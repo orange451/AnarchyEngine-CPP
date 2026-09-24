@@ -19,8 +19,11 @@ void Runner::prepare() {
     auto lua = std::make_unique<engine_core::LuaEngine>();
     lua->start();
     auto simulation = std::make_unique<engine_core::Engine>();
-    // The IDE is open for a long time. Pace both loops so they do not spin a core.
-    simulation->set_pace_hz(60.0);
+    // Heartbeat stays at 60 Hz. The render thread has no 60 Hz sleep. It waits
+    // for each Scene View paint so an empty step cannot run ahead of the picture.
+    simulation->set_simulation_pace_hz(60.0);
+    simulation->set_render_pace_hz(0.0);
+    simulation->set_render_client_sync(true);
     lua_ = std::move(lua);
     simulation_ = std::move(simulation);
 }

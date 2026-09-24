@@ -30,8 +30,15 @@ public:
     void set_renderer(IRenderer* renderer);
     void set_clock(IClock* clock);
     void set_timing(double render_dt, double physics_dt);
-    // 0 runs as fast as the machine allows. The IDE runner passes 60.
+    // 0 runs as fast as the machine allows. set_pace_hz sets both loops.
+    // The IDE paces the simulation at 60 and leaves the render loop uncapped.
     void set_pace_hz(double hz);
+    void set_simulation_pace_hz(double hz);
+    void set_render_pace_hz(double hz);
+    // An uncapped render loop normally spins. With this set, it waits for
+    // note_client_frame instead, so it stays with the window that is actually drawing.
+    void set_render_client_sync(bool enabled);
+    void note_client_frame();
 
     DataModel& datamodel() { return model_; }
     SnapshotPump& pump() { return pump_; }
@@ -75,7 +82,14 @@ private:
     IClock* clock_ = nullptr;
     double render_dt_ = 1.0 / 60.0;
     double physics_dt_ = 1.0 / 240.0;
-    double pace_hz_ = 0;
+    double simulation_pace_hz_ = 0;
+    double render_pace_hz_ = 0;
+    std::atomic<bool> render_client_sync_{false};
+    // note_client_frame bumps client_frames_. The uncapped render loop waits on it
+    // when render_client_sync_ is set. Tests leave the sync off.
+    std::mutex client_frame_mu_;
+    std::condition_variable client_frame_cv_;
+    std::uint64_t client_frames_ = 0;
 
     std::thread simulation_;
     std::thread render_;

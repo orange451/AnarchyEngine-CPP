@@ -1322,3 +1322,28 @@ TEST_CASE("an edit during play runs on the simulation thread", "[edit]") {
     REQUIRE(engine.datamodel().alive(id.load()));
     REQUIRE(engine.datamodel().parent(id.load()) == engine.datamodel().id());
 }
+
+TEST_CASE("client sync keeps an uncapped render loop with the window", "[pace]") {
+    engine_core::Engine engine;
+    engine.set_simulation_pace_hz(60.0);
+    engine.set_render_pace_hz(0.0);
+    engine.set_render_client_sync(true);
+    engine.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    const auto idle = engine.present_count();
+    // An empty step with nothing to wait for would present tens of thousands of times.
+    REQUIRE(idle < 12);
+    const auto paced_at = std::chrono::steady_clock::now();
+    for (int i = 0; i < 20; ++i) {
+        const auto before = engine.present_count();
+        engine.note_client_frame();
+        wait_until([&] { return engine.present_count() > before; });
+    }
+    const auto paced_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - paced_at)
+                              .count();
+    // Each note releases one step. Waiting out the 50 ms fallback twenty times would take a second.
+    REQUIRE(paced_ms < 400);
+    REQUIRE(engine.present_count() < idle + 50);
+    engine.stop();
+}

@@ -26,7 +26,24 @@ void Engine::set_timing(double render_dt, double physics_dt) {
     physics_dt_ = physics_dt;
 }
 
-void Engine::set_pace_hz(double hz) { pace_hz_ = hz; }
+void Engine::set_pace_hz(double hz) {
+    simulation_pace_hz_ = hz;
+    render_pace_hz_ = hz;
+}
+
+void Engine::set_simulation_pace_hz(double hz) { simulation_pace_hz_ = hz; }
+
+void Engine::set_render_pace_hz(double hz) { render_pace_hz_ = hz; }
+
+void Engine::set_render_client_sync(bool enabled) { render_client_sync_.store(enabled); }
+
+void Engine::note_client_frame() {
+    {
+        std::lock_guard<std::mutex> guard(client_frame_mu_);
+        ++client_frames_;
+    }
+    client_frame_cv_.notify_one();
+}
 
 void Engine::start() {
     if (running_.load()) {
@@ -115,6 +132,7 @@ void Engine::stop() {
     }
     start_cv_.notify_all();
     pause_cv_.notify_all();
+    client_frame_cv_.notify_all();
     if (simulation_.joinable()) {
         simulation_.join();
     }
@@ -208,9 +226,9 @@ void Engine::simulation_loop() {
         last_substeps_.store(substeps);
         sim_frames_.fetch_add(1);
 
-        if (pace_hz_ > 0) {
+        if (simulation_pace_hz_ > 0) {
             const auto budget = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                std::chrono::duration<double>(1.0 / pace_hz_));
+                std::chrono::duration<double>(1.0 / simulation_pace_hz_));
             const auto elapsed = std::chrono::steady_clock::now() - frame_start;
             if (elapsed < budget) {
                 std::this_thread::sleep_for(budget - elapsed);
@@ -232,8 +250,27 @@ void Engine::render_loop() {
         return;
     }
 
+    auto last_frame = std::chrono::steady_clock::now();
     while (running_.load()) {
+        // Sample before the work so a paint that arrives during the step is not missed.
+        std::uint64_t client_seen = 0;
+        const bool wait_for_client = render_client_sync_.load() && !(render_pace_hz_ > 0.0);
+        if (wait_for_client) {
+            std::lock_guard<std::mutex> guard(client_frame_mu_);
+            client_seen = client_frames_;
+        }
         const auto frame_start = std::chrono::steady_clock::now();
+        double frame_dt = std::chrono::duration<double>(frame_start - last_frame).count();
+        last_frame = frame_start;
+        if (frame_dt < 0) {
+            frame_dt = 0;
+        }
+        if (frame_dt > 0.1) {
+            frame_dt = 0.1;
+        }
+        if (!(frame_dt > 0.0)) {
+            frame_dt = render_dt_;
+        }
         bool prepared = false;
         bool saw_contract = false;
         std::uint64_t hold_ns = 0;
@@ -245,12 +282,12 @@ void Engine::render_loop() {
                 // Roblox order inside the pre-draw window: RenderStepped, then PreRender.
                 // A failure in one does not skip the other or the copy.
                 try {
-                    scheduler_.run_phase(Phase::RenderStepped, render_dt_);
+                    scheduler_.run_phase(Phase::RenderStepped, frame_dt);
                 } catch (const ContractViolation&) {
                     saw_contract = true;
                 }
                 try {
-                    scheduler_.run_phase(Phase::PreRender, render_dt_);
+                    scheduler_.run_phase(Phase::PreRender, frame_dt);
                 } catch (const ContractViolation&) {
                     saw_contract = true;
                 }
@@ -290,19 +327,27 @@ void Engine::render_loop() {
         // After Present the snapshot for this frame is already published.
         // PostRender does not hold the Prepare lock and is not part of the 2 ms budget.
         try {
-            scheduler_.run_phase(Phase::PostRender, render_dt_);
+            scheduler_.run_phase(Phase::PostRender, frame_dt);
         } catch (const ContractViolation&) {
             contract_count_.fetch_add(1);
         }
         present_count_.fetch_add(1);
 
-        if (pace_hz_ > 0) {
+        if (render_pace_hz_ > 0) {
             const auto budget = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                std::chrono::duration<double>(1.0 / pace_hz_));
+                std::chrono::duration<double>(1.0 / render_pace_hz_));
             const auto elapsed = std::chrono::steady_clock::now() - frame_start;
             if (elapsed < budget) {
                 std::this_thread::sleep_for(budget - elapsed);
             }
+        } else if (wait_for_client) {
+            // The window paints much slower than an empty step. Waiting here keeps
+            // the step with that paint. The timeout only covers a window that is
+            // not painting; stop() wakes this wait as well.
+            std::unique_lock<std::mutex> guard(client_frame_mu_);
+            client_frame_cv_.wait_for(guard, std::chrono::milliseconds(50), [&] {
+                return !running_.load() || client_frames_ != client_seen;
+            });
         }
     }
 }

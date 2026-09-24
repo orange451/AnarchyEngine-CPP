@@ -12,7 +12,6 @@
 #include <chrono>
 #include <cmath>
 #include <string>
-#include <vector>
 
 namespace runner {
 namespace {
@@ -34,7 +33,7 @@ int FramesPerSecond(double dt) {
 GameView::GameView(Runner& runner)
     : ide::IdePane("Scene View", false),
       model_(&runner.simulation().datamodel()),
-      renderDt_(std::make_shared<std::atomic<double>>(0.0)) {
+      engine_(&runner.simulation()) {
     setMinSize(64, 64);
     getClassList().add("ide-viewport");
     setBackground(jadefx::Color::rgb8(30, 30, 30));
@@ -45,33 +44,35 @@ GameView::GameView(Runner& runner)
     fpsLabel_ = label.get();
     getChildren().add(std::move(label));
     refreshTriangles();
+}
 
-    // The shell builds this view after prepare and before start, so neither
-    // loop is running. PreRender keeps running while the simulation is paused,
-    // and a bind after start would race that loop.
-    std::weak_ptr<std::atomic<double>> sample = renderDt_;
-    runner.simulation().scheduler().bind(engine_core::Phase::PreRender, [sample](double dt) {
-        if (!(dt > 0.0)) {
-            return;
-        }
-        const std::shared_ptr<std::atomic<double>> current = sample.lock();
-        if (!current) {
-            return;
-        }
-        current->store(dt);
-    });
+void GameView::notePaint() {
+    const auto now = std::chrono::steady_clock::now();
+    if (!paintWindowOpen_) {
+        paintWindowOpen_ = true;
+        paintWindowStart_ = now;
+        paintWindowFrames_ = 0;
+        return;
+    }
+    ++paintWindowFrames_;
+    const double elapsed = std::chrono::duration<double>(now - paintWindowStart_).count();
+    // One fast paint must not become the number on the label. A quarter-second
+    // of paints is long enough to be a real rate and short enough to follow a change.
+    constexpr double kWindowSeconds = 0.25;
+    if (elapsed < kWindowSeconds || paintWindowFrames_ <= 0) {
+        return;
+    }
+    measuredFps_.store(FramesPerSecond(elapsed / static_cast<double>(paintWindowFrames_)));
+    paintWindowStart_ = now;
+    paintWindowFrames_ = 0;
 }
 
 void GameView::refreshFpsLabel() {
     if (fpsLabel_ == nullptr) {
         return;
     }
-    const double dt = renderDt_->load();
-    if (!(dt > 0.0)) {
-        return;
-    }
-    const int fps = FramesPerSecond(dt);
-    if (fps == shownFps_) {
+    const int fps = measuredFps_.load();
+    if (fps <= 0 || fps == shownFps_) {
         return;
     }
     shownFps_ = fps;
@@ -117,6 +118,7 @@ void GameView::refreshTriangles() {
 void GameView::renderChildren(jadefx::UiRenderer&, float) {}
 
 void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
+    notePaint();
     refreshTriangles();
     const jadefx::Scene* scene = getScene();
     if (scene != nullptr && scene->getWidth() > 0.0 && scene->getHeight() > 0.0 && getWidth() > 0.0 &&
@@ -140,6 +142,11 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
     }
     // Painted after the clear, so the label stays on top of the viewport.
     Node::renderChildren(renderer, opacity);
+    // The render thread waits on this when it is uncapped, so its step follows
+    // the paint instead of looping again as soon as the step itself returns.
+    if (engine_ != nullptr) {
+        engine_->note_client_frame();
+    }
 }
 
 void GameView::sceneChanged(jadefx::Scene* previous) {

@@ -195,8 +195,8 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
 engine_core::Engine& IdeLayout::simulation() { return runner_.simulation(); }
 
 void IdeLayout::start() {
-    // PreRender is in its loop as soon as the threads start. The scene page
-    // binds that job first, while both loops are still stopped.
+    // Dock the view before the threads start. Its first paint is what lets the
+    // uncapped render thread leave its wait.
     sceneDock_->dock(jadefx::make<runner::GameView>(runner_));
     runner_.start();
 }

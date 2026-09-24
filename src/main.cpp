@@ -46,6 +46,9 @@ protected:
 
     std::string defaultTitle() const override { return "Anarchy Engine"; }
 
+    // The scene draws as fast as the frame allows. The simulation stays at 60 Hz.
+    int swapInterval() const override { return 0; }
+
 private:
     std::unique_ptr<ide::IdeLayout> layout_;
 };

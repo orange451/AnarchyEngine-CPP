@@ -99,7 +99,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
 
     auto center = jadefx::make<IdeDock>();
     center->setMinSize(64, 64);
-    center->dock(jadefx::make<IdeGameView>(runner_.simulation().steps()));
+    center->dock(jadefx::make<IdeGameView>(runner_));
 
     auto south = jadefx::make<IdeDock>();
     south->setMinSize(80, 96);

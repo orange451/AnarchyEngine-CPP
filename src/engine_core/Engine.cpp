@@ -169,8 +169,6 @@ void Engine::simulation_loop() {
         }
         last_substeps_.store(substeps);
         sim_frames_.fetch_add(1);
-        // The scene view turns only after this event, by `wall` seconds.
-        steps_.publish(wall);
 
         if (pace_hz_ > 0) {
             const auto budget = std::chrono::duration_cast<std::chrono::steady_clock::duration>(

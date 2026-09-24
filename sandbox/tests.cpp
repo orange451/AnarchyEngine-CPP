@@ -535,10 +535,9 @@ TEST_CASE("simulation stays paused until resume", "[pause]") {
     REQUIRE(engine.paused());
     std::this_thread::sleep_for(std::chrono::milliseconds(40));
     REQUIRE(engine.sim_frame_count() == 0);
-    REQUIRE(engine.steps().consume() == 0);
     engine.resume();
     REQUIRE_FALSE(engine.paused());
-    wait_until([&] { return engine.sim_frame_count() > 0 && engine.steps().consume() > 0; });
+    wait_until([&] { return engine.sim_frame_count() > 0; });
     engine.pause();
     // Let the in-flight step finish, then confirm no further steps are published.
     std::this_thread::sleep_for(std::chrono::milliseconds(40));

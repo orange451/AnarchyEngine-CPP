@@ -2,16 +2,22 @@
 
 #include "IdePane.hpp"
 #include "../runner/Renderer.hpp"
-#include "StepEvents.hpp"
+
+#include <atomic>
+#include <memory>
+
+namespace runner {
+class Runner;
+}
 
 namespace ide {
 
 // Scene viewport. The runner draws its picture here.
-// The rainbow triangle stays still until the simulation publishes a step,
-// then it turns by that step's delta time. This page stays open.
+// Heartbeat turns the triangle 90 degrees per simulation second.
+// A paused simulation leaves the angle where it is. This page stays open.
 class IdeGameView : public IdePane {
 public:
-    explicit IdeGameView(engine_core::StepEvents& steps);
+    explicit IdeGameView(runner::Runner& runner);
 
 protected:
     void renderContent(jadefx::UiRenderer& renderer, float opacity) override;
@@ -21,8 +27,9 @@ private:
     bool ensureGraphics();
 
     runner::Renderer renderer_;
-    engine_core::StepEvents* steps_ = nullptr;
-    double angleDegrees_ = 0;
+    // Heartbeat writes this on the simulation thread. The UI thread reads it.
+    // The callback keeps a weak reference, so the angle can die with this view.
+    std::shared_ptr<std::atomic<double>> angleDegrees_;
     bool graphicsAttempted_ = false;
     bool graphicsReady_ = false;
 };

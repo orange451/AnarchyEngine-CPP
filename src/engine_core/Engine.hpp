@@ -4,7 +4,6 @@
 #include "IClock.hpp"
 #include "IRenderer.hpp"
 #include "SnapshotPump.hpp"
-#include "StepEvents.hpp"
 #include "TaskScheduler.hpp"
 
 #include <atomic>
@@ -45,9 +44,6 @@ public:
     void resume();
     void pause();
     bool paused() const;
-
-    // Deltas published at the end of each simulation step.
-    StepEvents& steps() { return steps_; }
 
     std::thread::id simulation_thread_id() const { return simulation_id_; }
     std::thread::id render_thread_id() const { return render_id_; }
@@ -96,7 +92,6 @@ private:
     mutable std::mutex pause_mu_;
     std::condition_variable pause_cv_;
     bool paused_ = true;
-    StepEvents steps_;
 
     std::vector<std::uint32_t> color_keys_;
 };

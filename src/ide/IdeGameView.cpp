@@ -1,5 +1,7 @@
 #include "IdeGameView.hpp"
 
+#include "Engine.hpp"
+#include "../runner/Runner.hpp"
 #include "../runner/gl.hpp"
 
 #define GLFW_INCLUDE_NONE
@@ -10,15 +12,31 @@
 namespace ide {
 namespace {
 
-// A full turn takes four seconds of simulation time, not wall time.
+// A full turn takes four seconds of Heartbeat time.
 constexpr double kDegreesPerSecond = 90.0;
 
 }  // namespace
 
-IdeGameView::IdeGameView(engine_core::StepEvents& steps) : IdePane("Scene View", false), steps_(&steps) {
+IdeGameView::IdeGameView(runner::Runner& runner)
+    : IdePane("Scene View", false), angleDegrees_(std::make_shared<std::atomic<double>>(0.0)) {
     setMinSize(64, 64);
     getClassList().add("ide-viewport");
     setBackground(jadefx::Color::rgb8(30, 30, 30));
+
+    // The shell builds this view after Runner::start, while the simulation is
+    // still paused, so this bind does not race a running Heartbeat.
+    std::weak_ptr<std::atomic<double>> angle = angleDegrees_;
+    runner.simulation().scheduler().bind(engine_core::Phase::Heartbeat, [angle](double dt) {
+        const std::shared_ptr<std::atomic<double>> current = angle.lock();
+        if (!current) {
+            return;
+        }
+        double next = std::fmod(current->load() + dt * kDegreesPerSecond, 360.0);
+        if (next < 0) {
+            next += 360.0;
+        }
+        current->store(next);
+    });
 }
 
 void IdeGameView::renderContent(jadefx::UiRenderer&, float) {
@@ -30,16 +48,8 @@ void IdeGameView::renderContent(jadefx::UiRenderer&, float) {
     if (!ensureGraphics()) {
         return;
     }
-    // No step event means the simulation is paused or has not caught up.
-    // The triangle holds its angle instead of following the window clock.
-    if (steps_ != nullptr) {
-        angleDegrees_ = std::fmod(angleDegrees_ + steps_->consume() * kDegreesPerSecond, 360.0);
-        if (angleDegrees_ < 0) {
-            angleDegrees_ += 360.0;
-        }
-    }
     renderer_.draw(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(), scene->getHeight(),
-                   static_cast<float>(angleDegrees_));
+                   static_cast<float>(angleDegrees_->load()));
 }
 
 void IdeGameView::sceneChanged(jadefx::Scene* previous) {

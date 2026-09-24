@@ -5,16 +5,22 @@
 
 #include <atomic>
 #include <memory>
+#include <vector>
 
 namespace runner {
 class Runner;
 }
 
+namespace engine_core {
+class TestTriangle;
+}
+
 namespace ide {
 
-// Scene viewport. The runner draws its picture here.
-// Heartbeat turns the triangle 90 degrees per simulation second.
-// A paused simulation leaves the angle where it is. This page stays open.
+// Scene viewport. Draws each TestTriangle parented under the root DataModel
+// at that instance's position. Heartbeat steps those instances, 90 degrees
+// per simulation second. A paused simulation leaves the angles where they
+// are. This page stays open.
 // PreRender passes the render step. The corner label shows frames per second
 // from that delta, including while the simulation is paused.
 class IdeGameView : public IdePane {
@@ -33,10 +39,11 @@ private:
     bool ensureGraphics();
 
     runner::Renderer renderer_;
-    // Heartbeat writes the angle on the simulation thread. PreRender writes the
-    // step on the render thread. The UI thread reads both. Each callback keeps
-    // a weak reference, so the values can die with this view.
-    std::shared_ptr<std::atomic<double>> angleDegrees_;
+    // Found before the threads start. Heartbeat writes each angle. This thread
+    // only reads the atomics. The runner keeps the instances until it stops.
+    std::vector<engine_core::TestTriangle*> triangles_;
+    // PreRender writes the step on the render thread. The UI thread reads it.
+    // The callback keeps a weak reference, so the value can die with this view.
     std::shared_ptr<std::atomic<double>> renderDt_;
     jadefx::Label* fpsLabel_ = nullptr;
     int shownFps_ = -1;

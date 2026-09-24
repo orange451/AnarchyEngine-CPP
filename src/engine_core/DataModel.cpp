@@ -4,6 +4,7 @@
 
 #include <cstring>
 #include <mutex>
+#include <new>
 #include <utility>
 #include <vector>
 
@@ -34,6 +35,31 @@ int field_index(Field field) {
 thread_local int tlsHold = 0;
 thread_local const char* tlsDeferred = nullptr;
 
+struct InstancePool {
+    const void* key = nullptr;
+    std::size_t stride = 0;
+    std::size_t align = 0;
+    std::size_t count = 0;
+    std::byte* memory = nullptr;
+    std::vector<DataModel*> objects;
+    std::vector<std::uint32_t> free;
+    DataModel* (*construct)(void*, DataModel::ChildTag, DataModel::State&, InstanceId) = nullptr;
+    void (*destroy)(DataModel*) = nullptr;
+
+    ~InstancePool() {
+        for (DataModel* object : objects) {
+            if (object != nullptr && destroy != nullptr) {
+                destroy(object);
+            }
+        }
+        if (memory != nullptr) {
+            ::operator delete(memory, stride * DataModel::kMaxInstances, std::align_val_t(align));
+        }
+    }
+};
+
+GameObject* as_game_object(DataModel* instance) { return dynamic_cast<GameObject*>(instance); }
+
 }  // namespace
 
 struct DataModel::State {
@@ -62,29 +88,27 @@ struct DataModel::State {
 
     std::vector<Slot> slots;
     std::vector<std::uint32_t> free_list;
-    std::vector<DataModel> plains;
-    std::vector<std::uint32_t> free_plains;
-    std::vector<GameObject> objects;
-    std::vector<std::uint32_t> free_objects;
+    std::vector<std::unique_ptr<InstancePool>> pools;
+    // First child of the root DataModel. 0 means the root has no children.
+    InstanceId root_first_child = 0;
     InvalidationQueue invalidation;
 
     EventQueue events;
     std::vector<std::unique_ptr<InstanceSignals>> bags;
     std::vector<InstanceId> walk;
+    // Ids gathered for Heartbeat. Separate from walk, which ancestry mutates.
+    std::vector<InstanceId> step_ids;
 };
 
 DataModel::DataModel() : owned_(std::make_unique<State>()), state_(owned_.get()) {
     State& world = *state_;
     world.slots.reserve(kMaxInstances);
     world.free_list.reserve(kMaxInstances);
-    world.plains.reserve(kMaxInstances);
-    world.free_plains.reserve(kMaxInstances);
-    world.objects.reserve(kMaxInstances);
-    world.free_objects.reserve(kMaxInstances);
     world.invalidation.reserve(kMaxInvalidations);
     world.commands.assign(kMaxCommands, Command{});
     world.bags.resize(kMaxInstances);
     world.walk.reserve(kMaxInstances);
+    world.step_ids.reserve(kMaxInstances);
     world.events.watch_prerender(&world.prerender_window);
 }
 
@@ -217,10 +241,10 @@ const GameObject* DataModel::game_object_at_slot(std::uint32_t index) const {
         return nullptr;
     }
     const Slot& part = state_->slots[index];
-    if (!part.alive || part.kind != InstanceKind::GameObject || part.storage >= state_->objects.size()) {
+    if (!part.alive) {
         return nullptr;
     }
-    return &state_->objects[part.storage];
+    return as_game_object(part.instance);
 }
 
 WriteOrigin DataModel::current_origin() const {
@@ -313,7 +337,7 @@ bool DataModel::consume_resync() {
     return was;
 }
 
-InstanceId DataModel::allocate(InstanceKind kind) {
+InstanceId DataModel::allocate() {
     State& world = *state_;
     std::uint32_t index = 0;
     if (!world.free_list.empty()) {
@@ -330,67 +354,89 @@ InstanceId DataModel::allocate(InstanceKind kind) {
     part.alive = true;
     part.simulated = false;
     part.visual_only = false;
-    part.kind = kind;
+    part.pool = 0;
     part.storage = 0;
-    part.parent = 0;
+    part.instance = nullptr;
+    part.parent = kNoParent;
     part.first_child = 0;
     part.next_sibling = 0;
     part.prev_sibling = 0;
     return (part.generation << 16u) | index;
 }
 
-DataModel& DataModel::create() {
+DataModel& DataModel::spawn(const SpawnOps& ops) {
     if (state_->threads_running && std::this_thread::get_id() != state_->simulation_thread) {
         contract_fail("create runs on SimulationThread");
     }
-    const InstanceId id = allocate(InstanceKind::Plain);
-    const std::uint32_t index = id & kIndexMask;
+    if (ops.construct == nullptr || ops.destroy == nullptr || ops.bytes == 0 || ops.align == 0) {
+        contract_fail("create is missing a constructor");
+    }
     State& world = *state_;
+    InstancePool* pool = nullptr;
+    std::uint16_t pool_index = 0;
+    for (std::uint16_t index = 0; index < world.pools.size(); ++index) {
+        if (world.pools[index]->key == ops.key) {
+            pool = world.pools[index].get();
+            pool_index = index;
+            break;
+        }
+    }
+    if (pool == nullptr) {
+        if (world.pools.size() >= 0xffffu) {
+            contract_fail("instance type capacity exhausted");
+        }
+        const std::size_t align = ops.align;
+        const std::size_t stride = (ops.bytes + align - 1) & ~(align - 1);
+        auto created = std::make_unique<InstancePool>();
+        created->key = ops.key;
+        created->stride = stride;
+        created->align = align;
+        created->construct = ops.construct;
+        created->destroy = ops.destroy;
+        created->memory = static_cast<std::byte*>(::operator new(stride * kMaxInstances, std::align_val_t(align)));
+        created->objects.assign(kMaxInstances, nullptr);
+        created->free.reserve(kMaxInstances);
+        pool_index = static_cast<std::uint16_t>(world.pools.size());
+        world.pools.push_back(std::move(created));
+        pool = world.pools.back().get();
+    }
+
     std::uint32_t storage = 0;
-    DataModel* object = nullptr;
-    if (!world.free_plains.empty()) {
-        storage = world.free_plains.back();
-        world.free_plains.pop_back();
-        object = &world.plains[storage];
-        object->rebind(id);
+    if (!pool->free.empty()) {
+        storage = pool->free.back();
+        pool->free.pop_back();
     } else {
-        if (world.plains.size() == world.plains.capacity()) {
+        if (pool->count >= kMaxInstances) {
             contract_fail("instance capacity exhausted");
         }
-        world.plains.emplace_back(ChildTag{}, *state_, id);
-        storage = static_cast<std::uint32_t>(world.plains.size() - 1);
-        object = &world.plains.back();
+        storage = static_cast<std::uint32_t>(pool->count);
+        ++pool->count;
     }
-    world.slots[index].storage = storage;
+
+    const InstanceId id = allocate();
+    const std::uint32_t index = id & kIndexMask;
+    DataModel* object = pool->objects[storage];
+    if (object == nullptr) {
+        void* memory = pool->memory + static_cast<std::size_t>(storage) * pool->stride;
+        object = pool->construct(memory, ChildTag{}, *state_, id);
+        pool->objects[storage] = object;
+    } else {
+        object->rebind(id);
+        object->on_reuse();
+    }
+    Slot& part = world.slots[index];
+    part.pool = pool_index;
+    part.storage = storage;
+    part.instance = object;
     return *object;
 }
 
+DataModel& DataModel::create() { return create<DataModel>(); }
+
 GameObject& DataModel::create_game_object() {
-    if (state_->threads_running && std::this_thread::get_id() != state_->simulation_thread) {
-        contract_fail("create_game_object runs on SimulationThread");
-    }
-    const InstanceId id = allocate(InstanceKind::GameObject);
-    const std::uint32_t index = id & kIndexMask;
-    State& world = *state_;
-    std::uint32_t storage = 0;
-    GameObject* object = nullptr;
-    if (!world.free_objects.empty()) {
-        storage = world.free_objects.back();
-        world.free_objects.pop_back();
-        object = &world.objects[storage];
-        object->rebind(id);
-        object->reset_spatial();
-    } else {
-        if (world.objects.size() == world.objects.capacity()) {
-            contract_fail("instance capacity exhausted");
-        }
-        world.objects.emplace_back(ChildTag{}, *state_, id);
-        storage = static_cast<std::uint32_t>(world.objects.size() - 1);
-        object = &world.objects.back();
-    }
-    world.slots[index].storage = storage;
-    note(id, VisualField::Transform | VisualField::Color | VisualField::Size, WriteOrigin::Simulation);
-    return *object;
+    GameObject& object = create<GameObject>();
+    note(object.id(), VisualField::Transform | VisualField::Color | VisualField::Size, WriteOrigin::Simulation);
+    return object;
 }
 
 void DataModel::destroy(InstanceId id) {
@@ -411,18 +457,17 @@ void DataModel::destroy(InstanceId id) {
     }
     detach_links(id, *part);
     release_signals(id);
-    if (part->kind == InstanceKind::GameObject && part->storage < state_->objects.size()) {
-        state_->objects[part->storage].clear_spatial();
+    if (part->instance != nullptr) {
+        part->instance->on_release();
     }
+    if (part->pool < state_->pools.size()) {
+        state_->pools[part->pool]->free.push_back(part->storage);
+    }
+    part->instance = nullptr;
     part->alive = false;
     if (part->generation != 0xffffu) {
         ++part->generation;
         state_->free_list.push_back(index);
-        if (part->kind == InstanceKind::GameObject) {
-            state_->free_objects.push_back(part->storage);
-        } else {
-            state_->free_plains.push_back(part->storage);
-        }
     }
     note(id, VisualField::Removed, current_origin());
 }
@@ -444,18 +489,19 @@ void DataModel::apply_transform(InstanceId id, const Transform& transform, bool 
         reject_write("transform write on a dead instance");
         return;
     }
-    if (part->kind != InstanceKind::GameObject || part->storage >= state_->objects.size()) {
+    GameObject* object = as_game_object(part->instance);
+    if (object == nullptr) {
         reject_write("transform write on an instance that is not a GameObject");
         return;
     }
     if (!authorize(*part, force)) {
         return;
     }
-    GameObject& object = state_->objects[part->storage];
-    if (same_transform(object.transform_, transform)) {
+    GameObject& target = *object;
+    if (same_transform(target.transform_, transform)) {
         return;
     }
-    object.transform_ = transform;
+    target.transform_ = transform;
     const WriteOrigin origin = current_origin();
     note(id, VisualField::Transform, origin);
     emit_change(id, Field::Transform, origin);
@@ -478,18 +524,18 @@ void DataModel::apply_color(InstanceId id, ColorRgb color, bool force) {
         reject_write("color write on a dead instance");
         return;
     }
-    if (part->kind != InstanceKind::GameObject || part->storage >= state_->objects.size()) {
+    GameObject* object = as_game_object(part->instance);
+    if (object == nullptr) {
         reject_write("color write on an instance that is not a GameObject");
         return;
     }
     if (!authorize(*part, force)) {
         return;
     }
-    GameObject& object = state_->objects[part->storage];
-    if (same_color(object.color_, color)) {
+    if (same_color(object->color_, color)) {
         return;
     }
-    object.color_ = color;
+    object->color_ = color;
     const WriteOrigin origin = current_origin();
     note(id, VisualField::Color, origin);
     emit_change(id, Field::Color, origin);
@@ -525,13 +571,17 @@ void DataModel::set_visual_only(InstanceId id, bool visual_only) {
     emit_change(id, Field::VisualOnly, current_origin());
 }
 
-GameObject* DataModel::game_object(InstanceId id) {
+DataModel* DataModel::instance(InstanceId id) {
     Slot* part = slot(id);
-    if (part == nullptr || part->kind != InstanceKind::GameObject || part->storage >= state_->objects.size()) {
+    if (part == nullptr) {
         return nullptr;
     }
-    return &state_->objects[part->storage];
+    return part->instance;
 }
+
+const DataModel* DataModel::instance(InstanceId id) const { return const_cast<DataModel*>(this)->instance(id); }
+
+GameObject* DataModel::game_object(InstanceId id) { return as_game_object(instance(id)); }
 
 const GameObject* DataModel::game_object(InstanceId id) const {
     return const_cast<DataModel*>(this)->game_object(id);
@@ -557,18 +607,59 @@ void DataModel::integrate_simulated(double dt) {
         if (!part.alive || !part.simulated || part.visual_only) {
             continue;
         }
-        if (part.kind != InstanceKind::GameObject || part.storage >= world.objects.size()) {
+        GameObject* object = as_game_object(part.instance);
+        if (object == nullptr) {
             continue;
         }
-        GameObject& object = world.objects[part.storage];
-        if (object.velocity_[0] == 0.f && object.velocity_[1] == 0.f && object.velocity_[2] == 0.f) {
+        GameObject& body = *object;
+        if (body.velocity_[0] == 0.f && body.velocity_[1] == 0.f && body.velocity_[2] == 0.f) {
             continue;
         }
-        object.transform_.m[12] += object.velocity_[0] * step;
-        object.transform_.m[13] += object.velocity_[1] * step;
-        object.transform_.m[14] += object.velocity_[2] * step;
+        body.transform_.m[12] += body.velocity_[0] * step;
+        body.transform_.m[13] += body.velocity_[1] * step;
+        body.transform_.m[14] += body.velocity_[2] * step;
         const InstanceId id = (part.generation << 16u) | index;
         note(id, VisualField::Transform, WriteOrigin::Simulation);
+    }
+}
+
+void DataModel::step_descendants(double dt) {
+    std::vector<InstanceId>& ids = state_->step_ids;
+    ids.clear();
+    for (InstanceId child = state_->root_first_child; child != 0;) {
+        if (ids.size() == ids.capacity()) {
+            break;
+        }
+        ids.push_back(child);
+        const Slot* part = slot(child);
+        if (part == nullptr) {
+            break;
+        }
+        child = part->next_sibling;
+    }
+    for (std::size_t index = 0; index < ids.size(); ++index) {
+        const Slot* part = slot(ids[index]);
+        if (part == nullptr) {
+            continue;
+        }
+        for (InstanceId child = part->first_child; child != 0;) {
+            if (ids.size() == ids.capacity()) {
+                break;
+            }
+            ids.push_back(child);
+            const Slot* child_slot = slot(child);
+            if (child_slot == nullptr) {
+                break;
+            }
+            child = child_slot->next_sibling;
+        }
+    }
+    const std::size_t count = ids.size();
+    for (std::size_t index = 0; index < count; ++index) {
+        DataModel* object = instance(ids[index]);
+        if (object != nullptr) {
+            object->step(dt);
+        }
     }
 }
 
@@ -704,19 +795,25 @@ void DataModel::emit_ancestry(InstanceId id, WriteOrigin origin) {
 }
 
 void DataModel::unlink_parent(InstanceId id, Slot& part) {
-    if (part.parent == 0) {
+    if (part.parent == kNoParent) {
         part.prev_sibling = 0;
         part.next_sibling = 0;
         return;
     }
-    Slot* parent = slot(part.parent);
+    // Parent 0 is the root DataModel, which has no slot of its own.
+    InstanceId* head = nullptr;
+    if (part.parent == 0) {
+        head = &state_->root_first_child;
+    } else if (Slot* parent = slot(part.parent)) {
+        head = &parent->first_child;
+    }
     if (part.prev_sibling != 0) {
         Slot* prev = slot(part.prev_sibling);
         if (prev != nullptr) {
             prev->next_sibling = part.next_sibling;
         }
-    } else if (parent != nullptr && parent->first_child == id) {
-        parent->first_child = part.next_sibling;
+    } else if (head != nullptr && *head == id) {
+        *head = part.next_sibling;
     }
     if (part.next_sibling != 0) {
         Slot* next = slot(part.next_sibling);
@@ -724,27 +821,36 @@ void DataModel::unlink_parent(InstanceId id, Slot& part) {
             next->prev_sibling = part.prev_sibling;
         }
     }
-    part.parent = 0;
+    part.parent = kNoParent;
     part.prev_sibling = 0;
     part.next_sibling = 0;
 }
 
 void DataModel::link_child(InstanceId parent_id, InstanceId child) {
-    Slot* parent = slot(parent_id);
     Slot* part = slot(child);
-    if (parent == nullptr || part == nullptr) {
+    if (part == nullptr) {
         contract_fail("set_parent lost an instance");
+    }
+    InstanceId* head = nullptr;
+    if (parent_id == 0) {
+        head = &state_->root_first_child;
+    } else {
+        Slot* parent = slot(parent_id);
+        if (parent == nullptr) {
+            contract_fail("set_parent lost an instance");
+        }
+        head = &parent->first_child;
     }
     part->parent = parent_id;
     part->prev_sibling = 0;
-    part->next_sibling = parent->first_child;
-    if (parent->first_child != 0) {
-        Slot* first = slot(parent->first_child);
+    part->next_sibling = *head;
+    if (*head != 0) {
+        Slot* first = slot(*head);
         if (first != nullptr) {
             first->prev_sibling = child;
         }
     }
-    parent->first_child = child;
+    *head = child;
 }
 
 void DataModel::detach_links(InstanceId id, Slot& part) {
@@ -756,7 +862,7 @@ void DataModel::detach_links(InstanceId id, Slot& part) {
             break;
         }
         const InstanceId next = child_slot->next_sibling;
-        child_slot->parent = 0;
+        child_slot->parent = kNoParent;
         child_slot->prev_sibling = 0;
         child_slot->next_sibling = 0;
         child = next;
@@ -766,7 +872,7 @@ void DataModel::detach_links(InstanceId id, Slot& part) {
 
 bool DataModel::is_under(InstanceId ancestor, InstanceId node) const {
     InstanceId cursor = node;
-    while (cursor != 0) {
+    while (cursor != 0 && cursor != kNoParent) {
         if (cursor == ancestor) {
             return true;
         }
@@ -787,7 +893,7 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
     if (part == nullptr) {
         contract_fail("set_parent on a dead instance");
     }
-    if (new_parent != 0) {
+    if (new_parent != 0 && new_parent != kNoParent) {
         if (slot(new_parent) == nullptr) {
             contract_fail("set_parent to a dead instance");
         }
@@ -800,15 +906,15 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
     }
     const InstanceId old = part->parent;
     unlink_parent(id, *part);
-    if (new_parent != 0) {
+    if (new_parent != kNoParent) {
         link_child(new_parent, id);
     }
     const WriteOrigin origin = current_origin();
     emit_change(id, Field::Parent, origin);
-    if (old != 0) {
+    if (old != kNoParent) {
         emit_child(old, SignalKind::ChildRemoved, id, origin);
     }
-    if (new_parent != 0) {
+    if (new_parent != kNoParent) {
         emit_child(new_parent, SignalKind::ChildAdded, id, origin);
     }
     emit_ancestry(id, origin);
@@ -825,9 +931,28 @@ void DataModel::release_signals(InstanceId id) {
 InstanceId DataModel::parent(InstanceId id) const {
     const Slot* part = slot(id);
     if (part == nullptr) {
-        return 0;
+        return kNoParent;
     }
     return part->parent;
+}
+
+InstanceId DataModel::first_child(InstanceId parent_id) const {
+    if (parent_id == 0) {
+        return state_->root_first_child;
+    }
+    const Slot* part = slot(parent_id);
+    if (part == nullptr) {
+        return 0;
+    }
+    return part->first_child;
+}
+
+InstanceId DataModel::next_sibling(InstanceId id) const {
+    const Slot* part = slot(id);
+    if (part == nullptr) {
+        return 0;
+    }
+    return part->next_sibling;
 }
 
 }  // namespace engine_core

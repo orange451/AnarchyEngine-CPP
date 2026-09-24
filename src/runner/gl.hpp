@@ -68,6 +68,12 @@ using GLsizeiptr = std::ptrdiff_t;
 #ifdef GL_SCISSOR_TEST
 #undef GL_SCISSOR_TEST
 #endif
+#ifdef GL_DEPTH_TEST
+#undef GL_DEPTH_TEST
+#endif
+#ifdef GL_DEPTH_BUFFER_BIT
+#undef GL_DEPTH_BUFFER_BIT
+#endif
 constexpr GLboolean GL_FALSE = 0;
 constexpr GLboolean GL_TRUE = 1;
 constexpr GLenum GL_NO_ERROR = 0;
@@ -84,6 +90,8 @@ constexpr GLenum GL_COMPILE_STATUS = 0x8B81;
 constexpr GLenum GL_LINK_STATUS = 0x8B82;
 constexpr GLenum GL_BLEND = 0x0BE2;
 constexpr GLenum GL_SCISSOR_TEST = 0x0C11;
+constexpr GLenum GL_DEPTH_TEST = 0x0B71;
+constexpr GLbitfield GL_DEPTH_BUFFER_BIT = 0x00000100;
 constexpr GLenum GL_VIEWPORT = 0x0BA2;
 constexpr GLenum GL_SCISSOR_BOX = 0x0C10;
 
@@ -123,6 +131,7 @@ extern void (*rt_glGetIntegerv)(GLenum pname, GLint* data);
 extern void (*rt_glScissor)(GLint x, GLint y, GLsizei width, GLsizei height);
 extern GLint (*rt_glGetUniformLocation)(GLuint program, const GLchar* name);
 extern void (*rt_glUniform1f)(GLint location, GLfloat v0);
+extern void (*rt_glUniform3f)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
 
 using GlGetProcAddress = void* (*)(const char* name);
 
@@ -166,3 +175,4 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glScissor ::runner::rt_glScissor
 #define glGetUniformLocation ::runner::rt_glGetUniformLocation
 #define glUniform1f ::runner::rt_glUniform1f
+#define glUniform3f ::runner::rt_glUniform3f

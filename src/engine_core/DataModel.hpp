@@ -9,7 +9,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <new>
 #include <thread>
+#include <type_traits>
 
 namespace engine_core {
 
@@ -21,8 +23,9 @@ class GameObject;
 // for longer than Prepare's budget.
 //
 // The root DataModel owns that world. Every other instance shares it.
-// GameObject inherits DataModel and adds transform, color, size, and
-// velocity. A plain instance does not have those fields.
+// create<T>() makes any subclass. This class does not list those types.
+// GameObject adds transform, color, size, and velocity. A plain instance
+// does not have those fields.
 //
 // print(object.transform()) after a PreRender GameObject write shows the new
 // value immediately, because this object is live memory. The GPU does not
@@ -44,6 +47,9 @@ public:
     static constexpr std::size_t kMaxInvalidations = 65536;
     static constexpr std::size_t kMaxCommands = 4096;
 
+    // parent() returns this when an instance has no parent. 0 is the root.
+    static constexpr InstanceId kNoParent = 0xffffffffu;
+
     DataModel();
     virtual ~DataModel();
 
@@ -55,17 +61,26 @@ public:
     // Zero on the root world. A created instance returns its slot id.
     InstanceId id() const { return id_; }
 
+    // Heartbeat calls this on every descendant of the root. dt is that phase's
+    // step in seconds. The root itself is not stepped.
+    virtual void step(double dt) { (void)dt; }
+
     void set_thread_ids(std::thread::id simulation, std::thread::id render);
     void set_threads_running(bool running);
 
     // Plain instance in this world. No transform, color, size, or velocity.
     DataModel& create();
+    // Any subclass. The first create of a type allocates that type's pool.
+    // Later creates of the same type do not.
+    template <typename T>
+    T& create();
     GameObject& create_game_object();
     void destroy(InstanceId id);
 
     void set_simulated(InstanceId id, bool simulated);
     void set_visual_only(InstanceId id, bool visual_only);
-    // Hierarchy. Equal parent is a no-op. Emits Changed, property_changed,
+    // Hierarchy. Parent 0 is this root DataModel. kNoParent clears the parent.
+    // Equal parent is a no-op. Emits Changed, property_changed,
     // ChildRemoved/ChildAdded, and AncestryChanged on this id and descendants.
     void set_parent(InstanceId id, InstanceId parent);
 
@@ -80,15 +95,23 @@ public:
     const EventQueue& events() const;
     void attach_scheduler(TaskScheduler* scheduler);
 
+    // Null when the id is dead. A dead id does not alias a recycled slot.
+    DataModel* instance(InstanceId id);
+    const DataModel* instance(InstanceId id) const;
+
     // Null when the id is dead or the instance is not a GameObject.
-    // A dead id does not alias a recycled slot.
     GameObject* game_object(InstanceId id);
     const GameObject* game_object(InstanceId id) const;
 
     bool alive(InstanceId id) const;
     bool simulated(InstanceId id) const;
     bool visual_only(InstanceId id) const;
+    // kNoParent when id is dead or the instance has no parent.
+    // 0 when it is a child of the root DataModel.
     InstanceId parent(InstanceId id) const;
+    // Pass 0 to walk the root's children. A missing parent returns 0.
+    InstanceId first_child(InstanceId parent) const;
+    InstanceId next_sibling(InstanceId id) const;
 
     InvalidationQueue& invalidations();
     bool consume_resync();
@@ -105,6 +128,8 @@ public:
 
     // Moves every simulated, non-visual GameObject by its velocity and dirties Transform.
     void integrate_simulated(double dt);
+    // Heartbeat. Calls step(dt) on every descendant of the root.
+    void step_descendants(double dt);
 
     // Startup and resync. Visits live GameObjects only.
     template <typename Fn>
@@ -131,20 +156,33 @@ public:
     struct State;
     DataModel(ChildTag, State& state, InstanceId id);
 
+protected:
+    // destroy() keeps the C++ object so a stale reference can fail closed.
+    // on_release runs then. on_reuse runs when that storage is issued again.
+    virtual void on_release() {}
+    virtual void on_reuse() {}
+
 private:
     friend class DataModelLock;
     friend class GameObject;
 
-    enum class InstanceKind : std::uint8_t { Plain, GameObject };
+    struct SpawnOps {
+        const void* key = nullptr;
+        std::size_t bytes = 0;
+        std::size_t align = 0;
+        DataModel* (*construct)(void* memory, ChildTag tag, State& state, InstanceId id) = nullptr;
+        void (*destroy)(DataModel* object) = nullptr;
+    };
 
     struct Slot {
         std::uint32_t generation = 1;
         bool alive = false;
         bool simulated = false;
         bool visual_only = false;
-        InstanceKind kind = InstanceKind::Plain;
+        std::uint16_t pool = 0;
         std::uint32_t storage = 0;
-        InstanceId parent = 0;
+        DataModel* instance = nullptr;
+        InstanceId parent = kNoParent;
         InstanceId first_child = 0;
         InstanceId next_sibling = 0;
         InstanceId prev_sibling = 0;
@@ -180,7 +218,10 @@ private:
     const Slot* slot(InstanceId id) const;
     std::uint32_t slot_count() const;
     const GameObject* game_object_at_slot(std::uint32_t index) const;
-    InstanceId allocate(InstanceKind kind);
+    InstanceId allocate();
+    template <typename T>
+    static SpawnOps ops_for();
+    DataModel& spawn(const SpawnOps& ops);
     void rebind(InstanceId id) { id_ = id; }
 
     void require_simulation_thread(const char* message) const;
@@ -204,5 +245,25 @@ private:
     bool is_under(InstanceId ancestor, InstanceId node) const;
     void release_signals(InstanceId id);
 };
+
+template <typename T>
+DataModel::SpawnOps DataModel::ops_for() {
+    static const char key = 0;
+    SpawnOps ops;
+    ops.key = &key;
+    ops.bytes = sizeof(T);
+    ops.align = alignof(T);
+    ops.construct = [](void* memory, ChildTag tag, State& state, InstanceId id) -> DataModel* {
+        return ::new (memory) T(tag, state, id);
+    };
+    ops.destroy = [](DataModel* object) { static_cast<T*>(object)->~T(); };
+    return ops;
+}
+
+template <typename T>
+T& DataModel::create() {
+    static_assert(std::is_base_of<DataModel, T>::value, "create<T>() requires a DataModel subclass");
+    return static_cast<T&>(spawn(ops_for<T>()));
+}
 
 }  // namespace engine_core

@@ -1,6 +1,9 @@
 #include "ide/IdeLayout.hpp"
 #include "jadefx/jadefx.hpp"
 
+#include "Engine.hpp"
+#include "TestTriangle.hpp"
+
 #include <memory>
 #include <string>
 
@@ -14,6 +17,25 @@ public:
         // The shell owns the runner, which owns the Lua engine. It has to outlive
         // start(); the scene keeps the widgets, and this member keeps the engine.
         layout_ = std::make_unique<ide::IdeLayout>(size.width, size.height);
+        engine_core::Engine& simulation = layout_->simulation();
+        engine_core::DataModel& model = simulation.datamodel();
+        // View-space positions. Positive z is toward the camera.
+        const float kPositions[][3] = {
+            {-0.58f, 0.38f, 0.f},
+            {0.58f, 0.38f, 0.15f},
+            {0.f, 0.02f, 0.55f},
+            {-0.58f, -0.48f, -0.4f},
+            {0.58f, -0.48f, -0.15f},
+        };
+        const double kStartSeconds[] = {0.0, 0.4, 0.8, 1.2, 1.6};
+        constexpr int kCount = 5;
+        for (int index = 0; index < kCount; ++index) {
+            engine_core::TestTriangle& triangle = model.create<engine_core::TestTriangle>();
+            model.set_parent(triangle.id(), model.id());
+            triangle.set_position(kPositions[index][0], kPositions[index][1], kPositions[index][2]);
+            triangle.step(kStartSeconds[index]);
+        }
+        layout_->start();
         auto scene = jadefx::make<jadefx::Scene>(nullptr, size.width, size.height);
         layout_->mount(*scene);
         stage.setScene(std::move(scene));

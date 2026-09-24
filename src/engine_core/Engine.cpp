@@ -158,6 +158,9 @@ void Engine::simulation_loop() {
                 ++substeps;
             }
             scheduler_.run_phase(Phase::Heartbeat, render_dt_);
+            // Descendants of the root step in this phase. Bound Heartbeat jobs
+            // stay for callers that are not instances.
+            model_.step_descendants(render_dt_);
             model_.events().drain();
         } catch (const ContractViolation&) {
             contract_count_.fetch_add(1);

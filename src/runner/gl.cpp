@@ -39,6 +39,7 @@ void (*rt_glGetIntegerv)(GLenum, GLint*) = nullptr;
 void (*rt_glScissor)(GLint, GLint, GLsizei, GLsizei) = nullptr;
 GLint (*rt_glGetUniformLocation)(GLuint, const GLchar*) = nullptr;
 void (*rt_glUniform1f)(GLint, GLfloat) = nullptr;
+void (*rt_glUniform3f)(GLint, GLfloat, GLfloat, GLfloat) = nullptr;
 
 bool LoadGl(GlGetProcAddress get_proc) {
     if (get_proc == nullptr) {
@@ -91,6 +92,7 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(Scissor);
     LOAD(GetUniformLocation);
     LOAD(Uniform1f);
+    LOAD(Uniform3f);
 
 #undef LOAD
     return true;

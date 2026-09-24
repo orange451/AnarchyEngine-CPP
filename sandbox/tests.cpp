@@ -1,6 +1,7 @@
 #include "Contract.hpp"
 #include "DataModel.hpp"
 #include "GameObject.hpp"
+#include "TestTriangle.hpp"
 #include "Engine.hpp"
 #include "Events.hpp"
 #include "IClock.hpp"
@@ -997,6 +998,61 @@ TEST_CASE("plain instances do not carry transform color size or velocity", "[ins
     model.destroy(plain.id());
     REQUIRE_FALSE(model.alive(plain.id()));
     REQUIRE(model.alive(object.id()));
+}
+
+TEST_CASE("create<T> makes any subclass", "[instance]") {
+    engine_core::DataModel model;
+    engine_core::TestTriangle& triangle = model.create<engine_core::TestTriangle>();
+    model.set_parent(triangle.id(), model.id());
+    REQUIRE(model.instance(triangle.id()) == &triangle);
+    REQUIRE(model.game_object(triangle.id()) == nullptr);
+    REQUIRE(model.parent(triangle.id()) == model.id());
+    REQUIRE(model.first_child(model.id()) == triangle.id());
+    REQUIRE(triangle.angle_degrees() == 0.0);
+    REQUIRE(triangle.position().x == 0.f);
+    REQUIRE(triangle.position().y == 0.f);
+    REQUIRE(triangle.position().z == 0.f);
+    triangle.set_position(1.f, 2.f, 3.f);
+    REQUIRE(triangle.position().x == 1.f);
+    REQUIRE(triangle.position().y == 2.f);
+    REQUIRE(triangle.position().z == 3.f);
+    triangle.step(1.0);
+    REQUIRE(triangle.angle_degrees() == 90.0);
+
+    engine_core::DataModel& plain = model.create();
+    REQUIRE(model.parent(plain.id()) == engine_core::DataModel::kNoParent);
+    REQUIRE(dynamic_cast<engine_core::TestTriangle*>(model.instance(plain.id())) == nullptr);
+    REQUIRE(model.first_child(model.id()) == triangle.id());
+
+    const engine_core::InstanceId id = triangle.id();
+    model.destroy(id);
+    REQUIRE_FALSE(model.alive(id));
+    REQUIRE(model.instance(id) == nullptr);
+    REQUIRE(triangle.angle_degrees() == 0.0);
+    REQUIRE(triangle.position().x == 0.f);
+    REQUIRE(model.first_child(model.id()) == 0);
+
+    engine_core::TestTriangle& again = model.create<engine_core::TestTriangle>();
+    REQUIRE(again.angle_degrees() == 0.0);
+    REQUIRE(again.position().z == 0.f);
+    REQUIRE(model.game_object(again.id()) == nullptr);
+}
+
+TEST_CASE("Heartbeat steps descendants of the root", "[instance]") {
+    engine_core::Engine engine;
+    engine_core::DataModel& model = engine.datamodel();
+    engine_core::TestTriangle& triangle = model.create<engine_core::TestTriangle>();
+    model.set_parent(triangle.id(), model.id());
+    engine_core::TestTriangle& nested = model.create<engine_core::TestTriangle>();
+    model.set_parent(nested.id(), triangle.id());
+    engine_core::TestTriangle& loose = model.create<engine_core::TestTriangle>();
+    engine.start();
+    REQUIRE(triangle.angle_degrees() == 0.0);
+    REQUIRE(nested.angle_degrees() == 0.0);
+    engine.resume();
+    wait_until([&] { return triangle.angle_degrees() > 1.0 && nested.angle_degrees() > 1.0; });
+    REQUIRE(loose.angle_degrees() == 0.0);
+    engine.stop();
 }
 
 TEST_CASE("RenderStepped writes this frame and PostRender does not", "[T21]") {

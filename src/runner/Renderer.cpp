@@ -50,6 +50,7 @@ bool Renderer::initialize() {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
     angleLocation_ = glGetUniformLocation(program_, "uAngle");
+    positionLocation_ = glGetUniformLocation(program_, "uPosition");
     // Same dark gray as the Scene View pane, so a one-pixel seam does not show.
     glClearColor(30.f / 255.f, 30.f / 255.f, 30.f / 255.f, 1.0f);
 
@@ -107,7 +108,7 @@ PixelRect PanePixels(double x, double y, double width, double height, double sce
 }  // namespace
 
 void Renderer::draw(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
-                    float angleDegrees) {
+                    const TriangleDraw* triangles, int count) {
     if (!ready_ || width <= 0.0 || height <= 0.0 || sceneWidth <= 0.0 || sceneHeight <= 0.0) {
         return;
     }
@@ -127,6 +128,7 @@ void Renderer::draw(double x, double y, double width, double height, double scen
 
     const GLboolean scissorWasOn = glIsEnabled(GL_SCISSOR_TEST);
     const GLboolean blendWasOn = glIsEnabled(GL_BLEND);
+    const GLboolean depthWasOn = glIsEnabled(GL_DEPTH_TEST);
     PixelRect clip = pane;
     if (scissorWasOn == GL_TRUE) {
         const PixelRect outer{scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3]};
@@ -142,16 +144,27 @@ void Renderer::draw(double x, double y, double width, double height, double scen
     glScissor(clip.x, clip.y, clip.width, clip.height);
     glViewport(pane.x, pane.y, pane.width, pane.height);
     glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
     glClearColor(30.f / 255.f, 30.f / 255.f, 30.f / 255.f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(program_);
-    const float radians = angleDegrees * 0.01745329252f;
-    if (angleLocation_ >= 0) {
-        glUniform1f(angleLocation_, radians);
-    }
     glBindVertexArray(vao_);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    if (triangles != nullptr && count > 0) {
+        for (int index = 0; index < count; ++index) {
+            const TriangleDraw& triangle = triangles[index];
+            if (angleLocation_ >= 0) {
+                glUniform1f(angleLocation_, triangle.angleDegrees * 0.01745329252f);
+            }
+            if (positionLocation_ >= 0) {
+                glUniform3f(positionLocation_, triangle.x, triangle.y, triangle.z);
+            }
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        }
+    }
     glBindVertexArray(0);
+    if (depthWasOn != GL_TRUE) {
+        glDisable(GL_DEPTH_TEST);
+    }
 
     glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
     if (scissorWasOn == GL_TRUE) {

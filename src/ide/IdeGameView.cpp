@@ -1,6 +1,7 @@
 #include "IdeGameView.hpp"
 
 #include "Engine.hpp"
+#include "TestTriangle.hpp"
 #include "../runner/Runner.hpp"
 #include "../runner/gl.hpp"
 
@@ -9,12 +10,21 @@
 
 #include <cmath>
 #include <string>
+#include <vector>
 
 namespace ide {
 namespace {
 
-// A full turn takes four seconds of Heartbeat time.
-constexpr double kDegreesPerSecond = 90.0;
+std::vector<engine_core::TestTriangle*> FindSceneTriangles(runner::Runner& runner) {
+    std::vector<engine_core::TestTriangle*> found;
+    engine_core::DataModel& model = runner.simulation().datamodel();
+    for (engine_core::InstanceId id = model.first_child(model.id()); id != 0; id = model.next_sibling(id)) {
+        if (auto* triangle = dynamic_cast<engine_core::TestTriangle*>(model.instance(id))) {
+            found.push_back(triangle);
+        }
+    }
+    return found;
+}
 
 int FramesPerSecond(double dt) {
     const double frames = 1.0 / dt;
@@ -32,7 +42,7 @@ int FramesPerSecond(double dt) {
 
 IdeGameView::IdeGameView(runner::Runner& runner)
     : IdePane("Scene View", false),
-      angleDegrees_(std::make_shared<std::atomic<double>>(0.0)),
+      triangles_(FindSceneTriangles(runner)),
       renderDt_(std::make_shared<std::atomic<double>>(0.0)) {
     setMinSize(64, 64);
     getClassList().add("ide-viewport");
@@ -47,19 +57,6 @@ IdeGameView::IdeGameView(runner::Runner& runner)
     // The shell builds this view after prepare and before start, so neither
     // loop is running. PreRender keeps running while the simulation is paused,
     // and a bind after start would race that loop.
-    std::weak_ptr<std::atomic<double>> angle = angleDegrees_;
-    runner.simulation().scheduler().bind(engine_core::Phase::Heartbeat, [angle](double dt) {
-        const std::shared_ptr<std::atomic<double>> current = angle.lock();
-        if (!current) {
-            return;
-        }
-        double next = std::fmod(current->load() + dt * kDegreesPerSecond, 360.0);
-        if (next < 0) {
-            next += 360.0;
-        }
-        current->store(next);
-    });
-
     std::weak_ptr<std::atomic<double>> sample = renderDt_;
     runner.simulation().scheduler().bind(engine_core::Phase::PreRender, [sample](double dt) {
         if (!(dt > 0.0)) {
@@ -100,8 +97,22 @@ void IdeGameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
     const jadefx::Scene* scene = getScene();
     if (scene != nullptr && scene->getWidth() > 0.0 && scene->getHeight() > 0.0 && getWidth() > 0.0 &&
         getHeight() > 0.0 && ensureGraphics()) {
+        std::vector<runner::TriangleDraw> draws;
+        draws.reserve(triangles_.size());
+        for (engine_core::TestTriangle* triangle : triangles_) {
+            if (triangle == nullptr) {
+                continue;
+            }
+            const engine_core::Vec3 position = triangle->position();
+            runner::TriangleDraw draw;
+            draw.angleDegrees = static_cast<float>(triangle->angle_degrees());
+            draw.x = position.x;
+            draw.y = position.y;
+            draw.z = position.z;
+            draws.push_back(draw);
+        }
         renderer_.draw(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(), scene->getHeight(),
-                       static_cast<float>(angleDegrees_->load()));
+                       draws.data(), static_cast<int>(draws.size()));
     }
     // Painted after the clear, so the label stays on top of the viewport.
     Node::renderChildren(renderer, opacity);

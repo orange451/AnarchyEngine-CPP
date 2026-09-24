@@ -84,8 +84,6 @@ void ShowOne(jadefx::MenuItem& show, jadefx::MenuItem& hide) {
 }  // namespace
 
 IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
-    // PreRender is in its loop as soon as the threads start. The scene page
-    // binds that job first, while both loops are still stopped.
     runner_.prepare();
 
     auto file = jadefx::make<jadefx::Menu>("File");
@@ -128,7 +126,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
 
     auto center = jadefx::make<IdeDock>();
     center->setMinSize(64, 64);
-    center->dock(jadefx::make<IdeGameView>(runner_));
+    sceneDock_ = center.get();
 
     auto south = jadefx::make<IdeDock>();
     south->setMinSize(80, 96);
@@ -168,6 +166,14 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
     root_->setTop(menuBar);
     root_->setCenter(horizontal);
     root_->setBottom(status);
+}
+
+engine_core::Engine& IdeLayout::simulation() { return runner_.simulation(); }
+
+void IdeLayout::start() {
+    // PreRender is in its loop as soon as the threads start. The scene page
+    // binds that job first, while both loops are still stopped.
+    sceneDock_->dock(jadefx::make<IdeGameView>(runner_));
     runner_.start();
 }
 

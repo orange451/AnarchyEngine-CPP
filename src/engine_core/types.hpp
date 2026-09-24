@@ -16,6 +16,12 @@ struct ColorRgb {
     float a = 1.f;
 };
 
+struct Vec3 {
+    float x = 0.f;
+    float y = 0.f;
+    float z = 0.f;
+};
+
 // Low 16 bits are the slot index. High 16 bits are the generation.
 // Zero is never a live id.
 using InstanceId = std::uint32_t;

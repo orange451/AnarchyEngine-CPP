@@ -21,6 +21,10 @@ public:
     ColorRgb color() const;
     bool copy_size(float out[3]) const;
 
+protected:
+    void on_release() override;
+    void on_reuse() override;
+
 private:
     friend class DataModel;
 

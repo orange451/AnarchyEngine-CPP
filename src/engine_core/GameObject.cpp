@@ -16,7 +16,7 @@ void GameObject::set_size(float x, float y, float z) {
     if (part == nullptr) {
         contract_fail("size write on a dead instance");
     }
-    if (part->kind != InstanceKind::GameObject) {
+    if (part->instance != this) {
         contract_fail("size write on an instance that is not a GameObject");
     }
     if (size_[0] == x && size_[1] == y && size_[2] == z) {
@@ -36,7 +36,7 @@ void GameObject::set_linear_velocity(float x, float y, float z) {
     if (part == nullptr) {
         contract_fail("velocity write on a dead instance");
     }
-    if (part->kind != InstanceKind::GameObject) {
+    if (part->instance != this) {
         contract_fail("velocity write on an instance that is not a GameObject");
     }
     if (velocity_[0] == x && velocity_[1] == y && velocity_[2] == z) {
@@ -71,6 +71,10 @@ bool GameObject::copy_size(float out[3]) const {
     out[2] = size_[2];
     return true;
 }
+
+void GameObject::on_release() { clear_spatial(); }
+
+void GameObject::on_reuse() { reset_spatial(); }
 
 void GameObject::reset_spatial() {
     transform_ = transform_identity();

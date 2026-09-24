@@ -5,7 +5,7 @@ namespace {
 
 std::shared_ptr<jadefx::TreeItem> Branch(const char* name) {
     auto branch = jadefx::make<jadefx::TreeItem>(name);
-    branch->setExpanded(true);
+    //branch->setExpanded(true);
     branch->getChildren().add(jadefx::make<jadefx::TreeItem>("Child"));
     branch->getChildren().add(jadefx::make<jadefx::TreeItem>("Child"));
     return branch;
@@ -14,7 +14,7 @@ std::shared_ptr<jadefx::TreeItem> Branch(const char* name) {
 }  // namespace
 
 IdeExplorer::IdeExplorer(std::string name) : IdePane(std::move(name), true) {
-    setPrefWidth(240);
+    setPrefWidth(9999999);
     setMinSize(150, 80);
 
     auto root = jadefx::make<jadefx::TreeItem>("root");

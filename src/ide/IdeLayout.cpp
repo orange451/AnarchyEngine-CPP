@@ -45,6 +45,10 @@ textfield {
     border-color: #c8c8c8;
     padding: 6px 8px;
 }
+styleclassedtextarea {
+    background-color: #ffffff;
+    padding: 6px 8px;
+}
 split-pane:horizontal > .split-pane-divider,
 split-pane:vertical > .split-pane-divider {
     padding: 0 2px;
@@ -104,11 +108,28 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
     stop->setAccelerator(kKeyF5, 0);
     stop->setVisible(false);
     test->setOnAction([this, testItem, stopItem](jadefx::ActionEvent&) {
-        runner_.simulation().resume();
+        engine_core::Engine& engine = runner_.simulation();
+        // Opens the script VM and enqueues every eligible Script. The place is
+        // captured the first time. Heartbeats after resume run task.wait.
+        engine.on_simulation([](engine_core::DataModel& model) {
+            if (!model.simulation_running()) {
+                model.start_simulation();
+            }
+        });
+        engine.resume();
         ShowOne(*stopItem, *testItem);
     });
     stop->setOnAction([this, testItem, stopItem](jadefx::ActionEvent&) {
-        runner_.simulation().pause();
+        engine_core::Engine& engine = runner_.simulation();
+        // Pause first so stop_simulation runs on this thread once the sim
+        // step has released the write lock. That aborts scripts and restores
+        // the place before another Heartbeat can run.
+        engine.pause();
+        engine.on_simulation([](engine_core::DataModel& model) {
+            if (model.simulation_running()) {
+                model.stop_simulation();
+            }
+        });
         ShowOne(*testItem, *stopItem);
     });
 
@@ -154,7 +175,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
 
     auto south = jadefx::make<IdeDock>();
     south->setMinSize(80, 96);
-    south->dock(jadefx::make<IdeConsole>());
+    south->dock(jadefx::make<IdeConsole>(runner_.simulation()));
 
     auto east = jadefx::make<IdeDock>();
     east->setMinSize(160, 80);

@@ -2,6 +2,7 @@
 #include "jadefx/jadefx.hpp"
 
 #include "Engine.hpp"
+#include "Script.hpp"
 #include "TestTriangle.hpp"
 
 #include <memory>
@@ -31,10 +32,41 @@ public:
         constexpr int kCount = 5;
         for (int index = 0; index < kCount; ++index) {
             engine_core::TestTriangle& triangle = model.create<engine_core::TestTriangle>();
+            model.set_name(triangle.id(), "Tri" + std::to_string(index));
             model.set_parent(triangle.id(), model.id());
             triangle.set_position(kPositions[index][0], kPositions[index][1], kPositions[index][2]);
             triangle.step(kStartSeconds[index]);
         }
+        // Play-solo scripts. Test starts them; Stop restores these poses.
+        // HopSlow and HopFast wait on different clocks so one wait cannot freeze the other.
+        auto add_script = [&](const char* name, const char* source) {
+            engine_core::Script& script = model.create<engine_core::Script>();
+            model.set_name(script.id(), name);
+            script.set_source(source);
+            model.set_parent(script.id(), model.id());
+        };
+        add_script("HopSlow", R"(
+local tri = game:FindFirstChild("Tri0")
+local home = tri.Position
+local n = 0
+while true do
+    task.wait(0.5)
+    n = n + 1
+    local hop = (n % 2 == 1) and 0.45 or 0
+    tri.Position = {x = home.x + hop, y = home.y, z = home.z}
+end
+)");
+        add_script("HopFast", R"(
+local tri = game:FindFirstChild("Tri1")
+local home = tri.Position
+local n = 0
+while true do
+    task.wait(0.2)
+    n = n + 1
+    local hop = (n % 2 == 1) and 0.35 or 0
+    tri.Position = {x = home.x, y = home.y + hop, z = home.z}
+end
+)");
         layout_->start();
         auto scene = jadefx::make<jadefx::Scene>(nullptr, size.width, size.height);
         layout_->mount(*scene);

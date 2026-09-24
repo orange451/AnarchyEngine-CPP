@@ -110,6 +110,9 @@ struct DataModel::State {
     bool simulation_running = false;
     bool place_captured = false;
     PlaceSnapshot place;
+    std::function<void()> on_stop;
+    std::function<void()> on_start;
+    ScriptHost* script_host = nullptr;
 };
 
 DataModel::DataModel() : owned_(std::make_unique<State>()), state_(owned_.get()) {
@@ -954,6 +957,9 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
         emit_child(new_parent, SignalKind::ChildAdded, id, origin);
     }
     emit_ancestry(id, origin);
+    if (part->instance != nullptr) {
+        part->instance->on_parent_changed(old, new_parent);
+    }
 }
 
 void DataModel::release_signals(InstanceId id) {
@@ -1043,6 +1049,29 @@ std::vector<InstanceId> DataModel::child_ids(InstanceId parent_id) const {
     return children;
 }
 
+void DataModel::set_stop_hook(std::function<void()> hook) { state_->on_stop = std::move(hook); }
+
+void DataModel::set_start_hook(std::function<void()> hook) { state_->on_start = std::move(hook); }
+
+void DataModel::set_script_host(ScriptHost* host) { state_->script_host = host; }
+
+void DataModel::for_each_instance(const std::function<void(DataModel&)>& fn) {
+    const std::uint32_t count = slot_count();
+    for (std::uint32_t index = 0; index < count; ++index) {
+        Slot& part = state_->slots[index];
+        if (!part.alive || part.instance == nullptr) {
+            continue;
+        }
+        fn(*part.instance);
+    }
+}
+
+void DataModel::emit_own(Field field) { emit_change(id_, field, current_origin()); }
+
+ScriptHost* DataModel::script_host() const { return state_->script_host; }
+
+bool DataModel::on_gameplay_thread() const { return gameplay_thread(); }
+
 std::uint32_t DataModel::world_generation() const { return state_->world_generation; }
 
 bool DataModel::simulation_running() const { return state_->simulation_running; }
@@ -1070,6 +1099,9 @@ void DataModel::start_simulation() {
         capture_place_unlocked();
     }
     state_->simulation_running = true;
+    if (state_->on_start) {
+        state_->on_start();
+    }
 }
 
 void DataModel::stop_simulation() {
@@ -1080,7 +1112,11 @@ void DataModel::stop_simulation() {
         contract_fail("stop_simulation runs on SimulationThread");
     }
     DataModelLock lock(*this, DataModelLock::Write);
-    // Play-solo stop. Order is the contract.
+    // Scripts abort while the play tree is still the live one. The steps below
+    // are the existing stop: restore runs after the hook returns.
+    if (state_->on_stop) {
+        state_->on_stop();
+    }
     state_->events.drop_pending();
     state_->events.disconnect_all();
     if (TaskScheduler* scheduler = state_->events.scheduler()) {

@@ -6,6 +6,8 @@
 #include "SnapshotPump.hpp"
 #include "TaskScheduler.hpp"
 
+#include <memory>
+
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -19,6 +21,8 @@ namespace engine_core {
 // Two loops. SimulationThread steps the DataModel. RenderThread prepares a
 // snapshot under a short write lock, then Perform/Present with the lock down.
 // PostRender runs after Present, still on RenderThread, without the lock.
+class ScriptRuntime;
+
 class Engine {
 public:
     Engine();
@@ -43,6 +47,7 @@ public:
     DataModel& datamodel() { return model_; }
     SnapshotPump& pump() { return pump_; }
     TaskScheduler& scheduler() { return scheduler_; }
+    ScriptRuntime& scripts();
 
     void start();
     void stop();
@@ -78,6 +83,7 @@ private:
     DataModel model_;
     SnapshotPump pump_;
     TaskScheduler scheduler_;
+    std::unique_ptr<ScriptRuntime> scripts_;
     IRenderer* renderer_ = nullptr;
     IClock* clock_ = nullptr;
     double render_dt_ = 1.0 / 60.0;

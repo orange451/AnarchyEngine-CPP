@@ -2,15 +2,26 @@
 
 #include "../engine_core/LuaEngine.hpp"
 #include "../engine_core/Engine.hpp"
+#include "../engine_core/ScriptRuntime.hpp"
 
 #include <stdexcept>
 #include <utility>
 
 namespace runner {
+namespace {
+
+// The handler points at the simulation's script log. Drop it before that log is destroyed.
+void silencePrint(engine_core::LuaEngine* lua) {
+    if (lua != nullptr) {
+        lua->setPrintHandler(nullptr);
+    }
+}
+
+}  // namespace
 
 Runner::Runner() = default;
 
-Runner::~Runner() = default;
+Runner::~Runner() { silencePrint(lua_.get()); }
 
 void Runner::prepare() {
     if (lua_ != nullptr) {
@@ -24,6 +35,11 @@ void Runner::prepare() {
     simulation->set_simulation_pace_hz(60.0);
     simulation->set_render_pace_hz(0.0);
     simulation->set_render_client_sync(true);
+    // The IDE console reads the script log. Sandbox print shares that log with play scripts.
+    engine_core::ScriptRuntime* scripts = &simulation->scripts();
+    lua->setPrintHandler([scripts](std::string_view text) {
+        scripts->append_output(engine_core::ScriptRuntime::OutputKind::Print, std::string(text));
+    });
     lua_ = std::move(lua);
     simulation_ = std::move(simulation);
 }
@@ -47,6 +63,7 @@ void Runner::start() {
 }
 
 void Runner::stop() {
+    silencePrint(lua_.get());
     simulation_.reset();
     lua_.reset();
     threadsStarted_ = false;

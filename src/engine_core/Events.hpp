@@ -22,6 +22,8 @@ enum class Field : std::uint8_t {
     VisualOnly,
     Parent,
     Name,
+    Source,
+    Enabled,
     Count
 };
 
@@ -68,6 +70,9 @@ class Signal {
 public:
     Connection connect(Handler handler);
     Connection once(Handler handler);
+    // script == 0 is an ordinary C++ connection. A non-zero script tags the
+    // slot with that Script instance and the start_generation captured here.
+    Connection connect_scripted(Handler handler, InstanceId script, std::uint32_t script_generation, bool once);
     // Yields the current simulation job until the next firing.
     // Resumes at a later simulation phase. RenderThread cannot call this.
     void wait();
@@ -118,6 +123,22 @@ public:
     void drop_pending();
     // Tombstones every connection. Signal objects stay so a later connect works.
     void disconnect_all();
+    // Tombstones connections tagged with this Script instance.
+    void disconnect_script(InstanceId script);
+    // Tombstones every script-tagged connection. Untagged C++ connections stay.
+    void disconnect_scripted();
+
+    // Called after a drain batch, still on SimulationThread, while draining_ is set.
+    // Used to resume scripts that the batch made Ready. Must not call drain().
+    void set_after_drain(std::function<void()> hook);
+
+    // Tagged slots fire only when this returns true. Null accepts every tag.
+    using ScriptGate = bool (*)(InstanceId script, std::uint32_t script_generation, void* userdata);
+    void set_script_gate(ScriptGate gate, void* userdata);
+
+    // Host-owned signals (RunService). The Signal object must outlive the queue's use of it.
+    void host_signal(Signal* signal);
+    void release_signal(Signal& signal);
 
     std::uint64_t count(WriteOrigin origin) const;
     std::uint64_t suppressed_overrides() const { return suppressed_overrides_; }
@@ -147,6 +168,8 @@ private:
         std::uint32_t next = 0xffffffffu;
         std::uint64_t min_invoke = 0;
         std::uint64_t min_drain = 0;
+        InstanceId script = 0;
+        std::uint32_t script_generation = 0;
         Handler handler;
     };
 
@@ -157,7 +180,7 @@ private:
 
     void register_signal(Signal* signal);
     void unregister_signal(Signal& signal);
-    Connection connect_to(SignalId id, Handler handler, bool once);
+    Connection connect_to(SignalId id, Handler handler, bool once, InstanceId script, std::uint32_t script_generation);
     void disconnect_slot(std::uint32_t index, std::uint32_t generation);
     void tombstone(std::uint32_t index);
     Signal* resolve(SignalId id);
@@ -183,6 +206,9 @@ private:
     std::size_t size_ = 0;
 
     bool draining_ = false;
+    std::function<void()> after_drain_;
+    ScriptGate script_gate_ = nullptr;
+    void* script_gate_ud_ = nullptr;
     int invoke_depth_ = 0;
     int immediate_depth_ = 0;
     std::uint64_t invoke_epoch_ = 0;

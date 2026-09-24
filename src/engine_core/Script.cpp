@@ -1,0 +1,93 @@
+#include "Script.hpp"
+
+#include "Contract.hpp"
+
+#include <cstdint>
+#include <cstring>
+
+namespace engine_core {
+
+void LuaSource::set_source(std::string source) {
+    if (!on_gameplay_thread()) {
+        contract_fail("set_source runs on SimulationThread");
+    }
+    if (source_ == source) {
+        return;
+    }
+    source_ = std::move(source);
+    emit_own(Field::Source);
+}
+
+void LuaSource::set_enabled(bool enabled) {
+    if (!on_gameplay_thread()) {
+        contract_fail("set_enabled runs on SimulationThread");
+    }
+    if (enabled_ == enabled) {
+        return;
+    }
+    enabled_ = enabled;
+    emit_own(Field::Enabled);
+    if (auto* script = dynamic_cast<Script*>(this)) {
+        if (ScriptHost* host = script_host()) {
+            host->on_script_enabled(*script, enabled);
+        }
+    }
+}
+
+std::uint32_t LuaSource::bump_start_generation() {
+    if (start_generation_ == 0xffffffffu) {
+        start_generation_ = 1;
+    } else {
+        ++start_generation_;
+    }
+    return start_generation_;
+}
+
+void LuaSource::reset_source_fields() {
+    source_.clear();
+    enabled_ = true;
+    start_generation_ = 0;
+}
+
+void LuaSource::on_release() { reset_source_fields(); }
+
+void LuaSource::on_reuse() { reset_source_fields(); }
+
+void LuaSource::write_place(std::vector<std::byte>& out) const {
+    out.push_back(std::byte{enabled_ ? std::uint8_t{1} : std::uint8_t{0}});
+    const std::uint32_t length = static_cast<std::uint32_t>(source_.size());
+    const auto* bytes = reinterpret_cast<const std::byte*>(&length);
+    out.insert(out.end(), bytes, bytes + sizeof(length));
+    const auto* text = reinterpret_cast<const std::byte*>(source_.data());
+    out.insert(out.end(), text, text + source_.size());
+}
+
+void LuaSource::read_place(const std::byte* data, std::size_t size) {
+    reset_source_fields();
+    if (data == nullptr || size < 1 + sizeof(std::uint32_t)) {
+        return;
+    }
+    enabled_ = static_cast<unsigned char>(data[0]) != 0;
+    std::uint32_t length = 0;
+    std::memcpy(&length, data + 1, sizeof(length));
+    if (sizeof(std::uint32_t) + 1 + static_cast<std::size_t>(length) > size) {
+        enabled_ = true;
+        return;
+    }
+    source_.assign(reinterpret_cast<const char*>(data + 1 + sizeof(std::uint32_t)), length);
+}
+
+void Script::on_release() {
+    if (ScriptHost* host = script_host()) {
+        host->on_script_destroyed(*this);
+    }
+    LuaSource::on_release();
+}
+
+void Script::on_parent_changed(InstanceId previous, InstanceId next) {
+    if (ScriptHost* host = script_host()) {
+        host->on_script_parent(*this, previous, next);
+    }
+}
+
+}  // namespace engine_core

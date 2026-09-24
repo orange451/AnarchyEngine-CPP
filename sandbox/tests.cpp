@@ -8,6 +8,9 @@
 #include "Events.hpp"
 #include "IClock.hpp"
 #include "IRenderer.hpp"
+#include "Script.hpp"
+#include "ScriptRuntime.hpp"
+#include "TaskScheduler.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -1667,4 +1670,633 @@ TEST_CASE("N5 stop drops session events and session jobs", "[N5]") {
     }
     REQUIRE(after == 1);
     REQUIRE(model.name(id) == "After");
+}
+
+int name_number(engine_core::DataModel& model, engine_core::InstanceId id) {
+    try {
+        return std::stoi(model.name(id));
+    } catch (const std::exception&) {
+        return -1;
+    }
+}
+
+struct ScriptRig {
+    SimRole role;
+    engine_core::DataModel model;
+    engine_core::TaskScheduler scheduler;
+    engine_core::ScriptRuntime runtime;
+
+    ScriptRig() {
+        scheduler.reserve(16);
+        model.attach_scheduler(&scheduler);
+        runtime.attach(model, scheduler);
+    }
+
+    void frames(int count, double dt = 1.0 / 60.0) {
+        for (int i = 0; i < count; ++i) {
+            scheduler.run_phase(engine_core::Phase::Heartbeat, dt);
+            model.events().drain();
+            runtime.heartbeat(dt);
+            model.events().drain();
+        }
+    }
+};
+
+engine_core::GameObject& add_part(engine_core::DataModel& model, engine_core::InstanceId parent, const char* name) {
+    engine_core::GameObject& part = model.create<engine_core::GameObject>();
+    model.set_name(part.id(), name);
+    model.set_parent(part.id(), parent);
+    return part;
+}
+
+engine_core::Script& add_script(engine_core::DataModel& model, const char* name, const char* source) {
+    engine_core::Script& script = model.create<engine_core::Script>();
+    model.set_name(script.id(), name);
+    script.set_source(source);
+    model.set_parent(script.id(), model.id());
+    return script;
+}
+
+TEST_CASE("S1 two scripts wait without blocking each other", "[S1]") {
+    ScriptRig rig;
+    engine_core::Script& first = add_script(rig.model, "A", R"(
+        local box = script:GetChildren()[1]
+        while true do
+            task.wait(0.05)
+            local n = tonumber(box.Name) or 0
+            box.Name = tostring(n + 1)
+        end
+    )");
+    engine_core::Script& second = add_script(rig.model, "B", R"(
+        local box = script:GetChildren()[1]
+        while true do
+            task.wait(0.05)
+            local n = tonumber(box.Name) or 0
+            box.Name = tostring(n + 1)
+        end
+    )");
+    engine_core::GameObject& count_a = add_part(rig.model, first.id(), "0");
+    engine_core::GameObject& count_b = add_part(rig.model, second.id(), "0");
+    REQUIRE(rig.model.find_first_child(rig.model.id(), "A") == first.id());
+    REQUIRE(std::string(first.class_name()) == "Script");
+
+    rig.model.start_simulation();
+    rig.frames(4, 0.05);
+    const int a = name_number(rig.model, count_a.id());
+    const int b = name_number(rig.model, count_b.id());
+    REQUIRE(a > 0);
+    REQUIRE(b > 0);
+    REQUIRE(std::fabs(rig.runtime.sim_clock() - 0.2) < 1e-9);
+}
+
+TEST_CASE("S2 a script timeout leaves the other Heartbeat running", "[S2]") {
+    ScriptRig rig;
+    add_script(rig.model, "Spin", "while true do end");
+    engine_core::Script& live = add_script(rig.model, "Live", R"(
+        local box = script:GetChildren()[1]
+        game:GetService("RunService").Heartbeat:Connect(function()
+            local n = tonumber(box.Name) or 0
+            box.Name = tostring(n + 1)
+        end)
+    )");
+    engine_core::GameObject& count = add_part(rig.model, live.id(), "0");
+    rig.model.start_simulation();
+    rig.frames(3, 0.05);
+    const int mid = name_number(rig.model, count.id());
+    REQUIRE(mid > 0);
+    REQUIRE(rig.runtime.last_error().find("ScriptTimeout") != std::string::npos);
+    rig.frames(2, 0.05);
+    REQUIRE(name_number(rig.model, count.id()) > mid);
+}
+
+TEST_CASE("S3 stop aborts a waiting script and the next start runs from the top", "[S3]") {
+    ScriptRig rig;
+    engine_core::Script& script = add_script(rig.model, "Main", R"(
+        _G.marker = 1
+        local n = 0
+        local flag = script:GetChildren()[1]
+        flag.Name = tostring(n)
+        task.wait(10)
+        n = n + 1
+        flag.Name = tostring(n)
+        _G.marker = 2
+    )");
+    engine_core::GameObject& flag = add_part(rig.model, script.id(), "start");
+    rig.model.start_simulation();
+    rig.frames(3, 0.05);
+    REQUIRE(rig.model.name(flag.id()) == "0");
+    double marker = 0;
+    REQUIRE(rig.runtime.global_number("marker", marker));
+    REQUIRE(marker == 1);
+
+    rig.model.stop_simulation();
+    REQUIRE(rig.model.name(flag.id()) == "start");
+    REQUIRE_FALSE(rig.runtime.vm_open());
+    REQUIRE(rig.model.find_first_child(script.id(), "start") == flag.id());
+
+    rig.model.start_simulation();
+    REQUIRE(rig.runtime.vm_open());
+    REQUIRE(rig.runtime.global_is_nil("marker"));
+    rig.frames(3, 0.05);
+    REQUIRE(rig.model.name(flag.id()) == "0");
+    REQUIRE(rig.runtime.global_number("marker", marker));
+    REQUIRE(marker == 1);
+    REQUIRE(rig.runtime.sim_clock() < 10);
+}
+
+TEST_CASE("S4 disabling or destroying a script drops only its connections", "[S4]") {
+    ScriptRig rig;
+    engine_core::GameObject& part = add_part(rig.model, rig.model.id(), "P");
+    engine_core::GameObject& hits = add_part(rig.model, rig.model.id(), "Hits");
+    engine_core::GameObject& beat = add_part(rig.model, rig.model.id(), "Beat");
+    engine_core::GameObject& other = add_part(rig.model, rig.model.id(), "Other");
+    // The find names are the stable names. Counters live on children so renames do not hide them.
+    engine_core::GameObject& hit_count = add_part(rig.model, hits.id(), "0");
+    engine_core::GameObject& beat_count = add_part(rig.model, beat.id(), "0");
+    engine_core::GameObject& other_count = add_part(rig.model, other.id(), "0");
+    engine_core::Script& one = add_script(rig.model, "One", R"(
+        local part = game:FindFirstChild("P")
+        local hits = game:FindFirstChild("Hits"):GetChildren()[1]
+        local beat = game:FindFirstChild("Beat"):GetChildren()[1]
+        part.Changed:Connect(function()
+            local n = tonumber(hits.Name) or 0
+            hits.Name = tostring(n + 1)
+        end)
+        game:GetService("RunService").Heartbeat:Connect(function()
+            local n = tonumber(beat.Name) or 0
+            beat.Name = tostring(n + 1)
+        end)
+    )");
+    engine_core::Script& two = add_script(rig.model, "Two", R"(
+        local part = game:FindFirstChild("P")
+        local other = game:FindFirstChild("Other"):GetChildren()[1]
+        part.Changed:Connect(function()
+            local n = tonumber(other.Name) or 0
+            other.Name = tostring(n + 1)
+        end)
+    )");
+    (void)one;
+    rig.model.start_simulation();
+    rig.frames(3, 0.05);
+    const int beat_before = name_number(rig.model, beat_count.id());
+    REQUIRE(beat_before > 0);
+    part.set_color(rgb(0.2f, 0.3f, 0.4f));
+    rig.model.events().drain();
+    const int hits_before = name_number(rig.model, hit_count.id());
+    const int other_before = name_number(rig.model, other_count.id());
+    REQUIRE(hits_before > 0);
+    REQUIRE(other_before > 0);
+
+    one.set_enabled(false);
+    part.set_color(rgb(0.6f, 0.1f, 0.1f));
+    rig.model.events().drain();
+    REQUIRE(name_number(rig.model, hit_count.id()) == hits_before);
+    REQUIRE(name_number(rig.model, other_count.id()) > other_before);
+    const int beat_held = name_number(rig.model, beat_count.id());
+    rig.frames(2, 0.05);
+    REQUIRE(name_number(rig.model, beat_count.id()) == beat_held);
+
+    const int other_held = name_number(rig.model, other_count.id());
+    rig.model.destroy(two.id());
+    part.set_color(rgb(0.1f, 0.7f, 0.2f));
+    rig.model.events().drain();
+    REQUIRE(name_number(rig.model, other_count.id()) == other_held);
+    REQUIRE(name_number(rig.model, hit_count.id()) == hits_before);
+}
+
+TEST_CASE("S5 require caches one return and drops it when the simulation stops", "[S5]") {
+    ScriptRig rig;
+    engine_core::GameObject& runs = add_part(rig.model, rig.model.id(), "0");
+    rig.model.set_name(runs.id(), "Runs");
+    engine_core::GameObject& run_count = add_part(rig.model, runs.id(), "0");
+    engine_core::ModuleScript& mod = rig.model.create<engine_core::ModuleScript>();
+    rig.model.set_name(mod.id(), "Mod");
+    mod.set_source(R"(
+        local flag = script.Parent:FindFirstChild("Runs"):GetChildren()[1]
+        local n = tonumber(flag.Name) or 0
+        flag.Name = tostring(n + 1)
+        return { n = n + 1 }
+    )");
+    rig.model.set_parent(mod.id(), rig.model.id());
+    engine_core::ModuleScript& cycle = rig.model.create<engine_core::ModuleScript>();
+    rig.model.set_name(cycle.id(), "Cycle");
+    cycle.set_source("return require(script)");
+    rig.model.set_parent(cycle.id(), rig.model.id());
+    add_script(rig.model, "Main", R"(
+        local mod = game:FindFirstChild("Mod")
+        local a = require(mod)
+        local b = require(mod)
+        _G.same = (a == b)
+        _G.n = a.n
+        local ok = pcall(function()
+            require(game:FindFirstChild("Cycle"))
+        end)
+        _G.cycle = not ok
+    )");
+    rig.model.start_simulation();
+    rig.frames(1, 0.05);
+    bool same = false;
+    bool cycled = false;
+    double n = 0;
+    REQUIRE(rig.runtime.global_boolean("same", same));
+    REQUIRE(same);
+    REQUIRE(rig.runtime.global_number("n", n));
+    REQUIRE(n == 1);
+    REQUIRE(name_number(rig.model, run_count.id()) == 1);
+    REQUIRE(rig.runtime.global_boolean("cycle", cycled));
+    REQUIRE(cycled);
+
+    rig.model.stop_simulation();
+    REQUIRE(rig.model.name(run_count.id()) == "0");
+    rig.model.start_simulation();
+    REQUIRE(rig.runtime.global_is_nil("same"));
+    REQUIRE(rig.runtime.global_is_nil("n"));
+    rig.frames(1, 0.05);
+    REQUIRE(name_number(rig.model, run_count.id()) == 1);
+    REQUIRE(rig.runtime.global_boolean("same", same));
+    REQUIRE(same);
+    REQUIRE(rig.runtime.global_number("n", n));
+    REQUIRE(n == 1);
+}
+
+TEST_CASE("S6 stop drops a script-created GameObject and restores an authored name", "[S6]") {
+    ScriptRig rig;
+    engine_core::GameObject& door = add_part(rig.model, rig.model.id(), "Door");
+    engine_core::Script& maker = add_script(rig.model, "Maker", R"(
+        local made = Instance.new("GameObject")
+        made.Name = "Session"
+        made.Parent = script.Parent
+        local door = script.Parent:FindFirstChild("Door")
+        door.Name = "Moved"
+    )");
+    REQUIRE(rig.model.find_first_child(rig.model.id(), "Maker") == maker.id());
+    REQUIRE(std::string(maker.class_name()) == "Script");
+    rig.model.start_simulation();
+    rig.frames(1, 0.05);
+    REQUIRE(rig.model.name(door.id()) == "Moved");
+    const engine_core::InstanceId session = rig.model.find_first_child(rig.model.id(), "Session");
+    REQUIRE(session != 0);
+    REQUIRE(std::string(rig.model.instance(session)->class_name()) == "GameObject");
+
+    rig.model.stop_simulation();
+    REQUIRE(rig.model.name(door.id()) == "Door");
+    REQUIRE_FALSE(rig.model.alive(session));
+    REQUIRE(rig.model.find_first_child(rig.model.id(), "Session") == 0);
+    REQUIRE(rig.model.find_first_child(rig.model.id(), "Maker") == maker.id());
+}
+
+TEST_CASE("S7 parenting a script while running starts it after the drain", "[S7]") {
+    ScriptRig rig;
+    engine_core::GameObject& mark = add_part(rig.model, rig.model.id(), "Mark");
+    engine_core::GameObject& token = add_part(rig.model, mark.id(), "hidden");
+    engine_core::GameObject& flag = add_part(rig.model, rig.model.id(), "Flag");
+    engine_core::GameObject& trigger = add_part(rig.model, rig.model.id(), "Trigger");
+    engine_core::Script& script = rig.model.create<engine_core::Script>();
+    rig.model.set_name(script.id(), "Late");
+    script.set_source(R"(
+        local mark = game:FindFirstChild("Mark")
+        local flag = game:FindFirstChild("Flag")
+        flag.Name = mark:GetChildren()[1].Name
+    )");
+    REQUIRE(rig.model.parent(script.id()) == engine_core::DataModel::kNoParent);
+
+    rig.model.start_simulation();
+    bool started_inside = false;
+    rig.model.changed(trigger.id()).connect([&](engine_core::InstanceId, engine_core::Field) {
+        rig.model.set_name(token.id(), "visible");
+        rig.model.set_parent(script.id(), rig.model.id());
+        started_inside = rig.model.name(flag.id()) == "visible";
+    });
+    rig.model.set_name(trigger.id(), "go");
+    REQUIRE(rig.model.name(flag.id()) == "Flag");
+    rig.model.events().drain();
+    REQUIRE_FALSE(started_inside);
+    REQUIRE(rig.model.parent(script.id()) == rig.model.id());
+    REQUIRE(rig.model.name(flag.id()) == "visible");
+}
+
+TEST_CASE("S8 a script color write is path A", "[S8]") {
+    ScriptRig rig;
+    engine_core::GameObject& part = add_part(rig.model, rig.model.id(), "P");
+    add_script(rig.model, "Painter", R"(
+        local part = game:FindFirstChild("P")
+        part.Color = {r = 0.2, g = 0.4, b = 0.6, a = 1}
+    )");
+    int hits = 0;
+    engine_core::Field seen = engine_core::Field::Count;
+    rig.model.changed(part.id()).connect([&](engine_core::InstanceId, engine_core::Field field) {
+        ++hits;
+        seen = field;
+    });
+    rig.model.start_simulation();
+    rig.frames(1, 1.0 / 60.0);
+    const engine_core::ColorRgb tint = rgb(0.2f, 0.4f, 0.6f);
+    REQUIRE(hits >= 1);
+    REQUIRE(seen == engine_core::Field::Color);
+    REQUIRE(near_color(part.color(), tint));
+
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    {
+        engine_core::DataModelLock lock(rig.model, engine_core::DataModelLock::Write);
+        pump.begin_prerender_window(rig.model);
+        pump.end_prerender_window(rig.model);
+        pump.prepare_copy(rig.model);
+    }
+    pump.publish();
+    const engine_core::VisualInstance* vis = pump.find(part.id());
+    REQUIRE(vis != nullptr);
+    REQUIRE(near_color(vis->color, tint));
+    REQUIRE(vis->color_origin == engine_core::WriteOrigin::Simulation);
+}
+
+TEST_CASE("S9 binding PreRender from a script errors", "[S9]") {
+    ScriptRig rig;
+    add_script(rig.model, "Bad", R"(
+        local pre_ok = pcall(function()
+            game:GetService("RunService").PreRender:Connect(function() end)
+        end)
+        local step_ok = pcall(function()
+            game:GetService("RunService").RenderStepped:Connect(function() end)
+        end)
+        _G.pre = not pre_ok
+        _G.step = not step_ok
+    )");
+    add_script(rig.model, "Other", "_G.other = true");
+    rig.model.start_simulation();
+    rig.frames(1, 0.05);
+    bool pre = false;
+    bool step = false;
+    bool other = false;
+    REQUIRE(rig.runtime.global_boolean("pre", pre));
+    REQUIRE(pre);
+    REQUIRE(rig.runtime.global_boolean("step", step));
+    REQUIRE(step);
+    REQUIRE(rig.runtime.global_boolean("other", other));
+    REQUIRE(other);
+}
+
+TEST_CASE("S10 stale userdata after stop does not address the restored tree", "[S10]") {
+    ScriptRig rig;
+    engine_core::GameObject& door = add_part(rig.model, rig.model.id(), "Door");
+    add_script(rig.model, "Keeper", R"(
+        local door = game:FindFirstChild("Door")
+        _G.door = door
+        door.Name = "Live"
+        local temp = Instance.new("GameObject")
+        temp.Name = "Temp"
+        temp:Destroy()
+        _G.read_nil = (temp.Name == nil)
+        local ok = pcall(function()
+            temp.Name = "nope"
+        end)
+        _G.set_failed = not ok
+    )");
+    rig.model.start_simulation();
+    rig.frames(1, 0.05);
+    REQUIRE(rig.model.name(door.id()) == "Live");
+    bool read_nil = false;
+    bool set_failed = false;
+    REQUIRE(rig.runtime.global_boolean("read_nil", read_nil));
+    REQUIRE(read_nil);
+    REQUIRE(rig.runtime.global_boolean("set_failed", set_failed));
+    REQUIRE(set_failed);
+    const engine_core::ScriptRuntime::Watch watch = rig.runtime.watch_global("door");
+    REQUIRE(watch.valid);
+    REQUIRE(watch.id == door.id());
+    REQUIRE(rig.runtime.resolve_watch(watch) == &door);
+
+    const std::uint32_t generation = rig.model.world_generation();
+    rig.model.stop_simulation();
+    REQUIRE(rig.model.world_generation() == generation + 1);
+    REQUIRE(rig.model.alive(door.id()));
+    REQUIRE(rig.model.name(door.id()) == "Door");
+    REQUIRE(rig.runtime.resolve_watch(watch) == nullptr);
+
+    rig.model.start_simulation();
+    REQUIRE(rig.runtime.global_is_nil("door"));
+    REQUIRE(rig.runtime.resolve_watch(watch) == nullptr);
+    rig.frames(1, 0.05);
+    REQUIRE(rig.model.name(door.id()) == "Live");
+    REQUIRE(rig.runtime.resolve_watch(watch) == nullptr);
+    const engine_core::ScriptRuntime::Watch fresh = rig.runtime.watch_global("door");
+    REQUIRE(fresh.valid);
+    REQUIRE(fresh.world != watch.world);
+    REQUIRE(rig.runtime.resolve_watch(fresh) == &door);
+}
+
+TEST_CASE("S11 spawned wait(0) threads both resume", "[S11]") {
+    ScriptRig rig;
+    add_script(rig.model, "Main", R"(
+        task.spawn(function()
+            task.wait(0)
+            _G.a = (_G.a or 0) + 1
+        end)
+        task.spawn(function()
+            task.wait(0)
+            _G.b = (_G.b or 0) + 1
+        end)
+    )");
+    rig.model.start_simulation();
+    rig.frames(2, 0.05);
+    double a = 0;
+    double b = 0;
+    REQUIRE(rig.runtime.global_number("a", a));
+    REQUIRE(rig.runtime.global_number("b", b));
+    REQUIRE(a == 1);
+    REQUIRE(b == 1);
+}
+
+TEST_CASE("S12 a Luau Heartbeat connection runs on the simulation thread", "[S12]") {
+    engine_core::Engine engine;
+    engine_core::DataModel& model = engine.datamodel();
+    engine_core::GameObject& part = add_part(model, model.id(), "P");
+    add_script(model, "Beat", R"(
+        local part = game:FindFirstChild("P")
+        local n = 0
+        game:GetService("RunService").Heartbeat:Connect(function()
+            n = n + 1
+            part.Color = {r = n / 100, g = 0.2, b = 0.3, a = 1}
+        end)
+    )");
+    std::atomic<int> hits{0};
+    model.changed(part.id()).connect([&](engine_core::InstanceId, engine_core::Field) { hits.fetch_add(1); });
+    model.start_simulation();
+    engine.start();
+    engine.resume();
+    wait_until([&] { return hits.load() >= 3; });
+    engine.stop();
+    REQUIRE(hits.load() >= 3);
+}
+
+TEST_CASE("scene scripts hop a triangle on task.wait and stop restores the pose", "[scene]") {
+    ScriptRig rig;
+    engine_core::TestTriangle& slow = rig.model.create<engine_core::TestTriangle>();
+    rig.model.set_name(slow.id(), "Tri0");
+    rig.model.set_parent(slow.id(), rig.model.id());
+    slow.set_position(-0.58f, 0.38f, 0.f);
+    engine_core::TestTriangle& fast = rig.model.create<engine_core::TestTriangle>();
+    rig.model.set_name(fast.id(), "Tri1");
+    rig.model.set_parent(fast.id(), rig.model.id());
+    fast.set_position(0.58f, 0.38f, 0.15f);
+    add_script(rig.model, "HopSlow", R"(
+        local tri = game:FindFirstChild("Tri0")
+        local home = tri.Position
+        local n = 0
+        while true do
+            task.wait(0.5)
+            n = n + 1
+            local hop = (n % 2 == 1) and 0.45 or 0
+            tri.Position = {x = home.x + hop, y = home.y, z = home.z}
+        end
+    )");
+    add_script(rig.model, "HopFast", R"(
+        local tri = game:FindFirstChild("Tri1")
+        local home = tri.Position
+        local n = 0
+        while true do
+            task.wait(0.2)
+            n = n + 1
+            local hop = (n % 2 == 1) and 0.35 or 0
+            tri.Position = {x = home.x, y = home.y + hop, z = home.z}
+        end
+    )");
+
+    rig.model.start_simulation();
+    bool slow_moved = false;
+    bool fast_moved = false;
+    for (int frame = 0; frame < 12; ++frame) {
+        rig.frames(1, 0.1);
+        const engine_core::Vec3 slow_now = slow.position();
+        const engine_core::Vec3 fast_now = fast.position();
+        if (std::fabs(slow_now.x - (-0.58f)) > 0.2f) {
+            slow_moved = true;
+            REQUIRE(std::fabs(slow_now.y - 0.38f) < 1e-4f);
+        }
+        if (std::fabs(fast_now.y - 0.38f) > 0.2f) {
+            fast_moved = true;
+            REQUIRE(std::fabs(fast_now.x - 0.58f) < 1e-4f);
+        }
+    }
+    REQUIRE(slow_moved);
+    REQUIRE(fast_moved);
+
+    rig.model.stop_simulation();
+    const engine_core::Vec3 restored_slow = slow.position();
+    const engine_core::Vec3 restored_fast = fast.position();
+    REQUIRE(std::fabs(restored_slow.x - (-0.58f)) < 1e-4f);
+    REQUIRE(std::fabs(restored_slow.y - 0.38f) < 1e-4f);
+    REQUIRE(std::fabs(restored_slow.z) < 1e-4f);
+    REQUIRE(std::fabs(restored_fast.x - 0.58f) < 1e-4f);
+    REQUIRE(std::fabs(restored_fast.y - 0.38f) < 1e-4f);
+    REQUIRE(std::fabs(restored_fast.z - 0.15f) < 1e-4f);
+    REQUIRE(rig.model.name(rig.model.find_first_child(rig.model.id(), "HopSlow")) == "HopSlow");
+}
+
+TEST_CASE("S13 print and errors reach the log and a new start clears it", "[S13]") {
+    ScriptRig rig;
+    add_script(rig.model, "Main", R"(
+        print("hello", 2)
+        pcall(function() error("hidden") end)
+        error("boom")
+    )");
+    rig.runtime.append_output(engine_core::ScriptRuntime::OutputKind::Print, "stale-before");
+    rig.model.start_simulation();
+    const engine_core::ScriptRuntime::OutputBatch cleared = rig.runtime.drain_output();
+    REQUIRE(cleared.lines.empty());
+    REQUIRE(cleared.epoch >= 1);
+
+    rig.frames(1);
+    const engine_core::ScriptRuntime::OutputBatch first = rig.runtime.drain_output();
+    bool saw_print = false;
+    bool saw_boom = false;
+    for (const engine_core::ScriptRuntime::OutputLine& line : first.lines) {
+        REQUIRE(line.text.find("hidden") == std::string::npos);
+        REQUIRE(line.text.find("stale-before") == std::string::npos);
+        if (line.kind == engine_core::ScriptRuntime::OutputKind::Print && line.text == "hello\t2\n") {
+            saw_print = true;
+        }
+        if (line.kind == engine_core::ScriptRuntime::OutputKind::Error && line.text.find("boom") != std::string::npos) {
+            saw_boom = true;
+        }
+    }
+    REQUIRE(saw_print);
+    REQUIRE(saw_boom);
+    REQUIRE(rig.runtime.last_error().find("boom") != std::string::npos);
+
+    rig.model.stop_simulation();
+    rig.model.start_simulation();
+    rig.frames(1);
+    rig.model.stop_simulation();
+    rig.model.start_simulation();
+    const engine_core::ScriptRuntime::OutputBatch wiped = rig.runtime.drain_output();
+    REQUIRE(wiped.lines.empty());
+    REQUIRE(wiped.epoch > first.epoch);
+}
+
+TEST_CASE("S15 a console chunk uses the play VM", "[S15]") {
+    ScriptRig rig;
+    rig.model.start_simulation();
+    rig.runtime.drain_output();
+    rig.runtime.run_chunk("print(game.Name)");
+    rig.runtime.run_chunk("error(\"nope\")");
+    rig.runtime.run_chunk("pcall(function() error(\"hidden\") end)\nprint(\"after\")");
+    const engine_core::ScriptRuntime::OutputBatch batch = rig.runtime.drain_output();
+    bool saw_name = false;
+    bool saw_nope = false;
+    bool saw_after = false;
+    for (const engine_core::ScriptRuntime::OutputLine& line : batch.lines) {
+        REQUIRE(line.text.find("hidden") == std::string::npos);
+        if (line.kind == engine_core::ScriptRuntime::OutputKind::Print && line.text == "DataModel\n") {
+            saw_name = true;
+        }
+        if (line.kind == engine_core::ScriptRuntime::OutputKind::Error && line.text.find("nope") != std::string::npos) {
+            saw_nope = true;
+        }
+        if (line.kind == engine_core::ScriptRuntime::OutputKind::Print && line.text == "after\n") {
+            saw_after = true;
+        }
+    }
+    REQUIRE(saw_name);
+    REQUIRE(saw_nope);
+    REQUIRE(saw_after);
+}
+
+TEST_CASE("S14 a script that does not compile is logged", "[S14]") {
+    ScriptRig rig;
+    add_script(rig.model, "Bad", "print(");
+    rig.model.start_simulation();
+    rig.frames(1);
+    const engine_core::ScriptRuntime::OutputBatch batch = rig.runtime.drain_output();
+    REQUIRE(!batch.lines.empty());
+    REQUIRE(batch.lines[0].kind == engine_core::ScriptRuntime::OutputKind::Error);
+    REQUIRE(!rig.runtime.last_error().empty());
+}
+
+TEST_CASE("S16 the console sees game while the simulation is stopped", "[S16]") {
+    ScriptRig rig;
+    rig.model.set_name(0, "Place");
+    rig.runtime.run_chunk("print(game)");
+    rig.runtime.run_chunk("print(game.Name)");
+    const engine_core::ScriptRuntime::OutputBatch before = rig.runtime.drain_output();
+    REQUIRE(before.lines.size() == 2);
+    REQUIRE(before.lines[0].kind == engine_core::ScriptRuntime::OutputKind::Print);
+    REQUIRE(before.lines[0].text == "Place\n");
+    REQUIRE(before.lines[1].text == "Place\n");
+    REQUIRE_FALSE(rig.runtime.vm_open());
+
+    rig.model.start_simulation();
+    rig.runtime.run_chunk("print(game.Name)");
+    const engine_core::ScriptRuntime::OutputBatch playing = rig.runtime.drain_output();
+    REQUIRE(playing.lines.size() == 1);
+    REQUIRE(playing.lines[0].text == "Place\n");
+
+    rig.model.stop_simulation();
+    REQUIRE_FALSE(rig.runtime.vm_open());
+    rig.runtime.run_chunk("print(game)");
+    rig.runtime.run_chunk("print(game.Name)");
+    const engine_core::ScriptRuntime::OutputBatch after = rig.runtime.drain_output();
+    REQUIRE(after.lines.size() == 2);
+    REQUIRE(after.lines[0].text == "Place\n");
+    REQUIRE(after.lines[1].text == "Place\n");
 }

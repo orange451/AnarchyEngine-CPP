@@ -1,4 +1,6 @@
+#include "Engine.hpp"
 #include "LuaEngine.hpp"
+#include "ScriptRuntime.hpp"
 #include "runner/Runner.hpp"
 
 #include <cstdio>
@@ -191,6 +193,13 @@ void testRunner() {
     expect(runner.running(), "runner is running");
     expectValues(runner.lua().execute("boot", "return math.abs(-4)"), {"4"}, "runner started lua");
     expectValues(runner.lua().execute("os", "return os"), {"nil"}, "runner lua is sandboxed");
+    expectValues(runner.lua().execute("hi", "print(\"hi\", 2)"), {}, "runner print returns nothing");
+    const engine_core::ScriptRuntime::OutputBatch printed = runner.simulation().scripts().drain_output();
+    expect(printed.lines.size() == 1 && printed.lines[0].kind == engine_core::ScriptRuntime::OutputKind::Print &&
+               printed.lines[0].text == "hi\t2\n",
+           "runner print reaches the output log");
+    expectError(runner.lua().execute("bad", "error(\"nope\")"), "nope", "runner error");
+    expect(runner.simulation().scripts().drain_output().lines.empty(), "execute errors stay with the caller");
 
     bool threw = false;
     try {

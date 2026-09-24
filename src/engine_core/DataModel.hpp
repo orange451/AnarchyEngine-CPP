@@ -22,6 +22,7 @@ namespace engine_core {
 class DataModelLock;
 class Engine;
 class GameObject;
+class ScriptHost;
 
 // Live source of truth. SimulationThread is the only thread that may run
 // gameplay against it, and the only thread that may hold the write lock
@@ -107,11 +108,16 @@ public:
     // Place is the authored tree. The first start_simulation captures it when
     // nothing has been captured yet. capture_place replaces that tree.
     // start while running is an error. stop while stopped does nothing.
-    // stop runs on SimulationThread: drop queued events, disconnect every
+    // stop runs on SimulationThread. The stop hook runs first, while the play
+    // tree is still alive. Then: drop queued events, disconnect every
     // connection, cancel session jobs, restore the place, bump world_generation.
+    // The start hook runs after simulation_running is set, still under the write lock.
     void capture_place();
     void start_simulation();
     void stop_simulation();
+    void set_stop_hook(std::function<void()> hook);
+    void set_start_hook(std::function<void()> hook);
+    void set_script_host(ScriptHost* host);
     std::uint32_t world_generation() const;
     bool simulation_running() const;
 
@@ -163,6 +169,8 @@ public:
     void step_descendants(double dt);
 
     // Startup and resync. Visits live GameObjects only.
+    void for_each_instance(const std::function<void(DataModel&)>& fn);
+
     template <typename Fn>
     void for_each_game_object(Fn&& fn) const {
         const std::uint32_t count = slot_count();
@@ -176,6 +184,8 @@ public:
     void set_prerender_window(bool open);
     bool prerender_window() const;
     int write_depth() const;
+    // SimulationThread, or the caller when the engine threads are not running.
+    bool on_gameplay_thread() const;
 
     // Pool construction. Outsiders cannot build a ChildTag or a State.
     class ChildTag {
@@ -192,6 +202,16 @@ protected:
     // on_release runs then. on_reuse runs when that storage is issued again.
     virtual void on_release() {}
     virtual void on_reuse() {}
+
+    // Called at the end of a successful set_parent, after the signals are emitted.
+    // Subclasses enqueue work from here. They do not resume scripts.
+    virtual void on_parent_changed(InstanceId previous, InstanceId next) {
+        (void)previous;
+        (void)next;
+    }
+
+    void emit_own(Field field);
+    ScriptHost* script_host() const;
 
     // Subclass bytes stored in the place snapshot. The base stores nothing.
     // Velocity is not place state; GameObject clears it on read.

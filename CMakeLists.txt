@@ -118,6 +118,8 @@ add_library(engine_core STATIC
     src/engine_core/Events.cpp
     src/engine_core/Engine.cpp
     src/engine_core/LuaEngine.cpp
+    src/engine_core/Script.cpp
+    src/engine_core/ScriptRuntime.cpp
 )
 target_include_directories(engine_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/engine_core")
 target_compile_features(engine_core PUBLIC cxx_std_17)

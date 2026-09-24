@@ -1,6 +1,7 @@
 #include "Engine.hpp"
 
 #include "DataModelLock.hpp"
+#include "ScriptRuntime.hpp"
 
 #include <chrono>
 #include <stdexcept>
@@ -13,7 +14,11 @@ Engine::Engine() {
     pump_.reserve(DataModel::kMaxInstances);
     scheduler_.reserve(64);
     model_.attach_scheduler(&scheduler_);
+    scripts_ = std::make_unique<ScriptRuntime>();
+    scripts_->attach(model_, scheduler_);
 }
+
+ScriptRuntime& Engine::scripts() { return *scripts_; }
 
 Engine::~Engine() { stop(); }
 
@@ -216,6 +221,11 @@ void Engine::simulation_loop() {
             // Descendants of the root step in this phase. Bound Heartbeat jobs
             // stay for callers that are not instances.
             model_.step_descendants(render_dt_);
+            model_.events().drain();
+            // Same dt Heartbeat jobs just received. Scripts resume after that drain.
+            if (scripts_) {
+                scripts_->heartbeat(render_dt_);
+            }
             model_.events().drain();
         } catch (const ContractViolation&) {
             contract_count_.fetch_add(1);

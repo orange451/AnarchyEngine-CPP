@@ -143,6 +143,8 @@ void EventQueue::tombstone(std::uint32_t index) {
     slot.live = false;
     slot.once = false;
     slot.handler = nullptr;
+    slot.script = 0;
+    slot.script_generation = 0;
     slot.prev = kNone;
     slot.next = kNone;
     slot.signal_index = kNone;
@@ -165,7 +167,8 @@ void EventQueue::disconnect_slot(std::uint32_t index, std::uint32_t generation) 
     tombstone(index);
 }
 
-Connection EventQueue::connect_to(SignalId id, Handler handler, bool once) {
+Connection EventQueue::connect_to(SignalId id, Handler handler, bool once, InstanceId script,
+                                  std::uint32_t script_generation) {
     Signal* signal = resolve(id);
     if (signal == nullptr) {
         contract_fail("connect on a dead signal");
@@ -181,6 +184,8 @@ Connection EventQueue::connect_to(SignalId id, Handler handler, bool once) {
     ConnSlot& slot = conns_[index];
     slot.live = true;
     slot.once = once;
+    slot.script = script;
+    slot.script_generation = script_generation;
     slot.signal_index = id.index;
     slot.handler = std::move(handler);
     if (draining_) {
@@ -236,6 +241,10 @@ void EventQueue::invoke_connections(Signal& signal, const Event& event) {
     for (std::size_t cursor = begin; cursor < end; ++cursor) {
         const std::uint32_t index = invoke_list_[cursor];
         if (index >= conns_.size() || !eligible(conns_[index])) {
+            continue;
+        }
+        if (conns_[index].script != 0 && script_gate_ != nullptr &&
+            !script_gate_(conns_[index].script, conns_[index].script_generation, script_gate_ud_)) {
             continue;
         }
         Handler handler = conns_[index].handler;
@@ -321,6 +330,9 @@ void EventQueue::drain() {
         }
         invoke(event);
     }
+    if (after_drain_) {
+        after_drain_();
+    }
 }
 
 void EventQueue::seal_instance(InstanceId id) {
@@ -374,6 +386,38 @@ void EventQueue::disconnect_all() {
     }
 }
 
+void EventQueue::disconnect_script(InstanceId script) {
+    if (script == 0) {
+        return;
+    }
+    const std::uint32_t count = static_cast<std::uint32_t>(conns_.size());
+    for (std::uint32_t index = 0; index < count; ++index) {
+        if (conns_[index].live && conns_[index].script == script) {
+            tombstone(index);
+        }
+    }
+}
+
+void EventQueue::disconnect_scripted() {
+    const std::uint32_t count = static_cast<std::uint32_t>(conns_.size());
+    for (std::uint32_t index = 0; index < count; ++index) {
+        if (conns_[index].live && conns_[index].script != 0) {
+            tombstone(index);
+        }
+    }
+}
+
+void EventQueue::set_after_drain(std::function<void()> hook) { after_drain_ = std::move(hook); }
+
+void EventQueue::set_script_gate(ScriptGate gate, void* userdata) {
+    script_gate_ = gate;
+    script_gate_ud_ = userdata;
+}
+
+void EventQueue::host_signal(Signal* signal) { register_signal(signal); }
+
+void EventQueue::release_signal(Signal& signal) { unregister_signal(signal); }
+
 void EventQueue::shutdown() {
     for (ConnSlot& slot : conns_) {
         slot.live = false;
@@ -400,14 +444,21 @@ Connection Signal::connect(Handler handler) {
     if (!bound()) {
         contract_fail("connect on a dead signal");
     }
-    return queue_->connect_to(id_, std::move(handler), false);
+    return queue_->connect_to(id_, std::move(handler), false, 0, 0);
 }
 
 Connection Signal::once(Handler handler) {
     if (!bound()) {
         contract_fail("connect on a dead signal");
     }
-    return queue_->connect_to(id_, std::move(handler), true);
+    return queue_->connect_to(id_, std::move(handler), true, 0, 0);
+}
+
+Connection Signal::connect_scripted(Handler handler, InstanceId script, std::uint32_t script_generation, bool once) {
+    if (!bound()) {
+        contract_fail("connect on a dead signal");
+    }
+    return queue_->connect_to(id_, std::move(handler), once, script, script_generation);
 }
 
 void Signal::wait() {

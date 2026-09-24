@@ -24,8 +24,6 @@ struct ApplyGuard {
     ~ApplyGuard() { flag = false; }
 };
 
-const char* LabelOf(const char* name) { return name != nullptr && name[0] != '\0' ? name : "Instance"; }
-
 }  // namespace
 
 void IdeExplorer::Snapshot::clear() {
@@ -37,7 +35,7 @@ void IdeExplorer::Snapshot::clear() {
 }
 
 bool IdeExplorer::Snapshot::same_shape(const Snapshot& other) const {
-    return ids == other.ids && child_counts == other.child_counts;
+    return ids == other.ids && child_counts == other.child_counts && labels == other.labels;
 }
 
 IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name)
@@ -45,7 +43,7 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name)
     setPrefWidth(9999999);
     setMinSize(150, 80);
 
-    root_item_ = jadefx::make<jadefx::TreeItem>(LabelOf(root_.class_name()));
+    root_item_ = jadefx::make<jadefx::TreeItem>(root_.name(root_.id()));
     root_item_->setExpanded(true);
 
     tree_ = jadefx::make<jadefx::TreeView>(root_item_);
@@ -72,6 +70,7 @@ void IdeExplorer::sync() {
     apply(edit_weight() > kInPlaceEdits);
     committed_.ids = scratch_.ids;
     committed_.child_counts = scratch_.child_counts;
+    committed_.labels = scratch_.labels;
 }
 
 bool IdeExplorer::capture() {
@@ -100,12 +99,8 @@ void IdeExplorer::read_hierarchy(Snapshot& snap) {
         const engine_core::InstanceId id = pending_.back();
         pending_.pop_back();
 
-        const char* label = "Instance";
-        if (id == root_id) {
-            label = LabelOf(root_.class_name());
-        } else if (const engine_core::DataModel* instance = root_.instance(id)) {
-            label = LabelOf(instance->class_name());
-        }
+        // Name defaults to the class, so an unnamed instance still reads as its class.
+        std::string label = root_.name(id);
 
         const std::uint32_t begin = static_cast<std::uint32_t>(snap.children.size());
         std::uint32_t count = 0;
@@ -129,7 +124,7 @@ void IdeExplorer::read_hierarchy(Snapshot& snap) {
         snap.ids.push_back(id);
         snap.child_counts.push_back(count);
         snap.child_begins.push_back(begin);
-        snap.labels.push_back(label);
+        snap.labels.push_back(std::move(label));
 
         for (std::uint32_t i = count; i-- > 0;) {
             pending_.push_back(snap.children[begin + i]);
@@ -320,10 +315,15 @@ void IdeExplorer::apply(bool batch) {
         tree_->setRoot(nullptr);
     }
 
+    if (root_item_ && !snap.labels.empty() && root_item_->getValue() != snap.labels[0]) {
+        root_item_->setValue(snap.labels[0]);
+    }
     for (std::size_t i = 1; i < snap.ids.size(); ++i) {
         std::shared_ptr<jadefx::TreeItem>& row = items_[snap.ids[i]];
         if (!row) {
             row = jadefx::make<jadefx::TreeItem>(snap.labels[i]);
+        } else if (row->getValue() != snap.labels[i]) {
+            row->setValue(snap.labels[i]);
         }
     }
 

@@ -26,12 +26,13 @@ protected:
 private:
     // Preorder encoding of the live hierarchy. ids[0] is the explorer root.
     // children[child_begins[i] .. + child_counts[i]] are that node's direct children.
+    // labels[i] is that instance's Name, copied while the read lock is held.
     struct Snapshot {
         std::vector<engine_core::InstanceId> ids;
         std::vector<std::uint32_t> child_counts;
         std::vector<std::uint32_t> child_begins;
         std::vector<engine_core::InstanceId> children;
-        std::vector<const char*> labels;
+        std::vector<std::string> labels;
 
         void clear();
         bool same_shape(const Snapshot& other) const;

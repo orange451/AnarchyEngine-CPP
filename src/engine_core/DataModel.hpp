@@ -68,8 +68,7 @@ public:
     // Zero on the root world. A created instance returns its slot id.
     InstanceId id() const { return id_; }
 
-    // Stable label for tools such as the explorer. Subclasses return their own
-    // name. The pointer remains valid after the call.
+    // Class identity. The pointer remains valid after the call.
     virtual const char* class_name() const { return "DataModel"; }
 
     // Heartbeat calls this on every descendant of the root. dt is that phase's

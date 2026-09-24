@@ -139,12 +139,14 @@ std::string LoadShader(const char* filename) {
     fs::path candidates[4];
     std::size_t count = 0;
     if (!exeDir.empty()) {
+        // Mac bundle: the executable is Contents/MacOS, and resources/ from
+        // the source tree is copied onto Contents/Resources.
         candidates[count++] = exeDir / ".." / "Resources" / "shaders" / filename;
     }
-    candidates[count++] = fs::path("shaders") / filename;
+    candidates[count++] = fs::path("resources") / "shaders" / filename;
     if (!exeDir.empty()) {
-        candidates[count++] = exeDir / "shaders" / filename;
-        candidates[count++] = exeDir / ".." / "shaders" / filename;
+        candidates[count++] = exeDir / "resources" / "shaders" / filename;
+        candidates[count++] = exeDir / ".." / "resources" / "shaders" / filename;
     }
 
     for (std::size_t i = 0; i < count; ++i) {

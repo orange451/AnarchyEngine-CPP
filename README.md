@@ -26,4 +26,4 @@ cmake --build build --parallel
 
 A checkout named `JadeFX_CPP` next to this directory is used instead of the clone. Point `JADEFX_CPP_DIR` at the source to use some other checkout. A Linux build of the fetched GLFW also needs the X11 and Wayland development packages.
 
-Shaders are loaded at startup from the app bundle (`Contents/Resources/shaders` on macOS) or from a `shaders/` directory beside the executable. Editing `shaders/triangle.vert` or `shaders/triangle.frag` takes effect on the next launch. The build also copies JadeFX's interface shaders into that same directory.
+Runtime files live under `resources/`. Shaders are loaded at startup from the app bundle (`Contents/Resources/shaders` on macOS, where the source `resources/` tree is copied onto `Contents/Resources`) or from `resources/shaders/` beside the executable. Editing `resources/shaders/triangle.vert` or `resources/shaders/triangle.frag` takes effect on the next launch. The build also copies JadeFX's interface shaders into that shaders directory.

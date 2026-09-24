@@ -198,12 +198,14 @@ if(APPLE)
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in"
     )
 
-    # Copy the runtime shaders into the bundle, then sign it so Finder can launch it.
-    add_custom_target(bundle-shaders ALL
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyEngine-CPP>/Resources/shaders"
+    # Copy the resources tree into the bundle, then sign it so Finder can launch it.
+    # Source resources/ maps onto Contents/Resources, so resources/shaders lands in
+    # Contents/Resources/shaders. JadeFX's interface shaders join that directory.
+    add_custom_target(bundle-resources ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyEngine-CPP>/Resources"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
-            "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyEngine-CPP>/Resources/shaders"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources"
+            "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyEngine-CPP>/Resources"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${JADEFX_SOURCE_ROOT}/res/shaders"
             "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyEngine-CPP>/Resources/shaders"
@@ -213,11 +215,11 @@ if(APPLE)
     )
 else()
     add_custom_command(TARGET AnarchyEngine-CPP POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:AnarchyEngine-CPP>/shaders"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:AnarchyEngine-CPP>/resources"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_CURRENT_SOURCE_DIR}/shaders" "$<TARGET_FILE_DIR:AnarchyEngine-CPP>/shaders"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources" "$<TARGET_FILE_DIR:AnarchyEngine-CPP>/resources"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${JADEFX_SOURCE_ROOT}/res/shaders" "$<TARGET_FILE_DIR:AnarchyEngine-CPP>/shaders"
+            "${JADEFX_SOURCE_ROOT}/res/shaders" "$<TARGET_FILE_DIR:AnarchyEngine-CPP>/resources/shaders"
         VERBATIM
     )
 endif()

@@ -18,43 +18,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # JadeFX lives outside this tree; without it, `#include "jadefx/jadefx.hpp"` looks missing.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Prefer a system GLFW (Homebrew, vcpkg, apt's libglfw3-dev). Otherwise download
-# the pinned 3.5.1 source. Building that source on Linux needs the X11 and
-# Wayland development packages, because GLFW 3.5 enables both backends.
-find_package(glfw3 3.3 QUIET CONFIG)
-if(NOT TARGET glfw)
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(GLFW3 QUIET IMPORTED_TARGET glfw3)
-    endif()
-endif()
-
-if(TARGET glfw)
-    set(RAINBOW_GLFW_TARGET glfw)
-elseif(TARGET PkgConfig::GLFW3)
-    set(RAINBOW_GLFW_TARGET PkgConfig::GLFW3)
-else()
-    include(FetchContent)
-    FetchContent_Declare(
-        glfw
-        URL https://github.com/glfw/glfw/releases/download/3.5.1/glfw-3.5.1.zip
-        URL_HASH SHA256=ea79bc5feffc254c87291980c2d0bce9acebb68c4983b79f961dcd2cb8a611a0
-    )
-    set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(glfw)
-    set(RAINBOW_GLFW_TARGET glfw)
-endif()
-
 # MACOSX_BUNDLE is ignored on Windows and Linux, where this stays a normal executable.
+# GLFW comes in with JadeFX. That library creates the window.
 add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
     src/main.cpp
-    src/gl.cpp
-    src/ShaderFile.cpp
-    src/Renderer.cpp
-    src/PresentClock.cpp
+    src/runner/gl.cpp
+    src/runner/ShaderFile.cpp
+    src/runner/Renderer.cpp
     src/ide/IdePane.cpp
     src/ide/IdeDock.cpp
     src/ide/IdeConsole.cpp
@@ -63,17 +33,6 @@ add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
     src/ide/IdeTreeTest.cpp
     src/ide/IdeLayout.cpp
 )
-
-# PresentClock schedules an AppKit timer during live resize. The rest of the
-# file stays C++; only this translation unit is compiled as Objective-C++.
-if(APPLE)
-    set_source_files_properties(src/PresentClock.cpp PROPERTIES LANGUAGE OBJCXX)
-    set_target_properties(AnarchyEngine-CPP PROPERTIES
-        OBJCXX_STANDARD 17
-        OBJCXX_STANDARD_REQUIRED YES
-        OBJCXX_EXTENSIONS NO
-    )
-endif()
 
 # An explicit checkout wins. A sibling named JadeFX_CPP is next. Otherwise
 # CMake clones the library, so this tree is enough to build.
@@ -116,10 +75,7 @@ else()
     set(JADEFX_SOURCE_ROOT "${jadefx_SOURCE_DIR}")
 endif()
 
-target_link_libraries(AnarchyEngine-CPP PRIVATE ${RAINBOW_GLFW_TARGET} jadefx)
-if(APPLE)
-    target_link_libraries(AnarchyEngine-CPP PRIVATE "-framework CoreVideo")
-endif()
+target_link_libraries(AnarchyEngine-CPP PRIVATE jadefx)
 
 if(MSVC)
     target_compile_options(AnarchyEngine-CPP PRIVATE /W4 /utf-8)

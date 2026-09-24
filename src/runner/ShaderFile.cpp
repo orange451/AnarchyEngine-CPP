@@ -21,6 +21,7 @@
 #include <unistd.h>
 #endif
 
+namespace runner {
 namespace {
 
 namespace fs = std::filesystem;
@@ -196,3 +197,5 @@ GLuint LinkProgram(const std::string& vertexSource, const std::string& fragmentS
     }
     return program;
 }
+
+}  // namespace runner

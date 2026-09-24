@@ -6,6 +6,8 @@
 // points from the driver library. Load every call this program makes after a
 // context exists, so the same source links on all three.
 
+namespace runner {
+
 using GLenum = unsigned int;
 using GLboolean = unsigned char;
 using GLbitfield = unsigned int;
@@ -82,6 +84,8 @@ constexpr GLenum GL_COMPILE_STATUS = 0x8B81;
 constexpr GLenum GL_LINK_STATUS = 0x8B82;
 constexpr GLenum GL_BLEND = 0x0BE2;
 constexpr GLenum GL_SCISSOR_TEST = 0x0C11;
+constexpr GLenum GL_VIEWPORT = 0x0BA2;
+constexpr GLenum GL_SCISSOR_BOX = 0x0C10;
 
 // Names are prefixed so they do not collide with libGL's exported functions.
 extern const GLubyte* (*rt_glGetString)(GLenum name);
@@ -112,42 +116,53 @@ extern void (*rt_glBufferData)(GLenum target, GLsizeiptr size, const void* data,
 extern void (*rt_glEnableVertexAttribArray)(GLuint index);
 extern void (*rt_glVertexAttribPointer)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer);
 extern void (*rt_glDrawArrays)(GLenum mode, GLint first, GLsizei count);
+extern void (*rt_glEnable)(GLenum cap);
 extern void (*rt_glDisable)(GLenum cap);
+extern GLboolean (*rt_glIsEnabled)(GLenum cap);
+extern void (*rt_glGetIntegerv)(GLenum pname, GLint* data);
+extern void (*rt_glScissor)(GLint x, GLint y, GLsizei width, GLsizei height);
 extern GLint (*rt_glGetUniformLocation)(GLuint program, const GLchar* name);
 extern void (*rt_glUniform1f)(GLint location, GLfloat v0);
-
-#define glGetString rt_glGetString
-#define glGetError rt_glGetError
-#define glClear rt_glClear
-#define glClearColor rt_glClearColor
-#define glViewport rt_glViewport
-#define glCreateShader rt_glCreateShader
-#define glShaderSource rt_glShaderSource
-#define glCompileShader rt_glCompileShader
-#define glGetShaderiv rt_glGetShaderiv
-#define glGetShaderInfoLog rt_glGetShaderInfoLog
-#define glDeleteShader rt_glDeleteShader
-#define glCreateProgram rt_glCreateProgram
-#define glAttachShader rt_glAttachShader
-#define glLinkProgram rt_glLinkProgram
-#define glDeleteProgram rt_glDeleteProgram
-#define glGetProgramiv rt_glGetProgramiv
-#define glGetProgramInfoLog rt_glGetProgramInfoLog
-#define glUseProgram rt_glUseProgram
-#define glGenVertexArrays rt_glGenVertexArrays
-#define glDeleteVertexArrays rt_glDeleteVertexArrays
-#define glBindVertexArray rt_glBindVertexArray
-#define glGenBuffers rt_glGenBuffers
-#define glDeleteBuffers rt_glDeleteBuffers
-#define glBindBuffer rt_glBindBuffer
-#define glBufferData rt_glBufferData
-#define glEnableVertexAttribArray rt_glEnableVertexAttribArray
-#define glVertexAttribPointer rt_glVertexAttribPointer
-#define glDrawArrays rt_glDrawArrays
-#define glDisable rt_glDisable
-#define glGetUniformLocation rt_glGetUniformLocation
-#define glUniform1f rt_glUniform1f
 
 using GlGetProcAddress = void* (*)(const char* name);
 
 bool LoadGl(GlGetProcAddress get_proc);
+
+}  // namespace runner
+
+// The names stay unqualified in call sites. The pointers live in this package.
+#define glGetString ::runner::rt_glGetString
+#define glGetError ::runner::rt_glGetError
+#define glClear ::runner::rt_glClear
+#define glClearColor ::runner::rt_glClearColor
+#define glViewport ::runner::rt_glViewport
+#define glCreateShader ::runner::rt_glCreateShader
+#define glShaderSource ::runner::rt_glShaderSource
+#define glCompileShader ::runner::rt_glCompileShader
+#define glGetShaderiv ::runner::rt_glGetShaderiv
+#define glGetShaderInfoLog ::runner::rt_glGetShaderInfoLog
+#define glDeleteShader ::runner::rt_glDeleteShader
+#define glCreateProgram ::runner::rt_glCreateProgram
+#define glAttachShader ::runner::rt_glAttachShader
+#define glLinkProgram ::runner::rt_glLinkProgram
+#define glDeleteProgram ::runner::rt_glDeleteProgram
+#define glGetProgramiv ::runner::rt_glGetProgramiv
+#define glGetProgramInfoLog ::runner::rt_glGetProgramInfoLog
+#define glUseProgram ::runner::rt_glUseProgram
+#define glGenVertexArrays ::runner::rt_glGenVertexArrays
+#define glDeleteVertexArrays ::runner::rt_glDeleteVertexArrays
+#define glBindVertexArray ::runner::rt_glBindVertexArray
+#define glGenBuffers ::runner::rt_glGenBuffers
+#define glDeleteBuffers ::runner::rt_glDeleteBuffers
+#define glBindBuffer ::runner::rt_glBindBuffer
+#define glBufferData ::runner::rt_glBufferData
+#define glEnableVertexAttribArray ::runner::rt_glEnableVertexAttribArray
+#define glVertexAttribPointer ::runner::rt_glVertexAttribPointer
+#define glDrawArrays ::runner::rt_glDrawArrays
+#define glEnable ::runner::rt_glEnable
+#define glDisable ::runner::rt_glDisable
+#define glIsEnabled ::runner::rt_glIsEnabled
+#define glGetIntegerv ::runner::rt_glGetIntegerv
+#define glScissor ::runner::rt_glScissor
+#define glGetUniformLocation ::runner::rt_glGetUniformLocation
+#define glUniform1f ::runner::rt_glUniform1f

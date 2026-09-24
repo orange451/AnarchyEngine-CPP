@@ -1,6 +1,6 @@
 # AnarchyEngine-CPP
 
-C++ game engine and IDE. This tree starts from the JadeFX rainbow-triangle demo: an OpenGL 4.1 window that draws a rainbow triangle and lays a JadeFX interface on top of it.
+C++ game engine and IDE. JadeFX owns the window. The Scene View pane draws a spinning rainbow triangle.
 
 ![AnarchyEngine-CPP window](docs/screenshot.png)
 

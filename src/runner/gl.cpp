@@ -2,6 +2,8 @@
 
 #include <cstdio>
 
+namespace runner {
+
 const GLubyte* (*rt_glGetString)(GLenum) = nullptr;
 GLenum (*rt_glGetError)() = nullptr;
 void (*rt_glClear)(GLbitfield) = nullptr;
@@ -30,7 +32,11 @@ void (*rt_glBufferData)(GLenum, GLsizeiptr, const void*, GLenum) = nullptr;
 void (*rt_glEnableVertexAttribArray)(GLuint) = nullptr;
 void (*rt_glVertexAttribPointer)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void*) = nullptr;
 void (*rt_glDrawArrays)(GLenum, GLint, GLsizei) = nullptr;
+void (*rt_glEnable)(GLenum) = nullptr;
 void (*rt_glDisable)(GLenum) = nullptr;
+GLboolean (*rt_glIsEnabled)(GLenum) = nullptr;
+void (*rt_glGetIntegerv)(GLenum, GLint*) = nullptr;
+void (*rt_glScissor)(GLint, GLint, GLsizei, GLsizei) = nullptr;
 GLint (*rt_glGetUniformLocation)(GLuint, const GLchar*) = nullptr;
 void (*rt_glUniform1f)(GLint, GLfloat) = nullptr;
 
@@ -78,10 +84,16 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(EnableVertexAttribArray);
     LOAD(VertexAttribPointer);
     LOAD(DrawArrays);
+    LOAD(Enable);
     LOAD(Disable);
+    LOAD(IsEnabled);
+    LOAD(GetIntegerv);
+    LOAD(Scissor);
     LOAD(GetUniformLocation);
     LOAD(Uniform1f);
 
 #undef LOAD
     return true;
 }
+
+}  // namespace runner

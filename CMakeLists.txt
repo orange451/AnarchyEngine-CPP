@@ -76,7 +76,7 @@ else()
     set(JADEFX_SOURCE_ROOT "${jadefx_SOURCE_DIR}")
 endif()
 
-# Luau is the sandboxed Lua runtime. The engine package is the only thing that links it.
+# Luau is the sandboxed Lua runtime. engine_core is the only target that links it.
 # The CLI, tests, and web target are not part of the embed.
 set(LUAU_BUILD_CLI OFF CACHE BOOL "" FORCE)
 set(LUAU_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -106,13 +106,6 @@ else()
     endif()
 endif()
 
-add_library(engine STATIC
-    src/engine/LuaEngine.cpp
-)
-target_include_directories(engine PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(engine PRIVATE Luau.Compiler Luau.VM)
-target_compile_features(engine PUBLIC cxx_std_17)
-
 add_library(engine_core STATIC
     src/engine_core/Contract.cpp
     src/engine_core/InvalidationQueue.cpp
@@ -123,11 +116,13 @@ add_library(engine_core STATIC
     src/engine_core/TaskScheduler.cpp
     src/engine_core/Events.cpp
     src/engine_core/Engine.cpp
+    src/engine_core/LuaEngine.cpp
 )
 target_include_directories(engine_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/engine_core")
 target_compile_features(engine_core PUBLIC cxx_std_17)
 find_package(Threads REQUIRED)
 target_link_libraries(engine_core PUBLIC Threads::Threads)
+target_link_libraries(engine_core PRIVATE Luau.Compiler Luau.VM)
 
 set(ENGINE_CORE_TSAN OFF CACHE BOOL "Instrument engine_core and sandbox with ThreadSanitizer")
 if(ENGINE_CORE_TSAN AND NOT MSVC)
@@ -135,13 +130,16 @@ if(ENGINE_CORE_TSAN AND NOT MSVC)
     target_link_options(engine_core PUBLIC -fsanitize=thread)
 endif()
 
-target_link_libraries(AnarchyEngine-CPP PRIVATE jadefx engine engine_core)
+# Sources under src/ include each other as "ide/..." and "runner/...".
+target_include_directories(AnarchyEngine-CPP PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(AnarchyEngine-CPP PRIVATE jadefx engine_core)
 
 add_executable(engine-tests
     tests/LuaEngineTest.cpp
     src/runner/Runner.cpp
 )
-target_link_libraries(engine-tests PRIVATE engine engine_core)
+target_include_directories(engine-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(engine-tests PRIVATE engine_core)
 target_compile_features(engine-tests PRIVATE cxx_std_17)
 
 # Catch2 is only the sandbox acceptance suite.
@@ -177,13 +175,11 @@ endif()
 
 if(MSVC)
     target_compile_options(AnarchyEngine-CPP PRIVATE /W4 /utf-8)
-    target_compile_options(engine PRIVATE /W4 /utf-8)
     target_compile_options(engine-tests PRIVATE /W4 /utf-8)
     target_compile_options(engine_core PRIVATE /W4 /utf-8)
     target_compile_options(sandbox PRIVATE /W4 /utf-8)
 else()
     target_compile_options(AnarchyEngine-CPP PRIVATE -Wall -Wextra)
-    target_compile_options(engine PRIVATE -Wall -Wextra)
     target_compile_options(engine-tests PRIVATE -Wall -Wextra)
     target_compile_options(engine_core PRIVATE -Wall -Wextra)
     target_compile_options(sandbox PRIVATE -Wall -Wextra)

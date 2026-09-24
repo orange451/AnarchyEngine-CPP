@@ -10,7 +10,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace engine {
+namespace engine_core {
 namespace {
 
 bool isIdentifier(const std::string& name) {
@@ -451,4 +451,4 @@ int LuaEngine::dispatchHost(lua_State* state) {
     return args.resultCount();
 }
 
-}  // namespace engine
+}  // namespace engine_core

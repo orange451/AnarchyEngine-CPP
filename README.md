@@ -6,7 +6,7 @@ C++ game engine and IDE. JadeFX owns the window. The Scene View pane draws a spi
 
 ## Build
 
-This directory is enough. `make` clones the latest commit of [JadeFX](https://github.com/orange451/JadeFX_CPP) on `master`, and a later build updates that clone. It downloads GLFW 3.5.1 when GLFW is not already installed. The same build fetches [Luau](https://github.com/luau-lang/luau) 0.739. The engine package embeds that as the sandboxed Lua runtime.
+This directory is enough. `make` clones the latest commit of [JadeFX](https://github.com/orange451/JadeFX_CPP) on `master`, and a later build updates that clone. It downloads GLFW 3.5.1 when GLFW is not already installed. The same build fetches [Luau](https://github.com/luau-lang/luau) 0.739. The engine_core package embeds that as the sandboxed Lua runtime.
 
 `make test` builds and runs the Lua sandbox checks.
 

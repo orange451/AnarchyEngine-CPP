@@ -1,4 +1,4 @@
-#include "engine/LuaEngine.hpp"
+#include "LuaEngine.hpp"
 #include "runner/Runner.hpp"
 
 #include <cstdio>
@@ -22,7 +22,7 @@ void expect(bool condition, const char* label) {
     }
 }
 
-void expectValues(const engine::LuaEngine::ScriptResult& result, std::initializer_list<const char*> expected,
+void expectValues(const engine_core::LuaEngine::ScriptResult& result, std::initializer_list<const char*> expected,
                   const char* label) {
     if (!result.ok) {
         fail(std::string(label) + ": " + result.error);
@@ -42,7 +42,7 @@ void expectValues(const engine::LuaEngine::ScriptResult& result, std::initialize
     }
 }
 
-void expectError(const engine::LuaEngine::ScriptResult& result, const char* needle, const char* label) {
+void expectError(const engine_core::LuaEngine::ScriptResult& result, const char* needle, const char* label) {
     if (result.ok) {
         fail(std::string(label) + ": script succeeded");
         return;
@@ -53,7 +53,7 @@ void expectError(const engine::LuaEngine::ScriptResult& result, const char* need
 }
 
 void testLibraries() {
-    engine::LuaEngine engine;
+    engine_core::LuaEngine engine;
     engine.start();
     expect(engine.running(), "engine is running");
     expectValues(engine.execute("values", "return 1, nil, \"x\", true"), {"1", "nil", "x", "true"}, "plain values");
@@ -61,13 +61,13 @@ void testLibraries() {
                      "libs", "return math.abs(-3), string.upper(\"ab\"), typeof(vector.create(1, 2, 3)), "
                              "typeof(buffer.create(4)), bit32.band(7, 3)"),
                  {"3", "AB", "vector", "buffer", "3"}, "libraries");
-    const engine::LuaEngine::ScriptResult syntax = engine.execute("syntax", "return (");
+    const engine_core::LuaEngine::ScriptResult syntax = engine.execute("syntax", "return (");
     expect(!syntax.ok && !syntax.error.empty(), "syntax error");
     engine.stop();
     engine.stop();
     expect(!engine.execute("after", "return 1").ok, "execute after stop");
 
-    engine::LuaEngine again;
+    engine_core::LuaEngine again;
     again.start();
     bool threw = false;
     try {
@@ -79,7 +79,7 @@ void testLibraries() {
 }
 
 void testSandboxSurface() {
-    engine::LuaEngine engine;
+    engine_core::LuaEngine engine;
     engine.start();
     expectValues(engine.execute("missing",
                                 "return debug, os, io, package, require, loadstring, dofile, loadfile, getfenv, "
@@ -102,7 +102,7 @@ void testSandboxSurface() {
 }
 
 void testIsolation() {
-    engine::LuaEngine engine;
+    engine_core::LuaEngine engine;
     engine.start();
     expectValues(engine.execute("first", "marker = 7 return marker"), {"7"}, "script writes its own global");
     expectValues(engine.execute("second", "return marker"), {"nil"}, "other script does not see it");
@@ -111,9 +111,9 @@ void testIsolation() {
 }
 
 void testHostFunctions() {
-    engine::LuaEngine engine;
-    engine.bind("add", [](engine::HostArgs& args) { args.pushNumber(args.number(1) + args.number(2)); });
-    engine.bind("fail", [](engine::HostArgs& args) { args.error("nope"); });
+    engine_core::LuaEngine engine;
+    engine.bind("add", [](engine_core::HostArgs& args) { args.pushNumber(args.number(1) + args.number(2)); });
+    engine.bind("fail", [](engine_core::HostArgs& args) { args.error("nope"); });
     engine.start();
 
     expectValues(engine.execute("add", "return add(2, 3)"), {"5"}, "host add");
@@ -127,14 +127,14 @@ void testHostFunctions() {
 
     bool threw = false;
     try {
-        engine.bind("later", [](engine::HostArgs&) {});
+        engine.bind("later", [](engine_core::HostArgs&) {});
     } catch (const std::logic_error&) {
         threw = true;
     }
     expect(threw, "bind after start");
 
-    engine::LuaEngine clash;
-    clash.bind("math", [](engine::HostArgs&) {});
+    engine_core::LuaEngine clash;
+    clash.bind("math", [](engine_core::HostArgs&) {});
     threw = false;
     try {
         clash.start();
@@ -143,10 +143,10 @@ void testHostFunctions() {
     }
     expect(threw, "bind cannot replace math");
 
-    engine::LuaEngine badName;
+    engine_core::LuaEngine badName;
     threw = false;
     try {
-        badName.bind("not a name", [](engine::HostArgs&) {});
+        badName.bind("not a name", [](engine_core::HostArgs&) {});
     } catch (const std::invalid_argument&) {
         threw = true;
     }
@@ -154,7 +154,7 @@ void testHostFunctions() {
 }
 
 void testPrint() {
-    engine::LuaEngine engine;
+    engine_core::LuaEngine engine;
     engine.start();
     expectValues(engine.execute("quiet", "print(\"quiet\") return 1"), {"1"}, "print without a handler");
 
@@ -165,7 +165,7 @@ void testPrint() {
 }
 
 void testBudget() {
-    engine::LuaEngine engine;
+    engine_core::LuaEngine engine;
     engine.setExecutionBudget(2000);
     engine.start();
     expectValues(engine.execute("small", "return math.abs(-3)"), {"3"}, "small script under budget");
@@ -178,7 +178,7 @@ void testBudget() {
 }
 
 void testMemory() {
-    engine::LuaEngine engine;
+    engine_core::LuaEngine engine;
     engine.setMemoryLimit(1024 * 1024);
     engine.start();
     expectError(engine.execute("bomb", "return string.rep(\"x\", 2 * 1024 * 1024)"), "memory", "allocation cap");

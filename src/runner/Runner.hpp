@@ -2,12 +2,9 @@
 
 #include <memory>
 
-namespace engine {
-class LuaEngine;
-}
-
 namespace engine_core {
 class Engine;
+class LuaEngine;
 }
 
 namespace runner {
@@ -30,11 +27,11 @@ public:
     void stop();
     bool running() const { return lua_ != nullptr; }
 
-    engine::LuaEngine& lua();
+    engine_core::LuaEngine& lua();
     engine_core::Engine& simulation();
 
 private:
-    std::unique_ptr<engine::LuaEngine> lua_;
+    std::unique_ptr<engine_core::LuaEngine> lua_;
     std::unique_ptr<engine_core::Engine> simulation_;
     bool threadsStarted_ = false;
 };

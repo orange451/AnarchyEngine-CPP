@@ -1,6 +1,6 @@
 #include "Runner.hpp"
 
-#include "../engine/LuaEngine.hpp"
+#include "../engine_core/LuaEngine.hpp"
 #include "../engine_core/Engine.hpp"
 
 #include <stdexcept>
@@ -16,7 +16,7 @@ void Runner::prepare() {
     if (lua_ != nullptr) {
         throw std::logic_error("runner already started");
     }
-    auto lua = std::make_unique<engine::LuaEngine>();
+    auto lua = std::make_unique<engine_core::LuaEngine>();
     lua->start();
     auto simulation = std::make_unique<engine_core::Engine>();
     // The IDE is open for a long time. Pace both loops so they do not spin a core.
@@ -49,7 +49,7 @@ void Runner::stop() {
     threadsStarted_ = false;
 }
 
-engine::LuaEngine& Runner::lua() {
+engine_core::LuaEngine& Runner::lua() {
     if (lua_ == nullptr) {
         throw std::logic_error("runner is not started");
     }

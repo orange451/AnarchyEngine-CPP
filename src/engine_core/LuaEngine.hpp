@@ -9,7 +9,7 @@
 
 struct lua_State;
 
-namespace engine {
+namespace engine_core {
 
 // Arguments for one call from a script into the host. Indexes are 1-based, matching Luau.
 // A string view is valid only until the host function returns.
@@ -120,4 +120,4 @@ private:
     bool interrupting_ = false;
 };
 
-}  // namespace engine
+}  // namespace engine_core

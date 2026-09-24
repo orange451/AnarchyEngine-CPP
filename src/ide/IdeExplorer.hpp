@@ -33,6 +33,8 @@ private:
         std::vector<std::uint32_t> child_begins;
         std::vector<engine_core::InstanceId> children;
         std::vector<std::string> labels;
+        // Class name of ids[i], copied while the read lock is held.
+        std::vector<std::string> classes;
 
         void clear();
         bool same_shape(const Snapshot& other) const;

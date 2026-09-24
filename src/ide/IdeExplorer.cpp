@@ -1,6 +1,7 @@
 #include "IdeExplorer.hpp"
 
 #include "DataModelLock.hpp"
+#include "IdeIcons.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -32,6 +33,7 @@ void IdeExplorer::Snapshot::clear() {
     child_begins.clear();
     children.clear();
     labels.clear();
+    classes.clear();
 }
 
 bool IdeExplorer::Snapshot::same_shape(const Snapshot& other) const {
@@ -45,6 +47,11 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name)
 
     root_item_ = jadefx::make<jadefx::TreeItem>(root_.name(root_.id()));
     root_item_->setExpanded(true);
+    if (const char* type = root_.class_name()) {
+        if (std::shared_ptr<jadefx::ImageView> icon = icon_view(type)) {
+            root_item_->setGraphic(std::move(icon));
+        }
+    }
 
     tree_ = jadefx::make<jadefx::TreeView>(root_item_);
     tree_->setShowRoot(false);
@@ -101,6 +108,16 @@ void IdeExplorer::read_hierarchy(Snapshot& snap) {
 
         // Name defaults to the class, so an unnamed instance still reads as its class.
         std::string label = root_.name(id);
+        std::string type_name;
+        if (id == root_.id()) {
+            if (const char* type = root_.class_name()) {
+                type_name = type;
+            }
+        } else if (const engine_core::DataModel* object = root_.instance(id)) {
+            if (const char* type = object->class_name()) {
+                type_name = type;
+            }
+        }
 
         const std::uint32_t begin = static_cast<std::uint32_t>(snap.children.size());
         std::uint32_t count = 0;
@@ -125,6 +142,7 @@ void IdeExplorer::read_hierarchy(Snapshot& snap) {
         snap.child_counts.push_back(count);
         snap.child_begins.push_back(begin);
         snap.labels.push_back(std::move(label));
+        snap.classes.push_back(std::move(type_name));
 
         for (std::uint32_t i = count; i-- > 0;) {
             pending_.push_back(snap.children[begin + i]);
@@ -322,6 +340,11 @@ void IdeExplorer::apply(bool batch) {
         std::shared_ptr<jadefx::TreeItem>& row = items_[snap.ids[i]];
         if (!row) {
             row = jadefx::make<jadefx::TreeItem>(snap.labels[i]);
+            if (i < snap.classes.size()) {
+                if (std::shared_ptr<jadefx::ImageView> icon = icon_view(snap.classes[i])) {
+                    row->setGraphic(std::move(icon));
+                }
+            }
         } else if (row->getValue() != snap.labels[i]) {
             row->setValue(snap.labels[i]);
         }

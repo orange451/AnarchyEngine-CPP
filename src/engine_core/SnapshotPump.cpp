@@ -1,5 +1,7 @@
 #include "SnapshotPump.hpp"
 
+#include "GameObject.hpp"
+
 #include <algorithm>
 
 namespace engine_core {
@@ -87,6 +89,10 @@ void SnapshotPump::apply_live(DataModel& model, const Invalidation& change) {
         erase_base(change.id);
         return;
     }
+    const GameObject* object = model.game_object(change.id);
+    if (object == nullptr) {
+        return;
+    }
     VisualInstance* inst = base_find(change.id);
     if (inst == nullptr) {
         if (base_.instances.size() == base_.instances.capacity()) {
@@ -98,15 +104,15 @@ void SnapshotPump::apply_live(DataModel& model, const Invalidation& change) {
         inst->id = change.id;
     }
     if (any(change.fields, VisualField::Transform)) {
-        inst->world = model.transform(change.id);
+        inst->world = object->transform();
         inst->transform_origin = change.origin;
     }
     if (any(change.fields, VisualField::Color)) {
-        inst->color = model.color(change.id);
+        inst->color = object->color();
         inst->color_origin = change.origin;
     }
     if (any(change.fields, VisualField::Size)) {
-        if (model.copy_size(change.id, inst->size)) {
+        if (object->copy_size(inst->size)) {
             inst->size_origin = change.origin;
         }
     }
@@ -116,19 +122,17 @@ void SnapshotPump::apply_live(DataModel& model, const Invalidation& change) {
 void SnapshotPump::resync(DataModel& model) {
     base_.instances.clear();
     std::fill(base_index_.begin(), base_index_.end(), -1);
-    model.for_each_live([&](InstanceId id, const Transform& world, const ColorRgb& color, const float* size) {
+    model.for_each_game_object([&](const GameObject& object) {
         VisualInstance inst;
-        inst.id = id;
-        inst.world = world;
-        inst.color = color;
-        inst.size[0] = size[0];
-        inst.size[1] = size[1];
-        inst.size[2] = size[2];
+        inst.id = object.id();
+        inst.world = object.transform();
+        inst.color = object.color();
+        object.copy_size(inst.size);
         inst.alive = true;
         inst.transform_origin = WriteOrigin::Simulation;
         inst.color_origin = WriteOrigin::Simulation;
         inst.size_origin = WriteOrigin::Simulation;
-        remember(id, static_cast<int>(base_.instances.size()));
+        remember(object.id(), static_cast<int>(base_.instances.size()));
         base_.instances.push_back(inst);
     });
 }

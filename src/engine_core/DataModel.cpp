@@ -1,6 +1,11 @@
 #include "DataModel.hpp"
 
+#include "GameObject.hpp"
+
 #include <cstring>
+#include <mutex>
+#include <utility>
+#include <vector>
 
 namespace engine_core {
 namespace {
@@ -31,36 +36,130 @@ thread_local const char* tlsDeferred = nullptr;
 
 }  // namespace
 
-DataModel::DataModel() {
-    slots_.reserve(kMaxInstances);
-    free_list_.reserve(kMaxInstances);
-    invalidation_.reserve(kMaxInvalidations);
-    commands_.assign(kMaxCommands, Command{});
-    bags_.resize(kMaxInstances);
-    walk_.reserve(kMaxInstances);
-    events_.watch_prerender(&prerender_window_);
+struct DataModel::State {
+    // Guards slots, free lists, invalidation, and resync.
+    // SimulationThread may hold Write across a whole step and may re-enter
+    // (thread-local depth; the mutex is taken once).
+    // RenderThread may hold Write only inside Prepare (PreRender + copy), budget 2ms.
+    // Workers never take it.
+    std::timed_mutex write_mu;
+    std::thread::id owner{};
+    int write_depth = 0;
+    std::thread::id simulation_thread{};
+    std::thread::id render_thread{};
+    bool threads_running = false;
+    bool prerender_window = false;
+    bool resync = false;
+
+    // Guards commands only. Workers push, SimulationThread drains.
+    // Hold is one record, never the gameplay step.
+    std::mutex command_mu;
+    std::vector<Command> commands;
+    std::size_t command_head = 0;
+    std::size_t command_tail = 0;
+    std::size_t command_size = 0;
+
+    std::vector<Slot> slots;
+    std::vector<std::uint32_t> free_list;
+    std::vector<DataModel> plains;
+    std::vector<std::uint32_t> free_plains;
+    std::vector<GameObject> objects;
+    std::vector<std::uint32_t> free_objects;
+    InvalidationQueue invalidation;
+
+    EventQueue events;
+    std::vector<std::unique_ptr<InstanceSignals>> bags;
+    std::vector<InstanceId> walk;
+};
+
+DataModel::DataModel() : owned_(std::make_unique<State>()), state_(owned_.get()) {
+    State& world = *state_;
+    world.slots.reserve(kMaxInstances);
+    world.free_list.reserve(kMaxInstances);
+    world.plains.reserve(kMaxInstances);
+    world.free_plains.reserve(kMaxInstances);
+    world.objects.reserve(kMaxInstances);
+    world.free_objects.reserve(kMaxInstances);
+    world.invalidation.reserve(kMaxInvalidations);
+    world.commands.assign(kMaxCommands, Command{});
+    world.bags.resize(kMaxInstances);
+    world.walk.reserve(kMaxInstances);
+    world.events.watch_prerender(&world.prerender_window);
 }
 
-DataModel::~DataModel() { events_.shutdown(); }
+DataModel::DataModel(ChildTag, State& state, InstanceId id) : state_(&state), id_(id) {}
 
-void DataModel::attach_scheduler(TaskScheduler* scheduler) { events_.attach_scheduler(scheduler); }
+DataModel::~DataModel() {
+    if (owned_) {
+        owned_->events.shutdown();
+        owned_.reset();
+    }
+}
+
+DataModel::DataModel(DataModel&& other) noexcept
+    : owned_(std::move(other.owned_)), state_(other.state_), id_(other.id_) {
+    if (owned_) {
+        state_ = owned_.get();
+    }
+    other.state_ = nullptr;
+    other.id_ = 0;
+}
+
+DataModel& DataModel::operator=(DataModel&& other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
+    if (owned_) {
+        owned_->events.shutdown();
+        owned_.reset();
+    }
+    owned_ = std::move(other.owned_);
+    state_ = other.state_;
+    id_ = other.id_;
+    if (owned_) {
+        state_ = owned_.get();
+    }
+    other.state_ = nullptr;
+    other.id_ = 0;
+    return *this;
+}
+
+void DataModel::attach_scheduler(TaskScheduler* scheduler) { state_->events.attach_scheduler(scheduler); }
+
+EventQueue& DataModel::events() { return state_->events; }
+
+const EventQueue& DataModel::events() const { return state_->events; }
 
 void DataModel::set_thread_ids(std::thread::id simulation, std::thread::id render) {
-    simulation_thread_ = simulation;
-    render_thread_ = render;
+    state_->simulation_thread = simulation;
+    state_->render_thread = render;
 }
 
-void DataModel::set_threads_running(bool running) { threads_running_ = running; }
+void DataModel::set_threads_running(bool running) { state_->threads_running = running; }
+
+void DataModel::require_simulation_thread(const char* message) const {
+    if (state_->threads_running && std::this_thread::get_id() != state_->simulation_thread) {
+        contract_fail(message);
+    }
+}
+
+void DataModel::set_prerender_window(bool open) { state_->prerender_window = open; }
+
+bool DataModel::prerender_window() const { return state_->prerender_window; }
+
+int DataModel::write_depth() const { return state_->write_depth; }
+
+InvalidationQueue& DataModel::invalidations() { return state_->invalidation; }
 
 bool DataModel::lock_write_blocking() {
     if (tlsHold > 0) {
         ++tlsHold;
-        ++write_depth_;
+        ++state_->write_depth;
         return true;
     }
-    write_mu_.lock();
-    owner_ = std::this_thread::get_id();
-    write_depth_ = 1;
+    state_->write_mu.lock();
+    state_->owner = std::this_thread::get_id();
+    state_->write_depth = 1;
     tlsHold = 1;
     return true;
 }
@@ -68,14 +167,14 @@ bool DataModel::lock_write_blocking() {
 bool DataModel::lock_write_for(std::chrono::milliseconds budget) {
     if (tlsHold > 0) {
         ++tlsHold;
-        ++write_depth_;
+        ++state_->write_depth;
         return true;
     }
-    if (!write_mu_.try_lock_for(budget)) {
+    if (!state_->write_mu.try_lock_for(budget)) {
         return false;
     }
-    owner_ = std::this_thread::get_id();
-    write_depth_ = 1;
+    state_->owner = std::this_thread::get_id();
+    state_->write_depth = 1;
     tlsHold = 1;
     return true;
 }
@@ -85,21 +184,21 @@ void DataModel::unlock_write() {
         contract_fail("DataModelLock released without a hold");
     }
     --tlsHold;
-    --write_depth_;
+    --state_->write_depth;
     if (tlsHold > 0) {
         return;
     }
-    owner_ = std::thread::id{};
-    write_mu_.unlock();
+    state_->owner = std::thread::id{};
+    state_->write_mu.unlock();
 }
 
 DataModel::Slot* DataModel::slot(InstanceId id) {
     const std::uint32_t index = id & kIndexMask;
     const std::uint32_t generation = id >> 16u;
-    if (index >= slots_.size()) {
+    if (index >= state_->slots.size()) {
         return nullptr;
     }
-    Slot& part = slots_[index];
+    Slot& part = state_->slots[index];
     if (!part.alive || part.generation != generation) {
         return nullptr;
     }
@@ -110,8 +209,21 @@ const DataModel::Slot* DataModel::slot(InstanceId id) const {
     return const_cast<DataModel*>(this)->slot(id);
 }
 
+std::uint32_t DataModel::slot_count() const { return static_cast<std::uint32_t>(state_->slots.size()); }
+
+const GameObject* DataModel::game_object_at_slot(std::uint32_t index) const {
+    if (index >= state_->slots.size()) {
+        return nullptr;
+    }
+    const Slot& part = state_->slots[index];
+    if (!part.alive || part.kind != InstanceKind::GameObject || part.storage >= state_->objects.size()) {
+        return nullptr;
+    }
+    return &state_->objects[part.storage];
+}
+
 WriteOrigin DataModel::current_origin() const {
-    if (threads_running_ && std::this_thread::get_id() == render_thread_) {
+    if (state_->threads_running && std::this_thread::get_id() == state_->render_thread) {
         return WriteOrigin::PreRenderDataModel;
     }
     return WriteOrigin::Simulation;
@@ -136,15 +248,15 @@ bool DataModel::take_deferred_violation() {
 bool DataModel::has_deferred_violation() const { return tlsDeferred != nullptr; }
 
 bool DataModel::authorize(const Slot& part, bool force_sim_write) {
-    if (!threads_running_) {
+    if (!state_->threads_running) {
         return true;
     }
     const std::thread::id self = std::this_thread::get_id();
-    if (self == simulation_thread_) {
+    if (self == state_->simulation_thread) {
         return true;
     }
-    if (self == render_thread_) {
-        if (!prerender_window_) {
+    if (self == state_->render_thread) {
+        if (!state_->prerender_window) {
             return reject_write("DataModel write from RenderThread outside PreRender");
         }
         if (part.visual_only || force_sim_write) {
@@ -156,33 +268,33 @@ bool DataModel::authorize(const Slot& part, bool force_sim_write) {
 }
 
 void DataModel::note(InstanceId id, VisualField fields, WriteOrigin origin) {
-    invalidation_.push(Invalidation{id, fields, origin});
-    if (invalidation_.overflow()) {
-        resync_ = true;
+    state_->invalidation.push(Invalidation{id, fields, origin});
+    if (state_->invalidation.overflow()) {
+        state_->resync = true;
     }
 }
 
 void DataModel::enqueue(Command command) {
-    std::lock_guard<std::mutex> guard(command_mu_);
-    if (commands_.empty() || command_size_ == commands_.size()) {
+    std::lock_guard<std::mutex> guard(state_->command_mu);
+    if (state_->commands.empty() || state_->command_size == state_->commands.size()) {
         contract_fail("simulation command queue is full");
     }
-    commands_[command_tail_] = command;
-    command_tail_ = (command_tail_ + 1) % commands_.size();
-    ++command_size_;
+    state_->commands[state_->command_tail] = command;
+    state_->command_tail = (state_->command_tail + 1) % state_->commands.size();
+    ++state_->command_size;
 }
 
 void DataModel::drain_commands() {
     while (true) {
         Command command;
         {
-            std::lock_guard<std::mutex> guard(command_mu_);
-            if (command_size_ == 0) {
+            std::lock_guard<std::mutex> guard(state_->command_mu);
+            if (state_->command_size == 0) {
                 return;
             }
-            command = commands_[command_head_];
-            command_head_ = (command_head_ + 1) % commands_.size();
-            --command_size_;
+            command = state_->commands[state_->command_head];
+            state_->command_head = (state_->command_head + 1) % state_->commands.size();
+            --state_->command_size;
         }
         if (command.type == Command::Type::Destroy) {
             destroy(command.id);
@@ -195,46 +307,94 @@ void DataModel::drain_commands() {
 }
 
 bool DataModel::consume_resync() {
-    const bool was = resync_;
-    resync_ = false;
+    const bool was = state_->resync;
+    state_->resync = false;
     return was;
 }
 
-InstanceId DataModel::create_part() {
-    if (threads_running_ && std::this_thread::get_id() != simulation_thread_) {
-        contract_fail("create_part runs on SimulationThread");
-    }
+InstanceId DataModel::allocate(InstanceKind kind) {
+    State& world = *state_;
     std::uint32_t index = 0;
-    if (!free_list_.empty()) {
-        index = free_list_.back();
-        free_list_.pop_back();
+    if (!world.free_list.empty()) {
+        index = world.free_list.back();
+        world.free_list.pop_back();
     } else {
-        if (slots_.size() >= kMaxInstances) {
+        if (world.slots.size() >= kMaxInstances) {
             contract_fail("instance capacity exhausted");
         }
-        index = static_cast<std::uint32_t>(slots_.size());
-        slots_.emplace_back();
+        index = static_cast<std::uint32_t>(world.slots.size());
+        world.slots.emplace_back();
     }
-    Slot& part = slots_[index];
+    Slot& part = world.slots[index];
     part.alive = true;
     part.simulated = false;
     part.visual_only = false;
-    part.transform = transform_identity();
-    part.color = ColorRgb{};
-    part.size[0] = part.size[1] = part.size[2] = 1.f;
-    part.velocity[0] = part.velocity[1] = part.velocity[2] = 0.f;
+    part.kind = kind;
+    part.storage = 0;
     part.parent = 0;
     part.first_child = 0;
     part.next_sibling = 0;
     part.prev_sibling = 0;
-    const InstanceId id = (part.generation << 16u) | index;
+    return (part.generation << 16u) | index;
+}
+
+DataModel& DataModel::create() {
+    if (state_->threads_running && std::this_thread::get_id() != state_->simulation_thread) {
+        contract_fail("create runs on SimulationThread");
+    }
+    const InstanceId id = allocate(InstanceKind::Plain);
+    const std::uint32_t index = id & kIndexMask;
+    State& world = *state_;
+    std::uint32_t storage = 0;
+    DataModel* object = nullptr;
+    if (!world.free_plains.empty()) {
+        storage = world.free_plains.back();
+        world.free_plains.pop_back();
+        object = &world.plains[storage];
+        object->rebind(id);
+    } else {
+        if (world.plains.size() == world.plains.capacity()) {
+            contract_fail("instance capacity exhausted");
+        }
+        world.plains.emplace_back(ChildTag{}, *state_, id);
+        storage = static_cast<std::uint32_t>(world.plains.size() - 1);
+        object = &world.plains.back();
+    }
+    world.slots[index].storage = storage;
+    return *object;
+}
+
+GameObject& DataModel::create_game_object() {
+    if (state_->threads_running && std::this_thread::get_id() != state_->simulation_thread) {
+        contract_fail("create_game_object runs on SimulationThread");
+    }
+    const InstanceId id = allocate(InstanceKind::GameObject);
+    const std::uint32_t index = id & kIndexMask;
+    State& world = *state_;
+    std::uint32_t storage = 0;
+    GameObject* object = nullptr;
+    if (!world.free_objects.empty()) {
+        storage = world.free_objects.back();
+        world.free_objects.pop_back();
+        object = &world.objects[storage];
+        object->rebind(id);
+        object->reset_spatial();
+    } else {
+        if (world.objects.size() == world.objects.capacity()) {
+            contract_fail("instance capacity exhausted");
+        }
+        world.objects.emplace_back(ChildTag{}, *state_, id);
+        storage = static_cast<std::uint32_t>(world.objects.size() - 1);
+        object = &world.objects.back();
+    }
+    world.slots[index].storage = storage;
     note(id, VisualField::Transform | VisualField::Color | VisualField::Size, WriteOrigin::Simulation);
-    return id;
+    return *object;
 }
 
 void DataModel::destroy(InstanceId id) {
-    if (threads_running_ && std::this_thread::get_id() != simulation_thread_) {
-        if (std::this_thread::get_id() == render_thread_) {
+    if (state_->threads_running && std::this_thread::get_id() != state_->simulation_thread) {
+        if (std::this_thread::get_id() == state_->render_thread) {
             contract_fail("destroy from RenderThread");
         }
         Command command;
@@ -250,18 +410,26 @@ void DataModel::destroy(InstanceId id) {
     }
     detach_links(id, *part);
     release_signals(id);
+    if (part->kind == InstanceKind::GameObject && part->storage < state_->objects.size()) {
+        state_->objects[part->storage].clear_spatial();
+    }
     part->alive = false;
     if (part->generation != 0xffffu) {
         ++part->generation;
-        free_list_.push_back(index);
+        state_->free_list.push_back(index);
+        if (part->kind == InstanceKind::GameObject) {
+            state_->free_objects.push_back(part->storage);
+        } else {
+            state_->free_plains.push_back(part->storage);
+        }
     }
     note(id, VisualField::Removed, current_origin());
 }
 
 void DataModel::apply_transform(InstanceId id, const Transform& transform, bool force) {
-    if (threads_running_) {
+    if (state_->threads_running) {
         const std::thread::id self = std::this_thread::get_id();
-        if (self != simulation_thread_ && self != render_thread_) {
+        if (self != state_->simulation_thread && self != state_->render_thread) {
             Command command;
             command.type = Command::Type::Transform;
             command.id = id;
@@ -275,22 +443,27 @@ void DataModel::apply_transform(InstanceId id, const Transform& transform, bool 
         reject_write("transform write on a dead instance");
         return;
     }
+    if (part->kind != InstanceKind::GameObject || part->storage >= state_->objects.size()) {
+        reject_write("transform write on an instance that is not a GameObject");
+        return;
+    }
     if (!authorize(*part, force)) {
         return;
     }
-    if (same_transform(part->transform, transform)) {
+    GameObject& object = state_->objects[part->storage];
+    if (same_transform(object.transform_, transform)) {
         return;
     }
-    part->transform = transform;
+    object.transform_ = transform;
     const WriteOrigin origin = current_origin();
     note(id, VisualField::Transform, origin);
     emit_change(id, Field::Transform, origin);
 }
 
 void DataModel::apply_color(InstanceId id, ColorRgb color, bool force) {
-    if (threads_running_) {
+    if (state_->threads_running) {
         const std::thread::id self = std::this_thread::get_id();
-        if (self != simulation_thread_ && self != render_thread_) {
+        if (self != state_->simulation_thread && self != state_->render_thread) {
             Command command;
             command.type = Command::Type::Color;
             command.id = id;
@@ -304,51 +477,25 @@ void DataModel::apply_color(InstanceId id, ColorRgb color, bool force) {
         reject_write("color write on a dead instance");
         return;
     }
+    if (part->kind != InstanceKind::GameObject || part->storage >= state_->objects.size()) {
+        reject_write("color write on an instance that is not a GameObject");
+        return;
+    }
     if (!authorize(*part, force)) {
         return;
     }
-    if (same_color(part->color, color)) {
+    GameObject& object = state_->objects[part->storage];
+    if (same_color(object.color_, color)) {
         return;
     }
-    part->color = color;
+    object.color_ = color;
     const WriteOrigin origin = current_origin();
     note(id, VisualField::Color, origin);
     emit_change(id, Field::Color, origin);
 }
 
-void DataModel::set_transform(InstanceId id, const Transform& transform) {
-    apply_transform(id, transform, false);
-}
-
-void DataModel::set_transform(InstanceId id, const Transform& transform, ForceSimWrite) {
-    apply_transform(id, transform, true);
-}
-
-void DataModel::set_color(InstanceId id, ColorRgb color) { apply_color(id, color, false); }
-
-void DataModel::set_color(InstanceId id, ColorRgb color, ForceSimWrite) { apply_color(id, color, true); }
-
-void DataModel::set_size(InstanceId id, float x, float y, float z) {
-    if (threads_running_ && std::this_thread::get_id() != simulation_thread_) {
-        contract_fail("set_size runs on SimulationThread");
-    }
-    Slot* part = slot(id);
-    if (part == nullptr) {
-        contract_fail("size write on a dead instance");
-    }
-    if (part->size[0] == x && part->size[1] == y && part->size[2] == z) {
-        return;
-    }
-    part->size[0] = x;
-    part->size[1] = y;
-    part->size[2] = z;
-    const WriteOrigin origin = current_origin();
-    note(id, VisualField::Size, origin);
-    emit_change(id, Field::Size, origin);
-}
-
 void DataModel::set_simulated(InstanceId id, bool simulated) {
-    if (threads_running_ && std::this_thread::get_id() != simulation_thread_) {
+    if (state_->threads_running && std::this_thread::get_id() != state_->simulation_thread) {
         contract_fail("set_simulated runs on SimulationThread");
     }
     Slot* part = slot(id);
@@ -363,7 +510,7 @@ void DataModel::set_simulated(InstanceId id, bool simulated) {
 }
 
 void DataModel::set_visual_only(InstanceId id, bool visual_only) {
-    if (threads_running_ && std::this_thread::get_id() != simulation_thread_) {
+    if (state_->threads_running && std::this_thread::get_id() != state_->simulation_thread) {
         contract_fail("set_visual_only runs on SimulationThread");
     }
     Slot* part = slot(id);
@@ -377,48 +524,16 @@ void DataModel::set_visual_only(InstanceId id, bool visual_only) {
     emit_change(id, Field::VisualOnly, current_origin());
 }
 
-void DataModel::set_linear_velocity(InstanceId id, float x, float y, float z) {
-    if (threads_running_ && std::this_thread::get_id() != simulation_thread_) {
-        contract_fail("set_linear_velocity runs on SimulationThread");
-    }
+GameObject* DataModel::game_object(InstanceId id) {
     Slot* part = slot(id);
-    if (part == nullptr) {
-        contract_fail("velocity write on a dead instance");
+    if (part == nullptr || part->kind != InstanceKind::GameObject || part->storage >= state_->objects.size()) {
+        return nullptr;
     }
-    if (part->velocity[0] == x && part->velocity[1] == y && part->velocity[2] == z) {
-        return;
-    }
-    part->velocity[0] = x;
-    part->velocity[1] = y;
-    part->velocity[2] = z;
-    emit_change(id, Field::LinearVelocity, current_origin());
+    return &state_->objects[part->storage];
 }
 
-Transform DataModel::transform(InstanceId id) const {
-    const Slot* part = slot(id);
-    if (part == nullptr) {
-        return Transform{};
-    }
-    return part->transform;
-}
-
-ColorRgb DataModel::color(InstanceId id) const {
-    const Slot* part = slot(id);
-    if (part == nullptr) {
-        return ColorRgb{};
-    }
-    return part->color;
-}
-
-bool DataModel::copy_size(InstanceId id, float out[3]) const {
-    const Slot* part = slot(id);
-    if (part == nullptr) {
-        return false;
-    }
-    out[0] = part->size[0];
-    out[1] = part->size[1];
-    out[2] = part->size[2];
-    return true;
+const GameObject* DataModel::game_object(InstanceId id) const {
+    return const_cast<DataModel*>(this)->game_object(id);
 }
 
 bool DataModel::alive(InstanceId id) const { return slot(id) != nullptr; }
@@ -435,17 +550,22 @@ bool DataModel::visual_only(InstanceId id) const {
 
 void DataModel::integrate_simulated(double dt) {
     const float step = static_cast<float>(dt);
-    for (std::uint32_t index = 0; index < slots_.size(); ++index) {
-        Slot& part = slots_[index];
+    State& world = *state_;
+    for (std::uint32_t index = 0; index < world.slots.size(); ++index) {
+        Slot& part = world.slots[index];
         if (!part.alive || !part.simulated || part.visual_only) {
             continue;
         }
-        if (part.velocity[0] == 0.f && part.velocity[1] == 0.f && part.velocity[2] == 0.f) {
+        if (part.kind != InstanceKind::GameObject || part.storage >= world.objects.size()) {
             continue;
         }
-        part.transform.m[12] += part.velocity[0] * step;
-        part.transform.m[13] += part.velocity[1] * step;
-        part.transform.m[14] += part.velocity[2] * step;
+        GameObject& object = world.objects[part.storage];
+        if (object.velocity_[0] == 0.f && object.velocity_[1] == 0.f && object.velocity_[2] == 0.f) {
+            continue;
+        }
+        object.transform_.m[12] += object.velocity_[0] * step;
+        object.transform_.m[13] += object.velocity_[1] * step;
+        object.transform_.m[14] += object.velocity_[2] * step;
         const InstanceId id = (part.generation << 16u) | index;
         note(id, VisualField::Transform, WriteOrigin::Simulation);
     }
@@ -456,10 +576,10 @@ DataModel::InstanceSignals* DataModel::bag_for(InstanceId id) {
         return nullptr;
     }
     const std::uint32_t index = id & kIndexMask;
-    if (index >= bags_.size() || !bags_[index] || bags_[index]->owner != id) {
+    if (index >= state_->bags.size() || !state_->bags[index] || state_->bags[index]->owner != id) {
         return nullptr;
     }
-    return bags_[index].get();
+    return state_->bags[index].get();
 }
 
 DataModel::InstanceSignals& DataModel::ensure_bag(InstanceId id) {
@@ -467,17 +587,17 @@ DataModel::InstanceSignals& DataModel::ensure_bag(InstanceId id) {
         contract_fail("signal on a dead instance");
     }
     const std::uint32_t index = id & kIndexMask;
-    if (bags_.size() <= index) {
-        bags_.resize(index + 1);
+    if (state_->bags.size() <= index) {
+        state_->bags.resize(index + 1);
     }
-    if (!bags_[index] || bags_[index]->owner != id) {
-        if (bags_[index]) {
-            events_.destroy_instance(bags_[index]->owner);
+    if (!state_->bags[index] || state_->bags[index]->owner != id) {
+        if (state_->bags[index]) {
+            state_->events.destroy_instance(state_->bags[index]->owner);
         }
-        bags_[index] = std::make_unique<InstanceSignals>();
-        bags_[index]->owner = id;
+        state_->bags[index] = std::make_unique<InstanceSignals>();
+        state_->bags[index]->owner = id;
     }
-    return *bags_[index];
+    return *state_->bags[index];
 }
 
 Signal& DataModel::ensure_signal(InstanceId id, SignalKind kind, Field field) {
@@ -504,7 +624,7 @@ Signal& DataModel::ensure_signal(InstanceId id, SignalKind kind, Field field) {
         signal->owner_ = id;
         signal->kind_ = kind;
         signal->field_ = field;
-        events_.register_signal(signal);
+        state_->events.register_signal(signal);
     }
     return *signal;
 }
@@ -532,13 +652,13 @@ void DataModel::emit_change(InstanceId id, Field field, WriteOrigin origin) {
         return;
     }
     if (bag->changed.bound() && bag->changed.listeners_ > 0) {
-        events_.emit(bag->changed.id(), id, field, origin);
+        state_->events.emit(bag->changed.id(), id, field, origin);
     }
     const int index = static_cast<int>(field);
     if (index >= 0 && index < static_cast<int>(Field::Count)) {
         Signal& prop = bag->property[index];
         if (prop.bound() && prop.listeners_ > 0) {
-            events_.emit(prop.id(), id, field, origin);
+            state_->events.emit(prop.id(), id, field, origin);
         }
     }
 }
@@ -552,27 +672,27 @@ void DataModel::emit_child(InstanceId parent, SignalKind kind, InstanceId child,
     if (!signal.bound() || signal.listeners_ <= 0) {
         return;
     }
-    events_.emit(signal.id(), child, Field::Parent, origin);
+    state_->events.emit(signal.id(), child, Field::Parent, origin);
 }
 
 void DataModel::emit_ancestry(InstanceId id, WriteOrigin origin) {
-    walk_.clear();
-    walk_.push_back(id);
-    for (std::size_t i = 0; i < walk_.size(); ++i) {
-        const InstanceId cur = walk_[i];
+    state_->walk.clear();
+    state_->walk.push_back(id);
+    for (std::size_t i = 0; i < state_->walk.size(); ++i) {
+        const InstanceId cur = state_->walk[i];
         InstanceSignals* bag = bag_for(cur);
         if (bag != nullptr && bag->ancestry.bound() && bag->ancestry.listeners_ > 0) {
-            events_.emit(bag->ancestry.id(), cur, Field::Parent, origin);
+            state_->events.emit(bag->ancestry.id(), cur, Field::Parent, origin);
         }
         Slot* part = slot(cur);
         if (part == nullptr) {
             continue;
         }
         for (InstanceId child = part->first_child; child != 0;) {
-            if (walk_.size() == walk_.capacity()) {
+            if (state_->walk.size() == state_->walk.capacity()) {
                 break;
             }
-            walk_.push_back(child);
+            state_->walk.push_back(child);
             Slot* child_slot = slot(child);
             if (child_slot == nullptr) {
                 break;
@@ -659,7 +779,7 @@ bool DataModel::is_under(InstanceId ancestor, InstanceId node) const {
 }
 
 void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
-    if (threads_running_ && std::this_thread::get_id() != simulation_thread_) {
+    if (state_->threads_running && std::this_thread::get_id() != state_->simulation_thread) {
         contract_fail("set_parent runs on SimulationThread");
     }
     Slot* part = slot(id);
@@ -694,10 +814,10 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
 }
 
 void DataModel::release_signals(InstanceId id) {
-    events_.destroy_instance(id);
+    state_->events.destroy_instance(id);
     const std::uint32_t index = id & kIndexMask;
-    if (index < bags_.size()) {
-        bags_[index].reset();
+    if (index < state_->bags.size()) {
+        state_->bags[index].reset();
     }
 }
 

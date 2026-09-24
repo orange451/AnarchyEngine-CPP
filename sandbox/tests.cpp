@@ -1,5 +1,6 @@
 #include "Contract.hpp"
 #include "DataModel.hpp"
+#include "GameObject.hpp"
 #include "Engine.hpp"
 #include "Events.hpp"
 #include "IClock.hpp"
@@ -12,6 +13,7 @@
 #include <cmath>
 #include <string>
 #include <thread>
+#include <type_traits>
 
 namespace {
 
@@ -101,8 +103,7 @@ TEST_CASE("simulation and render are different threads", "[T1]") {
 TEST_CASE("DataModel write during Perform is rejected", "[T2]") {
     engine_core::Engine engine;
     struct Probe : engine_core::IRenderer {
-        engine_core::DataModel* model = nullptr;
-        engine_core::InstanceId id = 0;
+        engine_core::GameObject* object = nullptr;
         std::atomic<int> hits{0};
         std::string message;
         void perform(const engine_core::VisualSnapshot&, int) override {
@@ -110,7 +111,7 @@ TEST_CASE("DataModel write during Perform is rejected", "[T2]") {
                 return;
             }
             try {
-                model->set_color(id, engine_core::ColorRgb{});
+                object->set_color(engine_core::ColorRgb{});
             } catch (const engine_core::ContractViolation& ex) {
                 message = ex.what();
                 hits.store(1);
@@ -118,8 +119,7 @@ TEST_CASE("DataModel write during Perform is rejected", "[T2]") {
         }
         void present() override {}
     } probe;
-    probe.id = engine.datamodel().create_part();
-    probe.model = &engine.datamodel();
+    probe.object = &engine.datamodel().create_game_object();
     engine.set_renderer(&probe);
     engine.start();
     engine.resume();
@@ -132,7 +132,7 @@ TEST_CASE("heartbeat writes run alongside present", "[T3]") {
     engine_core::Engine engine;
     CountingRenderer renderer;
     engine.set_renderer(&renderer);
-    const engine_core::InstanceId id = engine.datamodel().create_part();
+    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
     std::atomic<int> writes{0};
     engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
         if (writes.load() != 0) {
@@ -144,7 +144,7 @@ TEST_CASE("heartbeat writes run alongside present", "[T3]") {
             color.g = 0.25f;
             color.b = 0.5f;
             color.a = 1.f;
-            engine.datamodel().set_color(id, color);
+            engine.datamodel().game_object(id)->set_color(color);
         }
         writes.store(10000);
     });
@@ -184,13 +184,13 @@ TEST_CASE("a long sim write does not block present", "[T4]") {
 
 TEST_CASE("heartbeat transform is live and snapshotted", "[T5]") {
     engine_core::Engine engine;
-    const engine_core::InstanceId id = engine.datamodel().create_part();
+    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
     const engine_core::Transform expected = T0();
     std::atomic<int> ready{0};
     engine_core::Transform snapped{};
     engine_core::WriteOrigin origin = engine_core::WriteOrigin::SnapshotOverride;
     engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
-        engine.datamodel().set_transform(id, expected);
+        engine.datamodel().game_object(id)->set_transform(expected);
     });
     struct Probe : CountingRenderer {
         engine_core::Engine* engine = nullptr;
@@ -229,14 +229,14 @@ TEST_CASE("heartbeat transform is live and snapshotted", "[T5]") {
     wait_until([&] { return ready.load() == 1; });
     engine.stop();
     // Threads are joined, so this live read is the DataModel, not the snapshot.
-    REQUIRE(near(engine.datamodel().transform(id), expected));
+    REQUIRE(near(engine.datamodel().game_object(id)->transform(), expected));
     REQUIRE(near(snapped, expected));
     REQUIRE(origin == engine_core::WriteOrigin::Simulation);
 }
 
 TEST_CASE("path C changes pixels for one frame only", "[T6]") {
     engine_core::Engine engine;
-    const engine_core::InstanceId id = engine.datamodel().create_part();
+    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
     const engine_core::Transform sim = T0();
     const engine_core::Transform flash = T1();
     std::atomic<int> heartbeats{0};
@@ -246,7 +246,7 @@ TEST_CASE("path C changes pixels for one frame only", "[T6]") {
     engine_core::Transform snap_next{};
     engine_core::WriteOrigin override_origin = engine_core::WriteOrigin::Simulation;
     engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
-        engine.datamodel().set_transform(id, sim);
+        engine.datamodel().game_object(id)->set_transform(sim);
         heartbeats.fetch_add(1);
     });
     engine.scheduler().bind(engine_core::Phase::PreRender, [&](double) {
@@ -261,7 +261,7 @@ TEST_CASE("path C changes pixels for one frame only", "[T6]") {
         override.field = engine_core::VisualField::Transform;
         override.transform = flash;
         engine.pump().override_visual(override);
-        live = engine.datamodel().transform(id);
+        live = engine.datamodel().game_object(id)->transform();
         stage.store(1);
     });
     struct Probe : CountingRenderer {
@@ -304,13 +304,13 @@ TEST_CASE("path C changes pixels for one frame only", "[T6]") {
     REQUIRE(near(snap_override, flash));
     REQUIRE(override_origin == engine_core::WriteOrigin::SnapshotOverride);
     REQUIRE(near(snap_next, sim));
-    REQUIRE(near(engine.datamodel().transform(id), sim));
+    REQUIRE(near(engine.datamodel().game_object(id)->transform(), sim));
 }
 
 TEST_CASE("path B on a visual-only part becomes sim truth", "[T7]") {
     engine_core::Engine engine;
     engine_core::DataModel& model = engine.datamodel();
-    const engine_core::InstanceId id = model.create_part();
+    const engine_core::InstanceId id = model.create_game_object().id();
     model.set_visual_only(id, true);
     const engine_core::Transform posed = T1();
     std::atomic<int> stage{0};
@@ -322,15 +322,15 @@ TEST_CASE("path B on a visual-only part becomes sim truth", "[T7]") {
         if (stage.load() != 0) {
             return;
         }
-        model.set_transform(id, posed);
-        live_at_write = model.transform(id);
+        model.game_object(id)->set_transform(posed);
+        live_at_write = model.game_object(id)->transform();
         stage.store(1);
     });
     engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
         if (stage.load() < 1) {
             return;
         }
-        live_later = model.transform(id);
+        live_later = model.game_object(id)->transform();
         if (stage.load() == 1) {
             return;
         }
@@ -375,9 +375,9 @@ TEST_CASE("path B on a visual-only part becomes sim truth", "[T7]") {
 TEST_CASE("path B on a simulated part is rejected unless forced", "[T8]") {
     engine_core::Engine engine;
     engine_core::DataModel& model = engine.datamodel();
-    const engine_core::InstanceId id = model.create_part();
+    const engine_core::InstanceId id = model.create_game_object().id();
     model.set_simulated(id, true);
-    model.set_linear_velocity(id, 1.f, 0.f, 0.f);
+    model.game_object(id)->set_linear_velocity(1.f, 0.f, 0.f);
     const engine_core::Transform posed = T1();
     std::atomic<int> rejected{0};
     std::atomic<int> stage{0};
@@ -388,19 +388,19 @@ TEST_CASE("path B on a simulated part is rejected unless forced", "[T8]") {
         if (stage.load() != 0) {
             return;
         }
-        model.set_transform(id, posed);
+        model.game_object(id)->set_transform(posed);
         if (model.take_deferred_violation()) {
             rejected.store(1);
         }
-        model.set_transform(id, posed, engine_core::ForceSimWrite{});
-        live_at_write = model.transform(id);
+        model.game_object(id)->set_transform(posed, engine_core::ForceSimWrite{});
+        live_at_write = model.game_object(id)->transform();
         stage.store(1);
     });
     engine.scheduler().bind(engine_core::Phase::PostSimulation, [&](double) {
         if (stage.load() != 2) {
             return;
         }
-        live_after_physics = model.transform(id);
+        live_after_physics = model.game_object(id)->transform();
         stage.store(3);
     });
     struct Probe : CountingRenderer {
@@ -452,7 +452,8 @@ TEST_CASE("physics substeps follow the sim clock, not present", "[T9]") {
 
 TEST_CASE("destroy removes the instance from the next snapshot", "[T10]") {
     engine_core::Engine engine;
-    const engine_core::InstanceId id = engine.datamodel().create_part();
+    engine_core::GameObject& object = engine.datamodel().create_game_object();
+    const engine_core::InstanceId id = object.id();
     std::atomic<int> destroyed{0};
     std::atomic<int> live_closed{0};
     std::atomic<int> snap_gone{0};
@@ -462,7 +463,8 @@ TEST_CASE("destroy removes the instance from the next snapshot", "[T10]") {
             destroyed.store(1);
         }
         if (destroyed.load() == 1) {
-            const bool closed = !engine.datamodel().alive(id) && is_zero(engine.datamodel().transform(id));
+            const bool closed = !engine.datamodel().alive(id) && engine.datamodel().game_object(id) == nullptr &&
+                                is_zero(object.transform());
             if (closed) {
                 live_closed.store(1);
             }
@@ -504,7 +506,7 @@ TEST_CASE("PreRender cannot spend the prepare budget on simulated parts", "[T11]
     engine_core::DataModel& model = engine.datamodel();
     engine_core::InstanceId ids[10000];
     for (int i = 0; i < 10000; ++i) {
-        ids[i] = model.create_part();
+        ids[i] = model.create_game_object().id();
         model.set_simulated(ids[i], true);
     }
     // The rejection is the Prepare. Drop the create records so that Prepare
@@ -514,7 +516,7 @@ TEST_CASE("PreRender cannot spend the prepare budget on simulated parts", "[T11]
         // Every one of these parts is simulated. The first write is rejected,
         // so Prepare does not walk the rest of the list.
         for (engine_core::InstanceId id : ids) {
-            model.set_transform(id, T1());
+            model.game_object(id)->set_transform(T1());
             if (model.has_deferred_violation()) {
                 break;
             }
@@ -548,7 +550,7 @@ TEST_CASE("simulation stays paused until resume", "[pause]") {
 
 TEST_CASE("heartbeat property change drains before prepare", "[T12]") {
     engine_core::Engine engine;
-    const engine_core::InstanceId id = engine.datamodel().create_part();
+    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
     const engine_core::ColorRgb tint = rgb(0.15f, 0.25f, 0.35f);
     std::atomic<int> handler_ran{0};
     std::atomic<int> bad{0};
@@ -569,7 +571,7 @@ TEST_CASE("heartbeat property change drains before prepare", "[T12]") {
         if (handler_ran.load() != 0) {
             return;
         }
-        engine.datamodel().set_color(id, tint);
+        engine.datamodel().game_object(id)->set_color(tint);
     });
     struct Probe : CountingRenderer {
         engine_core::InstanceId id = 0;
@@ -607,24 +609,24 @@ TEST_CASE("heartbeat property change drains before prepare", "[T12]") {
     REQUIRE(phase.load() == static_cast<int>(engine_core::Phase::Heartbeat));
     REQUIRE(role.load() == static_cast<int>(engine_core::ThreadRole::Simulation));
     REQUIRE(window.load() == 0);
-    REQUIRE(near_color(engine.datamodel().color(id), tint));
+    REQUIRE(near_color(engine.datamodel().game_object(id)->color(), tint));
 }
 
 TEST_CASE("handler writes are in the same snapshot", "[T13]") {
     engine_core::Engine engine;
-    const engine_core::InstanceId id = engine.datamodel().create_part();
+    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
     const engine_core::ColorRgb tint = rgb(0.2f, 0.4f, 0.6f);
     const engine_core::Transform posed = T1();
     std::atomic<int> ready{0};
     std::atomic<int> bad{0};
     engine.datamodel().property_changed(id, engine_core::Field::Color).connect([&](engine_core::InstanceId changed, engine_core::Field) {
-        engine.datamodel().set_transform(changed, posed);
+        engine.datamodel().game_object(changed)->set_transform(posed);
     });
     engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
         if (ready.load() != 0) {
             return;
         }
-        engine.datamodel().set_color(id, tint);
+        engine.datamodel().game_object(id)->set_color(tint);
     });
     struct Probe : CountingRenderer {
         engine_core::InstanceId id = 0;
@@ -664,13 +666,13 @@ TEST_CASE("handler writes are in the same snapshot", "[T13]") {
     engine.stop();
     REQUIRE(bad.load() == 0);
     REQUIRE(ready.load() == 1);
-    REQUIRE(near_color(engine.datamodel().color(id), tint));
-    REQUIRE(near(engine.datamodel().transform(id), posed));
+    REQUIRE(near_color(engine.datamodel().game_object(id)->color(), tint));
+    REQUIRE(near(engine.datamodel().game_object(id)->transform(), posed));
 }
 
 TEST_CASE("deferred handler does not re-enter the same drain", "[T14]") {
     engine_core::Engine engine;
-    const engine_core::InstanceId id = engine.datamodel().create_part();
+    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
     std::atomic<int> depth{0};
     std::atomic<int> max_depth{0};
     std::atomic<int> color_hits{0};
@@ -682,7 +684,7 @@ TEST_CASE("deferred handler does not re-enter the same drain", "[T14]") {
         }
         if (field == engine_core::Field::Color) {
             color_hits.fetch_add(1);
-            engine.datamodel().set_size(changed, 4.f, 5.f, 6.f);
+            engine.datamodel().game_object(changed)->set_size(4.f, 5.f, 6.f);
         } else if (field == engine_core::Field::Size) {
             size_hits.fetch_add(1);
         }
@@ -692,7 +694,7 @@ TEST_CASE("deferred handler does not re-enter the same drain", "[T14]") {
         if (color_hits.load() != 0) {
             return;
         }
-        engine.datamodel().set_color(id, rgb(0.7f, 0.1f, 0.2f));
+        engine.datamodel().game_object(id)->set_color(rgb(0.7f, 0.1f, 0.2f));
     });
     engine.start();
     engine.resume();
@@ -705,7 +707,7 @@ TEST_CASE("deferred handler does not re-enter the same drain", "[T14]") {
 
 TEST_CASE("disconnect during drain skips that connection", "[T15]") {
     engine_core::Engine engine;
-    const engine_core::InstanceId id = engine.datamodel().create_part();
+    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
     std::atomic<int> a{0};
     std::atomic<int> b{0};
     std::atomic<int> c{0};
@@ -728,10 +730,10 @@ TEST_CASE("disconnect during drain skips that connection", "[T15]") {
     engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
         const int step = stage.load();
         if (step == 0) {
-            engine.datamodel().set_color(id, rgb(0.1f, 0.2f, 0.3f));
+            engine.datamodel().game_object(id)->set_color(rgb(0.1f, 0.2f, 0.3f));
             stage.store(1);
         } else if (step == 1 && a.load() >= 1) {
-            engine.datamodel().set_color(id, rgb(0.4f, 0.5f, 0.6f));
+            engine.datamodel().game_object(id)->set_color(rgb(0.4f, 0.5f, 0.6f));
             stage.store(2);
         }
     });
@@ -750,18 +752,20 @@ TEST_CASE("disconnect during drain skips that connection", "[T15]") {
 TEST_CASE("destroy drops queued handlers", "[T16]") {
     engine_core::Engine engine;
     engine_core::DataModel& model = engine.datamodel();
-    const engine_core::InstanceId id = model.create_part();
+    const engine_core::InstanceId id = model.create_game_object().id();
     std::atomic<int> hits{0};
     std::atomic<int> stage{0};
     engine_core::Connection conn = model.changed(id).connect([&](engine_core::InstanceId got, engine_core::Field) {
         hits.fetch_add(1);
-        (void)model.color(got);
+        if (const engine_core::GameObject* object = model.game_object(got)) {
+            (void)object->color();
+        }
     });
     engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
         if (stage.load() != 0) {
             return;
         }
-        model.set_color(id, rgb(0.9f, 0.1f, 0.1f));
+        model.game_object(id)->set_color(rgb(0.9f, 0.1f, 0.1f));
         model.destroy(id);
         stage.store(1);
     });
@@ -778,7 +782,7 @@ TEST_CASE("destroy drops queued handlers", "[T16]") {
 TEST_CASE("path B enqueues and the snapshot still updates", "[T17]") {
     engine_core::Engine engine;
     engine_core::DataModel& model = engine.datamodel();
-    const engine_core::InstanceId id = model.create_part();
+    const engine_core::InstanceId id = model.create_game_object().id();
     model.set_visual_only(id, true);
     const engine_core::ColorRgb tint = rgb(0.2f, 0.8f, 0.1f);
     std::atomic<int> hits{0};
@@ -804,7 +808,7 @@ TEST_CASE("path B enqueues and the snapshot still updates", "[T17]") {
         if (stage.load() != 0) {
             return;
         }
-        model.set_color(id, tint);
+        model.game_object(id)->set_color(tint);
         during.store(hits.load());
         stage.store(1);
     });
@@ -833,7 +837,7 @@ TEST_CASE("path B enqueues and the snapshot still updates", "[T17]") {
     REQUIRE(during.load() == 0);
     REQUIRE(bad.load() == 0);
     REQUIRE(hits.load() >= 1);
-    REQUIRE(near_color(model.color(id), tint));
+    REQUIRE(near_color(model.game_object(id)->color(), tint));
     REQUIRE(model.events().count(engine_core::WriteOrigin::PreRenderDataModel) >= 1);
     REQUIRE(model.events().count(engine_core::WriteOrigin::SnapshotOverride) == 0);
 }
@@ -841,9 +845,9 @@ TEST_CASE("path B enqueues and the snapshot still updates", "[T17]") {
 TEST_CASE("path C emits nothing", "[T18]") {
     engine_core::Engine engine;
     engine_core::DataModel& model = engine.datamodel();
-    const engine_core::InstanceId id = model.create_part();
-    const engine_core::ColorRgb live_color = model.color(id);
-    const engine_core::Transform live_transform = model.transform(id);
+    const engine_core::InstanceId id = model.create_game_object().id();
+    const engine_core::ColorRgb live_color = model.game_object(id)->color();
+    const engine_core::Transform live_transform = model.game_object(id)->transform();
     std::atomic<int> hits{0};
     std::atomic<int> stage{0};
     model.changed(id).connect([&](engine_core::InstanceId, engine_core::Field) { hits.fetch_add(1); });
@@ -872,15 +876,15 @@ TEST_CASE("path C emits nothing", "[T18]") {
     wait_until([&] { return stage.load() == 1 && engine.present_count() > 3; });
     engine.stop();
     REQUIRE(hits.load() == 0);
-    REQUIRE(near_color(model.color(id), live_color));
-    REQUIRE(near(model.transform(id), live_transform));
+    REQUIRE(near_color(model.game_object(id)->color(), live_color));
+    REQUIRE(near(model.game_object(id)->transform(), live_transform));
     REQUIRE(model.events().count(engine_core::WriteOrigin::SnapshotOverride) == 0);
     REQUIRE(model.events().suppressed_overrides() == 0);
 }
 
 TEST_CASE("wait resumes on a later simulation phase", "[T19]") {
     engine_core::Engine engine;
-    const engine_core::InstanceId id = engine.datamodel().create_part();
+    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
     std::atomic<int> stage{0};
     std::atomic<int> resume_phase{-1};
     std::atomic<int> resume_role{-1};
@@ -909,7 +913,7 @@ TEST_CASE("wait resumes on a later simulation phase", "[T19]") {
             if (stage.load() != 1) {
                 return;
             }
-            engine.datamodel().set_color(id, rgb(0.3f, 0.2f, 0.1f));
+            engine.datamodel().game_object(id)->set_color(rgb(0.3f, 0.2f, 0.1f));
             stage.store(3);
         },
         1000);
@@ -927,7 +931,7 @@ TEST_CASE("wait resumes on a later simulation phase", "[T19]") {
 
 TEST_CASE("immediate handlers run inside set and cap at 16", "[T20]") {
     engine_core::Engine engine;
-    const engine_core::InstanceId id = engine.datamodel().create_part();
+    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
     std::atomic<int> calls{0};
     std::atomic<int> depth{0};
     std::atomic<int> max_depth{0};
@@ -952,11 +956,11 @@ TEST_CASE("immediate handlers run inside set and cap at 16", "[T20]") {
                 }
                 const int n = calls.fetch_add(1) + 1;
                 if (n <= 16) {
-                    engine.datamodel().set_size(changed, 10.f + static_cast<float>(n), 2.f, 3.f);
+                    engine.datamodel().game_object(changed)->set_size(10.f + static_cast<float>(n), 2.f, 3.f);
                 }
                 depth.fetch_sub(1);
             });
-            engine.datamodel().set_color(id, rgb(0.4f, 0.5f, 0.6f));
+            engine.datamodel().game_object(id)->set_color(rgb(0.4f, 0.5f, 0.6f));
             calls_at_return.store(calls.load());
             stage.store(1);
             return;
@@ -971,4 +975,27 @@ TEST_CASE("immediate handlers run inside set and cap at 16", "[T20]") {
     REQUIRE(calls_at_return.load() == 16);
     REQUIRE(calls.load() == 17);
     REQUIRE(max_depth.load() == 16);
+}
+
+TEST_CASE("plain instances do not carry transform color size or velocity", "[instance]") {
+    static_assert(std::is_base_of<engine_core::DataModel, engine_core::GameObject>::value,
+                  "GameObject inherits DataModel");
+    engine_core::DataModel model;
+    engine_core::DataModel& plain = model.create();
+    REQUIRE(plain.id() != 0);
+    REQUIRE(model.alive(plain.id()));
+    REQUIRE(model.game_object(plain.id()) == nullptr);
+    engine_core::GameObject& object = model.create_game_object();
+    REQUIRE(model.game_object(object.id()) == &object);
+    REQUIRE(object.transform().m[0] == 1.f);
+    REQUIRE(object.transform().m[15] == 1.f);
+    int seen = 0;
+    model.for_each_game_object([&](const engine_core::GameObject& item) {
+        REQUIRE(item.id() == object.id());
+        ++seen;
+    });
+    REQUIRE(seen == 1);
+    model.destroy(plain.id());
+    REQUIRE_FALSE(model.alive(plain.id()));
+    REQUIRE(model.alive(object.id()));
 }

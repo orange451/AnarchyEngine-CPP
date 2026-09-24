@@ -117,6 +117,7 @@ add_library(engine_core STATIC
     src/engine_core/Contract.cpp
     src/engine_core/InvalidationQueue.cpp
     src/engine_core/DataModel.cpp
+    src/engine_core/GameObject.cpp
     src/engine_core/DataModelLock.cpp
     src/engine_core/SnapshotPump.cpp
     src/engine_core/TaskScheduler.cpp

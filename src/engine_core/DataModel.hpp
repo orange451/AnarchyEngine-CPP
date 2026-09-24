@@ -181,6 +181,7 @@ private:
     InstanceId allocate(InstanceKind kind);
     void rebind(InstanceId id) { id_ = id; }
 
+    void require_simulation_thread(const char* message) const;
     bool authorize(const Slot& part, bool force_sim_write);
     bool reject_write(const char* message);
     void note(InstanceId id, VisualField fields, WriteOrigin origin);

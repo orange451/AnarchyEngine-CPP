@@ -45,7 +45,7 @@ enum class WriteOrigin {
     SnapshotOverride
 };
 
-// Passed to set_transform / set_color so a PreRender job can write a
+// Passed to GameObject::set_transform / set_color so a PreRender job can write a
 // simulated part. The next physics substep overwrites that transform.
 struct ForceSimWrite {
     explicit ForceSimWrite() = default;

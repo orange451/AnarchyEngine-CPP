@@ -10,12 +10,12 @@
 namespace ide {
 namespace {
 
-// A full turn takes four seconds. Scene::timeSeconds advances with each frame.
+// A full turn takes four seconds of simulation time, not wall time.
 constexpr double kDegreesPerSecond = 90.0;
 
 }  // namespace
 
-IdeGameView::IdeGameView() : IdePane("Scene View", false) {
+IdeGameView::IdeGameView(engine_core::StepEvents& steps) : IdePane("Scene View", false), steps_(&steps) {
     setMinSize(64, 64);
     getClassList().add("ide-viewport");
     setBackground(jadefx::Color::rgb8(30, 30, 30));
@@ -30,9 +30,16 @@ void IdeGameView::renderContent(jadefx::UiRenderer&, float) {
     if (!ensureGraphics()) {
         return;
     }
-    const double degrees = std::fmod(scene->timeSeconds() * kDegreesPerSecond, 360.0);
+    // No step event means the simulation is paused or has not caught up.
+    // The triangle holds its angle instead of following the window clock.
+    if (steps_ != nullptr) {
+        angleDegrees_ = std::fmod(angleDegrees_ + steps_->consume() * kDegreesPerSecond, 360.0);
+        if (angleDegrees_ < 0) {
+            angleDegrees_ += 360.0;
+        }
+    }
     renderer_.draw(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(), scene->getHeight(),
-                   static_cast<float>(degrees));
+                   static_cast<float>(angleDegrees_));
 }
 
 void IdeGameView::sceneChanged(jadefx::Scene* previous) {

@@ -113,23 +113,79 @@ target_include_directories(engine PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(engine PRIVATE Luau.Compiler Luau.VM)
 target_compile_features(engine PUBLIC cxx_std_17)
 
-target_link_libraries(AnarchyEngine-CPP PRIVATE jadefx engine)
+add_library(engine_core STATIC
+    src/engine_core/Contract.cpp
+    src/engine_core/InvalidationQueue.cpp
+    src/engine_core/DataModel.cpp
+    src/engine_core/DataModelLock.cpp
+    src/engine_core/SnapshotPump.cpp
+    src/engine_core/TaskScheduler.cpp
+    src/engine_core/StepEvents.cpp
+    src/engine_core/Engine.cpp
+)
+target_include_directories(engine_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/engine_core")
+target_compile_features(engine_core PUBLIC cxx_std_17)
+find_package(Threads REQUIRED)
+target_link_libraries(engine_core PUBLIC Threads::Threads)
+
+set(ENGINE_CORE_TSAN OFF CACHE BOOL "Instrument engine_core and sandbox with ThreadSanitizer")
+if(ENGINE_CORE_TSAN AND NOT MSVC)
+    target_compile_options(engine_core PRIVATE -fsanitize=thread -fno-omit-frame-pointer -g -O1)
+    target_link_options(engine_core PUBLIC -fsanitize=thread)
+endif()
+
+target_link_libraries(AnarchyEngine-CPP PRIVATE jadefx engine engine_core)
 
 add_executable(engine-tests
     tests/LuaEngineTest.cpp
     src/runner/Runner.cpp
 )
-target_link_libraries(engine-tests PRIVATE engine)
+target_link_libraries(engine-tests PRIVATE engine engine_core)
 target_compile_features(engine-tests PRIVATE cxx_std_17)
+
+# Catch2 is only the sandbox acceptance suite.
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.28")
+    FetchContent_Declare(
+        Catch2
+        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+        GIT_TAG v3.8.0
+        GIT_SHALLOW TRUE
+        EXCLUDE_FROM_ALL
+    )
+    FetchContent_MakeAvailable(Catch2)
+else()
+    FetchContent_Declare(
+        Catch2
+        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+        GIT_TAG v3.8.0
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_GetProperties(Catch2)
+    if(NOT Catch2_POPULATED)
+        FetchContent_Populate(Catch2)
+        add_subdirectory("${Catch2_SOURCE_DIR}" "${Catch2_BINARY_DIR}" EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
+add_executable(sandbox sandbox/tests.cpp)
+target_link_libraries(sandbox PRIVATE engine_core Catch2::Catch2WithMain)
+target_compile_features(sandbox PRIVATE cxx_std_17)
+if(ENGINE_CORE_TSAN AND NOT MSVC)
+    target_compile_options(sandbox PRIVATE -fsanitize=thread -fno-omit-frame-pointer -g -O1)
+endif()
 
 if(MSVC)
     target_compile_options(AnarchyEngine-CPP PRIVATE /W4 /utf-8)
     target_compile_options(engine PRIVATE /W4 /utf-8)
     target_compile_options(engine-tests PRIVATE /W4 /utf-8)
+    target_compile_options(engine_core PRIVATE /W4 /utf-8)
+    target_compile_options(sandbox PRIVATE /W4 /utf-8)
 else()
     target_compile_options(AnarchyEngine-CPP PRIVATE -Wall -Wextra)
     target_compile_options(engine PRIVATE -Wall -Wextra)
     target_compile_options(engine-tests PRIVATE -Wall -Wextra)
+    target_compile_options(engine_core PRIVATE -Wall -Wextra)
+    target_compile_options(sandbox PRIVATE -Wall -Wextra)
 endif()
 
 if(APPLE)

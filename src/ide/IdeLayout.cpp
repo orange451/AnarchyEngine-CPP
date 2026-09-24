@@ -1,5 +1,6 @@
 #include "IdeLayout.hpp"
 
+#include "Engine.hpp"
 #include "IdeConsole.hpp"
 #include "IdeDock.hpp"
 #include "IdeExplorer.hpp"
@@ -78,7 +79,10 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
     AddItem(*file, "Save As", jadefx::Key::S, jadefx::Key::ModControl | jadefx::Key::ModShift);
 
     auto edit = jadefx::make<jadefx::Menu>("Edit");
-    AddItem(*edit, "Test", kKeyF5, 0);
+    auto test = jadefx::make<jadefx::MenuItem>("Test");
+    test->setAccelerator(kKeyF5, 0);
+    test->setOnAction([this](jadefx::ActionEvent&) { runner_.simulation().resume(); });
+    edit->getItems().add(std::move(test));
 
     auto view = jadefx::make<jadefx::Menu>("View");
     AddItem(*view, "Maybe :)", 0, 0);
@@ -95,7 +99,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
 
     auto center = jadefx::make<IdeDock>();
     center->setMinSize(64, 64);
-    center->dock(jadefx::make<IdeGameView>());
+    center->dock(jadefx::make<IdeGameView>(runner_.simulation().steps()));
 
     auto south = jadefx::make<IdeDock>();
     south->setMinSize(80, 96);

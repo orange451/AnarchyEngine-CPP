@@ -20,6 +20,7 @@ run: all
 
 test: all
 	"$(BUILD_DIR)/engine-tests"
+	"$(BUILD_DIR)/sandbox"
 
 clean:
 	rm -rf $(BUILD_DIR)

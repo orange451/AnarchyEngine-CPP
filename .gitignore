@@ -1,4 +1,6 @@
-# CMake build tree: fetched GLFW, objects, and the app bundle.
+# CMake build trees: fetched GLFW, objects, and the app bundle.
+# build-tsan/ is the ThreadSanitizer tree from the engine_core README.
 build/
+build-*/
 
 .DS_Store

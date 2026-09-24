@@ -8,8 +8,8 @@
 namespace ide {
 
 // IDE shell, in the shape of OpenGLFX-IDE's IdeLayout.
-// The shell owns the runner and starts it. The runner starts the Lua engine.
-// Editing stays paused. Run Test, later, saves the project, simulates, and reloads that save.
+// The shell owns the runner and starts it. The runner starts the Lua engine
+// and the simulation. The simulation stays paused until Test resumes it.
 class IdeLayout {
 public:
     // windowWidth and windowHeight are the window size in points, used to place the splitters.

@@ -9,8 +9,10 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 namespace engine_core {
 
@@ -45,6 +47,11 @@ public:
     void pause();
     bool paused() const;
 
+    // Runs fn on the DataModel from SimulationThread.
+    // While the simulation is paused, the caller runs it under the write lock
+    // so the change is visible before the next Test.
+    void on_simulation(std::function<void(DataModel&)> fn);
+
     std::thread::id simulation_thread_id() const { return simulation_id_; }
     std::thread::id render_thread_id() const { return render_id_; }
     std::uint64_t present_count() const { return present_count_.load(); }
@@ -59,6 +66,7 @@ private:
     void render_loop();
     void step_physics(double dt);
     void pace(double hz_anchor_seconds) const;
+    void drain_edits();
 
     DataModel model_;
     SnapshotPump pump_;
@@ -87,10 +95,16 @@ private:
     bool start_release_ = false;
 
     // Guards paused_. SimulationThread waits on pause_cv_ while paused.
-    // The UI thread takes it only to flip the flag. Hold is a store.
+    // The UI thread takes it only to flip the flag or to publish a paused edit.
+    // Hold is a store, or one paused edit.
     mutable std::mutex pause_mu_;
     std::condition_variable pause_cv_;
     bool paused_ = true;
+
+    // Edits posted while the simulation is running. Drained on SimulationThread
+    // at the start of the next step, under the write lock.
+    std::mutex edit_mu_;
+    std::vector<std::function<void(DataModel&)>> edits_;
 };
 
 }  // namespace engine_core

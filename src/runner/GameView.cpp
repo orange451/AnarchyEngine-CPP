@@ -1,5 +1,6 @@
 #include "GameView.hpp"
 
+#include "DataModelLock.hpp"
 #include "Engine.hpp"
 #include "TestTriangle.hpp"
 #include "Runner.hpp"
@@ -8,23 +9,13 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
+#include <chrono>
 #include <cmath>
 #include <string>
 #include <vector>
 
 namespace runner {
 namespace {
-
-std::vector<engine_core::TestTriangle*> FindSceneTriangles(Runner& runner) {
-    std::vector<engine_core::TestTriangle*> found;
-    engine_core::DataModel& model = runner.simulation().datamodel();
-    for (engine_core::InstanceId id = model.first_child(model.id()); id != 0; id = model.next_sibling(id)) {
-        if (auto* triangle = dynamic_cast<engine_core::TestTriangle*>(model.instance(id))) {
-            found.push_back(triangle);
-        }
-    }
-    return found;
-}
 
 int FramesPerSecond(double dt) {
     const double frames = 1.0 / dt;
@@ -42,7 +33,7 @@ int FramesPerSecond(double dt) {
 
 GameView::GameView(Runner& runner)
     : ide::IdePane("Scene View", false),
-      triangles_(FindSceneTriangles(runner)),
+      model_(&runner.simulation().datamodel()),
       renderDt_(std::make_shared<std::atomic<double>>(0.0)) {
     setMinSize(64, 64);
     getClassList().add("ide-viewport");
@@ -53,6 +44,7 @@ GameView::GameView(Runner& runner)
     label->setMouseTransparent(true);
     fpsLabel_ = label.get();
     getChildren().add(std::move(label));
+    refreshTriangles();
 
     // The shell builds this view after prepare and before start, so neither
     // loop is running. PreRender keeps running while the simulation is paused,
@@ -91,9 +83,41 @@ void GameView::layoutChildren() {
     StackPane::layoutChildren();
 }
 
+void GameView::refreshTriangles() {
+    if (model_ == nullptr) {
+        return;
+    }
+    // The simulation thread may be inside a step. Skip this frame rather than
+    // waiting it out. The previous list stays drawable.
+    engine_core::DataModelLock lock(*model_, engine_core::DataModelLock::Read, std::chrono::milliseconds(1));
+    if (!lock.owns()) {
+        return;
+    }
+    triangleScratch_.clear();
+    for (engine_core::InstanceId id = model_->first_child(model_->id()); id != 0; id = model_->next_sibling(id)) {
+        if (auto* triangle = dynamic_cast<engine_core::TestTriangle*>(model_->instance(id))) {
+            triangleScratch_.push_back(triangle);
+        }
+    }
+    if (triangleScratch_.size() == triangles_.size()) {
+        bool same = true;
+        for (std::size_t i = 0; i < triangleScratch_.size(); ++i) {
+            if (triangleScratch_[i] != triangles_[i]) {
+                same = false;
+                break;
+            }
+        }
+        if (same) {
+            return;
+        }
+    }
+    triangles_.swap(triangleScratch_);
+}
+
 void GameView::renderChildren(jadefx::UiRenderer&, float) {}
 
 void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
+    refreshTriangles();
     const jadefx::Scene* scene = getScene();
     if (scene != nullptr && scene->getWidth() > 0.0 && scene->getHeight() > 0.0 && getWidth() > 0.0 &&
         getHeight() > 0.0 && ensureGraphics()) {

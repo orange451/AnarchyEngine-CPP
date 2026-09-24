@@ -1283,3 +1283,42 @@ TEST_CASE("a RenderStepped contract still runs PreRender", "[T24]") {
     REQUIRE(pre.load() > 0);
     REQUIRE(engine.contract_count() > 0);
 }
+
+TEST_CASE("a paused edit parents a triangle before the next step", "[edit]") {
+    engine_core::Engine engine;
+    engine.start();
+    REQUIRE(engine.paused());
+    engine_core::InstanceId id = 0;
+    engine.on_simulation([&](engine_core::DataModel& model) {
+        engine_core::TestTriangle& triangle = model.create<engine_core::TestTriangle>();
+        model.set_parent(triangle.id(), model.id());
+        id = triangle.id();
+    });
+    REQUIRE(id != 0);
+    REQUIRE(engine.datamodel().alive(id));
+    REQUIRE(engine.datamodel().parent(id) == engine.datamodel().id());
+    REQUIRE(engine.paused());
+    REQUIRE(engine.sim_frame_count() == 0);
+    engine.stop();
+}
+
+TEST_CASE("an edit during play runs on the simulation thread", "[edit]") {
+    engine_core::Engine engine;
+    engine.start();
+    engine.resume();
+    std::atomic<int> on_sim{0};
+    std::atomic<engine_core::InstanceId> id{0};
+    engine.on_simulation([&](engine_core::DataModel& model) {
+        if (std::this_thread::get_id() == engine.simulation_thread_id()) {
+            on_sim.store(1);
+        }
+        engine_core::TestTriangle& triangle = model.create<engine_core::TestTriangle>();
+        model.set_parent(triangle.id(), model.id());
+        id.store(triangle.id());
+    });
+    wait_until([&] { return id.load() != 0; });
+    engine.stop();
+    REQUIRE(on_sim.load() == 1);
+    REQUIRE(engine.datamodel().alive(id.load()));
+    REQUIRE(engine.datamodel().parent(id.load()) == engine.datamodel().id());
+}

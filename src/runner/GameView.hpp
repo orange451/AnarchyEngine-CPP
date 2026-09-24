@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace engine_core {
+class DataModel;
 class TestTriangle;
 }
 
@@ -34,12 +35,16 @@ protected:
 
 private:
     void refreshFpsLabel();
+    void refreshTriangles();
     bool ensureGraphics();
 
     Renderer renderer_;
-    // Found before the threads start. Heartbeat writes each angle. This thread
-    // only reads the atomics. The runner keeps the instances until it stops.
+    // The session DataModel. The runner keeps it alive for this view.
+    engine_core::DataModel* model_ = nullptr;
+    // Root TestTriangles. Refreshed when the hierarchy changes. Heartbeat writes
+    // each angle. This thread only reads the atomics.
     std::vector<engine_core::TestTriangle*> triangles_;
+    std::vector<engine_core::TestTriangle*> triangleScratch_;
     // PreRender writes the step on the render thread. The UI thread reads it.
     // The callback keeps a weak reference, so the value can die with this view.
     std::shared_ptr<std::atomic<double>> renderDt_;

@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <new>
 #include <thread>
@@ -16,6 +17,7 @@
 namespace engine_core {
 
 class DataModelLock;
+class Engine;
 class GameObject;
 
 // Live source of truth. SimulationThread is the only thread that may run
@@ -60,6 +62,10 @@ public:
 
     // Zero on the root world. A created instance returns its slot id.
     InstanceId id() const { return id_; }
+
+    // Stable label for tools such as the explorer. Subclasses return their own
+    // name. The pointer remains valid after the call.
+    virtual const char* class_name() const { return "DataModel"; }
 
     // Heartbeat calls this on every descendant of the root. dt is that phase's
     // step in seconds. The root itself is not stepped.
@@ -164,6 +170,7 @@ protected:
 
 private:
     friend class DataModelLock;
+    friend class Engine;
     friend class GameObject;
 
     struct SpawnOps {
@@ -225,6 +232,9 @@ private:
     void rebind(InstanceId id) { id_ = id; }
 
     void require_simulation_thread(const char* message) const;
+    // SimulationThread, or the paused-edit caller Engine admitted.
+    bool gameplay_thread() const;
+    void perform_paused_edit(const std::function<void(DataModel&)>& fn);
     bool authorize(const Slot& part, bool force_sim_write);
     bool reject_write(const char* message);
     void note(InstanceId id, VisualField fields, WriteOrigin origin);

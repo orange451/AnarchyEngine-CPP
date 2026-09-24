@@ -74,6 +74,8 @@ struct DataModel::State {
     int write_depth = 0;
     std::thread::id simulation_thread{};
     std::thread::id render_thread{};
+    // Set while Engine runs a paused edit on the caller. Empty otherwise.
+    std::thread::id edit_owner{};
     bool threads_running = false;
     bool prerender_window = false;
     bool resync = false;
@@ -163,9 +165,26 @@ void DataModel::set_thread_ids(std::thread::id simulation, std::thread::id rende
 void DataModel::set_threads_running(bool running) { state_->threads_running = running; }
 
 void DataModel::require_simulation_thread(const char* message) const {
-    if (state_->threads_running && std::this_thread::get_id() != state_->simulation_thread) {
+    if (!gameplay_thread()) {
         contract_fail(message);
     }
+}
+
+bool DataModel::gameplay_thread() const {
+    if (!state_->threads_running) {
+        return true;
+    }
+    const std::thread::id self = std::this_thread::get_id();
+    return self == state_->simulation_thread || self == state_->edit_owner;
+}
+
+void DataModel::perform_paused_edit(const std::function<void(DataModel&)>& fn) {
+    struct Clear {
+        State& state;
+        ~Clear() { state.edit_owner = {}; }
+    } clear{*state_};
+    state_->edit_owner = std::this_thread::get_id();
+    fn(*this);
 }
 
 void DataModel::set_prerender_window(bool open) { state_->prerender_window = open; }
@@ -365,7 +384,7 @@ InstanceId DataModel::allocate() {
 }
 
 DataModel& DataModel::spawn(const SpawnOps& ops) {
-    if (state_->threads_running && std::this_thread::get_id() != state_->simulation_thread) {
+    if (!gameplay_thread()) {
         contract_fail("create runs on SimulationThread");
     }
     if (ops.construct == nullptr || ops.destroy == nullptr || ops.bytes == 0 || ops.align == 0) {
@@ -886,7 +905,7 @@ bool DataModel::is_under(InstanceId ancestor, InstanceId node) const {
 }
 
 void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
-    if (state_->threads_running && std::this_thread::get_id() != state_->simulation_thread) {
+    if (!gameplay_thread()) {
         contract_fail("set_parent runs on SimulationThread");
     }
     Slot* part = slot(id);

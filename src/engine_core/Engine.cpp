@@ -4,6 +4,8 @@
 
 #include <chrono>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace engine_core {
 
@@ -65,6 +67,40 @@ void Engine::pause() {
 bool Engine::paused() const {
     std::lock_guard<std::mutex> guard(pause_mu_);
     return paused_;
+}
+
+void Engine::on_simulation(std::function<void(DataModel&)> fn) {
+    if (!fn) {
+        return;
+    }
+    if (!running_.load() || std::this_thread::get_id() == simulation_id_) {
+        fn(model_);
+        return;
+    }
+    // pause_mu_ is released by the sim thread while it waits. Holding it here
+    // keeps that wait from ending, so the write lock is not the step lock.
+    std::unique_lock<std::mutex> pause_lock(pause_mu_);
+    if (paused_) {
+        DataModelLock lock(model_, DataModelLock::Write);
+        model_.perform_paused_edit(fn);
+        return;
+    }
+    std::lock_guard<std::mutex> guard(edit_mu_);
+    edits_.push_back(std::move(fn));
+}
+
+void Engine::drain_edits() {
+    std::vector<std::function<void(DataModel&)>> batch;
+    {
+        std::lock_guard<std::mutex> guard(edit_mu_);
+        if (edits_.empty()) {
+            return;
+        }
+        batch.swap(edits_);
+    }
+    for (const std::function<void(DataModel&)>& fn : batch) {
+        fn(model_);
+    }
 }
 
 void Engine::stop() {
@@ -140,6 +176,7 @@ void Engine::simulation_loop() {
         try {
             DataModelLock lock(model_, DataModelLock::Write);
             model_.drain_commands();
+            drain_edits();
             scheduler_.run_phase(Phase::PreAnimation, render_dt_);
             // Deferred handlers run on this thread, still under the step lock,
             // after the phase that queued them and before Prepare can copy.

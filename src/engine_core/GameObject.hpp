@@ -9,6 +9,8 @@ class GameObject : public DataModel {
 public:
     GameObject(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
 
+    const char* class_name() const override { return "GameObject"; }
+
     void set_transform(const Transform& transform);
     void set_transform(const Transform& transform, ForceSimWrite);
     void set_color(ColorRgb color);

@@ -4,7 +4,10 @@
 #include "IdeConsole.hpp"
 #include "IdeDock.hpp"
 #include "IdeExplorer.hpp"
+#include "TestTriangle.hpp"
 #include "../runner/GameView.hpp"
+
+#include <cmath>
 
 namespace ide {
 namespace {
@@ -108,6 +111,25 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
         runner_.simulation().pause();
         ShowOne(*testItem, *stopItem);
     });
+
+    auto insert = jadefx::make<jadefx::MenuItem>("Insert Triangle");
+    insert->setOnAction([this](jadefx::ActionEvent&) {
+        runner_.simulation().on_simulation([](engine_core::DataModel& model) {
+            int existing = 0;
+            for (engine_core::InstanceId id = model.first_child(model.id()); id != 0; id = model.next_sibling(id)) {
+                if (dynamic_cast<engine_core::TestTriangle*>(model.instance(id)) != nullptr) {
+                    ++existing;
+                }
+            }
+            engine_core::TestTriangle& triangle = model.create<engine_core::TestTriangle>();
+            model.set_parent(triangle.id(), model.id());
+            // Spread repeats around the view so they do not stack on one point.
+            const float angle = static_cast<float>(existing) * 0.9f;
+            constexpr float kRadius = 0.42f;
+            triangle.set_position(std::cos(angle) * kRadius, std::sin(angle) * kRadius, 0.15f);
+        });
+    });
+    edit->getItems().add(std::move(insert));
     edit->getItems().add(std::move(test));
     edit->getItems().add(std::move(stop));
 
@@ -119,10 +141,12 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
     menuBar->getMenus().add(edit);
     menuBar->getMenus().add(view);
 
+    engine_core::DataModel& model = runner_.simulation().datamodel();
+
     auto west = jadefx::make<IdeDock>();
     west->setMinSize(160, 80);
     // IdeTreeTest is the sample tree page. The Java shell left that dock commented out.
-    west->dock(jadefx::make<IdeExplorer>("Game Explorer"));
+    west->dock(jadefx::make<IdeExplorer>(model, "Game Explorer"));
 
     auto center = jadefx::make<IdeDock>();
     center->setMinSize(64, 64);
@@ -134,7 +158,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
 
     auto east = jadefx::make<IdeDock>();
     east->setMinSize(160, 80);
-    east->dock(jadefx::make<IdeExplorer>("Current Scene"));
+    east->dock(jadefx::make<IdeExplorer>(model, "Current Scene"));
 
     auto vertical = jadefx::make<jadefx::SplitPane>();
     vertical->setOrientation(jadefx::Orientation::Vertical);

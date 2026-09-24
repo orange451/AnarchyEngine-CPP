@@ -1,9 +1,27 @@
 #include "DataModel.hpp"
 
+#include <cstring>
+
 namespace engine_core {
 namespace {
 
 constexpr std::uint32_t kIndexMask = 0xffffu;
+
+bool same_transform(const Transform& a, const Transform& b) {
+    return std::memcmp(a.m, b.m, sizeof(a.m)) == 0;
+}
+
+bool same_color(ColorRgb a, ColorRgb b) {
+    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+}
+
+int field_index(Field field) {
+    const int index = static_cast<int>(field);
+    if (index < 0 || index >= static_cast<int>(Field::Count)) {
+        contract_fail("unknown field");
+    }
+    return index;
+}
 
 // How many DataModelLock guards this thread currently owns.
 // The mutex itself is taken only for the outermost guard, so RenderThread's
@@ -18,7 +36,14 @@ DataModel::DataModel() {
     free_list_.reserve(kMaxInstances);
     invalidation_.reserve(kMaxInvalidations);
     commands_.assign(kMaxCommands, Command{});
+    bags_.resize(kMaxInstances);
+    walk_.reserve(kMaxInstances);
+    events_.watch_prerender(&prerender_window_);
 }
+
+DataModel::~DataModel() { events_.shutdown(); }
+
+void DataModel::attach_scheduler(TaskScheduler* scheduler) { events_.attach_scheduler(scheduler); }
 
 void DataModel::set_thread_ids(std::thread::id simulation, std::thread::id render) {
     simulation_thread_ = simulation;
@@ -198,6 +223,10 @@ InstanceId DataModel::create_part() {
     part.color = ColorRgb{};
     part.size[0] = part.size[1] = part.size[2] = 1.f;
     part.velocity[0] = part.velocity[1] = part.velocity[2] = 0.f;
+    part.parent = 0;
+    part.first_child = 0;
+    part.next_sibling = 0;
+    part.prev_sibling = 0;
     const InstanceId id = (part.generation << 16u) | index;
     note(id, VisualField::Transform | VisualField::Color | VisualField::Size, WriteOrigin::Simulation);
     return id;
@@ -219,6 +248,8 @@ void DataModel::destroy(InstanceId id) {
     if (part == nullptr) {
         return;
     }
+    detach_links(id, *part);
+    release_signals(id);
     part->alive = false;
     if (part->generation != 0xffffu) {
         ++part->generation;
@@ -247,8 +278,13 @@ void DataModel::apply_transform(InstanceId id, const Transform& transform, bool 
     if (!authorize(*part, force)) {
         return;
     }
+    if (same_transform(part->transform, transform)) {
+        return;
+    }
     part->transform = transform;
-    note(id, VisualField::Transform, current_origin());
+    const WriteOrigin origin = current_origin();
+    note(id, VisualField::Transform, origin);
+    emit_change(id, Field::Transform, origin);
 }
 
 void DataModel::apply_color(InstanceId id, ColorRgb color, bool force) {
@@ -271,8 +307,13 @@ void DataModel::apply_color(InstanceId id, ColorRgb color, bool force) {
     if (!authorize(*part, force)) {
         return;
     }
+    if (same_color(part->color, color)) {
+        return;
+    }
     part->color = color;
-    note(id, VisualField::Color, current_origin());
+    const WriteOrigin origin = current_origin();
+    note(id, VisualField::Color, origin);
+    emit_change(id, Field::Color, origin);
 }
 
 void DataModel::set_transform(InstanceId id, const Transform& transform) {
@@ -295,10 +336,15 @@ void DataModel::set_size(InstanceId id, float x, float y, float z) {
     if (part == nullptr) {
         contract_fail("size write on a dead instance");
     }
+    if (part->size[0] == x && part->size[1] == y && part->size[2] == z) {
+        return;
+    }
     part->size[0] = x;
     part->size[1] = y;
     part->size[2] = z;
-    note(id, VisualField::Size, WriteOrigin::Simulation);
+    const WriteOrigin origin = current_origin();
+    note(id, VisualField::Size, origin);
+    emit_change(id, Field::Size, origin);
 }
 
 void DataModel::set_simulated(InstanceId id, bool simulated) {
@@ -309,7 +355,11 @@ void DataModel::set_simulated(InstanceId id, bool simulated) {
     if (part == nullptr) {
         contract_fail("set_simulated on a dead instance");
     }
+    if (part->simulated == simulated) {
+        return;
+    }
     part->simulated = simulated;
+    emit_change(id, Field::Simulated, current_origin());
 }
 
 void DataModel::set_visual_only(InstanceId id, bool visual_only) {
@@ -320,7 +370,11 @@ void DataModel::set_visual_only(InstanceId id, bool visual_only) {
     if (part == nullptr) {
         contract_fail("set_visual_only on a dead instance");
     }
+    if (part->visual_only == visual_only) {
+        return;
+    }
     part->visual_only = visual_only;
+    emit_change(id, Field::VisualOnly, current_origin());
 }
 
 void DataModel::set_linear_velocity(InstanceId id, float x, float y, float z) {
@@ -331,9 +385,13 @@ void DataModel::set_linear_velocity(InstanceId id, float x, float y, float z) {
     if (part == nullptr) {
         contract_fail("velocity write on a dead instance");
     }
+    if (part->velocity[0] == x && part->velocity[1] == y && part->velocity[2] == z) {
+        return;
+    }
     part->velocity[0] = x;
     part->velocity[1] = y;
     part->velocity[2] = z;
+    emit_change(id, Field::LinearVelocity, current_origin());
 }
 
 Transform DataModel::transform(InstanceId id) const {
@@ -391,6 +449,264 @@ void DataModel::integrate_simulated(double dt) {
         const InstanceId id = (part.generation << 16u) | index;
         note(id, VisualField::Transform, WriteOrigin::Simulation);
     }
+}
+
+DataModel::InstanceSignals* DataModel::bag_for(InstanceId id) {
+    if (slot(id) == nullptr) {
+        return nullptr;
+    }
+    const std::uint32_t index = id & kIndexMask;
+    if (index >= bags_.size() || !bags_[index] || bags_[index]->owner != id) {
+        return nullptr;
+    }
+    return bags_[index].get();
+}
+
+DataModel::InstanceSignals& DataModel::ensure_bag(InstanceId id) {
+    if (slot(id) == nullptr) {
+        contract_fail("signal on a dead instance");
+    }
+    const std::uint32_t index = id & kIndexMask;
+    if (bags_.size() <= index) {
+        bags_.resize(index + 1);
+    }
+    if (!bags_[index] || bags_[index]->owner != id) {
+        if (bags_[index]) {
+            events_.destroy_instance(bags_[index]->owner);
+        }
+        bags_[index] = std::make_unique<InstanceSignals>();
+        bags_[index]->owner = id;
+    }
+    return *bags_[index];
+}
+
+Signal& DataModel::ensure_signal(InstanceId id, SignalKind kind, Field field) {
+    InstanceSignals& bag = ensure_bag(id);
+    Signal* signal = nullptr;
+    switch (kind) {
+    case SignalKind::Changed:
+        signal = &bag.changed;
+        break;
+    case SignalKind::PropertyChanged:
+        signal = &bag.property[field_index(field)];
+        break;
+    case SignalKind::ChildAdded:
+        signal = &bag.child_added;
+        break;
+    case SignalKind::ChildRemoved:
+        signal = &bag.child_removed;
+        break;
+    case SignalKind::AncestryChanged:
+        signal = &bag.ancestry;
+        break;
+    }
+    if (!signal->bound()) {
+        signal->owner_ = id;
+        signal->kind_ = kind;
+        signal->field_ = field;
+        events_.register_signal(signal);
+    }
+    return *signal;
+}
+
+Signal& DataModel::changed(InstanceId id) { return ensure_signal(id, SignalKind::Changed, Field::Transform); }
+
+Signal& DataModel::property_changed(InstanceId id, Field field) {
+    field_index(field);
+    return ensure_signal(id, SignalKind::PropertyChanged, field);
+}
+
+Signal& DataModel::child_added(InstanceId id) { return ensure_signal(id, SignalKind::ChildAdded, Field::Parent); }
+
+Signal& DataModel::child_removed(InstanceId id) {
+    return ensure_signal(id, SignalKind::ChildRemoved, Field::Parent);
+}
+
+Signal& DataModel::ancestry_changed(InstanceId id) {
+    return ensure_signal(id, SignalKind::AncestryChanged, Field::Parent);
+}
+
+void DataModel::emit_change(InstanceId id, Field field, WriteOrigin origin) {
+    InstanceSignals* bag = bag_for(id);
+    if (bag == nullptr) {
+        return;
+    }
+    if (bag->changed.bound() && bag->changed.listeners_ > 0) {
+        events_.emit(bag->changed.id(), id, field, origin);
+    }
+    const int index = static_cast<int>(field);
+    if (index >= 0 && index < static_cast<int>(Field::Count)) {
+        Signal& prop = bag->property[index];
+        if (prop.bound() && prop.listeners_ > 0) {
+            events_.emit(prop.id(), id, field, origin);
+        }
+    }
+}
+
+void DataModel::emit_child(InstanceId parent, SignalKind kind, InstanceId child, WriteOrigin origin) {
+    InstanceSignals* bag = bag_for(parent);
+    if (bag == nullptr) {
+        return;
+    }
+    Signal& signal = kind == SignalKind::ChildRemoved ? bag->child_removed : bag->child_added;
+    if (!signal.bound() || signal.listeners_ <= 0) {
+        return;
+    }
+    events_.emit(signal.id(), child, Field::Parent, origin);
+}
+
+void DataModel::emit_ancestry(InstanceId id, WriteOrigin origin) {
+    walk_.clear();
+    walk_.push_back(id);
+    for (std::size_t i = 0; i < walk_.size(); ++i) {
+        const InstanceId cur = walk_[i];
+        InstanceSignals* bag = bag_for(cur);
+        if (bag != nullptr && bag->ancestry.bound() && bag->ancestry.listeners_ > 0) {
+            events_.emit(bag->ancestry.id(), cur, Field::Parent, origin);
+        }
+        Slot* part = slot(cur);
+        if (part == nullptr) {
+            continue;
+        }
+        for (InstanceId child = part->first_child; child != 0;) {
+            if (walk_.size() == walk_.capacity()) {
+                break;
+            }
+            walk_.push_back(child);
+            Slot* child_slot = slot(child);
+            if (child_slot == nullptr) {
+                break;
+            }
+            child = child_slot->next_sibling;
+        }
+    }
+}
+
+void DataModel::unlink_parent(InstanceId id, Slot& part) {
+    if (part.parent == 0) {
+        part.prev_sibling = 0;
+        part.next_sibling = 0;
+        return;
+    }
+    Slot* parent = slot(part.parent);
+    if (part.prev_sibling != 0) {
+        Slot* prev = slot(part.prev_sibling);
+        if (prev != nullptr) {
+            prev->next_sibling = part.next_sibling;
+        }
+    } else if (parent != nullptr && parent->first_child == id) {
+        parent->first_child = part.next_sibling;
+    }
+    if (part.next_sibling != 0) {
+        Slot* next = slot(part.next_sibling);
+        if (next != nullptr) {
+            next->prev_sibling = part.prev_sibling;
+        }
+    }
+    part.parent = 0;
+    part.prev_sibling = 0;
+    part.next_sibling = 0;
+}
+
+void DataModel::link_child(InstanceId parent_id, InstanceId child) {
+    Slot* parent = slot(parent_id);
+    Slot* part = slot(child);
+    if (parent == nullptr || part == nullptr) {
+        contract_fail("set_parent lost an instance");
+    }
+    part->parent = parent_id;
+    part->prev_sibling = 0;
+    part->next_sibling = parent->first_child;
+    if (parent->first_child != 0) {
+        Slot* first = slot(parent->first_child);
+        if (first != nullptr) {
+            first->prev_sibling = child;
+        }
+    }
+    parent->first_child = child;
+}
+
+void DataModel::detach_links(InstanceId id, Slot& part) {
+    unlink_parent(id, part);
+    InstanceId child = part.first_child;
+    while (child != 0) {
+        Slot* child_slot = slot(child);
+        if (child_slot == nullptr) {
+            break;
+        }
+        const InstanceId next = child_slot->next_sibling;
+        child_slot->parent = 0;
+        child_slot->prev_sibling = 0;
+        child_slot->next_sibling = 0;
+        child = next;
+    }
+    part.first_child = 0;
+}
+
+bool DataModel::is_under(InstanceId ancestor, InstanceId node) const {
+    InstanceId cursor = node;
+    while (cursor != 0) {
+        if (cursor == ancestor) {
+            return true;
+        }
+        const Slot* part = slot(cursor);
+        if (part == nullptr) {
+            return false;
+        }
+        cursor = part->parent;
+    }
+    return false;
+}
+
+void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
+    if (threads_running_ && std::this_thread::get_id() != simulation_thread_) {
+        contract_fail("set_parent runs on SimulationThread");
+    }
+    Slot* part = slot(id);
+    if (part == nullptr) {
+        contract_fail("set_parent on a dead instance");
+    }
+    if (new_parent != 0) {
+        if (slot(new_parent) == nullptr) {
+            contract_fail("set_parent to a dead instance");
+        }
+        if (new_parent == id || is_under(id, new_parent)) {
+            contract_fail("set_parent would cycle");
+        }
+    }
+    if (part->parent == new_parent) {
+        return;
+    }
+    const InstanceId old = part->parent;
+    unlink_parent(id, *part);
+    if (new_parent != 0) {
+        link_child(new_parent, id);
+    }
+    const WriteOrigin origin = current_origin();
+    emit_change(id, Field::Parent, origin);
+    if (old != 0) {
+        emit_child(old, SignalKind::ChildRemoved, id, origin);
+    }
+    if (new_parent != 0) {
+        emit_child(new_parent, SignalKind::ChildAdded, id, origin);
+    }
+    emit_ancestry(id, origin);
+}
+
+void DataModel::release_signals(InstanceId id) {
+    events_.destroy_instance(id);
+    const std::uint32_t index = id & kIndexMask;
+    if (index < bags_.size()) {
+        bags_[index].reset();
+    }
+}
+
+InstanceId DataModel::parent(InstanceId id) const {
+    const Slot* part = slot(id);
+    if (part == nullptr) {
+        return 0;
+    }
+    return part->parent;
 }
 
 }  // namespace engine_core

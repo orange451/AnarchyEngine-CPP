@@ -1,6 +1,7 @@
 #include "Contract.hpp"
 #include "DataModel.hpp"
 #include "Engine.hpp"
+#include "Events.hpp"
 #include "IClock.hpp"
 #include "IRenderer.hpp"
 
@@ -54,6 +55,30 @@ void wait_until(Pred pred, std::chrono::milliseconds budget = std::chrono::secon
 engine_core::Transform T0() { return engine_core::transform_translation(3.f, 4.f, 5.f); }
 
 engine_core::Transform T1() { return engine_core::transform_translation(50.f, 0.f, 0.f); }
+
+engine_core::ColorRgb rgb(float r, float g, float b) {
+    engine_core::ColorRgb color;
+    color.r = r;
+    color.g = g;
+    color.b = b;
+    color.a = 1.f;
+    return color;
+}
+
+bool near_color(engine_core::ColorRgb a, engine_core::ColorRgb b) {
+    return std::fabs(a.r - b.r) < 1e-4f && std::fabs(a.g - b.g) < 1e-4f && std::fabs(a.b - b.b) < 1e-4f &&
+           std::fabs(a.a - b.a) < 1e-4f;
+}
+
+const engine_core::VisualInstance* find_instance(const engine_core::VisualSnapshot& snapshot,
+                                                  engine_core::InstanceId id) {
+    for (const engine_core::VisualInstance& item : snapshot.instances) {
+        if (item.id == id) {
+            return &item;
+        }
+    }
+    return nullptr;
+}
 
 class CountingRenderer : public engine_core::IRenderer {
 public:
@@ -519,4 +544,431 @@ TEST_CASE("simulation stays paused until resume", "[pause]") {
     std::this_thread::sleep_for(std::chrono::milliseconds(40));
     REQUIRE(engine.sim_frame_count() == frames);
     engine.stop();
+}
+
+TEST_CASE("heartbeat property change drains before prepare", "[T12]") {
+    engine_core::Engine engine;
+    const engine_core::InstanceId id = engine.datamodel().create_part();
+    const engine_core::ColorRgb tint = rgb(0.15f, 0.25f, 0.35f);
+    std::atomic<int> handler_ran{0};
+    std::atomic<int> bad{0};
+    std::atomic<int> ready{0};
+    std::atomic<int> phase{-1};
+    std::atomic<int> role{-1};
+    std::atomic<int> window{-1};
+    engine.datamodel().property_changed(id, engine_core::Field::Color).connect([&](engine_core::InstanceId, engine_core::Field) {
+        phase.store(static_cast<int>(engine.scheduler().current_phase()));
+        role.store(static_cast<int>(engine_core::thread_role()));
+        window.store(engine.datamodel().prerender_window() ? 1 : 0);
+        if (std::this_thread::get_id() != engine.simulation_thread_id()) {
+            bad.store(1);
+        }
+        handler_ran.store(1);
+    });
+    engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
+        if (handler_ran.load() != 0) {
+            return;
+        }
+        engine.datamodel().set_color(id, tint);
+    });
+    struct Probe : CountingRenderer {
+        engine_core::InstanceId id = 0;
+        const engine_core::ColorRgb* tint = nullptr;
+        std::atomic<int>* handler_ran = nullptr;
+        std::atomic<int>* bad = nullptr;
+        std::atomic<int>* ready = nullptr;
+        void perform(const engine_core::VisualSnapshot& snapshot, int) override {
+            if (ready->load() != 0 || bad->load() != 0) {
+                return;
+            }
+            const engine_core::VisualInstance* inst = find_instance(snapshot, id);
+            if (inst == nullptr || !near_color(inst->color, *tint)) {
+                return;
+            }
+            if (handler_ran->load() == 0) {
+                bad->store(1);
+                return;
+            }
+            ready->store(1);
+        }
+    } probe;
+    probe.id = id;
+    probe.tint = &tint;
+    probe.handler_ran = &handler_ran;
+    probe.bad = &bad;
+    probe.ready = &ready;
+    engine.set_renderer(&probe);
+    engine.start();
+    engine.resume();
+    wait_until([&] { return ready.load() == 1 || bad.load() == 1; });
+    engine.stop();
+    REQUIRE(bad.load() == 0);
+    REQUIRE(ready.load() == 1);
+    REQUIRE(phase.load() == static_cast<int>(engine_core::Phase::Heartbeat));
+    REQUIRE(role.load() == static_cast<int>(engine_core::ThreadRole::Simulation));
+    REQUIRE(window.load() == 0);
+    REQUIRE(near_color(engine.datamodel().color(id), tint));
+}
+
+TEST_CASE("handler writes are in the same snapshot", "[T13]") {
+    engine_core::Engine engine;
+    const engine_core::InstanceId id = engine.datamodel().create_part();
+    const engine_core::ColorRgb tint = rgb(0.2f, 0.4f, 0.6f);
+    const engine_core::Transform posed = T1();
+    std::atomic<int> ready{0};
+    std::atomic<int> bad{0};
+    engine.datamodel().property_changed(id, engine_core::Field::Color).connect([&](engine_core::InstanceId changed, engine_core::Field) {
+        engine.datamodel().set_transform(changed, posed);
+    });
+    engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
+        if (ready.load() != 0) {
+            return;
+        }
+        engine.datamodel().set_color(id, tint);
+    });
+    struct Probe : CountingRenderer {
+        engine_core::InstanceId id = 0;
+        const engine_core::ColorRgb* tint = nullptr;
+        const engine_core::Transform* posed = nullptr;
+        std::atomic<int>* ready = nullptr;
+        std::atomic<int>* bad = nullptr;
+        void perform(const engine_core::VisualSnapshot& snapshot, int) override {
+            if (ready->load() != 0) {
+                return;
+            }
+            const engine_core::VisualInstance* inst = find_instance(snapshot, id);
+            if (inst == nullptr) {
+                return;
+            }
+            const bool color_ok = near_color(inst->color, *tint);
+            const bool transform_ok = near(inst->world, *posed);
+            if (!color_ok && !transform_ok) {
+                return;
+            }
+            if (color_ok && transform_ok) {
+                ready->store(1);
+                return;
+            }
+            bad->store(1);
+        }
+    } probe;
+    probe.id = id;
+    probe.tint = &tint;
+    probe.posed = &posed;
+    probe.ready = &ready;
+    probe.bad = &bad;
+    engine.set_renderer(&probe);
+    engine.start();
+    engine.resume();
+    wait_until([&] { return ready.load() == 1 || bad.load() == 1; });
+    engine.stop();
+    REQUIRE(bad.load() == 0);
+    REQUIRE(ready.load() == 1);
+    REQUIRE(near_color(engine.datamodel().color(id), tint));
+    REQUIRE(near(engine.datamodel().transform(id), posed));
+}
+
+TEST_CASE("deferred handler does not re-enter the same drain", "[T14]") {
+    engine_core::Engine engine;
+    const engine_core::InstanceId id = engine.datamodel().create_part();
+    std::atomic<int> depth{0};
+    std::atomic<int> max_depth{0};
+    std::atomic<int> color_hits{0};
+    std::atomic<int> size_hits{0};
+    engine.datamodel().changed(id).connect([&](engine_core::InstanceId changed, engine_core::Field field) {
+        const int now = depth.fetch_add(1) + 1;
+        int seen = max_depth.load();
+        while (now > seen && !max_depth.compare_exchange_weak(seen, now)) {
+        }
+        if (field == engine_core::Field::Color) {
+            color_hits.fetch_add(1);
+            engine.datamodel().set_size(changed, 4.f, 5.f, 6.f);
+        } else if (field == engine_core::Field::Size) {
+            size_hits.fetch_add(1);
+        }
+        depth.fetch_sub(1);
+    });
+    engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
+        if (color_hits.load() != 0) {
+            return;
+        }
+        engine.datamodel().set_color(id, rgb(0.7f, 0.1f, 0.2f));
+    });
+    engine.start();
+    engine.resume();
+    wait_until([&] { return color_hits.load() == 1 && size_hits.load() == 1; });
+    engine.stop();
+    REQUIRE(max_depth.load() == 1);
+    REQUIRE(color_hits.load() == 1);
+    REQUIRE(size_hits.load() == 1);
+}
+
+TEST_CASE("disconnect during drain skips that connection", "[T15]") {
+    engine_core::Engine engine;
+    const engine_core::InstanceId id = engine.datamodel().create_part();
+    std::atomic<int> a{0};
+    std::atomic<int> b{0};
+    std::atomic<int> c{0};
+    std::atomic<int> late_hits{0};
+    std::atomic<int> stage{0};
+    engine_core::Connection late;
+    engine_core::Signal& signal = engine.datamodel().changed(id);
+    engine_core::Connection cb;
+    engine_core::Connection ca = signal.connect([&](engine_core::InstanceId, engine_core::Field) {
+        a.fetch_add(1);
+        cb.disconnect();
+        if (late_hits.load() == 0 && a.load() == 1) {
+            late = signal.connect([&](engine_core::InstanceId, engine_core::Field) { late_hits.fetch_add(1); });
+        }
+    });
+    cb = signal.connect([&](engine_core::InstanceId, engine_core::Field) { b.fetch_add(1); });
+    engine_core::Connection cc = signal.connect([&](engine_core::InstanceId, engine_core::Field) { c.fetch_add(1); });
+    (void)ca;
+    (void)cc;
+    engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
+        const int step = stage.load();
+        if (step == 0) {
+            engine.datamodel().set_color(id, rgb(0.1f, 0.2f, 0.3f));
+            stage.store(1);
+        } else if (step == 1 && a.load() >= 1) {
+            engine.datamodel().set_color(id, rgb(0.4f, 0.5f, 0.6f));
+            stage.store(2);
+        }
+    });
+    engine.start();
+    engine.resume();
+    wait_until([&] { return stage.load() == 2 && late_hits.load() == 1 && c.load() == 2; });
+    engine.stop();
+    REQUIRE(a.load() == 2);
+    REQUIRE(b.load() == 0);
+    REQUIRE(c.load() == 2);
+    REQUIRE(late_hits.load() == 1);
+    REQUIRE(late.connected());
+    REQUIRE_FALSE(cb.connected());
+}
+
+TEST_CASE("destroy drops queued handlers", "[T16]") {
+    engine_core::Engine engine;
+    engine_core::DataModel& model = engine.datamodel();
+    const engine_core::InstanceId id = model.create_part();
+    std::atomic<int> hits{0};
+    std::atomic<int> stage{0};
+    engine_core::Connection conn = model.changed(id).connect([&](engine_core::InstanceId got, engine_core::Field) {
+        hits.fetch_add(1);
+        (void)model.color(got);
+    });
+    engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
+        if (stage.load() != 0) {
+            return;
+        }
+        model.set_color(id, rgb(0.9f, 0.1f, 0.1f));
+        model.destroy(id);
+        stage.store(1);
+    });
+    engine.start();
+    engine.resume();
+    wait_until([&] { return stage.load() == 1 && engine.sim_frame_count() > 2; });
+    engine.stop();
+    REQUIRE(hits.load() == 0);
+    REQUIRE_FALSE(model.alive(id));
+    REQUIRE_FALSE(conn.connected());
+    REQUIRE(model.events().count(engine_core::WriteOrigin::SnapshotOverride) == 0);
+}
+
+TEST_CASE("path B enqueues and the snapshot still updates", "[T17]") {
+    engine_core::Engine engine;
+    engine_core::DataModel& model = engine.datamodel();
+    const engine_core::InstanceId id = model.create_part();
+    model.set_visual_only(id, true);
+    const engine_core::ColorRgb tint = rgb(0.2f, 0.8f, 0.1f);
+    std::atomic<int> hits{0};
+    std::atomic<int> bad{0};
+    std::atomic<int> during{0};
+    std::atomic<int> stage{0};
+    model.changed(id).connect([&](engine_core::InstanceId, engine_core::Field) {
+        if (engine_core::thread_role() != engine_core::ThreadRole::Simulation) {
+            bad.store(1);
+        }
+        if (model.prerender_window()) {
+            bad.store(1);
+        }
+        if (std::this_thread::get_id() != engine.simulation_thread_id()) {
+            bad.store(1);
+        }
+        if (engine.scheduler().current_phase() == engine_core::Phase::PreRender) {
+            bad.store(1);
+        }
+        hits.fetch_add(1);
+    });
+    engine.scheduler().bind(engine_core::Phase::PreRender, [&](double) {
+        if (stage.load() != 0) {
+            return;
+        }
+        model.set_color(id, tint);
+        during.store(hits.load());
+        stage.store(1);
+    });
+    struct Probe : CountingRenderer {
+        engine_core::InstanceId id = 0;
+        const engine_core::ColorRgb* tint = nullptr;
+        std::atomic<int>* stage = nullptr;
+        void perform(const engine_core::VisualSnapshot& snapshot, int) override {
+            if (stage->load() != 1) {
+                return;
+            }
+            const engine_core::VisualInstance* inst = find_instance(snapshot, id);
+            if (inst != nullptr && near_color(inst->color, *tint)) {
+                stage->store(2);
+            }
+        }
+    } probe;
+    probe.id = id;
+    probe.tint = &tint;
+    probe.stage = &stage;
+    engine.set_renderer(&probe);
+    engine.start();
+    engine.resume();
+    wait_until([&] { return stage.load() == 2 && hits.load() >= 1; });
+    engine.stop();
+    REQUIRE(during.load() == 0);
+    REQUIRE(bad.load() == 0);
+    REQUIRE(hits.load() >= 1);
+    REQUIRE(near_color(model.color(id), tint));
+    REQUIRE(model.events().count(engine_core::WriteOrigin::PreRenderDataModel) >= 1);
+    REQUIRE(model.events().count(engine_core::WriteOrigin::SnapshotOverride) == 0);
+}
+
+TEST_CASE("path C emits nothing", "[T18]") {
+    engine_core::Engine engine;
+    engine_core::DataModel& model = engine.datamodel();
+    const engine_core::InstanceId id = model.create_part();
+    const engine_core::ColorRgb live_color = model.color(id);
+    const engine_core::Transform live_transform = model.transform(id);
+    std::atomic<int> hits{0};
+    std::atomic<int> stage{0};
+    model.changed(id).connect([&](engine_core::InstanceId, engine_core::Field) { hits.fetch_add(1); });
+    model.property_changed(id, engine_core::Field::Color)
+        .connect([&](engine_core::InstanceId, engine_core::Field) { hits.fetch_add(1); });
+    model.property_changed(id, engine_core::Field::Transform)
+        .connect([&](engine_core::InstanceId, engine_core::Field) { hits.fetch_add(1); });
+    engine.scheduler().bind(engine_core::Phase::PreRender, [&](double) {
+        if (stage.load() != 0) {
+            return;
+        }
+        engine_core::SnapshotOverride color;
+        color.id = id;
+        color.field = engine_core::VisualField::Color;
+        color.color = rgb(1.f, 0.f, 0.f);
+        engine.pump().override_visual(color);
+        engine_core::SnapshotOverride transform;
+        transform.id = id;
+        transform.field = engine_core::VisualField::Transform;
+        transform.transform = T1();
+        engine.pump().override_visual(transform);
+        stage.store(1);
+    });
+    engine.start();
+    engine.resume();
+    wait_until([&] { return stage.load() == 1 && engine.present_count() > 3; });
+    engine.stop();
+    REQUIRE(hits.load() == 0);
+    REQUIRE(near_color(model.color(id), live_color));
+    REQUIRE(near(model.transform(id), live_transform));
+    REQUIRE(model.events().count(engine_core::WriteOrigin::SnapshotOverride) == 0);
+    REQUIRE(model.events().suppressed_overrides() == 0);
+}
+
+TEST_CASE("wait resumes on a later simulation phase", "[T19]") {
+    engine_core::Engine engine;
+    const engine_core::InstanceId id = engine.datamodel().create_part();
+    std::atomic<int> stage{0};
+    std::atomic<int> resume_phase{-1};
+    std::atomic<int> resume_role{-1};
+    std::atomic<int> resume_on_sim{0};
+    std::atomic<std::uint64_t> frame_at_wait{0};
+    std::atomic<std::uint64_t> frame_at_resume{0};
+    engine.scheduler().bind(
+        engine_core::Phase::Heartbeat,
+        [&](double) {
+            if (stage.load() != 0) {
+                return;
+            }
+            stage.store(1);
+            frame_at_wait.store(engine.sim_frame_count());
+            engine.datamodel().property_changed(id, engine_core::Field::Color).wait();
+            frame_at_resume.store(engine.sim_frame_count());
+            resume_phase.store(static_cast<int>(engine.scheduler().current_phase()));
+            resume_role.store(static_cast<int>(engine_core::thread_role()));
+            resume_on_sim.store(std::this_thread::get_id() == engine.simulation_thread_id() ? 1 : 0);
+            stage.store(2);
+        },
+        3000);
+    engine.scheduler().bind(
+        engine_core::Phase::Heartbeat,
+        [&](double) {
+            if (stage.load() != 1) {
+                return;
+            }
+            engine.datamodel().set_color(id, rgb(0.3f, 0.2f, 0.1f));
+            stage.store(3);
+        },
+        1000);
+    engine.start();
+    engine.resume();
+    wait_until([&] { return stage.load() == 2; });
+    engine.stop();
+    REQUIRE(resume_on_sim.load() == 1);
+    REQUIRE(resume_role.load() == static_cast<int>(engine_core::ThreadRole::Simulation));
+    REQUIRE(resume_phase.load() != static_cast<int>(engine_core::Phase::PreRender));
+    REQUIRE(resume_phase.load() >= static_cast<int>(engine_core::Phase::PreAnimation));
+    REQUIRE(resume_phase.load() <= static_cast<int>(engine_core::Phase::Heartbeat));
+    REQUIRE(frame_at_resume.load() > frame_at_wait.load());
+}
+
+TEST_CASE("immediate handlers run inside set and cap at 16", "[T20]") {
+    engine_core::Engine engine;
+    const engine_core::InstanceId id = engine.datamodel().create_part();
+    std::atomic<int> calls{0};
+    std::atomic<int> depth{0};
+    std::atomic<int> max_depth{0};
+    std::atomic<int> calls_at_return{0};
+    std::atomic<int> stage{0};
+    std::atomic<int> bad_thread{0};
+    engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
+        const int step = stage.load();
+        if (step >= 2) {
+            return;
+        }
+        if (step == 0) {
+            engine.datamodel().events().set_policy(engine_core::EventPolicy::Immediate);
+            engine.datamodel().changed(id).connect([&](engine_core::InstanceId changed, engine_core::Field) {
+                if (engine_core::thread_role() != engine_core::ThreadRole::Simulation ||
+                    std::this_thread::get_id() != engine.simulation_thread_id()) {
+                    bad_thread.store(1);
+                }
+                const int now = depth.fetch_add(1) + 1;
+                int seen = max_depth.load();
+                while (now > seen && !max_depth.compare_exchange_weak(seen, now)) {
+                }
+                const int n = calls.fetch_add(1) + 1;
+                if (n <= 16) {
+                    engine.datamodel().set_size(changed, 10.f + static_cast<float>(n), 2.f, 3.f);
+                }
+                depth.fetch_sub(1);
+            });
+            engine.datamodel().set_color(id, rgb(0.4f, 0.5f, 0.6f));
+            calls_at_return.store(calls.load());
+            stage.store(1);
+            return;
+        }
+        stage.store(2);
+    });
+    engine.start();
+    engine.resume();
+    wait_until([&] { return stage.load() == 2; });
+    engine.stop();
+    REQUIRE(bad_thread.load() == 0);
+    REQUIRE(calls_at_return.load() == 16);
+    REQUIRE(calls.load() == 17);
+    REQUIRE(max_depth.load() == 16);
 }

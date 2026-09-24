@@ -120,6 +120,7 @@ add_library(engine_core STATIC
     src/engine_core/DataModelLock.cpp
     src/engine_core/SnapshotPump.cpp
     src/engine_core/TaskScheduler.cpp
+    src/engine_core/Events.cpp
     src/engine_core/StepEvents.cpp
     src/engine_core/Engine.cpp
 )

@@ -12,6 +12,7 @@ Engine::Engine() {
     pump_.reserve(DataModel::kMaxInstances);
     scheduler_.reserve(64);
     color_keys_.reserve(DataModel::kMaxInstances);
+    model_.attach_scheduler(&scheduler_);
 }
 
 Engine::~Engine() { stop(); }
@@ -142,17 +143,24 @@ void Engine::simulation_loop() {
             DataModelLock lock(model_, DataModelLock::Write);
             model_.drain_commands();
             scheduler_.run_phase(Phase::PreAnimation, render_dt_);
+            // Deferred handlers run on this thread, still under the step lock,
+            // after the phase that queued them and before Prepare can copy.
+            model_.events().drain();
             accumulator += wall;
             constexpr int kMaxSubsteps = 32;
             while (accumulator >= physics_dt_ && substeps < kMaxSubsteps) {
                 scheduler_.run_phase(Phase::PreSimulation, physics_dt_);
+                model_.events().drain();
                 scheduler_.run_phase(Phase::PhysicsSubstep, physics_dt_);
+                model_.events().drain();
                 step_physics(physics_dt_);
                 scheduler_.run_phase(Phase::PostSimulation, physics_dt_);
+                model_.events().drain();
                 accumulator -= physics_dt_;
                 ++substeps;
             }
             scheduler_.run_phase(Phase::Heartbeat, render_dt_);
+            model_.events().drain();
         } catch (const ContractViolation&) {
             contract_count_.fetch_add(1);
         }

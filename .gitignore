@@ -1,0 +1,4 @@
+# CMake build tree: fetched GLFW, objects, and the app bundle.
+build/
+
+.DS_Store

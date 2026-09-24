@@ -66,6 +66,16 @@ double Fraction(double part, double whole, double limit) {
     return fraction;
 }
 
+// The click handler runs on the open menu's row. Hiding first keeps that row
+// alive: a visibility change on an open menu rebuilds its rows.
+void ShowOne(jadefx::MenuItem& show, jadefx::MenuItem& hide) {
+    if (jadefx::Menu* menu = show.getParentMenu()) {
+        menu->hide();
+    }
+    hide.setVisible(false);
+    show.setVisible(true);
+}
+
 }  // namespace
 
 IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
@@ -80,9 +90,22 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
 
     auto edit = jadefx::make<jadefx::Menu>("Edit");
     auto test = jadefx::make<jadefx::MenuItem>("Test");
+    auto stop = jadefx::make<jadefx::MenuItem>("Stop");
+    jadefx::MenuItem* testItem = test.get();
+    jadefx::MenuItem* stopItem = stop.get();
     test->setAccelerator(kKeyF5, 0);
-    test->setOnAction([this](jadefx::ActionEvent&) { runner_.simulation().resume(); });
+    stop->setAccelerator(kKeyF5, 0);
+    stop->setVisible(false);
+    test->setOnAction([this, testItem, stopItem](jadefx::ActionEvent&) {
+        runner_.simulation().resume();
+        ShowOne(*stopItem, *testItem);
+    });
+    stop->setOnAction([this, testItem, stopItem](jadefx::ActionEvent&) {
+        runner_.simulation().pause();
+        ShowOne(*testItem, *stopItem);
+    });
     edit->getItems().add(std::move(test));
+    edit->getItems().add(std::move(stop));
 
     auto view = jadefx::make<jadefx::Menu>("View");
     AddItem(*view, "Maybe :)", 0, 0);

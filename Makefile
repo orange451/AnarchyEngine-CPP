@@ -9,7 +9,7 @@ else
 APP_BIN := $(BUILD_DIR)/AnarchyEngine-CPP
 endif
 
-.PHONY: all run clean
+.PHONY: all run test clean
 
 all:
 	cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release
@@ -17,6 +17,9 @@ all:
 
 run: all
 	"$(APP_BIN)"
+
+test: all
+	"$(BUILD_DIR)/engine-tests"
 
 clean:
 	rm -rf $(BUILD_DIR)

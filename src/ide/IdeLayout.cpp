@@ -68,6 +68,9 @@ double Fraction(double part, double whole, double limit) {
 }  // namespace
 
 IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
+    // The shell starts the runner, and the runner starts the Lua engine.
+    runner_.start();
+
     auto file = jadefx::make<jadefx::Menu>("File");
     AddItem(*file, "New", jadefx::Key::N, jadefx::Key::ModControl);
     AddItem(*file, "Open", jadefx::Key::O, jadefx::Key::ModControl);

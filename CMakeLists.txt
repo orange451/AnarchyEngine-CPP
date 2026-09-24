@@ -25,6 +25,7 @@ add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
     src/runner/gl.cpp
     src/runner/ShaderFile.cpp
     src/runner/Renderer.cpp
+    src/runner/Runner.cpp
     src/ide/IdePane.cpp
     src/ide/IdeDock.cpp
     src/ide/IdeConsole.cpp
@@ -75,12 +76,60 @@ else()
     set(JADEFX_SOURCE_ROOT "${jadefx_SOURCE_DIR}")
 endif()
 
-target_link_libraries(AnarchyEngine-CPP PRIVATE jadefx)
+# Luau is the sandboxed Lua runtime. The engine package is the only thing that links it.
+# The CLI, tests, and web target are not part of the embed.
+set(LUAU_BUILD_CLI OFF CACHE BOOL "" FORCE)
+set(LUAU_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LUAU_BUILD_WEB OFF CACHE BOOL "" FORCE)
+set(LUAU_VERSION 0.739)
+include(FetchContent)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.28")
+    FetchContent_Declare(
+        luau
+        GIT_REPOSITORY https://github.com/luau-lang/luau.git
+        GIT_TAG ${LUAU_VERSION}
+        GIT_SHALLOW TRUE
+        EXCLUDE_FROM_ALL
+    )
+    FetchContent_MakeAvailable(luau)
+else()
+    FetchContent_Declare(
+        luau
+        GIT_REPOSITORY https://github.com/luau-lang/luau.git
+        GIT_TAG ${LUAU_VERSION}
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_GetProperties(luau)
+    if(NOT luau_POPULATED)
+        FetchContent_Populate(luau)
+        add_subdirectory("${luau_SOURCE_DIR}" "${luau_BINARY_DIR}" EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
+add_library(engine STATIC
+    src/engine/LuaEngine.cpp
+)
+target_include_directories(engine PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(engine PRIVATE Luau.Compiler Luau.VM)
+target_compile_features(engine PUBLIC cxx_std_17)
+
+target_link_libraries(AnarchyEngine-CPP PRIVATE jadefx engine)
+
+add_executable(engine-tests
+    tests/LuaEngineTest.cpp
+    src/runner/Runner.cpp
+)
+target_link_libraries(engine-tests PRIVATE engine)
+target_compile_features(engine-tests PRIVATE cxx_std_17)
 
 if(MSVC)
     target_compile_options(AnarchyEngine-CPP PRIVATE /W4 /utf-8)
+    target_compile_options(engine PRIVATE /W4 /utf-8)
+    target_compile_options(engine-tests PRIVATE /W4 /utf-8)
 else()
     target_compile_options(AnarchyEngine-CPP PRIVATE -Wall -Wextra)
+    target_compile_options(engine PRIVATE -Wall -Wextra)
+    target_compile_options(engine-tests PRIVATE -Wall -Wextra)
 endif()
 
 if(APPLE)

@@ -1,13 +1,14 @@
 #pragma once
 
 #include "jadefx/jadefx.hpp"
+#include "../runner/Runner.hpp"
 
 #include <memory>
 
 namespace ide {
 
 // IDE shell, in the shape of OpenGLFX-IDE's IdeLayout.
-// The runner is a separate program. This shell will attach to one later.
+// The shell owns the runner and starts it. The runner starts the Lua engine.
 // Editing stays paused. Run Test, later, saves the project, simulates, and reloads that save.
 class IdeLayout {
 public:
@@ -17,6 +18,8 @@ public:
     void mount(jadefx::Scene& scene);
 
 private:
+    // Declared first so the runner outlives the widgets during teardown.
+    runner::Runner runner_;
     std::shared_ptr<jadefx::BorderPane> root_;
 };
 

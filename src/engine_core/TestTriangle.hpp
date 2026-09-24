@@ -25,6 +25,8 @@ public:
 protected:
     void on_release() override;
     void on_reuse() override;
+    void write_place(std::vector<std::byte>& out) const override;
+    void read_place(const std::byte* data, std::size_t size) override;
 
 private:
     void clear_pose();

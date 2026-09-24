@@ -1,6 +1,8 @@
 #include "TestTriangle.hpp"
 
 #include <cmath>
+#include <cstring>
+#include <type_traits>
 
 namespace engine_core {
 namespace {
@@ -54,5 +56,40 @@ void TestTriangle::clear_pose() {
 void TestTriangle::on_release() { clear_pose(); }
 
 void TestTriangle::on_reuse() { clear_pose(); }
+
+namespace {
+
+struct PosePlace {
+    double angle = 0;
+    float x = 0.f;
+    float y = 0.f;
+    float z = 0.f;
+};
+
+}  // namespace
+
+void TestTriangle::write_place(std::vector<std::byte>& out) const {
+    static_assert(std::is_trivially_copyable<PosePlace>::value, "place blob must be memcpy-safe");
+    PosePlace pose;
+    pose.angle = angle_.load();
+    pose.x = x_.load();
+    pose.y = y_.load();
+    pose.z = z_.load();
+    const auto* bytes = reinterpret_cast<const std::byte*>(&pose);
+    out.insert(out.end(), bytes, bytes + sizeof(pose));
+}
+
+void TestTriangle::read_place(const std::byte* data, std::size_t size) {
+    if (data == nullptr || size < sizeof(PosePlace)) {
+        clear_pose();
+        return;
+    }
+    PosePlace pose;
+    std::memcpy(&pose, data, sizeof(pose));
+    angle_.store(pose.angle);
+    x_.store(pose.x);
+    y_.store(pose.y);
+    z_.store(pose.z);
+}
 
 }  // namespace engine_core

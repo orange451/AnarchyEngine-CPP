@@ -11,8 +11,11 @@
 #include <functional>
 #include <memory>
 #include <new>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
+#include <vector>
 
 namespace engine_core {
 
@@ -27,7 +30,8 @@ class GameObject;
 // The root DataModel owns that world. Every other instance shares it.
 // create<T>() makes any subclass. This class does not list those types.
 // GameObject adds transform, color, size, and velocity. A plain instance
-// does not have those fields.
+// does not have those fields. Every instance has a Name. The place snapshot
+// is the authored tree; stop_simulation restores it.
 //
 // print(object.transform()) after a PreRender GameObject write shows the new
 // value immediately, because this object is live memory. The GPU does not
@@ -89,6 +93,27 @@ public:
     // Equal parent is a no-op. Emits Changed, property_changed,
     // ChildRemoved/ChildAdded, and AncestryChanged on this id and descendants.
     void set_parent(InstanceId id, InstanceId parent);
+
+    // Path A. Default is class_name(). Siblings may share a name.
+    // Equal values do not emit. Name does not dirty the visual snapshot.
+    void set_name(InstanceId id, std::string name);
+    // Empty when id is dead. Id 0 is the root DataModel.
+    std::string name(InstanceId id) const;
+    // First direct child in sibling order, or 0 when none matches.
+    InstanceId find_first_child(InstanceId parent, std::string_view name) const;
+    // Direct children in sibling order. A missing parent returns an empty vector.
+    std::vector<InstanceId> get_children(InstanceId parent) const;
+
+    // Place is the authored tree. The first start_simulation captures it when
+    // nothing has been captured yet. capture_place replaces that tree.
+    // start while running is an error. stop while stopped does nothing.
+    // stop runs on SimulationThread: drop queued events, disconnect every
+    // connection, cancel session jobs, restore the place, bump world_generation.
+    void capture_place();
+    void start_simulation();
+    void stop_simulation();
+    std::uint32_t world_generation() const;
+    bool simulation_running() const;
 
     // Per-instance signals. The reference dies with the instance.
     Signal& changed(InstanceId id);
@@ -168,6 +193,11 @@ protected:
     virtual void on_release() {}
     virtual void on_reuse() {}
 
+    // Subclass bytes stored in the place snapshot. The base stores nothing.
+    // Velocity is not place state; GameObject clears it on read.
+    virtual void write_place(std::vector<std::byte>&) const {}
+    virtual void read_place(const std::byte*, std::size_t) {}
+
 private:
     friend class DataModelLock;
     friend class Engine;
@@ -213,9 +243,28 @@ private:
     };
 
     // Root owns the world. Every child instance points at that same State.
+    // One captured instance. Ids are the live ids at capture time.
+    struct PlaceRecord {
+        InstanceId id = 0;
+        const void* type_key = nullptr;
+        InstanceId parent = kNoParent;
+        std::vector<InstanceId> children;
+        std::string name;
+        bool simulated = false;
+        bool visual_only = false;
+        std::vector<std::byte> extra;
+    };
+
+    struct PlaceSnapshot {
+        std::string root_name;
+        std::vector<InstanceId> root_children;
+        std::vector<PlaceRecord> instances;
+    };
+
     std::unique_ptr<State> owned_;
     State* state_ = nullptr;
     InstanceId id_ = 0;
+    std::string name_;
 
     bool lock_write_blocking();
     bool lock_write_for(std::chrono::milliseconds budget);
@@ -254,6 +303,17 @@ private:
     void link_child(InstanceId parent, InstanceId child);
     bool is_under(InstanceId ancestor, InstanceId node) const;
     void release_signals(InstanceId id);
+
+    void capture_place_unlocked();
+    void restore_place_unlocked();
+    void retire_slot(std::uint32_t index, bool bump_generation);
+    std::uint16_t pool_index_for(const void* type_key) const;
+    void adopt_slot(std::uint16_t pool_index, InstanceId id);
+    void link_children_front(InstanceId parent, const std::vector<InstanceId>& children);
+    void clear_hierarchy();
+    void rebuild_free_list();
+    std::vector<InstanceId> child_ids(InstanceId parent) const;
+    void restore_record(const PlaceRecord& record);
 };
 
 template <typename T>

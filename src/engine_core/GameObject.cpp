@@ -1,5 +1,8 @@
 #include "GameObject.hpp"
 
+#include <cstring>
+#include <type_traits>
+
 namespace engine_core {
 
 void GameObject::set_transform(const Transform& transform) { apply_transform(id_, transform, false); }
@@ -88,6 +91,44 @@ void GameObject::clear_spatial() {
     color_ = ColorRgb{};
     size_[0] = size_[1] = size_[2] = 0.f;
     velocity_[0] = velocity_[1] = velocity_[2] = 0.f;
+}
+
+namespace {
+
+struct SpatialPlace {
+    Transform transform = transform_identity();
+    ColorRgb color{};
+    float size[3] = {1.f, 1.f, 1.f};
+};
+
+}  // namespace
+
+void GameObject::write_place(std::vector<std::byte>& out) const {
+    static_assert(std::is_trivially_copyable<SpatialPlace>::value, "place blob must be memcpy-safe");
+    SpatialPlace pod;
+    pod.transform = transform_;
+    pod.color = color_;
+    pod.size[0] = size_[0];
+    pod.size[1] = size_[1];
+    pod.size[2] = size_[2];
+    const auto* bytes = reinterpret_cast<const std::byte*>(&pod);
+    out.insert(out.end(), bytes, bytes + sizeof(pod));
+}
+
+void GameObject::read_place(const std::byte* data, std::size_t size) {
+    // Velocity is session-only. A place restore always clears it.
+    velocity_[0] = velocity_[1] = velocity_[2] = 0.f;
+    if (data == nullptr || size < sizeof(SpatialPlace)) {
+        reset_spatial();
+        return;
+    }
+    SpatialPlace pod;
+    std::memcpy(&pod, data, sizeof(pod));
+    transform_ = pod.transform;
+    color_ = pod.color;
+    size_[0] = pod.size[0];
+    size_[1] = pod.size[1];
+    size_[2] = pod.size[2];
 }
 
 }  // namespace engine_core

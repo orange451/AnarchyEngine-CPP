@@ -348,6 +348,32 @@ void EventQueue::destroy_instance(InstanceId id) {
     }
 }
 
+void EventQueue::drop_pending() {
+    if (events_.empty() || size_ == 0) {
+        head_ = 0;
+        tail_ = 0;
+        size_ = 0;
+        return;
+    }
+    std::size_t index = head_;
+    for (std::size_t n = 0; n < size_; ++n) {
+        events_[index] = Event{};
+        index = (index + 1) % events_.size();
+    }
+    head_ = 0;
+    tail_ = 0;
+    size_ = 0;
+}
+
+void EventQueue::disconnect_all() {
+    const std::uint32_t count = static_cast<std::uint32_t>(conns_.size());
+    for (std::uint32_t index = 0; index < count; ++index) {
+        if (conns_[index].live) {
+            tombstone(index);
+        }
+    }
+}
+
 void EventQueue::shutdown() {
     for (ConnSlot& slot : conns_) {
         slot.live = false;

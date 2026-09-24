@@ -27,7 +27,11 @@ public:
 
     void reserve(std::size_t per_phase);
     // Larger priority runs first. The default matches a normal gameplay job.
+    // bind() is engine-permanent: stop_simulation leaves it in place.
     void bind(Phase phase, Job job, int priority = 2000);
+    // Dropped by stop_simulation. A script job uses this, not bind().
+    void bind_session(Phase phase, Job job, int priority = 2000);
+    void cancel_session_jobs();
     void run_phase(Phase phase, double dt);
 
     // The phase this thread is inside. Render and simulation overlap after
@@ -45,6 +49,10 @@ private:
 
     struct Entry {
         int priority = 2000;
+        bool permanent = true;
+        // Session jobs cancelled while parked stay here so their stack is not freed
+        // under a suspended frame. run_phase skips them.
+        bool retired = false;
         Job job;
         JobState state = JobState::Idle;
         std::uint64_t wait_id = 0;
@@ -55,6 +63,8 @@ private:
         void* stack_bottom = nullptr;
         std::size_t stack_bytes = 0;
     };
+
+    void bind_job(Phase phase, Job job, int priority, bool permanent);
 
     void resume_ready();
     void start_job(Entry& entry, double dt);

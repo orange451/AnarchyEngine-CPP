@@ -1,6 +1,8 @@
 #include "Contract.hpp"
 #include "DataModel.hpp"
+#include "DataModelLock.hpp"
 #include "GameObject.hpp"
+#include "SnapshotPump.hpp"
 #include "TestTriangle.hpp"
 #include "Engine.hpp"
 #include "Events.hpp"
@@ -15,6 +17,7 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <vector>
 
 namespace {
 
@@ -87,6 +90,11 @@ class CountingRenderer : public engine_core::IRenderer {
 public:
     void perform(const engine_core::VisualSnapshot&) override {}
     void present() override {}
+};
+
+struct SimRole {
+    SimRole() { engine_core::set_thread_role(engine_core::ThreadRole::Simulation); }
+    ~SimRole() { engine_core::set_thread_role(engine_core::ThreadRole::Unknown); }
 };
 
 }  // namespace
@@ -1346,4 +1354,317 @@ TEST_CASE("client sync keeps an uncapped render loop with the window", "[pace]")
     REQUIRE(paced_ms < 400);
     REQUIRE(engine.present_count() < idle + 50);
     engine.stop();
+}
+
+TEST_CASE("N1 default name is the class name and set_name fires Name", "[N1]") {
+    engine_core::DataModel model;
+    REQUIRE(model.name(model.id()) == "DataModel");
+    engine_core::GameObject& part = model.create<engine_core::GameObject>();
+    REQUIRE(model.name(part.id()) == "GameObject");
+    engine_core::DataModel& plain = model.create();
+    REQUIRE(model.name(plain.id()) == "DataModel");
+
+    int property_hits = 0;
+    int changed_hits = 0;
+    engine_core::Field property_field = engine_core::Field::Transform;
+    engine_core::Field changed_field = engine_core::Field::Transform;
+    std::string seen_name;
+    model.property_changed(part.id(), engine_core::Field::Name)
+        .connect([&](engine_core::InstanceId, engine_core::Field field) {
+            ++property_hits;
+            property_field = field;
+            seen_name = model.name(part.id());
+        });
+    model.changed(part.id()).connect([&](engine_core::InstanceId, engine_core::Field field) {
+        ++changed_hits;
+        changed_field = field;
+    });
+
+    model.set_name(part.id(), "GameObject");
+    {
+        SimRole role;
+        model.events().drain();
+    }
+    REQUIRE(property_hits == 0);
+    REQUIRE(changed_hits == 0);
+
+    REQUIRE(model.invalidations().size() == 0);
+    model.set_name(part.id(), "Brick");
+    REQUIRE(model.name(part.id()) == "Brick");
+    REQUIRE(property_hits == 0);
+    REQUIRE(changed_hits == 0);
+    REQUIRE(model.invalidations().size() == 0);
+    {
+        SimRole role;
+        model.events().drain();
+    }
+    REQUIRE(property_hits == 1);
+    REQUIRE(changed_hits == 1);
+    REQUIRE(property_field == engine_core::Field::Name);
+    REQUIRE(changed_field == engine_core::Field::Name);
+    REQUIRE(seen_name == "Brick");
+
+    part.set_color(rgb(0.2f, 0.3f, 0.4f));
+    REQUIRE(model.invalidations().size() == 1);
+
+    const engine_core::InstanceId dead = plain.id();
+    model.destroy(dead);
+    REQUIRE(model.name(dead).empty());
+    REQUIRE_THROWS_AS(model.set_name(dead, "Nope"), engine_core::ContractViolation);
+}
+
+TEST_CASE("N2 siblings may share a name and find_first_child returns the first", "[N2]") {
+    engine_core::DataModel model;
+    engine_core::DataModel& folder = model.create();
+    model.set_name(folder.id(), "Folder");
+    model.set_parent(folder.id(), model.id());
+
+    engine_core::GameObject& older = model.create<engine_core::GameObject>();
+    engine_core::GameObject& newer = model.create<engine_core::GameObject>();
+    model.set_name(older.id(), "Wood");
+    model.set_name(newer.id(), "Wood");
+    model.set_parent(older.id(), folder.id());
+    model.set_parent(newer.id(), folder.id());
+    // link_child inserts at the front, so the later parent is first.
+    REQUIRE(model.first_child(folder.id()) == newer.id());
+    REQUIRE(model.find_first_child(folder.id(), "Wood") == newer.id());
+    REQUIRE(model.find_first_child(folder.id(), "Missing") == 0);
+
+    engine_core::GameObject& metal = model.create<engine_core::GameObject>();
+    model.set_name(metal.id(), "Metal");
+    model.set_parent(metal.id(), folder.id());
+    REQUIRE(model.find_first_child(folder.id(), "Wood") == newer.id());
+    REQUIRE(model.find_first_child(folder.id(), "Metal") == metal.id());
+
+    const std::vector<engine_core::InstanceId> children = model.get_children(folder.id());
+    REQUIRE(children.size() == 3);
+    REQUIRE(children[0] == metal.id());
+    REQUIRE(children[1] == newer.id());
+    REQUIRE(children[2] == older.id());
+    REQUIRE(model.get_children(0xdeadbeefu).empty());
+    REQUIRE(model.find_first_child(0xdeadbeefu, "Wood") == 0);
+    REQUIRE(model.get_children(model.id()).size() == 1);
+    REQUIRE(model.get_children(model.id())[0] == folder.id());
+}
+
+TEST_CASE("N3 place restore reverts play and drops session instances", "[N3]") {
+    engine_core::DataModel model;
+    engine_core::DataModel& folder = model.create();
+    const engine_core::InstanceId folder_id = folder.id();
+    model.set_name(folder_id, "Folder");
+    model.set_parent(folder_id, model.id());
+
+    engine_core::GameObject& leaf = model.create<engine_core::GameObject>();
+    const engine_core::InstanceId leaf_id = leaf.id();
+    model.set_name(leaf_id, "Leaf");
+    model.set_parent(leaf_id, folder_id);
+    const engine_core::ColorRgb red = rgb(0.8f, 0.1f, 0.1f);
+    const engine_core::Transform posed = T0();
+    leaf.set_color(red);
+    leaf.set_size(2.f, 3.f, 4.f);
+    leaf.set_transform(posed);
+    model.set_simulated(leaf_id, true);
+
+    engine_core::GameObject& sibling = model.create<engine_core::GameObject>();
+    const engine_core::InstanceId sibling_id = sibling.id();
+    model.set_name(sibling_id, "Sibling");
+    model.set_parent(sibling_id, folder_id);
+
+    const std::uint32_t generation = model.world_generation();
+    model.capture_place();
+    model.start_simulation();
+    REQUIRE(model.simulation_running());
+    REQUIRE_THROWS_AS(model.start_simulation(), engine_core::ContractViolation);
+
+    model.set_name(leaf_id, "Moved");
+    leaf.set_color(rgb(0.1f, 0.2f, 0.9f));
+    leaf.set_size(9.f, 9.f, 9.f);
+    leaf.set_transform(T1());
+    model.set_parent(leaf_id, model.id());
+    leaf.set_linear_velocity(10.f, 0.f, 0.f);
+    model.integrate_simulated(1.0);
+    REQUIRE_FALSE(near(model.game_object(leaf_id)->transform(), posed));
+
+    engine_core::GameObject& extra = model.create<engine_core::GameObject>();
+    const engine_core::InstanceId extra_id = extra.id();
+    model.set_name(extra_id, "Session");
+    model.set_parent(extra_id, folder_id);
+
+    model.destroy(sibling_id);
+    REQUIRE_FALSE(model.alive(sibling_id));
+    engine_core::GameObject& recycled = model.create<engine_core::GameObject>();
+    const engine_core::InstanceId recycled_id = recycled.id();
+    REQUIRE(recycled_id != sibling_id);
+    REQUIRE((recycled_id & 0xffffu) == (sibling_id & 0xffffu));
+    model.set_name(recycled_id, "Recycled");
+    model.set_parent(recycled_id, model.id());
+
+    model.stop_simulation();
+    REQUIRE_FALSE(model.simulation_running());
+    REQUIRE(model.world_generation() == generation + 1);
+    REQUIRE(model.name(model.id()) == "DataModel");
+    REQUIRE(model.alive(leaf_id));
+    REQUIRE(model.alive(sibling_id));
+    REQUIRE(model.alive(folder_id));
+    REQUIRE_FALSE(model.alive(extra_id));
+    REQUIRE_FALSE(model.alive(recycled_id));
+    REQUIRE(model.name(leaf_id) == "Leaf");
+    REQUIRE(model.name(sibling_id) == "Sibling");
+    REQUIRE(model.name(folder_id) == "Folder");
+    REQUIRE(model.parent(leaf_id) == folder_id);
+    REQUIRE(model.parent(sibling_id) == folder_id);
+    REQUIRE(model.parent(folder_id) == model.id());
+    REQUIRE(model.find_first_child(folder_id, "Sibling") == sibling_id);
+    REQUIRE(near_color(model.game_object(leaf_id)->color(), red));
+    float size[3] = {};
+    REQUIRE(model.game_object(leaf_id)->copy_size(size));
+    REQUIRE(size[0] == 2.f);
+    REQUIRE(size[1] == 3.f);
+    REQUIRE(size[2] == 4.f);
+    REQUIRE(near(model.game_object(leaf_id)->transform(), posed));
+    REQUIRE(model.simulated(leaf_id));
+    model.integrate_simulated(1.0);
+    REQUIRE(near(model.game_object(leaf_id)->transform(), posed));
+
+    const std::vector<engine_core::InstanceId> children = model.get_children(folder_id);
+    REQUIRE(children.size() == 2);
+    REQUIRE(children[0] == sibling_id);
+    REQUIRE(children[1] == leaf_id);
+
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    {
+        engine_core::DataModelLock lock(model, engine_core::DataModelLock::Write);
+        pump.begin_prerender_window(model);
+        pump.end_prerender_window(model);
+        pump.prepare_copy(model);
+    }
+    pump.publish();
+    const engine_core::VisualInstance* vis = pump.find(leaf_id);
+    REQUIRE(vis != nullptr);
+    REQUIRE(near_color(vis->color, red));
+    REQUIRE(near(vis->world, posed));
+    REQUIRE(vis->size[0] == 2.f);
+    REQUIRE(pump.find(extra_id) == nullptr);
+    REQUIRE(pump.find(recycled_id) == nullptr);
+    REQUIRE(pump.find(sibling_id) != nullptr);
+    REQUIRE(pump.find(folder_id) == nullptr);
+}
+
+TEST_CASE("N4 a second play restores the original place", "[N4]") {
+    engine_core::DataModel model;
+    engine_core::GameObject& part = model.create<engine_core::GameObject>();
+    const engine_core::InstanceId id = part.id();
+    model.set_parent(id, model.id());
+    const engine_core::ColorRgb red = rgb(0.7f, 0.0f, 0.0f);
+    part.set_color(red);
+    model.set_name(id, "Door");
+    model.capture_place();
+    const std::uint32_t generation = model.world_generation();
+
+    model.start_simulation();
+    part.set_color(rgb(0.f, 0.f, 1.f));
+    model.set_name(id, "Session");
+    engine_core::GameObject& extra = model.create<engine_core::GameObject>();
+    const engine_core::InstanceId extra_id = extra.id();
+    model.stop_simulation();
+    REQUIRE(model.world_generation() == generation + 1);
+    REQUIRE(model.name(id) == "Door");
+    REQUIRE(near_color(model.game_object(id)->color(), red));
+    REQUIRE_FALSE(model.alive(extra_id));
+
+    model.game_object(id)->set_color(rgb(0.f, 1.f, 0.f));
+    model.set_name(id, "Edited");
+    engine_core::GameObject& between = model.create<engine_core::GameObject>();
+    const engine_core::InstanceId between_id = between.id();
+    model.set_parent(between_id, model.id());
+
+    model.start_simulation();
+    model.game_object(id)->set_color(rgb(0.f, 0.f, 1.f));
+    model.set_name(id, "Again");
+    model.stop_simulation();
+    REQUIRE(model.world_generation() == generation + 2);
+    REQUIRE(model.name(id) == "Door");
+    REQUIRE(near_color(model.game_object(id)->color(), red));
+    REQUIRE(model.parent(id) == model.id());
+    REQUIRE_FALSE(model.alive(between_id));
+
+    model.stop_simulation();
+    REQUIRE_FALSE(model.simulation_running());
+    REQUIRE(model.world_generation() == generation + 2);
+}
+
+TEST_CASE("edit then play captures the place on start", "[N4]") {
+    engine_core::DataModel model;
+    engine_core::GameObject& part = model.create<engine_core::GameObject>();
+    const engine_core::InstanceId id = part.id();
+    const engine_core::ColorRgb red = rgb(0.4f, 0.1f, 0.1f);
+    part.set_color(red);
+    model.set_name(id, "Door");
+    model.set_parent(id, model.id());
+    REQUIRE_FALSE(model.simulation_running());
+    model.start_simulation();
+    REQUIRE(model.simulation_running());
+    part.set_color(rgb(0.1f, 0.1f, 0.8f));
+    model.set_name(id, "Gone");
+    engine_core::GameObject& extra = model.create<engine_core::GameObject>();
+    const engine_core::InstanceId extra_id = extra.id();
+    model.stop_simulation();
+    REQUIRE(model.name(id) == "Door");
+    REQUIRE(near_color(model.game_object(id)->color(), red));
+    REQUIRE(model.parent(id) == model.id());
+    REQUIRE_FALSE(model.alive(extra_id));
+}
+
+TEST_CASE("N5 stop drops session events and session jobs", "[N5]") {
+    engine_core::Engine engine;
+    engine_core::DataModel& model = engine.datamodel();
+    engine_core::GameObject& part = model.create<engine_core::GameObject>();
+    const engine_core::InstanceId id = part.id();
+    model.set_name(id, "Door");
+    model.capture_place();
+
+    int hits = 0;
+    engine_core::Connection early =
+        model.changed(id).connect([&](engine_core::InstanceId, engine_core::Field) { ++hits; });
+    engine_core::Connection named = model.property_changed(id, engine_core::Field::Name)
+                                         .connect([&](engine_core::InstanceId, engine_core::Field) { ++hits; });
+
+    int session_jobs = 0;
+    int permanent_jobs = 0;
+    engine.scheduler().bind_session(engine_core::Phase::Heartbeat, [&](double) { ++session_jobs; });
+    engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) { ++permanent_jobs; });
+
+    model.start_simulation();
+    model.set_name(id, "Session");
+    REQUIRE(hits == 0);
+    REQUIRE(model.name(id) == "Session");
+    model.stop_simulation();
+    REQUIRE(model.name(id) == "Door");
+    REQUIRE_FALSE(early.connected());
+    REQUIRE_FALSE(named.connected());
+    {
+        SimRole role;
+        model.events().drain();
+        engine.scheduler().run_phase(engine_core::Phase::Heartbeat, 0.0);
+    }
+    REQUIRE(hits == 0);
+    REQUIRE(session_jobs == 0);
+    REQUIRE(permanent_jobs == 1);
+
+    int after = 0;
+    model.property_changed(id, engine_core::Field::Name)
+        .connect([&](engine_core::InstanceId, engine_core::Field field) {
+            if (field == engine_core::Field::Name) {
+                ++after;
+            }
+        });
+    model.set_name(id, "After");
+    REQUIRE(after == 0);
+    {
+        SimRole role;
+        model.events().drain();
+    }
+    REQUIRE(after == 1);
+    REQUIRE(model.name(id) == "After");
 }

@@ -1,10 +1,13 @@
 #include "DataModel.hpp"
 
+#include "DataModelLock.hpp"
 #include "GameObject.hpp"
+#include "TaskScheduler.hpp"
 
 #include <cstring>
 #include <mutex>
 #include <new>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -100,6 +103,13 @@ struct DataModel::State {
     std::vector<InstanceId> walk;
     // Ids gathered for Heartbeat. Separate from walk, which ancestry mutates.
     std::vector<InstanceId> step_ids;
+
+    // The root object. Children share this State and reach the root through here.
+    DataModel* root = nullptr;
+    std::uint32_t world_generation = 0;
+    bool simulation_running = false;
+    bool place_captured = false;
+    PlaceSnapshot place;
 };
 
 DataModel::DataModel() : owned_(std::make_unique<State>()), state_(owned_.get()) {
@@ -112,6 +122,8 @@ DataModel::DataModel() : owned_(std::make_unique<State>()), state_(owned_.get())
     world.walk.reserve(kMaxInstances);
     world.step_ids.reserve(kMaxInstances);
     world.events.watch_prerender(&world.prerender_window);
+    world.root = this;
+    name_ = class_name();
 }
 
 DataModel::DataModel(ChildTag, State& state, InstanceId id) : state_(&state), id_(id) {}
@@ -124,9 +136,10 @@ DataModel::~DataModel() {
 }
 
 DataModel::DataModel(DataModel&& other) noexcept
-    : owned_(std::move(other.owned_)), state_(other.state_), id_(other.id_) {
+    : owned_(std::move(other.owned_)), state_(other.state_), id_(other.id_), name_(std::move(other.name_)) {
     if (owned_) {
         state_ = owned_.get();
+        state_->root = this;
     }
     other.state_ = nullptr;
     other.id_ = 0;
@@ -143,8 +156,10 @@ DataModel& DataModel::operator=(DataModel&& other) noexcept {
     owned_ = std::move(other.owned_);
     state_ = other.state_;
     id_ = other.id_;
+    name_ = std::move(other.name_);
     if (owned_) {
         state_ = owned_.get();
+        state_->root = this;
     }
     other.state_ = nullptr;
     other.id_ = 0;
@@ -443,6 +458,8 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
         object->rebind(id);
         object->on_reuse();
     }
+    const char* label = object->class_name();
+    object->name_ = label != nullptr ? label : std::string();
     Slot& part = world.slots[index];
     part.pool = pool_index;
     part.storage = storage;
@@ -972,6 +989,333 @@ InstanceId DataModel::next_sibling(InstanceId id) const {
         return 0;
     }
     return part->next_sibling;
+}
+
+void DataModel::set_name(InstanceId id, std::string name) {
+    if (!gameplay_thread()) {
+        contract_fail("set_name runs on SimulationThread");
+    }
+    DataModel* object = id == 0 ? state_->root : instance(id);
+    if (object == nullptr) {
+        contract_fail("set_name on a dead instance");
+    }
+    if (object->name_ == name) {
+        return;
+    }
+    object->name_ = std::move(name);
+    emit_change(id, Field::Name, current_origin());
+}
+
+std::string DataModel::name(InstanceId id) const {
+    if (id == 0) {
+        return state_->root != nullptr ? state_->root->name_ : std::string();
+    }
+    const DataModel* object = instance(id);
+    if (object == nullptr) {
+        return {};
+    }
+    return object->name_;
+}
+
+InstanceId DataModel::find_first_child(InstanceId parent_id, std::string_view name) const {
+    if (parent_id != 0 && slot(parent_id) == nullptr) {
+        return 0;
+    }
+    for (InstanceId child = first_child(parent_id); child != 0; child = next_sibling(child)) {
+        const DataModel* object = instance(child);
+        if (object != nullptr && object->name_ == name) {
+            return child;
+        }
+    }
+    return 0;
+}
+
+std::vector<InstanceId> DataModel::get_children(InstanceId parent_id) const { return child_ids(parent_id); }
+
+std::vector<InstanceId> DataModel::child_ids(InstanceId parent_id) const {
+    std::vector<InstanceId> children;
+    if (parent_id != 0 && slot(parent_id) == nullptr) {
+        return children;
+    }
+    for (InstanceId child = first_child(parent_id); child != 0; child = next_sibling(child)) {
+        children.push_back(child);
+    }
+    return children;
+}
+
+std::uint32_t DataModel::world_generation() const { return state_->world_generation; }
+
+bool DataModel::simulation_running() const { return state_->simulation_running; }
+
+void DataModel::capture_place() {
+    if (!gameplay_thread()) {
+        contract_fail("capture_place runs on SimulationThread");
+    }
+    if (state_->simulation_running) {
+        contract_fail("capture_place while simulation is running");
+    }
+    DataModelLock lock(*this, DataModelLock::Write);
+    capture_place_unlocked();
+}
+
+void DataModel::start_simulation() {
+    if (!gameplay_thread()) {
+        contract_fail("start_simulation runs on SimulationThread");
+    }
+    if (state_->simulation_running) {
+        contract_fail("start_simulation while simulation is running");
+    }
+    DataModelLock lock(*this, DataModelLock::Write);
+    if (!state_->place_captured) {
+        capture_place_unlocked();
+    }
+    state_->simulation_running = true;
+}
+
+void DataModel::stop_simulation() {
+    if (!state_->simulation_running) {
+        return;
+    }
+    if (!gameplay_thread()) {
+        contract_fail("stop_simulation runs on SimulationThread");
+    }
+    DataModelLock lock(*this, DataModelLock::Write);
+    // Play-solo stop. Order is the contract.
+    state_->events.drop_pending();
+    state_->events.disconnect_all();
+    if (TaskScheduler* scheduler = state_->events.scheduler()) {
+        scheduler->cancel_session_jobs();
+    }
+    restore_place_unlocked();
+    ++state_->world_generation;
+    state_->simulation_running = false;
+}
+
+void DataModel::capture_place_unlocked() {
+    PlaceSnapshot shot;
+    shot.root_name = state_->root != nullptr ? state_->root->name_ : std::string();
+    shot.root_children = child_ids(0);
+    const std::uint32_t count = slot_count();
+    shot.instances.reserve(count);
+    for (std::uint32_t index = 0; index < count; ++index) {
+        Slot& part = state_->slots[index];
+        if (!part.alive || part.instance == nullptr) {
+            continue;
+        }
+        if (part.pool >= state_->pools.size() || state_->pools[part.pool] == nullptr) {
+            contract_fail("place capture lost an instance type");
+        }
+        PlaceRecord record;
+        record.id = (part.generation << 16u) | index;
+        record.type_key = state_->pools[part.pool]->key;
+        record.parent = part.parent;
+        record.children = child_ids(record.id);
+        record.name = part.instance->name_;
+        record.simulated = part.simulated;
+        record.visual_only = part.visual_only;
+        part.instance->write_place(record.extra);
+        shot.instances.push_back(std::move(record));
+    }
+    state_->place = std::move(shot);
+    state_->place_captured = true;
+}
+
+std::uint16_t DataModel::pool_index_for(const void* type_key) const {
+    for (std::uint16_t index = 0; index < state_->pools.size(); ++index) {
+        if (state_->pools[index] != nullptr && state_->pools[index]->key == type_key) {
+            return index;
+        }
+    }
+    return 0xffffu;
+}
+
+void DataModel::retire_slot(std::uint32_t index, bool bump_generation) {
+    Slot& part = state_->slots[index];
+    if (!part.alive) {
+        return;
+    }
+    const InstanceId id = (part.generation << 16u) | index;
+    detach_links(id, part);
+    release_signals(id);
+    if (part.instance != nullptr) {
+        part.instance->name_.clear();
+        part.instance->on_release();
+    }
+    if (part.pool < state_->pools.size() && state_->pools[part.pool] != nullptr) {
+        state_->pools[part.pool]->free.push_back(part.storage);
+    }
+    part.instance = nullptr;
+    part.alive = false;
+    part.simulated = false;
+    part.visual_only = false;
+    part.parent = kNoParent;
+    part.first_child = 0;
+    part.next_sibling = 0;
+    part.prev_sibling = 0;
+    if (bump_generation && part.generation != 0xffffu) {
+        ++part.generation;
+    }
+}
+
+void DataModel::adopt_slot(std::uint16_t pool_index, InstanceId id) {
+    if (pool_index >= state_->pools.size() || state_->pools[pool_index] == nullptr) {
+        contract_fail("place restore lost an instance type");
+    }
+    const std::uint32_t index = id & kIndexMask;
+    const std::uint32_t generation = id >> 16u;
+    Slot& part = state_->slots[index];
+    part.generation = generation;
+    part.alive = true;
+    part.simulated = false;
+    part.visual_only = false;
+    part.parent = kNoParent;
+    part.first_child = 0;
+    part.next_sibling = 0;
+    part.prev_sibling = 0;
+
+    InstancePool& pool = *state_->pools[pool_index];
+    std::uint32_t storage = 0;
+    if (!pool.free.empty()) {
+        storage = pool.free.back();
+        pool.free.pop_back();
+    } else {
+        if (pool.count >= kMaxInstances) {
+            contract_fail("instance capacity exhausted");
+        }
+        storage = static_cast<std::uint32_t>(pool.count);
+        ++pool.count;
+    }
+    DataModel* object = pool.objects[storage];
+    if (object == nullptr) {
+        void* memory = pool.memory + static_cast<std::size_t>(storage) * pool.stride;
+        object = pool.construct(memory, ChildTag{}, *state_, id);
+        pool.objects[storage] = object;
+    } else {
+        object->rebind(id);
+        object->on_reuse();
+    }
+    part.pool = pool_index;
+    part.storage = storage;
+    part.instance = object;
+}
+
+void DataModel::restore_record(const PlaceRecord& record) {
+    const std::uint32_t index = record.id & kIndexMask;
+    Slot& part = state_->slots[index];
+    const bool same = part.alive && part.instance != nullptr && ((part.generation << 16u) | index) == record.id &&
+                      part.pool < state_->pools.size() && state_->pools[part.pool] != nullptr &&
+                      state_->pools[part.pool]->key == record.type_key;
+    if (!same) {
+        if (part.alive) {
+            retire_slot(index, false);
+        }
+        const std::uint16_t pool_index = pool_index_for(record.type_key);
+        if (pool_index == 0xffffu) {
+            contract_fail("place restore lost an instance type");
+        }
+        adopt_slot(pool_index, record.id);
+    }
+    Slot& live = state_->slots[index];
+    live.simulated = record.simulated;
+    live.visual_only = record.visual_only;
+    if (live.instance == nullptr) {
+        contract_fail("place restore lost an instance");
+    }
+    live.instance->name_ = record.name;
+    const std::byte* bytes = record.extra.empty() ? nullptr : record.extra.data();
+    live.instance->read_place(bytes, record.extra.size());
+}
+
+void DataModel::clear_hierarchy() {
+    state_->root_first_child = 0;
+    for (Slot& part : state_->slots) {
+        part.parent = kNoParent;
+        part.first_child = 0;
+        part.next_sibling = 0;
+        part.prev_sibling = 0;
+    }
+}
+
+void DataModel::link_children_front(InstanceId parent, const std::vector<InstanceId>& children) {
+    for (std::size_t n = children.size(); n > 0; --n) {
+        link_child(parent, children[n - 1]);
+    }
+}
+
+void DataModel::rebuild_free_list() {
+    state_->free_list.clear();
+    for (std::uint32_t index = 0; index < state_->slots.size(); ++index) {
+        if (!state_->slots[index].alive) {
+            state_->free_list.push_back(index);
+        }
+    }
+}
+
+void DataModel::restore_place_unlocked() {
+    if (!state_->place_captured) {
+        contract_fail("stop_simulation without a place snapshot");
+    }
+    const PlaceSnapshot& place = state_->place;
+    std::unordered_set<InstanceId> ids;
+    ids.reserve(place.instances.size());
+    for (const PlaceRecord& record : place.instances) {
+        if (!ids.insert(record.id).second) {
+            contract_fail("place snapshot has a duplicate instance");
+        }
+        const std::uint32_t index = record.id & kIndexMask;
+        if (index >= state_->slots.size()) {
+            contract_fail("place snapshot has an unknown instance");
+        }
+        if (pool_index_for(record.type_key) == 0xffffu) {
+            contract_fail("place snapshot instance type is missing");
+        }
+    }
+    for (InstanceId child : place.root_children) {
+        if (ids.count(child) == 0) {
+            contract_fail("place snapshot lost a child");
+        }
+    }
+    for (const PlaceRecord& record : place.instances) {
+        for (InstanceId child : record.children) {
+            if (ids.count(child) == 0) {
+                contract_fail("place snapshot lost a child");
+            }
+        }
+    }
+
+    for (std::uint32_t index = 0; index < state_->slots.size(); ++index) {
+        Slot& part = state_->slots[index];
+        if (!part.alive) {
+            continue;
+        }
+        const InstanceId id = (part.generation << 16u) | index;
+        if (ids.count(id) == 0) {
+            retire_slot(index, true);
+        }
+    }
+    for (const PlaceRecord& record : place.instances) {
+        restore_record(record);
+    }
+    clear_hierarchy();
+    link_children_front(0, place.root_children);
+    for (const PlaceRecord& record : place.instances) {
+        link_children_front(record.id, record.children);
+    }
+    if (state_->root != nullptr) {
+        state_->root->name_ = place.root_name;
+    }
+    rebuild_free_list();
+
+    {
+        std::lock_guard<std::mutex> guard(state_->command_mu);
+        state_->command_head = 0;
+        state_->command_tail = 0;
+        state_->command_size = 0;
+    }
+    // One resync so the next Prepare copies the reverted world, not session invalidations.
+    state_->invalidation.clear();
+    (void)state_->invalidation.take_overflow();
+    state_->resync = true;
 }
 
 }  // namespace engine_core

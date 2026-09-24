@@ -12,7 +12,7 @@ class TaskScheduler;
 class EventQueue;
 
 // Property identity for signals. Distinct from VisualField, which is the
-// snapshot dirty mask. Parent is hierarchy only and does not dirty visuals.
+// snapshot dirty mask. Parent and Name are not visual fields.
 enum class Field : std::uint8_t {
     Transform = 0,
     Color,
@@ -21,6 +21,7 @@ enum class Field : std::uint8_t {
     Simulated,
     VisualOnly,
     Parent,
+    Name,
     Count
 };
 
@@ -112,6 +113,11 @@ public:
 
     // Drops queued events for this id and disconnects its signals.
     void destroy_instance(InstanceId id);
+
+    // Drops every queued event. Connections stay until disconnect_all().
+    void drop_pending();
+    // Tombstones every connection. Signal objects stay so a later connect works.
+    void disconnect_all();
 
     std::uint64_t count(WriteOrigin origin) const;
     std::uint64_t suppressed_overrides() const { return suppressed_overrides_; }

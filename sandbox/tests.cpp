@@ -998,3 +998,232 @@ TEST_CASE("plain instances do not carry transform color size or velocity", "[ins
     REQUIRE_FALSE(model.alive(plain.id()));
     REQUIRE(model.alive(object.id()));
 }
+
+TEST_CASE("RenderStepped writes this frame and PostRender does not", "[T21]") {
+    engine_core::Engine engine;
+    engine_core::DataModel& model = engine.datamodel();
+    const engine_core::InstanceId id = model.create_game_object().id();
+    model.set_visual_only(id, true);
+    const engine_core::Transform posed = T1();
+    const engine_core::ColorRgb tint = rgb(0.4f, 0.5f, 0.6f);
+    const engine_core::ColorRgb original = model.game_object(id)->color();
+
+    std::atomic<int> stage{0};
+    std::atomic<int> bad{0};
+    std::atomic<int> lead{0};
+    std::atomic<int> rs_window{-1};
+    std::atomic<int> pre_window{-1};
+    std::atomic<int> post_window{-1};
+    std::atomic<int> rs_depth{-1};
+    std::atomic<int> pre_saw{0};
+    std::atomic<int> post_saw{0};
+    std::atomic<int> front_held{0};
+    std::atomic<int> hits{0};
+    std::atomic<int> during{0};
+    engine_core::Transform snapped{};
+    engine_core::WriteOrigin origin = engine_core::WriteOrigin::Simulation;
+    std::string post_write;
+    std::string post_override;
+
+    model.changed(id).connect([&](engine_core::InstanceId, engine_core::Field) {
+        if (engine_core::thread_role() != engine_core::ThreadRole::Simulation) {
+            bad.store(1);
+        }
+        if (std::this_thread::get_id() != engine.simulation_thread_id()) {
+            bad.store(1);
+        }
+        if (model.prerender_window()) {
+            bad.store(1);
+        }
+        hits.fetch_add(1);
+    });
+    // Larger priority runs first, same rule as every other phase.
+    engine.scheduler().bind(
+        engine_core::Phase::RenderStepped,
+        [&](double) {
+            if (stage.load() != 0) {
+                return;
+            }
+            if (lead.load() != 1) {
+                bad.store(1);
+            }
+            rs_window.store(model.prerender_window() ? 1 : 0);
+            rs_depth.store(model.write_depth());
+            if (engine_core::thread_role() != engine_core::ThreadRole::Render) {
+                bad.store(1);
+            }
+            model.game_object(id)->set_transform(posed);
+            during.store(hits.load());
+            stage.store(1);
+        },
+        100);
+    engine.scheduler().bind(
+        engine_core::Phase::RenderStepped,
+        [&](double) {
+            if (stage.load() != 0) {
+                return;
+            }
+            lead.store(1);
+        },
+        3000);
+    engine.scheduler().bind(engine_core::Phase::PreRender, [&](double) {
+        if (stage.load() != 1) {
+            return;
+        }
+        pre_window.store(model.prerender_window() ? 1 : 0);
+        pre_saw.store(near(model.game_object(id)->transform(), posed) ? 1 : 0);
+        stage.store(2);
+    });
+    engine.scheduler().bind(engine_core::Phase::PostRender, [&](double) {
+        if (stage.load() != 3) {
+            return;
+        }
+        post_window.store(model.prerender_window() ? 1 : 0);
+        if (engine_core::thread_role() != engine_core::ThreadRole::Render) {
+            bad.store(1);
+        }
+        const engine_core::VisualInstance* inst = engine.pump().find(id);
+        post_saw.store(inst != nullptr && near(inst->world, posed) ? 1 : 0);
+        try {
+            model.game_object(id)->set_color(tint);
+        } catch (const engine_core::ContractViolation& ex) {
+            post_write = ex.what();
+        }
+        try {
+            engine_core::SnapshotOverride override;
+            override.id = id;
+            override.field = engine_core::VisualField::Color;
+            override.color = tint;
+            engine.pump().override_visual(override);
+        } catch (const engine_core::ContractViolation& ex) {
+            post_override = ex.what();
+        }
+        inst = engine.pump().find(id);
+        const bool held = inst != nullptr && near(inst->world, posed) && near_color(inst->color, original);
+        front_held.store(held ? 1 : 0);
+        stage.store(4);
+    });
+
+    struct Probe : CountingRenderer {
+        engine_core::InstanceId id = 0;
+        std::atomic<int>* stage = nullptr;
+        engine_core::Transform* snapped = nullptr;
+        engine_core::WriteOrigin* origin = nullptr;
+        const engine_core::Transform* posed = nullptr;
+        void perform(const engine_core::VisualSnapshot& snapshot, int) override {
+            if (stage->load() != 2) {
+                return;
+            }
+            const engine_core::VisualInstance* inst = find_instance(snapshot, id);
+            if (inst == nullptr || !near(inst->world, *posed)) {
+                return;
+            }
+            *snapped = inst->world;
+            *origin = inst->transform_origin;
+            stage->store(3);
+        }
+    } probe;
+    probe.id = id;
+    probe.stage = &stage;
+    probe.snapped = &snapped;
+    probe.origin = &origin;
+    probe.posed = &posed;
+    engine.set_renderer(&probe);
+    engine.start();
+    engine.resume();
+    wait_until([&] { return stage.load() == 4 && hits.load() >= 1; });
+    engine.stop();
+
+    REQUIRE(bad.load() == 0);
+    REQUIRE(lead.load() == 1);
+    REQUIRE(rs_window.load() == 1);
+    REQUIRE(pre_window.load() == 1);
+    REQUIRE(post_window.load() == 0);
+    REQUIRE(rs_depth.load() > 0);
+    REQUIRE(pre_saw.load() == 1);
+    REQUIRE(post_saw.load() == 1);
+    REQUIRE(front_held.load() == 1);
+    REQUIRE(during.load() == 0);
+    REQUIRE(hits.load() >= 1);
+    REQUIRE(near(snapped, posed));
+    REQUIRE(origin == engine_core::WriteOrigin::PreRenderDataModel);
+    REQUIRE(near(model.game_object(id)->transform(), posed));
+    REQUIRE(near_color(model.game_object(id)->color(), original));
+    REQUIRE(post_write.find("PreRender") != std::string::npos);
+    REQUIRE(post_override.find("PreRender") != std::string::npos);
+    REQUIRE(model.events().count(engine_core::WriteOrigin::PreRenderDataModel) >= 1);
+}
+
+TEST_CASE("RenderStepped and PostRender run while simulation is paused", "[T22]") {
+    engine_core::Engine engine;
+    std::atomic<int> stepped{0};
+    std::atomic<int> posted{0};
+    engine.scheduler().bind(engine_core::Phase::RenderStepped, [&](double) { stepped.fetch_add(1); });
+    engine.scheduler().bind(engine_core::Phase::PostRender, [&](double) { posted.fetch_add(1); });
+    engine.start();
+    wait_until([&] { return stepped.load() > 0 && posted.load() > 0; });
+    REQUIRE(engine.paused());
+    REQUIRE(engine.sim_frame_count() == 0);
+    engine.stop();
+}
+
+TEST_CASE("render phases do not yield or drain", "[T23]") {
+    engine_core::Engine engine;
+    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
+    std::atomic<int> stepped_wait{0};
+    std::atomic<int> posted_wait{0};
+    std::atomic<int> posted_drain{0};
+    std::string stepped_message;
+    std::string posted_wait_message;
+    std::string posted_drain_message;
+    engine.scheduler().bind(engine_core::Phase::RenderStepped, [&](double) {
+        if (stepped_wait.load() != 0) {
+            return;
+        }
+        try {
+            engine.datamodel().property_changed(id, engine_core::Field::Color).wait();
+        } catch (const engine_core::ContractViolation& ex) {
+            stepped_message = ex.what();
+            stepped_wait.store(1);
+        }
+    });
+    engine.scheduler().bind(engine_core::Phase::PostRender, [&](double) {
+        if (posted_wait.load() != 0) {
+            return;
+        }
+        try {
+            engine.datamodel().property_changed(id, engine_core::Field::Color).wait();
+        } catch (const engine_core::ContractViolation& ex) {
+            posted_wait_message = ex.what();
+            posted_wait.store(1);
+        }
+        try {
+            engine.datamodel().events().drain();
+        } catch (const engine_core::ContractViolation& ex) {
+            posted_drain_message = ex.what();
+            posted_drain.store(1);
+        }
+    });
+    engine.start();
+    engine.resume();
+    wait_until([&] { return stepped_wait.load() == 1 && posted_wait.load() == 1 && posted_drain.load() == 1; });
+    engine.stop();
+    REQUIRE(stepped_message.find("simulation job") != std::string::npos);
+    REQUIRE(posted_wait_message.find("simulation job") != std::string::npos);
+    REQUIRE(posted_drain_message.find("SimulationThread") != std::string::npos);
+}
+
+TEST_CASE("a RenderStepped contract still runs PreRender", "[T24]") {
+    engine_core::Engine engine;
+    std::atomic<int> pre{0};
+    engine.scheduler().bind(engine_core::Phase::RenderStepped, [&](double) {
+        throw engine_core::ContractViolation("RenderStepped stopped");
+    });
+    engine.scheduler().bind(engine_core::Phase::PreRender, [&](double) { pre.fetch_add(1); });
+    engine.start();
+    engine.resume();
+    wait_until([&] { return pre.load() > 0 && engine.contract_count() > 0; });
+    engine.stop();
+    REQUIRE(pre.load() > 0);
+    REQUIRE(engine.contract_count() > 0);
+}

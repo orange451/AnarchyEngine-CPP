@@ -17,6 +17,7 @@ namespace engine_core {
 
 // Two loops. SimulationThread steps the DataModel. RenderThread prepares a
 // snapshot under a short write lock, then Perform/Present with the lock down.
+// PostRender runs after Present, still on RenderThread, without the lock.
 class Engine {
 public:
     Engine();

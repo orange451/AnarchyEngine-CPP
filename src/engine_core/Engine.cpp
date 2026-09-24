@@ -204,6 +204,13 @@ void Engine::render_loop() {
             if (lock.owns()) {
                 const auto hold_start = std::chrono::steady_clock::now();
                 pump_.begin_prerender_window(model_);
+                // Roblox order inside the pre-draw window: RenderStepped, then PreRender.
+                // A failure in one does not skip the other or the copy.
+                try {
+                    scheduler_.run_phase(Phase::RenderStepped, render_dt_);
+                } catch (const ContractViolation&) {
+                    saw_contract = true;
+                }
                 try {
                     scheduler_.run_phase(Phase::PreRender, render_dt_);
                 } catch (const ContractViolation&) {
@@ -239,9 +246,16 @@ void Engine::render_loop() {
                 renderer_->perform(pump_.front(), batches);
                 renderer_->present();
             } catch (const ContractViolation&) {
-                // Perform is outside PreRender. A DataModel write here is path D.
+                // Perform is outside the pre-draw window. A DataModel write here is path D.
                 contract_count_.fetch_add(1);
             }
+        }
+        // After Present the snapshot for this frame is already published.
+        // PostRender does not hold the Prepare lock and is not part of the 2 ms budget.
+        try {
+            scheduler_.run_phase(Phase::PostRender, render_dt_);
+        } catch (const ContractViolation&) {
+            contract_count_.fetch_add(1);
         }
         present_count_.fetch_add(1);
 

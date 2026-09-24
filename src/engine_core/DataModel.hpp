@@ -31,10 +31,12 @@ class GameObject;
 //
 // Path A: SimulationThread phases write here. They dirty the queue and become
 //         sim truth. The snapshot sees them at the next Prepare.
-// Path B: RenderThread may write a GameObject only inside PreRender, before
-//         the copy, and only for visual_only parts (or ForceSimWrite).
+// Path B: RenderThread may write a GameObject only inside RenderStepped or
+//         PreRender, before the copy, and only for visual_only parts
+//         (or ForceSimWrite).
 // Path C: does not enter this class. See SnapshotPump::override.
-// Path D: a render-thread write outside PreRender fails the contract.
+// Path D: a render-thread write outside that window fails the contract.
+//         Perform, Present, and PostRender are outside it.
 // Path E: any other OS thread enqueues a command. Simulation applies it.
 class DataModel {
 public:

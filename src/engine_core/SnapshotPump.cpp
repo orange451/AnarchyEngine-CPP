@@ -26,7 +26,7 @@ void SnapshotPump::end_prerender_window(DataModel& model) {
 
 void SnapshotPump::override_visual(const SnapshotOverride& override) {
     if (!window_open_ || thread_role() != ThreadRole::Render) {
-        contract_fail("SnapshotOverride is only valid inside PreRender");
+        contract_fail("SnapshotOverride is only valid inside RenderStepped or PreRender");
     }
     if (overrides_.size() == overrides_.capacity()) {
         contract_fail("snapshot override capacity exhausted");
@@ -36,7 +36,7 @@ void SnapshotPump::override_visual(const SnapshotOverride& override) {
 
 void SnapshotPump::set_camera(const Transform& camera) {
     if (!window_open_ || thread_role() != ThreadRole::Render) {
-        contract_fail("camera snapshot writes happen inside PreRender");
+        contract_fail("camera snapshot writes happen inside RenderStepped or PreRender");
     }
     pending_camera_ = camera;
     camera_pending_ = true;

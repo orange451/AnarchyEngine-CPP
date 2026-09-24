@@ -305,7 +305,7 @@ void EventQueue::drain() {
         contract_fail("EventQueue::drain runs on SimulationThread");
     }
     if (prerender_open_ != nullptr && *prerender_open_) {
-        contract_fail("EventQueue::drain during PreRender");
+        contract_fail("EventQueue::drain during RenderStepped or PreRender");
     }
     if (draining_) {
         return;

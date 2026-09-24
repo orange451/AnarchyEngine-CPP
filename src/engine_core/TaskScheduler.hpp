@@ -15,11 +15,12 @@ class Signal;
 
 // Cooperative jobs. The engine resumes a phase; jobs must return.
 // PreAnimation..Heartbeat run on SimulationThread.
-// PreRender runs on RenderThread during the Prepare lock, before the copy.
+// RenderStepped and PreRender run on RenderThread during the Prepare lock,
+// before the copy. PostRender runs on RenderThread after Present, lock down.
 //
 // A job may call Signal::wait(). That parks the job on its own stack and
-// resumes it at the start of a later simulation phase. PreRender jobs are
-// not parked and cannot wait.
+// resumes it at the start of a later simulation phase. Render-thread jobs
+// are not parked and cannot wait.
 class TaskScheduler {
 public:
     using Job = std::function<void(double dt)>;
@@ -29,7 +30,9 @@ public:
     void bind(Phase phase, Job job, int priority = 2000);
     void run_phase(Phase phase, double dt);
 
-    Phase current_phase() const { return current_phase_; }
+    // The phase this thread is inside. Render and simulation overlap after
+    // Present, so this is not a single engine-wide value.
+    Phase current_phase() const;
     bool in_job() const;
 
     // Parks the running simulation job until `signal` fires once.
@@ -64,9 +67,8 @@ private:
     static thread_local Entry* tls_entry_;
     static thread_local void* tls_scheduler_sp_;
 
-    std::vector<Entry> jobs_[6];
-    std::vector<int> order_[6];
-    Phase current_phase_ = Phase::PreAnimation;
+    std::vector<Entry> jobs_[kPhaseCount];
+    std::vector<int> order_[kPhaseCount];
     std::uint64_t wait_serial_ = 0;
 };
 

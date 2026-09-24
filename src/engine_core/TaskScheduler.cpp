@@ -113,6 +113,29 @@ extern "C" void __asan_unpoison_memory_region(void* addr, std::size_t size);
 thread_local TaskScheduler::Entry* TaskScheduler::tls_entry_ = nullptr;
 thread_local void* TaskScheduler::tls_scheduler_sp_ = nullptr;
 
+namespace {
+
+thread_local Phase tls_phase = Phase::PreAnimation;
+
+bool is_render_phase(Phase phase) {
+    return phase == Phase::RenderStepped || phase == Phase::PreRender || phase == Phase::PostRender;
+}
+
+const char* render_phase_thread_message(Phase phase) {
+    switch (phase) {
+    case Phase::RenderStepped:
+        return "RenderStepped runs on RenderThread";
+    case Phase::PreRender:
+        return "PreRender runs on RenderThread";
+    case Phase::PostRender:
+        return "PostRender runs on RenderThread";
+    default:
+        return "render phases run on RenderThread";
+    }
+}
+
+}  // namespace
+
 void TaskScheduler::fiber_main() {
 #if defined(AE_NO_FIBER)
     contract_fail("finished simulation job resumed");
@@ -141,8 +164,10 @@ void TaskScheduler::fiber_main() {
 #endif
 }
 
+Phase TaskScheduler::current_phase() const { return tls_phase; }
+
 void TaskScheduler::reserve(std::size_t per_phase) {
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < kPhaseCount; ++i) {
         jobs_[i].reserve(per_phase);
         order_[i].reserve(per_phase);
     }
@@ -295,22 +320,24 @@ void TaskScheduler::resume_ready() {
 }
 
 void TaskScheduler::run_phase(Phase phase, double dt) {
-    if (phase == Phase::PreRender) {
+    if (is_render_phase(phase)) {
         if (thread_role() != ThreadRole::Render) {
-            contract_fail("PreRender runs on RenderThread");
+            contract_fail(render_phase_thread_message(phase));
         }
     } else if (thread_role() != ThreadRole::Simulation) {
         contract_fail("gameplay phases run on SimulationThread");
     }
-    current_phase_ = phase;
+    tls_phase = phase;
     const int phase_index = static_cast<int>(phase);
-    if (phase != Phase::PreRender) {
+    // A parked simulation job resumes on the simulation thread only.
+    // Render phases call the job directly and never switch fibers.
+    if (!is_render_phase(phase)) {
         resume_ready();
     }
     const std::vector<int>& order = order_[phase_index];
     for (int slot : order) {
         Entry& entry = jobs_[phase_index][static_cast<std::size_t>(slot)];
-        if (phase == Phase::PreRender) {
+        if (is_render_phase(phase)) {
             entry.job(dt);
             continue;
         }

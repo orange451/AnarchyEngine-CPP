@@ -20,14 +20,22 @@ struct ColorRgb {
 // Zero is never a live id.
 using InstanceId = std::uint32_t;
 
+// Simulation phases stay contiguous at the front. Resume checks treat
+// PreAnimation..Heartbeat as the simulation range.
+// Render-frame order is RenderStepped, PreRender, then PostRender.
 enum class Phase {
     PreAnimation,    // SimulationThread
     PreSimulation,   // SimulationThread, once per physics substep
     PhysicsSubstep,  // SimulationThread, once per physics substep
     PostSimulation,  // SimulationThread, once per physics substep
     Heartbeat,       // SimulationThread
-    PreRender        // RenderThread, inside Prepare, before the copy
+    RenderStepped,   // RenderThread, inside Prepare, before PreRender and the copy
+    PreRender,       // RenderThread, inside Prepare, before the copy
+    PostRender       // RenderThread, after Present, lock released
 };
+
+// PostRender is the last enumerator. The scheduler's job tables use this bound.
+inline constexpr int kPhaseCount = static_cast<int>(Phase::PostRender) + 1;
 
 enum class VisualField : std::uint32_t {
     Transform = 1u << 0,
@@ -38,6 +46,7 @@ enum class VisualField : std::uint32_t {
 
 // Which writer produced a visual field.
 // Simulation and PreRenderDataModel are real DataModel writes.
+// RenderStepped is path B and records PreRenderDataModel.
 // SnapshotOverride never touches the DataModel and dies after one Prepare.
 enum class WriteOrigin {
     Simulation,
@@ -45,8 +54,8 @@ enum class WriteOrigin {
     SnapshotOverride
 };
 
-// Passed to GameObject::set_transform / set_color so a PreRender job can write a
-// simulated part. The next physics substep overwrites that transform.
+// Passed to GameObject::set_transform / set_color so a RenderStepped or PreRender
+// job can write a simulated part. The next physics substep overwrites that transform.
 struct ForceSimWrite {
     explicit ForceSimWrite() = default;
 };

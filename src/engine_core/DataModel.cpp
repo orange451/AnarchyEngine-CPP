@@ -40,7 +40,8 @@ struct DataModel::State {
     // Guards slots, free lists, invalidation, and resync.
     // SimulationThread may hold Write across a whole step and may re-enter
     // (thread-local depth; the mutex is taken once).
-    // RenderThread may hold Write only inside Prepare (PreRender + copy), budget 2ms.
+    // RenderThread may hold Write only inside Prepare (RenderStepped, PreRender, copy),
+    // budget 2ms. PostRender does not hold it.
     // Workers never take it.
     std::timed_mutex write_mu;
     std::thread::id owner{};
@@ -257,12 +258,12 @@ bool DataModel::authorize(const Slot& part, bool force_sim_write) {
     }
     if (self == state_->render_thread) {
         if (!state_->prerender_window) {
-            return reject_write("DataModel write from RenderThread outside PreRender");
+            return reject_write("DataModel write from RenderThread outside RenderStepped and PreRender");
         }
         if (part.visual_only || force_sim_write) {
             return true;
         }
-        return reject_write("PreRender DataModel write requires visual_only or ForceSimWrite");
+        return reject_write("render-step DataModel write requires visual_only or ForceSimWrite");
     }
     return true;
 }

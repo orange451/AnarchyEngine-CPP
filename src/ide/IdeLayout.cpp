@@ -31,6 +31,11 @@ scene {
 .ide-viewport {
     background-color: #1e1e1e;
 }
+.ide-fps {
+    color: #f2f2f2;
+    padding: 6px 8px;
+    background-color: rgba(0, 0, 0, 0.45);
+}
 textfield {
     background-color: #ffffff;
     border-width: 1px 0 0 0;
@@ -79,8 +84,9 @@ void ShowOne(jadefx::MenuItem& show, jadefx::MenuItem& hide) {
 }  // namespace
 
 IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
-    // The shell starts the runner, and the runner starts the Lua engine.
-    runner_.start();
+    // PreRender is in its loop as soon as the threads start. The scene page
+    // binds that job first, while both loops are still stopped.
+    runner_.prepare();
 
     auto file = jadefx::make<jadefx::Menu>("File");
     AddItem(*file, "New", jadefx::Key::N, jadefx::Key::ModControl);
@@ -162,6 +168,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
     root_->setTop(menuBar);
     root_->setCenter(horizontal);
     root_->setBottom(status);
+    runner_.start();
 }
 
 void IdeLayout::mount(jadefx::Scene& scene) {

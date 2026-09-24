@@ -12,7 +12,7 @@ Runner::Runner() = default;
 
 Runner::~Runner() = default;
 
-void Runner::start() {
+void Runner::prepare() {
     if (lua_ != nullptr) {
         throw std::logic_error("runner already started");
     }
@@ -21,19 +21,32 @@ void Runner::start() {
     auto simulation = std::make_unique<engine_core::Engine>();
     // The IDE is open for a long time. Pace both loops so they do not spin a core.
     simulation->set_pace_hz(60.0);
-    try {
-        simulation->start();
-    } catch (...) {
-        lua->stop();
-        throw;
-    }
     lua_ = std::move(lua);
     simulation_ = std::move(simulation);
+}
+
+void Runner::start() {
+    if (lua_ == nullptr) {
+        prepare();
+    }
+    if (threadsStarted_) {
+        throw std::logic_error("runner already started");
+    }
+    try {
+        simulation_->start();
+    } catch (...) {
+        lua_->stop();
+        lua_.reset();
+        simulation_.reset();
+        throw;
+    }
+    threadsStarted_ = true;
 }
 
 void Runner::stop() {
     simulation_.reset();
     lua_.reset();
+    threadsStarted_ = false;
 }
 
 engine::LuaEngine& Runner::lua() {

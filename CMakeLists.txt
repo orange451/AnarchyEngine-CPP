@@ -26,11 +26,11 @@ add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
     src/runner/ShaderFile.cpp
     src/runner/Renderer.cpp
     src/runner/Runner.cpp
+    src/runner/GameView.cpp
     src/ide/IdePane.cpp
     src/ide/IdeDock.cpp
     src/ide/IdeConsole.cpp
     src/ide/IdeExplorer.cpp
-    src/ide/IdeGameView.cpp
     src/ide/IdeTreeTest.cpp
     src/ide/IdeLayout.cpp
 )

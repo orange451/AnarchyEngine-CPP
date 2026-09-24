@@ -4,7 +4,7 @@
 #include "IdeConsole.hpp"
 #include "IdeDock.hpp"
 #include "IdeExplorer.hpp"
-#include "IdeGameView.hpp"
+#include "../runner/GameView.hpp"
 
 namespace ide {
 namespace {
@@ -173,7 +173,7 @@ engine_core::Engine& IdeLayout::simulation() { return runner_.simulation(); }
 void IdeLayout::start() {
     // PreRender is in its loop as soon as the threads start. The scene page
     // binds that job first, while both loops are still stopped.
-    sceneDock_->dock(jadefx::make<IdeGameView>(runner_));
+    sceneDock_->dock(jadefx::make<runner::GameView>(runner_));
     runner_.start();
 }
 

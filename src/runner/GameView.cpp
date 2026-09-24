@@ -1,9 +1,9 @@
-#include "IdeGameView.hpp"
+#include "GameView.hpp"
 
 #include "Engine.hpp"
 #include "TestTriangle.hpp"
-#include "../runner/Runner.hpp"
-#include "../runner/gl.hpp"
+#include "Runner.hpp"
+#include "gl.hpp"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -12,10 +12,10 @@
 #include <string>
 #include <vector>
 
-namespace ide {
+namespace runner {
 namespace {
 
-std::vector<engine_core::TestTriangle*> FindSceneTriangles(runner::Runner& runner) {
+std::vector<engine_core::TestTriangle*> FindSceneTriangles(Runner& runner) {
     std::vector<engine_core::TestTriangle*> found;
     engine_core::DataModel& model = runner.simulation().datamodel();
     for (engine_core::InstanceId id = model.first_child(model.id()); id != 0; id = model.next_sibling(id)) {
@@ -40,8 +40,8 @@ int FramesPerSecond(double dt) {
 
 }  // namespace
 
-IdeGameView::IdeGameView(runner::Runner& runner)
-    : IdePane("Scene View", false),
+GameView::GameView(Runner& runner)
+    : ide::IdePane("Scene View", false),
       triangles_(FindSceneTriangles(runner)),
       renderDt_(std::make_shared<std::atomic<double>>(0.0)) {
     setMinSize(64, 64);
@@ -70,7 +70,7 @@ IdeGameView::IdeGameView(runner::Runner& runner)
     });
 }
 
-void IdeGameView::refreshFpsLabel() {
+void GameView::refreshFpsLabel() {
     if (fpsLabel_ == nullptr) {
         return;
     }
@@ -86,25 +86,25 @@ void IdeGameView::refreshFpsLabel() {
     fpsLabel_->setText(std::to_string(fps) + " FPS");
 }
 
-void IdeGameView::layoutChildren() {
+void GameView::layoutChildren() {
     refreshFpsLabel();
     StackPane::layoutChildren();
 }
 
-void IdeGameView::renderChildren(jadefx::UiRenderer&, float) {}
+void GameView::renderChildren(jadefx::UiRenderer&, float) {}
 
-void IdeGameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
+void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
     const jadefx::Scene* scene = getScene();
     if (scene != nullptr && scene->getWidth() > 0.0 && scene->getHeight() > 0.0 && getWidth() > 0.0 &&
         getHeight() > 0.0 && ensureGraphics()) {
-        std::vector<runner::TriangleDraw> draws;
+        std::vector<TriangleDraw> draws;
         draws.reserve(triangles_.size());
         for (engine_core::TestTriangle* triangle : triangles_) {
             if (triangle == nullptr) {
                 continue;
             }
             const engine_core::Vec3 position = triangle->position();
-            runner::TriangleDraw draw;
+            TriangleDraw draw;
             draw.angleDegrees = static_cast<float>(triangle->angle_degrees());
             draw.x = position.x;
             draw.y = position.y;
@@ -118,7 +118,7 @@ void IdeGameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
     Node::renderChildren(renderer, opacity);
 }
 
-void IdeGameView::sceneChanged(jadefx::Scene* previous) {
+void GameView::sceneChanged(jadefx::Scene* previous) {
     // Leaving a live scene can release the GL objects. The context is still
     // current then. Scene teardown runs after JadeFX has destroyed the context,
     // so those names are left for the process to reclaim.
@@ -130,16 +130,16 @@ void IdeGameView::sceneChanged(jadefx::Scene* previous) {
     graphicsReady_ = false;
 }
 
-bool IdeGameView::ensureGraphics() {
+bool GameView::ensureGraphics() {
     if (graphicsAttempted_) {
         return graphicsReady_;
     }
     graphicsAttempted_ = true;
-    const bool loaded = runner::LoadGl([](const char* name) -> void* {
+    const bool loaded = LoadGl([](const char* name) -> void* {
         return reinterpret_cast<void*>(glfwGetProcAddress(name));
     });
     graphicsReady_ = loaded && renderer_.initialize();
     return graphicsReady_;
 }
 
-}  // namespace ide
+}  // namespace runner

@@ -9,7 +9,7 @@ namespace engine_core {
 class IRenderer {
 public:
     virtual ~IRenderer() = default;
-    virtual void perform(const VisualSnapshot& front, int color_batches) = 0;
+    virtual void perform(const VisualSnapshot& front) = 0;
     virtual void present() = 0;
 };
 

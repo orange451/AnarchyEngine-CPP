@@ -2,7 +2,6 @@
 
 #include "DataModelLock.hpp"
 
-#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 
@@ -11,7 +10,6 @@ namespace engine_core {
 Engine::Engine() {
     pump_.reserve(DataModel::kMaxInstances);
     scheduler_.reserve(64);
-    color_keys_.reserve(DataModel::kMaxInstances);
     model_.attach_scheduler(&scheduler_);
 }
 
@@ -242,8 +240,7 @@ void Engine::render_loop() {
         }
         if (renderer_ != nullptr) {
             try {
-                const int batches = batch_colors(pump_.front());
-                renderer_->perform(pump_.front(), batches);
+                renderer_->perform(pump_.front());
                 renderer_->present();
             } catch (const ContractViolation&) {
                 // Perform is outside the pre-draw window. A DataModel write here is path D.
@@ -271,33 +268,5 @@ void Engine::render_loop() {
 }
 
 void Engine::step_physics(double dt) { model_.integrate_simulated(dt); }
-
-int Engine::batch_colors(const VisualSnapshot& snapshot) {
-    color_keys_.clear();
-    for (const VisualInstance& inst : snapshot.instances) {
-        if (!inst.alive) {
-            continue;
-        }
-        auto quantize = [](float channel) {
-            float clamped = channel;
-            if (clamped < 0.f) {
-                clamped = 0.f;
-            }
-            if (clamped > 1.f) {
-                clamped = 1.f;
-            }
-            return static_cast<std::uint32_t>(clamped * 255.f + 0.5f);
-        };
-        const std::uint32_t key =
-            (quantize(inst.color.r) << 16u) | (quantize(inst.color.g) << 8u) | quantize(inst.color.b);
-        if (color_keys_.size() == color_keys_.capacity()) {
-            break;
-        }
-        color_keys_.push_back(key);
-    }
-    std::sort(color_keys_.begin(), color_keys_.end());
-    const auto unique_end = std::unique(color_keys_.begin(), color_keys_.end());
-    return static_cast<int>(unique_end - color_keys_.begin());
-}
 
 }  // namespace engine_core

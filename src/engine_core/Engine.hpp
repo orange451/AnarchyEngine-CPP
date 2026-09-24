@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <mutex>
 #include <thread>
-#include <vector>
 
 namespace engine_core {
 
@@ -60,7 +59,6 @@ private:
     void render_loop();
     void step_physics(double dt);
     void pace(double hz_anchor_seconds) const;
-    int batch_colors(const VisualSnapshot& snapshot);
 
     DataModel model_;
     SnapshotPump pump_;
@@ -93,8 +91,6 @@ private:
     mutable std::mutex pause_mu_;
     std::condition_variable pause_cv_;
     bool paused_ = true;
-
-    std::vector<std::uint32_t> color_keys_;
 };
 
 }  // namespace engine_core

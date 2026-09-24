@@ -84,7 +84,7 @@ const engine_core::VisualInstance* find_instance(const engine_core::VisualSnapsh
 
 class CountingRenderer : public engine_core::IRenderer {
 public:
-    void perform(const engine_core::VisualSnapshot&, int) override {}
+    void perform(const engine_core::VisualSnapshot&) override {}
     void present() override {}
 };
 
@@ -106,7 +106,7 @@ TEST_CASE("DataModel write during Perform is rejected", "[T2]") {
         engine_core::GameObject* object = nullptr;
         std::atomic<int> hits{0};
         std::string message;
-        void perform(const engine_core::VisualSnapshot&, int) override {
+        void perform(const engine_core::VisualSnapshot&) override {
             if (hits.load() != 0) {
                 return;
             }
@@ -199,7 +199,7 @@ TEST_CASE("heartbeat transform is live and snapshotted", "[T5]") {
         engine_core::Transform* snapped = nullptr;
         engine_core::WriteOrigin* origin = nullptr;
         std::atomic<int>* ready = nullptr;
-        void perform(const engine_core::VisualSnapshot& snapshot, int) override {
+        void perform(const engine_core::VisualSnapshot& snapshot) override {
             if (ready->load() != 0) {
                 return;
             }
@@ -270,7 +270,7 @@ TEST_CASE("path C changes pixels for one frame only", "[T6]") {
         engine_core::Transform* snap_override = nullptr;
         engine_core::Transform* snap_next = nullptr;
         engine_core::WriteOrigin* override_origin = nullptr;
-        void perform(const engine_core::VisualSnapshot& snapshot, int) override {
+        void perform(const engine_core::VisualSnapshot& snapshot) override {
             const engine_core::VisualInstance* inst = nullptr;
             for (const engine_core::VisualInstance& item : snapshot.instances) {
                 if (item.id == id) {
@@ -342,7 +342,7 @@ TEST_CASE("path B on a visual-only part becomes sim truth", "[T7]") {
         engine_core::Transform* snapped = nullptr;
         engine_core::WriteOrigin* origin = nullptr;
         const engine_core::Transform* posed = nullptr;
-        void perform(const engine_core::VisualSnapshot& snapshot, int) override {
+        void perform(const engine_core::VisualSnapshot& snapshot) override {
             if (stage->load() != 1) {
                 return;
             }
@@ -408,7 +408,7 @@ TEST_CASE("path B on a simulated part is rejected unless forced", "[T8]") {
         std::atomic<int>* stage = nullptr;
         engine_core::Transform* snapped = nullptr;
         const engine_core::Transform* posed = nullptr;
-        void perform(const engine_core::VisualSnapshot& snapshot, int) override {
+        void perform(const engine_core::VisualSnapshot& snapshot) override {
             if (stage->load() != 1) {
                 return;
             }
@@ -474,7 +474,7 @@ TEST_CASE("destroy removes the instance from the next snapshot", "[T10]") {
         engine_core::InstanceId id = 0;
         std::atomic<int>* destroyed = nullptr;
         std::atomic<int>* snap_gone = nullptr;
-        void perform(const engine_core::VisualSnapshot& snapshot, int) override {
+        void perform(const engine_core::VisualSnapshot& snapshot) override {
             if (destroyed->load() == 0) {
                 return;
             }
@@ -578,7 +578,7 @@ TEST_CASE("heartbeat property change drains before prepare", "[T12]") {
         std::atomic<int>* handler_ran = nullptr;
         std::atomic<int>* bad = nullptr;
         std::atomic<int>* ready = nullptr;
-        void perform(const engine_core::VisualSnapshot& snapshot, int) override {
+        void perform(const engine_core::VisualSnapshot& snapshot) override {
             if (ready->load() != 0 || bad->load() != 0) {
                 return;
             }
@@ -633,7 +633,7 @@ TEST_CASE("handler writes are in the same snapshot", "[T13]") {
         const engine_core::Transform* posed = nullptr;
         std::atomic<int>* ready = nullptr;
         std::atomic<int>* bad = nullptr;
-        void perform(const engine_core::VisualSnapshot& snapshot, int) override {
+        void perform(const engine_core::VisualSnapshot& snapshot) override {
             if (ready->load() != 0) {
                 return;
             }
@@ -815,7 +815,7 @@ TEST_CASE("path B enqueues and the snapshot still updates", "[T17]") {
         engine_core::InstanceId id = 0;
         const engine_core::ColorRgb* tint = nullptr;
         std::atomic<int>* stage = nullptr;
-        void perform(const engine_core::VisualSnapshot& snapshot, int) override {
+        void perform(const engine_core::VisualSnapshot& snapshot) override {
             if (stage->load() != 1) {
                 return;
             }
@@ -1110,7 +1110,7 @@ TEST_CASE("RenderStepped writes this frame and PostRender does not", "[T21]") {
         engine_core::Transform* snapped = nullptr;
         engine_core::WriteOrigin* origin = nullptr;
         const engine_core::Transform* posed = nullptr;
-        void perform(const engine_core::VisualSnapshot& snapshot, int) override {
+        void perform(const engine_core::VisualSnapshot& snapshot) override {
             if (stage->load() != 2) {
                 return;
             }

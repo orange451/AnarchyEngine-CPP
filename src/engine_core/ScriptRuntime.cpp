@@ -4,6 +4,7 @@
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
 #include "TestTriangle.hpp"
+#include "Vector3.hpp"
 
 #include "lualib.h"
 #include "luacode.h"
@@ -138,43 +139,6 @@ bool read_color(lua_State* state, int index, ColorRgb& color) {
     color.b = component("b", 3, 0.f);
     color.a = component("a", 4, 1.f);
     return true;
-}
-
-bool read_position(lua_State* state, int index, float& x, float& y, float& z) {
-    if (!lua_istable(state, index)) {
-        return false;
-    }
-    auto component = [&](const char* name, int slot, float fallback) {
-        lua_getfield(state, index, name);
-        if (lua_isnumber(state, -1)) {
-            const float value = static_cast<float>(lua_tonumber(state, -1));
-            lua_pop(state, 1);
-            return value;
-        }
-        lua_pop(state, 1);
-        lua_rawgeti(state, index, slot);
-        if (lua_isnumber(state, -1)) {
-            const float value = static_cast<float>(lua_tonumber(state, -1));
-            lua_pop(state, 1);
-            return value;
-        }
-        lua_pop(state, 1);
-        return fallback;
-    };
-    x = component("x", 1, x);
-    y = component("y", 2, y);
-    z = component("z", 3, z);
-    return true;
-}
-
-void push_position(lua_State* state, Vec3 position) {
-    lua_newtable(state);
-    lua_pushnumber(state, position.x);
-    lua_setfield(state, -2, "x");
-    lua_pushnumber(state, position.y);
-    lua_setfield(state, -2, "y");
-    lua_pushnumber(state, position.z);
-    lua_setfield(state, -2, "z");
 }
 
 void push_color(lua_State* state, ColorRgb color) {
@@ -630,6 +594,8 @@ void open_host_libraries(lua_State* state) {
     lua_setglobal(state, "_G");
     lua_newtable(state);
     lua_setglobal(state, "shared");
+
+    open_vector3(state);
 }
 
 lua_State* ScriptRuntime::create_state(bool console) {
@@ -1470,7 +1436,7 @@ void push_registered(lua_State* state, ScriptRuntime* runtime, const LuaSlot& sl
         runtime->push_instance(state, slot.id);
         return;
     case LuaSlot::Kind::Vec3:
-        push_position(state, slot.vec);
+        lua_pushvector(state, slot.vec.x, slot.vec.y, slot.vec.z);
         return;
     case LuaSlot::Kind::Color:
         push_color(state, slot.color);
@@ -1576,18 +1542,12 @@ int ScriptBindings::instance_newindex(lua_State* state) {
                 slot.id = parent->id;
             }
         } else if (type == "Vector3") {
-            LuaSlot current;
-            if (field->read != nullptr) {
-                field->read(*runtime->model_, *object, current);
-            }
-            float x = current.vec.x;
-            float y = current.vec.y;
-            float z = current.vec.z;
-            if (!read_position(state, 3, x, y, z)) {
-                luaL_error(state, "%s expects a table", field->name);
+            const float* components = lua_tovector(state, 3);
+            if (components == nullptr) {
+                luaL_error(state, "%s expects a Vector3", field->name);
             }
             slot.kind = LuaSlot::Kind::Vec3;
-            slot.vec = Vec3{x, y, z};
+            slot.vec = Vec3{components[0], components[1], components[2]};
         } else if (type == "Color") {
             if (!read_color(state, 3, slot.color)) {
                 luaL_error(state, "%s expects a table", field->name);

@@ -124,6 +124,7 @@ add_library(engine_core STATIC
     src/engine_core/Engine.cpp
     src/engine_core/LuaEngine.cpp
     src/engine_core/LuaApi.cpp
+    src/engine_core/Vector3.cpp
     src/engine_core/LuaReflect.cpp
     src/engine_core/Script.cpp
     src/engine_core/ScriptRuntime.cpp

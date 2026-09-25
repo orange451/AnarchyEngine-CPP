@@ -2129,6 +2129,271 @@ TEST_CASE("S12 a Luau Heartbeat connection runs on the simulation thread", "[S12
     REQUIRE(hits.load() >= 3);
 }
 
+TEST_CASE("Vector3 is the triangle position", "[vector3]") {
+    ScriptRig rig;
+    engine_core::TestTriangle& triangle = rig.model.create<engine_core::TestTriangle>();
+    rig.model.set_name(triangle.id(), "Tri0");
+    rig.model.set_parent(triangle.id(), rig.model.id());
+    triangle.set_position(-0.58f, 0.38f, 0.f);
+    add_script(rig.model, "Main", R"(
+        local tri = game:FindFirstChild("Tri0")
+        local home = tri.Position
+        _G.read_x = home.X
+        _G.read_y = home.Y
+        _G.read_z = home.Z
+        _G.lower = home.x == home.X and home.y == home.Y and home.z == home.Z
+        _G.typeof_ok = typeof(home) == "Vector3" and typeof(vector.create(1, 2, 3)) == "Vector3"
+        _G.type_ok = type(home) == "vector" and type(Vector3.new()) == "vector"
+        _G.text = tostring(Vector3.new(5, 2, 10)) == "5, 2, 10"
+        _G.text_neg = tostring(Vector3.new(-1, -2, -3)) == "-1, -2, -3"
+        _G.text_neg0 = tostring(-Vector3.xAxis) == "-1, -0, -0"
+
+        local empty = Vector3.new()
+        _G.empty = empty.X == 0 and empty.Y == 0 and empty.Z == 0
+        local partial = Vector3.new(4)
+        _G.partial = partial.X == 4 and partial.Y == 0 and partial.Z == 0
+        _G.nil_rejected = not pcall(function() return Vector3.new(nil) end)
+        _G.bad_new = not pcall(function() return Vector3.new("no") end)
+
+        _G.zero = Vector3.zero.Magnitude == 0 and Vector3.zero == Vector3.new()
+        _G.one = Vector3.one == Vector3.new(1, 1, 1)
+        _G.axes = Vector3.xAxis == Vector3.new(1, 0, 0) and Vector3.yAxis == Vector3.new(0, 1, 0) and
+            Vector3.zAxis == Vector3.new(0, 0, 1)
+
+        local sum = Vector3.new(1, 2, 3) + Vector3.new(4, 5, 6)
+        _G.sum_x, _G.sum_y, _G.sum_z = sum.X, sum.Y, sum.Z
+        local diff = Vector3.new(4, 5, 6) - Vector3.new(1, 2, 3)
+        _G.diff_x = diff.X
+        local scaled = Vector3.new(1, 2, 3) * 2
+        local left = 2 * Vector3.xAxis
+        _G.scaled_y = scaled.Y
+        _G.left_x = left.X
+        local product = Vector3.new(2, 3, 4) * Vector3.new(5, 6, 7)
+        _G.prod_x, _G.prod_y, _G.prod_z = product.X, product.Y, product.Z
+        local quotient = Vector3.new(4, 6, 8) / 2
+        _G.quot_z = quotient.Z
+        local divided = Vector3.new(4, 9, 8) / Vector3.new(2, 3, 4)
+        _G.div_y = divided.Y
+        local floored = Vector3.new(5, 7, 9) // 2
+        _G.floor_x, _G.floor_y, _G.floor_z = floored.X, floored.Y, floored.Z
+        local neg = -Vector3.new(1, -2, 3)
+        _G.neg_x, _G.neg_y, _G.neg_z = neg.X, neg.Y, neg.Z
+        _G.eq = Vector3.new(1, 2, 3) == Vector3.new(1, 2, 3)
+        _G.neq = Vector3.new(1, 2, 3) ~= Vector3.new(1, 2, 4)
+
+        _G.mag = Vector3.new(3, 4, 0).Magnitude
+        local unit = Vector3.new(3, 4, 0).Unit
+        _G.ux, _G.uy, _G.uz, _G.umag = unit.X, unit.Y, unit.Z, unit.Magnitude
+        local nan = Vector3.zero.Unit
+        _G.unit_nan = nan.X ~= nan.X and nan.Y ~= nan.Y and nan.Z ~= nan.Z
+
+        local absolute = Vector3.new(-2, 4, -6):Abs()
+        _G.abs_x, _G.abs_y, _G.abs_z = absolute.X, absolute.Y, absolute.Z
+        local ceiled = Vector3.new(-2.6, 5.1, 8.8):Ceil()
+        _G.ceil_x, _G.ceil_y, _G.ceil_z = ceiled.X, ceiled.Y, ceiled.Z
+        local flo = Vector3.new(-2.6, 5.1, 8.8):Floor()
+        _G.flo_x, _G.flo_y, _G.flo_z = flo.X, flo.Y, flo.Z
+        local signed = Vector3.new(-2.6, 5.1, 0):Sign()
+        _G.sign_x, _G.sign_y, _G.sign_z = signed.X, signed.Y, signed.Z
+
+        local cross = Vector3.xAxis:Cross(Vector3.yAxis)
+        _G.cross_x, _G.cross_y, _G.cross_z = cross.X, cross.Y, cross.Z
+        local back = Vector3.yAxis:Cross(Vector3.xAxis)
+        _G.back_z = back.Z
+        _G.dot = Vector3.new(1, 2, 3):Dot(Vector3.new(4, 5, 6))
+        _G.perp = Vector3.xAxis:Dot(Vector3.yAxis)
+        _G.angle = Vector3.xAxis:Angle(Vector3.yAxis)
+        _G.signed_angle = Vector3.xAxis:Angle(Vector3.yAxis, Vector3.zAxis)
+        _G.neg_angle = Vector3.yAxis:Angle(Vector3.xAxis, Vector3.zAxis)
+        _G.dot_missing = not pcall(function() return Vector3.xAxis:Dot() end)
+
+        local near = Vector3.new(1, 2, 3)
+        _G.fuzzy_same = near:FuzzyEq(Vector3.new(1, 2, 3))
+        _G.fuzzy_near = near:FuzzyEq(near + Vector3.new(1e-6, 0, 0))
+        _G.fuzzy_tight = near:FuzzyEq(near + Vector3.new(1e-6, 0, 0), 1e-8) == false
+        _G.fuzzy_far = Vector3.zero:FuzzyEq(Vector3.xAxis) == false
+        _G.fuzzy_scale = Vector3.new(100, 0, 0):FuzzyEq(Vector3.new(109, 0, 0), 10)
+
+        local lerped = Vector3.zero:Lerp(Vector3.new(10, 0, 0), 0.25)
+        _G.lerp = lerped.X
+        _G.lerp0 = Vector3.new(3, 4, 5):Lerp(Vector3.new(9, 9, 9), 0) == Vector3.new(3, 4, 5)
+        _G.lerp1 = Vector3.zero:Lerp(Vector3.one, 1) == Vector3.one
+        _G.lerp2 = Vector3.zero:Lerp(Vector3.new(10, 0, 0), 2).X
+        local high = Vector3.new(1, 2, 1):Max(Vector3.new(2, 1, 2))
+        _G.max_x, _G.max_y, _G.max_z = high.X, high.Y, high.Z
+        local low = Vector3.new(1, 2, 1):Min(Vector3.new(2, 1, 2))
+        _G.min_x, _G.min_y, _G.min_z = low.X, low.Y, low.Z
+
+        local frozen = Vector3.new(1, 2, 3)
+        _G.write_rejected = not pcall(function() frozen.X = 9 end) and frozen.X == 1
+        _G.missing = not pcall(function() return frozen.Nope end)
+
+        _G.right = Vector3.FromNormalId(Enum.NormalId.Right) == Vector3.xAxis
+        _G.left = Vector3.FromNormalId(Enum.NormalId.Left) == -Vector3.xAxis
+        _G.top = Vector3.FromNormalId(Enum.NormalId.Top) == Vector3.yAxis
+        _G.bottom = Vector3.FromNormalId(Enum.NormalId.Bottom) == -Vector3.yAxis
+        _G.back_n = Vector3.FromNormalId(Enum.NormalId.Back) == Vector3.zAxis
+        _G.front = Vector3.FromNormalId(Enum.NormalId.Front) == -Vector3.zAxis
+        _G.axis_x = Vector3.FromAxis(Enum.Axis.X) == Vector3.xAxis
+        _G.axis_y = Vector3.FromAxis(Enum.Axis.Y) == Vector3.yAxis
+        _G.axis_z = Vector3.FromAxis(Enum.Axis.Z) == Vector3.zAxis
+        _G.enum_name = Enum.NormalId.Front.Name == "Front"
+        _G.enum_value = Enum.NormalId.Front.Value == 5
+        _G.enum_text = tostring(Enum.NormalId.Front) == "Enum.NormalId.Front"
+        _G.enum_type = typeof(Enum.NormalId.Front) == "EnumItem"
+        _G.enum_same = Enum.NormalId.Front.EnumType == Enum.NormalId
+        _G.wrong_enum = not pcall(function() return Vector3.FromNormalId(Enum.Axis.X) end)
+        _G.wrong_axis = not pcall(function() return Vector3.FromAxis(Enum.NormalId.Top) end)
+
+        local ok, err = pcall(function()
+            tri.Position = {x = 1, y = 2, z = 3}
+        end)
+        _G.table_rejected = not ok
+        _G.table_msg = type(err) == "string" and string.find(err, "Vector3", 1, true) ~= nil
+        _G.held = tri.Position.X == home.X and tri.Position.Y == home.Y and tri.Position.Z == home.Z
+
+        tri.Position = vector.create(3, 4, 5)
+        _G.vec_x, _G.vec_y, _G.vec_z = tri.Position.X, tri.Position.Y, tri.Position.Z
+        tri.Position = home + Vector3.new(0.5, 0, 0)
+        _G.hop_x = tri.Position.X
+        _G.hop_y = tri.Position.Y
+        tri.Position = Vector3.new(1.5, -2, 0.25)
+        _G.set_x, _G.set_y, _G.set_z = tri.Position.X, tri.Position.Y, tri.Position.Z
+    )");
+
+    rig.model.start_simulation();
+    rig.frames(1);
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
+
+    auto flag = [&](const char* name) {
+        bool value = false;
+        INFO(name);
+        REQUIRE(rig.runtime.global_boolean(name, value));
+        REQUIRE(value);
+        return value;
+    };
+    auto number = [&](const char* name) {
+        double value = 0;
+        INFO(name);
+        REQUIRE(rig.runtime.global_number(name, value));
+        return value;
+    };
+
+    REQUIRE(number("read_x") == static_cast<double>(-0.58f));
+    REQUIRE(number("read_y") == static_cast<double>(0.38f));
+    REQUIRE(number("read_z") == 0.0);
+    flag("lower");
+    flag("typeof_ok");
+    flag("type_ok");
+    flag("text");
+    flag("text_neg");
+    flag("text_neg0");
+    flag("empty");
+    flag("partial");
+    flag("nil_rejected");
+    flag("bad_new");
+    flag("zero");
+    flag("one");
+    flag("axes");
+    REQUIRE(number("sum_x") == 5);
+    REQUIRE(number("sum_y") == 7);
+    REQUIRE(number("sum_z") == 9);
+    REQUIRE(number("diff_x") == 3);
+    REQUIRE(number("scaled_y") == 4);
+    REQUIRE(number("left_x") == 2);
+    REQUIRE(number("prod_x") == 10);
+    REQUIRE(number("prod_y") == 18);
+    REQUIRE(number("prod_z") == 28);
+    REQUIRE(number("quot_z") == 4);
+    REQUIRE(number("div_y") == 3);
+    REQUIRE(number("floor_x") == 2);
+    REQUIRE(number("floor_y") == 3);
+    REQUIRE(number("floor_z") == 4);
+    REQUIRE(number("neg_x") == -1);
+    REQUIRE(number("neg_y") == 2);
+    REQUIRE(number("neg_z") == -3);
+    flag("eq");
+    flag("neq");
+    REQUIRE(number("mag") == 5);
+    REQUIRE(std::fabs(number("ux") - 0.6) < 1e-5);
+    REQUIRE(std::fabs(number("uy") - 0.8) < 1e-5);
+    REQUIRE(number("uz") == 0);
+    REQUIRE(std::fabs(number("umag") - 1.0) < 1e-5);
+    flag("unit_nan");
+    REQUIRE(number("abs_x") == 2);
+    REQUIRE(number("abs_y") == 4);
+    REQUIRE(number("abs_z") == 6);
+    REQUIRE(number("ceil_x") == -2);
+    REQUIRE(number("ceil_y") == 6);
+    REQUIRE(number("ceil_z") == 9);
+    REQUIRE(number("flo_x") == -3);
+    REQUIRE(number("flo_y") == 5);
+    REQUIRE(number("flo_z") == 8);
+    REQUIRE(number("sign_x") == -1);
+    REQUIRE(number("sign_y") == 1);
+    REQUIRE(number("sign_z") == 0);
+    REQUIRE(number("cross_x") == 0);
+    REQUIRE(number("cross_y") == 0);
+    REQUIRE(number("cross_z") == 1);
+    REQUIRE(number("back_z") == -1);
+    REQUIRE(number("dot") == 32);
+    REQUIRE(number("perp") == 0);
+    REQUIRE(std::fabs(number("angle") - 1.5707963267948966) < 1e-5);
+    REQUIRE(std::fabs(number("signed_angle") - 1.5707963267948966) < 1e-5);
+    REQUIRE(std::fabs(number("neg_angle") + 1.5707963267948966) < 1e-5);
+    flag("dot_missing");
+    flag("fuzzy_same");
+    flag("fuzzy_near");
+    flag("fuzzy_tight");
+    flag("fuzzy_far");
+    flag("fuzzy_scale");
+    REQUIRE(number("lerp") == 2.5);
+    flag("lerp0");
+    flag("lerp1");
+    REQUIRE(number("lerp2") == 20);
+    REQUIRE(number("max_x") == 2);
+    REQUIRE(number("max_y") == 2);
+    REQUIRE(number("max_z") == 2);
+    REQUIRE(number("min_x") == 1);
+    REQUIRE(number("min_y") == 1);
+    REQUIRE(number("min_z") == 1);
+    flag("write_rejected");
+    flag("missing");
+    flag("right");
+    flag("left");
+    flag("top");
+    flag("bottom");
+    flag("back_n");
+    flag("front");
+    flag("axis_x");
+    flag("axis_y");
+    flag("axis_z");
+    flag("enum_name");
+    flag("enum_value");
+    flag("enum_text");
+    flag("enum_type");
+    flag("enum_same");
+    flag("wrong_enum");
+    flag("wrong_axis");
+    flag("table_rejected");
+    flag("table_msg");
+    flag("held");
+    REQUIRE(number("vec_x") == 3);
+    REQUIRE(number("vec_y") == 4);
+    REQUIRE(number("vec_z") == 5);
+    REQUIRE(number("hop_x") == static_cast<double>(-0.58f + 0.5f));
+    REQUIRE(number("hop_y") == static_cast<double>(0.38f));
+    REQUIRE(number("set_x") == 1.5);
+    REQUIRE(number("set_y") == -2);
+    REQUIRE(number("set_z") == 0.25);
+
+    const engine_core::Vec3 position = triangle.position();
+    REQUIRE(position.x == 1.5f);
+    REQUIRE(position.y == -2.f);
+    REQUIRE(position.z == 0.25f);
+}
+
 TEST_CASE("scene scripts hop a triangle on task.wait and stop restores the pose", "[scene]") {
     ScriptRig rig;
     engine_core::TestTriangle& slow = rig.model.create<engine_core::TestTriangle>();
@@ -2147,7 +2412,7 @@ TEST_CASE("scene scripts hop a triangle on task.wait and stop restores the pose"
             task.wait(0.5)
             n = n + 1
             local hop = (n % 2 == 1) and 0.45 or 0
-            tri.Position = {x = home.x + hop, y = home.y, z = home.z}
+            tri.Position = home + Vector3.new(hop, 0, 0)
         end
     )");
     add_script(rig.model, "HopFast", R"(
@@ -2158,7 +2423,7 @@ TEST_CASE("scene scripts hop a triangle on task.wait and stop restores the pose"
             task.wait(0.2)
             n = n + 1
             local hop = (n % 2 == 1) and 0.35 or 0
-            tri.Position = {x = home.x, y = home.y + hop, z = home.z}
+            tri.Position = home + Vector3.new(0, hop, 0)
         end
     )");
 

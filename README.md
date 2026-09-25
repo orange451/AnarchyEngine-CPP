@@ -22,7 +22,7 @@ local home = tri.Position
 
 while true do
     task.wait(0.5)
-    tri.Position = {x = home.x + 0.45, y = home.y, z = home.z}
+    tri.Position = home + Vector3.new(0.45, 0, 0)
 end
 ```
 

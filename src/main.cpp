@@ -53,7 +53,7 @@ while true do
     task.wait(0.5)
     n = n + 1
     local hop = (n % 2 == 1) and 0.45 or 0
-    tri.Position = {x = home.x + hop, y = home.y, z = home.z}
+    tri.Position = home + Vector3.new(hop, 0, 0)
 end
 )");
         add_script("HopFast", R"(
@@ -64,7 +64,7 @@ while true do
     task.wait(0.2)
     n = n + 1
     local hop = (n % 2 == 1) and 0.35 or 0
-    tri.Position = {x = home.x, y = home.y + hop, z = home.z}
+    tri.Position = home + Vector3.new(0, hop, 0)
 end
 )");
         layout_->start();

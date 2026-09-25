@@ -44,6 +44,8 @@ void expect_missing(const ide::CompletionList& list, const char* name, const cha
     }
 }
 
+void expect_detail(const ide::CompletionList& list, const char* name, const char* detail, const char* label);
+
 void expect_call(const ide::CompletionList& list, const char* name, bool call, const char* label) {
     bool actual = false;
     if (!has_item(list, name, &actual)) {
@@ -183,6 +185,67 @@ void testInstances() {
     const ide::CompletionList shadow = at_end("local task = game\ntask.");
     expect_has(shadow, "Name", "shadowed task");
     expect_missing(shadow, "wait", "shadowed task");
+}
+
+void testVector3() {
+    const ide::CompletionList library = at_end("Vector3.");
+    expect_has(library, "new", "Vector3.new");
+    expect_has(library, "zero", "Vector3.zero");
+    expect_has(library, "one", "Vector3.one");
+    expect_has(library, "xAxis", "Vector3.xAxis");
+    expect_has(library, "FromNormalId", "Vector3.FromNormalId");
+    expect_has(library, "FromAxis", "Vector3.FromAxis");
+    expect_call(library, "new", true, "Vector3.new");
+    expect_call(library, "zero", false, "Vector3.zero");
+    expect_missing(library, "X", "Vector3 library");
+    expect_detail(library, "new", "function", "Vector3.new");
+    expect_detail(library, "zero", "Vector3", "Vector3.zero");
+
+    const ide::CompletionList built = at_end("Vector3.new().");
+    expect_has(built, "X", "Vector3.X");
+    expect_has(built, "Y", "Vector3.Y");
+    expect_has(built, "Z", "Vector3.Z");
+    expect_has(built, "Magnitude", "Vector3.Magnitude");
+    expect_has(built, "Unit", "Vector3.Unit");
+    expect_has(built, "Abs", "Vector3.Abs");
+    expect_has(built, "Dot", "Vector3.Dot");
+    expect_has(built, "FuzzyEq", "Vector3.FuzzyEq");
+    expect_call(built, "X", false, "Vector3.X");
+    expect_call(built, "Abs", true, "Vector3.Abs");
+    expect_detail(built, "X", "number", "Vector3.X");
+    expect_detail(built, "Unit", "Vector3", "Vector3.Unit");
+    expect_detail(built, "Dot", "function", "Vector3.Dot");
+    expect_missing(built, "new", "Vector3 value");
+
+    const ide::CompletionList colon = at_end("Vector3.new():");
+    expect_has(colon, "Cross", "Vector3:Cross");
+    expect_has(colon, "Lerp", "Vector3:Lerp");
+    expect_missing(colon, "X", "Vector3:X");
+    expect_missing(colon, "Magnitude", "Vector3:Magnitude");
+
+    const ide::CompletionList constant = at_end("Vector3.zero.");
+    expect_has(constant, "Z", "Vector3.zero.Z");
+    expect_has(constant, "Unit", "Vector3.zero.Unit");
+
+    const ide::CompletionList normal = at_end("Vector3.FromNormalId().");
+    expect_has(normal, "X", "FromNormalId().X");
+
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(4, 0, "Tri0", "TestTriangle"));
+    world.push_back(node(5, 0, "Main", "Script"));
+    const ide::CompletionList position = at_end("local tri = game:FindFirstChild(\"Tri0\")\ntri.Position.", world, 5);
+    expect_has(position, "X", "Position.X");
+    expect_has(position, "Magnitude", "Position.Magnitude");
+    expect_has(position, "Abs", "Position.Abs");
+    expect_missing(position, "x", "Position.x");
+
+    const ide::CompletionList named = at_end("Vec");
+    expect_has(named, "Vector3", "Vec");
+
+    const ide::CompletionList enums = at_end("Enum.");
+    expect_has(enums, "NormalId", "Enum.NormalId");
+    expect_has(enums, "Axis", "Enum.Axis");
 }
 
 void testModule() {
@@ -448,6 +511,7 @@ int RunLuauCompleteTests() {
     try {
         testLibraries();
         testInstances();
+        testVector3();
         testModule();
         testNames();
         testConsole();

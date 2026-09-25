@@ -400,6 +400,8 @@ public:
             if (input.type_name == "string" || input.type_name == "number" || input.type_name == "boolean" ||
                 input.type_name == "vector" || input.type_name == "function" || input.type_name == "table") {
                 shape->value_type = input.type_name;
+            } else if (engine_core::lua_class_known(input.type_name.c_str())) {
+                shape->class_name = input.type_name;
             }
             if (input.type_name == "function") {
                 shape->call = true;
@@ -491,6 +493,9 @@ public:
             for (const engine_core::LuaSymbol& symbol : symbols) {
                 if (symbol.name != name) {
                     continue;
+                }
+                if (!symbol.call && engine_core::lua_class_known(symbol.type_name.c_str())) {
+                    return class_shape(symbol.type_name, kNoInstance);
                 }
                 Shape* shape = fresh();
                 if (symbol.type_name == "table") {

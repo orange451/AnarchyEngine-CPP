@@ -147,8 +147,6 @@ namespace {
 LuaField component(const char* name) { return lua_property(name, "number", true, nullptr, nullptr); }
 
 ANARCHY_LUA_REGISTER(register_value_classes) {
-    const LuaField vector[] = {component("x"), component("y"), component("z")};
-    register_lua_class("Vector3", nullptr, vector, 3);
     const LuaField color[] = {component("r"), component("g"), component("b"), component("a")};
     register_lua_class("Color", nullptr, color, 4);
     register_lua_class("Transform", nullptr, nullptr, 0);

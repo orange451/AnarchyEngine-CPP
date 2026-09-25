@@ -2,6 +2,7 @@
 
 #include "Contract.hpp"
 #include "GameObject.hpp"
+#include "LuaApi.hpp"
 #include "TestTriangle.hpp"
 
 #include "lualib.h"
@@ -248,6 +249,7 @@ struct ScriptBindings {
     static int instance_service(lua_State* state);
     static int signal_connect(lua_State* state);
     static int signal_wait(lua_State* state);
+    static int signal_index(lua_State* state);
     static int connection_disconnect(lua_State* state);
     static int connection_gc(lua_State* state);
     static int connection_index(lua_State* state);
@@ -551,6 +553,85 @@ void ScriptRuntime::assert_lua_thread() const {
     }
 }
 
+void open_host_libraries(lua_State* state) {
+    for (const luaL_Reg* library = kLibraries; library->func != nullptr; ++library) {
+        lua_pushcfunction(state, library->func, nullptr);
+        lua_pushstring(state, library->name);
+        lua_call(state, 1, 0);
+    }
+    lua_pushcfunction(state, &ScriptRuntime::lua_print, "print");
+    lua_setglobal(state, "print");
+    for (const char* const* name = kRemoved; *name != nullptr; ++name) {
+        lua_pushnil(state);
+        lua_setglobal(state, *name);
+    }
+
+    auto metatable = [&](const char* name) {
+        luaL_newmetatable(state, name);
+        return lua_gettop(state);
+    };
+    const int instance_mt = metatable(kInstanceMeta);
+    lua_pushcfunction(state, &ScriptBindings::instance_index, "index");
+    lua_setfield(state, instance_mt, "__index");
+    lua_pushcfunction(state, &ScriptBindings::instance_newindex, "newindex");
+    lua_setfield(state, instance_mt, "__newindex");
+    lua_pushcfunction(state, &ScriptBindings::instance_tostring, "tostring");
+    lua_setfield(state, instance_mt, "__tostring");
+    lua_setreadonly(state, instance_mt, 1);
+
+    const int signal_mt = metatable(kSignalMeta);
+    lua_pushcfunction(state, &ScriptBindings::signal_index, "index");
+    lua_setfield(state, signal_mt, "__index");
+    lua_setreadonly(state, signal_mt, 1);
+
+    const int connection_mt = metatable(kConnectionMeta);
+    lua_pushcfunction(state, &ScriptBindings::connection_index, "index");
+    lua_setfield(state, connection_mt, "__index");
+    lua_pushcfunction(state, &ScriptBindings::connection_gc, "gc");
+    lua_setfield(state, connection_mt, "__gc");
+    lua_setreadonly(state, connection_mt, 1);
+
+    const int thread_mt = metatable(kThreadMeta);
+    lua_pushcfunction(state, &ScriptBindings::thread_index, "index");
+    lua_setfield(state, thread_mt, "__index");
+    lua_setreadonly(state, thread_mt, 1);
+
+    const int service_mt = metatable(kServiceMeta);
+    lua_pushcfunction(state, &ScriptBindings::service_index, "index");
+    lua_setfield(state, service_mt, "__index");
+    lua_setreadonly(state, service_mt, 1);
+    lua_pop(state, 5);
+
+    lua_newtable(state);
+    lua_pushcfunction(state, &ScriptBindings::task_wait, "wait");
+    lua_setfield(state, -2, "wait");
+    lua_pushcfunction(state, &ScriptBindings::task_spawn, "spawn");
+    lua_setfield(state, -2, "spawn");
+    lua_pushcfunction(state, &ScriptBindings::task_defer, "defer");
+    lua_setfield(state, -2, "defer");
+    lua_pushcfunction(state, &ScriptBindings::task_delay, "delay");
+    lua_setfield(state, -2, "delay");
+    lua_pushcfunction(state, &ScriptBindings::task_cancel, "cancel");
+    lua_setfield(state, -2, "cancel");
+    lua_setglobal(state, "task");
+
+    lua_newtable(state);
+    lua_pushcfunction(state, &ScriptBindings::instance_new, "new");
+    lua_setfield(state, -2, "new");
+    lua_note_result("Instance", "new", "", true);
+    lua_setglobal(state, "Instance");
+
+    lua_pushcfunction(state, &ScriptBindings::require, "require");
+    lua_setglobal(state, "require");
+
+    // The play state replaces these after sandboxing. The reflection state keeps
+    // them, so completion sees the same globals the command line has.
+    lua_newtable(state);
+    lua_setglobal(state, "_G");
+    lua_newtable(state);
+    lua_setglobal(state, "shared");
+}
+
 lua_State* ScriptRuntime::create_state(bool console) {
     lua_State* state = lua_newstate(console ? &ScriptRuntime::allocate_console : &ScriptRuntime::allocate, this);
     if (state == nullptr) {
@@ -560,80 +641,7 @@ lua_State* ScriptRuntime::create_state(bool console) {
         lua_Callbacks* callbacks = lua_callbacks(state);
         callbacks->userdata = this;
         callbacks->panic = &ScriptRuntime::panic;
-
-        for (const luaL_Reg* library = kLibraries; library->func != nullptr; ++library) {
-            lua_pushcfunction(state, library->func, nullptr);
-            lua_pushstring(state, library->name);
-            lua_call(state, 1, 0);
-        }
-        lua_pushcfunction(state, &ScriptRuntime::lua_print, "print");
-        lua_setglobal(state, "print");
-        for (const char* const* name = kRemoved; *name != nullptr; ++name) {
-            lua_pushnil(state);
-            lua_setglobal(state, *name);
-        }
-
-        auto metatable = [&](const char* name) {
-            luaL_newmetatable(state, name);
-            return lua_gettop(state);
-        };
-        const int instance_mt = metatable(kInstanceMeta);
-        lua_pushcfunction(state, &ScriptBindings::instance_index, "index");
-        lua_setfield(state, instance_mt, "__index");
-        lua_pushcfunction(state, &ScriptBindings::instance_newindex, "newindex");
-        lua_setfield(state, instance_mt, "__newindex");
-        lua_pushcfunction(state, &ScriptBindings::instance_tostring, "tostring");
-        lua_setfield(state, instance_mt, "__tostring");
-        lua_setreadonly(state, instance_mt, 1);
-
-        const int signal_mt = metatable(kSignalMeta);
-        lua_newtable(state);
-        lua_pushcfunction(state, &ScriptBindings::signal_connect, "Connect");
-        lua_setfield(state, -2, "Connect");
-        lua_pushcfunction(state, &ScriptBindings::signal_wait, "Wait");
-        lua_setfield(state, -2, "Wait");
-        lua_setreadonly(state, -1, 1);
-        lua_setfield(state, signal_mt, "__index");
-        lua_setreadonly(state, signal_mt, 1);
-
-        const int connection_mt = metatable(kConnectionMeta);
-        lua_pushcfunction(state, &ScriptBindings::connection_index, "index");
-        lua_setfield(state, connection_mt, "__index");
-        lua_pushcfunction(state, &ScriptBindings::connection_gc, "gc");
-        lua_setfield(state, connection_mt, "__gc");
-        lua_setreadonly(state, connection_mt, 1);
-
-        const int thread_mt = metatable(kThreadMeta);
-        lua_pushcfunction(state, &ScriptBindings::thread_index, "index");
-        lua_setfield(state, thread_mt, "__index");
-        lua_setreadonly(state, thread_mt, 1);
-
-        const int service_mt = metatable(kServiceMeta);
-        lua_pushcfunction(state, &ScriptBindings::service_index, "index");
-        lua_setfield(state, service_mt, "__index");
-        lua_setreadonly(state, service_mt, 1);
-        lua_pop(state, 5);
-
-        lua_newtable(state);
-        lua_pushcfunction(state, &ScriptBindings::task_wait, "wait");
-        lua_setfield(state, -2, "wait");
-        lua_pushcfunction(state, &ScriptBindings::task_spawn, "spawn");
-        lua_setfield(state, -2, "spawn");
-        lua_pushcfunction(state, &ScriptBindings::task_defer, "defer");
-        lua_setfield(state, -2, "defer");
-        lua_pushcfunction(state, &ScriptBindings::task_delay, "delay");
-        lua_setfield(state, -2, "delay");
-        lua_pushcfunction(state, &ScriptBindings::task_cancel, "cancel");
-        lua_setfield(state, -2, "cancel");
-        lua_setglobal(state, "task");
-
-        lua_newtable(state);
-        lua_pushcfunction(state, &ScriptBindings::instance_new, "new");
-        lua_setfield(state, -2, "new");
-        lua_setglobal(state, "Instance");
-
-        lua_pushcfunction(state, &ScriptBindings::require, "require");
-        lua_setglobal(state, "require");
+        open_host_libraries(state);
 
         luaL_sandbox(state);
         lua_setreadonly(state, LUA_GLOBALSINDEX, 0);
@@ -1432,12 +1440,65 @@ int ScriptBindings::instance_tostring(lua_State* state) {
     return 1;
 }
 
+void push_registered(lua_State* state, ScriptRuntime* runtime, const LuaSlot& slot, InstanceId id, std::uint32_t world) {
+    switch (slot.kind) {
+    case LuaSlot::Kind::Nil:
+        lua_pushnil(state);
+        return;
+    case LuaSlot::Kind::Bool:
+        lua_pushboolean(state, slot.flag ? 1 : 0);
+        return;
+    case LuaSlot::Kind::Number:
+        lua_pushnumber(state, slot.number);
+        return;
+    case LuaSlot::Kind::String:
+        lua_pushlstring(state, slot.text.data(), slot.text.size());
+        return;
+    case LuaSlot::Kind::Instance:
+        runtime->push_instance(state, slot.id);
+        return;
+    case LuaSlot::Kind::Vec3:
+        push_position(state, slot.vec);
+        return;
+    case LuaSlot::Kind::Color:
+        push_color(state, slot.color);
+        return;
+    case LuaSlot::Kind::Transform: {
+        lua_newtable(state);
+        for (int index = 0; index < 16; ++index) {
+            lua_pushnumber(state, slot.transform.m[index]);
+            lua_rawseti(state, -2, index + 1);
+        }
+        return;
+    }
+    case LuaSlot::Kind::Signal: {
+        auto* signal = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
+        *signal = SignalUd{};
+        signal->kind = 0;
+        signal->id = id;
+        signal->world = world;
+        luaL_getmetatable(state, kSignalMeta);
+        lua_setmetatable(state, -2);
+        return;
+    }
+    }
+    lua_pushnil(state);
+}
+
+void push_method(lua_State* state, const LuaField& field) {
+    if (field.call == nullptr) {
+        lua_pushnil(state);
+        return;
+    }
+    lua_pushcfunction(state, reinterpret_cast<lua_CFunction>(field.call), field.name);
+}
+
 int ScriptBindings::instance_index(lua_State* state) {
     return lua_guard(state, [&] {
         auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
         const char* key = luaL_checkstring(state, 2);
         ScriptRuntime* runtime = runtime_from(state);
-        if (runtime == nullptr) {
+        if (runtime == nullptr || runtime->model_ == nullptr) {
             lua_pushnil(state);
             return 1;
         }
@@ -1446,86 +1507,21 @@ int ScriptBindings::instance_index(lua_State* state) {
             lua_pushnil(state);
             return 1;
         }
-        if (std::strcmp(key, "Destroy") == 0) {
-            lua_pushcfunction(state, &ScriptBindings::instance_destroy, "Destroy");
+        const LuaField* field = lua_class_find(object->class_name(), key != nullptr ? key : "");
+        if (field == nullptr) {
+            lua_pushnil(state);
             return 1;
         }
-        if (std::strcmp(key, "GetChildren") == 0) {
-            lua_pushcfunction(state, &ScriptBindings::instance_children, "GetChildren");
+        if (field->method) {
+            push_method(state, *field);
             return 1;
         }
-        if (std::strcmp(key, "FindFirstChild") == 0) {
-            lua_pushcfunction(state, &ScriptBindings::instance_find, "FindFirstChild");
+        LuaSlot slot;
+        if (field->read == nullptr || !field->read(*runtime->model_, *object, slot)) {
+            lua_pushnil(state);
             return 1;
         }
-        if (std::strcmp(key, "IsA") == 0) {
-            lua_pushcfunction(state, &ScriptBindings::instance_isa, "IsA");
-            return 1;
-        }
-        if (std::strcmp(key, "GetService") == 0) {
-            lua_pushcfunction(state, &ScriptBindings::instance_service, "GetService");
-            return 1;
-        }
-        if (std::strcmp(key, "Name") == 0) {
-            const std::string name = runtime->model_->name(object->id());
-            lua_pushlstring(state, name.data(), name.size());
-            return 1;
-        }
-        if (std::strcmp(key, "ClassName") == 0) {
-            lua_pushstring(state, object->class_name());
-            return 1;
-        }
-        if (std::strcmp(key, "Parent") == 0) {
-            const InstanceId parent = runtime->model_->parent(object->id());
-            if (parent == DataModel::kNoParent) {
-                lua_pushnil(state);
-            } else {
-                runtime->push_instance(state, parent);
-            }
-            return 1;
-        }
-        if (std::strcmp(key, "Changed") == 0) {
-            auto* signal = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
-            *signal = SignalUd{};
-            signal->kind = 0;
-            signal->id = object->id();
-            signal->world = ud->world;
-            luaL_getmetatable(state, kSignalMeta);
-            lua_setmetatable(state, -2);
-            return 1;
-        }
-        if (auto* source = dynamic_cast<LuaSource*>(object)) {
-            if (std::strcmp(key, "Source") == 0) {
-                lua_pushlstring(state, source->source().data(), source->source().size());
-                return 1;
-            }
-            if (std::strcmp(key, "Enabled") == 0) {
-                lua_pushboolean(state, source->enabled() ? 1 : 0);
-                return 1;
-            }
-        }
-        if (auto* triangle = dynamic_cast<TestTriangle*>(object)) {
-            if (std::strcmp(key, "Position") == 0) {
-                push_position(state, triangle->position());
-                return 1;
-            }
-        }
-        if (auto* body = dynamic_cast<GameObject*>(object)) {
-            if (std::strcmp(key, "Color") == 0) {
-                push_color(state, body->color());
-                return 1;
-            }
-            if (std::strcmp(key, "Transform") == 0 || std::strcmp(key, "CFrame") == 0) {
-                const Transform transform = body->transform();
-                lua_newtable(state);
-                for (int index = 0; index < 16; ++index) {
-                    lua_pushnumber(state, transform.m[index]);
-                    lua_rawseti(state, -2, index + 1);
-                }
-                return 1;
-            }
-        }
-        lua_pushnil(state);
+        push_registered(state, runtime, slot, object->id(), ud->world);
         return 1;
     });
 }
@@ -1542,82 +1538,71 @@ int ScriptBindings::instance_newindex(lua_State* state) {
         if (object == nullptr) {
             luaL_error(state, "instance is gone");
         }
-        if (std::strcmp(key, "Name") == 0) {
-            const char* text = luaL_checkstring(state, 3);
-            runtime->model_->set_name(object->id(), text != nullptr ? text : "");
-            return 0;
+        const LuaField* field = lua_class_find(object->class_name(), key != nullptr ? key : "");
+        if (field == nullptr || !field->writable || field->write == nullptr || field->type_name == nullptr) {
+            luaL_error(state, "cannot set %s", key);
         }
-        if (std::strcmp(key, "Parent") == 0) {
+        LuaSlot slot;
+        const std::string_view type = field->type_name;
+        if (type == "string") {
+            std::size_t length = 0;
+            const char* text = luaL_checklstring(state, 3, &length);
+            slot.kind = LuaSlot::Kind::String;
+            slot.text.assign(text != nullptr ? text : "", length);
+        } else if (type == "boolean") {
+            slot.kind = LuaSlot::Kind::Bool;
+            slot.flag = lua_toboolean(state, 3) != 0;
+        } else if (type == "Instance") {
             if (lua_isnil(state, 3)) {
-                runtime->model_->set_parent(object->id(), DataModel::kNoParent);
-                return 0;
-            }
-            auto* parent = static_cast<InstanceUd*>(luaL_checkudata(state, 3, kInstanceMeta));
-            if (runtime->resolve_id(parent->id, parent->world) == nullptr) {
-                luaL_error(state, "instance is gone");
-            }
-            runtime->model_->set_parent(object->id(), parent->id);
-            return 0;
-        }
-        if (std::strcmp(key, "Source") == 0 || std::strcmp(key, "Enabled") == 0) {
-            auto* source = dynamic_cast<LuaSource*>(object);
-            if (source == nullptr) {
-                luaL_error(state, "property is not available");
-            }
-            if (std::strcmp(key, "Source") == 0) {
-                std::size_t length = 0;
-                const char* text = luaL_checklstring(state, 3, &length);
-                source->set_source(std::string(text != nullptr ? text : "", length));
+                slot.kind = LuaSlot::Kind::Nil;
             } else {
-                source->set_enabled(lua_toboolean(state, 3) != 0);
-            }
-            return 0;
-        }
-        if (std::strcmp(key, "Position") == 0) {
-            auto* triangle = dynamic_cast<TestTriangle*>(object);
-            if (triangle == nullptr) {
-                luaL_error(state, "property is not available");
-            }
-            const Vec3 current = triangle->position();
-            float x = current.x;
-            float y = current.y;
-            float z = current.z;
-            if (!read_position(state, 3, x, y, z)) {
-                luaL_error(state, "Position expects a table");
-            }
-            triangle->set_position(x, y, z);
-            return 0;
-        }
-        if (std::strcmp(key, "Color") == 0 || std::strcmp(key, "Transform") == 0 || std::strcmp(key, "CFrame") == 0) {
-            auto* body = dynamic_cast<GameObject*>(object);
-            if (body == nullptr) {
-                luaL_error(state, "property is not available");
-            }
-            if (std::strcmp(key, "Color") == 0) {
-                ColorRgb color;
-                if (!read_color(state, 3, color)) {
-                    luaL_error(state, "Color expects a table");
+                auto* parent = static_cast<InstanceUd*>(luaL_checkudata(state, 3, kInstanceMeta));
+                if (runtime->resolve_id(parent->id, parent->world) == nullptr) {
+                    luaL_error(state, "instance is gone");
                 }
-                body->set_color(color);
-                return 0;
+                slot.kind = LuaSlot::Kind::Instance;
+                slot.id = parent->id;
             }
+        } else if (type == "Vector3") {
+            LuaSlot current;
+            if (field->read != nullptr) {
+                field->read(*runtime->model_, *object, current);
+            }
+            float x = current.vec.x;
+            float y = current.vec.y;
+            float z = current.vec.z;
+            if (!read_position(state, 3, x, y, z)) {
+                luaL_error(state, "%s expects a table", field->name);
+            }
+            slot.kind = LuaSlot::Kind::Vec3;
+            slot.vec = Vec3{x, y, z};
+        } else if (type == "Color") {
+            if (!read_color(state, 3, slot.color)) {
+                luaL_error(state, "%s expects a table", field->name);
+            }
+            slot.kind = LuaSlot::Kind::Color;
+        } else if (type == "Transform") {
             if (!lua_istable(state, 3)) {
-                luaL_error(state, "Transform expects a table of 16 numbers");
+                luaL_error(state, "%s expects a table of 16 numbers", field->name);
             }
-            Transform transform = transform_identity();
+            slot.kind = LuaSlot::Kind::Transform;
+            slot.transform = transform_identity();
             for (int index = 0; index < 16; ++index) {
                 lua_rawgeti(state, 3, index + 1);
                 if (!lua_isnumber(state, -1)) {
                     lua_pop(state, 1);
-                    luaL_error(state, "Transform expects a table of 16 numbers");
+                    luaL_error(state, "%s expects a table of 16 numbers", field->name);
                 }
-                transform.m[index] = static_cast<float>(lua_tonumber(state, -1));
+                slot.transform.m[index] = static_cast<float>(lua_tonumber(state, -1));
                 lua_pop(state, 1);
             }
-            body->set_transform(transform);
-            return 0;
+        } else {
+            luaL_error(state, "cannot set %s", key);
         }
-        luaL_error(state, "cannot set %s", key);
+        if (!field->write(*runtime->model_, *object, slot)) {
+            luaL_error(state, "property is not available");
+        }
+        return 0;
     });
 }
 
@@ -1807,11 +1792,16 @@ int ScriptBindings::connection_gc(lua_State* state) {
 
 int ScriptBindings::connection_index(lua_State* state) {
     const char* key = luaL_checkstring(state, 2);
-    if (std::strcmp(key, "Disconnect") == 0) {
-        lua_pushcfunction(state, &ScriptBindings::connection_disconnect, "Disconnect");
+    const LuaField* field = lua_class_find("Connection", key != nullptr ? key : "");
+    if (field == nullptr) {
+        lua_pushnil(state);
         return 1;
     }
-    if (std::strcmp(key, "Connected") == 0) {
+    if (field->method) {
+        push_method(state, *field);
+        return 1;
+    }
+    if (field->tag == 1) {
         auto* connection = static_cast<Connection*>(luaL_checkudata(state, 1, kConnectionMeta));
         lua_pushboolean(state, connection->connected() ? 1 : 0);
         return 1;
@@ -1820,50 +1810,74 @@ int ScriptBindings::connection_index(lua_State* state) {
     return 1;
 }
 
+int ScriptBindings::signal_index(lua_State* state) {
+    const char* key = luaL_checkstring(state, 2);
+    const LuaField* field = lua_class_find("Signal", key != nullptr ? key : "");
+    if (field == nullptr || !field->method) {
+        lua_pushnil(state);
+        return 1;
+    }
+    push_method(state, *field);
+    return 1;
+}
+
 int ScriptBindings::service_index(lua_State* state) {
     const char* key = luaL_checkstring(state, 2);
-    auto push_phase = [&](Phase phase, bool blocked, const char* blocked_name) {
-        auto* ud = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
-        *ud = SignalUd{};
-        ud->kind = 1;
-        ud->phase = static_cast<int>(phase);
-        ud->blocked = blocked;
-        if (blocked_name != nullptr) {
-            std::strncpy(ud->blocked_name, blocked_name, sizeof(ud->blocked_name) - 1);
-        }
-        luaL_getmetatable(state, kSignalMeta);
-        lua_setmetatable(state, -2);
-    };
-    if (std::strcmp(key, "Heartbeat") == 0) {
-        push_phase(Phase::Heartbeat, false, nullptr);
-        return 1;
+    const LuaField* field = lua_class_find("RunService", key != nullptr ? key : "");
+    if (field == nullptr) {
+        luaL_error(state, "unknown RunService member");
     }
-    if (std::strcmp(key, "PreSimulation") == 0) {
-        push_phase(Phase::PreSimulation, false, nullptr);
-        return 1;
+    auto* ud = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
+    *ud = SignalUd{};
+    ud->kind = 1;
+    ud->phase = field->tag;
+    ud->blocked = field->blocked;
+    if (field->blocked && field->name != nullptr) {
+        std::strncpy(ud->blocked_name, field->name, sizeof(ud->blocked_name) - 1);
     }
-    if (std::strcmp(key, "PostSimulation") == 0) {
-        push_phase(Phase::PostSimulation, false, nullptr);
-        return 1;
-    }
-    if (std::strcmp(key, "PreAnimation") == 0) {
-        push_phase(Phase::PreAnimation, false, nullptr);
-        return 1;
-    }
-    if (std::strcmp(key, "PreRender") == 0) {
-        push_phase(Phase::PreRender, true, "PreRender");
-        return 1;
-    }
-    if (std::strcmp(key, "RenderStepped") == 0) {
-        push_phase(Phase::RenderStepped, true, "RenderStepped");
-        return 1;
-    }
-    luaL_error(state, "unknown RunService member");
+    luaL_getmetatable(state, kSignalMeta);
+    lua_setmetatable(state, -2);
+    return 1;
 }
 
 int ScriptBindings::thread_index(lua_State* state) {
     lua_pushnil(state);
     return 1;
+}
+
+ANARCHY_LUA_REGISTER(register_script_methods) {
+    const LuaField methods[] = {
+        lua_method("Destroy", "nil", reinterpret_cast<void*>(&ScriptBindings::instance_destroy)),
+        lua_method("GetChildren", "Instance", reinterpret_cast<void*>(&ScriptBindings::instance_children), false, false, true),
+        lua_method("FindFirstChild", "Instance", reinterpret_cast<void*>(&ScriptBindings::instance_find), false, true, false),
+        lua_method("IsA", "boolean", reinterpret_cast<void*>(&ScriptBindings::instance_isa)),
+        lua_method("GetService", "", reinterpret_cast<void*>(&ScriptBindings::instance_service), true, false, false),
+    };
+    register_lua_class("DataModel", nullptr, methods, 5);
+
+    const LuaField signal[] = {
+        lua_method("Connect", "Connection", reinterpret_cast<void*>(&ScriptBindings::signal_connect)),
+        lua_method("Wait", "nil", reinterpret_cast<void*>(&ScriptBindings::signal_wait)),
+    };
+    register_lua_class("Signal", nullptr, signal, 2);
+
+    LuaField connected = lua_property("Connected", "boolean", false, nullptr, nullptr);
+    connected.tag = 1;
+    const LuaField connection[] = {
+        lua_method("Disconnect", "nil", reinterpret_cast<void*>(&ScriptBindings::connection_disconnect)),
+        connected,
+    };
+    register_lua_class("Connection", nullptr, connection, 2);
+
+    const LuaField service[] = {
+        lua_signal_member("Heartbeat", static_cast<int>(Phase::Heartbeat), false),
+        lua_signal_member("PreSimulation", static_cast<int>(Phase::PreSimulation), false),
+        lua_signal_member("PostSimulation", static_cast<int>(Phase::PostSimulation), false),
+        lua_signal_member("PreAnimation", static_cast<int>(Phase::PreAnimation), false),
+        lua_signal_member("PreRender", static_cast<int>(Phase::PreRender), true),
+        lua_signal_member("RenderStepped", static_cast<int>(Phase::RenderStepped), true),
+    };
+    register_lua_class("RunService", nullptr, service, 6);
 }
 
 }  // namespace engine_core

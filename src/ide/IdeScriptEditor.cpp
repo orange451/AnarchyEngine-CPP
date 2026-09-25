@@ -2,9 +2,11 @@
 
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
+#include "LuauComplete.hpp"
 #include "LuauHighlight.hpp"
 #include "Script.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <utility>
@@ -79,6 +81,16 @@ std::string lua_title(const std::string& name) {
 
 }  // namespace
 
+class ScriptCodeArea : public jadefx::CodeArea {
+public:
+    IdeScriptEditor* editor = nullptr;
+
+    void handleKey(jadefx::KeyEvent& event) override;
+    void handleText(jadefx::TextEvent& event) override;
+    void handleMousePressed(const jadefx::MouseEvent& event) override;
+    void handleScroll(jadefx::ScrollEvent& event) override;
+};
+
 struct IdeScriptEditor::Commit {
     std::atomic<std::uint64_t> epoch{0};
     std::atomic<std::uint64_t> acked{0};
@@ -88,18 +100,19 @@ struct IdeScriptEditor::Commit {
 IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     : IdePane("Script.lua", true), engine_(engine), id_(id), commit_(std::make_shared<Commit>()) {
     commit_->id = id;
-    area_ = jadefx::make<jadefx::CodeArea>();
+    auto area = std::make_shared<ScriptCodeArea>();
+    area->editor = this;
+    area_ = area;
     area_->getClassList().add("ide-script");
     // Load before the area is laid out. The stylesheet asks for this family.
     (void)editor_font();
     define_styles(*area_);
     area_->setOnPlainTextChange([this](const jadefx::PlainTextChange&) { note_text(); });
+    completion_.setOnAccept([this] { accept_completion(true); });
     Fill(*area_);
     getChildren().add(area_);
     load();
 }
-
-IdeScriptEditor::~IdeScriptEditor() = default;
 
 void IdeScriptEditor::setOnTitle(std::function<void(const std::string&)> handler) {
     on_title_ = std::move(handler);
@@ -141,6 +154,9 @@ void IdeScriptEditor::layoutChildren() {
         if (read_source(text, name, alive) && alive && name != shown_name_) {
             setTitleText(name);
         }
+    }
+    if (completion_open()) {
+        place_completion();
     }
     StackPane::layoutChildren();
 }
@@ -210,6 +226,9 @@ void IdeScriptEditor::note_text() {
         return;
     }
     paint();
+    if (!completion_.accepting()) {
+        refresh_completion(false);
+    }
     dirty_ = true;
     dirty_at_ = std::chrono::steady_clock::now();
 }
@@ -264,6 +283,127 @@ void IdeScriptEditor::reapply() {
     }
     if (text != area_->getText()) {
         flush();
+    }
+}
+
+std::vector<engine_core::LuaNode> IdeScriptEditor::world() const {
+    const std::string text = area_ ? area_->getText() : std::string();
+    return completion_world(engine_, id_, area_ ? &text : nullptr);
+}
+
+bool IdeScriptEditor::completion_open() const { return completion_.isOpen(); }
+
+bool IdeScriptEditor::completion_commits_name() const { return completion_.commitsName(); }
+
+bool IdeScriptEditor::completion_key_accepts() const { return completion_.keyAccepts(); }
+
+void IdeScriptEditor::dismiss_completion() { completion_.dismiss(); }
+
+void IdeScriptEditor::move_completion(int delta) { completion_.move(delta); }
+
+void IdeScriptEditor::accept_completion(bool parentheses) {
+    if (!area_) {
+        completion_.dismiss();
+        return;
+    }
+    const std::optional<CompletionEdit> edit = completion_.take(parentheses, area_->getText());
+    if (!edit) {
+        return;
+    }
+    area_->replaceText(edit->begin, edit->end, edit->text);
+    area_->moveTo(edit->caret);
+    area_->requestFocus();
+    completion_.finish();
+}
+
+void IdeScriptEditor::place_completion() {
+    if (!area_ || !completion_.isOpen()) {
+        return;
+    }
+    const jadefx::TextBounds bounds = area_->caretBounds();
+    if (!bounds.valid) {
+        completion_.dismiss();
+        return;
+    }
+    completion_.moveTo(*area_, bounds.x, bounds.y, bounds.height);
+}
+
+void IdeScriptEditor::refresh_completion(bool force) {
+    if (!area_ || loading_ || missing_ || completion_.accepting()) {
+        return;
+    }
+    if (area_->selections().size() > 1) {
+        completion_.dismiss();
+        return;
+    }
+    const jadefx::TextBounds bounds = area_->caretBounds();
+    if (!bounds.valid) {
+        completion_.dismiss();
+        return;
+    }
+    completion_.present(complete_luau(area_->getText(), area_->caretPosition(), world(), id_), force, *area_, bounds.x,
+                        bounds.y, bounds.height);
+}
+
+void ScriptCodeArea::handleKey(jadefx::KeyEvent& event) {
+    if (editor == nullptr || (!event.pressed && !event.repeat)) {
+        jadefx::CodeArea::handleKey(event);
+        return;
+    }
+    if (event.shortcut() && event.key == jadefx::Key::Space) {
+        editor->refresh_completion(true);
+        event.consume();
+        return;
+    }
+    if (editor->completion_open()) {
+        if ((event.key == jadefx::Key::Up || event.key == jadefx::Key::Down) && !event.shortcut()) {
+            editor->move_completion(event.key == jadefx::Key::Down ? 1 : -1);
+            event.consume();
+            return;
+        }
+        if ((event.key == jadefx::Key::Enter || event.key == jadefx::Key::KpEnter || event.key == jadefx::Key::Tab) &&
+            !event.shift && !event.shortcut()) {
+            if (editor->completion_key_accepts()) {
+                editor->accept_completion(true);
+                event.consume();
+                return;
+            }
+            editor->dismiss_completion();
+        }
+        if (event.key == jadefx::Key::Escape) {
+            editor->dismiss_completion();
+            event.consume();
+            return;
+        }
+        if (event.key == jadefx::Key::Left || event.key == jadefx::Key::Right || event.key == jadefx::Key::Home ||
+            event.key == jadefx::Key::End || event.key == jadefx::Key::PageUp || event.key == jadefx::Key::PageDown) {
+            editor->dismiss_completion();
+        }
+    }
+    jadefx::CodeArea::handleKey(event);
+}
+
+void ScriptCodeArea::handleText(jadefx::TextEvent& event) {
+    if (editor != nullptr && event.text.size() == 1) {
+        const char unit = event.text[0];
+        if ((unit == '.' || unit == ':' || unit == '(') && editor->completion_commits_name()) {
+            editor->accept_completion(false);
+        }
+    }
+    jadefx::CodeArea::handleText(event);
+}
+
+void ScriptCodeArea::handleMousePressed(const jadefx::MouseEvent& event) {
+    if (editor != nullptr) {
+        editor->dismiss_completion();
+    }
+    jadefx::CodeArea::handleMousePressed(event);
+}
+
+void ScriptCodeArea::handleScroll(jadefx::ScrollEvent& event) {
+    jadefx::CodeArea::handleScroll(event);
+    if (editor != nullptr && editor->completion_open()) {
+        editor->place_completion();
     }
 }
 

@@ -1,5 +1,7 @@
 #include "GameObject.hpp"
 
+#include "LuaApi.hpp"
+
 #include <cstring>
 #include <type_traits>
 
@@ -130,5 +132,56 @@ void GameObject::read_place(const std::byte* data, std::size_t size) {
     size_[1] = pod.size[1];
     size_[2] = pod.size[2];
 }
+
+namespace {
+
+bool read_lua_color(DataModel&, DataModel& object, LuaSlot& out) {
+    auto* body = dynamic_cast<GameObject*>(&object);
+    if (body == nullptr) {
+        return false;
+    }
+    out.kind = LuaSlot::Kind::Color;
+    out.color = body->color();
+    return true;
+}
+
+bool write_lua_color(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* body = dynamic_cast<GameObject*>(&object);
+    if (body == nullptr) {
+        return false;
+    }
+    body->set_color(in.color);
+    return true;
+}
+
+bool read_lua_transform(DataModel&, DataModel& object, LuaSlot& out) {
+    auto* body = dynamic_cast<GameObject*>(&object);
+    if (body == nullptr) {
+        return false;
+    }
+    out.kind = LuaSlot::Kind::Transform;
+    out.transform = body->transform();
+    return true;
+}
+
+bool write_lua_transform(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* body = dynamic_cast<GameObject*>(&object);
+    if (body == nullptr) {
+        return false;
+    }
+    body->set_transform(in.transform);
+    return true;
+}
+
+ANARCHY_LUA_REGISTER(register_game_object_lua) {
+    const LuaField fields[] = {
+        lua_property("Color", "Color", true, read_lua_color, write_lua_color),
+        lua_property("Transform", "Transform", true, read_lua_transform, write_lua_transform),
+        lua_property("CFrame", "Transform", true, read_lua_transform, write_lua_transform),
+    };
+    register_lua_class("GameObject", "DataModel", fields, 3);
+}
+
+}  // namespace
 
 }  // namespace engine_core

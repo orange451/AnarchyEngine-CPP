@@ -2,6 +2,7 @@
 
 #include "DataModelLock.hpp"
 #include "GameObject.hpp"
+#include "LuaApi.hpp"
 #include "TaskScheduler.hpp"
 
 #include <cstring>
@@ -1359,5 +1360,58 @@ void DataModel::restore_place_unlocked() {
     (void)state_->invalidation.take_overflow();
     state_->resync = true;
 }
+
+namespace {
+
+bool read_lua_name(DataModel& world, DataModel& object, LuaSlot& out) {
+    out.kind = LuaSlot::Kind::String;
+    out.text = world.name(object.id());
+    return true;
+}
+
+bool write_lua_name(DataModel& world, DataModel& object, LuaSlot& in) {
+    world.set_name(object.id(), in.text);
+    return true;
+}
+
+bool read_lua_class(DataModel&, DataModel& object, LuaSlot& out) {
+    out.kind = LuaSlot::Kind::String;
+    const char* name = object.class_name();
+    out.text = name != nullptr ? name : "";
+    return true;
+}
+
+bool read_lua_parent(DataModel& world, DataModel& object, LuaSlot& out) {
+    const InstanceId parent = world.parent(object.id());
+    if (parent == DataModel::kNoParent) {
+        out.kind = LuaSlot::Kind::Nil;
+        return true;
+    }
+    out.kind = LuaSlot::Kind::Instance;
+    out.id = parent;
+    return true;
+}
+
+bool write_lua_parent(DataModel& world, DataModel& object, LuaSlot& in) {
+    world.set_parent(object.id(), in.kind == LuaSlot::Kind::Nil ? DataModel::kNoParent : in.id);
+    return true;
+}
+
+bool read_lua_changed(DataModel&, DataModel&, LuaSlot& out) {
+    out.kind = LuaSlot::Kind::Signal;
+    return true;
+}
+
+ANARCHY_LUA_REGISTER(register_datamodel_lua) {
+    const LuaField fields[] = {
+        lua_property("Name", "string", true, read_lua_name, write_lua_name),
+        lua_property("ClassName", "string", false, read_lua_class, nullptr),
+        lua_property("Parent", "Instance", true, read_lua_parent, write_lua_parent),
+        lua_property("Changed", "Signal", false, read_lua_changed, nullptr),
+    };
+    register_lua_class("DataModel", nullptr, fields, 4);
+}
+
+}  // namespace
 
 }  // namespace engine_core

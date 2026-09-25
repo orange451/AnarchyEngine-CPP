@@ -253,6 +253,7 @@ void testContextActions() {
 }  // namespace
 
 int RunLuauHighlightTests();
+int RunLuauCompleteTests();
 
 int main() {
     try {
@@ -266,6 +267,7 @@ int main() {
         testRunner();
         testContextActions();
         gFailures += RunLuauHighlightTests();
+        gFailures += RunLuauCompleteTests();
     } catch (const std::exception& ex) {
         std::fprintf(stderr, "FAIL exception: %s\n", ex.what());
         return EXIT_FAILURE;

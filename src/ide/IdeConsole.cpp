@@ -1,12 +1,14 @@
 #include "IdeConsole.hpp"
 
 #include "Engine.hpp"
+#include "LuauComplete.hpp"
 #include "ScriptRuntime.hpp"
 
 #include <chrono>
 #include <cstdio>
 #include <ctime>
 #include <exception>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -90,6 +92,15 @@ void appendStamped(jadefx::StyleClassedTextArea& log, const engine_core::ScriptR
 
 }  // namespace
 
+class CommandField : public jadefx::TextField {
+public:
+    IdeConsole* console = nullptr;
+
+    void handleKey(jadefx::KeyEvent& event) override;
+    void handleText(jadefx::TextEvent& event) override;
+    void handleMousePressed(const jadefx::MouseEvent& event) override;
+};
+
 IdeConsole::IdeConsole(engine_core::Engine& engine) : IdePane("Console", true), engine_(engine) {
     log_ = jadefx::make<jadefx::StyleClassedTextArea>();
     log_->setEditable(false);
@@ -114,10 +125,13 @@ IdeConsole::IdeConsole(engine_core::Engine& engine) : IdePane("Console", true), 
     log_->defineStyleClass("time", time);
     Fill(*log_);
 
-    command_ = jadefx::make<jadefx::TextField>();
+    auto field = std::make_shared<CommandField>();
+    field->console = this;
+    command_ = field;
     command_->setPromptText("Lua Command Line");
     command_->setStyle("width: 100%;");
     command_->setOnAction([this](jadefx::ActionEvent&) { submitCommand(); });
+    completion_.setOnAccept([this] { accept_completion(true); });
 
     // The log takes the page left after the command line, so a splitter drag
     // grows and shrinks the log instead of leaving a gap or pushing the field out.
@@ -140,8 +154,18 @@ void IdeConsole::layoutChildren() {
         }
         pulling_ = false;
     }
+    if (completion_.isOpen() && command_) {
+        double x = 0;
+        double y = 0;
+        double height = 0;
+        if (command_->caretBounds(x, y, height)) {
+            completion_.moveTo(*command_, x, y, height);
+        }
+    }
     StackPane::layoutChildren();
 }
+
+void IdeConsole::onClose() { completion_.dismiss(); }
 
 void IdeConsole::renderContent(jadefx::UiRenderer& renderer, float opacity) {
     command_painted_ = true;
@@ -167,6 +191,7 @@ void IdeConsole::pull() {
 }
 
 void IdeConsole::submitCommand() {
+    completion_.dismiss();
     if (!command_) {
         return;
     }
@@ -206,6 +231,104 @@ void IdeConsole::runPending() {
             engine_.scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error, ex.what());
         }
     }
+}
+
+void IdeConsole::refresh_completion(bool force) {
+    if (!command_ || completion_.accepting()) {
+        return;
+    }
+    if (command_->getAnchor() != command_->getCaretPosition()) {
+        completion_.dismiss();
+        return;
+    }
+    double x = 0;
+    double y = 0;
+    double height = 0;
+    if (!command_->caretBounds(x, y, height)) {
+        completion_.dismiss();
+        return;
+    }
+    const std::string text = command_->getText();
+    completion_.present(complete_luau(text, command_->getCaretPosition(), completion_world(engine_, 0, nullptr), 0, false),
+                        force, *command_, x, y, height);
+}
+
+void IdeConsole::accept_completion(bool parentheses) {
+    if (!command_) {
+        completion_.dismiss();
+        return;
+    }
+    const std::optional<CompletionEdit> edit = completion_.take(parentheses, command_->getText());
+    if (!edit) {
+        return;
+    }
+    command_->selectRange(edit->begin, edit->end);
+    command_->replaceSelection(edit->text);
+    command_->positionCaret(edit->caret);
+    command_->requestFocus();
+    completion_.finish();
+}
+
+void CommandField::handleKey(jadefx::KeyEvent& event) {
+    if (console == nullptr || !event.pressed || isDisabled()) {
+        jadefx::TextField::handleKey(event);
+        return;
+    }
+    if (event.shortcut() && event.key == jadefx::Key::Space) {
+        console->refresh_completion(true);
+        event.consume();
+        return;
+    }
+    if (console->completion_.isOpen()) {
+        if ((event.key == jadefx::Key::Up || event.key == jadefx::Key::Down) && !event.shortcut()) {
+            console->completion_.move(event.key == jadefx::Key::Down ? 1 : -1);
+            event.consume();
+            return;
+        }
+        if ((event.key == jadefx::Key::Enter || event.key == jadefx::Key::KpEnter || event.key == jadefx::Key::Tab) &&
+            !event.shift && !event.shortcut()) {
+            if (console->completion_.keyAccepts()) {
+                console->accept_completion(true);
+                event.consume();
+                return;
+            }
+            console->completion_.dismiss();
+        }
+        if (event.key == jadefx::Key::Escape) {
+            console->completion_.dismiss();
+            event.consume();
+            return;
+        }
+        if (event.key == jadefx::Key::Left || event.key == jadefx::Key::Right || event.key == jadefx::Key::Home ||
+            event.key == jadefx::Key::End) {
+            console->completion_.dismiss();
+        }
+    }
+    const std::string before = getText();
+    jadefx::TextField::handleKey(event);
+    if (getText() != before) {
+        console->refresh_completion(false);
+    }
+}
+
+void CommandField::handleText(jadefx::TextEvent& event) {
+    if (console != nullptr && event.text.size() == 1) {
+        const char unit = event.text[0];
+        if ((unit == '.' || unit == ':' || unit == '(') && console->completion_.commitsName()) {
+            console->accept_completion(false);
+        }
+    }
+    jadefx::TextField::handleText(event);
+    if (console != nullptr && !console->completion_.accepting()) {
+        console->refresh_completion(false);
+    }
+}
+
+void CommandField::handleMousePressed(const jadefx::MouseEvent& event) {
+    if (console != nullptr) {
+        console->completion_.dismiss();
+    }
+    jadefx::TextField::handleMousePressed(event);
 }
 
 }  // namespace ide

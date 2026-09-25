@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Events.hpp"
+#include "LuaApi.hpp"
 #include "Script.hpp"
 #include "TaskScheduler.hpp"
 
@@ -19,6 +20,7 @@ struct lua_State;
 namespace engine_core {
 
 struct ScriptBindings;
+void open_host_libraries(lua_State* state);
 
 // One Luau state for the play session. SimulationThread is the only caller of lua_*.
 // task.wait sleeps on sim_clock, which advances by the Heartbeat dt.
@@ -90,6 +92,9 @@ public:
 
 private:
     friend struct ScriptBindings;
+    friend void open_host_libraries(lua_State* state);
+    friend void push_registered(lua_State* state, ScriptRuntime* runtime, const LuaSlot& slot, InstanceId id,
+                                std::uint32_t world);
 
     struct Thread {
         lua_State* co = nullptr;

@@ -1,5 +1,7 @@
 #include "TestTriangle.hpp"
 
+#include "LuaApi.hpp"
+
 #include <cmath>
 #include <cstring>
 #include <type_traits>
@@ -91,5 +93,35 @@ void TestTriangle::read_place(const std::byte* data, std::size_t size) {
     y_.store(pose.y);
     z_.store(pose.z);
 }
+
+namespace {
+
+bool read_lua_position(DataModel&, DataModel& object, LuaSlot& out) {
+    auto* triangle = dynamic_cast<TestTriangle*>(&object);
+    if (triangle == nullptr) {
+        return false;
+    }
+    out.kind = LuaSlot::Kind::Vec3;
+    out.vec = triangle->position();
+    return true;
+}
+
+bool write_lua_position(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* triangle = dynamic_cast<TestTriangle*>(&object);
+    if (triangle == nullptr) {
+        return false;
+    }
+    triangle->set_position(in.vec.x, in.vec.y, in.vec.z);
+    return true;
+}
+
+ANARCHY_LUA_REGISTER(register_test_triangle_lua) {
+    const LuaField fields[] = {
+        lua_property("Position", "Vector3", true, read_lua_position, write_lua_position),
+    };
+    register_lua_class("TestTriangle", "DataModel", fields, 1);
+}
+
+}  // namespace
 
 }  // namespace engine_core

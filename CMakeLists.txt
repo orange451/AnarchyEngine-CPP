@@ -30,10 +30,12 @@ add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
     src/ide/IdePane.cpp
     src/ide/IdeDock.cpp
     src/ide/IdeConsole.cpp
+    src/ide/CompletionPopup.cpp
     src/ide/IdeExplorer.cpp
     src/ide/IdeIcons.cpp
     src/ide/IdeScriptEditor.cpp
     src/ide/LuauHighlight.cpp
+    src/ide/LuauComplete.cpp
     src/ide/IdeTreeTest.cpp
     src/ide/IdeLayout.cpp
 )
@@ -121,6 +123,8 @@ add_library(engine_core STATIC
     src/engine_core/Events.cpp
     src/engine_core/Engine.cpp
     src/engine_core/LuaEngine.cpp
+    src/engine_core/LuaApi.cpp
+    src/engine_core/LuaReflect.cpp
     src/engine_core/Script.cpp
     src/engine_core/ScriptRuntime.cpp
 )
@@ -143,7 +147,9 @@ target_link_libraries(AnarchyEngine-CPP PRIVATE jadefx engine_core)
 add_executable(engine-tests
     tests/LuaEngineTest.cpp
     tests/LuauHighlightTest.cpp
+    tests/LuauCompleteTest.cpp
     src/ide/LuauHighlight.cpp
+    src/ide/LuauComplete.cpp
     src/runner/Runner.cpp
 )
 target_include_directories(engine-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")

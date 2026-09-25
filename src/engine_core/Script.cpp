@@ -1,6 +1,7 @@
 #include "Script.hpp"
 
 #include "Contract.hpp"
+#include "LuaApi.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -94,5 +95,56 @@ void Script::on_parent_changed(InstanceId previous, InstanceId next) {
         host->on_script_parent(*this, previous, next);
     }
 }
+
+namespace {
+
+bool read_lua_source(DataModel&, DataModel& object, LuaSlot& out) {
+    auto* source = dynamic_cast<LuaSource*>(&object);
+    if (source == nullptr) {
+        return false;
+    }
+    out.kind = LuaSlot::Kind::String;
+    out.text = source->source();
+    return true;
+}
+
+bool write_lua_source(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* source = dynamic_cast<LuaSource*>(&object);
+    if (source == nullptr) {
+        return false;
+    }
+    source->set_source(in.text);
+    return true;
+}
+
+bool read_lua_enabled(DataModel&, DataModel& object, LuaSlot& out) {
+    auto* source = dynamic_cast<LuaSource*>(&object);
+    if (source == nullptr) {
+        return false;
+    }
+    out.kind = LuaSlot::Kind::Bool;
+    out.flag = source->enabled();
+    return true;
+}
+
+bool write_lua_enabled(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* source = dynamic_cast<LuaSource*>(&object);
+    if (source == nullptr) {
+        return false;
+    }
+    source->set_enabled(in.flag);
+    return true;
+}
+
+ANARCHY_LUA_REGISTER(register_script_lua) {
+    const LuaField fields[] = {
+        lua_property("Source", "string", true, read_lua_source, write_lua_source),
+        lua_property("Enabled", "boolean", true, read_lua_enabled, write_lua_enabled),
+    };
+    register_lua_class("Script", "DataModel", fields, 2);
+    register_lua_class("ModuleScript", "DataModel", fields, 2);
+}
+
+}  // namespace
 
 }  // namespace engine_core

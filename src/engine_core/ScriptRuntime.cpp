@@ -1655,7 +1655,7 @@ int ScriptBindings::instance_service(lua_State* state) {
         if (runtime == nullptr || ud->id != 0 || runtime->resolve_id(0, ud->world) == nullptr) {
             luaL_error(state, "GetService is on the root DataModel");
         }
-        if (name == nullptr || std::strcmp(name, "RunService") != 0) {
+        if (name == nullptr || !lua_service_known(name)) {
             luaL_error(state, "unknown service");
         }
         lua_newuserdata(state, 1);
@@ -1831,12 +1831,15 @@ int ScriptBindings::thread_index(lua_State* state) {
 }
 
 ANARCHY_LUA_REGISTER(register_script_methods) {
+    LuaField get_service =
+        lua_method("GetService", "", reinterpret_cast<void*>(&ScriptBindings::instance_service), true, false, false);
+    get_service.service_arg = true;
     const LuaField methods[] = {
         lua_method("Destroy", "nil", reinterpret_cast<void*>(&ScriptBindings::instance_destroy)),
         lua_method("GetChildren", "Instance", reinterpret_cast<void*>(&ScriptBindings::instance_children), false, false, true),
         lua_method("FindFirstChild", "Instance", reinterpret_cast<void*>(&ScriptBindings::instance_find), false, true, false),
         lua_method("IsA", "boolean", reinterpret_cast<void*>(&ScriptBindings::instance_isa)),
-        lua_method("GetService", "", reinterpret_cast<void*>(&ScriptBindings::instance_service), true, false, false),
+        get_service,
     };
     register_lua_class("DataModel", nullptr, methods, 5);
 
@@ -1863,6 +1866,7 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         lua_signal_member("RenderStepped", static_cast<int>(Phase::RenderStepped), true),
     };
     register_lua_class("RunService", nullptr, service, 6);
+    register_lua_service("RunService");
 }
 
 }  // namespace engine_core

@@ -132,6 +132,48 @@ void lua_class_names(std::vector<std::string>& out) {
     }
 }
 
+namespace {
+
+std::vector<const char*>& service_names() {
+    static std::vector<const char*> names;
+    return names;
+}
+
+}  // namespace
+
+void register_lua_service(const char* name) {
+    if (name == nullptr) {
+        return;
+    }
+    for (const char* existing : service_names()) {
+        if (std::strcmp(existing, name) == 0) {
+            return;
+        }
+    }
+    service_names().push_back(name);
+}
+
+bool lua_service_known(const char* name) {
+    if (name == nullptr) {
+        return false;
+    }
+    for (const char* existing : service_names()) {
+        if (std::strcmp(existing, name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void lua_service_names(std::vector<std::string>& out) {
+    out.clear();
+    for (const char* name : service_names()) {
+        if (name != nullptr) {
+            out.emplace_back(name);
+        }
+    }
+}
+
 void lua_note_result(const char* owner, const char* name, const char* type_name, bool class_from_arg) {
     if (owner == nullptr || name == nullptr) {
         return;

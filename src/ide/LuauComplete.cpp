@@ -21,6 +21,7 @@ struct Shape {
     bool call = false;
     bool class_from_arg = false;
     bool resolves_child = false;
+    bool service_arg = false;
     bool returns_list = false;
     std::string callee_owner;
     std::string callee_name;
@@ -158,6 +159,10 @@ int LongSeparator(const std::u32string& text, int index) {
 struct Scan {
     std::vector<Token> tokens;
     bool blocked = false;
+    // The caret sits inside a ' or " literal that has not closed yet.
+    bool open_string = false;
+    int string_begin = 0;
+    char32_t quote = 0;
 };
 
 Scan Tokenize(const std::u32string& text, int caret) {
@@ -232,7 +237,14 @@ Scan Tokenize(const std::u32string& text, int caret) {
                 ++i;
             }
             if (!closed) {
-                scan.blocked = true;
+                if (i < caret) {
+                    // A raw newline ended the literal before the caret.
+                    scan.blocked = true;
+                    return scan;
+                }
+                scan.open_string = true;
+                scan.string_begin = start + 1;
+                scan.quote = code;
                 return scan;
             }
             emit(Token::String, start, i, Utf8(body));
@@ -339,6 +351,27 @@ const engine_core::LuaNode* FindNode(const std::vector<engine_core::LuaNode>& wo
         }
     }
     return nullptr;
+}
+
+bool IsCallPrefix(const Token& token) {
+    if (token.kind == Token::Name || token.kind == Token::String || token.kind == Token::RParen ||
+        token.kind == Token::RBrack || token.kind == Token::RBrace) {
+        return true;
+    }
+    return token.kind == Token::Keyword && (token.text == "true" || token.text == "false" || token.text == "nil");
+}
+
+// `obj:Method(` passes the receiver as self. `obj.Method(` does not, so the
+// first string is not the service or child name.
+bool IsColonCall(const std::vector<Token>& tokens, int callee_end) {
+    const int name = callee_end - 1;
+    if (name < 1 || tokens[static_cast<std::size_t>(name)].kind != Token::Name) {
+        return false;
+    }
+    if (tokens[static_cast<std::size_t>(name - 1)].kind != Token::Colon) {
+        return false;
+    }
+    return name < 2 || tokens[static_cast<std::size_t>(name - 2)].kind != Token::Colon;
 }
 
 const engine_core::LuaNode* FindChild(const std::vector<engine_core::LuaNode>& world, std::uint32_t parent,
@@ -474,12 +507,26 @@ public:
                 return none();
             }
             if (!field->method) {
+                if (std::strcmp(field->name, "Parent") == 0 && base->instance != kNoInstance) {
+                    if (const engine_core::LuaNode* node = FindNode(world_, base->instance)) {
+                        if (node->parent == kNoInstance) {
+                            return none();
+                        }
+                        const engine_core::LuaNode* parent = FindNode(world_, node->parent);
+                        std::string class_name = "Instance";
+                        if (parent != nullptr && !parent->class_name.empty()) {
+                            class_name = parent->class_name;
+                        }
+                        return class_shape(std::move(class_name), node->parent);
+                    }
+                }
                 return type_shape(field->type_name != nullptr ? field->type_name : "");
             }
             Shape* shape = fresh();
             shape->call = true;
             shape->class_from_arg = field->class_from_arg;
             shape->resolves_child = field->resolves_child;
+            shape->service_arg = field->service_arg;
             shape->returns_list = field->returns_list;
             shape->result_type = field->type_name != nullptr ? field->type_name : "";
             shape->instance = base->instance;
@@ -1380,13 +1427,7 @@ private:
         return call_shape(callee, have_literal ? &literal : nullptr);
     }
 
-    bool callee_token(const Token& token) const {
-        if (token.kind == Token::Name || token.kind == Token::String || token.kind == Token::RParen ||
-            token.kind == Token::RBrack || token.kind == Token::RBrace) {
-            return true;
-        }
-        return token.kind == Token::Keyword && (token.text == "true" || token.text == "false" || token.text == "nil");
-    }
+    bool callee_token(const Token& token) const { return IsCallPrefix(token); }
 
     int match_open(int close) const {
         Token::Kind open_kind = Token::LParen;
@@ -1542,6 +1583,141 @@ void AddTypes(std::string_view prefix, std::vector<CompletionItem>& out) {
     }
 }
 
+int StringContentEnd(const std::u32string& text, int content_begin, char32_t quote) {
+    int index = content_begin;
+    const int size = static_cast<int>(text.size());
+    if (index < 0) {
+        index = 0;
+    }
+    while (index < size) {
+        const char32_t unit = text[static_cast<std::size_t>(index)];
+        if (unit == quote || unit == U'\n' || unit == U'\r') {
+            return index;
+        }
+        if (unit == U'\\' && index + 1 < size) {
+            index += 2;
+            continue;
+        }
+        ++index;
+    }
+    return size;
+}
+
+std::string ArgumentPrefix(const std::u32string& text, int begin, int caret) {
+    if (begin < 0) {
+        begin = 0;
+    }
+    if (caret < begin) {
+        return {};
+    }
+    if (caret > static_cast<int>(text.size())) {
+        caret = static_cast<int>(text.size());
+    }
+    return Utf8(std::u32string_view(text.data() + begin, static_cast<std::size_t>(caret - begin)));
+}
+
+void AddChildren(const std::vector<engine_core::LuaNode>& world, std::uint32_t parent, std::string_view prefix,
+                 std::vector<CompletionItem>& out) {
+    struct Row {
+        std::string name;
+        std::string detail;
+    };
+    std::vector<Row> rows;
+    for (const engine_core::LuaNode& node : world) {
+        if (node.parent != parent || node.name.empty()) {
+            continue;
+        }
+        if (!prefix.empty() && !StartsWith(node.name, prefix)) {
+            continue;
+        }
+        Row row;
+        row.name = node.name;
+        row.detail = node.class_name.empty() ? "Instance" : node.class_name;
+        rows.push_back(std::move(row));
+    }
+    std::sort(rows.begin(), rows.end(), [](const Row& left, const Row& right) {
+        if (left.name != right.name) {
+            return left.name < right.name;
+        }
+        return left.detail < right.detail;
+    });
+    rows.erase(std::unique(rows.begin(), rows.end(),
+                           [](const Row& left, const Row& right) { return left.name == right.name; }),
+               rows.end());
+    for (Row& row : rows) {
+        CompletionItem item;
+        item.name = std::move(row.name);
+        item.detail = std::move(row.detail);
+        out.push_back(std::move(item));
+    }
+}
+
+void AddServices(std::string_view prefix, std::vector<CompletionItem>& out) {
+    std::vector<std::string> names;
+    engine_core::lua_service_names(names);
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    for (const std::string& name : names) {
+        if (!prefix.empty() && !StartsWith(name, prefix)) {
+            continue;
+        }
+        CompletionItem item;
+        item.name = name;
+        item.detail = "service";
+        out.push_back(std::move(item));
+    }
+}
+
+// The caret is inside the first string of a call. GetService offers services.
+// FindFirstChild offers the children of the receiver.
+CompletionList CompleteString(const Scan& scan, const std::u32string& text, int caret,
+                              const std::vector<engine_core::LuaNode>& world, std::uint32_t script_id,
+                              bool script_global) {
+    if (scan.tokens.empty() || scan.quote == 0) {
+        return {};
+    }
+    int callee_end = -1;
+    const Token& last = scan.tokens.back();
+    if (last.kind == Token::LParen) {
+        callee_end = static_cast<int>(scan.tokens.size()) - 1;
+    } else if (IsCallPrefix(last)) {
+        callee_end = static_cast<int>(scan.tokens.size());
+    } else {
+        return {};
+    }
+    if (!IsColonCall(scan.tokens, callee_end)) {
+        return {};
+    }
+    Resolver resolver(scan.tokens, world, script_id, script_global);
+    resolver.parse_until(callee_end);
+    Shape* callee = resolver.receiver(callee_end);
+    const bool child = callee != nullptr && callee->resolves_child && callee->instance != kNoInstance;
+    const bool service = callee != nullptr && callee->service_arg;
+    if (!child && !service) {
+        return {};
+    }
+    CompletionList list;
+    list.site = CompleteSite::Argument;
+    list.close_quote = static_cast<char>(scan.quote);
+    list.replace_begin = scan.string_begin;
+    if (list.replace_begin < 0) {
+        list.replace_begin = 0;
+    }
+    if (list.replace_begin > caret) {
+        list.replace_begin = caret;
+    }
+    list.replace_end = StringContentEnd(text, list.replace_begin, scan.quote);
+    list.prefix = ArgumentPrefix(text, list.replace_begin, caret);
+    const bool at_end = list.replace_end >= static_cast<int>(text.size());
+    list.unclosed = at_end || text[static_cast<std::size_t>(list.replace_end)] != scan.quote;
+    if (child) {
+        AddChildren(world, callee->instance, list.prefix, list.items);
+    } else {
+        AddServices(list.prefix, list.items);
+    }
+    return list;
+}
+
 }  // namespace
 
 CompletionList complete_luau(std::string_view source, int caret, const std::vector<engine_core::LuaNode>& world,
@@ -1557,6 +1733,9 @@ CompletionList complete_luau(std::string_view source, int caret, const std::vect
     CompletionList list;
     if (scan.blocked) {
         return list;
+    }
+    if (scan.open_string) {
+        return CompleteString(scan, text, caret, world, script_id, script_global);
     }
     const std::vector<Token>& tokens = scan.tokens;
     int index = static_cast<int>(tokens.size());

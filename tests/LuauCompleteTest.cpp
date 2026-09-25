@@ -494,6 +494,183 @@ void testConsole() {
     expect_has(global, "_G", "_G");
 }
 
+void expect_argument(const ide::CompletionList& list, const char* label) {
+    if (list.site != ide::CompleteSite::Argument) {
+        fail(std::string(label) + " is not an argument completion");
+    }
+}
+
+void testStringArguments() {
+    // Remains registered in this process. Nothing after this case lists services.
+    engine_core::register_lua_service("TestService");
+
+    const std::string service_source = "game:GetService(\"Ru";
+    const ide::CompletionList service = at_end(service_source);
+    expect_argument(service, "GetService");
+    expect_has(service, "RunService", "GetService prefix");
+    expect_missing(service, "TestService", "GetService prefix");
+    expect_missing(service, "DataModel", "GetService is not every class");
+    expect_missing(service, "Script", "GetService is not every class");
+    expect_detail(service, "RunService", "service", "GetService");
+    expect_call(service, "RunService", false, "GetService");
+    if (service.prefix != "Ru" || service.close_quote != '"' || !service.unclosed) {
+        fail("GetService string prefix");
+    }
+    const int service_begin = static_cast<int>(std::string("game:GetService(\"").size());
+    if (service.replace_begin != service_begin || service.replace_end != static_cast<int>(service_source.size())) {
+        fail("GetService replace range");
+    }
+
+    const ide::CompletionList open_service = at_end("game:GetService(\"");
+    expect_has(open_service, "RunService", "GetService open quote");
+    expect_has(open_service, "TestService", "registered service");
+    if (index_of(open_service, "RunService") > index_of(open_service, "TestService")) {
+        fail("services are alphabetical");
+    }
+    if (!open_service.prefix.empty() || !open_service.unclosed) {
+        fail("GetService open quote prefix");
+    }
+
+    const ide::CompletionList registered = at_end("game:GetService(\"Te");
+    expect_has(registered, "TestService", "TestService prefix");
+    expect_missing(registered, "RunService", "TestService prefix");
+
+    const ide::CompletionList single = at_end("game:GetService('Ru");
+    expect_has(single, "RunService", "single quoted service");
+    if (single.close_quote != '\'' || !single.unclosed) {
+        fail("single quoted service quote");
+    }
+
+    const ide::CompletionList spaced = at_end("game:GetService( \"Ru");
+    expect_has(spaced, "RunService", "space before the service string");
+
+    const ide::CompletionList bare = at_end("game:GetService \"Ru");
+    expect_has(bare, "RunService", "service string call");
+
+    const ide::CompletionList dotted = at_end("game.GetService(\"Ru");
+    if (dotted.site != ide::CompleteSite::None || !dotted.items.empty()) {
+        fail("a dot call does not pass self");
+    }
+
+    const ide::CompletionList unknown_service = at_end("game:GetService(\"Zz");
+    expect_argument(unknown_service, "unknown service");
+    if (!unknown_service.items.empty()) {
+        fail("unknown service should offer nothing");
+    }
+
+    const std::string closed = "game:GetService(\"RunService\").Heartbeat";
+    const int inside = static_cast<int>(std::string("game:GetService(\"Ru").size());
+    const ide::CompletionList middle = at_caret(closed, inside);
+    expect_has(middle, "RunService", "caret inside a service string");
+    if (middle.unclosed || middle.replace_end != static_cast<int>(std::string("game:GetService(\"RunService").size())) {
+        fail("closed service string replace range");
+    }
+
+    const std::string escaped = "game:GetService(\"Ru\\\"x\")";
+    const ide::CompletionList escaped_quote = at_caret(escaped, inside);
+    expect_has(escaped_quote, "RunService", "escaped quote in a service string");
+    if (escaped_quote.replace_end != static_cast<int>(std::string("game:GetService(\"Ru\\\"x").size())) {
+        fail("escaped quote is not the end of the string");
+    }
+
+    const ide::CompletionList members = at_end("game:GetService(\"RunService\").");
+    expect_has(members, "Heartbeat", "closed GetService still completes members");
+    if (members.site == ide::CompleteSite::Argument) {
+        fail("a closed service call is not an argument");
+    }
+
+    const ide::CompletionList printed = at_end("print(\"Ru");
+    if (printed.site != ide::CompleteSite::None || !printed.items.empty()) {
+        fail("print does not complete service names");
+    }
+    const ide::CompletionList broken = at_end("game:GetService(\"Ru\nlocal x = 1");
+    if (broken.site != ide::CompleteSite::None || !broken.items.empty()) {
+        fail("a newline ends the service string");
+    }
+
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(1, 0, "HopSlow", "Script"));
+    world.push_back(node(2, 0, "HopFast", "Script"));
+    world.push_back(node(3, 0, "Tri0", "TestTriangle"));
+    world.push_back(node(4, 1, "Inner", "GameObject"));
+    world.push_back(node(5, 0, "Main", "Script"));
+
+    const std::string child_source = "game:FindFirstChild(\"Ho";
+    const ide::CompletionList children = at_end(child_source, world, 5);
+    expect_argument(children, "FindFirstChild");
+    expect_has(children, "HopFast", "FindFirstChild prefix");
+    expect_has(children, "HopSlow", "FindFirstChild prefix");
+    expect_missing(children, "Tri0", "FindFirstChild prefix");
+    expect_missing(children, "Inner", "FindFirstChild is direct children");
+    expect_missing(children, "RunService", "FindFirstChild is not a service");
+    expect_detail(children, "HopFast", "Script", "FindFirstChild");
+    expect_call(children, "HopFast", false, "FindFirstChild");
+    if (index_of(children, "HopFast") > index_of(children, "HopSlow")) {
+        fail("children are alphabetical");
+    }
+    if (children.prefix != "Ho" || children.close_quote != '"' || !children.unclosed) {
+        fail("FindFirstChild string prefix");
+    }
+    if (children.replace_begin != static_cast<int>(std::string("game:FindFirstChild(\"").size()) ||
+        children.replace_end != static_cast<int>(child_source.size())) {
+        fail("FindFirstChild replace range");
+    }
+
+    const ide::CompletionList all_children = at_end("game:FindFirstChild(\"", world, 5);
+    expect_has(all_children, "HopFast", "all children");
+    expect_has(all_children, "HopSlow", "all children");
+    expect_has(all_children, "Tri0", "all children");
+    expect_has(all_children, "Main", "all children");
+    expect_missing(all_children, "Inner", "all children");
+    expect_missing(all_children, "game", "the root is not its own child");
+    if (index_of(all_children, "HopSlow") > index_of(all_children, "Main") ||
+        index_of(all_children, "Main") > index_of(all_children, "Tri0")) {
+        fail("all children are alphabetical");
+    }
+
+    const ide::CompletionList via_parent = at_end("script.Parent:FindFirstChild(\"Ho", world, 5);
+    expect_has(via_parent, "HopFast", "script.Parent children");
+    expect_has(via_parent, "HopSlow", "script.Parent children");
+    expect_missing(via_parent, "Inner", "script.Parent children");
+
+    const ide::CompletionList local_root = at_end("local root = game\nroot:FindFirstChild(\"Tr", world, 5);
+    expect_has(local_root, "Tri0", "local receiver");
+    expect_missing(local_root, "HopFast", "local receiver");
+
+    const ide::CompletionList nested = at_end("game:FindFirstChild(\"HopSlow\"):FindFirstChild(\"In", world, 5);
+    expect_has(nested, "Inner", "nested FindFirstChild");
+    expect_detail(nested, "Inner", "GameObject", "nested FindFirstChild");
+    expect_missing(nested, "HopFast", "nested FindFirstChild");
+
+    const ide::CompletionList dotted_child = at_end("game.FindFirstChild(\"Ho", world, 5);
+    if (dotted_child.site != ide::CompleteSite::None || !dotted_child.items.empty()) {
+        fail("a dot call does not pass self");
+    }
+
+    const ide::CompletionList second = at_end("game:FindFirstChild(\"HopSlow\", \"Ho", world, 5);
+    if (second.site != ide::CompleteSite::None || !second.items.empty()) {
+        fail("the second argument is not a child name");
+    }
+
+    const ide::CompletionList unknown = at_end("local x\nx:FindFirstChild(\"Ho", world, 5);
+    if (unknown.site != ide::CompleteSite::None || !unknown.items.empty()) {
+        fail("an unknown receiver has no children");
+    }
+
+    const ide::CompletionList no_world = at_end("game:FindFirstChild(\"Ho");
+    expect_argument(no_world, "FindFirstChild without a tree");
+    if (!no_world.items.empty()) {
+        fail("FindFirstChild without a tree offers names");
+    }
+
+    const char* command = "game:FindFirstChild(\"Ho";
+    const ide::CompletionList console =
+        ide::complete_luau(command, static_cast<int>(std::string_view(command).size()), world, 0, false);
+    expect_has(console, "HopFast", "console FindFirstChild");
+    expect_has(console, "HopSlow", "console FindFirstChild");
+}
+
 void testSkipped() {
     const ide::CompletionList comment = at_end("-- task.");
     if (comment.site != ide::CompleteSite::None || !comment.items.empty()) {
@@ -515,6 +692,7 @@ int RunLuauCompleteTests() {
         testModule();
         testNames();
         testConsole();
+        testStringArguments();
         testSkipped();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());

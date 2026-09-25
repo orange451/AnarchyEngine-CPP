@@ -68,6 +68,8 @@ struct CompletionPopup::State {
     int replace_begin = 0;
     int replace_end = 0;
     std::string prefix;
+    char close_quote = 0;
+    bool unclosed = false;
     bool picked = false;
     bool accepting = false;
     jadefx::Node* owner = nullptr;
@@ -125,6 +127,20 @@ bool CompletionPopup::keyAccepts() const {
     return item->name != state_->prefix;
 }
 
+bool CompletionPopup::commitsQuote(char quote) const {
+    const CompletionItem* item = highlighted();
+    if (item == nullptr || state_->site != CompleteSite::Argument || !state_->unclosed) {
+        return false;
+    }
+    if (quote != state_->close_quote) {
+        return false;
+    }
+    if (item->name == state_->prefix) {
+        return false;
+    }
+    return state_->picked || state_->items.size() == 1;
+}
+
 bool CompletionPopup::accepting() const { return state_->accepting; }
 
 int CompletionPopup::replaceEnd() const { return state_->replace_end; }
@@ -136,6 +152,8 @@ void CompletionPopup::dismiss() {
     state_->picked = false;
     state_->prefix.clear();
     state_->items.clear();
+    state_->close_quote = 0;
+    state_->unclosed = false;
     if (state_->popup && state_->owner != nullptr && state_->owner->getScene() != nullptr &&
         !state_->owner->getScene()->isTearingDown() && state_->owner->getScene()->isPopupShowing(state_->popup.get())) {
         state_->owner->getScene()->hidePopup(state_->popup.get());
@@ -179,6 +197,15 @@ std::optional<CompletionEdit> CompletionPopup::take(bool parentheses, std::strin
     if (parentheses && chosen.call && CodeAt(text, end) != U'(') {
         edit.text += "()";
         edit.caret = begin + CodePoints(chosen.name) + 1;
+    }
+    if (state_->close_quote != 0 && !chosen.call) {
+        const auto quote = static_cast<char32_t>(static_cast<unsigned char>(state_->close_quote));
+        if (CodeAt(text, end) == quote) {
+            edit.caret = begin + CodePoints(edit.text) + 1;
+        } else if (parentheses) {
+            edit.text.push_back(state_->close_quote);
+            edit.caret = begin + CodePoints(edit.text);
+        }
     }
     state_->accepting = true;
     dismiss();
@@ -311,6 +338,8 @@ void CompletionPopup::present(const CompletionList& list, bool force, jadefx::No
     state_->prefix = list.prefix;
     state_->replace_begin = list.replace_begin;
     state_->replace_end = list.replace_end;
+    state_->close_quote = list.close_quote;
+    state_->unclosed = list.unclosed;
     state_->owner = &owner;
     int exact = -1;
     int kept = -1;

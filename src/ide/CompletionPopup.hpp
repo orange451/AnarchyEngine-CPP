@@ -37,6 +37,8 @@ public:
 
     bool isOpen() const;
     bool commitsName() const;
+    // The typed quote matches an open argument string and one row is the choice.
+    bool commitsQuote(char quote) const;
     bool keyAccepts() const;
     bool accepting() const;
     int replaceEnd() const;

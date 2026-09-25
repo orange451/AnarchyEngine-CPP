@@ -295,6 +295,8 @@ bool IdeScriptEditor::completion_open() const { return completion_.isOpen(); }
 
 bool IdeScriptEditor::completion_commits_name() const { return completion_.commitsName(); }
 
+bool IdeScriptEditor::completion_commits_quote(char quote) const { return completion_.commitsQuote(quote); }
+
 bool IdeScriptEditor::completion_key_accepts() const { return completion_.keyAccepts(); }
 
 void IdeScriptEditor::dismiss_completion() { completion_.dismiss(); }
@@ -387,6 +389,8 @@ void ScriptCodeArea::handleText(jadefx::TextEvent& event) {
     if (editor != nullptr && event.text.size() == 1) {
         const char unit = event.text[0];
         if ((unit == '.' || unit == ':' || unit == '(') && editor->completion_commits_name()) {
+            editor->accept_completion(false);
+        } else if ((unit == '"' || unit == '\'') && editor->completion_commits_quote(unit)) {
             editor->accept_completion(false);
         }
     }

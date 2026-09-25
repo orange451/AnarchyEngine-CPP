@@ -183,12 +183,12 @@ int dummy_index(lua_State* state) {
                 }
                 if (method != nullptr && std::strcmp(method, "GetService") == 0) {
                     const char* service = luaL_checkstring(inner, 2);
-                    if (service != nullptr && std::strcmp(service, "RunService") == 0) {
+                    if (service != nullptr && lua_service_known(service)) {
                         lua_newtable(inner);
-                        lua_pushstring(inner, "RunService");
+                        lua_pushstring(inner, service);
                         lua_setfield(inner, -2, "__class");
                         std::vector<LuaField> members;
-                        lua_class_members("RunService", members);
+                        lua_class_members(service, members);
                         for (const LuaField& member : members) {
                             if (member.name == nullptr) {
                                 continue;

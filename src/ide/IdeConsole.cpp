@@ -316,6 +316,8 @@ void CommandField::handleText(jadefx::TextEvent& event) {
         const char unit = event.text[0];
         if ((unit == '.' || unit == ':' || unit == '(') && console->completion_.commitsName()) {
             console->accept_completion(false);
+        } else if ((unit == '"' || unit == '\'') && console->completion_.commitsQuote(unit)) {
+            console->accept_completion(false);
         }
     }
     jadefx::TextField::handleText(event);

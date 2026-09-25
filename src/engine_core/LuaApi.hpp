@@ -43,6 +43,8 @@ struct LuaField {
     bool class_from_arg = false;
     // FindFirstChild: the string argument is a child of the receiver.
     bool resolves_child = false;
+    // GetService: the string argument is a name from register_lua_service.
+    bool service_arg = false;
     // GetChildren: the result is a list of `type_name`.
     bool returns_list = false;
     // Signal phase, or a non-instance property tag (Connection.Connected).
@@ -95,6 +97,11 @@ void lua_class_members(const char* class_name, std::vector<LuaField>& out);
 const LuaField* lua_class_find(const char* class_name, std::string_view name);
 bool lua_class_known(const char* class_name);
 void lua_class_names(std::vector<std::string>& out);
+
+// Names GetService accepts. The service name is also its class name.
+void register_lua_service(const char* name);
+bool lua_service_known(const char* name);
+void lua_service_names(std::vector<std::string>& out);
 
 // Runs at load so a class is registered even when no instance has been created.
 // The object file that contains the class is what pulls the registrar in.

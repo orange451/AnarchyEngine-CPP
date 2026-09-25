@@ -110,12 +110,18 @@ bool would_cycle(const engine_core::DataModel& model, engine_core::InstanceId no
 
 // The click handler runs on the open menu's row. Hiding first keeps that row
 // alive: a visibility change on an open menu rebuilds its rows.
-void ShowOne(jadefx::MenuItem& show, jadefx::MenuItem& hide) {
-    if (jadefx::Menu* menu = show.getParentMenu()) {
+// testing: a play session is active. stepping: that session is executing.
+// Edit mode shows Test. A running test shows Pause and Stop. A paused test
+// shows Resume and Stop.
+void ShowSession(jadefx::MenuItem& test, jadefx::MenuItem& pause, jadefx::MenuItem& resume, jadefx::MenuItem& stop,
+                 bool testing, bool stepping) {
+    if (jadefx::Menu* menu = test.getParentMenu()) {
         menu->hide();
     }
-    hide.setVisible(false);
-    show.setVisible(true);
+    test.setVisible(!testing);
+    pause.setVisible(testing && stepping);
+    resume.setVisible(testing && !stepping);
+    stop.setVisible(testing);
 }
 
 }  // namespace
@@ -143,32 +149,50 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
 
     auto edit = jadefx::make<jadefx::Menu>("Edit");
     auto test = jadefx::make<jadefx::MenuItem>("Test");
+    auto pause = jadefx::make<jadefx::MenuItem>("Pause");
+    auto resume = jadefx::make<jadefx::MenuItem>("Resume");
     auto stop = jadefx::make<jadefx::MenuItem>("Stop");
     jadefx::MenuItem* testItem = test.get();
+    jadefx::MenuItem* pauseItem = pause.get();
+    jadefx::MenuItem* resumeItem = resume.get();
     jadefx::MenuItem* stopItem = stop.get();
     test->setAccelerator(kKeyF5, 0);
     stop->setAccelerator(kKeyF5, 0);
+    pause->setVisible(false);
+    resume->setVisible(false);
     stop->setVisible(false);
-    test->setOnAction([this, testItem, stopItem](jadefx::ActionEvent&) {
+    test->setOnAction([this, testItem, pauseItem, resumeItem, stopItem](jadefx::ActionEvent&) {
         engine_core::Engine& engine = runner_.simulation();
-        // The open editors write Source, and while stopped that becomes the
-        // place, before Test captures or resumes.
+        // Open editors write Source before the place is frozen.
         flush_editors();
-        // Opens the script VM and enqueues every eligible Script. The place is
-        // captured the first time. Heartbeats after resume run task.wait.
+        // Edit mode is the authored place. Freeze that tree before play so
+        // Stop restores it, including a folder removed while stopped.
+        // start_simulation alone keeps the previous snapshot.
         engine.on_simulation([](engine_core::DataModel& model) {
             if (!model.simulation_running()) {
+                model.capture_place();
                 model.start_simulation();
             }
         });
         engine.resume();
-        ShowOne(*stopItem, *testItem);
+        ShowSession(*testItem, *pauseItem, *resumeItem, *stopItem, true, true);
     });
-    stop->setOnAction([this, testItem, stopItem](jadefx::ActionEvent&) {
+    pause->setOnAction([this, testItem, pauseItem, resumeItem, stopItem](jadefx::ActionEvent&) {
+        // The session stays active: scripts and the play tree remain, and
+        // steps wait until Resume. Stop still restores the authored place.
+        runner_.simulation().pause();
+        ShowSession(*testItem, *pauseItem, *resumeItem, *stopItem, true, false);
+    });
+    resume->setOnAction([this, testItem, pauseItem, resumeItem, stopItem](jadefx::ActionEvent&) {
+        runner_.simulation().resume();
+        ShowSession(*testItem, *pauseItem, *resumeItem, *stopItem, true, true);
+    });
+    stop->setOnAction([this, testItem, pauseItem, resumeItem, stopItem](jadefx::ActionEvent&) {
         engine_core::Engine& engine = runner_.simulation();
         // Pause first so stop_simulation runs on this thread once the sim
         // step has released the write lock. That aborts scripts and restores
-        // the place before another Heartbeat can run.
+        // the place before another Heartbeat can run. Already paused is the
+        // same restore.
         engine.pause();
         engine.on_simulation([](engine_core::DataModel& model) {
             if (model.simulation_running()) {
@@ -179,7 +203,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
         // during play, write their buffers back and capture that place.
         reapply_editors();
         restore_closed_edits();
-        ShowOne(*testItem, *stopItem);
+        ShowSession(*testItem, *pauseItem, *resumeItem, *stopItem, false, false);
     });
 
     auto insert = jadefx::make<jadefx::MenuItem>("Insert Triangle");
@@ -201,6 +225,8 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     });
     edit->getItems().add(std::move(insert));
     edit->getItems().add(std::move(test));
+    edit->getItems().add(std::move(pause));
+    edit->getItems().add(std::move(resume));
     edit->getItems().add(std::move(stop));
 
     auto view = jadefx::make<jadefx::Menu>("View");

@@ -1664,6 +1664,46 @@ TEST_CASE("N4 a second play restores the original place", "[N4]") {
     REQUIRE(model.world_generation() == generation + 2);
 }
 
+TEST_CASE("N4 a folder removed in edit mode stays removed after the next stop", "[N4]") {
+    engine_core::DataModel model;
+
+    model.start_simulation();
+    model.stop_simulation();
+
+    engine_core::Folder& folder = model.create<engine_core::Folder>();
+    const engine_core::InstanceId folder_id = folder.id();
+    model.set_name(folder_id, "Props");
+    model.set_parent(folder_id, model.id());
+
+    engine_core::Folder& cut = model.create<engine_core::Folder>();
+    const engine_core::InstanceId cut_id = cut.id();
+    model.set_name(cut_id, "Loose");
+    model.set_parent(cut_id, model.id());
+    // Insert while stopped replaces the snapshot, which is why the new
+    // folders survive the next Stop.
+    model.capture_place();
+
+    model.start_simulation();
+    model.stop_simulation();
+    REQUIRE(model.parent(folder_id) == model.id());
+    REQUIRE(model.parent(cut_id) == model.id());
+
+    model.destroy(folder_id);
+    model.set_parent(cut_id, engine_core::DataModel::kNoParent);
+    REQUIRE_FALSE(model.alive(folder_id));
+    REQUIRE(model.parent(cut_id) == engine_core::DataModel::kNoParent);
+
+    // Test freezes this edit-mode tree before play.
+    model.capture_place();
+    model.start_simulation();
+    model.stop_simulation();
+    REQUIRE_FALSE(model.alive(folder_id));
+    REQUIRE(model.alive(cut_id));
+    REQUIRE(model.parent(cut_id) == engine_core::DataModel::kNoParent);
+    REQUIRE(model.find_first_child(model.id(), "Props") == 0);
+    REQUIRE(model.find_first_child(model.id(), "Loose") == 0);
+}
+
 TEST_CASE("edit then play captures the place on start", "[N4]") {
     engine_core::DataModel model;
     engine_core::GameObject& part = model.create<engine_core::GameObject>();

@@ -22,8 +22,10 @@ class IdeScriptEditor;
 // IDE shell, in the shape of OpenGLFX-IDE's IdeLayout.
 // The constructor prepares the session and builds the shell. The app can
 // then create instances. start() adds the scene view and launches the threads.
-// The simulation stays paused until Test resumes it. Stop pauses it again.
-// The Edit menu shows whichever of those two applies.
+// The simulation stays paused until Test resumes it. Pause during a test
+// stops steps and leaves the session active. Resume continues them. Stop
+// restores the place, including when that test is already paused.
+// The Edit menu shows Test, or Stop with Pause or Resume.
 // Explorer rows open Cut, Paste, and Rename. A script also has Edit, and a
 // double-click runs it. Edit docks a script editor on the scene view's tab strip.
 class IdeLayout {

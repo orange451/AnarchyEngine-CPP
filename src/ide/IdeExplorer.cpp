@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <string>
 #include <utility>
 
 namespace ide {
@@ -40,8 +41,8 @@ bool IdeExplorer::Snapshot::same_shape(const Snapshot& other) const {
     return ids == other.ids && child_counts == other.child_counts && labels == other.labels;
 }
 
-IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name)
-    : IdePane(std::move(name), true), root_(root) {
+IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, ExplorerHost host)
+    : IdePane(std::move(name), true), root_(root), host_(std::move(host)) {
     setPrefWidth(9999999);
     setMinSize(150, 80);
 
@@ -56,9 +57,110 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name)
     tree_ = jadefx::make<jadefx::TreeView>(root_item_);
     tree_->setShowRoot(false);
     tree_->setFixedCellSize(24);
+    tree_->setOnContextMenuRequested([this](jadefx::TreeItem& item, const jadefx::MouseEvent& event) {
+        show_menu(item, event.x, event.y);
+    });
+    tree_->setOnItemActivated([this](jadefx::TreeItem& item) { return activate(item); });
     Fill(*tree_);
     getChildren().add(tree_);
     sync();
+}
+
+bool IdeExplorer::find_id(const jadefx::TreeItem* item, engine_core::InstanceId& id) const {
+    if (item == nullptr) {
+        return false;
+    }
+    if (root_item_ && item == root_item_.get()) {
+        id = root_.id();
+        return true;
+    }
+    for (const auto& entry : items_) {
+        if (entry.second.get() == item) {
+            id = entry.first;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool IdeExplorer::actions_for(engine_core::InstanceId id, std::vector<engine_core::ContextAction>& out) const {
+    engine_core::DataModelLock lock(root_, engine_core::DataModelLock::Read, kLockWait);
+    if (!lock.owns()) {
+        return false;
+    }
+    const engine_core::DataModel* object = id == root_.id() ? &root_ : root_.instance(id);
+    if (object == nullptr) {
+        return false;
+    }
+    object->context_actions(out);
+    return !out.empty();
+}
+
+void IdeExplorer::show_menu(jadefx::TreeItem& item, double x, double y) {
+    engine_core::InstanceId id = 0;
+    if (!find_id(&item, id)) {
+        return;
+    }
+    std::vector<engine_core::ContextAction> actions;
+    if (!actions_for(id, actions)) {
+        return;
+    }
+    jadefx::Scene* scene = tree_ ? tree_->getScene() : nullptr;
+    if (scene == nullptr) {
+        return;
+    }
+    if (menu_) {
+        menu_->hide();
+    }
+    menu_ = jadefx::make<jadefx::Menu>();
+    bool any = false;
+    for (const engine_core::ContextAction& action : actions) {
+        if (action.name == nullptr) {
+            continue;
+        }
+        if (any && std::string_view(action.name) == "Cut") {
+            menu_->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
+        }
+        auto entry = jadefx::make<jadefx::MenuItem>(action.name);
+        const bool on = !host_.enabled || host_.enabled(action.name);
+        entry->setDisable(!on);
+        const std::string name = action.name;
+        entry->setOnAction([this, id, name](jadefx::ActionEvent&) {
+            if (host_.run) {
+                host_.run(name, id);
+            }
+        });
+        menu_->getItems().add(std::move(entry));
+        any = true;
+    }
+    if (any) {
+        menu_->show(*scene, x, y);
+    }
+}
+
+bool IdeExplorer::activate(jadefx::TreeItem& item) {
+    if (!host_.run) {
+        return false;
+    }
+    engine_core::InstanceId id = 0;
+    if (!find_id(&item, id)) {
+        return false;
+    }
+    std::vector<engine_core::ContextAction> actions;
+    if (!actions_for(id, actions)) {
+        return false;
+    }
+    for (const engine_core::ContextAction& action : actions) {
+        if (!action.primary || action.name == nullptr) {
+            continue;
+        }
+        if (host_.enabled && !host_.enabled(action.name)) {
+            return false;
+        }
+        host_.run(action.name, id);
+        return true;
+    }
+    return false;
 }
 
 void IdeExplorer::layoutChildren() {

@@ -997,6 +997,12 @@ InstanceId DataModel::next_sibling(InstanceId id) const {
     return part->next_sibling;
 }
 
+void DataModel::context_actions(std::vector<ContextAction>& out) const {
+    out.push_back(ContextAction{"Cut", false});
+    out.push_back(ContextAction{"Paste", false});
+    out.push_back(ContextAction{"Rename", false});
+}
+
 void DataModel::set_name(InstanceId id, std::string name) {
     if (!gameplay_thread()) {
         contract_fail("set_name runs on SimulationThread");

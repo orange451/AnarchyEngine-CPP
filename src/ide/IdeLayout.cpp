@@ -1,5 +1,6 @@
 #include "IdeLayout.hpp"
 
+#include "DataModelLock.hpp"
 #include "Engine.hpp"
 #include "IdeConsole.hpp"
 #include "IdeDock.hpp"
@@ -7,6 +8,7 @@
 #include "TestTriangle.hpp"
 #include "../runner/GameView.hpp"
 
+#include <chrono>
 #include <cmath>
 
 namespace ide {
@@ -78,6 +80,24 @@ double Fraction(double part, double whole, double limit) {
     return fraction;
 }
 
+bool parent_ok(const engine_core::DataModel& model, engine_core::InstanceId parent) {
+    return parent == 0 || (parent != engine_core::DataModel::kNoParent && model.alive(parent));
+}
+
+bool would_cycle(const engine_core::DataModel& model, engine_core::InstanceId node, engine_core::InstanceId parent) {
+    if (node == 0 || parent == node) {
+        return true;
+    }
+    engine_core::InstanceId cursor = parent;
+    for (int guard = 0; cursor != 0 && cursor != engine_core::DataModel::kNoParent && guard < 100000; ++guard) {
+        if (cursor == node) {
+            return true;
+        }
+        cursor = model.parent(cursor);
+    }
+    return false;
+}
+
 // The click handler runs on the open menu's row. Hiding first keeps that row
 // alive: a visibility change on an open menu rebuilds its rows.
 void ShowOne(jadefx::MenuItem& show, jadefx::MenuItem& hide) {
@@ -90,7 +110,19 @@ void ShowOne(jadefx::MenuItem& show, jadefx::MenuItem& hide) {
 
 }  // namespace
 
-IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
+struct IdeLayout::Clip {
+    engine_core::InstanceId id = 0;
+    engine_core::InstanceId parent = engine_core::DataModel::kNoParent;
+    bool held = false;
+};
+
+struct IdeLayout::Prompt {
+    std::shared_ptr<jadefx::Node> sheet;
+    std::shared_ptr<jadefx::TextField> field;
+    std::function<void(std::string)> apply;
+};
+
+IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_unique<Clip>()) {
     runner_.prepare();
 
     auto file = jadefx::make<jadefx::Menu>("File");
@@ -163,11 +195,14 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
     menuBar->getMenus().add(view);
 
     engine_core::DataModel& model = runner_.simulation().datamodel();
+    ExplorerHost host;
+    host.run = [this](std::string_view action, engine_core::InstanceId id) { run_action(action, id); };
+    host.enabled = [this](std::string_view action) { return action_enabled(action); };
 
     auto west = jadefx::make<IdeDock>();
     west->setMinSize(160, 80);
     // IdeTreeTest is the sample tree page. The Java shell left that dock commented out.
-    west->dock(jadefx::make<IdeExplorer>(model, "Game Explorer"));
+    west->dock(jadefx::make<IdeExplorer>(model, "Game Explorer", host));
 
     auto center = jadefx::make<IdeDock>();
     center->setMinSize(64, 64);
@@ -179,7 +214,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) {
 
     auto east = jadefx::make<IdeDock>();
     east->setMinSize(160, 80);
-    east->dock(jadefx::make<IdeExplorer>(model, "Current Scene"));
+    east->dock(jadefx::make<IdeExplorer>(model, "Current Scene", host));
 
     auto vertical = jadefx::make<jadefx::SplitPane>();
     vertical->setOrientation(jadefx::Orientation::Vertical);
@@ -223,9 +258,179 @@ void IdeLayout::start() {
 }
 
 void IdeLayout::mount(jadefx::Scene& scene) {
+    scene_ = &scene;
     scene.setPadding(jadefx::Insets{});
     scene.setStylesheet(kStylesheet);
     scene.setRoot(root_);
+}
+
+IdeLayout::~IdeLayout() = default;
+
+void IdeLayout::run_action(std::string_view action, std::uint32_t id) {
+    retiring_.reset();
+    if (prompt_ && (prompt_->sheet == nullptr || prompt_->sheet->getScene() == nullptr)) {
+        prompt_.reset();
+    }
+    if (action == "Cut") {
+        cut(id);
+    } else if (action == "Paste") {
+        paste(id);
+    } else if (action == "Rename") {
+        rename(id);
+    }
+}
+
+bool IdeLayout::action_enabled(std::string_view action) const {
+    if (action == "Paste") {
+        return clip_ && clip_->held;
+    }
+    return true;
+}
+
+void IdeLayout::cut(std::uint32_t id) {
+    if (!clip_ || id == 0) {
+        return;
+    }
+    engine_core::DataModel& model = runner_.simulation().datamodel();
+    engine_core::InstanceId old_parent = engine_core::DataModel::kNoParent;
+    {
+        engine_core::DataModelLock lock(model, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
+        if (!lock.owns() || !model.alive(id)) {
+            return;
+        }
+        old_parent = model.parent(id);
+    }
+    const engine_core::InstanceId put_back = clip_->held && clip_->id != id ? clip_->id : 0;
+    const engine_core::InstanceId put_parent = put_back != 0 ? clip_->parent : engine_core::DataModel::kNoParent;
+    clip_->id = id;
+    clip_->parent = old_parent;
+    clip_->held = true;
+    runner_.simulation().on_simulation([id, put_back, put_parent](engine_core::DataModel& world) {
+        if (put_back != 0 && world.alive(put_back) && world.parent(put_back) == engine_core::DataModel::kNoParent &&
+            parent_ok(world, put_parent) && !would_cycle(world, put_back, put_parent)) {
+            world.set_parent(put_back, put_parent);
+        }
+        if (world.alive(id)) {
+            world.set_parent(id, engine_core::DataModel::kNoParent);
+        }
+    });
+}
+
+void IdeLayout::paste(std::uint32_t id) {
+    if (!clip_ || !clip_->held) {
+        return;
+    }
+    const engine_core::InstanceId child = clip_->id;
+    engine_core::DataModel& model = runner_.simulation().datamodel();
+    {
+        engine_core::DataModelLock lock(model, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
+        if (!lock.owns() || !model.alive(child) || !parent_ok(model, id) || would_cycle(model, child, id)) {
+            return;
+        }
+    }
+    clip_->held = false;
+    runner_.simulation().on_simulation([child, id](engine_core::DataModel& world) {
+        if (!world.alive(child) || !parent_ok(world, id) || would_cycle(world, child, id)) {
+            return;
+        }
+        world.set_parent(child, id);
+    });
+}
+
+void IdeLayout::rename(std::uint32_t id) {
+    engine_core::DataModel& model = runner_.simulation().datamodel();
+    std::string current;
+    {
+        engine_core::DataModelLock lock(model, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
+        if (!lock.owns()) {
+            return;
+        }
+        if (id != 0 && !model.alive(id)) {
+            return;
+        }
+        current = model.name(id);
+    }
+    show_rename(std::move(current), [this, id](std::string name) {
+        runner_.simulation().on_simulation([id, name](engine_core::DataModel& world) {
+            if (id != 0 && !world.alive(id)) {
+                return;
+            }
+            world.set_name(id, name);
+        });
+    });
+}
+
+void IdeLayout::close_prompt(bool apply) {
+    std::shared_ptr<Prompt> prompt = std::move(prompt_);
+    if (!prompt) {
+        return;
+    }
+    std::string name = prompt->field ? prompt->field->getText() : std::string();
+    std::function<void(std::string)> done = std::move(prompt->apply);
+    if (scene_ != nullptr && prompt->sheet != nullptr && prompt->sheet->getScene() == scene_) {
+        scene_->hidePopup(prompt->sheet.get());
+    }
+    retiring_ = std::move(prompt);
+    if (apply && done) {
+        done(std::move(name));
+    }
+}
+
+void IdeLayout::show_rename(std::string current, std::function<void(std::string)> apply) {
+    if (scene_ == nullptr) {
+        return;
+    }
+    if (prompt_ && prompt_->sheet && prompt_->sheet->getScene() == scene_) {
+        scene_->hidePopup(prompt_->sheet.get());
+    }
+    retiring_ = std::move(prompt_);
+
+    auto sheet = jadefx::make<jadefx::VBox>();
+    sheet->setSpacing(8);
+    sheet->setPadding(jadefx::Insets::uniform(12));
+    sheet->setPrefWidth(300);
+    sheet->setBackground(jadefx::Color::white());
+    sheet->getClassList().add("rename-prompt");
+
+    auto label = jadefx::make<jadefx::Label>("Rename");
+    auto field = jadefx::make<jadefx::TextField>(current);
+    field->setStyle("background-color: #ffffff; border-width: 1px; border-color: #c8c8c8; padding: 6px 8px;");
+    field->selectAll();
+    auto row = jadefx::make<jadefx::HBox>();
+    row->setSpacing(8);
+    row->setAlignment(jadefx::Pos::CenterRight);
+    auto cancel = jadefx::make<jadefx::Button>("Cancel");
+    auto ok = jadefx::make<jadefx::Button>("OK");
+    ok->setDefaultButton(true);
+    cancel->setOnAction([this](jadefx::ActionEvent&) { close_prompt(false); });
+    ok->setOnAction([this](jadefx::ActionEvent&) { close_prompt(true); });
+    field->setOnAction([this](jadefx::ActionEvent&) { close_prompt(true); });
+    row->getChildren().add(cancel);
+    row->getChildren().add(ok);
+    sheet->getChildren().add(label);
+    sheet->getChildren().add(field);
+    sheet->getChildren().add(row);
+
+    prompt_ = std::make_shared<Prompt>();
+    prompt_->sheet = sheet;
+    prompt_->field = field;
+    prompt_->apply = std::move(apply);
+
+    jadefx::PopupOptions options;
+    options.autoHide = true;
+    scene_->showPopup(sheet, 0, 0, -1, -1, options);
+    const double width = sheet->getWidth();
+    const double height = sheet->getHeight();
+    double x = (scene_->getWidth() - width) * 0.5;
+    double y = (scene_->getHeight() - height) * 0.5;
+    if (x < 8) {
+        x = 8;
+    }
+    if (y < 8) {
+        y = 8;
+    }
+    scene_->movePopup(sheet.get(), x, y, width, height);
+    field->requestFocus();
 }
 
 }  // namespace ide

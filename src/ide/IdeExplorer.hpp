@@ -4,21 +4,32 @@
 #include "DataModel.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace ide {
 
+// The shell runs an action by name. enabled is false when the item should be
+// shown but not clickable, such as Paste with an empty clipboard.
+struct ExplorerHost {
+    std::function<void(std::string_view action, engine_core::InstanceId id)> run;
+    std::function<bool(std::string_view action)> enabled;
+};
+
 // Hierarchy under one DataModel. The hidden tree root is that instance.
 // Descendant rows stay aligned with parenting: adds, removes, reparents, and
 // destroy. A burst is applied in one pass so the view rebuilds once, not once
 // per instance.
+// A right-click opens that instance's context actions. A double-click runs the
+// primary one, which for a script is Edit.
 class IdeExplorer : public IdePane {
 public:
-    IdeExplorer(engine_core::DataModel& root, std::string name);
+    IdeExplorer(engine_core::DataModel& root, std::string name, ExplorerHost host);
 
 protected:
     void layoutChildren() override;
@@ -41,6 +52,10 @@ private:
     };
 
     void sync();
+    bool find_id(const jadefx::TreeItem* item, engine_core::InstanceId& id) const;
+    bool actions_for(engine_core::InstanceId id, std::vector<engine_core::ContextAction>& out) const;
+    void show_menu(jadefx::TreeItem& item, double x, double y);
+    bool activate(jadefx::TreeItem& item);
     // Copies the live hierarchy. False when the lock is busy or nothing changed.
     bool capture();
     void read_hierarchy(Snapshot& snap);
@@ -52,8 +67,10 @@ private:
     std::shared_ptr<jadefx::TreeItem> row_ptr(engine_core::InstanceId id) const;
 
     engine_core::DataModel& root_;
+    ExplorerHost host_;
     std::shared_ptr<jadefx::TreeItem> root_item_;
     std::shared_ptr<jadefx::TreeView> tree_;
+    std::shared_ptr<jadefx::Menu> menu_;
     std::unordered_map<engine_core::InstanceId, std::shared_ptr<jadefx::TreeItem>> items_;
     std::unordered_set<engine_core::InstanceId> seen_;
     std::vector<engine_core::InstanceId> pending_;

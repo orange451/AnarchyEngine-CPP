@@ -20,6 +20,14 @@
 namespace engine_core {
 
 class DataModelLock;
+
+// One explorer context action. name is the menu label. primary is the action a
+// double-click runs. The shell performs the action. A subclass adds its own.
+struct ContextAction {
+    const char* name = nullptr;
+    bool primary = false;
+};
+
 class Engine;
 class GameObject;
 class ScriptHost;
@@ -70,6 +78,9 @@ public:
 
     // Class identity. The pointer remains valid after the call.
     virtual const char* class_name() const { return "DataModel"; }
+
+    // Cut, Paste, and Rename. A subclass appends its own, or inserts a primary one.
+    virtual void context_actions(std::vector<ContextAction>& out) const;
 
     // Heartbeat calls this on every descendant of the root. dt is that phase's
     // step in seconds. The root itself is not stepped.

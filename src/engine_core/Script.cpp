@@ -7,6 +7,11 @@
 
 namespace engine_core {
 
+void LuaSource::context_actions(std::vector<ContextAction>& out) const {
+    out.push_back(ContextAction{"Edit", true});
+    DataModel::context_actions(out);
+}
+
 void LuaSource::set_source(std::string source) {
     if (!on_gameplay_thread()) {
         contract_fail("set_source runs on SimulationThread");

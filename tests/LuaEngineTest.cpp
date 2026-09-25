@@ -1,7 +1,11 @@
 #include "Engine.hpp"
 #include "LuaEngine.hpp"
+#include "Script.hpp"
 #include "ScriptRuntime.hpp"
+#include "TestTriangle.hpp"
 #include "runner/Runner.hpp"
+
+#include <vector>
 
 #include <cstdio>
 #include <cstdlib>
@@ -220,6 +224,32 @@ void testRunner() {
     expect(threw, "lua() after stop");
 }
 
+void testContextActions() {
+    engine_core::DataModel model;
+    std::vector<engine_core::ContextAction> actions;
+    model.context_actions(actions);
+    expect(actions.size() == 3, "a plain model has cut, paste, and rename");
+    expect(actions.size() == 3 && std::string(actions[0].name) == "Cut" && !actions[0].primary, "cut is not primary");
+    expect(actions.size() == 3 && std::string(actions[1].name) == "Paste" && !actions[1].primary, "paste is not primary");
+    expect(actions.size() == 3 && std::string(actions[2].name) == "Rename" && !actions[2].primary, "rename is not primary");
+
+    engine_core::Script& script = model.create<engine_core::Script>();
+    actions.clear();
+    script.context_actions(actions);
+    expect(actions.size() == 4 && std::string(actions[0].name) == "Edit" && actions[0].primary, "a script's edit is primary");
+    expect(actions.size() == 4 && std::string(actions[1].name) == "Cut", "a script still has cut");
+
+    engine_core::ModuleScript& module = model.create<engine_core::ModuleScript>();
+    actions.clear();
+    module.context_actions(actions);
+    expect(actions.size() == 4 && actions[0].primary && std::string(actions[0].name) == "Edit", "a module script edits");
+
+    engine_core::TestTriangle& triangle = model.create<engine_core::TestTriangle>();
+    actions.clear();
+    triangle.context_actions(actions);
+    expect(actions.size() == 3 && !actions[0].primary, "a triangle uses the plain actions");
+}
+
 }  // namespace
 
 int main() {
@@ -232,6 +262,7 @@ int main() {
         testBudget();
         testMemory();
         testRunner();
+        testContextActions();
     } catch (const std::exception& ex) {
         std::fprintf(stderr, "FAIL exception: %s\n", ex.what());
         return EXIT_FAILURE;

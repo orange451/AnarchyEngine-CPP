@@ -26,6 +26,9 @@ public:
     void set_source(std::string source);
     void set_enabled(bool enabled);
 
+    // Edit, then the actions every instance has. Edit is the double-click.
+    void context_actions(std::vector<ContextAction>& out) const override;
+
     const std::string& source() const { return source_; }
     bool enabled() const { return enabled_; }
     std::uint32_t start_generation() const { return start_generation_; }

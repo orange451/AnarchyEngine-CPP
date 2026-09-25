@@ -4,6 +4,7 @@
 #include "Script.hpp"
 #include "TaskScheduler.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <list>
@@ -46,12 +47,15 @@ public:
     bool vm_open() const { return open_; }
 
     // One console line. Print is a script print(). Error is a compile failure or an
-    // uncaught resume error. A caught error stays inside the script.
-    enum class OutputKind { Print, Error };
+    // uncaught resume error. Command is text submitted from the Lua command line.
+    // A caught error stays inside the script.
+    enum class OutputKind { Print, Error, Command };
 
     struct OutputLine {
         OutputKind kind = OutputKind::Print;
         std::string text;
+        // Wall clock when the line was recorded. The console shows this on each row.
+        std::chrono::system_clock::time_point time{};
     };
 
     struct OutputBatch {
@@ -62,8 +66,8 @@ public:
 
     // Drops queued lines. Play-session start does this before any script from that session runs.
     std::uint64_t clear_output();
-    // Copies the text. A missing trailing newline is added. Safe from the simulation thread
-    // and from the thread that runs the sandbox command line.
+    // Copies the text. A missing trailing newline is added. Records the wall time.
+    // Safe from the simulation thread and from the thread that runs the command line.
     void append_output(OutputKind kind, std::string text);
     OutputBatch drain_output();
 

@@ -2300,3 +2300,21 @@ TEST_CASE("S16 the console sees game while the simulation is stopped", "[S16]") 
     REQUIRE(after.lines[0].text == "Place\n");
     REQUIRE(after.lines[1].text == "Place\n");
 }
+
+TEST_CASE("S17 output lines remember when they were written", "[S17]") {
+    ScriptRig rig;
+    const auto before = std::chrono::system_clock::now();
+    rig.runtime.append_output(engine_core::ScriptRuntime::OutputKind::Command, "print(1)");
+    rig.runtime.append_output(engine_core::ScriptRuntime::OutputKind::Print, "1");
+    const auto after = std::chrono::system_clock::now();
+    const engine_core::ScriptRuntime::OutputBatch batch = rig.runtime.drain_output();
+    REQUIRE(batch.lines.size() == 2);
+    REQUIRE(batch.lines[0].kind == engine_core::ScriptRuntime::OutputKind::Command);
+    REQUIRE(batch.lines[0].text == "print(1)\n");
+    REQUIRE(batch.lines[1].kind == engine_core::ScriptRuntime::OutputKind::Print);
+    REQUIRE(batch.lines[1].text == "1\n");
+    REQUIRE(batch.lines[0].time >= before);
+    REQUIRE(batch.lines[0].time <= after);
+    REQUIRE(batch.lines[1].time >= batch.lines[0].time);
+    REQUIRE(batch.lines[1].time <= after);
+}

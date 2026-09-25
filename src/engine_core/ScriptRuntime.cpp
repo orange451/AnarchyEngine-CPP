@@ -1001,7 +1001,7 @@ void ScriptRuntime::append_output(OutputKind kind, std::string text) {
     while (output_.size() >= kMaxOutputLines) {
         output_.pop_front();
     }
-    output_.push_back(OutputLine{kind, std::move(text)});
+    output_.push_back(OutputLine{kind, std::move(text), std::chrono::system_clock::now()});
 }
 
 ScriptRuntime::OutputBatch ScriptRuntime::drain_output() {

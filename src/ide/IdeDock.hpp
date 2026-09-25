@@ -11,7 +11,9 @@ class IdeDock : public jadefx::BorderPane {
 public:
     IdeDock();
 
-    void dock(const std::shared_ptr<IdePane>& pane);
+    // Adds the page and selects it.
+    std::shared_ptr<jadefx::Tab> dock(const std::shared_ptr<IdePane>& pane);
+    void select(const IdePane* pane);
 
 private:
     std::shared_ptr<jadefx::TabPane> tabs_;

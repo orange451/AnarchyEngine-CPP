@@ -5,6 +5,8 @@
 #include "IdeConsole.hpp"
 #include "IdeDock.hpp"
 #include "IdeExplorer.hpp"
+#include "IdeScriptEditor.hpp"
+#include "Script.hpp"
 #include "TestTriangle.hpp"
 #include "../runner/GameView.hpp"
 
@@ -50,6 +52,13 @@ textfield {
 styleclassedtextarea {
     background-color: #ffffff;
     padding: 6px 8px;
+}
+codearea {
+    background-color: #ffffff;
+    color: #1f2328;
+    font-family: "Editor Mono";
+    font-size: 14px;
+    padding: 8px;
 }
 split-pane:horizontal > .split-pane-divider,
 split-pane:vertical > .split-pane-divider {
@@ -141,6 +150,9 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     stop->setVisible(false);
     test->setOnAction([this, testItem, stopItem](jadefx::ActionEvent&) {
         engine_core::Engine& engine = runner_.simulation();
+        // The open editors write Source, and while stopped that becomes the
+        // place, before Test captures or resumes.
+        flush_editors();
         // Opens the script VM and enqueues every eligible Script. The place is
         // captured the first time. Heartbeats after resume run task.wait.
         engine.on_simulation([](engine_core::DataModel& model) {
@@ -162,6 +174,10 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
                 model.stop_simulation();
             }
         });
+        // Stop put the authored scripts back. Open editors, and editors closed
+        // during play, write their buffers back and capture that place.
+        reapply_editors();
+        restore_closed_edits();
         ShowOne(*testItem, *stopItem);
     });
 
@@ -277,6 +293,8 @@ void IdeLayout::run_action(std::string_view action, std::uint32_t id) {
         paste(id);
     } else if (action == "Rename") {
         rename(id);
+    } else if (action == "Edit") {
+        edit(id);
     }
 }
 
@@ -357,7 +375,48 @@ void IdeLayout::rename(std::uint32_t id) {
             }
             world.set_name(id, name);
         });
+        if (std::shared_ptr<IdeScriptEditor> editor = open_editor(id)) {
+            editor->setTitleText(name);
+        }
     });
+}
+
+void IdeLayout::edit(std::uint32_t id) {
+    if (sceneDock_ == nullptr) {
+        return;
+    }
+    engine_core::DataModel& model = runner_.simulation().datamodel();
+    {
+        engine_core::DataModelLock lock(model, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
+        if (!lock.owns()) {
+            return;
+        }
+        if (dynamic_cast<const engine_core::LuaSource*>(model.instance(id)) == nullptr) {
+            return;
+        }
+    }
+    kept_sources_.erase(id);
+    if (std::shared_ptr<IdeScriptEditor> existing = open_editor(id)) {
+        sceneDock_->select(existing.get());
+        existing->focus();
+        return;
+    }
+    auto editor = jadefx::make<IdeScriptEditor>(runner_.simulation(), id);
+    std::shared_ptr<jadefx::Tab> tab = sceneDock_->dock(editor);
+    if (tab) {
+        std::weak_ptr<jadefx::Tab> weak = tab;
+        editor->setOnTitle([weak](const std::string& title) {
+            if (std::shared_ptr<jadefx::Tab> live = weak.lock()) {
+                live->setText(title);
+            }
+        });
+        tab->setOnClosed([this, id, editor] {
+            if (editor && editor->isLoaded()) {
+                kept_sources_[id] = editor->text();
+            }
+        });
+    }
+    open_scripts_[id] = editor;
 }
 
 void IdeLayout::close_prompt(bool apply) {
@@ -431,6 +490,59 @@ void IdeLayout::show_rename(std::string current, std::function<void(std::string)
     }
     scene_->movePopup(sheet.get(), x, y, width, height);
     field->requestFocus();
+}
+
+std::shared_ptr<IdeScriptEditor> IdeLayout::open_editor(std::uint32_t id) const {
+    const auto found = open_scripts_.find(id);
+    if (found == open_scripts_.end()) {
+        return nullptr;
+    }
+    return found->second.lock();
+}
+
+void IdeLayout::flush_editors() {
+    for (const auto& entry : open_scripts_) {
+        if (std::shared_ptr<IdeScriptEditor> editor = entry.second.lock()) {
+            editor->flush();
+        }
+    }
+}
+
+void IdeLayout::reapply_editors() {
+    for (const auto& entry : open_scripts_) {
+        if (std::shared_ptr<IdeScriptEditor> editor = entry.second.lock()) {
+            editor->reapply();
+        }
+    }
+}
+
+void IdeLayout::restore_closed_edits() {
+    std::unordered_map<std::uint32_t, std::string> pending;
+    for (auto it = kept_sources_.begin(); it != kept_sources_.end();) {
+        if (open_editor(it->first)) {
+            it = kept_sources_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    pending.swap(kept_sources_);
+    if (pending.empty()) {
+        return;
+    }
+    runner_.simulation().on_simulation([pending](engine_core::DataModel& model) {
+        bool changed = false;
+        for (const auto& entry : pending) {
+            auto* source = dynamic_cast<engine_core::LuaSource*>(model.instance(entry.first));
+            if (source == nullptr || source->source() == entry.second) {
+                continue;
+            }
+            source->set_source(entry.second);
+            changed = true;
+        }
+        if (changed && !model.simulation_running()) {
+            model.capture_place();
+        }
+    });
 }
 
 }  // namespace ide

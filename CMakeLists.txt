@@ -32,6 +32,8 @@ add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
     src/ide/IdeConsole.cpp
     src/ide/IdeExplorer.cpp
     src/ide/IdeIcons.cpp
+    src/ide/IdeScriptEditor.cpp
+    src/ide/LuauHighlight.cpp
     src/ide/IdeTreeTest.cpp
     src/ide/IdeLayout.cpp
 )
@@ -140,6 +142,8 @@ target_link_libraries(AnarchyEngine-CPP PRIVATE jadefx engine_core)
 
 add_executable(engine-tests
     tests/LuaEngineTest.cpp
+    tests/LuauHighlightTest.cpp
+    src/ide/LuauHighlight.cpp
     src/runner/Runner.cpp
 )
 target_include_directories(engine-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")

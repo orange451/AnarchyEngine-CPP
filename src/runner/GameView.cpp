@@ -154,10 +154,11 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
 }
 
 void GameView::sceneChanged(jadefx::Scene* previous) {
-    // Leaving a live scene can release the GL objects. The context is still
-    // current then. Scene teardown runs after JadeFX has destroyed the context,
-    // so those names are left for the process to reclaim.
-    if (getScene() != nullptr || previous == nullptr || previous->isTearingDown()) {
+    // Leaving a live scene releases the GL objects. The context that created
+    // them is still current: a move between windows shuts down before the new
+    // window paints, and that paint creates them again. Scene teardown runs
+    // after JadeFX has destroyed the context, so those names are left alone.
+    if (previous == nullptr || previous->isTearingDown() || getScene() == previous) {
         return;
     }
     renderer_.shutdown();

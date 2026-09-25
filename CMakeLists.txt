@@ -29,6 +29,7 @@ add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
     src/runner/GameView.cpp
     src/ide/IdePane.cpp
     src/ide/IdeDock.cpp
+    src/ide/DockArrange.cpp
     src/ide/IdeConsole.cpp
     src/ide/CompletionPopup.cpp
     src/ide/InsertPopup.cpp
@@ -151,6 +152,16 @@ endif()
 target_include_directories(AnarchyEngine-CPP PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(AnarchyEngine-CPP PRIVATE jadefx engine_core)
 
+add_executable(shell-tests
+    tests/DockArrangeTest.cpp
+    src/ide/DockArrange.cpp
+    src/ide/IdeDock.cpp
+    src/ide/IdePane.cpp
+)
+target_include_directories(shell-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(shell-tests PRIVATE jadefx)
+target_compile_features(shell-tests PRIVATE cxx_std_17)
+
 add_executable(engine-tests
     tests/LuaEngineTest.cpp
     tests/LuauHighlightTest.cpp
@@ -201,11 +212,13 @@ endif()
 if(MSVC)
     target_compile_options(AnarchyEngine-CPP PRIVATE /W4 /utf-8)
     target_compile_options(engine-tests PRIVATE /W4 /utf-8)
+    target_compile_options(shell-tests PRIVATE /W4 /utf-8)
     target_compile_options(engine_core PRIVATE /W4 /utf-8)
     target_compile_options(sandbox PRIVATE /W4 /utf-8)
 else()
     target_compile_options(AnarchyEngine-CPP PRIVATE -Wall -Wextra)
     target_compile_options(engine-tests PRIVATE -Wall -Wextra)
+    target_compile_options(shell-tests PRIVATE -Wall -Wextra)
     target_compile_options(engine_core PRIVATE -Wall -Wextra)
     target_compile_options(sandbox PRIVATE -Wall -Wextra)
 endif()

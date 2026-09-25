@@ -1,6 +1,19 @@
 #include "IdeDock.hpp"
 
+#include "jadefx/scene/controls/TabPane.hpp"
+
+#include <algorithm>
+#include <cmath>
+
 namespace ide {
+namespace {
+
+bool HorizontalTabs(const jadefx::TabPane& tabs) {
+    const jadefx::Side side = tabs.getSide();
+    return side == jadefx::Side::Top || side == jadefx::Side::Bottom;
+}
+
+}  // namespace
 
 IdeDock::IdeDock() {
     tabs_ = jadefx::make<jadefx::TabPane>();
@@ -36,7 +49,80 @@ std::shared_ptr<jadefx::Tab> IdeDock::dock(const std::shared_ptr<IdePane>& pane)
     });
     tabs_->getTabs().add(std::move(tab));
     tabs_->select(opened);
+    sawTab_ = true;
+    queuedEmpty_ = false;
+    syncMinimum();
     return opened;
+}
+
+void IdeDock::take(const std::shared_ptr<jadefx::Tab>& tab) {
+    if (!tab || !tabs_) {
+        return;
+    }
+    tabs_->getTabs().add(tab);
+    tabs_->select(tab);
+    sawTab_ = true;
+    queuedEmpty_ = false;
+    syncMinimum();
+}
+
+bool IdeDock::empty() const { return !tabs_ || tabs_->getTabs().empty(); }
+
+void IdeDock::syncMinimum() {
+    if (!tabs_) {
+        return;
+    }
+    double width = 0;
+    double height = 0;
+    for (const std::shared_ptr<jadefx::Tab>& tab : tabs_->getTabs().items()) {
+        const jadefx::Node* content = tab ? tab->getContent() : nullptr;
+        if (content == nullptr) {
+            continue;
+        }
+        width = std::max(width, content->getMinWidth());
+        height = std::max(height, content->getMinHeight());
+    }
+    const double header = tabs_->headerExtent();
+    if (HorizontalTabs(*tabs_)) {
+        height += header;
+    } else {
+        width += header;
+    }
+    if (std::fabs(getMinWidth() - width) > 0.5 || std::fabs(getMinHeight() - height) > 0.5) {
+        setMinSize(width, height);
+    }
+}
+
+void IdeDock::setOnEmpty(std::function<void()> handler) { onEmpty_ = std::move(handler); }
+
+void IdeDock::setOnTabDrag(std::function<void(const jadefx::TabDrag&)> handler) {
+    if (tabs_) {
+        tabs_->setOnTabDrag(std::move(handler));
+    }
+}
+
+void IdeDock::setOnFit(std::function<void()> handler) { onFit_ = std::move(handler); }
+
+void IdeDock::layoutChildren() {
+    const double previousWidth = getMinWidth();
+    const double previousHeight = getMinHeight();
+    const bool hadTabs = sawTab_;
+    if (tabs_ && !tabs_->getTabs().empty()) {
+        sawTab_ = true;
+        queuedEmpty_ = false;
+    } else if (hadTabs && !queuedEmpty_) {
+        queuedEmpty_ = true;
+        if (onEmpty_) {
+            onEmpty_();
+        }
+    }
+    syncMinimum();
+    BorderPane::layoutChildren();
+    const bool minChanged = std::fabs(getMinWidth() - previousWidth) > 0.5 || std::fabs(getMinHeight() - previousHeight) > 0.5;
+    const bool shortOfMin = getWidth() + 1.0 < getMinWidth() || getHeight() + 1.0 < getMinHeight();
+    if ((minChanged || shortOfMin) && onFit_) {
+        onFit_();
+    }
 }
 
 void IdeDock::select(const IdePane* pane) {

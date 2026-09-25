@@ -108,6 +108,7 @@ private:
 };
 
 IdeConsole::IdeConsole(engine_core::Engine& engine) : IdePane("Console", true), engine_(engine) {
+    setMinSize(80, 64);
     log_ = jadefx::make<jadefx::StyleClassedTextArea>();
     log_->setEditable(false);
     log_->setWrapText(true);

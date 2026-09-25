@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace engine_core {
 class Engine;
@@ -17,6 +18,7 @@ class Engine;
 namespace ide {
 
 class IdeDock;
+class IdePane;
 class IdeScriptEditor;
 
 // IDE shell, in the shape of OpenGLFX-IDE's IdeLayout.
@@ -38,6 +40,8 @@ public:
     // Binds the scene view, then starts the simulation and render threads.
     void start();
     void mount(jadefx::Scene& scene);
+    // Grows the window after a frame when a dock's minimum no longer fits.
+    void attachFrame(jadefx::Stage& stage);
 
 private:
     struct Prompt;
@@ -55,10 +59,57 @@ private:
     void flush_editors();
     void reapply_editors();
     void restore_closed_edits();
+    void adoptDock(const std::shared_ptr<IdeDock>& dock);
+    void onTabDrag(IdeDock& from, const jadefx::TabDrag& drag);
+    void previewDrag(IdeDock& from, const jadefx::TabDrag& drag);
+    void applyDrag(IdeDock& from, const jadefx::TabDrag& drag);
+    void showDropMark(jadefx::Scene& scene, double x, double y, double width, double height, const char* border,
+                      jadefx::Color fill);
+    void hideDropMark();
+    void floatTab(const std::shared_ptr<jadefx::Tab>& tab, double screenX, double screenY);
+    void flushFrame();
+    void removeDock(const std::shared_ptr<IdeDock>& dock);
+    void noteReplaced(jadefx::Node& owner, const std::shared_ptr<jadefx::Node>&,
+                      const std::shared_ptr<jadefx::Node>& replacement);
+    void rebindUtilities();
+    void forgetWindow(jadefx::UtilityWindow* window);
+    jadefx::UtilityWindow* utilityOf(const IdeDock* dock) const;
+    bool utilityHasDock(const jadefx::UtilityWindow* window) const;
+    std::vector<jadefx::Stage*> utilityStages() const;
+    std::shared_ptr<jadefx::Node> shareNode(jadefx::Node* node) const;
+    IdeDock* editorHome();
+    IdeDock* dockContaining(const IdePane* pane) const;
+    IdeDock* dockForPane(const jadefx::TabPane* pane) const;
+    void forgetDock(const std::shared_ptr<IdeDock>& dock);
+
+    struct Floating {
+        std::shared_ptr<jadefx::UtilityWindow> window;
+        int lastRequestedW = 0;
+        int lastRequestedH = 0;
+        int lastSceneW = -1;
+        int lastSceneH = -1;
+        std::string title;
+    };
 
     // Declared first so the runner outlives the widgets during teardown.
     runner::Runner runner_;
     std::shared_ptr<jadefx::BorderPane> root_;
+    std::shared_ptr<jadefx::Node> workArea_;
+    std::vector<std::shared_ptr<IdeDock>> docks_;
+    std::vector<std::shared_ptr<IdeDock>> pendingEmpty_;
+    std::vector<Floating> floating_;
+    // Docks currently parented in a utility window. The close hook reads this
+    // after the scene root has already been cleared.
+    std::unordered_map<IdeDock*, jadefx::UtilityWindow*> dockWindow_;
+    std::shared_ptr<jadefx::Pane> dropMark_;
+    jadefx::Scene* dropMarkScene_ = nullptr;
+    std::function<void(int, int)> resizeWindow_;
+    jadefx::Stage* mainStage_ = nullptr;
+    bool fitPending_ = false;
+    int lastRequestedW_ = 0;
+    int lastRequestedH_ = 0;
+    int lastSceneW_ = -1;
+    int lastSceneH_ = -1;
     IdeDock* sceneDock_ = nullptr;
     jadefx::Scene* scene_ = nullptr;
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeScriptEditor>> open_scripts_;

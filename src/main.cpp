@@ -72,6 +72,7 @@ end
         layout_->start();
         auto scene = jadefx::make<jadefx::Scene>(nullptr, size.width, size.height);
         layout_->mount(*scene);
+        layout_->attachFrame(stage);
         stage.setScene(std::move(scene));
     }
 

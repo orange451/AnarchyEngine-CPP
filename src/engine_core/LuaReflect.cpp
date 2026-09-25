@@ -1,5 +1,13 @@
 #include "LuaApi.hpp"
 
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#endif
+#include "Luau/Parser.h"
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 #include "luacode.h"
 #include "lualib.h"
 
@@ -90,7 +98,10 @@ void reflect_interrupt(lua_State* state, int) {
 struct Job {
     const std::vector<LuaNode>* world = nullptr;
     std::unordered_set<std::uint32_t> loading;
+    std::unordered_set<std::uint32_t> scanned;
     std::unordered_map<std::uint32_t, int> returns;
+    // "moduleId\nname\nline" for each `function obj:name` in a module that was run.
+    std::unordered_set<std::string> methods;
 };
 
 Job* job = nullptr;
@@ -248,6 +259,85 @@ int push_dummy(lua_State* state, std::uint32_t id) {
     return 1;
 }
 
+// The reflection chunk is named "=id", matching the ModuleScript that defined the function.
+std::string method_key(std::uint32_t module_id, std::string_view name, int line) {
+    std::string key = std::to_string(module_id);
+    key.push_back('\n');
+    key.append(name);
+    key.push_back('\n');
+    key.append(std::to_string(line));
+    return key;
+}
+
+struct ColonMethods : Luau::AstVisitor {
+    std::uint32_t module_id = 0;
+    std::unordered_set<std::string>* keys = nullptr;
+
+    bool visit(Luau::AstExprFunction* function) override {
+        if (keys != nullptr && function->self != nullptr && function->debugname.value != nullptr) {
+            keys->insert(method_key(module_id, function->debugname.value,
+                                    static_cast<int>(function->location.begin.line) + 1));
+        }
+        return true;
+    }
+};
+
+void collect_colon_methods(std::uint32_t module_id, std::string_view source) {
+    if (job == nullptr || !job->scanned.insert(module_id).second) {
+        return;
+    }
+    if (source.empty()) {
+        return;
+    }
+    try {
+        Luau::Allocator allocator;
+        Luau::AstNameTable names(allocator);
+        const Luau::ParseResult parsed = Luau::Parser::parse(source.data(), source.size(), names, allocator);
+        if (parsed.root == nullptr) {
+            return;
+        }
+        ColonMethods visitor;
+        visitor.module_id = module_id;
+        visitor.keys = &job->methods;
+        parsed.root->visit(&visitor);
+    } catch (...) {
+        // A parse failure leaves the function as a plain field.
+    }
+}
+
+bool chunk_module_id(const char* source, std::uint32_t& id) {
+    if (source == nullptr || source[0] != '=') {
+        return false;
+    }
+    char* end = nullptr;
+    const unsigned long value = std::strtoul(source + 1, &end, 10);
+    if (end == source + 1 || *end != '\0' || value > 0xfffffffful) {
+        return false;
+    }
+    id = static_cast<std::uint32_t>(value);
+    return true;
+}
+
+// True when this closure is a `function obj:name` from the module that defined it.
+bool function_is_method(lua_State* state, int index) {
+    if (job == nullptr || job->methods.empty()) {
+        return false;
+    }
+    index = lua_absindex(state, index);
+    lua_pushvalue(state, index);
+    lua_Debug debug{};
+    const bool ok = lua_getinfo(state, -1, "sn", &debug) != 0;
+    lua_pop(state, 1);
+    if (!ok || debug.name == nullptr || debug.linedefined <= 0) {
+        return false;
+    }
+    std::uint32_t id = 0;
+    if (!chunk_module_id(debug.source, id)) {
+        return false;
+    }
+    return job->methods.find(method_key(id, debug.name, debug.linedefined)) != job->methods.end();
+}
+
 void snapshot_value(lua_State* state, int index, LuaShape& out, int depth, std::unordered_set<const void*>& seen) {
     index = lua_absindex(state, index);
     if (depth > 8) {
@@ -258,6 +348,7 @@ void snapshot_value(lua_State* state, int index, LuaShape& out, int depth, std::
     if (type == LUA_TFUNCTION) {
         out.type_name = "function";
         out.call = true;
+        out.method = function_is_method(state, index);
         return;
     }
     if (type == LUA_TNUMBER) {
@@ -323,6 +414,7 @@ int eval_module(lua_State* state, const LuaNode& node) {
         lua_pushnil(state);
         return 1;
     }
+    collect_colon_methods(node.id, node.source);
     lua_CompileOptions options{};
     options.optimizationLevel = 1;
     options.debugLevel = 1;
@@ -347,7 +439,8 @@ int eval_module(lua_State* state, const LuaNode& node) {
     push_dummy(thread, node.id);
     lua_setglobal(thread, "script");
 
-    const std::string chunk = "=" + node.name;
+    // "=id" is the function's debug source, so a method can be matched back to this module.
+    const std::string chunk = "=" + std::to_string(node.id);
     if (luau_load(thread, chunk.c_str(), bytecode.get(), bytecode_size, 0) != 0) {
         job->loading.erase(node.id);
         lua_pop(state, 1);

@@ -6,6 +6,7 @@
 
 #include "jadefx/jadefx.hpp"
 #include "jadefx/scene/controls/ScrollBar.hpp"
+#include "jadefx/scene/text/Font.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -66,6 +67,104 @@ const jadefx::Color kRowHighlight = jadefx::Color::parse("#d6e4f5");
 const jadefx::Color kHeaderFill = jadefx::Color::parse("#eef1f4");
 const jadefx::Color kHeaderText = jadefx::Color::parse("#3c4450");
 const jadefx::Color kDetailText = jadefx::Color::parse("#5c6570");
+const jadefx::Color kTitleText = jadefx::Color::parse("#1f2328");
+// Popup is 420 wide, with 4px padding and a 1px border. The note adds 8px on each side.
+constexpr double kDocTextWidth = 386.0;
+
+// Break `text` into lines that fit `width`. A newline already in the text starts a line.
+std::string WrapToWidth(const std::string& text, double width) {
+    if (text.empty()) {
+        return {};
+    }
+    const jadefx::Font font;
+    std::string wrapped;
+    std::string line;
+    std::size_t index = 0;
+    auto append = [&] {
+        if (!wrapped.empty()) {
+            wrapped.push_back('\n');
+        }
+        wrapped += line;
+        line.clear();
+    };
+    while (index < text.size()) {
+        if (text[index] == '\n') {
+            append();
+            ++index;
+            continue;
+        }
+        const std::size_t start = index;
+        while (index < text.size() && text[index] != ' ' && text[index] != '\n') {
+            ++index;
+        }
+        const std::string word = text.substr(start, index - start);
+        while (index < text.size() && text[index] == ' ') {
+            ++index;
+        }
+        if (word.empty()) {
+            continue;
+        }
+        const std::string trial = line.empty() ? word : line + " " + word;
+        if (width > 8.0 && static_cast<double>(font.measureWidth(trial)) > width && !line.empty()) {
+            append();
+            line = word;
+            continue;
+        }
+        line = trial;
+    }
+    if (!line.empty()) {
+        append();
+    }
+    return wrapped;
+}
+
+// The gray text beside a name. A function shows what it returns.
+std::string RowDetail(const CompletionItem& item) {
+    if (item.returns.empty()) {
+        return item.detail;
+    }
+    if (!item.detail.empty() && item.detail.front() == '(') {
+        if (item.returns == "returns nothing") {
+            return item.detail + " -> ()";
+        }
+        return item.detail + " -> " + item.returns;
+    }
+    if (item.detail == "function" || item.detail.empty()) {
+        if (item.returns == "returns nothing") {
+            return "returns nothing";
+        }
+        return "-> " + item.returns;
+    }
+    return item.detail;
+}
+
+std::shared_ptr<jadefx::VBox> MakeDocs(const CompletionItem& item) {
+    if (item.title.empty() && item.summary.empty()) {
+        return nullptr;
+    }
+    auto box = jadefx::make<jadefx::VBox>();
+    box->setSpacing(2);
+    box->setPadding(jadefx::Insets{6, 8, 6, 8});
+    box->setAlignment(jadefx::Pos::TopLeft);
+    box->setBackground(kHeaderFill);
+    auto add = [&](const std::string& text, const jadefx::Color& fill) {
+        if (text.empty()) {
+            return;
+        }
+        auto label = jadefx::make<jadefx::Label>(WrapToWidth(text, kDocTextWidth));
+        label->setTextFill(fill);
+        label->setMouseTransparent(true);
+        box->getChildren().add(label);
+    };
+    add(item.title, kTitleText);
+    if (item.returns == "returns nothing") {
+        add("returns nothing", kDetailText);
+    } else if (item.returns.empty() && (item.detail == "library" || item.detail == "type")) {
+        add(item.detail, kDetailText);
+    }
+    add(item.summary, kDetailText);
+    return box;
+}
 
 class CompletionListPopup;
 
@@ -88,14 +187,16 @@ private:
 };
 
 // The list under the caret. Its height follows the rows, and stops at eight.
-// Further rows scroll. The signature stays above that window.
+// Further rows scroll. The signature stays above that window. The highlighted
+// row's return and explanation stay below it.
 class CompletionListPopup : public jadefx::Controls {
     friend class CompletionScrollTrack;
 
 public:
     CompletionListPopup(std::function<void(int)> activate, std::function<void(int)> reselect,
-                        std::function<void()> refocus)
-        : activate_(std::move(activate)), reselect_(std::move(reselect)), refocus_(std::move(refocus)) {
+                        std::function<void()> refocus, std::function<void()> resized)
+        : activate_(std::move(activate)), reselect_(std::move(reselect)), refocus_(std::move(refocus)),
+          resized_(std::move(resized)) {
         setPrefWidth(kPopupWidth);
         setDefaultCursor(jadefx::Cursor::Default);
         setStyle(
@@ -119,6 +220,8 @@ public:
     void showList(const std::string& signature, const std::vector<CompletionItem>& items, int selected) {
         rows_.clear();
         header_.reset();
+        docs_.reset();
+        items_ = items;
         children().clear();
         if (!signature.empty()) {
             header_ = jadefx::make<jadefx::HBox>();
@@ -147,7 +250,7 @@ public:
                 row->setBackground(kRowHighlight);
             }
             auto name = jadefx::make<jadefx::Label>(item.name);
-            auto detail = jadefx::make<jadefx::Label>(item.detail);
+            auto detail = jadefx::make<jadefx::Label>(RowDetail(item));
             detail->setTextFill(kDetailText);
             name->setMouseTransparent(true);
             detail->setMouseTransparent(true);
@@ -162,6 +265,7 @@ public:
             rows_.push_back(row);
             children().add(row);
         }
+        attachDocs(selected_);
         if (track_) {
             children().add(track_);
         }
@@ -174,7 +278,7 @@ protected:
     double preferredContentHeight(double innerWidth) const override {
         const int count = static_cast<int>(rows_.size());
         const int visible = std::min(count, kMaxVisibleRows);
-        return headerHeight(innerWidth) + static_cast<double>(visible) * rowExtent(innerWidth);
+        return headerHeight(innerWidth) + static_cast<double>(visible) * rowExtent(innerWidth) + docsHeight(innerWidth);
     }
 
     void layoutChildren() override {
@@ -212,6 +316,7 @@ protected:
             const double y = listTop + static_cast<double>(index - start) * row;
             node->performLayout(left, y, rowWidth, row);
         }
+        placeDocs(left, listTop + static_cast<double>(visible) * row, width);
         if (!track_) {
             return;
         }
@@ -247,6 +352,60 @@ private:
             return 0;
         }
         return header_->measuredHeight(std::max(0.0, innerWidth), -1);
+    }
+
+    double docsHeight(double innerWidth) const {
+        if (!docs_) {
+            return 0;
+        }
+        return docs_->measuredHeight(std::max(0.0, innerWidth), -1);
+    }
+
+    void placeDocs(double left, double y, double width) {
+        if (!docs_) {
+            return;
+        }
+        const double height = docsHeight(width);
+        docs_->setVisible(true);
+        docs_->performLayout(left, y, width, height);
+    }
+
+    void attachDocs(int index) {
+        docs_.reset();
+        if (index < 0 || index >= static_cast<int>(items_.size())) {
+            return;
+        }
+        docs_ = MakeDocs(items_[static_cast<std::size_t>(index)]);
+        if (!docs_) {
+            return;
+        }
+        if (refocus_) {
+            docs_->setOnMousePressed([this](const jadefx::MouseEvent&) { refocus_(); });
+        }
+        children().add(docs_);
+    }
+
+    void refreshDocs(int index) {
+        if (docs_) {
+            const std::shared_ptr<jadefx::Node> previous = docs_;
+            children().removeIf([&](const std::shared_ptr<jadefx::Node>& node) { return node == previous; });
+            docs_.reset();
+        }
+        attachDocs(index);
+    }
+
+    // The highlight moved with the scroll. The note follows it, and the popup grows to fit.
+    void followSelection(int before) {
+        if (following_ || selected_ == before) {
+            return;
+        }
+        following_ = true;
+        refreshDocs(selected_);
+        relayout();
+        if (resized_) {
+            resized_();
+        }
+        following_ = false;
     }
 
     double rowExtent(double innerWidth) const {
@@ -322,6 +481,7 @@ private:
         if (count <= visible || rowHeight_ <= 0.0) {
             return;
         }
+        const int before = selected_;
         const double magnitude = std::fabs(deltaY);
         double pixels = deltaY;
         // A mouse notch is about ±1. Anything else is already a pixel distance.
@@ -332,7 +492,10 @@ private:
         scroll_ -= pixels;
         clampScroll(rowHeight_, count, visible);
         keepSelectionVisible();
-        relayout();
+        followSelection(before);
+        if (selected_ == before) {
+            relayout();
+        }
     }
 
     void keepSelectionVisible() {
@@ -380,25 +543,33 @@ private:
             scrollGrab_ = localY - bar_.thumb;
             return;
         }
+        const int before = selected_;
         scroll_ = bar_.offsetFromPage(scroll_, where == jadefx::ScrollBar::Part::After);
         const int count = static_cast<int>(rows_.size());
         clampScroll(rowHeight_, count, std::min(count, kMaxVisibleRows));
         keepSelectionVisible();
         scrollGrab_ = bar_.thumbLength * 0.5f;
-        relayout();
+        followSelection(before);
+        if (selected_ == before) {
+            relayout();
+        }
     }
 
     void dragScroll(const jadefx::MouseEvent& event) {
         if (!scrollDrag_) {
             return;
         }
+        const int before = selected_;
         const float localX = static_cast<float>(event.x - getAbsoluteX());
         const float localY = static_cast<float>(event.y - getAbsoluteY());
         scroll_ = bar_.offsetFromDrag(localX, localY, scrollGrab_);
         const int count = static_cast<int>(rows_.size());
         clampScroll(rowHeight_, count, std::min(count, kMaxVisibleRows));
         keepSelectionVisible();
-        relayout();
+        followSelection(before);
+        if (selected_ == before) {
+            relayout();
+        }
     }
 
     void releaseScroll() { scrollDrag_ = false; }
@@ -410,7 +581,10 @@ private:
     std::function<void(int)> activate_;
     std::function<void(int)> reselect_;
     std::function<void()> refocus_;
+    std::function<void()> resized_;
+    std::vector<CompletionItem> items_;
     std::shared_ptr<jadefx::HBox> header_;
+    std::shared_ptr<jadefx::VBox> docs_;
     std::vector<std::shared_ptr<jadefx::HBox>> rows_;
     std::shared_ptr<CompletionScrollTrack> track_;
     jadefx::ScrollBar bar_{};
@@ -420,6 +594,7 @@ private:
     int selected_ = -1;
     int ensure_ = -1;
     bool scrollDrag_ = false;
+    bool following_ = false;
 };
 
 void CompletionScrollTrack::handleMousePressed(const jadefx::MouseEvent& event) {
@@ -620,6 +795,11 @@ void CompletionPopup::fill() {
             [this] {
                 if (state_->owner != nullptr) {
                     state_->owner->requestFocus();
+                }
+            },
+            [this] {
+                if (state_->owner != nullptr) {
+                    place(*state_->owner, state_->caret_x, state_->caret_y, state_->caret_height);
                 }
             });
     }

@@ -16,6 +16,8 @@ constexpr std::uint32_t kNoInstance = 0xffffffffu;
 struct Param {
     std::string name;
     std::string type_name;
+    // Token index of the parameter name. -1 when the parameter was not written here.
+    int decl = -1;
 };
 
 struct Shape {
@@ -37,6 +39,19 @@ struct Shape {
     std::string callee_owner;
     std::string callee_name;
     std::string result_type;
+    // A function written in this source, as opposed to a host function.
+    bool user_function = false;
+    // `function obj:name` takes self as its first parameter.
+    bool method = false;
+    std::string self_type;
+    bool annotated_return = false;
+    bool return_known = false;
+    bool return_conflict = false;
+    bool body_closed = false;
+    // The first return statement. A later return does not replace it.
+    bool saw_return = false;
+    bool first_none = false;
+    std::string first_type;
     std::vector<std::pair<std::string, Shape*>> fields;
 };
 
@@ -525,6 +540,57 @@ const engine_core::LuaNode* FindChild(const std::vector<engine_core::LuaNode>& w
     return nullptr;
 }
 
+std::string DescribeType(const Shape* shape) {
+    if (shape == nullptr) {
+        return {};
+    }
+    if (!shape->class_name.empty()) {
+        return shape->class_name;
+    }
+    if (!shape->library.empty()) {
+        return "table";
+    }
+    if (!shape->value_type.empty() && shape->value_type != "function") {
+        return shape->value_type;
+    }
+    if (shape->call || shape->user_function || shape->value_type == "function") {
+        return "function";
+    }
+    return {};
+}
+
+// Hover shows Vector3 for the built-in vector. Completion still says vector.
+std::string ShownType(const Shape* shape) {
+    const std::string type = DescribeType(shape);
+    if (type == "vector") {
+        return "Vector3";
+    }
+    return type;
+}
+
+bool ShapeUseful(const Shape* shape) {
+    if (shape == nullptr) {
+        return false;
+    }
+    if (!shape->class_name.empty() || !shape->library.empty() || !shape->value_type.empty()) {
+        return true;
+    }
+    return shape->call || shape->user_function || !shape->params.empty() || !shape->result_type.empty() ||
+           !shape->fields.empty();
+}
+
+// The hover tooltip's text for one shape. `returns` is the short form shown on a completion row.
+struct Written {
+    bool found = false;
+    std::string title;
+    std::string detail;
+    std::string summary;
+    std::string returns;
+};
+
+Written DescribeSymbol(const Shape* shape, const std::string& name, bool bound, bool parameter);
+void AttachDocs(CompletionItem& item, const Shape* shape);
+
 class Resolver {
 public:
     Resolver(const std::vector<Token>& tokens, const std::vector<engine_core::LuaNode>& world, std::uint32_t script_id,
@@ -570,6 +636,7 @@ public:
         Shape* shape = fresh();
         shape->class_name = input.class_name;
         shape->call = input.call;
+        shape->method = input.method;
         if (input.class_name.empty()) {
             if (input.type_name == "string" || input.type_name == "number" || input.type_name == "boolean" ||
                 input.type_name == "vector" || input.type_name == "function" || input.type_name == "table") {
@@ -624,12 +691,39 @@ public:
     }
 
     Shape* lookup(const std::string& name) {
+        if (hover_at_ >= 0) {
+            bool bound = false;
+            bool parameter = false;
+            return lookup_binding(name, hover_at_, bound, parameter);
+        }
         for (int index = static_cast<int>(bindings_.size()) - 1; index >= 0; --index) {
             const Binding& binding = bindings_[static_cast<std::size_t>(index)];
-            if (binding.name == name && binding.depth <= depth_ && binding.visible <= i_) {
+            if (binding.name == name && binding.depth <= depth_ && binding.visible <= i_ &&
+                (binding.end < 0 || i_ < binding.end)) {
                 return binding.shape;
             }
         }
+        return lookup_global(name);
+    }
+
+    // The binding in scope at `token_index`, including the name's own declaration.
+    Shape* lookup_binding(const std::string& name, int token_index, bool& bound, bool& parameter) {
+        for (int index = static_cast<int>(bindings_.size()) - 1; index >= 0; --index) {
+            const Binding& binding = bindings_[static_cast<std::size_t>(index)];
+            if (binding.name != name) {
+                continue;
+            }
+            const bool declaration = binding.decl == token_index;
+            const bool span = binding.visible <= token_index && (binding.end < 0 || token_index < binding.end);
+            if (!declaration && !span) {
+                continue;
+            }
+            bound = true;
+            parameter = binding.parameter;
+            return binding.shape != nullptr ? binding.shape : none();
+        }
+        bound = false;
+        parameter = false;
         return lookup_global(name);
     }
 
@@ -658,15 +752,21 @@ public:
                         if (parent != nullptr && !parent->class_name.empty()) {
                             class_name = parent->class_name;
                         }
-                        return class_shape(std::move(class_name), node->parent);
+                        Shape* parent_shape = class_shape(std::move(class_name), node->parent);
+                        parent_shape->callee_owner = base->class_name;
+                        parent_shape->callee_name = "Parent";
+                        return parent_shape;
                     }
                 }
                 Shape* shape = type_shape(field->type_name != nullptr ? field->type_name : "");
                 AppendSignalParams(shape, *field);
+                shape->callee_owner = base->class_name;
+                shape->callee_name = field->name;
                 return shape;
             }
             Shape* shape = fresh();
             shape->call = true;
+            shape->method = true;
             shape->class_from_arg = field->class_from_arg;
             shape->resolves_child = field->resolves_child;
             shape->service_arg = field->service_arg;
@@ -676,7 +776,21 @@ public:
                 shape->signal_params = base->signal_params;
             }
             shape->result_type = field->type_name != nullptr ? field->type_name : "";
+            shape->callee_owner = base->class_name;
+            shape->callee_name = field->name;
             shape->instance = base->instance;
+            // Wait returns the signal's arguments, not nil.
+            if (std::strcmp(field->name, "Wait") == 0 && !base->signal_params.empty()) {
+                std::string type;
+                for (std::size_t param = 0; param < base->signal_params.size(); ++param) {
+                    if (param > 0) {
+                        type += ", ";
+                    }
+                    type += base->signal_params[param].type_name.empty() ? "any" : base->signal_params[param].type_name;
+                }
+                shape->result_type = std::move(type);
+                shape->return_known = true;
+            }
             return shape;
         }
         if (!base->library.empty()) {
@@ -689,9 +803,14 @@ public:
                     continue;
                 }
                 if (!symbol.call && engine_core::lua_class_known(symbol.type_name.c_str())) {
-                    return class_shape(symbol.type_name, kNoInstance);
+                    Shape* shape = class_shape(symbol.type_name, kNoInstance);
+                    shape->callee_owner = base->library;
+                    shape->callee_name = name;
+                    return shape;
                 }
                 Shape* shape = fresh();
+                shape->callee_owner = base->library;
+                shape->callee_name = name;
                 if (symbol.type_name == "table") {
                     shape->library = name;
                     return shape;
@@ -703,8 +822,6 @@ public:
                 shape->value_type = symbol.type_name;
                 shape->call = symbol.call;
                 if (symbol.call) {
-                    shape->callee_owner = base->library;
-                    shape->callee_name = name;
                     const engine_core::LuaResult result = engine_core::lua_function_result(base->library, name);
                     if (result.known) {
                         shape->class_from_arg = result.class_from_arg;
@@ -723,6 +840,9 @@ public:
                     continue;
                 }
                 Shape* shape = value_shape(symbol.type_name.empty() ? "function" : symbol.type_name, symbol.call);
+                shape->callee_owner = base->value_type;
+                shape->callee_name = name;
+                shape->method = symbol.method;
                 return shape;
             }
         }
@@ -772,14 +892,126 @@ public:
         }
         engine_core::LuaShape exported;
         engine_core::lua_module_exports(node->source, node->id, world_, exported);
-        return adopt(exported);
+        Shape* adopted = adopt(exported);
+        // The running module only records that a field is a function. The return
+        // type is the first value of the first return written in its source.
+        learn_returns(adopted, *node);
+        return adopted;
     }
 
-    void bind(std::string name, Shape* shape, int visible, int depth = -1) {
+    // Reads `module` and copies each exported function's parameters and first
+    // return onto the table `require` actually produced.
+    void learn_returns(Shape* adopted, const engine_core::LuaNode& node) {
+        if (adopted == nullptr || node.source.empty() || requiring_->size() >= 8) {
+            return;
+        }
+        if (std::find(requiring_->begin(), requiring_->end(), node.id) != requiring_->end()) {
+            return;
+        }
+        requiring_->push_back(node.id);
+        const std::u32string text = Utf32(node.source);
+        const Scan scan = Tokenize(text, static_cast<int>(text.size()));
+        Resolver nested(scan.tokens, world_, node.id, true);
+        nested.signing_ = true;
+        nested.requiring_ = requiring_;
+        nested.parse_until(static_cast<int>(scan.tokens.size()));
+        nested.stamp_onto(adopted);
+        requiring_->pop_back();
+    }
+
+    void stamp_onto(Shape* runtime) { stamp_shape(runtime, chunk_return_); }
+
+    void stamp_shape(Shape* runtime, const Shape* source) {
+        if (runtime == nullptr || source == nullptr) {
+            return;
+        }
+        if (runtime->call && source->user_function) {
+            copy_signature(runtime, source);
+        }
+        for (auto& field : runtime->fields) {
+            const Shape* match = nullptr;
+            for (const auto& candidate : source->fields) {
+                if (candidate.first == field.first) {
+                    match = candidate.second;
+                    break;
+                }
+            }
+            if (match != nullptr) {
+                stamp_shape(field.second, match);
+            }
+        }
+    }
+
+    void copy_signature(Shape* runtime, const Shape* source) {
+        runtime->user_function = true;
+        runtime->params = source->params;
+        for (Param& param : runtime->params) {
+            param.decl = -1;
+        }
+        runtime->variadic = source->variadic;
+        if (runtime->method) {
+            runtime->self_type = source->self_type.empty() ? "table" : source->self_type;
+        }
+        if (!source->callee_name.empty()) {
+            runtime->callee_owner = source->callee_owner;
+            runtime->callee_name = source->callee_name;
+        }
+        auto set_type = [&](const std::string& type, bool annotated) {
+            runtime->annotated_return = annotated;
+            runtime->return_known = true;
+            runtime->return_conflict = false;
+            runtime->result_type = type;
+        };
+        auto set_nothing = [&]() {
+            runtime->annotated_return = false;
+            runtime->return_known = true;
+            runtime->return_conflict = false;
+            runtime->result_type.clear();
+            runtime->body_closed = true;
+        };
+        if (source->saw_return && !source->first_type.empty()) {
+            set_type(source->first_type, false);
+            return;
+        }
+        if (source->saw_return && source->first_none) {
+            set_nothing();
+            return;
+        }
+        if (source->saw_return) {
+            runtime->return_conflict = true;
+            return;
+        }
+        if (source->return_known && !source->return_conflict) {
+            if (source->result_type.empty()) {
+                set_nothing();
+            } else {
+                set_type(source->result_type, source->annotated_return);
+            }
+            return;
+        }
+        if (source->annotated_return && !source->result_type.empty()) {
+            set_type(source->result_type, true);
+            return;
+        }
+        if (source->body_closed && !source->return_conflict) {
+            set_nothing();
+            return;
+        }
+        runtime->return_conflict = true;
+    }
+
+    void bind(std::string name, Shape* shape, int visible, int depth = -1, int decl = -1, bool parameter = false) {
         if (depth < 0) {
             depth = depth_;
         }
-        bindings_.push_back(Binding{std::move(name), shape != nullptr ? shape : none(), depth, visible});
+        Binding binding;
+        binding.name = std::move(name);
+        binding.shape = shape != nullptr ? shape : none();
+        binding.depth = depth;
+        binding.visible = visible;
+        binding.decl = decl;
+        binding.parameter = parameter;
+        bindings_.push_back(std::move(binding));
     }
 
     void push_scope() { ++depth_; }
@@ -788,10 +1020,20 @@ public:
         if (depth_ > 0) {
             --depth_;
         }
+        if (retain_) {
+            for (Binding& binding : bindings_) {
+                if (binding.depth > depth_ && binding.end < 0) {
+                    binding.end = i_;
+                }
+            }
+            return;
+        }
         while (!bindings_.empty() && bindings_.back().depth > depth_) {
             bindings_.pop_back();
         }
     }
+
+    HoverInfo describe(int code_index);
 
     void parse_until(int end) {
         limit_ = end;
@@ -845,7 +1087,7 @@ public:
 
     void add_names(std::string_view prefix, int at, std::vector<CompletionItem>& out) {
         std::vector<std::string> seen;
-        auto take = [&](const std::string& name, const std::string& detail, bool call) {
+        auto take = [&](const std::string& name, const std::string& detail, bool call, const Shape* shape) {
             if (!prefix.empty() && !StartsWith(name, prefix)) {
                 return;
             }
@@ -857,6 +1099,7 @@ public:
             item.name = name;
             item.detail = detail;
             item.call = call;
+            AttachDocs(item, shape);
             out.push_back(std::move(item));
         };
         for (int index = static_cast<int>(bindings_.size()) - 1; index >= 0; --index) {
@@ -874,14 +1117,27 @@ public:
             } else if (shape != nullptr && !shape->value_type.empty()) {
                 detail = shape->value_type;
             }
-            take(binding.name, detail, shape != nullptr && shape->call);
+            take(binding.name, detail, shape != nullptr && shape->call, shape);
         }
         std::vector<engine_core::LuaSymbol> globals;
         engine_core::lua_library_globals(globals);
         for (const engine_core::LuaSymbol& symbol : globals) {
-            take(symbol.name, symbol.type_name == "table" ? "library" : symbol.type_name, symbol.call);
+            if (!prefix.empty() && !StartsWith(symbol.name, prefix)) {
+                continue;
+            }
+            Shape* documented = nullptr;
+            if (symbol.type_name == "table") {
+                documented = fresh();
+                documented->library = symbol.name;
+            } else {
+                documented = value_shape(symbol.type_name, symbol.call);
+                if (symbol.call) {
+                    documented->callee_name = symbol.name;
+                }
+            }
+            take(symbol.name, symbol.type_name == "table" ? "library" : symbol.type_name, symbol.call, documented);
         }
-        take("game", "DataModel", false);
+        take("game", "DataModel", false, lookup_global("game"));
         if (script_global_) {
             std::string script_type = "Script";
             if (script_id_ != 0) {
@@ -891,11 +1147,32 @@ public:
                     }
                 }
             }
-            take("script", script_type, false);
+            take("script", script_type, false, lookup_global("script"));
         }
         for (const char* keyword : kKeywords) {
-            take(keyword, "keyword", false);
+            take(keyword, "keyword", false, nullptr);
         }
+    }
+
+    // The shape hover would describe for this member. A root's Parent has no
+    // instance to point at, so the field's own type is used for the explanation.
+    Shape* documented_member(Shape* owner, const std::string& name, const std::string& type_name) {
+        Shape* documented = member_of(owner, name);
+        if (documented != nullptr && ShapeUseful(documented)) {
+            return documented;
+        }
+        documented = type_shape(type_name);
+        if (owner != nullptr) {
+            if (!owner->class_name.empty()) {
+                documented->callee_owner = owner->class_name;
+            } else if (!owner->library.empty()) {
+                documented->callee_owner = owner->library;
+            } else {
+                documented->callee_owner = owner->value_type;
+            }
+        }
+        documented->callee_name = name;
+        return documented;
     }
 
     void add_members(Shape* shape, bool colon, std::string_view prefix, std::vector<CompletionItem>& out) {
@@ -903,7 +1180,7 @@ public:
             return;
         }
         std::vector<std::string> seen;
-        auto take = [&](const std::string& name, const std::string& detail, bool call, bool method) {
+        auto take = [&](const std::string& name, const std::string& detail, bool call, bool method, const Shape* documented) {
             if (colon && !method) {
                 return;
             }
@@ -918,6 +1195,7 @@ public:
             item.name = name;
             item.detail = detail;
             item.call = call;
+            AttachDocs(item, documented);
             out.push_back(std::move(item));
         };
         if (!shape->class_name.empty()) {
@@ -928,33 +1206,41 @@ public:
                     continue;
                 }
                 const char* type_name = field.type_name != nullptr ? field.type_name : "";
-                take(field.name, field.method ? "function" : type_name, field.method, field.method);
+                take(field.name, field.method ? "function" : type_name, field.method, field.method,
+                     documented_member(shape, field.name, type_name));
             }
         }
         if (!shape->library.empty()) {
             std::vector<engine_core::LuaSymbol> symbols;
             engine_core::lua_library_members(shape->library, symbols);
             for (const engine_core::LuaSymbol& symbol : symbols) {
-                take(symbol.name, symbol.type_name, symbol.call, symbol.method);
+                take(symbol.name, symbol.type_name, symbol.call, symbol.method,
+                     documented_member(shape, symbol.name, symbol.type_name));
             }
         }
         if (shape->value_type == "string" || shape->value_type == "vector") {
             std::vector<engine_core::LuaSymbol> symbols;
             engine_core::lua_value_members(shape->value_type, symbols);
             for (const engine_core::LuaSymbol& symbol : symbols) {
-                take(symbol.name, symbol.type_name, symbol.call, symbol.method);
+                take(symbol.name, symbol.type_name, symbol.call, symbol.method,
+                     documented_member(shape, symbol.name, symbol.type_name));
             }
         }
         for (const auto& field : shape->fields) {
             const Shape* child = field.second;
             const bool call = child != nullptr && child->call;
+            const bool method = child != nullptr && child->method;
+            // `function obj:name` is offered after ':'. A '.' completion leaves it out.
+            if (!colon && method) {
+                continue;
+            }
             std::string detail = "field";
             if (child != nullptr && !child->class_name.empty()) {
                 detail = child->class_name;
             } else if (child != nullptr && !child->value_type.empty()) {
                 detail = child->value_type;
             }
-            take(field.first, detail, call, false);
+            take(field.first, detail, call, method, child);
         }
     }
 
@@ -1073,6 +1359,11 @@ private:
         Shape* shape = nullptr;
         int depth = 0;
         int visible = 0;
+        // Token index where the binding leaves scope. -1 while it is still open.
+        int end = -1;
+        // Token index of the name that introduces the binding. -1 when there is none.
+        int decl = -1;
+        bool parameter = false;
     };
 
     bool at_end() const { return i_ >= limit_; }
@@ -1107,8 +1398,14 @@ private:
         int brace = 0;
         int brack = 0;
         while (!at_end()) {
+            // A return annotation is followed by the function body. A name there is
+            // a statement, unless the type is still open (`string |`, `Foo.`, `->`).
+            const bool type_continues = text.empty() || (text.size() >= 2 && text.compare(text.size() - 2, 2, "->") == 0) ||
+                                        text.back() == '.' || text.back() == ':' || text.back() == '<' || text.back() == '|' ||
+                                        text.back() == '&' || text.back() == '(' || text.back() == ',';
             if (angle == 0 && paren == 0 && brace == 0 && brack == 0 &&
-                (is(Token::Comma) || is(Token::RParen) || is(Token::Eq))) {
+                (is(Token::Comma) || is(Token::RParen) || is(Token::Eq) ||
+                 ((is(Token::Name) || is(Token::Keyword)) && !type_continues))) {
                 break;
             }
             const Token& token = cur();
@@ -1268,17 +1565,29 @@ private:
         }
         if (is_kw("for")) {
             advance();
-            std::vector<std::string> names;
+            struct LoopName {
+                std::string name;
+                int decl = -1;
+            };
+            std::vector<LoopName> names;
             if (is_name()) {
-                names.push_back(take_name());
+                LoopName item;
+                item.decl = i_;
+                item.name = take_name();
+                names.push_back(std::move(item));
                 while (consume(Token::Comma) && is_name()) {
-                    names.push_back(take_name());
+                    LoopName next;
+                    next.decl = i_;
+                    next.name = take_name();
+                    names.push_back(std::move(next));
                 }
             }
-            if (consume(Token::Eq) || is_kw("in")) {
-                if (is_kw("in")) {
-                    advance();
-                }
+            bool numeric = false;
+            if (consume(Token::Eq)) {
+                numeric = true;
+                parse_expr_list();
+            } else if (is_kw("in")) {
+                advance();
                 parse_expr_list();
             }
             if (at_end()) {
@@ -1288,8 +1597,8 @@ private:
                 advance();
             }
             push_scope();
-            for (const std::string& name : names) {
-                bind(name, none(), i_);
+            for (const LoopName& name : names) {
+                bind(name.name, numeric ? value_shape("number") : none(), i_, -1, name.decl, false);
             }
             parse_block();
             if (at_end()) {
@@ -1327,8 +1636,14 @@ private:
         }
         if (is_kw("return")) {
             advance();
+            std::vector<Shape*> values;
             if (!at_end() && !block_end()) {
-                parse_expr_list();
+                values = parse_expr_list();
+            }
+            note_return(values);
+            if (signing_ && functions_.empty() && !saw_chunk_return_) {
+                saw_chunk_return_ = true;
+                chunk_return_ = values.empty() || values[0] == nullptr ? none() : values[0];
             }
             return;
         }
@@ -1350,10 +1665,12 @@ private:
         struct Slot {
             std::string name;
             std::string type_name;
+            int decl = -1;
         };
         std::vector<Slot> slots;
         while (is_name()) {
             Slot slot;
+            slot.decl = i_;
             slot.name = take_name();
             if (is(Token::Colon) && !next_colon()) {
                 advance();
@@ -1391,28 +1708,105 @@ private:
             if (shape == nullptr) {
                 shape = annotation_shape(slots[index].type_name);
             }
-            bind(slots[index].name, shape, visible);
+            bind(slots[index].name, shape, visible, -1, slots[index].decl, false);
+        }
+    }
+
+    void attach_function(Shape* owner, const std::string& name, Shape* fn) {
+        if (owner == nullptr || fn == nullptr || name.empty() || !ShapeUseful(owner)) {
+            return;
+        }
+        for (auto& field : owner->fields) {
+            if (field.first == name) {
+                field.second = fn;
+                return;
+            }
+        }
+        owner->fields.emplace_back(name, fn);
+    }
+
+    void note_return(const std::vector<Shape*>& values) {
+        if (functions_.empty()) {
+            return;
+        }
+        Shape* fn = functions_.back();
+        if (fn == nullptr) {
+            return;
+        }
+        if (!fn->saw_return) {
+            fn->saw_return = true;
+            if (values.empty()) {
+                fn->first_none = true;
+            } else {
+                fn->first_type = DescribeType(values[0]);
+            }
+        }
+        if (fn->annotated_return) {
+            return;
+        }
+        std::string type;
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            const std::string part = DescribeType(values[index]);
+            if (part.empty()) {
+                fn->return_known = true;
+                fn->return_conflict = true;
+                fn->result_type.clear();
+                return;
+            }
+            if (index > 0) {
+                type += ", ";
+            }
+            type += part;
+        }
+        if (fn->return_conflict) {
+            return;
+        }
+        if (!fn->return_known) {
+            fn->return_known = true;
+            fn->result_type = std::move(type);
+            return;
+        }
+        if (fn->result_type != type) {
+            fn->return_conflict = true;
+            fn->result_type.clear();
         }
     }
 
     Shape* parse_function(bool expression, bool local_name) {
         Shape* fn = value_shape("function", true);
+        fn->user_function = true;
         if (!expression && is_name()) {
+            const int name_at = i_;
             std::string first = take_name();
             if (consume(Token::Dot)) {
                 if (is_name()) {
-                    advance();
+                    const int method_at = i_;
+                    std::string method = take_name();
+                    Shape* owner = lookup(first);
+                    attach_function(owner, method, fn);
+                    fn->callee_owner = std::move(first);
+                    fn->callee_name = method;
+                    // Visible only on the declaration. A later `owner.name` sees the field.
+                    bind(std::move(method), fn, limit_ + 1, 0, method_at, false);
                 }
             } else if (is(Token::Colon) && !next_colon()) {
                 advance();
                 if (is_name()) {
-                    advance();
+                    const int method_at = i_;
+                    std::string method = take_name();
+                    Shape* owner = lookup(first);
+                    fn->method = true;
+                    fn->self_type = DescribeType(owner);
+                    attach_function(owner, method, fn);
+                    fn->callee_owner = std::move(first);
+                    fn->callee_name = method;
+                    bind(method, fn, limit_ + 1, 0, method_at, false);
                 }
             } else if (local_name) {
-                bind(std::move(first), fn, i_);
+                bind(std::move(first), fn, i_, -1, name_at, false);
             } else {
                 // `function name` assigns a global, including when it is nested in another block.
-                bind(std::move(first), fn, i_, 0);
+                bind(std::move(first), fn, i_, 0, name_at, false);
             }
         } else if (expression && is_name()) {
             advance();
@@ -1430,6 +1824,7 @@ private:
                     break;
                 }
                 Param param;
+                param.decl = i_;
                 param.name = take_name();
                 if (is(Token::Colon) && !next_colon()) {
                     advance();
@@ -1449,17 +1844,32 @@ private:
             }
             closed = consume(Token::RParen);
         }
+        if (closed && is(Token::Colon) && !next_colon()) {
+            advance();
+            if (at_end()) {
+                cut_ = true;
+            } else {
+                fn->result_type = read_type();
+                fn->annotated_return = true;
+                fn->return_known = true;
+            }
+        }
         // Parameters belong to the body. They are not in scope while the
         // parameter list itself is still being typed.
         const int visible = closed ? i_ : limit_ + 1;
         for (const Param& param : fn->params) {
-            bind(param.name, annotation_shape(param.type_name), visible);
+            bind(param.name, annotation_shape(param.type_name), visible, -1, param.decl, true);
         }
         if (!closed && at_end()) {
             cut_ = true;
         }
+        functions_.push_back(fn);
         parse_block();
+        if (!functions_.empty() && functions_.back() == fn) {
+            functions_.pop_back();
+        }
         if (is_kw("end")) {
+            fn->body_closed = true;
             advance();
             pop_scope();
         } else if (at_end()) {
@@ -1497,13 +1907,20 @@ private:
         if (eq < 0) {
             return;
         }
-        std::vector<std::string> names;
+        struct Assigned {
+            std::string name;
+            int decl = -1;
+        };
+        std::vector<Assigned> names;
         int cursor = start;
         while (cursor < eq) {
             const Token& token = tokens_[static_cast<std::size_t>(cursor)];
             if (token.kind == Token::Name &&
                 (cursor + 1 == eq || tokens_[static_cast<std::size_t>(cursor + 1)].kind == Token::Comma)) {
-                names.push_back(token.text);
+                Assigned item;
+                item.name = token.text;
+                item.decl = cursor;
+                names.push_back(std::move(item));
                 cursor += cursor + 1 < eq && tokens_[static_cast<std::size_t>(cursor + 1)].kind == Token::Comma ? 2 : 1;
                 continue;
             }
@@ -1519,19 +1936,30 @@ private:
         if (cut_ && !cut_before) {
             return;
         }
+        if (signing_ && names.empty() && !values.empty()) {
+            assign_field(start, eq, values[0]);
+        }
         for (std::size_t index = 0; index < names.size(); ++index) {
             Shape* shape = index < values.size() ? values[index] : none();
             bool updated = false;
             for (int slot = static_cast<int>(bindings_.size()) - 1; slot >= 0; --slot) {
                 Binding& binding = bindings_[static_cast<std::size_t>(slot)];
-                if (binding.name == names[index] && binding.depth <= depth_ && binding.visible <= i_) {
-                    binding.shape = shape != nullptr ? shape : none();
-                    updated = true;
-                    break;
+                if (binding.name != names[index].name || binding.depth > depth_ || binding.visible > i_ || binding.end >= 0) {
+                    continue;
                 }
+                if (retain_) {
+                    // A later assignment must not change the type of earlier uses.
+                    const int depth = binding.depth;
+                    binding.end = i_;
+                    bind(names[index].name, shape, i_, depth, names[index].decl, false);
+                } else {
+                    binding.shape = shape != nullptr ? shape : none();
+                }
+                updated = true;
+                break;
             }
             if (!updated) {
-                bind(names[index], shape, i_, 0);
+                bind(names[index].name, shape, i_, 0, names[index].decl, false);
             }
         }
     }
@@ -1723,6 +2151,9 @@ private:
             return inner;
         }
         if (is(Token::LBrace)) {
+            if (signing_) {
+                return parse_table();
+            }
             int depth = 0;
             do {
                 if (is(Token::LBrace)) {
@@ -1860,6 +2291,90 @@ private:
     int depth_ = 0;
     // The caret cut a declaration or expression off before it was complete.
     bool cut_ = false;
+    // Hover keeps bindings after their scope ends so a name can be resolved later.
+    bool retain_ = false;
+    // When set, lookup resolves names as they are at this token.
+    int hover_at_ = -1;
+    // Module source keeps table fields so a required function's return can be read.
+    bool signing_ = false;
+    bool saw_chunk_return_ = false;
+    Shape* chunk_return_ = nullptr;
+    std::vector<std::uint32_t> requiring_storage_;
+    std::vector<std::uint32_t>* requiring_ = &requiring_storage_;
+    std::vector<Shape*> functions_;
+
+    void assign_field(int start, int eq, Shape* value) {
+        if (start < 0 || eq <= start) {
+            return;
+        }
+        for (int index = start; index < eq; ++index) {
+            if (tokens_[static_cast<std::size_t>(index)].kind == Token::Comma) {
+                return;
+            }
+        }
+        int cursor = start;
+        if (tokens_[static_cast<std::size_t>(cursor)].kind != Token::Name) {
+            return;
+        }
+        Shape* owner = lookup(tokens_[static_cast<std::size_t>(cursor)].text);
+        ++cursor;
+        if (cursor >= eq || tokens_[static_cast<std::size_t>(cursor)].kind != Token::Dot) {
+            return;
+        }
+        while (cursor < eq) {
+            if (tokens_[static_cast<std::size_t>(cursor)].kind != Token::Dot) {
+                return;
+            }
+            ++cursor;
+            if (cursor >= eq || tokens_[static_cast<std::size_t>(cursor)].kind != Token::Name) {
+                return;
+            }
+            const std::string field = tokens_[static_cast<std::size_t>(cursor)].text;
+            ++cursor;
+            if (cursor >= eq) {
+                attach_function(owner, field, value);
+                return;
+            }
+            owner = member_of(owner, field);
+        }
+    }
+
+    Shape* parse_table() {
+        advance();
+        Shape* table = value_shape("table");
+        while (!at_end() && !is(Token::RBrace)) {
+            if (is(Token::LBrack)) {
+                advance();
+                if (!at_end() && !is(Token::RBrack)) {
+                    parse_expr();
+                }
+                consume(Token::RBrack);
+                if (consume(Token::Eq) && !at_end() && !is(Token::RBrace) && !is(Token::Comma) && !is(Token::Semi)) {
+                    parse_expr();
+                }
+            } else if (is_name() && i_ + 1 < limit_ && tokens_[static_cast<std::size_t>(i_ + 1)].kind == Token::Eq) {
+                const std::string name = take_name();
+                advance();
+                Shape* value = at_end() ? none() : parse_expr();
+                attach_function(table, name, value);
+            } else {
+                const int before = i_;
+                parse_expr();
+                if (i_ == before) {
+                    advance();
+                }
+            }
+            if (is(Token::Comma) || is(Token::Semi)) {
+                advance();
+                continue;
+            }
+            break;
+        }
+        if (!consume(Token::RBrace) && at_end()) {
+            cut_ = true;
+        }
+        return table;
+    }
 };
 
 bool IsFunctionParen(const std::vector<Token>& tokens, int paren) {
@@ -1916,6 +2431,282 @@ bool AnnotationAt(const std::vector<Token>& tokens, int colon) {
     return false;
 }
 
+std::string JoinParams(const std::vector<std::pair<std::string, std::string>>& params, bool variadic) {
+    std::string out = "(";
+    for (std::size_t index = 0; index < params.size(); ++index) {
+        if (index > 0) {
+            out += ", ";
+        }
+        out += params[index].first;
+        if (!params[index].second.empty()) {
+            out += ": ";
+            out += params[index].second;
+        }
+    }
+    if (variadic) {
+        if (!params.empty()) {
+            out += ", ";
+        }
+        out += "...";
+    }
+    out += ")";
+    return out;
+}
+
+std::string CallbackType(const Shape* shape) {
+    if (shape == nullptr || shape->signal_params.empty()) {
+        return "function";
+    }
+    std::string out = "(";
+    for (std::size_t index = 0; index < shape->signal_params.size(); ++index) {
+        if (index > 0) {
+            out += ", ";
+        }
+        out += shape->signal_params[index].name;
+        if (!shape->signal_params[index].type_name.empty()) {
+            out += ": ";
+            out += shape->signal_params[index].type_name;
+        }
+    }
+    out += ") -> ()";
+    return out;
+}
+
+std::string QualifiedName(const Shape* shape, const std::string& token) {
+    if (shape == nullptr) {
+        return token;
+    }
+    if (!shape->callee_owner.empty() && !shape->callee_name.empty() && (shape->call || shape->user_function || shape->method)) {
+        return shape->callee_owner + (shape->method ? ":" : ".") + shape->callee_name;
+    }
+    if (shape->user_function) {
+        return token;
+    }
+    if (!shape->callee_name.empty() && shape->call) {
+        return shape->callee_name;
+    }
+    return token;
+}
+
+Written DescribeSymbol(const Shape* shape, const std::string& name, bool bound, bool parameter) {
+    Written info;
+    if (shape == nullptr) {
+        return info;
+    }
+    engine_core::LuaDoc doc;
+    if (!shape->user_function && !shape->callee_name.empty()) {
+        doc = engine_core::lua_symbol_doc(shape->callee_owner, shape->callee_name);
+    }
+    if (!doc.found && !shape->library.empty()) {
+        doc = engine_core::lua_symbol_doc("", shape->library);
+    }
+
+    if (!shape->library.empty() && !shape->call && !shape->user_function) {
+        info.found = true;
+        info.title = name;
+        info.detail = "library";
+        if (doc.found) {
+            info.summary = doc.summary;
+        }
+        return info;
+    }
+
+    if (shape->call || shape->user_function) {
+        std::vector<std::pair<std::string, std::string>> params;
+        bool variadic = false;
+        if (shape->user_function) {
+            if (shape->method) {
+                params.emplace_back("self", shape->self_type);
+            }
+            for (const Param& param : shape->params) {
+                params.emplace_back(param.name, param.type_name);
+            }
+            variadic = shape->variadic;
+        } else if (doc.found) {
+            std::size_t first = 0;
+            if (shape->method && shape->callee_owner == "string" && !doc.params.empty() &&
+                doc.params[0].type_name == "string") {
+                first = 1;
+            }
+            for (std::size_t index = first; index < doc.params.size(); ++index) {
+                std::string type_name = doc.params[index].type_name;
+                if (shape->callback_arg && doc.params[index].name == "callback") {
+                    type_name = CallbackType(shape);
+                }
+                params.emplace_back(doc.params[index].name, std::move(type_name));
+            }
+            variadic = doc.variadic;
+        }
+        std::string ret;
+        bool known = false;
+        bool nothing = false;
+        if (shape->user_function && shape->annotated_return) {
+            if (!shape->result_type.empty()) {
+                known = true;
+                ret = shape->result_type;
+            }
+        } else if (shape->user_function && shape->return_known && !shape->return_conflict) {
+            known = true;
+            ret = shape->result_type;
+            nothing = ret.empty();
+        } else if (shape->user_function && shape->body_closed && !shape->return_conflict) {
+            known = true;
+            nothing = true;
+        } else if (shape->return_known && !shape->result_type.empty()) {
+            known = true;
+            ret = shape->result_type;
+        } else if (doc.found && doc.return_unknown) {
+            known = false;
+        } else if (doc.found && doc.returns_nothing) {
+            known = true;
+            nothing = true;
+        } else if (doc.found && !doc.return_type.empty()) {
+            known = true;
+            ret = doc.return_type;
+        } else if (shape->returns_list) {
+            known = true;
+            ret = shape->result_type.empty() ? "table" : "{" + shape->result_type + "}";
+        } else if (!shape->result_type.empty() && shape->result_type != "nil") {
+            known = true;
+            ret = shape->result_type;
+        } else if (shape->result_type == "nil") {
+            known = true;
+            nothing = true;
+        }
+        info.found = true;
+        info.title = "function " + QualifiedName(shape, name) + JoinParams(params, variadic);
+        if (known && !ret.empty()) {
+            info.title += ": ";
+            info.title += ret;
+            info.returns = std::move(ret);
+        }
+        if (nothing) {
+            info.detail = "returns nothing";
+            info.returns = "returns nothing";
+        }
+        if (doc.found && !shape->user_function) {
+            info.summary = doc.summary;
+        }
+        return info;
+    }
+
+    if (!bound && !ShapeUseful(shape)) {
+        return info;
+    }
+    info.found = true;
+    const std::string type_name = ShownType(shape);
+    if (!type_name.empty() && type_name != "function") {
+        info.title = name + ": " + type_name;
+    } else if (type_name == "function") {
+        info.title = name + ": function";
+    } else {
+        info.title = name;
+        info.detail = parameter ? "parameter" : "local";
+    }
+    if (doc.found) {
+        info.summary = doc.summary;
+    }
+    return info;
+}
+
+void AttachDocs(CompletionItem& item, const Shape* shape) {
+    if (shape == nullptr) {
+        return;
+    }
+    const Written written = DescribeSymbol(shape, item.name, true, false);
+    if (written.summary.empty() && written.returns.empty()) {
+        return;
+    }
+    item.title = written.title;
+    item.summary = written.summary;
+    item.returns = written.returns;
+}
+
+HoverInfo Resolver::describe(int code_index) {
+    int token_index = -1;
+    for (int index = 0; index < static_cast<int>(tokens_.size()); ++index) {
+        const Token& token = tokens_[static_cast<std::size_t>(index)];
+        if (code_index >= token.begin && code_index < token.end) {
+            token_index = index;
+            break;
+        }
+    }
+    if (token_index < 0) {
+        return {};
+    }
+    const Token& token = tokens_[static_cast<std::size_t>(token_index)];
+    HoverInfo info;
+    info.begin = token.begin;
+    info.end = token.end;
+    if (token.kind == Token::Keyword) {
+        if (token.text == "true" || token.text == "false") {
+            info.found = true;
+            info.title = token.text + ": boolean";
+            return info;
+        }
+        if (token.text == "nil") {
+            info.found = true;
+            info.title = "nil";
+            return info;
+        }
+        return {};
+    }
+    if (token.kind != Token::Name) {
+        return {};
+    }
+
+    const bool cast = token_index >= 2 && tokens_[static_cast<std::size_t>(token_index - 1)].kind == Token::Colon &&
+                      tokens_[static_cast<std::size_t>(token_index - 2)].kind == Token::Colon;
+    bool annotation = cast;
+    if (!annotation && token_index > 0 && tokens_[static_cast<std::size_t>(token_index - 1)].kind == Token::Colon) {
+        const int colon = token_index - 1;
+        if (AnnotationAt(tokens_, colon)) {
+            annotation = true;
+        } else if (colon > 0 && tokens_[static_cast<std::size_t>(colon - 1)].kind == Token::RParen) {
+            const int open = match_open(colon - 1);
+            annotation = open >= 0 && IsFunctionParen(tokens_, open);
+        }
+    }
+    if (annotation) {
+        info.found = true;
+        info.title = token.text;
+        info.detail = "type";
+        const engine_core::LuaDoc doc = engine_core::lua_symbol_doc("", token.text);
+        if (doc.found) {
+            info.summary = doc.summary;
+        }
+        return info;
+    }
+
+    retain_ = true;
+    parse_until(static_cast<int>(tokens_.size()));
+    retain_ = false;
+    hover_at_ = token_index;
+    bool bound = false;
+    bool parameter = false;
+    Shape* shape = nullptr;
+    if (suffix_before(token_index)) {
+        // receiver() parses up to the '.' or ':' and leaves the member name out.
+        shape = member_of(receiver(token_index - 1), token.text);
+    } else {
+        shape = lookup_binding(token.text, token_index, bound, parameter);
+    }
+    hover_at_ = -1;
+    if (shape == nullptr) {
+        return {};
+    }
+
+    const Written written = DescribeSymbol(shape, token.text, bound, parameter);
+    if (!written.found) {
+        return {};
+    }
+    info.found = true;
+    info.title = written.title;
+    info.detail = written.detail;
+    info.summary = written.summary;
+    return info;
+}
+
 void AddTypes(std::string_view prefix, std::vector<CompletionItem>& out) {
     std::vector<std::string> names;
     engine_core::lua_class_names(names);
@@ -1932,6 +2723,11 @@ void AddTypes(std::string_view prefix, std::vector<CompletionItem>& out) {
         CompletionItem item;
         item.name = name;
         item.detail = "type";
+        const engine_core::LuaDoc doc = engine_core::lua_symbol_doc("", name);
+        if (doc.found && !doc.summary.empty()) {
+            item.title = name;
+            item.summary = doc.summary;
+        }
         out.push_back(std::move(item));
     }
 }
@@ -2168,6 +2964,24 @@ CompletionList complete_luau(std::string_view source, int caret, const std::vect
     resolver.complete_callback(index, list);
     resolver.complete_signature(index, list);
     return list;
+}
+
+HoverInfo hover_luau(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world,
+                     std::uint32_t script_id, bool script_global) {
+    const std::u32string text = Utf32(source);
+    if (index < 0) {
+        index = 0;
+    }
+    if (index > static_cast<int>(text.size())) {
+        index = static_cast<int>(text.size());
+    }
+    // A trailing comment marks the scan blocked and still keeps every token before it.
+    const Scan scan = Tokenize(text, static_cast<int>(text.size()));
+    if (scan.tokens.empty()) {
+        return {};
+    }
+    Resolver resolver(scan.tokens, world, script_id, script_global);
+    return resolver.describe(index);
 }
 
 }  // namespace ide

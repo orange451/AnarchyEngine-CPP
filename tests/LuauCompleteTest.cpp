@@ -47,6 +47,35 @@ void expect_missing(const ide::CompletionList& list, const char* name, const cha
 
 void expect_detail(const ide::CompletionList& list, const char* name, const char* detail, const char* label);
 
+const ide::CompletionItem* find_item(const ide::CompletionList& list, const char* name) {
+    for (const ide::CompletionItem& item : list.items) {
+        if (item.name == name) {
+            return &item;
+        }
+    }
+    return nullptr;
+}
+
+// `returns`, `title`, and `summary_part` are checked when not null.
+// An empty string requires that field to be empty.
+void expect_info(const ide::CompletionList& list, const char* name, const char* returns, const char* title,
+                 const char* summary_part, const char* label) {
+    const ide::CompletionItem* item = find_item(list, name);
+    if (item == nullptr) {
+        fail(std::string(label) + " missing " + name);
+        return;
+    }
+    if (returns != nullptr && item->returns != returns) {
+        fail(std::string(label) + " returns '" + item->returns + "'");
+    }
+    if (title != nullptr && item->title != title) {
+        fail(std::string(label) + " title '" + item->title + "'");
+    }
+    if (summary_part != nullptr && item->summary.find(summary_part) == std::string::npos) {
+        fail(std::string(label) + " summary '" + item->summary + "'");
+    }
+}
+
 void expect_call(const ide::CompletionList& list, const char* name, bool call, const char* label) {
     bool actual = false;
     if (!has_item(list, name, &actual)) {
@@ -267,6 +296,115 @@ void testModule() {
     const ide::CompletionList nested = at_end("local m = require(game:FindFirstChild(\"Lib\"))\nm.nested.", world, 9);
     expect_has(nested, "zoom", "module nested.zoom");
     expect_call(nested, "zoom", true, "nested.zoom");
+}
+
+void testModuleMethods() {
+    const char* source =
+        "local module = {}\n"
+        "\n"
+        "function module:Test()\n"
+        "    print(\"Hello World!\")\n"
+        "end\n"
+        "\n"
+        "function module.Ping()\n"
+        "end\n"
+        "\n"
+        "function module.Take(self)\n"
+        "end\n"
+        "\n"
+        "module.ready = true\n"
+        "return module\n";
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(9, 0, "Main", "Script"));
+    world.push_back(node(8, 9, "ModuleScript", "ModuleScript", source));
+
+    const char* dot_source = "local Module = require(script:FindFirstChild(\"ModuleScript\"))\nModule.";
+    const ide::CompletionList dot = at_end(dot_source, world, 9);
+    expect_has(dot, "Ping", "dot function");
+    expect_has(dot, "Take", "explicit self stays on dot");
+    expect_has(dot, "ready", "dot field");
+    expect_missing(dot, "Test", "colon method on dot");
+    expect_call(dot, "Ping", true, "dot function");
+
+    const char* colon_source = "local Module = require(script:FindFirstChild(\"ModuleScript\"))\nModule:";
+    const ide::CompletionList colon = at_end(colon_source, world, 9);
+    expect_has(colon, "Test", "colon method");
+    expect_missing(colon, "Ping", "dot function on colon");
+    expect_missing(colon, "Take", "explicit self on colon");
+    expect_missing(colon, "ready", "field on colon");
+    expect_call(colon, "Test", true, "colon method");
+    expect_detail(colon, "Test", "function", "colon method");
+
+    const ide::CompletionList prefix =
+        at_end("local Module = require(script:FindFirstChild(\"ModuleScript\"))\nModule:Te", world, 9);
+    expect_has(prefix, "Test", "Module:Te");
+    expect_missing(prefix, "Ping", "Module:Te");
+
+    const ide::CompletionList local_colon = at_end("local module = {}\nfunction module:Test()\nend\nmodule:");
+    expect_has(local_colon, "Test", "local module:");
+    const ide::CompletionList local_dot = at_end("local module = {}\nfunction module:Test()\nend\nfunction module.Ping()\nend\nmodule.");
+    expect_missing(local_dot, "Test", "local module.");
+    expect_has(local_dot, "Ping", "local module.Ping");
+    const ide::CompletionList local_methods =
+        at_end("local module = {}\nfunction module:Test()\nend\nfunction module.Ping()\nend\nmodule:");
+    expect_has(local_methods, "Test", "local module:Test");
+    expect_missing(local_methods, "Ping", "local module:Ping");
+
+    const char* replaced =
+        "local module = {}\n"
+        "function module:Test()\n"
+        "end\n"
+        "module.Test = function()\n"
+        "end\n"
+        "return module\n";
+    std::vector<engine_core::LuaNode> replaced_world;
+    replaced_world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    replaced_world.push_back(node(3, 0, "Lib", "ModuleScript", replaced));
+    replaced_world.push_back(node(4, 0, "Main", "Script"));
+    const ide::CompletionList replaced_dot = at_end("local m = require(game:FindFirstChild(\"Lib\"))\nm.", replaced_world, 4);
+    expect_has(replaced_dot, "Test", "replaced method is a dot function");
+    const ide::CompletionList replaced_colon = at_end("local m = require(game:FindFirstChild(\"Lib\"))\nm:", replaced_world, 4);
+    expect_missing(replaced_colon, "Test", "replaced method");
+
+    const char* nested_source =
+        "local extra = {}\n"
+        "function extra:zoom()\n"
+        "end\n"
+        "extra.amount = 1\n"
+        "return { nested = extra }\n";
+    std::vector<engine_core::LuaNode> nested_world;
+    nested_world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    nested_world.push_back(node(5, 0, "Lib", "ModuleScript", nested_source));
+    nested_world.push_back(node(6, 0, "Main", "Script"));
+    const ide::CompletionList nested_dot =
+        at_end("local m = require(game:FindFirstChild(\"Lib\"))\nm.nested.", nested_world, 6);
+    expect_has(nested_dot, "amount", "nested field");
+    expect_missing(nested_dot, "zoom", "nested colon method on dot");
+    const ide::CompletionList nested_colon =
+        at_end("local m = require(game:FindFirstChild(\"Lib\"))\nm.nested:", nested_world, 6);
+    expect_has(nested_colon, "zoom", "nested colon method");
+    expect_missing(nested_colon, "amount", "nested field on colon");
+    expect_call(nested_colon, "zoom", true, "nested zoom");
+
+    const char* inner =
+        "local module = {}\n"
+        "function module:Test()\n"
+        "    print(\"Hello World!\")\n"
+        "end\n"
+        "return module\n";
+    const char* wrap = "return require(game:FindFirstChild(\"Lib\"))\n";
+    std::vector<engine_core::LuaNode> wrap_world;
+    wrap_world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    wrap_world.push_back(node(8, 0, "Lib", "ModuleScript", inner));
+    wrap_world.push_back(node(7, 0, "Wrap", "ModuleScript", wrap));
+    wrap_world.push_back(node(9, 0, "Main", "Script"));
+    const ide::CompletionList wrapped =
+        at_end("local Module = require(game:FindFirstChild(\"Wrap\"))\nModule:", wrap_world, 9);
+    expect_has(wrapped, "Test", "required module method");
+    const ide::CompletionList wrapped_dot =
+        at_end("local Module = require(game:FindFirstChild(\"Wrap\"))\nModule.", wrap_world, 9);
+    expect_missing(wrapped_dot, "Test", "required module method on dot");
 }
 
 int index_of(const ide::CompletionList& list, const char* name) {
@@ -1026,6 +1164,301 @@ void testInstanceNew() {
     expect_missing(console, "GameObject", "console Instance.new");
 }
 
+bool ident_char(char unit) {
+    return (unit >= 'A' && unit <= 'Z') || (unit >= 'a' && unit <= 'z') || (unit >= '0' && unit <= '9') || unit == '_';
+}
+
+int find_nth(std::string_view source, std::string_view name, int nth) {
+    std::size_t pos = 0;
+    int seen = 0;
+    while (pos < source.size()) {
+        pos = source.find(name, pos);
+        if (pos == std::string_view::npos) {
+            return -1;
+        }
+        const bool left = pos == 0 || !ident_char(source[pos - 1]);
+        const std::size_t end = pos + name.size();
+        const bool right = end >= source.size() || !ident_char(source[end]);
+        if (left && right) {
+            if (seen == nth) {
+                return static_cast<int>(pos);
+            }
+            ++seen;
+        }
+        pos += name.size();
+    }
+    return -1;
+}
+
+void expect_hover(const ide::HoverInfo& info, const char* title, const char* detail, const char* summary_part,
+                  const char* label) {
+    if (!info.found) {
+        fail(std::string(label) + " found nothing");
+        return;
+    }
+    if (title != nullptr && info.title != title) {
+        fail(std::string(label) + " title '" + info.title + "'");
+    }
+    if (detail != nullptr && info.detail != detail) {
+        fail(std::string(label) + " detail '" + info.detail + "'");
+    }
+    if (summary_part != nullptr && info.summary.find(summary_part) == std::string::npos) {
+        fail(std::string(label) + " summary '" + info.summary + "'");
+    }
+}
+
+void testHover() {
+    const char* count_source = "local count: number = 1\nprint(count)";
+    const ide::HoverInfo count = ide::hover_luau(count_source, find_nth(count_source, "count", 1));
+    expect_hover(count, "count: number", "", nullptr, "use of count");
+
+    const ide::HoverInfo declared = ide::hover_luau(count_source, find_nth(count_source, "count", 0));
+    expect_hover(declared, "count: number", "", nullptr, "declaration of count");
+
+    const char* untyped = "local value\nprint(value)";
+    const ide::HoverInfo blank = ide::hover_luau(untyped, find_nth(untyped, "value", 1));
+    expect_hover(blank, "value", "local", nullptr, "untyped local");
+
+    const char* defined = "local function test_func(a: string, b: Instance): boolean\n    return a == \"z\"\nend\n";
+    const std::string call = std::string(defined) + "test_func(\"z\", game)";
+    const ide::HoverInfo func = ide::hover_luau(call, find_nth(call, "test_func", 1));
+    expect_hover(func, "function test_func(a: string, b: Instance): boolean", "", nullptr, "call of test_func");
+
+    const char* printed = "local function greet(name: string): string\n    print(name)\n    return name\nend";
+    const ide::HoverInfo greet = ide::hover_luau(printed, find_nth(printed, "greet", 0));
+    expect_hover(greet, "function greet(name: string): string", "", nullptr, "return annotation before a call");
+
+    const ide::HoverInfo param = ide::hover_luau(defined, find_nth(defined, "a", 0));
+    expect_hover(param, "a: string", "", nullptr, "parameter a");
+
+    const char* inferred = "local function add(x: number, y: number)\n    return x + y\nend\nlocal n = add(1, 2)";
+    const ide::HoverInfo add = ide::hover_luau(inferred, find_nth(inferred, "add", 1));
+    expect_hover(add, "function add(x: number, y: number): number", "", nullptr, "inferred return");
+    const ide::HoverInfo result = ide::hover_luau(inferred, find_nth(inferred, "n", 0));
+    expect_hover(result, "n: number", "", nullptr, "call result");
+
+    const char* silent = "local function ping(name: string)\nend";
+    const ide::HoverInfo ping = ide::hover_luau(silent, find_nth(silent, "ping", 0));
+    expect_hover(ping, "function ping(name: string)", "returns nothing", nullptr, "no return");
+
+    const char* mixed = "local function pick(flag: boolean)\n    if flag then\n        return 1\n    end\n    return \"x\"\nend";
+    const ide::HoverInfo pick = ide::hover_luau(mixed, find_nth(mixed, "pick", 0));
+    const std::size_t paren = pick.title.rfind(')');
+    if (!pick.found || paren == std::string::npos || paren + 1 != pick.title.size() || pick.detail == "returns nothing") {
+        fail(std::string("mixed returns should not claim one type: ") + pick.title + " / " + pick.detail);
+    }
+
+    const char* task_source = "task.wait(0.5)";
+    const ide::HoverInfo library = ide::hover_luau(task_source, find_nth(task_source, "task", 0));
+    expect_hover(library, "task", "library", "simulation", "task library");
+    const ide::HoverInfo wait = ide::hover_luau(task_source, find_nth(task_source, "wait", 0));
+    expect_hover(wait, "function task.wait(seconds: number?)", "returns nothing", "simulation", "task.wait");
+
+    const char* floor_source = "math.floor(1.5)";
+    const ide::HoverInfo floor = ide::hover_luau(floor_source, find_nth(floor_source, "floor", 0));
+    expect_hover(floor, "function math.floor(n: number): number", "", "integer", "math.floor");
+
+    const char* slice = "local text = \"hi\"\ntext:sub(1, 1)";
+    const ide::HoverInfo sub = ide::hover_luau(slice, find_nth(slice, "sub", 0));
+    expect_hover(sub, "function string:sub(i: number, j: number?): string", "", "substring", "string method");
+
+    const ide::HoverInfo game = ide::hover_luau("print(game)", find_nth("print(game)", "game", 0));
+    expect_hover(game, "game: DataModel", "", nullptr, "game");
+
+    const char* child = "game:FindFirstChild(\"Hop\")";
+    const ide::HoverInfo find = ide::hover_luau(child, find_nth(child, "FindFirstChild", 0));
+    expect_hover(find, "function DataModel:FindFirstChild(name: string): Instance", "", "child", "FindFirstChild");
+
+    const char* beat = "game:GetService(\"RunService\").Heartbeat:Wait()";
+    const ide::HoverInfo heartbeat = ide::hover_luau(beat, find_nth(beat, "Wait", 0));
+    expect_hover(heartbeat, "function Signal:Wait(): number", "", "signal", "Heartbeat:Wait");
+
+    const char* shadow = "local task = game\nprint(task)";
+    const ide::HoverInfo shadowed = ide::hover_luau(shadow, find_nth(shadow, "task", 1));
+    expect_hover(shadowed, "task: DataModel", "", nullptr, "local shadows task");
+
+    const char* hidden = "do\n    local hidden: number = 1\nend\nprint(hidden)";
+    const ide::HoverInfo gone = ide::hover_luau(hidden, find_nth(hidden, "hidden", 1));
+    if (gone.found) {
+        fail(std::string("a local is not visible after its block: ") + gone.title);
+    }
+
+    const char* loop = "for i = 1, 4 do\n    print(i)\nend";
+    const ide::HoverInfo index = ide::hover_luau(loop, find_nth(loop, "i", 1));
+    expect_hover(index, "i: number", "", nullptr, "numeric for");
+
+    const ide::HoverInfo keyword = ide::hover_luau("local x = 1", 0);
+    if (keyword.found) {
+        fail("a keyword has no hover");
+    }
+
+    const char* note = "-- task.wait";
+    const ide::HoverInfo comment = ide::hover_luau(note, find_nth(note, "task", 0));
+    if (comment.found) {
+        fail("a comment has no hover");
+    }
+
+    const char* method = "local t = {}\nfunction t:foo(a: string)\nend";
+    const ide::HoverInfo foo = ide::hover_luau(method, find_nth(method, "foo", 0));
+    expect_hover(foo, "function t:foo(self: table, a: string)", "returns nothing", nullptr, "method");
+
+    const char* module_source =
+        "local module = {}\n"
+        "\n"
+        "function module:Test()\n"
+        "    print(\"Hello World\")\n"
+        "end\n"
+        "\n"
+        "function module.new()\n"
+        "    return \"ur mom lol\"\n"
+        "end\n"
+        "\n"
+        "function module.greet(name: string)\n"
+        "    if name == \"hi\" then\n"
+        "        return name\n"
+        "    end\n"
+        "    return 1\n"
+        "end\n"
+        "\n"
+        "return module\n";
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(9, 0, "Main", "Script"));
+    world.push_back(node(8, 9, "ModuleScript", "ModuleScript", module_source));
+    const char* use =
+        "local Module = require(script:FindFirstChild(\"ModuleScript\"))\n"
+        "local x = Module.new()\n"
+        "local y = Module.greet(\"hi\")\n"
+        "Module:Test()\n";
+    const ide::HoverInfo created = ide::hover_luau(use, find_nth(use, "new", 0), world, 9);
+    expect_hover(created, "function module.new(): string", "", nullptr, "module.new");
+    const ide::HoverInfo local_x = ide::hover_luau(use, find_nth(use, "x", 0), world, 9);
+    expect_hover(local_x, "x: string", "", nullptr, "result of module.new");
+    const ide::HoverInfo module_greet = ide::hover_luau(use, find_nth(use, "greet", 0), world, 9);
+    expect_hover(module_greet, "function module.greet(name: string): string", "", nullptr, "first return");
+    const ide::HoverInfo local_y = ide::hover_luau(use, find_nth(use, "y", 0), world, 9);
+    expect_hover(local_y, "y: string", "", nullptr, "result of the first return");
+    const ide::HoverInfo test = ide::hover_luau(use, find_nth(use, "Test", 0), world, 9);
+    expect_hover(test, "function module:Test(self: table)", "returns nothing", nullptr, "module method");
+
+    const char* replaced =
+        "local module = {}\n"
+        "function module.new()\n"
+        "    return \"nope\"\n"
+        "end\n"
+        "module.new = function()\n"
+        "    return 1\n"
+        "end\n"
+        "return module\n";
+    std::vector<engine_core::LuaNode> replaced_world;
+    replaced_world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    replaced_world.push_back(node(9, 0, "Main", "Script"));
+    replaced_world.push_back(node(8, 9, "ModuleScript", "ModuleScript", replaced));
+    const char* replaced_use = "local Module = require(script:FindFirstChild(\"ModuleScript\"))\nlocal x = Module.new()\n";
+    const ide::HoverInfo replaced_new = ide::hover_luau(replaced_use, find_nth(replaced_use, "new", 0), replaced_world, 9);
+    expect_hover(replaced_new, "function new(): number", "", nullptr, "replaced module.new");
+    const ide::HoverInfo replaced_x = ide::hover_luau(replaced_use, find_nth(replaced_use, "x", 0), replaced_world, 9);
+    expect_hover(replaced_x, "x: number", "", nullptr, "replaced module.new result");
+
+    const char* constructed = "return { new = function()\n    return true\nend }\n";
+    std::vector<engine_core::LuaNode> constructed_world;
+    constructed_world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    constructed_world.push_back(node(9, 0, "Main", "Script"));
+    constructed_world.push_back(node(8, 9, "ModuleScript", "ModuleScript", constructed));
+    const char* constructed_use = "local Module = require(script:FindFirstChild(\"ModuleScript\"))\nlocal x = Module.new()\n";
+    const ide::HoverInfo constructed_new =
+        ide::hover_luau(constructed_use, find_nth(constructed_use, "new", 0), constructed_world, 9);
+    expect_hover(constructed_new, "function new(): boolean", "", nullptr, "constructed module.new");
+    const ide::HoverInfo constructed_x =
+        ide::hover_luau(constructed_use, find_nth(constructed_use, "x", 0), constructed_world, 9);
+    expect_hover(constructed_x, "x: boolean", "", nullptr, "constructed module.new result");
+}
+
+void testCompletionDocs() {
+    const ide::CompletionList math = at_end("math.");
+    expect_detail(math, "floor", "function", "math.floor kind");
+    expect_info(math, "floor", "number", "function math.floor(n: number): number", "integer", "math.floor");
+    expect_info(math, "pi", "", "pi: number", "constant", "math.pi");
+    expect_detail(math, "pi", "number", "math.pi kind");
+
+    const ide::CompletionList task = at_end("task.");
+    expect_info(task, "wait", "returns nothing", "function task.wait(seconds: number?)", "simulation", "task.wait");
+    expect_info(task, "spawn", "thread", "function task.spawn(callback: function, ...): thread", "thread", "task.spawn");
+
+    const ide::CompletionList names = at_end("ta");
+    expect_info(names, "task", "", "task", "simulation", "task library");
+    expect_detail(names, "task", "library", "task kind");
+    const ide::CompletionList printed = at_end("pri");
+    expect_info(printed, "print", "returns nothing", "function print(...)", "console", "print");
+    const ide::CompletionList keyword = at_end("lo");
+    expect_info(keyword, "local", "", "", "", "keyword has no explanation");
+
+    const ide::CompletionList required = at_end("req");
+    expect_info(required, "require", "", "function require(module: ModuleScript)", "ModuleScript", "require");
+
+    const ide::CompletionList game = at_end("game:");
+    expect_info(game, "FindFirstChild", "Instance", "function DataModel:FindFirstChild(name: string): Instance", "child",
+                "FindFirstChild");
+    expect_info(game, "Destroy", "returns nothing", "function DataModel:Destroy()", "descendants", "Destroy");
+    expect_info(game, "GetChildren", "{Instance}", "function DataModel:GetChildren(): {Instance}", "children",
+                "GetChildren");
+    expect_detail(game, "FindFirstChild", "function", "FindFirstChild kind");
+
+    const ide::CompletionList fields = at_end("game.");
+    expect_info(fields, "Name", "", "Name: string", "name", "Name");
+    expect_detail(fields, "Name", "string", "Name kind");
+
+    const ide::CompletionList text = at_end("\"hi\":");
+    expect_info(text, "sub", "string", "function string:sub(i: number, j: number?): string", "substring", "string.sub");
+
+    const ide::CompletionList library = at_end("Vector3.");
+    expect_info(library, "new", "Vector3", "function Vector3.new(x: number?, y: number?, z: number?): Vector3", "components",
+                "Vector3.new");
+    expect_info(library, "zero", "", "zero: Vector3", "0, 0, 0", "Vector3.zero");
+    expect_detail(library, "new", "function", "Vector3.new kind");
+    expect_detail(library, "zero", "Vector3", "Vector3.zero kind");
+
+    const ide::CompletionList built = at_end("Vector3.new().");
+    expect_info(built, "Dot", "number", "function Vector3:Dot(other: Vector3): number", "dot", "Vector3.Dot");
+    expect_info(built, "Abs", "Vector3", "function Vector3:Abs(): Vector3", "non-negative", "Vector3.Abs");
+    expect_info(built, "X", "", "X: number", "component", "Vector3.X");
+    expect_detail(built, "Dot", "function", "Vector3.Dot kind");
+    expect_detail(built, "X", "number", "Vector3.X kind");
+
+    const ide::CompletionList beat = at_end("game:GetService(\"RunService\").Heartbeat:");
+    expect_info(beat, "Wait", "number", "function Signal:Wait(): number", "signal", "Heartbeat:Wait");
+    expect_info(beat, "Connect", "Connection", nullptr, "callback", "Heartbeat:Connect");
+
+    const char* added = "local function add(x: number, y: number)\n    return x + y\nend\nad";
+    const ide::CompletionList add = at_end(added);
+    expect_detail(add, "add", "(x: number, y: number)", "add parameters");
+    expect_info(add, "add", "number", "function add(x: number, y: number): number", "", "add return");
+
+    const char* silent = "local function ping(name: string)\nend\npi";
+    const ide::CompletionList ping = at_end(silent);
+    expect_info(ping, "ping", "returns nothing", "function ping(name: string)", "", "ping returns nothing");
+
+    const char* mixed = "local function pick(flag: boolean)\n    if flag then\n        return 1\n    end\n    return \"x\"\nend\npic";
+    const ide::CompletionList pick = at_end(mixed);
+    expect_info(pick, "pick", "", "", "", "mixed return is not claimed");
+
+    const char* method = "local module = {}\nfunction module:Test()\nend\nmodule:";
+    const ide::CompletionList colon = at_end(method);
+    expect_info(colon, "Test", "returns nothing", "function module:Test(self: table)", "", "colon method returns nothing");
+    expect_detail(colon, "Test", "function", "colon method kind");
+
+    const char* annotated = "local module = {}\nfunction module:Test(): string\n    return \"hi\"\nend\nmodule:";
+    const ide::CompletionList noted = at_end(annotated);
+    expect_info(noted, "Test", "string", "function module:Test(self: table): string", "", "annotated method");
+
+    const ide::CompletionList snippet = at_end("game:GetService(\"RunService\").Heartbeat:Connect(fun");
+    expect_info(snippet, "function(dt)", "", "", "", "callback snippet has no function return");
+
+    const ide::CompletionList typed = at_end("local value: Vec");
+    expect_info(typed, "Vector3", "", "Vector3", "3D vector", "Vector3 type");
+    expect_detail(typed, "Vector3", "type", "Vector3 type kind");
+}
+
 void testSkipped() {
     const ide::CompletionList comment = at_end("-- task.");
     if (comment.site != ide::CompleteSite::None || !comment.items.empty()) {
@@ -1045,6 +1478,7 @@ int RunLuauCompleteTests() {
         testInstances();
         testVector3();
         testModule();
+        testModuleMethods();
         testNames();
         testConsole();
         testStringArguments();
@@ -1052,6 +1486,8 @@ int RunLuauCompleteTests() {
         testInstanceNew();
         testCallbackArguments();
         testFunctionParameters();
+        testHover();
+        testCompletionDocs();
         testSkipped();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());

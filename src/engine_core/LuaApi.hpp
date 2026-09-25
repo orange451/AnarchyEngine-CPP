@@ -123,8 +123,8 @@ bool lua_service_known(const char* name);
 void lua_service_names(std::vector<std::string>& out);
 
 // Classes Instance.new can construct. The factory builds one in `world`.
-// Completion lists these same names. A null result from lua_create_instance
-// is an unknown class.
+// Completion and the explorer insert list use these same names. A null result
+// from lua_create_instance is an unknown class.
 using LuaCreate = DataModel& (*)(DataModel& world);
 void register_lua_creatable(const char* class_name, LuaCreate create);
 bool lua_creatable_known(const char* class_name);
@@ -172,6 +172,31 @@ bool lua_library_members(std::string_view global_name, std::vector<LuaSymbol>& o
 bool lua_value_members(std::string_view lua_type, std::vector<LuaSymbol>& out);
 LuaResult lua_function_result(std::string_view owner, std::string_view name);
 
+// One parameter in a host function's documentation.
+struct LuaDocParam {
+    std::string name;
+    std::string type_name;
+};
+
+// What the editor shows for a host library, function, or property.
+// `found` is false when nothing was recorded for that name.
+// `returns_nothing` means the function returns no value.
+// `return_unknown` means it returns a value whose type is not a single named type.
+struct LuaDoc {
+    bool found = false;
+    std::string summary;
+    std::string return_type;
+    bool returns_nothing = false;
+    bool return_unknown = false;
+    bool variadic = false;
+    std::vector<LuaDocParam> params;
+};
+
+// `owner` is empty for a global such as `task` or `print`. A member is looked up
+// as owner "task" and name "wait". A class member walks base classes, so a
+// method recorded on DataModel is found on a Script.
+LuaDoc lua_symbol_doc(std::string_view owner, std::string_view name);
+
 // One instance the editor can see. parent is kNoParent for the root.
 struct LuaNode {
     std::uint32_t id = 0;
@@ -184,10 +209,12 @@ struct LuaNode {
 // Nested table or class produced by running a ModuleScript.
 // `class_name` is set when the value is an instance of a registered class.
 // `fields` are the keys a returned table actually has.
+// `method` is set on a function written as `function obj:name`.
 struct LuaShape {
     std::string type_name;
     std::string class_name;
     bool call = false;
+    bool method = false;
     std::vector<std::pair<std::string, LuaShape>> fields;
 };
 

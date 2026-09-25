@@ -88,7 +88,25 @@ public:
     void handleKey(jadefx::KeyEvent& event) override;
     void handleText(jadefx::TextEvent& event) override;
     void handleMousePressed(const jadefx::MouseEvent& event) override;
+    void handleMouseMoved(const jadefx::MouseEvent& event) override;
     void handleScroll(jadefx::ScrollEvent& event) override;
+
+    void tickHover();
+    void dismissHover();
+
+private:
+    void armHover(int index, double x, double y);
+    void showHover();
+    bool sameWord(int index) const;
+
+    std::shared_ptr<jadefx::VBox> tip_;
+    int hover_index_ = -1;
+    int hover_begin_ = -1;
+    int hover_end_ = -1;
+    double anchor_x_ = 0;
+    double anchor_y_ = 0;
+    std::chrono::steady_clock::time_point hover_since_{};
+    bool hover_waiting_ = false;
 };
 
 struct IdeScriptEditor::Commit {
@@ -108,6 +126,11 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     (void)editor_font();
     define_styles(*area_);
     area_->setOnPlainTextChange([this](const jadefx::PlainTextChange&) { note_text(); });
+    area_->setOnMouseExited([this](const jadefx::MouseEvent&) {
+        if (area_) {
+            static_cast<ScriptCodeArea*>(area_.get())->dismissHover();
+        }
+    });
     completion_.setOnAccept([this] { accept_completion(true); });
     Fill(*area_);
     getChildren().add(area_);
@@ -157,6 +180,11 @@ void IdeScriptEditor::layoutChildren() {
     }
     if (completion_open()) {
         place_completion();
+        if (area_) {
+            static_cast<ScriptCodeArea*>(area_.get())->dismissHover();
+        }
+    } else if (area_) {
+        static_cast<ScriptCodeArea*>(area_.get())->tickHover();
     }
     StackPane::layoutChildren();
 }
@@ -225,6 +253,7 @@ void IdeScriptEditor::note_text() {
     if (loading_ || !area_) {
         return;
     }
+    static_cast<ScriptCodeArea*>(area_.get())->dismissHover();
     paint();
     if (!completion_.accepting()) {
         refresh_completion(false);
@@ -398,17 +427,219 @@ void ScriptCodeArea::handleText(jadefx::TextEvent& event) {
 }
 
 void ScriptCodeArea::handleMousePressed(const jadefx::MouseEvent& event) {
+    dismissHover();
     if (editor != nullptr) {
         editor->dismiss_completion();
     }
     jadefx::CodeArea::handleMousePressed(event);
 }
 
+void ScriptCodeArea::handleMouseMoved(const jadefx::MouseEvent& event) {
+    jadefx::CodeArea::handleMouseMoved(event);
+    if (editor == nullptr) {
+        return;
+    }
+    const jadefx::CharacterHit where = hit(event.x, event.y);
+    if (!where.valid || where.characterIndex < 0) {
+        dismissHover();
+        return;
+    }
+    armHover(where.characterIndex, event.x, event.y);
+}
+
 void ScriptCodeArea::handleScroll(jadefx::ScrollEvent& event) {
+    dismissHover();
     jadefx::CodeArea::handleScroll(event);
     if (editor != nullptr && editor->completion_open()) {
         editor->place_completion();
     }
+}
+
+namespace {
+
+constexpr std::chrono::milliseconds kHoverDelay(500);
+
+char32_t CodePointAt(std::string_view text, int index) {
+    int count = 0;
+    for (std::size_t cursor = 0; cursor < text.size();) {
+        const unsigned char lead = static_cast<unsigned char>(text[cursor]);
+        std::size_t step = 1;
+        char32_t code = lead;
+        if (lead >= 0x80) {
+            if ((lead & 0xE0) == 0xC0) {
+                step = 2;
+                code = lead & 0x1F;
+            } else if ((lead & 0xF0) == 0xE0) {
+                step = 3;
+                code = lead & 0x0F;
+            } else {
+                step = 4;
+                code = lead & 0x07;
+            }
+            for (std::size_t i = 1; i < step && cursor + i < text.size(); ++i) {
+                code = (code << 6) | (static_cast<unsigned char>(text[cursor + i]) & 0x3F);
+            }
+        }
+        if (count == index) {
+            return code;
+        }
+        if (cursor + step > text.size()) {
+            break;
+        }
+        cursor += step;
+        ++count;
+    }
+    return 0;
+}
+
+bool NameChar(char32_t code) {
+    return (code >= U'A' && code <= U'Z') || (code >= U'a' && code <= U'z') || code == U'_' ||
+           (code >= U'0' && code <= U'9') || code >= 0x80;
+}
+
+int WordStart(std::string_view text, int index) {
+    int cursor = index;
+    while (cursor > 0 && NameChar(CodePointAt(text, cursor - 1))) {
+        --cursor;
+    }
+    return cursor;
+}
+
+}  // namespace
+
+bool ScriptCodeArea::sameWord(int index) const {
+    if (hover_index_ < 0 || index < 0) {
+        return false;
+    }
+    const std::string text = getText();
+    if (!NameChar(CodePointAt(text, hover_index_)) || !NameChar(CodePointAt(text, index))) {
+        return false;
+    }
+    return WordStart(text, hover_index_) == WordStart(text, index);
+}
+
+void ScriptCodeArea::dismissHover() {
+    hover_index_ = -1;
+    hover_begin_ = -1;
+    hover_end_ = -1;
+    hover_waiting_ = false;
+    if (!tip_) {
+        return;
+    }
+    jadefx::Scene* scene = getScene();
+    if (scene != nullptr && !scene->isTearingDown() && scene->isPopupShowing(tip_.get())) {
+        scene->hidePopup(tip_.get());
+    }
+}
+
+void ScriptCodeArea::armHover(int index, double x, double y) {
+    if (editor != nullptr && editor->completion_open()) {
+        dismissHover();
+        return;
+    }
+    if (hover_waiting_ && sameWord(index)) {
+        hover_index_ = index;
+        return;
+    }
+    if (tip_ && getScene() != nullptr && getScene()->isPopupShowing(tip_.get()) && index >= hover_begin_ &&
+        index < hover_end_) {
+        hover_index_ = index;
+        return;
+    }
+    if (tip_ && getScene() != nullptr && getScene()->isPopupShowing(tip_.get())) {
+        jadefx::Scene* scene = getScene();
+        if (scene != nullptr && !scene->isTearingDown()) {
+            scene->hidePopup(tip_.get());
+        }
+    }
+    hover_index_ = index;
+    hover_begin_ = -1;
+    hover_end_ = -1;
+    anchor_x_ = x;
+    anchor_y_ = y;
+    hover_since_ = std::chrono::steady_clock::now();
+    hover_waiting_ = true;
+}
+
+void ScriptCodeArea::showHover() {
+    if (editor == nullptr || hover_index_ < 0 || editor->completion_open()) {
+        return;
+    }
+    const HoverInfo info = hover_luau(getText(), hover_index_, editor->world(), editor->id_);
+    if (!info.found || info.title.empty()) {
+        hover_waiting_ = false;
+        return;
+    }
+    hover_begin_ = info.begin;
+    hover_end_ = info.end;
+    if (!tip_) {
+        tip_ = jadefx::make<jadefx::VBox>();
+        tip_->setMouseTransparent(true);
+        tip_->setSpacing(2);
+        tip_->setPadding(jadefx::Insets{6, 8, 6, 8});
+        tip_->setStyle(
+            "background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #c5c8ce; "
+            "box-shadow: 0 2px 8px rgba(32, 33, 36, 0.16);");
+    }
+    tip_->getChildren().clear();
+    const jadefx::Color title_fill = jadefx::Color::parse("#1f2328");
+    const jadefx::Color body_fill = jadefx::Color::parse("#5c6570");
+    auto add_line = [&](const std::string& text, const jadefx::Color& fill) {
+        if (text.empty()) {
+            return;
+        }
+        auto label = jadefx::make<jadefx::Label>(text);
+        label->setTextFill(fill);
+        label->setMouseTransparent(true);
+        tip_->getChildren().add(label);
+    };
+    add_line(info.title, title_fill);
+    add_line(info.detail, body_fill);
+    add_line(info.summary, body_fill);
+
+    jadefx::Scene* scene = getScene();
+    if (scene == nullptr || scene->isTearingDown()) {
+        return;
+    }
+    jadefx::PopupOptions options;
+    options.owner = this;
+    options.autoHide = true;
+    scene->showPopup(tip_, anchor_x_, anchor_y_ + 18, -1, -1, options);
+    double width = tip_->getWidth();
+    double height = tip_->getHeight();
+    if (width < 1) {
+        width = 160;
+    }
+    if (height < 1) {
+        height = 28;
+    }
+    double x = anchor_x_;
+    double y = anchor_y_ + 18;
+    if (scene->getWidth() > 0 && x + width > scene->getWidth()) {
+        x = std::max(0.0, scene->getWidth() - width);
+    }
+    if (x < 0) {
+        x = 0;
+    }
+    if (scene->getHeight() > 0 && y + height > scene->getHeight() && anchor_y_ > height + 4) {
+        y = anchor_y_ - height - 4;
+    }
+    scene->movePopup(tip_.get(), x, y, width, height);
+    hover_waiting_ = false;
+}
+
+void ScriptCodeArea::tickHover() {
+    if (!hover_waiting_ || hover_index_ < 0) {
+        return;
+    }
+    if (editor != nullptr && editor->completion_open()) {
+        dismissHover();
+        return;
+    }
+    if (std::chrono::steady_clock::now() - hover_since_ < kHoverDelay) {
+        return;
+    }
+    showHover();
 }
 
 }  // namespace ide

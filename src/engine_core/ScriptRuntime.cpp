@@ -1859,6 +1859,8 @@ int ScriptBindings::thread_index(lua_State* state) {
     return 1;
 }
 
+ANARCHY_LUA_REGISTER(note_task_library) { lua_note_host_library("task"); }
+
 ANARCHY_LUA_REGISTER(register_script_methods) {
     LuaField get_service =
         lua_method("GetService", "", reinterpret_cast<void*>(&ScriptBindings::instance_service), true, false, false);

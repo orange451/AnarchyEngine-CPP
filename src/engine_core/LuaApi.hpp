@@ -111,6 +111,9 @@ void register_lua_class(const char* class_name, const char* base, const LuaField
 
 // Base members first. A derived field with the same name replaces the base one.
 void lua_class_members(const char* class_name, std::vector<LuaField>& out);
+// Fields registered on this class only. Inherited fields are not included.
+void lua_class_own_members(const char* class_name, std::vector<LuaField>& out);
+const char* lua_class_base(const char* class_name);
 const LuaField* lua_class_find(const char* class_name, std::string_view name);
 bool lua_class_known(const char* class_name);
 // True when `class_name` is `ancestor` or registers `ancestor` as a base.
@@ -167,6 +170,11 @@ struct LuaResult {
 void open_host_libraries(lua_State* state);
 void lua_note_result(const char* owner, const char* name, const char* type_name, bool class_from_arg);
 
+// A global table script analysis should declare, such as task. Its members and
+// their parameter types come from lua_symbol_doc. Note it next to the install.
+void lua_note_host_library(const char* name);
+void lua_host_library_names(std::vector<std::string>& out);
+
 void lua_library_globals(std::vector<LuaSymbol>& out);
 bool lua_library_members(std::string_view global_name, std::vector<LuaSymbol>& out);
 bool lua_value_members(std::string_view lua_type, std::vector<LuaSymbol>& out);
@@ -196,6 +204,12 @@ struct LuaDoc {
 // as owner "task" and name "wait". A class member walks base classes, so a
 // method recorded on DataModel is found on a Script.
 LuaDoc lua_symbol_doc(std::string_view owner, std::string_view name);
+// Member names documented for `owner`, in sorted order.
+void lua_doc_names(std::string_view owner, std::vector<std::string>& out);
+
+// Definition source for the script checker, built from the class registry,
+// noted host libraries, and lua_symbol_doc. There is no separate definition file.
+std::string lua_analysis_definitions();
 
 // One instance the editor can see. parent is kNoParent for the root.
 struct LuaNode {

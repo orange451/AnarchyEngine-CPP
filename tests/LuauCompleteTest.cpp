@@ -1459,6 +1459,222 @@ void testCompletionDocs() {
     expect_detail(typed, "Vector3", "type", "Vector3 type kind");
 }
 
+std::vector<engine_core::LuaNode> module_world(const char* source) {
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(9, 0, "Main", "Script"));
+    world.push_back(node(8, 9, "ModuleScript", "ModuleScript", source));
+    return world;
+}
+
+void testTuples() {
+    const char* module_source =
+        "local module = {}\n"
+        "\n"
+        "function module:Test()\n"
+        "    return 2+2, \"Test\"\n"
+        "end\n"
+        "\n"
+        "return module\n";
+    const std::vector<engine_core::LuaNode> world = module_world(module_source);
+    const char* use =
+        "local Module = require(script:FindFirstChild(\"ModuleScript\"))\n"
+        "local x, y = Module:Test()\n"
+        "print(y)\n";
+    const ide::HoverInfo test = ide::hover_luau(use, find_nth(use, "Test", 0), world, 9);
+    expect_hover(test, "function module:Test(self: table): (number, string)", "", nullptr, "tuple method");
+    const ide::HoverInfo local_x = ide::hover_luau(use, find_nth(use, "x", 0), world, 9);
+    expect_hover(local_x, "x: number", "", nullptr, "first tuple value");
+    const ide::HoverInfo local_y = ide::hover_luau(use, find_nth(use, "y", 0), world, 9);
+    expect_hover(local_y, "y: string", "", nullptr, "second tuple value");
+    const ide::HoverInfo use_y = ide::hover_luau(use, find_nth(use, "y", 1), world, 9);
+    expect_hover(use_y, "y: string", "", nullptr, "later use of y");
+
+    const ide::HoverInfo defined = ide::hover_luau(module_source, find_nth(module_source, "Test", 0));
+    expect_hover(defined, "function module:Test(self: table): (number, string)", "", nullptr, "tuple in its module");
+
+    const char* colon_source = "local Module = require(script:FindFirstChild(\"ModuleScript\"))\nModule:";
+    const ide::CompletionList colon = at_end(colon_source, world, 9);
+    expect_detail(colon, "Test", "function", "tuple method kind");
+    expect_info(colon, "Test", "(number, string)", "function module:Test(self: table): (number, string)", "",
+                "tuple method completion");
+    const ide::CompletionList dot = at_end("local Module = require(script:FindFirstChild(\"ModuleScript\"))\nModule.", world, 9);
+    expect_missing(dot, "Test", "tuple method stays on colon");
+
+    const char* names =
+        "local Module = require(script:FindFirstChild(\"ModuleScript\"))\n"
+        "local x, y = Module:Test()\n";
+    expect_detail(at_end(std::string(names) + "x", world, 9), "x", "number", "x is a number");
+    expect_detail(at_end(std::string(names) + "y", world, 9), "y", "string", "y is a string");
+    const ide::CompletionList text = at_end(std::string(names) + "y:", world, 9);
+    expect_has(text, "sub", "y completes as a string");
+    const ide::CompletionList number = at_end(std::string(names) + "x:", world, 9);
+    expect_missing(number, "sub", "x is not a string");
+
+    const char* third =
+        "local Module = require(script:FindFirstChild(\"ModuleScript\"))\n"
+        "local x, y, z = Module:Test()\n"
+        "print(z)\n";
+    const ide::HoverInfo extra = ide::hover_luau(third, find_nth(third, "z", 0), world, 9);
+    expect_hover(extra, "z", "local", nullptr, "third name has no value");
+
+    const char* adjusted =
+        "local Module = require(script:FindFirstChild(\"ModuleScript\"))\n"
+        "local x, y = Module:Test(), true\n";
+    expect_hover(ide::hover_luau(adjusted, find_nth(adjusted, "x", 0), world, 9), "x: number", "", nullptr,
+                 "call before a comma keeps one value");
+    expect_hover(ide::hover_luau(adjusted, find_nth(adjusted, "y", 0), world, 9), "y: boolean", "", nullptr,
+                 "the next expression fills y");
+
+    const char* wrapped_call =
+        "local Module = require(script:FindFirstChild(\"ModuleScript\"))\n"
+        "local x, y = (Module:Test())\n"
+        "print(y)\n";
+    expect_hover(ide::hover_luau(wrapped_call, find_nth(wrapped_call, "x", 0), world, 9), "x: number", "", nullptr,
+                 "parentheses keep the first value");
+    expect_hover(ide::hover_luau(wrapped_call, find_nth(wrapped_call, "y", 1), world, 9), "y", "local", nullptr,
+                 "parentheses drop the second value");
+
+    const char* both =
+        "local Module = require(script:FindFirstChild(\"ModuleScript\"))\n"
+        "local a, b, c = Module:Test(), Module:Test()\n";
+    expect_hover(ide::hover_luau(both, find_nth(both, "a", 0), world, 9), "a: number", "", nullptr, "first call adjusts");
+    expect_hover(ide::hover_luau(both, find_nth(both, "b", 0), world, 9), "b: number", "", nullptr, "second call starts at b");
+    expect_hover(ide::hover_luau(both, find_nth(both, "c", 0), world, 9), "c: string", "", nullptr, "second call's extra");
+
+    const char* skipped =
+        "local Module = require(script:FindFirstChild(\"ModuleScript\"))\n"
+        "local _, y = Module:Test()\n";
+    expect_hover(ide::hover_luau(skipped, find_nth(skipped, "y", 0), world, 9), "y: string", "", nullptr,
+                 "skipped first value");
+
+    const char* same_file =
+        "local function pair(name: string)\n"
+        "    return 2 + 2, name\n"
+        "end\n"
+        "local x, y = pair(\"Test\")\n";
+    expect_hover(ide::hover_luau(same_file, find_nth(same_file, "pair", 1)),
+                 "function pair(name: string): (number, string)", "", nullptr, "same-file tuple");
+    expect_hover(ide::hover_luau(same_file, find_nth(same_file, "x", 0)), "x: number", "", nullptr, "same-file x");
+    expect_hover(ide::hover_luau(same_file, find_nth(same_file, "y", 0)), "y: string", "", nullptr, "same-file y");
+    const ide::CompletionList listed = at_end("local function pair(name: string)\n    return 2 + 2, name\nend\npai");
+    expect_detail(listed, "pair", "(name: string)", "tuple parameter list");
+    expect_info(listed, "pair", "(number, string)", "function pair(name: string): (number, string)", "",
+                "same-file tuple completion");
+
+    const char* passed =
+        "local function pair()\n"
+        "    return 2 + 2, \"Test\"\n"
+        "end\n"
+        "local function wrap()\n"
+        "    return pair()\n"
+        "end\n"
+        "local x, y = wrap()\n";
+    expect_hover(ide::hover_luau(passed, find_nth(passed, "wrap", 1)), "function wrap(): (number, string)", "", nullptr,
+                 "returned call keeps both values");
+    expect_hover(ide::hover_luau(passed, find_nth(passed, "y", 0)), "y: string", "", nullptr, "wrap's second value");
+
+    const char* trimmed =
+        "local function pair()\n"
+        "    return 2 + 2, \"Test\"\n"
+        "end\n"
+        "local function wrap()\n"
+        "    return pair(), true\n"
+        "end\n"
+        "local x, y = wrap()\n";
+    expect_hover(ide::hover_luau(trimmed, find_nth(trimmed, "wrap", 1)), "function wrap(): (number, boolean)", "", nullptr,
+                 "a call before a comma keeps one value");
+    expect_hover(ide::hover_luau(trimmed, find_nth(trimmed, "y", 0)), "y: boolean", "", nullptr, "wrap's boolean");
+
+    const char* triple = "local function triple()\n    return 1, \"a\", true\nend\nlocal x, y, z = triple()\n";
+    expect_hover(ide::hover_luau(triple, find_nth(triple, "triple", 1)), "function triple(): (number, string, boolean)",
+                 "", nullptr, "three values");
+    expect_hover(ide::hover_luau(triple, find_nth(triple, "z", 0)), "z: boolean", "", nullptr, "third value");
+
+    const char* noted = "local function pair(): (number, string)\n    return 1, \"a\"\nend\nlocal x, y = pair()\n";
+    expect_hover(ide::hover_luau(noted, find_nth(noted, "pair", 1)), "function pair(): (number, string)", "", nullptr,
+                 "annotated tuple");
+    expect_hover(ide::hover_luau(noted, find_nth(noted, "y", 0)), "y: string", "", nullptr, "annotated second value");
+
+    const char* agreed =
+        "local function pair(flag: boolean)\n"
+        "    if flag then\n"
+        "        return 1, \"a\"\n"
+        "    end\n"
+        "    return 2, \"b\"\n"
+        "end\n";
+    expect_hover(ide::hover_luau(agreed, find_nth(agreed, "pair", 0)), "function pair(flag: boolean): (number, string)",
+                 "", nullptr, "agreeing tuples");
+
+    const char* mixed =
+        "local function pick(flag: boolean)\n"
+        "    if flag then\n"
+        "        return 1, \"a\"\n"
+        "    end\n"
+        "    return \"x\"\n"
+        "end\n"
+        "local x, y = pick(true)\n";
+    const ide::HoverInfo pick = ide::hover_luau(mixed, find_nth(mixed, "pick", 1));
+    const std::size_t paren = pick.title.rfind(')');
+    if (!pick.found || paren == std::string::npos || paren + 1 != pick.title.size() || pick.detail == "returns nothing") {
+        fail(std::string("disagreeing tuples should not claim one pack: ") + pick.title + " / " + pick.detail);
+    }
+    expect_hover(ide::hover_luau(mixed, find_nth(mixed, "y", 0)), "y", "local", nullptr, "disagreeing second value");
+
+    const char* assigned =
+        "local Module = require(script:FindFirstChild(\"ModuleScript\"))\n"
+        "local x, y\n"
+        "x, y = Module:Test()\n"
+        "print(y)\n";
+    expect_hover(ide::hover_luau(assigned, find_nth(assigned, "y", 2), world, 9), "y: string", "", nullptr,
+                 "assignment keeps the second value");
+
+    const char* first_wins =
+        "local module = {}\n"
+        "function module.greet(name: string)\n"
+        "    if name == \"hi\" then\n"
+        "        return name, 1\n"
+        "    end\n"
+        "    return true\n"
+        "end\n"
+        "return module\n";
+    const ide::HoverInfo direct = ide::hover_luau(first_wins, find_nth(first_wins, "greet", 0));
+    const std::size_t direct_paren = direct.title.rfind(')');
+    if (!direct.found || direct_paren == std::string::npos || direct_paren + 1 != direct.title.size()) {
+        fail(std::string("a module edited here does not keep a disagreeing tuple: ") + direct.title);
+    }
+    const std::vector<engine_core::LuaNode> greet_world = module_world(first_wins);
+    const char* greet_use =
+        "local Module = require(script:FindFirstChild(\"ModuleScript\"))\n"
+        "local a, b = Module.greet(\"hi\")\n";
+    expect_hover(ide::hover_luau(greet_use, find_nth(greet_use, "greet", 0), greet_world, 9),
+                 "function module.greet(name: string): (string, number)", "", nullptr, "required first return pack");
+    expect_hover(ide::hover_luau(greet_use, find_nth(greet_use, "a", 0), greet_world, 9), "a: string", "", nullptr,
+                 "required first of the pack");
+    expect_hover(ide::hover_luau(greet_use, find_nth(greet_use, "b", 0), greet_world, 9), "b: number", "", nullptr,
+                 "required second of the pack");
+
+    const char* replaced =
+        "local module = {}\n"
+        "function module:Test()\n"
+        "    return 2+2, \"Test\"\n"
+        "end\n"
+        "module.Test = function()\n"
+        "    return true\n"
+        "end\n"
+        "return module\n";
+    const std::vector<engine_core::LuaNode> replaced_world = module_world(replaced);
+    const char* replaced_use =
+        "local Module = require(script:FindFirstChild(\"ModuleScript\"))\n"
+        "local x = Module.Test()\n";
+    expect_hover(ide::hover_luau(replaced_use, find_nth(replaced_use, "Test", 0), replaced_world, 9),
+                 "function Test(): boolean", "", nullptr, "replaced tuple");
+    expect_hover(ide::hover_luau(replaced_use, find_nth(replaced_use, "x", 0), replaced_world, 9), "x: boolean", "",
+                 nullptr, "replaced tuple result");
+    expect_missing(at_end("local Module = require(script:FindFirstChild(\"ModuleScript\"))\nModule:", replaced_world, 9),
+                   "Test", "replaced function is not a method");
+}
+
 void testSkipped() {
     const ide::CompletionList comment = at_end("-- task.");
     if (comment.site != ide::CompleteSite::None || !comment.items.empty()) {
@@ -1488,6 +1704,7 @@ int RunLuauCompleteTests() {
         testFunctionParameters();
         testHover();
         testCompletionDocs();
+        testTuples();
         testSkipped();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());

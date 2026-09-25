@@ -1,5 +1,6 @@
 #include "DataModel.hpp"
 #include "GameObject.hpp"
+#include "LuaApi.hpp"
 #include "Script.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
@@ -343,6 +344,21 @@ TEST_CASE("A10 a known child keeps its class and may still be nil", "[A10]") {
         }
     }
     REQUIRE(missing_position);
+}
+
+TEST_CASE("analysis definitions come from the class registry", "[A11]") {
+    const std::string source = engine_core::lua_analysis_definitions();
+    REQUIRE(source.find("declare extern type TestTriangle") != std::string::npos);
+    REQUIRE(source.find("Position: Vector3") != std::string::npos);
+    REQUIRE(source.find("function FindFirstChild(self, name: string): Instance?") != std::string::npos);
+    REQUIRE(source.find("Parent: Instance?") != std::string::npos);
+    REQUIRE(source.find("type Vector3 = vector") != std::string::npos);
+    REQUIRE(source.find("declare task:") != std::string::npos);
+    REQUIRE(source.find("PreRender") == std::string::npos);
+    REQUIRE(source.find("RenderStepped") == std::string::npos);
+    REQUIRE(source.find("workspace") == std::string::npos);
+    REQUIRE(source.find("BasePart") == std::string::npos);
+    REQUIRE(source.find("GetPropertyChangedSignal") == std::string::npos);
 }
 
 TEST_CASE("disabling script analysis drops diagnostics", "[A]") {

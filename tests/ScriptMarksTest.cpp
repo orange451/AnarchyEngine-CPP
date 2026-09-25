@@ -80,7 +80,7 @@ void testSummary() {
     expect(!hint.blocks_compile, "a hint does not block compile");
 
     const ide::ScriptProblemSummary analysis = ide::summarize_problems(
-        {problem(engine_core::Severity::Error, "Analysis", "engine.d.lua failed to load", 0, 0, 0, 0)});
+        {problem(engine_core::Severity::Error, "Analysis", "script analysis definitions failed to load", 0, 0, 0, 0)});
     expect(analysis.text.empty(), "an analysis failure is not a squiggle or a compile banner");
     expect(ide::marks_for("return 1\n", {problem(engine_core::Severity::Error, "Analysis", "failed", 0, 0, 0, 0)}).empty(),
            "an analysis failure has no underline");

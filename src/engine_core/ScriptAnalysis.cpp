@@ -1,6 +1,7 @@
 #include "ScriptAnalysis.hpp"
 
 #include "DataModel.hpp"
+#include "LuaApi.hpp"
 #include "Script.hpp"
 
 #if defined(__clang__)
@@ -44,9 +45,6 @@
 #include <utility>
 
 namespace engine_core {
-
-extern const char kEngineDefinitionSource[];
-
 namespace {
 
 constexpr std::chrono::milliseconds kDebounce{75};
@@ -316,7 +314,25 @@ struct FindChildMagic final : Luau::MagicFunction {
     bool infer(const Luau::MagicFunctionCallContext& context) override;
 };
 
-void attach_find_child(WorkerEnv& env);
+struct NarrowMagic final : Luau::MagicFunction {
+    enum class Kind { Service, Creatable };
+
+    Kind kind = Kind::Service;
+
+    explicit NarrowMagic(Kind kind) : kind(kind) {}
+
+    std::optional<Luau::WithPredicate<Luau::TypePackId>> handleOldSolver(Luau::TypeChecker&,
+                                                                          const std::shared_ptr<Luau::Scope>&,
+                                                                          const Luau::AstExprCall&,
+                                                                          Luau::WithPredicate<Luau::TypePackId>) override {
+        return std::nullopt;
+    }
+
+    bool infer(const Luau::MagicFunctionCallContext& context) override;
+};
+
+void stamp_vector(Luau::Frontend& frontend);
+void attach_api(WorkerEnv& env);
 
 struct SourceFileResolver : Luau::FileResolver {
     const std::string* module_name = nullptr;
@@ -347,7 +363,7 @@ struct SourceConfigResolver : Luau::ConfigResolver {
 
 std::string definition_failure(const Luau::LoadDefinitionFileResult& loaded) {
     std::ostringstream out;
-    out << "engine.d.lua failed to load";
+    out << "script analysis definitions failed to load";
     for (const Luau::ParseError& error : loaded.parseResult.errors) {
         out << '\n' << error.getMessage();
     }
@@ -368,6 +384,8 @@ struct WorkerEnv {
     const WorldSnap* world = nullptr;
     InstanceId self = 0;
     std::shared_ptr<Luau::MagicFunction> find_child;
+    std::shared_ptr<Luau::MagicFunction> service_result;
+    std::shared_ptr<Luau::MagicFunction> creatable_result;
 
     void init() {
         configs.config.mode = Luau::Mode::Nonstrict;
@@ -378,45 +396,177 @@ struct WorkerEnv {
         try {
             Luau::unfreeze(frontend->globals.globalTypes);
             Luau::registerBuiltinGlobals(*frontend, frontend->globals);
+            const std::string definitions = lua_analysis_definitions();
             const Luau::LoadDefinitionFileResult loaded = frontend->loadDefinitionFile(
-                frontend->globals, frontend->globals.globalScope, kEngineDefinitionSource, "@anarchy",
+                frontend->globals, frontend->globals.globalScope, definitions, "@anarchy",
                 /*captureComments*/ false, /*typeCheckForAutocomplete*/ false);
             if (!loaded.success) {
                 init_error = definition_failure(loaded);
             } else {
-                attach_find_child(*this);
+                stamp_vector(*frontend);
+                attach_api(*this);
             }
             Luau::freeze(frontend->globals.globalTypes);
         } catch (const std::exception& error) {
             init_error = error.what();
         } catch (...) {
-            init_error = "engine.d.lua failed to load";
+            init_error = "script analysis definitions failed to load";
         }
     }
 };
 
-void attach_find_child(WorkerEnv& env) {
-    if (env.frontend == nullptr || env.frontend->globals.globalScope == nullptr) {
+void set_magic(Luau::Property& prop, const std::shared_ptr<Luau::MagicFunction>& magic) {
+    if (!magic || !prop.readTy) {
         return;
     }
-    const auto found = env.frontend->globals.globalScope->exportedTypeBindings.find("Instance");
-    if (found == env.frontend->globals.globalScope->exportedTypeBindings.end()) {
-        return;
-    }
-    Luau::ExternType* instance = Luau::getMutable<Luau::ExternType>(Luau::follow(found->second.type));
-    if (instance == nullptr) {
-        return;
-    }
-    const auto prop = instance->props.find("FindFirstChild");
-    if (prop == instance->props.end() || !prop->second.readTy) {
-        return;
-    }
-    Luau::FunctionType* function = Luau::getMutable<Luau::FunctionType>(Luau::follow(*prop->second.readTy));
+    Luau::FunctionType* function = Luau::getMutable<Luau::FunctionType>(Luau::follow(*prop.readTy));
     if (function == nullptr) {
         return;
     }
+    function->magic = magic;
+}
+
+Luau::TypeId vector_member_type(std::string type, Luau::TypeId vector_type, Luau::NotNull<Luau::BuiltinTypes> builtins,
+                                Luau::TypeArena& arena) {
+    bool optional = false;
+    if (!type.empty() && type.back() == '?') {
+        optional = true;
+        type.pop_back();
+    }
+    Luau::TypeId resolved = builtins->anyType;
+    if (type == "number") {
+        resolved = builtins->numberType;
+    } else if (type == "boolean") {
+        resolved = builtins->booleanType;
+    } else if (type == "string") {
+        resolved = builtins->stringType;
+    } else if (type == "thread") {
+        resolved = builtins->threadType;
+    } else if (type == "nil") {
+        resolved = builtins->nilType;
+        optional = false;
+    } else if (type == "Vector3" || type == "vector") {
+        resolved = vector_type;
+    }
+    if (optional) {
+        resolved = Luau::makeOption(builtins, arena, resolved);
+    }
+    return resolved;
+}
+
+Luau::TypeId vector_method(Luau::TypeArena& arena, Luau::TypeId self, const std::vector<Luau::TypeId>& params, Luau::TypeId result) {
+    switch (params.size()) {
+    case 0:
+        return Luau::makeFunction(arena, self, {}, {result});
+    case 1:
+        return Luau::makeFunction(arena, self, {params[0]}, {result});
+    case 2:
+        return Luau::makeFunction(arena, self, {params[0], params[1]}, {result});
+    case 3:
+        return Luau::makeFunction(arena, self, {params[0], params[1], params[2]}, {result});
+    default:
+        break;
+    }
+    std::vector<Luau::TypeId> arguments;
+    arguments.reserve(params.size() + 1);
+    arguments.push_back(self);
+    arguments.insert(arguments.end(), params.begin(), params.end());
+    Luau::TypePackId argument_pack = arena.addTypePack(std::move(arguments));
+    Luau::TypePackId result_pack = arena.addTypePack({result});
+    Luau::FunctionType function{{}, {}, argument_pack, result_pack, {}, true};
+    function.argNames.emplace_back(Luau::FunctionArgument{"self", {}});
+    for (std::size_t index = 0; index < params.size(); ++index) {
+        function.argNames.emplace_back(std::nullopt);
+    }
+    return arena.addType(std::move(function));
+}
+
+// Vector3 is Luau's builtin vector. Its arithmetic stays on that type. The
+// class registry contributes the X/Y/Z properties and the methods.
+void stamp_vector(Luau::Frontend& frontend) {
+    if (frontend.globals.globalScope == nullptr) {
+        return;
+    }
+    const auto found = frontend.globals.globalScope->exportedTypeBindings.find("vector");
+    if (found == frontend.globals.globalScope->exportedTypeBindings.end()) {
+        return;
+    }
+    const Luau::TypeId vector_type = Luau::follow(found->second.type);
+    Luau::ExternType* vector = Luau::getMutable<Luau::ExternType>(vector_type);
+    if (vector == nullptr) {
+        return;
+    }
+    Luau::TypeArena& arena = frontend.globals.globalTypes;
+    Luau::NotNull<Luau::BuiltinTypes> builtins = frontend.globals.builtinTypes;
+    std::vector<LuaField> fields;
+    lua_class_own_members("Vector3", fields);
+    for (const LuaField& field : fields) {
+        if (field.blocked || field.name == nullptr) {
+            continue;
+        }
+        const std::string result_name = field.type_name != nullptr ? field.type_name : "";
+        const Luau::TypeId result = vector_member_type(result_name.empty() ? "nil" : result_name, vector_type, builtins, arena);
+        if (!field.method) {
+            vector->props[field.name] = field.writable ? Luau::Property::rw(result) : Luau::Property::readonly(result);
+            continue;
+        }
+        const LuaDoc doc = lua_symbol_doc("Vector3", field.name);
+        std::vector<Luau::TypeId> params;
+        if (doc.found) {
+            for (const LuaDocParam& param : doc.params) {
+                params.push_back(vector_member_type(param.type_name, vector_type, builtins, arena));
+            }
+        }
+        vector->props[field.name] = Luau::Property::readonly(vector_method(arena, vector_type, params, result));
+    }
+}
+
+void attach_api(WorkerEnv& env) {
+    if (env.frontend == nullptr || env.frontend->globals.globalScope == nullptr) {
+        return;
+    }
     env.find_child = std::make_shared<FindChildMagic>(&env);
-    function->magic = env.find_child;
+    env.service_result = std::make_shared<NarrowMagic>(NarrowMagic::Kind::Service);
+    env.creatable_result = std::make_shared<NarrowMagic>(NarrowMagic::Kind::Creatable);
+
+    for (auto& binding : env.frontend->globals.globalScope->exportedTypeBindings) {
+        Luau::ExternType* type = Luau::getMutable<Luau::ExternType>(Luau::follow(binding.second.type));
+        if (type == nullptr) {
+            continue;
+        }
+        for (auto& entry : type->props) {
+            const LuaField* field = lua_class_find(type->name.c_str(), entry.first);
+            if (field == nullptr) {
+                continue;
+            }
+            if (field->resolves_child) {
+                set_magic(entry.second, env.find_child);
+            } else if (field->service_arg) {
+                set_magic(entry.second, env.service_result);
+            } else if (field->class_from_arg) {
+                set_magic(entry.second, env.creatable_result);
+            }
+        }
+    }
+
+    std::vector<std::string> classes;
+    lua_class_names(classes);
+    for (const std::string& name : classes) {
+        Luau::Binding* binding = Luau::tryGetGlobalBindingRef(env.frontend->globals, name);
+        if (binding == nullptr) {
+            continue;
+        }
+        Luau::TableType* table = Luau::getMutable<Luau::TableType>(Luau::follow(binding->typeId));
+        if (table == nullptr) {
+            continue;
+        }
+        for (auto& entry : table->props) {
+            if (!lua_function_result(name, entry.first).class_from_arg) {
+                continue;
+            }
+            set_magic(entry.second, env.creatable_result);
+        }
+    }
 }
 
 bool FindChildMagic::infer(const Luau::MagicFunctionCallContext& context) {
@@ -444,6 +594,36 @@ bool FindChildMagic::infer(const Luau::MagicFunctionCallContext& context) {
     const Luau::TypeId optional =
         arena->addType(Luau::UnionType{{context.solver->builtinTypes->nilType, class_ty}});
     Luau::asMutable(context.result)->ty.emplace<Luau::BoundTypePack>(arena->addTypePack({optional}));
+    return true;
+}
+
+bool NarrowMagic::infer(const Luau::MagicFunctionCallContext& context) {
+    const Luau::AstExprCall* call = context.callSite.get();
+    if (call == nullptr || call->args.size < 1) {
+        return false;
+    }
+    const auto* literal = call->args.data[0]->as<Luau::AstExprConstantString>();
+    if (literal == nullptr || !literal->isQuoted()) {
+        return false;
+    }
+    const std::string name = string_literal(literal->value);
+    if (kind == Kind::Service) {
+        if (!lua_service_known(name.c_str())) {
+            return false;
+        }
+    } else if (!lua_creatable_known(name.c_str())) {
+        return false;
+    }
+    const std::optional<Luau::TypeFun> type_fun = context.solver->rootScope->lookupType(name);
+    if (!type_fun) {
+        return false;
+    }
+    const Luau::TypeId class_ty = Luau::follow(type_fun->type);
+    if (Luau::get<Luau::ExternType>(class_ty) == nullptr) {
+        return false;
+    }
+    Luau::TypeArena* arena = context.solver->arena.get();
+    Luau::asMutable(context.result)->ty.emplace<Luau::BoundTypePack>(arena->addTypePack({class_ty}));
     return true;
 }
 
@@ -529,7 +709,7 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
         return finished;
     }
 
-    // Stage 3. Type check against engine.d.lua. Lint already ran, so the
+    // Stage 3. Type check against the registered API. Lint already ran, so the
     // frontend does not lint again.
     // The full checker runs for both strict and nonstrict. Nonstrict then
     // downgrades type errors to warnings. `--!nocheck` never reaches here.

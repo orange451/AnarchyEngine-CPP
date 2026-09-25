@@ -113,19 +113,6 @@ else()
     endif()
 endif()
 
-set(ENGINE_DEFINITION_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/EngineDefinitions.cpp")
-add_custom_command(
-    OUTPUT "${ENGINE_DEFINITION_CPP}"
-    COMMAND ${CMAKE_COMMAND}
-        -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/src/engine_core/definitions/engine.d.lua
-        -DOUTPUT=${ENGINE_DEFINITION_CPP}
-        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-definitions.cmake
-    DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_core/definitions/engine.d.lua
-        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-definitions.cmake
-    VERBATIM
-)
-
 add_library(engine_core STATIC
     src/engine_core/Contract.cpp
     src/engine_core/InvalidationQueue.cpp
@@ -145,7 +132,7 @@ add_library(engine_core STATIC
     src/engine_core/Script.cpp
     src/engine_core/ScriptRuntime.cpp
     src/engine_core/ScriptAnalysis.cpp
-    ${ENGINE_DEFINITION_CPP}
+    src/engine_core/AnalysisDefinitions.cpp
 )
 target_include_directories(engine_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/engine_core")
 target_compile_features(engine_core PUBLIC cxx_std_17)

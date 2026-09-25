@@ -40,7 +40,14 @@ struct Shape {
     bool variadic = false;
     std::string callee_owner;
     std::string callee_name;
+    // First return value. A tuple's remaining values live in `return_pack`.
     std::string result_type;
+    // Every value a function returns, in order. One entry is a single return.
+    // Empty when that list was not recorded.
+    std::vector<std::string> return_pack;
+    // Values after the first when this expression is a call.
+    // A name bound to one result does not keep these, so it does not spread again.
+    std::vector<Shape*> tail;
     // A function written in this source, as opposed to a host function.
     bool user_function = false;
     // `function obj:name` takes self as its first parameter.
@@ -53,7 +60,7 @@ struct Shape {
     // The first return statement. A later return does not replace it.
     bool saw_return = false;
     bool first_none = false;
-    std::string first_type;
+    std::vector<std::string> first_pack;
     std::vector<std::pair<std::string, Shape*>> fields;
 };
 
@@ -467,6 +474,112 @@ std::string FormatParams(const std::vector<Param>& params, bool variadic) {
     }
     out += ")";
     return out;
+}
+
+std::string TrimCopy(std::string_view text) {
+    std::size_t begin = 0;
+    while (begin < text.size() && (text[begin] == ' ' || text[begin] == '\t')) {
+        ++begin;
+    }
+    std::size_t end = text.size();
+    while (end > begin && (text[end - 1] == ' ' || text[end - 1] == '\t')) {
+        --end;
+    }
+    return std::string(text.substr(begin, end - begin));
+}
+
+int TypeDepthDelta(char unit) {
+    if (unit == '(' || unit == '{' || unit == '[' || unit == '<') {
+        return 1;
+    }
+    if (unit == ')' || unit == '}' || unit == ']' || unit == '>') {
+        return -1;
+    }
+    return 0;
+}
+
+std::vector<std::string> SplitTopLevel(std::string_view text) {
+    std::vector<std::string> parts;
+    int depth = 0;
+    std::size_t start = 0;
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        const char unit = text[index];
+        if (unit == ',' && depth == 0) {
+            parts.push_back(TrimCopy(text.substr(start, index - start)));
+            start = index + 1;
+            continue;
+        }
+        depth += TypeDepthDelta(unit);
+        if (depth < 0) {
+            depth = 0;
+        }
+    }
+    parts.push_back(TrimCopy(text.substr(start)));
+    return parts;
+}
+
+// `(number, string)` is a pack of return values. `(number) -> string` is one type.
+std::vector<std::string> SplitReturnPack(const std::string& type) {
+    if (type.size() >= 2 && type.front() == '(') {
+        int depth = 0;
+        std::size_t close = std::string::npos;
+        for (std::size_t index = 0; index < type.size(); ++index) {
+            depth += TypeDepthDelta(type[index]);
+            if (depth == 0 && type[index] == ')') {
+                close = index;
+                break;
+            }
+            if (depth < 0) {
+                break;
+            }
+        }
+        if (close != std::string::npos && close + 1 == type.size()) {
+            return SplitTopLevel(std::string_view(type).substr(1, type.size() - 2));
+        }
+    }
+    if (type.empty()) {
+        return {};
+    }
+    return {type};
+}
+
+std::string FormatReturns(const std::vector<std::string>& pack) {
+    if (pack.empty()) {
+        return {};
+    }
+    if (pack.size() == 1) {
+        return pack[0];
+    }
+    std::string out = "(";
+    for (std::size_t index = 0; index < pack.size(); ++index) {
+        if (index > 0) {
+            out += ", ";
+        }
+        out += pack[index];
+    }
+    out += ")";
+    return out;
+}
+
+bool PackComplete(const std::vector<std::string>& pack) {
+    if (pack.empty()) {
+        return false;
+    }
+    for (const std::string& part : pack) {
+        if (part.empty()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool AnyKnown(const std::vector<std::string>& pack) {
+    for (const std::string& part : pack) {
+        if (!part.empty()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // "string?" is a string for matching. Unions and function types stay as written.
@@ -893,6 +1006,15 @@ public:
             list->class_name = shape->class_name;
             return list;
         }
+        // A call can fill several names. `local x, y = f()` reads `return_pack` in order.
+        if (!callee->return_pack.empty()) {
+            Shape* first = callee->return_pack[0].empty() ? none() : annotation_shape(callee->return_pack[0]);
+            for (std::size_t index = 1; index < callee->return_pack.size(); ++index) {
+                const std::string& part = callee->return_pack[index];
+                first->tail.push_back(part.empty() ? none() : annotation_shape(part));
+            }
+            return first;
+        }
         if (!callee->result_type.empty() && !callee->class_from_arg) {
             return type_shape(callee->result_type);
         }
@@ -914,7 +1036,7 @@ public:
         engine_core::lua_module_exports(node->source, node->id, world_, exported);
         Shape* adopted = adopt(exported);
         // The running module only records that a field is a function. The return
-        // type is the first value of the first return written in its source.
+        // values are every value of the first return written in its source.
         learn_returns(adopted, *node);
         return adopted;
     }
@@ -976,21 +1098,24 @@ public:
             runtime->callee_owner = source->callee_owner;
             runtime->callee_name = source->callee_name;
         }
-        auto set_type = [&](const std::string& type, bool annotated) {
+        auto set_pack = [&](const std::vector<std::string>& pack, bool annotated) {
             runtime->annotated_return = annotated;
             runtime->return_known = true;
             runtime->return_conflict = false;
-            runtime->result_type = type;
+            runtime->return_pack = pack;
+            runtime->result_type = pack.empty() ? std::string() : pack[0];
         };
         auto set_nothing = [&]() {
             runtime->annotated_return = false;
             runtime->return_known = true;
             runtime->return_conflict = false;
+            runtime->return_pack.clear();
             runtime->result_type.clear();
             runtime->body_closed = true;
         };
-        if (source->saw_return && !source->first_type.empty()) {
-            set_type(source->first_type, false);
+        // A required module keeps the first return, including every value in it.
+        if (source->saw_return && AnyKnown(source->first_pack)) {
+            set_pack(source->first_pack, false);
             return;
         }
         if (source->saw_return && source->first_none) {
@@ -1002,15 +1127,21 @@ public:
             return;
         }
         if (source->return_known && !source->return_conflict) {
-            if (source->result_type.empty()) {
+            if (source->return_pack.empty() && source->result_type.empty()) {
                 set_nothing();
+            } else if (!source->return_pack.empty()) {
+                set_pack(source->return_pack, source->annotated_return);
             } else {
-                set_type(source->result_type, source->annotated_return);
+                set_pack({source->result_type}, source->annotated_return);
             }
             return;
         }
         if (source->annotated_return && !source->result_type.empty()) {
-            set_type(source->result_type, true);
+            if (!source->return_pack.empty()) {
+                set_pack(source->return_pack, true);
+            } else {
+                set_pack({source->result_type}, true);
+            }
             return;
         }
         if (source->body_closed && !source->return_conflict) {
@@ -1722,9 +1853,13 @@ private:
         if (cut_ && !cut_before) {
             return;
         }
+        const std::vector<Shape*> expanded = inits.empty() ? std::vector<Shape*>{} : expand_results(inits);
         const int visible = i_;
         for (std::size_t index = 0; index < slots.size(); ++index) {
-            Shape* shape = index < inits.size() && inits[index] != nullptr ? inits[index] : nullptr;
+            Shape* shape = nullptr;
+            if (!inits.empty() && index < expanded.size()) {
+                shape = expanded[index] != nullptr ? expanded[index] : none();
+            }
             if (shape == nullptr) {
                 shape = annotation_shape(slots[index].type_name);
             }
@@ -1745,6 +1880,37 @@ private:
         owner->fields.emplace_back(name, fn);
     }
 
+    // One result. Parentheses and every expression except the last of a list use this,
+    // so a call's extra values stop there.
+    Shape* single_value(Shape* shape) {
+        if (shape == nullptr || shape->tail.empty()) {
+            return shape;
+        }
+        Shape* one = fresh();
+        *one = *shape;
+        one->tail.clear();
+        return one;
+    }
+
+    // Lua keeps every value of the last call and one value from each call before it.
+    std::vector<Shape*> expand_results(const std::vector<Shape*>& values) {
+        std::vector<Shape*> out;
+        if (values.empty()) {
+            return out;
+        }
+        for (std::size_t index = 0; index + 1 < values.size(); ++index) {
+            out.push_back(single_value(values[index]));
+        }
+        Shape* last = values.back();
+        out.push_back(single_value(last));
+        if (last != nullptr) {
+            for (Shape* extra : last->tail) {
+                out.push_back(extra != nullptr ? extra : none());
+            }
+        }
+        return out;
+    }
+
     void note_return(const std::vector<Shape*>& values) {
         if (functions_.empty()) {
             return;
@@ -1753,42 +1919,48 @@ private:
         if (fn == nullptr) {
             return;
         }
+        const std::vector<Shape*> flat = expand_results(values);
+        std::vector<std::string> pack;
+        pack.reserve(flat.size());
+        bool unknown = false;
+        for (const Shape* value : flat) {
+            const std::string part = DescribeType(value);
+            if (part.empty()) {
+                unknown = true;
+            }
+            pack.push_back(part);
+        }
         if (!fn->saw_return) {
             fn->saw_return = true;
-            if (values.empty()) {
+            if (pack.empty()) {
                 fn->first_none = true;
             } else {
-                fn->first_type = DescribeType(values[0]);
+                fn->first_pack = pack;
             }
         }
         if (fn->annotated_return) {
             return;
         }
-        std::string type;
-        for (std::size_t index = 0; index < values.size(); ++index) {
-            const std::string part = DescribeType(values[index]);
-            if (part.empty()) {
-                fn->return_known = true;
-                fn->return_conflict = true;
-                fn->result_type.clear();
-                return;
-            }
-            if (index > 0) {
-                type += ", ";
-            }
-            type += part;
+        if (unknown) {
+            fn->return_known = true;
+            fn->return_conflict = true;
+            fn->result_type.clear();
+            fn->return_pack.clear();
+            return;
         }
         if (fn->return_conflict) {
             return;
         }
         if (!fn->return_known) {
             fn->return_known = true;
-            fn->result_type = std::move(type);
+            fn->return_pack = pack;
+            fn->result_type = pack.empty() ? std::string() : pack[0];
             return;
         }
-        if (fn->result_type != type) {
+        if (fn->return_pack != pack) {
             fn->return_conflict = true;
             fn->result_type.clear();
+            fn->return_pack.clear();
         }
     }
 
@@ -1872,6 +2044,10 @@ private:
                 fn->result_type = read_type();
                 fn->annotated_return = true;
                 fn->return_known = true;
+                fn->return_pack = SplitReturnPack(fn->result_type);
+                if (!fn->return_pack.empty() && !fn->return_pack[0].empty()) {
+                    fn->result_type = fn->return_pack[0];
+                }
             }
         }
         // Parameters belong to the body. They are not in scope while the
@@ -1959,8 +2135,9 @@ private:
         if (signing_ && names.empty() && !values.empty()) {
             assign_field(start, eq, values[0]);
         }
+        const std::vector<Shape*> expanded = expand_results(values);
         for (std::size_t index = 0; index < names.size(); ++index) {
-            Shape* shape = index < values.size() ? values[index] : none();
+            Shape* shape = index < expanded.size() && expanded[index] != nullptr ? expanded[index] : none();
             bool updated = false;
             for (int slot = static_cast<int>(bindings_.size()) - 1; slot >= 0; --slot) {
                 Binding& binding = bindings_[static_cast<std::size_t>(slot)];
@@ -2168,7 +2345,8 @@ private:
             if (!consume(Token::RParen) && at_end()) {
                 cut_ = true;
             }
-            return inner;
+            // `(f())` is one value, even when f returns several.
+            return single_value(inner);
         }
         if (is(Token::LBrace)) {
             if (signing_) {
@@ -2560,18 +2738,29 @@ Written DescribeSymbol(const Shape* shape, const std::string& name, bool bound, 
         std::string ret;
         bool known = false;
         bool nothing = false;
-        if (shape->user_function && shape->annotated_return) {
-            if (!shape->result_type.empty()) {
+        const bool pack_ready = PackComplete(shape->return_pack);
+        if (shape->user_function) {
+            if (shape->annotated_return) {
+                if (pack_ready) {
+                    known = true;
+                    ret = FormatReturns(shape->return_pack);
+                } else if (!shape->result_type.empty() && shape->return_pack.size() <= 1) {
+                    known = true;
+                    ret = shape->result_type;
+                }
+            } else if (shape->return_known && !shape->return_conflict) {
+                if (pack_ready) {
+                    known = true;
+                    ret = FormatReturns(shape->return_pack);
+                } else if (shape->return_pack.size() <= 1) {
+                    known = true;
+                    ret = shape->result_type;
+                    nothing = ret.empty();
+                }
+            } else if (shape->body_closed && !shape->return_conflict) {
                 known = true;
-                ret = shape->result_type;
+                nothing = true;
             }
-        } else if (shape->user_function && shape->return_known && !shape->return_conflict) {
-            known = true;
-            ret = shape->result_type;
-            nothing = ret.empty();
-        } else if (shape->user_function && shape->body_closed && !shape->return_conflict) {
-            known = true;
-            nothing = true;
         } else if (shape->return_known && !shape->result_type.empty()) {
             known = true;
             ret = shape->result_type;

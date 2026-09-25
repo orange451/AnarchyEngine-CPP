@@ -68,8 +68,9 @@ struct HoverInfo {
 
 // The name at code-point `index`. A variable reports its type. A function reports
 // its parameters and return. A library such as `task` reports what it is.
-// A function brought in by require uses the type of the first value in its first
-// return, and a local assigned from that call uses the same type.
+// A function brought in by require uses every value of its first return. A later
+// return does not replace that list. `local x, y = Module:Test()` types each
+// name from the value in that position.
 // `script_global` is false on the command line, where `script` is nil.
 HoverInfo hover_luau(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world = {},
                      std::uint32_t script_id = 0, bool script_global = true);
@@ -83,7 +84,8 @@ HoverInfo hover_luau(std::string_view source, int index, const std::vector<engin
 // arguments, so Heartbeat offers function(dt). A function written in the source
 // keeps its parameters: the body uses each annotation as the parameter's type,
 // and a call lists those parameters. A function row also carries the return
-// and the one-sentence explanation the hover tooltip shows. `script_global`
+// and the one-sentence explanation the hover tooltip shows. Two or more return
+// values are shown as `(number, string)`. `script_global`
 // is false on the command line, where `script` is nil.
 CompletionList complete_luau(std::string_view source, int caret, const std::vector<engine_core::LuaNode>& world = {},
                              std::uint32_t script_id = 0, bool script_global = true);

@@ -1,5 +1,6 @@
 #include "LuaApi.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -148,6 +149,23 @@ void lua_class_names(std::vector<std::string>& out) {
     }
 }
 
+void lua_class_own_members(const char* class_name, std::vector<LuaField>& out) {
+    out.clear();
+    const ClassRecord* record = find_class_const(class_name);
+    if (record == nullptr) {
+        return;
+    }
+    out = record->fields;
+}
+
+const char* lua_class_base(const char* class_name) {
+    const ClassRecord* record = find_class_const(class_name);
+    if (record == nullptr) {
+        return nullptr;
+    }
+    return record->base;
+}
+
 namespace {
 
 std::vector<const char*>& service_names() {
@@ -250,6 +268,36 @@ void lua_note_result(const char* owner, const char* name, const char* type_name,
     note.type_name = type_name != nullptr ? type_name : "";
     note.class_from_arg = class_from_arg;
     results()[result_key(owner, name)] = std::move(note);
+}
+
+namespace {
+
+std::vector<const char*>& host_libraries() {
+    static std::vector<const char*> names;
+    return names;
+}
+
+}  // namespace
+
+void lua_note_host_library(const char* name) {
+    if (name == nullptr || name[0] == '\0') {
+        return;
+    }
+    for (const char* existing : host_libraries()) {
+        if (std::strcmp(existing, name) == 0) {
+            return;
+        }
+    }
+    host_libraries().push_back(name);
+}
+
+void lua_host_library_names(std::vector<std::string>& out) {
+    out.clear();
+    for (const char* name : host_libraries()) {
+        if (name != nullptr) {
+            out.emplace_back(name);
+        }
+    }
 }
 
 namespace {
@@ -676,6 +724,18 @@ LuaDoc lua_symbol_doc(std::string_view owner, std::string_view name) {
         current = record->base;
     }
     return {};
+}
+
+void lua_doc_names(std::string_view owner, std::vector<std::string>& out) {
+    out.clear();
+    const std::string prefix = std::string(owner) + "\n";
+    for (const auto& entry : docs()) {
+        if (entry.first.compare(0, prefix.size(), prefix) != 0) {
+            continue;
+        }
+        out.emplace_back(entry.first.substr(prefix.size()));
+    }
+    std::sort(out.begin(), out.end());
 }
 
 }  // namespace engine_core

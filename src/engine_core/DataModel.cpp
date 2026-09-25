@@ -101,6 +101,9 @@ struct DataModel::State {
 
     EventQueue events;
     std::vector<std::unique_ptr<InstanceSignals>> bags;
+    // Id 0 is the root and has no slot. bags[0] belongs to the first created
+    // instance, whose id is (generation << 16) | 0 and generation starts at 1.
+    std::unique_ptr<InstanceSignals> root_signals;
     std::vector<InstanceId> walk;
     // Ids gathered for Heartbeat. Separate from walk, which ancestry mutates.
     std::vector<InstanceId> step_ids;
@@ -704,6 +707,9 @@ void DataModel::step_descendants(double dt) {
 }
 
 DataModel::InstanceSignals* DataModel::bag_for(InstanceId id) {
+    if (id == 0) {
+        return state_->root_signals.get();
+    }
     if (slot(id) == nullptr) {
         return nullptr;
     }
@@ -715,6 +721,18 @@ DataModel::InstanceSignals* DataModel::bag_for(InstanceId id) {
 }
 
 DataModel::InstanceSignals& DataModel::ensure_bag(InstanceId id) {
+    if (id == 0) {
+        if (state_->root == nullptr) {
+            contract_fail("signal on a dead instance");
+        }
+        // Never destroy_instance(0). RunService phase signals are also owned
+        // by 0, and their queued events use instance 0.
+        if (!state_->root_signals) {
+            state_->root_signals = std::make_unique<InstanceSignals>();
+            state_->root_signals->owner = 0;
+        }
+        return *state_->root_signals;
+    }
     if (slot(id) == nullptr) {
         contract_fail("signal on a dead instance");
     }

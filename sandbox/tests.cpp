@@ -1416,6 +1416,72 @@ TEST_CASE("N1 default name is the class name and set_name fires Name", "[N1]") {
     REQUIRE_THROWS_AS(model.set_name(dead, "Nope"), engine_core::ContractViolation);
 }
 
+TEST_CASE("N6 the root Changed signal is not the first instance", "[N6]") {
+    engine_core::DataModel model;
+    engine_core::GameObject& part = model.create<engine_core::GameObject>();
+    REQUIRE((part.id() & 0xffffu) == 0);
+    REQUIRE(part.id() != model.id());
+
+    int root_changed = 0;
+    int root_named = 0;
+    int part_changed = 0;
+    int added = 0;
+    engine_core::InstanceId added_id = 0;
+    model.changed(model.id()).connect([&](engine_core::InstanceId id, engine_core::Field field) {
+        REQUIRE(id == model.id());
+        REQUIRE(field == engine_core::Field::Name);
+        ++root_changed;
+    });
+    model.property_changed(model.id(), engine_core::Field::Name)
+        .connect([&](engine_core::InstanceId id, engine_core::Field field) {
+            REQUIRE(id == model.id());
+            REQUIRE(field == engine_core::Field::Name);
+            ++root_named;
+        });
+    model.changed(part.id()).connect([&](engine_core::InstanceId id, engine_core::Field) {
+        REQUIRE(id == part.id());
+        ++part_changed;
+    });
+    model.child_added(model.id()).connect([&](engine_core::InstanceId child, engine_core::Field) {
+        ++added;
+        added_id = child;
+    });
+
+    model.set_name(model.id(), "DataModel");
+    {
+        SimRole role;
+        model.events().drain();
+    }
+    REQUIRE(root_changed == 0);
+    REQUIRE(root_named == 0);
+
+    model.set_name(model.id(), "Place");
+    model.set_name(part.id(), "Brick");
+    engine_core::GameObject& extra = model.create<engine_core::GameObject>();
+    model.set_parent(extra.id(), model.id());
+    {
+        SimRole role;
+        model.events().drain();
+    }
+    REQUIRE(root_changed == 1);
+    REQUIRE(root_named == 1);
+    REQUIRE(part_changed == 1);
+    REQUIRE(added == 1);
+    REQUIRE(added_id == extra.id());
+    REQUIRE(model.name(model.id()) == "Place");
+
+    const int part_held = part_changed;
+    model.destroy(part.id());
+    model.set_name(model.id(), "Again");
+    {
+        SimRole role;
+        model.events().drain();
+    }
+    REQUIRE(root_changed == 2);
+    REQUIRE(root_named == 2);
+    REQUIRE(part_changed == part_held);
+}
+
 TEST_CASE("N2 siblings may share a name and find_first_child returns the first", "[N2]") {
     engine_core::DataModel model;
     engine_core::DataModel& folder = model.create();
@@ -2686,5 +2752,47 @@ TEST_CASE("S20 Changed:Wait returns the property name", "[S20]") {
     REQUIRE(rig.runtime.global_boolean("ok", ok));
     REQUIRE(ok);
     REQUIRE(rig.model.find_first_child(rig.model.id(), "Next") != 0);
+    REQUIRE(rig.runtime.last_error().empty());
+}
+
+TEST_CASE("S21 game.Changed reports the root property", "[S21]") {
+    ScriptRig rig;
+    engine_core::GameObject& part = add_part(rig.model, rig.model.id(), "P");
+    add_script(rig.model, "Watch", R"(
+        local part = game:FindFirstChild("P")
+        game.Changed:Connect(function(property)
+            _G.hits = (_G.hits or 0) + 1
+            _G.ok = (_G.hits == 1 and property == "Name")
+        end)
+        part.Name = "Q"
+        game.Name = "Place"
+        local field = game.Changed:Wait()
+        _G.waited = (field == "Name")
+    )");
+    rig.model.start_simulation();
+    rig.frames(1, 0.05);
+    bool ok = false;
+    bool waited = false;
+    double hits = 0;
+    REQUIRE(rig.runtime.global_boolean("ok", ok));
+    REQUIRE(ok);
+    REQUIRE(rig.runtime.global_boolean("waited", waited));
+    REQUIRE(waited);
+    REQUIRE(rig.runtime.global_number("hits", hits));
+    REQUIRE(hits == 1);
+    REQUIRE(rig.model.name(rig.model.id()) == "Place");
+    REQUIRE(rig.model.name(part.id()) == "Q");
+    REQUIRE(rig.runtime.last_error().empty());
+
+    rig.model.stop_simulation();
+    REQUIRE(rig.model.name(rig.model.id()) == "DataModel");
+    REQUIRE(rig.model.name(part.id()) == "P");
+    rig.model.start_simulation();
+    rig.frames(1, 0.05);
+    REQUIRE(rig.runtime.global_boolean("ok", ok));
+    REQUIRE(ok);
+    REQUIRE(rig.runtime.global_boolean("waited", waited));
+    REQUIRE(waited);
+    REQUIRE(rig.model.name(rig.model.id()) == "Place");
     REQUIRE(rig.runtime.last_error().empty());
 }

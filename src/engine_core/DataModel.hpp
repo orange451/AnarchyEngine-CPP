@@ -132,6 +132,7 @@ public:
     bool simulation_running() const;
 
     // Per-instance signals. The reference dies with the instance.
+    // Id 0 is the root DataModel. It has no slot; its signals are not bags[0].
     Signal& changed(InstanceId id);
     Signal& property_changed(InstanceId id, Field field);
     Signal& child_added(InstanceId id);

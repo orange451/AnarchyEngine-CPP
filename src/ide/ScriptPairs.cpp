@@ -858,6 +858,23 @@ Header FunctionHeader(const Scan& scan, int line, int caret) {
     return header;
 }
 
+// One level deeper than the header line. Spaces follow the editor tab size.
+std::u32string BodyLeading(const Scan& scan, int line, int tab_size, bool spaces) {
+    std::u32string body = scan.leading(line);
+    if (spaces) {
+        body.append(static_cast<std::size_t>(tab_size), U' ');
+    } else {
+        body.push_back(U'\t');
+    }
+    return body;
+}
+
+// Closers already on this line stay after the break. Otherwise the break is the
+// end of the line, so a trailing comment stays on the header.
+int BreakAt(const Scan& scan, int line, const Header& header) {
+    return header.trailing_parens > 0 ? header.signature_end : scan.line_end(line);
+}
+
 }  // namespace
 
 char32_t source_code_point(std::string_view source, int index) {
@@ -929,7 +946,26 @@ EnterResult enter_luau(std::string_view source, int caret, int tab_size, bool sp
 
     const int indent = scan.indent_of(line, tab_size);
     const Follow follow = NextLine(scan, line, indent, tab_size);
+    // Already inside the block. Indent the new line and leave the body or closer.
+    // The command line stays one line, so Enter there still runs it.
     if (follow == Follow::Body || follow == Follow::Closer) {
+        if (flat) {
+            return result;
+        }
+        const std::u32string body = BodyLeading(scan, line, tab_size, spaces);
+        std::u32string inserted(1, U'\n');
+        inserted += body;
+        // A call closer still on this line, as in Connect(function(dt)|), moves
+        // down with the break so the body line stays empty.
+        if (header.trailing_parens > 0) {
+            inserted.push_back(U'\n');
+        }
+        const int at = BreakAt(scan, line, header);
+        result.insert = true;
+        result.begin = at;
+        result.end = at;
+        result.text = Utf8(inserted);
+        result.caret = at + 1 + static_cast<int>(body.size());
         return result;
     }
 
@@ -973,12 +1009,7 @@ EnterResult enter_luau(std::string_view source, int caret, int tab_size, bool sp
     }
 
     const std::u32string base = scan.leading(line);
-    std::u32string body = base;
-    if (spaces) {
-        body.append(static_cast<std::size_t>(tab_size), U' ');
-    } else {
-        body.push_back(U'\t');
-    }
+    const std::u32string body = BodyLeading(scan, line, tab_size, spaces);
     std::u32string inserted;
     inserted.push_back(U'\n');
     inserted += body;
@@ -989,9 +1020,7 @@ EnterResult enter_luau(std::string_view source, int caret, int tab_size, bool sp
         inserted.push_back(U')');
     }
 
-    // Closers already on this line stay after end. Otherwise the break goes at
-    // the end of the line so a trailing comment stays on the header.
-    const int at = header.trailing_parens > 0 ? header.signature_end : scan.line_end(line);
+    const int at = BreakAt(scan, line, header);
     result.insert = true;
     result.begin = at;
     result.end = at;

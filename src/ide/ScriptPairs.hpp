@@ -21,12 +21,16 @@ struct PairResult {
 PairResult pair_luau(std::string_view source, int begin, int end, char32_t typed);
 
 // Enter at the end of a function, do, for, while, or conditional header.
-// `insert` is false when the line is not a header or the block already has a body.
 // The replacement is inserted at [begin, end) and the caret lands on the new body line.
 // A ')' already closing the call around the function, as in Connect(function(dt)|),
 // stays after the inserted end.
+// When that block already has a body, or an `end`, `else`, or `elseif` at the header's
+// indent, Enter inserts only the indented line. An `end` on a following line stays.
+// A ')' still on the header, as in Connect(function(dt)|), moves to the line after the body.
+// `insert` is false when the line is not one of those headers.
 // When `flat` is set, the command stays on one line: a space, then `end`, then one
 // ')' when the function is an anonymous callback. The caret sits just before `end`.
+// A block that already has a body or closer does not insert, so Enter can run the line.
 // A trailing `--` comment stays after that closer.
 struct EnterResult {
     bool insert = false;

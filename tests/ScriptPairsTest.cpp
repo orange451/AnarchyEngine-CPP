@@ -82,7 +82,7 @@ int EndCaret(const std::string& text) {
     return -1;
 }
 
-void ExpectEnter(const std::string& source, int caret, const std::string& want, const char* label) {
+void ExpectEnter(const std::string& source, int caret, const std::string& want, const char* label, int want_caret = -1) {
     if (caret < 0) {
         caret = static_cast<int>(source.size());
     }
@@ -100,9 +100,10 @@ void ExpectEnter(const std::string& source, int caret, const std::string& want, 
         return;
     }
     got.replace(static_cast<std::size_t>(result.begin), static_cast<std::size_t>(count), result.text);
-    if (got != want || result.caret != EndCaret(want)) {
+    const int caret_at = want_caret >= 0 ? want_caret : EndCaret(want);
+    if (got != want || result.caret != caret_at) {
         std::fprintf(stderr, "FAIL %s\n got:  %s caret %d\n want: %s caret %d\n", label, Show(got).c_str(), result.caret,
-                     Show(want).c_str(), EndCaret(want));
+                     Show(want).c_str(), caret_at);
         ++gFailures;
     }
 }
@@ -260,13 +261,45 @@ int RunScriptPairsTests() {
     ExpectPlain("-- function foo()", -1, "a comment is not a header");
     ExpectPlain("\"function foo()\"", -1, "a string is not a header");
     ExpectPlain("function foo()", 4, "enter in the middle of the header splits normally");
-    ExpectPlain("function foo()\nend", static_cast<int>(std::string("function foo()").size()),
-                "an end at the same indent stays");
-    ExpectPlain("function foo()\n    return 1\nend", static_cast<int>(std::string("function foo()").size()),
-                "a function that already has a body stays");
-    ExpectPlain("if x then\nelse\nend", static_cast<int>(std::string("if x then").size()), "else already continues the conditional");
-    ExpectPlain("function foo()\n    -- note\nend", static_cast<int>(std::string("function foo()").size()),
-                "an indented note is already the body");
+    const int function_end = static_cast<int>(std::string("function foo()").size());
+    const int indented = static_cast<int>(std::string("\n    ").size());
+    ExpectEnter("function foo()\nend", function_end, "function foo()\n    \nend", "an end at the same indent indents the body");
+    ExpectEnter("function foo()\n    return 1\nend", function_end, "function foo()\n    \n    return 1\nend",
+                "a function that already has a body indents", function_end + indented);
+    ExpectEnter("if x then\nelse\nend", static_cast<int>(std::string("if x then").size()), "if x then\n    \nelse\nend",
+                "enter before else indents the branch", static_cast<int>(std::string("if x then").size()) + indented);
+    ExpectEnter("function foo()\n    -- note\nend", function_end, "function foo()\n    \n    -- note\nend",
+                "enter above an indented note indents", function_end + indented);
+    ExpectEnter("do\nend", static_cast<int>(std::string("do").size()), "do\n    \nend", "enter before end indents a do block");
+    ExpectEnter("for i = 1, 10 do\nend", static_cast<int>(std::string("for i = 1, 10 do").size()),
+                "for i = 1, 10 do\n    \nend", "enter before end indents a for block");
+    ExpectEnter("while true do\nend", static_cast<int>(std::string("while true do").size()), "while true do\n    \nend",
+                "enter before end indents a while block");
+    ExpectEnter("    if x then\n    end", static_cast<int>(std::string("    if x then").size()),
+                "    if x then\n        \n    end", "an indented header indents one level further");
+    const std::string callback = "game:GetService(\"RunService\").Heartbeat:Connect(function(dt)\nend)";
+    const int callback_at = static_cast<int>(callback.find('\n'));
+    ExpectEnter(callback, callback_at, "game:GetService(\"RunService\").Heartbeat:Connect(function(dt)\n    \nend)",
+                "enter inside a callback indents before end)");
+    ExpectEnter("function foo()\n\nend", function_end, "function foo()\n    \n\nend",
+                "a blank line before end still indents", function_end + indented);
+    const ide::EnterResult callback_tab = ide::enter_luau(callback, callback_at, 4, false);
+    Expect(callback_tab.insert && callback_tab.text == "\n\t" && callback_tab.caret == callback_at + 2,
+           "enter inside a callback can indent with a tab");
+    ExpectEnter("function outer()\n    function inner()\n    end\nend",
+                static_cast<int>(std::string("function outer()\n    function inner()").size()),
+                "function outer()\n    function inner()\n        \n    end\nend",
+                "an inner function indents inside its own end");
+    ExpectEnter("function foo() -- hi\nend", static_cast<int>(std::string("function foo() -- hi").size()),
+                "function foo() -- hi\n    \nend", "a trailing comment stays on the closed header");
+    ExpectEnter("Connect(function(dt))\nend", static_cast<int>(std::string("Connect(function(dt)").size()),
+                "Connect(function(dt)\n    \n)\nend", "a call closer stays after the indented line",
+                static_cast<int>(std::string("Connect(function(dt)").size()) + indented);
+    ExpectPlain("function foo()\nend", 4, "enter in the middle of a closed function splits normally");
+    ExpectPlain("function foo()\nend", static_cast<int>(std::string("function foo()\nend").size()),
+                "enter on the end line stays at that indent");
+    ExpectPlain("function foo()\n    return 1\nend", static_cast<int>(std::string("function foo()\n    return 1").size()),
+                "enter on a body line keeps the editor indent");
     ExpectPlain("print(\n)", -1, "a closing parenthesis is not a function");
     ExpectPlain("function foo(", -1, "an unfinished parameter list stays open");
     ExpectPlain("Heartbeat:Connect(function(dt))", static_cast<int>(std::string("Heartbeat:Connect(function(dt").size()),
@@ -307,6 +340,8 @@ int RunScriptPairsTests() {
     ExpectFlatPlain("function foo() end", static_cast<int>(std::string("function foo() ").size()),
                     "enter before the inserted end does not add another");
 
+    ExpectFlatPlain("function foo()\nend", static_cast<int>(std::string("function foo()").size()),
+                    "a command whose block is already closed still runs");
     ExpectFlatPlain("function foo() end", -1, "a finished command stays one line");
     ExpectFlatPlain("function foo() return 1", -1, "a command with a body is left alone");
     ExpectFlatPlain("-- function foo()", -1, "a command comment is not a header");

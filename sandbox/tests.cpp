@@ -2318,3 +2318,108 @@ TEST_CASE("S17 output lines remember when they were written", "[S17]") {
     REQUIRE(batch.lines[1].time >= batch.lines[0].time);
     REQUIRE(batch.lines[1].time <= after);
 }
+
+TEST_CASE("S18 Heartbeat:Wait yields until the next Heartbeat", "[S18]") {
+    ScriptRig rig;
+    // The first Heartbeat has already been emitted by the time the script starts,
+    // so the first Wait resumes on the following beat and returns that beat's dt.
+    add_script(rig.model, "HopSlow", R"(
+        local pre_ok = pcall(function()
+            game:GetService("RunService").PreRender:Wait()
+        end)
+        local step_ok = pcall(function()
+            game:GetService("RunService").RenderStepped:Wait()
+        end)
+        _G.pre = not pre_ok
+        _G.step = not step_ok
+        while true do
+            local dt = game:GetService("RunService").Heartbeat:Wait()
+            _G.n = (_G.n or 0) + 1
+            _G.dt = dt
+        end
+    )");
+    add_script(rig.model, "Nested", R"(
+        local rs = game:GetService("RunService")
+        rs.Heartbeat:Connect(function()
+            local seen = _G.inside or 0
+            _G.inside = seen + 1
+            if seen == 0 then
+                _G.from_inside = rs.Heartbeat:Wait()
+            end
+        end)
+    )");
+    rig.model.start_simulation();
+    rig.frames(1, 0.05);
+    bool pre = false;
+    bool step = false;
+    REQUIRE(rig.runtime.global_boolean("pre", pre));
+    REQUIRE(pre);
+    REQUIRE(rig.runtime.global_boolean("step", step));
+    REQUIRE(step);
+    REQUIRE(rig.runtime.global_is_nil("n"));
+    REQUIRE(rig.runtime.global_is_nil("inside"));
+    REQUIRE(rig.runtime.last_error().empty());
+
+    rig.frames(1, 0.02);
+    double n = 0;
+    double dt = 0;
+    double inside = 0;
+    REQUIRE(rig.runtime.global_number("n", n));
+    REQUIRE(n == 1);
+    REQUIRE(rig.runtime.global_number("dt", dt));
+    REQUIRE(std::fabs(dt - 0.02) < 1e-9);
+    REQUIRE(rig.runtime.global_number("inside", inside));
+    REQUIRE(inside == 1);
+    REQUIRE_FALSE(rig.runtime.global_number("from_inside", dt));
+
+    rig.frames(1, 0.05);
+    REQUIRE(rig.runtime.global_number("n", n));
+    REQUIRE(n == 2);
+    REQUIRE(rig.runtime.global_number("dt", dt));
+    REQUIRE(std::fabs(dt - 0.05) < 1e-9);
+    REQUIRE(rig.runtime.global_number("inside", inside));
+    REQUIRE(inside == 2);
+    REQUIRE(rig.runtime.global_number("from_inside", dt));
+    REQUIRE(std::fabs(dt - 0.05) < 1e-9);
+    REQUIRE(rig.runtime.last_error().empty());
+    const engine_core::ScriptRuntime::OutputBatch batch = rig.runtime.drain_output();
+    for (const engine_core::ScriptRuntime::OutputLine& line : batch.lines) {
+        REQUIRE(line.kind != engine_core::ScriptRuntime::OutputKind::Error);
+    }
+}
+
+TEST_CASE("S19 PreSimulation:Wait returns that step", "[S19]") {
+    ScriptRig rig;
+    add_script(rig.model, "Sub", R"(
+        _G.dt = game:GetService("RunService").PreSimulation:Wait()
+    )");
+    rig.model.start_simulation();
+    rig.frames(1, 0.05);
+    double dt = 0;
+    REQUIRE_FALSE(rig.runtime.global_number("dt", dt));
+    rig.scheduler.run_phase(engine_core::Phase::PreSimulation, 0.01);
+    rig.model.events().drain();
+    REQUIRE(rig.runtime.global_number("dt", dt));
+    REQUIRE(std::fabs(dt - 0.01) < 1e-9);
+    REQUIRE(rig.runtime.last_error().empty());
+}
+
+TEST_CASE("S20 Changed:Wait returns the property name", "[S20]") {
+    ScriptRig rig;
+    add_part(rig.model, rig.model.id(), "P");
+    add_script(rig.model, "Watch", R"(
+        local part = game:FindFirstChild("P")
+        task.spawn(function()
+            part.Name = "Next"
+        end)
+        local field = part.Changed:Wait()
+        _G.ok = (field == "Name")
+    )");
+    rig.model.start_simulation();
+    rig.frames(1, 0.05);
+    bool ok = false;
+    REQUIRE(rig.runtime.global_boolean("ok", ok));
+    REQUIRE(ok);
+    REQUIRE(rig.model.find_first_child(rig.model.id(), "Next") != 0);
+    REQUIRE(rig.runtime.last_error().empty());
+}

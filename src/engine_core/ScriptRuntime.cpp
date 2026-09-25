@@ -931,6 +931,18 @@ void ScriptRuntime::make_ready(Thread& thread, const char* result) {
     ready(thread);
 }
 
+void ScriptRuntime::make_ready_number(Thread& thread, double result) {
+    if (thread.dead || thread.co == nullptr) {
+        return;
+    }
+    sleep_.remove(&thread);
+    defer_.remove(&thread);
+    lua_pushnumber(thread.co, result);
+    thread.nargs = 1;
+    thread.park = Thread::Park::None;
+    ready(thread);
+}
+
 bool ScriptRuntime::thread_ok(const Thread& thread) const {
     if (thread.dead || model_ == nullptr) {
         return false;
@@ -1753,21 +1765,34 @@ int ScriptBindings::signal_wait(lua_State* state) {
         if (ud->blocked) {
             luaL_error(state, "%s is not available to scripts", ud->blocked_name);
         }
-        if (ud->kind != 0) {
-            luaL_error(state, "Wait on RunService is not available");
+        // kind 0 is an instance Changed signal. Other kinds are simulation phases
+        // on RunService (Heartbeat and the other sim steps). Render phases are
+        // already rejected above.
+        Signal* signal = nullptr;
+        const bool phase = ud->kind != 0;
+        if (phase) {
+            signal = runtime->phase_signal(static_cast<Phase>(ud->phase));
+            if (signal == nullptr) {
+                luaL_error(state, "signal is not available");
+            }
+        } else {
+            if (runtime->resolve_id(ud->id, ud->world) == nullptr) {
+                luaL_error(state, "instance is gone");
+            }
+            signal = &runtime->model_->changed(ud->id);
         }
-        if (runtime->resolve_id(ud->id, ud->world) == nullptr) {
-            luaL_error(state, "instance is gone");
-        }
-        Signal& signal = runtime->model_->changed(ud->id);
         thread->park = ScriptRuntime::Thread::Park::Signal;
-        signal.connect_scripted(
-            [runtime, thread](InstanceId, Field field) {
+        signal->connect_scripted(
+            [runtime, thread, phase](InstanceId, Field field) {
                 if (runtime->closing_ || thread->dead) {
                     thread->dead = true;
                     return;
                 }
-                runtime->make_ready(*thread, field_name(field));
+                if (phase) {
+                    runtime->make_ready_number(*thread, runtime->phase_dt_);
+                } else {
+                    runtime->make_ready(*thread, field_name(field));
+                }
             },
             thread->script, thread->generation, true);
         return lua_yield(state, 0);

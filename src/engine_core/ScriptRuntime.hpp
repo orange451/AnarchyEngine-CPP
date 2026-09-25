@@ -147,6 +147,7 @@ private:
     void drop_dead(std::list<Thread*>& queue);
     void ready(Thread& thread);
     void make_ready(Thread& thread, const char* result);
+    void make_ready_number(Thread& thread, double result);
     bool thread_ok(const Thread& thread) const;
     Thread& new_thread(InstanceId script, std::uint32_t generation);
     void set_script_global(lua_State* co, InstanceId script);

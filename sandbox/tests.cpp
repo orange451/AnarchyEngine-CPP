@@ -1931,6 +1931,79 @@ TEST_CASE("S4 disabling or destroying a script drops only its connections", "[S4
     REQUIRE(name_number(rig.model, hit_count.id()) == hits_before);
 }
 
+TEST_CASE("a new ModuleScript returns an empty table", "[module]") {
+    constexpr const char* starter = "local module = {}\n\nreturn module\n";
+    ScriptRig rig;
+
+    engine_core::ModuleScript& created = rig.model.create<engine_core::ModuleScript>();
+    REQUIRE(created.source() == starter);
+    REQUIRE(created.enabled());
+    engine_core::Script& script = rig.model.create<engine_core::Script>();
+    REQUIRE(script.source().empty());
+    rig.model.destroy(script.id());
+
+    created.set_source("return 1");
+    rig.model.destroy(created.id());
+    engine_core::ModuleScript& module = rig.model.create<engine_core::ModuleScript>();
+    REQUIRE(module.source() == starter);
+
+    const char* kept = "return { kept = true }";
+    module.set_source(kept);
+    const engine_core::InstanceId id = module.id();
+    rig.model.set_name(id, "Kept");
+    rig.model.set_parent(id, rig.model.id());
+    rig.model.capture_place();
+
+    rig.model.start_simulation();
+    module.set_source("return { session = true }");
+    rig.model.destroy(id);
+    engine_core::ModuleScript& recycled = rig.model.create<engine_core::ModuleScript>();
+    const engine_core::InstanceId recycled_id = recycled.id();
+    REQUIRE(recycled.source() == starter);
+    add_script(rig.model, "Check", R"lua(
+        local made = Instance.new("ModuleScript")
+        made.Name = "FromNew"
+        made.Parent = game
+        if made.Source ~= "local module = {}\n\nreturn module\n" then
+            error("bad source")
+        end
+        local value = require(made)
+        if type(value) ~= "table" or next(value) ~= nil then
+            error("module did not return an empty table")
+        end
+    )lua");
+    rig.frames(1, 0.05);
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
+    const engine_core::ScriptRuntime::OutputBatch played = rig.runtime.drain_output();
+    for (const engine_core::ScriptRuntime::OutputLine& line : played.lines) {
+        INFO(line.text);
+        REQUIRE(line.kind != engine_core::ScriptRuntime::OutputKind::Error);
+    }
+    const engine_core::InstanceId from_new = rig.model.find_first_child(rig.model.id(), "FromNew");
+    REQUIRE(from_new != 0);
+    const auto* made = dynamic_cast<const engine_core::ModuleScript*>(rig.model.instance(from_new));
+    REQUIRE(made != nullptr);
+    REQUIRE(made->source() == starter);
+
+    rig.model.stop_simulation();
+    REQUIRE(rig.model.alive(id));
+    REQUIRE_FALSE(rig.model.alive(recycled_id));
+    REQUIRE_FALSE(rig.model.alive(from_new));
+    auto* restored = dynamic_cast<engine_core::ModuleScript*>(rig.model.instance(id));
+    REQUIRE(restored != nullptr);
+    REQUIRE(restored->source() == kept);
+
+    restored->set_source("");
+    rig.model.capture_place();
+    rig.model.start_simulation();
+    restored->set_source(starter);
+    rig.model.stop_simulation();
+    restored = dynamic_cast<engine_core::ModuleScript*>(rig.model.instance(id));
+    REQUIRE(restored != nullptr);
+    REQUIRE(restored->source().empty());
+}
+
 TEST_CASE("S5 require caches one return and drops it when the simulation stops", "[S5]") {
     ScriptRig rig;
     engine_core::GameObject& runs = add_part(rig.model, rig.model.id(), "0");

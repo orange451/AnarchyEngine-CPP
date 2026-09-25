@@ -97,6 +97,20 @@ void Script::on_parent_changed(InstanceId previous, InstanceId next) {
 }
 
 namespace {
+constexpr char kModuleScriptSource[] = "local module = {}\n\nreturn module\n";
+}
+
+ModuleScript::ModuleScript(DataModel::ChildTag tag, DataModel::State& state, InstanceId id)
+    : LuaSource(tag, state, id) {
+    source_ = kModuleScriptSource;
+}
+
+void ModuleScript::on_reuse() {
+    LuaSource::on_reuse();
+    source_ = kModuleScriptSource;
+}
+
+namespace {
 
 bool read_lua_source(DataModel&, DataModel& object, LuaSlot& out) {
     auto* source = dynamic_cast<LuaSource*>(&object);

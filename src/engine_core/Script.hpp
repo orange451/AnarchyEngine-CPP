@@ -64,11 +64,15 @@ protected:
 };
 
 // Same fields as Script. Never auto-started. Runs only through require.
+// A new module starts with an empty table that it returns.
 class ModuleScript : public LuaSource {
 public:
-    ModuleScript(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : LuaSource(tag, state, id) {}
+    ModuleScript(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);
 
     const char* class_name() const override { return "ModuleScript"; }
+
+protected:
+    void on_reuse() override;
 };
 
 }  // namespace engine_core

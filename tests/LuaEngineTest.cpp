@@ -1,4 +1,5 @@
 #include "Engine.hpp"
+#include "LuaApi.hpp"
 #include "LuaEngine.hpp"
 #include "Script.hpp"
 #include "ScriptRuntime.hpp"
@@ -250,6 +251,23 @@ void testContextActions() {
     expect(actions.size() == 3 && !actions[0].primary, "a triangle uses the plain actions");
 }
 
+void testInsertInstance() {
+    engine_core::DataModel model;
+    const char* names[] = {"Folder", "GameObject", "Script", "ModuleScript"};
+    for (const char* name : names) {
+        engine_core::DataModel* made = engine_core::lua_create_instance(model, name);
+        expect(made != nullptr && made->class_name() != nullptr && std::string(made->class_name()) == name, name);
+        if (made == nullptr) {
+            continue;
+        }
+        model.set_parent(made->id(), model.id());
+        expect(model.parent(made->id()) == model.id(), "created instance is parented under the row");
+        expect(model.name(made->id()) == name, "a new instance is named for its class");
+    }
+    expect(engine_core::lua_create_instance(model, "TestTriangle") == nullptr, "TestTriangle is not in the insert list");
+    expect(engine_core::lua_create_instance(model, "DataModel") == nullptr, "DataModel is not inserted");
+}
+
 }  // namespace
 
 int RunLuauHighlightTests();
@@ -266,6 +284,7 @@ int main() {
         testMemory();
         testRunner();
         testContextActions();
+        testInsertInstance();
         gFailures += RunLuauHighlightTests();
         gFailures += RunLuauCompleteTests();
     } catch (const std::exception& ex) {

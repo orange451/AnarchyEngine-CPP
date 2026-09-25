@@ -31,6 +31,7 @@ add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
     src/ide/IdeDock.cpp
     src/ide/IdeConsole.cpp
     src/ide/CompletionPopup.cpp
+    src/ide/InsertPopup.cpp
     src/ide/IdeExplorer.cpp
     src/ide/IdeIcons.cpp
     src/ide/IdeScriptEditor.cpp

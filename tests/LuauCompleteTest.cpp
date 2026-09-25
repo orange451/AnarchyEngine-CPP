@@ -1,4 +1,5 @@
 #include "LuaApi.hpp"
+#include "ide/ClassFilter.hpp"
 #include "ide/LuauComplete.hpp"
 
 #include <cstdio>
@@ -884,6 +885,33 @@ void testFunctionParameters() {
     }
 }
 
+void testInsertFilter() {
+    std::vector<std::string> names;
+    engine_core::lua_creatable_names(names);
+    std::vector<std::string> shown;
+    ide::filter_class_names(names, "", shown);
+    if (shown.size() != 4 || shown[0] != "Folder" || shown[1] != "GameObject" || shown[2] != "ModuleScript" ||
+        shown[3] != "Script") {
+        fail("insert list is every creatable class, A to Z");
+    }
+    ide::filter_class_names(names, "scr", shown);
+    if (shown.size() != 2 || shown[0] != "Script" || shown[1] != "ModuleScript") {
+        fail("scr lists Script before ModuleScript");
+    }
+    ide::filter_class_names(names, "Ga", shown);
+    if (shown.size() != 1 || shown[0] != "GameObject") {
+        fail("Ga is GameObject");
+    }
+    ide::filter_class_names(names, "zzz", shown);
+    if (!shown.empty()) {
+        fail("zzz matches nothing");
+    }
+    ide::filter_class_names(names, "  folder ", shown);
+    if (shown.size() != 1 || shown[0] != "Folder") {
+        fail("search ignores surrounding spaces and case");
+    }
+}
+
 void testInstanceNew() {
     if (!engine_core::lua_creatable_known("Folder") || !engine_core::lua_creatable_known("GameObject") ||
         !engine_core::lua_creatable_known("Script") || !engine_core::lua_creatable_known("ModuleScript")) {
@@ -1020,6 +1048,7 @@ int RunLuauCompleteTests() {
         testNames();
         testConsole();
         testStringArguments();
+        testInsertFilter();
         testInstanceNew();
         testCallbackArguments();
         testFunctionParameters();

@@ -153,6 +153,13 @@ std::shared_ptr<jadefx::ImageView> icon_view(const std::string& class_name) {
     }
     const char* aliased = IconFile(class_name);
     const std::string filename = aliased != nullptr ? aliased : class_name + ".png";
+    return icon_file(filename);
+}
+
+std::shared_ptr<jadefx::ImageView> icon_file(const std::string& filename) {
+    if (filename.empty()) {
+        return nullptr;
+    }
     const std::shared_ptr<jadefx::Image> image = IconImage(filename);
     if (!image) {
         return nullptr;

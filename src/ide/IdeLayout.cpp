@@ -3,6 +3,7 @@
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
 #include "IdeConsole.hpp"
+#include "LuaApi.hpp"
 #include "IdeDock.hpp"
 #include "IdeExplorer.hpp"
 #include "IdeScriptEditor.hpp"
@@ -214,6 +215,27 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     ExplorerHost host;
     host.run = [this](std::string_view action, engine_core::InstanceId id) { run_action(action, id); };
     host.enabled = [this](std::string_view action) { return action_enabled(action); };
+    host.insert = [this](std::string class_name, engine_core::InstanceId parent, std::shared_ptr<InsertResult> result) {
+        runner_.simulation().on_simulation(
+            [class_name = std::move(class_name), parent, result](engine_core::DataModel& world) {
+                engine_core::InstanceId made = 0;
+                if (parent_ok(world, parent)) {
+                    if (engine_core::DataModel* created = engine_core::lua_create_instance(world, class_name.c_str())) {
+                        world.set_parent(created->id(), parent);
+                        made = created->id();
+                        // An edit while stopped is part of the place. One made during
+                        // play is dropped when Stop restores that place.
+                        if (!world.simulation_running()) {
+                            world.capture_place();
+                        }
+                    }
+                }
+                if (result) {
+                    result->id.store(made, std::memory_order_relaxed);
+                    result->done.store(true, std::memory_order_release);
+                }
+            });
+    };
 
     auto west = jadefx::make<IdeDock>();
     west->setMinSize(160, 80);

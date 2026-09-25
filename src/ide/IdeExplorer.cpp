@@ -26,6 +26,31 @@ struct ApplyGuard {
     ~ApplyGuard() { flag = false; }
 };
 
+// The + drawn on the hovered row. The icon stays 16px; the chip is the hit target.
+class InsertButton : public jadefx::StackPane {
+public:
+    InsertButton() {
+        setAlignment(jadefx::Pos::Center);
+        setCursor(jadefx::Cursor::Pointer);
+        if (std::shared_ptr<jadefx::ImageView> icon = icon_file("plus-small.png")) {
+            icon->setMouseTransparent(true);
+            icon->setPrefSize(16, 16);
+            icon->setMinSize(16, 16);
+            getChildren().add(std::move(icon));
+        } else {
+            auto plus = jadefx::make<jadefx::Label>("+");
+            plus->setMouseTransparent(true);
+            plus->setAlignment(jadefx::Pos::Center);
+            plus->setTextFill(jadefx::Color::rgb8(95, 99, 104));
+            getChildren().add(std::move(plus));
+        }
+        setOnMouseEntered([this](const jadefx::MouseEvent&) {
+            setBackground(jadefx::Color::rgb8(232, 240, 254));
+        });
+        setOnMouseExited([this](const jadefx::MouseEvent&) { setBackground(jadefx::Color::transparent()); });
+    }
+};
+
 }  // namespace
 
 void IdeExplorer::Snapshot::clear() {
@@ -61,6 +86,9 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
         show_menu(item, event.x, event.y);
     });
     tree_->setOnItemActivated([this](jadefx::TreeItem& item) { return activate(item); });
+    insert_button_ = jadefx::make<InsertButton>();
+    insert_button_->setOnMouseClicked([this](const jadefx::MouseEvent&) { open_insert(); });
+    tree_->setHoverAccessory(insert_button_);
     Fill(*tree_);
     getChildren().add(tree_);
     sync();
@@ -163,6 +191,62 @@ bool IdeExplorer::activate(jadefx::TreeItem& item) {
     return false;
 }
 
+void IdeExplorer::open_insert() {
+    if (!tree_ || !insert_button_) {
+        return;
+    }
+    jadefx::TreeItem* item = tree_->getHoveredItem();
+    if (item == nullptr) {
+        return;
+    }
+    engine_core::InstanceId id = 0;
+    if (!find_id(item, id)) {
+        return;
+    }
+    tree_->select(item);
+    item->setExpanded(true);
+    insert_parent_ = id;
+    if (!insert_popup_) {
+        insert_popup_ = std::make_unique<InsertPopup>();
+        insert_popup_->setOnCreate([this](const std::string& name) { create_child(name); });
+    }
+    insert_popup_->show(*insert_button_);
+}
+
+void IdeExplorer::create_child(const std::string& class_name) {
+    if (!host_.insert || class_name.empty()) {
+        return;
+    }
+    jadefx::TreeItem* parent = nullptr;
+    if (root_item_ && insert_parent_ == root_.id()) {
+        parent = root_item_.get();
+    } else if (const std::shared_ptr<jadefx::TreeItem> row = row_ptr(insert_parent_)) {
+        parent = row.get();
+    }
+    if (parent != nullptr) {
+        parent->setExpanded(true);
+    }
+    auto result = std::make_shared<InsertResult>();
+    pending_insert_ = result;
+    host_.insert(class_name, insert_parent_, std::move(result));
+}
+
+void IdeExplorer::finish_insert(engine_core::InstanceId made) {
+    if (!pending_insert_) {
+        return;
+    }
+    if (made == 0 || (read_ok_ && seen_.find(made) == seen_.end())) {
+        pending_insert_.reset();
+        return;
+    }
+    const std::shared_ptr<jadefx::TreeItem> row = row_ptr(made);
+    if (!row || !tree_) {
+        return;
+    }
+    tree_->select(row.get());
+    pending_insert_.reset();
+}
+
 void IdeExplorer::layoutChildren() {
     sync();
     StackPane::layoutChildren();
@@ -172,23 +256,29 @@ void IdeExplorer::sync() {
     if (applying_ || !tree_ || !root_item_) {
         return;
     }
-    if (!capture()) {
-        return;
+    const bool pending = pending_insert_ && pending_insert_->done.load(std::memory_order_acquire);
+    const engine_core::InstanceId made = pending ? pending_insert_->id.load(std::memory_order_relaxed) : 0;
+    if (capture()) {
+        ApplyGuard guard(applying_);
+        apply(edit_weight() > kInPlaceEdits);
+        committed_.ids = scratch_.ids;
+        committed_.child_counts = scratch_.child_counts;
+        committed_.labels = scratch_.labels;
     }
-    ApplyGuard guard(applying_);
-    apply(edit_weight() > kInPlaceEdits);
-    committed_.ids = scratch_.ids;
-    committed_.child_counts = scratch_.child_counts;
-    committed_.labels = scratch_.labels;
+    if (pending) {
+        finish_insert(made);
+    }
 }
 
 bool IdeExplorer::capture() {
+    read_ok_ = false;
     {
         engine_core::DataModelLock lock(root_, engine_core::DataModelLock::Read, kLockWait);
         if (!lock.owns()) {
             return false;
         }
         read_hierarchy(scratch_);
+        read_ok_ = true;
     }
     return !scratch_.same_shape(committed_);
 }

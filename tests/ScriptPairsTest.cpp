@@ -118,6 +118,43 @@ void ExpectPlain(const std::string& source, int caret, const char* label) {
     }
 }
 
+void ExpectFlat(const std::string& source, int caret, const std::string& want, const char* label) {
+    if (caret < 0) {
+        caret = static_cast<int>(source.size());
+    }
+    const ide::EnterResult result = ide::enter_luau(source, caret, 4, true, true);
+    if (!result.insert) {
+        std::fprintf(stderr, "FAIL %s (no insert)\n", label);
+        ++gFailures;
+        return;
+    }
+    std::string got = source;
+    const int count = result.end - result.begin;
+    if (result.begin < 0 || count < 0 || result.begin + count > static_cast<int>(got.size())) {
+        std::fprintf(stderr, "FAIL %s (bad range %d..%d)\n", label, result.begin, result.end);
+        ++gFailures;
+        return;
+    }
+    got.replace(static_cast<std::size_t>(result.begin), static_cast<std::size_t>(count), result.text);
+    const std::size_t end_at = want.rfind("end");
+    if (got != want || end_at == std::string::npos || result.caret != static_cast<int>(end_at)) {
+        std::fprintf(stderr, "FAIL %s\n got:  %s caret %d\n want: %s caret %d\n", label, Show(got).c_str(), result.caret,
+                     Show(want).c_str(), end_at == std::string::npos ? -1 : static_cast<int>(end_at));
+        ++gFailures;
+    }
+}
+
+void ExpectFlatPlain(const std::string& source, int caret, const char* label) {
+    if (caret < 0) {
+        caret = static_cast<int>(source.size());
+    }
+    const ide::EnterResult result = ide::enter_luau(source, caret, 4, true, true);
+    if (result.insert) {
+        std::fprintf(stderr, "FAIL %s (inserted %s)\n", label, Show(result.text).c_str());
+        ++gFailures;
+    }
+}
+
 }  // namespace
 
 int RunScriptPairsTests() {
@@ -240,6 +277,41 @@ int RunScriptPairsTests() {
 
     ExpectEnter("function foo()\n-- note", static_cast<int>(std::string("function foo()").size()),
                 "function foo()\n    \nend\n-- note", "a comment below the header stays below end");
+
+    ExpectFlat("function foo()", -1, "function foo() end", "a command-line function gains end");
+    ExpectFlat("local function foo()", -1, "local function foo() end", "a command-line local function gains end");
+    ExpectFlat("function Foo:bar()", -1, "function Foo:bar() end", "a command-line method gains end");
+    ExpectFlat("local f = function()", -1, "local f = function() end", "a command-line assignment adds no parenthesis");
+    ExpectFlat("foo(function(dt)", -1, "foo(function(dt) end)", "a command-line callback gains end)");
+    ExpectFlat("Heartbeat:Connect(function(dt)", -1, "Heartbeat:Connect(function(dt) end)",
+               "a command-line Connect gains end)");
+    ExpectFlat(heartbeat, before_closer, "game:GetService(\"RunService\").Heartbeat:Connect(function(dt) end)",
+               "a command-line enter before the call closer closes the callback");
+    ExpectFlat(heartbeat, -1, "game:GetService(\"RunService\").Heartbeat:Connect(function(dt) end)",
+               "a command-line enter after the call closer closes the callback");
+    ExpectFlat("foo(bar(function(dt)))", static_cast<int>(std::string("foo(bar(function(dt)").size()),
+               "foo(bar(function(dt) end))", "command-line closers stay after end");
+    ExpectFlat("for i = 1, 10 do", -1, "for i = 1, 10 do end", "a command-line for gains end");
+    ExpectFlat("while (ready) do", -1, "while (ready) do end", "a command-line while adds no parenthesis");
+    ExpectFlat("do", -1, "do end", "a command-line do gains end");
+    ExpectFlat("if x then", -1, "if x then end", "a command-line conditional gains end");
+    ExpectFlat("elseif x then", -1, "elseif x then end", "a command-line elseif gains end");
+    ExpectFlat("    if x then", -1, "    if x then end", "a command-line header keeps its indent");
+    ExpectFlat("if x then -- later", -1, "if x then end -- later", "a command-line comment stays after end");
+    ExpectFlat("do -- block", -1, "do end -- block", "a command-line do comment stays after end");
+    ExpectFlat("function foo() -- hi", -1, "function foo() end -- hi", "a command-line header comment stays after end");
+    ExpectFlat("function foo()--hi", -1, "function foo() end --hi", "a command-line comment gains a space");
+    ExpectFlat("function foo() -- hi", static_cast<int>(std::string("function foo() -- ").size()),
+               "function foo() end -- hi", "enter in a command-line comment still closes");
+    ExpectFlat("if x then  ", -1, "if x then  end", "spaces already before the closer are kept");
+    ExpectFlatPlain("function foo() end", static_cast<int>(std::string("function foo() ").size()),
+                    "enter before the inserted end does not add another");
+
+    ExpectFlatPlain("function foo() end", -1, "a finished command stays one line");
+    ExpectFlatPlain("function foo() return 1", -1, "a command with a body is left alone");
+    ExpectFlatPlain("-- function foo()", -1, "a command comment is not a header");
+    ExpectFlatPlain("function foo(", -1, "an unfinished command stays open");
+    ExpectFlatPlain("repeat", -1, "repeat does not close on the command line");
 
     return gFailures;
 }

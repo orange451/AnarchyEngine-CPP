@@ -2,8 +2,10 @@
 
 #include "Engine.hpp"
 #include "LuauComplete.hpp"
+#include "ScriptPairs.hpp"
 #include "ScriptRuntime.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
@@ -99,6 +101,10 @@ public:
     void handleKey(jadefx::KeyEvent& event) override;
     void handleText(jadefx::TextEvent& event) override;
     void handleMousePressed(const jadefx::MouseEvent& event) override;
+
+private:
+    bool applyPair(char unit);
+    bool applyEnter();
 };
 
 IdeConsole::IdeConsole(engine_core::Engine& engine) : IdePane("Console", true), engine_(engine) {
@@ -304,6 +310,15 @@ void CommandField::handleKey(jadefx::KeyEvent& event) {
             console->completion_.dismiss();
         }
     }
+    const bool plain_enter = (event.key == jadefx::Key::Enter || event.key == jadefx::Key::KpEnter) && !event.shift &&
+                             !event.shortcut() && !event.repeat;
+    if (plain_enter && applyEnter()) {
+        event.consume();
+        if (!console->completion_.accepting()) {
+            console->refresh_completion(false);
+        }
+        return;
+    }
     const std::string before = getText();
     jadefx::TextField::handleKey(event);
     if (getText() != before) {
@@ -311,13 +326,86 @@ void CommandField::handleKey(jadefx::KeyEvent& event) {
     }
 }
 
+bool CommandField::applyPair(char unit) {
+    if (!isEditable() || isDisabled()) {
+        return false;
+    }
+    const int anchor = getAnchor();
+    const int caret = getCaretPosition();
+    const int begin = std::min(anchor, caret);
+    const int end = std::max(anchor, caret);
+    const PairResult pair =
+        pair_luau(getText(), begin, end, static_cast<char32_t>(static_cast<unsigned char>(unit)));
+    if (pair.action == PairAction::None) {
+        return false;
+    }
+    if (pair.action == PairAction::Skip) {
+        if (console != nullptr) {
+            console->completion_.dismiss();
+        }
+        positionCaret(end + 1);
+        return true;
+    }
+    if (pair.action == PairAction::Insert) {
+        std::string both;
+        both.push_back(pair.open);
+        both.push_back(pair.close);
+        selectRange(begin, begin);
+        replaceSelection(both);
+        positionCaret(begin + 1);
+        return true;
+    }
+    const std::string selected = getSelectedText();
+    std::string wrapped;
+    wrapped.push_back(pair.open);
+    wrapped += selected;
+    wrapped.push_back(pair.close);
+    selectRange(begin, end);
+    replaceSelection(wrapped);
+    return true;
+}
+
+bool CommandField::applyEnter() {
+    if (!isEditable() || isDisabled() || getAnchor() != getCaretPosition()) {
+        return false;
+    }
+    const EnterResult result = enter_luau(getText(), getCaretPosition(), 4, true, true);
+    if (!result.insert) {
+        return false;
+    }
+    selectRange(result.begin, result.end);
+    replaceSelection(result.text);
+    positionCaret(result.caret);
+    return true;
+}
+
 void CommandField::handleText(jadefx::TextEvent& event) {
-    if (console != nullptr && event.text.size() == 1) {
+    if (console != nullptr && event.text.size() == 1 && !isDisabled()) {
         const char unit = event.text[0];
-        if ((unit == '.' || unit == ':' || unit == '(') && console->completion_.commitsName()) {
+        const bool name_key = unit == '.' || unit == ':' || unit == '(';
+        const bool quote_key = unit == '"' || unit == '\'';
+        const bool collapsed = getAnchor() == getCaretPosition();
+        const bool steps_over = collapsed && quote_key &&
+                                source_code_point(getText(), getCaretPosition()) ==
+                                    static_cast<char32_t>(static_cast<unsigned char>(unit));
+        if (name_key && console->completion_.commitsName()) {
             console->accept_completion(false);
-        } else if ((unit == '"' || unit == '\'') && console->completion_.commitsQuote(unit)) {
+        } else if (quote_key && console->completion_.commitsQuote(unit, !steps_over)) {
             console->accept_completion(false);
+            if (steps_over) {
+                event.consume();
+                if (!console->completion_.accepting()) {
+                    console->refresh_completion(false);
+                }
+                return;
+            }
+        }
+        if (applyPair(unit)) {
+            event.consume();
+            if (!console->completion_.accepting()) {
+                console->refresh_completion(false);
+            }
+            return;
         }
     }
     jadefx::TextField::handleText(event);

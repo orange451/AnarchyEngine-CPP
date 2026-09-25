@@ -278,6 +278,22 @@ public:
         return true;
     }
 
+    // A `--` comment on this line that begins at or after `from`. Long comments
+    // are separate: they are not a trailing line comment.
+    int line_comment_from(int line, int from) const {
+        const int end = line_end(line);
+        int found = -1;
+        for (const Region& region : regions_) {
+            if (region.kind != RegionKind::LineComment || region.begin < from || region.begin >= end) {
+                continue;
+            }
+            if (found < 0 || region.begin < found) {
+                found = region.begin;
+            }
+        }
+        return found;
+    }
+
     const Tok& token(int index) const { return tokens_[static_cast<std::size_t>(index)]; }
     int token_count() const { return static_cast<int>(tokens_.size()); }
 
@@ -883,7 +899,7 @@ PairResult pair_luau(std::string_view source, int begin, int end, char32_t typed
     return result;
 }
 
-EnterResult enter_luau(std::string_view source, int caret, int tab_size, bool spaces) {
+EnterResult enter_luau(std::string_view source, int caret, int tab_size, bool spaces, bool flat) {
     EnterResult result;
     const std::u32string text = Utf32(source);
     const int size = static_cast<int>(text.size());
@@ -921,6 +937,39 @@ EnterResult enter_luau(std::string_view source, int caret, int tab_size, bool sp
     if (header.found && header.anonymous && header.trailing_parens == 0 &&
         ParenDepth(scan, header.function_index) > 0 && follow != Follow::Paren) {
         add_paren = true;
+    }
+
+    if (flat) {
+        int at = header.trailing_parens > 0 ? header.signature_end : scan.line_end(line);
+        bool before_comment = false;
+        if (header.trailing_parens == 0) {
+            const int from = header.found ? header.signature_end : (last >= 0 ? scan.token(last).end : scan.line_start(line));
+            const int comment = scan.line_comment_from(line, from);
+            if (comment >= 0) {
+                at = comment;
+                before_comment = true;
+            }
+        }
+        const std::u32string& chars = scan.text();
+        const bool spaced_before = at > 0 && IsSpace(chars[static_cast<std::size_t>(at - 1)]);
+        std::u32string inserted;
+        if (!spaced_before) {
+            inserted.push_back(U' ');
+        }
+        const int caret_at = at + static_cast<int>(inserted.size());
+        inserted += std::u32string(U"end");
+        if (add_paren) {
+            inserted.push_back(U')');
+        }
+        if (before_comment && at < scan.size() && !IsSpace(chars[static_cast<std::size_t>(at)])) {
+            inserted.push_back(U' ');
+        }
+        result.insert = true;
+        result.begin = at;
+        result.end = at;
+        result.text = Utf8(inserted);
+        result.caret = caret_at;
+        return result;
     }
 
     const std::u32string base = scan.leading(line);

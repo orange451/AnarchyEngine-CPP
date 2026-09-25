@@ -25,6 +25,9 @@ PairResult pair_luau(std::string_view source, int begin, int end, char32_t typed
 // The replacement is inserted at [begin, end) and the caret lands on the new body line.
 // A ')' already closing the call around the function, as in Connect(function(dt)|),
 // stays after the inserted end.
+// When `flat` is set, the command stays on one line: a space, then `end`, then one
+// ')' when the function is an anonymous callback. The caret sits just before `end`.
+// A trailing `--` comment stays after that closer.
 struct EnterResult {
     bool insert = false;
     int begin = 0;
@@ -34,8 +37,8 @@ struct EnterResult {
 };
 
 // `spaces` writes the extra body indent as `tab_size` spaces. Otherwise it is one tab.
-// The header line keeps whatever indent it already uses.
-EnterResult enter_luau(std::string_view source, int caret, int tab_size, bool spaces);
+// The header line keeps whatever indent it already uses. `flat` is the one-line form.
+EnterResult enter_luau(std::string_view source, int caret, int tab_size, bool spaces, bool flat = false);
 
 // Code point at `index`, or 0 when `index` is past the end.
 char32_t source_code_point(std::string_view source, int index);

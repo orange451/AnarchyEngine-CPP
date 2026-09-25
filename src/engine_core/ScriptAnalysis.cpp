@@ -822,6 +822,18 @@ std::shared_ptr<WorldSnap> capture_world(DataModel& model) {
 
 }  // namespace
 
+void lint_rule_names(std::vector<std::string>& out) {
+    out.clear();
+    for (int code = static_cast<int>(Luau::LintWarning::Code_Unknown) + 1;
+         code < static_cast<int>(Luau::LintWarning::Code__Count); ++code) {
+        const char* name = Luau::LintWarning::getName(static_cast<Luau::LintWarning::Code>(code));
+        if (name == nullptr || name[0] == '\0') {
+            continue;
+        }
+        out.emplace_back(name);
+    }
+}
+
 struct ScriptAnalysis::State {
     std::mutex mu;
     std::condition_variable cv;

@@ -862,18 +862,21 @@ void CompletionPopup::present(const CompletionList& list, bool force, jadefx::No
     }
     // An empty name, or a name nothing extends, stays closed. A call that knows
     // its parameters still shows that list, without every in-scope name.
+    // A finished directive matches exactly and closes the same way. `--!` has an
+    // empty prefix and still opens, because the bang is what asked for the list.
     bool signature_only = false;
-    if (list.site == CompleteSite::Name && !force) {
-        const bool longer = std::any_of(list.items.begin(), list.items.end(), [&](const CompletionItem& item) {
-            return item.name.size() > list.prefix.size();
-        });
-        if (list.prefix.empty() || !longer) {
-            if (list.signature.empty()) {
-                dismiss();
-                return;
-            }
-            signature_only = true;
+    const bool extends = std::any_of(list.items.begin(), list.items.end(), [&](const CompletionItem& item) {
+        return item.name.size() > list.prefix.size();
+    });
+    if (list.site == CompleteSite::Name && !force && (list.prefix.empty() || !extends)) {
+        if (list.signature.empty()) {
+            dismiss();
+            return;
         }
+        signature_only = true;
+    } else if (list.site == CompleteSite::Directive && !force && !list.prefix.empty() && !extends) {
+        dismiss();
+        return;
     }
     std::string previous;
     const bool keep_pick = open && state_->picked && state_->site == list.site && state_->selected >= 0 &&

@@ -12,10 +12,11 @@ namespace ide {
 // Where the caret is asking for a completion.
 enum class CompleteSite {
     None,
-    Member,    // After '.' or ':'.
-    Name,      // A local, global, or keyword.
-    Type,      // A type name after ':' or '::'.
-    Argument,  // A string argument of GetService, FindFirstChild, or Instance.new.
+    Member,     // After '.' or ':'.
+    Name,       // A local, global, or keyword.
+    Type,       // A type name after ':' or '::'.
+    Argument,   // A string argument of GetService, FindFirstChild, or Instance.new.
+    Directive,  // A header `--!` comment: strict, nonstrict, nocheck, nolint, native, optimize.
 };
 
 struct CompletionItem {
@@ -85,8 +86,11 @@ HoverInfo hover_luau(std::string_view source, int index, const std::vector<engin
 // keeps its parameters: the body uses each annotation as the parameter's type,
 // and a call lists those parameters. A function row also carries the return
 // and the one-sentence explanation the hover tooltip shows. Two or more return
-// values are shown as `(number, string)`. `script_global`
-// is false on the command line, where `script` is nil.
+// values are shown as `(number, string)`. A header comment `--!` completes
+// strict, nonstrict, nocheck, nolint, native, and optimize. `--!nolint` then
+// completes lint rule names, and `--!optimize` completes levels 0, 1, and 2.
+// A directive after the first statement is ignored, so it is not completed.
+// `script_global` is false on the command line, where `script` is nil.
 CompletionList complete_luau(std::string_view source, int caret, const std::vector<engine_core::LuaNode>& world = {},
                              std::uint32_t script_id = 0, bool script_global = true);
 

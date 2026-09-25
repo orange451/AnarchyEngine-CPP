@@ -22,6 +22,9 @@ enum class Severity { Error, Warning, Information, Hint };
 // Default when a script has no `--!` hot comment on the first lines.
 enum class TypeMode { NoCheck, NonStrict, Strict };
 
+// Rule names a header `--!nolint` comment can name. Unknown is not a rule.
+void lint_rule_names(std::vector<std::string>& out);
+
 // 0-based, matching Luau's Location.
 struct TextPos {
     std::uint32_t line = 0;

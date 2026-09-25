@@ -1,5 +1,7 @@
 #include "LuauComplete.hpp"
 
+#include "ScriptAnalysis.hpp"
+
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -194,6 +196,9 @@ int LongSeparator(const std::u32string& text, int index) {
 struct Scan {
     std::vector<Token> tokens;
     bool blocked = false;
+    // The caret sits in a header `--!` comment. `directive_begin` is the code point after `!`.
+    bool directive = false;
+    int directive_begin = 0;
     // The caret sits inside a ' or " literal that has not closed yet.
     bool open_string = false;
     int string_begin = 0;
@@ -239,10 +244,17 @@ Scan Tokenize(const std::u32string& text, int caret) {
                     continue;
                 }
             }
+            const int body = i;
             while (i < caret && text[static_cast<std::size_t>(i)] != U'\n' && text[static_cast<std::size_t>(i)] != U'\r') {
                 ++i;
             }
             if (i >= caret) {
+                // The caret is inside this line comment. A `--!` before any code is a directive.
+                // Luau ignores the same comment once a statement has been written.
+                if (scan.tokens.empty() && body < caret && text[static_cast<std::size_t>(body)] == U'!') {
+                    scan.directive = true;
+                    scan.directive_begin = body + 1;
+                }
                 scan.blocked = true;
                 return scan;
             }
@@ -3038,6 +3050,147 @@ void AddCreatable(std::string_view prefix, std::vector<CompletionItem>& out) {
     AddNamed(prefix, names, "class", out);
 }
 
+// Header comments Luau reads before the first statement. Order is the order shown.
+struct DirectiveRow {
+    const char* name;
+    const char* detail;
+    const char* summary;
+};
+
+constexpr DirectiveRow kDirectives[] = {
+    {"strict", "mode", "Report type errors as errors."},
+    {"nonstrict", "mode", "Report type errors as warnings."},
+    {"nocheck", "mode", "Skip type checking."},
+    {"nolint", "lint", "Disable lint warnings, or one named rule."},
+    {"native", "compile", "Mark the script as a native module."},
+    {"optimize", "compile", "Set the optimization level to 0, 1, or 2."},
+};
+
+void AddDirectives(std::string_view prefix, std::vector<CompletionItem>& out) {
+    for (const DirectiveRow& row : kDirectives) {
+        if (!prefix.empty() && !StartsWith(row.name, prefix)) {
+            continue;
+        }
+        CompletionItem item;
+        item.name = row.name;
+        item.detail = row.detail;
+        item.summary = row.summary;
+        out.push_back(std::move(item));
+    }
+}
+
+void AddLintRules(std::string_view prefix, std::vector<CompletionItem>& out) {
+    std::vector<std::string> names;
+    engine_core::lint_rule_names(names);
+    std::sort(names.begin(), names.end());
+    for (const std::string& name : names) {
+        if (!prefix.empty() && !StartsWith(name, prefix)) {
+            continue;
+        }
+        CompletionItem item;
+        item.name = name;
+        item.detail = "rule";
+        out.push_back(std::move(item));
+    }
+}
+
+void AddOptimizeLevels(std::string_view prefix, std::vector<CompletionItem>& out) {
+    struct Level {
+        const char* name;
+        const char* summary;
+    };
+    constexpr Level kLevels[] = {
+        {"0", "Leave the script unoptimized."},
+        {"1", "Use the baseline optimizations."},
+        {"2", "Use the full optimization level."},
+    };
+    for (const Level& level : kLevels) {
+        if (!prefix.empty() && !StartsWith(level.name, prefix)) {
+            continue;
+        }
+        CompletionItem item;
+        item.name = level.name;
+        item.detail = "level";
+        item.summary = level.summary;
+        out.push_back(std::move(item));
+    }
+}
+
+bool IsDirectiveSpace(char32_t code) { return code == U' ' || code == U'\t'; }
+
+int DirectiveLineEnd(const std::u32string& text, int index) {
+    const int size = static_cast<int>(text.size());
+    while (index < size && text[static_cast<std::size_t>(index)] != U'\n' &&
+           text[static_cast<std::size_t>(index)] != U'\r') {
+        ++index;
+    }
+    return index;
+}
+
+// `--!` completes the directive word. A space after `nolint` or `optimize`
+// completes that directive's argument. A space right after `!` is not a directive.
+CompletionList CompleteDirective(const std::u32string& text, int caret, int begin) {
+    if (begin < 0 || caret < begin || begin > static_cast<int>(text.size())) {
+        return {};
+    }
+    const int line_end = DirectiveLineEnd(text, begin);
+    if (caret > line_end) {
+        return {};
+    }
+    if (begin < line_end && IsDirectiveSpace(text[static_cast<std::size_t>(begin)])) {
+        return {};
+    }
+    int word_end = begin;
+    while (word_end < line_end && !IsDirectiveSpace(text[static_cast<std::size_t>(word_end)])) {
+        ++word_end;
+    }
+    CompletionList list;
+    list.site = CompleteSite::Directive;
+    if (caret <= word_end) {
+        list.replace_begin = begin;
+        list.replace_end = word_end;
+        list.prefix = ArgumentPrefix(text, begin, caret);
+        AddDirectives(list.prefix, list.items);
+    } else {
+        const std::string word = ArgumentPrefix(text, begin, word_end);
+        int argument = word_end;
+        while (argument < line_end && IsDirectiveSpace(text[static_cast<std::size_t>(argument)])) {
+            ++argument;
+        }
+        if (word != "nolint" && word != "optimize") {
+            return {};
+        }
+        if (caret < argument) {
+            if (argument != line_end) {
+                return {};
+            }
+            list.replace_begin = caret;
+            list.replace_end = line_end;
+            list.prefix.clear();
+        } else {
+            int argument_end = argument;
+            while (argument_end < line_end && !IsDirectiveSpace(text[static_cast<std::size_t>(argument_end)])) {
+                ++argument_end;
+            }
+            if (caret > argument_end) {
+                return {};
+            }
+            list.replace_begin = argument;
+            list.replace_end = argument_end;
+            list.prefix = ArgumentPrefix(text, argument, caret);
+        }
+        if (word == "nolint") {
+            AddLintRules(list.prefix, list.items);
+        } else {
+            AddOptimizeLevels(list.prefix, list.items);
+        }
+    }
+    if (list.items.empty()) {
+        return {};
+    }
+    return list;
+}
+
 void BeginStringArgument(CompletionList& list, const Scan& scan, const std::u32string& text, int caret) {
     list.site = CompleteSite::Argument;
     list.close_quote = static_cast<char>(scan.quote);
@@ -3121,6 +3274,9 @@ CompletionList complete_luau(std::string_view source, int caret, const std::vect
         caret = static_cast<int>(text.size());
     }
     const Scan scan = Tokenize(text, caret);
+    if (scan.directive) {
+        return CompleteDirective(text, caret, scan.directive_begin);
+    }
     CompletionList list;
     if (scan.blocked) {
         return list;

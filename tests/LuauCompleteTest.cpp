@@ -1,4 +1,5 @@
 #include "LuaApi.hpp"
+#include "ScriptAnalysis.hpp"
 #include "ide/ClassFilter.hpp"
 #include "ide/LuauComplete.hpp"
 
@@ -1675,6 +1676,169 @@ void testTuples() {
                    "Test", "replaced function is not a method");
 }
 
+void expect_directive(const ide::CompletionList& list, const char* label) {
+    if (list.site != ide::CompleteSite::Directive) {
+        fail(std::string(label) + " is not a directive completion");
+    }
+}
+
+void expect_range(const ide::CompletionList& list, int begin, int end, const char* label) {
+    if (list.replace_begin != begin || list.replace_end != end) {
+        fail(std::string(label) + " range " + std::to_string(list.replace_begin) + ".." +
+             std::to_string(list.replace_end));
+    }
+}
+
+void expect_closed(const ide::CompletionList& list, const char* label) {
+    if (list.site != ide::CompleteSite::None || !list.items.empty()) {
+        fail(std::string(label) + " should not complete");
+    }
+}
+
+void testDirectives() {
+    const ide::CompletionList all = at_end("--!");
+    expect_directive(all, "--!");
+    expect_range(all, 3, 3, "--!");
+    if (all.items.size() != 6 || all.items.front().name != "strict") {
+        fail("--! should lead with strict");
+    }
+    expect_has(all, "strict", "--!");
+    expect_has(all, "nonstrict", "--!");
+    expect_has(all, "nocheck", "--!");
+    expect_has(all, "nolint", "--!");
+    expect_has(all, "native", "--!");
+    expect_has(all, "optimize", "--!");
+    expect_missing(all, "local", "--!");
+    expect_missing(all, "game", "--!");
+    expect_call(all, "strict", false, "--!strict");
+    expect_detail(all, "strict", "mode", "--!strict");
+    expect_detail(all, "nolint", "lint", "--!nolint");
+    expect_info(all, "strict", "", "", "Report type errors as errors.", "--!strict");
+    expect_info(all, "nonstrict", "", "", "Report type errors as warnings.", "--!nonstrict");
+    expect_info(all, "nocheck", "", "", "Skip type checking.", "--!nocheck");
+
+    const ide::CompletionList filtered = at_end("--!str");
+    expect_directive(filtered, "--!str");
+    expect_range(filtered, 3, 6, "--!str");
+    expect_has(filtered, "strict", "--!str");
+    expect_missing(filtered, "nonstrict", "--!str");
+    expect_missing(filtered, "nocheck", "--!str");
+    if (filtered.prefix != "str") {
+        fail("--!str prefix");
+    }
+
+    const ide::CompletionList narrow = at_end("--!n");
+    expect_directive(narrow, "--!n");
+    if (narrow.items.empty() || narrow.items.front().name != "nonstrict") {
+        fail("--!n should lead with nonstrict");
+    }
+    expect_has(narrow, "nocheck", "--!n");
+    expect_has(narrow, "nolint", "--!n");
+    expect_has(narrow, "native", "--!n");
+    expect_missing(narrow, "strict", "--!n");
+    expect_missing(narrow, "optimize", "--!n");
+
+    const char* word = "--!strict";
+    const ide::CompletionList inside = at_caret(word, 6);
+    expect_directive(inside, "caret inside strict");
+    expect_range(inside, 3, 9, "caret inside strict");
+    expect_has(inside, "strict", "caret inside strict");
+    if (inside.prefix != "str") {
+        fail("caret inside strict prefix");
+    }
+
+    const ide::CompletionList indented = at_end("\n  --!no");
+    expect_directive(indented, "indented --!no");
+    expect_has(indented, "nocheck", "indented");
+    expect_has(indented, "nolint", "indented");
+    expect_has(indented, "nonstrict", "indented");
+    expect_missing(indented, "native", "indented");
+    expect_range(indented, 6, 8, "indented --!no");
+
+    const ide::CompletionList second = at_end("--!strict\n--!nat");
+    expect_directive(second, "second header");
+    expect_has(second, "native", "second header");
+    expect_missing(second, "strict", "second header");
+
+    const ide::CompletionList after_comment = at_end("-- hello\n--!s");
+    expect_has(after_comment, "strict", "after a comment");
+    const ide::CompletionList after_block = at_end("--[[ note ]]\n--!");
+    expect_has(after_block, "optimize", "after a block comment");
+
+    const char* unicode = "-- caf\xC3\xA9\n--!";
+    const ide::CompletionList points = at_caret(unicode, 11);
+    expect_directive(points, "code points");
+    expect_range(points, 11, 11, "code points");
+    expect_has(points, "strict", "code points");
+
+    expect_closed(at_end("--! "), "space after bang");
+    expect_closed(at_end("--!Strict"), "directive case");
+    expect_closed(at_end("local x = 1\n--!"), "directive after code");
+    expect_closed(at_end("local x = 1 --!"), "directive on a statement");
+    expect_closed(at_end("--[[--!strict"), "unclosed block comment");
+    const char* closed_block = "--[[\n--!strict\n]]";
+    expect_closed(at_caret(closed_block, 8), "directive inside a block comment");
+    expect_closed(at_caret("--!strict", 2), "caret before bang");
+    expect_closed(at_end("-- strict"), "comment without bang");
+    expect_closed(at_caret("local s = \"--!\"", 14), "bang inside a string");
+
+    const ide::CompletionList rules = at_end("--!nolint ");
+    expect_directive(rules, "--!nolint");
+    expect_range(rules, 10, 10, "--!nolint ");
+    expect_has(rules, "LocalUnused", "--!nolint");
+    expect_has(rules, "UnknownGlobal", "--!nolint");
+    expect_missing(rules, "Unknown", "--!nolint");
+    expect_missing(rules, "strict", "--!nolint");
+    std::vector<std::string> rule_names;
+    engine_core::lint_rule_names(rule_names);
+    if (rules.items.size() != rule_names.size()) {
+        fail("--!nolint does not list every lint rule");
+    }
+    for (const std::string& name : rule_names) {
+        expect_has(rules, name.c_str(), "--!nolint");
+        expect_detail(rules, name.c_str(), "rule", "--!nolint");
+    }
+
+    const ide::CompletionList local_rule = at_end("--!nolint Loc");
+    expect_has(local_rule, "LocalUnused", "Loc");
+    expect_has(local_rule, "LocalShadow", "Loc");
+    expect_missing(local_rule, "UnreachableCode", "Loc");
+    expect_range(local_rule, 10, 13, "--!nolint Loc");
+
+    const ide::CompletionList spaced = at_end("--!nolint  Loc");
+    expect_has(spaced, "LocalUnused", "two spaces");
+    expect_range(spaced, 11, 14, "two spaces");
+
+    const ide::CompletionList levels = at_end("--!optimize ");
+    expect_directive(levels, "--!optimize");
+    expect_has(levels, "0", "optimize");
+    expect_has(levels, "1", "optimize");
+    expect_has(levels, "2", "optimize");
+    expect_missing(levels, "3", "optimize");
+    expect_detail(levels, "1", "level", "optimize 1");
+    expect_info(levels, "2", "", "", "Use the full optimization level.", "optimize 2");
+    if (levels.items.size() != 3 || levels.items.front().name != "0") {
+        fail("optimize levels should be 0, 1, 2");
+    }
+
+    const ide::CompletionList one = at_end("--!optimize 1");
+    expect_has(one, "1", "optimize 1");
+    expect_missing(one, "0", "optimize 1");
+    expect_missing(one, "2", "optimize 1");
+    expect_range(one, 12, 13, "optimize 1");
+
+    expect_closed(at_end("--!strict "), "strict takes no argument");
+    const ide::CompletionList optimize_word = at_end("--!optimize");
+    expect_has(optimize_word, "optimize", "optimize word");
+    expect_missing(optimize_word, "0", "optimize word");
+    expect_missing(optimize_word, "2", "optimize word");
+    expect_closed(at_end("--!optimize 2 "), "finished optimize level");
+    expect_closed(at_end("--!nolint LocalUnused "), "finished lint rule");
+
+    const ide::CompletionList console = ide::complete_luau("--!no", 5, {}, 0, false);
+    expect_has(console, "nocheck", "command line");
+}
+
 void testSkipped() {
     const ide::CompletionList comment = at_end("-- task.");
     if (comment.site != ide::CompleteSite::None || !comment.items.empty()) {
@@ -1705,6 +1869,7 @@ int RunLuauCompleteTests() {
         testHover();
         testCompletionDocs();
         testTuples();
+        testDirectives();
         testSkipped();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());

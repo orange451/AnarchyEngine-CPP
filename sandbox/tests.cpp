@@ -2950,3 +2950,49 @@ TEST_CASE("Folder stores other instances", "[folder]") {
     REQUIRE(model.game_object(props_id) == nullptr);
     REQUIRE(model.game_object(inner_id) == nullptr);
 }
+
+TEST_CASE("S22 a script created during play stays parented to game", "[S22]") {
+    ScriptRig rig;
+    add_script(rig.model, "Maker", R"lua(
+        local made = Instance.new("Script")
+        made.Name = "Spawned"
+        made.Source = "print('from spawned')"
+        made.Parent = game
+        local also = Instance.new("Script", game)
+        also.Name = "FromNew"
+        also.Source = "print('from new')"
+    )lua");
+    rig.model.start_simulation();
+    rig.frames(2, 0.05);
+    const engine_core::InstanceId spawned = rig.model.find_first_child(rig.model.id(), "Spawned");
+    const engine_core::InstanceId from_new = rig.model.find_first_child(rig.model.id(), "FromNew");
+    REQUIRE(spawned != 0);
+    REQUIRE(from_new != 0);
+    REQUIRE(std::string(rig.model.instance(spawned)->class_name()) == "Script");
+    REQUIRE(rig.model.parent(spawned) == rig.model.id());
+    REQUIRE(rig.model.parent(from_new) == rig.model.id());
+    const engine_core::ScriptRuntime::OutputBatch played = rig.runtime.drain_output();
+    bool spawned_printed = false;
+    bool new_printed = false;
+    for (const engine_core::ScriptRuntime::OutputLine& line : played.lines) {
+        if (line.kind == engine_core::ScriptRuntime::OutputKind::Error) {
+            INFO(line.text);
+        }
+        REQUIRE(line.kind != engine_core::ScriptRuntime::OutputKind::Error);
+        if (line.text.find("from spawned") != std::string::npos) {
+            spawned_printed = true;
+        }
+        if (line.text.find("from new") != std::string::npos) {
+            new_printed = true;
+        }
+    }
+    REQUIRE(spawned_printed);
+    REQUIRE(new_printed);
+    REQUIRE(rig.runtime.last_error().empty());
+
+    rig.model.stop_simulation();
+    REQUIRE_FALSE(rig.model.alive(spawned));
+    REQUIRE_FALSE(rig.model.alive(from_new));
+    REQUIRE(rig.model.find_first_child(rig.model.id(), "Spawned") == 0);
+    REQUIRE(rig.model.find_first_child(rig.model.id(), "FromNew") == 0);
+}

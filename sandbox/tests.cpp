@@ -1,6 +1,7 @@
 #include "Contract.hpp"
 #include "DataModel.hpp"
 #include "DataModelLock.hpp"
+#include "Folder.hpp"
 #include "GameObject.hpp"
 #include "SnapshotPump.hpp"
 #include "TestTriangle.hpp"
@@ -2795,4 +2796,84 @@ TEST_CASE("S21 game.Changed reports the root property", "[S21]") {
     REQUIRE(waited);
     REQUIRE(rig.model.name(rig.model.id()) == "Place");
     REQUIRE(rig.runtime.last_error().empty());
+}
+
+TEST_CASE("Folder stores other instances", "[folder]") {
+    ScriptRig rig;
+    engine_core::DataModel& model = rig.model;
+    REQUIRE(engine_core::lua_class_known("Folder"));
+    REQUIRE(engine_core::lua_class_inherits("Folder", "DataModel"));
+
+    engine_core::Folder& props = model.create<engine_core::Folder>();
+    const engine_core::InstanceId props_id = props.id();
+    REQUIRE(std::string(props.class_name()) == "Folder");
+    REQUIRE(model.name(props_id) == "Folder");
+    REQUIRE(model.game_object(props_id) == nullptr);
+    model.set_name(props_id, "Props");
+    model.set_parent(props_id, model.id());
+
+    engine_core::Folder& inner = model.create<engine_core::Folder>();
+    const engine_core::InstanceId inner_id = inner.id();
+    model.set_name(inner_id, "Inner");
+    model.set_parent(inner_id, props_id);
+
+    engine_core::GameObject& box = model.create<engine_core::GameObject>();
+    const engine_core::InstanceId box_id = box.id();
+    model.set_name(box_id, "Box");
+    model.set_parent(box_id, inner_id);
+    REQUIRE(model.parent(box_id) == inner_id);
+    REQUIRE(model.parent(inner_id) == props_id);
+    REQUIRE(model.find_first_child(inner_id, "Box") == box_id);
+
+    int bodies = 0;
+    model.for_each_game_object([&](const engine_core::GameObject& item) {
+        REQUIRE(item.id() == box_id);
+        ++bodies;
+    });
+    REQUIRE(bodies == 1);
+
+    model.capture_place();
+    model.start_simulation();
+    rig.runtime.run_chunk(R"(
+        local session = Instance.new("Folder")
+        session.Name = "Session"
+        session.Parent = game
+        local loose = Instance.new("GameObject")
+        loose.Name = "Loose"
+        loose.Parent = session
+        local props = game:FindFirstChild("Props")
+        props.Name = "Renamed"
+        local box = props:FindFirstChild("Inner"):FindFirstChild("Box")
+        box.Parent = game
+        if not session:IsA("Folder") or not session:IsA("DataModel") or session:IsA("GameObject") then
+            error("folder class")
+        end
+    )");
+    const engine_core::ScriptRuntime::OutputBatch played = rig.runtime.drain_output();
+    for (const engine_core::ScriptRuntime::OutputLine& line : played.lines) {
+        REQUIRE(line.kind != engine_core::ScriptRuntime::OutputKind::Error);
+    }
+    REQUIRE(rig.runtime.last_error().empty());
+    const engine_core::InstanceId session_id = model.find_first_child(model.id(), "Session");
+    REQUIRE(session_id != 0);
+    REQUIRE(std::string(model.instance(session_id)->class_name()) == "Folder");
+    REQUIRE(model.find_first_child(session_id, "Loose") != 0);
+    REQUIRE(model.parent(box_id) == model.id());
+    REQUIRE(model.name(props_id) == "Renamed");
+
+    model.stop_simulation();
+    REQUIRE(model.alive(props_id));
+    REQUIRE(model.alive(inner_id));
+    REQUIRE(model.alive(box_id));
+    REQUIRE_FALSE(model.alive(session_id));
+    REQUIRE(std::string(model.instance(props_id)->class_name()) == "Folder");
+    REQUIRE(std::string(model.instance(inner_id)->class_name()) == "Folder");
+    REQUIRE(model.name(props_id) == "Props");
+    REQUIRE(model.name(inner_id) == "Inner");
+    REQUIRE(model.parent(props_id) == model.id());
+    REQUIRE(model.parent(inner_id) == props_id);
+    REQUIRE(model.parent(box_id) == inner_id);
+    REQUIRE(model.find_first_child(model.id(), "Session") == 0);
+    REQUIRE(model.game_object(props_id) == nullptr);
+    REQUIRE(model.game_object(inner_id) == nullptr);
 }

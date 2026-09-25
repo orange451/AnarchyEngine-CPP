@@ -1,6 +1,7 @@
 #include "ScriptRuntime.hpp"
 
 #include "Contract.hpp"
+#include "Folder.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
 #include "TestTriangle.hpp"
@@ -1372,6 +1373,8 @@ int ScriptBindings::instance_new(lua_State* state) {
             created = &runtime->model_->create<Script>();
         } else if (std::strcmp(name, "ModuleScript") == 0) {
             created = &runtime->model_->create<ModuleScript>();
+        } else if (std::strcmp(name, "Folder") == 0) {
+            created = &runtime->model_->create<Folder>();
         } else {
             luaL_error(state, "unknown class %s", name);
         }

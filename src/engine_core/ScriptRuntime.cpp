@@ -1387,9 +1387,22 @@ int ScriptBindings::instance_new(lua_State* state) {
             luaL_error(state, "Instance.new has no data model");
         }
         const char* name = luaL_checkstring(state, 1);
+        // The second argument is the parent, as in Instance.new("Script", game).
+        // Checked before create so a bad parent does not leave an instance behind.
+        InstanceId parent_id = DataModel::kNoParent;
+        if (lua_gettop(state) >= 2 && !lua_isnil(state, 2)) {
+            auto* parent = static_cast<InstanceUd*>(luaL_checkudata(state, 2, kInstanceMeta));
+            if (parent == nullptr || runtime->resolve_id(parent->id, parent->world) == nullptr) {
+                luaL_error(state, "instance is gone");
+            }
+            parent_id = parent->id;
+        }
         DataModel* created = lua_create_instance(*runtime->model_, name);
         if (created == nullptr) {
             luaL_error(state, "unknown class %s", name);
+        }
+        if (parent_id != DataModel::kNoParent) {
+            runtime->model_->set_parent(created->id(), parent_id);
         }
         runtime->push_instance(state, created->id());
         return 1;

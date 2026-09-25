@@ -884,6 +884,120 @@ void testFunctionParameters() {
     }
 }
 
+void testInstanceNew() {
+    if (!engine_core::lua_creatable_known("Folder") || !engine_core::lua_creatable_known("GameObject") ||
+        !engine_core::lua_creatable_known("Script") || !engine_core::lua_creatable_known("ModuleScript")) {
+        fail("Instance.new classes are not registered");
+    }
+    if (engine_core::lua_creatable_known("TestTriangle") || engine_core::lua_creatable_known("DataModel") ||
+        engine_core::lua_creatable_known("Instance") || engine_core::lua_creatable_known("RunService") ||
+        engine_core::lua_creatable_known("Vector3")) {
+        fail("Instance.new registered a class it cannot create");
+    }
+
+    const std::string source = "Instance.new(\"Ga";
+    const ide::CompletionList made = at_end(source);
+    expect_argument(made, "Instance.new");
+    expect_has(made, "GameObject", "Instance.new prefix");
+    expect_missing(made, "Folder", "Instance.new prefix");
+    expect_missing(made, "Script", "Instance.new prefix");
+    expect_missing(made, "ModuleScript", "Instance.new prefix");
+    expect_missing(made, "TestTriangle", "Instance.new is not every class");
+    expect_missing(made, "DataModel", "Instance.new is not every class");
+    expect_missing(made, "RunService", "Instance.new is not a service");
+    expect_detail(made, "GameObject", "class", "Instance.new");
+    expect_call(made, "GameObject", false, "Instance.new");
+    if (made.prefix != "Ga" || made.close_quote != '"' || !made.unclosed) {
+        fail("Instance.new string prefix");
+    }
+    const int begin = static_cast<int>(std::string("Instance.new(\"").size());
+    if (made.replace_begin != begin || made.replace_end != static_cast<int>(source.size())) {
+        fail("Instance.new replace range");
+    }
+
+    const ide::CompletionList open = at_end("Instance.new(\"");
+    expect_has(open, "Folder", "open Instance.new");
+    expect_has(open, "GameObject", "open Instance.new");
+    expect_has(open, "ModuleScript", "open Instance.new");
+    expect_has(open, "Script", "open Instance.new");
+    expect_missing(open, "TestTriangle", "open Instance.new");
+    expect_missing(open, "Widget", "open Instance.new");
+    if (index_of(open, "Folder") > index_of(open, "GameObject") ||
+        index_of(open, "GameObject") > index_of(open, "ModuleScript") ||
+        index_of(open, "ModuleScript") > index_of(open, "Script")) {
+        fail("classes are alphabetical");
+    }
+    if (!open.prefix.empty() || !open.unclosed) {
+        fail("Instance.new open quote prefix");
+    }
+
+    const ide::CompletionList single = at_end("Instance.new('Sc");
+    expect_has(single, "Script", "single quoted class");
+    expect_missing(single, "ModuleScript", "single quoted class");
+    if (single.close_quote != '\'' || !single.unclosed) {
+        fail("single quoted class quote");
+    }
+
+    const ide::CompletionList spaced = at_end("Instance.new( \"Fo");
+    expect_has(spaced, "Folder", "space before the class string");
+
+    const ide::CompletionList bare = at_end("Instance.new \"Mo");
+    expect_has(bare, "ModuleScript", "class string call");
+    expect_missing(bare, "GameObject", "class string call");
+
+    const ide::CompletionList colon = at_end("Instance:new(\"Fo");
+    if (colon.site != ide::CompleteSite::None || !colon.items.empty()) {
+        fail("a colon call passes Instance as the first argument");
+    }
+
+    const ide::CompletionList second = at_end("Instance.new(\"Folder\", \"Fo");
+    if (second.site != ide::CompleteSite::None || !second.items.empty()) {
+        fail("the parent argument is not a class name");
+    }
+
+    const ide::CompletionList aliased = at_end("local make = Instance.new\nmake(\"Sc");
+    expect_has(aliased, "Script", "local Instance.new");
+    expect_missing(aliased, "ModuleScript", "local Instance.new");
+
+    const ide::CompletionList unknown = at_end("Instance.new(\"Zz");
+    expect_argument(unknown, "unknown class");
+    if (!unknown.items.empty()) {
+        fail("unknown class should offer nothing");
+    }
+
+    const ide::CompletionList vector = at_end("Vector3.new(\"");
+    if (vector.site != ide::CompleteSite::None || !vector.items.empty()) {
+        fail("Vector3.new does not create instances");
+    }
+
+    const std::string closed = "Instance.new(\"GameObject\").Name";
+    const int inside = static_cast<int>(std::string("Instance.new(\"Ga").size());
+    const ide::CompletionList middle = at_caret(closed, inside);
+    expect_has(middle, "GameObject", "caret inside a class string");
+    if (middle.unclosed || middle.replace_end != static_cast<int>(std::string("Instance.new(\"GameObject").size())) {
+        fail("closed class string replace range");
+    }
+
+    const ide::CompletionList object = at_end("local part = Instance.new(\"GameObject\")\npart.");
+    expect_has(object, "Color", "created GameObject");
+    expect_missing(object, "Source", "created GameObject");
+
+    const ide::CompletionList folder = at_end("local folder = Instance.new(\"Folder\")\nfolder.");
+    expect_has(folder, "Name", "created Folder");
+    expect_missing(folder, "Color", "created Folder");
+    expect_missing(folder, "Source", "created Folder");
+
+    const ide::CompletionList script = at_end("local made = Instance.new(\"Script\")\nmade.");
+    expect_has(script, "Source", "created Script");
+    expect_has(script, "Enabled", "created Script");
+
+    const char* command = "Instance.new(\"Fo";
+    const ide::CompletionList console =
+        ide::complete_luau(command, static_cast<int>(std::string_view(command).size()), {}, 0, false);
+    expect_has(console, "Folder", "console Instance.new");
+    expect_missing(console, "GameObject", "console Instance.new");
+}
+
 void testSkipped() {
     const ide::CompletionList comment = at_end("-- task.");
     if (comment.site != ide::CompleteSite::None || !comment.items.empty()) {
@@ -906,6 +1020,7 @@ int RunLuauCompleteTests() {
         testNames();
         testConsole();
         testStringArguments();
+        testInstanceNew();
         testCallbackArguments();
         testFunctionParameters();
         testSkipped();

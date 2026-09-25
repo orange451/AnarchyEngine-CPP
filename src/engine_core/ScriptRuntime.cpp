@@ -1359,6 +1359,27 @@ int ScriptBindings::task_cancel(lua_State* state) {
     });
 }
 
+namespace {
+
+DataModel& create_game_object(DataModel& world) { return world.create<GameObject>(); }
+
+DataModel& create_script(DataModel& world) { return world.create<Script>(); }
+
+DataModel& create_module_script(DataModel& world) { return world.create<ModuleScript>(); }
+
+DataModel& create_folder(DataModel& world) { return world.create<Folder>(); }
+
+// The factories stay in this file so each class's object file stays linked.
+// Completion reads the same names Instance.new will construct.
+ANARCHY_LUA_REGISTER(register_creatable_instances) {
+    register_lua_creatable("GameObject", create_game_object);
+    register_lua_creatable("Script", create_script);
+    register_lua_creatable("ModuleScript", create_module_script);
+    register_lua_creatable("Folder", create_folder);
+}
+
+}  // namespace
+
 int ScriptBindings::instance_new(lua_State* state) {
     return lua_guard(state, [&] {
         ScriptRuntime* runtime = runtime_from(state);
@@ -1366,16 +1387,8 @@ int ScriptBindings::instance_new(lua_State* state) {
             luaL_error(state, "Instance.new has no data model");
         }
         const char* name = luaL_checkstring(state, 1);
-        DataModel* created = nullptr;
-        if (std::strcmp(name, "GameObject") == 0) {
-            created = &runtime->model_->create<GameObject>();
-        } else if (std::strcmp(name, "Script") == 0) {
-            created = &runtime->model_->create<Script>();
-        } else if (std::strcmp(name, "ModuleScript") == 0) {
-            created = &runtime->model_->create<ModuleScript>();
-        } else if (std::strcmp(name, "Folder") == 0) {
-            created = &runtime->model_->create<Folder>();
-        } else {
+        DataModel* created = lua_create_instance(*runtime->model_, name);
+        if (created == nullptr) {
             luaL_error(state, "unknown class %s", name);
         }
         runtime->push_instance(state, created->id());

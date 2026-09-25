@@ -15,7 +15,7 @@ enum class CompleteSite {
     Member,    // After '.' or ':'.
     Name,      // A local, global, or keyword.
     Type,      // A type name after ':' or '::'.
-    Argument,  // A string argument of GetService or FindFirstChild.
+    Argument,  // A string argument of GetService, FindFirstChild, or Instance.new.
 };
 
 struct CompletionItem {
@@ -48,7 +48,8 @@ struct CompletionList {
 // Members come from the class registry and from the libraries the play VM loads.
 // require of a ModuleScript runs that source and completes whatever it returns.
 // GetService("...") completes registered services. FindFirstChild("...") completes
-// the receiver's children. Connect(function) completes the signal's callback
+// the receiver's children. Instance.new("...") completes classes Instance.new can
+// create. Connect(function) completes the signal's callback
 // arguments, so Heartbeat offers function(dt). A function written in the source
 // keeps its parameters: the body uses each annotation as the parameter's type,
 // and a call lists those parameters. `script_global` is false on the command

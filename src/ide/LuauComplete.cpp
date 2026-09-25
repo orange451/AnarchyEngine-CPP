@@ -2005,24 +2005,53 @@ void AddChildren(const std::vector<engine_core::LuaNode>& world, std::uint32_t p
     }
 }
 
-void AddServices(std::string_view prefix, std::vector<CompletionItem>& out) {
-    std::vector<std::string> names;
-    engine_core::lua_service_names(names);
-    std::sort(names.begin(), names.end());
-    names.erase(std::unique(names.begin(), names.end()), names.end());
-    for (const std::string& name : names) {
+void AddNamed(std::string_view prefix, const std::vector<std::string>& names, const char* detail,
+              std::vector<CompletionItem>& out) {
+    std::vector<std::string> sorted = names;
+    std::sort(sorted.begin(), sorted.end());
+    sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+    for (const std::string& name : sorted) {
         if (!prefix.empty() && !StartsWith(name, prefix)) {
             continue;
         }
         CompletionItem item;
         item.name = name;
-        item.detail = "service";
+        item.detail = detail;
         out.push_back(std::move(item));
     }
 }
 
+void AddServices(std::string_view prefix, std::vector<CompletionItem>& out) {
+    std::vector<std::string> names;
+    engine_core::lua_service_names(names);
+    AddNamed(prefix, names, "service", out);
+}
+
+void AddCreatable(std::string_view prefix, std::vector<CompletionItem>& out) {
+    std::vector<std::string> names;
+    engine_core::lua_creatable_names(names);
+    AddNamed(prefix, names, "class", out);
+}
+
+void BeginStringArgument(CompletionList& list, const Scan& scan, const std::u32string& text, int caret) {
+    list.site = CompleteSite::Argument;
+    list.close_quote = static_cast<char>(scan.quote);
+    list.replace_begin = scan.string_begin;
+    if (list.replace_begin < 0) {
+        list.replace_begin = 0;
+    }
+    if (list.replace_begin > caret) {
+        list.replace_begin = caret;
+    }
+    list.replace_end = StringContentEnd(text, list.replace_begin, scan.quote);
+    list.prefix = ArgumentPrefix(text, list.replace_begin, caret);
+    const bool at_end = list.replace_end >= static_cast<int>(text.size());
+    list.unclosed = at_end || text[static_cast<std::size_t>(list.replace_end)] != scan.quote;
+}
+
 // The caret is inside a string argument. The first string of a colon call offers
-// services or children. Any call of a function written in this source shows that
+// services or children. The first string of Instance.new offers classes that
+// call can create. Any call of a function written in this source shows that
 // function's parameter list.
 CompletionList CompleteString(const Scan& scan, const std::u32string& text, int caret,
                               const std::vector<engine_core::LuaNode>& world, std::uint32_t script_id,
@@ -2042,35 +2071,27 @@ CompletionList CompleteString(const Scan& scan, const std::u32string& text, int 
     }
     const bool first_arg = !slot.found || slot.argument == 0;
     const bool colon = callee_end >= 0 && first_arg && IsColonCall(tokens, callee_end);
-    if (!slot.found && !colon) {
+    const int expr_end = slot.found ? slot.open : callee_end;
+    if (expr_end < 0) {
         return {};
     }
     Resolver resolver(tokens, world, script_id, script_global);
-    resolver.parse_until(slot.found ? slot.open : callee_end);
+    resolver.parse_until(expr_end);
     CompletionList list;
-    if (colon) {
-        Shape* callee = resolver.receiver(callee_end);
-        const bool child = callee != nullptr && callee->resolves_child && callee->instance != kNoInstance;
-        const bool service = callee != nullptr && callee->service_arg;
-        if (child || service) {
-            list.site = CompleteSite::Argument;
-            list.close_quote = static_cast<char>(scan.quote);
-            list.replace_begin = scan.string_begin;
-            if (list.replace_begin < 0) {
-                list.replace_begin = 0;
-            }
-            if (list.replace_begin > caret) {
-                list.replace_begin = caret;
-            }
-            list.replace_end = StringContentEnd(text, list.replace_begin, scan.quote);
-            list.prefix = ArgumentPrefix(text, list.replace_begin, caret);
-            const bool at_end = list.replace_end >= static_cast<int>(text.size());
-            list.unclosed = at_end || text[static_cast<std::size_t>(list.replace_end)] != scan.quote;
-            if (child) {
-                AddChildren(world, callee->instance, list.prefix, list.items);
-            } else {
-                AddServices(list.prefix, list.items);
-            }
+    Shape* callee = resolver.receiver(expr_end);
+    const bool child = colon && callee != nullptr && callee->resolves_child && callee->instance != kNoInstance;
+    const bool service = colon && callee != nullptr && callee->service_arg;
+    // Instance.new is a dot call. GetService also records class_from_arg, and a
+    // colon call already offers services, so a service argument is not a class.
+    const bool created = !colon && first_arg && callee != nullptr && callee->class_from_arg && !callee->service_arg;
+    if (child || service || created) {
+        BeginStringArgument(list, scan, text, caret);
+        if (child) {
+            AddChildren(world, callee->instance, list.prefix, list.items);
+        } else if (service) {
+            AddServices(list.prefix, list.items);
+        } else {
+            AddCreatable(list.prefix, list.items);
         }
     }
     resolver.complete_signature(index, list);

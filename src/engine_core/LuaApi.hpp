@@ -122,6 +122,15 @@ void register_lua_service(const char* name);
 bool lua_service_known(const char* name);
 void lua_service_names(std::vector<std::string>& out);
 
+// Classes Instance.new can construct. The factory builds one in `world`.
+// Completion lists these same names. A null result from lua_create_instance
+// is an unknown class.
+using LuaCreate = DataModel& (*)(DataModel& world);
+void register_lua_creatable(const char* class_name, LuaCreate create);
+bool lua_creatable_known(const char* class_name);
+void lua_creatable_names(std::vector<std::string>& out);
+DataModel* lua_create_instance(DataModel& world, const char* class_name);
+
 // Runs at load so a class is registered even when no instance has been created.
 // The object file that contains the class is what pulls the registrar in.
 #if defined(_MSC_VER)

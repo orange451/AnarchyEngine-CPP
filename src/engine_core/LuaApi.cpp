@@ -190,6 +190,58 @@ void lua_service_names(std::vector<std::string>& out) {
     }
 }
 
+namespace {
+
+struct Creatable {
+    const char* name = nullptr;
+    LuaCreate create = nullptr;
+};
+
+std::vector<Creatable>& creatables() {
+    static std::vector<Creatable> records;
+    return records;
+}
+
+const Creatable* find_creatable(const char* class_name) {
+    if (class_name == nullptr) {
+        return nullptr;
+    }
+    for (const Creatable& record : creatables()) {
+        if (record.name != nullptr && std::strcmp(record.name, class_name) == 0) {
+            return &record;
+        }
+    }
+    return nullptr;
+}
+
+}  // namespace
+
+void register_lua_creatable(const char* class_name, LuaCreate create) {
+    if (class_name == nullptr || create == nullptr || find_creatable(class_name) != nullptr) {
+        return;
+    }
+    creatables().push_back(Creatable{class_name, create});
+}
+
+bool lua_creatable_known(const char* class_name) { return find_creatable(class_name) != nullptr; }
+
+void lua_creatable_names(std::vector<std::string>& out) {
+    out.clear();
+    for (const Creatable& record : creatables()) {
+        if (record.name != nullptr) {
+            out.emplace_back(record.name);
+        }
+    }
+}
+
+DataModel* lua_create_instance(DataModel& world, const char* class_name) {
+    const Creatable* record = find_creatable(class_name);
+    if (record == nullptr || record->create == nullptr) {
+        return nullptr;
+    }
+    return &record->create(world);
+}
+
 void lua_note_result(const char* owner, const char* name, const char* type_name, bool class_from_arg) {
     if (owner == nullptr || name == nullptr) {
         return;

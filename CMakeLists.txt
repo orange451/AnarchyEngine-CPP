@@ -36,6 +36,7 @@ add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
     src/ide/IdeIcons.cpp
     src/ide/IdeScriptEditor.cpp
     src/ide/ScriptMarks.cpp
+    src/ide/ScriptPairs.cpp
     src/ide/LuauHighlight.cpp
     src/ide/LuauComplete.cpp
     src/ide/IdeTreeTest.cpp
@@ -155,9 +156,11 @@ add_executable(engine-tests
     tests/LuauHighlightTest.cpp
     tests/LuauCompleteTest.cpp
     tests/ScriptMarksTest.cpp
+    tests/ScriptPairsTest.cpp
     src/ide/LuauHighlight.cpp
     src/ide/LuauComplete.cpp
     src/ide/ScriptMarks.cpp
+    src/ide/ScriptPairs.cpp
     src/runner/Runner.cpp
 )
 target_include_directories(engine-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")

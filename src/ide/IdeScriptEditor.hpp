@@ -64,7 +64,7 @@ private:
     void place_completion();
     bool completion_open() const;
     bool completion_commits_name() const;
-    bool completion_commits_quote(char quote) const;
+    bool completion_commits_quote(char quote, bool unclosed_only = true) const;
     // Enter and Tab accept when the highlighted name would change the text.
     // A finished name keeps those keys, so a newline or indent still works.
     bool completion_key_accepts() const;

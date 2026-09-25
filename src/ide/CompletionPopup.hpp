@@ -37,8 +37,11 @@ public:
 
     bool isOpen() const;
     bool commitsName() const;
-    // The typed quote matches an open argument string and one row is the choice.
-    bool commitsQuote(char quote) const;
+    // The typed quote matches an argument string and one row is the choice.
+    // `unclosed_only` ignores a string whose closer is already in the buffer.
+    // The editor passes false when that closer is the next character, so typing
+    // it still chooses the row and steps past the quote.
+    bool commitsQuote(char quote, bool unclosed_only = true) const;
     bool keyAccepts() const;
     bool accepting() const;
     int replaceEnd() const;

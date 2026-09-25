@@ -691,9 +691,12 @@ bool CompletionPopup::keyAccepts() const {
     return item->name != state_->prefix;
 }
 
-bool CompletionPopup::commitsQuote(char quote) const {
+bool CompletionPopup::commitsQuote(char quote, bool unclosed_only) const {
     const CompletionItem* item = highlighted();
-    if (item == nullptr || state_->site != CompleteSite::Argument || !state_->unclosed) {
+    if (item == nullptr || state_->site != CompleteSite::Argument) {
+        return false;
+    }
+    if (unclosed_only && !state_->unclosed) {
         return false;
     }
     if (quote != state_->close_quote) {

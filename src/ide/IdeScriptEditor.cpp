@@ -7,6 +7,7 @@
 #include "Script.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptMarks.hpp"
+#include "ScriptPairs.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -89,6 +90,8 @@ public:
 
     void handleKey(jadefx::KeyEvent& event) override;
     void handleText(jadefx::TextEvent& event) override;
+    bool applyPair(char unit);
+    bool applyEnter();
     void handleMousePressed(const jadefx::MouseEvent& event) override;
     void handleMouseMoved(const jadefx::MouseEvent& event) override;
     void handleScroll(jadefx::ScrollEvent& event) override;
@@ -404,7 +407,9 @@ bool IdeScriptEditor::completion_open() const { return completion_.isOpen(); }
 
 bool IdeScriptEditor::completion_commits_name() const { return completion_.commitsName(); }
 
-bool IdeScriptEditor::completion_commits_quote(char quote) const { return completion_.commitsQuote(quote); }
+bool IdeScriptEditor::completion_commits_quote(char quote, bool unclosed_only) const {
+    return completion_.commitsQuote(quote, unclosed_only);
+}
 
 bool IdeScriptEditor::completion_key_accepts() const { return completion_.keyAccepts(); }
 
@@ -466,6 +471,8 @@ void ScriptCodeArea::handleKey(jadefx::KeyEvent& event) {
         event.consume();
         return;
     }
+    const bool plain_enter = (event.key == jadefx::Key::Enter || event.key == jadefx::Key::KpEnter) && !event.shift &&
+                             !event.shortcut();
     if (editor->completion_open()) {
         if ((event.key == jadefx::Key::Up || event.key == jadefx::Key::Down) && !event.shortcut()) {
             editor->move_completion(event.key == jadefx::Key::Down ? 1 : -1);
@@ -491,16 +498,92 @@ void ScriptCodeArea::handleKey(jadefx::KeyEvent& event) {
             editor->dismiss_completion();
         }
     }
+    if (plain_enter && applyEnter()) {
+        event.consume();
+        return;
+    }
     jadefx::CodeArea::handleKey(event);
+}
+
+bool ScriptCodeArea::applyPair(char unit) {
+    if (!isEditable() || selections().size() != 1) {
+        return false;
+    }
+    const jadefx::IndexRange range = selection();
+    const PairResult pair =
+        pair_luau(getText(), range.start, range.end, static_cast<char32_t>(static_cast<unsigned char>(unit)));
+    if (pair.action == PairAction::None) {
+        return false;
+    }
+    if (pair.action == PairAction::Skip) {
+        dismissHover();
+        if (editor != nullptr) {
+            editor->dismiss_completion();
+        }
+        moveTo(range.end + 1);
+        return true;
+    }
+    if (pair.action == PairAction::Insert) {
+        const int caret = range.start;
+        std::string both;
+        both.push_back(pair.open);
+        both.push_back(pair.close);
+        transact(false, [&] {
+            replaceText(caret, caret, both);
+            moveTo(caret + 1);
+        });
+        return true;
+    }
+    const std::string selected = getText(range.start, range.end);
+    std::string wrapped;
+    wrapped.push_back(pair.open);
+    wrapped += selected;
+    wrapped.push_back(pair.close);
+    replaceText(range.start, range.end, wrapped);
+    return true;
+}
+
+bool ScriptCodeArea::applyEnter() {
+    if (!isEditable() || selections().size() != 1) {
+        return false;
+    }
+    const jadefx::IndexRange range = selection();
+    if (!range.empty()) {
+        return false;
+    }
+    const EnterResult result = enter_luau(getText(), range.start, getTabSize(), isInsertSpacesForTab());
+    if (!result.insert) {
+        return false;
+    }
+    transact(false, [&] {
+        replaceText(result.begin, result.end, result.text);
+        moveTo(result.caret);
+    });
+    return true;
 }
 
 void ScriptCodeArea::handleText(jadefx::TextEvent& event) {
     if (editor != nullptr && event.text.size() == 1) {
         const char unit = event.text[0];
-        if ((unit == '.' || unit == ':' || unit == '(') && editor->completion_commits_name()) {
+        const bool name_key = unit == '.' || unit == ':' || unit == '(';
+        const bool quote_key = unit == '"' || unit == '\'';
+        const bool one = selections().size() == 1;
+        const jadefx::IndexRange range = one ? selection() : jadefx::IndexRange{};
+        const bool steps_over = one && range.empty() && quote_key &&
+                                source_code_point(getText(), range.start) ==
+                                    static_cast<char32_t>(static_cast<unsigned char>(unit));
+        if (name_key && editor->completion_commits_name()) {
             editor->accept_completion(false);
-        } else if ((unit == '"' || unit == '\'') && editor->completion_commits_quote(unit)) {
+        } else if (quote_key && editor->completion_commits_quote(unit, !steps_over)) {
             editor->accept_completion(false);
+            if (steps_over) {
+                event.consume();
+                return;
+            }
+        }
+        if (one && applyPair(unit)) {
+            event.consume();
+            return;
         }
     }
     jadefx::CodeArea::handleText(event);

@@ -273,6 +273,7 @@ void testInsertInstance() {
 int RunLuauHighlightTests();
 int RunLuauCompleteTests();
 int RunScriptMarksTests();
+int RunScriptPairsTests();
 
 int main() {
     try {
@@ -289,6 +290,7 @@ int main() {
         gFailures += RunLuauHighlightTests();
         gFailures += RunLuauCompleteTests();
         gFailures += RunScriptMarksTests();
+        gFailures += RunScriptPairsTests();
     } catch (const std::exception& ex) {
         std::fprintf(stderr, "FAIL exception: %s\n", ex.what());
         return EXIT_FAILURE;

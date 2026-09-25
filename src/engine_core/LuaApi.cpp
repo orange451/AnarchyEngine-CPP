@@ -608,11 +608,11 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
 
     add("DataModel", "Name", "The instance's name.", "string", false, {});
     add("DataModel", "ClassName", "The instance's class. This cannot be changed.", "string", false, {});
-    add("DataModel", "Parent", "The instance this one is parented to. nil means it has no parent.", "Instance", false, {});
+    add("DataModel", "Parent", "The instance this one is parented to. nil means it has no parent.", "Instance?", false, {});
     add("DataModel", "Changed", "Fires with the name of the property that changed.", "Signal", false, {});
     add("DataModel", "Destroy", "Unparents this instance and its descendants.", nullptr, false, {});
     add("DataModel", "GetChildren", "The direct children of this instance.", "{Instance}", false, {});
-    add("DataModel", "FindFirstChild", "The direct child with this name, or nil.", "Instance", false, {P("name", "string")});
+    add("DataModel", "FindFirstChild", "The direct child with this name, or nil.", "Instance?", false, {P("name", "string")});
     add("DataModel", "IsA", "True when this instance's class is className or a subclass of it.", "boolean", false,
         {P("className", "string")});
     add("DataModel", "GetService", "The service with this name. RunService is the registered service.", "Instance", false,

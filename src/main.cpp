@@ -47,6 +47,7 @@ public:
         };
         add_script("HopSlow", R"(
 local tri = game:FindFirstChild("Tri0")
+assert(tri)
 local home = tri.Position
 local n = 0
 while true do
@@ -58,6 +59,7 @@ end
 )");
         add_script("HopFast", R"(
 local tri = game:FindFirstChild("Tri1")
+assert(tri)
 local home = tri.Position
 local n = 0
 while true do

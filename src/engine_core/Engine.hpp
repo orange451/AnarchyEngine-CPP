@@ -21,6 +21,7 @@ namespace engine_core {
 // Two loops. SimulationThread steps the DataModel. RenderThread prepares a
 // snapshot under a short write lock, then Perform/Present with the lock down.
 // PostRender runs after Present, still on RenderThread, without the lock.
+class ScriptAnalysis;
 class ScriptRuntime;
 
 class Engine {
@@ -48,6 +49,8 @@ public:
     SnapshotPump& pump() { return pump_; }
     TaskScheduler& scheduler() { return scheduler_; }
     ScriptRuntime& scripts();
+    ScriptAnalysis& analysis();
+    const ScriptAnalysis& analysis() const;
 
     void start();
     void stop();
@@ -125,6 +128,10 @@ private:
     // at the start of the next step, under the write lock.
     std::mutex edit_mu_;
     std::vector<std::function<void(DataModel&)>> edits_;
+
+    // Declared last so it is destroyed before the DataModel, after stop() joins
+    // the simulation and render threads.
+    std::unique_ptr<ScriptAnalysis> analysis_;
 };
 
 }  // namespace engine_core

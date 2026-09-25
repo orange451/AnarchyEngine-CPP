@@ -18,6 +18,7 @@ A script runs against the live place. It gets `game` for the root and `script` f
 
 ```lua
 local tri = game:FindFirstChild("Tri0")
+assert(tri)
 local home = tri.Position
 
 while true do

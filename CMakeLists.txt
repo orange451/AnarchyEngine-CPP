@@ -35,6 +35,7 @@ add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
     src/ide/IdeExplorer.cpp
     src/ide/IdeIcons.cpp
     src/ide/IdeScriptEditor.cpp
+    src/ide/ScriptMarks.cpp
     src/ide/LuauHighlight.cpp
     src/ide/LuauComplete.cpp
     src/ide/IdeTreeTest.cpp
@@ -112,6 +113,19 @@ else()
     endif()
 endif()
 
+set(ENGINE_DEFINITION_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/EngineDefinitions.cpp")
+add_custom_command(
+    OUTPUT "${ENGINE_DEFINITION_CPP}"
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/src/engine_core/definitions/engine.d.lua
+        -DOUTPUT=${ENGINE_DEFINITION_CPP}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-definitions.cmake
+    DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine_core/definitions/engine.d.lua
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-definitions.cmake
+    VERBATIM
+)
+
 add_library(engine_core STATIC
     src/engine_core/Contract.cpp
     src/engine_core/InvalidationQueue.cpp
@@ -130,12 +144,14 @@ add_library(engine_core STATIC
     src/engine_core/LuaReflect.cpp
     src/engine_core/Script.cpp
     src/engine_core/ScriptRuntime.cpp
+    src/engine_core/ScriptAnalysis.cpp
+    ${ENGINE_DEFINITION_CPP}
 )
 target_include_directories(engine_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/engine_core")
 target_compile_features(engine_core PUBLIC cxx_std_17)
 find_package(Threads REQUIRED)
 target_link_libraries(engine_core PUBLIC Threads::Threads)
-target_link_libraries(engine_core PRIVATE Luau.Compiler Luau.VM)
+target_link_libraries(engine_core PRIVATE Luau.Compiler Luau.VM Luau.Analysis)
 
 set(ENGINE_CORE_TSAN OFF CACHE BOOL "Instrument engine_core and sandbox with ThreadSanitizer")
 if(ENGINE_CORE_TSAN AND NOT MSVC)
@@ -151,8 +167,10 @@ add_executable(engine-tests
     tests/LuaEngineTest.cpp
     tests/LuauHighlightTest.cpp
     tests/LuauCompleteTest.cpp
+    tests/ScriptMarksTest.cpp
     src/ide/LuauHighlight.cpp
     src/ide/LuauComplete.cpp
+    src/ide/ScriptMarks.cpp
     src/runner/Runner.cpp
 )
 target_include_directories(engine-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -183,7 +201,7 @@ else()
     endif()
 endif()
 
-add_executable(sandbox sandbox/tests.cpp)
+add_executable(sandbox sandbox/tests.cpp sandbox/analysis_tests.cpp)
 target_link_libraries(sandbox PRIVATE engine_core Catch2::Catch2WithMain)
 target_compile_features(sandbox PRIVATE cxx_std_17)
 if(ENGINE_CORE_TSAN AND NOT MSVC)

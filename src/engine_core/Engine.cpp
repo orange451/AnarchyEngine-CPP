@@ -1,6 +1,7 @@
 #include "Engine.hpp"
 
 #include "DataModelLock.hpp"
+#include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
 
 #include <chrono>
@@ -16,9 +17,14 @@ Engine::Engine() {
     model_.attach_scheduler(&scheduler_);
     scripts_ = std::make_unique<ScriptRuntime>();
     scripts_->attach(model_, scheduler_);
+    analysis_ = std::make_unique<ScriptAnalysis>(model_);
 }
 
 ScriptRuntime& Engine::scripts() { return *scripts_; }
+
+ScriptAnalysis& Engine::analysis() { return *analysis_; }
+
+const ScriptAnalysis& Engine::analysis() const { return *analysis_; }
 
 Engine::~Engine() { stop(); }
 

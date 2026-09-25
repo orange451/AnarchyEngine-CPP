@@ -3,6 +3,8 @@
 #include "DataModelLock.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
+#include "Script.hpp"
+#include "ScriptAnalysis.hpp"
 #include "TaskScheduler.hpp"
 
 #include <cstring>
@@ -117,6 +119,7 @@ struct DataModel::State {
     std::function<void()> on_stop;
     std::function<void()> on_start;
     ScriptHost* script_host = nullptr;
+    ScriptAnalysis* script_analysis = nullptr;
 };
 
 DataModel::DataModel() : owned_(std::make_unique<State>()), state_(owned_.get()) {
@@ -471,6 +474,11 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
     part.pool = pool_index;
     part.storage = storage;
     part.instance = object;
+    if (dynamic_cast<LuaSource*>(object) != nullptr) {
+        if (ScriptAnalysis* analysis = script_analysis()) {
+            analysis->invalidate(object->id());
+        }
+    }
     return *object;
 }
 
@@ -979,6 +987,13 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
     if (part->instance != nullptr) {
         part->instance->on_parent_changed(old, new_parent);
     }
+    if (DataModel* live = instance(id)) {
+        if (dynamic_cast<LuaSource*>(live) != nullptr) {
+            if (ScriptAnalysis* analysis = script_analysis()) {
+                analysis->invalidate(id);
+            }
+        }
+    }
 }
 
 void DataModel::release_signals(InstanceId id) {
@@ -1035,6 +1050,11 @@ void DataModel::set_name(InstanceId id, std::string name) {
     }
     object->name_ = std::move(name);
     emit_change(id, Field::Name, current_origin());
+    if (dynamic_cast<LuaSource*>(object) != nullptr) {
+        if (ScriptAnalysis* analysis = script_analysis()) {
+            analysis->invalidate(id);
+        }
+    }
 }
 
 std::string DataModel::name(InstanceId id) const {
@@ -1079,6 +1099,10 @@ void DataModel::set_stop_hook(std::function<void()> hook) { state_->on_stop = st
 void DataModel::set_start_hook(std::function<void()> hook) { state_->on_start = std::move(hook); }
 
 void DataModel::set_script_host(ScriptHost* host) { state_->script_host = host; }
+
+void DataModel::set_script_analysis(ScriptAnalysis* analysis) { state_->script_analysis = analysis; }
+
+ScriptAnalysis* DataModel::script_analysis() const { return state_->script_analysis; }
 
 void DataModel::for_each_instance(const std::function<void(DataModel&)>& fn) {
     const std::uint32_t count = slot_count();
@@ -1429,7 +1453,7 @@ ANARCHY_LUA_REGISTER(register_datamodel_lua) {
     const LuaField fields[] = {
         lua_property("Name", "string", true, read_lua_name, write_lua_name),
         lua_property("ClassName", "string", false, read_lua_class, nullptr),
-        lua_property("Parent", "Instance", true, read_lua_parent, write_lua_parent),
+        lua_property("Parent", "Instance?", true, read_lua_parent, write_lua_parent),
         changed,
     };
     register_lua_class("DataModel", nullptr, fields, 4);

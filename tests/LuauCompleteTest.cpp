@@ -1267,7 +1267,7 @@ void testHover() {
 
     const char* child = "game:FindFirstChild(\"Hop\")";
     const ide::HoverInfo find = ide::hover_luau(child, find_nth(child, "FindFirstChild", 0));
-    expect_hover(find, "function DataModel:FindFirstChild(name: string): Instance", "", "child", "FindFirstChild");
+    expect_hover(find, "function DataModel:FindFirstChild(name: string): Instance?", "", "child", "FindFirstChild");
 
     const char* beat = "game:GetService(\"RunService\").Heartbeat:Wait()";
     const ide::HoverInfo heartbeat = ide::hover_luau(beat, find_nth(beat, "Wait", 0));
@@ -1397,7 +1397,7 @@ void testCompletionDocs() {
     expect_info(required, "require", "", "function require(module: ModuleScript)", "ModuleScript", "require");
 
     const ide::CompletionList game = at_end("game:");
-    expect_info(game, "FindFirstChild", "Instance", "function DataModel:FindFirstChild(name: string): Instance", "child",
+    expect_info(game, "FindFirstChild", "Instance?", "function DataModel:FindFirstChild(name: string): Instance?", "child",
                 "FindFirstChild");
     expect_info(game, "Destroy", "returns nothing", "function DataModel:Destroy()", "descendants", "Destroy");
     expect_info(game, "GetChildren", "{Instance}", "function DataModel:GetChildren(): {Instance}", "children",

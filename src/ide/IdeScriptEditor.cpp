@@ -5,6 +5,8 @@
 #include "LuauComplete.hpp"
 #include "LuauHighlight.hpp"
 #include "Script.hpp"
+#include "ScriptAnalysis.hpp"
+#include "ScriptMarks.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -93,11 +95,18 @@ public:
 
     void tickHover();
     void dismissHover();
+    // Replaces the squiggles. Returns true when the set changed.
+    bool setProblems(std::vector<ScriptMark> marks);
+    const ScriptMark* problemAt(int index) const;
 
 private:
     void armHover(int index, double x, double y);
     void showHover();
+    void showTip(const std::string& title, const std::string& detail, const std::string& summary, const jadefx::Color& titleFill);
     bool sameWord(int index) const;
+    bool sameProblem(int index) const;
+
+    std::vector<ScriptMark> problems_;
 
     std::shared_ptr<jadefx::VBox> tip_;
     int hover_index_ = -1;
@@ -132,8 +141,22 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
         }
     });
     completion_.setOnAccept([this] { accept_completion(true); });
-    Fill(*area_);
-    getChildren().add(area_);
+
+    status_ = jadefx::make<jadefx::Label>("");
+    status_->setAlignment(jadefx::Pos::CenterLeft);
+    status_->setMouseTransparent(true);
+    status_->setVisible(false);
+    status_->setPadding(jadefx::Insets{3, 8, 3, 8});
+    status_->setStyle("font-size: 12px;");
+    status_->setMinSize(0, 0);
+    status_->setPrefHeight(0);
+    status_->setMaxSize(100000, 0);
+
+    auto column = jadefx::make<jadefx::BorderPane>();
+    Fill(*column);
+    column->setCenter(area_);
+    column->setBottom(status_);
+    getChildren().add(column);
     load();
 }
 
@@ -168,7 +191,9 @@ void IdeScriptEditor::layoutChildren() {
         load();
     } else if (dirty_ && std::chrono::steady_clock::now() - dirty_at_ >= kSaveDelay) {
         flush();
-    } else if (!dirty_ && engine_.paused()) {
+    } else if (!dirty_ && engine_.paused() && !engine_.datamodel().simulation_running()) {
+        // Edit mode, after Stop has restored the place. A paused test is still
+        // the play session, so its source stays as the session left it.
         reapply();
     } else {
         std::string text;
@@ -186,6 +211,7 @@ void IdeScriptEditor::layoutChildren() {
     } else if (area_) {
         static_cast<ScriptCodeArea*>(area_.get())->tickHover();
     }
+    refresh_marks();
     StackPane::layoutChildren();
 }
 
@@ -247,6 +273,60 @@ void IdeScriptEditor::paint() {
     area_->suspendUndo();
     area_->setStyleSpans(0, builder.create());
     area_->resumeUndo();
+}
+
+namespace {
+
+void show_banner(jadefx::Label& status, const ScriptProblemSummary& summary) {
+    if (summary.text.empty()) {
+        if (!status.isVisible()) {
+            return;
+        }
+        status.setVisible(false);
+        status.setText("");
+        status.setPrefHeight(0);
+        status.setMaxSize(100000, 0);
+        status.setBackground(jadefx::Color::transparent());
+        return;
+    }
+    if (status.isVisible() && status.getText() == summary.text) {
+        return;
+    }
+    status.setVisible(true);
+    status.setText(summary.text);
+    status.setPrefHeight(22);
+    status.setMaxSize(100000, 28);
+    jadefx::Color fill = jadefx::Color::rgb8(92, 101, 112);
+    jadefx::Color back = jadefx::Color::rgb8(243, 244, 246);
+    if (summary.blocks_compile || summary.severity == engine_core::Severity::Error) {
+        fill = jadefx::Color::rgb8(176, 0, 32);
+        back = jadefx::Color::rgb8(253, 236, 234);
+    } else if (summary.severity == engine_core::Severity::Warning) {
+        fill = jadefx::Color::rgb8(138, 90, 0);
+        back = jadefx::Color::rgb8(255, 244, 214);
+    }
+    status.setTextFill(fill);
+    status.setBackground(back);
+}
+
+}  // namespace
+
+void IdeScriptEditor::refresh_marks() {
+    // Publishing here is the UI thread. The engine render thread does not run this.
+    engine_.analysis().pump();
+    if (!area_ || !status_ || !loaded_ || missing_) {
+        return;
+    }
+    const std::optional<std::string> checked = engine_.analysis().analyzed_source(id_);
+    std::vector<engine_core::Diagnostic> diagnostics;
+    if (checked && *checked == area_->getText()) {
+        diagnostics = engine_.analysis().diagnostics(id_);
+    }
+    auto* code = static_cast<ScriptCodeArea*>(area_.get());
+    if (code->setProblems(marks_for(area_->getText(), diagnostics))) {
+        code->dismissHover();
+    }
+    show_banner(*status_, summarize_problems(diagnostics));
 }
 
 void IdeScriptEditor::note_text() {
@@ -440,11 +520,15 @@ void ScriptCodeArea::handleMouseMoved(const jadefx::MouseEvent& event) {
         return;
     }
     const jadefx::CharacterHit where = hit(event.x, event.y);
-    if (!where.valid || where.characterIndex < 0) {
+    if (!where.valid) {
         dismissHover();
         return;
     }
-    armHover(where.characterIndex, event.x, event.y);
+    int index = where.characterIndex;
+    if (index < 0) {
+        index = where.insertionIndex > 0 ? where.insertionIndex - 1 : where.insertionIndex;
+    }
+    armHover(index, event.x, event.y);
 }
 
 void ScriptCodeArea::handleScroll(jadefx::ScrollEvent& event) {
@@ -507,6 +591,63 @@ int WordStart(std::string_view text, int index) {
 
 }  // namespace
 
+bool ScriptCodeArea::setProblems(std::vector<ScriptMark> marks) {
+    if (marks == problems_) {
+        return false;
+    }
+    problems_ = std::move(marks);
+    std::vector<jadefx::TextMark> visual;
+    visual.reserve(problems_.size());
+    for (const ScriptMark& mark : problems_) {
+        jadefx::TextMark text;
+        text.start = mark.start;
+        text.end = mark.end;
+        switch (mark.severity) {
+        case engine_core::Severity::Error:
+            text.severity = jadefx::TextMarkSeverity::Error;
+            break;
+        case engine_core::Severity::Warning:
+            text.severity = jadefx::TextMarkSeverity::Warning;
+            break;
+        case engine_core::Severity::Information:
+            text.severity = jadefx::TextMarkSeverity::Information;
+            break;
+        case engine_core::Severity::Hint:
+            text.severity = jadefx::TextMarkSeverity::Hint;
+            break;
+        }
+        visual.push_back(text);
+    }
+    setTextMarks(std::move(visual));
+    return true;
+}
+
+const ScriptMark* ScriptCodeArea::problemAt(int index) const {
+    const ScriptMark* fallback = nullptr;
+    for (const ScriptMark& mark : problems_) {
+        if (!mark_covers(mark, index)) {
+            continue;
+        }
+        if (mark.code == "Syntax") {
+            return &mark;
+        }
+        if (fallback == nullptr ||
+            (mark.severity == engine_core::Severity::Error && fallback->severity != engine_core::Severity::Error)) {
+            fallback = &mark;
+        }
+    }
+    return fallback;
+}
+
+bool ScriptCodeArea::sameProblem(int index) const {
+    const ScriptMark* here = problemAt(index);
+    const ScriptMark* there = problemAt(hover_index_);
+    if (here == nullptr || there == nullptr) {
+        return false;
+    }
+    return here->start == there->start && here->end == there->end && here->code == there->code;
+}
+
 bool ScriptCodeArea::sameWord(int index) const {
     if (hover_index_ < 0 || index < 0) {
         return false;
@@ -537,7 +678,11 @@ void ScriptCodeArea::armHover(int index, double x, double y) {
         dismissHover();
         return;
     }
-    if (hover_waiting_ && sameWord(index)) {
+    if (hover_waiting_ && sameProblem(index)) {
+        hover_index_ = index;
+        return;
+    }
+    if (hover_waiting_ && problemAt(index) == nullptr && sameWord(index)) {
         hover_index_ = index;
         return;
     }
@@ -561,17 +706,12 @@ void ScriptCodeArea::armHover(int index, double x, double y) {
     hover_waiting_ = true;
 }
 
-void ScriptCodeArea::showHover() {
-    if (editor == nullptr || hover_index_ < 0 || editor->completion_open()) {
-        return;
-    }
-    const HoverInfo info = hover_luau(getText(), hover_index_, editor->world(), editor->id_);
-    if (!info.found || info.title.empty()) {
+void ScriptCodeArea::showTip(const std::string& title, const std::string& detail, const std::string& summary,
+                             const jadefx::Color& titleFill) {
+    if (title.empty() && detail.empty()) {
         hover_waiting_ = false;
         return;
     }
-    hover_begin_ = info.begin;
-    hover_end_ = info.end;
     if (!tip_) {
         tip_ = jadefx::make<jadefx::VBox>();
         tip_->setMouseTransparent(true);
@@ -582,7 +722,6 @@ void ScriptCodeArea::showHover() {
             "box-shadow: 0 2px 8px rgba(32, 33, 36, 0.16);");
     }
     tip_->getChildren().clear();
-    const jadefx::Color title_fill = jadefx::Color::parse("#1f2328");
     const jadefx::Color body_fill = jadefx::Color::parse("#5c6570");
     auto add_line = [&](const std::string& text, const jadefx::Color& fill) {
         if (text.empty()) {
@@ -593,9 +732,9 @@ void ScriptCodeArea::showHover() {
         label->setMouseTransparent(true);
         tip_->getChildren().add(label);
     };
-    add_line(info.title, title_fill);
-    add_line(info.detail, body_fill);
-    add_line(info.summary, body_fill);
+    add_line(title, titleFill);
+    add_line(detail, body_fill);
+    add_line(summary, body_fill);
 
     jadefx::Scene* scene = getScene();
     if (scene == nullptr || scene->isTearingDown()) {
@@ -626,6 +765,33 @@ void ScriptCodeArea::showHover() {
     }
     scene->movePopup(tip_.get(), x, y, width, height);
     hover_waiting_ = false;
+}
+
+void ScriptCodeArea::showHover() {
+    if (editor == nullptr || hover_index_ < 0 || editor->completion_open()) {
+        return;
+    }
+    if (const ScriptMark* mark = problemAt(hover_index_)) {
+        hover_begin_ = mark->start;
+        hover_end_ = std::max(mark->end, mark->start + 1);
+        jadefx::Color title = jadefx::Color::rgb8(176, 0, 32);
+        if (mark->severity == engine_core::Severity::Warning) {
+            title = jadefx::Color::rgb8(138, 90, 0);
+        } else if (mark->severity != engine_core::Severity::Error) {
+            title = jadefx::Color::parse("#1f2328");
+        }
+        const std::string heading = mark->message.empty() ? mark->code : mark->message;
+        showTip(heading, problem_detail(*mark), "", title);
+        return;
+    }
+    const HoverInfo info = hover_luau(getText(), hover_index_, editor->world(), editor->id_);
+    if (!info.found || info.title.empty()) {
+        hover_waiting_ = false;
+        return;
+    }
+    hover_begin_ = info.begin;
+    hover_end_ = info.end;
+    showTip(info.title, info.detail, info.summary, jadefx::Color::parse("#1f2328"));
 }
 
 void ScriptCodeArea::tickHover() {

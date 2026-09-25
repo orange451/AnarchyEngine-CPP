@@ -54,6 +54,7 @@ private:
     bool read_source(std::string& text, std::string& name, bool& alive) const;
     void load();
     void paint();
+    void refresh_marks();
     void note_text();
     void push(const std::string& text);
     void refresh_completion(bool force);
@@ -72,6 +73,7 @@ private:
     engine_core::Engine& engine_;
     std::uint32_t id_ = 0;
     std::shared_ptr<jadefx::CodeArea> area_;
+    std::shared_ptr<jadefx::Label> status_;
     CompletionPopup completion_;
     std::shared_ptr<Commit> commit_;
     std::function<void(const std::string&)> on_title_;

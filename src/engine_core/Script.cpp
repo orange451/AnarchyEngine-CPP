@@ -2,6 +2,7 @@
 
 #include "Contract.hpp"
 #include "LuaApi.hpp"
+#include "ScriptAnalysis.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -22,6 +23,9 @@ void LuaSource::set_source(std::string source) {
     }
     source_ = std::move(source);
     emit_own(Field::Source);
+    if (ScriptAnalysis* analysis = script_analysis()) {
+        analysis->invalidate(id());
+    }
 }
 
 void LuaSource::set_enabled(bool enabled) {
@@ -55,7 +59,12 @@ void LuaSource::reset_source_fields() {
     start_generation_ = 0;
 }
 
-void LuaSource::on_release() { reset_source_fields(); }
+void LuaSource::on_release() {
+    if (ScriptAnalysis* analysis = script_analysis()) {
+        analysis->remove(id());
+    }
+    reset_source_fields();
+}
 
 void LuaSource::on_reuse() { reset_source_fields(); }
 
@@ -69,18 +78,24 @@ void LuaSource::write_place(std::vector<std::byte>& out) const {
 }
 
 void LuaSource::read_place(const std::byte* data, std::size_t size) {
+    const std::string previous = source_;
     reset_source_fields();
-    if (data == nullptr || size < 1 + sizeof(std::uint32_t)) {
-        return;
+    if (data != nullptr && size >= 1 + sizeof(std::uint32_t)) {
+        enabled_ = static_cast<unsigned char>(data[0]) != 0;
+        std::uint32_t length = 0;
+        std::memcpy(&length, data + 1, sizeof(length));
+        if (sizeof(std::uint32_t) + 1 + static_cast<std::size_t>(length) > size) {
+            enabled_ = true;
+        } else {
+            source_.assign(reinterpret_cast<const char*>(data + 1 + sizeof(std::uint32_t)), length);
+        }
     }
-    enabled_ = static_cast<unsigned char>(data[0]) != 0;
-    std::uint32_t length = 0;
-    std::memcpy(&length, data + 1, sizeof(length));
-    if (sizeof(std::uint32_t) + 1 + static_cast<std::size_t>(length) > size) {
-        enabled_ = true;
-        return;
+    // Stop restores authored source through here, not through set_source.
+    if (source_ != previous) {
+        if (ScriptAnalysis* analysis = script_analysis()) {
+            analysis->invalidate(id());
+        }
     }
-    source_.assign(reinterpret_cast<const char*>(data + 1 + sizeof(std::uint32_t)), length);
 }
 
 void Script::on_release() {

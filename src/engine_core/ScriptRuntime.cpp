@@ -1559,7 +1559,7 @@ int ScriptBindings::instance_newindex(lua_State* state) {
         } else if (type == "boolean") {
             slot.kind = LuaSlot::Kind::Bool;
             slot.flag = lua_toboolean(state, 3) != 0;
-        } else if (type == "Instance") {
+        } else if (type == "Instance" || type == "Instance?") {
             if (lua_isnil(state, 3)) {
                 slot.kind = LuaSlot::Kind::Nil;
             } else {
@@ -1866,7 +1866,7 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     const LuaField methods[] = {
         lua_method("Destroy", "nil", reinterpret_cast<void*>(&ScriptBindings::instance_destroy)),
         lua_method("GetChildren", "Instance", reinterpret_cast<void*>(&ScriptBindings::instance_children), false, false, true),
-        lua_method("FindFirstChild", "Instance", reinterpret_cast<void*>(&ScriptBindings::instance_find), false, true, false),
+        lua_method("FindFirstChild", "Instance?", reinterpret_cast<void*>(&ScriptBindings::instance_find), false, true, false),
         lua_method("IsA", "boolean", reinterpret_cast<void*>(&ScriptBindings::instance_isa)),
         get_service,
     };

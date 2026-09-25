@@ -30,6 +30,7 @@ struct ContextAction {
 
 class Engine;
 class GameObject;
+class ScriptAnalysis;
 class ScriptHost;
 
 // Live source of truth. SimulationThread is the only thread that may run
@@ -128,6 +129,9 @@ public:
     void set_stop_hook(std::function<void()> hook);
     void set_start_hook(std::function<void()> hook);
     void set_script_host(ScriptHost* host);
+    // Null until ScriptAnalysis is attached. Setters notify it. They do not analyze.
+    void set_script_analysis(ScriptAnalysis* analysis);
+    ScriptAnalysis* script_analysis() const;
     std::uint32_t world_generation() const;
     bool simulation_running() const;
 

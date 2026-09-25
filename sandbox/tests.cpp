@@ -2546,6 +2546,7 @@ TEST_CASE("scene scripts hop a triangle on task.wait and stop restores the pose"
     fast.set_position(0.58f, 0.38f, 0.15f);
     add_script(rig.model, "HopSlow", R"(
         local tri = game:FindFirstChild("Tri0")
+        assert(tri)
         local home = tri.Position
         local n = 0
         while true do
@@ -2557,6 +2558,7 @@ TEST_CASE("scene scripts hop a triangle on task.wait and stop restores the pose"
     )");
     add_script(rig.model, "HopFast", R"(
         local tri = game:FindFirstChild("Tri1")
+        assert(tri)
         local home = tri.Position
         local n = 0
         while true do

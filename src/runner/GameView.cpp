@@ -2,6 +2,7 @@
 
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
+#include "ScriptAnalysis.hpp"
 #include "TestTriangle.hpp"
 #include "Runner.hpp"
 #include "gl.hpp"
@@ -146,6 +147,9 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
     // the paint instead of looping again as soon as the step itself returns.
     if (engine_ != nullptr) {
         engine_->note_client_frame();
+        // This paint runs on the UI thread. The engine render thread is waiting
+        // on the frame note above, so publishing analysis here is not RenderThread.
+        engine_->analysis().pump();
     }
 }
 

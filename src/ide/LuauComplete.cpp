@@ -32,6 +32,8 @@ struct Shape {
     bool returns_list = false;
     // Connect: the callback's parameters are `signal_params` from the receiver.
     bool callback_arg = false;
+    // The value may be nil. Members still come from the class.
+    bool optional = false;
     std::vector<Param> signal_params;
     // Parameters of a function written in this source. Empty for host functions.
     std::vector<Param> params;
@@ -561,9 +563,12 @@ std::string DescribeType(const Shape* shape) {
 
 // Hover shows Vector3 for the built-in vector. Completion still says vector.
 std::string ShownType(const Shape* shape) {
-    const std::string type = DescribeType(shape);
+    std::string type = DescribeType(shape);
     if (type == "vector") {
-        return "Vector3";
+        type = "Vector3";
+    }
+    if (shape != nullptr && shape->optional && !type.empty() && type.back() != '?') {
+        type.push_back('?');
     }
     return type;
 }
@@ -619,17 +624,27 @@ public:
     }
 
     Shape* type_shape(const std::string& name) {
-        if (name.empty() || name == "nil") {
-            return none();
+        std::string type = name;
+        bool optional = false;
+        if (!type.empty() && type.back() == '?') {
+            optional = true;
+            type.pop_back();
         }
-        if (name == "string" || name == "number" || name == "boolean" || name == "vector" || name == "buffer" ||
-            name == "function" || name == "table" || name == "thread") {
-            return value_shape(name, name == "function");
+        Shape* shape = nullptr;
+        if (type.empty() || type == "nil") {
+            shape = none();
+        } else if (type == "string" || type == "number" || type == "boolean" || type == "vector" || type == "buffer" ||
+                   type == "function" || type == "table" || type == "thread") {
+            shape = value_shape(type, type == "function");
+        } else if (engine_core::lua_class_known(type.c_str())) {
+            shape = class_shape(std::move(type), kNoInstance);
+        } else {
+            shape = value_shape(std::move(type));
         }
-        if (engine_core::lua_class_known(name.c_str())) {
-            return class_shape(name, kNoInstance);
+        if (shape != nullptr) {
+            shape->optional = optional;
         }
-        return value_shape(name);
+        return shape;
     }
 
     Shape* adopt(const engine_core::LuaShape& input) {
@@ -857,10 +872,15 @@ public:
             // The receiver of require is the argument, stored on the call below.
         }
         if (callee->resolves_child && literal != nullptr && callee->instance != kNoInstance) {
+            // The child may be missing at runtime, so the result stays optional.
             if (const engine_core::LuaNode* child = FindChild(world_, callee->instance, *literal)) {
-                return class_shape(child->class_name.empty() ? "DataModel" : child->class_name, child->id);
+                Shape* shape = class_shape(child->class_name.empty() ? "DataModel" : child->class_name, child->id);
+                shape->optional = true;
+                return shape;
             }
-            return class_shape("Instance", kNoInstance);
+            Shape* shape = class_shape("Instance", kNoInstance);
+            shape->optional = true;
+            return shape;
         }
         if (callee->class_from_arg && literal != nullptr && engine_core::lua_class_known(literal->c_str())) {
             return class_shape(*literal, kNoInstance);

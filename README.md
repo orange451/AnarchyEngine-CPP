@@ -1,29 +1,41 @@
-# AnarchyEngine-CPP
+# Anarchy Engine
 
-C++ game engine and IDE. JadeFX owns the window. The Scene View pane draws a spinning rainbow triangle.
+Anarchy Engine is a game engine and studio for building a place and playing it. The place is a tree of instances. Gameplay is Luau that reads and changes that tree. Test runs the simulation. Stop puts the place back to what you authored.
 
-![AnarchyEngine-CPP window](docs/screenshot.png)
+You use it to make a small game in one window: arrange instances, write the scripts that move them, run the place, and edit again from the restored world. The desktop studio is the way in. The engine underneath is what keeps the live place, the scripts, and the picture on screen in step with each other.
 
-## Build
+## The place
 
-This directory is enough. `make` clones the latest commit of [JadeFX](https://github.com/orange451/JadeFX_CPP) on `master`, and a later build updates that clone. It downloads GLFW 3.5.1 when GLFW is not already installed. The same build fetches [Luau](https://github.com/luau-lang/luau) 0.739. The engine_core package embeds that as the sandboxed Lua runtime.
+Every object in the world is an instance. It has a name, a parent, and children, and siblings may share a name. The root of that tree is the place a script sees as `game`.
 
-`make test` builds and runs the Lua sandbox checks.
+`GameObject` is the instance that occupies space. It carries a transform, a color, a size, and a velocity. `Script` and `ModuleScript` hold Luau source. Any other instance is a node in the tree, with a name, a parent, and signals.
 
-```sh
-make
-make run
+Creating an instance, parenting it, or writing a property is how the place grows. Those writes are what explorers, scripts, and the play session all share.
+
+## Scripts
+
+A script runs against the live place. It gets `game` for the root and `script` for itself. From there it creates instances with `Instance.new`, finds children, reads and writes properties, and connects to signals such as `Changed`. `task.wait`, `task.spawn`, `task.defer`, and `task.delay` schedule work on the simulation clock. A `ModuleScript` runs when another script calls `require`.
+
+```lua
+local tri = game:FindFirstChild("Tri0")
+local home = tri.Position
+
+while true do
+    task.wait(0.5)
+    tri.Position = {x = home.x + 0.45, y = home.y, z = home.z}
+end
 ```
 
-`make run` rebuilds, then launches the app. On macOS the result is `build/AnarchyEngine-CPP.app`. On Windows and Linux it is a normal executable named `AnarchyEngine-CPP`.
+A script starts when it is parented, enabled, and the place is playing. It runs on the simulation, on the same clock as Heartbeat. The code is sandboxed to the libraries the engine opens: the Luau base libraries, `task`, and the instance API.
 
-The same build from CMake directly:
+## Play
 
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel
-```
+The simulation starts paused, so the place holds still while you edit. Test captures that place, starts every eligible script, and steps the world at 60 Hz. A frame can take several physics steps, then Heartbeat, which wakes `task.wait` and steps the instances in the tree.
 
-A checkout named `JadeFX_CPP` next to this directory is used instead of the clone. Point `JADEFX_CPP_DIR` at the source to use some other checkout. A Linux build of the fetched GLFW also needs the X11 and Wayland development packages.
+Stop ends the session. Scripts are aborted, instances created during play are gone, and property changes revert to the captured place. Text you still have open in a script editor is written back onto those restored scripts, so the edit survives the stop.
 
-Runtime files live under `resources/`. Shaders are loaded at startup from the app bundle (`Contents/Resources/shaders` on macOS, where the source `resources/` tree is copied onto `Contents/Resources`) or from `resources/shaders/` beside the executable. Editing `resources/shaders/triangle.vert` or `resources/shaders/triangle.frag` takes effect on the next launch. The build also copies JadeFX's interface shaders into that shaders directory.
+## The studio
+
+The window is the studio. Explorers on either side list the place by instance name. The scene view draws each triangle in the place at that instance's position, and it keeps painting while the simulation is paused. The script editor opens a script from its row, highlights Luau, and completes names and members as you type. The console shows `print` output and script errors, and its command line runs Luau against the same place while play is stopped.
+
+Cut, paste, and rename work on any instance. Double-click a script to edit it. Edit > Test and Edit > Stop are the play session. The widgets and the window come from [JadeFX](https://github.com/orange451/JadeFX_CPP).

@@ -1421,11 +1421,16 @@ bool read_lua_changed(DataModel&, DataModel&, LuaSlot& out) {
 }
 
 ANARCHY_LUA_REGISTER(register_datamodel_lua) {
+    // Changed passes the name of the property that changed.
+    static const LuaParam kChangedArgs[] = {{"property", "string"}};
+    LuaField changed = lua_property("Changed", "Signal", false, read_lua_changed, nullptr);
+    changed.params = kChangedArgs;
+    changed.param_count = 1;
     const LuaField fields[] = {
         lua_property("Name", "string", true, read_lua_name, write_lua_name),
         lua_property("ClassName", "string", false, read_lua_class, nullptr),
         lua_property("Parent", "Instance", true, read_lua_parent, write_lua_parent),
-        lua_property("Changed", "Signal", false, read_lua_changed, nullptr),
+        changed,
     };
     register_lua_class("DataModel", nullptr, fields, 4);
 }

@@ -23,6 +23,9 @@ struct CompletionItem {
     std::string detail;
     // True when accepting the name can insert a call's parentheses.
     bool call = false;
+    // `name` already contains the punctuation, as in `function(dt)`.
+    // Typing `(` does not accept it.
+    bool snippet = false;
 };
 
 struct CompletionList {
@@ -36,13 +39,20 @@ struct CompletionList {
     char close_quote = 0;
     // The closing quote is not in the buffer yet. Accepting can type it.
     bool unclosed = false;
+    // Parameter list of the call being written, such as "(a: string, b: Instance)".
+    // Shown above the rows. Accepting does not insert it.
+    std::string signature;
 };
 
 // `world` is the live instance tree. `script_id` is the script being edited.
 // Members come from the class registry and from the libraries the play VM loads.
 // require of a ModuleScript runs that source and completes whatever it returns.
 // GetService("...") completes registered services. FindFirstChild("...") completes
-// the receiver's children. `script_global` is false on the command line, where `script` is nil.
+// the receiver's children. Connect(function) completes the signal's callback
+// arguments, so Heartbeat offers function(dt). A function written in the source
+// keeps its parameters: the body uses each annotation as the parameter's type,
+// and a call lists those parameters. `script_global` is false on the command
+// line, where `script` is nil.
 CompletionList complete_luau(std::string_view source, int caret, const std::vector<engine_core::LuaNode>& world = {},
                              std::uint32_t script_id = 0, bool script_global = true);
 

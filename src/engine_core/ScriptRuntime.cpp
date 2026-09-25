@@ -1843,8 +1843,11 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     };
     register_lua_class("DataModel", nullptr, methods, 5);
 
+    LuaField connect =
+        lua_method("Connect", "Connection", reinterpret_cast<void*>(&ScriptBindings::signal_connect));
+    connect.callback_arg = true;
     const LuaField signal[] = {
-        lua_method("Connect", "Connection", reinterpret_cast<void*>(&ScriptBindings::signal_connect)),
+        connect,
         lua_method("Wait", "nil", reinterpret_cast<void*>(&ScriptBindings::signal_wait)),
     };
     register_lua_class("Signal", nullptr, signal, 2);

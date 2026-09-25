@@ -123,6 +123,22 @@ const LuaField* lua_class_find(const char* class_name, std::string_view name) {
 
 bool lua_class_known(const char* class_name) { return find_class_const(class_name) != nullptr; }
 
+bool lua_class_inherits(const char* class_name, const char* ancestor) {
+    if (class_name == nullptr || ancestor == nullptr) {
+        return false;
+    }
+    const ClassRecord* record = find_class_const(class_name);
+    int depth = 0;
+    while (record != nullptr && record->name != nullptr && depth < 32) {
+        if (std::strcmp(record->name, ancestor) == 0) {
+            return true;
+        }
+        record = find_class_const(record->base);
+        ++depth;
+    }
+    return false;
+}
+
 void lua_class_names(std::vector<std::string>& out) {
     out.clear();
     for (const ClassRecord& record : classes()) {

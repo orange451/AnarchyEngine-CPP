@@ -13,6 +13,11 @@ namespace {
 
 constexpr std::uint32_t kNoInstance = 0xffffffffu;
 
+struct Param {
+    std::string name;
+    std::string type_name;
+};
+
 struct Shape {
     std::string class_name;
     std::string library;
@@ -23,6 +28,12 @@ struct Shape {
     bool resolves_child = false;
     bool service_arg = false;
     bool returns_list = false;
+    // Connect: the callback's parameters are `signal_params` from the receiver.
+    bool callback_arg = false;
+    std::vector<Param> signal_params;
+    // Parameters of a function written in this source. Empty for host functions.
+    std::vector<Param> params;
+    bool variadic = false;
     std::string callee_owner;
     std::string callee_name;
     std::string result_type;
@@ -374,6 +385,136 @@ bool IsColonCall(const std::vector<Token>& tokens, int callee_end) {
     return name < 2 || tokens[static_cast<std::size_t>(name - 2)].kind != Token::Colon;
 }
 
+// The caret is the start of an argument. `open` is the call's '('.
+struct CallSlot {
+    int open = -1;
+    int argument = 0;
+    bool found = false;
+};
+
+CallSlot CallArgumentAt(const std::vector<Token>& tokens, int index) {
+    CallSlot slot;
+    if (index <= 0 || index > static_cast<int>(tokens.size())) {
+        return slot;
+    }
+    const Token::Kind previous = tokens[static_cast<std::size_t>(index - 1)].kind;
+    if (previous != Token::LParen && previous != Token::Comma) {
+        return slot;
+    }
+    int depth = 0;
+    int commas = 0;
+    for (int cursor = index - 1; cursor >= 0; --cursor) {
+        const Token::Kind kind = tokens[static_cast<std::size_t>(cursor)].kind;
+        if (kind == Token::RParen || kind == Token::RBrack || kind == Token::RBrace) {
+            ++depth;
+        } else if (kind == Token::LParen || kind == Token::LBrack || kind == Token::LBrace) {
+            if (depth == 0) {
+                if (kind != Token::LParen) {
+                    return slot;
+                }
+                slot.open = cursor;
+                slot.argument = commas;
+                slot.found = true;
+                return slot;
+            }
+            --depth;
+        } else if (depth == 0 && kind == Token::Comma) {
+            ++commas;
+        }
+    }
+    return slot;
+}
+
+bool AnonymousFunctionOpen(const std::vector<Token>& tokens, int open) {
+    return open > 0 && tokens[static_cast<std::size_t>(open - 1)].kind == Token::Keyword &&
+           tokens[static_cast<std::size_t>(open - 1)].text == "function";
+}
+
+std::string FormatParams(const std::vector<Param>& params, bool variadic) {
+    std::string out = "(";
+    for (std::size_t index = 0; index < params.size(); ++index) {
+        if (index > 0) {
+            out += ", ";
+        }
+        out += params[index].name;
+        if (!params[index].type_name.empty()) {
+            out += ": ";
+            out += params[index].type_name;
+        }
+    }
+    if (variadic) {
+        if (!params.empty()) {
+            out += ", ";
+        }
+        out += "...";
+    }
+    out += ")";
+    return out;
+}
+
+// "string?" is a string for matching. Unions and function types stay as written.
+std::string CoreType(std::string_view type) {
+    while (!type.empty() && (type.back() == '?' || type.back() == ' ')) {
+        type.remove_suffix(1);
+    }
+    return std::string(type);
+}
+
+bool IsIdent(std::string_view text) {
+    if (text.empty() || !IsNameStart(static_cast<char32_t>(static_cast<unsigned char>(text.front())))) {
+        return false;
+    }
+    for (unsigned char unit : text) {
+        if (!IsNameContinue(static_cast<char32_t>(unit))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Instance is registered as an alias of DataModel, so any DataModel class fits it.
+bool IsInstanceClass(const std::string& name) {
+    return engine_core::lua_class_inherits(name.c_str(), "DataModel");
+}
+
+bool AcceptsType(const std::string& expected, const CompletionItem& item) {
+    if (expected.empty()) {
+        return false;
+    }
+    if (expected == "boolean" && (item.name == "true" || item.name == "false")) {
+        return true;
+    }
+    if (expected == "function" && (item.call || item.name == "function")) {
+        return true;
+    }
+    if (item.detail == expected) {
+        return true;
+    }
+    if (!IsIdent(expected) || !IsInstanceClass(expected) || !IsInstanceClass(item.detail)) {
+        return false;
+    }
+    if (expected == "Instance" || expected == "DataModel") {
+        return true;
+    }
+    return engine_core::lua_class_inherits(item.detail.c_str(), expected.c_str());
+}
+
+void AppendSignalParams(Shape* shape, const engine_core::LuaField& field) {
+    if (shape == nullptr || field.params == nullptr || field.param_count <= 0) {
+        return;
+    }
+    for (int index = 0; index < field.param_count; ++index) {
+        const engine_core::LuaParam& param = field.params[index];
+        if (param.name == nullptr || param.name[0] == '\0') {
+            continue;
+        }
+        Param row;
+        row.name = param.name;
+        row.type_name = param.type_name != nullptr ? param.type_name : "";
+        shape->signal_params.push_back(std::move(row));
+    }
+}
+
 const engine_core::LuaNode* FindChild(const std::vector<engine_core::LuaNode>& world, std::uint32_t parent,
                                       std::string_view name) {
     for (const engine_core::LuaNode& node : world) {
@@ -520,7 +661,9 @@ public:
                         return class_shape(std::move(class_name), node->parent);
                     }
                 }
-                return type_shape(field->type_name != nullptr ? field->type_name : "");
+                Shape* shape = type_shape(field->type_name != nullptr ? field->type_name : "");
+                AppendSignalParams(shape, *field);
+                return shape;
             }
             Shape* shape = fresh();
             shape->call = true;
@@ -528,6 +671,10 @@ public:
             shape->resolves_child = field->resolves_child;
             shape->service_arg = field->service_arg;
             shape->returns_list = field->returns_list;
+            shape->callback_arg = field->callback_arg;
+            if (field->callback_arg) {
+                shape->signal_params = base->signal_params;
+            }
             shape->result_type = field->type_name != nullptr ? field->type_name : "";
             shape->instance = base->instance;
             return shape;
@@ -679,6 +826,23 @@ public:
         return shape != nullptr ? shape : none();
     }
 
+    // Parameters of the callback at `argument` of the call whose '(' is `open`.
+    // A colon call's callback is argument 0. A dot call passes self first.
+    std::vector<Param> callback_params(int open, int argument) {
+        if (open < 0) {
+            return {};
+        }
+        Shape* callee = receiver(open);
+        if (callee == nullptr || !callee->callback_arg || callee->signal_params.empty()) {
+            return {};
+        }
+        const int expected = IsColonCall(tokens_, open) ? 0 : 1;
+        if (argument != expected) {
+            return {};
+        }
+        return callee->signal_params;
+    }
+
     void add_names(std::string_view prefix, int at, std::vector<CompletionItem>& out) {
         std::vector<std::string> seen;
         auto take = [&](const std::string& name, const std::string& detail, bool call) {
@@ -704,6 +868,9 @@ public:
             std::string detail = "local";
             if (shape != nullptr && !shape->class_name.empty()) {
                 detail = shape->class_name;
+            } else if (shape != nullptr && shape->value_type == "function" &&
+                       (!shape->params.empty() || shape->variadic)) {
+                detail = FormatParams(shape->params, shape->variadic);
             } else if (shape != nullptr && !shape->value_type.empty()) {
                 detail = shape->value_type;
             }
@@ -791,6 +958,115 @@ public:
         }
     }
 
+    // `function` in a Connect argument becomes `function(dt)`, and the parameter
+    // list of that function offers the same names.
+    void complete_callback(int index, CompletionList& list) {
+        const CallSlot slot = CallArgumentAt(tokens_, index);
+        if (!slot.found) {
+            return;
+        }
+        if (AnonymousFunctionOpen(tokens_, slot.open)) {
+            const CallSlot outer = CallArgumentAt(tokens_, slot.open - 1);
+            if (!outer.found) {
+                return;
+            }
+            const std::vector<Param> params = callback_params(outer.open, outer.argument);
+            if (params.empty()) {
+                return;
+            }
+            std::vector<std::string> used;
+            for (int cursor = slot.open + 1; cursor < index && cursor < static_cast<int>(tokens_.size()); ++cursor) {
+                if (tokens_[static_cast<std::size_t>(cursor)].kind == Token::Name) {
+                    used.push_back(tokens_[static_cast<std::size_t>(cursor)].text);
+                }
+            }
+            std::vector<CompletionItem> extra;
+            for (const Param& param : params) {
+                if (std::find(used.begin(), used.end(), param.name) != used.end()) {
+                    continue;
+                }
+                if (!list.prefix.empty() && !StartsWith(param.name, list.prefix)) {
+                    continue;
+                }
+                bool seen = false;
+                for (const CompletionItem& item : list.items) {
+                    if (item.name == param.name) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (seen) {
+                    continue;
+                }
+                CompletionItem item;
+                item.name = param.name;
+                item.detail = param.type_name.empty() ? "parameter" : param.type_name;
+                extra.push_back(std::move(item));
+            }
+            if (!extra.empty()) {
+                list.items.insert(list.items.begin(), extra.begin(), extra.end());
+            }
+            return;
+        }
+        const std::vector<Param> params = callback_params(slot.open, slot.argument);
+        if (params.empty()) {
+            return;
+        }
+        std::string detail;
+        std::string snippet = "function(";
+        for (std::size_t param_index = 0; param_index < params.size(); ++param_index) {
+            if (param_index > 0) {
+                snippet += ", ";
+                detail += ", ";
+            }
+            snippet += params[param_index].name;
+            detail += params[param_index].type_name.empty() ? "parameter" : params[param_index].type_name;
+        }
+        snippet += ")";
+        if (!list.prefix.empty() && !StartsWith(snippet, list.prefix)) {
+            return;
+        }
+        list.items.erase(std::remove_if(list.items.begin(), list.items.end(),
+                                        [](const CompletionItem& item) {
+                                            return item.name == "function" && item.detail == "keyword";
+                                        }),
+                         list.items.end());
+        for (const CompletionItem& item : list.items) {
+            if (item.name == snippet) {
+                return;
+            }
+        }
+        CompletionItem item;
+        item.name = std::move(snippet);
+        item.detail = std::move(detail);
+        item.snippet = true;
+        list.items.insert(list.items.begin(), std::move(item));
+    }
+
+    // A call of a function written in this source lists that function's parameters.
+    // Names that fit the active parameter move to the front.
+    void complete_signature(int index, CompletionList& list) {
+        const CallSlot slot = CallArgumentAt(tokens_, index);
+        if (!slot.found || AnonymousFunctionOpen(tokens_, slot.open)) {
+            return;
+        }
+        Shape* callee = receiver(slot.open);
+        if (callee == nullptr || (callee->params.empty() && !callee->variadic)) {
+            return;
+        }
+        list.signature = FormatParams(callee->params, callee->variadic);
+        if (list.items.empty() || slot.argument < 0 || slot.argument >= static_cast<int>(callee->params.size())) {
+            return;
+        }
+        const std::string expected = CoreType(callee->params[static_cast<std::size_t>(slot.argument)].type_name);
+        if (expected.empty()) {
+            return;
+        }
+        std::stable_partition(list.items.begin(), list.items.end(), [&](const CompletionItem& item) {
+            return AcceptsType(expected, item);
+        });
+    }
+
 private:
     struct Binding {
         std::string name;
@@ -822,6 +1098,73 @@ private:
         advance();
         return name;
     }
+
+    // The type written after `:`, up to the next parameter or the closing ')'.
+    std::string read_type() {
+        std::string text;
+        int angle = 0;
+        int paren = 0;
+        int brace = 0;
+        int brack = 0;
+        while (!at_end()) {
+            if (angle == 0 && paren == 0 && brace == 0 && brack == 0 &&
+                (is(Token::Comma) || is(Token::RParen) || is(Token::Eq))) {
+                break;
+            }
+            const Token& token = cur();
+            if (token.kind == Token::Op && token.text == "<") {
+                ++angle;
+            } else if (token.kind == Token::Op && token.text == ">") {
+                if (angle > 0) {
+                    --angle;
+                }
+            } else if (token.kind == Token::LParen) {
+                ++paren;
+            } else if (token.kind == Token::RParen) {
+                if (paren == 0) {
+                    break;
+                }
+                --paren;
+            } else if (token.kind == Token::LBrace) {
+                ++brace;
+            } else if (token.kind == Token::RBrace) {
+                if (brace > 0) {
+                    --brace;
+                }
+            } else if (token.kind == Token::LBrack) {
+                ++brack;
+            } else if (token.kind == Token::RBrack) {
+                if (brack > 0) {
+                    --brack;
+                }
+            }
+            const bool tight = token.text == "?" || token.text == "," || token.text == ">" || token.text == ")" ||
+                               token.text == "]" || token.text == "}";
+            if (!text.empty()) {
+                const char last = text.back();
+                const bool after_open =
+                    last == '<' || last == '(' || last == '[' || last == '{' || last == '.' || last == ':';
+                if (!after_open && !tight) {
+                    text.push_back(' ');
+                }
+            }
+            text += token.text;
+            advance();
+        }
+        return text;
+    }
+
+    Shape* annotation_shape(const std::string& type_text) {
+        if (type_text.empty()) {
+            return none();
+        }
+        const std::string core = CoreType(type_text);
+        if (IsIdent(core)) {
+            return type_shape(core);
+        }
+        return value_shape(type_text);
+    }
+
     bool block_end() const { return is_kw("end") || is_kw("else") || is_kw("elseif") || is_kw("until"); }
 
     void parse_block() {
@@ -1006,18 +1349,21 @@ private:
         const bool cut_before = cut_;
         struct Slot {
             std::string name;
+            std::string type_name;
         };
         std::vector<Slot> slots;
         while (is_name()) {
-            slots.push_back(Slot{take_name()});
+            Slot slot;
+            slot.name = take_name();
             if (is(Token::Colon) && !next_colon()) {
                 advance();
-                if (is_name()) {
-                    advance();
-                } else if (at_end()) {
+                if (at_end()) {
                     cut_ = true;
+                } else {
+                    slot.type_name = read_type();
                 }
             }
+            slots.push_back(std::move(slot));
             if (!consume(Token::Comma)) {
                 break;
             }
@@ -1041,12 +1387,16 @@ private:
         }
         const int visible = i_;
         for (std::size_t index = 0; index < slots.size(); ++index) {
-            Shape* shape = index < inits.size() && inits[index] != nullptr ? inits[index] : none();
+            Shape* shape = index < inits.size() && inits[index] != nullptr ? inits[index] : nullptr;
+            if (shape == nullptr) {
+                shape = annotation_shape(slots[index].type_name);
+            }
             bind(slots[index].name, shape, visible);
         }
     }
 
-    void parse_function(bool expression, bool local_name) {
+    Shape* parse_function(bool expression, bool local_name) {
+        Shape* fn = value_shape("function", true);
         if (!expression && is_name()) {
             std::string first = take_name();
             if (consume(Token::Dot)) {
@@ -1059,34 +1409,37 @@ private:
                     advance();
                 }
             } else if (local_name) {
-                bind(std::move(first), value_shape("function", true), i_);
+                bind(std::move(first), fn, i_);
             } else {
                 // `function name` assigns a global, including when it is nested in another block.
-                bind(std::move(first), value_shape("function", true), i_, 0);
+                bind(std::move(first), fn, i_, 0);
             }
         } else if (expression && is_name()) {
             advance();
         }
         push_scope();
-        std::vector<std::string> params;
         bool closed = false;
         if (consume(Token::LParen)) {
             while (!at_end() && !is(Token::RParen)) {
                 if (is(Token::Ellipsis)) {
+                    fn->variadic = true;
                     advance();
                     break;
                 }
                 if (!is_name()) {
                     break;
                 }
-                std::string name = take_name();
+                Param param;
+                param.name = take_name();
                 if (is(Token::Colon) && !next_colon()) {
                     advance();
-                    if (is_name()) {
-                        advance();
+                    if (at_end()) {
+                        cut_ = true;
+                    } else {
+                        param.type_name = read_type();
                     }
                 }
-                params.push_back(std::move(name));
+                fn->params.push_back(std::move(param));
                 if (!consume(Token::Comma)) {
                     break;
                 }
@@ -1099,8 +1452,8 @@ private:
         // Parameters belong to the body. They are not in scope while the
         // parameter list itself is still being typed.
         const int visible = closed ? i_ : limit_ + 1;
-        for (const std::string& name : params) {
-            bind(name, none(), visible);
+        for (const Param& param : fn->params) {
+            bind(param.name, annotation_shape(param.type_name), visible);
         }
         if (!closed && at_end()) {
             cut_ = true;
@@ -1114,6 +1467,7 @@ private:
         } else {
             pop_scope();
         }
+        return fn;
     }
 
     void parse_assign() {
@@ -1358,8 +1712,7 @@ private:
         }
         if (is_kw("function")) {
             advance();
-            parse_function(true, false);
-            return value_shape("function", true);
+            return parse_function(true, false);
         }
         if (is(Token::LParen)) {
             advance();
@@ -1668,52 +2021,64 @@ void AddServices(std::string_view prefix, std::vector<CompletionItem>& out) {
     }
 }
 
-// The caret is inside the first string of a call. GetService offers services.
-// FindFirstChild offers the children of the receiver.
+// The caret is inside a string argument. The first string of a colon call offers
+// services or children. Any call of a function written in this source shows that
+// function's parameter list.
 CompletionList CompleteString(const Scan& scan, const std::u32string& text, int caret,
                               const std::vector<engine_core::LuaNode>& world, std::uint32_t script_id,
                               bool script_global) {
     if (scan.tokens.empty() || scan.quote == 0) {
         return {};
     }
+    const std::vector<Token>& tokens = scan.tokens;
+    const int index = static_cast<int>(tokens.size());
+    const CallSlot slot = CallArgumentAt(tokens, index);
     int callee_end = -1;
-    const Token& last = scan.tokens.back();
+    const Token& last = tokens.back();
     if (last.kind == Token::LParen) {
-        callee_end = static_cast<int>(scan.tokens.size()) - 1;
+        callee_end = index - 1;
     } else if (IsCallPrefix(last)) {
-        callee_end = static_cast<int>(scan.tokens.size());
-    } else {
+        callee_end = index;
+    }
+    const bool first_arg = !slot.found || slot.argument == 0;
+    const bool colon = callee_end >= 0 && first_arg && IsColonCall(tokens, callee_end);
+    if (!slot.found && !colon) {
         return {};
     }
-    if (!IsColonCall(scan.tokens, callee_end)) {
-        return {};
-    }
-    Resolver resolver(scan.tokens, world, script_id, script_global);
-    resolver.parse_until(callee_end);
-    Shape* callee = resolver.receiver(callee_end);
-    const bool child = callee != nullptr && callee->resolves_child && callee->instance != kNoInstance;
-    const bool service = callee != nullptr && callee->service_arg;
-    if (!child && !service) {
-        return {};
-    }
+    Resolver resolver(tokens, world, script_id, script_global);
+    resolver.parse_until(slot.found ? slot.open : callee_end);
     CompletionList list;
-    list.site = CompleteSite::Argument;
-    list.close_quote = static_cast<char>(scan.quote);
-    list.replace_begin = scan.string_begin;
-    if (list.replace_begin < 0) {
-        list.replace_begin = 0;
+    if (colon) {
+        Shape* callee = resolver.receiver(callee_end);
+        const bool child = callee != nullptr && callee->resolves_child && callee->instance != kNoInstance;
+        const bool service = callee != nullptr && callee->service_arg;
+        if (child || service) {
+            list.site = CompleteSite::Argument;
+            list.close_quote = static_cast<char>(scan.quote);
+            list.replace_begin = scan.string_begin;
+            if (list.replace_begin < 0) {
+                list.replace_begin = 0;
+            }
+            if (list.replace_begin > caret) {
+                list.replace_begin = caret;
+            }
+            list.replace_end = StringContentEnd(text, list.replace_begin, scan.quote);
+            list.prefix = ArgumentPrefix(text, list.replace_begin, caret);
+            const bool at_end = list.replace_end >= static_cast<int>(text.size());
+            list.unclosed = at_end || text[static_cast<std::size_t>(list.replace_end)] != scan.quote;
+            if (child) {
+                AddChildren(world, callee->instance, list.prefix, list.items);
+            } else {
+                AddServices(list.prefix, list.items);
+            }
+        }
     }
-    if (list.replace_begin > caret) {
-        list.replace_begin = caret;
+    resolver.complete_signature(index, list);
+    if (list.site == CompleteSite::None && list.signature.empty()) {
+        return {};
     }
-    list.replace_end = StringContentEnd(text, list.replace_begin, scan.quote);
-    list.prefix = ArgumentPrefix(text, list.replace_begin, caret);
-    const bool at_end = list.replace_end >= static_cast<int>(text.size());
-    list.unclosed = at_end || text[static_cast<std::size_t>(list.replace_end)] != scan.quote;
-    if (child) {
-        AddChildren(world, callee->instance, list.prefix, list.items);
-    } else {
-        AddServices(list.prefix, list.items);
+    if (list.site == CompleteSite::None) {
+        list.site = CompleteSite::Argument;
     }
     return list;
 }
@@ -1779,6 +2144,8 @@ CompletionList complete_luau(std::string_view source, int caret, const std::vect
     list.site = CompleteSite::Name;
     resolver.parse_until(index);
     resolver.add_names(list.prefix, index, list.items);
+    resolver.complete_callback(index, list);
+    resolver.complete_signature(index, list);
     return list;
 }
 

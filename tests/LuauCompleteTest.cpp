@@ -361,6 +361,7 @@ void testNames() {
 
     const ide::CompletionList annotated = at_end("local target: number\ntar");
     expect_has(annotated, "target", "annotated local");
+    expect_detail(annotated, "target", "number", "annotated local");
 
     const ide::CompletionList shadow = at_end("local task = game\nta");
     expect_detail(shadow, "task", "DataModel", "shadowed task");
@@ -403,8 +404,9 @@ void testNames() {
 
     const ide::CompletionList param = at_end("local function take(target)\nta");
     expect_has(param, "target", "parameter");
+    expect_detail(param, "target", "local", "parameter");
     expect_has(param, "take", "local function");
-    expect_detail(param, "take", "function", "local function");
+    expect_detail(param, "take", "(target)", "local function");
     expect_call(param, "take", true, "local function");
 
     const ide::CompletionList param_list = at_end("local function take(target, tar");
@@ -671,6 +673,217 @@ void testStringArguments() {
     expect_has(console, "HopSlow", "console FindFirstChild");
 }
 
+bool is_snippet(const ide::CompletionList& list, const char* name) {
+    for (const ide::CompletionItem& item : list.items) {
+        if (item.name == name) {
+            return item.snippet;
+        }
+    }
+    return false;
+}
+
+void testCallbackArguments() {
+    const char* phases[] = {"Heartbeat", "PreSimulation", "PostSimulation", "PreAnimation", "PreRender",
+                            "RenderStepped"};
+    for (const char* phase : phases) {
+        const std::string source = std::string("game:GetService(\"RunService\").") + phase + ":Connect(fun";
+        const ide::CompletionList list = at_end(source);
+        const std::string label = std::string(phase) + " callback";
+        expect_name(list, label.c_str());
+        expect_has(list, "function(dt)", label.c_str());
+        expect_missing(list, "function", label.c_str());
+        expect_detail(list, "function(dt)", "number", label.c_str());
+        expect_call(list, "function(dt)", false, label.c_str());
+        if (!is_snippet(list, "function(dt)")) {
+            fail(label + " should be a snippet");
+        }
+        if (index_of(list, "function(dt)") != 0) {
+            fail(label + " snippet should be the first row");
+        }
+        const int begin = static_cast<int>(source.size()) - 3;
+        if (list.prefix != "fun" || list.replace_begin != begin || list.replace_end != static_cast<int>(source.size())) {
+            fail(label + " replace range");
+        }
+    }
+
+    const ide::CompletionList typed = at_end("game:GetService(\"RunService\").Heartbeat:Connect(function");
+    expect_has(typed, "function(dt)", "typed function");
+    expect_missing(typed, "function", "typed function");
+
+    const ide::CompletionList spaced = at_end("game:GetService(\"RunService\").Heartbeat:Connect( fun");
+    expect_has(spaced, "function(dt)", "space before function");
+
+    const ide::CompletionList broken = at_end("game:GetService(\"RunService\").Heartbeat:Connect(\nfun");
+    expect_has(broken, "function(dt)", "function on the next line");
+
+    const ide::CompletionList aliased =
+        at_end("local heartbeat = game:GetService(\"RunService\").Heartbeat\nheartbeat:Connect(fun");
+    expect_has(aliased, "function(dt)", "local signal");
+    expect_detail(aliased, "function(dt)", "number", "local signal");
+
+    const ide::CompletionList dotted =
+        at_end("game:GetService(\"RunService\").Heartbeat.Connect(game, fun");
+    expect_has(dotted, "function(dt)", "dot call passes self");
+
+    const ide::CompletionList dotted_self = at_end("game:GetService(\"RunService\").Heartbeat.Connect(fun");
+    expect_missing(dotted_self, "function(dt)", "dot call first argument is self");
+    expect_has(dotted_self, "function", "dot call first argument is self");
+
+    const ide::CompletionList second =
+        at_end("game:GetService(\"RunService\").Heartbeat:Connect(callback, fun");
+    expect_missing(second, "function(dt)", "second argument is not the callback");
+    expect_has(second, "function", "second argument is not the callback");
+
+    const ide::CompletionList waiting = at_end("game:GetService(\"RunService\").Heartbeat:Wait(fun");
+    expect_missing(waiting, "function(dt)", "Wait does not take a callback");
+    expect_has(waiting, "function", "Wait does not take a callback");
+
+    const ide::CompletionList spawned = at_end("task.spawn(fun");
+    expect_missing(spawned, "function(dt)", "task.spawn has no fixed parameters");
+    expect_has(spawned, "function", "task.spawn still offers the keyword");
+
+    const ide::CompletionList plain = at_end("fun");
+    expect_has(plain, "function", "a bare function is the keyword");
+    expect_missing(plain, "function(dt)", "a bare function is the keyword");
+
+    const ide::CompletionList parameter =
+        at_end("game:GetService(\"RunService\").Heartbeat:Connect(function(d");
+    expect_name(parameter, "parameter");
+    expect_has(parameter, "dt", "open parameter list");
+    expect_missing(parameter, "function(dt)", "open parameter list");
+    expect_detail(parameter, "dt", "number", "open parameter list");
+    expect_call(parameter, "dt", false, "open parameter list");
+    if (index_of(parameter, "dt") != 0) {
+        fail("dt should be the first parameter suggestion");
+    }
+
+    const ide::CompletionList used =
+        at_end("game:GetService(\"RunService\").Heartbeat:Connect(function(dt, d");
+    expect_missing(used, "dt", "dt is already a parameter");
+
+    const ide::CompletionList changed = at_end("game.Changed:Connect(fun");
+    expect_has(changed, "function(property)", "Changed callback");
+    expect_missing(changed, "function", "Changed callback");
+    expect_missing(changed, "function(dt)", "Changed is not a phase signal");
+    expect_detail(changed, "function(property)", "string", "Changed callback");
+
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(5, 0, "Main", "Script"));
+    const ide::CompletionList script_changed = at_end("script.Changed:Connect(function(prop", world, 5);
+    expect_has(script_changed, "property", "script.Changed parameter");
+    expect_detail(script_changed, "property", "string", "script.Changed parameter");
+    expect_missing(script_changed, "dt", "script.Changed parameter");
+
+    const ide::CompletionList changed_dot = at_end("game.Changed.Connect(game, fun");
+    expect_has(changed_dot, "function(property)", "Changed dot call");
+    const ide::CompletionList changed_dot_self = at_end("game.Changed.Connect(fun");
+    expect_missing(changed_dot_self, "function(property)", "Changed dot call without self");
+    expect_has(changed_dot_self, "function", "Changed dot call without self");
+}
+
+void expect_signature(const ide::CompletionList& list, const char* signature, const char* label) {
+    if (list.signature != signature) {
+        fail(std::string(label) + " signature is '" + list.signature + "'");
+    }
+}
+
+void testFunctionParameters() {
+    const char* body = "local function test_func(a: string, b: Instance)\n    print(\"Test function!\", ";
+    const ide::CompletionList text = at_end(std::string(body) + "a");
+    expect_name(text, "parameter a");
+    expect_detail(text, "a", "string", "parameter a");
+    expect_call(text, "a", false, "parameter a");
+    expect_missing(text, "b", "parameter a");
+
+    const ide::CompletionList object = at_end(std::string(body) + "b");
+    expect_detail(object, "b", "Instance", "parameter b");
+    expect_call(object, "b", false, "parameter b");
+    expect_missing(object, "a", "parameter b");
+
+    const ide::CompletionList fields = at_end("local function test_func(a: string, b: Instance)\n    b.");
+    expect_has(fields, "Name", "Instance parameter");
+    expect_has(fields, "FindFirstChild", "Instance parameter");
+    expect_missing(fields, "Source", "Instance parameter");
+
+    const ide::CompletionList letters = at_end("local function test_func(a: string, b: Instance)\n    a:");
+    expect_has(letters, "sub", "string parameter");
+    expect_call(letters, "sub", true, "string parameter");
+
+    const ide::CompletionList untyped = at_end("local function plain(a, b: Instance)\n    a");
+    expect_detail(untyped, "a", "local", "untyped parameter");
+    const ide::CompletionList mixed = at_end("local function plain(a, b: Instance)\nend\npl");
+    expect_detail(mixed, "plain", "(a, b: Instance)", "mixed parameters");
+
+    const ide::CompletionList open_list = at_end("local function test_func(a: string, b");
+    expect_missing(open_list, "a", "parameter list still open");
+
+    const char* defined =
+        "local greeting = \"hi\"\n"
+        "local function test_func(a: string, b: Instance)\n"
+        "    print(\"Test function!\", a, b)\n"
+        "end\n";
+    const ide::CompletionList named = at_end(std::string(defined) + "test_f");
+    expect_name(named, "call test_func");
+    expect_has(named, "test_func", "call test_func");
+    expect_detail(named, "test_func", "(a: string, b: Instance)", "call test_func");
+    expect_call(named, "test_func", true, "call test_func");
+    if (!named.signature.empty()) {
+        fail("naming a function is not a call");
+    }
+
+    const ide::CompletionList invoke = at_end(std::string(defined) + "test_func(");
+    expect_name(invoke, "open call");
+    expect_signature(invoke, "(a: string, b: Instance)", "open call");
+
+    const ide::CompletionList first = at_end(std::string(defined) + "test_func(g");
+    expect_signature(first, "(a: string, b: Instance)", "first argument");
+    expect_has(first, "greeting", "first argument");
+    expect_detail(first, "greeting", "string", "first argument");
+    expect_has(first, "game", "first argument");
+    if (index_of(first, "greeting") != 0 || index_of(first, "game") < index_of(first, "greeting")) {
+        fail("a string argument should offer string values first");
+    }
+
+    const ide::CompletionList second = at_end(std::string(defined) + "test_func(\"test\", g");
+    expect_signature(second, "(a: string, b: Instance)", "second argument");
+    expect_has(second, "game", "second argument");
+    expect_detail(second, "game", "DataModel", "second argument");
+    if (index_of(second, "game") != 0 || index_of(second, "greeting") < index_of(second, "game")) {
+        fail("an Instance argument should offer instances first");
+    }
+
+    const ide::CompletionList quoted = at_end(std::string(defined) + "test_func(\"");
+    expect_argument(quoted, "string argument");
+    expect_signature(quoted, "(a: string, b: Instance)", "string argument");
+    if (!quoted.items.empty()) {
+        fail("a string parameter has no value list");
+    }
+
+    const ide::CompletionList quoted_second = at_end(std::string(defined) + "test_func(\"test\", \"");
+    expect_signature(quoted_second, "(a: string, b: Instance)", "second string argument");
+
+    const ide::CompletionList expression = at_end(
+        "local test_func = function(a: string, b: Instance)\nend\ntest_f");
+    expect_detail(expression, "test_func", "(a: string, b: Instance)", "function value");
+
+    const ide::CompletionList global = at_end("function test_func(a: string, b: Instance)\nend\ntest_f");
+    expect_detail(global, "test_func", "(a: string, b: Instance)", "global function");
+
+    const ide::CompletionList optional = at_end("local function test_func(a: string?)\n    a");
+    expect_detail(optional, "a", "string", "optional string");
+    const ide::CompletionList optional_fn = at_end("local function test_func(a: string?)\nend\ntest_f");
+    expect_detail(optional_fn, "test_func", "(a: string?)", "optional string");
+
+    const ide::CompletionList variadic = at_end("local function test_func(a: string, ...)\nend\ntest_f");
+    expect_detail(variadic, "test_func", "(a: string, ...)", "variadic function");
+
+    const ide::CompletionList printing = at_end("print(g");
+    if (!printing.signature.empty()) {
+        fail("print has no declared parameters");
+    }
+}
+
 void testSkipped() {
     const ide::CompletionList comment = at_end("-- task.");
     if (comment.site != ide::CompleteSite::None || !comment.items.empty()) {
@@ -693,6 +906,8 @@ int RunLuauCompleteTests() {
         testNames();
         testConsole();
         testStringArguments();
+        testCallbackArguments();
+        testFunctionParameters();
         testSkipped();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());

@@ -31,6 +31,12 @@ struct LuaSlot {
 using LuaRead = bool (*)(DataModel& world, DataModel& object, LuaSlot& out);
 using LuaWrite = bool (*)(DataModel& world, DataModel& object, LuaSlot& in);
 
+// One argument a Signal passes to Connect, in order.
+struct LuaParam {
+    const char* name = nullptr;
+    const char* type_name = nullptr;
+};
+
 // One field or method a class exposes to Luau. `call` is the C function for a
 // method, stored without including lua.h here. Null for properties.
 struct LuaField {
@@ -47,6 +53,12 @@ struct LuaField {
     bool service_arg = false;
     // GetChildren: the result is a list of `type_name`.
     bool returns_list = false;
+    // Connect: the first argument after self is a callback. Its parameters are
+    // the receiver signal's `params`.
+    bool callback_arg = false;
+    // Arguments a Signal passes into that callback. Empty when the field is not a signal.
+    const LuaParam* params = nullptr;
+    int param_count = 0;
     // Signal phase, or a non-instance property tag (Connection.Connected).
     int tag = -1;
     bool blocked = false;
@@ -78,12 +90,17 @@ inline LuaField lua_method(const char* name, const char* type_name, void* call, 
     return field;
 }
 
+// Every RunService signal passes the simulation step's delta as `dt`.
+inline const LuaParam kPhaseSignalArgs[] = {{"dt", "number"}};
+
 inline LuaField lua_signal_member(const char* name, int phase, bool blocked) {
     LuaField field;
     field.name = name;
     field.type_name = "Signal";
     field.tag = phase;
     field.blocked = blocked;
+    field.params = kPhaseSignalArgs;
+    field.param_count = 1;
     return field;
 }
 
@@ -96,6 +113,8 @@ void register_lua_class(const char* class_name, const char* base, const LuaField
 void lua_class_members(const char* class_name, std::vector<LuaField>& out);
 const LuaField* lua_class_find(const char* class_name, std::string_view name);
 bool lua_class_known(const char* class_name);
+// True when `class_name` is `ancestor` or registers `ancestor` as a base.
+bool lua_class_inherits(const char* class_name, const char* ancestor);
 void lua_class_names(std::vector<std::string>& out);
 
 // Names GetService accepts. The service name is also its class name.

@@ -3343,3 +3343,47 @@ TEST_CASE("S28 the command line gets one handle per instance too", "[S28]") {
     rig.runtime.run_chunk("assert(game:FindFirstChild('Box') ~= game)");
     REQUIRE(rig.runtime.last_error().empty());
 }
+
+TEST_CASE("S29 a dot reads a child by name", "[S29]") {
+    ScriptRig rig;
+    engine_core::GameObject& door = add_part(rig.model, rig.model.id(), "Door");
+    engine_core::Folder& box = rig.model.create<engine_core::Folder>();
+    rig.model.set_name(box.id(), "Box");
+    rig.model.set_parent(box.id(), rig.model.id());
+    engine_core::GameObject& inner = add_part(rig.model, box.id(), "Inner");
+    add_part(rig.model, box.id(), "Twin");
+    add_part(rig.model, box.id(), "Twin");
+    // A child named like a property: the property wins.
+    add_part(rig.model, box.id(), "Name");
+    engine_core::ModuleScript& module = rig.model.create<engine_core::ModuleScript>();
+    rig.model.set_name(module.id(), "Mod");
+    module.set_source("return 42\n");
+    rig.model.set_parent(module.id(), rig.model.id());
+    add_script(rig.model, "Reader", R"(
+        _G.door = game.Door == game:FindFirstChild("Door")
+        _G.nested = game.Box.Inner.Name == "Inner"
+        _G.parent = script.Parent.Box.Inner.Parent == game.Box
+        _G.first = game.Box.Twin == game.Box:FindFirstChild("Twin")
+        _G.property = game.Box.Name == "Box"
+        _G.required = require(script.Parent.Mod) == 42
+        local ok, message = pcall(function()
+            return game.Box.Missing
+        end)
+        _G.missing_errors = not ok
+        _G.missing_message = type(message) == "string"
+            and string.find(message, "Missing is not a valid member of Folder \"Box\"", 1, true) ~= nil
+        game.Box.Inner.Name = "Renamed"
+    )");
+    rig.model.start_simulation();
+    rig.frames(1, 0.05);
+    INFO(rig.runtime.last_error());
+    for (const char* name : {"door", "nested", "parent", "first", "property", "required", "missing_errors",
+                             "missing_message"}) {
+        bool value = false;
+        INFO(name);
+        REQUIRE(rig.runtime.global_boolean(name, value));
+        REQUIRE(value);
+    }
+    REQUIRE(rig.model.name(inner.id()) == "Renamed");
+    REQUIRE(rig.model.alive(door.id()));
+}

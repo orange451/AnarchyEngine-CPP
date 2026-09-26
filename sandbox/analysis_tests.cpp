@@ -670,3 +670,30 @@ TEST_CASE("A18 WaitForChild gives the child's class without nil and walks a requ
         REQUIRE(analysis.diagnostics(script.id()).empty());
     }
 }
+
+TEST_CASE("A19 a dotted name that reaches a child is not an unknown member", "[A19]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.model);
+    engine_core::GameObject& door = rig.model.create<engine_core::GameObject>();
+    rig.model.set_name(door.id(), "Door");
+    rig.model.set_parent(door.id(), rig.model.id());
+    engine_core::Script& script = add_script(rig.model, "Dot",
+                                              "local d = game.Door\n"
+                                              "d.Name = \"x\"\n"
+                                              "local c = game.Door.Color\n"
+                                              "local m = game.Nope\n"
+                                              "return c, m\n");
+    settle(analysis);
+    std::vector<engine_core::Diagnostic> found = analysis.diagnostics(script.id());
+    INFO(dump(found));
+    REQUIRE(found.size() == 1);
+    REQUIRE(found[0].range.start.line == 3);
+    REQUIRE(found[0].message.find("Nope") != std::string::npos);
+
+    // A rename away from Door makes the first two reads unknown again.
+    rig.model.set_name(door.id(), "Gate");
+    settle(analysis);
+    found = analysis.diagnostics(script.id());
+    INFO(dump(found));
+    REQUIRE(found.size() == 3);
+}

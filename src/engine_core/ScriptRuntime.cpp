@@ -1717,8 +1717,16 @@ int ScriptBindings::instance_index(lua_State* state) {
         }
         const LuaField* field = lua_class_find(object->class_name(), key != nullptr ? key : "");
         if (field == nullptr) {
-            lua_pushnil(state);
-            return 1;
+            // Not a property or method: a child by that name, the first in sibling
+            // order, like FindFirstChild. A property of the same name wins.
+            const InstanceId child = runtime->model_->find_first_child(object->id(), key != nullptr ? key : "");
+            if (child != 0) {
+                runtime->push_instance(state, child);
+                return 1;
+            }
+            const std::string name = runtime->model_->name(object->id());
+            luaL_error(state, "%s is not a valid member of %s \"%s\"", key != nullptr ? key : "",
+                       object->class_name() != nullptr ? object->class_name() : "Instance", name.c_str());
         }
         if (field->method) {
             push_method(state, *field);

@@ -287,6 +287,40 @@ std::vector<InstanceId> find_requires(const WorldSnap& world, InstanceId self, L
     return walk.required;
 }
 
+// `game.Door` reads the child named Door at run time. The type checker only
+// knows class members, so it reports Door as unknown. These are the dotted
+// names in a script that reach a real child in the snapshot.
+struct DotChildWalk : Luau::AstVisitor {
+    const WorldSnap* world = nullptr;
+    InstanceId self = 0;
+    std::vector<Luau::Position> found;
+
+    bool visit(Luau::AstExprIndexName* index) override {
+        if (index->index != "Parent" && resolve_expr(*world, self, index)) {
+            found.push_back(index->location.begin);
+            found.push_back(index->indexLocation.begin);
+        }
+        return true;
+    }
+};
+
+std::vector<Luau::Position> dot_children(const WorldSnap& world, InstanceId self, Luau::AstStatBlock* root) {
+    DotChildWalk walk;
+    walk.world = &world;
+    walk.self = self;
+    root->visit(&walk);
+    return walk.found;
+}
+
+// A missing-member error on a dotted name that is a child in the place.
+bool reaches_child(const Luau::TypeError& error, const std::vector<Luau::Position>& children) {
+    if (Luau::get<Luau::UnknownProperty>(error) == nullptr &&
+        Luau::get<Luau::UnknownPropButFoundLikeProp>(error) == nullptr) {
+        return false;
+    }
+    return std::find(children.begin(), children.end(), error.location.begin) != children.end();
+}
+
 bool missing_render_member(const Luau::TypeError& error) {
     if (const Luau::UnknownProperty* property = Luau::get<Luau::UnknownProperty>(error)) {
         return property->key == "PreRender" || property->key == "RenderStepped";
@@ -866,9 +900,16 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
         }
         Luau::TypeErrorToStringOptions stringify;
         stringify.fileResolver = &env.files;
+        const std::vector<Luau::Position> children =
+            parsed.root != nullptr ? dot_children(*job.world, job.id, parsed.root) : std::vector<Luau::Position>{};
         for (const Luau::TypeError& error : checked.errors) {
             // A required module reports its own problems when it is analyzed.
             if (error.moduleName != module_name) {
+                continue;
+            }
+            // `game.Door` with Door in the place runs. Its type is unknown to the
+            // checker, so later uses of it are not reported either.
+            if (reaches_child(error, children)) {
                 continue;
             }
             if (Luau::get<Luau::SyntaxError>(error) != nullptr) {

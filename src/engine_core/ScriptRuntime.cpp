@@ -42,7 +42,24 @@ const char* kInstanceMeta = "AE.Instance";
 const char* kSignalMeta = "AE.Signal";
 const char* kConnectionMeta = "AE.Connection";
 const char* kThreadMeta = "AE.Thread";
-const char* kServiceMeta = "AE.RunService";
+const char* kServiceMeta = "AE.Service";
+
+// Which service a GetService userdata stands for. The name is also its class.
+struct ServiceUd {
+    int kind = 0;
+};
+
+const char* kServiceClasses[] = {"RunService", "Selection"};
+constexpr int kServiceKinds = static_cast<int>(sizeof(kServiceClasses) / sizeof(kServiceClasses[0]));
+
+int service_kind(const char* name) {
+    for (int kind = 0; kind < kServiceKinds; ++kind) {
+        if (std::strcmp(kServiceClasses[kind], name) == 0) {
+            return kind;
+        }
+    }
+    return -1;
+}
 
 const luaL_Reg kLibraries[] = {
     {"", luaopen_base},
@@ -219,6 +236,8 @@ struct ScriptBindings {
     static int connection_gc(lua_State* state);
     static int connection_index(lua_State* state);
     static int service_index(lua_State* state);
+    static int selection_get(lua_State* state);
+    static int selection_set(lua_State* state);
     static int thread_index(lua_State* state);
 };
 
@@ -1684,10 +1703,12 @@ int ScriptBindings::instance_service(lua_State* state) {
         if (runtime == nullptr || ud->id != 0 || runtime->resolve_id(0, ud->world) == nullptr) {
             luaL_error(state, "GetService is on the root DataModel");
         }
-        if (name == nullptr || !lua_service_known(name)) {
+        const int kind = name != nullptr && lua_service_known(name) ? service_kind(name) : -1;
+        if (kind < 0) {
             luaL_error(state, "unknown service");
         }
-        lua_newuserdata(state, 1);
+        auto* service = static_cast<ServiceUd*>(lua_newuserdata(state, sizeof(ServiceUd)));
+        service->kind = kind;
         luaL_getmetatable(state, kServiceMeta);
         lua_setmetatable(state, -2);
         return 1;
@@ -1836,10 +1857,16 @@ int ScriptBindings::signal_index(lua_State* state) {
 }
 
 int ScriptBindings::service_index(lua_State* state) {
+    const auto* service = static_cast<ServiceUd*>(luaL_checkudata(state, 1, kServiceMeta));
     const char* key = luaL_checkstring(state, 2);
-    const LuaField* field = lua_class_find("RunService", key != nullptr ? key : "");
+    const char* class_name = service->kind >= 0 && service->kind < kServiceKinds ? kServiceClasses[service->kind] : "";
+    const LuaField* field = lua_class_find(class_name, key != nullptr ? key : "");
     if (field == nullptr) {
-        luaL_error(state, "unknown RunService member");
+        luaL_error(state, "unknown %s member", class_name);
+    }
+    if (field->method) {
+        push_method(state, *field);
+        return 1;
     }
     auto* ud = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
     *ud = SignalUd{};
@@ -1852,6 +1879,56 @@ int ScriptBindings::service_index(lua_State* state) {
     luaL_getmetatable(state, kSignalMeta);
     lua_setmetatable(state, -2);
     return 1;
+}
+
+int ScriptBindings::selection_get(lua_State* state) {
+    return lua_guard(state, [&] {
+        luaL_checkudata(state, 1, kServiceMeta);
+        ScriptRuntime* runtime = runtime_from(state);
+        lua_newtable(state);
+        if (runtime == nullptr || runtime->model_ == nullptr) {
+            return 1;
+        }
+        // The list may still name an instance destroyed since it was set.
+        int index = 1;
+        for (InstanceId id : runtime->model_->selection().get()) {
+            if (runtime->model_->instance(id) == nullptr) {
+                continue;
+            }
+            runtime->push_instance(state, id);
+            lua_rawseti(state, -2, index);
+            ++index;
+        }
+        return 1;
+    });
+}
+
+int ScriptBindings::selection_set(lua_State* state) {
+    return lua_guard(state, [&] {
+        luaL_checkudata(state, 1, kServiceMeta);
+        luaL_checktype(state, 2, LUA_TTABLE);
+        ScriptRuntime* runtime = runtime_from(state);
+        if (runtime == nullptr || runtime->model_ == nullptr) {
+            luaL_error(state, "Selection is not available");
+        }
+        std::vector<InstanceId> ids;
+        const int count = lua_objlen(state, 2);
+        ids.reserve(static_cast<std::size_t>(count));
+        for (int i = 1; i <= count; ++i) {
+            lua_rawgeti(state, 2, i);
+            const auto* ud = static_cast<InstanceUd*>(test_udata(state, -1, kInstanceMeta));
+            if (ud == nullptr) {
+                luaL_error(state, "Set takes a list of instances");
+            }
+            // A gone instance, or one from before a Stop, cannot be selected.
+            if (ud->id != 0 && runtime->resolve_id(ud->id, ud->world) != nullptr) {
+                ids.push_back(ud->id);
+            }
+            lua_pop(state, 1);
+        }
+        runtime->model_->selection().set(std::move(ids));
+        return 0;
+    });
 }
 
 int ScriptBindings::thread_index(lua_State* state) {
@@ -1901,6 +1978,13 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     };
     register_lua_class("RunService", nullptr, service, 6);
     register_lua_service("RunService");
+
+    const LuaField selection[] = {
+        lua_method("Get", "Instance", reinterpret_cast<void*>(&ScriptBindings::selection_get), false, false, true),
+        lua_method("Set", "nil", reinterpret_cast<void*>(&ScriptBindings::selection_set)),
+    };
+    register_lua_class("Selection", nullptr, selection, 2);
+    register_lua_service("Selection");
 }
 
 }  // namespace engine_core

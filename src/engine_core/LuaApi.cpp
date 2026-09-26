@@ -672,7 +672,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("DataModel", "FindFirstChild", "The direct child with this name, or nil.", "Instance?", false, {P("name", "string")});
     add("DataModel", "IsA", "True when this instance's class is className or a subclass of it.", "boolean", false,
         {P("className", "string")});
-    add("DataModel", "GetService", "The service with this name. RunService is the registered service.", "Instance", false,
+    add("DataModel", "GetService", "The service with this name: RunService or Selection.", "Instance", false,
         {P("className", "string")});
 
     add("Script", "Source", "The Luau source this script runs.", "string", false, {});
@@ -694,6 +694,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Signal", "Wait", "Yields until the signal fires, then returns the signal's arguments.", "", false, {});
     add("Connection", "Disconnect", "Stops this connection from firing.", nullptr, false, {});
     add("Connection", "Connected", "True until Disconnect runs.", "boolean", false, {});
+
+    add("Selection", "Get", "The selected instances, in the order they were selected.", "{Instance}", false, {});
+    add("Selection", "Set", "Selects these instances and nothing else. The explorer shows the same selection.", nullptr,
+        false, {P("selection", "{Instance}")});
 
     add("RunService", "Heartbeat", "Fires on every simulation step. The argument dt is the step length in seconds.", "Signal",
         false, {});

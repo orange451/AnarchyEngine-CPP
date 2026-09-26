@@ -205,6 +205,11 @@ int dummy_index(lua_State* state) {
                             if (member.name == nullptr) {
                                 continue;
                             }
+                            if (member.method) {
+                                lua_pushcfunction(inner, [](lua_State*) -> int { return 0; }, member.name);
+                                lua_setfield(inner, -2, member.name);
+                                continue;
+                            }
                             lua_newtable(inner);
                             lua_pushstring(inner, "Signal");
                             lua_setfield(inner, -2, "__class");

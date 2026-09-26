@@ -5,6 +5,7 @@
 #include "Events.hpp"
 #include "InvalidationQueue.hpp"
 #include "PropertyBag.hpp"
+#include "SelectionService.hpp"
 #include "types.hpp"
 
 #include <chrono>
@@ -175,6 +176,9 @@ public:
     // Edit undo. Play waypoints live on a second stack that stop drops.
     ChangeHistoryService& history();
     const ChangeHistoryService& history() const;
+    // What the studio has selected. Shared by every instance in this world.
+    SelectionService& selection();
+    const SelectionService& selection() const;
 
     // Stable authored identity, written to disk and used by references.
     // create assigns one. Empty when id is dead. Id 0 is the root.

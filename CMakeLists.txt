@@ -138,6 +138,7 @@ add_library(engine_core STATIC
     src/engine_core/ScriptAnalysis.cpp
     src/engine_core/AnalysisDefinitions.cpp
     src/engine_core/ChangeHistoryService.cpp
+    src/engine_core/SelectionService.cpp
     src/engine_core/PropertyBag.cpp
     src/engine_core/Project.cpp
 )

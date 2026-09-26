@@ -142,6 +142,7 @@ struct DataModel::State {
     // Declared before the pools so their destructors still see history.
     // Members are destroyed in reverse order.
     std::unique_ptr<ChangeHistoryService> history;
+    SelectionService selection;
     std::vector<std::unique_ptr<InstancePool>> pools;
     // First child of the root DataModel. 0 means the root has no children.
     InstanceId root_first_child = 0;
@@ -1246,6 +1247,10 @@ bool DataModel::simulation_running() const { return state_->simulation_running; 
 ChangeHistoryService& DataModel::history() { return *state_->history; }
 
 const ChangeHistoryService& DataModel::history() const { return *state_->history; }
+
+SelectionService& DataModel::selection() { return state_->selection; }
+
+const SelectionService& DataModel::selection() const { return state_->selection; }
 
 void DataModel::capture_place() {
     if (!gameplay_thread()) {

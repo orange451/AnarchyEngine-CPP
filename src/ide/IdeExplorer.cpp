@@ -41,6 +41,17 @@ struct ApplyGuard {
     ~ApplyGuard() { flag = false; }
 };
 
+// Actions the explorer runs over the whole selection. The rest run on one row.
+bool Batchable(std::string_view action) { return action == "Delete"; }
+
+constexpr int kAddKeys = jadefx::Key::ModControl | jadefx::Key::ModSuper;
+constexpr int kSelectKeys = kAddKeys | jadefx::Key::ModShift;
+
+// JadeFX's selected row, for the rows the explorer paints itself.
+const jadefx::Color kSelectedRow = jadefx::Color::rgb8(232, 240, 254);
+const jadefx::Color kSelectedHover = jadefx::Color::rgb8(210, 227, 252);
+constexpr double kSelectionBar = 3;
+
 const char* ActionIcon(std::string_view name) {
     if (name == "Edit") {
         return "Script.png";
@@ -147,6 +158,7 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
         show_menu(item, event.x, event.y);
     });
     tree_->setOnItemActivated([this](jadefx::TreeItem& item) { return activate(item); });
+    tree_->setOnSelectionChanged([this](jadefx::TreeItem* item) { tree_picked(item); });
     // Row clicks bubble here after the row has selected itself.
     tree_->setOnMouseClicked([this](const jadefx::MouseEvent& event) { clicked(event); });
     insert_button_ = jadefx::make<InsertButton>();
@@ -205,11 +217,36 @@ bool IdeExplorer::offers(engine_core::InstanceId id, std::string_view action) co
 }
 
 bool IdeExplorer::run_on_selection(std::string_view action) {
-    engine_core::InstanceId id = 0;
-    if (!tree_ || !find_id(tree_->getSelectedItem(), id) || !offers(id, action)) {
+    if (!tree_) {
         return false;
     }
-    run(std::string(action), id);
+    std::vector<engine_core::InstanceId> ids;
+    for (engine_core::InstanceId id : selected_) {
+        if (existing_row(id) != nullptr && offers(id, action)) {
+            ids.push_back(id);
+        }
+    }
+    if (ids.empty()) {
+        return false;
+    }
+    if (ids.size() > 1 && Batchable(action)) {
+        if (host_.run_many) {
+            host_.run_many(action, ids);
+        } else {
+            for (engine_core::InstanceId id : ids) {
+                run(std::string(action), id);
+            }
+        }
+        return true;
+    }
+    // One instance: the tree's own row when it is one of them, else the last picked.
+    engine_core::InstanceId one = ids.back();
+    for (engine_core::InstanceId id : ids) {
+        if (existing_row(id) == tree_->getSelectedItem()) {
+            one = id;
+        }
+    }
+    run(std::string(action), one);
     return true;
 }
 
@@ -231,6 +268,13 @@ void IdeExplorer::show_menu(jadefx::TreeItem& item, double x, double y) {
     if (!find_id(&item, id)) {
         return;
     }
+    // The tree already moved its row here. A right-click on a selected row
+    // keeps the rest of the selection.
+    pick_pending_ = false;
+    if (!is_selected(id)) {
+        select_only(id);
+    }
+    const bool many = selected_.size() > 1;
     std::vector<engine_core::ContextAction> actions;
     if (!actions_for(id, actions)) {
         return;
@@ -260,7 +304,12 @@ void IdeExplorer::show_menu(jadefx::TreeItem& item, double x, double y) {
         const bool on = !host_.enabled || host_.enabled(action.name);
         entry->setDisable(!on);
         const std::string name = action.name;
-        entry->setOnAction([this, id, name](jadefx::ActionEvent&) { run(name, id); });
+        const bool batch = many && Batchable(name);
+        entry->setOnAction([this, id, name, batch](jadefx::ActionEvent&) {
+            if (!batch || !run_on_selection(name)) {
+                run(name, id);
+            }
+        });
         menu_->getItems().add(std::move(entry));
         any = true;
     }
@@ -317,7 +366,18 @@ void IdeExplorer::clicked(const jadefx::MouseEvent& event) {
         }
     }
     engine_core::InstanceId id = 0;
-    if (at < 0 || item == nullptr || !find_id(item, id)) {
+    const bool row = item != nullptr && find_id(item, id);
+    if (row) {
+        pick_pending_ = false;
+        const int mods = modifiers();
+        click_select(id, mods);
+        if ((mods & kSelectKeys) != 0) {
+            // A click that edits the selection does not start a rename pair.
+            forget_clicks();
+            return;
+        }
+    }
+    if (at < 0 || !row) {
         forget_clicks();
         return;
     }
@@ -369,6 +429,187 @@ void IdeExplorer::forget_clicks() {
     slow_pending_ = false;
 }
 
+int IdeExplorer::modifiers() const {
+    if (host_.modifiers) {
+        return host_.modifiers();
+    }
+    const jadefx::Scene* scene = getScene();
+    return scene != nullptr ? scene->modifierMask() : 0;
+}
+
+void IdeExplorer::tree_picked(jadefx::TreeItem* item) {
+    // A rebuild, or the explorer's own select, is not a pick. A row that went
+    // away leaves the selection as it is.
+    engine_core::InstanceId id = 0;
+    if (picking_ || applying_ || item == nullptr || !find_id(item, id)) {
+        return;
+    }
+    // A row click lands here first. clicked() then takes it with the modifiers.
+    pick_pending_ = true;
+    pick_id_ = id;
+}
+
+void IdeExplorer::click_select(engine_core::InstanceId id, int mods) {
+    const bool add = (mods & kAddKeys) != 0;
+    const bool range = (mods & jadefx::Key::ModShift) != 0;
+    if (range && anchor_ != 0 && existing_row(anchor_) != nullptr) {
+        std::vector<engine_core::InstanceId> ids;
+        if (add) {
+            ids = selected_;
+        }
+        for (engine_core::InstanceId next : row_range(anchor_, id)) {
+            if (std::find(ids.begin(), ids.end(), next) == ids.end()) {
+                ids.push_back(next);
+            }
+        }
+        write_selection(std::move(ids));
+        return;
+    }
+    if (add) {
+        std::vector<engine_core::InstanceId> ids = selected_;
+        const auto found = std::find(ids.begin(), ids.end(), id);
+        if (found != ids.end()) {
+            ids.erase(found);
+        } else {
+            ids.push_back(id);
+        }
+        anchor_ = id;
+        write_selection(std::move(ids));
+        return;
+    }
+    select_only(id);
+}
+
+std::vector<engine_core::InstanceId> IdeExplorer::row_range(engine_core::InstanceId from,
+                                                            engine_core::InstanceId to) const {
+    int first = tree_->getRow(existing_row(from));
+    int last = tree_->getRow(existing_row(to));
+    if (first < 0 || last < 0) {
+        return {to};
+    }
+    if (first > last) {
+        std::swap(first, last);
+    }
+    std::unordered_map<const jadefx::TreeItem*, engine_core::InstanceId> ids;
+    ids.reserve(items_.size());
+    for (const auto& entry : items_) {
+        ids.emplace(entry.second.get(), entry.first);
+    }
+    std::vector<engine_core::InstanceId> out;
+    for (int row = first; row <= last; ++row) {
+        const auto found = ids.find(tree_->getTreeItem(row));
+        if (found != ids.end()) {
+            out.push_back(found->second);
+        }
+    }
+    return out;
+}
+
+void IdeExplorer::select_only(engine_core::InstanceId id) {
+    anchor_ = id;
+    write_selection({id});
+}
+
+void IdeExplorer::write_selection(std::vector<engine_core::InstanceId> ids) {
+    selected_ = ids;
+    root_.selection().set(std::move(ids));
+}
+
+bool IdeExplorer::is_selected(engine_core::InstanceId id) const {
+    return std::find(selected_.begin(), selected_.end(), id) != selected_.end();
+}
+
+void IdeExplorer::pull_selection() {
+    if (root_.selection().revision() != selection_seen_) {
+        std::vector<engine_core::InstanceId> ids = root_.selection().get(selection_seen_);
+        if (ids != selected_) {
+            // Set from somewhere else: a script, or the other explorer. Open
+            // the branches above each newly selected row so it can be seen.
+            for (engine_core::InstanceId id : ids) {
+                if (is_selected(id)) {
+                    continue;
+                }
+                jadefx::TreeItem* row = existing_row(id);
+                for (jadefx::TreeItem* up = row != nullptr ? row->getParent() : nullptr; up != nullptr;
+                     up = up->getParent()) {
+                    if (!up->isExpanded()) {
+                        up->setExpanded(true);
+                    }
+                }
+            }
+            selected_ = std::move(ids);
+        }
+        if (!is_selected(anchor_)) {
+            anchor_ = selected_.empty() ? 0 : selected_.back();
+        }
+    }
+    // The tree's own row stays on a selected instance: the last one picked
+    // that has a row here, or none.
+    jadefx::TreeItem* current = tree_->getSelectedItem();
+    jadefx::TreeItem* next = nullptr;
+    for (auto it = selected_.rbegin(); it != selected_.rend(); ++it) {
+        jadefx::TreeItem* row = existing_row(*it);
+        if (row == nullptr) {
+            continue;
+        }
+        if (row == current) {
+            return;
+        }
+        if (next == nullptr) {
+            next = row;
+        }
+    }
+    if (next == current) {
+        return;
+    }
+    ApplyGuard guard(picking_);
+    if (next != nullptr) {
+        tree_->select(next);
+    } else {
+        tree_->clearSelection();
+    }
+}
+
+void IdeExplorer::paint_selection() {
+    const jadefx::TreeItem* own = tree_->getSelectedItem();
+    std::vector<jadefx::Node*> cells;
+    for (engine_core::InstanceId id : selected_) {
+        jadefx::TreeItem* row = existing_row(id);
+        if (row == nullptr || row == own) {
+            continue;
+        }
+        if (cells.empty()) {
+            // One cell per shown row, top to bottom, including rows scrolled away.
+            cells = tree_->getElementsByClassName("tree-cell");
+        }
+        const int index = tree_->getRow(row);
+        if (index < 0 || static_cast<std::size_t>(index) >= cells.size()) {
+            continue;
+        }
+        auto* cell = dynamic_cast<jadefx::Region*>(cells[static_cast<std::size_t>(index)]);
+        if (cell == nullptr || !cell->isVisible() || cell->getHeight() <= 0) {
+            continue;
+        }
+        // The cell shows this row's name when the order is what it looks like.
+        bool matches = false;
+        for (jadefx::Node* label : cell->getElementsByClassName("tree-cell-label")) {
+            auto* text = dynamic_cast<jadefx::Label*>(label);
+            matches = text != nullptr && text->getText() == row->getValue();
+        }
+        if (!matches) {
+            continue;
+        }
+        cell->setBackground(cell->isHovered() ? kSelectedHover : kSelectedRow);
+        for (jadefx::Node* found : cell->getElementsByClassName("selection-bar")) {
+            if (auto* bar = dynamic_cast<jadefx::Region*>(found)) {
+                bar->setBackground(tree_->getSelectionBarColor());
+                bar->setVisible(true);
+                bar->performLayout(0, 0, kSelectionBar, cell->getHeight());
+            }
+        }
+    }
+}
+
 void IdeExplorer::begin_rename(engine_core::InstanceId id) {
     finish_rename(false);
     forget_clicks();
@@ -376,7 +617,14 @@ void IdeExplorer::begin_rename(engine_core::InstanceId id) {
     if (!row || !tree_ || !rename_field_ || getScene() == nullptr) {
         return;
     }
-    tree_->select(row.get());
+    {
+        // Renaming one row of a selection keeps the rest selected.
+        ApplyGuard guard(picking_);
+        tree_->select(row.get());
+    }
+    if (!is_selected(id)) {
+        select_only(id);
+    }
     // The label is the instance's Name, copied at the last sync.
     rename_from_ = row->getValue();
     rename_field_->setText(rename_from_);
@@ -511,8 +759,14 @@ void IdeExplorer::finish_insert(engine_core::InstanceId made) {
 
 void IdeExplorer::layoutChildren() {
     sync();
+    if (pick_pending_) {
+        pick_pending_ = false;
+        select_only(pick_id_);
+    }
+    pull_selection();
     poll_clicks();
     StackPane::layoutChildren();
+    paint_selection();
     place_rename();
 }
 

@@ -349,6 +349,12 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     engine_core::DataModel& model = runner_.simulation().datamodel();
     ExplorerHost host;
     host.run = [this](std::string_view action, engine_core::InstanceId id) { run_action(action, id); };
+    host.run_many = [this](std::string_view action, const std::vector<engine_core::InstanceId>& ids) {
+        if (action == "Delete") {
+            delete_instances(ids);
+        }
+    };
+    host.modifiers = [this] { return held_mods_; };
     host.enabled = [this](std::string_view action) { return action_enabled(action); };
     host.rename = [this](engine_core::InstanceId id, std::string name) { rename(id, std::move(name)); };
     host.insert = [this](std::string class_name, engine_core::InstanceId parent, std::shared_ptr<InsertResult> result) {
@@ -448,6 +454,7 @@ void IdeLayout::mount(jadefx::Scene& scene) {
     scene.setStylesheet(kStylesheet);
     scene.setRoot(root_);
     scene.addKeyHook([this](jadefx::KeyEvent& event) {
+        noteModifiers(event);
         if (scene_ != nullptr) {
             routeUndo(event, *scene_);
             routeDelete(event, *scene_);
@@ -1202,22 +1209,51 @@ void IdeLayout::run_action(std::string_view action, std::uint32_t id) {
     } else if (action == "Edit") {
         edit(id);
     } else if (action == "Delete") {
-        delete_instance(id);
+        delete_instances({id});
     }
 }
 
-void IdeLayout::delete_instance(std::uint32_t id) {
-    if (id == 0) {
+void IdeLayout::delete_instances(std::vector<std::uint32_t> ids) {
+    ids.erase(std::remove(ids.begin(), ids.end(), 0u), ids.end());
+    if (ids.empty()) {
         return;
     }
-    runner_.simulation().on_simulation([id](engine_core::DataModel& world) {
-        if (!world.alive(id)) {
-            return;
+    runner_.simulation().on_simulation([ids = std::move(ids)](engine_core::DataModel& world) {
+        bool any = false;
+        for (std::uint32_t id : ids) {
+            // A selected child is already gone with its selected parent.
+            if (!world.alive(id)) {
+                continue;
+            }
+            if (!any) {
+                world.history().set_pending_gesture("Delete");
+                any = true;
+            }
+            world.destroy_tree(id);
         }
-        world.history().set_pending_gesture("Delete");
-        world.destroy_tree(id);
-        CloseGesture(world);
+        if (any) {
+            CloseGesture(world);
+        }
     });
+}
+
+void IdeLayout::noteModifiers(const jadefx::KeyEvent& event) {
+    int mods = (event.shift ? jadefx::Key::ModShift : 0) | (event.control ? jadefx::Key::ModControl : 0) |
+               (event.alt ? jadefx::Key::ModAlt : 0) | (event.meta ? jadefx::Key::ModSuper : 0);
+    int own = 0;
+    if (event.key == jadefx::Key::LeftShift || event.key == jadefx::Key::RightShift) {
+        own = jadefx::Key::ModShift;
+    } else if (event.key == jadefx::Key::LeftControl || event.key == jadefx::Key::RightControl) {
+        own = jadefx::Key::ModControl;
+    } else if (event.key == jadefx::Key::LeftAlt || event.key == jadefx::Key::RightAlt) {
+        own = jadefx::Key::ModAlt;
+    } else if (event.key == jadefx::Key::LeftSuper || event.key == jadefx::Key::RightSuper) {
+        own = jadefx::Key::ModSuper;
+    }
+    if (own != 0) {
+        mods = event.pressed ? (mods | own) : (mods & ~own);
+    }
+    held_mods_ = mods;
 }
 
 void IdeLayout::routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene) {

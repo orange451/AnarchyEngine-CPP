@@ -63,8 +63,8 @@ private:
     void run_action(std::string_view action, std::uint32_t id);
     bool action_enabled(std::string_view action) const;
     void cut(std::uint32_t id);
-    // Destroys id and its descendants as one undo step.
-    void delete_instance(std::uint32_t id);
+    // Destroys each id and its descendants as one undo step.
+    void delete_instances(std::vector<std::uint32_t> ids);
     void paste(std::uint32_t id);
     void rename(std::uint32_t id, std::string name);
     void edit(std::uint32_t id);
@@ -97,8 +97,11 @@ private:
     void reapply_editors();
     void restore_closed_edits();
     void routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene);
-    // Delete on a focused explorer row deletes that instance. Text fields keep the key.
+    // Delete on a focused explorer deletes the selected instances. Text fields keep the key.
     void routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene);
+    // Keeps held_mods_ current. A modifier's own press or release is counted
+    // here, because some platforms report the mask from before that key.
+    void noteModifiers(const jadefx::KeyEvent& event);
     void noteScriptFocus();
     void adoptDock(const std::shared_ptr<IdeDock>& dock);
     void onTabDrag(IdeDock& from, const jadefx::TabDrag& drag);
@@ -153,6 +156,8 @@ private:
     int lastSceneH_ = -1;
     IdeDock* sceneDock_ = nullptr;
     jadefx::Scene* scene_ = nullptr;
+    // jadefx::Key::Mod bits held now. The explorers read it on a click.
+    int held_mods_ = 0;
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeScriptEditor>> open_scripts_;
     std::weak_ptr<class IdeConsole> console_;
     InputRouter undo_router_;

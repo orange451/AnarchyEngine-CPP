@@ -9,6 +9,7 @@
 #include "Events.hpp"
 #include "IClock.hpp"
 #include "IRenderer.hpp"
+#include "LuaApi.hpp"
 #include "Script.hpp"
 #include "ScriptRuntime.hpp"
 #include "TaskScheduler.hpp"
@@ -3099,4 +3100,74 @@ TEST_CASE("S22 a script created during play stays parented to game", "[S22]") {
     REQUIRE_FALSE(rig.model.alive(from_new));
     REQUIRE(rig.model.find_first_child(rig.model.id(), "Spawned") == 0);
     REQUIRE(rig.model.find_first_child(rig.model.id(), "FromNew") == 0);
+}
+
+TEST_CASE("Selection keeps an ordered list without repeats or the root", "[selection]") {
+    engine_core::SelectionService selection;
+    REQUIRE(selection.get().empty());
+    const std::uint64_t start = selection.revision();
+    REQUIRE(selection.set({7, 0, 3, 7}));
+    REQUIRE(selection.get() == std::vector<engine_core::InstanceId>{7, 3});
+    REQUIRE(selection.revision() == start + 1);
+    REQUIRE_FALSE(selection.set({7, 3}));
+    REQUIRE(selection.revision() == start + 1);
+    std::uint64_t seen = 0;
+    REQUIRE(selection.get(seen) == std::vector<engine_core::InstanceId>{7, 3});
+    REQUIRE(seen == start + 1);
+    REQUIRE(selection.set({}));
+    REQUIRE(selection.get().empty());
+}
+
+TEST_CASE("Selection Get and Set reach the same list the explorer reads", "[selection]") {
+    ScriptRig rig;
+    engine_core::DataModel& model = rig.model;
+    engine_core::Folder& a = model.create<engine_core::Folder>();
+    model.set_name(a.id(), "A");
+    model.set_parent(a.id(), model.id());
+    engine_core::Folder& b = model.create<engine_core::Folder>();
+    model.set_name(b.id(), "B");
+    model.set_parent(b.id(), model.id());
+    const engine_core::InstanceId a_id = a.id();
+    const engine_core::InstanceId b_id = b.id();
+    REQUIRE(engine_core::lua_service_known("Selection"));
+    const std::string definitions = engine_core::lua_analysis_definitions();
+    REQUIRE(definitions.find("function Get(self): {Instance}") != std::string::npos);
+    REQUIRE(definitions.find("function Set(self, selection: {Instance}): ()") != std::string::npos);
+
+    rig.runtime.run_chunk("local s = game:GetService(\"Selection\")\n"
+                          "local a, b = game:FindFirstChild(\"A\"), game:FindFirstChild(\"B\")\n"
+                          "s:Set({b, a, b, game})\n"
+                          "local got = s:Get()\n"
+                          "print(#got, got[1].Name, got[2].Name)");
+    const engine_core::ScriptRuntime::OutputBatch set = rig.runtime.drain_output();
+    REQUIRE(set.lines.size() == 1);
+    REQUIRE(set.lines[0].text == "2\tB\tA\n");
+    REQUIRE(model.selection().get() == std::vector<engine_core::InstanceId>{b_id, a_id});
+
+    // The studio side writes the list; the script reads it back.
+    model.selection().set({a_id});
+    rig.runtime.run_chunk("local got = game:GetService(\"Selection\"):Get()\nprint(#got, got[1].Name)");
+    const engine_core::ScriptRuntime::OutputBatch read = rig.runtime.drain_output();
+    REQUIRE(read.lines.size() == 1);
+    REQUIRE(read.lines[0].text == "1\tA\n");
+
+    // A destroyed instance is skipped, and a non-instance is an error.
+    model.selection().set({a_id, b_id});
+    model.destroy(a_id);
+    rig.runtime.run_chunk("local got = game:GetService(\"Selection\"):Get()\nprint(#got, got[1].Name)");
+    rig.runtime.run_chunk("game:GetService(\"Selection\"):Set({1})");
+    rig.runtime.run_chunk("game:GetService(\"Selection\"):Set({})\nprint(#game:GetService(\"Selection\"):Get())");
+    const engine_core::ScriptRuntime::OutputBatch rest = rig.runtime.drain_output();
+    REQUIRE(rest.lines.size() == 3);
+    REQUIRE(rest.lines[0].text == "1\tB\n");
+    REQUIRE(rest.lines[1].kind == engine_core::ScriptRuntime::OutputKind::Error);
+    REQUIRE(rest.lines[1].text.find("list of instances") != std::string::npos);
+    REQUIRE(rest.lines[2].text == "0\n");
+    REQUIRE(model.selection().get().empty());
+
+    // RunService still resolves its signals through the shared service userdata.
+    rig.runtime.run_chunk("print(typeof(game:GetService(\"RunService\").Heartbeat.Connect))");
+    const engine_core::ScriptRuntime::OutputBatch run = rig.runtime.drain_output();
+    REQUIRE(run.lines.size() == 1);
+    REQUIRE(run.lines[0].text == "function\n");
 }

@@ -869,7 +869,93 @@ struct ScriptAnalysis::State {
     std::unordered_map<InstanceId, Record> published;
     std::unordered_map<InstanceId, std::unordered_set<InstanceId>> requires_of;
     std::unordered_map<InstanceId, std::unordered_set<InstanceId>> required_by;
+
+    AnalysisScope scope = AnalysisScope::All;
+    // Editors showing each script. Open scope analyzes these and what they require.
+    std::unordered_map<InstanceId, int> watched;
+    // Waiting for pump() to capture the tree: newly watched scripts, and
+    // modules a watched script turned out to require.
+    std::unordered_set<InstanceId> to_schedule;
 };
+
+std::unordered_set<InstanceId> ScriptAnalysis::active_locked() const {
+    std::unordered_set<InstanceId> active;
+    std::vector<InstanceId> frontier;
+    for (const auto& entry : state_->watched) {
+        if (active.insert(entry.first).second) {
+            frontier.push_back(entry.first);
+        }
+    }
+    while (!frontier.empty()) {
+        const InstanceId next = frontier.back();
+        frontier.pop_back();
+        const auto found = state_->requires_of.find(next);
+        if (found == state_->requires_of.end()) {
+            continue;
+        }
+        for (InstanceId target : found->second) {
+            if (active.insert(target).second) {
+                frontier.push_back(target);
+            }
+        }
+    }
+    return active;
+}
+
+std::vector<InstanceId> ScriptAnalysis::drop_inactive_locked() {
+    const std::unordered_set<InstanceId> active = active_locked();
+    std::unordered_set<InstanceId> known;
+    for (const auto& entry : state_->published) {
+        known.insert(entry.first);
+    }
+    for (const auto& entry : state_->pending) {
+        known.insert(entry.first);
+    }
+    for (const auto& entry : state_->tokens) {
+        known.insert(entry.first);
+    }
+    for (InstanceId id : state_->to_schedule) {
+        known.insert(id);
+    }
+    std::vector<InstanceId> dropped;
+    for (InstanceId id : known) {
+        if (active.count(id) != 0) {
+            continue;
+        }
+        ++state_->generations[id];
+        state_->pending.erase(id);
+        state_->to_schedule.erase(id);
+        const auto token = state_->tokens.find(id);
+        if (token != state_->tokens.end()) {
+            if (token->second) {
+                token->second->cancel();
+            }
+            state_->tokens.erase(token);
+        }
+        state_->results.erase(std::remove_if(state_->results.begin(), state_->results.end(),
+                                             [id](const Finished& finished) { return finished.id == id; }),
+                              state_->results.end());
+        if (state_->published.erase(id) > 0) {
+            dropped.push_back(id);
+        }
+    }
+    // An inactive script's own requires no longer keep anything alive.
+    for (InstanceId id : known) {
+        if (active.count(id) == 0) {
+            const auto own = state_->requires_of.find(id);
+            if (own != state_->requires_of.end()) {
+                for (InstanceId target : own->second) {
+                    const auto found = state_->required_by.find(target);
+                    if (found != state_->required_by.end()) {
+                        found->second.erase(id);
+                    }
+                }
+                state_->requires_of.erase(own);
+            }
+        }
+    }
+    return dropped;
+}
 
 void ScriptAnalysis::replace_requires(InstanceId script, const std::vector<InstanceId>& targets) {
     std::unordered_set<InstanceId>& current = state_->requires_of[script];
@@ -1071,20 +1157,49 @@ TypeMode ScriptAnalysis::default_mode() const {
     return state_->default_mode;
 }
 
-void ScriptAnalysis::invalidate(InstanceId script) {
-    bool enabled = false;
-    {
-        std::lock_guard<std::mutex> lock(state_->mu);
-        enabled = state_->enabled && !state_->stop;
-    }
-    if (!enabled) {
+void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
+    if (ids.empty()) {
         return;
     }
+    const std::shared_ptr<WorldSnap> world = capture_world(model_);
+    ensure_worker();
+    std::lock_guard<std::mutex> lock(state_->mu);
+    if (!state_->enabled || state_->stop) {
+        return;
+    }
+    const TypeMode mode = state_->default_mode;
+    const auto ready_at = std::chrono::steady_clock::now() + kDebounce;
+    for (InstanceId id : ids) {
+        // Handled either way: a dead or non-script id has nothing to check.
+        state_->to_schedule.erase(id);
+        const NodeSnap* node = world->find(id);
+        if (node == nullptr || !node->lua) {
+            continue;
+        }
+        std::uint64_t& generation = state_->generations[id];
+        ++generation;
+        const auto previous = state_->tokens.find(id);
+        if (previous != state_->tokens.end() && previous->second) {
+            previous->second->cancel();
+        }
+        auto token = std::make_shared<Luau::FrontendCancellationToken>();
+        state_->tokens[id] = token;
+        Job job;
+        job.id = id;
+        job.generation = generation;
+        job.default_mode = mode;
+        job.world = world;
+        job.cancel = std::move(token);
+        state_->pending[id] = Pending{std::move(job), ready_at};
+    }
+    state_->cv.notify_all();
+}
+
+void ScriptAnalysis::invalidate(InstanceId script) {
     DataModel* object = model_.instance(script);
     if (dynamic_cast<LuaSource*>(object) == nullptr) {
         return;
     }
-    const std::shared_ptr<WorldSnap> world = capture_world(model_);
     std::vector<InstanceId> chain;
     {
         std::lock_guard<std::mutex> lock(state_->mu);
@@ -1093,80 +1208,97 @@ void ScriptAnalysis::invalidate(InstanceId script) {
         }
         std::unordered_set<InstanceId> seen;
         collect_dependents(script, chain, seen);
-    }
-    ensure_worker();
-    {
-        std::lock_guard<std::mutex> lock(state_->mu);
-        if (!state_->enabled || state_->stop) {
-            return;
+        if (state_->scope == AnalysisScope::Open) {
+            const std::unordered_set<InstanceId> active = active_locked();
+            chain.erase(std::remove_if(chain.begin(), chain.end(),
+                                       [&active](InstanceId id) { return active.count(id) == 0; }),
+                        chain.end());
         }
-        const TypeMode mode = state_->default_mode;
-        const auto ready_at = std::chrono::steady_clock::now() + kDebounce;
-        for (InstanceId id : chain) {
-            const NodeSnap* node = world->find(id);
-            if (node == nullptr || !node->lua) {
-                continue;
-            }
-            std::uint64_t& generation = state_->generations[id];
-            ++generation;
-            const auto previous = state_->tokens.find(id);
-            if (previous != state_->tokens.end() && previous->second) {
-                previous->second->cancel();
-            }
-            auto token = std::make_shared<Luau::FrontendCancellationToken>();
-            state_->tokens[id] = token;
-            Job job;
-            job.id = id;
-            job.generation = generation;
-            job.default_mode = mode;
-            job.world = world;
-            job.cancel = std::move(token);
-            state_->pending[id] = Pending{std::move(job), ready_at};
-        }
-        state_->cv.notify_all();
     }
+    schedule(chain);
 }
 
 void ScriptAnalysis::invalidate_all() {
-    bool enabled = false;
-    {
-        std::lock_guard<std::mutex> lock(state_->mu);
-        enabled = state_->enabled && !state_->stop;
-    }
-    if (!enabled) {
-        return;
-    }
-    const std::shared_ptr<WorldSnap> world = capture_world(model_);
-    ensure_worker();
+    std::vector<InstanceId> ids;
     {
         std::lock_guard<std::mutex> lock(state_->mu);
         if (!state_->enabled || state_->stop) {
             return;
         }
-        const TypeMode mode = state_->default_mode;
-        const auto ready_at = std::chrono::steady_clock::now() + kDebounce;
-        for (const NodeSnap& node : world->nodes) {
-            if (!node.lua) {
-                continue;
-            }
-            std::uint64_t& generation = state_->generations[node.id];
-            ++generation;
-            const auto previous = state_->tokens.find(node.id);
-            if (previous != state_->tokens.end() && previous->second) {
-                previous->second->cancel();
-            }
-            auto token = std::make_shared<Luau::FrontendCancellationToken>();
-            state_->tokens[node.id] = token;
-            Job job;
-            job.id = node.id;
-            job.generation = generation;
-            job.default_mode = mode;
-            job.world = world;
-            job.cancel = std::move(token);
-            state_->pending[node.id] = Pending{std::move(job), ready_at};
+        if (state_->scope == AnalysisScope::Open) {
+            const std::unordered_set<InstanceId> active = active_locked();
+            ids.assign(active.begin(), active.end());
         }
-        state_->cv.notify_all();
     }
+    if (ids.empty()) {
+        // All scope: every script in the tree. schedule skips non-scripts.
+        bool all = false;
+        {
+            std::lock_guard<std::mutex> lock(state_->mu);
+            all = state_->scope == AnalysisScope::All;
+        }
+        if (!all) {
+            return;
+        }
+        model_.for_each_instance([&ids](DataModel& object) {
+            if (dynamic_cast<LuaSource*>(&object) != nullptr) {
+                ids.push_back(object.id());
+            }
+        });
+    }
+    schedule(ids);
+}
+
+void ScriptAnalysis::set_scope(AnalysisScope scope) {
+    std::vector<InstanceId> dropped;
+    {
+        std::lock_guard<std::mutex> lock(state_->mu);
+        if (state_->scope == scope) {
+            return;
+        }
+        state_->scope = scope;
+        if (scope == AnalysisScope::Open) {
+            dropped = drop_inactive_locked();
+        }
+    }
+    fire(dropped);
+    if (scope == AnalysisScope::All) {
+        state_->world_stale.store(true, std::memory_order_relaxed);
+    }
+}
+
+AnalysisScope ScriptAnalysis::scope() const {
+    std::lock_guard<std::mutex> lock(state_->mu);
+    return state_->scope;
+}
+
+void ScriptAnalysis::watch(InstanceId script) {
+    std::lock_guard<std::mutex> lock(state_->mu);
+    ++state_->watched[script];
+    // Checked against the tree as it is when the editor opens, not whenever
+    // its last result was made.
+    state_->to_schedule.insert(script);
+}
+
+void ScriptAnalysis::unwatch(InstanceId script) {
+    std::vector<InstanceId> dropped;
+    {
+        std::lock_guard<std::mutex> lock(state_->mu);
+        const auto found = state_->watched.find(script);
+        if (found == state_->watched.end()) {
+            return;
+        }
+        if (--found->second > 0) {
+            return;
+        }
+        state_->watched.erase(found);
+        if (state_->scope == AnalysisScope::Open) {
+            dropped = drop_inactive_locked();
+        } else {
+            state_->to_schedule.erase(script);
+        }
+    }
+    fire(dropped);
 }
 
 void ScriptAnalysis::remove(InstanceId script) {
@@ -1265,6 +1397,18 @@ void ScriptAnalysis::pump() {
             invalidate_all();
         }
     }
+    // Newly watched scripts, and modules they turned out to require.
+    std::vector<InstanceId> wanted;
+    {
+        std::lock_guard<std::mutex> lock(state_->mu);
+        wanted.assign(state_->to_schedule.begin(), state_->to_schedule.end());
+    }
+    if (!wanted.empty()) {
+        DataModelLock lock(model_, DataModelLock::Read, std::chrono::milliseconds(2));
+        if (lock.owns()) {
+            schedule(wanted);
+        }
+    }
     std::vector<Finished> ready;
     {
         std::lock_guard<std::mutex> lock(state_->mu);
@@ -1287,6 +1431,25 @@ void ScriptAnalysis::pump() {
             record.diagnostics = std::move(finished.diagnostics);
             replace_requires(finished.id, finished.requires);
             fired.push_back(finished.id);
+        }
+        if (state_->scope == AnalysisScope::Open && !fired.empty()) {
+            // A required module is on the watched script's path. Check it too,
+            // and what it requires, as each result arrives.
+            for (InstanceId id : fired) {
+                const auto found = state_->requires_of.find(id);
+                if (found == state_->requires_of.end()) {
+                    continue;
+                }
+                for (InstanceId target : found->second) {
+                    if (state_->published.count(target) == 0 && state_->pending.count(target) == 0 &&
+                        state_->tokens.count(target) == 0) {
+                        state_->to_schedule.insert(target);
+                    }
+                }
+            }
+            // A dropped require can leave a module nobody watches.
+            const std::vector<InstanceId> dropped = drop_inactive_locked();
+            fired.insert(fired.end(), dropped.begin(), dropped.end());
         }
     }
     fire(fired);
@@ -1329,7 +1492,7 @@ bool ScriptAnalysis::busy() const {
         return true;
     }
     std::lock_guard<std::mutex> lock(state_->mu);
-    return !state_->pending.empty() || state_->inflight > 0;
+    return !state_->pending.empty() || state_->inflight > 0 || !state_->to_schedule.empty();
 }
 
 bool ScriptAnalysis::idle() const {
@@ -1337,7 +1500,8 @@ bool ScriptAnalysis::idle() const {
         return false;
     }
     std::lock_guard<std::mutex> lock(state_->mu);
-    return state_->pending.empty() && state_->inflight == 0 && state_->results.empty();
+    return state_->pending.empty() && state_->inflight == 0 && state_->results.empty() &&
+           state_->to_schedule.empty();
 }
 
 void ScriptAnalysis::fire(const std::vector<InstanceId>& ids) {

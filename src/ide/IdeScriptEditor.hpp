@@ -27,7 +27,9 @@ class IdeScriptEditor : public IdePane {
     friend class ScriptCodeArea;
 
 public:
+    // Watches its script in analysis until the editor is destroyed.
     IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id);
+    ~IdeScriptEditor() override;
 
     std::uint32_t instanceId() const { return id_; }
 

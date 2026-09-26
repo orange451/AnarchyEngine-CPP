@@ -131,6 +131,8 @@ struct IdeScriptEditor::Commit {
 IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     : IdePane("Script.lua", true), engine_(engine), id_(id), commit_(std::make_shared<Commit>()) {
     setIconFile("Script.png");
+    // Checked against the tree as it is now, not as it was at its last check.
+    engine_.analysis().watch(id_);
     commit_->id = id;
     auto area = std::make_shared<ScriptCodeArea>();
     area->editor = this;
@@ -219,6 +221,8 @@ void IdeScriptEditor::applyUndoText() {
     dirty_at_ = std::chrono::steady_clock::now();
     paint();
 }
+
+IdeScriptEditor::~IdeScriptEditor() { engine_.analysis().unwatch(id_); }
 
 void IdeScriptEditor::onOpen() { focus(); }
 

@@ -432,3 +432,118 @@ TEST_CASE("A13 a loaded project is analyzed against the whole loaded tree", "[A1
     REQUIRE(analysis.diagnostics(hop).empty());
     fs::remove_all(dir);
 }
+
+namespace {
+
+engine_core::ModuleScript& add_module(engine_core::DataModel& model, const char* name, const char* source) {
+    engine_core::ModuleScript& module = model.create<engine_core::ModuleScript>();
+    model.set_name(module.id(), name);
+    module.set_source(source);
+    model.set_parent(module.id(), model.id());
+    return module;
+}
+
+bool analyzed(const engine_core::ScriptAnalysis& analysis, engine_core::InstanceId id) {
+    return analysis.analyzed_source(id).has_value();
+}
+
+}  // namespace
+
+TEST_CASE("A14 open scope checks watched scripts and the modules they require", "[A14]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.model);
+    analysis.set_scope(engine_core::AnalysisScope::Open);
+    const char* kBad = "--!strict\nlocal x: number = \"a\"\nreturn x\n";
+    engine_core::ModuleScript& deep = add_module(rig.model, "Deep", kBad);
+    engine_core::ModuleScript& mid = add_module(rig.model, "Mid", "return require(script.Parent.Deep)\n");
+    engine_core::ModuleScript& other = add_module(rig.model, "Other", kBad);
+    engine_core::Script& main = add_script(rig.model, "Main", "local value = require(script.Parent.Mid)\nreturn value\n");
+    engine_core::Script& closed = add_script(rig.model, "Closed", kBad);
+    settle(analysis);
+    REQUIRE_FALSE(analyzed(analysis, main.id()));
+    REQUIRE_FALSE(analyzed(analysis, closed.id()));
+    REQUIRE_FALSE(analyzed(analysis, deep.id()));
+
+    SECTION("a watched script pulls in its requires, recursively, and nothing else") {
+        analysis.watch(main.id());
+        settle(analysis);
+        REQUIRE(analyzed(analysis, main.id()));
+        REQUIRE(analyzed(analysis, mid.id()));
+        REQUIRE(analyzed(analysis, deep.id()));
+        REQUIRE(has_code(analysis.diagnostics(deep.id()), "Type"));
+        REQUIRE_FALSE(analyzed(analysis, other.id()));
+        REQUIRE_FALSE(analyzed(analysis, closed.id()));
+
+        // An edit to a closed script is not checked. One on the watched path is.
+        closed.set_source("return 2\n");
+        deep.set_source("return 3\n");
+        settle(analysis);
+        REQUIRE_FALSE(analyzed(analysis, closed.id()));
+        REQUIRE(analysis.analyzed_source(deep.id()) == std::string("return 3\n"));
+        REQUIRE(analysis.diagnostics(deep.id()).empty());
+
+        // Dropping the require drops the modules it brought in.
+        main.set_source("return 1\n");
+        settle(analysis);
+        REQUIRE(analyzed(analysis, main.id()));
+        REQUIRE_FALSE(analyzed(analysis, mid.id()));
+        REQUIRE_FALSE(analyzed(analysis, deep.id()));
+
+        analysis.unwatch(main.id());
+        settle(analysis);
+        REQUIRE_FALSE(analyzed(analysis, main.id()));
+    }
+
+    SECTION("a module shared by two watched scripts stays until both close") {
+        engine_core::Script& second =
+            add_script(rig.model, "Second", "local value = require(script.Parent.Deep)\nreturn value\n");
+        analysis.watch(main.id());
+        analysis.watch(second.id());
+        settle(analysis);
+        REQUIRE(analyzed(analysis, deep.id()));
+        analysis.unwatch(main.id());
+        settle(analysis);
+        REQUIRE(analyzed(analysis, deep.id()));
+        REQUIRE_FALSE(analyzed(analysis, mid.id()));
+        analysis.unwatch(second.id());
+        settle(analysis);
+        REQUIRE_FALSE(analyzed(analysis, deep.id()));
+    }
+
+    SECTION("a watched script follows the tree") {
+        engine_core::Script& hop = add_script(rig.model, "Hop",
+                                               "local tri = game:FindFirstChild(\"Tri0\")\n"
+                                               "assert(tri)\n"
+                                               "local home = tri.Position\n"
+                                               "return home\n");
+        analysis.watch(hop.id());
+        settle(analysis);
+        REQUIRE_FALSE(analysis.diagnostics(hop.id()).empty());
+        engine_core::TestTriangle& triangle = rig.model.create<engine_core::TestTriangle>();
+        rig.model.set_name(triangle.id(), "Tri0");
+        rig.model.set_parent(triangle.id(), rig.model.id());
+        settle(analysis);
+        INFO(dump(analysis.diagnostics(hop.id())));
+        REQUIRE(analysis.diagnostics(hop.id()).empty());
+        REQUIRE_FALSE(analyzed(analysis, closed.id()));
+    }
+}
+
+TEST_CASE("A15 switching to open scope drops what is not watched", "[A15]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.model);
+    engine_core::Script& kept = add_script(rig.model, "Kept", "return 1\n");
+    engine_core::Script& dropped = add_script(rig.model, "Dropped", "return 2\n");
+    settle(analysis);
+    REQUIRE(analyzed(analysis, kept.id()));
+    REQUIRE(analyzed(analysis, dropped.id()));
+    analysis.watch(kept.id());
+    analysis.set_scope(engine_core::AnalysisScope::Open);
+    settle(analysis);
+    REQUIRE(analyzed(analysis, kept.id()));
+    REQUIRE_FALSE(analyzed(analysis, dropped.id()));
+    // A watched script that is destroyed does not leave analysis busy.
+    rig.model.destroy(kept.id());
+    settle(analysis);
+    REQUIRE(analysis.idle());
+}

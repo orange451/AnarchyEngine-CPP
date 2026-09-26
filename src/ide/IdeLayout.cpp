@@ -9,6 +9,7 @@
 #include "IdeIcons.hpp"
 #include "LuaApi.hpp"
 #include "Project.hpp"
+#include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
 #include "IdeDock.hpp"
 #include "IdeExplorer.hpp"
@@ -251,6 +252,9 @@ struct IdeLayout::Clip {
 
 IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_unique<Clip>()) {
     runner_.prepare();
+    // Only open scripts, and the modules they require, are checked. Nothing
+    // else in the studio reads diagnostics.
+    runner_.simulation().analysis().set_scope(engine_core::AnalysisScope::Open);
 
     auto file = jadefx::make<jadefx::Menu>("File");
     AddItem(*file, "New", "New.png", jadefx::Key::N, jadefx::Key::ModControl)->setOnAction([this](jadefx::ActionEvent&) {

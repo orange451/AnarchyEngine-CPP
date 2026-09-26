@@ -22,6 +22,11 @@ enum class Severity { Error, Warning, Information, Hint };
 // Default when a script has no `--!` hot comment on the first lines.
 enum class TypeMode { NoCheck, NonStrict, Strict };
 
+// Which scripts are analyzed. All: every Script and ModuleScript. Open: the
+// watched scripts and every ModuleScript they require, recursively, because a
+// required module's types are part of the watched script's check.
+enum class AnalysisScope { All, Open };
+
 // Rule names a header `--!nolint` comment can name. Unknown is not a rule.
 void lint_rule_names(std::vector<std::string>& out);
 
@@ -62,6 +67,17 @@ public:
 
     void set_default_mode(TypeMode mode);
     TypeMode default_mode() const;
+
+    // All is the default. Switching to Open drops every result outside the
+    // watched scripts and their required modules.
+    void set_scope(AnalysisScope scope);
+    AnalysisScope scope() const;
+    // An editor is showing this script. It is checked against the current tree
+    // on the next pump(), whatever result it had. Counted: each watch needs an unwatch.
+    void watch(InstanceId script);
+    // In Open scope, the last unwatch drops this script's result, and the
+    // result of every module no other watched script still requires.
+    void unwatch(InstanceId script);
 
     // Source, name, or parent changed. Also used after place restore.
     void invalidate(InstanceId script);
@@ -115,6 +131,15 @@ private:
     void shutdown();
     void run();
     void fire(const std::vector<InstanceId>& ids);
+    // Captures the tree once and queues these scripts. Gameplay thread, or a
+    // thread that holds the DataModel lock.
+    void schedule(const std::vector<InstanceId>& ids);
+    // Open scope with the state mutex held: the watched scripts and every
+    // script they reach through recorded requires.
+    std::unordered_set<InstanceId> active_locked() const;
+    // Open scope with the state mutex held: forgets every script outside
+    // active_locked(). Returns the ones that had a published result.
+    std::vector<InstanceId> drop_inactive_locked();
     void replace_requires(InstanceId script, const std::vector<InstanceId>& targets);
     void forget_requires(InstanceId script);
     void collect_dependents(InstanceId id, std::vector<InstanceId>& out, std::unordered_set<InstanceId>& seen) const;

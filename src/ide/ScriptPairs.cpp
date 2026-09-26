@@ -875,6 +875,105 @@ int BreakAt(const Scan& scan, int line, const Header& header) {
     return header.trailing_parens > 0 ? header.signature_end : scan.line_end(line);
 }
 
+// The line after a table opener. A deeper line is a field that already exists. A
+// '}' at the same indent already closes this table. Anything else needs a '}'.
+Follow NextBraceLine(const Scan& scan, int line, int indent, int tab_size) {
+    for (int next = line + 1; next < scan.line_count(); ++next) {
+        if (scan.blank(next)) {
+            continue;
+        }
+        const int next_indent = scan.indent_of(next, tab_size);
+        if (next_indent > indent) {
+            return Follow::Body;
+        }
+        const int token = scan.first_token(next);
+        if (token >= 0 && scan.token(token).kind == Kind::RBrace && next_indent == indent) {
+            return Follow::Closer;
+        }
+        return Follow::Statement;
+    }
+    return Follow::Missing;
+}
+
+// Last token that ends at or before `caret`, or -1.
+int TokenBefore(const Scan& scan, int caret) {
+    int found = -1;
+    for (int index = 0; index < scan.token_count(); ++index) {
+        if (scan.token(index).end > caret) {
+            break;
+        }
+        found = index;
+    }
+    return found;
+}
+
+// Only spaces or tabs in [from, to).
+bool OnlyBlanks(const Scan& scan, int from, int to) {
+    for (int index = from; index < to; ++index) {
+        const char32_t code = scan.text()[static_cast<std::size_t>(index)];
+        if (code != U' ' && code != U'\t') {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Enter after a table's '{', or in a comment after it. `{|}` opens the pair onto three lines. A '{'
+// that ends the line gains a '}' on its own line unless the table is already
+// closed or filled below. A '(' just before the '{', as in foo({, closes after it.
+EnterResult EnterBrace(const Scan& scan, int caret, int tab_size, bool spaces) {
+    EnterResult result;
+    const int before = TokenBefore(scan, caret);
+    if (before < 0 || scan.token(before).kind != Kind::LBrace) {
+        return result;
+    }
+    const Tok& lbrace = scan.token(before);
+    const int line = scan.line_of(caret);
+    if (lbrace.begin < scan.line_start(line)) {
+        return result;
+    }
+    const std::u32string base = scan.leading(line);
+    const std::u32string body = BodyLeading(scan, line, tab_size, spaces);
+
+    const int after = before + 1;
+    if (after < scan.token_count() && scan.token(after).kind == Kind::RBrace && OnlyBlanks(scan, lbrace.end, caret) &&
+        scan.token(after).begin <= scan.line_end(line) && OnlyBlanks(scan, caret, scan.token(after).begin)) {
+        std::u32string inserted(1, U'\n');
+        inserted += body;
+        inserted.push_back(U'\n');
+        inserted += base;
+        result.insert = true;
+        result.begin = lbrace.end;
+        result.end = scan.token(after).begin;
+        result.text = Utf8(inserted);
+        result.caret = lbrace.end + 1 + static_cast<int>(body.size());
+        return result;
+    }
+    if (!scan.logical_end(caret, line)) {
+        return result;
+    }
+
+    const int indent = scan.indent_of(line, tab_size);
+    const Follow follow = NextBraceLine(scan, line, indent, tab_size);
+    std::u32string inserted(1, U'\n');
+    inserted += body;
+    if (follow == Follow::Missing || follow == Follow::Statement) {
+        inserted.push_back(U'\n');
+        inserted += base;
+        inserted.push_back(U'}');
+        if (before > 0 && scan.token(before - 1).kind == Kind::LParen) {
+            inserted.push_back(U')');
+        }
+    }
+    const int at = scan.line_end(line);
+    result.insert = true;
+    result.begin = at;
+    result.end = at;
+    result.text = Utf8(inserted);
+    result.caret = at + 1 + static_cast<int>(body.size());
+    return result;
+}
+
 }  // namespace
 
 char32_t source_code_point(std::string_view source, int index) {
@@ -930,6 +1029,12 @@ EnterResult enter_luau(std::string_view source, int caret, int tab_size, bool sp
     const Scan::Context where = scan.context(caret);
     if (where.in_string() || where.in_long_comment) {
         return result;
+    }
+    if (!flat) {
+        const EnterResult brace = EnterBrace(scan, caret, tab_size, spaces);
+        if (brace.insert) {
+            return brace;
+        }
     }
     const int line = scan.line_of(caret);
     const Header header = FunctionHeader(scan, line, caret);

@@ -311,6 +311,24 @@ int RunScriptPairsTests() {
     ExpectEnter("function foo()\n-- note", static_cast<int>(std::string("function foo()").size()),
                 "function foo()\n    \nend\n-- note", "a comment below the header stays below end");
 
+    const std::string module_head = "local module = {\n    Configs = {\n        ValidateTransactions = true,\n    },\n    Test = {";
+    ExpectEnter(module_head + "\n}", static_cast<int>(module_head.size()), module_head + "\n        \n    }\n}",
+                "a nested table gains its closer", static_cast<int>(module_head.size()) + 9);
+    ExpectEnter("local t = {", -1, "local t = {\n    \n}", "a table gains its closer", 16);
+    ExpectEnter("local t = { -- note", -1, "local t = { -- note\n    \n}", "a trailing comment stays on the table line", 24);
+    ExpectEnter("\tlocal t = {", -1, "\tlocal t = {\n\t    \n\t}", "a table closer keeps the line indent", 18);
+    ExpectEnter("foo({", -1, "foo({\n    \n})", "a table argument closes the call", 10);
+    ExpectEnter("local t = {}", 11, "local t = {\n    \n}", "enter between braces opens the table", 16);
+    ExpectEnter("local t = { }", 11, "local t = {\n    \n}", "blanks between braces are dropped", 16);
+    ExpectEnter("local t = {\n}", 11, "local t = {\n    \n}", "a closed table only gains the indented line", 16);
+    ExpectEnter("local t = {\n    a = 1,\n}", 11, "local t = {\n    \n    a = 1,\n}", "a filled table only gains the indented line",
+                16);
+    ExpectPlain("local t = { a = 1", -1, "a field after the brace is a normal newline");
+    ExpectPlain("local t = {a}", 11, "a brace with a field after it is a normal newline");
+    ExpectPlain("local s = \"{", -1, "a brace in a string is not a table");
+    ExpectPlain("-- local t = {", -1, "a brace in a comment is not a table");
+    ExpectFlatPlain("local t = {", -1, "the command line leaves an open brace alone");
+
     ExpectFlat("function foo()", -1, "function foo() end", "a command-line function gains end");
     ExpectFlat("local function foo()", -1, "local function foo() end", "a command-line local function gains end");
     ExpectFlat("function Foo:bar()", -1, "function Foo:bar() end", "a command-line method gains end");

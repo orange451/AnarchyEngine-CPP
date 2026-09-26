@@ -71,6 +71,9 @@ private:
     // Destroys each id and its descendants as one undo step.
     void delete_instances(std::vector<std::uint32_t> ids);
     void paste(std::uint32_t id);
+    // Puts ids under parent in order, just before its child before, or last
+    // when before is 0, as one undo step. One that would cycle stays put.
+    void move(std::vector<std::uint32_t> ids, std::uint32_t parent, std::uint32_t before);
     void rename(std::uint32_t id, std::string name);
     void edit(std::uint32_t id);
     std::shared_ptr<IdeScriptEditor> open_editor(std::uint32_t id) const;

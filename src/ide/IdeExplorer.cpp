@@ -155,6 +155,9 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
     tree_->setOnItemActivated([this](jadefx::TreeItem& item) { return activate(item); });
     tree_->setSelectionMode(jadefx::SelectionMode::Multiple);
     tree_->setOnSelectedItemsChanged([this] { tree_selected(); });
+    if (host_.move) {
+        tree_->setOnItemsDropped([this](const jadefx::TreeDrop& drop) { dropped(drop); });
+    }
     // Row clicks bubble here after the row has selected itself.
     tree_->setOnMouseClicked([this](const jadefx::MouseEvent& event) { clicked(event); });
     insert_button_ = jadefx::make<InsertButton>();
@@ -167,6 +170,44 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
     rename_field_->setOnAction([this](jadefx::ActionEvent&) { finish_rename(true); });
     getChildren().add(rename_field_);
     sync();
+}
+
+void IdeExplorer::dropped(const jadefx::TreeDrop& drop) {
+    engine_core::InstanceId parent = 0;
+    if (!host_.move || !find_id(drop.parent(), parent)) {
+        return;
+    }
+    std::vector<engine_core::InstanceId> ids;
+    std::unordered_set<const jadefx::TreeItem*> carried;
+    for (const jadefx::TreeItem* item : drop.items) {
+        engine_core::InstanceId id = 0;
+        if (find_id(item, id)) {
+            ids.push_back(id);
+            carried.insert(item);
+        }
+    }
+    if (ids.empty()) {
+        return;
+    }
+    // The rows mirror sibling order, so the row after the line names the
+    // instance they go before. A carried row is moving too, so it is skipped.
+    engine_core::InstanceId before = 0;
+    const jadefx::TreeItem* next = nullptr;
+    if (drop.position == jadefx::TreeDropPosition::Before) {
+        next = drop.target;
+    } else if (drop.position == jadefx::TreeDropPosition::After) {
+        next = drop.target->nextSibling();
+    }
+    while (next != nullptr && carried.count(next) != 0) {
+        next = next->nextSibling();
+    }
+    if (next != nullptr && !find_id(next, before)) {
+        return;
+    }
+    if (drop.position == jadefx::TreeDropPosition::Into) {
+        drop.target->setExpanded(true);
+    }
+    host_.move(ids, parent, before);
 }
 
 bool IdeExplorer::find_id(const jadefx::TreeItem* item, engine_core::InstanceId& id) const {
@@ -341,6 +382,11 @@ double IdeExplorer::now() const {
 
 void IdeExplorer::clicked(const jadefx::MouseEvent& event) {
     slow_pending_ = false;
+    // The release that ends a drag is not half of a rename pair.
+    if (!event.stillSincePress) {
+        forget_clicks();
+        return;
+    }
     const double at = now();
     // The row's own handler already selected it. The disclosure arrow, the +
     // button, the scrollbar, and the empty space under the rows are not row clicks.

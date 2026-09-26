@@ -389,6 +389,8 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     };
     host.enabled = [this](std::string_view action) { return action_enabled(action); };
     host.rename = [this](engine_core::InstanceId id, std::string name) { rename(id, std::move(name)); };
+    host.move = [this](const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId parent,
+                       engine_core::InstanceId before) { move(ids, parent, before); };
     host.insert = [this](std::string class_name, engine_core::InstanceId parent, std::shared_ptr<InsertResult> result) {
         runner_.simulation().on_simulation(
             [class_name = std::move(class_name), parent, result](engine_core::DataModel& world) {
@@ -1413,6 +1415,17 @@ void IdeLayout::paste(std::uint32_t id) {
                 world.set_parent(*it, id);
             }
         }
+        CloseGesture(world);
+    });
+}
+
+void IdeLayout::move(std::vector<std::uint32_t> ids, std::uint32_t parent, std::uint32_t before) {
+    if (ids.empty()) {
+        return;
+    }
+    runner_.simulation().on_simulation([ids = std::move(ids), parent, before](engine_core::DataModel& world) {
+        world.history().set_pending_gesture("Move");
+        move_set(world, ids, parent, before);
         CloseGesture(world);
     });
 }

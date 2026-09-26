@@ -81,6 +81,8 @@ struct Mutation {
     InstanceId old_parent = kHistoryNoParent;
     InstanceId new_parent = kHistoryNoParent;
     int old_sibling_index = -1;
+    // -1 is first among the new parent's children.
+    int new_sibling_index = -1;
     AuthoredRecord record;
 };
 

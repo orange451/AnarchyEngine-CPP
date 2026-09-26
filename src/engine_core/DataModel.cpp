@@ -1042,7 +1042,38 @@ bool DataModel::is_under(InstanceId ancestor, InstanceId node) const {
     return false;
 }
 
-void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
+void DataModel::set_parent(InstanceId id, InstanceId new_parent) { move_under(id, new_parent, -1); }
+
+void DataModel::set_parent_at(InstanceId id, InstanceId new_parent, int index) {
+    if (!gameplay_thread()) {
+        contract_fail("set_parent runs on SimulationThread");
+    }
+    const Slot* part = slot(id);
+    if (part == nullptr) {
+        contract_fail("set_parent on a dead instance");
+    }
+    if (new_parent == kNoParent) {
+        move_under(id, kNoParent, -1);
+        return;
+    }
+    const bool same = part->parent == new_parent;
+    const int count = static_cast<int>(child_ids(new_parent).size()) - (same ? 1 : 0);
+    if (index < 0 || index > count) {
+        index = count;
+    }
+    if (!same) {
+        move_under(id, new_parent, index);
+        return;
+    }
+    const int old_index = sibling_index_of(id);
+    if (old_index == index) {
+        return;
+    }
+    place_at_sibling(id, index);
+    record_parent(id, new_parent, new_parent, old_index, index);
+}
+
+void DataModel::move_under(InstanceId id, InstanceId new_parent, int index) {
     if (!gameplay_thread()) {
         contract_fail("set_parent runs on SimulationThread");
     }
@@ -1066,8 +1097,11 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
     unlink_parent(id, *part);
     if (new_parent != kNoParent) {
         link_child(new_parent, id);
+        if (index > 0) {
+            place_at_sibling(id, index);
+        }
     }
-    record_parent(id, old, new_parent, old_index);
+    record_parent(id, old, new_parent, old_index, new_parent == kNoParent ? -1 : index);
     note_tree_changed();
     const WriteOrigin origin = current_origin();
     emit_change(id, Field::Parent, origin);
@@ -1698,7 +1732,8 @@ void DataModel::record_position(InstanceId id, const Vec3& before, const Vec3& a
     note_property(state_->history.get(), id, value_position(before), value_position(after));
 }
 
-void DataModel::record_parent(InstanceId id, InstanceId old_parent, InstanceId new_parent, int old_index) {
+void DataModel::record_parent(InstanceId id, InstanceId old_parent, InstanceId new_parent, int old_index,
+                              int new_index) {
     // The child's path moves. Each parent's child order, and whether it is a
     // folder or a leaf, may change.
     mark_authored_dirty(id);
@@ -1713,6 +1748,7 @@ void DataModel::record_parent(InstanceId id, InstanceId old_parent, InstanceId n
     mutation.old_parent = old_parent;
     mutation.new_parent = new_parent;
     mutation.old_sibling_index = old_index;
+    mutation.new_sibling_index = new_index;
     state_->history->note(std::move(mutation));
 }
 
@@ -1993,7 +2029,7 @@ void DataModel::apply_history(const Mutation& mutation, bool inverse) {
         if (inverse) {
             apply_parent(mutation.id, mutation.old_parent, mutation.old_sibling_index);
         } else {
-            apply_parent(mutation.id, mutation.new_parent, -1);
+            apply_parent(mutation.id, mutation.new_parent, mutation.new_sibling_index);
         }
         break;
     case MutationKind::CreateInstance:

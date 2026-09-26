@@ -12,4 +12,11 @@ namespace ide {
 std::vector<engine_core::InstanceId> cut_set(const engine_core::DataModel& model,
                                              const std::vector<engine_core::InstanceId>& ids);
 
+// Puts each of ids under parent, in the order given, just before parent's
+// child before, or last when before is 0 or no longer a child. A dead id, the
+// root, or one that would go inside itself stays put. False when none could
+// move. Runs on the simulation thread.
+bool move_set(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids,
+              engine_core::InstanceId parent, engine_core::InstanceId before);
+
 }  // namespace ide

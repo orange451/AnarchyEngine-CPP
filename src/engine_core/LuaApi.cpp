@@ -156,6 +156,17 @@ void lua_class_names(std::vector<std::string>& out) {
     }
 }
 
+bool lua_method_resolves_child(std::string_view name) {
+    for (const ClassRecord& record : classes()) {
+        for (const LuaField& field : record.fields) {
+            if (field.method && field.resolves_child && field.name != nullptr && name == field.name) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void lua_class_own_members(const char* class_name, std::vector<LuaField>& out) {
     out.clear();
     const ClassRecord* record = find_class_const(class_name);

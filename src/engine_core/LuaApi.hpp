@@ -119,6 +119,9 @@ bool lua_class_known(const char* class_name);
 // True when `class_name` is `ancestor` or registers `ancestor` as a base.
 bool lua_class_inherits(const char* class_name, const char* ancestor);
 void lua_class_names(std::vector<std::string>& out);
+// True when some class registers a method with this name as resolves_child.
+// Static analysis sees a call's method name before it knows the receiver class.
+bool lua_method_resolves_child(std::string_view name);
 
 // Names GetService accepts. The service name is also its class name.
 void register_lua_service(const char* name);

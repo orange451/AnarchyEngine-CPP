@@ -145,11 +145,15 @@ std::string param_list(const LuaDoc& doc) {
 }
 
 // `self` stays unannotated. The definition grammar requires that, then adds the receiver type itself.
+// A declared function spells its vararg `...: any`. `...any` only parses in a function type.
 std::string method_params(const LuaDoc& doc) {
     if (!doc.found) {
-        return "self, ...any";
+        return "self, ...: any";
     }
-    const std::string rest = param_list(doc);
+    std::string rest = param_list(doc);
+    if (doc.variadic) {
+        rest.replace(rest.size() - std::char_traits<char>::length("...any"), std::string::npos, "...: any");
+    }
     if (rest.empty()) {
         return "self";
     }

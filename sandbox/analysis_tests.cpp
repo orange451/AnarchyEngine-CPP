@@ -595,3 +595,40 @@ TEST_CASE("A16 a require path that reaches a ModuleScript takes its type", "[A16
         REQUIRE(dump(analysis.diagnostics(script.id())).find("Settings") != std::string::npos);
     }
 }
+
+TEST_CASE("A17 any method the API marks resolves_child walks a require path", "[A17]") {
+    // Stands in for WaitForChild or any later lookup: analysis must follow the
+    // API's flag, not the name FindFirstChild.
+    static const engine_core::LuaField probe[] = {
+        engine_core::lua_method("ProbeChild", "Instance?", nullptr, /*class_from_arg*/ false, /*resolves_child*/ true)};
+    engine_core::register_lua_class("ProbeLookup", "DataModel", probe, 1);
+    REQUIRE(engine_core::lua_method_resolves_child("FindFirstChild"));
+    REQUIRE(engine_core::lua_method_resolves_child("ProbeChild"));
+    REQUIRE_FALSE(engine_core::lua_method_resolves_child("GetChildren"));
+
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.model);
+    engine_core::Folder& modules = rig.model.create<engine_core::Folder>();
+    rig.model.set_name(modules.id(), "Modules");
+    rig.model.set_parent(modules.id(), rig.model.id());
+    engine_core::ModuleScript& config = add_module(rig.model, "Config", "return { Gold = 1 }\n");
+    rig.model.set_parent(config.id(), modules.id());
+    engine_core::Script& script = add_script(
+        rig.model, "Test", "local Config = require(game:ProbeChild(\"Modules\"):ProbeChild(\"Config\"))\nreturn Config\n");
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(script.id())));
+    // An undocumented method must not break the definitions and leave nothing checked.
+    REQUIRE_FALSE(has_code(analysis.diagnostics(script.id()), "Analysis"));
+    REQUIRE(dump(analysis.diagnostics(script.id())).find("Unknown require") == std::string::npos);
+
+    // The same path records the dependency, so editing the module rechecks the script.
+    int fires = 0;
+    analysis.diagnostics_changed().connect([&](engine_core::InstanceId id) {
+        if (id == script.id()) {
+            ++fires;
+        }
+    });
+    config.set_source("return { Gold = 2 }\n");
+    settle(analysis);
+    REQUIRE(fires >= 1);
+}

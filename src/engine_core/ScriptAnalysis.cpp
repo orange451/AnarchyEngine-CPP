@@ -213,7 +213,7 @@ std::optional<InstanceId> resolve_expr(const WorldSnap& world, InstanceId self, 
     }
     if (auto* call = expr->as<Luau::AstExprCall>()) {
         auto* index = call->func->as<Luau::AstExprIndexName>();
-        if (index == nullptr || index->index != "FindFirstChild" || call->args.size < 1) {
+        if (index == nullptr || !lua_method_resolves_child(index->index.value) || call->args.size < 1) {
             return std::nullopt;
         }
         auto* literal = call->args.data[0]->as<Luau::AstExprConstantString>();
@@ -405,7 +405,7 @@ struct SourceFileResolver : Luau::FileResolver {
             }
         } else if (auto* call = expr->as<Luau::AstExprCall>()) {
             auto* index = call->func->as<Luau::AstExprIndexName>();
-            if (index != nullptr && index->index == "FindFirstChild" && call->args.size >= 1) {
+            if (index != nullptr && lua_method_resolves_child(index->index.value) && call->args.size >= 1) {
                 auto* literal = call->args.data[0]->as<Luau::AstExprConstantString>();
                 if (literal != nullptr && literal->isQuoted()) {
                     found = world->child_named(*base, string_literal(literal->value));

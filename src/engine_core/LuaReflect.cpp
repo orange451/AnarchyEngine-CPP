@@ -147,7 +147,7 @@ int dummy_index(lua_State* state) {
         }
         return 1;
     }
-    if (std::strcmp(key, "FindFirstChild") == 0 || std::strcmp(key, "GetChildren") == 0 ||
+    if (lua_method_resolves_child(key) || std::strcmp(key, "GetChildren") == 0 ||
         std::strcmp(key, "GetService") == 0 || std::strcmp(key, "IsA") == 0) {
         lua_pushstring(state, key);
         lua_pushcclosure(
@@ -157,7 +157,7 @@ int dummy_index(lua_State* state) {
                 lua_getfield(inner, 1, "__id");
                 const auto self = static_cast<std::uint32_t>(lua_tointeger(inner, -1));
                 lua_pop(inner, 1);
-                if (method != nullptr && std::strcmp(method, "FindFirstChild") == 0) {
+                if (method != nullptr && lua_method_resolves_child(method)) {
                     const char* name = luaL_checkstring(inner, 2);
                     if (job != nullptr && job->world != nullptr && name != nullptr) {
                         for (const LuaNode& child : *job->world) {

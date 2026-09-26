@@ -584,6 +584,7 @@ void DataModel::destroy(InstanceId id) {
     }
     // The parent's folder may become a leaf and its child order changes.
     mark_authored_dirty(part->parent);
+    note_tree_changed();
     detach_links(id, *part);
     release_signals(id);
     if (part->instance != nullptr) {
@@ -1067,6 +1068,7 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
         link_child(new_parent, id);
     }
     record_parent(id, old, new_parent, old_index);
+    note_tree_changed();
     const WriteOrigin origin = current_origin();
     emit_change(id, Field::Parent, origin);
     if (old != kNoParent) {
@@ -1168,6 +1170,7 @@ void DataModel::set_name(InstanceId id, std::string name) {
     const std::string previous = object->name_;
     object->name_ = std::move(name);
     record_string(id, Field::Name, previous, object->name_);
+    note_tree_changed();
     emit_change(id, Field::Name, current_origin());
     if (dynamic_cast<LuaSource*>(object) != nullptr) {
         if (ScriptAnalysis* analysis = script_analysis()) {
@@ -1881,6 +1884,7 @@ void DataModel::place_at_sibling(InstanceId id, int index) {
     }
     kids.insert(kids.begin() + index, id);
     mark_authored_dirty(parent);
+    note_tree_changed();
     for (InstanceId child : kids) {
         if (Slot* child_slot = slot(child)) {
             unlink_parent(child, *child_slot);
@@ -2208,6 +2212,15 @@ AuthoredDirty DataModel::authored_dirty() const {
 void DataModel::clear_authored_dirty() {
     state_->dirty.clear();
     state_->dirty_all = false;
+}
+
+void DataModel::note_tree_changed() {
+    if (state_->simulation_running) {
+        return;
+    }
+    if (ScriptAnalysis* analysis = script_analysis()) {
+        analysis->note_world_changed();
+    }
 }
 
 void DataModel::mark_authored_dirty(InstanceId id) {

@@ -1,6 +1,7 @@
 #include "ScriptAnalysis.hpp"
 
 #include "DataModel.hpp"
+#include "DataModelLock.hpp"
 #include "LuaApi.hpp"
 #include "Script.hpp"
 
@@ -8,6 +9,8 @@
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
 #endif
+#include <atomic>
+
 #include "Luau/Allocator.h"
 #include "Luau/Ast.h"
 #include "Luau/BuiltinDefinitions.h"
@@ -836,6 +839,8 @@ void lint_rule_names(std::vector<std::string>& out) {
 
 struct ScriptAnalysis::State {
     std::mutex mu;
+    // Set by note_world_changed. pump() turns it into one invalidate_all.
+    std::atomic<bool> world_stale{false};
     std::condition_variable cv;
     std::mutex start_mu;
     bool stop = false;
@@ -1248,7 +1253,18 @@ std::vector<Diagnostic> ScriptAnalysis::get_diagnostics_for_line(InstanceId scri
     return matched;
 }
 
+void ScriptAnalysis::note_world_changed() { state_->world_stale.store(true, std::memory_order_relaxed); }
+
 void ScriptAnalysis::pump() {
+    // A tree change rechecks every script once, however many changes came in.
+    // Only while stopped: play changes are not the authored tree. The UI
+    // thread pumps outside a step, so the read lock is short and uncontended.
+    if (state_->world_stale.load(std::memory_order_relaxed) && !model_.simulation_running()) {
+        DataModelLock lock(model_, DataModelLock::Read, std::chrono::milliseconds(2));
+        if (lock.owns() && state_->world_stale.exchange(false, std::memory_order_relaxed)) {
+            invalidate_all();
+        }
+    }
     std::vector<Finished> ready;
     {
         std::lock_guard<std::mutex> lock(state_->mu);
@@ -1309,11 +1325,17 @@ void ScriptAnalysis::print_report(std::ostream& out) const {
 }
 
 bool ScriptAnalysis::busy() const {
+    if (state_->world_stale.load(std::memory_order_relaxed)) {
+        return true;
+    }
     std::lock_guard<std::mutex> lock(state_->mu);
     return !state_->pending.empty() || state_->inflight > 0;
 }
 
 bool ScriptAnalysis::idle() const {
+    if (state_->world_stale.load(std::memory_order_relaxed)) {
+        return false;
+    }
     std::lock_guard<std::mutex> lock(state_->mu);
     return state_->pending.empty() && state_->inflight == 0 && state_->results.empty();
 }

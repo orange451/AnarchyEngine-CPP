@@ -66,6 +66,12 @@ public:
     // Source, name, or parent changed. Also used after place restore.
     void invalidate(InstanceId script);
     void invalidate_all();
+    // The tree changed around the scripts: a parent, a name, an order, a
+    // destroy. A script's answer to FindFirstChild depends on that even when
+    // its own source did not change. Cheap and safe to call often: the next
+    // pump() rechecks every script against one new snapshot of the tree.
+    // Waits while the simulation runs; Stop restores the authored tree.
+    void note_world_changed();
     // The instance is gone. Drops its diagnostics and cancels its job.
     void remove(InstanceId script);
 
@@ -84,7 +90,8 @@ public:
     // The printed line is 1-based.
     void print_report(std::ostream& out) const;
 
-    // A snapshot is waiting out the debounce, or the worker is inside a job.
+    // A snapshot is waiting out the debounce, the worker is inside a job, or a
+    // tree change is waiting for pump().
     bool busy() const;
     // busy() is false and pump() has published every finished job.
     bool idle() const;

@@ -1,6 +1,7 @@
 #include "DataModel.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
+#include "Project.hpp"
 #include "Script.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
@@ -11,6 +12,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <random>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -372,4 +376,59 @@ TEST_CASE("disabling script analysis drops diagnostics", "[A]") {
     REQUIRE(analysis.diagnostics(script.id()).empty());
     REQUIRE_FALSE(analysis.analyzed_source(script.id()).has_value());
     REQUIRE(analysis.idle());
+}
+
+TEST_CASE("A12 a script is rechecked when the tree it looks into changes", "[A12]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.model);
+    engine_core::Script& hop = add_script(rig.model, "Hop",
+                                           "local tri = game:FindFirstChild(\"Tri0\")\n"
+                                           "assert(tri)\n"
+                                           "local home = tri.Position\n"
+                                           "return home\n");
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(hop.id())));
+    REQUIRE_FALSE(analysis.diagnostics(hop.id()).empty());
+
+    // Tri0 arrives after the script. The script did not change; its answer did.
+    engine_core::TestTriangle& triangle = rig.model.create<engine_core::TestTriangle>();
+    rig.model.set_name(triangle.id(), "Tri0");
+    rig.model.set_parent(triangle.id(), rig.model.id());
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(hop.id())));
+    REQUIRE(analysis.diagnostics(hop.id()).empty());
+
+    // A rename away from the looked-up name brings the warning back.
+    rig.model.set_name(triangle.id(), "Tri9");
+    settle(analysis);
+    REQUIRE_FALSE(analysis.diagnostics(hop.id()).empty());
+}
+
+TEST_CASE("A13 a loaded project is analyzed against the whole loaded tree", "[A13]") {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / ("ae-a13-" + std::to_string(std::random_device{}()));
+    fs::remove_all(dir);
+    auto write = [&dir](const char* path, const std::string& bytes) {
+        fs::create_directories((dir / path).parent_path());
+        std::ofstream(dir / path, std::ios::binary) << bytes;
+    };
+    write("project.json", "{\"format\": 1, \"name\": \"A13\", \"tree\": {\"src\": \"src\"}}\n");
+    write("src/init.json", "{\"class\": \"DataModel\", \"id\": \"root0\", \"Name\": \"A13\"}\n");
+    // Siblings sort by GUID and the loader parents the last one first, so the
+    // script is in the tree before Tri0 is.
+    write("src/Tri0.aaa.json", "{\"class\": \"TestTriangle\", \"id\": \"aaa\", \"Name\": \"Tri0\"}\n");
+    write("src/Hop.zzz.meta.json", "{\"class\": \"Script\", \"id\": \"zzz\", \"Name\": \"Hop\"}\n");
+    write("src/Hop.zzz.luau",
+          "local tri = game:FindFirstChild(\"Tri0\")\n"
+          "assert(tri)\n"
+          "local home = tri.Position\n"
+          "return home\n");
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.model);
+    engine_core::Project loaded = engine_core::Project::load(dir, rig.model);
+    settle(analysis);
+    const engine_core::InstanceId hop = *rig.model.find_guid("zzz");
+    INFO(dump(analysis.diagnostics(hop)));
+    REQUIRE(analysis.diagnostics(hop).empty());
+    fs::remove_all(dir);
 }

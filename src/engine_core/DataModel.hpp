@@ -469,6 +469,8 @@ private:
     void reparent_record(const AuthoredRecord& record);
     void place_at_sibling(InstanceId id, int index);
     void apply_record_fields(const AuthoredRecord& record);
+    // Scripts look the tree up by name. Tells analysis the tree moved.
+    void note_tree_changed();
     PropertyBag merged_properties(const DataModel& object) const;
 };
 

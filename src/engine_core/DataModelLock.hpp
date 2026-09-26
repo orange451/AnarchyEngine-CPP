@@ -17,11 +17,11 @@ public:
 
     // Blocks. SimulationThread may already hold the mutex; that path bumps
     // a thread-local depth and does not lock again.
-    DataModelLock(DataModel& model, Kind kind);
+    DataModelLock(DataModel& game, Kind kind);
 
     // Render Prepare. On timeout, owns() is false and the destructor is a no-op.
     // timeout is the whole Prepare budget (2ms), not a per-instance wait.
-    DataModelLock(DataModel& model, Kind kind, std::chrono::milliseconds timeout);
+    DataModelLock(DataModel& game, Kind kind, std::chrono::milliseconds timeout);
 
     ~DataModelLock();
 
@@ -31,7 +31,7 @@ public:
     bool owns() const { return owns_; }
 
 private:
-    DataModel* model_ = nullptr;
+    DataModel* game_ = nullptr;
     bool owns_ = false;
 };
 

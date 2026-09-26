@@ -14,13 +14,13 @@ void SnapshotPump::reserve(std::size_t instances) {
     base_index_.assign(instances, -1);
 }
 
-void SnapshotPump::begin_prerender_window(DataModel& model) {
+void SnapshotPump::begin_prerender_window(DataModel& game) {
     window_open_ = true;
-    model.set_prerender_window(true);
+    game.set_prerender_window(true);
 }
 
-void SnapshotPump::end_prerender_window(DataModel& model) {
-    model.set_prerender_window(false);
+void SnapshotPump::end_prerender_window(DataModel& game) {
+    game.set_prerender_window(false);
     window_open_ = false;
 }
 
@@ -84,12 +84,12 @@ void SnapshotPump::erase_base(InstanceId id) {
     }
 }
 
-void SnapshotPump::apply_live(DataModel& model, const Invalidation& change) {
-    if (any(change.fields, VisualField::Removed) || !model.alive(change.id)) {
+void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
+    if (any(change.fields, VisualField::Removed) || !game.alive(change.id)) {
         erase_base(change.id);
         return;
     }
-    const GameObject* object = model.game_object(change.id);
+    const GameObject* object = game.game_object(change.id);
     if (object == nullptr) {
         return;
     }
@@ -119,10 +119,10 @@ void SnapshotPump::apply_live(DataModel& model, const Invalidation& change) {
     inst->alive = true;
 }
 
-void SnapshotPump::resync(DataModel& model) {
+void SnapshotPump::resync(DataModel& game) {
     base_.instances.clear();
     std::fill(base_index_.begin(), base_index_.end(), -1);
-    model.for_each_game_object([&](const GameObject& object) {
+    game.for_each_game_object([&](const GameObject& object) {
         VisualInstance inst;
         inst.id = object.id();
         inst.world = object.transform();
@@ -161,12 +161,12 @@ void SnapshotPump::apply_overrides(VisualSnapshot& dst) {
     }
 }
 
-void SnapshotPump::prepare_copy(DataModel& model) {
-    InvalidationQueue& queue = model.invalidations();
-    if (queue.take_overflow() || model.consume_resync()) {
-        resync(model);
+void SnapshotPump::prepare_copy(DataModel& game) {
+    InvalidationQueue& queue = game.invalidations();
+    if (queue.take_overflow() || game.consume_resync()) {
+        resync(game);
     } else {
-        queue.drain([&](const Invalidation& change) { apply_live(model, change); });
+        queue.drain([&](const Invalidation& change) { apply_live(game, change); });
     }
     if (camera_pending_) {
         base_.camera = pending_camera_;

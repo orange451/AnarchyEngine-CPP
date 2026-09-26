@@ -123,9 +123,9 @@ private:
 // during play and is dropped on stop. Text keystrokes do not come here.
 class ChangeHistoryService {
 public:
-    explicit ChangeHistoryService(DataModel& model);
+    explicit ChangeHistoryService(DataModel& game);
 
-    void rebind(DataModel& model) { model_ = &model; }
+    void rebind(DataModel& game) { game_ = &game; }
 
     // Null when a recording is already open or history is disabled.
     std::optional<std::string> try_begin_recording(std::string name, std::string display_name = {});
@@ -195,7 +195,7 @@ private:
     const std::vector<Waypoint>& redo_stack() const;
     bool playing() const;
 
-    DataModel* model_ = nullptr;
+    DataModel* game_ = nullptr;
     bool enabled_ = true;
     int applying_ = 0;
     std::uint64_t next_id_ = 1;

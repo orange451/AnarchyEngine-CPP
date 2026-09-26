@@ -252,19 +252,19 @@ struct ScriptBindings {
 
 ScriptRuntime::~ScriptRuntime() { detach(); }
 
-void ScriptRuntime::attach(DataModel& model, TaskScheduler& scheduler) {
-    if (model_ != nullptr) {
+void ScriptRuntime::attach(DataModel& game, TaskScheduler& scheduler) {
+    if (game_ != nullptr) {
         return;
     }
-    model_ = &model;
+    game_ = &game;
     scheduler_ = &scheduler;
     scheduler.reserve(8);
-    model.set_stop_hook([this] { on_stop(); });
-    model.set_start_hook([this] { on_start(); });
-    model.set_script_host(this);
-    model.events().set_after_drain([this] { on_end_of_drain(); });
-    model.events().set_script_gate(&ScriptRuntime::gate, this);
-    run_service_.bind(model.events());
+    game.set_stop_hook([this] { on_stop(); });
+    game.set_start_hook([this] { on_start(); });
+    game.set_script_host(this);
+    game.events().set_after_drain([this] { on_end_of_drain(); });
+    game.events().set_script_gate(&ScriptRuntime::gate, this);
+    run_service_.bind(game.events());
     scheduler.bind(Phase::PreAnimation, [this](double dt) { fire_phase(Phase::PreAnimation, dt); });
     scheduler.bind(Phase::PreSimulation, [this](double dt) { fire_phase(Phase::PreSimulation, dt); });
     scheduler.bind(Phase::PostSimulation, [this](double dt) { fire_phase(Phase::PostSimulation, dt); });
@@ -273,18 +273,18 @@ void ScriptRuntime::attach(DataModel& model, TaskScheduler& scheduler) {
 
 void ScriptRuntime::detach() {
     close_console();
-    if (model_ != nullptr) {
-        model_->events().disconnect_scripted();
+    if (game_ != nullptr) {
+        game_->events().disconnect_scripted();
     }
     close_vm();
-    if (model_ != nullptr) {
-        run_service_.release(model_->events());
-        model_->set_stop_hook(nullptr);
-        model_->set_start_hook(nullptr);
-        model_->set_script_host(nullptr);
-        model_->events().set_after_drain(nullptr);
-        model_->events().set_script_gate(nullptr, nullptr);
-        model_ = nullptr;
+    if (game_ != nullptr) {
+        run_service_.release(game_->events());
+        game_->set_stop_hook(nullptr);
+        game_->set_start_hook(nullptr);
+        game_->set_script_host(nullptr);
+        game_->events().set_after_drain(nullptr);
+        game_->events().set_script_gate(nullptr, nullptr);
+        game_ = nullptr;
     }
     scheduler_ = nullptr;
 }
@@ -373,7 +373,7 @@ DataModel* ScriptRuntime::resolve_watch(Watch watch) const {
 }
 
 void ScriptRuntime::on_script_parent(Script& script, InstanceId, InstanceId next) {
-    if (model_ == nullptr || !model_->simulation_running() || closing_) {
+    if (game_ == nullptr || !game_->simulation_running() || closing_) {
         return;
     }
     kill_script(script.id());
@@ -383,7 +383,7 @@ void ScriptRuntime::on_script_parent(Script& script, InstanceId, InstanceId next
 }
 
 void ScriptRuntime::on_script_enabled(Script& script, bool enabled) {
-    if (model_ == nullptr || !model_->simulation_running() || closing_) {
+    if (game_ == nullptr || !game_->simulation_running() || closing_) {
         return;
     }
     kill_script(script.id());
@@ -405,10 +405,10 @@ ScriptRuntime::Thread* ScriptRuntime::thread_from(lua_State* state) {
 
 bool ScriptRuntime::gate(InstanceId script, std::uint32_t generation, void* userdata) {
     auto* self = static_cast<ScriptRuntime*>(userdata);
-    if (self == nullptr || self->model_ == nullptr || self->closing_) {
+    if (self == nullptr || self->game_ == nullptr || self->closing_) {
         return false;
     }
-    auto* object = dynamic_cast<Script*>(self->model_->instance(script));
+    auto* object = dynamic_cast<Script*>(self->game_->instance(script));
     if (object == nullptr || !object->enabled()) {
         return false;
     }
@@ -506,11 +506,11 @@ void ScriptRuntime::on_start() {
     clear_output();
     open_vm();
     sim_clock_ = 0;
-    if (model_ == nullptr) {
+    if (game_ == nullptr) {
         return;
     }
     std::vector<Script*> scripts;
-    model_->for_each_instance([&](DataModel& instance) {
+    game_->for_each_instance([&](DataModel& instance) {
         if (auto* script = dynamic_cast<Script*>(&instance)) {
             scripts.push_back(script);
         }
@@ -521,8 +521,8 @@ void ScriptRuntime::on_start() {
 }
 
 void ScriptRuntime::on_stop() {
-    if (model_ != nullptr) {
-        model_->events().disconnect_scripted();
+    if (game_ != nullptr) {
+        game_->events().disconnect_scripted();
     }
     close_vm();
 }
@@ -531,10 +531,10 @@ void ScriptRuntime::assert_lua_thread() const {
     if (thread_role() == ThreadRole::Render) {
         contract_fail("Lua runs on SimulationThread");
     }
-    if (model_ != nullptr && !model_->on_gameplay_thread()) {
+    if (game_ != nullptr && !game_->on_gameplay_thread()) {
         contract_fail("Lua runs on SimulationThread");
     }
-    if (model_ != nullptr && model_->prerender_window()) {
+    if (game_ != nullptr && game_->prerender_window()) {
         contract_fail("Lua runs on SimulationThread");
     }
 }
@@ -659,7 +659,7 @@ lua_State* ScriptRuntime::create_state(bool console) {
 }
 
 void ScriptRuntime::open_vm() {
-    if (state_ != nullptr || model_ == nullptr) {
+    if (state_ != nullptr || game_ == nullptr) {
         return;
     }
     lua_State* state = create_state(false);
@@ -673,7 +673,7 @@ void ScriptRuntime::open_vm() {
 }
 
 void ScriptRuntime::ensure_console() {
-    if (console_state_ != nullptr || model_ == nullptr) {
+    if (console_state_ != nullptr || game_ == nullptr) {
         return;
     }
     console_state_ = create_state(true);
@@ -738,8 +738,8 @@ void ScriptRuntime::close_vm() {
 }
 
 void ScriptRuntime::kill_script(InstanceId id) {
-    if (model_ != nullptr) {
-        model_->events().disconnect_script(id);
+    if (game_ != nullptr) {
+        game_->events().disconnect_script(id);
     }
     starts_.erase(std::remove_if(starts_.begin(), starts_.end(),
                                  [&](const Start& start) { return start.id == id; }),
@@ -753,19 +753,19 @@ void ScriptRuntime::kill_script(InstanceId id) {
     drop_dead(sleep_);
     drop_dead(defer_);
     drop_dead_child_waits();
-    if (model_ == nullptr || closing_) {
+    if (game_ == nullptr || closing_) {
         return;
     }
-    if (auto* script = dynamic_cast<Script*>(model_->instance(id))) {
+    if (auto* script = dynamic_cast<Script*>(game_->instance(id))) {
         script->bump_start_generation();
     }
 }
 
 void ScriptRuntime::enqueue_start(Script& script) {
-    if (model_ == nullptr || !open_ || closing_ || !model_->simulation_running()) {
+    if (game_ == nullptr || !open_ || closing_ || !game_->simulation_running()) {
         return;
     }
-    if (!script.enabled() || model_->parent(script.id()) == DataModel::kNoParent) {
+    if (!script.enabled() || game_->parent(script.id()) == DataModel::kNoParent) {
         return;
     }
     const std::uint32_t generation = script.bump_start_generation();
@@ -784,14 +784,14 @@ void ScriptRuntime::launch_starts() {
 }
 
 void ScriptRuntime::launch_one(const Start& start) {
-    if (model_ == nullptr || state_ == nullptr) {
+    if (game_ == nullptr || state_ == nullptr) {
         return;
     }
-    auto* script = dynamic_cast<Script*>(model_->instance(start.id));
+    auto* script = dynamic_cast<Script*>(game_->instance(start.id));
     if (script == nullptr || script->start_generation() != start.generation || !script->enabled()) {
         return;
     }
-    if (model_->parent(script->id()) == DataModel::kNoParent || !model_->simulation_running()) {
+    if (game_->parent(script->id()) == DataModel::kNoParent || !game_->simulation_running()) {
         return;
     }
     lua_CompileOptions options{};
@@ -803,12 +803,12 @@ void ScriptRuntime::launch_one(const Start& start) {
         luau_compile(source.data() != nullptr ? source.data() : "", source.size(), &options, &bytecode_size), std::free);
     if (bytecode == nullptr || bytecode_size == 0) {
         last_error_ = "could not compile script";
-        const std::string script_name = model_->name(script->id());
+        const std::string script_name = game_->name(script->id());
         append_output(OutputKind::Error, script_name.empty() ? last_error_ : script_name + ": " + last_error_);
         return;
     }
     Thread& thread = new_thread(script->id(), start.generation);
-    const std::string chunk = "=" + model_->name(script->id());
+    const std::string chunk = "=" + game_->name(script->id());
     const int loaded = luau_load(thread.co, chunk.c_str(), bytecode.get(), bytecode_size, 0);
     if (loaded != LUA_OK) {
         report_error(thread.co);
@@ -1022,10 +1022,10 @@ void ScriptRuntime::deliver_child_waits() {
         // The match may have moved or been renamed again before this drain.
         InstanceId child = thread->wait_found;
         thread->wait_found = 0;
-        if (resolve_id(child, thread->wait_world) == nullptr || model_->parent(child) != thread->wait_parent ||
-            model_->name(child) != thread->wait_name) {
+        if (resolve_id(child, thread->wait_world) == nullptr || game_->parent(child) != thread->wait_parent ||
+            game_->name(child) != thread->wait_name) {
             child = resolve_id(thread->wait_parent, thread->wait_world) != nullptr
-                        ? model_->find_first_child(thread->wait_parent, thread->wait_name)
+                        ? game_->find_first_child(thread->wait_parent, thread->wait_name)
                         : 0;
         }
         if (child == 0) {
@@ -1062,7 +1062,7 @@ void ScriptRuntime::wake_child_timers() {
             if (!thread->wait_warned && thread->wait_warn_at <= sim_clock_) {
                 thread->wait_warned = true;
                 const std::string parent = resolve_id(thread->wait_parent, thread->wait_world) != nullptr
-                                               ? model_->name(thread->wait_parent)
+                                               ? game_->name(thread->wait_parent)
                                                : std::string("<destroyed>");
                 append_output(OutputKind::Print,
                               "Infinite yield possible on '" + parent + ":WaitForChild(\"" + thread->wait_name + "\")'");
@@ -1084,14 +1084,14 @@ void ScriptRuntime::wake_child_timers() {
 }
 
 bool ScriptRuntime::thread_ok(const Thread& thread) const {
-    if (thread.dead || model_ == nullptr) {
+    if (thread.dead || game_ == nullptr) {
         return false;
     }
     // The command line is not a Script. It stays until the chunk finishes or the VM closes.
     if (thread.script == 0) {
         return true;
     }
-    auto* script = dynamic_cast<Script*>(model_->instance(thread.script));
+    auto* script = dynamic_cast<Script*>(game_->instance(thread.script));
     if (script == nullptr || !script->enabled()) {
         return false;
     }
@@ -1220,7 +1220,7 @@ void ScriptRuntime::eval_chunk(lua_State* state, std::string_view source) {
 
 void ScriptRuntime::run_chunk(std::string_view source) {
     assert_lua_thread();
-    if (model_ == nullptr) {
+    if (game_ == nullptr) {
         append_output(OutputKind::Error, "Lua is not running");
         return;
     }
@@ -1261,7 +1261,7 @@ int ScriptRuntime::lua_print(lua_State* state) {
 }
 
 void ScriptRuntime::push_instance(lua_State* state, InstanceId id) {
-    const std::uint32_t world = model_ != nullptr ? model_->world_generation() : 0;
+    const std::uint32_t world = game_ != nullptr ? game_->world_generation() : 0;
     lua_getfield(state, LUA_REGISTRYINDEX, kInstanceCache);
     const bool cached = lua_istable(state, -1);
     if (cached) {
@@ -1291,20 +1291,20 @@ void ScriptRuntime::push_instance(lua_State* state, InstanceId id) {
 }
 
 DataModel* ScriptRuntime::resolve_id(InstanceId id, std::uint32_t world) const {
-    if (model_ == nullptr || world != model_->world_generation()) {
+    if (game_ == nullptr || world != game_->world_generation()) {
         return nullptr;
     }
     if (id == 0) {
-        return model_;
+        return game_;
     }
-    return model_->instance(id);
+    return game_->instance(id);
 }
 
 void ScriptRuntime::fire_phase(Phase phase, double dt) {
-    if (!open_ || closing_ || model_ == nullptr) {
+    if (!open_ || closing_ || game_ == nullptr) {
         return;
     }
-    run_service_.fire(model_->events(), phase, dt);
+    run_service_.fire(game_->events(), phase, dt);
 }
 
 void ScriptRuntime::invoke_listener(int ref, InstanceId script, std::uint32_t generation, const char* text,
@@ -1333,10 +1333,10 @@ void ScriptRuntime::invoke_listener(int ref, InstanceId script, std::uint32_t ge
 }
 
 int ScriptRuntime::require_module(lua_State* state, InstanceId module_id) {
-    if (model_ == nullptr) {
+    if (game_ == nullptr) {
         luaL_error(state, "require has no data model");
     }
-    auto* module = dynamic_cast<ModuleScript*>(model_->instance(module_id));
+    auto* module = dynamic_cast<ModuleScript*>(game_->instance(module_id));
     if (module == nullptr) {
         luaL_error(state, "require expects a ModuleScript");
     }
@@ -1381,7 +1381,7 @@ int ScriptRuntime::require_module(lua_State* state, InstanceId module_id) {
         thread.dead = true;
         luaL_error(state, "could not compile ModuleScript");
     }
-    const std::string chunk = "=" + model_->name(module_id);
+    const std::string chunk = "=" + game_->name(module_id);
     const int loaded = luau_load(thread.co, chunk.c_str(), bytecode.get(), bytecode_size, 0);
     if (loaded != LUA_OK) {
         remember_error(thread.co);
@@ -1559,7 +1559,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
 int ScriptBindings::instance_new(lua_State* state) {
     return lua_guard(state, [&] {
         ScriptRuntime* runtime = runtime_from(state);
-        if (runtime == nullptr || runtime->model_ == nullptr) {
+        if (runtime == nullptr || runtime->game_ == nullptr) {
             luaL_error(state, "Instance.new has no data model");
         }
         const char* name = luaL_checkstring(state, 1);
@@ -1573,12 +1573,12 @@ int ScriptBindings::instance_new(lua_State* state) {
             }
             parent_id = parent->id;
         }
-        DataModel* created = lua_create_instance(*runtime->model_, name);
+        DataModel* created = lua_create_instance(*runtime->game_, name);
         if (created == nullptr) {
             luaL_error(state, "unknown class %s", name);
         }
         if (parent_id != DataModel::kNoParent) {
-            runtime->model_->set_parent(created->id(), parent_id);
+            runtime->game_->set_parent(created->id(), parent_id);
         }
         runtime->push_instance(state, created->id());
         return 1;
@@ -1604,7 +1604,7 @@ int ScriptBindings::instance_tostring(lua_State* state) {
     auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
     ScriptRuntime* runtime = runtime_from(state);
     const char* fallback = "Instance";
-    if (runtime == nullptr || runtime->model_ == nullptr || ud == nullptr) {
+    if (runtime == nullptr || runtime->game_ == nullptr || ud == nullptr) {
         lua_pushstring(state, fallback);
         return 1;
     }
@@ -1613,7 +1613,7 @@ int ScriptBindings::instance_tostring(lua_State* state) {
         lua_pushstring(state, fallback);
         return 1;
     }
-    const std::string name = runtime->model_->name(object->id());
+    const std::string name = runtime->game_->name(object->id());
     if (!name.empty()) {
         lua_pushlstring(state, name.data(), name.size());
         return 1;
@@ -1681,7 +1681,7 @@ int ScriptBindings::instance_index(lua_State* state) {
         auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
         const char* key = luaL_checkstring(state, 2);
         ScriptRuntime* runtime = runtime_from(state);
-        if (runtime == nullptr || runtime->model_ == nullptr) {
+        if (runtime == nullptr || runtime->game_ == nullptr) {
             lua_pushnil(state);
             return 1;
         }
@@ -1694,12 +1694,12 @@ int ScriptBindings::instance_index(lua_State* state) {
         if (field == nullptr) {
             // Not a property or method: a child by that name, the first in sibling
             // order, like FindFirstChild. A property of the same name wins.
-            const InstanceId child = runtime->model_->find_first_child(object->id(), key != nullptr ? key : "");
+            const InstanceId child = runtime->game_->find_first_child(object->id(), key != nullptr ? key : "");
             if (child != 0) {
                 runtime->push_instance(state, child);
                 return 1;
             }
-            const std::string name = runtime->model_->name(object->id());
+            const std::string name = runtime->game_->name(object->id());
             luaL_error(state, "%s is not a valid member of %s \"%s\"", key != nullptr ? key : "",
                        object->class_name() != nullptr ? object->class_name() : "Instance", name.c_str());
         }
@@ -1708,7 +1708,7 @@ int ScriptBindings::instance_index(lua_State* state) {
             return 1;
         }
         LuaSlot slot;
-        if (field->read == nullptr || !field->read(*runtime->model_, *object, slot)) {
+        if (field->read == nullptr || !field->read(*runtime->game_, *object, slot)) {
             lua_pushnil(state);
             return 1;
         }
@@ -1722,7 +1722,7 @@ int ScriptBindings::instance_newindex(lua_State* state) {
         auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
         const char* key = luaL_checkstring(state, 2);
         ScriptRuntime* runtime = runtime_from(state);
-        if (runtime == nullptr || runtime->model_ == nullptr) {
+        if (runtime == nullptr || runtime->game_ == nullptr) {
             luaL_error(state, "instance is gone");
         }
         DataModel* object = runtime->resolve_id(ud->id, ud->world);
@@ -1784,7 +1784,7 @@ int ScriptBindings::instance_newindex(lua_State* state) {
         } else {
             luaL_error(state, "cannot set %s", key);
         }
-        if (!field->write(*runtime->model_, *object, slot)) {
+        if (!field->write(*runtime->game_, *object, slot)) {
             luaL_error(state, "property is not available");
         }
         return 0;
@@ -1801,7 +1801,7 @@ int ScriptBindings::instance_destroy(lua_State* state) {
         if (ud->id == 0) {
             luaL_error(state, "cannot destroy the root");
         }
-        runtime->model_->destroy(ud->id);
+        runtime->game_->destroy(ud->id);
         return 0;
     });
 }
@@ -1814,7 +1814,7 @@ int ScriptBindings::instance_children(lua_State* state) {
             lua_newtable(state);
             return 1;
         }
-        const std::vector<InstanceId> children = runtime->model_->get_children(ud->id);
+        const std::vector<InstanceId> children = runtime->game_->get_children(ud->id);
         lua_newtable(state);
         int index = 1;
         for (InstanceId child : children) {
@@ -1835,7 +1835,7 @@ int ScriptBindings::instance_find(lua_State* state) {
             lua_pushnil(state);
             return 1;
         }
-        const InstanceId child = runtime->model_->find_first_child(ud->id, name != nullptr ? name : "");
+        const InstanceId child = runtime->game_->find_first_child(ud->id, name != nullptr ? name : "");
         if (child == 0) {
             lua_pushnil(state);
         } else {
@@ -1861,7 +1861,7 @@ int ScriptBindings::instance_wait_child(lua_State* state) {
             luaL_error(state, "WaitForChild on an instance that is gone");
         }
         const std::string wanted = name != nullptr ? name : "";
-        const InstanceId child = runtime->model_->find_first_child(ud->id, wanted);
+        const InstanceId child = runtime->game_->find_first_child(ud->id, wanted);
         if (child != 0) {
             runtime->push_instance(state, child);
             return 1;
@@ -1927,7 +1927,7 @@ int ScriptBindings::signal_connect(lua_State* state) {
         luaL_checktype(state, 2, LUA_TFUNCTION);
         ScriptRuntime* runtime = runtime_from(state);
         ScriptRuntime::Thread* caller = ScriptRuntime::thread_from(state);
-        if (runtime == nullptr || runtime->model_ == nullptr || caller == nullptr) {
+        if (runtime == nullptr || runtime->game_ == nullptr || caller == nullptr) {
             luaL_error(state, "Connect runs inside a script");
         }
         if (ud->blocked) {
@@ -1944,7 +1944,7 @@ int ScriptBindings::signal_connect(lua_State* state) {
             if (runtime->resolve_id(ud->id, ud->world) == nullptr) {
                 luaL_error(state, "instance is gone");
             }
-            signal = &runtime->model_->changed(ud->id);
+            signal = &runtime->game_->changed(ud->id);
         } else {
             signal = runtime->run_service_.signal(static_cast<Phase>(ud->phase));
             if (signal == nullptr) {
@@ -1975,7 +1975,7 @@ int ScriptBindings::signal_wait(lua_State* state) {
         auto* ud = static_cast<SignalUd*>(luaL_checkudata(state, 1, kSignalMeta));
         ScriptRuntime* runtime = runtime_from(state);
         ScriptRuntime::Thread* thread = ScriptRuntime::thread_from(state);
-        if (runtime == nullptr || runtime->model_ == nullptr || thread == nullptr) {
+        if (runtime == nullptr || runtime->game_ == nullptr || thread == nullptr) {
             luaL_error(state, "Wait yields the running script thread");
         }
         if (ud->blocked) {
@@ -1995,7 +1995,7 @@ int ScriptBindings::signal_wait(lua_State* state) {
             if (runtime->resolve_id(ud->id, ud->world) == nullptr) {
                 luaL_error(state, "instance is gone");
             }
-            signal = &runtime->model_->changed(ud->id);
+            signal = &runtime->game_->changed(ud->id);
         }
         thread->park = ScriptRuntime::Thread::Park::Signal;
         signal->connect_scripted(
@@ -2092,13 +2092,13 @@ int ScriptBindings::selection_get(lua_State* state) {
         luaL_checkudata(state, 1, kServiceMeta);
         ScriptRuntime* runtime = runtime_from(state);
         lua_newtable(state);
-        if (runtime == nullptr || runtime->model_ == nullptr) {
+        if (runtime == nullptr || runtime->game_ == nullptr) {
             return 1;
         }
         // The list may still name an instance destroyed since it was set.
         int index = 1;
-        for (InstanceId id : runtime->model_->selection().get()) {
-            if (runtime->model_->instance(id) == nullptr) {
+        for (InstanceId id : runtime->game_->selection().get()) {
+            if (runtime->game_->instance(id) == nullptr) {
                 continue;
             }
             runtime->push_instance(state, id);
@@ -2114,7 +2114,7 @@ int ScriptBindings::selection_set(lua_State* state) {
         luaL_checkudata(state, 1, kServiceMeta);
         luaL_checktype(state, 2, LUA_TTABLE);
         ScriptRuntime* runtime = runtime_from(state);
-        if (runtime == nullptr || runtime->model_ == nullptr) {
+        if (runtime == nullptr || runtime->game_ == nullptr) {
             luaL_error(state, "Selection is not available");
         }
         std::vector<InstanceId> ids;
@@ -2132,7 +2132,7 @@ int ScriptBindings::selection_set(lua_State* state) {
             }
             lua_pop(state, 1);
         }
-        runtime->model_->selection().set(std::move(ids));
+        runtime->game_->selection().set(std::move(ids));
         return 0;
     });
 }

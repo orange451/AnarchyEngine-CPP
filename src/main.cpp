@@ -20,9 +20,9 @@ public:
         // start(); the scene keeps the widgets, and this member keeps the engine.
         layout_ = std::make_unique<ide::IdeLayout>(size.width, size.height);
         engine_core::Engine& simulation = layout_->simulation();
-        engine_core::DataModel& model = simulation.datamodel();
+        engine_core::DataModel& game = simulation.datamodel();
         // The demo place is the baseline, not an undo step.
-        model.history().set_enabled(false);
+        game.history().set_enabled(false);
         // View-space positions. Positive z is toward the camera.
         const float kPositions[][3] = {
             {-0.58f, 0.38f, 0.f},
@@ -34,19 +34,19 @@ public:
         const double kStartSeconds[] = {0.0, 0.4, 0.8, 1.2, 1.6};
         constexpr int kCount = 5;
         for (int index = 0; index < kCount; ++index) {
-            engine_core::TestTriangle& triangle = model.create<engine_core::TestTriangle>();
-            model.set_name(triangle.id(), "Tri" + std::to_string(index));
-            model.set_parent(triangle.id(), model.id());
+            engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
+            game.set_name(triangle.id(), "Tri" + std::to_string(index));
+            game.set_parent(triangle.id(), game.id());
             triangle.set_position(kPositions[index][0], kPositions[index][1], kPositions[index][2]);
             triangle.step(kStartSeconds[index]);
         }
         // Play-solo scripts. Test starts them; Stop restores these poses.
         // HopSlow and HopFast wait on different clocks so one wait cannot freeze the other.
         auto add_script = [&](const char* name, const char* source) {
-            engine_core::Script& script = model.create<engine_core::Script>();
-            model.set_name(script.id(), name);
+            engine_core::Script& script = game.create<engine_core::Script>();
+            game.set_name(script.id(), name);
             script.set_source(source);
-            model.set_parent(script.id(), model.id());
+            game.set_parent(script.id(), game.id());
         };
         add_script("HopSlow", R"(
 local tri = game:FindFirstChild("Tri0")
@@ -72,7 +72,7 @@ while true do
     tri.Position = home + Vector3.new(0, hop, 0)
 end
 )");
-        model.history().set_enabled(true);
+        game.history().set_enabled(true);
         layout_->start();
         auto scene = jadefx::make<jadefx::Scene>(nullptr, size.width, size.height);
         layout_->mount(*scene);

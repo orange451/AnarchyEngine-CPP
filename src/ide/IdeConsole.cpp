@@ -230,8 +230,8 @@ void IdeConsole::runPending() {
         // A stop that lands first changes the world, and that command is dropped.
         try {
             engine_.on_simulation([scripts = &engine_.scripts(), source = command.source,
-                                   world = command.world](engine_core::DataModel& model) {
-                if (model.world_generation() != world) {
+                                   world = command.world](engine_core::DataModel& game) {
+                if (game.world_generation() != world) {
                     return;
                 }
                 scripts->run_chunk(source);

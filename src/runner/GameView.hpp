@@ -41,13 +41,13 @@ private:
     bool ensureGraphics();
 
     Renderer renderer_;
-    // The session DataModel. The runner keeps it alive for this view.
-    engine_core::DataModel* model_ = nullptr;
+    // The session game. The runner keeps it alive for this view.
+    engine_core::DataModel* game_ = nullptr;
     // Root TestTriangles. Refreshed when the hierarchy changes. Heartbeat writes
     // each angle. This thread only reads the atomics.
     std::vector<engine_core::TestTriangle*> triangles_;
     std::vector<engine_core::TestTriangle*> triangleScratch_;
-    // The engine that owns model_. Each paint tells its render thread a frame happened.
+    // The engine that owns game_. Each paint tells its render thread a frame happened.
     engine_core::Engine* engine_ = nullptr;
     // Paints in the current window. The label reads the finished average.
     std::chrono::steady_clock::time_point paintWindowStart_{};

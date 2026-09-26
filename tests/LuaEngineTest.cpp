@@ -227,28 +227,28 @@ void testRunner() {
 }
 
 void testContextActions() {
-    engine_core::Game model;
+    engine_core::Game game;
     std::vector<engine_core::ContextAction> actions;
-    model.context_actions(actions);
+    game.context_actions(actions);
     // The root cannot be deleted.
-    expect(actions.size() == 3, "a plain model has cut, paste, and rename");
+    expect(actions.size() == 3, "the game has cut, paste, and rename");
     expect(actions.size() == 3 && std::string(actions[0].name) == "Cut" && !actions[0].primary, "cut is not primary");
     expect(actions.size() == 3 && std::string(actions[1].name) == "Paste" && !actions[1].primary, "paste is not primary");
     expect(actions.size() == 3 && std::string(actions[2].name) == "Rename" && !actions[2].primary, "rename is not primary");
 
-    engine_core::Script& script = model.create<engine_core::Script>();
+    engine_core::Script& script = game.create<engine_core::Script>();
     actions.clear();
     script.context_actions(actions);
     expect(actions.size() == 5 && std::string(actions[0].name) == "Edit" && actions[0].primary, "a script's edit is primary");
     expect(actions.size() == 5 && std::string(actions[1].name) == "Cut", "a script still has cut");
     expect(actions.size() == 5 && std::string(actions[4].name) == "Delete" && !actions[4].primary, "a script can be deleted");
 
-    engine_core::ModuleScript& module = model.create<engine_core::ModuleScript>();
+    engine_core::ModuleScript& module = game.create<engine_core::ModuleScript>();
     actions.clear();
     module.context_actions(actions);
     expect(actions.size() == 5 && actions[0].primary && std::string(actions[0].name) == "Edit", "a module script edits");
 
-    engine_core::TestTriangle& triangle = model.create<engine_core::TestTriangle>();
+    engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
     actions.clear();
     triangle.context_actions(actions);
     expect(actions.size() == 4 && !actions[0].primary, "a triangle uses the plain actions");
@@ -256,20 +256,20 @@ void testContextActions() {
 }
 
 void testInsertInstance() {
-    engine_core::Game model;
+    engine_core::Game game;
     const char* names[] = {"Folder", "GameObject", "Script", "ModuleScript"};
     for (const char* name : names) {
-        engine_core::DataModel* made = engine_core::lua_create_instance(model, name);
+        engine_core::DataModel* made = engine_core::lua_create_instance(game, name);
         expect(made != nullptr && made->class_name() != nullptr && std::string(made->class_name()) == name, name);
         if (made == nullptr) {
             continue;
         }
-        model.set_parent(made->id(), model.id());
-        expect(model.parent(made->id()) == model.id(), "created instance is parented under the row");
-        expect(model.name(made->id()) == name, "a new instance is named for its class");
+        game.set_parent(made->id(), game.id());
+        expect(game.parent(made->id()) == game.id(), "created instance is parented under the row");
+        expect(game.name(made->id()) == name, "a new instance is named for its class");
     }
-    expect(engine_core::lua_create_instance(model, "TestTriangle") == nullptr, "TestTriangle is not in the insert list");
-    expect(engine_core::lua_create_instance(model, "DataModel") == nullptr, "DataModel is not inserted");
+    expect(engine_core::lua_create_instance(game, "TestTriangle") == nullptr, "TestTriangle is not in the insert list");
+    expect(engine_core::lua_create_instance(game, "DataModel") == nullptr, "DataModel is not inserted");
 }
 
 }  // namespace

@@ -31,22 +31,22 @@ struct SimRole {
 
 struct ScriptRig {
     SimRole role;
-    engine_core::Game model;
+    engine_core::Game game;
     engine_core::TaskScheduler scheduler;
     engine_core::ScriptRuntime runtime;
 
     ScriptRig() {
         scheduler.reserve(16);
-        model.attach_scheduler(&scheduler);
-        runtime.attach(model, scheduler);
+        game.attach_scheduler(&scheduler);
+        runtime.attach(game, scheduler);
     }
 
     void frames(int count, double dt = 1.0 / 60.0) {
         for (int i = 0; i < count; ++i) {
             scheduler.run_phase(engine_core::Phase::Heartbeat, dt);
-            model.events().drain();
+            game.events().drain();
             runtime.heartbeat(dt);
-            model.events().drain();
+            game.events().drain();
         }
     }
 };
@@ -80,11 +80,11 @@ bool has_code(const std::vector<engine_core::Diagnostic>& diagnostics, const cha
     return false;
 }
 
-engine_core::Script& add_script(engine_core::DataModel& model, const char* name, const char* source) {
-    engine_core::Script& script = model.create<engine_core::Script>();
-    model.set_name(script.id(), name);
+engine_core::Script& add_script(engine_core::DataModel& game, const char* name, const char* source) {
+    engine_core::Script& script = game.create<engine_core::Script>();
+    game.set_name(script.id(), name);
     script.set_source(source);
-    model.set_parent(script.id(), model.id());
+    game.set_parent(script.id(), game.id());
     return script;
 }
 
@@ -92,8 +92,8 @@ engine_core::Script& add_script(engine_core::DataModel& model, const char* name,
 
 TEST_CASE("A1 a syntax error is one Syntax diagnostic and compile still fails", "[A1]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Script& script = add_script(rig.model, "Broken", "local x =");
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Broken", "local x =");
     settle(analysis);
     const std::vector<engine_core::Diagnostic> diagnostics = analysis.diagnostics(script.id());
     INFO(dump(diagnostics));
@@ -107,15 +107,15 @@ TEST_CASE("A1 a syntax error is one Syntax diagnostic and compile still fails", 
     REQUIRE(report.str().find("Broken") != std::string::npos);
     REQUIRE(report.str().find("Syntax") != std::string::npos);
 
-    rig.model.start_simulation();
+    rig.game.start_simulation();
     rig.frames(1);
     REQUIRE_FALSE(rig.runtime.last_error().empty());
 }
 
 TEST_CASE("A2 nocheck skips the type error and strict reports it", "[A2]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Script& script = add_script(rig.model, "Typed", "--!nocheck\nlocal x: number = \"a\"\n");
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Typed", "--!nocheck\nlocal x: number = \"a\"\n");
     settle(analysis);
     INFO(dump(analysis.diagnostics(script.id())));
     REQUIRE_FALSE(has_code(analysis.diagnostics(script.id()), "Type"));
@@ -136,8 +136,8 @@ TEST_CASE("A2 nocheck skips the type error and strict reports it", "[A2]") {
 
 TEST_CASE("A3 wait is an unknown global and task.wait is clean", "[A3]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Script& script = add_script(rig.model, "Wait", "wait(1)\n");
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Wait", "wait(1)\n");
     settle(analysis);
     const std::vector<engine_core::Diagnostic> waiting = analysis.diagnostics(script.id());
     INFO(dump(waiting));
@@ -157,8 +157,8 @@ TEST_CASE("A3 wait is an unknown global and task.wait is clean", "[A3]") {
 
 TEST_CASE("A4 PreRender is not declared and Heartbeat is", "[A4]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Script& script = add_script(rig.model, "Render",
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Render",
                                              "local run = game:GetService(\"RunService\")\n"
                                              "local blocked = run.PreRender\n"
                                              "local beat = run.Heartbeat\n"
@@ -183,8 +183,8 @@ TEST_CASE("A4 PreRender is not declared and Heartbeat is", "[A4]") {
 
 TEST_CASE("A5 only the latest source is published", "[A5]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Script& script = add_script(rig.model, "Edit", "return 1\n");
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Edit", "return 1\n");
     settle(analysis);
     int publishes = 0;
     const std::uint64_t token = analysis.diagnostics_changed().connect([&](engine_core::InstanceId id) {
@@ -203,12 +203,12 @@ TEST_CASE("A5 only the latest source is published", "[A5]") {
 
 TEST_CASE("A6 invalidating a required module reanalyzes the script", "[A6]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::ModuleScript& module = rig.model.create<engine_core::ModuleScript>();
-    rig.model.set_name(module.id(), "Mod");
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::ModuleScript& module = rig.game.create<engine_core::ModuleScript>();
+    rig.game.set_name(module.id(), "Mod");
     module.set_source("return 1\n");
-    rig.model.set_parent(module.id(), rig.model.id());
-    engine_core::Script& script = add_script(rig.model, "Main", "local value = require(script.Parent.Mod)\nreturn value\n");
+    rig.game.set_parent(module.id(), rig.game.id());
+    engine_core::Script& script = add_script(rig.game, "Main", "local value = require(script.Parent.Mod)\nreturn value\n");
     settle(analysis);
 
     int fires = 0;
@@ -226,41 +226,41 @@ TEST_CASE("A6 invalidating a required module reanalyzes the script", "[A6]") {
 
 TEST_CASE("A7 a type error does not block the script", "[A7]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Script& script = add_script(rig.model, "Runs",
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Runs",
                                              "--!strict\n"
                                              "local value: number = \"nope\"\n"
                                              "local box = script:GetChildren()[1]\n"
                                              "box.Name = \"ran\"\n");
-    engine_core::GameObject& box = rig.model.create<engine_core::GameObject>();
-    rig.model.set_name(box.id(), "0");
-    rig.model.set_parent(box.id(), script.id());
+    engine_core::GameObject& box = rig.game.create<engine_core::GameObject>();
+    rig.game.set_name(box.id(), "0");
+    rig.game.set_parent(box.id(), script.id());
     settle(analysis);
     INFO(dump(analysis.diagnostics(script.id())));
     REQUIRE(has_code(analysis.diagnostics(script.id()), "Type"));
 
-    rig.model.start_simulation();
+    rig.game.start_simulation();
     rig.frames(1);
     INFO(rig.runtime.last_error());
     REQUIRE(rig.runtime.last_error().empty());
-    REQUIRE(rig.model.name(box.id()) == "ran");
+    REQUIRE(rig.game.name(box.id()) == "ran");
 }
 
 TEST_CASE("A8 stop restores authored diagnostics", "[A8]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
+    engine_core::ScriptAnalysis analysis(rig.game);
     const char* authored = "--!strict\nlocal value: number = \"nope\"\n";
-    engine_core::Script& script = add_script(rig.model, "Authored", authored);
+    engine_core::Script& script = add_script(rig.game, "Authored", authored);
     settle(analysis);
     REQUIRE(has_code(analysis.diagnostics(script.id()), "Type"));
 
-    rig.model.start_simulation();
+    rig.game.start_simulation();
     script.set_source("local x =\n");
     settle(analysis);
     INFO(dump(analysis.diagnostics(script.id())));
     REQUIRE(has_code(analysis.diagnostics(script.id()), "Syntax"));
 
-    rig.model.stop_simulation();
+    rig.game.stop_simulation();
     REQUIRE(script.source() == authored);
     settle(analysis);
     const std::vector<engine_core::Diagnostic> restored = analysis.diagnostics(script.id());
@@ -271,8 +271,8 @@ TEST_CASE("A8 stop restores authored diagnostics", "[A8]") {
 
 TEST_CASE("A9 pump is the only publisher", "[A9]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Script& script = add_script(rig.model, "Queued", "return 1\n");
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Queued", "return 1\n");
     settle(analysis);
     REQUIRE(analysis.diagnostics(script.id()).empty());
     REQUIRE(analysis.analyzed_source(script.id()) == std::string("return 1\n"));
@@ -301,12 +301,12 @@ TEST_CASE("A9 pump is the only publisher", "[A9]") {
 // is needed. Only a name that is not in the place is Instance?.
 TEST_CASE("A10 a child in the place is its class and never nil", "[A10]") {
     ScriptRig rig;
-    engine_core::TestTriangle& triangle = rig.model.create<engine_core::TestTriangle>();
-    rig.model.set_name(triangle.id(), "Tri0");
-    rig.model.set_parent(triangle.id(), rig.model.id());
-    engine_core::ScriptAnalysis analysis(rig.model);
+    engine_core::TestTriangle& triangle = rig.game.create<engine_core::TestTriangle>();
+    rig.game.set_name(triangle.id(), "Tri0");
+    rig.game.set_parent(triangle.id(), rig.game.id());
+    engine_core::ScriptAnalysis analysis(rig.game);
 
-    engine_core::Script& bare = add_script(rig.model, "Bare",
+    engine_core::Script& bare = add_script(rig.game, "Bare",
                                             "local tri = game:FindFirstChild(\"Tri0\")\n"
                                             "local home = tri.Position\n"
                                             "return home\n");
@@ -331,7 +331,7 @@ TEST_CASE("A10 a child in the place is its class and never nil", "[A10]") {
         REQUIRE(report.find("could be nil") != std::string::npos);
     }
 
-    engine_core::Script& hop = add_script(rig.model, "Hop",
+    engine_core::Script& hop = add_script(rig.game, "Hop",
                                            "local tri = game:FindFirstChild(\"Tri0\")\n"
                                            "assert(tri)\n"
                                            "local home = tri.Position\n"
@@ -341,7 +341,7 @@ TEST_CASE("A10 a child in the place is its class and never nil", "[A10]") {
     INFO(dump(analysis.diagnostics(hop.id())));
     REQUIRE(analysis.diagnostics(hop.id()).empty());
 
-    engine_core::Script& missing = add_script(rig.model, "Missing",
+    engine_core::Script& missing = add_script(rig.game, "Missing",
                                                "local tri = game:FindFirstChild(\"Nope\")\n"
                                                "assert(tri)\n"
                                                "local home = tri.Position\n"
@@ -389,8 +389,8 @@ TEST_CASE("analysis definitions come from the class registry", "[A11]") {
 
 TEST_CASE("disabling script analysis drops diagnostics", "[A]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Script& script = add_script(rig.model, "Off", "local x =\n");
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Off", "local x =\n");
     settle(analysis);
     REQUIRE_FALSE(analysis.diagnostics(script.id()).empty());
     analysis.set_enabled(false);
@@ -402,8 +402,8 @@ TEST_CASE("disabling script analysis drops diagnostics", "[A]") {
 
 TEST_CASE("A12 a script is rechecked when the tree it looks into changes", "[A12]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Script& hop = add_script(rig.model, "Hop",
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& hop = add_script(rig.game, "Hop",
                                            "local tri = game:FindFirstChild(\"Tri0\")\n"
                                            "assert(tri)\n"
                                            "local home = tri.Position\n"
@@ -413,15 +413,15 @@ TEST_CASE("A12 a script is rechecked when the tree it looks into changes", "[A12
     REQUIRE_FALSE(analysis.diagnostics(hop.id()).empty());
 
     // Tri0 arrives after the script. The script did not change; its answer did.
-    engine_core::TestTriangle& triangle = rig.model.create<engine_core::TestTriangle>();
-    rig.model.set_name(triangle.id(), "Tri0");
-    rig.model.set_parent(triangle.id(), rig.model.id());
+    engine_core::TestTriangle& triangle = rig.game.create<engine_core::TestTriangle>();
+    rig.game.set_name(triangle.id(), "Tri0");
+    rig.game.set_parent(triangle.id(), rig.game.id());
     settle(analysis);
     INFO(dump(analysis.diagnostics(hop.id())));
     REQUIRE(analysis.diagnostics(hop.id()).empty());
 
     // A rename away from the looked-up name brings the warning back.
-    rig.model.set_name(triangle.id(), "Tri9");
+    rig.game.set_name(triangle.id(), "Tri9");
     settle(analysis);
     REQUIRE_FALSE(analysis.diagnostics(hop.id()).empty());
 }
@@ -446,10 +446,10 @@ TEST_CASE("A13 a loaded project is analyzed against the whole loaded tree", "[A1
           "local home = tri.Position\n"
           "return home\n");
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Project loaded = engine_core::Project::load(dir, rig.model);
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Project loaded = engine_core::Project::load(dir, rig.game);
     settle(analysis);
-    const engine_core::InstanceId hop = *rig.model.find_guid("zzz");
+    const engine_core::InstanceId hop = *rig.game.find_guid("zzz");
     INFO(dump(analysis.diagnostics(hop)));
     REQUIRE(analysis.diagnostics(hop).empty());
     fs::remove_all(dir);
@@ -457,11 +457,11 @@ TEST_CASE("A13 a loaded project is analyzed against the whole loaded tree", "[A1
 
 namespace {
 
-engine_core::ModuleScript& add_module(engine_core::DataModel& model, const char* name, const char* source) {
-    engine_core::ModuleScript& module = model.create<engine_core::ModuleScript>();
-    model.set_name(module.id(), name);
+engine_core::ModuleScript& add_module(engine_core::DataModel& game, const char* name, const char* source) {
+    engine_core::ModuleScript& module = game.create<engine_core::ModuleScript>();
+    game.set_name(module.id(), name);
     module.set_source(source);
-    model.set_parent(module.id(), model.id());
+    game.set_parent(module.id(), game.id());
     return module;
 }
 
@@ -473,14 +473,14 @@ bool analyzed(const engine_core::ScriptAnalysis& analysis, engine_core::Instance
 
 TEST_CASE("A14 open scope checks watched scripts and the modules they require", "[A14]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
+    engine_core::ScriptAnalysis analysis(rig.game);
     analysis.set_scope(engine_core::AnalysisScope::Open);
     const char* kBad = "--!strict\nlocal x: number = \"a\"\nreturn x\n";
-    engine_core::ModuleScript& deep = add_module(rig.model, "Deep", kBad);
-    engine_core::ModuleScript& mid = add_module(rig.model, "Mid", "return require(script.Parent.Deep)\n");
-    engine_core::ModuleScript& other = add_module(rig.model, "Other", kBad);
-    engine_core::Script& main = add_script(rig.model, "Main", "local value = require(script.Parent.Mid)\nreturn value\n");
-    engine_core::Script& closed = add_script(rig.model, "Closed", kBad);
+    engine_core::ModuleScript& deep = add_module(rig.game, "Deep", kBad);
+    engine_core::ModuleScript& mid = add_module(rig.game, "Mid", "return require(script.Parent.Deep)\n");
+    engine_core::ModuleScript& other = add_module(rig.game, "Other", kBad);
+    engine_core::Script& main = add_script(rig.game, "Main", "local value = require(script.Parent.Mid)\nreturn value\n");
+    engine_core::Script& closed = add_script(rig.game, "Closed", kBad);
     settle(analysis);
     REQUIRE_FALSE(analyzed(analysis, main.id()));
     REQUIRE_FALSE(analyzed(analysis, closed.id()));
@@ -518,7 +518,7 @@ TEST_CASE("A14 open scope checks watched scripts and the modules they require", 
 
     SECTION("a module shared by two watched scripts stays until both close") {
         engine_core::Script& second =
-            add_script(rig.model, "Second", "local value = require(script.Parent.Deep)\nreturn value\n");
+            add_script(rig.game, "Second", "local value = require(script.Parent.Deep)\nreturn value\n");
         analysis.watch(main.id());
         analysis.watch(second.id());
         settle(analysis);
@@ -533,7 +533,7 @@ TEST_CASE("A14 open scope checks watched scripts and the modules they require", 
     }
 
     SECTION("a watched script follows the tree") {
-        engine_core::Script& hop = add_script(rig.model, "Hop",
+        engine_core::Script& hop = add_script(rig.game, "Hop",
                                                "local tri = game:FindFirstChild(\"Tri0\")\n"
                                                "assert(tri)\n"
                                                "local home = tri.Position\n"
@@ -541,9 +541,9 @@ TEST_CASE("A14 open scope checks watched scripts and the modules they require", 
         analysis.watch(hop.id());
         settle(analysis);
         REQUIRE_FALSE(analysis.diagnostics(hop.id()).empty());
-        engine_core::TestTriangle& triangle = rig.model.create<engine_core::TestTriangle>();
-        rig.model.set_name(triangle.id(), "Tri0");
-        rig.model.set_parent(triangle.id(), rig.model.id());
+        engine_core::TestTriangle& triangle = rig.game.create<engine_core::TestTriangle>();
+        rig.game.set_name(triangle.id(), "Tri0");
+        rig.game.set_parent(triangle.id(), rig.game.id());
         settle(analysis);
         INFO(dump(analysis.diagnostics(hop.id())));
         REQUIRE(analysis.diagnostics(hop.id()).empty());
@@ -553,9 +553,9 @@ TEST_CASE("A14 open scope checks watched scripts and the modules they require", 
 
 TEST_CASE("A15 switching to open scope drops what is not watched", "[A15]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Script& kept = add_script(rig.model, "Kept", "return 1\n");
-    engine_core::Script& dropped = add_script(rig.model, "Dropped", "return 2\n");
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& kept = add_script(rig.game, "Kept", "return 1\n");
+    engine_core::Script& dropped = add_script(rig.game, "Dropped", "return 2\n");
     settle(analysis);
     REQUIRE(analyzed(analysis, kept.id()));
     REQUIRE(analyzed(analysis, dropped.id()));
@@ -565,24 +565,24 @@ TEST_CASE("A15 switching to open scope drops what is not watched", "[A15]") {
     REQUIRE(analyzed(analysis, kept.id()));
     REQUIRE_FALSE(analyzed(analysis, dropped.id()));
     // A watched script that is destroyed does not leave analysis busy.
-    rig.model.destroy(kept.id());
+    rig.game.destroy(kept.id());
     settle(analysis);
     REQUIRE(analysis.idle());
 }
 
 TEST_CASE("A16 a require path that reaches a ModuleScript takes its type", "[A16]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Folder& modules = rig.model.create<engine_core::Folder>();
-    rig.model.set_name(modules.id(), "Modules");
-    rig.model.set_parent(modules.id(), rig.model.id());
-    engine_core::ModuleScript& config = add_module(rig.model, "Config",
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Folder& modules = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(modules.id(), "Modules");
+    rig.game.set_parent(modules.id(), rig.game.id());
+    engine_core::ModuleScript& config = add_module(rig.game, "Config",
                                                    "local Config = {}\n"
                                                    "Config.Currencies = { Gold = \"Gold\" }\n"
                                                    "Config.Settings = { Enabled = false }\n"
                                                    "return Config\n");
-    rig.model.set_parent(config.id(), modules.id());
-    engine_core::Script& script = add_script(rig.model, "Test",
+    rig.game.set_parent(config.id(), modules.id());
+    engine_core::Script& script = add_script(rig.game, "Test",
                                              "local Config = require(game:FindFirstChild(\"Modules\"):FindFirstChild(\"Config\"))\n"
                                              "local currency = Config.Currencies.Gold\n"
                                              "Config.Settings.Enabled = true\n"
@@ -628,14 +628,14 @@ TEST_CASE("A17 any method the API marks resolves_child walks a require path", "[
     REQUIRE_FALSE(engine_core::lua_method_resolves_child("GetChildren"));
 
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Folder& modules = rig.model.create<engine_core::Folder>();
-    rig.model.set_name(modules.id(), "Modules");
-    rig.model.set_parent(modules.id(), rig.model.id());
-    engine_core::ModuleScript& config = add_module(rig.model, "Config", "return { Gold = 1 }\n");
-    rig.model.set_parent(config.id(), modules.id());
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Folder& modules = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(modules.id(), "Modules");
+    rig.game.set_parent(modules.id(), rig.game.id());
+    engine_core::ModuleScript& config = add_module(rig.game, "Config", "return { Gold = 1 }\n");
+    rig.game.set_parent(config.id(), modules.id());
     engine_core::Script& script = add_script(
-        rig.model, "Test", "local Config = require(game:ProbeChild(\"Modules\"):ProbeChild(\"Config\"))\nreturn Config\n");
+        rig.game, "Test", "local Config = require(game:ProbeChild(\"Modules\"):ProbeChild(\"Config\"))\nreturn Config\n");
     settle(analysis);
     INFO(dump(analysis.diagnostics(script.id())));
     // An undocumented method must not break the definitions and leave nothing checked.
@@ -656,17 +656,17 @@ TEST_CASE("A17 any method the API marks resolves_child walks a require path", "[
 
 TEST_CASE("A18 WaitForChild gives the child's class without nil and walks a require path", "[A18]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Folder& modules = rig.model.create<engine_core::Folder>();
-    rig.model.set_name(modules.id(), "Modules");
-    rig.model.set_parent(modules.id(), rig.model.id());
-    engine_core::ModuleScript& config = add_module(rig.model, "Config",
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Folder& modules = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(modules.id(), "Modules");
+    rig.game.set_parent(modules.id(), rig.game.id());
+    engine_core::ModuleScript& config = add_module(rig.game, "Config",
                                                    "local Config = {}\n"
                                                    "Config.Currencies = { Gold = \"Gold\" }\n"
                                                    "Config.Settings = { Enabled = false }\n"
                                                    "return Config\n");
-    rig.model.set_parent(config.id(), modules.id());
-    engine_core::Script& script = add_script(rig.model, "Test",
+    rig.game.set_parent(config.id(), modules.id());
+    engine_core::Script& script = add_script(rig.game, "Test",
                                              "local Config = require(game:WaitForChild(\"Modules\"):WaitForChild(\"Config\"))\n"
                                              "local currency = Config.Currencies.Gold\n"
                                              "Config.Settings.Enabled = true\n"
@@ -694,11 +694,11 @@ TEST_CASE("A18 WaitForChild gives the child's class without nil and walks a requ
 
 TEST_CASE("A19 a dotted name that reaches a child is not an unknown member", "[A19]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::GameObject& door = rig.model.create<engine_core::GameObject>();
-    rig.model.set_name(door.id(), "Door");
-    rig.model.set_parent(door.id(), rig.model.id());
-    engine_core::Script& script = add_script(rig.model, "Dot",
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::GameObject& door = rig.game.create<engine_core::GameObject>();
+    rig.game.set_name(door.id(), "Door");
+    rig.game.set_parent(door.id(), rig.game.id());
+    engine_core::Script& script = add_script(rig.game, "Dot",
                                               "local d = game.Door\n"
                                               "d.Name = \"x\"\n"
                                               "local c = game.Door.Color\n"
@@ -712,7 +712,7 @@ TEST_CASE("A19 a dotted name that reaches a child is not an unknown member", "[A
     REQUIRE(found[0].message.find("Nope") != std::string::npos);
 
     // A rename away from Door makes the first two reads unknown again.
-    rig.model.set_name(door.id(), "Gate");
+    rig.game.set_name(door.id(), "Gate");
     settle(analysis);
     found = analysis.diagnostics(script.id());
     INFO(dump(found));
@@ -723,20 +723,20 @@ TEST_CASE("A19 a dotted name that reaches a child is not an unknown member", "[A
 // too: its members, its own children, a local holding it, and a require.
 TEST_CASE("A20 a dotted name is the child it reaches, with its type", "[A20]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Folder& configs = rig.model.create<engine_core::Folder>();
-    rig.model.set_name(configs.id(), "Configs");
-    rig.model.set_parent(configs.id(), rig.model.id());
-    engine_core::TestTriangle& inner = rig.model.create<engine_core::TestTriangle>();
-    rig.model.set_name(inner.id(), "SomeInstance");
-    rig.model.set_parent(inner.id(), configs.id());
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Folder& configs = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(configs.id(), "Configs");
+    rig.game.set_parent(configs.id(), rig.game.id());
+    engine_core::TestTriangle& inner = rig.game.create<engine_core::TestTriangle>();
+    rig.game.set_name(inner.id(), "SomeInstance");
+    rig.game.set_parent(inner.id(), configs.id());
     // A child named like a property: the property wins, as at run time.
-    engine_core::Folder& named = rig.model.create<engine_core::Folder>();
-    rig.model.set_name(named.id(), "Name");
-    rig.model.set_parent(named.id(), configs.id());
-    engine_core::ModuleScript& config = add_module(rig.model, "Config", "return { Gold = 1 }\n");
-    rig.model.set_parent(config.id(), configs.id());
-    engine_core::Script& script = add_script(rig.model, "Test",
+    engine_core::Folder& named = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(named.id(), "Name");
+    rig.game.set_parent(named.id(), configs.id());
+    engine_core::ModuleScript& config = add_module(rig.game, "Config", "return { Gold = 1 }\n");
+    rig.game.set_parent(config.id(), configs.id());
+    engine_core::Script& script = add_script(rig.game, "Test",
                                              "local some = game.Configs.SomeInstance\n"
                                              "local home = some.Position\n"
                                              "game.Configs.SomeInstance.Position = home\n"
@@ -795,17 +795,17 @@ TEST_CASE("A20 a dotted name is the child it reaches, with its type", "[A20]") {
 // so nothing is nil and there is nothing to report.
 TEST_CASE("A21 FindFirstChild chains to a module in the place with no nil warning", "[A21]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
+    engine_core::ScriptAnalysis analysis(rig.game);
     analysis.set_scope(engine_core::AnalysisScope::Open);
-    engine_core::Folder& modules = rig.model.create<engine_core::Folder>();
-    rig.model.set_name(modules.id(), "Modules");
-    rig.model.set_parent(modules.id(), rig.model.id());
-    engine_core::ModuleScript& config = add_module(rig.model, "Config",
+    engine_core::Folder& modules = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(modules.id(), "Modules");
+    rig.game.set_parent(modules.id(), rig.game.id());
+    engine_core::ModuleScript& config = add_module(rig.game, "Config",
                                                    "local Config = {}\n"
                                                    "Config.Currencies = { Gold = \"Gold\" }\n"
                                                    "Config.Settings = { DeleteEveryFileOnTheComputer = false }\n"
                                                    "return Config\n");
-    rig.model.set_parent(config.id(), modules.id());
+    rig.game.set_parent(config.id(), modules.id());
     const char* source =
         "local Config = require(game:FindFirstChild(\"Modules\"):FindFirstChild(\"Config\"))\n"
         "\n"
@@ -814,7 +814,7 @@ TEST_CASE("A21 FindFirstChild chains to a module in the place with no nil warnin
         "Config.Settings.DeleteEveryFileOnTheComputer = true\n"
         "\n"
         "print(\"Currency:\", currency, \"Setting:\", Config.Settings.DeleteEveryFileOnTheComputer)\n";
-    engine_core::Script& script = add_script(rig.model, "Test", source);
+    engine_core::Script& script = add_script(rig.game, "Test", source);
     analysis.watch(script.id());
     settle(analysis);
     INFO(dump(analysis.diagnostics(script.id())));
@@ -828,7 +828,7 @@ TEST_CASE("A21 FindFirstChild chains to a module in the place with no nil warnin
     }
 
     SECTION("renaming the folder away brings the nil warning back") {
-        rig.model.set_name(modules.id(), "Elsewhere");
+        rig.game.set_name(modules.id(), "Elsewhere");
         settle(analysis);
         const std::string report = dump(analysis.diagnostics(script.id()));
         INFO(report);
@@ -841,13 +841,13 @@ TEST_CASE("A21 FindFirstChild chains to a module in the place with no nil warnin
 // and only game has GetService.
 TEST_CASE("A22 Parent takes any DataModel, and game is not an Instance", "[A22]") {
     ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.model);
-    engine_core::Folder& box = rig.model.create<engine_core::Folder>();
-    rig.model.set_name(box.id(), "Box");
-    rig.model.set_parent(box.id(), rig.model.id());
-    engine_core::TestTriangle& tri = rig.model.create<engine_core::TestTriangle>();
-    rig.model.set_name(tri.id(), "Tri0");
-    rig.model.set_parent(tri.id(), box.id());
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Folder& box = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(box.id(), "Box");
+    rig.game.set_parent(box.id(), rig.game.id());
+    engine_core::TestTriangle& tri = rig.game.create<engine_core::TestTriangle>();
+    rig.game.set_name(tri.id(), "Tri0");
+    rig.game.set_parent(tri.id(), box.id());
     const char* source =
         "local box = game:FindFirstChild(\"Box\")\n"
         "local tri = game.Box.Tri0\n"
@@ -867,7 +867,7 @@ TEST_CASE("A22 Parent takes any DataModel, and game is not an Instance", "[A22]"
         "game:GetService(\"Selection\"):Set({box, tri})\n"
         "local beat = game:GetService(\"RunService\").Heartbeat\n"
         "return root, made, found, up, beat\n";
-    engine_core::Script& script = add_script(rig.model, "Parenting", source);
+    engine_core::Script& script = add_script(rig.game, "Parenting", source);
     settle(analysis);
     INFO(dump(analysis.diagnostics(script.id())));
     REQUIRE(analysis.diagnostics(script.id()).empty());

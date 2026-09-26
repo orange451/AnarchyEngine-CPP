@@ -920,25 +920,25 @@ void CompletionPopup::present(const CompletionList& list, bool force, jadefx::No
 std::vector<engine_core::LuaNode> completion_world(engine_core::Engine& engine, std::uint32_t script_id,
                                                    const std::string* buffer) {
     std::vector<engine_core::LuaNode> nodes;
-    engine_core::DataModel& model = engine.datamodel();
-    engine_core::DataModelLock lock(model, engine_core::DataModelLock::Read, kLockWait);
+    engine_core::DataModel& game = engine.datamodel();
+    engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kLockWait);
     if (!lock.owns()) {
         return nodes;
     }
     engine_core::LuaNode root;
     root.id = 0;
     root.parent = engine_core::DataModel::kNoParent;
-    root.name = model.name(0);
-    root.class_name = model.class_name();
+    root.name = game.name(0);
+    root.class_name = game.class_name();
     nodes.push_back(std::move(root));
-    model.for_each_instance([&](engine_core::DataModel& object) {
+    game.for_each_instance([&](engine_core::DataModel& object) {
         if (object.id() == 0) {
             return;
         }
         engine_core::LuaNode node;
         node.id = object.id();
-        node.parent = model.parent(object.id());
-        node.name = model.name(object.id());
+        node.parent = game.parent(object.id());
+        node.name = game.name(object.id());
         const char* class_name = object.class_name();
         node.class_name = class_name != nullptr ? class_name : "";
         if (auto* source = dynamic_cast<engine_core::LuaSource*>(&object)) {

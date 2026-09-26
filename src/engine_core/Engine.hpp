@@ -46,7 +46,7 @@ public:
     void set_render_client_sync(bool enabled);
     void note_client_frame();
 
-    DataModel& datamodel() { return model_; }
+    DataModel& datamodel() { return game_; }
     SnapshotPump& pump() { return pump_; }
     TaskScheduler& scheduler() { return scheduler_; }
     ScriptRuntime& scripts();
@@ -84,7 +84,7 @@ private:
     void pace(double hz_anchor_seconds) const;
     void drain_edits();
 
-    Game model_;
+    Game game_;
     SnapshotPump pump_;
     TaskScheduler scheduler_;
     std::unique_ptr<ScriptRuntime> scripts_;

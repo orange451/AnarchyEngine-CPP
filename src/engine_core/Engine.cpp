@@ -14,10 +14,10 @@ namespace engine_core {
 Engine::Engine() {
     pump_.reserve(DataModel::kMaxInstances);
     scheduler_.reserve(64);
-    model_.attach_scheduler(&scheduler_);
+    game_.attach_scheduler(&scheduler_);
     scripts_ = std::make_unique<ScriptRuntime>();
-    scripts_->attach(model_, scheduler_);
-    analysis_ = std::make_unique<ScriptAnalysis>(model_);
+    scripts_->attach(game_, scheduler_);
+    analysis_ = std::make_unique<ScriptAnalysis>(game_);
 }
 
 ScriptRuntime& Engine::scripts() { return *scripts_; }
@@ -72,8 +72,8 @@ void Engine::start() {
     {
         std::unique_lock<std::mutex> guard(start_mu_);
         start_cv_.wait(guard, [&] { return simulation_ready_ && render_ready_; });
-        model_.set_thread_ids(simulation_id_, render_id_);
-        model_.set_threads_running(true);
+        game_.set_thread_ids(simulation_id_, render_id_);
+        game_.set_threads_running(true);
         start_release_ = true;
     }
     start_cv_.notify_all();
@@ -102,15 +102,15 @@ void Engine::on_simulation(std::function<void(DataModel&)> fn) {
         return;
     }
     if (!running_.load() || std::this_thread::get_id() == simulation_id_) {
-        fn(model_);
+        fn(game_);
         return;
     }
     // pause_mu_ is released by the sim thread while it waits. Holding it here
     // keeps that wait from ending, so the write lock is not the step lock.
     std::unique_lock<std::mutex> pause_lock(pause_mu_);
     if (paused_) {
-        DataModelLock lock(model_, DataModelLock::Write);
-        model_.perform_paused_edit(fn);
+        DataModelLock lock(game_, DataModelLock::Write);
+        game_.perform_paused_edit(fn);
         return;
     }
     std::lock_guard<std::mutex> guard(edit_mu_);
@@ -127,7 +127,7 @@ void Engine::drain_edits() {
         batch.swap(edits_);
     }
     for (const std::function<void(DataModel&)>& fn : batch) {
-        fn(model_);
+        fn(game_);
     }
 }
 
@@ -150,7 +150,7 @@ void Engine::stop() {
     if (render_.joinable()) {
         render_.join();
     }
-    model_.set_threads_running(false);
+    game_.set_threads_running(false);
 }
 
 void Engine::simulation_loop() {
@@ -203,40 +203,40 @@ void Engine::simulation_loop() {
 
         int substeps = 0;
         try {
-            DataModelLock lock(model_, DataModelLock::Write);
-            model_.drain_commands();
+            DataModelLock lock(game_, DataModelLock::Write);
+            game_.drain_commands();
             drain_edits();
             scheduler_.run_phase(Phase::PreAnimation, render_dt_);
             // Deferred handlers run on this thread, still under the step lock,
             // after the phase that queued them and before Prepare can copy.
-            model_.events().drain();
+            game_.events().drain();
             accumulator += wall;
             constexpr int kMaxSubsteps = 32;
             while (accumulator >= physics_dt_ && substeps < kMaxSubsteps) {
                 scheduler_.run_phase(Phase::PreSimulation, physics_dt_);
-                model_.events().drain();
+                game_.events().drain();
                 scheduler_.run_phase(Phase::PhysicsSubstep, physics_dt_);
-                model_.events().drain();
+                game_.events().drain();
                 step_physics(physics_dt_);
                 scheduler_.run_phase(Phase::PostSimulation, physics_dt_);
-                model_.events().drain();
+                game_.events().drain();
                 accumulator -= physics_dt_;
                 ++substeps;
             }
             scheduler_.run_phase(Phase::Heartbeat, render_dt_);
             // Descendants of the root step in this phase. Bound Heartbeat jobs
             // stay for callers that are not instances.
-            model_.step_descendants(render_dt_);
-            model_.events().drain();
+            game_.step_descendants(render_dt_);
+            game_.events().drain();
             // Same dt Heartbeat jobs just received. Scripts resume after that drain.
             if (scripts_) {
                 scripts_->heartbeat(render_dt_);
             }
-            model_.events().drain();
+            game_.events().drain();
         } catch (const ContractViolation&) {
             contract_count_.fetch_add(1);
         }
-        if (model_.take_deferred_violation()) {
+        if (game_.take_deferred_violation()) {
             contract_count_.fetch_add(1);
         }
         last_substeps_.store(substeps);
@@ -291,10 +291,10 @@ void Engine::render_loop() {
         bool saw_contract = false;
         std::uint64_t hold_ns = 0;
         {
-            DataModelLock lock(model_, DataModelLock::Write, std::chrono::milliseconds(2));
+            DataModelLock lock(game_, DataModelLock::Write, std::chrono::milliseconds(2));
             if (lock.owns()) {
                 const auto hold_start = std::chrono::steady_clock::now();
-                pump_.begin_prerender_window(model_);
+                pump_.begin_prerender_window(game_);
                 // Roblox order inside the pre-draw window: RenderStepped, then PreRender.
                 // A failure in one does not skip the other or the copy.
                 try {
@@ -307,11 +307,11 @@ void Engine::render_loop() {
                 } catch (const ContractViolation&) {
                     saw_contract = true;
                 }
-                pump_.end_prerender_window(model_);
+                pump_.end_prerender_window(game_);
                 // Copy even after a rejected PreRender write. Authorize fails before
                 // mutation, so the queue still describes real sim state.
                 try {
-                    pump_.prepare_copy(model_);
+                    pump_.prepare_copy(game_);
                     prepared = true;
                 } catch (const ContractViolation&) {
                     saw_contract = true;
@@ -321,7 +321,7 @@ void Engine::render_loop() {
                         .count());
             }
         }
-        if (model_.take_deferred_violation()) {
+        if (game_.take_deferred_violation()) {
             saw_contract = true;
         }
         if (saw_contract) {
@@ -368,6 +368,6 @@ void Engine::render_loop() {
     }
 }
 
-void Engine::step_physics(double dt) { model_.integrate_simulated(dt); }
+void Engine::step_physics(double dt) { game_.integrate_simulated(dt); }
 
 }  // namespace engine_core

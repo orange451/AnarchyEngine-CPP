@@ -551,8 +551,8 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         status.clear();
         auto result = std::make_shared<PendingEdit>();
         pending.push_back(result);
-        auto write = [ids, edit, result](engine_core::DataModel& model) {
-            result->result = apply_edit(model, ids, edit);
+        auto write = [ids, edit, result](engine_core::DataModel& game) {
+            result->result = apply_edit(game, ids, edit);
             result->done.store(true, std::memory_order_release);
         };
         if (run) {

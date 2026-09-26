@@ -1045,20 +1045,20 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
     return finished;
 }
 
-std::shared_ptr<WorldSnap> capture_world(DataModel& model) {
+std::shared_ptr<WorldSnap> capture_world(DataModel& game) {
     auto world = std::make_shared<WorldSnap>();
-    world->root = model.id();
+    world->root = game.id();
     NodeSnap root;
     root.id = world->root;
     root.parent = DataModel::kNoParent;
-    root.name = model.name(world->root);
-    root.class_name = model.class_name();
+    root.name = game.name(world->root);
+    root.class_name = game.class_name();
     world->nodes.push_back(std::move(root));
-    model.for_each_instance([&](DataModel& object) {
+    game.for_each_instance([&](DataModel& object) {
         NodeSnap node;
         node.id = object.id();
-        node.parent = model.parent(object.id());
-        node.name = model.name(object.id());
+        node.parent = game.parent(object.id());
+        node.name = game.name(object.id());
         node.class_name = object.class_name() != nullptr ? object.class_name() : "";
         if (auto* source = dynamic_cast<LuaSource*>(&object)) {
             node.lua = true;
@@ -1068,7 +1068,7 @@ std::shared_ptr<WorldSnap> capture_world(DataModel& model) {
         world->nodes.push_back(std::move(node));
     });
     for (NodeSnap& node : world->nodes) {
-        for (InstanceId child = model.first_child(node.id); child != 0; child = model.next_sibling(child)) {
+        for (InstanceId child = game.first_child(node.id); child != 0; child = game.next_sibling(child)) {
             node.children.push_back(child);
         }
     }
@@ -1267,16 +1267,16 @@ void ScriptAnalysis::collect_dependents(InstanceId id, std::vector<InstanceId>& 
     }
 }
 
-ScriptAnalysis::ScriptAnalysis(DataModel& model) : model_(model), state_(std::make_unique<State>()) {
+ScriptAnalysis::ScriptAnalysis(DataModel& game) : game_(game), state_(std::make_unique<State>()) {
     signal_.owner_ = this;
-    model_.set_script_analysis(this);
+    game_.set_script_analysis(this);
 }
 
 ScriptAnalysis::~ScriptAnalysis() { shutdown(); }
 
 void ScriptAnalysis::shutdown() {
-    if (model_.script_analysis() == this) {
-        model_.set_script_analysis(nullptr);
+    if (game_.script_analysis() == this) {
+        game_.set_script_analysis(nullptr);
     }
     std::lock_guard<std::mutex> start(state_->start_mu);
     {
@@ -1413,7 +1413,7 @@ void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
     if (ids.empty()) {
         return;
     }
-    const std::shared_ptr<WorldSnap> world = capture_world(model_);
+    const std::shared_ptr<WorldSnap> world = capture_world(game_);
     ensure_worker();
     std::lock_guard<std::mutex> lock(state_->mu);
     if (!state_->enabled || state_->stop) {
@@ -1448,7 +1448,7 @@ void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
 }
 
 void ScriptAnalysis::invalidate(InstanceId script) {
-    DataModel* object = model_.instance(script);
+    DataModel* object = game_.instance(script);
     if (dynamic_cast<LuaSource*>(object) == nullptr) {
         return;
     }
@@ -1492,7 +1492,7 @@ void ScriptAnalysis::invalidate_all() {
         if (!all) {
             return;
         }
-        model_.for_each_instance([&ids](DataModel& object) {
+        game_.for_each_instance([&ids](DataModel& object) {
             if (dynamic_cast<LuaSource*>(&object) != nullptr) {
                 ids.push_back(object.id());
             }
@@ -1643,8 +1643,8 @@ void ScriptAnalysis::pump() {
     // A tree change rechecks every script once, however many changes came in.
     // Only while stopped: play changes are not the authored tree. The UI
     // thread pumps outside a step, so the read lock is short and uncontended.
-    if (state_->world_stale.load(std::memory_order_relaxed) && !model_.simulation_running()) {
-        DataModelLock lock(model_, DataModelLock::Read, std::chrono::milliseconds(2));
+    if (state_->world_stale.load(std::memory_order_relaxed) && !game_.simulation_running()) {
+        DataModelLock lock(game_, DataModelLock::Read, std::chrono::milliseconds(2));
         if (lock.owns() && state_->world_stale.exchange(false, std::memory_order_relaxed)) {
             invalidate_all();
         }
@@ -1656,7 +1656,7 @@ void ScriptAnalysis::pump() {
         wanted.assign(state_->to_schedule.begin(), state_->to_schedule.end());
     }
     if (!wanted.empty()) {
-        DataModelLock lock(model_, DataModelLock::Read, std::chrono::milliseconds(2));
+        DataModelLock lock(game_, DataModelLock::Read, std::chrono::milliseconds(2));
         if (lock.owns()) {
             schedule(wanted);
         }

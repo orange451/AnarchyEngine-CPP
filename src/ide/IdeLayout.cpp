@@ -230,11 +230,11 @@ const jadefx::Color kSplitFill = jadefx::Color::rgba(0.204f, 0.659f, 0.325f, 0.4
 const jadefx::Color kFloatFill = jadefx::Color::rgba(0.984f, 0.737f, 0.016f, 0.46f);
 const jadefx::Color kCaretFill = jadefx::Color::rgba(0.102f, 0.451f, 0.910f, 0.95f);
 
-bool parent_ok(const engine_core::DataModel& model, engine_core::InstanceId parent) {
-    return parent == 0 || (parent != engine_core::DataModel::kNoParent && model.alive(parent));
+bool parent_ok(const engine_core::DataModel& game, engine_core::InstanceId parent) {
+    return parent == 0 || (parent != engine_core::DataModel::kNoParent && game.alive(parent));
 }
 
-bool would_cycle(const engine_core::DataModel& model, engine_core::InstanceId node, engine_core::InstanceId parent) {
+bool would_cycle(const engine_core::DataModel& game, engine_core::InstanceId node, engine_core::InstanceId parent) {
     if (node == 0 || parent == node) {
         return true;
     }
@@ -243,7 +243,7 @@ bool would_cycle(const engine_core::DataModel& model, engine_core::InstanceId no
         if (cursor == node) {
             return true;
         }
-        cursor = model.parent(cursor);
+        cursor = game.parent(cursor);
     }
     return false;
 }
@@ -345,20 +345,20 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     auto insert = jadefx::make<jadefx::MenuItem>("Insert Triangle");
     AttachIcon(*insert, "Mesh.png");
     insert->setOnAction([this](jadefx::ActionEvent&) {
-        runner_.simulation().on_simulation([](engine_core::DataModel& model) {
+        runner_.simulation().on_simulation([](engine_core::DataModel& game) {
             int existing = 0;
-            for (engine_core::InstanceId id = model.first_child(model.id()); id != 0; id = model.next_sibling(id)) {
-                if (dynamic_cast<engine_core::TestTriangle*>(model.instance(id)) != nullptr) {
+            for (engine_core::InstanceId id = game.first_child(game.id()); id != 0; id = game.next_sibling(id)) {
+                if (dynamic_cast<engine_core::TestTriangle*>(game.instance(id)) != nullptr) {
                     ++existing;
                 }
             }
-            engine_core::TestTriangle& triangle = model.create<engine_core::TestTriangle>();
-            model.set_parent(triangle.id(), model.id());
+            engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
+            game.set_parent(triangle.id(), game.id());
             // Spread repeats around the view so they do not stack on one point.
             const float angle = static_cast<float>(existing) * 0.9f;
             constexpr float kRadius = 0.42f;
             triangle.set_position(std::cos(angle) * kRadius, std::sin(angle) * kRadius, 0.15f);
-            CloseGesture(model);
+            CloseGesture(game);
         });
     });
     edit->getItems().add(std::move(insert));
@@ -377,7 +377,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     top->getChildren().add(menuBar);
     top->getChildren().add(ribbon);
 
-    engine_core::DataModel& model = runner_.simulation().datamodel();
+    engine_core::DataModel& game = runner_.simulation().datamodel();
     ExplorerHost host;
     host.run = [this](std::string_view action, engine_core::InstanceId id) { run_action(action, id); };
     host.run_many = [this](std::string_view action, const std::vector<engine_core::InstanceId>& ids) {
@@ -415,7 +415,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     auto west = jadefx::make<IdeDock>();
     adoptDock(west);
     // IdeTreeTest is the sample tree page. The Java shell left that dock commented out.
-    auto gameExplorer = jadefx::make<IdeExplorer>(model, "Game Explorer", host);
+    auto gameExplorer = jadefx::make<IdeExplorer>(game, "Game Explorer", host);
     gameExplorer->setIconFile("Explorer.png");
     west->dock(gameExplorer);
 
@@ -432,7 +432,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
 
     auto east = jadefx::make<IdeDock>();
     adoptDock(east);
-    auto sceneExplorer = jadefx::make<IdeExplorer>(model, "Current Scene", host);
+    auto sceneExplorer = jadefx::make<IdeExplorer>(game, "Current Scene", host);
     sceneExplorer->setIconFile("Scenes.png");
     east->dock(sceneExplorer);
 
@@ -442,7 +442,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     properties_->set_runner([this](std::function<void(engine_core::DataModel&)> write) {
         runner_.simulation().on_simulation(std::move(write));
     });
-    properties_->bind(model, model.selection(), model.history());
+    properties_->bind(game, game.selection(), game.history());
     auto propertiesDock = jadefx::make<IdeDock>();
     adoptDock(propertiesDock);
     propertiesDock->dock(properties_->dock_widget());
@@ -1328,14 +1328,14 @@ void IdeLayout::cut(const std::vector<std::uint32_t>& ids) {
     if (!clip_) {
         return;
     }
-    engine_core::DataModel& model = runner_.simulation().datamodel();
+    engine_core::DataModel& game = runner_.simulation().datamodel();
     std::vector<engine_core::InstanceId> taken;
     {
-        engine_core::DataModelLock lock(model, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
         if (!lock.owns()) {
             return;
         }
-        taken = cut_set(model, ids);
+        taken = cut_set(game, ids);
     }
     if (taken.empty()) {
         return;
@@ -1354,7 +1354,7 @@ void IdeLayout::cut(const std::vector<std::uint32_t>& ids) {
     clip_->held = true;
     // The cut instances leave the tree, so they leave the selection. Paste
     // selects them again.
-    model.selection().set({});
+    game.selection().set({});
     runner_.simulation().on_simulation([taken, dropped](engine_core::DataModel& world) {
         world.history().set_pending_gesture("Cut");
         for (engine_core::InstanceId id : dropped) {
@@ -1375,20 +1375,20 @@ void IdeLayout::paste(std::uint32_t id) {
     if (!clip_ || !clip_->held) {
         return;
     }
-    engine_core::DataModel& model = runner_.simulation().datamodel();
+    engine_core::DataModel& game = runner_.simulation().datamodel();
     std::vector<engine_core::InstanceId> children;
     {
-        engine_core::DataModelLock lock(model, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
-        if (!lock.owns() || !parent_ok(model, id)) {
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
+        if (!lock.owns() || !parent_ok(game, id)) {
             return;
         }
         // A target inside something cut refuses the whole paste, so nothing
         // is left behind out of the place.
         for (engine_core::InstanceId child : clip_->ids) {
-            if (!model.alive(child)) {
+            if (!game.alive(child)) {
                 continue;
             }
-            if (would_cycle(model, child, id)) {
+            if (would_cycle(game, child, id)) {
                 return;
             }
             children.push_back(child);
@@ -1400,7 +1400,7 @@ void IdeLayout::paste(std::uint32_t id) {
     clip_->held = false;
     clip_->ids.clear();
     // The pasted instances become the selection, as they were when cut.
-    model.selection().set(children);
+    game.selection().set(children);
     runner_.simulation().on_simulation([children, id](engine_core::DataModel& world) {
         if (!parent_ok(world, id)) {
             return;
@@ -1439,13 +1439,13 @@ void IdeLayout::edit(std::uint32_t id) {
     if (home == nullptr) {
         return;
     }
-    engine_core::DataModel& model = runner_.simulation().datamodel();
+    engine_core::DataModel& game = runner_.simulation().datamodel();
     {
-        engine_core::DataModelLock lock(model, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
         if (!lock.owns()) {
             return;
         }
-        if (dynamic_cast<const engine_core::LuaSource*>(model.instance(id)) == nullptr) {
+        if (dynamic_cast<const engine_core::LuaSource*>(game.instance(id)) == nullptr) {
             return;
         }
     }
@@ -1514,15 +1514,15 @@ void IdeLayout::restore_closed_edits() {
     if (pending.empty()) {
         return;
     }
-    runner_.simulation().on_simulation([pending](engine_core::DataModel& model) {
-        const bool edit = !model.simulation_running();
+    runner_.simulation().on_simulation([pending](engine_core::DataModel& game) {
+        const bool edit = !game.simulation_running();
         std::optional<std::string> recording;
         if (edit) {
-            recording = model.history().try_begin_recording("Edit Script");
+            recording = game.history().try_begin_recording("Edit Script");
         }
         bool changed = false;
         for (const auto& entry : pending) {
-            auto* source = dynamic_cast<engine_core::LuaSource*>(model.instance(entry.first));
+            auto* source = dynamic_cast<engine_core::LuaSource*>(game.instance(entry.first));
             if (source == nullptr || source->source() == entry.second) {
                 continue;
             }
@@ -1530,10 +1530,10 @@ void IdeLayout::restore_closed_edits() {
             changed = true;
         }
         if (recording) {
-            model.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
+            game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
         }
         if (changed && edit) {
-            model.capture_place();
+            game.capture_place();
         }
     });
 }
@@ -1620,11 +1620,11 @@ void IdeLayout::routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene) {
     }
     const bool redo = is_redo(chord);
     event.consume();
-    runner_.simulation().on_simulation([redo](engine_core::DataModel& model) {
+    runner_.simulation().on_simulation([redo](engine_core::DataModel& game) {
         if (redo) {
-            model.history().redo();
+            game.history().redo();
         } else {
-            model.history().undo();
+            game.history().undo();
         }
     });
 }
@@ -1644,10 +1644,10 @@ void IdeLayout::start_test() {
     // Edit mode is the authored place. Freeze that tree before play so
     // Stop restores it, including a folder removed while stopped.
     // start_simulation alone keeps the previous snapshot.
-    engine.on_simulation([](engine_core::DataModel& model) {
-        if (!model.simulation_running()) {
-            model.capture_place();
-            model.start_simulation();
+    engine.on_simulation([](engine_core::DataModel& game) {
+        if (!game.simulation_running()) {
+            game.capture_place();
+            game.start_simulation();
         }
     });
     engine.resume();
@@ -1673,9 +1673,9 @@ void IdeLayout::stop_test() {
     // the place before another Heartbeat can run. Already paused is the
     // same restore.
     engine.pause();
-    engine.on_simulation([](engine_core::DataModel& model) {
-        if (model.simulation_running()) {
-            model.stop_simulation();
+    engine.on_simulation([](engine_core::DataModel& game) {
+        if (game.simulation_running()) {
+            game.stop_simulation();
         }
     });
     // Stop put the authored scripts back. Open editors, and editors closed
@@ -1771,16 +1771,16 @@ bool IdeLayout::editors_unflushed() const {
 }
 
 void IdeLayout::mark_saved() {
-    engine_core::DataModel& model = runner_.simulation().datamodel();
+    engine_core::DataModel& game = runner_.simulation().datamodel();
     run_now([this](engine_core::DataModel& world) { saved_fingerprint_ = engine_core::Project::place_fingerprint(world); });
-    seen_revision_ = model.authored_revision();
+    seen_revision_ = game.authored_revision();
     place_modified_ = false;
     update_title();
 }
 
 void IdeLayout::refresh_modified() {
-    engine_core::DataModel& model = runner_.simulation().datamodel();
-    const std::uint64_t revision = model.authored_revision();
+    engine_core::DataModel& game = runner_.simulation().datamodel();
+    const std::uint64_t revision = game.authored_revision();
     if (revision != seen_revision_) {
         // Only an authored change moves the revision, so this runs at the pace
         // of edits. Play steps do not move it.
@@ -1857,7 +1857,7 @@ void IdeLayout::new_place() {
     if (clip_) {
         clip_->held = false;
     }
-    run_now([](engine_core::DataModel& model) { engine_core::Project::reset_place(model); });
+    run_now([](engine_core::DataModel& game) { engine_core::Project::reset_place(game); });
     project_.reset();
     mark_saved();
     runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Print, "New place");
@@ -1894,9 +1894,9 @@ void IdeLayout::open_project_at(const std::filesystem::path& root) {
     }
     std::unique_ptr<engine_core::Project> loaded;
     std::string error;
-    run_now([&](engine_core::DataModel& model) {
+    run_now([&](engine_core::DataModel& game) {
         try {
-            loaded = std::make_unique<engine_core::Project>(engine_core::Project::load(root, model));
+            loaded = std::make_unique<engine_core::Project>(engine_core::Project::load(root, game));
         } catch (const std::exception& failure) {
             error = failure.what();
         }
@@ -1978,12 +1978,12 @@ void IdeLayout::save_project_as(std::function<void()> then) {
 bool IdeLayout::save_project_to(const std::filesystem::path& root) {
     flush_editors();
     std::string error;
-    run_now([&](engine_core::DataModel& model) {
+    run_now([&](engine_core::DataModel& game) {
         try {
             if (project_) {
                 project_->save_as(root);
             } else {
-                project_ = std::make_unique<engine_core::Project>(engine_core::Project::adopt(root, model));
+                project_ = std::make_unique<engine_core::Project>(engine_core::Project::adopt(root, game));
             }
         } catch (const std::exception& failure) {
             error = failure.what();

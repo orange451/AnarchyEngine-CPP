@@ -80,11 +80,11 @@ bool blocks_coalesce(const Mutation& existing, InstanceId id) {
 
 }  // namespace
 
-ChangeHistoryService::ChangeHistoryService(DataModel& model) : model_(&model) {
+ChangeHistoryService::ChangeHistoryService(DataModel& game) : game_(&game) {
     static_assert(kHistoryNoParent == DataModel::kNoParent, "history parent sentinel drifted");
 }
 
-bool ChangeHistoryService::playing() const { return model_ != nullptr && model_->simulation_running(); }
+bool ChangeHistoryService::playing() const { return game_ != nullptr && game_->simulation_running(); }
 
 std::vector<ChangeHistoryService::Waypoint>& ChangeHistoryService::undo_stack() {
     return playing() ? session_undo_ : edit_undo_;
@@ -103,7 +103,7 @@ const std::vector<ChangeHistoryService::Waypoint>& ChangeHistoryService::redo_st
 }
 
 bool ChangeHistoryService::wants_mutation() const {
-    if (!enabled_ || applying_ != 0 || model_ == nullptr) {
+    if (!enabled_ || applying_ != 0 || game_ == nullptr) {
         return false;
     }
     if (playing() && !recording_) {
@@ -176,7 +176,7 @@ void ChangeHistoryService::push_or_coalesce(Mutation mutation) {
 }
 
 void ChangeHistoryService::note(Mutation mutation) {
-    if (!enabled_ || applying_ != 0 || model_ == nullptr) {
+    if (!enabled_ || applying_ != 0 || game_ == nullptr) {
         return;
     }
     if (playing() && !recording_) {
@@ -202,7 +202,7 @@ void ChangeHistoryService::note(Mutation mutation) {
 }
 
 void ChangeHistoryService::apply_waypoint(Waypoint& waypoint, bool inverse) {
-    if (model_ == nullptr) {
+    if (game_ == nullptr) {
         return;
     }
     struct Guard {
@@ -212,11 +212,11 @@ void ChangeHistoryService::apply_waypoint(Waypoint& waypoint, bool inverse) {
     } guard(applying_);
     if (inverse) {
         for (std::size_t index = waypoint.mutations.size(); index > 0; --index) {
-            model_->apply_history(waypoint.mutations[index - 1], true);
+            game_->apply_history(waypoint.mutations[index - 1], true);
         }
     } else {
         for (const Mutation& mutation : waypoint.mutations) {
-            model_->apply_history(mutation, false);
+            game_->apply_history(mutation, false);
         }
     }
 }

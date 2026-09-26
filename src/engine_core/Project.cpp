@@ -714,9 +714,9 @@ Project::Project(Project&&) noexcept = default;
 Project& Project::operator=(Project&&) noexcept = default;
 Project::~Project() = default;
 
-void Project::bind(DataModel* model, std::unique_ptr<DataModel> owned) {
+void Project::bind(DataModel* game, std::unique_ptr<DataModel> owned) {
     owned_ = std::move(owned);
-    model_ = owned_ ? owned_.get() : model;
+    game_ = owned_ ? owned_.get() : game;
 }
 
 std::optional<InstanceId> Project::instance_for(std::string_view guid) const {
@@ -745,8 +745,8 @@ void Project::write_skeleton(const fs::path& root) const {
 
 Project Project::create(const fs::path& root) {
     auto owned = std::make_unique<Game>();
-    DataModel& model = *owned;
-    Project project = create(root, model);
+    DataModel& game = *owned;
+    Project project = create(root, game);
     project.bind(nullptr, std::move(owned));
     return project;
 }
@@ -770,12 +770,12 @@ Project Project::create(const fs::path& root, DataModel& into) {
     return project;
 }
 
-Project Project::adopt(const fs::path& root, DataModel& model) {
+Project Project::adopt(const fs::path& root, DataModel& game) {
     if (!missing_or_empty_dir(root)) {
         fail(utf8(root) + " is not empty");
     }
     Project project;
-    project.bind(&model, nullptr);
+    project.bind(&game, nullptr);
     project.root_ = root;
     project.name_ = project_name_for(root);
     project.write_skeleton(root);
@@ -793,8 +793,8 @@ Project Project::load(const fs::path& root) {
     const std::vector<PlanNode> plan = PlanReader(root, layout).read();
     std::vector<InstanceId> ids;
     {
-        Rebuild rebuild(*project.model_);
-        ids = build(*project.model_, plan);
+        Rebuild rebuild(*project.game_);
+        ids = build(*project.game_, plan);
         rebuild.finish();
     }
     for (std::size_t index = 0; index < plan.size(); ++index) {
@@ -913,7 +913,7 @@ std::map<std::string, Project::Files> Project::plan_files(const std::vector<Auth
     return next;
 }
 
-std::uint64_t Project::place_fingerprint(const DataModel& model) {
+std::uint64_t Project::place_fingerprint(const DataModel& game) {
     // FNV-1a over each path and its bytes, in GUID order.
     std::uint64_t hash = 14695981039346656037ull;
     auto mix = [&hash](const std::string& text) {
@@ -925,7 +925,7 @@ std::uint64_t Project::place_fingerprint(const DataModel& model) {
         hash ^= 0xffu;
         hash *= 1099511628211ull;
     };
-    const std::vector<AuthoredNode> tree = model.authored_tree(nullptr);
+    const std::vector<AuthoredNode> tree = game.authored_tree(nullptr);
     try {
         const std::map<std::string, Files> files = plan_files(tree, Layout{}.src, {});
         for (const auto& [guid, entry] : files) {
@@ -942,16 +942,16 @@ std::uint64_t Project::place_fingerprint(const DataModel& model) {
     return hash;
 }
 
-void Project::reset_place(DataModel& model) {
-    Rebuild rebuild(model);
-    clear_world(model);
-    model.set_name(0, model.class_name());
-    model.set_guid(0, make_guid());
+void Project::reset_place(DataModel& game) {
+    Rebuild rebuild(game);
+    clear_world(game);
+    game.set_name(0, game.class_name());
+    game.set_guid(0, make_guid());
     rebuild.finish();
 }
 
 void Project::save_tree(bool full) {
-    DataModel& world = *model_;
+    DataModel& world = *game_;
     const bool playing = world.simulation_running();
     const AuthoredDirty dirty = world.authored_dirty();
     const bool everything = full || playing || dirty.all;

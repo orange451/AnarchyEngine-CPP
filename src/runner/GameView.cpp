@@ -33,7 +33,7 @@ int FramesPerSecond(double dt) {
 
 GameView::GameView(Runner& runner)
     : ide::IdePane("Scene View", false),
-      model_(&runner.simulation().datamodel()),
+      game_(&runner.simulation().datamodel()),
       engine_(&runner.simulation()) {
     setIconFile("Camera.png");
     setMinSize(64, 64);
@@ -87,18 +87,18 @@ void GameView::layoutChildren() {
 }
 
 void GameView::refreshTriangles() {
-    if (model_ == nullptr) {
+    if (game_ == nullptr) {
         return;
     }
     // The simulation thread may be inside a step. Skip this frame rather than
     // waiting it out. The previous list stays drawable.
-    engine_core::DataModelLock lock(*model_, engine_core::DataModelLock::Read, std::chrono::milliseconds(1));
+    engine_core::DataModelLock lock(*game_, engine_core::DataModelLock::Read, std::chrono::milliseconds(1));
     if (!lock.owns()) {
         return;
     }
     triangleScratch_.clear();
-    for (engine_core::InstanceId id = model_->first_child(model_->id()); id != 0; id = model_->next_sibling(id)) {
-        if (auto* triangle = dynamic_cast<engine_core::TestTriangle*>(model_->instance(id))) {
+    for (engine_core::InstanceId id = game_->first_child(game_->id()); id != 0; id = game_->next_sibling(id)) {
+        if (auto* triangle = dynamic_cast<engine_core::TestTriangle*>(game_->instance(id))) {
             triangleScratch_.push_back(triangle);
         }
     }

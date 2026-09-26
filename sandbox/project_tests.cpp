@@ -95,18 +95,18 @@ std::set<std::string> changed(const std::map<std::string, std::string>& before,
     return out;
 }
 
-engine_core::GameObject& add_part(DataModel& model, InstanceId parent, const char* name) {
-    engine_core::GameObject& part = model.create<engine_core::GameObject>();
-    model.set_name(part.id(), name);
-    model.set_parent(part.id(), parent);
+engine_core::GameObject& add_part(DataModel& game, InstanceId parent, const char* name) {
+    engine_core::GameObject& part = game.create<engine_core::GameObject>();
+    game.set_name(part.id(), name);
+    game.set_parent(part.id(), parent);
     return part;
 }
 
-engine_core::Script& add_script(DataModel& model, InstanceId parent, const char* name, const char* source) {
-    engine_core::Script& script = model.create<engine_core::Script>();
-    model.set_name(script.id(), name);
+engine_core::Script& add_script(DataModel& game, InstanceId parent, const char* name, const char* source) {
+    engine_core::Script& script = game.create<engine_core::Script>();
+    game.set_name(script.id(), name);
     script.set_source(source);
-    model.set_parent(script.id(), parent);
+    game.set_parent(script.id(), parent);
     return script;
 }
 
@@ -118,20 +118,20 @@ engine_core::ColorRgb rgb(float r, float g, float b) {
     return color;
 }
 
-std::string leaf(const DataModel& model, InstanceId id, const char* ext = ".json") {
-    return "src/" + engine_core::sanitize_file_name(model.name(id)) + "." + model.guid(id) + ext;
+std::string leaf(const DataModel& game, InstanceId id, const char* ext = ".json") {
+    return "src/" + engine_core::sanitize_file_name(game.name(id)) + "." + game.guid(id) + ext;
 }
 
-InstanceId by_guid(const DataModel& model, const std::string& guid) {
-    const std::optional<InstanceId> id = model.find_guid(guid);
+InstanceId by_guid(const DataModel& game, const std::string& guid) {
+    const std::optional<InstanceId> id = game.find_guid(guid);
     REQUIRE(id.has_value());
     return *id;
 }
 
-std::vector<std::string> child_guids(const DataModel& model, InstanceId parent) {
+std::vector<std::string> child_guids(const DataModel& game, InstanceId parent) {
     std::vector<std::string> out;
-    for (InstanceId child : model.get_children(parent)) {
-        out.push_back(model.guid(child));
+    for (InstanceId child : game.get_children(parent)) {
+        out.push_back(game.guid(child));
     }
     return out;
 }
@@ -160,33 +160,33 @@ TEST_CASE("P1 save then load keeps names, GUIDs, and source bytes", "[P1][projec
     std::string root_guid;
     {
         Project project = Project::create(dir.path);
-        DataModel& model = project.datamodel();
-        engine_core::GameObject& part = add_part(model, 0, "Part");
+        DataModel& game = project.datamodel();
+        engine_core::GameObject& part = add_part(game, 0, "Part");
         part.set_color(rgb(0.25f, 0.5f, 0.1f));
         part.set_transform(engine_core::transform_translation(1.5f, -2.f, 0.1f));
-        engine_core::Script& script = add_script(model, 0, "Main", source.c_str());
-        part_guid = model.guid(part.id());
-        script_guid = model.guid(script.id());
-        root_guid = model.guid(0);
+        engine_core::Script& script = add_script(game, 0, "Main", source.c_str());
+        part_guid = game.guid(part.id());
+        script_guid = game.guid(script.id());
+        root_guid = game.guid(0);
         project.save();
-        REQUIRE(fs::exists(dir.path / leaf(model, part.id())));
-        REQUIRE(fs::exists(dir.path / leaf(model, script.id(), ".luau")));
-        REQUIRE(fs::exists(dir.path / leaf(model, script.id(), ".meta.json")));
-        REQUIRE(read_file(dir.path / leaf(model, script.id(), ".luau")) == source);
+        REQUIRE(fs::exists(dir.path / leaf(game, part.id())));
+        REQUIRE(fs::exists(dir.path / leaf(game, script.id(), ".luau")));
+        REQUIRE(fs::exists(dir.path / leaf(game, script.id(), ".meta.json")));
+        REQUIRE(read_file(dir.path / leaf(game, script.id(), ".luau")) == source);
         // Source is only in the .luau file.
-        REQUIRE(read_file(dir.path / leaf(model, script.id(), ".meta.json")).find("print") == std::string::npos);
+        REQUIRE(read_file(dir.path / leaf(game, script.id(), ".meta.json")).find("print") == std::string::npos);
     }
     Project loaded = Project::load(dir.path);
-    DataModel& model = loaded.datamodel();
-    REQUIRE(model.guid(0) == root_guid);
-    const InstanceId part = by_guid(model, part_guid);
-    const InstanceId script = by_guid(model, script_guid);
-    REQUIRE(model.name(part) == "Part");
-    REQUIRE(model.name(script) == "Main");
-    REQUIRE(model.parent(part) == 0);
-    REQUIRE(std::string(model.instance(script)->class_name()) == "Script");
-    REQUIRE(dynamic_cast<engine_core::Script*>(model.instance(script))->source() == source);
-    const engine_core::GameObject* body = model.game_object(part);
+    DataModel& game = loaded.datamodel();
+    REQUIRE(game.guid(0) == root_guid);
+    const InstanceId part = by_guid(game, part_guid);
+    const InstanceId script = by_guid(game, script_guid);
+    REQUIRE(game.name(part) == "Part");
+    REQUIRE(game.name(script) == "Main");
+    REQUIRE(game.parent(part) == 0);
+    REQUIRE(std::string(game.instance(script)->class_name()) == "Script");
+    REQUIRE(dynamic_cast<engine_core::Script*>(game.instance(script))->source() == source);
+    const engine_core::GameObject* body = game.game_object(part);
     REQUIRE(body != nullptr);
     REQUIRE(body->color().r == 0.25f);
     REQUIRE(body->color().g == 0.5f);
@@ -195,17 +195,17 @@ TEST_CASE("P1 save then load keeps names, GUIDs, and source bytes", "[P1][projec
     REQUIRE(body->transform().m[14] == 0.1f);
     REQUIRE(loaded.instance_for(part_guid) == part);
     // Nothing loaded is undoable, and Stop Play returns to this tree.
-    REQUIRE_FALSE(model.history().can_undo().first);
+    REQUIRE_FALSE(game.history().can_undo().first);
 }
 
 TEST_CASE("P2 a second save with no edits writes nothing", "[P2][project]") {
     SimRole role;
     TempDir dir;
     Project project = Project::create(dir.path);
-    DataModel& model = project.datamodel();
-    engine_core::GameObject& folderish = add_part(model, 0, "Holder");
-    add_part(model, folderish.id(), "Inner").set_color(rgb(0.f, 1.f, 0.f));
-    add_script(model, 0, "Main", "print(1)\n");
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& folderish = add_part(game, 0, "Holder");
+    add_part(game, folderish.id(), "Inner").set_color(rgb(0.f, 1.f, 0.f));
+    add_script(game, 0, "Main", "print(1)\n");
     project.save();
     const auto before = tree_files(dir.path);
     project.save();
@@ -225,57 +225,57 @@ TEST_CASE("P3 one color edit rewrites only that part", "[P3][project]") {
     SimRole role;
     TempDir dir;
     Project project = Project::create(dir.path);
-    DataModel& model = project.datamodel();
-    engine_core::GameObject& a = add_part(model, 0, "A");
-    add_part(model, 0, "B");
-    add_script(model, 0, "Main", "print(1)\n");
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    add_part(game, 0, "B");
+    add_script(game, 0, "Main", "print(1)\n");
     project.save();
     const auto before = tree_files(dir.path);
 
     a.set_color(rgb(0.2f, 0.3f, 0.4f));
     project.save();
     const std::set<std::string> diff = changed(before, tree_files(dir.path));
-    REQUIRE(diff == std::set<std::string>{leaf(model, a.id())});
-    REQUIRE(project.last_save().written == std::vector<std::string>{leaf(model, a.id())});
-    REQUIRE(read_file(dir.path / leaf(model, a.id())).find("\"Color\": [0.2, 0.3, 0.4]") != std::string::npos);
+    REQUIRE(diff == std::set<std::string>{leaf(game, a.id())});
+    REQUIRE(project.last_save().written == std::vector<std::string>{leaf(game, a.id())});
+    REQUIRE(read_file(dir.path / leaf(game, a.id())).find("\"Color\": [0.2, 0.3, 0.4]") != std::string::npos);
 }
 
 TEST_CASE("P4 a source edit rewrites only the .luau file", "[P4][project]") {
     SimRole role;
     TempDir dir;
     Project project = Project::create(dir.path);
-    DataModel& model = project.datamodel();
-    add_part(model, 0, "A");
-    engine_core::Script& main = add_script(model, 0, "Main", "print(1)\n");
+    DataModel& game = project.datamodel();
+    add_part(game, 0, "A");
+    engine_core::Script& main = add_script(game, 0, "Main", "print(1)\n");
     project.save();
     const auto before = tree_files(dir.path);
 
     main.set_source("print(2)\n");
     project.save();
-    REQUIRE(changed(before, tree_files(dir.path)) == std::set<std::string>{leaf(model, main.id(), ".luau")});
-    REQUIRE(read_file(dir.path / leaf(model, main.id(), ".luau")) == "print(2)\n");
+    REQUIRE(changed(before, tree_files(dir.path)) == std::set<std::string>{leaf(game, main.id(), ".luau")});
+    REQUIRE(read_file(dir.path / leaf(game, main.id(), ".luau")) == "print(2)\n");
 }
 
 namespace {
 
 struct ScriptRig {
     SimRole role;
-    Game model;
+    Game game;
     engine_core::TaskScheduler scheduler;
     engine_core::ScriptRuntime runtime;
 
     ScriptRig() {
         scheduler.reserve(16);
-        model.attach_scheduler(&scheduler);
-        runtime.attach(model, scheduler);
+        game.attach_scheduler(&scheduler);
+        runtime.attach(game, scheduler);
     }
 
     void frames(int count, double dt = 1.0 / 60.0) {
         for (int i = 0; i < count; ++i) {
             scheduler.run_phase(engine_core::Phase::Heartbeat, dt);
-            model.events().drain();
+            game.events().drain();
             runtime.heartbeat(dt);
-            model.events().drain();
+            game.events().drain();
         }
     }
 };
@@ -286,9 +286,9 @@ TEST_CASE("P5 a save during play writes the place, never play-only instances", "
     TempDir dir;
     ScriptRig rig;
     {
-        Project project = Project::create(dir.path, rig.model);
-        add_part(rig.model, 0, "Door");
-        add_script(rig.model, 0, "Maker", R"(
+        Project project = Project::create(dir.path, rig.game);
+        add_part(rig.game, 0, "Door");
+        add_script(rig.game, 0, "Maker", R"(
             local made = Instance.new("GameObject")
             made.Name = "Session"
             made.Parent = script.Parent
@@ -296,16 +296,16 @@ TEST_CASE("P5 a save during play writes the place, never play-only instances", "
         )");
         project.save();
     }
-    Project project = Project::load(dir.path, rig.model);
+    Project project = Project::load(dir.path, rig.game);
     const auto saved = tree_files(dir.path);
-    const InstanceId door = rig.model.find_first_child(0, "Door");
+    const InstanceId door = rig.game.find_first_child(0, "Door");
     REQUIRE(door != 0);
 
-    rig.model.start_simulation();
+    rig.game.start_simulation();
     rig.frames(1, 0.05);
-    const InstanceId session = rig.model.find_first_child(0, "Session");
+    const InstanceId session = rig.game.find_first_child(0, "Session");
     REQUIRE(session != 0);
-    REQUIRE(rig.model.name(door) == "Moved");
+    REQUIRE(rig.game.name(door) == "Moved");
 
     project.save();
     REQUIRE(project.last_save().written.empty());
@@ -318,9 +318,9 @@ TEST_CASE("P5 a save during play writes the place, never play-only instances", "
         REQUIRE(bytes.find("\"Name\": \"Moved\"") == std::string::npos);
     }
 
-    rig.model.stop_simulation();
-    REQUIRE_FALSE(rig.model.alive(session));
-    REQUIRE(rig.model.name(door) == "Door");
+    rig.game.stop_simulation();
+    REQUIRE_FALSE(rig.game.alive(session));
+    REQUIRE(rig.game.name(door) == "Door");
     project.save();
     REQUIRE(project.last_save().written.empty());
     REQUIRE(tree_files(dir.path) == saved);
@@ -330,25 +330,25 @@ TEST_CASE("P6 destroying an authored part deletes its file", "[P6][project]") {
     SimRole role;
     TempDir dir;
     Project project = Project::create(dir.path);
-    DataModel& model = project.datamodel();
-    engine_core::GameObject& keep = add_part(model, 0, "Keep");
-    engine_core::GameObject& gone = add_part(model, 0, "Gone");
-    engine_core::GameObject& child = add_part(model, gone.id(), "Child");
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& keep = add_part(game, 0, "Keep");
+    engine_core::GameObject& gone = add_part(game, 0, "Gone");
+    engine_core::GameObject& child = add_part(game, gone.id(), "Child");
     project.save();
-    const std::string gone_dir = "src/Gone." + model.guid(gone.id());
+    const std::string gone_dir = "src/Gone." + game.guid(gone.id());
     const std::string gone_init = gone_dir + "/init.json";
-    const std::string child_file = gone_dir + "/Child." + model.guid(child.id()) + ".json";
+    const std::string child_file = gone_dir + "/Child." + game.guid(child.id()) + ".json";
     REQUIRE(fs::exists(dir.path / gone_init));
     REQUIRE(fs::exists(dir.path / child_file));
 
-    model.destroy(child.id());
-    model.destroy(gone.id());
+    game.destroy(child.id());
+    game.destroy(gone.id());
     project.save();
     REQUIRE_FALSE(fs::exists(dir.path / gone_init));
     REQUIRE_FALSE(fs::exists(dir.path / child_file));
     // The emptied folder goes too.
     REQUIRE_FALSE(fs::exists(dir.path / gone_dir));
-    REQUIRE(fs::exists(dir.path / leaf(model, keep.id())));
+    REQUIRE(fs::exists(dir.path / leaf(game, keep.id())));
     REQUIRE(project.last_save().removed.size() == 2);
 }
 
@@ -378,11 +378,11 @@ TEST_CASE("P7 a children array orders siblings; without one they sort by GUID", 
         std::vector<std::string> order;
         {
             Project project = Project::create(dir.path);
-            DataModel& model = project.datamodel();
+            DataModel& game = project.datamodel();
             for (int i = 0; i < 6; ++i) {
-                add_part(model, 0, "Part");
+                add_part(game, 0, "Part");
             }
-            order = child_guids(model, 0);
+            order = child_guids(game, 0);
             project.save();
             const bool sorted = std::is_sorted(order.begin(), order.end());
             REQUIRE((read_file(dir.path / "src" / "init.json").find("\"children\"") == std::string::npos) == sorted);
@@ -439,16 +439,16 @@ TEST_CASE("P9 an unknown hand-edited key round-trips through the property bag", 
     write_file(dir.path / path, edited);
 
     Project project = Project::load(dir.path);
-    DataModel& model = project.datamodel();
-    const InstanceId part = by_guid(model, guid);
-    const engine_core::JsonValue* value = engine_core::bag_find(model.extra_properties(part), "path");
+    DataModel& game = project.datamodel();
+    const InstanceId part = by_guid(game, guid);
+    const engine_core::JsonValue* value = engine_core::bag_find(game.extra_properties(part), "path");
     REQUIRE(value != nullptr);
     REQUIRE(value->as_string() == "textures/brick.png");
 
     // Untouched, it is not rewritten. Edited, the key survives the rewrite.
     project.save();
     REQUIRE(read_file(dir.path / path) == edited);
-    model.game_object(part)->set_color(rgb(1.f, 0.f, 0.f));
+    game.game_object(part)->set_color(rgb(1.f, 0.f, 0.f));
     project.save();
     const std::string rewritten = read_file(dir.path / path);
     REQUIRE(rewritten.find("\"path\": \"textures/brick.png\"") != std::string::npos);
@@ -464,34 +464,34 @@ TEST_CASE("P11 two siblings named Part are two files", "[P11][project]") {
     std::string second;
     {
         Project project = Project::create(dir.path);
-        DataModel& model = project.datamodel();
-        first = model.guid(add_part(model, 0, "Part").id());
-        second = model.guid(add_part(model, 0, "Part").id());
+        DataModel& game = project.datamodel();
+        first = game.guid(add_part(game, 0, "Part").id());
+        second = game.guid(add_part(game, 0, "Part").id());
         REQUIRE(first != second);
         project.save();
     }
     REQUIRE(fs::exists(dir.path / "src" / ("Part." + first + ".json")));
     REQUIRE(fs::exists(dir.path / "src" / ("Part." + second + ".json")));
     Project project = Project::load(dir.path);
-    DataModel& model = project.datamodel();
-    REQUIRE(model.get_children(0).size() == 2);
-    REQUIRE(model.name(by_guid(model, first)) == "Part");
-    REQUIRE(model.name(by_guid(model, second)) == "Part");
+    DataModel& game = project.datamodel();
+    REQUIRE(game.get_children(0).size() == 2);
+    REQUIRE(game.name(by_guid(game, first)) == "Part");
+    REQUIRE(game.name(by_guid(game, second)) == "Part");
 }
 
 TEST_CASE("P12 adding a third Part adds one file and renames none", "[P12][project]") {
     SimRole role;
     TempDir dir;
     Project project = Project::create(dir.path);
-    DataModel& model = project.datamodel();
-    const InstanceId a = add_part(model, 0, "Part").id();
-    const InstanceId b = add_part(model, 0, "Part").id();
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, 0, "Part").id();
+    const InstanceId b = add_part(game, 0, "Part").id();
     project.save();
     const auto before = tree_files(dir.path);
-    const std::string a_file = leaf(model, a);
-    const std::string b_file = leaf(model, b);
+    const std::string a_file = leaf(game, a);
+    const std::string b_file = leaf(game, b);
 
-    const InstanceId c = add_part(model, 0, "Part").id();
+    const InstanceId c = add_part(game, 0, "Part").id();
     project.save();
     const auto after = tree_files(dir.path);
     REQUIRE(after.at(a_file) == before.at(a_file));
@@ -500,7 +500,7 @@ TEST_CASE("P12 adding a third Part adds one file and renames none", "[P12][proje
     // One new instance file. The root's init.json may change only to record child order.
     std::set<std::string> diff = changed(before, after);
     diff.erase("src/init.json");
-    REQUIRE(diff == std::set<std::string>{leaf(model, c)});
+    REQUIRE(diff == std::set<std::string>{leaf(game, c)});
     REQUIRE(after.size() == before.size() + 1);
 }
 
@@ -511,15 +511,15 @@ TEST_CASE("P13 two Scripts named Main keep their own source", "[P13][project]") 
     std::string two;
     {
         Project project = Project::create(dir.path);
-        DataModel& model = project.datamodel();
-        one = model.guid(add_script(model, 0, "Main", "return 'one'\n").id());
-        two = model.guid(add_script(model, 0, "Main", "return 'two'\n").id());
+        DataModel& game = project.datamodel();
+        one = game.guid(add_script(game, 0, "Main", "return 'one'\n").id());
+        two = game.guid(add_script(game, 0, "Main", "return 'two'\n").id());
         project.save();
     }
     Project project = Project::load(dir.path);
-    DataModel& model = project.datamodel();
-    auto source_of = [&model](const std::string& guid) {
-        return dynamic_cast<engine_core::Script*>(model.instance(by_guid(model, guid)))->source();
+    DataModel& game = project.datamodel();
+    auto source_of = [&game](const std::string& guid) {
+        return dynamic_cast<engine_core::Script*>(game.instance(by_guid(game, guid)))->source();
     };
     REQUIRE(source_of(one) == "return 'one'\n");
     REQUIRE(source_of(two) == "return 'two'\n");
@@ -529,19 +529,19 @@ TEST_CASE("P14 a rename moves only that file and keeps the GUID", "[P14][project
     SimRole role;
     TempDir dir;
     Project project = Project::create(dir.path);
-    DataModel& model = project.datamodel();
-    const InstanceId floor = add_part(model, 0, "Part").id();
-    const InstanceId other = add_part(model, 0, "Part").id();
+    DataModel& game = project.datamodel();
+    const InstanceId floor = add_part(game, 0, "Part").id();
+    const InstanceId other = add_part(game, 0, "Part").id();
     project.save();
-    const std::string guid = model.guid(floor);
-    const std::string old_file = leaf(model, floor);
-    const std::string other_file = leaf(model, other);
+    const std::string guid = game.guid(floor);
+    const std::string old_file = leaf(game, floor);
+    const std::string other_file = leaf(game, other);
     const std::string other_bytes = read_file(dir.path / other_file);
 
-    model.set_name(floor, "Floor");
+    game.set_name(floor, "Floor");
     project.save();
     const std::string new_file = "src/Floor." + guid + ".json";
-    REQUIRE(model.guid(floor) == guid);
+    REQUIRE(game.guid(floor) == guid);
     REQUIRE_FALSE(fs::exists(dir.path / old_file));
     REQUIRE(fs::exists(dir.path / new_file));
     REQUIRE(project.last_save().moved == std::vector<std::string>{old_file + " -> " + new_file});
@@ -556,9 +556,9 @@ TEST_CASE("P15 illegal Name characters save as _ with the real Name inside", "[P
     std::string mixed;
     {
         Project project = Project::create(dir.path);
-        DataModel& model = project.datamodel();
-        slash = model.guid(add_part(model, 0, "/").id());
-        mixed = model.guid(add_part(model, 0, "a:b*c?").id());
+        DataModel& game = project.datamodel();
+        slash = game.guid(add_part(game, 0, "/").id());
+        mixed = game.guid(add_part(game, 0, "a:b*c?").id());
         project.save();
     }
     const fs::path slash_file = dir.path / "src" / ("_." + slash + ".json");
@@ -638,11 +638,11 @@ TEST_CASE("load errors", "[project]") {
         TempDir dir;
         write_bare_project(dir.path);
         write_file(dir.path / "src" / "P.aaa.json", meta("GameObject", "aaa", "P", ",\n  \"Color\": [1]"));
-        Game model;
-        const InstanceId keep = add_part(model, 0, "Keep").id();
-        REQUIRE_THROWS_AS(Project::load(dir.path, model), ProjectError);
-        REQUIRE(model.alive(keep));
-        REQUIRE(model.find_first_child(0, "Keep") == keep);
+        Game game;
+        const InstanceId keep = add_part(game, 0, "Keep").id();
+        REQUIRE_THROWS_AS(Project::load(dir.path, game), ProjectError);
+        REQUIRE(game.alive(keep));
+        REQUIRE(game.find_first_child(0, "Keep") == keep);
     }
 }
 
@@ -650,53 +650,53 @@ TEST_CASE("folders: first child, folder rename, script with children, undo of a 
     SimRole role;
     TempDir dir;
     Project project = Project::create(dir.path);
-    DataModel& model = project.datamodel();
-    engine_core::Folder& box = model.create<engine_core::Folder>();
-    model.set_name(box.id(), "Box");
-    model.set_parent(box.id(), 0);
+    DataModel& game = project.datamodel();
+    engine_core::Folder& box = game.create<engine_core::Folder>();
+    game.set_name(box.id(), "Box");
+    game.set_parent(box.id(), 0);
     project.save();
-    const std::string box_guid = model.guid(box.id());
+    const std::string box_guid = game.guid(box.id());
     REQUIRE(fs::exists(dir.path / "src" / ("Box." + box_guid + ".json")));
 
     // The first child turns the leaf into a folder.
-    const InstanceId inner = add_part(model, box.id(), "Inner").id();
+    const InstanceId inner = add_part(game, box.id(), "Inner").id();
     project.save();
     const std::string box_dir = "src/Box." + box_guid;
     REQUIRE_FALSE(fs::exists(dir.path / "src" / ("Box." + box_guid + ".json")));
     REQUIRE(fs::exists(dir.path / box_dir / "init.json"));
-    REQUIRE(fs::exists(dir.path / box_dir / ("Inner." + model.guid(inner) + ".json")));
+    REQUIRE(fs::exists(dir.path / box_dir / ("Inner." + game.guid(inner) + ".json")));
 
     // Renaming the folder moves its children with it.
-    const std::string inner_bytes = read_file(dir.path / box_dir / ("Inner." + model.guid(inner) + ".json"));
-    model.set_name(box.id(), "Crate");
+    const std::string inner_bytes = read_file(dir.path / box_dir / ("Inner." + game.guid(inner) + ".json"));
+    game.set_name(box.id(), "Crate");
     project.save();
     const std::string crate_dir = "src/Crate." + box_guid;
     REQUIRE_FALSE(fs::exists(dir.path / box_dir));
-    REQUIRE(read_file(dir.path / crate_dir / ("Inner." + model.guid(inner) + ".json")) == inner_bytes);
+    REQUIRE(read_file(dir.path / crate_dir / ("Inner." + game.guid(inner) + ".json")) == inner_bytes);
 
     // A script with a child is a folder with init.luau and init.meta.json.
-    engine_core::Script& main = add_script(model, 0, "Main", "print(1)\n");
-    add_part(model, main.id(), "Handle");
+    engine_core::Script& main = add_script(game, 0, "Main", "print(1)\n");
+    add_part(game, main.id(), "Handle");
     project.save();
-    const std::string main_dir = "src/Main." + model.guid(main.id());
+    const std::string main_dir = "src/Main." + game.guid(main.id());
     REQUIRE(read_file(dir.path / main_dir / "init.luau") == "print(1)\n");
     REQUIRE(fs::exists(dir.path / main_dir / "init.meta.json"));
 
     // Undo of a delete brings back the same GUID, so the same file.
-    model.history().end_gesture();
-    const std::string inner_guid = model.guid(inner);
-    model.destroy(inner);
-    model.history().end_gesture();
+    game.history().end_gesture();
+    const std::string inner_guid = game.guid(inner);
+    game.destroy(inner);
+    game.history().end_gesture();
     project.save();
     REQUIRE_FALSE(fs::exists(dir.path / crate_dir / ("Inner." + inner_guid + ".json")));
-    model.history().undo();
-    REQUIRE(model.guid(inner) == inner_guid);
+    game.history().undo();
+    REQUIRE(game.guid(inner) == inner_guid);
     project.save();
     REQUIRE(read_file(dir.path / crate_dir / ("Inner." + inner_guid + ".json")) == inner_bytes);
 
     Project loaded = Project::load(dir.path);
     DataModel& again = loaded.datamodel();
-    const InstanceId script = by_guid(again, model.guid(main.id()));
+    const InstanceId script = by_guid(again, game.guid(main.id()));
     REQUIRE(dynamic_cast<engine_core::Script*>(again.instance(script))->source() == "print(1)\n");
     REQUIRE(again.name(again.get_children(script).at(0)) == "Handle");
 }
@@ -733,20 +733,20 @@ TEST_CASE("json numbers use one formatter", "[project]") {
 TEST_CASE("adopt writes an unsaved place without clearing it", "[project]") {
     SimRole role;
     TempDir dir;
-    Game model;
-    const InstanceId part = add_part(model, 0, "Part").id();
-    model.history().end_gesture();
-    REQUIRE(model.history().can_undo().first);
-    const std::string guid = model.guid(part);
+    Game game;
+    const InstanceId part = add_part(game, 0, "Part").id();
+    game.history().end_gesture();
+    REQUIRE(game.history().can_undo().first);
+    const std::string guid = game.guid(part);
 
-    Project project = Project::adopt(dir.path / "Adopted", model);
-    REQUIRE(&project.datamodel() == &model);
+    Project project = Project::adopt(dir.path / "Adopted", game);
+    REQUIRE(&project.datamodel() == &game);
     REQUIRE(project.name() == "Adopted");
-    REQUIRE(model.alive(part));
-    REQUIRE(model.history().can_undo().first);
+    REQUIRE(game.alive(part));
+    REQUIRE(game.history().can_undo().first);
     REQUIRE(fs::exists(dir.path / "Adopted" / "project.json"));
     REQUIRE(fs::exists(dir.path / "Adopted" / "src" / ("Part." + guid + ".json")));
-    REQUIRE_THROWS_AS(Project::adopt(dir.path / "Adopted", model), ProjectError);
+    REQUIRE_THROWS_AS(Project::adopt(dir.path / "Adopted", game), ProjectError);
 
     Project loaded = Project::load(dir.path / "Adopted");
     REQUIRE(loaded.datamodel().name(by_guid(loaded.datamodel(), guid)) == "Part");
@@ -755,60 +755,60 @@ TEST_CASE("adopt writes an unsaved place without clearing it", "[project]") {
 TEST_CASE("the fingerprint changes with the saved bytes, not with edits that cancel out", "[project]") {
     TempDir dir;
     ScriptRig rig;
-    Project project = Project::create(dir.path, rig.model);
-    DataModel& model = rig.model;
-    engine_core::GameObject& part = add_part(model, 0, "Part");
-    engine_core::Script& main = add_script(model, 0, "Main", "print(1)\n");
+    Project project = Project::create(dir.path, rig.game);
+    DataModel& game = rig.game;
+    engine_core::GameObject& part = add_part(game, 0, "Part");
+    engine_core::Script& main = add_script(game, 0, "Main", "print(1)\n");
     project.save();
-    const std::uint64_t saved = Project::place_fingerprint(model);
-    REQUIRE(Project::place_fingerprint(model) == saved);
+    const std::uint64_t saved = Project::place_fingerprint(game);
+    REQUIRE(Project::place_fingerprint(game) == saved);
 
     part.set_color(rgb(1.f, 0.f, 0.f));
-    REQUIRE(Project::place_fingerprint(model) != saved);
+    REQUIRE(Project::place_fingerprint(game) != saved);
     part.set_color(rgb(1.f, 1.f, 1.f));
-    REQUIRE(Project::place_fingerprint(model) == saved);
+    REQUIRE(Project::place_fingerprint(game) == saved);
 
-    model.set_name(part.id(), "Floor");
-    REQUIRE(Project::place_fingerprint(model) != saved);
-    model.set_name(part.id(), "Part");
+    game.set_name(part.id(), "Floor");
+    REQUIRE(Project::place_fingerprint(game) != saved);
+    game.set_name(part.id(), "Part");
     main.set_source("print(2)\n");
-    REQUIRE(Project::place_fingerprint(model) != saved);
+    REQUIRE(Project::place_fingerprint(game) != saved);
     main.set_source("print(1)\n");
 
-    const InstanceId extra = add_part(model, 0, "Extra").id();
-    REQUIRE(Project::place_fingerprint(model) != saved);
-    model.destroy(extra);
-    REQUIRE(Project::place_fingerprint(model) == saved);
+    const InstanceId extra = add_part(game, 0, "Extra").id();
+    REQUIRE(Project::place_fingerprint(game) != saved);
+    game.destroy(extra);
+    REQUIRE(Project::place_fingerprint(game) == saved);
 
     // Play-only instances are not part of what a save writes.
-    model.capture_place();
-    model.start_simulation();
-    add_part(model, 0, "Session");
-    REQUIRE(Project::place_fingerprint(model) == saved);
-    model.stop_simulation();
-    REQUIRE(Project::place_fingerprint(model) == saved);
+    game.capture_place();
+    game.start_simulation();
+    add_part(game, 0, "Session");
+    REQUIRE(Project::place_fingerprint(game) == saved);
+    game.stop_simulation();
+    REQUIRE(Project::place_fingerprint(game) == saved);
 }
 
 TEST_CASE("reset_place empties the place and drops undo", "[project]") {
     SimRole role;
-    Game model;
-    add_part(model, 0, "Part");
-    add_script(model, 0, "Main", "print(1)\n");
-    model.history().end_gesture();
-    REQUIRE(model.history().can_undo().first);
-    const std::string old_root = model.guid(0);
-    model.start_simulation();
+    Game game;
+    add_part(game, 0, "Part");
+    add_script(game, 0, "Main", "print(1)\n");
+    game.history().end_gesture();
+    REQUIRE(game.history().can_undo().first);
+    const std::string old_root = game.guid(0);
+    game.start_simulation();
 
-    Project::reset_place(model);
-    REQUIRE_FALSE(model.simulation_running());
-    REQUIRE(model.get_children(0).empty());
-    REQUIRE_FALSE(model.history().can_undo().first);
-    REQUIRE(model.guid(0) != old_root);
+    Project::reset_place(game);
+    REQUIRE_FALSE(game.simulation_running());
+    REQUIRE(game.get_children(0).empty());
+    REQUIRE_FALSE(game.history().can_undo().first);
+    REQUIRE(game.guid(0) != old_root);
     // Stop Play returns to the empty place, not the old one.
-    model.start_simulation();
-    add_part(model, 0, "Session");
-    model.stop_simulation();
-    REQUIRE(model.get_children(0).empty());
+    game.start_simulation();
+    add_part(game, 0, "Session");
+    game.stop_simulation();
+    REQUIRE(game.get_children(0).empty());
 }
 
 TEST_CASE("a project opened in a running engine keeps colors and transforms", "[project]") {
@@ -827,9 +827,9 @@ TEST_CASE("a project opened in a running engine keeps colors and transforms", "[
     engine_core::Engine engine;
     engine.start();
     std::unique_ptr<Project> project;
-    engine.on_simulation([&](DataModel& model) { project = std::make_unique<Project>(Project::load(dir.path, model)); });
-    const DataModel& model = engine.datamodel();
-    const engine_core::GameObject* part = model.game_object(*model.find_guid(guid));
+    engine.on_simulation([&](DataModel& game) { project = std::make_unique<Project>(Project::load(dir.path, game)); });
+    const DataModel& game = engine.datamodel();
+    const engine_core::GameObject* part = game.game_object(*game.find_guid(guid));
     REQUIRE(part != nullptr);
     REQUIRE(part->color().g == 0.5f);
     REQUIRE(part->transform().m[14] == 6.f);
@@ -843,36 +843,36 @@ TEST_CASE("a project opened in a running engine keeps colors and transforms", "[
 
 TEST_CASE("destroy_tree destroys descendants and one undo brings them back", "[project][history]") {
     SimRole role;
-    Game model;
-    engine_core::Folder& box = model.create<engine_core::Folder>();
-    model.set_parent(box.id(), 0);
-    const InstanceId inner = add_part(model, box.id(), "Inner").id();
-    const InstanceId deep = add_part(model, inner, "Deep").id();
-    model.history().end_gesture();
-    model.history().reset_waypoints();
+    Game game;
+    engine_core::Folder& box = game.create<engine_core::Folder>();
+    game.set_parent(box.id(), 0);
+    const InstanceId inner = add_part(game, box.id(), "Inner").id();
+    const InstanceId deep = add_part(game, inner, "Deep").id();
+    game.history().end_gesture();
+    game.history().reset_waypoints();
 
-    model.history().set_pending_gesture("Delete");
-    model.destroy_tree(box.id());
-    model.history().end_gesture();
-    REQUIRE_FALSE(model.alive(box.id()));
-    REQUIRE_FALSE(model.alive(inner));
-    REQUIRE_FALSE(model.alive(deep));
-    REQUIRE(model.history().can_undo().second == "Delete");
+    game.history().set_pending_gesture("Delete");
+    game.destroy_tree(box.id());
+    game.history().end_gesture();
+    REQUIRE_FALSE(game.alive(box.id()));
+    REQUIRE_FALSE(game.alive(inner));
+    REQUIRE_FALSE(game.alive(deep));
+    REQUIRE(game.history().can_undo().second == "Delete");
 
-    model.history().undo();
-    REQUIRE(model.alive(box.id()));
-    REQUIRE(model.parent(box.id()) == 0);
-    REQUIRE(model.parent(inner) == box.id());
-    REQUIRE(model.parent(deep) == inner);
-    REQUIRE(model.name(deep) == "Deep");
+    game.history().undo();
+    REQUIRE(game.alive(box.id()));
+    REQUIRE(game.parent(box.id()) == 0);
+    REQUIRE(game.parent(inner) == box.id());
+    REQUIRE(game.parent(deep) == inner);
+    REQUIRE(game.name(deep) == "Deep");
 
-    model.destroy_tree(0);
-    REQUIRE(model.get_children(0).size() == 1);
+    game.destroy_tree(0);
+    REQUIRE(game.get_children(0).size() == 1);
 
     std::vector<engine_core::ContextAction> root_actions;
-    model.context_actions(root_actions);
+    game.context_actions(root_actions);
     std::vector<engine_core::ContextAction> part_actions;
-    model.instance(inner)->context_actions(part_actions);
+    game.instance(inner)->context_actions(part_actions);
     auto has_delete = [](const std::vector<engine_core::ContextAction>& actions) {
         return std::any_of(actions.begin(), actions.end(),
                            [](const engine_core::ContextAction& a) { return std::string(a.name) == "Delete"; });

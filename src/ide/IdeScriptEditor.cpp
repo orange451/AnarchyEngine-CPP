@@ -259,21 +259,21 @@ void IdeScriptEditor::layoutChildren() {
 
 bool IdeScriptEditor::read_source(std::string& text, std::string& name, bool& alive, std::uint32_t* world) const {
     alive = false;
-    engine_core::DataModel& model = engine_.datamodel();
-    engine_core::DataModelLock lock(model, engine_core::DataModelLock::Read, kLockWait);
+    engine_core::DataModel& game = engine_.datamodel();
+    engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kLockWait);
     if (!lock.owns()) {
         return false;
     }
-    const engine_core::DataModel* object = model.instance(id_);
+    const engine_core::DataModel* object = game.instance(id_);
     const auto* source = dynamic_cast<const engine_core::LuaSource*>(object);
     if (source == nullptr) {
         return true;
     }
     alive = true;
     text = source->source();
-    name = model.name(id_);
+    name = game.name(id_);
     if (world != nullptr) {
-        *world = model.world_generation();
+        *world = game.world_generation();
     }
     return true;
 }
@@ -396,21 +396,21 @@ void IdeScriptEditor::push(const std::string& text) {
     }
     const std::uint64_t gen = commit_->epoch.fetch_add(1, std::memory_order_relaxed) + 1;
     std::shared_ptr<Commit> commit = commit_;
-    engine_.on_simulation([commit, text, gen](engine_core::DataModel& model) {
-        if (auto* source = dynamic_cast<engine_core::LuaSource*>(model.instance(commit->id))) {
+    engine_.on_simulation([commit, text, gen](engine_core::DataModel& game) {
+        if (auto* source = dynamic_cast<engine_core::LuaSource*>(game.instance(commit->id))) {
             if (source->source() != text) {
                 // One place waypoint for the buffer, not one per keystroke.
                 // Play leaves this off the edit stack unless a recording is already open.
                 std::optional<std::string> recording;
-                if (!model.simulation_running()) {
-                    recording = model.history().try_begin_recording("Edit Script");
+                if (!game.simulation_running()) {
+                    recording = game.history().try_begin_recording("Edit Script");
                 }
                 source->set_source(text);
                 if (recording) {
-                    model.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
+                    game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
                 }
-                if (!model.simulation_running()) {
-                    model.capture_place();
+                if (!game.simulation_running()) {
+                    game.capture_place();
                 }
             }
         }

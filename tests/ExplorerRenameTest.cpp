@@ -29,9 +29,9 @@ constexpr double kWidth = 320;
 constexpr double kHeight = 400;
 
 // One explorer over a place with three folders. The host applies a rename
-// straight to the model, standing in for the simulation thread.
+// straight to the game, standing in for the simulation thread.
 struct Rig {
-    engine_core::Game model;
+    engine_core::Game game;
     std::vector<engine_core::InstanceId> ids;
     std::vector<std::pair<engine_core::InstanceId, std::string>> renames;
     std::vector<std::string> runs;
@@ -43,9 +43,9 @@ struct Rig {
 
     Rig() {
         for (const char* name : {"Alpha", "Beta", "Gamma"}) {
-            engine_core::Folder& folder = model.create<engine_core::Folder>();
-            model.set_name(folder.id(), name);
-            model.set_parent(folder.id(), model.id());
+            engine_core::Folder& folder = game.create<engine_core::Folder>();
+            game.set_name(folder.id(), name);
+            game.set_parent(folder.id(), game.id());
             ids.push_back(folder.id());
         }
         ide::ExplorerHost host;
@@ -55,10 +55,10 @@ struct Rig {
         };
         host.enabled = [](std::string_view) { return true; };
         host.rename = [this](engine_core::InstanceId id, std::string name) {
-            model.set_name(id, name);
+            game.set_name(id, name);
             renames.emplace_back(id, std::move(name));
         };
-        explorer = jadefx::make<ide::IdeExplorer>(model, "Explorer", host);
+        explorer = jadefx::make<ide::IdeExplorer>(game, "Explorer", host);
         explorer->setPrefWidthRatio(1);
         explorer->setPrefHeightRatio(1);
         scene = jadefx::make<jadefx::Scene>(explorer, kWidth, kHeight);
@@ -120,7 +120,7 @@ struct Rig {
         return false;
     }
 
-    std::vector<engine_core::InstanceId> selection() const { return model.selection().get(); }
+    std::vector<engine_core::InstanceId> selection() const { return game.selection().get(); }
 
     std::vector<engine_core::InstanceId> pick(std::initializer_list<int> indexes) const {
         std::vector<engine_core::InstanceId> out;
@@ -196,7 +196,7 @@ void TestEscapeCancels() {
     rig.key(jadefx::Key::Escape);
     Expect(!rig.editing(), "Escape closes the field");
     Expect(rig.renames.empty(), "Escape does not rename");
-    Expect(rig.model.name(rig.ids[1]) == "Beta", "Escape keeps the old name");
+    Expect(rig.game.name(rig.ids[1]) == "Beta", "Escape keeps the old name");
 }
 
 void TestEmptyNameCancels() {
@@ -225,7 +225,7 @@ void TestClickOutsideCancels() {
     rig.frame(1.6);
     Expect(!rig.editing(), "a click on another row closes the field");
     Expect(rig.renames.empty(), "a click outside does not rename");
-    Expect(rig.model.name(rig.ids[1]) == "Beta", "a click outside keeps the old name");
+    Expect(rig.game.name(rig.ids[1]) == "Beta", "a click outside keeps the old name");
 }
 
 void TestRightClickCancels() {
@@ -361,25 +361,25 @@ void TestShiftClickSelectsRange() {
 void TestSetShowsInTheTree() {
     Rig rig;
     rig.clickRow("Alpha", 0.1);
-    rig.model.selection().set(rig.pick({1, 2}));
+    rig.game.selection().set(rig.pick({1, 2}));
     rig.frame(0.2);
     Expect(rig.painted("Beta") && rig.painted("Gamma") && !rig.painted("Alpha"), "a Set shows in the explorer");
     jadefx::Node* gamma = rig.cell("Gamma");
     Expect(gamma != nullptr && gamma->isSelected(), "the tree marks a selected row");
 
-    rig.model.selection().set({});
+    rig.game.selection().set({});
     rig.frame(0.3);
     Expect(!rig.painted("Alpha") && !rig.painted("Beta") && !rig.painted("Gamma"), "an empty Set clears the rows");
 }
 
 void TestSetOpensTheBranch() {
     Rig rig;
-    engine_core::Folder& inner = rig.model.create<engine_core::Folder>();
-    rig.model.set_name(inner.id(), "Inner");
-    rig.model.set_parent(inner.id(), rig.ids[0]);
+    engine_core::Folder& inner = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(inner.id(), "Inner");
+    rig.game.set_parent(inner.id(), rig.ids[0]);
     rig.frame(0.1);
     Expect(rig.cell("Inner") == nullptr, "a child of a closed folder has no row");
-    rig.model.selection().set({inner.id()});
+    rig.game.selection().set({inner.id()});
     rig.frame(0.2);
     rig.frame(0.3);
     Expect(rig.painted("Inner"), "a Set opens the folder above the selected row");
@@ -388,7 +388,7 @@ void TestSetOpensTheBranch() {
 void TestSelectionIsShared() {
     Rig rig;
     ide::ExplorerHost host;
-    auto other = jadefx::make<ide::IdeExplorer>(rig.model, "Other", host);
+    auto other = jadefx::make<ide::IdeExplorer>(rig.game, "Other", host);
     other->setPrefWidthRatio(1);
     other->setPrefHeightRatio(1);
     auto scene = jadefx::make<jadefx::Scene>(other, kWidth, kHeight);
@@ -439,8 +439,8 @@ void TestRebuildKeepsTheSelection() {
     rig.mods = 0;
     // Enough new rows at once that the explorer rebuilds the tree detached.
     for (int i = 0; i < 12; ++i) {
-        engine_core::Folder& folder = rig.model.create<engine_core::Folder>();
-        rig.model.set_parent(folder.id(), rig.model.id());
+        engine_core::Folder& folder = rig.game.create<engine_core::Folder>();
+        rig.game.set_parent(folder.id(), rig.game.id());
     }
     rig.frame(0.9);
     rig.frame(1.0);
@@ -450,7 +450,7 @@ void TestRebuildKeepsTheSelection() {
 
 void TestCutRunsOnTheSelection() {
     Rig rig;
-    rig.model.selection().set(rig.pick({0, 2}));
+    rig.game.selection().set(rig.pick({0, 2}));
     rig.frame(0.1);
     rig.clickRow("Alpha", 0.2, 1);
     rig.clickMenu("Cut");
@@ -464,19 +464,19 @@ void TestCutRunsOnTheSelection() {
 void TestCutSet() {
     Rig rig;
     // Gamma, Beta, Alpha at the top; Inner under Alpha.
-    engine_core::Folder& inner = rig.model.create<engine_core::Folder>();
-    rig.model.set_parent(inner.id(), rig.ids[0]);
+    engine_core::Folder& inner = rig.game.create<engine_core::Folder>();
+    rig.game.set_parent(inner.id(), rig.ids[0]);
     const engine_core::InstanceId alpha = rig.ids[0];
     const engine_core::InstanceId beta = rig.ids[1];
     const engine_core::InstanceId gamma = rig.ids[2];
-    Expect(ide::cut_set(rig.model, {alpha, gamma}) == std::vector<engine_core::InstanceId>{gamma, alpha},
+    Expect(ide::cut_set(rig.game, {alpha, gamma}) == std::vector<engine_core::InstanceId>{gamma, alpha},
            "a cut takes instances in the order the tree shows them");
-    Expect(ide::cut_set(rig.model, {inner.id(), alpha}) == std::vector<engine_core::InstanceId>{alpha},
+    Expect(ide::cut_set(rig.game, {inner.id(), alpha}) == std::vector<engine_core::InstanceId>{alpha},
            "a child goes with its selected parent");
-    Expect(ide::cut_set(rig.model, {inner.id(), beta}) == std::vector<engine_core::InstanceId>{beta, inner.id()},
+    Expect(ide::cut_set(rig.game, {inner.id(), beta}) == std::vector<engine_core::InstanceId>{beta, inner.id()},
            "a child whose parent is not selected is taken on its own");
-    rig.model.destroy(beta);
-    Expect(ide::cut_set(rig.model, {beta, 0}).empty(), "a cut skips the root and gone instances");
+    rig.game.destroy(beta);
+    Expect(ide::cut_set(rig.game, {beta, 0}).empty(), "a cut skips the root and gone instances");
 }
 
 void TestDeleteRunsOnTheSelection() {
@@ -484,7 +484,7 @@ void TestDeleteRunsOnTheSelection() {
     rig.clickRow("Beta", 0.1);
     Expect(rig.explorer->run_on_selection("Delete"), "Delete runs on one selected row");
     Expect(rig.runs.size() == 1 && rig.runs[0] == "Delete" && rig.batches.empty(), "one row uses run");
-    rig.model.selection().set(rig.pick({0, 1, 2}));
+    rig.game.selection().set(rig.pick({0, 1, 2}));
     rig.frame(0.2);
     Expect(rig.explorer->run_on_selection("Delete"), "Delete runs on a multiple selection");
     Expect(rig.batches.size() == 1 && rig.batches[0].second == rig.pick({0, 1, 2}), "many rows use run_many");

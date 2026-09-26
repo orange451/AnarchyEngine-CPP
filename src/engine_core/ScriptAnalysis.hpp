@@ -56,7 +56,7 @@ struct Diagnostic {
 // lua_resume or Prepare.
 class ScriptAnalysis {
 public:
-    explicit ScriptAnalysis(DataModel& model);
+    explicit ScriptAnalysis(DataModel& game);
     ~ScriptAnalysis();
 
     ScriptAnalysis(const ScriptAnalysis&) = delete;
@@ -144,7 +144,7 @@ private:
     void forget_requires(InstanceId script);
     void collect_dependents(InstanceId id, std::vector<InstanceId>& out, std::unordered_set<InstanceId>& seen) const;
 
-    DataModel& model_;
+    DataModel& game_;
     std::unique_ptr<State> state_;
     DiagnosticsSignal signal_;
 };

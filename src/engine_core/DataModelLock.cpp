@@ -4,17 +4,17 @@
 
 namespace engine_core {
 
-DataModelLock::DataModelLock(DataModel& model, Kind) : model_(&model) {
-    owns_ = model_->lock_write_blocking();
+DataModelLock::DataModelLock(DataModel& game, Kind) : game_(&game) {
+    owns_ = game_->lock_write_blocking();
 }
 
-DataModelLock::DataModelLock(DataModel& model, Kind, std::chrono::milliseconds timeout) : model_(&model) {
-    owns_ = model_->lock_write_for(timeout);
+DataModelLock::DataModelLock(DataModel& game, Kind, std::chrono::milliseconds timeout) : game_(&game) {
+    owns_ = game_->lock_write_for(timeout);
 }
 
 DataModelLock::~DataModelLock() {
-    if (owns_ && model_ != nullptr) {
-        model_->unlock_write();
+    if (owns_ && game_ != nullptr) {
+        game_->unlock_write();
     }
 }
 

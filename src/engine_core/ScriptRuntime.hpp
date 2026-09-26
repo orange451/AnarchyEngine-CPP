@@ -40,7 +40,7 @@ public:
     ScriptRuntime(const ScriptRuntime&) = delete;
     ScriptRuntime& operator=(const ScriptRuntime&) = delete;
 
-    void attach(DataModel& model, TaskScheduler& scheduler);
+    void attach(DataModel& game, TaskScheduler& scheduler);
     void detach();
 
     // sim_clock += dt, wake sleeps, resume ready threads. dt is the Heartbeat step.
@@ -181,7 +181,7 @@ private:
                          double number);
     int require_module(lua_State* state, InstanceId module_id);
 
-    DataModel* model_ = nullptr;
+    DataModel* game_ = nullptr;
     TaskScheduler* scheduler_ = nullptr;
     lua_State* state_ = nullptr;
     lua_State* console_state_ = nullptr;

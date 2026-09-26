@@ -42,8 +42,8 @@ class SnapshotPump {
 public:
     void reserve(std::size_t instances);
 
-    void begin_prerender_window(DataModel& model);
-    void end_prerender_window(DataModel& model);
+    void begin_prerender_window(DataModel& game);
+    void end_prerender_window(DataModel& game);
 
     // Path C. No DataModel write.
     void override_visual(const SnapshotOverride& override);
@@ -52,7 +52,7 @@ public:
     // Copies dirty DataModel fields into the base snapshot, clones that into
     // the back buffer, then applies overrides onto the back buffer only.
     // Does not swap. Call publish() after the DataModel lock is released.
-    void prepare_copy(DataModel& model);
+    void prepare_copy(DataModel& game);
 
     void publish();
 
@@ -64,8 +64,8 @@ private:
     VisualInstance* base_find(InstanceId id);
     void erase_base(InstanceId id);
     void remember(InstanceId id, int position);
-    void apply_live(DataModel& model, const Invalidation& change);
-    void resync(DataModel& model);
+    void apply_live(DataModel& game, const Invalidation& change);
+    void resync(DataModel& game);
     void blit(VisualSnapshot& dst) const;
     void apply_overrides(VisualSnapshot& dst);
 

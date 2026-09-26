@@ -58,7 +58,7 @@ public:
     // that as the place, and drops undo history. On error the DataModel is untouched.
     // Save As for a place that has no project yet: writes the skeleton and the
     // current tree. The DataModel is not cleared and its undo history stays.
-    static Project adopt(const std::filesystem::path& root, DataModel& model);
+    static Project adopt(const std::filesystem::path& root, DataModel& game);
     static Project load(const std::filesystem::path& root);
     static Project load(const std::filesystem::path& root, DataModel& into);
 
@@ -77,15 +77,15 @@ public:
     // Equal fingerprints mean a save has nothing to write, so an edit that is
     // undone back to the saved state no longer counts. Needs no project folder.
     // During play it covers the place captured at Test, like a save does.
-    static std::uint64_t place_fingerprint(const DataModel& model);
+    static std::uint64_t place_fingerprint(const DataModel& game);
     // File > New: stops a running simulation, destroys every instance, gives the
     // root a fresh GUID, captures the empty place, and drops undo history.
-    static void reset_place(DataModel& model);
+    static void reset_place(DataModel& game);
 
     const std::filesystem::path& root() const { return root_; }
     const std::string& name() const { return name_; }
-    DataModel& datamodel() { return *model_; }
-    const DataModel& datamodel() const { return *model_; }
+    DataModel& datamodel() { return *game_; }
+    const DataModel& datamodel() const { return *game_; }
 
     // The runtime id for a GUID as of the last load or save.
     std::optional<InstanceId> instance_for(std::string_view guid) const;
@@ -110,7 +110,7 @@ private:
         std::string source_bytes;
     };
 
-    void bind(DataModel* model, std::unique_ptr<DataModel> owned);
+    void bind(DataModel* game, std::unique_ptr<DataModel> owned);
     void write_skeleton(const std::filesystem::path& root) const;
     void save_tree(bool full);
     // The files for each GUID. A node without properties takes its bytes from cache.
@@ -120,7 +120,7 @@ private:
     std::filesystem::path root_;
     std::string name_;
     std::unique_ptr<DataModel> owned_;
-    DataModel* model_ = nullptr;
+    DataModel* game_ = nullptr;
     std::unordered_map<std::string, Files> files_;
     std::unordered_map<InstanceId, std::string> id_guid_;
     std::unordered_map<std::string, InstanceId> guid_id_;

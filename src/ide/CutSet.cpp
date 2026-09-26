@@ -6,11 +6,11 @@
 
 namespace ide {
 
-std::vector<engine_core::InstanceId> cut_set(const engine_core::DataModel& model,
+std::vector<engine_core::InstanceId> cut_set(const engine_core::DataModel& game,
                                              const std::vector<engine_core::InstanceId>& ids) {
     std::unordered_set<engine_core::InstanceId> wanted;
     for (engine_core::InstanceId id : ids) {
-        if (id != 0 && model.alive(id)) {
+        if (id != 0 && game.alive(id)) {
             wanted.insert(id);
         }
     }
@@ -22,7 +22,7 @@ std::vector<engine_core::InstanceId> cut_set(const engine_core::DataModel& model
     std::vector<engine_core::InstanceId> stack;
     const auto push_children = [&](engine_core::InstanceId parent) {
         const std::size_t mark = stack.size();
-        for (engine_core::InstanceId child = model.first_child(parent); child != 0; child = model.next_sibling(child)) {
+        for (engine_core::InstanceId child = game.first_child(parent); child != 0; child = game.next_sibling(child)) {
             stack.push_back(child);
         }
         std::reverse(stack.begin() + static_cast<std::ptrdiff_t>(mark), stack.end());

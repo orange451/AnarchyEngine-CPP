@@ -101,8 +101,15 @@ private:
         int anchor = -1;
         InstanceId script = 0;
         std::uint32_t generation = 0;
-        enum class Park { None, Sleep, Signal, Defer } park = Park::None;
+        enum class Park { None, Sleep, Signal, Defer, Child } park = Park::None;
         double due = 0;
+        // Park::Child: WaitForChild on `wait_parent` for `wait_name`. `due` is the
+        // timeout, infinite without one. `wait_warn_at` is the infinite-yield notice.
+        InstanceId wait_parent = 0;
+        std::uint32_t wait_world = 0;
+        std::string wait_name;
+        double wait_warn_at = 0;
+        bool wait_warned = false;
         int nargs = 0;
         bool dead = false;
     };
@@ -142,6 +149,7 @@ private:
     void launch_one(const Start& start);
     void flush_defer();
     void wake_sleeps();
+    void wake_child_waits();
     void resume_budget();
     void resume_one(Thread& thread);
     void drop_dead(std::list<Thread*>& queue);
@@ -187,6 +195,7 @@ private:
     std::list<Thread*> ready_;
     std::list<Thread*> sleep_;
     std::list<Thread*> defer_;
+    std::list<Thread*> child_waits_;
     std::vector<Start> starts_;
     std::unordered_map<InstanceId, int> require_cache_;
     std::vector<InstanceId> loading_;

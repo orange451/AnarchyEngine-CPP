@@ -15,6 +15,7 @@
 #include <exception>
 #include <memory>
 #include <new>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -226,6 +227,7 @@ struct ScriptBindings {
     static int instance_destroy(lua_State* state);
     static int instance_children(lua_State* state);
     static int instance_find(lua_State* state);
+    static int instance_wait_child(lua_State* state);
     static int instance_isa(lua_State* state);
     static int instance_tostring(lua_State* state);
     static int instance_service(lua_State* state);
@@ -300,6 +302,7 @@ void ScriptRuntime::heartbeat(double dt) {
     }
     sim_clock_ += dt;
     wake_sleeps();
+    wake_child_waits();
     launch_starts();
     flush_defer();
     resume_budget();
@@ -703,6 +706,7 @@ void ScriptRuntime::close_vm() {
     ready_.clear();
     sleep_.clear();
     defer_.clear();
+    child_waits_.clear();
     starts_.clear();
     require_cache_.clear();
     loading_.clear();
@@ -737,6 +741,7 @@ void ScriptRuntime::kill_script(InstanceId id) {
     drop_dead(ready_);
     drop_dead(sleep_);
     drop_dead(defer_);
+    drop_dead(child_waits_);
     if (model_ == nullptr || closing_) {
         return;
     }
@@ -864,6 +869,7 @@ void ScriptRuntime::resume_one(Thread& thread) {
         drop_dead(ready_);
         drop_dead(sleep_);
         drop_dead(defer_);
+        drop_dead(child_waits_);
         return;
     }
     if (status == LUA_YIELD) {
@@ -909,6 +915,7 @@ void ScriptRuntime::make_ready(Thread& thread, const char* result) {
     }
     sleep_.remove(&thread);
     defer_.remove(&thread);
+    child_waits_.remove(&thread);
     if (result != nullptr) {
         lua_pushstring(thread.co, result);
         thread.nargs = 1;
@@ -923,10 +930,49 @@ void ScriptRuntime::make_ready_number(Thread& thread, double result) {
     }
     sleep_.remove(&thread);
     defer_.remove(&thread);
+    child_waits_.remove(&thread);
     lua_pushnumber(thread.co, result);
     thread.nargs = 1;
     thread.park = Thread::Park::None;
     ready(thread);
+}
+
+// WaitForChild checks once per heartbeat, after sleeps wake, so a child added
+// by any script during the last frame is found.
+void ScriptRuntime::wake_child_waits() {
+    for (auto it = child_waits_.begin(); it != child_waits_.end();) {
+        Thread* thread = *it;
+        if (thread->dead || !thread_ok(*thread) || thread->co == nullptr) {
+            thread->dead = true;
+            it = child_waits_.erase(it);
+            continue;
+        }
+        InstanceId child = 0;
+        if (resolve_id(thread->wait_parent, thread->wait_world) != nullptr) {
+            child = model_->find_first_child(thread->wait_parent, thread->wait_name);
+        }
+        if (child != 0 || thread->due <= sim_clock_) {
+            if (child != 0) {
+                push_instance(thread->co, child);
+            } else {
+                lua_pushnil(thread->co);
+            }
+            thread->nargs = 1;
+            thread->park = Thread::Park::None;
+            it = child_waits_.erase(it);
+            ready(*thread);
+            continue;
+        }
+        if (!thread->wait_warned && thread->wait_warn_at <= sim_clock_) {
+            thread->wait_warned = true;
+            const std::string parent = resolve_id(thread->wait_parent, thread->wait_world) != nullptr
+                                           ? model_->name(thread->wait_parent)
+                                           : std::string("<destroyed>");
+            append_output(OutputKind::Print,
+                          "Infinite yield possible on '" + parent + ":WaitForChild(\"" + thread->wait_name + "\")'");
+        }
+        ++it;
+    }
 }
 
 bool ScriptRuntime::thread_ok(const Thread& thread) const {
@@ -1371,6 +1417,7 @@ int ScriptBindings::task_cancel(lua_State* state) {
         runtime->ready_.remove(thread);
         runtime->sleep_.remove(thread);
         runtime->defer_.remove(thread);
+        runtime->child_waits_.remove(thread);
         if (ScriptRuntime::thread_from(state) == thread) {
             luaL_error(state, "cancelled");
         }
@@ -1680,6 +1727,48 @@ int ScriptBindings::instance_find(lua_State* state) {
     });
 }
 
+int ScriptBindings::instance_wait_child(lua_State* state) {
+    return lua_guard(state, [&] {
+        auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
+        const char* name = luaL_checkstring(state, 2);
+        double timeout = -1;
+        if (lua_gettop(state) >= 3 && !lua_isnoneornil(state, 3)) {
+            timeout = luaL_checknumber(state, 3);
+            if (timeout < 0) {
+                timeout = 0;
+            }
+        }
+        ScriptRuntime* runtime = runtime_from(state);
+        if (runtime == nullptr || runtime->resolve_id(ud->id, ud->world) == nullptr) {
+            luaL_error(state, "WaitForChild on an instance that is gone");
+        }
+        const std::string wanted = name != nullptr ? name : "";
+        const InstanceId child = runtime->model_->find_first_child(ud->id, wanted);
+        if (child != 0) {
+            runtime->push_instance(state, child);
+            return 1;
+        }
+        ScriptRuntime::Thread* thread = ScriptRuntime::thread_from(state);
+        if (thread == nullptr || thread->co != state) {
+            luaL_error(state, "WaitForChild yields the running script thread");
+        }
+        if (thread->dead) {
+            luaL_error(state, "script is dead");
+        }
+        constexpr double kInfiniteYieldNotice = 5.0;
+        thread->park = ScriptRuntime::Thread::Park::Child;
+        thread->wait_parent = ud->id;
+        thread->wait_world = ud->world;
+        thread->wait_name = wanted;
+        thread->due = timeout < 0 ? std::numeric_limits<double>::infinity() : runtime->sim_clock_ + timeout;
+        thread->wait_warn_at = runtime->sim_clock_ + kInfiniteYieldNotice;
+        // A timeout means the caller expects nil back, so there is no notice.
+        thread->wait_warned = timeout >= 0;
+        runtime->child_waits_.push_back(thread);
+        return lua_yield(state, 0);
+    });
+}
+
 int ScriptBindings::instance_isa(lua_State* state) {
     return lua_guard(state, [&] {
         auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
@@ -1946,10 +2035,12 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         lua_method("Destroy", "nil", reinterpret_cast<void*>(&ScriptBindings::instance_destroy)),
         lua_method("GetChildren", "Instance", reinterpret_cast<void*>(&ScriptBindings::instance_children), false, false, true),
         lua_method("FindFirstChild", "Instance?", reinterpret_cast<void*>(&ScriptBindings::instance_find), false, true, false),
+        lua_method("WaitForChild", "Instance", reinterpret_cast<void*>(&ScriptBindings::instance_wait_child), false, true,
+                   false),
         lua_method("IsA", "boolean", reinterpret_cast<void*>(&ScriptBindings::instance_isa)),
         get_service,
     };
-    register_lua_class("DataModel", nullptr, methods, 5);
+    register_lua_class("DataModel", nullptr, methods, 6);
 
     LuaField connect =
         lua_method("Connect", "Connection", reinterpret_cast<void*>(&ScriptBindings::signal_connect));

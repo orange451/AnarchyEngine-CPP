@@ -632,3 +632,41 @@ TEST_CASE("A17 any method the API marks resolves_child walks a require path", "[
     settle(analysis);
     REQUIRE(fires >= 1);
 }
+
+TEST_CASE("A18 WaitForChild gives the child's class without nil and walks a require path", "[A18]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.model);
+    engine_core::Folder& modules = rig.model.create<engine_core::Folder>();
+    rig.model.set_name(modules.id(), "Modules");
+    rig.model.set_parent(modules.id(), rig.model.id());
+    engine_core::ModuleScript& config = add_module(rig.model, "Config",
+                                                   "local Config = {}\n"
+                                                   "Config.Currencies = { Gold = \"Gold\" }\n"
+                                                   "Config.Settings = { Enabled = false }\n"
+                                                   "return Config\n");
+    rig.model.set_parent(config.id(), modules.id());
+    engine_core::Script& script = add_script(rig.model, "Test",
+                                             "local Config = require(game:WaitForChild(\"Modules\"):WaitForChild(\"Config\"))\n"
+                                             "local currency = Config.Currencies.Gold\n"
+                                             "Config.Settings.Enabled = true\n"
+                                             "print(\"Currency:\", currency, Config.Settings.Enabled)\n");
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(script.id())));
+    REQUIRE(analysis.diagnostics(script.id()).empty());
+
+    SECTION("the child keeps its class") {
+        script.set_source("--!strict\nlocal folder = game:WaitForChild(\"Modules\")\nlocal n: number = folder\n");
+        settle(analysis);
+        const std::string report = dump(analysis.diagnostics(script.id()));
+        INFO(report);
+        REQUIRE(report.find("'Folder'") != std::string::npos);
+        REQUIRE(report.find("Folder?") == std::string::npos);
+    }
+
+    SECTION("a timeout is accepted") {
+        script.set_source("--!strict\nlocal folder = game:WaitForChild(\"Modules\", 2)\nreturn folder\n");
+        settle(analysis);
+        INFO(dump(analysis.diagnostics(script.id())));
+        REQUIRE(analysis.diagnostics(script.id()).empty());
+    }
+}

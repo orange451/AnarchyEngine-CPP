@@ -207,6 +207,9 @@ void testInstances() {
     expect_has(triangle, "Name", "Tri0.Name");
     expect_missing(triangle, "Source", "Tri0.Source");
     expect_missing(triangle, "Color", "Tri0.Color");
+    const ide::CompletionList waited = at_end("local tri = game:WaitForChild(\"Tri0\")\ntri.", world, 5);
+    expect_has(waited, "Position", "WaitForChild Tri0.Position");
+    expect_missing(waited, "Source", "WaitForChild Tri0.Source");
 
     const ide::CompletionList service = at_end("game:GetService(\"RunService\").");
     expect_has(service, "Heartbeat", "RunService.Heartbeat");
@@ -297,6 +300,9 @@ void testModule() {
     const ide::CompletionList nested = at_end("local m = require(game:FindFirstChild(\"Lib\"))\nm.nested.", world, 9);
     expect_has(nested, "zoom", "module nested.zoom");
     expect_call(nested, "zoom", true, "nested.zoom");
+
+    const ide::CompletionList waited = at_end("local m = require(game:WaitForChild(\"Lib\"))\nm.", world, 9);
+    expect_has(waited, "alpha", "WaitForChild module alpha");
 }
 
 void testModuleMethods() {

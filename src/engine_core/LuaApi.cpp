@@ -681,6 +681,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("DataModel", "Destroy", "Unparents this instance and its descendants.", nullptr, false, {});
     add("DataModel", "GetChildren", "The direct children of this instance.", "{Instance}", false, {});
     add("DataModel", "FindFirstChild", "The direct child with this name, or nil.", "Instance?", false, {P("name", "string")});
+    add("DataModel", "WaitForChild",
+        "The direct child with this name. Yields the running script until it exists. With timeout, gives nil once "
+        "that many seconds pass.",
+        "Instance", false, {P("name", "string"), P("timeout", "number?")});
     add("DataModel", "IsA", "True when this instance's class is className or a subclass of it.", "boolean", false,
         {P("className", "string")});
     add("DataModel", "GetService", "The service with this name: RunService or Selection.", "Instance", false,

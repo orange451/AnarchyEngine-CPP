@@ -3171,3 +3171,89 @@ TEST_CASE("Selection Get and Set reach the same list the explorer reads", "[sele
     REQUIRE(run.lines.size() == 1);
     REQUIRE(run.lines[0].text == "function\n");
 }
+
+TEST_CASE("S23 WaitForChild yields until the child exists", "[S23]") {
+    ScriptRig rig;
+    add_script(rig.model, "Waiter", R"(
+        _G.here = game:WaitForChild("Waiter").Name == "Waiter"
+        _G.got = nil
+        local later = game:WaitForChild("Later")
+        _G.got = later.Name == "Later"
+        _G.got_at = _G.clock
+        _G.timed_out = game:WaitForChild("Never", 0.3) == nil
+    )");
+    add_script(rig.model, "Clock", R"(
+        _G.clock = 0
+        game:GetService("RunService").Heartbeat:Connect(function(dt)
+            _G.clock = _G.clock + dt
+        end)
+    )");
+    add_script(rig.model, "Maker", R"(
+        task.wait(0.2)
+        local made = Instance.new("Folder")
+        made.Name = "Later"
+        made.Parent = game
+    )");
+    rig.model.start_simulation();
+    rig.frames(2, 0.05);
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
+    REQUIRE(rig.runtime.global_is_nil("got"));
+    rig.frames(4, 0.05);
+    double got_at = 0;
+    REQUIRE(rig.runtime.global_number("got_at", got_at));
+    REQUIRE(got_at >= 0.2 - 1e-9);
+    REQUIRE(rig.runtime.global_is_nil("timed_out"));
+    rig.frames(8, 0.05);
+    bool timed_out = false;
+    REQUIRE(rig.runtime.global_boolean("timed_out", timed_out));
+    REQUIRE(timed_out);
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
+    bool here = false;
+    bool got = false;
+    REQUIRE(rig.runtime.global_boolean("here", here));
+    REQUIRE(rig.runtime.global_boolean("got", got));
+    REQUIRE(here);
+    REQUIRE(got);
+}
+
+TEST_CASE("S24 WaitForChild without a timeout notes a possible infinite yield", "[S24]") {
+    ScriptRig rig;
+    add_script(rig.model, "Stuck", R"(
+        game:WaitForChild("Nothing")
+        _G.after = true
+    )");
+    rig.model.start_simulation();
+    rig.runtime.drain_output();
+    rig.frames(90, 0.05);
+    const engine_core::ScriptRuntime::OutputBatch early = rig.runtime.drain_output();
+    for (const engine_core::ScriptRuntime::OutputLine& line : early.lines) {
+        REQUIRE(line.text.find("Infinite yield") == std::string::npos);
+    }
+    rig.frames(20, 0.05);
+    int notices = 0;
+    for (const engine_core::ScriptRuntime::OutputLine& line : rig.runtime.drain_output().lines) {
+        if (line.text.find("Infinite yield possible on") != std::string::npos &&
+            line.text.find(":WaitForChild(\"Nothing\")") != std::string::npos) {
+            ++notices;
+        }
+    }
+    REQUIRE(notices == 1);
+    REQUIRE(rig.runtime.global_is_nil("after"));
+
+    // Stop drops the waiting thread, and the next start waits again from the top.
+    rig.model.stop_simulation();
+    REQUIRE_FALSE(rig.runtime.vm_open());
+    rig.model.start_simulation();
+    rig.frames(2, 0.05);
+    REQUIRE(rig.runtime.global_is_nil("after"));
+    REQUIRE(rig.runtime.last_error().empty());
+}
+
+TEST_CASE("S25 WaitForChild from the command line only returns a child that is there", "[S25]") {
+    ScriptRig rig;
+    rig.model.start_simulation();
+    rig.runtime.run_chunk("_G.found = game:WaitForChild('Missing') ~= nil");
+    REQUIRE(rig.runtime.last_error().find("WaitForChild yields the running script thread") != std::string::npos);
+}

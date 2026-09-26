@@ -301,7 +301,7 @@ struct WorkerEnv;
 
 // FindFirstChild's declared return is Instance?. When the name is a string
 // literal and that child is in the place, the result is that child's class,
-// still optional. assert then removes the nil.
+// still optional. assert then removes the nil. WaitForChild's is not optional.
 struct FindChildMagic final : Luau::MagicFunction {
     WorkerEnv* env = nullptr;
 
@@ -690,9 +690,16 @@ bool FindChildMagic::infer(const Luau::MagicFunctionCallContext& context) {
         return false;
     }
     Luau::TypeArena* arena = context.solver->arena.get();
-    const Luau::TypeId optional =
-        arena->addType(Luau::UnionType{{context.solver->builtinTypes->nilType, class_ty}});
-    Luau::asMutable(context.result)->ty.emplace<Luau::BoundTypePack>(arena->addTypePack({optional}));
+    // FindFirstChild can give nil and stays optional. WaitForChild declares
+    // Instance, since it yields until the child is there.
+    Luau::TypeId result = class_ty;
+    const auto* method = context.callSite->func->as<Luau::AstExprIndexName>();
+    const LuaField* field = method != nullptr ? lua_class_find("DataModel", method->index.value) : nullptr;
+    const std::string_view declared = field != nullptr && field->type_name != nullptr ? field->type_name : "?";
+    if (declared.empty() || declared.back() == '?') {
+        result = arena->addType(Luau::UnionType{{context.solver->builtinTypes->nilType, class_ty}});
+    }
+    Luau::asMutable(context.result)->ty.emplace<Luau::BoundTypePack>(arena->addTypePack({result}));
     return true;
 }
 

@@ -3176,46 +3176,80 @@ TEST_CASE("S23 WaitForChild yields until the child exists", "[S23]") {
     ScriptRig rig;
     add_script(rig.model, "Waiter", R"(
         _G.here = game:WaitForChild("Waiter").Name == "Waiter"
-        _G.got = nil
         local later = game:WaitForChild("Later")
-        _G.got = later.Name == "Later"
-        _G.got_at = _G.clock
+        _G.got = later.Name == "Later" and _G.made == true
+        local renamed = game:WaitForChild("Renamed")
+        _G.renamed = renamed.Name == "Renamed"
         _G.timed_out = game:WaitForChild("Never", 0.3) == nil
-    )");
-    add_script(rig.model, "Clock", R"(
-        _G.clock = 0
-        game:GetService("RunService").Heartbeat:Connect(function(dt)
-            _G.clock = _G.clock + dt
-        end)
     )");
     add_script(rig.model, "Maker", R"(
         task.wait(0.2)
         local made = Instance.new("Folder")
         made.Name = "Later"
         made.Parent = game
+        _G.made = true
+        task.wait(0.1)
+        -- A child already there that is renamed to the name wakes the wait too.
+        made.Name = "Renamed"
     )");
     rig.model.start_simulation();
-    rig.frames(2, 0.05);
+    rig.frames(3, 0.05);
     INFO(rig.runtime.last_error());
     REQUIRE(rig.runtime.last_error().empty());
     REQUIRE(rig.runtime.global_is_nil("got"));
-    rig.frames(4, 0.05);
-    double got_at = 0;
-    REQUIRE(rig.runtime.global_number("got_at", got_at));
-    REQUIRE(got_at >= 0.2 - 1e-9);
+    // The frame that adds the child also resumes the waiter.
+    rig.frames(1, 0.05);
+    bool got = false;
+    REQUIRE(rig.runtime.global_boolean("got", got));
+    REQUIRE(got);
+    REQUIRE(rig.runtime.global_is_nil("renamed"));
+    rig.frames(3, 0.05);
+    bool renamed = false;
+    REQUIRE(rig.runtime.global_boolean("renamed", renamed));
+    REQUIRE(renamed);
     REQUIRE(rig.runtime.global_is_nil("timed_out"));
     rig.frames(8, 0.05);
     bool timed_out = false;
     REQUIRE(rig.runtime.global_boolean("timed_out", timed_out));
     REQUIRE(timed_out);
+    bool here = false;
+    REQUIRE(rig.runtime.global_boolean("here", here));
+    REQUIRE(here);
     INFO(rig.runtime.last_error());
     REQUIRE(rig.runtime.last_error().empty());
-    bool here = false;
-    bool got = false;
-    REQUIRE(rig.runtime.global_boolean("here", here));
-    REQUIRE(rig.runtime.global_boolean("got", got));
-    REQUIRE(here);
-    REQUIRE(got);
+}
+
+TEST_CASE("S26 WaitForChild ignores other names and a match that leaves before it resumes", "[S26]") {
+    ScriptRig rig;
+    add_script(rig.model, "Waiter", R"(
+        local found = game:WaitForChild("Target")
+        -- Instances have no __eq, so compare the parent by name.
+        _G.ok = found.Name == "Target" and found.Parent ~= nil and found.Parent.Name == game.Name
+    )");
+    add_script(rig.model, "Maker", R"(
+        task.wait(0.1)
+        local other = Instance.new("Folder")
+        other.Name = "Other"
+        other.Parent = game
+        -- Matches, then leaves in the same step, before the waiter can resume.
+        local brief = Instance.new("Folder")
+        brief.Name = "Target"
+        brief.Parent = game
+        brief.Parent = other
+        task.wait(0.1)
+        local real = Instance.new("Folder")
+        real.Name = "Target"
+        real.Parent = game
+    )");
+    rig.model.start_simulation();
+    rig.frames(3, 0.05);
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
+    REQUIRE(rig.runtime.global_is_nil("ok"));
+    rig.frames(3, 0.05);
+    bool ok = false;
+    REQUIRE(rig.runtime.global_boolean("ok", ok));
+    REQUIRE(ok);
 }
 
 TEST_CASE("S24 WaitForChild without a timeout notes a possible infinite yield", "[S24]") {

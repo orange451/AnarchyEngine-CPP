@@ -302,7 +302,8 @@ void ScriptRuntime::heartbeat(double dt) {
     }
     sim_clock_ += dt;
     wake_sleeps();
-    wake_child_waits();
+    deliver_child_waits();
+    wake_child_timers();
     launch_starts();
     flush_defer();
     resume_budget();
@@ -494,6 +495,7 @@ void ScriptRuntime::on_end_of_drain() {
     }
     assert_lua_thread();
     launch_starts();
+    deliver_child_waits();
     flush_defer();
     resume_budget();
     if (!starts_.empty()) {
@@ -707,6 +709,8 @@ void ScriptRuntime::close_vm() {
     sleep_.clear();
     defer_.clear();
     child_waits_.clear();
+    child_found_.clear();
+    next_child_timer_ = std::numeric_limits<double>::infinity();
     starts_.clear();
     require_cache_.clear();
     loading_.clear();
@@ -741,7 +745,7 @@ void ScriptRuntime::kill_script(InstanceId id) {
     drop_dead(ready_);
     drop_dead(sleep_);
     drop_dead(defer_);
-    drop_dead(child_waits_);
+    drop_dead_child_waits();
     if (model_ == nullptr || closing_) {
         return;
     }
@@ -869,7 +873,7 @@ void ScriptRuntime::resume_one(Thread& thread) {
         drop_dead(ready_);
         drop_dead(sleep_);
         drop_dead(defer_);
-        drop_dead(child_waits_);
+        drop_dead_child_waits();
         return;
     }
     if (status == LUA_YIELD) {
@@ -915,7 +919,7 @@ void ScriptRuntime::make_ready(Thread& thread, const char* result) {
     }
     sleep_.remove(&thread);
     defer_.remove(&thread);
-    child_waits_.remove(&thread);
+    forget_child_wait(thread);
     if (result != nullptr) {
         lua_pushstring(thread.co, result);
         thread.nargs = 1;
@@ -930,48 +934,145 @@ void ScriptRuntime::make_ready_number(Thread& thread, double result) {
     }
     sleep_.remove(&thread);
     defer_.remove(&thread);
-    child_waits_.remove(&thread);
+    forget_child_wait(thread);
     lua_pushnumber(thread.co, result);
     thread.nargs = 1;
     thread.park = Thread::Park::None;
     ready(thread);
 }
 
-// WaitForChild checks once per heartbeat, after sleeps wake, so a child added
-// by any script during the last frame is found.
-void ScriptRuntime::wake_child_waits() {
+void ScriptRuntime::park_child_wait(Thread& thread) {
+    thread.park = Thread::Park::Child;
+    thread.wait_found = 0;
+    child_waits_[thread.wait_parent].push_back(&thread);
+    next_child_timer_ = std::min(next_child_timer_, thread.due);
+    if (!thread.wait_warned) {
+        next_child_timer_ = std::min(next_child_timer_, thread.wait_warn_at);
+    }
+}
+
+void ScriptRuntime::forget_child_wait(Thread& thread) {
+    child_found_.erase(std::remove(child_found_.begin(), child_found_.end(), &thread), child_found_.end());
+    const auto found = child_waits_.find(thread.wait_parent);
+    if (found == child_waits_.end()) {
+        return;
+    }
+    std::vector<Thread*>& waiters = found->second;
+    waiters.erase(std::remove(waiters.begin(), waiters.end(), &thread), waiters.end());
+    if (waiters.empty()) {
+        child_waits_.erase(found);
+    }
+}
+
+void ScriptRuntime::drop_dead_child_waits() {
+    child_found_.erase(std::remove_if(child_found_.begin(), child_found_.end(), [](Thread* thread) { return thread->dead; }),
+                       child_found_.end());
     for (auto it = child_waits_.begin(); it != child_waits_.end();) {
+        std::vector<Thread*>& waiters = it->second;
+        waiters.erase(std::remove_if(waiters.begin(), waiters.end(), [](Thread* thread) { return thread->dead; }),
+                      waiters.end());
+        it = waiters.empty() ? child_waits_.erase(it) : std::next(it);
+    }
+}
+
+// Runs inside set_parent and set_name, maybe while Lua is running, so it only
+// moves matched threads to child_found_. deliver_child_waits resumes them.
+void ScriptRuntime::on_child_named(InstanceId parent, InstanceId child, const std::string& name) {
+    if (!open_ || closing_) {
+        return;
+    }
+    const auto found = child_waits_.find(parent);
+    if (found == child_waits_.end()) {
+        return;
+    }
+    std::vector<Thread*>& waiters = found->second;
+    for (auto it = waiters.begin(); it != waiters.end();) {
         Thread* thread = *it;
+        if (thread->dead || thread->wait_name != name) {
+            ++it;
+            continue;
+        }
+        thread->wait_found = child;
+        child_found_.push_back(thread);
+        it = waiters.erase(it);
+    }
+    if (waiters.empty()) {
+        child_waits_.erase(found);
+    }
+}
+
+void ScriptRuntime::deliver_child_waits() {
+    if (child_found_.empty()) {
+        return;
+    }
+    std::vector<Thread*> found;
+    found.swap(child_found_);
+    for (Thread* thread : found) {
         if (thread->dead || !thread_ok(*thread) || thread->co == nullptr) {
             thread->dead = true;
-            it = child_waits_.erase(it);
             continue;
         }
-        InstanceId child = 0;
-        if (resolve_id(thread->wait_parent, thread->wait_world) != nullptr) {
-            child = model_->find_first_child(thread->wait_parent, thread->wait_name);
+        // The match may have moved or been renamed again before this drain.
+        InstanceId child = thread->wait_found;
+        thread->wait_found = 0;
+        if (resolve_id(child, thread->wait_world) == nullptr || model_->parent(child) != thread->wait_parent ||
+            model_->name(child) != thread->wait_name) {
+            child = resolve_id(thread->wait_parent, thread->wait_world) != nullptr
+                        ? model_->find_first_child(thread->wait_parent, thread->wait_name)
+                        : 0;
         }
-        if (child != 0 || thread->due <= sim_clock_) {
-            if (child != 0) {
-                push_instance(thread->co, child);
-            } else {
-                lua_pushnil(thread->co);
+        if (child == 0) {
+            park_child_wait(*thread);
+            continue;
+        }
+        push_instance(thread->co, child);
+        thread->nargs = 1;
+        thread->park = Thread::Park::None;
+        ready(*thread);
+    }
+}
+
+void ScriptRuntime::wake_child_timers() {
+    if (sim_clock_ < next_child_timer_) {
+        return;
+    }
+    next_child_timer_ = std::numeric_limits<double>::infinity();
+    std::vector<Thread*> timed_out;
+    for (auto it = child_waits_.begin(); it != child_waits_.end();) {
+        std::vector<Thread*>& waiters = it->second;
+        for (auto wait = waiters.begin(); wait != waiters.end();) {
+            Thread* thread = *wait;
+            if (thread->dead || !thread_ok(*thread) || thread->co == nullptr) {
+                thread->dead = true;
+                wait = waiters.erase(wait);
+                continue;
             }
-            thread->nargs = 1;
-            thread->park = Thread::Park::None;
-            it = child_waits_.erase(it);
-            ready(*thread);
-            continue;
+            if (thread->due <= sim_clock_) {
+                timed_out.push_back(thread);
+                wait = waiters.erase(wait);
+                continue;
+            }
+            if (!thread->wait_warned && thread->wait_warn_at <= sim_clock_) {
+                thread->wait_warned = true;
+                const std::string parent = resolve_id(thread->wait_parent, thread->wait_world) != nullptr
+                                               ? model_->name(thread->wait_parent)
+                                               : std::string("<destroyed>");
+                append_output(OutputKind::Print,
+                              "Infinite yield possible on '" + parent + ":WaitForChild(\"" + thread->wait_name + "\")'");
+            }
+            next_child_timer_ = std::min(next_child_timer_, thread->due);
+            if (!thread->wait_warned) {
+                next_child_timer_ = std::min(next_child_timer_, thread->wait_warn_at);
+            }
+            ++wait;
         }
-        if (!thread->wait_warned && thread->wait_warn_at <= sim_clock_) {
-            thread->wait_warned = true;
-            const std::string parent = resolve_id(thread->wait_parent, thread->wait_world) != nullptr
-                                           ? model_->name(thread->wait_parent)
-                                           : std::string("<destroyed>");
-            append_output(OutputKind::Print,
-                          "Infinite yield possible on '" + parent + ":WaitForChild(\"" + thread->wait_name + "\")'");
-        }
-        ++it;
+        it = waiters.empty() ? child_waits_.erase(it) : std::next(it);
+    }
+    for (Thread* thread : timed_out) {
+        lua_pushnil(thread->co);
+        thread->nargs = 1;
+        thread->park = Thread::Park::None;
+        ready(*thread);
     }
 }
 
@@ -1417,7 +1518,7 @@ int ScriptBindings::task_cancel(lua_State* state) {
         runtime->ready_.remove(thread);
         runtime->sleep_.remove(thread);
         runtime->defer_.remove(thread);
-        runtime->child_waits_.remove(thread);
+        runtime->forget_child_wait(*thread);
         if (ScriptRuntime::thread_from(state) == thread) {
             luaL_error(state, "cancelled");
         }
@@ -1756,7 +1857,6 @@ int ScriptBindings::instance_wait_child(lua_State* state) {
             luaL_error(state, "script is dead");
         }
         constexpr double kInfiniteYieldNotice = 5.0;
-        thread->park = ScriptRuntime::Thread::Park::Child;
         thread->wait_parent = ud->id;
         thread->wait_world = ud->world;
         thread->wait_name = wanted;
@@ -1764,7 +1864,7 @@ int ScriptBindings::instance_wait_child(lua_State* state) {
         thread->wait_warn_at = runtime->sim_clock_ + kInfiniteYieldNotice;
         // A timeout means the caller expects nil back, so there is no notice.
         thread->wait_warned = timeout >= 0;
-        runtime->child_waits_.push_back(thread);
+        runtime->park_child_wait(*thread);
         return lua_yield(state, 0);
     });
 }

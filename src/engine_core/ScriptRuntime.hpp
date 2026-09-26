@@ -10,6 +10,7 @@
 #include <deque>
 #include <list>
 #include <mutex>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -89,6 +90,7 @@ public:
     void on_script_parent(Script& script, InstanceId previous, InstanceId next) override;
     void on_script_enabled(Script& script, bool enabled) override;
     void on_script_destroyed(Script& script) override;
+    void on_child_named(InstanceId parent, InstanceId child, const std::string& name) override;
 
 private:
     friend struct ScriptBindings;
@@ -105,7 +107,9 @@ private:
         double due = 0;
         // Park::Child: WaitForChild on `wait_parent` for `wait_name`. `due` is the
         // timeout, infinite without one. `wait_warn_at` is the infinite-yield notice.
+        // `wait_found` is the child on_child_named matched, not yet delivered.
         InstanceId wait_parent = 0;
+        InstanceId wait_found = 0;
         std::uint32_t wait_world = 0;
         std::string wait_name;
         double wait_warn_at = 0;
@@ -149,7 +153,13 @@ private:
     void launch_one(const Start& start);
     void flush_defer();
     void wake_sleeps();
-    void wake_child_waits();
+    // WaitForChild. deliver resumes threads on_child_named matched. The timer
+    // pass handles timeouts and the notice, and runs only when one is due.
+    void park_child_wait(Thread& thread);
+    void forget_child_wait(Thread& thread);
+    void drop_dead_child_waits();
+    void deliver_child_waits();
+    void wake_child_timers();
     void resume_budget();
     void resume_one(Thread& thread);
     void drop_dead(std::list<Thread*>& queue);
@@ -195,7 +205,11 @@ private:
     std::list<Thread*> ready_;
     std::list<Thread*> sleep_;
     std::list<Thread*> defer_;
-    std::list<Thread*> child_waits_;
+    // WaitForChild threads keyed by the parent they wait on, so a reparent or
+    // rename elsewhere is one lookup.
+    std::unordered_map<InstanceId, std::vector<Thread*>> child_waits_;
+    std::vector<Thread*> child_found_;
+    double next_child_timer_ = std::numeric_limits<double>::infinity();
     std::vector<Start> starts_;
     std::unordered_map<InstanceId, int> require_cache_;
     std::vector<InstanceId> loading_;

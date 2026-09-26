@@ -1081,6 +1081,9 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
     if (part->instance != nullptr) {
         part->instance->on_parent_changed(old, new_parent);
     }
+    if (new_parent != kNoParent && state_->script_host != nullptr) {
+        state_->script_host->on_child_named(new_parent, id, name(id));
+    }
     if (DataModel* live = instance(id)) {
         if (dynamic_cast<LuaSource*>(live) != nullptr) {
             if (ScriptAnalysis* analysis = script_analysis()) {
@@ -1172,6 +1175,12 @@ void DataModel::set_name(InstanceId id, std::string name) {
     record_string(id, Field::Name, previous, object->name_);
     note_tree_changed();
     emit_change(id, Field::Name, current_origin());
+    if (state_->script_host != nullptr && id != 0) {
+        const InstanceId under = parent(id);
+        if (under != kNoParent) {
+            state_->script_host->on_child_named(under, id, object->name_);
+        }
+    }
     if (dynamic_cast<LuaSource*>(object) != nullptr) {
         if (ScriptAnalysis* analysis = script_analysis()) {
             analysis->invalidate(id);

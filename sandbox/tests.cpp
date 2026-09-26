@@ -2883,6 +2883,26 @@ TEST_CASE("S33 a large printed table is copied up to a cap", "[S33]") {
     REQUIRE(table->fields.front().key == "[1]");
 }
 
+TEST_CASE("S34 a table with __tostring prints its name and is not copied", "[S34]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk("local named = setmetatable({secret = 1}, {__tostring = function() return \"Named\" end})\n"
+                          "print(named, {inner = named})");
+    const engine_core::ScriptRuntime::OutputBatch batch = rig.runtime.drain_output();
+    REQUIRE(batch.lines.size() == 1);
+    const engine_core::ScriptRuntime::OutputLine& line = batch.lines[0];
+    REQUIRE(line.text.rfind("Named\ttable: ", 0) == 0);
+    REQUIRE(line.values.size() == 2);
+    REQUIRE(line.values[0].text == "Named");
+    REQUIRE_FALSE(line.values[0].table);
+    const std::shared_ptr<const engine_core::TableSnapshot> table = line.values[1].table;
+    REQUIRE(table);
+    REQUIRE(table->fields.size() == 1);
+    REQUIRE(table->fields[0].key == "inner");
+    REQUIRE(table->fields[0].value == "Named");
+    REQUIRE_FALSE(table->fields[0].table);
+    REQUIRE(table->fields[0].note.empty());
+}
+
 TEST_CASE("S18 Heartbeat:Wait yields until the next Heartbeat", "[S18]") {
     ScriptRig rig;
     // The first Heartbeat has already been emitted by the time the script starts,

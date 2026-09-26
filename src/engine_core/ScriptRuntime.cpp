@@ -1260,7 +1260,7 @@ int ScriptRuntime::lua_print(lua_State* state) {
             value.text.assign(whole.substr(0, fit_utf8(whole, kMaxOutputBytes)));
         }
         lua_pop(state, 1);
-        if (lua_type(state, index) == LUA_TTABLE) {
+        if (snapshots_as_table(state, index)) {
             value.table = snapshot_table(state, index);
             has_table = true;
         }

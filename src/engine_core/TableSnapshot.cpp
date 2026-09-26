@@ -111,7 +111,7 @@ public:
             } else {
                 row.field.value = display(-1);
             }
-            if (lua_type(state_, -1) == LUA_TTABLE) {
+            if (snapshots_as_table(state_, -1)) {
                 const void* pointer = lua_topointer(state_, -1);
                 if (std::find(open_.begin(), open_.end(), pointer) != open_.end()) {
                     row.field.note = "cycle";
@@ -184,6 +184,18 @@ private:
 };
 
 }  // namespace
+
+bool snapshots_as_table(lua_State* state, int index) {
+    if (lua_type(state, index) != LUA_TTABLE) {
+        return false;
+    }
+    // Leaves the field on the stack when it finds one.
+    if (luaL_getmetafield(state, index, "__tostring") == 0) {
+        return true;
+    }
+    lua_pop(state, 1);
+    return false;
+}
 
 std::shared_ptr<const TableSnapshot> snapshot_table(lua_State* state, int index) {
     Copier copier(state);

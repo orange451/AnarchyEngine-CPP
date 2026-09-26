@@ -253,7 +253,7 @@ void IdeScriptEditor::layoutChildren() {
     StackPane::layoutChildren();
 }
 
-bool IdeScriptEditor::read_source(std::string& text, std::string& name, bool& alive) const {
+bool IdeScriptEditor::read_source(std::string& text, std::string& name, bool& alive, std::uint32_t* world) const {
     alive = false;
     engine_core::DataModel& model = engine_.datamodel();
     engine_core::DataModelLock lock(model, engine_core::DataModelLock::Read, kLockWait);
@@ -268,6 +268,9 @@ bool IdeScriptEditor::read_source(std::string& text, std::string& name, bool& al
     alive = true;
     text = source->source();
     name = model.name(id_);
+    if (world != nullptr) {
+        *world = model.world_generation();
+    }
     return true;
 }
 
@@ -278,7 +281,7 @@ void IdeScriptEditor::load() {
     std::string text;
     std::string name;
     bool alive = false;
-    if (!read_source(text, name, alive)) {
+    if (!read_source(text, name, alive, &world_)) {
         return;
     }
     if (!alive) {
@@ -429,7 +432,8 @@ void IdeScriptEditor::reapply() {
     std::string text;
     std::string name;
     bool alive = false;
-    if (!read_source(text, name, alive)) {
+    std::uint32_t world = 0;
+    if (!read_source(text, name, alive, &world)) {
         return;
     }
     if (!alive) {
@@ -440,9 +444,37 @@ void IdeScriptEditor::reapply() {
     if (name != shown_name_) {
         setTitleText(name);
     }
-    if (text != area_->getText()) {
-        flush();
+    const bool stopped = world != world_;
+    world_ = world;
+    if (text == area_->getText()) {
+        return;
     }
+    if (stopped) {
+        // Stop restored the authored place. The buffer holds edits made during
+        // play, so it wins and becomes the place's source.
+        flush();
+    } else if (!dirty_) {
+        // The Source changed under an idle buffer in edit mode: a place undo or
+        // redo, or another writer. Show it rather than writing the buffer over it.
+        show_source(std::move(text));
+    }
+}
+
+void IdeScriptEditor::show_source(std::string text) {
+    const int caret = area_->caretPosition();
+    loading_ = true;
+    area_->suspendUndo();
+    area_->setText(std::move(text));
+    area_->resumeUndo();
+    area_->forgetHistory();
+    // Keystroke undo would rewrite the text the place history just set.
+    if (undo_stack_ != nullptr) {
+        undo_stack_->reset(area_->getText());
+    }
+    area_->moveTo(std::min(caret, area_->length()));
+    loading_ = false;
+    paint();
+    dismiss_completion();
 }
 
 std::vector<engine_core::LuaNode> IdeScriptEditor::world() const {

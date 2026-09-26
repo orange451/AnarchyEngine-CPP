@@ -56,7 +56,8 @@ protected:
 private:
     struct Commit;
 
-    bool read_source(std::string& text, std::string& name, bool& alive) const;
+    bool read_source(std::string& text, std::string& name, bool& alive, std::uint32_t* world = nullptr) const;
+    void show_source(std::string text);
     void load();
     void paint();
     void refresh_marks();
@@ -89,6 +90,8 @@ private:
     bool loaded_ = false;
     bool missing_ = false;
     bool dirty_ = false;
+    // world_generation the buffer last matched. Stop bumps it.
+    std::uint32_t world_ = 0;
     std::chrono::steady_clock::time_point dirty_at_{};
 };
 

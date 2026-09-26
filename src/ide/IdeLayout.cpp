@@ -258,6 +258,13 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
         ->setOnAction([this](jadefx::ActionEvent&) { save_project(); });
     AddItem(*file, "Save As", "SaveAs.png", jadefx::Key::S, jadefx::Key::ModControl | jadefx::Key::ModShift)
         ->setOnAction([this](jadefx::ActionEvent&) { save_project_as(); });
+    file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
+    // The same path as the window's close button: unsaved work is offered a save first.
+    AddItem(*file, "Quit", nullptr, jadefx::Key::Q, jadefx::Key::ModControl)->setOnAction([this](jadefx::ActionEvent&) {
+        if (mainStage_ != nullptr && mainStage_->closeRequested()) {
+            mainStage_->close();
+        }
+    });
 
     auto edit = jadefx::make<jadefx::Menu>("Edit");
     auto test = jadefx::make<jadefx::MenuItem>("Test");

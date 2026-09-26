@@ -40,6 +40,8 @@ struct SignalUd {
 };
 
 const char* kInstanceMeta = "AE.Instance";
+// Registry table: instance id -> its one userdata in this state, weak values.
+const char* kInstanceCache = "AE.InstanceCache";
 const char* kSignalMeta = "AE.Signal";
 const char* kConnectionMeta = "AE.Connection";
 const char* kThreadMeta = "AE.Thread";
@@ -590,6 +592,16 @@ void open_host_libraries(lua_State* state) {
     lua_setfield(state, service_mt, "__index");
     lua_setreadonly(state, service_mt, 1);
     lua_pop(state, 5);
+
+    // One userdata per instance, as Roblox does, so == and rawequal hold and an
+    // instance works as a table key. Weak values let unused handles collect.
+    lua_newtable(state);
+    lua_newtable(state);
+    lua_pushstring(state, "v");
+    lua_setfield(state, -2, "__mode");
+    lua_setreadonly(state, -1, 1);
+    lua_setmetatable(state, -2);
+    lua_setfield(state, LUA_REGISTRYINDEX, kInstanceCache);
 
     lua_newtable(state);
     lua_pushcfunction(state, &ScriptBindings::task_wait, "wait");
@@ -1254,11 +1266,33 @@ int ScriptRuntime::lua_print(lua_State* state) {
 }
 
 void ScriptRuntime::push_instance(lua_State* state, InstanceId id) {
+    const std::uint32_t world = model_ != nullptr ? model_->world_generation() : 0;
+    lua_getfield(state, LUA_REGISTRYINDEX, kInstanceCache);
+    const bool cached = lua_istable(state, -1);
+    if (cached) {
+        lua_pushnumber(state, static_cast<double>(id));
+        lua_rawget(state, -2);
+        const auto* hit = static_cast<InstanceUd*>(test_udata(state, -1, kInstanceMeta));
+        // A handle from an earlier world generation names a different instance.
+        if (hit != nullptr && hit->world == world) {
+            lua_remove(state, -2);
+            return;
+        }
+        lua_pop(state, 1);
+    }
     auto* ud = static_cast<InstanceUd*>(lua_newuserdata(state, sizeof(InstanceUd)));
     ud->id = id;
-    ud->world = model_ != nullptr ? model_->world_generation() : 0;
+    ud->world = world;
     luaL_getmetatable(state, kInstanceMeta);
     lua_setmetatable(state, -2);
+    if (cached) {
+        lua_pushnumber(state, static_cast<double>(id));
+        lua_pushvalue(state, -2);
+        lua_rawset(state, -4);
+        lua_remove(state, -2);
+    } else {
+        lua_remove(state, -2);
+    }
 }
 
 DataModel* ScriptRuntime::resolve_id(InstanceId id, std::uint32_t world) const {

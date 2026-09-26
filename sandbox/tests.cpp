@@ -3223,8 +3223,7 @@ TEST_CASE("S26 WaitForChild ignores other names and a match that leaves before i
     ScriptRig rig;
     add_script(rig.model, "Waiter", R"(
         local found = game:WaitForChild("Target")
-        -- Instances have no __eq, so compare the parent by name.
-        _G.ok = found.Name == "Target" and found.Parent ~= nil and found.Parent.Name == game.Name
+        _G.ok = found.Name == "Target" and found.Parent == game
     )");
     add_script(rig.model, "Maker", R"(
         task.wait(0.1)
@@ -3290,4 +3289,57 @@ TEST_CASE("S25 WaitForChild from the command line only returns a child that is t
     rig.model.start_simulation();
     rig.runtime.run_chunk("_G.found = game:WaitForChild('Missing') ~= nil");
     REQUIRE(rig.runtime.last_error().find("WaitForChild yields the running script thread") != std::string::npos);
+}
+
+TEST_CASE("S27 every handle to an instance is the same value", "[S27]") {
+    ScriptRig rig;
+    engine_core::Script& script = add_script(rig.model, "Main", R"(
+        local box = script:GetChildren()[1]
+        local same = script:FindFirstChild("Box")
+        local seen = {}
+        seen[box] = true
+        _G.eq = box == same and rawequal(box, same) and seen[same] == true
+        _G.parent_is_game = script.Parent == game and box.Parent == script
+        _G.differs = box ~= script and box ~= game and box ~= nil
+        local made = Instance.new("Folder")
+        made.Parent = game
+        _G.made_eq = game:FindFirstChild(made.Name) == made
+        local weak = setmetatable({}, { __mode = "k" })
+        weak[box] = 1
+        _G.keyed = weak[script:FindFirstChild("Box")] == 1
+    )");
+    engine_core::GameObject& box = rig.model.create<engine_core::GameObject>();
+    rig.model.set_name(box.id(), "Box");
+    rig.model.set_parent(box.id(), script.id());
+    rig.model.start_simulation();
+    rig.frames(1, 0.05);
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
+    for (const char* name : {"eq", "parent_is_game", "differs", "made_eq", "keyed"}) {
+        bool value = false;
+        INFO(name);
+        REQUIRE(rig.runtime.global_boolean(name, value));
+        REQUIRE(value);
+    }
+
+    // A fresh session hands out fresh handles that still compare equal.
+    rig.model.stop_simulation();
+    rig.model.start_simulation();
+    rig.frames(1, 0.05);
+    bool eq = false;
+    REQUIRE(rig.runtime.global_boolean("eq", eq));
+    REQUIRE(eq);
+}
+
+TEST_CASE("S28 the command line gets one handle per instance too", "[S28]") {
+    ScriptRig rig;
+    engine_core::GameObject& box = rig.model.create<engine_core::GameObject>();
+    rig.model.set_name(box.id(), "Box");
+    rig.model.set_parent(box.id(), rig.model.id());
+    rig.runtime.run_chunk(
+        "local box = game:FindFirstChild('Box') assert(box == game:GetChildren()[1] and box.Parent == game)");
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
+    rig.runtime.run_chunk("assert(game:FindFirstChild('Box') ~= game)");
+    REQUIRE(rig.runtime.last_error().empty());
 }

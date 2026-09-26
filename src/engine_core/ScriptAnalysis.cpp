@@ -337,22 +337,108 @@ struct NarrowMagic final : Luau::MagicFunction {
 void stamp_vector(Luau::Frontend& frontend);
 void attach_api(WorkerEnv& env);
 
+constexpr std::string_view kModulePrefix = "script-";
+
+std::string module_name_of(InstanceId id) {
+    return std::string(kModulePrefix) + std::to_string(id);
+}
+
+std::optional<InstanceId> instance_of_module(std::string_view name) {
+    if (name.substr(0, kModulePrefix.size()) != kModulePrefix) {
+        return std::nullopt;
+    }
+    InstanceId id = 0;
+    const std::string_view digits = name.substr(kModulePrefix.size());
+    if (digits.empty()) {
+        return std::nullopt;
+    }
+    for (char digit : digits) {
+        if (digit < '0' || digit > '9') {
+            return std::nullopt;
+        }
+        id = id * 10 + static_cast<InstanceId>(digit - '0');
+    }
+    return id;
+}
+
+// Every instance is a module name, "script-<id>", so a require path can walk
+// through folders. Only a ModuleScript has source a require can load.
 struct SourceFileResolver : Luau::FileResolver {
     const std::string* module_name = nullptr;
     const std::string* source = nullptr;
     const std::string* display = nullptr;
     Luau::SourceCode::Type type = Luau::SourceCode::Script;
+    const WorldSnap* world = nullptr;
 
     std::optional<Luau::SourceCode> readSource(const Luau::ModuleName& name) override {
-        if (module_name == nullptr || source == nullptr || name != *module_name) {
+        if (module_name != nullptr && source != nullptr && name == *module_name) {
+            return Luau::SourceCode{*source, type};
+        }
+        const std::optional<InstanceId> id = instance_of_module(name);
+        if (world == nullptr || !id) {
             return std::nullopt;
         }
-        return Luau::SourceCode{*source, type};
+        const NodeSnap* node = world->find(*id);
+        if (node == nullptr || !node->lua) {
+            return std::nullopt;
+        }
+        return Luau::SourceCode{node->source, node->module ? Luau::SourceCode::Module : Luau::SourceCode::Script};
+    }
+
+    // The same paths resolve_expr follows, one step at a time. RequireTracer
+    // hands each step the step before it as context.
+    std::optional<Luau::ModuleInfo> resolveModule(const Luau::ModuleInfo* context, Luau::AstExpr* expr,
+                                                  const Luau::TypeCheckLimits&) override {
+        if (world == nullptr || context == nullptr || expr == nullptr) {
+            return std::nullopt;
+        }
+        const std::optional<InstanceId> base = instance_of_module(context->name);
+        if (!base) {
+            return std::nullopt;
+        }
+        std::optional<InstanceId> found;
+        if (auto* global = expr->as<Luau::AstExprGlobal>()) {
+            if (global->name == "script") {
+                found = base;
+            } else if (global->name == "game" || global->name == "workspace") {
+                found = world->root;
+            }
+        } else if (auto* call = expr->as<Luau::AstExprCall>()) {
+            auto* index = call->func->as<Luau::AstExprIndexName>();
+            if (index != nullptr && index->index == "FindFirstChild" && call->args.size >= 1) {
+                auto* literal = call->args.data[0]->as<Luau::AstExprConstantString>();
+                if (literal != nullptr && literal->isQuoted()) {
+                    found = world->child_named(*base, string_literal(literal->value));
+                }
+            }
+        } else if (auto* index = expr->as<Luau::AstExprIndexName>()) {
+            if (index->index == "Parent") {
+                const NodeSnap* node = world->find(*base);
+                if (node != nullptr && node->parent != DataModel::kNoParent) {
+                    found = node->parent;
+                }
+            } else {
+                found = world->child_named(*base, index->index.value);
+            }
+        } else if (auto* literal = expr->as<Luau::AstExprConstantString>()) {
+            if (literal->isQuoted()) {
+                found = resolve_expr(*world, *base, literal);
+            }
+        }
+        if (!found) {
+            return std::nullopt;
+        }
+        return Luau::ModuleInfo{module_name_of(*found)};
     }
 
     std::string getHumanReadableModuleName(const Luau::ModuleName& name) const override {
         if (display != nullptr && !display->empty() && module_name != nullptr && name == *module_name) {
             return *display;
+        }
+        if (const std::optional<InstanceId> id = instance_of_module(name); id && world != nullptr) {
+            if (const NodeSnap* node = world->find(*id)) {
+                return node->name.empty() ? node->class_name : node->name;
+            }
         }
         return name;
     }
@@ -386,6 +472,8 @@ struct WorkerEnv {
     // The place copied for the check that is running. The magic reads it.
     const WorldSnap* world = nullptr;
     InstanceId self = 0;
+    // The snapshot the frontend's cached modules were checked against.
+    std::shared_ptr<const WorldSnap> checked_world;
     std::shared_ptr<Luau::MagicFunction> find_child;
     std::shared_ptr<Luau::MagicFunction> service_result;
     std::shared_ptr<Luau::MagicFunction> creatable_result;
@@ -576,8 +664,16 @@ bool FindChildMagic::infer(const Luau::MagicFunctionCallContext& context) {
     if (env == nullptr || env->world == nullptr) {
         return false;
     }
+    // A required module is checked in the same pass, so `script` is whichever
+    // module this call is in.
+    InstanceId self = env->self;
+    if (context.constraint->moduleName != nullptr) {
+        if (const std::optional<InstanceId> owner = instance_of_module(*context.constraint->moduleName)) {
+            self = *owner;
+        }
+    }
     const std::optional<InstanceId> child =
-        resolve_expr(*env->world, env->self, const_cast<Luau::AstExprCall*>(context.callSite.get()));
+        resolve_expr(*env->world, self, const_cast<Luau::AstExprCall*>(context.callSite.get()));
     if (!child) {
         return false;
     }
@@ -728,8 +824,19 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
                 check_source.replace(at, std::char_traits<char>::length("--!nonstrict"), "--!strict");
             }
         }
-        const std::string module_name = "script-" + std::to_string(job.id);
+        const std::string module_name = module_name_of(job.id);
+        // Required modules stay cached in the frontend. A new snapshot can
+        // change their source or what their paths reach, so recheck them.
+        if (env.checked_world != job.world) {
+            for (const NodeSnap& node : job.world->nodes) {
+                if (node.lua) {
+                    env.frontend->markDirty(module_name_of(node.id));
+                }
+            }
+            env.checked_world = job.world;
+        }
         env.files.module_name = &module_name;
+        env.files.world = job.world.get();
         env.files.source = &check_source;
         env.files.display = &finished.name;
         env.files.type = self->module ? Luau::SourceCode::Module : Luau::SourceCode::Script;
@@ -744,6 +851,7 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
         options.cancellationToken = job.cancel;
         const Luau::CheckResult checked = env.frontend->check(module_name, options);
         env.world = nullptr;
+        env.files.world = nullptr;
         env.self = 0;
         if (job.cancel && job.cancel->requested()) {
             finished.cancelled = true;
@@ -752,6 +860,10 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
         Luau::TypeErrorToStringOptions stringify;
         stringify.fileResolver = &env.files;
         for (const Luau::TypeError& error : checked.errors) {
+            // A required module reports its own problems when it is analyzed.
+            if (error.moduleName != module_name) {
+                continue;
+            }
             if (Luau::get<Luau::SyntaxError>(error) != nullptr) {
                 finished.diagnostics.push_back(make_diagnostic(job.id, range_from(error.location), Severity::Error, "Syntax",
                                                                Luau::toString(error, stringify)));
@@ -773,6 +885,7 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
         }
     } catch (const std::exception& error) {
         env.world = nullptr;
+        env.files.world = nullptr;
         env.self = 0;
         if (job.cancel && job.cancel->requested()) {
             finished.cancelled = true;
@@ -781,6 +894,7 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
         finished.diagnostics.push_back(make_diagnostic(job.id, TextRange{}, Severity::Error, "Analysis", error.what()));
     } catch (...) {
         env.world = nullptr;
+        env.files.world = nullptr;
         env.self = 0;
         if (job.cancel && job.cancel->requested()) {
             finished.cancelled = true;
@@ -789,6 +903,7 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
         finished.diagnostics.push_back(make_diagnostic(job.id, TextRange{}, Severity::Error, "Analysis", "analysis failed"));
     }
     env.world = nullptr;
+    env.files.world = nullptr;
     env.self = 0;
     return finished;
 }

@@ -1,4 +1,5 @@
 #include "DataModel.hpp"
+#include "Folder.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
 #include "Project.hpp"
@@ -546,4 +547,51 @@ TEST_CASE("A15 switching to open scope drops what is not watched", "[A15]") {
     rig.model.destroy(kept.id());
     settle(analysis);
     REQUIRE(analysis.idle());
+}
+
+TEST_CASE("A16 a require path that reaches a ModuleScript takes its type", "[A16]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.model);
+    engine_core::Folder& modules = rig.model.create<engine_core::Folder>();
+    rig.model.set_name(modules.id(), "Modules");
+    rig.model.set_parent(modules.id(), rig.model.id());
+    engine_core::ModuleScript& config = add_module(rig.model, "Config",
+                                                   "local Config = {}\n"
+                                                   "Config.Currencies = { Gold = \"Gold\" }\n"
+                                                   "Config.Settings = { Enabled = false }\n"
+                                                   "return Config\n");
+    rig.model.set_parent(config.id(), modules.id());
+    engine_core::Script& script = add_script(rig.model, "Test",
+                                             "local Config = require(game:FindFirstChild(\"Modules\"):FindFirstChild(\"Config\"))\n"
+                                             "local currency = Config.Currencies.Gold\n"
+                                             "Config.Settings.Enabled = true\n"
+                                             "print(\"Currency:\", currency, Config.Settings.Enabled)\n");
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(script.id())));
+    REQUIRE(dump(analysis.diagnostics(script.id())).find("Unknown require") == std::string::npos);
+
+    SECTION("the module's type reaches the script") {
+        script.set_source("--!strict\n"
+                          "local Config = require(game:FindFirstChild(\"Modules\"):FindFirstChild(\"Config\"))\n"
+                          "local gold: number = Config.Currencies.Gold\n");
+        settle(analysis);
+        INFO(dump(analysis.diagnostics(script.id())));
+        const std::string report = dump(analysis.diagnostics(script.id()));
+        REQUIRE(report.find("@2:") != std::string::npos);
+        REQUIRE(report.find("Unknown require") == std::string::npos);
+    }
+
+    SECTION("a path to nothing still warns") {
+        script.set_source("local Config = require(game:FindFirstChild(\"Modules\"):FindFirstChild(\"Missing\"))\n");
+        settle(analysis);
+        INFO(dump(analysis.diagnostics(script.id())));
+        REQUIRE(dump(analysis.diagnostics(script.id())).find("Unknown require") != std::string::npos);
+    }
+
+    SECTION("an edit to the module reaches the script") {
+        config.set_source("return { Currencies = {} }\n");
+        settle(analysis);
+        INFO(dump(analysis.diagnostics(script.id())));
+        REQUIRE(dump(analysis.diagnostics(script.id())).find("Settings") != std::string::npos);
+    }
 }

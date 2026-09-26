@@ -18,10 +18,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # JadeFX lives outside this tree; without it, `#include "jadefx/jadefx.hpp"` looks missing.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# MACOSX_BUNDLE is ignored on Windows and Linux, where this stays a normal executable.
-# GLFW comes in with JadeFX. That library creates the window.
-add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
-    src/main.cpp
+# Everything in the studio except main, so a test can build the real layout.
+set(STUDIO_SOURCES
     src/runner/gl.cpp
     src/runner/ShaderFile.cpp
     src/runner/Renderer.cpp
@@ -45,6 +43,15 @@ add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
     src/ide/TextUndoStack.cpp
     src/ide/InputRouter.cpp
     src/ide/CutSet.cpp
+    src/ide/PropertySheet.cpp
+    src/ide/PropertiesPanel.cpp
+)
+
+# MACOSX_BUNDLE is ignored on Windows and Linux, where this stays a normal executable.
+# GLFW comes in with JadeFX. That library creates the window.
+add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
+    src/main.cpp
+    ${STUDIO_SOURCES}
 )
 
 # An explicit checkout wins. A sibling named JadeFX_CPP is next. Otherwise
@@ -183,6 +190,31 @@ target_include_directories(explorer-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/s
 target_link_libraries(explorer-tests PRIVATE jadefx engine_core)
 target_compile_features(explorer-tests PRIVATE cxx_std_17)
 
+# Drives the Properties page next to an explorer: selection, mixed rows, commits, and undo.
+add_executable(properties-tests
+    tests/PropertiesTest.cpp
+    src/ide/CutSet.cpp
+    src/ide/IdeExplorer.cpp
+    src/ide/IdeIcons.cpp
+    src/ide/IdePane.cpp
+    src/ide/InsertPopup.cpp
+    src/ide/PropertySheet.cpp
+    src/ide/PropertiesPanel.cpp
+    src/ide/TextUndoStack.cpp
+)
+target_include_directories(properties-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(properties-tests PRIVATE jadefx engine_core)
+target_compile_features(properties-tests PRIVATE cxx_std_17)
+
+# R10: the default dock layout, built headless from the studio's own sources.
+add_executable(studio-tests
+    tests/StudioLayoutTest.cpp
+    ${STUDIO_SOURCES}
+)
+target_include_directories(studio-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(studio-tests PRIVATE jadefx engine_core)
+target_compile_features(studio-tests PRIVATE cxx_std_17)
+
 add_executable(engine-tests
     tests/LuaEngineTest.cpp
     tests/LuauHighlightTest.cpp
@@ -242,12 +274,16 @@ if(MSVC)
     target_compile_options(AnarchyEngine-CPP PRIVATE /W4 /utf-8)
     target_compile_options(engine-tests PRIVATE /W4 /utf-8)
     target_compile_options(shell-tests PRIVATE /W4 /utf-8)
+    target_compile_options(properties-tests PRIVATE /W4 /utf-8)
+    target_compile_options(studio-tests PRIVATE /W4 /utf-8)
     target_compile_options(engine_core PRIVATE /W4 /utf-8)
     target_compile_options(sandbox PRIVATE /W4 /utf-8)
 else()
     target_compile_options(AnarchyEngine-CPP PRIVATE -Wall -Wextra)
     target_compile_options(engine-tests PRIVATE -Wall -Wextra)
     target_compile_options(shell-tests PRIVATE -Wall -Wextra)
+    target_compile_options(properties-tests PRIVATE -Wall -Wextra)
+    target_compile_options(studio-tests PRIVATE -Wall -Wextra)
     target_compile_options(engine_core PRIVATE -Wall -Wextra)
     target_compile_options(sandbox PRIVATE -Wall -Wextra)
 endif()

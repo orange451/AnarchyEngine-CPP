@@ -20,6 +20,8 @@ run: all
 
 test: all
 	"$(BUILD_DIR)/engine-tests"
+	"$(BUILD_DIR)/properties-tests"
+	"$(BUILD_DIR)/studio-tests"
 	"$(BUILD_DIR)/sandbox"
 
 clean:

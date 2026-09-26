@@ -13,6 +13,7 @@
 #include "IdeDock.hpp"
 #include "IdeExplorer.hpp"
 #include "IdeScriptEditor.hpp"
+#include "PropertiesPanel.hpp"
 #include "Script.hpp"
 #include "TestTriangle.hpp"
 #include "../runner/GameView.hpp"
@@ -408,6 +409,23 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     sceneExplorer->setIconFile("Scenes.png");
     east->dock(sceneExplorer);
 
+    // Properties sits under the right-hand explorer, as in Roblox Studio.
+    // Its writes go to the simulation thread, like a rename.
+    properties_ = std::make_unique<PropertiesPanel>();
+    properties_->set_runner([this](std::function<void(engine_core::DataModel&)> write) {
+        runner_.simulation().on_simulation(std::move(write));
+    });
+    properties_->bind(model, model.selection(), model.history());
+    auto propertiesDock = jadefx::make<IdeDock>();
+    adoptDock(propertiesDock);
+    propertiesDock->dock(properties_->dock_widget());
+
+    auto eastColumn = jadefx::make<jadefx::SplitPane>();
+    eastColumn->setOrientation(jadefx::Orientation::Vertical);
+    eastColumn->getItems().add(east);
+    eastColumn->getItems().add(propertiesDock);
+    eastColumn->setDividerPositions({0.5});
+
     auto vertical = jadefx::make<jadefx::SplitPane>();
     vertical->setOrientation(jadefx::Orientation::Vertical);
     vertical->getItems().add(center);
@@ -419,11 +437,11 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     auto horizontal = jadefx::make<jadefx::SplitPane>();
     horizontal->getItems().add(west);
     horizontal->getItems().add(vertical);
-    horizontal->getItems().add(east);
+    horizontal->getItems().add(eastColumn);
     const double side = Fraction(kSideWidth, windowWidth, 0.35);
     horizontal->setDividerPositions({side, 1.0 - side});
     jadefx::SplitPane::setResizableWithParent(*west, false);
-    jadefx::SplitPane::setResizableWithParent(*east, false);
+    jadefx::SplitPane::setResizableWithParent(*eastColumn, false);
     workArea_ = horizontal;
 
     auto status = jadefx::make<jadefx::Pane>();
@@ -1537,12 +1555,21 @@ void IdeLayout::routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene) {
             return;
         }
     }
+    // A Properties field undoes its own typing first. A half-typed value is not
+    // a document, so once that is spent the chord goes to the place.
+    const bool properties = properties_ && focused != nullptr && properties_->owns(focused);
+    if (properties && properties_->field_undo(is_redo(chord))) {
+        event.consume();
+        return;
+    }
     // A text widget we do not own still keeps the chord. Place undo does not run.
-    if (InTextWidget(focused)) {
+    if (!properties && InTextWidget(focused)) {
         return;
     }
     Focus target;
-    if (Owning<IdeExplorer>(focused) != nullptr) {
+    if (properties) {
+        target.kind = FocusKind::Properties;
+    } else if (Owning<IdeExplorer>(focused) != nullptr) {
         target.kind = FocusKind::Explorer;
     } else if (Owning<runner::GameView>(focused) != nullptr) {
         target.kind = FocusKind::Viewport;

@@ -146,6 +146,8 @@ public:
     // Off: mutators do not enter history. An open recording can still be finished.
     void set_enabled(bool enabled);
     bool enabled() const { return enabled_; }
+    // True while undo, redo, or a cancel is writing the place back.
+    bool applying_undo_redo() const { return applying_ != 0; }
 
     // Name used the next time edit mode opens an implicit recording.
     void set_pending_gesture(std::string name);

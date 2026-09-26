@@ -24,6 +24,7 @@ namespace ide {
 class IdeDock;
 class IdePane;
 class IdeScriptEditor;
+class PropertiesPanel;
 
 // IDE shell, in the shape of OpenGLFX-IDE's IdeLayout.
 // The constructor prepares the session and builds the shell. The app can
@@ -35,6 +36,7 @@ class IdeScriptEditor;
 // Explorer rows open Cut, Paste, and Rename. A script also has Edit, and a
 // double-click runs it. Edit docks a script editor on the scene view's tab strip.
 // The explorer edits a name in place and hands the result to rename.
+// Properties, under the right-hand explorer, edits the selection's properties.
 // File opens and saves a project folder through the system folder dialog.
 // Until the first Save As, the place has no folder. New, Open, and closing the
 // window ask first when the place has changes a save would write.
@@ -157,6 +159,8 @@ private:
     jadefx::Scene* scene_ = nullptr;
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeScriptEditor>> open_scripts_;
     std::weak_ptr<class IdeConsole> console_;
+    // Edits the selection's properties. Docked under the right-hand explorer.
+    std::unique_ptr<PropertiesPanel> properties_;
     InputRouter undo_router_;
     std::uint32_t last_script_focus_ = 0;
     // Source from an editor that was closed while the simulation was running.

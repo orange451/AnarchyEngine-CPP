@@ -42,7 +42,7 @@ struct ApplyGuard {
 };
 
 // Actions the explorer runs over the whole selection. The rest run on one row.
-bool Batchable(std::string_view action) { return action == "Delete"; }
+bool Batchable(std::string_view action) { return action == "Delete" || action == "Cut"; }
 
 // Keys that make a click edit the selection instead of picking one row.
 constexpr int kSelectKeys = jadefx::Key::ModControl | jadefx::Key::ModSuper | jadefx::Key::ModShift;

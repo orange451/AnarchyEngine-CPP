@@ -1,3 +1,4 @@
+#include "ide/CutSet.hpp"
 #include "ide/IdeExplorer.hpp"
 
 #include "DataModel.hpp"
@@ -446,6 +447,37 @@ void TestRebuildKeepsTheSelection() {
     Expect(rig.painted("Alpha") && rig.painted("Gamma") && !rig.painted("Beta"), "a rebuild keeps the rows drawn");
 }
 
+void TestCutRunsOnTheSelection() {
+    Rig rig;
+    rig.model.selection().set(rig.pick({0, 2}));
+    rig.frame(0.1);
+    rig.clickRow("Alpha", 0.2, 1);
+    rig.clickMenu("Cut");
+    Expect(rig.batches.size() == 1 && rig.batches[0].first == "Cut" && rig.batches[0].second == rig.pick({0, 2}),
+           "Cut from the menu runs once on every selected instance");
+    Expect(rig.runs.empty(), "a multiple Cut does not also run on the clicked row");
+    Expect(rig.explorer->run_on_selection("Cut"), "Cut runs on the selection by name too");
+    Expect(rig.batches.size() == 2 && rig.batches[1].first == "Cut", "that Cut is one batch too");
+}
+
+void TestCutSet() {
+    Rig rig;
+    // Gamma, Beta, Alpha at the top; Inner under Alpha.
+    engine_core::Folder& inner = rig.model.create<engine_core::Folder>();
+    rig.model.set_parent(inner.id(), rig.ids[0]);
+    const engine_core::InstanceId alpha = rig.ids[0];
+    const engine_core::InstanceId beta = rig.ids[1];
+    const engine_core::InstanceId gamma = rig.ids[2];
+    Expect(ide::cut_set(rig.model, {alpha, gamma}) == std::vector<engine_core::InstanceId>{gamma, alpha},
+           "a cut takes instances in the order the tree shows them");
+    Expect(ide::cut_set(rig.model, {inner.id(), alpha}) == std::vector<engine_core::InstanceId>{alpha},
+           "a child goes with its selected parent");
+    Expect(ide::cut_set(rig.model, {inner.id(), beta}) == std::vector<engine_core::InstanceId>{beta, inner.id()},
+           "a child whose parent is not selected is taken on its own");
+    rig.model.destroy(beta);
+    Expect(ide::cut_set(rig.model, {beta, 0}).empty(), "a cut skips the root and gone instances");
+}
+
 void TestDeleteRunsOnTheSelection() {
     Rig rig;
     rig.clickRow("Beta", 0.1);
@@ -483,6 +515,8 @@ int main() {
     TestRightClickKeepsTheSelection();
     TestRebuildKeepsTheSelection();
     TestDeleteRunsOnTheSelection();
+    TestCutRunsOnTheSelection();
+    TestCutSet();
     if (gFailures == 0) {
         std::printf("explorer tests passed\n");
         return 0;

@@ -62,7 +62,9 @@ private:
 
     void run_action(std::string_view action, std::uint32_t id);
     bool action_enabled(std::string_view action) const;
-    void cut(std::uint32_t id);
+    // Takes every id out of the place as one undo step. A selected child of a
+    // selected instance goes with its ancestor.
+    void cut(const std::vector<std::uint32_t>& ids);
     // Destroys each id and its descendants as one undo step.
     void delete_instances(std::vector<std::uint32_t> ids);
     void paste(std::uint32_t id);

@@ -1,6 +1,7 @@
 #include "IdeLayout.hpp"
 
 #include "ChangeHistoryService.hpp"
+#include "CutSet.hpp"
 #include "DataModelLock.hpp"
 #include "DockArrange.hpp"
 #include "Engine.hpp"
@@ -19,6 +20,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <vector>
 
 namespace ide {
 namespace {
@@ -239,9 +241,10 @@ void ShowSession(jadefx::MenuItem& test, jadefx::MenuItem& pause, jadefx::MenuIt
 
 }  // namespace
 
-// The cut instance, out of the place until Paste parents it again.
+// What the last Cut took, in tree order. They stay alive and unparented until
+// Paste, or until the next Cut deletes them.
 struct IdeLayout::Clip {
-    engine_core::InstanceId id = 0;
+    std::vector<engine_core::InstanceId> ids;
     bool held = false;
 };
 
@@ -352,6 +355,8 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     host.run_many = [this](std::string_view action, const std::vector<engine_core::InstanceId>& ids) {
         if (action == "Delete") {
             delete_instances(ids);
+        } else if (action == "Cut") {
+            cut(ids);
         }
     };
     host.enabled = [this](std::string_view action) { return action_enabled(action); };
@@ -1201,7 +1206,7 @@ IdeLayout::~IdeLayout() {
 
 void IdeLayout::run_action(std::string_view action, std::uint32_t id) {
     if (action == "Cut") {
-        cut(id);
+        cut({id});
     } else if (action == "Paste") {
         paste(id);
     } else if (action == "Edit") {
@@ -1263,29 +1268,48 @@ bool IdeLayout::action_enabled(std::string_view action) const {
     return true;
 }
 
-void IdeLayout::cut(std::uint32_t id) {
-    if (!clip_ || id == 0) {
+void IdeLayout::cut(const std::vector<std::uint32_t>& ids) {
+    if (!clip_) {
         return;
     }
     engine_core::DataModel& model = runner_.simulation().datamodel();
+    std::vector<engine_core::InstanceId> taken;
     {
         engine_core::DataModelLock lock(model, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
-        if (!lock.owns() || !model.alive(id)) {
+        if (!lock.owns()) {
             return;
         }
+        taken = cut_set(model, ids);
+    }
+    if (taken.empty()) {
+        return;
     }
     // A second Cut replaces the clipboard. What it held is already out of the
     // place, so it is deleted, not put back. Undo of this Cut brings it back.
-    const engine_core::InstanceId dropped = clip_->held && clip_->id != id ? clip_->id : 0;
-    clip_->id = id;
-    clip_->held = true;
-    runner_.simulation().on_simulation([id, dropped](engine_core::DataModel& world) {
-        world.history().set_pending_gesture("Cut");
-        if (dropped != 0 && world.alive(dropped) && world.parent(dropped) == engine_core::DataModel::kNoParent) {
-            world.destroy_tree(dropped);
+    std::vector<engine_core::InstanceId> dropped;
+    if (clip_->held) {
+        for (engine_core::InstanceId id : clip_->ids) {
+            if (std::find(taken.begin(), taken.end(), id) == taken.end()) {
+                dropped.push_back(id);
+            }
         }
-        if (world.alive(id)) {
-            world.set_parent(id, engine_core::DataModel::kNoParent);
+    }
+    clip_->ids = taken;
+    clip_->held = true;
+    // The cut instances leave the tree, so they leave the selection. Paste
+    // selects them again.
+    model.selection().set({});
+    runner_.simulation().on_simulation([taken, dropped](engine_core::DataModel& world) {
+        world.history().set_pending_gesture("Cut");
+        for (engine_core::InstanceId id : dropped) {
+            if (world.alive(id) && world.parent(id) == engine_core::DataModel::kNoParent) {
+                world.destroy_tree(id);
+            }
+        }
+        for (engine_core::InstanceId id : taken) {
+            if (world.alive(id)) {
+                world.set_parent(id, engine_core::DataModel::kNoParent);
+            }
         }
         CloseGesture(world);
     });
@@ -1295,21 +1319,44 @@ void IdeLayout::paste(std::uint32_t id) {
     if (!clip_ || !clip_->held) {
         return;
     }
-    const engine_core::InstanceId child = clip_->id;
     engine_core::DataModel& model = runner_.simulation().datamodel();
+    std::vector<engine_core::InstanceId> children;
     {
         engine_core::DataModelLock lock(model, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
-        if (!lock.owns() || !model.alive(child) || !parent_ok(model, id) || would_cycle(model, child, id)) {
+        if (!lock.owns() || !parent_ok(model, id)) {
             return;
         }
+        // A target inside something cut refuses the whole paste, so nothing
+        // is left behind out of the place.
+        for (engine_core::InstanceId child : clip_->ids) {
+            if (!model.alive(child)) {
+                continue;
+            }
+            if (would_cycle(model, child, id)) {
+                return;
+            }
+            children.push_back(child);
+        }
+    }
+    if (children.empty()) {
+        return;
     }
     clip_->held = false;
-    runner_.simulation().on_simulation([child, id](engine_core::DataModel& world) {
-        if (!world.alive(child) || !parent_ok(world, id) || would_cycle(world, child, id)) {
+    clip_->ids.clear();
+    // The pasted instances become the selection, as they were when cut.
+    model.selection().set(children);
+    runner_.simulation().on_simulation([children, id](engine_core::DataModel& world) {
+        if (!parent_ok(world, id)) {
             return;
         }
         world.history().set_pending_gesture("Paste");
-        world.set_parent(child, id);
+        // set_parent puts a child first, so the last goes in first and the
+        // pasted instances keep the order they were cut in.
+        for (auto it = children.rbegin(); it != children.rend(); ++it) {
+            if (world.alive(*it) && !would_cycle(world, *it, id)) {
+                world.set_parent(*it, id);
+            }
+        }
         CloseGesture(world);
     });
 }

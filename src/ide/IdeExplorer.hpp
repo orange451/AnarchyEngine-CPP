@@ -25,8 +25,8 @@ struct InsertResult {
 
 // The shell runs an action by name. enabled is false when the item should be
 // shown but not clickable, such as Paste with an empty clipboard.
-// run_many runs Delete once over every selected instance, so it is one undo
-// step. Without it, Delete runs on one instance at a time.
+// run_many runs Delete or Cut once over every selected instance, so it is one
+// undo step. Without it, they run on one instance at a time.
 // insert creates class_name under parent and reports the new id through result.
 // The explorer runs Rename itself and hands the typed name to rename.
 struct ExplorerHost {
@@ -61,8 +61,8 @@ public:
     IdeExplorer(engine_core::DataModel& root, std::string name, ExplorerHost host);
 
     // Runs action on the selection when those instances offer it and it is
-    // enabled. Only Delete runs on more than one. False when nothing selected
-    // offers the action.
+    // enabled. Only Delete and Cut run on more than one. False when nothing
+    // selected offers the action.
     bool run_on_selection(std::string_view action);
 
 protected:

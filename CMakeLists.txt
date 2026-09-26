@@ -44,6 +44,7 @@ add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
     src/ide/IdeLayout.cpp
     src/ide/TextUndoStack.cpp
     src/ide/InputRouter.cpp
+    src/ide/CutSet.cpp
 )
 
 # An explicit checkout wins. A sibling named JadeFX_CPP is next. Otherwise
@@ -172,6 +173,7 @@ target_compile_features(shell-tests PRIVATE cxx_std_17)
 # Drives the explorer through a headless scene: clicks, typing, and keys.
 add_executable(explorer-tests
     tests/ExplorerRenameTest.cpp
+    src/ide/CutSet.cpp
     src/ide/IdeExplorer.cpp
     src/ide/IdeIcons.cpp
     src/ide/IdePane.cpp

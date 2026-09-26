@@ -224,6 +224,10 @@ private:
     double next_child_timer_ = std::numeric_limits<double>::infinity();
     std::vector<Start> starts_;
     std::unordered_map<InstanceId, int> require_cache_;
+    // The command line's own modules, refs in console_state_. A VM cannot hold another VM's
+    // values, so the console runs a ModuleScript itself. Cleared before each command, so a
+    // module edited while stopped is read again.
+    std::unordered_map<InstanceId, int> console_require_cache_;
     std::vector<InstanceId> loading_;
 
     // The phase signals scripts reach through game:GetService("RunService").

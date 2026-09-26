@@ -2870,6 +2870,84 @@ TEST_CASE("S32 print copies a table so the console can open it", "[S32]") {
     REQUIRE(batch.lines[1].text == "plain\t2\n");
 }
 
+TEST_CASE("S35 the command line requires a ModuleScript like a script does", "[S35]") {
+    ScriptRig rig;
+    engine_core::Folder& folder = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(folder.id(), "Folder");
+    rig.game.set_parent(folder.id(), rig.game.id());
+    engine_core::ModuleScript& config = rig.game.create<engine_core::ModuleScript>();
+    rig.game.set_name(config.id(), "Config");
+    config.set_source(R"(
+local module = {
+    Configs = {
+        ValidateTransactions = true,
+    },
+    Currencies = {
+        Gold = "Gold",
+        Silver = "Silver",
+        Copper = "Copper",
+    }
+}
+
+return module
+)");
+    rig.game.set_parent(config.id(), folder.id());
+    rig.runtime.drain_output();
+
+    // Stopped: the console runs the module itself.
+    rig.runtime.run_chunk("print(require(game.Folder.Config))");
+    engine_core::ScriptRuntime::OutputBatch batch = rig.runtime.drain_output();
+    REQUIRE(batch.lines.size() == 1);
+    REQUIRE(batch.lines[0].kind == engine_core::ScriptRuntime::OutputKind::Print);
+    REQUIRE(batch.lines[0].values.size() == 1);
+    const std::shared_ptr<const engine_core::TableSnapshot> table = batch.lines[0].values[0].table;
+    REQUIRE(table);
+    REQUIRE(table->fields.size() == 2);
+    REQUIRE(table->fields[0].key == "Configs");
+    REQUIRE(table->fields[1].key == "Currencies");
+    REQUIRE(table->fields[1].table);
+    REQUIRE(table->fields[1].table->fields.size() == 3);
+
+    // One command gets one copy, as a script does.
+    rig.runtime.run_chunk("print(require(game.Folder.Config) == require(game.Folder.Config), "
+                          "require(game.Folder.Config).Currencies.Gold)");
+    batch = rig.runtime.drain_output();
+    REQUIRE(batch.lines.size() == 1);
+    REQUIRE(batch.lines[0].text == "true\tGold\n");
+
+    // The next command reads the module again, so an edit while stopped shows.
+    config.set_source("return { Currencies = { Gold = \"Au\" } }");
+    rig.runtime.run_chunk("print(require(game.Folder.Config).Currencies.Gold)");
+    batch = rig.runtime.drain_output();
+    REQUIRE(batch.lines.size() == 1);
+    REQUIRE(batch.lines[0].text == "Au\n");
+
+    // An error in the module is the command's error, and the next require still works.
+    config.set_source("error(\"broken module\")");
+    rig.runtime.run_chunk("print(require(game.Folder.Config))");
+    batch = rig.runtime.drain_output();
+    REQUIRE(batch.lines.size() == 1);
+    REQUIRE(batch.lines[0].kind == engine_core::ScriptRuntime::OutputKind::Error);
+    REQUIRE(batch.lines[0].text.find("broken module") != std::string::npos);
+    config.set_source("return 7");
+    rig.runtime.run_chunk("print(require(game.Folder.Config))");
+    batch = rig.runtime.drain_output();
+    REQUIRE(batch.lines.size() == 1);
+    REQUIRE(batch.lines[0].text == "7\n");
+
+    // Playing: the same, beside a script that requires it in the play VM.
+    config.set_source("return { Gold = \"Gold\" }");
+    add_script(rig.game, "Main", "_G.gold = require(game.Folder.Config).Gold");
+    rig.game.start_simulation();
+    rig.frames(1, 0.05);
+    REQUIRE(rig.runtime.global_is_nil("gold") == false);
+    rig.runtime.drain_output();
+    rig.runtime.run_chunk("print(require(game.Folder.Config).Gold)");
+    batch = rig.runtime.drain_output();
+    REQUIRE(batch.lines.size() == 1);
+    REQUIRE(batch.lines[0].text == "Gold\n");
+}
+
 TEST_CASE("S33 a large printed table is copied up to a cap", "[S33]") {
     ScriptRig rig;
     rig.runtime.run_chunk("local t = {} for i = 1, 6000 do t[i] = i end print(t)");

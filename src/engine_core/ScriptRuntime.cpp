@@ -686,6 +686,7 @@ void ScriptRuntime::close_console() {
     }
     lua_State* state = console_state_;
     console_state_ = nullptr;
+    console_require_cache_.clear();
     lua_Callbacks* callbacks = lua_callbacks(state);
     callbacks->interrupt = nullptr;
     callbacks->panic = nullptr;
@@ -1238,6 +1239,12 @@ void ScriptRuntime::run_chunk(std::string_view source) {
         return;
     }
     refresh_game(console_state_);
+    for (const auto& entry : console_require_cache_) {
+        if (entry.second != LUA_REFNIL) {
+            lua_unref(console_state_, entry.second);
+        }
+    }
+    console_require_cache_.clear();
     eval_chunk(console_state_, source);
 }
 
@@ -1356,8 +1363,16 @@ int ScriptRuntime::require_module(lua_State* state, InstanceId module_id) {
     if (module == nullptr) {
         luaL_error(state, "require expects a ModuleScript");
     }
-    const auto cached = require_cache_.find(module_id);
-    if (cached != require_cache_.end()) {
+    // The module runs in the caller's VM and is cached there: the play VM for scripts,
+    // the console's own VM for the command line.
+    lua_State* vm = lua_mainthread(state);
+    const bool console = console_state_ != nullptr && vm == console_state_;
+    if (!console && vm != state_) {
+        luaL_error(state, "require has no VM for this thread");
+    }
+    std::unordered_map<InstanceId, int>& cache = console ? console_require_cache_ : require_cache_;
+    const auto cached = cache.find(module_id);
+    if (cached != cache.end()) {
         if (cached->second == LUA_REFNIL) {
             lua_pushnil(state);
         } else {
@@ -1380,11 +1395,45 @@ int ScriptRuntime::require_module(lua_State* state, InstanceId module_id) {
         }
     } pop{loading_};
 
-    Thread* caller = ScriptRuntime::thread_from(state);
-    const InstanceId owner = caller != nullptr ? caller->script : 0;
-    const std::uint32_t generation = caller != nullptr ? caller->generation : 0;
-    Thread& thread = new_thread(owner, generation);
-    set_script_global(thread.co, module_id);
+    // A script's module gets a scheduler thread, so its signals belong to that script.
+    // The console's is a plain coroutine anchored until this call returns.
+    lua_State* co = nullptr;
+    Thread* thread = nullptr;
+    struct Anchor {
+        lua_State* vm = nullptr;
+        int ref = LUA_NOREF;
+        ~Anchor() {
+            if (vm != nullptr && ref != LUA_NOREF) {
+                lua_unref(vm, ref);
+            }
+        }
+    } anchor;
+    if (console) {
+        co = lua_newthread(vm);
+        if (co == nullptr) {
+            luaL_error(state, "could not create a ModuleScript thread");
+        }
+        anchor.vm = vm;
+        anchor.ref = lua_ref(vm, -1);
+        lua_pop(vm, 1);
+        luaL_sandboxthread(co);
+        set_script_global(co, module_id);
+    } else {
+        Thread* caller = ScriptRuntime::thread_from(state);
+        const InstanceId owner = caller != nullptr ? caller->script : 0;
+        const std::uint32_t generation = caller != nullptr ? caller->generation : 0;
+        thread = &new_thread(owner, generation);
+        set_script_global(thread->co, module_id);
+        co = thread->co;
+    }
+    struct Finish {
+        Thread* thread;
+        ~Finish() {
+            if (thread != nullptr) {
+                thread->dead = true;
+            }
+        }
+    } finish{thread};
 
     lua_CompileOptions options{};
     options.optimizationLevel = 1;
@@ -1394,40 +1443,35 @@ int ScriptRuntime::require_module(lua_State* state, InstanceId module_id) {
     std::unique_ptr<char, void (*)(void*)> bytecode(
         luau_compile(source.data() != nullptr ? source.data() : "", source.size(), &options, &bytecode_size), std::free);
     if (bytecode == nullptr || bytecode_size == 0) {
-        thread.dead = true;
         luaL_error(state, "could not compile ModuleScript");
     }
     const std::string chunk = "=" + game_->name(module_id);
-    const int loaded = luau_load(thread.co, chunk.c_str(), bytecode.get(), bytecode_size, 0);
+    const int loaded = luau_load(co, chunk.c_str(), bytecode.get(), bytecode_size, 0);
     if (loaded != LUA_OK) {
-        remember_error(thread.co);
+        remember_error(co);
         const std::string message = last_error_;
-        thread.dead = true;
         luaL_error(state, "%s", message.c_str());
     }
-    const int status = lua_resume(thread.co, state, 0);
+    const int status = lua_resume(co, state, 0);
     if (status == LUA_YIELD) {
-        thread.dead = true;
         luaL_error(state, "ModuleScript yielded");
     }
     if (status != LUA_OK) {
-        remember_error(thread.co);
+        remember_error(co);
         const std::string message = last_error_;
-        thread.dead = true;
         luaL_error(state, "%s", message.c_str());
     }
-    if (lua_gettop(thread.co) <= 0 || lua_isnil(thread.co, 1)) {
-        require_cache_[module_id] = LUA_REFNIL;
+    if (lua_gettop(co) <= 0 || lua_isnil(co, 1)) {
+        cache[module_id] = LUA_REFNIL;
         lua_pushnil(state);
         return 1;
     }
-    lua_pushvalue(thread.co, 1);
-    lua_xmove(thread.co, state_, 1);
-    const int ref = lua_ref(state_, -1);
-    lua_pop(state_, 1);
-    require_cache_[module_id] = ref;
+    lua_pushvalue(co, 1);
+    lua_xmove(co, vm, 1);
+    const int ref = lua_ref(vm, -1);
+    lua_pop(vm, 1);
+    cache[module_id] = ref;
     lua_getref(state, ref);
-    thread.dead = true;
     return 1;
 }
 

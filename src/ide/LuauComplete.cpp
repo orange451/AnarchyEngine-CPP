@@ -879,6 +879,12 @@ public:
         if (!base->class_name.empty()) {
             const engine_core::LuaField* field = engine_core::lua_class_find(base->class_name.c_str(), name);
             if (field == nullptr || field->name == nullptr) {
+                // `game.Door` reads the child named Door. A member of that name wins.
+                if (base->instance != kNoInstance) {
+                    if (const engine_core::LuaNode* child = FindChild(world_, base->instance, name)) {
+                        return class_shape(child->class_name.empty() ? "DataModel" : child->class_name, child->id);
+                    }
+                }
                 return none();
             }
             if (!field->method) {
@@ -997,11 +1003,10 @@ public:
             // The receiver of require is the argument, stored on the call below.
         }
         if (callee->resolves_child && literal != nullptr && callee->instance != kNoInstance) {
-            // The child may be missing at runtime, so the result stays optional.
+            // A child that is in the place is that child, not optional, as in
+            // script analysis. A name that is not there may be nil.
             if (const engine_core::LuaNode* child = FindChild(world_, callee->instance, *literal)) {
-                Shape* shape = class_shape(child->class_name.empty() ? "DataModel" : child->class_name, child->id);
-                shape->optional = true;
-                return shape;
+                return class_shape(child->class_name.empty() ? "DataModel" : child->class_name, child->id);
             }
             Shape* shape = class_shape("Instance", kNoInstance);
             shape->optional = true;
@@ -1371,6 +1376,17 @@ public:
                 const char* type_name = field.type_name != nullptr ? field.type_name : "";
                 take(field.name, field.method ? "function" : type_name, field.method, field.method,
                      documented_member(shape, field.name, type_name));
+            }
+            // After '.', the instance's children by name. Members came first, so
+            // a child named like one is left out, as `game.Name` reads the member.
+            // A name that is not an identifier needs FindFirstChild.
+            if (!colon && shape->instance != kNoInstance) {
+                for (const engine_core::LuaNode& node : world_) {
+                    if (node.parent == shape->instance && node.id != shape->instance && IsIdent(node.name) &&
+                        KeywordText(node.name) == nullptr) {
+                        take(node.name, node.class_name.empty() ? "Instance" : node.class_name, false, false, nullptr);
+                    }
+                }
             }
         }
         if (!shape->library.empty()) {

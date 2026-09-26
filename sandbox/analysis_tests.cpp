@@ -295,7 +295,10 @@ TEST_CASE("A9 pump is the only publisher", "[A9]") {
     REQUIRE(analysis.idle());
 }
 
-TEST_CASE("A10 a known child keeps its class and may still be nil", "[A10]") {
+// A script is checked against the place in the explorer. A child that is there
+// is found: FindFirstChild gives that child's class with no nil, so no assert
+// is needed. Only a name that is not in the place is Instance?.
+TEST_CASE("A10 a child in the place is its class and never nil", "[A10]") {
     ScriptRig rig;
     engine_core::TestTriangle& triangle = rig.model.create<engine_core::TestTriangle>();
     rig.model.set_name(triangle.id(), "Tri0");
@@ -307,21 +310,25 @@ TEST_CASE("A10 a known child keeps its class and may still be nil", "[A10]") {
                                             "local home = tri.Position\n"
                                             "return home\n");
     settle(analysis);
-    const std::vector<engine_core::Diagnostic> bare_diagnostics = analysis.diagnostics(bare.id());
-    INFO(dump(bare_diagnostics));
-    bool position_missing = false;
-    bool nil_warning = false;
-    for (const engine_core::Diagnostic& diagnostic : bare_diagnostics) {
-        if (diagnostic.message.find("Position") != std::string::npos &&
-            diagnostic.message.find("not found") != std::string::npos) {
-            position_missing = true;
-        }
-        if (diagnostic.message.find("nil") != std::string::npos) {
-            nil_warning = true;
-        }
+    INFO(dump(analysis.diagnostics(bare.id())));
+    REQUIRE(analysis.diagnostics(bare.id()).empty());
+
+    SECTION("the type has no nil in it") {
+        bare.set_source("--!strict\nlocal tri = game:FindFirstChild(\"Tri0\")\nlocal n: number = tri\n");
+        settle(analysis);
+        const std::string report = dump(analysis.diagnostics(bare.id()));
+        INFO(report);
+        REQUIRE(report.find("'TestTriangle'") != std::string::npos);
+        REQUIRE(report.find("TestTriangle?") == std::string::npos);
     }
-    REQUIRE_FALSE(position_missing);
-    REQUIRE(nil_warning);
+
+    SECTION("a name that is not in the place may be nil") {
+        bare.set_source("local tri = game:FindFirstChild(\"Nope\")\nlocal name = tri.Name\nreturn name\n");
+        settle(analysis);
+        const std::string report = dump(analysis.diagnostics(bare.id()));
+        INFO(report);
+        REQUIRE(report.find("could be nil") != std::string::npos);
+    }
 
     engine_core::Script& hop = add_script(rig.model, "Hop",
                                            "local tri = game:FindFirstChild(\"Tri0\")\n"
@@ -696,4 +703,121 @@ TEST_CASE("A19 a dotted name that reaches a child is not an unknown member", "[A
     found = analysis.diagnostics(script.id());
     INFO(dump(found));
     REQUIRE(found.size() == 3);
+}
+
+// A dotted child has that child's type, so what follows the dot is checked
+// too: its members, its own children, a local holding it, and a require.
+TEST_CASE("A20 a dotted name is the child it reaches, with its type", "[A20]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.model);
+    engine_core::Folder& configs = rig.model.create<engine_core::Folder>();
+    rig.model.set_name(configs.id(), "Configs");
+    rig.model.set_parent(configs.id(), rig.model.id());
+    engine_core::TestTriangle& inner = rig.model.create<engine_core::TestTriangle>();
+    rig.model.set_name(inner.id(), "SomeInstance");
+    rig.model.set_parent(inner.id(), configs.id());
+    // A child named like a property: the property wins, as at run time.
+    engine_core::Folder& named = rig.model.create<engine_core::Folder>();
+    rig.model.set_name(named.id(), "Name");
+    rig.model.set_parent(named.id(), configs.id());
+    engine_core::ModuleScript& config = add_module(rig.model, "Config", "return { Gold = 1 }\n");
+    rig.model.set_parent(config.id(), configs.id());
+    engine_core::Script& script = add_script(rig.model, "Test",
+                                             "local some = game.Configs.SomeInstance\n"
+                                             "local home = some.Position\n"
+                                             "game.Configs.SomeInstance.Position = home\n"
+                                             "local again = script.Parent.Configs.SomeInstance.Position\n"
+                                             "local folder = game.Configs\n"
+                                             "local found = folder:FindFirstChild(\"SomeInstance\").Position\n"
+                                             "local label: string = game.Configs.Name\n"
+                                             "local gold = require(game.Configs.Config).Gold\n"
+                                             "return again, found, label, gold\n");
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(script.id())));
+    REQUIRE(analysis.diagnostics(script.id()).empty());
+
+    SECTION("the child keeps its class") {
+        script.set_source("--!strict\nlocal n: number = game.Configs.SomeInstance\n");
+        settle(analysis);
+        const std::string report = dump(analysis.diagnostics(script.id()));
+        INFO(report);
+        REQUIRE(report.find("'TestTriangle'") != std::string::npos);
+    }
+
+    SECTION("a member the child's class lacks is reported") {
+        script.set_source("local s = game.Configs.SomeInstance.Source\nreturn s\n");
+        settle(analysis);
+        const std::string report = dump(analysis.diagnostics(script.id()));
+        INFO(report);
+        REQUIRE(report.find("Source") != std::string::npos);
+    }
+
+    SECTION("a child that is not there is reported, past the first dot too") {
+        script.set_source("local a = game.Configs.Missing\nreturn a\n");
+        settle(analysis);
+        const std::string report = dump(analysis.diagnostics(script.id()));
+        INFO(report);
+        REQUIRE(report.find("Missing") != std::string::npos);
+    }
+
+    SECTION("a required module's type comes through a dotted path") {
+        script.set_source("--!strict\nlocal gold: string = require(game.Configs.Config).Gold\n");
+        settle(analysis);
+        const std::string report = dump(analysis.diagnostics(script.id()));
+        INFO(report);
+        REQUIRE(report.find("Unknown require") == std::string::npos);
+        REQUIRE(report.find("@1:") != std::string::npos);
+    }
+
+    SECTION("a child is read-only") {
+        script.set_source("game.Configs.SomeInstance = nil\n");
+        settle(analysis);
+        INFO(dump(analysis.diagnostics(script.id())));
+        REQUIRE_FALSE(analysis.diagnostics(script.id()).empty());
+    }
+}
+
+// The script from the editor: every lookup reaches something in the explorer,
+// so nothing is nil and there is nothing to report.
+TEST_CASE("A21 FindFirstChild chains to a module in the place with no nil warning", "[A21]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.model);
+    analysis.set_scope(engine_core::AnalysisScope::Open);
+    engine_core::Folder& modules = rig.model.create<engine_core::Folder>();
+    rig.model.set_name(modules.id(), "Modules");
+    rig.model.set_parent(modules.id(), rig.model.id());
+    engine_core::ModuleScript& config = add_module(rig.model, "Config",
+                                                   "local Config = {}\n"
+                                                   "Config.Currencies = { Gold = \"Gold\" }\n"
+                                                   "Config.Settings = { DeleteEveryFileOnTheComputer = false }\n"
+                                                   "return Config\n");
+    rig.model.set_parent(config.id(), modules.id());
+    const char* source =
+        "local Config = require(game:FindFirstChild(\"Modules\"):FindFirstChild(\"Config\"))\n"
+        "\n"
+        "local currency = Config.Currencies.Gold\n"
+        "\n"
+        "Config.Settings.DeleteEveryFileOnTheComputer = true\n"
+        "\n"
+        "print(\"Currency:\", currency, \"Setting:\", Config.Settings.DeleteEveryFileOnTheComputer)\n";
+    engine_core::Script& script = add_script(rig.model, "Test", source);
+    analysis.watch(script.id());
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(script.id())));
+    REQUIRE(analysis.diagnostics(script.id()).empty());
+
+    SECTION("in strict mode too") {
+        script.set_source(std::string("--!strict\n") + source);
+        settle(analysis);
+        INFO(dump(analysis.diagnostics(script.id())));
+        REQUIRE(analysis.diagnostics(script.id()).empty());
+    }
+
+    SECTION("renaming the folder away brings the nil warning back") {
+        rig.model.set_name(modules.id(), "Elsewhere");
+        settle(analysis);
+        const std::string report = dump(analysis.diagnostics(script.id()));
+        INFO(report);
+        REQUIRE(report.find("could be nil") != std::string::npos);
+    }
 }

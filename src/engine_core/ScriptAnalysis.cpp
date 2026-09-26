@@ -287,38 +287,108 @@ std::vector<InstanceId> find_requires(const WorldSnap& world, InstanceId self, L
     return walk.required;
 }
 
-// `game.Door` reads the child named Door at run time. The type checker only
-// knows class members, so it reports Door as unknown. These are the dotted
-// names in a script that reach a real child in the snapshot.
-struct DotChildWalk : Luau::AstVisitor {
-    const WorldSnap* world = nullptr;
-    InstanceId self = 0;
-    std::vector<Luau::Position> found;
+// The instance an extern type in PlaceTypes stands for. Cloning a type keeps
+// this pointer, so a module's exported copy still names the same instance.
+struct InstanceTag final : Luau::ClassUserData {
+    InstanceId id = 0;
 
-    bool visit(Luau::AstExprIndexName* index) override {
-        if (index->index != "Parent" && resolve_expr(*world, self, index)) {
-            found.push_back(index->location.begin);
-            found.push_back(index->indexLocation.begin);
+    explicit InstanceTag(InstanceId id) : id(id) {}
+};
+
+// One extern type per instance in a snapshot, so a script is checked against
+// the place it runs in. Each extends its instance's class. Its children are
+// read-only fields named like them, the first of a name in sibling order, as
+// `game.Door` reads at run time; a class member of the same name wins. Parent
+// reads as the parent's type and still takes any Instance on write. `game` and
+// `script` are bound to these in every module the frontend checks.
+struct PlaceTypes {
+    std::shared_ptr<const WorldSnap> world;
+    Luau::TypeArena arena;
+    std::unordered_map<InstanceId, Luau::TypeId> types;
+
+    std::optional<Luau::TypeId> find(InstanceId id) const {
+        const auto found = types.find(id);
+        if (found == types.end()) {
+            return std::nullopt;
         }
-        return true;
+        return found->second;
     }
 };
 
-std::vector<Luau::Position> dot_children(const WorldSnap& world, InstanceId self, Luau::AstStatBlock* root) {
-    DotChildWalk walk;
-    walk.world = &world;
-    walk.self = self;
-    root->visit(&walk);
-    return walk.found;
+std::optional<Luau::TypeId> class_type(const Luau::Scope& scope, const std::string& name) {
+    const std::optional<Luau::TypeFun> type_fun = scope.lookupType(name);
+    if (!type_fun) {
+        return std::nullopt;
+    }
+    const Luau::TypeId type = Luau::follow(type_fun->type);
+    if (Luau::get<Luau::ExternType>(type) == nullptr) {
+        return std::nullopt;
+    }
+    return type;
 }
 
-// A missing-member error on a dotted name that is a child in the place.
-bool reaches_child(const Luau::TypeError& error, const std::vector<Luau::Position>& children) {
-    if (Luau::get<Luau::UnknownProperty>(error) == nullptr &&
-        Luau::get<Luau::UnknownPropButFoundLikeProp>(error) == nullptr) {
-        return false;
+std::unique_ptr<PlaceTypes> build_place_types(const Luau::Scope& globals, std::shared_ptr<const WorldSnap> world) {
+    auto place = std::make_unique<PlaceTypes>();
+    place->world = std::move(world);
+    std::unordered_map<InstanceId, const NodeSnap*> nodes;
+    for (const NodeSnap& node : place->world->nodes) {
+        nodes[node.id] = &node;
+        std::optional<Luau::TypeId> base = class_type(globals, node.class_name);
+        if (!base) {
+            base = class_type(globals, "DataModel");
+        }
+        if (!base) {
+            continue;
+        }
+        const Luau::ExternType* base_class = Luau::get<Luau::ExternType>(*base);
+        place->types[node.id] = place->arena.addType(Luau::ExternType{base_class->name, {}, *base, std::nullopt, {},
+                                                                      std::make_shared<InstanceTag>(node.id), "@anarchy",
+                                                                      std::nullopt});
     }
-    return std::find(children.begin(), children.end(), error.location.begin) != children.end();
+    for (const NodeSnap& node : place->world->nodes) {
+        const std::optional<Luau::TypeId> own = place->find(node.id);
+        if (!own) {
+            continue;
+        }
+        Luau::ExternType* type = Luau::getMutable<Luau::ExternType>(*own);
+        const Luau::ExternType* base_class = Luau::get<Luau::ExternType>(*type->parent);
+        for (InstanceId child : node.children) {
+            const auto child_node = nodes.find(child);
+            const std::optional<Luau::TypeId> child_type = place->find(child);
+            if (child_node == nodes.end() || !child_type) {
+                continue;
+            }
+            const std::string& name = child_node->second->name;
+            if (name.empty() || type->props.count(name) != 0 || Luau::lookupExternTypeProp(base_class, name) != nullptr) {
+                continue;
+            }
+            type->props[name] = Luau::Property::readonly(*child_type);
+        }
+        const std::optional<Luau::TypeId> parent =
+            node.parent != DataModel::kNoParent ? place->find(node.parent) : std::nullopt;
+        if (!parent) {
+            continue;
+        }
+        const Luau::Property* declared = Luau::lookupExternTypeProp(base_class, "Parent");
+        if (declared != nullptr && declared->writeTy) {
+            type->props["Parent"] = Luau::Property::rw(*parent, *declared->writeTy);
+        } else {
+            type->props["Parent"] = Luau::Property::readonly(*parent);
+        }
+    }
+    return place;
+}
+
+std::optional<InstanceId> tagged_instance(Luau::TypeId type) {
+    const Luau::ExternType* extern_type = Luau::get<Luau::ExternType>(Luau::follow(type));
+    if (extern_type == nullptr) {
+        return std::nullopt;
+    }
+    const auto* tag = dynamic_cast<const InstanceTag*>(extern_type->userData.get());
+    if (tag == nullptr) {
+        return std::nullopt;
+    }
+    return tag->id;
 }
 
 bool missing_render_member(const Luau::TypeError& error) {
@@ -334,8 +404,10 @@ bool missing_render_member(const Luau::TypeError& error) {
 struct WorkerEnv;
 
 // FindFirstChild's declared return is Instance?. When the name is a string
-// literal and that child is in the place, the result is that child's class,
-// still optional. assert then removes the nil. WaitForChild's is not optional.
+// literal and that child is in the place, the result is that child, not
+// optional: the script is checked against the tree in the explorer, the same
+// way `game.Door` is. A name that is not there keeps the declared Instance?.
+// WaitForChild and any other lookup the API flags resolves_child work the same.
 struct FindChildMagic final : Luau::MagicFunction {
     WorkerEnv* env = nullptr;
 
@@ -508,6 +580,9 @@ struct WorkerEnv {
     InstanceId self = 0;
     // The snapshot the frontend's cached modules were checked against.
     std::shared_ptr<const WorldSnap> checked_world;
+    // Built from checked_world. Every script is marked dirty when it is
+    // replaced, so no cached module still uses the old one's types.
+    std::unique_ptr<PlaceTypes> place;
     std::shared_ptr<Luau::MagicFunction> find_child;
     std::shared_ptr<Luau::MagicFunction> service_result;
     std::shared_ptr<Luau::MagicFunction> creatable_result;
@@ -518,6 +593,21 @@ struct WorkerEnv {
         configs.config.enabledLint.setDefaults();
         frontend = std::make_unique<Luau::Frontend>(Luau::SolverMode::New, &files, &configs, Luau::FrontendOptions{});
         frontend->iceHandler.onInternalError = [](const char*) {};
+        // `game` is this place's root and `script` is the instance the module
+        // belongs to, children and all, instead of their bare classes.
+        frontend->prepareModuleScope = [this](const Luau::ModuleName& name, const Luau::ScopePtr& scope, bool) {
+            if (place == nullptr) {
+                return;
+            }
+            if (const std::optional<Luau::TypeId> root = place->find(place->world->root)) {
+                scope->bindings[Luau::AstName("game")] = Luau::Binding{*root};
+            }
+            if (const std::optional<InstanceId> owner = instance_of_module(name)) {
+                if (const std::optional<Luau::TypeId> self = place->find(*owner)) {
+                    scope->bindings[Luau::AstName("script")] = Luau::Binding{*self};
+                }
+            }
+        };
         try {
             Luau::unfreeze(frontend->globals.globalTypes);
             Luau::registerBuiltinGlobals(*frontend, frontend->globals);
@@ -706,34 +796,39 @@ bool FindChildMagic::infer(const Luau::MagicFunctionCallContext& context) {
             self = *owner;
         }
     }
-    const std::optional<InstanceId> child =
-        resolve_expr(*env->world, self, const_cast<Luau::AstExprCall*>(context.callSite.get()));
+    // The receiver's type names its instance when it came from game, script, a
+    // dotted child, or an earlier lookup, even through a local. Otherwise the
+    // call's own path is followed.
+    std::optional<InstanceId> child;
+    const Luau::AstExprCall* call = context.callSite.get();
+    const auto* literal = call->args.size >= 1 ? call->args.data[0]->as<Luau::AstExprConstantString>() : nullptr;
+    if (call->self && literal != nullptr && literal->isQuoted()) {
+        const auto [head, tail] = Luau::flatten(context.arguments);
+        if (!head.empty()) {
+            if (const std::optional<InstanceId> receiver = tagged_instance(head[0])) {
+                child = env->world->child_named(*receiver, string_literal(literal->value));
+            }
+        }
+    }
+    if (!child) {
+        child = resolve_expr(*env->world, self, const_cast<Luau::AstExprCall*>(call));
+    }
     if (!child) {
         return false;
     }
-    const NodeSnap* node = env->world->find(*child);
-    if (node == nullptr || node->class_name.empty()) {
-        return false;
+    std::optional<Luau::TypeId> result = env->place != nullptr ? env->place->find(*child) : std::nullopt;
+    if (!result) {
+        const NodeSnap* node = env->world->find(*child);
+        if (node == nullptr || node->class_name.empty()) {
+            return false;
+        }
+        result = class_type(*context.solver->rootScope, node->class_name);
     }
-    const std::optional<Luau::TypeFun> type_fun = context.solver->rootScope->lookupType(node->class_name);
-    if (!type_fun) {
-        return false;
-    }
-    const Luau::TypeId class_ty = Luau::follow(type_fun->type);
-    if (Luau::get<Luau::ExternType>(class_ty) == nullptr) {
+    if (!result) {
         return false;
     }
     Luau::TypeArena* arena = context.solver->arena.get();
-    // FindFirstChild can give nil and stays optional. WaitForChild declares
-    // Instance, since it yields until the child is there.
-    Luau::TypeId result = class_ty;
-    const auto* method = context.callSite->func->as<Luau::AstExprIndexName>();
-    const LuaField* field = method != nullptr ? lua_class_find("DataModel", method->index.value) : nullptr;
-    const std::string_view declared = field != nullptr && field->type_name != nullptr ? field->type_name : "?";
-    if (declared.empty() || declared.back() == '?') {
-        result = arena->addType(Luau::UnionType{{context.solver->builtinTypes->nilType, class_ty}});
-    }
-    Luau::asMutable(context.result)->ty.emplace<Luau::BoundTypePack>(arena->addTypePack({result}));
+    Luau::asMutable(context.result)->ty.emplace<Luau::BoundTypePack>(arena->addTypePack({*result}));
     return true;
 }
 
@@ -875,6 +970,7 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
                 }
             }
             env.checked_world = job.world;
+            env.place = build_place_types(*env.frontend->globals.globalScope, job.world);
         }
         env.files.module_name = &module_name;
         env.files.world = job.world.get();
@@ -900,16 +996,9 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
         }
         Luau::TypeErrorToStringOptions stringify;
         stringify.fileResolver = &env.files;
-        const std::vector<Luau::Position> children =
-            parsed.root != nullptr ? dot_children(*job.world, job.id, parsed.root) : std::vector<Luau::Position>{};
         for (const Luau::TypeError& error : checked.errors) {
             // A required module reports its own problems when it is analyzed.
             if (error.moduleName != module_name) {
-                continue;
-            }
-            // `game.Door` with Door in the place runs. Its type is unknown to the
-            // checker, so later uses of it are not reported either.
-            if (reaches_child(error, children)) {
                 continue;
             }
             if (Luau::get<Luau::SyntaxError>(error) != nullptr) {

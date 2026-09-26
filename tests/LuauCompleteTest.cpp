@@ -1856,6 +1856,62 @@ void testSkipped() {
     }
 }
 
+// `game.Configs.Door` reads children by name, as scripts run. A child that is
+// in the place is its class, never optional, whether reached by a dot or by
+// FindFirstChild; only a name that is not there may be nil.
+void testDotChildren() {
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(3, 0, "Configs", "Folder"));
+    world.push_back(node(4, 3, "Tri0", "TestTriangle"));
+    world.push_back(node(6, 3, "Name", "Folder"));
+    world.push_back(node(7, 3, "My Part", "Folder"));
+    world.push_back(node(5, 0, "Main", "Script"));
+
+    const ide::CompletionList root = at_end("game.", world, 5);
+    expect_has(root, "Configs", "game. child");
+    expect_detail(root, "Configs", "Folder", "game.Configs detail");
+    expect_has(root, "Main", "game. script child");
+    expect_has(root, "FindFirstChild", "game. member");
+
+    const ide::CompletionList configs = at_end("game.Configs.", world, 5);
+    expect_has(configs, "Tri0", "game.Configs. child");
+    expect_detail(configs, "Tri0", "TestTriangle", "game.Configs.Tri0 detail");
+    expect_has(configs, "Name", "game.Configs.Name");
+    expect_detail(configs, "Name", "string", "a member wins over a child of that name");
+    expect_missing(configs, "My Part", "a child that is not an identifier");
+    expect_missing(configs, "Position", "Folder has no Position");
+
+    const ide::CompletionList triangle = at_end("game.Configs.Tri0.", world, 5);
+    expect_has(triangle, "Position", "game.Configs.Tri0.Position");
+    expect_missing(triangle, "Source", "game.Configs.Tri0.Source");
+
+    const ide::CompletionList local = at_end("local tri = game.Configs.Tri0\ntri.", world, 5);
+    expect_has(local, "Position", "a local holding a dotted child");
+
+    const ide::CompletionList parent = at_end("script.Parent.Configs.", world, 5);
+    expect_has(parent, "Tri0", "script.Parent.Configs.");
+
+    const ide::CompletionList found = at_end("game:FindFirstChild(\"Configs\").", world, 5);
+    expect_has(found, "Tri0", "FindFirstChild then a dot");
+
+    const ide::CompletionList colon = at_end("game.Configs:", world, 5);
+    expect_missing(colon, "Tri0", "a colon offers methods, not children");
+
+    const ide::CompletionList missing = at_end("game.Nope.", world, 5);
+    expect_missing(missing, "Name", "a child that is not there");
+
+    const char* lookup = "local tri = game:FindFirstChild(\"Configs\"):FindFirstChild(\"Tri0\")\nprint(tri)\n";
+    expect_hover(ide::hover_luau(lookup, find_nth(lookup, "tri", 1), world, 5), "tri: TestTriangle", nullptr, nullptr,
+                 "a child in the place is not optional");
+    const char* dotted = "local tri = game.Configs.Tri0\nprint(tri)\n";
+    expect_hover(ide::hover_luau(dotted, find_nth(dotted, "tri", 1), world, 5), "tri: TestTriangle", nullptr, nullptr,
+                 "a dotted child");
+    const char* absent = "local gone = game:FindFirstChild(\"Nope\")\nprint(gone)\n";
+    expect_hover(ide::hover_luau(absent, find_nth(absent, "gone", 1), world, 5), "gone: Instance?", nullptr, nullptr,
+                 "a name that is not there may be nil");
+}
+
 }  // namespace
 
 int RunLuauCompleteTests() {
@@ -1877,6 +1933,7 @@ int RunLuauCompleteTests() {
         testTuples();
         testDirectives();
         testSkipped();
+        testDotChildren();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());
     }

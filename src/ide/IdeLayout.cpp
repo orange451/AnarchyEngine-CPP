@@ -354,7 +354,6 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
             delete_instances(ids);
         }
     };
-    host.modifiers = [this] { return held_mods_; };
     host.enabled = [this](std::string_view action) { return action_enabled(action); };
     host.rename = [this](engine_core::InstanceId id, std::string name) { rename(id, std::move(name)); };
     host.insert = [this](std::string class_name, engine_core::InstanceId parent, std::shared_ptr<InsertResult> result) {
@@ -454,7 +453,6 @@ void IdeLayout::mount(jadefx::Scene& scene) {
     scene.setStylesheet(kStylesheet);
     scene.setRoot(root_);
     scene.addKeyHook([this](jadefx::KeyEvent& event) {
-        noteModifiers(event);
         if (scene_ != nullptr) {
             routeUndo(event, *scene_);
             routeDelete(event, *scene_);
@@ -1235,25 +1233,6 @@ void IdeLayout::delete_instances(std::vector<std::uint32_t> ids) {
             CloseGesture(world);
         }
     });
-}
-
-void IdeLayout::noteModifiers(const jadefx::KeyEvent& event) {
-    int mods = (event.shift ? jadefx::Key::ModShift : 0) | (event.control ? jadefx::Key::ModControl : 0) |
-               (event.alt ? jadefx::Key::ModAlt : 0) | (event.meta ? jadefx::Key::ModSuper : 0);
-    int own = 0;
-    if (event.key == jadefx::Key::LeftShift || event.key == jadefx::Key::RightShift) {
-        own = jadefx::Key::ModShift;
-    } else if (event.key == jadefx::Key::LeftControl || event.key == jadefx::Key::RightControl) {
-        own = jadefx::Key::ModControl;
-    } else if (event.key == jadefx::Key::LeftAlt || event.key == jadefx::Key::RightAlt) {
-        own = jadefx::Key::ModAlt;
-    } else if (event.key == jadefx::Key::LeftSuper || event.key == jadefx::Key::RightSuper) {
-        own = jadefx::Key::ModSuper;
-    }
-    if (own != 0) {
-        mods = event.pressed ? (mods | own) : (mods & ~own);
-    }
-    held_mods_ = mods;
 }
 
 void IdeLayout::routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene) {

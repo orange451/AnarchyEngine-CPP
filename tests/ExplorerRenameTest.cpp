@@ -52,7 +52,6 @@ struct Rig {
             batches.emplace_back(std::string(action), ids);
         };
         host.enabled = [](std::string_view) { return true; };
-        host.modifiers = [this] { return mods; };
         host.rename = [this](engine_core::InstanceId id, std::string name) {
             model.set_name(id, name);
             renames.emplace_back(id, std::move(name));
@@ -99,13 +98,13 @@ struct Rig {
         }
         const double x = row->getAbsoluteX() + row->getWidth() * 0.4;
         const double y = row->getAbsoluteY() + row->getHeight() * 0.5;
-        scene->noteButton(button, true, x, y);
-        scene->noteButton(button, false, x, y);
+        scene->noteButton(button, true, x, y, mods);
+        scene->noteButton(button, false, x, y, mods);
     }
 
     void key(int code) { scene->noteKey(code, true, false, 0); }
 
-    // The row draws the selection bar: the tree's own row, or one the explorer painted.
+    // The row draws the selection bar.
     bool painted(const std::string& name) {
         jadefx::Node* row = cell(name);
         if (row == nullptr) {
@@ -364,7 +363,7 @@ void TestSetShowsInTheTree() {
     rig.frame(0.2);
     Expect(rig.painted("Beta") && rig.painted("Gamma") && !rig.painted("Alpha"), "a Set shows in the explorer");
     jadefx::Node* gamma = rig.cell("Gamma");
-    Expect(gamma != nullptr && gamma->isSelected(), "the tree's own row moves to the last selected");
+    Expect(gamma != nullptr && gamma->isSelected(), "the tree marks a selected row");
 
     rig.model.selection().set({});
     rig.frame(0.3);
@@ -430,6 +429,23 @@ void TestRightClickKeepsTheSelection() {
     Expect(rig.selection() == rig.pick({1}), "a right-click on another row selects only it");
 }
 
+void TestRebuildKeepsTheSelection() {
+    Rig rig;
+    rig.clickRow("Alpha", 0.1);
+    rig.mods = jadefx::Key::ModControl;
+    rig.clickRow("Gamma", 0.8);
+    rig.mods = 0;
+    // Enough new rows at once that the explorer rebuilds the tree detached.
+    for (int i = 0; i < 12; ++i) {
+        engine_core::Folder& folder = rig.model.create<engine_core::Folder>();
+        rig.model.set_parent(folder.id(), rig.model.id());
+    }
+    rig.frame(0.9);
+    rig.frame(1.0);
+    Expect(rig.selection() == rig.pick({0, 2}), "a rebuild does not change the selection");
+    Expect(rig.painted("Alpha") && rig.painted("Gamma") && !rig.painted("Beta"), "a rebuild keeps the rows drawn");
+}
+
 void TestDeleteRunsOnTheSelection() {
     Rig rig;
     rig.clickRow("Beta", 0.1);
@@ -465,6 +481,7 @@ int main() {
     TestSelectionIsShared();
     TestKeysMoveTheSelection();
     TestRightClickKeepsTheSelection();
+    TestRebuildKeepsTheSelection();
     TestDeleteRunsOnTheSelection();
     if (gFailures == 0) {
         std::printf("explorer tests passed\n");

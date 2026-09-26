@@ -371,6 +371,10 @@ TEST_CASE("analysis definitions come from the class registry", "[A11]") {
     REQUIRE(source.find("workspace") == std::string::npos);
     REQUIRE(source.find("BasePart") == std::string::npos);
     REQUIRE(source.find("GetPropertyChangedSignal") == std::string::npos);
+    // Instance is the base every instance class reaches, not a subclass of DataModel.
+    REQUIRE(source.find("declare extern type Instance with") != std::string::npos);
+    REQUIRE(source.find("declare extern type DataModel extends Instance with") != std::string::npos);
+    REQUIRE(source.find("declare extern type Folder extends DataModel with") != std::string::npos);
 }
 
 TEST_CASE("disabling script analysis drops diagnostics", "[A]") {
@@ -819,5 +823,62 @@ TEST_CASE("A21 FindFirstChild chains to a module in the place with no nil warnin
         const std::string report = dump(analysis.diagnostics(script.id()));
         INFO(report);
         REQUIRE(report.find("could be nil") != std::string::npos);
+    }
+}
+
+// Instance names the instance base, so any instance can be a Parent or go
+// where an Instance is asked for: a Folder, game, a child, a new instance.
+TEST_CASE("A22 any instance is an Instance: Parent takes a Folder or game", "[A22]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.model);
+    engine_core::Folder& box = rig.model.create<engine_core::Folder>();
+    rig.model.set_name(box.id(), "Box");
+    rig.model.set_parent(box.id(), rig.model.id());
+    engine_core::TestTriangle& tri = rig.model.create<engine_core::TestTriangle>();
+    rig.model.set_name(tri.id(), "Tri0");
+    rig.model.set_parent(tri.id(), box.id());
+    const char* source =
+        "local box = game:FindFirstChild(\"Box\")\n"
+        "local tri = game.Box.Tri0\n"
+        "tri.Parent = box\n"
+        "tri.Parent = game\n"
+        "tri.Parent = nil\n"
+        "local folder = Instance.new(\"Folder\")\n"
+        "folder.Parent = game\n"
+        "tri.Parent = folder\n"
+        "for _, child in game:GetChildren() do\n"
+        "    child.Parent = box\n"
+        "end\n"
+        "local root: Instance = game\n"
+        "local found: Instance? = box:FindFirstChild(\"Tri0\")\n"
+        "game:GetService(\"Selection\"):Set({box, tri, game})\n"
+        "return root, found\n";
+    engine_core::Script& script = add_script(rig.model, "Parenting", source);
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(script.id())));
+    REQUIRE(analysis.diagnostics(script.id()).empty());
+
+    SECTION("in strict mode too") {
+        script.set_source(std::string("--!strict\n") + source);
+        settle(analysis);
+        INFO(dump(analysis.diagnostics(script.id())));
+        REQUIRE(analysis.diagnostics(script.id()).empty());
+    }
+
+    SECTION("a value that is not an instance is still refused") {
+        script.set_source("--!strict\nlocal tri = game.Box.Tri0\ntri.Parent = 5\n");
+        settle(analysis);
+        const std::string report = dump(analysis.diagnostics(script.id()));
+        INFO(report);
+        REQUIRE(report.find("@2:") != std::string::npos);
+        REQUIRE(report.find("Instance?") != std::string::npos);
+    }
+
+    SECTION("a missing child still reads as Instance?") {
+        script.set_source("--!strict\nlocal gone = game:FindFirstChild(\"Nope\")\nlocal n: number = gone\n");
+        settle(analysis);
+        const std::string report = dump(analysis.diagnostics(script.id()));
+        INFO(report);
+        REQUIRE(report.find("Instance?") != std::string::npos);
     }
 }

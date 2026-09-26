@@ -18,8 +18,10 @@ public:
     // One undo step that replaces [byte, byte + remove_count).
     void replace(std::size_t byte, std::size_t remove_count, std::string inserted);
 
-    // Code-point index, matching a text widget's plain-text change.
-    void record_change(int code_point, const std::string& removed, const std::string& inserted);
+    // Code-point index, matching a text widget's plain-text change. False when the
+    // change does not fit the tracked text; the stack is then out of sync and the
+    // caller should reset it from the widget.
+    bool record_change(int code_point, const std::string& removed, const std::string& inserted);
 
     bool can_undo() const { return !undo_.empty(); }
     bool can_redo() const { return !redo_.empty(); }

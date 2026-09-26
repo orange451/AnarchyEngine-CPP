@@ -143,15 +143,22 @@ void TextUndoStack::erase(std::size_t index, std::size_t count) {
     push(std::move(edit));
 }
 
-void TextUndoStack::record_change(int code_point, const std::string& removed, const std::string& inserted) {
+bool TextUndoStack::record_change(int code_point, const std::string& removed, const std::string& inserted) {
     if (removed.empty() && inserted.empty()) {
-        return;
+        return true;
+    }
+    // A position past the end means the widget holds text this stack never saw.
+    // byte_at would clamp it and quietly record the edit against the wrong buffer.
+    if (code_point < 0 || code_point > code_points(text_)) {
+        undo_.clear();
+        redo_.clear();
+        return false;
     }
     const std::size_t byte = byte_at(text_, code_point);
     if (byte > text_.size() || text_.compare(byte, removed.size(), removed) != 0) {
         undo_.clear();
         redo_.clear();
-        return;
+        return false;
     }
     Edit edit;
     edit.byte = byte;
@@ -162,6 +169,7 @@ void TextUndoStack::record_change(int code_point, const std::string& removed, co
     text_.replace(byte, removed.size(), inserted);
     caret_ = edit.caret_after_redo;
     push(std::move(edit));
+    return true;
 }
 
 bool TextUndoStack::undo() {

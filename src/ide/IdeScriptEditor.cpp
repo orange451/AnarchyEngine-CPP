@@ -141,7 +141,11 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     define_styles(*area_);
     area_->setOnPlainTextChange([this](const jadefx::PlainTextChange& change) {
         if (!loading_ && !mute_undo_ && undo_stack_ != nullptr) {
-            undo_stack_->record_change(change.position, change.removed, change.inserted);
+            if (!undo_stack_->record_change(change.position, change.removed, change.inserted)) {
+                // The stack lost track of the buffer. Restart it from what is on screen so
+                // an undo can never roll the script back to text it does not hold.
+                undo_stack_->reset(area_->getText());
+            }
         }
         note_text();
     });
@@ -192,7 +196,14 @@ void IdeScriptEditor::focus() {
     }
 }
 
-void IdeScriptEditor::bindUndo(TextUndoStack* stack) { undo_stack_ = stack; }
+void IdeScriptEditor::bindUndo(TextUndoStack* stack) {
+    undo_stack_ = stack;
+    // The constructor loads the source before this is bound. Seed the stack with it,
+    // or its baseline is empty and undo wipes the script.
+    if (undo_stack_ != nullptr && area_ && loaded_) {
+        undo_stack_->reset(area_->getText());
+    }
+}
 
 void IdeScriptEditor::applyUndoText() {
     if (!area_ || undo_stack_ == nullptr || area_->getText() == undo_stack_->text()) {

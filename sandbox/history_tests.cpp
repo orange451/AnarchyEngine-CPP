@@ -480,3 +480,23 @@ TEST_CASE("H15 applying undo does not record a waypoint", "[H15][history]") {
     REQUIRE_FALSE(model.history().can_undo().first);
     REQUIRE(model.history().can_redo().second == "Set Color");
 }
+
+TEST_CASE("H16 a text stack out of sync with the editor refuses the edit", "[H16][history]") {
+    // An editor that loaded "print(1)" but whose stack was never seeded: typing at
+    // the end must not be recorded against an empty buffer, or undo empties the script.
+    ide::TextUndoStack text;
+    REQUIRE_FALSE(text.record_change(8, "", "\n"));
+    REQUIRE_FALSE(text.can_undo());
+    REQUIRE(text.text().empty());
+
+    text.reset("print(1)");
+    REQUIRE(text.record_change(8, "", "\n"));
+    REQUIRE(text.text() == "print(1)\n");
+    REQUIRE(text.undo());
+    REQUIRE(text.text() == "print(1)");
+    REQUIRE_FALSE(text.undo());
+    REQUIRE(text.text() == "print(1)");
+
+    REQUIRE_FALSE(text.record_change(0, "x", ""));
+    REQUIRE_FALSE(text.can_undo());
+}

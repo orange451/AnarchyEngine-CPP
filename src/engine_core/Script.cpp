@@ -21,7 +21,9 @@ void LuaSource::set_source(std::string source) {
     if (source_ == source) {
         return;
     }
+    const std::string previous = source_;
     source_ = std::move(source);
+    record_string(id(), Field::Source, previous, source_);
     emit_own(Field::Source);
     if (ScriptAnalysis* analysis = script_analysis()) {
         analysis->invalidate(id());
@@ -35,7 +37,9 @@ void LuaSource::set_enabled(bool enabled) {
     if (enabled_ == enabled) {
         return;
     }
+    const bool previous = enabled_;
     enabled_ = enabled;
+    record_bool(id(), Field::Enabled, previous, enabled_);
     emit_own(Field::Enabled);
     if (auto* script = dynamic_cast<Script*>(this)) {
         if (ScriptHost* host = script_host()) {

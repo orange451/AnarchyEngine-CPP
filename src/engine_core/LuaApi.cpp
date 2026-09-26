@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -44,6 +45,12 @@ struct ResultNote {
 std::unordered_map<std::string, ResultNote>& results() {
     static std::unordered_map<std::string, ResultNote> notes;
     return notes;
+}
+
+// The analysis worker reads this map while a play VM's open_host_libraries writes it.
+std::mutex& result_mu() {
+    static std::mutex mu;
+    return mu;
 }
 
 std::string result_key(std::string_view owner, std::string_view name) {
@@ -267,6 +274,7 @@ void lua_note_result(const char* owner, const char* name, const char* type_name,
     ResultNote note;
     note.type_name = type_name != nullptr ? type_name : "";
     note.class_from_arg = class_from_arg;
+    std::lock_guard<std::mutex> lock(result_mu());
     results()[result_key(owner, name)] = std::move(note);
 }
 
@@ -314,6 +322,7 @@ ANARCHY_LUA_REGISTER(register_value_classes) {
 }  // namespace
 
 LuaResult lua_function_result(std::string_view owner, std::string_view name) {
+    std::lock_guard<std::mutex> lock(result_mu());
     const auto found = results().find(result_key(owner, name));
     LuaResult result;
     if (found == results().end()) {

@@ -2,6 +2,7 @@
 
 #include "jadefx/jadefx.hpp"
 #include "../runner/Runner.hpp"
+#include "InputRouter.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -59,6 +60,8 @@ private:
     void flush_editors();
     void reapply_editors();
     void restore_closed_edits();
+    void routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene);
+    void noteScriptFocus();
     void adoptDock(const std::shared_ptr<IdeDock>& dock);
     void onTabDrag(IdeDock& from, const jadefx::TabDrag& drag);
     void previewDrag(IdeDock& from, const jadefx::TabDrag& drag);
@@ -113,6 +116,9 @@ private:
     IdeDock* sceneDock_ = nullptr;
     jadefx::Scene* scene_ = nullptr;
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeScriptEditor>> open_scripts_;
+    std::weak_ptr<class IdeConsole> console_;
+    InputRouter undo_router_;
+    std::uint32_t last_script_focus_ = 0;
     // Source from an editor that was closed while the simulation was running.
     // Stop restores the place, then these strings are written back.
     std::unordered_map<std::uint32_t, std::string> kept_sources_;

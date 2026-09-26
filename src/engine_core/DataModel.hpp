@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
 #include "Events.hpp"
 #include "InvalidationQueue.hpp"
@@ -134,6 +135,9 @@ public:
     ScriptAnalysis* script_analysis() const;
     std::uint32_t world_generation() const;
     bool simulation_running() const;
+    // Edit undo. Play waypoints live on a second stack that stop drops.
+    ChangeHistoryService& history();
+    const ChangeHistoryService& history() const;
 
     // Per-instance signals. The reference dies with the instance.
     // Id 0 is the root DataModel. It has no slot; its signals are not bags[0].
@@ -228,6 +232,15 @@ protected:
     void emit_own(Field field);
     ScriptHost* script_host() const;
 
+    // Successful mutators record here. Equal values return before these run.
+    // Velocity is not recorded. Undo application does not record.
+    void record_transform(InstanceId id, const Transform& before, const Transform& after);
+    void record_color(InstanceId id, ColorRgb before, ColorRgb after);
+    void record_size(InstanceId id, float bx, float by, float bz, float ax, float ay, float az);
+    void record_bool(InstanceId id, Field field, bool before, bool after);
+    void record_string(InstanceId id, Field field, const std::string& before, const std::string& after);
+    void record_position(InstanceId id, const Vec3& before, const Vec3& after);
+
     // Subclass bytes stored in the place snapshot. The base stores nothing.
     // Velocity is not place state; GameObject clears it on read.
     virtual void write_place(std::vector<std::byte>&) const {}
@@ -237,6 +250,7 @@ private:
     friend class DataModelLock;
     friend class Engine;
     friend class GameObject;
+    friend class ChangeHistoryService;
 
     struct SpawnOps {
         const void* key = nullptr;
@@ -349,6 +363,22 @@ private:
     void rebuild_free_list();
     std::vector<InstanceId> child_ids(InstanceId parent) const;
     void restore_record(const PlaceRecord& record);
+
+    void record_parent(InstanceId id, InstanceId old_parent, InstanceId new_parent, int old_index);
+    void record_created(InstanceId id);
+    void record_destroyed(AuthoredRecord record);
+    AuthoredRecord capture_record(InstanceId id, bool subtree) const;
+    const void* type_key_of(InstanceId id) const;
+    int sibling_index_of(InstanceId id) const;
+    void take_free_index(std::uint32_t index);
+    void apply_history(const Mutation& mutation, bool inverse);
+    void apply_property(InstanceId id, const PropertyValue& value);
+    void apply_parent(InstanceId id, InstanceId parent, int sibling_index);
+    void revive_record(const AuthoredRecord& record);
+    void revive_tree(const AuthoredRecord& record);
+    void reparent_record(const AuthoredRecord& record);
+    void place_at_sibling(InstanceId id, int index);
+    void apply_record_fields(const AuthoredRecord& record);
 };
 
 template <typename T>

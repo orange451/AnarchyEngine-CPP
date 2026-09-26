@@ -27,9 +27,13 @@ void GameObject::set_size(float x, float y, float z) {
     if (size_[0] == x && size_[1] == y && size_[2] == z) {
         return;
     }
+    const float previous_x = size_[0];
+    const float previous_y = size_[1];
+    const float previous_z = size_[2];
     size_[0] = x;
     size_[1] = y;
     size_[2] = z;
+    record_size(id_, previous_x, previous_y, previous_z, x, y, z);
     const WriteOrigin origin = current_origin();
     note(id_, VisualField::Size, origin);
     emit_change(id_, Field::Size, origin);

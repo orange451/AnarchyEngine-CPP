@@ -208,6 +208,7 @@ void IdeConsole::submitCommand() {
         return;
     }
     command_->clear();
+    noteCommandEdit();
     const std::uint32_t world = engine_.datamodel().world_generation();
     // Show the whole command before Lua runs. The next painted frame draws this
     // line; layout after that paint is what calls runPending.
@@ -273,8 +274,65 @@ void IdeConsole::accept_completion(bool parentheses) {
     command_->selectRange(edit->begin, edit->end);
     command_->replaceSelection(edit->text);
     command_->positionCaret(edit->caret);
+    noteCommandEdit();
     command_->requestFocus();
     completion_.finish();
+}
+
+void IdeConsole::bindUndo(TextUndoStack* stack) {
+    undo_stack_ = stack;
+    if (undo_stack_ != nullptr && command_) {
+        undo_stack_->reset(command_->getText());
+    }
+}
+
+bool IdeConsole::commandFocused(const jadefx::Node* node) const {
+    for (const jadefx::Node* cursor = node; cursor != nullptr; cursor = cursor->getParent()) {
+        if (cursor == command_.get()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void IdeConsole::noteCommandEdit() {
+    if (mute_undo_ || undo_stack_ == nullptr || command_ == nullptr) {
+        return;
+    }
+    const std::string& next = command_->getText();
+    const std::string& previous = undo_stack_->text();
+    if (next == previous) {
+        return;
+    }
+    std::size_t start = 0;
+    while (start < previous.size() && start < next.size() && previous[start] == next[start]) {
+        ++start;
+    }
+    std::size_t previous_end = previous.size();
+    std::size_t next_end = next.size();
+    while (previous_end > start && next_end > start && previous[previous_end - 1] == next[next_end - 1]) {
+        --previous_end;
+        --next_end;
+    }
+    while (start > 0 && (static_cast<unsigned char>(previous[start]) & 0xC0u) == 0x80u) {
+        --start;
+    }
+    while (previous_end < previous.size() && next_end < next.size() &&
+           (static_cast<unsigned char>(previous[previous_end]) & 0xC0u) == 0x80u) {
+        ++previous_end;
+        ++next_end;
+    }
+    undo_stack_->replace(start, previous_end - start, next.substr(start, next_end - start));
+}
+
+void IdeConsole::applyUndoText() {
+    if (!command_ || undo_stack_ == nullptr || command_->getText() == undo_stack_->text()) {
+        return;
+    }
+    mute_undo_ = true;
+    command_->setText(undo_stack_->text());
+    command_->positionCaret(undo_stack_->caret());
+    mute_undo_ = false;
 }
 
 void CommandField::handleKey(jadefx::KeyEvent& event) {
@@ -282,6 +340,10 @@ void CommandField::handleKey(jadefx::KeyEvent& event) {
         jadefx::TextField::handleKey(event);
         return;
     }
+    struct NoteEdit {
+        IdeConsole* console;
+        ~NoteEdit() { console->noteCommandEdit(); }
+    } note{console};
     if (event.shortcut() && event.key == jadefx::Key::Space) {
         console->refresh_completion(true);
         event.consume();
@@ -382,6 +444,14 @@ bool CommandField::applyEnter() {
 }
 
 void CommandField::handleText(jadefx::TextEvent& event) {
+    struct NoteEdit {
+        IdeConsole* console;
+        ~NoteEdit() {
+            if (console != nullptr) {
+                console->noteCommandEdit();
+            }
+        }
+    } note{console};
     if (console != nullptr && event.text.size() == 1 && !isDisabled()) {
         const char unit = event.text[0];
         const bool name_key = unit == '.' || unit == ':' || unit == '(';

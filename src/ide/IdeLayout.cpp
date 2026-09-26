@@ -1,5 +1,6 @@
 #include "IdeLayout.hpp"
 
+#include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
 #include "DockArrange.hpp"
 #include "Engine.hpp"
@@ -28,6 +29,46 @@ constexpr double kConsoleHeight = 150;
 
 // JadeFX key codes match GLFW. This is GLFW_KEY_F5.
 constexpr int kKeyF5 = 294;
+constexpr std::uint64_t kCommandUndo = 1;
+
+template <typename T>
+T* Owning(jadefx::Node* node) {
+    for (jadefx::Node* cursor = node; cursor != nullptr; cursor = cursor->getParent()) {
+        if (auto* hit = dynamic_cast<T*>(cursor)) {
+            return hit;
+        }
+    }
+    return nullptr;
+}
+
+bool InTextWidget(jadefx::Node* node) {
+    for (jadefx::Node* cursor = node; cursor != nullptr; cursor = cursor->getParent()) {
+        if (dynamic_cast<jadefx::StyledTextArea*>(cursor) != nullptr || dynamic_cast<jadefx::TextField*>(cursor) != nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+
+KeyChord ChordOf(const jadefx::KeyEvent& event) {
+    KeyChord chord;
+    chord.primary = event.shortcut();
+    chord.shift = event.shift;
+    chord.alt = event.alt;
+#if defined(__APPLE__)
+    chord.apple = true;
+#else
+    chord.apple = false;
+#endif
+    if (event.key == jadefx::Key::Z) {
+        chord.key = ChordKey::Z;
+    } else if (event.key == jadefx::Key::Y) {
+        chord.key = ChordKey::Y;
+    }
+    return chord;
+}
+
+void CloseGesture(engine_core::DataModel& world) { world.history().end_gesture(); }
 
 constexpr const char* kStylesheet = R"CSS(
 scene {
@@ -294,6 +335,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
             const float angle = static_cast<float>(existing) * 0.9f;
             constexpr float kRadius = 0.42f;
             triangle.set_position(std::cos(angle) * kRadius, std::sin(angle) * kRadius, 0.15f);
+            CloseGesture(model);
         });
     });
     edit->getItems().add(std::move(insert));
@@ -322,6 +364,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
                     if (engine_core::DataModel* created = engine_core::lua_create_instance(world, class_name.c_str())) {
                         world.set_parent(created->id(), parent);
                         made = created->id();
+                        CloseGesture(world);
                         // An edit while stopped is part of the place. One made during
                         // play is dropped when Stop restores that place.
                         if (!world.simulation_running()) {
@@ -349,7 +392,10 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
 
     auto south = jadefx::make<IdeDock>();
     adoptDock(south);
-    south->dock(jadefx::make<IdeConsole>(runner_.simulation()));
+    auto console = jadefx::make<IdeConsole>(runner_.simulation());
+    console->bindUndo(&undo_router_.widget_stack(kCommandUndo));
+    console_ = console;
+    south->dock(console);
 
     auto east = jadefx::make<IdeDock>();
     adoptDock(east);
@@ -404,6 +450,11 @@ void IdeLayout::mount(jadefx::Scene& scene) {
     scene.setPadding(jadefx::Insets{});
     scene.setStylesheet(kStylesheet);
     scene.setRoot(root_);
+    scene.addKeyHook([this](jadefx::KeyEvent& event) {
+        if (scene_ != nullptr) {
+            routeUndo(event, *scene_);
+        }
+    });
 }
 
 void IdeLayout::attachFrame(jadefx::Stage& stage) {
@@ -673,6 +724,8 @@ void IdeLayout::floatTab(const std::shared_ptr<jadefx::Tab>& tab, double screenX
     StretchRoot(*dock);
     auto scene = jadefx::make<jadefx::Scene>(dock, static_cast<double>(width), static_cast<double>(height));
     scene->setStylesheet(kStylesheet);
+    jadefx::Scene* utilityScene = scene.get();
+    scene->addKeyHook([this, utilityScene](jadefx::KeyEvent& event) { routeUndo(event, *utilityScene); });
     window->stage().setScene(std::move(scene));
     dock->take(tab);
     window->setCanClose([this, raw = window.get()]() {
@@ -1063,6 +1116,7 @@ void GrowToFit(const jadefx::Node* area, jadefx::Scene* scene, const std::functi
 }
 
 void IdeLayout::flushFrame() {
+    noteScriptFocus();
     const std::vector<std::shared_ptr<IdeDock>> pending = std::move(pendingEmpty_);
     pendingEmpty_.clear();
     for (const std::shared_ptr<IdeDock>& dock : pending) {
@@ -1164,6 +1218,7 @@ void IdeLayout::cut(std::uint32_t id) {
     clip_->parent = old_parent;
     clip_->held = true;
     runner_.simulation().on_simulation([id, put_back, put_parent](engine_core::DataModel& world) {
+        world.history().set_pending_gesture("Cut");
         if (put_back != 0 && world.alive(put_back) && world.parent(put_back) == engine_core::DataModel::kNoParent &&
             parent_ok(world, put_parent) && !would_cycle(world, put_back, put_parent)) {
             world.set_parent(put_back, put_parent);
@@ -1171,6 +1226,7 @@ void IdeLayout::cut(std::uint32_t id) {
         if (world.alive(id)) {
             world.set_parent(id, engine_core::DataModel::kNoParent);
         }
+        CloseGesture(world);
     });
 }
 
@@ -1191,7 +1247,9 @@ void IdeLayout::paste(std::uint32_t id) {
         if (!world.alive(child) || !parent_ok(world, id) || would_cycle(world, child, id)) {
             return;
         }
+        world.history().set_pending_gesture("Paste");
         world.set_parent(child, id);
+        CloseGesture(world);
     });
 }
 
@@ -1213,7 +1271,9 @@ void IdeLayout::rename(std::uint32_t id) {
             if (id != 0 && !world.alive(id)) {
                 return;
             }
+            world.history().set_pending_gesture("Rename");
             world.set_name(id, name);
+            CloseGesture(world);
         });
         if (std::shared_ptr<IdeScriptEditor> editor = open_editor(id)) {
             editor->setTitleText(name);
@@ -1246,6 +1306,7 @@ void IdeLayout::edit(std::uint32_t id) {
         return;
     }
     auto editor = jadefx::make<IdeScriptEditor>(runner_.simulation(), id);
+    editor->bindUndo(&undo_router_.script_stack(id));
     std::shared_ptr<jadefx::Tab> tab = home->dock(editor);
     if (tab) {
         std::weak_ptr<jadefx::Tab> weak = tab;
@@ -1374,6 +1435,11 @@ void IdeLayout::restore_closed_edits() {
         return;
     }
     runner_.simulation().on_simulation([pending](engine_core::DataModel& model) {
+        const bool edit = !model.simulation_running();
+        std::optional<std::string> recording;
+        if (edit) {
+            recording = model.history().try_begin_recording("Edit Script");
+        }
         bool changed = false;
         for (const auto& entry : pending) {
             auto* source = dynamic_cast<engine_core::LuaSource*>(model.instance(entry.first));
@@ -1383,8 +1449,93 @@ void IdeLayout::restore_closed_edits() {
             source->set_source(entry.second);
             changed = true;
         }
-        if (changed && !model.simulation_running()) {
+        if (recording) {
+            model.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
+        }
+        if (changed && edit) {
             model.capture_place();
+        }
+    });
+}
+
+void IdeLayout::noteScriptFocus() {
+    std::uint32_t focused = 0;
+    auto consider = [&](jadefx::Scene* scene) {
+        if (scene == nullptr || focused != 0) {
+            return;
+        }
+        if (IdeScriptEditor* editor = Owning<IdeScriptEditor>(scene->focusedNode())) {
+            focused = editor->instanceId();
+        }
+    };
+    consider(scene_);
+    for (Floating& item : floating_) {
+        if (item.window && item.window->isOpen()) {
+            consider(&item.window->stage().getScene());
+        }
+    }
+    if (last_script_focus_ != 0 && last_script_focus_ != focused) {
+        if (std::shared_ptr<IdeScriptEditor> editor = open_editor(last_script_focus_)) {
+            editor->flush();
+        }
+    }
+    last_script_focus_ = focused;
+}
+
+void IdeLayout::routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene) {
+    if (!event.pressed) {
+        return;
+    }
+    const KeyChord chord = ChordOf(event);
+    if (!is_undo(chord) && !is_redo(chord)) {
+        return;
+    }
+    jadefx::Node* focused = scene.focusedNode();
+    if (IdeScriptEditor* editor = Owning<IdeScriptEditor>(focused)) {
+        Focus target;
+        target.kind = FocusKind::ScriptEditor;
+        target.script = editor->instanceId();
+        undo_router_.set_focus(target);
+        undo_router_.handle(chord, nullptr);
+        editor->applyUndoText();
+        event.consume();
+        return;
+    }
+    if (const std::shared_ptr<IdeConsole> console = console_.lock()) {
+        if (console->commandFocused(focused)) {
+            Focus target;
+            target.kind = FocusKind::OtherTextField;
+            target.widget = kCommandUndo;
+            undo_router_.set_focus(target);
+            undo_router_.handle(chord, nullptr);
+            console->applyUndoText();
+            event.consume();
+            return;
+        }
+    }
+    // A text widget we do not own still keeps the chord. Place undo does not run.
+    if (InTextWidget(focused)) {
+        return;
+    }
+    Focus target;
+    if (Owning<IdeExplorer>(focused) != nullptr) {
+        target.kind = FocusKind::Explorer;
+    } else if (Owning<runner::GameView>(focused) != nullptr) {
+        target.kind = FocusKind::Viewport;
+    } else {
+        target.kind = FocusKind::None;
+    }
+    undo_router_.set_focus(target);
+    if (undo_router_.classify(chord) != UndoRoute::Place) {
+        return;
+    }
+    const bool redo = is_redo(chord);
+    event.consume();
+    runner_.simulation().on_simulation([redo](engine_core::DataModel& model) {
+        if (redo) {
+            model.history().redo();
+        } else {
+            model.history().undo();
         }
     });
 }

@@ -20,6 +20,8 @@ public:
         layout_ = std::make_unique<ide::IdeLayout>(size.width, size.height);
         engine_core::Engine& simulation = layout_->simulation();
         engine_core::DataModel& model = simulation.datamodel();
+        // The demo place is the baseline, not an undo step.
+        model.history().set_enabled(false);
         // View-space positions. Positive z is toward the camera.
         const float kPositions[][3] = {
             {-0.58f, 0.38f, 0.f},
@@ -69,6 +71,7 @@ while true do
     tri.Position = home + Vector3.new(0, hop, 0)
 end
 )");
+        model.history().set_enabled(true);
         layout_->start();
         auto scene = jadefx::make<jadefx::Scene>(nullptr, size.width, size.height);
         layout_->mount(*scene);

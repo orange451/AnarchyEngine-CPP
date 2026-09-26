@@ -2,6 +2,7 @@
 
 #include "CompletionPopup.hpp"
 #include "IdePane.hpp"
+#include "ide/TextUndoStack.hpp"
 
 #include <cstdint>
 #include <deque>
@@ -26,6 +27,11 @@ class IdeConsole : public IdePane {
 
 public:
     explicit IdeConsole(engine_core::Engine& engine);
+
+    void bindUndo(TextUndoStack* stack);
+    bool commandFocused(const jadefx::Node* node) const;
+    void applyUndoText();
+    void noteCommandEdit();
 
 protected:
     void layoutChildren() override;
@@ -54,6 +60,8 @@ private:
     // Set once this pane has been drawn since the last submit. A paused command
     // runs on the UI thread, so it waits until the submitted line is on screen.
     bool command_painted_ = false;
+    TextUndoStack* undo_stack_ = nullptr;
+    bool mute_undo_ = false;
 };
 
 }  // namespace ide

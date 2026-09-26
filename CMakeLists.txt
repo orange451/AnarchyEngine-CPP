@@ -42,6 +42,8 @@ add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
     src/ide/LuauComplete.cpp
     src/ide/IdeTreeTest.cpp
     src/ide/IdeLayout.cpp
+    src/ide/TextUndoStack.cpp
+    src/ide/InputRouter.cpp
 )
 
 # An explicit checkout wins. A sibling named JadeFX_CPP is next. Otherwise
@@ -135,6 +137,7 @@ add_library(engine_core STATIC
     src/engine_core/ScriptRuntime.cpp
     src/engine_core/ScriptAnalysis.cpp
     src/engine_core/AnalysisDefinitions.cpp
+    src/engine_core/ChangeHistoryService.cpp
 )
 target_include_directories(engine_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/engine_core")
 target_compile_features(engine_core PUBLIC cxx_std_17)
@@ -156,6 +159,7 @@ add_executable(shell-tests
     tests/DockArrangeTest.cpp
     src/ide/DockArrange.cpp
     src/ide/IdeDock.cpp
+    src/ide/IdeIcons.cpp
     src/ide/IdePane.cpp
 )
 target_include_directories(shell-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -202,7 +206,14 @@ else()
     endif()
 endif()
 
-add_executable(sandbox sandbox/tests.cpp sandbox/analysis_tests.cpp)
+add_executable(sandbox
+    sandbox/tests.cpp
+    sandbox/analysis_tests.cpp
+    sandbox/history_tests.cpp
+    src/ide/TextUndoStack.cpp
+    src/ide/InputRouter.cpp
+)
+target_include_directories(sandbox PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(sandbox PRIVATE engine_core Catch2::Catch2WithMain)
 target_compile_features(sandbox PRIVATE cxx_std_17)
 if(ENGINE_CORE_TSAN AND NOT MSVC)

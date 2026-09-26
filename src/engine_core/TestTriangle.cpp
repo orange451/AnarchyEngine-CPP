@@ -29,9 +29,14 @@ void TestTriangle::set_position(float x, float y, float z) {
     if (!alive(id())) {
         return;
     }
+    const Vec3 previous{x_.load(), y_.load(), z_.load()};
+    if (previous.x == x && previous.y == y && previous.z == z) {
+        return;
+    }
     x_.store(x);
     y_.store(y);
     z_.store(z);
+    record_position(id(), previous, Vec3{x, y, z});
 }
 
 double TestTriangle::angle_degrees() const {

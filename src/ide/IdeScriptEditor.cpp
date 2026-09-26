@@ -1,5 +1,6 @@
 #include "IdeScriptEditor.hpp"
 
+#include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
 #include "LuauComplete.hpp"
@@ -138,7 +139,12 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     // Load before the area is laid out. The stylesheet asks for this family.
     (void)editor_font();
     define_styles(*area_);
-    area_->setOnPlainTextChange([this](const jadefx::PlainTextChange&) { note_text(); });
+    area_->setOnPlainTextChange([this](const jadefx::PlainTextChange& change) {
+        if (!loading_ && !mute_undo_ && undo_stack_ != nullptr) {
+            undo_stack_->record_change(change.position, change.removed, change.inserted);
+        }
+        note_text();
+    });
     area_->setOnMouseExited([this](const jadefx::MouseEvent&) {
         if (area_) {
             static_cast<ScriptCodeArea*>(area_.get())->dismissHover();
@@ -184,6 +190,23 @@ void IdeScriptEditor::focus() {
     if (area_) {
         area_->requestFocus();
     }
+}
+
+void IdeScriptEditor::bindUndo(TextUndoStack* stack) { undo_stack_ = stack; }
+
+void IdeScriptEditor::applyUndoText() {
+    if (!area_ || undo_stack_ == nullptr || area_->getText() == undo_stack_->text()) {
+        return;
+    }
+    mute_undo_ = true;
+    area_->suspendUndo();
+    area_->setText(undo_stack_->text());
+    area_->moveTo(undo_stack_->caret());
+    area_->resumeUndo();
+    mute_undo_ = false;
+    dirty_ = true;
+    dirty_at_ = std::chrono::steady_clock::now();
+    paint();
 }
 
 void IdeScriptEditor::onOpen() { focus(); }
@@ -255,6 +278,9 @@ void IdeScriptEditor::load() {
     loading_ = true;
     area_->setText(std::move(text));
     area_->forgetHistory();
+    if (undo_stack_ != nullptr) {
+        undo_stack_->reset(area_->getText());
+    }
     area_->moveTo(0);
     loading_ = false;
     paint();
@@ -355,7 +381,16 @@ void IdeScriptEditor::push(const std::string& text) {
     engine_.on_simulation([commit, text, gen](engine_core::DataModel& model) {
         if (auto* source = dynamic_cast<engine_core::LuaSource*>(model.instance(commit->id))) {
             if (source->source() != text) {
+                // One place waypoint for the buffer, not one per keystroke.
+                // Play leaves this off the edit stack unless a recording is already open.
+                std::optional<std::string> recording;
+                if (!model.simulation_running()) {
+                    recording = model.history().try_begin_recording("Edit Script");
+                }
                 source->set_source(text);
+                if (recording) {
+                    model.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
+                }
                 if (!model.simulation_running()) {
                     model.capture_place();
                 }

@@ -3,6 +3,7 @@
 #include "CompletionPopup.hpp"
 #include "IdePane.hpp"
 #include "LuaApi.hpp"
+#include "ide/TextUndoStack.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -40,6 +41,10 @@ public:
     void focus();
     // Writes the buffer to the instance. While stopped, captures the place.
     void flush();
+    // The document stack Ctrl/Cmd-Z edits. Null until the shell binds one.
+    void bindUndo(TextUndoStack* stack);
+    // Copies the stack into the buffer after InputRouter has undone or redone it.
+    void applyUndoText();
     // After Stop restores the place, put this buffer back when it differs.
     void reapply();
 
@@ -78,6 +83,8 @@ private:
     std::shared_ptr<Commit> commit_;
     std::function<void(const std::string&)> on_title_;
     std::string shown_name_;
+    TextUndoStack* undo_stack_ = nullptr;
+    bool mute_undo_ = false;
     bool loading_ = false;
     bool loaded_ = false;
     bool missing_ = false;

@@ -178,36 +178,20 @@ void IdeExplorer::dropped(const jadefx::TreeDrop& drop) {
         return;
     }
     std::vector<engine_core::InstanceId> ids;
-    std::unordered_set<const jadefx::TreeItem*> carried;
     for (const jadefx::TreeItem* item : drop.items) {
         engine_core::InstanceId id = 0;
         if (find_id(item, id)) {
             ids.push_back(id);
-            carried.insert(item);
         }
     }
     if (ids.empty()) {
         return;
     }
-    // The rows mirror sibling order, so the row after the line names the
-    // instance they go before. A carried row is moving too, so it is skipped.
-    engine_core::InstanceId before = 0;
-    const jadefx::TreeItem* next = nullptr;
-    if (drop.position == jadefx::TreeDropPosition::Before) {
-        next = drop.target;
-    } else if (drop.position == jadefx::TreeDropPosition::After) {
-        next = drop.target->nextSibling();
-    }
-    while (next != nullptr && carried.count(next) != 0) {
-        next = next->nextSibling();
-    }
-    if (next != nullptr && !find_id(next, before)) {
-        return;
-    }
     if (drop.position == jadefx::TreeDropPosition::Into) {
         drop.target->setExpanded(true);
     }
-    host_.move(ids, parent, before);
+    // Beside a row means that row's parent. They go last there, whatever the line showed.
+    host_.move(ids, parent);
 }
 
 bool IdeExplorer::find_id(const jadefx::TreeItem* item, engine_core::InstanceId& id) const {

@@ -142,13 +142,10 @@ public:
     void set_simulated(InstanceId id, bool simulated);
     void set_visual_only(InstanceId id, bool visual_only);
     // Hierarchy. Parent 0 is this root DataModel. kNoParent clears the parent.
-    // Equal parent is a no-op. Emits Changed, property_changed,
+    // The child goes last among the new parent's children, so siblings keep
+    // the order they arrived in. Equal parent is a no-op. Emits Changed, property_changed,
     // ChildRemoved/ChildAdded, and AncestryChanged on this id and descendants.
     void set_parent(InstanceId id, InstanceId parent);
-    // set_parent, then id is at index among parent's children, counted without
-    // id. A negative index, or one past the end, is last. Under the same parent
-    // it only reorders, which is its own undo step and fires no signals.
-    void set_parent_at(InstanceId id, InstanceId parent, int index);
 
     // Path A. Default is class_name(). Siblings may share a name.
     // Equal values do not emit. Name does not dirty the visual snapshot.
@@ -453,15 +450,13 @@ private:
     void retire_slot(std::uint32_t index, bool bump_generation);
     std::uint16_t pool_index_for(const void* type_key) const;
     void adopt_slot(std::uint16_t pool_index, InstanceId id);
-    void link_children_front(InstanceId parent, const std::vector<InstanceId>& children);
+    void link_children(InstanceId parent, const std::vector<InstanceId>& children);
     void clear_hierarchy();
     void rebuild_free_list();
     std::vector<InstanceId> child_ids(InstanceId parent) const;
     void restore_record(const PlaceRecord& record);
 
-    // new_index -1 is first, where set_parent puts a child.
-    void record_parent(InstanceId id, InstanceId old_parent, InstanceId new_parent, int old_index,
-                       int new_index = -1);
+    void record_parent(InstanceId id, InstanceId old_parent, InstanceId new_parent, int old_index);
     void record_created(InstanceId id);
     void record_destroyed(AuthoredRecord record);
     AuthoredRecord capture_record(InstanceId id, bool subtree) const;
@@ -475,8 +470,6 @@ private:
     void revive_tree(const AuthoredRecord& record);
     void reparent_record(const AuthoredRecord& record);
     void place_at_sibling(InstanceId id, int index);
-    // set_parent's body. index -1 or 0 links id first, as set_parent does.
-    void move_under(InstanceId id, InstanceId parent, int index);
     void apply_record_fields(const AuthoredRecord& record);
     // Scripts look the tree up by name. Tells analysis the tree moved.
     void note_tree_changed();

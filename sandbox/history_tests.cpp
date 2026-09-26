@@ -445,9 +445,9 @@ TEST_CASE("H13 undo destroy restores children and names", "[H13][history]") {
     REQUIRE(model.parent(first_id) == folder_id);
     REQUIRE(model.parent(second_id) == folder_id);
     REQUIRE(model.parent(grand_id) == second_id);
-    // set_parent inserts at the head, so the later child is first.
-    REQUIRE(model.first_child(folder_id) == second_id);
-    REQUIRE(model.next_sibling(second_id) == first_id);
+    // A child goes last, so the one parented first is first.
+    REQUIRE(model.first_child(folder_id) == first_id);
+    REQUIRE(model.next_sibling(first_id) == second_id);
 }
 
 TEST_CASE("H15 applying undo does not record a waypoint", "[H15][history]") {
@@ -502,52 +502,31 @@ TEST_CASE("H16 a text stack out of sync with the editor refuses the edit", "[H16
     REQUIRE_FALSE(text.can_undo());
 }
 
-TEST_CASE("H17 set_parent_at places a child and undoes to its old place", "[H17][history]") {
+TEST_CASE("H17 set_parent puts a child last and undo puts it back in its old place", "[H17][history]") {
     engine_core::DataModel model;
+    engine_core::Folder& folder = model.create<engine_core::Folder>();
+    model.set_parent(folder.id(), 0);
+    const engine_core::InstanceId f = folder.id();
     const engine_core::InstanceId a = make_part(model, "A").id();
     const engine_core::InstanceId b = make_part(model, "B").id();
     const engine_core::InstanceId c = make_part(model, "C").id();
-    engine_core::Folder& folder = model.create<engine_core::Folder>();
-    const engine_core::InstanceId f = folder.id();
-    model.set_parent(f, model.id());
-    const engine_core::InstanceId x = make_part(model, "X").id();
-    model.set_parent(x, f);
     close_gesture(model);
-    // set_parent puts each child first.
-    const std::vector<engine_core::InstanceId> start{f, c, b, a};
-    REQUIRE(model.get_children(0) == start);
+    model.history().reset_waypoints();
+    using Ids = std::vector<engine_core::InstanceId>;
+    REQUIRE(model.get_children(0) == Ids{f, a, b, c});
 
-    SECTION("a reorder under the same parent is one undo step") {
-        model.set_parent_at(c, 0, 3);
-        close_gesture(model);
-        REQUIRE(model.get_children(0) == std::vector<engine_core::InstanceId>{f, b, a, c});
-        model.set_parent_at(c, 0, 3);
-        close_gesture(model);
-        REQUIRE(model.get_children(0) == std::vector<engine_core::InstanceId>{f, b, a, c});
+    model.history().set_pending_gesture("Move");
+    model.set_parent(b, f);
+    close_gesture(model);
+    model.set_parent(a, f);
+    close_gesture(model);
+    REQUIRE(model.get_children(f) == Ids{b, a});
+    REQUIRE(model.get_children(0) == Ids{f, c});
 
-        model.history().undo();
-        REQUIRE(model.get_children(0) == start);
-        model.history().redo();
-        REQUIRE(model.get_children(0) == std::vector<engine_core::InstanceId>{f, b, a, c});
-    }
-
-    SECTION("a move under a new parent lands at the index, and redo puts it back there") {
-        model.set_parent_at(b, f, 1);
-        close_gesture(model);
-        REQUIRE(model.parent(b) == f);
-        REQUIRE(model.get_children(f) == std::vector<engine_core::InstanceId>{x, b});
-
-        model.history().undo();
-        REQUIRE(model.get_children(0) == start);
-        REQUIRE(model.get_children(f) == std::vector<engine_core::InstanceId>{x});
-        model.history().redo();
-        REQUIRE(model.get_children(f) == std::vector<engine_core::InstanceId>{x, b});
-    }
-
-    SECTION("a negative or too large index is last") {
-        model.set_parent_at(a, f, -1);
-        model.set_parent_at(c, f, 99);
-        close_gesture(model);
-        REQUIRE(model.get_children(f) == std::vector<engine_core::InstanceId>{x, a, c});
-    }
+    model.history().undo();
+    model.history().undo();
+    REQUIRE(model.get_children(0) == Ids{f, a, b, c});
+    model.history().redo();
+    REQUIRE(model.get_children(f) == Ids{b});
+    REQUIRE(model.get_children(0) == Ids{f, a, c});
 }

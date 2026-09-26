@@ -389,8 +389,9 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     };
     host.enabled = [this](std::string_view action) { return action_enabled(action); };
     host.rename = [this](engine_core::InstanceId id, std::string name) { rename(id, std::move(name)); };
-    host.move = [this](const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId parent,
-                       engine_core::InstanceId before) { move(ids, parent, before); };
+    host.move = [this](const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId parent) {
+        move(ids, parent);
+    };
     host.insert = [this](std::string class_name, engine_core::InstanceId parent, std::shared_ptr<InsertResult> result) {
         runner_.simulation().on_simulation(
             [class_name = std::move(class_name), parent, result](engine_core::DataModel& world) {
@@ -1408,24 +1409,23 @@ void IdeLayout::paste(std::uint32_t id) {
             return;
         }
         world.history().set_pending_gesture("Paste");
-        // set_parent puts a child first, so the last goes in first and the
-        // pasted instances keep the order they were cut in.
-        for (auto it = children.rbegin(); it != children.rend(); ++it) {
-            if (world.alive(*it) && !would_cycle(world, *it, id)) {
-                world.set_parent(*it, id);
+        // Each goes last, so the pasted instances keep the order they were cut in.
+        for (engine_core::InstanceId child : children) {
+            if (world.alive(child) && !would_cycle(world, child, id)) {
+                world.set_parent(child, id);
             }
         }
         CloseGesture(world);
     });
 }
 
-void IdeLayout::move(std::vector<std::uint32_t> ids, std::uint32_t parent, std::uint32_t before) {
+void IdeLayout::move(std::vector<std::uint32_t> ids, std::uint32_t parent) {
     if (ids.empty()) {
         return;
     }
-    runner_.simulation().on_simulation([ids = std::move(ids), parent, before](engine_core::DataModel& world) {
+    runner_.simulation().on_simulation([ids = std::move(ids), parent](engine_core::DataModel& world) {
         world.history().set_pending_gesture("Move");
-        move_set(world, ids, parent, before);
+        move_set(world, ids, parent);
         CloseGesture(world);
     });
 }

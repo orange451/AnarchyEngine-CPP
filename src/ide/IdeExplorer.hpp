@@ -29,8 +29,8 @@ struct InsertResult {
 // undo step. Without it, they run on one instance at a time.
 // insert creates class_name under parent and reports the new id through result.
 // The explorer runs Rename itself and hands the typed name to rename.
-// move puts ids under parent in the order given, just before its child before,
-// or last when before is 0, as one undo step. Without it, rows do not drag.
+// move puts ids under parent in the order given, each last among its children,
+// as one undo step. Without it, rows do not drag.
 struct ExplorerHost {
     std::function<void(std::string_view action, engine_core::InstanceId id)> run;
     std::function<void(std::string_view action, const std::vector<engine_core::InstanceId>& ids)> run_many;
@@ -38,9 +38,7 @@ struct ExplorerHost {
     std::function<void(std::string class_name, engine_core::InstanceId parent, std::shared_ptr<InsertResult> result)>
         insert;
     std::function<void(engine_core::InstanceId id, std::string name)> rename;
-    std::function<void(const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId parent,
-                       engine_core::InstanceId before)>
-        move;
+    std::function<void(const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId parent)> move;
 };
 
 // Hierarchy under one DataModel. The hidden tree root is that instance.
@@ -54,9 +52,10 @@ struct ExplorerHost {
 // cancels. A second click on the same row, half a second or more after the
 // first, runs Rename too.
 // Dragging a row moves it, and every other selected row with it when it is
-// selected. Released on the middle of a row, they go in that instance, last.
-// Released on its top or bottom edge, they go beside it, and a line between
-// the rows shows where. A row never goes inside itself, and Escape cancels.
+// selected. Released on the middle of a row, they go in that instance.
+// Released on its top or bottom edge, they go in that row's parent. Either
+// way they go last among the children: sibling order is the order instances
+// arrived in, not where the line was drawn. A row never goes inside itself, and Escape cancels.
 // Hovering a row shows + on its right. That opens a searchable list of classes
 // Instance.new can create, and the chosen class is parented under the row.
 //

@@ -58,10 +58,9 @@ struct Rig {
             model.set_name(id, name);
             renames.emplace_back(id, std::move(name));
         };
-        host.move = [this](const std::vector<engine_core::InstanceId>& moved, engine_core::InstanceId parent,
-                           engine_core::InstanceId before) {
+        host.move = [this](const std::vector<engine_core::InstanceId>& moved, engine_core::InstanceId parent) {
             ++moves;
-            ide::move_set(model, moved, parent, before);
+            ide::move_set(model, moved, parent);
         };
         explorer = jadefx::make<ide::IdeExplorer>(model, "Explorer", host);
         explorer->setPrefWidthRatio(1);
@@ -378,7 +377,7 @@ void TestShiftClickSelectsRange() {
     rig.mods = jadefx::Key::ModShift;
     rig.clickRow("Alpha", 0.8);
     rig.frame(0.9);
-    // Rows show newest first: Gamma, Beta, Alpha. The range keeps that order.
+    // Rows show Alpha, Beta, Gamma. The range runs from the anchor, Gamma, up to Alpha.
     Expect(rig.selection() == rig.pick({2, 1, 0}), "Shift and a click selects every row between");
     Expect(rig.painted("Alpha") && rig.painted("Beta") && rig.painted("Gamma"), "the whole range is drawn");
 
@@ -438,7 +437,7 @@ void TestSelectionIsShared() {
 
 void TestKeysMoveTheSelection() {
     Rig rig;
-    rig.clickRow("Gamma", 0.1);
+    rig.clickRow("Alpha", 0.1);
     rig.key(jadefx::Key::Down);
     rig.frame(0.2);
     Expect(rig.selection() == rig.pick({1}), "the arrow keys move the selection");
@@ -492,17 +491,17 @@ void TestCutRunsOnTheSelection() {
 
 void TestCutSet() {
     Rig rig;
-    // Gamma, Beta, Alpha at the top; Inner under Alpha.
+    // Alpha, Beta, Gamma at the top; Inner under Alpha.
     engine_core::Folder& inner = rig.model.create<engine_core::Folder>();
     rig.model.set_parent(inner.id(), rig.ids[0]);
     const engine_core::InstanceId alpha = rig.ids[0];
     const engine_core::InstanceId beta = rig.ids[1];
     const engine_core::InstanceId gamma = rig.ids[2];
-    Expect(ide::cut_set(rig.model, {alpha, gamma}) == std::vector<engine_core::InstanceId>{gamma, alpha},
+    Expect(ide::cut_set(rig.model, {gamma, alpha}) == std::vector<engine_core::InstanceId>{alpha, gamma},
            "a cut takes instances in the order the tree shows them");
     Expect(ide::cut_set(rig.model, {inner.id(), alpha}) == std::vector<engine_core::InstanceId>{alpha},
            "a child goes with its selected parent");
-    Expect(ide::cut_set(rig.model, {inner.id(), beta}) == std::vector<engine_core::InstanceId>{beta, inner.id()},
+    Expect(ide::cut_set(rig.model, {beta, inner.id()}) == std::vector<engine_core::InstanceId>{inner.id(), beta},
            "a child whose parent is not selected is taken on its own");
     rig.model.destroy(beta);
     Expect(ide::cut_set(rig.model, {beta, 0}).empty(), "a cut skips the root and gone instances");
@@ -535,16 +534,15 @@ void TestDragIntoAnotherRow() {
 
 void TestDragBesideAnotherRow() {
     Rig rig;
-    // Folders are parented first, so the rows read Gamma, Beta, Alpha.
-    Expect(rig.children(0) == rig.pick({2, 1, 0}), "the rows start newest first");
-    rig.drag("Gamma", "Alpha", 0.95, 0.1);
-    Expect(rig.children(0) == rig.pick({1, 0, 2}), "the bottom edge of a row puts it after that row");
-    rig.drag("Gamma", "Beta", 0.05, 0.5);
-    Expect(rig.children(0) == rig.pick({2, 1, 0}), "the top edge of a row puts it before that row");
-    rig.drag("Gamma", "Beta", 0.5, 1.0);
-    rig.drag("Alpha", "Gamma", 0.05, 1.5);
-    Expect(rig.model.parent(rig.ids[0]) == rig.ids[1] && rig.children(rig.ids[1]) == rig.pick({0, 2}),
-           "a sibling drop goes under the target's parent");
+    // Folders are parented in order, so the rows read Alpha, Beta, Gamma.
+    Expect(rig.children(0) == rig.pick({0, 1, 2}), "the rows start in the order they arrived");
+    rig.drag("Alpha", "Gamma", 0.95, 0.1);
+    Expect(rig.children(0) == rig.pick({0, 1, 2}), "beside a row under the same parent changes nothing");
+    rig.drag("Gamma", "Beta", 0.5, 0.5);
+    Expect(rig.children(rig.ids[1]) == rig.pick({2}), "the middle of a row puts it inside");
+    rig.drag("Alpha", "Gamma", 0.05, 1.0);
+    Expect(rig.model.parent(rig.ids[0]) == rig.ids[1], "beside a row puts it under that row's parent");
+    Expect(rig.children(rig.ids[1]) == rig.pick({2, 0}), "and last there, not where the line was");
 }
 
 void TestDragCarriesTheSelection() {
@@ -552,7 +550,7 @@ void TestDragCarriesTheSelection() {
     rig.model.selection().set(rig.pick({2, 0}));
     rig.frame(0.05);
     rig.drag("Alpha", "Beta", 0.5, 0.1);
-    Expect(rig.children(rig.ids[1]) == rig.pick({2, 0}), "every selected row moves, in row order");
+    Expect(rig.children(rig.ids[1]) == rig.pick({0, 2}), "every selected row moves, in row order");
     Expect(rig.moves == 1, "the selection moves as one step");
 }
 
@@ -574,15 +572,16 @@ void TestMoveSet() {
         model.set_parent(folder.id(), 0);
         ids.push_back(folder.id());
     }
-    // Rows read D, C, B, A.
-    Expect(ide::move_set(model, {ids[3], ids[2]}, 0, ids[0]), "move_set moves");
-    Expect(model.get_children(0) == std::vector<engine_core::InstanceId>{ids[1], ids[3], ids[2], ids[0]},
-           "the moved instances land before the anchor in the order given");
-    Expect(ide::move_set(model, {ids[1]}, 0, 0), "move_set moves to the end");
-    Expect(model.get_children(0).back() == ids[1], "before 0 is last");
-    ide::move_set(model, {ids[0]}, ids[1], 0);
-    Expect(!ide::move_set(model, {ids[1]}, ids[0], 0), "an instance never goes inside its own child");
-    Expect(!ide::move_set(model, {0}, ids[1], 0), "the root never moves");
+    Expect(model.get_children(0) == ids, "children are in the order they arrived");
+    Expect(!ide::move_set(model, {ids[3]}, 0), "an instance already under the parent stays put");
+    Expect(model.get_children(0) == ids, "and keeps its place");
+    Expect(ide::move_set(model, {ids[3], ids[2]}, ids[0]), "move_set moves");
+    Expect(model.get_children(ids[0]) == std::vector<engine_core::InstanceId>{ids[3], ids[2]},
+           "the moved instances go last, in the order given");
+    Expect(ide::move_set(model, {ids[3]}, 0), "back to the root");
+    Expect(model.get_children(0) == std::vector<engine_core::InstanceId>{ids[0], ids[1], ids[3]}, "last again");
+    Expect(!ide::move_set(model, {ids[0]}, ids[2]), "an instance never goes inside its own child");
+    Expect(!ide::move_set(model, {0}, ids[1]), "the root never moves");
 }
 
 }  // namespace

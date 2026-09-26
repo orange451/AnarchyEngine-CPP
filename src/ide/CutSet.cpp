@@ -41,7 +41,7 @@ std::vector<engine_core::InstanceId> cut_set(const engine_core::DataModel& model
 }
 
 bool move_set(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids,
-              engine_core::InstanceId parent, engine_core::InstanceId before) {
+              engine_core::InstanceId parent) {
     constexpr engine_core::InstanceId kNone = engine_core::DataModel::kNoParent;
     if (parent == kNone || (parent != 0 && !world.alive(parent))) {
         return false;
@@ -61,13 +61,10 @@ bool move_set(engine_core::DataModel& world, const std::vector<engine_core::Inst
         if (cycle) {
             continue;
         }
-        // Counted without id, so each one lands just before the anchor and
-        // the ones moved ahead of it keep their order.
-        std::vector<engine_core::InstanceId> siblings = world.get_children(parent);
-        siblings.erase(std::remove(siblings.begin(), siblings.end(), id), siblings.end());
-        const auto anchor = before == 0 ? siblings.end() : std::find(siblings.begin(), siblings.end(), before);
-        const int index = anchor == siblings.end() ? -1 : static_cast<int>(anchor - siblings.begin());
-        world.set_parent_at(id, parent, index);
+        if (world.parent(id) == parent) {
+            continue;
+        }
+        world.set_parent(id, parent);
         any = true;
     }
     return any;

@@ -1560,22 +1560,22 @@ TEST_CASE("N2 siblings may share a name and find_first_child returns the first",
     model.set_name(newer.id(), "Wood");
     model.set_parent(older.id(), folder.id());
     model.set_parent(newer.id(), folder.id());
-    // link_child inserts at the front, so the later parent is first.
-    REQUIRE(model.first_child(folder.id()) == newer.id());
-    REQUIRE(model.find_first_child(folder.id(), "Wood") == newer.id());
+    // A child goes last, so the one parented first is first.
+    REQUIRE(model.first_child(folder.id()) == older.id());
+    REQUIRE(model.find_first_child(folder.id(), "Wood") == older.id());
     REQUIRE(model.find_first_child(folder.id(), "Missing") == 0);
 
     engine_core::GameObject& metal = model.create<engine_core::GameObject>();
     model.set_name(metal.id(), "Metal");
     model.set_parent(metal.id(), folder.id());
-    REQUIRE(model.find_first_child(folder.id(), "Wood") == newer.id());
+    REQUIRE(model.find_first_child(folder.id(), "Wood") == older.id());
     REQUIRE(model.find_first_child(folder.id(), "Metal") == metal.id());
 
     const std::vector<engine_core::InstanceId> children = model.get_children(folder.id());
     REQUIRE(children.size() == 3);
-    REQUIRE(children[0] == metal.id());
+    REQUIRE(children[0] == older.id());
     REQUIRE(children[1] == newer.id());
-    REQUIRE(children[2] == older.id());
+    REQUIRE(children[2] == metal.id());
     REQUIRE(model.get_children(0xdeadbeefu).empty());
     REQUIRE(model.find_first_child(0xdeadbeefu, "Wood") == 0);
     REQUIRE(model.get_children(model.id()).size() == 1);
@@ -1663,8 +1663,8 @@ TEST_CASE("N3 place restore reverts play and drops session instances", "[N3]") {
 
     const std::vector<engine_core::InstanceId> children = model.get_children(folder_id);
     REQUIRE(children.size() == 2);
-    REQUIRE(children[0] == sibling_id);
-    REQUIRE(children[1] == leaf_id);
+    REQUIRE(children[0] == leaf_id);
+    REQUIRE(children[1] == sibling_id);
 
     engine_core::SnapshotPump pump;
     pump.reserve(engine_core::DataModel::kMaxInstances);

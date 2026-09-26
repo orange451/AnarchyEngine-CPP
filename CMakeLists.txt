@@ -29,6 +29,7 @@ set(STUDIO_SOURCES
     src/ide/IdeDock.cpp
     src/ide/DockArrange.cpp
     src/ide/IdeConsole.cpp
+    src/ide/ConsoleLog.cpp
     src/ide/CompletionPopup.cpp
     src/ide/InsertPopup.cpp
     src/ide/IdeExplorer.cpp
@@ -165,6 +166,7 @@ add_library(engine_core STATIC
     src/engine_core/LuaApi.cpp
     src/engine_core/LuaReflect.cpp
     src/engine_core/ScriptRuntime.cpp
+    src/engine_core/TableSnapshot.cpp
     src/engine_core/ScriptAnalysis.cpp
     src/engine_core/AnalysisDefinitions.cpp
     src/engine_core/PropertyBag.cpp
@@ -219,6 +221,15 @@ add_executable(explorer-tests
 target_include_directories(explorer-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(explorer-tests PRIVATE jadefx engine_core)
 target_compile_features(explorer-tests PRIVATE cxx_std_17)
+
+# Opens and closes printed tables in the console log, by call and by click.
+add_executable(console-tests
+    tests/ConsoleLogTest.cpp
+    src/ide/ConsoleLog.cpp
+)
+target_include_directories(console-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(console-tests PRIVATE jadefx engine_core)
+target_compile_features(console-tests PRIVATE cxx_std_17)
 
 # Drives the Properties page next to an explorer: selection, mixed rows, commits, and undo.
 add_executable(properties-tests
@@ -305,6 +316,7 @@ if(MSVC)
     target_compile_options(engine-tests PRIVATE /W4 /utf-8)
     target_compile_options(shell-tests PRIVATE /W4 /utf-8)
     target_compile_options(properties-tests PRIVATE /W4 /utf-8)
+target_compile_options(console-tests PRIVATE /W4 /utf-8)
     target_compile_options(studio-tests PRIVATE /W4 /utf-8)
     foreach(package IN LISTS ENGINE_PACKAGES)
         target_compile_options(${package} PRIVATE /W4 /utf-8)
@@ -315,6 +327,7 @@ else()
     target_compile_options(engine-tests PRIVATE -Wall -Wextra)
     target_compile_options(shell-tests PRIVATE -Wall -Wextra)
     target_compile_options(properties-tests PRIVATE -Wall -Wextra)
+target_compile_options(console-tests PRIVATE -Wall -Wextra)
     target_compile_options(studio-tests PRIVATE -Wall -Wextra)
     foreach(package IN LISTS ENGINE_PACKAGES)
         target_compile_options(${package} PRIVATE -Wall -Wextra)

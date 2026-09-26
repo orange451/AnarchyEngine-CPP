@@ -1148,7 +1148,9 @@ std::uint64_t ScriptRuntime::clear_output() {
     return ++output_epoch_;
 }
 
-void ScriptRuntime::append_output(OutputKind kind, std::string text) {
+void ScriptRuntime::append_output(OutputKind kind, std::string text) { append_output(kind, std::move(text), {}); }
+
+void ScriptRuntime::append_output(OutputKind kind, std::string text, std::vector<OutputValue> values) {
     if (text.empty()) {
         return;
     }
@@ -1162,7 +1164,7 @@ void ScriptRuntime::append_output(OutputKind kind, std::string text) {
     while (output_.size() >= kMaxOutputLines) {
         output_.pop_front();
     }
-    output_.push_back(OutputLine{kind, std::move(text), std::chrono::system_clock::now()});
+    output_.push_back(OutputLine{kind, std::move(text), std::move(values), std::chrono::system_clock::now()});
 }
 
 ScriptRuntime::OutputBatch ScriptRuntime::drain_output() {
@@ -1243,20 +1245,33 @@ int ScriptRuntime::lua_print(lua_State* state) {
     ScriptRuntime* runtime = runtime_from(state);
     const int count = lua_gettop(state);
     std::string line;
+    std::vector<OutputValue> values;
+    bool has_table = false;
     for (int index = 1; index <= count; ++index) {
         std::size_t length = 0;
         const char* text = luaL_tolstring(state, index, &length);
         if (index > 1) {
             line.push_back('\t');
         }
+        OutputValue value;
         if (text != nullptr && length > 0) {
             line.append(text, length);
+            const std::string_view whole(text, length);
+            value.text.assign(whole.substr(0, fit_utf8(whole, kMaxOutputBytes)));
         }
         lua_pop(state, 1);
+        if (lua_type(state, index) == LUA_TTABLE) {
+            value.table = snapshot_table(state, index);
+            has_table = true;
+        }
+        values.push_back(std::move(value));
     }
     line.push_back('\n');
+    if (!has_table) {
+        values.clear();
+    }
     if (runtime != nullptr) {
-        runtime->append_output(OutputKind::Print, std::move(line));
+        runtime->append_output(OutputKind::Print, std::move(line), std::move(values));
     }
     return 0;
 }

@@ -14,6 +14,7 @@
 #include "ModuleScript.hpp"
 #include "Script.hpp"
 #include "ScriptRuntime.hpp"
+#include "TableSnapshot.hpp"
 #include "TaskScheduler.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -21,6 +22,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <memory>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -2830,6 +2832,55 @@ TEST_CASE("S17 output lines remember when they were written", "[S17]") {
     REQUIRE(batch.lines[0].time <= after);
     REQUIRE(batch.lines[1].time >= batch.lines[0].time);
     REQUIRE(batch.lines[1].time <= after);
+}
+
+TEST_CASE("S32 print copies a table so the console can open it", "[S32]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk("local t = {10, \"a\\nb\", zed = true, name = {x = 1}, [\"two words\"] = 2}\n"
+                          "t.self = t\n"
+                          "print(\"label\", t)\n"
+                          "print(\"plain\", 2)");
+    const engine_core::ScriptRuntime::OutputBatch batch = rig.runtime.drain_output();
+    REQUIRE(batch.lines.size() == 2);
+    const engine_core::ScriptRuntime::OutputLine& line = batch.lines[0];
+    REQUIRE(line.text.rfind("label\ttable: ", 0) == 0);
+    REQUIRE(line.values.size() == 2);
+    REQUIRE(line.values[0].text == "label");
+    REQUIRE_FALSE(line.values[0].table);
+    REQUIRE(line.values[1].text.rfind("table: ", 0) == 0);
+    const std::shared_ptr<const engine_core::TableSnapshot> table = line.values[1].table;
+    REQUIRE(table);
+    std::vector<std::string> keys;
+    for (const engine_core::TableField& field : table->fields) {
+        keys.push_back(field.key);
+    }
+    REQUIRE(keys == std::vector<std::string>{"[1]", "[2]", "[\"two words\"]", "name", "self", "zed"});
+    REQUIRE(table->fields[0].value == "10");
+    REQUIRE(table->fields[1].value == "\"a\\nb\"");
+    REQUIRE(table->fields[5].value == "true");
+    REQUIRE(table->fields[3].table);
+    REQUIRE(table->fields[3].table->fields.size() == 1);
+    REQUIRE(table->fields[3].table->fields[0].key == "x");
+    // A table inside itself is named, not copied again.
+    REQUIRE(table->fields[4].value.find("(cycle)") != std::string::npos);
+    REQUIRE_FALSE(table->fields[4].table);
+    REQUIRE(table->omitted == 0);
+    // A print without a table carries only its text.
+    REQUIRE(batch.lines[1].values.empty());
+    REQUIRE(batch.lines[1].text == "plain\t2\n");
+}
+
+TEST_CASE("S33 a large printed table is copied up to a cap", "[S33]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk("local t = {} for i = 1, 6000 do t[i] = i end print(t)");
+    const engine_core::ScriptRuntime::OutputBatch batch = rig.runtime.drain_output();
+    REQUIRE(batch.lines.size() == 1);
+    REQUIRE(batch.lines[0].values.size() == 1);
+    const std::shared_ptr<const engine_core::TableSnapshot> table = batch.lines[0].values[0].table;
+    REQUIRE(table);
+    REQUIRE(table->omitted > 0);
+    REQUIRE(table->fields.size() + table->omitted == 6000);
+    REQUIRE(table->fields.front().key == "[1]");
 }
 
 TEST_CASE("S18 Heartbeat:Wait yields until the next Heartbeat", "[S18]") {

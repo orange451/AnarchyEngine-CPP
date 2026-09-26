@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CompletionPopup.hpp"
+#include "ConsoleLog.hpp"
 #include "IdePane.hpp"
 #include "ide/TextUndoStack.hpp"
 
@@ -20,7 +21,7 @@ class CommandField;
 // Log of Lua print lines and errors, with a command line under it.
 // The command line runs against the live data model, stopped or running.
 // A submitted command is shown in full, then run after that line has been drawn.
-// Each log row shows the wall time the line was recorded.
+// Each log row shows the wall time the line was recorded. A printed table opens in place.
 // The log clears when a play session starts.
 class IdeConsole : public IdePane {
     friend class CommandField;
@@ -51,7 +52,7 @@ private:
     void accept_completion(bool parentheses);
 
     engine_core::Engine& engine_;
-    std::shared_ptr<jadefx::StyleClassedTextArea> log_;
+    std::shared_ptr<ConsoleLog> log_;
     std::shared_ptr<jadefx::TextField> command_;
     CompletionPopup completion_;
     std::deque<PendingCommand> pending_;

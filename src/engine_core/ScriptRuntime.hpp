@@ -4,12 +4,14 @@
 #include "LuaApi.hpp"
 #include "RunService.hpp"
 #include "ScriptHost.hpp"
+#include "TableSnapshot.hpp"
 #include "TaskScheduler.hpp"
 
 #include <chrono>
 #include <cstdint>
 #include <deque>
 #include <list>
+#include <memory>
 #include <mutex>
 #include <limits>
 #include <string>
@@ -55,9 +57,19 @@ public:
     // A caught error stays inside the script.
     enum class OutputKind { Print, Error, Command };
 
+    // One print argument. text is its tostring. table is set when the argument is a table,
+    // copied when print ran, so the console can open it later.
+    struct OutputValue {
+        std::string text;
+        std::shared_ptr<const TableSnapshot> table;
+    };
+
     struct OutputLine {
         OutputKind kind = OutputKind::Print;
         std::string text;
+        // One entry per argument when a print had a table among them. Empty otherwise.
+        // text is still the whole line, tab separated, for readers that only want text.
+        std::vector<OutputValue> values;
         // Wall clock when the line was recorded. The console shows this on each row.
         std::chrono::system_clock::time_point time{};
     };
@@ -73,6 +85,8 @@ public:
     // Copies the text. A missing trailing newline is added. Records the wall time.
     // Safe from the simulation thread and from the thread that runs the command line.
     void append_output(OutputKind kind, std::string text);
+    // A print line that carries its arguments. The text is capped as above; the values are not.
+    void append_output(OutputKind kind, std::string text, std::vector<OutputValue> values);
     OutputBatch drain_output();
 
     // One chunk against the live data model. Works while the play session is closed.

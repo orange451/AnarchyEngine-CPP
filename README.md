@@ -39,4 +39,4 @@ Stop ends the session. Scripts are aborted, instances created during play are go
 
 The window is the studio. Explorers on either side list the place by instance name. The scene view draws each triangle in the place at that instance's position, and it keeps painting while the simulation is paused. The script editor opens a script from its row, highlights Luau, and completes names and members as you type. The console shows `print` output and script errors, and its command line runs Luau against the same place while play is stopped.
 
-Cut, paste, and rename work on any instance. Double-click a script to edit it. Edit > Test and Edit > Stop are the play session. The widgets and the window come from [JadeFX](https://github.com/orange451/JadeFX_CPP).
+Cut, paste, and rename work on any instance. Rename edits the name in place on its row: Enter keeps it, and Escape or a click elsewhere drops it. Clicking a row again after a pause also renames it. Double-click a script to edit it. Edit > Test and Edit > Stop are the play session. The widgets and the window come from [JadeFX](https://github.com/orange451/JadeFX_CPP).

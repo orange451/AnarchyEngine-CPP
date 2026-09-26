@@ -3,10 +3,13 @@
 #include "DataModelLock.hpp"
 #include "IdeIcons.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace ide {
 namespace {
@@ -19,6 +22,18 @@ constexpr std::size_t kInPlaceEdits = 8;
 // The simulation thread can hold the DataModel lock for a whole step.
 // This wait is short so a busy step does not freeze the shell.
 constexpr std::chrono::milliseconds kLockWait(1);
+
+// A second click on the same row, at least this long after the first, renames it.
+constexpr double kSlowClickSeconds = 0.5;
+// JadeFX's TreeView turns two clicks inside this window into a double-click.
+// A slow click waits this long before renaming, so a double-click that starts
+// with it still runs the primary action.
+constexpr double kDoubleClickSeconds = 0.4;
+// The field starts this far before the row's name, clear of the icon, and
+// stops this far short of the row's right edge. With the field's padding, the
+// typed text lands where the name was drawn.
+constexpr double kRenameLead = 2;
+constexpr double kRenameTrail = 4;
 
 struct ApplyGuard {
     bool& flag;
@@ -67,6 +82,33 @@ public:
     }
 };
 
+// The name editor laid over a row. A plain TextField leaves Escape to its
+// parent; this one cancels the rename.
+class RenameField : public jadefx::TextField {
+public:
+    explicit RenameField(std::function<void()> cancel) : cancel_(std::move(cancel)) {
+        getClassList().add("explorer-rename");
+        setStyle("padding: 0 3px; border-width: 0; border-radius: 4px; background-color: #ffffff;");
+        setPrefColumnCount(1);
+        setVisible(false);
+    }
+
+protected:
+    void handleKey(jadefx::KeyEvent& event) override {
+        if (event.pressed && event.key == jadefx::Key::Escape) {
+            event.consume();
+            if (cancel_) {
+                cancel_();
+            }
+            return;
+        }
+        TextField::handleKey(event);
+    }
+
+private:
+    std::function<void()> cancel_;
+};
+
 }  // namespace
 
 void IdeExplorer::Snapshot::clear() {
@@ -102,11 +144,17 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
         show_menu(item, event.x, event.y);
     });
     tree_->setOnItemActivated([this](jadefx::TreeItem& item) { return activate(item); });
+    // Row clicks bubble here after the row has selected itself.
+    tree_->setOnMouseClicked([this](const jadefx::MouseEvent& event) { clicked(event); });
     insert_button_ = jadefx::make<InsertButton>();
     insert_button_->setOnMouseClicked([this](const jadefx::MouseEvent&) { open_insert(); });
     tree_->setHoverAccessory(insert_button_);
     Fill(*tree_);
     getChildren().add(tree_);
+    // After the tree, so it draws over the rows and is hit first.
+    rename_field_ = jadefx::make<RenameField>([this] { finish_rename(false); });
+    rename_field_->setOnAction([this](jadefx::ActionEvent&) { finish_rename(true); });
+    getChildren().add(rename_field_);
     sync();
 }
 
@@ -140,7 +188,33 @@ bool IdeExplorer::actions_for(engine_core::InstanceId id, std::vector<engine_cor
     return !out.empty();
 }
 
+bool IdeExplorer::offers(engine_core::InstanceId id, std::string_view action) const {
+    std::vector<engine_core::ContextAction> actions;
+    if (!actions_for(id, actions)) {
+        return false;
+    }
+    for (const engine_core::ContextAction& entry : actions) {
+        if (entry.name != nullptr && action == entry.name) {
+            return !host_.enabled || host_.enabled(action);
+        }
+    }
+    return false;
+}
+
+void IdeExplorer::run(const std::string& action, engine_core::InstanceId id) {
+    if (action == "Rename") {
+        begin_rename(id);
+        return;
+    }
+    if (host_.run) {
+        host_.run(action, id);
+    }
+}
+
 void IdeExplorer::show_menu(jadefx::TreeItem& item, double x, double y) {
+    // A right-click is outside the field, and a menu is not the second click of a pair.
+    finish_rename(false);
+    forget_clicks();
     engine_core::InstanceId id = 0;
     if (!find_id(&item, id)) {
         return;
@@ -174,11 +248,7 @@ void IdeExplorer::show_menu(jadefx::TreeItem& item, double x, double y) {
         const bool on = !host_.enabled || host_.enabled(action.name);
         entry->setDisable(!on);
         const std::string name = action.name;
-        entry->setOnAction([this, id, name](jadefx::ActionEvent&) {
-            if (host_.run) {
-                host_.run(name, id);
-            }
-        });
+        entry->setOnAction([this, id, name](jadefx::ActionEvent&) { run(name, id); });
         menu_->getItems().add(std::move(entry));
         any = true;
     }
@@ -206,10 +276,169 @@ bool IdeExplorer::activate(jadefx::TreeItem& item) {
         if (host_.enabled && !host_.enabled(action.name)) {
             return false;
         }
-        host_.run(action.name, id);
+        run(action.name, id);
         return true;
     }
     return false;
+}
+
+double IdeExplorer::now() const {
+    const jadefx::Scene* scene = getScene();
+    return scene != nullptr ? scene->timeSeconds() : -1;
+}
+
+void IdeExplorer::clicked(const jadefx::MouseEvent& event) {
+    slow_pending_ = false;
+    const double at = now();
+    // The row's own handler already selected it. The disclosure arrow, the +
+    // button, the scrollbar, and the empty space under the rows are not row clicks.
+    jadefx::TreeItem* item = nullptr;
+    for (jadefx::Node* node = tree_->pick(event.x, event.y); node != nullptr && node != tree_.get();
+         node = node->getParent()) {
+        const std::string_view type = node->getElementType();
+        if (type == "tree-disclosure-node") {
+            break;
+        }
+        if (type == "tree-cell") {
+            item = tree_->getSelectedItem();
+            break;
+        }
+    }
+    engine_core::InstanceId id = 0;
+    if (at < 0 || item == nullptr || !find_id(item, id)) {
+        forget_clicks();
+        return;
+    }
+    const bool same = click_held_ && click_id_ == id;
+    const double gap = at - click_at_;
+    if (same && gap < kDoubleClickSeconds) {
+        // The tree took this pair as a double-click.
+        click_held_ = false;
+        return;
+    }
+    if (same && click_pairs_ && gap >= kSlowClickSeconds) {
+        slow_pending_ = true;
+        slow_id_ = id;
+        slow_at_ = at;
+        click_pairs_ = false;
+    } else {
+        click_pairs_ = true;
+    }
+    click_held_ = true;
+    click_id_ = id;
+    click_at_ = at;
+}
+
+void IdeExplorer::poll_clicks() {
+    if (!click_held_ && !slow_pending_) {
+        return;
+    }
+    // Two clicks only pair while the tree keeps focus between them.
+    const jadefx::Scene* scene = getScene();
+    jadefx::Node* focus = scene != nullptr ? scene->focusedNode() : nullptr;
+    if (focus == nullptr || !tree_->isAncestorOf(focus)) {
+        forget_clicks();
+        return;
+    }
+    if (!slow_pending_ || now() - slow_at_ < kDoubleClickSeconds) {
+        return;
+    }
+    slow_pending_ = false;
+    const std::shared_ptr<jadefx::TreeItem> row = row_ptr(slow_id_);
+    if (!row || tree_->getSelectedItem() != row.get() || !offers(slow_id_, "Rename")) {
+        return;
+    }
+    run("Rename", slow_id_);
+}
+
+void IdeExplorer::forget_clicks() {
+    click_held_ = false;
+    click_pairs_ = false;
+    slow_pending_ = false;
+}
+
+void IdeExplorer::begin_rename(engine_core::InstanceId id) {
+    finish_rename(false);
+    forget_clicks();
+    const std::shared_ptr<jadefx::TreeItem> row = row_ptr(id);
+    if (!row || !tree_ || !rename_field_ || getScene() == nullptr) {
+        return;
+    }
+    tree_->select(row.get());
+    // The label is the instance's Name, copied at the last sync.
+    rename_from_ = row->getValue();
+    rename_field_->setText(rename_from_);
+    rename_field_->selectAll();
+    rename_field_->setVisible(true);
+    rename_field_->requestFocus();
+    rename_id_ = id;
+    renaming_ = true;
+}
+
+void IdeExplorer::finish_rename(bool apply) {
+    if (!renaming_) {
+        return;
+    }
+    renaming_ = false;
+    const bool had_focus = rename_field_->isFocused();
+    rename_field_->setVisible(false);
+    // Enter and Escape give the keys back to the tree. A click elsewhere keeps
+    // the focus it moved.
+    if (had_focus) {
+        if (jadefx::Scene* scene = getScene()) {
+            scene->releaseFocus(rename_field_.get());
+        }
+        tree_->requestFocus();
+    }
+    std::string name = rename_field_->getText();
+    rename_field_->clear();
+    if (!apply || name.empty() || name == rename_from_ || !host_.rename) {
+        return;
+    }
+    // Show the new name now. The next sync reads the same name once the
+    // simulation has applied it.
+    if (const std::shared_ptr<jadefx::TreeItem> row = row_ptr(rename_id_)) {
+        row->setValue(name);
+    }
+    host_.rename(rename_id_, std::move(name));
+}
+
+void IdeExplorer::place_rename() {
+    if (!renaming_) {
+        return;
+    }
+    const std::shared_ptr<jadefx::TreeItem> row = row_ptr(rename_id_);
+    if (!row || tree_->getSelectedItem() != row.get() || !rename_field_->isFocused()) {
+        finish_rename(false);
+        return;
+    }
+    // The tree marks the cell drawing its selected row, and the cell's label holds the name.
+    jadefx::Node* cell = nullptr;
+    for (jadefx::Node* candidate : tree_->getElementsByClassName("tree-cell")) {
+        if (candidate->isSelected() && candidate->isVisible() && candidate->getHeight() > 0) {
+            cell = candidate;
+            break;
+        }
+    }
+    if (cell == nullptr) {
+        finish_rename(false);
+        return;
+    }
+    double left = cell->getAbsoluteX();
+    const std::vector<jadefx::Node*> labels = cell->getElementsByClassName("tree-cell-label");
+    if (!labels.empty()) {
+        left = labels.front()->getAbsoluteX() - kRenameLead;
+    }
+    const double right = cell->getAbsoluteX() + cell->getWidth() - kRenameTrail;
+    const double height = std::max(0.0, cell->getHeight() - 2);
+    // A row cut off by the tree's edge keeps the whole field inside the tree.
+    const double top = tree_->getAbsoluteY();
+    const double bottom = top + tree_->getHeight();
+    double y = cell->getAbsoluteY() + 1;
+    y = std::min(y, bottom - height);
+    y = std::max(y, top);
+    const double width = std::max(0.0, right - left);
+    rename_field_->performLayout(left - getAbsoluteX(), y - getAbsoluteY(), width, height);
 }
 
 void IdeExplorer::open_insert() {
@@ -270,7 +499,9 @@ void IdeExplorer::finish_insert(engine_core::InstanceId made) {
 
 void IdeExplorer::layoutChildren() {
     sync();
+    poll_clicks();
     StackPane::layoutChildren();
+    place_rename();
 }
 
 void IdeExplorer::sync() {

@@ -241,12 +241,6 @@ struct IdeLayout::Clip {
     bool held = false;
 };
 
-struct IdeLayout::Prompt {
-    std::shared_ptr<jadefx::Node> sheet;
-    std::shared_ptr<jadefx::TextField> field;
-    std::function<void(std::string)> apply;
-};
-
 IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_unique<Clip>()) {
     runner_.prepare();
 
@@ -356,6 +350,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     ExplorerHost host;
     host.run = [this](std::string_view action, engine_core::InstanceId id) { run_action(action, id); };
     host.enabled = [this](std::string_view action) { return action_enabled(action); };
+    host.rename = [this](engine_core::InstanceId id, std::string name) { rename(id, std::move(name)); };
     host.insert = [this](std::string class_name, engine_core::InstanceId parent, std::shared_ptr<InsertResult> result) {
         runner_.simulation().on_simulation(
             [class_name = std::move(class_name), parent, result](engine_core::DataModel& world) {
@@ -1177,16 +1172,10 @@ IdeLayout::~IdeLayout() {
 }
 
 void IdeLayout::run_action(std::string_view action, std::uint32_t id) {
-    retiring_.reset();
-    if (prompt_ && (prompt_->sheet == nullptr || prompt_->sheet->getScene() == nullptr)) {
-        prompt_.reset();
-    }
     if (action == "Cut") {
         cut(id);
     } else if (action == "Paste") {
         paste(id);
-    } else if (action == "Rename") {
-        rename(id);
     } else if (action == "Edit") {
         edit(id);
     }
@@ -1253,31 +1242,20 @@ void IdeLayout::paste(std::uint32_t id) {
     });
 }
 
-void IdeLayout::rename(std::uint32_t id) {
-    engine_core::DataModel& model = runner_.simulation().datamodel();
-    std::string current;
-    {
-        engine_core::DataModelLock lock(model, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
-        if (!lock.owns()) {
-            return;
-        }
-        if (id != 0 && !model.alive(id)) {
-            return;
-        }
-        current = model.name(id);
+void IdeLayout::rename(std::uint32_t id, std::string name) {
+    if (name.empty()) {
+        return;
     }
-    show_rename(std::move(current), [this, id](std::string name) {
-        runner_.simulation().on_simulation([id, name](engine_core::DataModel& world) {
-            if (id != 0 && !world.alive(id)) {
-                return;
-            }
-            world.history().set_pending_gesture("Rename");
-            world.set_name(id, name);
-            CloseGesture(world);
-        });
-        if (std::shared_ptr<IdeScriptEditor> editor = open_editor(id)) {
-            editor->setTitleText(name);
+    if (std::shared_ptr<IdeScriptEditor> editor = open_editor(id)) {
+        editor->setTitleText(name);
+    }
+    runner_.simulation().on_simulation([id, name = std::move(name)](engine_core::DataModel& world) {
+        if (id != 0 && !world.alive(id)) {
+            return;
         }
+        world.history().set_pending_gesture("Rename");
+        world.set_name(id, name);
+        CloseGesture(world);
     });
 }
 
@@ -1322,79 +1300,6 @@ void IdeLayout::edit(std::uint32_t id) {
         });
     }
     open_scripts_[id] = editor;
-}
-
-void IdeLayout::close_prompt(bool apply) {
-    std::shared_ptr<Prompt> prompt = std::move(prompt_);
-    if (!prompt) {
-        return;
-    }
-    std::string name = prompt->field ? prompt->field->getText() : std::string();
-    std::function<void(std::string)> done = std::move(prompt->apply);
-    if (scene_ != nullptr && prompt->sheet != nullptr && prompt->sheet->getScene() == scene_) {
-        scene_->hidePopup(prompt->sheet.get());
-    }
-    retiring_ = std::move(prompt);
-    if (apply && done) {
-        done(std::move(name));
-    }
-}
-
-void IdeLayout::show_rename(std::string current, std::function<void(std::string)> apply) {
-    if (scene_ == nullptr) {
-        return;
-    }
-    if (prompt_ && prompt_->sheet && prompt_->sheet->getScene() == scene_) {
-        scene_->hidePopup(prompt_->sheet.get());
-    }
-    retiring_ = std::move(prompt_);
-
-    auto sheet = jadefx::make<jadefx::VBox>();
-    sheet->setSpacing(8);
-    sheet->setPadding(jadefx::Insets::uniform(12));
-    sheet->setPrefWidth(300);
-    sheet->setBackground(jadefx::Color::white());
-    sheet->getClassList().add("rename-prompt");
-
-    auto label = jadefx::make<jadefx::Label>("Rename");
-    auto field = jadefx::make<jadefx::TextField>(current);
-    field->setStyle("background-color: #ffffff; border-width: 1px; border-color: #c8c8c8; padding: 6px 8px;");
-    field->selectAll();
-    auto row = jadefx::make<jadefx::HBox>();
-    row->setSpacing(8);
-    row->setAlignment(jadefx::Pos::CenterRight);
-    auto cancel = jadefx::make<jadefx::Button>("Cancel");
-    auto ok = jadefx::make<jadefx::Button>("OK");
-    ok->setDefaultButton(true);
-    cancel->setOnAction([this](jadefx::ActionEvent&) { close_prompt(false); });
-    ok->setOnAction([this](jadefx::ActionEvent&) { close_prompt(true); });
-    field->setOnAction([this](jadefx::ActionEvent&) { close_prompt(true); });
-    row->getChildren().add(cancel);
-    row->getChildren().add(ok);
-    sheet->getChildren().add(label);
-    sheet->getChildren().add(field);
-    sheet->getChildren().add(row);
-
-    prompt_ = std::make_shared<Prompt>();
-    prompt_->sheet = sheet;
-    prompt_->field = field;
-    prompt_->apply = std::move(apply);
-
-    jadefx::PopupOptions options;
-    options.autoHide = true;
-    scene_->showPopup(sheet, 0, 0, -1, -1, options);
-    const double width = sheet->getWidth();
-    const double height = sheet->getHeight();
-    double x = (scene_->getWidth() - width) * 0.5;
-    double y = (scene_->getHeight() - height) * 0.5;
-    if (x < 8) {
-        x = 8;
-    }
-    if (y < 8) {
-        y = 8;
-    }
-    scene_->movePopup(sheet.get(), x, y, width, height);
-    field->requestFocus();
 }
 
 std::shared_ptr<IdeScriptEditor> IdeLayout::open_editor(std::uint32_t id) const {

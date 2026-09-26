@@ -166,6 +166,18 @@ target_include_directories(shell-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
 target_link_libraries(shell-tests PRIVATE jadefx)
 target_compile_features(shell-tests PRIVATE cxx_std_17)
 
+# Drives the explorer through a headless scene: clicks, typing, and keys.
+add_executable(explorer-tests
+    tests/ExplorerRenameTest.cpp
+    src/ide/IdeExplorer.cpp
+    src/ide/IdeIcons.cpp
+    src/ide/IdePane.cpp
+    src/ide/InsertPopup.cpp
+)
+target_include_directories(explorer-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(explorer-tests PRIVATE jadefx engine_core)
+target_compile_features(explorer-tests PRIVATE cxx_std_17)
+
 add_executable(engine-tests
     tests/LuaEngineTest.cpp
     tests/LuauHighlightTest.cpp

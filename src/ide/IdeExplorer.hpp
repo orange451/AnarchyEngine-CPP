@@ -26,11 +26,13 @@ struct InsertResult {
 // The shell runs an action by name. enabled is false when the item should be
 // shown but not clickable, such as Paste with an empty clipboard.
 // insert creates class_name under parent and reports the new id through result.
+// The explorer runs Rename itself and hands the typed name to rename.
 struct ExplorerHost {
     std::function<void(std::string_view action, engine_core::InstanceId id)> run;
     std::function<bool(std::string_view action)> enabled;
     std::function<void(std::string class_name, engine_core::InstanceId parent, std::shared_ptr<InsertResult> result)>
         insert;
+    std::function<void(engine_core::InstanceId id, std::string name)> rename;
 };
 
 // Hierarchy under one DataModel. The hidden tree root is that instance.
@@ -39,6 +41,10 @@ struct ExplorerHost {
 // per instance.
 // A right-click opens that instance's context actions. A double-click runs the
 // primary one, which for a script is Edit.
+// Rename puts a text field over the row's name with the whole name selected.
+// Enter applies it. Escape, an empty name, or focus moving anywhere else
+// cancels. A second click on the same row, half a second or more after the
+// first, runs Rename too.
 // Hovering a row shows + on its right. That opens a searchable list of classes
 // Instance.new can create, and the chosen class is parented under the row.
 class IdeExplorer : public IdePane {
@@ -68,8 +74,22 @@ private:
     void sync();
     bool find_id(const jadefx::TreeItem* item, engine_core::InstanceId& id) const;
     bool actions_for(engine_core::InstanceId id, std::vector<engine_core::ContextAction>& out) const;
+    bool offers(engine_core::InstanceId id, std::string_view action) const;
+    void run(const std::string& action, engine_core::InstanceId id);
     void show_menu(jadefx::TreeItem& item, double x, double y);
     bool activate(jadefx::TreeItem& item);
+    // Seconds from the scene clock. Negative when the tree is not in a scene.
+    double now() const;
+    void clicked(const jadefx::MouseEvent& event);
+    // Starts a slow click's rename once no double-click can follow it, and
+    // forgets the last click when focus leaves the tree.
+    void poll_clicks();
+    void forget_clicks();
+    void begin_rename(engine_core::InstanceId id);
+    void finish_rename(bool apply);
+    // Lays the field over the renamed row's name. Cancels when that row is
+    // gone, no longer selected, scrolled out of view, or the field lost focus.
+    void place_rename();
     void open_insert();
     void create_child(const std::string& class_name);
     void finish_insert(engine_core::InstanceId made);
@@ -100,6 +120,22 @@ private:
     std::shared_ptr<InsertResult> pending_insert_;
     std::shared_ptr<jadefx::Node> insert_button_;
     std::unique_ptr<InsertPopup> insert_popup_;
+
+    // Hidden until a rename. Kept as a child so it is styled every frame.
+    std::shared_ptr<jadefx::TextField> rename_field_;
+    bool renaming_ = false;
+    engine_core::InstanceId rename_id_ = 0;
+    std::string rename_from_;
+    // The last single click on a row. pairs is false once that click already
+    // started a rename, so the next one starts a new pair.
+    bool click_held_ = false;
+    bool click_pairs_ = false;
+    engine_core::InstanceId click_id_ = 0;
+    double click_at_ = 0;
+    // A slow click waits out the double-click window before it renames.
+    bool slow_pending_ = false;
+    engine_core::InstanceId slow_id_ = 0;
+    double slow_at_ = 0;
 };
 
 }  // namespace ide

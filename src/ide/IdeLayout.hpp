@@ -31,6 +31,7 @@ class IdeScriptEditor;
 // The Edit menu shows Test, or Stop with Pause or Resume.
 // Explorer rows open Cut, Paste, and Rename. A script also has Edit, and a
 // double-click runs it. Edit docks a script editor on the scene view's tab strip.
+// The explorer edits a name in place and hands the result to rename.
 class IdeLayout {
 public:
     // windowWidth and windowHeight are the window size in points, used to place the splitters.
@@ -45,17 +46,14 @@ public:
     void attachFrame(jadefx::Stage& stage);
 
 private:
-    struct Prompt;
     struct Clip;
 
     void run_action(std::string_view action, std::uint32_t id);
     bool action_enabled(std::string_view action) const;
     void cut(std::uint32_t id);
     void paste(std::uint32_t id);
-    void rename(std::uint32_t id);
+    void rename(std::uint32_t id, std::string name);
     void edit(std::uint32_t id);
-    void close_prompt(bool apply);
-    void show_rename(std::string current, std::function<void(std::string)> apply);
     std::shared_ptr<IdeScriptEditor> open_editor(std::uint32_t id) const;
     void flush_editors();
     void reapply_editors();
@@ -123,10 +121,6 @@ private:
     // Stop restores the place, then these strings are written back.
     std::unordered_map<std::uint32_t, std::string> kept_sources_;
     std::unique_ptr<Clip> clip_;
-    std::shared_ptr<Prompt> prompt_;
-    // The rename sheet stays alive until the next action, so its button handler
-    // is not destroyed while that handler is still on the stack.
-    std::shared_ptr<Prompt> retiring_;
 };
 
 }  // namespace ide

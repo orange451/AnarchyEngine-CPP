@@ -103,7 +103,12 @@ ConsoleLog::ConsoleLog() {
     // A field row repeats its table's stamp so the columns line up and a copy keeps it,
     // but only the first row of a print shows one.
     define("gutter", jadefx::Color::rgb8(0, 0, 0, 0));
-    define("toggle", jadefx::Color::rgb8(18, 78, 148));
+    // What opens or closes a table is underlined, like a link.
+    jadefx::TextStyle toggle;
+    toggle.hasFill = true;
+    toggle.fill = jadefx::Color::rgb8(18, 78, 148);
+    toggle.underline = true;
+    defineStyleClass("toggle", toggle);
     define("key", jadefx::Color::rgb8(136, 19, 145));
     define("note", jadefx::Color::rgb8(120, 124, 130));
     rows_.assign(static_cast<std::size_t>(paragraphCount()), Row{});
@@ -372,24 +377,39 @@ bool ConsoleLog::toggleAt(int paragraph, int column) {
     return true;
 }
 
-const ConsoleLog::Toggle* ConsoleLog::toggleUnder(double x, double y) const {
+bool ConsoleLog::spotUnder(double x, double y, int& paragraph, int& column) const {
+    // The character whose glyph is under the pointer, not the nearest caret gap:
+    // the gap lands on a brace from half a glyph to its left.
     const jadefx::CharacterHit hitAt = hit(x, y);
     if (!hitAt.valid || hitAt.characterIndex < 0) {
+        return false;
+    }
+    const jadefx::TextPos pos = position(hitAt.characterIndex);
+    paragraph = pos.paragraph;
+    column = pos.column;
+    return true;
+}
+
+const ConsoleLog::Toggle* ConsoleLog::toggleUnder(double x, double y) const {
+    int paragraph = 0;
+    int column = 0;
+    if (!spotUnder(x, y, paragraph, column)) {
         return nullptr;
     }
-    const int slot = findToggle(hitAt.paragraph, hitAt.column);
+    const int slot = findToggle(paragraph, column);
     if (slot < 0) {
         return nullptr;
     }
-    return &rows_[static_cast<std::size_t>(hitAt.paragraph)].toggles[static_cast<std::size_t>(slot)];
+    return &rows_[static_cast<std::size_t>(paragraph)].toggles[static_cast<std::size_t>(slot)];
 }
 
 void ConsoleLog::handleMousePressed(const jadefx::MouseEvent& event) {
     // cursorAt leaves the scroll bars out, so a press on a bar over a brace still scrolls.
+    int paragraph = 0;
+    int column = 0;
     if (event.button == 0 && !event.shift() && !event.shortcut() &&
-        cursorAt(event.x, event.y) == jadefx::Cursor::Pointer) {
-        const jadefx::CharacterHit hitAt = hit(event.x, event.y);
-        toggleAt(hitAt.paragraph, hitAt.column);
+        cursorAt(event.x, event.y) == jadefx::Cursor::Pointer && spotUnder(event.x, event.y, paragraph, column)) {
+        toggleAt(paragraph, column);
         return;
     }
     jadefx::StyleClassedTextArea::handleMousePressed(event);

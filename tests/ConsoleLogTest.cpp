@@ -130,6 +130,43 @@ int main() {
     Expect(clicked, "{...} shows a pointer");
     Expect(log->paragraphCount() == 11, "a click opens the table");
 
+    // The hand shows over the braces' own glyphs: from the left edge of { to the right edge of },
+    // never over the half glyph in front of them.
+    {
+        log->clearLog();
+        log->appendLine(PrintLine("t\ttable: 0x1\n", {{"t", nullptr}, {"table: 0x1", MakeTable()}}));
+        scene->layout(600, 300, 1);
+        const int brace = Column(*log, 0, "{...}");
+        auto gapX = [&](int column, double& x, double& y) {
+            log->moveTo(0, column);
+            const jadefx::TextBounds bounds = log->caretBounds();
+            x = bounds.x;
+            y = bounds.y + bounds.height * 0.5;
+            return bounds.valid;
+        };
+        double left = 0;
+        double right = 0;
+        double y = 0;
+        const bool measured = gapX(brace, left, y) && gapX(brace + 5, right, y);
+        Expect(measured, "the braces are on screen");
+        double first = -1;
+        double last = -1;
+        for (double x = 0; x < 600; x += 0.25) {
+            if (log->cursorAt(x, y) == jadefx::Cursor::Pointer) {
+                if (first < 0) {
+                    first = x;
+                }
+                last = x;
+            }
+        }
+        Expect(first >= left && first < left + 1, "the hand starts at the left edge of {");
+        Expect(last < right && last > right - 1, "the hand ends at the right edge of }");
+        const jadefx::StyleSpans spans =
+            log->getStyleSpans(log->absolutePosition(0, brace), log->absolutePosition(0, brace + 5));
+        Expect(spans.spans().size() == 1 && spans.spans()[0].style.styleClass == "toggle",
+               "all of {...} takes the underlined toggle style");
+    }
+
     log->clearLog();
     Expect(log->paragraphCount() == 1 && log->getText().empty(), "clearing empties the log");
     Expect(!log->toggleAt(0, 0), "a cleared log has no toggles");

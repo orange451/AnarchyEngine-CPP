@@ -70,6 +70,7 @@ private:
     // What the toggle shows in its row, and where its clickable part ends.
     static std::string toggleText(const Toggle& toggle);
     static int clickEnd(const Toggle& toggle);
+    bool spotUnder(double x, double y, int& paragraph, int& column) const;
     const Toggle* toggleUnder(double x, double y) const;
     int findToggle(int paragraph, int column) const;
     void syncRows();

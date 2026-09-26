@@ -140,7 +140,8 @@ public:
     void set_simulated(InstanceId id, bool simulated);
     void set_visual_only(InstanceId id, bool visual_only);
     // Hierarchy. Parent 0 is this root DataModel. kNoParent clears the parent.
-    // Equal parent is a no-op. Emits Changed, property_changed,
+    // The child goes last among the new parent's children, so siblings keep
+    // the order they arrived in. Equal parent is a no-op. Emits Changed, property_changed,
     // ChildRemoved/ChildAdded, and AncestryChanged on this id and descendants.
     void set_parent(InstanceId id, InstanceId parent);
 
@@ -453,7 +454,7 @@ private:
     void retire_slot(std::uint32_t index, bool bump_generation);
     std::uint16_t pool_index_for(const void* type_key) const;
     void adopt_slot(std::uint16_t pool_index, InstanceId id);
-    void link_children_front(InstanceId parent, const std::vector<InstanceId>& children);
+    void link_children(InstanceId parent, const std::vector<InstanceId>& children);
     void clear_hierarchy();
     void rebuild_free_list();
     std::vector<InstanceId> child_ids(InstanceId parent) const;

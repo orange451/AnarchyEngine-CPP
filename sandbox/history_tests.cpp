@@ -16,6 +16,7 @@
 #include <cstring>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -445,9 +446,9 @@ TEST_CASE("H13 undo destroy restores children and names", "[H13][history]") {
     REQUIRE(game.parent(first_id) == folder_id);
     REQUIRE(game.parent(second_id) == folder_id);
     REQUIRE(game.parent(grand_id) == second_id);
-    // set_parent inserts at the head, so the later child is first.
-    REQUIRE(game.first_child(folder_id) == second_id);
-    REQUIRE(game.next_sibling(second_id) == first_id);
+    // A child goes last, so the one parented first is first.
+    REQUIRE(game.first_child(folder_id) == first_id);
+    REQUIRE(game.next_sibling(first_id) == second_id);
 }
 
 TEST_CASE("H15 applying undo does not record a waypoint", "[H15][history]") {
@@ -500,4 +501,33 @@ TEST_CASE("H16 a text stack out of sync with the editor refuses the edit", "[H16
 
     REQUIRE_FALSE(text.record_change(0, "x", ""));
     REQUIRE_FALSE(text.can_undo());
+}
+
+TEST_CASE("H17 set_parent puts a child last and undo puts it back in its old place", "[H17][history]") {
+    engine_core::Game game;
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    game.set_parent(folder.id(), 0);
+    const engine_core::InstanceId f = folder.id();
+    const engine_core::InstanceId a = make_part(game, "A").id();
+    const engine_core::InstanceId b = make_part(game, "B").id();
+    const engine_core::InstanceId c = make_part(game, "C").id();
+    close_gesture(game);
+    game.history().reset_waypoints();
+    using Ids = std::vector<engine_core::InstanceId>;
+    REQUIRE(game.get_children(0) == Ids{f, a, b, c});
+
+    game.history().set_pending_gesture("Move");
+    game.set_parent(b, f);
+    close_gesture(game);
+    game.set_parent(a, f);
+    close_gesture(game);
+    REQUIRE(game.get_children(f) == Ids{b, a});
+    REQUIRE(game.get_children(0) == Ids{f, c});
+
+    game.history().undo();
+    game.history().undo();
+    REQUIRE(game.get_children(0) == Ids{f, a, b, c});
+    game.history().redo();
+    REQUIRE(game.get_children(f) == Ids{b});
+    REQUIRE(game.get_children(0) == Ids{f, a, c});
 }

@@ -35,6 +35,7 @@ struct Rig {
     std::vector<engine_core::InstanceId> ids;
     std::vector<std::pair<engine_core::InstanceId, std::string>> renames;
     std::vector<std::string> runs;
+    int moves = 0;
     std::vector<std::pair<std::string, std::vector<engine_core::InstanceId>>> batches;
     // The modifier keys the next click sees.
     int mods = 0;
@@ -57,6 +58,10 @@ struct Rig {
         host.rename = [this](engine_core::InstanceId id, std::string name) {
             game.set_name(id, name);
             renames.emplace_back(id, std::move(name));
+        };
+        host.move = [this](const std::vector<engine_core::InstanceId>& moved, engine_core::InstanceId parent) {
+            ++moves;
+            ide::move_set(game, moved, parent);
         };
         explorer = jadefx::make<ide::IdeExplorer>(game, "Explorer", host);
         explorer->setPrefWidthRatio(1);
@@ -105,6 +110,30 @@ struct Rig {
     }
 
     void key(int code) { scene->noteKey(code, true, false, 0); }
+
+    // Presses the middle of from's row, moves to along (0 top, 1 bottom) of
+    // to's row, and releases there. The move lays out in between.
+    void drag(const std::string& from, const std::string& to, double along, double at) {
+        frame(at);
+        jadefx::Node* source = cell(from);
+        jadefx::Node* target = cell(to);
+        Expect(source != nullptr && target != nullptr, "both drag rows are on screen");
+        if (source == nullptr || target == nullptr) {
+            return;
+        }
+        const double x = source->getAbsoluteX() + source->getWidth() * 0.4;
+        scene->noteButton(0, true, x, source->getAbsoluteY() + source->getHeight() * 0.5, mods);
+        const double y = target->getAbsoluteY() + target->getHeight() * along;
+        scene->noteMove(x, y);
+        frame(at + 0.05);
+        scene->noteMove(x, y);
+        scene->noteButton(0, false, x, y, mods);
+        frame(at + 0.1);
+    }
+
+    std::vector<engine_core::InstanceId> children(engine_core::InstanceId parent) const {
+        return game.get_children(parent);
+    }
 
     // The row draws the selection bar.
     bool painted(const std::string& name) {
@@ -349,7 +378,7 @@ void TestShiftClickSelectsRange() {
     rig.mods = jadefx::Key::ModShift;
     rig.clickRow("Alpha", 0.8);
     rig.frame(0.9);
-    // Rows show newest first: Gamma, Beta, Alpha. The range keeps that order.
+    // Rows show Alpha, Beta, Gamma. The range runs from the anchor, Gamma, up to Alpha.
     Expect(rig.selection() == rig.pick({2, 1, 0}), "Shift and a click selects every row between");
     Expect(rig.painted("Alpha") && rig.painted("Beta") && rig.painted("Gamma"), "the whole range is drawn");
 
@@ -409,7 +438,7 @@ void TestSelectionIsShared() {
 
 void TestKeysMoveTheSelection() {
     Rig rig;
-    rig.clickRow("Gamma", 0.1);
+    rig.clickRow("Alpha", 0.1);
     rig.key(jadefx::Key::Down);
     rig.frame(0.2);
     Expect(rig.selection() == rig.pick({1}), "the arrow keys move the selection");
@@ -463,17 +492,17 @@ void TestCutRunsOnTheSelection() {
 
 void TestCutSet() {
     Rig rig;
-    // Gamma, Beta, Alpha at the top; Inner under Alpha.
+    // Alpha, Beta, Gamma at the top; Inner under Alpha.
     engine_core::Folder& inner = rig.game.create<engine_core::Folder>();
     rig.game.set_parent(inner.id(), rig.ids[0]);
     const engine_core::InstanceId alpha = rig.ids[0];
     const engine_core::InstanceId beta = rig.ids[1];
     const engine_core::InstanceId gamma = rig.ids[2];
-    Expect(ide::cut_set(rig.game, {alpha, gamma}) == std::vector<engine_core::InstanceId>{gamma, alpha},
+    Expect(ide::cut_set(rig.game, {gamma, alpha}) == std::vector<engine_core::InstanceId>{alpha, gamma},
            "a cut takes instances in the order the tree shows them");
     Expect(ide::cut_set(rig.game, {inner.id(), alpha}) == std::vector<engine_core::InstanceId>{alpha},
            "a child goes with its selected parent");
-    Expect(ide::cut_set(rig.game, {inner.id(), beta}) == std::vector<engine_core::InstanceId>{beta, inner.id()},
+    Expect(ide::cut_set(rig.game, {beta, inner.id()}) == std::vector<engine_core::InstanceId>{inner.id(), beta},
            "a child whose parent is not selected is taken on its own");
     rig.game.destroy(beta);
     Expect(ide::cut_set(rig.game, {beta, 0}).empty(), "a cut skips the root and gone instances");
@@ -489,6 +518,71 @@ void TestDeleteRunsOnTheSelection() {
     Expect(rig.explorer->run_on_selection("Delete"), "Delete runs on a multiple selection");
     Expect(rig.batches.size() == 1 && rig.batches[0].second == rig.pick({0, 1, 2}), "many rows use run_many");
     Expect(!rig.explorer->run_on_selection("Edit"), "a folder does not offer Edit");
+}
+
+void TestDragIntoAnotherRow() {
+    Rig rig;
+    rig.drag("Gamma", "Alpha", 0.5, 0.1);
+    Expect(rig.moves == 1, "a drop moves once");
+    Expect(rig.game.parent(rig.ids[2]) == rig.ids[0], "dropping on the middle of a row parents inside it");
+    Expect(rig.selection() == rig.pick({2}), "the dragged row is selected");
+    Expect(!rig.editing(), "the release after a drag does not start a rename");
+    rig.frame(0.3);
+    Expect(rig.cell("Gamma") != nullptr, "the new parent opens to show the moved row");
+    rig.frame(1.5);
+    Expect(!rig.editing(), "a drag never becomes a slow click");
+}
+
+void TestDragBesideAnotherRow() {
+    Rig rig;
+    // Folders are parented in order, so the rows read Alpha, Beta, Gamma.
+    Expect(rig.children(0) == rig.pick({0, 1, 2}), "the rows start in the order they arrived");
+    rig.drag("Alpha", "Gamma", 0.95, 0.1);
+    Expect(rig.children(0) == rig.pick({0, 1, 2}), "beside a row under the same parent changes nothing");
+    rig.drag("Gamma", "Beta", 0.5, 0.5);
+    Expect(rig.children(rig.ids[1]) == rig.pick({2}), "the middle of a row puts it inside");
+    rig.drag("Alpha", "Gamma", 0.05, 1.0);
+    Expect(rig.game.parent(rig.ids[0]) == rig.ids[1], "beside a row puts it under that row's parent");
+    Expect(rig.children(rig.ids[1]) == rig.pick({2, 0}), "and last there, not where the line was");
+}
+
+void TestDragCarriesTheSelection() {
+    Rig rig;
+    rig.game.selection().set(rig.pick({2, 0}));
+    rig.frame(0.05);
+    rig.drag("Alpha", "Beta", 0.5, 0.1);
+    Expect(rig.children(rig.ids[1]) == rig.pick({0, 2}), "every selected row moves, in row order");
+    Expect(rig.moves == 1, "the selection moves as one step");
+}
+
+void TestDragRefusesItsOwnChild() {
+    Rig rig;
+    rig.drag("Gamma", "Alpha", 0.5, 0.1);
+    rig.frame(0.3);
+    rig.drag("Alpha", "Gamma", 0.5, 0.5);
+    Expect(rig.moves == 1, "a row cannot drop inside its own child");
+    Expect(rig.game.parent(rig.ids[0]) == rig.game.id(), "the refused drop leaves the row where it was");
+}
+
+void TestMoveSet() {
+    engine_core::Game game;
+    std::vector<engine_core::InstanceId> ids;
+    for (const char* name : {"A", "B", "C", "D"}) {
+        engine_core::Folder& folder = game.create<engine_core::Folder>();
+        game.set_name(folder.id(), name);
+        game.set_parent(folder.id(), 0);
+        ids.push_back(folder.id());
+    }
+    Expect(game.get_children(0) == ids, "children are in the order they arrived");
+    Expect(!ide::move_set(game, {ids[3]}, 0), "an instance already under the parent stays put");
+    Expect(game.get_children(0) == ids, "and keeps its place");
+    Expect(ide::move_set(game, {ids[3], ids[2]}, ids[0]), "move_set moves");
+    Expect(game.get_children(ids[0]) == std::vector<engine_core::InstanceId>{ids[3], ids[2]},
+           "the moved instances go last, in the order given");
+    Expect(ide::move_set(game, {ids[3]}, 0), "back to the root");
+    Expect(game.get_children(0) == std::vector<engine_core::InstanceId>{ids[0], ids[1], ids[3]}, "last again");
+    Expect(!ide::move_set(game, {ids[0]}, ids[2]), "an instance never goes inside its own child");
+    Expect(!ide::move_set(game, {0}, ids[1]), "the root never moves");
 }
 
 }  // namespace
@@ -518,6 +612,11 @@ int main() {
     TestDeleteRunsOnTheSelection();
     TestCutRunsOnTheSelection();
     TestCutSet();
+    TestDragIntoAnotherRow();
+    TestDragBesideAnotherRow();
+    TestDragCarriesTheSelection();
+    TestDragRefusesItsOwnChild();
+    TestMoveSet();
     if (gFailures == 0) {
         std::printf("explorer tests passed\n");
         return 0;

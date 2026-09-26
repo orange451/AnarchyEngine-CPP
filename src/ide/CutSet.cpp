@@ -40,4 +40,34 @@ std::vector<engine_core::InstanceId> cut_set(const engine_core::DataModel& game,
     return out;
 }
 
+bool move_set(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids,
+              engine_core::InstanceId parent) {
+    constexpr engine_core::InstanceId kNone = engine_core::DataModel::kNoParent;
+    if (parent == kNone || (parent != 0 && !world.alive(parent))) {
+        return false;
+    }
+    bool any = false;
+    for (engine_core::InstanceId id : ids) {
+        if (id == 0 || !world.alive(id)) {
+            continue;
+        }
+        bool cycle = false;
+        for (engine_core::InstanceId cursor = parent; cursor != 0 && cursor != kNone; cursor = world.parent(cursor)) {
+            if (cursor == id) {
+                cycle = true;
+                break;
+            }
+        }
+        if (cycle) {
+            continue;
+        }
+        if (world.parent(id) == parent) {
+            continue;
+        }
+        world.set_parent(id, parent);
+        any = true;
+    }
+    return any;
+}
+
 }  // namespace ide

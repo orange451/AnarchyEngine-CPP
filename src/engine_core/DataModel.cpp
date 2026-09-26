@@ -998,16 +998,24 @@ void DataModel::link_child(InstanceId parent_id, InstanceId child) {
         }
         head = &parent->first_child;
     }
+    // Last, so siblings stay in the order they arrived.
     part->parent = parent_id;
+    part->next_sibling = 0;
     part->prev_sibling = 0;
-    part->next_sibling = *head;
-    if (*head != 0) {
-        Slot* first = slot(*head);
-        if (first != nullptr) {
-            first->prev_sibling = child;
-        }
+    if (*head == 0) {
+        *head = child;
+        return;
     }
-    *head = child;
+    InstanceId last = *head;
+    for (Slot* cursor = slot(last); cursor != nullptr && cursor->next_sibling != 0; cursor = slot(last)) {
+        last = cursor->next_sibling;
+    }
+    Slot* tail = slot(last);
+    if (tail == nullptr) {
+        contract_fail("set_parent lost an instance");
+    }
+    tail->next_sibling = child;
+    part->prev_sibling = last;
 }
 
 void DataModel::detach_links(InstanceId id, Slot& part) {
@@ -1486,9 +1494,9 @@ void DataModel::clear_hierarchy() {
     }
 }
 
-void DataModel::link_children_front(InstanceId parent, const std::vector<InstanceId>& children) {
-    for (std::size_t n = children.size(); n > 0; --n) {
-        link_child(parent, children[n - 1]);
+void DataModel::link_children(InstanceId parent, const std::vector<InstanceId>& children) {
+    for (InstanceId child : children) {
+        link_child(parent, child);
     }
 }
 
@@ -1547,9 +1555,9 @@ void DataModel::restore_place_unlocked() {
         restore_record(record);
     }
     clear_hierarchy();
-    link_children_front(0, place.root_children);
+    link_children(0, place.root_children);
     for (const PlaceRecord& record : place.instances) {
-        link_children_front(record.id, record.children);
+        link_children(record.id, record.children);
     }
     if (state_->root != nullptr) {
         state_->root->name_ = place.root_name;
@@ -1903,7 +1911,7 @@ void DataModel::place_at_sibling(InstanceId id, int index) {
             unlink_parent(child, *child_slot);
         }
     }
-    link_children_front(parent, kids);
+    link_children(parent, kids);
 }
 
 void DataModel::reparent_record(const AuthoredRecord& record) {

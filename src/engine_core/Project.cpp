@@ -597,11 +597,10 @@ std::vector<InstanceId> build(DataModel& world, const std::vector<PlanNode>& pla
             lua->set_source(node.source);
         }
     }
-    // set_parent puts a child first, so parent the last child first.
+    // set_parent puts a child last, so children go in in their saved order.
     for (std::size_t index = 0; index < plan.size(); ++index) {
-        const std::vector<std::size_t>& children = plan[index].children;
-        for (std::size_t n = children.size(); n > 0; --n) {
-            world.set_parent(ids[children[n - 1]], ids[index]);
+        for (std::size_t child : plan[index].children) {
+            world.set_parent(ids[child], ids[index]);
         }
     }
     return ids;

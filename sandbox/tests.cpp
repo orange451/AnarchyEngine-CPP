@@ -1337,6 +1337,45 @@ TEST_CASE("a paused edit destroys at once", "[edit]") {
     engine.stop();
 }
 
+TEST_CASE("a paused edit writes transform, color, and flags at once", "[edit]") {
+    engine_core::Engine engine;
+    engine.start();
+    engine_core::InstanceId id = 0;
+    bool seen_inside = false;
+    const engine_core::Transform moved = engine_core::transform_translation(1.f, 2.f, 3.f);
+    engine.on_simulation([&](engine_core::DataModel& model) {
+        engine_core::GameObject& part = model.create<engine_core::GameObject>();
+        model.set_parent(part.id(), model.id());
+        id = part.id();
+        engine_core::ColorRgb red;
+        red.g = 0.f;
+        red.b = 0.f;
+        part.set_color(red);
+        part.set_transform(moved);
+        model.set_simulated(id, true);
+        model.set_visual_only(id, true);
+        // A project load reads these back before it captures the place.
+        seen_inside = part.color().g == 0.f && part.transform().m[12] == 1.f && model.simulated(id);
+    });
+    REQUIRE(seen_inside);
+    const engine_core::GameObject* part = engine.datamodel().game_object(id);
+    REQUIRE(part != nullptr);
+    REQUIRE(part->color().g == 0.f);
+    REQUIRE(part->transform().m[13] == 2.f);
+    REQUIRE(engine.datamodel().visual_only(id));
+    // Undo of those writes runs as a paused edit too.
+    engine.on_simulation([&](engine_core::DataModel& model) {
+        model.history().end_gesture();
+        model.history().undo();
+    });
+    REQUIRE_FALSE(engine.datamodel().alive(id));
+    engine.on_simulation([&](engine_core::DataModel& model) { model.history().redo(); });
+    REQUIRE(engine.datamodel().visual_only(id));
+    REQUIRE(engine.datamodel().game_object(id)->color().g == 0.f);
+    REQUIRE(engine.paused());
+    engine.stop();
+}
+
 TEST_CASE("an edit during play runs on the simulation thread", "[edit]") {
     engine_core::Engine engine;
     engine.start();

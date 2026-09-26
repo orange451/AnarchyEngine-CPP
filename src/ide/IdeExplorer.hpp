@@ -51,6 +51,10 @@ class IdeExplorer : public IdePane {
 public:
     IdeExplorer(engine_core::DataModel& root, std::string name, ExplorerHost host);
 
+    // Runs action on the selected row when that instance offers it and it is
+    // enabled. False when nothing is selected or the action does not apply.
+    bool run_on_selection(std::string_view action);
+
 protected:
     void layoutChildren() override;
 

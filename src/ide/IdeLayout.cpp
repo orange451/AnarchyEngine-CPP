@@ -239,9 +239,9 @@ void ShowSession(jadefx::MenuItem& test, jadefx::MenuItem& pause, jadefx::MenuIt
 
 }  // namespace
 
+// The cut instance, out of the place until Paste parents it again.
 struct IdeLayout::Clip {
     engine_core::InstanceId id = 0;
-    engine_core::InstanceId parent = engine_core::DataModel::kNoParent;
     bool held = false;
 };
 
@@ -443,6 +443,7 @@ void IdeLayout::mount(jadefx::Scene& scene) {
     scene.addKeyHook([this](jadefx::KeyEvent& event) {
         if (scene_ != nullptr) {
             routeUndo(event, *scene_);
+            routeDelete(event, *scene_);
         }
     });
 }
@@ -731,7 +732,10 @@ void IdeLayout::floatTab(const std::shared_ptr<jadefx::Tab>& tab, double screenX
     auto scene = jadefx::make<jadefx::Scene>(dock, static_cast<double>(width), static_cast<double>(height));
     scene->setStylesheet(kStylesheet);
     jadefx::Scene* utilityScene = scene.get();
-    scene->addKeyHook([this, utilityScene](jadefx::KeyEvent& event) { routeUndo(event, *utilityScene); });
+    scene->addKeyHook([this, utilityScene](jadefx::KeyEvent& event) {
+        routeUndo(event, *utilityScene);
+        routeDelete(event, *utilityScene);
+    });
     window->stage().setScene(std::move(scene));
     dock->take(tab);
     window->setCanClose([this, raw = window.get()]() {
@@ -1190,6 +1194,43 @@ void IdeLayout::run_action(std::string_view action, std::uint32_t id) {
         paste(id);
     } else if (action == "Edit") {
         edit(id);
+    } else if (action == "Delete") {
+        delete_instance(id);
+    }
+}
+
+void IdeLayout::delete_instance(std::uint32_t id) {
+    if (id == 0) {
+        return;
+    }
+    runner_.simulation().on_simulation([id](engine_core::DataModel& world) {
+        if (!world.alive(id)) {
+            return;
+        }
+        world.history().set_pending_gesture("Delete");
+        world.destroy_tree(id);
+        CloseGesture(world);
+    });
+}
+
+void IdeLayout::routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene) {
+    if (!event.pressed || event.consumed || event.shortcut() || event.alt) {
+        return;
+    }
+    // The Mac keyboard's Delete key is Backspace.
+#if defined(__APPLE__)
+    const bool key = event.key == jadefx::Key::Delete || event.key == jadefx::Key::Backspace;
+#else
+    const bool key = event.key == jadefx::Key::Delete;
+#endif
+    jadefx::Node* focused = scene.focusedNode();
+    if (!key || InTextWidget(focused)) {
+        return;
+    }
+    if (IdeExplorer* explorer = Owning<IdeExplorer>(focused)) {
+        if (explorer->run_on_selection("Delete")) {
+            event.consume();
+        }
     }
 }
 
@@ -1205,24 +1246,21 @@ void IdeLayout::cut(std::uint32_t id) {
         return;
     }
     engine_core::DataModel& model = runner_.simulation().datamodel();
-    engine_core::InstanceId old_parent = engine_core::DataModel::kNoParent;
     {
         engine_core::DataModelLock lock(model, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
         if (!lock.owns() || !model.alive(id)) {
             return;
         }
-        old_parent = model.parent(id);
     }
-    const engine_core::InstanceId put_back = clip_->held && clip_->id != id ? clip_->id : 0;
-    const engine_core::InstanceId put_parent = put_back != 0 ? clip_->parent : engine_core::DataModel::kNoParent;
+    // A second Cut replaces the clipboard. What it held is already out of the
+    // place, so it is deleted, not put back. Undo of this Cut brings it back.
+    const engine_core::InstanceId dropped = clip_->held && clip_->id != id ? clip_->id : 0;
     clip_->id = id;
-    clip_->parent = old_parent;
     clip_->held = true;
-    runner_.simulation().on_simulation([id, put_back, put_parent](engine_core::DataModel& world) {
+    runner_.simulation().on_simulation([id, dropped](engine_core::DataModel& world) {
         world.history().set_pending_gesture("Cut");
-        if (put_back != 0 && world.alive(put_back) && world.parent(put_back) == engine_core::DataModel::kNoParent &&
-            parent_ok(world, put_parent) && !would_cycle(world, put_back, put_parent)) {
-            world.set_parent(put_back, put_parent);
+        if (dropped != 0 && world.alive(dropped) && world.parent(dropped) == engine_core::DataModel::kNoParent) {
+            world.destroy_tree(dropped);
         }
         if (world.alive(id)) {
             world.set_parent(id, engine_core::DataModel::kNoParent);

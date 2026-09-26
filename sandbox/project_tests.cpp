@@ -1,4 +1,5 @@
 #include "DataModel.hpp"
+#include "Engine.hpp"
 #include "Folder.hpp"
 #include "GameObject.hpp"
 #include "Project.hpp"
@@ -15,6 +16,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <random>
 #include <set>
 #include <string>
@@ -790,4 +792,74 @@ TEST_CASE("reset_place empties the place and drops undo", "[project]") {
     add_part(model, 0, "Session");
     model.stop_simulation();
     REQUIRE(model.get_children(0).empty());
+}
+
+TEST_CASE("a project opened in a running engine keeps colors and transforms", "[project]") {
+    TempDir dir;
+    std::string guid;
+    {
+        SimRole role;
+        Project project = Project::create(dir.path);
+        engine_core::GameObject& part = add_part(project.datamodel(), 0, "Part");
+        part.set_color(rgb(0.25f, 0.5f, 0.75f));
+        part.set_transform(engine_core::transform_translation(4.f, 5.f, 6.f));
+        guid = project.datamodel().guid(part.id());
+        project.save();
+    }
+    // The IDE opens a project as a paused edit on the UI thread.
+    engine_core::Engine engine;
+    engine.start();
+    std::unique_ptr<Project> project;
+    engine.on_simulation([&](DataModel& model) { project = std::make_unique<Project>(Project::load(dir.path, model)); });
+    const DataModel& model = engine.datamodel();
+    const engine_core::GameObject* part = model.game_object(*model.find_guid(guid));
+    REQUIRE(part != nullptr);
+    REQUIRE(part->color().g == 0.5f);
+    REQUIRE(part->transform().m[14] == 6.f);
+    // Nothing waits for the next step: a save right away writes the same bytes.
+    const auto before = tree_files(dir.path);
+    engine.on_simulation([&](DataModel&) { project->save(); });
+    REQUIRE(project->last_save().written.empty());
+    REQUIRE(tree_files(dir.path) == before);
+    engine.stop();
+}
+
+TEST_CASE("destroy_tree destroys descendants and one undo brings them back", "[project][history]") {
+    SimRole role;
+    DataModel model;
+    engine_core::Folder& box = model.create<engine_core::Folder>();
+    model.set_parent(box.id(), 0);
+    const InstanceId inner = add_part(model, box.id(), "Inner").id();
+    const InstanceId deep = add_part(model, inner, "Deep").id();
+    model.history().end_gesture();
+    model.history().reset_waypoints();
+
+    model.history().set_pending_gesture("Delete");
+    model.destroy_tree(box.id());
+    model.history().end_gesture();
+    REQUIRE_FALSE(model.alive(box.id()));
+    REQUIRE_FALSE(model.alive(inner));
+    REQUIRE_FALSE(model.alive(deep));
+    REQUIRE(model.history().can_undo().second == "Delete");
+
+    model.history().undo();
+    REQUIRE(model.alive(box.id()));
+    REQUIRE(model.parent(box.id()) == 0);
+    REQUIRE(model.parent(inner) == box.id());
+    REQUIRE(model.parent(deep) == inner);
+    REQUIRE(model.name(deep) == "Deep");
+
+    model.destroy_tree(0);
+    REQUIRE(model.get_children(0).size() == 1);
+
+    std::vector<engine_core::ContextAction> root_actions;
+    model.context_actions(root_actions);
+    std::vector<engine_core::ContextAction> part_actions;
+    model.instance(inner)->context_actions(part_actions);
+    auto has_delete = [](const std::vector<engine_core::ContextAction>& actions) {
+        return std::any_of(actions.begin(), actions.end(),
+                           [](const engine_core::ContextAction& a) { return std::string(a.name) == "Delete"; });
+    };
+    REQUIRE_FALSE(has_delete(root_actions));
+    REQUIRE(has_delete(part_actions));
 }

@@ -63,6 +63,8 @@ private:
     void run_action(std::string_view action, std::uint32_t id);
     bool action_enabled(std::string_view action) const;
     void cut(std::uint32_t id);
+    // Destroys id and its descendants as one undo step.
+    void delete_instance(std::uint32_t id);
     void paste(std::uint32_t id);
     void rename(std::uint32_t id, std::string name);
     void edit(std::uint32_t id);
@@ -95,6 +97,8 @@ private:
     void reapply_editors();
     void restore_closed_edits();
     void routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene);
+    // Delete on a focused explorer row deletes that instance. Text fields keep the key.
+    void routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene);
     void noteScriptFocus();
     void adoptDock(const std::shared_ptr<IdeDock>& dock);
     void onTabDrag(IdeDock& from, const jadefx::TabDrag& drag);

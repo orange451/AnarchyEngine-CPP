@@ -113,7 +113,8 @@ public:
     // Class identity. The pointer remains valid after the call.
     virtual const char* class_name() const { return "DataModel"; }
 
-    // Cut, Paste, and Rename. A subclass appends its own, or inserts a primary one.
+    // Cut, Paste, Rename, and Delete; the root has no Delete. A subclass appends
+    // its own, or inserts a primary one.
     virtual void context_actions(std::vector<ContextAction>& out) const;
 
     // Heartbeat calls this on every descendant of the root. dt is that phase's
@@ -131,6 +132,10 @@ public:
     T& create();
     GameObject& create_game_object();
     void destroy(InstanceId id);
+    // Destroys id and every descendant. destroy alone leaves the children alive
+    // and unparented. Children go first, so undo revives each parent before its
+    // children. The root is never destroyed.
+    void destroy_tree(InstanceId id);
 
     void set_simulated(InstanceId id, bool simulated);
     void set_visual_only(InstanceId id, bool visual_only);

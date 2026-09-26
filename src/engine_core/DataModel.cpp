@@ -386,7 +386,7 @@ bool DataModel::authorize(const Slot& part, bool force_sim_write) {
         return true;
     }
     const std::thread::id self = std::this_thread::get_id();
-    if (self == state_->simulation_thread) {
+    if (self == state_->simulation_thread || self == state_->edit_owner) {
         return true;
     }
     if (self == state_->render_thread) {
@@ -606,7 +606,8 @@ void DataModel::destroy(InstanceId id) {
 void DataModel::apply_transform(InstanceId id, const Transform& transform, bool force) {
     if (state_->threads_running) {
         const std::thread::id self = std::this_thread::get_id();
-        if (self != state_->simulation_thread && self != state_->render_thread) {
+        // A paused edit writes now, like SimulationThread. Any other thread enqueues.
+        if (!gameplay_thread() && self != state_->render_thread) {
             Command command;
             command.type = Command::Type::Transform;
             command.id = id;
@@ -643,7 +644,7 @@ void DataModel::apply_transform(InstanceId id, const Transform& transform, bool 
 void DataModel::apply_color(InstanceId id, ColorRgb color, bool force) {
     if (state_->threads_running) {
         const std::thread::id self = std::this_thread::get_id();
-        if (self != state_->simulation_thread && self != state_->render_thread) {
+        if (!gameplay_thread() && self != state_->render_thread) {
             Command command;
             command.type = Command::Type::Color;
             command.id = id;
@@ -677,7 +678,7 @@ void DataModel::apply_color(InstanceId id, ColorRgb color, bool force) {
 }
 
 void DataModel::set_simulated(InstanceId id, bool simulated) {
-    if (state_->threads_running && std::this_thread::get_id() != state_->simulation_thread) {
+    if (!gameplay_thread()) {
         contract_fail("set_simulated runs on SimulationThread");
     }
     Slot* part = slot(id);
@@ -694,7 +695,7 @@ void DataModel::set_simulated(InstanceId id, bool simulated) {
 }
 
 void DataModel::set_visual_only(InstanceId id, bool visual_only) {
-    if (state_->threads_running && std::this_thread::get_id() != state_->simulation_thread) {
+    if (!gameplay_thread()) {
         contract_fail("set_visual_only runs on SimulationThread");
     }
     Slot* part = slot(id);
@@ -1125,6 +1126,31 @@ void DataModel::context_actions(std::vector<ContextAction>& out) const {
     out.push_back(ContextAction{"Cut", false});
     out.push_back(ContextAction{"Paste", false});
     out.push_back(ContextAction{"Rename", false});
+    if (id_ != 0) {
+        out.push_back(ContextAction{"Delete", false});
+    }
+}
+
+void DataModel::destroy_tree(InstanceId id) {
+    if (id == 0 || !alive(id)) {
+        return;
+    }
+    // Preorder, then destroyed back to front: every descendant before its ancestors.
+    std::vector<InstanceId> order;
+    std::vector<InstanceId> pending{id};
+    while (!pending.empty()) {
+        const InstanceId next = pending.back();
+        pending.pop_back();
+        order.push_back(next);
+        for (InstanceId child = first_child(next); child != 0; child = next_sibling(child)) {
+            pending.push_back(child);
+        }
+    }
+    for (auto it = order.rbegin(); it != order.rend(); ++it) {
+        if (alive(*it)) {
+            destroy(*it);
+        }
+    }
 }
 
 void DataModel::set_name(InstanceId id, std::string name) {

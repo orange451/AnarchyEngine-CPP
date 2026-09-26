@@ -54,6 +54,9 @@ const char* ActionIcon(std::string_view name) {
     if (name == "Rename") {
         return "Rename.png";
     }
+    if (name == "Delete") {
+        return "Cross.png";
+    }
     return nullptr;
 }
 
@@ -199,6 +202,15 @@ bool IdeExplorer::offers(engine_core::InstanceId id, std::string_view action) co
         }
     }
     return false;
+}
+
+bool IdeExplorer::run_on_selection(std::string_view action) {
+    engine_core::InstanceId id = 0;
+    if (!tree_ || !find_id(tree_->getSelectedItem(), id) || !offers(id, action)) {
+        return false;
+    }
+    run(std::string(action), id);
+    return true;
 }
 
 void IdeExplorer::run(const std::string& action, engine_core::InstanceId id) {

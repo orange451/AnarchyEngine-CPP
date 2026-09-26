@@ -14,6 +14,29 @@ void LuaSource::context_actions(std::vector<ContextAction>& out) const {
     DataModel::context_actions(out);
 }
 
+void LuaSource::save_properties(PropertyBag& out) const {
+    DataModel::save_properties(out);
+    if (!enabled_) {
+        bag_set(out, "Enabled", JsonValue::boolean(false));
+    }
+}
+
+bool LuaSource::load_property(const std::string& key, const JsonValue& value, std::string& error) {
+    if (key == "Enabled") {
+        if (!value.is_bool()) {
+            error = "Enabled must be true or false";
+            return true;
+        }
+        set_enabled(value.as_bool());
+        return true;
+    }
+    if (key == "Source") {
+        error = "Source belongs in the .luau file, not in json";
+        return true;
+    }
+    return DataModel::load_property(key, value, error);
+}
+
 void LuaSource::set_source(std::string source) {
     if (!on_gameplay_thread()) {
         contract_fail("set_source runs on SimulationThread");

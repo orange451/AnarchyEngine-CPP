@@ -23,6 +23,10 @@ public:
     ColorRgb color() const;
     bool copy_size(float out[3]) const;
 
+    // Transform, Color, and Size when they differ from a new GameObject.
+    void save_properties(PropertyBag& out) const override;
+    bool load_property(const std::string& key, const JsonValue& value, std::string& error) override;
+
 protected:
     void on_release() override;
     void on_reuse() override;

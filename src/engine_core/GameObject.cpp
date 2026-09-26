@@ -81,6 +81,59 @@ bool GameObject::copy_size(float out[3]) const {
     return true;
 }
 
+void GameObject::save_properties(PropertyBag& out) const {
+    DataModel::save_properties(out);
+    const Transform identity = transform_identity();
+    if (std::memcmp(transform_.m, identity.m, sizeof(identity.m)) != 0) {
+        bag_set(out, "Transform", json_floats(transform_.m, 16));
+    }
+    const ColorRgb white{};
+    if (color_.r != white.r || color_.g != white.g || color_.b != white.b || color_.a != white.a) {
+        // Opaque colors write three channels.
+        const float channels[4] = {color_.r, color_.g, color_.b, color_.a};
+        bag_set(out, "Color", json_floats(channels, color_.a == 1.f ? 3 : 4));
+    }
+    if (size_[0] != 1.f || size_[1] != 1.f || size_[2] != 1.f) {
+        bag_set(out, "Size", json_floats(size_, 3));
+    }
+}
+
+bool GameObject::load_property(const std::string& key, const JsonValue& value, std::string& error) {
+    std::vector<float> floats;
+    if (key == "Transform") {
+        if (!read_json_floats(value, 16, 16, floats)) {
+            error = "Transform must be 16 numbers, column-major";
+            return true;
+        }
+        Transform transform;
+        std::memcpy(transform.m, floats.data(), sizeof(transform.m));
+        set_transform(transform);
+        return true;
+    }
+    if (key == "Color") {
+        if (!read_json_floats(value, 3, 4, floats)) {
+            error = "Color must be 3 or 4 numbers";
+            return true;
+        }
+        ColorRgb color;
+        color.r = floats[0];
+        color.g = floats[1];
+        color.b = floats[2];
+        color.a = floats.size() == 4 ? floats[3] : 1.f;
+        set_color(color);
+        return true;
+    }
+    if (key == "Size") {
+        if (!read_json_floats(value, 3, 3, floats)) {
+            error = "Size must be 3 numbers";
+            return true;
+        }
+        set_size(floats[0], floats[1], floats[2]);
+        return true;
+    }
+    return DataModel::load_property(key, value, error);
+}
+
 void GameObject::on_release() { clear_spatial(); }
 
 void GameObject::on_reuse() { reset_spatial(); }

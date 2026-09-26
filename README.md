@@ -35,6 +35,14 @@ The simulation starts paused, so the place holds still while you edit. Test capt
 
 Stop ends the session. Scripts are aborted, instances created during play are gone, and property changes revert to the captured place. Text you still have open in a script editor is written back onto those restored scripts, so the edit survives the stop.
 
+## Projects
+
+A project is a directory, and it is meant to live in git. `project.json` names it. `src/` holds the authored tree, one file per instance, and `resources/` is where textures, meshes, and audio will go. The live place is a working copy: loading reads `src/`, and saving writes back only the files whose bytes changed.
+
+Every instance has a GUID that never changes, and every file is named `<Name>.<guid>`. Two siblings may both be called `Part`; they are two files. Adding a third `Part` adds one file, and renaming one moves only that file. An instance with children becomes a folder holding its own `init.json`. A script is a `.luau` file with a `.meta.json` beside it, so its source never lands inside JSON. Keys the engine does not know are kept as they are.
+
+Saving during play writes the place as it was when Test started, never what the session created. Undo history, caches, and editor layout stay out of the tree; `.studio/` is ignored for them.
+
 ## The studio
 
 The window is the studio. Explorers on either side list the place by instance name. The scene view draws each triangle in the place at that instance's position, and it keeps painting while the simulation is paused. The script editor opens a script from its row, highlights Luau, and completes names and members as you type. The console shows `print` output and script errors, and its command line runs Luau against the same place while play is stopped.

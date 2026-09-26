@@ -4,6 +4,7 @@
 #include "Contract.hpp"
 #include "Events.hpp"
 #include "InvalidationQueue.hpp"
+#include "PropertyBag.hpp"
 #include "types.hpp"
 
 #include <chrono>
@@ -12,6 +13,7 @@
 #include <functional>
 #include <memory>
 #include <new>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -28,6 +30,36 @@ struct ContextAction {
     const char* name = nullptr;
     bool primary = false;
 };
+
+// One instance of the authored tree, for a project save. Children index the
+// same vector in sibling order. The root is element 0 and has id 0.
+struct AuthoredNode {
+    InstanceId id = 0;
+    std::string guid;
+    std::string class_name;
+    std::string name;
+    // Filled only when the caller wanted this node. Known fields that differ
+    // from the class default, then the extra keys the class does not know.
+    bool has_properties = false;
+    PropertyBag properties;
+    // has_source is always set for a Script or ModuleScript. source is filled
+    // only when the node was wanted.
+    bool has_source = false;
+    std::string source;
+    std::vector<std::size_t> children;
+};
+
+// Edit-mode authored changes since the last clear. all means every instance.
+struct AuthoredDirty {
+    std::vector<InstanceId> ids;
+    bool all = false;
+};
+
+// A GUID is 1 to 64 of [0-9a-z-] and does not start with '-'. Lowercase only,
+// so two GUIDs never differ by case on a case-insensitive filesystem.
+bool valid_guid(std::string_view guid);
+// 16 lowercase hex digits from a seeded 64-bit generator.
+std::string make_guid();
 
 class Engine;
 class GameObject;
@@ -138,6 +170,41 @@ public:
     // Edit undo. Play waypoints live on a second stack that stop drops.
     ChangeHistoryService& history();
     const ChangeHistoryService& history() const;
+
+    // Stable authored identity, written to disk and used by references.
+    // create assigns one. Empty when id is dead. Id 0 is the root.
+    std::string guid(InstanceId id) const;
+    // Project load only. The loader checks that GUIDs are unique; this does
+    // not scan the world. Throws std::invalid_argument on a malformed GUID.
+    // Does not record history.
+    void set_guid(InstanceId id, std::string guid);
+    // Linear. The live instance holding this GUID, or empty.
+    std::optional<InstanceId> find_guid(std::string_view guid) const;
+
+    // Keys the class does not know. A project load fills them; save writes them back.
+    // Empty when id is dead.
+    const PropertyBag& extra_properties(InstanceId id) const;
+    // Marks the instance dirty. Not recorded in undo history.
+    void set_extra_property(InstanceId id, std::string key, JsonValue value);
+    void erase_extra_property(InstanceId id, std::string_view key);
+
+    // Authored fields other than class, id, Name, Source, and children.
+    // A class writes only values that differ from its default.
+    virtual void save_properties(PropertyBag& out) const;
+    // True when this class owns key. The value was applied, or error is set.
+    // Runs on a live instance during project load.
+    virtual bool load_property(const std::string& key, const JsonValue& value, std::string& error);
+
+    // Edit mode: the live tree under the root. Play: the place snapshot, so
+    // instances created during play are never included. Unparented instances
+    // are not in the tree. want(id) false leaves properties and source empty.
+    std::vector<AuthoredNode> authored_tree(const std::function<bool(InstanceId)>& want) const;
+    // Mutators mark here from the same sites that record history, and only
+    // while the simulation is stopped. Stop sets all: the restore may revert
+    // edits that came after the last capture.
+    AuthoredDirty authored_dirty() const;
+    void clear_authored_dirty();
+    void mark_authored_dirty(InstanceId id);
 
     // Per-instance signals. The reference dies with the instance.
     // Id 0 is the root DataModel. It has no slot; its signals are not bags[0].
@@ -299,6 +366,13 @@ private:
         InstanceId parent = kNoParent;
         std::vector<InstanceId> children;
         std::string name;
+        std::string guid;
+        PropertyBag extras;
+        // What a save during play writes: the class and fields at capture.
+        std::string class_name;
+        PropertyBag properties;
+        bool has_source = false;
+        std::string source;
         bool simulated = false;
         bool visual_only = false;
         std::vector<std::byte> extra;
@@ -306,6 +380,8 @@ private:
 
     struct PlaceSnapshot {
         std::string root_name;
+        std::string root_guid;
+        PropertyBag root_extras;
         std::vector<InstanceId> root_children;
         std::vector<PlaceRecord> instances;
     };
@@ -314,6 +390,8 @@ private:
     State* state_ = nullptr;
     InstanceId id_ = 0;
     std::string name_;
+    std::string guid_;
+    PropertyBag extras_;
 
     bool lock_write_blocking();
     bool lock_write_for(std::chrono::milliseconds budget);
@@ -379,6 +457,7 @@ private:
     void reparent_record(const AuthoredRecord& record);
     void place_at_sibling(InstanceId id, int index);
     void apply_record_fields(const AuthoredRecord& record);
+    PropertyBag merged_properties(const DataModel& object) const;
 };
 
 template <typename T>

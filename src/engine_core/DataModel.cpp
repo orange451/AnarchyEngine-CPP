@@ -9,10 +9,15 @@
 #include "TestTriangle.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <new>
 #include <optional>
+#include <random>
+#include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -69,7 +74,41 @@ struct InstancePool {
 
 GameObject* as_game_object(DataModel* instance) { return dynamic_cast<GameObject*>(instance); }
 
+const PropertyBag& empty_bag() {
+    static const PropertyBag bag;
+    return bag;
+}
+
 }  // namespace
+
+bool valid_guid(std::string_view guid) {
+    if (guid.empty() || guid.size() > 64 || guid.front() == '-') {
+        return false;
+    }
+    for (const char c : guid) {
+        const bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || c == '-';
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string make_guid() {
+    // One generator per thread. Seeded from the device, the clock, and the
+    // thread, so two processes started together still diverge.
+    thread_local std::mt19937_64 engine = [] {
+        std::random_device device;
+        std::seed_seq seed{static_cast<std::uint64_t>(device()), static_cast<std::uint64_t>(device()),
+                           static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()),
+                           static_cast<std::uint64_t>(std::chrono::system_clock::now().time_since_epoch().count()),
+                           static_cast<std::uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()))};
+        return std::mt19937_64(seed);
+    }();
+    char buffer[17];
+    std::snprintf(buffer, sizeof(buffer), "%016llx", static_cast<unsigned long long>(engine()));
+    return std::string(buffer, 16);
+}
 
 struct DataModel::State {
     // Guards slots, free lists, invalidation, and resync.
@@ -122,6 +161,9 @@ struct DataModel::State {
     bool simulation_running = false;
     bool place_captured = false;
     PlaceSnapshot place;
+    // Edit-mode authored changes a project save has not written yet.
+    std::unordered_set<InstanceId> dirty;
+    bool dirty_all = false;
     std::function<void()> on_stop;
     std::function<void()> on_start;
     ScriptHost* script_host = nullptr;
@@ -140,6 +182,7 @@ DataModel::DataModel() : owned_(std::make_unique<State>()), state_(owned_.get())
     world.events.watch_prerender(&world.prerender_window);
     world.root = this;
     name_ = class_name();
+    guid_ = make_guid();
     world.history = std::make_unique<ChangeHistoryService>(*this);
 }
 
@@ -153,7 +196,12 @@ DataModel::~DataModel() {
 }
 
 DataModel::DataModel(DataModel&& other) noexcept
-    : owned_(std::move(other.owned_)), state_(other.state_), id_(other.id_), name_(std::move(other.name_)) {
+    : owned_(std::move(other.owned_)),
+      state_(other.state_),
+      id_(other.id_),
+      name_(std::move(other.name_)),
+      guid_(std::move(other.guid_)),
+      extras_(std::move(other.extras_)) {
     if (owned_) {
         state_ = owned_.get();
         state_->root = this;
@@ -177,6 +225,8 @@ DataModel& DataModel::operator=(DataModel&& other) noexcept {
     state_ = other.state_;
     id_ = other.id_;
     name_ = std::move(other.name_);
+    guid_ = std::move(other.guid_);
+    extras_ = std::move(other.extras_);
     if (owned_) {
         state_ = owned_.get();
         state_->root = this;
@@ -483,6 +533,9 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
     }
     const char* label = object->class_name();
     object->name_ = label != nullptr ? label : std::string();
+    // Assigned once. A project load replaces it with the GUID from disk.
+    object->guid_ = make_guid();
+    object->extras_.clear();
     Slot& part = world.slots[index];
     part.pool = pool_index;
     part.storage = storage;
@@ -493,6 +546,7 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
         }
     }
     record_created(object->id());
+    mark_authored_dirty(object->id());
     return *object;
 }
 
@@ -524,6 +578,8 @@ void DataModel::destroy(InstanceId id) {
     if (state_->history && state_->history->wants_mutation()) {
         captured = capture_record(id, true);
     }
+    // The parent's folder may become a leaf and its child order changes.
+    mark_authored_dirty(part->parent);
     detach_links(id, *part);
     release_signals(id);
     if (part->instance != nullptr) {
@@ -1225,6 +1281,10 @@ void DataModel::stop_simulation() {
 void DataModel::capture_place_unlocked() {
     PlaceSnapshot shot;
     shot.root_name = state_->root != nullptr ? state_->root->name_ : std::string();
+    if (state_->root != nullptr) {
+        shot.root_guid = state_->root->guid_;
+        shot.root_extras = state_->root->extras_;
+    }
     shot.root_children = child_ids(0);
     const std::uint32_t count = slot_count();
     shot.instances.reserve(count);
@@ -1245,6 +1305,15 @@ void DataModel::capture_place_unlocked() {
         record.simulated = part.simulated;
         record.visual_only = part.visual_only;
         part.instance->write_place(record.extra);
+        record.guid = part.instance->guid_;
+        record.extras = part.instance->extras_;
+        const char* label = part.instance->class_name();
+        record.class_name = label != nullptr ? label : "";
+        record.properties = merged_properties(*part.instance);
+        if (const auto* lua = dynamic_cast<const LuaSource*>(part.instance)) {
+            record.has_source = true;
+            record.source = lua->source();
+        }
         shot.instances.push_back(std::move(record));
     }
     state_->place = std::move(shot);
@@ -1270,6 +1339,8 @@ void DataModel::retire_slot(std::uint32_t index, bool bump_generation) {
     release_signals(id);
     if (part.instance != nullptr) {
         part.instance->name_.clear();
+        part.instance->guid_.clear();
+        part.instance->extras_.clear();
         part.instance->on_release();
     }
     if (part.pool < state_->pools.size() && state_->pools[part.pool] != nullptr) {
@@ -1353,6 +1424,8 @@ void DataModel::restore_record(const PlaceRecord& record) {
         contract_fail("place restore lost an instance");
     }
     live.instance->name_ = record.name;
+    live.instance->guid_ = record.guid;
+    live.instance->extras_ = record.extras;
     const std::byte* bytes = record.extra.empty() ? nullptr : record.extra.data();
     live.instance->read_place(bytes, record.extra.size());
 }
@@ -1434,8 +1507,13 @@ void DataModel::restore_place_unlocked() {
     }
     if (state_->root != nullptr) {
         state_->root->name_ = place.root_name;
+        state_->root->guid_ = place.root_guid;
+        state_->root->extras_ = place.root_extras;
     }
     rebuild_free_list();
+    // Edits after the last capture are gone from the live tree now.
+    state_->dirty.clear();
+    state_->dirty_all = true;
 
     {
         std::lock_guard<std::mutex> guard(state_->command_mu);
@@ -1536,14 +1614,17 @@ void note_property(ChangeHistoryService* history, InstanceId id, PropertyValue b
 }  // namespace
 
 void DataModel::record_transform(InstanceId id, const Transform& before, const Transform& after) {
+    mark_authored_dirty(id);
     note_property(state_->history.get(), id, value_transform(before), value_transform(after));
 }
 
 void DataModel::record_color(InstanceId id, ColorRgb before, ColorRgb after) {
+    mark_authored_dirty(id);
     note_property(state_->history.get(), id, value_color(before), value_color(after));
 }
 
 void DataModel::record_size(InstanceId id, float bx, float by, float bz, float ax, float ay, float az) {
+    mark_authored_dirty(id);
     note_property(state_->history.get(), id, value_size(bx, by, bz), value_size(ax, ay, az));
 }
 
@@ -1551,6 +1632,7 @@ void DataModel::record_bool(InstanceId id, Field field, bool before, bool after)
     if (field != Field::Simulated && field != Field::VisualOnly && field != Field::Enabled) {
         return;
     }
+    mark_authored_dirty(id);
     const HistoryProp prop = history_prop(field);
     note_property(state_->history.get(), id, value_flag(prop, before), value_flag(prop, after));
 }
@@ -1559,15 +1641,22 @@ void DataModel::record_string(InstanceId id, Field field, const std::string& bef
     if (field != Field::Name && field != Field::Source) {
         return;
     }
+    mark_authored_dirty(id);
     const HistoryProp prop = history_prop(field);
     note_property(state_->history.get(), id, value_text(prop, before), value_text(prop, after));
 }
 
 void DataModel::record_position(InstanceId id, const Vec3& before, const Vec3& after) {
+    mark_authored_dirty(id);
     note_property(state_->history.get(), id, value_position(before), value_position(after));
 }
 
 void DataModel::record_parent(InstanceId id, InstanceId old_parent, InstanceId new_parent, int old_index) {
+    // The child's path moves. Each parent's child order, and whether it is a
+    // folder or a leaf, may change.
+    mark_authored_dirty(id);
+    mark_authored_dirty(old_parent);
+    mark_authored_dirty(new_parent);
     if (state_->history == nullptr) {
         return;
     }
@@ -1642,6 +1731,8 @@ AuthoredRecord DataModel::capture_record(InstanceId id, bool subtree) const {
     const char* class_name = object->class_name();
     record.class_name = class_name != nullptr ? class_name : "";
     record.name = object->name_;
+    record.guid = object->guid_;
+    record.extras = object->extras_;
     record.parent = part->parent;
     record.sibling_index = sibling_index_of(id);
     record.simulated = part->simulated;
@@ -1669,6 +1760,11 @@ AuthoredRecord DataModel::capture_record(InstanceId id, bool subtree) const {
 }
 
 void DataModel::apply_record_fields(const AuthoredRecord& record) {
+    if (DataModel* object = instance(record.id)) {
+        object->guid_ = record.guid.empty() ? make_guid() : record.guid;
+        object->extras_ = record.extras;
+    }
+    mark_authored_dirty(record.id);
     set_name(record.id, record.name);
     set_simulated(record.id, record.simulated);
     set_visual_only(record.id, record.visual_only);
@@ -1749,6 +1845,7 @@ void DataModel::place_at_sibling(InstanceId id, int index) {
         index = static_cast<int>(kids.size());
     }
     kids.insert(kids.begin() + index, id);
+    mark_authored_dirty(parent);
     for (InstanceId child : kids) {
         if (Slot* child_slot = slot(child)) {
             unlink_parent(child, *child_slot);
@@ -1869,6 +1966,220 @@ void DataModel::apply_history(const Mutation& mutation, bool inverse) {
         }
         break;
     }
+}
+
+std::string DataModel::guid(InstanceId id) const {
+    const DataModel* object = id == 0 ? state_->root : instance(id);
+    return object != nullptr ? object->guid_ : std::string();
+}
+
+void DataModel::set_guid(InstanceId id, std::string guid) {
+    if (!valid_guid(guid)) {
+        throw std::invalid_argument("malformed GUID \"" + guid + "\"");
+    }
+    DataModel* object = id == 0 ? state_->root : instance(id);
+    if (object == nullptr) {
+        contract_fail("set_guid on a dead instance");
+    }
+    if (object->guid_ == guid) {
+        return;
+    }
+    object->guid_ = std::move(guid);
+    mark_authored_dirty(id);
+}
+
+std::optional<InstanceId> DataModel::find_guid(std::string_view guid) const {
+    if (guid.empty()) {
+        return std::nullopt;
+    }
+    if (state_->root != nullptr && state_->root->guid_ == guid) {
+        return InstanceId{0};
+    }
+    const std::uint32_t count = slot_count();
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const Slot& part = state_->slots[index];
+        if (part.alive && part.instance != nullptr && part.instance->guid_ == guid) {
+            return (part.generation << 16u) | index;
+        }
+    }
+    return std::nullopt;
+}
+
+const PropertyBag& DataModel::extra_properties(InstanceId id) const {
+    const DataModel* object = id == 0 ? state_->root : instance(id);
+    return object != nullptr ? object->extras_ : empty_bag();
+}
+
+void DataModel::set_extra_property(InstanceId id, std::string key, JsonValue value) {
+    DataModel* object = id == 0 ? state_->root : instance(id);
+    if (object == nullptr) {
+        contract_fail("set_extra_property on a dead instance");
+    }
+    if (const JsonValue* current = bag_find(object->extras_, key)) {
+        if (*current == value) {
+            return;
+        }
+    }
+    bag_set(object->extras_, std::move(key), std::move(value));
+    mark_authored_dirty(id);
+}
+
+void DataModel::erase_extra_property(InstanceId id, std::string_view key) {
+    DataModel* object = id == 0 ? state_->root : instance(id);
+    if (object != nullptr && bag_erase(object->extras_, key)) {
+        mark_authored_dirty(id);
+    }
+}
+
+void DataModel::save_properties(PropertyBag& out) const {
+    const Slot* part = slot(id_);
+    if (part == nullptr || part->instance != this) {
+        return;
+    }
+    if (part->simulated) {
+        bag_set(out, "Simulated", JsonValue::boolean(true));
+    }
+    if (part->visual_only) {
+        bag_set(out, "VisualOnly", JsonValue::boolean(true));
+    }
+}
+
+bool DataModel::load_property(const std::string& key, const JsonValue& value, std::string& error) {
+    if (key != "Simulated" && key != "VisualOnly") {
+        return false;
+    }
+    if (!value.is_bool()) {
+        error = key + " must be true or false";
+        return true;
+    }
+    if (slot(id_) == nullptr) {
+        error = key + " is not a property of the root";
+        return true;
+    }
+    if (key == "Simulated") {
+        set_simulated(id_, value.as_bool());
+    } else {
+        set_visual_only(id_, value.as_bool());
+    }
+    return true;
+}
+
+PropertyBag DataModel::merged_properties(const DataModel& object) const {
+    PropertyBag out;
+    object.save_properties(out);
+    for (const JsonValue::Member& member : object.extras_) {
+        // A key the class writes itself wins over a stale extra of the same name.
+        if (bag_find(out, member.first) == nullptr) {
+            bag_set(out, member.first, member.second);
+        }
+    }
+    return out;
+}
+
+std::vector<AuthoredNode> DataModel::authored_tree(const std::function<bool(InstanceId)>& want) const {
+    std::vector<AuthoredNode> out;
+    const DataModel* root = state_->root;
+    if (root == nullptr) {
+        return out;
+    }
+    auto wanted = [&want](InstanceId id) { return !want || want(id); };
+    AuthoredNode top;
+    top.id = 0;
+    top.class_name = root->class_name();
+    if (!state_->simulation_running) {
+        top.guid = root->guid_;
+        top.name = root->name_;
+        if (wanted(0)) {
+            top.has_properties = true;
+            top.properties = merged_properties(*root);
+        }
+        out.push_back(std::move(top));
+        // Breadth first with an explicit queue. A deep chain does not recurse.
+        for (std::size_t at = 0; at < out.size(); ++at) {
+            const InstanceId parent_id = out[at].id;
+            for (InstanceId child = first_child(parent_id); child != 0; child = next_sibling(child)) {
+                const DataModel* object = instance(child);
+                if (object == nullptr) {
+                    continue;
+                }
+                AuthoredNode node;
+                node.id = child;
+                node.guid = object->guid_;
+                const char* label = object->class_name();
+                node.class_name = label != nullptr ? label : "";
+                node.name = object->name_;
+                const auto* lua = dynamic_cast<const LuaSource*>(object);
+                node.has_source = lua != nullptr;
+                if (wanted(child)) {
+                    node.has_properties = true;
+                    node.properties = merged_properties(*object);
+                    if (lua != nullptr) {
+                        node.source = lua->source();
+                    }
+                }
+                out[at].children.push_back(out.size());
+                out.push_back(std::move(node));
+            }
+        }
+        return out;
+    }
+
+    // Play: the snapshot is the authored tree. Play-only instances are not in it.
+    const PlaceSnapshot& place = state_->place;
+    top.guid = place.root_guid;
+    top.name = place.root_name;
+    top.has_properties = true;
+    top.properties = place.root_extras;
+    out.push_back(std::move(top));
+    std::unordered_map<InstanceId, const PlaceRecord*> records;
+    records.reserve(place.instances.size());
+    for (const PlaceRecord& record : place.instances) {
+        records.emplace(record.id, &record);
+    }
+    std::vector<const std::vector<InstanceId>*> kids{&place.root_children};
+    for (std::size_t at = 0; at < out.size(); ++at) {
+        const std::vector<InstanceId>& children = *kids[at];
+        for (InstanceId child : children) {
+            const auto found = records.find(child);
+            if (found == records.end()) {
+                continue;
+            }
+            const PlaceRecord& record = *found->second;
+            AuthoredNode node;
+            node.id = record.id;
+            node.guid = record.guid;
+            node.class_name = record.class_name;
+            node.name = record.name;
+            node.has_properties = true;
+            node.properties = record.properties;
+            node.has_source = record.has_source;
+            node.source = record.source;
+            out[at].children.push_back(out.size());
+            out.push_back(std::move(node));
+            kids.push_back(&record.children);
+        }
+    }
+    return out;
+}
+
+AuthoredDirty DataModel::authored_dirty() const {
+    AuthoredDirty out;
+    out.all = state_->dirty_all;
+    out.ids.assign(state_->dirty.begin(), state_->dirty.end());
+    std::sort(out.ids.begin(), out.ids.end());
+    return out;
+}
+
+void DataModel::clear_authored_dirty() {
+    state_->dirty.clear();
+    state_->dirty_all = false;
+}
+
+void DataModel::mark_authored_dirty(InstanceId id) {
+    if (id == kNoParent || state_->simulation_running) {
+        return;
+    }
+    state_->dirty.insert(id);
 }
 
 namespace {

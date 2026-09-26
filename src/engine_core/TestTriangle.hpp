@@ -22,6 +22,10 @@ public:
     double angle_degrees() const;
     Vec3 position() const;
 
+    // Position when it is not the origin. The angle is animation, not authored.
+    void save_properties(PropertyBag& out) const override;
+    bool load_property(const std::string& key, const JsonValue& value, std::string& error) override;
+
 protected:
     void on_release() override;
     void on_reuse() override;

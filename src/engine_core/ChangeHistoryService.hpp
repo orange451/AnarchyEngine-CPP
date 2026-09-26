@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PropertyBag.hpp"
 #include "types.hpp"
 
 #include <cstddef>
@@ -52,6 +53,9 @@ struct AuthoredRecord {
     const void* type_key = nullptr;
     std::string class_name;
     std::string name;
+    // Undo of a destroy brings back the same GUID, so the same file on disk.
+    std::string guid;
+    PropertyBag extras;
     InstanceId parent = kHistoryNoParent;
     int sibling_index = -1;
     bool simulated = false;

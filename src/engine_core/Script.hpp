@@ -29,6 +29,10 @@ public:
     // Edit, then the actions every instance has. Edit is the double-click.
     void context_actions(std::vector<ContextAction>& out) const override;
 
+    // Enabled when false. Source is never a property: it lives in the .luau file.
+    void save_properties(PropertyBag& out) const override;
+    bool load_property(const std::string& key, const JsonValue& value, std::string& error) override;
+
     const std::string& source() const { return source_; }
     bool enabled() const { return enabled_; }
     std::uint32_t start_generation() const { return start_generation_; }

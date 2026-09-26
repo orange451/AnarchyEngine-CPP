@@ -53,6 +53,27 @@ Vec3 TestTriangle::position() const {
     return {x_.load(), y_.load(), z_.load()};
 }
 
+void TestTriangle::save_properties(PropertyBag& out) const {
+    DataModel::save_properties(out);
+    const float position[3] = {x_.load(), y_.load(), z_.load()};
+    if (position[0] != 0.f || position[1] != 0.f || position[2] != 0.f) {
+        bag_set(out, "Position", json_floats(position, 3));
+    }
+}
+
+bool TestTriangle::load_property(const std::string& key, const JsonValue& value, std::string& error) {
+    if (key == "Position") {
+        std::vector<float> floats;
+        if (!read_json_floats(value, 3, 3, floats)) {
+            error = "Position must be 3 numbers";
+            return true;
+        }
+        set_position(floats[0], floats[1], floats[2]);
+        return true;
+    }
+    return DataModel::load_property(key, value, error);
+}
+
 void TestTriangle::clear_pose() {
     angle_.store(0.0);
     x_.store(0.f);

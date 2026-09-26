@@ -363,7 +363,7 @@ TEST_CASE("analysis definitions come from the class registry", "[A11]") {
     REQUIRE(source.find("declare extern type TestTriangle") != std::string::npos);
     REQUIRE(source.find("Position: Vector3") != std::string::npos);
     REQUIRE(source.find("function FindFirstChild(self, name: string): Instance?") != std::string::npos);
-    REQUIRE(source.find("Parent: Instance?") != std::string::npos);
+    REQUIRE(source.find("Parent: DataModel?") != std::string::npos);
     REQUIRE(source.find("type Vector3 = vector") != std::string::npos);
     REQUIRE(source.find("declare task:") != std::string::npos);
     REQUIRE(source.find("PreRender") == std::string::npos);
@@ -371,10 +371,19 @@ TEST_CASE("analysis definitions come from the class registry", "[A11]") {
     REQUIRE(source.find("workspace") == std::string::npos);
     REQUIRE(source.find("BasePart") == std::string::npos);
     REQUIRE(source.find("GetPropertyChangedSignal") == std::string::npos);
-    // Instance is the base every instance class reaches, not a subclass of DataModel.
-    REQUIRE(source.find("declare extern type Instance with") != std::string::npos);
-    REQUIRE(source.find("declare extern type DataModel extends Instance with") != std::string::npos);
-    REQUIRE(source.find("declare extern type Folder extends DataModel with") != std::string::npos);
+    // DataModel is everything in the tree. Instance is what Instance.new makes.
+    // Game is the root alone, and GetService is on it.
+    REQUIRE(source.find("declare extern type Instance extends DataModel with") != std::string::npos);
+    REQUIRE(source.find("declare extern type Folder extends Instance with") != std::string::npos);
+    REQUIRE(source.find("declare extern type Game extends DataModel with") != std::string::npos);
+    REQUIRE(source.find("declare game: Game") != std::string::npos);
+    const std::size_t data_model = source.find("declare extern type DataModel with");
+    REQUIRE(data_model != std::string::npos);
+    const std::string data_model_block = source.substr(data_model, source.find("end\n", data_model) - data_model);
+    REQUIRE(data_model_block.find("GetService") == std::string::npos);
+    const std::size_t game = source.find("declare extern type Game extends DataModel with");
+    const std::string game_block = source.substr(game, source.find("end\n", game) - game);
+    REQUIRE(game_block.find("function GetService") != std::string::npos);
 }
 
 TEST_CASE("disabling script analysis drops diagnostics", "[A]") {
@@ -826,9 +835,10 @@ TEST_CASE("A21 FindFirstChild chains to a module in the place with no nil warnin
     }
 }
 
-// Instance names the instance base, so any instance can be a Parent or go
-// where an Instance is asked for: a Folder, game, a child, a new instance.
-TEST_CASE("A22 any instance is an Instance: Parent takes a Folder or game", "[A22]") {
+// DataModel is everything in the tree, so a Parent takes a Folder or game.
+// Instance is what Instance.new makes: game is a DataModel but not an Instance,
+// and only game has GetService.
+TEST_CASE("A22 Parent takes any DataModel, and game is not an Instance", "[A22]") {
     ScriptRig rig;
     engine_core::ScriptAnalysis analysis(rig.model);
     engine_core::Folder& box = rig.model.create<engine_core::Folder>();
@@ -843,16 +853,19 @@ TEST_CASE("A22 any instance is an Instance: Parent takes a Folder or game", "[A2
         "tri.Parent = box\n"
         "tri.Parent = game\n"
         "tri.Parent = nil\n"
-        "local folder = Instance.new(\"Folder\")\n"
+        "local folder = Instance.new(\"Folder\", game)\n"
         "folder.Parent = game\n"
         "tri.Parent = folder\n"
         "for _, child in game:GetChildren() do\n"
         "    child.Parent = box\n"
         "end\n"
-        "local root: Instance = game\n"
+        "local root: DataModel = game\n"
+        "local made: Instance = folder\n"
         "local found: Instance? = box:FindFirstChild(\"Tri0\")\n"
-        "game:GetService(\"Selection\"):Set({box, tri, game})\n"
-        "return root, found\n";
+        "local up: DataModel? = box.Parent\n"
+        "game:GetService(\"Selection\"):Set({box, tri})\n"
+        "local beat = game:GetService(\"RunService\").Heartbeat\n"
+        "return root, made, found, up, beat\n";
     engine_core::Script& script = add_script(rig.model, "Parenting", source);
     settle(analysis);
     INFO(dump(analysis.diagnostics(script.id())));
@@ -865,13 +878,29 @@ TEST_CASE("A22 any instance is an Instance: Parent takes a Folder or game", "[A2
         REQUIRE(analysis.diagnostics(script.id()).empty());
     }
 
+    SECTION("game is not an Instance") {
+        script.set_source("--!strict\nlocal made: Instance = game\nreturn made\n");
+        settle(analysis);
+        const std::string report = dump(analysis.diagnostics(script.id()));
+        INFO(report);
+        REQUIRE(report.find("'Instance', but got 'Game'") != std::string::npos);
+    }
+
+    SECTION("GetService is only on game") {
+        script.set_source("local service = game.Box:GetService(\"RunService\")\nreturn service\n");
+        settle(analysis);
+        const std::string report = dump(analysis.diagnostics(script.id()));
+        INFO(report);
+        REQUIRE(report.find("GetService") != std::string::npos);
+    }
+
     SECTION("a value that is not an instance is still refused") {
         script.set_source("--!strict\nlocal tri = game.Box.Tri0\ntri.Parent = 5\n");
         settle(analysis);
         const std::string report = dump(analysis.diagnostics(script.id()));
         INFO(report);
         REQUIRE(report.find("@2:") != std::string::npos);
-        REQUIRE(report.find("Instance?") != std::string::npos);
+        REQUIRE(report.find("DataModel?") != std::string::npos);
     }
 
     SECTION("a missing child still reads as Instance?") {

@@ -160,46 +160,11 @@ std::string method_params(const LuaDoc& doc) {
     return "self, " + rest;
 }
 
-// The registry's instance base is DataModel, and Instance is registered as
-// another name for it: any instance fits where an Instance is asked for. An
-// extern type cannot alias another, and `Instance extends DataModel` would
-// make Folder and game not Instances, so `part.Parent = folder` would not
-// check. Here Instance is declared as the base, with DataModel's members, and
-// DataModel extends it. Every class that extends DataModel is then an Instance.
-bool instance_is_base() { return lua_class_known("Instance") && lua_class_known("DataModel"); }
-
-// The base a class is declared with.
-const char* declared_base(const std::string& name) {
-    if (instance_is_base()) {
-        if (name == "Instance") {
-            return nullptr;
-        }
-        if (name == "DataModel") {
-            return "Instance";
-        }
-    }
-    return lua_class_base(name.c_str());
-}
-
-// The registered class whose own members, and their docs, a declaration lists.
-// Empty lists none.
-std::string member_owner(const std::string& name) {
-    if (instance_is_base()) {
-        if (name == "Instance") {
-            return "DataModel";
-        }
-        if (name == "DataModel") {
-            return {};
-        }
-    }
-    return name;
-}
-
 void emit_class(std::ostringstream& out, const std::string& name) {
     if (name == "Vector3" || !identifier(name)) {
         return;
     }
-    const char* base = declared_base(name);
+    const char* base = lua_class_base(name.c_str());
     const bool has_base = base != nullptr && base[0] != '\0' && std::strcmp(base, name.c_str()) != 0 && identifier(base) &&
                           lua_class_known(base);
     out << "declare extern type " << name;
@@ -208,11 +173,8 @@ void emit_class(std::ostringstream& out, const std::string& name) {
     }
     out << " with\n";
 
-    const std::string owner = member_owner(name);
     std::vector<LuaField> fields;
-    if (!owner.empty()) {
-        lua_class_own_members(owner.c_str(), fields);
-    }
+    lua_class_own_members(name.c_str(), fields);
     if (fields.empty() && !has_base) {
         // No fields and no parent: the VM stores this as a table of numbers (Transform).
         out << "    [number]: number\n";
@@ -221,7 +183,7 @@ void emit_class(std::ostringstream& out, const std::string& name) {
         if (field.blocked || field.name == nullptr || !identifier(field.name)) {
             continue;
         }
-        const LuaDoc doc = lua_symbol_doc(owner, field.name);
+        const LuaDoc doc = lua_symbol_doc(name, field.name);
         if (field.method) {
             out << "    function " << field.name << "(" << method_params(doc) << "): " << return_syntax(&field, doc) << "\n";
             continue;
@@ -295,7 +257,7 @@ std::string lua_analysis_definitions() {
             if (emitted.count(name) != 0) {
                 continue;
             }
-            const char* base = declared_base(name);
+            const char* base = lua_class_base(name.c_str());
             if (base != nullptr && base[0] != '\0' && std::strcmp(base, name.c_str()) != 0 && lua_class_known(base) &&
                 emitted.count(base) == 0) {
                 continue;
@@ -311,8 +273,8 @@ std::string lua_analysis_definitions() {
         }
     }
 
-    if (lua_class_known("DataModel")) {
-        out << "declare game: DataModel\n";
+    if (lua_class_known("Game")) {
+        out << "declare game: Game\n";
     }
     if (lua_class_known("Script") && lua_class_known("ModuleScript")) {
         out << "declare script: Script | ModuleScript\n";

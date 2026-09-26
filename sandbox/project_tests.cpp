@@ -413,6 +413,9 @@ TEST_CASE("P8 create writes the project skeleton", "[P8][project]") {
     REQUIRE(read_file(root / ".gitignore").find(".studio/") != std::string::npos);
     REQUIRE(read_file(root / ".gitattributes").find("*.luau text eol=lf") != std::string::npos);
     REQUIRE(fs::is_regular_file(root / "src" / "init.json"));
+    // The root is game, class Game.
+    REQUIRE(engine_core::parse_json(read_file(root / "src" / "init.json"), doc, error));
+    REQUIRE(doc.find("class")->as_string() == "Game");
     REQUIRE_THROWS_AS(Project::create(root), ProjectError);
 }
 
@@ -602,6 +605,18 @@ TEST_CASE("load errors", "[project]") {
         TempDir dir;
         write_bare_project(dir.path);
         write_file(dir.path / "src" / "T.aaa.json", meta("Texture", "aaa", "T"));
+        REQUIRE_THROWS_AS(Project::load(dir.path), ProjectError);
+    }
+    SECTION("only the root is a Game") {
+        TempDir dir;
+        write_bare_project(dir.path);
+        write_file(dir.path / "src" / "G.aaa.json", meta("Game", "aaa", "G"));
+        REQUIRE_THROWS_AS(Project::load(dir.path), ProjectError);
+    }
+    SECTION("the root is a Game or, from before Game, a DataModel") {
+        TempDir dir;
+        write_bare_project(dir.path);
+        write_file(dir.path / "src" / "init.json", meta("Folder", "root0", "Hand"));
         REQUIRE_THROWS_AS(Project::load(dir.path), ProjectError);
     }
     SECTION("a .luau without .meta.json is an error") {

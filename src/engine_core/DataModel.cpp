@@ -2292,7 +2292,8 @@ ANARCHY_LUA_REGISTER(register_datamodel_lua) {
     const LuaField fields[] = {
         lua_property("Name", "string", true, read_lua_name, write_lua_name),
         lua_property("ClassName", "string", false, read_lua_class, nullptr),
-        lua_property("Parent", "Instance?", true, read_lua_parent, write_lua_parent),
+        // game is a parent too, and it is not an Instance.
+        lua_property("Parent", "DataModel?", true, read_lua_parent, write_lua_parent),
         changed,
     };
     register_lua_class("DataModel", nullptr, fields, 4);

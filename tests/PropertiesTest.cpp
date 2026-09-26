@@ -389,7 +389,7 @@ void TestR6ParentReference() {
     Rig rig;
     rig.select({rig.a});
     const std::string root = rig.model.name(0);
-    Expect(rig.text("Parent") == root + " (DataModel)", "R6 the Parent shows Name (Class)");
+    Expect(rig.text("Parent") == root + " (Game)", "R6 the Parent shows Name (Class)");
 
     // Pick: the next explorer click is the value, and the selection comes back.
     rig.click(rig.panel.editor("Parent", 1));

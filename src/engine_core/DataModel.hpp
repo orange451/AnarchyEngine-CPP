@@ -111,8 +111,9 @@ public:
     // Zero on the root world. A created instance returns its slot id.
     InstanceId id() const { return id_; }
 
-    // Class identity. The pointer remains valid after the call.
-    virtual const char* class_name() const { return "DataModel"; }
+    // Class identity. The pointer remains valid after the call. The root is
+    // game, class Game; a plain instance elsewhere in the tree is DataModel.
+    virtual const char* class_name() const { return id_ == 0 ? "Game" : "DataModel"; }
 
     // Cut, Paste, Rename, and Delete; the root has no Delete. A subclass appends
     // its own, or inserts a primary one.

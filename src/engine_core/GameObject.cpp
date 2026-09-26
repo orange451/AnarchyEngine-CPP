@@ -236,7 +236,7 @@ ANARCHY_LUA_REGISTER(register_game_object_lua) {
         lua_property("Transform", "Transform", true, read_lua_transform, write_lua_transform),
         lua_property("CFrame", "Transform", true, read_lua_transform, write_lua_transform),
     };
-    register_lua_class("GameObject", "DataModel", fields, 3);
+    register_lua_class("GameObject", "Instance", fields, 3);
 }
 
 }  // namespace

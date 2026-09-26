@@ -84,7 +84,7 @@ bool IsFile(const fs::path& path) {
 
 // ClassName.png when that file exists. These classes have no file of that name.
 const char* IconFile(const std::string& class_name) {
-    if (class_name == "DataModel") {
+    if (class_name == "Game" || class_name == "DataModel") {
         return "World.png";
     }
     if (class_name == "ModuleScript") {

@@ -929,7 +929,7 @@ std::vector<engine_core::LuaNode> completion_world(engine_core::Engine& engine, 
     root.id = 0;
     root.parent = engine_core::DataModel::kNoParent;
     root.name = model.name(0);
-    root.class_name = "DataModel";
+    root.class_name = model.class_name();
     nodes.push_back(std::move(root));
     model.for_each_instance([&](engine_core::DataModel& object) {
         if (object.id() == 0) {

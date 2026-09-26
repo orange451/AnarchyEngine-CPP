@@ -181,6 +181,10 @@ bool is_a(const DataModel& object, const char* name) {
     if (std::strcmp(object.class_name(), name) == 0) {
         return true;
     }
+    // Instance and DataModel, and any other registered base.
+    if (lua_class_inherits(object.class_name(), name)) {
+        return true;
+    }
     if (std::strcmp(name, "DataModel") == 0) {
         return true;
     }
@@ -1768,7 +1772,7 @@ int ScriptBindings::instance_newindex(lua_State* state) {
         } else if (type == "boolean") {
             slot.kind = LuaSlot::Kind::Bool;
             slot.flag = lua_toboolean(state, 3) != 0;
-        } else if (type == "Instance" || type == "Instance?") {
+        } else if (type == "Instance" || type == "Instance?" || type == "DataModel" || type == "DataModel?") {
             if (lua_isnil(state, 3)) {
                 slot.kind = LuaSlot::Kind::Nil;
             } else {
@@ -1932,7 +1936,7 @@ int ScriptBindings::instance_service(lua_State* state) {
         const char* name = luaL_checkstring(state, 2);
         ScriptRuntime* runtime = runtime_from(state);
         if (runtime == nullptr || ud->id != 0 || runtime->resolve_id(0, ud->world) == nullptr) {
-            luaL_error(state, "GetService is on the root DataModel");
+            luaL_error(state, "GetService is on game");
         }
         const int kind = name != nullptr && lua_service_known(name) ? service_kind(name) : -1;
         if (kind < 0) {
@@ -2180,9 +2184,10 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         lua_method("WaitForChild", "Instance", reinterpret_cast<void*>(&ScriptBindings::instance_wait_child), false, true,
                    false),
         lua_method("IsA", "boolean", reinterpret_cast<void*>(&ScriptBindings::instance_isa)),
-        get_service,
     };
-    register_lua_class("DataModel", nullptr, methods, 6);
+    register_lua_class("DataModel", nullptr, methods, 5);
+    // Services hang off game alone.
+    register_lua_class("Game", "DataModel", &get_service, 1);
 
     LuaField connect =
         lua_method("Connect", "Connection", reinterpret_cast<void*>(&ScriptBindings::signal_connect));

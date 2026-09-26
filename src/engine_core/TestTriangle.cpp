@@ -145,7 +145,7 @@ ANARCHY_LUA_REGISTER(register_test_triangle_lua) {
     const LuaField fields[] = {
         lua_property("Position", "Vector3", true, read_lua_position, write_lua_position),
     };
-    register_lua_class("TestTriangle", "DataModel", fields, 1);
+    register_lua_class("TestTriangle", "Instance", fields, 1);
 }
 
 }  // namespace

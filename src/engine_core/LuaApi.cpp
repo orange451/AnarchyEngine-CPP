@@ -327,6 +327,8 @@ ANARCHY_LUA_REGISTER(register_value_classes) {
     const LuaField color[] = {component("r"), component("g"), component("b"), component("a")};
     register_lua_class("Color", nullptr, color, 4);
     register_lua_class("Transform", nullptr, nullptr, 0);
+    // DataModel is everything in the tree. Instance is what Instance.new makes;
+    // Game, the root that scripts see as game, is not one.
     register_lua_class("Instance", "DataModel", nullptr, 0);
 }
 
@@ -638,7 +640,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
 
     add("", "Instance", "Builds instances. new takes a class name and an optional parent.", nullptr, false, {});
     add("Instance", "new", "Creates an instance of className and parents it when parent is given.", "Instance", false,
-        {P("className", "string"), P("parent", "Instance?")});
+        {P("className", "string"), P("parent", "DataModel?")});
 
     add("", "print", "Writes each argument to the console, separated by tabs.", nullptr, true, {});
     add("", "require", "Runs a ModuleScript and returns what that module returns.", "", false, {P("module", "ModuleScript")});
@@ -676,7 +678,8 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
 
     add("DataModel", "Name", "The instance's name.", "string", false, {});
     add("DataModel", "ClassName", "The instance's class. This cannot be changed.", "string", false, {});
-    add("DataModel", "Parent", "The instance this one is parented to. nil means it has no parent.", "Instance?", false, {});
+    add("DataModel", "Parent", "The instance this one is parented to, or game. nil means it has no parent.", "DataModel?",
+        false, {});
     add("DataModel", "Changed", "Fires with the name of the property that changed.", "Signal", false, {});
     add("DataModel", "Destroy", "Unparents this instance and its descendants.", nullptr, false, {});
     add("DataModel", "GetChildren", "The direct children of this instance.", "{Instance}", false, {});
@@ -687,7 +690,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Instance", false, {P("name", "string"), P("timeout", "number?")});
     add("DataModel", "IsA", "True when this instance's class is className or a subclass of it.", "boolean", false,
         {P("className", "string")});
-    add("DataModel", "GetService", "The service with this name: RunService or Selection.", "Instance", false,
+    add("Game", "GetService", "The service with this name: RunService or Selection.", "Instance", false,
         {P("className", "string")});
 
     add("Script", "Source", "The Luau source this script runs.", "string", false, {});

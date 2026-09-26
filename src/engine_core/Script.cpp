@@ -197,8 +197,8 @@ ANARCHY_LUA_REGISTER(register_script_lua) {
         lua_property("Source", "string", true, read_lua_source, write_lua_source),
         lua_property("Enabled", "boolean", true, read_lua_enabled, write_lua_enabled),
     };
-    register_lua_class("Script", "DataModel", fields, 2);
-    register_lua_class("ModuleScript", "DataModel", fields, 2);
+    register_lua_class("Script", "Instance", fields, 2);
+    register_lua_class("ModuleScript", "Instance", fields, 2);
 }
 
 }  // namespace

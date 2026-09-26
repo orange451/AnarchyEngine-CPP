@@ -289,9 +289,10 @@ public:
             fail(utf8(disk_path(root_, init)) + " is missing");
         }
         PlanNode root;
-        read_props(root, init, std::string());
-        if (root.class_name != "DataModel") {
-            fail(init + ": the root class must be DataModel");
+        read_props(root, init, std::string(), /*root*/ true);
+        // Projects saved before the root was its own class call it DataModel.
+        if (root.class_name != "Game" && root.class_name != "DataModel") {
+            fail(init + ": the root class must be Game");
         }
         claim(root.guid, init);
         nodes_.push_back(std::move(root));
@@ -312,7 +313,8 @@ private:
     }
 
     // expected_guid empty: the root, whose GUID is not in a filename.
-    void read_props(PlanNode& node, const std::string& path, const std::string& expected_guid) {
+    // The root is game, which no factory makes. Its class is checked by the caller.
+    void read_props(PlanNode& node, const std::string& path, const std::string& expected_guid, bool root = false) {
         node.props_path = path;
         node.props_bytes = read_file(disk_path(root_, path));
         JsonValue doc;
@@ -341,7 +343,7 @@ private:
         node.class_name = klass->as_string();
         node.guid = id->as_string();
         node.name = name->as_string();
-        if (find_factory(node.class_name) == nullptr) {
+        if (!root && find_factory(node.class_name) == nullptr) {
             fail(path + ": unknown class " + node.class_name);
         }
         if (const JsonValue* children = doc.find("children")) {
@@ -979,7 +981,8 @@ void Project::save_tree(bool full) {
         if (!by_guid.emplace(node.guid, index).second) {
             fail("GUID " + node.guid + " is used by two instances");
         }
-        if (!project_class_known(node.class_name)) {
+        const bool known = node.id == 0 ? node.class_name == "Game" : project_class_known(node.class_name);
+        if (!known) {
             fail("instance " + node.guid + " (" + node.name + ") has unknown class " + node.class_name);
         }
         if (!node.has_properties && files_.count(node.guid) == 0) {

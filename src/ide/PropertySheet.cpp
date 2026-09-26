@@ -200,7 +200,8 @@ bool property_kind_for(const std::string& type_name, PropertyKind& out) {
         out = PropertyKind::Number;
     } else if (type_name == "Vector3") {
         out = PropertyKind::Vector3;
-    } else if (type_name == "Instance" || type_name == "Instance?") {
+    } else if (type_name == "Instance" || type_name == "Instance?" || type_name == "DataModel" ||
+               type_name == "DataModel?") {
         out = PropertyKind::Ref;
     } else if (type_name == "Color") {
         // No color picker yet. The value is still worth seeing.

@@ -189,7 +189,7 @@ int dummy_index(lua_State* state) {
                     const LuaNode* self_node = find_node(self);
                     const bool match = self_node != nullptr && class_name != nullptr &&
                                        (self_node->class_name == class_name || std::strcmp(class_name, "DataModel") == 0 ||
-                                        std::strcmp(class_name, "Instance") == 0);
+                                        lua_class_inherits(self_node->class_name.c_str(), class_name));
                     lua_pushboolean(inner, match ? 1 : 0);
                     return 1;
                 }

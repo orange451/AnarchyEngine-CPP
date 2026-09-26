@@ -1425,7 +1425,9 @@ TEST_CASE("client sync keeps an uncapped render loop with the window", "[pace]")
 
 TEST_CASE("N1 default name is the class name and set_name fires Name", "[N1]") {
     engine_core::DataModel model;
-    REQUIRE(model.name(model.id()) == "DataModel");
+    // The root is game, class Game.
+    REQUIRE(std::string(model.class_name()) == "Game");
+    REQUIRE(model.name(model.id()) == "Game");
     engine_core::GameObject& part = model.create<engine_core::GameObject>();
     REQUIRE(model.name(part.id()) == "GameObject");
     engine_core::DataModel& plain = model.create();
@@ -1511,7 +1513,7 @@ TEST_CASE("N6 the root Changed signal is not the first instance", "[N6]") {
         added_id = child;
     });
 
-    model.set_name(model.id(), "DataModel");
+    model.set_name(model.id(), "Game");
     {
         SimRole role;
         model.events().drain();
@@ -1635,7 +1637,7 @@ TEST_CASE("N3 place restore reverts play and drops session instances", "[N3]") {
     model.stop_simulation();
     REQUIRE_FALSE(model.simulation_running());
     REQUIRE(model.world_generation() == generation + 1);
-    REQUIRE(model.name(model.id()) == "DataModel");
+    REQUIRE(model.name(model.id()) == "Game");
     REQUIRE(model.alive(leaf_id));
     REQUIRE(model.alive(sibling_id));
     REQUIRE(model.alive(folder_id));
@@ -2757,7 +2759,7 @@ TEST_CASE("S15 a console chunk uses the play VM", "[S15]") {
     bool saw_after = false;
     for (const engine_core::ScriptRuntime::OutputLine& line : batch.lines) {
         REQUIRE(line.text.find("hidden") == std::string::npos);
-        if (line.kind == engine_core::ScriptRuntime::OutputKind::Print && line.text == "DataModel\n") {
+        if (line.kind == engine_core::ScriptRuntime::OutputKind::Print && line.text == "Game\n") {
             saw_name = true;
         }
         if (line.kind == engine_core::ScriptRuntime::OutputKind::Error && line.text.find("nope") != std::string::npos) {
@@ -2964,7 +2966,7 @@ TEST_CASE("S21 game.Changed reports the root property", "[S21]") {
     REQUIRE(rig.runtime.last_error().empty());
 
     rig.model.stop_simulation();
-    REQUIRE(rig.model.name(rig.model.id()) == "DataModel");
+    REQUIRE(rig.model.name(rig.model.id()) == "Game");
     REQUIRE(rig.model.name(part.id()) == "P");
     rig.model.start_simulation();
     rig.frames(1, 0.05);
@@ -3386,4 +3388,47 @@ TEST_CASE("S29 a dot reads a child by name", "[S29]") {
     }
     REQUIRE(rig.model.name(inner.id()) == "Renamed");
     REQUIRE(rig.model.alive(door.id()));
+}
+
+// DataModel is everything in the tree. Instance is what Instance.new makes.
+// game is a Game: a DataModel, not an Instance, and the only one with GetService.
+TEST_CASE("S30 game is a Game, a DataModel but not an Instance", "[S30]") {
+    ScriptRig rig;
+    REQUIRE(std::string(rig.model.class_name()) == "Game");
+    REQUIRE(engine_core::lua_class_inherits("Game", "DataModel"));
+    REQUIRE_FALSE(engine_core::lua_class_inherits("Game", "Instance"));
+    for (const char* name : {"Folder", "GameObject", "TestTriangle", "Script", "ModuleScript"}) {
+        INFO(name);
+        REQUIRE(engine_core::lua_class_inherits(name, "Instance"));
+        REQUIRE(engine_core::lua_class_inherits(name, "DataModel"));
+    }
+    REQUIRE_FALSE(engine_core::lua_creatable_known("Game"));
+    REQUIRE(engine_core::lua_class_find("Game", "GetService") != nullptr);
+    REQUIRE(engine_core::lua_class_find("DataModel", "GetService") == nullptr);
+    REQUIRE(engine_core::lua_class_find("Folder", "GetService") == nullptr);
+
+    add_script(rig.model, "Classes", R"(
+        _G.class = game.ClassName == "Game"
+        _G.game_isa = game:IsA("Game") and game:IsA("DataModel") and not game:IsA("Instance")
+        local box = Instance.new("Folder", game)
+        _G.box_isa = box:IsA("Folder") and box:IsA("Instance") and box:IsA("DataModel") and not box:IsA("Game")
+        _G.parent = box.Parent == game
+        _G.service = game:GetService("RunService") ~= nil
+        local ok, message = pcall(function()
+            return box:GetService("RunService")
+        end)
+        _G.box_service = not ok and string.find(message, "GetService is not a valid member of Folder", 1, true) ~= nil
+        _G.no_game = not pcall(function()
+            return Instance.new("Game")
+        end)
+    )");
+    rig.model.start_simulation();
+    rig.frames(1, 0.05);
+    INFO(rig.runtime.last_error());
+    for (const char* name : {"class", "game_isa", "box_isa", "parent", "service", "box_service", "no_game"}) {
+        bool value = false;
+        INFO(name);
+        REQUIRE(rig.runtime.global_boolean(name, value));
+        REQUIRE(value);
+    }
 }

@@ -614,7 +614,7 @@ bool IsIdent(std::string_view text) {
     return true;
 }
 
-// Instance is registered as an alias of DataModel, so any DataModel class fits it.
+// Every class in the tree is a DataModel: Instance and its subclasses, and Game.
 bool IsInstanceClass(const std::string& name) {
     return engine_core::lua_class_inherits(name.c_str(), "DataModel");
 }
@@ -635,9 +635,7 @@ bool AcceptsType(const std::string& expected, const CompletionItem& item) {
     if (!IsIdent(expected) || !IsInstanceClass(expected) || !IsInstanceClass(item.detail)) {
         return false;
     }
-    if (expected == "Instance" || expected == "DataModel") {
-        return true;
-    }
+    // Instance takes what Instance.new makes, not game. DataModel takes both.
     return engine_core::lua_class_inherits(item.detail.c_str(), expected.c_str());
 }
 
@@ -796,8 +794,7 @@ public:
 
     Shape* lookup_global(const std::string& name) {
         if (name == "game") {
-            const engine_core::LuaNode* root = FindNode(world_, 0);
-            return class_shape(root != nullptr && !root->class_name.empty() ? root->class_name : "DataModel", 0);
+            return class_shape("Game", 0);
         }
         if (name == "script") {
             if (!script_global_) {
@@ -882,7 +879,7 @@ public:
                 // `game.Door` reads the child named Door. A member of that name wins.
                 if (base->instance != kNoInstance) {
                     if (const engine_core::LuaNode* child = FindChild(world_, base->instance, name)) {
-                        return class_shape(child->class_name.empty() ? "DataModel" : child->class_name, child->id);
+                        return class_shape(child->class_name.empty() ? "Instance" : child->class_name, child->id);
                     }
                 }
                 return none();
@@ -895,7 +892,9 @@ public:
                         }
                         const engine_core::LuaNode* parent = FindNode(world_, node->parent);
                         std::string class_name = "Instance";
-                        if (parent != nullptr && !parent->class_name.empty()) {
+                        if (node->parent == 0) {
+                            class_name = "Game";
+                        } else if (parent != nullptr && !parent->class_name.empty()) {
                             class_name = parent->class_name;
                         }
                         Shape* parent_shape = class_shape(std::move(class_name), node->parent);
@@ -1006,7 +1005,7 @@ public:
             // A child that is in the place is that child, not optional, as in
             // script analysis. A name that is not there may be nil.
             if (const engine_core::LuaNode* child = FindChild(world_, callee->instance, *literal)) {
-                return class_shape(child->class_name.empty() ? "DataModel" : child->class_name, child->id);
+                return class_shape(child->class_name.empty() ? "Instance" : child->class_name, child->id);
             }
             Shape* shape = class_shape("Instance", kNoInstance);
             shape->optional = true;
@@ -1305,7 +1304,7 @@ public:
             }
             take(symbol.name, symbol.type_name == "table" ? "library" : symbol.type_name, symbol.call, documented);
         }
-        take("game", "DataModel", false, lookup_global("game"));
+        take("game", "Game", false, lookup_global("game"));
         if (script_global_) {
             std::string script_type = "Script";
             if (script_id_ != 0) {

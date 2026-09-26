@@ -199,7 +199,7 @@ void testInstances() {
     expect_missing(widget, "Source", "Widget.Source");
 
     std::vector<engine_core::LuaNode> world;
-    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
     world.push_back(node(4, 0, "Tri0", "TestTriangle"));
     world.push_back(node(5, 0, "Main", "Script"));
     const ide::CompletionList triangle = at_end("local tri = game:FindFirstChild(\"Tri0\")\ntri.", world, 5);
@@ -265,7 +265,7 @@ void testVector3() {
     expect_has(normal, "X", "FromNormalId().X");
 
     std::vector<engine_core::LuaNode> world;
-    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
     world.push_back(node(4, 0, "Tri0", "TestTriangle"));
     world.push_back(node(5, 0, "Main", "Script"));
     const ide::CompletionList position = at_end("local tri = game:FindFirstChild(\"Tri0\")\ntri.Position.", world, 5);
@@ -284,7 +284,7 @@ void testVector3() {
 
 void testModule() {
     std::vector<engine_core::LuaNode> world;
-    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
     world.push_back(node(8, 0, "Lib", "ModuleScript",
                          "local extra = { zoom = function() end }\nreturn { alpha = 1, beta = function() end, nested = extra }\n"));
     world.push_back(node(9, 0, "Main", "Script", ""));
@@ -322,7 +322,7 @@ void testModuleMethods() {
         "module.ready = true\n"
         "return module\n";
     std::vector<engine_core::LuaNode> world;
-    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
     world.push_back(node(9, 0, "Main", "Script"));
     world.push_back(node(8, 9, "ModuleScript", "ModuleScript", source));
 
@@ -366,7 +366,7 @@ void testModuleMethods() {
         "end\n"
         "return module\n";
     std::vector<engine_core::LuaNode> replaced_world;
-    replaced_world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    replaced_world.push_back(node(0, 0xffffffffu, "game", "Game"));
     replaced_world.push_back(node(3, 0, "Lib", "ModuleScript", replaced));
     replaced_world.push_back(node(4, 0, "Main", "Script"));
     const ide::CompletionList replaced_dot = at_end("local m = require(game:FindFirstChild(\"Lib\"))\nm.", replaced_world, 4);
@@ -381,7 +381,7 @@ void testModuleMethods() {
         "extra.amount = 1\n"
         "return { nested = extra }\n";
     std::vector<engine_core::LuaNode> nested_world;
-    nested_world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    nested_world.push_back(node(0, 0xffffffffu, "game", "Game"));
     nested_world.push_back(node(5, 0, "Lib", "ModuleScript", nested_source));
     nested_world.push_back(node(6, 0, "Main", "Script"));
     const ide::CompletionList nested_dot =
@@ -402,7 +402,7 @@ void testModuleMethods() {
         "return module\n";
     const char* wrap = "return require(game:FindFirstChild(\"Lib\"))\n";
     std::vector<engine_core::LuaNode> wrap_world;
-    wrap_world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    wrap_world.push_back(node(0, 0xffffffffu, "game", "Game"));
     wrap_world.push_back(node(8, 0, "Lib", "ModuleScript", inner));
     wrap_world.push_back(node(7, 0, "Wrap", "ModuleScript", wrap));
     wrap_world.push_back(node(9, 0, "Main", "Script"));
@@ -469,7 +469,7 @@ void testNames() {
     expect_detail(script, "script", "Script", "sc");
 
     std::vector<engine_core::LuaNode> world;
-    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
     world.push_back(node(3, 0, "Lib", "ModuleScript"));
     const ide::CompletionList module_script = at_end("sc", world, 3);
     expect_detail(module_script, "script", "ModuleScript", "module script");
@@ -499,7 +499,7 @@ void testNames() {
     expect_detail(typed, "label", "string", "string local");
 
     const ide::CompletionList object = at_end("local target = game\ntar");
-    expect_detail(object, "target", "DataModel", "game local");
+    expect_detail(object, "target", "Game", "game local");
     expect_call(object, "target", false, "game local");
 
     const ide::CompletionList plain = at_end("local target\ntar");
@@ -510,7 +510,7 @@ void testNames() {
     expect_detail(annotated, "target", "number", "annotated local");
 
     const ide::CompletionList shadow = at_end("local task = game\nta");
-    expect_detail(shadow, "task", "DataModel", "shadowed task");
+    expect_detail(shadow, "task", "Game", "shadowed task");
     expect_call(shadow, "task", false, "shadowed task");
 
     const ide::CompletionList shadow_game = at_end("local game = 1\nga");
@@ -520,7 +520,7 @@ void testNames() {
     expect_detail(inner, "target", "number", "inner target");
 
     const ide::CompletionList outer = at_end("local target = game\ndo\nlocal target = tar");
-    expect_detail(outer, "target", "DataModel", "outer target in initializer");
+    expect_detail(outer, "target", "Game", "outer target in initializer");
 
     const ide::CompletionList defining = at_end("local target = tar");
     expect_missing(defining, "target", "local initializer");
@@ -622,7 +622,7 @@ void testConsole() {
         ide::complete_luau(command, static_cast<int>(std::string_view(command).size()), {}, 0, false);
     expect_name(names, "console name");
     expect_has(names, "target", "console local");
-    expect_detail(names, "target", "DataModel", "console local");
+    expect_detail(names, "target", "Game", "console local");
     expect_missing(names, "script", "console script");
 
     const ide::CompletionList typed = ide::complete_luau("ga", 2, {}, 0, false);
@@ -737,7 +737,7 @@ void testStringArguments() {
     }
 
     std::vector<engine_core::LuaNode> world;
-    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
     world.push_back(node(1, 0, "HopSlow", "Script"));
     world.push_back(node(2, 0, "HopFast", "Script"));
     world.push_back(node(3, 0, "Tri0", "TestTriangle"));
@@ -914,7 +914,7 @@ void testCallbackArguments() {
     expect_detail(changed, "function(property)", "string", "Changed callback");
 
     std::vector<engine_core::LuaNode> world;
-    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
     world.push_back(node(5, 0, "Main", "Script"));
     const ide::CompletionList script_changed = at_end("script.Changed:Connect(function(prop", world, 5);
     expect_has(script_changed, "property", "script.Changed parameter");
@@ -994,9 +994,25 @@ void testFunctionParameters() {
     const ide::CompletionList second = at_end(std::string(defined) + "test_func(\"test\", g");
     expect_signature(second, "(a: string, b: Instance)", "second argument");
     expect_has(second, "game", "second argument");
-    expect_detail(second, "game", "DataModel", "second argument");
-    if (index_of(second, "game") != 0 || index_of(second, "greeting") < index_of(second, "game")) {
-        fail("an Instance argument should offer instances first");
+    expect_detail(second, "game", "Game", "second argument");
+
+    // An Instance parameter offers what Instance.new makes first. game is a
+    // DataModel but not an Instance, so it goes first only where a DataModel fits.
+    const char* placed =
+        "local gate = Instance.new(\"Folder\")\n"
+        "local function place(item: Instance, parent: DataModel)\n"
+        "end\n";
+    const ide::CompletionList item = at_end(std::string(placed) + "place(g");
+    expect_has(item, "gate", "Instance argument");
+    expect_has(item, "game", "Instance argument");
+    if (index_of(item, "gate") != 0 || index_of(item, "game") < index_of(item, "gate")) {
+        fail("an Instance argument should offer instances first, and game is not one");
+    }
+    const ide::CompletionList parent = at_end(std::string(placed) + "place(gate, g");
+    expect_has(parent, "gate", "DataModel argument");
+    expect_has(parent, "game", "DataModel argument");
+    if (index_of(parent, "game") > 1 || index_of(parent, "gate") > 1) {
+        fail("a DataModel argument should offer game and instances first");
     }
 
     const ide::CompletionList quoted = at_end(std::string(defined) + "test_func(\"");
@@ -1063,7 +1079,8 @@ void testInstanceNew() {
         fail("Instance.new classes are not registered");
     }
     if (engine_core::lua_creatable_known("TestTriangle") || engine_core::lua_creatable_known("DataModel") ||
-        engine_core::lua_creatable_known("Instance") || engine_core::lua_creatable_known("RunService") ||
+        engine_core::lua_creatable_known("Instance") || engine_core::lua_creatable_known("Game") ||
+        engine_core::lua_creatable_known("RunService") ||
         engine_core::lua_creatable_known("Vector3")) {
         fail("Instance.new registered a class it cannot create");
     }
@@ -1077,6 +1094,7 @@ void testInstanceNew() {
     expect_missing(made, "ModuleScript", "Instance.new prefix");
     expect_missing(made, "TestTriangle", "Instance.new is not every class");
     expect_missing(made, "DataModel", "Instance.new is not every class");
+    expect_missing(made, "Game", "Instance.new cannot make game");
     expect_missing(made, "RunService", "Instance.new is not a service");
     expect_detail(made, "GameObject", "class", "Instance.new");
     expect_call(made, "GameObject", false, "Instance.new");
@@ -1270,11 +1288,11 @@ void testHover() {
     expect_hover(sub, "function string:sub(i: number, j: number?): string", "", "substring", "string method");
 
     const ide::HoverInfo game = ide::hover_luau("print(game)", find_nth("print(game)", "game", 0));
-    expect_hover(game, "game: DataModel", "", nullptr, "game");
+    expect_hover(game, "game: Game", "", nullptr, "game");
 
     const char* child = "game:FindFirstChild(\"Hop\")";
     const ide::HoverInfo find = ide::hover_luau(child, find_nth(child, "FindFirstChild", 0));
-    expect_hover(find, "function DataModel:FindFirstChild(name: string): Instance?", "", "child", "FindFirstChild");
+    expect_hover(find, "function Game:FindFirstChild(name: string): Instance?", "", "child", "FindFirstChild");
 
     const char* beat = "game:GetService(\"RunService\").Heartbeat:Wait()";
     const ide::HoverInfo heartbeat = ide::hover_luau(beat, find_nth(beat, "Wait", 0));
@@ -1282,7 +1300,7 @@ void testHover() {
 
     const char* shadow = "local task = game\nprint(task)";
     const ide::HoverInfo shadowed = ide::hover_luau(shadow, find_nth(shadow, "task", 1));
-    expect_hover(shadowed, "task: DataModel", "", nullptr, "local shadows task");
+    expect_hover(shadowed, "task: Game", "", nullptr, "local shadows task");
 
     const char* hidden = "do\n    local hidden: number = 1\nend\nprint(hidden)";
     const ide::HoverInfo gone = ide::hover_luau(hidden, find_nth(hidden, "hidden", 1));
@@ -1329,7 +1347,7 @@ void testHover() {
         "\n"
         "return module\n";
     std::vector<engine_core::LuaNode> world;
-    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
     world.push_back(node(9, 0, "Main", "Script"));
     world.push_back(node(8, 9, "ModuleScript", "ModuleScript", module_source));
     const char* use =
@@ -1358,7 +1376,7 @@ void testHover() {
         "end\n"
         "return module\n";
     std::vector<engine_core::LuaNode> replaced_world;
-    replaced_world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    replaced_world.push_back(node(0, 0xffffffffu, "game", "Game"));
     replaced_world.push_back(node(9, 0, "Main", "Script"));
     replaced_world.push_back(node(8, 9, "ModuleScript", "ModuleScript", replaced));
     const char* replaced_use = "local Module = require(script:FindFirstChild(\"ModuleScript\"))\nlocal x = Module.new()\n";
@@ -1369,7 +1387,7 @@ void testHover() {
 
     const char* constructed = "return { new = function()\n    return true\nend }\n";
     std::vector<engine_core::LuaNode> constructed_world;
-    constructed_world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    constructed_world.push_back(node(0, 0xffffffffu, "game", "Game"));
     constructed_world.push_back(node(9, 0, "Main", "Script"));
     constructed_world.push_back(node(8, 9, "ModuleScript", "ModuleScript", constructed));
     const char* constructed_use = "local Module = require(script:FindFirstChild(\"ModuleScript\"))\nlocal x = Module.new()\n";
@@ -1404,10 +1422,10 @@ void testCompletionDocs() {
     expect_info(required, "require", "", "function require(module: ModuleScript)", "ModuleScript", "require");
 
     const ide::CompletionList game = at_end("game:");
-    expect_info(game, "FindFirstChild", "Instance?", "function DataModel:FindFirstChild(name: string): Instance?", "child",
+    expect_info(game, "FindFirstChild", "Instance?", "function Game:FindFirstChild(name: string): Instance?", "child",
                 "FindFirstChild");
-    expect_info(game, "Destroy", "returns nothing", "function DataModel:Destroy()", "descendants", "Destroy");
-    expect_info(game, "GetChildren", "{Instance}", "function DataModel:GetChildren(): {Instance}", "children",
+    expect_info(game, "Destroy", "returns nothing", "function Game:Destroy()", "descendants", "Destroy");
+    expect_info(game, "GetChildren", "{Instance}", "function Game:GetChildren(): {Instance}", "children",
                 "GetChildren");
     expect_detail(game, "FindFirstChild", "function", "FindFirstChild kind");
 
@@ -1468,7 +1486,7 @@ void testCompletionDocs() {
 
 std::vector<engine_core::LuaNode> module_world(const char* source) {
     std::vector<engine_core::LuaNode> world;
-    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
     world.push_back(node(9, 0, "Main", "Script"));
     world.push_back(node(8, 9, "ModuleScript", "ModuleScript", source));
     return world;
@@ -1861,7 +1879,7 @@ void testSkipped() {
 // FindFirstChild; only a name that is not there may be nil.
 void testDotChildren() {
     std::vector<engine_core::LuaNode> world;
-    world.push_back(node(0, 0xffffffffu, "game", "DataModel"));
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
     world.push_back(node(3, 0, "Configs", "Folder"));
     world.push_back(node(4, 3, "Tri0", "TestTriangle"));
     world.push_back(node(6, 3, "Name", "Folder"));

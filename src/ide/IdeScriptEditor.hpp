@@ -37,6 +37,8 @@ public:
 
     bool isLoaded() const { return loaded_; }
     std::string text() const;
+    // Typed text the script's Source does not have yet. flush() writes it.
+    bool hasUnflushedText() const { return dirty_; }
 
     void focus();
     // Writes the buffer to the instance. While stopped, captures the place.

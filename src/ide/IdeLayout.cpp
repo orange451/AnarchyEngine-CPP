@@ -249,7 +249,9 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     runner_.prepare();
 
     auto file = jadefx::make<jadefx::Menu>("File");
-    AddItem(*file, "New", "New.png", jadefx::Key::N, jadefx::Key::ModControl);
+    AddItem(*file, "New", "New.png", jadefx::Key::N, jadefx::Key::ModControl)->setOnAction([this](jadefx::ActionEvent&) {
+        confirm_discard("Save changes before starting a new place?", [this] { new_place(); });
+    });
     AddItem(*file, "Open", "Folder.png", jadefx::Key::O, jadefx::Key::ModControl)
         ->setOnAction([this](jadefx::ActionEvent&) { open_project(); });
     AddItem(*file, "Save", "Save.png", jadefx::Key::S, jadefx::Key::ModControl)
@@ -429,6 +431,8 @@ void IdeLayout::start() {
     // uncapped render thread leave its wait.
     sceneDock_->dock(jadefx::make<runner::GameView>(runner_));
     runner_.start();
+    // Whatever the app built before start is the starting point, not an edit.
+    mark_saved();
 }
 
 void IdeLayout::mount(jadefx::Scene& scene) {
@@ -447,6 +451,21 @@ void IdeLayout::attachFrame(jadefx::Stage& stage) {
     mainStage_ = &stage;
     resizeWindow_ = [&stage](int width, int height) { stage.setSize(width, height); };
     stage.setFrameTail([this]() { flushFrame(); });
+    // The close button, Alt+F4, and Cmd+Q ask about unsaved work first.
+    stage.setOnCloseRequest([this]() {
+        if (prompt_open_ || dialog_open_) {
+            return false;
+        }
+        if (!has_unsaved_changes()) {
+            return true;
+        }
+        confirm_discard("Save changes before closing?", [this] {
+            if (mainStage_ != nullptr) {
+                mainStage_->close();
+            }
+        });
+        return false;
+    });
     update_title();
 }
 
@@ -1104,6 +1123,7 @@ void GrowToFit(const jadefx::Node* area, jadefx::Scene* scene, const std::functi
 
 void IdeLayout::flushFrame() {
     noteScriptFocus();
+    refresh_modified();
     const std::vector<std::shared_ptr<IdeDock>> pending = std::move(pendingEmpty_);
     pendingEmpty_.clear();
     for (const std::shared_ptr<IdeDock>& dock : pending) {
@@ -1488,7 +1508,9 @@ void IdeLayout::update_title() {
     if (mainStage_ == nullptr) {
         return;
     }
-    mainStage_->setTitle(project_ ? project_->name() + " - Anarchy Engine" : std::string("Anarchy Engine"));
+    title_modified_ = place_modified_ || editors_unflushed();
+    const std::string name = project_ ? project_->name() : std::string("Untitled");
+    mainStage_->setTitle(name + (title_modified_ ? "*" : "") + " - Anarchy Engine");
 }
 
 void IdeLayout::show_error(const std::string& heading, const std::string& detail) {
@@ -1535,25 +1557,131 @@ void IdeLayout::close_script_editors() {
     last_script_focus_ = 0;
 }
 
-void IdeLayout::open_project() {
-    if (dialog_open_) {
+bool IdeLayout::editors_unflushed() const {
+    for (const auto& entry : open_scripts_) {
+        if (std::shared_ptr<IdeScriptEditor> editor = entry.second.lock()) {
+            if (editor->hasUnflushedText()) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void IdeLayout::mark_saved() {
+    engine_core::DataModel& model = runner_.simulation().datamodel();
+    run_now([this](engine_core::DataModel& world) { saved_fingerprint_ = engine_core::Project::place_fingerprint(world); });
+    seen_revision_ = model.authored_revision();
+    place_modified_ = false;
+    update_title();
+}
+
+void IdeLayout::refresh_modified() {
+    engine_core::DataModel& model = runner_.simulation().datamodel();
+    const std::uint64_t revision = model.authored_revision();
+    if (revision != seen_revision_) {
+        // Only an authored change moves the revision, so this runs at the pace
+        // of edits. Play steps do not move it.
+        seen_revision_ = revision;
+        std::uint64_t now = 0;
+        run_now([&now](engine_core::DataModel& world) { now = engine_core::Project::place_fingerprint(world); });
+        place_modified_ = now != saved_fingerprint_;
+    }
+    if ((place_modified_ || editors_unflushed()) != title_modified_) {
+        update_title();
+    }
+}
+
+bool IdeLayout::has_unsaved_changes() {
+    seen_revision_ = ~std::uint64_t{0};
+    refresh_modified();
+    return place_modified_ || editors_unflushed();
+}
+
+void IdeLayout::confirm_discard(const std::string& question, std::function<void()> proceed) {
+    if (prompt_open_ || dialog_open_) {
         return;
     }
-    dialog_open_ = true;
-    jadefx::FolderDialogOptions options;
-    options.title = "Open Project";
-    options.directory = dialog_directory().u8string();
-    jadefx::showFolderDialog(std::move(options), [this](jadefx::DialogResult result, const std::string& path) {
-        dialog_open_ = false;
-        if (result == jadefx::DialogResult::Unavailable) {
-            show_error("No folder dialog",
-                       "This system has no folder picker. On Linux, install zenity or kdialog. You can also "
-                       "start the studio with a project folder: AnarchyEngine-CPP <folder>");
+    if (!has_unsaved_changes() || scene_ == nullptr) {
+        proceed();
+        return;
+    }
+    prompt_open_ = true;
+    const jadefx::ButtonType save("Save", jadefx::ButtonType::Data::OkDone);
+    const jadefx::ButtonType discard("Don't Save", jadefx::ButtonType::Data::Left);
+    auto alert = std::make_shared<jadefx::Alert>(jadefx::AlertType::Warning,
+                                                 "Your changes will be lost if you don't save them.",
+                                                 std::vector<jadefx::ButtonType>{save, discard, jadefx::ButtonType::Cancel()});
+    alert->setTitle("Anarchy Engine");
+    alert->setHeaderText(question);
+    alert->setOnClosed([this, save, discard, proceed = std::move(proceed)](const jadefx::ButtonType* choice) {
+        prompt_open_ = false;
+        if (choice == nullptr) {
             return;
         }
-        if (result == jadefx::DialogResult::Chosen) {
-            open_project_at(std::filesystem::u8path(path));
+        if (*choice == discard) {
+            // Don't Save: the editors' text is dropped with the place.
+            proceed();
+        } else if (*choice == save) {
+            // The editors' text is part of what is saved.
+            if (testing_) {
+                stop_test();
+            }
+            save_project(proceed);
         }
+    });
+    alerts_.erase(std::remove_if(alerts_.begin(), alerts_.end(),
+                                 [](const std::shared_ptr<jadefx::Alert>& item) {
+                                     return !item || item->getResult() != nullptr;
+                                 }),
+                  alerts_.end());
+    alert->show(*scene_);
+    // Stable names for the three answers, so a test can find them.
+    const std::pair<const jadefx::ButtonType*, const char*> ids[] = {
+        {&save, "unsaved-save"}, {&discard, "unsaved-discard"}, {&jadefx::ButtonType::Cancel(), "unsaved-cancel"}};
+    for (const auto& [type, id] : ids) {
+        if (jadefx::Button* button = alert->lookupButton(*type)) {
+            button->setElementId(id);
+        }
+    }
+    alerts_.push_back(std::move(alert));
+}
+
+void IdeLayout::new_place() {
+    if (testing_) {
+        stop_test();
+    }
+    close_script_editors();
+    if (clip_) {
+        clip_->held = false;
+    }
+    run_now([](engine_core::DataModel& model) { engine_core::Project::reset_place(model); });
+    project_.reset();
+    mark_saved();
+    runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Print, "New place");
+}
+
+void IdeLayout::open_project() {
+    confirm_discard("Save changes before opening another project?", [this] {
+        if (dialog_open_) {
+            return;
+        }
+        dialog_open_ = true;
+        jadefx::FolderDialogOptions options;
+        options.title = "Open Project";
+        options.directory = dialog_directory().u8string();
+        jadefx::showFolderDialog(std::move(options), [this](jadefx::DialogResult result, const std::string& path) {
+            dialog_open_ = false;
+            if (result == jadefx::DialogResult::Unavailable) {
+                show_error("No folder dialog",
+                           "This system has no folder picker. On Linux, install zenity or kdialog. You can also "
+                           "start the studio with a project folder: AnarchyEngine-CPP <folder>");
+                return;
+            }
+            if (result == jadefx::DialogResult::Chosen) {
+                open_project_at(std::filesystem::u8path(path));
+            }
+        });
     });
 }
 
@@ -1581,16 +1709,12 @@ void IdeLayout::open_project_at(const std::filesystem::path& root) {
         clip_->held = false;
     }
     project_ = std::move(loaded);
-    update_title();
+    mark_saved();
     runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Print,
                                                  "Opened " + project_->root().u8string());
 }
 
-void IdeLayout::save_project() {
-    if (!project_) {
-        save_project_as();
-        return;
-    }
+bool IdeLayout::save_open_project() {
     // Open editors write Source first. During play the save writes the place
     // captured at Test, so play edits stay out of it either way.
     flush_editors();
@@ -1604,17 +1728,29 @@ void IdeLayout::save_project() {
     });
     if (!error.empty()) {
         show_error("Could not save project", error);
-        return;
+        return false;
     }
+    mark_saved();
     const engine_core::Project::SaveReport& report = project_->last_save();
     const std::size_t changed = report.written.size() + report.moved.size() + report.removed.size();
     runner_.simulation().scripts().append_output(
         engine_core::ScriptRuntime::OutputKind::Print,
         "Saved " + project_->root().u8string() +
             (changed == 0 ? std::string(" (no changes)") : " (" + std::to_string(changed) + " files changed)"));
+    return true;
 }
 
-void IdeLayout::save_project_as() {
+void IdeLayout::save_project(std::function<void()> then) {
+    if (!project_) {
+        save_project_as(std::move(then));
+        return;
+    }
+    if (save_open_project() && then) {
+        then();
+    }
+}
+
+void IdeLayout::save_project_as(std::function<void()> then) {
     if (dialog_open_) {
         return;
     }
@@ -1624,20 +1760,20 @@ void IdeLayout::save_project_as() {
     options.save = true;
     options.directory = dialog_directory().u8string();
     options.name = project_ ? project_->name() : std::string("MyPlace");
-    jadefx::showFolderDialog(std::move(options), [this](jadefx::DialogResult result, const std::string& path) {
+    jadefx::showFolderDialog(std::move(options), [this, then = std::move(then)](jadefx::DialogResult result,
+                                                                              const std::string& path) {
         dialog_open_ = false;
         if (result == jadefx::DialogResult::Unavailable) {
-            show_error("No folder dialog",
-                       "This system has no folder picker. On Linux, install zenity or kdialog.");
+            show_error("No folder dialog", "This system has no folder picker. On Linux, install zenity or kdialog.");
             return;
         }
-        if (result == jadefx::DialogResult::Chosen) {
-            save_project_to(std::filesystem::u8path(path));
+        if (result == jadefx::DialogResult::Chosen && save_project_to(std::filesystem::u8path(path)) && then) {
+            then();
         }
     });
 }
 
-void IdeLayout::save_project_to(const std::filesystem::path& root) {
+bool IdeLayout::save_project_to(const std::filesystem::path& root) {
     flush_editors();
     std::string error;
     run_now([&](engine_core::DataModel& model) {
@@ -1653,11 +1789,12 @@ void IdeLayout::save_project_to(const std::filesystem::path& root) {
     });
     if (!error.empty()) {
         show_error("Could not save project", error);
-        return;
+        return false;
     }
-    update_title();
+    mark_saved();
     runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Print,
                                                  "Saved " + project_->root().u8string());
+    return true;
 }
 
 }  // namespace ide

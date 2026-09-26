@@ -205,6 +205,9 @@ public:
     AuthoredDirty authored_dirty() const;
     void clear_authored_dirty();
     void mark_authored_dirty(InstanceId id);
+    // Bumps on every authored mark and on Stop. Never resets. Safe to read from
+    // any thread, so a UI can notice a change without taking the lock.
+    std::uint64_t authored_revision() const;
 
     // Per-instance signals. The reference dies with the instance.
     // Id 0 is the root DataModel. It has no slot; its signals are not bags[0].

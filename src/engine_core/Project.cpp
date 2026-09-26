@@ -861,6 +861,92 @@ void Project::save_as(const fs::path& root) {
     save_tree(true);
 }
 
+std::map<std::string, Project::Files> Project::plan_files(const std::vector<AuthoredNode>& tree,
+                                                          const std::string& src,
+                                                          const std::unordered_map<std::string, Files>& cache) {
+    // Paths. Every name carries the GUID, so two instances never want one path.
+    std::vector<std::string> dirs(tree.size());
+    std::map<std::string, Files> next;
+    if (tree.empty()) {
+        return next;
+    }
+    dirs[0] = src;
+    for (std::size_t index = 0; index < tree.size(); ++index) {
+        const AuthoredNode& node = tree[index];
+        Files files;
+        if (index == 0) {
+            files.props_path = join(src, "init.json");
+            for (std::size_t child : node.children) {
+                dirs[child] = src;
+            }
+        } else {
+            // Parents come before children in the tree, so dirs[parent] is set.
+            const std::string& dir = dirs[index];
+            const std::string stem = sanitize_file_name(node.name) + "." + node.guid;
+            const bool folder = !node.children.empty();
+            files.has_source = node.has_source;
+            if (folder) {
+                const std::string own = join(dir, stem);
+                files.props_path = join(own, node.has_source ? "init.meta.json" : "init.json");
+                files.source_path = node.has_source ? join(own, "init.luau") : std::string();
+                for (std::size_t child : node.children) {
+                    dirs[child] = own;
+                }
+            } else {
+                files.props_path = join(dir, stem + (node.has_source ? ".meta.json" : ".json"));
+                files.source_path = node.has_source ? join(dir, stem + ".luau") : std::string();
+            }
+        }
+        if (node.has_properties) {
+            files.props_bytes = instance_bytes(node, tree);
+            files.source_bytes = node.source;
+        } else {
+            const Files& known = cache.at(node.guid);
+            files.props_bytes = known.props_bytes;
+            files.source_bytes = known.source_bytes;
+        }
+        next.emplace(node.guid, std::move(files));
+    }
+    return next;
+}
+
+std::uint64_t Project::place_fingerprint(const DataModel& model) {
+    // FNV-1a over each path and its bytes, in GUID order.
+    std::uint64_t hash = 14695981039346656037ull;
+    auto mix = [&hash](const std::string& text) {
+        for (const char c : text) {
+            hash ^= static_cast<unsigned char>(c);
+            hash *= 1099511628211ull;
+        }
+        // A separator, so "ab"+"c" and "a"+"bc" differ.
+        hash ^= 0xffu;
+        hash *= 1099511628211ull;
+    };
+    const std::vector<AuthoredNode> tree = model.authored_tree(nullptr);
+    try {
+        const std::map<std::string, Files> files = plan_files(tree, Layout{}.src, {});
+        for (const auto& [guid, entry] : files) {
+            mix(guid);
+            mix(entry.props_path);
+            mix(entry.props_bytes);
+            mix(entry.source_path);
+            mix(entry.source_bytes);
+        }
+    } catch (const ProjectError& error) {
+        // A place that cannot be written is never "saved".
+        mix(error.what());
+    }
+    return hash;
+}
+
+void Project::reset_place(DataModel& model) {
+    Rebuild rebuild(model);
+    clear_world(model);
+    model.set_name(0, model.class_name());
+    model.set_guid(0, make_guid());
+    rebuild.finish();
+}
+
 void Project::save_tree(bool full) {
     DataModel& world = *model_;
     const bool playing = world.simulation_running();
@@ -901,49 +987,7 @@ void Project::save_tree(bool full) {
         }
     }
 
-    // Paths. Every name carries the GUID, so two instances never want one path.
-    std::vector<std::string> dirs(tree.size());
-    std::unordered_map<std::string, Files> next;
-    next.reserve(tree.size());
-    dirs[0] = layout.src;
-    for (std::size_t index = 0; index < tree.size(); ++index) {
-        const AuthoredNode& node = tree[index];
-        Files files;
-        if (index == 0) {
-            files.props_path = join(layout.src, "init.json");
-        } else {
-            // Parents come before children in the tree, so dirs[parent] is set.
-            const std::string& dir = dirs[index];
-            const std::string stem = sanitize_file_name(node.name) + "." + node.guid;
-            const bool folder = !node.children.empty();
-            files.has_source = node.has_source;
-            if (folder) {
-                const std::string own = join(dir, stem);
-                files.props_path = join(own, node.has_source ? "init.meta.json" : "init.json");
-                files.source_path = node.has_source ? join(own, "init.luau") : std::string();
-                for (std::size_t child : node.children) {
-                    dirs[child] = own;
-                }
-            } else {
-                files.props_path = join(dir, stem + (node.has_source ? ".meta.json" : ".json"));
-                files.source_path = node.has_source ? join(dir, stem + ".luau") : std::string();
-            }
-        }
-        if (index == 0) {
-            for (std::size_t child : node.children) {
-                dirs[child] = layout.src;
-            }
-        }
-        if (node.has_properties) {
-            files.props_bytes = instance_bytes(node, tree);
-            files.source_bytes = node.source;
-        } else {
-            const Files& known = files_.at(node.guid);
-            files.props_bytes = known.props_bytes;
-            files.source_bytes = known.source_bytes;
-        }
-        next.emplace(node.guid, std::move(files));
-    }
+    std::map<std::string, Files> next = plan_files(tree, layout.src, files_);
 
     SaveReport report;
     std::set<std::string> vacated;
@@ -1015,7 +1059,8 @@ void Project::save_tree(bool full) {
         }
     }
 
-    files_ = std::move(next);
+    files_ = std::unordered_map<std::string, Files>(std::make_move_iterator(next.begin()),
+                                                   std::make_move_iterator(next.end()));
     id_guid_.clear();
     guid_id_.clear();
     for (const AuthoredNode& node : tree) {

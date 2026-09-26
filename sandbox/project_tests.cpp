@@ -732,3 +732,62 @@ TEST_CASE("adopt writes an unsaved place without clearing it", "[project]") {
     Project loaded = Project::load(dir.path / "Adopted");
     REQUIRE(loaded.datamodel().name(by_guid(loaded.datamodel(), guid)) == "Part");
 }
+
+TEST_CASE("the fingerprint changes with the saved bytes, not with edits that cancel out", "[project]") {
+    TempDir dir;
+    ScriptRig rig;
+    Project project = Project::create(dir.path, rig.model);
+    DataModel& model = rig.model;
+    engine_core::GameObject& part = add_part(model, 0, "Part");
+    engine_core::Script& main = add_script(model, 0, "Main", "print(1)\n");
+    project.save();
+    const std::uint64_t saved = Project::place_fingerprint(model);
+    REQUIRE(Project::place_fingerprint(model) == saved);
+
+    part.set_color(rgb(1.f, 0.f, 0.f));
+    REQUIRE(Project::place_fingerprint(model) != saved);
+    part.set_color(rgb(1.f, 1.f, 1.f));
+    REQUIRE(Project::place_fingerprint(model) == saved);
+
+    model.set_name(part.id(), "Floor");
+    REQUIRE(Project::place_fingerprint(model) != saved);
+    model.set_name(part.id(), "Part");
+    main.set_source("print(2)\n");
+    REQUIRE(Project::place_fingerprint(model) != saved);
+    main.set_source("print(1)\n");
+
+    const InstanceId extra = add_part(model, 0, "Extra").id();
+    REQUIRE(Project::place_fingerprint(model) != saved);
+    model.destroy(extra);
+    REQUIRE(Project::place_fingerprint(model) == saved);
+
+    // Play-only instances are not part of what a save writes.
+    model.capture_place();
+    model.start_simulation();
+    add_part(model, 0, "Session");
+    REQUIRE(Project::place_fingerprint(model) == saved);
+    model.stop_simulation();
+    REQUIRE(Project::place_fingerprint(model) == saved);
+}
+
+TEST_CASE("reset_place empties the place and drops undo", "[project]") {
+    SimRole role;
+    DataModel model;
+    add_part(model, 0, "Part");
+    add_script(model, 0, "Main", "print(1)\n");
+    model.history().end_gesture();
+    REQUIRE(model.history().can_undo().first);
+    const std::string old_root = model.guid(0);
+    model.start_simulation();
+
+    Project::reset_place(model);
+    REQUIRE_FALSE(model.simulation_running());
+    REQUIRE(model.get_children(0).empty());
+    REQUIRE_FALSE(model.history().can_undo().first);
+    REQUIRE(model.guid(0) != old_root);
+    // Stop Play returns to the empty place, not the old one.
+    model.start_simulation();
+    add_part(model, 0, "Session");
+    model.stop_simulation();
+    REQUIRE(model.get_children(0).empty());
+}

@@ -9,6 +9,7 @@
 #include "TestTriangle.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -164,6 +165,7 @@ struct DataModel::State {
     // Edit-mode authored changes a project save has not written yet.
     std::unordered_set<InstanceId> dirty;
     bool dirty_all = false;
+    std::atomic<std::uint64_t> revision{0};
     std::function<void()> on_stop;
     std::function<void()> on_start;
     ScriptHost* script_host = nullptr;
@@ -1515,6 +1517,7 @@ void DataModel::restore_place_unlocked() {
     // Edits after the last capture are gone from the live tree now.
     state_->dirty.clear();
     state_->dirty_all = true;
+    state_->revision.fetch_add(1, std::memory_order_relaxed);
 
     {
         std::lock_guard<std::mutex> guard(state_->command_mu);
@@ -2181,7 +2184,10 @@ void DataModel::mark_authored_dirty(InstanceId id) {
         return;
     }
     state_->dirty.insert(id);
+    state_->revision.fetch_add(1, std::memory_order_relaxed);
 }
+
+std::uint64_t DataModel::authored_revision() const { return state_->revision.load(std::memory_order_relaxed); }
 
 namespace {
 

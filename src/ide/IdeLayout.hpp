@@ -36,7 +36,8 @@ class IdeScriptEditor;
 // double-click runs it. Edit docks a script editor on the scene view's tab strip.
 // The explorer edits a name in place and hands the result to rename.
 // File opens and saves a project folder through the system folder dialog.
-// Until the first Save As, the place has no folder.
+// Until the first Save As, the place has no folder. New, Open, and closing the
+// window ask first when the place has changes a save would write.
 class IdeLayout {
 public:
     // windowWidth and windowHeight are the window size in points, used to place the splitters.
@@ -52,6 +53,9 @@ public:
     // Stops a running test, closes script editors, and loads the project at root.
     // A failure shows an alert and leaves the current place open.
     void open_project_at(const std::filesystem::path& root);
+    // True when a save would write something, or an editor holds text its
+    // script's Source does not have yet.
+    bool has_unsaved_changes();
 
 private:
     struct Clip;
@@ -64,10 +68,21 @@ private:
     void edit(std::uint32_t id);
     std::shared_ptr<IdeScriptEditor> open_editor(std::uint32_t id) const;
     void flush_editors();
+    void new_place();
     void open_project();
-    void save_project();
-    void save_project_as();
-    void save_project_to(const std::filesystem::path& root);
+    // then runs after a successful save. A cancelled dialog or a failure skips it.
+    void save_project(std::function<void()> then = {});
+    void save_project_as(std::function<void()> then = {});
+    bool save_project_to(const std::filesystem::path& root);
+    bool save_open_project();
+    // Runs proceed now when nothing is unsaved. Otherwise asks Save, Don't
+    // Save, or Cancel; Save runs proceed only once the save succeeded.
+    void confirm_discard(const std::string& question, std::function<void()> proceed);
+    // The place as it is now is what is on disk, or the starting point of New.
+    void mark_saved();
+    // Recomputes the unsaved state when the place or an editor changed.
+    void refresh_modified();
+    bool editors_unflushed() const;
     // Runs fn on this thread with the simulation paused, then resumes a test
     // that was stepping. Play steps wait meanwhile.
     void run_now(const std::function<void(engine_core::DataModel&)>& fn);
@@ -145,6 +160,14 @@ private:
     // The open project. Null until Open or Save As.
     std::unique_ptr<engine_core::Project> project_;
     bool dialog_open_ = false;
+    bool prompt_open_ = false;
+    // Project::place_fingerprint when the place was last opened, saved, or made new.
+    std::uint64_t saved_fingerprint_ = 0;
+    // DataModel::authored_revision when place_modified_ was computed.
+    std::uint64_t seen_revision_ = ~std::uint64_t{0};
+    bool place_modified_ = false;
+    // What the window title shows now.
+    bool title_modified_ = false;
     // A play session is active: Edit shows Stop.
     bool testing_ = false;
     // Test, Pause, Resume, and Stop.

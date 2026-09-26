@@ -2,7 +2,9 @@
 
 #include "DataModel.hpp"
 
+#include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -71,6 +73,15 @@ public:
     // Writes the whole project under a new root, copies resources/, and binds there.
     void save_as(const std::filesystem::path& root);
 
+    // A hash of every path and every byte a save of this place would write.
+    // Equal fingerprints mean a save has nothing to write, so an edit that is
+    // undone back to the saved state no longer counts. Needs no project folder.
+    // During play it covers the place captured at Test, like a save does.
+    static std::uint64_t place_fingerprint(const DataModel& model);
+    // File > New: stops a running simulation, destroys every instance, gives the
+    // root a fresh GUID, captures the empty place, and drops undo history.
+    static void reset_place(DataModel& model);
+
     const std::filesystem::path& root() const { return root_; }
     const std::string& name() const { return name_; }
     DataModel& datamodel() { return *model_; }
@@ -102,6 +113,9 @@ private:
     void bind(DataModel* model, std::unique_ptr<DataModel> owned);
     void write_skeleton(const std::filesystem::path& root) const;
     void save_tree(bool full);
+    // The files for each GUID. A node without properties takes its bytes from cache.
+    static std::map<std::string, Files> plan_files(const std::vector<AuthoredNode>& tree, const std::string& src,
+                                                   const std::unordered_map<std::string, Files>& cache);
 
     std::filesystem::path root_;
     std::string name_;

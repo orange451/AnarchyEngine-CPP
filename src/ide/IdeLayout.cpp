@@ -22,13 +22,16 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <vector>
 
 namespace ide {
 namespace {
 
-// MenuBar's title row is 28 points. The status strip below is 24, matching the Java toolbar.
+// MenuBar's title row is 28 points. The ribbon under it is 32. The status
+// strip below is 24, matching the Java toolbar.
 constexpr double kMenuHeight = 28;
+constexpr double kRibbonHeight = 32;
 constexpr double kStatusHeight = 24;
 constexpr double kSideWidth = 240;
 constexpr double kConsoleHeight = 150;
@@ -85,6 +88,26 @@ scene {
 }
 .ide-status {
     background-color: #eceff1;
+}
+.ide-ribbon {
+    background-color: #f5f6f7;
+    border-width: 0 0 1px 0;
+    border-color: #c8c8c8;
+    padding: 3px 6px;
+}
+.ide-ribbon-button {
+    padding: 0 8px;
+    border-radius: 4px;
+}
+.ide-ribbon-button:hover {
+    background-color: #e1e5ea;
+}
+.ide-ribbon-button:active {
+    background-color: #cfd6de;
+}
+.ide-ribbon-button:disabled {
+    background-color: transparent;
+    opacity: 0.4;
 }
 .ide-viewport {
     background-color: #1e1e1e;
@@ -225,20 +248,41 @@ bool would_cycle(const engine_core::DataModel& model, engine_core::InstanceId no
     return false;
 }
 
-// The click handler runs on the open menu's row. Hiding first keeps that row
-// alive: a visibility change on an open menu rebuilds its rows.
-// testing: a play session is active. stepping: that session is executing.
-// Edit mode shows Test. A running test shows Pause and Stop. A paused test
-// shows Resume and Stop.
-void ShowSession(jadefx::MenuItem& test, jadefx::MenuItem& pause, jadefx::MenuItem& resume, jadefx::MenuItem& stop,
-                 bool testing, bool stepping) {
-    if (jadefx::Menu* menu = test.getParentMenu()) {
-        menu->hide();
+// An icon and a label on the ribbon. A left click runs action. A disabled
+// button is dimmed and takes no clicks.
+class RibbonButton : public jadefx::HBox {
+public:
+    RibbonButton(const char* label, const char* icon, std::function<void()> action) : action_(std::move(action)) {
+        getClassList().add("ide-ribbon-button");
+        setSpacing(5);
+        setAlignment(jadefx::Pos::CenterLeft);
+        setCursor(jadefx::Cursor::Pointer);
+        if (std::shared_ptr<jadefx::ImageView> view = icon_graphic(icon)) {
+            getChildren().add(std::move(view));
+        }
+        auto text = jadefx::make<jadefx::Label>(label);
+        text->setMouseTransparent(true);
+        getChildren().add(std::move(text));
+        setOnMouseClicked([this](const jadefx::MouseEvent& event) {
+            if (event.button == 0 && action_) {
+                action_();
+            }
+        });
     }
-    test.setVisible(!testing);
-    pause.setVisible(testing && stepping);
-    resume.setVisible(testing && !stepping);
-    stop.setVisible(testing);
+
+private:
+    std::function<void()> action_;
+};
+
+// testing: a play session is active. stepping: that session is executing.
+// Edit mode enables Test. A running test enables Pause and Stop. A paused
+// test enables Resume and Stop.
+void ShowSession(jadefx::Node& test, jadefx::Node& pause, jadefx::Node& resume, jadefx::Node& stop, bool testing,
+                 bool stepping) {
+    test.setDisable(testing);
+    pause.setDisable(!(testing && stepping));
+    resume.setDisable(!(testing && !stepping));
+    stop.setDisable(!testing);
 }
 
 }  // namespace
@@ -275,50 +319,27 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     });
 
     auto edit = jadefx::make<jadefx::Menu>("Edit");
-    auto test = jadefx::make<jadefx::MenuItem>("Test");
-    auto pause = jadefx::make<jadefx::MenuItem>("Pause");
-    auto resume = jadefx::make<jadefx::MenuItem>("Resume");
-    auto stop = jadefx::make<jadefx::MenuItem>("Stop");
-    AttachIcon(*test, "Play.png");
-    AttachIcon(*pause, "Pause.png");
-    AttachIcon(*resume, "Resume.png");
-    AttachIcon(*stop, "Stop.png");
-    session_items_[0] = test.get();
-    session_items_[1] = pause.get();
-    session_items_[2] = resume.get();
-    session_items_[3] = stop.get();
-    test->setAccelerator(kKeyF5, 0);
-    stop->setAccelerator(kKeyF5, 0);
-    pause->setVisible(false);
-    resume->setVisible(false);
-    stop->setVisible(false);
-    test->setOnAction([this](jadefx::ActionEvent&) {
-        engine_core::Engine& engine = runner_.simulation();
-        // Open editors write Source before the place is frozen.
-        flush_editors();
-        // Edit mode is the authored place. Freeze that tree before play so
-        // Stop restores it, including a folder removed while stopped.
-        // start_simulation alone keeps the previous snapshot.
-        engine.on_simulation([](engine_core::DataModel& model) {
-            if (!model.simulation_running()) {
-                model.capture_place();
-                model.start_simulation();
-            }
-        });
-        engine.resume();
-        show_session(true, true);
-    });
-    pause->setOnAction([this](jadefx::ActionEvent&) {
-        // The session stays active: scripts and the play tree remain, and
-        // steps wait until Resume. Stop still restores the authored place.
-        runner_.simulation().pause();
-        show_session(true, false);
-    });
-    resume->setOnAction([this](jadefx::ActionEvent&) {
-        runner_.simulation().resume();
-        show_session(true, true);
-    });
-    stop->setOnAction([this](jadefx::ActionEvent&) { stop_test(); });
+
+    auto ribbon = jadefx::make<jadefx::HBox>();
+    ribbon->getClassList().add("ide-ribbon");
+    ribbon->setSpacing(2);
+    ribbon->setAlignment(jadefx::Pos::CenterLeft);
+    ribbon->setPrefWidthRatio(1);
+    ribbon->setMinSize(0, kRibbonHeight);
+    ribbon->setPrefHeight(kRibbonHeight);
+    auto test = jadefx::make<RibbonButton>("Test", "Play.png", [this] { start_test(); });
+    auto pause = jadefx::make<RibbonButton>("Pause", "Pause.png", [this] { pause_test(); });
+    auto resume = jadefx::make<RibbonButton>("Resume", "Resume.png", [this] { resume_test(); });
+    auto stop = jadefx::make<RibbonButton>("Stop", "Stop.png", [this] { stop_test(); });
+    session_buttons_[0] = test.get();
+    session_buttons_[1] = pause.get();
+    session_buttons_[2] = resume.get();
+    session_buttons_[3] = stop.get();
+    ShowSession(*test, *pause, *resume, *stop, false, false);
+    ribbon->getChildren().add(std::move(test));
+    ribbon->getChildren().add(std::move(pause));
+    ribbon->getChildren().add(std::move(resume));
+    ribbon->getChildren().add(std::move(stop));
 
 
     auto insert = jadefx::make<jadefx::MenuItem>("Insert Triangle");
@@ -341,10 +362,6 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
         });
     });
     edit->getItems().add(std::move(insert));
-    edit->getItems().add(std::move(test));
-    edit->getItems().add(std::move(pause));
-    edit->getItems().add(std::move(resume));
-    edit->getItems().add(std::move(stop));
 
     auto view = jadefx::make<jadefx::Menu>("View");
     AddItem(*view, "Maybe :)", "Smile.png", 0, 0);
@@ -353,6 +370,12 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     menuBar->getMenus().add(file);
     menuBar->getMenus().add(edit);
     menuBar->getMenus().add(view);
+    menuBar->setPrefWidthRatio(1);
+
+    auto top = jadefx::make<jadefx::VBox>();
+    top->setPrefWidthRatio(1);
+    top->getChildren().add(menuBar);
+    top->getChildren().add(ribbon);
 
     engine_core::DataModel& model = runner_.simulation().datamodel();
     ExplorerHost host;
@@ -434,7 +457,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     vertical->setOrientation(jadefx::Orientation::Vertical);
     vertical->getItems().add(center);
     vertical->getItems().add(south);
-    const double contentHeight = windowHeight - kMenuHeight - kStatusHeight;
+    const double contentHeight = windowHeight - kMenuHeight - kRibbonHeight - kStatusHeight;
     vertical->setDividerPositions({1.0 - Fraction(kConsoleHeight, contentHeight, 0.6)});
     jadefx::SplitPane::setResizableWithParent(*south, false);
 
@@ -458,7 +481,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     root_->setPrefWidthRatio(1);
     root_->setPrefHeightRatio(1);
     root_->setBackground(jadefx::Color::rgb8(208, 208, 208));
-    root_->setTop(menuBar);
+    root_->setTop(top);
     root_->setCenter(horizontal);
     root_->setBottom(status);
 }
@@ -480,6 +503,17 @@ void IdeLayout::mount(jadefx::Scene& scene) {
     scene.setStylesheet(kStylesheet);
     scene.setRoot(root_);
     scene.addKeyHook([this](jadefx::KeyEvent& event) {
+        // F5 toggles the play session, as the menu accelerator did.
+        if (event.pressed && !event.repeat && !event.consumed && event.key == kKeyF5 && !event.shift &&
+            !event.control && !event.alt && !event.meta) {
+            event.consume();
+            if (testing_) {
+                stop_test();
+            } else {
+                start_test();
+            }
+            return;
+        }
         if (scene_ != nullptr) {
             routeUndo(event, *scene_);
             routeDelete(event, *scene_);
@@ -1597,9 +1631,39 @@ void IdeLayout::routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene) {
 
 void IdeLayout::show_session(bool testing, bool stepping) {
     testing_ = testing;
-    if (session_items_[0] != nullptr) {
-        ShowSession(*session_items_[0], *session_items_[1], *session_items_[2], *session_items_[3], testing, stepping);
+    if (session_buttons_[0] != nullptr) {
+        ShowSession(*session_buttons_[0], *session_buttons_[1], *session_buttons_[2], *session_buttons_[3], testing,
+                    stepping);
     }
+}
+
+void IdeLayout::start_test() {
+    engine_core::Engine& engine = runner_.simulation();
+    // Open editors write Source before the place is frozen.
+    flush_editors();
+    // Edit mode is the authored place. Freeze that tree before play so
+    // Stop restores it, including a folder removed while stopped.
+    // start_simulation alone keeps the previous snapshot.
+    engine.on_simulation([](engine_core::DataModel& model) {
+        if (!model.simulation_running()) {
+            model.capture_place();
+            model.start_simulation();
+        }
+    });
+    engine.resume();
+    show_session(true, true);
+}
+
+void IdeLayout::pause_test() {
+    // The session stays active: scripts and the play tree remain, and
+    // steps wait until Resume. Stop still restores the authored place.
+    runner_.simulation().pause();
+    show_session(true, false);
+}
+
+void IdeLayout::resume_test() {
+    runner_.simulation().resume();
+    show_session(true, true);
 }
 
 void IdeLayout::stop_test() {

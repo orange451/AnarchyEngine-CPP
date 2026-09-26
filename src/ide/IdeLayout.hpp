@@ -32,7 +32,8 @@ class PropertiesPanel;
 // The simulation stays paused until Test resumes it. Pause during a test
 // stops steps and leaves the session active. Resume continues them. Stop
 // restores the place, including when that test is already paused.
-// The Edit menu shows Test, or Stop with Pause or Resume.
+// The ribbon under the menu bar holds Test, Pause, Resume, and Stop. Only
+// the ones that apply to the session are enabled. F5 is Test, or Stop.
 // Explorer rows open Cut, Paste, and Rename. A script also has Edit, and a
 // double-click runs it. Edit docks a script editor on the scene view's tab strip.
 // The explorer edits a name in place and hands the result to rename.
@@ -93,6 +94,9 @@ private:
     // that was stepping. Play steps wait meanwhile.
     void run_now(const std::function<void(engine_core::DataModel&)>& fn);
     void show_session(bool testing, bool stepping);
+    void start_test();
+    void pause_test();
+    void resume_test();
     void stop_test();
     void close_script_editors();
     void show_error(const std::string& heading, const std::string& detail);
@@ -178,10 +182,10 @@ private:
     bool place_modified_ = false;
     // What the window title shows now.
     bool title_modified_ = false;
-    // A play session is active: Edit shows Stop.
+    // A play session is active: the ribbon enables Stop, and F5 stops.
     bool testing_ = false;
-    // Test, Pause, Resume, and Stop.
-    jadefx::MenuItem* session_items_[4] = {};
+    // The ribbon's Test, Pause, Resume, and Stop.
+    jadefx::Node* session_buttons_[4] = {};
     // Open alerts. An alert must outlive its popup.
     std::vector<std::shared_ptr<jadefx::Alert>> alerts_;
 };

@@ -1,26 +1,14 @@
 #pragma once
 
+// The value types live in engine_datatypes. Everything that includes this file
+// uses them, so they come along.
+#include "Color.hpp"
+#include "Transform.hpp"
+#include "Vector3.hpp"
+
 #include <cstdint>
 
 namespace engine_core {
-
-// Column-major 4x4. Translation lives in m[12], m[13], m[14].
-struct Transform {
-    float m[16] = {};
-};
-
-struct ColorRgb {
-    float r = 1.f;
-    float g = 1.f;
-    float b = 1.f;
-    float a = 1.f;
-};
-
-struct Vec3 {
-    float x = 0.f;
-    float y = 0.f;
-    float z = 0.f;
-};
 
 // Low 16 bits are the slot index. High 16 bits are the generation.
 // Zero is never a live id.
@@ -76,20 +64,6 @@ inline VisualField operator&(VisualField a, VisualField b) {
 
 inline bool any(VisualField field, VisualField bit) {
     return (static_cast<std::uint32_t>(field) & static_cast<std::uint32_t>(bit)) != 0;
-}
-
-inline Transform transform_identity() {
-    Transform out;
-    out.m[0] = out.m[5] = out.m[10] = out.m[15] = 1.f;
-    return out;
-}
-
-inline Transform transform_translation(float x, float y, float z) {
-    Transform out = transform_identity();
-    out.m[12] = x;
-    out.m[13] = y;
-    out.m[14] = z;
-    return out;
 }
 
 enum class ThreadRole {

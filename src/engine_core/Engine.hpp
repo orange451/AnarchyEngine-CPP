@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DataModel.hpp"
+#include "Game.hpp"
 #include "IClock.hpp"
 #include "IRenderer.hpp"
 #include "SnapshotPump.hpp"
@@ -83,7 +84,7 @@ private:
     void pace(double hz_anchor_seconds) const;
     void drain_edits();
 
-    DataModel model_;
+    Game model_;
     SnapshotPump pump_;
     TaskScheduler scheduler_;
     std::unique_ptr<ScriptRuntime> scripts_;

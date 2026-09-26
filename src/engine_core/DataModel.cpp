@@ -173,7 +173,7 @@ struct DataModel::State {
     ScriptAnalysis* script_analysis = nullptr;
 };
 
-DataModel::DataModel() : owned_(std::make_unique<State>()), state_(owned_.get()) {
+DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()), state_(owned_.get()) {
     State& world = *state_;
     world.slots.reserve(kMaxInstances);
     world.free_list.reserve(kMaxInstances);
@@ -184,7 +184,7 @@ DataModel::DataModel() : owned_(std::make_unique<State>()), state_(owned_.get())
     world.step_ids.reserve(kMaxInstances);
     world.events.watch_prerender(&world.prerender_window);
     world.root = this;
-    name_ = class_name();
+    name_ = root_name;
     guid_ = make_guid();
     world.history = std::make_unique<ChangeHistoryService>(*this);
 }

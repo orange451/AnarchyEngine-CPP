@@ -1,5 +1,6 @@
 #include "DataModel.hpp"
 #include "Folder.hpp"
+#include "Game.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
 #include "Project.hpp"
@@ -30,7 +31,7 @@ struct SimRole {
 
 struct ScriptRig {
     SimRole role;
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::TaskScheduler scheduler;
     engine_core::ScriptRuntime runtime;
 

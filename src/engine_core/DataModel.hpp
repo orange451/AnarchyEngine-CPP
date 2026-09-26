@@ -71,7 +71,8 @@ class ScriptHost;
 // gameplay against it, and the only thread that may hold the write lock
 // for longer than Prepare's budget.
 //
-// The root DataModel owns that world. Every other instance shares it.
+// The root owns that world, and every other instance shares it. The root is
+// a Game (engine_services), the only class that makes a new world.
 // create<T>() makes any subclass. This class does not list those types.
 // GameObject adds transform, color, size, and velocity. A plain instance
 // does not have those fields. Every instance has a Name. The place snapshot
@@ -100,20 +101,17 @@ public:
     // parent() returns this when an instance has no parent. 0 is the root.
     static constexpr InstanceId kNoParent = 0xffffffffu;
 
-    DataModel();
     virtual ~DataModel();
 
     DataModel(const DataModel&) = delete;
     DataModel& operator=(const DataModel&) = delete;
-    DataModel(DataModel&&) noexcept;
-    DataModel& operator=(DataModel&&) noexcept;
 
     // Zero on the root world. A created instance returns its slot id.
     InstanceId id() const { return id_; }
 
-    // Class identity. The pointer remains valid after the call. The root is
-    // game, class Game; a plain instance elsewhere in the tree is DataModel.
-    virtual const char* class_name() const { return id_ == 0 ? "Game" : "DataModel"; }
+    // Class identity. The pointer remains valid after the call. A plain
+    // instance is DataModel. Game overrides it for the root.
+    virtual const char* class_name() const { return "DataModel"; }
 
     // Cut, Paste, Rename, and Delete; the root has no Delete. A subclass appends
     // its own, or inserts a primary one.
@@ -297,6 +295,12 @@ public:
     DataModel(ChildTag, State& state, InstanceId id);
 
 protected:
+    // A new, empty world with this object as its root, named root_name.
+    // Only Game makes one.
+    explicit DataModel(const char* root_name);
+    DataModel(DataModel&&) noexcept;
+    DataModel& operator=(DataModel&&) noexcept;
+
     // destroy() keeps the C++ object so a stale reference can fail closed.
     // on_release runs then. on_reuse runs when that storage is issued again.
     virtual void on_release() {}

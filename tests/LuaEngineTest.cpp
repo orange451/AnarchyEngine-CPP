@@ -1,4 +1,5 @@
 #include "Engine.hpp"
+#include "Game.hpp"
 #include "LuaApi.hpp"
 #include "LuaEngine.hpp"
 #include "Script.hpp"
@@ -226,7 +227,7 @@ void testRunner() {
 }
 
 void testContextActions() {
-    engine_core::DataModel model;
+    engine_core::Game model;
     std::vector<engine_core::ContextAction> actions;
     model.context_actions(actions);
     // The root cannot be deleted.
@@ -255,7 +256,7 @@ void testContextActions() {
 }
 
 void testInsertInstance() {
-    engine_core::DataModel model;
+    engine_core::Game model;
     const char* names[] = {"Folder", "GameObject", "Script", "ModuleScript"};
     for (const char* name : names) {
         engine_core::DataModel* made = engine_core::lua_create_instance(model, name);

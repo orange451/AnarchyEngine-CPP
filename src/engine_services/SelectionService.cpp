@@ -1,5 +1,7 @@
 #include "SelectionService.hpp"
 
+#include "LuaApi.hpp"
+
 #include <algorithm>
 #include <utility>
 
@@ -32,5 +34,15 @@ bool SelectionService::set(std::vector<InstanceId> ids) {
     revision_.fetch_add(1, std::memory_order_release);
     return true;
 }
+
+namespace {
+
+// ScriptRuntime adds Get and Set, since those calls need the script VM.
+ANARCHY_LUA_REGISTER(register_selection_lua) {
+    register_lua_class("Selection", nullptr, nullptr, 0);
+    register_lua_service("Selection");
+}
+
+}  // namespace
 
 }  // namespace engine_core

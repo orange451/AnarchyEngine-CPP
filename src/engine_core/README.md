@@ -2,7 +2,7 @@
 
 Simulation and render are two threads. The DataModel is live memory. The GPU reads a `VisualSnapshot` only.
 
-`GameObject` inherits `DataModel` and is the instance that carries transform, color, size, and velocity. A plain instance has hierarchy and signals, and none of those fields.
+`DataModel` is the tree every other package builds on. The instance classes are in `engine_instances`, `Game` and the services are in `engine_services`, and value types such as `Vector3` are in `engine_datatypes`. `GameObject` inherits `DataModel` and is the instance that carries transform, color, size, and velocity. A plain instance has hierarchy and signals, and none of those fields.
 
 Prepare holds the DataModel write lock: RenderStepped, PreRender, then the dirty copy, then path-C overrides. Perform/Present runs with the lock released and reads the front snapshot. PostRender runs after Present, still on the render thread, without that lock. If the lock is not acquired within 2 ms, Present repeats the previous snapshot and PostRender still runs.
 

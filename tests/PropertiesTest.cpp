@@ -4,6 +4,7 @@
 
 #include "DataModel.hpp"
 #include "Folder.hpp"
+#include "Game.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
 #include "Script.hpp"
@@ -28,6 +29,7 @@ void Expect(bool condition, const char* message) {
 }
 
 using engine_core::DataModel;
+using engine_core::Game;
 using engine_core::InstanceId;
 
 // A class the panel has never heard of, with a number and a boolean. Its rows
@@ -97,7 +99,7 @@ constexpr double kHeight = 600;
 // An explorer and the Properties page side by side over one place. Writes
 // run on this thread, standing in for the simulation thread.
 struct Rig {
-    DataModel model;
+    Game model;
     InstanceId a = 0;
     InstanceId b = 0;
     InstanceId script = 0;

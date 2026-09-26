@@ -1,6 +1,7 @@
 #include "DataModel.hpp"
 #include "Engine.hpp"
 #include "Folder.hpp"
+#include "Game.hpp"
 #include "GameObject.hpp"
 #include "Project.hpp"
 #include "PropertyBag.hpp"
@@ -24,6 +25,7 @@
 
 namespace fs = std::filesystem;
 using engine_core::DataModel;
+using engine_core::Game;
 using engine_core::InstanceId;
 using engine_core::Project;
 using engine_core::ProjectError;
@@ -258,7 +260,7 @@ namespace {
 
 struct ScriptRig {
     SimRole role;
-    DataModel model;
+    Game model;
     engine_core::TaskScheduler scheduler;
     engine_core::ScriptRuntime runtime;
 
@@ -636,7 +638,7 @@ TEST_CASE("load errors", "[project]") {
         TempDir dir;
         write_bare_project(dir.path);
         write_file(dir.path / "src" / "P.aaa.json", meta("GameObject", "aaa", "P", ",\n  \"Color\": [1]"));
-        DataModel model;
+        Game model;
         const InstanceId keep = add_part(model, 0, "Keep").id();
         REQUIRE_THROWS_AS(Project::load(dir.path, model), ProjectError);
         REQUIRE(model.alive(keep));
@@ -731,7 +733,7 @@ TEST_CASE("json numbers use one formatter", "[project]") {
 TEST_CASE("adopt writes an unsaved place without clearing it", "[project]") {
     SimRole role;
     TempDir dir;
-    DataModel model;
+    Game model;
     const InstanceId part = add_part(model, 0, "Part").id();
     model.history().end_gesture();
     REQUIRE(model.history().can_undo().first);
@@ -789,7 +791,7 @@ TEST_CASE("the fingerprint changes with the saved bytes, not with edits that can
 
 TEST_CASE("reset_place empties the place and drops undo", "[project]") {
     SimRole role;
-    DataModel model;
+    Game model;
     add_part(model, 0, "Part");
     add_script(model, 0, "Main", "print(1)\n");
     model.history().end_gesture();
@@ -841,7 +843,7 @@ TEST_CASE("a project opened in a running engine keeps colors and transforms", "[
 
 TEST_CASE("destroy_tree destroys descendants and one undo brings them back", "[project][history]") {
     SimRole role;
-    DataModel model;
+    Game model;
     engine_core::Folder& box = model.create<engine_core::Folder>();
     model.set_parent(box.id(), 0);
     const InstanceId inner = add_part(model, box.id(), "Inner").id();

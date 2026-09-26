@@ -4,6 +4,7 @@
 #include "Folder.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
+#include "Script.hpp"
 #include "TestTriangle.hpp"
 #include "Vector3.hpp"
 
@@ -263,11 +264,7 @@ void ScriptRuntime::attach(DataModel& model, TaskScheduler& scheduler) {
     model.set_script_host(this);
     model.events().set_after_drain([this] { on_end_of_drain(); });
     model.events().set_script_gate(&ScriptRuntime::gate, this);
-    model.events().host_signal(&pre_animation_);
-    model.events().host_signal(&pre_simulation_);
-    model.events().host_signal(&post_simulation_);
-    model.events().host_signal(&heartbeat_signal_);
-    signals_bound_ = true;
+    run_service_.bind(model.events());
     scheduler.bind(Phase::PreAnimation, [this](double dt) { fire_phase(Phase::PreAnimation, dt); });
     scheduler.bind(Phase::PreSimulation, [this](double dt) { fire_phase(Phase::PreSimulation, dt); });
     scheduler.bind(Phase::PostSimulation, [this](double dt) { fire_phase(Phase::PostSimulation, dt); });
@@ -280,14 +277,8 @@ void ScriptRuntime::detach() {
         model_->events().disconnect_scripted();
     }
     close_vm();
-    if (model_ != nullptr && signals_bound_) {
-        model_->events().release_signal(pre_animation_);
-        model_->events().release_signal(pre_simulation_);
-        model_->events().release_signal(post_simulation_);
-        model_->events().release_signal(heartbeat_signal_);
-        signals_bound_ = false;
-    }
     if (model_ != nullptr) {
+        run_service_.release(model_->events());
         model_->set_stop_hook(nullptr);
         model_->set_start_hook(nullptr);
         model_->set_script_host(nullptr);
@@ -1313,27 +1304,7 @@ void ScriptRuntime::fire_phase(Phase phase, double dt) {
     if (!open_ || closing_ || model_ == nullptr) {
         return;
     }
-    Signal* signal = phase_signal(phase);
-    if (signal == nullptr || !signal->id().valid()) {
-        return;
-    }
-    phase_dt_ = dt;
-    model_->events().emit(signal->id(), 0, Field::Name);
-}
-
-Signal* ScriptRuntime::phase_signal(Phase phase) {
-    switch (phase) {
-    case Phase::PreAnimation:
-        return &pre_animation_;
-    case Phase::PreSimulation:
-        return &pre_simulation_;
-    case Phase::PostSimulation:
-        return &post_simulation_;
-    case Phase::Heartbeat:
-        return &heartbeat_signal_;
-    default:
-        return nullptr;
-    }
+    run_service_.fire(model_->events(), phase, dt);
 }
 
 void ScriptRuntime::invoke_listener(int ref, InstanceId script, std::uint32_t generation, const char* text,
@@ -1975,7 +1946,7 @@ int ScriptBindings::signal_connect(lua_State* state) {
             }
             signal = &runtime->model_->changed(ud->id);
         } else {
-            signal = runtime->phase_signal(static_cast<Phase>(ud->phase));
+            signal = runtime->run_service_.signal(static_cast<Phase>(ud->phase));
             if (signal == nullptr) {
                 luaL_error(state, "signal is not available");
             }
@@ -1987,7 +1958,7 @@ int ScriptBindings::signal_connect(lua_State* state) {
                 if (kind == 0) {
                     runtime->invoke_listener(ref, script, generation, field_name(field), false, 0);
                 } else {
-                    runtime->invoke_listener(ref, script, generation, nullptr, true, runtime->phase_dt_);
+                    runtime->invoke_listener(ref, script, generation, nullptr, true, runtime->run_service_.dt());
                 }
             },
             script, generation, false);
@@ -2016,7 +1987,7 @@ int ScriptBindings::signal_wait(lua_State* state) {
         Signal* signal = nullptr;
         const bool phase = ud->kind != 0;
         if (phase) {
-            signal = runtime->phase_signal(static_cast<Phase>(ud->phase));
+            signal = runtime->run_service_.signal(static_cast<Phase>(ud->phase));
             if (signal == nullptr) {
                 luaL_error(state, "signal is not available");
             }
@@ -2034,7 +2005,7 @@ int ScriptBindings::signal_wait(lua_State* state) {
                     return;
                 }
                 if (phase) {
-                    runtime->make_ready_number(*thread, runtime->phase_dt_);
+                    runtime->make_ready_number(*thread, runtime->run_service_.dt());
                 } else {
                     runtime->make_ready(*thread, field_name(field));
                 }
@@ -2186,8 +2157,8 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         lua_method("IsA", "boolean", reinterpret_cast<void*>(&ScriptBindings::instance_isa)),
     };
     register_lua_class("DataModel", nullptr, methods, 5);
-    // Services hang off game alone.
-    register_lua_class("Game", "DataModel", &get_service, 1);
+    // Services hang off game alone. Game.cpp declares the class.
+    register_lua_class("Game", nullptr, &get_service, 1);
 
     LuaField connect =
         lua_method("Connect", "Connection", reinterpret_cast<void*>(&ScriptBindings::signal_connect));
@@ -2206,23 +2177,12 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     };
     register_lua_class("Connection", nullptr, connection, 2);
 
-    const LuaField service[] = {
-        lua_signal_member("Heartbeat", static_cast<int>(Phase::Heartbeat), false),
-        lua_signal_member("PreSimulation", static_cast<int>(Phase::PreSimulation), false),
-        lua_signal_member("PostSimulation", static_cast<int>(Phase::PostSimulation), false),
-        lua_signal_member("PreAnimation", static_cast<int>(Phase::PreAnimation), false),
-        lua_signal_member("PreRender", static_cast<int>(Phase::PreRender), true),
-        lua_signal_member("RenderStepped", static_cast<int>(Phase::RenderStepped), true),
-    };
-    register_lua_class("RunService", nullptr, service, 6);
-    register_lua_service("RunService");
-
+    // SelectionService.cpp declares the class and the service.
     const LuaField selection[] = {
         lua_method("Get", "Instance", reinterpret_cast<void*>(&ScriptBindings::selection_get), false, false, true),
         lua_method("Set", "nil", reinterpret_cast<void*>(&ScriptBindings::selection_set)),
     };
     register_lua_class("Selection", nullptr, selection, 2);
-    register_lua_service("Selection");
 }
 
 }  // namespace engine_core

@@ -2,6 +2,7 @@
 #include "DataModel.hpp"
 #include "Events.hpp"
 #include "Folder.hpp"
+#include "Game.hpp"
 #include "GameObject.hpp"
 #include "Script.hpp"
 #include "ScriptRuntime.hpp"
@@ -52,7 +53,7 @@ engine_core::GameObject& make_part(engine_core::DataModel& model, const char* na
 }  // namespace
 
 TEST_CASE("H1 edit create undo restores the same id", "[H1][history]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::GameObject& part = model.create<engine_core::GameObject>();
     const engine_core::InstanceId id = part.id();
     model.set_name(id, "Brick");
@@ -75,7 +76,7 @@ TEST_CASE("H1 edit create undo restores the same id", "[H1][history]") {
 }
 
 TEST_CASE("H2 three color recordings and a new edit clears redo", "[H2][history]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::GameObject& part = make_part(model, "Brick");
     close_gesture(model);
     model.history().reset_waypoints();
@@ -110,7 +111,7 @@ TEST_CASE("H2 three color recordings and a new edit clears redo", "[H2][history]
 }
 
 TEST_CASE("H3 one recording coalesces a drag", "[H3][history]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::GameObject& part = make_part(model, "Brick");
     close_gesture(model);
     model.history().reset_waypoints();
@@ -130,7 +131,7 @@ TEST_CASE("H3 one recording coalesces a drag", "[H3][history]") {
 }
 
 TEST_CASE("H4 implicit names coalesce until the gesture ends", "[H4][history]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::GameObject& part = make_part(model, "Brick");
     close_gesture(model);
     model.history().reset_waypoints();
@@ -150,7 +151,7 @@ TEST_CASE("H4 implicit names coalesce until the gesture ends", "[H4][history]") 
 
 TEST_CASE("H5 play script writes stay off the edit stack", "[H5][history]") {
     SimRole role;
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::TaskScheduler scheduler;
     engine_core::ScriptRuntime runtime;
     scheduler.reserve(8);
@@ -194,7 +195,7 @@ TEST_CASE("H5 play script writes stay off the edit stack", "[H5][history]") {
 }
 
 TEST_CASE("H6 a play recording undoes, then stop drops it", "[H6][history]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::GameObject& part = make_part(model, "Brick");
     const engine_core::ColorRgb authored = rgb(1.f, 0.f, 0.f);
     part.set_color(authored);
@@ -230,7 +231,7 @@ TEST_CASE("H6 a play recording undoes, then stop drops it", "[H6][history]") {
 }
 
 TEST_CASE("H7 cancel restores the destroyed part and leaves the stacks", "[H7][history]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::GameObject& part = make_part(model, "Brick");
     const engine_core::InstanceId id = part.id();
     close_gesture(model);
@@ -251,7 +252,7 @@ TEST_CASE("H7 cancel restores the destroyed part and leaves the stacks", "[H7][h
 }
 
 TEST_CASE("H8 a second begin does not replace the open recording", "[H8][history]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::GameObject& part = make_part(model, "Brick");
     close_gesture(model);
     model.history().reset_waypoints();
@@ -272,7 +273,7 @@ TEST_CASE("H8 a second begin does not replace the open recording", "[H8][history
 }
 
 TEST_CASE("H9 undo during a recording is a no-op", "[H9][history]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::GameObject& part = make_part(model, "Brick");
     close_gesture(model);
     model.history().reset_waypoints();
@@ -293,7 +294,7 @@ TEST_CASE("H9 undo during a recording is a no-op", "[H9][history]") {
 }
 
 TEST_CASE("H10 script focus undoes text and leaves the place alone", "[H10][history]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::GameObject& part = make_part(model, "Brick");
     close_gesture(model);
     model.history().reset_waypoints();
@@ -329,7 +330,7 @@ TEST_CASE("H10 script focus undoes text and leaves the place alone", "[H10][hist
 }
 
 TEST_CASE("H11 an empty text stack does not undo the place", "[H11][history]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::GameObject& part = make_part(model, "Brick");
     close_gesture(model);
     model.history().reset_waypoints();
@@ -354,7 +355,7 @@ TEST_CASE("H11 an empty text stack does not undo the place", "[H11][history]") {
 }
 
 TEST_CASE("H12 redo follows focus", "[H12][history]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::GameObject& part = make_part(model, "Brick");
     close_gesture(model);
     model.history().reset_waypoints();
@@ -404,7 +405,7 @@ TEST_CASE("H12 redo follows focus", "[H12][history]") {
 }
 
 TEST_CASE("H13 undo destroy restores children and names", "[H13][history]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::Folder& folder = model.create<engine_core::Folder>();
     const engine_core::InstanceId folder_id = folder.id();
     model.set_name(folder_id, "Box");
@@ -451,7 +452,7 @@ TEST_CASE("H13 undo destroy restores children and names", "[H13][history]") {
 
 TEST_CASE("H15 applying undo does not record a waypoint", "[H15][history]") {
     SimRole role;
-    engine_core::DataModel model;
+    engine_core::Game model;
     model.events().set_policy(engine_core::EventPolicy::Immediate);
     engine_core::GameObject& part = make_part(model, "Brick");
     close_gesture(model);

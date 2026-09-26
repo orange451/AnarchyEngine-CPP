@@ -3,6 +3,7 @@
 
 #include "DataModel.hpp"
 #include "Folder.hpp"
+#include "Game.hpp"
 #include "jadefx/jadefx.hpp"
 
 #include <cstdio>
@@ -30,7 +31,7 @@ constexpr double kHeight = 400;
 // One explorer over a place with three folders. The host applies a rename
 // straight to the model, standing in for the simulation thread.
 struct Rig {
-    engine_core::DataModel model;
+    engine_core::Game model;
     std::vector<engine_core::InstanceId> ids;
     std::vector<std::pair<engine_core::InstanceId, std::string>> renames;
     std::vector<std::string> runs;

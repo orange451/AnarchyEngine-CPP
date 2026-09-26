@@ -2,6 +2,7 @@
 #include "DataModel.hpp"
 #include "DataModelLock.hpp"
 #include "Folder.hpp"
+#include "Game.hpp"
 #include "GameObject.hpp"
 #include "SnapshotPump.hpp"
 #include "TestTriangle.hpp"
@@ -993,7 +994,7 @@ TEST_CASE("immediate handlers run inside set and cap at 16", "[T20]") {
 TEST_CASE("plain instances do not carry transform color size or velocity", "[instance]") {
     static_assert(std::is_base_of<engine_core::DataModel, engine_core::GameObject>::value,
                   "GameObject inherits DataModel");
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::DataModel& plain = model.create();
     REQUIRE(plain.id() != 0);
     REQUIRE(model.alive(plain.id()));
@@ -1014,7 +1015,7 @@ TEST_CASE("plain instances do not carry transform color size or velocity", "[ins
 }
 
 TEST_CASE("create<T> makes any subclass", "[instance]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::TestTriangle& triangle = model.create<engine_core::TestTriangle>();
     model.set_parent(triangle.id(), model.id());
     REQUIRE(model.instance(triangle.id()) == &triangle);
@@ -1424,7 +1425,7 @@ TEST_CASE("client sync keeps an uncapped render loop with the window", "[pace]")
 }
 
 TEST_CASE("N1 default name is the class name and set_name fires Name", "[N1]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     // The root is game, class Game.
     REQUIRE(std::string(model.class_name()) == "Game");
     REQUIRE(model.name(model.id()) == "Game");
@@ -1483,7 +1484,7 @@ TEST_CASE("N1 default name is the class name and set_name fires Name", "[N1]") {
 }
 
 TEST_CASE("N6 the root Changed signal is not the first instance", "[N6]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::GameObject& part = model.create<engine_core::GameObject>();
     REQUIRE((part.id() & 0xffffu) == 0);
     REQUIRE(part.id() != model.id());
@@ -1549,7 +1550,7 @@ TEST_CASE("N6 the root Changed signal is not the first instance", "[N6]") {
 }
 
 TEST_CASE("N2 siblings may share a name and find_first_child returns the first", "[N2]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::DataModel& folder = model.create();
     model.set_name(folder.id(), "Folder");
     model.set_parent(folder.id(), model.id());
@@ -1583,7 +1584,7 @@ TEST_CASE("N2 siblings may share a name and find_first_child returns the first",
 }
 
 TEST_CASE("N3 place restore reverts play and drops session instances", "[N3]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::DataModel& folder = model.create();
     const engine_core::InstanceId folder_id = folder.id();
     model.set_name(folder_id, "Folder");
@@ -1687,7 +1688,7 @@ TEST_CASE("N3 place restore reverts play and drops session instances", "[N3]") {
 }
 
 TEST_CASE("N4 a second play restores the original place", "[N4]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::GameObject& part = model.create<engine_core::GameObject>();
     const engine_core::InstanceId id = part.id();
     model.set_parent(id, model.id());
@@ -1730,7 +1731,7 @@ TEST_CASE("N4 a second play restores the original place", "[N4]") {
 }
 
 TEST_CASE("N4 a folder removed in edit mode stays removed after the next stop", "[N4]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
 
     model.start_simulation();
     model.stop_simulation();
@@ -1770,7 +1771,7 @@ TEST_CASE("N4 a folder removed in edit mode stays removed after the next stop", 
 }
 
 TEST_CASE("edit then play captures the place on start", "[N4]") {
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::GameObject& part = model.create<engine_core::GameObject>();
     const engine_core::InstanceId id = part.id();
     const engine_core::ColorRgb red = rgb(0.4f, 0.1f, 0.1f);
@@ -1854,7 +1855,7 @@ int name_number(engine_core::DataModel& model, engine_core::InstanceId id) {
 
 struct ScriptRig {
     SimRole role;
-    engine_core::DataModel model;
+    engine_core::Game model;
     engine_core::TaskScheduler scheduler;
     engine_core::ScriptRuntime runtime;
 
@@ -3395,6 +3396,9 @@ TEST_CASE("S29 a dot reads a child by name", "[S29]") {
 TEST_CASE("S30 game is a Game, a DataModel but not an Instance", "[S30]") {
     ScriptRig rig;
     REQUIRE(std::string(rig.model.class_name()) == "Game");
+    // Only a Game makes a world. Any other DataModel is an instance inside one.
+    STATIC_REQUIRE(std::is_default_constructible<engine_core::Game>::value);
+    STATIC_REQUIRE_FALSE(std::is_default_constructible<engine_core::DataModel>::value);
     REQUIRE(engine_core::lua_class_inherits("Game", "DataModel"));
     REQUIRE_FALSE(engine_core::lua_class_inherits("Game", "Instance"));
     for (const char* name : {"Folder", "GameObject", "TestTriangle", "Script", "ModuleScript"}) {

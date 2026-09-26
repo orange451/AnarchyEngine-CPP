@@ -95,7 +95,7 @@ else()
     set(JADEFX_SOURCE_ROOT "${jadefx_SOURCE_DIR}")
 endif()
 
-# Luau is the sandboxed Lua runtime. engine_core is the only target that links it.
+# Luau is the sandboxed Lua runtime. engine_core and engine_datatypes are the only targets that link it.
 # The CLI, tests, and web target are not part of the embed.
 set(LUAU_BUILD_CLI OFF CACHE BOOL "" FORCE)
 set(LUAU_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -125,13 +125,35 @@ else()
     endif()
 endif()
 
+# The engine is four packages, each a static library with its own directory:
+#   engine_core       DataModel, events, threads, the script runtime, projects
+#   engine_datatypes  values: Vector3, Color, Transform
+#   engine_instances  what Instance.new makes: GameObject, Folder, Script, ...
+#   engine_services   Game and what game:GetService returns
+# The dependencies are not one-way yet: DataModel knows GameObject and Script,
+# the runtime binds the services, and Vector3 registers through core's LuaApi.
+# So the four link each other. CMake allows that cycle between static libraries
+# and repeats them on the link line.
+# A target that links engine_core gets all four and their include directories.
+add_library(engine_datatypes STATIC
+    src/engine_datatypes/Vector3.cpp
+)
+add_library(engine_instances STATIC
+    src/engine_instances/Folder.cpp
+    src/engine_instances/GameObject.cpp
+    src/engine_instances/Script.cpp
+    src/engine_instances/TestTriangle.cpp
+)
+add_library(engine_services STATIC
+    src/engine_services/ChangeHistoryService.cpp
+    src/engine_services/Game.cpp
+    src/engine_services/RunService.cpp
+    src/engine_services/SelectionService.cpp
+)
 add_library(engine_core STATIC
     src/engine_core/Contract.cpp
     src/engine_core/InvalidationQueue.cpp
     src/engine_core/DataModel.cpp
-    src/engine_core/GameObject.cpp
-    src/engine_core/Folder.cpp
-    src/engine_core/TestTriangle.cpp
     src/engine_core/DataModelLock.cpp
     src/engine_core/SnapshotPump.cpp
     src/engine_core/TaskScheduler.cpp
@@ -139,26 +161,32 @@ add_library(engine_core STATIC
     src/engine_core/Engine.cpp
     src/engine_core/LuaEngine.cpp
     src/engine_core/LuaApi.cpp
-    src/engine_core/Vector3.cpp
     src/engine_core/LuaReflect.cpp
-    src/engine_core/Script.cpp
     src/engine_core/ScriptRuntime.cpp
     src/engine_core/ScriptAnalysis.cpp
     src/engine_core/AnalysisDefinitions.cpp
-    src/engine_core/ChangeHistoryService.cpp
-    src/engine_core/SelectionService.cpp
     src/engine_core/PropertyBag.cpp
     src/engine_core/Project.cpp
 )
-target_include_directories(engine_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/engine_core")
-target_compile_features(engine_core PUBLIC cxx_std_17)
+set(ENGINE_PACKAGES engine_core engine_datatypes engine_instances engine_services)
+foreach(package IN LISTS ENGINE_PACKAGES)
+    target_include_directories(${package} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/${package}")
+    target_compile_features(${package} PUBLIC cxx_std_17)
+endforeach()
 find_package(Threads REQUIRED)
-target_link_libraries(engine_core PUBLIC Threads::Threads)
+target_link_libraries(engine_core PUBLIC Threads::Threads engine_datatypes engine_instances engine_services)
+target_link_libraries(engine_datatypes PUBLIC engine_core)
+target_link_libraries(engine_instances PUBLIC engine_core)
+target_link_libraries(engine_services PUBLIC engine_core)
 target_link_libraries(engine_core PRIVATE Luau.Compiler Luau.VM Luau.Analysis)
+# Vector3 is a Luau vector.
+target_link_libraries(engine_datatypes PRIVATE Luau.VM)
 
-set(ENGINE_CORE_TSAN OFF CACHE BOOL "Instrument engine_core and sandbox with ThreadSanitizer")
+set(ENGINE_CORE_TSAN OFF CACHE BOOL "Instrument the engine packages and sandbox with ThreadSanitizer")
 if(ENGINE_CORE_TSAN AND NOT MSVC)
-    target_compile_options(engine_core PRIVATE -fsanitize=thread -fno-omit-frame-pointer -g -O1)
+    foreach(package IN LISTS ENGINE_PACKAGES)
+        target_compile_options(${package} PRIVATE -fsanitize=thread -fno-omit-frame-pointer -g -O1)
+    endforeach()
     target_link_options(engine_core PUBLIC -fsanitize=thread)
 endif()
 
@@ -276,7 +304,9 @@ if(MSVC)
     target_compile_options(shell-tests PRIVATE /W4 /utf-8)
     target_compile_options(properties-tests PRIVATE /W4 /utf-8)
     target_compile_options(studio-tests PRIVATE /W4 /utf-8)
-    target_compile_options(engine_core PRIVATE /W4 /utf-8)
+    foreach(package IN LISTS ENGINE_PACKAGES)
+        target_compile_options(${package} PRIVATE /W4 /utf-8)
+    endforeach()
     target_compile_options(sandbox PRIVATE /W4 /utf-8)
 else()
     target_compile_options(AnarchyEngine-CPP PRIVATE -Wall -Wextra)
@@ -284,7 +314,9 @@ else()
     target_compile_options(shell-tests PRIVATE -Wall -Wextra)
     target_compile_options(properties-tests PRIVATE -Wall -Wextra)
     target_compile_options(studio-tests PRIVATE -Wall -Wextra)
-    target_compile_options(engine_core PRIVATE -Wall -Wextra)
+    foreach(package IN LISTS ENGINE_PACKAGES)
+        target_compile_options(${package} PRIVATE -Wall -Wextra)
+    endforeach()
     target_compile_options(sandbox PRIVATE -Wall -Wextra)
 endif()
 

@@ -1,6 +1,7 @@
 #include "Project.hpp"
 
 #include "Folder.hpp"
+#include "Game.hpp"
 #include "GameObject.hpp"
 #include "Script.hpp"
 #include "TestTriangle.hpp"
@@ -743,7 +744,7 @@ void Project::write_skeleton(const fs::path& root) const {
 }
 
 Project Project::create(const fs::path& root) {
-    auto owned = std::make_unique<DataModel>();
+    auto owned = std::make_unique<Game>();
     DataModel& model = *owned;
     Project project = create(root, model);
     project.bind(nullptr, std::move(owned));
@@ -783,7 +784,7 @@ Project Project::adopt(const fs::path& root, DataModel& model) {
 }
 
 Project Project::load(const fs::path& root) {
-    auto owned = std::make_unique<DataModel>();
+    auto owned = std::make_unique<Game>();
     Project project;
     project.bind(nullptr, std::move(owned));
     project.root_ = root;
@@ -815,7 +816,7 @@ Project Project::load(const fs::path& root, DataModel& into) {
     const std::vector<PlanNode> plan = PlanReader(root, layout).read();
     {
         // A class-level error (a bad Color) must not leave `into` half rebuilt.
-        DataModel scratch;
+        Game scratch;
         scratch.history().set_enabled(false);
         build(scratch, plan);
     }

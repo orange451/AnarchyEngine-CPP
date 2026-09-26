@@ -2,7 +2,8 @@
 
 #include "Events.hpp"
 #include "LuaApi.hpp"
-#include "Script.hpp"
+#include "RunService.hpp"
+#include "ScriptHost.hpp"
 #include "TaskScheduler.hpp"
 
 #include <chrono>
@@ -176,7 +177,6 @@ private:
     void push_instance(lua_State* state, InstanceId id);
     DataModel* resolve_id(InstanceId id, std::uint32_t world) const;
     void fire_phase(Phase phase, double dt);
-    Signal* phase_signal(Phase phase);
     void invoke_listener(int ref, InstanceId script, std::uint32_t generation, const char* text, bool pass_number,
                          double number);
     int require_module(lua_State* state, InstanceId module_id);
@@ -187,10 +187,8 @@ private:
     lua_State* console_state_ = nullptr;
     bool open_ = false;
     bool closing_ = false;
-    bool signals_bound_ = false;
     int lua_depth_ = 0;
     double sim_clock_ = 0;
-    double phase_dt_ = 0;
     std::uint64_t steps_ = 0;
     std::size_t memory_used_ = 0;
     std::size_t console_memory_used_ = 0;
@@ -214,10 +212,8 @@ private:
     std::unordered_map<InstanceId, int> require_cache_;
     std::vector<InstanceId> loading_;
 
-    Signal pre_animation_;
-    Signal pre_simulation_;
-    Signal post_simulation_;
-    Signal heartbeat_signal_;
+    // The phase signals scripts reach through game:GetService("RunService").
+    RunService run_service_;
 };
 
 }  // namespace engine_core

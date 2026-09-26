@@ -35,6 +35,7 @@ GameView::GameView(Runner& runner)
     : ide::IdePane("Scene View", false),
       model_(&runner.simulation().datamodel()),
       engine_(&runner.simulation()) {
+    setIconFile("Camera.png");
     setMinSize(64, 64);
     getClassList().add("ide-viewport");
     setBackground(jadefx::Color::rgb8(30, 30, 30));

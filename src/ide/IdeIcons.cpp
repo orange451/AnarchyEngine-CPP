@@ -167,4 +167,15 @@ std::shared_ptr<jadefx::ImageView> icon_file(const std::string& filename) {
     return jadefx::make<jadefx::ImageView>(image);
 }
 
+std::shared_ptr<jadefx::ImageView> icon_graphic(const std::string& filename) {
+    std::shared_ptr<jadefx::ImageView> view = icon_file(filename);
+    if (!view) {
+        return nullptr;
+    }
+    view->setMouseTransparent(true);
+    view->setPrefSize(16, 16);
+    view->setMinSize(16, 16);
+    return view;
+}
+
 }  // namespace ide

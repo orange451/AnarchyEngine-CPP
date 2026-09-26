@@ -4,6 +4,7 @@
 #include "DockArrange.hpp"
 #include "Engine.hpp"
 #include "IdeConsole.hpp"
+#include "IdeIcons.hpp"
 #include "LuaApi.hpp"
 #include "IdeDock.hpp"
 #include "IdeExplorer.hpp"
@@ -70,8 +71,18 @@ split-pane:vertical > .split-pane-divider {
 }
 )CSS";
 
-void AddItem(jadefx::Menu& menu, const char* label, int key, int mods) {
+void AttachIcon(jadefx::MenuItem& item, const char* filename) {
+    if (filename == nullptr || filename[0] == '\0') {
+        return;
+    }
+    if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic(filename)) {
+        item.setGraphic(std::move(icon));
+    }
+}
+
+void AddItem(jadefx::Menu& menu, const char* label, const char* icon, int key, int mods) {
     auto item = jadefx::make<jadefx::MenuItem>(label);
+    AttachIcon(*item, icon);
     if (key != 0) {
         item->setAccelerator(key, mods);
     }
@@ -199,16 +210,20 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     runner_.prepare();
 
     auto file = jadefx::make<jadefx::Menu>("File");
-    AddItem(*file, "New", jadefx::Key::N, jadefx::Key::ModControl);
-    AddItem(*file, "Open", jadefx::Key::O, jadefx::Key::ModControl);
-    AddItem(*file, "Save", jadefx::Key::S, jadefx::Key::ModControl);
-    AddItem(*file, "Save As", jadefx::Key::S, jadefx::Key::ModControl | jadefx::Key::ModShift);
+    AddItem(*file, "New", "New.png", jadefx::Key::N, jadefx::Key::ModControl);
+    AddItem(*file, "Open", "Folder.png", jadefx::Key::O, jadefx::Key::ModControl);
+    AddItem(*file, "Save", "Save.png", jadefx::Key::S, jadefx::Key::ModControl);
+    AddItem(*file, "Save As", "SaveAs.png", jadefx::Key::S, jadefx::Key::ModControl | jadefx::Key::ModShift);
 
     auto edit = jadefx::make<jadefx::Menu>("Edit");
     auto test = jadefx::make<jadefx::MenuItem>("Test");
     auto pause = jadefx::make<jadefx::MenuItem>("Pause");
     auto resume = jadefx::make<jadefx::MenuItem>("Resume");
     auto stop = jadefx::make<jadefx::MenuItem>("Stop");
+    AttachIcon(*test, "Play.png");
+    AttachIcon(*pause, "Pause.png");
+    AttachIcon(*resume, "Resume.png");
+    AttachIcon(*stop, "Stop.png");
     jadefx::MenuItem* testItem = test.get();
     jadefx::MenuItem* pauseItem = pause.get();
     jadefx::MenuItem* resumeItem = resume.get();
@@ -264,6 +279,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     });
 
     auto insert = jadefx::make<jadefx::MenuItem>("Insert Triangle");
+    AttachIcon(*insert, "Mesh.png");
     insert->setOnAction([this](jadefx::ActionEvent&) {
         runner_.simulation().on_simulation([](engine_core::DataModel& model) {
             int existing = 0;
@@ -287,7 +303,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     edit->getItems().add(std::move(stop));
 
     auto view = jadefx::make<jadefx::Menu>("View");
-    AddItem(*view, "Maybe :)", 0, 0);
+    AddItem(*view, "Maybe :)", "Smile.png", 0, 0);
 
     auto menuBar = jadefx::make<jadefx::MenuBar>();
     menuBar->getMenus().add(file);
@@ -323,7 +339,9 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     auto west = jadefx::make<IdeDock>();
     adoptDock(west);
     // IdeTreeTest is the sample tree page. The Java shell left that dock commented out.
-    west->dock(jadefx::make<IdeExplorer>(model, "Game Explorer", host));
+    auto gameExplorer = jadefx::make<IdeExplorer>(model, "Game Explorer", host);
+    gameExplorer->setIconFile("Explorer.png");
+    west->dock(gameExplorer);
 
     auto center = jadefx::make<IdeDock>();
     adoptDock(center);
@@ -335,7 +353,9 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
 
     auto east = jadefx::make<IdeDock>();
     adoptDock(east);
-    east->dock(jadefx::make<IdeExplorer>(model, "Current Scene", host));
+    auto sceneExplorer = jadefx::make<IdeExplorer>(model, "Current Scene", host);
+    sceneExplorer->setIconFile("Scenes.png");
+    east->dock(sceneExplorer);
 
     auto vertical = jadefx::make<jadefx::SplitPane>();
     vertical->setOrientation(jadefx::Orientation::Vertical);

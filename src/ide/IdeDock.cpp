@@ -1,5 +1,6 @@
 #include "IdeDock.hpp"
 
+#include "IdeIcons.hpp"
 #include "jadefx/scene/controls/TabPane.hpp"
 
 #include <algorithm>
@@ -28,6 +29,9 @@ std::shared_ptr<jadefx::Tab> IdeDock::dock(const std::shared_ptr<IdePane>& pane)
     }
 
     auto tab = jadefx::make<jadefx::Tab>(pane->name(), pane);
+    if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic(pane->iconFile())) {
+        tab->setGraphic(std::move(icon));
+    }
     tab->setClosable(pane->closable());
     if (!pane->closable()) {
         tab->setOnCloseRequest([](jadefx::TabCloseRequest& request) { request.consume(); });

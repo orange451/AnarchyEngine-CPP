@@ -26,6 +26,22 @@ struct ApplyGuard {
     ~ApplyGuard() { flag = false; }
 };
 
+const char* ActionIcon(std::string_view name) {
+    if (name == "Edit") {
+        return "Script.png";
+    }
+    if (name == "Cut") {
+        return "Cut.png";
+    }
+    if (name == "Paste") {
+        return "Paste.png";
+    }
+    if (name == "Rename") {
+        return "Rename.png";
+    }
+    return nullptr;
+}
+
 // The + drawn on the hovered row. The icon stays 16px; the chip is the hit target.
 class InsertButton : public jadefx::StackPane {
 public:
@@ -150,6 +166,11 @@ void IdeExplorer::show_menu(jadefx::TreeItem& item, double x, double y) {
             menu_->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
         }
         auto entry = jadefx::make<jadefx::MenuItem>(action.name);
+        if (const char* file = ActionIcon(action.name)) {
+            if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic(file)) {
+                entry->setGraphic(std::move(icon));
+            }
+        }
         const bool on = !host_.enabled || host_.enabled(action.name);
         entry->setDisable(!on);
         const std::string name = action.name;

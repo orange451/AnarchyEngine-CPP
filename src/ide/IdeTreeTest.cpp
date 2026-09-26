@@ -3,6 +3,7 @@
 namespace ide {
 
 IdeTreeTest::IdeTreeTest() : IdePane("I'm a tree", true) {
+    setIconFile("Folder.png");
     setPrefWidth(240);
     setMinSize(150, 80);
 

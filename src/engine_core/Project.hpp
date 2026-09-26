@@ -54,6 +54,9 @@ public:
     static Project create(const std::filesystem::path& root, DataModel& into);
     // Stops a running simulation, rebuilds the DataModel from src/, captures
     // that as the place, and drops undo history. On error the DataModel is untouched.
+    // Save As for a place that has no project yet: writes the skeleton and the
+    // current tree. The DataModel is not cleared and its undo history stays.
+    static Project adopt(const std::filesystem::path& root, DataModel& model);
     static Project load(const std::filesystem::path& root);
     static Project load(const std::filesystem::path& root, DataModel& into);
 

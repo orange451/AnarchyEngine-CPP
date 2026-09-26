@@ -767,6 +767,19 @@ Project Project::create(const fs::path& root, DataModel& into) {
     return project;
 }
 
+Project Project::adopt(const fs::path& root, DataModel& model) {
+    if (!missing_or_empty_dir(root)) {
+        fail(utf8(root) + " is not empty");
+    }
+    Project project;
+    project.bind(&model, nullptr);
+    project.root_ = root;
+    project.name_ = project_name_for(root);
+    project.write_skeleton(root);
+    project.save_tree(true);
+    return project;
+}
+
 Project Project::load(const fs::path& root) {
     auto owned = std::make_unique<DataModel>();
     Project project;

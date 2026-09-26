@@ -5,6 +5,7 @@
 #include "Script.hpp"
 #include "TestTriangle.hpp"
 
+#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -13,7 +14,7 @@ namespace {
 // Desktop shell. JadeFX owns the window, the GL context, and the frame loop.
 class AnarchyEngine : public jadefx::Application {
 public:
-    void start(jadefx::Stage& stage, int, char**) override {
+    void start(jadefx::Stage& stage, int argc, char** argv) override {
         const jadefx::Size size = defaultWindowSize();
         // The shell owns the runner, which owns the Lua engine. It has to outlive
         // start(); the scene keeps the widgets, and this member keeps the engine.
@@ -77,6 +78,12 @@ end
         layout_->mount(*scene);
         layout_->attachFrame(stage);
         stage.setScene(std::move(scene));
+        // AnarchyEngine-CPP <folder> opens that project on the first frame.
+        // Finder may pass -psn_ arguments; flags are not folders.
+        if (argc > 1 && argv[1] != nullptr && argv[1][0] != '-') {
+            const std::filesystem::path root(argv[1]);
+            jadefx::runLater([this, root]() { layout_->open_project_at(root); });
+        }
     }
 
 protected:

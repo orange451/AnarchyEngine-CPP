@@ -710,3 +710,25 @@ TEST_CASE("json numbers use one formatter", "[project]") {
     REQUIRE(engine_core::write_json(doc) ==
             "{\n  \"class\": \"Folder\",\n  \"id\": \"g\",\n  \"Name\": \"x\",\n  \"b\": 2\n}\n");
 }
+
+TEST_CASE("adopt writes an unsaved place without clearing it", "[project]") {
+    SimRole role;
+    TempDir dir;
+    DataModel model;
+    const InstanceId part = add_part(model, 0, "Part").id();
+    model.history().end_gesture();
+    REQUIRE(model.history().can_undo().first);
+    const std::string guid = model.guid(part);
+
+    Project project = Project::adopt(dir.path / "Adopted", model);
+    REQUIRE(&project.datamodel() == &model);
+    REQUIRE(project.name() == "Adopted");
+    REQUIRE(model.alive(part));
+    REQUIRE(model.history().can_undo().first);
+    REQUIRE(fs::exists(dir.path / "Adopted" / "project.json"));
+    REQUIRE(fs::exists(dir.path / "Adopted" / "src" / ("Part." + guid + ".json")));
+    REQUIRE_THROWS_AS(Project::adopt(dir.path / "Adopted", model), ProjectError);
+
+    Project loaded = Project::load(dir.path / "Adopted");
+    REQUIRE(loaded.datamodel().name(by_guid(loaded.datamodel(), guid)) == "Part");
+}

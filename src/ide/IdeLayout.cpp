@@ -7,6 +7,8 @@
 #include "IdeConsole.hpp"
 #include "IdeIcons.hpp"
 #include "LuaApi.hpp"
+#include "Project.hpp"
+#include "ScriptRuntime.hpp"
 #include "IdeDock.hpp"
 #include "IdeExplorer.hpp"
 #include "IdeScriptEditor.hpp"
@@ -121,13 +123,15 @@ void AttachIcon(jadefx::MenuItem& item, const char* filename) {
     }
 }
 
-void AddItem(jadefx::Menu& menu, const char* label, const char* icon, int key, int mods) {
+jadefx::MenuItem* AddItem(jadefx::Menu& menu, const char* label, const char* icon, int key, int mods) {
     auto item = jadefx::make<jadefx::MenuItem>(label);
     AttachIcon(*item, icon);
     if (key != 0) {
         item->setAccelerator(key, mods);
     }
+    jadefx::MenuItem* raw = item.get();
     menu.getItems().add(std::move(item));
+    return raw;
 }
 
 double Fraction(double part, double whole, double limit) {
@@ -246,9 +250,12 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
 
     auto file = jadefx::make<jadefx::Menu>("File");
     AddItem(*file, "New", "New.png", jadefx::Key::N, jadefx::Key::ModControl);
-    AddItem(*file, "Open", "Folder.png", jadefx::Key::O, jadefx::Key::ModControl);
-    AddItem(*file, "Save", "Save.png", jadefx::Key::S, jadefx::Key::ModControl);
-    AddItem(*file, "Save As", "SaveAs.png", jadefx::Key::S, jadefx::Key::ModControl | jadefx::Key::ModShift);
+    AddItem(*file, "Open", "Folder.png", jadefx::Key::O, jadefx::Key::ModControl)
+        ->setOnAction([this](jadefx::ActionEvent&) { open_project(); });
+    AddItem(*file, "Save", "Save.png", jadefx::Key::S, jadefx::Key::ModControl)
+        ->setOnAction([this](jadefx::ActionEvent&) { save_project(); });
+    AddItem(*file, "Save As", "SaveAs.png", jadefx::Key::S, jadefx::Key::ModControl | jadefx::Key::ModShift)
+        ->setOnAction([this](jadefx::ActionEvent&) { save_project_as(); });
 
     auto edit = jadefx::make<jadefx::Menu>("Edit");
     auto test = jadefx::make<jadefx::MenuItem>("Test");
@@ -259,16 +266,16 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     AttachIcon(*pause, "Pause.png");
     AttachIcon(*resume, "Resume.png");
     AttachIcon(*stop, "Stop.png");
-    jadefx::MenuItem* testItem = test.get();
-    jadefx::MenuItem* pauseItem = pause.get();
-    jadefx::MenuItem* resumeItem = resume.get();
-    jadefx::MenuItem* stopItem = stop.get();
+    session_items_[0] = test.get();
+    session_items_[1] = pause.get();
+    session_items_[2] = resume.get();
+    session_items_[3] = stop.get();
     test->setAccelerator(kKeyF5, 0);
     stop->setAccelerator(kKeyF5, 0);
     pause->setVisible(false);
     resume->setVisible(false);
     stop->setVisible(false);
-    test->setOnAction([this, testItem, pauseItem, resumeItem, stopItem](jadefx::ActionEvent&) {
+    test->setOnAction([this](jadefx::ActionEvent&) {
         engine_core::Engine& engine = runner_.simulation();
         // Open editors write Source before the place is frozen.
         flush_editors();
@@ -282,36 +289,20 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
             }
         });
         engine.resume();
-        ShowSession(*testItem, *pauseItem, *resumeItem, *stopItem, true, true);
+        show_session(true, true);
     });
-    pause->setOnAction([this, testItem, pauseItem, resumeItem, stopItem](jadefx::ActionEvent&) {
+    pause->setOnAction([this](jadefx::ActionEvent&) {
         // The session stays active: scripts and the play tree remain, and
         // steps wait until Resume. Stop still restores the authored place.
         runner_.simulation().pause();
-        ShowSession(*testItem, *pauseItem, *resumeItem, *stopItem, true, false);
+        show_session(true, false);
     });
-    resume->setOnAction([this, testItem, pauseItem, resumeItem, stopItem](jadefx::ActionEvent&) {
+    resume->setOnAction([this](jadefx::ActionEvent&) {
         runner_.simulation().resume();
-        ShowSession(*testItem, *pauseItem, *resumeItem, *stopItem, true, true);
+        show_session(true, true);
     });
-    stop->setOnAction([this, testItem, pauseItem, resumeItem, stopItem](jadefx::ActionEvent&) {
-        engine_core::Engine& engine = runner_.simulation();
-        // Pause first so stop_simulation runs on this thread once the sim
-        // step has released the write lock. That aborts scripts and restores
-        // the place before another Heartbeat can run. Already paused is the
-        // same restore.
-        engine.pause();
-        engine.on_simulation([](engine_core::DataModel& model) {
-            if (model.simulation_running()) {
-                model.stop_simulation();
-            }
-        });
-        // Stop put the authored scripts back. Open editors, and editors closed
-        // during play, write their buffers back and capture that place.
-        reapply_editors();
-        restore_closed_edits();
-        ShowSession(*testItem, *pauseItem, *resumeItem, *stopItem, false, false);
-    });
+    stop->setOnAction([this](jadefx::ActionEvent&) { stop_test(); });
+
 
     auto insert = jadefx::make<jadefx::MenuItem>("Insert Triangle");
     AttachIcon(*insert, "Mesh.png");
@@ -456,6 +447,7 @@ void IdeLayout::attachFrame(jadefx::Stage& stage) {
     mainStage_ = &stage;
     resizeWindow_ = [&stage](int width, int height) { stage.setSize(width, height); };
     stage.setFrameTail([this]() { flushFrame(); });
+    update_title();
 }
 
 void IdeLayout::adoptDock(const std::shared_ptr<IdeDock>& dock) {
@@ -1443,6 +1435,229 @@ void IdeLayout::routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene) {
             model.history().undo();
         }
     });
+}
+
+void IdeLayout::show_session(bool testing, bool stepping) {
+    testing_ = testing;
+    if (session_items_[0] != nullptr) {
+        ShowSession(*session_items_[0], *session_items_[1], *session_items_[2], *session_items_[3], testing, stepping);
+    }
+}
+
+void IdeLayout::stop_test() {
+    engine_core::Engine& engine = runner_.simulation();
+    // Pause first so stop_simulation runs on this thread once the sim
+    // step has released the write lock. That aborts scripts and restores
+    // the place before another Heartbeat can run. Already paused is the
+    // same restore.
+    engine.pause();
+    engine.on_simulation([](engine_core::DataModel& model) {
+        if (model.simulation_running()) {
+            model.stop_simulation();
+        }
+    });
+    // Stop put the authored scripts back. Open editors, and editors closed
+    // during play, write their buffers back and capture that place.
+    reapply_editors();
+    restore_closed_edits();
+    show_session(false, false);
+}
+
+void IdeLayout::run_now(const std::function<void(engine_core::DataModel&)>& fn) {
+    engine_core::Engine& engine = runner_.simulation();
+    // A paused engine runs the edit here, under the write lock. A stepping
+    // test waits one step for it, then carries on.
+    const bool stepping = !engine.paused();
+    if (stepping) {
+        engine.pause();
+    }
+    engine.on_simulation(fn);
+    if (stepping) {
+        engine.resume();
+    }
+}
+
+std::filesystem::path IdeLayout::dialog_directory() const {
+    if (!project_) {
+        return {};
+    }
+    return project_->root().parent_path();
+}
+
+void IdeLayout::update_title() {
+    if (mainStage_ == nullptr) {
+        return;
+    }
+    mainStage_->setTitle(project_ ? project_->name() + " - Anarchy Engine" : std::string("Anarchy Engine"));
+}
+
+void IdeLayout::show_error(const std::string& heading, const std::string& detail) {
+    runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error,
+                                                 heading + ": " + detail);
+    if (scene_ == nullptr) {
+        return;
+    }
+    alerts_.erase(std::remove_if(alerts_.begin(), alerts_.end(),
+                                 [](const std::shared_ptr<jadefx::Alert>& alert) {
+                                     return !alert || alert->getResult() != nullptr;
+                                 }),
+                  alerts_.end());
+    auto alert = std::make_shared<jadefx::Alert>(jadefx::AlertType::Error, detail);
+    alert->setTitle("Anarchy Engine");
+    alert->setHeaderText(heading);
+    alert->show(*scene_);
+    alerts_.push_back(std::move(alert));
+}
+
+void IdeLayout::close_script_editors() {
+    std::vector<std::shared_ptr<IdeScriptEditor>> editors;
+    for (const auto& entry : open_scripts_) {
+        if (std::shared_ptr<IdeScriptEditor> editor = entry.second.lock()) {
+            editors.push_back(std::move(editor));
+        }
+    }
+    for (const std::shared_ptr<IdeScriptEditor>& editor : editors) {
+        IdeDock* dock = dockContaining(editor.get());
+        if (dock == nullptr || dock->tabs() == nullptr) {
+            continue;
+        }
+        const std::vector<std::shared_ptr<jadefx::Tab>> tabs = dock->tabs()->getTabs().items();
+        for (const std::shared_ptr<jadefx::Tab>& tab : tabs) {
+            if (tab && tab->getContent() == editor.get() && !dock->tabs()->close(tab)) {
+                dock->tabs()->getTabs().removeIf(
+                    [&tab](const std::shared_ptr<jadefx::Tab>& item) { return item == tab; });
+            }
+        }
+    }
+    // Those ids belong to the place that is going away.
+    open_scripts_.clear();
+    kept_sources_.clear();
+    last_script_focus_ = 0;
+}
+
+void IdeLayout::open_project() {
+    if (dialog_open_) {
+        return;
+    }
+    dialog_open_ = true;
+    jadefx::FolderDialogOptions options;
+    options.title = "Open Project";
+    options.directory = dialog_directory().u8string();
+    jadefx::showFolderDialog(std::move(options), [this](jadefx::DialogResult result, const std::string& path) {
+        dialog_open_ = false;
+        if (result == jadefx::DialogResult::Unavailable) {
+            show_error("No folder dialog",
+                       "This system has no folder picker. On Linux, install zenity or kdialog. You can also "
+                       "start the studio with a project folder: AnarchyEngine-CPP <folder>");
+            return;
+        }
+        if (result == jadefx::DialogResult::Chosen) {
+            open_project_at(std::filesystem::u8path(path));
+        }
+    });
+}
+
+void IdeLayout::open_project_at(const std::filesystem::path& root) {
+    // The load replaces the tree that Stop would restore.
+    if (testing_) {
+        stop_test();
+    }
+    std::unique_ptr<engine_core::Project> loaded;
+    std::string error;
+    run_now([&](engine_core::DataModel& model) {
+        try {
+            loaded = std::make_unique<engine_core::Project>(engine_core::Project::load(root, model));
+        } catch (const std::exception& failure) {
+            error = failure.what();
+        }
+    });
+    if (!loaded) {
+        show_error("Could not open project", error);
+        return;
+    }
+    // Every instance id changed. Editors and the clipboard pointed at the old ones.
+    close_script_editors();
+    if (clip_) {
+        clip_->held = false;
+    }
+    project_ = std::move(loaded);
+    update_title();
+    runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Print,
+                                                 "Opened " + project_->root().u8string());
+}
+
+void IdeLayout::save_project() {
+    if (!project_) {
+        save_project_as();
+        return;
+    }
+    // Open editors write Source first. During play the save writes the place
+    // captured at Test, so play edits stay out of it either way.
+    flush_editors();
+    std::string error;
+    run_now([&](engine_core::DataModel&) {
+        try {
+            project_->save();
+        } catch (const std::exception& failure) {
+            error = failure.what();
+        }
+    });
+    if (!error.empty()) {
+        show_error("Could not save project", error);
+        return;
+    }
+    const engine_core::Project::SaveReport& report = project_->last_save();
+    const std::size_t changed = report.written.size() + report.moved.size() + report.removed.size();
+    runner_.simulation().scripts().append_output(
+        engine_core::ScriptRuntime::OutputKind::Print,
+        "Saved " + project_->root().u8string() +
+            (changed == 0 ? std::string(" (no changes)") : " (" + std::to_string(changed) + " files changed)"));
+}
+
+void IdeLayout::save_project_as() {
+    if (dialog_open_) {
+        return;
+    }
+    dialog_open_ = true;
+    jadefx::FolderDialogOptions options;
+    options.title = "Save Project As";
+    options.save = true;
+    options.directory = dialog_directory().u8string();
+    options.name = project_ ? project_->name() : std::string("MyPlace");
+    jadefx::showFolderDialog(std::move(options), [this](jadefx::DialogResult result, const std::string& path) {
+        dialog_open_ = false;
+        if (result == jadefx::DialogResult::Unavailable) {
+            show_error("No folder dialog",
+                       "This system has no folder picker. On Linux, install zenity or kdialog.");
+            return;
+        }
+        if (result == jadefx::DialogResult::Chosen) {
+            save_project_to(std::filesystem::u8path(path));
+        }
+    });
+}
+
+void IdeLayout::save_project_to(const std::filesystem::path& root) {
+    flush_editors();
+    std::string error;
+    run_now([&](engine_core::DataModel& model) {
+        try {
+            if (project_) {
+                project_->save_as(root);
+            } else {
+                project_ = std::make_unique<engine_core::Project>(engine_core::Project::adopt(root, model));
+            }
+        } catch (const std::exception& failure) {
+            error = failure.what();
+        }
+    });
+    if (!error.empty()) {
+        show_error("Could not save project", error);
+        return;
+    }
+    update_title();
+    runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Print,
+                                                 "Saved " + project_->root().u8string());
 }
 
 }  // namespace ide

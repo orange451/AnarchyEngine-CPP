@@ -1314,6 +1314,29 @@ TEST_CASE("a paused edit parents a triangle before the next step", "[edit]") {
     engine.stop();
 }
 
+TEST_CASE("a paused edit destroys at once", "[edit]") {
+    engine_core::Engine engine;
+    engine.start();
+    engine_core::InstanceId id = 0;
+    engine.on_simulation([&](engine_core::DataModel& model) {
+        engine_core::GameObject& part = model.create<engine_core::GameObject>();
+        model.set_parent(part.id(), model.id());
+        id = part.id();
+    });
+    REQUIRE(engine.datamodel().alive(id));
+    // A project load clears the world inside one paused edit, then builds the
+    // new tree. The old instances must be gone before that edit returns.
+    bool gone_inside = false;
+    engine.on_simulation([&](engine_core::DataModel& model) {
+        model.destroy(id);
+        gone_inside = !model.alive(id);
+    });
+    REQUIRE(gone_inside);
+    REQUIRE_FALSE(engine.datamodel().alive(id));
+    REQUIRE(engine.paused());
+    engine.stop();
+}
+
 TEST_CASE("an edit during play runs on the simulation thread", "[edit]") {
     engine_core::Engine engine;
     engine.start();

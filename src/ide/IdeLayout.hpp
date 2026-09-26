@@ -5,6 +5,7 @@
 #include "InputRouter.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -13,7 +14,9 @@
 #include <vector>
 
 namespace engine_core {
+class DataModel;
 class Engine;
+class Project;
 }
 
 namespace ide {
@@ -32,6 +35,8 @@ class IdeScriptEditor;
 // Explorer rows open Cut, Paste, and Rename. A script also has Edit, and a
 // double-click runs it. Edit docks a script editor on the scene view's tab strip.
 // The explorer edits a name in place and hands the result to rename.
+// File opens and saves a project folder through the system folder dialog.
+// Until the first Save As, the place has no folder.
 class IdeLayout {
 public:
     // windowWidth and windowHeight are the window size in points, used to place the splitters.
@@ -44,6 +49,9 @@ public:
     void mount(jadefx::Scene& scene);
     // Grows the window after a frame when a dock's minimum no longer fits.
     void attachFrame(jadefx::Stage& stage);
+    // Stops a running test, closes script editors, and loads the project at root.
+    // A failure shows an alert and leaves the current place open.
+    void open_project_at(const std::filesystem::path& root);
 
 private:
     struct Clip;
@@ -56,6 +64,19 @@ private:
     void edit(std::uint32_t id);
     std::shared_ptr<IdeScriptEditor> open_editor(std::uint32_t id) const;
     void flush_editors();
+    void open_project();
+    void save_project();
+    void save_project_as();
+    void save_project_to(const std::filesystem::path& root);
+    // Runs fn on this thread with the simulation paused, then resumes a test
+    // that was stepping. Play steps wait meanwhile.
+    void run_now(const std::function<void(engine_core::DataModel&)>& fn);
+    void show_session(bool testing, bool stepping);
+    void stop_test();
+    void close_script_editors();
+    void show_error(const std::string& heading, const std::string& detail);
+    void update_title();
+    std::filesystem::path dialog_directory() const;
     void reapply_editors();
     void restore_closed_edits();
     void routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene);
@@ -121,6 +142,15 @@ private:
     // Stop restores the place, then these strings are written back.
     std::unordered_map<std::uint32_t, std::string> kept_sources_;
     std::unique_ptr<Clip> clip_;
+    // The open project. Null until Open or Save As.
+    std::unique_ptr<engine_core::Project> project_;
+    bool dialog_open_ = false;
+    // A play session is active: Edit shows Stop.
+    bool testing_ = false;
+    // Test, Pause, Resume, and Stop.
+    jadefx::MenuItem* session_items_[4] = {};
+    // Open alerts. An alert must outlive its popup.
+    std::vector<std::shared_ptr<jadefx::Alert>> alerts_;
 };
 
 }  // namespace ide

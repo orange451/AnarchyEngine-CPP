@@ -559,7 +559,8 @@ GameObject& DataModel::create_game_object() {
 }
 
 void DataModel::destroy(InstanceId id) {
-    if (state_->threads_running && std::this_thread::get_id() != state_->simulation_thread) {
+    // A paused edit owns the world like SimulationThread does, so it destroys now.
+    if (!gameplay_thread()) {
         if (std::this_thread::get_id() == state_->render_thread) {
             contract_fail("destroy from RenderThread");
         }

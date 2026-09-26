@@ -41,6 +41,8 @@ A project is a directory, and it is meant to live in git. `project.json` names i
 
 Every instance has a GUID that never changes, and every file is named `<Name>.<guid>`. Two siblings may both be called `Part`; they are two files. Adding a third `Part` adds one file, and renaming one moves only that file. An instance with children becomes a folder holding its own `init.json`. A script is a `.luau` file with a `.meta.json` beside it, so its source never lands inside JSON. Keys the engine does not know are kept as they are.
 
+File > Open picks a project folder, File > Save writes to it, and File > Save As names a new folder and writes the whole project there. A place that has never been saved asks for a folder on its first Save. The dialogs are the system's own: Cocoa on macOS, the Windows file dialog, and zenity or kdialog on Linux. `AnarchyEngine-CPP <folder>` opens a project at launch.
+
 Saving during play writes the place as it was when Test started, never what the session created. Undo history, caches, and editor layout stay out of the tree; `.studio/` is ignored for them.
 
 ## The studio

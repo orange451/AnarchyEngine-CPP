@@ -14,11 +14,12 @@ struct TableSnapshot;
 // One field of a printed table, copied when print ran. Both strings are display text:
 // key is `name`, `[1]`, or `["two words"]`, and value is `"text"`, `12`, or what tostring gives.
 // table is set when the value is a table that was copied too. A table already open above
-// this field, or past the depth limit, keeps only its value text, with a note after it.
+// this field, or past the depth limit, is not copied: note says which, "cycle" or "too deep".
 struct TableField {
     std::string key;
     std::string value;
     std::shared_ptr<const TableSnapshot> table;
+    std::string note;
 };
 
 // The fields of a table, numbers first in order, then names, then the rest.

@@ -114,9 +114,9 @@ public:
             if (lua_type(state_, -1) == LUA_TTABLE) {
                 const void* pointer = lua_topointer(state_, -1);
                 if (std::find(open_.begin(), open_.end(), pointer) != open_.end()) {
-                    row.field.value += "  (cycle)";
+                    row.field.note = "cycle";
                 } else if (open_.size() >= kMaxDepth) {
-                    row.field.value += "  (too deep)";
+                    row.field.note = "too deep";
                 } else {
                     row.field.table = copy(-1);
                 }

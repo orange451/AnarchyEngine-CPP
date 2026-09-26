@@ -14,13 +14,10 @@ using engine_core::ScriptRuntime;
 using engine_core::TableField;
 using engine_core::TableSnapshot;
 
-// The marker in front of a table. Open Sans has no triangles; these two are the same width.
-constexpr std::string_view kClosed = "+";
-constexpr std::string_view kOpen = "−";
-// Where a field row's key starts when it has no marker, so keys line up with the tables.
-constexpr std::string_view kLeafGap = "   ";
+constexpr std::string_view kClosed = "{...}";
+constexpr std::string_view kOpen = "{";
+constexpr std::string_view kEmpty = "{}";
 constexpr std::string_view kIndent = "    ";
-constexpr std::size_t kPreviewBytes = 60;
 
 struct Editable {
     jadefx::StyledTextArea& area;
@@ -73,35 +70,13 @@ std::string oneLine(std::string_view text) {
     return out;
 }
 
-// {1, 2, x = 3, ...}: the array part without keys, then named fields, until it is long enough.
-std::string preview(const TableSnapshot& table) {
-    if (table.fields.empty() && table.omitted == 0) {
-        return "{}";
+bool isEmpty(const TableSnapshot& table) { return table.fields.empty() && table.omitted == 0; }
+
+std::string indentFor(int depth) {
+    std::string out;
+    for (int i = 0; i < depth; ++i) {
+        out += kIndent;
     }
-    std::string out = "{";
-    std::size_t index = 0;
-    bool first = true;
-    bool cut = table.omitted > 0;
-    for (const TableField& field : table.fields) {
-        ++index;
-        std::string item = field.table ? "{...}" : oneLine(field.value);
-        if (field.key != "[" + std::to_string(index) + "]") {
-            item = field.key + " = " + item;
-        }
-        if (!first && out.size() + item.size() > kPreviewBytes) {
-            cut = true;
-            break;
-        }
-        if (!first) {
-            out += ", ";
-        }
-        out += item;
-        first = false;
-    }
-    if (cut) {
-        out += ", ...";
-    }
-    out += "}";
     return out;
 }
 
@@ -130,8 +105,20 @@ ConsoleLog::ConsoleLog() {
     define("gutter", jadefx::Color::rgb8(0, 0, 0, 0));
     define("toggle", jadefx::Color::rgb8(18, 78, 148));
     define("key", jadefx::Color::rgb8(136, 19, 145));
-    define("preview", jadefx::Color::rgb8(120, 124, 130));
+    define("note", jadefx::Color::rgb8(120, 124, 130));
     rows_.assign(static_cast<std::size_t>(paragraphCount()), Row{});
+}
+
+std::string ConsoleLog::toggleText(const Toggle& toggle) {
+    std::string text(toggle.open ? kOpen : kClosed);
+    if (toggle.comma && !toggle.open) {
+        text.push_back(',');
+    }
+    return text;
+}
+
+int ConsoleLog::clickEnd(const Toggle& toggle) {
+    return toggle.begin + units(toggle.open ? kOpen : kClosed);
 }
 
 void ConsoleLog::clearLog() {
@@ -192,18 +179,15 @@ void ConsoleLog::appendLine(const ScriptRuntime::OutputLine& line) {
                 continue;
             }
             Pending& row = rows.back();
+            if (isEmpty(*value.table)) {
+                row.text.append(kEmpty);
+                continue;
+            }
             Toggle toggle;
             toggle.table = value.table;
             toggle.begin = units(row.text);
-            row.text.append(kClosed);
-            row.text.push_back(' ');
-            row.text += oneLine(value.text);
-            toggle.end = units(row.text);
-            row.spans.push_back(Span{toggle.begin, toggle.begin + 1, "toggle"});
-            row.text.push_back(' ');
-            const int previewAt = units(row.text);
-            row.text += preview(*value.table);
-            row.spans.push_back(Span{previewAt, units(row.text), "preview"});
+            row.text += toggleText(toggle);
+            row.spans.push_back(Span{toggle.begin, clickEnd(toggle), "toggle"});
             row.row.toggles.push_back(std::move(toggle));
         }
     }
@@ -211,57 +195,63 @@ void ConsoleLog::appendLine(const ScriptRuntime::OutputLine& line) {
     insertRows(paragraphCount() - 1, std::move(rows));
 }
 
-std::vector<ConsoleLog::Pending> ConsoleLog::fieldRows(const Row& parent, int slot, const TableSnapshot& table) const {
+std::vector<ConsoleLog::Pending> ConsoleLog::fieldRows(const Row& parent, int slot) const {
+    const Toggle& opened = parent.toggles[static_cast<std::size_t>(slot)];
+    const TableSnapshot& table = *opened.table;
     std::vector<Pending> rows;
-    std::string indent;
-    for (int i = 0; i <= parent.depth; ++i) {
-        indent += kIndent;
-    }
-    auto make = [&] {
+    auto make = [&](int indent) {
         Pending pending;
         pending.row.depth = parent.depth + 1;
         pending.row.slot = slot;
         pending.row.stamp = parent.stamp;
         pending.stampStyle = "gutter";
-        pending.text = indent;
+        pending.text = indentFor(indent);
         return pending;
     };
     for (const TableField& field : table.fields) {
-        Pending pending = make();
+        Pending pending = make(parent.depth + 1);
         std::string& text = pending.text;
-        Toggle toggle;
-        if (field.table) {
-            toggle.table = field.table;
-            toggle.begin = units(text);
-            text.append(kClosed);
-            text.push_back(' ');
-            pending.spans.push_back(Span{toggle.begin, toggle.begin + 1, "toggle"});
-        } else {
-            text.append(kLeafGap);
-        }
         const int keyAt = units(text);
         text += oneLine(field.key);
         pending.spans.push_back(Span{keyAt, units(text), "key"});
         text += " = ";
-        text += oneLine(field.value);
-        if (field.table) {
-            toggle.end = units(text);
-            text.push_back(' ');
-            const int previewAt = units(text);
-            text += preview(*field.table);
-            pending.spans.push_back(Span{previewAt, units(text), "preview"});
+        if (field.table && !isEmpty(*field.table)) {
+            Toggle toggle;
+            toggle.table = field.table;
+            toggle.comma = true;
+            toggle.begin = units(text);
+            text += toggleText(toggle);
+            pending.spans.push_back(Span{toggle.begin, clickEnd(toggle), "toggle"});
             pending.row.toggles.push_back(std::move(toggle));
+            rows.push_back(std::move(pending));
+            continue;
         }
+        if (field.table) {
+            text.append(kEmpty);
+        } else if (!field.note.empty()) {
+            const int noteAt = units(text);
+            text += "<" + field.note + ">";
+            pending.spans.push_back(Span{noteAt, units(text), "note"});
+        } else {
+            text += oneLine(field.value);
+        }
+        text.push_back(',');
         rows.push_back(std::move(pending));
     }
     if (table.omitted > 0) {
-        Pending pending = make();
-        pending.text.append(kLeafGap);
+        Pending pending = make(parent.depth + 1);
         const int at = units(pending.text);
         pending.text += "... " + std::to_string(table.omitted) + " more";
-        pending.spans.push_back(Span{at, units(pending.text), "preview"});
+        pending.spans.push_back(Span{at, units(pending.text), "note"});
         rows.push_back(std::move(pending));
     }
+    // The brace lines up with the row that opened it. A field keeps its comma after it.
+    Pending close = make(parent.depth);
+    close.text.push_back('}');
+    if (opened.comma) {
+        close.text.push_back(',');
+    }
+    rows.push_back(std::move(close));
     return rows;
 }
 
@@ -275,7 +265,6 @@ void ConsoleLog::insertRows(int paragraph, std::vector<Pending> rows) {
         const int prefix = units(pending.row.stamp) + 1;
         for (Toggle& toggle : pending.row.toggles) {
             toggle.begin += prefix;
-            toggle.end += prefix;
         }
         text += pending.row.stamp;
         text.push_back(' ');
@@ -315,7 +304,7 @@ int ConsoleLog::findToggle(int paragraph, int column) const {
     }
     const std::vector<Toggle>& toggles = rows_[static_cast<std::size_t>(paragraph)].toggles;
     for (std::size_t i = 0; i < toggles.size(); ++i) {
-        if (column >= toggles[i].begin && column < toggles[i].end) {
+        if (column >= toggles[i].begin && column < clickEnd(toggles[i])) {
             return static_cast<int>(i);
         }
     }
@@ -355,15 +344,22 @@ bool ConsoleLog::toggleAt(int paragraph, int column) {
     setFollowCaret(false);
     {
         Editable editing(*this);
-        Toggle& toggle = rows_[at].toggles[static_cast<std::size_t>(slot)];
+        std::vector<Toggle>& toggles = rows_[at].toggles;
+        Toggle& toggle = toggles[static_cast<std::size_t>(slot)];
+        const std::string before = toggleText(toggle);
         toggle.open = !toggle.open;
         const bool open = toggle.open;
-        const std::shared_ptr<const TableSnapshot> table = toggle.table;
+        const std::string after = toggleText(toggle);
         const int marker = absolutePosition(paragraph, toggle.begin);
-        replaceText(marker, marker + 1, std::string(open ? kOpen : kClosed));
-        setStyleClass(marker, marker + 1, "toggle");
+        replaceText(marker, marker + units(before), after);
+        setStyleClass(marker, marker + clickEnd(toggle) - toggle.begin, "toggle");
+        // A later table on the same row moves with the text in front of it.
+        const int shift = units(after) - units(before);
+        for (std::size_t i = static_cast<std::size_t>(slot) + 1; i < toggles.size(); ++i) {
+            toggles[i].begin += shift;
+        }
         if (open) {
-            insertRows(begin, fieldRows(rows_[at], slot, *table));
+            insertRows(begin, fieldRows(rows_[at], slot));
         } else if (end > begin) {
             deleteText(absolutePosition(begin, 0), absolutePosition(end, 0));
             rows_.erase(rows_.begin() + begin, rows_.begin() + end);
@@ -389,7 +385,7 @@ const ConsoleLog::Toggle* ConsoleLog::toggleUnder(double x, double y) const {
 }
 
 void ConsoleLog::handleMousePressed(const jadefx::MouseEvent& event) {
-    // cursorAt leaves the scroll bars out, so a press on a bar over a label still scrolls.
+    // cursorAt leaves the scroll bars out, so a press on a bar over a brace still scrolls.
     if (event.button == 0 && !event.shift() && !event.shortcut() &&
         cursorAt(event.x, event.y) == jadefx::Cursor::Pointer) {
         const jadefx::CharacterHit hitAt = hit(event.x, event.y);

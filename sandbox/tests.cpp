@@ -2862,7 +2862,7 @@ TEST_CASE("S32 print copies a table so the console can open it", "[S32]") {
     REQUIRE(table->fields[3].table->fields.size() == 1);
     REQUIRE(table->fields[3].table->fields[0].key == "x");
     // A table inside itself is named, not copied again.
-    REQUIRE(table->fields[4].value.find("(cycle)") != std::string::npos);
+    REQUIRE(table->fields[4].note == "cycle");
     REQUIRE_FALSE(table->fields[4].table);
     REQUIRE(table->omitted == 0);
     // A print without a table carries only its text.

@@ -11,9 +11,10 @@
 namespace ide {
 
 // The console's read-only log. Each row starts with the wall time it was recorded.
-// A printed table shows as `+ table: 0x... {1, 2, x = 3}`. Clicking the + opens it:
-// one row per field goes in under it, and a field that is a table opens the same way.
-// The - on an open table closes it and everything opened inside it.
+// A printed table shows as `{...}`, or `{}` when it is empty. Clicking `{...}` opens it
+// the way Luau writes a table: `{` on that row, one `key = value,` row per field, then `}`.
+// A field that is a table shows `{...}` and opens the same way. Clicking the `{` of an
+// open table closes it and everything opened inside it.
 // Opening reads the copy print made, so it shows the table as it was when printed.
 class ConsoleLog : public jadefx::StyleClassedTextArea {
 public:
@@ -22,7 +23,7 @@ public:
     void appendLine(const engine_core::ScriptRuntime::OutputLine& line);
     void clearLog();
 
-    // Opens or closes the table whose + or label covers this spot. False when none does.
+    // Opens or closes the table whose braces cover this spot. False when none does.
     bool toggleAt(int paragraph, int column);
 
     void handleMousePressed(const jadefx::MouseEvent& event) override;
@@ -30,11 +31,12 @@ public:
 
 private:
     struct Toggle {
-        // Columns in the paragraph, the marker first, the end after the label.
+        // Column of the opening brace in the paragraph.
         int begin = 0;
-        int end = 0;
         std::shared_ptr<const engine_core::TableSnapshot> table;
         bool open = false;
+        // A field's table ends with a comma: after `{...}` when closed, after `}` when open.
+        bool comma = false;
     };
 
     // One per paragraph, including the empty one after the last newline.
@@ -63,7 +65,11 @@ private:
     };
 
     void insertRows(int paragraph, std::vector<Pending> rows);
-    std::vector<Pending> fieldRows(const Row& parent, int slot, const engine_core::TableSnapshot& table) const;
+    // The fields of parent's table at slot, then the closing brace.
+    std::vector<Pending> fieldRows(const Row& parent, int slot) const;
+    // What the toggle shows in its row, and where its clickable part ends.
+    static std::string toggleText(const Toggle& toggle);
+    static int clickEnd(const Toggle& toggle);
     const Toggle* toggleUnder(double x, double y) const;
     int findToggle(int paragraph, int column) const;
     void syncRows();

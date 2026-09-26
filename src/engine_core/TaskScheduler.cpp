@@ -13,7 +13,7 @@ namespace {
 constexpr std::size_t kFrameBytes = 160;
 
 // Callee-saved GPRs and d8-d15. x30 of a fresh frame is the entry point.
-__attribute__((naked)) extern "C" void ae_fiber_swap(void**, void**) {
+extern "C" __attribute__((naked)) void ae_fiber_swap(void**, void**) {
     __asm__ volatile(
         "stp x19, x20, [sp, #-16]!\n"
         "stp x21, x22, [sp, #-16]!\n"
@@ -54,7 +54,7 @@ void write_frame(void* sp, void (*entry)()) {
 #elif defined(__x86_64__) && !defined(_WIN32)
 constexpr std::size_t kFrameBytes = 64;
 
-__attribute__((naked)) extern "C" void ae_fiber_swap(void**, void**) {
+extern "C" __attribute__((naked)) void ae_fiber_swap(void**, void**) {
     __asm__ volatile(
         "pushq %rbx\n"
         "pushq %rbp\n"

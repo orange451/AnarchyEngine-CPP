@@ -5,6 +5,7 @@
 #include "GameObject.hpp"
 #include "Project.hpp"
 #include "PropertyBag.hpp"
+#include "ModuleScript.hpp"
 #include "Script.hpp"
 #include "ScriptRuntime.hpp"
 #include "TaskScheduler.hpp"
@@ -419,6 +420,31 @@ TEST_CASE("P8 create writes the project skeleton", "[P8][project]") {
     REQUIRE(engine_core::parse_json(read_file(root / "src" / "init.json"), doc, error));
     REQUIRE(doc.find("class")->as_string() == "Game");
     REQUIRE_THROWS_AS(Project::create(root), ProjectError);
+}
+
+// Enabled is Script's. A ModuleScript saved when it had one still loads, and
+// the key stays in its file as one the class does not know.
+TEST_CASE("P16 a ModuleScript saved with Enabled still loads", "[P16][project]") {
+    SimRole role;
+    TempDir dir;
+    write_bare_project(dir.path);
+    write_file(dir.path / "src" / "Mod.aaa.luau", "return 1\n");
+    write_file(dir.path / "src" / "Mod.aaa.meta.json", meta("ModuleScript", "aaa", "Mod", ",\n  \"Enabled\": false"));
+    write_file(dir.path / "src" / "Main.bbb.luau", "print(1)\n");
+    write_file(dir.path / "src" / "Main.bbb.meta.json", meta("Script", "bbb", "Main", ",\n  \"Enabled\": false"));
+
+    Project project = Project::load(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId mod = by_guid(game, "aaa");
+    REQUIRE(dynamic_cast<engine_core::ModuleScript*>(game.instance(mod)) != nullptr);
+    const engine_core::JsonValue* kept = engine_core::bag_find(game.extra_properties(mod), "Enabled");
+    REQUIRE(kept != nullptr);
+    REQUIRE(kept->is_bool());
+    REQUIRE_FALSE(kept->as_bool());
+    auto* main = dynamic_cast<engine_core::Script*>(game.instance(by_guid(game, "bbb")));
+    REQUIRE(main != nullptr);
+    REQUIRE_FALSE(main->enabled());
+    REQUIRE(engine_core::bag_find(game.extra_properties(main->id()), "Enabled") == nullptr);
 }
 
 TEST_CASE("P9 an unknown hand-edited key round-trips through the property bag", "[P9][project]") {

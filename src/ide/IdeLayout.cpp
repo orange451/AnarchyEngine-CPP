@@ -15,7 +15,7 @@
 #include "IdeExplorer.hpp"
 #include "IdeScriptEditor.hpp"
 #include "PropertiesPanel.hpp"
-#include "Script.hpp"
+#include "LuaSource.hpp"
 #include "TestTriangle.hpp"
 #include "../runner/GameView.hpp"
 

@@ -1793,7 +1793,9 @@ AuthoredRecord DataModel::capture_record(InstanceId id, bool subtree) const {
     if (const LuaSource* source = dynamic_cast<const LuaSource*>(object)) {
         record.has_source = true;
         record.source = source->source();
-        record.enabled = source->enabled();
+    }
+    if (const Script* script = dynamic_cast<const Script*>(object)) {
+        record.enabled = script->enabled();
     }
     if (!record.spatial && !record.has_source) {
         object->write_place(record.extra);
@@ -1825,7 +1827,9 @@ void DataModel::apply_record_fields(const AuthoredRecord& record) {
     if (record.has_source) {
         if (auto* source = dynamic_cast<LuaSource*>(instance(record.id))) {
             source->set_source(record.source);
-            source->set_enabled(record.enabled);
+        }
+        if (auto* script = dynamic_cast<Script*>(instance(record.id))) {
+            script->set_enabled(record.enabled);
         }
     } else if (!record.spatial) {
         if (DataModel* object = instance(record.id)) {
@@ -1960,8 +1964,8 @@ void DataModel::apply_property(InstanceId id, const PropertyValue& value) {
         }
         break;
     case HistoryProp::Enabled:
-        if (auto* source = dynamic_cast<LuaSource*>(instance(id))) {
-            source->set_enabled(value.flag);
+        if (auto* script = dynamic_cast<Script*>(instance(id))) {
+            script->set_enabled(value.flag);
         }
         break;
     case HistoryProp::Position:

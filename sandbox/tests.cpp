@@ -11,6 +11,7 @@
 #include "IClock.hpp"
 #include "IRenderer.hpp"
 #include "LuaApi.hpp"
+#include "ModuleScript.hpp"
 #include "Script.hpp"
 #include "ScriptRuntime.hpp"
 #include "TaskScheduler.hpp"
@@ -2043,7 +2044,6 @@ TEST_CASE("a new ModuleScript returns an empty table", "[module]") {
 
     engine_core::ModuleScript& created = rig.game.create<engine_core::ModuleScript>();
     REQUIRE(created.source() == starter);
-    REQUIRE(created.enabled());
     engine_core::Script& script = rig.game.create<engine_core::Script>();
     REQUIRE(script.source().empty());
     rig.game.destroy(script.id());
@@ -3435,4 +3435,63 @@ TEST_CASE("S30 game is a Game, a DataModel but not an Instance", "[S30]") {
         REQUIRE(rig.runtime.global_boolean(name, value));
         REQUIRE(value);
     }
+}
+
+// Script and ModuleScript are separate classes. Both are a LuaSource, which
+// holds Source. Enabled is Script's alone: a ModuleScript runs only through
+// require, so it has none.
+TEST_CASE("S31 Script and ModuleScript share LuaSource, and only Script has Enabled", "[S31]") {
+    STATIC_REQUIRE(std::is_base_of<engine_core::LuaSource, engine_core::Script>::value);
+    STATIC_REQUIRE(std::is_base_of<engine_core::LuaSource, engine_core::ModuleScript>::value);
+    STATIC_REQUIRE_FALSE(std::is_base_of<engine_core::Script, engine_core::ModuleScript>::value);
+    STATIC_REQUIRE_FALSE(std::is_base_of<engine_core::ModuleScript, engine_core::Script>::value);
+    REQUIRE(engine_core::lua_class_inherits("LuaSource", "Instance"));
+    REQUIRE(engine_core::lua_class_inherits("Script", "LuaSource"));
+    REQUIRE(engine_core::lua_class_inherits("ModuleScript", "LuaSource"));
+    REQUIRE_FALSE(engine_core::lua_class_inherits("ModuleScript", "Script"));
+    REQUIRE_FALSE(engine_core::lua_class_inherits("Script", "ModuleScript"));
+    REQUIRE_FALSE(engine_core::lua_creatable_known("LuaSource"));
+    REQUIRE(engine_core::lua_class_find("LuaSource", "Source") != nullptr);
+    REQUIRE(engine_core::lua_class_find("ModuleScript", "Source") != nullptr);
+    REQUIRE(engine_core::lua_class_find("Script", "Enabled") != nullptr);
+    REQUIRE(engine_core::lua_class_find("ModuleScript", "Enabled") == nullptr);
+    REQUIRE(engine_core::lua_class_find("LuaSource", "Enabled") == nullptr);
+
+    ScriptRig rig;
+    engine_core::ModuleScript& module = rig.game.create<engine_core::ModuleScript>();
+    rig.game.set_name(module.id(), "Mod");
+    module.set_source("return 7\n");
+    rig.game.set_parent(module.id(), rig.game.id());
+    add_script(rig.game, "Reader", R"(
+        local mod = script.Parent.Mod
+        _G.module_isa = mod:IsA("LuaSource") and mod:IsA("ModuleScript") and not mod:IsA("Script")
+        _G.script_isa = script:IsA("LuaSource") and script:IsA("Script") and not script:IsA("ModuleScript")
+        _G.source = mod.Source == "return 7\n" and script.Enabled == true
+        local ok, message = pcall(function()
+            return mod.Enabled
+        end)
+        _G.no_enabled = not ok and string.find(message, "Enabled is not a valid member of ModuleScript", 1, true) ~= nil
+        _G.required = require(mod) == 7
+    )");
+    rig.game.start_simulation();
+    rig.frames(1, 0.05);
+    INFO(rig.runtime.last_error());
+    for (const char* name : {"module_isa", "script_isa", "source", "no_enabled", "required"}) {
+        bool value = false;
+        INFO(name);
+        REQUIRE(rig.runtime.global_boolean(name, value));
+        REQUIRE(value);
+    }
+
+    // Stop puts back a disabled Script's Enabled and a module's source.
+    rig.game.stop_simulation();
+    engine_core::Script& off = add_script(rig.game, "Off", "_G.off_ran = true\n");
+    off.set_enabled(false);
+    rig.game.capture_place();
+    rig.game.start_simulation();
+    off.set_enabled(true);
+    module.set_source("return 8\n");
+    rig.game.stop_simulation();
+    REQUIRE_FALSE(off.enabled());
+    REQUIRE(module.source() == "return 7\n");
 }

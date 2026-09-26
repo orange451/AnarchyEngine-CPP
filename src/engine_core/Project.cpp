@@ -3,6 +3,7 @@
 #include "Folder.hpp"
 #include "Game.hpp"
 #include "GameObject.hpp"
+#include "ModuleScript.hpp"
 #include "Script.hpp"
 #include "TestTriangle.hpp"
 

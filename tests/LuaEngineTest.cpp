@@ -2,6 +2,7 @@
 #include "Game.hpp"
 #include "LuaApi.hpp"
 #include "LuaEngine.hpp"
+#include "ModuleScript.hpp"
 #include "Script.hpp"
 #include "ScriptRuntime.hpp"
 #include "TestTriangle.hpp"

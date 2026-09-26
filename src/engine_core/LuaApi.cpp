@@ -693,10 +693,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Game", "GetService", "The service with this name: RunService or Selection.", "Instance", false,
         {P("className", "string")});
 
+    add("LuaSource", "Source", "The Luau source this instance holds.", "string", false, {});
     add("Script", "Source", "The Luau source this script runs.", "string", false, {});
     add("Script", "Enabled", "When false, the script does not run.", "boolean", false, {});
     add("ModuleScript", "Source", "The Luau source require runs.", "string", false, {});
-    add("ModuleScript", "Enabled", "Stored on the module. require does not check it.", "boolean", false, {});
 
     add("GameObject", "Color", "The color stored on this object.", "Color", false, {});
     add("GameObject", "Transform", "A table of 16 numbers.", "Transform", false, {});

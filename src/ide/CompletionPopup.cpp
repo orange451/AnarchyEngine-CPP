@@ -2,7 +2,7 @@
 
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
-#include "Script.hpp"
+#include "LuaSource.hpp"
 
 #include "jadefx/jadefx.hpp"
 #include "jadefx/scene/controls/ScrollBar.hpp"

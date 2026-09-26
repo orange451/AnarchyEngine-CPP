@@ -7,6 +7,7 @@
 #include "Game.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
+#include "ModuleScript.hpp"
 #include "Script.hpp"
 #include "TestTriangle.hpp"
 #include "jadefx/jadefx.hpp"
@@ -539,11 +540,26 @@ void TestBooleanAndNumber() {
            "Instance rows lead in a fixed order");
 }
 
+// Enabled is Script's. A ModuleScript runs only through require and has none,
+// so a selection with one in it shows no Enabled row.
+void TestModuleScriptHasNoEnabled() {
+    Rig rig;
+    const InstanceId module = rig.add<engine_core::ModuleScript>("Mod");
+    const ide::PropertySheet script_sheet = ide::read_sheet(rig.game, {rig.script});
+    Expect(script_sheet.find("Enabled") != nullptr, "a Script shows Enabled");
+    const ide::PropertySheet module_sheet = ide::read_sheet(rig.game, {module});
+    Expect(module_sheet.find("Enabled") == nullptr, "a ModuleScript has no Enabled");
+    Expect(module_sheet.find("ClassName") != nullptr && module_sheet.find("ClassName")->value.text == "ModuleScript",
+           "the ModuleScript sheet is its own");
+    const ide::PropertySheet both = ide::read_sheet(rig.game, {rig.script, module});
+    Expect(both.find("Enabled") == nullptr, "Script and ModuleScript share no Enabled");
+}
+
 void TestMixedEnabledIsOneWaypoint() {
     Rig rig;
     const InstanceId other = rig.add<engine_core::Script>("Other");
-    auto* first = dynamic_cast<engine_core::LuaSource*>(rig.game.instance(rig.script));
-    auto* second = dynamic_cast<engine_core::LuaSource*>(rig.game.instance(other));
+    auto* first = dynamic_cast<engine_core::Script*>(rig.game.instance(rig.script));
+    auto* second = dynamic_cast<engine_core::Script*>(rig.game.instance(other));
     second->set_enabled(false);
     rig.game.history().reset_waypoints();
     rig.select({rig.script, other});
@@ -608,6 +624,7 @@ int main() {
     TestR9DestroyedLeavesIntersection();
     TestBooleanAndNumber();
     TestMixedEnabledIsOneWaypoint();
+    TestModuleScriptHasNoEnabled();
     TestFieldUndoThenPlace();
     TestPlayEditIsUndoable();
     if (gFailures == 0) {

@@ -4,6 +4,7 @@
 #include "Folder.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
+#include "ModuleScript.hpp"
 #include "Script.hpp"
 #include "TestTriangle.hpp"
 #include "Vector3.hpp"

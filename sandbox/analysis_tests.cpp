@@ -3,6 +3,7 @@
 #include "Game.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
+#include "ModuleScript.hpp"
 #include "Project.hpp"
 #include "Script.hpp"
 #include "ScriptAnalysis.hpp"
@@ -385,6 +386,13 @@ TEST_CASE("analysis definitions come from the class registry", "[A11]") {
     const std::size_t game = source.find("declare extern type Game extends DataModel with");
     const std::string game_block = source.substr(game, source.find("end\n", game) - game);
     REQUIRE(game_block.find("function GetService") != std::string::npos);
+    // Script and ModuleScript share LuaSource. Only Script has Enabled.
+    REQUIRE(source.find("declare extern type LuaSource extends Instance with") != std::string::npos);
+    REQUIRE(source.find("declare extern type Script extends LuaSource with") != std::string::npos);
+    const std::size_t module = source.find("declare extern type ModuleScript extends LuaSource with");
+    REQUIRE(module != std::string::npos);
+    const std::string module_block = source.substr(module, source.find("end\n", module) - module);
+    REQUIRE(module_block.find("Enabled") == std::string::npos);
 }
 
 TEST_CASE("disabling script analysis drops diagnostics", "[A]") {
@@ -911,4 +919,21 @@ TEST_CASE("A22 Parent takes any DataModel, and game is not an Instance", "[A22]"
         INFO(report);
         REQUIRE(report.find("Instance?") != std::string::npos);
     }
+}
+
+// Enabled is Script's. A module that reads its own Enabled is told it has none.
+TEST_CASE("A23 a ModuleScript has no Enabled; a Script does", "[A23]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::ModuleScript& module = add_module(rig.game, "Mod", "local on = script.Enabled\nreturn { on = on }\n");
+    engine_core::Script& script = add_script(rig.game, "Main",
+                                             "script.Enabled = false\nlocal text: string = script.Source\n"
+                                             "local mod = script.Parent.Mod\nlocal body: string = mod.Source\n"
+                                             "return text, body\n");
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(script.id())));
+    REQUIRE(analysis.diagnostics(script.id()).empty());
+    const std::string report = dump(analysis.diagnostics(module.id()));
+    INFO(report);
+    REQUIRE(report.find("Enabled") != std::string::npos);
 }

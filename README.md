@@ -10,7 +10,7 @@ Every object in the world is an instance. It has a name, a parent, and children,
 
 Everything in the tree is a `DataModel`: it has `Name`, `Parent`, `FindFirstChild`, and the rest. What `Instance.new` makes is an `Instance`. `game` is a `Game`, a `DataModel` that is not an `Instance`, since a script cannot make one; `GetService` is on `game` alone. A `Parent` is any `DataModel`, so `game` or any instance.
 
-`GameObject` is the instance that occupies space. It carries a transform, a color, a size, and a velocity. `Script` and `ModuleScript` hold Luau source. Any other instance is a node in the tree, with a name, a parent, and signals.
+`GameObject` is the instance that occupies space. It carries a transform, a color, a size, and a velocity. `Script` and `ModuleScript` hold Luau source; both are a `LuaSource`, which has `Source`. Only a `Script` has `Enabled`, since a `ModuleScript` runs only through `require`. Any other instance is a node in the tree, with a name, a parent, and signals.
 
 Creating an instance, parenting it, or writing a property is how the place grows. Those writes are what explorers, scripts, and the play session all share.
 

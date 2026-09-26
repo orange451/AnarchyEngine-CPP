@@ -3,7 +3,8 @@
 #include "DataModel.hpp"
 #include "DataModelLock.hpp"
 #include "LuaApi.hpp"
-#include "Script.hpp"
+#include "LuaSource.hpp"
+#include "ModuleScript.hpp"
 
 #if defined(__clang__)
 #pragma clang diagnostic push

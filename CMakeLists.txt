@@ -141,6 +141,8 @@ add_library(engine_datatypes STATIC
 add_library(engine_instances STATIC
     src/engine_instances/Folder.cpp
     src/engine_instances/GameObject.cpp
+    src/engine_instances/LuaSource.cpp
+    src/engine_instances/ModuleScript.cpp
     src/engine_instances/Script.cpp
     src/engine_instances/TestTriangle.cpp
 )

@@ -60,6 +60,13 @@ void define_styles(jadefx::StyleClassedTextArea& area) {
     builtin.bold = true;
     area.defineStyleClass("builtin", builtin);
 
+    // Instance, Vector3, Enum: types, so they read apart from functions like print.
+    jadefx::TextStyle datatype;
+    datatype.hasFill = true;
+    datatype.fill = jadefx::Color::parse("#a3470a");
+    datatype.bold = true;
+    area.defineStyleClass("datatype", datatype);
+
     jadefx::TextStyle comment;
     comment.hasFill = true;
     comment.fill = jadefx::Color::parse("#6a737d");

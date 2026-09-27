@@ -7,7 +7,7 @@
 namespace ide {
 
 // One run of code points. style is null for plain text, or keyword, builtin,
-// comment, string, or number. Lengths are Unicode code points, matching CodeArea.
+// datatype, comment, string, or number. A datatype is a global such as Vector3 or Enum. Lengths are Unicode code points, matching CodeArea.
 struct LuauSpan {
     const char* style = nullptr;
     int length = 0;

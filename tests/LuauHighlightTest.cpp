@@ -1,5 +1,7 @@
 #include "ide/LuauHighlight.hpp"
 
+#include "LuaApi.hpp"
+
 #include <cstdio>
 #include <string>
 #include <string_view>
@@ -87,7 +89,28 @@ int RunLuauHighlightTests() {
     expect_style("export type Vec", 7, "keyword", "type is a keyword");
     expect_style("0xFF", 0, "number", "a hex literal is a number");
     expect_style(".5", 0, "number", "a leading dot is a number");
-    expect_style("Instance.new", 0, "builtin", "Instance is a builtin");
+    expect_style("Instance.new", 0, "datatype", "Instance is a datatype");
+    expect_style("local v = Vector3.new(1, 2, 3)", 10, "datatype", "Vector3 is a datatype");
+    expect_style("local v = Vector3.new(1, 2, 3)", 18, nullptr, "a datatype's constructor stays plain");
+    expect_style("Enum.Material.Plastic", 0, "datatype", "Enum is a datatype");
+    expect_style("local p: Vector3 = v", 9, "datatype", "a type annotation names the datatype");
+    expect_style("local Vector3s = {}", 6, nullptr, "a longer name is not the datatype");
+    expect_style("-- Vector3", 3, "comment", "a comment hides datatypes");
+    expect_style("\"Vector3\"", 1, "string", "a datatype inside a string is a string");
+
+    // Every capitalized global the engine installs is a datatype, so a new one cannot go uncolored.
+    std::vector<engine_core::LuaSymbol> globals;
+    engine_core::lua_library_globals(globals);
+    int capitalized = 0;
+    for (const engine_core::LuaSymbol& global : globals) {
+        if (global.name.empty() || global.name[0] < 'A' || global.name[0] > 'Z') {
+            continue;
+        }
+        ++capitalized;
+        const std::string label = "the global " + global.name + " is highlighted as a datatype";
+        expect_style(global.name, 0, "datatype", label.c_str());
+    }
+    expect(capitalized >= 3, "the engine installs Instance, Vector3, and Enum");
     expect_style("_G", 0, "builtin", "_G is a builtin");
 
     const std::string utf = "local café = 1";

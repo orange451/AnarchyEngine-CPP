@@ -32,7 +32,7 @@ const char* Keyword(std::string_view word) {
 const char* Builtin(std::string_view word) {
     // Names the play VM and the command line actually expose, plus the Luau
     // libraries that sandbox opens. `self` is the method receiver.
-    static const char* kWords[] = {"Instance", "assert",     "bit32",   "buffer",      "coroutine", "error",
+    static const char* kWords[] = {"assert",   "bit32",      "buffer",  "coroutine",   "error",
                                    "game",     "getmetatable", "ipairs", "math",        "next",      "pairs",
                                    "pcall",    "print",      "rawequal", "rawget",      "rawlen",    "rawset",
                                    "require",  "script",     "select",   "setmetatable", "shared",   "string",
@@ -41,6 +41,18 @@ const char* Builtin(std::string_view word) {
     for (const char* candidate : kWords) {
         if (word == candidate) {
             return "builtin";
+        }
+    }
+    return nullptr;
+}
+
+// The engine's datatype globals: what Instance.new, Vector3.new, and Enum.<Name> start from.
+// A new datatype global goes here too; LuauHighlightTest checks every capitalized global is listed.
+const char* Datatype(std::string_view word) {
+    static const char* kWords[] = {"Enum", "Instance", "Vector3"};
+    for (const char* candidate : kWords) {
+        if (word == candidate) {
+            return "datatype";
         }
     }
     return nullptr;
@@ -331,6 +343,9 @@ private:
         const char* style = Keyword(word);
         if (style == nullptr) {
             style = Builtin(word);
+        }
+        if (style == nullptr) {
+            style = Datatype(word);
         }
         add(style, static_cast<int>(index_ - start));
     }

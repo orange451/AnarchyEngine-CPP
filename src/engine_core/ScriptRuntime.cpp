@@ -1201,6 +1201,33 @@ void ScriptRuntime::append_output(OutputKind kind, std::string text, std::vector
         output_.pop_front();
     }
     output_.push_back(OutputLine{kind, std::move(text), std::move(values), std::chrono::system_clock::now()});
+    while (history_.size() >= kMaxOutputLines) {
+        history_.pop_front();
+    }
+    history_.push_back(output_.back());
+    ++history_next_;
+}
+
+ScriptRuntime::OutputHistory ScriptRuntime::output_since(std::uint64_t since, std::size_t limit) const {
+    std::lock_guard<std::mutex> guard(output_mu_);
+    OutputHistory out;
+    out.next = history_next_;
+    const std::uint64_t oldest = history_next_ - history_.size();
+    out.first = std::max(since, oldest);
+    if (out.first > history_next_) {
+        out.first = history_next_;
+    }
+    const std::size_t begin = static_cast<std::size_t>(out.first - oldest);
+    const std::size_t end = std::min(history_.size(), begin + limit);
+    for (std::size_t i = begin; i < end; ++i) {
+        out.lines.push_back(history_[i]);
+    }
+    return out;
+}
+
+std::uint64_t ScriptRuntime::output_next() const {
+    std::lock_guard<std::mutex> guard(output_mu_);
+    return history_next_;
 }
 
 ScriptRuntime::OutputBatch ScriptRuntime::drain_output() {

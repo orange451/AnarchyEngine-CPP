@@ -74,6 +74,7 @@ end
 )");
         game.history().set_enabled(true);
         layout_->start();
+        layout_->start_mcp();
         auto scene = jadefx::make<jadefx::Scene>(nullptr, size.width, size.height);
         layout_->mount(*scene);
         layout_->attachFrame(stage);

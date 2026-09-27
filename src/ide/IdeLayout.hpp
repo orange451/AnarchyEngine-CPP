@@ -24,6 +24,7 @@ namespace ide {
 class IdeDock;
 class IdePane;
 class IdeScriptEditor;
+class McpServer;
 class PropertiesPanel;
 
 // IDE shell, in the shape of OpenGLFX-IDE's IdeLayout.
@@ -52,6 +53,11 @@ public:
     engine_core::Engine& simulation();
     // Binds the scene view, then starts the simulation and render threads.
     void start();
+    // Starts the MCP server, so an LLM client can read and edit the place.
+    // ANARCHY_MCP_PORT picks the port (default 7777), ANARCHY_MCP=0 turns it
+    // off, and ANARCHY_MCP_TOKEN makes clients send that bearer token. The
+    // console says where it listens, or why it could not.
+    void start_mcp();
     void mount(jadefx::Scene& scene);
     // Grows the window after a frame when a dock's minimum no longer fits.
     void attachFrame(jadefx::Stage& stage);
@@ -171,6 +177,10 @@ private:
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeScriptEditor>> open_scripts_;
     std::weak_ptr<class IdeConsole> console_;
     std::vector<std::weak_ptr<class IdeExplorer>> explorers_;
+    std::unique_ptr<McpServer> mcp_;
+    // MCP tools that wait for the UI thread hold this weakly, so a task that
+    // runs after the layout is gone does nothing.
+    std::shared_ptr<int> alive_ = std::make_shared<int>(0);
     // Edits the selection's properties. Docked under the right-hand explorer.
     std::unique_ptr<PropertiesPanel> properties_;
     InputRouter undo_router_;

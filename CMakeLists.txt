@@ -47,6 +47,8 @@ set(STUDIO_SOURCES
     src/ide/PropertySheet.cpp
     src/ide/PropertiesPanel.cpp
     src/ide/TextWrap.cpp
+    src/ide/McpServer.cpp
+    src/ide/McpTools.cpp
 )
 
 # MACOSX_BUNDLE is ignored on Windows and Linux, where this stays a normal executable.
@@ -141,6 +143,23 @@ else()
     endif()
 endif()
 
+# cpp-httplib is the MCP server's HTTP listener: one MIT-licensed
+# header, fetched the way JadeFX fetches stb, pinned by tag and hash.
+FetchContent_Declare(
+    httplib
+    URL https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.58.0/httplib.h
+    URL_HASH SHA256=aa14e7e7bd2703694e0a6b6855af3b8c406102ab1fc56ac905fe33619b31faa5
+    DOWNLOAD_NO_EXTRACT TRUE
+)
+FetchContent_GetProperties(httplib)
+if(NOT httplib_POPULATED)
+    # The header has no CMakeLists, so populate it directly.
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
+    FetchContent_Populate(httplib)
+endif()
+
 # The engine is four packages, each a static library with its own directory:
 #   engine_core       DataModel, events, threads, the script runtime, projects
 #   engine_datatypes  values: Vector2, Vector3, Color, Transform, Enum
@@ -213,8 +232,12 @@ if(ENGINE_CORE_TSAN AND NOT MSVC)
 endif()
 
 # Sources under src/ include each other as "ide/..." and "runner/...".
-target_include_directories(AnarchyEngine-CPP PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(AnarchyEngine-CPP PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")
 target_link_libraries(AnarchyEngine-CPP PRIVATE jadefx engine_core)
+# httplib's sockets. MSVC links these from a pragma in the header; MinGW needs them here.
+if(WIN32)
+    target_link_libraries(AnarchyEngine-CPP PRIVATE ws2_32 crypt32)
+endif()
 
 add_executable(shell-tests
     tests/DockArrangeTest.cpp
@@ -270,9 +293,27 @@ add_executable(studio-tests
     tests/StudioLayoutTest.cpp
     ${STUDIO_SOURCES}
 )
-target_include_directories(studio-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(studio-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")
 target_link_libraries(studio-tests PRIVATE jadefx engine_core)
 target_compile_features(studio-tests PRIVATE cxx_std_17)
+if(WIN32)
+    target_link_libraries(studio-tests PRIVATE ws2_32 crypt32)
+endif()
+
+# The MCP server: JSON-RPC by call, the engine tools against a live place,
+# and one round trip over a real loopback socket.
+add_executable(mcp-tests
+    tests/McpTest.cpp
+    src/ide/McpServer.cpp
+    src/ide/McpTools.cpp
+    src/ide/PropertySheet.cpp
+)
+target_include_directories(mcp-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")
+target_link_libraries(mcp-tests PRIVATE engine_core)
+target_compile_features(mcp-tests PRIVATE cxx_std_17)
+if(WIN32)
+    target_link_libraries(mcp-tests PRIVATE ws2_32 crypt32)
+endif()
 
 add_executable(engine-tests
     tests/LuaEngineTest.cpp

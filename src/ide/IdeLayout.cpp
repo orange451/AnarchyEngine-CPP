@@ -16,12 +16,18 @@
 #include "IdeScriptEditor.hpp"
 #include "PropertiesPanel.hpp"
 #include "LuaSource.hpp"
+#include "McpServer.hpp"
+#include "McpTools.hpp"
 #include "TestTriangle.hpp"
 #include "../runner/GameView.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <cstdlib>
+#include <mutex>
+#include <stdexcept>
 #include <functional>
 #include <vector>
 
@@ -229,6 +235,42 @@ const jadefx::Color kMergeFill = jadefx::Color::rgba(0.102f, 0.451f, 0.910f, 0.3
 const jadefx::Color kSplitFill = jadefx::Color::rgba(0.204f, 0.659f, 0.325f, 0.40f);
 const jadefx::Color kFloatFill = jadefx::Color::rgba(0.984f, 0.737f, 0.016f, 0.46f);
 const jadefx::Color kCaretFill = jadefx::Color::rgba(0.102f, 0.451f, 0.910f, 0.95f);
+
+constexpr int kMcpPort = 7777;
+constexpr std::chrono::seconds kUiWait(5);
+
+// Runs fn on the UI thread and waits for it. Called from an MCP server thread.
+// Throws when the frame loop does not get to it, or with what fn threw.
+void OnUiThread(std::function<void()> fn) {
+    struct Wait {
+        std::mutex mu;
+        std::condition_variable cv;
+        bool done = false;
+        std::string error;
+    };
+    auto wait = std::make_shared<Wait>();
+    jadefx::runLater([wait, fn = std::move(fn)] {
+        std::string error;
+        try {
+            fn();
+        } catch (const std::exception& ex) {
+            error = ex.what();
+        }
+        {
+            std::lock_guard<std::mutex> guard(wait->mu);
+            wait->error = std::move(error);
+            wait->done = true;
+        }
+        wait->cv.notify_all();
+    });
+    std::unique_lock<std::mutex> lock(wait->mu);
+    if (!wait->cv.wait_for(lock, kUiWait, [&] { return wait->done; })) {
+        throw std::runtime_error("The studio did not respond within 5 seconds.");
+    }
+    if (!wait->error.empty()) {
+        throw std::runtime_error(wait->error);
+    }
+}
 
 bool parent_ok(const engine_core::DataModel& game, engine_core::InstanceId parent) {
     return parent == 0 || (parent != engine_core::DataModel::kNoParent && game.alive(parent));
@@ -500,6 +542,58 @@ void IdeLayout::start() {
     runner_.start();
     // Whatever the app built before start is the starting point, not an edit.
     mark_saved();
+}
+
+void IdeLayout::start_mcp() {
+    const char* enabled = std::getenv("ANARCHY_MCP");
+    if (enabled != nullptr && std::string(enabled) == "0") {
+        return;
+    }
+    int port = kMcpPort;
+    if (const char* text = std::getenv("ANARCHY_MCP_PORT")) {
+        const int asked = std::atoi(text);
+        if (asked > 0 && asked < 65536) {
+            port = asked;
+        }
+    }
+    // Each hook runs on the UI thread, where the ribbon's own handlers run.
+    std::weak_ptr<int> alive = alive_;
+    auto on_ui = [alive](std::function<void()> fn) {
+        OnUiThread([alive, fn = std::move(fn)] {
+            if (alive.expired()) {
+                throw std::runtime_error("The studio is closing.");
+            }
+            fn();
+        });
+    };
+    McpStudio studio;
+    studio.start_test = [this, on_ui] { on_ui([this] { start_test(); }); };
+    studio.pause_test = [this, on_ui] { on_ui([this] { pause_test(); }); };
+    studio.resume_test = [this, on_ui] { on_ui([this] { resume_test(); }); };
+    studio.stop_test = [this, on_ui] { on_ui([this] { stop_test(); }); };
+    studio.session = [this, on_ui] {
+        // Shared, since a task that runs after a timed-out wait still writes it.
+        auto state = std::make_shared<std::string>();
+        on_ui([this, state] { *state = !testing_ ? "stopped" : (stepping_ ? "running" : "paused"); });
+        return *state;
+    };
+    studio.flush_scripts = [this, on_ui] { on_ui([this] { flush_editors(); }); };
+    studio.refresh_scripts = [this, on_ui] { on_ui([this] { reapply_editors(); }); };
+
+    auto server = std::make_unique<McpServer>();
+    if (const char* token = std::getenv("ANARCHY_MCP_TOKEN")) {
+        server->set_token(token);
+    }
+    add_engine_tools(*server, runner_.simulation(), std::move(studio));
+    engine_core::ScriptRuntime& scripts = runner_.simulation().scripts();
+    std::string error;
+    if (!server->start(port, error)) {
+        scripts.append_output(engine_core::ScriptRuntime::OutputKind::Error, "MCP server: " + error);
+        return;
+    }
+    scripts.append_output(engine_core::ScriptRuntime::OutputKind::Print,
+                          "MCP server listening on http://127.0.0.1:" + std::to_string(port) + "/mcp");
+    mcp_ = std::move(server);
 }
 
 void IdeLayout::mount(jadefx::Scene& scene) {
@@ -1264,6 +1358,9 @@ void IdeLayout::flushFrame() {
 }
 
 IdeLayout::~IdeLayout() {
+    // Before anything its tools reach is torn down.
+    alive_.reset();
+    mcp_.reset();
     // Window teardown calls the close hook. Drop it first so that hook does not
     // touch docks that are already being destroyed.
     for (Floating& item : floating_) {

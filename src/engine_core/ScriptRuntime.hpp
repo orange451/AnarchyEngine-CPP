@@ -90,6 +90,20 @@ public:
     void append_output(OutputKind kind, std::string text, std::vector<OutputValue> values);
     OutputBatch drain_output();
 
+    // Every line also goes to a history that readers other than the console
+    // share, such as the MCP server. Reading it takes nothing from the console.
+    // Each line gets the next sequence number; the oldest lines drop past a cap.
+    struct OutputHistory {
+        // The sequence number of lines.front(), and the one the next line will get.
+        std::uint64_t first = 0;
+        std::uint64_t next = 0;
+        std::vector<OutputLine> lines;
+    };
+    // Lines numbered since and later, at most limit of them.
+    OutputHistory output_since(std::uint64_t since, std::size_t limit) const;
+    // The sequence number the next line will get.
+    std::uint64_t output_next() const;
+
     // One chunk against the live data model. Works while the play session is closed.
     // The caller is the simulation thread, or a paused edit.
     // print and an uncaught error join the log. No Script instance is attached.
@@ -217,10 +231,12 @@ private:
     std::size_t console_memory_used_ = 0;
     std::string last_error_;
 
-    // Guards output_ and output_epoch_. Never take the DataModel lock while holding this.
-    std::mutex output_mu_;
+    // Guards output_, output_epoch_, and the history. Never take the DataModel lock while holding this.
+    mutable std::mutex output_mu_;
     std::deque<OutputLine> output_;
     std::uint64_t output_epoch_ = 0;
+    std::deque<OutputLine> history_;
+    std::uint64_t history_next_ = 0;
 
     std::list<Thread> threads_;
     std::list<Thread*> ready_;

@@ -9,6 +9,20 @@ enum class SessionAction { None, Test, Resume, Stop };
 // stops it. F5 while a test is running, and any other modifier, does nothing.
 // key is a JadeFX key code, which matches GLFW. testing: a play session is
 // active. stepping: that session is executing.
-SessionAction SessionKeyAction(int key, bool shift, bool control, bool alt, bool meta, bool testing, bool stepping);
+inline SessionAction SessionKeyAction(int key, bool shift, bool control, bool alt, bool meta, bool testing,
+                                      bool stepping) {
+    // GLFW_KEY_F5.
+    constexpr int kKeyF5 = 294;
+    if (key != kKeyF5 || control || alt || meta) {
+        return SessionAction::None;
+    }
+    if (shift) {
+        return testing ? SessionAction::Stop : SessionAction::None;
+    }
+    if (!testing) {
+        return SessionAction::Test;
+    }
+    return stepping ? SessionAction::None : SessionAction::Resume;
+}
 
 }  // namespace ide

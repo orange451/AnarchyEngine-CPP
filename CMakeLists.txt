@@ -47,7 +47,6 @@ set(STUDIO_SOURCES
     src/ide/PropertySheet.cpp
     src/ide/PropertiesPanel.cpp
     src/ide/TextWrap.cpp
-    src/ide/SessionKeys.cpp
 )
 
 # MACOSX_BUNDLE is ignored on Windows and Linux, where this stays a normal executable.
@@ -288,7 +287,6 @@ add_executable(engine-tests
     src/ide/ScriptMarks.cpp
     src/ide/ScriptPairs.cpp
     src/ide/TextWrap.cpp
-    src/ide/SessionKeys.cpp
     src/runner/Runner.cpp
 )
 target_include_directories(engine-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")

@@ -405,36 +405,37 @@ void install_vector3_library(lua_State* state) {
     lua_setglobal(state, "Vector3");
 }
 
-const LuaField kVectorFields[] = {
-    lua_property("X", "number", false, nullptr, nullptr),
-    lua_property("Y", "number", false, nullptr, nullptr),
-    lua_property("Z", "number", false, nullptr, nullptr),
-    lua_property("Magnitude", "number", false, nullptr, nullptr),
-    lua_property("Unit", "Vector3", false, nullptr, nullptr),
-    lua_method("Abs", "Vector3", nullptr),
-    lua_method("Ceil", "Vector3", nullptr),
-    lua_method("Floor", "Vector3", nullptr),
-    lua_method("Sign", "Vector3", nullptr),
-    lua_method("Cross", "Vector3", nullptr),
-    lua_method("Angle", "number", nullptr),
-    lua_method("Dot", "number", nullptr),
-    lua_method("FuzzyEq", "boolean", nullptr),
-    lua_method("Lerp", "Vector3", nullptr),
-    lua_method("Max", "Vector3", nullptr),
-    lua_method("Min", "Vector3", nullptr),
-};
-
-const LuaField kEnumItemFields[] = {
-    lua_property("Name", "string", false, nullptr, nullptr),
-    lua_property("Value", "number", false, nullptr, nullptr),
-    lua_property("EnumType", "table", false, nullptr, nullptr),
-};
-
+// The rows are built here, not at namespace scope. A constructor function can run
+// before this file's dynamic initializers, and would copy rows with no names.
 ANARCHY_LUA_REGISTER(register_vector3_lua) {
-    register_lua_class("Vector3", nullptr, kVectorFields,
-                       static_cast<int>(sizeof(kVectorFields) / sizeof(kVectorFields[0])));
-    register_lua_class("EnumItem", nullptr, kEnumItemFields,
-                       static_cast<int>(sizeof(kEnumItemFields) / sizeof(kEnumItemFields[0])));
+    const LuaField vector_fields[] = {
+        lua_property("X", "number", false, nullptr, nullptr),
+        lua_property("Y", "number", false, nullptr, nullptr),
+        lua_property("Z", "number", false, nullptr, nullptr),
+        lua_property("Magnitude", "number", false, nullptr, nullptr),
+        lua_property("Unit", "Vector3", false, nullptr, nullptr),
+        lua_method("Abs", "Vector3", nullptr),
+        lua_method("Ceil", "Vector3", nullptr),
+        lua_method("Floor", "Vector3", nullptr),
+        lua_method("Sign", "Vector3", nullptr),
+        lua_method("Cross", "Vector3", nullptr),
+        lua_method("Angle", "number", nullptr),
+        lua_method("Dot", "number", nullptr),
+        lua_method("FuzzyEq", "boolean", nullptr),
+        lua_method("Lerp", "Vector3", nullptr),
+        lua_method("Max", "Vector3", nullptr),
+        lua_method("Min", "Vector3", nullptr),
+    };
+
+    const LuaField enum_item_fields[] = {
+        lua_property("Name", "string", false, nullptr, nullptr),
+        lua_property("Value", "number", false, nullptr, nullptr),
+        lua_property("EnumType", "table", false, nullptr, nullptr),
+    };
+    register_lua_class("Vector3", nullptr, vector_fields,
+                       static_cast<int>(sizeof(vector_fields) / sizeof(vector_fields[0])));
+    register_lua_class("EnumItem", nullptr, enum_item_fields,
+                       static_cast<int>(sizeof(enum_item_fields) / sizeof(enum_item_fields[0])));
     lua_note_result("Vector3", "new", "Vector3", false);
     lua_note_result("Vector3", "FromNormalId", "Vector3", false);
     lua_note_result("Vector3", "FromAxis", "Vector3", false);

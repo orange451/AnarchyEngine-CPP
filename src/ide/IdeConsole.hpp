@@ -22,7 +22,8 @@ class CommandField;
 // The command line runs against the live data model, stopped or running.
 // A submitted command is shown in full, then run after that line has been drawn.
 // Each log row shows the wall time the line was recorded. A printed table opens in place.
-// The log clears when a play session starts.
+// The log clears when a play session starts, and from Clear Output: a right-click
+// on the log, or Cmd+K (Ctrl+K elsewhere) while the log or the command line has focus.
 class IdeConsole : public IdePane {
     friend class CommandField;
 
@@ -33,10 +34,16 @@ public:
     bool commandFocused(const jadefx::Node* node) const;
     void applyUndoText();
     void noteCommandEdit();
+    // Empties the log. Output printed before this does not come back.
+    void clearOutput();
+    // Null until the log is right-clicked.
+    jadefx::Menu* contextMenu() const { return menu_.get(); }
+    ConsoleLog& log() const { return *log_; }
 
 protected:
     void layoutChildren() override;
     void renderContent(jadefx::UiRenderer& renderer, float opacity) override;
+    void handleKey(jadefx::KeyEvent& event) override;
     void onClose() override;
 
 private:
@@ -46,6 +53,7 @@ private:
     };
 
     void pull();
+    void showMenu(double x, double y);
     void submitCommand();
     void runPending();
     void refresh_completion(bool force);
@@ -54,6 +62,7 @@ private:
     engine_core::Engine& engine_;
     std::shared_ptr<ConsoleLog> log_;
     std::shared_ptr<jadefx::TextField> command_;
+    std::shared_ptr<jadefx::Menu> menu_;
     CompletionPopup completion_;
     std::deque<PendingCommand> pending_;
     std::uint64_t epoch_ = 0;

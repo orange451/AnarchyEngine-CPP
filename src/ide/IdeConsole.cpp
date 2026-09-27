@@ -30,11 +30,13 @@ IdeConsole::IdeConsole(engine_core::Engine& engine) : IdePane("Console", true), 
     setMinSize(80, 64);
     log_ = jadefx::make<ConsoleLog>();
     Fill(*log_);
+    log_->setOnContextMenuRequested([this](const jadefx::MouseEvent& event) { showMenu(event.x, event.y); });
 
     auto field = std::make_shared<CommandField>();
     field->console = this;
     command_ = field;
     command_->setPromptText("Lua Command Line");
+    command_->getClassList().add("console-command");
     command_->setStyle("width: 100%;");
     command_->setOnAction([this](jadefx::ActionEvent&) { submitCommand(); });
     completion_.setOnAccept([this] { accept_completion(true); });
@@ -71,7 +73,53 @@ void IdeConsole::layoutChildren() {
     StackPane::layoutChildren();
 }
 
-void IdeConsole::onClose() { completion_.dismiss(); }
+void IdeConsole::onClose() {
+    completion_.dismiss();
+    if (menu_) {
+        menu_->hide();
+    }
+}
+
+void IdeConsole::handleKey(jadefx::KeyEvent& event) {
+    // Keys bubble here from the log and the command line.
+    if (event.pressed && !event.repeat && event.shortcut() && !event.shift && !event.alt &&
+        event.key == jadefx::Key::K) {
+        clearOutput();
+        event.consume();
+        return;
+    }
+    IdePane::handleKey(event);
+}
+
+void IdeConsole::showMenu(double x, double y) {
+    jadefx::Scene* scene = getScene();
+    if (scene == nullptr) {
+        return;
+    }
+    if (menu_) {
+        menu_->hide();
+    }
+    menu_ = jadefx::make<jadefx::Menu>();
+    auto clear = jadefx::make<jadefx::MenuItem>("Clear Output");
+    // Shown on the row. handleKey is what runs it, since this menu is not in the menu bar.
+    clear->setAccelerator(jadefx::Key::K, jadefx::Key::ModControl);
+    clear->setOnAction([this](jadefx::ActionEvent&) { clearOutput(); });
+    menu_->getItems().add(std::move(clear));
+    menu_->show(*scene, x, y);
+}
+
+void IdeConsole::clearOutput() {
+    if (!log_) {
+        return;
+    }
+    // Take what is already printed first, so it does not show up after the clear.
+    if (!pulling_) {
+        pulling_ = true;
+        pull();
+        pulling_ = false;
+    }
+    log_->clearLog();
+}
 
 void IdeConsole::renderContent(jadefx::UiRenderer& renderer, float opacity) {
     command_painted_ = true;

@@ -1995,6 +1995,87 @@ void testNestedTable() {
     expect_hover(declared, nullptr, nullptr, nullptr, "hover module declaration");
 }
 
+// Regression for d25981a: rows copied before their names were set left every member
+// of a class unnamed. Every registered class has named members, and the value types
+// complete and hover theirs.
+void testRegisteredMembers() {
+    std::vector<std::string> classes;
+    engine_core::lua_class_names(classes);
+    if (classes.empty()) {
+        fail("no classes are registered");
+    }
+    for (const std::string& name : classes) {
+        std::vector<engine_core::LuaField> fields;
+        engine_core::lua_class_own_members(name.c_str(), fields);
+        for (const engine_core::LuaField& field : fields) {
+            if (field.name == nullptr || field.name[0] == '\0') {
+                fail(name + " has a member with no name");
+            }
+        }
+    }
+    const char* members[][2] = {
+        {"Vector3", "X"},       {"Vector3", "Y"},        {"Vector3", "Z"},     {"Vector3", "Magnitude"},
+        {"Vector3", "Unit"},    {"Vector3", "Dot"},      {"Vector3", "Cross"}, {"Vector3", "Lerp"},
+        {"EnumItem", "Name"},   {"EnumItem", "Value"},   {"EnumItem", "EnumType"},
+    };
+    for (const auto& row : members) {
+        const engine_core::LuaField* field = engine_core::lua_class_find(row[0], row[1]);
+        if (field == nullptr || field->name == nullptr || std::string_view(field->name) != row[1]) {
+            fail(std::string(row[0]) + "." + row[1] + " is not registered by name");
+        }
+    }
+
+    const ide::CompletionList vector = at_end("local v = Vector3.new(1, 2, 3)\nlocal m = v.");
+    expect_has(vector, "X", "Vector3 local X");
+    expect_has(vector, "Magnitude", "Vector3 local Magnitude");
+    const ide::CompletionList method = at_end("local v = Vector3.new(1, 2, 3)\nlocal m = v:");
+    expect_has(method, "Dot", "Vector3 local :Dot");
+    expect_has(method, "Lerp", "Vector3 local :Lerp");
+    const ide::CompletionList axis = at_end("local v = Vector3.xAxis.");
+    expect_has(axis, "Unit", "Vector3.xAxis.Unit");
+
+    const std::string read = "local v = Vector3.new(1, 2, 3)\nlocal m = v.Magnitude\n";
+    expect_hover(ide::hover_luau(read, find_nth(read, "Magnitude", 0)), "Magnitude: number", nullptr, nullptr,
+                 "hover Vector3 Magnitude");
+    const std::string unit = "local v = Vector3.new(1, 2, 3)\nlocal u = v.Unit\n";
+    expect_hover(ide::hover_luau(unit, find_nth(unit, "Unit", 0)), "Unit: Vector3", nullptr, nullptr,
+                 "hover Vector3 Unit");
+}
+
+// Regression for 4cf379e: a table constructor in the script being edited, not only in a
+// required ModuleScript, gives its keys to completion and hover.
+void testScriptTableKeys() {
+    const std::string deep = "local t = { a = { b = { c = 1, d = \"x\" } } }\n";
+    expect_has(at_end(deep + "local x = t."), "a", "script table a");
+    expect_has(at_end(deep + "local x = t.a."), "b", "script table a.b");
+    const ide::CompletionList leaves = at_end(deep + "local x = t.a.b.");
+    expect_has(leaves, "c", "script table a.b.c");
+    expect_has(leaves, "d", "script table a.b.d");
+    expect_hover(ide::hover_luau(deep, find_nth(deep, "c", 0)), "c: number", nullptr, nullptr,
+                 "hover a key three tables deep");
+    expect_hover(ide::hover_luau(deep, find_nth(deep, "d", 0)), "d: string", nullptr, nullptr,
+                 "hover a string key where it is written");
+    const std::string used = deep + "local x = t.a.b.c\n";
+    expect_hover(ide::hover_luau(used, find_nth(used, "c", 1)), "c: number", nullptr, nullptr,
+                 "hover a key where it is read");
+
+    // A key whose value is a function completes as a call.
+    const ide::CompletionList calls = at_end("local t = { run = function(a) return a end, n = 2 }\nt.");
+    expect_has(calls, "run", "function key");
+    expect_call(calls, "run", true, "function key is a call");
+    expect_call(calls, "n", false, "number key is not a call");
+
+    // A table built inside a function.
+    expect_has(at_end("local function f()\n    local inner = { speed = 3 }\n    local x = inner."), "speed",
+               "table inside a function");
+
+    // Typing inside a constructor that is not closed yet still completes names around it.
+    expect_has(at_end("local alpha = 1\nlocal t = {\n    k = alp"), "alpha", "local inside an unclosed table");
+    expect_has(at_end("local alpha = 1\nlocal t = {\n    k = { j = alp"), "alpha", "local inside two unclosed tables");
+    // A later, closed table after an unclosed-looking line still reads its keys.
+    expect_has(at_end("local t = { a = 1 }\nlocal u = { b = t.a }\nlocal x = u."), "b", "table reading another table");
+}
+
 int RunLuauCompleteTests() {
     try {
         testLibraries();
@@ -2016,6 +2097,8 @@ int RunLuauCompleteTests() {
         testSkipped();
         testDotChildren();
         testNestedTable();
+        testRegisteredMembers();
+        testScriptTableKeys();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());
     }

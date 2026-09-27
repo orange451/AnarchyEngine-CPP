@@ -1296,6 +1296,24 @@ void testHover() {
                  "a Connect parameter");
     expect_hover(ide::hover_luau(connected, find_nth(connected, "processed", 0)), "processed: boolean", nullptr, nullptr,
                  "a Connect parameter's declaration");
+    // The `function` keyword of a callback names the signal that runs it.
+    expect_hover(ide::hover_luau(connected, find_nth(connected, "function", 0)),
+                 "function(input: InputObject, processed: boolean)",
+                 "callback, runs each time UserInputService.InputBegan fires", "gameProcessedEvent", "a Connect callback");
+    const char* dotted =
+        "local signal = game:GetService(\"UserInputService\").InputEnded\nsignal.Connect(signal, function(input) end)";
+    expect_hover(ide::hover_luau(dotted, find_nth(dotted, "function", 0)), "function(input: InputObject)",
+                 "callback, runs each time UserInputService.InputEnded fires", nullptr, "a callback passed with a dot");
+    const char* lambda = "local double = function(x: number)\n    return x * 2\nend";
+    expect_hover(ide::hover_luau(lambda, find_nth(lambda, "function", 0)), "function(x: number): number",
+                 "anonymous function", nullptr, "an anonymous function");
+    const char* deferred = "task.defer(function() end)";
+    expect_hover(ide::hover_luau(deferred, find_nth(deferred, "function", 0)), "function()",
+                 "anonymous function, returns nothing", nullptr, "an anonymous function returning nothing");
+    const char* named = "local function greet() end";
+    if (ide::hover_luau(named, find_nth(named, "function", 0)).found) {
+        fail("the keyword of a named function shows a tip");
+    }
 
     const char* untyped = "local value\nprint(value)";
     const ide::HoverInfo blank = ide::hover_luau(untyped, find_nth(untyped, "value", 1));

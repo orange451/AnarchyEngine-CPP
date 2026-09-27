@@ -63,6 +63,9 @@ struct Shape {
     bool saw_return = false;
     bool first_none = false;
     std::vector<std::string> first_pack;
+    // Connect: the signal it is called on, as `UserInputService.InputBegan`.
+    // A function written as that call's callback keeps the same name.
+    std::string signal;
     std::vector<std::pair<std::string, Shape*>> fields;
 };
 
@@ -919,6 +922,9 @@ public:
             shape->callback_arg = field->callback_arg;
             if (field->callback_arg) {
                 shape->signal_params = base->signal_params;
+                if (!base->callee_owner.empty() && !base->callee_name.empty()) {
+                    shape->signal = base->callee_owner + "." + base->callee_name;
+                }
             }
             shape->result_type = field->type_name != nullptr ? field->type_name : "";
             shape->callee_owner = base->class_name;
@@ -1202,6 +1208,8 @@ public:
     }
 
     HoverInfo describe(int code_index);
+    // The `function` keyword of an anonymous function: its parameters, and the signal it is connected to.
+    HoverInfo describe_function(int token_index);
 
     void parse_until(int end) {
         limit_ = end;
@@ -2351,6 +2359,8 @@ private:
         // Only a function written directly as the argument takes the parameters.
         std::vector<Param> callback = std::move(callback_params_);
         callback_params_.clear();
+        std::string signal = std::move(callback_signal_);
+        callback_signal_.clear();
         if (is_name()) {
             const std::string name = take_name();
             return lookup(name);
@@ -2372,8 +2382,14 @@ private:
             return value_shape("string");
         }
         if (is_kw("function")) {
+            const int keyword = i_;
             advance();
-            return parse_function(true, false, &callback);
+            Shape* fn = parse_function(true, false, &callback);
+            fn->signal = std::move(signal);
+            if (retain_) {
+                function_keys_.emplace_back(keyword, fn);
+            }
+            return fn;
         }
         if (is(Token::LParen)) {
             advance();
@@ -2405,7 +2421,7 @@ private:
         // Connect's callback is the first argument, or the second when the
         // signal is passed as self with a dot.
         int callback_at = -1;
-        if (callee != nullptr && callee->callback_arg && !callee->signal_params.empty()) {
+        if (callee != nullptr && callee->callback_arg) {
             callback_at = IsColonCall(tokens_, open) ? 0 : 1;
         }
         if (!is(Token::RParen) && !at_end()) {
@@ -2418,9 +2434,11 @@ private:
                 }
                 if (argument_index == callback_at) {
                     callback_params_ = callee->signal_params;
+                    callback_signal_ = callee->signal;
                 }
                 Shape* argument = parse_expr();
                 callback_params_.clear();
+                callback_signal_.clear();
                 ++argument_index;
                 if (leading) {
                     first = argument;
@@ -2538,6 +2556,10 @@ private:
     // A signal's parameters, set while its Connect argument is parsed. A
     // function written there takes them for the parameters it leaves unannotated.
     std::vector<Param> callback_params_;
+    // The signal those parameters come from, as `UserInputService.InputBegan`.
+    std::string callback_signal_;
+    // Hover: the `function` token of each anonymous function, with the function.
+    std::vector<std::pair<int, Shape*>> function_keys_;
     // Hover: the `name` token of each `name = value` in a table constructor, with its value.
     std::vector<std::pair<int, Shape*>> table_keys_;
 
@@ -2827,7 +2849,9 @@ Written DescribeSymbol(const Shape* shape, const std::string& name, bool bound, 
             nothing = true;
         }
         info.found = true;
-        info.title = "function " + QualifiedName(shape, name) + JoinParams(params, variadic);
+        // An anonymous function has no name: `function(a, b)`.
+        const std::string qualified = QualifiedName(shape, name);
+        info.title = (qualified.empty() ? "function" : "function " + qualified) + JoinParams(params, variadic);
         if (known && !ret.empty()) {
             info.title += ": ";
             info.title += ret;
@@ -2902,6 +2926,9 @@ HoverInfo Resolver::describe(int code_index) {
             info.title = "nil";
             return info;
         }
+        if (token.text == "function") {
+            return describe_function(token_index);
+        }
         return {};
     }
     if (token.kind != Token::Name) {
@@ -2962,6 +2989,41 @@ HoverInfo Resolver::describe(int code_index) {
     info.title = written.title;
     info.detail = written.detail;
     info.summary = written.summary;
+    return info;
+}
+
+HoverInfo Resolver::describe_function(int token_index) {
+    retain_ = true;
+    parse_until(static_cast<int>(tokens_.size()));
+    retain_ = false;
+    Shape* fn = nullptr;
+    for (const auto& key : function_keys_) {
+        if (key.first == token_index) {
+            fn = key.second;
+        }
+    }
+    // `function name()` is described by hovering its name.
+    if (fn == nullptr) {
+        return {};
+    }
+    const Written written = DescribeSymbol(fn, "", true, false);
+    const Token& token = tokens_[static_cast<std::size_t>(token_index)];
+    HoverInfo info;
+    info.found = true;
+    info.begin = token.begin;
+    info.end = token.end;
+    info.title = written.title;
+    if (!fn->signal.empty()) {
+        // A callback: say what calls it, and what that signal passes.
+        info.detail = "callback, runs each time " + fn->signal + " fires";
+        const std::size_t dot = fn->signal.rfind('.');
+        const engine_core::LuaDoc doc = engine_core::lua_symbol_doc(fn->signal.substr(0, dot), fn->signal.substr(dot + 1));
+        if (doc.found) {
+            info.summary = doc.summary;
+        }
+    } else {
+        info.detail = written.detail.empty() ? "anonymous function" : "anonymous function, " + written.detail;
+    }
     return info;
 }
 

@@ -688,11 +688,13 @@ void TestFilterClearButton() {
         const std::vector<jadefx::Node*> found = rig.explorer->getElementsByClassName("explorer-filter-clear");
         return found.empty() ? nullptr : found.front();
     };
-    Expect(clear_button() != nullptr && !clear_button()->isVisible(), "the clear button is hidden while the filter is empty");
+    Expect(clear_button() != nullptr && clear_button()->isVisible() && clear_button()->isDisabled(),
+           "the clear button shows disabled while the filter is empty");
     rig.filter()->requestFocus();
     rig.type_filter("bet", 0.1);
     jadefx::Node* button = clear_button();
-    Expect(button != nullptr && button->isVisible(), "the clear button shows once there is filter text");
+    Expect(button != nullptr && button->isVisible() && !button->isDisabled(),
+           "the clear button is enabled once there is filter text");
     if (button == nullptr) {
         return;
     }
@@ -709,7 +711,7 @@ void TestFilterClearButton() {
     Expect(field->getText().empty(), "the clear button empties the filter");
     Expect(!field->isFocused(), "the clear button takes the focus from the filter");
     Expect(rig.cell("Alpha") != nullptr, "every row shows again");
-    Expect(!button->isVisible(), "the clear button hides again");
+    Expect(button->isVisible() && button->isDisabled(), "the clear button is disabled again");
 }
 
 void TestFilterKeepsHiddenSelection() {

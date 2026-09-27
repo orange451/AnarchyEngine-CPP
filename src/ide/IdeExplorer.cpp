@@ -66,20 +66,19 @@ const char* ActionIcon(std::string_view name) {
     return nullptr;
 }
 
-// An icon on a chip: the + on the hovered row, and the X that clears the
-// filter. The icon stays 16px; the chip is the hit target.
-class ChipButton : public jadefx::StackPane {
+// The + drawn on the hovered row. The icon stays 16px; the chip is the hit target.
+class InsertButton : public jadefx::StackPane {
 public:
-    ChipButton(const char* file, const char* fallback) {
+    InsertButton() {
         setAlignment(jadefx::Pos::Center);
         setCursor(jadefx::Cursor::Pointer);
-        if (std::shared_ptr<jadefx::ImageView> icon = icon_file(file)) {
+        if (std::shared_ptr<jadefx::ImageView> icon = icon_file("plus-small.png")) {
             icon->setMouseTransparent(true);
             icon->setPrefSize(16, 16);
             icon->setMinSize(16, 16);
             getChildren().add(std::move(icon));
         } else {
-            auto plus = jadefx::make<jadefx::Label>(fallback);
+            auto plus = jadefx::make<jadefx::Label>("+");
             plus->setMouseTransparent(true);
             plus->setAlignment(jadefx::Pos::Center);
             plus->setTextFill(jadefx::Color::rgb8(95, 99, 104));
@@ -148,6 +147,26 @@ private:
 // The clear button's chip, and its gap from the field's right edge.
 constexpr double kClearSize = 20;
 constexpr double kClearInset = 4;
+const jadefx::Color kClearOn = jadefx::Color::rgb8(95, 99, 104);
+const jadefx::Color kClearOff = jadefx::Color::rgb8(200, 203, 207);
+const jadefx::Color kClearHover = jadefx::Color::rgb8(232, 240, 254);
+
+// The × at the filter's right end, the same glyph as a tab's close button.
+// place_clear disables it while the filter is empty.
+class ClearButton : public jadefx::Label {
+public:
+    ClearButton() : Label("\u00d7") {
+        getClassList().add("explorer-filter-clear");
+        setAlignment(jadefx::Pos::Center);
+        setFont(jadefx::Font("Open Sans", 18.f));
+        setOnMouseEntered([this](const jadefx::MouseEvent&) {
+            if (!isDisabled()) {
+                setBackground(kClearHover);
+            }
+        });
+        setOnMouseExited([this](const jadefx::MouseEvent&) { setBackground(jadefx::Color::transparent()); });
+    }
+};
 
 std::string Lower(std::string text) {
     for (char& unit : text) {
@@ -200,7 +219,7 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
     }
     // Row clicks bubble here after the row has selected itself.
     tree_->setOnMouseClicked([this](const jadefx::MouseEvent& event) { clicked(event); });
-    insert_button_ = jadefx::make<ChipButton>("plus-small.png", "+");
+    insert_button_ = jadefx::make<InsertButton>();
     insert_button_->setOnMouseClicked([this](const jadefx::MouseEvent&) { open_insert(); });
     tree_->setHoverAccessory(insert_button_);
     filter_field_ = jadefx::make<FilterField>([this] { leave_filter(); });
@@ -210,10 +229,11 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
     column->setCenter(tree_);
     getChildren().add(column);
     // After the column, so it draws over the field and is hit first.
-    filter_clear_ = jadefx::make<ChipButton>("Cross.png", "x");
-    filter_clear_->getClassList().add("explorer-filter-clear");
-    filter_clear_->setVisible(false);
+    filter_clear_ = jadefx::make<ClearButton>();
     filter_clear_->setOnMouseClicked([this](const jadefx::MouseEvent&) {
+        if (filter_field_->getText().empty()) {
+            return;
+        }
         filter_field_->clear();
         leave_filter();
     });
@@ -769,10 +789,14 @@ void IdeExplorer::leave_filter() {
 }
 
 void IdeExplorer::place_clear() {
-    const bool show = !filter_field_->getText().empty() && filter_field_->getHeight() > 0;
-    filter_clear_->setVisible(show);
-    if (!show) {
-        return;
+    const bool on = !filter_field_->getText().empty();
+    if (on == filter_clear_->isDisabled()) {
+        filter_clear_->setDisable(!on);
+        filter_clear_->setCursor(on ? jadefx::Cursor::Pointer : jadefx::Cursor::Default);
+        filter_clear_->setTextFill(on ? kClearOn : kClearOff);
+        if (!on) {
+            filter_clear_->setBackground(jadefx::Color::transparent());
+        }
     }
     const double x = filter_field_->getAbsoluteX() + filter_field_->getWidth() - kClearInset - kClearSize;
     const double y = filter_field_->getAbsoluteY() + (filter_field_->getHeight() - kClearSize) * 0.5;

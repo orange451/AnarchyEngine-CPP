@@ -68,8 +68,8 @@ struct ExplorerHost {
 // The field above the tree filters it. A row shows when its Name contains the
 // typed text, ignoring case, or when a row under it does. While filtering, the
 // branches leading to matches are open. An empty field shows every row again,
-// with the branches opened or closed as they were before. The X at the
-// field's right end empties it. Escape in the field, or the X, moves the keys
+// with the branches opened or closed as they were before. The × at the
+// field's right end empties it, and is greyed out while there is nothing to clear. Escape in the field, or the X, moves the keys
 // to the tree. Escape there clears the selection.
 class IdeExplorer : public IdePane {
 public:
@@ -113,7 +113,7 @@ private:
     void poll_filter();
     // Takes the focus from the filter field and gives it to the tree.
     void leave_filter();
-    // Lays the clear button over the filter field's right end. Hidden while the field is empty.
+    // Lays the clear button over the filter field's right end. Disabled while the field is empty.
     void place_clear();
     // Fills filtered_ from scratch_ with the matches and the rows above them.
     void filter_rows();
@@ -175,7 +175,7 @@ private:
     Snapshot committed_;
     Snapshot filtered_;
     std::shared_ptr<jadefx::TextField> filter_field_;
-    std::shared_ptr<jadefx::Node> filter_clear_;
+    std::shared_ptr<jadefx::Label> filter_clear_;
     // The field's text as last read, and that text in lower case. Empty when not filtering.
     std::string filter_typed_;
     std::string filter_;

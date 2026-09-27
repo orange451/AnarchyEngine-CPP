@@ -111,6 +111,12 @@ public:
     // 3-argument form matches the public contract. Origin defaults to
     // Simulation. SnapshotOverride is recorded and dropped.
     void emit(SignalId signal, InstanceId id, Field field, WriteOrigin origin = WriteOrigin::Simulation);
+    // A host signal event that carries a number for its handlers, such as which
+    // InputService record it is. Handlers read it with payload().
+    void emit_payload(SignalId signal, std::uint64_t payload);
+    // The payload of the event whose handlers are running. 0 outside a handler,
+    // and for an event emitted without one.
+    std::uint64_t payload() const { return payload_; }
 
     // Runs handlers for events already queued. SimulationThread only.
     // Events enqueued by those handlers wait for the next drain.
@@ -156,6 +162,7 @@ private:
         InstanceId owner = 0;
         Field field = Field::Transform;
         WriteOrigin origin = WriteOrigin::Simulation;
+        std::uint64_t payload = 0;
         bool live = true;
     };
 
@@ -191,6 +198,7 @@ private:
     Event pop();
     void seal_instance(InstanceId id);
     void invoke_connections(Signal& signal, const Event& event);
+    void post(const Event& event);
 
     EventPolicy policy_ = EventPolicy::Deferred;
     TaskScheduler* scheduler_ = nullptr;
@@ -215,6 +223,7 @@ private:
     std::uint64_t drain_serial_ = 0;
     std::uint64_t counts_[3] = {};
     std::uint64_t suppressed_overrides_ = 0;
+    std::uint64_t payload_ = 0;
     // Snapshot of connection indices for the active invoke. Nested invokes append.
     std::vector<std::uint32_t> invoke_list_;
 };

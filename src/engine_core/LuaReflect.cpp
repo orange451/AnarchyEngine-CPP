@@ -210,6 +210,9 @@ int dummy_index(lua_State* state) {
                                 lua_setfield(inner, -2, member.name);
                                 continue;
                             }
+                            if (member.type_name == nullptr || std::strcmp(member.type_name, "Signal") != 0) {
+                                continue;
+                            }
                             lua_newtable(inner);
                             lua_pushstring(inner, "Signal");
                             lua_setfield(inner, -2, "__class");
@@ -550,8 +553,21 @@ bool lua_library_members(std::string_view global_name, std::vector<LuaSymbol>& o
     if (state == nullptr) {
         return false;
     }
-    lua_pushlstring(state, global_name.data(), global_name.size());
+    // A dotted name is a table inside a library, such as Enum.KeyCode.
+    const std::size_t dot = global_name.find('.');
+    const std::string_view head = global_name.substr(0, dot);
+    lua_pushlstring(state, head.data(), head.size());
     lua_rawget(state, LUA_GLOBALSINDEX);
+    std::size_t start = dot;
+    while (start != std::string_view::npos && lua_istable(state, -1)) {
+        const std::size_t next = global_name.find('.', start + 1);
+        const std::string_view part =
+            global_name.substr(start + 1, next == std::string_view::npos ? std::string_view::npos : next - start - 1);
+        lua_pushlstring(state, part.data(), part.size());
+        lua_rawget(state, -2);
+        lua_remove(state, -2);
+        start = next;
+    }
     if (!lua_istable(state, -1)) {
         lua_pop(state, 1);
         return false;

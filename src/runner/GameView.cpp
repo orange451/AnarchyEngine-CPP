@@ -167,6 +167,64 @@ void GameView::sceneChanged(jadefx::Scene* previous) {
     graphicsReady_ = false;
 }
 
+float GameView::localX(double x) const { return static_cast<float>(x - getAbsoluteX()); }
+
+float GameView::localY(double y) const { return static_cast<float>(y - getAbsoluteY()); }
+
+void GameView::handleMousePressed(const jadefx::MouseEvent& event) {
+    // Keys go to the focused node, so a click is how a player gives the game the keyboard.
+    requestFocus();
+    if (game_ != nullptr) {
+        game_->input().post_mouse_button(event.button, true, localX(event.x), localY(event.y));
+    }
+    IdePane::handleMousePressed(event);
+}
+
+void GameView::handleMouseReleased(const jadefx::MouseEvent& event) {
+    if (game_ != nullptr) {
+        game_->input().post_mouse_button(event.button, false, localX(event.x), localY(event.y));
+    }
+    IdePane::handleMouseReleased(event);
+}
+
+void GameView::handleMouseDragged(const jadefx::MouseEvent& event) {
+    if (game_ != nullptr) {
+        game_->input().post_mouse_move(localX(event.x), localY(event.y));
+    }
+    IdePane::handleMouseDragged(event);
+}
+
+void GameView::handleMouseMoved(const jadefx::MouseEvent& event) {
+    if (game_ != nullptr) {
+        game_->input().post_mouse_move(localX(event.x), localY(event.y));
+    }
+    IdePane::handleMouseMoved(event);
+}
+
+void GameView::handleScroll(jadefx::ScrollEvent& event) {
+    if (game_ != nullptr) {
+        game_->input().post_wheel(localX(event.x), localY(event.y), static_cast<float>(event.deltaY));
+    }
+    IdePane::handleScroll(event);
+}
+
+void GameView::handleKey(jadefx::KeyEvent& event) {
+    // A held key repeats. InputBegan fires once, on the first press.
+    if (game_ != nullptr && !event.repeat) {
+        const int key = engine_core::InputService::key_code_from_glfw(event.key);
+        game_->input().post_key(key, event.pressed);
+    }
+    IdePane::handleKey(event);
+}
+
+void GameView::handleFocusLost() {
+    // The release will go to whatever has focus now, so end the held keys here.
+    if (game_ != nullptr) {
+        game_->input().post_focus_lost();
+    }
+    IdePane::handleFocusLost();
+}
+
 bool GameView::ensureGraphics() {
     if (graphicsAttempted_) {
         return graphicsReady_;

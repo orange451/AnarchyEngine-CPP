@@ -957,7 +957,8 @@ public:
                 shape->callee_owner = base->library;
                 shape->callee_name = name;
                 if (symbol.type_name == "table") {
-                    shape->library = name;
+                    // A table inside a library, such as Enum.KeyCode, is found by its path.
+                    shape->library = base->library + "." + name;
                     return shape;
                 }
                 if (symbol.type_name == "vector" || symbol.type_name == "string") {

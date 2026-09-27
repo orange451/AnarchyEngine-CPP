@@ -3644,3 +3644,188 @@ TEST_CASE("S31 Script and ModuleScript share LuaSource, and only Script has Enab
     REQUIRE_FALSE(off.enabled());
     REQUIRE(module.source() == "return 7\n");
 }
+
+namespace {
+
+// One step as Engine runs it: PreAnimation delivers the frame's input, then Heartbeat.
+void input_frame(ScriptRig& rig) {
+    rig.scheduler.run_phase(engine_core::Phase::PreAnimation, 1.0 / 60.0);
+    rig.game.events().drain();
+    rig.frames(1);
+}
+
+bool has_line(const engine_core::ScriptRuntime::OutputBatch& batch, const std::string& text) {
+    for (const engine_core::ScriptRuntime::OutputLine& line : batch.lines) {
+        if (line.text == text) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
+TEST_CASE("InputService maps GLFW keys to Roblox KeyCode values", "[input]") {
+    using engine_core::InputService;
+    REQUIRE(InputService::key_code_from_glfw(87) == 119);   // W
+    REQUIRE(InputService::key_code_from_glfw(65) == 97);    // A
+    REQUIRE(InputService::key_code_from_glfw(32) == 32);    // Space
+    REQUIRE(InputService::key_code_from_glfw(49) == 49);    // One
+    REQUIRE(InputService::key_code_from_glfw(256) == 27);   // Escape
+    REQUIRE(InputService::key_code_from_glfw(257) == 13);   // Return
+    REQUIRE(InputService::key_code_from_glfw(265) == 273);  // Up
+    REQUIRE(InputService::key_code_from_glfw(294) == 286);  // F5
+    REQUIRE(InputService::key_code_from_glfw(340) == 304);  // LeftShift
+    REQUIRE(InputService::key_code_from_glfw(320) == 256);  // KeypadZero
+    REQUIRE(InputService::key_code_from_glfw(-1) == 0);
+    REQUIRE(InputService::key_code_from_glfw(161) == 0);
+}
+
+TEST_CASE("InputService keeps posts only while active and ends held input", "[input]") {
+    SimRole role;
+    engine_core::EventQueue events;
+    engine_core::InputService input;
+    input.bind(events);
+
+    // Inactive: dropped.
+    input.post_key(119, true);
+    input.dispatch(events);
+    REQUIRE_FALSE(input.key_down(119));
+
+    input.set_active(true);
+    input.post_key(119, true);
+    input.post_key(119, true);  // a repeat of a key already down
+    input.post_key(97, false);  // a release of a key never pressed
+    input.post_mouse_button(1, true, 4.f, 5.f);
+    input.post_mouse_move(10.f, 20.f);
+    input.post_mouse_move(15.f, 22.f);
+    input.dispatch(events);
+    REQUIRE(input.key_down(119));
+    REQUIRE_FALSE(input.key_down(97));
+    REQUIRE(input.keys_down() == std::vector<int>{119});
+    REQUIRE(input.button_down(1));
+    REQUIRE(input.mouse_location().x == 15.f);
+    REQUIRE(input.mouse_location().y == 22.f);
+
+    // Losing focus ends everything still down.
+    input.post_focus_lost();
+    input.dispatch(events);
+    REQUIRE_FALSE(input.key_down(119));
+    REQUIRE_FALSE(input.button_down(1));
+
+    // Turning it off drops what was queued.
+    input.post_key(120, true);
+    input.set_active(false);
+    input.dispatch(events);
+    REQUIRE_FALSE(input.key_down(120));
+    input.release(events);
+}
+
+TEST_CASE("InputService signals give scripts an InputObject", "[input]") {
+    ScriptRig rig;
+    engine_core::DataModel& model = rig.game;
+    REQUIRE(engine_core::lua_service_known("InputService"));
+    const std::string definitions = engine_core::lua_analysis_definitions();
+    REQUIRE(definitions.find("declare extern type InputService with") != std::string::npos);
+    REQUIRE(definitions.find("read InputBegan: Signal") != std::string::npos);
+    REQUIRE(definitions.find("function IsKeyDown(self, keyCode: any): boolean") != std::string::npos);
+    REQUIRE(definitions.find("function GetKeysPressed(self): {InputObject}") != std::string::npos);
+    REQUIRE(definitions.find("declare extern type InputObject with") != std::string::npos);
+
+    add_script(model, "Input", R"(
+        local input = game:GetService("InputService")
+        input.InputBegan:Connect(function(io, processed)
+            print("began", io.KeyCode, io.UserInputType, io.UserInputState, processed,
+                input:IsKeyDown(Enum.KeyCode.W), io.KeyCode == Enum.KeyCode.W)
+            if io.KeyCode == Enum.KeyCode.E then
+                local keys = input:GetKeysPressed()
+                print("keys", #keys, keys[1].KeyCode.Name, keys[2].KeyCode.Name, input:IsKeyDown("E"))
+            end
+            if io.UserInputType == Enum.UserInputType.MouseButton1 then
+                print("click", io.Position.X, io.Position.Y, input:IsMouseButtonPressed(Enum.UserInputType.MouseButton1),
+                    #input:GetMouseButtonsPressed())
+            end
+        end)
+        input.InputChanged:Connect(function(io)
+            print("changed", io.UserInputType.Name, io.Position.X, io.Position.Y, io.Delta.X, io.Delta.Y,
+                input:GetMouseLocation().X)
+        end)
+        input.InputEnded:Connect(function(io)
+            print("ended", io.KeyCode.Name, io.UserInputType.Name, io.UserInputState.Name)
+        end)
+        task.spawn(function()
+            local io, processed = input.InputBegan:Wait()
+            print("waited", io.KeyCode.Name, processed)
+        end)
+        print("ready", input.KeyboardEnabled, input.MouseEnabled, input.TouchEnabled,
+            (pcall(function() return input:IsKeyDown(Enum.NormalId.Top) end)))
+    )");
+    // Input before Test is not the session's.
+    model.input().post_key(119, true);
+    rig.game.start_simulation();
+    REQUIRE(model.input().active());
+    rig.frames(1);
+    INFO(rig.runtime.last_error());
+    const engine_core::ScriptRuntime::OutputBatch ready = rig.runtime.drain_output();
+    REQUIRE(has_line(ready, "ready\ttrue\ttrue\tfalse\tfalse\n"));
+
+    model.input().post_key(119, true);
+    input_frame(rig);
+    const engine_core::ScriptRuntime::OutputBatch began = rig.runtime.drain_output();
+    INFO(rig.runtime.last_error());
+    REQUIRE(has_line(began,
+                     "began\tEnum.KeyCode.W\tEnum.UserInputType.Keyboard\tEnum.UserInputState.Begin\tfalse\ttrue\ttrue\n"));
+    REQUIRE(has_line(began, "waited\tW\tfalse\n"));
+
+    model.input().post_key(101, true);
+    input_frame(rig);
+    REQUIRE(has_line(rig.runtime.drain_output(), "keys\t2\tW\tE\ttrue\n"));
+
+    model.input().post_mouse_move(10.f, 20.f);
+    model.input().post_mouse_move(15.f, 22.f);
+    input_frame(rig);
+    const engine_core::ScriptRuntime::OutputBatch moved = rig.runtime.drain_output();
+    REQUIRE(moved.lines.size() == 1);
+    REQUIRE(has_line(moved, "changed\tMouseMovement\t15\t22\t15\t22\t15\n"));
+
+    model.input().post_mouse_button(0, true, 15.f, 22.f);
+    input_frame(rig);
+    REQUIRE(has_line(rig.runtime.drain_output(), "click\t15\t22\ttrue\t1\n"));
+
+    model.input().post_wheel(15.f, 22.f, -1.f);
+    input_frame(rig);
+    REQUIRE(has_line(rig.runtime.drain_output(), "changed\tMouseWheel\t15\t22\t0\t0\t15\n"));
+
+    model.input().post_key(119, false);
+    model.input().post_focus_lost();
+    input_frame(rig);
+    const engine_core::ScriptRuntime::OutputBatch ended = rig.runtime.drain_output();
+    REQUIRE(has_line(ended, "ended\tW\tKeyboard\tEnd\n"));
+    REQUIRE(has_line(ended, "ended\tE\tKeyboard\tEnd\n"));
+    REQUIRE(has_line(ended, "ended\tUnknown\tMouseButton1\tEnd\n"));
+    REQUIRE(model.input().keys_down().empty());
+
+    // Stop turns the service off and forgets what it held.
+    model.input().post_key(119, true);
+    rig.game.stop_simulation();
+    REQUIRE_FALSE(model.input().active());
+    REQUIRE_FALSE(model.input().key_down(119));
+}
+
+TEST_CASE("InputService keeps a release when the queue is full", "[input]") {
+    SimRole role;
+    engine_core::EventQueue events;
+    engine_core::InputService input;
+    input.set_active(true);
+    input.post_key(119, true);
+    // A paused test never dispatches. Movement fills the queue.
+    for (int i = 0; i < 2000; ++i) {
+        input.post_mouse_button(1, i % 2 == 0, 0.f, 0.f);
+    }
+    input.post_key(97, true);  // dropped: the queue is full
+    input.post_key(119, false);
+    input.dispatch(events);
+    REQUIRE_FALSE(input.key_down(119));
+    REQUIRE_FALSE(input.key_down(97));
+    REQUIRE_FALSE(input.button_down(1));
+}

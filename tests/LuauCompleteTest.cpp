@@ -280,6 +280,23 @@ void testVector3() {
     const ide::CompletionList enums = at_end("Enum.");
     expect_has(enums, "NormalId", "Enum.NormalId");
     expect_has(enums, "Axis", "Enum.Axis");
+    expect_has(enums, "KeyCode", "Enum.KeyCode");
+    expect_has(enums, "UserInputType", "Enum.UserInputType");
+    expect_has(enums, "UserInputState", "Enum.UserInputState");
+    const ide::CompletionList keys = at_end("Enum.KeyCode.");
+    expect_has(keys, "W", "Enum.KeyCode.W");
+    expect_has(keys, "LeftShift", "Enum.KeyCode.LeftShift");
+    const ide::CompletionList faces = at_end("Enum.NormalId.");
+    expect_has(faces, "Top", "Enum.NormalId.Top");
+    const ide::CompletionList item = at_end("Enum.KeyCode.W.");
+    expect_has(item, "Name", "Enum.KeyCode.W.Name");
+
+    const ide::CompletionList input = at_end("local input = game:GetService(\"InputService\")\ninput.");
+    expect_has(input, "InputBegan", "InputService.InputBegan");
+    expect_has(input, "InputEnded", "InputService.InputEnded");
+    const ide::CompletionList input_method = at_end("local input = game:GetService(\"InputService\")\ninput:");
+    expect_has(input_method, "IsKeyDown", "InputService:IsKeyDown");
+    expect_has(input_method, "GetMouseLocation", "InputService:GetMouseLocation");
 }
 
 void testModule() {

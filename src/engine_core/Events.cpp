@@ -226,7 +226,11 @@ void EventQueue::invoke(const Event& event) {
     if (signal == nullptr) {
         return;
     }
+    // Immediate events nest, so the outer event's payload comes back after.
+    const std::uint64_t outer = payload_;
+    payload_ = event.payload;
     invoke_connections(*signal, event);
+    payload_ = outer;
 }
 
 void EventQueue::invoke_connections(Signal& signal, const Event& event) {
@@ -296,7 +300,25 @@ void EventQueue::emit(SignalId signal, InstanceId id, Field field, WriteOrigin o
     event.field = field;
     event.origin = origin;
     event.live = true;
+    post(event);
+}
 
+void EventQueue::emit_payload(SignalId signal, std::uint64_t payload) {
+    Signal* live = resolve(signal);
+    if (live == nullptr || live->listeners_ <= 0) {
+        return;
+    }
+    ++counts_[origin_index(WriteOrigin::Simulation)];
+    Event event;
+    event.signal = signal;
+    event.owner = live->owner_;
+    event.field = Field::Name;
+    event.payload = payload;
+    event.live = true;
+    post(event);
+}
+
+void EventQueue::post(const Event& event) {
     const bool on_sim = thread_role() == ThreadRole::Simulation;
     const bool run_now = policy_ == EventPolicy::Immediate && on_sim && immediate_depth_ < kImmediateCap;
     if (!run_now) {

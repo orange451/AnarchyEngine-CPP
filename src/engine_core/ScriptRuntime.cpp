@@ -1,6 +1,7 @@
 #include "ScriptRuntime.hpp"
 
 #include "Contract.hpp"
+#include "Enum.hpp"
 #include "Folder.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
@@ -48,13 +49,20 @@ const char* kSignalMeta = "AE.Signal";
 const char* kConnectionMeta = "AE.Connection";
 const char* kThreadMeta = "AE.Thread";
 const char* kServiceMeta = "AE.Service";
+const char* kInputObjectMeta = "AE.InputObject";
 
 // Which service a GetService userdata stands for. The name is also its class.
 struct ServiceUd {
     int kind = 0;
 };
 
-const char* kServiceClasses[] = {"RunService", "Selection"};
+const char* kServiceClasses[] = {"RunService", "Selection", "InputService"};
+constexpr int kInputServiceKind = 2;
+
+// SignalUd kinds. An instance's Changed, a RunService phase, or an InputService signal.
+constexpr int kSignalChanged = 0;
+constexpr int kSignalPhase = 1;
+constexpr int kSignalInput = 2;
 constexpr int kServiceKinds = static_cast<int>(sizeof(kServiceClasses) / sizeof(kServiceClasses[0]));
 
 int service_kind(const char* name) {
@@ -248,6 +256,15 @@ struct ScriptBindings {
     static int service_index(lua_State* state);
     static int selection_get(lua_State* state);
     static int selection_set(lua_State* state);
+    // The keys and buttons are the service's, read on the simulation thread.
+    static InputService* input_service(lua_State* state);
+    static int input_is_key_down(lua_State* state);
+    static int input_is_mouse_button_pressed(lua_State* state);
+    static int input_get_keys_pressed(lua_State* state);
+    static int input_get_mouse_buttons_pressed(lua_State* state);
+    static int input_get_mouse_location(lua_State* state);
+    static int input_object_index(lua_State* state);
+    static int input_object_tostring(lua_State* state);
     static int thread_index(lua_State* state);
 };
 
@@ -266,6 +283,7 @@ void ScriptRuntime::attach(DataModel& game, TaskScheduler& scheduler) {
     game.events().set_after_drain([this] { on_end_of_drain(); });
     game.events().set_script_gate(&ScriptRuntime::gate, this);
     run_service_.bind(game.events());
+    game.input().bind(game.events());
     scheduler.bind(Phase::PreAnimation, [this](double dt) { fire_phase(Phase::PreAnimation, dt); });
     scheduler.bind(Phase::PreSimulation, [this](double dt) { fire_phase(Phase::PreSimulation, dt); });
     scheduler.bind(Phase::PostSimulation, [this](double dt) { fire_phase(Phase::PostSimulation, dt); });
@@ -280,6 +298,8 @@ void ScriptRuntime::detach() {
     close_vm();
     if (game_ != nullptr) {
         run_service_.release(game_->events());
+        game_->input().release(game_->events());
+        game_->input().set_active(false);
         game_->set_stop_hook(nullptr);
         game_->set_start_hook(nullptr);
         game_->set_script_host(nullptr);
@@ -510,6 +530,9 @@ void ScriptRuntime::on_start() {
     if (game_ == nullptr) {
         return;
     }
+    // Input from before Test, or from the last session, is not this session's.
+    game_->input().reset();
+    game_->input().set_active(true);
     std::vector<Script*> scripts;
     game_->for_each_instance([&](DataModel& instance) {
         if (auto* script = dynamic_cast<Script*>(&instance)) {
@@ -524,6 +547,8 @@ void ScriptRuntime::on_start() {
 void ScriptRuntime::on_stop() {
     if (game_ != nullptr) {
         game_->events().disconnect_scripted();
+        game_->input().set_active(false);
+        game_->input().reset();
     }
     close_vm();
 }
@@ -587,7 +612,14 @@ void open_host_libraries(lua_State* state) {
     lua_pushcfunction(state, &ScriptBindings::service_index, "index");
     lua_setfield(state, service_mt, "__index");
     lua_setreadonly(state, service_mt, 1);
-    lua_pop(state, 5);
+
+    const int input_mt = metatable(kInputObjectMeta);
+    lua_pushcfunction(state, &ScriptBindings::input_object_index, "index");
+    lua_setfield(state, input_mt, "__index");
+    lua_pushcfunction(state, &ScriptBindings::input_object_tostring, "tostring");
+    lua_setfield(state, input_mt, "__tostring");
+    lua_setreadonly(state, input_mt, 1);
+    lua_pop(state, 6);
 
     // One userdata per instance, as Roblox does, so == and rawequal hold and an
     // instance works as a table key. Weak values let unused handles collect.
@@ -628,6 +660,7 @@ void open_host_libraries(lua_State* state) {
     lua_newtable(state);
     lua_setglobal(state, "shared");
 
+    open_enum(state);
     open_vector3(state);
 }
 
@@ -1327,32 +1360,93 @@ void ScriptRuntime::fire_phase(Phase phase, double dt) {
     if (!open_ || closing_ || game_ == nullptr) {
         return;
     }
+    // A frame's input reaches scripts first, in the drain after PreAnimation,
+    // so everything later in the step reads the keys as they are now.
+    if (phase == Phase::PreAnimation) {
+        game_->input().dispatch(game_->events());
+    }
     run_service_.fire(game_->events(), phase, dt);
 }
 
-void ScriptRuntime::invoke_listener(int ref, InstanceId script, std::uint32_t generation, const char* text,
-                                    bool pass_number, double number) {
+ScriptRuntime::Thread* ScriptRuntime::start_listener(int ref, InstanceId script, std::uint32_t generation) {
     if (!open_ || closing_ || state_ == nullptr) {
-        return;
+        return nullptr;
     }
     if (!gate(script, generation, this)) {
-        return;
+        return nullptr;
     }
     Thread& thread = new_thread(script, generation);
     lua_getref(state_, ref);
     lua_xmove(state_, thread.co, 1);
-    if (text != nullptr) {
-        lua_pushstring(thread.co, text);
-        thread.nargs = 1;
-    } else if (pass_number) {
-        lua_pushnumber(thread.co, number);
-        thread.nargs = 1;
-    }
+    return &thread;
+}
+
+void ScriptRuntime::run_listener(Thread& thread) {
     if (lua_depth_ > 0) {
         ready(thread);
         return;
     }
     resume_one(thread);
+}
+
+void ScriptRuntime::invoke_listener(int ref, InstanceId script, std::uint32_t generation, const char* text,
+                                    bool pass_number, double number) {
+    Thread* thread = start_listener(ref, script, generation);
+    if (thread == nullptr) {
+        return;
+    }
+    if (text != nullptr) {
+        lua_pushstring(thread->co, text);
+        thread->nargs = 1;
+    } else if (pass_number) {
+        lua_pushnumber(thread->co, number);
+        thread->nargs = 1;
+    }
+    run_listener(*thread);
+}
+
+namespace {
+
+void push_input_object(lua_State* state, const InputRecord& record) {
+    auto* ud = static_cast<InputRecord*>(lua_newuserdata(state, sizeof(InputRecord)));
+    new (ud) InputRecord(record);
+    luaL_getmetatable(state, kInputObjectMeta);
+    lua_setmetatable(state, -2);
+}
+
+}  // namespace
+
+void ScriptRuntime::invoke_listener_input(int ref, InstanceId script, std::uint32_t generation,
+                                          const InputRecord& record) {
+    Thread* thread = start_listener(ref, script, generation);
+    if (thread == nullptr) {
+        return;
+    }
+    push_input_object(thread->co, record);
+    lua_pushboolean(thread->co, record.processed ? 1 : 0);
+    thread->nargs = 2;
+    run_listener(*thread);
+}
+
+void ScriptRuntime::make_ready_input(Thread& thread, const InputRecord& record) {
+    if (thread.dead || thread.co == nullptr) {
+        return;
+    }
+    sleep_.remove(&thread);
+    defer_.remove(&thread);
+    forget_child_wait(thread);
+    push_input_object(thread.co, record);
+    lua_pushboolean(thread.co, record.processed ? 1 : 0);
+    thread.nargs = 2;
+    thread.park = Thread::Park::None;
+    ready(thread);
+}
+
+const InputRecord* ScriptRuntime::delivered_input() const {
+    if (game_ == nullptr) {
+        return nullptr;
+    }
+    return game_->input().record(game_->events().payload());
 }
 
 int ScriptRuntime::require_module(lua_State* state, InstanceId module_id) {
@@ -1717,7 +1811,7 @@ void push_registered(lua_State* state, ScriptRuntime* runtime, const LuaSlot& sl
     case LuaSlot::Kind::Signal: {
         auto* signal = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
         *signal = SignalUd{};
-        signal->kind = 0;
+        signal->kind = kSignalChanged;
         signal->id = id;
         signal->world = world;
         luaL_getmetatable(state, kSignalMeta);
@@ -2000,23 +2094,29 @@ int ScriptBindings::signal_connect(lua_State* state) {
         const int ref = lua_ref(state, -1);
         lua_pop(state, 1);
         Signal* signal = nullptr;
-        if (ud->kind == 0) {
+        if (ud->kind == kSignalChanged) {
             if (runtime->resolve_id(ud->id, ud->world) == nullptr) {
                 luaL_error(state, "instance is gone");
             }
             signal = &runtime->game_->changed(ud->id);
+        } else if (ud->kind == kSignalInput) {
+            signal = runtime->game_->input().signal(static_cast<InputService::Kind>(ud->phase));
         } else {
             signal = runtime->run_service_.signal(static_cast<Phase>(ud->phase));
-            if (signal == nullptr) {
-                luaL_error(state, "signal is not available");
-            }
+        }
+        if (signal == nullptr) {
+            luaL_error(state, "signal is not available");
         }
         const InstanceId script = caller->script;
         const std::uint32_t generation = caller->generation;
         Connection connection = signal->connect_scripted(
             [runtime, ref, script, generation, kind = ud->kind](InstanceId, Field field) {
-                if (kind == 0) {
+                if (kind == kSignalChanged) {
                     runtime->invoke_listener(ref, script, generation, field_name(field), false, 0);
+                } else if (kind == kSignalInput) {
+                    if (const InputRecord* record = runtime->delivered_input()) {
+                        runtime->invoke_listener_input(ref, script, generation, *record);
+                    }
                 } else {
                     runtime->invoke_listener(ref, script, generation, nullptr, true, runtime->run_service_.dt());
                 }
@@ -2041,33 +2141,41 @@ int ScriptBindings::signal_wait(lua_State* state) {
         if (ud->blocked) {
             luaL_error(state, "%s is not available to scripts", ud->blocked_name);
         }
-        // kind 0 is an instance Changed signal. Other kinds are simulation phases
-        // on RunService (Heartbeat and the other sim steps). Render phases are
+        // An instance Changed signal, a simulation phase on RunService (Heartbeat
+        // and the other sim steps), or an InputService signal. Render phases are
         // already rejected above.
         Signal* signal = nullptr;
-        const bool phase = ud->kind != 0;
-        if (phase) {
-            signal = runtime->run_service_.signal(static_cast<Phase>(ud->phase));
-            if (signal == nullptr) {
-                luaL_error(state, "signal is not available");
-            }
-        } else {
+        const int kind = ud->kind;
+        if (kind == kSignalChanged) {
             if (runtime->resolve_id(ud->id, ud->world) == nullptr) {
                 luaL_error(state, "instance is gone");
             }
             signal = &runtime->game_->changed(ud->id);
+        } else if (kind == kSignalInput) {
+            signal = runtime->game_->input().signal(static_cast<InputService::Kind>(ud->phase));
+        } else {
+            signal = runtime->run_service_.signal(static_cast<Phase>(ud->phase));
+        }
+        if (signal == nullptr) {
+            luaL_error(state, "signal is not available");
         }
         thread->park = ScriptRuntime::Thread::Park::Signal;
         signal->connect_scripted(
-            [runtime, thread, phase](InstanceId, Field field) {
+            [runtime, thread, kind](InstanceId, Field field) {
                 if (runtime->closing_ || thread->dead) {
                     thread->dead = true;
                     return;
                 }
-                if (phase) {
-                    runtime->make_ready_number(*thread, runtime->run_service_.dt());
-                } else {
+                if (kind == kSignalChanged) {
                     runtime->make_ready(*thread, field_name(field));
+                } else if (kind == kSignalInput) {
+                    if (const InputRecord* record = runtime->delivered_input()) {
+                        runtime->make_ready_input(*thread, *record);
+                    } else {
+                        runtime->make_ready(*thread, nullptr);
+                    }
+                } else {
+                    runtime->make_ready_number(*thread, runtime->run_service_.dt());
                 }
             },
             thread->script, thread->generation, true);
@@ -2134,9 +2242,19 @@ int ScriptBindings::service_index(lua_State* state) {
         push_method(state, *field);
         return 1;
     }
+    if (field->read != nullptr) {
+        ScriptRuntime* runtime = runtime_from(state);
+        LuaSlot slot;
+        if (runtime == nullptr || runtime->game_ == nullptr || !field->read(*runtime->game_, *runtime->game_, slot)) {
+            lua_pushnil(state);
+            return 1;
+        }
+        push_registered(state, runtime, slot, 0, runtime->game_->world_generation());
+        return 1;
+    }
     auto* ud = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
     *ud = SignalUd{};
-    ud->kind = 1;
+    ud->kind = service->kind == kInputServiceKind ? kSignalInput : kSignalPhase;
     ud->phase = field->tag;
     ud->blocked = field->blocked;
     if (field->blocked && field->name != nullptr) {
@@ -2197,6 +2315,116 @@ int ScriptBindings::selection_set(lua_State* state) {
     });
 }
 
+InputService* ScriptBindings::input_service(lua_State* state) {
+    luaL_checkudata(state, 1, kServiceMeta);
+    ScriptRuntime* runtime = runtime_from(state);
+    if (runtime == nullptr || runtime->game_ == nullptr) {
+        return nullptr;
+    }
+    return &runtime->game_->input();
+}
+
+int ScriptBindings::input_is_key_down(lua_State* state) {
+    return lua_guard(state, [&] {
+        InputService* input = input_service(state);
+        const int key = check_enum_arg(state, 2, key_code_enum());
+        lua_pushboolean(state, input != nullptr && input->key_down(key) ? 1 : 0);
+        return 1;
+    });
+}
+
+int ScriptBindings::input_is_mouse_button_pressed(lua_State* state) {
+    return lua_guard(state, [&] {
+        InputService* input = input_service(state);
+        const int type = check_enum_arg(state, 2, user_input_type_enum());
+        const int button = type - InputService::kMouseButton1;
+        lua_pushboolean(state, input != nullptr && input->button_down(button) ? 1 : 0);
+        return 1;
+    });
+}
+
+int ScriptBindings::input_get_keys_pressed(lua_State* state) {
+    return lua_guard(state, [&] {
+        InputService* input = input_service(state);
+        lua_newtable(state);
+        if (input == nullptr) {
+            return 1;
+        }
+        const Vec3 mouse = input->mouse_location();
+        int index = 1;
+        for (int key : input->keys_down()) {
+            InputRecord record;
+            record.type = InputService::kKeyboard;
+            record.state = InputService::kBegin;
+            record.key = key;
+            record.position = mouse;
+            push_input_object(state, record);
+            lua_rawseti(state, -2, index);
+            ++index;
+        }
+        return 1;
+    });
+}
+
+int ScriptBindings::input_get_mouse_buttons_pressed(lua_State* state) {
+    return lua_guard(state, [&] {
+        InputService* input = input_service(state);
+        lua_newtable(state);
+        if (input == nullptr) {
+            return 1;
+        }
+        int index = 1;
+        for (int button = 0; button < 3; ++button) {
+            if (!input->button_down(button)) {
+                continue;
+            }
+            InputRecord record;
+            record.type = InputService::kMouseButton1 + button;
+            record.state = InputService::kBegin;
+            record.position = input->mouse_location();
+            push_input_object(state, record);
+            lua_rawseti(state, -2, index);
+            ++index;
+        }
+        return 1;
+    });
+}
+
+int ScriptBindings::input_get_mouse_location(lua_State* state) {
+    return lua_guard(state, [&] {
+        InputService* input = input_service(state);
+        const Vec3 mouse = input != nullptr ? input->mouse_location() : Vec3{};
+        lua_pushvector(state, mouse.x, mouse.y, 0.f);
+        return 1;
+    });
+}
+
+int ScriptBindings::input_object_index(lua_State* state) {
+    const auto* record = static_cast<const InputRecord*>(luaL_checkudata(state, 1, kInputObjectMeta));
+    const char* key = luaL_checkstring(state, 2);
+    const std::string_view name = key != nullptr ? key : "";
+    if (name == "KeyCode") {
+        push_enum_item(state, key_code_enum(), record->key);
+    } else if (name == "UserInputType") {
+        push_enum_item(state, user_input_type_enum(), record->type);
+    } else if (name == "UserInputState") {
+        push_enum_item(state, user_input_state_enum(), record->state);
+    } else if (name == "Position") {
+        lua_pushvector(state, record->position.x, record->position.y, record->position.z);
+    } else if (name == "Delta") {
+        lua_pushvector(state, record->delta.x, record->delta.y, record->delta.z);
+    } else {
+        luaL_error(state, "%s is not a valid member of InputObject", key != nullptr ? key : "");
+    }
+    return 1;
+}
+
+int ScriptBindings::input_object_tostring(lua_State* state) {
+    luaL_checkudata(state, 1, kInputObjectMeta);
+    lua_pushstring(state, "InputObject");
+    return 1;
+}
+
 int ScriptBindings::thread_index(lua_State* state) {
     lua_pushnil(state);
     return 1;
@@ -2243,6 +2471,19 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         lua_method("Set", "nil", reinterpret_cast<void*>(&ScriptBindings::selection_set)),
     };
     register_lua_class("Selection", nullptr, selection, 2);
+
+    // InputService.cpp declares the class, its signals, and the service.
+    const LuaField input[] = {
+        lua_method("IsKeyDown", "boolean", reinterpret_cast<void*>(&ScriptBindings::input_is_key_down)),
+        lua_method("IsMouseButtonPressed", "boolean",
+                   reinterpret_cast<void*>(&ScriptBindings::input_is_mouse_button_pressed)),
+        lua_method("GetKeysPressed", "InputObject", reinterpret_cast<void*>(&ScriptBindings::input_get_keys_pressed),
+                   false, false, true),
+        lua_method("GetMouseButtonsPressed", "InputObject",
+                   reinterpret_cast<void*>(&ScriptBindings::input_get_mouse_buttons_pressed), false, false, true),
+        lua_method("GetMouseLocation", "Vector3", reinterpret_cast<void*>(&ScriptBindings::input_get_mouse_location)),
+    };
+    register_lua_class("InputService", nullptr, input, static_cast<int>(sizeof(input) / sizeof(input[0])));
 }
 
 }  // namespace engine_core

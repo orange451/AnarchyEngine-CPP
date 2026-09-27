@@ -137,6 +137,7 @@ endif()
 # and repeats them on the link line.
 # A target that links engine_core gets all four and their include directories.
 add_library(engine_datatypes STATIC
+    src/engine_datatypes/Enum.cpp
     src/engine_datatypes/Vector3.cpp
 )
 add_library(engine_instances STATIC
@@ -150,6 +151,7 @@ add_library(engine_instances STATIC
 add_library(engine_services STATIC
     src/engine_services/ChangeHistoryService.cpp
     src/engine_services/Game.cpp
+    src/engine_services/InputService.cpp
     src/engine_services/RunService.cpp
     src/engine_services/SelectionService.cpp
 )
@@ -183,7 +185,7 @@ target_link_libraries(engine_datatypes PUBLIC engine_core)
 target_link_libraries(engine_instances PUBLIC engine_core)
 target_link_libraries(engine_services PUBLIC engine_core)
 target_link_libraries(engine_core PRIVATE Luau.Compiler Luau.VM Luau.Analysis)
-# Vector3 is a Luau vector.
+# Vector3 is a Luau vector, and Enum items are Luau userdata.
 target_link_libraries(engine_datatypes PRIVATE Luau.VM)
 
 set(ENGINE_CORE_TSAN OFF CACHE BOOL "Instrument the engine packages and sandbox with ThreadSanitizer")

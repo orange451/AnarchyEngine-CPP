@@ -632,8 +632,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Vector3", "Max", "The component-wise maximum with other.", "Vector3", false, {P("other", "Vector3")});
     add("Vector3", "Min", "The component-wise minimum with other.", "Vector3", false, {P("other", "Vector3")});
 
-    add("", "Enum", "Named constants. NormalId and Axis are used by Vector3.FromNormalId and Vector3.FromAxis.", nullptr, false,
-        {});
+    add("", "Enum",
+        "Named constants. NormalId and Axis are used by Vector3.FromNormalId and Vector3.FromAxis. KeyCode, "
+        "UserInputType, and UserInputState describe an InputObject.",
+        nullptr, false, {});
     add("EnumItem", "Name", "The item's name.", "string", false, {});
     add("EnumItem", "Value", "The item's numeric value.", "number", false, {});
     add("EnumItem", "EnumType", "The enum this item belongs to.", "table", false, {});
@@ -690,7 +692,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Instance", false, {P("name", "string"), P("timeout", "number?")});
     add("DataModel", "IsA", "True when this instance's class is className or a subclass of it.", "boolean", false,
         {P("className", "string")});
-    add("Game", "GetService", "The service with this name: RunService or Selection.", "Instance", false,
+    add("Game", "GetService", "The service with this name: RunService, Selection, or InputService.", "Instance", false,
         {P("className", "string")});
 
     add("LuaSource", "Source", "The Luau source this instance holds.", "string", false, {});
@@ -716,6 +718,38 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Selection", "Get", "The selected instances, in the order they were selected.", "{Instance}", false, {});
     add("Selection", "Set", "Selects these instances and nothing else. The explorer shows the same selection.", nullptr,
         false, {P("selection", "{Instance}")});
+
+    add("InputService", "InputBegan",
+        "Fires when a key or mouse button goes down in the scene view. The arguments are the InputObject and "
+        "gameProcessedEvent.",
+        "Signal", false, {});
+    add("InputService", "InputChanged",
+        "Fires when the mouse moves or the wheel turns over the scene view. The arguments are the InputObject and "
+        "gameProcessedEvent.",
+        "Signal", false, {});
+    add("InputService", "InputEnded",
+        "Fires when a key or mouse button comes back up, or the scene view loses focus while it is down. The arguments "
+        "are the InputObject and gameProcessedEvent.",
+        "Signal", false, {});
+    add("InputService", "IsKeyDown", "True while this key is held.", "boolean", false, {P("keyCode", "Enum.KeyCode")});
+    add("InputService", "IsMouseButtonPressed", "True while this mouse button is held.", "boolean", false,
+        {P("mouseButton", "Enum.UserInputType")});
+    add("InputService", "GetKeysPressed", "An InputObject for each key held, in the order they went down.", "{InputObject}",
+        false, {});
+    add("InputService", "GetMouseButtonsPressed", "An InputObject for each mouse button held.", "{InputObject}", false, {});
+    add("InputService", "GetMouseLocation", "The pointer in the scene view, in points from its top-left corner. z is 0.",
+        "Vector3", false, {});
+    add("InputService", "KeyboardEnabled", "True when there is a keyboard.", "boolean", false, {});
+    add("InputService", "MouseEnabled", "True when there is a mouse.", "boolean", false, {});
+    add("InputService", "TouchEnabled", "True when there is a touch screen.", "boolean", false, {});
+    add("InputObject", "KeyCode", "The key, or Enum.KeyCode.Unknown for mouse input.", "EnumItem", false, {});
+    add("InputObject", "UserInputType", "What made the input: Keyboard, MouseButton1, MouseMovement, and so on.",
+        "EnumItem", false, {});
+    add("InputObject", "UserInputState", "Begin, Change, or End.", "EnumItem", false, {});
+    add("InputObject", "Position", "The pointer in the scene view when the input happened. z is 0.", "Vector3", false,
+        {});
+    add("InputObject", "Delta", "How far the mouse moved. For MouseWheel, z is how far the wheel turned.", "Vector3", false,
+        {});
 
     add("RunService", "Heartbeat", "Fires on every simulation step. The argument dt is the step length in seconds.", "Signal",
         false, {});

@@ -1,5 +1,6 @@
 #include "Vector3.hpp"
 
+#include "Enum.hpp"
 #include "LuaApi.hpp"
 
 #include "lualib.h"
@@ -12,14 +13,6 @@ namespace engine_core {
 namespace {
 
 static_assert(std::is_same<LUA_VECTOR_TYPE, float>::value, "Vector3 is stored as float");
-
-const char* kEnumItemMeta = "AE.EnumItem";
-
-struct EnumItemUd {
-    const char* type_name = nullptr;
-    const char* name = nullptr;
-    int value = 0;
-};
 
 // Roblox scales the tolerance by |component| + 1, using the receiver's component.
 // An exact match is equal, including infinities.
@@ -52,30 +45,6 @@ const float* check_vector3(lua_State* state, int index) {
         luaL_typeerrorL(state, index, "Vector3");
     }
     return value;
-}
-
-void* matching_udata(lua_State* state, int index, const char* name) {
-    void* data = lua_touserdata(state, index);
-    if (data == nullptr || !lua_getmetatable(state, index)) {
-        return nullptr;
-    }
-    luaL_getmetatable(state, name);
-    const bool match = lua_rawequal(state, -1, -2) != 0;
-    lua_pop(state, 2);
-    return match ? data : nullptr;
-}
-
-const EnumItemUd* enum_item(lua_State* state, int index) {
-    return static_cast<const EnumItemUd*>(matching_udata(state, index, kEnumItemMeta));
-}
-
-// `stored` is the name on the item ("NormalId"). `expected` is what scripts see ("Enum.NormalId").
-const EnumItemUd* check_enum_item(lua_State* state, int index, const char* stored, const char* expected) {
-    const EnumItemUd* item = enum_item(state, index);
-    if (item == nullptr || item->type_name == nullptr || std::strcmp(item->type_name, stored) != 0) {
-        luaL_typeerrorL(state, index, expected);
-    }
-    return item;
 }
 
 int vector3_abs(lua_State* state) {
@@ -254,9 +223,9 @@ const Axis kAxes[] = {
 };
 
 int vector3_from_normal(lua_State* state) {
-    const EnumItemUd* item = check_enum_item(state, 1, "NormalId", "Enum.NormalId");
+    const int value = check_enum_arg(state, 1, normal_id_enum());
     for (const Normal& normal : kNormals) {
-        if (item->name != nullptr && std::strcmp(item->name, normal.name) == 0) {
+        if (normal.value == value) {
             lua_pushvector(state, normal.x, normal.y, normal.z);
             return 1;
         }
@@ -265,94 +234,14 @@ int vector3_from_normal(lua_State* state) {
 }
 
 int vector3_from_axis(lua_State* state) {
-    const EnumItemUd* item = check_enum_item(state, 1, "Axis", "Enum.Axis");
+    const int value = check_enum_arg(state, 1, axis_enum());
     for (const Axis& axis : kAxes) {
-        if (item->name != nullptr && std::strcmp(item->name, axis.name) == 0) {
+        if (axis.value == value) {
             lua_pushvector(state, axis.x, axis.y, axis.z);
             return 1;
         }
     }
     luaL_argerror(state, 1, "Enum.Axis expected");
-}
-
-int enum_item_index(lua_State* state) {
-    auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
-    const char* key = luaL_checkstring(state, 2);
-    if (key == nullptr || item == nullptr) {
-        lua_pushnil(state);
-        return 1;
-    }
-    if (std::strcmp(key, "Name") == 0) {
-        lua_pushstring(state, item->name != nullptr ? item->name : "");
-        return 1;
-    }
-    if (std::strcmp(key, "Value") == 0) {
-        lua_pushinteger(state, item->value);
-        return 1;
-    }
-    if (std::strcmp(key, "EnumType") == 0) {
-        lua_getglobal(state, "Enum");
-        if (lua_istable(state, -1) && item->type_name != nullptr) {
-            lua_getfield(state, -1, item->type_name);
-            lua_remove(state, -2);
-            return 1;
-        }
-        lua_pop(state, 1);
-        lua_pushnil(state);
-        return 1;
-    }
-    luaL_error(state, "attempt to index EnumItem with '%s'", key);
-}
-
-int enum_item_tostring(lua_State* state) {
-    auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
-    const char* type_name = item != nullptr && item->type_name != nullptr ? item->type_name : "";
-    const char* name = item != nullptr && item->name != nullptr ? item->name : "";
-    lua_pushfstring(state, "Enum.%s.%s", type_name, name);
-    return 1;
-}
-
-void push_enum_item(lua_State* state, const char* type_name, const char* name, int value) {
-    auto* item = static_cast<EnumItemUd*>(lua_newuserdata(state, sizeof(EnumItemUd)));
-    item->type_name = type_name;
-    item->name = name;
-    item->value = value;
-    luaL_getmetatable(state, kEnumItemMeta);
-    lua_setmetatable(state, -2);
-}
-
-void install_enum_items(lua_State* state) {
-    luaL_newmetatable(state, kEnumItemMeta);
-    lua_pushcfunction(state, enum_item_index, "index");
-    lua_setfield(state, -2, "__index");
-    lua_pushcfunction(state, enum_item_tostring, "tostring");
-    lua_setfield(state, -2, "__tostring");
-    lua_pushliteral(state, "EnumItem");
-    lua_setfield(state, -2, "__type");
-    lua_setreadonly(state, -1, 1);
-    lua_pop(state, 1);
-}
-
-void install_enum(lua_State* state) {
-    install_enum_items(state);
-    lua_newtable(state);
-    lua_newtable(state);
-    for (const Normal& normal : kNormals) {
-        push_enum_item(state, "NormalId", normal.name, normal.value);
-        lua_setfield(state, -2, normal.name);
-    }
-    lua_setreadonly(state, -1, 1);
-    lua_setfield(state, -2, "NormalId");
-
-    lua_newtable(state);
-    for (const Axis& axis : kAxes) {
-        push_enum_item(state, "Axis", axis.name, axis.value);
-        lua_setfield(state, -2, axis.name);
-    }
-    lua_setreadonly(state, -1, 1);
-    lua_setfield(state, -2, "Axis");
-    lua_setreadonly(state, -1, 1);
-    lua_setglobal(state, "Enum");
 }
 
 void install_vector_metatable(lua_State* state) {
@@ -426,16 +315,8 @@ ANARCHY_LUA_REGISTER(register_vector3_lua) {
         lua_method("Max", "Vector3", nullptr),
         lua_method("Min", "Vector3", nullptr),
     };
-
-    const LuaField enum_item_fields[] = {
-        lua_property("Name", "string", false, nullptr, nullptr),
-        lua_property("Value", "number", false, nullptr, nullptr),
-        lua_property("EnumType", "table", false, nullptr, nullptr),
-    };
     register_lua_class("Vector3", nullptr, vector_fields,
                        static_cast<int>(sizeof(vector_fields) / sizeof(vector_fields[0])));
-    register_lua_class("EnumItem", nullptr, enum_item_fields,
-                       static_cast<int>(sizeof(enum_item_fields) / sizeof(enum_item_fields[0])));
     lua_note_result("Vector3", "new", "Vector3", false);
     lua_note_result("Vector3", "FromNormalId", "Vector3", false);
     lua_note_result("Vector3", "FromAxis", "Vector3", false);
@@ -447,7 +328,6 @@ void open_vector3(lua_State* state) {
     if (state == nullptr) {
         return;
     }
-    install_enum(state);
     install_vector_metatable(state);
     install_vector3_library(state);
 }

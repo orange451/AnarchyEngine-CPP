@@ -37,7 +37,8 @@ class PropertiesPanel;
 // paused. Shift+F5 is Stop.
 // Explorer rows open Cut, Paste, and Rename. A script also has Edit, and a
 // double-click runs it. Edit docks a script editor on the scene view's tab strip.
-// The explorer edits a name in place and hands the result to rename.
+// The explorer edits a name in place and hands the result to rename. F shows
+// the selection in every explorer: the branches above it open, and it scrolls into view.
 // Properties, under the right-hand explorer, edits the selection's properties.
 // File opens and saves a project folder through the system folder dialog.
 // Until the first Save As, the place has no folder. New, Open, and closing the
@@ -111,6 +112,8 @@ private:
     void routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene);
     // Delete on a focused explorer deletes the selected instances. Text fields keep the key.
     void routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene);
+    // F, outside a text field, shows the selection in every explorer.
+    void routeReveal(jadefx::KeyEvent& event, jadefx::Scene& scene);
     void noteScriptFocus();
     void adoptDock(const std::shared_ptr<IdeDock>& dock);
     void onTabDrag(IdeDock& from, const jadefx::TabDrag& drag);
@@ -167,6 +170,7 @@ private:
     jadefx::Scene* scene_ = nullptr;
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeScriptEditor>> open_scripts_;
     std::weak_ptr<class IdeConsole> console_;
+    std::vector<std::weak_ptr<class IdeExplorer>> explorers_;
     // Edits the selection's properties. Docked under the right-hand explorer.
     std::unique_ptr<PropertiesPanel> properties_;
     InputRouter undo_router_;

@@ -118,6 +118,35 @@ private:
     std::function<void()> cancel_;
 };
 
+// The filter above the tree. Escape empties it.
+class FilterField : public jadefx::TextField {
+public:
+    FilterField() {
+        getClassList().add("explorer-filter");
+        setPromptText("Filter");
+        setStyle("width: 100%; border-width: 0 0 1px 0;");
+    }
+
+protected:
+    void handleKey(jadefx::KeyEvent& event) override {
+        if (event.pressed && event.key == jadefx::Key::Escape && !getText().empty()) {
+            event.consume();
+            clear();
+            return;
+        }
+        TextField::handleKey(event);
+    }
+};
+
+std::string Lower(std::string text) {
+    for (char& unit : text) {
+        if (unit >= 'A' && unit <= 'Z') {
+            unit = static_cast<char>(unit - 'A' + 'a');
+        }
+    }
+    return text;
+}
+
 }  // namespace
 
 void IdeExplorer::Snapshot::clear() {
@@ -163,8 +192,12 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
     insert_button_ = jadefx::make<InsertButton>();
     insert_button_->setOnMouseClicked([this](const jadefx::MouseEvent&) { open_insert(); });
     tree_->setHoverAccessory(insert_button_);
-    Fill(*tree_);
-    getChildren().add(tree_);
+    filter_field_ = jadefx::make<FilterField>();
+    auto column = jadefx::make<jadefx::BorderPane>();
+    Fill(*column);
+    column->setTop(filter_field_);
+    column->setCenter(tree_);
+    getChildren().add(column);
     // After the tree, so it draws over the rows and is hit first.
     rename_field_ = jadefx::make<RenameField>([this] { finish_rename(false); });
     rename_field_->setOnAction([this](jadefx::ActionEvent&) { finish_rename(true); });
@@ -243,7 +276,7 @@ bool IdeExplorer::run_on_selection(std::string_view action) {
     }
     std::vector<engine_core::InstanceId> ids;
     for (engine_core::InstanceId id : selected_) {
-        if (existing_row(id) != nullptr && offers(id, action)) {
+        if (shown_row(id) != nullptr && offers(id, action)) {
             ids.push_back(id);
         }
     }
@@ -498,7 +531,7 @@ void IdeExplorer::pull_selection(bool rows_changed) {
     // this step may get its row on a later sync, which comes back here.
     std::vector<jadefx::TreeItem*> rows;
     for (engine_core::InstanceId id : selected_) {
-        if (jadefx::TreeItem* row = existing_row(id)) {
+        if (jadefx::TreeItem* row = shown_row(id)) {
             rows.push_back(row);
         }
     }
@@ -638,6 +671,12 @@ void IdeExplorer::finish_insert(engine_core::InstanceId made) {
         pending_insert_.reset();
         return;
     }
+    // The filter hides it. It is still the selection, for Properties.
+    if (read_ok_ && !filter_.empty() && shown_row(made) == nullptr) {
+        write_selection({made});
+        pending_insert_.reset();
+        return;
+    }
     const std::shared_ptr<jadefx::TreeItem> row = row_ptr(made);
     if (!row || !tree_) {
         return;
@@ -647,10 +686,104 @@ void IdeExplorer::finish_insert(engine_core::InstanceId made) {
 }
 
 void IdeExplorer::layoutChildren() {
+    poll_filter();
     pull_selection(sync());
+    if (reveal_wanted_) {
+        reveal_wanted_ = false;
+        open_selection();
+    }
     poll_clicks();
     StackPane::layoutChildren();
+    place_reveal();
     place_rename();
+}
+
+void IdeExplorer::poll_filter() {
+    if (!filter_field_ || filter_field_->getText() == filter_typed_) {
+        return;
+    }
+    filter_typed_ = filter_field_->getText();
+    const std::string next = Lower(filter_typed_);
+    if (filter_.empty() && !next.empty()) {
+        open_before_filter_.clear();
+        for (const auto& entry : items_) {
+            open_before_filter_[entry.first] = entry.second->isExpanded();
+        }
+    }
+    const bool ending = !filter_.empty() && next.empty();
+    filter_ = next;
+    filter_dirty_ = true;
+    if (!ending) {
+        return;
+    }
+    // Rows first shown while filtering start closed.
+    for (const auto& entry : items_) {
+        const auto was = open_before_filter_.find(entry.first);
+        entry.second->setExpanded(was != open_before_filter_.end() && was->second);
+    }
+    open_before_filter_.clear();
+    // What was picked while filtering stays in view.
+    reveal_wanted_ = true;
+}
+
+bool IdeExplorer::reveal_selection() {
+    if (!tree_ || selected_.empty()) {
+        return false;
+    }
+    if (!filter_.empty()) {
+        for (engine_core::InstanceId id : selected_) {
+            if (shown_row(id) == nullptr) {
+                filter_field_->clear();
+                break;
+            }
+        }
+    }
+    reveal_wanted_ = true;
+    return true;
+}
+
+void IdeExplorer::open_selection() {
+    reveal_id_ = 0;
+    for (engine_core::InstanceId id : selected_) {
+        jadefx::TreeItem* row = shown_row(id);
+        if (row == nullptr) {
+            continue;
+        }
+        for (jadefx::TreeItem* up = row->getParent(); up != nullptr; up = up->getParent()) {
+            if (!up->isExpanded()) {
+                up->setExpanded(true);
+            }
+        }
+        // The tree's own row when it is selected, else the last picked.
+        if (reveal_id_ == 0 || row == tree_->getSelectedItem()) {
+            reveal_id_ = id;
+        }
+    }
+}
+
+void IdeExplorer::place_reveal() {
+    if (reveal_id_ == 0) {
+        return;
+    }
+    jadefx::TreeItem* row = shown_row(reveal_id_);
+    reveal_id_ = 0;
+    if (row == nullptr) {
+        return;
+    }
+    const double top = tree_->getAbsoluteY();
+    const double bottom = top + tree_->getHeight();
+    if (const jadefx::Node* cell = tree_->getCell(row)) {
+        if (cell->getAbsoluteY() >= top && cell->getAbsoluteY() + cell->getHeight() <= bottom) {
+            return;
+        }
+    }
+    // Out of view: put it in the middle of the tree.
+    const int index = tree_->getRow(row);
+    if (index < 0) {
+        return;
+    }
+    const int rows = static_cast<int>(tree_->getHeight() / tree_->getFixedCellSize());
+    tree_->scrollTo(std::max(0, index - rows / 2));
 }
 
 bool IdeExplorer::sync() {
@@ -660,9 +793,16 @@ bool IdeExplorer::sync() {
     const bool pending = pending_insert_ && pending_insert_->done.load(std::memory_order_acquire);
     const engine_core::InstanceId made = pending ? pending_insert_->id.load(std::memory_order_relaxed) : 0;
     bool changed = false;
-    if (capture()) {
+    if (capture() || filter_dirty_) {
+        filter_dirty_ = false;
+        if (!filter_.empty()) {
+            filter_rows();
+        }
         ApplyGuard guard(applying_);
         apply(edit_weight() > kInPlaceEdits);
+        if (!filter_.empty()) {
+            open_matches();
+        }
         committed_.ids = scratch_.ids;
         committed_.child_counts = scratch_.child_counts;
         committed_.labels = scratch_.labels;
@@ -746,6 +886,83 @@ void IdeExplorer::read_hierarchy(Snapshot& snap) {
     }
 }
 
+void IdeExplorer::filter_rows() {
+    const Snapshot& all = scratch_;
+    const std::size_t count = all.ids.size();
+    std::unordered_map<engine_core::InstanceId, std::size_t> index;
+    index.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        index.emplace(all.ids[i], i);
+    }
+    std::vector<std::size_t> parent(count, 0);
+    for (std::size_t i = 0; i < count; ++i) {
+        for (std::uint32_t c = 0; c < all.child_counts[i]; ++c) {
+            const auto found = index.find(all.children[all.child_begins[i] + c]);
+            if (found != index.end()) {
+                parent[found->second] = i;
+            }
+        }
+    }
+    // Preorder puts a parent before its children, so walking back reaches the
+    // children first and they can keep their parent.
+    std::vector<char> keep(count, 0);
+    if (count > 0) {
+        keep[0] = 1;
+    }
+    for (std::size_t i = count; i-- > 1;) {
+        if (!keep[i] && Lower(all.labels[i]).find(filter_) != std::string::npos) {
+            keep[i] = 1;
+        }
+        if (keep[i]) {
+            keep[parent[i]] = 1;
+        }
+    }
+
+    filtered_.clear();
+    for (std::size_t i = 0; i < count; ++i) {
+        if (!keep[i]) {
+            continue;
+        }
+        const std::uint32_t begin = static_cast<std::uint32_t>(filtered_.children.size());
+        std::uint32_t kept = 0;
+        for (std::uint32_t c = 0; c < all.child_counts[i]; ++c) {
+            const engine_core::InstanceId child = all.children[all.child_begins[i] + c];
+            const auto found = index.find(child);
+            if (found != index.end() && keep[found->second]) {
+                filtered_.children.push_back(child);
+                ++kept;
+            }
+        }
+        filtered_.ids.push_back(all.ids[i]);
+        filtered_.child_counts.push_back(kept);
+        filtered_.child_begins.push_back(begin);
+        filtered_.labels.push_back(all.labels[i]);
+        filtered_.classes.push_back(all.classes[i]);
+    }
+}
+
+void IdeExplorer::open_matches() {
+    for (std::size_t i = 1; i < filtered_.ids.size(); ++i) {
+        if (filtered_.child_counts[i] == 0) {
+            continue;
+        }
+        jadefx::TreeItem* row = existing_row(filtered_.ids[i]);
+        if (row != nullptr && !row->isExpanded()) {
+            row->setExpanded(true);
+        }
+    }
+}
+
+jadefx::TreeItem* IdeExplorer::shown_row(engine_core::InstanceId id) const {
+    jadefx::TreeItem* row = existing_row(id);
+    for (jadefx::TreeItem* up = row; up != nullptr; up = up->getParent()) {
+        if (up == root_item_.get()) {
+            return row;
+        }
+    }
+    return nullptr;
+}
+
 jadefx::TreeItem* IdeExplorer::existing_row(engine_core::InstanceId id) const {
     const auto found = items_.find(id);
     if (found == items_.end()) {
@@ -763,7 +980,7 @@ std::shared_ptr<jadefx::TreeItem> IdeExplorer::row_ptr(engine_core::InstanceId i
 }
 
 std::size_t IdeExplorer::edit_weight() const {
-    const Snapshot& snap = scratch_;
+    const Snapshot& snap = shown();
     std::unordered_set<engine_core::InstanceId> live;
     live.reserve(snap.ids.size());
     std::size_t weight = 0;
@@ -834,7 +1051,7 @@ void IdeExplorer::set_children(jadefx::TreeItem& item, std::uint32_t begin, std:
     auto& kids = item.getChildren();
     bool same = kids.size() == count;
     for (std::uint32_t i = 0; same && i < count; ++i) {
-        const std::shared_ptr<jadefx::TreeItem> desired = row_ptr(scratch_.children[begin + i]);
+        const std::shared_ptr<jadefx::TreeItem> desired = row_ptr(shown().children[begin + i]);
         same = desired && kids[i].get() == desired.get();
     }
     if (same) {
@@ -846,7 +1063,7 @@ void IdeExplorer::set_children(jadefx::TreeItem& item, std::uint32_t begin, std:
             kids.removeAt(kids.size() - 1);
         }
         for (std::uint32_t i = 0; i < count; ++i) {
-            if (std::shared_ptr<jadefx::TreeItem> row = row_ptr(scratch_.children[begin + i])) {
+            if (std::shared_ptr<jadefx::TreeItem> row = row_ptr(shown().children[begin + i])) {
                 kids.add(std::move(row));
             }
         }
@@ -862,7 +1079,7 @@ void IdeExplorer::set_children(jadefx::TreeItem& item, std::uint32_t begin, std:
         ++steps;
         const bool has_current = index < kids.size();
         const bool has_desired = index < count;
-        std::shared_ptr<jadefx::TreeItem> desired = has_desired ? row_ptr(scratch_.children[begin + index]) : nullptr;
+        std::shared_ptr<jadefx::TreeItem> desired = has_desired ? row_ptr(shown().children[begin + index]) : nullptr;
         if (has_current && desired && kids[index].get() == desired.get()) {
             ++index;
             continue;
@@ -871,7 +1088,7 @@ void IdeExplorer::set_children(jadefx::TreeItem& item, std::uint32_t begin, std:
         bool wanted_later = false;
         if (has_current) {
             for (std::uint32_t look = static_cast<std::uint32_t>(index); look < count; ++look) {
-                const std::shared_ptr<jadefx::TreeItem> later = row_ptr(scratch_.children[begin + look]);
+                const std::shared_ptr<jadefx::TreeItem> later = row_ptr(shown().children[begin + look]);
                 if (later && later.get() == kids[index].get()) {
                     wanted_later = true;
                     break;
@@ -909,7 +1126,7 @@ void IdeExplorer::set_children(jadefx::TreeItem& item, std::uint32_t begin, std:
 }
 
 void IdeExplorer::apply(bool batch) {
-    const Snapshot& snap = scratch_;
+    const Snapshot& snap = shown();
     if (snap.ids.empty()) {
         return;
     }

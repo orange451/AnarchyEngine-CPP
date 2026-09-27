@@ -421,6 +421,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     auto gameExplorer = jadefx::make<IdeExplorer>(game, "Game Explorer", host);
     gameExplorer->setIconFile("Explorer.png");
     west->dock(gameExplorer);
+    explorers_.push_back(gameExplorer);
 
     auto center = jadefx::make<IdeDock>();
     adoptDock(center);
@@ -438,6 +439,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     auto sceneExplorer = jadefx::make<IdeExplorer>(game, "Current Scene", host);
     sceneExplorer->setIconFile("Scenes.png");
     east->dock(sceneExplorer);
+    explorers_.push_back(sceneExplorer);
 
     // Properties sits under the right-hand explorer, as in Roblox Studio.
     // Its writes go to the simulation thread, like a rename.
@@ -528,6 +530,7 @@ void IdeLayout::mount(jadefx::Scene& scene) {
         if (scene_ != nullptr) {
             routeUndo(event, *scene_);
             routeDelete(event, *scene_);
+            routeReveal(event, *scene_);
         }
     });
 }
@@ -819,6 +822,7 @@ void IdeLayout::floatTab(const std::shared_ptr<jadefx::Tab>& tab, double screenX
     scene->addKeyHook([this, utilityScene](jadefx::KeyEvent& event) {
         routeUndo(event, *utilityScene);
         routeDelete(event, *utilityScene);
+        routeReveal(event, *utilityScene);
     });
     window->stage().setScene(std::move(scene));
     dock->take(tab);
@@ -1325,6 +1329,22 @@ void IdeLayout::routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene) {
         if (explorer->run_on_selection("Delete")) {
             event.consume();
         }
+    }
+}
+
+void IdeLayout::routeReveal(jadefx::KeyEvent& event, jadefx::Scene& scene) {
+    if (!event.pressed || event.repeat || event.consumed || event.key != jadefx::Key::F || event.shift ||
+        event.alt || event.control || event.meta || InTextWidget(scene.focusedNode())) {
+        return;
+    }
+    bool any = false;
+    for (const std::weak_ptr<IdeExplorer>& weak : explorers_) {
+        if (const std::shared_ptr<IdeExplorer> explorer = weak.lock()) {
+            any = explorer->reveal_selection() || any;
+        }
+    }
+    if (any) {
+        event.consume();
     }
 }
 

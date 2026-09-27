@@ -64,6 +64,11 @@ struct ExplorerHost {
 // (Cmd on macOS) and a click adds or removes a row, and Shift and a click
 // selects the rows from the last clicked one. A right-click on a selected row
 // keeps the rest. A Selection:Set from a script shows on the next frame.
+//
+// The field above the tree filters it. A row shows when its Name contains the
+// typed text, ignoring case, or when a row under it does. While filtering, the
+// branches leading to matches are open. Escape or an empty field shows every
+// row again, with the branches opened or closed as they were before.
 class IdeExplorer : public IdePane {
 public:
     IdeExplorer(engine_core::DataModel& root, std::string name, ExplorerHost host);
@@ -72,6 +77,10 @@ public:
     // enabled. Only Delete and Cut run on more than one. False when nothing
     // selected offers the action.
     bool run_on_selection(std::string_view action);
+    // Opens the branches above each selected row and scrolls the tree until the
+    // tree's own selected row is in view. When the filter hides a selected
+    // row, the filter is cleared first. False when nothing is selected.
+    bool reveal_selection();
 
 protected:
     void layoutChildren() override;
@@ -95,6 +104,16 @@ private:
 
     // True when the rows changed.
     bool sync();
+    // The rows the tree shows: every captured row, or the ones the filter keeps.
+    const Snapshot& shown() const { return filter_.empty() ? scratch_ : filtered_; }
+    // Reads the filter field, and starts or ends filtering when it changed.
+    void poll_filter();
+    // Fills filtered_ from scratch_ with the matches and the rows above them.
+    void filter_rows();
+    void open_matches();
+    // Opens the branches above each selected row, then place_reveal scrolls to one.
+    void open_selection();
+    void place_reveal();
     bool find_id(const jadefx::TreeItem* item, engine_core::InstanceId& id) const;
     bool actions_for(engine_core::InstanceId id, std::vector<engine_core::ContextAction>& out) const;
     bool offers(engine_core::InstanceId id, std::string_view action) const;
@@ -134,6 +153,8 @@ private:
     void set_children(jadefx::TreeItem& item, std::uint32_t begin, std::uint32_t count, bool batch);
     jadefx::TreeItem* existing_row(engine_core::InstanceId id) const;
     std::shared_ptr<jadefx::TreeItem> row_ptr(engine_core::InstanceId id) const;
+    // The instance's row when it is in the tree, not held back by the filter.
+    jadefx::TreeItem* shown_row(engine_core::InstanceId id) const;
 
     engine_core::DataModel& root_;
     ExplorerHost host_;
@@ -145,6 +166,16 @@ private:
     std::vector<engine_core::InstanceId> pending_;
     Snapshot scratch_;
     Snapshot committed_;
+    Snapshot filtered_;
+    std::shared_ptr<jadefx::TextField> filter_field_;
+    // The field's text as last read, and that text in lower case. Empty when not filtering.
+    std::string filter_typed_;
+    std::string filter_;
+    bool filter_dirty_ = false;
+    // Which rows were open when filtering started. Put back when it ends.
+    std::unordered_map<engine_core::InstanceId, bool> open_before_filter_;
+    bool reveal_wanted_ = false;
+    engine_core::InstanceId reveal_id_ = 0;
     bool applying_ = false;
     // True when capture read the live tree, including a read that changed nothing.
     bool read_ok_ = false;

@@ -149,6 +149,38 @@ struct Rig {
         return false;
     }
 
+    // The row is drawn inside the tree's bounds.
+    bool in_view(const std::string& name) {
+        jadefx::Node* row = cell(name);
+        jadefx::TreeView* view = tree();
+        return row != nullptr && view != nullptr && row->isVisible() && row->getHeight() > 0 &&
+               row->getAbsoluteY() >= view->getAbsoluteY() &&
+               row->getAbsoluteY() + row->getHeight() <= view->getAbsoluteY() + view->getHeight();
+    }
+
+    jadefx::TreeView* tree() {
+        const std::vector<jadefx::Node*> cells = explorer->getElementsByClassName("tree-cell");
+        for (jadefx::Node* up = cells.empty() ? nullptr : cells.front(); up != nullptr; up = up->getParent()) {
+            if (auto* found = dynamic_cast<jadefx::TreeView*>(up)) {
+                return found;
+            }
+        }
+        return nullptr;
+    }
+
+    jadefx::TextField* filter() {
+        const std::vector<jadefx::Node*> found = explorer->getElementsByClassName("explorer-filter");
+        return found.empty() ? nullptr : dynamic_cast<jadefx::TextField*>(found.front());
+    }
+
+    void type_filter(const std::string& text, double at) {
+        if (jadefx::TextField* box = filter()) {
+            box->setText(text);
+        }
+        frame(at);
+        frame(at + 0.01);
+    }
+
     std::vector<engine_core::InstanceId> selection() const { return game.selection().get(); }
 
     std::vector<engine_core::InstanceId> pick(std::initializer_list<int> indexes) const {
@@ -585,6 +617,121 @@ void TestMoveSet() {
     Expect(!ide::move_set(game, {0}, ids[1]), "the root never moves");
 }
 
+// Alpha holds Inner, which holds Deep.
+engine_core::InstanceId NestDeep(Rig& rig) {
+    engine_core::Folder& inner = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(inner.id(), "Inner");
+    rig.game.set_parent(inner.id(), rig.ids[0]);
+    engine_core::Folder& deep = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(deep.id(), "Deep");
+    rig.game.set_parent(deep.id(), inner.id());
+    rig.frame(0.1);
+    return deep.id();
+}
+
+void TestFilterHidesOtherRows() {
+    Rig rig;
+    Expect(rig.filter() != nullptr, "the explorer has a filter field");
+    rig.type_filter("bet", 0.1);
+    Expect(rig.cell("Beta") != nullptr, "a row whose name contains the filter shows");
+    Expect(rig.cell("Alpha") == nullptr && rig.cell("Gamma") == nullptr, "rows that do not match are hidden");
+    rig.type_filter("BETA", 0.2);
+    Expect(rig.cell("Beta") != nullptr, "the filter ignores case");
+    rig.type_filter("", 0.3);
+    Expect(rig.cell("Alpha") != nullptr && rig.cell("Beta") != nullptr && rig.cell("Gamma") != nullptr,
+           "an empty filter shows every row");
+}
+
+void TestFilterShowsTheWayToAMatch() {
+    Rig rig;
+    NestDeep(rig);
+    Expect(rig.cell("Deep") == nullptr, "Deep starts in a closed folder");
+    rig.type_filter("dee", 0.2);
+    Expect(rig.cell("Alpha") != nullptr && rig.cell("Inner") != nullptr && rig.cell("Deep") != nullptr,
+           "a match shows with the open branches above it");
+    Expect(rig.cell("Beta") == nullptr, "a row with no match under it is hidden");
+    rig.type_filter("", 0.3);
+    Expect(rig.cell("Alpha") != nullptr && rig.cell("Inner") == nullptr, "clearing the filter closes what it opened");
+}
+
+void TestFilterEscapeClears() {
+    Rig rig;
+    rig.type_filter("gam", 0.1);
+    rig.filter()->requestFocus();
+    rig.key(jadefx::Key::Escape);
+    rig.frame(0.2);
+    rig.frame(0.21);
+    Expect(rig.filter()->getText().empty(), "Escape empties the filter");
+    Expect(rig.cell("Alpha") != nullptr, "Escape shows every row");
+}
+
+void TestFilterKeepsHiddenSelection() {
+    Rig rig;
+    rig.clickRow("Alpha", 0.1);
+    rig.type_filter("gam", 0.2);
+    Expect(rig.selection() == rig.pick({0}), "filtering keeps a hidden selected instance selected");
+    rig.batches.clear();
+    rig.runs.clear();
+    Expect(!rig.explorer->run_on_selection("Delete"), "Delete skips a selected row the filter hides");
+}
+
+void TestRevealOpensTheBranch() {
+    Rig rig;
+    const engine_core::InstanceId deep = NestDeep(rig);
+    rig.game.selection().set({deep});
+    rig.frame(0.2);
+    // A Set opens the branch too. Close it again to see reveal open it.
+    jadefx::TreeView* tree = rig.tree();
+    Expect(tree != nullptr, "the explorer's tree is found");
+    if (tree != nullptr) {
+        tree->getRoot()->getChildren()[0]->setExpanded(false);
+    }
+    rig.frame(0.25);
+    Expect(rig.cell("Deep") == nullptr, "closing Alpha hides Deep");
+    rig.explorer->reveal_selection();
+    rig.frame(0.3);
+    rig.frame(0.31);
+    Expect(rig.painted("Deep"), "reveal shows the selected row");
+}
+
+void TestRevealScrolls() {
+    Rig rig;
+    engine_core::InstanceId last = 0;
+    for (int i = 0; i < 60; ++i) {
+        engine_core::Folder& folder = rig.game.create<engine_core::Folder>();
+        rig.game.set_name(folder.id(), "Row" + std::to_string(i));
+        rig.game.set_parent(folder.id(), rig.game.id());
+        last = folder.id();
+    }
+    rig.frame(0.1);
+    rig.game.selection().set({last});
+    rig.frame(0.2);
+    jadefx::TreeView* tree = rig.tree();
+    if (tree != nullptr) {
+        tree->scrollTo(0);
+    }
+    rig.frame(0.25);
+    Expect(!rig.in_view("Row59"), "the last row starts below the view");
+    Expect(rig.explorer->reveal_selection(), "reveal runs with a selection");
+    rig.frame(0.3);
+    rig.frame(0.31);
+    Expect(rig.in_view("Row59"), "reveal scrolls the selected row into view");
+    rig.game.selection().set({});
+    rig.frame(0.4);
+    Expect(!rig.explorer->reveal_selection(), "reveal does nothing with no selection");
+}
+
+void TestRevealClearsAHidingFilter() {
+    Rig rig;
+    rig.clickRow("Alpha", 0.1);
+    rig.type_filter("gam", 0.2);
+    rig.explorer->reveal_selection();
+    rig.frame(0.3);
+    rig.frame(0.31);
+    Expect(rig.filter()->getText().empty(), "reveal clears a filter that hides the selection");
+    Expect(rig.painted("Alpha"), "the revealed row shows selected");
+}
+
 }  // namespace
 
 int main() {
@@ -617,6 +764,13 @@ int main() {
     TestDragCarriesTheSelection();
     TestDragRefusesItsOwnChild();
     TestMoveSet();
+    TestFilterHidesOtherRows();
+    TestFilterShowsTheWayToAMatch();
+    TestFilterEscapeClears();
+    TestFilterKeepsHiddenSelection();
+    TestRevealOpensTheBranch();
+    TestRevealScrolls();
+    TestRevealClearsAHidingFilter();
     if (gFailures == 0) {
         std::printf("explorer tests passed\n");
         return 0;

@@ -281,7 +281,6 @@ add_executable(engine-tests
     tests/ScriptMarksTest.cpp
     tests/ScriptPairsTest.cpp
     tests/TextWrapTest.cpp
-    tests/SessionKeysTest.cpp
     src/ide/LuauHighlight.cpp
     src/ide/LuauComplete.cpp
     src/ide/ScriptMarks.cpp

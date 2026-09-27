@@ -10,7 +10,7 @@ namespace ide {
 
 // A Color3 written out in a script with constant arguments, such as
 // Color3.fromRGB(255, 128, 0) or Color3.fromHex("#1a73e8"). The editor shows a
-// swatch before each one and rewrites it from the color picker.
+// swatch after each one and rewrites it from the color picker.
 struct Color3Literal {
     enum class Form { New, FromRGB, FromHSV, FromHex };
 

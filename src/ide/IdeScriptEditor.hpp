@@ -82,7 +82,7 @@ private:
     // A finished name keeps those keys, so a newline or indent still works.
     bool completion_key_accepts() const;
     std::vector<engine_core::LuaNode> world() const;
-    // A swatch before each Color3 literal. A click on one opens the color picker on it.
+    // A swatch after each Color3 literal. A click on one opens the color picker on it.
     void refresh_color_swatches();
     void open_color_picker(std::size_t index);
     // Ends the picker: keep writes one undo step for the whole session, and

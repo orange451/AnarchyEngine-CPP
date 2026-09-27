@@ -369,9 +369,10 @@ void IdeScriptEditor::refresh_color_swatches() {
     nodes.reserve(color_literals_.size());
     for (std::size_t i = 0; i < color_literals_.size(); ++i) {
         if (i == color_swatches_.size()) {
-            // The slot takes the click and holds the square, with the gap after it.
+            // The slot takes the click and holds the square, with the gap before it.
             auto slot = std::make_shared<jadefx::Pane>();
             slot->setPrefSize(kSwatchSlot, kSwatchSize);
+            slot->setPadding(jadefx::Insets{0, 0, 0, kSwatchSlot - kSwatchSize});
             // A click on it leaves the focus in the text, so Ctrl/Cmd+Z stays the text's undo.
             slot->setFocusTraversable(false);
             slot->setStyle("cursor: pointer;");
@@ -385,7 +386,7 @@ void IdeScriptEditor::refresh_color_swatches() {
         }
         const std::shared_ptr<jadefx::Pane>& slot = color_swatches_[i];
         static_cast<jadefx::Pane&>(*slot->getChildren()[0]).setBackground(to_jadefx(color_literals_[i].color));
-        nodes.push_back({color_literals_[i].start, slot});
+        nodes.push_back({color_literals_[i].end, slot});
     }
     area_->setInlineNodes(std::move(nodes));
 }

@@ -1932,6 +1932,69 @@ void testDotChildren() {
 
 }  // namespace
 
+// A module table written with nested tables: the name, each key, and the local
+// that reads through them all complete and hover.
+void testNestedTable() {
+    const std::string head =
+        "local module = {\n"
+        "    Configs = {\n"
+        "        ValidateTransactions = true,\n"
+        "    },\n"
+        "    Currencies = {\n"
+        "        Gold = \"Gold\",\n"
+        "        Silver = \"Silver\",\n"
+        "        Copper = \"Copper\",\n"
+        "    }\n"
+        "}\n\n";
+
+    expect_has(at_end(head + "local xx = modu"), "module", "nested table name");
+    const ide::CompletionList top = at_end(head + "local xx = module.");
+    expect_has(top, "Configs", "nested table Configs");
+    expect_has(top, "Currencies", "nested table Currencies");
+    expect_has(at_end(head + "local xx = module.Con"), "Configs", "nested table Con prefix");
+    const ide::CompletionList inner = at_end(head + "local xx = module.Configs.");
+    expect_has(inner, "ValidateTransactions", "nested ValidateTransactions");
+    expect_has(at_end(head + "local xx = module.Configs.Valid"), "ValidateTransactions", "nested Valid prefix");
+    expect_has(at_end(head + "local xx = module.Currencies."), "Silver", "nested Silver");
+
+    // Typed in the middle of a ModuleScript, with the return below the caret.
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
+    world.push_back(node(4, 0, "Economy", "ModuleScript"));
+    const char* typed[][2] = {
+        {"local xx = modu", "module"},
+        {"local xx = module.Con", "Configs"},
+        {"local xx = module.Configs.Valid", "ValidateTransactions"},
+    };
+    for (const auto& row : typed) {
+        const std::string before = head + row[0];
+        const std::string whole = before + "\n\nreturn module\n";
+        world[1].source = whole;
+        const ide::CompletionList list =
+            ide::complete_luau(whole, static_cast<int>(before.size()), world, 4);
+        expect_has(list, row[1], row[0]);
+    }
+
+    const std::string source = head + "local xx = module.Configs.ValidateTransactions\n\nreturn module\n";
+    const int use = static_cast<int>(source.find("local xx"));
+    const ide::HoverInfo xx = ide::hover_luau(source, find_nth(source, "xx", 0));
+    expect_hover(xx, "xx: boolean", "", nullptr, "hover xx");
+    const ide::HoverInfo module = ide::hover_luau(source, static_cast<int>(source.find("module", use)));
+    expect_hover(module, nullptr, nullptr, nullptr, "hover module");
+    const ide::HoverInfo configs = ide::hover_luau(source, static_cast<int>(source.find("Configs", use)));
+    expect_hover(configs, nullptr, nullptr, nullptr, "hover Configs");
+    const ide::HoverInfo valid = ide::hover_luau(source, static_cast<int>(source.find("ValidateTransactions", use)));
+    expect_hover(valid, "ValidateTransactions: boolean", nullptr, nullptr, "hover ValidateTransactions");
+    const ide::HoverInfo key = ide::hover_luau(source, find_nth(source, "ValidateTransactions", 0));
+    expect_hover(key, "ValidateTransactions: boolean", nullptr, nullptr, "hover key where it is written");
+    const ide::HoverInfo gold = ide::hover_luau(source, find_nth(source, "Gold", 0));
+    expect_hover(gold, "Gold: string", nullptr, nullptr, "hover Gold key");
+    const ide::HoverInfo table_key = ide::hover_luau(source, find_nth(source, "Configs", 0));
+    expect_hover(table_key, nullptr, nullptr, nullptr, "hover Configs key");
+    const ide::HoverInfo declared = ide::hover_luau(source, find_nth(source, "module", 0));
+    expect_hover(declared, nullptr, nullptr, nullptr, "hover module declaration");
+}
+
 int RunLuauCompleteTests() {
     try {
         testLibraries();
@@ -1952,6 +2015,7 @@ int RunLuauCompleteTests() {
         testDirectives();
         testSkipped();
         testDotChildren();
+        testNestedTable();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());
     }

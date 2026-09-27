@@ -2376,22 +2376,8 @@ private:
             return single_value(inner);
         }
         if (is(Token::LBrace)) {
-            if (signing_) {
-                return parse_table();
-            }
-            int depth = 0;
-            do {
-                if (is(Token::LBrace)) {
-                    ++depth;
-                } else if (is(Token::RBrace)) {
-                    --depth;
-                }
-                advance();
-            } while (!at_end() && depth > 0);
-            if (depth > 0) {
-                cut_ = true;
-            }
-            return value_shape("table");
+            // Keys written in the constructor complete and hover, in this script and in a required module.
+            return parse_table();
         }
         return none();
     }
@@ -2527,6 +2513,8 @@ private:
     std::vector<std::uint32_t> requiring_storage_;
     std::vector<std::uint32_t>* requiring_ = &requiring_storage_;
     std::vector<Shape*> functions_;
+    // Hover: the `name` token of each `name = value` in a table constructor, with its value.
+    std::vector<std::pair<int, Shape*>> table_keys_;
 
     void assign_field(int start, int eq, Shape* value) {
         if (start < 0 || eq <= start) {
@@ -2578,10 +2566,14 @@ private:
                     parse_expr();
                 }
             } else if (is_name() && i_ + 1 < limit_ && tokens_[static_cast<std::size_t>(i_ + 1)].kind == Token::Eq) {
+                const int key = i_;
                 const std::string name = take_name();
                 advance();
                 Shape* value = at_end() ? none() : parse_expr();
                 attach_function(table, name, value);
+                if (retain_) {
+                    table_keys_.emplace_back(key, value);
+                }
             } else {
                 const int before = i_;
                 parse_expr();
@@ -2921,10 +2913,15 @@ HoverInfo Resolver::describe(int code_index) {
     bool bound = false;
     bool parameter = false;
     Shape* shape = nullptr;
-    if (suffix_before(token_index)) {
+    for (const auto& key : table_keys_) {
+        if (key.first == token_index) {
+            shape = key.second;
+        }
+    }
+    if (shape == nullptr && suffix_before(token_index)) {
         // receiver() parses up to the '.' or ':' and leaves the member name out.
         shape = member_of(receiver(token_index - 1), token.text);
-    } else {
+    } else if (shape == nullptr) {
         shape = lookup_binding(token.text, token_index, bound, parameter);
     }
     hover_at_ = -1;

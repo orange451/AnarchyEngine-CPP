@@ -103,29 +103,27 @@ ConsoleLog::ConsoleLog() {
     // A field row repeats its table's stamp so the columns line up and a copy keeps it,
     // but only the first row of a print shows one.
     define("gutter", jadefx::Color::rgb8(0, 0, 0, 0));
-    // What opens or closes a table is link blue, and underlines while the pointer is on it.
+    // What opens or closes a table is link blue. Printed text is a link too, but keeps the text color.
     define("toggle", jadefx::Color::rgb8(18, 78, 148));
+    setStyle("--link-color: currentColor;");
     define("key", jadefx::Color::rgb8(136, 19, 145));
     define("note", jadefx::Color::rgb8(120, 124, 130));
     rows_.assign(static_cast<std::size_t>(paragraphCount()), Row{});
-    setOnMouseExited([this](const jadefx::MouseEvent&) { hovered_ = -1; });
+    // A toggle and a printed line are separate links, so the spot tells which one was clicked.
+    setOnLinkClicked([this](const jadefx::LinkEvent& event) {
+        const jadefx::TextPos at = position(event.range.start);
+        if (!toggleAt(at.paragraph, at.column)) {
+            openAt(at.paragraph, at.column);
+        }
+    });
 }
 
-std::string ConsoleLog::markClass(int mark) { return "hover-" + std::to_string(mark); }
+std::string ConsoleLog::nextHref(const char* kind) const { return std::string("#") + kind + "-" + std::to_string(nextLink_++); }
 
-jadefx::TextStyle ConsoleLog::resolveStyle(const jadefx::TextStyle& style) const {
-    jadefx::TextStyle out = jadefx::StyleClassedTextArea::resolveStyle(style);
-    if (hovered_ < 0) {
-        return out;
-    }
-    // A mark is always the last class of its span.
-    const std::string mark = markClass(hovered_);
-    const std::string& classes = style.styleClass;
-    if (classes.size() >= mark.size() && classes.compare(classes.size() - mark.size(), mark.size(), mark) == 0 &&
-        (classes.size() == mark.size() || classes[classes.size() - mark.size() - 1] == ' ')) {
-        out.underline = true;
-    }
-    return out;
+void ConsoleLog::styleToggle(int offset, const Toggle& toggle) {
+    const int end = offset + clickEnd(toggle) - toggle.begin;
+    setStyleClass(offset, end, "toggle");
+    setLink(offset, end, toggle.href);
 }
 
 std::string ConsoleLog::toggleText(const Toggle& toggle) {
@@ -145,8 +143,6 @@ void ConsoleLog::clearLog() {
     clear();
     rows_.assign(static_cast<std::size_t>(paragraphCount()), Row{});
     links_.clear();
-    hovered_ = -1;
-    pressedLink_ = -1;
 }
 
 void ConsoleLog::syncRows() {
@@ -166,7 +162,7 @@ void ConsoleLog::appendLine(const ScriptRuntime::OutputLine& line) {
     int link = -1;
     if (line.kind == ScriptRuntime::OutputKind::Print && line.script != 0) {
         link = static_cast<int>(links_.size());
-        links_.push_back(Link{line.script, line.line, nextMark_++});
+        links_.push_back(Link{line.script, line.line, nextHref("print")});
     }
     std::vector<Pending> rows;
     auto next = [&] {
@@ -214,10 +210,9 @@ void ConsoleLog::appendLine(const ScriptRuntime::OutputLine& line) {
             }
             Toggle toggle;
             toggle.table = value.table;
-            toggle.mark = nextMark_++;
+            toggle.href = nextHref("table");
             toggle.begin = units(row.text);
             row.text += toggleText(toggle);
-            row.spans.push_back(Span{toggle.begin, clickEnd(toggle), "toggle " + markClass(toggle.mark)});
             row.row.toggles.push_back(std::move(toggle));
         }
     }
@@ -249,10 +244,9 @@ std::vector<ConsoleLog::Pending> ConsoleLog::fieldRows(const Row& parent, int sl
             Toggle toggle;
             toggle.table = field.table;
             toggle.comma = true;
-            toggle.mark = nextMark_++;
+            toggle.href = nextHref("table");
             toggle.begin = units(text);
             text += toggleText(toggle);
-            pending.spans.push_back(Span{toggle.begin, clickEnd(toggle), "toggle " + markClass(toggle.mark)});
             pending.row.toggles.push_back(std::move(toggle));
             rows.push_back(std::move(pending));
             continue;
@@ -314,20 +308,20 @@ void ConsoleLog::insertRows(int paragraph, std::vector<Pending> rows) {
         if (stampEnd > offset) {
             setStyleClass(offset, stampEnd, pending.stampStyle);
         }
-        std::string textClass = pending.textStyle != nullptr ? pending.textStyle : "";
-        if (pending.row.link >= 0) {
-            if (!textClass.empty()) {
-                textClass.push_back(' ');
-            }
-            textClass += markClass(links_[static_cast<std::size_t>(pending.row.link)].mark);
-        }
-        if (!textClass.empty()) {
-            setStyleClass(textAt, end, textClass);
+        if (pending.textStyle != nullptr) {
+            setStyleClass(textAt, end, pending.textStyle);
         }
         for (const Span& span : pending.spans) {
             if (span.end > span.begin) {
                 setStyleClass(textAt + span.begin, textAt + span.end, span.style);
             }
+        }
+        // The printed text links to its script, then each toggle takes its own link over that.
+        if (pending.row.link >= 0) {
+            setLink(textAt, end - 1, links_[static_cast<std::size_t>(pending.row.link)].href);
+        }
+        for (const Toggle& toggle : pending.row.toggles) {
+            styleToggle(offset + toggle.begin, toggle);
         }
         inserted.push_back(std::move(pending.row));
         offset = end;
@@ -417,7 +411,12 @@ bool ConsoleLog::toggleAt(int paragraph, int column) {
         const std::string after = toggleText(toggle);
         const int marker = absolutePosition(paragraph, toggle.begin);
         replaceText(marker, marker + units(before), after);
-        setStyleClass(marker, marker + clickEnd(toggle) - toggle.begin, "toggle " + markClass(toggle.mark));
+        // The new text takes the style in front of it, so the row's link is put back past the braces.
+        const Row& row = rows_[at];
+        if (row.link >= 0) {
+            setLink(marker, marker + units(after), links_[static_cast<std::size_t>(row.link)].href);
+        }
+        styleToggle(marker, toggle);
         // A later table on the same row moves with the text in front of it.
         const int shift = units(after) - units(before);
         for (std::size_t i = static_cast<std::size_t>(slot) + 1; i < toggles.size(); ++i) {
@@ -435,72 +434,6 @@ bool ConsoleLog::toggleAt(int paragraph, int column) {
     setFollowCaret(follow);
     scrollTo(scrollX, scrollY);
     return true;
-}
-
-bool ConsoleLog::spotUnder(double x, double y, int& paragraph, int& column) const {
-    // The character whose glyph is under the pointer, not the nearest caret gap:
-    // the gap lands on a brace from half a glyph to its left.
-    const jadefx::CharacterHit hitAt = hit(x, y);
-    if (!hitAt.valid || hitAt.characterIndex < 0) {
-        return false;
-    }
-    const jadefx::TextPos pos = position(hitAt.characterIndex);
-    paragraph = pos.paragraph;
-    column = pos.column;
-    return true;
-}
-
-int ConsoleLog::markUnder(double x, double y) const {
-    int paragraph = 0;
-    int column = 0;
-    if (!spotUnder(x, y, paragraph, column)) {
-        return -1;
-    }
-    const int slot = findToggle(paragraph, column);
-    if (slot >= 0) {
-        return rows_[static_cast<std::size_t>(paragraph)].toggles[static_cast<std::size_t>(slot)].mark;
-    }
-    const Link* link = findLink(paragraph, column);
-    return link != nullptr ? link->mark : -1;
-}
-
-void ConsoleLog::handleMousePressed(const jadefx::MouseEvent& event) {
-    // cursorAt leaves the scroll bars out, so a press on a bar over a brace still scrolls.
-    pressedLink_ = -1;
-    int paragraph = 0;
-    int column = 0;
-    if (event.button == 0 && !event.shift() && !event.shortcut() &&
-        cursorAt(event.x, event.y) == jadefx::Cursor::Pointer && spotUnder(event.x, event.y, paragraph, column)) {
-        if (toggleAt(paragraph, column)) {
-            return;
-        }
-        // A link opens on release, so a drag from printed text still selects it.
-        if (const Link* link = findLink(paragraph, column)) {
-            pressedLink_ = static_cast<int>(link - links_.data());
-        }
-    }
-    jadefx::StyleClassedTextArea::handleMousePressed(event);
-}
-
-void ConsoleLog::handleMouseReleased(const jadefx::MouseEvent& event) {
-    jadefx::StyleClassedTextArea::handleMouseReleased(event);
-    const int pressed = pressedLink_;
-    pressedLink_ = -1;
-    int paragraph = 0;
-    int column = 0;
-    if (pressed < 0 || selection().start != selection().end || !spotUnder(event.x, event.y, paragraph, column)) {
-        return;
-    }
-    const Link* link = findLink(paragraph, column);
-    if (link != nullptr && link - links_.data() == pressed) {
-        openAt(paragraph, column);
-    }
-}
-
-jadefx::Cursor ConsoleLog::cursorAt(double x, double y) const {
-    const jadefx::Cursor base = jadefx::StyleClassedTextArea::cursorAt(x, y);
-    hovered_ = base == jadefx::Cursor::Text ? markUnder(x, y) : -1;
-    return hovered_ >= 0 ? jadefx::Cursor::Pointer : base;
 }
 
 }  // namespace ide

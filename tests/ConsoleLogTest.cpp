@@ -62,12 +62,6 @@ std::string Body(const ide::ConsoleLog& log, int paragraph) {
     return space == std::string::npos ? text : text.substr(space + 1);
 }
 
-// Exposes the style the log draws with, which adds the hover underline.
-class ProbeLog : public ide::ConsoleLog {
-public:
-    using ide::ConsoleLog::resolveStyle;
-};
-
 ScriptRuntime::OutputLine ScriptLine(std::string text, std::uint32_t script, int line,
                                      std::vector<ScriptRuntime::OutputValue> values = {}) {
     ScriptRuntime::OutputLine out = PrintLine(std::move(text), std::move(values));
@@ -76,10 +70,10 @@ ScriptRuntime::OutputLine ScriptLine(std::string text, std::uint32_t script, int
     return out;
 }
 
-bool Underlined(const ProbeLog& log, int paragraph, int column) {
-    const int at = log.absolutePosition(paragraph, column);
-    const jadefx::StyleSpans spans = log.getStyleSpans(at, at + 1);
-    return !spans.spans().empty() && log.resolveStyle(spans.spans()[0].style).underline;
+// A link underlines while the pointer is on any run of it.
+bool Underlined(const ide::ConsoleLog& log, int paragraph, int column) {
+    const std::string href = log.linkAt(log.absolutePosition(paragraph, column));
+    return !href.empty() && href == log.hoveredLink();
 }
 
 int Column(const ide::ConsoleLog& log, int paragraph, const std::string& needle) {
@@ -181,16 +175,18 @@ int main() {
         }
         Expect(first >= left && first < left + 1, "the hand starts at the left edge of {");
         Expect(last < right && last > right - 1, "the hand ends at the right edge of }");
-        const jadefx::StyleSpans spans =
-            log->getStyleSpans(log->absolutePosition(0, brace), log->absolutePosition(0, brace + 5));
-        Expect(spans.spans().size() == 1 && spans.spans()[0].style.styleClass.rfind("toggle hover-", 0) == 0,
-               "all of {...} takes the toggle style and one hover mark");
+        const int at = log->absolutePosition(0, brace);
+        const jadefx::StyleSpans spans = log->getStyleSpans(at, at + 5);
+        const jadefx::IndexRange link = log->linkRange(at + 1);
+        Expect(spans.spans().size() == 1 && spans.spans()[0].style.styleClass == "toggle",
+               "all of {...} takes the toggle style");
+        Expect(link.start == at && link.end == at + 5, "and is one link");
     }
 
     // Toggles and printed text underline only while the pointer is on them.
     // A line a script printed opens that script at its line.
     {
-        auto probe = jadefx::make<ProbeLog>();
+        auto probe = jadefx::make<ide::ConsoleLog>();
         auto probeScene = jadefx::make<jadefx::Scene>(probe, 600, 300);
         probe->setPrefWidthRatio(1);
         probe->setPrefHeightRatio(1);
@@ -223,20 +219,23 @@ int main() {
         double x = 0;
         double y = 0;
         centre(0, text + 1, x, y);
+        probeScene->noteMove(x, y);
         Expect(probe->cursorAt(x, y) == jadefx::Cursor::Pointer, "printed text shows a pointer");
         Expect(Underlined(*probe, 0, text) && Underlined(*probe, 0, text + 4), "the hovered print underlines");
         Expect(!Underlined(*probe, 0, 0), "the stamp does not underline");
         Expect(!Underlined(*probe, 2, brace), "another row does not underline");
 
         centre(2, brace + 1, x, y);
+        probeScene->noteMove(x, y);
         Expect(probe->cursorAt(x, y) == jadefx::Cursor::Pointer, "a toggle still shows a pointer");
         Expect(Underlined(*probe, 2, brace) && !Underlined(*probe, 2, Column(*probe, 2, "t\t")),
                "a hovered toggle underlines, and not the text around it");
         Expect(!Underlined(*probe, 0, text), "moving off a print takes its underline away");
 
         centre(1, Column(*probe, 1, "host"), x, y);
+        probeScene->noteMove(x, y);
         Expect(probe->cursorAt(x, y) == jadefx::Cursor::Text, "a line no script printed is plain text");
-        Expect(probe->hoveredMark() < 0, "and marks nothing");
+        Expect(probe->hoveredLink().empty(), "and hovers nothing");
         centre(3, Column(*probe, 3, "oops"), x, y);
         Expect(probe->cursorAt(x, y) == jadefx::Cursor::Text, "an error is not a link");
 

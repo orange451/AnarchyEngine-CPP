@@ -159,9 +159,13 @@ struct Rig {
         return dynamic_cast<jadefx::TextField*>(panel.editor(property, part));
     }
 
+    // A field's text, or a reference's Name on its button.
     std::string text(const std::string& property, int part = 0) {
-        jadefx::TextField* box = field(property, part);
-        return box != nullptr ? box->getText() : std::string("<no field>");
+        if (jadefx::TextField* box = field(property, part)) {
+            return box->getText();
+        }
+        auto* button = dynamic_cast<jadefx::Button*>(panel.editor(property, part));
+        return button != nullptr ? button->getText() : std::string("<no field>");
     }
 
     void click(jadefx::Node* node) {
@@ -392,10 +396,11 @@ void TestR6ParentReference() {
     Rig rig;
     rig.select({rig.a});
     const std::string root = rig.game.name(0);
-    Expect(rig.text("Parent") == root + " (Game)", "R6 the Parent shows Name (Class)");
+    Expect(rig.text("Parent") == root, "R6 the Parent shows its Name alone");
+    Expect(rig.panel.editor("Parent", 2) == nullptr, "R6 the Name is the Pick button, next to Clear");
 
-    // Pick: the next explorer click is the value, and the selection comes back.
-    rig.click(rig.panel.editor("Parent", 1));
+    // Clicking the Name picks: the next explorer click is the value, and the selection comes back.
+    rig.click(rig.panel.editor("Parent", 0));
     rig.frame();
     Expect(rig.panel.picking() && rig.panel.pick_property() == "Parent", "R6 Pick waits for a click");
     rig.clickExplorer("Stuff");
@@ -403,12 +408,12 @@ void TestR6ParentReference() {
     Expect(rig.game.parent(rig.a) == rig.folder, "R6 the picked instance is the Parent");
     Expect(rig.game.selection().get() == std::vector<InstanceId>{rig.a}, "R6 the selection comes back");
     rig.frame();
-    Expect(rig.text("Parent") == "Stuff (Folder)", "R6 the row shows the new Parent");
+    Expect(rig.text("Parent") == "Stuff", "R6 the row shows the new Parent");
     Expect(rig.game.history().can_undo().second == "Set Parent", "R6 a pick is one Set Parent");
 
     // A cycle is refused: the folder cannot go under its own child.
     rig.select({rig.folder});
-    rig.click(rig.panel.editor("Parent", 1));
+    rig.click(rig.panel.editor("Parent", 0));
     rig.frame();
     rig.clickExplorer("A");
     Expect(rig.game.parent(rig.folder) == 0, "R6 a descendant cannot be the Parent");
@@ -422,26 +427,26 @@ void TestR6ParentReference() {
     // Mixed parents are blank until a pick sets them all.
     rig.select({rig.a, rig.b});
     Expect(rig.mixed("Parent") && rig.text("Parent").empty(), "R6 mixed parents are blank");
-    rig.click(rig.panel.editor("Parent", 1));
+    rig.click(rig.panel.editor("Parent", 0));
     rig.frame();
     rig.clickExplorer("Stuff");
     Expect(rig.game.parent(rig.a) == rig.folder && rig.game.parent(rig.b) == rig.folder, "R6 a pick sets both");
     rig.frame();
-    Expect(!rig.mixed("Parent") && rig.text("Parent") == "Stuff (Folder)", "R6 the row agrees");
+    Expect(!rig.mixed("Parent") && rig.text("Parent") == "Stuff", "R6 the row agrees");
 
     // Clear sets nil on every selected instance.
-    rig.click(rig.panel.editor("Parent", 2));
+    rig.click(rig.panel.editor("Parent", 1));
     rig.frame();
     Expect(rig.game.parent(rig.a) == DataModel::kNoParent && rig.game.parent(rig.b) == DataModel::kNoParent,
            "R6 Clear sets nil");
     Expect(rig.text("Parent").empty(), "R6 nil shows empty");
 
     // Pick again, then Pick a second time cancels.
-    rig.click(rig.panel.editor("Parent", 1));
+    rig.click(rig.panel.editor("Parent", 0));
     rig.frame();
-    rig.click(rig.panel.editor("Parent", 1));
+    rig.click(rig.panel.editor("Parent", 0));
     rig.frame();
-    Expect(!rig.panel.picking(), "R6 a second Pick cancels");
+    Expect(!rig.panel.picking(), "R6 a second click on the Name cancels");
 }
 
 void TestR7MidEditIsNotClobbered() {

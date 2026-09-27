@@ -26,7 +26,6 @@ constexpr double kRowHeight = 24;
 constexpr double kRowGap = 2;
 constexpr double kIndent = 10;
 constexpr double kAxisGap = 4;
-constexpr double kPickWidth = 40;
 constexpr double kClearWidth = 24;
 
 constexpr const char* kFieldStyle =
@@ -36,7 +35,10 @@ constexpr const char* kReadOnlyStyle =
     "padding: 0 4px; border-width: 1px; border-style: solid; border-color: #dadce0; border-radius: 3px; "
     "background-color: #f1f3f4; color: #5f6368;";
 constexpr const char* kButtonStyle = "padding: 0 4px; border-radius: 3px;";
-constexpr const char* kPickingStyle = "padding: 0 4px; border-radius: 3px; background-color: #d2e3fc;";
+// A reference's value is a button that reads like a field. It turns blue while it waits for a pick.
+constexpr const char* kPickingStyle =
+    "padding: 0 4px; border-width: 1px; border-style: solid; border-color: #1a73e8; border-radius: 3px; "
+    "background-color: #d2e3fc;";
 
 // One replace for the span that differs, so the stack sees a paste or a
 // selection overwrite as one step. Byte ends are pulled to UTF-8 boundaries.
@@ -451,13 +453,12 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             pane->getChildren().add(view->check);
             break;
         case PropertyKind::Ref:
-            // The display is never typed in. Pick and Clear set the value.
-            view->field = make_field(view, true);
-            view->field->setStyle(kFieldStyle);
+            // The value is never typed in. Clicking it picks, and Clear sets nil.
             view->tip = jadefx::make<jadefx::Tooltip>("");
-            view->pick = jadefx::make<jadefx::Button>("Pick");
+            view->pick = jadefx::make<jadefx::Button>("");
             view->pick->getClassList().add("properties-pick");
-            view->pick->setStyle(kButtonStyle);
+            view->pick->setStyle(row.writable ? kFieldStyle : kReadOnlyStyle);
+            view->pick->setAlignment(jadefx::Pos::CenterLeft);
             view->pick->setDisable(!row.writable);
             view->pick->setOnAction([weak_self, weak_view](jadefx::ActionEvent&) {
                 const auto self = weak_self.lock();
@@ -526,18 +527,20 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             view.check->setIndeterminate(row.mixed);
             break;
         case PropertyKind::Ref:
-            view.field->show(shown_text(row));
+            view.pick->setText(shown_text(row));
             view.tip->setText(row.mixed ? std::string() : row.path);
             if (!row.mixed && !row.path.empty()) {
                 if (!view.tip_installed) {
-                    jadefx::Tooltip::install(view.field.get(), view.tip);
+                    jadefx::Tooltip::install(view.pick.get(), view.tip);
                     view.tip_installed = true;
                 }
             } else if (view.tip_installed) {
-                jadefx::Tooltip::uninstall(view.field.get());
+                jadefx::Tooltip::uninstall(view.pick.get());
                 view.tip_installed = false;
             }
-            view.pick->setStyle(picking && pick_name == row.name ? kPickingStyle : kButtonStyle);
+            view.pick->setStyle(picking && pick_name == row.name ? kPickingStyle
+                                : row.writable                  ? kFieldStyle
+                                                                : kReadOnlyStyle);
             break;
         }
     }
@@ -679,7 +682,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         pick_name = view.row.name;
         pick_ids = view.ids;
         pick_seen = selection->revision();
-        status = "Click an instance in the Explorer to set " + pick_name + ". Click Pick again to cancel.";
+        status = "Click an instance in the Explorer to set " + pick_name + ". Click " + pick_name + " again to cancel.";
         force = true;
     }
 
@@ -772,10 +775,9 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 place(*view->check, editor_x, std::min(editor_width, kRowHeight), kRowHeight);
                 break;
             case PropertyKind::Ref: {
-                const double display = std::max(24.0, editor_width - kPickWidth - kClearWidth - 2 * kAxisGap);
-                place(*view->field, editor_x, display, kRowHeight);
-                place(*view->pick, editor_x + display + kAxisGap, kPickWidth, kRowHeight);
-                place(*view->clear, editor_x + display + kPickWidth + 2 * kAxisGap, kClearWidth, kRowHeight);
+                const double display = std::max(24.0, editor_width - kClearWidth - kAxisGap);
+                place(*view->pick, editor_x, display, kRowHeight);
+                place(*view->clear, editor_x + display + kAxisGap, kClearWidth, kRowHeight);
                 break;
             }
             default:
@@ -886,9 +888,8 @@ jadefx::Node* PropertiesPanel::editor(const std::string& property, int part) con
         case PropertyKind::Bool:
             return part == 0 ? view->check.get() : nullptr;
         case PropertyKind::Ref:
-            return part == 0 ? static_cast<jadefx::Node*>(view->field.get())
-                   : part == 1 ? static_cast<jadefx::Node*>(view->pick.get())
-                   : part == 2 ? static_cast<jadefx::Node*>(view->clear.get())
+            return part == 0 ? static_cast<jadefx::Node*>(view->pick.get())
+                   : part == 1 ? static_cast<jadefx::Node*>(view->clear.get())
                                : nullptr;
         default:
             return part == 0 ? view->field.get() : nullptr;

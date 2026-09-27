@@ -29,7 +29,7 @@ struct PropertyValue {
 // One property every selected instance has, with the same type.
 // mixed is true when the instances do not all hold the same value. For a
 // Vector3, axis_mixed says which components differ; value keeps the ones that
-// agree. For a Ref, label is "Name (Class)" and path is the Names from the root
+// agree. For a Ref, label is the Name and path is the Names from the root
 // down, both empty when the value is nil or mixed.
 struct PropertyRow {
     std::string name;
@@ -91,7 +91,7 @@ struct EditResult {
 EditResult apply_edit(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids,
                       const PropertyEdit& edit);
 
-// "Name (Class)" for a Ref value, and the Names from the root down. The caller
+// The Name of a Ref value, and the Names from the root down. The caller
 // holds the DataModel lock.
 std::string ref_label(const engine_core::DataModel& world, engine_core::InstanceId id);
 std::string ref_path(const engine_core::DataModel& world, engine_core::InstanceId id);

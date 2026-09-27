@@ -426,8 +426,7 @@ std::string ref_label(const DataModel& world, InstanceId id) {
     if (id == DataModel::kNoParent || (id != 0 && !world.alive(id))) {
         return {};
     }
-    const char* type = class_of(world, id);
-    return world.name(id) + " (" + (type != nullptr ? type : "Instance") + ")";
+    return world.name(id);
 }
 
 std::string ref_path(const DataModel& world, InstanceId id) {

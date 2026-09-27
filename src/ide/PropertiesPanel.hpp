@@ -32,9 +32,10 @@ using PropertiesRun = std::function<void(std::function<void(engine_core::DataMod
 // cancels. A value changed elsewhere shows at once, except in a field that is
 // focused and typed in; that one resyncs when it commits or cancels.
 //
-// A reference row shows "Name (Class)" and its path as a tooltip. Pick waits
-// for the next selection change, such as a click in the explorer, uses the
-// instance picked, and puts the selection back. Clear sets nil. A Parent that
+// A reference row shows the instance's Name, with its path as a tooltip.
+// Clicking the Name waits for the next selection change, such as a click in
+// the explorer, uses the instance picked, and puts the selection back.
+// Clicking it again cancels. Clear sets nil. A Parent that
 // would put an instance under itself is refused.
 class PropertiesPanel {
 public:
@@ -60,7 +61,7 @@ public:
     bool field_undo(bool redo);
 
     // The widget for a row. part picks the Vector3 axis, or for a reference
-    // 0 the display, 1 Pick, and 2 Clear. Null when there is no such row.
+    // 0 the Name that picks and 1 Clear. Null when there is no such row.
     jadefx::Node* editor(const std::string& property, int part = 0) const;
 
     // What the rows show now.

@@ -279,6 +279,7 @@ int RunLuauHighlightTests();
 int RunLuauCompleteTests();
 int RunScriptMarksTests();
 int RunScriptPairsTests();
+int RunTextWrapTests();
 
 int main() {
     try {
@@ -296,6 +297,7 @@ int main() {
         gFailures += RunLuauCompleteTests();
         gFailures += RunScriptMarksTests();
         gFailures += RunScriptPairsTests();
+        gFailures += RunTextWrapTests();
     } catch (const std::exception& ex) {
         std::fprintf(stderr, "FAIL exception: %s\n", ex.what());
         return EXIT_FAILURE;

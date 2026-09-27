@@ -9,6 +9,7 @@
 #include "ScriptAnalysis.hpp"
 #include "ScriptMarks.hpp"
 #include "ScriptPairs.hpp"
+#include "TextWrap.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -715,6 +716,10 @@ void ScriptCodeArea::handleScroll(jadefx::ScrollEvent& event) {
 namespace {
 
 constexpr std::chrono::milliseconds kHoverDelay(500);
+// The hover tip's widest, and its distance from the window's edges.
+constexpr double kTipMaxWidth = 560;
+constexpr double kTipMargin = 8;
+constexpr double kTipPaddingX = 8;
 
 char32_t CodePointAt(std::string_view text, int index) {
     int count = 0;
@@ -889,21 +894,35 @@ void ScriptCodeArea::showTip(const std::string& title, const std::string& detail
         tip_ = jadefx::make<jadefx::VBox>();
         tip_->setMouseTransparent(true);
         tip_->setSpacing(2);
-        tip_->setPadding(jadefx::Insets{6, 8, 6, 8});
+        tip_->setPadding(jadefx::Insets{6, kTipPaddingX, 6, kTipPaddingX});
         tip_->setStyle(
             "background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #c5c8ce; "
             "box-shadow: 0 2px 8px rgba(32, 33, 36, 0.16);");
     }
     tip_->getChildren().clear();
     const jadefx::Color body_fill = jadefx::Color::parse("#5c6570");
+    // A Label draws one line and cuts off what does not fit, so long text is
+    // wrapped here, one Label per line. The tip is never wider than
+    // kTipMaxWidth, or than the window less a margin.
+    double wrap_width = kTipMaxWidth;
+    if (const jadefx::Scene* scene = getScene(); scene != nullptr && scene->getWidth() > 0) {
+        wrap_width = std::min(wrap_width, scene->getWidth() - kTipMargin * 2);
+    }
+    wrap_width = std::max(wrap_width - kTipPaddingX * 2, 80.0);
+    // Measured and drawn in the same font: each line pins it, so a style cannot change it later.
+    const jadefx::Font font = jadefx::Label().getFont();
+    const auto measure = [&font](const std::string& line) { return static_cast<double>(font.measureWidth(line)); };
     auto add_line = [&](const std::string& text, const jadefx::Color& fill) {
         if (text.empty()) {
             return;
         }
-        auto label = jadefx::make<jadefx::Label>(text);
-        label->setTextFill(fill);
-        label->setMouseTransparent(true);
-        tip_->getChildren().add(label);
+        for (const std::string& line : WrapText(text, wrap_width, measure)) {
+            auto label = jadefx::make<jadefx::Label>(line);
+            label->setFont(font);
+            label->setTextFill(fill);
+            label->setMouseTransparent(true);
+            tip_->getChildren().add(label);
+        }
     };
     add_line(title, titleFill);
     add_line(detail, body_fill);

@@ -278,9 +278,13 @@ void testColor3() {
     expectChunkError(runner, "local c = Color3.new() c.R = 1", "cannot be assigned", "Color3 is read-only");
     expectChunkError(runner, "local _ = Color3.new().A", "not a valid member", "a Color3 has no alpha");
     expectPrinted(runner,
-                  "local o = Instance.new('GameObject') o.Color = Color3.fromRGB(255, 0, 0) "
-                  "print(o.Color.r, o.Color.g, o.Color.a)",
-                  "1\t0\t1", "a Color property takes a Color3");
+                  "local o = Instance.new('GameObject') "
+                  "print(typeof(o.Color), o.Color == Color3.new(1, 1, 1)) "
+                  "o.Color = Color3.fromRGB(255, 0, 0) "
+                  "print(typeof(o.Color), o.Color.R, o.Color.G, o.Color.B, o.Color == Color3.new(1, 0, 0))",
+                  "Color3\ttrue\nColor3\t1\t0\t0\ttrue", "GameObject.Color is a Color3");
+    expectChunkError(runner, "Instance.new('GameObject').Color = {r = 1, g = 0, b = 0}", "Color3",
+                     "a Color property refuses a table");
     runner.stop();
 }
 

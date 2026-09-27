@@ -145,49 +145,13 @@ int lua_guard(lua_State* state, Fn fn) {
     }
 }
 
-bool read_color(lua_State* state, int index, ColorRgb& color) {
-    // A Color3 is opaque.
-    if (const Color3* rgb = to_color3(state, index)) {
-        color = ColorRgb{rgb->r, rgb->g, rgb->b, 1.f};
-        return true;
-    }
-    if (!lua_istable(state, index)) {
+bool read_color3(lua_State* state, int index, ColorRgb& color) {
+    const Color3* rgb = to_color3(state, index);
+    if (rgb == nullptr) {
         return false;
     }
-    auto component = [&](const char* name, int slot, float fallback) {
-        lua_getfield(state, index, name);
-        if (lua_isnumber(state, -1)) {
-            const float value = static_cast<float>(lua_tonumber(state, -1));
-            lua_pop(state, 1);
-            return value;
-        }
-        lua_pop(state, 1);
-        lua_rawgeti(state, index, slot);
-        if (lua_isnumber(state, -1)) {
-            const float value = static_cast<float>(lua_tonumber(state, -1));
-            lua_pop(state, 1);
-            return value;
-        }
-        lua_pop(state, 1);
-        return fallback;
-    };
-    color.r = component("r", 1, 0.f);
-    color.g = component("g", 2, 0.f);
-    color.b = component("b", 3, 0.f);
-    color.a = component("a", 4, 1.f);
+    color = ColorRgb{rgb->r, rgb->g, rgb->b, 1.f};
     return true;
-}
-
-void push_color(lua_State* state, ColorRgb color) {
-    lua_newtable(state);
-    lua_pushnumber(state, color.r);
-    lua_setfield(state, -2, "r");
-    lua_pushnumber(state, color.g);
-    lua_setfield(state, -2, "g");
-    lua_pushnumber(state, color.b);
-    lua_setfield(state, -2, "b");
-    lua_pushnumber(state, color.a);
-    lua_setfield(state, -2, "a");
 }
 
 bool is_a(const DataModel& object, const char* name) {
@@ -1865,7 +1829,7 @@ void push_registered(lua_State* state, ScriptRuntime* runtime, const LuaSlot& sl
         lua_pushvector(state, slot.vec.x, slot.vec.y, slot.vec.z);
         return;
     case LuaSlot::Kind::Color:
-        push_color(state, slot.color);
+        push_color3(state, Color3{slot.color.r, slot.color.g, slot.color.b});
         return;
     case LuaSlot::Kind::Transform: {
         lua_newtable(state);
@@ -1982,9 +1946,9 @@ int ScriptBindings::instance_newindex(lua_State* state) {
             }
             slot.kind = LuaSlot::Kind::Vec3;
             slot.vec = Vec3{components[0], components[1], components[2]};
-        } else if (type == "Color") {
-            if (!read_color(state, 3, slot.color)) {
-                luaL_error(state, "%s expects a Color3 or a table", field->name);
+        } else if (type == "Color3") {
+            if (!read_color3(state, 3, slot.color)) {
+                luaL_error(state, "%s expects a Color3", field->name);
             }
             slot.kind = LuaSlot::Kind::Color;
         } else if (type == "Transform") {

@@ -315,6 +315,11 @@ void testVector3() {
     const ide::CompletionList color3_method = at_end("local c = Color3.new(1, 0, 0)\nc:");
     expect_has(color3_method, "Lerp", "Color3:Lerp");
     expect_has(color3_method, "ToHex", "Color3:ToHex");
+    const ide::CompletionList painted = at_end("local part = Instance.new(\"GameObject\")\npart.Color.");
+    expect_has(painted, "R", "GameObject.Color.R");
+    expect_missing(painted, "A", "GameObject.Color has no alpha");
+    const ide::CompletionList painted_method = at_end("local part = Instance.new(\"GameObject\")\npart.Color:");
+    expect_has(painted_method, "ToHex", "GameObject.Color:ToHex");
 
     // A Connect callback's parameters take the signal's types without an annotation.
     const ide::CompletionList inferred = at_end(

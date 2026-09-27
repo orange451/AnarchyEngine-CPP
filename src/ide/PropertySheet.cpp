@@ -83,9 +83,6 @@ bool read_value(DataModel& world, DataModel& object, const LuaField& field, Prop
         case LuaSlot::Kind::Color:
             out.text = format_float(slot.color.r) + ", " + format_float(slot.color.g) + ", " +
                        format_float(slot.color.b);
-            if (slot.color.a != 1.f) {
-                out.text += ", " + format_float(slot.color.a);
-            }
             return true;
         case LuaSlot::Kind::String:
             out.text = slot.text;
@@ -203,7 +200,7 @@ bool property_kind_for(const std::string& type_name, PropertyKind& out) {
     } else if (type_name == "Instance" || type_name == "Instance?" || type_name == "DataModel" ||
                type_name == "DataModel?") {
         out = PropertyKind::Ref;
-    } else if (type_name == "Color") {
+    } else if (type_name == "Color3") {
         // No color picker yet. The value is still worth seeing.
         out = PropertyKind::ReadOnlyText;
     } else {

@@ -2,7 +2,7 @@
 
 namespace engine_core {
 
-// A script sees this as a Color: a table with r, g, b, and a.
+// Engine storage. A script sees GameObject.Color as a Color3, which has no alpha.
 struct ColorRgb {
     float r = 1.f;
     float g = 1.f;

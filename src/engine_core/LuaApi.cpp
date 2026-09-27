@@ -356,11 +356,7 @@ void lua_host_library_names(std::vector<std::string>& out) {
 
 namespace {
 
-LuaField component(const char* name) { return lua_property(name, "number", true, nullptr, nullptr); }
-
 ANARCHY_LUA_REGISTER(register_value_classes) {
-    const LuaField color[] = {component("r"), component("g"), component("b"), component("a")};
-    register_lua_class("Color", nullptr, color, 4);
     register_lua_class("Transform", nullptr, nullptr, 0);
     // DataModel is everything in the tree. Instance is what Instance.new makes;
     // Game, the root that scripts see as game, is not one.
@@ -781,14 +777,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Script", "Enabled", "When false, the script does not run.", "boolean", false, {});
     add("ModuleScript", "Source", "The Luau source require runs.", "string", false, {});
 
-    add("GameObject", "Color", "The color stored on this object.", "Color", false, {});
+    add("GameObject", "Color", "The color stored on this object.", "Color3", false, {});
     add("GameObject", "Transform", "A table of 16 numbers.", "Transform", false, {});
     add("GameObject", "CFrame", "The same transform as Transform.", "Transform", false, {});
     add("TestTriangle", "Position", "Where the triangle is drawn. Positive z is toward the camera.", "Vector3", false, {});
-    add("Color", "r", "The red component.", "number", false, {});
-    add("Color", "g", "The green component.", "number", false, {});
-    add("Color", "b", "The blue component.", "number", false, {});
-    add("Color", "a", "The alpha component.", "number", false, {});
 
     add("Signal", "Connect", "Calls callback when the signal fires and returns the connection.", "Connection", false,
         {P("callback", "function")});

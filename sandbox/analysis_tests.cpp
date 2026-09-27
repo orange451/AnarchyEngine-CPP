@@ -403,8 +403,13 @@ TEST_CASE("analysis definitions come from the class registry", "[A11]") {
     std::vector<engine_core::LuaOperator> operators;
     engine_core::lua_class_operators("Vector2", operators);
     REQUIRE(operators.size() == 7);
-    engine_core::lua_class_operators("Color", operators);
+    engine_core::lua_class_operators("Transform", operators);
     REQUIRE(operators.empty());
+    const std::size_t game_object = source.find("declare extern type GameObject extends Instance with");
+    REQUIRE(game_object != std::string::npos);
+    const std::string game_object_block = source.substr(game_object, source.find("end\n", game_object) - game_object);
+    REQUIRE(game_object_block.find("Color: Color3") != std::string::npos);
+    REQUIRE(source.find("declare extern type Color with") == std::string::npos);
     // Operators are not members, so completion does not offer them.
     REQUIRE(engine_core::lua_class_find("Vector2", "__add") == nullptr);
 }

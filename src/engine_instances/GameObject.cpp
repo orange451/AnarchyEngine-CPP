@@ -232,7 +232,7 @@ bool write_lua_transform(DataModel&, DataModel& object, LuaSlot& in) {
 
 ANARCHY_LUA_REGISTER(register_game_object_lua) {
     const LuaField fields[] = {
-        lua_property("Color", "Color", true, read_lua_color, write_lua_color),
+        lua_property("Color", "Color3", true, read_lua_color, write_lua_color),
         lua_property("Transform", "Transform", true, read_lua_transform, write_lua_transform),
         lua_property("CFrame", "Transform", true, read_lua_transform, write_lua_transform),
     };

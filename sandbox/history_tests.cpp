@@ -168,7 +168,7 @@ TEST_CASE("H5 play script writes stay off the edit stack", "[H5][history]") {
     script.set_source(R"(
         local part = game:FindFirstChild("Brick")
         for _ = 1, 100 do
-            part.Color = {r = 0, g = 0, b = 1, a = 1}
+            part.Color = Color3.new(0, 0, 1)
         end
     )");
     game.set_parent(script.id(), game.id());

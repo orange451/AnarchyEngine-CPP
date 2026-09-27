@@ -2228,7 +2228,7 @@ TEST_CASE("S8 a script color write is path A", "[S8]") {
     engine_core::GameObject& part = add_part(rig.game, rig.game.id(), "P");
     add_script(rig.game, "Painter", R"(
         local part = game:FindFirstChild("P")
-        part.Color = {r = 0.2, g = 0.4, b = 0.6, a = 1}
+        part.Color = Color3.new(0.2, 0.4, 0.6)
     )");
     int hits = 0;
     engine_core::Field seen = engine_core::Field::Count;
@@ -2364,7 +2364,7 @@ TEST_CASE("S12 a Luau Heartbeat connection runs on the simulation thread", "[S12
         local n = 0
         game:GetService("RunService").Heartbeat:Connect(function()
             n = n + 1
-            part.Color = {r = n / 100, g = 0.2, b = 0.3, a = 1}
+            part.Color = Color3.new(n / 100, 0.2, 0.3)
         end)
     )");
     std::atomic<int> hits{0};

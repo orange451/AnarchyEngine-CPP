@@ -654,15 +654,62 @@ void TestFilterShowsTheWayToAMatch() {
     Expect(rig.cell("Alpha") != nullptr && rig.cell("Inner") == nullptr, "clearing the filter closes what it opened");
 }
 
-void TestFilterEscapeClears() {
+void TestFilterEscapeLeavesTheField() {
     Rig rig;
-    rig.type_filter("gam", 0.1);
+    rig.clickRow("Gamma", 0.1);
+    rig.type_filter("gam", 0.2);
     rig.filter()->requestFocus();
     rig.key(jadefx::Key::Escape);
+    rig.frame(0.3);
+    Expect(!rig.filter()->isFocused(), "Escape takes the focus from the filter");
+    Expect(rig.filter()->getText() == "gam", "Escape keeps the filter text");
+    Expect(rig.selection() == rig.pick({2}), "Escape in the filter keeps the selection");
+    rig.key(jadefx::Key::Escape);
+    rig.frame(0.4);
+    Expect(rig.selection().empty(), "a second Escape clears the selection");
+    Expect(!rig.painted("Gamma"), "the cleared row no longer shows selected");
+}
+
+void TestEscapeClearsTheSelection() {
+    Rig rig;
+    rig.clickRow("Alpha", 0.1);
+    rig.mods = jadefx::Key::ModControl;
+    rig.clickRow("Beta", 0.2);
+    rig.mods = 0;
+    Expect(rig.selection().size() == 2, "two rows are selected");
+    rig.key(jadefx::Key::Escape);
+    rig.frame(0.3);
+    Expect(rig.selection().empty(), "Escape on the tree clears the selection");
+}
+
+void TestFilterClearButton() {
+    Rig rig;
+    auto clear_button = [&]() -> jadefx::Node* {
+        const std::vector<jadefx::Node*> found = rig.explorer->getElementsByClassName("explorer-filter-clear");
+        return found.empty() ? nullptr : found.front();
+    };
+    Expect(clear_button() != nullptr && !clear_button()->isVisible(), "the clear button is hidden while the filter is empty");
+    rig.filter()->requestFocus();
+    rig.type_filter("bet", 0.1);
+    jadefx::Node* button = clear_button();
+    Expect(button != nullptr && button->isVisible(), "the clear button shows once there is filter text");
+    if (button == nullptr) {
+        return;
+    }
+    jadefx::TextField* field = rig.filter();
+    Expect(button->getAbsoluteX() + button->getWidth() <= field->getAbsoluteX() + field->getWidth() &&
+               button->getAbsoluteX() > field->getAbsoluteX() + field->getWidth() * 0.5,
+           "the clear button sits at the field's right end");
+    const double x = button->getAbsoluteX() + button->getWidth() * 0.5;
+    const double y = button->getAbsoluteY() + button->getHeight() * 0.5;
+    rig.scene->noteButton(0, true, x, y);
+    rig.scene->noteButton(0, false, x, y);
     rig.frame(0.2);
     rig.frame(0.21);
-    Expect(rig.filter()->getText().empty(), "Escape empties the filter");
-    Expect(rig.cell("Alpha") != nullptr, "Escape shows every row");
+    Expect(field->getText().empty(), "the clear button empties the filter");
+    Expect(!field->isFocused(), "the clear button takes the focus from the filter");
+    Expect(rig.cell("Alpha") != nullptr, "every row shows again");
+    Expect(!button->isVisible(), "the clear button hides again");
 }
 
 void TestFilterKeepsHiddenSelection() {
@@ -766,7 +813,9 @@ int main() {
     TestMoveSet();
     TestFilterHidesOtherRows();
     TestFilterShowsTheWayToAMatch();
-    TestFilterEscapeClears();
+    TestFilterEscapeLeavesTheField();
+    TestEscapeClearsTheSelection();
+    TestFilterClearButton();
     TestFilterKeepsHiddenSelection();
     TestRevealOpensTheBranch();
     TestRevealScrolls();

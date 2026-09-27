@@ -66,19 +66,20 @@ const char* ActionIcon(std::string_view name) {
     return nullptr;
 }
 
-// The + drawn on the hovered row. The icon stays 16px; the chip is the hit target.
-class InsertButton : public jadefx::StackPane {
+// An icon on a chip: the + on the hovered row, and the X that clears the
+// filter. The icon stays 16px; the chip is the hit target.
+class ChipButton : public jadefx::StackPane {
 public:
-    InsertButton() {
+    ChipButton(const char* file, const char* fallback) {
         setAlignment(jadefx::Pos::Center);
         setCursor(jadefx::Cursor::Pointer);
-        if (std::shared_ptr<jadefx::ImageView> icon = icon_file("plus-small.png")) {
+        if (std::shared_ptr<jadefx::ImageView> icon = icon_file(file)) {
             icon->setMouseTransparent(true);
             icon->setPrefSize(16, 16);
             icon->setMinSize(16, 16);
             getChildren().add(std::move(icon));
         } else {
-            auto plus = jadefx::make<jadefx::Label>("+");
+            auto plus = jadefx::make<jadefx::Label>(fallback);
             plus->setMouseTransparent(true);
             plus->setAlignment(jadefx::Pos::Center);
             plus->setTextFill(jadefx::Color::rgb8(95, 99, 104));
@@ -118,25 +119,35 @@ private:
     std::function<void()> cancel_;
 };
 
-// The filter above the tree. Escape empties it.
+// The filter above the tree. Escape leaves it and keeps the text. The right
+// padding is room for the clear button.
 class FilterField : public jadefx::TextField {
 public:
-    FilterField() {
+    explicit FilterField(std::function<void()> leave) : leave_(std::move(leave)) {
         getClassList().add("explorer-filter");
         setPromptText("Filter");
-        setStyle("width: 100%; border-width: 0 0 1px 0;");
+        setStyle("width: 100%; border-width: 0 0 1px 0; padding: 6px 28px 6px 8px;");
     }
 
 protected:
     void handleKey(jadefx::KeyEvent& event) override {
-        if (event.pressed && event.key == jadefx::Key::Escape && !getText().empty()) {
+        if (event.pressed && event.key == jadefx::Key::Escape) {
             event.consume();
-            clear();
+            if (leave_) {
+                leave_();
+            }
             return;
         }
         TextField::handleKey(event);
     }
+
+private:
+    std::function<void()> leave_;
 };
+
+// The clear button's chip, and its gap from the field's right edge.
+constexpr double kClearSize = 20;
+constexpr double kClearInset = 4;
 
 std::string Lower(std::string text) {
     for (char& unit : text) {
@@ -189,15 +200,24 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
     }
     // Row clicks bubble here after the row has selected itself.
     tree_->setOnMouseClicked([this](const jadefx::MouseEvent& event) { clicked(event); });
-    insert_button_ = jadefx::make<InsertButton>();
+    insert_button_ = jadefx::make<ChipButton>("plus-small.png", "+");
     insert_button_->setOnMouseClicked([this](const jadefx::MouseEvent&) { open_insert(); });
     tree_->setHoverAccessory(insert_button_);
-    filter_field_ = jadefx::make<FilterField>();
+    filter_field_ = jadefx::make<FilterField>([this] { leave_filter(); });
     auto column = jadefx::make<jadefx::BorderPane>();
     Fill(*column);
     column->setTop(filter_field_);
     column->setCenter(tree_);
     getChildren().add(column);
+    // After the column, so it draws over the field and is hit first.
+    filter_clear_ = jadefx::make<ChipButton>("Cross.png", "x");
+    filter_clear_->getClassList().add("explorer-filter-clear");
+    filter_clear_->setVisible(false);
+    filter_clear_->setOnMouseClicked([this](const jadefx::MouseEvent&) {
+        filter_field_->clear();
+        leave_filter();
+    });
+    getChildren().add(filter_clear_);
     // After the tree, so it draws over the rows and is hit first.
     rename_field_ = jadefx::make<RenameField>([this] { finish_rename(false); });
     rename_field_->setOnAction([this](jadefx::ActionEvent&) { finish_rename(true); });
@@ -694,6 +714,7 @@ void IdeExplorer::layoutChildren() {
     }
     poll_clicks();
     StackPane::layoutChildren();
+    place_clear();
     place_reveal();
     place_rename();
 }
@@ -724,6 +745,38 @@ void IdeExplorer::poll_filter() {
     open_before_filter_.clear();
     // What was picked while filtering stays in view.
     reveal_wanted_ = true;
+}
+
+void IdeExplorer::handleKey(jadefx::KeyEvent& event) {
+    // Keys bubble here from the tree. The filter and the rename field keep their Escape.
+    if (event.pressed && !event.repeat && event.key == jadefx::Key::Escape && !event.shift && !event.alt &&
+        !event.shortcut() && !selected_.empty()) {
+        event.consume();
+        write_selection({});
+        return;
+    }
+    IdePane::handleKey(event);
+}
+
+void IdeExplorer::leave_filter() {
+    if (filter_field_->isFocused()) {
+        if (jadefx::Scene* scene = getScene()) {
+            scene->releaseFocus(filter_field_.get());
+        }
+    }
+    // The tree takes the keys, so a second Escape clears the selection.
+    tree_->requestFocus();
+}
+
+void IdeExplorer::place_clear() {
+    const bool show = !filter_field_->getText().empty() && filter_field_->getHeight() > 0;
+    filter_clear_->setVisible(show);
+    if (!show) {
+        return;
+    }
+    const double x = filter_field_->getAbsoluteX() + filter_field_->getWidth() - kClearInset - kClearSize;
+    const double y = filter_field_->getAbsoluteY() + (filter_field_->getHeight() - kClearSize) * 0.5;
+    filter_clear_->performLayout(x - getAbsoluteX(), y - getAbsoluteY(), kClearSize, kClearSize);
 }
 
 bool IdeExplorer::reveal_selection() {

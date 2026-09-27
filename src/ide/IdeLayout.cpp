@@ -15,6 +15,7 @@
 #include "IdeExplorer.hpp"
 #include "IdeScriptEditor.hpp"
 #include "PropertiesPanel.hpp"
+#include "SessionKeys.hpp"
 #include "LuaSource.hpp"
 #include "TestTriangle.hpp"
 #include "../runner/GameView.hpp"
@@ -36,8 +37,6 @@ constexpr double kStatusHeight = 24;
 constexpr double kSideWidth = 240;
 constexpr double kConsoleHeight = 150;
 
-// JadeFX key codes match GLFW. This is GLFW_KEY_F5.
-constexpr int kKeyF5 = 294;
 constexpr std::uint64_t kCommandUndo = 1;
 
 template <typename T>
@@ -506,16 +505,21 @@ void IdeLayout::mount(jadefx::Scene& scene) {
     scene.setStylesheet(kStylesheet);
     scene.setRoot(root_);
     scene.addKeyHook([this](jadefx::KeyEvent& event) {
-        // F5 toggles the play session, as the menu accelerator did.
-        if (event.pressed && !event.repeat && !event.consumed && event.key == kKeyF5 && !event.shift &&
-            !event.control && !event.alt && !event.meta) {
-            event.consume();
-            if (testing_) {
-                stop_test();
-            } else {
-                start_test();
+        // F5 tests or resumes, and Shift+F5 stops, as in Roblox Studio.
+        if (event.pressed && !event.repeat && !event.consumed) {
+            const SessionAction action = SessionKeyAction(event.key, event.shift, event.control, event.alt,
+                                                          event.meta, testing_, stepping_);
+            if (action != SessionAction::None) {
+                event.consume();
+                if (action == SessionAction::Test) {
+                    start_test();
+                } else if (action == SessionAction::Resume) {
+                    resume_test();
+                } else {
+                    stop_test();
+                }
+                return;
             }
-            return;
         }
         if (scene_ != nullptr) {
             routeUndo(event, *scene_);
@@ -1644,6 +1648,7 @@ void IdeLayout::routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene) {
 
 void IdeLayout::show_session(bool testing, bool stepping) {
     testing_ = testing;
+    stepping_ = stepping;
     if (session_buttons_[0] != nullptr) {
         ShowSession(*session_buttons_[0], *session_buttons_[1], *session_buttons_[2], *session_buttons_[3], testing,
                     stepping);

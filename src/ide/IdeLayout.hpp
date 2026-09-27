@@ -33,7 +33,8 @@ class PropertiesPanel;
 // stops steps and leaves the session active. Resume continues them. Stop
 // restores the place, including when that test is already paused.
 // The ribbon under the menu bar holds Test, Pause, Resume, and Stop. Only
-// the ones that apply to the session are enabled. F5 is Test, or Stop.
+// the ones that apply to the session are enabled. F5 is Test, or Resume when
+// paused. Shift+F5 is Stop.
 // Explorer rows open Cut, Paste, and Rename. A script also has Edit, and a
 // double-click runs it. Edit docks a script editor on the scene view's tab strip.
 // The explorer edits a name in place and hands the result to rename.
@@ -185,8 +186,10 @@ private:
     bool place_modified_ = false;
     // What the window title shows now.
     bool title_modified_ = false;
-    // A play session is active: the ribbon enables Stop, and F5 stops.
+    // A play session is active: the ribbon enables Stop, and Shift+F5 stops.
     bool testing_ = false;
+    // That session is executing, not paused. F5 resumes only a paused one.
+    bool stepping_ = false;
     // The ribbon's Test, Pause, Resume, and Stop.
     jadefx::Node* session_buttons_[4] = {};
     // Open alerts. An alert must outlive its popup.

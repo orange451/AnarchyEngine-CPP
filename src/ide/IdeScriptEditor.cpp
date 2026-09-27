@@ -720,6 +720,10 @@ constexpr std::chrono::milliseconds kHoverDelay(500);
 constexpr double kTipMaxWidth = 560;
 constexpr double kTipMargin = 8;
 constexpr double kTipPaddingX = 8;
+// The IDE's text font, from the scene rule in IdeLayout's stylesheet. A new
+// Label's own font is 16px, which is larger than the text around it.
+constexpr const char* kTipFontFamily = "Open Sans";
+constexpr float kTipFontSize = 13.f;
 
 char32_t CodePointAt(std::string_view text, int index) {
     int count = 0;
@@ -910,7 +914,7 @@ void ScriptCodeArea::showTip(const std::string& title, const std::string& detail
     }
     wrap_width = std::max(wrap_width - kTipPaddingX * 2, 80.0);
     // Measured and drawn in the same font: each line pins it, so a style cannot change it later.
-    const jadefx::Font font = jadefx::Label().getFont();
+    const jadefx::Font font(kTipFontFamily, kTipFontSize);
     const auto measure = [&font](const std::string& line) { return static_cast<double>(font.measureWidth(line)); };
     auto add_line = [&](const std::string& text, const jadefx::Color& fill) {
         if (text.empty()) {

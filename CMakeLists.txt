@@ -56,6 +56,20 @@ add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
     ${STUDIO_SOURCES}
 )
 
+# The program icon comes from resources/icon. make_icons.py there rebuilds the
+# .ico and .icns from anarchy.png.
+set(ANARCHY_ICON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon")
+if(WIN32)
+    # Written with an absolute path so rc and windres find the icon from any directory.
+    set(ANARCHY_ICON_ICO "${ANARCHY_ICON_DIR}/anarchy.ico")
+    configure_file("${ANARCHY_ICON_DIR}/anarchy.rc.in" "${CMAKE_CURRENT_BINARY_DIR}/anarchy.rc" @ONLY)
+    target_sources(AnarchyEngine-CPP PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/anarchy.rc")
+elseif(APPLE)
+    # Lands in Contents/Resources, where CFBundleIconFile looks.
+    target_sources(AnarchyEngine-CPP PRIVATE "${ANARCHY_ICON_DIR}/anarchy.icns")
+    set_source_files_properties("${ANARCHY_ICON_DIR}/anarchy.icns" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+endif()
+
 # An explicit checkout wins. A sibling named JadeFX_CPP is next. Otherwise
 # CMake clones the library, so this tree is enough to build.
 set(JADEFX_CPP_DIR "" CACHE PATH "Path to a JadeFX checkout. Empty downloads it unless ../JadeFX_CPP exists.")
@@ -348,6 +362,7 @@ if(APPLE)
         MACOSX_BUNDLE_GUI_IDENTIFIER "local.anarchyengine-cpp"
         MACOSX_BUNDLE_BUNDLE_VERSION "1.0"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+        MACOSX_BUNDLE_ICON_FILE "anarchy.icns"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in"
     )
 

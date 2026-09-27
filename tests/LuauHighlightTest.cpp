@@ -85,6 +85,10 @@ int RunLuauHighlightTests() {
     expect_style("`hello {script}`", 1, "string", "text around an interpolation stays a string");
 
     expect_style("continue", 0, "keyword", "continue is a keyword");
+    expect_style("const limit = 10", 0, "keyword", "const is a keyword, like local");
+    expect_style("const limit = 10", 6, nullptr, "a const's name stays plain");
+    expect_style("local constant = 1", 6, nullptr, "a name starting with const is not a keyword");
+    expect_style("-- const", 3, "comment", "a comment hides const");
     expect_style("export type Vec", 0, "keyword", "export is a keyword");
     expect_style("export type Vec", 7, "keyword", "type is a keyword");
     expect_style("0xFF", 0, "number", "a hex literal is a number");

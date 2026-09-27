@@ -18,9 +18,11 @@ bool IsNameContinue(char32_t code) {
 bool IsDigit(char32_t code) { return code >= U'0' && code <= U'9'; }
 
 const char* Keyword(std::string_view word) {
-    static const char* kWords[] = {"and",  "break", "continue", "do",    "else", "elseif", "end",  "export", "false", "for",
-                                   "function", "if", "in",       "local", "nil",  "not",    "or",   "repeat", "return", "then",
-                                   "true", "type",  "until",     "while"};
+    // continue, const, export, and type are contextual in Luau, but read as keywords.
+    static const char* kWords[] = {"and",   "break", "const",  "continue", "do",    "else", "elseif", "end",
+                                   "export", "false", "for",   "function", "if",    "in",   "local",  "nil",
+                                   "not",   "or",    "repeat", "return",   "then",  "true", "type",   "until",
+                                   "while"};
     for (const char* candidate : kWords) {
         if (word == candidate) {
             return "keyword";

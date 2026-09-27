@@ -469,26 +469,51 @@ bool AnonymousFunctionOpen(const std::vector<Token>& tokens, int open) {
            tokens[static_cast<std::size_t>(open - 1)].text == "function";
 }
 
-std::string FormatParams(const std::vector<Param>& params, bool variadic) {
+// `active` is the parameter being typed. Its byte range in the result goes to
+// `bold`. Past the last parameter, `...` is the active one, or nothing is.
+std::string FormatParams(const std::vector<Param>& params, bool variadic, int active = -1,
+                         std::pair<int, int>* bold = nullptr) {
     std::string out = "(";
+    const auto mark = [&](int index, std::size_t begin) {
+        if (bold != nullptr && index == active) {
+            *bold = {static_cast<int>(begin), static_cast<int>(out.size())};
+        }
+    };
     for (std::size_t index = 0; index < params.size(); ++index) {
         if (index > 0) {
             out += ", ";
         }
+        const std::size_t begin = out.size();
         out += params[index].name;
         if (!params[index].type_name.empty()) {
             out += ": ";
             out += params[index].type_name;
         }
+        mark(static_cast<int>(index), begin);
     }
     if (variadic) {
         if (!params.empty()) {
             out += ", ";
         }
+        const std::size_t begin = out.size();
         out += "...";
+        if (active >= static_cast<int>(params.size())) {
+            active = static_cast<int>(params.size());
+        }
+        mark(static_cast<int>(params.size()), begin);
     }
     out += ")";
     return out;
+}
+
+// Puts a parameter list in the popup's header, with `lead` before it, such as
+// `function`. The parameter being typed is drawn bold.
+void SetSignature(CompletionList& list, const std::string& lead, const std::vector<Param>& params, bool variadic,
+                  int active) {
+    std::pair<int, int> bold{-1, -1};
+    list.signature = lead + FormatParams(params, variadic, active, &bold);
+    list.signature_bold_begin = bold.first < 0 ? -1 : bold.first + static_cast<int>(lead.size());
+    list.signature_bold_end = bold.second < 0 ? -1 : bold.second + static_cast<int>(lead.size());
 }
 
 std::string TrimCopy(std::string_view text) {
@@ -1447,6 +1472,8 @@ public:
             if (params.empty()) {
                 return;
             }
+            // What the signal passes, following the parameter being typed.
+            SetSignature(list, "function", params, false, slot.argument);
             std::vector<std::string> used;
             for (int cursor = slot.open + 1; cursor < index && cursor < static_cast<int>(tokens_.size()); ++cursor) {
                 if (tokens_[static_cast<std::size_t>(cursor)].kind == Token::Name) {
@@ -1485,6 +1512,22 @@ public:
         if (params.empty()) {
             return;
         }
+        // Connect( shows the callback it takes before the function is written.
+        std::string callback_type = "(";
+        for (std::size_t param_index = 0; param_index < params.size(); ++param_index) {
+            if (param_index > 0) {
+                callback_type += ", ";
+            }
+            callback_type += params[param_index].name;
+            if (!params[param_index].type_name.empty()) {
+                callback_type += ": " + params[param_index].type_name;
+            }
+        }
+        callback_type += ") -> ()";
+        Param callback;
+        callback.name = "callback";
+        callback.type_name = std::move(callback_type);
+        SetSignature(list, "", {std::move(callback)}, false, 0);
         std::string detail;
         std::string snippet = "function(";
         for (std::size_t param_index = 0; param_index < params.size(); ++param_index) {
@@ -1527,7 +1570,7 @@ public:
         if (callee == nullptr || (callee->params.empty() && !callee->variadic)) {
             return;
         }
-        list.signature = FormatParams(callee->params, callee->variadic);
+        SetSignature(list, "", callee->params, callee->variadic, slot.argument);
         if (list.items.empty() || slot.argument < 0 || slot.argument >= static_cast<int>(callee->params.size())) {
             return;
         }

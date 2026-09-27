@@ -978,6 +978,21 @@ void testCallbackArguments() {
     expect_has(changed_dot_self, "function", "Changed dot call without self");
 }
 
+// The part of the signature drawn bold: the parameter being typed.
+std::string bolded(const ide::CompletionList& list) {
+    if (list.signature_bold_begin < 0 || list.signature_bold_end > static_cast<int>(list.signature.size())) {
+        return {};
+    }
+    return list.signature.substr(static_cast<std::size_t>(list.signature_bold_begin),
+                                 static_cast<std::size_t>(list.signature_bold_end - list.signature_bold_begin));
+}
+
+void expect_bold(const ide::CompletionList& list, const char* part, const char* label) {
+    if (bolded(list) != part) {
+        fail(std::string(label) + " bolds '" + bolded(list) + "' of '" + list.signature + "'");
+    }
+}
+
 void expect_signature(const ide::CompletionList& list, const char* signature, const char* label) {
     if (list.signature != signature) {
         fail(std::string(label) + " signature is '" + list.signature + "'");
@@ -1043,6 +1058,37 @@ void testFunctionParameters() {
 
     const ide::CompletionList second = at_end(std::string(defined) + "test_func(\"test\", g");
     expect_signature(second, "(a: string, b: Instance)", "second argument");
+    expect_bold(invoke, "a: string", "open call");
+    expect_bold(first, "a: string", "first argument");
+    expect_bold(second, "b: Instance", "second argument");
+    expect_bold(at_end(std::string(defined) + "test_func(\"test\", game, "), "", "past the last parameter");
+    expect_bold(at_end("local function log(tag: string, ...)\nend\nlog(\"a\", 1, "), "...", "a variadic argument");
+
+    // A Connect callback: first what Connect takes, then, inside `function(`,
+    // what the signal passes, following the parameter being typed.
+    const std::string began = "game:GetService(\"UserInputService\").InputBegan:Connect(";
+    const ide::CompletionList connect = at_end(began);
+    expect_signature(connect, "(callback: (input: InputObject, gameProcessedEvent: boolean) -> ())", "Connect(");
+    expect_bold(connect, "callback: (input: InputObject, gameProcessedEvent: boolean) -> ()", "Connect(");
+    const ide::CompletionList opened = at_end(began + "function(");
+    expect_signature(opened, "function(input: InputObject, gameProcessedEvent: boolean)", "callback parameters");
+    expect_bold(opened, "input: InputObject", "callback's first parameter");
+    expect_bold(at_end(began + "function(inp"), "input: InputObject", "typing the first parameter");
+    const ide::CompletionList next = at_end(began + "function(input, ");
+    expect_bold(next, "gameProcessedEvent: boolean", "callback's second parameter");
+    expect_has(next, "gameProcessedEvent", "callback's second parameter");
+    expect_bold(at_end(began + "function(input, game"), "gameProcessedEvent: boolean", "typing the second parameter");
+    if (!at_end(began + "function(input, processed)\n    ").signature.empty()) {
+        fail("the callback's body shows no signature");
+    }
+    // The editor closes the brackets as they are typed, so the caret sits before `))`.
+    const std::pair<const char*, const char*> closers[] = {{"function(", "input: InputObject"},
+                                                           {"function(input, ", "gameProcessedEvent: boolean"}};
+    for (const auto& [head, part] : closers) {
+        const std::string typed = began + head;
+        const std::string text = typed + "))";
+        expect_bold(ide::complete_luau(text, static_cast<int>(typed.size())), part, "before the closing brackets");
+    }
     expect_has(second, "game", "second argument");
     expect_detail(second, "game", "Game", "second argument");
 

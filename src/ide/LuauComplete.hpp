@@ -51,6 +51,10 @@ struct CompletionList {
     // Parameter list of the call being written, such as "(a: string, b: Instance)".
     // Shown above the rows. Accepting does not insert it.
     std::string signature;
+    // Byte range of `signature` naming the parameter being typed, drawn bold.
+    // -1 when no parameter is active.
+    int signature_bold_begin = -1;
+    int signature_bold_end = -1;
 };
 
 // Text for the popup shown while the pointer rests on a name.

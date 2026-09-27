@@ -18,6 +18,40 @@ namespace {
 
 constexpr std::chrono::milliseconds kLockWait(5);
 
+// Text drawn bold the way the code area draws it: struck twice, the second
+// time a little to the right. Open Sans has no bold face loaded.
+class BoldText : public jadefx::Controls {
+public:
+    BoldText(const std::string& text, const jadefx::Color& fill) {
+        setMouseTransparent(true);
+        for (auto& strike : strikes_) {
+            strike = jadefx::make<jadefx::Label>(text);
+            strike->setTextFill(fill);
+            strike->setMouseTransparent(true);
+            children().add(strike);
+        }
+    }
+
+    const char* getElementType() const override { return "bold-text"; }
+
+protected:
+    double preferredContentWidth(double innerAvailable) const override {
+        return strikes_[0]->measuredWidth(innerAvailable) + kOffset;
+    }
+    double preferredContentHeight(double innerWidth) const override {
+        return strikes_[0]->measuredHeight(innerWidth, -1);
+    }
+    void layoutChildren() override {
+        const double width = std::max(0.0, contentWidth() - kOffset);
+        strikes_[0]->performLayout(contentLeft(), contentTop(), width, contentHeight());
+        strikes_[1]->performLayout(contentLeft() + kOffset, contentTop(), width, contentHeight());
+    }
+
+private:
+    static constexpr double kOffset = 0.6;
+    std::shared_ptr<jadefx::Label> strikes_[2];
+};
+
 int CodePoints(std::string_view text) {
     int count = 0;
     for (std::size_t index = 0; index < text.size();) {
@@ -217,7 +251,9 @@ public:
 
     const char* getElementType() const override { return "completion-popup"; }
 
-    void showList(const std::string& signature, const std::vector<CompletionItem>& items, int selected) {
+    // signature[bold_begin, bold_end) is the parameter being typed, drawn bold.
+    void showList(const std::string& signature, int bold_begin, int bold_end, const std::vector<CompletionItem>& items,
+                  int selected) {
         rows_.clear();
         header_.reset();
         docs_.reset();
@@ -228,10 +264,25 @@ public:
             header_->setPadding(jadefx::Insets{4, 8, 4, 8});
             header_->setAlignment(jadefx::Pos::CenterLeft);
             header_->setBackground(kHeaderFill);
-            auto label = jadefx::make<jadefx::Label>(signature);
-            label->setTextFill(kHeaderText);
-            label->setMouseTransparent(true);
-            header_->getChildren().add(label);
+            const auto add = [this](const std::string& text) {
+                if (text.empty()) {
+                    return;
+                }
+                auto label = jadefx::make<jadefx::Label>(text);
+                label->setTextFill(kHeaderText);
+                label->setMouseTransparent(true);
+                header_->getChildren().add(std::move(label));
+            };
+            const int size = static_cast<int>(signature.size());
+            if (bold_begin >= 0 && bold_begin < bold_end && bold_end <= size) {
+                const auto begin = static_cast<std::size_t>(bold_begin);
+                const auto end = static_cast<std::size_t>(bold_end);
+                add(signature.substr(0, begin));
+                header_->getChildren().add(jadefx::make<BoldText>(signature.substr(begin, end - begin), kHeaderText));
+                add(signature.substr(end));
+            } else {
+                add(signature);
+            }
             children().add(header_);
         }
         const int count = static_cast<int>(items.size());
@@ -632,6 +683,8 @@ struct CompletionPopup::State {
     int replace_end = 0;
     std::string prefix;
     std::string signature;
+    int signature_bold_begin = -1;
+    int signature_bold_end = -1;
     char close_quote = 0;
     bool unclosed = false;
     bool picked = false;
@@ -719,6 +772,8 @@ void CompletionPopup::dismiss() {
     state_->picked = false;
     state_->prefix.clear();
     state_->signature.clear();
+    state_->signature_bold_begin = -1;
+    state_->signature_bold_end = -1;
     state_->items.clear();
     state_->close_quote = 0;
     state_->unclosed = false;
@@ -806,7 +861,8 @@ void CompletionPopup::fill() {
                 }
             });
     }
-    state_->popup->showList(state_->signature, state_->items, state_->selected);
+    state_->popup->showList(state_->signature, state_->signature_bold_begin, state_->signature_bold_end, state_->items,
+                            state_->selected);
 }
 
 void CompletionPopup::place(jadefx::Node& owner, double caret_x, double caret_y, double caret_height) {
@@ -891,6 +947,8 @@ void CompletionPopup::present(const CompletionList& list, bool force, jadefx::No
     state_->site = list.site;
     state_->prefix = list.prefix;
     state_->signature = list.signature;
+    state_->signature_bold_begin = list.signature_bold_begin;
+    state_->signature_bold_end = list.signature_bold_end;
     state_->replace_begin = list.replace_begin;
     state_->replace_end = list.replace_end;
     state_->close_quote = list.close_quote;

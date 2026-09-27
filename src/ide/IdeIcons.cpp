@@ -83,12 +83,9 @@ bool IsFile(const fs::path& path) {
 }
 
 // ClassName.png when that file exists. These classes have no file of that name.
-const char* IconFile(const std::string& class_name) {
-    if (class_name == "Game" || class_name == "DataModel") {
+const char* IconFileOverride(const std::string& class_name) {
+    if (class_name == "Game") {
         return "World.png";
-    }
-    if (class_name == "ModuleScript") {
-        return "Script.png";
     }
     if (class_name == "TestTriangle") {
         return "Mesh.png";
@@ -151,9 +148,14 @@ std::shared_ptr<jadefx::ImageView> icon_view(const std::string& class_name) {
     if (class_name.empty()) {
         return nullptr;
     }
-    const char* aliased = IconFile(class_name);
+    const char* aliased = IconFileOverride(class_name);
     const std::string filename = aliased != nullptr ? aliased : class_name + ".png";
-    return icon_file(filename);
+    const std::shared_ptr<jadefx::ImageView> icon = icon_file(filename);
+    if ( !icon ) {
+        return icon_file("wat.gif");
+    }
+    
+    return icon;
 }
 
 std::shared_ptr<jadefx::ImageView> icon_file(const std::string& filename) {

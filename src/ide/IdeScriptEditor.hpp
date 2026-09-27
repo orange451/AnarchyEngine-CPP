@@ -43,6 +43,8 @@ public:
     bool hasUnflushedText() const { return dirty_; }
 
     void focus();
+    // Puts the caret at the start of a 1-based line and scrolls to it.
+    void showLine(int line);
     // Writes the buffer to the instance. While stopped, captures the place.
     void flush();
     // The document stack Ctrl/Cmd-Z edits. Null until the shell binds one.

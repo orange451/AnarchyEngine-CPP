@@ -1186,7 +1186,8 @@ std::uint64_t ScriptRuntime::clear_output() {
 
 void ScriptRuntime::append_output(OutputKind kind, std::string text) { append_output(kind, std::move(text), {}); }
 
-void ScriptRuntime::append_output(OutputKind kind, std::string text, std::vector<OutputValue> values) {
+void ScriptRuntime::append_output(OutputKind kind, std::string text, std::vector<OutputValue> values, InstanceId script,
+                                  int line) {
     if (text.empty()) {
         return;
     }
@@ -1200,7 +1201,8 @@ void ScriptRuntime::append_output(OutputKind kind, std::string text, std::vector
     while (output_.size() >= kMaxOutputLines) {
         output_.pop_front();
     }
-    output_.push_back(OutputLine{kind, std::move(text), std::move(values), std::chrono::system_clock::now()});
+    output_.push_back(
+        OutputLine{kind, std::move(text), std::move(values), std::chrono::system_clock::now(), script, line});
     while (history_.size() >= kMaxOutputLines) {
         history_.pop_front();
     }
@@ -1310,6 +1312,33 @@ void ScriptRuntime::run_chunk(std::string_view source) {
     eval_chunk(console_state_, source);
 }
 
+// The script whose code called print, and the line it was on. A chunk's functions keep the
+// globals it was loaded with, and those hold its `script`, so a ModuleScript's function
+// names the module even when a Script calls it. C functions in between, such as pcall, are skipped.
+void ScriptRuntime::print_source(lua_State* state, InstanceId& script, int& line) const {
+    script = 0;
+    line = 0;
+    lua_Debug debug{};
+    for (int level = 1; level < 16 && lua_getinfo(state, level, "slf", &debug) != 0; ++level) {
+        if (lua_iscfunction(state, -1)) {
+            lua_pop(state, 1);
+            continue;
+        }
+        lua_getfenv(state, -1);
+        if (lua_istable(state, -1)) {
+            lua_rawgetfield(state, -1, "script");
+            const auto* ud = static_cast<const InstanceUd*>(test_udata(state, -1, kInstanceMeta));
+            if (ud != nullptr && resolve_id(ud->id, ud->world) != nullptr && ud->id != 0) {
+                script = ud->id;
+                line = debug.currentline;
+            }
+            lua_pop(state, 1);
+        }
+        lua_pop(state, 2);
+        return;
+    }
+}
+
 int ScriptRuntime::lua_print(lua_State* state) {
     ScriptRuntime* runtime = runtime_from(state);
     const int count = lua_gettop(state);
@@ -1340,7 +1369,10 @@ int ScriptRuntime::lua_print(lua_State* state) {
         values.clear();
     }
     if (runtime != nullptr) {
-        runtime->append_output(OutputKind::Print, std::move(line), std::move(values));
+        InstanceId script = 0;
+        int at = 0;
+        runtime->print_source(state, script, at);
+        runtime->append_output(OutputKind::Print, std::move(line), std::move(values), script, at);
     }
     return 0;
 }

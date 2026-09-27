@@ -206,6 +206,15 @@ void IdeScriptEditor::focus() {
     }
 }
 
+void IdeScriptEditor::showLine(int line) {
+    if (!area_ || line < 1) {
+        return;
+    }
+    const int paragraph = std::min(line, area_->paragraphCount()) - 1;
+    area_->moveTo(paragraph, 0);
+    area_->showPosition(area_->caretPosition());
+}
+
 void IdeScriptEditor::bindUndo(TextUndoStack* stack) {
     undo_stack_ = stack;
     // The constructor loads the source before this is bound. Seed the stack with it,

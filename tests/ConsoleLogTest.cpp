@@ -62,6 +62,26 @@ std::string Body(const ide::ConsoleLog& log, int paragraph) {
     return space == std::string::npos ? text : text.substr(space + 1);
 }
 
+// Exposes the style the log draws with, which adds the hover underline.
+class ProbeLog : public ide::ConsoleLog {
+public:
+    using ide::ConsoleLog::resolveStyle;
+};
+
+ScriptRuntime::OutputLine ScriptLine(std::string text, std::uint32_t script, int line,
+                                     std::vector<ScriptRuntime::OutputValue> values = {}) {
+    ScriptRuntime::OutputLine out = PrintLine(std::move(text), std::move(values));
+    out.script = script;
+    out.line = line;
+    return out;
+}
+
+bool Underlined(const ProbeLog& log, int paragraph, int column) {
+    const int at = log.absolutePosition(paragraph, column);
+    const jadefx::StyleSpans spans = log.getStyleSpans(at, at + 1);
+    return !spans.spans().empty() && log.resolveStyle(spans.spans()[0].style).underline;
+}
+
 int Column(const ide::ConsoleLog& log, int paragraph, const std::string& needle) {
     const std::string text = log.getText(paragraph);
     const std::size_t at = text.find(needle);
@@ -163,8 +183,83 @@ int main() {
         Expect(last < right && last > right - 1, "the hand ends at the right edge of }");
         const jadefx::StyleSpans spans =
             log->getStyleSpans(log->absolutePosition(0, brace), log->absolutePosition(0, brace + 5));
-        Expect(spans.spans().size() == 1 && spans.spans()[0].style.styleClass == "toggle",
-               "all of {...} takes the underlined toggle style");
+        Expect(spans.spans().size() == 1 && spans.spans()[0].style.styleClass.rfind("toggle hover-", 0) == 0,
+               "all of {...} takes the toggle style and one hover mark");
+    }
+
+    // Toggles and printed text underline only while the pointer is on them.
+    // A line a script printed opens that script at its line.
+    {
+        auto probe = jadefx::make<ProbeLog>();
+        auto probeScene = jadefx::make<jadefx::Scene>(probe, 600, 300);
+        probe->setPrefWidthRatio(1);
+        probe->setPrefHeightRatio(1);
+        std::uint32_t opened = 0;
+        int openedLine = 0;
+        probe->setOnOpenScript([&](std::uint32_t script, int line) {
+            opened = script;
+            openedLine = line;
+        });
+        probe->appendLine(ScriptLine("hello\n", 7, 3));
+        probe->appendLine(PrintLine("host\n", {}));
+        probe->appendLine(ScriptLine("t\ttable: 0x1\n", 9, 5, {{"t", nullptr}, {"table: 0x1", MakeTable()}}));
+        ScriptRuntime::OutputLine error = ScriptLine("oops\n", 7, 1);
+        error.kind = ScriptRuntime::OutputKind::Error;
+        probe->appendLine(error);
+        probeScene->layout(600, 300, 0);
+
+        const int text = Column(*probe, 0, "hello");
+        const int brace = Column(*probe, 2, "{...}");
+        Expect(!Underlined(*probe, 0, text) && !Underlined(*probe, 2, brace), "nothing is underlined at rest");
+
+        auto centre = [&](int paragraph, int column, double& x, double& y) {
+            probe->moveTo(paragraph, column);
+            const jadefx::TextBounds left = probe->caretBounds();
+            probe->moveTo(paragraph, column + 1);
+            const jadefx::TextBounds right = probe->caretBounds();
+            x = (left.x + right.x) * 0.5;
+            y = left.y + left.height * 0.5;
+        };
+        double x = 0;
+        double y = 0;
+        centre(0, text + 1, x, y);
+        Expect(probe->cursorAt(x, y) == jadefx::Cursor::Pointer, "printed text shows a pointer");
+        Expect(Underlined(*probe, 0, text) && Underlined(*probe, 0, text + 4), "the hovered print underlines");
+        Expect(!Underlined(*probe, 0, 0), "the stamp does not underline");
+        Expect(!Underlined(*probe, 2, brace), "another row does not underline");
+
+        centre(2, brace + 1, x, y);
+        Expect(probe->cursorAt(x, y) == jadefx::Cursor::Pointer, "a toggle still shows a pointer");
+        Expect(Underlined(*probe, 2, brace) && !Underlined(*probe, 2, Column(*probe, 2, "t\t")),
+               "a hovered toggle underlines, and not the text around it");
+        Expect(!Underlined(*probe, 0, text), "moving off a print takes its underline away");
+
+        centre(1, Column(*probe, 1, "host"), x, y);
+        Expect(probe->cursorAt(x, y) == jadefx::Cursor::Text, "a line no script printed is plain text");
+        Expect(probe->hoveredMark() < 0, "and marks nothing");
+        centre(3, Column(*probe, 3, "oops"), x, y);
+        Expect(probe->cursorAt(x, y) == jadefx::Cursor::Text, "an error is not a link");
+
+        Expect(!probe->openAt(0, 0), "the stamp does not open the script");
+        Expect(!probe->openAt(1, Column(*probe, 1, "host")), "a host line opens nothing");
+        Expect(probe->openAt(2, Column(*probe, 2, "t\t")) && opened == 9 && openedLine == 5,
+               "the text beside a table opens its script");
+        Expect(!probe->openAt(2, brace), "the table's braces toggle, not open");
+
+        opened = 0;
+        centre(0, text + 1, x, y);
+        probeScene->noteButton(0, true, x, y, 0);
+        probeScene->noteButton(0, false, x, y, 0);
+        Expect(opened == 7 && openedLine == 3, "a click on printed text opens the script at its line");
+
+        opened = 0;
+        double endX = 0;
+        double endY = 0;
+        centre(0, text + 4, endX, endY);
+        probeScene->noteButton(0, true, x, y, 0);
+        probeScene->noteMove(endX, endY);
+        probeScene->noteButton(0, false, endX, endY, 0);
+        Expect(opened == 0, "a drag across printed text selects it instead");
     }
 
     log->clearLog();

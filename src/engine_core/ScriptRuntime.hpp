@@ -73,6 +73,10 @@ public:
         std::vector<OutputValue> values;
         // Wall clock when the line was recorded. The console shows this on each row.
         std::chrono::system_clock::time_point time{};
+        // For a print, the Script or ModuleScript whose code called it and the line it
+        // was on. 0 when a command, the console, or the host printed the line.
+        InstanceId script = 0;
+        int line = 0;
     };
 
     struct OutputBatch {
@@ -87,7 +91,8 @@ public:
     // Safe from the simulation thread and from the thread that runs the command line.
     void append_output(OutputKind kind, std::string text);
     // A print line that carries its arguments. The text is capped as above; the values are not.
-    void append_output(OutputKind kind, std::string text, std::vector<OutputValue> values);
+    void append_output(OutputKind kind, std::string text, std::vector<OutputValue> values, InstanceId script = 0,
+                       int line = 0);
     OutputBatch drain_output();
 
     // Every line also goes to a history that readers other than the console
@@ -164,6 +169,7 @@ private:
     static void interrupt(lua_State* state, int gc);
     static void panic(lua_State* state, int code);
     static int lua_print(lua_State* state);
+    void print_source(lua_State* state, InstanceId& script, int& line) const;
 
     void on_end_of_drain();
     void on_start();

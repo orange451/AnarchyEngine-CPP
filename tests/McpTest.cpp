@@ -3,6 +3,8 @@
 
 #include "Engine.hpp"
 #include "LuaSource.hpp"
+#include "ModuleScript.hpp"
+#include "ScriptRuntime.hpp"
 #include "Script.hpp"
 #include "httplib.h"
 
@@ -306,11 +308,45 @@ void TestHttp() {
     server.stop();
 }
 
+// print records the script whose code called it, so the console can open that script.
+void TestPrintSource() {
+    engine_core::Engine engine;
+    engine_core::DataModel& game = engine.datamodel();
+    ide::McpServer server;
+    ide::add_engine_tools(server, engine, {});
+    engine_core::ModuleScript& module = game.create<engine_core::ModuleScript>();
+    game.set_name(module.id(), "Lib");
+    module.set_source("print('top')\nreturn { say = function()\n    pcall(print, 'said')\nend }");
+    game.set_parent(module.id(), game.id());
+
+    const std::uint64_t since = engine.scripts().output_next();
+    Call(server, "run_lua", R"j({"source":"local lib = require(game.Lib)\nprint('console')\nlib.say()"})j");
+    const engine_core::ScriptRuntime::OutputHistory history = engine.scripts().output_since(since, 16);
+    auto find = [&](const std::string& text) -> const engine_core::ScriptRuntime::OutputLine* {
+        for (const auto& line : history.lines) {
+            if (line.text == text + "\n") {
+                return &line;
+            }
+        }
+        return nullptr;
+    };
+    const auto* top = find("top");
+    Expect(top != nullptr && top->script == module.id() && top->line == 1, "a module's print names the module and line");
+    const auto* console = find("console");
+    Expect(console != nullptr && console->script == 0, "a command's print names no script");
+    const auto* said = find("said");
+    Expect(said != nullptr && said->script == module.id() && said->line == 3,
+           "a module function called from elsewhere, through pcall, still names the module");
+    const auto* command = find("local lib = require(game.Lib)\nprint('console')\nlib.say()");
+    Expect(command == nullptr || command->script == 0, "a command line names no script");
+}
+
 }  // namespace
 
 int main() {
     TestProtocol();
     TestEngineTools();
+    TestPrintSource();
     TestThreadedEdits();
     TestHttp();
     if (gFailures == 0) {

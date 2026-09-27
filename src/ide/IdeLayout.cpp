@@ -474,6 +474,13 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     auto console = jadefx::make<IdeConsole>(runner_.simulation());
     console->bindUndo(&undo_router_.widget_stack(kCommandUndo));
     console_ = console;
+    // Clicking a line a script printed opens that script at the line.
+    console->log().setOnOpenScript([this](std::uint32_t script, int line) {
+        this->edit(script);
+        if (std::shared_ptr<IdeScriptEditor> editor = open_editor(script)) {
+            editor->showLine(line);
+        }
+    });
     south->dock(console);
 
     auto east = jadefx::make<IdeDock>();

@@ -112,7 +112,7 @@ public:
     // Simulation. SnapshotOverride is recorded and dropped.
     void emit(SignalId signal, InstanceId id, Field field, WriteOrigin origin = WriteOrigin::Simulation);
     // A host signal event that carries a number for its handlers, such as which
-    // InputService record it is. Handlers read it with payload().
+    // UserInputService record it is. Handlers read it with payload().
     void emit_payload(SignalId signal, std::uint64_t payload);
     // The payload of the event whose handlers are running. 0 outside a handler,
     // and for an event emitted without one.

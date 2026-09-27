@@ -24,7 +24,7 @@ class Runner;
 // The corner label is how many times this view is painted per second, averaged
 // over a quarter of a second. That count keeps moving while the simulation is paused.
 //
-// Keys and the mouse over this view go to the place's InputService, which keeps
+// Keys and the mouse over this view go to the place's UserInputService, which keeps
 // them only while the place is playing. A press here takes keyboard focus, and
 // losing focus ends whatever was still held.
 class GameView : public ide::IdePane {
@@ -50,7 +50,7 @@ private:
     void refreshFpsLabel();
     void refreshTriangles();
     bool ensureGraphics();
-    // A window point as InputService wants it: points from this view's top-left.
+    // A window point as UserInputService wants it: points from this view's top-left.
     float localX(double x) const;
     float localY(double y) const;
 

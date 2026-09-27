@@ -1,5 +1,5 @@
 # engine_datatypes
 
-Values a property holds and a script passes around: `Vector3` (`Vec3` in C++), `Color` (`ColorRgb`), and `Transform`. A value has no identity and no place in the tree. `types.hpp` in engine_core includes these headers, so most code gets them without asking.
+Values a property holds and a script passes around: `Vector2` (`Vec2` in C++), `Vector3` (`Vec3`), `Color` (`ColorRgb`), and `Transform`. A value has no identity and no place in the tree. `types.hpp` in engine_core includes these headers, so most code gets them without asking.
 
-`Vector3.cpp` also installs the `Vector3` library into a Luau state. `Enum.cpp` installs `Enum`: `NormalId`, `Axis`, and the input enums `KeyCode`, `UserInputType`, and `UserInputState`, with Roblox's values. Each item is one userdata, so `==` holds, and a function that takes an enum accepts the item, its name, or its value.
+`Vector3.cpp` also installs the `Vector3` library into a Luau state. A `Vector3` is Luau's built-in vector. `Vector2.cpp` installs `Vector2`, which is a userdata, since Luau has no two-component vector: `typeof` is `Vector2` and the arithmetic operators work on it. `Enum.cpp` installs `Enum`: `NormalId`, `Axis`, and the input enums `KeyCode`, `UserInputType`, and `UserInputState`, with Roblox's values. Each item is one userdata, so `==` holds, and a function that takes an enum accepts the item, its name, or its value.

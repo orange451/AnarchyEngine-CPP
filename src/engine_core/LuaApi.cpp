@@ -632,6 +632,32 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Vector3", "Max", "The component-wise maximum with other.", "Vector3", false, {P("other", "Vector3")});
     add("Vector3", "Min", "The component-wise minimum with other.", "Vector3", false, {P("other", "Vector3")});
 
+    add("", "Vector2", "A 2D vector, such as a point on the screen. new builds one. Omitted components are 0.", nullptr, false,
+        {});
+    add("Vector2", "new", "A vector. Omitted components are 0.", "Vector2", false, {P("x", "number?"), P("y", "number?")});
+    add("Vector2", "zero", "The vector (0, 0).", "Vector2", false, {});
+    add("Vector2", "one", "The vector (1, 1).", "Vector2", false, {});
+    add("Vector2", "xAxis", "The vector (1, 0).", "Vector2", false, {});
+    add("Vector2", "yAxis", "The vector (0, 1).", "Vector2", false, {});
+    add("Vector2", "X", "The x component.", "number", false, {});
+    add("Vector2", "Y", "The y component.", "number", false, {});
+    add("Vector2", "Magnitude", "The length of the vector.", "number", false, {});
+    add("Vector2", "Unit", "The vector scaled to length 1.", "Vector2", false, {});
+    add("Vector2", "Abs", "Each component made non-negative.", "Vector2", false, {});
+    add("Vector2", "Ceil", "Each component rounded up.", "Vector2", false, {});
+    add("Vector2", "Floor", "Each component rounded down.", "Vector2", false, {});
+    add("Vector2", "Sign", "The sign of each component.", "Vector2", false, {});
+    add("Vector2", "Cross", "The z of the cross product with other.", "number", false, {P("other", "Vector2")});
+    add("Vector2", "Dot", "The dot product with other.", "number", false, {P("other", "Vector2")});
+    add("Vector2", "Angle", "The angle in radians to other. Signed, counterclockwise positive, when isSigned is true.",
+        "number", false, {P("other", "Vector2"), P("isSigned", "boolean?")});
+    add("Vector2", "FuzzyEq", "True when each component is within epsilon. epsilon defaults to 1e-5.", "boolean", false,
+        {P("other", "Vector2"), P("epsilon", "number?")});
+    add("Vector2", "Lerp", "A linear blend toward goal. alpha 0 returns this vector and alpha 1 returns goal.", "Vector2",
+        false, {P("goal", "Vector2"), P("alpha", "number")});
+    add("Vector2", "Max", "The component-wise maximum with the others.", "Vector2", true, {P("other", "Vector2")});
+    add("Vector2", "Min", "The component-wise minimum with the others.", "Vector2", true, {P("other", "Vector2")});
+
     add("", "Enum",
         "Named constants. NormalId and Axis are used by Vector3.FromNormalId and Vector3.FromAxis. KeyCode, "
         "UserInputType, and UserInputState describe an InputObject.",
@@ -692,7 +718,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Instance", false, {P("name", "string"), P("timeout", "number?")});
     add("DataModel", "IsA", "True when this instance's class is className or a subclass of it.", "boolean", false,
         {P("className", "string")});
-    add("Game", "GetService", "The service with this name: RunService, Selection, or InputService.", "Instance", false,
+    add("Game", "GetService", "The service with this name: RunService, Selection, or UserInputService.", "Instance", false,
         {P("className", "string")});
 
     add("LuaSource", "Source", "The Luau source this instance holds.", "string", false, {});
@@ -719,36 +745,36 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Selection", "Set", "Selects these instances and nothing else. The explorer shows the same selection.", nullptr,
         false, {P("selection", "{Instance}")});
 
-    add("InputService", "InputBegan",
+    add("UserInputService", "InputBegan",
         "Fires when a key or mouse button goes down in the scene view. The arguments are the InputObject and "
         "gameProcessedEvent.",
         "Signal", false, {});
-    add("InputService", "InputChanged",
+    add("UserInputService", "InputChanged",
         "Fires when the mouse moves or the wheel turns over the scene view. The arguments are the InputObject and "
         "gameProcessedEvent.",
         "Signal", false, {});
-    add("InputService", "InputEnded",
+    add("UserInputService", "InputEnded",
         "Fires when a key or mouse button comes back up, or the scene view loses focus while it is down. The arguments "
         "are the InputObject and gameProcessedEvent.",
         "Signal", false, {});
-    add("InputService", "IsKeyDown", "True while this key is held.", "boolean", false, {P("keyCode", "Enum.KeyCode")});
-    add("InputService", "IsMouseButtonPressed", "True while this mouse button is held.", "boolean", false,
+    add("UserInputService", "IsKeyDown", "True while this key is held.", "boolean", false, {P("keyCode", "Enum.KeyCode")});
+    add("UserInputService", "IsMouseButtonPressed", "True while this mouse button is held.", "boolean", false,
         {P("mouseButton", "Enum.UserInputType")});
-    add("InputService", "GetKeysPressed", "An InputObject for each key held, in the order they went down.", "{InputObject}",
+    add("UserInputService", "GetKeysPressed", "An InputObject for each key held, in the order they went down.", "{InputObject}",
         false, {});
-    add("InputService", "GetMouseButtonsPressed", "An InputObject for each mouse button held.", "{InputObject}", false, {});
-    add("InputService", "GetMouseLocation", "The pointer in the scene view, in points from its top-left corner. z is 0.",
-        "Vector3", false, {});
-    add("InputService", "KeyboardEnabled", "True when there is a keyboard.", "boolean", false, {});
-    add("InputService", "MouseEnabled", "True when there is a mouse.", "boolean", false, {});
-    add("InputService", "TouchEnabled", "True when there is a touch screen.", "boolean", false, {});
+    add("UserInputService", "GetMouseButtonsPressed", "An InputObject for each mouse button held.", "{InputObject}", false, {});
+    add("UserInputService", "GetMouseLocation", "The pointer in the scene view, in points from its top-left corner.",
+        "Vector2", false, {});
+    add("UserInputService", "KeyboardEnabled", "True when there is a keyboard.", "boolean", false, {});
+    add("UserInputService", "MouseEnabled", "True when there is a mouse.", "boolean", false, {});
+    add("UserInputService", "TouchEnabled", "True when there is a touch screen.", "boolean", false, {});
     add("InputObject", "KeyCode", "The key, or Enum.KeyCode.Unknown for mouse input.", "EnumItem", false, {});
     add("InputObject", "UserInputType", "What made the input: Keyboard, MouseButton1, MouseMovement, and so on.",
         "EnumItem", false, {});
     add("InputObject", "UserInputState", "Begin, Change, or End.", "EnumItem", false, {});
-    add("InputObject", "Position", "The pointer in the scene view when the input happened. z is 0.", "Vector3", false,
+    add("InputObject", "Position", "The pointer in the scene view when the input happened. For MouseWheel, z is how far the wheel turned.", "Vector3", false,
         {});
-    add("InputObject", "Delta", "How far the mouse moved. For MouseWheel, z is how far the wheel turned.", "Vector3", false,
+    add("InputObject", "Delta", "How far the mouse moved. z is 0.", "Vector3", false,
         {});
 
     add("RunService", "Heartbeat", "Fires on every simulation step. The argument dt is the step length in seconds.", "Signal",

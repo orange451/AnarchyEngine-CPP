@@ -291,12 +291,45 @@ void testVector3() {
     const ide::CompletionList item = at_end("Enum.KeyCode.W.");
     expect_has(item, "Name", "Enum.KeyCode.W.Name");
 
-    const ide::CompletionList input = at_end("local input = game:GetService(\"InputService\")\ninput.");
-    expect_has(input, "InputBegan", "InputService.InputBegan");
-    expect_has(input, "InputEnded", "InputService.InputEnded");
-    const ide::CompletionList input_method = at_end("local input = game:GetService(\"InputService\")\ninput:");
-    expect_has(input_method, "IsKeyDown", "InputService:IsKeyDown");
-    expect_has(input_method, "GetMouseLocation", "InputService:GetMouseLocation");
+    const ide::CompletionList input = at_end("local input = game:GetService(\"UserInputService\")\ninput.");
+    expect_has(input, "InputBegan", "UserInputService.InputBegan");
+    expect_has(input, "InputEnded", "UserInputService.InputEnded");
+    const ide::CompletionList input_method = at_end("local input = game:GetService(\"UserInputService\")\ninput:");
+    expect_has(input_method, "IsKeyDown", "UserInputService:IsKeyDown");
+    expect_has(input_method, "GetMouseLocation", "UserInputService:GetMouseLocation");
+    const ide::CompletionList mouse = at_end("local input = game:GetService(\"UserInputService\")\ninput:GetMouseLocation().");
+    expect_has(mouse, "X", "GetMouseLocation().X");
+    expect_has(mouse, "Magnitude", "GetMouseLocation().Magnitude");
+    expect_missing(mouse, "Z", "a Vector2 has no Z");
+    const ide::CompletionList vector2 = at_end("Vector2.");
+    expect_has(vector2, "new", "Vector2.new");
+    expect_has(vector2, "zero", "Vector2.zero");
+    const ide::CompletionList vector2_value = at_end("local v = Vector2.new(1, 2)\nv:");
+    expect_has(vector2_value, "Dot", "Vector2:Dot");
+
+    // A Connect callback's parameters take the signal's types without an annotation.
+    const ide::CompletionList inferred = at_end(
+        "game:GetService(\"UserInputService\").InputBegan:Connect(function(input, gameProcessedEvent)\n    input.");
+    expect_has(inferred, "KeyCode", "inferred InputObject.KeyCode");
+    expect_has(inferred, "UserInputType", "inferred InputObject.UserInputType");
+    const ide::CompletionList inferred_local = at_end(
+        "local input = game:GetService(\"UserInputService\")\ninput.InputEnded:Connect(function(io)\n"
+        "    print(io.KeyCode)\n    io.");
+    expect_has(inferred_local, "Position", "inferred InputObject through a local");
+    const ide::CompletionList inferred_dot = at_end(
+        "local input = game:GetService(\"UserInputService\")\ninput.InputChanged.Connect(input.InputChanged, function(io)\n"
+        "    io.");
+    expect_has(inferred_dot, "Delta", "inferred InputObject in a dot call");
+    const ide::CompletionList inferred_dt =
+        at_end("game:GetService(\"RunService\").Heartbeat:Connect(function(dt)\n    local step = dt\n    step.");
+    expect_missing(inferred_dt, "KeyCode", "dt is a number");
+    const ide::CompletionList annotated = at_end(
+        "game:GetService(\"UserInputService\").InputBegan:Connect(function(input: Instance)\n    input.");
+    expect_missing(annotated, "KeyCode", "an annotation wins over the signal's type");
+    expect_has(annotated, "Name", "an annotated Instance parameter");
+    const ide::CompletionList nested = at_end(
+        "game:GetService(\"UserInputService\").InputBegan:Connect(print(function(input)\n    input.");
+    expect_missing(nested, "KeyCode", "a function that is not the argument itself");
 }
 
 void testModule() {
@@ -1256,6 +1289,13 @@ void testHover() {
 
     const ide::HoverInfo declared = ide::hover_luau(count_source, find_nth(count_source, "count", 0));
     expect_hover(declared, "count: number", "", nullptr, "declaration of count");
+
+    const char* connected =
+        "game:GetService(\"UserInputService\").InputBegan:Connect(function(input, processed)\n    print(input)\nend)";
+    expect_hover(ide::hover_luau(connected, find_nth(connected, "input", 1)), "input: InputObject", nullptr, nullptr,
+                 "a Connect parameter");
+    expect_hover(ide::hover_luau(connected, find_nth(connected, "processed", 0)), "processed: boolean", nullptr, nullptr,
+                 "a Connect parameter's declaration");
 
     const char* untyped = "local value\nprint(value)";
     const ide::HoverInfo blank = ide::hover_luau(untyped, find_nth(untyped, "value", 1));

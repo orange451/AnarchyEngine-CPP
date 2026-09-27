@@ -1,4 +1,4 @@
-#include "InputService.hpp"
+#include "UserInputService.hpp"
 
 #include "LuaApi.hpp"
 
@@ -17,7 +17,7 @@ bool valid_button(int button) { return button >= 0 && button < 3; }
 
 }  // namespace
 
-int InputService::key_code_from_glfw(int glfw_key) {
+int UserInputService::key_code_from_glfw(int glfw_key) {
     // Letters: GLFW has uppercase ASCII, KeyCode lowercase.
     if (glfw_key >= 65 && glfw_key <= 90) {
         return glfw_key + 32;
@@ -131,7 +131,7 @@ int InputService::key_code_from_glfw(int glfw_key) {
     return 0;
 }
 
-void InputService::set_active(bool active) {
+void UserInputService::set_active(bool active) {
     std::lock_guard<std::mutex> lock(mu_);
     active_ = active;
     queue_.clear();
@@ -139,12 +139,12 @@ void InputService::set_active(bool active) {
     std::fill(std::begin(posted_buttons_), std::end(posted_buttons_), false);
 }
 
-bool InputService::active() const {
+bool UserInputService::active() const {
     std::lock_guard<std::mutex> lock(mu_);
     return active_;
 }
 
-void InputService::push_locked(const InputRecord& record) {
+void UserInputService::push_locked(const InputRecord& record) {
     // Movement between two steps arrives as one Changed, as a frame of
     // Roblox mouse movement does. The deltas add up.
     if (record.type == kMouseMovement && !queue_.empty()) {
@@ -159,7 +159,7 @@ void InputService::push_locked(const InputRecord& record) {
     queue_.push_back(record);
 }
 
-void InputService::post_key(int key_code, bool down, bool processed) {
+void UserInputService::post_key(int key_code, bool down, bool processed) {
     std::lock_guard<std::mutex> lock(mu_);
     if (!active_ || key_code == 0 || (down && queue_.size() >= kMaxQueued)) {
         return;
@@ -182,7 +182,7 @@ void InputService::post_key(int key_code, bool down, bool processed) {
     push_locked(record);
 }
 
-void InputService::post_mouse_button(int button, bool down, float x, float y, bool processed) {
+void UserInputService::post_mouse_button(int button, bool down, float x, float y, bool processed) {
     std::lock_guard<std::mutex> lock(mu_);
     if (!active_ || !valid_button(button) || (down && queue_.size() >= kMaxQueued)) {
         return;
@@ -200,7 +200,7 @@ void InputService::post_mouse_button(int button, bool down, float x, float y, bo
     push_locked(record);
 }
 
-void InputService::post_mouse_move(float x, float y, bool processed) {
+void UserInputService::post_mouse_move(float x, float y, bool processed) {
     std::lock_guard<std::mutex> lock(mu_);
     if (!active_) {
         return;
@@ -224,7 +224,7 @@ void InputService::post_mouse_move(float x, float y, bool processed) {
     push_locked(record);
 }
 
-void InputService::post_wheel(float x, float y, float amount, bool processed) {
+void UserInputService::post_wheel(float x, float y, float amount, bool processed) {
     std::lock_guard<std::mutex> lock(mu_);
     if (!active_ || amount == 0.f || queue_.size() >= kMaxQueued) {
         return;
@@ -233,13 +233,13 @@ void InputService::post_wheel(float x, float y, float amount, bool processed) {
     InputRecord record;
     record.type = kMouseWheel;
     record.state = kChange;
-    record.position = posted_mouse_;
-    record.delta = Vec3{0.f, 0.f, amount};
+    // Roblox puts the wheel in Position.Z.
+    record.position = Vec3{x, y, amount};
     record.processed = processed;
     push_locked(record);
 }
 
-void InputService::end_held_locked() {
+void UserInputService::end_held_locked() {
     // Not capped: these ends are what keeps a key from staying down forever.
     for (int key : posted_keys_) {
         InputRecord record;
@@ -263,7 +263,7 @@ void InputService::end_held_locked() {
     }
 }
 
-void InputService::post_focus_lost() {
+void UserInputService::post_focus_lost() {
     std::lock_guard<std::mutex> lock(mu_);
     if (!active_) {
         return;
@@ -271,7 +271,7 @@ void InputService::post_focus_lost() {
     end_held_locked();
 }
 
-void InputService::bind(EventQueue& events) {
+void UserInputService::bind(EventQueue& events) {
     if (bound_) {
         return;
     }
@@ -281,7 +281,7 @@ void InputService::bind(EventQueue& events) {
     bound_ = true;
 }
 
-void InputService::release(EventQueue& events) {
+void UserInputService::release(EventQueue& events) {
     if (!bound_) {
         return;
     }
@@ -291,7 +291,7 @@ void InputService::release(EventQueue& events) {
     bound_ = false;
 }
 
-Signal* InputService::signal(Kind kind) {
+Signal* UserInputService::signal(Kind kind) {
     switch (kind) {
     case Kind::Began:
         return &began_;
@@ -303,7 +303,7 @@ Signal* InputService::signal(Kind kind) {
     return nullptr;
 }
 
-void InputService::dispatch(EventQueue& events) {
+void UserInputService::dispatch(EventQueue& events) {
     // The previous step's records were delivered by the drains that followed it.
     dispatched_.clear();
     {
@@ -338,20 +338,20 @@ void InputService::dispatch(EventQueue& events) {
     }
 }
 
-const InputRecord* InputService::record(std::uint64_t payload) const {
+const InputRecord* UserInputService::record(std::uint64_t payload) const {
     if (payload < first_payload_ || payload >= first_payload_ + dispatched_.size()) {
         return nullptr;
     }
     return &dispatched_[static_cast<std::size_t>(payload - first_payload_)];
 }
 
-bool InputService::key_down(int key_code) const {
+bool UserInputService::key_down(int key_code) const {
     return std::find(keys_down_.begin(), keys_down_.end(), key_code) != keys_down_.end();
 }
 
-bool InputService::button_down(int button) const { return valid_button(button) && buttons_down_[button]; }
+bool UserInputService::button_down(int button) const { return valid_button(button) && buttons_down_[button]; }
 
-void InputService::reset() {
+void UserInputService::reset() {
     dispatched_.clear();
     first_payload_ = next_payload_;
     keys_down_.clear();
@@ -373,10 +373,10 @@ bool read_false(DataModel&, DataModel&, LuaSlot& out) {
     return true;
 }
 
-// Every InputService signal passes the InputObject and whether the studio took it.
+// Every UserInputService signal passes the InputObject and whether the studio took it.
 const LuaParam kInputSignalArgs[] = {{"input", "InputObject"}, {"gameProcessedEvent", "boolean"}};
 
-LuaField input_signal(const char* name, InputService::Kind kind) {
+LuaField input_signal(const char* name, UserInputService::Kind kind) {
     LuaField field;
     field.name = name;
     field.type_name = "Signal";
@@ -390,15 +390,15 @@ LuaField input_signal(const char* name, InputService::Kind kind) {
 // reads the InputObject fields off its own userdata.
 ANARCHY_LUA_REGISTER(register_input_service_lua) {
     const LuaField fields[] = {
-        input_signal("InputBegan", InputService::Kind::Began),
-        input_signal("InputChanged", InputService::Kind::Changed),
-        input_signal("InputEnded", InputService::Kind::Ended),
+        input_signal("InputBegan", UserInputService::Kind::Began),
+        input_signal("InputChanged", UserInputService::Kind::Changed),
+        input_signal("InputEnded", UserInputService::Kind::Ended),
         lua_property("KeyboardEnabled", "boolean", false, read_true, nullptr),
         lua_property("MouseEnabled", "boolean", false, read_true, nullptr),
         lua_property("TouchEnabled", "boolean", false, read_false, nullptr),
     };
-    register_lua_class("InputService", nullptr, fields, static_cast<int>(sizeof(fields) / sizeof(fields[0])));
-    register_lua_service("InputService");
+    register_lua_class("UserInputService", nullptr, fields, static_cast<int>(sizeof(fields) / sizeof(fields[0])));
+    register_lua_service("UserInputService");
 
     const LuaField input_object[] = {
         lua_property("KeyCode", "EnumItem", false, nullptr, nullptr),

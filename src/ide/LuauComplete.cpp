@@ -1992,7 +1992,8 @@ private:
         }
     }
 
-    Shape* parse_function(bool expression, bool local_name) {
+    // callback: the parameters a Connect argument receives, or null.
+    Shape* parse_function(bool expression, bool local_name, const std::vector<Param>* callback = nullptr) {
         Shape* fn = value_shape("function", true);
         fn->user_function = true;
         if (!expression && is_name()) {
@@ -2053,6 +2054,10 @@ private:
                     } else {
                         param.type_name = read_type();
                     }
+                }
+                const std::size_t position = fn->params.size();
+                if (param.type_name.empty() && callback != nullptr && position < callback->size()) {
+                    param.type_name = (*callback)[position].type_name;
                 }
                 fn->params.push_back(std::move(param));
                 if (!consume(Token::Comma)) {
@@ -2343,6 +2348,9 @@ private:
     }
 
     Shape* parse_primary() {
+        // Only a function written directly as the argument takes the parameters.
+        std::vector<Param> callback = std::move(callback_params_);
+        callback_params_.clear();
         if (is_name()) {
             const std::string name = take_name();
             return lookup(name);
@@ -2365,7 +2373,7 @@ private:
         }
         if (is_kw("function")) {
             advance();
-            return parse_function(true, false);
+            return parse_function(true, false, &callback);
         }
         if (is(Token::LParen)) {
             advance();
@@ -2390,17 +2398,30 @@ private:
         std::string literal;
         bool have_literal = false;
         Shape* first = nullptr;
+        const int open = i_;
         if (!consume(Token::LParen)) {
             return callee;
         }
+        // Connect's callback is the first argument, or the second when the
+        // signal is passed as self with a dot.
+        int callback_at = -1;
+        if (callee != nullptr && callee->callback_arg && !callee->signal_params.empty()) {
+            callback_at = IsColonCall(tokens_, open) ? 0 : 1;
+        }
         if (!is(Token::RParen) && !at_end()) {
             bool leading = true;
+            int argument_index = 0;
             for (;;) {
                 if (leading && is(Token::String)) {
                     literal = cur().text;
                     have_literal = true;
                 }
+                if (argument_index == callback_at) {
+                    callback_params_ = callee->signal_params;
+                }
                 Shape* argument = parse_expr();
+                callback_params_.clear();
+                ++argument_index;
                 if (leading) {
                     first = argument;
                 }
@@ -2514,6 +2535,9 @@ private:
     std::vector<std::uint32_t> requiring_storage_;
     std::vector<std::uint32_t>* requiring_ = &requiring_storage_;
     std::vector<Shape*> functions_;
+    // A signal's parameters, set while its Connect argument is parsed. A
+    // function written there takes them for the parameters it leaves unannotated.
+    std::vector<Param> callback_params_;
     // Hover: the `name` token of each `name = value` in a table constructor, with its value.
     std::vector<std::pair<int, Shape*>> table_keys_;
 

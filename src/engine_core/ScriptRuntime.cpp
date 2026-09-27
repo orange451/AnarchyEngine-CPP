@@ -8,6 +8,7 @@
 #include "ModuleScript.hpp"
 #include "Script.hpp"
 #include "TestTriangle.hpp"
+#include "Vector2.hpp"
 #include "Vector3.hpp"
 
 #include "lualib.h"
@@ -56,10 +57,10 @@ struct ServiceUd {
     int kind = 0;
 };
 
-const char* kServiceClasses[] = {"RunService", "Selection", "InputService"};
-constexpr int kInputServiceKind = 2;
+const char* kServiceClasses[] = {"RunService", "Selection", "UserInputService"};
+constexpr int kUserInputServiceKind = 2;
 
-// SignalUd kinds. An instance's Changed, a RunService phase, or an InputService signal.
+// SignalUd kinds. An instance's Changed, a RunService phase, or an UserInputService signal.
 constexpr int kSignalChanged = 0;
 constexpr int kSignalPhase = 1;
 constexpr int kSignalInput = 2;
@@ -257,7 +258,7 @@ struct ScriptBindings {
     static int selection_get(lua_State* state);
     static int selection_set(lua_State* state);
     // The keys and buttons are the service's, read on the simulation thread.
-    static InputService* input_service(lua_State* state);
+    static UserInputService* input_service(lua_State* state);
     static int input_is_key_down(lua_State* state);
     static int input_is_mouse_button_pressed(lua_State* state);
     static int input_get_keys_pressed(lua_State* state);
@@ -661,6 +662,7 @@ void open_host_libraries(lua_State* state) {
     lua_setglobal(state, "shared");
 
     open_enum(state);
+    open_vector2(state);
     open_vector3(state);
 }
 
@@ -2100,7 +2102,7 @@ int ScriptBindings::signal_connect(lua_State* state) {
             }
             signal = &runtime->game_->changed(ud->id);
         } else if (ud->kind == kSignalInput) {
-            signal = runtime->game_->input().signal(static_cast<InputService::Kind>(ud->phase));
+            signal = runtime->game_->input().signal(static_cast<UserInputService::Kind>(ud->phase));
         } else {
             signal = runtime->run_service_.signal(static_cast<Phase>(ud->phase));
         }
@@ -2142,7 +2144,7 @@ int ScriptBindings::signal_wait(lua_State* state) {
             luaL_error(state, "%s is not available to scripts", ud->blocked_name);
         }
         // An instance Changed signal, a simulation phase on RunService (Heartbeat
-        // and the other sim steps), or an InputService signal. Render phases are
+        // and the other sim steps), or an UserInputService signal. Render phases are
         // already rejected above.
         Signal* signal = nullptr;
         const int kind = ud->kind;
@@ -2152,7 +2154,7 @@ int ScriptBindings::signal_wait(lua_State* state) {
             }
             signal = &runtime->game_->changed(ud->id);
         } else if (kind == kSignalInput) {
-            signal = runtime->game_->input().signal(static_cast<InputService::Kind>(ud->phase));
+            signal = runtime->game_->input().signal(static_cast<UserInputService::Kind>(ud->phase));
         } else {
             signal = runtime->run_service_.signal(static_cast<Phase>(ud->phase));
         }
@@ -2254,7 +2256,7 @@ int ScriptBindings::service_index(lua_State* state) {
     }
     auto* ud = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
     *ud = SignalUd{};
-    ud->kind = service->kind == kInputServiceKind ? kSignalInput : kSignalPhase;
+    ud->kind = service->kind == kUserInputServiceKind ? kSignalInput : kSignalPhase;
     ud->phase = field->tag;
     ud->blocked = field->blocked;
     if (field->blocked && field->name != nullptr) {
@@ -2315,7 +2317,7 @@ int ScriptBindings::selection_set(lua_State* state) {
     });
 }
 
-InputService* ScriptBindings::input_service(lua_State* state) {
+UserInputService* ScriptBindings::input_service(lua_State* state) {
     luaL_checkudata(state, 1, kServiceMeta);
     ScriptRuntime* runtime = runtime_from(state);
     if (runtime == nullptr || runtime->game_ == nullptr) {
@@ -2326,7 +2328,7 @@ InputService* ScriptBindings::input_service(lua_State* state) {
 
 int ScriptBindings::input_is_key_down(lua_State* state) {
     return lua_guard(state, [&] {
-        InputService* input = input_service(state);
+        UserInputService* input = input_service(state);
         const int key = check_enum_arg(state, 2, key_code_enum());
         lua_pushboolean(state, input != nullptr && input->key_down(key) ? 1 : 0);
         return 1;
@@ -2335,9 +2337,9 @@ int ScriptBindings::input_is_key_down(lua_State* state) {
 
 int ScriptBindings::input_is_mouse_button_pressed(lua_State* state) {
     return lua_guard(state, [&] {
-        InputService* input = input_service(state);
+        UserInputService* input = input_service(state);
         const int type = check_enum_arg(state, 2, user_input_type_enum());
-        const int button = type - InputService::kMouseButton1;
+        const int button = type - UserInputService::kMouseButton1;
         lua_pushboolean(state, input != nullptr && input->button_down(button) ? 1 : 0);
         return 1;
     });
@@ -2345,7 +2347,7 @@ int ScriptBindings::input_is_mouse_button_pressed(lua_State* state) {
 
 int ScriptBindings::input_get_keys_pressed(lua_State* state) {
     return lua_guard(state, [&] {
-        InputService* input = input_service(state);
+        UserInputService* input = input_service(state);
         lua_newtable(state);
         if (input == nullptr) {
             return 1;
@@ -2354,8 +2356,8 @@ int ScriptBindings::input_get_keys_pressed(lua_State* state) {
         int index = 1;
         for (int key : input->keys_down()) {
             InputRecord record;
-            record.type = InputService::kKeyboard;
-            record.state = InputService::kBegin;
+            record.type = UserInputService::kKeyboard;
+            record.state = UserInputService::kBegin;
             record.key = key;
             record.position = mouse;
             push_input_object(state, record);
@@ -2368,7 +2370,7 @@ int ScriptBindings::input_get_keys_pressed(lua_State* state) {
 
 int ScriptBindings::input_get_mouse_buttons_pressed(lua_State* state) {
     return lua_guard(state, [&] {
-        InputService* input = input_service(state);
+        UserInputService* input = input_service(state);
         lua_newtable(state);
         if (input == nullptr) {
             return 1;
@@ -2379,8 +2381,8 @@ int ScriptBindings::input_get_mouse_buttons_pressed(lua_State* state) {
                 continue;
             }
             InputRecord record;
-            record.type = InputService::kMouseButton1 + button;
-            record.state = InputService::kBegin;
+            record.type = UserInputService::kMouseButton1 + button;
+            record.state = UserInputService::kBegin;
             record.position = input->mouse_location();
             push_input_object(state, record);
             lua_rawseti(state, -2, index);
@@ -2392,9 +2394,9 @@ int ScriptBindings::input_get_mouse_buttons_pressed(lua_State* state) {
 
 int ScriptBindings::input_get_mouse_location(lua_State* state) {
     return lua_guard(state, [&] {
-        InputService* input = input_service(state);
+        UserInputService* input = input_service(state);
         const Vec3 mouse = input != nullptr ? input->mouse_location() : Vec3{};
-        lua_pushvector(state, mouse.x, mouse.y, 0.f);
+        push_vector2(state, Vec2{mouse.x, mouse.y});
         return 1;
     });
 }
@@ -2472,7 +2474,7 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     };
     register_lua_class("Selection", nullptr, selection, 2);
 
-    // InputService.cpp declares the class, its signals, and the service.
+    // UserInputService.cpp declares the class, its signals, and the service.
     const LuaField input[] = {
         lua_method("IsKeyDown", "boolean", reinterpret_cast<void*>(&ScriptBindings::input_is_key_down)),
         lua_method("IsMouseButtonPressed", "boolean",
@@ -2481,9 +2483,9 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
                    false, false, true),
         lua_method("GetMouseButtonsPressed", "InputObject",
                    reinterpret_cast<void*>(&ScriptBindings::input_get_mouse_buttons_pressed), false, false, true),
-        lua_method("GetMouseLocation", "Vector3", reinterpret_cast<void*>(&ScriptBindings::input_get_mouse_location)),
+        lua_method("GetMouseLocation", "Vector2", reinterpret_cast<void*>(&ScriptBindings::input_get_mouse_location)),
     };
-    register_lua_class("InputService", nullptr, input, static_cast<int>(sizeof(input) / sizeof(input[0])));
+    register_lua_class("UserInputService", nullptr, input, static_cast<int>(sizeof(input) / sizeof(input[0])));
 }
 
 }  // namespace engine_core

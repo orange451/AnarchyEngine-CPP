@@ -194,13 +194,13 @@ private:
     void fire_phase(Phase phase, double dt);
     void invoke_listener(int ref, InstanceId script, std::uint32_t generation, const char* text, bool pass_number,
                          double number);
-    // An InputService signal: the listener gets an InputObject and gameProcessedEvent.
+    // An UserInputService signal: the listener gets an InputObject and gameProcessedEvent.
     void invoke_listener_input(int ref, InstanceId script, std::uint32_t generation, const InputRecord& record);
     // Null when the gate refuses. The listener is on the new thread's stack.
     Thread* start_listener(int ref, InstanceId script, std::uint32_t generation);
     void run_listener(Thread& thread);
     void make_ready_input(Thread& thread, const InputRecord& record);
-    // The InputObject for the record being delivered, or null outside an InputService handler.
+    // The InputObject for the record being delivered, or null outside an UserInputService handler.
     const InputRecord* delivered_input() const;
     int require_module(lua_State* state, InstanceId module_id);
 

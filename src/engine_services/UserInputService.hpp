@@ -16,14 +16,14 @@ struct InputRecord {
     int state = 4;  // UserInputState.None
     int key = 0;    // KeyCode.Unknown
     // Pointer position in the scene view, in points from its top-left corner.
-    // z is 0. For MouseWheel, z of delta is the wheel movement.
+    // z is 0, except for MouseWheel, where z of position is the wheel movement.
     Vec3 position{};
     Vec3 delta{};
     // True when the studio, not the game, took the event.
     bool processed = false;
 };
 
-// game:GetService("InputService"). Keys and the mouse, as Roblox's
+// game:GetService("UserInputService"). Keys and the mouse, as Roblox's
 // UserInputService gives them: InputBegan, InputChanged, and InputEnded fire
 // with an InputObject and gameProcessedEvent, and IsKeyDown and the other
 // queries answer from the events delivered so far.
@@ -33,7 +33,7 @@ struct InputRecord {
 // which is while the place is playing. SimulationThread dispatches the queue once
 // per step, before PreAnimation's handlers run, so every script sees one frame's
 // input at the same point.
-class InputService {
+class UserInputService {
 public:
     // UserInputType values.
     static constexpr int kMouseButton1 = 0;
@@ -51,9 +51,9 @@ public:
 
     enum class Kind { Began, Changed, Ended };
 
-    InputService() = default;
-    InputService(const InputService&) = delete;
-    InputService& operator=(const InputService&) = delete;
+    UserInputService() = default;
+    UserInputService(const UserInputService&) = delete;
+    UserInputService& operator=(const UserInputService&) = delete;
 
     // The KeyCode value for a GLFW key number. JadeFX forwards GLFW's numbers
     // unchanged. KeyCode.Unknown (0) when the key has no KeyCode.

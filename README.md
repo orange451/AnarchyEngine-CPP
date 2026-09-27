@@ -31,19 +31,19 @@ end
 
 A script starts when it is parented, enabled, and the place is playing. It runs on the simulation, on the same clock as Heartbeat. The code is sandboxed to the libraries the engine opens: the Luau base libraries, `task`, and the instance API.
 
-`game:GetService("InputService")` is the keyboard and mouse, the way Roblox's `UserInputService` has them. Click the scene view during a test to give it the keyboard. `InputBegan`, `InputChanged`, and `InputEnded` fire with an `InputObject`, whose `KeyCode`, `UserInputType`, `UserInputState`, `Position`, and `Delta` say what happened, and `gameProcessedEvent`. `IsKeyDown`, `IsMouseButtonPressed`, `GetKeysPressed`, `GetMouseButtonsPressed`, and `GetMouseLocation` ask what is held now. Positions are points from the scene view's top-left corner, as a `Vector3` with z 0, since there is no `Vector2` yet. A key still held when the view loses focus gets its `InputEnded` then, and Stop forgets whatever was held.
+`game:GetService("UserInputService")` is the keyboard and mouse, the way Roblox's `UserInputService` has them. Click the scene view during a test to give it the keyboard. `InputBegan`, `InputChanged`, and `InputEnded` fire with an `InputObject`, whose `KeyCode`, `UserInputType`, `UserInputState`, `Position`, and `Delta` say what happened, and `gameProcessedEvent`. `IsKeyDown`, `IsMouseButtonPressed`, `GetKeysPressed`, `GetMouseButtonsPressed`, and `GetMouseLocation` ask what is held now. Positions are points from the scene view's top-left corner. As in Roblox, `GetMouseLocation` returns a `Vector2`, and an `InputObject`'s `Position` and `Delta` are `Vector3`s whose z is 0, except that a `MouseWheel` input's `Position.Z` is how far the wheel turned. A key still held when the view loses focus gets its `InputEnded` then, and Stop forgets whatever was held.
 
 ```lua
-local InputService = game:GetService("InputService")
+local UserInputService = game:GetService("UserInputService")
 
-InputService.InputBegan:Connect(function(input, gameProcessedEvent)
+UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
     if input.KeyCode == Enum.KeyCode.Space then
         print("jump")
     end
 end)
 
 game:GetService("RunService").Heartbeat:Connect(function(dt)
-    if InputService:IsKeyDown(Enum.KeyCode.W) then
+    if UserInputService:IsKeyDown(Enum.KeyCode.W) then
         print("forward", dt)
     end
 end)

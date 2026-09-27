@@ -3,7 +3,7 @@
 #include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
 #include "Events.hpp"
-#include "InputService.hpp"
+#include "UserInputService.hpp"
 #include "InvalidationQueue.hpp"
 #include "PropertyBag.hpp"
 #include "SelectionService.hpp"
@@ -180,10 +180,10 @@ public:
     // What the studio has selected. Shared by every instance in this world.
     SelectionService& selection();
     const SelectionService& selection() const;
-    // Keys and the mouse for game:GetService("InputService"). The scene view
+    // Keys and the mouse for game:GetService("UserInputService"). The scene view
     // posts to it; the play session's scripts read it.
-    InputService& input();
-    const InputService& input() const;
+    UserInputService& input();
+    const UserInputService& input() const;
 
     // Stable authored identity, written to disk and used by references.
     // create assigns one. Empty when id is dead. Id 0 is the root.

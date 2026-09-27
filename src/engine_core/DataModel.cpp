@@ -144,7 +144,7 @@ struct DataModel::State {
     std::unique_ptr<ChangeHistoryService> history;
     SelectionService selection;
     // Its signals are hosted by events below. ScriptRuntime binds and releases them.
-    InputService input;
+    UserInputService input;
     std::vector<std::unique_ptr<InstancePool>> pools;
     // First child of the root DataModel. 0 means the root has no children.
     InstanceId root_first_child = 0;
@@ -1274,9 +1274,9 @@ SelectionService& DataModel::selection() { return state_->selection; }
 
 const SelectionService& DataModel::selection() const { return state_->selection; }
 
-InputService& DataModel::input() { return state_->input; }
+UserInputService& DataModel::input() { return state_->input; }
 
-const InputService& DataModel::input() const { return state_->input; }
+const UserInputService& DataModel::input() const { return state_->input; }
 
 void DataModel::capture_place() {
     if (!gameplay_thread()) {

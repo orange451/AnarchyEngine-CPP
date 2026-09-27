@@ -128,7 +128,7 @@ endif()
 
 # The engine is four packages, each a static library with its own directory:
 #   engine_core       DataModel, events, threads, the script runtime, projects
-#   engine_datatypes  values: Vector3, Color, Transform
+#   engine_datatypes  values: Vector2, Vector3, Color, Transform, Enum
 #   engine_instances  what Instance.new makes: GameObject, Folder, Script, ...
 #   engine_services   Game and what game:GetService returns
 # The dependencies are not one-way yet: DataModel knows GameObject and Script,
@@ -138,6 +138,7 @@ endif()
 # A target that links engine_core gets all four and their include directories.
 add_library(engine_datatypes STATIC
     src/engine_datatypes/Enum.cpp
+    src/engine_datatypes/Vector2.cpp
     src/engine_datatypes/Vector3.cpp
 )
 add_library(engine_instances STATIC
@@ -151,7 +152,7 @@ add_library(engine_instances STATIC
 add_library(engine_services STATIC
     src/engine_services/ChangeHistoryService.cpp
     src/engine_services/Game.cpp
-    src/engine_services/InputService.cpp
+    src/engine_services/UserInputService.cpp
     src/engine_services/RunService.cpp
     src/engine_services/SelectionService.cpp
 )

@@ -2377,6 +2377,65 @@ TEST_CASE("S12 a Luau Heartbeat connection runs on the simulation thread", "[S12
     REQUIRE(hits.load() >= 3);
 }
 
+TEST_CASE("Vector2 is a value with Roblox's API", "[vector2]") {
+    ScriptRig rig;
+    add_script(rig.game, "Main", R"(
+        local a = Vector2.new(3, 4)
+        local checks = {
+            typeof(a) == "Vector2",
+            type(a) == "userdata",
+            a.X == 3 and a.Y == 4,
+            a.Magnitude == 5,
+            a.Unit:FuzzyEq(Vector2.new(0.6, 0.8)),
+            tostring(a) == "3, 4",
+            tostring(Vector2.new(-1.5)) == "-1.5, 0",
+            a == Vector2.new(3, 4),
+            a ~= Vector2.new(4, 3),
+            a + Vector2.one == Vector2.new(4, 5),
+            a - Vector2.one == Vector2.new(2, 3),
+            -a == Vector2.new(-3, -4),
+            a * 2 == Vector2.new(6, 8),
+            2 * a == Vector2.new(6, 8),
+            a * Vector2.new(2, 3) == Vector2.new(6, 12),
+            a / 2 == Vector2.new(1.5, 2),
+            12 / a == Vector2.new(4, 3),
+            a // 2 == Vector2.new(1, 2),
+            Vector2.zero == Vector2.new(0, 0),
+            Vector2.xAxis == Vector2.new(1, 0) and Vector2.yAxis == Vector2.new(0, 1),
+            Vector2.new(-1.5, 2.5):Abs() == Vector2.new(1.5, 2.5),
+            Vector2.new(1.2, -1.2):Ceil() == Vector2.new(2, -1),
+            Vector2.new(1.2, -1.2):Floor() == Vector2.new(1, -2),
+            Vector2.new(-3, 0):Sign() == Vector2.new(-1, 0),
+            Vector2.xAxis:Cross(Vector2.yAxis) == 1,
+            a:Dot(Vector2.new(1, 1)) == 7,
+            math.abs(Vector2.xAxis:Angle(Vector2.yAxis) - math.pi / 2) < 1e-6,
+            math.abs(Vector2.yAxis:Angle(Vector2.xAxis, true) + math.pi / 2) < 1e-6,
+            Vector2.yAxis:Angle(Vector2.xAxis) > 0,
+            Vector2.zero:Lerp(a, 0.5) == Vector2.new(1.5, 2),
+            Vector2.new(1, 5):Max(Vector2.new(2, 1), Vector2.new(0, 7)) == Vector2.new(2, 7),
+            Vector2.new(1, 5):Min(Vector2.new(2, 1)) == Vector2.new(1, 1),
+            not pcall(function() a.X = 1 end),
+            not pcall(function() return a.Z end),
+            not pcall(function() return a + 1 end),
+            not pcall(function() return Vector2.new(nil) end),
+            not pcall(function() return a:Dot(Vector3.one) end),
+        }
+        for index, ok in checks do
+            if not ok then
+                error("check " .. index .. " failed")
+            end
+        end
+        _G.vector2_checks = #checks
+    )");
+    rig.game.start_simulation();
+    rig.frames(1);
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
+    double count = 0;
+    REQUIRE(rig.runtime.global_number("vector2_checks", count));
+    REQUIRE(count == 37);
+}
+
 TEST_CASE("Vector3 is the triangle position", "[vector3]") {
     ScriptRig rig;
     engine_core::TestTriangle& triangle = rig.game.create<engine_core::TestTriangle>();
@@ -3665,26 +3724,26 @@ bool has_line(const engine_core::ScriptRuntime::OutputBatch& batch, const std::s
 
 }  // namespace
 
-TEST_CASE("InputService maps GLFW keys to Roblox KeyCode values", "[input]") {
-    using engine_core::InputService;
-    REQUIRE(InputService::key_code_from_glfw(87) == 119);   // W
-    REQUIRE(InputService::key_code_from_glfw(65) == 97);    // A
-    REQUIRE(InputService::key_code_from_glfw(32) == 32);    // Space
-    REQUIRE(InputService::key_code_from_glfw(49) == 49);    // One
-    REQUIRE(InputService::key_code_from_glfw(256) == 27);   // Escape
-    REQUIRE(InputService::key_code_from_glfw(257) == 13);   // Return
-    REQUIRE(InputService::key_code_from_glfw(265) == 273);  // Up
-    REQUIRE(InputService::key_code_from_glfw(294) == 286);  // F5
-    REQUIRE(InputService::key_code_from_glfw(340) == 304);  // LeftShift
-    REQUIRE(InputService::key_code_from_glfw(320) == 256);  // KeypadZero
-    REQUIRE(InputService::key_code_from_glfw(-1) == 0);
-    REQUIRE(InputService::key_code_from_glfw(161) == 0);
+TEST_CASE("UserInputService maps GLFW keys to Roblox KeyCode values", "[input]") {
+    using engine_core::UserInputService;
+    REQUIRE(UserInputService::key_code_from_glfw(87) == 119);   // W
+    REQUIRE(UserInputService::key_code_from_glfw(65) == 97);    // A
+    REQUIRE(UserInputService::key_code_from_glfw(32) == 32);    // Space
+    REQUIRE(UserInputService::key_code_from_glfw(49) == 49);    // One
+    REQUIRE(UserInputService::key_code_from_glfw(256) == 27);   // Escape
+    REQUIRE(UserInputService::key_code_from_glfw(257) == 13);   // Return
+    REQUIRE(UserInputService::key_code_from_glfw(265) == 273);  // Up
+    REQUIRE(UserInputService::key_code_from_glfw(294) == 286);  // F5
+    REQUIRE(UserInputService::key_code_from_glfw(340) == 304);  // LeftShift
+    REQUIRE(UserInputService::key_code_from_glfw(320) == 256);  // KeypadZero
+    REQUIRE(UserInputService::key_code_from_glfw(-1) == 0);
+    REQUIRE(UserInputService::key_code_from_glfw(161) == 0);
 }
 
-TEST_CASE("InputService keeps posts only while active and ends held input", "[input]") {
+TEST_CASE("UserInputService keeps posts only while active and ends held input", "[input]") {
     SimRole role;
     engine_core::EventQueue events;
-    engine_core::InputService input;
+    engine_core::UserInputService input;
     input.bind(events);
 
     // Inactive: dropped.
@@ -3721,19 +3780,19 @@ TEST_CASE("InputService keeps posts only while active and ends held input", "[in
     input.release(events);
 }
 
-TEST_CASE("InputService signals give scripts an InputObject", "[input]") {
+TEST_CASE("UserInputService signals give scripts an InputObject", "[input]") {
     ScriptRig rig;
     engine_core::DataModel& model = rig.game;
-    REQUIRE(engine_core::lua_service_known("InputService"));
+    REQUIRE(engine_core::lua_service_known("UserInputService"));
     const std::string definitions = engine_core::lua_analysis_definitions();
-    REQUIRE(definitions.find("declare extern type InputService with") != std::string::npos);
+    REQUIRE(definitions.find("declare extern type UserInputService with") != std::string::npos);
     REQUIRE(definitions.find("read InputBegan: Signal") != std::string::npos);
     REQUIRE(definitions.find("function IsKeyDown(self, keyCode: any): boolean") != std::string::npos);
     REQUIRE(definitions.find("function GetKeysPressed(self): {InputObject}") != std::string::npos);
     REQUIRE(definitions.find("declare extern type InputObject with") != std::string::npos);
 
     add_script(model, "Input", R"(
-        local input = game:GetService("InputService")
+        local input = game:GetService("UserInputService")
         input.InputBegan:Connect(function(io, processed)
             print("began", io.KeyCode, io.UserInputType, io.UserInputState, processed,
                 input:IsKeyDown(Enum.KeyCode.W), io.KeyCode == Enum.KeyCode.W)
@@ -3747,8 +3806,9 @@ TEST_CASE("InputService signals give scripts an InputObject", "[input]") {
             end
         end)
         input.InputChanged:Connect(function(io)
-            print("changed", io.UserInputType.Name, io.Position.X, io.Position.Y, io.Delta.X, io.Delta.Y,
-                input:GetMouseLocation().X)
+            local location = input:GetMouseLocation()
+            print("changed", io.UserInputType.Name, io.Position.X, io.Position.Y, io.Position.Z, io.Delta.X, io.Delta.Y,
+                location.X, location.Y, typeof(location))
         end)
         input.InputEnded:Connect(function(io)
             print("ended", io.KeyCode.Name, io.UserInputType.Name, io.UserInputState.Name)
@@ -3786,7 +3846,7 @@ TEST_CASE("InputService signals give scripts an InputObject", "[input]") {
     input_frame(rig);
     const engine_core::ScriptRuntime::OutputBatch moved = rig.runtime.drain_output();
     REQUIRE(moved.lines.size() == 1);
-    REQUIRE(has_line(moved, "changed\tMouseMovement\t15\t22\t15\t22\t15\n"));
+    REQUIRE(has_line(moved, "changed\tMouseMovement\t15\t22\t0\t15\t22\t15\t22\tVector2\n"));
 
     model.input().post_mouse_button(0, true, 15.f, 22.f);
     input_frame(rig);
@@ -3794,7 +3854,7 @@ TEST_CASE("InputService signals give scripts an InputObject", "[input]") {
 
     model.input().post_wheel(15.f, 22.f, -1.f);
     input_frame(rig);
-    REQUIRE(has_line(rig.runtime.drain_output(), "changed\tMouseWheel\t15\t22\t0\t0\t15\n"));
+    REQUIRE(has_line(rig.runtime.drain_output(), "changed\tMouseWheel\t15\t22\t-1\t0\t0\t15\t22\tVector2\n"));
 
     model.input().post_key(119, false);
     model.input().post_focus_lost();
@@ -3812,10 +3872,10 @@ TEST_CASE("InputService signals give scripts an InputObject", "[input]") {
     REQUIRE_FALSE(model.input().key_down(119));
 }
 
-TEST_CASE("InputService keeps a release when the queue is full", "[input]") {
+TEST_CASE("UserInputService keeps a release when the queue is full", "[input]") {
     SimRole role;
     engine_core::EventQueue events;
-    engine_core::InputService input;
+    engine_core::UserInputService input;
     input.set_active(true);
     input.post_key(119, true);
     // A paused test never dispatches. Movement fills the queue.

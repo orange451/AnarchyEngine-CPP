@@ -211,7 +211,7 @@ void GameView::handleScroll(jadefx::ScrollEvent& event) {
 void GameView::handleKey(jadefx::KeyEvent& event) {
     // A held key repeats. InputBegan fires once, on the first press.
     if (game_ != nullptr && !event.repeat) {
-        const int key = engine_core::InputService::key_code_from_glfw(event.key);
+        const int key = engine_core::UserInputService::key_code_from_glfw(event.key);
         game_->input().post_key(key, event.pressed);
     }
     IdePane::handleKey(event);

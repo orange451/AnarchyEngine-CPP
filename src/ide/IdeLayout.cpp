@@ -591,8 +591,7 @@ void IdeLayout::start_mcp() {
         scripts.append_output(engine_core::ScriptRuntime::OutputKind::Error, "MCP server: " + error);
         return;
     }
-    scripts.append_output(engine_core::ScriptRuntime::OutputKind::Print,
-                          "MCP server listening on http://127.0.0.1:" + std::to_string(port) + "/mcp");
+    scripts.append_output(engine_core::ScriptRuntime::OutputKind::Print, "MCP server listening on http://127.0.0.1:" + std::to_string(port) + "/mcp");
     mcp_ = std::move(server);
 }
 

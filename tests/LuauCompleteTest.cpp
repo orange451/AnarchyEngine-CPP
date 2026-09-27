@@ -306,6 +306,15 @@ void testVector3() {
     expect_has(vector2, "zero", "Vector2.zero");
     const ide::CompletionList vector2_value = at_end("local v = Vector2.new(1, 2)\nv:");
     expect_has(vector2_value, "Dot", "Vector2:Dot");
+    const ide::CompletionList color3 = at_end("Color3.");
+    expect_has(color3, "fromRGB", "Color3.fromRGB");
+    expect_has(color3, "fromHex", "Color3.fromHex");
+    const ide::CompletionList color3_value = at_end("local c = Color3.fromRGB(255, 0, 0)\nc.");
+    expect_has(color3_value, "R", "Color3.R");
+    expect_missing(color3_value, "A", "a Color3 has no alpha");
+    const ide::CompletionList color3_method = at_end("local c = Color3.new(1, 0, 0)\nc:");
+    expect_has(color3_method, "Lerp", "Color3:Lerp");
+    expect_has(color3_method, "ToHex", "Color3:ToHex");
 
     // A Connect callback's parameters take the signal's types without an annotation.
     const ide::CompletionList inferred = at_end(

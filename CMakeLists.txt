@@ -37,6 +37,7 @@ set(STUDIO_SOURCES
     src/ide/IdeScriptEditor.cpp
     src/ide/ScriptMarks.cpp
     src/ide/ScriptPairs.cpp
+    src/ide/ColorLiterals.cpp
     src/ide/LuauHighlight.cpp
     src/ide/LuauComplete.cpp
     src/ide/IdeTreeTest.cpp
@@ -162,7 +163,7 @@ endif()
 
 # The engine is four packages, each a static library with its own directory:
 #   engine_core       DataModel, events, threads, the script runtime, projects
-#   engine_datatypes  values: Vector2, Vector3, Color, Transform, Enum
+#   engine_datatypes  values: Vector2, Vector3, Color, Color3, Transform, Enum
 #   engine_instances  what Instance.new makes: GameObject, Folder, Script, ...
 #   engine_services   Game and what game:GetService returns
 # The dependencies are not one-way yet: DataModel knows GameObject and Script,
@@ -171,6 +172,7 @@ endif()
 # and repeats them on the link line.
 # A target that links engine_core gets all four and their include directories.
 add_library(engine_datatypes STATIC
+    src/engine_datatypes/Color3.cpp
     src/engine_datatypes/Enum.cpp
     src/engine_datatypes/Vector2.cpp
     src/engine_datatypes/Vector3.cpp
@@ -317,11 +319,13 @@ endif()
 
 add_executable(engine-tests
     tests/LuaEngineTest.cpp
+    tests/ColorLiteralsTest.cpp
     tests/LuauHighlightTest.cpp
     tests/LuauCompleteTest.cpp
     tests/ScriptMarksTest.cpp
     tests/ScriptPairsTest.cpp
     tests/TextWrapTest.cpp
+    src/ide/ColorLiterals.cpp
     src/ide/LuauHighlight.cpp
     src/ide/LuauComplete.cpp
     src/ide/ScriptMarks.cpp

@@ -227,6 +227,63 @@ void testRunner() {
     expect(threw, "lua() after stop");
 }
 
+// Runs a chunk in the script runtime, as the command line does, and returns what it
+// printed, with "error: " in front of an uncaught error.
+std::string runChunk(runner::Runner& runner, const char* source) {
+    engine_core::ScriptRuntime& scripts = runner.simulation().scripts();
+    std::string out;
+    runner.simulation().on_simulation([&](engine_core::DataModel&) {
+        const std::uint64_t from = scripts.output_next();
+        scripts.run_chunk(source);
+        const std::uint64_t to = scripts.output_next();
+        for (const auto& line : scripts.output_since(from, static_cast<std::size_t>(to - from)).lines) {
+            if (line.kind == engine_core::ScriptRuntime::OutputKind::Error) {
+                out += "error: ";
+            }
+            out += line.text;
+        }
+    });
+    return out;
+}
+
+void expectPrinted(runner::Runner& runner, const char* source, const std::string& wanted, const char* label) {
+    const std::string printed = runChunk(runner, source);
+    if (printed != wanted + "\n") {
+        fail(std::string(label) + ": printed '" + printed + "'");
+    }
+}
+
+void expectChunkError(runner::Runner& runner, const char* source, const char* needle, const char* label) {
+    const std::string printed = runChunk(runner, source);
+    if (printed.rfind("error: ", 0) != 0 || printed.find(needle) == std::string::npos) {
+        fail(std::string(label) + ": printed '" + printed + "'");
+    }
+}
+
+// Roblox's Color3: constructors, channels, conversions, and a Color property taking one.
+void testColor3() {
+    runner::Runner runner;
+    runner.start();
+    expectPrinted(runner, "local c = Color3.new(1, 0.5) print(c.R, c.G, c.B, typeof(c))", "1\t0.5\t0\tColor3",
+                  "Color3.new fills omitted channels with 0");
+    expectPrinted(runner, "print(Color3.fromRGB(255, 0, 51):ToHex())", "FF0033", "fromRGB and ToHex");
+    expectPrinted(runner, "print(Color3.fromHex('#1a73e8') == Color3.fromRGB(26, 115, 232))", "true",
+                  "fromHex matches fromRGB");
+    expectPrinted(runner, "print(Color3.fromHex('0f0'):ToHex())", "00FF00", "a three digit hex code");
+    expectChunkError(runner, "Color3.fromHex('nope')", "hex", "fromHex refuses bad text");
+    expectPrinted(runner, "print(Color3.fromHSV(0.5, 1, 1):ToHSV())", "0.5\t1\t1", "fromHSV and ToHSV round-trip");
+    expectPrinted(runner, "print((Color3.toHSV(Color3.new(0, 0, 1))))", "0.6666666666666666", "Color3.toHSV takes a color");
+    expectPrinted(runner, "print(tostring(Color3.new(0, 0, 0):Lerp(Color3.new(1, 1, 1), 0.25)))", "0.25, 0.25, 0.25",
+                  "Lerp and tostring");
+    expectChunkError(runner, "local c = Color3.new() c.R = 1", "cannot be assigned", "Color3 is read-only");
+    expectChunkError(runner, "local _ = Color3.new().A", "not a valid member", "a Color3 has no alpha");
+    expectPrinted(runner,
+                  "local o = Instance.new('GameObject') o.Color = Color3.fromRGB(255, 0, 0) "
+                  "print(o.Color.r, o.Color.g, o.Color.a)",
+                  "1\t0\t1", "a Color property takes a Color3");
+    runner.stop();
+}
+
 void testContextActions() {
     engine_core::Game game;
     std::vector<engine_core::ContextAction> actions;
@@ -281,6 +338,8 @@ int RunScriptMarksTests();
 int RunScriptPairsTests();
 int RunTextWrapTests();
 
+int RunColorLiteralsTests();
+
 int main() {
     try {
         testLibraries();
@@ -291,6 +350,7 @@ int main() {
         testBudget();
         testMemory();
         testRunner();
+        testColor3();
         testContextActions();
         testInsertInstance();
         gFailures += RunLuauHighlightTests();
@@ -298,6 +358,7 @@ int main() {
         gFailures += RunScriptMarksTests();
         gFailures += RunScriptPairsTests();
         gFailures += RunTextWrapTests();
+        gFailures += RunColorLiteralsTests();
     } catch (const std::exception& ex) {
         std::fprintf(stderr, "FAIL exception: %s\n", ex.what());
         return EXIT_FAILURE;

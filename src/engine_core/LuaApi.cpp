@@ -667,6 +667,26 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Vector3", "Max", "The component-wise maximum with other.", "Vector3", false, {P("other", "Vector3")});
     add("Vector3", "Min", "The component-wise minimum with other.", "Vector3", false, {P("other", "Vector3")});
 
+    add("", "Color3", "A color from red, green, and blue, each 0 to 1. new, fromRGB, fromHSV, and fromHex build one.",
+        nullptr, false, {});
+    add("Color3", "new", "A color from red, green, and blue, each 0 to 1. Omitted channels are 0.", "Color3", false,
+        {P("r", "number?"), P("g", "number?"), P("b", "number?")});
+    add("Color3", "fromRGB", "A color from red, green, and blue, each 0 to 255. Omitted channels are 0.", "Color3", false,
+        {P("r", "number?"), P("g", "number?"), P("b", "number?")});
+    add("Color3", "fromHSV", "A color from hue, saturation, and value, each 0 to 1.", "Color3", false,
+        {P("h", "number"), P("s", "number"), P("v", "number")});
+    add("Color3", "fromHex", "A color from a hex code: RGB or RRGGBB, with or without #.", "Color3", false,
+        {P("hex", "string")});
+    add("Color3", "toHSV", "The hue, saturation, and value of a color, each 0 to 1.", "number", false,
+        {P("color", "Color3")});
+    add("Color3", "R", "The red channel, 0 to 1.", "number", false, {});
+    add("Color3", "G", "The green channel, 0 to 1.", "number", false, {});
+    add("Color3", "B", "The blue channel, 0 to 1.", "number", false, {});
+    add("Color3", "Lerp", "A linear blend toward goal. alpha 0 returns this color and alpha 1 returns goal.", "Color3",
+        false, {P("goal", "Color3"), P("alpha", "number")});
+    add("Color3", "ToHSV", "The hue, saturation, and value, each 0 to 1.", "number", false, {});
+    add("Color3", "ToHex", "The hex code, RRGGBB in capitals without #.", "string", false, {});
+
     add("", "Vector2", "A 2D vector, such as a point on the screen. new builds one. Omitted components are 0.", nullptr, false,
         {});
     add("Vector2", "new", "A vector. Omitted components are 0.", "Vector2", false, {P("x", "number?"), P("y", "number?")});

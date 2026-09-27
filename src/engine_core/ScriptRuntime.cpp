@@ -146,6 +146,11 @@ int lua_guard(lua_State* state, Fn fn) {
 }
 
 bool read_color(lua_State* state, int index, ColorRgb& color) {
+    // A Color3 is opaque.
+    if (const Color3* rgb = to_color3(state, index)) {
+        color = ColorRgb{rgb->r, rgb->g, rgb->b, 1.f};
+        return true;
+    }
     if (!lua_istable(state, index)) {
         return false;
     }
@@ -662,6 +667,7 @@ void open_host_libraries(lua_State* state) {
     lua_setglobal(state, "shared");
 
     open_enum(state);
+    open_color3(state);
     open_vector2(state);
     open_vector3(state);
 }
@@ -1978,7 +1984,7 @@ int ScriptBindings::instance_newindex(lua_State* state) {
             slot.vec = Vec3{components[0], components[1], components[2]};
         } else if (type == "Color") {
             if (!read_color(state, 3, slot.color)) {
-                luaL_error(state, "%s expects a table", field->name);
+                luaL_error(state, "%s expects a Color3 or a table", field->name);
             }
             slot.kind = LuaSlot::Kind::Color;
         } else if (type == "Transform") {

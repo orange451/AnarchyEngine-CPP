@@ -239,7 +239,13 @@ void IdeScriptEditor::applyUndoText() {
     paint();
 }
 
-IdeScriptEditor::~IdeScriptEditor() { engine_.analysis().unwatch(id_); }
+IdeScriptEditor::~IdeScriptEditor() {
+    if (color_edit_ && getScene() != nullptr && !getScene()->isTearingDown()) {
+        getScene()->removeKeyHook(color_edit_->key_hook);
+        getScene()->hidePopup(color_chooser_.get());
+    }
+    engine_.analysis().unwatch(id_);
+}
 
 void IdeScriptEditor::onOpen() { focus(); }
 
@@ -271,6 +277,10 @@ void IdeScriptEditor::layoutChildren() {
         static_cast<ScriptCodeArea*>(area_.get())->tickHover();
     }
     refresh_marks();
+    // A press outside the picker closes it in the scene; the color it chose stays.
+    if (color_edit_ && color_chooser_ && getScene() != nullptr && !getScene()->isPopupShowing(color_chooser_.get())) {
+        close_color_picker(true);
+    }
     StackPane::layoutChildren();
 }
 
@@ -338,6 +348,137 @@ void IdeScriptEditor::paint() {
     area_->suspendUndo();
     area_->setStyleSpans(0, builder.create());
     area_->resumeUndo();
+    refresh_color_swatches();
+}
+
+namespace {
+
+// Room for the swatch and a little space before the text it marks.
+constexpr double kSwatchSize = 10;
+constexpr double kSwatchSlot = 14;
+
+jadefx::Color to_jadefx(const engine_core::Color3& color) { return jadefx::Color::rgba(color.r, color.g, color.b, 1.f); }
+
+engine_core::Color3 to_color3(const jadefx::Color& color) { return engine_core::Color3{color.r, color.g, color.b}; }
+
+}  // namespace
+
+void IdeScriptEditor::refresh_color_swatches() {
+    color_literals_ = find_color3_literals(area_->getText());
+    std::vector<jadefx::StyledTextArea::InlineNode> nodes;
+    nodes.reserve(color_literals_.size());
+    for (std::size_t i = 0; i < color_literals_.size(); ++i) {
+        if (i == color_swatches_.size()) {
+            // The slot takes the click and holds the square, with the gap after it.
+            auto slot = std::make_shared<jadefx::Pane>();
+            slot->setPrefSize(kSwatchSlot, kSwatchSize);
+            // A click on it leaves the focus in the text, so Ctrl/Cmd+Z stays the text's undo.
+            slot->setFocusTraversable(false);
+            slot->setStyle("cursor: pointer;");
+            auto square = std::make_shared<jadefx::Pane>();
+            square->setPrefSize(kSwatchSize, kSwatchSize);
+            square->setFocusTraversable(false);
+            square->setStyle("border-width: 1px; border-style: solid; border-color: rgba(0, 0, 0, 0.35); border-radius: 2px;");
+            slot->getChildren().add(square);
+            slot->setOnMouseClicked([this, i](const jadefx::MouseEvent&) { open_color_picker(i); });
+            color_swatches_.push_back(slot);
+        }
+        const std::shared_ptr<jadefx::Pane>& slot = color_swatches_[i];
+        static_cast<jadefx::Pane&>(*slot->getChildren()[0]).setBackground(to_jadefx(color_literals_[i].color));
+        nodes.push_back({color_literals_[i].start, slot});
+    }
+    area_->setInlineNodes(std::move(nodes));
+}
+
+void IdeScriptEditor::open_color_picker(std::size_t index) {
+    jadefx::Scene* scene = getScene();
+    if (scene == nullptr || index >= color_literals_.size() || index >= color_swatches_.size()) {
+        return;
+    }
+    close_color_picker(true);
+    const Color3Literal& literal = color_literals_[index];
+    color_edit_ = std::make_unique<ColorEdit>();
+    color_edit_->literal = literal;
+    color_edit_->original = area_->getText(literal.start, literal.end);
+    if (!color_chooser_) {
+        // A Color3 has no alpha, and a script's colors have no use for a recent list.
+        color_chooser_ = std::make_shared<jadefx::ColorChooser>();
+        color_chooser_->setShowAlpha(false);
+        color_chooser_->setShowRecentColors(false);
+        color_chooser_->setOnValueChanged([this] { write_color(to_color3(color_chooser_->getValue())); });
+    }
+    color_chooser_->setOriginalValue(to_jadefx(literal.color));
+    color_chooser_->setValue(to_jadefx(literal.color));
+    // Enter keeps the color and Escape puts the literal back, as in a ColorPicker.
+    color_edit_->key_hook = scene->addKeyHook([this](jadefx::KeyEvent& event) {
+        if (!event.pressed || !color_edit_) {
+            return;
+        }
+        if (event.key == jadefx::Key::Escape || event.key == jadefx::Key::Enter || event.key == jadefx::Key::KpEnter) {
+            color_chooser_->commitEdits();
+            close_color_picker(event.key != jadefx::Key::Escape);
+            event.consume();
+        }
+    });
+    jadefx::PopupOptions options;
+    options.owner = color_swatches_[index].get();
+    scene->showPopupNear(color_chooser_, color_swatches_[index].get(), jadefx::Side::Bottom, options);
+}
+
+void IdeScriptEditor::write_color(const engine_core::Color3& color) {
+    if (!color_edit_ || !area_) {
+        return;
+    }
+    Color3Literal& literal = color_edit_->literal;
+    const std::string text = format_color3_literal(literal, color);
+    const std::string current = area_->getText(literal.start, literal.end);
+    if (text == current) {
+        return;
+    }
+    // The caret keeps its place in the text around the literal.
+    int caret = area_->caretPosition();
+    const int grown = static_cast<int>(text.size()) - (literal.end - literal.start);
+    if (caret >= literal.end) {
+        caret += grown;
+    } else if (caret > literal.start) {
+        caret = literal.start;
+    }
+    // Each change while the picker is open is one step of a single edit, recorded when it closes.
+    mute_undo_ = true;
+    area_->replaceText(literal.start, literal.end, text);
+    mute_undo_ = false;
+    literal.end = literal.start + static_cast<int>(text.size());
+    area_->moveTo(caret);
+}
+
+void IdeScriptEditor::close_color_picker(bool keep) {
+    if (!color_edit_) {
+        return;
+    }
+    const std::unique_ptr<ColorEdit> edit = std::move(color_edit_);
+    jadefx::Scene* scene = getScene();
+    if (scene != nullptr) {
+        scene->removeKeyHook(edit->key_hook);
+        if (color_chooser_ && scene->isPopupShowing(color_chooser_.get())) {
+            scene->hidePopup(color_chooser_.get());
+        }
+    }
+    // Back to the text, so the next Ctrl/Cmd+Z undoes the color as one step.
+    area_->requestFocus();
+    const Color3Literal& literal = edit->literal;
+    const std::string current = area_->getText(literal.start, literal.end);
+    if (!keep) {
+        if (current != edit->original) {
+            mute_undo_ = true;
+            area_->replaceText(literal.start, literal.end, edit->original);
+            mute_undo_ = false;
+        }
+        return;
+    }
+    if (current != edit->original && undo_stack_ != nullptr &&
+        !undo_stack_->record_change(literal.start, edit->original, current)) {
+        undo_stack_->reset(area_->getText());
+    }
 }
 
 namespace {

@@ -3,6 +3,7 @@
 // The value types live in engine_datatypes. Everything that includes this file
 // uses them, so they come along.
 #include "Color.hpp"
+#include "Color3.hpp"
 #include "Transform.hpp"
 #include "Vector2.hpp"
 #include "Vector3.hpp"

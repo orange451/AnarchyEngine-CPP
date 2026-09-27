@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ColorLiterals.hpp"
 #include "CompletionPopup.hpp"
 #include "IdePane.hpp"
 #include "LuaApi.hpp"
@@ -81,6 +82,13 @@ private:
     // A finished name keeps those keys, so a newline or indent still works.
     bool completion_key_accepts() const;
     std::vector<engine_core::LuaNode> world() const;
+    // A swatch before each Color3 literal. A click on one opens the color picker on it.
+    void refresh_color_swatches();
+    void open_color_picker(std::size_t index);
+    // Ends the picker: keep writes one undo step for the whole session, and
+    // otherwise the literal goes back to how it was.
+    void close_color_picker(bool keep);
+    void write_color(const engine_core::Color3& color);
 
     engine_core::Engine& engine_;
     std::uint32_t id_ = 0;
@@ -99,6 +107,17 @@ private:
     // world_generation the buffer last matched. Stop bumps it.
     std::uint32_t world_ = 0;
     std::chrono::steady_clock::time_point dirty_at_{};
+
+    // The literal the picker is editing, as it was when the picker opened.
+    struct ColorEdit {
+        Color3Literal literal;
+        std::string original;
+        int key_hook = 0;
+    };
+    std::vector<Color3Literal> color_literals_;
+    std::vector<std::shared_ptr<jadefx::Pane>> color_swatches_;
+    std::shared_ptr<jadefx::ColorChooser> color_chooser_;
+    std::unique_ptr<ColorEdit> color_edit_;
 };
 
 }  // namespace ide

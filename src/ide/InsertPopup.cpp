@@ -5,7 +5,7 @@
 #include "LuaApi.hpp"
 
 #include "jadefx/jadefx.hpp"
-#include "jadefx/scene/controls/ScrollBar.hpp"
+#include "jadefx/scene/controls/ScrollTrack.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -156,7 +156,7 @@ protected:
         }
         clampScroll(row, count, visible);
         const bool bars = count > kMaxVisibleRows && visible > 0 && row > 0.0;
-        const double gutter = bars ? static_cast<double>(jadefx::ScrollBar::kThickness) : 0.0;
+        const double gutter = bars ? static_cast<double>(jadefx::ScrollTrack::kThickness) : 0.0;
         const double rowWidth = std::max(0.0, width - gutter);
         const int start = windowStart(row, count, visible);
         for (int index = 0; index < count; ++index) {
@@ -179,11 +179,11 @@ protected:
             return;
         }
         const double listHeight = static_cast<double>(visible) * row;
-        bar_ = jadefx::ScrollBar::vertical(static_cast<float>(left + width - jadefx::ScrollBar::kThickness),
+        bar_ = jadefx::ScrollTrack::vertical(static_cast<float>(left + width - jadefx::ScrollTrack::kThickness),
                                            static_cast<float>(listTop), static_cast<float>(listHeight),
                                            static_cast<float>(static_cast<double>(count) * row),
                                            static_cast<float>(listHeight), scroll_);
-        const double trackX = std::max(left, static_cast<double>(bar_.cross) - jadefx::ScrollBar::kHitSlop);
+        const double trackX = std::max(left, static_cast<double>(bar_.cross) - jadefx::ScrollTrack::kHitSlop);
         const double trackRight = std::min(left + width, static_cast<double>(bar_.cross + bar_.thickness));
         track_->setVisible(true);
         track_->performLayout(trackX, listTop, std::max(0.0, trackRight - trackX), listHeight);
@@ -463,17 +463,17 @@ private:
     void pressScroll(const jadefx::MouseEvent& event) {
         const float localX = static_cast<float>(event.x - getAbsoluteX());
         const float localY = static_cast<float>(event.y - getAbsoluteY());
-        const jadefx::ScrollBar::Part where = bar_.part(localX, localY);
-        if (where == jadefx::ScrollBar::Part::None) {
+        const jadefx::ScrollTrack::Part where = bar_.part(localX, localY);
+        if (where == jadefx::ScrollTrack::Part::None) {
             scrollDrag_ = false;
             return;
         }
         scrollDrag_ = true;
-        if (where == jadefx::ScrollBar::Part::Thumb) {
+        if (where == jadefx::ScrollTrack::Part::Thumb) {
             scrollGrab_ = localY - bar_.thumb;
             return;
         }
-        scroll_ = bar_.offsetFromPage(scroll_, where == jadefx::ScrollBar::Part::After);
+        scroll_ = bar_.offsetFromPage(scroll_, where == jadefx::ScrollTrack::Part::After);
         const int count = static_cast<int>(rows_.size());
         clampScroll(rowHeight_, count, std::min(count, kMaxVisibleRows));
         scrollGrab_ = bar_.thumbLength * 0.5f;
@@ -511,7 +511,7 @@ private:
     double pinned_w_ = 0;
     double pinned_h_ = 0;
     bool pinned_ = false;
-    jadefx::ScrollBar bar_{};
+    jadefx::ScrollTrack bar_{};
     double scroll_ = 0;
     double rowHeight_ = 0;
     float scrollGrab_ = 0;

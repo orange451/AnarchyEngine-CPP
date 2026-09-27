@@ -393,6 +393,20 @@ TEST_CASE("analysis definitions come from the class registry", "[A11]") {
     REQUIRE(module != std::string::npos);
     const std::string module_block = source.substr(module, source.find("end\n", module) - module);
     REQUIRE(module_block.find("Enabled") == std::string::npos);
+    // Vector2's operators come from its registered rows, not a list in analysis.
+    const std::size_t vector2 = source.find("declare extern type Vector2 with");
+    REQUIRE(vector2 != std::string::npos);
+    const std::string vector2_block = source.substr(vector2, source.find("end\n", vector2) - vector2);
+    REQUIRE(vector2_block.find("__mul: (Vector2 | number, Vector2 | number) -> Vector2") != std::string::npos);
+    REQUIRE(vector2_block.find("__unm: (Vector2) -> Vector2") != std::string::npos);
+    REQUIRE(vector2_block.find("__eq: (Vector2, Vector2) -> boolean") != std::string::npos);
+    std::vector<engine_core::LuaOperator> operators;
+    engine_core::lua_class_operators("Vector2", operators);
+    REQUIRE(operators.size() == 7);
+    engine_core::lua_class_operators("Color", operators);
+    REQUIRE(operators.empty());
+    // Operators are not members, so completion does not offer them.
+    REQUIRE(engine_core::lua_class_find("Vector2", "__add") == nullptr);
 }
 
 TEST_CASE("disabling script analysis drops diagnostics", "[A]") {

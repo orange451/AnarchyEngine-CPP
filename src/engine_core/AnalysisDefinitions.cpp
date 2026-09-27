@@ -161,24 +161,25 @@ std::string method_params(const LuaDoc& doc) {
     return "self, " + rest;
 }
 
-// Operators of a userdata value. Declared as properties, not methods, so
-// `2 * v` checks as well as `v * 2`. Luau puts __ names in the metatable.
-struct Operators {
-    const char* class_name;
-    const char* lines;
-};
-
-const Operators kOperators[] = {
-    {"Vector2",
-     "    __add: (Vector2, Vector2) -> Vector2\n"
-     "    __sub: (Vector2, Vector2) -> Vector2\n"
-     "    __mul: (Vector2 | number, Vector2 | number) -> Vector2\n"
-     "    __div: (Vector2 | number, Vector2 | number) -> Vector2\n"
-     "    __idiv: (Vector2 | number, Vector2 | number) -> Vector2\n"
-     "    __unm: (Vector2) -> Vector2\n"
-     "    __eq: (Vector2, Vector2) -> boolean\n"
-     "    __tostring: (Vector2) -> string\n"},
-};
+// An operand as registered: one type, or several joined by " | ".
+std::string operand_type(const char* registered) {
+    const std::string text = registered != nullptr ? registered : "";
+    std::string out;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t bar = text.find('|', start);
+        const std::string part = text.substr(start, bar == std::string::npos ? std::string::npos : bar - start);
+        if (!out.empty()) {
+            out += " | ";
+        }
+        out += to_luau_type(part);
+        if (bar == std::string::npos) {
+            break;
+        }
+        start = bar + 1;
+    }
+    return out.empty() ? "any" : out;
+}
 
 void emit_class(std::ostringstream& out, const std::string& name) {
     if (name == "Vector3" || !identifier(name)) {
@@ -215,10 +216,20 @@ void emit_class(std::ostringstream& out, const std::string& name) {
         }
         out << field.name << ": " << to_luau_type(type_name) << "\n";
     }
-    for (const Operators& operators : kOperators) {
-        if (name == operators.class_name) {
-            out << operators.lines;
+    // Declared as properties, not methods: a method's first argument is always
+    // this class, and `2 * v` passes the number first. Luau moves __ names into
+    // the metatable.
+    std::vector<LuaOperator> operators;
+    lua_class_operators(name.c_str(), operators);
+    for (const LuaOperator& op : operators) {
+        if (op.metamethod == nullptr || !identifier(op.metamethod)) {
+            continue;
         }
+        out << "    " << op.metamethod << ": (" << operand_type(op.left);
+        if (op.right != nullptr) {
+            out << ", " << operand_type(op.right);
+        }
+        out << ") -> " << operand_type(op.result) << "\n";
     }
     out << "end\n\n";
 }

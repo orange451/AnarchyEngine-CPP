@@ -109,6 +109,23 @@ inline LuaField lua_signal_member(const char* name, int phase, bool blocked) {
 // Calling again appends. It does not replace fields already added.
 void register_lua_class(const char* class_name, const char* base, const LuaField* fields, int count);
 
+// One operator a value's metatable implements, as script analysis types it.
+// Each operand is a registered class name or number, or several joined by
+// " | ". `right` is null for a unary operator. Operators are not members, so
+// completion does not list them.
+struct LuaOperator {
+    const char* metamethod = nullptr;
+    const char* left = nullptr;
+    const char* right = nullptr;
+    const char* result = nullptr;
+};
+
+// Adds operators onto a class. A later row for the same metamethod replaces
+// the earlier one. Safe during static initialization, like register_lua_class.
+void register_lua_operators(const char* class_name, const LuaOperator* operators, int count);
+// This class's operators only, in registration order.
+void lua_class_operators(const char* class_name, std::vector<LuaOperator>& out);
+
 // Base members first. A derived field with the same name replaces the base one.
 void lua_class_members(const char* class_name, std::vector<LuaField>& out);
 // Fields registered on this class only. Inherited fields are not included.

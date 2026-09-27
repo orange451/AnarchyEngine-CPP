@@ -250,6 +250,26 @@ int vector2_new(lua_State* state) {
     return 1;
 }
 
+// The operators, and how script analysis types them. The metatable and the
+// class registry both read this one table.
+struct Operator {
+    const char* metamethod;
+    lua_CFunction call;
+    const char* left;
+    const char* right;
+    const char* result;
+};
+
+const Operator kOperators[] = {
+    {"__add", vector2_add, "Vector2", "Vector2", "Vector2"},
+    {"__sub", vector2_sub, "Vector2", "Vector2", "Vector2"},
+    {"__mul", vector2_mul, "Vector2 | number", "Vector2 | number", "Vector2"},
+    {"__div", vector2_div, "Vector2 | number", "Vector2 | number", "Vector2"},
+    {"__idiv", vector2_idiv, "Vector2 | number", "Vector2 | number", "Vector2"},
+    {"__unm", vector2_unm, "Vector2", nullptr, "Vector2"},
+    {"__eq", vector2_eq, "Vector2", "Vector2", "boolean"},
+};
+
 void install_vector2_metatable(lua_State* state) {
     luaL_newmetatable(state, kVector2Meta);
 
@@ -267,15 +287,13 @@ void install_vector2_metatable(lua_State* state) {
     lua_pushcclosure(state, vector2_index, "index", 1);
     lua_setfield(state, -2, "__index");
 
-    const luaL_Reg metamethods[] = {
-        {"__newindex", vector2_newindex}, {"__tostring", vector2_tostring}, {"__eq", vector2_eq},
-        {"__add", vector2_add},           {"__sub", vector2_sub},           {"__unm", vector2_unm},
-        {"__mul", vector2_mul},           {"__div", vector2_div},           {"__idiv", vector2_idiv},
-        {nullptr, nullptr},
-    };
-    for (const luaL_Reg* method = metamethods; method->func != nullptr; ++method) {
-        lua_pushcfunction(state, method->func, method->name);
-        lua_setfield(state, -2, method->name);
+    lua_pushcfunction(state, vector2_newindex, "__newindex");
+    lua_setfield(state, -2, "__newindex");
+    lua_pushcfunction(state, vector2_tostring, "__tostring");
+    lua_setfield(state, -2, "__tostring");
+    for (const Operator& op : kOperators) {
+        lua_pushcfunction(state, op.call, op.metamethod);
+        lua_setfield(state, -2, op.metamethod);
     }
     lua_pushliteral(state, "Vector2");
     lua_setfield(state, -2, "__type");
@@ -321,6 +339,14 @@ ANARCHY_LUA_REGISTER(register_vector2_lua) {
     register_lua_class("Vector2", nullptr, vector_fields,
                        static_cast<int>(sizeof(vector_fields) / sizeof(vector_fields[0])));
     lua_note_result("Vector2", "new", "Vector2", false);
+    for (const Operator& op : kOperators) {
+        LuaOperator row;
+        row.metamethod = op.metamethod;
+        row.left = op.left;
+        row.right = op.right;
+        row.result = op.result;
+        register_lua_operators("Vector2", &row, 1);
+    }
 }
 
 }  // namespace

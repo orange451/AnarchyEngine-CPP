@@ -14,6 +14,7 @@ struct ClassRecord {
     const char* name = nullptr;
     const char* base = nullptr;
     std::vector<LuaField> fields;
+    std::vector<LuaOperator> operators;
 };
 
 std::vector<ClassRecord>& classes() {
@@ -106,6 +107,40 @@ void register_lua_class(const char* class_name, const char* base, const LuaField
     }
     for (int index = 0; index < count; ++index) {
         append_unique(record->fields, fields[index]);
+    }
+}
+
+void register_lua_operators(const char* class_name, const LuaOperator* operators, int count) {
+    if (class_name == nullptr) {
+        return;
+    }
+    register_lua_class(class_name, nullptr, nullptr, 0);
+    ClassRecord* record = find_class(class_name);
+    if (record == nullptr || operators == nullptr) {
+        return;
+    }
+    for (int index = 0; index < count; ++index) {
+        const LuaOperator& row = operators[index];
+        if (row.metamethod == nullptr) {
+            continue;
+        }
+        bool replaced = false;
+        for (LuaOperator& existing : record->operators) {
+            if (std::strcmp(existing.metamethod, row.metamethod) == 0) {
+                existing = row;
+                replaced = true;
+            }
+        }
+        if (!replaced) {
+            record->operators.push_back(row);
+        }
+    }
+}
+
+void lua_class_operators(const char* class_name, std::vector<LuaOperator>& out) {
+    out.clear();
+    if (const ClassRecord* record = find_class_const(class_name)) {
+        out = record->operators;
     }
 }
 

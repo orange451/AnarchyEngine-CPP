@@ -937,3 +937,51 @@ TEST_CASE("A23 a ModuleScript has no Enabled; a Script does", "[A23]") {
     INFO(report);
     REQUIRE(report.find("Enabled") != std::string::npos);
 }
+
+TEST_CASE("A24 Enum, Vector2, and UserInputService are declared to analysis", "[A24]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Input", R"(
+local UserInputService = game:GetService("UserInputService")
+UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+    print(input.KeyCode, input.UserInputType)
+    if input.KeyCode == Enum.KeyCode.A and not gameProcessedEvent then
+        print("You pressed A!", input.KeyCode.Name, input.KeyCode.Value, input.Position.Z)
+    end
+end)
+local held: boolean = UserInputService:IsKeyDown(Enum.KeyCode.W)
+local face: Vector3 = Vector3.FromNormalId(Enum.NormalId.Top) + Vector3.FromAxis(Enum.Axis.X)
+local state: EnumItem = Enum.UserInputState.Begin
+local mouse: Vector2 = UserInputService:GetMouseLocation()
+local x: number = mouse.X + mouse.Magnitude
+local moved: Vector2 = (mouse + Vector2.new(1, 2) - Vector2.one) * 2 / 2
+local scaled: Vector2 = 2 * mouse
+local negated: Vector2 = -mouse
+local unit: Vector2 = mouse.Unit:Lerp(Vector2.zero, 0.5):Max(Vector2.xAxis)
+local dot: number = mouse:Dot(Vector2.yAxis) + mouse:Cross(Vector2.one)
+print(held, face, state, x, moved, scaled, negated, unit, dot, mouse == Vector2.zero)
+)");
+    settle(analysis);
+    const std::vector<engine_core::Diagnostic> diagnostics = analysis.diagnostics(script.id());
+    INFO(dump(diagnostics));
+    REQUIRE(diagnostics.empty());
+
+    script.set_source("print(Enum.KeyCode.NotAKey, Enum.NotAnEnum)\n");
+    settle(analysis);
+    const std::vector<engine_core::Diagnostic> unknown = analysis.diagnostics(script.id());
+    INFO(dump(unknown));
+    REQUIRE(unknown.size() == 2);
+    REQUIRE(dump(unknown).find("NotAKey") != std::string::npos);
+    // The item's error names the enum's type, not every item in it.
+    REQUIRE(dump(unknown).find("EnumKeyCode") != std::string::npos);
+    REQUIRE(dump(unknown).find("Backspace") == std::string::npos);
+    REQUIRE(dump(unknown).find("NotAnEnum") != std::string::npos);
+
+    script.set_source("local v = Vector2.new(1, 2) + 1\nlocal z = Vector2.zero.Z\n");
+    settle(analysis);
+    const std::vector<engine_core::Diagnostic> wrong = analysis.diagnostics(script.id());
+    INFO(dump(wrong));
+    REQUIRE(has_code(wrong, "Type"));
+    REQUIRE(dump(wrong).find("@0:") != std::string::npos);
+    REQUIRE(dump(wrong).find("@1:") != std::string::npos);
+}

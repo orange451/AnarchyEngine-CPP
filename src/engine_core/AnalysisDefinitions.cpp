@@ -1,3 +1,4 @@
+#include "Enum.hpp"
 #include "LuaApi.hpp"
 
 #include <cstring>
@@ -160,6 +161,25 @@ std::string method_params(const LuaDoc& doc) {
     return "self, " + rest;
 }
 
+// Operators of a userdata value. Declared as properties, not methods, so
+// `2 * v` checks as well as `v * 2`. Luau puts __ names in the metatable.
+struct Operators {
+    const char* class_name;
+    const char* lines;
+};
+
+const Operators kOperators[] = {
+    {"Vector2",
+     "    __add: (Vector2, Vector2) -> Vector2\n"
+     "    __sub: (Vector2, Vector2) -> Vector2\n"
+     "    __mul: (Vector2 | number, Vector2 | number) -> Vector2\n"
+     "    __div: (Vector2 | number, Vector2 | number) -> Vector2\n"
+     "    __idiv: (Vector2 | number, Vector2 | number) -> Vector2\n"
+     "    __unm: (Vector2) -> Vector2\n"
+     "    __eq: (Vector2, Vector2) -> boolean\n"
+     "    __tostring: (Vector2) -> string\n"},
+};
+
 void emit_class(std::ostringstream& out, const std::string& name) {
     if (name == "Vector3" || !identifier(name)) {
         return;
@@ -194,6 +214,11 @@ void emit_class(std::ostringstream& out, const std::string& name) {
             out << "read ";
         }
         out << field.name << ": " << to_luau_type(type_name) << "\n";
+    }
+    for (const Operators& operators : kOperators) {
+        if (name == operators.class_name) {
+            out << operators.lines;
+        }
     }
     out << "end\n\n";
 }
@@ -235,6 +260,29 @@ void emit_static(std::ostringstream& out, const std::string& owner) {
     out << "}\n\n";
 }
 
+// Enum.<Type>.<Name>. Every item is an EnumItem. Each type is its own
+// declared type, EnumKeyCode and so on, so a misspelled item is an unknown
+// member of a type with a short name. A misspelled type is an unknown key.
+void emit_enum(std::ostringstream& out) {
+    if (!lua_class_known("EnumItem")) {
+        return;
+    }
+    for (int index = 0; index < enum_type_count(); ++index) {
+        const EnumType& type = enum_type_at(index);
+        out << "declare extern type Enum" << type.name << " with\n";
+        for (int item = 0; item < type.count; ++item) {
+            out << "    read " << type.items[item].name << ": EnumItem\n";
+        }
+        out << "end\n\n";
+    }
+    out << "declare Enum: {\n";
+    for (int index = 0; index < enum_type_count(); ++index) {
+        const EnumType& type = enum_type_at(index);
+        out << "    " << type.name << ": Enum" << type.name << ",\n";
+    }
+    out << "}\n\n";
+}
+
 }  // namespace
 
 std::string lua_analysis_definitions() {
@@ -243,7 +291,7 @@ std::string lua_analysis_definitions() {
     // Redeclaring `vector` would replace Luau's builtin and drop its operators.
     // Vector3 is that same value. Members are added onto it after this loads.
     if (lua_class_known("Vector3")) {
-        out << "type Vector3 = vector\n\n";
+        out << "export type Vector3 = vector\n\n";
     }
 
     std::vector<std::string> names;
@@ -284,10 +332,11 @@ std::string lua_analysis_definitions() {
     for (const std::string& name : names) {
         emit_static(out, name);
     }
+    emit_enum(out);
     std::vector<std::string> libraries;
     lua_host_library_names(libraries);
     for (const std::string& name : libraries) {
-        if (lua_class_known(name.c_str())) {
+        if (name == "Enum" || lua_class_known(name.c_str())) {
             continue;
         }
         emit_static(out, name);

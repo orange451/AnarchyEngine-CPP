@@ -26,6 +26,10 @@ const EnumType& key_code_enum();
 const EnumType& user_input_type_enum();
 const EnumType& user_input_state_enum();
 
+// Every type the Enum global holds, for script analysis to declare.
+int enum_type_count();
+const EnumType& enum_type_at(int index);
+
 // Null when no item of the type has this value.
 const char* enum_item_name(const EnumType& type, int value);
 

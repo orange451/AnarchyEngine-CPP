@@ -244,6 +244,10 @@ const EnumType& user_input_type_enum() { return kUserInputTypeType; }
 
 const EnumType& user_input_state_enum() { return kUserInputStateType; }
 
+int enum_type_count() { return static_cast<int>(sizeof(kTypes) / sizeof(kTypes[0])); }
+
+const EnumType& enum_type_at(int index) { return *kTypes[index]; }
+
 const char* enum_item_name(const EnumType& type, int value) {
     for (int index = 0; index < type.count; ++index) {
         if (type.items[index].value == value) {

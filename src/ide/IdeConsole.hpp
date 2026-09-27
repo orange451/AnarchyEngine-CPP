@@ -9,6 +9,7 @@
 #include <deque>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace engine_core {
 class Engine;
@@ -21,6 +22,7 @@ class CommandField;
 // Log of Lua print lines and errors, with a command line under it.
 // The command line runs against the live data model, stopped or running.
 // A submitted command is shown in full, then run after that line has been drawn.
+// Up and Down step through the commands submitted before, as in a shell.
 // Each log row shows the wall time the line was recorded. A printed table opens in place.
 // The log clears when a play session starts, and from Clear Output: a right-click
 // on the log, or Cmd+K (Ctrl+K elsewhere) while the log or the command line has focus.
@@ -55,6 +57,9 @@ private:
     void pull();
     void showMenu(double x, double y);
     void submitCommand();
+    // Moves through the history, older for -1 and newer for 1. Past the newest
+    // entry, the line typed before browsing comes back.
+    void browseHistory(int step);
     void runPending();
     void refresh_completion(bool force);
     void accept_completion(bool parentheses);
@@ -65,6 +70,10 @@ private:
     std::shared_ptr<jadefx::Menu> menu_;
     CompletionPopup completion_;
     std::deque<PendingCommand> pending_;
+    std::vector<std::string> history_;
+    // history_.size() while not browsing.
+    std::size_t history_at_ = 0;
+    std::string history_draft_;
     std::uint64_t epoch_ = 0;
     bool pulling_ = false;
     // Set once this pane has been drawn since the last submit. A paused command

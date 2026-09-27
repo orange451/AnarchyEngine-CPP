@@ -149,6 +149,11 @@ void IdeConsole::submitCommand() {
     if (source.empty()) {
         return;
     }
+    if (history_.empty() || history_.back() != source) {
+        history_.push_back(source);
+    }
+    history_at_ = history_.size();
+    history_draft_.clear();
     command_->clear();
     noteCommandEdit();
     const std::uint32_t world = engine_.datamodel().world_generation();
@@ -162,6 +167,25 @@ void IdeConsole::submitCommand() {
         pull();
         pulling_ = false;
     }
+}
+
+void IdeConsole::browseHistory(int step) {
+    if (!command_) {
+        return;
+    }
+    if (step < 0 && history_at_ == 0) {
+        return;
+    }
+    if (step > 0 && history_at_ >= history_.size()) {
+        return;
+    }
+    if (history_at_ == history_.size()) {
+        history_draft_ = command_->getText();
+    }
+    history_at_ = step < 0 ? history_at_ - 1 : history_at_ + 1;
+    completion_.dismiss();
+    command_->setText(history_at_ < history_.size() ? history_[history_at_] : history_draft_);
+    command_->positionCaret(command_->getLength());
 }
 
 void IdeConsole::runPending() {
@@ -315,6 +339,12 @@ void CommandField::handleKey(jadefx::KeyEvent& event) {
             event.key == jadefx::Key::End) {
             console->completion_.dismiss();
         }
+    }
+    if ((event.key == jadefx::Key::Up || event.key == jadefx::Key::Down) && !event.shift && !event.alt &&
+        !event.shortcut()) {
+        console->browseHistory(event.key == jadefx::Key::Down ? 1 : -1);
+        event.consume();
+        return;
     }
     const bool plain_enter = (event.key == jadefx::Key::Enter || event.key == jadefx::Key::KpEnter) && !event.shift &&
                              !event.shortcut() && !event.repeat;

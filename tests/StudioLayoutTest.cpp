@@ -108,6 +108,37 @@ int main() {
             command->requestFocus();
             scene->noteKey(jadefx::Key::K, true, false, jadefx::Key::ModControl);
             expect(empty(), "Cmd+K on the command line clears the log");
+
+            // Up and Down walk the submitted commands, and bring back the unsent line.
+            auto& field = static_cast<jadefx::TextField&>(*command);
+            auto submit = [&](const char* text) {
+                field.setText(text);
+                scene->noteKey(jadefx::Key::Enter, true, false, 0);
+                scene->layout(1280, 800, 0.5);
+            };
+            auto key = [&](int code) { scene->noteKey(code, true, false, 0); };
+            submit("local a = 1");
+            submit("local b = 2");
+            submit("local b = 2");
+            expect(field.getText().empty(), "a submit empties the command line");
+            field.setText("draft");
+            key(jadefx::Key::Up);
+            expect(field.getText() == "local b = 2", "Up shows the last command");
+            expect(field.getCaretPosition() == field.getLength(), "the caret goes to the end of a recalled command");
+            key(jadefx::Key::Up);
+            expect(field.getText() == "local a = 1", "a repeated command is kept once");
+            key(jadefx::Key::Up);
+            expect(field.getText() == "local a = 1", "Up stops at the oldest command");
+            key(jadefx::Key::Down);
+            expect(field.getText() == "local b = 2", "Down steps to a newer command");
+            key(jadefx::Key::Down);
+            expect(field.getText() == "draft", "Down past the newest brings back the unsent line");
+            key(jadefx::Key::Down);
+            expect(field.getText() == "draft", "Down with nothing newer keeps the line");
+            key(jadefx::Key::Up);
+            submit("local a = 1");
+            key(jadefx::Key::Up);
+            expect(field.getText() == "local a = 1", "a rerun command is the newest entry");
         }
     }
 

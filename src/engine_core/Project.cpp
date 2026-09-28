@@ -1202,6 +1202,43 @@ std::uint64_t Project::place_fingerprint(const DataModel& game) {
     return hash;
 }
 
+bool Project::unsaved() const {
+    const std::vector<AuthoredNode> tree = game_->authored_tree(nullptr);
+    Layout layout;
+    std::error_code error;
+    if (fs::is_regular_file(root_ / "project.json", error)) {
+        std::string ignored;
+        read_project_json(root_, ignored, layout);
+    }
+    std::map<std::string, Files> next;
+    try {
+        next = plan_files(tree, layout.src, files_);
+    } catch (const ProjectError&) {
+        return true;
+    }
+    if (next.size() != files_.size()) {
+        return true;
+    }
+    for (const auto& [guid, planned] : next) {
+        const auto base = files_.find(guid);
+        if (base == files_.end()) {
+            return true;
+        }
+        const Files& was = base->second;
+        if (planned.props_path != was.props_path || planned.has_source != was.has_source ||
+            planned.source_path != was.source_path || planned.source_bytes != was.source_bytes) {
+            return true;
+        }
+        for (const KeyMerge& merged : merge_keys(was.props, was.props, planned.props)) {
+            // The root's class is always the studio's; files saved before say DataModel.
+            if (merged.change == KeyChange::StudioOnly && !(guid == tree[0].guid && merged.key == "class")) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void Project::reset_place(DataModel& game) {
     Rebuild rebuild(game);
     clear_world(game);

@@ -2201,3 +2201,61 @@ TEST_CASE("A15 a sibling order only the disk changed loads", "[A15][disk][projec
     project.apply_disk();
     REQUIRE(child_guids(game, box) == order);
 }
+
+TEST_CASE("U1 unsaved follows edits and their undo", "[U1][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    {
+        Project project = Project::create(dir.path);
+        add_part(project.datamodel(), 0, "A");
+        project.save();
+    }
+    Project project = Project::load(dir.path);
+    DataModel& game = project.datamodel();
+    REQUIRE_FALSE(project.unsaved());
+    const InstanceId a = game.find_first_child(0, "A");
+    game.history().set_pending_gesture("Color");
+    game.game_object(a)->set_color(rgb(1.f, 0.f, 0.f));
+    game.history().end_gesture();
+    REQUIRE(project.unsaved());
+    game.history().undo();
+    REQUIRE_FALSE(project.unsaved());
+}
+
+TEST_CASE("U2 changes loaded from disk are not unsaved", "[U2][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, 0, "A").id();
+    project.save();
+    edit_key(dir.path / leaf(game, a), "Size", triple(2, 2, 2));
+    project.apply_disk();
+    REQUIRE_FALSE(project.unsaved());
+}
+
+TEST_CASE("U3 a file only reformatted on disk is not unsaved", "[U3][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    a.set_color(rgb(1.f, 0.f, 0.f));
+    project.save();
+    const std::string path = leaf(game, a.id());
+    std::string wide = read_file(dir.path / path);
+    for (std::size_t at = wide.find("\n  "); at != std::string::npos; at = wide.find("\n  ", at + 5)) {
+        wide.replace(at, 3, "\n    ");
+    }
+    write_file(dir.path / path, wide);
+    project.apply_disk();
+    REQUIRE_FALSE(project.unsaved());
+}
+
+TEST_CASE("U4 a root saved as DataModel is not unsaved", "[U4][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    write_bare_project(dir.path);
+    Project project = Project::load(dir.path);
+    REQUIRE_FALSE(project.unsaved());
+}

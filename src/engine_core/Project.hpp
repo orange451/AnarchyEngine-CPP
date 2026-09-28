@@ -151,6 +151,10 @@ public:
     // undone back to the saved state no longer counts. Needs no project folder.
     // During play it covers the place captured at Test, like a save does.
     static std::uint64_t place_fingerprint(const DataModel& game);
+    // A save would write, move, or remove something: the place differs from the
+    // last load or save, compared key by key, so a file on disk that is only
+    // formatted differently does not count.
+    bool unsaved() const;
     // Reads src/ and compares it, key by key, with the last load or save and
     // with the place. Touches nothing. Throws ProjectError when src/ does not
     // read as a project, or holds a value its class rejects.

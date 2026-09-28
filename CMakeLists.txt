@@ -35,6 +35,9 @@ set(STUDIO_SOURCES
     src/ide/IdeExplorer.cpp
     src/ide/IdeIcons.cpp
     src/ide/IdeScriptEditor.cpp
+    src/ide/IdeSearch.cpp
+    src/ide/FindBar.cpp
+    src/ide/TextSearch.cpp
     src/ide/ScriptMarks.cpp
     src/ide/ScriptPairs.cpp
     src/ide/ColorLiterals.cpp
@@ -293,6 +296,7 @@ target_compile_features(properties-tests PRIVATE cxx_std_17)
 # R10: the default dock layout, built headless from the studio's own sources.
 add_executable(studio-tests
     tests/StudioLayoutTest.cpp
+    tests/FindReplaceTest.cpp
     ${STUDIO_SOURCES}
 )
 target_include_directories(studio-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")
@@ -324,12 +328,14 @@ add_executable(engine-tests
     tests/LuauCompleteTest.cpp
     tests/ScriptMarksTest.cpp
     tests/ScriptPairsTest.cpp
+    tests/TextSearchTest.cpp
     tests/TextWrapTest.cpp
     src/ide/ColorLiterals.cpp
     src/ide/LuauHighlight.cpp
     src/ide/LuauComplete.cpp
     src/ide/ScriptMarks.cpp
     src/ide/ScriptPairs.cpp
+    src/ide/TextSearch.cpp
     src/ide/TextWrap.cpp
     src/runner/Runner.cpp
 )

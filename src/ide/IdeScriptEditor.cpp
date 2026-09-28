@@ -3,6 +3,7 @@
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
+#include "FindBar.hpp"
 #include "LuaSource.hpp"
 #include "LuauComplete.hpp"
 #include "LuauHighlight.hpp"
@@ -21,6 +22,8 @@ namespace {
 
 constexpr std::chrono::milliseconds kSaveDelay(50);
 constexpr std::chrono::milliseconds kLockWait(5);
+// The most matches the find bar counts and highlights, as in VS Code.
+constexpr std::size_t kFindLimit = 19999;
 
 struct EditorFont {
     EditorFont() {
@@ -82,6 +85,17 @@ void define_styles(jadefx::StyleClassedTextArea& area) {
     number.hasFill = true;
     number.fill = jadefx::Color::parse("#0550ae");
     area.defineStyleClass("number", number);
+
+    // Every match of the find bar, and the one it is on.
+    jadefx::TextStyle match;
+    match.hasBackground = true;
+    match.background = jadefx::Color::parse("rgba(234, 92, 0, 0.22)");
+    area.defineStyleClass("find-match", match);
+
+    jadefx::TextStyle current;
+    current.hasBackground = true;
+    current.background = jadefx::Color::parse("rgba(234, 92, 0, 0.5)");
+    area.defineStyleClass("find-current", current);
 }
 
 std::string lua_title(const std::string& name) {
@@ -89,6 +103,26 @@ std::string lua_title(const std::string& name) {
         return "Script.lua";
     }
     return name + ".lua";
+}
+
+bool NameChar(char32_t code) {
+    return (code >= U'A' && code <= U'Z') || (code >= U'a' && code <= U'z') || code == U'_' ||
+           (code >= U'0' && code <= U'9') || code >= 0x80;
+}
+
+// The name the caret at column touches in line, as code points [start, end).
+// Empty when the caret is between two characters that are not part of a name.
+jadefx::IndexRange name_around(const std::u32string& line, int column) {
+    const int length = static_cast<int>(line.size());
+    int start = std::clamp(column, 0, length);
+    int end = start;
+    while (start > 0 && NameChar(line[static_cast<std::size_t>(start - 1)])) {
+        --start;
+    }
+    while (end < length && NameChar(line[static_cast<std::size_t>(end)])) {
+        ++end;
+    }
+    return jadefx::IndexRange{start, end};
 }
 
 }  // namespace
@@ -166,6 +200,15 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     });
     completion_.setOnAccept([this] { accept_completion(true); });
 
+    FindBar::Actions find;
+    find.changed = [this] { find_changed(); };
+    find.step = [this](int direction) { step_find(direction); };
+    find.replace = [this] { replace_find(); };
+    find.replace_all = [this] { replace_find_all(); };
+    find.close = [this] { closeFind(); };
+    find_bar_ = jadefx::make<FindBar>(std::move(find));
+    find_bar_->setVisible(false);
+
     status_ = jadefx::make<jadefx::Label>("");
     status_->setAlignment(jadefx::Pos::CenterLeft);
     status_->setMouseTransparent(true);
@@ -181,6 +224,8 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     column->setCenter(area_);
     column->setBottom(status_);
     getChildren().add(column);
+    // After the text, so it draws over it and is hit first.
+    getChildren().add(find_bar_);
     load();
 }
 
@@ -200,6 +245,8 @@ void IdeScriptEditor::setTitleText(const std::string& name) {
 
 std::string IdeScriptEditor::text() const { return area_ ? area_->getText() : std::string(); }
 
+std::string IdeScriptEditor::selectedText() const { return area_ ? area_->selectedText() : std::string(); }
+
 void IdeScriptEditor::focus() {
     if (area_) {
         area_->requestFocus();
@@ -213,6 +260,293 @@ void IdeScriptEditor::showLine(int line) {
     const int paragraph = std::min(line, area_->paragraphCount()) - 1;
     area_->moveTo(paragraph, 0);
     area_->showPosition(area_->caretPosition());
+}
+
+void IdeScriptEditor::showRange(int line, int column, int column_end) {
+    if (!area_ || line < 1) {
+        return;
+    }
+    if (!loaded_) {
+        pending_range_ = PendingRange{line, column, column_end};
+        return;
+    }
+    const int paragraph = std::min(line, area_->paragraphCount()) - 1;
+    const int length = area_->getParagraph(paragraph).length();
+    const int start = area_->absolutePosition(paragraph, std::clamp(column, 0, length));
+    const int end = area_->absolutePosition(paragraph, std::clamp(column_end, 0, length));
+    area_->selectRange(start, std::max(start, end));
+    area_->showPosition(start);
+}
+
+bool IdeScriptEditor::findOpen() const { return find_bar_ && find_bar_->isVisible(); }
+
+bool IdeScriptEditor::findOwns(const jadefx::Node* node) const { return find_bar_ && find_bar_->owns(node); }
+
+void IdeScriptEditor::openFind(bool replace) {
+    if (!area_ || !find_bar_) {
+        return;
+    }
+    // One line of selection, or the name under the caret, is what to find.
+    std::string seed;
+    if (area_->selections().size() == 1) {
+        const jadefx::IndexRange range = area_->selection();
+        if (!range.empty()) {
+            seed = area_->getText(range.start, range.end);
+            if (seed.find('\n') != std::string::npos) {
+                seed.clear();
+            }
+        } else {
+            const jadefx::TextPos at = area_->position(range.start);
+            const jadefx::IndexRange name = name_around(area_->getParagraph(at.paragraph).content(), at.column);
+            if (!name.empty()) {
+                // Selected, so it is the match the bar starts on.
+                const int start = area_->absolutePosition(at.paragraph, name.start);
+                const int end = area_->absolutePosition(at.paragraph, name.end);
+                seed = area_->getText(start, end);
+                area_->selectRange(start, end);
+            }
+        }
+    }
+    const bool was_open = findOpen();
+    find_bar_->setVisible(true);
+    find_bar_->setReplaceEnabled(area_->isEditable());
+    // Find opens with replace hidden. Once open, the bar keeps what the chevron chose.
+    if (replace || !was_open) {
+        find_bar_->setReplaceShown(replace);
+    }
+    if (!seed.empty()) {
+        find_bar_->setFindText(seed);
+    }
+    if (!was_open) {
+        paint();
+    }
+    if (replace && !find_bar_->query().pattern.empty()) {
+        find_bar_->focusReplace();
+    } else {
+        find_bar_->focusFind();
+    }
+}
+
+void IdeScriptEditor::closeFind() {
+    if (!findOpen()) {
+        return;
+    }
+    find_bar_->setVisible(false);
+    find_bar_->performLayout(0, 0, 0, 0);
+    if (jadefx::Scene* scene = getScene()) {
+        scene->releaseFocus(find_bar_.get());
+    }
+    paint();
+    focus();
+}
+
+void IdeScriptEditor::refresh_find(const std::string& text) {
+    find_matches_.clear();
+    find_capped_ = false;
+    find_error_.clear();
+    if (!findOpen()) {
+        return;
+    }
+    const TextSearch search(find_bar_->query());
+    find_error_ = search.error();
+    if (search.ready()) {
+        find_matches_ = search.find_all(text, kFindLimit + 1);
+        if (find_matches_.size() > kFindLimit) {
+            find_matches_.resize(kFindLimit);
+            find_capped_ = true;
+        }
+    }
+}
+
+int IdeScriptEditor::current_find() const {
+    if (!area_ || find_matches_.empty() || area_->selections().size() != 1) {
+        return -1;
+    }
+    const jadefx::IndexRange range = area_->selection();
+    auto it = std::lower_bound(find_matches_.begin(), find_matches_.end(), range.start,
+                               [](const TextMatch& match, int start) { return match.start < start; });
+    for (; it != find_matches_.end() && it->start == range.start; ++it) {
+        if (it->end == range.end) {
+            return static_cast<int>(it - find_matches_.begin());
+        }
+    }
+    return -1;
+}
+
+void IdeScriptEditor::show_find_count() {
+    if (findOpen()) {
+        find_bar_->showCount(current_find(), static_cast<int>(find_matches_.size()), find_capped_, find_error_);
+    }
+}
+
+void IdeScriptEditor::find_changed() {
+    if (!area_) {
+        return;
+    }
+    // As the find text grows, the match stays where the last one started.
+    const int from = area_->selection().start;
+    paint();
+    if (find_matches_.empty()) {
+        return;
+    }
+    std::size_t index = 0;
+    for (std::size_t i = 0; i < find_matches_.size(); ++i) {
+        if (find_matches_[i].start >= from) {
+            index = i;
+            break;
+        }
+    }
+    select_find(index);
+}
+
+void IdeScriptEditor::select_find(std::size_t index) {
+    if (!area_ || index >= find_matches_.size()) {
+        return;
+    }
+    const TextMatch& match = find_matches_[index];
+    area_->selectRange(match.start, match.end);
+    area_->showPosition(match.start);
+    if (painted_find_ != static_cast<int>(index)) {
+        paint();
+    } else {
+        show_find_count();
+    }
+}
+
+void IdeScriptEditor::step_find(int direction) {
+    if (!area_ || find_matches_.empty()) {
+        return;
+    }
+    const std::size_t count = find_matches_.size();
+    const int current = current_find();
+    std::size_t index = 0;
+    if (current >= 0) {
+        index = (static_cast<std::size_t>(current) + count + (direction > 0 ? 1 : count - 1)) % count;
+    } else if (direction > 0) {
+        // The first match after the selection, or the first of all.
+        const int from = area_->selection().end;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (find_matches_[i].start >= from) {
+                index = i;
+                break;
+            }
+        }
+    } else {
+        // The last match before the selection, or the last of all.
+        const int before = area_->selection().start;
+        index = count - 1;
+        for (std::size_t i = count; i-- > 0;) {
+            if (find_matches_[i].start < before) {
+                index = i;
+                break;
+            }
+        }
+    }
+    select_find(index);
+}
+
+void IdeScriptEditor::replace_find() {
+    if (!area_ || !findOpen() || !area_->isEditable()) {
+        return;
+    }
+    const int current = current_find();
+    // The first press only goes to a match; the next replaces it, as in VS Code.
+    if (current < 0) {
+        step_find(1);
+        return;
+    }
+    const TextSearch search(find_bar_->query());
+    if (!search.ready()) {
+        return;
+    }
+    const std::string text = area_->getText();
+    const TextMatch match = find_matches_[static_cast<std::size_t>(current)];
+    const std::string inserted = search.expand(text, match, find_bar_->replacement());
+    dismiss_completion();
+    replacing_ = true;
+    area_->replaceText(match.start, match.end, inserted);
+    replacing_ = false;
+    const int after = match.start + code_points(inserted);
+    area_->moveTo(after);
+    // The edit repainted, so the matches are the new text's. An empty match
+    // replaced with nothing is still there; the next one is past it.
+    if (find_matches_.empty()) {
+        show_find_count();
+        return;
+    }
+    const bool stuck = match.start == match.end && inserted.empty();
+    std::size_t index = 0;
+    for (std::size_t i = 0; i < find_matches_.size(); ++i) {
+        if (stuck ? find_matches_[i].start > after : find_matches_[i].start >= after) {
+            index = i;
+            break;
+        }
+    }
+    select_find(index);
+}
+
+void IdeScriptEditor::replace_find_all() {
+    if (!area_ || !findOpen() || !area_->isEditable()) {
+        return;
+    }
+    const TextSearch search(find_bar_->query());
+    if (!search.ready()) {
+        return;
+    }
+    const std::string text = area_->getText();
+    // Every match, past the limit the bar counts to.
+    const std::vector<TextMatch> matches = search.find_all(text);
+    if (!matches.empty()) {
+        apply_replacements(search, text, matches, find_bar_->replacement());
+    }
+}
+
+int IdeScriptEditor::replaceMatches(const SearchQuery& query, const std::string& replacement, int line) {
+    if (!area_ || !loaded_ || missing_ || !area_->isEditable()) {
+        return 0;
+    }
+    const TextSearch search(query);
+    if (!search.ready()) {
+        return 0;
+    }
+    const std::string text = area_->getText();
+    std::vector<TextMatch> matches = search.find_all(text);
+    if (line > 0) {
+        matches.erase(std::remove_if(matches.begin(), matches.end(),
+                                     [line](const TextMatch& match) { return match.line != line - 1; }),
+                      matches.end());
+    }
+    if (matches.empty()) {
+        return 0;
+    }
+    return apply_replacements(search, text, matches, replacement);
+}
+
+int IdeScriptEditor::apply_replacements(const TextSearch& search, const std::string& text,
+                                        const std::vector<TextMatch>& matches, const std::string& replacement) {
+    // The caret keeps its place in the text around the replacements.
+    const int caret = area_->caretPosition();
+    int moved = caret;
+    for (const TextMatch& match : matches) {
+        if (caret <= match.start) {
+            break;
+        }
+        const int inserted = code_points(search.expand(text, match, replacement));
+        if (caret >= match.end) {
+            moved += inserted - (match.end - match.start);
+            continue;
+        }
+        moved = match.start + (moved - caret) + inserted;
+        break;
+    }
+    // One edit from the first match to the last, so one undo puts them all back.
+    const std::string span = search.replace_span(text, matches, replacement);
+    dismiss_completion();
+    replacing_ = true;
+    area_->replaceText(matches.front().start, matches.back().end, span);
+    replacing_ = false;
+    area_->moveTo(std::clamp(moved, 0, area_->length()));
+    return static_cast<int>(matches.size());
 }
 
 void IdeScriptEditor::bindUndo(TextUndoStack* stack) {
@@ -281,7 +615,29 @@ void IdeScriptEditor::layoutChildren() {
     if (color_edit_ && color_chooser_ && getScene() != nullptr && !getScene()->isPopupShowing(color_chooser_.get())) {
         close_color_picker(true);
     }
+    if (findOpen()) {
+        find_bar_->poll();
+        // A click or an arrow key can put the selection on a match or take it off one.
+        if (current_find() != painted_find_) {
+            paint();
+        }
+    }
     StackPane::layoutChildren();
+    place_find_bar();
+}
+
+void IdeScriptEditor::place_find_bar() {
+    if (!find_bar_) {
+        return;
+    }
+    if (!findOpen()) {
+        find_bar_->performLayout(0, 0, 0, 0);
+        return;
+    }
+    const double right = contentLeft() + contentWidth() - FindBar::kRightGap;
+    const double width = std::max(0.0, std::min(FindBar::kMaxWidth, right - contentLeft() - 8));
+    const double height = find_bar_->measuredHeight(width, -1);
+    find_bar_->performLayout(right - width, contentTop(), width, height);
 }
 
 bool IdeScriptEditor::read_source(std::string& text, std::string& name, bool& alive, std::uint32_t* world) const {
@@ -331,20 +687,56 @@ void IdeScriptEditor::load() {
     paint();
     loaded_ = true;
     setTitleText(name);
+    if (pending_range_) {
+        const PendingRange range = *pending_range_;
+        pending_range_.reset();
+        showRange(range.line, range.column, range.column_end);
+    }
 }
 
 void IdeScriptEditor::paint() {
     if (!area_) {
         return;
     }
+    const std::string text = area_->getText();
+    refresh_find(text);
+    const int current = current_find();
+    painted_find_ = current;
+    // The highlighter's spans, cut where find matches start and end. A match adds
+    // its class after the token's, so it keeps the token's color.
     jadefx::StyleSpansBuilder builder;
-    for (const LuauSpan& span : highlight_luau(area_->getText())) {
-        jadefx::TextStyle style;
-        if (span.style != nullptr) {
-            style.styleClass = span.style;
+    std::size_t next = 0;
+    int at = 0;
+    for (const LuauSpan& span : highlight_luau(text)) {
+        int left = span.length;
+        while (left > 0) {
+            while (next < find_matches_.size() && find_matches_[next].end <= at) {
+                ++next;
+            }
+            int piece = left;
+            const char* mark = nullptr;
+            if (next < find_matches_.size()) {
+                const TextMatch& match = find_matches_[next];
+                if (match.start > at) {
+                    piece = std::min(left, match.start - at);
+                } else {
+                    piece = std::min(left, match.end - at);
+                    mark = static_cast<int>(next) == current ? "find-current" : "find-match";
+                }
+            }
+            jadefx::TextStyle style;
+            if (span.style != nullptr) {
+                style.styleClass = span.style;
+            }
+            if (mark != nullptr) {
+                style.styleClass = style.styleClass.empty() ? std::string(mark) : style.styleClass + " " + mark;
+            }
+            builder.add(style, piece);
+            at += piece;
+            left -= piece;
         }
-        builder.add(style, span.length);
     }
+    show_find_count();
     area_->suspendUndo();
     area_->setStyleSpans(0, builder.create());
     area_->resumeUndo();
@@ -542,7 +934,7 @@ void IdeScriptEditor::note_text() {
     }
     static_cast<ScriptCodeArea*>(area_.get())->dismissHover();
     paint();
-    if (!completion_.accepting()) {
+    if (!completion_.accepting() && !replacing_) {
         refresh_completion(false);
     }
     dirty_ = true;
@@ -712,6 +1104,24 @@ void ScriptCodeArea::handleKey(jadefx::KeyEvent& event) {
         editor->refresh_completion(true);
         event.consume();
         return;
+    }
+    const FindChord chord = find_chord(event);
+    if (chord == FindChord::Find || chord == FindChord::Replace) {
+        editor->openFind(chord == FindChord::Replace);
+        event.consume();
+        return;
+    }
+    if (editor->findOpen()) {
+        if (event.key == jadefx::Key::F3 || (event.shortcut() && !event.alt && event.key == jadefx::Key::G)) {
+            editor->step_find(event.shift ? -1 : 1);
+            event.consume();
+            return;
+        }
+        if (event.key == jadefx::Key::Escape && !event.shift && !event.shortcut() && !editor->completion_open()) {
+            editor->closeFind();
+            event.consume();
+            return;
+        }
     }
     const bool plain_enter = (event.key == jadefx::Key::Enter || event.key == jadefx::Key::KpEnter) && !event.shift &&
                              !event.shortcut();
@@ -907,11 +1317,6 @@ char32_t CodePointAt(std::string_view text, int index) {
         ++count;
     }
     return 0;
-}
-
-bool NameChar(char32_t code) {
-    return (code >= U'A' && code <= U'Z') || (code >= U'a' && code <= U'z') || code == U'_' ||
-           (code >= U'0' && code <= U'9') || code >= 0x80;
 }
 
 int WordStart(std::string_view text, int index) {

@@ -14,6 +14,7 @@
 #include "IdeDock.hpp"
 #include "IdeExplorer.hpp"
 #include "IdeScriptEditor.hpp"
+#include "IdeSearch.hpp"
 #include "PropertiesPanel.hpp"
 #include "LuaSource.hpp"
 #include "McpServer.hpp"
@@ -404,6 +405,11 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
         });
     });
     edit->getItems().add(std::move(insert));
+    edit->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
+    AddItem(*edit, "Find in Scripts", "Search.png", jadefx::Key::F, jadefx::Key::ModControl | jadefx::Key::ModShift)
+        ->setOnAction([this](jadefx::ActionEvent&) { open_search(false, scene_); });
+    AddItem(*edit, "Replace in Scripts", nullptr, jadefx::Key::H, jadefx::Key::ModControl | jadefx::Key::ModShift)
+        ->setOnAction([this](jadefx::ActionEvent&) { open_search(true, scene_); });
 
     auto view = jadefx::make<jadefx::Menu>("View");
     AddItem(*view, "Maybe :)", "Smile.png", 0, 0);
@@ -631,6 +637,7 @@ void IdeLayout::mount(jadefx::Scene& scene) {
             routeUndo(event, *scene_);
             routeDelete(event, *scene_);
             routeReveal(event, *scene_);
+            routeSearch(event, *scene_);
         }
     });
 }
@@ -923,6 +930,7 @@ void IdeLayout::floatTab(const std::shared_ptr<jadefx::Tab>& tab, double screenX
         routeUndo(event, *utilityScene);
         routeDelete(event, *utilityScene);
         routeReveal(event, *utilityScene);
+        routeSearch(event, *utilityScene);
     });
     window->stage().setScene(std::move(scene));
     dock->take(tab);
@@ -1451,6 +1459,100 @@ void IdeLayout::routeReveal(jadefx::KeyEvent& event, jadefx::Scene& scene) {
     }
 }
 
+void IdeLayout::routeSearch(jadefx::KeyEvent& event, jadefx::Scene& scene) {
+    if (event.consumed) {
+        return;
+    }
+    const FindChord chord = find_chord(event);
+    if (chord == FindChord::FindInScripts || chord == FindChord::ReplaceInScripts) {
+        event.consume();
+        open_search(chord == FindChord::ReplaceInScripts, &scene);
+    }
+}
+
+void IdeLayout::open_search(bool replace, jadefx::Scene* scene) {
+    // A selection on one line in the focused editor is what to find.
+    std::string seed;
+    if (scene != nullptr) {
+        if (IdeScriptEditor* editor = Owning<IdeScriptEditor>(scene->focusedNode())) {
+            if (!editor->findOwns(scene->focusedNode())) {
+                seed = editor->selectedText();
+                if (seed.find('\n') != std::string::npos) {
+                    seed.clear();
+                }
+            }
+        }
+    }
+    if (search_ && dockContaining(search_.get()) == nullptr && search_->getParent() != nullptr) {
+        // Still held by a tab that is on its way out. Start a new pane.
+        search_.reset();
+    }
+    if (!search_) {
+        SearchHost host;
+        host.editor_text = [this](std::uint32_t id) -> std::optional<std::string> {
+            const std::shared_ptr<IdeScriptEditor> editor = open_editor(id);
+            if (!editor || !editor->isLoaded()) {
+                return std::nullopt;
+            }
+            return editor->text();
+        };
+        host.replace_in_editor = [this](std::uint32_t id, const SearchQuery& query, const std::string& replacement,
+                                        int line) {
+            const std::shared_ptr<IdeScriptEditor> editor = open_editor(id);
+            if (!editor || !editor->isLoaded()) {
+                return -1;
+            }
+            const int count = editor->replaceMatches(query, replacement, line);
+            // Now, not when the editor's tab next lays out, so Source and the place have it.
+            editor->flush();
+            return count;
+        };
+        host.open = [this](std::uint32_t id, int line, int column, int column_end) {
+            edit(id);
+            if (const std::shared_ptr<IdeScriptEditor> editor = open_editor(id)) {
+                editor->showRange(line, column, column_end);
+            }
+        };
+        search_ = jadefx::make<IdeSearch>(runner_.simulation(), std::move(host));
+    }
+    if (IdeDock* dock = dockContaining(search_.get())) {
+        dock->select(search_.get());
+    } else {
+        // Find in Scripts opens the pane with replace hidden.
+        if (!replace) {
+            search_->setReplaceShown(false);
+        }
+        // Beside the left explorer, as VS Code keeps search in its side bar.
+        IdeDock* home = nullptr;
+        for (const std::weak_ptr<IdeExplorer>& weak : explorers_) {
+            if (const std::shared_ptr<IdeExplorer> explorer = weak.lock()) {
+                home = dockContaining(explorer.get());
+                if (home != nullptr) {
+                    break;
+                }
+            }
+        }
+        if (home == nullptr) {
+            home = editorHome();
+        }
+        if (home == nullptr) {
+            return;
+        }
+        home->dock(search_);
+    }
+    if (!seed.empty()) {
+        search_->setFindText(seed);
+    }
+    if (replace && !search_->findInput().text().empty()) {
+        search_->focusReplace();
+    } else {
+        if (replace) {
+            search_->setReplaceShown(true);
+        }
+        search_->focusFind();
+    }
+}
+
 bool IdeLayout::action_enabled(std::string_view action) const {
     if (action == "Paste") {
         return clip_ && clip_->held;
@@ -1715,7 +1817,9 @@ void IdeLayout::routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene) {
         return;
     }
     jadefx::Node* focused = scene.focusedNode();
-    if (IdeScriptEditor* editor = Owning<IdeScriptEditor>(focused)) {
+    // The find bar's fields are text fields of their own, not the script.
+    IdeScriptEditor* editor = Owning<IdeScriptEditor>(focused);
+    if (editor != nullptr && !editor->findOwns(focused)) {
         Focus target;
         target.kind = FocusKind::ScriptEditor;
         target.script = editor->instanceId();

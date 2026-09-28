@@ -24,6 +24,7 @@ namespace ide {
 class IdeDock;
 class IdePane;
 class IdeScriptEditor;
+class IdeSearch;
 class McpServer;
 class PropertiesPanel;
 
@@ -41,6 +42,8 @@ class PropertiesPanel;
 // The explorer edits a name in place and hands the result to rename. F shows
 // the selection in every explorer: the branches above it open, and it scrolls into view.
 // Properties, under the right-hand explorer, edits the selection's properties.
+// Edit > Find in Scripts (Cmd+Shift+F) docks the Search pane beside the left
+// explorer, and Replace in Scripts (Cmd+Shift+H) opens it with replace.
 // File opens and saves a project folder through the system folder dialog.
 // Until the first Save As, the place has no folder. New, Open, and closing the
 // window ask first when the place has changes a save would write.
@@ -120,6 +123,13 @@ private:
     void routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene);
     // F, outside a text field, shows the selection in every explorer.
     void routeReveal(jadefx::KeyEvent& event, jadefx::Scene& scene);
+    // Cmd+Shift+F and Cmd+Shift+H in a window whose menu bar does not take them.
+    void routeSearch(jadefx::KeyEvent& event, jadefx::Scene& scene);
+    // Docks the Search pane, or brings it forward, and focuses its find field or,
+    // with replace, its replace field. Docked without replace, it starts with
+    // replace hidden. A selection on one line in the focused
+    // editor becomes the find text.
+    void open_search(bool replace, jadefx::Scene* scene);
     void noteScriptFocus();
     void adoptDock(const std::shared_ptr<IdeDock>& dock);
     void onTabDrag(IdeDock& from, const jadefx::TabDrag& drag);
@@ -176,6 +186,8 @@ private:
     jadefx::Scene* scene_ = nullptr;
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeScriptEditor>> open_scripts_;
     std::weak_ptr<class IdeConsole> console_;
+    // Kept while its tab is closed, so reopening it keeps the search.
+    std::shared_ptr<IdeSearch> search_;
     std::vector<std::weak_ptr<class IdeExplorer>> explorers_;
     std::unique_ptr<McpServer> mcp_;
     // MCP tools that wait for the UI thread hold this weakly, so a task that

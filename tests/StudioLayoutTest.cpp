@@ -1,6 +1,7 @@
 #include "ide/IdeConsole.hpp"
 #include "ide/IdeLayout.hpp"
 #include "ide/IdePane.hpp"
+#include "ide/IdeSearch.hpp"
 
 #include "Engine.hpp"
 #include "ScriptRuntime.hpp"
@@ -11,6 +12,8 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+
+int RunFindReplaceTests(engine_core::Engine& engine);
 
 // R10: the studio's default layout builds, and its docks hold the explorers,
 // the console, and Properties. Runs headless: the threads are never started.
@@ -141,6 +144,64 @@ int main() {
             expect(field.getText() == "local a = 1", "a rerun command is the newest entry");
         }
     }
+
+    // Cmd+Shift+F (Ctrl+Shift+F elsewhere) docks Search beside the left explorer, with its field focused.
+    scene->noteKey(jadefx::Key::F, true, false, jadefx::Key::ModControl | jadefx::Key::ModShift);
+    scene->noteKey(jadefx::Key::F, false, false, 0);
+    scene->layout(1280, 800, 0.6);
+    scene->layout(1280, 800, 0.7);
+    ide::IdeSearch* search = nullptr;
+    for (jadefx::Node* node : scene->getRoot()->getElementsByClassName("ide-pane")) {
+        if (auto* found = dynamic_cast<ide::IdeSearch*>(node)) {
+            search = found;
+        }
+    }
+    expect(search != nullptr, "Cmd+Shift+F docks the Search pane");
+    if (search != nullptr) {
+        expect(search->getWidth() > 100 && search->getAbsoluteX() < 300, "Search sits on the left, with the explorer");
+        expect(search->findInput().field().isFocused(), "the Search field takes the focus");
+        expect(!search->replaceShown(), "Search opens with replace hidden");
+        scene->noteKey(jadefx::Key::H, true, false, jadefx::Key::ModControl | jadefx::Key::ModShift);
+        scene->noteKey(jadefx::Key::H, false, false, 0);
+        expect(search->replaceShown(), "Cmd+Shift+H shows replace in the Search pane");
+
+        // Closing its tab and opening it again brings back the same search.
+        search->setFindText("kept");
+        jadefx::TabPane* tabs = nullptr;
+        for (jadefx::Node* node = search->getParent(); node != nullptr && tabs == nullptr; node = node->getParent()) {
+            tabs = dynamic_cast<jadefx::TabPane*>(node);
+        }
+        expect(tabs != nullptr, "Search is in a tab strip");
+        if (tabs != nullptr) {
+            const std::vector<std::shared_ptr<jadefx::Tab>> items = tabs->getTabs().items();
+            for (const std::shared_ptr<jadefx::Tab>& tab : items) {
+                if (tab && tab->getContent() == search) {
+                    tabs->close(tab);
+                }
+            }
+        }
+        scene->layout(1280, 800, 0.8);
+        scene->layout(1280, 800, 0.9);
+        bool shown = false;
+        for (jadefx::Node* node : scene->getRoot()->getElementsByClassName("ide-pane")) {
+            shown = shown || node == search;
+        }
+        expect(!shown, "closing the tab takes Search out of the window");
+        scene->noteKey(jadefx::Key::F, true, false, jadefx::Key::ModControl | jadefx::Key::ModShift);
+        scene->noteKey(jadefx::Key::F, false, false, 0);
+        scene->layout(1280, 800, 1.0);
+        ide::IdeSearch* again = nullptr;
+        for (jadefx::Node* node : scene->getRoot()->getElementsByClassName("ide-pane")) {
+            if (auto* found = dynamic_cast<ide::IdeSearch*>(node)) {
+                again = found;
+            }
+        }
+        expect(again != nullptr && again->findInput().text() == "kept" && again->findInput().field().isFocused(),
+               "Cmd+Shift+F after a close docks Search again with its search");
+        expect(again != nullptr && !again->replaceShown(), "Search opens again with replace hidden");
+    }
+
+    failures += RunFindReplaceTests(layout.simulation());
 
     if (failures == 0) {
         std::printf("studio layout tests passed\n");

@@ -79,6 +79,12 @@ if(WIN32)
     set(ANARCHY_ICON_ICO "${ANARCHY_ICON_DIR}/anarchy.ico")
     configure_file("${ANARCHY_ICON_DIR}/anarchy.rc.in" "${CMAKE_CURRENT_BINARY_DIR}/anarchy.rc" @ONLY)
     target_sources(AnarchyEngine-CPP PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/anarchy.rc")
+    # A GUI-subsystem program, so launching the IDE opens no console window.
+    # MSVC looks for WinMain there; the entry point keeps the ordinary main().
+    set_target_properties(AnarchyEngine-CPP PROPERTIES WIN32_EXECUTABLE TRUE)
+    if(MSVC)
+        target_link_options(AnarchyEngine-CPP PRIVATE /ENTRY:mainCRTStartup)
+    endif()
 elseif(APPLE)
     # Lands in Contents/Resources, where CFBundleIconFile looks.
     target_sources(AnarchyEngine-CPP PRIVATE "${ANARCHY_ICON_DIR}/anarchy.icns")

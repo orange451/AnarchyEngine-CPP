@@ -79,8 +79,9 @@ end
         layout_->start_mcp();
         auto scene = jadefx::make<jadefx::Scene>(nullptr, size.width, size.height);
         layout_->mount(*scene);
-        layout_->attachFrame(stage);
+        // Setting the scene sizes the window to it, so the saved size goes on after.
         stage.setScene(std::move(scene));
+        layout_->attachFrame(stage);
         // AnarchyEngine-CPP <folder> opens that project on the first frame.
         // Finder may pass -psn_ arguments; flags are not folders.
         if (argc > 1 && argv[1] != nullptr && argv[1][0] != '-') {

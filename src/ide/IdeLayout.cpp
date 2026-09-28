@@ -334,6 +334,26 @@ private:
     std::function<void()> action_;
 };
 
+// A number in a layout.json object, or fallback when it is missing or not a finite number.
+double NumberOr(const engine_core::JsonValue& object, const char* key, double fallback) {
+    const engine_core::JsonValue* value = object.find(key);
+    return value != nullptr && value->is_number() && std::isfinite(value->as_number()) ? value->as_number() : fallback;
+}
+
+// A window whose point 0, 0 is at x, y shows the top of itself on some display,
+// so it can be dragged. With no displays to ask about, any place is taken.
+bool OnScreen(const std::vector<jadefx::ScreenArea>& areas, double x, double y) {
+    if (areas.empty()) {
+        return true;
+    }
+    for (const jadefx::ScreenArea& area : areas) {
+        if (x + 40 >= area.x && x + 40 < area.x + area.width && y >= area.y && y < area.y + area.height) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // A Window menu row's graphic: a check while the window is open, then the
 // window's icon. The menu lays its rows out each time it opens, and the check
 // is worked out then. Check.png is white and takes the menu's text color.
@@ -966,7 +986,13 @@ bool IdeLayout::restore_layout() {
     }
     const engine_core::JsonValue* version = saved.find("version");
     const engine_core::JsonValue* main = saved.find("main");
-    if (version == nullptr || version->as_number() != 1 || main == nullptr) {
+    if (version == nullptr || version->as_number() != 1) {
+        return refuse(utf8_path(layout_file_) + " is not a layout this studio reads");
+    }
+    if (const engine_core::JsonValue* window = saved.find("window"); window != nullptr && window->is_object()) {
+        saved_window_ = *window;
+    }
+    if (main == nullptr) {
         return refuse(utf8_path(layout_file_) + " is not a layout this studio reads");
     }
     std::shared_ptr<jadefx::Node> tree = load_layout_node(*main, layout_host());
@@ -1014,22 +1040,25 @@ bool IdeLayout::restore_layout() {
 void IdeLayout::restore_floating() {
     const engine_core::JsonValue windows = std::move(saved_floating_);
     saved_floating_ = engine_core::JsonValue();
+    const std::vector<jadefx::ScreenArea> areas = jadefx::screenWorkAreas();
     for (const engine_core::JsonValue& window : windows.items()) {
         const engine_core::JsonValue* tree = window.find("root");
         if (tree == nullptr) {
             continue;
         }
-        auto number = [&window](const char* key, double fallback) {
-            const engine_core::JsonValue* value = window.find(key);
-            return value != nullptr && value->is_number() && std::isfinite(value->as_number()) ? value->as_number()
-                                                                                                 : fallback;
-        };
         // flushFrame titles it after the tab that shows.
         std::vector<std::string> names;
         layout_tab_names(*tree, names);
-        const int width = static_cast<int>(std::lround(std::clamp(number("width", 420), 200.0, 4000.0)));
-        const int height = static_cast<int>(std::lround(std::clamp(number("height", 280), 140.0, 4000.0)));
-        open_floating(names.empty() ? std::string() : names.front(), width, height, number("x", 120), number("y", 120),
+        const int width = static_cast<int>(std::lround(std::clamp(NumberOr(window, "width", 420), 200.0, 4000.0)));
+        const int height = static_cast<int>(std::lround(std::clamp(NumberOr(window, "height", 280), 140.0, 4000.0)));
+        double x = NumberOr(window, "x", 120);
+        double y = NumberOr(window, "y", 120);
+        // Its display may be gone since.
+        if (!OnScreen(areas, x, y)) {
+            x = 120;
+            y = 120;
+        }
+        open_floating(names.empty() ? std::string() : names.front(), width, height, x, y,
                       [&] {
                           std::shared_ptr<jadefx::Node> node = load_layout_node(*tree, layout_host());
                           if (node) {
@@ -1037,6 +1066,41 @@ void IdeLayout::restore_floating() {
                           }
                           return node;
                       });
+    }
+}
+
+void IdeLayout::restore_window(jadefx::Stage& stage) {
+    const engine_core::JsonValue window = std::move(saved_window_);
+    saved_window_ = engine_core::JsonValue();
+    if (!window.is_object()) {
+        return;
+    }
+    const std::vector<jadefx::ScreenArea> areas = jadefx::screenWorkAreas();
+    double width = NumberOr(window, "width", 0);
+    double height = NumberOr(window, "height", 0);
+    if (width >= 200 && height >= 150) {
+        // No bigger than the largest display now.
+        double widest = 0;
+        double tallest = 0;
+        for (const jadefx::ScreenArea& area : areas) {
+            widest = std::max(widest, area.width);
+            tallest = std::max(tallest, area.height);
+        }
+        if (widest > 0) {
+            width = std::min(width, widest);
+            height = std::min(height, tallest);
+        }
+        stage.setSize(static_cast<int>(std::lround(width)), static_cast<int>(std::lround(height)));
+    }
+    const double x = NumberOr(window, "x", std::nan(""));
+    const double y = NumberOr(window, "y", std::nan(""));
+    // A place on a display that is gone is left to the system.
+    if (std::isfinite(x) && std::isfinite(y) && OnScreen(areas, x, y)) {
+        jadefx::moveStageTo(stage, x, y);
+    }
+    if (const engine_core::JsonValue* maximized = window.find("maximized"); maximized != nullptr && maximized->as_bool()) {
+        // Once the window is showing.
+        jadefx::runLater([&stage] { jadefx::maximizeStage(stage); });
     }
 }
 
@@ -1095,6 +1159,17 @@ engine_core::JsonValue IdeLayout::capture_layout() {
         closed.items().push_back(engine_core::JsonValue::string("Search"));
     }
     saved.set("closed", std::move(closed));
+    double x = 0;
+    double y = 0;
+    if (mainStage_ != nullptr && jadefx::stageToScreen(*mainStage_, 0, 0, x, y)) {
+        engine_core::JsonValue window = engine_core::JsonValue::object();
+        window.set("x", engine_core::JsonValue::number(x));
+        window.set("y", engine_core::JsonValue::number(y));
+        window.set("width", engine_core::JsonValue::number(mainStage_->getWidth()));
+        window.set("height", engine_core::JsonValue::number(mainStage_->getHeight()));
+        window.set("maximized", engine_core::JsonValue::boolean(jadefx::isStageMaximized(*mainStage_)));
+        saved.set("window", std::move(window));
+    }
     return saved;
 }
 
@@ -1278,6 +1353,7 @@ void IdeLayout::attachFrame(jadefx::Stage& stage) {
         return false;
     });
     update_title();
+    restore_window(stage);
     restore_floating();
 }
 

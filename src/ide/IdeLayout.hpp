@@ -61,9 +61,9 @@ class PropertiesPanel;
 // another tab brings it forward, and picking one that is showing closes it.
 // Below them, New Scene View docks another view of the place beside the first,
 // and Reset to Default Layout puts the windows back as a new studio has them.
-// Where the docks are, what each holds, and which windows are closed are kept
-// in layout.json in the config folder when the window closes, and the next
-// start docks them that way again. Script editors and extra scene views are
+// Where the docks are, what each holds, which windows are closed, and the
+// main window's place and size are kept in layout.json in the config folder
+// when the window closes, and the next start puts them back. Script editors and extra scene views are
 // not kept. Without that file, or when it cannot be read, the studio starts
 // with its default layout.
 class IdeLayout {
@@ -86,6 +86,8 @@ public:
     void start_mcp();
     void mount(jadefx::Scene& scene);
     // Grows the window after a frame when a dock's minimum no longer fits.
+    // Gives the window the place and size layout.json had, and opens its
+    // floating windows, so it comes after the stage has its scene.
     void attachFrame(jadefx::Stage& stage);
     // Stops a running test, closes script editors, and loads the project at root.
     // A failure shows an alert and leaves the current place open.
@@ -189,6 +191,8 @@ private:
     bool restore_layout();
     // Opens the floating windows layout.json had. Needs the main window.
     void restore_floating();
+    // Gives the main window the place, size, and maximized state layout.json had.
+    void restore_window(jadefx::Stage& stage);
     LayoutHost layout_host();
     // The layout as save_layout writes it.
     engine_core::JsonValue capture_layout();
@@ -272,6 +276,8 @@ private:
     std::filesystem::path layout_file_;
     // The floating windows layout.json had, until the main window is up to open them.
     engine_core::JsonValue saved_floating_;
+    // The main window's place and size from layout.json, until attachFrame.
+    engine_core::JsonValue saved_window_;
     // Frames flushed so far.
     std::uint64_t frames_ = 0;
     // The layout just before a floating window closed its tabs, and the frame

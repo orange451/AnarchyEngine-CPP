@@ -1,30 +1,40 @@
-# Unix: make && make run
-# Windows (from a developer prompt): cmake -S . -B build && cmake --build build --config Release
+# make && make run, on macOS, Linux, and Windows.
+# Windows needs GNU make (winget install ezwinports.make) and Visual Studio's C++ tools.
 
 BUILD_DIR := build
+CONFIG := Release
 
+ifeq ($(OS),Windows_NT)
+# Visual Studio builds every configuration into its own folder, picked at build time.
+BIN_DIR := $(BUILD_DIR)/$(CONFIG)
+EXE := .exe
+APP_BIN := $(BIN_DIR)/AnarchyEngine-CPP$(EXE)
+else
+BIN_DIR := $(BUILD_DIR)
+EXE :=
 ifeq ($(shell uname),Darwin)
 APP_BIN := $(BUILD_DIR)/AnarchyEngine-CPP.app/Contents/MacOS/AnarchyEngine-CPP
 else
 APP_BIN := $(BUILD_DIR)/AnarchyEngine-CPP
 endif
+endif
 
 .PHONY: all run test clean
 
 all:
-	cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Release
-	cmake --build $(BUILD_DIR) --parallel
+	cmake -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(CONFIG)
+	cmake --build $(BUILD_DIR) --config $(CONFIG) --parallel
 
 run: all
 	"$(APP_BIN)"
 
 test: all
-	"$(BUILD_DIR)/engine-tests"
-	"$(BUILD_DIR)/properties-tests"
-	"$(BUILD_DIR)/console-tests"
-	"$(BUILD_DIR)/studio-tests"
-	"$(BUILD_DIR)/mcp-tests"
-	"$(BUILD_DIR)/sandbox"
+	"$(BIN_DIR)/engine-tests$(EXE)"
+	"$(BIN_DIR)/properties-tests$(EXE)"
+	"$(BIN_DIR)/console-tests$(EXE)"
+	"$(BIN_DIR)/studio-tests$(EXE)"
+	"$(BIN_DIR)/mcp-tests$(EXE)"
+	"$(BIN_DIR)/sandbox$(EXE)"
 
 clean:
-	rm -rf $(BUILD_DIR)
+	cmake -E rm -rf $(BUILD_DIR)

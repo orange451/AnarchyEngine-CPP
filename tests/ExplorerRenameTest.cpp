@@ -4,6 +4,7 @@
 #include "DataModel.hpp"
 #include "Folder.hpp"
 #include "Game.hpp"
+#include "LuaApi.hpp"
 #include "jadefx/jadefx.hpp"
 
 #include <cstdio>
@@ -37,6 +38,8 @@ struct Rig {
     std::vector<std::string> runs;
     int moves = 0;
     std::vector<std::pair<std::string, std::vector<engine_core::InstanceId>>> batches;
+    // Each insert's class and parent. Each makes a Folder there, whatever the class.
+    std::vector<std::pair<std::string, engine_core::InstanceId>> inserts;
     // The modifier keys the next click sees.
     int mods = 0;
     std::shared_ptr<ide::IdeExplorer> explorer;
@@ -62,6 +65,15 @@ struct Rig {
         host.move = [this](const std::vector<engine_core::InstanceId>& moved, engine_core::InstanceId parent) {
             ++moves;
             ide::move_set(game, moved, parent);
+        };
+        host.insert = [this](std::string class_name, engine_core::InstanceId parent,
+                             std::shared_ptr<ide::InsertResult> result) {
+            inserts.emplace_back(std::move(class_name), parent);
+            engine_core::Folder& made = game.create<engine_core::Folder>();
+            game.set_name(made.id(), "Made");
+            game.set_parent(made.id(), parent);
+            result->id = made.id();
+            result->done = true;
         };
         explorer = jadefx::make<ide::IdeExplorer>(game, "Explorer", host);
         explorer->setPrefWidthRatio(1);
@@ -781,6 +793,48 @@ void TestRevealClearsAHidingFilter() {
     Expect(rig.painted("Alpha"), "the revealed row shows selected");
 }
 
+engine_core::DataModel& CreateFolder(engine_core::DataModel& world) {
+    return world.create<engine_core::Folder>();
+}
+
+void TestHeaderInsertsUnderTheRoot() {
+    // The engine's registrars are not linked in here, so the class list needs one.
+    engine_core::register_lua_creatable("Folder", CreateFolder);
+    Rig rig;
+    const std::vector<jadefx::Node*> found = rig.explorer->getElementsByClassName("explorer-add");
+    jadefx::TextField* filter = rig.filter();
+    Expect(found.size() == 1 && filter != nullptr, "the header has a filter and a + button");
+    if (found.empty() || filter == nullptr) {
+        return;
+    }
+    jadefx::Node* add = found.front();
+    Expect(add->getAbsoluteY() >= filter->getAbsoluteY() + filter->getHeight(),
+           "the + sits under the filter");
+    Expect(add->getAbsoluteX() + add->getWidth() > filter->getAbsoluteX() + filter->getWidth() - 1,
+           "the + sits at the header's right edge");
+    jadefx::TreeView* view = rig.tree();
+    Expect(view != nullptr && add->getAbsoluteY() + add->getHeight() <= view->getAbsoluteY(),
+           "the + sits above the rows");
+    const double x = add->getAbsoluteX() + add->getWidth() * 0.5;
+    const double y = add->getAbsoluteY() + add->getHeight() * 0.5;
+    rig.scene->noteButton(0, true, x, y, 0);
+    rig.scene->noteButton(0, false, x, y, 0);
+    rig.frame(0.1);
+    // The class list takes the focus with its first class highlighted.
+    rig.key(jadefx::Key::Enter);
+    rig.frame(0.2);
+    Expect(rig.inserts.size() == 1, "Enter in the list inserts once");
+    Expect(!rig.inserts.empty() && rig.inserts.front().second == rig.game.id(), "the header's + inserts under game");
+    rig.frame(0.3);
+    Expect(rig.painted("Made"), "the new instance shows selected");
+    jadefx::Node* focused = rig.scene->focusedNode();
+    Expect(focused != nullptr && focused == rig.tree(), "the tree takes the focus after an insert");
+    // Escape reaches the tree without another click.
+    rig.key(jadefx::Key::Escape);
+    rig.frame(0.4);
+    Expect(rig.selection().empty(), "Escape clears the new instance's selection");
+}
+
 }  // namespace
 
 int main() {
@@ -822,6 +876,7 @@ int main() {
     TestRevealOpensTheBranch();
     TestRevealScrolls();
     TestRevealClearsAHidingFilter();
+    TestHeaderInsertsUnderTheRoot();
     if (gFailures == 0) {
         std::printf("explorer tests passed\n");
         return 0;

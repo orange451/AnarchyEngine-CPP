@@ -1,6 +1,7 @@
 #include "IdeExplorer.hpp"
 
 #include "DataModelLock.hpp"
+#include "FindBar.hpp"
 #include "IdeIcons.hpp"
 #include "IdeTheme.hpp"
 
@@ -35,6 +36,25 @@ constexpr double kDoubleClickSeconds = 0.4;
 // typed text lands where the name was drawn.
 constexpr double kRenameLead = 2;
 constexpr double kRenameTrail = 4;
+// The + in the header, the same chip a hovered row shows.
+constexpr double kAddSize = 22;
+
+// The header takes the Search pane's look: an inset filter field, then a
+// divider before the rows. kFindStylesheet styles the field itself.
+constexpr const char* kExplorerRules = R"CSS(
+.explorer-pane {
+    background-color: var(--ide-panel-color);
+}
+.explorer-header {
+    padding: 8px 8px 4px 8px;
+    spacing: 4px;
+}
+.explorer-tree {
+    border-width: 1px 0 0 0;
+    border-style: solid;
+    border-color: var(--ide-search-divider-color);
+}
+)CSS";
 
 struct ApplyGuard {
     bool& flag;
@@ -125,8 +145,9 @@ class FilterField : public jadefx::TextField {
 public:
     explicit FilterField(std::function<void()> leave) : leave_(std::move(leave)) {
         getClassList().add("explorer-filter");
+        getClassList().add("search-field");
         setPromptText("Filter");
-        setStyle("width: 100%; border-width: 0 0 1px 0; border-radius: 0; padding: 6px 28px 6px 8px;");
+        setStyle("width: 100%; padding: 3px 26px 3px 6px;");
     }
 
 protected:
@@ -146,8 +167,8 @@ private:
 };
 
 // The clear button's chip, and its gap from the field's right edge.
-constexpr double kClearSize = 20;
-constexpr double kClearInset = 4;
+constexpr double kClearSize = 18;
+constexpr double kClearInset = 3;
 
 // The × at the filter's right end, the same glyph as a tab's close button.
 // place_clear disables it while the filter is empty.
@@ -156,7 +177,7 @@ public:
     ClearButton() : Label("\u00d7") {
         getClassList().add("explorer-filter-clear");
         setAlignment(jadefx::Pos::Center);
-        setFont(jadefx::Font("Open Sans", 18.f));
+        setFont(jadefx::Font("Open Sans", 16.f));
         setOnMouseEntered([this](const jadefx::MouseEvent&) {
             if (!isDisabled()) {
                 setBackground(theme_color("--ide-explorer-button-hover-color"));
@@ -194,6 +215,8 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
     : IdePane(std::move(name), true), root_(root), host_(std::move(host)) {
     setPrefWidth(9999999);
     setMinSize(150, 80);
+    getClassList().add("explorer-pane");
+    setStylesheet(std::string(kFindStylesheet) + kExplorerRules);
 
     root_item_ = jadefx::make<jadefx::TreeItem>(root_.name(root_.id()));
     root_item_->setExpanded(true);
@@ -204,6 +227,7 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
     }
 
     tree_ = jadefx::make<jadefx::TreeView>(root_item_);
+    tree_->getClassList().add("explorer-tree");
     tree_->setShowRoot(false);
     tree_->setFixedCellSize(24);
     tree_->setOnContextMenuRequested([this](jadefx::TreeItem& item, const jadefx::MouseEvent& event) {
@@ -221,9 +245,32 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
     insert_button_->setOnMouseClicked([this](const jadefx::MouseEvent&) { open_insert(); });
     tree_->setHoverAccessory(insert_button_);
     filter_field_ = jadefx::make<FilterField>([this] { leave_filter(); });
+    // Inserts under the root itself, which has no row of its own to hover.
+    add_button_ = jadefx::make<InsertButton>();
+    add_button_->getClassList().add("explorer-add");
+    add_button_->setStyle("color: var(--ide-explorer-button-color); border-radius: 3px;");
+    add_button_->setMinSize(kAddSize, kAddSize);
+    add_button_->setPrefSize(kAddSize, kAddSize);
+    add_button_->setMaxSize(kAddSize, kAddSize);
+    jadefx::Tooltip::install(add_button_.get(), jadefx::make<jadefx::Tooltip>("Insert Object"));
+    add_button_->setOnMouseClicked([this](const jadefx::MouseEvent& event) {
+        if (event.button == 0) {
+            insert_parent_ = root_.id();
+            show_insert(*add_button_);
+        }
+    });
+    auto actions = jadefx::make<jadefx::HBox>();
+    actions->setAlignment(jadefx::Pos::CenterRight);
+    actions->setStyle("width: 100%;");
+    actions->getChildren().add(add_button_);
+    auto header = jadefx::make<jadefx::VBox>();
+    header->getClassList().add("explorer-header");
+    header->setStyle("width: 100%;");
+    header->getChildren().add(filter_field_);
+    header->getChildren().add(actions);
     auto column = jadefx::make<jadefx::BorderPane>();
     Fill(*column);
-    column->setTop(filter_field_);
+    column->setTop(header);
     column->setCenter(tree_);
     getChildren().add(column);
     // After the column, so it draws over the field and is hit first.
@@ -676,11 +723,15 @@ void IdeExplorer::open_insert() {
     tree_->select(item);
     item->setExpanded(true);
     insert_parent_ = id;
+    show_insert(*insert_button_);
+}
+
+void IdeExplorer::show_insert(jadefx::Node& anchor) {
     if (!insert_popup_) {
         insert_popup_ = std::make_unique<InsertPopup>();
         insert_popup_->setOnCreate([this](const std::string& name) { create_child(name); });
     }
-    insert_popup_->show(*insert_button_);
+    insert_popup_->show(anchor);
 }
 
 void IdeExplorer::create_child(const std::string& class_name) {
@@ -709,10 +760,13 @@ void IdeExplorer::finish_insert(engine_core::InstanceId made) {
         pending_insert_.reset();
         return;
     }
+    // Either way the focus is still in the closed class list. The tree takes it,
+    // so Delete, F, and Escape act on the new instance without another click.
     // The filter hides it. It is still the selection, for Properties.
     if (read_ok_ && !filter_.empty() && shown_row(made) == nullptr) {
         write_selection({made});
         pending_insert_.reset();
+        tree_->requestFocus();
         return;
     }
     const std::shared_ptr<jadefx::TreeItem> row = row_ptr(made);
@@ -721,6 +775,7 @@ void IdeExplorer::finish_insert(engine_core::InstanceId made) {
     }
     tree_->select(row.get());
     pending_insert_.reset();
+    tree_->requestFocus();
 }
 
 void IdeExplorer::layoutChildren() {

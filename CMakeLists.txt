@@ -298,6 +298,7 @@ target_compile_features(shell-tests PRIVATE cxx_std_17)
 add_executable(explorer-tests
     tests/ExplorerRenameTest.cpp
     src/ide/CutSet.cpp
+    src/ide/FindBar.cpp
     src/ide/IdeExplorer.cpp
     src/ide/IdeIcons.cpp
     src/ide/IdePane.cpp
@@ -324,6 +325,7 @@ target_compile_features(console-tests PRIVATE cxx_std_17)
 add_executable(properties-tests
     tests/PropertiesTest.cpp
     src/ide/CutSet.cpp
+    src/ide/FindBar.cpp
     src/ide/IdeExplorer.cpp
     src/ide/IdeIcons.cpp
     src/ide/IdePane.cpp

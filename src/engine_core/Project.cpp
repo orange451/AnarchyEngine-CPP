@@ -3,6 +3,7 @@
 #include "Folder.hpp"
 #include "Game.hpp"
 #include "GameObject.hpp"
+#include "JsonMerge.hpp"
 #include "ModuleScript.hpp"
 #include "Script.hpp"
 #include "TestTriangle.hpp"
@@ -16,6 +17,7 @@
 #include <set>
 #include <sstream>
 #include <system_error>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 
@@ -249,6 +251,10 @@ bool reserved_key(const std::string& key) {
     return key == "class" || key == "id" || key == "Name" || key == "children";
 }
 
+}  // namespace
+
+namespace detail {
+
 // One instance read from disk, before anything is created.
 struct PlanNode {
     std::string guid;
@@ -264,7 +270,15 @@ struct PlanNode {
     std::string source_path;
     std::string source_bytes;
     std::vector<std::size_t> children;
+    // The properties file as parsed.
+    JsonValue doc;
 };
+
+}  // namespace detail
+
+namespace {
+
+using detail::PlanNode;
 
 // "Part.3f2a9c1e8b" -> guid "3f2a9c1e8b". The name part is display only.
 bool split_stem(const std::string& stem, std::string& guid) {
@@ -345,6 +359,7 @@ private:
         node.class_name = klass->as_string();
         node.guid = id->as_string();
         node.name = name->as_string();
+        node.doc = doc;
         if (!root && find_factory(node.class_name) == nullptr) {
             fail(path + ": unknown class " + node.class_name);
         }
@@ -580,6 +595,53 @@ std::string own_folder(const std::string& props_path) {
     return name == "init.json" || name == "init.meta.json" ? props_path.substr(0, slash) : std::string();
 }
 
+// Each node's parent, by index. Parents come before children.
+template <typename Node>
+std::vector<std::size_t> parents_of(const std::vector<Node>& nodes) {
+    std::vector<std::size_t> out(nodes.size(), 0);
+    for (std::size_t index = 0; index < nodes.size(); ++index) {
+        for (std::size_t child : nodes[index].children) {
+            out[child] = index;
+        }
+    }
+    return out;
+}
+
+// "game.Box.Part": the Names from the root down to index. The root is "game".
+template <typename Node>
+std::string path_of(const std::vector<Node>& nodes, const std::vector<std::size_t>& parents, std::size_t index) {
+    std::vector<const std::string*> names;
+    for (std::size_t at = index; at != 0; at = parents[at]) {
+        names.push_back(&nodes[at].name);
+    }
+    std::string out = "game";
+    for (auto it = names.rbegin(); it != names.rend(); ++it) {
+        out += "." + **it;
+    }
+    return out;
+}
+
+// The first line where a and b differ, from each, as "2: print(1)".
+std::pair<std::string, std::string> differing_lines(const std::string& a, const std::string& b) {
+    std::istringstream left(a);
+    std::istringstream right(b);
+    std::string one;
+    std::string two;
+    for (int line = 1;; ++line) {
+        const bool more_left = static_cast<bool>(std::getline(left, one));
+        const bool more_right = static_cast<bool>(std::getline(right, two));
+        if (!more_left && !more_right) {
+            // Only line endings differ.
+            return {"(line endings)", "(line endings)"};
+        }
+        if (more_left != more_right || one != two) {
+            const std::string at = std::to_string(line) + ": ";
+            return {more_left ? at + one : "(no line " + std::to_string(line) + ")",
+                    more_right ? at + two : "(no line " + std::to_string(line) + ")"};
+        }
+    }
+}
+
 void apply_properties(DataModel& object, const PlanNode& node) {
     DataModel& world = object;
     for (const JsonValue::Member& member : node.properties) {
@@ -689,7 +751,7 @@ private:
     bool was_;
 };
 
-std::string instance_bytes(const AuthoredNode& node, const std::vector<AuthoredNode>& tree) {
+JsonValue instance_json(const AuthoredNode& node, const std::vector<AuthoredNode>& tree) {
     JsonValue doc = JsonValue::object();
     doc.set("class", JsonValue::string(node.class_name));
     doc.set("id", JsonValue::string(node.guid));
@@ -713,6 +775,10 @@ std::string instance_bytes(const AuthoredNode& node, const std::vector<AuthoredN
         }
         doc.set("children", JsonValue::array(std::move(items)));
     }
+    return doc;
+}
+
+std::string instance_bytes(const JsonValue& doc, const AuthoredNode& node) {
     try {
         return write_json(doc);
     } catch (const std::invalid_argument&) {
@@ -771,7 +837,8 @@ std::string sanitize_file_name(std::string_view name) {
 std::string describe_conflict(const SaveConflict& conflict) {
     switch (conflict.kind) {
     case SaveConflict::Kind::EditedOutside:
-        return conflict.path + " changed on disk";
+        return conflict.key.empty() ? conflict.path + " changed on disk"
+                                    : conflict.path + ": " + conflict.key + " changed on disk";
     case SaveConflict::Kind::DeletedOutside:
         return conflict.path + " was deleted on disk";
     case SaveConflict::Kind::MovedOutside:
@@ -816,6 +883,18 @@ std::optional<InstanceId> Project::instance_for(std::string_view guid) const {
         return std::nullopt;
     }
     return found->second;
+}
+
+Project::Files Project::from_disk(const detail::PlanNode& node, std::string parent) {
+    Files files;
+    files.props_path = node.props_path;
+    files.props_bytes = node.props_bytes;
+    files.has_source = node.has_source;
+    files.source_path = node.source_path;
+    files.source_bytes = node.source_bytes;
+    files.props = node.doc;
+    files.parent = std::move(parent);
+    return files;
 }
 
 void Project::write_skeleton(const fs::path& root) const {
@@ -888,10 +967,10 @@ Project Project::load(const fs::path& root) {
         ids = build(*project.game_, plan);
         rebuild.finish();
     }
+    const std::vector<std::size_t> parents = parents_of(plan);
     for (std::size_t index = 0; index < plan.size(); ++index) {
         const PlanNode& node = plan[index];
-        project.files_[node.guid] = Files{node.props_path, node.props_bytes, node.has_source, node.source_path,
-                                          node.source_bytes};
+        project.files_[node.guid] = from_disk(node, index == 0 ? std::string() : plan[parents[index]].guid);
         project.id_guid_[ids[index]] = node.guid;
         project.guid_id_[node.guid] = ids[index];
     }
@@ -918,10 +997,10 @@ Project Project::load(const fs::path& root, DataModel& into) {
         ids = build(into, plan);
         rebuild.finish();
     }
+    const std::vector<std::size_t> parents = parents_of(plan);
     for (std::size_t index = 0; index < plan.size(); ++index) {
         const PlanNode& node = plan[index];
-        project.files_[node.guid] = Files{node.props_path, node.props_bytes, node.has_source, node.source_path,
-                                          node.source_bytes};
+        project.files_[node.guid] = from_disk(node, index == 0 ? std::string() : plan[parents[index]].guid);
         project.id_guid_[ids[index]] = node.guid;
         project.guid_id_[node.guid] = ids[index];
     }
@@ -964,6 +1043,7 @@ std::map<std::string, Project::Files> Project::plan_files(const std::vector<Auth
     if (tree.empty()) {
         return next;
     }
+    const std::vector<std::size_t> parents = parents_of(tree);
     dirs[0] = src;
     for (std::size_t index = 0; index < tree.size(); ++index) {
         const AuthoredNode& node = tree[index];
@@ -991,11 +1071,14 @@ std::map<std::string, Project::Files> Project::plan_files(const std::vector<Auth
                 files.source_path = node.has_source ? join(dir, stem + ".luau") : std::string();
             }
         }
+        files.parent = index == 0 ? std::string() : tree[parents[index]].guid;
         if (node.has_properties) {
-            files.props_bytes = instance_bytes(node, tree);
+            files.props = instance_json(node, tree);
+            files.props_bytes = instance_bytes(files.props, node);
             files.source_bytes = node.source;
         } else {
             const Files& known = cache.at(node.guid);
+            files.props = known.props;
             files.props_bytes = known.props_bytes;
             files.source_bytes = known.source_bytes;
         }
@@ -1045,13 +1128,27 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
                                                    const std::map<std::string, Files>& next,
                                                    const std::map<std::string, std::vector<std::string>>& claims,
                                                    std::set<std::string>& left_gone) const {
-    // Each node's parent, by index into tree. Parents come before children.
-    std::vector<std::size_t> parent(tree.size(), 0);
+    const std::vector<std::size_t> parent = parents_of(tree);
+    std::unordered_map<std::string, std::size_t> index_of;
     for (std::size_t index = 0; index < tree.size(); ++index) {
-        for (std::size_t child : tree[index].children) {
-            parent[child] = index;
-        }
+        index_of.emplace(tree[index].guid, index);
     }
+    // A row names its instance as the explorers do: its Name, and where it sits.
+    auto row = [&](const std::string& guid, const std::string& path, SaveConflict::Kind kind) {
+        SaveConflict out;
+        out.guid = guid;
+        out.path = path;
+        out.kind = kind;
+        if (const auto live = index_of.find(guid); live != index_of.end()) {
+            out.name = tree[live->second].name;
+            out.where = live->second == 0 ? std::string() : path_of(tree, parent, parent[live->second]);
+        } else if (const auto base = files_.find(guid); base != files_.end()) {
+            if (const JsonValue* name = base->second.props.find("Name"); name != nullptr && name->is_string()) {
+                out.name = name->as_string();
+            }
+        }
+        return out;
+    };
     // Every folder above an instance the save writes or moves counts as changed
     // too: without its own file, that folder would not load. So one gone from
     // disk is a conflict rather than left gone.
@@ -1136,15 +1233,65 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
                 continue;  // Deleted on both sides.
             }
             conflicts.push_back(
-                {guid, *gone, elsewhere ? SaveConflict::Kind::MovedOutside : SaveConflict::Kind::DeletedOutside});
+                row(guid, *gone, elsewhere ? SaveConflict::Kind::MovedOutside : SaveConflict::Kind::DeletedOutside));
             continue;
         }
-        for (const Own& file : own) {
-            if (file.rewritten && read_file(disk_path(root_, *file.path)) != *file.bytes) {
-                conflicts.push_back({guid, *file.path, SaveConflict::Kind::EditedOutside});
-                break;
+        // What the save rewrites or deletes, against the disk: the properties
+        // key by key, so formatting alone is no change, and a script's source
+        // whole. An instance the studio deleted is one row for all of it.
+        std::vector<SaveConflict> edited;
+        auto whole = [&, id = guid](const std::string& path) {
+            SaveConflict out = row(id, path, SaveConflict::Kind::EditedOutside);
+            out.studio = "deleted";
+            out.disk = "changed on disk";
+            return out;
+        };
+        if (own[0].rewritten) {
+            const std::string bytes = read_file(disk_path(root_, base.props_path));
+            JsonValue disk;
+            std::string error;
+            if (bytes == base.props_bytes) {
+                // Unchanged on disk.
+            } else if (!parse_json(bytes, disk, error) || !disk.is_object()) {
+                SaveConflict unreadable = row(guid, base.props_path, SaveConflict::Kind::EditedOutside);
+                unreadable.disk = "can't be read";
+                edited.push_back(std::move(unreadable));
+            } else {
+                const JsonValue none = JsonValue::object();
+                const JsonValue& mine = removed ? none : planned->second.props;
+                for (const KeyMerge& merged : merge_keys(base.props, disk, mine)) {
+                    // The save would write over a value that changed on disk.
+                    if (merged.change != KeyChange::DiskOnly && merged.change != KeyChange::Conflict) {
+                        continue;
+                    }
+                    if (removed) {
+                        edited.push_back(whole(base.props_path));
+                        break;
+                    }
+                    SaveConflict key = row(guid, base.props_path, SaveConflict::Kind::EditedOutside);
+                    key.key = merged.key;
+                    key.studio = display_value(mine.find(merged.key));
+                    key.disk = display_value(disk.find(merged.key));
+                    edited.push_back(std::move(key));
+                }
             }
         }
+        if (own.size() > 1 && own[1].rewritten) {
+            const std::string text = read_file(disk_path(root_, base.source_path));
+            if (text != base.source_bytes && (removed || text != planned->second.source_bytes)) {
+                if (removed) {
+                    if (edited.empty()) {
+                        edited.push_back(whole(base.props_path));
+                    }
+                } else {
+                    SaveConflict source = row(guid, base.source_path, SaveConflict::Kind::EditedOutside);
+                    source.key = "Source";
+                    std::tie(source.studio, source.disk) = differing_lines(planned->second.source_bytes, text);
+                    edited.push_back(std::move(source));
+                }
+            }
+        }
+        conflicts.insert(conflicts.end(), edited.begin(), edited.end());
     }
 
     // An instance left gone inside a folder that is itself deleted or moved on
@@ -1162,9 +1309,9 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
         if (gone == gone_paths.end() || gone_folders.count(tree[parent[index]].guid) == 0) {
             continue;
         }
-        conflicts.push_back({guid, gone->second,
-                             moved(guid, files_.at(guid)) ? SaveConflict::Kind::MovedOutside
-                                                          : SaveConflict::Kind::DeletedOutside});
+        conflicts.push_back(row(guid, gone->second,
+                                moved(guid, files_.at(guid)) ? SaveConflict::Kind::MovedOutside
+                                                             : SaveConflict::Kind::DeletedOutside));
         gone_folders.insert(guid);
         left_gone.erase(guid);
     }
@@ -1186,13 +1333,14 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
             }
             for (const std::string& path : paths) {
                 if (path.compare(0, prefix.size(), prefix) == 0 && added.emplace(claimed, path).second) {
-                    conflicts.push_back({claimed, path, SaveConflict::Kind::AddedOutside});
+                    conflicts.push_back(row(claimed, path, SaveConflict::Kind::AddedOutside));
                 }
             }
         }
     }
-    std::sort(conflicts.begin(), conflicts.end(),
-              [](const SaveConflict& a, const SaveConflict& b) { return a.path < b.path; });
+    std::sort(conflicts.begin(), conflicts.end(), [](const SaveConflict& a, const SaveConflict& b) {
+        return std::tie(a.path, a.key) < std::tie(b.path, b.key);
+    });
     return conflicts;
 }
 

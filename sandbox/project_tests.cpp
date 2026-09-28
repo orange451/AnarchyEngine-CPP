@@ -150,6 +150,20 @@ void write_bare_project(const fs::path& root, const char* root_extra = "") {
     write_file(root / "src" / "init.json", meta("DataModel", "root0", "Hand", root_extra));
 }
 
+// Sets one key of an instance file on disk, as another editor would.
+void edit_key(const fs::path& file, const char* key, const engine_core::JsonValue& value) {
+    engine_core::JsonValue doc;
+    std::string error;
+    REQUIRE(engine_core::parse_json(read_file(file), doc, error));
+    doc.set(key, value);
+    write_file(file, engine_core::write_json(doc));
+}
+
+engine_core::JsonValue triple(float x, float y, float z) {
+    const float values[3] = {x, y, z};
+    return engine_core::json_floats(values, 3);
+}
+
 }  // namespace
 
 TEST_CASE("P1 save then load keeps names, GUIDs, and source bytes", "[P1][project]") {
@@ -947,7 +961,7 @@ TEST_CASE("G2 an outside edit under a studio edit stops the save and writes noth
     engine_core::GameObject& b = add_part(game, 0, "B");
     project.save();
     const std::string path = leaf(game, a.id());
-    write_file(dir.path / path, read_file(dir.path / path) + "\n");
+    edit_key(dir.path / path, "Size", triple(2, 2, 2));
 
     a.set_color(rgb(1.f, 0.f, 0.f));
     b.set_color(rgb(0.f, 1.f, 0.f));
@@ -961,6 +975,11 @@ TEST_CASE("G2 an outside edit under a studio edit stops the save and writes noth
         REQUIRE(conflict.conflicts()[0].guid == game.guid(a.id()));
         REQUIRE(conflict.conflicts()[0].path == path);
         REQUIRE(conflict.conflicts()[0].kind == engine_core::SaveConflict::Kind::EditedOutside);
+        REQUIRE(conflict.conflicts()[0].key == "Size");
+        REQUIRE(conflict.conflicts()[0].studio == "(default)");
+        REQUIRE(conflict.conflicts()[0].disk == "2, 2, 2");
+        REQUIRE(conflict.conflicts()[0].name == "A");
+        REQUIRE(conflict.conflicts()[0].where == "game");
     }
     REQUIRE(message.find(path) != std::string::npos);
     // Nothing was written, B included, and the next save sees the same thing.
@@ -977,14 +996,15 @@ TEST_CASE("G3 a studio delete of a file edited outside stops the save", "[G3][gu
     const InstanceId a = add_part(game, 0, "A").id();
     project.save();
     const std::string path = leaf(game, a);
-    const std::string outside = read_file(dir.path / path) + "\n";
-    write_file(dir.path / path, outside);
+    edit_key(dir.path / path, "Size", triple(2, 2, 2));
+    const std::string outside = read_file(dir.path / path);
 
     game.destroy(a);
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
     REQUIRE(conflicts.size() == 1);
     REQUIRE(conflicts[0].path == path);
     REQUIRE(conflicts[0].kind == engine_core::SaveConflict::Kind::EditedOutside);
+    REQUIRE(conflicts[0].key.empty());
     REQUIRE(read_file(dir.path / path) == outside);
 }
 
@@ -1028,6 +1048,7 @@ TEST_CASE("G5 a script's two files are checked one by one", "[G5][guard][project
         const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
         REQUIRE(conflicts.size() == 1);
         REQUIRE(conflicts[0].path == luau);
+        REQUIRE(conflicts[0].key == "Source");
         REQUIRE(read_file(dir.path / luau) == "print(\"outside\")\n");
     }
 }
@@ -1059,7 +1080,7 @@ TEST_CASE("G7 a save during play checks the place captured at Test", "[G7][guard
     const InstanceId door = rig.game.find_first_child(0, "Door");
     REQUIRE(door != 0);
     const std::string path = leaf(rig.game, door);
-    write_file(dir.path / path, read_file(dir.path / path) + "\n");
+    edit_key(dir.path / path, "Size", triple(2, 2, 2));
     // An edit before Test, recaptured into the place as the studio does after each edit.
     rig.game.game_object(door)->set_color(rgb(1.f, 0.f, 0.f));
     rig.game.capture_place();
@@ -1266,7 +1287,7 @@ TEST_CASE("G16 Overwrite writes the studio's version over an outside edit", "[G1
     engine_core::GameObject& a = add_part(game, 0, "A");
     project.save();
     const std::string path = leaf(game, a.id());
-    write_file(dir.path / path, read_file(dir.path / path) + "\n");
+    edit_key(dir.path / path, "Size", triple(2, 2, 2));
 
     a.set_color(rgb(0.25f, 0.5f, 0.75f));
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
@@ -1412,6 +1433,7 @@ TEST_CASE("G22 Overwrite keeps the file it wrote when the name on disk differs o
     door.set_color(rgb(0.25f, 0.5f, 0.75f));
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
     REQUIRE(conflicts.size() == 1);
+    REQUIRE(conflicts[0].key == "Name");
     project.save(conflicts);
     REQUIRE(leaf_files_of(dir.path, guid).size() == 1);
     Project loaded = Project::load(dir.path);
@@ -1428,16 +1450,16 @@ TEST_CASE("G23 Overwrite writes over only the conflicts it lists", "[G23][guard]
     project.save();
     const std::string a_path = leaf(game, a.id());
     const std::string b_path = leaf(game, b.id());
-    const std::string a_outside = read_file(dir.path / a_path) + "\n";
-    write_file(dir.path / a_path, a_outside);
+    edit_key(dir.path / a_path, "Size", triple(2, 2, 2));
+    const std::string a_outside = read_file(dir.path / a_path);
     a.set_color(rgb(1.f, 0.f, 0.f));
     b.set_color(rgb(0.f, 1.f, 0.f));
     const std::vector<engine_core::SaveConflict> listed = save_conflicts(project);
     REQUIRE(listed.size() == 1);
 
     // B changes on disk after the list was made.
-    const std::string b_outside = read_file(dir.path / b_path) + "\n";
-    write_file(dir.path / b_path, b_outside);
+    edit_key(dir.path / b_path, "Size", triple(2, 2, 2));
+    const std::string b_outside = read_file(dir.path / b_path);
     std::vector<engine_core::SaveConflict> again;
     try {
         project.save(listed);
@@ -1534,4 +1556,42 @@ TEST_CASE("G26 part of an instance deleted outside is written back when the stud
     REQUIRE(read_file(dir.path / luau) == "print(1)\n");
     REQUIRE(fs::exists(dir.path / init));
     REQUIRE_NOTHROW(Project::load(dir.path));
+}
+
+TEST_CASE("G27 a file only reformatted outside is no conflict", "[G27][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    project.save();
+    const std::string path = leaf(game, a.id());
+    std::string wide = read_file(dir.path / path);
+    for (std::size_t at = wide.find("\n  "); at != std::string::npos; at = wide.find("\n  ", at + 5)) {
+        wide.replace(at, 3, "\n    ");
+    }
+    write_file(dir.path / path, wide);
+
+    a.set_color(rgb(0.25f, 0.5f, 0.75f));
+    REQUIRE(save_conflicts(project).empty());
+    REQUIRE(read_file(dir.path / path).find("\"Color\": [0.25, 0.5, 0.75]") != std::string::npos);
+}
+
+TEST_CASE("G28 a property file that does not parse is one row for its instance", "[G28][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    project.save();
+    const std::string path = leaf(game, a.id());
+    write_file(dir.path / path, "{\"class\": ");
+
+    a.set_color(rgb(0.25f, 0.5f, 0.75f));
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    REQUIRE(conflicts.size() == 1);
+    REQUIRE(conflicts[0].key.empty());
+    REQUIRE(conflicts[0].disk == "can't be read");
+    project.save(conflicts);
+    REQUIRE(read_file(dir.path / path).find("\"Color\": [0.25, 0.5, 0.75]") != std::string::npos);
 }

@@ -4,6 +4,7 @@
 #include "Engine.hpp"
 #include "GameObject.hpp"
 #include "Project.hpp"
+#include "PropertyBag.hpp"
 
 #include "jadefx/jadefx.hpp"
 
@@ -67,9 +68,14 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
             game.game_object(game.find_first_child(0, name))->set_color(color);
         });
     };
-    // Something outside the studio changes a file.
+    // Something outside the studio changes a property in a file.
     auto touch = [&root](const std::string& file) {
-        const std::string bytes = ReadBytes(root / file) + "\n";
+        engine_core::JsonValue doc;
+        std::string error;
+        engine_core::parse_json(ReadBytes(root / file), doc, error);
+        const float size[3] = {2.f, 2.f, 2.f};
+        doc.set("Size", engine_core::json_floats(size, 3));
+        const std::string bytes = engine_core::write_json(doc);
         WriteBytes(root / file, bytes);
         return bytes;
     };

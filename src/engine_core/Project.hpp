@@ -16,6 +16,10 @@
 
 namespace engine_core {
 
+namespace detail {
+struct PlanNode;
+}  // namespace detail
+
 // Every load and save failure. The message names the file.
 class ProjectError : public std::runtime_error {
 public:
@@ -36,10 +40,21 @@ struct SaveConflict {
     // An added file's path is where it is now.
     std::string path;
     Kind kind = Kind::EditedOutside;
+    // What the row is about: a key of the instance's file, "Parent", "Source",
+    // or "class". Empty for the whole instance.
+    std::string key;
+    // Each side as a person reads it: a value, or a word such as "deleted".
+    std::string studio;
+    std::string disk;
+    // The instance's Name, and where it sits, as the explorers show them
+    // ("game.Box"). Empty when neither side has it.
+    std::string name;
+    std::string where;
 };
 
 inline bool operator==(const SaveConflict& a, const SaveConflict& b) {
-    return a.guid == b.guid && a.path == b.path && a.kind == b.kind;
+    return a.guid == b.guid && a.path == b.path && a.kind == b.kind && a.key == b.key && a.studio == b.studio &&
+           a.disk == b.disk && a.name == b.name && a.where == b.where;
 }
 
 // "src/Part.3f2a.json changed on disk", "... was deleted on disk",
@@ -148,6 +163,12 @@ private:
         bool has_source = false;
         std::string source_path;
         std::string source_bytes;
+        // The properties file parsed: the base each key is compared against. A
+        // key settled for the studio's side is patched here, and props_bytes
+        // rewritten to match.
+        JsonValue props;
+        // The parent's GUID. Empty for the root.
+        std::string parent;
     };
 
     void bind(DataModel* game, std::unique_ptr<DataModel> owned);
@@ -165,6 +186,8 @@ private:
     // The files for each GUID. A node without properties takes its bytes from cache.
     static std::map<std::string, Files> plan_files(const std::vector<AuthoredNode>& tree, const std::string& src,
                                                    const std::unordered_map<std::string, Files>& cache);
+    // An instance's files as the disk has them, parent its parent's GUID.
+    static Files from_disk(const detail::PlanNode& node, std::string parent);
 
     std::filesystem::path root_;
     std::string name_;

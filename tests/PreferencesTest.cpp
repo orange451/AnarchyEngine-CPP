@@ -463,6 +463,45 @@ void TestFrameRate() {
     }
     Expect(heard == 0 && ide::Preferences(file).frame_rate() == -1, "and those change nothing");
     Expect(!panel->frame_rate_status().empty(), "saying why");
+
+    // There is no Apply button: leaving the field takes what was typed.
+    auto* tabs = dynamic_cast<jadefx::TabPane*>(panel->getCenter());
+    jadefx::TextField* field = panel->frame_rate_field();
+    Expect(tabs != nullptr && field != nullptr, "the panel is tabs");
+    if (tabs == nullptr || field == nullptr) {
+        return;
+    }
+    double time = 0.2;
+    const auto leave_field = [&] {
+        tabs->select(std::size_t{0});
+        scene->layout(700, 640, time += 0.1);
+        tabs->select(std::size_t{1});
+        scene->layout(700, 640, time += 0.1);
+    };
+    tabs->select(std::size_t{1});
+    scene->layout(700, 640, time += 0.1);
+    field->requestFocus();
+    Expect(field->isFocused(), "the field takes the focus");
+    field->setText("90");
+    leave_field();
+    Expect(heard == 90 && ide::Preferences(file).frame_rate() == 90, "leaving the field sets the limit");
+
+    field->requestFocus();
+    field->setText("fast");
+    leave_field();
+    Expect(heard == 90 && ide::Preferences(file).frame_rate() == 90, "leaving it on text that is not a limit keeps the limit");
+    ExpectText(field->getText(), "90", "and the field shows the limit again");
+    Expect(!panel->frame_rate_status().empty(), "saying why");
+
+    heard = 0;
+    field->requestFocus();
+    leave_field();
+    Expect(heard == 0, "leaving it unchanged sets nothing");
+
+    field->requestFocus();
+    field->setText("75");
+    Expect(panel->request_close([] {}), "the window closes with no colors changed");
+    Expect(heard == 75 && ide::Preferences(file).frame_rate() == 75, "and a limit still being typed is set");
 }
 
 }  // namespace

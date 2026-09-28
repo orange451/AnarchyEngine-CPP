@@ -103,6 +103,9 @@ private:
     void set_rate_status(std::string text, bool error = false);
     // The Performance tab: the frame rate limit.
     std::shared_ptr<jadefx::Node> build_performance();
+    // Sets the limit from the field unless it already shows it. restore puts
+    // the limit back in the field when its text is not a limit.
+    void commit_frame_rate(bool restore);
     void show_save_as(bool shown);
     void ask(const std::string& header, const std::string& content, const std::string& yes,
              std::function<void()> then, jadefx::AlertType type = jadefx::AlertType::Confirmation);

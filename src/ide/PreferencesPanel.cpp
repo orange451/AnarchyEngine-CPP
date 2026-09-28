@@ -432,10 +432,16 @@ std::shared_ptr<jadefx::Node> PreferencesPanel::build_performance() {
     frame_rate_->getClassList().add("prefs-frame-rate");
     frame_rate_->setPrefWidth(80);
     frame_rate_->setText(std::to_string(preferences_.frame_rate()));
-    frame_rate_->setOnAction([this](jadefx::ActionEvent&) { set_frame_rate(frame_rate_->getText()); });
+    // Enter or leaving the field sets the limit. Enter leaves text that is not a
+    // limit to be fixed; leaving the field puts the limit back in it.
+    frame_rate_->setOnAction([this](jadefx::ActionEvent&) { commit_frame_rate(false); });
+    frame_rate_->setOnFocusChanged([this](bool focused) {
+        if (!focused) {
+            commit_frame_rate(true);
+        }
+    });
     rate_row->getChildren().add(frame_rate_);
     rate_row->getChildren().add(jadefx::make<jadefx::Label>("fps"));
-    rate_row->getChildren().add(MakeButton("Apply", [this] { set_frame_rate(frame_rate_->getText()); }));
 
     auto hint = jadefx::make<jadefx::Label>(
         "The most frames a second the studio draws. -1 is uncapped. From " +
@@ -485,6 +491,17 @@ bool PreferencesPanel::set_frame_rate(const std::string& text) {
     set_rate_status(fps == Preferences::kUncappedFrameRate ? "The studio draws uncapped."
                                                            : "The studio draws at up to " + std::to_string(fps) + " fps.");
     return true;
+}
+
+void PreferencesPanel::commit_frame_rate(bool restore) {
+    const std::string current = std::to_string(preferences_.frame_rate());
+    if (Trim(frame_rate_->getText()) == current) {
+        return;
+    }
+    if (!set_frame_rate(frame_rate_->getText()) && restore) {
+        frame_rate_->setText(current);
+        set_rate_status(rate_status_text_ + " The limit stays at " + current + ".", true);
+    }
 }
 
 void PreferencesPanel::layoutChildren() {
@@ -660,6 +677,9 @@ bool PreferencesPanel::delete_theme() {
 }
 
 bool PreferencesPanel::request_close(std::function<void()> close) {
+    // The scene tears down without telling the field it lost the focus, so a
+    // limit still being typed is set here.
+    commit_frame_rate(true);
     jadefx::Scene* scene = getScene();
     if (!modified_ || scene == nullptr) {
         if (modified_) {

@@ -467,10 +467,21 @@ struct IdeLayout::Clip {
 };
 
 // A page the Window menu opens and closes.
+// It is saved in layout.json by name, and listed in the Window menu.
 struct IdeLayout::WindowEntry {
+    std::string name;
+    std::string icon;
+    // Null until the page is made, for a window with make.
     std::shared_ptr<IdePane> pane;
+    // Makes the page the first time it is asked for, and again when the old one
+    // is still held by a tab on its way out. Empty for a page made up front.
+    std::function<std::shared_ptr<IdePane>()> make;
     // Makes a dock for the page when the one it last closed from is gone.
     std::function<IdeDock*()> home;
+    // What the Window menu does to open it. Empty docks it with show_window.
+    std::function<void()> open;
+    // Closed in the default layout, and when layout.json does not name it.
+    bool starts_closed = false;
     std::weak_ptr<IdeDock> last;
 };
 
@@ -691,11 +702,26 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
 
     // The Window menu's pages, kept while their tabs are closed. When the dock
     // one closed from is gone, it opens again where the default layout has it.
-    auto keep = [this](std::shared_ptr<IdePane> pane, std::function<IdeDock*()> home) {
+    auto keep = [this](std::shared_ptr<IdePane> pane, std::function<IdeDock*()> home) -> WindowEntry& {
         auto entry = std::make_unique<WindowEntry>();
+        entry->name = pane->name();
+        entry->icon = pane->iconFile();
         entry->pane = std::move(pane);
         entry->home = std::move(home);
         windows_.push_back(std::move(entry));
+        return *windows_.back();
+    };
+    // Made the first time it opens, and closed until then.
+    auto keep_closed = [this](std::string name, std::string icon,
+                              std::function<std::shared_ptr<IdePane>()> make) -> WindowEntry& {
+        auto entry = std::make_unique<WindowEntry>();
+        entry->name = std::move(name);
+        entry->icon = std::move(icon);
+        entry->make = std::move(make);
+        entry->home = [this] { return side_home(); };
+        entry->starts_closed = true;
+        windows_.push_back(std::move(entry));
+        return *windows_.back();
     };
     keep(gameExplorer, [this] { return dock_beside(nullptr, DropSide::Left, kSideWidth); });
     keep(sceneExplorer, [this] { return dock_beside(nullptr, DropSide::Right, kSideWidth); });
@@ -709,6 +735,9 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         IdeDock* above = sceneDock_ != nullptr && sceneDock_->getParent() != nullptr ? sceneDock_ : nullptr;
         return dock_beside(above, DropSide::Bottom, kConsoleHeight);
     });
+    search_window_ = &keep_closed("Search", "Search.png", [this] { return make_search(); });
+    search_window_->open = [this] { open_search(false, scene_); };
+    conflicts_window_ = &keep_closed("Conflicts", "Warning.png", [this] { return make_conflicts(); });
 
     if (!restore_layout()) {
         default_layout(windowWidth, windowHeight,
@@ -798,15 +827,18 @@ void IdeLayout::reset_layout() {
     };
     auto kept = [this](const jadefx::Node* page) {
         for (const std::unique_ptr<WindowEntry>& entry : windows_) {
-            if (entry->pane.get() == page) {
+            if (entry->pane && entry->pane.get() == page) {
                 return true;
             }
         }
-        return page == scene_view_.get() || page == search_.get();
+        return page == scene_view_.get();
     };
-    // Search is closed in the default layout. It keeps its search for next time.
-    if (search_) {
-        if (const std::shared_ptr<jadefx::Tab> tab = tab_of(search_.get()); tab && tab->getTabPane() != nullptr) {
+    // Search and Conflicts are closed in the default layout. Each keeps its page for next time.
+    for (const std::unique_ptr<WindowEntry>& entry : windows_) {
+        if (!entry->starts_closed || !entry->pane) {
+            continue;
+        }
+        if (const std::shared_ptr<jadefx::Tab> tab = tab_of(entry->pane.get()); tab && tab->getTabPane() != nullptr) {
             tab->getTabPane()->close(tab);
         }
     }
@@ -858,22 +890,18 @@ void IdeLayout::fill_window_menu(jadefx::Menu& menu) {
         return raw;
     };
     for (const std::unique_ptr<WindowEntry>& entry : windows_) {
-        IdePane* pane = entry->pane.get();
         WindowEntry* kept = entry.get();
-        add(pane->name(), pane->iconFile(), [this, pane] { return dockContaining(pane) != nullptr; })
-            ->setOnAction([this, pane, kept](jadefx::ActionEvent&) {
-                toggle_window(pane, [this, kept] { show_window(*kept); });
+        add(kept->name, kept->icon, [this, kept] { return dockContaining(kept->pane.get()) != nullptr; })
+            ->setOnAction([this, kept](jadefx::ActionEvent&) {
+                toggle_window(kept->pane.get(), [this, kept] {
+                    if (kept->open) {
+                        kept->open();
+                    } else {
+                        show_window(*kept);
+                    }
+                });
             });
     }
-    // Made the first time it opens, and docked by open_search.
-    add("Search", "Search.png", [this] { return search_ && dockContaining(search_.get()) != nullptr; })
-        ->setOnAction([this](jadefx::ActionEvent&) {
-            toggle_window(search_.get(), [this] { open_search(false, scene_); });
-        });
-    add("Conflicts", "Warning.png", [this] { return conflicts_pane_ && dockContaining(conflicts_pane_.get()) != nullptr; })
-        ->setOnAction([this](jadefx::ActionEvent&) {
-            toggle_window(conflicts_pane_.get(), [this] { show_conflicts(); });
-        });
     menu.getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     add("New Scene View", "Camera.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { new_scene_view(); });
     menu.getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
@@ -916,8 +944,25 @@ void IdeLayout::show_window(WindowEntry& entry) {
     if (target == nullptr) {
         return;
     }
-    target->dock(entry.pane);
+    target->dock(window_page(entry));
     watch_close(entry);
+}
+
+void IdeLayout::open_window(WindowEntry& entry) {
+    window_page(entry);
+    reveal_window(entry.pane.get(), [this, &entry] { show_window(entry); });
+}
+
+const std::shared_ptr<IdePane>& IdeLayout::window_page(WindowEntry& entry) {
+    if (entry.make && entry.pane && dockContaining(entry.pane.get()) == nullptr &&
+        entry.pane->getParent() != nullptr) {
+        // Still held by a tab that is on its way out. Start a new page.
+        entry.pane.reset();
+    }
+    if (!entry.pane && entry.make) {
+        entry.pane = entry.make();
+    }
+    return entry.pane;
 }
 
 void IdeLayout::watch_close(WindowEntry& entry) {
@@ -991,26 +1036,24 @@ LayoutHost IdeLayout::layout_host() {
     // The one-of-a-kind pages and the first scene view. Script editors and
     // extra views are not kept.
     host.name_of = [this](const IdePane& page) -> std::string {
-        if (&page == scene_view_.get() || &page == search_.get()) {
+        if (&page == scene_view_.get()) {
             return page.name();
         }
         for (const std::unique_ptr<WindowEntry>& entry : windows_) {
             if (entry->pane.get() == &page) {
-                return page.name();
+                return entry->name;
             }
         }
         return {};
     };
     host.dock_page = [this, placed](IdeDock& dock, const std::string& name) {
         std::shared_ptr<IdePane> page;
-        if (name == "Search") {
-            page = search_pane();
-        } else if (name == scene_view_->name()) {
+        if (name == scene_view_->name()) {
             page = scene_view_;
         }
         for (const std::unique_ptr<WindowEntry>& entry : windows_) {
-            if (entry->pane->name() == name) {
-                page = entry->pane;
+            if (entry->name == name) {
+                page = window_page(*entry);
             }
         }
         if (!page || placed->count(page.get()) != 0 || dockContaining(page.get()) != nullptr) {
@@ -1100,8 +1143,8 @@ bool IdeLayout::restore_layout() {
     // A window the file does not name, such as one added since it was
     // written, opens where the default layout has it.
     for (const std::unique_ptr<WindowEntry>& entry : windows_) {
-        if (dockContaining(entry->pane.get()) == nullptr &&
-            std::find(named.begin(), named.end(), entry->pane->name()) == named.end()) {
+        if (!entry->starts_closed && dockContaining(entry->pane.get()) == nullptr &&
+            std::find(named.begin(), named.end(), entry->name) == named.end()) {
             show_window(*entry);
         }
     }
@@ -1223,11 +1266,8 @@ engine_core::JsonValue IdeLayout::capture_layout() {
     engine_core::JsonValue closed = engine_core::JsonValue::array();
     for (const std::unique_ptr<WindowEntry>& entry : windows_) {
         if (dockContaining(entry->pane.get()) == nullptr) {
-            closed.items().push_back(engine_core::JsonValue::string(entry->pane->name()));
+            closed.items().push_back(engine_core::JsonValue::string(entry->name));
         }
-    }
-    if (!search_ || dockContaining(search_.get()) == nullptr) {
-        closed.items().push_back(engine_core::JsonValue::string("Search"));
     }
     saved.set("closed", std::move(closed));
     double x = 0;
@@ -2342,38 +2382,37 @@ void IdeLayout::routeSearch(jadefx::KeyEvent& event, jadefx::Scene& scene) {
 }
 
 const std::shared_ptr<IdeSearch>& IdeLayout::search_pane() {
-    if (search_ && dockContaining(search_.get()) == nullptr && search_->getParent() != nullptr) {
-        // Still held by a tab that is on its way out. Start a new pane.
-        search_.reset();
-    }
-    if (!search_) {
-        SearchHost host;
-        host.editor_text = [this](std::uint32_t id) -> std::optional<std::string> {
-            const std::shared_ptr<IdeScriptEditor> editor = open_editor(id);
-            if (!editor || !editor->isLoaded()) {
-                return std::nullopt;
-            }
-            return editor->text();
-        };
-        host.replace_in_editor = [this](std::uint32_t id, const SearchQuery& query, const std::string& replacement,
-                                        int line) {
-            const std::shared_ptr<IdeScriptEditor> editor = open_editor(id);
-            if (!editor || !editor->isLoaded()) {
-                return -1;
-            }
-            const int count = editor->replaceMatches(query, replacement, line);
-            // Now, not when the editor's tab next lays out, so Source and the place have it.
-            editor->flush();
-            return count;
-        };
-        host.open = [this](std::uint32_t id, int line, int column, int column_end) {
-            edit(id);
-            if (const std::shared_ptr<IdeScriptEditor> editor = open_editor(id)) {
-                editor->showRange(line, column, column_end);
-            }
-        };
-        search_ = jadefx::make<IdeSearch>(runner_.simulation(), std::move(host));
-    }
+    window_page(*search_window_);
+    return search_;
+}
+
+std::shared_ptr<IdePane> IdeLayout::make_search() {
+    SearchHost host;
+    host.editor_text = [this](std::uint32_t id) -> std::optional<std::string> {
+        const std::shared_ptr<IdeScriptEditor> editor = open_editor(id);
+        if (!editor || !editor->isLoaded()) {
+            return std::nullopt;
+        }
+        return editor->text();
+    };
+    host.replace_in_editor = [this](std::uint32_t id, const SearchQuery& query, const std::string& replacement,
+                                    int line) {
+        const std::shared_ptr<IdeScriptEditor> editor = open_editor(id);
+        if (!editor || !editor->isLoaded()) {
+            return -1;
+        }
+        const int count = editor->replaceMatches(query, replacement, line);
+        // Now, not when the editor's tab next lays out, so Source and the place have it.
+        editor->flush();
+        return count;
+    };
+    host.open = [this](std::uint32_t id, int line, int column, int column_end) {
+        edit(id);
+        if (const std::shared_ptr<IdeScriptEditor> editor = open_editor(id)) {
+            editor->showRange(line, column, column_end);
+        }
+    };
+    search_ = jadefx::make<IdeSearch>(runner_.simulation(), std::move(host));
     return search_;
 }
 
@@ -2390,42 +2429,36 @@ IdeDock* IdeLayout::side_home() {
 }
 
 const std::shared_ptr<IdeConflicts>& IdeLayout::conflicts_pane() {
-    if (conflicts_pane_ && dockContaining(conflicts_pane_.get()) == nullptr && conflicts_pane_->getParent() != nullptr) {
-        // Still held by a tab that is on its way out. Start a new pane.
-        conflicts_pane_.reset();
-    }
-    if (!conflicts_pane_) {
-        ConflictsHost host;
-        host.apply = [this](const std::vector<engine_core::DiskChoice>& choices) { check_disk(choices); };
-        host.refresh = [this] { check_disk(); };
-        host.select = [this](const std::string& guid) { select_guid(guid); };
-        host.class_of = [this](const std::string& guid) {
-            std::string name;
-            run_now([&](engine_core::DataModel& game) {
-                const std::optional<engine_core::InstanceId> id = game.find_guid(guid);
-                if (id && *id != 0 && game.instance(*id) != nullptr) {
-                    name = game.instance(*id)->class_name();
-                }
-            });
-            return name;
-        };
-        conflicts_pane_ = jadefx::make<IdeConflicts>(std::move(host));
-        conflicts_pane_->setConflicts(conflicts_);
-        conflicts_pane_->setApplyEnabled(!testing_);
-        if (!disk_problem_.empty()) {
-            conflicts_pane_->setProblem("Can't read the project on disk: " + disk_problem_);
-        }
+    window_page(*conflicts_window_);
+    return conflicts_pane_;
+}
+
+std::shared_ptr<IdePane> IdeLayout::make_conflicts() {
+    ConflictsHost host;
+    host.apply = [this](const std::vector<engine_core::DiskChoice>& choices) { check_disk(choices); };
+    host.refresh = [this] { check_disk(); };
+    host.select = [this](const std::string& guid) { select_guid(guid); };
+    host.class_of = [this](const std::string& guid) {
+        std::string name;
+        run_now([&](engine_core::DataModel& game) {
+            const std::optional<engine_core::InstanceId> id = game.find_guid(guid);
+            if (id && *id != 0 && game.instance(*id) != nullptr) {
+                name = game.instance(*id)->class_name();
+            }
+        });
+        return name;
+    };
+    conflicts_pane_ = jadefx::make<IdeConflicts>(std::move(host));
+    conflicts_pane_->setConflicts(conflicts_);
+    conflicts_pane_->setApplyEnabled(!testing_);
+    if (!disk_problem_.empty()) {
+        conflicts_pane_->setProblem("Can't read the project on disk: " + disk_problem_);
     }
     return conflicts_pane_;
 }
 
 void IdeLayout::show_conflicts() {
-    conflicts_pane();
-    reveal_window(conflicts_pane_.get(), [this] {
-        if (IdeDock* home = side_home()) {
-            home->dock(conflicts_pane_);
-        }
-    });
+    open_window(*conflicts_window_);
 }
 
 void IdeLayout::forget_conflicts() {
@@ -2570,11 +2603,10 @@ void IdeLayout::open_search(bool replace, jadefx::Scene* scene) {
         if (!replace) {
             search_->setReplaceShown(false);
         }
-        IdeDock* home = side_home();
-        if (home == nullptr) {
+        show_window(*search_window_);
+        if (dockContaining(search_.get()) == nullptr) {
             return;
         }
-        home->dock(search_);
     }
     if (!seed.empty()) {
         search_->setFindText(seed);

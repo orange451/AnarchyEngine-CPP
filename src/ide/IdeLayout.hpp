@@ -210,6 +210,10 @@ private:
     void toggle_window(IdePane* pane, const std::function<void()>& open);
     // Docks the page in the dock its tab last closed from, or else where its home puts it.
     void show_window(WindowEntry& entry);
+    // Brings the page's tab forward, or docks it with show_window when it is closed.
+    void open_window(WindowEntry& entry);
+    // The entry's page, made now when it has not been.
+    const std::shared_ptr<IdePane>& window_page(WindowEntry& entry);
     // Keeps the dock the page's tab closes from, for show_window. Called each time it is docked.
     void watch_close(WindowEntry& entry);
     // A new dock on one side of target, depth points across. Target null is the whole work area.
@@ -220,7 +224,7 @@ private:
     void default_layout(double windowWidth, double windowHeight,
                         const std::function<void(IdeDock&, const std::shared_ptr<IdePane>&)>& place);
     // Puts the windows back as the default layout has them: the four open,
-    // Search closed, and no floating windows. Script editors and extra scene
+    // Search and Conflicts closed, and no floating windows. Script editors and extra scene
     // views move in beside the scene view.
     void reset_layout();
     // Docks the pages as layout.json left them. False, having docked nothing,
@@ -239,6 +243,9 @@ private:
     const std::shared_ptr<IdeSearch>& search_pane();
     // The Conflicts window, made the first time it is asked for.
     const std::shared_ptr<IdeConflicts>& conflicts_pane();
+    // Build the pages for their window entries.
+    std::shared_ptr<IdePane> make_search();
+    std::shared_ptr<IdePane> make_conflicts();
     // Where Search and Conflicts dock: beside the left explorer, else where editors dock.
     IdeDock* side_home();
     // The ribbon's count and the Conflicts window's rows, from conflicts_.
@@ -309,7 +316,9 @@ private:
     jadefx::Scene* scene_ = nullptr;
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeScriptEditor>> open_scripts_;
     std::weak_ptr<class IdeConsole> console_;
-    // Kept while its tab is closed, so reopening it keeps the search.
+    // The Search and Conflicts pages, typed, as their window entries' make last
+    // built them. Null until first made. Kept while the tab is closed, so
+    // reopening Search keeps the search.
     std::shared_ptr<IdeSearch> search_;
     std::shared_ptr<IdeConflicts> conflicts_pane_;
     // The rows the last check left open.
@@ -326,8 +335,11 @@ private:
     jadefx::Label* conflict_count_text_ = nullptr;
     std::shared_ptr<jadefx::Tooltip> conflict_tip_;
     std::vector<std::weak_ptr<class IdeExplorer>> explorers_;
-    // The windows the Window menu opens and closes, besides Search.
+    // The windows the Window menu opens and closes, and layout.json keeps.
     std::vector<std::unique_ptr<WindowEntry>> windows_;
+    // Search's and Conflicts' entries in windows_.
+    WindowEntry* search_window_ = nullptr;
+    WindowEntry* conflicts_window_ = nullptr;
     // Scene views opened so far, which numbers the next one's tab.
     int scene_views_ = 1;
     // The studio's first scene view. It stays open.

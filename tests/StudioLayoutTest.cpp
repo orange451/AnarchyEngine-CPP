@@ -518,9 +518,13 @@ int main() {
             auto at = jadefx::make<jadefx::Scene>(nullptr, 1280, 800);
             first.mount(*at);
             frame(*at);
-            // Close Properties, open Search beside the game explorer, move the
-            // console in with the scene explorer, and widen the left column.
+            // Close Properties, open Conflicts and then Search beside the game
+            // explorer, move the console in with the scene explorer, and widen
+            // the left column.
             if (jadefx::MenuItem* item = window_item(*at, "Properties")) {
+                item->fire();
+            }
+            if (jadefx::MenuItem* item = window_item(*at, "Conflicts")) {
                 item->fire();
             }
             if (jadefx::MenuItem* item = window_item(*at, "Search")) {
@@ -562,6 +566,14 @@ int main() {
             expect(search != nullptr && std::abs(search->getWidth() - left_width) < 2,
                    "the left column keeps its width");
             expect(showing(*at, "Game Explorer") == nullptr, "the game explorer is behind Search again");
+            bool conflicts_kept = false;
+            if (ide::IdeDock* left = dock_of(search)) {
+                for (const std::shared_ptr<jadefx::Tab>& tab : left->tabs()->getTabs().items()) {
+                    auto* pane = tab ? dynamic_cast<ide::IdePane*>(tab->getContent()) : nullptr;
+                    conflicts_kept = conflicts_kept || (pane != nullptr && pane->name() == "Conflicts");
+                }
+            }
+            expect(conflicts_kept, "Conflicts opens where it was, beside Search");
             ide::IdePane* console = showing(*at, "Console");
             expect(console != nullptr && console->getAbsoluteX() > 640, "the console opens with the scene explorer");
             expect(showing(*at, "Current Scene") == nullptr, "which is behind it, as it was");

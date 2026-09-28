@@ -12,6 +12,7 @@
 #include <cctype>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <set>
@@ -640,6 +641,29 @@ std::pair<std::string, std::string> differing_lines(const std::string& a, const 
                     more_right ? at + two : "(no line " + std::to_string(line) + ")"};
         }
     }
+}
+
+// An instance's file as merge_keys compares it: with its parent's GUID as
+// "Parent" and a script's text as "Source". The root has no parent.
+JsonValue compared_json(JsonValue props, const std::string& parent, bool root, bool has_source,
+                        const std::string& source) {
+    if (!root) {
+        props.set("Parent", JsonValue::string(parent));
+    }
+    if (has_source) {
+        props.set("Source", JsonValue::string(source));
+    }
+    return props;
+}
+
+// b differs from a in some key.
+bool differs(const JsonValue& a, const JsonValue& b) {
+    for (const KeyMerge& merged : merge_keys(a, a, b)) {
+        if (merged.change == KeyChange::StudioOnly) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void apply_properties(DataModel& object, const PlanNode& node) {
@@ -1342,6 +1366,218 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
         return std::tie(a.path, a.key) < std::tie(b.path, b.key);
     });
     return conflicts;
+}
+
+struct Project::Comparison {
+    struct Action {
+        enum class Type { Create, Restore, Recreate, Set, Destroy };
+        Type type = Type::Set;
+        std::string guid;
+        // Set: the key, "Parent", "Source", or "children".
+        std::string key;
+    };
+    std::vector<detail::PlanNode> plan;
+    std::vector<std::size_t> plan_parents;
+    std::unordered_map<std::string, std::size_t> on_disk;
+    std::vector<AuthoredNode> tree;
+    std::vector<std::size_t> tree_parents;
+    std::unordered_map<std::string, std::size_t> in_studio;
+    // What only the disk changed, in the order to apply it.
+    std::vector<Action> actions;
+    std::vector<SaveConflict> rows;
+
+    std::string disk_parent(std::size_t index) const {
+        return index == 0 ? std::string() : plan[plan_parents[index]].guid;
+    }
+    std::string studio_parent(std::size_t index) const {
+        return index == 0 ? std::string() : tree[tree_parents[index]].guid;
+    }
+};
+
+Project::Comparison Project::compare_disk() const {
+    using Type = Comparison::Action::Type;
+    Layout layout;
+    std::string ignored;
+    read_project_json(root_, ignored, layout);
+    Comparison out;
+    out.plan = PlanReader(root_, layout).read();
+    {
+        // A value a class rejects, such as a Color that is not numbers, stops
+        // the scan here rather than halfway through an apply.
+        Game scratch;
+        scratch.history().set_enabled(false);
+        build(scratch, out.plan);
+    }
+    out.plan_parents = parents_of(out.plan);
+    for (std::size_t index = 0; index < out.plan.size(); ++index) {
+        out.on_disk.emplace(out.plan[index].guid, index);
+    }
+    out.tree = game_->authored_tree(nullptr);
+    out.tree_parents = parents_of(out.tree);
+    for (std::size_t index = 0; index < out.tree.size(); ++index) {
+        out.in_studio.emplace(out.tree[index].guid, index);
+    }
+
+    auto base_json = [&](const Files& base) {
+        return compared_json(base.props, base.parent, base.parent.empty(), base.has_source, base.source_bytes);
+    };
+    auto disk_json = [&](std::size_t index) {
+        const PlanNode& node = out.plan[index];
+        return compared_json(node.doc, out.disk_parent(index), index == 0, node.has_source, node.source);
+    };
+    auto studio_json = [&](std::size_t index) {
+        const AuthoredNode& node = out.tree[index];
+        return compared_json(instance_json(node, out.tree), out.studio_parent(index), index == 0, node.has_source,
+                             node.source);
+    };
+    // The studio changed index, or anything under it, since the base.
+    std::function<bool(std::size_t)> studio_below = [&](std::size_t index) {
+        const AuthoredNode& node = out.tree[index];
+        const auto base = files_.find(node.guid);
+        if (base == files_.end() || differs(base_json(base->second), studio_json(index))) {
+            return true;
+        }
+        return std::any_of(node.children.begin(), node.children.end(), studio_below);
+    };
+    // The disk changed index, or added or changed anything under it.
+    std::function<bool(std::size_t)> disk_below = [&](std::size_t index) {
+        const PlanNode& node = out.plan[index];
+        const auto base = files_.find(node.guid);
+        if (base == files_.end() || differs(base_json(base->second), disk_json(index))) {
+            return true;
+        }
+        return std::any_of(node.children.begin(), node.children.end(), disk_below);
+    };
+    auto add_row = [&](const std::string& guid, const std::string& path, SaveConflict::Kind kind, std::string key,
+                       std::string studio, std::string disk) {
+        SaveConflict row;
+        row.guid = guid;
+        row.path = path;
+        row.kind = kind;
+        row.key = std::move(key);
+        row.studio = std::move(studio);
+        row.disk = std::move(disk);
+        if (const auto live = out.in_studio.find(guid); live != out.in_studio.end()) {
+            row.name = out.tree[live->second].name;
+            row.where = live->second == 0 ? std::string() : path_of(out.tree, out.tree_parents, out.tree_parents[live->second]);
+        } else if (const auto file = out.on_disk.find(guid); file != out.on_disk.end()) {
+            row.name = out.plan[file->second].name;
+            row.where = file->second == 0 ? std::string() : path_of(out.plan, out.plan_parents, out.plan_parents[file->second]);
+        }
+        out.rows.push_back(std::move(row));
+    };
+    // A parent's GUID as the path of that parent on one side.
+    auto parent_text = [&](bool studio_side, const std::string& guid) {
+        if (studio_side) {
+            const auto found = out.in_studio.find(guid);
+            return found == out.in_studio.end() ? guid : path_of(out.tree, out.tree_parents, found->second);
+        }
+        const auto found = out.on_disk.find(guid);
+        return found == out.on_disk.end() ? guid : path_of(out.plan, out.plan_parents, found->second);
+    };
+    auto key_row = [&](const std::string& guid, const std::string& path, const std::string& key,
+                       const JsonValue& mine, const JsonValue& disk) {
+        const JsonValue* studio = mine.find(key);
+        const JsonValue* theirs = disk.find(key);
+        std::string studio_text;
+        std::string disk_text;
+        if (key == "Parent") {
+            studio_text = parent_text(true, studio != nullptr ? studio->as_string() : std::string());
+            disk_text = parent_text(false, theirs != nullptr ? theirs->as_string() : std::string());
+        } else if (key == "Source") {
+            std::tie(studio_text, disk_text) = differing_lines(studio != nullptr ? studio->as_string() : std::string(),
+                                                               theirs != nullptr ? theirs->as_string() : std::string());
+        } else {
+            studio_text = display_value(studio);
+            disk_text = display_value(theirs);
+        }
+        add_row(guid, path, SaveConflict::Kind::EditedOutside, key, studio_text, disk_text);
+    };
+    auto act = [&](Type type, const std::string& guid, std::string key = {}) {
+        out.actions.push_back({type, guid, std::move(key)});
+    };
+
+    // Everything on disk, parents before children.
+    std::vector<bool> creatable(out.plan.size(), false);
+    for (std::size_t index = 0; index < out.plan.size(); ++index) {
+        const PlanNode& node = out.plan[index];
+        const auto base = files_.find(node.guid);
+        const auto studio = out.in_studio.find(node.guid);
+        const bool in_base = base != files_.end();
+        const bool live = studio != out.in_studio.end();
+        if (!in_base && !live) {
+            // Added on disk: made under its disk parent when that parent is in
+            // the studio, or is made too. Under one the studio deleted, that
+            // parent's row carries it.
+            const std::string parent = out.disk_parent(index);
+            creatable[index] = out.in_studio.count(parent) != 0 ||
+                               (files_.count(parent) == 0 && creatable[out.plan_parents[index]]);
+            if (creatable[index]) {
+                act(Type::Create, node.guid);
+            }
+            continue;
+        }
+        if (!live) {
+            // The studio deleted it. A save removes it, unless the disk changed
+            // it or added under it.
+            if (disk_below(index)) {
+                add_row(node.guid, base->second.props_path, SaveConflict::Kind::EditedOutside, "", "deleted",
+                        "changed on disk");
+            }
+            continue;
+        }
+        const JsonValue disk = disk_json(index);
+        const JsonValue mine = studio_json(studio->second);
+        const JsonValue was = in_base ? base_json(base->second) : JsonValue::object();
+        const std::string path = in_base ? base->second.props_path : node.props_path;
+        // A new class is a new instance: taken whole, or kept whole.
+        if (index != 0 && in_base && !same_value(was.find("class"), disk.find("class"))) {
+            if (differs(was, mine)) {
+                add_row(node.guid, path, SaveConflict::Kind::EditedOutside, "class", display_value(mine.find("class")),
+                        display_value(disk.find("class")));
+            } else {
+                act(Type::Recreate, node.guid);
+            }
+            continue;
+        }
+        for (const KeyMerge& merged : merge_keys(was, disk, mine)) {
+            if (merged.key == "class") {
+                continue;
+            }
+            if (merged.change == KeyChange::DiskOnly) {
+                act(Type::Set, node.guid, merged.key);
+            } else if (merged.change == KeyChange::Conflict) {
+                key_row(node.guid, path, merged.key, mine, disk);
+            }
+        }
+    }
+    // Gone from disk.
+    for (const auto& [guid, files] : files_) {
+        if (out.on_disk.count(guid) != 0) {
+            continue;
+        }
+        const auto studio = out.in_studio.find(guid);
+        if (studio == out.in_studio.end()) {
+            continue;  // Deleted on both sides.
+        }
+        if (studio_below(studio->second)) {
+            add_row(guid, files.props_path, SaveConflict::Kind::DeletedOutside, "", "changed in the studio", "deleted");
+        } else {
+            act(Type::Destroy, guid);
+        }
+    }
+    std::sort(out.rows.begin(), out.rows.end(), [](const SaveConflict& a, const SaveConflict& b) {
+        return std::tie(a.where, a.name, a.guid, a.key) < std::tie(b.where, b.name, b.guid, b.key);
+    });
+    return out;
+}
+
+DiskScan Project::scan_disk() const {
+    Comparison compared = compare_disk();
+    DiskScan out;
+    out.conflicts = std::move(compared.rows);
+    out.has_disk_changes = !compared.actions.empty();
+    return out;
 }
 
 void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {

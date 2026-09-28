@@ -72,6 +72,18 @@ private:
     std::vector<SaveConflict> conflicts_;
 };
 
+// What the disk holds that the place does not, against the last load or save.
+struct DiskScan {
+    // Instances apply_disk changed from the disk, by Name. Empty from scan_disk.
+    std::vector<std::string> loaded;
+    // Choices apply_disk did not apply: their row changed since it was listed.
+    std::vector<SaveConflict> skipped;
+    // Rows that need a person's choice, by where, name, then key.
+    std::vector<SaveConflict> conflicts;
+    // True when the disk has changes the studio did not make, which apply_disk loads.
+    bool has_disk_changes = false;
+};
+
 // Classes a project file may name. The built-ins are DataModel, GameObject,
 // Script, ModuleScript, Folder, and TestTriangle. A later class registers here.
 using ProjectFactory = DataModel& (*)(DataModel& world);
@@ -133,6 +145,10 @@ public:
     // undone back to the saved state no longer counts. Needs no project folder.
     // During play it covers the place captured at Test, like a save does.
     static std::uint64_t place_fingerprint(const DataModel& game);
+    // Reads src/ and compares it, key by key, with the last load or save and
+    // with the place. Touches nothing. Throws ProjectError when src/ does not
+    // read as a project, or holds a value its class rejects.
+    DiskScan scan_disk() const;
     // File > New: stops a running simulation, destroys every instance, gives the
     // root a fresh GUID, captures the empty place, and drops undo history.
     static void reset_place(DataModel& game);
@@ -183,6 +199,9 @@ private:
                                               const std::map<std::string, Files>& next,
                                               const std::map<std::string, std::vector<std::string>>& claims,
                                               std::set<std::string>& left_gone) const;
+    // Base, disk, and studio side by side, and what differs. Defined in Project.cpp.
+    struct Comparison;
+    Comparison compare_disk() const;
     // The files for each GUID. A node without properties takes its bytes from cache.
     static std::map<std::string, Files> plan_files(const std::vector<AuthoredNode>& tree, const std::string& src,
                                                    const std::unordered_map<std::string, Files>& cache);

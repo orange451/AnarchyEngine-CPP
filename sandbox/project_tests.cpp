@@ -1595,3 +1595,277 @@ TEST_CASE("G28 a property file that does not parse is one row for its instance",
     project.save(conflicts);
     REQUIRE(read_file(dir.path / path).find("\"Color\": [0.25, 0.5, 0.75]") != std::string::npos);
 }
+
+namespace {
+
+// A copy: callers pass the scan_disk() temporary, which dies with the statement.
+engine_core::SaveConflict only_row(const engine_core::DiskScan& scan) {
+    REQUIRE(scan.conflicts.size() == 1);
+    return scan.conflicts[0];
+}
+
+std::string box_dir(const DataModel& game, InstanceId box) { return "src/Box." + game.guid(box); }
+
+}  // namespace
+
+TEST_CASE("D1 a scan with nothing changed finds nothing", "[D1][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    add_part(game, 0, "A");
+    add_script(game, 0, "Main", "print(1)\n");
+    project.save();
+    const engine_core::DiskScan scan = project.scan_disk();
+    REQUIRE(scan.conflicts.empty());
+    REQUIRE_FALSE(scan.has_disk_changes);
+}
+
+TEST_CASE("D2 a property only the disk changed is a change to load, not a row", "[D2][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    project.save();
+    edit_key(dir.path / leaf(game, a.id()), "Size", triple(2, 2, 2));
+    const engine_core::DiskScan scan = project.scan_disk();
+    REQUIRE(scan.conflicts.empty());
+    REQUIRE(scan.has_disk_changes);
+}
+
+TEST_CASE("D3 a property both sides changed differently is a row", "[D3][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, 0, "Box").id();
+    engine_core::GameObject& a = add_part(game, box, "A");
+    project.save();
+    const std::string path = box_dir(game, box) + "/A." + game.guid(a.id()) + ".json";
+    edit_key(dir.path / path, "Color", triple(0, 0, 1));
+    a.set_color(rgb(1.f, 0.f, 0.f));
+    const engine_core::SaveConflict& row = only_row(project.scan_disk());
+    REQUIRE(row.guid == game.guid(a.id()));
+    REQUIRE(row.path == path);
+    REQUIRE(row.kind == engine_core::SaveConflict::Kind::EditedOutside);
+    REQUIRE(row.key == "Color");
+    REQUIRE(row.studio == "1, 0, 0");
+    REQUIRE(row.disk == "0, 0, 1");
+    REQUIRE(row.name == "A");
+    REQUIRE(row.where == "game.Box");
+}
+
+TEST_CASE("D4 a property both sides changed the same way is nothing", "[D4][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    project.save();
+    edit_key(dir.path / leaf(game, a.id()), "Color", triple(0, 0, 1));
+    a.set_color(rgb(0.f, 0.f, 1.f));
+    const engine_core::DiskScan scan = project.scan_disk();
+    REQUIRE(scan.conflicts.empty());
+    REQUIRE_FALSE(scan.has_disk_changes);
+}
+
+TEST_CASE("D5 a move on disk is a Parent change", "[D5][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, 0, "Box").id();
+    add_part(game, box, "Keep");
+    const InstanceId q = add_part(game, 0, "Q").id();
+    add_part(game, q, "QKeep");
+    const InstanceId loose = add_part(game, 0, "Loose").id();
+    project.save();
+    fs::rename(dir.path / leaf(game, loose),
+               dir.path / box_dir(game, box) / ("Loose." + game.guid(loose) + ".json"));
+
+    SECTION("the studio left it alone: a change to load") {
+        const engine_core::DiskScan scan = project.scan_disk();
+        REQUIRE(scan.conflicts.empty());
+        REQUIRE(scan.has_disk_changes);
+    }
+    SECTION("the studio moved it too: a row") {
+        game.set_parent(loose, q);
+        const engine_core::SaveConflict& row = only_row(project.scan_disk());
+        REQUIRE(row.key == "Parent");
+        REQUIRE(row.studio == "game.Q");
+        REQUIRE(row.disk == "game.Box");
+    }
+}
+
+TEST_CASE("D6 a source both sides changed is a row showing the first differing line", "[D6][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::Script& main = add_script(game, 0, "Main", "print(1)\nprint(2)\n");
+    project.save();
+    write_file(dir.path / leaf(game, main.id(), ".luau"), "print(1)\nprint(\"disk\")\n");
+    main.set_source("print(1)\nprint(\"studio\")\n");
+    const engine_core::SaveConflict& row = only_row(project.scan_disk());
+    REQUIRE(row.key == "Source");
+    REQUIRE(row.studio == "2: print(\"studio\")");
+    REQUIRE(row.disk == "2: print(\"disk\")");
+}
+
+TEST_CASE("D7 an instance deleted on disk", "[D7][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId keep = add_part(game, box, "Keep").id();
+    add_part(game, box, "Other");
+    project.save();
+    fs::remove_all(dir.path / box_dir(game, box));
+
+    SECTION("the studio left it alone: a change to load") {
+        const engine_core::DiskScan scan = project.scan_disk();
+        REQUIRE(scan.conflicts.empty());
+        REQUIRE(scan.has_disk_changes);
+    }
+    SECTION("the studio changed something inside it: rows for it and for the child") {
+        game.game_object(keep)->set_color(rgb(1.f, 0.f, 0.f));
+        const engine_core::DiskScan scan = project.scan_disk();
+        REQUIRE(scan.conflicts.size() == 2);
+        std::set<std::string> names;
+        for (const engine_core::SaveConflict& row : scan.conflicts) {
+            REQUIRE(row.kind == engine_core::SaveConflict::Kind::DeletedOutside);
+            REQUIRE(row.key.empty());
+            REQUIRE(row.studio == "changed in the studio");
+            REQUIRE(row.disk == "deleted");
+            names.insert(row.name);
+        }
+        REQUIRE(names == std::set<std::string>{"Box", "Keep"});
+    }
+}
+
+TEST_CASE("D8 an instance deleted in the studio", "[D8][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, 0, "A").id();
+    project.save();
+    const std::string path = leaf(game, a);
+
+    SECTION("the disk left it alone: nothing, a save removes it") {
+        game.destroy(a);
+        const engine_core::DiskScan scan = project.scan_disk();
+        REQUIRE(scan.conflicts.empty());
+        REQUIRE_FALSE(scan.has_disk_changes);
+    }
+    SECTION("the disk changed it: a row") {
+        edit_key(dir.path / path, "Size", triple(2, 2, 2));
+        game.destroy(a);
+        const engine_core::SaveConflict& row = only_row(project.scan_disk());
+        REQUIRE(row.kind == engine_core::SaveConflict::Kind::EditedOutside);
+        REQUIRE(row.key.empty());
+        REQUIRE(row.studio == "deleted");
+        REQUIRE(row.disk == "changed on disk");
+        REQUIRE(row.name == "A");
+    }
+}
+
+TEST_CASE("D9 a class changed on disk", "[D9][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    project.save();
+    edit_key(dir.path / leaf(game, a.id()), "class", engine_core::JsonValue::string("Folder"));
+
+    SECTION("the studio left it alone: a change to load") {
+        const engine_core::DiskScan scan = project.scan_disk();
+        REQUIRE(scan.conflicts.empty());
+        REQUIRE(scan.has_disk_changes);
+    }
+    SECTION("the studio changed it: a row") {
+        a.set_color(rgb(1.f, 0.f, 0.f));
+        const engine_core::SaveConflict& row = only_row(project.scan_disk());
+        REQUIRE(row.key == "class");
+        REQUIRE(row.studio == "GameObject");
+        REQUIRE(row.disk == "Folder");
+    }
+}
+
+TEST_CASE("D10 an instance added on disk", "[D10][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId keep = add_part(game, box, "Keep").id();
+    project.save();
+    write_file(dir.path / box_dir(game, box) / "Added.added-0001.json", meta("Folder", "added-0001", "Added"));
+
+    SECTION("under an instance the studio has: a change to load") {
+        const engine_core::DiskScan scan = project.scan_disk();
+        REQUIRE(scan.conflicts.empty());
+        REQUIRE(scan.has_disk_changes);
+    }
+    SECTION("under one the studio deleted: a row for that one") {
+        const std::string box_guid = game.guid(box);
+        game.destroy(keep);
+        game.destroy(box);
+        const engine_core::SaveConflict& row = only_row(project.scan_disk());
+        REQUIRE(row.guid == box_guid);
+        REQUIRE(row.key.empty());
+        REQUIRE(row.disk == "changed on disk");
+    }
+}
+
+TEST_CASE("D11 a value a class rejects makes the scan throw", "[D11][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    project.save();
+    edit_key(dir.path / leaf(game, a.id()), "Color", engine_core::JsonValue::string("red"));
+    REQUIRE_THROWS_AS(project.scan_disk(), ProjectError);
+}
+
+TEST_CASE("D12 a file only reformatted is no change", "[D12][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    a.set_color(rgb(1.f, 0.f, 0.f));
+    project.save();
+    const std::string path = leaf(game, a.id());
+    std::string wide = read_file(dir.path / path);
+    for (std::size_t at = wide.find("\n  "); at != std::string::npos; at = wide.find("\n  ", at + 5)) {
+        wide.replace(at, 3, "\n    ");
+    }
+    write_file(dir.path / path, wide);
+    const engine_core::DiskScan scan = project.scan_disk();
+    REQUIRE(scan.conflicts.empty());
+    REQUIRE_FALSE(scan.has_disk_changes);
+}
+
+TEST_CASE("D13 a key removed on disk is a change to load", "[D13][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    a.set_color(rgb(1.f, 0.f, 0.f));
+    project.save();
+    const fs::path file = dir.path / leaf(game, a.id());
+    engine_core::JsonValue doc;
+    std::string error;
+    REQUIRE(engine_core::parse_json(read_file(file), doc, error));
+    REQUIRE(doc.erase("Color"));
+    write_file(file, engine_core::write_json(doc));
+    const engine_core::DiskScan scan = project.scan_disk();
+    REQUIRE(scan.conflicts.empty());
+    REQUIRE(scan.has_disk_changes);
+}

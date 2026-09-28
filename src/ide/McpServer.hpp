@@ -45,11 +45,14 @@ public:
     McpServer& operator=(const McpServer&) = delete;
 
     void add_tool(McpTool tool);
+    const std::vector<McpTool>& tools() const { return tools_; }
     void set_token(std::string token);
+    // What initialize tells the client about the server. default_instructions() until set.
+    void set_instructions(std::string instructions);
 
     // Listens on 127.0.0.1:port from its own thread. Port 0 takes any free
     // port, which port() then reports. False, with error set, when the port
-    // cannot be bound.
+    // cannot be bound, including when another server already listens there.
     bool start(int port, std::string& error);
     // Stops listening and waits for the thread. Safe to call twice.
     void stop();
@@ -66,12 +69,15 @@ private:
 
     std::vector<McpTool> tools_;
     std::string token_;
+    std::string instructions_;
     std::unique_ptr<httplib::Server> http_;
     std::thread thread_;
     std::atomic<bool> running_{false};
     int port_ = 0;
 };
 
+// What a studio's server tells the client: the place, paths, undo, run_lua.
+const char* default_instructions();
 // One line, no spaces, keys in the value's order. What goes on the wire and
 // into a tool result's text.
 std::string compact_json(const engine_core::JsonValue& value);

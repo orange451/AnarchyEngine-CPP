@@ -23,6 +23,7 @@ test: all
 	"$(BUILD_DIR)/properties-tests"
 	"$(BUILD_DIR)/console-tests"
 	"$(BUILD_DIR)/studio-tests"
+	"$(BUILD_DIR)/mcp-tests"
 	"$(BUILD_DIR)/sandbox"
 
 clean:

@@ -20,7 +20,7 @@ constexpr const char* kVersions[] = {"2025-11-25", "2025-06-18", "2025-03-26"};
 constexpr const char* kServerName = "anarchy-engine";
 constexpr const char* kServerVersion = "0.1.0";
 
-constexpr const char* kInstructions =
+constexpr const char* kDefaultInstructions =
     "Anarchy Engine studio. The place is a tree of instances under the root, `game`. "
     "Name an instance by its id, or by its path of Names from the root such as \"Folder.Part\". "
     "Edits go through the studio's undo history, as if made by hand. "
@@ -183,13 +183,17 @@ JsonValue json_literal(const char* text) {
     return value;
 }
 
-McpServer::McpServer() = default;
+const char* default_instructions() { return kDefaultInstructions; }
+
+McpServer::McpServer() : instructions_(kDefaultInstructions) {}
 
 McpServer::~McpServer() { stop(); }
 
 void McpServer::add_tool(McpTool tool) { tools_.push_back(std::move(tool)); }
 
 void McpServer::set_token(std::string token) { token_ = std::move(token); }
+
+void McpServer::set_instructions(std::string instructions) { instructions_ = std::move(instructions); }
 
 bool McpServer::start(int port, std::string& error) {
     stop();
@@ -215,6 +219,15 @@ bool McpServer::start(int port, std::string& error) {
     // No event streams: a GET that asks for one is told this server has none.
     http->Get("/mcp", [](const httplib::Request&, httplib::Response& response) { response.status = 405; });
     http->Delete("/mcp", [](const httplib::Request&, httplib::Response& response) { response.status = 405; });
+    // httplib's default is SO_REUSEPORT, which lets a second studio bind this
+    // port too and take some of the first one's requests. One port, one studio.
+    http->set_socket_options([](socket_t sock) {
+#ifdef _WIN32
+        httplib::set_socket_opt(sock, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, 1);
+#else
+        httplib::set_socket_opt(sock, SOL_SOCKET, SO_REUSEADDR, 1);
+#endif
+    });
     if (port == 0) {
         port = http->bind_to_any_port("127.0.0.1");
         if (port <= 0) {
@@ -314,7 +327,7 @@ JsonValue McpServer::dispatch(const JsonValue& message, bool& reply) const {
         result.set("protocolVersion", JsonValue::string(PickVersion(*params)));
         result.set("capabilities", std::move(capabilities));
         result.set("serverInfo", std::move(info));
-        result.set("instructions", JsonValue::string(kInstructions));
+        result.set("instructions", JsonValue::string(instructions_));
         return ResultReply(*id, std::move(result));
     }
     if (name == "ping") {

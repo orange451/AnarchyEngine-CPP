@@ -65,9 +65,11 @@ public:
     // Binds the scene view, then starts the simulation and render threads.
     void start();
     // Starts the MCP server, so an LLM client can read and edit the place.
-    // ANARCHY_MCP_PORT picks the port (default 7777), ANARCHY_MCP=0 turns it
-    // off, and ANARCHY_MCP_TOKEN makes clients send that bearer token. A
-    // toast says where it listens; the console says why it could not.
+    // It listens on 7777, or on any free port when another studio has 7777,
+    // and names itself and its project in the studio registry, where the
+    // anarchy-mcp bridge finds it. ANARCHY_MCP_PORT pins the port,
+    // ANARCHY_MCP=0 turns it off, and ANARCHY_MCP_TOKEN makes clients send
+    // that bearer token. A toast says where it listens; the console says why it could not.
     void start_mcp();
     void mount(jadefx::Scene& scene);
     // Grows the window after a frame when a dock's minimum no longer fits.
@@ -128,6 +130,8 @@ private:
     // One sent before mount waits for it.
     void show_toast(std::string text, double seconds = jadefx::Toast::LENGTH_SHORT);
     void update_title();
+    // Writes the project's name and folder to the registry entry when they changed.
+    void publish_studio();
     std::filesystem::path dialog_directory() const;
     void reapply_editors();
     void restore_closed_edits();
@@ -205,6 +209,9 @@ private:
     std::shared_ptr<IdeSearch> search_;
     std::vector<std::weak_ptr<class IdeExplorer>> explorers_;
     std::unique_ptr<McpServer> mcp_;
+    struct McpIdentity;
+    // Null while the server is off.
+    std::shared_ptr<McpIdentity> mcp_identity_;
     // MCP tools that wait for the UI thread hold this weakly, so a task that
     // runs after the layout is gone does nothing.
     std::shared_ptr<int> alive_ = std::make_shared<int>(0);

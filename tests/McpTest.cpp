@@ -1,5 +1,8 @@
+#include "bridge/StudioBridge.hpp"
+#include "ide/IdeResources.hpp"
 #include "ide/McpServer.hpp"
 #include "ide/McpTools.hpp"
+#include "ide/StudioRegistry.hpp"
 
 #include "Engine.hpp"
 #include "LuaSource.hpp"
@@ -9,8 +12,12 @@
 #include "httplib.h"
 
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -325,6 +332,10 @@ void TestHttp() {
     Expect(sneaky_result && sneaky_result->status == 403, "a host that only starts with localhost is refused");
     httplib::Result get = client.Get("/mcp", auth);
     Expect(get && get->status == 405, "GET has no event stream");
+    ide::McpServer rival;
+    std::string rival_error;
+    Expect(!rival.start(server.port(), rival_error) && !rival_error.empty(),
+           "a second server cannot listen on a port another already has");
     server.stop();
     Expect(!server.running(), "stop ends the listener");
     server.stop();
@@ -363,6 +374,141 @@ void TestPrintSource() {
     Expect(command == nullptr || command->script == 0, "a command line names no script");
 }
 
+namespace fs = std::filesystem;
+
+// An empty folder of its own under the system temp folder.
+fs::path TempDir(const std::string& name) {
+    const fs::path dir = fs::temp_directory_path() /
+                         ("anarchy-mcp-test-" + name + "-" + std::to_string(ide::current_pid()));
+    std::error_code ignored;
+    fs::remove_all(dir, ignored);
+    return dir;
+}
+
+void TestRegistry() {
+    const fs::path dir = TempDir("registry");
+    Expect(ide::list_studios(dir).empty(), "a missing registry lists no studios");
+    std::string error;
+    const ide::StudioEntry live{ide::current_pid(), 4321, "Alpha", "/somewhere/Alpha"};
+    Expect(ide::write_studio(dir, live, error), "an entry is written: " + error);
+    // Above any pid a system hands out.
+    const ide::StudioEntry gone{0x7ffffff0, 4322, "Gone", ""};
+    Expect(ide::write_studio(dir, gone, error), "a second entry is written: " + error);
+    std::ofstream(dir / "junk.json") << "{nope";
+    const std::vector<ide::StudioEntry> studios = ide::list_studios(dir);
+    Expect(studios.size() == 1 && studios[0].project == "Alpha" && studios[0].port == 4321 &&
+               studios[0].root == "/somewhere/Alpha" && studios[0].pid == ide::current_pid(),
+           "a running studio is listed with its project and folder");
+    Expect(!fs::exists(dir / (std::to_string(gone.pid) + "-4322.json")), "the entry of an ended process is deleted");
+    ide::remove_studio(dir, live);
+    Expect(ide::list_studios(dir).empty(), "remove_studio takes the entry out");
+    std::error_code ignored;
+    fs::remove_all(dir, ignored);
+}
+
+// A stand-in for a studio: a real server on loopback whose whoami names it.
+struct FakeStudio {
+    ide::McpServer server;
+    ide::StudioEntry entry;
+};
+
+std::unique_ptr<FakeStudio> OpenStudio(const fs::path& registry, const std::string& name, const fs::path& root) {
+    auto studio = std::make_unique<FakeStudio>();
+    studio->server.add_tool({"whoami", "", ide::json_literal(R"({"type":"object"})"), [name](const JsonValue&) {
+                                 JsonValue out = JsonValue::object();
+                                 out.set("name", JsonValue::string(name));
+                                 return out;
+                             }});
+    std::string error;
+    Expect(studio->server.start(0, error), name + " listens: " + error);
+    studio->entry = {ide::current_pid(), studio->server.port(), name, ide::utf8_path(root)};
+    Expect(ide::write_studio(registry, studio->entry, error), name + " is registered: " + error);
+    return studio;
+}
+
+std::string Whoami(const ide::McpServer& bridge) {
+    bool failed = false;
+    const JsonValue out = Call(bridge, "whoami", "{}", &failed);
+    return !failed && out.find("name") != nullptr ? out.find("name")->as_string() : "(failed)";
+}
+
+void TestBridge() {
+    const fs::path base = TempDir("bridge");
+    const fs::path registry = base / "studios";
+    fs::create_directories(base / "Alpha");
+    fs::create_directories(base / "Beta" / "src");
+    const std::vector<ide::McpTool> catalog = {
+        {"whoami", "Names the studio.", ide::json_literal(R"({"type":"object"})"), nullptr}};
+    bridge::StudioBridge outside({registry, base, "", ""}, catalog);
+    const ide::McpServer& front = outside.server();
+
+    const JsonValue init = Request(front, "initialize", R"({"protocolVersion":"2025-06-18"})");
+    const JsonValue* instructions = init.find("result") != nullptr ? init.find("result")->find("instructions") : nullptr;
+    Expect(instructions != nullptr && instructions->as_string().find("select_studio") != std::string::npos,
+           "the bridge's instructions explain how a studio is picked");
+    const JsonValue tools = Request(front, "tools/list");
+    std::vector<std::string> names;
+    for (const JsonValue& tool : tools.find("result")->find("tools")->items()) {
+        names.push_back(tool.find("name")->as_string());
+    }
+    Expect(names == std::vector<std::string>{"whoami", "list_studios", "select_studio"},
+           "the bridge lists the studio's tools, then its own");
+
+    Expect(ErrorText(front, "whoami", "{}").find("No Anarchy Engine studio is open") == 0,
+           "with no studio open, a call says to open one");
+
+    auto alpha = OpenStudio(registry, "Alpha", base / "Alpha");
+    Expect(Whoami(front) == "Alpha", "the only open studio takes the call");
+
+    auto beta = OpenStudio(registry, "Beta", base / "Beta");
+    const std::string several = ErrorText(front, "whoami", "{}");
+    Expect(several.find("2 studios are open") == 0 && several.find("Alpha (") != std::string::npos &&
+               several.find("Beta (") != std::string::npos,
+           "with two open and neither holding the working directory, a call names both: " + several);
+
+    bridge::StudioBridge inside({registry, base / "Beta" / "src", "", ""}, catalog);
+    Expect(Whoami(inside.server()) == "Beta", "the studio whose folder holds the working directory takes the call");
+    bridge::StudioBridge pinned({registry, base / "Beta", "alpha", ""}, catalog);
+    Expect(Whoami(pinned.server()) == "Alpha", "--project names a studio, ignoring case, over the working directory");
+
+    Call(front, "select_studio", R"({"studio":"ALPHA"})");
+    Expect(Whoami(front) == "Alpha", "select_studio picks by name, ignoring case");
+    const JsonValue listed = Call(front, "list_studios", "{}");
+    bool alpha_selected = false;
+    for (const JsonValue& studio : listed.find("studios")->items()) {
+        alpha_selected = alpha_selected ||
+                         (studio.find("project")->as_string() == "Alpha" && studio.find("selected")->as_bool());
+    }
+    Expect(alpha_selected && listed.find("studios")->items().size() == 2 &&
+               listed.find("selected_by")->as_string() == "select_studio",
+           "list_studios shows both and marks the pick");
+    Call(front, "select_studio",
+         "{\"studio\":" + ide::compact_json(JsonValue::string(ide::utf8_path(base / "Beta"))) + "}");
+    Expect(Whoami(front) == "Beta", "select_studio picks by folder");
+    Expect(ErrorText(front, "select_studio", "{\"studio\":" + std::to_string(ide::current_pid()) + "}")
+                   .find("matches several studios") != std::string::npos,
+           "a pid two studios share is refused as ambiguous");
+    Expect(ErrorText(front, "select_studio", R"({"studio":"Gamma"})").find("No open studio matches Gamma") == 0,
+           "select_studio refuses a name nothing matches");
+
+    Call(front, "select_studio", R"({"studio":"alpha"})");
+    ide::remove_studio(registry, alpha->entry);
+    alpha->server.stop();
+    Expect(ErrorText(front, "whoami", "{}").find("has closed") != std::string::npos,
+           "a call to a picked studio that closed fails");
+    Expect(ErrorText(front, "whoami", "{}").find("has closed") != std::string::npos,
+           "and keeps failing, rather than going to another studio");
+    Call(front, "select_studio", R"({"studio":""})");
+    Expect(Whoami(front) == "Beta", "dropping the pick goes back to the usual order");
+
+    beta->server.stop();
+    Expect(ErrorText(front, "whoami", "{}").find("Could not reach Beta") == 0,
+           "a registered studio that stopped answering is named in the error");
+    ide::remove_studio(registry, beta->entry);
+    std::error_code ignored;
+    fs::remove_all(base, ignored);
+}
+
 }  // namespace
 
 int main() {
@@ -371,6 +517,8 @@ int main() {
     TestPrintSource();
     TestThreadedEdits();
     TestHttp();
+    TestRegistry();
+    TestBridge();
     if (gFailures == 0) {
         std::printf("mcp tests passed\n");
         return 0;

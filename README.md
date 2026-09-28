@@ -94,14 +94,25 @@ The Appearance tab lists every color with its variable's name, in groups such as
 
 ## Talking to an LLM (MCP)
 
-While the studio is open it runs a [Model Context Protocol](https://modelcontextprotocol.io) server at `http://127.0.0.1:7777/mcp`, so an LLM client can read and edit the place. With Claude Code:
+While the studio is open it runs a [Model Context Protocol](https://modelcontextprotocol.io) server, so an LLM client can read and edit the place. The first studio listens at `http://127.0.0.1:7777/mcp`; one opened while another has 7777 listens on any free port. A toast at the bottom right of the window says where, and if the server could not start, the console says why.
+
+Several studios can be open at once, so clients go through `anarchy-mcp`, a bridge the build puts in `build/`. Register it once, for every folder you work in. With Claude Code:
 
 ```
-claude mcp add --transport http anarchy http://127.0.0.1:7777/mcp
+claude mcp add anarchy -s user -- /path/to/AnarchyEngine-CPP/build/anarchy-mcp
 ```
 
-Any client that speaks MCP over HTTP connects the same way. A toast at the bottom right of the window says where the server listens when the studio opens; if it could not start, the console says why.
+Each studio names its project and port in a `studios` folder beside `preferences.json`, and the bridge sends each tool call to one of them:
+
+1. the studio `select_studio` picked, by project name, folder, or pid, until it closes;
+2. else the one `--project <name|folder|pid>` names, when the bridge was registered with it;
+3. else the only studio open;
+4. else the studio whose project folder holds the folder the client was started in, so `cd MyGame && claude` talks to the studio that has MyGame open.
+
+Otherwise a call fails and lists the open studios. Once the studio `select_studio` picked closes, calls fail until it picks another; `select_studio` with `""` goes back to the usual order. `list_studios` shows every open studio and which one calls go to, and `get_studio_info` asks a studio which project it has open. The entry of a studio that crashed is dropped the next time the bridge looks.
+
+With only one studio open, a client that speaks MCP over HTTP can also connect to it directly: `claude mcp add --transport http anarchy http://127.0.0.1:7777/mcp`.
 
 The tools read the tree (`get_tree`, `find_instances`), read and set properties, create and delete instances, read and write scripts, get and set the explorers' selection, list classes and their Luau API, run Luau with `run_lua` and read what it printed, read the console with `get_output`, and start, pause, and stop a test with `playtest`. An instance is named by its id or by its path of names, such as `Folder.Part`. Edits go through undo like edits made by hand, and a chunk from `run_lua` shows in the console.
 
-The server listens on the loopback address only, and refuses requests from a web page on another site. `ANARCHY_MCP_PORT` picks another port, `ANARCHY_MCP=0` turns the server off, and `ANARCHY_MCP_TOKEN=<secret>` makes clients send `Authorization: Bearer <secret>` (with Claude Code, add `--header "Authorization: Bearer <secret>"`).
+The server listens on the loopback address only, and refuses requests from a web page on another site. `ANARCHY_MCP_PORT` pins the port, and the server does not start when that port is taken. `ANARCHY_MCP=0` turns the server off, and `ANARCHY_MCP_TOKEN=<secret>` makes clients send `Authorization: Bearer <secret>`. The bridge sends the `ANARCHY_MCP_TOKEN` it was started with (with Claude Code, `claude mcp add ... -e ANARCHY_MCP_TOKEN=<secret> -- ...`; connecting directly, add `--header "Authorization: Bearer <secret>"`).

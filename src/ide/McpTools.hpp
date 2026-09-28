@@ -26,10 +26,12 @@ struct McpStudio {
     std::function<void()> flush_scripts;
     // Shows a Source a tool wrote in an idle open editor.
     std::function<void()> refresh_scripts;
+    // An object naming this studio: project, root, pid, and port.
+    std::function<engine_core::JsonValue()> info;
 };
 
 // The tools over one engine: the tree, properties, instances, scripts,
-// selection, the class registry, Luau, output, and play testing.
+// selection, the class registry, Luau, output, play testing, and which studio this is.
 //
 // Reads take the DataModel read lock on the server thread. Edits run on the
 // simulation thread, or under the write lock while paused, as the explorer's

@@ -19,8 +19,10 @@
 #include "PreferencesPanel.hpp"
 #include "PropertiesPanel.hpp"
 #include "LuaSource.hpp"
+#include "IdeResources.hpp"
 #include "McpServer.hpp"
 #include "McpTools.hpp"
+#include "StudioRegistry.hpp"
 #include "TestTriangle.hpp"
 #include "../runner/GameView.hpp"
 
@@ -29,6 +31,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdlib>
+#include <filesystem>
 #include <mutex>
 #include <stdexcept>
 #include <functional>
@@ -586,16 +589,26 @@ void IdeLayout::start() {
     mark_saved();
 }
 
+// What this studio's registry entry says, shared with the server's threads.
+struct IdeLayout::McpIdentity {
+    std::mutex mu;
+    StudioEntry entry;
+    std::filesystem::path dir;
+    bool published = false;
+};
+
 void IdeLayout::start_mcp() {
     const char* enabled = std::getenv("ANARCHY_MCP");
     if (enabled != nullptr && std::string(enabled) == "0") {
         return;
     }
     int port = kMcpPort;
+    bool pinned = false;
     if (const char* text = std::getenv("ANARCHY_MCP_PORT")) {
         const int asked = std::atoi(text);
         if (asked > 0 && asked < 65536) {
             port = asked;
+            pinned = true;
         }
     }
     // Each hook runs on the UI thread, where the ribbon's own handlers run.
@@ -621,6 +634,16 @@ void IdeLayout::start_mcp() {
     };
     studio.flush_scripts = [this, on_ui] { on_ui([this] { flush_editors(); }); };
     studio.refresh_scripts = [this, on_ui] { on_ui([this] { reapply_editors(); }); };
+    auto identity = std::make_shared<McpIdentity>();
+    studio.info = [identity] {
+        std::lock_guard<std::mutex> guard(identity->mu);
+        engine_core::JsonValue out = engine_core::JsonValue::object();
+        out.set("project", engine_core::JsonValue::string(identity->entry.project));
+        out.set("root", engine_core::JsonValue::string(identity->entry.root));
+        out.set("pid", engine_core::JsonValue::number(static_cast<double>(identity->entry.pid)));
+        out.set("port", engine_core::JsonValue::number(identity->entry.port));
+        return out;
+    };
 
     auto server = std::make_unique<McpServer>();
     if (const char* token = std::getenv("ANARCHY_MCP_TOKEN")) {
@@ -629,12 +652,53 @@ void IdeLayout::start_mcp() {
     add_engine_tools(*server, runner_.simulation(), std::move(studio));
     engine_core::ScriptRuntime& scripts = runner_.simulation().scripts();
     std::string error;
-    if (!server->start(port, error)) {
+    // A second studio finds 7777 taken and listens on any free port. The
+    // registry entry is how the bridge finds it there.
+    if (!server->start(port, error) && (pinned || !server->start(0, error))) {
         scripts.append_output(engine_core::ScriptRuntime::OutputKind::Error, "MCP server: " + error);
         return;
     }
-    show_toast("MCP server listening on http://127.0.0.1:" + std::to_string(port) + "/mcp", jadefx::Toast::LENGTH_LONG);
+    identity->entry.pid = current_pid();
+    identity->entry.port = server->port();
+    identity->dir = studio_registry_dir();
+    show_toast("MCP server listening on http://127.0.0.1:" + std::to_string(server->port()) + "/mcp",
+               jadefx::Toast::LENGTH_LONG);
     mcp_ = std::move(server);
+    mcp_identity_ = std::move(identity);
+    publish_studio();
+}
+
+void IdeLayout::publish_studio() {
+    if (!mcp_identity_) {
+        return;
+    }
+    const std::string project = project_ ? project_->name() : std::string("Untitled");
+    std::string root;
+    if (project_) {
+        std::error_code ignored;
+        const std::filesystem::path absolute = std::filesystem::absolute(project_->root(), ignored);
+        root = utf8_path(std::filesystem::weakly_canonical(absolute, ignored));
+    }
+    StudioEntry entry;
+    {
+        std::lock_guard<std::mutex> guard(mcp_identity_->mu);
+        StudioEntry& current = mcp_identity_->entry;
+        if (mcp_identity_->published && current.project == project && current.root == root) {
+            return;
+        }
+        current.project = project;
+        current.root = root;
+        mcp_identity_->published = true;
+        entry = current;
+    }
+    if (mcp_identity_->dir.empty()) {
+        return;
+    }
+    std::string error;
+    if (!write_studio(mcp_identity_->dir, entry, error)) {
+        runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error,
+                                                     "MCP studio registry: " + error);
+    }
 }
 
 void IdeLayout::mount(jadefx::Scene& scene) {
@@ -1402,6 +1466,9 @@ void IdeLayout::flushFrame() {
 IdeLayout::~IdeLayout() {
     // Before anything its tools reach is torn down.
     alive_.reset();
+    if (mcp_identity_ && !mcp_identity_->dir.empty()) {
+        remove_studio(mcp_identity_->dir, mcp_identity_->entry);
+    }
     mcp_.reset();
     // Window teardown calls the close hook. Drop it first so that hook does not
     // touch docks that are already being destroyed.
@@ -1988,6 +2055,8 @@ std::filesystem::path IdeLayout::dialog_directory() const {
 }
 
 void IdeLayout::update_title() {
+    // Open, New, and Save As all come here, so the registry follows the project.
+    publish_studio();
     if (mainStage_ == nullptr) {
         return;
     }

@@ -58,6 +58,7 @@ set(STUDIO_SOURCES
     src/ide/TextWrap.cpp
     src/ide/McpServer.cpp
     src/ide/McpTools.cpp
+    src/ide/StudioRegistry.cpp
 )
 
 # MACOSX_BUNDLE is ignored on Windows and Linux, where this stays a normal executable.
@@ -321,18 +322,39 @@ if(WIN32)
 endif()
 
 # The MCP server: JSON-RPC by call, the engine tools against a live place,
-# and one round trip over a real loopback socket.
+# round trips over real loopback sockets, the studio registry, and the bridge.
 add_executable(mcp-tests
     tests/McpTest.cpp
+    src/bridge/StudioBridge.cpp
+    src/ide/IdeResources.cpp
     src/ide/McpServer.cpp
     src/ide/McpTools.cpp
     src/ide/PropertySheet.cpp
+    src/ide/StudioRegistry.cpp
 )
 target_include_directories(mcp-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")
 target_link_libraries(mcp-tests PRIVATE engine_core)
 target_compile_features(mcp-tests PRIVATE cxx_std_17)
 if(WIN32)
     target_link_libraries(mcp-tests PRIVATE ws2_32 crypt32)
+endif()
+
+# anarchy-mcp: the MCP server an LLM client runs over stdio. It sends each
+# tool call to one open studio, found through the studio registry.
+add_executable(anarchy-mcp
+    src/bridge/main.cpp
+    src/bridge/StudioBridge.cpp
+    src/ide/IdeResources.cpp
+    src/ide/McpServer.cpp
+    src/ide/McpTools.cpp
+    src/ide/PropertySheet.cpp
+    src/ide/StudioRegistry.cpp
+)
+target_include_directories(anarchy-mcp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")
+target_link_libraries(anarchy-mcp PRIVATE engine_core)
+target_compile_features(anarchy-mcp PRIVATE cxx_std_17)
+if(WIN32)
+    target_link_libraries(anarchy-mcp PRIVATE ws2_32 crypt32)
 endif()
 
 add_executable(engine-tests
@@ -403,6 +425,8 @@ if(MSVC)
     target_compile_options(properties-tests PRIVATE /W4 /utf-8)
 target_compile_options(console-tests PRIVATE /W4 /utf-8)
     target_compile_options(studio-tests PRIVATE /W4 /utf-8)
+    target_compile_options(mcp-tests PRIVATE /W4 /utf-8)
+    target_compile_options(anarchy-mcp PRIVATE /W4 /utf-8)
     foreach(package IN LISTS ENGINE_PACKAGES)
         target_compile_options(${package} PRIVATE /W4 /utf-8)
     endforeach()
@@ -414,6 +438,8 @@ else()
     target_compile_options(properties-tests PRIVATE -Wall -Wextra)
 target_compile_options(console-tests PRIVATE -Wall -Wextra)
     target_compile_options(studio-tests PRIVATE -Wall -Wextra)
+    target_compile_options(mcp-tests PRIVATE -Wall -Wextra)
+    target_compile_options(anarchy-mcp PRIVATE -Wall -Wextra)
     foreach(package IN LISTS ENGINE_PACKAGES)
         target_compile_options(${package} PRIVATE -Wall -Wextra)
     endforeach()

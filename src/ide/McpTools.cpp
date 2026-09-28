@@ -820,6 +820,20 @@ void add_engine_tools(McpServer& server, engine_core::Engine& engine, McpStudio 
                              return out;
                          }});
     }
+
+    if (studio.info) {
+        server.add_tool({"get_studio_info",
+                         "Which studio this is: its project's name and folder, its process id, and its MCP port. "
+                         "Several studios may be open at once; check this before editing when it matters which.",
+                         json_literal(R"({"type":"object","properties":{}})"),
+                         [studio](const JsonValue&) {
+                             JsonValue out = studio.info();
+                             if (studio.session) {
+                                 out.set("session", JsonValue::string(studio.session()));
+                             }
+                             return out;
+                         }});
+    }
 }
 
 }  // namespace ide

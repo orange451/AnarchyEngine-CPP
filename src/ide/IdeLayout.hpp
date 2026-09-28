@@ -98,6 +98,9 @@ public:
     bool has_unsaved_changes();
     // Opens the Preferences window, or leaves the open one be.
     void open_preferences();
+    // Shows a dockable pane: open docks it when no dock holds it. Otherwise its
+    // tab is selected, and a floating window that holds it comes to the front.
+    void reveal_window(IdePane* pane, const std::function<void()>& open = {});
     // Writes the layout to layout.json in the config folder. A close request
     // on the main window does this. Nothing is written without a config folder.
     void save_layout();

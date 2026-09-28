@@ -834,7 +834,7 @@ void IdeLayout::toggle_window(IdePane* pane, const std::function<void()>& open) 
         if (tab->isSelected()) {
             dock->tabs()->close(tab);
         } else {
-            dock->tabs()->select(tab);
+            reveal_window(pane);
         }
         return;
     }
@@ -1598,6 +1598,20 @@ IdeDock* IdeLayout::dockForPane(const jadefx::TabPane* pane) const {
     return nullptr;
 }
 
+void IdeLayout::reveal_window(IdePane* pane, const std::function<void()>& open) {
+    IdeDock* dock = dockContaining(pane);
+    if (dock == nullptr) {
+        if (open) {
+            open();
+        }
+        return;
+    }
+    dock->select(pane);
+    if (jadefx::UtilityWindow* window = utilityOf(dock)) {
+        window->toFront();
+    }
+}
+
 IdeDock* IdeLayout::dockContaining(const IdePane* pane) const {
     if (pane == nullptr) {
         return nullptr;
@@ -2299,8 +2313,8 @@ void IdeLayout::open_search(bool replace, jadefx::Scene* scene) {
         }
     }
     search_pane();
-    if (IdeDock* dock = dockContaining(search_.get())) {
-        dock->select(search_.get());
+    if (dockContaining(search_.get()) != nullptr) {
+        reveal_window(search_.get());
     } else {
         // Find in Scripts opens the pane with replace hidden.
         if (!replace) {

@@ -1071,3 +1071,189 @@ TEST_CASE("G7 a save during play checks the place captured at Test", "[G7][guard
     REQUIRE(conflicts[0].path == path);
     rig.game.stop_simulation();
 }
+
+namespace {
+
+// src/ files whose own name carries guid: a leaf's .json, .meta.json, or .luau.
+std::vector<std::string> leaf_files_of(const fs::path& root, const std::string& guid) {
+    std::vector<std::string> out;
+    for (const auto& [path, bytes] : tree_files(root)) {
+        if (path.substr(path.rfind('/') + 1).find("." + guid + ".") != std::string::npos) {
+            out.push_back(path);
+        }
+    }
+    return out;
+}
+
+// A folder instance Box holding Keep, and a leaf beside it.
+struct BoxAndLeaf {
+    InstanceId box = 0;
+    InstanceId keep = 0;
+    InstanceId leaf = 0;
+
+    BoxAndLeaf(DataModel& game, const char* leaf_name) {
+        box = add_part(game, 0, "Box").id();
+        keep = add_part(game, box, "Keep").id();
+        leaf = add_part(game, 0, leaf_name).id();
+    }
+
+    // Where a file for the leaf lands when it is moved into Box.
+    fs::path moved(const fs::path& root, const DataModel& game) const {
+        return root / ("src/Box." + game.guid(box)) /
+               (engine_core::sanitize_file_name(game.name(leaf)) + "." + game.guid(leaf) + ".json");
+    }
+};
+
+}  // namespace
+
+TEST_CASE("G8 a file deleted outside stays deleted when the studio left it alone", "[G8][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& b = add_part(game, 0, "B");
+    project.save();
+    fs::remove(dir.path / leaf(game, a.id()));
+
+    b.set_color(rgb(0.f, 0.f, 1.f));
+    REQUIRE(save_conflicts(project).empty());
+    REQUIRE(project.last_save().written == std::vector<std::string>{leaf(game, b.id())});
+    REQUIRE_FALSE(fs::exists(dir.path / leaf(game, a.id())));
+    project.save();
+    REQUIRE(project.last_save().written.empty());
+    REQUIRE_FALSE(fs::exists(dir.path / leaf(game, a.id())));
+}
+
+TEST_CASE("G9 a leaf moved outside keeps one file when the studio left it alone", "[G9][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const BoxAndLeaf ids(game, "Loose");
+    project.save();
+    const std::string guid = game.guid(ids.leaf);
+    fs::rename(dir.path / leaf(game, ids.leaf), ids.moved(dir.path, game));
+
+    game.game_object(ids.keep)->set_color(rgb(0.f, 1.f, 0.f));
+    REQUIRE(save_conflicts(project).empty());
+    REQUIRE(leaf_files_of(dir.path, guid).size() == 1);
+    Project loaded = Project::load(dir.path);
+    DataModel& again = loaded.datamodel();
+    REQUIRE(again.guid(again.parent(by_guid(again, guid))) == game.guid(ids.box));
+}
+
+TEST_CASE("G10 a file deleted outside under a studio edit stops the save", "[G10][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    project.save();
+    const std::string path = leaf(game, a.id());
+    fs::remove(dir.path / path);
+
+    a.set_color(rgb(1.f, 0.f, 0.f));
+    const auto before = tree_files(dir.path);
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    REQUIRE(conflicts.size() == 1);
+    REQUIRE(conflicts[0].path == path);
+    REQUIRE(conflicts[0].kind == engine_core::SaveConflict::Kind::DeletedOutside);
+    REQUIRE(tree_files(dir.path) == before);
+}
+
+TEST_CASE("G11 a file moved outside under a studio edit stops the save", "[G11][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    // A dot in the Name: the GUID is still the last part of the file name.
+    const BoxAndLeaf ids(game, "Loose.v2");
+    project.save();
+    const std::string path = leaf(game, ids.leaf);
+    fs::rename(dir.path / path, ids.moved(dir.path, game));
+
+    game.game_object(ids.leaf)->set_color(rgb(1.f, 0.f, 0.f));
+    const auto before = tree_files(dir.path);
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    REQUIRE(conflicts.size() == 1);
+    REQUIRE(conflicts[0].guid == game.guid(ids.leaf));
+    REQUIRE(conflicts[0].path == path);
+    REQUIRE(conflicts[0].kind == engine_core::SaveConflict::Kind::MovedOutside);
+    REQUIRE(tree_files(dir.path) == before);
+}
+
+TEST_CASE("G12 a file deleted on both sides saves quietly", "[G12][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, 0, "A").id();
+    project.save();
+    fs::remove(dir.path / leaf(game, a));
+
+    game.destroy(a);
+    REQUIRE(save_conflicts(project).empty());
+    REQUIRE(project.last_save().removed.empty());
+}
+
+TEST_CASE("G13 a studio delete of a file moved outside stops the save", "[G13][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const BoxAndLeaf ids(game, "Loose");
+    project.save();
+    const std::string path = leaf(game, ids.leaf);
+    const fs::path moved = ids.moved(dir.path, game);
+    fs::rename(dir.path / path, moved);
+
+    game.destroy(ids.leaf);
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    REQUIRE(conflicts.size() == 1);
+    REQUIRE(conflicts[0].path == path);
+    REQUIRE(conflicts[0].kind == engine_core::SaveConflict::Kind::MovedOutside);
+    REQUIRE(fs::exists(moved));
+}
+
+TEST_CASE("G14 a new child under a folder deleted outside stops the save", "[G14][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const BoxAndLeaf ids(game, "Loose");
+    project.save();
+    const std::string box_dir = "src/Box." + game.guid(ids.box);
+    fs::remove_all(dir.path / box_dir);
+
+    add_part(game, ids.box, "New");
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    bool box_listed = false;
+    for (const engine_core::SaveConflict& conflict : conflicts) {
+        box_listed = box_listed || (conflict.guid == game.guid(ids.box) && conflict.path == box_dir + "/init.json" &&
+                                    conflict.kind == engine_core::SaveConflict::Kind::DeletedOutside);
+    }
+    REQUIRE(box_listed);
+    REQUIRE_FALSE(fs::exists(dir.path / box_dir));
+}
+
+TEST_CASE("G15 junk that mentions a GUID does not make a deleted file look moved", "[G15][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    project.save();
+    const std::string path = leaf(game, a.id());
+    const std::string guid = game.guid(a.id());
+    const std::string bytes = read_file(dir.path / path);
+    write_file(dir.path / "src" / ".DS_Store", "junk");
+    write_file(dir.path / "src" / ".backup" / ("A." + guid + ".json"), bytes);
+    write_file(dir.path / "src" / ("A." + guid + " copy.json"), bytes);
+    fs::remove(dir.path / path);
+
+    a.set_color(rgb(1.f, 0.f, 0.f));
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    REQUIRE(conflicts.size() == 1);
+    REQUIRE(conflicts[0].kind == engine_core::SaveConflict::Kind::DeletedOutside);
+}

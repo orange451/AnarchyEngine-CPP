@@ -149,9 +149,14 @@ private:
     void bind(DataModel* game, std::unique_ptr<DataModel> owned);
     void write_skeleton(const std::filesystem::path& root) const;
     void save_tree(bool full, SaveMode mode = SaveMode::Guarded);
-    // The files next would write over or delete that changed on disk since the
-    // last load or save, sorted by path.
-    std::vector<SaveConflict> outside_changes(const std::map<std::string, Files>& next) const;
+    // The files next would write over, delete, or put back that changed on disk
+    // since the last load or save, sorted by path. A GUID whose files are gone
+    // while the studio left it alone goes in left_gone instead: the save leaves
+    // it gone. claims is every src/ file by the GUID in its name.
+    std::vector<SaveConflict> outside_changes(const std::vector<AuthoredNode>& tree,
+                                              const std::map<std::string, Files>& next,
+                                              const std::map<std::string, std::vector<std::string>>& claims,
+                                              std::set<std::string>& left_gone) const;
     // The files for each GUID. A node without properties takes its bytes from cache.
     static std::map<std::string, Files> plan_files(const std::vector<AuthoredNode>& tree, const std::string& src,
                                                    const std::unordered_map<std::string, Files>& cache);

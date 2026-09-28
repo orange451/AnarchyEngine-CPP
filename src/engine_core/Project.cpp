@@ -521,6 +521,52 @@ private:
     std::unordered_map<std::string, std::string> seen_;
 };
 
+// Every file under src that carries a GUID in its name, by GUID: <Name>.<guid>.json,
+// .meta.json, and .luau, and a folder's init files under <Name>.<guid>/. Names
+// that fit none of these, dotfiles, dot folders, and .tmp files are skipped, as
+// a load skips or reports them.
+std::map<std::string, std::vector<std::string>> guid_claims(const fs::path& root, const std::string& src) {
+    std::map<std::string, std::vector<std::string>> claims;
+    const fs::path top = disk_path(root, src);
+    std::error_code error;
+    for (fs::recursive_directory_iterator it(top, error), end; !error && it != end; it.increment(error)) {
+        const std::string name = utf8(it->path().filename());
+        std::error_code kind;
+        if (it->is_directory(kind)) {
+            if (!name.empty() && name[0] == '.') {
+                it.disable_recursion_pending();
+            }
+            continue;
+        }
+        if (name.empty() || name[0] == '.' || ends_with(name, ".tmp") || !it->is_regular_file(kind)) {
+            continue;
+        }
+        std::string guid;
+        if (name == "init.json" || name == "init.meta.json" || name == "init.luau") {
+            // The root's init.json names no GUID; its GUID is inside.
+            if (it->path().parent_path() == top || !split_stem(utf8(it->path().parent_path().filename()), guid)) {
+                continue;
+            }
+        } else {
+            std::string stem;
+            if (ends_with(name, ".meta.json")) {
+                stem = name.substr(0, name.size() - 10);
+            } else if (ends_with(name, ".luau")) {
+                stem = name.substr(0, name.size() - 5);
+            } else if (ends_with(name, ".json")) {
+                stem = name.substr(0, name.size() - 5);
+            } else {
+                continue;
+            }
+            if (!split_stem(stem, guid)) {
+                continue;
+            }
+        }
+        claims[guid].push_back(it->path().lexically_relative(root).generic_u8string());
+    }
+    return claims;
+}
+
 void apply_properties(DataModel& object, const PlanNode& node) {
     DataModel& world = object;
     for (const JsonValue::Member& member : node.properties) {
@@ -980,7 +1026,25 @@ void Project::reset_place(DataModel& game) {
     rebuild.finish();
 }
 
-std::vector<SaveConflict> Project::outside_changes(const std::map<std::string, Files>& next) const {
+std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNode>& tree,
+                                                   const std::map<std::string, Files>& next,
+                                                   const std::map<std::string, std::vector<std::string>>& claims,
+                                                   std::set<std::string>& left_gone) const {
+    // A parent counts as changed when a child's file lands in its folder anew,
+    // a new child or one the studio moved or renamed: without the parent's own
+    // file, that folder would not load.
+    std::set<std::string> receives;
+    for (const AuthoredNode& node : tree) {
+        for (std::size_t child : node.children) {
+            const std::string& id = tree[child].guid;
+            const auto base = files_.find(id);
+            if (base == files_.end() || base->second.props_path != next.at(id).props_path) {
+                receives.insert(node.guid);
+                break;
+            }
+        }
+    }
+
     std::vector<SaveConflict> conflicts;
     std::error_code error;
     for (const auto& [guid, base] : files_) {
@@ -1000,12 +1064,38 @@ std::vector<SaveConflict> Project::outside_changes(const std::map<std::string, F
                            removed || !planned->second.has_source ||
                                planned->second.source_bytes != base.source_bytes});
         }
+        const bool touched = removed || receives.count(guid) != 0 || planned->second.props_path != base.props_path ||
+                             planned->second.source_path != base.source_path ||
+                             planned->second.has_source != base.has_source ||
+                             std::any_of(own.begin(), own.end(), [](const Own& file) { return file.rewritten; });
+
+        const std::string* gone = nullptr;
         for (const Own& file : own) {
-            const fs::path target = disk_path(root_, *file.path);
-            if (!file.rewritten || !fs::exists(target, error)) {
+            if (gone == nullptr && !fs::exists(disk_path(root_, *file.path), error)) {
+                gone = file.path;
+            }
+        }
+        if (gone != nullptr) {
+            if (!touched) {
+                // The studio left it alone, so the save leaves it gone.
+                left_gone.insert(guid);
                 continue;
             }
-            if (read_file(target) != *file.bytes) {
+            bool elsewhere = false;
+            if (const auto claimed = claims.find(guid); claimed != claims.end()) {
+                for (const std::string& path : claimed->second) {
+                    elsewhere = elsewhere || (path != base.props_path && path != base.source_path);
+                }
+            }
+            if (removed && !elsewhere) {
+                continue;  // Deleted on both sides.
+            }
+            conflicts.push_back(
+                {guid, *gone, elsewhere ? SaveConflict::Kind::MovedOutside : SaveConflict::Kind::DeletedOutside});
+            continue;
+        }
+        for (const Own& file : own) {
+            if (file.rewritten && read_file(disk_path(root_, *file.path)) != *file.bytes) {
                 conflicts.push_back({guid, *file.path, SaveConflict::Kind::EditedOutside});
                 break;
             }
@@ -1061,11 +1151,11 @@ void Project::save_tree(bool full, SaveMode mode) {
 
     // A file changed on disk since the last load or save stops a guarded save
     // here, before anything is written.
-    if (mode == SaveMode::Guarded) {
-        std::vector<SaveConflict> conflicts = outside_changes(next);
-        if (!conflicts.empty()) {
-            throw ProjectConflict(std::move(conflicts));
-        }
+    const std::map<std::string, std::vector<std::string>> claims = guid_claims(root_, layout.src);
+    std::set<std::string> left_gone;
+    std::vector<SaveConflict> conflicts = outside_changes(tree, next, claims, left_gone);
+    if (!conflicts.empty() && mode == SaveMode::Guarded) {
+        throw ProjectConflict(std::move(conflicts));
     }
 
     SaveReport report;
@@ -1094,6 +1184,10 @@ void Project::save_tree(bool full, SaveMode mode) {
         }
     };
     for (const auto& [guid, files] : next) {
+        if (left_gone.count(guid) != 0) {
+            // Gone from disk while the studio left it alone: the save leaves it gone.
+            continue;
+        }
         const auto old = files_.find(guid);
         const bool had = old != files_.end();
         place(had ? old->second.props_path : std::string(), had ? old->second.props_bytes : std::string(), had,

@@ -235,6 +235,8 @@ private:
 
     std::filesystem::path root_;
     std::string name_;
+    // The tree folder project.json named at the load; create and Save As write "src".
+    std::string src_ = "src";
     std::unique_ptr<DataModel> owned_;
     DataModel* game_ = nullptr;
     std::unordered_map<std::string, Files> files_;

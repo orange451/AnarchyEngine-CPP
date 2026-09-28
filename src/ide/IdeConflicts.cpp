@@ -78,13 +78,6 @@ std::shared_ptr<jadefx::Label> value_label(const std::string& text) {
     return label;
 }
 
-std::shared_ptr<jadefx::Pane> spacer() {
-    auto pane = jadefx::make<jadefx::Pane>();
-    pane->setStyle("width: 100%;");
-    pane->setMouseTransparent(true);
-    return pane;
-}
-
 std::string counted(std::size_t count, const char* one, const char* many) {
     return std::to_string(count) + " " + (count == 1 ? one : many);
 }
@@ -156,14 +149,16 @@ IdeConflicts::IdeConflicts(ConflictsHost host) : IdePane("Conflicts", true), hos
     all_disk_ = jadefx::make<jadefx::Button>("All Disk");
     all_disk_->getClassList().add("conflicts-all-disk");
     all_disk_->setOnAction([this](jadefx::ActionEvent&) { chooseAll(true); });
-    auto header = jadefx::make<jadefx::HBox>();
+    // Two lines, so a narrow side dock still shows both buttons.
+    auto picks = jadefx::make<jadefx::HBox>();
+    picks->setSpacing(6);
+    picks->getChildren().add(all_ide_);
+    picks->getChildren().add(all_disk_);
+    auto header = jadefx::make<jadefx::VBox>();
     header->getClassList().add("conflicts-header");
-    header->setAlignment(jadefx::Pos::CenterLeft);
     header->setStyle("width: 100%;");
     header->getChildren().add(summary_);
-    header->getChildren().add(spacer());
-    header->getChildren().add(all_ide_);
-    header->getChildren().add(all_disk_);
+    header->getChildren().add(picks);
     problem_ = text_label("", "conflicts-problem");
     top_ = jadefx::make<jadefx::VBox>();
     top_->setStyle("width: 100%;");
@@ -190,14 +185,15 @@ IdeConflicts::IdeConflicts(ConflictsHost host) : IdePane("Conflicts", true), hos
     apply_ = jadefx::make<jadefx::Button>("Apply");
     apply_->getClassList().add("conflicts-apply");
     apply_->setOnAction([this](jadefx::ActionEvent&) { apply(); });
-    auto footer = jadefx::make<jadefx::HBox>();
+    auto buttons = jadefx::make<jadefx::HBox>();
+    buttons->setSpacing(6);
+    buttons->getChildren().add(refresh_);
+    buttons->getChildren().add(apply_);
+    auto footer = jadefx::make<jadefx::VBox>();
     footer->getClassList().add("conflicts-footer");
-    footer->setAlignment(jadefx::Pos::CenterLeft);
     footer->setStyle("width: 100%;");
     footer->getChildren().add(chosen_);
-    footer->getChildren().add(spacer());
-    footer->getChildren().add(refresh_);
-    footer->getChildren().add(apply_);
+    footer->getChildren().add(buttons);
 
     auto column = jadefx::make<jadefx::BorderPane>();
     Fill(*column);
@@ -352,16 +348,7 @@ void IdeConflicts::rebuild() {
             auto box = jadefx::make<jadefx::HBox>();
             box->setSpacing(6);
             box->setAlignment(jadefx::Pos::CenterLeft);
-            box->setStyle("width: 100%;");
-            const std::string klass = host_.class_of ? host_.class_of(row.guid) : std::string();
-            if (std::shared_ptr<jadefx::ImageView> icon = klass.empty() ? nullptr : icon_view(klass)) {
-                icon->setPrefSize(16, 16);
-                box->getChildren().add(icon);
-            }
-            box->getChildren().add(text_label(row.name.empty() ? row.path : row.name, nullptr));
-            box->getChildren().add(text_label(row.where, "conflicts-path"));
-            box->getChildren().add(text_label(std::to_string(counts[row.guid]), "conflicts-badge"));
-            box->getChildren().add(spacer());
+            // The toggle first, so a narrow dock never pushes it out of sight.
             const std::string guid = row.guid;
             auto toggle = jadefx::make<SideToggle>([this, guid](std::optional<bool> side) {
                 for (std::size_t at = 0; at < rows_.size(); ++at) {
@@ -373,6 +360,14 @@ void IdeConflicts::rebuild() {
             });
             box->getChildren().add(toggle);
             group_toggles_[guid] = toggle;
+            const std::string klass = host_.class_of ? host_.class_of(row.guid) : std::string();
+            if (std::shared_ptr<jadefx::ImageView> icon = klass.empty() ? nullptr : icon_view(klass)) {
+                icon->setPrefSize(16, 16);
+                box->getChildren().add(icon);
+            }
+            box->getChildren().add(text_label(row.name.empty() ? row.path : row.name, nullptr));
+            box->getChildren().add(text_label(row.where, "conflicts-path"));
+            box->getChildren().add(text_label(std::to_string(counts[row.guid]), "conflicts-badge"));
             auto group = jadefx::make<jadefx::TreeItem>("", box);
             group->setExpanded(true);
             items_[group.get()] = guid;
@@ -382,7 +377,12 @@ void IdeConflicts::rebuild() {
         auto box = jadefx::make<jadefx::HBox>();
         box->setSpacing(6);
         box->setAlignment(jadefx::Pos::CenterLeft);
-        box->setStyle("width: 100%;");
+        auto toggle = jadefx::make<SideToggle>([this, index](std::optional<bool> side) {
+            set_pick(index, side);
+            sync();
+        });
+        box->getChildren().add(toggle);
+        row_toggles_[index] = toggle;
         if (row.key.empty()) {
             box->getChildren().add(text_label(whole_instance(row), nullptr));
         } else {
@@ -392,13 +392,6 @@ void IdeConflicts::rebuild() {
             box->getChildren().add(text_label("Disk", "conflicts-side"));
             box->getChildren().add(value_label(row.disk));
         }
-        box->getChildren().add(spacer());
-        auto toggle = jadefx::make<SideToggle>([this, index](std::optional<bool> side) {
-            set_pick(index, side);
-            sync();
-        });
-        box->getChildren().add(toggle);
-        row_toggles_[index] = toggle;
         auto item = jadefx::make<jadefx::TreeItem>("", box);
         items_[item.get()] = row.guid;
         group_of[row.guid]->getChildren().add(std::move(item));
@@ -433,7 +426,12 @@ void IdeConflicts::sync() {
                                                   "back to it.")
                                     : counted(rows_.size(), "conflict", "conflicts") + " in " +
                                           counted(instances, "instance", "instances"));
-    chosen_->setText(rows_.empty() ? std::string() : std::to_string(chosen) + " of " + std::to_string(rows_.size()) + " chosen");
+    if (!apply_enabled_ && !rows_.empty()) {
+        chosen_->setText("Stop the test to apply");
+    } else {
+        chosen_->setText(rows_.empty() ? std::string()
+                                       : std::to_string(chosen) + " of " + std::to_string(rows_.size()) + " chosen");
+    }
     all_ide_->setDisable(rows_.empty());
     all_disk_->setDisable(rows_.empty());
     apply_->setDisable(chosen == 0 || !apply_enabled_);

@@ -2432,3 +2432,15 @@ TEST_CASE("F6 keeping a folder deleted on disk keeps its untouched children", "[
     Project loaded = Project::load(dir.path);
     REQUIRE(loaded.datamodel().find_guid(other_guid).has_value());
 }
+
+TEST_CASE("U5 unsaved does not read project.json, so one that does not parse is no error", "[U5][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    add_part(project.datamodel(), 0, "A");
+    project.save();
+    write_file(dir.path / "project.json", "<<<<<<< HEAD\n{");
+    bool unsaved = true;
+    REQUIRE_NOTHROW(unsaved = project.unsaved());
+    REQUIRE_FALSE(unsaved);
+}

@@ -1094,6 +1094,7 @@ Project Project::load(const fs::path& root) {
     project.root_ = root;
     Layout layout;
     read_project_json(root, project.name_, layout);
+    project.src_ = layout.src;
     const std::vector<PlanNode> plan = PlanReader(root, layout).read();
     std::vector<InstanceId> ids;
     {
@@ -1118,6 +1119,7 @@ Project Project::load(const fs::path& root, DataModel& into) {
     project.root_ = root;
     Layout layout;
     read_project_json(root, project.name_, layout);
+    project.src_ = layout.src;
     const std::vector<PlanNode> plan = PlanReader(root, layout).read();
     {
         // A class-level error (a bad Color) must not leave `into` half rebuilt.
@@ -1166,6 +1168,7 @@ void Project::save_as(const fs::path& root) {
         }
     }
     root_ = root;
+    src_ = Layout{}.src;
     files_.clear();
     save_tree(true);
 }
@@ -1254,15 +1257,9 @@ std::uint64_t Project::place_fingerprint(const DataModel& game) {
 
 bool Project::unsaved() const {
     const std::vector<AuthoredNode> tree = game_->authored_tree(nullptr);
-    Layout layout;
-    std::error_code error;
-    if (fs::is_regular_file(root_ / "project.json", error)) {
-        std::string ignored;
-        read_project_json(root_, ignored, layout);
-    }
     std::map<std::string, Files> next;
     try {
-        next = plan_files(tree, layout.src, files_);
+        next = plan_files(tree, src_, files_);
     } catch (const ProjectError&) {
         return true;
     }

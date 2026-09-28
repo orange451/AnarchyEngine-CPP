@@ -293,6 +293,75 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     const auto* cancel = scene.getElementById("save-conflict-cancel");
     expect(cancel == nullptr, "and closes the question");
 
+    // In the side dock where it opens, each row's toggle and the header's buttons fit the pane.
+    scene.layout(1280, 800, 5.0);
+    scene.layout(1280, 800, 5.05);
+    if (pane != nullptr) {
+        const double right = pane->getAbsoluteX() + pane->getWidth() + 0.5;
+        bool fits = !pane->getElementsByClassName("conflict-disk").empty();
+        for (jadefx::Node* button : pane->getElementsByClassName("conflict-disk")) {
+            fits = fits && button->getAbsoluteX() + button->getWidth() <= right;
+        }
+        expect(fits, "every row's Disk toggle is inside the pane");
+        const std::vector<jadefx::Node*> all_disk = pane->getElementsByClassName("conflicts-all-disk");
+        expect(!all_disk.empty() && all_disk.front()->getAbsoluteX() + all_disk.front()->getWidth() <= right,
+               "and so is All Disk");
+    }
+
+    // During a test, Apply waits for Stop, and Save does not point to the window.
+    auto key = [&scene](int code, int mods) {
+        scene.noteKey(code, true, false, mods);
+        scene.noteKey(code, false, false, 0);
+    };
+    key(jadefx::Key::F5, 0);
+    if (pane != nullptr) {
+        const std::vector<jadefx::Node*> apply = pane->getElementsByClassName("conflicts-apply");
+        pane->chooseAll(true);
+        expect(!apply.empty() && apply.front()->isDisabled(), "Apply is off during a test");
+        expect(pane->chosenText() == "Stop the test to apply", "and says why");
+    }
+    key(jadefx::Key::S, jadefx::Key::ModControl);
+    expect(scene.getElementById("save-conflict-cancel") != nullptr, "Save during a test still asks");
+    expect(scene.getElementById("save-conflict-show") == nullptr, "without pointing to the Conflicts window");
+    expect(scene.getElementById("save-conflict-overwrite") == nullptr, "or offering to overwrite");
+    if (auto* close = dynamic_cast<jadefx::ButtonBase*>(scene.getElementById("save-conflict-cancel"))) {
+        close->fire();
+    }
+    key(jadefx::Key::F5, jadefx::Key::ModShift);
+    if (pane != nullptr) {
+        const std::vector<jadefx::Node*> apply = pane->getElementsByClassName("conflicts-apply");
+        expect(!apply.empty() && !apply.front()->isDisabled(), "after Stop, Apply is back");
+    }
+
+    // A project.json that does not parse, as in a merge, is no crash.
+    std::string project_json;
+    {
+        std::ifstream in(root / "project.json", std::ios::binary);
+        project_json.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    }
+    {
+        std::ofstream out(root / "project.json", std::ios::binary | std::ios::trunc);
+        out << "<<<<<<< HEAD\n{";
+    }
+    layout.check_disk();
+    paint(0.5f, 0.5f, 0.5f);
+    layout.flushFrame();
+    expect(layout.has_unsaved_changes(), "the place still says it has changes");
+    {
+        std::ofstream out(root / "project.json", std::ios::binary | std::ios::trunc);
+        out << project_json;
+    }
+    layout.check_disk();
+
+    // File > New starts with no conflicts.
+    expect(count_shown(), "a conflict is still listed");
+    key(jadefx::Key::N, jadefx::Key::ModControl);
+    if (auto* discard = dynamic_cast<jadefx::ButtonBase*>(scene.getElementById("unsaved-discard"))) {
+        discard->fire();
+    }
+    expect(!count_shown(), "a new place shows no conflict count");
+    expect(pane == nullptr || pane->conflicts().empty(), "and lists no conflicts");
+
     std::error_code error;
     fs::remove_all(folder, error);
     return failures;

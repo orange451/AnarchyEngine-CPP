@@ -46,7 +46,7 @@ public:
     const std::vector<engine_core::SaveConflict>& conflicts() const { return rows_; }
     // Why the list could not be checked, over the list. Empty hides it.
     void setProblem(const std::string& text);
-    // Apply is off during a test.
+    // Apply is off during a test, and the footer says to stop it.
     void setApplyEnabled(bool enabled);
 
     // A row's pick: none, IDE (false), or Disk (true).

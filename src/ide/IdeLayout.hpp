@@ -150,11 +150,19 @@ private:
                            const std::vector<engine_core::SaveConflict>* overwrite = nullptr);
     // Lists the files a save found changed on disk. Overwrite saves over those
     // and runs then; Cancel writes nothing.
-    // checked: the rows came from a check, and Overwrite All settles each for the
-    // studio's side before saving. Otherwise they are the save's own, and it
-    // saves over exactly those.
+    // Where a save gate's rows came from, which sets what it offers.
+    enum class GateRows {
+        // A check: Show Conflicts, and Overwrite All settles each for the studio's side.
+        Checked,
+        // The save's own guard, with the check unable to read src/: Overwrite All saves over exactly these.
+        Guarded,
+        // The guard during a test, when changes on disk wait for Stop: only Cancel.
+        DuringTest,
+    };
     void confirm_overwrite(const std::vector<engine_core::SaveConflict>& conflicts, std::function<void()> then,
-                           bool checked);
+                           GateRows from);
+    // A new place, or another project: no conflicts from the last one.
+    void forget_conflicts();
     // Runs proceed now when nothing is unsaved. Otherwise asks Save, Don't
     // Save, or Cancel; Save runs proceed only once the save succeeded.
     void confirm_discard(const std::string& question, std::function<void()> proceed);

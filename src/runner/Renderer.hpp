@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ViewCapture.hpp"
+
 namespace runner {
 
 // One triangle in the pane. x, y, and z are its position in view space.
@@ -25,6 +27,11 @@ public:
     // triangles may be null when count is 0. The pane is still cleared.
     void draw(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
               const TriangleDraw* triangles, int count);
+    // Reads back what draw just drew for the same pane, top row first. Only
+    // the part inside the framebuffer and the current scissor. False when
+    // there is nothing to read.
+    bool read(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
+              ViewPixels& out) const;
     void shutdown();
 
 private:

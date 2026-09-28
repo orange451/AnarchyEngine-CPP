@@ -237,11 +237,30 @@ JsonValue StudioBridge::forward(const StudioEntry& studio, const std::string& to
     if (failed != nullptr && failed->as_bool()) {
         throw std::runtime_error(text);
     }
-    if (const JsonValue* structured = result->find("structuredContent")) {
-        return *structured;
-    }
     JsonValue value;
-    return engine_core::parse_json(text, value, error) ? value : JsonValue::string(text);
+    if (const JsonValue* structured = result->find("structuredContent")) {
+        value = *structured;
+    } else if (!engine_core::parse_json(text, value, error)) {
+        return JsonValue::string(text);
+    }
+    // An image rides beside the text. Put it back where this side's server looks for it.
+    if (content == nullptr || !value.is_object()) {
+        return value;
+    }
+    for (const JsonValue& item : content->items()) {
+        const JsonValue* type = item.find("type");
+        const JsonValue* data = item.find("data");
+        const JsonValue* mime = item.find("mimeType");
+        if (type != nullptr && type->is_string() && type->as_string() == "image" && data != nullptr &&
+            mime != nullptr) {
+            JsonValue image = JsonValue::object();
+            image.set("data", *data);
+            image.set("mimeType", *mime);
+            value.set(ide::kImageMember, std::move(image));
+            break;
+        }
+    }
+    return value;
 }
 
 std::vector<StudioEntry> StudioBridge::matching(const std::vector<StudioEntry>& studios, const std::string& query) const {

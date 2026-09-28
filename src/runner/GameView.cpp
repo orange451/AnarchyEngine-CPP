@@ -49,6 +49,12 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
     refreshTriangles();
 }
 
+void GameView::requestCapture(std::function<void(ViewPixels)> done) {
+    if (done) {
+        captures_.push_back(std::move(done));
+    }
+}
+
 void GameView::notePaint() {
     const auto now = std::chrono::steady_clock::now();
     if (!paintWindowOpen_) {
@@ -142,6 +148,17 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
         }
         renderer_.draw(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(), scene->getHeight(),
                        draws.data(), static_cast<int>(draws.size()));
+        // Read before the children paint, so the FPS label is not in the picture.
+        if (!captures_.empty()) {
+            ViewPixels pixels;
+            renderer_.read(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(),
+                           scene->getHeight(), pixels);
+            std::vector<std::function<void(ViewPixels)>> waiting;
+            waiting.swap(captures_);
+            for (const auto& done : waiting) {
+                done(pixels);
+            }
+        }
     }
     // Painted after the clear, so the label stays on top of the viewport.
     Node::renderChildren(renderer, opacity);

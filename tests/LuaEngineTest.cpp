@@ -342,6 +342,7 @@ int RunScriptMarksTests();
 int RunScriptPairsTests();
 int RunTextSearchTests();
 int RunTextWrapTests();
+int RunViewCaptureTests();
 
 int RunColorLiteralsTests();
 
@@ -364,6 +365,7 @@ int main() {
         gFailures += RunScriptPairsTests();
         gFailures += RunTextSearchTests();
         gFailures += RunTextWrapTests();
+        gFailures += RunViewCaptureTests();
         gFailures += RunColorLiteralsTests();
     } catch (const std::exception& ex) {
         std::fprintf(stderr, "FAIL exception: %s\n", ex.what());

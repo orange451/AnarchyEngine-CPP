@@ -74,6 +74,12 @@ using GLsizeiptr = std::ptrdiff_t;
 #ifdef GL_DEPTH_BUFFER_BIT
 #undef GL_DEPTH_BUFFER_BIT
 #endif
+#ifdef GL_RGBA
+#undef GL_RGBA
+#endif
+#ifdef GL_UNSIGNED_BYTE
+#undef GL_UNSIGNED_BYTE
+#endif
 constexpr GLboolean GL_FALSE = 0;
 constexpr GLboolean GL_TRUE = 1;
 constexpr GLenum GL_NO_ERROR = 0;
@@ -94,6 +100,8 @@ constexpr GLenum GL_DEPTH_TEST = 0x0B71;
 constexpr GLbitfield GL_DEPTH_BUFFER_BIT = 0x00000100;
 constexpr GLenum GL_VIEWPORT = 0x0BA2;
 constexpr GLenum GL_SCISSOR_BOX = 0x0C10;
+constexpr GLenum GL_RGBA = 0x1908;
+constexpr GLenum GL_UNSIGNED_BYTE = 0x1401;
 
 // Names are prefixed so they do not collide with libGL's exported functions.
 extern const GLubyte* (*rt_glGetString)(GLenum name);
@@ -132,6 +140,7 @@ extern void (*rt_glScissor)(GLint x, GLint y, GLsizei width, GLsizei height);
 extern GLint (*rt_glGetUniformLocation)(GLuint program, const GLchar* name);
 extern void (*rt_glUniform1f)(GLint location, GLfloat v0);
 extern void (*rt_glUniform3f)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
+extern void (*rt_glReadPixels)(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
 
 using GlGetProcAddress = void* (*)(const char* name);
 
@@ -176,3 +185,4 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glGetUniformLocation ::runner::rt_glGetUniformLocation
 #define glUniform1f ::runner::rt_glUniform1f
 #define glUniform3f ::runner::rt_glUniform3f
+#define glReadPixels ::runner::rt_glReadPixels

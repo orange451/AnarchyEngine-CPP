@@ -2,6 +2,7 @@
 
 #include "httplib.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <exception>
 #include <stdexcept>
@@ -24,7 +25,9 @@ constexpr const char* kDefaultInstructions =
     "Anarchy Engine studio. The place is a tree of instances under the root, `game`. "
     "Name an instance by its id, or by its path of Names from the root such as \"Folder.Part\". "
     "Edits go through the studio's undo history, as if made by hand. "
-    "run_lua runs Luau against the live place, like the studio's command line.";
+    "run_lua runs Luau against the live place, like the studio's command line. "
+    "The studio checks Luau itself: write_script and edit_script return the problems it finds, and "
+    "get_diagnostics reports them for any script.";
 
 // JSON-RPC error codes.
 constexpr int kParseError = -32700;
@@ -136,6 +139,27 @@ JsonValue TextContent(std::string text) {
     return JsonValue::array({std::move(item)});
 }
 
+// value as MCP content: its JSON as text, then the image it holds under
+// kImageMember, if any, as image content. The image leaves value.
+JsonValue ResultContent(JsonValue& value) {
+    JsonValue image;
+    if (const JsonValue* held = value.find(kImageMember)) {
+        image = *held;
+        value.erase(kImageMember);
+    }
+    JsonValue content = TextContent(compact_json(value));
+    const JsonValue* data = image.find("data");
+    const JsonValue* mime = image.find("mimeType");
+    if (data != nullptr && data->is_string() && mime != nullptr && mime->is_string()) {
+        JsonValue item = JsonValue::object();
+        item.set("type", JsonValue::string("image"));
+        item.set("data", *data);
+        item.set("mimeType", *mime);
+        content.items().push_back(std::move(item));
+    }
+    return content;
+}
+
 std::string PickVersion(const JsonValue& params) {
     if (const JsonValue* asked = params.find("protocolVersion")) {
         for (const char* version : kVersions) {
@@ -184,6 +208,34 @@ JsonValue json_literal(const char* text) {
 }
 
 const char* default_instructions() { return kDefaultInstructions; }
+
+std::string base64_encode(std::string_view bytes) {
+    static constexpr char kDigits[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve((bytes.size() + 2) / 3 * 4);
+    std::size_t at = 0;
+    for (; at + 3 <= bytes.size(); at += 3) {
+        const std::uint32_t group = static_cast<std::uint32_t>(static_cast<unsigned char>(bytes[at])) << 16u |
+                                    static_cast<std::uint32_t>(static_cast<unsigned char>(bytes[at + 1])) << 8u |
+                                    static_cast<unsigned char>(bytes[at + 2]);
+        out.push_back(kDigits[(group >> 18u) & 63u]);
+        out.push_back(kDigits[(group >> 12u) & 63u]);
+        out.push_back(kDigits[(group >> 6u) & 63u]);
+        out.push_back(kDigits[group & 63u]);
+    }
+    const std::size_t left = bytes.size() - at;
+    if (left > 0) {
+        std::uint32_t group = static_cast<std::uint32_t>(static_cast<unsigned char>(bytes[at])) << 16u;
+        if (left == 2) {
+            group |= static_cast<std::uint32_t>(static_cast<unsigned char>(bytes[at + 1])) << 8u;
+        }
+        out.push_back(kDigits[(group >> 18u) & 63u]);
+        out.push_back(kDigits[(group >> 12u) & 63u]);
+        out.push_back(left == 2 ? kDigits[(group >> 6u) & 63u] : '=');
+        out.push_back('=');
+    }
+    return out;
+}
 
 McpServer::McpServer() : instructions_(kDefaultInstructions) {}
 
@@ -382,7 +434,7 @@ JsonValue McpServer::call_tool(const JsonValue& params, bool& found) const {
     JsonValue result = JsonValue::object();
     try {
         JsonValue value = tool->run(*arguments);
-        result.set("content", TextContent(compact_json(value)));
+        result.set("content", ResultContent(value));
         if (value.is_object()) {
             result.set("structuredContent", std::move(value));
         }

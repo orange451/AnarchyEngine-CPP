@@ -7,6 +7,7 @@
 #include "Engine.hpp"
 #include "LuaSource.hpp"
 #include "ModuleScript.hpp"
+#include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
 #include "Script.hpp"
 #include "httplib.h"
@@ -15,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -273,6 +275,210 @@ void TestEngineTools() {
     Expect(!ErrorText(server, "delete_instance", R"({"instance":"game"})").empty(), "the root is not deleted");
 }
 
+const engine_core::LuaSource* ScriptNamed(engine_core::DataModel& game, const char* name) {
+    return dynamic_cast<const engine_core::LuaSource*>(game.instance(game.find_first_child(game.id(), name)));
+}
+
+bool HasProblem(const JsonValue& problems, const std::string& code, int line) {
+    for (const JsonValue& problem : problems.items()) {
+        if (problem.find("code")->as_string() == code && problem.find("line")->as_number() == line) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Scripts are checked, edited in part, searched, and undone. Analysis looks
+// only at open scripts, as in the studio, so the tools watch what they ask about.
+void TestScriptTools() {
+    engine_core::Engine engine;
+    engine_core::DataModel& game = engine.datamodel();
+    engine.analysis().set_scope(engine_core::AnalysisScope::Open);
+    ide::McpServer server;
+    ide::add_engine_tools(server, engine, {});
+    AddScript(game, "Main", "print('hi')", game.id());
+    // The explorer ends each of its edits as a step. So does this test's own.
+    game.history().end_gesture();
+
+    const JsonValue broken = Call(server, "write_script", R"({"instance":"Main","source":"local x ="})");
+    const JsonValue* problems = broken.find("problems");
+    Expect(problems != nullptr && problems->items().size() == 1 && HasProblem(*problems, "Syntax", 1) &&
+               problems->items()[0].find("severity")->as_string() == "error",
+           "write_script returns a syntax error, lines from 1: " + ide::compact_json(broken));
+    const JsonValue clean = Call(server, "write_script", R"j({"instance":"Main","source":"local n = 1\nprint(n)\n"})j");
+    Expect(clean.find("problems") != nullptr && clean.find("problems")->items().empty(),
+           "a clean script has no problems: " + ide::compact_json(clean));
+
+    const JsonValue edited = Call(
+        server, "edit_script",
+        R"j({"instance":"Main","edits":[{"old_text":"print(n)","new_text":"print(n + missing)"}]})j");
+    Expect(ScriptNamed(game, "Main")->source() == "local n = 1\nprint(n + missing)\n", "edit_script replaces the text");
+    Expect(edited.find("replaced")->as_number() == 1, "edit_script counts its replacements");
+    Expect(edited.find("problems") != nullptr && HasProblem(*edited.find("problems"), "Lint/UnknownGlobal", 2),
+           "edit_script returns what analysis finds: " + ide::compact_json(edited));
+
+    const JsonValue two = Call(server, "write_script",
+                               R"j({"instance":"Main","source":"local n = 1\nprint(n + missing)\nlocal x = n"})j");
+    const JsonValue* ordered = two.find("problems");
+    Expect(ordered != nullptr && ordered->items().size() == 2 &&
+               ordered->items()[0].find("line")->as_number() == 2 && ordered->items()[1].find("line")->as_number() == 3,
+           "problems come in line order: " + ide::compact_json(two));
+
+    Call(server, "write_script", R"j({"instance":"Main","source":"local a = 1\nlocal b = a\nlocal c = a\n"})j");
+    const std::string twice =
+        ErrorText(server, "edit_script", R"j({"instance":"Main","edits":[{"old_text":"= a","new_text":"= 2"}]})j");
+    Expect(twice.find("2 times, on lines 2, 3") != std::string::npos,
+           "old_text that matches twice is refused, naming the lines: " + twice);
+    Expect(ErrorText(server, "edit_script", R"j({"instance":"Main","edits":[{"old_text":"nope","new_text":""}]})j")
+                   .find("is not in the Source") != std::string::npos,
+           "old_text that does not match is refused");
+    ErrorText(server, "edit_script",
+              R"j({"instance":"Main","edits":[{"old_text":"local b","new_text":"local B"},{"old_text":"nope","new_text":""}]})j");
+    Expect(ScriptNamed(game, "Main")->source() == "local a = 1\nlocal b = a\nlocal c = a\n",
+           "a failed edit leaves the earlier ones unapplied");
+    const JsonValue every = Call(
+        server, "edit_script", R"j({"instance":"Main","edits":[{"old_text":"= a","new_text":"= 2","replace_all":true}]})j");
+    Expect(every.find("replaced")->as_number() == 2 &&
+               ScriptNamed(game, "Main")->source() == "local a = 1\nlocal b = 2\nlocal c = 2\n",
+           "replace_all replaces each place");
+
+    Call(server, "write_script", R"j({"instance":"Main","source":"one\ntwo\nthree\n"})j");
+    const JsonValue whole = Call(server, "read_script", R"({"instance":"Main"})");
+    Expect(whole.find("line_count")->as_number() == 4 && whole.find("source")->as_string() == "one\ntwo\nthree\n",
+           "read_script returns the whole Source and its line count");
+    const JsonValue middle = Call(server, "read_script", R"({"instance":"Main","first_line":2,"last_line":3})");
+    Expect(middle.find("source")->as_string() == "two\nthree" && middle.find("first_line")->as_number() == 2,
+           "read_script returns a range of lines");
+    const JsonValue tail = Call(server, "read_script", R"({"instance":"Main","first_line":3})");
+    Expect(tail.find("source")->as_string() == "three\n" && tail.find("last_line")->as_number() == 4,
+           "a range without last_line runs to the end");
+    Expect(ErrorText(server, "read_script", R"({"instance":"Main","first_line":9})") == "The Source has 4 lines.",
+           "a range past the end is refused");
+
+    const JsonValue lib = Call(server, "create_instance", R"({"class":"Folder","name":"Lib"})");
+    engine_core::ModuleScript& module = game.create<engine_core::ModuleScript>();
+    game.set_name(module.id(), "Util");
+    module.set_source("local Value = 1\nreturn value\n");
+    game.set_parent(module.id(), static_cast<engine_core::InstanceId>(lib.find("id")->as_number()));
+    game.history().end_gesture();
+
+    const JsonValue found = Call(server, "search_scripts", R"({"pattern":"VALUE"})");
+    const JsonValue* scripts = found.find("scripts");
+    Expect(scripts->items().size() == 1 && scripts->items()[0].find("path")->as_string() == "Lib.Util" &&
+               scripts->items()[0].find("lines")->items().size() == 2 && found.find("matches")->as_number() == 2,
+           "search_scripts ignores case and lists matching lines: " + ide::compact_json(found));
+    const JsonValue cased = Call(server, "search_scripts", R"({"pattern":"value","match_case":true})");
+    Expect(cased.find("matches")->as_number() == 1 &&
+               cased.find("scripts")->items()[0].find("lines")->items()[0].find("line")->as_number() == 2,
+           "match_case finds only the exact case, on its line");
+    const JsonValue pattern = Call(server, "search_scripts", R"({"pattern":"^t\\w+","regex":true})");
+    Expect(pattern.find("matches")->as_number() == 2 &&
+               pattern.find("scripts")->items()[0].find("path")->as_string() == "Main",
+           "a regex matches per line, scripts in explorer order: " + ide::compact_json(pattern));
+    const JsonValue scoped = Call(server, "search_scripts", R"({"pattern":"t","instance":"Lib"})");
+    Expect(scoped.find("scripts")->items().size() == 1, "instance limits the search to what is under it");
+    const JsonValue capped = Call(server, "search_scripts", R"({"pattern":"e","limit":1})");
+    Expect(capped.find("matches")->as_number() == 1 && capped.find("truncated") != nullptr,
+           "limit caps the matches and says so");
+    Expect(ErrorText(server, "search_scripts", R"({"pattern":"(","regex":true})").find("is not a regex") != std::string::npos,
+           "a bad regex is refused");
+
+    Call(server, "write_script", R"j({"instance":"Lib.Util","source":"return {"})j");
+    const JsonValue all = Call(server, "get_diagnostics", "{}");
+    Expect(all.find("checked")->as_number() == 2 && all.find("errors")->as_number() >= 1 &&
+               all.find("pending") == nullptr,
+           "get_diagnostics checks every script: " + ide::compact_json(all));
+    bool util = false;
+    for (const JsonValue& entry : all.find("scripts")->items()) {
+        util = util || (entry.find("path")->as_string() == "Lib.Util" && HasProblem(*entry.find("problems"), "Syntax", 1));
+    }
+    Expect(util, "get_diagnostics lists a script's problems under its path");
+    const JsonValue one = Call(server, "get_diagnostics", R"({"instance":"Main"})");
+    Expect(one.find("checked")->as_number() == 1, "get_diagnostics checks only the scripts asked for");
+
+    Call(server, "write_script", R"j({"instance":"Main","source":"print('v1')"})j");
+    Call(server, "write_script", R"j({"instance":"Main","source":"print('v2')"})j");
+    const JsonValue undone = Call(server, "undo", "{}");
+    Expect(ScriptNamed(game, "Main")->source() == "print('v1')" && undone.find("undone")->items().size() == 1 &&
+               undone.find("next_redo")->is_string(),
+           "undo puts the Source back: " + ide::compact_json(undone));
+    Call(server, "undo", R"({"redo":true})");
+    Expect(ScriptNamed(game, "Main")->source() == "print('v2')", "redo applies it again");
+
+    const JsonValue several = Call(server, "get_properties", R"({"instances":["Main","Lib"]})");
+    Expect(several.find("instances")->items().size() == 2 &&
+               several.find("instances")->items()[1].find("name")->as_string() == "Lib",
+           "get_properties reads several instances in order");
+}
+
+// playtest run_for waits while the place plays, and returns what it printed.
+void TestPlaytestRun() {
+    engine_core::Engine engine;
+    engine_core::DataModel& game = engine.datamodel();
+    AddScript(game, "Hello", "print('from play')", game.id());
+    // What the studio's Test, Pause, Resume, and Stop do to the engine.
+    auto state = std::make_shared<std::string>("stopped");
+    auto mu = std::make_shared<std::mutex>();
+    auto set = [state, mu](const char* next) {
+        std::lock_guard<std::mutex> guard(*mu);
+        *state = next;
+    };
+    ide::McpStudio studio;
+    studio.start_test = [&engine, set] {
+        engine.on_simulation([](engine_core::DataModel& world) {
+            if (!world.simulation_running()) {
+                world.capture_place();
+                world.start_simulation();
+            }
+        });
+        engine.resume();
+        set("running");
+    };
+    studio.pause_test = [&engine, set] {
+        engine.pause();
+        set("paused");
+    };
+    studio.resume_test = [&engine, set] {
+        engine.resume();
+        set("running");
+    };
+    studio.stop_test = [&engine, set] {
+        engine.pause();
+        engine.on_simulation([](engine_core::DataModel& world) {
+            if (world.simulation_running()) {
+                world.stop_simulation();
+            }
+        });
+        set("stopped");
+    };
+    studio.session = [state, mu] {
+        std::lock_guard<std::mutex> guard(*mu);
+        return *state;
+    };
+    ide::McpServer server;
+    ide::add_engine_tools(server, engine, studio);
+    engine.start();
+
+    const JsonValue ran = Call(server, "playtest", R"({"action":"start","run_for":0.3})");
+    bool printed = false;
+    for (const JsonValue& line : ran.find("output")->items()) {
+        printed = printed || line.find("text")->as_string() == "from play";
+    }
+    Expect(printed, "run_for returns what the place printed: " + ide::compact_json(ran));
+    Expect(ran.find("session")->as_string() == "paused" && ran.find("ran_for")->as_number() >= 0.3 &&
+               ran.find("ended_on_error") == nullptr,
+           "run_for runs the whole time, then pauses");
+    Expect(Call(server, "playtest", R"({"action":"stop"})").find("session")->as_string() == "stopped",
+           "stop ends the test");
+
+    Call(server, "write_script", R"j({"instance":"Hello","source":"print('about to fail')\nerror('boom')"})j");
+    const JsonValue failed = Call(server, "playtest", R"({"action":"start","run_for":10,"then":"stop"})");
+    Expect(failed.find("ended_on_error") != nullptr && failed.find("ran_for")->as_number() < 10 &&
+               failed.find("errors")->as_number() >= 1 && failed.find("session")->as_string() == "stopped",
+           "an error ends the wait early, and then stop ends the test: " + ide::compact_json(failed));
+    engine.stop();
+}
+
 // With the engine's threads running, an edit from another thread runs under
 // the write lock while paused, and waits for a step while playing.
 void TestThreadedEdits() {
@@ -509,16 +715,78 @@ void TestBridge() {
     fs::remove_all(base, ignored);
 }
 
+// An image a tool returns goes out as image content, beside the JSON text.
+void TestImages() {
+    Expect(ide::base64_encode("") == "" && ide::base64_encode("f") == "Zg==" && ide::base64_encode("fo") == "Zm8=" &&
+               ide::base64_encode("foo") == "Zm9v" && ide::base64_encode("foob") == "Zm9vYg==" &&
+               ide::base64_encode("foobar") == "Zm9vYmFy" && ide::base64_encode("\xff\xfe") == "//4=",
+           "base64 matches RFC 4648");
+
+    engine_core::Engine engine;
+    ide::McpStudio studio;
+    studio.capture_view = [](int max_size) {
+        Expect(max_size == 256, "screenshot passes max_size on");
+        return ide::McpImage{"\x89PNG", 4, 3};
+    };
+    ide::McpServer server;
+    ide::add_engine_tools(server, engine, studio);
+    const JsonValue reply =
+        Request(server, "tools/call", R"({"name":"screenshot","arguments":{"max_size":256}})");
+    const JsonValue* result = reply.find("result");
+    const JsonValue* content = result != nullptr ? result->find("content") : nullptr;
+    Expect(content != nullptr && content->items().size() == 2 &&
+               content->items()[1].find("type")->as_string() == "image" &&
+               content->items()[1].find("data")->as_string() == ide::base64_encode("\x89PNG") &&
+               content->items()[1].find("mimeType")->as_string() == "image/png",
+           "screenshot sends the PNG as image content: " + ide::compact_json(reply));
+    Expect(content != nullptr && content->items()[0].find("text")->as_string() == R"({"height":3,"width":4})",
+           "the text holds the rest, without the image");
+    Expect(result != nullptr && result->find("structuredContent")->find(ide::kImageMember) == nullptr,
+           "structured content leaves the image out");
+
+    // Through the bridge, the image still reaches the client.
+    const fs::path base = TempDir("images");
+    const fs::path registry = base / "studios";
+    fs::create_directories(base / "Pics");
+    ide::McpServer pics;
+    pics.add_tool({"picture", "", ide::json_literal(R"({"type":"object"})"), [](const JsonValue&) {
+                       JsonValue image = JsonValue::object();
+                       image.set("data", JsonValue::string("AAAA"));
+                       image.set("mimeType", JsonValue::string("image/png"));
+                       JsonValue out = JsonValue::object();
+                       out.set("width", JsonValue::number(1));
+                       out.set(ide::kImageMember, std::move(image));
+                       return out;
+                   }});
+    std::string error;
+    Expect(pics.start(0, error), "the picture studio listens: " + error);
+    const ide::StudioEntry entry{ide::current_pid(), pics.port(), "Pics", ide::utf8_path(base / "Pics")};
+    Expect(ide::write_studio(registry, entry, error), "the picture studio is registered: " + error);
+    bridge::StudioBridge bridge({registry, base, "", ""}, {{"picture", "", ide::json_literal(R"({"type":"object"})"), nullptr}});
+    const JsonValue forwarded = Request(bridge.server(), "tools/call", R"({"name":"picture","arguments":{}})");
+    const JsonValue* items = forwarded.find("result") != nullptr ? forwarded.find("result")->find("content") : nullptr;
+    Expect(items != nullptr && items->items().size() == 2 && items->items()[1].find("data")->as_string() == "AAAA" &&
+               items->items()[0].find("text")->as_string() == R"({"width":1})",
+           "the bridge forwards the image as image content: " + ide::compact_json(forwarded));
+    pics.stop();
+    ide::remove_studio(registry, entry);
+    std::error_code ignored;
+    fs::remove_all(base, ignored);
+}
+
 }  // namespace
 
 int main() {
     TestProtocol();
     TestEngineTools();
+    TestScriptTools();
+    TestPlaytestRun();
     TestPrintSource();
     TestThreadedEdits();
     TestHttp();
     TestRegistry();
     TestBridge();
+    TestImages();
     if (gFailures == 0) {
         std::printf("mcp tests passed\n");
         return 0;

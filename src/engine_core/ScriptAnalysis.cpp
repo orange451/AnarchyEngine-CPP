@@ -1110,6 +1110,8 @@ struct ScriptAnalysis::State {
     TypeMode default_mode = TypeMode::NonStrict;
     std::uint64_t next_token = 0;
     int inflight = 0;
+    // The script the worker is checking. 0 between jobs.
+    InstanceId running = 0;
     std::thread worker;
 
     struct Handler {
@@ -1344,11 +1346,13 @@ void ScriptAnalysis::run() {
             job = std::move(due->second.job);
             state_->pending.erase(due);
             ++state_->inflight;
+            state_->running = job.id;
         }
         Finished finished = analyze_job(env, job);
         {
             std::lock_guard<std::mutex> lock(state_->mu);
             --state_->inflight;
+            state_->running = 0;
             const auto generation = state_->generations.find(job.id);
             const bool current = generation != state_->generations.end() && generation->second == job.generation;
             if (!state_->stop && state_->enabled && current && !finished.cancelled &&
@@ -1763,6 +1767,19 @@ bool ScriptAnalysis::idle() const {
     std::lock_guard<std::mutex> lock(state_->mu);
     return state_->pending.empty() && state_->inflight == 0 && state_->results.empty() &&
            state_->to_schedule.empty();
+}
+
+bool ScriptAnalysis::settled(InstanceId script) const {
+    if (state_->world_stale.load(std::memory_order_relaxed) && !game_.simulation_running()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(state_->mu);
+    if (state_->published.count(script) == 0 || state_->pending.count(script) != 0 ||
+        state_->to_schedule.count(script) != 0 || state_->running == script) {
+        return false;
+    }
+    return std::none_of(state_->results.begin(), state_->results.end(),
+                        [script](const Finished& finished) { return finished.id == script; });
 }
 
 void ScriptAnalysis::fire(const std::vector<InstanceId>& ids) {

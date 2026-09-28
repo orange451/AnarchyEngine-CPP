@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <vector>
 
 namespace runner {
 namespace {
@@ -176,6 +177,42 @@ void Renderer::draw(double x, double y, double width, double height, double scen
     if (blendWasOn == GL_TRUE) {
         glEnable(GL_BLEND);
     }
+}
+
+bool Renderer::read(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
+                    ViewPixels& out) const {
+    out = ViewPixels{};
+    if (!ready_ || width <= 0.0 || height <= 0.0 || sceneWidth <= 0.0 || sceneHeight <= 0.0) {
+        return false;
+    }
+    GLint viewport[4] = {};
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    if (viewport[2] <= 0 || viewport[3] <= 0) {
+        return false;
+    }
+    // Only what draw could reach: the pane, inside the framebuffer and any parent clip.
+    PixelRect clip = Intersect(PanePixels(x, y, width, height, sceneWidth, sceneHeight, viewport),
+                               PixelRect{viewport[0], viewport[1], viewport[2], viewport[3]});
+    if (glIsEnabled(GL_SCISSOR_TEST) == GL_TRUE) {
+        GLint scissorBox[4] = {};
+        glGetIntegerv(GL_SCISSOR_BOX, scissorBox);
+        clip = Intersect(clip, PixelRect{scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3]});
+    }
+    if (clip.width <= 0 || clip.height <= 0) {
+        return false;
+    }
+    // RGBA rows are whole words, so the default pack alignment of 4 adds no padding.
+    std::vector<unsigned char> bottomUp(static_cast<std::size_t>(clip.width) * clip.height * 4);
+    glReadPixels(clip.x, clip.y, clip.width, clip.height, GL_RGBA, GL_UNSIGNED_BYTE, bottomUp.data());
+    out.width = clip.width;
+    out.height = clip.height;
+    out.rgba.resize(bottomUp.size());
+    const std::size_t row = static_cast<std::size_t>(clip.width) * 4;
+    for (int line = 0; line < clip.height; ++line) {
+        std::copy_n(bottomUp.data() + static_cast<std::size_t>(clip.height - 1 - line) * row, row,
+                    out.rgba.data() + static_cast<std::size_t>(line) * row);
+    }
+    return true;
 }
 
 void Renderer::shutdown() {

@@ -40,6 +40,7 @@ void (*rt_glScissor)(GLint, GLint, GLsizei, GLsizei) = nullptr;
 GLint (*rt_glGetUniformLocation)(GLuint, const GLchar*) = nullptr;
 void (*rt_glUniform1f)(GLint, GLfloat) = nullptr;
 void (*rt_glUniform3f)(GLint, GLfloat, GLfloat, GLfloat) = nullptr;
+void (*rt_glReadPixels)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*) = nullptr;
 
 bool LoadGl(GlGetProcAddress get_proc) {
     if (get_proc == nullptr) {
@@ -93,6 +94,7 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(GetUniformLocation);
     LOAD(Uniform1f);
     LOAD(Uniform3f);
+    LOAD(ReadPixels);
 
 #undef LOAD
     return true;

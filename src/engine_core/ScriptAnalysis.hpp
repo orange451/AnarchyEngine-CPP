@@ -111,6 +111,10 @@ public:
     bool busy() const;
     // busy() is false and pump() has published every finished job.
     bool idle() const;
+    // This script has a published result, and no newer check of it is queued,
+    // running, or waiting for pump(). A tree change pump() has not taken yet
+    // counts as newer while the simulation is stopped.
+    bool settled(InstanceId script) const;
 
     class DiagnosticsSignal {
     public:

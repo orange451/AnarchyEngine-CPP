@@ -26,6 +26,7 @@
 #include "StudioRegistry.hpp"
 #include "TestTriangle.hpp"
 #include "../runner/GameView.hpp"
+#include "../runner/ViewCapture.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -262,6 +263,8 @@ constexpr const char* kCaretMark = "border-width: 0; background-color: var(--ide
 
 constexpr int kMcpPort = 7777;
 constexpr std::chrono::seconds kUiWait(5);
+// How long screenshot waits for the Scene View to paint.
+constexpr std::chrono::seconds kCaptureWait(3);
 
 // Runs fn on the UI thread and waits for it. Called from an MCP server thread.
 // Throws when the frame loop does not get to it, or with what fn threw.
@@ -1232,6 +1235,55 @@ void IdeLayout::start_mcp() {
     };
     studio.flush_scripts = [this, on_ui] { on_ui([this] { flush_editors(); }); };
     studio.refresh_scripts = [this, on_ui] { on_ui([this] { reapply_editors(); }); };
+    // The first Scene View's next paint. The wait is on the server thread, since
+    // the paint comes after the UI task that asks for it.
+    studio.capture_view = [this, on_ui](int max_size) {
+        struct Shot {
+            std::mutex mu;
+            std::condition_variable cv;
+            bool done = false;
+            runner::ViewPixels pixels;
+        };
+        // Shared, since a paint after a timed-out wait still writes it.
+        auto shot = std::make_shared<Shot>();
+        on_ui([this, shot] {
+            auto* view = dynamic_cast<runner::GameView*>(scene_view_.get());
+            if (view == nullptr) {
+                throw std::runtime_error("The studio has no Scene View.");
+            }
+            // A tab behind another is out of the scene, so it does not paint.
+            if (view->getScene() == nullptr) {
+                throw std::runtime_error("The Scene View's tab is behind another tab in its dock, so it is not "
+                                         "drawing. Select its tab in the studio, then try again.");
+            }
+            view->requestCapture([shot](runner::ViewPixels pixels) {
+                {
+                    std::lock_guard<std::mutex> guard(shot->mu);
+                    shot->pixels = std::move(pixels);
+                    shot->done = true;
+                }
+                shot->cv.notify_all();
+            });
+        });
+        runner::ViewPixels pixels;
+        {
+            std::unique_lock<std::mutex> lock(shot->mu);
+            if (!shot->cv.wait_for(lock, kCaptureWait, [&] { return shot->done; })) {
+                throw std::runtime_error("The Scene View did not draw within 3 seconds. Check that the studio window "
+                                         "is not minimized.");
+            }
+            pixels = std::move(shot->pixels);
+        }
+        if (pixels.empty()) {
+            throw std::runtime_error("The Scene View could not be read back.");
+        }
+        const runner::ViewPixels fitted = runner::FitWithin(pixels, max_size);
+        McpImage image;
+        image.png = runner::EncodePng(fitted);
+        image.width = fitted.width;
+        image.height = fitted.height;
+        return image;
+    };
     auto identity = std::make_shared<McpIdentity>();
     studio.info = [identity] {
         std::lock_guard<std::mutex> guard(identity->mu);

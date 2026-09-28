@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,11 @@ class Runner;
 class GameView : public ide::IdePane {
 public:
     explicit GameView(Runner& runner, std::string name = "Scene View", bool closable = false);
+
+    // The next paint reads back what it drew, before the label, and hands it to
+    // done on this thread. A view that does not paint, such as a hidden tab,
+    // does not call done until it paints again.
+    void requestCapture(std::function<void(ViewPixels)> done);
 
 protected:
     void layoutChildren() override;
@@ -74,6 +80,8 @@ private:
     int shownFps_ = -1;
     bool graphicsAttempted_ = false;
     bool graphicsReady_ = false;
+    // Waiting for the next paint's pixels. UI thread only.
+    std::vector<std::function<void(ViewPixels)>> captures_;
 };
 
 }  // namespace runner

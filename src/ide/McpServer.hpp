@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -76,8 +77,15 @@ private:
     int port_ = 0;
 };
 
+// A tool result holds an image under this member: an object with "data", the
+// bytes in base64, and "mimeType". The server sends it as image content after
+// the JSON text, not inside it. The bridge puts it back here when it forwards.
+inline constexpr const char* kImageMember = "image_content";
+
 // What a studio's server tells the client: the place, paths, undo, run_lua.
 const char* default_instructions();
+// Standard base64 with padding, as MCP image content carries bytes.
+std::string base64_encode(std::string_view bytes);
 // One line, no spaces, keys in the value's order. What goes on the wire and
 // into a tool result's text.
 std::string compact_json(const engine_core::JsonValue& value);

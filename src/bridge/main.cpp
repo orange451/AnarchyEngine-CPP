@@ -42,6 +42,7 @@ ide::McpStudio ListingStudio() {
     studio.info = []() -> engine_core::JsonValue {
         throw std::logic_error("The bridge runs no studio tool itself.");
     };
+    studio.capture_view = [](int) -> ide::McpImage { throw std::logic_error("The bridge runs no studio tool itself."); };
     return studio;
 }
 

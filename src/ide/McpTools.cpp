@@ -1,13 +1,18 @@
 #include "McpTools.hpp"
 
+#include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
 #include "LuaApi.hpp"
 #include "LuaSource.hpp"
 #include "PropertySheet.hpp"
+#include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
+#include "TextSearch.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -15,6 +20,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -37,6 +44,19 @@ constexpr std::size_t kMaxTreeRows = 500;
 constexpr int kDefaultDepth = 2;
 constexpr int kMaxDepth = 16;
 constexpr std::size_t kDefaultOutputLines = 200;
+// How long a tool waits for script analysis, and how often it looks.
+constexpr std::chrono::seconds kAnalysisWait(10);
+constexpr std::chrono::milliseconds kAnalysisPoll(25);
+// search_scripts lists this many matches unless asked for more, and cuts a
+// longer line down to kMaxLineBytes.
+constexpr std::size_t kDefaultMatches = 200;
+constexpr std::size_t kMaxMatches = 2000;
+constexpr std::size_t kMaxLineBytes = 300;
+// The longest playtest run_for, in seconds, and how often it looks at the session.
+constexpr double kMaxRunFor = 60;
+constexpr std::chrono::milliseconds kPlayPoll(100);
+constexpr int kMaxUndoSteps = 50;
+constexpr int kDefaultCaptureSize = 1024;
 
 // The read lock, taken between simulation steps.
 class ReadLock {
@@ -393,6 +413,282 @@ JsonValue OutputLines(const engine_core::ScriptRuntime::OutputHistory& history) 
 // Ends the edit's undo step, as the explorer's edits do.
 void CloseGesture(DataModel& world) { world.history().end_gesture(); }
 
+const char* SeverityName(engine_core::Severity severity) {
+    switch (severity) {
+        case engine_core::Severity::Error:
+            return "error";
+        case engine_core::Severity::Warning:
+            return "warning";
+        case engine_core::Severity::Information:
+            return "information";
+        case engine_core::Severity::Hint:
+            return "hint";
+    }
+    return "error";
+}
+
+// In the order they appear. Lines and columns count from 1, as the editor shows them.
+JsonValue ProblemList(std::vector<engine_core::Diagnostic> diagnostics) {
+    std::stable_sort(diagnostics.begin(), diagnostics.end(),
+                     [](const engine_core::Diagnostic& left, const engine_core::Diagnostic& right) {
+                         if (left.range.start.line != right.range.start.line) {
+                             return left.range.start.line < right.range.start.line;
+                         }
+                         return left.range.start.character < right.range.start.character;
+                     });
+    JsonValue list = JsonValue::array();
+    for (const engine_core::Diagnostic& diagnostic : diagnostics) {
+        JsonValue entry = JsonValue::object();
+        entry.set("line", JsonValue::number(diagnostic.range.start.line + 1.0));
+        entry.set("column", JsonValue::number(diagnostic.range.start.character + 1.0));
+        entry.set("severity", JsonValue::string(SeverityName(diagnostic.severity)));
+        entry.set("code", JsonValue::string(diagnostic.code));
+        entry.set("message", JsonValue::string(diagnostic.message));
+        list.items().push_back(std::move(entry));
+    }
+    return list;
+}
+
+// Watches scripts for as long as it lives, as an open editor does.
+class Watching {
+public:
+    Watching(engine_core::ScriptAnalysis& analysis, std::vector<InstanceId> ids)
+        : analysis_(analysis), ids_(std::move(ids)) {
+        for (InstanceId id : ids_) {
+            analysis_.watch(id);
+        }
+    }
+    ~Watching() {
+        for (InstanceId id : ids_) {
+            analysis_.unwatch(id);
+        }
+    }
+    Watching(const Watching&) = delete;
+    Watching& operator=(const Watching&) = delete;
+
+private:
+    engine_core::ScriptAnalysis& analysis_;
+    std::vector<InstanceId> ids_;
+};
+
+// What analysis found in some scripts, each checked against the Source it has now.
+struct Checked {
+    std::unordered_map<InstanceId, std::vector<engine_core::Diagnostic>> problems;
+    // Scripts analysis had not finished when the wait ran out. A deleted script is in neither.
+    std::vector<InstanceId> pending;
+    // Analysis is turned off, so nothing was checked.
+    bool off = false;
+};
+
+// Waits up to kAnalysisWait for analysis to check these scripts. The studio
+// analyzes only scripts open in an editor, so each is watched while this waits.
+Checked CheckScripts(engine_core::Engine& engine, const std::vector<InstanceId>& ids) {
+    engine_core::ScriptAnalysis& analysis = engine.analysis();
+    Checked out;
+    if (!analysis.enabled()) {
+        out.off = true;
+        return out;
+    }
+    const Watching watching(analysis, ids);
+    // Shared, since an edit that runs after a timed-out wait still writes it.
+    struct Progress {
+        std::vector<InstanceId> waiting;
+        std::unordered_map<InstanceId, std::vector<engine_core::Diagnostic>> done;
+    };
+    auto progress = std::make_shared<Progress>();
+    progress->waiting = ids;
+    const auto deadline = std::chrono::steady_clock::now() + kAnalysisWait;
+    while (true) {
+        try {
+            // pump() publishes finished checks. It runs where edits run, a thread
+            // its contract allows, and there it reads the tree it compares against.
+            RunEdit(engine, [&analysis, progress](DataModel& world) {
+                analysis.pump();
+                std::vector<InstanceId> still;
+                for (InstanceId id : progress->waiting) {
+                    const auto* script = dynamic_cast<const engine_core::LuaSource*>(world.instance(id));
+                    if (script == nullptr) {
+                        continue;
+                    }
+                    const std::optional<std::string> checked = analysis.analyzed_source(id);
+                    if (analysis.settled(id) && checked && *checked == script->source()) {
+                        progress->done[id] = analysis.diagnostics(id);
+                    } else {
+                        still.push_back(id);
+                    }
+                }
+                progress->waiting.swap(still);
+                return JsonValue();
+            });
+        } catch (const std::exception&) {
+            // The simulation is too busy to look. What is not done yet is pending.
+            break;
+        }
+        if (progress->waiting.empty() || std::chrono::steady_clock::now() >= deadline) {
+            break;
+        }
+        std::this_thread::sleep_for(kAnalysisPoll);
+    }
+    for (InstanceId id : ids) {
+        const auto found = progress->done.find(id);
+        if (found != progress->done.end()) {
+            out.problems.emplace(id, found->second);
+        } else if (std::find(progress->waiting.begin(), progress->waiting.end(), id) != progress->waiting.end()) {
+            out.pending.push_back(id);
+        }
+    }
+    return out;
+}
+
+// Adds what analysis found in the script to out: its problems, or analysis
+// "pending" or "off" when there is no answer to give.
+void AddProblems(engine_core::Engine& engine, InstanceId id, JsonValue& out) {
+    const Checked checked = CheckScripts(engine, {id});
+    const auto found = checked.problems.find(id);
+    if (found != checked.problems.end()) {
+        out.set("problems", ProblemList(found->second));
+    } else {
+        out.set("analysis", JsonValue::string(checked.off ? "off" : "pending"));
+    }
+}
+
+// Sets a script's Source to what change makes of it, as an editor's typing
+// does: one undo step. Open editors write their typing first and show the
+// new Source after. Returns the script, with what analysis finds in it.
+JsonValue WriteSource(engine_core::Engine& engine, const McpStudio& studio, const JsonValue& instance,
+                      std::function<std::string(const std::string&)> change) {
+    if (studio.flush_scripts) {
+        studio.flush_scripts();
+    }
+    JsonValue out = RunEdit(engine, [instance, change = std::move(change)](DataModel& world) {
+        const InstanceId id = Resolve(world, &instance);
+        engine_core::LuaSource& script = ScriptAt(world, id);
+        const std::string source = change(script.source());
+        if (script.source() != source) {
+            // The same waypoint an editor's typing makes.
+            std::optional<std::string> recording;
+            if (!world.simulation_running()) {
+                recording = world.history().try_begin_recording("Edit Script");
+            }
+            script.set_source(source);
+            if (recording) {
+                world.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
+            }
+            if (!world.simulation_running()) {
+                world.capture_place();
+            }
+        }
+        return Brief(world, id);
+    });
+    if (studio.refresh_scripts) {
+        studio.refresh_scripts();
+    }
+    AddProblems(engine, static_cast<InstanceId>(out.find("id")->as_number()), out);
+    return out;
+}
+
+// The 1-based line that byte at of text is on.
+int LineAt(const std::string& text, std::size_t at) {
+    return 1 + static_cast<int>(std::count(text.begin(), text.begin() + static_cast<std::ptrdiff_t>(at), '\n'));
+}
+
+// source with each of edits applied in turn. An old_text must be in the text
+// exactly once, or with replace_all at least once. Throws naming the edit
+// that could not apply. replaced counts the replacements.
+std::string ApplyEdits(std::string source, const JsonValue* edits, int& replaced) {
+    if (edits == nullptr || !edits->is_array() || edits->items().empty()) {
+        throw std::runtime_error("edits is required: a list of {old_text, new_text}.");
+    }
+    int index = 0;
+    for (const JsonValue& edit : edits->items()) {
+        const std::string which = "Edit " + std::to_string(++index);
+        const JsonValue* old_text = edit.find("old_text");
+        const JsonValue* new_text = edit.find("new_text");
+        if (old_text == nullptr || !old_text->is_string() || new_text == nullptr || !new_text->is_string()) {
+            throw std::runtime_error(which + " needs old_text and new_text, both strings.");
+        }
+        const std::string& before = old_text->as_string();
+        if (before.empty()) {
+            throw std::runtime_error(which + ": old_text is empty.");
+        }
+        const JsonValue* every = edit.find("replace_all");
+        const bool all = every != nullptr && every->is_bool() && every->as_bool();
+        std::vector<std::size_t> found;
+        for (std::size_t at = source.find(before); at != std::string::npos; at = source.find(before, at + before.size())) {
+            found.push_back(at);
+        }
+        if (found.empty()) {
+            throw std::runtime_error(which + ": old_text is not in the Source. It must match exactly, spaces "
+                                             "and line breaks included.");
+        }
+        if (found.size() > 1 && !all) {
+            std::string lines;
+            for (std::size_t at : found) {
+                lines += (lines.empty() ? "" : ", ") + std::to_string(LineAt(source, at));
+            }
+            throw std::runtime_error(which + ": old_text is in the Source " + std::to_string(found.size()) +
+                                     " times, on lines " + lines +
+                                     ". Include more of the lines around it, or set replace_all.");
+        }
+        std::string next;
+        next.reserve(source.size());
+        std::size_t kept = 0;
+        for (std::size_t at : found) {
+            next.append(source, kept, at - kept);
+            next += new_text->as_string();
+            kept = at + before.size();
+        }
+        next.append(source, kept, std::string::npos);
+        source = std::move(next);
+        replaced += static_cast<int>(found.size());
+    }
+    return source;
+}
+
+// A whole number argument, clamped to [low, high], or fallback when it is missing.
+int IntArg(const JsonValue& arguments, const char* key, int fallback, int low, int high) {
+    const JsonValue* value = arguments.find(key);
+    if (value == nullptr) {
+        return fallback;
+    }
+    const double number = NumberArg(*value, key);
+    return static_cast<int>(std::max<double>(low, std::min<double>(high, number)));
+}
+
+bool BoolArg(const JsonValue& arguments, const char* key, bool fallback) {
+    const JsonValue* value = arguments.find(key);
+    if (value == nullptr) {
+        return fallback;
+    }
+    if (!value->is_bool()) {
+        throw std::runtime_error(std::string(key) + " must be true or false.");
+    }
+    return value->as_bool();
+}
+
+// The Scripts and ModuleScripts at and under id, in the explorer's order.
+void CollectScripts(const DataModel& world, InstanceId id, std::vector<InstanceId>& out) {
+    if (dynamic_cast<const engine_core::LuaSource*>(world.instance(id)) != nullptr) {
+        out.push_back(id);
+    }
+    for (InstanceId child : world.get_children(id)) {
+        CollectScripts(world, child, out);
+    }
+}
+
+// text cut to about kMaxLineBytes, on a UTF-8 boundary, marked when cut.
+std::string ClipLine(std::string text) {
+    if (text.size() <= kMaxLineBytes) {
+        return text;
+    }
+    std::size_t cut = kMaxLineBytes;
+    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0u) == 0x80u) {
+        --cut;
+    }
+    text.resize(cut);
+    return text + "...";
+}
+
 }  // namespace
 
 void add_engine_tools(McpServer& server, engine_core::Engine& engine, McpStudio studio) {
@@ -462,13 +758,28 @@ void add_engine_tools(McpServer& server, engine_core::Engine& engine, McpStudio 
                      }});
 
     server.add_tool({"get_properties",
-                     "An instance's properties with their types and values, as the Properties panel shows them.",
-                     json_literal(R"({"type":"object","required":["instance"],"properties":{
-                         "instance":{"type":["string","number"],"description":"Id or path."}}})"),
+                     "An instance's properties with their types and values, as the Properties panel shows them. "
+                     "Pass instances instead of instance to read several at once.",
+                     json_literal(R"({"type":"object","properties":{
+                         "instance":{"type":["string","number"],"description":"Id or path."},
+                         "instances":{"type":"array","items":{"type":["string","number"]},"description":"Ids or paths. The result lists each one's properties under instances, in this order."}}})"),
                      [live](const JsonValue& arguments) {
                          DataModel& world = live->datamodel();
                          ReadLock lock(world);
-                         return Properties(world, Resolve(world, arguments.find("instance")));
+                         const JsonValue* several = arguments.find("instances");
+                         if (several == nullptr) {
+                             return Properties(world, Resolve(world, arguments.find("instance")));
+                         }
+                         if (!several->is_array()) {
+                             throw std::runtime_error("instances must be a list of ids or paths.");
+                         }
+                         JsonValue list = JsonValue::array();
+                         for (const JsonValue& item : several->items()) {
+                             list.items().push_back(Properties(world, Resolve(world, &item)));
+                         }
+                         JsonValue out = JsonValue::object();
+                         out.set("instances", std::move(list));
+                         return out;
                      }});
 
     server.add_tool({"set_property",
@@ -563,52 +874,233 @@ void add_engine_tools(McpServer& server, engine_core::Engine& engine, McpStudio 
                      }});
 
     server.add_tool({"read_script",
-                     "The Source of a Script or ModuleScript.",
+                     "The Source of a Script or ModuleScript, and how many lines it has. first_line and last_line "
+                     "return only those lines, counting from 1.",
                      json_literal(R"({"type":"object","required":["instance"],"properties":{
-                         "instance":{"type":["string","number"],"description":"Id or path."}}})"),
+                         "instance":{"type":["string","number"],"description":"Id or path."},
+                         "first_line":{"type":"integer","minimum":1,"description":"Default 1."},
+                         "last_line":{"type":"integer","minimum":1,"description":"Default: the last line."}}})"),
                      [live](const JsonValue& arguments) {
                          DataModel& world = live->datamodel();
-                         ReadLock lock(world);
-                         const InstanceId id = Resolve(world, arguments.find("instance"));
-                         JsonValue out = Brief(world, id);
-                         out.set("source", JsonValue::string(ScriptAt(world, id).source()));
+                         JsonValue out;
+                         std::string source;
+                         {
+                             ReadLock lock(world);
+                             const InstanceId id = Resolve(world, arguments.find("instance"));
+                             out = Brief(world, id);
+                             source = ScriptAt(world, id).source();
+                         }
+                         const int lines = LineAt(source, source.size());
+                         out.set("line_count", JsonValue::number(lines));
+                         if (arguments.find("first_line") == nullptr && arguments.find("last_line") == nullptr) {
+                             out.set("source", JsonValue::string(std::move(source)));
+                             return out;
+                         }
+                         const int first = IntArg(arguments, "first_line", 1, 1, lines + 1);
+                         const int last = IntArg(arguments, "last_line", lines, 1, lines);
+                         if (first > lines) {
+                             throw std::runtime_error("The Source has " + std::to_string(lines) + " lines.");
+                         }
+                         if (last < first) {
+                             throw std::runtime_error("last_line is before first_line.");
+                         }
+                         // Byte offsets of the first line's start and the last line's end.
+                         std::size_t begin = 0;
+                         for (int line = 1; line < first; ++line) {
+                             begin = source.find('\n', begin) + 1;
+                         }
+                         std::size_t end = begin;
+                         for (int line = first; line <= last; ++line) {
+                             end = source.find('\n', end);
+                             if (end == std::string::npos) {
+                                 end = source.size();
+                                 break;
+                             }
+                             if (line < last) {
+                                 ++end;
+                             }
+                         }
+                         out.set("first_line", JsonValue::number(first));
+                         out.set("last_line", JsonValue::number(last));
+                         out.set("source", JsonValue::string(source.substr(begin, end - begin)));
                          return out;
                      }});
 
     server.add_tool({"write_script",
                      "Replaces the Source of a Script or ModuleScript. One undo step. An open editor shows the new "
-                     "source; typing not yet written from it is written first, then replaced.",
+                     "source; typing not yet written from it is written first, then replaced. Returns the problems "
+                     "the studio's analysis finds in the new source, lines from 1, or analysis \"pending\" when it "
+                     "has not finished (see get_diagnostics). To change part of a long script, edit_script sends less.",
                      json_literal(R"({"type":"object","required":["instance","source"],"properties":{
                          "instance":{"type":["string","number"],"description":"Id or path."},
                          "source":{"type":"string"}}})"),
                      [live, studio](const JsonValue& arguments) {
                          const JsonValue instance = arguments.find("instance") ? *arguments.find("instance") : JsonValue();
                          const std::string source = StringArg(arguments, "source");
-                         if (studio.flush_scripts) {
-                             studio.flush_scripts();
-                         }
-                         JsonValue out = RunEdit(*live, [instance, source](DataModel& world) {
-                             const InstanceId id = Resolve(world, &instance);
-                             engine_core::LuaSource& script = ScriptAt(world, id);
-                             if (script.source() != source) {
-                                 // The same waypoint an editor's typing makes.
-                                 std::optional<std::string> recording;
-                                 if (!world.simulation_running()) {
-                                     recording = world.history().try_begin_recording("Edit Script");
-                                 }
-                                 script.set_source(source);
-                                 if (recording) {
-                                     world.history().finish_recording(*recording,
-                                                                      engine_core::FinishRecordingOperation::Commit);
-                                 }
-                                 if (!world.simulation_running()) {
-                                     world.capture_place();
-                                 }
-                             }
-                             return Brief(world, id);
+                         return WriteSource(*live, studio, instance, [source](const std::string&) { return source; });
+                     }});
+
+    server.add_tool({"edit_script",
+                     "Replaces text in a Script or ModuleScript's Source without sending all of it. Each edit's "
+                     "old_text must appear exactly once, spaces and line breaks included, unless replace_all is set. "
+                     "Edits apply in order, all or none, as one undo step. Returns how many places changed and the "
+                     "problems analysis finds, as write_script does.",
+                     json_literal(R"({"type":"object","required":["instance","edits"],"properties":{
+                         "instance":{"type":["string","number"],"description":"Id or path."},
+                         "edits":{"type":"array","minItems":1,"items":{"type":"object","required":["old_text","new_text"],"properties":{
+                             "old_text":{"type":"string"},
+                             "new_text":{"type":"string"},
+                             "replace_all":{"type":"boolean","description":"Replace every place old_text appears. Default false."}}}}}})"),
+                     [live, studio](const JsonValue& arguments) {
+                         const JsonValue instance = arguments.find("instance") ? *arguments.find("instance") : JsonValue();
+                         const JsonValue edits = arguments.find("edits") ? *arguments.find("edits") : JsonValue();
+                         auto replaced = std::make_shared<int>(0);
+                         JsonValue out = WriteSource(*live, studio, instance, [edits, replaced](const std::string& source) {
+                             *replaced = 0;
+                             return ApplyEdits(source, &edits, *replaced);
                          });
-                         if (studio.refresh_scripts) {
-                             studio.refresh_scripts();
+                         out.set("replaced", JsonValue::number(*replaced));
+                         return out;
+                     }});
+
+    server.add_tool({"search_scripts",
+                     "Finds text in the Source of every Script and ModuleScript, or only those under instance, as "
+                     "the studio's Search pane does. Returns each script with a match and its matching lines, "
+                     "counting from 1, in the explorer's order. At most limit matches, 200 by default.",
+                     json_literal(R"({"type":"object","required":["pattern"],"properties":{
+                         "pattern":{"type":"string"},
+                         "regex":{"type":"boolean","description":"pattern is an ECMAScript regular expression. A match stays within one line. Default false."},
+                         "match_case":{"type":"boolean","description":"Default false."},
+                         "whole_word":{"type":"boolean","description":"Default false."},
+                         "instance":{"type":["string","number"],"description":"Search only this and what is under it. Default: the root, game."},
+                         "limit":{"type":"integer","minimum":1,"maximum":2000}}})"),
+                     [live](const JsonValue& arguments) {
+                         SearchQuery query;
+                         query.pattern = StringArg(arguments, "pattern");
+                         query.regex = BoolArg(arguments, "regex", false);
+                         query.match_case = BoolArg(arguments, "match_case", false);
+                         query.whole_word = BoolArg(arguments, "whole_word", false);
+                         const TextSearch search(query);
+                         if (!search.ready()) {
+                             throw std::runtime_error(search.error().empty() ? "pattern is empty."
+                                                                             : "pattern is not a regex: " + search.error());
+                         }
+                         std::size_t left = static_cast<std::size_t>(IntArg(
+                             arguments, "limit", static_cast<int>(kDefaultMatches), 1, static_cast<int>(kMaxMatches)));
+                         struct Source {
+                             JsonValue brief;
+                             std::string text;
+                         };
+                         std::vector<Source> sources;
+                         {
+                             DataModel& world = live->datamodel();
+                             ReadLock lock(world);
+                             const JsonValue* ref = arguments.find("instance");
+                             std::vector<InstanceId> ids;
+                             CollectScripts(world, ref != nullptr ? Resolve(world, ref) : world.id(), ids);
+                             for (InstanceId id : ids) {
+                                 sources.push_back({Brief(world, id), ScriptAt(world, id).source()});
+                             }
+                         }
+                         JsonValue scripts = JsonValue::array();
+                         std::size_t total = 0;
+                         bool truncated = false;
+                         for (Source& source : sources) {
+                             if (left == 0) {
+                                 truncated = true;
+                                 break;
+                             }
+                             std::vector<TextMatch> matches = search.find_all(source.text, left + 1);
+                             if (matches.size() > left) {
+                                 matches.resize(left);
+                                 truncated = true;
+                             }
+                             if (matches.empty()) {
+                                 continue;
+                             }
+                             left -= matches.size();
+                             total += matches.size();
+                             JsonValue lines = JsonValue::array();
+                             int shown = 0;
+                             for (const TextMatch& match : matches) {
+                                 if (match.line + 1 == shown) {
+                                     continue;
+                                 }
+                                 shown = match.line + 1;
+                                 std::size_t stop = source.text.find('\n', match.line_byte);
+                                 if (stop == std::string::npos) {
+                                     stop = source.text.size();
+                                 }
+                                 JsonValue line = JsonValue::object();
+                                 line.set("line", JsonValue::number(shown));
+                                 line.set("text", JsonValue::string(
+                                                      ClipLine(source.text.substr(match.line_byte, stop - match.line_byte))));
+                                 lines.items().push_back(std::move(line));
+                             }
+                             JsonValue entry = std::move(source.brief);
+                             entry.erase("name");
+                             entry.set("lines", std::move(lines));
+                             scripts.items().push_back(std::move(entry));
+                         }
+                         JsonValue out = JsonValue::object();
+                         out.set("scripts", std::move(scripts));
+                         out.set("matches", JsonValue::number(static_cast<double>(total)));
+                         if (truncated) {
+                             out.set("truncated", JsonValue::boolean(true));
+                         }
+                         return out;
+                     }});
+
+    server.add_tool({"get_diagnostics",
+                     "The problems the studio's Luau analysis finds, as the script editor underlines them: syntax "
+                     "and type errors, and lint warnings. Checks one Script or ModuleScript, or every script under "
+                     "an instance, by default the whole place, waiting up to 10 seconds. Lists only scripts with "
+                     "problems, lines from 1. pending names scripts whose check had not finished.",
+                     json_literal(R"({"type":"object","properties":{
+                         "instance":{"type":["string","number"],"description":"A script, or an instance whose scripts to check. Default: the root, game."}}})"),
+                     [live](const JsonValue& arguments) {
+                         DataModel& world = live->datamodel();
+                         std::vector<InstanceId> ids;
+                         {
+                             ReadLock lock(world);
+                             const JsonValue* ref = arguments.find("instance");
+                             CollectScripts(world, ref != nullptr ? Resolve(world, ref) : world.id(), ids);
+                         }
+                         const Checked checked = CheckScripts(*live, ids);
+                         if (checked.off) {
+                             throw std::runtime_error("Script analysis is turned off in this studio.");
+                         }
+                         JsonValue scripts = JsonValue::array();
+                         JsonValue pending = JsonValue::array();
+                         int errors = 0;
+                         int warnings = 0;
+                         ReadLock lock(world);
+                         for (InstanceId id : ids) {
+                             const auto found = checked.problems.find(id);
+                             if (found == checked.problems.end() || found->second.empty() || !Exists(world, id)) {
+                                 continue;
+                             }
+                             for (const engine_core::Diagnostic& diagnostic : found->second) {
+                                 errors += diagnostic.severity == engine_core::Severity::Error ? 1 : 0;
+                                 warnings += diagnostic.severity == engine_core::Severity::Warning ? 1 : 0;
+                             }
+                             JsonValue entry = Brief(world, id);
+                             entry.erase("name");
+                             entry.set("problems", ProblemList(found->second));
+                             scripts.items().push_back(std::move(entry));
+                         }
+                         for (InstanceId id : checked.pending) {
+                             if (Exists(world, id)) {
+                                 pending.items().push_back(JsonValue::string(PathOf(world, id)));
+                             }
+                         }
+                         JsonValue out = JsonValue::object();
+                         out.set("checked", JsonValue::number(static_cast<double>(checked.problems.size())));
+                         out.set("errors", JsonValue::number(errors));
+                         out.set("warnings", JsonValue::number(warnings));
+                         out.set("scripts", std::move(scripts));
+                         if (!pending.items().empty()) {
+                             out.set("pending", std::move(pending));
                          }
                          return out;
                      }});
@@ -706,6 +1198,54 @@ void add_engine_tools(McpServer& server, engine_core::Engine& engine, McpStudio 
                          return out;
                      }});
 
+    server.add_tool({"undo",
+                     "Undoes place edits as the studio's Undo does: the last count of them, 1 by default. With "
+                     "redo, redoes instead. Each edit these tools make is one step, write_script and edit_script "
+                     "included. Returns the steps taken and what Undo and Redo would do next.",
+                     json_literal(R"({"type":"object","properties":{
+                         "redo":{"type":"boolean","description":"Default false."},
+                         "count":{"type":"integer","minimum":1,"maximum":50,"description":"Default 1."}}})"),
+                     [live, studio](const JsonValue& arguments) {
+                         const bool redo = BoolArg(arguments, "redo", false);
+                         const int count = IntArg(arguments, "count", 1, 1, kMaxUndoSteps);
+                         if (studio.flush_scripts) {
+                             studio.flush_scripts();
+                         }
+                         JsonValue out = RunEdit(*live, [redo, count](DataModel& world) {
+                             engine_core::ChangeHistoryService& history = world.history();
+                             // History neither undoes nor redoes in the middle of an edit.
+                             if (history.is_recording_in_progress()) {
+                                 throw std::runtime_error("An edit is still being made in the studio. Try again "
+                                                          "once it is done.");
+                             }
+                             JsonValue steps = JsonValue::array();
+                             for (int step = 0; step < count; ++step) {
+                                 const std::pair<bool, std::string> next = redo ? history.can_redo() : history.can_undo();
+                                 if (!next.first) {
+                                     break;
+                                 }
+                                 steps.items().push_back(JsonValue::string(next.second));
+                                 if (redo) {
+                                     history.redo();
+                                 } else {
+                                     history.undo();
+                                 }
+                             }
+                             const std::pair<bool, std::string> undo_next = history.can_undo();
+                             const std::pair<bool, std::string> redo_next = history.can_redo();
+                             JsonValue result = JsonValue::object();
+                             result.set(redo ? "redone" : "undone", std::move(steps));
+                             result.set("next_undo", undo_next.first ? JsonValue::string(undo_next.second) : JsonValue());
+                             result.set("next_redo", redo_next.first ? JsonValue::string(redo_next.second) : JsonValue());
+                             return result;
+                         });
+                         // Idle editors show the Source the history put back.
+                         if (studio.refresh_scripts) {
+                             studio.refresh_scripts();
+                         }
+                         return out;
+                     }});
+
     server.add_tool({"list_classes",
                      "The class names Luau knows, the ones Instance.new can create, and the services "
                      "game:GetService returns.",
@@ -788,11 +1328,31 @@ void add_engine_tools(McpServer& server, engine_core::Engine& engine, McpStudio 
         server.add_tool({"playtest",
                          "Runs the place as the studio's Test button does. start begins a test (or resumes a "
                          "paused one), pause and resume hold and continue it, stop ends it and restores the place "
-                         "as it was before start. status only reports. Every action returns the session state.",
+                         "as it was before start. status only reports. Every action returns the session state. "
+                         "With start or resume, run_for lets the test run that many seconds, ending early at the "
+                         "first error unless end_on_error is false, then pauses it so run_lua and get_properties "
+                         "can look at the play state (or does what then says), and returns what the place printed.",
                          json_literal(R"({"type":"object","required":["action"],"properties":{
-                             "action":{"type":"string","enum":["start","pause","resume","stop","status"]}}})"),
-                         [studio](const JsonValue& arguments) {
+                             "action":{"type":"string","enum":["start","pause","resume","stop","status"]},
+                             "run_for":{"type":"number","exclusiveMinimum":0,"maximum":60,"description":"Seconds."},
+                             "then":{"type":"string","enum":["pause","stop","run"],"description":"After run_for: pause (the default), stop, or keep running."},
+                             "end_on_error":{"type":"boolean","description":"Default true."}}})"),
+                         [live, studio](const JsonValue& arguments) {
                              const std::string& action = StringArg(arguments, "action");
+                             double run_for = 0;
+                             if (const JsonValue* value = arguments.find("run_for")) {
+                                 run_for = std::max(0.0, std::min(kMaxRunFor, NumberArg(*value, "run_for")));
+                             }
+                             std::string then = "pause";
+                             if (const JsonValue* value = arguments.find("then")) {
+                                 then = value->is_string() ? value->as_string() : "";
+                                 if (then != "pause" && then != "stop" && then != "run") {
+                                     throw std::runtime_error("then must be pause, stop, or run.");
+                                 }
+                             }
+                             const bool end_on_error = BoolArg(arguments, "end_on_error", true);
+                             engine_core::ScriptRuntime& scripts = live->scripts();
+                             const std::uint64_t from = scripts.output_next();
                              const std::string before = studio.session();
                              if (action == "start") {
                                  if (before == "stopped") {
@@ -816,7 +1376,80 @@ void add_engine_tools(McpServer& server, engine_core::Engine& engine, McpStudio 
                                  throw std::runtime_error("action must be start, pause, resume, stop, or status.");
                              }
                              JsonValue out = JsonValue::object();
+                             if (run_for <= 0 || (action != "start" && action != "resume")) {
+                                 out.set("session", JsonValue::string(studio.session()));
+                                 return out;
+                             }
+                             const auto began = std::chrono::steady_clock::now();
+                             const auto deadline = began + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                                               std::chrono::duration<double>(run_for));
+                             std::uint64_t seen = from;
+                             bool errored = false;
+                             while (!errored) {
+                                 const auto now = std::chrono::steady_clock::now();
+                                 if (now >= deadline) {
+                                     break;
+                                 }
+                                 std::this_thread::sleep_for(
+                                     std::min<std::chrono::steady_clock::duration>(kPlayPoll, deadline - now));
+                                 if (end_on_error) {
+                                     const engine_core::ScriptRuntime::OutputHistory newer =
+                                         scripts.output_since(seen, kDefaultOutputLines);
+                                     for (const engine_core::ScriptRuntime::OutputLine& line : newer.lines) {
+                                         errored = errored || line.kind == engine_core::ScriptRuntime::OutputKind::Error;
+                                     }
+                                     seen = newer.first + newer.lines.size();
+                                 }
+                                 // Someone pressed Pause or Stop in the studio.
+                                 if (!errored && studio.session() != "running") {
+                                     break;
+                                 }
+                             }
+                             const double ran = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+                             const std::string after = studio.session();
+                             if (then == "pause" && after == "running") {
+                                 studio.pause_test();
+                             } else if (then == "stop" && after != "stopped") {
+                                 studio.stop_test();
+                             }
+                             const engine_core::ScriptRuntime::OutputHistory printed =
+                                 scripts.output_since(from, kDefaultOutputLines);
+                             int errors = 0;
+                             for (const engine_core::ScriptRuntime::OutputLine& line : printed.lines) {
+                                 errors += line.kind == engine_core::ScriptRuntime::OutputKind::Error ? 1 : 0;
+                             }
                              out.set("session", JsonValue::string(studio.session()));
+                             out.set("ran_for", JsonValue::number(std::round(ran * 100.0) / 100.0));
+                             if (errored) {
+                                 out.set("ended_on_error", JsonValue::boolean(true));
+                             }
+                             out.set("errors", JsonValue::number(errors));
+                             out.set("output", OutputLines(printed));
+                             const std::uint64_t next = printed.first + printed.lines.size();
+                             if (next < printed.next) {
+                                 // More was printed than fits. get_output since next reads on.
+                                 out.set("next", JsonValue::number(static_cast<double>(next)));
+                             }
+                             return out;
+                         }});
+    }
+
+    if (studio.capture_view) {
+        server.add_tool({"screenshot",
+                         "A PNG of the studio's Scene View as it draws next, scaled to fit max_size pixels on its "
+                         "longer side. The view must be showing: a hidden tab or a minimized window does not draw.",
+                         json_literal(R"({"type":"object","properties":{
+                             "max_size":{"type":"integer","minimum":64,"maximum":2048,"description":"Default 1024."}}})"),
+                         [studio](const JsonValue& arguments) {
+                             const McpImage image =
+                                 studio.capture_view(IntArg(arguments, "max_size", kDefaultCaptureSize, 64, 2048));
+                             JsonValue picture = JsonValue::object();
+                             picture.set("data", JsonValue::string(base64_encode(image.png)));
+                             picture.set("mimeType", JsonValue::string("image/png"));
+                             JsonValue out = JsonValue::object();
+                             out.set("width", JsonValue::number(image.width));
+                             out.set("height", JsonValue::number(image.height));
+                             out.set(kImageMember, std::move(picture));
                              return out;
                          }});
     }

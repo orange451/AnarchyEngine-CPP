@@ -25,6 +25,7 @@ set(STUDIO_SOURCES
     src/runner/Renderer.cpp
     src/runner/Runner.cpp
     src/runner/GameView.cpp
+    src/runner/ViewCapture.cpp
     src/ide/IdePane.cpp
     src/ide/IdeDock.cpp
     src/ide/DockArrange.cpp
@@ -171,6 +172,22 @@ if(NOT httplib_POPULATED)
     FetchContent_Populate(httplib)
 endif()
 
+# stb_image_write encodes the MCP screenshot as PNG: one public-domain header,
+# pinned to the nothings/stb commit JadeFX takes stb_image from.
+FetchContent_Declare(
+    stb_image_write
+    URL https://raw.githubusercontent.com/nothings/stb/2c980bb59875b0d32144a71867fbdebb2f77cd20/stb_image_write.h
+    URL_HASH SHA256=cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05
+    DOWNLOAD_NO_EXTRACT TRUE
+)
+FetchContent_GetProperties(stb_image_write)
+if(NOT stb_image_write_POPULATED)
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
+    FetchContent_Populate(stb_image_write)
+endif()
+
 # The engine is four packages, each a static library with its own directory:
 #   engine_core       DataModel, events, threads, the script runtime, projects
 #   engine_datatypes  values: Vector2, Vector3, Color, Color3, Transform, Enum
@@ -245,6 +262,8 @@ endif()
 
 # Sources under src/ include each other as "ide/..." and "runner/...".
 target_include_directories(AnarchyEngine-CPP PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")
+# SYSTEM, so -Wextra does not report on the vendored header.
+target_include_directories(AnarchyEngine-CPP SYSTEM PRIVATE "${stb_image_write_SOURCE_DIR}")
 target_link_libraries(AnarchyEngine-CPP PRIVATE jadefx engine_core)
 # httplib's sockets. MSVC links these from a pragma in the header; MinGW needs them here.
 if(WIN32)
@@ -316,6 +335,8 @@ add_executable(studio-tests
     ${STUDIO_SOURCES}
 )
 target_include_directories(studio-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")
+# SYSTEM, so -Wextra does not report on the vendored header.
+target_include_directories(studio-tests SYSTEM PRIVATE "${stb_image_write_SOURCE_DIR}")
 target_link_libraries(studio-tests PRIVATE jadefx engine_core)
 target_compile_features(studio-tests PRIVATE cxx_std_17)
 if(WIN32)
@@ -332,6 +353,7 @@ add_executable(mcp-tests
     src/ide/McpTools.cpp
     src/ide/PropertySheet.cpp
     src/ide/StudioRegistry.cpp
+    src/ide/TextSearch.cpp
 )
 target_include_directories(mcp-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")
 target_link_libraries(mcp-tests PRIVATE engine_core)
@@ -350,6 +372,7 @@ add_executable(anarchy-mcp
     src/ide/McpTools.cpp
     src/ide/PropertySheet.cpp
     src/ide/StudioRegistry.cpp
+    src/ide/TextSearch.cpp
 )
 target_include_directories(anarchy-mcp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")
 target_link_libraries(anarchy-mcp PRIVATE engine_core)
@@ -367,6 +390,7 @@ add_executable(engine-tests
     tests/ScriptPairsTest.cpp
     tests/TextSearchTest.cpp
     tests/TextWrapTest.cpp
+    tests/ViewCaptureTest.cpp
     src/ide/ColorLiterals.cpp
     src/ide/LuauHighlight.cpp
     src/ide/LuauComplete.cpp
@@ -375,8 +399,10 @@ add_executable(engine-tests
     src/ide/TextSearch.cpp
     src/ide/TextWrap.cpp
     src/runner/Runner.cpp
+    src/runner/ViewCapture.cpp
 )
 target_include_directories(engine-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(engine-tests SYSTEM PRIVATE "${stb_image_write_SOURCE_DIR}")
 target_link_libraries(engine-tests PRIVATE engine_core)
 target_compile_features(engine-tests PRIVATE cxx_std_17)
 

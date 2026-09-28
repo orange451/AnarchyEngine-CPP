@@ -1199,6 +1199,27 @@ void Project::save_tree(bool full, SaveMode mode) {
                   files.source_bytes);
         }
     }
+    // Overwrite: a GUID the save wrote over a conflict keeps only the files it
+    // wrote. Any other file claiming it, as one moved outside, would load as a
+    // second instance with the same GUID.
+    for (const SaveConflict& conflict : conflicts) {
+        const auto claimed = claims.find(conflict.guid);
+        if (claimed == claims.end()) {
+            continue;
+        }
+        const auto planned = next.find(conflict.guid);
+        for (const std::string& path : claimed->second) {
+            if (planned != next.end() && (path == planned->second.props_path || path == planned->second.source_path)) {
+                continue;
+            }
+            const fs::path target = disk_path(root_, path);
+            if (fs::exists(target, error)) {
+                remove_file(target);
+                report.removed.push_back(path);
+                note_vacated(path);
+            }
+        }
+    }
     for (const auto& [guid, files] : files_) {
         if (next.count(guid) != 0) {
             continue;

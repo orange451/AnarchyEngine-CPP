@@ -1257,3 +1257,64 @@ TEST_CASE("G15 junk that mentions a GUID does not make a deleted file look moved
     REQUIRE(conflicts.size() == 1);
     REQUIRE(conflicts[0].kind == engine_core::SaveConflict::Kind::DeletedOutside);
 }
+
+TEST_CASE("G16 Overwrite writes the studio's version over an outside edit", "[G16][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    project.save();
+    const std::string path = leaf(game, a.id());
+    write_file(dir.path / path, read_file(dir.path / path) + "\n");
+
+    a.set_color(rgb(0.25f, 0.5f, 0.75f));
+    REQUIRE(save_conflicts(project).size() == 1);
+    project.save(engine_core::SaveMode::Overwrite);
+    REQUIRE(project.last_save().written == std::vector<std::string>{path});
+    REQUIRE(read_file(dir.path / path).find("\"Color\": [0.25, 0.5, 0.75]") != std::string::npos);
+    REQUIRE(save_conflicts(project).empty());
+    REQUIRE(project.last_save().written.empty());
+}
+
+TEST_CASE("G17 Overwrite of a file moved outside leaves one file for its GUID", "[G17][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const BoxAndLeaf ids(game, "Loose");
+    project.save();
+    const std::string guid = game.guid(ids.leaf);
+    const fs::path moved = ids.moved(dir.path, game);
+    fs::rename(dir.path / leaf(game, ids.leaf), moved);
+
+    game.game_object(ids.leaf)->set_color(rgb(0.25f, 0.5f, 0.75f));
+    REQUIRE(save_conflicts(project).size() == 1);
+    project.save(engine_core::SaveMode::Overwrite);
+    REQUIRE(leaf_files_of(dir.path, guid) == std::vector<std::string>{leaf(game, ids.leaf)});
+    REQUIRE_FALSE(fs::exists(moved));
+    Project loaded = Project::load(dir.path);
+    DataModel& again = loaded.datamodel();
+    const InstanceId loose = by_guid(again, guid);
+    REQUIRE(again.parent(loose) == 0);
+    REQUIRE(again.game_object(loose)->color().b == 0.75f);
+}
+
+TEST_CASE("G18 Overwrite puts back a file deleted outside", "[G18][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    project.save();
+    const std::string path = leaf(game, a.id());
+    const std::string guid = game.guid(a.id());
+    fs::remove(dir.path / path);
+
+    a.set_color(rgb(0.25f, 0.5f, 0.75f));
+    REQUIRE(save_conflicts(project).size() == 1);
+    project.save(engine_core::SaveMode::Overwrite);
+    REQUIRE(fs::exists(dir.path / path));
+    Project loaded = Project::load(dir.path);
+    REQUIRE(loaded.datamodel().game_object(by_guid(loaded.datamodel(), guid))->color().b == 0.75f);
+}

@@ -73,8 +73,9 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         engine_core::JsonValue doc;
         std::string error;
         engine_core::parse_json(ReadBytes(root / file), doc, error);
-        const float size[3] = {2.f, 2.f, 2.f};
-        doc.set("Size", engine_core::json_floats(size, 3));
+        // The studio changes Color too, so both sides changed the same property.
+        const float color[3] = {0.f, 1.f, 0.f};
+        doc.set("Color", engine_core::json_floats(color, 3));
         const std::string bytes = engine_core::write_json(doc);
         WriteBytes(root / file, bytes);
         return bytes;

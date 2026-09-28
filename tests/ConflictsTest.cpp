@@ -3,7 +3,18 @@
 #include "ide/IdeLayout.hpp"
 #include "ide/IdePane.hpp"
 
+#include "DataModel.hpp"
+#include "Engine.hpp"
+#include "GameObject.hpp"
+#include "Project.hpp"
+#include "PropertyBag.hpp"
+
 #include "jadefx/jadefx.hpp"
+
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 
 #include <cstdio>
 #include <memory>
@@ -167,5 +178,122 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         layout.reveal_window(search, [&opened] { opened = true; });
         expect(opened, "reveal_window opens a pane no dock holds");
     }
+
+    // Checks: what only the disk changed loads; a conflict goes to the window and the ribbon.
+    namespace fs = std::filesystem;
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    const fs::path folder = fs::temp_directory_path() / ("anarchy-sync-test-" + std::to_string(stamp));
+    const fs::path root = folder / "SyncPlace";
+    std::string part_file;
+    layout.simulation().on_simulation([&](engine_core::DataModel&) {
+        engine_core::Project project = engine_core::Project::create(root);
+        engine_core::DataModel& game = project.datamodel();
+        engine_core::GameObject& part = game.create_game_object();
+        game.set_name(part.id(), "Part");
+        game.set_parent(part.id(), 0);
+        project.save();
+        part_file = "src/Part." + game.guid(part.id()) + ".json";
+    });
+    layout.open_project_at(root);
+    auto set_disk = [&](const char* key, float x, float y, float z) {
+        std::ifstream in(root / part_file, std::ios::binary);
+        const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        in.close();
+        engine_core::JsonValue doc;
+        std::string error;
+        engine_core::parse_json(bytes, doc, error);
+        const float values[3] = {x, y, z};
+        doc.set(key, engine_core::json_floats(values, 3));
+        std::ofstream out(root / part_file, std::ios::binary | std::ios::trunc);
+        out << engine_core::write_json(doc);
+    };
+    auto part_color = [&layout] {
+        engine_core::ColorRgb color;
+        layout.simulation().on_simulation([&color](engine_core::DataModel& game) {
+            color = game.game_object(game.find_first_child(0, "Part"))->color();
+        });
+        return color;
+    };
+    auto part_has = [&layout](const char* key) {
+        bool found = false;
+        layout.simulation().on_simulation([&found, key](engine_core::DataModel& game) {
+            engine_core::PropertyBag bag;
+            game.instance(game.find_first_child(0, "Part"))->save_properties(bag);
+            found = engine_core::bag_find(bag, key) != nullptr;
+        });
+        return found;
+    };
+    auto paint = [&layout](float r, float g, float b) {
+        layout.simulation().on_simulation([r, g, b](engine_core::DataModel& game) {
+            engine_core::ColorRgb color;
+            color.r = r;
+            color.g = g;
+            color.b = b;
+            game.game_object(game.find_first_child(0, "Part"))->set_color(color);
+        });
+    };
+    auto count_shown = [&scene] {
+        const jadefx::Node* badge = scene.getElementById("conflicts-count");
+        return badge != nullptr && badge->isVisible();
+    };
+
+    set_disk("Size", 2, 2, 2);
+    layout.check_disk();
+    expect(part_has("Size"), "a change only the disk made loads when the studio checks");
+    expect(!layout.has_unsaved_changes(), "and leaves nothing to save");
+    expect(!count_shown(), "with no conflict, the ribbon shows no count");
+
+    set_disk("Color", 0, 1, 0);
+    scene.noteWindowFocus(false);
+    layout.flushFrame();
+    scene.noteWindowFocus(true);
+    layout.flushFrame();
+    expect(part_color().g == 1.f && part_color().r == 0.f, "coming back to the window checks the disk");
+
+    paint(0.25f, 0.5f, 0.75f);
+    set_disk("Color", 1, 0, 0);
+    layout.check_disk();
+    expect(count_shown(), "a conflict shows a count on the ribbon");
+    const auto* count = dynamic_cast<const jadefx::Label*>(scene.getElementById("conflicts-count-text"));
+    expect(count != nullptr && count->getText() == "1", "counting the rows");
+
+    layout.show_conflicts();
+    ide::IdeConflicts* pane = scene.getElementsByClassName("conflicts-pane").empty()
+                                  ? nullptr
+                                  : dynamic_cast<ide::IdeConflicts*>(scene.getElementsByClassName("conflicts-pane").front());
+    ide::IdeDock* home = DockOf(pane);
+    const std::shared_ptr<jadefx::Tab> pane_tab = home != nullptr ? TabOf(*home, pane) : nullptr;
+    expect(pane_tab && pane_tab->isSelected(), "the count's window docks and comes to the front");
+    expect(pane != nullptr && pane->conflicts().size() == 1, "listing the conflict");
+    if (pane != nullptr && pane->conflicts().size() == 1) {
+        pane->choose(0, true);
+        pane->apply();
+        expect(part_color().r == 1.f && part_color().b == 0.f, "Apply takes the disk's side");
+        expect(pane->conflicts().empty() && !count_shown(), "and the row and the count go");
+    }
+
+    paint(0.25f, 0.5f, 0.75f);
+    set_disk("Color", 0, 0, 1);
+    if (pane_tab) {
+        for (const std::shared_ptr<jadefx::Tab>& other : home->tabs()->getTabs().items()) {
+            if (other != pane_tab) {
+                home->tabs()->select(other);
+                break;
+            }
+        }
+    }
+    scene.noteKey(jadefx::Key::S, true, false, jadefx::Key::ModControl);
+    scene.noteKey(jadefx::Key::S, false, false, 0);
+    auto* show = dynamic_cast<jadefx::ButtonBase*>(scene.getElementById("save-conflict-show"));
+    expect(show != nullptr, "Save with a conflict offers the Conflicts window");
+    if (show != nullptr) {
+        show->fire();
+    }
+    expect(pane_tab && pane_tab->isSelected(), "Show Conflicts brings it to the front");
+    const auto* cancel = scene.getElementById("save-conflict-cancel");
+    expect(cancel == nullptr, "and closes the question");
+
+    std::error_code error;
+    fs::remove_all(folder, error);
     return failures;
 }

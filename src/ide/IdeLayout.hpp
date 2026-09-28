@@ -5,6 +5,7 @@
 #include "InputRouter.hpp"
 #include "Preferences.hpp"
 #include "ThemeLibrary.hpp"
+#include "Project.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -31,6 +32,7 @@ enum class DropSide;
 struct LayoutHost;
 class IdeScriptEditor;
 class IdeSearch;
+class IdeConflicts;
 class McpServer;
 class PreferencesPanel;
 class PropertiesPanel;
@@ -101,6 +103,17 @@ public:
     // Shows a dockable pane: open docks it when no dock holds it. Otherwise its
     // tab is selected, and a floating window that holds it comes to the front.
     void reveal_window(IdePane* pane, const std::function<void()>& open = {});
+    // Compares the disk with the place: loads what only the disk changed, and
+    // lists what both changed in the Conflicts window and as a count on the
+    // ribbon. choices are applied too. Returns the rows still open, or nothing
+    // when the check did not run: during a test, or when src/ does not read.
+    std::optional<std::vector<engine_core::SaveConflict>> check_disk(
+        const std::vector<engine_core::DiskChoice>& choices = {});
+    // Shows the Conflicts window, docking it beside the left explorer when it is closed.
+    void show_conflicts();
+    // Once a frame, after the scene lays out; the main window's stage calls it.
+    // Coming back to the window checks the disk here.
+    void flushFrame();
     // Writes the layout to layout.json in the config folder. A close request
     // on the main window does this. Nothing is written without a config folder.
     void save_layout();
@@ -137,7 +150,11 @@ private:
                            const std::vector<engine_core::SaveConflict>* overwrite = nullptr);
     // Lists the files a save found changed on disk. Overwrite saves over those
     // and runs then; Cancel writes nothing.
-    void confirm_overwrite(const std::vector<engine_core::SaveConflict>& conflicts, std::function<void()> then);
+    // checked: the rows came from a check, and Overwrite All settles each for the
+    // studio's side before saving. Otherwise they are the save's own, and it
+    // saves over exactly those.
+    void confirm_overwrite(const std::vector<engine_core::SaveConflict>& conflicts, std::function<void()> then,
+                           bool checked);
     // Runs proceed now when nothing is unsaved. Otherwise asks Save, Don't
     // Save, or Cancel; Save runs proceed only once the save succeeded.
     void confirm_discard(const std::string& question, std::function<void()> proceed);
@@ -212,6 +229,16 @@ private:
     void adopt_tree(const std::shared_ptr<jadefx::Node>& node);
     // The Search pane, made the first time it is asked for.
     const std::shared_ptr<IdeSearch>& search_pane();
+    // The Conflicts window, made the first time it is asked for.
+    const std::shared_ptr<IdeConflicts>& conflicts_pane();
+    // Where Search and Conflicts dock: beside the left explorer, else where editors dock.
+    IdeDock* side_home();
+    // The ribbon's count and the Conflicts window's rows, from conflicts_.
+    void show_conflict_count();
+    // Selects the instance with this GUID and shows it in every explorer.
+    void select_guid(const std::string& guid);
+    // A rename or a Properties field is being typed in: a check waits for it.
+    bool editing_field() const;
     // Opens a utility window around the node fill returns, and keeps it with
     // the shell's windows. Null, with no window left open, when it cannot open
     // or fill returns null.
@@ -226,7 +253,6 @@ private:
     void showDropMark(jadefx::Scene& scene, double x, double y, double width, double height, const char* style);
     void hideDropMark();
     void floatTab(const std::shared_ptr<jadefx::Tab>& tab, double screenX, double screenY);
-    void flushFrame();
     void removeDock(const std::shared_ptr<IdeDock>& dock);
     void noteReplaced(jadefx::Node& owner, const std::shared_ptr<jadefx::Node>&,
                       const std::shared_ptr<jadefx::Node>& replacement);
@@ -277,6 +303,20 @@ private:
     std::weak_ptr<class IdeConsole> console_;
     // Kept while its tab is closed, so reopening it keeps the search.
     std::shared_ptr<IdeSearch> search_;
+    std::shared_ptr<IdeConflicts> conflicts_pane_;
+    // The rows the last check left open.
+    std::vector<engine_core::SaveConflict> conflicts_;
+    // Why the last check could not read src/, so it is said once.
+    std::string disk_problem_;
+    // A check is due: the window came back, a test stopped, or an edit held one back.
+    bool check_pending_ = false;
+    bool was_focused_ = true;
+    // A test holds changes on disk back until it stops, and a toast said so.
+    bool noted_play_check_ = false;
+    // The ribbon's conflict count: shown only when there are conflicts.
+    jadefx::Node* conflict_count_ = nullptr;
+    jadefx::Label* conflict_count_text_ = nullptr;
+    std::shared_ptr<jadefx::Tooltip> conflict_tip_;
     std::vector<std::weak_ptr<class IdeExplorer>> explorers_;
     // The windows the Window menu opens and closes, besides Search.
     std::vector<std::unique_ptr<WindowEntry>> windows_;

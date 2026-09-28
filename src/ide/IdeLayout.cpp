@@ -13,6 +13,7 @@
 #include "SavedLayout.hpp"
 #include "ScriptRuntime.hpp"
 #include "IdeDock.hpp"
+#include "IdeConflicts.hpp"
 #include "IdeExplorer.hpp"
 #include "IdeScriptEditor.hpp"
 #include "IdeSearch.hpp"
@@ -65,6 +66,44 @@ T* Owning(jadefx::Node* node) {
         }
     }
     return nullptr;
+}
+
+std::string Counted(std::size_t count, const char* one, const char* many) {
+    return std::to_string(count) + " " + (count == 1 ? one : many);
+}
+
+// "Loaded 3 changes from disk: Part, Door, and 1 more".
+std::string LoadedText(const std::vector<std::string>& names) {
+    if (names.size() == 1) {
+        return "Loaded a change from disk: " + names[0];
+    }
+    if (names.size() == 2) {
+        return "Loaded 2 changes from disk: " + names[0] + " and " + names[1];
+    }
+    return "Loaded " + std::to_string(names.size()) + " changes from disk: " + names[0] + ", " + names[1] + ", and " +
+           std::to_string(names.size() - 2) + " more";
+}
+
+// One row of the save gate: "Part · Color", or what happened to the whole instance.
+std::string ConflictLine(const engine_core::SaveConflict& row) {
+    std::string what = row.key;
+    if (what.empty()) {
+        switch (row.kind) {
+        case engine_core::SaveConflict::Kind::DeletedOutside:
+            what = "deleted on disk";
+            break;
+        case engine_core::SaveConflict::Kind::MovedOutside:
+            what = "moved on disk";
+            break;
+        case engine_core::SaveConflict::Kind::AddedOutside:
+            what = "added on disk";
+            break;
+        case engine_core::SaveConflict::Kind::EditedOutside:
+            what = row.disk == "can't be read" ? "can't be read" : "changed on disk";
+            break;
+        }
+    }
+    return (row.name.empty() ? row.path : row.name) + " \u00b7 " + what;
 }
 
 bool InTextWidget(jadefx::Node* node) {
@@ -471,6 +510,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         ->setOnAction([this](jadefx::ActionEvent&) { save_project(); });
     AddItem(*file, "Save As", "SaveAs.png", jadefx::Key::S, jadefx::Key::ModControl | jadefx::Key::ModShift)
         ->setOnAction([this](jadefx::ActionEvent&) { save_project_as(); });
+    AddItem(*file, "Reload from Disk", nullptr, 0, 0)->setOnAction([this](jadefx::ActionEvent&) { check_disk(); });
     file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     AddItem(*file, "Preferences\u2026", nullptr, jadefx::Key::Comma, jadefx::Key::ModControl)
         ->setOnAction([this](jadefx::ActionEvent&) { open_preferences(); });
@@ -504,6 +544,24 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     ribbon->getChildren().add(std::move(pause));
     ribbon->getChildren().add(std::move(resume));
     ribbon->getChildren().add(std::move(stop));
+    // Conflicts with the disk: a count at the right end, shown only when there are any.
+    auto gap = jadefx::make<jadefx::Pane>();
+    gap->setStyle("width: 100%;");
+    gap->setMouseTransparent(true);
+    ribbon->getChildren().add(gap);
+    auto count = jadefx::make<RibbonButton>("0", "Warning.png", [this] { show_conflicts(); });
+    count->setElementId("conflicts-count");
+    count->setVisible(false);
+    for (const std::shared_ptr<jadefx::Node>& child : count->getChildren().items()) {
+        if (auto* label = dynamic_cast<jadefx::Label*>(child.get())) {
+            label->setElementId("conflicts-count-text");
+            conflict_count_text_ = label;
+        }
+    }
+    conflict_tip_ = jadefx::make<jadefx::Tooltip>("");
+    jadefx::Tooltip::install(count.get(), conflict_tip_);
+    conflict_count_ = count.get();
+    ribbon->getChildren().add(std::move(count));
 
 
     auto insert = jadefx::make<jadefx::MenuItem>("Insert Triangle");
@@ -811,6 +869,10 @@ void IdeLayout::fill_window_menu(jadefx::Menu& menu) {
     add("Search", "Search.png", [this] { return search_ && dockContaining(search_.get()) != nullptr; })
         ->setOnAction([this](jadefx::ActionEvent&) {
             toggle_window(search_.get(), [this] { open_search(false, scene_); });
+        });
+    add("Conflicts", "Warning.png", [this] { return conflicts_pane_ && dockContaining(conflicts_pane_.get()) != nullptr; })
+        ->setOnAction([this](jadefx::ActionEvent&) {
+            toggle_window(conflicts_pane_.get(), [this] { show_conflicts(); });
         });
     menu.getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     add("New Scene View", "Camera.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { new_scene_view(); });
@@ -2107,6 +2169,20 @@ void GrowToFit(const jadefx::Node* area, jadefx::Scene* scene, const std::functi
 void IdeLayout::flushFrame() {
     ++frames_;
     noteScriptFocus();
+    // Coming back to the window checks the disk. During a test the check only
+    // notes that changes wait; after it, or once an edit ends, it runs.
+    const bool focused = scene_ != nullptr && scene_->isWindowFocused();
+    if (focused && !was_focused_) {
+        if (testing_) {
+            check_disk();
+        } else {
+            check_pending_ = true;
+        }
+    }
+    was_focused_ = focused;
+    if (check_pending_ && !testing_ && !editing_field()) {
+        check_disk();
+    }
     refresh_modified();
     const std::vector<std::shared_ptr<IdeDock>> pending = std::move(pendingEmpty_);
     pendingEmpty_.clear();
@@ -2299,6 +2375,166 @@ const std::shared_ptr<IdeSearch>& IdeLayout::search_pane() {
     return search_;
 }
 
+IdeDock* IdeLayout::side_home() {
+    // Beside the left explorer, as VS Code keeps search in its side bar.
+    for (const std::weak_ptr<IdeExplorer>& weak : explorers_) {
+        if (const std::shared_ptr<IdeExplorer> explorer = weak.lock()) {
+            if (IdeDock* home = dockContaining(explorer.get())) {
+                return home;
+            }
+        }
+    }
+    return editorHome();
+}
+
+const std::shared_ptr<IdeConflicts>& IdeLayout::conflicts_pane() {
+    if (conflicts_pane_ && dockContaining(conflicts_pane_.get()) == nullptr && conflicts_pane_->getParent() != nullptr) {
+        // Still held by a tab that is on its way out. Start a new pane.
+        conflicts_pane_.reset();
+    }
+    if (!conflicts_pane_) {
+        ConflictsHost host;
+        host.apply = [this](const std::vector<engine_core::DiskChoice>& choices) { check_disk(choices); };
+        host.refresh = [this] { check_disk(); };
+        host.select = [this](const std::string& guid) { select_guid(guid); };
+        host.class_of = [this](const std::string& guid) {
+            std::string name;
+            run_now([&](engine_core::DataModel& game) {
+                const std::optional<engine_core::InstanceId> id = game.find_guid(guid);
+                if (id && *id != 0 && game.instance(*id) != nullptr) {
+                    name = game.instance(*id)->class_name();
+                }
+            });
+            return name;
+        };
+        conflicts_pane_ = jadefx::make<IdeConflicts>(std::move(host));
+        conflicts_pane_->setConflicts(conflicts_);
+        conflicts_pane_->setApplyEnabled(!testing_);
+        if (!disk_problem_.empty()) {
+            conflicts_pane_->setProblem("Can't read the project on disk: " + disk_problem_);
+        }
+    }
+    return conflicts_pane_;
+}
+
+void IdeLayout::show_conflicts() {
+    conflicts_pane();
+    reveal_window(conflicts_pane_.get(), [this] {
+        if (IdeDock* home = side_home()) {
+            home->dock(conflicts_pane_);
+        }
+    });
+}
+
+void IdeLayout::show_conflict_count() {
+    if (conflicts_pane_) {
+        conflicts_pane_->setConflicts(conflicts_);
+        conflicts_pane_->setApplyEnabled(!testing_);
+    }
+    if (conflict_count_ != nullptr) {
+        conflict_count_->setVisible(!conflicts_.empty());
+    }
+    if (conflict_count_text_ != nullptr) {
+        conflict_count_text_->setText(std::to_string(conflicts_.size()));
+    }
+    if (conflict_tip_) {
+        conflict_tip_->setText(Counted(conflicts_.size(), "conflict", "conflicts") + " with files on disk");
+    }
+}
+
+void IdeLayout::select_guid(const std::string& guid) {
+    bool found = false;
+    run_now([&](engine_core::DataModel& game) {
+        const std::optional<engine_core::InstanceId> id = game.find_guid(guid);
+        if (id && *id != 0) {
+            game.selection().set({*id});
+            found = true;
+        }
+    });
+    if (!found) {
+        return;
+    }
+    for (const std::weak_ptr<IdeExplorer>& weak : explorers_) {
+        const std::shared_ptr<IdeExplorer> explorer = weak.lock();
+        if (explorer && dockContaining(explorer.get()) != nullptr) {
+            explorer->reveal_selection();
+        }
+    }
+}
+
+bool IdeLayout::editing_field() const {
+    if (scene_ == nullptr) {
+        return false;
+    }
+    jadefx::Node* focused = scene_->focusedNode();
+    return InTextWidget(focused) && (Owning<IdeExplorer>(focused) != nullptr || Owning<PropertiesPanel>(focused) != nullptr);
+}
+
+std::optional<std::vector<engine_core::SaveConflict>> IdeLayout::check_disk(
+    const std::vector<engine_core::DiskChoice>& choices) {
+    if (!project_) {
+        return std::vector<engine_core::SaveConflict>();
+    }
+    if (testing_) {
+        // A test runs on the place captured at Test. Changes on disk wait for Stop.
+        check_pending_ = true;
+        if (!noted_play_check_) {
+            bool waiting = false;
+            run_now([&](engine_core::DataModel&) {
+                try {
+                    const engine_core::DiskScan scan = project_->scan_disk();
+                    waiting = scan.has_disk_changes || !scan.conflicts.empty();
+                } catch (const std::exception&) {
+                }
+            });
+            if (waiting) {
+                show_toast("Changes on disk will load when the test stops");
+                noted_play_check_ = true;
+            }
+        }
+        return std::nullopt;
+    }
+    // Typing an editor has not written yet is the studio's side.
+    flush_editors();
+    engine_core::DiskScan scan;
+    std::string problem;
+    run_now([&](engine_core::DataModel&) {
+        try {
+            scan = project_->apply_disk(choices);
+        } catch (const std::exception& failure) {
+            problem = failure.what();
+        }
+    });
+    check_pending_ = false;
+    noted_play_check_ = false;
+    // The base may have moved without the place moving, so the title looks again.
+    seen_revision_ = ~std::uint64_t{0};
+    if (!problem.empty()) {
+        if (problem != disk_problem_) {
+            show_toast("Can't read the project on disk: " + problem);
+        }
+        disk_problem_ = problem;
+        if (conflicts_pane_) {
+            conflicts_pane_->setProblem("Can't read the project on disk: " + problem);
+        }
+        return std::nullopt;
+    }
+    disk_problem_.clear();
+    if (conflicts_pane_) {
+        conflicts_pane_->setProblem("");
+    }
+    if (!scan.loaded.empty()) {
+        show_toast(LoadedText(scan.loaded));
+    }
+    if (!scan.skipped.empty()) {
+        show_toast(Counted(scan.skipped.size(), "row", "rows") + " changed on disk and " +
+                   (scan.skipped.size() == 1 ? "wasn't" : "weren't") + " applied");
+    }
+    conflicts_ = scan.conflicts;
+    show_conflict_count();
+    return scan.conflicts;
+}
+
 void IdeLayout::open_search(bool replace, jadefx::Scene* scene) {
     // A selection on one line in the focused editor is what to find.
     std::string seed;
@@ -2320,19 +2556,7 @@ void IdeLayout::open_search(bool replace, jadefx::Scene* scene) {
         if (!replace) {
             search_->setReplaceShown(false);
         }
-        // Beside the left explorer, as VS Code keeps search in its side bar.
-        IdeDock* home = nullptr;
-        for (const std::weak_ptr<IdeExplorer>& weak : explorers_) {
-            if (const std::shared_ptr<IdeExplorer> explorer = weak.lock()) {
-                home = dockContaining(explorer.get());
-                if (home != nullptr) {
-                    break;
-                }
-            }
-        }
-        if (home == nullptr) {
-            home = editorHome();
-        }
+        IdeDock* home = side_home();
         if (home == nullptr) {
             return;
         }
@@ -2730,6 +2954,8 @@ void IdeLayout::stop_test() {
     reapply_editors();
     restore_closed_edits();
     show_session(false, false);
+    // Changes on disk that waited for the test load on the next frame.
+    check_pending_ = true;
 }
 
 void IdeLayout::run_now(const std::function<void(engine_core::DataModel&)>& fn) {
@@ -2842,9 +3068,18 @@ void IdeLayout::refresh_modified() {
         // Only an authored change moves the revision, so this runs at the pace
         // of edits. Play steps do not move it.
         seen_revision_ = revision;
+        // A project compares key by key, so a file on disk that is only
+        // formatted differently does not count. An untitled place has no files.
         std::uint64_t now = 0;
-        run_now([&now](engine_core::DataModel& world) { now = engine_core::Project::place_fingerprint(world); });
-        place_modified_ = now != saved_fingerprint_;
+        bool unsaved = false;
+        run_now([&](engine_core::DataModel& world) {
+            if (project_) {
+                unsaved = project_->unsaved();
+            } else {
+                now = engine_core::Project::place_fingerprint(world);
+            }
+        });
+        place_modified_ = project_ ? unsaved : now != saved_fingerprint_;
     }
     if ((place_modified_ || editors_unflushed()) != title_modified_) {
         update_title();
@@ -3019,6 +3254,16 @@ void IdeLayout::open_project_at(const std::filesystem::path& root) {
 
 bool IdeLayout::save_open_project(std::function<void()> then,
                                   const std::vector<engine_core::SaveConflict>* overwrite) {
+    // A check first: what only the disk changed loads, and what both changed
+    // stops the save and asks. When the check cannot run, during a test or with
+    // src/ unreadable, the save's own guard still stops at a changed file.
+    if (overwrite == nullptr) {
+        const std::optional<std::vector<engine_core::SaveConflict>> open = check_disk();
+        if (open && !open->empty()) {
+            confirm_overwrite(*open, std::move(then), true);
+            return false;
+        }
+    }
     // Open editors write Source first. During play the save writes the place
     // captured at Test, so play edits stay out of it either way.
     flush_editors();
@@ -3034,7 +3279,7 @@ bool IdeLayout::save_open_project(std::function<void()> then,
         }
     });
     if (!conflicts.empty()) {
-        confirm_overwrite(conflicts, std::move(then));
+        confirm_overwrite(conflicts, std::move(then), false);
         return false;
     }
     if (!error.empty()) {
@@ -3051,7 +3296,7 @@ bool IdeLayout::save_open_project(std::function<void()> then,
 }
 
 void IdeLayout::confirm_overwrite(const std::vector<engine_core::SaveConflict>& conflicts,
-                                  std::function<void()> then) {
+                                  std::function<void()> then, bool checked) {
     runner_.simulation().scripts().append_output(
         engine_core::ScriptRuntime::OutputKind::Error,
         "Not saved: " + engine_core::describe_conflict(conflicts.front()) +
@@ -3063,34 +3308,54 @@ void IdeLayout::confirm_overwrite(const std::vector<engine_core::SaveConflict>& 
     std::string detail;
     const std::size_t shown = std::min<std::size_t>(conflicts.size(), 5);
     for (std::size_t index = 0; index < shown; ++index) {
-        detail += engine_core::describe_conflict(conflicts[index]) + "\n";
+        detail += ConflictLine(conflicts[index]) + "\n";
     }
     if (conflicts.size() > shown) {
         detail += "and " + std::to_string(conflicts.size() - shown) + " more\n";
     }
-    detail += "\nOverwrite writes the studio's version over them. Cancel saves nothing.";
-    const jadefx::ButtonType overwrite("Overwrite", jadefx::ButtonType::Data::OkDone);
-    auto alert = std::make_shared<jadefx::Alert>(jadefx::AlertType::Warning, detail,
-                                                 std::vector<jadefx::ButtonType>{overwrite, jadefx::ButtonType::Cancel()});
+    detail += "\nTo see more information, check the Conflicts window.";
+    const jadefx::ButtonType show("Show Conflicts", jadefx::ButtonType::Data::Left);
+    const jadefx::ButtonType overwrite("Overwrite All", jadefx::ButtonType::Data::OkDone);
+    auto alert = std::make_shared<jadefx::Alert>(
+        jadefx::AlertType::Warning, detail,
+        std::vector<jadefx::ButtonType>{show, overwrite, jadefx::ButtonType::Cancel()});
     alert->setTitle("Anarchy Engine");
-    alert->setHeaderText(conflicts.size() == 1
-                             ? std::string("A file changed on disk since the project was opened or saved.")
-                             : std::to_string(conflicts.size()) +
-                                   " files changed on disk since the project was opened or saved.");
-    // Overwrite writes over exactly these. A file that changed while the alert
-    // was up stops that save and asks again.
-    alert->setOnClosed([this, overwrite, listed = conflicts, then = std::move(then)](const jadefx::ButtonType* choice) {
+    alert->setHeaderText(Counted(conflicts.size(), "conflict", "conflicts") + " with files changed on disk.");
+    // Overwrite All takes the studio's side of exactly these. A file that
+    // changed while the alert was up is asked about again.
+    alert->setOnClosed([this, show, overwrite, listed = conflicts, checked, then = std::move(then)](
+                           const jadefx::ButtonType* choice) {
         prompt_open_ = false;
-        if (choice != nullptr && *choice == overwrite && project_ && save_open_project(then, &listed) && then) {
+        if (choice == nullptr) {
+            return;
+        }
+        if (*choice == show) {
+            show_conflicts();
+            return;
+        }
+        if (*choice != overwrite || !project_) {
+            return;
+        }
+        if (checked) {
+            std::vector<engine_core::DiskChoice> keep;
+            for (const engine_core::SaveConflict& row : listed) {
+                keep.push_back({row, false});
+            }
+            check_disk(keep);
+            if (save_open_project(then) && then) {
+                then();
+            }
+        } else if (save_open_project(then, &listed) && then) {
             then();
         }
     });
     // Finished alerts are not dropped here: this may run inside the closed
     // handler of the alert that asked last.
     alert->show(*scene_);
-    // Stable names for the two answers, so a test can find them.
-    const std::pair<const jadefx::ButtonType*, const char*> ids[] = {
-        {&overwrite, "save-conflict-overwrite"}, {&jadefx::ButtonType::Cancel(), "save-conflict-cancel"}};
+    // Stable names for the answers, so a test can find them.
+    const std::pair<const jadefx::ButtonType*, const char*> ids[] = {{&show, "save-conflict-show"},
+                                                                     {&overwrite, "save-conflict-overwrite"},
+                                                                     {&jadefx::ButtonType::Cancel(), "save-conflict-cancel"}};
     for (const auto& [type, id] : ids) {
         if (jadefx::Button* button = alert->lookupButton(*type)) {
             button->setElementId(id);

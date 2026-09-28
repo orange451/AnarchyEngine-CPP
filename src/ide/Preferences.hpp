@@ -1,0 +1,36 @@
+#pragma once
+
+#include "PropertyBag.hpp"
+
+#include <filesystem>
+#include <string>
+
+namespace ide {
+
+// The studio's settings for this user, kept in preferences.json in the config
+// folder. Keys it does not know are kept when it writes, so a newer studio's
+// settings survive an older one.
+class Preferences {
+public:
+    // file: where they are kept. Empty: nothing is read or written.
+    explicit Preferences(std::filesystem::path file);
+
+    const std::filesystem::path& file() const { return file_; }
+    // Why the file could not be read, or is not a JSON object. The settings
+    // are then the defaults, and writing replaces the file.
+    const std::string& load_error() const { return load_error_; }
+
+    // The id of the theme the studio draws with. "light" when none was chosen.
+    std::string theme() const;
+    void set_theme(const std::string& id);
+
+    // Writes the file. True, doing nothing, when there is no file.
+    bool save(std::string& error) const;
+
+private:
+    std::filesystem::path file_;
+    engine_core::JsonValue root_ = engine_core::JsonValue::object();
+    std::string load_error_;
+};
+
+}  // namespace ide

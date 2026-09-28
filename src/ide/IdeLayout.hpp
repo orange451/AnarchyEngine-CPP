@@ -3,6 +3,8 @@
 #include "jadefx/jadefx.hpp"
 #include "../runner/Runner.hpp"
 #include "InputRouter.hpp"
+#include "Preferences.hpp"
+#include "ThemeLibrary.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -11,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace engine_core {
@@ -26,6 +29,7 @@ class IdePane;
 class IdeScriptEditor;
 class IdeSearch;
 class McpServer;
+class PreferencesPanel;
 class PropertiesPanel;
 
 // IDE shell, in the shape of OpenGLFX-IDE's IdeLayout.
@@ -47,10 +51,14 @@ class PropertiesPanel;
 // File opens and saves a project folder through the system folder dialog.
 // Until the first Save As, the place has no folder. New, Open, and closing the
 // window ask first when the place has changes a save would write.
+// File > Preferences (Cmd+,) opens the Preferences window. The theme it picks
+// is kept in the config folder and drawn with from the start.
 class IdeLayout {
 public:
     // windowWidth and windowHeight are the window size in points, used to place the splitters.
-    IdeLayout(double windowWidth, double windowHeight);
+    // config is where the user's preferences and themes are kept. Empty keeps
+    // none: the studio draws with the light theme, and Preferences saves nothing.
+    IdeLayout(double windowWidth, double windowHeight, const std::filesystem::path& config = {});
     ~IdeLayout();
 
     engine_core::Engine& simulation();
@@ -58,8 +66,8 @@ public:
     void start();
     // Starts the MCP server, so an LLM client can read and edit the place.
     // ANARCHY_MCP_PORT picks the port (default 7777), ANARCHY_MCP=0 turns it
-    // off, and ANARCHY_MCP_TOKEN makes clients send that bearer token. The
-    // console says where it listens, or why it could not.
+    // off, and ANARCHY_MCP_TOKEN makes clients send that bearer token. A
+    // toast says where it listens; the console says why it could not.
     void start_mcp();
     void mount(jadefx::Scene& scene);
     // Grows the window after a frame when a dock's minimum no longer fits.
@@ -70,6 +78,8 @@ public:
     // True when a save would write something, or an editor holds text its
     // script's Source does not have yet.
     bool has_unsaved_changes();
+    // Opens the Preferences window, or leaves the open one be.
+    void open_preferences();
 
 private:
     struct Clip;
@@ -114,6 +124,9 @@ private:
     void stop_test();
     void close_script_editors();
     void show_error(const std::string& heading, const std::string& detail);
+    // News that needs no answer, as a JadeFX toast at the bottom right of the window.
+    // One sent before mount waits for it.
+    void show_toast(std::string text, double seconds = jadefx::Toast::LENGTH_SHORT);
     void update_title();
     std::filesystem::path dialog_directory() const;
     void reapply_editors();
@@ -135,8 +148,8 @@ private:
     void onTabDrag(IdeDock& from, const jadefx::TabDrag& drag);
     void previewDrag(IdeDock& from, const jadefx::TabDrag& drag);
     void applyDrag(IdeDock& from, const jadefx::TabDrag& drag);
-    void showDropMark(jadefx::Scene& scene, double x, double y, double width, double height, const char* border,
-                      jadefx::Color fill);
+    // style is the mark's inline CSS: its outline and fill.
+    void showDropMark(jadefx::Scene& scene, double x, double y, double width, double height, const char* style);
     void hideDropMark();
     void floatTab(const std::shared_ptr<jadefx::Tab>& tab, double screenX, double screenY);
     void flushFrame();
@@ -165,6 +178,8 @@ private:
 
     // Declared first so the runner outlives the widgets during teardown.
     runner::Runner runner_;
+    Preferences preferences_;
+    ThemeLibrary themes_;
     std::shared_ptr<jadefx::BorderPane> root_;
     std::shared_ptr<jadefx::Node> workArea_;
     std::vector<std::shared_ptr<IdeDock>> docks_;
@@ -220,6 +235,11 @@ private:
     jadefx::Node* session_buttons_[4] = {};
     // Open alerts. An alert must outlive its popup.
     std::vector<std::shared_ptr<jadefx::Alert>> alerts_;
+    // Toasts sent before mount, with their seconds. Mount shows them.
+    std::vector<std::pair<std::string, double>> pending_toasts_;
+    // Last, so they go before the preferences and themes they edit.
+    std::shared_ptr<jadefx::UtilityWindow> preferences_window_;
+    std::shared_ptr<PreferencesPanel> preferences_panel_;
 };
 
 }  // namespace ide

@@ -4,16 +4,23 @@
 #include "ide/IdeSearch.hpp"
 
 #include "Engine.hpp"
+#include "Project.hpp"
 #include "ScriptRuntime.hpp"
 
 #include "jadefx/jadefx.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <string>
 #include <vector>
 
 int RunFindReplaceTests(engine_core::Engine& engine);
+int RunThemeTests(jadefx::Scene& scene);
+int RunPreferencesTests();
 
 // R10: the studio's default layout builds, and its docks hold the explorers,
 // the console, and Properties. Runs headless: the threads are never started.
@@ -30,6 +37,27 @@ int main() {
     layout.mount(*scene);
     scene->layout(1280, 800, 0.1);
     scene->layout(1280, 800, 0.2);
+
+    // Preferences is in the File menu, and only there.
+    // The menu bar is the first row of the root's top.
+    jadefx::MenuBar* bar = nullptr;
+    if (auto* root = dynamic_cast<jadefx::BorderPane*>(scene->getRoot())) {
+        if (auto* top = dynamic_cast<jadefx::VBox*>(root->getTop()); top != nullptr && !top->getChildren().empty()) {
+            bar = dynamic_cast<jadefx::MenuBar*>(top->getChildren()[0].get());
+        }
+    }
+    expect(bar != nullptr, "the menu bar tops the studio");
+    std::vector<std::string> holding;
+    if (bar != nullptr) {
+        for (const std::shared_ptr<jadefx::Menu>& menu : bar->getMenus().items()) {
+            for (const std::shared_ptr<jadefx::MenuItem>& item : menu->getItems().items()) {
+                if (item && item->getText() == "Preferences\u2026") {
+                    holding.push_back(menu->getText());
+                }
+            }
+        }
+    }
+    expect(holding == std::vector<std::string>{"File"}, "Preferences is in the File menu alone");
 
     std::vector<std::string> names;
     std::vector<ide::IdePane*> panes;
@@ -201,7 +229,41 @@ int main() {
         expect(again != nullptr && !again->replaceShown(), "Search opens again with replace hidden");
     }
 
+    failures += RunThemeTests(*scene);
     failures += RunFindReplaceTests(layout.simulation());
+    failures += RunPreferencesTests();
+
+    // Opening a project says so in a toast, and not in the console. Last, since it replaces the place.
+    {
+        namespace fs = std::filesystem;
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        const fs::path folder = fs::temp_directory_path() / ("anarchy-toast-test-" + std::to_string(stamp));
+        const fs::path root = folder / "ToastPlace";
+        layout.simulation().on_simulation([&](engine_core::DataModel&) { engine_core::Project::create(root); });
+        engine_core::ScriptRuntime& scripts = layout.simulation().scripts();
+        const std::uint64_t before = scripts.output_next();
+        layout.open_project_at(root);
+        scene->layout(1280, 800, 2.0);
+        scene->layout(1280, 800, 2.05);
+        jadefx::Label* toast = nullptr;
+        for (jadefx::Node* node : scene->getElementsByClassName("toast")) {
+            auto* label = dynamic_cast<jadefx::Label*>(node);
+            if (label != nullptr && label->getText() == "Opened ToastPlace" && scene->isPopupShowing(label)) {
+                toast = label;
+            }
+        }
+        expect(toast != nullptr, "opening a project shows a toast naming it");
+        expect(toast != nullptr && toast->getWidth() > 0 &&
+                   std::abs(toast->getAbsoluteX() + toast->getWidth() - (1280 - 16)) < 1,
+               "the toast sits at the right of the window");
+        bool logged = false;
+        for (const auto& line : scripts.output_since(before, 100).lines) {
+            logged = logged || line.text.find("Opened") != std::string::npos;
+        }
+        expect(!logged, "and the console does not say it");
+        std::error_code error;
+        fs::remove_all(folder, error);
+    }
 
     if (failures == 0) {
         std::printf("studio layout tests passed\n");

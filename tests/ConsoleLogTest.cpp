@@ -261,6 +261,27 @@ int main() {
         Expect(opened == 0, "a drag across printed text selects it instead");
     }
 
+    // Toggles and printed text draw in the theme's text color, not link blue.
+    {
+        struct Styled : ide::ConsoleLog {
+            using jadefx::StyleClassedTextArea::resolveStyle;
+        };
+        auto probe = jadefx::make<Styled>();
+        auto probeScene = jadefx::make<jadefx::Scene>(probe, 600, 300);
+        probe->appendLine(ScriptLine("t\ttable: 0x1\n", 9, 5, {{"t", nullptr}, {"table: 0x1", MakeTable()}}));
+        const int brace = probe->absolutePosition(0, Column(*probe, 0, "{...}"));
+        const jadefx::StyleSpans spans = probe->getStyleSpans(brace, brace + 5);
+        Expect(!probe->resolveStyle(spans.spans().front().style).hasFill, "a toggle sets no fill of its own");
+        for (const char* theme : {jadefx::Theme::LIGHT, jadefx::Theme::DARK}) {
+            probeScene->setUserAgentStylesheet(theme);
+            probeScene->layout(600, 300, 0);
+            const jadefx::Color link = probe->themeColor(jadefx::ThemeColor::Link);
+            const jadefx::Color text = probe->computedStyle().color;
+            Expect(link.r == text.r && link.g == text.g && link.b == text.b && link.a == text.a,
+                   "links take the theme's text color");
+        }
+    }
+
     log->clearLog();
     Expect(log->paragraphCount() == 1 && log->getText().empty(), "clearing empties the log");
     Expect(!log->toggleAt(0, 0), "a cleared log has no toggles");

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "IdeTheme.hpp"
 #include "ScriptRuntime.hpp"
 
 #include "jadefx/jadefx.hpp"
@@ -98,11 +99,14 @@ private:
     // Styles a toggle's braces and links them.
     void styleToggle(int offset, const Toggle& toggle);
     void syncRows();
+    // The text colors, from the theme.
+    void defineStyles();
 
     std::vector<Row> rows_;
     std::vector<Link> links_;
     std::function<void(std::uint32_t, int)> onOpenScript_;
     mutable int nextLink_ = 0;
+    ThemeListener themeListener_{[this] { defineStyles(); }};
 };
 
 }  // namespace ide

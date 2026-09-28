@@ -1,0 +1,155 @@
+/*
+ * Dracula, by Zeno Rocha and contributors: https://draculatheme.com (MIT).
+ * Colors from the Dracula spec. Keywords are pink, functions green, types cyan,
+ * strings yellow, and numbers orange, as the spec assigns them.
+ *
+ * Built on the shipped dark theme. Its own palette comes first; every color after
+ * names one of them, so changing a palette color changes everything drawn in it.
+ */
+:root {
+    --theme-name: "Dracula";
+    --theme-base: dark;
+
+    /* Palette */
+    --dracula-background: #282a36;
+    --dracula-current-line: #44475a;
+    --dracula-foreground: #f8f8f2;
+    --dracula-comment: #6272a4;
+    --dracula-cyan: #8be9fd;
+    --dracula-green: #50fa7b;
+    --dracula-orange: #ffb86c;
+    --dracula-pink: #ff79c6;
+    --dracula-purple: #bd93f9;
+    --dracula-red: #ff5555;
+    --dracula-yellow: #f1fa8c;
+    --dracula-background-lighter: #424450;
+    --dracula-background-light: #343746;
+    --dracula-background-dark: #21222c;
+    --dracula-background-darker: #191a21;
+
+    /* Controls (JadeFX) */
+    --background-color: var(--dracula-background-darker);
+    --surface-color: var(--dracula-background-dark);
+    --text-color: var(--dracula-foreground);
+    --muted-color: #b4b7cc;
+    --faint-color: var(--dracula-comment);
+    --border-color: var(--dracula-background-darker);
+    --accent-color: var(--dracula-purple);
+    --link-color: var(--dracula-cyan);
+    --hover-color: var(--dracula-background-lighter);
+    --track-color: var(--dracula-background-darker);
+    --subtle-color: var(--dracula-background-light);
+    --selection-color: var(--dracula-current-line);
+    --selection-hover-color: #4d5066;
+    --row-hover-color: #2c2e3a;
+    --tab-color: var(--dracula-background-darker);
+    --tooltip-color: var(--dracula-foreground);
+    --tooltip-text-color: var(--dracula-background);
+    --text-selection-color: rgba(98, 114, 164, 0.45);
+    --current-line-color: rgba(68, 71, 90, 0.45);
+    --divider-color: var(--dracula-background-darker);
+    --grip-color: var(--dracula-comment);
+    --warning-color: var(--dracula-yellow);
+    --error-color: var(--dracula-red);
+    --success-color: var(--dracula-green);
+
+    /* Studio */
+    --ide-window-color: var(--dracula-background-darker);
+    --ide-text-color: var(--dracula-foreground);
+    --ide-muted-text-color: #b4b7cc;
+    --ide-panel-color: var(--dracula-background-dark);
+    --ide-status-bar-color: var(--dracula-background-darker);
+    --ide-field-color: var(--dracula-background-light);
+    --ide-field-border-color: var(--dracula-background-darker);
+    --ide-error-text-color: var(--dracula-red);
+    --ide-warning-text-color: var(--dracula-yellow);
+
+    /* Ribbon */
+    --ide-ribbon-color: var(--dracula-background-light);
+    --ide-ribbon-border-color: var(--dracula-background-darker);
+    --ide-ribbon-hover-color: var(--dracula-background-lighter);
+    --ide-ribbon-pressed-color: #4d5066;
+
+    /* Scene View */
+    --ide-viewport-color: #1e1e1e;
+    --ide-fps-color: rgba(0, 0, 0, 0.45);
+    --ide-fps-text-color: #f2f2f2;
+
+    /* Docking */
+    --ide-dock-merge-color: var(--dracula-purple);
+    --ide-dock-merge-fill-color: rgba(189, 147, 249, 0.3);
+    --ide-dock-split-color: var(--dracula-green);
+    --ide-dock-split-fill-color: rgba(80, 250, 123, 0.25);
+    --ide-dock-float-color: var(--dracula-orange);
+    --ide-dock-float-fill-color: rgba(255, 184, 108, 0.3);
+    --ide-dock-caret-color: var(--dracula-purple);
+
+    /* Popups */
+    --ide-popup-color: var(--dracula-background-light);
+    --ide-popup-border-color: var(--dracula-background-darker);
+    --ide-popup-shadow-color: rgba(0, 0, 0, 0.5);
+    --ide-popup-text-color: var(--dracula-foreground);
+    --ide-popup-detail-text-color: #b4b7cc;
+    --ide-popup-selection-color: var(--dracula-current-line);
+    --ide-popup-header-color: var(--dracula-background-dark);
+    --ide-popup-header-text-color: #b4b7cc;
+
+    /* Script Editor */
+    --ide-editor-color: var(--dracula-background);
+    --ide-editor-text-color: var(--dracula-foreground);
+    --ide-syntax-keyword-color: var(--dracula-pink);
+    --ide-syntax-builtin-color: var(--dracula-green);
+    --ide-syntax-datatype-color: var(--dracula-cyan);
+    --ide-syntax-comment-color: var(--dracula-comment);
+    --ide-syntax-string-color: var(--dracula-yellow);
+    --ide-syntax-number-color: var(--dracula-orange);
+    --ide-find-match-color: rgba(255, 184, 108, 0.3);
+    --ide-find-current-color: rgba(255, 184, 108, 0.6);
+    --ide-swatch-border-color: rgba(255, 255, 255, 0.35);
+    --ide-banner-color: var(--dracula-background-dark);
+    --ide-banner-text-color: #b4b7cc;
+    --ide-banner-error-color: rgba(255, 85, 85, 0.18);
+    --ide-banner-warning-color: rgba(241, 250, 140, 0.14);
+
+    /* Search */
+    --ide-find-bar-color: var(--dracula-background-light);
+    --ide-find-bar-border-color: var(--dracula-background-darker);
+    --ide-find-bar-shadow-color: rgba(0, 0, 0, 0.5);
+    --ide-search-field-text-color: var(--dracula-foreground);
+    --ide-search-field-border-color: var(--dracula-background-darker);
+    --ide-search-field-focus-color: var(--dracula-purple);
+    --ide-search-field-invalid-color: var(--dracula-red);
+    --ide-find-button-text-color: var(--dracula-foreground);
+    --ide-find-button-hover-color: rgba(255, 255, 255, 0.08);
+    --ide-find-button-pressed-color: rgba(255, 255, 255, 0.14);
+    --ide-find-button-checked-color: rgba(189, 147, 249, 0.3);
+    --ide-find-button-checked-border-color: var(--dracula-purple);
+    --ide-search-status-color: #b4b7cc;
+    --ide-search-status-error-color: var(--dracula-red);
+    --ide-search-divider-color: var(--dracula-background-darker);
+    --ide-search-path-color: #b4b7cc;
+    --ide-search-badge-color: var(--dracula-background-lighter);
+    --ide-search-badge-text-color: var(--dracula-foreground);
+
+    /* Console */
+    --ide-console-command-color: var(--dracula-cyan);
+    --ide-console-time-color: var(--dracula-comment);
+    --ide-console-key-color: var(--dracula-purple);
+    --ide-console-note-color: var(--dracula-comment);
+
+    /* Explorer */
+    --ide-explorer-button-color: #b4b7cc;
+    --ide-explorer-button-hover-color: var(--dracula-current-line);
+    --ide-explorer-button-disabled-color: var(--dracula-comment);
+
+    /* Properties */
+    --ide-properties-group-color: var(--dracula-background-light);
+    --ide-properties-group-text-color: #b4b7cc;
+    --ide-properties-readonly-name-color: var(--dracula-comment);
+    --ide-properties-readonly-color: var(--dracula-background-dark);
+    --ide-properties-readonly-border-color: var(--dracula-background-darker);
+    --ide-properties-picking-color: var(--dracula-current-line);
+    --ide-properties-picking-border-color: var(--dracula-purple);
+    --ide-properties-error-color: var(--dracula-red);
+    --ide-properties-hint-color: var(--dracula-purple);
+}

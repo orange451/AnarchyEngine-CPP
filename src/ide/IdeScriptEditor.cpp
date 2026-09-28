@@ -4,6 +4,7 @@
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
 #include "FindBar.hpp"
+#include "IdeTheme.hpp"
 #include "LuaSource.hpp"
 #include "LuauComplete.hpp"
 #include "LuauHighlight.hpp"
@@ -51,50 +52,53 @@ const EditorFont& editor_font() {
     return font;
 }
 
+// The problem banner under the editor. Its colors are added for each severity.
+constexpr const char* kBannerStyle = "font-size: 12px; ";
+
 void define_styles(jadefx::StyleClassedTextArea& area) {
     jadefx::TextStyle keyword;
     keyword.hasFill = true;
-    keyword.fill = jadefx::Color::parse("#7a3e9d");
+    keyword.fill = theme_color("--ide-syntax-keyword-color");
     keyword.bold = true;
     area.defineStyleClass("keyword", keyword);
 
     jadefx::TextStyle builtin;
     builtin.hasFill = true;
-    builtin.fill = jadefx::Color::parse("#0b6e84");
+    builtin.fill = theme_color("--ide-syntax-builtin-color");
     builtin.bold = true;
     area.defineStyleClass("builtin", builtin);
 
     // Instance, Vector3, Enum: types, so they read apart from functions like print.
     jadefx::TextStyle datatype;
     datatype.hasFill = true;
-    datatype.fill = jadefx::Color::parse("#a3470a");
+    datatype.fill = theme_color("--ide-syntax-datatype-color");
     datatype.bold = true;
     area.defineStyleClass("datatype", datatype);
 
     jadefx::TextStyle comment;
     comment.hasFill = true;
-    comment.fill = jadefx::Color::parse("#6a737d");
+    comment.fill = theme_color("--ide-syntax-comment-color");
     area.defineStyleClass("comment", comment);
 
     jadefx::TextStyle stringStyle;
     stringStyle.hasFill = true;
-    stringStyle.fill = jadefx::Color::parse("#0a7d33");
+    stringStyle.fill = theme_color("--ide-syntax-string-color");
     area.defineStyleClass("string", stringStyle);
 
     jadefx::TextStyle number;
     number.hasFill = true;
-    number.fill = jadefx::Color::parse("#0550ae");
+    number.fill = theme_color("--ide-syntax-number-color");
     area.defineStyleClass("number", number);
 
     // Every match of the find bar, and the one it is on.
     jadefx::TextStyle match;
     match.hasBackground = true;
-    match.background = jadefx::Color::parse("rgba(234, 92, 0, 0.22)");
+    match.background = theme_color("--ide-find-match-color");
     area.defineStyleClass("find-match", match);
 
     jadefx::TextStyle current;
     current.hasBackground = true;
-    current.background = jadefx::Color::parse("rgba(234, 92, 0, 0.5)");
+    current.background = theme_color("--ide-find-current-color");
     area.defineStyleClass("find-current", current);
 }
 
@@ -183,6 +187,7 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     // Load before the area is laid out. The stylesheet asks for this family.
     (void)editor_font();
     define_styles(*area_);
+    theme_listener_ = std::make_unique<ThemeListener>([this] { define_styles(*area_); });
     area_->setOnPlainTextChange([this](const jadefx::PlainTextChange& change) {
         if (!loading_ && !mute_undo_ && undo_stack_ != nullptr) {
             if (!undo_stack_->record_change(change.position, change.removed, change.inserted)) {
@@ -214,7 +219,7 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     status_->setMouseTransparent(true);
     status_->setVisible(false);
     status_->setPadding(jadefx::Insets{3, 8, 3, 8});
-    status_->setStyle("font-size: 12px;");
+    status_->setStyle(kBannerStyle);
     status_->setMinSize(0, 0);
     status_->setPrefHeight(0);
     status_->setMaxSize(100000, 0);
@@ -771,7 +776,8 @@ void IdeScriptEditor::refresh_color_swatches() {
             auto square = std::make_shared<jadefx::Pane>();
             square->setPrefSize(kSwatchSize, kSwatchSize);
             square->setFocusTraversable(false);
-            square->setStyle("border-width: 1px; border-style: solid; border-color: rgba(0, 0, 0, 0.35); border-radius: 2px;");
+            square->setStyle("border-width: 1px; border-style: solid; border-color: var(--ide-swatch-border-color); "
+                             "border-radius: 2px;");
             slot->getChildren().add(square);
             slot->setOnMouseClicked([this, i](const jadefx::MouseEvent&) { open_color_picker(i); });
             color_swatches_.push_back(slot);
@@ -885,7 +891,7 @@ void show_banner(jadefx::Label& status, const ScriptProblemSummary& summary) {
         status.setText("");
         status.setPrefHeight(0);
         status.setMaxSize(100000, 0);
-        status.setBackground(jadefx::Color::transparent());
+        status.setStyle(kBannerStyle);
         return;
     }
     if (status.isVisible() && status.getText() == summary.text) {
@@ -895,17 +901,13 @@ void show_banner(jadefx::Label& status, const ScriptProblemSummary& summary) {
     status.setText(summary.text);
     status.setPrefHeight(22);
     status.setMaxSize(100000, 28);
-    jadefx::Color fill = jadefx::Color::rgb8(92, 101, 112);
-    jadefx::Color back = jadefx::Color::rgb8(243, 244, 246);
+    const char* colors = "color: var(--ide-banner-text-color); background-color: var(--ide-banner-color);";
     if (summary.blocks_compile || summary.severity == engine_core::Severity::Error) {
-        fill = jadefx::Color::rgb8(176, 0, 32);
-        back = jadefx::Color::rgb8(253, 236, 234);
+        colors = "color: var(--ide-error-text-color); background-color: var(--ide-banner-error-color);";
     } else if (summary.severity == engine_core::Severity::Warning) {
-        fill = jadefx::Color::rgb8(138, 90, 0);
-        back = jadefx::Color::rgb8(255, 244, 214);
+        colors = "color: var(--ide-warning-text-color); background-color: var(--ide-banner-warning-color);";
     }
-    status.setTextFill(fill);
-    status.setBackground(back);
+    status.setStyle(std::string(kBannerStyle) + colors);
 }
 
 }  // namespace
@@ -1254,8 +1256,9 @@ void ScriptCodeArea::handleMouseMoved(const jadefx::MouseEvent& event) {
     if (editor == nullptr) {
         return;
     }
+    // Below the last line nothing is under the pointer, even where it lines up with a word on that line.
     const jadefx::CharacterHit where = hit(event.x, event.y);
-    if (!where.valid) {
+    if (!where.valid || !where.onLine) {
         dismissHover();
         return;
     }
@@ -1456,11 +1459,11 @@ void ScriptCodeArea::showTip(const std::string& title, const std::string& detail
         tip_->setSpacing(2);
         tip_->setPadding(jadefx::Insets{6, kTipPaddingX, 6, kTipPaddingX});
         tip_->setStyle(
-            "background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #c5c8ce; "
-            "box-shadow: 0 2px 8px rgba(32, 33, 36, 0.16);");
+            "background-color: var(--ide-popup-color); border-style: solid; border-width: 1px; "
+            "border-color: var(--ide-popup-border-color); box-shadow: 0 2px 8px var(--ide-popup-shadow-color);");
     }
     tip_->getChildren().clear();
-    const jadefx::Color body_fill = jadefx::Color::parse("#5c6570");
+    const jadefx::Color body_fill = theme_color("--ide-popup-detail-text-color");
     // A Label draws one line and cuts off what does not fit, so long text is
     // wrapped here, one Label per line. The tip is never wider than
     // kTipMaxWidth, or than the window less a margin.
@@ -1526,14 +1529,14 @@ void ScriptCodeArea::showHover() {
     if (const ScriptMark* mark = problemAt(hover_index_)) {
         hover_begin_ = mark->start;
         hover_end_ = std::max(mark->end, mark->start + 1);
-        jadefx::Color title = jadefx::Color::rgb8(176, 0, 32);
+        const char* title = "--ide-error-text-color";
         if (mark->severity == engine_core::Severity::Warning) {
-            title = jadefx::Color::rgb8(138, 90, 0);
+            title = "--ide-warning-text-color";
         } else if (mark->severity != engine_core::Severity::Error) {
-            title = jadefx::Color::parse("#1f2328");
+            title = "--ide-popup-text-color";
         }
         const std::string heading = mark->message.empty() ? mark->code : mark->message;
-        showTip(heading, problem_detail(*mark), "", title);
+        showTip(heading, problem_detail(*mark), "", theme_color(title));
         return;
     }
     const HoverInfo info = hover_luau(getText(), hover_index_, editor->world(), editor->id_);
@@ -1543,7 +1546,7 @@ void ScriptCodeArea::showHover() {
     }
     hover_begin_ = info.begin;
     hover_end_ = info.end;
-    showTip(info.title, info.detail, info.summary, jadefx::Color::parse("#1f2328"));
+    showTip(info.title, info.detail, info.summary, theme_color("--ide-popup-text-color"));
 }
 
 void ScriptCodeArea::tickHover() {

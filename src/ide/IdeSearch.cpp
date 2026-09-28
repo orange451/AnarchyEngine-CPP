@@ -24,38 +24,38 @@ constexpr double kRowHeight = 22;
 
 constexpr const char* kSearchRules = R"CSS(
 .search-pane {
-    background-color: #ffffff;
+    background-color: var(--ide-panel-color);
 }
 .search-header {
     padding: 8px 8px 4px 2px;
     spacing: 2px;
 }
 .search-summary {
-    color: #616161;
+    color: var(--ide-search-status-color);
     font-size: 12px;
     padding: 2px 8px 6px 8px;
 }
 .search-summary.error {
-    color: #a1260d;
+    color: var(--ide-search-status-error-color);
 }
 .search-results {
     border-width: 1px 0 0 0;
     border-style: solid;
-    border-color: #e5e5e5;
+    border-color: var(--ide-search-divider-color);
 }
 .search-path, .search-line-number {
-    color: #717171;
+    color: var(--ide-search-path-color);
     font-size: 12px;
 }
 .search-badge {
-    background-color: #c4c4c4;
-    color: #1f2328;
+    background-color: var(--ide-search-badge-color);
+    color: var(--ide-search-badge-text-color);
     border-radius: 8px;
     font-size: 11px;
     padding: 0 6px;
 }
 .search-hit {
-    background-color: rgba(234, 92, 0, 0.22);
+    background-color: var(--ide-find-match-color);
     border-radius: 2px;
 }
 )CSS";

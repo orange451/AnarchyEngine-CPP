@@ -1,0 +1,159 @@
+/*
+ * Nord, by Arctic Ice Studio and Sven Greb: https://www.nordtheme.com (MIT).
+ * Polar Night for backgrounds, Snow Storm for text, Frost for accents and
+ * keywords, Aurora for strings, numbers, and states, as the Nord docs assign them.
+ * Comments are the brightened nord3 that Nord's editor ports use.
+ *
+ * Built on the shipped dark theme. Its own palette comes first; every color after
+ * names one of them, so changing a palette color changes everything drawn in it.
+ */
+:root {
+    --theme-name: "Nord";
+    --theme-base: dark;
+
+    /* Palette */
+    --nord-nord0: #2e3440;
+    --nord-nord1: #3b4252;
+    --nord-nord2: #434c5e;
+    --nord-nord3: #4c566a;
+    --nord-nord3-bright: #616e88;
+    --nord-nord4: #d8dee9;
+    --nord-nord5: #e5e9f0;
+    --nord-nord6: #eceff4;
+    --nord-nord7: #8fbcbb;
+    --nord-nord8: #88c0d0;
+    --nord-nord9: #81a1c1;
+    --nord-nord10: #5e81ac;
+    --nord-nord11: #bf616a;
+    --nord-nord12: #d08770;
+    --nord-nord13: #ebcb8b;
+    --nord-nord14: #a3be8c;
+    --nord-nord15: #b48ead;
+    --nord-nord0-dark: #272c36;
+
+    /* Controls (JadeFX) */
+    --background-color: var(--nord-nord0-dark);
+    --surface-color: var(--nord-nord0);
+    --text-color: var(--nord-nord6);
+    --muted-color: var(--nord-nord4);
+    --faint-color: var(--nord-nord3-bright);
+    --border-color: var(--nord-nord2);
+    --accent-color: var(--nord-nord8);
+    --link-color: var(--nord-nord8);
+    --hover-color: var(--nord-nord2);
+    --track-color: var(--nord-nord0-dark);
+    --subtle-color: var(--nord-nord1);
+    --selection-color: var(--nord-nord2);
+    --selection-hover-color: var(--nord-nord3);
+    --row-hover-color: #353b49;
+    --tab-color: var(--nord-nord0-dark);
+    --tooltip-color: var(--nord-nord6);
+    --tooltip-text-color: var(--nord-nord0);
+    --text-selection-color: rgba(129, 161, 193, 0.3);
+    --current-line-color: rgba(67, 76, 94, 0.5);
+    --divider-color: var(--nord-nord2);
+    --grip-color: var(--nord-nord3-bright);
+    --warning-color: var(--nord-nord13);
+    --error-color: var(--nord-nord11);
+    --success-color: var(--nord-nord14);
+
+    /* Studio */
+    --ide-window-color: var(--nord-nord0-dark);
+    --ide-text-color: var(--nord-nord6);
+    --ide-muted-text-color: var(--nord-nord4);
+    --ide-panel-color: var(--nord-nord0);
+    --ide-status-bar-color: var(--nord-nord0-dark);
+    --ide-field-color: var(--nord-nord1);
+    --ide-field-border-color: var(--nord-nord2);
+    --ide-error-text-color: var(--nord-nord11);
+    --ide-warning-text-color: var(--nord-nord13);
+
+    /* Ribbon */
+    --ide-ribbon-color: var(--nord-nord1);
+    --ide-ribbon-border-color: var(--nord-nord2);
+    --ide-ribbon-hover-color: var(--nord-nord2);
+    --ide-ribbon-pressed-color: var(--nord-nord3);
+
+    /* Scene View */
+    --ide-viewport-color: #1e1e1e;
+    --ide-fps-color: rgba(0, 0, 0, 0.45);
+    --ide-fps-text-color: #f2f2f2;
+
+    /* Docking */
+    --ide-dock-merge-color: var(--nord-nord8);
+    --ide-dock-merge-fill-color: rgba(136, 192, 208, 0.3);
+    --ide-dock-split-color: var(--nord-nord14);
+    --ide-dock-split-fill-color: rgba(163, 190, 140, 0.3);
+    --ide-dock-float-color: var(--nord-nord13);
+    --ide-dock-float-fill-color: rgba(235, 203, 139, 0.3);
+    --ide-dock-caret-color: var(--nord-nord8);
+
+    /* Popups */
+    --ide-popup-color: var(--nord-nord1);
+    --ide-popup-border-color: var(--nord-nord2);
+    --ide-popup-shadow-color: rgba(0, 0, 0, 0.5);
+    --ide-popup-text-color: var(--nord-nord6);
+    --ide-popup-detail-text-color: var(--nord-nord4);
+    --ide-popup-selection-color: var(--nord-nord2);
+    --ide-popup-header-color: var(--nord-nord0);
+    --ide-popup-header-text-color: var(--nord-nord4);
+
+    /* Script Editor */
+    --ide-editor-color: var(--nord-nord0);
+    --ide-editor-text-color: var(--nord-nord4);
+    --ide-syntax-keyword-color: var(--nord-nord9);
+    --ide-syntax-builtin-color: var(--nord-nord8);
+    --ide-syntax-datatype-color: var(--nord-nord7);
+    --ide-syntax-comment-color: var(--nord-nord3-bright);
+    --ide-syntax-string-color: var(--nord-nord14);
+    --ide-syntax-number-color: var(--nord-nord15);
+    --ide-find-match-color: rgba(136, 192, 208, 0.2);
+    --ide-find-current-color: rgba(136, 192, 208, 0.4);
+    --ide-swatch-border-color: rgba(255, 255, 255, 0.35);
+    --ide-banner-color: var(--nord-nord0);
+    --ide-banner-text-color: var(--nord-nord4);
+    --ide-banner-error-color: rgba(191, 97, 106, 0.25);
+    --ide-banner-warning-color: rgba(235, 203, 139, 0.18);
+
+    /* Search */
+    --ide-find-bar-color: var(--nord-nord1);
+    --ide-find-bar-border-color: var(--nord-nord2);
+    --ide-find-bar-shadow-color: rgba(0, 0, 0, 0.5);
+    --ide-search-field-text-color: var(--nord-nord6);
+    --ide-search-field-border-color: var(--nord-nord2);
+    --ide-search-field-focus-color: var(--nord-nord8);
+    --ide-search-field-invalid-color: var(--nord-nord11);
+    --ide-find-button-text-color: var(--nord-nord6);
+    --ide-find-button-hover-color: rgba(255, 255, 255, 0.08);
+    --ide-find-button-pressed-color: rgba(255, 255, 255, 0.14);
+    --ide-find-button-checked-color: rgba(136, 192, 208, 0.3);
+    --ide-find-button-checked-border-color: var(--nord-nord8);
+    --ide-search-status-color: var(--nord-nord4);
+    --ide-search-status-error-color: var(--nord-nord11);
+    --ide-search-divider-color: var(--nord-nord2);
+    --ide-search-path-color: var(--nord-nord4);
+    --ide-search-badge-color: var(--nord-nord2);
+    --ide-search-badge-text-color: var(--nord-nord6);
+
+    /* Console */
+    --ide-console-command-color: var(--nord-nord8);
+    --ide-console-time-color: var(--nord-nord3-bright);
+    --ide-console-key-color: var(--nord-nord9);
+    --ide-console-note-color: var(--nord-nord3-bright);
+
+    /* Explorer */
+    --ide-explorer-button-color: var(--nord-nord4);
+    --ide-explorer-button-hover-color: var(--nord-nord2);
+    --ide-explorer-button-disabled-color: var(--nord-nord3-bright);
+
+    /* Properties */
+    --ide-properties-group-color: var(--nord-nord1);
+    --ide-properties-group-text-color: var(--nord-nord4);
+    --ide-properties-readonly-name-color: var(--nord-nord3-bright);
+    --ide-properties-readonly-color: var(--nord-nord0);
+    --ide-properties-readonly-border-color: var(--nord-nord2);
+    --ide-properties-picking-color: var(--nord-nord2);
+    --ide-properties-picking-border-color: var(--nord-nord8);
+    --ide-properties-error-color: var(--nord-nord11);
+    --ide-properties-hint-color: var(--nord-nord8);
+}

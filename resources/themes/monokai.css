@@ -1,0 +1,158 @@
+/*
+ * Monokai, by Wimer Hazenberg, as VS Code ships it:
+ * https://github.com/microsoft/vscode/tree/main/extensions/theme-monokai (MIT).
+ * Keywords are pink, library functions cyan, classes green, strings yellow, and
+ * numbers purple.
+ *
+ * Built on the shipped dark theme. Its own palette comes first; every color after
+ * names one of them, so changing a palette color changes everything drawn in it.
+ */
+:root {
+    --theme-name: "Monokai";
+    --theme-base: dark;
+
+    /* Palette */
+    --monokai-background: #272822;
+    --monokai-sidebar: #1e1f1c;
+    --monokai-window: #171814;
+    --monokai-tab: #34352f;
+    --monokai-line: #3e3d32;
+    --monokai-input: #414339;
+    --monokai-selection: #49483e;
+    --monokai-active: #75715e;
+    --monokai-foreground: #f8f8f2;
+    --monokai-subtle: #cfcfc2;
+    --monokai-comment: #88846f;
+    --monokai-pink: #f92672;
+    --monokai-orange: #fd971f;
+    --monokai-yellow: #e6db74;
+    --monokai-green: #a6e22e;
+    --monokai-cyan: #66d9ef;
+    --monokai-purple: #ae81ff;
+
+    /* Controls (JadeFX) */
+    --background-color: var(--monokai-window);
+    --surface-color: var(--monokai-sidebar);
+    --text-color: var(--monokai-foreground);
+    --muted-color: var(--monokai-subtle);
+    --faint-color: var(--monokai-comment);
+    --border-color: var(--monokai-input);
+    --accent-color: var(--monokai-cyan);
+    --link-color: var(--monokai-cyan);
+    --hover-color: var(--monokai-line);
+    --track-color: var(--monokai-window);
+    --subtle-color: var(--monokai-tab);
+    --selection-color: var(--monokai-selection);
+    --selection-hover-color: var(--monokai-active);
+    --row-hover-color: #2d2e27;
+    --tab-color: var(--monokai-window);
+    --tooltip-color: var(--monokai-foreground);
+    --tooltip-text-color: var(--monokai-background);
+    --text-selection-color: rgba(135, 139, 145, 0.5);
+    --current-line-color: rgba(62, 61, 50, 0.75);
+    --divider-color: var(--monokai-input);
+    --grip-color: var(--monokai-comment);
+    --warning-color: var(--monokai-yellow);
+    --error-color: var(--monokai-pink);
+    --success-color: var(--monokai-green);
+
+    /* Studio */
+    --ide-window-color: var(--monokai-window);
+    --ide-text-color: var(--monokai-foreground);
+    --ide-muted-text-color: var(--monokai-subtle);
+    --ide-panel-color: var(--monokai-sidebar);
+    --ide-status-bar-color: var(--monokai-window);
+    --ide-field-color: var(--monokai-input);
+    --ide-field-border-color: var(--monokai-input);
+    --ide-error-text-color: var(--monokai-pink);
+    --ide-warning-text-color: var(--monokai-yellow);
+
+    /* Ribbon */
+    --ide-ribbon-color: var(--monokai-tab);
+    --ide-ribbon-border-color: var(--monokai-input);
+    --ide-ribbon-hover-color: var(--monokai-line);
+    --ide-ribbon-pressed-color: var(--monokai-input);
+
+    /* Scene View */
+    --ide-viewport-color: #1e1e1e;
+    --ide-fps-color: rgba(0, 0, 0, 0.45);
+    --ide-fps-text-color: #f2f2f2;
+
+    /* Docking */
+    --ide-dock-merge-color: var(--monokai-cyan);
+    --ide-dock-merge-fill-color: rgba(102, 217, 239, 0.3);
+    --ide-dock-split-color: var(--monokai-green);
+    --ide-dock-split-fill-color: rgba(166, 226, 46, 0.25);
+    --ide-dock-float-color: var(--monokai-orange);
+    --ide-dock-float-fill-color: rgba(253, 151, 31, 0.3);
+    --ide-dock-caret-color: var(--monokai-cyan);
+
+    /* Popups */
+    --ide-popup-color: var(--monokai-tab);
+    --ide-popup-border-color: var(--monokai-input);
+    --ide-popup-shadow-color: rgba(0, 0, 0, 0.5);
+    --ide-popup-text-color: var(--monokai-foreground);
+    --ide-popup-detail-text-color: var(--monokai-subtle);
+    --ide-popup-selection-color: var(--monokai-selection);
+    --ide-popup-header-color: var(--monokai-sidebar);
+    --ide-popup-header-text-color: var(--monokai-subtle);
+
+    /* Script Editor */
+    --ide-editor-color: var(--monokai-background);
+    --ide-editor-text-color: var(--monokai-foreground);
+    --ide-syntax-keyword-color: var(--monokai-pink);
+    --ide-syntax-builtin-color: var(--monokai-cyan);
+    --ide-syntax-datatype-color: var(--monokai-green);
+    --ide-syntax-comment-color: var(--monokai-comment);
+    --ide-syntax-string-color: var(--monokai-yellow);
+    --ide-syntax-number-color: var(--monokai-purple);
+    --ide-find-match-color: rgba(230, 219, 116, 0.25);
+    --ide-find-current-color: rgba(230, 219, 116, 0.5);
+    --ide-swatch-border-color: rgba(255, 255, 255, 0.35);
+    --ide-banner-color: var(--monokai-sidebar);
+    --ide-banner-text-color: var(--monokai-subtle);
+    --ide-banner-error-color: rgba(249, 38, 114, 0.2);
+    --ide-banner-warning-color: rgba(230, 219, 116, 0.15);
+
+    /* Search */
+    --ide-find-bar-color: var(--monokai-tab);
+    --ide-find-bar-border-color: var(--monokai-input);
+    --ide-find-bar-shadow-color: rgba(0, 0, 0, 0.5);
+    --ide-search-field-text-color: var(--monokai-foreground);
+    --ide-search-field-border-color: var(--monokai-input);
+    --ide-search-field-focus-color: var(--monokai-cyan);
+    --ide-search-field-invalid-color: var(--monokai-pink);
+    --ide-find-button-text-color: var(--monokai-foreground);
+    --ide-find-button-hover-color: rgba(255, 255, 255, 0.08);
+    --ide-find-button-pressed-color: rgba(255, 255, 255, 0.14);
+    --ide-find-button-checked-color: rgba(102, 217, 239, 0.3);
+    --ide-find-button-checked-border-color: var(--monokai-cyan);
+    --ide-search-status-color: var(--monokai-subtle);
+    --ide-search-status-error-color: var(--monokai-pink);
+    --ide-search-divider-color: var(--monokai-input);
+    --ide-search-path-color: var(--monokai-subtle);
+    --ide-search-badge-color: var(--monokai-line);
+    --ide-search-badge-text-color: var(--monokai-foreground);
+
+    /* Console */
+    --ide-console-command-color: var(--monokai-cyan);
+    --ide-console-time-color: var(--monokai-comment);
+    --ide-console-key-color: var(--monokai-orange);
+    --ide-console-note-color: var(--monokai-comment);
+
+    /* Explorer */
+    --ide-explorer-button-color: var(--monokai-subtle);
+    --ide-explorer-button-hover-color: var(--monokai-selection);
+    --ide-explorer-button-disabled-color: var(--monokai-comment);
+
+    /* Properties */
+    --ide-properties-group-color: var(--monokai-tab);
+    --ide-properties-group-text-color: var(--monokai-subtle);
+    --ide-properties-readonly-name-color: var(--monokai-comment);
+    --ide-properties-readonly-color: var(--monokai-sidebar);
+    --ide-properties-readonly-border-color: var(--monokai-input);
+    --ide-properties-picking-color: var(--monokai-selection);
+    --ide-properties-picking-border-color: var(--monokai-cyan);
+    --ide-properties-error-color: var(--monokai-pink);
+    --ide-properties-hint-color: var(--monokai-cyan);
+}

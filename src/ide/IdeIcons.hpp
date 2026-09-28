@@ -13,7 +13,7 @@ namespace ide {
 // Empty when that class has no icon file.
 std::shared_ptr<jadefx::ImageView> icon_view(const std::string& class_name);
 
-// An icon file under resources/icons, such as "plus-small.png".
+// An icon file under resources/icons, such as "Plus.png".
 // Empty when the file is missing. The decoded bitmap is shared.
 std::shared_ptr<jadefx::ImageView> icon_file(const std::string& filename);
 

@@ -191,6 +191,28 @@ void TestEngineTools() {
     Expect(ErrorText(server, "get_properties", R"({"instance":"Nope.Missing"})").find("No instance at") == 0,
            "a missing path says where it stopped");
 
+    // A Color3 reads as [r, g, b] and takes that or a hex code.
+    Call(server, "create_instance", R"({"class":"GameObject","name":"Box"})");
+    Call(server, "set_property", R"({"instance":"Box","property":"Color","value":[1,0.5,0]})");
+    auto color_of = [&server]() {
+        const JsonValue box = Call(server, "get_properties", R"({"instance":"Box"})");
+        const JsonValue* entry = box.find("properties") != nullptr ? box.find("properties")->find("Color") : nullptr;
+        return entry != nullptr ? *entry : JsonValue();
+    };
+    JsonValue color = color_of();
+    Expect(color.find("type") != nullptr && color.find("type")->as_string() == "Color3" &&
+               color.find("readonly") == nullptr,
+           "Color is a writable Color3");
+    Expect(color.find("value") != nullptr && color.find("value")->items().size() == 3 &&
+               color.find("value")->items()[1].as_number() == 0.5,
+           "set_property writes [r, g, b] and get_properties reads it back");
+    Call(server, "set_property", R"({"instance":"Box","property":"Color","value":"#0000FF"})");
+    color = color_of();
+    Expect(color.find("value")->items()[0].as_number() == 0 && color.find("value")->items()[2].as_number() == 1,
+           "a hex code sets a Color3");
+    Expect(!ErrorText(server, "set_property", R"({"instance":"Box","property":"Color","value":"blue"})").empty(),
+           "a Color3 refuses what is not a color");
+
     const JsonValue run = Call(server, "run_lua", R"j({"source":"print('from mcp', 1 + 2)"})j");
     const JsonValue* lines = run.find("output");
     Expect(lines != nullptr && lines->items().size() == 1 &&

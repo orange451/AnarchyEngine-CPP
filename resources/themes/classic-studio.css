@@ -1,0 +1,158 @@
+/*
+ * Classic Studio: Roblox Studio's classic dark theme and script editor colors, as
+ * archived on the Roblox Developer Forum. Keywords are red, built-ins and types
+ * cyan, strings green, numbers gold, and selections Studio's blue.
+ *
+ * Built on the shipped dark theme. Its own palette comes first; every color after
+ * names one of them, so changing a palette color changes everything drawn in it.
+ */
+:root {
+    --theme-name: "Classic Studio";
+    --theme-base: dark;
+
+    /* Palette */
+    --studio-background: #252525;
+    --studio-main: #2e2e2e;
+    --studio-dark: #222222;
+    --studio-titlebar: #353535;
+    --studio-button: #3c3c3c;
+    --studio-text: #cccccc;
+    --studio-selected: #0b5aaf;
+    --studio-link: #35b5ff;
+    --studio-current-line: #2d3241;
+    --studio-keyword: #f86d7c;
+    --studio-builtin: #84d6f7;
+    --studio-string: #adf195;
+    --studio-number: #ffc600;
+    --studio-comment: #666666;
+    --studio-property: #61a1f1;
+    --studio-method: #fdfbac;
+    --studio-warning: #ff7315;
+    --studio-find: #8d7600;
+
+    /* Controls (JadeFX) */
+    --background-color: var(--studio-dark);
+    --surface-color: var(--studio-main);
+    --text-color: var(--studio-text);
+    --muted-color: #aaaaaa;
+    --faint-color: var(--studio-comment);
+    --border-color: var(--studio-dark);
+    --accent-color: var(--studio-link);
+    --link-color: var(--studio-link);
+    --hover-color: var(--studio-button);
+    --track-color: var(--studio-dark);
+    --subtle-color: var(--studio-titlebar);
+    --selection-color: var(--studio-selected);
+    --selection-hover-color: #1669c5;
+    --row-hover-color: #3a3a3a;
+    --tab-color: var(--studio-dark);
+    --tooltip-color: #e0e0e0;
+    --tooltip-text-color: var(--studio-dark);
+    --text-selection-color: rgba(11, 90, 175, 0.6);
+    --current-line-color: rgba(61, 74, 110, 0.4);
+    --divider-color: var(--studio-dark);
+    --grip-color: var(--studio-comment);
+    --warning-color: var(--studio-warning);
+    --error-color: #ff5a5a;
+    --success-color: #52c85e;
+
+    /* Studio */
+    --ide-window-color: var(--studio-dark);
+    --ide-text-color: var(--studio-text);
+    --ide-muted-text-color: #aaaaaa;
+    --ide-panel-color: var(--studio-main);
+    --ide-status-bar-color: var(--studio-dark);
+    --ide-field-color: var(--studio-background);
+    --ide-field-border-color: var(--studio-dark);
+    --ide-error-text-color: #ff5a5a;
+    --ide-warning-text-color: var(--studio-warning);
+
+    /* Ribbon */
+    --ide-ribbon-color: var(--studio-titlebar);
+    --ide-ribbon-border-color: var(--studio-dark);
+    --ide-ribbon-hover-color: var(--studio-button);
+    --ide-ribbon-pressed-color: #454545;
+
+    /* Scene View */
+    --ide-viewport-color: #1e1e1e;
+    --ide-fps-color: rgba(0, 0, 0, 0.45);
+    --ide-fps-text-color: #f2f2f2;
+
+    /* Docking */
+    --ide-dock-merge-color: var(--studio-link);
+    --ide-dock-merge-fill-color: rgba(53, 181, 255, 0.3);
+    --ide-dock-split-color: #52c85e;
+    --ide-dock-split-fill-color: rgba(82, 200, 94, 0.3);
+    --ide-dock-float-color: var(--studio-warning);
+    --ide-dock-float-fill-color: rgba(255, 115, 21, 0.3);
+    --ide-dock-caret-color: var(--studio-link);
+
+    /* Popups */
+    --ide-popup-color: var(--studio-titlebar);
+    --ide-popup-border-color: var(--studio-dark);
+    --ide-popup-shadow-color: rgba(0, 0, 0, 0.5);
+    --ide-popup-text-color: var(--studio-text);
+    --ide-popup-detail-text-color: #aaaaaa;
+    --ide-popup-selection-color: var(--studio-selected);
+    --ide-popup-header-color: var(--studio-main);
+    --ide-popup-header-text-color: #aaaaaa;
+
+    /* Script Editor */
+    --ide-editor-color: var(--studio-background);
+    --ide-editor-text-color: var(--studio-text);
+    --ide-syntax-keyword-color: var(--studio-keyword);
+    --ide-syntax-builtin-color: var(--studio-builtin);
+    --ide-syntax-datatype-color: var(--studio-builtin);
+    --ide-syntax-comment-color: var(--studio-comment);
+    --ide-syntax-string-color: var(--studio-string);
+    --ide-syntax-number-color: var(--studio-number);
+    --ide-find-match-color: rgba(141, 118, 0, 0.55);
+    --ide-find-current-color: rgba(141, 118, 0, 0.95);
+    --ide-swatch-border-color: rgba(255, 255, 255, 0.35);
+    --ide-banner-color: var(--studio-main);
+    --ide-banner-text-color: #aaaaaa;
+    --ide-banner-error-color: rgba(255, 90, 90, 0.18);
+    --ide-banner-warning-color: rgba(255, 115, 21, 0.18);
+
+    /* Search */
+    --ide-find-bar-color: var(--studio-titlebar);
+    --ide-find-bar-border-color: var(--studio-dark);
+    --ide-find-bar-shadow-color: rgba(0, 0, 0, 0.5);
+    --ide-search-field-text-color: var(--studio-text);
+    --ide-search-field-border-color: var(--studio-dark);
+    --ide-search-field-focus-color: var(--studio-link);
+    --ide-search-field-invalid-color: #ff5a5a;
+    --ide-find-button-text-color: var(--studio-text);
+    --ide-find-button-hover-color: rgba(255, 255, 255, 0.08);
+    --ide-find-button-pressed-color: rgba(255, 255, 255, 0.14);
+    --ide-find-button-checked-color: rgba(53, 181, 255, 0.3);
+    --ide-find-button-checked-border-color: var(--studio-link);
+    --ide-search-status-color: #aaaaaa;
+    --ide-search-status-error-color: #ff5a5a;
+    --ide-search-divider-color: var(--studio-dark);
+    --ide-search-path-color: #aaaaaa;
+    --ide-search-badge-color: var(--studio-button);
+    --ide-search-badge-text-color: var(--studio-text);
+
+    /* Console */
+    --ide-console-command-color: var(--studio-builtin);
+    --ide-console-time-color: var(--studio-comment);
+    --ide-console-key-color: var(--studio-property);
+    --ide-console-note-color: var(--studio-comment);
+
+    /* Explorer */
+    --ide-explorer-button-color: #aaaaaa;
+    --ide-explorer-button-hover-color: var(--studio-selected);
+    --ide-explorer-button-disabled-color: var(--studio-comment);
+
+    /* Properties */
+    --ide-properties-group-color: var(--studio-titlebar);
+    --ide-properties-group-text-color: #aaaaaa;
+    --ide-properties-readonly-name-color: var(--studio-comment);
+    --ide-properties-readonly-color: var(--studio-main);
+    --ide-properties-readonly-border-color: var(--studio-dark);
+    --ide-properties-picking-color: var(--studio-selected);
+    --ide-properties-picking-border-color: var(--studio-link);
+    --ide-properties-error-color: #ff5a5a;
+    --ide-properties-hint-color: var(--studio-link);
+}

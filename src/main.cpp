@@ -1,4 +1,5 @@
 #include "ide/IdeLayout.hpp"
+#include "ide/IdeResources.hpp"
 #include "jadefx/jadefx.hpp"
 
 #include "Engine.hpp"
@@ -18,7 +19,8 @@ public:
         const jadefx::Size size = defaultWindowSize();
         // The shell owns the runner, which owns the Lua engine. It has to outlive
         // start(); the scene keeps the widgets, and this member keeps the engine.
-        layout_ = std::make_unique<ide::IdeLayout>(size.width, size.height);
+        // Preferences and themes live in the user's config folder.
+        layout_ = std::make_unique<ide::IdeLayout>(size.width, size.height, ide::config_directory());
         engine_core::Engine& simulation = layout_->simulation();
         engine_core::DataModel& game = simulation.datamodel();
         // The demo place is the baseline, not an undo step.

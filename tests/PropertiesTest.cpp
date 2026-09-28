@@ -392,6 +392,124 @@ void TestR5Vector3PerAxis() {
     Expect(!rig.panel.status().empty(), "R5 a bad number says why");
 }
 
+bool SameColor(const engine_core::ColorRgb& color, float r, float g, float b) {
+    auto near = [](float x, float y) { return x > y - 0.002f && x < y + 0.002f; };
+    return near(color.r, r) && near(color.g, g) && near(color.b, b) && color.a == 1.f;
+}
+
+// Moves the chooser's red, green, and blue sliders, as a drag does, so the picker hears of it.
+void Pick(jadefx::ColorPicker& picker, int r, int g, int b) {
+    const char* names[3] = {"red", "green", "blue"};
+    const int values[3] = {r, g, b};
+    for (int index = 0; index < 3; ++index) {
+        for (jadefx::Node* node : picker.getColorChooser().getElementsByClassName(names[index])) {
+            if (auto* slider = dynamic_cast<jadefx::Slider*>(node)) {
+                slider->setValue(values[index]);
+                break;
+            }
+        }
+    }
+}
+
+// Color is a color picker. Closing the chooser on a new color writes it to every selected instance.
+void TestColorPicker() {
+    Rig rig;
+    auto* a = dynamic_cast<engine_core::GameObject*>(rig.game.instance(rig.a));
+    auto* b = dynamic_cast<engine_core::GameObject*>(rig.game.instance(rig.b));
+    a->set_color(engine_core::ColorRgb{1.f, 0.f, 0.f, 1.f});
+    b->set_color(engine_core::ColorRgb{1.f, 0.f, 0.f, 1.f});
+    rig.game.history().reset_waypoints();
+    rig.select({rig.a});
+    auto* picker = dynamic_cast<jadefx::ColorPicker*>(rig.panel.editor("Color"));
+    Expect(picker != nullptr && picker->isVisible(), "Color is a color picker");
+    if (picker == nullptr) {
+        return;
+    }
+    Expect(!picker->isDisabled() && picker->getValue().toHex() == "#ff0000", "the picker shows the color");
+    Expect(!picker->getColorChooser().isShowAlpha(), "a Color3 has no alpha to pick");
+
+    a->set_color(engine_core::ColorRgb{0.f, 0.f, 1.f, 1.f});
+    rig.game.history().reset_waypoints();
+    rig.frame();
+    Expect(picker->getValue().toHex() == "#0000ff", "a color set elsewhere shows at once");
+
+    // Escape puts the color back and writes nothing.
+    rig.click(picker);
+    rig.frame();
+    Expect(picker->isShowing(), "a click opens the chooser");
+    Pick(*picker, 0, 255, 0);
+    rig.key(jadefx::Key::Escape);
+    rig.frame();
+    Expect(!picker->isShowing() && SameColor(a->color(), 0.f, 0.f, 1.f), "Escape writes nothing");
+    Expect(picker->getValue().toHex() == "#0000ff", "and shows the color again");
+
+    // Enter keeps the new color, as one undo step.
+    rig.click(picker);
+    rig.frame();
+    Expect(picker->isShowing(), "a click opens it again");
+    Pick(*picker, 0, 255, 0);
+    rig.frame();
+    Expect(picker->getValue().toHex() == "#00ff00", "the picker follows the chooser");
+    Expect(SameColor(a->color(), 0.f, 0.f, 1.f), "the color is not written while the chooser is open");
+    rig.key(jadefx::Key::Enter);
+    rig.frame();
+    Expect(SameColor(a->color(), 0.f, 1.f, 0.f), "closing on a new color writes it");
+    Expect(rig.undoDepth() == 1, "one waypoint");
+
+    // Two instances that disagree are mixed, and a pick writes both.
+    rig.select({rig.a, rig.b});
+    Expect(rig.mixed("Color"), "different colors are mixed");
+    rig.click(picker);
+    rig.frame();
+    Pick(*picker, 255, 255, 0);
+    rig.key(jadefx::Key::Enter);
+    rig.frame();
+    Expect(SameColor(a->color(), 1.f, 1.f, 0.f) && SameColor(b->color(), 1.f, 1.f, 0.f), "a mixed pick writes both");
+    Expect(!rig.mixed("Color") && picker->getValue().toHex() == "#ffff00", "and they agree after");
+
+    // A mixed row keeps a color out of sight. Picking that same color still writes it.
+    b->set_color(engine_core::ColorRgb{1.f, 1.f, 1.f, 1.f});
+    rig.game.history().reset_waypoints();
+    rig.frame();
+    Expect(rig.mixed("Color"), "mixed again");
+    const jadefx::Color hidden = picker->getValue();
+    rig.click(picker);
+    rig.frame();
+    Pick(*picker, static_cast<int>(hidden.r * 255 + 0.5f), static_cast<int>(hidden.g * 255 + 0.5f),
+         static_cast<int>(hidden.b * 255 + 0.5f) == 0 ? 1 : 0);
+    Pick(*picker, static_cast<int>(hidden.r * 255 + 0.5f), static_cast<int>(hidden.g * 255 + 0.5f),
+         static_cast<int>(hidden.b * 255 + 0.5f));
+    rig.key(jadefx::Key::Enter);
+    rig.frame();
+    Expect(!rig.mixed("Color") && SameColor(b->color(), hidden.r, hidden.g, hidden.b),
+           "picking the hidden color of a mixed row writes it");
+    Expect(rig.undoDepth() == 1, "as one waypoint");
+
+    // Opening and closing with no pick writes nothing, even over a mixed row.
+    b->set_color(engine_core::ColorRgb{1.f, 1.f, 1.f, 1.f});
+    rig.game.history().reset_waypoints();
+    rig.frame();
+    rig.click(picker);
+    rig.frame();
+    rig.clickAway();
+    Expect(!picker->isShowing() && rig.mixed("Color") && rig.undoDepth() == 0, "a look inside writes nothing");
+
+    // A chooser open when the selection changes closes, and the color lands on what was selected.
+    rig.click(picker);
+    rig.frame();
+    Pick(*picker, 0, 255, 255);
+    rig.select({rig.b});
+    Expect(!picker->isShowing(), "a new selection closes the chooser");
+    Expect(SameColor(a->color(), 0.f, 1.f, 1.f) && SameColor(b->color(), 0.f, 1.f, 1.f),
+           "and the color lands on what was selected");
+    rig.click(picker);
+    rig.frame();
+    Pick(*picker, 255, 0, 255);
+    rig.select({rig.script});
+    Expect(rig.panel.editor("Color") == nullptr && SameColor(b->color(), 1.f, 0.f, 1.f),
+           "a row that goes away keeps its pick too");
+}
+
 void TestR6ParentReference() {
     Rig rig;
     rig.select({rig.a});
@@ -623,6 +741,7 @@ int main() {
     TestR3IntersectionOnly();
     TestR4SameValueIsNotMixed();
     TestR5Vector3PerAxis();
+    TestColorPicker();
     TestR6ParentReference();
     TestR7MidEditIsNotClobbered();
     TestR8NoSelection();

@@ -71,6 +71,9 @@ bool read_value(DataModel& world, DataModel& object, const LuaField& field, Prop
     case PropertyKind::Vector3:
         out.vec = slot.vec;
         return slot.kind == LuaSlot::Kind::Vec3;
+    case PropertyKind::Color3:
+        out.color = engine_core::Color3{slot.color.r, slot.color.g, slot.color.b};
+        return slot.kind == LuaSlot::Kind::Color;
     case PropertyKind::Ref:
         if (slot.kind == LuaSlot::Kind::Nil) {
             out.ref = DataModel::kNoParent;
@@ -120,6 +123,10 @@ void merge(PropertyRow& row, const PropertyValue& next) {
         row.axis_mixed[1] = row.axis_mixed[1] || !same_component(row.value.vec.y, next.vec.y);
         row.axis_mixed[2] = row.axis_mixed[2] || !same_component(row.value.vec.z, next.vec.z);
         row.mixed = row.axis_mixed[0] || row.axis_mixed[1] || row.axis_mixed[2];
+        break;
+    case PropertyKind::Color3:
+        row.mixed = row.mixed || row.value.color.r != next.color.r || row.value.color.g != next.color.g ||
+                    row.value.color.b != next.color.b;
         break;
     case PropertyKind::Ref:
         row.mixed = row.mixed || row.value.ref != next.ref;
@@ -172,7 +179,8 @@ bool PropertyRow::operator==(const PropertyRow& other) const {
     }
     return value.text == other.value.text && value.flag == other.value.flag && value.number == other.value.number &&
            value.vec.x == other.value.vec.x && value.vec.y == other.value.vec.y && value.vec.z == other.value.vec.z &&
-           value.ref == other.value.ref;
+           value.color.r == other.value.color.r && value.color.g == other.value.color.g &&
+           value.color.b == other.value.color.b && value.ref == other.value.ref;
 }
 
 bool PropertyRow::same_slot(const PropertyRow& other) const {
@@ -201,8 +209,7 @@ bool property_kind_for(const std::string& type_name, PropertyKind& out) {
                type_name == "DataModel?") {
         out = PropertyKind::Ref;
     } else if (type_name == "Color3") {
-        // No color picker yet. The value is still worth seeing.
-        out = PropertyKind::ReadOnlyText;
+        out = PropertyKind::Color3;
     } else {
         return false;
     }
@@ -398,6 +405,11 @@ EditResult apply_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
             }
             break;
         }
+        case PropertyKind::Color3:
+            // A Color3 has no alpha, so the color is opaque, as a script's write makes it.
+            slot.kind = LuaSlot::Kind::Color;
+            slot.color = engine_core::ColorRgb{edit.value.color.r, edit.value.color.g, edit.value.color.b, 1.f};
+            break;
         case PropertyKind::Ref:
             if (edit.value.nil_ref()) {
                 slot.kind = LuaSlot::Kind::Nil;

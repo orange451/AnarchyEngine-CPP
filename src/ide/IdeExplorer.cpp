@@ -2,6 +2,7 @@
 
 #include "DataModelLock.hpp"
 #include "IdeIcons.hpp"
+#include "IdeTheme.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -67,25 +68,25 @@ const char* ActionIcon(std::string_view name) {
 }
 
 // The + drawn on the hovered row. The icon stays 16px; the chip is the hit target.
+// Plus.png is white, and takes the chip's text color, as the find bar's icons do.
 class InsertButton : public jadefx::StackPane {
 public:
     InsertButton() {
         setAlignment(jadefx::Pos::Center);
         setCursor(jadefx::Cursor::Pointer);
-        if (std::shared_ptr<jadefx::ImageView> icon = icon_file("plus-small.png")) {
-            icon->setMouseTransparent(true);
-            icon->setPrefSize(16, 16);
-            icon->setMinSize(16, 16);
+        setStyle("color: var(--ide-explorer-button-color);");
+        if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic("Plus.png")) {
+            icon->setStyle("image-color: currentColor;");
             getChildren().add(std::move(icon));
         } else {
             auto plus = jadefx::make<jadefx::Label>("+");
             plus->setMouseTransparent(true);
             plus->setAlignment(jadefx::Pos::Center);
-            plus->setTextFill(jadefx::Color::rgb8(95, 99, 104));
+            plus->setStyle("color: var(--ide-explorer-button-color);");
             getChildren().add(std::move(plus));
         }
         setOnMouseEntered([this](const jadefx::MouseEvent&) {
-            setBackground(jadefx::Color::rgb8(232, 240, 254));
+            setBackground(theme_color("--ide-explorer-button-hover-color"));
         });
         setOnMouseExited([this](const jadefx::MouseEvent&) { setBackground(jadefx::Color::transparent()); });
     }
@@ -97,7 +98,7 @@ class RenameField : public jadefx::TextField {
 public:
     explicit RenameField(std::function<void()> cancel) : cancel_(std::move(cancel)) {
         getClassList().add("explorer-rename");
-        setStyle("padding: 0 3px; border-width: 0; border-radius: 4px; background-color: #ffffff;");
+        setStyle("padding: 0 3px; border-width: 0; border-radius: 4px; background-color: var(--ide-field-color);");
         setPrefColumnCount(1);
         setVisible(false);
     }
@@ -125,7 +126,7 @@ public:
     explicit FilterField(std::function<void()> leave) : leave_(std::move(leave)) {
         getClassList().add("explorer-filter");
         setPromptText("Filter");
-        setStyle("width: 100%; border-width: 0 0 1px 0; padding: 6px 28px 6px 8px;");
+        setStyle("width: 100%; border-width: 0 0 1px 0; border-radius: 0; padding: 6px 28px 6px 8px;");
     }
 
 protected:
@@ -147,9 +148,6 @@ private:
 // The clear button's chip, and its gap from the field's right edge.
 constexpr double kClearSize = 20;
 constexpr double kClearInset = 4;
-const jadefx::Color kClearOn = jadefx::Color::rgb8(95, 99, 104);
-const jadefx::Color kClearOff = jadefx::Color::rgb8(200, 203, 207);
-const jadefx::Color kClearHover = jadefx::Color::rgb8(232, 240, 254);
 
 // The × at the filter's right end, the same glyph as a tab's close button.
 // place_clear disables it while the filter is empty.
@@ -161,7 +159,7 @@ public:
         setFont(jadefx::Font("Open Sans", 18.f));
         setOnMouseEntered([this](const jadefx::MouseEvent&) {
             if (!isDisabled()) {
-                setBackground(kClearHover);
+                setBackground(theme_color("--ide-explorer-button-hover-color"));
             }
         });
         setOnMouseExited([this](const jadefx::MouseEvent&) { setBackground(jadefx::Color::transparent()); });
@@ -793,7 +791,8 @@ void IdeExplorer::place_clear() {
     if (on == filter_clear_->isDisabled()) {
         filter_clear_->setDisable(!on);
         filter_clear_->setCursor(on ? jadefx::Cursor::Pointer : jadefx::Cursor::Default);
-        filter_clear_->setTextFill(on ? kClearOn : kClearOff);
+        filter_clear_->setStyle(on ? "color: var(--ide-explorer-button-color);"
+                                   : "color: var(--ide-explorer-button-disabled-color);");
         if (!on) {
             filter_clear_->setBackground(jadefx::Color::transparent());
         }

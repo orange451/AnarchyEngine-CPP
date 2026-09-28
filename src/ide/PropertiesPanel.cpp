@@ -29,16 +29,20 @@ constexpr double kAxisGap = 4;
 constexpr double kClearWidth = 24;
 
 constexpr const char* kFieldStyle =
-    "padding: 0 4px; border-width: 1px; border-style: solid; border-color: #c8c8c8; border-radius: 3px; "
-    "background-color: #ffffff;";
+    "padding: 0 4px; border-width: 1px; border-style: solid; border-radius: 3px; "
+    "border-color: var(--ide-field-border-color); background-color: var(--ide-field-color);";
 constexpr const char* kReadOnlyStyle =
-    "padding: 0 4px; border-width: 1px; border-style: solid; border-color: #dadce0; border-radius: 3px; "
-    "background-color: #f1f3f4; color: #5f6368;";
+    "padding: 0 4px; border-width: 1px; border-style: solid; border-radius: 3px; "
+    "border-color: var(--ide-properties-readonly-border-color); "
+    "background-color: var(--ide-properties-readonly-color); color: var(--ide-muted-text-color);";
 constexpr const char* kButtonStyle = "padding: 0 4px; border-radius: 3px;";
+// The line under the rows: a refused edit, or what to click while picking a reference.
+constexpr const char* kErrorStyle = "color: var(--ide-properties-error-color);";
+constexpr const char* kHintStyle = "color: var(--ide-properties-hint-color);";
 // A reference's value is a button that reads like a field. It turns blue while it waits for a pick.
 constexpr const char* kPickingStyle =
-    "padding: 0 4px; border-width: 1px; border-style: solid; border-color: #1a73e8; border-radius: 3px; "
-    "background-color: #d2e3fc;";
+    "padding: 0 4px; border-width: 1px; border-style: solid; border-radius: 3px; "
+    "border-color: var(--ide-properties-picking-border-color); background-color: var(--ide-properties-picking-color);";
 
 // One replace for the span that differs, so the stack sees a paste or a
 // selection overwrite as one step. Byte ends are pulled to UTF-8 boundaries.
@@ -148,6 +152,61 @@ private:
     bool mute_ = false;
 };
 
+// A Color3 value. on_pick runs when the chooser closes on a pick, so a drag
+// through the chooser is one undo step. Escape closes without one. A mixed row
+// draws no color, as a mixed field shows no text, and any pick in it counts,
+// even of the color it keeps out of sight.
+class PropertyColor : public jadefx::ColorPicker {
+public:
+    PropertyColor() {
+        getClassList().add("properties-color");
+        getColorChooser().setShowAlpha(false);
+        // While the chooser is open, only the chooser changes the value.
+        setOnValueChanged([this] { touched_ = touched_ || isShowing(); });
+    }
+
+    bool mixed = false;
+    std::function<void()> on_pick;
+
+protected:
+    void popupShowing() override {
+        if (!isShowing()) {
+            before_ = getValue().toHex();
+            touched_ = false;
+            escaped_ = false;
+        }
+        jadefx::ColorPicker::popupShowing();
+    }
+
+    bool handlePopupKey(jadefx::KeyEvent& event) override {
+        if (event.pressed && event.key == jadefx::Key::Escape) {
+            escaped_ = true;
+        }
+        return jadefx::ColorPicker::handlePopupKey(event);
+    }
+
+    void popupHidden() override {
+        jadefx::ColorPicker::popupHidden();
+        const bool picked = touched_ && !escaped_ && (mixed || getValue().toHex() != before_);
+        touched_ = false;
+        if (picked && on_pick) {
+            on_pick();
+        }
+    }
+
+    void renderValue(jadefx::UiRenderer& renderer, float opacity, float x, float y, float width,
+                     float height) override {
+        if (!mixed || isShowing()) {
+            jadefx::ColorPicker::renderValue(renderer, opacity, x, y, width, height);
+        }
+    }
+
+private:
+    std::string before_;
+    bool touched_ = false;
+    bool escaped_ = false;
+};
+
 // A write handed to the simulation thread. done is set after result.
 struct PendingEdit {
     EditResult result;
@@ -164,7 +223,7 @@ public:
         setIconFile("Properties.png");
         setPrefWidth(9999999);
         setMinSize(150, 80);
-        setBackground(jadefx::Color::rgb8(255, 255, 255));
+        setStyle("background-color: var(--ide-panel-color);");
         getClassList().add("properties-pane");
     }
 
@@ -190,6 +249,7 @@ struct RowView {
     std::shared_ptr<PropertyField> field;
     std::shared_ptr<PropertyField> axes[3];
     std::shared_ptr<jadefx::CheckBox> check;
+    std::shared_ptr<PropertyColor> color;
     std::shared_ptr<jadefx::Button> pick;
     std::shared_ptr<jadefx::Button> clear;
     std::shared_ptr<jadefx::Tooltip> tip;
@@ -200,7 +260,8 @@ struct RowView {
         for (jadefx::Node* node : {static_cast<jadefx::Node*>(name.get()), static_cast<jadefx::Node*>(field.get()),
                                    static_cast<jadefx::Node*>(axes[0].get()), static_cast<jadefx::Node*>(axes[1].get()),
                                    static_cast<jadefx::Node*>(axes[2].get()), static_cast<jadefx::Node*>(check.get()),
-                                   static_cast<jadefx::Node*>(pick.get()), static_cast<jadefx::Node*>(clear.get())}) {
+                                   static_cast<jadefx::Node*>(color.get()), static_cast<jadefx::Node*>(pick.get()),
+                                   static_cast<jadefx::Node*>(clear.get())}) {
             if (node != nullptr) {
                 out.push_back(node);
             }
@@ -251,19 +312,21 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         pane = jadefx::make<PropertiesPane>();
         empty = jadefx::make<jadefx::Label>("No selection");
         empty->getClassList().add("properties-empty");
-        empty->setTextFill(jadefx::Color::rgb8(95, 99, 104));
+        empty->setStyle("color: var(--ide-muted-text-color);");
         pane->getChildren().add(empty);
         const char* titles[2] = {"Instance", "Data"};
         for (int index = 0; index < 2; ++index) {
             headers[index] = jadefx::make<jadefx::Label>(titles[index]);
             headers[index]->getClassList().add("properties-group");
-            headers[index]->setStyle("padding: 0 6px; background-color: #e8eaed; color: #3c4043;");
+            headers[index]->setStyle(
+                "padding: 0 6px; background-color: var(--ide-properties-group-color); "
+                "color: var(--ide-properties-group-text-color);");
             headers[index]->setVisible(false);
             pane->getChildren().add(headers[index]);
         }
         status_label = jadefx::make<jadefx::Label>("");
         status_label->getClassList().add("properties-status");
-        status_label->setTextFill(jadefx::Color::rgb8(197, 34, 31));
+        status_label->setStyle(kErrorStyle);
         status_label->setVisible(false);
         pane->getChildren().add(status_label);
     }
@@ -358,6 +421,10 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 commit_field(view, *field);
             }
         }
+        // Closing keeps the color picked so far, for the instances it was picked for.
+        if (view.color && view.color->isShowing()) {
+            view.color->hide();
+        }
     }
 
     void rebuild_rows(const PropertySheet& next) {
@@ -424,7 +491,8 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         view->row = row;
         view->name = jadefx::make<jadefx::Label>(row.name);
         view->name->getClassList().add("properties-name");
-        view->name->setTextFill(row.writable ? jadefx::Color::rgb8(32, 33, 36) : jadefx::Color::rgb8(128, 134, 139));
+        view->name->setStyle(row.writable ? "color: var(--ide-text-color);"
+                                          : "color: var(--ide-properties-readonly-name-color);");
         pane->getChildren().add(view->name);
         std::weak_ptr<Impl> weak_self = shared_from_this();
         std::weak_ptr<RowView> weak_view = view;
@@ -451,6 +519,18 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 }
             });
             pane->getChildren().add(view->check);
+            break;
+        case PropertyKind::Color3:
+            view->color = jadefx::make<PropertyColor>();
+            view->color->setDisable(!row.writable);
+            view->color->on_pick = [weak_self, weak_view]() {
+                const auto self = weak_self.lock();
+                const auto row_view = weak_view.lock();
+                if (self && row_view) {
+                    self->commit_color(*row_view);
+                }
+            };
+            pane->getChildren().add(view->color);
             break;
         case PropertyKind::Ref:
             // The value is never typed in. Clicking it picks, and Clear sets nil.
@@ -525,6 +605,14 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             // Mixed is an indeterminate box, never an unchecked "false".
             view.check->setSelected(!row.mixed && row.value.flag);
             view.check->setIndeterminate(row.mixed);
+            break;
+        case PropertyKind::Color3:
+            // An open chooser keeps the color being picked.
+            if (view.color->isShowing()) {
+                break;
+            }
+            view.color->mixed = row.mixed;
+            view.color->setValue(jadefx::Color::rgba(row.value.color.r, row.value.color.g, row.value.color.b, 1.f));
             break;
         case PropertyKind::Ref:
             view.pick->setText(shown_text(row));
@@ -641,6 +729,19 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         // From mixed, a click checks every one.
         edit.value.flag = view.check->isSelected();
         view.check->setIndeterminate(false);
+        submit(view.ids, edit);
+    }
+
+    void commit_color(RowView& view) {
+        if (!view.row.writable) {
+            return;
+        }
+        PropertyEdit edit;
+        edit.property = view.row.name;
+        edit.kind = PropertyKind::Color3;
+        const jadefx::Color picked = view.color->getValue();
+        edit.value.color = engine_core::Color3{picked.r, picked.g, picked.b};
+        view.color->mixed = false;
         submit(view.ids, edit);
     }
 
@@ -774,6 +875,9 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             case PropertyKind::Bool:
                 place(*view->check, editor_x, std::min(editor_width, kRowHeight), kRowHeight);
                 break;
+            case PropertyKind::Color3:
+                place(*view->color, editor_x, editor_width, kRowHeight);
+                break;
             case PropertyKind::Ref: {
                 const double display = std::max(24.0, editor_width - kClearWidth - kAxisGap);
                 place(*view->pick, editor_x, display, kRowHeight);
@@ -788,7 +892,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
         status_label->setText(status);
         // Pick instructions are a hint. Anything else is a refused edit.
-        status_label->setTextFill(picking ? jadefx::Color::rgb8(26, 115, 232) : jadefx::Color::rgb8(197, 34, 31));
+        status_label->setStyle(picking ? kHintStyle : kErrorStyle);
         if (!status.empty()) {
             y += kRowGap;
             place(*status_label, left + kPad, inner, kRowHeight);
@@ -887,6 +991,8 @@ jadefx::Node* PropertiesPanel::editor(const std::string& property, int part) con
             return part >= 0 && part < 3 ? view->axes[part].get() : nullptr;
         case PropertyKind::Bool:
             return part == 0 ? view->check.get() : nullptr;
+        case PropertyKind::Color3:
+            return part == 0 ? view->color.get() : nullptr;
         case PropertyKind::Ref:
             return part == 0 ? static_cast<jadefx::Node*>(view->pick.get())
                    : part == 1 ? static_cast<jadefx::Node*>(view->clear.get())

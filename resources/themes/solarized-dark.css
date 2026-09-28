@@ -1,0 +1,162 @@
+/*
+ * Solarized, by Ethan Schoonover: https://ethanschoonover.com/solarized (MIT).
+ * base03 is the background and base0 the body text, as Solarized's dark mode has
+ * them; the panels are the darker shade VS Code's Solarized Dark gives its side bar.
+ * Keywords are green, functions blue, types orange, strings cyan, numbers magenta.
+ *
+ * Built on the shipped dark theme. Its own palette comes first; every color after
+ * names one of them, so changing a palette color changes everything drawn in it.
+ */
+:root {
+    --theme-name: "Solarized Dark";
+    --theme-base: dark;
+
+    /* Palette */
+    --solarized-base03: #002b36;
+    --solarized-base02: #073642;
+    --solarized-base01: #586e75;
+    --solarized-base00: #657b83;
+    --solarized-base0: #839496;
+    --solarized-base1: #93a1a1;
+    --solarized-base2: #eee8d5;
+    --solarized-base3: #fdf6e3;
+    --solarized-yellow: #b58900;
+    --solarized-orange: #cb4b16;
+    --solarized-red: #dc322f;
+    --solarized-magenta: #d33682;
+    --solarized-violet: #6c71c4;
+    --solarized-blue: #268bd2;
+    --solarized-cyan: #2aa198;
+    --solarized-green: #859900;
+    --solarized-sidebar: #00212b;
+    --solarized-window: #001d26;
+    --solarized-input: #003847;
+    --solarized-hover: #004454;
+    --solarized-selection: #005a6f;
+
+    /* Controls (JadeFX) */
+    --background-color: var(--solarized-window);
+    --surface-color: var(--solarized-sidebar);
+    --text-color: var(--solarized-base1);
+    --muted-color: var(--solarized-base0);
+    --faint-color: var(--solarized-base01);
+    --border-color: var(--solarized-base02);
+    --accent-color: var(--solarized-cyan);
+    --link-color: var(--solarized-blue);
+    --hover-color: var(--solarized-hover);
+    --track-color: var(--solarized-window);
+    --subtle-color: var(--solarized-base02);
+    --selection-color: var(--solarized-selection);
+    --selection-hover-color: #006b84;
+    --row-hover-color: #002f3b;
+    --tab-color: var(--solarized-window);
+    --tooltip-color: var(--solarized-base2);
+    --tooltip-text-color: var(--solarized-base02);
+    --text-selection-color: rgba(42, 161, 152, 0.25);
+    --current-line-color: rgba(7, 54, 66, 0.9);
+    --divider-color: var(--solarized-base02);
+    --grip-color: var(--solarized-base01);
+    --warning-color: var(--solarized-yellow);
+    --error-color: var(--solarized-red);
+    --success-color: var(--solarized-green);
+
+    /* Studio */
+    --ide-window-color: var(--solarized-window);
+    --ide-text-color: var(--solarized-base1);
+    --ide-muted-text-color: var(--solarized-base0);
+    --ide-panel-color: var(--solarized-sidebar);
+    --ide-status-bar-color: var(--solarized-window);
+    --ide-field-color: var(--solarized-input);
+    --ide-field-border-color: var(--solarized-base02);
+    --ide-error-text-color: var(--solarized-red);
+    --ide-warning-text-color: var(--solarized-yellow);
+
+    /* Ribbon */
+    --ide-ribbon-color: var(--solarized-base02);
+    --ide-ribbon-border-color: var(--solarized-base02);
+    --ide-ribbon-hover-color: var(--solarized-hover);
+    --ide-ribbon-pressed-color: var(--solarized-selection);
+
+    /* Scene View */
+    --ide-viewport-color: #1e1e1e;
+    --ide-fps-color: rgba(0, 0, 0, 0.45);
+    --ide-fps-text-color: #f2f2f2;
+
+    /* Docking */
+    --ide-dock-merge-color: var(--solarized-cyan);
+    --ide-dock-merge-fill-color: rgba(42, 161, 152, 0.3);
+    --ide-dock-split-color: var(--solarized-green);
+    --ide-dock-split-fill-color: rgba(133, 153, 0, 0.3);
+    --ide-dock-float-color: var(--solarized-yellow);
+    --ide-dock-float-fill-color: rgba(181, 137, 0, 0.3);
+    --ide-dock-caret-color: var(--solarized-cyan);
+
+    /* Popups */
+    --ide-popup-color: var(--solarized-base02);
+    --ide-popup-border-color: var(--solarized-base02);
+    --ide-popup-shadow-color: rgba(0, 0, 0, 0.5);
+    --ide-popup-text-color: var(--solarized-base1);
+    --ide-popup-detail-text-color: var(--solarized-base0);
+    --ide-popup-selection-color: var(--solarized-selection);
+    --ide-popup-header-color: var(--solarized-sidebar);
+    --ide-popup-header-text-color: var(--solarized-base0);
+
+    /* Script Editor */
+    --ide-editor-color: var(--solarized-base03);
+    --ide-editor-text-color: var(--solarized-base0);
+    --ide-syntax-keyword-color: var(--solarized-green);
+    --ide-syntax-builtin-color: var(--solarized-blue);
+    --ide-syntax-datatype-color: var(--solarized-orange);
+    --ide-syntax-comment-color: var(--solarized-base01);
+    --ide-syntax-string-color: var(--solarized-cyan);
+    --ide-syntax-number-color: var(--solarized-magenta);
+    --ide-find-match-color: rgba(181, 137, 0, 0.3);
+    --ide-find-current-color: rgba(203, 75, 22, 0.45);
+    --ide-swatch-border-color: rgba(255, 255, 255, 0.35);
+    --ide-banner-color: var(--solarized-sidebar);
+    --ide-banner-text-color: var(--solarized-base0);
+    --ide-banner-error-color: rgba(220, 50, 47, 0.2);
+    --ide-banner-warning-color: rgba(181, 137, 0, 0.2);
+
+    /* Search */
+    --ide-find-bar-color: var(--solarized-base02);
+    --ide-find-bar-border-color: var(--solarized-base02);
+    --ide-find-bar-shadow-color: rgba(0, 0, 0, 0.5);
+    --ide-search-field-text-color: var(--solarized-base1);
+    --ide-search-field-border-color: var(--solarized-base02);
+    --ide-search-field-focus-color: var(--solarized-cyan);
+    --ide-search-field-invalid-color: var(--solarized-red);
+    --ide-find-button-text-color: var(--solarized-base1);
+    --ide-find-button-hover-color: rgba(255, 255, 255, 0.08);
+    --ide-find-button-pressed-color: rgba(255, 255, 255, 0.14);
+    --ide-find-button-checked-color: rgba(42, 161, 152, 0.3);
+    --ide-find-button-checked-border-color: var(--solarized-cyan);
+    --ide-search-status-color: var(--solarized-base0);
+    --ide-search-status-error-color: var(--solarized-red);
+    --ide-search-divider-color: var(--solarized-base02);
+    --ide-search-path-color: var(--solarized-base0);
+    --ide-search-badge-color: var(--solarized-hover);
+    --ide-search-badge-text-color: var(--solarized-base1);
+
+    /* Console */
+    --ide-console-command-color: var(--solarized-blue);
+    --ide-console-time-color: var(--solarized-base01);
+    --ide-console-key-color: var(--solarized-violet);
+    --ide-console-note-color: var(--solarized-base01);
+
+    /* Explorer */
+    --ide-explorer-button-color: var(--solarized-base0);
+    --ide-explorer-button-hover-color: var(--solarized-selection);
+    --ide-explorer-button-disabled-color: var(--solarized-base01);
+
+    /* Properties */
+    --ide-properties-group-color: var(--solarized-base02);
+    --ide-properties-group-text-color: var(--solarized-base0);
+    --ide-properties-readonly-name-color: var(--solarized-base01);
+    --ide-properties-readonly-color: var(--solarized-sidebar);
+    --ide-properties-readonly-border-color: var(--solarized-base02);
+    --ide-properties-picking-color: var(--solarized-selection);
+    --ide-properties-picking-border-color: var(--solarized-cyan);
+    --ide-properties-error-color: var(--solarized-red);
+    --ide-properties-hint-color: var(--solarized-cyan);
+}

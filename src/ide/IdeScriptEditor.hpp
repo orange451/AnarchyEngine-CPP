@@ -20,6 +20,10 @@ class Engine;
 }
 
 namespace ide {
+class ThemeListener;
+}
+
+namespace ide {
 
 class FindBar;
 class ScriptCodeArea;
@@ -176,6 +180,8 @@ private:
     // The current match paint last drew, so a selection that moves only repaints when it changes.
     int painted_find_ = -1;
     std::optional<PendingRange> pending_range_;
+    // Defines the syntax colors again when the theme changes.
+    std::unique_ptr<ThemeListener> theme_listener_;
 };
 
 }  // namespace ide

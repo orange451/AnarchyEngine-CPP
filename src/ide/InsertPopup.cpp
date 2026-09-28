@@ -2,6 +2,7 @@
 
 #include "ClassFilter.hpp"
 #include "IdeIcons.hpp"
+#include "IdeTheme.hpp"
 #include "LuaApi.hpp"
 
 #include "jadefx/jadefx.hpp"
@@ -16,7 +17,6 @@ namespace ide {
 constexpr int kMaxVisibleRows = 8;
 constexpr double kPopupWidth = 280;
 constexpr double kFieldGap = 4;
-const jadefx::Color kRowHighlight = jadefx::Color::parse("#d6e4f5");
 
 class InsertList;
 
@@ -75,8 +75,9 @@ public:
         setPrefWidth(kPopupWidth);
         setDefaultCursor(jadefx::Cursor::Default);
         setStyle(
-            "background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #c5c8ce; "
-            "box-shadow: 0 2px 8px rgba(32, 33, 36, 0.16); padding: 4px;");
+            "background-color: var(--ide-popup-color); border-style: solid; border-width: 1px; "
+            "border-color: var(--ide-popup-border-color); box-shadow: 0 2px 8px var(--ide-popup-shadow-color); "
+            "padding: 4px;");
         field_ = std::make_shared<InsertField>([this] { onTyped(); });
         field_->setOnAction([this](jadefx::ActionEvent&) { choose(selected_); });
         children().add(field_);
@@ -249,7 +250,7 @@ private:
             row->setAlignment(jadefx::Pos::CenterLeft);
             row->setCursor(jadefx::Cursor::Pointer);
             if (index == selected_) {
-                row->setBackground(kRowHighlight);
+                row->setBackground(theme_color("--ide-popup-selection-color"));
             }
             if (std::shared_ptr<jadefx::ImageView> icon = icon_view(name)) {
                 icon->setMouseTransparent(true);
@@ -276,8 +277,9 @@ private:
 
     void paint() {
         const int count = static_cast<int>(rows_.size());
+        const jadefx::Color highlight = theme_color("--ide-popup-selection-color");
         for (int index = 0; index < count; ++index) {
-            rows_[static_cast<std::size_t>(index)]->setBackground(index == selected_ ? kRowHighlight
+            rows_[static_cast<std::size_t>(index)]->setBackground(index == selected_ ? highlight
                                                                                       : jadefx::Color::transparent());
         }
     }

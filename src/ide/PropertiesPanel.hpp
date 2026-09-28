@@ -32,6 +32,9 @@ using PropertiesRun = std::function<void(std::function<void(engine_core::DataMod
 // cancels. A value changed elsewhere shows at once, except in a field that is
 // focused and typed in; that one resyncs when it commits or cancels.
 //
+// A Color3 row is a color picker. Closing its chooser on a new color writes
+// it, so the whole pick is one undo step.
+//
 // A reference row shows the instance's Name, with its path as a tooltip.
 // Clicking the Name waits for the next selection change, such as a click in
 // the explorer, uses the instance picked, and puts the selection back.

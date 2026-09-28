@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draws the find and replace icons into ../icons. Needs only the standard library.
+"""Draws the find and replace icons, and the explorer's insert +, into ../icons. Needs only the standard library.
 
 Each icon is 32 pixels square and is shown at 16 points, so it stays sharp on a
 2x display. Shapes are sampled 4x4 per pixel for smooth edges. The PNGs are
@@ -107,6 +107,8 @@ ICONS = {
     "FindClose.png": ink(polyline([(9, 9), (23, 23)]), polyline([(23, 9), (9, 23)])),
     "FindCollapsed.png": ink(polyline([(12, 8), (20, 16), (12, 24)])),
     "FindExpanded.png": ink(polyline([(8, 12), (16, 20), (24, 12)])),
+    # The explorer's insert chip on a hovered row.
+    "Plus.png": ink(polyline([(16, 8), (16, 24)]), polyline([(8, 16), (24, 16)])),
     # The old text in outline, an arrow, and the new text filled in.
     "Replace.png": ink(
         frame(3, 4, 16, 13),

@@ -2,6 +2,7 @@
 
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
+#include "IdeTheme.hpp"
 #include "LuaSource.hpp"
 
 #include "jadefx/jadefx.hpp"
@@ -97,11 +98,12 @@ char32_t CodeAt(std::string_view text, int index) {
 
 constexpr int kMaxVisibleRows = 8;
 constexpr double kPopupWidth = 420.0;
-const jadefx::Color kRowHighlight = jadefx::Color::parse("#d6e4f5");
-const jadefx::Color kHeaderFill = jadefx::Color::parse("#eef1f4");
-const jadefx::Color kHeaderText = jadefx::Color::parse("#3c4450");
-const jadefx::Color kDetailText = jadefx::Color::parse("#5c6570");
-const jadefx::Color kTitleText = jadefx::Color::parse("#1f2328");
+// Read from the theme each time a popup is built or repainted.
+jadefx::Color RowHighlight() { return theme_color("--ide-popup-selection-color"); }
+jadefx::Color HeaderFill() { return theme_color("--ide-popup-header-color"); }
+jadefx::Color HeaderText() { return theme_color("--ide-popup-header-text-color"); }
+jadefx::Color DetailText() { return theme_color("--ide-popup-detail-text-color"); }
+jadefx::Color TitleText() { return theme_color("--ide-popup-text-color"); }
 // Popup is 420 wide, with 4px padding and a 1px border. The note adds 8px on each side.
 constexpr double kDocTextWidth = 386.0;
 
@@ -180,7 +182,7 @@ std::shared_ptr<jadefx::VBox> MakeDocs(const CompletionItem& item) {
     box->setSpacing(2);
     box->setPadding(jadefx::Insets{6, 8, 6, 8});
     box->setAlignment(jadefx::Pos::TopLeft);
-    box->setBackground(kHeaderFill);
+    box->setBackground(HeaderFill());
     auto add = [&](const std::string& text, const jadefx::Color& fill) {
         if (text.empty()) {
             return;
@@ -190,13 +192,13 @@ std::shared_ptr<jadefx::VBox> MakeDocs(const CompletionItem& item) {
         label->setMouseTransparent(true);
         box->getChildren().add(label);
     };
-    add(item.title, kTitleText);
+    add(item.title, TitleText());
     if (item.returns == "returns nothing") {
-        add("returns nothing", kDetailText);
+        add("returns nothing", DetailText());
     } else if (item.returns.empty() && (item.detail == "library" || item.detail == "type")) {
-        add(item.detail, kDetailText);
+        add(item.detail, DetailText());
     }
-    add(item.summary, kDetailText);
+    add(item.summary, DetailText());
     return box;
 }
 
@@ -234,8 +236,9 @@ public:
         setPrefWidth(kPopupWidth);
         setDefaultCursor(jadefx::Cursor::Default);
         setStyle(
-            "background-color: #ffffff; border-style: solid; border-width: 1px; border-color: #c5c8ce; "
-            "box-shadow: 0 2px 8px rgba(32, 33, 36, 0.16); padding: 4px;");
+            "background-color: var(--ide-popup-color); border-style: solid; border-width: 1px; "
+            "border-color: var(--ide-popup-border-color); box-shadow: 0 2px 8px var(--ide-popup-shadow-color); "
+            "padding: 4px;");
         track_ = std::make_shared<CompletionScrollTrack>(*this);
         children().add(track_);
         if (refocus_) {
@@ -263,13 +266,13 @@ public:
             header_ = jadefx::make<jadefx::HBox>();
             header_->setPadding(jadefx::Insets{4, 8, 4, 8});
             header_->setAlignment(jadefx::Pos::CenterLeft);
-            header_->setBackground(kHeaderFill);
+            header_->setBackground(HeaderFill());
             const auto add = [this](const std::string& text) {
                 if (text.empty()) {
                     return;
                 }
                 auto label = jadefx::make<jadefx::Label>(text);
-                label->setTextFill(kHeaderText);
+                label->setTextFill(HeaderText());
                 label->setMouseTransparent(true);
                 header_->getChildren().add(std::move(label));
             };
@@ -278,7 +281,7 @@ public:
                 const auto begin = static_cast<std::size_t>(bold_begin);
                 const auto end = static_cast<std::size_t>(bold_end);
                 add(signature.substr(0, begin));
-                header_->getChildren().add(jadefx::make<BoldText>(signature.substr(begin, end - begin), kHeaderText));
+                header_->getChildren().add(jadefx::make<BoldText>(signature.substr(begin, end - begin), HeaderText()));
                 add(signature.substr(end));
             } else {
                 add(signature);
@@ -298,11 +301,11 @@ public:
             row->setPadding(jadefx::Insets{3, 8, 3, 8});
             row->setAlignment(jadefx::Pos::CenterLeft);
             if (index == selected_) {
-                row->setBackground(kRowHighlight);
+                row->setBackground(RowHighlight());
             }
             auto name = jadefx::make<jadefx::Label>(item.name);
             auto detail = jadefx::make<jadefx::Label>(RowDetail(item));
-            detail->setTextFill(kDetailText);
+            detail->setTextFill(DetailText());
             name->setMouseTransparent(true);
             detail->setMouseTransparent(true);
             row->getChildren().add(name);
@@ -568,8 +571,8 @@ private:
         }
         selected_ = next;
         for (int index = 0; index < count; ++index) {
-            rows_[static_cast<std::size_t>(index)]->setBackground(index == next ? kRowHighlight
-                                                                                : jadefx::Color::transparent());
+            rows_[static_cast<std::size_t>(index)]->setBackground(index == next ? RowHighlight()
+                                                                                  : jadefx::Color::transparent());
         }
         reselect_(next);
     }

@@ -62,66 +62,66 @@ void set_class(jadefx::Node& node, const char* name, bool on) {
 
 }  // namespace
 
-// Colors from VS Code's light theme, which the rest of the studio is close to.
+// Laid out like VS Code's find widget. Colors are the theme's; see resources/themes/light.css.
 const char* const kFindStylesheet = R"CSS(
 .find-bar {
-    background-color: #f3f3f3;
+    background-color: var(--ide-find-bar-color);
     border-width: 0 1px 1px 1px;
     border-style: solid;
-    border-color: #c8c8c8;
+    border-color: var(--ide-find-bar-border-color);
     border-radius: 0 0 4px 4px;
-    box-shadow: 0px 2px 8px 0px rgba(0, 0, 0, 0.18);
+    box-shadow: 0px 2px 8px 0px var(--ide-find-bar-shadow-color);
     padding: 4px 6px 4px 2px;
     spacing: 2px;
 }
 .search-field {
-    background-color: #ffffff;
-    color: #1f2328;
+    background-color: var(--ide-field-color);
+    color: var(--ide-search-field-text-color);
     border-width: 1px;
     border-style: solid;
-    border-color: #cecece;
+    border-color: var(--ide-search-field-border-color);
     border-radius: 2px;
     font-size: 13px;
     --outline-color: rgba(0, 0, 0, 0);
 }
 .search-field:focus {
-    border-color: #0090f1;
+    border-color: var(--ide-search-field-focus-color);
 }
 .search-field.invalid {
-    border-color: #be1100;
+    border-color: var(--ide-search-field-invalid-color);
 }
 .find-button {
     border-width: 1px;
     border-style: solid;
     border-color: rgba(0, 0, 0, 0);
     border-radius: 3px;
-    color: #424242;
+    color: var(--ide-find-button-text-color);
     font-size: 12px;
 }
 .find-button image-view {
     image-color: currentColor;
 }
 .find-button:hover {
-    background-color: rgba(184, 184, 184, 0.31);
+    background-color: var(--ide-find-button-hover-color);
 }
 .find-button:active {
-    background-color: rgba(166, 166, 166, 0.5);
+    background-color: var(--ide-find-button-pressed-color);
 }
 .find-button:checked {
-    background-color: rgba(0, 144, 241, 0.2);
-    border-color: #007acc;
+    background-color: var(--ide-find-button-checked-color);
+    border-color: var(--ide-find-button-checked-border-color);
 }
 .find-button:disabled {
     background-color: rgba(0, 0, 0, 0);
     opacity: 0.4;
 }
 .find-count {
-    color: #616161;
+    color: var(--ide-search-status-color);
     font-size: 12px;
     padding: 0 4px;
 }
 .find-count.empty {
-    color: #a1260d;
+    color: var(--ide-search-status-error-color);
 }
 )CSS";
 

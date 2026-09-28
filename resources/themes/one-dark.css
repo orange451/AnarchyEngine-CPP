@@ -1,0 +1,159 @@
+/*
+ * One Dark, from Atom, as One Dark Pro carries it to VS Code:
+ * https://github.com/Binaryify/OneDark-Pro (MIT). Keywords are purple, functions
+ * blue, types yellow, strings green, and numbers orange.
+ *
+ * Built on the shipped dark theme. Its own palette comes first; every color after
+ * names one of them, so changing a palette color changes everything drawn in it.
+ */
+:root {
+    --theme-name: "One Dark";
+    --theme-base: dark;
+
+    /* Palette */
+    --one-dark-background: #282c34;
+    --one-dark-sidebar: #21252b;
+    --one-dark-input: #1d1f23;
+    --one-dark-gutter: #2c313a;
+    --one-dark-hover: #323842;
+    --one-dark-guide: #3e4452;
+    --one-dark-selection: #4b5263;
+    --one-dark-border: #181a1f;
+    --one-dark-foreground: #abb2bf;
+    --one-dark-highlight: #d7dae0;
+    --one-dark-subtle: #9da5b4;
+    --one-dark-comment: #7f848e;
+    --one-dark-red: #e06c75;
+    --one-dark-orange: #d19a66;
+    --one-dark-yellow: #e5c07b;
+    --one-dark-green: #98c379;
+    --one-dark-cyan: #56b6c2;
+    --one-dark-blue: #61afef;
+    --one-dark-purple: #c678dd;
+
+    /* Controls (JadeFX) */
+    --background-color: var(--one-dark-input);
+    --surface-color: var(--one-dark-sidebar);
+    --text-color: var(--one-dark-highlight);
+    --muted-color: var(--one-dark-subtle);
+    --faint-color: var(--one-dark-comment);
+    --border-color: var(--one-dark-border);
+    --accent-color: var(--one-dark-blue);
+    --link-color: var(--one-dark-blue);
+    --hover-color: var(--one-dark-hover);
+    --track-color: var(--one-dark-input);
+    --subtle-color: var(--one-dark-gutter);
+    --selection-color: var(--one-dark-guide);
+    --selection-hover-color: var(--one-dark-selection);
+    --row-hover-color: var(--one-dark-gutter);
+    --tab-color: var(--one-dark-input);
+    --tooltip-color: var(--one-dark-highlight);
+    --tooltip-text-color: var(--one-dark-sidebar);
+    --text-selection-color: rgba(103, 118, 150, 0.38);
+    --current-line-color: rgba(44, 49, 60, 0.9);
+    --divider-color: var(--one-dark-border);
+    --grip-color: var(--one-dark-comment);
+    --warning-color: var(--one-dark-yellow);
+    --error-color: var(--one-dark-red);
+    --success-color: var(--one-dark-green);
+
+    /* Studio */
+    --ide-window-color: var(--one-dark-input);
+    --ide-text-color: var(--one-dark-highlight);
+    --ide-muted-text-color: var(--one-dark-subtle);
+    --ide-panel-color: var(--one-dark-sidebar);
+    --ide-status-bar-color: var(--one-dark-input);
+    --ide-field-color: var(--one-dark-input);
+    --ide-field-border-color: var(--one-dark-border);
+    --ide-error-text-color: var(--one-dark-red);
+    --ide-warning-text-color: var(--one-dark-yellow);
+
+    /* Ribbon */
+    --ide-ribbon-color: var(--one-dark-gutter);
+    --ide-ribbon-border-color: var(--one-dark-border);
+    --ide-ribbon-hover-color: var(--one-dark-hover);
+    --ide-ribbon-pressed-color: var(--one-dark-guide);
+
+    /* Scene View */
+    --ide-viewport-color: #1e1e1e;
+    --ide-fps-color: rgba(0, 0, 0, 0.45);
+    --ide-fps-text-color: #f2f2f2;
+
+    /* Docking */
+    --ide-dock-merge-color: var(--one-dark-blue);
+    --ide-dock-merge-fill-color: rgba(97, 175, 239, 0.3);
+    --ide-dock-split-color: var(--one-dark-green);
+    --ide-dock-split-fill-color: rgba(152, 195, 121, 0.3);
+    --ide-dock-float-color: var(--one-dark-yellow);
+    --ide-dock-float-fill-color: rgba(229, 192, 123, 0.3);
+    --ide-dock-caret-color: var(--one-dark-blue);
+
+    /* Popups */
+    --ide-popup-color: var(--one-dark-gutter);
+    --ide-popup-border-color: var(--one-dark-border);
+    --ide-popup-shadow-color: rgba(0, 0, 0, 0.5);
+    --ide-popup-text-color: var(--one-dark-highlight);
+    --ide-popup-detail-text-color: var(--one-dark-subtle);
+    --ide-popup-selection-color: var(--one-dark-guide);
+    --ide-popup-header-color: var(--one-dark-sidebar);
+    --ide-popup-header-text-color: var(--one-dark-subtle);
+
+    /* Script Editor */
+    --ide-editor-color: var(--one-dark-background);
+    --ide-editor-text-color: var(--one-dark-foreground);
+    --ide-syntax-keyword-color: var(--one-dark-purple);
+    --ide-syntax-builtin-color: var(--one-dark-blue);
+    --ide-syntax-datatype-color: var(--one-dark-yellow);
+    --ide-syntax-comment-color: var(--one-dark-comment);
+    --ide-syntax-string-color: var(--one-dark-green);
+    --ide-syntax-number-color: var(--one-dark-orange);
+    --ide-find-match-color: rgba(209, 154, 102, 0.27);
+    --ide-find-current-color: rgba(209, 154, 102, 0.55);
+    --ide-swatch-border-color: rgba(255, 255, 255, 0.35);
+    --ide-banner-color: var(--one-dark-sidebar);
+    --ide-banner-text-color: var(--one-dark-subtle);
+    --ide-banner-error-color: rgba(224, 108, 117, 0.2);
+    --ide-banner-warning-color: rgba(229, 192, 123, 0.15);
+
+    /* Search */
+    --ide-find-bar-color: var(--one-dark-gutter);
+    --ide-find-bar-border-color: var(--one-dark-border);
+    --ide-find-bar-shadow-color: rgba(0, 0, 0, 0.5);
+    --ide-search-field-text-color: var(--one-dark-highlight);
+    --ide-search-field-border-color: var(--one-dark-border);
+    --ide-search-field-focus-color: var(--one-dark-blue);
+    --ide-search-field-invalid-color: var(--one-dark-red);
+    --ide-find-button-text-color: var(--one-dark-highlight);
+    --ide-find-button-hover-color: rgba(255, 255, 255, 0.08);
+    --ide-find-button-pressed-color: rgba(255, 255, 255, 0.14);
+    --ide-find-button-checked-color: rgba(97, 175, 239, 0.3);
+    --ide-find-button-checked-border-color: var(--one-dark-blue);
+    --ide-search-status-color: var(--one-dark-subtle);
+    --ide-search-status-error-color: var(--one-dark-red);
+    --ide-search-divider-color: var(--one-dark-border);
+    --ide-search-path-color: var(--one-dark-subtle);
+    --ide-search-badge-color: var(--one-dark-hover);
+    --ide-search-badge-text-color: var(--one-dark-highlight);
+
+    /* Console */
+    --ide-console-command-color: var(--one-dark-blue);
+    --ide-console-time-color: var(--one-dark-comment);
+    --ide-console-key-color: var(--one-dark-red);
+    --ide-console-note-color: var(--one-dark-comment);
+
+    /* Explorer */
+    --ide-explorer-button-color: var(--one-dark-subtle);
+    --ide-explorer-button-hover-color: var(--one-dark-guide);
+    --ide-explorer-button-disabled-color: var(--one-dark-comment);
+
+    /* Properties */
+    --ide-properties-group-color: var(--one-dark-gutter);
+    --ide-properties-group-text-color: var(--one-dark-subtle);
+    --ide-properties-readonly-name-color: var(--one-dark-comment);
+    --ide-properties-readonly-color: var(--one-dark-sidebar);
+    --ide-properties-readonly-border-color: var(--one-dark-border);
+    --ide-properties-picking-color: var(--one-dark-guide);
+    --ide-properties-picking-border-color: var(--one-dark-blue);
+    --ide-properties-error-color: var(--one-dark-red);
+    --ide-properties-hint-color: var(--one-dark-blue);
+}

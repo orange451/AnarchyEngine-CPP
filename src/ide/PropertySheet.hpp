@@ -9,7 +9,7 @@ namespace ide {
 
 // What a Properties row edits. The class registry's type name picks it.
 // ReadOnlyText is shown and never written.
-enum class PropertyKind { String, Bool, Number, Vector3, Ref, ReadOnlyText };
+enum class PropertyKind { String, Bool, Number, Vector3, Color3, Ref, ReadOnlyText };
 
 // Instance rows come first in a fixed order, then Data rows by name.
 enum class PropertyGroup { Instance, Data };
@@ -22,6 +22,7 @@ struct PropertyValue {
     double number = 0;
     engine_core::Vec3 vec{};
     engine_core::InstanceId ref = engine_core::DataModel::kNoParent;
+    engine_core::Color3 color{};
 
     bool nil_ref() const { return ref == engine_core::DataModel::kNoParent; }
 };

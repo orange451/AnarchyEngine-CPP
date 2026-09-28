@@ -91,23 +91,10 @@ ConsoleLog::ConsoleLog() {
     // so a following print does not inherit the red.
     setUseInitialStyleForInsertion(true);
     suspendUndo();
-    auto define = [this](const char* name, jadefx::Color fill) {
-        jadefx::TextStyle style;
-        style.hasFill = true;
-        style.fill = fill;
-        defineStyleClass(name, style);
-    };
-    define("error", jadefx::Color::rgb8(176, 0, 32));
-    define("command", jadefx::Color::rgb8(18, 78, 148));
-    define("time", jadefx::Color::rgb8(120, 124, 130));
-    // A field row repeats its table's stamp so the columns line up and a copy keeps it,
-    // but only the first row of a print shows one.
-    define("gutter", jadefx::Color::rgb8(0, 0, 0, 0));
-    // What opens or closes a table is link blue. Printed text is a link too, but keeps the text color.
-    define("toggle", jadefx::Color::rgb8(18, 78, 148));
+    defineStyles();
+    // What opens or closes a table and printed text are links, and keep the theme's text color.
+    // The toggle class only marks the braces, so it sets no fill.
     setStyle("--link-color: currentColor;");
-    define("key", jadefx::Color::rgb8(136, 19, 145));
-    define("note", jadefx::Color::rgb8(120, 124, 130));
     rows_.assign(static_cast<std::size_t>(paragraphCount()), Row{});
     // A toggle and a printed line are separate links, so the spot tells which one was clicked.
     setOnLinkClicked([this](const jadefx::LinkEvent& event) {
@@ -356,6 +343,23 @@ const ConsoleLog::Link* ConsoleLog::findLink(int paragraph, int column) const {
         return nullptr;
     }
     return &links_[static_cast<std::size_t>(row.link)];
+}
+
+void ConsoleLog::defineStyles() {
+    auto define = [this](const char* name, jadefx::Color fill) {
+        jadefx::TextStyle style;
+        style.hasFill = true;
+        style.fill = fill;
+        defineStyleClass(name, style);
+    };
+    define("error", theme_color("--ide-error-text-color"));
+    define("command", theme_color("--ide-console-command-color"));
+    define("time", theme_color("--ide-console-time-color"));
+    // A field row repeats its table's stamp so the columns line up and a copy keeps it,
+    // but only the first row of a print shows one.
+    define("gutter", jadefx::Color::rgb8(0, 0, 0, 0));
+    define("key", theme_color("--ide-console-key-color"));
+    define("note", theme_color("--ide-console-note-color"));
 }
 
 bool ConsoleLog::openAt(int paragraph, int column) {

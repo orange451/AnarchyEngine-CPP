@@ -15,6 +15,8 @@
 #include "IdeExplorer.hpp"
 #include "IdeScriptEditor.hpp"
 #include "IdeSearch.hpp"
+#include "IdeTheme.hpp"
+#include "PreferencesPanel.hpp"
 #include "PropertiesPanel.hpp"
 #include "LuaSource.hpp"
 #include "McpServer.hpp"
@@ -86,20 +88,25 @@ KeyChord ChordOf(const jadefx::KeyEvent& event) {
 
 void CloseGesture(engine_core::DataModel& world) { world.history().end_gesture(); }
 
+// Every color is a variable of the current theme, which set_current_theme puts in
+// JadeFX's user-agent stylesheet. See resources/themes/light.css.
 constexpr const char* kStylesheet = R"CSS(
 scene {
-    background-color: #d0d0d0;
+    background-color: var(--ide-window-color);
     font-family: "Open Sans";
     font-size: 13px;
-    color: #202124;
+    color: var(--ide-text-color);
+}
+.ide-root {
+    background-color: var(--ide-window-color);
 }
 .ide-status {
-    background-color: #eceff1;
+    background-color: var(--ide-status-bar-color);
 }
 .ide-ribbon {
-    background-color: #f5f6f7;
+    background-color: var(--ide-ribbon-color);
     border-width: 0 0 1px 0;
-    border-color: #c8c8c8;
+    border-color: var(--ide-ribbon-border-color);
     padding: 3px 6px;
 }
 .ide-ribbon-button {
@@ -107,36 +114,36 @@ scene {
     border-radius: 4px;
 }
 .ide-ribbon-button:hover {
-    background-color: #e1e5ea;
+    background-color: var(--ide-ribbon-hover-color);
 }
 .ide-ribbon-button:active {
-    background-color: #cfd6de;
+    background-color: var(--ide-ribbon-pressed-color);
 }
 .ide-ribbon-button:disabled {
     background-color: transparent;
     opacity: 0.4;
 }
 .ide-viewport {
-    background-color: #1e1e1e;
+    background-color: var(--ide-viewport-color);
 }
 .ide-fps {
-    color: #f2f2f2;
+    color: var(--ide-fps-text-color);
     padding: 6px 8px;
-    background-color: rgba(0, 0, 0, 0.45);
+    background-color: var(--ide-fps-color);
 }
 textfield {
-    background-color: #ffffff;
+    background-color: var(--ide-field-color);
     border-width: 1px 0 0 0;
-    border-color: #c8c8c8;
+    border-color: var(--ide-field-border-color);
     padding: 6px 8px;
 }
 styleclassedtextarea {
-    background-color: #ffffff;
+    background-color: var(--ide-panel-color);
     padding: 6px 8px;
 }
 codearea {
-    background-color: #ffffff;
-    color: #1f2328;
+    background-color: var(--ide-editor-color);
+    color: var(--ide-editor-text-color);
     font-family: "Editor Mono";
     font-size: 14px;
     padding: 8px;
@@ -144,7 +151,11 @@ codearea {
 split-pane:horizontal > .split-pane-divider,
 split-pane:vertical > .split-pane-divider {
     padding: 0 2px;
-    background-color: #b0b0b0;
+    background-color: var(--divider-color);
+}
+.toast {
+    border-radius: 0px;
+    box-shadow: 0px 2px 8px 0px var(--ide-popup-shadow-color);
 }
 )CSS";
 
@@ -227,15 +238,14 @@ Box ClampBox(Box box, double sceneW, double sceneH) {
     return box;
 }
 
-constexpr const char* kMergeBorder = "border-width: 2px; border-style: solid; border-color: #1a73e8;";
-constexpr const char* kSplitBorder = "border-width: 2px; border-style: solid; border-color: #188038;";
-constexpr const char* kFloatBorder = "border-width: 2px; border-style: solid; border-color: #e37400;";
-constexpr const char* kCaretBorder = "border-width: 0;";
-
-const jadefx::Color kMergeFill = jadefx::Color::rgba(0.102f, 0.451f, 0.910f, 0.38f);
-const jadefx::Color kSplitFill = jadefx::Color::rgba(0.204f, 0.659f, 0.325f, 0.40f);
-const jadefx::Color kFloatFill = jadefx::Color::rgba(0.984f, 0.737f, 0.016f, 0.46f);
-const jadefx::Color kCaretFill = jadefx::Color::rgba(0.102f, 0.451f, 0.910f, 0.95f);
+// The drop mark over a dock while a tab is dragged: its outline and fill for each kind of drop.
+constexpr const char* kMergeMark = "border-width: 2px; border-style: solid; border-color: var(--ide-dock-merge-color); "
+                                   "background-color: var(--ide-dock-merge-fill-color);";
+constexpr const char* kSplitMark = "border-width: 2px; border-style: solid; border-color: var(--ide-dock-split-color); "
+                                   "background-color: var(--ide-dock-split-fill-color);";
+constexpr const char* kFloatMark = "border-width: 2px; border-style: solid; border-color: var(--ide-dock-float-color); "
+                                   "background-color: var(--ide-dock-float-fill-color);";
+constexpr const char* kCaretMark = "border-width: 0; background-color: var(--ide-dock-caret-color);";
 
 constexpr int kMcpPort = 7777;
 constexpr std::chrono::seconds kUiWait(5);
@@ -337,8 +347,25 @@ struct IdeLayout::Clip {
     bool held = false;
 };
 
-IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_unique<Clip>()) {
+IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesystem::path& config)
+    : preferences_(config.empty() ? std::filesystem::path() : config / "preferences.json"),
+      themes_(config.empty() ? std::filesystem::path() : config / "themes"),
+      clip_(std::make_unique<Clip>()) {
     runner_.prepare();
+    // Before any widget reads a color.
+    engine_core::ScriptRuntime& scripts = runner_.simulation().scripts();
+    if (!preferences_.load_error().empty()) {
+        scripts.append_output(engine_core::ScriptRuntime::OutputKind::Error,
+                              "Preferences: " + preferences_.load_error());
+    }
+    IdeTheme theme;
+    std::string theme_error;
+    if (!themes_.load(preferences_.theme(), theme, theme_error)) {
+        scripts.append_output(engine_core::ScriptRuntime::OutputKind::Error,
+                              "Theme: " + theme_error + ". Drawing with Light instead.");
+        theme = themes_.shipped("light");
+    }
+    set_current_theme(std::move(theme));
     // Only open scripts, and the modules they require, are checked. Nothing
     // else in the studio reads diagnostics.
     runner_.simulation().analysis().set_scope(engine_core::AnalysisScope::Open);
@@ -353,6 +380,9 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
         ->setOnAction([this](jadefx::ActionEvent&) { save_project(); });
     AddItem(*file, "Save As", "SaveAs.png", jadefx::Key::S, jadefx::Key::ModControl | jadefx::Key::ModShift)
         ->setOnAction([this](jadefx::ActionEvent&) { save_project_as(); });
+    file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
+    AddItem(*file, "Preferences\u2026", nullptr, jadefx::Key::Comma, jadefx::Key::ModControl)
+        ->setOnAction([this](jadefx::ActionEvent&) { open_preferences(); });
     file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     // The same path as the window's close button: unsaved work is offered a save first.
     AddItem(*file, "Quit", nullptr, jadefx::Key::Q, jadefx::Key::ModControl)->setOnAction([this](jadefx::ActionEvent&) {
@@ -535,12 +565,11 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight) : clip_(std::make_
     status->getClassList().add("ide-status");
     status->setMinSize(0, kStatusHeight);
     status->setPrefHeight(kStatusHeight);
-    status->setBackground(jadefx::Color::rgb8(236, 239, 241));
 
     root_ = jadefx::make<jadefx::BorderPane>();
     root_->setPrefWidthRatio(1);
     root_->setPrefHeightRatio(1);
-    root_->setBackground(jadefx::Color::rgb8(208, 208, 208));
+    root_->getClassList().add("ide-root");
     root_->setTop(top);
     root_->setCenter(horizontal);
     root_->setBottom(status);
@@ -604,7 +633,7 @@ void IdeLayout::start_mcp() {
         scripts.append_output(engine_core::ScriptRuntime::OutputKind::Error, "MCP server: " + error);
         return;
     }
-    scripts.append_output(engine_core::ScriptRuntime::OutputKind::Print, "MCP server listening on http://127.0.0.1:" + std::to_string(port) + "/mcp");
+    show_toast("MCP server listening on http://127.0.0.1:" + std::to_string(port) + "/mcp", jadefx::Toast::LENGTH_LONG);
     mcp_ = std::move(server);
 }
 
@@ -640,6 +669,10 @@ void IdeLayout::mount(jadefx::Scene& scene) {
             routeSearch(event, *scene_);
         }
     });
+    for (auto& [text, seconds] : pending_toasts_) {
+        show_toast(std::move(text), seconds);
+    }
+    pending_toasts_.clear();
 }
 
 void IdeLayout::attachFrame(jadefx::Stage& stage) {
@@ -1154,8 +1187,7 @@ DragChoice ChooseDrop(IdeDock& from, const DragPoint& point, const std::vector<s
     return choice;
 }
 
-void IdeLayout::showDropMark(jadefx::Scene& scene, double x, double y, double width, double height, const char* border,
-                             jadefx::Color fill) {
+void IdeLayout::showDropMark(jadefx::Scene& scene, double x, double y, double width, double height, const char* style) {
     if (width < 2.0 || height < 2.0) {
         hideDropMark();
         return;
@@ -1164,8 +1196,7 @@ void IdeLayout::showDropMark(jadefx::Scene& scene, double x, double y, double wi
         dropMark_ = jadefx::make<jadefx::Pane>();
         dropMark_->setMouseTransparent(true);
     }
-    dropMark_->setBackground(fill);
-    dropMark_->setStyle(border != nullptr ? border : kCaretBorder);
+    dropMark_->setStyle(style);
     const Box box = ClampBox(Box{x, y, width, height}, scene.getWidth(), scene.getHeight());
     if (dropMarkScene_ != &scene) {
         hideDropMark();
@@ -1204,8 +1235,7 @@ void IdeLayout::previewDrag(IdeDock& from, const jadefx::TabDrag& drag) {
         return;
     }
     Box mark = choice.mark;
-    const char* border = kFloatBorder;
-    jadefx::Color fill = kFloatFill;
+    const char* style = kFloatMark;
     if (choice.kind == DragKind::Undock) {
         const jadefx::Node* content = drag.tab ? drag.tab->getContent() : nullptr;
         const double contentW = content != nullptr ? content->getMinWidth() : 0;
@@ -1215,13 +1245,11 @@ void IdeLayout::previewDrag(IdeDock& from, const jadefx::TabDrag& drag) {
         mark.x = point.x - 36.0;
         mark.y = point.y - 12.0;
     } else if (choice.kind == DragKind::MoveTab || choice.kind == DragKind::Restore) {
-        border = choice.caret ? kCaretBorder : kMergeBorder;
-        fill = choice.caret ? kCaretFill : kMergeFill;
+        style = choice.caret ? kCaretMark : kMergeMark;
     } else {
-        border = kSplitBorder;
-        fill = kSplitFill;
+        style = kSplitMark;
     }
-    showDropMark(point.stage->getScene(), mark.x, mark.y, mark.width, mark.height, border, fill);
+    showDropMark(point.stage->getScene(), mark.x, mark.y, mark.width, mark.height, style);
 }
 
 void IdeLayout::applyDrag(IdeDock& from, const jadefx::TabDrag& drag) {
@@ -1383,6 +1411,10 @@ IdeLayout::~IdeLayout() {
         }
         item.window->setOnClosed(nullptr);
         item.window->setCanClose(nullptr);
+    }
+    if (preferences_window_) {
+        preferences_window_->setOnClosed(nullptr);
+        preferences_window_->setCanClose(nullptr);
     }
 }
 
@@ -1982,6 +2014,14 @@ void IdeLayout::show_error(const std::string& heading, const std::string& detail
     alerts_.push_back(std::move(alert));
 }
 
+void IdeLayout::show_toast(std::string text, double seconds) {
+    if (scene_ == nullptr) {
+        pending_toasts_.emplace_back(std::move(text), seconds);
+        return;
+    }
+    jadefx::Toast::show(*root_, std::move(text), seconds, jadefx::Pos::BottomRight);
+}
+
 void IdeLayout::close_script_editors() {
     std::vector<std::shared_ptr<IdeScriptEditor>> editors;
     for (const auto& entry : open_scripts_) {
@@ -2049,6 +2089,50 @@ bool IdeLayout::has_unsaved_changes() {
     return place_modified_ || editors_unflushed();
 }
 
+void IdeLayout::open_preferences() {
+    if (preferences_window_ && preferences_window_->isOpen()) {
+        return;
+    }
+    constexpr int kWidth = 700;
+    constexpr int kHeight = 640;
+    // Centered across the main window, a little below its top.
+    double x = 120;
+    double y = 120;
+    double screenX = 0;
+    double screenY = 0;
+    if (mainStage_ != nullptr && scene_ != nullptr && jadefx::stageToScreen(*mainStage_, 0, 0, screenX, screenY)) {
+        x = screenX + std::max(0.0, (scene_->getWidth() - kWidth) * 0.5);
+        y = screenY + 60;
+    }
+    std::shared_ptr<jadefx::UtilityWindow> window = jadefx::UtilityWindow::open("Preferences", kWidth, kHeight, x, y);
+    if (!window) {
+        return;
+    }
+    auto panel = jadefx::make<PreferencesPanel>(themes_, preferences_);
+    auto scene = jadefx::make<jadefx::Scene>(panel, static_cast<double>(kWidth), static_cast<double>(kHeight));
+    window->stage().setScene(std::move(scene));
+    // Unsaved colors ask first. The answer closes the window on a later frame, off the alert's own event.
+    std::weak_ptr<jadefx::UtilityWindow> weak = window;
+    window->setCanClose([this, weak]() {
+        if (!preferences_panel_) {
+            return true;
+        }
+        return preferences_panel_->request_close([weak] {
+            jadefx::runLater([weak] {
+                if (std::shared_ptr<jadefx::UtilityWindow> open = weak.lock()) {
+                    open->close();
+                }
+            });
+        });
+    });
+    window->setOnClosed([this]() {
+        preferences_panel_.reset();
+        preferences_window_.reset();
+    });
+    preferences_window_ = std::move(window);
+    preferences_panel_ = std::move(panel);
+}
+
 void IdeLayout::confirm_discard(const std::string& question, std::function<void()> proceed) {
     if (prompt_open_ || dialog_open_) {
         return;
@@ -2109,7 +2193,7 @@ void IdeLayout::new_place() {
     run_now([](engine_core::DataModel& game) { engine_core::Project::reset_place(game); });
     project_.reset();
     mark_saved();
-    runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Print, "New place");
+    show_toast("New place");
 }
 
 void IdeLayout::open_project() {
@@ -2161,8 +2245,7 @@ void IdeLayout::open_project_at(const std::filesystem::path& root) {
     }
     project_ = std::move(loaded);
     mark_saved();
-    runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Print,
-                                                 "Opened " + project_->root().u8string());
+    show_toast("Opened " + project_->name());
 }
 
 bool IdeLayout::save_open_project() {
@@ -2184,10 +2267,9 @@ bool IdeLayout::save_open_project() {
     mark_saved();
     const engine_core::Project::SaveReport& report = project_->last_save();
     const std::size_t changed = report.written.size() + report.moved.size() + report.removed.size();
-    runner_.simulation().scripts().append_output(
-        engine_core::ScriptRuntime::OutputKind::Print,
-        "Saved " + project_->root().u8string() +
-            (changed == 0 ? std::string(" (no changes)") : " (" + std::to_string(changed) + " files changed)"));
+    show_toast("Saved " + project_->name() +
+               (changed == 0 ? std::string(" (no changes)")
+                             : " (" + std::to_string(changed) + (changed == 1 ? " file" : " files") + " changed)"));
     return true;
 }
 
@@ -2243,8 +2325,7 @@ bool IdeLayout::save_project_to(const std::filesystem::path& root) {
         return false;
     }
     mark_saved();
-    runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Print,
-                                                 "Saved " + project_->root().u8string());
+    show_toast("Saved " + project_->name());
     return true;
 }
 

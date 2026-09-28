@@ -34,6 +34,7 @@ set(STUDIO_SOURCES
     src/ide/InsertPopup.cpp
     src/ide/IdeExplorer.cpp
     src/ide/IdeIcons.cpp
+    src/ide/IdeResources.cpp
     src/ide/IdeScriptEditor.cpp
     src/ide/IdeSearch.cpp
     src/ide/FindBar.cpp
@@ -43,6 +44,7 @@ set(STUDIO_SOURCES
     src/ide/ColorLiterals.cpp
     src/ide/LuauHighlight.cpp
     src/ide/LuauComplete.cpp
+    src/ide/IdeTheme.cpp
     src/ide/IdeTreeTest.cpp
     src/ide/IdeLayout.cpp
     src/ide/TextUndoStack.cpp
@@ -50,6 +52,9 @@ set(STUDIO_SOURCES
     src/ide/CutSet.cpp
     src/ide/PropertySheet.cpp
     src/ide/PropertiesPanel.cpp
+    src/ide/Preferences.cpp
+    src/ide/PreferencesPanel.cpp
+    src/ide/ThemeLibrary.cpp
     src/ide/TextWrap.cpp
     src/ide/McpServer.cpp
     src/ide/McpTools.cpp
@@ -250,6 +255,7 @@ add_executable(shell-tests
     src/ide/IdeDock.cpp
     src/ide/IdeIcons.cpp
     src/ide/IdePane.cpp
+    src/ide/IdeResources.cpp
 )
 target_include_directories(shell-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(shell-tests PRIVATE jadefx)
@@ -262,6 +268,8 @@ add_executable(explorer-tests
     src/ide/IdeExplorer.cpp
     src/ide/IdeIcons.cpp
     src/ide/IdePane.cpp
+    src/ide/IdeResources.cpp
+    src/ide/IdeTheme.cpp
     src/ide/InsertPopup.cpp
 )
 target_include_directories(explorer-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -272,6 +280,8 @@ target_compile_features(explorer-tests PRIVATE cxx_std_17)
 add_executable(console-tests
     tests/ConsoleLogTest.cpp
     src/ide/ConsoleLog.cpp
+    src/ide/IdeResources.cpp
+    src/ide/IdeTheme.cpp
 )
 target_include_directories(console-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(console-tests PRIVATE jadefx engine_core)
@@ -284,6 +294,8 @@ add_executable(properties-tests
     src/ide/IdeExplorer.cpp
     src/ide/IdeIcons.cpp
     src/ide/IdePane.cpp
+    src/ide/IdeResources.cpp
+    src/ide/IdeTheme.cpp
     src/ide/InsertPopup.cpp
     src/ide/PropertySheet.cpp
     src/ide/PropertiesPanel.cpp
@@ -297,6 +309,8 @@ target_compile_features(properties-tests PRIVATE cxx_std_17)
 add_executable(studio-tests
     tests/StudioLayoutTest.cpp
     tests/FindReplaceTest.cpp
+    tests/ThemeTest.cpp
+    tests/PreferencesTest.cpp
     ${STUDIO_SOURCES}
 )
 target_include_directories(studio-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")

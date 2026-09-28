@@ -1,0 +1,113 @@
+/*
+ * Anarchy Engine's light theme.
+ *
+ * A theme is one :root rule of CSS custom properties. --theme-base picks the
+ * JadeFX look underneath, light or dark, which sets JadeFX's own variables
+ * such as --accent-color and --surface-color; a theme may set those too. The
+ * --ide-* variables are the studio's. A theme that leaves one out gets it from
+ * the shipped theme of the same base.
+ */
+:root {
+    --theme-name: "Light";
+    --theme-base: light;
+
+    /* Studio */
+    --ide-window-color: #d0d0d0;
+    --ide-text-color: #202124;
+    --ide-muted-text-color: #5f6368;
+    --ide-panel-color: #ffffff;
+    --ide-status-bar-color: #eceff1;
+    --ide-field-color: #ffffff;
+    --ide-field-border-color: #c8c8c8;
+    --ide-error-text-color: #b00020;
+    --ide-warning-text-color: #8a5a00;
+
+    /* Ribbon */
+    --ide-ribbon-color: #f5f6f7;
+    --ide-ribbon-border-color: #c8c8c8;
+    --ide-ribbon-hover-color: #e1e5ea;
+    --ide-ribbon-pressed-color: #cfd6de;
+
+    /* Scene View */
+    --ide-viewport-color: #1e1e1e;
+    --ide-fps-color: rgba(0, 0, 0, 0.45);
+    --ide-fps-text-color: #f2f2f2;
+
+    /* Docking */
+    --ide-dock-merge-color: #1a73e8;
+    --ide-dock-merge-fill-color: rgba(26, 115, 232, 0.38);
+    --ide-dock-split-color: #188038;
+    --ide-dock-split-fill-color: rgba(52, 168, 83, 0.4);
+    --ide-dock-float-color: #e37400;
+    --ide-dock-float-fill-color: rgba(251, 188, 4, 0.46);
+    --ide-dock-caret-color: rgba(26, 115, 232, 0.95);
+
+    /* Popups: completion, Insert Object, and hover tips */
+    --ide-popup-color: #ffffff;
+    --ide-popup-border-color: #c5c8ce;
+    --ide-popup-shadow-color: rgba(32, 33, 36, 0.16);
+    --ide-popup-text-color: #1f2328;
+    --ide-popup-detail-text-color: #5c6570;
+    --ide-popup-selection-color: #d6e4f5;
+    --ide-popup-header-color: #eef1f4;
+    --ide-popup-header-text-color: #3c4450;
+
+    /* Script Editor */
+    --ide-editor-color: #ffffff;
+    --ide-editor-text-color: #1f2328;
+    --ide-syntax-keyword-color: #7a3e9d;
+    --ide-syntax-builtin-color: #0b6e84;
+    --ide-syntax-datatype-color: #a3470a;
+    --ide-syntax-comment-color: #6a737d;
+    --ide-syntax-string-color: #0a7d33;
+    --ide-syntax-number-color: #0550ae;
+    --ide-find-match-color: rgba(234, 92, 0, 0.22);
+    --ide-find-current-color: rgba(234, 92, 0, 0.5);
+    --ide-swatch-border-color: rgba(0, 0, 0, 0.35);
+    --ide-banner-color: #f3f4f6;
+    --ide-banner-text-color: #5c6570;
+    --ide-banner-error-color: #fdecea;
+    --ide-banner-warning-color: #fff4d6;
+
+    /* Search: the script editor's find bar and the Search pane */
+    --ide-find-bar-color: #f3f3f3;
+    --ide-find-bar-border-color: #c8c8c8;
+    --ide-find-bar-shadow-color: rgba(0, 0, 0, 0.18);
+    --ide-search-field-text-color: #1f2328;
+    --ide-search-field-border-color: #cecece;
+    --ide-search-field-focus-color: #0090f1;
+    --ide-search-field-invalid-color: #be1100;
+    --ide-find-button-text-color: #424242;
+    --ide-find-button-hover-color: rgba(184, 184, 184, 0.31);
+    --ide-find-button-pressed-color: rgba(166, 166, 166, 0.5);
+    --ide-find-button-checked-color: rgba(0, 144, 241, 0.2);
+    --ide-find-button-checked-border-color: #007acc;
+    --ide-search-status-color: #616161;
+    --ide-search-status-error-color: #a1260d;
+    --ide-search-divider-color: #e5e5e5;
+    --ide-search-path-color: #717171;
+    --ide-search-badge-color: #c4c4c4;
+    --ide-search-badge-text-color: #1f2328;
+
+    /* Console */
+    --ide-console-command-color: #124e94;
+    --ide-console-time-color: #787c82;
+    --ide-console-key-color: #881391;
+    --ide-console-note-color: #787c82;
+
+    /* Explorer */
+    --ide-explorer-button-color: #5f6368;
+    --ide-explorer-button-hover-color: #e8f0fe;
+    --ide-explorer-button-disabled-color: #c8cbcf;
+
+    /* Properties */
+    --ide-properties-group-color: #e8eaed;
+    --ide-properties-group-text-color: #3c4043;
+    --ide-properties-readonly-name-color: #80868b;
+    --ide-properties-readonly-color: #f1f3f4;
+    --ide-properties-readonly-border-color: #dadce0;
+    --ide-properties-picking-color: #d2e3fc;
+    --ide-properties-picking-border-color: #1a73e8;
+    --ide-properties-error-color: #c5221f;
+    --ide-properties-hint-color: #1a73e8;
+}

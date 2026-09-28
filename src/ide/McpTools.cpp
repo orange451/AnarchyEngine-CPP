@@ -218,6 +218,8 @@ const char* KindName(PropertyKind kind) {
             return "number";
         case PropertyKind::Vector3:
             return "Vector3";
+        case PropertyKind::Color3:
+            return "Color3";
         case PropertyKind::Ref:
             return "Instance";
         case PropertyKind::ReadOnlyText:
@@ -240,6 +242,10 @@ JsonValue RowValue(const DataModel& world, const PropertyRow& row) {
             return JsonValue::array({JsonValue::number_from_float(row.value.vec.x),
                                      JsonValue::number_from_float(row.value.vec.y),
                                      JsonValue::number_from_float(row.value.vec.z)});
+        case PropertyKind::Color3:
+            return JsonValue::array({JsonValue::number_from_float(row.value.color.r),
+                                     JsonValue::number_from_float(row.value.color.g),
+                                     JsonValue::number_from_float(row.value.color.b)});
         case PropertyKind::Ref:
             if (row.value.nil_ref() || !Exists(world, row.value.ref)) {
                 return JsonValue();
@@ -319,6 +325,19 @@ PropertyEdit EditFor(const DataModel& world, const PropertyRow& row, const JsonV
             edit.value.vec.z = static_cast<float>(axes[2]);
             break;
         }
+        case PropertyKind::Color3:
+            if (value.is_string()) {
+                if (!engine_core::color3_from_hex(value.as_string(), edit.value.color)) {
+                    throw std::runtime_error(row.name + " takes [r, g, b] from 0 to 1, or a hex code.");
+                }
+            } else if (value.is_array() && value.items().size() == 3) {
+                edit.value.color.r = static_cast<float>(NumberArg(value.items()[0], row.name));
+                edit.value.color.g = static_cast<float>(NumberArg(value.items()[1], row.name));
+                edit.value.color.b = static_cast<float>(NumberArg(value.items()[2], row.name));
+            } else {
+                throw std::runtime_error(row.name + " takes [r, g, b] from 0 to 1, or a hex code.");
+            }
+            break;
         case PropertyKind::Ref:
             edit.value.ref = value.is_null() ? DataModel::kNoParent : Resolve(world, &value, row.name.c_str());
             break;
@@ -454,11 +473,12 @@ void add_engine_tools(McpServer& server, engine_core::Engine& engine, McpStudio 
 
     server.add_tool({"set_property",
                      "Sets one property, as an edit in the Properties panel does: one undo step. Vector3 takes "
-                     "[x, y, z]. An Instance property (such as Parent) takes an id, a path, or null.",
+                     "[x, y, z]. Color3 takes [r, g, b], each 0 to 1, or a hex code such as \"#FF8000\". An "
+                     "Instance property (such as Parent) takes an id, a path, or null.",
                      json_literal(R"({"type":"object","required":["instance","property","value"],"properties":{
                          "instance":{"type":["string","number"],"description":"Id or path."},
                          "property":{"type":"string"},
-                         "value":{"description":"string, number, boolean, [x,y,z], id, path, or null."}}})"),
+                         "value":{"description":"string, number, boolean, [x,y,z], [r,g,b], hex code, id, path, or null."}}})"),
                      [live](const JsonValue& arguments) {
                          const JsonValue instance = arguments.find("instance") ? *arguments.find("instance") : JsonValue();
                          const std::string property = StringArg(arguments, "property");

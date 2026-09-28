@@ -22,6 +22,7 @@
 #include "Luau/FileResolver.h"
 #include "Luau/Frontend.h"
 #include "Luau/Linter.h"
+#include "Luau/Module.h"
 #include "Luau/ParseOptions.h"
 #include "Luau/ConstraintSolver.h"
 #include "Luau/Parser.h"
@@ -587,8 +588,15 @@ struct WorkerEnv {
     std::shared_ptr<Luau::MagicFunction> find_child;
     std::shared_ptr<Luau::MagicFunction> service_result;
     std::shared_ptr<Luau::MagicFunction> creatable_result;
+    // Lint runs before the type check, so it has no types. This empty module says so:
+    // the lints that want types find none, as with no module at all. Luau's
+    // TableLiteral lint reads the module on every table type, so a null one crashes it.
+    std::unique_ptr<Luau::Module> untyped;
 
     void init() {
+        untyped = std::make_unique<Luau::Module>(std::make_shared<Luau::TypeArena>());
+        // As the frontend below, so a table type's read and write fields lint the same way.
+        untyped->checkedInNewSolver = true;
         configs.config.mode = Luau::Mode::Nonstrict;
         configs.config.parseOptions.captureComments = true;
         configs.config.enabledLint.setDefaults();
@@ -927,7 +935,7 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
         lint_options.disableWarning(Luau::LintWarning::Code_ImplicitReturn);
     }
     const std::vector<Luau::LintWarning> lints = Luau::lint(parsed.root, names, env.frontend->globals.globalScope,
-                                                            /*module*/ nullptr, parsed.hotcomments, lint_options);
+                                                            env.untyped.get(), parsed.hotcomments, lint_options);
     for (const Luau::LintWarning& warning : lints) {
         Severity severity = Severity::Warning;
         if (warning.code == Luau::LintWarning::Code_LocalUnused || warning.code == Luau::LintWarning::Code_FunctionUnused ||

@@ -1004,3 +1004,19 @@ print(held, face, state, x, moved, scaled, negated, unit, dot, mouse == Vector2.
     REQUIRE(dump(wrong).find("@0:") != std::string::npos);
     REQUIRE(dump(wrong).find("@1:") != std::string::npos);
 }
+
+TEST_CASE("A25 a table type is linted without a crash, and a duplicate key still warns", "[A25]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Enemies",
+                                             "--!strict\n"
+                                             "type Enemy = { name: string, health: number }\n"
+                                             "local rates = { slow = 1, slow = 2 }\n"
+                                             "local boss: Enemy = { name = \"Boss\", health = 100 }\n"
+                                             "print(rates.slow, boss.name)\n");
+    settle(analysis);
+    const std::vector<engine_core::Diagnostic> diagnostics = analysis.diagnostics(script.id());
+    INFO(dump(diagnostics));
+    REQUIRE(has_code(diagnostics, "Lint/TableLiteral"));
+    REQUIRE_FALSE(has_code(diagnostics, "Type"));
+}

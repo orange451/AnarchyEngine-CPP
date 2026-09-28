@@ -12,6 +12,7 @@
 #include "TestTriangle.hpp"
 #include "jadefx/jadefx.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -392,6 +393,106 @@ void TestR5Vector3PerAxis() {
     Expect(!rig.panel.status().empty(), "R5 a bad number says why");
 }
 
+bool SelectedWhole(const jadefx::TextField* box) {
+    return box != nullptr && std::min(box->getAnchor(), box->getCaretPosition()) == 0 &&
+           std::max(box->getAnchor(), box->getCaretPosition()) == box->getLength();
+}
+
+void TestFocusSelectsWhole() {
+    Rig rig;
+    rig.game.set_name(rig.a, "LongerName");
+    rig.select({rig.a});
+    jadefx::TextField* name = rig.field("Name");
+    // Clicks far enough apart that none is a double click.
+    auto clickAt = [&rig, name](double across) {
+        const double x = name->getAbsoluteX() + name->getWidth() * across;
+        const double y = name->getAbsoluteY() + name->getHeight() * 0.5;
+        rig.scene->noteButton(0, true, x, y);
+        rig.scene->noteButton(0, false, x, y);
+    };
+    clickAt(0.5);
+    Expect(name->isFocused() && SelectedWhole(name), "a click into a field selects its value");
+    rig.scene->noteText("Q");
+    Expect(name->getText() == "Q", "so typing replaces it");
+    rig.key(jadefx::Key::Escape);
+    rig.frame();
+    Expect(!name->isFocused() && name->getText() == "LongerName", "Escape drops the typing");
+
+    clickAt(0.2);
+    Expect(name->isFocused() && SelectedWhole(name), "each click that focuses the field selects it");
+    clickAt(0.05);
+    Expect(name->isFocused() && name->getAnchor() == name->getCaretPosition(),
+           "a click in the focused field places the caret");
+    rig.scene->noteWindowFocus(false);
+    rig.scene->noteWindowFocus(true);
+    Expect(name->isFocused() && name->getAnchor() == name->getCaretPosition(),
+           "focus coming back with the window keeps the caret");
+    rig.clickAway();
+
+    // A press that drags selects what it dragged over.
+    const double x = name->getAbsoluteX() + 6;
+    const double y = name->getAbsoluteY() + name->getHeight() * 0.5;
+    rig.scene->noteButton(0, true, x, y);
+    rig.scene->noteMove(x + 24, y);
+    rig.scene->noteButton(0, false, x + 24, y);
+    Expect(name->isFocused() && !name->getSelectedText().empty() && !SelectedWhole(name),
+           "a drag that focuses the field keeps its own selection");
+    rig.clickAway();
+}
+
+void TestTabWalksFields() {
+    Rig rig;
+    auto* tri = dynamic_cast<engine_core::TestTriangle*>(rig.game.instance(rig.tri1));
+    tri->set_position(1, 2, 3);
+    rig.game.history().reset_waypoints();
+    rig.select({rig.tri1});
+    jadefx::TextField* name = rig.field("Name");
+    jadefx::TextField* axes[3] = {rig.field("Position", 0), rig.field("Position", 1), rig.field("Position", 2)};
+    auto tab = [&rig](bool back) {
+        rig.scene->noteKey(jadefx::Key::Tab, true, false, back ? jadefx::Key::ModShift : 0);
+        rig.frame();
+    };
+
+    rig.click(name);
+    tab(false);
+    Expect(axes[0]->isFocused() && SelectedWhole(axes[0]), "Tab skips Parent and read-only ClassName to X");
+    rig.scene->noteText("5");
+    tab(false);
+    Expect(axes[1]->isFocused() && SelectedWhole(axes[1]), "Tab goes from X to Y and selects it");
+    Expect(rig.position(rig.tri1).x == 5 && rig.text("Position", 0) == "5", "Tab writes the X typed");
+    Expect(rig.undoDepth() == 1, "as one waypoint");
+    tab(false);
+    Expect(axes[2]->isFocused() && SelectedWhole(axes[2]), "Tab goes from Y to Z");
+    tab(true);
+    Expect(axes[1]->isFocused() && SelectedWhole(axes[1]), "Shift+Tab goes back to Y");
+    tab(false);
+    tab(false);
+    Expect(name->isFocused() && SelectedWhole(name), "Tab from the last field wraps to the first");
+    tab(true);
+    Expect(axes[2]->isFocused(), "Shift+Tab from the first field wraps to the last");
+
+    // A value that changes under a field selected whole stays selected whole.
+    tri->set_position(5, 2, 7.5f);
+    rig.frame();
+    Expect(axes[2]->getText() == "7.5" && SelectedWhole(axes[2]), "a new value in a selected field is selected");
+    rig.clickAway();
+    const engine_core::Vec3 kept = rig.position(rig.tri1);
+    Expect(kept.x == 5 && kept.y == 2 && kept.z == 7.5f, "moving through fields writes nothing");
+}
+
+void TestPositionAxisColors() {
+    Rig rig;
+    rig.select({rig.tri1});
+    const char* colors[3] = {"--ide-properties-x-color", "--ide-properties-y-color", "--ide-properties-z-color"};
+    for (int axis = 0; axis < 3; ++axis) {
+        jadefx::TextField* box = rig.field("Position", axis);
+        Expect(box != nullptr && box->getStyle().find(colors[axis]) != std::string::npos,
+               "Position's X, Y, and Z are red, green, and blue");
+    }
+    Expect(rig.field("Name")->getStyle().find("--ide-field-color") != std::string::npos,
+           "other fields keep the field color");
+}
+
 bool SameColor(const engine_core::ColorRgb& color, float r, float g, float b) {
     auto near = [](float x, float y) { return x > y - 0.002f && x < y + 0.002f; };
     return near(color.r, r) && near(color.g, g) && near(color.b, b) && color.a == 1.f;
@@ -741,6 +842,9 @@ int main() {
     TestR3IntersectionOnly();
     TestR4SameValueIsNotMixed();
     TestR5Vector3PerAxis();
+    TestFocusSelectsWhole();
+    TestTabWalksFields();
+    TestPositionAxisColors();
     TestColorPicker();
     TestR6ParentReference();
     TestR7MidEditIsNotClobbered();

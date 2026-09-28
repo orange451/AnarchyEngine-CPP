@@ -35,6 +35,15 @@ constexpr const char* kReadOnlyStyle =
     "padding: 0 4px; border-width: 1px; border-style: solid; border-radius: 3px; "
     "border-color: var(--ide-properties-readonly-border-color); "
     "background-color: var(--ide-properties-readonly-color); color: var(--ide-muted-text-color);";
+// Position's X, Y, and Z fields are tinted red, green, and blue.
+constexpr const char* kAxisStyles[3] = {
+    "padding: 0 4px; border-width: 1px; border-style: solid; border-radius: 3px; "
+    "border-color: var(--ide-field-border-color); background-color: var(--ide-properties-x-color);",
+    "padding: 0 4px; border-width: 1px; border-style: solid; border-radius: 3px; "
+    "border-color: var(--ide-field-border-color); background-color: var(--ide-properties-y-color);",
+    "padding: 0 4px; border-width: 1px; border-style: solid; border-radius: 3px; "
+    "border-color: var(--ide-field-border-color); background-color: var(--ide-properties-z-color);",
+};
 constexpr const char* kButtonStyle = "padding: 0 4px; border-radius: 3px;";
 // The line under the rows: a refused edit, or what to click while picking a reference.
 constexpr const char* kErrorStyle = "color: var(--ide-properties-error-color);";
@@ -75,6 +84,10 @@ void RecordChange(TextUndoStack& stack, const std::string& next) {
 // A value field. dirty is set by typing and cleared by show, a commit, or undo
 // back to where the field started, so a blank mixed field that was only
 // focused commits nothing.
+//
+// Focus selects the whole value, so typing replaces it. A click that focuses
+// the field selects it when the button comes up, unless the press dragged out a
+// selection of its own. Focus coming back with the window keeps the caret.
 class PropertyField : public jadefx::TextField {
 public:
     PropertyField() {
@@ -84,15 +97,24 @@ public:
     }
 
     std::function<void()> on_cancel;
+    // Tab, or Shift+Tab when back is true.
+    std::function<void(bool back)> on_tab;
     TextUndoStack stack;
     bool dirty = false;
     bool was_focused = false;
+    // The style while the field is editable.
+    const char* editable_style = kFieldStyle;
 
-    // Shows a value from the world. Typing so far is dropped.
+    // Shows a value from the world. Typing so far is dropped. A field selected
+    // whole stays selected whole.
     void show(const std::string& text) {
         mute_ = true;
         if (getText() != text) {
+            const bool whole = isFocused() && selected_whole();
             setText(text);
+            if (whole) {
+                selectAll();
+            }
         }
         mute_ = false;
         stack.reset(text);
@@ -101,7 +123,7 @@ public:
 
     void set_read_only(bool read_only) {
         setEditable(!read_only);
-        setStyle(read_only ? kReadOnlyStyle : kFieldStyle);
+        setStyle(read_only ? kReadOnlyStyle : editable_style);
     }
 
     // The focused field's own undo. False when its stack has nothing that way.
@@ -131,6 +153,11 @@ protected:
             }
             return;
         }
+        if (event.pressed && event.key == jadefx::Key::Tab && !event.shortcut() && !event.alt && on_tab) {
+            event.consume();
+            on_tab(event.shift);
+            return;
+        }
         jadefx::TextField::handleKey(event);
         note();
     }
@@ -138,6 +165,33 @@ protected:
     void handleText(jadefx::TextEvent& event) override {
         jadefx::TextField::handleText(event);
         note();
+    }
+
+    void handleFocusGained() override {
+        jadefx::TextField::handleFocusGained();
+        if (window_away_) {
+            window_away_ = false;
+            return;
+        }
+        selectAll();
+        // The scene marks the pressed node before it moves the focus.
+        select_on_release_ = isPressed();
+    }
+
+    void handleFocusLost() override {
+        jadefx::Scene* scene = getScene();
+        window_away_ = scene != nullptr && !scene->isWindowFocused();
+        select_on_release_ = false;
+        jadefx::TextField::handleFocusLost();
+    }
+
+    // The press that focused the field put the caret under the pointer.
+    void handleMouseReleased(const jadefx::MouseEvent& event) override {
+        jadefx::TextField::handleMouseReleased(event);
+        if (select_on_release_ && event.stillSincePress) {
+            selectAll();
+        }
+        select_on_release_ = false;
     }
 
 private:
@@ -149,7 +203,13 @@ private:
         dirty = true;
     }
 
+    bool selected_whole() const {
+        return std::min(getAnchor(), getCaretPosition()) == 0 && std::max(getAnchor(), getCaretPosition()) == getLength();
+    }
+
     bool mute_ = false;
+    bool window_away_ = false;
+    bool select_on_release_ = false;
 };
 
 // A Color3 value. on_pick runs when the chooser closes on a pick, so a drag
@@ -254,6 +314,8 @@ struct RowView {
     std::shared_ptr<jadefx::Button> clear;
     std::shared_ptr<jadefx::Tooltip> tip;
     bool tip_installed = false;
+    // Where the last layout put the row, in unscrolled content points.
+    double top = 0;
 
     std::vector<jadefx::Node*> nodes() const {
         std::vector<jadefx::Node*> out;
@@ -461,8 +523,10 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         rows = std::move(kept);
     }
 
-    std::shared_ptr<PropertyField> make_field(const std::shared_ptr<RowView>& view, bool read_only) {
+    std::shared_ptr<PropertyField> make_field(const std::shared_ptr<RowView>& view, bool read_only,
+                                              const char* style = kFieldStyle) {
         auto field = jadefx::make<PropertyField>();
+        field->editable_style = style;
         field->set_read_only(read_only);
         std::weak_ptr<Impl> weak_self = shared_from_this();
         std::weak_ptr<RowView> weak_view = view;
@@ -480,6 +544,13 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             const auto row = weak_view.lock();
             if (self && row) {
                 self->cancel_field(*row, *raw);
+            }
+        };
+        field->on_tab = [weak_self, weak_view, raw](bool back) {
+            const auto self = weak_self.lock();
+            const auto row = weak_view.lock();
+            if (self && row) {
+                self->tab_from(*row, *raw, back);
             }
         };
         pane->getChildren().add(field);
@@ -503,8 +574,9 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             view->field = make_field(view, !row.writable);
             break;
         case PropertyKind::Vector3:
-            for (auto& axis : view->axes) {
-                axis = make_field(view, !row.writable);
+            for (int axis = 0; axis < 3; ++axis) {
+                view->axes[axis] =
+                    make_field(view, !row.writable, row.name == "Position" ? kAxisStyles[axis] : kFieldStyle);
             }
             break;
         case PropertyKind::Bool:
@@ -772,6 +844,47 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
     }
 
+    // ---- Tab -------------------------------------------------------------
+
+    // Tab and Shift+Tab walk the editable fields top to bottom, a Vector3's
+    // X, Y, and Z in turn, and wrap around. The field left commits first.
+    void tab_from(RowView& view, PropertyField& from, bool back) {
+        std::vector<std::pair<RowView*, PropertyField*>> order;
+        std::size_t at = 0;
+        for (const auto& row : rows) {
+            for (PropertyField* field : row->fields()) {
+                if (field == &from) {
+                    at = order.size();
+                }
+                order.emplace_back(row.get(), field);
+            }
+        }
+        commit_field(view, from);
+        for (std::size_t step = 1; step < order.size(); ++step) {
+            const std::size_t index = (at + (back ? order.size() - step : step)) % order.size();
+            const auto [row, field] = order[index];
+            if (field->isEditable()) {
+                field->requestFocus();
+                reveal(*row);
+                return;
+            }
+        }
+        // The only field to go to is this one.
+        if (from.isEditable()) {
+            from.selectAll();
+        }
+    }
+
+    // Scrolls just enough to show the row.
+    void reveal(const RowView& view) {
+        const double height = pane ? pane->inner_height() : 0.0;
+        if (view.top - kPad < scroll) {
+            scroll = std::max(0.0, view.top - kPad);
+        } else if (view.top + kRowHeight + kPad > scroll + height) {
+            scroll = view.top + kRowHeight + kPad - height;
+        }
+    }
+
     // ---- Pick ------------------------------------------------------------
 
     void toggle_pick(RowView& view) {
@@ -863,6 +976,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 place(header, left, width, kRowHeight - 2);
                 y += kRowHeight - 2 + kRowGap;
             }
+            view->top = y + scroll;
             place(*view->name, left + kPad + kIndent, name_width - kIndent - 4, kRowHeight);
             switch (view->row.kind) {
             case PropertyKind::Vector3: {

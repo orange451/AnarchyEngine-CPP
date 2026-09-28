@@ -32,6 +32,11 @@ using PropertiesRun = std::function<void(std::function<void(engine_core::DataMod
 // cancels. A value changed elsewhere shows at once, except in a field that is
 // focused and typed in; that one resyncs when it commits or cancels.
 //
+// Focusing a field selects its value. Tab and Shift+Tab commit the field and
+// move to the next or previous one that can be typed in, a Vector3's X, Y, and
+// Z in turn, wrapping at the ends. Position's axes are tinted red, green, and
+// blue by the theme's --ide-properties-{x,y,z}-color.
+//
 // A Color3 row is a color picker. Closing its chooser on a new color writes
 // it, so the whole pick is one undo step.
 //

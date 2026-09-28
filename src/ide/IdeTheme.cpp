@@ -205,6 +205,9 @@ const std::vector<ThemeVariable>& theme_variables() {
         {"--ide-properties-picking-border-color", "Properties", "Picking field border"},
         {"--ide-properties-error-color", "Properties", "Refused edit"},
         {"--ide-properties-hint-color", "Properties", "Pick hint"},
+        {"--ide-properties-x-color", "Properties", "Position X field"},
+        {"--ide-properties-y-color", "Properties", "Position Y field"},
+        {"--ide-properties-z-color", "Properties", "Position Z field"},
     };
     return variables;
 }

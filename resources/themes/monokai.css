@@ -155,4 +155,7 @@
     --ide-properties-picking-border-color: var(--monokai-cyan);
     --ide-properties-error-color: var(--monokai-pink);
     --ide-properties-hint-color: var(--monokai-cyan);
+    --ide-properties-x-color: #753b49;
+    --ide-properties-y-color: #5d7036;
+    --ide-properties-z-color: #4b6d6c;
 }

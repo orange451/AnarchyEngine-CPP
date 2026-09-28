@@ -155,4 +155,7 @@
     --ide-properties-picking-border-color: var(--studio-link);
     --ide-properties-error-color: #ff5a5a;
     --ide-properties-hint-color: var(--studio-link);
+    --ide-properties-x-color: #643b3f;
+    --ide-properties-y-color: #4e6247;
+    --ide-properties-z-color: #374a62;
 }

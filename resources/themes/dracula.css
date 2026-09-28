@@ -152,4 +152,7 @@
     --ide-properties-picking-border-color: var(--dracula-purple);
     --ide-properties-error-color: var(--dracula-red);
     --ide-properties-hint-color: var(--dracula-purple);
+    --ide-properties-x-color: #6d3f4a;
+    --ide-properties-y-color: #3c6e55;
+    --ide-properties-z-color: #444f7a;
 }

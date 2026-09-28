@@ -159,4 +159,7 @@
     --ide-properties-picking-border-color: var(--solarized-cyan);
     --ide-properties-error-color: var(--solarized-red);
     --ide-properties-hint-color: var(--solarized-cyan);
+    --ide-properties-x-color: #46363f;
+    --ide-properties-y-color: #2b5730;
+    --ide-properties-z-color: #0c5373;
 }

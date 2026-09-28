@@ -156,4 +156,7 @@
     --ide-properties-picking-border-color: var(--one-dark-blue);
     --ide-properties-error-color: var(--one-dark-red);
     --ide-properties-hint-color: var(--one-dark-blue);
+    --ide-properties-x-color: #58363c;
+    --ide-properties-y-color: #42503d;
+    --ide-properties-z-color: #314a60;
 }

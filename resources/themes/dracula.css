@@ -105,6 +105,7 @@
     --ide-syntax-number-color: var(--dracula-orange);
     --ide-find-match-color: rgba(255, 184, 108, 0.3);
     --ide-find-current-color: rgba(255, 184, 108, 0.6);
+    --ide-find-scroll-color: var(--dracula-orange);
     --ide-swatch-border-color: rgba(255, 255, 255, 0.35);
     --ide-banner-color: var(--dracula-background-dark);
     --ide-banner-text-color: #b4b7cc;

@@ -109,6 +109,7 @@
     --ide-syntax-number-color: var(--one-dark-orange);
     --ide-find-match-color: rgba(209, 154, 102, 0.27);
     --ide-find-current-color: rgba(209, 154, 102, 0.55);
+    --ide-find-scroll-color: var(--one-dark-orange);
     --ide-swatch-border-color: rgba(255, 255, 255, 0.35);
     --ide-banner-color: var(--one-dark-sidebar);
     --ide-banner-text-color: var(--one-dark-subtle);

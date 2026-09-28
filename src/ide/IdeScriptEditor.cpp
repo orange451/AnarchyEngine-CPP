@@ -147,6 +147,7 @@ public:
     void dismissHover();
     // Replaces the squiggles. Returns true when the set changed.
     bool setProblems(std::vector<ScriptMark> marks);
+    const std::vector<ScriptMark>& problems() const { return problems_; }
     const ScriptMark* problemAt(int index) const;
 
 private:
@@ -187,7 +188,10 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     // Load before the area is laid out. The stylesheet asks for this family.
     (void)editor_font();
     define_styles(*area_);
-    theme_listener_ = std::make_unique<ThemeListener>([this] { define_styles(*area_); });
+    theme_listener_ = std::make_unique<ThemeListener>([this] {
+        define_styles(*area_);
+        refresh_scroll_marks();
+    });
     area_->setOnPlainTextChange([this](const jadefx::PlainTextChange& change) {
         if (!loading_ && !mute_undo_ && undo_stack_ != nullptr) {
             if (!undo_stack_->record_change(change.position, change.removed, change.inserted)) {
@@ -746,6 +750,36 @@ void IdeScriptEditor::paint() {
     area_->setStyleSpans(0, builder.create());
     area_->resumeUndo();
     refresh_color_swatches();
+    refresh_scroll_marks();
+}
+
+void IdeScriptEditor::refresh_scroll_marks() {
+    if (!area_) {
+        return;
+    }
+    const auto& problems = static_cast<const ScriptCodeArea*>(area_.get())->problems();
+    std::vector<jadefx::ScrollMark> marks;
+    marks.reserve(find_matches_.size() + problems.size());
+    // Find matches down the left half of the bar, problems down the right.
+    const jadefx::Color found = theme_color("--ide-find-scroll-color");
+    for (const TextMatch& match : find_matches_) {
+        marks.push_back({match.start, match.end, found, jadefx::ScrollMarkLane::Left});
+    }
+    // Hints stay off the bar. Errors come last, so they draw over the rest.
+    const std::pair<engine_core::Severity, const char*> severities[] = {
+        {engine_core::Severity::Information, "--info-color"},
+        {engine_core::Severity::Warning, "--warning-color"},
+        {engine_core::Severity::Error, "--error-color"},
+    };
+    for (const auto& [severity, name] : severities) {
+        const jadefx::Color color = theme_color(name);
+        for (const ScriptMark& mark : problems) {
+            if (mark.severity == severity) {
+                marks.push_back({mark.start, mark.end, color, jadefx::ScrollMarkLane::Right});
+            }
+        }
+    }
+    area_->setScrollMarks(std::move(marks));
 }
 
 namespace {
@@ -926,6 +960,7 @@ void IdeScriptEditor::refresh_marks() {
     auto* code = static_cast<ScriptCodeArea*>(area_.get());
     if (code->setProblems(marks_for(area_->getText(), diagnostics))) {
         code->dismissHover();
+        refresh_scroll_marks();
     }
     show_banner(*status_, summarize_problems(diagnostics));
 }

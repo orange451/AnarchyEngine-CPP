@@ -162,6 +162,7 @@ const std::vector<ThemeVariable>& theme_variables() {
         {"--ide-syntax-number-color", "Script Editor", "Number"},
         {"--ide-find-match-color", "Script Editor", "Find match"},
         {"--ide-find-current-color", "Script Editor", "Current find match"},
+        {"--ide-find-scroll-color", "Script Editor", "Find match on scroll bar"},
         {"--ide-swatch-border-color", "Script Editor", "Color swatch border"},
         {"--ide-banner-color", "Script Editor", "Problem banner"},
         {"--ide-banner-text-color", "Script Editor", "Problem banner text"},

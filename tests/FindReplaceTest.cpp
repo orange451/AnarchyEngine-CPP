@@ -1,6 +1,7 @@
 #include "ide/FindBar.hpp"
 #include "ide/IdeScriptEditor.hpp"
 #include "ide/IdeSearch.hpp"
+#include "ide/IdeTheme.hpp"
 #include "ide/TextUndoStack.hpp"
 
 #include "ChangeHistoryService.hpp"
@@ -11,9 +12,11 @@
 
 #include "jadefx/jadefx.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <map>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -222,6 +225,45 @@ void TestFindBar(engine_core::Engine& engine) {
 #endif
     Expect(rig.bar().replaceShown() && rig.bar().replaceInput().field().isFocused(),
            "the replace shortcut shows replace and focuses it");
+}
+
+// Find matches and problems as bands on the editor's scroll bar.
+void TestScrollBarMarks(engine_core::Engine& engine) {
+    EditorRig rig(engine, "local part = 1\nprint(part)\nlocal broken = = 2\n");
+    auto lane = [&rig](jadefx::ScrollMarkLane which) {
+        std::vector<jadefx::ScrollMark> out;
+        for (const jadefx::ScrollMark& mark : rig.area->scrollMarks()) {
+            if (mark.lane == which) {
+                out.push_back(mark);
+            }
+        }
+        return out;
+    };
+    // The syntax error comes from the analysis worker.
+    for (int wait = 0; wait < 500 && lane(jadefx::ScrollMarkLane::Right).empty(); ++wait) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        rig.frame();
+    }
+    const std::vector<jadefx::ScrollMark> problems = lane(jadefx::ScrollMarkLane::Right);
+    const jadefx::Color error = ide::theme_color("--error-color");
+    Expect(!problems.empty() && problems.back().start >= 27 && problems.back().color.r == error.r &&
+               problems.back().color.g == error.g && problems.back().color.b == error.b,
+           "the syntax error on the third line is an error band on the right of the scroll bar");
+    Expect(lane(jadefx::ScrollMarkLane::Left).empty(), "a closed find bar marks nothing");
+
+    rig.chord(jadefx::Key::F, jadefx::Key::ModControl);
+    rig.type("part");
+    const std::vector<jadefx::ScrollMark> found = lane(jadefx::ScrollMarkLane::Left);
+    const jadefx::Color color = ide::theme_color("--ide-find-scroll-color");
+    Expect(found.size() == 2 && found[0].start == 6 && found[0].end == 10 && found[1].start == 21 &&
+               found[0].color.r == color.r && found[0].color.g == color.g && found[0].color.b == color.b,
+           "each find match is a band on the left of the scroll bar");
+    Expect(!lane(jadefx::ScrollMarkLane::Right).empty(), "the problems stay while finding");
+
+    rig.type("x");
+    Expect(lane(jadefx::ScrollMarkLane::Left).empty(), "text that finds nothing marks nothing");
+    rig.key(jadefx::Key::Escape);
+    Expect(!rig.editor->findOpen() && lane(jadefx::ScrollMarkLane::Left).empty(), "closing the bar clears its bands");
 }
 
 void TestShowRange(engine_core::Engine& engine) {
@@ -491,6 +533,7 @@ void TestSearchPane(engine_core::Engine& engine) {
 int RunFindReplaceTests(engine_core::Engine& engine) {
     gFailures = 0;
     TestFindBar(engine);
+    TestScrollBarMarks(engine);
     TestShowRange(engine);
     TestRequireCompletion(engine);
     TestSearchPane(engine);

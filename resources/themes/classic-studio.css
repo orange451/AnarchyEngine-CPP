@@ -108,6 +108,7 @@
     --ide-syntax-number-color: var(--studio-number);
     --ide-find-match-color: rgba(141, 118, 0, 0.55);
     --ide-find-current-color: rgba(141, 118, 0, 0.95);
+    --ide-find-scroll-color: var(--studio-find);
     --ide-swatch-border-color: rgba(255, 255, 255, 0.35);
     --ide-banner-color: var(--studio-main);
     --ide-banner-text-color: #aaaaaa;

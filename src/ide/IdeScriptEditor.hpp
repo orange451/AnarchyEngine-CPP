@@ -33,7 +33,8 @@ class ScriptCodeArea;
 // the authored place, so Stop keeps the edit. A double-click or Edit opens it.
 // Cmd+F (Ctrl+F elsewhere) opens the find bar at the top right, and Cmd+Alt+F
 // (Ctrl+H) opens it with replace. While it is open every match is highlighted,
-// the current one more strongly, and Escape closes it.
+// the current one more strongly, and Escape closes it. The scroll bar marks
+// every match down its left half and every problem but a hint down its right.
 class IdeScriptEditor : public IdePane {
     friend class ScriptCodeArea;
 
@@ -98,6 +99,8 @@ private:
     void load();
     void paint();
     void refresh_marks();
+    // Every find match and problem, as bands on the scroll bar.
+    void refresh_scroll_marks();
     void note_text();
     void push(const std::string& text);
     void refresh_completion(bool force);

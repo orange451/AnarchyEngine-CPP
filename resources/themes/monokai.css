@@ -108,6 +108,7 @@
     --ide-syntax-number-color: var(--monokai-purple);
     --ide-find-match-color: rgba(230, 219, 116, 0.25);
     --ide-find-current-color: rgba(230, 219, 116, 0.5);
+    --ide-find-scroll-color: var(--monokai-yellow);
     --ide-swatch-border-color: rgba(255, 255, 255, 0.35);
     --ide-banner-color: var(--monokai-sidebar);
     --ide-banner-text-color: var(--monokai-subtle);

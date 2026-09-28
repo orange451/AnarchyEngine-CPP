@@ -709,6 +709,36 @@ std::string sanitize_file_name(std::string_view name) {
     return out;
 }
 
+std::string describe_conflict(const SaveConflict& conflict) {
+    switch (conflict.kind) {
+    case SaveConflict::Kind::EditedOutside:
+        return conflict.path + " changed on disk";
+    case SaveConflict::Kind::DeletedOutside:
+        return conflict.path + " was deleted on disk";
+    case SaveConflict::Kind::MovedOutside:
+        return conflict.path + " was moved or renamed on disk";
+    }
+    return conflict.path;
+}
+
+namespace {
+
+std::string conflict_message(const std::vector<SaveConflict>& conflicts) {
+    if (conflicts.empty()) {
+        return "files changed on disk";
+    }
+    std::string text = describe_conflict(conflicts.front()) + " since it was loaded or saved";
+    if (conflicts.size() > 1) {
+        text += " (and " + std::to_string(conflicts.size() - 1) + " more)";
+    }
+    return text;
+}
+
+}  // namespace
+
+ProjectConflict::ProjectConflict(std::vector<SaveConflict> conflicts)
+    : ProjectError(conflict_message(conflicts)), conflicts_(std::move(conflicts)) {}
+
 Project::Project() = default;
 Project::Project(Project&&) noexcept = default;
 Project& Project::operator=(Project&&) noexcept = default;
@@ -837,7 +867,7 @@ Project Project::load(const fs::path& root, DataModel& into) {
     return project;
 }
 
-void Project::save() { save_tree(false); }
+void Project::save(SaveMode mode) { save_tree(false, mode); }
 
 void Project::save_as(const fs::path& root) {
     if (!missing_or_empty_dir(root)) {
@@ -950,7 +980,43 @@ void Project::reset_place(DataModel& game) {
     rebuild.finish();
 }
 
-void Project::save_tree(bool full) {
+std::vector<SaveConflict> Project::outside_changes(const std::map<std::string, Files>& next) const {
+    std::vector<SaveConflict> conflicts;
+    std::error_code error;
+    for (const auto& [guid, base] : files_) {
+        const auto planned = next.find(guid);
+        const bool removed = planned == next.end();
+        // A file's bytes matter only where the save rewrites or deletes it. A
+        // move alone carries whatever is on disk to the new path.
+        struct Own {
+            const std::string* path;
+            const std::string* bytes;
+            bool rewritten;
+        };
+        std::vector<Own> own{{&base.props_path, &base.props_bytes,
+                              removed || planned->second.props_bytes != base.props_bytes}};
+        if (base.has_source) {
+            own.push_back({&base.source_path, &base.source_bytes,
+                           removed || !planned->second.has_source ||
+                               planned->second.source_bytes != base.source_bytes});
+        }
+        for (const Own& file : own) {
+            const fs::path target = disk_path(root_, *file.path);
+            if (!file.rewritten || !fs::exists(target, error)) {
+                continue;
+            }
+            if (read_file(target) != *file.bytes) {
+                conflicts.push_back({guid, *file.path, SaveConflict::Kind::EditedOutside});
+                break;
+            }
+        }
+    }
+    std::sort(conflicts.begin(), conflicts.end(),
+              [](const SaveConflict& a, const SaveConflict& b) { return a.path < b.path; });
+    return conflicts;
+}
+
+void Project::save_tree(bool full, SaveMode mode) {
     DataModel& world = *game_;
     const bool playing = world.simulation_running();
     const AuthoredDirty dirty = world.authored_dirty();
@@ -992,6 +1058,15 @@ void Project::save_tree(bool full) {
     }
 
     std::map<std::string, Files> next = plan_files(tree, layout.src, files_);
+
+    // A file changed on disk since the last load or save stops a guarded save
+    // here, before anything is written.
+    if (mode == SaveMode::Guarded) {
+        std::vector<SaveConflict> conflicts = outside_changes(next);
+        if (!conflicts.empty()) {
+            throw ProjectConflict(std::move(conflicts));
+        }
+    }
 
     SaveReport report;
     std::set<std::string> vacated;

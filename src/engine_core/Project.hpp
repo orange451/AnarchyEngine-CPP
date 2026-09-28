@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -20,6 +21,38 @@ class ProjectError : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };
+
+// A file that changed on disk since the last load or save, which a save would
+// have written over, deleted, or put back.
+struct SaveConflict {
+    enum class Kind {
+        EditedOutside,   // its bytes differ from the last load or save
+        DeletedOutside,  // it is gone, and no other file claims its GUID
+        MovedOutside,    // it is gone, and a file elsewhere claims its GUID
+    };
+    std::string guid;
+    // As last loaded or saved: relative to the project root, written with '/'.
+    std::string path;
+    Kind kind = Kind::EditedOutside;
+};
+
+// "src/Part.3f2a.json changed on disk", "... was deleted on disk", or
+// "... was moved or renamed on disk".
+std::string describe_conflict(const SaveConflict& conflict);
+
+// Thrown by a guarded save before it touches disk. Sorted by path; the message
+// names the first.
+class ProjectConflict : public ProjectError {
+public:
+    explicit ProjectConflict(std::vector<SaveConflict> conflicts);
+    const std::vector<SaveConflict>& conflicts() const { return conflicts_; }
+
+private:
+    std::vector<SaveConflict> conflicts_;
+};
+
+// Guarded stops at files changed on disk. Overwrite writes the studio's version anyway.
+enum class SaveMode { Guarded, Overwrite };
 
 // Classes a project file may name. The built-ins are DataModel, GameObject,
 // Script, ModuleScript, Folder, and TestTriangle. A later class registers here.
@@ -69,7 +102,10 @@ public:
     // Edit mode writes the live tree. Play writes the place snapshot, never
     // an instance created during play. Only files whose bytes changed are
     // written. A renamed or moved instance's files move; a destroyed one's are deleted.
-    void save();
+    // A guarded save first compares every file it would write or delete with
+    // the last load or save, and throws ProjectConflict, writing nothing, when
+    // one changed on disk.
+    void save(SaveMode mode = SaveMode::Guarded);
     // Writes the whole project under a new root, copies resources/, and binds there.
     void save_as(const std::filesystem::path& root);
 
@@ -112,7 +148,10 @@ private:
 
     void bind(DataModel* game, std::unique_ptr<DataModel> owned);
     void write_skeleton(const std::filesystem::path& root) const;
-    void save_tree(bool full);
+    void save_tree(bool full, SaveMode mode = SaveMode::Guarded);
+    // The files next would write over or delete that changed on disk since the
+    // last load or save, sorted by path.
+    std::vector<SaveConflict> outside_changes(const std::map<std::string, Files>& next) const;
     // The files for each GUID. A node without properties takes its bytes from cache.
     static std::map<std::string, Files> plan_files(const std::vector<AuthoredNode>& tree, const std::string& src,
                                                    const std::unordered_map<std::string, Files>& cache);

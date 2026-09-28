@@ -906,3 +906,168 @@ TEST_CASE("destroy_tree destroys descendants and one undo brings them back", "[p
     REQUIRE_FALSE(has_delete(root_actions));
     REQUIRE(has_delete(part_actions));
 }
+
+namespace {
+
+// The conflicts a guarded save stopped on. Empty when it saved.
+std::vector<engine_core::SaveConflict> save_conflicts(Project& project) {
+    try {
+        project.save();
+    } catch (const engine_core::ProjectConflict& conflict) {
+        return conflict.conflicts();
+    }
+    return {};
+}
+
+}  // namespace
+
+TEST_CASE("G1 an outside edit to an instance the studio left alone survives a save", "[G1][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& b = add_part(game, 0, "B");
+    project.save();
+    const std::string outside = read_file(dir.path / leaf(game, a.id())) + "\n";
+    write_file(dir.path / leaf(game, a.id()), outside);
+
+    b.set_color(rgb(0.f, 0.f, 1.f));
+    REQUIRE(save_conflicts(project).empty());
+    REQUIRE(project.last_save().written == std::vector<std::string>{leaf(game, b.id())});
+    REQUIRE(read_file(dir.path / leaf(game, a.id())) == outside);
+}
+
+TEST_CASE("G2 an outside edit under a studio edit stops the save and writes nothing", "[G2][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& b = add_part(game, 0, "B");
+    project.save();
+    const std::string path = leaf(game, a.id());
+    write_file(dir.path / path, read_file(dir.path / path) + "\n");
+
+    a.set_color(rgb(1.f, 0.f, 0.f));
+    b.set_color(rgb(0.f, 1.f, 0.f));
+    const auto before = tree_files(dir.path);
+    std::string message;
+    try {
+        project.save();
+    } catch (const engine_core::ProjectConflict& conflict) {
+        message = conflict.what();
+        REQUIRE(conflict.conflicts().size() == 1);
+        REQUIRE(conflict.conflicts()[0].guid == game.guid(a.id()));
+        REQUIRE(conflict.conflicts()[0].path == path);
+        REQUIRE(conflict.conflicts()[0].kind == engine_core::SaveConflict::Kind::EditedOutside);
+    }
+    REQUIRE(message.find(path) != std::string::npos);
+    // Nothing was written, B included, and the next save sees the same thing.
+    REQUIRE(tree_files(dir.path) == before);
+    REQUIRE(save_conflicts(project).size() == 1);
+    REQUIRE(tree_files(dir.path) == before);
+}
+
+TEST_CASE("G3 a studio delete of a file edited outside stops the save", "[G3][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, 0, "A").id();
+    project.save();
+    const std::string path = leaf(game, a);
+    const std::string outside = read_file(dir.path / path) + "\n";
+    write_file(dir.path / path, outside);
+
+    game.destroy(a);
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    REQUIRE(conflicts.size() == 1);
+    REQUIRE(conflicts[0].path == path);
+    REQUIRE(conflicts[0].kind == engine_core::SaveConflict::Kind::EditedOutside);
+    REQUIRE(read_file(dir.path / path) == outside);
+}
+
+TEST_CASE("G4 a folder rename carries a child edited outside along", "[G4][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& holder = add_part(game, 0, "Holder");
+    engine_core::GameObject& inner = add_part(game, holder.id(), "Inner");
+    project.save();
+    const std::string inner_name = "/Inner." + game.guid(inner.id()) + ".json";
+    const fs::path old_path = dir.path / ("src/Holder." + game.guid(holder.id()) + inner_name);
+    const std::string outside = read_file(old_path) + "\n";
+    write_file(old_path, outside);
+
+    // Inner's bytes do not change, so the save only moves its file.
+    game.set_name(holder.id(), "Box");
+    REQUIRE(save_conflicts(project).empty());
+    REQUIRE(read_file(dir.path / ("src/Box." + game.guid(holder.id()) + inner_name)) == outside);
+}
+
+TEST_CASE("G5 a script's two files are checked one by one", "[G5][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::Script& main = add_script(game, 0, "Main", "print(1)\n");
+    project.save();
+    const std::string luau = leaf(game, main.id(), ".luau");
+    write_file(dir.path / luau, "print(\"outside\")\n");
+
+    SECTION("a studio change to the other file saves, and keeps the outside source") {
+        main.set_enabled(false);
+        REQUIRE(save_conflicts(project).empty());
+        REQUIRE(project.last_save().written == std::vector<std::string>{leaf(game, main.id(), ".meta.json")});
+        REQUIRE(read_file(dir.path / luau) == "print(\"outside\")\n");
+    }
+    SECTION("a studio change to the same file stops the save") {
+        main.set_source("print(2)\n");
+        const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+        REQUIRE(conflicts.size() == 1);
+        REQUIRE(conflicts[0].path == luau);
+        REQUIRE(read_file(dir.path / luau) == "print(\"outside\")\n");
+    }
+}
+
+TEST_CASE("G6 a file rewritten with the same bytes is no conflict", "[G6][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    project.save();
+    const std::string path = leaf(game, a.id());
+    write_file(dir.path / path, read_file(dir.path / path));
+
+    a.set_color(rgb(1.f, 0.f, 0.f));
+    REQUIRE(save_conflicts(project).empty());
+    REQUIRE(project.last_save().written == std::vector<std::string>{path});
+}
+
+TEST_CASE("G7 a save during play checks the place captured at Test", "[G7][guard][project]") {
+    TempDir dir;
+    ScriptRig rig;
+    {
+        Project project = Project::create(dir.path, rig.game);
+        add_part(rig.game, 0, "Door");
+        project.save();
+    }
+    Project project = Project::load(dir.path, rig.game);
+    const InstanceId door = rig.game.find_first_child(0, "Door");
+    REQUIRE(door != 0);
+    const std::string path = leaf(rig.game, door);
+    write_file(dir.path / path, read_file(dir.path / path) + "\n");
+    // An edit before Test, recaptured into the place as the studio does after each edit.
+    rig.game.game_object(door)->set_color(rgb(1.f, 0.f, 0.f));
+    rig.game.capture_place();
+
+    rig.game.start_simulation();
+    rig.frames(1, 0.05);
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    REQUIRE(conflicts.size() == 1);
+    REQUIRE(conflicts[0].path == path);
+    rig.game.stop_simulation();
+}

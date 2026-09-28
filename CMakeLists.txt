@@ -236,6 +236,7 @@ add_library(engine_core STATIC
     src/engine_core/ScriptAnalysis.cpp
     src/engine_core/AnalysisDefinitions.cpp
     src/engine_core/PropertyBag.cpp
+    src/engine_core/JsonMerge.cpp
     src/engine_core/Project.cpp
 )
 set(ENGINE_PACKAGES engine_core engine_datatypes engine_instances engine_services)
@@ -436,6 +437,7 @@ add_executable(sandbox
     sandbox/analysis_tests.cpp
     sandbox/history_tests.cpp
     sandbox/project_tests.cpp
+    sandbox/merge_tests.cpp
     src/ide/TextUndoStack.cpp
     src/ide/InputRouter.cpp
 )

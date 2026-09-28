@@ -1269,8 +1269,9 @@ TEST_CASE("G16 Overwrite writes the studio's version over an outside edit", "[G1
     write_file(dir.path / path, read_file(dir.path / path) + "\n");
 
     a.set_color(rgb(0.25f, 0.5f, 0.75f));
-    REQUIRE(save_conflicts(project).size() == 1);
-    project.save(engine_core::SaveMode::Overwrite);
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    REQUIRE(conflicts.size() == 1);
+    project.save(conflicts);
     REQUIRE(project.last_save().written == std::vector<std::string>{path});
     REQUIRE(read_file(dir.path / path).find("\"Color\": [0.25, 0.5, 0.75]") != std::string::npos);
     REQUIRE(save_conflicts(project).empty());
@@ -1289,8 +1290,9 @@ TEST_CASE("G17 Overwrite of a file moved outside leaves one file for its GUID", 
     fs::rename(dir.path / leaf(game, ids.leaf), moved);
 
     game.game_object(ids.leaf)->set_color(rgb(0.25f, 0.5f, 0.75f));
-    REQUIRE(save_conflicts(project).size() == 1);
-    project.save(engine_core::SaveMode::Overwrite);
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    REQUIRE(conflicts.size() == 1);
+    project.save(conflicts);
     REQUIRE(leaf_files_of(dir.path, guid) == std::vector<std::string>{leaf(game, ids.leaf)});
     REQUIRE_FALSE(fs::exists(moved));
     Project loaded = Project::load(dir.path);
@@ -1312,9 +1314,224 @@ TEST_CASE("G18 Overwrite puts back a file deleted outside", "[G18][guard][projec
     fs::remove(dir.path / path);
 
     a.set_color(rgb(0.25f, 0.5f, 0.75f));
-    REQUIRE(save_conflicts(project).size() == 1);
-    project.save(engine_core::SaveMode::Overwrite);
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    REQUIRE(conflicts.size() == 1);
+    project.save(conflicts);
     REQUIRE(fs::exists(dir.path / path));
     Project loaded = Project::load(dir.path);
     REQUIRE(loaded.datamodel().game_object(by_guid(loaded.datamodel(), guid))->color().b == 0.75f);
+}
+
+TEST_CASE("G19 Overwrite after a folder deleted outside leaves a project that loads", "[G19][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId keep = add_part(game, box, "Keep").id();
+    add_part(game, box, "Other");
+    project.save();
+    const std::string box_dir = "src/Box." + game.guid(box);
+    fs::remove_all(dir.path / box_dir);
+
+    game.game_object(keep)->set_color(rgb(0.25f, 0.5f, 0.75f));
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    bool box_listed = false;
+    for (const engine_core::SaveConflict& conflict : conflicts) {
+        box_listed = box_listed || conflict.path == box_dir + "/init.json";
+    }
+    REQUIRE(box_listed);
+    project.save(conflicts);
+    // Load throws when a folder has no init file.
+    Project loaded = Project::load(dir.path);
+    DataModel& again = loaded.datamodel();
+    const InstanceId kept = by_guid(again, game.guid(keep));
+    REQUIRE(again.guid(again.parent(kept)) == game.guid(box));
+    REQUIRE(again.game_object(kept)->color().b == 0.75f);
+}
+
+TEST_CASE("G20 Overwrite of a new child two folders below one deleted outside leaves a project that loads",
+          "[G20][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, 0, "A").id();
+    const InstanceId b = add_part(game, a, "B").id();
+    add_part(game, b, "Keep");
+    project.save();
+    fs::remove_all(dir.path / ("src/A." + game.guid(a)));
+
+    const InstanceId added = add_part(game, b, "New").id();
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    REQUIRE_FALSE(conflicts.empty());
+    project.save(conflicts);
+    Project loaded = Project::load(dir.path);
+    by_guid(loaded.datamodel(), game.guid(added));
+}
+
+TEST_CASE("G21 Overwrite of a folder moved outside brings its children back with it", "[G21][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId q = add_part(game, 0, "Q").id();
+    add_part(game, q, "QKeep");
+    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId keep = add_part(game, box, "Keep").id();
+    project.save();
+    fs::rename(dir.path / ("src/Box." + game.guid(box)),
+               dir.path / ("src/Q." + game.guid(q)) / ("Box." + game.guid(box)));
+
+    game.game_object(box)->set_color(rgb(0.25f, 0.5f, 0.75f));
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    REQUIRE_FALSE(conflicts.empty());
+    project.save(conflicts);
+    Project loaded = Project::load(dir.path);
+    DataModel& again = loaded.datamodel();
+    REQUIRE(again.parent(by_guid(again, game.guid(box))) == 0);
+    REQUIRE(again.guid(again.parent(by_guid(again, game.guid(keep)))) == game.guid(box));
+    REQUIRE(leaf_files_of(dir.path, game.guid(keep)).size() == 1);
+}
+
+TEST_CASE("G22 Overwrite keeps the file it wrote when the name on disk differs only in case",
+          "[G22][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& door = add_part(game, 0, "Door");
+    project.save();
+    const std::string guid = game.guid(door.id());
+    std::string bytes = read_file(dir.path / leaf(game, door.id()));
+    bytes.replace(bytes.find("\"Name\": \"Door\""), 14, "\"Name\": \"door\"");
+    const fs::path renamed = dir.path / ("src/door." + guid + ".json");
+    fs::rename(dir.path / leaf(game, door.id()), renamed);
+    write_file(renamed, bytes);
+
+    door.set_color(rgb(0.25f, 0.5f, 0.75f));
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    REQUIRE(conflicts.size() == 1);
+    project.save(conflicts);
+    REQUIRE(leaf_files_of(dir.path, guid).size() == 1);
+    Project loaded = Project::load(dir.path);
+    REQUIRE(loaded.datamodel().game_object(by_guid(loaded.datamodel(), guid))->color().b == 0.75f);
+}
+
+TEST_CASE("G23 Overwrite writes over only the conflicts it lists", "[G23][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& b = add_part(game, 0, "B");
+    project.save();
+    const std::string a_path = leaf(game, a.id());
+    const std::string b_path = leaf(game, b.id());
+    const std::string a_outside = read_file(dir.path / a_path) + "\n";
+    write_file(dir.path / a_path, a_outside);
+    a.set_color(rgb(1.f, 0.f, 0.f));
+    b.set_color(rgb(0.f, 1.f, 0.f));
+    const std::vector<engine_core::SaveConflict> listed = save_conflicts(project);
+    REQUIRE(listed.size() == 1);
+
+    // B changes on disk after the list was made.
+    const std::string b_outside = read_file(dir.path / b_path) + "\n";
+    write_file(dir.path / b_path, b_outside);
+    std::vector<engine_core::SaveConflict> again;
+    try {
+        project.save(listed);
+    } catch (const engine_core::ProjectConflict& conflict) {
+        again = conflict.conflicts();
+    }
+    REQUIRE(again.size() == 2);
+    REQUIRE(read_file(dir.path / a_path) == a_outside);
+    REQUIRE(read_file(dir.path / b_path) == b_outside);
+}
+
+TEST_CASE("G24 a file added outside inside a folder the save moves or deletes stops the save",
+          "[G24][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId keep = add_part(game, box, "Keep").id();
+    project.save();
+    const std::string added = "src/Box." + game.guid(box) + "/Added.added-0001.json";
+    write_file(dir.path / added, meta("Folder", "added-0001", "Added"));
+    auto added_listed = [&added](const std::vector<engine_core::SaveConflict>& conflicts) {
+        for (const engine_core::SaveConflict& conflict : conflicts) {
+            if (conflict.path == added && conflict.kind == engine_core::SaveConflict::Kind::AddedOutside) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    SECTION("a rename of the folder") {
+        game.set_name(box, "Crate");
+        const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+        REQUIRE(added_listed(conflicts));
+        REQUIRE(fs::exists(dir.path / added));
+        project.save(conflicts);
+        REQUIRE_FALSE(fs::exists(dir.path / added));
+        REQUIRE_NOTHROW(Project::load(dir.path));
+    }
+    SECTION("a delete of the folder") {
+        game.destroy(keep);
+        game.destroy(box);
+        REQUIRE(added_listed(save_conflicts(project)));
+        REQUIRE(fs::exists(dir.path / added));
+    }
+    SECTION("a delete of its last child, which makes it a leaf") {
+        game.destroy(keep);
+        REQUIRE(added_listed(save_conflicts(project)));
+        REQUIRE(fs::exists(dir.path / added));
+    }
+}
+
+TEST_CASE("G25 a copy of a folder beside it is not taken for a move", "[G25][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId keep = add_part(game, box, "Keep").id();
+    project.save();
+    const std::string box_dir = "src/Box." + game.guid(box);
+    const std::string keep_name = "Keep." + game.guid(keep) + ".json";
+    const fs::path copy = dir.path / (box_dir + " copy");
+    fs::copy(dir.path / box_dir, copy, fs::copy_options::recursive);
+    fs::remove(dir.path / box_dir / keep_name);
+
+    game.game_object(keep)->set_color(rgb(0.25f, 0.5f, 0.75f));
+    const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
+    REQUIRE(conflicts.size() == 1);
+    REQUIRE(conflicts[0].kind == engine_core::SaveConflict::Kind::DeletedOutside);
+    project.save(conflicts);
+    REQUIRE(fs::exists(copy / keep_name));
+}
+
+TEST_CASE("G26 part of an instance deleted outside is written back when the studio left it alone",
+          "[G26][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::Script& main = add_script(game, 0, "Main", "print(1)\n");
+    const InstanceId box = add_part(game, 0, "Box").id();
+    add_part(game, box, "Keep");
+    engine_core::GameObject& other = add_part(game, 0, "Other");
+    project.save();
+    const std::string luau = leaf(game, main.id(), ".luau");
+    const std::string init = "src/Box." + game.guid(box) + "/init.json";
+    fs::remove(dir.path / luau);
+    fs::remove(dir.path / init);
+
+    other.set_color(rgb(0.25f, 0.5f, 0.75f));
+    REQUIRE(save_conflicts(project).empty());
+    REQUIRE(read_file(dir.path / luau) == "print(1)\n");
+    REQUIRE(fs::exists(dir.path / init));
+    REQUIRE_NOTHROW(Project::load(dir.path));
 }

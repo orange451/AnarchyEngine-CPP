@@ -532,8 +532,11 @@ std::map<std::string, std::vector<std::string>> guid_claims(const fs::path& root
     for (fs::recursive_directory_iterator it(top, error), end; !error && it != end; it.increment(error)) {
         const std::string name = utf8(it->path().filename());
         std::error_code kind;
+        std::string guid;
         if (it->is_directory(kind)) {
-            if (!name.empty() && name[0] == '.') {
+            // Only an instance's folder, <Name>.<guid>: not a dot folder, and not
+            // a copy such as "Box.3f2a copy", whose files are the user's.
+            if (name.empty() || name[0] == '.' || !split_stem(name, guid)) {
                 it.disable_recursion_pending();
             }
             continue;
@@ -541,7 +544,6 @@ std::map<std::string, std::vector<std::string>> guid_claims(const fs::path& root
         if (name.empty() || name[0] == '.' || ends_with(name, ".tmp") || !it->is_regular_file(kind)) {
             continue;
         }
-        std::string guid;
         if (name == "init.json" || name == "init.meta.json" || name == "init.luau") {
             // The root's init.json names no GUID; its GUID is inside.
             if (it->path().parent_path() == top || !split_stem(utf8(it->path().parent_path().filename()), guid)) {
@@ -565,6 +567,17 @@ std::map<std::string, std::vector<std::string>> guid_claims(const fs::path& root
         claims[guid].push_back(it->path().lexically_relative(root).generic_u8string());
     }
     return claims;
+}
+
+// "src/Box.3f2a/init.json" -> "src/Box.3f2a": the folder an instance with
+// children owns. Empty for a leaf's file.
+std::string own_folder(const std::string& props_path) {
+    const std::size_t slash = props_path.rfind('/');
+    if (slash == std::string::npos) {
+        return std::string();
+    }
+    const std::string name = props_path.substr(slash + 1);
+    return name == "init.json" || name == "init.meta.json" ? props_path.substr(0, slash) : std::string();
 }
 
 void apply_properties(DataModel& object, const PlanNode& node) {
@@ -763,6 +776,8 @@ std::string describe_conflict(const SaveConflict& conflict) {
         return conflict.path + " was deleted on disk";
     case SaveConflict::Kind::MovedOutside:
         return conflict.path + " was moved or renamed on disk";
+    case SaveConflict::Kind::AddedOutside:
+        return conflict.path + " was added on disk";
     }
     return conflict.path;
 }
@@ -913,7 +928,7 @@ Project Project::load(const fs::path& root, DataModel& into) {
     return project;
 }
 
-void Project::save(SaveMode mode) { save_tree(false, mode); }
+void Project::save(const std::vector<SaveConflict>& overwrite) { save_tree(false, overwrite); }
 
 void Project::save_as(const fs::path& root) {
     if (!missing_or_empty_dir(root)) {
@@ -1030,22 +1045,45 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
                                                    const std::map<std::string, Files>& next,
                                                    const std::map<std::string, std::vector<std::string>>& claims,
                                                    std::set<std::string>& left_gone) const {
-    // A parent counts as changed when a child's file lands in its folder anew,
-    // a new child or one the studio moved or renamed: without the parent's own
-    // file, that folder would not load.
-    std::set<std::string> receives;
-    for (const AuthoredNode& node : tree) {
-        for (std::size_t child : node.children) {
-            const std::string& id = tree[child].guid;
-            const auto base = files_.find(id);
-            if (base == files_.end() || base->second.props_path != next.at(id).props_path) {
-                receives.insert(node.guid);
+    // Each node's parent, by index into tree. Parents come before children.
+    std::vector<std::size_t> parent(tree.size(), 0);
+    for (std::size_t index = 0; index < tree.size(); ++index) {
+        for (std::size_t child : tree[index].children) {
+            parent[child] = index;
+        }
+    }
+    // Every folder above an instance the save writes or moves counts as changed
+    // too: without its own file, that folder would not load. So one gone from
+    // disk is a conflict rather than left gone.
+    std::set<std::string> holds;
+    for (std::size_t index = 1; index < tree.size(); ++index) {
+        const auto base = files_.find(tree[index].guid);
+        const Files& planned = next.at(tree[index].guid);
+        const bool places = base == files_.end() || planned.props_path != base->second.props_path ||
+                            planned.source_path != base->second.source_path ||
+                            planned.has_source != base->second.has_source ||
+                            planned.props_bytes != base->second.props_bytes ||
+                            planned.source_bytes != base->second.source_bytes;
+        for (std::size_t up = parent[index]; places; up = parent[up]) {
+            if (!holds.insert(tree[up].guid).second || up == 0) {
                 break;
             }
         }
     }
+    // Gone from its own paths, and claimed by a file somewhere else.
+    auto moved = [&claims](const std::string& guid, const Files& base) {
+        const auto claimed = claims.find(guid);
+        if (claimed == claims.end()) {
+            return false;
+        }
+        return std::any_of(claimed->second.begin(), claimed->second.end(), [&base](const std::string& path) {
+            return path != base.props_path && path != base.source_path;
+        });
+    };
 
     std::vector<SaveConflict> conflicts;
+    // Left gone: GUID -> its first missing file.
+    std::map<std::string, std::string> gone_paths;
     std::error_code error;
     for (const auto& [guid, base] : files_) {
         const auto planned = next.find(guid);
@@ -1064,29 +1102,36 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
                            removed || !planned->second.has_source ||
                                planned->second.source_bytes != base.source_bytes});
         }
-        const bool touched = removed || receives.count(guid) != 0 || planned->second.props_path != base.props_path ||
+        const bool touched = removed || holds.count(guid) != 0 || planned->second.props_path != base.props_path ||
                              planned->second.source_path != base.source_path ||
                              planned->second.has_source != base.has_source ||
                              std::any_of(own.begin(), own.end(), [](const Own& file) { return file.rewritten; });
 
         const std::string* gone = nullptr;
+        bool some_left = false;
         for (const Own& file : own) {
-            if (gone == nullptr && !fs::exists(disk_path(root_, *file.path), error)) {
+            if (fs::exists(disk_path(root_, *file.path), error)) {
+                some_left = true;
+            } else if (gone == nullptr) {
                 gone = file.path;
             }
         }
         if (gone != nullptr) {
+            // A folder's own directory, still there with its children, is part of it.
+            const std::string folder = own_folder(base.props_path);
+            some_left = some_left || (!folder.empty() && fs::is_directory(disk_path(root_, folder), error));
+            if (!touched && some_left) {
+                // A lone .luau or .meta.json, or a folder without its init file,
+                // does not load. The save writes the missing part back.
+                continue;
+            }
             if (!touched) {
                 // The studio left it alone, so the save leaves it gone.
                 left_gone.insert(guid);
+                gone_paths.emplace(guid, *gone);
                 continue;
             }
-            bool elsewhere = false;
-            if (const auto claimed = claims.find(guid); claimed != claims.end()) {
-                for (const std::string& path : claimed->second) {
-                    elsewhere = elsewhere || (path != base.props_path && path != base.source_path);
-                }
-            }
+            const bool elsewhere = moved(guid, base);
             if (removed && !elsewhere) {
                 continue;  // Deleted on both sides.
             }
@@ -1101,12 +1146,57 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
             }
         }
     }
+
+    // An instance left gone inside a folder that is itself deleted or moved on
+    // disk is listed with that folder. Writing the folder back without it would
+    // strand it where the folder moved, or drop it.
+    std::set<std::string> gone_folders;
+    for (const SaveConflict& conflict : conflicts) {
+        if (conflict.kind == SaveConflict::Kind::DeletedOutside || conflict.kind == SaveConflict::Kind::MovedOutside) {
+            gone_folders.insert(conflict.guid);
+        }
+    }
+    for (std::size_t index = 1; index < tree.size(); ++index) {
+        const std::string& guid = tree[index].guid;
+        const auto gone = gone_paths.find(guid);
+        if (gone == gone_paths.end() || gone_folders.count(tree[parent[index]].guid) == 0) {
+            continue;
+        }
+        conflicts.push_back({guid, gone->second,
+                             moved(guid, files_.at(guid)) ? SaveConflict::Kind::MovedOutside
+                                                          : SaveConflict::Kind::DeletedOutside});
+        gone_folders.insert(guid);
+        left_gone.erase(guid);
+    }
+
+    // A folder the save moves or deletes must not strand a file it does not
+    // know: an instance added in it on disk would be left without the folder's
+    // init file.
+    std::set<std::pair<std::string, std::string>> added;
+    for (const auto& [guid, base] : files_) {
+        const std::string folder = own_folder(base.props_path);
+        const auto planned = next.find(guid);
+        if (folder.empty() || (planned != next.end() && planned->second.props_path == base.props_path)) {
+            continue;
+        }
+        const std::string prefix = folder + "/";
+        for (const auto& [claimed, paths] : claims) {
+            if (files_.count(claimed) != 0) {
+                continue;
+            }
+            for (const std::string& path : paths) {
+                if (path.compare(0, prefix.size(), prefix) == 0 && added.emplace(claimed, path).second) {
+                    conflicts.push_back({claimed, path, SaveConflict::Kind::AddedOutside});
+                }
+            }
+        }
+    }
     std::sort(conflicts.begin(), conflicts.end(),
               [](const SaveConflict& a, const SaveConflict& b) { return a.path < b.path; });
     return conflicts;
 }
 
-void Project::save_tree(bool full, SaveMode mode) {
+void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {
     DataModel& world = *game_;
     const bool playing = world.simulation_running();
     const AuthoredDirty dirty = world.authored_dirty();
@@ -1154,7 +1244,12 @@ void Project::save_tree(bool full, SaveMode mode) {
     const std::map<std::string, std::vector<std::string>> claims = guid_claims(root_, layout.src);
     std::set<std::string> left_gone;
     std::vector<SaveConflict> conflicts = outside_changes(tree, next, claims, left_gone);
-    if (!conflicts.empty() && mode == SaveMode::Guarded) {
+    // Only the conflicts overwrite lists are written over. Any other, as a file
+    // that changed after that list was made, stops the save.
+    const bool listed = std::all_of(conflicts.begin(), conflicts.end(), [&overwrite](const SaveConflict& conflict) {
+        return std::find(overwrite.begin(), overwrite.end(), conflict) != overwrite.end();
+    });
+    if (!listed) {
         throw ProjectConflict(std::move(conflicts));
     }
 
@@ -1208,11 +1303,18 @@ void Project::save_tree(bool full, SaveMode mode) {
             continue;
         }
         const auto planned = next.find(conflict.guid);
+        // The same file, by name or by the file system: a name that differs
+        // only in case is one file on macOS and Windows.
+        auto wrote = [&](const fs::path& target, const std::string& path) {
+            return !path.empty() && fs::equivalent(target, disk_path(root_, path), error);
+        };
         for (const std::string& path : claimed->second) {
-            if (planned != next.end() && (path == planned->second.props_path || path == planned->second.source_path)) {
+            const fs::path target = disk_path(root_, path);
+            if (planned != next.end() && (path == planned->second.props_path || path == planned->second.source_path ||
+                                          wrote(target, planned->second.props_path) ||
+                                          wrote(target, planned->second.source_path))) {
                 continue;
             }
-            const fs::path target = disk_path(root_, path);
             if (fs::exists(target, error)) {
                 remove_file(target);
                 report.removed.push_back(path);

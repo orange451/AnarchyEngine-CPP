@@ -3003,7 +3003,8 @@ void IdeLayout::open_project_at(const std::filesystem::path& root) {
     show_toast("Opened " + project_->name());
 }
 
-bool IdeLayout::save_open_project(std::function<void()> then, bool overwrite) {
+bool IdeLayout::save_open_project(std::function<void()> then,
+                                  const std::vector<engine_core::SaveConflict>* overwrite) {
     // Open editors write Source first. During play the save writes the place
     // captured at Test, so play edits stay out of it either way.
     flush_editors();
@@ -3011,7 +3012,7 @@ bool IdeLayout::save_open_project(std::function<void()> then, bool overwrite) {
     std::vector<engine_core::SaveConflict> conflicts;
     run_now([&](engine_core::DataModel&) {
         try {
-            project_->save(overwrite ? engine_core::SaveMode::Overwrite : engine_core::SaveMode::Guarded);
+            project_->save(overwrite != nullptr ? *overwrite : std::vector<engine_core::SaveConflict>());
         } catch (const engine_core::ProjectConflict& conflict) {
             conflicts = conflict.conflicts();
         } catch (const std::exception& failure) {
@@ -3062,17 +3063,16 @@ void IdeLayout::confirm_overwrite(const std::vector<engine_core::SaveConflict>& 
                              ? std::string("A file changed on disk since the project was opened or saved.")
                              : std::to_string(conflicts.size()) +
                                    " files changed on disk since the project was opened or saved.");
-    alert->setOnClosed([this, overwrite, then = std::move(then)](const jadefx::ButtonType* choice) {
+    // Overwrite writes over exactly these. A file that changed while the alert
+    // was up stops that save and asks again.
+    alert->setOnClosed([this, overwrite, listed = conflicts, then = std::move(then)](const jadefx::ButtonType* choice) {
         prompt_open_ = false;
-        if (choice != nullptr && *choice == overwrite && project_ && save_open_project({}, true) && then) {
+        if (choice != nullptr && *choice == overwrite && project_ && save_open_project(then, &listed) && then) {
             then();
         }
     });
-    alerts_.erase(std::remove_if(alerts_.begin(), alerts_.end(),
-                                 [](const std::shared_ptr<jadefx::Alert>& item) {
-                                     return !item || item->getResult() != nullptr;
-                                 }),
-                  alerts_.end());
+    // Finished alerts are not dropped here: this may run inside the closed
+    // handler of the alert that asked last.
     alert->show(*scene_);
     // Stable names for the two answers, so a test can find them.
     const std::pair<const jadefx::ButtonType*, const char*> ids[] = {

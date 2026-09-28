@@ -156,11 +156,13 @@ DataModel* lua_create_instance(DataModel& world, const char* class_name);
 
 // Runs at load so a class is registered even when no instance has been created.
 // The object file that contains the class is what pulls the registrar in.
+// MSVC has no constructor attribute. A pointer placed in .CRT$XCU is dropped
+// when it has internal linkage, as it does in an anonymous namespace, so a
+// dynamic initializer calls the registrar instead.
 #if defined(_MSC_VER)
-#pragma section(".CRT$XCU", read)
-#define ANARCHY_LUA_REGISTER(fn)                                   \
-    static void fn();                                              \
-    __declspec(allocate(".CRT$XCU")) void (*fn##_ptr)() = fn;      \
+#define ANARCHY_LUA_REGISTER(fn)                            \
+    static void fn();                                       \
+    [[maybe_unused]] static const bool fn##_done = (fn(), true); \
     static void fn()
 #else
 #define ANARCHY_LUA_REGISTER(fn)                   \

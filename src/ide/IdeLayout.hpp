@@ -20,6 +20,7 @@ namespace engine_core {
 class DataModel;
 class Engine;
 class Project;
+struct SaveConflict;
 }
 
 namespace ide {
@@ -125,7 +126,13 @@ private:
     void save_project(std::function<void()> then = {});
     void save_project_as(std::function<void()> then = {});
     bool save_project_to(const std::filesystem::path& root);
-    bool save_open_project();
+    // Saves the open project. When files changed on disk since it was opened or
+    // saved, asks whether to overwrite them and returns false; if Overwrite
+    // saves, then runs. overwrite saves over them without asking.
+    bool save_open_project(std::function<void()> then = {}, bool overwrite = false);
+    // Lists the files a guarded save found changed on disk. Overwrite saves over
+    // them and runs then; Cancel writes nothing.
+    void confirm_overwrite(const std::vector<engine_core::SaveConflict>& conflicts, std::function<void()> then);
     // Runs proceed now when nothing is unsaved. Otherwise asks Save, Don't
     // Save, or Cancel; Save runs proceed only once the save succeeded.
     void confirm_discard(const std::string& question, std::function<void()> proceed);

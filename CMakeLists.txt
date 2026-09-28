@@ -332,6 +332,7 @@ add_executable(studio-tests
     tests/FindReplaceTest.cpp
     tests/ThemeTest.cpp
     tests/PreferencesTest.cpp
+    tests/SaveConflictTest.cpp
     ${STUDIO_SOURCES}
 )
 target_include_directories(studio-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")

@@ -3003,18 +3003,25 @@ void IdeLayout::open_project_at(const std::filesystem::path& root) {
     show_toast("Opened " + project_->name());
 }
 
-bool IdeLayout::save_open_project() {
+bool IdeLayout::save_open_project(std::function<void()> then, bool overwrite) {
     // Open editors write Source first. During play the save writes the place
     // captured at Test, so play edits stay out of it either way.
     flush_editors();
     std::string error;
+    std::vector<engine_core::SaveConflict> conflicts;
     run_now([&](engine_core::DataModel&) {
         try {
-            project_->save();
+            project_->save(overwrite ? engine_core::SaveMode::Overwrite : engine_core::SaveMode::Guarded);
+        } catch (const engine_core::ProjectConflict& conflict) {
+            conflicts = conflict.conflicts();
         } catch (const std::exception& failure) {
             error = failure.what();
         }
     });
+    if (!conflicts.empty()) {
+        confirm_overwrite(conflicts, std::move(then));
+        return false;
+    }
     if (!error.empty()) {
         show_error("Could not save project", error);
         return false;
@@ -3028,12 +3035,62 @@ bool IdeLayout::save_open_project() {
     return true;
 }
 
+void IdeLayout::confirm_overwrite(const std::vector<engine_core::SaveConflict>& conflicts,
+                                  std::function<void()> then) {
+    runner_.simulation().scripts().append_output(
+        engine_core::ScriptRuntime::OutputKind::Error,
+        "Not saved: " + engine_core::describe_conflict(conflicts.front()) +
+            (conflicts.size() > 1 ? " (and " + std::to_string(conflicts.size() - 1) + " more)" : std::string()));
+    if (scene_ == nullptr || prompt_open_) {
+        return;
+    }
+    prompt_open_ = true;
+    std::string detail;
+    const std::size_t shown = std::min<std::size_t>(conflicts.size(), 5);
+    for (std::size_t index = 0; index < shown; ++index) {
+        detail += engine_core::describe_conflict(conflicts[index]) + "\n";
+    }
+    if (conflicts.size() > shown) {
+        detail += "and " + std::to_string(conflicts.size() - shown) + " more\n";
+    }
+    detail += "\nOverwrite writes the studio's version over them. Cancel saves nothing.";
+    const jadefx::ButtonType overwrite("Overwrite", jadefx::ButtonType::Data::OkDone);
+    auto alert = std::make_shared<jadefx::Alert>(jadefx::AlertType::Warning, detail,
+                                                 std::vector<jadefx::ButtonType>{overwrite, jadefx::ButtonType::Cancel()});
+    alert->setTitle("Anarchy Engine");
+    alert->setHeaderText(conflicts.size() == 1
+                             ? std::string("A file changed on disk since the project was opened or saved.")
+                             : std::to_string(conflicts.size()) +
+                                   " files changed on disk since the project was opened or saved.");
+    alert->setOnClosed([this, overwrite, then = std::move(then)](const jadefx::ButtonType* choice) {
+        prompt_open_ = false;
+        if (choice != nullptr && *choice == overwrite && project_ && save_open_project({}, true) && then) {
+            then();
+        }
+    });
+    alerts_.erase(std::remove_if(alerts_.begin(), alerts_.end(),
+                                 [](const std::shared_ptr<jadefx::Alert>& item) {
+                                     return !item || item->getResult() != nullptr;
+                                 }),
+                  alerts_.end());
+    alert->show(*scene_);
+    // Stable names for the two answers, so a test can find them.
+    const std::pair<const jadefx::ButtonType*, const char*> ids[] = {
+        {&overwrite, "save-conflict-overwrite"}, {&jadefx::ButtonType::Cancel(), "save-conflict-cancel"}};
+    for (const auto& [type, id] : ids) {
+        if (jadefx::Button* button = alert->lookupButton(*type)) {
+            button->setElementId(id);
+        }
+    }
+    alerts_.push_back(std::move(alert));
+}
+
 void IdeLayout::save_project(std::function<void()> then) {
     if (!project_) {
         save_project_as(std::move(then));
         return;
     }
-    if (save_open_project() && then) {
+    if (save_open_project(then) && then) {
         then();
     }
 }

@@ -27,6 +27,7 @@ namespace ide {
 class IdeDock;
 class IdePane;
 enum class DropSide;
+struct LayoutHost;
 class IdeScriptEditor;
 class IdeSearch;
 class McpServer;
@@ -34,8 +35,8 @@ class PreferencesPanel;
 class PropertiesPanel;
 
 // IDE shell, in the shape of OpenGLFX-IDE's IdeLayout.
-// The constructor prepares the session and builds the shell. The app can
-// then create instances. start() adds the scene view and launches the threads.
+// The constructor prepares the session and builds the shell, scene view
+// included. The app can then create instances. start() launches the threads.
 // The simulation stays paused until Test resumes it. Pause during a test
 // stops steps and leaves the session active. Resume continues them. Stop
 // restores the place, including when that test is already paused.
@@ -58,7 +59,13 @@ class PropertiesPanel;
 // Properties, the console, and Search. A check marks each one that is open.
 // Picking a closed one opens it where it last was, picking one hidden behind
 // another tab brings it forward, and picking one that is showing closes it.
-// Below them, New Scene View docks another view of the place beside the first.
+// Below them, New Scene View docks another view of the place beside the first,
+// and Reset to Default Layout puts the windows back as a new studio has them.
+// Where the docks are, what each holds, and which windows are closed are kept
+// in layout.json in the config folder when the window closes, and the next
+// start docks them that way again. Script editors and extra scene views are
+// not kept. Without that file, or when it cannot be read, the studio starts
+// with its default layout.
 class IdeLayout {
 public:
     // windowWidth and windowHeight are the window size in points, used to place the splitters.
@@ -88,6 +95,9 @@ public:
     bool has_unsaved_changes();
     // Opens the Preferences window, or leaves the open one be.
     void open_preferences();
+    // Writes the layout to layout.json in the config folder. A close request
+    // on the main window does this. Nothing is written without a config folder.
+    void save_layout();
 
 private:
     struct Clip;
@@ -166,6 +176,31 @@ private:
     // A new dock on one side of target, depth points across. Target null is the whole work area.
     IdeDock* dock_beside(jadefx::Node* target, DropSide side, double depth);
     void new_scene_view();
+    // Builds the default layout's docks in the main window, and hands each
+    // page to place with the dock it goes in.
+    void default_layout(double windowWidth, double windowHeight,
+                        const std::function<void(IdeDock&, const std::shared_ptr<IdePane>&)>& place);
+    // Puts the windows back as the default layout has them: the four open,
+    // Search closed, and no floating windows. Script editors and extra scene
+    // views move in beside the scene view.
+    void reset_layout();
+    // Docks the pages as layout.json left them. False, having docked nothing,
+    // when there is no file or nothing in it could be docked.
+    bool restore_layout();
+    // Opens the floating windows layout.json had. Needs the main window.
+    void restore_floating();
+    LayoutHost layout_host();
+    // The layout as save_layout writes it.
+    engine_core::JsonValue capture_layout();
+    // Registers each dock under node with the shell.
+    void adopt_tree(const std::shared_ptr<jadefx::Node>& node);
+    // The Search pane, made the first time it is asked for.
+    const std::shared_ptr<IdeSearch>& search_pane();
+    // Opens a utility window around the node fill returns, and keeps it with
+    // the shell's windows. Null, with no window left open, when it cannot open
+    // or fill returns null.
+    jadefx::UtilityWindow* open_floating(const std::string& title, int width, int height, double screenX,
+                                         double screenY, const std::function<std::shared_ptr<jadefx::Node>()>& fill);
     void noteScriptFocus();
     void adoptDock(const std::shared_ptr<IdeDock>& dock);
     void onTabDrag(IdeDock& from, const jadefx::TabDrag& drag);
@@ -231,6 +266,18 @@ private:
     std::vector<std::unique_ptr<WindowEntry>> windows_;
     // Scene views opened so far, which numbers the next one's tab.
     int scene_views_ = 1;
+    // The studio's first scene view. It stays open.
+    std::shared_ptr<IdePane> scene_view_;
+    // layout.json in the config folder. Empty keeps no layout.
+    std::filesystem::path layout_file_;
+    // The floating windows layout.json had, until the main window is up to open them.
+    engine_core::JsonValue saved_floating_;
+    // Frames flushed so far.
+    std::uint64_t frames_ = 0;
+    // The layout just before a floating window closed its tabs, and the frame
+    // that was in. A save in that same frame is a quit, and writes this instead.
+    engine_core::JsonValue quit_layout_;
+    std::uint64_t quit_frame_ = ~std::uint64_t{0};
     std::unique_ptr<McpServer> mcp_;
     struct McpIdentity;
     // Null while the server is off.

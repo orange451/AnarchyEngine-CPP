@@ -28,6 +28,7 @@ set(STUDIO_SOURCES
     src/ide/IdePane.cpp
     src/ide/IdeDock.cpp
     src/ide/DockArrange.cpp
+    src/ide/SavedLayout.cpp
     src/ide/IdeConsole.cpp
     src/ide/ConsoleLog.cpp
     src/ide/CompletionPopup.cpp

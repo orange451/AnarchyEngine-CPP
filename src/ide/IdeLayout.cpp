@@ -10,6 +10,7 @@
 #include "LuaApi.hpp"
 #include "Project.hpp"
 #include "ScriptAnalysis.hpp"
+#include "SavedLayout.hpp"
 #include "ScriptRuntime.hpp"
 #include "IdeDock.hpp"
 #include "IdeExplorer.hpp"
@@ -35,6 +36,9 @@
 #include <mutex>
 #include <stdexcept>
 #include <functional>
+#include <string>
+#include <system_error>
+#include <unordered_set>
 #include <vector>
 
 namespace ide {
@@ -406,6 +410,9 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     : preferences_(config.empty() ? std::filesystem::path() : config / "preferences.json"),
       themes_(config.empty() ? std::filesystem::path() : config / "themes"),
       clip_(std::make_unique<Clip>()) {
+    if (!config.empty()) {
+        layout_file_ = config / "layout.json";
+    }
     runner_.prepare();
     // Before any widget reads a color.
     engine_core::ScriptRuntime& scripts = runner_.simulation().scripts();
@@ -552,20 +559,15 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
             });
     };
 
-    auto west = jadefx::make<IdeDock>();
-    adoptDock(west);
     // IdeTreeTest is the sample tree page. The Java shell left that dock commented out.
     auto gameExplorer = jadefx::make<IdeExplorer>(game, "Game Explorer", host);
     gameExplorer->setIconFile("Explorer.png");
-    west->dock(gameExplorer);
     explorers_.push_back(gameExplorer);
 
-    auto center = jadefx::make<IdeDock>();
-    adoptDock(center);
-    sceneDock_ = center.get();
+    auto sceneExplorer = jadefx::make<IdeExplorer>(game, "Current Scene", host);
+    sceneExplorer->setIconFile("Scenes.png");
+    explorers_.push_back(sceneExplorer);
 
-    auto south = jadefx::make<IdeDock>();
-    adoptDock(south);
     auto console = jadefx::make<IdeConsole>(runner_.simulation());
     console->bindUndo(&undo_router_.widget_stack(kCommandUndo));
     console_ = console;
@@ -576,25 +578,91 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
             editor->showLine(line);
         }
     });
-    south->dock(console);
 
-    auto east = jadefx::make<IdeDock>();
-    adoptDock(east);
-    auto sceneExplorer = jadefx::make<IdeExplorer>(game, "Current Scene", host);
-    sceneExplorer->setIconFile("Scenes.png");
-    east->dock(sceneExplorer);
-    explorers_.push_back(sceneExplorer);
-
-    // Properties sits under the right-hand explorer, as in Roblox Studio.
     // Its writes go to the simulation thread, like a rename.
     properties_ = std::make_unique<PropertiesPanel>();
     properties_->set_runner([this](std::function<void(engine_core::DataModel&)> write) {
         runner_.simulation().on_simulation(std::move(write));
     });
     properties_->bind(game, game.selection(), game.history());
+
+    // Docked before the threads start. Its first paint is what lets the
+    // uncapped render thread leave its wait.
+    scene_view_ = jadefx::make<runner::GameView>(runner_);
+
+    auto status = jadefx::make<jadefx::Pane>();
+    status->getClassList().add("ide-status");
+    status->setMinSize(0, kStatusHeight);
+    status->setPrefHeight(kStatusHeight);
+
+    root_ = jadefx::make<jadefx::BorderPane>();
+    root_->setPrefWidthRatio(1);
+    root_->setPrefHeightRatio(1);
+    root_->getClassList().add("ide-root");
+    root_->setTop(top);
+    root_->setBottom(status);
+
+    // The Window menu's pages, kept while their tabs are closed. When the dock
+    // one closed from is gone, it opens again where the default layout has it.
+    auto keep = [this](std::shared_ptr<IdePane> pane, std::function<IdeDock*()> home) {
+        auto entry = std::make_unique<WindowEntry>();
+        entry->pane = std::move(pane);
+        entry->home = std::move(home);
+        windows_.push_back(std::move(entry));
+    };
+    keep(gameExplorer, [this] { return dock_beside(nullptr, DropSide::Left, kSideWidth); });
+    keep(sceneExplorer, [this] { return dock_beside(nullptr, DropSide::Right, kSideWidth); });
+    keep(properties_->dock_widget(), [this, above = sceneExplorer.get()] {
+        if (IdeDock* dock = dockContaining(above)) {
+            return dock_beside(dock, DropSide::Bottom, dock->getHeight() * 0.5);
+        }
+        return dock_beside(nullptr, DropSide::Right, kSideWidth);
+    });
+    keep(console, [this] {
+        IdeDock* above = sceneDock_ != nullptr && sceneDock_->getParent() != nullptr ? sceneDock_ : nullptr;
+        return dock_beside(above, DropSide::Bottom, kConsoleHeight);
+    });
+
+    if (!restore_layout()) {
+        default_layout(windowWidth, windowHeight,
+                       [](IdeDock& dock, const std::shared_ptr<IdePane>& page) { dock.dock(page); });
+    }
+    for (const std::unique_ptr<WindowEntry>& entry : windows_) {
+        watch_close(*entry);
+    }
+    fill_window_menu(*window);
+}
+
+void IdeLayout::default_layout(double windowWidth, double windowHeight,
+                               const std::function<void(IdeDock&, const std::shared_ptr<IdePane>&)>& place) {
+    // The game explorer on the left, the scene view over the console, and the
+    // scene explorer over Properties on the right, as in Roblox Studio.
+    auto west = jadefx::make<IdeDock>();
+    adoptDock(west);
+    if (const std::shared_ptr<IdeExplorer> explorer = explorers_[0].lock()) {
+        place(*west, explorer);
+    }
+
+    auto center = jadefx::make<IdeDock>();
+    adoptDock(center);
+    place(*center, scene_view_);
+    sceneDock_ = center.get();
+
+    auto south = jadefx::make<IdeDock>();
+    adoptDock(south);
+    if (const std::shared_ptr<IdeConsole> console = console_.lock()) {
+        place(*south, console);
+    }
+
+    auto east = jadefx::make<IdeDock>();
+    adoptDock(east);
+    if (const std::shared_ptr<IdeExplorer> explorer = explorers_[1].lock()) {
+        place(*east, explorer);
+    }
+
     auto propertiesDock = jadefx::make<IdeDock>();
     adoptDock(propertiesDock);
-    propertiesDock->dock(properties_->dock_widget());
+    place(*propertiesDock, properties_->dock_widget());
 
     auto eastColumn = jadefx::make<jadefx::SplitPane>();
     eastColumn->setOrientation(jadefx::Orientation::Vertical);
@@ -619,42 +687,79 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     jadefx::SplitPane::setResizableWithParent(*west, false);
     jadefx::SplitPane::setResizableWithParent(*eastColumn, false);
     workArea_ = horizontal;
-
-    auto status = jadefx::make<jadefx::Pane>();
-    status->getClassList().add("ide-status");
-    status->setMinSize(0, kStatusHeight);
-    status->setPrefHeight(kStatusHeight);
-
-    root_ = jadefx::make<jadefx::BorderPane>();
-    root_->setPrefWidthRatio(1);
-    root_->setPrefHeightRatio(1);
-    root_->getClassList().add("ide-root");
-    root_->setTop(top);
     root_->setCenter(horizontal);
-    root_->setBottom(status);
+}
 
-    // The Window menu's pages, kept while their tabs are closed. When the dock
-    // one closed from is gone, it opens again where this layout first put it.
-    auto keep = [this](std::shared_ptr<IdePane> pane, std::function<IdeDock*()> home) {
-        auto entry = std::make_unique<WindowEntry>();
-        entry->pane = std::move(pane);
-        entry->home = std::move(home);
-        watch_close(*entry);
-        windows_.push_back(std::move(entry));
-    };
-    keep(gameExplorer, [this] { return dock_beside(nullptr, DropSide::Left, kSideWidth); });
-    keep(sceneExplorer, [this] { return dock_beside(nullptr, DropSide::Right, kSideWidth); });
-    keep(properties_->dock_widget(), [this, above = sceneExplorer.get()] {
-        if (IdeDock* dock = dockContaining(above)) {
-            return dock_beside(dock, DropSide::Bottom, dock->getHeight() * 0.5);
+void IdeLayout::reset_layout() {
+    const std::vector<std::shared_ptr<IdeDock>> old_docks = docks_;
+    std::vector<std::shared_ptr<jadefx::UtilityWindow>> old_windows;
+    for (const Floating& item : floating_) {
+        if (item.window) {
+            old_windows.push_back(item.window);
         }
-        return dock_beside(nullptr, DropSide::Right, kSideWidth);
+    }
+    // A copy, since moving a tab takes it out of the list it was found in.
+    auto tab_of = [&old_docks](const jadefx::Node* page) -> std::shared_ptr<jadefx::Tab> {
+        for (const std::shared_ptr<IdeDock>& dock : old_docks) {
+            for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+                if (tab && tab->getContent() == page) {
+                    return tab;
+                }
+            }
+        }
+        return nullptr;
+    };
+    auto kept = [this](const jadefx::Node* page) {
+        for (const std::unique_ptr<WindowEntry>& entry : windows_) {
+            if (entry->pane.get() == page) {
+                return true;
+            }
+        }
+        return page == scene_view_.get() || page == search_.get();
+    };
+    // Search is closed in the default layout. It keeps its search for next time.
+    if (search_) {
+        if (const std::shared_ptr<jadefx::Tab> tab = tab_of(search_.get()); tab && tab->getTabPane() != nullptr) {
+            tab->getTabPane()->close(tab);
+        }
+    }
+    // Script editors and extra scene views stay open, beside the scene view.
+    std::vector<std::shared_ptr<jadefx::Tab>> others;
+    for (const std::shared_ptr<IdeDock>& dock : old_docks) {
+        for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+            if (tab && !kept(tab->getContent())) {
+                others.push_back(tab);
+            }
+        }
+    }
+    const double width = scene_ != nullptr ? scene_->getWidth() : root_->getWidth();
+    const double height = scene_ != nullptr ? scene_->getHeight() : root_->getHeight();
+    // A page that is open moves with its tab. A closed one opens.
+    default_layout(width, height, [this, &tab_of](IdeDock& dock, const std::shared_ptr<IdePane>& page) {
+        if (const std::shared_ptr<jadefx::Tab> tab = tab_of(page.get())) {
+            dock.take(tab);
+            return;
+        }
+        dock.dock(page);
+        for (const std::unique_ptr<WindowEntry>& entry : windows_) {
+            if (entry->pane == page) {
+                watch_close(*entry);
+            }
+        }
     });
-    keep(console, [this] {
-        IdeDock* above = sceneDock_ != nullptr && sceneDock_->getParent() != nullptr ? sceneDock_ : nullptr;
-        return dock_beside(above, DropSide::Bottom, kConsoleHeight);
-    });
-    fill_window_menu(*window);
+    for (const std::shared_ptr<jadefx::Tab>& tab : others) {
+        sceneDock_->take(tab);
+    }
+    sceneDock_->select(scene_view_.get());
+    for (const std::shared_ptr<IdeDock>& dock : old_docks) {
+        forgetDock(dock);
+    }
+    for (const std::shared_ptr<jadefx::UtilityWindow>& window : old_windows) {
+        if (window->isOpen()) {
+            window->close();
+        }
+    }
+    rebindUtilities();
 }
 
 void IdeLayout::fill_window_menu(jadefx::Menu& menu) {
@@ -680,6 +785,10 @@ void IdeLayout::fill_window_menu(jadefx::Menu& menu) {
         });
     menu.getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     add("New Scene View", "Camera.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { new_scene_view(); });
+    menu.getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
+    add("Reset to Default Layout", std::string(), nullptr)->setOnAction([this](jadefx::ActionEvent&) {
+        reset_layout();
+    });
 }
 
 void IdeLayout::toggle_window(IdePane* pane, const std::function<void()>& open) {
@@ -784,12 +893,214 @@ void IdeLayout::new_scene_view() {
     home->dock(jadefx::make<runner::GameView>(runner_, "Scene View " + std::to_string(scene_views_), true));
 }
 
+LayoutHost IdeLayout::layout_host() {
+    // The pages one load has docked, so a name the file repeats docks once.
+    auto placed = std::make_shared<std::unordered_set<const IdePane*>>();
+    LayoutHost host;
+    // The one-of-a-kind pages and the first scene view. Script editors and
+    // extra views are not kept.
+    host.name_of = [this](const IdePane& page) -> std::string {
+        if (&page == scene_view_.get() || &page == search_.get()) {
+            return page.name();
+        }
+        for (const std::unique_ptr<WindowEntry>& entry : windows_) {
+            if (entry->pane.get() == &page) {
+                return page.name();
+            }
+        }
+        return {};
+    };
+    host.dock_page = [this, placed](IdeDock& dock, const std::string& name) {
+        std::shared_ptr<IdePane> page;
+        if (name == "Search") {
+            page = search_pane();
+        } else if (name == scene_view_->name()) {
+            page = scene_view_;
+        }
+        for (const std::unique_ptr<WindowEntry>& entry : windows_) {
+            if (entry->pane->name() == name) {
+                page = entry->pane;
+            }
+        }
+        if (!page || placed->count(page.get()) != 0 || dockContaining(page.get()) != nullptr) {
+            return false;
+        }
+        placed->insert(page.get());
+        dock.dock(page);
+        return true;
+    };
+    return host;
+}
+
+void IdeLayout::adopt_tree(const std::shared_ptr<jadefx::Node>& node) {
+    if (const std::shared_ptr<IdeDock> dock = std::dynamic_pointer_cast<IdeDock>(node)) {
+        adoptDock(dock);
+        return;
+    }
+    if (auto* split = dynamic_cast<jadefx::SplitPane*>(node.get())) {
+        for (const std::shared_ptr<jadefx::Node>& item : split->getItems().items()) {
+            adopt_tree(item);
+        }
+    }
+}
+
+bool IdeLayout::restore_layout() {
+    std::error_code missing;
+    if (layout_file_.empty() || !std::filesystem::exists(layout_file_, missing)) {
+        return false;
+    }
+    engine_core::ScriptRuntime& scripts = runner_.simulation().scripts();
+    auto refuse = [&](const std::string& why) {
+        scripts.append_output(engine_core::ScriptRuntime::OutputKind::Error,
+                              "Layout: " + why + ". Starting with the default layout.");
+        return false;
+    };
+    std::string text;
+    std::string error;
+    engine_core::JsonValue saved;
+    if (!read_file(layout_file_, text, error)) {
+        return refuse(error);
+    }
+    if (!engine_core::parse_json(text, saved, error)) {
+        return refuse(utf8_path(layout_file_) + ": " + error);
+    }
+    const engine_core::JsonValue* version = saved.find("version");
+    const engine_core::JsonValue* main = saved.find("main");
+    if (version == nullptr || version->as_number() != 1 || main == nullptr) {
+        return refuse(utf8_path(layout_file_) + " is not a layout this studio reads");
+    }
+    std::shared_ptr<jadefx::Node> tree = load_layout_node(*main, layout_host());
+    if (!tree) {
+        return refuse(utf8_path(layout_file_) + " docks nothing in the main window");
+    }
+    adopt_tree(tree);
+    workArea_ = tree;
+    root_->setCenter(tree);
+    // The first scene view stays in the main window, even when it was floating.
+    sceneDock_ = dockContaining(scene_view_.get());
+    if (sceneDock_ == nullptr) {
+        if (IdeDock* home = editorHome()) {
+            home->dock(scene_view_);
+            sceneDock_ = home;
+        }
+    }
+    std::vector<std::string> named;
+    layout_tab_names(*main, named);
+    const engine_core::JsonValue* floating = saved.find("floating");
+    if (floating != nullptr && floating->is_array()) {
+        for (const engine_core::JsonValue& window : floating->items()) {
+            if (const engine_core::JsonValue* root = window.find("root")) {
+                layout_tab_names(*root, named);
+            }
+        }
+        saved_floating_ = *floating;
+    }
+    if (const engine_core::JsonValue* closed = saved.find("closed"); closed != nullptr && closed->is_array()) {
+        for (const engine_core::JsonValue& name : closed->items()) {
+            named.push_back(name.as_string());
+        }
+    }
+    // A window the file does not name, such as one added since it was
+    // written, opens where the default layout has it.
+    for (const std::unique_ptr<WindowEntry>& entry : windows_) {
+        if (dockContaining(entry->pane.get()) == nullptr &&
+            std::find(named.begin(), named.end(), entry->pane->name()) == named.end()) {
+            show_window(*entry);
+        }
+    }
+    return true;
+}
+
+void IdeLayout::restore_floating() {
+    const engine_core::JsonValue windows = std::move(saved_floating_);
+    saved_floating_ = engine_core::JsonValue();
+    for (const engine_core::JsonValue& window : windows.items()) {
+        const engine_core::JsonValue* tree = window.find("root");
+        if (tree == nullptr) {
+            continue;
+        }
+        auto number = [&window](const char* key, double fallback) {
+            const engine_core::JsonValue* value = window.find(key);
+            return value != nullptr && value->is_number() && std::isfinite(value->as_number()) ? value->as_number()
+                                                                                                 : fallback;
+        };
+        // flushFrame titles it after the tab that shows.
+        std::vector<std::string> names;
+        layout_tab_names(*tree, names);
+        const int width = static_cast<int>(std::lround(std::clamp(number("width", 420), 200.0, 4000.0)));
+        const int height = static_cast<int>(std::lround(std::clamp(number("height", 280), 140.0, 4000.0)));
+        open_floating(names.empty() ? std::string() : names.front(), width, height, number("x", 120), number("y", 120),
+                      [&] {
+                          std::shared_ptr<jadefx::Node> node = load_layout_node(*tree, layout_host());
+                          if (node) {
+                              adopt_tree(node);
+                          }
+                          return node;
+                      });
+    }
+}
+
+void IdeLayout::save_layout() {
+    if (layout_file_.empty()) {
+        return;
+    }
+    // Quitting asks every window to close at once, the floating ones first,
+    // and each takes its pages with it. What they held before that is what is kept.
+    const engine_core::JsonValue saved = quit_frame_ == frames_ ? quit_layout_ : capture_layout();
+    std::string error;
+    if (!write_file(layout_file_, engine_core::write_json(saved), error)) {
+        runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error,
+                                                     "Layout: " + error);
+    }
+}
+
+engine_core::JsonValue IdeLayout::capture_layout() {
+    const LayoutHost host = layout_host();
+    engine_core::JsonValue saved = engine_core::JsonValue::object();
+    saved.set("version", engine_core::JsonValue::number(1));
+    if (const jadefx::Node* center = root_->getCenter()) {
+        engine_core::JsonValue main = save_layout_node(*center, host);
+        if (!main.is_null()) {
+            saved.set("main", std::move(main));
+        }
+    }
+    engine_core::JsonValue floating = engine_core::JsonValue::array();
+    for (const Floating& item : floating_) {
+        if (!item.window || !item.window->isOpen() || item.window->stage().getScene().getRoot() == nullptr) {
+            continue;
+        }
+        jadefx::Stage& stage = item.window->stage();
+        engine_core::JsonValue tree = save_layout_node(*stage.getScene().getRoot(), host);
+        double x = 0;
+        double y = 0;
+        if (tree.is_null() || !jadefx::stageToScreen(stage, 0, 0, x, y)) {
+            continue;
+        }
+        engine_core::JsonValue window = engine_core::JsonValue::object();
+        window.set("x", engine_core::JsonValue::number(x));
+        window.set("y", engine_core::JsonValue::number(y));
+        window.set("width", engine_core::JsonValue::number(stage.getWidth()));
+        window.set("height", engine_core::JsonValue::number(stage.getHeight()));
+        window.set("root", std::move(tree));
+        floating.items().push_back(std::move(window));
+    }
+    saved.set("floating", std::move(floating));
+    engine_core::JsonValue closed = engine_core::JsonValue::array();
+    for (const std::unique_ptr<WindowEntry>& entry : windows_) {
+        if (dockContaining(entry->pane.get()) == nullptr) {
+            closed.items().push_back(engine_core::JsonValue::string(entry->pane->name()));
+        }
+    }
+    if (!search_ || dockContaining(search_.get()) == nullptr) {
+        closed.items().push_back(engine_core::JsonValue::string("Search"));
+    }
+    saved.set("closed", std::move(closed));
+    return saved;
+}
+
 engine_core::Engine& IdeLayout::simulation() { return runner_.simulation(); }
 
 void IdeLayout::start() {
-    // Dock the view before the threads start. Its first paint is what lets the
-    // uncapped render thread leave its wait.
-    sceneDock_->dock(jadefx::make<runner::GameView>(runner_));
     runner_.start();
     // Whatever the app built before start is the starting point, not an edit.
     mark_saved();
@@ -951,6 +1262,8 @@ void IdeLayout::attachFrame(jadefx::Stage& stage) {
     stage.setFrameTail([this]() { flushFrame(); });
     // The close button, Alt+F4, and Cmd+Q ask about unsaved work first.
     stage.setOnCloseRequest([this]() {
+        // Kept whether or not the close goes ahead.
+        save_layout();
         if (prompt_open_ || dialog_open_) {
             return false;
         }
@@ -965,6 +1278,7 @@ void IdeLayout::attachFrame(jadefx::Stage& stage) {
         return false;
     });
     update_title();
+    restore_floating();
 }
 
 void IdeLayout::adoptDock(const std::shared_ptr<IdeDock>& dock) {
@@ -1218,15 +1532,31 @@ void IdeLayout::floatTab(const std::shared_ptr<jadefx::Tab>& tab, double screenX
     const double contentH = content != nullptr ? content->getMinHeight() : 0;
     const int width = std::max(420, static_cast<int>(std::ceil(contentW + 16)));
     const int height = std::max(280, static_cast<int>(std::ceil(contentH + 48)));
-    std::shared_ptr<jadefx::UtilityWindow> window =
-        jadefx::UtilityWindow::open(tab->getText(), width, height, screenX - 36, screenY - 12);
-    if (!window) {
-        return;
+    std::shared_ptr<IdeDock> dock;
+    open_floating(tab->getText(), width, height, screenX - 36, screenY - 12, [this, &dock] {
+        dock = jadefx::make<IdeDock>();
+        adoptDock(dock);
+        return dock;
+    });
+    if (dock) {
+        dock->take(tab);
     }
-    auto dock = jadefx::make<IdeDock>();
-    adoptDock(dock);
-    StretchRoot(*dock);
-    auto scene = jadefx::make<jadefx::Scene>(dock, static_cast<double>(width), static_cast<double>(height));
+}
+
+jadefx::UtilityWindow* IdeLayout::open_floating(const std::string& title, int width, int height, double screenX,
+                                                double screenY,
+                                                const std::function<std::shared_ptr<jadefx::Node>()>& fill) {
+    std::shared_ptr<jadefx::UtilityWindow> window = jadefx::UtilityWindow::open(title, width, height, screenX, screenY);
+    if (!window) {
+        return nullptr;
+    }
+    const std::shared_ptr<jadefx::Node> root = fill ? fill() : nullptr;
+    if (!root) {
+        window->close();
+        return nullptr;
+    }
+    StretchRoot(*root);
+    auto scene = jadefx::make<jadefx::Scene>(root, static_cast<double>(width), static_cast<double>(height));
     scene->setStylesheet(kStylesheet);
     jadefx::Scene* utilityScene = scene.get();
     scene->addKeyHook([this, utilityScene](jadefx::KeyEvent& event) {
@@ -1236,8 +1566,12 @@ void IdeLayout::floatTab(const std::shared_ptr<jadefx::Tab>& tab, double screenX
         routeSearch(event, *utilityScene);
     });
     window->stage().setScene(std::move(scene));
-    dock->take(tab);
     window->setCanClose([this, raw = window.get()]() {
+        // Closing its tabs changes the layout. A quit saves it as it was.
+        if (!layout_file_.empty()) {
+            quit_layout_ = capture_layout();
+            quit_frame_ = frames_;
+        }
         std::vector<IdeDock*> docks;
         for (const std::shared_ptr<IdeDock>& dock : docks_) {
             if (dock && utilityOf(dock.get()) == raw) {
@@ -1278,9 +1612,10 @@ void IdeLayout::floatTab(const std::shared_ptr<jadefx::Tab>& tab, double screenX
     window->setOnClosed([this, raw = window.get()]() { forgetWindow(raw); });
     Floating created;
     created.window = window;
-    created.title = tab->getText();
+    created.title = title;
     floating_.push_back(std::move(created));
     rebindUtilities();
+    return window.get();
 }
 
 struct DragPoint {
@@ -1620,6 +1955,7 @@ void GrowToFit(const jadefx::Node* area, jadefx::Scene* scene, const std::functi
 }
 
 void IdeLayout::flushFrame() {
+    ++frames_;
     noteScriptFocus();
     refresh_modified();
     const std::vector<std::shared_ptr<IdeDock>> pending = std::move(pendingEmpty_);
@@ -1777,19 +2113,7 @@ void IdeLayout::routeSearch(jadefx::KeyEvent& event, jadefx::Scene& scene) {
     }
 }
 
-void IdeLayout::open_search(bool replace, jadefx::Scene* scene) {
-    // A selection on one line in the focused editor is what to find.
-    std::string seed;
-    if (scene != nullptr) {
-        if (IdeScriptEditor* editor = Owning<IdeScriptEditor>(scene->focusedNode())) {
-            if (!editor->findOwns(scene->focusedNode())) {
-                seed = editor->selectedText();
-                if (seed.find('\n') != std::string::npos) {
-                    seed.clear();
-                }
-            }
-        }
-    }
+const std::shared_ptr<IdeSearch>& IdeLayout::search_pane() {
     if (search_ && dockContaining(search_.get()) == nullptr && search_->getParent() != nullptr) {
         // Still held by a tab that is on its way out. Start a new pane.
         search_.reset();
@@ -1822,6 +2146,23 @@ void IdeLayout::open_search(bool replace, jadefx::Scene* scene) {
         };
         search_ = jadefx::make<IdeSearch>(runner_.simulation(), std::move(host));
     }
+    return search_;
+}
+
+void IdeLayout::open_search(bool replace, jadefx::Scene* scene) {
+    // A selection on one line in the focused editor is what to find.
+    std::string seed;
+    if (scene != nullptr) {
+        if (IdeScriptEditor* editor = Owning<IdeScriptEditor>(scene->focusedNode())) {
+            if (!editor->findOwns(scene->focusedNode())) {
+                seed = editor->selectedText();
+                if (seed.find('\n') != std::string::npos) {
+                    seed.clear();
+                }
+            }
+        }
+    }
+    search_pane();
     if (IdeDock* dock = dockContaining(search_.get())) {
         dock->select(search_.get());
     } else {

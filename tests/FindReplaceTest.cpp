@@ -17,7 +17,8 @@
 #include <tuple>
 #include <vector>
 
-// The script editor's find bar and the Search pane, driven through headless scenes.
+// The script editor's find bar, its require completion, and the Search pane,
+// driven through headless scenes.
 namespace {
 
 int gFailures = 0;
@@ -239,6 +240,52 @@ void TestShowRange(engine_core::Engine& engine) {
     ExpectText(rig.text(), "a\nlocbl tbrget = 2\n", "only the given line changed");
 }
 
+// A `.` that starts a line at the top of the script offers ModuleScripts and
+// services. Enter writes the declaration over what was typed.
+void TestRequireCompletion(engine_core::Engine& engine) {
+    engine_core::DataModel& game = engine.datamodel();
+    engine_core::Folder& workspace = game.create<engine_core::Folder>();
+    game.set_name(workspace.id(), "Workspace");
+    game.set_parent(workspace.id(), game.id());
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    game.set_name(folder.id(), "Folder");
+    game.set_parent(folder.id(), workspace.id());
+    engine_core::ModuleScript& config = game.create<engine_core::ModuleScript>();
+    game.set_name(config.id(), "Config");
+    game.set_parent(config.id(), folder.id());
+    config.set_source("return {}\n");
+
+    auto type_each = [](EditorRig& rig, const std::string& text) {
+        for (const char unit : text) {
+            rig.type(std::string(1, unit));
+        }
+    };
+
+    EditorRig rig(engine, "print(1)\n");
+    rig.area->moveTo(rig.area->length());
+    type_each(rig, ".Conf");
+    rig.key(jadefx::Key::Enter);
+    ExpectText(rig.text(), "print(1)\nlocal Config = require(game.Workspace.Folder.Config)",
+               "Enter on .Conf requires the module by its path");
+    Expect(rig.area->caretPosition() == rig.area->length(), "the caret ends after the declaration");
+
+    rig.key(jadefx::Key::Enter);
+    type_each(rig, ".UserIn");
+    rig.key(jadefx::Key::Enter);
+    ExpectText(rig.text(),
+               "print(1)\nlocal Config = require(game.Workspace.Folder.Config)\n"
+               "local UserInputService = game:GetService(\"UserInputService\")",
+               "Enter on .UserIn gets the service");
+
+    EditorRig inner(engine, "local function f()\n    \nend\n");
+    inner.area->moveTo(inner.area->absolutePosition(1, 4));
+    type_each(inner, ".Conf");
+    inner.key(jadefx::Key::Enter);
+    Expect(inner.text().find("require") == std::string::npos, "inside a function a dot does not offer a require");
+
+    game.destroy_tree(workspace.id());
+}
+
 // A Search pane over a place of its own. One script plays an open editor whose
 // text is ahead of its Source.
 struct SearchRig {
@@ -445,6 +492,7 @@ int RunFindReplaceTests(engine_core::Engine& engine) {
     gFailures = 0;
     TestFindBar(engine);
     TestShowRange(engine);
+    TestRequireCompletion(engine);
     TestSearchPane(engine);
     return gFailures;
 }

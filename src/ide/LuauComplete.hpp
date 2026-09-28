@@ -17,11 +17,14 @@ enum class CompleteSite {
     Type,       // A type name after ':' or '::'.
     Argument,   // A string argument of GetService, FindFirstChild, or Instance.new.
     Directive,  // A header `--!` comment: strict, nonstrict, nocheck, nolint, native, optimize.
+    Require,    // A `.` that starts a line at the top of a script: a ModuleScript or service to declare.
 };
 
 struct CompletionItem {
     std::string name;
     std::string detail;
+    // What accepting writes in place of the typed text. Empty writes `name`.
+    std::string insert;
     // True when accepting the name can insert a call's parentheses.
     bool call = false;
     // `name` already contains the punctuation, as in `function(dt)`.
@@ -94,7 +97,13 @@ HoverInfo hover_luau(std::string_view source, int index, const std::vector<engin
 // strict, nonstrict, nocheck, nolint, native, and optimize. `--!nolint` then
 // completes lint rule names, and `--!optimize` completes levels 0, 1, and 2.
 // A directive after the first statement is ignored, so it is not completed.
-// `script_global` is false on the command line, where `script` is nil.
+// A `.` that starts a line outside every function, block, and bracket completes
+// the ModuleScripts in `world` and the registered services whose names start with
+// what follows it. Accepting writes the whole declaration over the dot and name:
+// `local Config = require(game.Folder.Config)` or
+// `local UserInputService = game:GetService("UserInputService")`.
+// `script_global` is false on the command line, where `script` is nil. The
+// command line does not complete requires.
 CompletionList complete_luau(std::string_view source, int caret, const std::vector<engine_core::LuaNode>& world = {},
                              std::uint32_t script_id = 0, bool script_global = true);
 

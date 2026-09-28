@@ -815,14 +815,15 @@ std::optional<CompletionEdit> CompletionPopup::take(bool parentheses, std::strin
     const CompletionItem chosen = *item;
     const int begin = state_->replace_begin;
     const int end = state_->replace_end;
+    const std::string& written = chosen.insert.empty() ? chosen.name : chosen.insert;
     CompletionEdit edit;
     edit.begin = begin;
     edit.end = end;
-    edit.text = chosen.name;
-    edit.caret = begin + CodePoints(chosen.name);
+    edit.text = written;
+    edit.caret = begin + CodePoints(written);
     if (parentheses && chosen.call && CodeAt(text, end) != U'(') {
         edit.text += "()";
-        edit.caret = begin + CodePoints(chosen.name) + 1;
+        edit.caret = begin + CodePoints(written) + 1;
     }
     if (state_->close_quote != 0 && !chosen.call) {
         const auto quote = static_cast<char32_t>(static_cast<unsigned char>(state_->close_quote));

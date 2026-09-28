@@ -3192,6 +3192,217 @@ void AddCreatable(std::string_view prefix, std::vector<CompletionItem>& out) {
     AddNamed(prefix, names, "class", out);
 }
 
+// A statement can end on this token, so the next line may start another.
+bool EndsStatement(const Token& token) {
+    switch (token.kind) {
+    case Token::Name:
+    case Token::Number:
+    case Token::String:
+    case Token::RParen:
+    case Token::RBrack:
+    case Token::RBrace:
+    case Token::Ellipsis:
+    case Token::Semi:
+        return true;
+    case Token::Keyword:
+        return token.text == "end" || token.text == "true" || token.text == "false" || token.text == "nil" ||
+               token.text == "break" || token.text == "continue";
+    default:
+        return false;
+    }
+}
+
+// Tokens [0, count) leave no function, block, loop header, or bracket open, so
+// the next statement belongs to the chunk itself. An `if` that follows `=`, `(`,
+// `return`, or an operator is an if-expression, which has no `end`.
+bool AtChunkTop(const std::vector<Token>& tokens, int count) {
+    // 'b' is a block closed by `end` or `until`. 'h' is a `while` or `for` header
+    // waiting for its `do`. '(' is any bracket.
+    std::vector<char> open;
+    for (int index = 0; index < count; ++index) {
+        const Token& token = tokens[static_cast<std::size_t>(index)];
+        if (token.kind == Token::LParen || token.kind == Token::LBrack || token.kind == Token::LBrace) {
+            open.push_back('(');
+        } else if (token.kind == Token::RParen || token.kind == Token::RBrack || token.kind == Token::RBrace) {
+            if (!open.empty()) {
+                open.pop_back();
+            }
+        } else if (token.kind != Token::Keyword) {
+            continue;
+        } else if (token.text == "function" || token.text == "repeat") {
+            open.push_back('b');
+        } else if (token.text == "if") {
+            const Token* before = index > 0 ? &tokens[static_cast<std::size_t>(index - 1)] : nullptr;
+            if (before == nullptr || EndsStatement(*before) ||
+                (before->kind == Token::Keyword &&
+                 (before->text == "then" || before->text == "else" || before->text == "do" || before->text == "repeat"))) {
+                open.push_back('b');
+            }
+        } else if (token.text == "while" || token.text == "for") {
+            open.push_back('h');
+        } else if (token.text == "do") {
+            if (!open.empty() && open.back() == 'h') {
+                open.back() = 'b';
+            } else {
+                open.push_back('b');
+            }
+        } else if (token.text == "end" || token.text == "until") {
+            if (!open.empty()) {
+                open.pop_back();
+            }
+        }
+    }
+    return open.empty();
+}
+
+// Only spaces and tabs come before code point `index` on its line.
+bool StartsLine(const std::u32string& text, int index) {
+    for (int at = index - 1; at >= 0; --at) {
+        const char32_t code = text[static_cast<std::size_t>(at)];
+        if (code == U'\n' || code == U'\r') {
+            return true;
+        }
+        if (code != U' ' && code != U'\t') {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool IsAsciiName(std::string_view text) {
+    if (text.empty() || KeywordText(text) != nullptr) {
+        return false;
+    }
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        const char unit = text[index];
+        const bool letter = (unit >= 'A' && unit <= 'Z') || (unit >= 'a' && unit <= 'z') || unit == '_';
+        if (!letter && !(index > 0 && unit >= '0' && unit <= '9')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string QuoteString(std::string_view text) {
+    std::string out = "\"";
+    for (const char unit : text) {
+        if (unit == '"' || unit == '\\') {
+            out.push_back('\\');
+            out.push_back(unit);
+        } else if (unit == '\n') {
+            out += "\\n";
+        } else if (unit == '\r') {
+            out += "\\r";
+        } else {
+            out.push_back(unit);
+        }
+    }
+    out.push_back('"');
+    return out;
+}
+
+// The expression that reaches `id` from game, such as `game.Folder.Config`. A name
+// that is not an identifier is indexed as `["My Part"]`. A name a member of its
+// parent shadows, such as a child called Name, is found with FindFirstChild.
+// Empty when `id` is not under game.
+std::string InstancePath(const std::vector<engine_core::LuaNode>& world, std::uint32_t id) {
+    std::vector<const engine_core::LuaNode*> chain;
+    const engine_core::LuaNode* node = FindNode(world, id);
+    while (node != nullptr && node->id != 0) {
+        if (chain.size() > world.size()) {
+            return {};
+        }
+        chain.push_back(node);
+        node = FindNode(world, node->parent);
+    }
+    if (node == nullptr || chain.empty()) {
+        return {};
+    }
+    std::string path = "game";
+    std::string parent_class = node->class_name.empty() ? "Game" : node->class_name;
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        const std::string& name = (*it)->name;
+        const engine_core::LuaField* member = engine_core::lua_class_find(parent_class.c_str(), name);
+        if (member != nullptr && member->name != nullptr) {
+            path += ":FindFirstChild(" + QuoteString(name) + ")";
+        } else if (IsAsciiName(name)) {
+            path += "." + name;
+        } else {
+            path += "[" + QuoteString(name) + "]";
+        }
+        parent_class = (*it)->class_name.empty() ? "Instance" : (*it)->class_name;
+    }
+    return path;
+}
+
+// A local named after an instance: its letters, digits, and underscores. It never
+// starts with a digit and is never a keyword.
+std::string LocalName(std::string_view name) {
+    std::string out;
+    for (const char unit : name) {
+        if ((unit >= 'A' && unit <= 'Z') || (unit >= 'a' && unit <= 'z') || (unit >= '0' && unit <= '9') ||
+            unit == '_') {
+            out.push_back(unit);
+        }
+    }
+    if (out.empty() || (out.front() >= '0' && out.front() <= '9')) {
+        out.insert(out.begin(), '_');
+    }
+    if (KeywordText(out) != nullptr) {
+        out.push_back('_');
+    }
+    return out;
+}
+
+// Every ModuleScript under game but the script being edited, and every registered
+// service, whose name starts with `prefix`. Each row writes the local that holds it.
+void AddRequires(const std::vector<engine_core::LuaNode>& world, std::uint32_t script_id, std::string_view prefix,
+                 std::vector<CompletionItem>& out) {
+    const std::size_t first = out.size();
+    for (const engine_core::LuaNode& node : world) {
+        if (node.class_name != "ModuleScript" || node.id == script_id || node.name.empty()) {
+            continue;
+        }
+        if (!prefix.empty() && !StartsWith(node.name, prefix)) {
+            continue;
+        }
+        const std::string path = InstancePath(world, node.id);
+        if (path.empty()) {
+            continue;
+        }
+        CompletionItem item;
+        item.name = node.name;
+        item.detail = path;
+        item.insert = "local " + LocalName(node.name) + " = require(" + path + ")";
+        item.title = item.insert;
+        out.push_back(std::move(item));
+    }
+    std::vector<std::string> services;
+    engine_core::lua_service_names(services);
+    for (const std::string& name : services) {
+        if (!prefix.empty() && !StartsWith(name, prefix)) {
+            continue;
+        }
+        CompletionItem item;
+        item.name = name;
+        item.detail = "service";
+        item.insert = "local " + LocalName(name) + " = game:GetService(" + QuoteString(name) + ")";
+        item.title = item.insert;
+        const engine_core::LuaDoc doc = engine_core::lua_symbol_doc("", name);
+        if (doc.found) {
+            item.summary = doc.summary;
+        }
+        out.push_back(std::move(item));
+    }
+    std::sort(out.begin() + static_cast<std::ptrdiff_t>(first), out.end(),
+              [](const CompletionItem& left, const CompletionItem& right) {
+                  if (left.name != right.name) {
+                      return left.name < right.name;
+                  }
+                  return left.detail < right.detail;
+              });
+}
+
 // Header comments Luau reads before the first statement. Order is the order shown.
 struct DirectiveRow {
     const char* name;
@@ -3441,6 +3652,19 @@ CompletionList complete_luau(std::string_view source, int caret, const std::vect
             ++end;
         }
         list.replace_end = end;
+    }
+
+    // `.Conf` starting a line at the top of a script asks for a require. Anywhere
+    // else the dot reads a member of the expression before it.
+    if (script_global && index > 0 && tokens[static_cast<std::size_t>(index - 1)].kind == Token::Dot) {
+        const Token& dot = tokens[static_cast<std::size_t>(index - 1)];
+        if (StartsLine(text, dot.begin) && (index == 1 || EndsStatement(tokens[static_cast<std::size_t>(index - 2)])) &&
+            AtChunkTop(tokens, index - 1)) {
+            list.site = CompleteSite::Require;
+            list.replace_begin = dot.begin;
+            AddRequires(world, script_id, list.prefix, list.items);
+            return list;
+        }
     }
 
     const bool cast = index >= 2 && tokens[static_cast<std::size_t>(index - 1)].kind == Token::Colon &&

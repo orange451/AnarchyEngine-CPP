@@ -2211,6 +2211,125 @@ void testScriptTableKeys() {
     expect_has(at_end("local t = { a = 1 }\nlocal u = { b = t.a }\nlocal x = u."), "b", "table reading another table");
 }
 
+// A `.` that starts a line at the top of a script completes ModuleScripts and
+// services, and accepting writes the declaration that reaches them.
+void testRequire() {
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
+    world.push_back(node(1, 0, "Workspace", "Folder"));
+    world.push_back(node(2, 1, "Folder", "Folder"));
+    world.push_back(node(3, 2, "Config", "ModuleScript", "return {}"));
+    world.push_back(node(4, 2, "My Module", "ModuleScript", "return {}"));
+    world.push_back(node(5, 1, "Name", "Folder"));
+    world.push_back(node(6, 5, "Shadowed", "ModuleScript", "return {}"));
+    world.push_back(node(7, 0, "Main", "Script"));
+    world.push_back(node(8, 0, "ConfigFolder", "Folder"));
+    world.push_back(node(9, 0xffffffffu, "Loose", "ModuleScript", "return {}"));
+
+    auto expect_insert = [](const ide::CompletionList& list, const char* name, const char* insert, const char* label) {
+        const ide::CompletionItem* item = find_item(list, name);
+        if (item == nullptr) {
+            fail(std::string(label) + " missing " + name);
+            return;
+        }
+        if (item->insert != insert) {
+            fail(std::string(label) + " inserts '" + item->insert + "'");
+        }
+        if (item->title != insert) {
+            fail(std::string(label) + " title '" + item->title + "'");
+        }
+    };
+    auto expect_require = [](const ide::CompletionList& list, const char* label) {
+        if (list.site != ide::CompleteSite::Require) {
+            fail(std::string(label) + " is not a require");
+        }
+    };
+    auto expect_not_require = [](const ide::CompletionList& list, const char* label) {
+        if (list.site == ide::CompleteSite::Require) {
+            fail(std::string(label) + " should not complete a require");
+        }
+    };
+
+    const ide::CompletionList conf = at_end(".Conf", world, 7);
+    expect_require(conf, ".Conf");
+    expect_insert(conf, "Config", "local Config = require(game.Workspace.Folder.Config)", ".Conf");
+    expect_detail(conf, "Config", "game.Workspace.Folder.Config", ".Conf detail");
+    expect_missing(conf, "ConfigFolder", "a Folder is not a module");
+    expect_missing(conf, "UserInputService", ".Conf is not a service");
+    if (conf.replace_begin != 0 || conf.replace_end != 5 || conf.prefix != "Conf") {
+        fail(".Conf replaces the dot and the name");
+    }
+
+    const ide::CompletionList input = at_end(".UserIn", world, 7);
+    expect_require(input, ".UserIn");
+    expect_insert(input, "UserInputService", "local UserInputService = game:GetService(\"UserInputService\")",
+                  ".UserIn");
+    expect_detail(input, "UserInputService", "service", ".UserIn detail");
+    expect_missing(input, "Config", ".UserIn is not a module");
+
+    const ide::CompletionList bare = at_end(".", world, 7);
+    expect_require(bare, "a lone dot");
+    expect_has(bare, "Config", "a lone dot lists modules");
+    expect_has(bare, "RunService", "a lone dot lists services");
+    expect_has(bare, "Selection", "a lone dot lists every service");
+    expect_missing(bare, "Loose", "a module outside game");
+    expect_missing(bare, "Main", "a Script is not a module");
+
+    // A name that is not an identifier is indexed, and its local drops what cannot be in a name.
+    expect_insert(at_end(".My", world, 7), "My Module", "local MyModule = require(game.Workspace.Folder[\"My Module\"])",
+                  "a module name with a space");
+    // A child a member shadows, such as a Folder called Name, is found by name.
+    expect_insert(at_end(".Sha", world, 7), "Shadowed",
+                  "local Shadowed = require(game.Workspace:FindFirstChild(\"Name\").Shadowed)",
+                  "a child a member shadows");
+
+    // The caret inside the name still replaces the whole name.
+    const ide::CompletionList middle = ide::complete_luau(".Config\n", 3, world, 7);
+    expect_require(middle, "caret inside the name");
+    if (middle.replace_begin != 0 || middle.replace_end != 7 || middle.prefix != "Co") {
+        fail("caret inside the name replaces through its end");
+    }
+
+    // A module does not require itself.
+    expect_missing(at_end(".Conf", world, 3), "Config", "the module being edited");
+
+    // After statements at the top of the chunk, and after blocks that have closed.
+    expect_require(at_end("local x = 1\n.Conf", world, 7), "after a local");
+    expect_require(at_end("print(\"hi\")\n    .Conf", world, 7), "indented after a call");
+    expect_require(at_end("local t = { a = 1 }\n.Conf", world, 7), "after a closed table");
+    expect_require(at_end("local function f()\nend\n.Conf", world, 7), "after a closed function");
+    expect_require(at_end("if ready then\n    print(1)\nelse\n    print(2)\nend\n.Conf", world, 7), "after an if");
+    expect_require(at_end("for i = 1, 3 do\nend\n.Conf", world, 7), "after a for");
+    expect_require(at_end("while go(function() end) do\nend\n.Conf", world, 7), "after a while");
+    expect_require(at_end("repeat\n    step()\nuntil done\n.Conf", world, 7), "after a repeat");
+    expect_require(at_end("local y = if a then 1 else 2\n.Conf", world, 7), "an if-expression has no end");
+    expect_require(at_end("do\nend;\n.Conf", world, 7), "after a semicolon");
+
+    // Inside a function, a block, or a bracket.
+    expect_not_require(at_end("local function f()\n    .Conf", world, 7), "inside a function");
+    expect_not_require(at_end("game.Changed:Connect(function()\n    .Conf", world, 7), "inside a callback");
+    expect_not_require(at_end("do\n    .Conf", world, 7), "inside do");
+    expect_not_require(at_end("if ready then\n    .Conf", world, 7), "inside if");
+    expect_not_require(at_end("if ready then\nelse\n    .Conf", world, 7), "inside else");
+    expect_not_require(at_end("for i = 1, 3 do\n    .Conf", world, 7), "inside for");
+    expect_not_require(at_end("while true do\n    .Conf", world, 7), "inside while");
+    expect_not_require(at_end("repeat\n    .Conf", world, 7), "inside repeat");
+    expect_not_require(at_end("local t = {\n    .Conf", world, 7), "inside a table");
+    expect_not_require(at_end("print(\n    .Conf", world, 7), "inside a call");
+    expect_not_require(at_end("local function f()\n    if a then\n    end\n    .Conf", world, 7),
+                       "a closed block inside a function");
+
+    // A dot that does not start a statement.
+    expect_not_require(at_end("local x = game.Conf", world, 7), "a member after a name");
+    expect_not_require(at_end("local x =\n.Conf", world, 7), "the value of an assignment");
+    expect_not_require(at_end("local x = 1 +\n.Conf", world, 7), "after an operator");
+    expect_not_require(at_end("return\n.Conf", world, 7), "after return");
+
+    // The command line has no script to declare locals in.
+    const ide::CompletionList console = ide::complete_luau(".Conf", 5, world, 0, false);
+    expect_not_require(console, "the command line");
+}
+
 int RunLuauCompleteTests() {
     try {
         testLibraries();
@@ -2234,6 +2353,7 @@ int RunLuauCompleteTests() {
         testNestedTable();
         testRegisteredMembers();
         testScriptTableKeys();
+        testRequire();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());
     }

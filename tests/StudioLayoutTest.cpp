@@ -229,6 +229,124 @@ int main() {
         expect(again != nullptr && !again->replaceShown(), "Search opens again with replace hidden");
     }
 
+    // The Window menu lists the one-of-a-kind windows, then New Scene View under a separator.
+    jadefx::Menu* windows = nullptr;
+    if (bar != nullptr) {
+        for (const std::shared_ptr<jadefx::Menu>& menu : bar->getMenus().items()) {
+            if (menu && menu->getText() == "Window") {
+                windows = menu.get();
+            }
+        }
+    }
+    expect(windows != nullptr, "the menu bar has a Window menu");
+    if (windows != nullptr) {
+        std::vector<std::string> labels;
+        for (const std::shared_ptr<jadefx::MenuItem>& item : windows->getItems().items()) {
+            labels.push_back(item ? item->getText() : std::string());
+        }
+        expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "",
+                                                  "New Scene View"},
+               "Window lists the explorers, Properties, Console, and Search, then New Scene View");
+        double time = 1.1;
+        auto frame = [&] {
+            scene->layout(1280, 800, time);
+            time += 0.01;
+        };
+        auto pick = [&](const std::string& text) {
+            for (const std::shared_ptr<jadefx::MenuItem>& item : windows->getItems().items()) {
+                if (item && item->getText() == text) {
+                    item->fire();
+                }
+            }
+            frame();
+        };
+        // Whether the row shows its check. Opening the menu lays its rows out, which works it out.
+        auto checked = [&](const std::string& text) {
+            windows->show(*scene, 10, 10);
+            frame();
+            bool on = false;
+            for (const std::shared_ptr<jadefx::MenuItem>& item : windows->getItems().items()) {
+                if (item && item->getText() == text && item->getGraphic()) {
+                    for (jadefx::Node* check : item->getGraphic()->getElementsByClassName("ide-window-check")) {
+                        on = on || check->isVisible();
+                    }
+                }
+            }
+            windows->hide();
+            frame();
+            return on;
+        };
+        // The page by that name the window shows now. A tab behind another is not shown.
+        auto showing = [&](const std::string& name) -> ide::IdePane* {
+            for (jadefx::Node* node : scene->getRoot()->getElementsByClassName("ide-pane")) {
+                auto* pane = dynamic_cast<ide::IdePane*>(node);
+                if (pane != nullptr && pane->name() == name) {
+                    return pane;
+                }
+            }
+            return nullptr;
+        };
+
+        // Search docked beside the left explorer above, so the explorer is behind it.
+        expect(checked("Game Explorer") && checked("Current Scene") && checked("Properties") && checked("Console") &&
+                   checked("Search"),
+               "every window starts open, and has a check");
+        expect(!checked("New Scene View"), "New Scene View has no check");
+        expect(showing("Game Explorer") == nullptr && showing("Search") != nullptr,
+               "the left explorer is behind Search");
+        pick("Game Explorer");
+        ide::IdePane* explorer = showing("Game Explorer");
+        expect(explorer != nullptr && showing("Search") == nullptr, "picking a window behind a tab brings it forward");
+        expect(checked("Game Explorer"), "and it keeps its check");
+        pick("Game Explorer");
+        expect(showing("Game Explorer") == nullptr && !checked("Game Explorer"), "picking a showing window closes it");
+        expect(showing("Search") != nullptr, "and the tab beside it shows");
+        pick("Game Explorer");
+        ide::IdePane* reopened = showing("Game Explorer");
+        expect(reopened != nullptr && checked("Game Explorer"), "picking a closed window opens it");
+        expect(reopened == explorer, "it opens as the same page it was");
+        expect(reopened != nullptr && reopened->getAbsoluteX() < 300, "in the dock it closed from");
+
+        pick("Properties");
+        expect(showing("Properties") == nullptr && !checked("Properties"), "Properties closes from the menu");
+        pick("Properties");
+        ide::IdePane* properties = showing("Properties");
+        expect(properties != nullptr && checked("Properties"), "and opens again");
+        expect(properties != nullptr && properties->getAbsoluteX() > 640, "on the right, where it was");
+
+        pick("Search");
+        expect(showing("Search") != nullptr, "Search comes forward from behind the explorer");
+        pick("Search");
+        expect(showing("Search") == nullptr && !checked("Search"), "Search closes from the menu");
+        pick("Search");
+        auto* search_again = dynamic_cast<ide::IdeSearch*>(showing("Search"));
+        expect(search_again != nullptr && checked("Search") && search_again->findInput().text() == "kept",
+               "Search opens again from the menu with its search");
+
+        // Each pick makes another view, which closes like any tab.
+        pick("New Scene View");
+        ide::IdePane* view = showing("Scene View 2");
+        expect(view != nullptr && view->closable(), "New Scene View docks a closable Scene View 2");
+        pick("New Scene View");
+        expect(showing("Scene View 3") != nullptr, "the next one is Scene View 3");
+        jadefx::TabPane* strip = nullptr;
+        for (jadefx::Node* node = showing("Scene View 3"); node != nullptr && strip == nullptr; node = node->getParent()) {
+            strip = dynamic_cast<jadefx::TabPane*>(node);
+        }
+        expect(strip != nullptr, "the new views share a tab strip");
+        if (strip != nullptr) {
+            const std::vector<std::shared_ptr<jadefx::Tab>> tabs = strip->getTabs().items();
+            for (const std::shared_ptr<jadefx::Tab>& tab : tabs) {
+                if (tab && (tab->getText() == "Scene View 2" || tab->getText() == "Scene View 3")) {
+                    strip->close(tab);
+                }
+            }
+        }
+        frame();
+        expect(showing("Scene View 2") == nullptr && showing("Scene View 3") == nullptr,
+               "a new view closes like any tab");
+    }
+
     failures += RunThemeTests(*scene);
     failures += RunFindReplaceTests(layout.simulation());
     failures += RunPreferencesTests();

@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <string>
 #include <vector>
 
 namespace engine_core {
@@ -20,7 +21,8 @@ class Runner;
 // Scene viewport. Draws each TestTriangle parented under the root DataModel
 // at that instance's position. Heartbeat steps those instances, 90 degrees
 // per simulation second. A paused simulation leaves the angles where they
-// are. This page stays open.
+// are. The studio's first view stays open. Another, from Window > New Scene
+// View, is closable, and draws the same place.
 // The corner label is how many times this view is painted per second, averaged
 // over a quarter of a second. That count keeps moving while the simulation is paused.
 //
@@ -29,7 +31,7 @@ class Runner;
 // losing focus ends whatever was still held.
 class GameView : public ide::IdePane {
 public:
-    explicit GameView(Runner& runner);
+    explicit GameView(Runner& runner, std::string name = "Scene View", bool closable = false);
 
 protected:
     void layoutChildren() override;

@@ -26,6 +26,7 @@ namespace ide {
 
 class IdeDock;
 class IdePane;
+enum class DropSide;
 class IdeScriptEditor;
 class IdeSearch;
 class McpServer;
@@ -53,6 +54,11 @@ class PropertiesPanel;
 // window ask first when the place has changes a save would write.
 // File > Preferences (Cmd+,) opens the Preferences window. The theme it picks
 // is kept in the config folder and drawn with from the start.
+// The Window menu lists the studio's one-of-a-kind windows: the two explorers,
+// Properties, the console, and Search. A check marks each one that is open.
+// Picking a closed one opens it where it last was, picking one hidden behind
+// another tab brings it forward, and picking one that is showing closes it.
+// Below them, New Scene View docks another view of the place beside the first.
 class IdeLayout {
 public:
     // windowWidth and windowHeight are the window size in points, used to place the splitters.
@@ -147,6 +153,19 @@ private:
     // replace hidden. A selection on one line in the focused
     // editor becomes the find text.
     void open_search(bool replace, jadefx::Scene* scene);
+    // Adds the one-of-a-kind windows and New Scene View to the Window menu.
+    void fill_window_menu(jadefx::Menu& menu);
+    struct WindowEntry;
+    // Runs open when no dock holds pane. Otherwise brings its tab forward, or
+    // closes it when it is already the tab showing.
+    void toggle_window(IdePane* pane, const std::function<void()>& open);
+    // Docks the page in the dock its tab last closed from, or else where its home puts it.
+    void show_window(WindowEntry& entry);
+    // Keeps the dock the page's tab closes from, for show_window. Called each time it is docked.
+    void watch_close(WindowEntry& entry);
+    // A new dock on one side of target, depth points across. Target null is the whole work area.
+    IdeDock* dock_beside(jadefx::Node* target, DropSide side, double depth);
+    void new_scene_view();
     void noteScriptFocus();
     void adoptDock(const std::shared_ptr<IdeDock>& dock);
     void onTabDrag(IdeDock& from, const jadefx::TabDrag& drag);
@@ -208,6 +227,10 @@ private:
     // Kept while its tab is closed, so reopening it keeps the search.
     std::shared_ptr<IdeSearch> search_;
     std::vector<std::weak_ptr<class IdeExplorer>> explorers_;
+    // The windows the Window menu opens and closes, besides Search.
+    std::vector<std::unique_ptr<WindowEntry>> windows_;
+    // Scene views opened so far, which numbers the next one's tab.
+    int scene_views_ = 1;
     std::unique_ptr<McpServer> mcp_;
     struct McpIdentity;
     // Null while the server is off.

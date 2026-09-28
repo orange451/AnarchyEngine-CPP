@@ -330,6 +330,50 @@ private:
     std::function<void()> action_;
 };
 
+// A Window menu row's graphic: a check while the window is open, then the
+// window's icon. The menu lays its rows out each time it opens, and the check
+// is worked out then. Check.png is white and takes the menu's text color.
+// Without open, the check never shows; the slot keeps the icons in line.
+class WindowGraphic : public jadefx::HBox {
+public:
+    WindowGraphic(const std::string& icon, std::function<bool()> open) : open_(std::move(open)) {
+        constexpr double kIcon = 16;
+        constexpr double kGap = 4;
+        setSpacing(kGap);
+        setAlignment(jadefx::Pos::CenterLeft);
+        setMouseTransparent(true);
+        auto slot = jadefx::make<jadefx::StackPane>();
+        slot->setMouseTransparent(true);
+        slot->setMinSize(kIcon, kIcon);
+        slot->setPrefSize(kIcon, kIcon);
+        slot->setMaxSize(kIcon, kIcon);
+        if (std::shared_ptr<jadefx::ImageView> check = icon_graphic("Check.png")) {
+            check->getClassList().add("ide-window-check");
+            check->setStyle("image-color: currentColor;");
+            check->setVisible(false);
+            check_ = check.get();
+            slot->getChildren().add(std::move(check));
+        }
+        getChildren().add(std::move(slot));
+        if (std::shared_ptr<jadefx::ImageView> view = icon_graphic(icon)) {
+            getChildren().add(std::move(view));
+        }
+        setPrefWidth(kIcon + kGap + kIcon);
+    }
+
+protected:
+    void layoutChildren() override {
+        if (check_ != nullptr) {
+            check_->setVisible(open_ && open_());
+        }
+        HBox::layoutChildren();
+    }
+
+private:
+    std::function<bool()> open_;
+    jadefx::Node* check_ = nullptr;
+};
+
 // testing: a play session is active. stepping: that session is executing.
 // Edit mode enables Test. A running test enables Pause and Stop. A paused
 // test enables Resume and Stop.
@@ -348,6 +392,14 @@ void ShowSession(jadefx::Node& test, jadefx::Node& pause, jadefx::Node& resume, 
 struct IdeLayout::Clip {
     std::vector<engine_core::InstanceId> ids;
     bool held = false;
+};
+
+// A page the Window menu opens and closes.
+struct IdeLayout::WindowEntry {
+    std::shared_ptr<IdePane> pane;
+    // Makes a dock for the page when the one it last closed from is gone.
+    std::function<IdeDock*()> home;
+    std::weak_ptr<IdeDock> last;
 };
 
 IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesystem::path& config)
@@ -447,10 +499,14 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     auto view = jadefx::make<jadefx::Menu>("View");
     AddItem(*view, "Maybe :)", "Smile.png", 0, 0);
 
+    // Filled once the windows it lists are docked, below.
+    auto window = jadefx::make<jadefx::Menu>("Window");
+
     auto menuBar = jadefx::make<jadefx::MenuBar>();
     menuBar->getMenus().add(file);
     menuBar->getMenus().add(edit);
     menuBar->getMenus().add(view);
+    menuBar->getMenus().add(window);
     menuBar->setPrefWidthRatio(1);
 
     auto top = jadefx::make<jadefx::VBox>();
@@ -576,6 +632,156 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     root_->setTop(top);
     root_->setCenter(horizontal);
     root_->setBottom(status);
+
+    // The Window menu's pages, kept while their tabs are closed. When the dock
+    // one closed from is gone, it opens again where this layout first put it.
+    auto keep = [this](std::shared_ptr<IdePane> pane, std::function<IdeDock*()> home) {
+        auto entry = std::make_unique<WindowEntry>();
+        entry->pane = std::move(pane);
+        entry->home = std::move(home);
+        watch_close(*entry);
+        windows_.push_back(std::move(entry));
+    };
+    keep(gameExplorer, [this] { return dock_beside(nullptr, DropSide::Left, kSideWidth); });
+    keep(sceneExplorer, [this] { return dock_beside(nullptr, DropSide::Right, kSideWidth); });
+    keep(properties_->dock_widget(), [this, above = sceneExplorer.get()] {
+        if (IdeDock* dock = dockContaining(above)) {
+            return dock_beside(dock, DropSide::Bottom, dock->getHeight() * 0.5);
+        }
+        return dock_beside(nullptr, DropSide::Right, kSideWidth);
+    });
+    keep(console, [this] {
+        IdeDock* above = sceneDock_ != nullptr && sceneDock_->getParent() != nullptr ? sceneDock_ : nullptr;
+        return dock_beside(above, DropSide::Bottom, kConsoleHeight);
+    });
+    fill_window_menu(*window);
+}
+
+void IdeLayout::fill_window_menu(jadefx::Menu& menu) {
+    auto add = [&menu](const std::string& label, const std::string& icon, std::function<bool()> open) {
+        auto item = jadefx::make<jadefx::MenuItem>(label);
+        item->setGraphic(jadefx::make<WindowGraphic>(icon, std::move(open)));
+        jadefx::MenuItem* raw = item.get();
+        menu.getItems().add(std::move(item));
+        return raw;
+    };
+    for (const std::unique_ptr<WindowEntry>& entry : windows_) {
+        IdePane* pane = entry->pane.get();
+        WindowEntry* kept = entry.get();
+        add(pane->name(), pane->iconFile(), [this, pane] { return dockContaining(pane) != nullptr; })
+            ->setOnAction([this, pane, kept](jadefx::ActionEvent&) {
+                toggle_window(pane, [this, kept] { show_window(*kept); });
+            });
+    }
+    // Made the first time it opens, and docked by open_search.
+    add("Search", "Search.png", [this] { return search_ && dockContaining(search_.get()) != nullptr; })
+        ->setOnAction([this](jadefx::ActionEvent&) {
+            toggle_window(search_.get(), [this] { open_search(false, scene_); });
+        });
+    menu.getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
+    add("New Scene View", "Camera.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { new_scene_view(); });
+}
+
+void IdeLayout::toggle_window(IdePane* pane, const std::function<void()>& open) {
+    IdeDock* dock = dockContaining(pane);
+    if (dock == nullptr) {
+        open();
+        return;
+    }
+    const std::vector<std::shared_ptr<jadefx::Tab>> tabs = dock->tabs()->getTabs().items();
+    for (const std::shared_ptr<jadefx::Tab>& tab : tabs) {
+        if (!tab || tab->getContent() != pane) {
+            continue;
+        }
+        if (tab->isSelected()) {
+            dock->tabs()->close(tab);
+        } else {
+            dock->tabs()->select(tab);
+        }
+        return;
+    }
+}
+
+void IdeLayout::show_window(WindowEntry& entry) {
+    IdeDock* target = nullptr;
+    // Still in a window, with the tabs that were beside this one.
+    if (const std::shared_ptr<IdeDock> last = entry.last.lock()) {
+        if (last->getParent() != nullptr && std::find(docks_.begin(), docks_.end(), last) != docks_.end()) {
+            target = last.get();
+        }
+    }
+    if (target == nullptr && entry.home) {
+        target = entry.home();
+    }
+    if (target == nullptr) {
+        return;
+    }
+    target->dock(entry.pane);
+    watch_close(entry);
+}
+
+void IdeLayout::watch_close(WindowEntry& entry) {
+    IdeDock* dock = dockContaining(entry.pane.get());
+    if (dock == nullptr) {
+        return;
+    }
+    for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+        if (!tab || tab->getContent() != entry.pane.get()) {
+            continue;
+        }
+        // The tab keeps this through drags to other docks and windows.
+        std::weak_ptr<jadefx::Tab> weak = tab;
+        WindowEntry* kept = &entry;
+        tab->setOnCloseRequest([this, weak, kept](jadefx::TabCloseRequest&) {
+            const std::shared_ptr<jadefx::Tab> live = weak.lock();
+            const IdeDock* from = live ? dockForPane(live->getTabPane()) : nullptr;
+            for (const std::shared_ptr<IdeDock>& candidate : docks_) {
+                if (candidate.get() == from) {
+                    kept->last = candidate;
+                }
+            }
+        });
+        return;
+    }
+}
+
+IdeDock* IdeLayout::dock_beside(jadefx::Node* target, DropSide side, double depth) {
+    auto fresh = jadefx::make<IdeDock>();
+    adoptDock(fresh);
+    if (target == nullptr && root_->getCenter() == nullptr) {
+        // Nothing is docked in the main window. The new dock fills it.
+        workArea_ = fresh;
+        root_->setCenter(fresh);
+        return fresh.get();
+    }
+    if (target == nullptr) {
+        target = workArea_.get();
+    }
+    if (target == nullptr) {
+        forgetDock(fresh);
+        return nullptr;
+    }
+    const bool across = side == DropSide::Left || side == DropSide::Right;
+    const double span = across ? target->getWidth() : target->getHeight();
+    const double fraction = span > 1.0 ? std::clamp(depth / span, 0.12, 0.5) : 0.25;
+    auto share = [this](jadefx::Node* node) { return shareNode(node); };
+    auto replaced = [this](jadefx::Node& owner, const std::shared_ptr<jadefx::Node>& previous,
+                           const std::shared_ptr<jadefx::Node>& replacement) { noteReplaced(owner, previous, replacement); };
+    if (!splitEdge(*target, fresh, side, fraction, share, replaced)) {
+        forgetDock(fresh);
+        return nullptr;
+    }
+    rebindUtilities();
+    return fresh.get();
+}
+
+void IdeLayout::new_scene_view() {
+    IdeDock* home = editorHome();
+    if (home == nullptr) {
+        return;
+    }
+    ++scene_views_;
+    home->dock(jadefx::make<runner::GameView>(runner_, "Scene View " + std::to_string(scene_views_), true));
 }
 
 engine_core::Engine& IdeLayout::simulation() { return runner_.simulation(); }
@@ -1549,7 +1755,9 @@ void IdeLayout::routeReveal(jadefx::KeyEvent& event, jadefx::Scene& scene) {
     }
     bool any = false;
     for (const std::weak_ptr<IdeExplorer>& weak : explorers_) {
-        if (const std::shared_ptr<IdeExplorer> explorer = weak.lock()) {
+        // A closed explorer is kept for the Window menu, and has nothing to show.
+        const std::shared_ptr<IdeExplorer> explorer = weak.lock();
+        if (explorer && dockContaining(explorer.get()) != nullptr) {
             any = explorer->reveal_selection() || any;
         }
     }

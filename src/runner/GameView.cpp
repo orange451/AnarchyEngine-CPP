@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <string>
+#include <utility>
 
 namespace runner {
 namespace {
@@ -31,8 +32,8 @@ int FramesPerSecond(double dt) {
 
 }  // namespace
 
-GameView::GameView(Runner& runner)
-    : ide::IdePane("Scene View", false),
+GameView::GameView(Runner& runner, std::string name, bool closable)
+    : ide::IdePane(std::move(name), closable),
       game_(&runner.simulation().datamodel()),
       engine_(&runner.simulation()) {
     setIconFile("Camera.png");

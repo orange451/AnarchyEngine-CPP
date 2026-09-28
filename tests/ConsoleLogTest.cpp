@@ -1,4 +1,5 @@
 #include "ide/ConsoleLog.hpp"
+#include "ide/IdeTheme.hpp"
 
 #include "ScriptRuntime.hpp"
 #include "TableSnapshot.hpp"
@@ -272,14 +273,37 @@ int main() {
         const int brace = probe->absolutePosition(0, Column(*probe, 0, "{...}"));
         const jadefx::StyleSpans spans = probe->getStyleSpans(brace, brace + 5);
         Expect(!probe->resolveStyle(spans.spans().front().style).hasFill, "a toggle sets no fill of its own");
+        auto linksTakeText = [](const ide::ConsoleLog& console, const char* message) {
+            const jadefx::Color link = console.themeColor(jadefx::ThemeColor::Link);
+            const jadefx::Color text = console.computedStyle().color;
+            Expect(link.r == text.r && link.g == text.g && link.b == text.b && link.a == text.a, message);
+        };
         for (const char* theme : {jadefx::Theme::LIGHT, jadefx::Theme::DARK}) {
             probeScene->setUserAgentStylesheet(theme);
             probeScene->layout(600, 300, 0);
-            const jadefx::Color link = probe->themeColor(jadefx::ThemeColor::Link);
-            const jadefx::Color text = probe->computedStyle().color;
-            Expect(link.r == text.r && link.g == text.g && link.b == text.b && link.a == text.a,
-                   "links take the theme's text color");
+            linksTakeText(*probe, "links take the theme's text color");
         }
+
+        // In the studio the console pane sizes the log with an inline style, and each studio
+        // theme sets its own --link-color. Only the console's links ignore it.
+        auto console = jadefx::make<ide::ConsoleLog>();
+        console->setStyle("width: 100%; height: 100%;");
+        auto elsewhere = jadefx::make<jadefx::StyledTextArea>();
+        auto studio = jadefx::make<jadefx::HBox>();
+        studio->getChildren().add(console);
+        studio->getChildren().add(elsewhere);
+        auto studioScene = jadefx::make<jadefx::Scene>(studio, 600, 300);
+        for (const char* theme : {"light", "dark", "classic-studio", "dracula", "monokai", "nord", "one-dark",
+                                  "solarized-dark", "solarized-light"}) {
+            ide::set_current_theme(ide::shipped_theme(theme));
+            studioScene->layout(600, 300, 0);
+            linksTakeText(*console, "links keep the text color under a studio theme and a sizing style");
+            const jadefx::Color link = elsewhere->themeColor(jadefx::ThemeColor::Link);
+            const jadefx::Color themed = ide::theme_color("--link-color");
+            Expect(link.r == themed.r && link.g == themed.g && link.b == themed.b,
+                   "a text area outside the console keeps the theme's link color");
+        }
+        ide::set_current_theme(ide::shipped_theme("light"));
     }
 
     log->clearLog();

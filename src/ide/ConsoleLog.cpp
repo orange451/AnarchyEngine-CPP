@@ -93,8 +93,10 @@ ConsoleLog::ConsoleLog() {
     suspendUndo();
     defineStyles();
     // What opens or closes a table and printed text are links, and keep the theme's text color.
-    // The toggle class only marks the braces, so it sets no fill.
-    setStyle("--link-color: currentColor;");
+    // The toggle class only marks the braces, so it sets no fill. This is the log's own
+    // stylesheet, not its inline style, which the pane holding it replaces to size it.
+    getClassList().add("console-log");
+    setStylesheet(".console-log { --link-color: currentColor; }");
     rows_.assign(static_cast<std::size_t>(paragraphCount()), Row{});
     // A toggle and a printed line are separate links, so the spot tells which one was clicked.
     setOnLinkClicked([this](const jadefx::LinkEvent& event) {

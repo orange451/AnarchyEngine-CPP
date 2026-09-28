@@ -751,6 +751,68 @@ std::vector<InstanceId> build(DataModel& world, const std::vector<PlanNode>& pla
     return ids;
 }
 
+// A new instance from its disk file, with its GUID, under parent.
+InstanceId create_from(DataModel& world, const PlanNode& node, InstanceId parent) {
+    DataModel& object = find_factory(node.class_name)(world);
+    const InstanceId id = object.id();
+    world.set_guid(id, node.guid);
+    world.set_name(id, node.name);
+    apply_properties(object, node);
+    if (auto* lua = dynamic_cast<LuaSource*>(&object)) {
+        lua->set_source(node.source);
+    }
+    world.set_parent(id, parent);
+    return id;
+}
+
+// One property from the disk's file, or the class default when the file no
+// longer has it. A key the class does not own is an extra.
+void set_key(DataModel& world, InstanceId id, DataModel& object, const std::string& key, const JsonValue* value) {
+    std::string error;
+    if (value != nullptr) {
+        if (!object.load_property(key, *value, error)) {
+            world.set_extra_property(id, key, *value);
+        }
+        return;
+    }
+    PropertyBag defaults;
+    object.default_properties(defaults);
+    if (const JsonValue* fallback = bag_find(defaults, key)) {
+        object.load_property(key, *fallback, error);
+    } else {
+        world.erase_extra_property(id, key);
+    }
+}
+
+// id's children in the order a load gives them: those doc's "children" lists,
+// in that order, then the rest by GUID. A child moves by leaving and rejoining
+// its parent, since setting the same parent does nothing.
+void order_children_as(DataModel& world, InstanceId id, const JsonValue& doc) {
+    std::vector<std::string> listed;
+    if (const JsonValue* children = doc.find("children"); children != nullptr && children->is_array()) {
+        for (const JsonValue& item : children->items()) {
+            if (item.is_string()) {
+                listed.push_back(item.as_string());
+            }
+        }
+    }
+    const std::vector<InstanceId> now = world.get_children(id);
+    std::vector<InstanceId> order = now;
+    auto rank = [&](InstanceId child) {
+        const std::string guid = world.guid(child);
+        const auto at = std::find(listed.begin(), listed.end(), guid);
+        return std::make_pair(static_cast<std::size_t>(at - listed.begin()), at == listed.end() ? guid : std::string());
+    };
+    std::stable_sort(order.begin(), order.end(), [&](InstanceId a, InstanceId b) { return rank(a) < rank(b); });
+    if (order == now) {
+        return;
+    }
+    for (InstanceId child : order) {
+        world.set_parent(child, DataModel::kNoParent);
+        world.set_parent(child, id);
+    }
+}
+
 // History off while the tree is built. Afterwards the loaded tree is the
 // place, and nothing from before is undoable.
 class Rebuild {
@@ -1530,8 +1592,10 @@ Project::Comparison Project::compare_disk() const {
         const JsonValue mine = studio_json(studio->second);
         const JsonValue was = in_base ? base_json(base->second) : JsonValue::object();
         const std::string path = in_base ? base->second.props_path : node.props_path;
-        // A new class is a new instance: taken whole, or kept whole.
-        if (index != 0 && in_base && !same_value(was.find("class"), disk.find("class"))) {
+        // A new class is a new instance: taken whole, or kept whole. When the
+        // studio already has the disk's class, the rest merges key by key.
+        if (index != 0 && in_base && !same_value(was.find("class"), disk.find("class")) &&
+            !same_value(mine.find("class"), disk.find("class"))) {
             if (differs(was, mine)) {
                 add_row(node.guid, path, SaveConflict::Kind::EditedOutside, "class", display_value(mine.find("class")),
                         display_value(disk.find("class")));
@@ -1578,6 +1642,265 @@ DiskScan Project::scan_disk() const {
     out.conflicts = std::move(compared.rows);
     out.has_disk_changes = !compared.actions.empty();
     return out;
+}
+
+DiskScan Project::apply_disk(const std::vector<DiskChoice>& choices) {
+    using Type = Comparison::Action::Type;
+    DataModel& world = *game_;
+    if (world.simulation_running()) {
+        fail("changes from disk load in edit mode; stop the test first");
+    }
+    Comparison compared = compare_disk();
+    DiskScan out;
+    for (const DiskChoice& choice : choices) {
+        if (std::find(compared.rows.begin(), compared.rows.end(), choice.conflict) == compared.rows.end()) {
+            out.skipped.push_back(choice.conflict);
+            continue;
+        }
+        if (!choice.disk) {
+            settle(compared, choice.conflict);
+            continue;
+        }
+        Comparison::Action action;
+        action.guid = choice.conflict.guid;
+        if (choice.conflict.kind == SaveConflict::Kind::DeletedOutside) {
+            action.type = Type::Destroy;
+        } else if (choice.conflict.key.empty()) {
+            action.type = Type::Restore;
+        } else if (choice.conflict.key == "class") {
+            action.type = Type::Recreate;
+        } else {
+            action.type = Type::Set;
+            action.key = choice.conflict.key;
+        }
+        compared.actions.push_back(std::move(action));
+    }
+    if (!compared.actions.empty()) {
+        // An edit still open is its own step; this one is "Changes from Disk".
+        world.history().end_gesture();
+        const std::optional<std::string> recording = world.history().try_begin_recording("Changes from Disk");
+        apply_changes(compared, out.loaded);
+        if (recording) {
+            world.history().finish_recording(*recording, FinishRecordingOperation::Commit);
+        }
+        world.capture_place();
+    }
+    Comparison after = compare_disk();
+    refresh_base(after);
+    out.conflicts = std::move(after.rows);
+    out.has_disk_changes = !after.actions.empty();
+    return out;
+}
+
+void Project::settle(const Comparison& compared, const SaveConflict& conflict) {
+    if (conflict.kind == SaveConflict::Kind::DeletedOutside) {
+        // Kept: a save writes it as a new file.
+        files_.erase(conflict.guid);
+        return;
+    }
+    const auto disk = compared.on_disk.find(conflict.guid);
+    if (disk == compared.on_disk.end()) {
+        return;
+    }
+    const std::size_t index = disk->second;
+    if (conflict.key.empty()) {
+        // The studio's delete stands. The base takes the disk's files under it
+        // too, so a save removes them all.
+        std::set<std::size_t> within{index};
+        for (std::size_t at = index; at < compared.plan.size(); ++at) {
+            if (at != index && within.count(compared.plan_parents[at]) == 0) {
+                continue;
+            }
+            within.insert(at);
+            files_[compared.plan[at].guid] = from_disk(compared.plan[at], compared.disk_parent(at));
+        }
+        return;
+    }
+    const detail::PlanNode& node = compared.plan[index];
+    const auto base = files_.find(conflict.guid);
+    if (base == files_.end() || conflict.key == "class") {
+        files_[conflict.guid] = from_disk(node, compared.disk_parent(index));
+        return;
+    }
+    Files& files = base->second;
+    if (conflict.key == "Parent") {
+        files.parent = compared.disk_parent(index);
+    } else if (conflict.key == "Source") {
+        files.source_bytes = node.source;
+    } else {
+        if (const JsonValue* value = node.doc.find(conflict.key)) {
+            files.props.set(conflict.key, *value);
+        } else {
+            files.props.erase(conflict.key);
+        }
+        files.props_bytes = write_json(files.props);
+    }
+}
+
+void Project::apply_changes(const Comparison& compared, std::vector<std::string>& loaded) {
+    using Type = Comparison::Action::Type;
+    using Action = Comparison::Action;
+    DataModel& world = *game_;
+    auto note = [&loaded](const std::string& name) {
+        if (std::find(loaded.begin(), loaded.end(), name) == loaded.end()) {
+            loaded.push_back(name);
+        }
+    };
+    auto each = [&compared](Type type, const std::function<void(const Action&)>& run) {
+        for (const Action& action : compared.actions) {
+            if (action.type == type) {
+                run(action);
+            }
+        }
+    };
+    // Parents that took a child from the disk, to order as the disk does.
+    std::set<std::string> received;
+
+    // New instances first, parents before children, so every later step finds them.
+    each(Type::Create, [&](const Action& action) {
+        const std::size_t index = compared.on_disk.at(action.guid);
+        const std::string parent = compared.disk_parent(index);
+        if (const std::optional<InstanceId> up = world.find_guid(parent)) {
+            create_from(world, compared.plan[index], *up);
+            received.insert(parent);
+            note(compared.plan[index].name);
+        }
+    });
+    // An instance the studio deleted, back from the disk with everything under it.
+    each(Type::Restore, [&](const Action& action) {
+        const std::size_t top = compared.on_disk.at(action.guid);
+        std::set<std::size_t> within{top};
+        for (std::size_t index = top; index < compared.plan.size(); ++index) {
+            if (index != top && within.count(compared.plan_parents[index]) == 0) {
+                continue;
+            }
+            within.insert(index);
+            const detail::PlanNode& node = compared.plan[index];
+            const std::string parent = compared.disk_parent(index);
+            const std::optional<InstanceId> up = world.find_guid(parent);
+            if (world.find_guid(node.guid) || !up) {
+                continue;
+            }
+            create_from(world, node, *up);
+            received.insert(parent);
+            note(node.name);
+        }
+    });
+    // A new class is a new instance with the same GUID, children, and place among its siblings.
+    each(Type::Recreate, [&](const Action& action) {
+        const std::optional<InstanceId> old = world.find_guid(action.guid);
+        if (!old || *old == 0) {
+            return;
+        }
+        const detail::PlanNode& node = compared.plan[compared.on_disk.at(action.guid)];
+        const InstanceId parent = world.parent(*old);
+        const std::vector<InstanceId> siblings = world.get_children(parent);
+        const std::vector<InstanceId> kids = world.get_children(*old);
+        for (InstanceId kid : kids) {
+            world.set_parent(kid, DataModel::kNoParent);
+        }
+        world.destroy(*old);
+        const InstanceId made = create_from(world, node, parent);
+        for (InstanceId kid : kids) {
+            world.set_parent(kid, made);
+        }
+        for (InstanceId sibling : siblings) {
+            const InstanceId at = sibling == *old ? made : sibling;
+            world.set_parent(at, DataModel::kNoParent);
+            world.set_parent(at, parent);
+        }
+        note(node.name);
+    });
+    // Keys, shallowest instance first, so a parent moves before a child moves under it.
+    std::vector<const Action*> sets;
+    for (const Action& action : compared.actions) {
+        if (action.type == Type::Set) {
+            sets.push_back(&action);
+        }
+    }
+    auto depth = [&](const Action* action) {
+        std::size_t out = 0;
+        for (std::size_t at = compared.on_disk.at(action->guid); at != 0; at = compared.plan_parents[at]) {
+            ++out;
+        }
+        return out;
+    };
+    std::stable_sort(sets.begin(), sets.end(), [&](const Action* a, const Action* b) { return depth(a) < depth(b); });
+    for (const Action* action : sets) {
+        const std::optional<InstanceId> id = world.find_guid(action->guid);
+        if (!id) {
+            continue;
+        }
+        const std::size_t index = compared.on_disk.at(action->guid);
+        const detail::PlanNode& node = compared.plan[index];
+        DataModel& object = *id == 0 ? world : *world.instance(*id);
+        if (action->key == "Name") {
+            world.set_name(*id, node.name);
+        } else if (action->key == "Parent") {
+            const std::string parent = compared.disk_parent(index);
+            const std::optional<InstanceId> up = world.find_guid(parent);
+            bool cycle = false;
+            for (InstanceId cursor = up ? *up : 0; up && cursor != 0 && cursor != DataModel::kNoParent;
+                 cursor = world.parent(cursor)) {
+                cycle = cycle || cursor == *id;
+            }
+            if (up && !cycle && world.parent(*id) != *up) {
+                world.set_parent(*id, *up);
+                received.insert(parent);
+            }
+        } else if (action->key == "Source") {
+            if (auto* lua = dynamic_cast<LuaSource*>(&object)) {
+                lua->set_source(node.source);
+            }
+        } else if (action->key == "children") {
+            order_children_as(world, *id, node.doc);
+        } else {
+            set_key(world, *id, object, action->key, node.doc.find(action->key));
+        }
+        note(node.name);
+    }
+    for (const std::string& parent : received) {
+        const bool open = std::any_of(compared.rows.begin(), compared.rows.end(), [&](const SaveConflict& row) {
+            return row.guid == parent && row.key == "children";
+        });
+        const std::optional<InstanceId> id = world.find_guid(parent);
+        const auto disk = compared.on_disk.find(parent);
+        if (!open && id && disk != compared.on_disk.end()) {
+            order_children_as(world, *id, compared.plan[disk->second].doc);
+        }
+    }
+    // Deleted on disk, last, after anything under them moved out.
+    each(Type::Destroy, [&](const Action& action) {
+        if (const std::optional<InstanceId> id = world.find_guid(action.guid); id && *id != 0) {
+            note(world.name(*id));
+            world.destroy_tree(*id);
+        }
+    });
+}
+
+void Project::refresh_base(const Comparison& after) {
+    std::set<std::string> open;
+    for (const SaveConflict& row : after.rows) {
+        open.insert(row.guid);
+    }
+    for (std::size_t index = 0; index < after.plan.size(); ++index) {
+        const detail::PlanNode& node = after.plan[index];
+        if (open.count(node.guid) != 0) {
+            continue;  // Still in question: its base stays until a choice or a save.
+        }
+        // Added on disk under an instance the studio deleted: that instance's row carries it.
+        if (files_.count(node.guid) == 0 && after.in_studio.count(node.guid) == 0) {
+            continue;
+        }
+        files_[node.guid] = from_disk(node, after.disk_parent(index));
+    }
+    for (auto it = files_.begin(); it != files_.end();) {
+        if (after.on_disk.count(it->first) == 0 && open.count(it->first) == 0) {
+            it = files_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {

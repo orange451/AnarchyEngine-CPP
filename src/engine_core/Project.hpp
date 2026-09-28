@@ -84,6 +84,12 @@ struct DiskScan {
     bool has_disk_changes = false;
 };
 
+// A person's pick for one row: disk true takes the disk's side.
+struct DiskChoice {
+    SaveConflict conflict;
+    bool disk = false;
+};
+
 // Classes a project file may name. The built-ins are DataModel, GameObject,
 // Script, ModuleScript, Folder, and TestTriangle. A later class registers here.
 using ProjectFactory = DataModel& (*)(DataModel& world);
@@ -149,6 +155,13 @@ public:
     // with the place. Touches nothing. Throws ProjectError when src/ does not
     // read as a project, or holds a value its class rejects.
     DiskScan scan_disk() const;
+    // Edit mode. Loads every change only the disk made, and the disk's side of
+    // each choice, into the place as one undo step named "Changes from Disk".
+    // The studio's side of a choice is settled in the base, so the next save
+    // writes the studio's value. Scans first: a choice whose row changed since
+    // it was listed is skipped, and listed again. Then the base takes the
+    // disk's files wherever no row is left. Returns the rows still open.
+    DiskScan apply_disk(const std::vector<DiskChoice>& choices = {});
     // File > New: stops a running simulation, destroys every instance, gives the
     // root a fresh GUID, captures the empty place, and drops undo history.
     static void reset_place(DataModel& game);
@@ -202,6 +215,12 @@ private:
     // Base, disk, and studio side by side, and what differs. Defined in Project.cpp.
     struct Comparison;
     Comparison compare_disk() const;
+    // The studio's side of a row: the base takes the disk's value there.
+    void settle(const Comparison& compared, const SaveConflict& conflict);
+    // The changes only the disk made, and the disk's side of chosen rows.
+    void apply_changes(const Comparison& compared, std::vector<std::string>& loaded);
+    // The base takes the disk's files wherever after has no row.
+    void refresh_base(const Comparison& after);
     // The files for each GUID. A node without properties takes its bytes from cache.
     static std::map<std::string, Files> plan_files(const std::vector<AuthoredNode>& tree, const std::string& src,
                                                    const std::unordered_map<std::string, Files>& cache);

@@ -1869,3 +1869,335 @@ TEST_CASE("D13 a key removed on disk is a change to load", "[D13][disk][project]
     REQUIRE(scan.conflicts.empty());
     REQUIRE(scan.has_disk_changes);
 }
+
+namespace {
+
+bool has_key(const DataModel& object, const char* key) {
+    engine_core::PropertyBag bag;
+    object.save_properties(bag);
+    return engine_core::bag_find(bag, key) != nullptr;
+}
+
+}  // namespace
+
+TEST_CASE("A1 disk changes load as one undo step; undone, a save writes the studio's values", "[A1][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, 0, "A").id();
+    engine_core::GameObject& b = add_part(game, 0, "B");
+    project.save();
+    edit_key(dir.path / leaf(game, a), "Size", triple(2, 2, 2));
+    // A studio edit whose gesture is still open.
+    b.set_color(rgb(1.f, 0.f, 0.f));
+
+    const engine_core::DiskScan result = project.apply_disk();
+    REQUIRE(result.loaded == std::vector<std::string>{"A"});
+    REQUIRE(result.conflicts.empty());
+    REQUIRE(has_key(*game.instance(a), "Size"));
+    REQUIRE_FALSE(project.scan_disk().has_disk_changes);
+
+    game.history().undo();
+    REQUIRE_FALSE(has_key(*game.instance(a), "Size"));
+    REQUIRE(b.color().r == 1.f);
+    REQUIRE(save_conflicts(project).empty());
+    REQUIRE(read_file(dir.path / leaf(game, a)).find("Size") == std::string::npos);
+}
+
+TEST_CASE("A2 each side of a row", "[A2][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& b = add_part(game, 0, "B");
+    project.save();
+    edit_key(dir.path / leaf(game, a.id()), "Color", triple(0, 0, 1));
+    edit_key(dir.path / leaf(game, b.id()), "Color", triple(0, 0, 1));
+    a.set_color(rgb(1.f, 0.f, 0.f));
+    b.set_color(rgb(1.f, 0.f, 0.f));
+    const std::vector<engine_core::SaveConflict> rows = project.scan_disk().conflicts;
+    REQUIRE(rows.size() == 2);
+    std::vector<engine_core::DiskChoice> choices;
+    for (const engine_core::SaveConflict& row : rows) {
+        choices.push_back({row, row.name == "A"});
+    }
+
+    const engine_core::DiskScan result = project.apply_disk(choices);
+    REQUIRE(result.conflicts.empty());
+    REQUIRE(result.skipped.empty());
+    REQUIRE(a.color().b == 1.f);
+    REQUIRE(b.color().r == 1.f);
+    // B's studio value is settled: a save writes it over the disk's.
+    REQUIRE(save_conflicts(project).empty());
+    REQUIRE(read_file(dir.path / leaf(game, b.id())).find("\"Color\": [1, 0, 0]") != std::string::npos);
+    REQUIRE(read_file(dir.path / leaf(game, a.id())).find("\"Color\": [0, 0, 1]") != std::string::npos);
+}
+
+TEST_CASE("A3 a row that changed after it was listed is skipped and listed again", "[A3][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    project.save();
+    const fs::path file = dir.path / leaf(game, a.id());
+    edit_key(file, "Color", triple(0, 0, 1));
+    a.set_color(rgb(1.f, 0.f, 0.f));
+    const std::vector<engine_core::SaveConflict> listed = project.scan_disk().conflicts;
+    REQUIRE(listed.size() == 1);
+    edit_key(file, "Color", triple(0, 1, 0));
+
+    const engine_core::DiskScan result = project.apply_disk({{listed[0], true}});
+    REQUIRE(result.skipped == listed);
+    REQUIRE(result.conflicts.size() == 1);
+    REQUIRE(result.conflicts[0].disk == "0, 1, 0");
+    REQUIRE(a.color().r == 1.f);
+}
+
+TEST_CASE("A4 a loaded property keeps the instance's id", "[A4][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, 0, "A").id();
+    const std::string guid = game.guid(a);
+    project.save();
+    edit_key(dir.path / leaf(game, a), "Size", triple(2, 2, 2));
+    project.apply_disk();
+    REQUIRE(game.find_guid(guid) == a);
+}
+
+TEST_CASE("A5 a rename and a move on disk load together, and the next save is quiet", "[A5][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, 0, "Box").id();
+    add_part(game, box, "Keep");
+    const InstanceId loose = add_part(game, 0, "Loose").id();
+    project.save();
+    const fs::path from = dir.path / leaf(game, loose);
+    const fs::path to = dir.path / box_dir(game, box) / ("Tight." + game.guid(loose) + ".json");
+    fs::rename(from, to);
+    edit_key(to, "Name", engine_core::JsonValue::string("Tight"));
+
+    const engine_core::DiskScan result = project.apply_disk();
+    REQUIRE(result.conflicts.empty());
+    REQUIRE(game.name(loose) == "Tight");
+    REQUIRE(game.parent(loose) == box);
+    project.save();
+    // Only the old parent's file may be rewritten: when it listed its children
+    // in order, the move left Loose in that list on disk.
+    const std::vector<std::string> quiet;
+    const std::vector<std::string> stale_list{"src/init.json"};
+    REQUIRE((project.last_save().written == quiet || project.last_save().written == stale_list));
+    REQUIRE(project.last_save().moved.empty());
+    REQUIRE(project.last_save().removed.empty());
+    REQUIRE_NOTHROW(Project::load(dir.path));
+}
+
+TEST_CASE("A6 an instance added on disk is made with its GUID, and the next save is quiet", "[A6][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, 0, "Box").id();
+    add_part(game, box, "Keep");
+    project.save();
+    write_file(dir.path / box_dir(game, box) / "Added.added-0001.json", meta("Folder", "added-0001", "Added"));
+
+    const engine_core::DiskScan result = project.apply_disk();
+    REQUIRE(result.loaded == std::vector<std::string>{"Added"});
+    const std::optional<InstanceId> added = game.find_guid("added-0001");
+    REQUIRE(added.has_value());
+    REQUIRE(game.parent(*added) == box);
+    REQUIRE(std::string(game.instance(*added)->class_name()) == "Folder");
+    project.save();
+    REQUIRE(project.last_save().written.empty());
+}
+
+TEST_CASE("A7 an instance deleted on disk is destroyed, and one undo brings it back", "[A7][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, 0, "A").id();
+    const std::string guid = game.guid(a);
+    project.save();
+    fs::remove(dir.path / leaf(game, a));
+
+    project.apply_disk();
+    REQUIRE_FALSE(game.find_guid(guid).has_value());
+    game.history().undo();
+    REQUIRE(game.find_guid(guid).has_value());
+}
+
+TEST_CASE("A8 rows for an instance deleted on disk", "[A8][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId keep = add_part(game, box, "Keep").id();
+    add_part(game, box, "Other");
+    project.save();
+    const std::string box_guid = game.guid(box);
+    const std::string keep_guid = game.guid(keep);
+    fs::remove_all(dir.path / box_dir(game, box));
+    game.game_object(keep)->set_color(rgb(1.f, 0.f, 0.f));
+    const std::vector<engine_core::SaveConflict> rows = project.scan_disk().conflicts;
+    REQUIRE(rows.size() == 2);
+
+    SECTION("the studio's side keeps them, and a save writes them back") {
+        std::vector<engine_core::DiskChoice> choices;
+        for (const engine_core::SaveConflict& row : rows) {
+            choices.push_back({row, false});
+        }
+        REQUIRE(project.apply_disk(choices).conflicts.empty());
+        REQUIRE(save_conflicts(project).empty());
+        Project loaded = Project::load(dir.path);
+        REQUIRE(loaded.datamodel().find_guid(keep_guid).has_value());
+    }
+    SECTION("the disk's side on the parent removes the child with it") {
+        const auto parent_row = std::find_if(rows.begin(), rows.end(),
+                                             [&](const engine_core::SaveConflict& row) { return row.guid == box_guid; });
+        REQUIRE(parent_row != rows.end());
+        REQUIRE(project.apply_disk({{*parent_row, true}}).conflicts.empty());
+        REQUIRE_FALSE(game.find_guid(box_guid).has_value());
+        REQUIRE_FALSE(game.find_guid(keep_guid).has_value());
+    }
+}
+
+TEST_CASE("A9 a row for an instance deleted in the studio and changed on disk", "[A9][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId keep = add_part(game, box, "Keep").id();
+    project.save();
+    const std::string box_guid = game.guid(box);
+    const std::string keep_guid = game.guid(keep);
+    const std::string folder = box_dir(game, box);
+    write_file(dir.path / folder / "Added.added-0001.json", meta("Folder", "added-0001", "Added"));
+    game.destroy(keep);
+    game.destroy(box);
+    const std::vector<engine_core::SaveConflict> rows = project.scan_disk().conflicts;
+    REQUIRE(rows.size() == 1);
+
+    SECTION("the disk's side brings it back, with everything under it") {
+        REQUIRE(project.apply_disk({{rows[0], true}}).conflicts.empty());
+        const std::optional<InstanceId> back = game.find_guid(box_guid);
+        REQUIRE(back.has_value());
+        REQUIRE(game.parent(*game.find_guid(keep_guid)) == *back);
+        REQUIRE(game.parent(*game.find_guid("added-0001")) == *back);
+    }
+    SECTION("the studio's side lets the delete stand, and a save removes it all") {
+        REQUIRE(project.apply_disk({{rows[0], false}}).conflicts.empty());
+        REQUIRE(save_conflicts(project).empty());
+        REQUIRE_FALSE(fs::exists(dir.path / folder));
+    }
+}
+
+TEST_CASE("A10 a class changed on disk makes the instance again, keeping its children", "[A10][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, 0, "A").id();
+    const InstanceId child = add_part(game, a, "Child").id();
+    const std::string guid = game.guid(a);
+    project.save();
+    edit_key(dir.path / ("src/A." + guid + "/init.json"), "class", engine_core::JsonValue::string("Folder"));
+
+    REQUIRE(project.apply_disk().conflicts.empty());
+    const std::optional<InstanceId> made = game.find_guid(guid);
+    REQUIRE(made.has_value());
+    REQUIRE(std::string(game.instance(*made)->class_name()) == "Folder");
+    REQUIRE(game.parent(child) == *made);
+}
+
+TEST_CASE("A11 a key removed on disk puts the class default back", "[A11][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    a.set_color(rgb(1.f, 0.f, 0.f));
+    project.save();
+    const fs::path file = dir.path / leaf(game, a.id());
+    engine_core::JsonValue doc;
+    std::string error;
+    REQUIRE(engine_core::parse_json(read_file(file), doc, error));
+    REQUIRE(doc.erase("Color"));
+    write_file(file, engine_core::write_json(doc));
+
+    project.apply_disk();
+    REQUIRE_FALSE(has_key(a, "Color"));
+}
+
+TEST_CASE("A12 a source only the disk changed loads", "[A12][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::Script& main = add_script(game, 0, "Main", "print(1)\n");
+    project.save();
+    write_file(dir.path / leaf(game, main.id(), ".luau"), "print(\"disk\")\n");
+    project.apply_disk();
+    REQUIRE(main.source() == "print(\"disk\")\n");
+}
+
+TEST_CASE("A13 a key the engine does not know loads as an extra, and the next save is quiet", "[A13][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, 0, "A").id();
+    project.save();
+    engine_core::JsonValue custom = engine_core::JsonValue::object();
+    custom.set("x", engine_core::JsonValue::number(1));
+    edit_key(dir.path / leaf(game, a), "Custom", custom);
+
+    project.apply_disk();
+    REQUIRE(engine_core::bag_find(game.extra_properties(a), "Custom") != nullptr);
+    project.save();
+    REQUIRE(project.last_save().written.empty());
+}
+
+TEST_CASE("A14 an apply during a test throws", "[A14][disk][project]") {
+    TempDir dir;
+    ScriptRig rig;
+    {
+        Project project = Project::create(dir.path, rig.game);
+        add_part(rig.game, 0, "Door");
+        project.save();
+    }
+    Project project = Project::load(dir.path, rig.game);
+    rig.game.start_simulation();
+    REQUIRE_THROWS_AS(project.apply_disk(), ProjectError);
+    rig.game.stop_simulation();
+}
+
+TEST_CASE("A15 a sibling order only the disk changed loads", "[A15][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, 0, "Box").id();
+    add_part(game, box, "One");
+    add_part(game, box, "Two");
+    project.save();
+    std::vector<std::string> order = child_guids(game, box);
+    std::reverse(order.begin(), order.end());
+    std::vector<engine_core::JsonValue> items;
+    for (const std::string& guid : order) {
+        items.push_back(engine_core::JsonValue::string(guid));
+    }
+    edit_key(dir.path / box_dir(game, box) / "init.json", "children", engine_core::JsonValue::array(std::move(items)));
+
+    project.apply_disk();
+    REQUIRE(child_guids(game, box) == order);
+}

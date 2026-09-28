@@ -1402,6 +1402,26 @@ TEST_CASE("an edit during play runs on the simulation thread", "[edit]") {
     REQUIRE(engine.datamodel().parent(id.load()) == engine.datamodel().id());
 }
 
+TEST_CASE("a paced simulation steps at the rate it is given", "[pace]") {
+    engine_core::Engine engine;
+    engine.set_simulation_pace_hz(60.0);
+    engine.start();
+    engine.resume();
+    wait_until([&] { return engine.sim_frame_count() > 0; });
+    const auto first = engine.sim_frame_count();
+    const auto from = std::chrono::steady_clock::now();
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    const auto steps = engine.sim_frame_count() - first;
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - from).count();
+    engine.stop();
+    // Each sleep wakes late, by up to a whole 15.6 ms Windows tick. Pacing on a
+    // fixed schedule absorbs that; pacing each step on its own ran near 32 Hz.
+    const double hz = static_cast<double>(steps) / seconds;
+    INFO("steps a second: " << hz);
+    REQUIRE(hz > 57.0);
+    REQUIRE(hz < 63.0);
+}
+
 TEST_CASE("client sync keeps an uncapped render loop with the window", "[pace]") {
     engine_core::Engine engine;
     engine.set_simulation_pace_hz(60.0);

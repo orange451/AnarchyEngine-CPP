@@ -6,10 +6,35 @@
 
 #include <chrono>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 #include <vector>
 
 namespace engine_core {
+namespace {
+
+// Sleeps until the next slot of a fixed hz schedule. Sleeping for the budget
+// less the step's own work dropped each wake-up's lateness, and a sleep on
+// Windows can wake a whole 15.6 ms tick late, so 60 Hz ran near 32. On a fixed
+// schedule a late wake is made up by the next one. A step more than a slot
+// behind starts the schedule over rather than running a burst to catch up.
+// next is the schedule; an empty one starts at from.
+void WaitForSlot(std::chrono::steady_clock::time_point& next, std::chrono::steady_clock::time_point from, double hz) {
+    const auto interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        std::chrono::duration<double>(1.0 / hz));
+    if (next == std::chrono::steady_clock::time_point{}) {
+        next = from;
+    }
+    next += interval;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - next > interval) {
+        next = now;
+    } else if (now < next) {
+        std::this_thread::sleep_until(next);
+    }
+}
+
+}  // namespace
 
 Engine::Engine() {
     pump_.reserve(DataModel::kMaxInstances);
@@ -167,6 +192,7 @@ void Engine::simulation_loop() {
     }
 
     auto last = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point next_step;
     double accumulator = 0;
     while (running_.load()) {
         bool woke = false;
@@ -183,6 +209,10 @@ void Engine::simulation_loop() {
         // The time spent paused is not a simulation step.
         if (woke && clock_ == nullptr) {
             last = std::chrono::steady_clock::now();
+        }
+        // Nor slots to catch up on.
+        if (woke) {
+            next_step = {};
         }
 
         const auto frame_start = std::chrono::steady_clock::now();
@@ -243,12 +273,7 @@ void Engine::simulation_loop() {
         sim_frames_.fetch_add(1);
 
         if (simulation_pace_hz_ > 0) {
-            const auto budget = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                std::chrono::duration<double>(1.0 / simulation_pace_hz_));
-            const auto elapsed = std::chrono::steady_clock::now() - frame_start;
-            if (elapsed < budget) {
-                std::this_thread::sleep_for(budget - elapsed);
-            }
+            WaitForSlot(next_step, frame_start, simulation_pace_hz_);
         }
     }
 }
@@ -267,6 +292,7 @@ void Engine::render_loop() {
     }
 
     auto last_frame = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point next_frame;
     while (running_.load()) {
         // Sample before the work so a paint that arrives during the step is not missed.
         std::uint64_t client_seen = 0;
@@ -350,12 +376,7 @@ void Engine::render_loop() {
         present_count_.fetch_add(1);
 
         if (render_pace_hz_ > 0) {
-            const auto budget = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                std::chrono::duration<double>(1.0 / render_pace_hz_));
-            const auto elapsed = std::chrono::steady_clock::now() - frame_start;
-            if (elapsed < budget) {
-                std::this_thread::sleep_for(budget - elapsed);
-            }
+            WaitForSlot(next_frame, frame_start, render_pace_hz_);
         } else if (wait_for_client) {
             // The window paints much slower than an empty step. Waiting here keeps
             // the step with that paint. The timeout only covers a window that is

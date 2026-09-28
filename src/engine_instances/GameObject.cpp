@@ -98,6 +98,17 @@ void GameObject::save_properties(PropertyBag& out) const {
     }
 }
 
+void GameObject::default_properties(PropertyBag& out) const {
+    DataModel::default_properties(out);
+    const Transform identity = transform_identity();
+    bag_set(out, "Transform", json_floats(identity.m, 16));
+    const ColorRgb white{};
+    const float channels[3] = {white.r, white.g, white.b};
+    bag_set(out, "Color", json_floats(channels, 3));
+    const float one[3] = {1.f, 1.f, 1.f};
+    bag_set(out, "Size", json_floats(one, 3));
+}
+
 bool GameObject::load_property(const std::string& key, const JsonValue& value, std::string& error) {
     std::vector<float> floats;
     if (key == "Transform") {

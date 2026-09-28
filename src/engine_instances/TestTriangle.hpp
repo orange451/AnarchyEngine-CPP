@@ -24,6 +24,7 @@ public:
 
     // Position when it is not the origin. The angle is animation, not authored.
     void save_properties(PropertyBag& out) const override;
+    void default_properties(PropertyBag& out) const override;
     bool load_property(const std::string& key, const JsonValue& value, std::string& error) override;
 
 protected:

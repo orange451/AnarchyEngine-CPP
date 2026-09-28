@@ -1,4 +1,13 @@
 #include "JsonMerge.hpp"
+#include "Contract.hpp"
+#include "DataModel.hpp"
+#include "Folder.hpp"
+#include "Game.hpp"
+#include "GameObject.hpp"
+#include "ModuleScript.hpp"
+#include "Script.hpp"
+#include "TestTriangle.hpp"
+#include "types.hpp"
 #include "PropertyBag.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -78,4 +87,53 @@ TEST_CASE("M4 display_value writes a value on one line", "[M4][merge]") {
     REQUIRE(text.find('\n') == std::string::npos);
     REQUIRE(text.front() == '{');
     REQUIRE(text.find("\"a\": 1") != std::string::npos);
+}
+
+namespace {
+
+struct SimRole {
+    SimRole() { engine_core::set_thread_role(engine_core::ThreadRole::Simulation); }
+    ~SimRole() { engine_core::set_thread_role(engine_core::ThreadRole::Unknown); }
+};
+
+std::vector<std::string> default_keys(const engine_core::DataModel& object) {
+    engine_core::PropertyBag defaults;
+    object.default_properties(defaults);
+    std::vector<std::string> out;
+    for (const JsonValue::Member& member : defaults) {
+        out.push_back(member.first);
+    }
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("M5 default_properties is what save_properties leaves out", "[M5][merge]") {
+    SimRole role;
+    engine_core::Game game;
+    std::vector<engine_core::DataModel*> objects = {
+        &game.create(), &game.create<engine_core::GameObject>(), &game.create<engine_core::Script>(),
+        &game.create<engine_core::ModuleScript>(), &game.create<engine_core::Folder>(),
+        &game.create<engine_core::TestTriangle>()};
+    for (engine_core::DataModel* object : objects) {
+        INFO(object->class_name());
+        engine_core::PropertyBag saved;
+        object->save_properties(saved);
+        REQUIRE(saved.empty());
+        engine_core::PropertyBag defaults;
+        object->default_properties(defaults);
+        for (const JsonValue::Member& member : defaults) {
+            std::string error;
+            REQUIRE(object->load_property(member.first, member.second, error));
+            REQUIRE(error.empty());
+        }
+        object->save_properties(saved);
+        REQUIRE(saved.empty());
+    }
+    REQUIRE(default_keys(game).empty());
+    REQUIRE(default_keys(*objects[0]) == std::vector<std::string>{"Simulated", "VisualOnly"});
+    REQUIRE(default_keys(*objects[1]) ==
+            std::vector<std::string>{"Color", "Simulated", "Size", "Transform", "VisualOnly"});
+    REQUIRE(default_keys(*objects[2]) == std::vector<std::string>{"Enabled", "Simulated", "VisualOnly"});
+    REQUIRE(default_keys(*objects[5]) == std::vector<std::string>{"Position", "Simulated", "VisualOnly"});
 }

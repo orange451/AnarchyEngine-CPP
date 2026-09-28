@@ -205,6 +205,9 @@ public:
     // Authored fields other than class, id, Name, Source, and children.
     // A class writes only values that differ from its default.
     virtual void save_properties(PropertyBag& out) const;
+    // The value save_properties leaves out, for every key this class owns: what
+    // a key missing from its file means. The root owns none.
+    virtual void default_properties(PropertyBag& out) const;
     // True when this class owns key. The value was applied, or error is set.
     // Runs on a live instance during project load.
     virtual bool load_property(const std::string& key, const JsonValue& value, std::string& error);

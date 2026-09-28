@@ -2110,6 +2110,15 @@ void DataModel::save_properties(PropertyBag& out) const {
     }
 }
 
+void DataModel::default_properties(PropertyBag& out) const {
+    const Slot* part = slot(id_);
+    if (part == nullptr || part->instance != this) {
+        return;
+    }
+    bag_set(out, "Simulated", JsonValue::boolean(false));
+    bag_set(out, "VisualOnly", JsonValue::boolean(false));
+}
+
 bool DataModel::load_property(const std::string& key, const JsonValue& value, std::string& error) {
     if (key != "Simulated" && key != "VisualOnly") {
         return false;

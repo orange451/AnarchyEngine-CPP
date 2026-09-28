@@ -14,6 +14,11 @@ void Script::save_properties(PropertyBag& out) const {
     }
 }
 
+void Script::default_properties(PropertyBag& out) const {
+    LuaSource::default_properties(out);
+    bag_set(out, "Enabled", JsonValue::boolean(true));
+}
+
 bool Script::load_property(const std::string& key, const JsonValue& value, std::string& error) {
     if (key == "Enabled") {
         if (!value.is_bool()) {

@@ -61,6 +61,12 @@ void TestTriangle::save_properties(PropertyBag& out) const {
     }
 }
 
+void TestTriangle::default_properties(PropertyBag& out) const {
+    DataModel::default_properties(out);
+    const float origin[3] = {0.f, 0.f, 0.f};
+    bag_set(out, "Position", json_floats(origin, 3));
+}
+
 bool TestTriangle::load_property(const std::string& key, const JsonValue& value, std::string& error) {
     if (key == "Position") {
         std::vector<float> floats;

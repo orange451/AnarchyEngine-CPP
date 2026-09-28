@@ -30,6 +30,7 @@ set(STUDIO_SOURCES
     src/ide/IdeDock.cpp
     src/ide/DockArrange.cpp
     src/ide/SavedLayout.cpp
+    src/ide/IdeConflicts.cpp
     src/ide/IdeConsole.cpp
     src/ide/ConsoleLog.cpp
     src/ide/CompletionPopup.cpp

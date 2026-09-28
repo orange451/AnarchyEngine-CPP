@@ -1,3 +1,4 @@
+#include "ide/IdeConflicts.hpp"
 #include "ide/IdeDock.hpp"
 #include "ide/IdeLayout.hpp"
 #include "ide/IdePane.hpp"
@@ -7,6 +8,7 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -28,12 +30,110 @@ std::shared_ptr<jadefx::Tab> TabOf(ide::IdeDock& dock, const jadefx::Node* pane)
     return nullptr;
 }
 
+engine_core::SaveConflict Row(const char* guid, const char* name, const char* key, const char* studio,
+                              const char* disk,
+                              engine_core::SaveConflict::Kind kind = engine_core::SaveConflict::Kind::EditedOutside) {
+    engine_core::SaveConflict row;
+    row.guid = guid;
+    row.path = std::string("src/") + name + "." + guid + ".json";
+    row.kind = kind;
+    row.key = key;
+    row.studio = studio;
+    row.disk = disk;
+    row.name = name;
+    row.where = "game";
+    return row;
+}
+
+// The window on its own: its groups, picks, and buttons.
+int RunConflictsPaneTests() {
+    int failures = 0;
+    auto expect = [&failures](bool condition, const char* message) {
+        if (!condition) {
+            std::fprintf(stderr, "FAIL %s\n", message);
+            ++failures;
+        }
+    };
+    std::vector<engine_core::DiskChoice> applied;
+    std::string selected;
+    int refreshed = 0;
+    ide::ConflictsHost host;
+    host.apply = [&applied](const std::vector<engine_core::DiskChoice>& choices) { applied = choices; };
+    host.refresh = [&refreshed] { ++refreshed; };
+    host.select = [&selected](const std::string& guid) { selected = guid; };
+    host.class_of = [](const std::string&) { return std::string("GameObject"); };
+    auto pane = jadefx::make<ide::IdeConflicts>(host);
+
+    const std::vector<engine_core::SaveConflict> rows = {
+        Row("p", "Part", "Color", "1, 0, 0", "0, 0, 1"),
+        Row("p", "Part", "Size", "(default)", "2, 2, 2"),
+        Row("b", "Bounce", "Source", "2: print(2)", "2: print(\"hi\")"),
+        Row("c", "Crate", "", "changed in the studio", "deleted", engine_core::SaveConflict::Kind::DeletedOutside),
+    };
+    pane->setConflicts(rows);
+    expect(pane->summary() == "4 conflicts in 3 instances", "the header counts rows and instances");
+    const auto& groups = pane->tree().getRoot()->getChildren();
+    expect(groups.size() == 3, "each instance is a group");
+    expect(groups.size() == 3 && groups.items()[0]->getChildren().size() == 2, "with a row per property under it");
+    expect(!pane->pick(0).has_value(), "a row starts with no pick");
+
+    pane->choose(0, true);
+    pane->chooseInstance("b", false);
+    std::vector<engine_core::DiskChoice> choices = pane->choices();
+    expect(choices.size() == 2, "only picked rows are choices");
+    expect(choices.size() == 2 && choices[0].disk && choices[0].conflict.key == "Color", "Disk for Part's Color");
+    expect(choices.size() == 2 && !choices[1].disk && choices[1].conflict.guid == "b", "IDE for Bounce");
+    expect(pane->chosenText() == "2 of 4 chosen", "the footer counts the picks");
+
+    // A row's own Disk button picks it.
+    const std::vector<jadefx::Node*> disk_buttons = pane->getElementsByClassName("conflict-disk");
+    expect(disk_buttons.size() == 7, "a Disk button on every group and every row");
+    if (auto* crate = dynamic_cast<jadefx::ButtonBase*>(disk_buttons.back())) {
+        crate->fire();
+    }
+    expect(pane->pick(3) == std::optional<bool>(true), "the Crate row's Disk button picks Disk");
+    if (auto* crate = dynamic_cast<jadefx::ButtonBase*>(disk_buttons.back())) {
+        crate->fire();
+    }
+    expect(!pane->pick(3).has_value(), "clicking it again clears the pick");
+
+    // The same rows keep their picks; a row whose value changed starts over.
+    std::vector<engine_core::SaveConflict> again = rows;
+    again[1].disk = "9, 9, 9";
+    pane->choose(1, true);
+    pane->setConflicts(again);
+    expect(pane->pick(0) == std::optional<bool>(true), "an unchanged row keeps its pick");
+    expect(!pane->pick(1).has_value(), "a changed row loses its pick");
+    expect(pane->pick(2) == std::optional<bool>(false), "and the rest keep theirs");
+
+    pane->chooseAll(false);
+    pane->apply();
+    expect(applied.size() == 4, "Apply sends every picked row");
+    expect(applied.size() == 4 && !applied[3].disk, "All IDE picked IDE for each");
+
+    const std::vector<jadefx::Node*> refresh = pane->getElementsByClassName("conflicts-refresh");
+    if (!refresh.empty()) {
+        if (auto* button = dynamic_cast<jadefx::ButtonBase*>(refresh.front())) {
+            button->fire();
+        }
+    }
+    expect(refreshed == 1, "Refresh checks again");
+
+    pane->showInstance(groups.items()[1].get());
+    expect(selected == "b", "a row shows its instance in the explorers");
+
+    pane->setConflicts({});
+    expect(pane->summary() == "No conflicts. Changes made outside the studio load when you switch back to it.",
+           "an empty list says so");
+    return failures;
+}
+
 }  // namespace
 
 // reveal_window shows any dockable pane: it selects the pane's tab, and docks
 // a closed pane through the open it is given.
 int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
-    int failures = 0;
+    int failures = RunConflictsPaneTests();
     auto expect = [&failures](bool condition, const char* message) {
         if (!condition) {
             std::fprintf(stderr, "FAIL %s\n", message);

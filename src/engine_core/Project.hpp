@@ -131,8 +131,8 @@ public:
     static Project load(const std::filesystem::path& root);
     static Project load(const std::filesystem::path& root, DataModel& into);
 
-    Project(Project&&) noexcept;
-    Project& operator=(Project&&) noexcept;
+    Project(Project&&);
+    Project& operator=(Project&&);
     ~Project();
 
     // Edit mode writes the live tree. Play writes the place snapshot, never

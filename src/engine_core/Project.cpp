@@ -1002,8 +1002,8 @@ ProjectConflict::ProjectConflict(std::vector<SaveConflict> conflicts)
     : ProjectError(conflict_message(conflicts)), conflicts_(std::move(conflicts)) {}
 
 Project::Project() = default;
-Project::Project(Project&&) noexcept = default;
-Project& Project::operator=(Project&&) noexcept = default;
+Project::Project(Project&&) = default;
+Project& Project::operator=(Project&&) = default;
 Project::~Project() = default;
 
 void Project::bind(DataModel* game, std::unique_ptr<DataModel> owned) {

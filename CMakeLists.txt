@@ -163,6 +163,8 @@ FetchContent_Declare(
     URL https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.58.0/httplib.h
     URL_HASH SHA256=aa14e7e7bd2703694e0a6b6855af3b8c406102ab1fc56ac905fe33619b31faa5
     DOWNLOAD_NO_EXTRACT TRUE
+    # CMake before 3.18 leaves an unextracted download outside SOURCE_DIR.
+    DOWNLOAD_DIR "${FETCHCONTENT_BASE_DIR}/httplib-src"
 )
 FetchContent_GetProperties(httplib)
 if(NOT httplib_POPULATED)
@@ -180,6 +182,8 @@ FetchContent_Declare(
     URL https://raw.githubusercontent.com/nothings/stb/2c980bb59875b0d32144a71867fbdebb2f77cd20/stb_image_write.h
     URL_HASH SHA256=cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05
     DOWNLOAD_NO_EXTRACT TRUE
+    # CMake before 3.18 leaves an unextracted download outside SOURCE_DIR.
+    DOWNLOAD_DIR "${FETCHCONTENT_BASE_DIR}/stb_image_write-src"
 )
 FetchContent_GetProperties(stb_image_write)
 if(NOT stb_image_write_POPULATED)
@@ -428,9 +432,9 @@ else()
         GIT_SHALLOW TRUE
     )
     FetchContent_GetProperties(Catch2)
-    if(NOT Catch2_POPULATED)
+    if(NOT catch2_POPULATED)
         FetchContent_Populate(Catch2)
-        add_subdirectory("${Catch2_SOURCE_DIR}" "${Catch2_BINARY_DIR}" EXCLUDE_FROM_ALL)
+        add_subdirectory("${catch2_SOURCE_DIR}" "${catch2_BINARY_DIR}" EXCLUDE_FROM_ALL)
     endif()
 endif()
 

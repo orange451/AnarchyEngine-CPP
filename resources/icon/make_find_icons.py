@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Draws the find and replace icons, the explorer's insert +, and the Window menu's check into ../icons.
+"""Draws the find and replace icons, the explorer's insert +, the Window menu's check, and the
+conflicts warning into ../icons.
 Needs only the standard library.
 
 Each icon is 32 pixels square and is shown at 16 points, so it stays sharp on a
@@ -53,6 +54,19 @@ def frame(left, top, right, bottom, width=STROKE):
 
 def disc(cx, cy, radius):
     return lambda x, y: math.hypot(x - cx, y - cy) <= radius
+
+
+def triangle(a, b, c):
+    """The filled triangle with corners a, b, and c."""
+
+    def side(p, q, x, y):
+        return (q[0] - p[0]) * (y - p[1]) - (q[1] - p[1]) * (x - p[0])
+
+    def inside(x, y):
+        d1, d2, d3 = side(a, b, x, y), side(b, c, x, y), side(c, a, x, y)
+        return (d1 >= 0 and d2 >= 0 and d3 >= 0) or (d1 <= 0 and d2 <= 0 and d3 <= 0)
+
+    return inside
 
 
 def ring(cx, cy, radius, width):
@@ -131,6 +145,13 @@ ICONS = {
         (disc(13, 13, 8), (206, 226, 250), 1.0),
         (ring(13, 13, 8.5, 3), (59, 109, 179), 1.0),
         (polyline([(19.8, 19.8), (27, 27)], 5), (107, 79, 42), 1.0),
+    ],
+    # The ribbon's conflict count and the Conflicts window's tab: an amber sign with an exclamation mark.
+    "Warning.png": [
+        (triangle((16, 4.5), (28.5, 26.5), (3.5, 26.5)), (242, 183, 5), 1.0),
+        (polyline([(16, 4.5), (28.5, 26.5), (3.5, 26.5), (16, 4.5)], 3), (242, 183, 5), 1.0),
+        (polyline([(16, 11.5), (16, 19)], 3.2), (51, 40, 18), 1.0),
+        (disc(16, 23.2, 1.9), (51, 40, 18), 1.0),
     ],
 }
 

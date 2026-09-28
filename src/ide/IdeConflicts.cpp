@@ -79,6 +79,62 @@ std::shared_ptr<jadefx::Label> value_label(const std::string& text) {
     return label;
 }
 
+// A list row: its last child at the right edge, and the rest from the left in
+// the width left over. A narrow dock shortens the text, which ends in an
+// ellipsis, and never pushes the last child out of sight.
+class ConflictRow : public jadefx::HBox {
+public:
+    ConflictRow() {
+        setSpacing(6);
+        setAlignment(jadefx::Pos::CenterLeft);
+        setStyle("width: 100%;");
+    }
+
+protected:
+    double preferredContentWidth(double innerAvailable) const override {
+        const double wanted = HBox::preferredContentWidth(innerAvailable);
+        return innerAvailable > 0.0 ? std::min(wanted, innerAvailable) : wanted;
+    }
+
+    void layoutChildren() override {
+        const std::vector<std::shared_ptr<jadefx::Node>>& children = getChildren().items();
+        if (children.empty() || !children.back()) {
+            HBox::layoutChildren();
+            return;
+        }
+        const double gap = getSpacing();
+        const double left = contentLeft();
+        const double top = contentTop();
+        const double height = contentHeight();
+        jadefx::Node& last = *children.back();
+        const double last_width = std::min(last.measuredWidth(contentWidth()), contentWidth());
+        const double last_x = left + contentWidth() - last_width;
+        const double last_height = last.measuredHeight(last_width, height);
+        last.performLayout(last_x, top + (height - last_height) * 0.5, last_width, last_height);
+        const double limit = last_x - gap;
+        double x = left;
+        for (std::size_t index = 0; index + 1 < children.size(); ++index) {
+            jadefx::Node* child = children[index].get();
+            if (child == nullptr) {
+                continue;
+            }
+            const double room = std::max(0.0, limit - x);
+            const double width = std::min(child->measuredWidth(room), room);
+            const double child_height = child->measuredHeight(width, height);
+            child->performLayout(x, top + (height - child_height) * 0.5, width, child_height);
+            x += width + gap;
+        }
+    }
+};
+
+// Takes the room left in a line, which pushes what follows it to the right edge.
+std::shared_ptr<jadefx::Pane> spacer() {
+    auto pane = jadefx::make<jadefx::Pane>();
+    pane->setStyle("width: 100%;");
+    pane->setMouseTransparent(true);
+    return pane;
+}
+
 std::string counted(std::size_t count, const char* one, const char* many) {
     return std::to_string(count) + " " + (count == 1 ? one : many);
 }
@@ -150,9 +206,11 @@ IdeConflicts::IdeConflicts(ConflictsHost host) : IdePane("Conflicts", true), hos
     all_disk_ = jadefx::make<jadefx::Button>("All Disk");
     all_disk_->getClassList().add("conflicts-all-disk");
     all_disk_->setOnAction([this](jadefx::ActionEvent&) { chooseAll(true); });
-    // Two lines, so a narrow side dock still shows both buttons.
+    // Two lines, so a narrow side dock still shows both buttons. They sit at the right.
     auto picks = jadefx::make<jadefx::HBox>();
     picks->setSpacing(6);
+    picks->setStyle("width: 100%;");
+    picks->getChildren().add(spacer());
     picks->getChildren().add(all_ide_);
     picks->getChildren().add(all_disk_);
     auto header = jadefx::make<jadefx::VBox>();
@@ -188,6 +246,8 @@ IdeConflicts::IdeConflicts(ConflictsHost host) : IdePane("Conflicts", true), hos
     apply_->setOnAction([this](jadefx::ActionEvent&) { apply(); });
     auto buttons = jadefx::make<jadefx::HBox>();
     buttons->setSpacing(6);
+    buttons->setStyle("width: 100%;");
+    buttons->getChildren().add(spacer());
     buttons->getChildren().add(refresh_);
     buttons->getChildren().add(apply_);
     auto footer = jadefx::make<jadefx::VBox>();
@@ -348,10 +408,16 @@ void IdeConflicts::rebuild() {
     for (std::size_t index = 0; index < rows_.size(); ++index) {
         const engine_core::SaveConflict& row = rows_[index];
         if (group_of.count(row.guid) == 0) {
-            auto box = jadefx::make<jadefx::HBox>();
-            box->setSpacing(6);
-            box->setAlignment(jadefx::Pos::CenterLeft);
-            // The toggle first, so a narrow dock never pushes it out of sight.
+            auto box = jadefx::make<ConflictRow>();
+            const std::string klass = host_.class_of ? host_.class_of(row.guid) : std::string();
+            if (std::shared_ptr<jadefx::ImageView> icon = klass.empty() ? nullptr : icon_view(klass)) {
+                icon->setPrefSize(16, 16);
+                box->getChildren().add(icon);
+            }
+            box->getChildren().add(text_label(row.name.empty() ? row.path : row.name, nullptr));
+            box->getChildren().add(text_label(row.where, "conflicts-path"));
+            box->getChildren().add(text_label(std::to_string(counts[row.guid]), "conflicts-badge"));
+            // Last, so the row keeps it at the right edge, lined up down the list.
             const std::string guid = row.guid;
             auto toggle = jadefx::make<SideToggle>([this, guid](std::optional<bool> side) {
                 for (std::size_t at = 0; at < rows_.size(); ++at) {
@@ -363,29 +429,13 @@ void IdeConflicts::rebuild() {
             });
             box->getChildren().add(toggle);
             group_toggles_[guid] = toggle;
-            const std::string klass = host_.class_of ? host_.class_of(row.guid) : std::string();
-            if (std::shared_ptr<jadefx::ImageView> icon = klass.empty() ? nullptr : icon_view(klass)) {
-                icon->setPrefSize(16, 16);
-                box->getChildren().add(icon);
-            }
-            box->getChildren().add(text_label(row.name.empty() ? row.path : row.name, nullptr));
-            box->getChildren().add(text_label(row.where, "conflicts-path"));
-            box->getChildren().add(text_label(std::to_string(counts[row.guid]), "conflicts-badge"));
             auto group = jadefx::make<jadefx::TreeItem>("", box);
             group->setExpanded(true);
             items_[group.get()] = guid;
             group_of[guid] = group.get();
             groups.push_back(std::move(group));
         }
-        auto box = jadefx::make<jadefx::HBox>();
-        box->setSpacing(6);
-        box->setAlignment(jadefx::Pos::CenterLeft);
-        auto toggle = jadefx::make<SideToggle>([this, index](std::optional<bool> side) {
-            set_pick(index, side);
-            sync();
-        });
-        box->getChildren().add(toggle);
-        row_toggles_[index] = toggle;
+        auto box = jadefx::make<ConflictRow>();
         if (row.key.empty()) {
             box->getChildren().add(text_label(whole_instance(row), nullptr));
         } else {
@@ -395,6 +445,12 @@ void IdeConflicts::rebuild() {
             box->getChildren().add(text_label("Disk", "conflicts-side"));
             box->getChildren().add(value_label(row.disk));
         }
+        auto toggle = jadefx::make<SideToggle>([this, index](std::optional<bool> side) {
+            set_pick(index, side);
+            sync();
+        });
+        box->getChildren().add(toggle);
+        row_toggles_[index] = toggle;
         auto item = jadefx::make<jadefx::TreeItem>("", box);
         items_[item.get()] = row.guid;
         group_of[row.guid]->getChildren().add(std::move(item));

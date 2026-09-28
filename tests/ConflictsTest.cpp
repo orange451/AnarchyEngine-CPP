@@ -16,6 +16,7 @@
 #include <fstream>
 #include <iterator>
 
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -308,6 +309,19 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         const std::vector<jadefx::Node*> all_disk = pane->getElementsByClassName("conflicts-all-disk");
         expect(!all_disk.empty() && all_disk.front()->getAbsoluteX() + all_disk.front()->getWidth() <= right,
                "and so is All Disk");
+        // The toggles and the buttons sit at the right, the toggles lined up down the list.
+        const double middle = pane->getAbsoluteX() + pane->getWidth() * 0.5;
+        auto right_edge = [](const jadefx::Node* node) { return node->getAbsoluteX() + node->getWidth(); };
+        const std::vector<jadefx::Node*> disks = pane->getElementsByClassName("conflict-disk");
+        bool lined_up = !disks.empty() && disks.front()->getAbsoluteX() > middle;
+        for (const jadefx::Node* disk : disks) {
+            lined_up = lined_up && std::abs(right_edge(disk) - right_edge(disks.front())) < 1.0;
+        }
+        expect(lined_up, "the IDE/Disk toggles line up at the right");
+        const std::vector<jadefx::Node*> apply = pane->getElementsByClassName("conflicts-apply");
+        expect(!all_disk.empty() && all_disk.front()->getAbsoluteX() > middle, "All IDE and All Disk sit at the right");
+        expect(!apply.empty() && apply.front()->getAbsoluteX() > middle && right_edge(apply.front()) <= right,
+               "and so do Refresh and Apply");
     }
 
     // During a test, Apply waits for Stop, and Save does not point to the window.

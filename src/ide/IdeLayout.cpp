@@ -200,6 +200,12 @@ double Fraction(double part, double whole, double limit) {
     return fraction;
 }
 
+// The stage hands over each key its scene did not consume.
+void LeaveFieldsOnEscape(jadefx::Stage& stage) {
+    jadefx::Stage* raw = &stage;
+    stage.setOnKey([raw](int key, bool pressed) { leave_field_on_escape(raw->getScene(), key, pressed); });
+}
+
 void StretchRoot(jadefx::Node& node) {
     node.setPrefWidthRatio(1);
     node.setPrefHeightRatio(1);
@@ -1335,6 +1341,7 @@ void IdeLayout::attachFrame(jadefx::Stage& stage) {
     mainStage_ = &stage;
     resizeWindow_ = [&stage](int width, int height) { stage.setSize(width, height); };
     stage.setFrameTail([this]() { flushFrame(); });
+    LeaveFieldsOnEscape(stage);
     // The close button, Alt+F4, and Cmd+Q ask about unsaved work first.
     stage.setOnCloseRequest([this]() {
         // Kept whether or not the close goes ahead.
@@ -1642,6 +1649,7 @@ jadefx::UtilityWindow* IdeLayout::open_floating(const std::string& title, int wi
         routeSearch(event, *utilityScene);
     });
     window->stage().setScene(std::move(scene));
+    LeaveFieldsOnEscape(window->stage());
     window->setCanClose([this, raw = window.get()]() {
         // Closing its tabs changes the layout. A quit saves it as it was.
         if (!layout_file_.empty()) {
@@ -2805,6 +2813,7 @@ void IdeLayout::open_preferences() {
     auto panel = jadefx::make<PreferencesPanel>(themes_, preferences_);
     auto scene = jadefx::make<jadefx::Scene>(panel, static_cast<double>(kWidth), static_cast<double>(kHeight));
     window->stage().setScene(std::move(scene));
+    LeaveFieldsOnEscape(window->stage());
     // Unsaved colors ask first. The answer closes the window on a later frame, off the alert's own event.
     std::weak_ptr<jadefx::UtilityWindow> weak = window;
     window->setCanClose([this, weak]() {
@@ -3021,6 +3030,16 @@ bool IdeLayout::save_project_to(const std::filesystem::path& root) {
     mark_saved();
     show_toast("Saved " + project_->name());
     return true;
+}
+
+void leave_field_on_escape(jadefx::Scene& scene, int key, bool pressed) {
+    if (!pressed || key != jadefx::Key::Escape) {
+        return;
+    }
+    jadefx::Node* focused = scene.focusedNode();
+    if (dynamic_cast<jadefx::TextField*>(focused) != nullptr) {
+        scene.releaseFocus(focused);
+    }
 }
 
 }  // namespace ide

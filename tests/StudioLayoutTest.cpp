@@ -39,6 +39,14 @@ int main() {
     layout.mount(*scene);
     scene->layout(1280, 800, 0.1);
     scene->layout(1280, 800, 0.2);
+    // Escape as the window's stage delivers it: when the scene does not consume
+    // the key, leave_field_on_escape gets it.
+    auto escape = [&scene] {
+        if (!scene->noteKey(jadefx::Key::Escape, true, false, 0)) {
+            ide::leave_field_on_escape(*scene, jadefx::Key::Escape, true);
+        }
+        scene->noteKey(jadefx::Key::Escape, false, false, 0);
+    };
 
     // Preferences is in the File menu, and only there.
     // The menu bar is the first row of the root's top.
@@ -126,6 +134,8 @@ int main() {
         scene->noteButton(0, true, x, y);
         scene->noteButton(0, false, x, y);
         expect(log.isFocused(), "a click focuses the log");
+        escape();
+        expect(log.isFocused(), "Escape leaves text fields, and the log is not one");
         scene->noteKey(jadefx::Key::K, true, false, jadefx::Key::ModControl);
         expect(empty(), "Cmd+K on the log clears it");
 
@@ -172,6 +182,10 @@ int main() {
             submit("local a = 1");
             key(jadefx::Key::Up);
             expect(field.getText() == "local a = 1", "a rerun command is the newest entry");
+
+            escape();
+            expect(!field.isFocused(), "Escape leaves the command line");
+            expect(field.getText() == "local a = 1", "Escape keeps the command line's text");
         }
     }
 
@@ -194,6 +208,12 @@ int main() {
         scene->noteKey(jadefx::Key::H, true, false, jadefx::Key::ModControl | jadefx::Key::ModShift);
         scene->noteKey(jadefx::Key::H, false, false, 0);
         expect(search->replaceShown(), "Cmd+Shift+H shows replace in the Search pane");
+
+        search->findInput().field().requestFocus();
+        search->setFindText("leave");
+        escape();
+        expect(!search->findInput().field().isFocused(), "Escape leaves the Search field");
+        expect(search->findInput().text() == "leave", "Escape keeps the Search text");
 
         // Closing its tab and opening it again brings back the same search.
         search->setFindText("kept");

@@ -325,4 +325,10 @@ private:
     std::shared_ptr<PreferencesPanel> preferences_panel_;
 };
 
+// An Escape that nothing in `scene` took leaves the focused text field, keeping
+// its text, as the explorer's filter does. A field with its own use for Escape,
+// such as a rename, a Properties value, or the find bar, keeps that. Every
+// studio window's stage calls this with the keys its scene did not consume.
+void leave_field_on_escape(jadefx::Scene& scene, int key, bool pressed);
+
 }  // namespace ide

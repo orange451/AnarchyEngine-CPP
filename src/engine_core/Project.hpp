@@ -223,13 +223,15 @@ private:
     void settle(const Comparison& compared, const SaveConflict& conflict);
     // The changes only the disk made, and the disk's side of chosen rows.
     void apply_changes(const Comparison& compared, std::vector<std::string>& loaded);
-    // The base takes the disk's files wherever after has no row.
-    void refresh_base(const Comparison& after);
+    // After an apply: the base takes what the disk had when before was read
+    // and still has in after, wherever after holds nothing open or pending.
+    void refresh_base(const Comparison& before, const Comparison& after);
     // The files for each GUID. A node without properties takes its bytes from cache.
     static std::map<std::string, Files> plan_files(const std::vector<AuthoredNode>& tree, const std::string& src,
                                                    const std::unordered_map<std::string, Files>& cache);
-    // An instance's files as the disk has them, parent its parent's GUID.
-    static Files from_disk(const detail::PlanNode& node, std::string parent);
+    // An instance's files as the disk has them, parent its parent's GUID, and
+    // props its file as the class stores it.
+    static Files from_disk(const detail::PlanNode& node, std::string parent, JsonValue props);
 
     std::filesystem::path root_;
     std::string name_;

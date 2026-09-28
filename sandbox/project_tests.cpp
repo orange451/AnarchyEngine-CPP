@@ -2259,3 +2259,176 @@ TEST_CASE("U4 a root saved as DataModel is not unsaved", "[U4][disk][project]") 
     Project project = Project::load(dir.path);
     REQUIRE_FALSE(project.unsaved());
 }
+
+namespace {
+
+// Stands in for another program writing a file while an apply runs: making a
+// RaceProbe writes a Size into race_file, once.
+fs::path race_file;
+
+engine_core::DataModel& make_race_probe(DataModel& world) {
+    DataModel& made = world.create<engine_core::Folder>();
+    if (!race_file.empty() && read_file(race_file).find("\"Size\"") == std::string::npos) {
+        edit_key(race_file, "Size", triple(3, 3, 3));
+    }
+    return made;
+}
+
+}  // namespace
+
+TEST_CASE("F1 a file written during an apply is still a change afterwards", "[F1][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    engine_core::register_project_class("RaceProbe", make_race_probe);
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId b = add_part(game, 0, "B").id();
+    project.save();
+    // The disk adds an instance; reading it back mid-apply writes B's file.
+    write_file(dir.path / "src/Probe.probe-0001.json", meta("RaceProbe", "probe-0001", "Probe"));
+    race_file = dir.path / leaf(game, b);
+    project.apply_disk();
+    race_file.clear();
+    REQUIRE(project.scan_disk().has_disk_changes);
+    project.apply_disk();
+    REQUIRE(has_key(*game.instance(b), "Size"));
+}
+
+TEST_CASE("F2 a class change and a move on disk load together", "[F2][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, 0, "Box").id();
+    add_part(game, box, "Keep");
+    const InstanceId a = add_part(game, 0, "A").id();
+    const std::string guid = game.guid(a);
+    project.save();
+    const fs::path moved = dir.path / box_dir(game, box) / ("A." + guid + ".json");
+    fs::rename(dir.path / leaf(game, a), moved);
+    edit_key(moved, "class", engine_core::JsonValue::string("Folder"));
+
+    project.apply_disk();
+    const std::optional<InstanceId> made = game.find_guid(guid);
+    REQUIRE(made.has_value());
+    REQUIRE(game.parent(*made) == box);
+    REQUIRE_FALSE(project.scan_disk().has_disk_changes);
+    project.save();
+    REQUIRE(project.last_save().moved.empty());
+    REQUIRE(fs::exists(moved));
+}
+
+TEST_CASE("F3 a value the class stores differently is no row", "[F3][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, 0, "A").id();
+    project.save();
+    const fs::path file = dir.path / leaf(game, a);
+
+    SECTION("a float with more digits than a float holds") {
+        engine_core::JsonValue precise = engine_core::JsonValue::array(
+            {engine_core::JsonValue::number(1.23456789), engine_core::JsonValue::number(1), engine_core::JsonValue::number(1)});
+        edit_key(file, "Size", precise);
+    }
+    SECTION("an opaque color written with four channels") {
+        engine_core::JsonValue color = engine_core::JsonValue::array(
+            {engine_core::JsonValue::number(1), engine_core::JsonValue::number(0), engine_core::JsonValue::number(0),
+             engine_core::JsonValue::number(1)});
+        edit_key(file, "Color", color);
+    }
+    const engine_core::DiskScan result = project.apply_disk();
+    REQUIRE(result.conflicts.empty());
+    REQUIRE_FALSE(result.has_disk_changes);
+    REQUIRE(project.scan_disk().conflicts.empty());
+    REQUIRE_FALSE(project.unsaved());
+}
+
+TEST_CASE("F3b a project opened with a precise number is not unsaved", "[F3b][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    std::string path;
+    {
+        Project project = Project::create(dir.path);
+        const InstanceId a = add_part(project.datamodel(), 0, "A").id();
+        project.save();
+        path = leaf(project.datamodel(), a);
+    }
+    edit_key(dir.path / path, "Size",
+             engine_core::JsonValue::array({engine_core::JsonValue::number(1.23456789), engine_core::JsonValue::number(1),
+                                            engine_core::JsonValue::number(1)}));
+    Project project = Project::load(dir.path);
+    REQUIRE_FALSE(project.unsaved());
+}
+
+TEST_CASE("F4 undoing Changes from Disk sticks for an instance with an open row", "[F4][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, 0, "A");
+    project.save();
+    const fs::path file = dir.path / leaf(game, a.id());
+    edit_key(file, "Size", triple(2, 2, 2));
+    edit_key(file, "Color", triple(0, 0, 1));
+    a.set_color(rgb(1.f, 0.f, 0.f));
+    const engine_core::DiskScan result = project.apply_disk();
+    REQUIRE(result.conflicts.size() == 1);
+    REQUIRE(has_key(a, "Size"));
+    game.history().undo();
+    REQUIRE_FALSE(has_key(a, "Size"));
+    REQUIRE_FALSE(project.scan_disk().has_disk_changes);
+}
+
+TEST_CASE("F5 a child added on disk keeps the studio's own sibling order", "[F5][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, 0, "Box").id();
+    add_part(game, box, "One");
+    add_part(game, box, "Two");
+    add_part(game, box, "Three");
+    project.save();
+    std::vector<InstanceId> reversed = game.get_children(box);
+    std::reverse(reversed.begin(), reversed.end());
+    for (InstanceId child : reversed) {
+        game.set_parent(child, DataModel::kNoParent);
+        game.set_parent(child, box);
+    }
+    const std::vector<std::string> studio_order = child_guids(game, box);
+    write_file(dir.path / box_dir(game, box) / "Added.added-0001.json", meta("Folder", "added-0001", "Added"));
+
+    project.apply_disk();
+    std::vector<std::string> order = child_guids(game, box);
+    REQUIRE(order.size() == 4);
+    order.resize(3);
+    REQUIRE(order == studio_order);
+}
+
+TEST_CASE("F6 keeping a folder deleted on disk keeps its untouched children", "[F6][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId keep = add_part(game, box, "Keep").id();
+    const InstanceId other = add_part(game, box, "Other").id();
+    const std::string other_guid = game.guid(other);
+    project.save();
+    fs::remove_all(dir.path / box_dir(game, box));
+    game.game_object(keep)->set_color(rgb(1.f, 0.f, 0.f));
+
+    const engine_core::DiskScan checked = project.apply_disk();
+    REQUIRE(game.find_guid(other_guid).has_value());
+    REQUIRE(checked.conflicts.size() == 2);
+    std::vector<engine_core::DiskChoice> choices;
+    for (const engine_core::SaveConflict& row : checked.conflicts) {
+        choices.push_back({row, false});
+    }
+    REQUIRE(project.apply_disk(choices).conflicts.empty());
+    REQUIRE(save_conflicts(project).empty());
+    Project loaded = Project::load(dir.path);
+    REQUIRE(loaded.datamodel().find_guid(other_guid).has_value());
+}

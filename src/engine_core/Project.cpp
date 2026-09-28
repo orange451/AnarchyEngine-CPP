@@ -813,6 +813,54 @@ void order_children_as(DataModel& world, InstanceId id, const JsonValue& doc) {
     }
 }
 
+// An instance's file as the studio would write it back: each property as its
+// class stores it (a float, three channels for an opaque color, a default left
+// out), extras as they are, and the file's own class, id, Name, and children.
+JsonValue written_doc(const DataModel& world, InstanceId id, const JsonValue& doc) {
+    JsonValue out = JsonValue::object();
+    for (const char* key : {"class", "id", "Name", "children"}) {
+        if (const JsonValue* value = doc.find(key)) {
+            out.set(key, *value);
+        }
+    }
+    const DataModel* object = id == 0 ? &world : world.instance(id);
+    PropertyBag bag;
+    if (object != nullptr) {
+        object->save_properties(bag);
+    }
+    for (const JsonValue::Member& member : world.extra_properties(id)) {
+        bag_set(bag, member.first, member.second);
+    }
+    for (const JsonValue::Member& member : bag) {
+        out.set(member.first, member.second);
+    }
+    return out;
+}
+
+// doc as its class stores it, made in scratch. doc itself when no class takes it.
+JsonValue as_written(DataModel& scratch, const JsonValue& doc) {
+    const JsonValue* klass = doc.find("class");
+    const ProjectFactory factory =
+        klass != nullptr && klass->is_string() ? find_factory(klass->as_string()) : nullptr;
+    if (factory == nullptr) {
+        return doc;
+    }
+    DataModel& object = factory(scratch);
+    for (const JsonValue::Member& member : doc.members()) {
+        if (reserved_key(member.first)) {
+            continue;
+        }
+        std::string error;
+        if (!object.load_property(member.first, member.second, error)) {
+            scratch.set_extra_property(object.id(), member.first, member.second);
+        }
+        if (!error.empty()) {
+            return doc;
+        }
+    }
+    return written_doc(scratch, object.id(), doc);
+}
+
 // History off while the tree is built. Afterwards the loaded tree is the
 // place, and nothing from before is undoable.
 class Rebuild {
@@ -971,14 +1019,14 @@ std::optional<InstanceId> Project::instance_for(std::string_view guid) const {
     return found->second;
 }
 
-Project::Files Project::from_disk(const detail::PlanNode& node, std::string parent) {
+Project::Files Project::from_disk(const detail::PlanNode& node, std::string parent, JsonValue props) {
     Files files;
     files.props_path = node.props_path;
     files.props_bytes = node.props_bytes;
     files.has_source = node.has_source;
     files.source_path = node.source_path;
     files.source_bytes = node.source_bytes;
-    files.props = node.doc;
+    files.props = std::move(props);
     files.parent = std::move(parent);
     return files;
 }
@@ -1056,7 +1104,8 @@ Project Project::load(const fs::path& root) {
     const std::vector<std::size_t> parents = parents_of(plan);
     for (std::size_t index = 0; index < plan.size(); ++index) {
         const PlanNode& node = plan[index];
-        project.files_[node.guid] = from_disk(node, index == 0 ? std::string() : plan[parents[index]].guid);
+        project.files_[node.guid] = from_disk(node, index == 0 ? std::string() : plan[parents[index]].guid,
+                                              written_doc(*project.game_, ids[index], node.doc));
         project.id_guid_[ids[index]] = node.guid;
         project.guid_id_[node.guid] = ids[index];
     }
@@ -1086,7 +1135,8 @@ Project Project::load(const fs::path& root, DataModel& into) {
     const std::vector<std::size_t> parents = parents_of(plan);
     for (std::size_t index = 0; index < plan.size(); ++index) {
         const PlanNode& node = plan[index];
-        project.files_[node.guid] = from_disk(node, index == 0 ? std::string() : plan[parents[index]].guid);
+        project.files_[node.guid] = from_disk(node, index == 0 ? std::string() : plan[parents[index]].guid,
+                                              written_doc(*project.game_, ids[index], node.doc));
         project.id_guid_[ids[index]] = node.guid;
         project.guid_id_[node.guid] = ids[index];
     }
@@ -1252,6 +1302,16 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
                                                    const std::map<std::string, std::vector<std::string>>& claims,
                                                    std::set<std::string>& left_gone) const {
     const std::vector<std::size_t> parent = parents_of(tree);
+    // A place to read a changed file back into, as its class stores it; made
+    // the first time a file needs it.
+    std::unique_ptr<Game> scratch_game;
+    auto scratch = [&scratch_game]() -> DataModel& {
+        if (!scratch_game) {
+            scratch_game = std::make_unique<Game>();
+            scratch_game->history().set_enabled(false);
+        }
+        return *scratch_game;
+    };
     std::unordered_map<std::string, std::size_t> index_of;
     for (std::size_t index = 0; index < tree.size(); ++index) {
         index_of.emplace(tree[index].guid, index);
@@ -1375,7 +1435,8 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
             std::string error;
             if (bytes == base.props_bytes) {
                 // Unchanged on disk.
-            } else if (!parse_json(bytes, disk, error) || !disk.is_object()) {
+            } else if (!parse_json(bytes, disk, error) || !disk.is_object() ||
+                       !(disk = as_written(scratch(), disk)).is_object()) {
                 SaveConflict unreadable = row(guid, base.props_path, SaveConflict::Kind::EditedOutside);
                 unreadable.disk = "can't be read";
                 edited.push_back(std::move(unreadable));
@@ -1476,6 +1537,8 @@ struct Project::Comparison {
         std::string key;
     };
     std::vector<detail::PlanNode> plan;
+    // Each plan node's file as its class stores it.
+    std::vector<JsonValue> docs;
     std::vector<std::size_t> plan_parents;
     std::unordered_map<std::string, std::size_t> on_disk;
     std::vector<AuthoredNode> tree;
@@ -1484,6 +1547,9 @@ struct Project::Comparison {
     // What only the disk changed, in the order to apply it.
     std::vector<Action> actions;
     std::vector<SaveConflict> rows;
+    // Parents whose sibling order the studio changed: a child from the disk
+    // does not re-sort them.
+    std::set<std::string> keep_order;
 
     std::string disk_parent(std::size_t index) const {
         return index == 0 ? std::string() : plan[plan_parents[index]].guid;
@@ -1505,7 +1571,13 @@ Project::Comparison Project::compare_disk() const {
         // the scan here rather than halfway through an apply.
         Game scratch;
         scratch.history().set_enabled(false);
-        build(scratch, out.plan);
+        const std::vector<InstanceId> ids = build(scratch, out.plan);
+        // Each file as its class stores it, so a value the class writes back
+        // differently compares as the studio would write it.
+        out.docs.reserve(out.plan.size());
+        for (std::size_t index = 0; index < out.plan.size(); ++index) {
+            out.docs.push_back(written_doc(scratch, ids[index], out.plan[index].doc));
+        }
     }
     out.plan_parents = parents_of(out.plan);
     for (std::size_t index = 0; index < out.plan.size(); ++index) {
@@ -1522,7 +1594,7 @@ Project::Comparison Project::compare_disk() const {
     };
     auto disk_json = [&](std::size_t index) {
         const PlanNode& node = out.plan[index];
-        return compared_json(node.doc, out.disk_parent(index), index == 0, node.has_source, node.source);
+        return compared_json(out.docs[index], out.disk_parent(index), index == 0, node.has_source, node.source);
     };
     auto studio_json = [&](std::size_t index) {
         const AuthoredNode& node = out.tree[index];
@@ -1645,6 +1717,10 @@ Project::Comparison Project::compare_disk() const {
             if (merged.key == "class") {
                 continue;
             }
+            if (merged.key == "children" &&
+                (merged.change == KeyChange::StudioOnly || merged.change == KeyChange::Conflict)) {
+                out.keep_order.insert(node.guid);
+            }
             if (merged.change == KeyChange::DiskOnly) {
                 act(Type::Set, node.guid, merged.key);
             } else if (merged.change == KeyChange::Conflict) {
@@ -1653,6 +1729,8 @@ Project::Comparison Project::compare_disk() const {
         }
     }
     // Gone from disk.
+    std::set<std::string> kept;
+    std::vector<std::string> gone;
     for (const auto& [guid, files] : files_) {
         if (out.on_disk.count(guid) != 0) {
             continue;
@@ -1663,7 +1741,19 @@ Project::Comparison Project::compare_disk() const {
         }
         if (studio_below(studio->second)) {
             add_row(guid, files.props_path, SaveConflict::Kind::DeletedOutside, "", "changed in the studio", "deleted");
+            kept.insert(guid);
         } else {
+            gone.push_back(guid);
+        }
+    }
+    // One inside a folder that has a row stays with that folder: the folder's
+    // row decides for both.
+    for (const std::string& guid : gone) {
+        bool held = false;
+        for (std::size_t at = out.tree_parents[out.in_studio.at(guid)]; at != 0 && !held; at = out.tree_parents[at]) {
+            held = kept.count(out.tree[at].guid) != 0;
+        }
+        if (!held) {
             act(Type::Destroy, guid);
         }
     }
@@ -1723,7 +1813,7 @@ DiskScan Project::apply_disk(const std::vector<DiskChoice>& choices) {
         world.capture_place();
     }
     Comparison after = compare_disk();
-    refresh_base(after);
+    refresh_base(compared, after);
     out.conflicts = std::move(after.rows);
     out.has_disk_changes = !after.actions.empty();
     return out;
@@ -1749,14 +1839,15 @@ void Project::settle(const Comparison& compared, const SaveConflict& conflict) {
                 continue;
             }
             within.insert(at);
-            files_[compared.plan[at].guid] = from_disk(compared.plan[at], compared.disk_parent(at));
+            files_[compared.plan[at].guid] =
+                from_disk(compared.plan[at], compared.disk_parent(at), compared.docs[at]);
         }
         return;
     }
     const detail::PlanNode& node = compared.plan[index];
     const auto base = files_.find(conflict.guid);
     if (base == files_.end() || conflict.key == "class") {
-        files_[conflict.guid] = from_disk(node, compared.disk_parent(index));
+        files_[conflict.guid] = from_disk(node, compared.disk_parent(index), compared.docs[index]);
         return;
     }
     Files& files = base->second;
@@ -1765,7 +1856,7 @@ void Project::settle(const Comparison& compared, const SaveConflict& conflict) {
     } else if (conflict.key == "Source") {
         files.source_bytes = node.source;
     } else {
-        if (const JsonValue* value = node.doc.find(conflict.key)) {
+        if (const JsonValue* value = compared.docs[index].find(conflict.key)) {
             files.props.set(conflict.key, *value);
         } else {
             files.props.erase(conflict.key);
@@ -1829,9 +1920,21 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
         if (!old || *old == 0) {
             return;
         }
-        const detail::PlanNode& node = compared.plan[compared.on_disk.at(action.guid)];
-        const InstanceId parent = world.parent(*old);
-        const std::vector<InstanceId> siblings = world.get_children(parent);
+        const std::size_t index = compared.on_disk.at(action.guid);
+        const detail::PlanNode& node = compared.plan[index];
+        // Under its disk parent, unless that parent is it or under it.
+        const InstanceId was = world.parent(*old);
+        InstanceId parent = was;
+        if (const std::optional<InstanceId> up = world.find_guid(compared.disk_parent(index))) {
+            bool under = false;
+            for (InstanceId cursor = *up; cursor != 0 && cursor != DataModel::kNoParent; cursor = world.parent(cursor)) {
+                under = under || cursor == *old;
+            }
+            if (!under) {
+                parent = *up;
+            }
+        }
+        const std::vector<InstanceId> siblings = world.get_children(was);
         const std::vector<InstanceId> kids = world.get_children(*old);
         for (InstanceId kid : kids) {
             world.set_parent(kid, DataModel::kNoParent);
@@ -1841,10 +1944,14 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
         for (InstanceId kid : kids) {
             world.set_parent(kid, made);
         }
-        for (InstanceId sibling : siblings) {
-            const InstanceId at = sibling == *old ? made : sibling;
-            world.set_parent(at, DataModel::kNoParent);
-            world.set_parent(at, parent);
+        if (parent == was) {
+            for (InstanceId sibling : siblings) {
+                const InstanceId at = sibling == *old ? made : sibling;
+                world.set_parent(at, DataModel::kNoParent);
+                world.set_parent(at, parent);
+            }
+        } else {
+            received.insert(compared.disk_parent(index));
         }
         note(node.name);
     });
@@ -1902,7 +2009,7 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
         });
         const std::optional<InstanceId> id = world.find_guid(parent);
         const auto disk = compared.on_disk.find(parent);
-        if (!open && id && disk != compared.on_disk.end()) {
+        if (!open && compared.keep_order.count(parent) == 0 && id && disk != compared.on_disk.end()) {
             order_children_as(world, *id, compared.plan[disk->second].doc);
         }
     }
@@ -1915,24 +2022,83 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
     });
 }
 
-void Project::refresh_base(const Comparison& after) {
-    std::set<std::string> open;
+void Project::refresh_base(const Comparison& before, const Comparison& after) {
+    // What after still has open or pending, by GUID: a key, or "" for all of it.
+    std::map<std::string, std::set<std::string>> held;
     for (const SaveConflict& row : after.rows) {
-        open.insert(row.guid);
+        held[row.guid].insert(row.key);
+    }
+    for (const Comparison::Action& action : after.actions) {
+        held[action.guid].insert(action.type == Comparison::Action::Type::Set ? action.key : std::string());
     }
     for (std::size_t index = 0; index < after.plan.size(); ++index) {
         const detail::PlanNode& node = after.plan[index];
-        if (open.count(node.guid) != 0) {
-            continue;  // Still in question: its base stays until a choice or a save.
+        const auto seen = before.on_disk.find(node.guid);
+        if (seen == before.on_disk.end()) {
+            continue;  // Written during the apply: the next check takes it.
         }
-        // Added on disk under an instance the studio deleted: that instance's row carries it.
-        if (files_.count(node.guid) == 0 && after.in_studio.count(node.guid) == 0) {
+        const detail::PlanNode& was = before.plan[seen->second];
+        const bool files_steady = node.props_path == was.props_path && node.source_path == was.source_path;
+        const bool steady = files_steady && node.props_bytes == was.props_bytes &&
+                            node.source_bytes == was.source_bytes &&
+                            after.disk_parent(index) == before.disk_parent(seen->second);
+        const auto keys = held.find(node.guid);
+        if (keys == held.end()) {
+            // Nothing open: the base takes the disk, when the disk still reads as the apply saw it.
+            if (!steady) {
+                continue;
+            }
+            // Added on disk under an instance the studio deleted: that instance's row carries it.
+            if (files_.count(node.guid) == 0 && after.in_studio.count(node.guid) == 0) {
+                continue;
+            }
+            files_[node.guid] = from_disk(node, after.disk_parent(index), after.docs[index]);
             continue;
         }
-        files_[node.guid] = from_disk(node, after.disk_parent(index));
+        // Something open: the base takes the disk key by key, for every key
+        // neither open nor pending that the disk held steady through the apply.
+        const auto base = files_.find(node.guid);
+        if (base == files_.end() || keys->second.count("") != 0) {
+            continue;
+        }
+        Files& files = base->second;
+        const JsonValue& disk = after.docs[index];
+        const JsonValue& earlier = before.docs[seen->second];
+        std::set<std::string> names;
+        for (const JsonValue* object : {static_cast<const JsonValue*>(&files.props), &disk}) {
+            for (const JsonValue::Member& member : object->members()) {
+                names.insert(member.first);
+            }
+        }
+        for (const std::string& key : names) {
+            if (key == "id" || keys->second.count(key) != 0 || !same_value(disk.find(key), earlier.find(key))) {
+                continue;
+            }
+            if (const JsonValue* value = disk.find(key)) {
+                files.props.set(key, *value);
+            } else {
+                files.props.erase(key);
+            }
+        }
+        files.props_bytes = write_json(files.props);
+        if (keys->second.count("Parent") == 0 && after.disk_parent(index) == before.disk_parent(seen->second)) {
+            files.parent = after.disk_parent(index);
+        }
+        if (keys->second.count("Source") == 0 && node.source_bytes == was.source_bytes) {
+            files.has_source = node.has_source;
+            files.source_bytes = node.source_bytes;
+        }
+        // Where its files are, once no one disagrees about its place or its name.
+        if (keys->second.count("Parent") == 0 && keys->second.count("Name") == 0 && files_steady) {
+            files.props_path = node.props_path;
+            files.source_path = node.source_path;
+        }
     }
+    // Gone from disk: out of the base only when it was already gone when the
+    // apply acted, and nothing holds it.
     for (auto it = files_.begin(); it != files_.end();) {
-        if (after.on_disk.count(it->first) == 0 && open.count(it->first) == 0) {
+        if (after.on_disk.count(it->first) == 0 && before.on_disk.count(it->first) == 0 &&
+            held.count(it->first) == 0) {
             it = files_.erase(it);
         } else {
             ++it;

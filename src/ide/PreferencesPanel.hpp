@@ -20,7 +20,8 @@ class Preferences;
 // change. The colors are listed in groups, closed at first; a click on a
 // group's heading opens or closes it, and a filter opens every group with a match. Each color can go back to what the theme under it gives. A shipped
 // theme is never written: its edits save as a new theme of the user's, built
-// on it. A choice of theme is written to preferences.json at once.
+// on it. A choice of theme is written to preferences.json at once. Its
+// Performance tab sets the most frames a second the studio draws.
 class PreferencesPanel : public jadefx::BorderPane {
 public:
     // Asks for a file and passes its path to chosen, or never calls it. The
@@ -31,6 +32,15 @@ public:
     ~PreferencesPanel() override;
 
     void set_file_picker(FilePicker picker) { file_picker_ = std::move(picker); }
+    // Runs with the frame rate the Performance tab keeps, so the studio draws at it.
+    void set_on_frame_rate(std::function<void(int fps)> handler) { on_frame_rate_ = std::move(handler); }
+
+    // The Performance tab's limit, as typed: a whole number, -1 for uncapped.
+    // Remembers it and passes it on. False, with the reason on that tab, for other text.
+    bool set_frame_rate(const std::string& text);
+    const std::string& frame_rate_status() const { return rate_status_text_; }
+    // The Performance tab's field, for tests.
+    jadefx::TextField* frame_rate_field() const { return frame_rate_.get(); }
 
     // The theme the panel shows and edits.
     const std::string& theme_id() const { return id_; }
@@ -90,6 +100,9 @@ private:
     // is typed, and takes them out otherwise. Its arrow says which.
     void place_body(Group& group);
     void set_status(std::string text, bool error = false);
+    void set_rate_status(std::string text, bool error = false);
+    // The Performance tab: the frame rate limit.
+    std::shared_ptr<jadefx::Node> build_performance();
     void show_save_as(bool shown);
     void ask(const std::string& header, const std::string& content, const std::string& yes,
              std::function<void()> then, jadefx::AlertType type = jadefx::AlertType::Confirmation);
@@ -99,6 +112,7 @@ private:
     ThemeLibrary& themes_;
     Preferences& preferences_;
     FilePicker file_picker_;
+    std::function<void(int)> on_frame_rate_;
 
     std::string id_;
     std::string name_;
@@ -132,6 +146,9 @@ private:
     std::shared_ptr<jadefx::Button> save_as_;
     std::shared_ptr<jadefx::Button> save_;
     std::string status_text_;
+    std::shared_ptr<jadefx::TextField> frame_rate_;
+    std::shared_ptr<jadefx::Label> rate_status_;
+    std::string rate_status_text_;
     bool save_as_shown_ = false;
     // An alert must outlive its popup.
     std::vector<std::shared_ptr<jadefx::Alert>> alerts_;

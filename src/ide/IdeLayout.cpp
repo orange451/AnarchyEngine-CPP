@@ -1453,7 +1453,9 @@ void IdeLayout::mount(jadefx::Scene& scene) {
 
 void IdeLayout::attachFrame(jadefx::Stage& stage) {
     mainStage_ = &stage;
-    resizeWindow_ = [&stage](int width, int height) { stage.setSize(width, height); };
+    // 120 unless Preferences > Performance says otherwise. JadeFX's own default is 60.
+    stage.setMaxFrameRate(Preferences::stage_frame_rate(preferences_.frame_rate()));
+    resizeWindow_ =[&stage](int width, int height) { stage.setSize(width, height); };
     stage.setFrameTail([this]() { flushFrame(); });
     LeaveFieldsOnEscape(stage);
     // The close button, Alt+F4, and Cmd+Q ask about unsaved work first.
@@ -3128,6 +3130,11 @@ void IdeLayout::open_preferences() {
         return;
     }
     auto panel = jadefx::make<PreferencesPanel>(themes_, preferences_);
+    panel->set_on_frame_rate([this](int fps) {
+        if (mainStage_ != nullptr) {
+            mainStage_->setMaxFrameRate(Preferences::stage_frame_rate(fps));
+        }
+    });
     auto scene = jadefx::make<jadefx::Scene>(panel, static_cast<double>(kWidth), static_cast<double>(kHeight));
     window->stage().setScene(std::move(scene));
     LeaveFieldsOnEscape(window->stage());

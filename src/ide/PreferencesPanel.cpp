@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <stdexcept>
+#include <string>
 #include <system_error>
 #include <utility>
 
@@ -388,6 +390,9 @@ void PreferencesPanel::build() {
     auto tab = std::make_shared<jadefx::Tab>("Appearance", appearance);
     tab->setClosable(false);
     tabs->getTabs().add(tab);
+    auto performance = std::make_shared<jadefx::Tab>("Performance", build_performance());
+    performance->setClosable(false);
+    tabs->getTabs().add(performance);
     setCenter(tabs);
 
     // A theme file dropped on the window is imported.
@@ -413,6 +418,73 @@ void PreferencesPanel::build() {
         event.consume();
     });
     rebuild_rows();
+}
+
+std::shared_ptr<jadefx::Node> PreferencesPanel::build_performance() {
+    auto rate_row = jadefx::make<jadefx::HBox>();
+    rate_row->getClassList().add("prefs-row");
+    rate_row->setAlignment(jadefx::Pos::CenterLeft);
+    auto label = jadefx::make<jadefx::Label>("Frame rate limit");
+    label->setPrefWidth(kLabelWidth);
+    label->setMinSize(kLabelWidth, 0);
+    rate_row->getChildren().add(label);
+    frame_rate_ = jadefx::make<jadefx::TextField>();
+    frame_rate_->getClassList().add("prefs-frame-rate");
+    frame_rate_->setPrefWidth(80);
+    frame_rate_->setText(std::to_string(preferences_.frame_rate()));
+    frame_rate_->setOnAction([this](jadefx::ActionEvent&) { set_frame_rate(frame_rate_->getText()); });
+    rate_row->getChildren().add(frame_rate_);
+    rate_row->getChildren().add(jadefx::make<jadefx::Label>("fps"));
+    rate_row->getChildren().add(MakeButton("Apply", [this] { set_frame_rate(frame_rate_->getText()); }));
+
+    auto hint = jadefx::make<jadefx::Label>(
+        "The most frames a second the studio draws. -1 is uncapped. From " +
+        std::to_string(Preferences::kMinFrameRate) + " to " + std::to_string(Preferences::kMaxFrameRate) +
+        " otherwise. The game's simulation stays at 60 Hz.");
+    hint->getClassList().add("prefs-hint");
+    rate_status_ = jadefx::make<jadefx::Label>("");
+    rate_status_->getClassList().add("prefs-status");
+
+    auto page = jadefx::make<jadefx::VBox>();
+    page->getClassList().add("prefs-top");
+    page->setPrefWidthRatio(1);
+    page->setPrefHeightRatio(1);
+    page->getChildren().add(rate_row);
+    page->getChildren().add(hint);
+    page->getChildren().add(rate_status_);
+    return page;
+}
+
+bool PreferencesPanel::set_frame_rate(const std::string& text) {
+    const std::string trimmed = Trim(text);
+    int fps = 0;
+    std::size_t used = 0;
+    try {
+        fps = std::stoi(trimmed, &used);
+    } catch (const std::exception&) {
+        used = 0;
+    }
+    if (trimmed.empty() || used != trimmed.size() ||
+        (fps != Preferences::kUncappedFrameRate &&
+         (fps < Preferences::kMinFrameRate || fps > Preferences::kMaxFrameRate))) {
+        set_rate_status("Type -1 for uncapped, or a whole number from " + std::to_string(Preferences::kMinFrameRate) +
+                            " to " + std::to_string(Preferences::kMaxFrameRate) + ".",
+                        true);
+        return false;
+    }
+    preferences_.set_frame_rate(fps);
+    frame_rate_->setText(std::to_string(fps));
+    if (on_frame_rate_) {
+        on_frame_rate_(fps);
+    }
+    std::string failure;
+    if (!preferences_.save(failure)) {
+        set_rate_status("Could not save your preferences: " + failure, true);
+        return false;
+    }
+    set_rate_status(fps == Preferences::kUncappedFrameRate ? "The studio draws uncapped."
+                                                           : "The studio draws at up to " + std::to_string(fps) + " fps.");
+    return true;
 }
 
 void PreferencesPanel::layoutChildren() {
@@ -739,6 +811,15 @@ void PreferencesPanel::set_status(std::string text, bool error) {
     status_->getClassList().removeIf([](const std::string& name) { return name == "error"; });
     if (error) {
         status_->getClassList().add("error");
+    }
+}
+
+void PreferencesPanel::set_rate_status(std::string text, bool error) {
+    rate_status_text_ = std::move(text);
+    rate_status_->setText(rate_status_text_);
+    rate_status_->getClassList().removeIf([](const std::string& name) { return name == "error"; });
+    if (error) {
+        rate_status_->getClassList().add("error");
     }
 }
 

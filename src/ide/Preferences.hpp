@@ -24,6 +24,18 @@ public:
     std::string theme() const;
     void set_theme(const std::string& id);
 
+    // The most frames a second the studio draws. kUncappedFrameRate draws as
+    // fast as the machine allows. Other values are kept from kMinFrameRate to
+    // kMaxFrameRate, so a typo cannot leave the studio too slow to use.
+    static constexpr int kUncappedFrameRate = -1;
+    static constexpr int kDefaultFrameRate = 120;
+    static constexpr int kMinFrameRate = 15;
+    static constexpr int kMaxFrameRate = 1000;
+    int frame_rate() const;
+    void set_frame_rate(int fps);
+    // What Stage::setMaxFrameRate takes for fps. Uncapped is 0 there.
+    static double stage_frame_rate(int fps);
+
     // Writes the file. True, doing nothing, when there is no file.
     bool save(std::string& error) const;
 

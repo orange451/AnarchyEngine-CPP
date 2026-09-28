@@ -425,6 +425,46 @@ void TestGroups() {
     Expect(listed("--ide-ribbon-color"), "and the group that was open stays open");
 }
 
+void TestFrameRate() {
+    Scratch scratch;
+    const fs::path file = scratch.root / "preferences.json";
+    {
+        ide::Preferences preferences(file);
+        Expect(preferences.frame_rate() == 120, "the studio draws at 120 fps unless told otherwise");
+        preferences.set_frame_rate(-1);
+        Expect(preferences.frame_rate() == -1, "-1 is uncapped");
+        Expect(ide::Preferences::stage_frame_rate(-1) == 0, "which the stage takes as 0");
+        preferences.set_frame_rate(3);
+        Expect(preferences.frame_rate() == 15, "a rate too slow to use is raised");
+    }
+    Write(file, "{ \"frameRate\": 0 }");
+    Expect(ide::Preferences(file).frame_rate() == 120, "a rate of 0 in the file is the default");
+    Write(file, "{ \"frameRate\": \"fast\" }");
+    Expect(ide::Preferences(file).frame_rate() == 120, "and so is one that is not a number");
+
+    ide::ThemeLibrary library(scratch.root / "themes");
+    ide::Preferences preferences(file);
+    auto panel = jadefx::make<ide::PreferencesPanel>(library, preferences);
+    auto scene = jadefx::make<jadefx::Scene>(panel, 700, 640);
+    scene->layout(700, 640, 0.1);
+    int heard = 0;
+    panel->set_on_frame_rate([&heard](int fps) { heard = fps; });
+    Expect(panel->frame_rate_field() != nullptr && panel->frame_rate_field()->getText() == "120",
+           "the Performance tab shows the limit");
+
+    Expect(panel->set_frame_rate(" 144 "), "a whole number is a limit");
+    Expect(heard == 144, "that the studio is told");
+    Expect(ide::Preferences(file).frame_rate() == 144, "and that is remembered");
+    Expect(panel->set_frame_rate("-1") && heard == -1, "-1 uncaps it");
+    Expect(ide::Preferences(file).frame_rate() == -1, "which is remembered too");
+    heard = 0;
+    for (const char* bad : {"", "abc", "60fps", "0", "5", "-2", "2000", "99999999999"}) {
+        Expect(!panel->set_frame_rate(bad), (std::string("not a limit: '") + bad + "'").c_str());
+    }
+    Expect(heard == 0 && ide::Preferences(file).frame_rate() == -1, "and those change nothing");
+    Expect(!panel->frame_rate_status().empty(), "saying why");
+}
+
 }  // namespace
 
 int RunPreferencesTests() {
@@ -436,5 +476,6 @@ int RunPreferencesTests() {
     TestPanel();
     TestPickFromList();
     TestGroups();
+    TestFrameRate();
     return gFailures;
 }

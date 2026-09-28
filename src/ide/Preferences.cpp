@@ -2,6 +2,8 @@
 
 #include "IdeResources.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <system_error>
 #include <utility>
 
@@ -32,6 +34,28 @@ std::string Preferences::theme() const {
 }
 
 void Preferences::set_theme(const std::string& id) { root_.set("theme", engine_core::JsonValue::string(id)); }
+
+int Preferences::frame_rate() const {
+    const engine_core::JsonValue* rate = root_.find("frameRate");
+    if (rate == nullptr || !rate->is_number() || !std::isfinite(rate->as_number())) {
+        return kDefaultFrameRate;
+    }
+    const double value = std::round(rate->as_number());
+    if (value == kUncappedFrameRate) {
+        return kUncappedFrameRate;
+    }
+    if (value < 1) {
+        return kDefaultFrameRate;
+    }
+    return static_cast<int>(std::clamp(value, static_cast<double>(kMinFrameRate), static_cast<double>(kMaxFrameRate)));
+}
+
+void Preferences::set_frame_rate(int fps) {
+    const int kept = fps == kUncappedFrameRate ? fps : std::clamp(fps, kMinFrameRate, kMaxFrameRate);
+    root_.set("frameRate", engine_core::JsonValue::number(kept));
+}
+
+double Preferences::stage_frame_rate(int fps) { return fps == kUncappedFrameRate ? 0.0 : static_cast<double>(fps); }
 
 bool Preferences::save(std::string& error) const {
     if (file_.empty()) {

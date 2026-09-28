@@ -3,6 +3,7 @@
 #include "IdeIcons.hpp"
 
 #include <algorithm>
+#include <string>
 #include <utility>
 
 namespace ide {
@@ -220,6 +221,8 @@ void IdeConflicts::setConflicts(std::vector<engine_core::SaveConflict> rows) {
     }
     picks_ = std::move(kept);
     rows_ = std::move(rows);
+    // The tab counts the rows, as "Conflicts (2)". None leaves it "Conflicts".
+    setTitle(rows_.empty() ? std::string() : name() + " (" + std::to_string(rows_.size()) + ")");
     rebuild();
 }
 

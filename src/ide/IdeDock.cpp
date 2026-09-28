@@ -28,7 +28,7 @@ std::shared_ptr<jadefx::Tab> IdeDock::dock(const std::shared_ptr<IdePane>& pane)
         return nullptr;
     }
 
-    auto tab = jadefx::make<jadefx::Tab>(pane->name(), pane);
+    auto tab = jadefx::make<jadefx::Tab>(pane->title(), pane);
     if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic(pane->iconFile())) {
         tab->setGraphic(std::move(icon));
     }
@@ -39,6 +39,12 @@ std::shared_ptr<jadefx::Tab> IdeDock::dock(const std::shared_ptr<IdePane>& pane)
     std::weak_ptr<IdePane> page = pane;
     std::weak_ptr<jadefx::Tab> weak = tab;
     std::shared_ptr<jadefx::Tab> opened = tab;
+    // The tab moves between docks and windows whole, so this follows it there.
+    pane->setOnTitle([weak](const std::string& title) {
+        if (const std::shared_ptr<jadefx::Tab> live = weak.lock()) {
+            live->setText(title);
+        }
+    });
     tab->setOnSelectionChanged([page, weak] {
         const std::shared_ptr<IdePane> live = page.lock();
         const std::shared_ptr<jadefx::Tab> current = weak.lock();

@@ -238,18 +238,9 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     load();
 }
 
-void IdeScriptEditor::setOnTitle(std::function<void(const std::string&)> handler) {
-    on_title_ = std::move(handler);
-    if (on_title_ && loaded_) {
-        on_title_(lua_title(shown_name_));
-    }
-}
-
 void IdeScriptEditor::setTitleText(const std::string& name) {
     shown_name_ = name;
-    if (on_title_) {
-        on_title_(lua_title(name));
-    }
+    setTitle(lua_title(name));
 }
 
 std::string IdeScriptEditor::text() const { return area_ ? area_->getText() : std::string(); }

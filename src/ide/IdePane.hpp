@@ -2,19 +2,28 @@
 
 #include "jadefx/jadefx.hpp"
 
+#include <functional>
 #include <string>
 
 namespace ide {
 
-// One docked page. The dock shows `name` on the tab. iconFile() is drawn beside
-// that name when the file is under resources/icons. A page that is not closable
-// keeps its tab for the life of the shell.
+// One docked page. The dock shows title() on the tab: `name` unless the page
+// sets another, as Conflicts adds its count. name() stays the same, and is
+// what layout.json and the Window menu know the page by. iconFile() is drawn
+// beside the title when the file is under resources/icons. A page that is not
+// closable keeps its tab for the life of the shell.
 class IdePane : public jadefx::StackPane {
 public:
     IdePane(std::string name, bool closable);
 
     const std::string& name() const { return name_; }
     bool closable() const { return closable_; }
+
+    const std::string& title() const { return title_.empty() ? name_ : title_; }
+    // Empty goes back to the name. The tab showing the page follows.
+    void setTitle(std::string title);
+    // Called with the new title. The dock holding the page sets this.
+    void setOnTitle(std::function<void(const std::string&)> handler) { on_title_ = std::move(handler); }
 
     void setIconFile(std::string filename) { iconFile_ = std::move(filename); }
     const std::string& iconFile() const { return iconFile_; }
@@ -24,6 +33,8 @@ public:
 
 private:
     std::string name_;
+    std::string title_;
+    std::function<void(const std::string&)> on_title_;
     bool closable_;
     std::string iconFile_;
 };

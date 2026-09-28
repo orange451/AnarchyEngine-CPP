@@ -265,11 +265,13 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     const std::shared_ptr<jadefx::Tab> pane_tab = home != nullptr ? TabOf(*home, pane) : nullptr;
     expect(pane_tab && pane_tab->isSelected(), "the count's window docks and comes to the front");
     expect(pane != nullptr && pane->conflicts().size() == 1, "listing the conflict");
+    expect(pane_tab && pane_tab->getText() == "Conflicts (1)", "its tab counts the conflict");
     if (pane != nullptr && pane->conflicts().size() == 1) {
         pane->choose(0, true);
         pane->apply();
         expect(part_color().r == 1.f && part_color().b == 0.f, "Apply takes the disk's side");
         expect(pane->conflicts().empty() && !count_shown(), "and the row and the count go");
+        expect(pane_tab && pane_tab->getText() == "Conflicts", "and the tab drops its count");
     }
 
     paint(0.25f, 0.5f, 0.75f);

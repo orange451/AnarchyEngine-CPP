@@ -2776,12 +2776,6 @@ void IdeLayout::edit(std::uint32_t id) {
     editor->bindUndo(&undo_router_.script_stack(id));
     std::shared_ptr<jadefx::Tab> tab = home->dock(editor);
     if (tab) {
-        std::weak_ptr<jadefx::Tab> weak = tab;
-        editor->setOnTitle([weak](const std::string& title) {
-            if (std::shared_ptr<jadefx::Tab> live = weak.lock()) {
-                live->setText(title);
-            }
-        });
         tab->setOnClosed([this, id, editor] {
             if (editor && editor->isLoaded()) {
                 kept_sources_[id] = editor->text();

@@ -45,8 +45,7 @@ public:
 
     std::uint32_t instanceId() const { return id_; }
 
-    // The tab title, including the .lua suffix.
-    void setOnTitle(std::function<void(const std::string&)> handler);
+    // Titles the tab with the script's name and the .lua suffix.
     void setTitleText(const std::string& name);
 
     bool isLoaded() const { return loaded_; }
@@ -145,7 +144,6 @@ private:
     std::shared_ptr<jadefx::Label> status_;
     CompletionPopup completion_;
     std::shared_ptr<Commit> commit_;
-    std::function<void(const std::string&)> on_title_;
     std::string shown_name_;
     TextUndoStack* undo_stack_ = nullptr;
     bool mute_undo_ = false;

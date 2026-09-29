@@ -307,6 +307,7 @@ add_library(engine_core STATIC
     src/engine_core/ScriptRuntime.cpp
     src/engine_core/TableSnapshot.cpp
     src/engine_core/ScriptAnalysis.cpp
+    src/engine_core/StackThread.cpp
     src/engine_core/AnalysisDefinitions.cpp
     src/engine_core/PropertyBag.cpp
     src/engine_core/JsonMerge.cpp

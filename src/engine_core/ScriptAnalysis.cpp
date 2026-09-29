@@ -5,6 +5,7 @@
 #include "LuaApi.hpp"
 #include "LuaSource.hpp"
 #include "ModuleScript.hpp"
+#include "StackThread.hpp"
 #include "TableSnapshot.hpp"
 
 #if defined(__clang__)
@@ -2419,7 +2420,8 @@ struct ScriptAnalysis::State {
     int inflight = 0;
     // The script the worker is checking. 0 between jobs.
     InstanceId running = 0;
-    std::thread worker;
+    // Luau parses and checks here, as deep as its own recursion limits allow.
+    StackThread worker;
 
     struct Handler {
         std::uint64_t token = 0;
@@ -2635,13 +2637,18 @@ void ScriptAnalysis::shutdown() {
     }
 }
 
+// Luau's parser allows 1000 levels of nesting and its checker hundreds more;
+// a Debug build spends a few KB of stack on each. std::thread's default of 1 MB
+// overflows on code nested that deep, so the worker reserves this much.
+constexpr std::size_t kWorkerStackBytes = std::size_t{16} << 20;
+
 void ScriptAnalysis::ensure_worker() {
     std::lock_guard<std::mutex> start(state_->start_mu);
     if (state_->started) {
         return;
     }
     state_->started = true;
-    state_->worker = std::thread([this] { run(); });
+    state_->worker = StackThread(kWorkerStackBytes, [this] { run(); });
 }
 
 void ScriptAnalysis::run() {

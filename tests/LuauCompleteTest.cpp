@@ -2763,6 +2763,130 @@ void testTypedLater() {
     }
 }
 
+// Types a module exports, used from another script: `Module.Type` in an
+// annotation, values of those types, literal types, and hovers on type names.
+void testExportedTypes() {
+    const char* vector =
+        "--!strict\n"
+        "local Vector2D = {}\n"
+        "Vector2D.__index = Vector2D\n"
+        "export type Vector2D = typeof(setmetatable({} :: { x: number, y: number }, Vector2D))\n"
+        "function Vector2D.new(x: number?, y: number?): Vector2D\n"
+        "    return setmetatable({ x = x or 0, y = y or 0 }, Vector2D)\n"
+        "end\n"
+        "function Vector2D.magnitude(self: Vector2D): number\n"
+        "    return math.sqrt(self.x * self.x + self.y * self.y)\n"
+        "end\n"
+        "return Vector2D\n";
+    const char* animal =
+        "--!strict\n"
+        "local Vector2D = require(script.Parent.Vector2D)\n"
+        "local Animal = {}\n"
+        "Animal.__index = Animal\n"
+        "export type Diet = \"herbivore\" | \"carnivore\" | \"omnivore\"\n"
+        "export type AnimalData = {\n"
+        "    name: string,\n"
+        "    diet: Diet,\n"
+        "    position: Vector2D.Vector2D,\n"
+        "}\n"
+        "export type Animal = typeof(setmetatable({} :: AnimalData, Animal))\n"
+        "function Animal.new(name: string, diet: Diet): Animal\n"
+        "    local self = setmetatable({} :: AnimalData, Animal)\n"
+        "    self.name = name\n"
+        "    self.diet = diet\n"
+        "    self.position = Vector2D.new()\n"
+        "    return self\n"
+        "end\n"
+        "function Animal.speak(self: Animal): string\n"
+        "    return self.name\n"
+        "end\n"
+        "function Animal.moveTo(self: Animal, target: Vector2D.Vector2D): number\n"
+        "    return (target :: any).x\n"
+        "end\n"
+        "return Animal\n";
+    const char* dog =
+        "--!strict\n"
+        "local Animal = require(script.Parent.Animal)\n"
+        "local Dog = setmetatable({}, { __index = Animal })\n"
+        "Dog.__index = Dog\n"
+        "export type Trick = \"sit\" | \"roll\" | \"fetch\"\n"
+        "export type Dog = Animal.Animal & {\n"
+        "    breed: string,\n"
+        "    learn: (self: Dog, trick: Trick) -> (),\n"
+        "}\n"
+        "function Dog.new(name: string, breed: string): Dog\n"
+        "    local self = Animal.new(name, \"omnivore\") :: any\n"
+        "    self.breed = breed\n"
+        "    return setmetatable(self, Dog) :: any\n"
+        "end\n"
+        "function Dog.learn(self: Dog, trick: Trick)\n"
+        "end\n"
+        "return Dog\n";
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
+    world.push_back(node(1, 0, "Demo", "Folder"));
+    world.push_back(node(2, 1, "Vector2D", "ModuleScript", vector));
+    world.push_back(node(3, 1, "Animal", "ModuleScript", animal));
+    world.push_back(node(4, 1, "Dog", "ModuleScript", dog));
+    world.push_back(node(5, 1, "Main", "Script"));
+    const std::string main =
+        "local Vector2D = require(script.Parent.Vector2D)\n"
+        "local Animal = require(script.Parent.Animal)\n"
+        "local Dog = require(script.Parent.Dog)\n"
+        "local rex = Dog.new(\"Rex\", \"Beagle\")\n";
+
+    // A module's exported types after `Module.` in an annotation.
+    const ide::CompletionList vector_types = at_end(main + "local p: Vector2D.", world, 5);
+    expect_detail(vector_types, "Vector2D", "type", "an exported type");
+    const ide::CompletionList dog_types = at_end(main + "local d: Dog.", world, 5);
+    expect_has(dog_types, "Dog", "an exported type");
+    expect_has(dog_types, "Trick", "an exported literal type");
+    expect_missing(dog_types, "new", "a value is no type");
+    // A type name offers the modules that export types, and local aliases.
+    expect_detail(at_end(main + "local p: Vec", world, 5), "Vector2D", "module", "a module in a type");
+    const std::string field = animal;
+    const std::size_t diet_at = field.find("diet: Diet,") + std::string("diet: Di").size();
+    const ide::CompletionList local_type =
+        at_caret(field, ide::CodePointsBefore(field, diet_at), world, 3);
+    expect_has(local_type, "Diet", "a local type in a table type's field");
+
+    // A value of an exported type: every function that takes it first after ':'.
+    const ide::CompletionList methods = at_end(main + "rex:", world, 5);
+    expect_has(methods, "speak", "an inherited method written with a dot and self");
+    expect_has(methods, "moveTo", "an inherited method");
+    expect_has(methods, "learn", "the type's own method");
+    expect_missing(methods, "breed", "a field after ':'");
+    expect_missing(methods, "new", "a constructor takes no receiver");
+    expect_has(at_end(main + "rex.", world, 5), "breed", "a field of an exported type");
+
+    // A literal type offers its strings.
+    const ide::CompletionList tricks = at_end(main + "rex:learn(\"", world, 5);
+    expect_has(tricks, "sit", "a literal type's string");
+    expect_has(tricks, "fetch", "a literal type's string");
+    if (tricks.site != ide::CompleteSite::Argument) {
+        fail("a literal type's strings are an argument completion");
+    }
+    expect_has(at_end(main + "Animal.new(\"x\", \"om", world, 5), "omnivore", "a literal type typed so far");
+    // Signatures read as the definition wrote them.
+    expect_signature(at_end(main + "Animal.new(", world, 5), "(name: string, diet: Diet)", "a written parameter type");
+    expect_signature(at_end(main + "rex:moveTo(", world, 5), "(target: Vector2D.Vector2D)",
+                     "a ':' call drops the receiver written as self");
+
+    // Hovering a type name shows its declaration.
+    expect_hover(ide::hover_luau(animal, find_nth(animal, "Diet", 1), world, 3),
+                 "type Diet = \"herbivore\" | \"carnivore\" | \"omnivore\"", "type", nullptr, "a local type");
+    const std::string typed = main + "local d: Dog.Dog = rex\n";
+    const ide::HoverInfo exported = ide::hover_luau(typed, find_nth(typed, "Dog", 4), world, 5);
+    if (!exported.found || exported.title.rfind("type Dog = Animal.Animal & {", 0) != 0) {
+        fail("an exported type's hover is its declaration: " + exported.title);
+    }
+    const ide::HoverInfo alias = ide::hover_luau(typed, find_nth(typed, "Dog", 3), world, 5);
+    expect_hover(alias, "Dog", "module", nullptr, "the module before an exported type");
+    expect_hover(ide::hover_luau(animal, find_nth(animal, "Vector2D", 3), world, 3),
+                 "type Vector2D = typeof(setmetatable({} :: { x: number, y: number }, Vector2D))", "type", nullptr,
+                 "an imported type");
+}
+
 int RunLuauCompleteTests() {
     try {
         testLibraries();
@@ -2793,6 +2917,7 @@ int RunLuauCompleteTests() {
         testTypedHoverAndSignature();
         testTypedLater();
         testTypedSwitchedOff();
+        testExportedTypes();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());
     }

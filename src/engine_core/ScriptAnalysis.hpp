@@ -88,6 +88,9 @@ struct LuauSuggestion {
     bool returns_disagree = false;
     // Its body returns no value anywhere, as `function() end`.
     bool returns_none = false;
+    // It takes a receiver first, so a ':' call suits it: written with ':', or
+    // a first parameter annotated or named self with a type that says what.
+    bool takes_receiver = false;
     // A local in scope at the position, and where it was declared, as
     // line * 65536 + column, so the nearest can come first.
     bool local = false;

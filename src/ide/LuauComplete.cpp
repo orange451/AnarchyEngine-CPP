@@ -1263,7 +1263,8 @@ std::size_t ByteOf(const std::string& source, int point) { return CodePointByte(
 // The source with whatever is still open closed at its end: `end` for a
 // function, if, or do, `until true` for a repeat, and the brackets. Luau drops
 // the body of a block it cannot close, and with it the locals being typed
-// inside it. Offsets before the end stay where they were.
+// inside it. A string still open closes first. Offsets before the end stay
+// where they were.
 std::string ClosedForLuau(const std::string& source) {
     const std::u32string text = Utf32(source);
     const Scan scan = Tokenize(text, static_cast<int>(text.size()));
@@ -1288,17 +1289,17 @@ std::string ClosedForLuau(const std::string& source) {
             open.pop_back();
         }
     }
-    if (open.empty()) {
-        return source;
-    }
     std::string closed = source;
+    if (scan.open_string && scan.quote != 0) {
+        closed += static_cast<char>(scan.quote);
+    }
     for (auto closer = open.rbegin(); closer != open.rend(); ++closer) {
         closed += *closer == ")" || *closer == "}" || *closer == "]" ? *closer : "\n" + *closer;
     }
     return closed;
 }
 
-enum class Step { Done, Member, Name, String };
+enum class Step { Done, Member, Name, String, Type };
 
 }  // namespace
 
@@ -1376,7 +1377,49 @@ const engine_core::LuauTypeAt* FactType(const engine_core::LuauFacts& facts, int
     return &facts.types[static_cast<std::size_t>(index)];
 }
 
+// A type name: the types Luau sees here, local and exported, the modules whose
+// exported types are named as `Module.Type`, and every registered class. The
+// site stays what the text said, so the popup keeps its list while typing.
+void FinishTypes(const engine_core::LuauCompletion& luau, CompletionList& list) {
+    std::vector<CompletionItem> rows;
+    for (const engine_core::LuauSuggestion& row : luau.items) {
+        if ((row.kind != "type" && row.kind != "module") || !StartsWith(row.name, list.prefix) ||
+            StartsWith(row.name, "Signal_")) {
+            continue;
+        }
+        CompletionItem item;
+        item.name = row.name;
+        item.detail = row.kind;
+        rows.push_back(std::move(item));
+    }
+    std::vector<CompletionItem> registered;
+    AddTypes(list.prefix, registered);
+    for (CompletionItem& item : registered) {
+        const auto same = std::find_if(rows.begin(), rows.end(), [&](const CompletionItem& row) { return row.name == item.name; });
+        if (same == rows.end()) {
+            rows.push_back(std::move(item));
+        } else if (same->detail == "type") {
+            *same = std::move(item);
+        }
+    }
+    std::stable_sort(rows.begin(), rows.end(),
+                     [](const CompletionItem& a, const CompletionItem& b) { return a.name < b.name; });
+    list.items = std::move(rows);
+}
+
 void FinishMember(const CompletionPlanState& state, const engine_core::LuauCompletion& luau, CompletionList& list) {
+    // `Module.` in a type: the types the module exports.
+    if (luau.context == "type") {
+        for (const engine_core::LuauSuggestion& row : luau.items) {
+            if (row.kind == "type" && StartsWith(row.name, list.prefix)) {
+                CompletionItem item;
+                item.name = row.name;
+                item.detail = "type";
+                list.items.push_back(std::move(item));
+            }
+        }
+        return;
+    }
     // `script` is nil on the command line.
     if (!state.script_global && luau.receiver_global == "script") {
         return;
@@ -1468,6 +1511,9 @@ void FinishMember(const CompletionPlanState& state, const engine_core::LuauCompl
         if (!state.colon && method) {
             continue;
         }
+        if (state.colon && (!row.function || row.wrong_index || !row.takes_receiver)) {
+            continue;
+        }
         CompletionItem item;
         item.name = row.name;
         item.call = row.function;
@@ -1480,7 +1526,7 @@ void FinishMember(const CompletionPlanState& state, const engine_core::LuauCompl
             const std::string shown = RowType(row.type);
             item.detail = shown.empty() ? "field" : shown;
         }
-        take(std::move(item), method);
+        take(std::move(item), row.function);
     }
 }
 
@@ -1680,7 +1726,7 @@ void FinishSignature(const CompletionPlanState& state, const engine_core::LuauFa
         const bool colon = callee->kind == "member" && state.slot.open >= 2 &&
                            state.tokens[static_cast<std::size_t>(state.slot.open - 2)].kind == Token::Colon;
         const auto shown = ShownParams(callee->described);
-        for (std::size_t index = colon && callee->described.method ? 1 : 0; index < shown.size(); ++index) {
+        for (std::size_t index = colon ? 1 : 0; index < shown.size(); ++index) {
             Param param;
             param.name = shown[index].first;
             param.type_name = shown[index].second;
@@ -1730,6 +1776,31 @@ void FinishString(const CompletionPlanState& state, const engine_core::LuauFacts
                 AddServices(list.prefix, list.items);
             } else {
                 AddCreatable(list.prefix, list.items);
+            }
+        }
+    }
+    // A parameter typed as string literals offers them.
+    if (list.site == CompleteSite::None) {
+        std::vector<std::string> literals;
+        for (const engine_core::LuauSuggestion& row : facts.completion.items) {
+            if (row.kind != "string") {
+                continue;
+            }
+            // Luau quotes a literal offered outside a string, not one inside it.
+            const bool quoted = row.name.size() >= 2 && (row.name.front() == '"' || row.name.front() == '\'') &&
+                                row.name.back() == row.name.front();
+            literals.push_back(quoted ? row.name.substr(1, row.name.size() - 2) : row.name);
+        }
+        if (!literals.empty()) {
+            BeginStringArgument(list, state.scan, state.text, state.caret);
+            std::sort(literals.begin(), literals.end());
+            for (const std::string& literal : literals) {
+                if (StartsWith(literal, list.prefix)) {
+                    CompletionItem item;
+                    item.name = literal;
+                    item.detail = "string";
+                    list.items.push_back(std::move(item));
+                }
             }
         }
     }
@@ -1786,6 +1857,7 @@ CompletionPlan plan_completion(std::string_view source, int caret, const std::ve
             return plan;
         }
         state->index = index;
+        plan.caret_offset = ByteOf(state->source, caret);
         BeginStringArgument(plan.frame, scan, text, caret);
         state->scan = std::move(scan);
         state->step = Step::String;
@@ -1827,7 +1899,11 @@ CompletionPlan plan_completion(std::string_view source, int caret, const std::ve
                             AnnotationAt(tokens, index - 1);
     if (cast || annotation) {
         list.site = CompleteSite::Type;
-        AddTypes(list.prefix, list.items);
+        plan.caret_offset = ByteOf(state->source, caret);
+        plan.needs_luau = true;
+        plan.frame = list;
+        state->step = Step::Type;
+        plan.state = state;
         return plan;
     }
     const bool member = index > 0 && (tokens[static_cast<std::size_t>(index - 1)].kind == Token::Dot ||
@@ -1873,6 +1949,8 @@ CompletionList finish_completion(const CompletionPlan& plan, const engine_core::
     if (!facts.ran) {
         if (state.step == Step::Name) {
             FinishNames(state, engine_core::LuauCompletion{}, list);
+        } else if (state.step == Step::Type) {
+            AddTypes(list.prefix, list.items);
         }
         return list;
     }
@@ -1880,7 +1958,14 @@ CompletionList finish_completion(const CompletionPlan& plan, const engine_core::
     case Step::Member:
         FinishMember(state, facts.completion, list);
         break;
+    case Step::Type:
+        FinishTypes(facts.completion, list);
+        break;
     case Step::Name:
+        if (facts.completion.context == "type") {
+            FinishTypes(facts.completion, list);
+            break;
+        }
         FinishNames(state, facts.completion, list);
         FinishCallback(state, facts, list);
         FinishSignature(state, facts, list);
@@ -1904,6 +1989,9 @@ struct HoverPlanState {
     CompletionPlanState call;
     bool anonymous = false;
     bool callback = false;
+    // The word is a type in an annotation. Without Luau's answer it still
+    // shows as a type.
+    bool annotation = false;
 };
 
 HoverPlan plan_hover(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world,
@@ -1992,16 +2080,7 @@ HoverPlan plan_hover(std::string_view source, int index, const std::vector<engin
             }
         }
     }
-    if (annotation) {
-        info.found = true;
-        info.title = token.text;
-        info.detail = "type";
-        const engine_core::LuaDoc doc = engine_core::lua_symbol_doc("", token.text);
-        if (doc.found) {
-            info.summary = doc.summary;
-        }
-        return plan;
-    }
+    state->annotation = annotation;
     (void)world;
     (void)script_id;
     (void)script_global;
@@ -2013,10 +2092,46 @@ HoverPlan plan_hover(std::string_view source, int index, const std::vector<engin
 
 HoverInfo finish_hover(const HoverPlan& plan, const engine_core::LuauFacts& facts) {
     HoverInfo info = plan.info;
-    if (!plan.state || !facts.ran || facts.types.empty()) {
-        return plan.state ? HoverInfo{} : info;
+    if (!plan.state) {
+        return info;
     }
     const HoverPlanState& state = *plan.state;
+    const bool answered = facts.ran && !facts.types.empty() && facts.types[0].found;
+    // A type name: its declaration as written, or a registered class's docs.
+    if (answered && (facts.types[0].kind == "type" || facts.types[0].kind == "module")) {
+        const engine_core::LuauTypeAt& named = facts.types[0];
+        info.found = true;
+        info.detail = named.kind;
+        std::string declared = named.described.type;
+        if (declared.rfind("export ", 0) == 0) {
+            declared.erase(0, 7);
+        }
+        constexpr std::size_t kLongest = 240;
+        if (declared.size() > kLongest) {
+            declared = declared.substr(0, kLongest) + "...";
+        }
+        const std::string qualified = named.object_name.empty() ? named.name : named.object_name + "." + named.name;
+        info.title = declared.rfind("type ", 0) == 0 ? declared : qualified;
+        const engine_core::LuaDoc doc =
+            engine_core::lua_symbol_doc("", named.class_name.empty() ? named.name : named.class_name);
+        if (doc.found) {
+            info.summary = doc.summary;
+        }
+        return info;
+    }
+    if (state.annotation) {
+        info.found = true;
+        info.title = state.word;
+        info.detail = "type";
+        const engine_core::LuaDoc doc = engine_core::lua_symbol_doc("", state.word);
+        if (doc.found) {
+            info.summary = doc.summary;
+        }
+        return info;
+    }
+    if (!facts.ran || facts.types.empty()) {
+        return {};
+    }
     const engine_core::LuauTypeAt& luau = facts.types[0];
     if (state.anonymous) {
         if (!luau.found || !luau.described.function) {

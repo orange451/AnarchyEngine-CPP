@@ -1298,37 +1298,15 @@ const char* context_name(Luau::AutocompleteContext context) {
 
 // A function type as a completion row shows it: its parameters after the name,
 // and what it returns. `with_self` drops the first parameter, as a ':' call does.
-// A type as a completion row or hover writes it. A literal is its kind: "hi"
-// reads string and true reads boolean, as the value's type, not its value.
+// A type as a completion row or hover writes it. A literal alone is its kind:
+// "hi" reads string and true reads boolean, as the value's type, not its
+// value. Inside a union it stays, so "sit" | "roll" says what it allows.
 std::string shown_type(Luau::TypeId type) {
-    const std::string text = Luau::toString(type);
-    std::string out;
-    for (std::size_t at = 0; at < text.size();) {
-        if (text[at] == '"') {
-            std::size_t end = at + 1;
-            while (end < text.size() && text[end] != '"') {
-                end += text[end] == '\\' ? 2 : 1;
-            }
-            out += "string";
-            at = end + 1;
-            continue;
-        }
-        const bool word_start = at == 0 || !(std::isalnum(static_cast<unsigned char>(text[at - 1])) || text[at - 1] == '_');
-        for (const char* literal : {"true", "false"}) {
-            const std::size_t length = std::strlen(literal);
-            const std::size_t after = at + length;
-            if (word_start && text.compare(at, length, literal) == 0 &&
-                (after >= text.size() || !(std::isalnum(static_cast<unsigned char>(text[after])) || text[after] == '_'))) {
-                out += "boolean";
-                at = after;
-                goto next;
-            }
-        }
-        out += text[at];
-        ++at;
-    next:;
+    const Luau::TypeId followed = Luau::follow(type);
+    if (const auto* singleton = Luau::get<Luau::SingletonType>(followed)) {
+        return Luau::get<Luau::BooleanSingleton>(singleton) != nullptr ? "boolean" : "string";
     }
-    return out;
+    return Luau::toString(followed);
 }
 
 // What a method's self is, as a title shows it: its class, else the table
@@ -1390,6 +1368,35 @@ std::string defined_name(const WorkerEnv& env, const Luau::FunctionType& fn) {
     std::string name(line.substr(keyword + 8, open - keyword - 8));
     name.erase(std::remove_if(name.begin(), name.end(), [](char unit) { return unit == ' ' || unit == '\t'; }), name.end());
     return name;
+}
+
+// The source a location spans, on one line: runs of blank space become one.
+std::string text_at(const std::string& text, const Luau::Location& where) {
+    const auto offset = [&](const Luau::Position& position) {
+        std::size_t at = 0;
+        for (unsigned line = 0; line < position.line && at != std::string::npos; ++line) {
+            at = text.find('\n', at);
+            at = at == std::string::npos ? at : at + 1;
+        }
+        return at == std::string::npos ? text.size() : std::min(text.size(), at + position.column);
+    };
+    const std::size_t begin = offset(where.begin);
+    const std::size_t end = std::max(begin, offset(where.end));
+    std::string out;
+    bool blank = false;
+    for (std::size_t at = begin; at < end; ++at) {
+        const char unit = text[at];
+        if (unit == ' ' || unit == '\t' || unit == '\r' || unit == '\n') {
+            blank = !out.empty();
+            continue;
+        }
+        if (blank) {
+            out += ' ';
+            blank = false;
+        }
+        out += unit;
+    }
+    return out;
 }
 
 // The function node a definition is, in a module checked with its types kept.
@@ -1486,11 +1493,51 @@ std::string pack_text(const std::vector<std::string>& types) {
     return out + ")";
 }
 
+// The definition of a function in its module's source, and that source, when
+// the worker can read both.
+struct Definition {
+    Luau::AstExprFunction* node = nullptr;
+    const std::string* text = nullptr;
+};
+
+Definition find_definition(const WorkerEnv& env, const Luau::FunctionType& fn) {
+    Definition out;
+    if (!fn.definition || !fn.definition->definitionModuleName || env.frontend == nullptr) {
+        return out;
+    }
+    const std::string& module_name = *fn.definition->definitionModuleName;
+    const Luau::SourceModule* source = env.frontend->getSourceModule(module_name);
+    const std::string* text = module_text(env, module_name);
+    if (source == nullptr || source->root == nullptr || text == nullptr) {
+        return out;
+    }
+    FindFunction find;
+    find.where = fn.definition->definitionLocation;
+    source->root->visit(&find);
+    out.node = find.found;
+    out.text = find.found != nullptr ? text : nullptr;
+    return out;
+}
+
 // A function type as rows and hovers use it. Every parameter is listed, self
 // too for a method; `params` leaves self out when the function is called
-// with ':', as `with_self` says.
+// with ':', as `with_self` says. A parameter or return the definition
+// annotated reads as written there, as `target: Vector2D.Vector2D`, rather
+// than as the type it expands to.
 void describe_function(const WorkerEnv* env, const Luau::FunctionType& fn, bool with_self, LuauSuggestion& out) {
     const auto [args, args_tail] = Luau::flatten(fn.argTypes);
+    const Definition written = env != nullptr ? find_definition(*env, fn) : Definition{};
+    const auto annotation = [&](std::size_t index) -> std::string {
+        if (written.node == nullptr) {
+            return {};
+        }
+        const std::size_t own = fn.hasSelf ? index - 1 : index;
+        if ((fn.hasSelf && index == 0) || own >= written.node->args.size) {
+            return {};
+        }
+        const Luau::AstLocal* arg = written.node->args.data[own];
+        return arg->annotation != nullptr ? text_at(*written.text, arg->annotation->location) : std::string();
+    };
     std::string params = "(";
     bool first = true;
     for (std::size_t index = 0; index < args.size(); ++index) {
@@ -1502,7 +1549,8 @@ void describe_function(const WorkerEnv* env, const Luau::FunctionType& fn, bool 
         if (self && name.empty()) {
             name = "self";
         }
-        const std::string type = self ? self_type(args[index]) : shown_type(args[index]);
+        const std::string noted = annotation(index);
+        const std::string type = !noted.empty() ? noted : self ? self_type(args[index]) : shown_type(args[index]);
         out.param_list.emplace_back(name, type);
         if (index == 0 && (with_self || (fn.hasSelf && with_self))) {
             continue;
@@ -1520,6 +1568,15 @@ void describe_function(const WorkerEnv* env, const Luau::FunctionType& fn, bool 
         }
     }
     out.params = params + ")";
+    if (!args.empty()) {
+        const Luau::TypeId receiver = Luau::follow(args[0]);
+        const bool vague = Luau::get<Luau::AnyType>(receiver) != nullptr ||
+                           Luau::get<Luau::UnknownType>(receiver) != nullptr ||
+                           Luau::get<Luau::GenericType>(receiver) != nullptr ||
+                           Luau::get<Luau::FreeType>(receiver) != nullptr || Luau::get<Luau::ErrorType>(receiver) != nullptr;
+        const bool named_self = !fn.argNames.empty() && fn.argNames[0] && fn.argNames[0]->name == "self";
+        out.takes_receiver = fn.hasSelf || (!vague && (named_self || !annotation(0).empty()));
+    }
     const auto [rets, rets_tail] = Luau::flatten(fn.retTypes);
     if (rets.size() == 1 && !rets_tail) {
         out.returns = shown_type(rets[0]);
@@ -1544,6 +1601,12 @@ void describe_function(const WorkerEnv* env, const Luau::FunctionType& fn, bool 
         if (out.returns_disagree && defined_elsewhere(*env, fn) && !first_return.empty()) {
             out.returns = pack_text(first_return);
             out.returns_disagree = false;
+        }
+        // A written return is what the function promises.
+        if (written.node != nullptr && written.node->returnAnnotation != nullptr) {
+            out.returns = text_at(*written.text, written.node->returnAnnotation->location);
+            out.returns_disagree = false;
+            out.returns_none = out.returns == "()";
         }
     }
 }
@@ -1848,11 +1911,81 @@ std::optional<CallValue> call_value(const WorkerEnv& env, const Luau::SourceModu
     return out;
 }
 
+// The `type` statement that declares `name` in a module, as it is written.
+std::string type_declaration(const WorkerEnv& env, const std::string& module_name, const std::string& name) {
+    const Luau::SourceModule* source = env.frontend->getSourceModule(module_name);
+    const std::string* text = module_text(env, module_name);
+    if (source == nullptr || source->root == nullptr || text == nullptr) {
+        return {};
+    }
+    for (Luau::AstStat* stat : source->root->body) {
+        auto* alias = stat->as<Luau::AstStatTypeAlias>();
+        if (alias != nullptr && name == alias->name.value) {
+            return text_at(*text, alias->location);
+        }
+    }
+    return {};
+}
+
+// A type name at the position: `Diet`, or `Trick` in `Dog.Trick`, or the
+// module alias `Dog` before the dot. Kind "type" or "module".
+bool type_name_at(const WorkerEnv& env, const Luau::SourceModule& source, const Luau::Module& module,
+                  const std::string& module_name, const Luau::Position& at, LuauTypeAt& out) {
+    Luau::AstTypeReference* reference = nullptr;
+    for (Luau::AstNode* node : Luau::findAstAncestryOfPosition(source, at, true)) {
+        if (auto* found = node->as<Luau::AstTypeReference>()) {
+            reference = found;
+        }
+    }
+    if (reference == nullptr) {
+        return false;
+    }
+    const Luau::ScopePtr scope = Luau::findScopeAtPosition(module, at);
+    if (reference->prefix && reference->prefixLocation && reference->prefixLocation->containsClosed(at)) {
+        out.found = true;
+        out.name = reference->prefix->value;
+        out.kind = "module";
+        return true;
+    }
+    if (!reference->nameLocation.containsClosed(at)) {
+        return false;
+    }
+    out.name = reference->name.value;
+    out.kind = "type";
+    out.found = true;
+    std::optional<Luau::TypeFun> named;
+    std::string declared_in = module_name;
+    if (reference->prefix) {
+        const std::string alias = reference->prefix->value;
+        for (Luau::ScopePtr step = scope; step != nullptr && declared_in == module_name; step = step->parent) {
+            const auto imported = step->importedModules.find(alias);
+            if (imported != step->importedModules.end()) {
+                declared_in = imported->second;
+            }
+        }
+        named = scope != nullptr ? scope->lookupImportedType(alias, out.name) : std::nullopt;
+        out.object_name = alias;
+    } else if (scope != nullptr) {
+        named = scope->lookupType(out.name);
+    }
+    out.described.type = type_declaration(env, declared_in, out.name);
+    if (named) {
+        out.class_name = registered_class(named->type);
+        if (out.described.type.empty() && out.class_name.empty()) {
+            out.described.type = shown_type(named->type);
+        }
+    }
+    return true;
+}
+
 LuauTypeAt type_at_offset(const WorkerEnv& env, const Luau::SourceModule& source, const Luau::Module& module,
                           const std::string& text, std::size_t offset) {
     LuauTypeAt out;
     out.ran = true;
     const Luau::Position at = position_of(text, offset);
+    if (env.files.module_name != nullptr && type_name_at(env, source, module, *env.files.module_name, at, out)) {
+        return out;
+    }
     Luau::ExprOrLocal found = Luau::findExprOrLocalAtPosition(source, at);
     std::optional<Luau::TypeId> type;
     bool with_self = false;

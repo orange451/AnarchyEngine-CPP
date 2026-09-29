@@ -191,6 +191,20 @@ int main() {
             escape();
             expect(!field.isFocused(), "Escape leaves the command line");
             expect(field.getText() == "local a = 1", "Escape keeps the command line's text");
+
+            // A command never runs inside layout. It runs at the start of the next
+            // frame, once the frame showing the submitted line is on screen.
+            command->requestFocus();
+            field.setText("print(\"console ran it\")");
+            scene->noteKey(jadefx::Key::Enter, true, false, 0);
+            scene->layout(1280, 800, 0.45);
+            scene->layout(1280, 800, 0.46);
+            expect(console->log().getText().find("console ran it\n") == std::string::npos,
+                   "layout does not run a submitted command");
+            jadefx::drainRunLater();
+            scene->layout(1280, 800, 0.47);
+            expect(console->log().getText().find("console ran it\n") != std::string::npos,
+                   "the next frame runs a submitted command");
         }
     }
 

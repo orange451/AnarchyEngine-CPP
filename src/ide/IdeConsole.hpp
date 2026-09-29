@@ -46,7 +46,6 @@ public:
 
 protected:
     void layoutChildren() override;
-    void renderContent(jadefx::UiRenderer& renderer, float opacity) override;
     void handleKey(jadefx::KeyEvent& event) override;
     void onClose() override;
 
@@ -63,6 +62,9 @@ private:
     // entry, the line typed before browsing comes back.
     void browseHistory(int step);
     void runPending();
+    // Runs the submitted commands at the start of the next frame, after the
+    // frame that shows them is on screen. Never from inside layout.
+    void queueRun();
     void refresh_completion(bool force);
     // Shows Luau's list for the last keystroke, once it has arrived.
     void take_luau_list();
@@ -82,9 +84,9 @@ private:
     std::string history_draft_;
     std::uint64_t epoch_ = 0;
     bool pulling_ = false;
-    // Set once this pane has been drawn since the last submit. A paused command
-    // runs on the UI thread, so it waits until the submitted line is on screen.
-    bool command_painted_ = false;
+    bool run_queued_ = false;
+    // A queued run checks this first; it is gone once the console is.
+    std::shared_ptr<int> alive_ = std::make_shared<int>(0);
     TextUndoStack* undo_stack_ = nullptr;
     bool mute_undo_ = false;
 };

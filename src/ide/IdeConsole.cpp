@@ -56,12 +56,6 @@ void IdeConsole::layoutChildren() {
     if (!pulling_) {
         pulling_ = true;
         pull();
-        // A paused chunk runs here, on the UI thread. Wait until renderContent has
-        // drawn the submitted line and the previous frame has been swapped.
-        if (!pending_.empty() && (command_painted_ || !isVisible())) {
-            runPending();
-            pull();
-        }
         pulling_ = false;
     }
     take_luau_list();
@@ -124,11 +118,6 @@ void IdeConsole::clearOutput() {
     log_->clearLog();
 }
 
-void IdeConsole::renderContent(jadefx::UiRenderer& renderer, float opacity) {
-    command_painted_ = true;
-    IdePane::renderContent(renderer, opacity);
-}
-
 void IdeConsole::pull() {
     if (!log_) {
         return;
@@ -160,11 +149,11 @@ void IdeConsole::submitCommand() {
     command_->clear();
     noteCommandEdit();
     const std::uint32_t world = engine_.datamodel().world_generation();
-    // Show the whole command before Lua runs. The next painted frame draws this
-    // line; layout after that paint is what calls runPending.
+    // Show the whole command before Lua runs. This frame draws the line; the
+    // command runs when the next one starts.
     engine_.scripts().append_output(engine_core::ScriptRuntime::OutputKind::Command, source);
     pending_.push_back(PendingCommand{source, world});
-    command_painted_ = false;
+    queueRun();
     if (!pulling_) {
         pulling_ = true;
         pull();
@@ -189,6 +178,26 @@ void IdeConsole::browseHistory(int step) {
     completion_.dismiss();
     command_->setText(history_at_ < history_.size() ? history_[history_at_] : history_draft_);
     command_->positionCaret(command_->getLength());
+}
+
+void IdeConsole::queueRun() {
+    if (run_queued_) {
+        return;
+    }
+    run_queued_ = true;
+    std::weak_ptr<int> alive = alive_;
+    jadefx::runLater([this, alive] {
+        if (alive.expired()) {
+            return;
+        }
+        run_queued_ = false;
+        runPending();
+        if (!pulling_) {
+            pulling_ = true;
+            pull();
+            pulling_ = false;
+        }
+    });
 }
 
 void IdeConsole::runPending() {

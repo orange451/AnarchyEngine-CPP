@@ -314,13 +314,12 @@ bool IdeExplorer::find_id(const jadefx::TreeItem* item, engine_core::InstanceId&
         id = root_.id();
         return true;
     }
-    for (const auto& entry : items_) {
-        if (entry.second.get() == item) {
-            id = entry.first;
-            return true;
-        }
+    const auto found = item_ids_.find(item);
+    if (found == item_ids_.end()) {
+        return false;
     }
-    return false;
+    id = found->second;
+    return true;
 }
 
 bool IdeExplorer::actions_for(engine_core::InstanceId id, std::vector<engine_core::ContextAction>& out) const {
@@ -1286,6 +1285,7 @@ void IdeExplorer::apply(bool batch) {
         std::shared_ptr<jadefx::TreeItem>& row = items_[snap.ids[i]];
         if (!row) {
             row = jadefx::make<jadefx::TreeItem>(snap.labels[i]);
+            item_ids_[row.get()] = snap.ids[i];
             if (i < snap.classes.size()) {
                 if (std::shared_ptr<jadefx::ImageView> icon = icon_view(snap.classes[i])) {
                     row->setGraphic(std::move(icon));
@@ -1317,6 +1317,7 @@ void IdeExplorer::apply(bool batch) {
         }
         const std::shared_ptr<jadefx::TreeItem> row = found->second;
         if (row) {
+            item_ids_.erase(row.get());
             if (jadefx::TreeItem* parent = row->getParent()) {
                 parent->getChildren().removeIf(
                     [&](const std::shared_ptr<jadefx::TreeItem>& child) { return child.get() == row.get(); });

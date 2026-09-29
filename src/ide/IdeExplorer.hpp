@@ -175,6 +175,8 @@ private:
     std::shared_ptr<jadefx::TreeView> tree_;
     std::shared_ptr<jadefx::Menu> menu_;
     std::unordered_map<engine_core::InstanceId, std::shared_ptr<jadefx::TreeItem>> items_;
+    // items_ the other way round, so a click finds its instance without a scan.
+    std::unordered_map<const jadefx::TreeItem*, engine_core::InstanceId> item_ids_;
     std::unordered_set<engine_core::InstanceId> seen_;
     std::vector<engine_core::InstanceId> pending_;
     Snapshot scratch_;

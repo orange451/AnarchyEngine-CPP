@@ -14,6 +14,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -89,6 +90,33 @@ TEST_CASE("M4 display_value writes a value on one line", "[M4][merge]") {
     REQUIRE(text.find('\n') == std::string::npos);
     REQUIRE(text.front() == '{');
     REQUIRE(text.find("\"a\": 1") != std::string::npos);
+}
+
+TEST_CASE("M6 a value a script made non-finite is a change, not a failed read", "[M6][merge]") {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    JsonValue base = JsonValue::object();
+    base.set("Size", JsonValue::array({JsonValue::number(1), JsonValue::number(1), JsonValue::number(1)}));
+    base.set("Transparency", JsonValue::number(0.5));
+    JsonValue studio = JsonValue::object();
+    studio.set("Size", JsonValue::array({JsonValue::number(1), JsonValue::number(inf), JsonValue::number(1)}));
+    studio.set("Transparency", JsonValue::number(nan));
+    std::map<std::string, KeyChange> got;
+    REQUIRE_NOTHROW(got = changes(base, base, studio));
+    REQUIRE(got["Size"] == KeyChange::StudioOnly);
+    REQUIRE(got["Transparency"] == KeyChange::StudioOnly);
+
+    const JsonValue not_a_number = JsonValue::number(nan);
+    const JsonValue big = JsonValue::number(inf);
+    const JsonValue small = JsonValue::number(-inf);
+    REQUIRE(engine_core::same_value(&big, &big));
+    REQUIRE_FALSE(engine_core::same_value(&big, &small));
+    REQUIRE(engine_core::display_value(&not_a_number) == "nan");
+    REQUIRE(engine_core::display_value(&big) == "inf");
+    REQUIRE(engine_core::display_value(&small) == "-inf");
+    REQUIRE(engine_core::display_value(studio.find("Size")) == "1, inf, 1");
+    const JsonValue mixed = JsonValue::array({JsonValue::number(nan), JsonValue::string("x")});
+    REQUIRE_NOTHROW(engine_core::display_value(&mixed));
 }
 
 namespace {

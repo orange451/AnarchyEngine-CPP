@@ -181,29 +181,30 @@ void TaskScheduler::bind_session(Phase phase, Job job, int priority) {
 }
 
 void TaskScheduler::bind_job(Phase phase, Job job, int priority, bool permanent) {
-    std::vector<Entry>& list = jobs_[static_cast<int>(phase)];
+    std::vector<std::unique_ptr<Entry>>& list = jobs_[static_cast<int>(phase)];
     std::vector<int>& order = order_[static_cast<int>(phase)];
     if (list.size() == list.capacity()) {
         contract_fail("phase job capacity exhausted");
     }
     const int slot = static_cast<int>(list.size());
-    list.push_back(Entry{});
-    list.back().priority = priority;
-    list.back().permanent = permanent;
-    list.back().job = std::move(job);
+    auto entry = std::make_unique<Entry>();
+    entry->priority = priority;
+    entry->permanent = permanent;
+    entry->job = std::move(job);
+    list.push_back(std::move(entry));
     order.push_back(slot);
     std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
-        return list[static_cast<std::size_t>(a)].priority > list[static_cast<std::size_t>(b)].priority;
+        return list[static_cast<std::size_t>(a)]->priority > list[static_cast<std::size_t>(b)]->priority;
     });
 }
 
 void TaskScheduler::cancel_session_jobs() {
     for (int phase = 0; phase < kPhaseCount; ++phase) {
-        std::vector<Entry>& list = jobs_[phase];
+        std::vector<std::unique_ptr<Entry>>& list = jobs_[phase];
         bool holds_current = false;
         if (tls_entry_ != nullptr) {
-            for (Entry& entry : list) {
-                if (&entry == tls_entry_) {
+            for (const std::unique_ptr<Entry>& entry : list) {
+                if (entry.get() == tls_entry_) {
                     holds_current = true;
                     break;
                 }
@@ -212,7 +213,8 @@ void TaskScheduler::cancel_session_jobs() {
         // Render jobs run without a fiber. One may be inside its std::function on the
         // render thread while stop runs here, so those entries stay put.
         if (holds_current || is_render_phase(static_cast<Phase>(phase))) {
-            for (Entry& entry : list) {
+            for (const std::unique_ptr<Entry>& owned : list) {
+                Entry& entry = *owned;
                 if (entry.permanent) {
                     continue;
                 }
@@ -224,12 +226,13 @@ void TaskScheduler::cancel_session_jobs() {
             continue;
         }
         const std::size_t capacity = list.capacity();
-        std::vector<Entry> kept;
+        std::vector<std::unique_ptr<Entry>> kept;
         kept.reserve(capacity);
         for (int slot : order_[phase]) {
-            Entry& entry = list[static_cast<std::size_t>(slot)];
+            std::unique_ptr<Entry>& owned = list[static_cast<std::size_t>(slot)];
+            Entry& entry = *owned;
             if (entry.permanent && !entry.retired) {
-                kept.push_back(std::move(entry));
+                kept.push_back(std::move(owned));
                 continue;
             }
             const bool parked = entry.state == JobState::Running || entry.state == JobState::Suspended ||
@@ -239,7 +242,7 @@ void TaskScheduler::cancel_session_jobs() {
             }
             entry.retired = true;
             entry.state = JobState::Idle;
-            kept.push_back(std::move(entry));
+            kept.push_back(std::move(owned));
         }
         list.swap(kept);
         if (list.capacity() < capacity) {
@@ -261,8 +264,9 @@ bool TaskScheduler::can_suspend() {
 }
 
 void TaskScheduler::mark_ready(std::uint64_t wait_id) {
-    for (std::vector<Entry>& phase : jobs_) {
-        for (Entry& entry : phase) {
+    for (std::vector<std::unique_ptr<Entry>>& phase : jobs_) {
+        for (const std::unique_ptr<Entry>& owned : phase) {
+            Entry& entry = *owned;
             if (!entry.retired && entry.wait_id == wait_id && entry.state == JobState::Suspended) {
                 entry.state = JobState::Ready;
             }
@@ -377,8 +381,9 @@ void TaskScheduler::start_job(Entry& entry, double dt) {
 }
 
 void TaskScheduler::resume_ready() {
-    for (std::vector<Entry>& phase : jobs_) {
-        for (Entry& entry : phase) {
+    for (std::vector<std::unique_ptr<Entry>>& phase : jobs_) {
+        for (const std::unique_ptr<Entry>& owned : phase) {
+            Entry& entry = *owned;
             if (entry.retired || entry.state != JobState::Ready) {
                 continue;
             }
@@ -405,7 +410,7 @@ void TaskScheduler::run_phase(Phase phase, double dt) {
     }
     const std::vector<int>& order = order_[phase_index];
     for (int slot : order) {
-        Entry& entry = jobs_[phase_index][static_cast<std::size_t>(slot)];
+        Entry& entry = *jobs_[phase_index][static_cast<std::size_t>(slot)];
         if (entry.retired || !entry.job) {
             continue;
         }

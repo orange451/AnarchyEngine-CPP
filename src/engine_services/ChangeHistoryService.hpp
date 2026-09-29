@@ -127,7 +127,8 @@ public:
 
     // Null when a recording is already open or history is disabled.
     std::optional<std::string> try_begin_recording(std::string name, std::string display_name = {});
-    void finish_recording(const std::string& id, FinishRecordingOperation op);
+    // By value: callers pass the open recording's own id, which this destroys.
+    void finish_recording(std::string id, FinishRecordingOperation op);
     // Empty id asks whether any recording is open.
     bool is_recording_in_progress(std::optional<std::string> id = std::nullopt) const;
 

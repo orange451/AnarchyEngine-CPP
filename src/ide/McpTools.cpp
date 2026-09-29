@@ -157,11 +157,12 @@ InstanceId Resolve(const DataModel& world, const JsonValue* ref, const char* wha
     }
     if (ref->is_number()) {
         const double number = ref->as_number();
-        const auto id = static_cast<InstanceId>(number);
-        if (number < 0 || static_cast<double>(id) != number || !Exists(world, id)) {
+        // Checked before the cast, which is undefined outside InstanceId's range.
+        const bool whole = number >= 0 && number <= 4294967295.0 && std::floor(number) == number;
+        if (!whole || !Exists(world, static_cast<InstanceId>(number))) {
             throw std::runtime_error("No instance has id " + engine_core::format_json_number(number) + ".");
         }
-        return id;
+        return static_cast<InstanceId>(number);
     }
     if (!ref->is_string()) {
         throw std::runtime_error(std::string(what) + " must be an id or a path.");
@@ -501,8 +502,10 @@ Checked CheckScripts(engine_core::Engine& engine, const std::vector<InstanceId>&
     const auto deadline = std::chrono::steady_clock::now() + kAnalysisWait;
     while (true) {
         try {
-            // pump() publishes finished checks. It runs where edits run, a thread
-            // its contract allows, and there it reads the tree it compares against.
+            // pump() publishes finished checks. It runs where edits run: the
+            // simulation thread, or this thread under a paused edit, which is the
+            // gameplay thread its contract allows. There it reads the tree it
+            // compares against.
             RunEdit(engine, [&analysis, progress](DataModel& world) {
                 analysis.pump();
                 std::vector<InstanceId> still;
@@ -699,11 +702,7 @@ void add_engine_tools(McpServer& server, engine_core::Engine& engine, McpStudio 
                          "depth":{"type":"integer","minimum":0,"maximum":16,"description":"Levels to include. Default 2."}}})"),
                      [live](const JsonValue& arguments) {
                          DataModel& world = live->datamodel();
-                         int depth = kDefaultDepth;
-                         if (const JsonValue* asked = arguments.find("depth")) {
-                             depth = static_cast<int>(NumberArg(*asked, "depth"));
-                         }
-                         depth = std::max(0, std::min(depth, kMaxDepth));
+                         const int depth = IntArg(arguments, "depth", kDefaultDepth, 0, kMaxDepth);
                          ReadLock lock(world);
                          const JsonValue* ref = arguments.find("instance");
                          const InstanceId id = ref != nullptr ? Resolve(world, ref) : world.id();
@@ -1129,7 +1128,9 @@ void add_engine_tools(McpServer& server, engine_core::Engine& engine, McpStudio 
                      [live](const JsonValue& arguments) {
                          std::uint64_t since = 0;
                          if (const JsonValue* value = arguments.find("since")) {
-                             since = static_cast<std::uint64_t>(std::max(0.0, NumberArg(*value, "since")));
+                             // 2^53: far past any line, and exact, so the cast is defined.
+                             since = static_cast<std::uint64_t>(
+                                 std::max(0.0, std::min(9007199254740992.0, NumberArg(*value, "since"))));
                          }
                          std::size_t limit = kDefaultOutputLines;
                          if (const JsonValue* value = arguments.find("limit")) {

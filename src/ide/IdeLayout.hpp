@@ -34,6 +34,7 @@ class IdeScriptEditor;
 class IdeSearch;
 class IdeConflicts;
 class McpServer;
+class UiCalls;
 class PreferencesPanel;
 class PropertiesPanel;
 
@@ -359,6 +360,8 @@ private:
     engine_core::JsonValue quit_layout_;
     std::uint64_t quit_frame_ = ~std::uint64_t{0};
     std::unique_ptr<McpServer> mcp_;
+    // The server's calls into the UI thread. Closed first as the studio closes.
+    std::shared_ptr<UiCalls> ui_calls_;
     struct McpIdentity;
     // Null while the server is off.
     std::shared_ptr<McpIdentity> mcp_identity_;

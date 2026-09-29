@@ -343,6 +343,7 @@ int RunScriptPairsTests();
 int RunTextSearchTests();
 int RunTextWrapTests();
 int RunUtf8Tests();
+int RunUiCallsTests();
 int RunViewCaptureTests();
 
 int RunColorLiteralsTests();
@@ -367,6 +368,7 @@ int main() {
         gFailures += RunTextSearchTests();
         gFailures += RunTextWrapTests();
         gFailures += RunUtf8Tests();
+        gFailures += RunUiCallsTests();
         gFailures += RunViewCaptureTests();
         gFailures += RunColorLiteralsTests();
     } catch (const std::exception& ex) {

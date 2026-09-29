@@ -217,7 +217,7 @@ void ChangeHistoryService::apply_waypoint(Waypoint& waypoint, bool inverse) {
     }
 }
 
-void ChangeHistoryService::finish_recording(const std::string& id, FinishRecordingOperation op) {
+void ChangeHistoryService::finish_recording(std::string id, FinishRecordingOperation op) {
     if (!recording_ || recording_->id != id) {
         return;
     }

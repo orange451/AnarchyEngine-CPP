@@ -80,7 +80,9 @@ private:
     static thread_local Entry* tls_entry_;
     static thread_local void* tls_scheduler_sp_;
 
-    std::vector<Entry> jobs_[kPhaseCount];
+    // Each entry has its own allocation. A parked job's frame refers to its
+    // entry, so cancel_session_jobs can rebuild a list without moving one.
+    std::vector<std::unique_ptr<Entry>> jobs_[kPhaseCount];
     std::vector<int> order_[kPhaseCount];
     std::uint64_t wait_serial_ = 0;
 };

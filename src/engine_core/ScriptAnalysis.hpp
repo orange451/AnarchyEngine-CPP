@@ -49,8 +49,9 @@ struct Diagnostic {
 // Incremental analysis of every Lua source in one DataModel.
 // Source is copied on the gameplay thread. A background worker parses, lints,
 // and typechecks that copy. pump() is the only publisher. It runs on the
-// simulation thread or the UI thread, never on RenderThread, and never inside
-// lua_resume or Prepare.
+// gameplay thread, as DataModel::gameplay_thread counts it (the simulation
+// thread, or the thread running a paused edit), or on the UI thread. Never on
+// RenderThread, and never inside lua_resume or Prepare.
 class ScriptAnalysis {
 public:
     explicit ScriptAnalysis(DataModel& game);

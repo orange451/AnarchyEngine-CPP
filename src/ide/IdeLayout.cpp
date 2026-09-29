@@ -25,6 +25,7 @@
 #include "McpServer.hpp"
 #include "McpTools.hpp"
 #include "StudioRegistry.hpp"
+#include "UiCalls.hpp"
 #include "TestTriangle.hpp"
 #include "../runner/GameView.hpp"
 #include "../runner/ViewCapture.hpp"
@@ -304,39 +305,6 @@ constexpr int kMcpPort = 7777;
 constexpr std::chrono::seconds kUiWait(5);
 // How long screenshot waits for the Scene View to paint.
 constexpr std::chrono::seconds kCaptureWait(3);
-
-// Runs fn on the UI thread and waits for it. Called from an MCP server thread.
-// Throws when the frame loop does not get to it, or with what fn threw.
-void OnUiThread(std::function<void()> fn) {
-    struct Wait {
-        std::mutex mu;
-        std::condition_variable cv;
-        bool done = false;
-        std::string error;
-    };
-    auto wait = std::make_shared<Wait>();
-    jadefx::runLater([wait, fn = std::move(fn)] {
-        std::string error;
-        try {
-            fn();
-        } catch (const std::exception& ex) {
-            error = ex.what();
-        }
-        {
-            std::lock_guard<std::mutex> guard(wait->mu);
-            wait->error = std::move(error);
-            wait->done = true;
-        }
-        wait->cv.notify_all();
-    });
-    std::unique_lock<std::mutex> lock(wait->mu);
-    if (!wait->cv.wait_for(lock, kUiWait, [&] { return wait->done; })) {
-        throw std::runtime_error("The studio did not respond within 5 seconds.");
-    }
-    if (!wait->error.empty()) {
-        throw std::runtime_error(wait->error);
-    }
-}
 
 bool parent_ok(const engine_core::DataModel& game, engine_core::InstanceId parent) {
     return parent == 0 || (parent != engine_core::DataModel::kNoParent && game.alive(parent));
@@ -1315,13 +1283,17 @@ void IdeLayout::start_mcp() {
     }
     // Each hook runs on the UI thread, where the ribbon's own handlers run.
     std::weak_ptr<int> alive = alive_;
-    auto on_ui = [alive](std::function<void()> fn) {
-        OnUiThread([alive, fn = std::move(fn)] {
-            if (alive.expired()) {
-                throw std::runtime_error("The studio is closing.");
-            }
-            fn();
-        });
+    ui_calls_ = std::make_shared<UiCalls>([](std::function<void()> task) { jadefx::runLater(std::move(task)); });
+    const std::shared_ptr<UiCalls> calls = ui_calls_;
+    auto on_ui = [alive, calls](std::function<void()> fn) {
+        calls->run(
+            [alive, fn = std::move(fn)] {
+                if (alive.expired()) {
+                    throw std::runtime_error("The studio is closing.");
+                }
+                fn();
+            },
+            kUiWait);
     };
     McpStudio studio;
     studio.start_test = [this, on_ui] { on_ui([this] { start_test(); }); };
@@ -1338,16 +1310,14 @@ void IdeLayout::start_mcp() {
     studio.refresh_scripts = [this, on_ui] { on_ui([this] { reapply_editors(); }); };
     // The first Scene View's next paint. The wait is on the server thread, since
     // the paint comes after the UI task that asks for it.
-    studio.capture_view = [this, on_ui](int max_size) {
+    studio.capture_view = [this, on_ui, calls](int max_size) {
+        // Guarded by calls. Shared, since a paint after a timed-out wait still writes it.
         struct Shot {
-            std::mutex mu;
-            std::condition_variable cv;
             bool done = false;
             runner::ViewPixels pixels;
         };
-        // Shared, since a paint after a timed-out wait still writes it.
         auto shot = std::make_shared<Shot>();
-        on_ui([this, shot] {
+        on_ui([this, shot, calls] {
             auto* view = dynamic_cast<runner::GameView*>(scene_view_.get());
             if (view == nullptr) {
                 throw std::runtime_error("The studio has no Scene View.");
@@ -1357,24 +1327,19 @@ void IdeLayout::start_mcp() {
                 throw std::runtime_error("The Scene View's tab is behind another tab in its dock, so it is not "
                                          "drawing. Select its tab in the studio, then try again.");
             }
-            view->requestCapture([shot](runner::ViewPixels pixels) {
-                {
-                    std::lock_guard<std::mutex> guard(shot->mu);
+            view->requestCapture([shot, calls](runner::ViewPixels pixels) {
+                calls->update([&] {
                     shot->pixels = std::move(pixels);
                     shot->done = true;
-                }
-                shot->cv.notify_all();
+                });
             });
         });
-        runner::ViewPixels pixels;
-        {
-            std::unique_lock<std::mutex> lock(shot->mu);
-            if (!shot->cv.wait_for(lock, kCaptureWait, [&] { return shot->done; })) {
-                throw std::runtime_error("The Scene View did not draw within 3 seconds. Check that the studio window "
-                                         "is not minimized.");
-            }
-            pixels = std::move(shot->pixels);
+        if (!calls->wait_until([&] { return shot->done; }, kCaptureWait)) {
+            throw std::runtime_error("The Scene View did not draw within 3 seconds. Check that the studio window "
+                                     "is not minimized.");
         }
+        runner::ViewPixels pixels;
+        calls->update([&] { pixels = std::move(shot->pixels); });
         if (pixels.empty()) {
             throw std::runtime_error("The Scene View could not be read back.");
         }
@@ -2265,7 +2230,11 @@ void IdeLayout::flushFrame() {
 }
 
 IdeLayout::~IdeLayout() {
-    // Before anything its tools reach is torn down.
+    // Before anything its tools reach is torn down. A tool call waiting for this
+    // thread gives up now, so joining the server below does not wait it out.
+    if (ui_calls_) {
+        ui_calls_->close();
+    }
     alive_.reset();
     if (mcp_identity_ && !mcp_identity_->dir.empty()) {
         remove_studio(mcp_identity_->dir, mcp_identity_->entry);

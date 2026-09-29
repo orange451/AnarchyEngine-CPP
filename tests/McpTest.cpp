@@ -197,6 +197,11 @@ void TestEngineTools() {
            "a value of the wrong type is refused");
     Expect(ErrorText(server, "get_properties", R"({"instance":"Nope.Missing"})").find("No instance at") == 0,
            "a missing path says where it stopped");
+    Expect(ErrorText(server, "get_properties", R"({"instance":-1})") == "No instance has id -1.",
+           "a negative id is no instance");
+    Expect(ErrorText(server, "get_properties", R"({"instance":1e300})").find("No instance has id") == 0,
+           "an id past any instance is no instance");
+    Expect(Call(server, "get_tree", R"({"depth":1e300})").find("tree") != nullptr, "a huge depth is the deepest allowed");
 
     // A Color3 reads as [r, g, b] and takes that or a hex code.
     Call(server, "create_instance", R"({"class":"GameObject","name":"Box"})");
@@ -239,6 +244,8 @@ void TestEngineTools() {
     Call(server, "run_lua", R"j({"source":"print('later')"})j");
     const JsonValue newer = Call(server, "get_output", "{\"since\":" + engine_core::format_json_number(next) + "}");
     Expect(newer.find("lines")->items().size() == 2, "get_output since returns only newer lines");
+    Expect(Call(server, "get_output", R"({"since":1e300})").find("lines")->items().empty(),
+           "get_output since a line never written returns nothing");
 
     const JsonValue source = Call(server, "read_script", R"({"instance":"Stuff.Hello"})");
     Expect(source.find("source")->as_string() == "print('hi')", "read_script returns the Source");
@@ -657,6 +664,8 @@ void TestBridge() {
     }
     Expect(names == std::vector<std::string>{"whoami", "list_studios", "select_studio"},
            "the bridge lists the studio's tools, then its own");
+    Expect(ErrorText(front, "select_studio", R"({"studio":1e300})").find("studio must be") == 0,
+           "a number too large to be a pid is refused");
 
     Expect(ErrorText(front, "whoami", "{}").find("No Anarchy Engine studio is open") == 0,
            "with no studio open, a call says to open one");

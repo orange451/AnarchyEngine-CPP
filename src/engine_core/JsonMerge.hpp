@@ -27,7 +27,8 @@ struct KeyMerge {
 // default. "id" names the instance and is left out.
 std::vector<KeyMerge> merge_keys(const JsonValue& base, const JsonValue& disk, const JsonValue& studio);
 
-// Equal as write_json writes them. Null is absent: equal only to null.
+// Equal values, as write_json would write them alike. NaN equals nothing,
+// which a file never holds anyway. Null is absent: equal only to null.
 bool same_value(const JsonValue* a, const JsonValue* b);
 
 // A value on one line for a person: numbers as the file writes them, an array

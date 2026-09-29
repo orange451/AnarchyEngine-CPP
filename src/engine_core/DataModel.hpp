@@ -446,6 +446,8 @@ private:
     void perform_paused_edit(const std::function<void(DataModel&)>& fn);
     bool authorize(const Slot& part, bool force_sim_write);
     bool reject_write(const char* message);
+    // Whether this thread holds this world's write lock.
+    bool holds_write() const;
     void note(InstanceId id, VisualField fields, WriteOrigin origin);
     // Whether a Transform or Color write from this thread goes to the command queue.
     bool queues_visual_write() const;

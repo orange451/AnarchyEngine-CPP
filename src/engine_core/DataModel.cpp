@@ -36,11 +36,6 @@ int field_index(Field field) {
     return index;
 }
 
-// How many DataModelLock guards this thread currently owns.
-// The mutex itself is taken only for the outermost guard, so RenderThread's
-// try_lock waits on a normal timed mutex instead of a recursive one.
-thread_local int tlsHold = 0;
-thread_local const char* tlsDeferred = nullptr;
 
 GameObject* as_game_object(DataModel* instance) { return dynamic_cast<GameObject*>(instance); }
 
@@ -111,8 +106,17 @@ struct DataModel::State {
     // budget 2ms. PostRender does not hold it.
     // Workers never take it.
     std::timed_mutex write_mu;
-    std::thread::id owner{};
+    // The thread that holds write_mu, and how many guards it has open. Only that
+    // thread changes these, so another reads owner only to learn it is not the
+    // holder. The mutex itself is taken only for the outermost guard, so
+    // RenderThread's try_lock waits on a normal timed mutex instead of a
+    // recursive one.
+    std::atomic<std::thread::id> owner{};
     int write_depth = 0;
+    // Writes rejected while their thread held this world's lock, kept until the
+    // loop that made them takes them. Rare, so a mutex and a list are enough.
+    std::mutex deferred_mu;
+    std::vector<std::pair<std::thread::id, const char*>> deferred;
     std::thread::id simulation_thread{};
     std::thread::id render_thread{};
     // Set while Engine runs a paused edit on the caller. Empty otherwise.
@@ -236,44 +240,43 @@ int DataModel::write_depth() const { return state_->write_depth; }
 
 InvalidationQueue& DataModel::invalidations() { return state_->invalidation; }
 
+bool DataModel::holds_write() const {
+    return state_->owner.load(std::memory_order_relaxed) == std::this_thread::get_id();
+}
+
 bool DataModel::lock_write_blocking() {
-    if (tlsHold > 0) {
-        ++tlsHold;
+    if (holds_write()) {
         ++state_->write_depth;
         return true;
     }
     state_->write_mu.lock();
-    state_->owner = std::this_thread::get_id();
+    state_->owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
     state_->write_depth = 1;
-    tlsHold = 1;
     return true;
 }
 
 bool DataModel::lock_write_for(std::chrono::milliseconds budget) {
-    if (tlsHold > 0) {
-        ++tlsHold;
+    if (holds_write()) {
         ++state_->write_depth;
         return true;
     }
     if (!state_->write_mu.try_lock_for(budget)) {
         return false;
     }
-    state_->owner = std::this_thread::get_id();
+    state_->owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
     state_->write_depth = 1;
-    tlsHold = 1;
     return true;
 }
 
 void DataModel::unlock_write() {
-    if (tlsHold <= 0) {
+    if (!holds_write() || state_->write_depth <= 0) {
         contract_fail("DataModelLock released without a hold");
     }
-    --tlsHold;
     --state_->write_depth;
-    if (tlsHold > 0) {
+    if (state_->write_depth > 0) {
         return;
     }
-    state_->owner = std::thread::id{};
+    state_->owner.store(std::thread::id{}, std::memory_order_relaxed);
     state_->write_mu.unlock();
 }
 
@@ -315,22 +318,43 @@ WriteOrigin DataModel::current_origin() const {
 }
 
 bool DataModel::reject_write(const char* message) {
-    if (tlsHold > 0) {
-        tlsDeferred = message;
+    if (holds_write()) {
+        const std::thread::id self = std::this_thread::get_id();
+        std::lock_guard<std::mutex> guard(state_->deferred_mu);
+        for (auto& entry : state_->deferred) {
+            if (entry.first == self) {
+                entry.second = message;
+                return false;
+            }
+        }
+        state_->deferred.emplace_back(self, message);
         return false;
     }
     contract_fail(message);
 }
 
 bool DataModel::take_deferred_violation() {
-    if (tlsDeferred == nullptr) {
-        return false;
+    const std::thread::id self = std::this_thread::get_id();
+    std::lock_guard<std::mutex> guard(state_->deferred_mu);
+    for (auto it = state_->deferred.begin(); it != state_->deferred.end(); ++it) {
+        if (it->first == self) {
+            state_->deferred.erase(it);
+            return true;
+        }
     }
-    tlsDeferred = nullptr;
-    return true;
+    return false;
 }
 
-bool DataModel::has_deferred_violation() const { return tlsDeferred != nullptr; }
+bool DataModel::has_deferred_violation() const {
+    const std::thread::id self = std::this_thread::get_id();
+    std::lock_guard<std::mutex> guard(state_->deferred_mu);
+    for (const auto& entry : state_->deferred) {
+        if (entry.first == self) {
+            return true;
+        }
+    }
+    return false;
+}
 
 bool DataModel::authorize(const Slot& part, bool force_sim_write) {
     if (!state_->threads_running) {

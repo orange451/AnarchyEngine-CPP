@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
@@ -304,6 +305,10 @@ JsonValue StudioBridge::list_tool() {
 JsonValue StudioBridge::select_tool(const JsonValue& arguments) {
     const JsonValue* studio = arguments.find("studio");
     if (studio == nullptr || !(studio->is_string() || studio->is_number())) {
+        throw std::runtime_error("studio must be a project name, folder, or pid.");
+    }
+    // A pid past 2^53 is no pid, and casting it would be undefined.
+    if (studio->is_number() && !(std::fabs(studio->as_number()) < 9007199254740992.0)) {
         throw std::runtime_error("studio must be a project name, folder, or pid.");
     }
     const std::string query = studio->is_number() ? std::to_string(static_cast<long long>(studio->as_number()))

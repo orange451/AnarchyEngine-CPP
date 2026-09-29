@@ -1,15 +1,33 @@
 #include "JsonMerge.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <set>
+#include <stdexcept>
 
 namespace engine_core {
+
+namespace {
+
+// As the file writes it. A script can make a number NaN or infinite, which no
+// file holds; those read as Luau prints them.
+std::string display_number(double value) {
+    if (std::isnan(value)) {
+        return "nan";
+    }
+    if (std::isinf(value)) {
+        return value > 0 ? "inf" : "-inf";
+    }
+    return format_json_number(value);
+}
+
+}  // namespace
 
 bool same_value(const JsonValue* a, const JsonValue* b) {
     if (a == nullptr || b == nullptr) {
         return a == b;
     }
-    return write_json(*a) == write_json(*b);
+    return *a == *b;
 }
 
 std::vector<KeyMerge> merge_keys(const JsonValue& base, const JsonValue& disk, const JsonValue& studio) {
@@ -48,7 +66,7 @@ std::string display_value(const JsonValue* value) {
         return value->as_string();
     }
     if (value->is_number()) {
-        return format_json_number(value->as_number());
+        return display_number(value->as_number());
     }
     if (value->is_bool()) {
         return value->as_bool() ? "true" : "false";
@@ -57,12 +75,17 @@ std::string display_value(const JsonValue* value) {
         std::all_of(value->items().begin(), value->items().end(), [](const JsonValue& item) { return item.is_number(); })) {
         std::string out;
         for (const JsonValue& item : value->items()) {
-            out += (out.empty() ? "" : ", ") + format_json_number(item.as_number());
+            out += (out.empty() ? "" : ", ") + display_number(item.as_number());
         }
         return out;
     }
     // Anything else: its JSON, each line break and its indent folded to one space.
-    const std::string text = write_json(*value);
+    std::string text;
+    try {
+        text = write_json(*value);
+    } catch (const std::invalid_argument&) {
+        return "(holds a number that is not finite)";
+    }
     std::string out;
     for (std::size_t at = 0; at < text.size(); ++at) {
         if (text[at] != '\n') {

@@ -4160,3 +4160,25 @@ TEST_CASE("S41 a cancelled Wait does not resume when its signal fires later", "[
     REQUIRE(done);
     REQUIRE(rig.runtime.global_is_nil("woke"));
 }
+
+TEST_CASE("L1 a thread that holds one world's lock still locks another", "[L1]") {
+    engine_core::Game first;
+    engine_core::Game second;
+    engine_core::DataModelLock outer(first, engine_core::DataModelLock::Write);
+    engine_core::DataModelLock inner(second, engine_core::DataModelLock::Write);
+    bool other_got_it = true;
+    std::thread other([&] {
+        engine_core::DataModelLock attempt(second, engine_core::DataModelLock::Write, std::chrono::milliseconds(20));
+        other_got_it = attempt.owns();
+    });
+    other.join();
+    REQUIRE_FALSE(other_got_it);
+}
+
+TEST_CASE("L2 the same thread takes one world's lock again without blocking", "[L2]") {
+    engine_core::Game game;
+    engine_core::DataModelLock outer(game, engine_core::DataModelLock::Write);
+    engine_core::DataModelLock inner(game, engine_core::DataModelLock::Write, std::chrono::milliseconds(20));
+    REQUIRE(inner.owns());
+    REQUIRE(game.write_depth() == 2);
+}

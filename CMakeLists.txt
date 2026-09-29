@@ -406,6 +406,7 @@ add_executable(engine-tests
     tests/ScriptPairsTest.cpp
     tests/TextSearchTest.cpp
     tests/TextWrapTest.cpp
+    tests/UiCallsTest.cpp
     tests/Utf8Test.cpp
     tests/ViewCaptureTest.cpp
     src/ide/ColorLiterals.cpp

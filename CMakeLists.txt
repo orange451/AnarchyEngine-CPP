@@ -61,6 +61,10 @@ set(STUDIO_SOURCES
     src/ide/FindBar.cpp
     src/ide/IdeTheme.cpp
     src/ide/IdeLayout.cpp
+    src/ide/IdeLayoutDocking.cpp
+    src/ide/IdeLayoutEditing.cpp
+    src/ide/IdeLayoutMcp.cpp
+    src/ide/IdeLayoutProject.cpp
     src/ide/CutSet.cpp
     src/ide/PropertiesPanel.cpp
     src/ide/Preferences.cpp

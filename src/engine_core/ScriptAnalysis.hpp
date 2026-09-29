@@ -41,6 +41,10 @@ struct TextRange {
     TextPos end;
 };
 
+// `text` on one line: line breaks and tabs become spaces. Longer than
+// `max_bytes`, it is cut at a whole character and ends in "...".
+std::string one_line(std::string text, std::size_t max_bytes = std::string::npos);
+
 struct Diagnostic {
     InstanceId script = 0;
     TextRange range;

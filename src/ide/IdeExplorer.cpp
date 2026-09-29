@@ -1,4 +1,5 @@
 #include "IdeExplorer.hpp"
+#include "LockWaits.hpp"
 
 #include "DataModelLock.hpp"
 #include "FindBar.hpp"
@@ -25,7 +26,6 @@ constexpr std::size_t kInPlaceEdits = 8;
 
 // The simulation thread can hold the DataModel lock for a whole step.
 // This wait is short so a busy step does not freeze the shell.
-constexpr std::chrono::milliseconds kLockWait(1);
 // An action the person asked for waits longer than a repaint, then says why it did nothing.
 constexpr std::chrono::milliseconds kActionWait(250);
 
@@ -324,7 +324,7 @@ bool IdeExplorer::find_id(const jadefx::TreeItem* item, engine_core::InstanceId&
 }
 
 bool IdeExplorer::actions_for(engine_core::InstanceId id, std::vector<engine_core::ContextAction>& out) const {
-    engine_core::DataModelLock lock(root_, engine_core::DataModelLock::Read, kLockWait);
+    engine_core::DataModelLock lock(root_, engine_core::DataModelLock::Read, kFrameLockWait);
     if (!lock.owns()) {
         return false;
     }
@@ -958,7 +958,7 @@ bool IdeExplorer::capture() {
     }
     read_ok_ = false;
     {
-        engine_core::DataModelLock lock(root_, engine_core::DataModelLock::Read, kLockWait);
+        engine_core::DataModelLock lock(root_, engine_core::DataModelLock::Read, kFrameLockWait);
         if (!lock.owns()) {
             return false;
         }

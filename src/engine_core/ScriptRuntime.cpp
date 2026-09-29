@@ -445,7 +445,7 @@ void ScriptRuntime::open_vm() {
     state_ = state;
     steps_ = 0;
     last_error_.clear();
-    vm_token_ = std::make_shared<char>(0);
+    vm_token_ = std::make_shared<char>('\0');
     halted_ = false;
     open_ = true;
 }

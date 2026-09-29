@@ -177,7 +177,9 @@ TEST_CASE("P1 save then load keeps names, GUIDs, and source bytes", "[P1][projec
     REQUIRE(body->color().b == 0.1f);
     REQUIRE(body->transform().m[12] == 1.5f);
     REQUIRE(body->transform().m[14] == 0.1f);
-    REQUIRE(loaded.instance_for(part_guid) == part);
+    const std::optional<engine_core::InstanceId> found = loaded.instance_for(part_guid);
+    REQUIRE(found.has_value());
+    REQUIRE(*found == part);
     // Nothing loaded is undoable, and Stop Play returns to this tree.
     REQUIRE_FALSE(game.history().can_undo().first);
 }

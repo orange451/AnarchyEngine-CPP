@@ -1,4 +1,5 @@
 #include "IdeScriptEditor.hpp"
+#include "LockWaits.hpp"
 
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
@@ -23,7 +24,6 @@ namespace ide {
 namespace {
 
 constexpr std::chrono::milliseconds kSaveDelay(50);
-constexpr std::chrono::milliseconds kLockWait(5);
 // The most matches the find bar counts and highlights, as in VS Code.
 constexpr std::size_t kFindLimit = 19999;
 
@@ -649,7 +649,7 @@ void IdeScriptEditor::place_find_bar() {
 bool IdeScriptEditor::read_source(std::string& text, std::string& name, bool& alive, std::uint32_t* world) const {
     alive = false;
     engine_core::DataModel& game = engine_.datamodel();
-    engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kLockWait);
+    engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionLockWait);
     if (!lock.owns()) {
         return false;
     }

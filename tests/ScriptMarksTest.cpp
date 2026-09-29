@@ -86,11 +86,32 @@ void testSummary() {
            "an analysis failure has no underline");
 }
 
+// A long message is cut at a whole character, so the banner never shows half of one.
+void testLongMessage() {
+    std::string message;
+    for (int index = 0; index < 120; ++index) {
+        message += "\xC3\xA9";  // e with an acute accent, two bytes
+    }
+    const std::vector<ide::ScriptMark> marks =
+        ide::marks_for("return 1\n", {problem(engine_core::Severity::Error, "Type", message.c_str(), 0, 0, 0, 6)});
+    expect(marks.size() == 1, "a long message still marks");
+    if (marks.empty()) {
+        return;
+    }
+    const std::string& shown = marks[0].message;
+    expect(shown.size() <= 180, "a long message is cut to fit");
+    expect(shown.size() >= 3 && shown.compare(shown.size() - 3, 3, "...") == 0, "a cut message ends in ...");
+    const std::string kept = shown.substr(0, shown.size() - 3);
+    expect(kept.size() % 2 == 0, "a cut message keeps whole characters");
+    expect(engine_core::one_line("a\tb\nc") == "a b c", "tabs and line breaks become spaces");
+}
+
 }  // namespace
 
 int RunScriptMarksTests() {
     gFailures = 0;
     testOffsets();
     testSummary();
+    testLongMessage();
     return gFailures;
 }

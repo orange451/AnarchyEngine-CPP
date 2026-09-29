@@ -100,13 +100,6 @@ protected:
     }
 };
 
-std::string Trim(const std::string& text) {
-    const auto space = [](char unit) { return std::isspace(static_cast<unsigned char>(unit)) != 0; };
-    const auto begin = std::find_if_not(text.begin(), text.end(), space);
-    const auto end = std::find_if_not(text.rbegin(), text.rend(), space).base();
-    return begin < end ? std::string(begin, end) : std::string();
-}
-
 const std::string* Find(const ThemeValues& values, const std::string& name) {
     for (const auto& [key, value] : values) {
         if (key == name) {

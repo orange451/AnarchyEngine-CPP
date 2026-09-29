@@ -5,6 +5,7 @@
 #include "LuaApi.hpp"
 #include "LuaSource.hpp"
 #include "ModuleScript.hpp"
+#include "TableSnapshot.hpp"
 
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -164,14 +165,22 @@ TextRange range_from(const Luau::Location& location) {
     return range;
 }
 
-std::string one_line(std::string message) {
-    for (char& character : message) {
-        if (character == '\n' || character == '\r') {
-            character = ' ';
+}  // namespace
+
+std::string one_line(std::string text, std::size_t max_bytes) {
+    for (char& unit : text) {
+        if (unit == '\n' || unit == '\r' || unit == '\t') {
+            unit = ' ';
         }
     }
-    return message;
+    if (max_bytes != std::string::npos && text.size() > max_bytes) {
+        text.resize(fit_utf8(text, max_bytes >= 3 ? max_bytes - 3 : 0));
+        text += "...";
+    }
+    return text;
 }
+
+namespace {
 
 Diagnostic make_diagnostic(InstanceId script, TextRange range, Severity severity, std::string code, std::string message) {
     Diagnostic diagnostic;

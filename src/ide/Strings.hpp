@@ -22,6 +22,22 @@ inline std::string AsciiLower(std::string_view text) {
     return out;
 }
 
+// `text` without the blank space at either end.
+inline std::string Trim(std::string_view text) {
+    const auto blank = [](char unit) {
+        return unit == ' ' || unit == '\t' || unit == '\n' || unit == '\r' || unit == '\f' || unit == '\v';
+    };
+    std::size_t begin = 0;
+    std::size_t end = text.size();
+    while (begin < end && blank(text[begin])) {
+        ++begin;
+    }
+    while (end > begin && blank(text[end - 1])) {
+        --end;
+    }
+    return std::string(text.substr(begin, end - begin));
+}
+
 // "1 result", "3 results".
 inline std::string counted(std::size_t count, const char* one, const char* many) {
     return std::to_string(count) + " " + (count == 1 ? one : many);

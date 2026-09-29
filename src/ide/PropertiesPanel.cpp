@@ -1,4 +1,5 @@
 #include "PropertiesPanel.hpp"
+#include "LockWaits.hpp"
 
 #include "ChangeHistoryService.hpp"
 #include "DataModel.hpp"
@@ -19,7 +20,6 @@ namespace {
 using engine_core::InstanceId;
 
 // Same wait as the explorer: a busy simulation step must not freeze the shell.
-constexpr std::chrono::milliseconds kLockWait(1);
 
 constexpr double kPad = 6;
 constexpr double kRowHeight = 24;
@@ -386,7 +386,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         const std::vector<InstanceId> ids = selection->get(revision);
         PropertySheet next;
         {
-            engine_core::DataModelLock lock(*world, engine_core::DataModelLock::Read, kLockWait);
+            engine_core::DataModelLock lock(*world, engine_core::DataModelLock::Read, kFrameLockWait);
             if (!lock.owns()) {
                 return;
             }

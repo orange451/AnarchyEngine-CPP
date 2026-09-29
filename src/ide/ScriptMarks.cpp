@@ -45,18 +45,8 @@ int document_offset(std::string_view source, std::uint32_t line, std::uint32_t b
     return offset;
 }
 
-std::string one_line(std::string message) {
-    for (char& unit : message) {
-        if (unit == '\n' || unit == '\r' || unit == '\t') {
-            unit = ' ';
-        }
-    }
-    if (message.size() > 180) {
-        message.resize(177);
-        message += "...";
-    }
-    return message;
-}
+// The longest message a mark or the banner shows.
+constexpr std::size_t kMessageBytes = 180;
 
 int problem_rank(const engine_core::Diagnostic& diagnostic) {
     if (diagnostic.code == "Syntax" && diagnostic.severity == engine_core::Severity::Error) {
@@ -113,7 +103,7 @@ std::vector<ScriptMark> marks_for(std::string_view source, const std::vector<eng
         }
         mark.severity = diagnostic.severity;
         mark.code = diagnostic.code;
-        mark.message = one_line(diagnostic.message);
+        mark.message = engine_core::one_line(diagnostic.message, kMessageBytes);
         mark.line = diagnostic.range.start.line;
         marks.push_back(std::move(mark));
     }
@@ -143,7 +133,7 @@ ScriptProblemSummary summarize_problems(const std::vector<engine_core::Diagnosti
         return summary;
     }
     summary.severity = best->severity;
-    const std::string message = one_line(best->message);
+    const std::string message = engine_core::one_line(best->message, kMessageBytes);
     const std::string where = "(line " + std::to_string(best->range.start.line + 1) + ")";
     if (summary.blocks_compile) {
         summary.text = "Will not compile — " + message + " " + where;

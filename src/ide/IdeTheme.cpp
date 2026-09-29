@@ -1,6 +1,7 @@
 #include "IdeTheme.hpp"
 
 #include "IdeResources.hpp"
+#include "Strings.hpp"
 
 #include "jadefx/jadefx.hpp"
 
@@ -14,18 +15,6 @@
 
 namespace ide {
 namespace {
-
-std::string Trim(std::string_view text) {
-    std::size_t begin = 0;
-    std::size_t end = text.size();
-    while (begin < end && std::isspace(static_cast<unsigned char>(text[begin]))) {
-        ++begin;
-    }
-    while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1]))) {
-        --end;
-    }
-    return std::string(text.substr(begin, end - begin));
-}
 
 // The CSS less its comments. A quoted string keeps whatever it holds.
 std::string StripComments(const std::string& css) {

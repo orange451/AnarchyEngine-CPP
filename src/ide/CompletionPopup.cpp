@@ -1,4 +1,5 @@
 #include "CompletionPopup.hpp"
+#include "LockWaits.hpp"
 
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
@@ -21,7 +22,6 @@
 namespace ide {
 namespace {
 
-constexpr std::chrono::milliseconds kLockWait(5);
 
 // Text drawn bold the way the code area draws it: struck twice, the second
 // time a little to the right. Open Sans has no bold face loaded.
@@ -984,7 +984,7 @@ std::vector<engine_core::LuaNode> completion_world(engine_core::Engine& engine, 
     static std::vector<engine_core::LuaNode> last;
     std::vector<engine_core::LuaNode> nodes;
     engine_core::DataModel& game = engine.datamodel();
-    engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kLockWait);
+    engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionLockWait);
     if (!lock.owns()) {
         nodes = last;
         for (engine_core::LuaNode& node : nodes) {

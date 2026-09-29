@@ -1,4 +1,5 @@
 #include "IdeSearch.hpp"
+#include "LockWaits.hpp"
 
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
@@ -16,7 +17,6 @@
 namespace ide {
 namespace {
 
-constexpr std::chrono::milliseconds kLockWait(5);
 // Typing waits this long before a search, and results are checked against edits this often.
 constexpr double kTypingPause = 0.15;
 constexpr double kRefreshEvery = 1.0;
@@ -339,7 +339,7 @@ void IdeSearch::refresh() {
     std::vector<Source> sources;
     if (search.ready()) {
         engine_core::DataModel& game = engine_.datamodel();
-        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kLockWait);
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionLockWait);
         if (!lock.owns()) {
             // The place is busy. The next layout tries again.
             return;

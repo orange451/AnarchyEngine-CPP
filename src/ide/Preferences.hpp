@@ -36,6 +36,11 @@ public:
     // What Stage::setMaxFrameRate takes for fps. Uncapped is 0 there.
     static double stage_frame_rate(int fps);
 
+    static constexpr double kMinZoom = 0.5;
+    static constexpr double kMaxZoom = 3.0;
+    double zoom() const;
+    void set_zoom(double zoom);
+
     // Writes the file. True, doing nothing, when there is no file.
     bool save(std::string& error) const;
 

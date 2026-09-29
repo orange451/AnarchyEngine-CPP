@@ -169,6 +169,7 @@ struct DataModel::State {
     std::unordered_set<InstanceId> dirty;
     bool dirty_all = false;
     std::atomic<std::uint64_t> revision{0};
+    std::atomic<std::uint64_t> tree_revision{0};
     std::function<void()> on_stop;
     std::function<void()> on_start;
     ScriptHost* script_host = nullptr;
@@ -960,6 +961,7 @@ void DataModel::unlink_parent(InstanceId id, Slot& part) {
         part.next_sibling = 0;
         return;
     }
+    state_->tree_revision.fetch_add(1, std::memory_order_relaxed);
     // Parent 0 is the root DataModel, which has no slot of its own.
     InstanceId* head = nullptr;
     InstanceId* tail = nullptr;
@@ -996,6 +998,7 @@ void DataModel::link_child(InstanceId parent_id, InstanceId child) {
     if (part == nullptr) {
         contract_fail("set_parent lost an instance");
     }
+    state_->tree_revision.fetch_add(1, std::memory_order_relaxed);
     InstanceId* head = nullptr;
     InstanceId* tail = nullptr;
     if (parent_id == 0) {
@@ -1190,6 +1193,7 @@ void DataModel::set_name(InstanceId id, std::string name) {
     }
     const std::string previous = object->name_;
     object->name_ = std::move(name);
+    state_->tree_revision.fetch_add(1, std::memory_order_relaxed);
     record_string(id, Field::Name, previous, object->name_);
     note_tree_changed();
     emit_change(id, Field::Name, current_origin());
@@ -1479,6 +1483,7 @@ void DataModel::restore_record(const PlaceRecord& record) {
 }
 
 void DataModel::clear_hierarchy() {
+    state_->tree_revision.fetch_add(1, std::memory_order_relaxed);
     state_->root_first_child = 0;
     state_->root_last_child = 0;
     for (Slot& part : state_->slots) {
@@ -1565,6 +1570,7 @@ void DataModel::restore_place_unlocked() {
     state_->dirty.clear();
     state_->dirty_all = true;
     state_->revision.fetch_add(1, std::memory_order_relaxed);
+    state_->tree_revision.fetch_add(1, std::memory_order_relaxed);
 
     {
         std::lock_guard<std::mutex> guard(state_->command_mu);
@@ -2275,6 +2281,8 @@ void DataModel::mark_authored_dirty(InstanceId id) {
 }
 
 std::uint64_t DataModel::authored_revision() const { return state_->revision.load(std::memory_order_relaxed); }
+
+std::uint64_t DataModel::tree_revision() const { return state_->tree_revision.load(std::memory_order_relaxed); }
 
 namespace {
 

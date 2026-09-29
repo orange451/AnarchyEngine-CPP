@@ -951,12 +951,18 @@ bool IdeExplorer::sync() {
 }
 
 bool IdeExplorer::capture() {
+    // Names and the hierarchy move the revision under the write lock, so an
+    // unmoved revision means scratch_ still matches the tree.
+    if (read_ok_ && root_.tree_revision() == read_revision_) {
+        return false;
+    }
     read_ok_ = false;
     {
         engine_core::DataModelLock lock(root_, engine_core::DataModelLock::Read, kLockWait);
         if (!lock.owns()) {
             return false;
         }
+        read_revision_ = root_.tree_revision();
         read_hierarchy(scratch_);
         read_ok_ = true;
     }

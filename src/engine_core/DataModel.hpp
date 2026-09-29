@@ -231,6 +231,10 @@ public:
     // Bumps on every authored mark and on Stop. Never resets. Safe to read from
     // any thread, so a UI can notice a change without taking the lock.
     std::uint64_t authored_revision() const;
+    // Bumps on every change to a name or to the hierarchy, during play too.
+    // Moves under the write lock and never resets. A panel that shows the tree
+    // reads it again only when this moved. Safe to read from any thread.
+    std::uint64_t tree_revision() const;
 
     // Per-instance signals. The reference dies with the instance.
     // Id 0 is the root DataModel. It has no slot; its signals are not bags[0].

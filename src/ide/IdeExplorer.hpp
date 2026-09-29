@@ -193,6 +193,9 @@ private:
     bool applying_ = false;
     // True when capture read the live tree, including a read that changed nothing.
     bool read_ok_ = false;
+    // DataModel::tree_revision when scratch_ was read. The tree is read again
+    // only when it moved.
+    std::uint64_t read_revision_ = 0;
     engine_core::InstanceId insert_parent_ = 0;
     std::shared_ptr<InsertResult> pending_insert_;
     std::shared_ptr<jadefx::Node> insert_button_;

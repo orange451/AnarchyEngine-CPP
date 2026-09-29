@@ -4571,3 +4571,35 @@ TEST_CASE("V1 Vector3 Max and Min take any number of vectors, as Vector2's do", 
     REQUIRE(low == 1);
     REQUIRE(one == 3);
 }
+
+TEST_CASE("W2 the tree revision moves on names and the hierarchy, and not on properties", "[W2]") {
+    ScriptRig rig;
+    engine_core::DataModel& game = rig.game;
+    std::uint64_t last = game.tree_revision();
+    auto moved = [&] {
+        const std::uint64_t now = game.tree_revision();
+        const bool changed = now != last;
+        last = now;
+        return changed;
+    };
+    engine_core::GameObject& part = game.create<engine_core::GameObject>();
+    REQUIRE_FALSE(moved());
+    game.set_parent(part.id(), game.id());
+    REQUIRE(moved());
+    game.set_name(part.id(), "Brick");
+    REQUIRE(moved());
+    part.set_color(rgb(0.2f, 0.4f, 0.6f));
+    REQUIRE_FALSE(moved());
+    game.set_name(0, "Place");
+    REQUIRE(moved());
+    // During play too.
+    game.start_simulation();
+    REQUIRE_FALSE(moved());
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    game.set_parent(folder.id(), game.id());
+    REQUIRE(moved());
+    game.destroy(folder.id());
+    REQUIRE(moved());
+    game.stop_simulation();
+    REQUIRE(moved());
+}

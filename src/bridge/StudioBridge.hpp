@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ide/McpServer.hpp"
+#include "ide/McpTools.hpp"
 #include "ide/StudioRegistry.hpp"
 
 #include <filesystem>
@@ -35,7 +36,7 @@ struct BridgeOptions {
 // The tools are the studio's own, from catalog, plus list_studios and select_studio.
 class StudioBridge {
 public:
-    StudioBridge(BridgeOptions options, const std::vector<ide::McpTool>& catalog);
+    StudioBridge(BridgeOptions options, const std::vector<ide::McpToolSpec>& catalog);
 
     StudioBridge(const StudioBridge&) = delete;
     StudioBridge& operator=(const StudioBridge&) = delete;

@@ -80,10 +80,10 @@ std::string describe_studio(const StudioEntry& studio) {
            ")";
 }
 
-StudioBridge::StudioBridge(BridgeOptions options, const std::vector<ide::McpTool>& catalog)
+StudioBridge::StudioBridge(BridgeOptions options, const std::vector<ide::McpToolSpec>& catalog)
     : options_(std::move(options)) {
     front_.set_instructions(std::string(ide::default_instructions()) + kSeveral);
-    for (const ide::McpTool& tool : catalog) {
+    for (const ide::McpToolSpec& tool : catalog) {
         const std::string name = tool.name;
         front_.add_tool({tool.name, tool.description, tool.input_schema,
                          [this, name](const JsonValue& arguments) { return forward(target(), name, arguments); }});

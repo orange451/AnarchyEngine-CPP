@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace engine_core {
 class Engine;
@@ -40,9 +41,23 @@ struct McpStudio {
     std::function<McpImage(int max_size)> capture_view;
 };
 
+// What tools/list shows of a tool, without the code that runs it.
+struct McpToolSpec {
+    std::string name;
+    std::string description;
+    // A JSON Schema object describing the arguments.
+    engine_core::JsonValue input_schema;
+};
+
+// Every tool add_engine_tools can add, in its order, as a studio with every
+// hook set offers them. The bridge lists these without an engine.
+std::vector<McpToolSpec> engine_tool_specs();
+
 // The tools over one engine: the tree, properties, instances, scripts and
 // what analysis finds in them, selection, the class registry, Luau, output,
-// undo, play testing, the Scene View, and which studio this is.
+// undo, play testing, the Scene View, and which studio this is. Each is the
+// one engine_tool_specs describes; a tool whose studio hooks are missing is
+// left out.
 //
 // Reads take the DataModel read lock on the server thread. Edits run on the
 // simulation thread, or under the write lock while paused, as the explorer's

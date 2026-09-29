@@ -7,13 +7,10 @@
 #include "StudioBridge.hpp"
 #include "ide/McpTools.hpp"
 
-#include "Engine.hpp"
-
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
-#include <stdexcept>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -32,22 +29,6 @@ constexpr const char* kUsage =
     "else the one whose project folder holds the working directory.\n"
     "Each studio's token comes from its registry entry. ANARCHY_MCP_TOKEN is sent\n"
     "to a studio whose entry has none.\n";
-
-// Every hook set, so the catalog lists every tool a studio can offer. None runs here.
-ide::McpStudio ListingStudio() {
-    auto never = [] { throw std::logic_error("The bridge runs no studio tool itself."); };
-    ide::McpStudio studio;
-    studio.start_test = never;
-    studio.pause_test = never;
-    studio.resume_test = never;
-    studio.stop_test = never;
-    studio.session = []() -> std::string { throw std::logic_error("The bridge runs no studio tool itself."); };
-    studio.info = []() -> engine_core::JsonValue {
-        throw std::logic_error("The bridge runs no studio tool itself.");
-    };
-    studio.capture_view = [](int) -> ide::McpImage { throw std::logic_error("The bridge runs no studio tool itself."); };
-    return studio;
-}
 
 }  // namespace
 
@@ -83,10 +64,7 @@ int main(int argc, char** argv) {
     }
 
     // The studio's own tool definitions, so the list is whole even before a studio opens.
-    engine_core::Engine engine;
-    ide::McpServer catalog;
-    ide::add_engine_tools(catalog, engine, ListingStudio());
-    bridge::StudioBridge bridge(options, catalog.tools());
+    bridge::StudioBridge bridge(options, ide::engine_tool_specs());
 
     std::string line;
     while (std::getline(std::cin, line)) {

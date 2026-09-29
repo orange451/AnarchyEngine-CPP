@@ -651,8 +651,8 @@ void TestBridge() {
     const fs::path registry = base / "studios";
     fs::create_directories(base / "Alpha");
     fs::create_directories(base / "Beta" / "src");
-    const std::vector<ide::McpTool> catalog = {
-        {"whoami", "Names the studio.", ide::json_literal(R"({"type":"object"})"), nullptr}};
+    const std::vector<ide::McpToolSpec> catalog = {
+        {"whoami", "Names the studio.", ide::json_literal(R"({"type":"object"})")}};
     bridge::StudioBridge outside({registry, base, "", ""}, catalog);
     const ide::McpServer& front = outside.server();
 
@@ -774,7 +774,7 @@ void TestImages() {
     Expect(pics.start(0, error), "the picture studio listens: " + error);
     ide::StudioEntry entry{ide::current_pid(), pics.port(), "Pics", ide::utf8_path(base / "Pics"), "s3cret"};
     Expect(ide::write_studio(registry, entry, error), "the picture studio is registered: " + error);
-    bridge::StudioBridge bridge({registry, base, "", ""}, {{"picture", "", ide::json_literal(R"({"type":"object"})"), nullptr}});
+    bridge::StudioBridge bridge({registry, base, "", ""}, {{"picture", "", ide::json_literal(R"({"type":"object"})")}});
     const JsonValue forwarded = Request(bridge.server(), "tools/call", R"({"name":"picture","arguments":{}})");
     const JsonValue* items = forwarded.find("result") != nullptr ? forwarded.find("result")->find("content") : nullptr;
     Expect(items != nullptr && items->items().size() == 2 && items->items()[1].find("data")->as_string() == "AAAA" &&

@@ -70,10 +70,6 @@ std::string Unquote(const std::string& value) {
     return value;
 }
 
-bool IsMeta(const std::string& name) {
-    return name == "--theme-name" || name == "--theme-base" || name == "--theme-extends";
-}
-
 const std::string* Find(const ThemeValues& values, std::string_view name) {
     for (const auto& [key, value] : values) {
         if (key == name) {
@@ -358,13 +354,17 @@ std::string IdeTheme::stylesheet() const {
     std::string css = ":root {\n";
     for (const ThemeValues* layer : {&inherited_, &declared_}) {
         for (const auto& [key, value] : *layer) {
-            if (!IsMeta(key)) {
+            if (!is_theme_meta(key)) {
                 css += "    " + key + ": " + value + ";\n";
             }
         }
     }
     css += "}\n";
     return css;
+}
+
+bool is_theme_meta(std::string_view name) {
+    return name == "--theme-name" || name == "--theme-base" || name == "--theme-extends";
 }
 
 std::string write_theme(const std::string& name, const std::string& base, const std::string& extends,

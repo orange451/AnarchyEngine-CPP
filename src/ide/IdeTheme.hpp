@@ -79,6 +79,10 @@ private:
     std::unordered_map<std::string, std::string> all_;
 };
 
+// A theme file's own facts, not a color: --theme-name, --theme-base, and
+// --theme-extends.
+bool is_theme_meta(std::string_view name);
+
 // A theme file: a :root rule of --theme-name, --theme-base, --theme-extends
 // when extends is not the base, and variables, each under the heading of its
 // group in the order theme_variables and control_variables list them.

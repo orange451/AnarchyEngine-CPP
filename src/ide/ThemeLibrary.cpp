@@ -20,7 +20,7 @@ std::string UserId(const fs::path& file) { return kUserPrefix + utf8_path(file.f
 // A theme's own variables less its name, base, and parent: what it changes.
 bool HasColors(const ThemeValues& declared) {
     return std::any_of(declared.begin(), declared.end(), [](const auto& item) {
-        return item.first != "--theme-name" && item.first != "--theme-base" && item.first != "--theme-extends";
+        return !is_theme_meta(item.first);
     });
 }
 

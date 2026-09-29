@@ -126,8 +126,6 @@ void Put(ThemeValues& values, const std::string& name, std::string value) {
     values.emplace_back(name, std::move(value));
 }
 
-bool IsMeta(const std::string& name) { return name == "--theme-name" || name == "--theme-base"; }
-
 // Two values that draw the same: equal colors however they are written, or equal text.
 bool SameValue(const std::string& a, const std::string& b) {
     bool okA = false;
@@ -535,7 +533,7 @@ bool PreferencesPanel::show_theme(const std::string& id, bool remember) {
         inherited_ = theme.inherited();
         parent_ = themes_.parent_of(theme);
         for (const auto& [key, value] : theme.declared()) {
-            if (!IsMeta(key)) {
+            if (!is_theme_meta(key)) {
                 edits_.emplace_back(key, value);
             }
         }

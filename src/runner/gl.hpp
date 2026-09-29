@@ -23,6 +23,12 @@ using GLsizeiptr = std::ptrdiff_t;
 #ifdef GL_FALSE
 #undef GL_FALSE
 #endif
+#ifdef GL_VIEWPORT
+#undef GL_VIEWPORT
+#endif
+#ifdef GL_SCISSOR_BOX
+#undef GL_SCISSOR_BOX
+#endif
 #ifdef GL_TRUE
 #undef GL_TRUE
 #endif

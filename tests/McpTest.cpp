@@ -21,6 +21,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <vector>
@@ -36,6 +37,34 @@ void Expect(bool condition, const std::string& message) {
         std::fprintf(stderr, "FAIL %s\n", message.c_str());
         ++gFailures;
     }
+}
+
+// What a missing member or item reads as.
+const JsonValue kMissing{};
+
+// The start of value's JSON, for a failure message.
+std::string Excerpt(const JsonValue& value) {
+    const std::string text = ide::compact_json(value);
+    return text.size() <= 200 ? text : text.substr(0, 200) + "...";
+}
+
+// The member key of object. A missing one fails the test, naming it, and reads
+// as null, so the tests after it still run.
+const JsonValue& Member(const JsonValue& object, std::string_view key) {
+    if (const JsonValue* value = object.find(key)) {
+        return *value;
+    }
+    Expect(false, "JSON has member \"" + std::string(key) + "\": " + Excerpt(object));
+    return kMissing;
+}
+
+// The item at index of a list. A missing one fails the test and reads as null.
+const JsonValue& Item(const JsonValue& list, std::size_t index) {
+    if (index < list.items().size()) {
+        return list.items()[index];
+    }
+    Expect(false, "JSON has item " + std::to_string(index) + ": " + Excerpt(list));
+    return kMissing;
 }
 
 JsonValue Parse(const std::string& text) {
@@ -69,12 +98,12 @@ JsonValue Call(const ide::McpServer& server, const std::string& tool, const std:
     if (result == nullptr) {
         return {};
     }
-    const bool error = result->find("isError") != nullptr && result->find("isError")->as_bool();
+    const bool error = result->find("isError") != nullptr && Member(*result, "isError").as_bool();
     if (failed != nullptr) {
         *failed = error;
     } else if (error) {
-        const JsonValue& content = result->find("content")->items()[0];
-        Expect(false, tool + " succeeds: " + content.find("text")->as_string());
+        const JsonValue& content = Item(Member(*result, "content"), 0);
+        Expect(false, tool + " succeeds: " + Member(content, "text").as_string());
     }
     const JsonValue* structured = result->find("structuredContent");
     return structured != nullptr ? *structured : JsonValue();
@@ -84,10 +113,10 @@ std::string ErrorText(const ide::McpServer& server, const std::string& tool, con
     const JsonValue reply =
         Request(server, "tools/call", R"({"name":")" + tool + R"(","arguments":)" + arguments + "}");
     const JsonValue* result = reply.find("result");
-    if (result == nullptr || result->find("isError") == nullptr || !result->find("isError")->as_bool()) {
+    if (result == nullptr || result->find("isError") == nullptr || !Member(*result, "isError").as_bool()) {
         return {};
     }
-    return result->find("content")->items()[0].find("text")->as_string();
+    return Member(Item(Member(*result, "content"), 0), "text").as_string();
 }
 
 void TestProtocol() {
@@ -99,29 +128,29 @@ void TestProtocol() {
 
     const JsonValue init = Request(server, "initialize", R"({"protocolVersion":"2025-06-18","capabilities":{}})");
     const JsonValue* result = init.find("result");
-    Expect(result != nullptr && result->find("protocolVersion")->as_string() == "2025-06-18",
+    Expect(result != nullptr && Member(*result, "protocolVersion").as_string() == "2025-06-18",
            "initialize answers with the client's version when it knows it");
-    Expect(result != nullptr && result->find("capabilities")->find("tools") != nullptr, "initialize offers tools");
+    Expect(result != nullptr && Member(*result, "capabilities").find("tools") != nullptr, "initialize offers tools");
     const JsonValue newer = Request(server, "initialize", R"({"protocolVersion":"2099-01-01"})");
-    Expect(newer.find("result")->find("protocolVersion")->as_string() == "2025-11-25",
+    Expect(Member(Member(newer, "result"), "protocolVersion").as_string() == "2025-11-25",
            "an unknown version gets the newest this server speaks");
 
     const JsonValue list = Request(server, "tools/list");
-    const JsonValue* tools = list.find("result")->find("tools");
-    Expect(tools != nullptr && tools->items().size() == 2 && tools->items()[0].find("name")->as_string() == "echo" &&
-               tools->items()[0].find("inputSchema")->is_object(),
+    const JsonValue* tools = Member(list, "result").find("tools");
+    Expect(tools != nullptr && tools->items().size() == 2 && Member(Item(*tools, 0), "name").as_string() == "echo" &&
+               Member(Item(*tools, 0), "inputSchema").is_object(),
            "tools/list names each tool with its schema");
 
     const JsonValue echoed = Call(server, "echo", R"({"a":1,"b":"two"})");
-    Expect(echoed.find("a") != nullptr && echoed.find("a")->as_number() == 1, "a tool's result is its structured content");
+    Expect(echoed.find("a") != nullptr && Member(echoed, "a").as_number() == 1, "a tool's result is its structured content");
 
     Expect(ErrorText(server, "boom", "{}") == "it broke", "a throwing tool reports its message as a failed call");
 
     const JsonValue unknown = Request(server, "tools/call", R"({"name":"nope"})");
-    Expect(unknown.find("error") != nullptr && unknown.find("error")->find("code")->as_number() == -32602,
+    Expect(unknown.find("error") != nullptr && Member(Member(unknown, "error"), "code").as_number() == -32602,
            "an unknown tool is an invalid-params error");
     const JsonValue missing = Request(server, "no/such");
-    Expect(missing.find("error") != nullptr && missing.find("error")->find("code")->as_number() == -32601,
+    Expect(missing.find("error") != nullptr && Member(Member(missing, "error"), "code").as_number() == -32601,
            "an unknown method is method-not-found");
     Expect(Request(server, "ping").find("result") != nullptr, "ping answers");
 
@@ -129,7 +158,7 @@ void TestProtocol() {
     Expect(server.handle(R"({"jsonrpc":"2.0","method":"notifications/initialized"})", status).empty() && status == 202,
            "a notification gets 202 and no body");
     const JsonValue bad = Parse(server.handle("{nope", status));
-    Expect(bad.find("error") != nullptr && bad.find("error")->find("code")->as_number() == -32700,
+    Expect(bad.find("error") != nullptr && Member(Member(bad, "error"), "code").as_number() == -32700,
            "bad JSON is a parse error");
     const JsonValue batch = Parse(server.handle(
         R"([{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"},)"
@@ -156,10 +185,10 @@ void TestEngineTools() {
     ide::add_engine_tools(server, engine, {});
 
     const JsonValue folder = Call(server, "create_instance", R"({"class":"Folder","name":"Stuff"})");
-    Expect(folder.find("path") != nullptr && folder.find("path")->as_string() == "Stuff",
+    Expect(folder.find("path") != nullptr && Member(folder, "path").as_string() == "Stuff",
            "create_instance puts it under the root");
     const JsonValue inner = Call(server, "create_instance", R"({"class":"Folder","name":"Inner","parent":"Stuff"})");
-    Expect(inner.find("path")->as_string() == "Stuff.Inner", "create_instance takes a parent path");
+    Expect(Member(inner, "path").as_string() == "Stuff.Inner", "create_instance takes a parent path");
     Expect(ErrorText(server, "create_instance", R"({"class":"Banana"})").find("Instance.new cannot make") == 0,
            "an unknown class is refused");
     AddScript(game, "Hello", "print('hi')", game.find_first_child(game.id(), "Stuff"));
@@ -168,25 +197,25 @@ void TestEngineTools() {
     const JsonValue* top = tree.find("tree");
     Expect(top != nullptr && top->find("children") != nullptr, "get_tree lists the root's children");
     bool saw = false;
-    for (const JsonValue& child : top->find("children")->items()) {
-        if (child.find("name")->as_string() == "Stuff") {
-            saw = child.find("children") == nullptr && child.find("child_count")->as_number() == 2;
+    for (const JsonValue& child : Member(Member(tree, "tree"), "children").items()) {
+        if (Member(child, "name").as_string() == "Stuff") {
+            saw = child.find("children") == nullptr && Member(child, "child_count").as_number() == 2;
         }
     }
     Expect(saw, "a row below depth reports its child count");
     const JsonValue deep = Call(server, "get_tree", R"({"instance":"game.Stuff","depth":3})");
-    Expect(deep.find("tree")->find("children")->items().size() == 2, "get_tree starts at a path");
+    Expect(Member(Member(deep, "tree"), "children").items().size() == 2, "get_tree starts at a path");
 
     const JsonValue found = Call(server, "find_instances", R"({"name":"inn"})");
-    Expect(found.find("instances")->items().size() == 1 &&
-               found.find("instances")->items()[0].find("path")->as_string() == "Stuff.Inner",
+    Expect(Member(found, "instances").items().size() == 1 &&
+               Member(Item(Member(found, "instances"), 0), "path").as_string() == "Stuff.Inner",
            "find_instances matches part of a name, ignoring case");
 
     const JsonValue props = Call(server, "get_properties", R"({"instance":"Stuff.Inner"})");
-    const JsonValue* name = props.find("properties") != nullptr ? props.find("properties")->find("Name") : nullptr;
-    Expect(name != nullptr && name->find("value")->as_string() == "Inner", "get_properties shows Name");
-    const JsonValue* parent = props.find("properties") != nullptr ? props.find("properties")->find("Parent") : nullptr;
-    Expect(parent != nullptr && parent->find("value")->find("path")->as_string() == "Stuff",
+    const JsonValue* name = props.find("properties") != nullptr ? Member(props, "properties").find("Name") : nullptr;
+    Expect(name != nullptr && Member(*name, "value").as_string() == "Inner", "get_properties shows Name");
+    const JsonValue* parent = props.find("properties") != nullptr ? Member(props, "properties").find("Parent") : nullptr;
+    Expect(parent != nullptr && Member(Member(*parent, "value"), "path").as_string() == "Stuff",
            "an Instance property shows its target's path");
 
     Call(server, "set_property", R"({"instance":"Stuff.Inner","property":"Name","value":"Renamed"})");
@@ -210,19 +239,19 @@ void TestEngineTools() {
     Call(server, "set_property", R"({"instance":"Box","property":"Color","value":[1,0.5,0]})");
     auto color_of = [&server]() {
         const JsonValue box = Call(server, "get_properties", R"({"instance":"Box"})");
-        const JsonValue* entry = box.find("properties") != nullptr ? box.find("properties")->find("Color") : nullptr;
+        const JsonValue* entry = box.find("properties") != nullptr ? Member(box, "properties").find("Color") : nullptr;
         return entry != nullptr ? *entry : JsonValue();
     };
     JsonValue color = color_of();
-    Expect(color.find("type") != nullptr && color.find("type")->as_string() == "Color3" &&
+    Expect(color.find("type") != nullptr && Member(color, "type").as_string() == "Color3" &&
                color.find("readonly") == nullptr,
            "Color is a writable Color3");
-    Expect(color.find("value") != nullptr && color.find("value")->items().size() == 3 &&
-               color.find("value")->items()[1].as_number() == 0.5,
+    Expect(color.find("value") != nullptr && Member(color, "value").items().size() == 3 &&
+               Item(Member(color, "value"), 1).as_number() == 0.5,
            "set_property writes [r, g, b] and get_properties reads it back");
     Call(server, "set_property", R"({"instance":"Box","property":"Color","value":"#0000FF"})");
     color = color_of();
-    Expect(color.find("value")->items()[0].as_number() == 0 && color.find("value")->items()[2].as_number() == 1,
+    Expect(Item(Member(color, "value"), 0).as_number() == 0 && Item(Member(color, "value"), 2).as_number() == 1,
            "a hex code sets a Color3");
     Expect(!ErrorText(server, "set_property", R"({"instance":"Box","property":"Color","value":"blue"})").empty(),
            "a Color3 refuses what is not a color");
@@ -230,27 +259,27 @@ void TestEngineTools() {
     const JsonValue run = Call(server, "run_lua", R"j({"source":"print('from mcp', 1 + 2)"})j");
     const JsonValue* lines = run.find("output");
     Expect(lines != nullptr && lines->items().size() == 1 &&
-               lines->items()[0].find("text")->as_string() == "from mcp\t3",
+               Member(Item(*lines, 0), "text").as_string() == "from mcp\t3",
            "run_lua returns what the chunk printed");
     const JsonValue failed = Call(server, "run_lua", R"j({"source":"error('nope')"})j");
-    Expect(failed.find("error")->as_bool(), "run_lua reports an error");
+    Expect(Member(failed, "error").as_bool(), "run_lua reports an error");
 
     const JsonValue output = Call(server, "get_output", "{}");
     bool command = false;
-    for (const JsonValue& line : output.find("lines")->items()) {
-        command = command || (line.find("kind")->as_string() == "command" &&
-                              line.find("text")->as_string() == "print('from mcp', 1 + 2)");
+    for (const JsonValue& line : Member(output, "lines").items()) {
+        command = command || (Member(line, "kind").as_string() == "command" &&
+                              Member(line, "text").as_string() == "print('from mcp', 1 + 2)");
     }
     Expect(command, "the chunk run_lua ran shows in the console");
-    const double next = output.find("next")->as_number();
+    const double next = Member(output, "next").as_number();
     Call(server, "run_lua", R"j({"source":"print('later')"})j");
     const JsonValue newer = Call(server, "get_output", "{\"since\":" + engine_core::format_json_number(next) + "}");
-    Expect(newer.find("lines")->items().size() == 2, "get_output since returns only newer lines");
-    Expect(Call(server, "get_output", R"({"since":1e300})").find("lines")->items().empty(),
+    Expect(Member(newer, "lines").items().size() == 2, "get_output since returns only newer lines");
+    Expect(Member(Call(server, "get_output", R"({"since":1e300})"), "lines").items().empty(),
            "get_output since a line never written returns nothing");
 
     const JsonValue source = Call(server, "read_script", R"({"instance":"Stuff.Hello"})");
-    Expect(source.find("source")->as_string() == "print('hi')", "read_script returns the Source");
+    Expect(Member(source, "source").as_string() == "print('hi')", "read_script returns the Source");
     Call(server, "write_script", R"j({"instance":"Stuff.Hello","source":"print('bye')"})j");
     const auto* script = dynamic_cast<const engine_core::LuaSource*>(
         game.instance(game.find_first_child(game.find_first_child(game.id(), "Stuff"), "Hello")));
@@ -260,20 +289,20 @@ void TestEngineTools() {
     Call(server, "set_selection", R"({"instances":["Stuff","Renamed"]})");
     Expect(game.selection().get().size() == 2, "set_selection selects by path");
     const JsonValue selection = Call(server, "get_selection", "{}");
-    Expect(selection.find("instances")->items().size() == 2 &&
-               selection.find("instances")->items()[1].find("name")->as_string() == "Renamed",
+    Expect(Member(selection, "instances").items().size() == 2 &&
+               Member(Item(Member(selection, "instances"), 1), "name").as_string() == "Renamed",
            "get_selection lists them in order");
 
     const JsonValue classes = Call(server, "list_classes", "{}");
     bool creatable = false;
-    for (const JsonValue& entry : classes.find("creatable")->items()) {
+    for (const JsonValue& entry : Member(classes, "creatable").items()) {
         creatable = creatable || entry.as_string() == "Folder";
     }
     Expect(creatable, "list_classes names Folder as creatable");
     const JsonValue api = Call(server, "get_class", R"({"class":"Folder"})");
     bool has_name = false;
-    for (const JsonValue& entry : api.find("properties")->items()) {
-        has_name = has_name || entry.find("name")->as_string() == "Name";
+    for (const JsonValue& entry : Member(api, "properties").items()) {
+        has_name = has_name || Member(entry, "name").as_string() == "Name";
     }
     Expect(has_name, "get_class includes inherited properties");
 
@@ -288,7 +317,7 @@ const engine_core::LuaSource* ScriptNamed(engine_core::DataModel& game, const ch
 
 bool HasProblem(const JsonValue& problems, const std::string& code, int line) {
     for (const JsonValue& problem : problems.items()) {
-        if (problem.find("code")->as_string() == code && problem.find("line")->as_number() == line) {
+        if (Member(problem, "code").as_string() == code && Member(problem, "line").as_number() == line) {
             return true;
         }
     }
@@ -310,17 +339,17 @@ void TestScriptTools() {
     const JsonValue broken = Call(server, "write_script", R"({"instance":"Main","source":"local x ="})");
     const JsonValue* problems = broken.find("problems");
     Expect(problems != nullptr && problems->items().size() == 1 && HasProblem(*problems, "Syntax", 1) &&
-               problems->items()[0].find("severity")->as_string() == "error",
+               Member(Item(*problems, 0), "severity").as_string() == "error",
            "write_script returns a syntax error, lines from 1: " + ide::compact_json(broken));
     const JsonValue clean = Call(server, "write_script", R"j({"instance":"Main","source":"local n = 1\nprint(n)\n"})j");
-    Expect(clean.find("problems") != nullptr && clean.find("problems")->items().empty(),
+    Expect(clean.find("problems") != nullptr && Member(clean, "problems").items().empty(),
            "a clean script has no problems: " + ide::compact_json(clean));
 
     const JsonValue edited = Call(
         server, "edit_script",
         R"j({"instance":"Main","edits":[{"old_text":"print(n)","new_text":"print(n + missing)"}]})j");
     Expect(ScriptNamed(game, "Main")->source() == "local n = 1\nprint(n + missing)\n", "edit_script replaces the text");
-    Expect(edited.find("replaced")->as_number() == 1, "edit_script counts its replacements");
+    Expect(Member(edited, "replaced").as_number() == 1, "edit_script counts its replacements");
     Expect(edited.find("problems") != nullptr && HasProblem(*edited.find("problems"), "Lint/UnknownGlobal", 2),
            "edit_script returns what analysis finds: " + ide::compact_json(edited));
 
@@ -328,7 +357,7 @@ void TestScriptTools() {
                                R"j({"instance":"Main","source":"local n = 1\nprint(n + missing)\nlocal x = n"})j");
     const JsonValue* ordered = two.find("problems");
     Expect(ordered != nullptr && ordered->items().size() == 2 &&
-               ordered->items()[0].find("line")->as_number() == 2 && ordered->items()[1].find("line")->as_number() == 3,
+               Member(Item(*ordered, 0), "line").as_number() == 2 && Member(Item(*ordered, 1), "line").as_number() == 3,
            "problems come in line order: " + ide::compact_json(two));
 
     Call(server, "write_script", R"j({"instance":"Main","source":"local a = 1\nlocal b = a\nlocal c = a\n"})j");
@@ -345,19 +374,19 @@ void TestScriptTools() {
            "a failed edit leaves the earlier ones unapplied");
     const JsonValue every = Call(
         server, "edit_script", R"j({"instance":"Main","edits":[{"old_text":"= a","new_text":"= 2","replace_all":true}]})j");
-    Expect(every.find("replaced")->as_number() == 2 &&
+    Expect(Member(every, "replaced").as_number() == 2 &&
                ScriptNamed(game, "Main")->source() == "local a = 1\nlocal b = 2\nlocal c = 2\n",
            "replace_all replaces each place");
 
     Call(server, "write_script", R"j({"instance":"Main","source":"one\ntwo\nthree\n"})j");
     const JsonValue whole = Call(server, "read_script", R"({"instance":"Main"})");
-    Expect(whole.find("line_count")->as_number() == 4 && whole.find("source")->as_string() == "one\ntwo\nthree\n",
+    Expect(Member(whole, "line_count").as_number() == 4 && Member(whole, "source").as_string() == "one\ntwo\nthree\n",
            "read_script returns the whole Source and its line count");
     const JsonValue middle = Call(server, "read_script", R"({"instance":"Main","first_line":2,"last_line":3})");
-    Expect(middle.find("source")->as_string() == "two\nthree" && middle.find("first_line")->as_number() == 2,
+    Expect(Member(middle, "source").as_string() == "two\nthree" && Member(middle, "first_line").as_number() == 2,
            "read_script returns a range of lines");
     const JsonValue tail = Call(server, "read_script", R"({"instance":"Main","first_line":3})");
-    Expect(tail.find("source")->as_string() == "three\n" && tail.find("last_line")->as_number() == 4,
+    Expect(Member(tail, "source").as_string() == "three\n" && Member(tail, "last_line").as_number() == 4,
            "a range without last_line runs to the end");
     Expect(ErrorText(server, "read_script", R"({"instance":"Main","first_line":9})") == "The Source has 4 lines.",
            "a range past the end is refused");
@@ -366,55 +395,55 @@ void TestScriptTools() {
     engine_core::ModuleScript& module = game.create<engine_core::ModuleScript>();
     game.set_name(module.id(), "Util");
     module.set_source("local Value = 1\nreturn value\n");
-    game.set_parent(module.id(), static_cast<engine_core::InstanceId>(lib.find("id")->as_number()));
+    game.set_parent(module.id(), static_cast<engine_core::InstanceId>(Member(lib, "id").as_number()));
     game.history().end_gesture();
 
     const JsonValue found = Call(server, "search_scripts", R"({"pattern":"VALUE"})");
-    const JsonValue* scripts = found.find("scripts");
-    Expect(scripts->items().size() == 1 && scripts->items()[0].find("path")->as_string() == "Lib.Util" &&
-               scripts->items()[0].find("lines")->items().size() == 2 && found.find("matches")->as_number() == 2,
+    const JsonValue& scripts = Member(found, "scripts");
+    Expect(scripts.items().size() == 1 && Member(Item(scripts, 0), "path").as_string() == "Lib.Util" &&
+               Member(Item(scripts, 0), "lines").items().size() == 2 && Member(found, "matches").as_number() == 2,
            "search_scripts ignores case and lists matching lines: " + ide::compact_json(found));
     const JsonValue cased = Call(server, "search_scripts", R"({"pattern":"value","match_case":true})");
-    Expect(cased.find("matches")->as_number() == 1 &&
-               cased.find("scripts")->items()[0].find("lines")->items()[0].find("line")->as_number() == 2,
+    Expect(Member(cased, "matches").as_number() == 1 &&
+               Member(Item(Member(Item(Member(cased, "scripts"), 0), "lines"), 0), "line").as_number() == 2,
            "match_case finds only the exact case, on its line");
     const JsonValue pattern = Call(server, "search_scripts", R"({"pattern":"^t\\w+","regex":true})");
-    Expect(pattern.find("matches")->as_number() == 2 &&
-               pattern.find("scripts")->items()[0].find("path")->as_string() == "Main",
+    Expect(Member(pattern, "matches").as_number() == 2 &&
+               Member(Item(Member(pattern, "scripts"), 0), "path").as_string() == "Main",
            "a regex matches per line, scripts in explorer order: " + ide::compact_json(pattern));
     const JsonValue scoped = Call(server, "search_scripts", R"({"pattern":"t","instance":"Lib"})");
-    Expect(scoped.find("scripts")->items().size() == 1, "instance limits the search to what is under it");
+    Expect(Member(scoped, "scripts").items().size() == 1, "instance limits the search to what is under it");
     const JsonValue capped = Call(server, "search_scripts", R"({"pattern":"e","limit":1})");
-    Expect(capped.find("matches")->as_number() == 1 && capped.find("truncated") != nullptr,
+    Expect(Member(capped, "matches").as_number() == 1 && capped.find("truncated") != nullptr,
            "limit caps the matches and says so");
     Expect(ErrorText(server, "search_scripts", R"({"pattern":"(","regex":true})").find("is not a regex") != std::string::npos,
            "a bad regex is refused");
 
     Call(server, "write_script", R"j({"instance":"Lib.Util","source":"return {"})j");
     const JsonValue all = Call(server, "get_diagnostics", "{}");
-    Expect(all.find("checked")->as_number() == 2 && all.find("errors")->as_number() >= 1 &&
+    Expect(Member(all, "checked").as_number() == 2 && Member(all, "errors").as_number() >= 1 &&
                all.find("pending") == nullptr,
            "get_diagnostics checks every script: " + ide::compact_json(all));
     bool util = false;
-    for (const JsonValue& entry : all.find("scripts")->items()) {
-        util = util || (entry.find("path")->as_string() == "Lib.Util" && HasProblem(*entry.find("problems"), "Syntax", 1));
+    for (const JsonValue& entry : Member(all, "scripts").items()) {
+        util = util || (Member(entry, "path").as_string() == "Lib.Util" && HasProblem(Member(entry, "problems"), "Syntax", 1));
     }
     Expect(util, "get_diagnostics lists a script's problems under its path");
     const JsonValue one = Call(server, "get_diagnostics", R"({"instance":"Main"})");
-    Expect(one.find("checked")->as_number() == 1, "get_diagnostics checks only the scripts asked for");
+    Expect(Member(one, "checked").as_number() == 1, "get_diagnostics checks only the scripts asked for");
 
     Call(server, "write_script", R"j({"instance":"Main","source":"print('v1')"})j");
     Call(server, "write_script", R"j({"instance":"Main","source":"print('v2')"})j");
     const JsonValue undone = Call(server, "undo", "{}");
-    Expect(ScriptNamed(game, "Main")->source() == "print('v1')" && undone.find("undone")->items().size() == 1 &&
-               undone.find("next_redo")->is_string(),
+    Expect(ScriptNamed(game, "Main")->source() == "print('v1')" && Member(undone, "undone").items().size() == 1 &&
+               Member(undone, "next_redo").is_string(),
            "undo puts the Source back: " + ide::compact_json(undone));
     Call(server, "undo", R"({"redo":true})");
     Expect(ScriptNamed(game, "Main")->source() == "print('v2')", "redo applies it again");
 
     const JsonValue several = Call(server, "get_properties", R"({"instances":["Main","Lib"]})");
-    Expect(several.find("instances")->items().size() == 2 &&
-               several.find("instances")->items()[1].find("name")->as_string() == "Lib",
+    Expect(Member(several, "instances").items().size() == 2 &&
+               Member(Item(Member(several, "instances"), 1), "name").as_string() == "Lib",
            "get_properties reads several instances in order");
 }
 
@@ -468,20 +497,20 @@ void TestPlaytestRun() {
 
     const JsonValue ran = Call(server, "playtest", R"({"action":"start","run_for":0.3})");
     bool printed = false;
-    for (const JsonValue& line : ran.find("output")->items()) {
-        printed = printed || line.find("text")->as_string() == "from play";
+    for (const JsonValue& line : Member(ran, "output").items()) {
+        printed = printed || Member(line, "text").as_string() == "from play";
     }
     Expect(printed, "run_for returns what the place printed: " + ide::compact_json(ran));
-    Expect(ran.find("session")->as_string() == "paused" && ran.find("ran_for")->as_number() >= 0.3 &&
+    Expect(Member(ran, "session").as_string() == "paused" && Member(ran, "ran_for").as_number() >= 0.3 &&
                ran.find("ended_on_error") == nullptr,
            "run_for runs the whole time, then pauses");
-    Expect(Call(server, "playtest", R"({"action":"stop"})").find("session")->as_string() == "stopped",
+    Expect(Member(Call(server, "playtest", R"({"action":"stop"})"), "session").as_string() == "stopped",
            "stop ends the test");
 
     Call(server, "write_script", R"j({"instance":"Hello","source":"print('about to fail')\nerror('boom')"})j");
     const JsonValue failed = Call(server, "playtest", R"({"action":"start","run_for":10,"then":"stop"})");
-    Expect(failed.find("ended_on_error") != nullptr && failed.find("ran_for")->as_number() < 10 &&
-               failed.find("errors")->as_number() >= 1 && failed.find("session")->as_string() == "stopped",
+    Expect(failed.find("ended_on_error") != nullptr && Member(failed, "ran_for").as_number() < 10 &&
+               Member(failed, "errors").as_number() >= 1 && Member(failed, "session").as_string() == "stopped",
            "an error ends the wait early, and then stop ends the test: " + ide::compact_json(failed));
     engine.stop();
 }
@@ -496,7 +525,7 @@ void TestThreadedEdits() {
     std::thread paused([&] {
         Call(server, "create_instance", R"({"class":"Folder","name":"WhilePaused"})");
         const JsonValue run = Call(server, "run_lua", R"j({"source":"print(game:FindFirstChild('WhilePaused') ~= nil)"})j");
-        Expect(run.find("output")->items().size() == 1 && run.find("output")->items()[0].find("text")->as_string() == "true",
+        Expect(Member(run, "output").items().size() == 1 && Member(Item(Member(run, "output"), 0), "text").as_string() == "true",
                "run_lua sees an edit made while paused");
     });
     paused.join();
@@ -529,7 +558,7 @@ void TestHttp() {
     Expect(ok && ok->status == 200, "a POST with the token is answered");
     if (ok) {
         const JsonValue reply = Parse(ok->body);
-        Expect(reply.find("id") != nullptr && reply.find("id")->as_number() == 7, "the reply carries the request id");
+        Expect(reply.find("id") != nullptr && Member(reply, "id").as_number() == 7, "the reply carries the request id");
         Expect(ok->get_header_value("Content-Type").find("application/json") == 0, "the reply is JSON");
     }
     httplib::Result no_token = client.Post("/mcp", body, "application/json");
@@ -643,7 +672,7 @@ std::unique_ptr<FakeStudio> OpenStudio(const fs::path& registry, const std::stri
 std::string Whoami(const ide::McpServer& bridge) {
     bool failed = false;
     const JsonValue out = Call(bridge, "whoami", "{}", &failed);
-    return !failed && out.find("name") != nullptr ? out.find("name")->as_string() : "(failed)";
+    return !failed && out.find("name") != nullptr ? Member(out, "name").as_string() : "(failed)";
 }
 
 void TestBridge() {
@@ -657,13 +686,13 @@ void TestBridge() {
     const ide::McpServer& front = outside.server();
 
     const JsonValue init = Request(front, "initialize", R"({"protocolVersion":"2025-06-18"})");
-    const JsonValue* instructions = init.find("result") != nullptr ? init.find("result")->find("instructions") : nullptr;
+    const JsonValue* instructions = init.find("result") != nullptr ? Member(init, "result").find("instructions") : nullptr;
     Expect(instructions != nullptr && instructions->as_string().find("select_studio") != std::string::npos,
            "the bridge's instructions explain how a studio is picked");
     const JsonValue tools = Request(front, "tools/list");
     std::vector<std::string> names;
-    for (const JsonValue& tool : tools.find("result")->find("tools")->items()) {
-        names.push_back(tool.find("name")->as_string());
+    for (const JsonValue& tool : Member(Member(tools, "result"), "tools").items()) {
+        names.push_back(Member(tool, "name").as_string());
     }
     Expect(names == std::vector<std::string>{"whoami", "list_studios", "select_studio"},
            "the bridge lists the studio's tools, then its own");
@@ -691,12 +720,12 @@ void TestBridge() {
     Expect(Whoami(front) == "Alpha", "select_studio picks by name, ignoring case");
     const JsonValue listed = Call(front, "list_studios", "{}");
     bool alpha_selected = false;
-    for (const JsonValue& studio : listed.find("studios")->items()) {
+    for (const JsonValue& studio : Member(listed, "studios").items()) {
         alpha_selected = alpha_selected ||
-                         (studio.find("project")->as_string() == "Alpha" && studio.find("selected")->as_bool());
+                         (Member(studio, "project").as_string() == "Alpha" && Member(studio, "selected").as_bool());
     }
-    Expect(alpha_selected && listed.find("studios")->items().size() == 2 &&
-               listed.find("selected_by")->as_string() == "select_studio",
+    Expect(alpha_selected && Member(listed, "studios").items().size() == 2 &&
+               Member(listed, "selected_by").as_string() == "select_studio",
            "list_studios shows both and marks the pick");
     Call(front, "select_studio",
          "{\"studio\":" + ide::compact_json(JsonValue::string(ide::utf8_path(base / "Beta"))) + "}");
@@ -745,13 +774,13 @@ void TestImages() {
     const JsonValue* result = reply.find("result");
     const JsonValue* content = result != nullptr ? result->find("content") : nullptr;
     Expect(content != nullptr && content->items().size() == 2 &&
-               content->items()[1].find("type")->as_string() == "image" &&
-               content->items()[1].find("data")->as_string() == ide::base64_encode("\x89PNG") &&
-               content->items()[1].find("mimeType")->as_string() == "image/png",
+               Member(Item(*content, 1), "type").as_string() == "image" &&
+               Member(Item(*content, 1), "data").as_string() == ide::base64_encode("\x89PNG") &&
+               Member(Item(*content, 1), "mimeType").as_string() == "image/png",
            "screenshot sends the PNG as image content: " + ide::compact_json(reply));
-    Expect(content != nullptr && content->items()[0].find("text")->as_string() == R"({"height":3,"width":4})",
+    Expect(content != nullptr && Member(Item(*content, 0), "text").as_string() == R"({"height":3,"width":4})",
            "the text holds the rest, without the image");
-    Expect(result != nullptr && result->find("structuredContent")->find(ide::kImageMember) == nullptr,
+    Expect(result != nullptr && Member(*result, "structuredContent").find(ide::kImageMember) == nullptr,
            "structured content leaves the image out");
 
     // Through the bridge, the image still reaches the client.
@@ -776,16 +805,16 @@ void TestImages() {
     Expect(ide::write_studio(registry, entry, error), "the picture studio is registered: " + error);
     bridge::StudioBridge bridge({registry, base, "", ""}, {{"picture", "", ide::json_literal(R"({"type":"object"})")}});
     const JsonValue forwarded = Request(bridge.server(), "tools/call", R"({"name":"picture","arguments":{}})");
-    const JsonValue* items = forwarded.find("result") != nullptr ? forwarded.find("result")->find("content") : nullptr;
-    Expect(items != nullptr && items->items().size() == 2 && items->items()[1].find("data")->as_string() == "AAAA" &&
-               items->items()[0].find("text")->as_string() == R"({"width":1})",
+    const JsonValue* items = forwarded.find("result") != nullptr ? Member(forwarded, "result").find("content") : nullptr;
+    Expect(items != nullptr && items->items().size() == 2 && Member(Item(*items, 1), "data").as_string() == "AAAA" &&
+               Member(Item(*items, 0), "text").as_string() == R"({"width":1})",
            "the bridge forwards the image as image content: " + ide::compact_json(forwarded));
     entry.token = "stale";
     Expect(ide::write_studio(registry, entry, error), "the entry is registered again: " + error);
     const JsonValue refused = Request(bridge.server(), "tools/call", R"({"name":"picture","arguments":{}})");
     const JsonValue* failed = refused.find("result");
-    Expect(failed != nullptr && failed->find("isError") != nullptr && failed->find("isError")->as_bool() &&
-               failed->find("content")->items()[0].find("text")->as_string().find("refused") != std::string::npos,
+    Expect(failed != nullptr && failed->find("isError") != nullptr && Member(*failed, "isError").as_bool() &&
+               Member(Item(Member(*failed, "content"), 0), "text").as_string().find("refused") != std::string::npos,
            "a token that does not match is refused: " + ide::compact_json(refused));
     pics.stop();
     ide::remove_studio(registry, entry);

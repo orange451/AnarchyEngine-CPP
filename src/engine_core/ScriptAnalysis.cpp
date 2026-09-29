@@ -906,9 +906,11 @@ bool same_tree(const WorldSnap& a, const WorldSnap& b) {
     }
     for (const NodeSnap& node : b.nodes) {
         const auto was = before.find(node.id);
+        // Children in the same order too: FindFirstChild takes the first of two
+        // siblings with one name, and the place's types follow that order.
         if (was == before.end() || was->second->parent != node.parent || was->second->name != node.name ||
             was->second->class_name != node.class_name || was->second->lua != node.lua ||
-            was->second->module != node.module) {
+            was->second->module != node.module || was->second->children != node.children) {
             return false;
         }
     }
@@ -1136,6 +1138,8 @@ struct CompleteRequest {
     std::condition_variable cv;
     bool done = false;
     std::shared_ptr<LuauAnswer> answer = std::make_shared<LuauAnswer>();
+    // Shutdown cancels the check a request is running.
+    std::shared_ptr<Luau::FrontendCancellationToken> cancel = std::make_shared<Luau::FrontendCancellationToken>();
 };
 
 // Publishes a request's answer to both the waiting and the polling side.
@@ -1169,11 +1173,17 @@ std::shared_ptr<WorldSnap> world_from_nodes(const std::vector<LuaNode>& nodes) {
         }
         world->nodes.push_back(std::move(node));
     }
-    for (NodeSnap& node : world->nodes) {
-        for (const NodeSnap& child : world->nodes) {
-            if (child.parent == node.id && child.id != node.id) {
-                node.children.push_back(child.id);
-            }
+    // Children in the order the nodes came, which completion_world makes the
+    // tree's sibling order, as capture_world has it.
+    std::unordered_map<InstanceId, std::size_t> index;
+    index.reserve(world->nodes.size());
+    for (std::size_t at = 0; at < world->nodes.size(); ++at) {
+        index.emplace(world->nodes[at].id, at);
+    }
+    for (const NodeSnap& child : world->nodes) {
+        const auto parent = index.find(child.parent);
+        if (parent != index.end() && child.parent != child.id) {
+            world->nodes[parent->second].children.push_back(child.id);
         }
     }
     return world;
@@ -1316,12 +1326,17 @@ std::string with_checked_buffer(WorkerEnv& env, const CompleteRequest& request, 
         Luau::FrontendOptions options;
         options.runLintChecks = false;
         options.retainFullTypeGraphs = true;
+        options.cancellationToken = request.cancel;
         env.frontend->check(module_name, options);
-        answer(module_name);
+        if (request.cancel->requested()) {
+            error = "cancelled";
+        } else {
+            answer(module_name);
+        }
     } catch (const std::exception& failure) {
-        error = failure.what();
+        error = request.cancel->requested() ? "cancelled" : failure.what();
     } catch (...) {
-        error = "the type check failed";
+        error = request.cancel->requested() ? "cancelled" : "the type check failed";
     }
     env.world = nullptr;
     env.self = 0;
@@ -1508,8 +1523,10 @@ struct ScriptAnalysis::State {
     std::unordered_map<InstanceId, std::unordered_set<InstanceId>> required_by;
 
     AnalysisScope scope = AnalysisScope::All;
-    // Luau autocomplete requests, answered before queued checks.
+    // Luau autocomplete requests, answered before queued checks, and the one
+    // the worker is answering now.
     std::deque<std::shared_ptr<CompleteRequest>> completions;
+    std::shared_ptr<CompleteRequest> serving;
     // Editors showing each script. Open scope analyzes these and what they require.
     std::unordered_map<InstanceId, int> watched;
     // Waiting for pump() to capture the tree: newly watched scripts, and
@@ -1666,6 +1683,7 @@ void ScriptAnalysis::shutdown() {
         game_.set_script_analysis(nullptr);
     }
     std::lock_guard<std::mutex> start(state_->start_mu);
+    std::deque<std::shared_ptr<CompleteRequest>> stopped;
     {
         std::lock_guard<std::mutex> lock(state_->mu);
         state_->stop = true;
@@ -1679,7 +1697,19 @@ void ScriptAnalysis::shutdown() {
         state_->tokens.clear();
         state_->results.clear();
         state_->handlers.clear();
+        // Luau requests still queued are answered with nothing, and the one
+        // running stops, so neither a waiter nor the join waits on a check.
+        if (state_->serving) {
+            state_->serving->cancel->cancel();
+        }
+        stopped = std::move(state_->completions);
+        state_->completions.clear();
         state_->cv.notify_all();
+    }
+    for (const std::shared_ptr<CompleteRequest>& request : stopped) {
+        request->answer->completion.error = "script analysis has stopped";
+        request->answer->type.error = "script analysis has stopped";
+        finish_request(*request);
     }
     if (state_->worker.joinable()) {
         state_->worker.join();
@@ -1713,6 +1743,7 @@ void ScriptAnalysis::run() {
             if (!state_->completions.empty()) {
                 request = std::move(state_->completions.front());
                 state_->completions.pop_front();
+                state_->serving = request;
             }
         }
         if (request) {
@@ -1720,6 +1751,10 @@ void ScriptAnalysis::run() {
                 request->answer->type = type_job(env, *request);
             } else {
                 request->answer->completion = complete_job(env, *request);
+            }
+            {
+                std::lock_guard<std::mutex> lock(state_->mu);
+                state_->serving.reset();
             }
             finish_request(*request);
             continue;
@@ -1783,7 +1818,8 @@ std::shared_ptr<ScriptAnalysis::LuauRequest> ScriptAnalysis::queue_luau(bool typ
     std::vector<std::shared_ptr<CompleteRequest>> replaced;
     {
         std::lock_guard<std::mutex> lock(state_->mu);
-        if (state_->stop) {
+        // Analysis turned off runs no type checks, completion's included.
+        if (state_->stop || !state_->enabled) {
             return nullptr;
         }
         if (!request->lane.empty()) {
@@ -1830,7 +1866,7 @@ std::shared_ptr<ScriptAnalysis::LuauRequest> ScriptAnalysis::ask_luau(bool type_
                                                                       std::string& error) {
     const std::shared_ptr<LuauRequest> request = queue_luau(type_at, world, script, std::move(source), offset, "");
     if (!request) {
-        error = "script analysis has stopped";
+        error = "script analysis is off or has stopped";
         return nullptr;
     }
     std::unique_lock<std::mutex> lock(request->mu);

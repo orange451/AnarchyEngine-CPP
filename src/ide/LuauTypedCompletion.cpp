@@ -1,6 +1,7 @@
 #include "LuauTypedCompletion.hpp"
 
 #include "ScriptAnalysis.hpp"
+#include "Utf8.hpp"
 
 #include <algorithm>
 #include <string>
@@ -25,16 +26,12 @@ std::string Shortened(std::string text, std::size_t most = kMaxDetail) {
     return text;
 }
 
-// The byte offset of each code point, and one past the last.
+// The byte offset of each code point, and one past the last, counted as the
+// editor counts them, malformed bytes included.
 std::vector<std::size_t> CodePointBytes(std::string_view source) {
     std::vector<std::size_t> bytes;
-    std::size_t at = 0;
-    while (at < source.size()) {
+    for (std::size_t at = 0; at < source.size(); at += Utf8Step(source, at)) {
         bytes.push_back(at);
-        ++at;
-        while (at < source.size() && (static_cast<unsigned char>(source[at]) & 0xC0) == 0x80) {
-            ++at;
-        }
     }
     bytes.push_back(source.size());
     return bytes;
@@ -157,7 +154,8 @@ bool apply_luau_hover(HoverInfo& info, const HoverWord& word, const engine_core:
         Uninformative(luau.described.type)) {
         return false;
     }
-    const bool parameter = info.found && info.detail == "parameter";
+    // What the resolver said about the name, such as local or parameter, stays.
+    const std::string detail = info.found ? info.detail : std::string();
     info.found = true;
     info.begin = word.begin;
     info.end = word.end;
@@ -165,10 +163,10 @@ bool apply_luau_hover(HoverInfo& info, const HoverWord& word, const engine_core:
     if (luau.described.function) {
         info.title = "function " + word.word + luau.described.params +
                      (luau.described.returns.empty() ? std::string() : ": " + luau.described.returns);
-        info.detail = luau.described.returns.empty() ? "returns nothing" : "";
+        info.detail = !detail.empty() ? detail : luau.described.returns.empty() ? "returns nothing" : "";
     } else {
         info.title = word.word + ": " + Shortened(luau.described.type, kMaxHoverType);
-        info.detail = parameter ? "parameter" : "";
+        info.detail = detail;
     }
     return true;
 }

@@ -1088,3 +1088,41 @@ TEST_CASE("A28 completion against an unsaved buffer never reaches another script
     REQUIRE(dump(analysis.diagnostics(script.id())).find("M.b") == std::string::npos);
     REQUIRE_FALSE(has_code(analysis.diagnostics(script.id()), "Type"));
 }
+
+TEST_CASE("A29 a completion snapshot in another sibling order leaves no stale place types", "[A29]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    // Two folders named Dup. The second one made comes first among the siblings,
+    // and only it holds M, so game.Dup.M reads through it.
+    engine_core::Folder& first_made = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(first_made.id(), "Dup");
+    engine_core::Folder& second_made = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(second_made.id(), "Dup");
+    rig.game.set_parent(second_made.id(), rig.game.id());
+    rig.game.set_parent(first_made.id(), rig.game.id());
+    engine_core::Folder& inner = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(inner.id(), "M");
+    rig.game.set_parent(inner.id(), second_made.id());
+    engine_core::Script& script = add_script(rig.game, "Main", "--!strict\nlocal found = game.Dup.M\nprint(found)\n");
+    settle(analysis);
+    const std::string clean = dump(analysis.diagnostics(script.id()));
+    INFO(clean);
+    REQUIRE_FALSE(has_code(analysis.diagnostics(script.id()), "Type"));
+
+    // The tree changes, and a completion request arrives before analysis
+    // checks it, with its instances in slot order: the first-made Dup first.
+    engine_core::Folder& extra = rig.game.create<engine_core::Folder>();
+    rig.game.set_parent(extra.id(), rig.game.id());
+    std::vector<engine_core::LuaNode> slot_order = completion_nodes(rig.game, script.id(), script.source());
+    const engine_core::LuauCompletion asked = analysis.luau_complete(
+        slot_order, script.id(), script.source(), script.source().size(), std::chrono::seconds(20));
+    REQUIRE(asked.ran);
+
+    // Analysis then checks the tree in its own order, and game.Dup is still
+    // the Dup that holds M.
+    analysis.note_world_changed();
+    analysis.invalidate(script.id());
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(script.id())));
+    REQUIRE_FALSE(has_code(analysis.diagnostics(script.id()), "Type"));
+}

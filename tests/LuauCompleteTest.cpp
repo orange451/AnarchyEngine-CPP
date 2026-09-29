@@ -5,6 +5,7 @@
 #include "ide/ClassFilter.hpp"
 #include "ide/LuauComplete.hpp"
 #include "ide/LuauTypedCompletion.hpp"
+#include "ide/Utf8.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -2679,6 +2680,18 @@ void testTypedHoverAndSignature() {
     if (!object.found || object.title.rfind("a: ", 0) != 0 || object.title.size() <= 3) {
         fail("a metatable object's hover has its type: " + object.title);
     }
+    if (object.detail != "local") {
+        fail("the resolver's 'local' stays on the hover: '" + object.detail + "'");
+    }
+
+    // A stray byte that is not UTF-8 counts as one code point, as the editor counts it.
+    const std::string stray = "-- 90\xB0 degrees\n" + use;
+    const std::size_t a_byte = stray.find("print(a") + 6;
+    const ide::HoverInfo after_stray = typed_hover(stray, ide::CodePointsBefore(stray, a_byte), world, 9);
+    if (!after_stray.found || after_stray.title.rfind("a: ", 0) != 0 ||
+        after_stray.begin != ide::CodePointsBefore(stray, a_byte)) {
+        fail("a hover after a malformed byte finds its name: " + after_stray.title);
+    }
 
     // What the resolver already says stays.
     const char* counted = "local count = 1\nprint(count)\n";
@@ -2709,9 +2722,21 @@ void testTypedHoverAndSignature() {
     }
     // A host function, which the resolver has no parameters for, gets the definitions'.
     expect_signature(typed_signature("task.wait("), "(seconds: number?)", "a host function's signature");
-    // Outside a call there is none.
+    // Outside a call there is none, and neither while a function's own
+    // parameters are being named.
     if (!typed_signature("local x = 1\nx").signature.empty()) {
         fail("no signature outside a call");
+    }
+    for (const char* defining : {"local function foo(a, ", "function foo(", "function Account.make(first, ",
+                                 "function Account:Do("}) {
+        // Luau is not asked about a function while its parameters are named.
+        // What the resolver shows there, the parameters so far, stays.
+        const ide::CompletionList plain =
+            ide::complete_luau(defining, static_cast<int>(std::string_view(defining).size()));
+        const ide::CompletionList named = typed_signature(defining);
+        if (named.call_open != -1 || named.signature != plain.signature) {
+            fail(std::string("naming parameters asks Luau nothing: ") + defining);
+        }
     }
 }
 
@@ -2736,6 +2761,32 @@ bool answered(const std::shared_ptr<const engine_core::LuauAnswer>& answer) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return true;
+}
+
+// Analysis turned off runs no type checks for completion either, and shutdown
+// answers what was still queued.
+void testTypedSwitchedOff() {
+    engine_core::Game game;
+    auto analysis = std::make_unique<engine_core::ScriptAnalysis>(game);
+    analysis->set_enabled(false);
+    const engine_core::LuauCompletion off = analysis->luau_complete({}, 0, "local t = {}\nt.", 15, std::chrono::seconds(5));
+    if (off.ran || analysis->luau_complete_later({}, 0, "local t = {}\nt.", 15, "members")) {
+        fail("analysis turned off answers no completion");
+    }
+    analysis->set_enabled(true);
+    if (!analysis->luau_complete({}, 0, "local t = { x = 1 }\nt.", 22, std::chrono::seconds(20)).ran) {
+        fail("analysis turned back on answers again");
+    }
+    std::string big;
+    for (int index = 0; index < 300; ++index) {
+        big += "local function f" + std::to_string(index) + "(x: number)\n    return x * 2\nend\n";
+    }
+    const auto running = analysis->luau_complete_later({}, 0, big, big.size(), "busy");
+    const auto waiting = analysis->luau_complete_later({}, 0, "local t = {}\nt.", 15, "members");
+    analysis.reset();
+    if (!running || !waiting || !running->ready.load() || !waiting->ready.load() || waiting->completion.ran) {
+        fail("shutdown answers every request still on its way");
+    }
 }
 
 void testTypedLater() {
@@ -2954,6 +3005,7 @@ int RunLuauCompleteTests() {
         testTypedFallback();
         testTypedHoverAndSignature();
         testTypedLater();
+        testTypedSwitchedOff();
         shadowProbes();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());

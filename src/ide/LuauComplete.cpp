@@ -408,6 +408,26 @@ bool AnonymousFunctionOpen(const std::vector<Token>& tokens, int open) {
            tokens[static_cast<std::size_t>(open - 1)].text == "function";
 }
 
+// The '(' of `function name(`, `function a.b(`, or `function a:b(`: a parameter
+// list being written, not a call.
+bool NamedFunctionOpen(const std::vector<Token>& tokens, int open) {
+    int cursor = open - 1;
+    bool name = false;
+    while (cursor >= 0) {
+        const Token& token = tokens[static_cast<std::size_t>(cursor)];
+        if (token.kind == Token::Name && !name) {
+            name = true;
+        } else if ((token.kind == Token::Dot || token.kind == Token::Colon) && name) {
+            name = false;
+        } else {
+            break;
+        }
+        --cursor;
+    }
+    return name && cursor >= 0 && tokens[static_cast<std::size_t>(cursor)].kind == Token::Keyword &&
+           tokens[static_cast<std::size_t>(cursor)].text == "function";
+}
+
 // `active` is the parameter being typed. Its byte range in the result goes to
 // `bold`. Past the last parameter, `...` is the active one, or nothing is.
 std::string FormatParams(const std::vector<Param>& params, bool variadic, int active = -1,
@@ -1503,8 +1523,10 @@ public:
         if (!slot.found || AnonymousFunctionOpen(tokens_, slot.open)) {
             return;
         }
-        list.call_open = tokens_[static_cast<std::size_t>(slot.open)].begin;
-        list.call_argument = slot.argument;
+        if (!NamedFunctionOpen(tokens_, slot.open)) {
+            list.call_open = tokens_[static_cast<std::size_t>(slot.open)].begin;
+            list.call_argument = slot.argument;
+        }
         Shape* callee = receiver(slot.open);
         if (callee == nullptr || (callee->params.empty() && !callee->variadic)) {
             return;

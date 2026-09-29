@@ -41,6 +41,9 @@ public:
 
     // Parks the running simulation job until `signal` fires once.
     void yield_for(Signal& signal);
+    // Whether yield_for can park a job. The fiber switch is written for arm64
+    // and for x86-64 outside Windows. Elsewhere it is a contract failure.
+    static bool can_suspend();
 
 private:
     friend void ae_fiber_main();

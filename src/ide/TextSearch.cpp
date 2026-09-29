@@ -64,13 +64,17 @@ std::string unescape(std::string_view replacement) {
 // let \b see the byte before, but libc++ then matches ^ there too. So a search
 // that starts inside the line is not at its start, and is not at the start of
 // a word when the byte before is part of one. Only a word that ends right where
-// the search starts is lost to \b.
+// the search starts is lost to \b. When nothing is left after a byte that is not
+// part of a word, no word ends there either; MSVC's \b would take that empty rest
+// for a word edge.
 std::regex_constants::match_flag_type resume_flags(std::string_view line, std::size_t at) {
     auto flags = std::regex_constants::match_default;
     if (at > 0) {
         flags |= std::regex_constants::match_not_bol;
         if (word_unit(line[at - 1])) {
             flags |= std::regex_constants::match_not_bow;
+        } else if (at == line.size()) {
+            flags |= std::regex_constants::match_not_eow;
         }
     }
     return flags;

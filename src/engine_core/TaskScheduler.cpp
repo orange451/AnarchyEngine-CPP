@@ -252,6 +252,14 @@ void TaskScheduler::cancel_session_jobs() {
 
 bool TaskScheduler::in_job() const { return tls_entry_ != nullptr; }
 
+bool TaskScheduler::can_suspend() {
+#if defined(AE_NO_FIBER)
+    return false;
+#else
+    return true;
+#endif
+}
+
 void TaskScheduler::mark_ready(std::uint64_t wait_id) {
     for (std::vector<Entry>& phase : jobs_) {
         for (Entry& entry : phase) {

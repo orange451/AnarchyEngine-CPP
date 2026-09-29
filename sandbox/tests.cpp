@@ -889,6 +889,9 @@ TEST_CASE("path C emits nothing", "[T18]") {
 }
 
 TEST_CASE("wait resumes on a later simulation phase", "[T19]") {
+    if (!engine_core::TaskScheduler::can_suspend()) {
+        SKIP("Signal::wait needs the fiber switch, which this platform does not build");
+    }
     engine_core::Engine engine;
     const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
     std::atomic<int> stage{0};

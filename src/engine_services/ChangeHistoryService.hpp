@@ -137,6 +137,12 @@ public:
     // Clears the undo and redo stacks and drops an open recording without reverting.
     void reset_waypoints();
 
+    // The most waypoints each undo stack keeps, and roughly how many bytes of
+    // recorded state. The oldest go first; the newest always stays.
+    static constexpr std::size_t kMaxWaypoints = 1000;
+    static constexpr std::size_t kMaxHistoryBytes = std::size_t{128} << 20;
+    void set_limits(std::size_t waypoints, std::size_t bytes);
+
     void undo();
     void redo();
     std::pair<bool, std::string> can_undo() const;
@@ -183,6 +189,8 @@ private:
         std::string name;
         std::string display_name;
         std::vector<Mutation> mutations;
+        // About how much memory this holds, for max_bytes_.
+        std::size_t bytes = 0;
     };
 
     void open_implicit(const Mutation& first);
@@ -190,6 +198,8 @@ private:
     void apply_waypoint(Waypoint& waypoint, bool inverse);
     // Undo moves the newest waypoint from the undo stack to the redo stack; redo moves it back.
     void step(bool undoing);
+    // Drops the oldest waypoints past the limits, keeping the newest.
+    void trim(std::vector<Waypoint>& stack);
     std::vector<Waypoint>& undo_stack();
     std::vector<Waypoint>& redo_stack();
     const std::vector<Waypoint>& undo_stack() const;
@@ -206,6 +216,8 @@ private:
     std::vector<Waypoint> edit_redo_;
     std::vector<Waypoint> session_undo_;
     std::vector<Waypoint> session_redo_;
+    std::size_t max_waypoints_ = kMaxWaypoints;
+    std::size_t max_bytes_ = kMaxHistoryBytes;
 };
 
 }  // namespace engine_core

@@ -514,3 +514,125 @@ TEST_CASE("H17 set_parent puts a child last and undo puts it back in its old pla
     REQUIRE(game.get_children(f) == Ids{b});
     REQUIRE(game.get_children(0) == Ids{f, a, c});
 }
+
+namespace {
+
+int undo_all(engine_core::DataModel& game) {
+    int count = 0;
+    while (game.history().can_undo().first) {
+        game.history().undo();
+        ++count;
+    }
+    return count;
+}
+
+}  // namespace
+
+TEST_CASE("H18 edit history keeps the newest waypoints up to its count", "[H18][history]") {
+    engine_core::Game game;
+    engine_core::GameObject& part = make_part(game, "Brick");
+    close_gesture(game);
+    game.history().reset_waypoints();
+    game.history().set_limits(5, 1u << 30);
+    for (int i = 0; i < 8; ++i) {
+        part.set_color(rgb(static_cast<float>(i) / 10.f, 0.f, 0.f));
+        close_gesture(game);
+    }
+    REQUIRE(undo_all(game) == 5);
+    // The oldest three are gone: undo stops at the color the fourth edit made.
+    REQUIRE(same_color(part.color(), rgb(0.2f, 0.f, 0.f)));
+}
+
+TEST_CASE("H19 edit history keeps its newest waypoints within its size", "[H19][history]") {
+    engine_core::Game game;
+    engine_core::Script& script = add_script(game, "Big", "");
+    close_gesture(game);
+    game.history().reset_waypoints();
+    // Each edit keeps the text before and after, about 200 KB, so 1 MB holds four.
+    game.history().set_limits(1000, 1u << 20);
+    for (int i = 0; i < 10; ++i) {
+        script.set_source(std::string(100 * 1024, static_cast<char>('a' + i)));
+        close_gesture(game);
+    }
+    const int kept = undo_all(game);
+    REQUIRE(kept >= 1);
+    REQUIRE(kept <= 5);
+    REQUIRE(script.source() == std::string(100 * 1024, static_cast<char>('a' + 10 - kept - 1)));
+}
+
+TEST_CASE("H20 the newest waypoint stays however large it is", "[H20][history]") {
+    engine_core::Game game;
+    engine_core::Script& script = add_script(game, "Huge", "small");
+    close_gesture(game);
+    game.history().reset_waypoints();
+    game.history().set_limits(1000, 1024);
+    script.set_source(std::string(64 * 1024, 'x'));
+    close_gesture(game);
+    REQUIRE(undo_all(game) == 1);
+    REQUIRE(script.source() == "small");
+}
+
+namespace {
+
+int undo_text(ide::TextUndoStack& text) {
+    int count = 0;
+    while (text.can_undo()) {
+        text.undo();
+        ++count;
+    }
+    return count;
+}
+
+}  // namespace
+
+TEST_CASE("H21 a text stack keeps its newest edits up to its count", "[H21][history]") {
+    ide::TextUndoStack text;
+    text.set_limits(5, 1u << 30);
+    text.reset("");
+    for (char c = 'a'; c < 'a' + 8; ++c) {
+        text.insert(text.text().size(), std::string(1, c));
+    }
+    REQUIRE(undo_text(text) == 5);
+    REQUIRE(text.text() == "abc");
+}
+
+TEST_CASE("H22 a text stack keeps its newest edits within its size", "[H22][history]") {
+    ide::TextUndoStack text;
+    // Each edit keeps about 1 KB, so 4 KB holds a few of them.
+    text.set_limits(1000, 4096);
+    text.reset("");
+    for (int i = 0; i < 20; ++i) {
+        text.insert(text.text().size(), std::string(1024, static_cast<char>('a' + i)));
+    }
+    const int kept = undo_text(text);
+    REQUIRE(kept >= 1);
+    REQUIRE(kept <= 4);
+    REQUIRE(text.text().size() == static_cast<std::size_t>(20 - kept) * 1024);
+}
+
+TEST_CASE("H23 the newest text edit stays however large it is", "[H23][history]") {
+    ide::TextUndoStack text;
+    text.set_limits(1000, 16);
+    text.reset("keep");
+    text.insert(4, std::string(4096, 'z'));
+    REQUIRE(undo_text(text) == 1);
+    REQUIRE(text.text() == "keep");
+}
+
+TEST_CASE("H24 the router forgets a script's text stack", "[H24][history]") {
+    ide::InputRouter router;
+    router.script_stack(7).reset("seven");
+    router.script_stack(8).reset("eight");
+    ide::Focus focus;
+    focus.kind = ide::FocusKind::ScriptEditor;
+    focus.script = 7;
+    router.set_focus(focus);
+    REQUIRE(router.focused_stack() != nullptr);
+    router.forget_script(7);
+    REQUIRE(router.focused_stack() == nullptr);
+    focus.script = 8;
+    router.set_focus(focus);
+    REQUIRE(router.focused_stack() != nullptr);
+    router.forget_scripts();
+    REQUIRE(router.focused_stack() == nullptr);
+}

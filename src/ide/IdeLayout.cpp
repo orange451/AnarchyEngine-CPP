@@ -2752,6 +2752,12 @@ void IdeLayout::edit(std::uint32_t id) {
             if (testing_ && editor && editor->isLoaded()) {
                 kept_sources_[id] = editor->text();
             }
+            // A reopened editor starts its undo over, so the closed one's history
+            // is only memory.
+            if (editor) {
+                editor->bindUndo(nullptr);
+            }
+            undo_router_.forget_script(id);
         });
     }
     open_scripts_[id] = editor;
@@ -3052,7 +3058,11 @@ void IdeLayout::close_script_editors() {
             }
         }
     }
-    // Those ids belong to the place that is going away.
+    // Those ids belong to the place that is going away, and so do their undo stacks.
+    for (const std::shared_ptr<IdeScriptEditor>& editor : editors) {
+        editor->bindUndo(nullptr);
+    }
+    undo_router_.forget_scripts();
     open_scripts_.clear();
     kept_sources_.clear();
     last_script_focus_ = 0;

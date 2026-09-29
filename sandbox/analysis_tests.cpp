@@ -986,3 +986,16 @@ TEST_CASE("A25 a table type is linted without a crash, and a duplicate key still
     REQUIRE(has_code(diagnostics, "Lint/TableLiteral"));
     REQUIRE_FALSE(has_code(diagnostics, "Type"));
 }
+
+TEST_CASE("A26 a destroyed script's module leaves the checker's cache", "[A26]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    for (int i = 0; i < 4; ++i) {
+        engine_core::Script& script = add_script(rig.game, "Churn", "local x = 1\n");
+        settle(analysis);
+        rig.game.destroy(script.id());
+    }
+    add_script(rig.game, "Kept", "local y = 2\n");
+    settle(analysis);
+    REQUIRE(analysis.cached_modules() == 1);
+}

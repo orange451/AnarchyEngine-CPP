@@ -33,6 +33,10 @@ TextUndoStack& InputRouter::script_stack(engine_core::InstanceId id) { return sc
 
 TextUndoStack& InputRouter::widget_stack(std::uint64_t id) { return widgets_[id]; }
 
+void InputRouter::forget_script(engine_core::InstanceId id) { scripts_.erase(id); }
+
+void InputRouter::forget_scripts() { scripts_.clear(); }
+
 TextUndoStack* InputRouter::focused_stack() {
     if (focus_.kind == FocusKind::ScriptEditor) {
         const auto found = scripts_.find(focus_.script);

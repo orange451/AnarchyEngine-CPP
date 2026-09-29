@@ -959,13 +959,23 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
         }
         const std::string module_name = module_name_of(job.id);
         // Required modules stay cached in the frontend. A new snapshot can
-        // change their source or what their paths reach, so recheck them.
+        // change their source or what their paths reach, so recheck them. A
+        // script the snapshot lacks is gone, and so is its cached module.
         if (env.checked_world != job.world) {
+            std::unordered_set<std::string> live;
             for (const NodeSnap& node : job.world->nodes) {
                 if (node.lua) {
+                    live.insert(module_name_of(node.id));
                     env.frontend->markDirty(module_name_of(node.id));
                 }
             }
+            std::vector<Luau::ModuleName> gone;
+            for (const auto& cached : env.frontend->sourceNodes) {
+                if (live.count(cached.first) == 0) {
+                    gone.push_back(cached.first);
+                }
+            }
+            env.frontend->clearModules(gone);
             env.checked_world = job.world;
             env.place = build_place_types(*env.frontend->globals.globalScope, job.world);
         }
@@ -1108,6 +1118,8 @@ struct ScriptAnalysis::State {
     };
     std::vector<Handler> handlers;
     std::unordered_map<InstanceId, std::uint64_t> generations;
+    // Written by the worker after each job.
+    std::atomic<std::size_t> cached_modules{0};
     std::unordered_map<InstanceId, Pending> pending;
     std::unordered_map<InstanceId, std::shared_ptr<Luau::FrontendCancellationToken>> tokens;
     std::vector<Finished> results;
@@ -1336,6 +1348,9 @@ void ScriptAnalysis::run() {
             state_->running = job.id;
         }
         Finished finished = analyze_job(env, job);
+        if (env.frontend != nullptr) {
+            state_->cached_modules.store(env.frontend->sourceNodes.size(), std::memory_order_relaxed);
+        }
         {
             std::lock_guard<std::mutex> lock(state_->mu);
             --state_->inflight;
@@ -1533,6 +1548,10 @@ void ScriptAnalysis::unwatch(InstanceId script) {
         }
     }
     fire(dropped);
+}
+
+std::size_t ScriptAnalysis::cached_modules() const {
+    return state_->cached_modules.load(std::memory_order_relaxed);
 }
 
 void ScriptAnalysis::remove(InstanceId script) {

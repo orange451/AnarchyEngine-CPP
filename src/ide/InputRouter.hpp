@@ -43,6 +43,11 @@ public:
     TextUndoStack& script_stack(engine_core::InstanceId id);
     TextUndoStack& widget_stack(std::uint64_t id);
     TextUndoStack* focused_stack();
+    // Drops a script's stack, as when its editor closes. An editor bound to it
+    // must be unbound first.
+    void forget_script(engine_core::InstanceId id);
+    // Drops every script's stack, as when the place those ids belong to goes away.
+    void forget_scripts();
 
     // True when the chord belongs to undo or redo and was consumed.
     bool handle(const KeyChord& chord, engine_core::ChangeHistoryService* history);

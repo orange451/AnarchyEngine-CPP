@@ -85,6 +85,9 @@ public:
     void note_world_changed();
     // The instance is gone. Drops its diagnostics and cancels its job.
     void remove(InstanceId script);
+    // Modules the checker holds, as of its last job: one per script it has
+    // checked in the tree it last saw.
+    std::size_t cached_modules() const;
 
     std::vector<Diagnostic> diagnostics() const;
     std::vector<Diagnostic> diagnostics(InstanceId script) const;

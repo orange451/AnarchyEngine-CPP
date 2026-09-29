@@ -43,6 +43,21 @@ std::string default_gesture(const Mutation& mutation) {
     return "Edit";
 }
 
+// Roughly what a record keeps alive: its strings, its bag, and its subtree.
+std::size_t record_bytes(const AuthoredRecord& record) {
+    std::size_t bytes = sizeof(AuthoredRecord) + record.class_name.size() + record.name.size() + record.guid.size() +
+                        record.source.size() + record.extra.size() + record.extras.size() * sizeof(JsonValue::Member);
+    for (const AuthoredRecord& child : record.children) {
+        bytes += record_bytes(child);
+    }
+    return bytes;
+}
+
+std::size_t mutation_bytes(const Mutation& mutation) {
+    return sizeof(Mutation) - sizeof(AuthoredRecord) + mutation.before.text.size() + mutation.after.text.size() +
+           record_bytes(mutation.record);
+}
+
 bool same_value(const PropertyValue& a, const PropertyValue& b) {
     if (a.prop != b.prop) {
         return false;
@@ -232,8 +247,14 @@ void ChangeHistoryService::finish_recording(std::string id, FinishRecordingOpera
         waypoint.name = recording.name;
         waypoint.display_name = recording.display_name;
         waypoint.mutations = std::move(recording.mutations);
-        undo_stack().push_back(std::move(waypoint));
+        waypoint.bytes = sizeof(Waypoint) + waypoint.name.size() + waypoint.display_name.size();
+        for (const Mutation& mutation : waypoint.mutations) {
+            waypoint.bytes += mutation_bytes(mutation);
+        }
+        std::vector<Waypoint>& undo = undo_stack();
+        undo.push_back(std::move(waypoint));
         redo_stack().clear();
+        trim(undo);
     }
     on_recording_finished.emit(recording.name, recording.display_name, recording.id, op);
 }
@@ -282,6 +303,24 @@ void ChangeHistoryService::reset_waypoints() {
     edit_redo_.clear();
     session_undo_.clear();
     session_redo_.clear();
+}
+
+void ChangeHistoryService::trim(std::vector<Waypoint>& stack) {
+    std::size_t bytes = 0;
+    for (const Waypoint& waypoint : stack) {
+        bytes += waypoint.bytes;
+    }
+    std::size_t drop = 0;
+    while (stack.size() - drop > 1 && (stack.size() - drop > max_waypoints_ || bytes > max_bytes_)) {
+        bytes -= stack[drop].bytes;
+        ++drop;
+    }
+    stack.erase(stack.begin(), stack.begin() + static_cast<std::ptrdiff_t>(drop));
+}
+
+void ChangeHistoryService::set_limits(std::size_t waypoints, std::size_t bytes) {
+    max_waypoints_ = waypoints;
+    max_bytes_ = bytes;
 }
 
 void ChangeHistoryService::undo() { step(true); }

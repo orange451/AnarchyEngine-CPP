@@ -13,9 +13,25 @@ void TextUndoStack::reset(std::string text) {
     caret_ = CodePoints(text_);
 }
 
+void TextUndoStack::set_limits(std::size_t edits, std::size_t bytes) {
+    max_edits_ = edits;
+    max_bytes_ = bytes;
+}
+
 void TextUndoStack::push(Edit edit) {
     undo_.push_back(std::move(edit));
     redo_.clear();
+    const auto bytes_of = [](const Edit& kept) { return sizeof(Edit) + kept.removed.size() + kept.inserted.size(); };
+    std::size_t bytes = 0;
+    for (const Edit& kept : undo_) {
+        bytes += bytes_of(kept);
+    }
+    std::size_t drop = 0;
+    while (undo_.size() - drop > 1 && (undo_.size() - drop > max_edits_ || bytes > max_bytes_)) {
+        bytes -= bytes_of(undo_[drop]);
+        ++drop;
+    }
+    undo_.erase(undo_.begin(), undo_.begin() + static_cast<std::ptrdiff_t>(drop));
 }
 
 void TextUndoStack::apply(const Edit& edit, bool inverse, int caret) {

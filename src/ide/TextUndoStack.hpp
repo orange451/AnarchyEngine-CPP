@@ -10,6 +10,12 @@ namespace ide {
 // whole-buffer Source write, not one of these edits.
 class TextUndoStack {
 public:
+    // The most edits undo keeps, and roughly how many bytes of text they hold.
+    // The oldest go first; the newest always stays.
+    static constexpr std::size_t kMaxEdits = 1000;
+    static constexpr std::size_t kMaxBytes = std::size_t{16} << 20;
+    void set_limits(std::size_t edits, std::size_t bytes);
+
     void reset(std::string text);
 
     // Byte indexes. Tests and ASCII edits use these.
@@ -53,6 +59,8 @@ private:
     std::vector<Edit> undo_;
     std::vector<Edit> redo_;
     int caret_ = 0;
+    std::size_t max_edits_ = kMaxEdits;
+    std::size_t max_bytes_ = kMaxBytes;
 };
 
 }  // namespace ide

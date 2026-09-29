@@ -165,7 +165,9 @@ private:
         std::uint32_t generation = 0;
     };
 
-    static constexpr std::uint64_t kScriptTimeout = 50000;
+    // Interrupts, loop back-edges and calls, one resume may take before it is
+    // stopped as a runaway. The same budget LuaEngine gives a chunk.
+    static constexpr std::uint64_t kScriptTimeout = 1000000;
     static constexpr int kResumeBudget = 32;
     static constexpr std::size_t kMemoryLimit = 64 * 1024 * 1024;
 
@@ -248,6 +250,8 @@ private:
 
     DataModel* game_ = nullptr;
     TaskScheduler* scheduler_ = nullptr;
+    // The phase jobs attach binds, which detach unbinds.
+    std::vector<TaskScheduler::JobId> phase_jobs_;
     lua_State* state_ = nullptr;
     lua_State* console_state_ = nullptr;
     bool open_ = false;

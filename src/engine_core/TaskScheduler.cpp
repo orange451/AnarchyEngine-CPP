@@ -174,13 +174,37 @@ void TaskScheduler::reserve(std::size_t per_phase) {
     }
 }
 
-void TaskScheduler::bind(Phase phase, Job job, int priority) { bind_job(phase, std::move(job), priority, true); }
+TaskScheduler::JobId TaskScheduler::bind(Phase phase, Job job, int priority) {
+    return bind_job(phase, std::move(job), priority, true);
+}
+
+void TaskScheduler::unbind(JobId id) {
+    for (int phase = 0; phase < kPhaseCount; ++phase) {
+        for (const std::unique_ptr<Entry>& owned : jobs_[phase]) {
+            Entry& entry = *owned;
+            if (entry.id != id) {
+                continue;
+            }
+            // A retired job that is not permanent leaves the list at the next
+            // cancel_session_jobs, or stays until its parked frame is done.
+            entry.permanent = false;
+            entry.retired = true;
+            // A render job may be inside its closure on the render thread, and a
+            // running or parked job is inside it here.
+            if (!is_render_phase(static_cast<Phase>(phase)) && &entry != tls_entry_ &&
+                entry.state == JobState::Idle) {
+                entry.job = nullptr;
+            }
+            return;
+        }
+    }
+}
 
 void TaskScheduler::bind_session(Phase phase, Job job, int priority) {
     bind_job(phase, std::move(job), priority, false);
 }
 
-void TaskScheduler::bind_job(Phase phase, Job job, int priority, bool permanent) {
+TaskScheduler::JobId TaskScheduler::bind_job(Phase phase, Job job, int priority, bool permanent) {
     std::vector<std::unique_ptr<Entry>>& list = jobs_[static_cast<int>(phase)];
     std::vector<int>& order = order_[static_cast<int>(phase)];
     if (list.size() == list.capacity()) {
@@ -188,6 +212,7 @@ void TaskScheduler::bind_job(Phase phase, Job job, int priority, bool permanent)
     }
     const int slot = static_cast<int>(list.size());
     auto entry = std::make_unique<Entry>();
+    entry->id = ++next_id_;
     entry->priority = priority;
     entry->permanent = permanent;
     entry->job = std::move(job);
@@ -196,6 +221,7 @@ void TaskScheduler::bind_job(Phase phase, Job job, int priority, bool permanent)
     std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
         return list[static_cast<std::size_t>(a)]->priority > list[static_cast<std::size_t>(b)]->priority;
     });
+    return list.back()->id;
 }
 
 void TaskScheduler::cancel_session_jobs() {

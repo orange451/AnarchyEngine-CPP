@@ -34,15 +34,21 @@ void* reflect_alloc(void*, void* pointer, std::size_t, std::size_t size) {
     return std::realloc(pointer, size);
 }
 
+struct CloseState {
+    void operator()(lua_State* state) const { lua_close(state); }
+};
+
+// Reflection keeps one state, job, and step count per thread, so completion on
+// one thread and analysis or tests on another never share a lua_State.
 lua_State* reflect_state() {
-    static lua_State* state = nullptr;
-    if (state == nullptr) {
-        state = lua_newstate(reflect_alloc, nullptr);
-        if (state != nullptr) {
-            open_host_libraries(state);
+    thread_local std::unique_ptr<lua_State, CloseState> state;
+    if (!state) {
+        state.reset(lua_newstate(reflect_alloc, nullptr));
+        if (state) {
+            open_host_libraries(state.get());
         }
     }
-    return state;
+    return state.get();
 }
 
 std::string lua_type_name(lua_State* state, int index) {
@@ -89,7 +95,7 @@ void sort_symbols(std::vector<LuaSymbol>& out) {
     std::sort(out.begin(), out.end(), [](const LuaSymbol& a, const LuaSymbol& b) { return a.name < b.name; });
 }
 
-int reflect_steps = 0;
+thread_local int reflect_steps = 0;
 
 void reflect_interrupt(lua_State* state, int) {
     if (--reflect_steps <= 0) {
@@ -106,7 +112,7 @@ struct Job {
     std::unordered_set<std::string> methods;
 };
 
-Job* job = nullptr;
+thread_local Job* job = nullptr;
 
 const LuaNode* find_node(std::uint32_t id) {
     if (job == nullptr || job->world == nullptr) {
@@ -513,8 +519,12 @@ std::uint64_t hash_world(const std::vector<LuaNode>& world) {
         for (unsigned char byte : node.class_name) {
             mix(byte);
         }
-        for (unsigned char byte : node.source) {
-            mix(byte);
+        // Only a ModuleScript's source can run under require, so typing in a
+        // Script leaves the cached module shapes alone.
+        if (node.class_name == "ModuleScript") {
+            for (unsigned char byte : node.source) {
+                mix(byte);
+            }
         }
         mix(0);
     }
@@ -527,7 +537,7 @@ struct ExportCache {
 };
 
 ExportCache& cache() {
-    static ExportCache stored;
+    thread_local ExportCache stored;
     return stored;
 }
 

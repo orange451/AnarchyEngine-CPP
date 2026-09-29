@@ -45,7 +45,8 @@ struct SignalUd {
     std::uint32_t world = 0;
     int phase = 0;
     bool blocked = false;
-    char blocked_name[24] = {};
+    // The registered field's name, which lives as long as the class registry.
+    const char* blocked_name = nullptr;
 };
 
 const char* kInstanceMeta = "AE.Instance";
@@ -299,10 +300,9 @@ void ScriptRuntime::attach(DataModel& game, TaskScheduler& scheduler) {
     game.events().set_script_gate(&ScriptRuntime::gate, this);
     run_service_.bind(game.events());
     game.input().bind(game.events());
-    scheduler.bind(Phase::PreAnimation, [this](double dt) { fire_phase(Phase::PreAnimation, dt); });
-    scheduler.bind(Phase::PreSimulation, [this](double dt) { fire_phase(Phase::PreSimulation, dt); });
-    scheduler.bind(Phase::PostSimulation, [this](double dt) { fire_phase(Phase::PostSimulation, dt); });
-    scheduler.bind(Phase::Heartbeat, [this](double dt) { fire_phase(Phase::Heartbeat, dt); });
+    for (Phase phase : {Phase::PreAnimation, Phase::PreSimulation, Phase::PostSimulation, Phase::Heartbeat}) {
+        phase_jobs_.push_back(scheduler.bind(phase, [this, phase](double dt) { fire_phase(phase, dt); }));
+    }
 }
 
 void ScriptRuntime::detach() {
@@ -322,6 +322,12 @@ void ScriptRuntime::detach() {
         game_->events().set_script_gate(nullptr, nullptr);
         game_ = nullptr;
     }
+    if (scheduler_ != nullptr) {
+        for (TaskScheduler::JobId id : phase_jobs_) {
+            scheduler_->unbind(id);
+        }
+    }
+    phase_jobs_.clear();
     scheduler_ = nullptr;
 }
 
@@ -537,6 +543,7 @@ void ScriptRuntime::assert_lua_thread() const {
 void open_host_libraries(lua_State* state) {
     open_sandbox_libraries(state, &ScriptRuntime::lua_print);
 
+    const int top = lua_gettop(state);
     auto metatable = [&](const char* name) {
         luaL_newmetatable(state, name);
         return lua_gettop(state);
@@ -576,7 +583,7 @@ void open_host_libraries(lua_State* state) {
     lua_pushcfunction(state, &ScriptBindings::input_object_tostring, "tostring");
     lua_setfield(state, input_mt, "__tostring");
     lua_setreadonly(state, input_mt, 1);
-    lua_pop(state, 6);
+    lua_settop(state, top);
 
     // One userdata per instance, as Roblox does, so == and rawequal hold and an
     // instance works as a table key. Weak values let unused handles collect.
@@ -2258,8 +2265,8 @@ int ScriptBindings::service_index(lua_State* state) {
     ud->kind = service->kind == kUserInputServiceKind ? kSignalInput : kSignalPhase;
     ud->phase = field->tag;
     ud->blocked = field->blocked;
-    if (field->blocked && field->name != nullptr) {
-        std::strncpy(ud->blocked_name, field->name, sizeof(ud->blocked_name) - 1);
+    if (field->blocked) {
+        ud->blocked_name = field->name != nullptr ? field->name : "signal";
     }
     luaL_getmetatable(state, kSignalMeta);
     lua_setmetatable(state, -2);

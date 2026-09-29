@@ -24,11 +24,17 @@ class Signal;
 class TaskScheduler {
 public:
     using Job = std::function<void(double dt)>;
+    // Names one bound job, for unbind. Never 0.
+    using JobId = std::uint64_t;
 
     void reserve(std::size_t per_phase);
     // Larger priority runs first. The default matches a normal gameplay job.
-    // bind() is engine-permanent: stop_simulation leaves it in place.
-    void bind(Phase phase, Job job, int priority = 2000);
+    // bind() is engine-permanent: stop_simulation leaves it in place, and only
+    // unbind() takes it out.
+    JobId bind(Phase phase, Job job, int priority = 2000);
+    // The job does not run again. Its closure is released now, or at the next
+    // cancel_session_jobs when it is the job running on this thread.
+    void unbind(JobId id);
     // Dropped by stop_simulation. A script job uses this, not bind().
     void bind_session(Phase phase, Job job, int priority = 2000);
     void cancel_session_jobs();
@@ -51,6 +57,7 @@ private:
     enum class JobState { Idle, Running, Suspended, Ready };
 
     struct Entry {
+        JobId id = 0;
         int priority = 2000;
         bool permanent = true;
         // Session jobs cancelled while parked stay here so their stack is not freed
@@ -67,7 +74,7 @@ private:
         std::size_t stack_bytes = 0;
     };
 
-    void bind_job(Phase phase, Job job, int priority, bool permanent);
+    JobId bind_job(Phase phase, Job job, int priority, bool permanent);
 
     void resume_ready();
     void start_job(Entry& entry, double dt);
@@ -84,6 +91,7 @@ private:
     // entry, so cancel_session_jobs can rebuild a list without moving one.
     std::vector<std::unique_ptr<Entry>> jobs_[kPhaseCount];
     std::vector<int> order_[kPhaseCount];
+    JobId next_id_ = 0;
     std::uint64_t wait_serial_ = 0;
 };
 

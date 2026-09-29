@@ -123,7 +123,7 @@ struct Rig {
         tri1 = add<engine_core::TestTriangle>("T1");
         tri2 = add<engine_core::TestTriangle>("T2");
         ide::ExplorerHost host;
-        host.enabled = [](std::string_view) { return true; };
+        host.enabled = [](engine_core::InstanceAction) { return true; };
         host.rename = [this](InstanceId id, std::string name) { game.set_name(id, name); };
         explorer = jadefx::make<ide::IdeExplorer>(game, "Explorer", host);
         panel.bind(game, game.selection(), game.history());

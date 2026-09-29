@@ -25,7 +25,7 @@ struct InsertResult {
     std::atomic<bool> done{false};
 };
 
-// The shell runs an action by name. enabled is false when the item should be
+// The shell runs an action. enabled is false when the item should be
 // shown but not clickable, such as Paste with an empty clipboard.
 // run_many runs Delete or Cut once over every selected instance, so it is one
 // undo step. Without it, they run on one instance at a time.
@@ -34,9 +34,10 @@ struct InsertResult {
 // move puts ids under parent in the order given, each last among its children,
 // as one undo step. Without it, rows do not drag.
 struct ExplorerHost {
-    std::function<void(std::string_view action, engine_core::InstanceId id)> run;
-    std::function<void(std::string_view action, const std::vector<engine_core::InstanceId>& ids)> run_many;
-    std::function<bool(std::string_view action)> enabled;
+    std::function<void(engine_core::InstanceAction action, engine_core::InstanceId id)> run;
+    std::function<void(engine_core::InstanceAction action, const std::vector<engine_core::InstanceId>& ids)>
+        run_many;
+    std::function<bool(engine_core::InstanceAction action)> enabled;
     // A short message for the person, such as why an action did nothing.
     std::function<void(std::string text)> notice;
     std::function<void(std::string class_name, engine_core::InstanceId parent, std::shared_ptr<InsertResult> result)>
@@ -84,7 +85,7 @@ public:
     // Runs action on the selection when those instances offer it and it is
     // enabled. Only Delete and Cut run on more than one. False when nothing
     // selected offers the action.
-    bool run_on_selection(std::string_view action);
+    bool run_on_selection(engine_core::InstanceAction action);
     // Opens the branches above each selected row and scrolls the tree until the
     // tree's own selected row is in view. When the filter hides a selected
     // row, the filter is cleared first. False when nothing is selected.
@@ -129,8 +130,8 @@ private:
     void place_reveal();
     bool find_id(const jadefx::TreeItem* item, engine_core::InstanceId& id) const;
     bool actions_for(engine_core::InstanceId id, std::vector<engine_core::ContextAction>& out) const;
-    bool offers(engine_core::InstanceId id, std::string_view action) const;
-    void run(const std::string& action, engine_core::InstanceId id);
+    bool offers(engine_core::InstanceId id, engine_core::InstanceAction action) const;
+    void run(engine_core::InstanceAction action, engine_core::InstanceId id);
     void show_menu(jadefx::TreeItem& item, double x, double y);
     bool activate(jadefx::TreeItem& item);
     void dropped(const jadefx::TreeDrop& drop);

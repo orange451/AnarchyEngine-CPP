@@ -66,26 +66,25 @@ struct ApplyGuard {
     ~ApplyGuard() { flag = false; }
 };
 
+using engine_core::InstanceAction;
+
 // Actions the explorer runs over the whole selection. The rest run on one row.
-bool Batchable(std::string_view action) { return action == "Delete" || action == "Cut"; }
+bool Batchable(InstanceAction action) { return action == InstanceAction::Delete || action == InstanceAction::Cut; }
 
 // Keys that make a click edit the selection instead of picking one row.
 constexpr int kSelectKeys = jadefx::Key::ModControl | jadefx::Key::ModSuper | jadefx::Key::ModShift;
 
-const char* ActionIcon(std::string_view name) {
-    if (name == "Edit") {
+const char* ActionIcon(InstanceAction action) {
+    switch (action) {
+    case InstanceAction::Edit:
         return "Script.png";
-    }
-    if (name == "Cut") {
+    case InstanceAction::Cut:
         return "Cut.png";
-    }
-    if (name == "Paste") {
+    case InstanceAction::Paste:
         return "Paste.png";
-    }
-    if (name == "Rename") {
+    case InstanceAction::Rename:
         return "Rename.png";
-    }
-    if (name == "Delete") {
+    case InstanceAction::Delete:
         return "Cross.png";
     }
     return nullptr;
@@ -336,20 +335,20 @@ bool IdeExplorer::actions_for(engine_core::InstanceId id, std::vector<engine_cor
     return !out.empty();
 }
 
-bool IdeExplorer::offers(engine_core::InstanceId id, std::string_view action) const {
+bool IdeExplorer::offers(engine_core::InstanceId id, InstanceAction action) const {
     std::vector<engine_core::ContextAction> actions;
     if (!actions_for(id, actions)) {
         return false;
     }
     for (const engine_core::ContextAction& entry : actions) {
-        if (entry.name != nullptr && action == entry.name) {
+        if (entry.action == action) {
             return !host_.enabled || host_.enabled(action);
         }
     }
     return false;
 }
 
-bool IdeExplorer::run_on_selection(std::string_view action) {
+bool IdeExplorer::run_on_selection(InstanceAction action) {
     if (!tree_) {
         return false;
     }
@@ -360,7 +359,8 @@ bool IdeExplorer::run_on_selection(std::string_view action) {
         engine_core::DataModelLock lock(root_, engine_core::DataModelLock::Read, kActionWait);
         if (!lock.owns()) {
             if (host_.notice) {
-                host_.notice("The place is busy, so " + std::string(action) + " did nothing. Try again.");
+                host_.notice("The place is busy, so " + std::string(engine_core::action_label(action)) +
+                             " did nothing. Try again.");
             }
             return true;
         }
@@ -378,7 +378,7 @@ bool IdeExplorer::run_on_selection(std::string_view action) {
             host_.run_many(action, ids);
         } else {
             for (engine_core::InstanceId id : ids) {
-                run(std::string(action), id);
+                run(action, id);
             }
         }
         return true;
@@ -390,12 +390,12 @@ bool IdeExplorer::run_on_selection(std::string_view action) {
             one = id;
         }
     }
-    run(std::string(action), one);
+    run(action, one);
     return true;
 }
 
-void IdeExplorer::run(const std::string& action, engine_core::InstanceId id) {
-    if (action == "Rename") {
+void IdeExplorer::run(InstanceAction action, engine_core::InstanceId id) {
+    if (action == InstanceAction::Rename) {
         begin_rename(id);
         return;
     }
@@ -427,26 +427,23 @@ void IdeExplorer::show_menu(jadefx::TreeItem& item, double x, double y) {
     }
     menu_ = jadefx::make<jadefx::Menu>();
     bool any = false;
-    for (const engine_core::ContextAction& action : actions) {
-        if (action.name == nullptr) {
-            continue;
-        }
-        if (any && std::string_view(action.name) == "Cut") {
+    for (const engine_core::ContextAction& offered : actions) {
+        const InstanceAction action = offered.action;
+        if (any && action == InstanceAction::Cut) {
             menu_->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
         }
-        auto entry = jadefx::make<jadefx::MenuItem>(action.name);
-        if (const char* file = ActionIcon(action.name)) {
+        auto entry = jadefx::make<jadefx::MenuItem>(engine_core::action_label(action));
+        if (const char* file = ActionIcon(action)) {
             if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic(file)) {
                 entry->setGraphic(std::move(icon));
             }
         }
-        const bool on = !host_.enabled || host_.enabled(action.name);
+        const bool on = !host_.enabled || host_.enabled(action);
         entry->setDisable(!on);
-        const std::string name = action.name;
-        const bool batch = many && Batchable(name);
-        entry->setOnAction([this, id, name, batch](jadefx::ActionEvent&) {
-            if (!batch || !run_on_selection(name)) {
-                run(name, id);
+        const bool batch = many && Batchable(action);
+        entry->setOnAction([this, id, action, batch](jadefx::ActionEvent&) {
+            if (!batch || !run_on_selection(action)) {
+                run(action, id);
             }
         });
         menu_->getItems().add(std::move(entry));
@@ -469,14 +466,14 @@ bool IdeExplorer::activate(jadefx::TreeItem& item) {
     if (!actions_for(id, actions)) {
         return false;
     }
-    for (const engine_core::ContextAction& action : actions) {
-        if (!action.primary || action.name == nullptr) {
+    for (const engine_core::ContextAction& offered : actions) {
+        if (!offered.primary) {
             continue;
         }
-        if (host_.enabled && !host_.enabled(action.name)) {
+        if (host_.enabled && !host_.enabled(offered.action)) {
             return false;
         }
-        run(action.name, id);
+        run(offered.action, id);
         return true;
     }
     return false;
@@ -551,10 +548,10 @@ void IdeExplorer::poll_clicks() {
     }
     slow_pending_ = false;
     const std::shared_ptr<jadefx::TreeItem> row = row_ptr(slow_id_);
-    if (!row || tree_->getSelectedItem() != row.get() || !offers(slow_id_, "Rename")) {
+    if (!row || tree_->getSelectedItem() != row.get() || !offers(slow_id_, InstanceAction::Rename)) {
         return;
     }
-    run("Rename", slow_id_);
+    run(InstanceAction::Rename, slow_id_);
 }
 
 void IdeExplorer::forget_clicks() {

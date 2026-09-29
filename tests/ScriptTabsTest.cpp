@@ -116,7 +116,7 @@ void TestClosedTabs(ide::IdeLayout& layout, jadefx::Scene& scene) {
         bool ran = false;
         for (jadefx::Node* node : scene.getElementsByClassName("explorer-pane")) {
             if (auto* explorer = dynamic_cast<ide::IdeExplorer*>(node); explorer != nullptr && !ran) {
-                ran = explorer->run_on_selection("Edit");
+                ran = explorer->run_on_selection(engine_core::InstanceAction::Edit);
             }
         }
         frame();

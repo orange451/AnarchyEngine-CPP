@@ -122,8 +122,8 @@ public:
 private:
     struct Clip;
 
-    void run_action(std::string_view action, std::uint32_t id);
-    bool action_enabled(std::string_view action) const;
+    void run_action(engine_core::InstanceAction action, std::uint32_t id);
+    bool action_enabled(engine_core::InstanceAction action) const;
     // Takes every id out of the place as one undo step. A selected child of a
     // selected instance goes with its ancestor.
     void cut(const std::vector<std::uint32_t>& ids);

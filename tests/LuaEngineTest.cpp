@@ -294,27 +294,27 @@ void testContextActions() {
     game.context_actions(actions);
     // The root cannot be deleted.
     expect(actions.size() == 3, "the game has cut, paste, and rename");
-    expect(actions.size() == 3 && std::string(actions[0].name) == "Cut" && !actions[0].primary, "cut is not primary");
-    expect(actions.size() == 3 && std::string(actions[1].name) == "Paste" && !actions[1].primary, "paste is not primary");
-    expect(actions.size() == 3 && std::string(actions[2].name) == "Rename" && !actions[2].primary, "rename is not primary");
+    expect(actions.size() == 3 && actions[0].action == engine_core::InstanceAction::Cut && !actions[0].primary, "cut is not primary");
+    expect(actions.size() == 3 && actions[1].action == engine_core::InstanceAction::Paste && !actions[1].primary, "paste is not primary");
+    expect(actions.size() == 3 && actions[2].action == engine_core::InstanceAction::Rename && !actions[2].primary, "rename is not primary");
 
     engine_core::Script& script = game.create<engine_core::Script>();
     actions.clear();
     script.context_actions(actions);
-    expect(actions.size() == 5 && std::string(actions[0].name) == "Edit" && actions[0].primary, "a script's edit is primary");
-    expect(actions.size() == 5 && std::string(actions[1].name) == "Cut", "a script still has cut");
-    expect(actions.size() == 5 && std::string(actions[4].name) == "Delete" && !actions[4].primary, "a script can be deleted");
+    expect(actions.size() == 5 && actions[0].action == engine_core::InstanceAction::Edit && actions[0].primary, "a script's edit is primary");
+    expect(actions.size() == 5 && actions[1].action == engine_core::InstanceAction::Cut, "a script still has cut");
+    expect(actions.size() == 5 && actions[4].action == engine_core::InstanceAction::Delete && !actions[4].primary, "a script can be deleted");
 
     engine_core::ModuleScript& module = game.create<engine_core::ModuleScript>();
     actions.clear();
     module.context_actions(actions);
-    expect(actions.size() == 5 && actions[0].primary && std::string(actions[0].name) == "Edit", "a module script edits");
+    expect(actions.size() == 5 && actions[0].primary && actions[0].action == engine_core::InstanceAction::Edit, "a module script edits");
 
     engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
     actions.clear();
     triangle.context_actions(actions);
     expect(actions.size() == 4 && !actions[0].primary, "a triangle uses the plain actions");
-    expect(actions.size() == 4 && std::string(actions[3].name) == "Delete", "a triangle can be deleted");
+    expect(actions.size() == 4 && actions[3].action == engine_core::InstanceAction::Delete, "a triangle can be deleted");
 }
 
 void testInsertInstance() {

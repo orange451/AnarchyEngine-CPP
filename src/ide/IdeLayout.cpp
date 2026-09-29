@@ -148,15 +148,15 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
 
     engine_core::DataModel& game = runner_.simulation().datamodel();
     ExplorerHost host;
-    host.run = [this](std::string_view action, engine_core::InstanceId id) { run_action(action, id); };
-    host.run_many = [this](std::string_view action, const std::vector<engine_core::InstanceId>& ids) {
-        if (action == "Delete") {
+    host.run = [this](engine_core::InstanceAction action, engine_core::InstanceId id) { run_action(action, id); };
+    host.run_many = [this](engine_core::InstanceAction action, const std::vector<engine_core::InstanceId>& ids) {
+        if (action == engine_core::InstanceAction::Delete) {
             delete_instances(ids);
-        } else if (action == "Cut") {
+        } else if (action == engine_core::InstanceAction::Cut) {
             cut(ids);
         }
     };
-    host.enabled = [this](std::string_view action) { return action_enabled(action); };
+    host.enabled = [this](engine_core::InstanceAction action) { return action_enabled(action); };
     host.notice = [this](std::string text) { show_toast(std::move(text)); };
     host.rename = [this](engine_core::InstanceId id, std::string name) { rename(id, std::move(name)); };
     host.move = [this](const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId parent) {
@@ -494,7 +494,7 @@ void IdeLayout::routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene) {
         return;
     }
     if (IdeExplorer* explorer = Owning<IdeExplorer>(focused)) {
-        if (explorer->run_on_selection("Delete")) {
+        if (explorer->run_on_selection(engine_core::InstanceAction::Delete)) {
             event.consume();
         }
     }

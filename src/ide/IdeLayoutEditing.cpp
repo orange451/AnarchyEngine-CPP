@@ -6,15 +6,23 @@
 
 namespace ide {
 
-void IdeLayout::run_action(std::string_view action, std::uint32_t id) {
-    if (action == "Cut") {
+void IdeLayout::run_action(engine_core::InstanceAction action, std::uint32_t id) {
+    switch (action) {
+    case engine_core::InstanceAction::Cut:
         cut({id});
-    } else if (action == "Paste") {
+        break;
+    case engine_core::InstanceAction::Paste:
         paste(id);
-    } else if (action == "Edit") {
+        break;
+    case engine_core::InstanceAction::Edit:
         edit(id);
-    } else if (action == "Delete") {
+        break;
+    case engine_core::InstanceAction::Delete:
         delete_instances({id});
+        break;
+    case engine_core::InstanceAction::Rename:
+        // The explorer renames in its own row.
+        break;
     }
 }
 
@@ -128,8 +136,8 @@ void IdeLayout::open_search(bool replace, jadefx::Scene* scene) {
     }
 }
 
-bool IdeLayout::action_enabled(std::string_view action) const {
-    if (action == "Paste") {
+bool IdeLayout::action_enabled(engine_core::InstanceAction action) const {
+    if (action == engine_core::InstanceAction::Paste) {
         return clip_ && clip_->held;
     }
     return true;

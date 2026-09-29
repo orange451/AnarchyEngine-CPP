@@ -10,7 +10,7 @@
 namespace engine_core {
 
 void LuaSource::context_actions(std::vector<ContextAction>& out) const {
-    out.push_back(ContextAction{"Edit", true});
+    out.push_back(ContextAction{InstanceAction::Edit, true});
     DataModel::context_actions(out);
 }
 

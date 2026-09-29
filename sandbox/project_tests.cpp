@@ -864,7 +864,7 @@ TEST_CASE("destroy_tree destroys descendants and one undo brings them back", "[p
     game.instance(inner)->context_actions(part_actions);
     auto has_delete = [](const std::vector<engine_core::ContextAction>& actions) {
         return std::any_of(actions.begin(), actions.end(),
-                           [](const engine_core::ContextAction& a) { return std::string(a.name) == "Delete"; });
+                           [](const engine_core::ContextAction& a) { return a.action == engine_core::InstanceAction::Delete; });
     };
     REQUIRE_FALSE(has_delete(root_actions));
     REQUIRE(has_delete(part_actions));

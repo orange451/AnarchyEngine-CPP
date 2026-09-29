@@ -62,11 +62,13 @@ struct Rig {
             ids.push_back(folder.id());
         }
         ide::ExplorerHost host;
-        host.run = [this](std::string_view action, engine_core::InstanceId) { runs.emplace_back(action); };
-        host.run_many = [this](std::string_view action, const std::vector<engine_core::InstanceId>& ids) {
-            batches.emplace_back(std::string(action), ids);
+        host.run = [this](engine_core::InstanceAction action, engine_core::InstanceId) {
+            runs.emplace_back(engine_core::action_label(action));
         };
-        host.enabled = [](std::string_view) { return true; };
+        host.run_many = [this](engine_core::InstanceAction action, const std::vector<engine_core::InstanceId>& ids) {
+            batches.emplace_back(engine_core::action_label(action), ids);
+        };
+        host.enabled = [](engine_core::InstanceAction) { return true; };
         host.notice = [this](std::string text) { notices.push_back(std::move(text)); };
         host.rename = [this](engine_core::InstanceId id, std::string name) {
             game.set_name(id, name);
@@ -545,7 +547,7 @@ void TestCutRunsOnTheSelection() {
     Expect(rig.batches.size() == 1 && rig.batches[0].first == "Cut" && rig.batches[0].second == rig.pick({0, 2}),
            "Cut from the menu runs once on every selected instance");
     Expect(rig.runs.empty(), "a multiple Cut does not also run on the clicked row");
-    Expect(rig.explorer->run_on_selection("Cut"), "Cut runs on the selection by name too");
+    Expect(rig.explorer->run_on_selection(engine_core::InstanceAction::Cut), "Cut runs on the selection by name too");
     Expect(rig.batches.size() == 2 && rig.batches[1].first == "Cut", "that Cut is one batch too");
 }
 
@@ -570,13 +572,13 @@ void TestCutSet() {
 void TestDeleteRunsOnTheSelection() {
     Rig rig;
     rig.clickRow("Beta", 0.1);
-    Expect(rig.explorer->run_on_selection("Delete"), "Delete runs on one selected row");
+    Expect(rig.explorer->run_on_selection(engine_core::InstanceAction::Delete), "Delete runs on one selected row");
     Expect(rig.runs.size() == 1 && rig.runs[0] == "Delete" && rig.batches.empty(), "one row uses run");
     rig.game.selection().set(rig.pick({0, 1, 2}));
     rig.frame(0.2);
-    Expect(rig.explorer->run_on_selection("Delete"), "Delete runs on a multiple selection");
+    Expect(rig.explorer->run_on_selection(engine_core::InstanceAction::Delete), "Delete runs on a multiple selection");
     Expect(rig.batches.size() == 1 && rig.batches[0].second == rig.pick({0, 1, 2}), "many rows use run_many");
-    Expect(!rig.explorer->run_on_selection("Edit"), "a folder does not offer Edit");
+    Expect(!rig.explorer->run_on_selection(engine_core::InstanceAction::Edit), "a folder does not offer Edit");
 }
 
 void TestDragIntoAnotherRow() {
@@ -758,12 +760,12 @@ void TestBusyPlaceSaysSo() {
     while (!held) {
         std::this_thread::yield();
     }
-    Expect(rig.explorer->run_on_selection("Delete"), "a busy place still takes Delete");
+    Expect(rig.explorer->run_on_selection(engine_core::InstanceAction::Delete), "a busy place still takes Delete");
     release = true;
     busy.join();
     Expect(rig.runs.empty() && rig.batches.empty(), "Delete runs on none of the selection, not part of it");
     Expect(rig.notices.size() == 1 && rig.notices[0].find("busy") != std::string::npos, "a busy place says so");
-    Expect(rig.explorer->run_on_selection("Delete") && rig.batches.size() == 1 &&
+    Expect(rig.explorer->run_on_selection(engine_core::InstanceAction::Delete) && rig.batches.size() == 1 &&
                rig.batches[0].second == rig.pick({0, 1, 2}),
            "once the place is free, Delete runs on the whole selection");
 }
@@ -775,7 +777,7 @@ void TestFilterKeepsHiddenSelection() {
     Expect(rig.selection() == rig.pick({0}), "filtering keeps a hidden selected instance selected");
     rig.batches.clear();
     rig.runs.clear();
-    Expect(!rig.explorer->run_on_selection("Delete"), "Delete skips a selected row the filter hides");
+    Expect(!rig.explorer->run_on_selection(engine_core::InstanceAction::Delete), "Delete skips a selected row the filter hides");
 }
 
 void TestRevealOpensTheBranch() {

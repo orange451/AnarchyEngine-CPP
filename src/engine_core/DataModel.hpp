@@ -27,8 +27,15 @@ class DataModelLock;
 
 // One explorer context action. name is the menu label. primary is the action a
 // double-click runs. The shell performs the action. A subclass adds its own.
+// What the explorer can do to an instance. Each class offers some of them.
+enum class InstanceAction { Edit, Cut, Paste, Rename, Delete };
+
+// The action's name, as its menu item shows it.
+const char* action_label(InstanceAction action);
+
 struct ContextAction {
-    const char* name = nullptr;
+    InstanceAction action = InstanceAction::Rename;
+    // Double-clicking the row runs it.
     bool primary = false;
 };
 

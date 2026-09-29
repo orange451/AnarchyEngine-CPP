@@ -257,6 +257,8 @@ private:
     // Build the pages for their window entries.
     std::shared_ptr<IdePane> make_search();
     std::shared_ptr<IdePane> make_conflicts();
+    // The user's shell, started in the project's folder.
+    std::shared_ptr<IdePane> make_terminal();
     // Where Search and Conflicts dock: beside the left explorer, else where editors dock.
     IdeDock* side_home();
     // The ribbon's count and the Conflicts window's rows, from conflicts_.
@@ -357,6 +359,7 @@ private:
     // Search's and Conflicts' entries in windows_.
     WindowEntry* search_window_ = nullptr;
     WindowEntry* conflicts_window_ = nullptr;
+    WindowEntry* terminal_window_ = nullptr;
     // Scene views opened so far, which numbers the next one's tab.
     int scene_views_ = 1;
     // The studio's first scene view. It stays open.

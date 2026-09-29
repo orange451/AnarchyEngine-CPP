@@ -37,6 +37,7 @@ set(STUDIO_CORE_SOURCES
     src/ide/ScriptMarks.cpp
     src/ide/ScriptPairs.cpp
     src/ide/StudioRegistry.cpp
+    src/ide/TerminalScreen.cpp
     src/ide/TextSearch.cpp
     src/ide/TextUndoStack.cpp
     src/ide/TextWrap.cpp
@@ -52,6 +53,8 @@ set(STUDIO_SOURCES
     src/ide/SavedLayout.cpp
     src/ide/IdeConflicts.cpp
     src/ide/IdeConsole.cpp
+    src/ide/IdeTerminal.cpp
+    src/ide/TerminalView.cpp
     src/ide/ConsoleLog.cpp
     src/ide/CompletionPopup.cpp
     src/ide/InsertPopup.cpp
@@ -72,6 +75,12 @@ set(STUDIO_SOURCES
     src/ide/PreferencesPanel.cpp
     src/ide/ThemeLibrary.cpp
 )
+# The terminal page's pseudo-terminal: ConPTY on Windows, forkpty elsewhere.
+if(WIN32)
+    list(APPEND STUDIO_CORE_SOURCES src/ide/PtyWindows.cpp)
+else()
+    list(APPEND STUDIO_CORE_SOURCES src/ide/PtyPosix.cpp)
+endif()
 add_library(studio_core STATIC ${STUDIO_CORE_SOURCES})
 add_library(studio STATIC ${STUDIO_SOURCES})
 
@@ -209,6 +218,43 @@ if(NOT stb_image_write_POPULATED)
     FetchContent_Populate(stb_image_write)
 endif()
 
+# libvterm parses what a program writes to the terminal page, and encodes the
+# keys it reads. MIT-licensed C. Neovim's mirror is pinned because its tree
+# carries the generated encoding tables, which the upstream tarball builds with Perl.
+enable_language(C)
+FetchContent_Declare(
+    libvterm
+    URL https://github.com/neovim/libvterm/archive/934bc2fbf21800ac3458a499df8820ca5fb45fd3.tar.gz
+    URL_HASH SHA256=f09525eb2a02679be0eb50bc1c294569e8cbaa4b59fb867d606236de2830045f
+)
+FetchContent_GetProperties(libvterm)
+if(NOT libvterm_POPULATED)
+    # Its Makefile is not CMake, so the library is defined here.
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
+    FetchContent_Populate(libvterm)
+endif()
+add_library(vterm STATIC
+    "${libvterm_SOURCE_DIR}/src/encoding.c"
+    "${libvterm_SOURCE_DIR}/src/keyboard.c"
+    "${libvterm_SOURCE_DIR}/src/mouse.c"
+    "${libvterm_SOURCE_DIR}/src/parser.c"
+    "${libvterm_SOURCE_DIR}/src/pen.c"
+    "${libvterm_SOURCE_DIR}/src/screen.c"
+    "${libvterm_SOURCE_DIR}/src/state.c"
+    "${libvterm_SOURCE_DIR}/src/unicode.c"
+    "${libvterm_SOURCE_DIR}/src/vterm.c"
+)
+target_include_directories(vterm SYSTEM PUBLIC "${libvterm_SOURCE_DIR}/include")
+target_include_directories(vterm PRIVATE "${libvterm_SOURCE_DIR}/src")
+if(MSVC)
+    target_compile_definitions(vterm PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(vterm PRIVATE /utf-8)
+else()
+    target_compile_options(vterm PRIVATE -std=c99)
+endif()
+
 # The engine is four packages, each a static library with its own directory:
 #   engine_core       DataModel, events, threads, the script runtime, projects
 #   engine_datatypes  values: Vector2, Vector3, Color, Color3, Transform, Enum
@@ -291,6 +337,11 @@ target_include_directories(studio_core SYSTEM PUBLIC "${httplib_SOURCE_DIR}")
 # SYSTEM, so -Wextra does not report on the vendored header.
 target_include_directories(studio_core SYSTEM PRIVATE "${stb_image_write_SOURCE_DIR}")
 target_link_libraries(studio_core PUBLIC engine_core)
+target_link_libraries(studio_core PRIVATE vterm)
+# forkpty is in libutil on Linux, and in libc on macOS and the BSDs.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(studio_core PUBLIC util)
+endif()
 target_compile_features(studio_core PUBLIC cxx_std_17)
 # httplib's sockets. MSVC links these from a pragma in the header; MinGW needs them here.
 if(WIN32)
@@ -332,6 +383,7 @@ add_executable(studio-tests
     tests/SaveConflictTest.cpp
     tests/ConflictsTest.cpp
     tests/ScriptTabsTest.cpp
+    tests/TerminalPaneTest.cpp
 )
 target_link_libraries(studio-tests PRIVATE studio)
 
@@ -365,6 +417,25 @@ add_executable(engine-tests
     tests/ViewCaptureTest.cpp
 )
 target_link_libraries(engine-tests PRIVATE studio_core)
+
+# The terminal page without a window: real programs on a pseudo-terminal, and
+# the screen their output makes.
+add_executable(terminal-tests
+    tests/TerminalTest.cpp
+)
+target_link_libraries(terminal-tests PRIVATE studio_core)
+
+# By hand, not ctest: terminal-probe 8 claude prints the screen a real program draws.
+add_executable(terminal-probe
+    tests/TerminalProbe.cpp
+)
+target_link_libraries(terminal-probe PRIVATE studio_core)
+
+# By hand, not ctest: terminal-demo out.png 12 light claude saves the page drawing a real program.
+add_executable(terminal-demo
+    tests/TerminalDemo.cpp
+)
+target_link_libraries(terminal-demo PRIVATE studio)
 
 # Catch2 is only the sandbox acceptance suite.
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.28")
@@ -412,7 +483,7 @@ function(anarchy_warnings target)
     endif()
 endfunction()
 foreach(target IN ITEMS studio_core studio AnarchyEngine-CPP engine-tests shell-tests properties-tests console-tests
-                        studio-tests mcp-tests explorer-tests anarchy-mcp sandbox ${ENGINE_PACKAGES})
+                        studio-tests mcp-tests explorer-tests terminal-tests terminal-probe anarchy-mcp sandbox ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()
 
@@ -467,7 +538,8 @@ endif()
 # Every test program, for ctest (with Visual Studio, ctest -C Release). Each
 # runs from the source folder, where resources/ is.
 enable_testing()
-foreach(suite engine-tests properties-tests console-tests studio-tests mcp-tests sandbox shell-tests explorer-tests)
+foreach(suite engine-tests properties-tests console-tests studio-tests mcp-tests sandbox shell-tests explorer-tests
+              terminal-tests)
     if(TARGET ${suite})
         add_test(NAME ${suite} COMMAND ${suite} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()

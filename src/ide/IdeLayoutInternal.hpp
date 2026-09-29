@@ -23,6 +23,7 @@
 #include "IdeExplorer.hpp"
 #include "IdeScriptEditor.hpp"
 #include "IdeSearch.hpp"
+#include "IdeTerminal.hpp"
 #include "IdeTheme.hpp"
 #include "PreferencesPanel.hpp"
 #include "PropertiesPanel.hpp"

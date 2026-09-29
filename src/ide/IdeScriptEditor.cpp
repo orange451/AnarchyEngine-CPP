@@ -27,29 +27,6 @@ constexpr std::chrono::milliseconds kSaveDelay(50);
 // The most matches the find bar counts and highlights, as in VS Code.
 constexpr std::size_t kFindLimit = 19999;
 
-struct EditorFont {
-    EditorFont() {
-        const char* paths[] = {
-            "/System/Library/Fonts/Menlo.ttc",
-            "/System/Library/Fonts/Supplemental/Courier New.ttf",
-            "C:/Windows/Fonts/consola.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-        };
-        for (const char* path : paths) {
-            if (jadefx::Font::loadFile("Editor Mono", path)) {
-                return;
-            }
-        }
-    }
-};
-
-const EditorFont& editor_font() {
-    static const EditorFont font;
-    return font;
-}
-
 // The problem banner under the editor. Its colors are added for each severity.
 constexpr const char* kBannerStyle = "font-size: 12px; ";
 
@@ -193,7 +170,7 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     area_ = area;
     area_->getClassList().add("ide-script");
     // Load before the area is laid out. The stylesheet asks for this family.
-    (void)editor_font();
+    (void)editor_mono_family();
     define_styles(*area_);
     theme_listener_ = std::make_unique<ThemeListener>([this] {
         define_styles(*area_);

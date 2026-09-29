@@ -28,6 +28,7 @@ int RunPreferencesTests();
 int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunScriptTabTests(ide::IdeLayout& layout, jadefx::Scene& scene);
+int RunTerminalPaneTests();
 
 // R10: the studio's default layout builds, and its docks hold the explorers,
 // the console, and Properties. Runs headless: the threads are never started.
@@ -285,9 +286,9 @@ int main() {
         for (const std::shared_ptr<jadefx::MenuItem>& item : windows->getItems().items()) {
             labels.push_back(item ? item->getText() : std::string());
         }
-        expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "",
+        expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "Terminal", "",
                                                   "New Scene View", "", "Reset to Default Layout"},
-               "Window lists the explorers, Properties, Console, Search, and Conflicts, then New Scene View and the reset");
+               "Window lists the explorers, Properties, Console, Search, Conflicts, and Terminal, then New Scene View and the reset");
         double time = 1.1;
         auto frame = [&] {
             scene->layout(1280, 800, time);
@@ -519,6 +520,7 @@ int main() {
     failures += RunSaveConflictTests(layout, *scene);
     failures += RunConflictsTests(layout, *scene);
     failures += RunScriptTabTests(layout, *scene);
+    failures += RunTerminalPaneTests();
 
     // The layout is kept in layout.json in the config folder, and the next
     // studio docks the windows that way again.

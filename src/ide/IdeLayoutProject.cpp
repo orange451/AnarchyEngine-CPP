@@ -35,6 +35,13 @@ std::shared_ptr<IdePane> IdeLayout::make_conflicts() {
     return conflicts_pane_;
 }
 
+std::shared_ptr<IdePane> IdeLayout::make_terminal() {
+    TerminalHost host;
+    // The project open when the shell starts; this process's folder before one is.
+    host.folder = [this] { return project_ ? project_->root().string() : std::string(); };
+    return jadefx::make<IdeTerminal>(std::move(host));
+}
+
 void IdeLayout::show_conflicts() {
     open_window(*conflicts_window_);
 }

@@ -108,6 +108,11 @@ void set_current_theme(IdeTheme theme);
 // current_theme().color(name), for a color set from code rather than CSS.
 jadefx::Color theme_color(std::string_view name);
 
+// "Editor Mono": the system's monospace font, which the script editor and the
+// terminal draw with. The first call loads it: Menlo, Consolas, or DejaVu Sans
+// Mono, whichever the system has.
+const std::string& editor_mono_family();
+
 // Runs changed after each set_current_theme, for as long as it lives. For
 // colors code sets, such as a text area's style classes; CSS needs none.
 class ThemeListener {

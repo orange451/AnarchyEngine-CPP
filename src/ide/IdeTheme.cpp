@@ -462,4 +462,25 @@ ThemeListener::ThemeListener(std::function<void()> changed) : id_(++TheListeners
 
 ThemeListener::~ThemeListener() { TheListeners().changed.erase(id_); }
 
+const std::string& editor_mono_family() {
+    static const std::string family = [] {
+        const std::string name = "Editor Mono";
+        const char* paths[] = {
+            "/System/Library/Fonts/Menlo.ttc",
+            "/System/Library/Fonts/Supplemental/Courier New.ttf",
+            "C:/Windows/Fonts/consola.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+        };
+        for (const char* path : paths) {
+            if (jadefx::Font::loadFile(name, path)) {
+                break;
+            }
+        }
+        return name;
+    }();
+    return family;
+}
+
 }  // namespace ide

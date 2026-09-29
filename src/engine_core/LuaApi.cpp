@@ -1,6 +1,7 @@
 #include "LuaApi.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -89,7 +90,14 @@ void collect(const char* class_name, std::vector<LuaField>& out, int depth) {
 
 }  // namespace
 
+namespace {
+std::atomic<std::uint64_t> g_registry_revision{0};
+}  // namespace
+
+std::uint64_t lua_registry_revision() { return g_registry_revision.load(std::memory_order_acquire); }
+
 void register_lua_class(const char* class_name, const char* base, const LuaField* fields, int count) {
+    g_registry_revision.fetch_add(1, std::memory_order_acq_rel);
     if (class_name == nullptr) {
         return;
     }
@@ -111,6 +119,7 @@ void register_lua_class(const char* class_name, const char* base, const LuaField
 }
 
 void register_lua_operators(const char* class_name, const LuaOperator* operators, int count) {
+    g_registry_revision.fetch_add(1, std::memory_order_acq_rel);
     if (class_name == nullptr) {
         return;
     }
@@ -229,6 +238,7 @@ std::vector<const char*>& service_names() {
 }  // namespace
 
 void register_lua_service(const char* name) {
+    g_registry_revision.fetch_add(1, std::memory_order_acq_rel);
     if (name == nullptr) {
         return;
     }
@@ -288,6 +298,7 @@ const Creatable* find_creatable(const char* class_name) {
 }  // namespace
 
 void register_lua_creatable(const char* class_name, LuaCreate create) {
+    g_registry_revision.fetch_add(1, std::memory_order_acq_rel);
     if (class_name == nullptr || create == nullptr || find_creatable(class_name) != nullptr) {
         return;
     }
@@ -314,6 +325,7 @@ DataModel* lua_create_instance(DataModel& world, const char* class_name) {
 }
 
 void lua_note_result(const char* owner, const char* name, const char* type_name, bool class_from_arg) {
+    g_registry_revision.fetch_add(1, std::memory_order_acq_rel);
     if (owner == nullptr || name == nullptr) {
         return;
     }
@@ -334,6 +346,7 @@ std::vector<const char*>& host_libraries() {
 }  // namespace
 
 void lua_note_host_library(const char* name) {
+    g_registry_revision.fetch_add(1, std::memory_order_acq_rel);
     if (name == nullptr || name[0] == '\0') {
         return;
     }

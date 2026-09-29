@@ -2,7 +2,7 @@
 
 #include "ColorLiterals.hpp"
 #include "CompletionPopup.hpp"
-#include "LuauTypedCompletion.hpp"
+#include "LuauComplete.hpp"
 #include "IdePane.hpp"
 #include "LuaApi.hpp"
 #include "TextSearch.hpp"
@@ -106,18 +106,21 @@ private:
     void note_text();
     void push(const std::string& text);
     void refresh_completion(bool force);
-    // Shows Luau's answers for the last list, once they have arrived.
+    // Shows Luau's list for the last keystroke, once it has arrived.
     void take_luau_list();
+    // Before an accept reads the popup: waits for that list and shows it, so
+    // what is accepted matches the text as it is now.
+    void settle_luau_list();
     void dismiss_completion();
     void accept_completion(bool parentheses);
     void move_completion(int delta);
     void place_completion();
     bool completion_open() const;
-    bool completion_commits_name() const;
-    bool completion_commits_quote(char quote, bool unclosed_only = true) const;
+    bool completion_commits_name();
+    bool completion_commits_quote(char quote, bool unclosed_only = true);
     // Enter and Tab accept when the highlighted name would change the text.
     // A finished name keeps those keys, so a newline or indent still works.
-    bool completion_key_accepts() const;
+    bool completion_key_accepts();
     std::vector<engine_core::LuaNode> world() const;
     // A swatch after each Color3 literal. A click on one opens the color picker on it.
     void refresh_color_swatches();
@@ -151,8 +154,8 @@ private:
     std::shared_ptr<jadefx::CodeArea> area_;
     std::shared_ptr<jadefx::Label> status_;
     CompletionPopup completion_;
-    // Luau's answers for the list the popup last showed, on their way.
-    std::optional<PendingLuauList> luau_list_;
+    // Luau's list for the last keystroke, on its way.
+    std::optional<PendingCompletion> luau_list_;
     std::shared_ptr<Commit> commit_;
     std::string shown_name_;
     // DataModel::authored_revision and tree_revision when reapply last read

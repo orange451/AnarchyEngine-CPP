@@ -2,7 +2,6 @@
 
 #include "Engine.hpp"
 #include "LuauComplete.hpp"
-#include "LuauTypedCompletion.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptPairs.hpp"
 #include "ScriptRuntime.hpp"
@@ -65,22 +64,7 @@ void IdeConsole::layoutChildren() {
         }
         pulling_ = false;
     }
-    if (luau_list_) {
-        bool changed = false;
-        if (take_luau_answers(*luau_list_, changed)) {
-            PendingLuauList pending = std::move(*luau_list_);
-            luau_list_.reset();
-            double x = 0;
-            double y = 0;
-            double height = 0;
-            // Only while the popup, the caret, and the text are as they were asked about.
-            if (changed && command_ && !completion_.accepting() && completion_.isOpen() == pending.shown &&
-                command_->getCaretPosition() == pending.caret && command_->getText() == pending.source &&
-                command_->caretBounds(x, y, height)) {
-                completion_.present(std::move(pending.list), pending.force, *command_, x, y, height);
-            }
-        }
-    }
+    take_luau_list();
     if (completion_.isOpen() && command_) {
         double x = 0;
         double y = 0;
@@ -245,19 +229,51 @@ void IdeConsole::refresh_completion(bool force) {
     const std::string text = command_->getText();
     const int caret = command_->getCaretPosition();
     const std::vector<engine_core::LuaNode> place = completion_world(engine_, 0, nullptr);
-    CompletionList list = complete_luau(text, caret, place, 0, false);
-    // What the resolver cannot follow is asked of Luau, as in the script editor.
-    // Its answer shows on a later frame.
-    luau_list_ = ask_luau_for_list(list, engine_.analysis(), text, caret, place, 0, force);
-    completion_.present(std::move(list), force, *command_, x, y, height);
-    if (luau_list_) {
-        luau_list_->shown = completion_.isOpen();
+    // As in the script editor, what needs Luau's types shows on a later frame.
+    CompletionList now;
+    luau_list_ = ask_completion(now, engine_.analysis(), text, caret, place, 0, false, force);
+    if (!luau_list_) {
+        completion_.present(std::move(now), force, *command_, x, y, height);
+        return;
+    }
+    luau_list_->shown = completion_.isOpen();
+}
+
+void IdeConsole::take_luau_list() {
+    if (!luau_list_) {
+        return;
+    }
+    std::optional<CompletionList> list = take_completion(*luau_list_);
+    if (!list) {
+        return;
+    }
+    PendingCompletion pending = std::move(*luau_list_);
+    luau_list_.reset();
+    double x = 0;
+    double y = 0;
+    double height = 0;
+    // Only while the popup, the caret, and the text are as they were asked about.
+    if (command_ && !completion_.accepting() && completion_.isOpen() == pending.shown &&
+        command_->getCaretPosition() == pending.caret && command_->getText() == pending.source &&
+        command_->caretBounds(x, y, height)) {
+        completion_.present(std::move(*list), pending.force, *command_, x, y, height);
+    }
+}
+
+void IdeConsole::settle_luau_list() {
+    if (luau_list_ && completion_.isOpen() && !completion_.accepting()) {
+        settle_completion(*luau_list_, kSettleWait);
+        take_luau_list();
     }
 }
 
 void IdeConsole::accept_completion(bool parentheses) {
     if (!command_) {
         completion_.dismiss();
+        return;
+    }
+    settle_luau_list();
+    if (!completion_.isOpen()) {
         return;
     }
     const std::optional<CompletionEdit> edit = completion_.take(parentheses, command_->getText());
@@ -327,6 +343,7 @@ void CommandField::handleKey(jadefx::KeyEvent& event) {
         }
         if ((event.key == jadefx::Key::Enter || event.key == jadefx::Key::KpEnter || event.key == jadefx::Key::Tab) &&
             !event.shift && !event.shortcut()) {
+            console->settle_luau_list();
             if (console->completion_.keyAccepts()) {
                 console->accept_completion(true);
                 event.consume();
@@ -436,6 +453,9 @@ void CommandField::handleText(jadefx::TextEvent& event) {
         const bool steps_over = collapsed && quote_key &&
                                 source_code_point(getText(), getCaretPosition()) ==
                                     static_cast<char32_t>(static_cast<unsigned char>(unit));
+        if (name_key || quote_key) {
+            console->settle_luau_list();
+        }
         if (name_key && console->completion_.commitsName()) {
             console->accept_completion(false);
         } else if (quote_key && console->completion_.commitsQuote(unit, !steps_over)) {

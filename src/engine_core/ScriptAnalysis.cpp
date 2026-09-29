@@ -383,10 +383,9 @@ std::optional<InstanceId> tagged_instance(Luau::TypeId type) {
     return tag->id;
 }
 
-// The registered class a type is, walking a per-instance type up to it. Empty
-// for anything that is not an instance or datatype class.
-std::string registered_class(Luau::TypeId type) {
-    const Luau::ExternType* extern_type = Luau::get<Luau::ExternType>(Luau::follow(type));
+// The registered class an extern type is, walking up its bases. Empty for
+// anything the registry does not know.
+std::string registered_class(const Luau::ExternType* extern_type) {
     for (int depth = 0; extern_type != nullptr && depth < 64; ++depth) {
         if (extern_type->name == "vector") {
             return "Vector3";
@@ -400,6 +399,11 @@ std::string registered_class(Luau::TypeId type) {
         extern_type = Luau::get<Luau::ExternType>(Luau::follow(*extern_type->parent));
     }
     return {};
+}
+
+// The registered class a type is, walking a per-instance type up to it.
+std::string registered_class(Luau::TypeId type) {
+    return registered_class(Luau::get<Luau::ExternType>(Luau::follow(type)));
 }
 
 bool missing_render_member(const Luau::TypeError& error) {
@@ -601,6 +605,10 @@ struct WorkerEnv {
     // the lints that want types find none, as with no module at all. Luau's
     // TableLiteral lint reads the module on every table type, so a null one crashes it.
     std::unique_ptr<Luau::Module> untyped;
+    // The registry revision the definitions were built from.
+    std::uint64_t revision = 0;
+    // Each global library function by its type, so an alias of one is known.
+    std::unordered_map<Luau::TypeId, std::pair<std::string, std::string>> global_functions;
 
     void init() {
         untyped = std::make_unique<Luau::Module>(std::make_shared<Luau::TypeArena>());
@@ -614,18 +622,26 @@ struct WorkerEnv {
         // `game` is this place's root and `script` is the instance the module
         // belongs to, children and all, instead of their bare classes.
         frontend->prepareModuleScope = [this](const Luau::ModuleName& name, const Luau::ScopePtr& scope, bool) {
-            if (place == nullptr) {
-                return;
+            if (place != nullptr) {
+                if (const std::optional<Luau::TypeId> root = place->find(place->world->root)) {
+                    scope->bindings[Luau::AstName("game")] = Luau::Binding{*root};
+                }
+                if (const std::optional<InstanceId> owner = instance_of_module(name)) {
+                    if (const std::optional<Luau::TypeId> self = place->find(*owner)) {
+                        scope->bindings[Luau::AstName("script")] = Luau::Binding{*self};
+                        return;
+                    }
+                }
             }
-            if (const std::optional<Luau::TypeId> root = place->find(place->world->root)) {
-                scope->bindings[Luau::AstName("game")] = Luau::Binding{*root};
-            }
-            if (const std::optional<InstanceId> owner = instance_of_module(name)) {
-                if (const std::optional<Luau::TypeId> self = place->find(*owner)) {
-                    scope->bindings[Luau::AstName("script")] = Luau::Binding{*self};
+            // A buffer the place does not hold yet is the kind of script it says it is.
+            if (files.module_name != nullptr && name == *files.module_name && frontend != nullptr) {
+                const char* kind = files.type == Luau::SourceCode::Module ? "ModuleScript" : "Script";
+                if (const std::optional<Luau::TypeId> type = class_type(*frontend->globals.globalScope, kind)) {
+                    scope->bindings[Luau::AstName("script")] = Luau::Binding{*type};
                 }
             }
         };
+        revision = lua_registry_revision();
         try {
             Luau::unfreeze(frontend->globals.globalTypes);
             Luau::registerBuiltinGlobals(*frontend, frontend->globals);
@@ -757,6 +773,17 @@ void stamp_vector(Luau::Frontend& frontend) {
 void attach_api(WorkerEnv& env) {
     if (env.frontend == nullptr || env.frontend->globals.globalScope == nullptr) {
         return;
+    }
+    for (const auto& [symbol, binding] : env.frontend->globals.globalScope->bindings) {
+        const Luau::TableType* table = Luau::get<Luau::TableType>(Luau::follow(binding.typeId));
+        if (table == nullptr || symbol.global.value == nullptr) {
+            continue;
+        }
+        for (const auto& [name, prop] : table->props) {
+            if (prop.readTy && Luau::get<Luau::FunctionType>(Luau::follow(*prop.readTy)) != nullptr) {
+                env.global_functions[Luau::follow(*prop.readTy)] = {symbol.global.value, name};
+            }
+        }
     }
     env.find_child = std::make_shared<FindChildMagic>(&env);
     env.service_result = std::make_shared<NarrowMagic>(NarrowMagic::Kind::Service);
@@ -939,10 +966,11 @@ bool same_tree(const WorldSnap& a, const WorldSnap& b) {
 // Required modules stay cached in the frontend. A new snapshot can change
 // their source or what their paths reach, so recheck them. A script the
 // snapshot lacks is gone, and so is its cached module.
-void sync_world(WorkerEnv& env, const std::shared_ptr<const WorldSnap>& world) {
-    // A place with no root, as when completion could not read it, says nothing
-    // about the tree. The cached modules stay for the next real snapshot.
-    if (env.checked_world == world || world->nodes.empty()) {
+void sync_world(WorkerEnv& env, const std::shared_ptr<const WorldSnap>& world, bool keep_on_empty) {
+    // A place with no root, as when an analysis pass could not read it, says
+    // nothing about the tree. The cached modules stay for the next real
+    // snapshot. A completion asked with no place means none.
+    if (env.checked_world == world || (keep_on_empty && world->nodes.empty())) {
         return;
     }
     // The same tree keeps every cached module and the place's types. Only a
@@ -1069,7 +1097,7 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
     try {
         const std::string check_source = checked_source(self->source, parsed, mode);
         const std::string module_name = module_name_of(job.id);
-        sync_world(env, job.world);
+        sync_world(env, job.world, true);
         env.files.module_name = &module_name;
         env.files.world = job.world.get();
         env.files.source = &check_source;
@@ -1273,21 +1301,218 @@ const char* context_name(Luau::AutocompleteContext context) {
 
 // A function type as a completion row shows it: its parameters after the name,
 // and what it returns. `with_self` drops the first parameter, as a ':' call does.
-void describe_function(const Luau::FunctionType& fn, bool with_self, LuauSuggestion& out) {
+// A type as a completion row or hover writes it. A literal is its kind: "hi"
+// reads string and true reads boolean, as the value's type, not its value.
+std::string shown_type(Luau::TypeId type) {
+    const std::string text = Luau::toString(type);
+    std::string out;
+    for (std::size_t at = 0; at < text.size();) {
+        if (text[at] == '"') {
+            std::size_t end = at + 1;
+            while (end < text.size() && text[end] != '"') {
+                end += text[end] == '\\' ? 2 : 1;
+            }
+            out += "string";
+            at = end + 1;
+            continue;
+        }
+        const bool word_start = at == 0 || !(std::isalnum(static_cast<unsigned char>(text[at - 1])) || text[at - 1] == '_');
+        for (const char* literal : {"true", "false"}) {
+            const std::size_t length = std::strlen(literal);
+            const std::size_t after = at + length;
+            if (word_start && text.compare(at, length, literal) == 0 &&
+                (after >= text.size() || !(std::isalnum(static_cast<unsigned char>(text[after])) || text[after] == '_'))) {
+                out += "boolean";
+                at = after;
+                goto next;
+            }
+        }
+        out += text[at];
+        ++at;
+    next:;
+    }
+    return out;
+}
+
+// What a method's self is, as a title shows it: its class, else the table
+// the method was written on.
+std::string self_type(Luau::TypeId type) {
+    const std::string class_name = registered_class(Luau::follow(type));
+    return class_name.empty() ? std::string("table") : class_name;
+}
+
+// The source of a module the worker can read: the buffer being answered, or a
+// script in the place.
+const std::string* module_text(const WorkerEnv& env, const std::string& module) {
+    if (env.files.module_name != nullptr && env.files.source != nullptr && module == *env.files.module_name) {
+        return env.files.source;
+    }
+    const std::optional<InstanceId> id = instance_of_module(module);
+    if (env.files.world == nullptr || !id) {
+        return nullptr;
+    }
+    const NodeSnap* node = env.files.world->find(*id);
+    return node != nullptr && node->lua ? &node->source : nullptr;
+}
+
+// The text of a position's line in a source.
+std::string_view line_of(const std::string& text, unsigned line) {
+    std::size_t start = 0;
+    for (unsigned at = 0; at < line && start != std::string::npos; ++at) {
+        start = text.find('\n', start);
+        start = start == std::string::npos ? start : start + 1;
+    }
+    if (start == std::string::npos) {
+        return {};
+    }
+    const std::size_t end = text.find('\n', start);
+    return std::string_view(text).substr(start, end == std::string::npos ? std::string::npos : end - start);
+}
+
+// The name a definition wrote after `function`: `module:Test` in
+// `function module:Test()`. Empty for `function(` itself.
+std::string defined_name(const WorkerEnv& env, const Luau::FunctionType& fn) {
+    if (!fn.definition || !fn.definition->definitionModuleName) {
+        return {};
+    }
+    const std::string* text = module_text(env, *fn.definition->definitionModuleName);
+    if (text == nullptr) {
+        return {};
+    }
+    const Luau::Location& where = fn.definition->definitionLocation;
+    const std::string_view line = line_of(*text, where.begin.line);
+    const std::size_t column = std::min<std::size_t>(where.begin.column, line.size());
+    const std::size_t keyword = line.substr(0, column + 8).rfind("function");
+    if (keyword == std::string_view::npos) {
+        return {};
+    }
+    const std::size_t open = line.find('(', keyword);
+    if (open == std::string_view::npos) {
+        return {};
+    }
+    std::string name(line.substr(keyword + 8, open - keyword - 8));
+    name.erase(std::remove_if(name.begin(), name.end(), [](char unit) { return unit == ' ' || unit == '\t'; }), name.end());
+    return name;
+}
+
+// The function node a definition is, in a module checked with its types kept.
+struct FindFunction : Luau::AstVisitor {
+    Luau::Location where;
+    Luau::AstExprFunction* found = nullptr;
+
+    bool visit(Luau::AstExprFunction* node) override {
+        if (node->location == where) {
+            found = node;
+            return false;
+        }
+        return found == nullptr;
+    }
+};
+
+// The returns of one function, not of the functions inside it.
+struct FindReturns : Luau::AstVisitor {
+    Luau::AstExprFunction* self = nullptr;
+    std::vector<Luau::AstStatReturn*> returns;
+
+    bool visit(Luau::AstExprFunction* node) override { return node == self; }
+    bool visit(Luau::AstStatReturn* node) override {
+        returns.push_back(node);
+        return true;
+    }
+};
+
+// What a function's return statements say, as the resolver judged them:
+// `none` when no return gives a value, `disagree` when two give different
+// counts or types, and `first` the types the first return gives. Comparing
+// types needs a module checked with its types kept.
+void judge_returns(const WorkerEnv& env, const Luau::FunctionType& fn, bool& none, bool& disagree,
+                   std::vector<std::string>* first_types = nullptr) {
+    none = false;
+    disagree = false;
+    if (!fn.definition || !fn.definition->definitionModuleName || env.frontend == nullptr) {
+        return;
+    }
+    const std::string& module_name = *fn.definition->definitionModuleName;
+    const Luau::SourceModule* source = env.frontend->getSourceModule(module_name);
+    if (source == nullptr || source->root == nullptr) {
+        return;
+    }
+    FindFunction find;
+    find.where = fn.definition->definitionLocation;
+    source->root->visit(&find);
+    if (find.found == nullptr) {
+        return;
+    }
+    FindReturns returns;
+    returns.self = find.found;
+    find.found->body->visit(&returns);
+    none = std::all_of(returns.returns.begin(), returns.returns.end(),
+                       [](const Luau::AstStatReturn* statement) { return statement->list.size == 0; });
+    const Luau::ModulePtr module = env.frontend->moduleResolver.getModule(module_name);
+    if (module == nullptr || module->astTypes.empty()) {
+        return;
+    }
+    std::optional<std::vector<std::string>> first;
+    for (Luau::AstStatReturn* statement : returns.returns) {
+        std::vector<std::string> shown;
+        for (Luau::AstExpr* expr : statement->list) {
+            const Luau::TypeId* type = module->astTypes.find(expr);
+            shown.push_back(type != nullptr ? shown_type(*type) : std::string("?"));
+        }
+        if (!first) {
+            first = std::move(shown);
+            if (first_types != nullptr) {
+                *first_types = *first;
+            }
+        } else if (*first != shown) {
+            disagree = true;
+            return;
+        }
+    }
+}
+
+// Whether a function was written in another script than the one being
+// answered. A required module's function reads as its first return says.
+bool defined_elsewhere(const WorkerEnv& env, const Luau::FunctionType& fn) {
+    return fn.definition && fn.definition->definitionModuleName && env.files.module_name != nullptr &&
+           *fn.definition->definitionModuleName != *env.files.module_name;
+}
+
+std::string pack_text(const std::vector<std::string>& types) {
+    if (types.size() == 1) {
+        return types[0];
+    }
+    std::string out = "(";
+    for (std::size_t index = 0; index < types.size(); ++index) {
+        out += (index == 0 ? "" : ", ") + types[index];
+    }
+    return out + ")";
+}
+
+// A function type as rows and hovers use it. Every parameter is listed, self
+// too for a method; `params` leaves self out when the function is called
+// with ':', as `with_self` says.
+void describe_function(const WorkerEnv* env, const Luau::FunctionType& fn, bool with_self, LuauSuggestion& out) {
     const auto [args, args_tail] = Luau::flatten(fn.argTypes);
     std::string params = "(";
     bool first = true;
-    for (std::size_t index = with_self ? 1 : 0; index < args.size(); ++index) {
-        params += first ? "" : ", ";
-        first = false;
+    for (std::size_t index = 0; index < args.size(); ++index) {
         std::string name;
         if (index < fn.argNames.size() && fn.argNames[index] && !fn.argNames[index]->name.empty()) {
             name = fn.argNames[index]->name;
-            params += name + ": ";
         }
-        const std::string type = Luau::toString(args[index]);
-        params += type;
-        out.param_list.emplace_back(std::move(name), type);
+        const bool self = index == 0 && fn.hasSelf;
+        if (self && name.empty()) {
+            name = "self";
+        }
+        const std::string type = self ? self_type(args[index]) : shown_type(args[index]);
+        out.param_list.emplace_back(name, type);
+        if (index == 0 && (with_self || (fn.hasSelf && with_self))) {
+            continue;
+        }
+        params += first ? "" : ", ";
+        first = false;
+        params += name.empty() ? type : name + ": " + type;
     }
     // Luau gives a function it inferred a hidden `...` tail. Only a written one shows.
     if (args_tail) {
@@ -1300,11 +1525,11 @@ void describe_function(const Luau::FunctionType& fn, bool with_self, LuauSuggest
     out.params = params + ")";
     const auto [rets, rets_tail] = Luau::flatten(fn.retTypes);
     if (rets.size() == 1 && !rets_tail) {
-        out.returns = Luau::toString(rets[0]);
+        out.returns = shown_type(rets[0]);
     } else if (!rets.empty() || rets_tail) {
         std::string pack = "(";
         for (std::size_t index = 0; index < rets.size(); ++index) {
-            pack += (index == 0 ? "" : ", ") + Luau::toString(rets[index]);
+            pack += (index == 0 ? "" : ", ") + shown_type(rets[index]);
         }
         if (rets_tail) {
             pack += rets.empty() ? "..." : ", ...";
@@ -1312,6 +1537,18 @@ void describe_function(const Luau::FunctionType& fn, bool with_self, LuauSuggest
         out.returns = pack + ")";
     }
     out.function = true;
+    out.method = fn.hasSelf;
+    if (env != nullptr) {
+        out.defined_as = defined_name(*env, fn);
+        std::vector<std::string> first_return;
+        judge_returns(*env, fn, out.returns_none, out.returns_disagree, &first_return);
+        // A required module's function that returns different things reads
+        // as its first return, as the resolver read it.
+        if (out.returns_disagree && defined_elsewhere(*env, fn) && !first_return.empty()) {
+            out.returns = pack_text(first_return);
+            out.returns_disagree = false;
+        }
+    }
 }
 
 // Checks the request's buffer with full type graphs kept and calls `answer`
@@ -1335,7 +1572,7 @@ std::string with_checked_buffer(WorkerEnv& env, const CompleteRequest& request, 
     const std::string display = self != nullptr && !self->name.empty() ? self->name : std::string("script");
     std::string error;
     try {
-        sync_world(env, request.world);
+        sync_world(env, request.world, false);
         env.files.module_name = &module_name;
         env.files.world = request.world.get();
         env.files.source = &check_source;
@@ -1408,7 +1645,16 @@ void describe_object(const Luau::Module& module, Luau::AstExpr* object, std::str
     if (auto* global = object->as<Luau::AstExprGlobal>()) {
         owner = global->name.value;
     }
+    if (object->is<Luau::AstExprConstantString>()) {
+        owner = "string";
+    }
     if (const Luau::TypeId* type = module.astTypes.find(object)) {
+        const Luau::TypeId followed = Luau::follow(*type);
+        const auto* primitive = Luau::get<Luau::PrimitiveType>(followed);
+        if ((primitive != nullptr && primitive->type == Luau::PrimitiveType::String) ||
+            (Luau::get<Luau::SingletonType>(followed) != nullptr && Luau::toString(followed).rfind('"', 0) == 0)) {
+            owner = "string";
+        }
         const std::string class_name = registered_class(*type);
         if (!class_name.empty()) {
             owner = class_name;
@@ -1420,17 +1666,216 @@ void describe_object(const Luau::Module& module, Luau::AstExpr* object, std::str
     }
 }
 
-LuauTypeAt type_at_offset(const Luau::SourceModule& source, const Luau::Module& module, const std::string& text,
-                          std::size_t offset) {
+// The `local` statement that declares a local.
+struct FindDeclaration : Luau::AstVisitor {
+    const Luau::AstLocal* local = nullptr;
+    Luau::AstStatLocal* found = nullptr;
+
+    bool visit(Luau::AstStatLocal* node) override {
+        for (Luau::AstLocal* var : node->vars) {
+            if (var == local) {
+                found = node;
+            }
+        }
+        return found == nullptr;
+    }
+};
+
+// The table field a statement writes, as `module.new` in `module.new = f`
+// or `function module.new()`.
+bool written_field(Luau::AstExpr* target, const Luau::AstLocal*& table, std::string& field) {
+    auto* index = target->as<Luau::AstExprIndexName>();
+    auto* object = index != nullptr ? index->expr->as<Luau::AstExprLocal>() : nullptr;
+    if (object == nullptr) {
+        return false;
+    }
+    table = object->local;
+    field = index->index.value;
+    return true;
+}
+
+// What a module leaves in a field it first filled with this function, when a
+// later top-level write replaces it: `module.new = function() ... end` after
+// `function module.new() ... end`. The runtime keeps the last write; Luau
+// types the field by the first.
+std::optional<Luau::TypeId> replaced_by(const WorkerEnv& env, const Luau::FunctionType& fn) {
+    if (!fn.definition || !fn.definition->definitionModuleName || env.frontend == nullptr) {
+        return std::nullopt;
+    }
+    const std::string& module_name = *fn.definition->definitionModuleName;
+    const Luau::SourceModule* source = env.frontend->getSourceModule(module_name);
+    const Luau::ModulePtr module = env.frontend->moduleResolver.getModule(module_name);
+    if (source == nullptr || source->root == nullptr || module == nullptr || module->astTypes.empty()) {
+        return std::nullopt;
+    }
+    const Luau::Location& where = fn.definition->definitionLocation;
+    const Luau::AstLocal* table = nullptr;
+    std::string field;
+    Luau::AstExpr* last = nullptr;
+    const auto wrote = [&](Luau::AstExpr* target, Luau::AstExpr* value) {
+        const Luau::AstLocal* written_table = nullptr;
+        std::string written;
+        if (!written_field(target, written_table, written)) {
+            return;
+        }
+        if (table == nullptr && value->is<Luau::AstExprFunction>() && value->location == where) {
+            table = written_table;
+            field = written;
+            last = value;
+        } else if (table != nullptr && written_table == table && written == field) {
+            last = value;
+        }
+    };
+    for (Luau::AstStat* stat : source->root->body) {
+        if (auto* defined = stat->as<Luau::AstStatFunction>()) {
+            wrote(defined->name, defined->func);
+        } else if (auto* assign = stat->as<Luau::AstStatAssign>()) {
+            for (std::size_t index = 0; index < assign->vars.size && index < assign->values.size; ++index) {
+                wrote(assign->vars.data[index], assign->values.data[index]);
+            }
+        }
+    }
+    if (last == nullptr || last->location == where) {
+        return std::nullopt;
+    }
+    const Luau::TypeId* type = module->astTypes.find(last);
+    return type != nullptr ? std::optional<Luau::TypeId>(*type) : std::nullopt;
+}
+
+// A function type, or what its module replaced it with.
+const Luau::FunctionType* kept_function(const WorkerEnv& env, Luau::TypeId& type) {
+    const auto* fn = Luau::get<Luau::FunctionType>(Luau::follow(type));
+    if (fn == nullptr) {
+        return nullptr;
+    }
+    if (const std::optional<Luau::TypeId> replaced = replaced_by(env, *fn)) {
+        if (const auto* kept = Luau::get<Luau::FunctionType>(Luau::follow(*replaced))) {
+            type = *replaced;
+            return kept;
+        }
+    }
+    return fn;
+}
+
+// The call a local takes its value from, and which of the call's values it
+// takes: 1 for y in `local x, y = f()`. A call in parentheses gives one value
+// and is not followed.
+Luau::AstExprCall* value_call(const Luau::SourceModule& source, Luau::ExprOrLocal& found, std::size_t& value) {
+    const Luau::AstLocal* local = found.getLocal();
+    if (local == nullptr && found.getExpr() != nullptr) {
+        if (auto* named = found.getExpr()->as<Luau::AstExprLocal>()) {
+            local = named->local;
+        }
+    }
+    if (local == nullptr || source.root == nullptr) {
+        return nullptr;
+    }
+    FindDeclaration find;
+    find.local = local;
+    source.root->visit(&find);
+    if (find.found == nullptr || find.found->values.size == 0) {
+        return nullptr;
+    }
+    std::size_t index = 0;
+    while (index < find.found->vars.size && find.found->vars.data[index] != local) {
+        ++index;
+    }
+    const std::size_t last = find.found->values.size - 1;
+    value = index < last ? 0 : index - last;
+    return find.found->values.data[std::min(index, last)]->as<Luau::AstExprCall>();
+}
+
+// What a local holds when the call it takes its value from reads otherwise
+// than Luau types it: the replaced function's return, or, when the returns
+// disagree, nothing for a function written here and the first return's type
+// for a required one. Nothing to say when Luau's type stands.
+struct CallValue {
+    std::optional<Luau::TypeId> type;
+    std::optional<std::string> shown;
+};
+
+std::optional<CallValue> call_value(const WorkerEnv& env, const Luau::SourceModule& source,
+                                    const Luau::Module& module, Luau::ExprOrLocal& found) {
+    std::size_t value = 0;
+    Luau::AstExprCall* call = value_call(source, found, value);
+    const Luau::TypeId* callee = call != nullptr ? module.astTypes.find(call->func) : nullptr;
+    if (callee == nullptr) {
+        return std::nullopt;
+    }
+    Luau::TypeId kept = *callee;
+    const Luau::FunctionType* fn = kept_function(env, kept);
+    if (fn == nullptr) {
+        return std::nullopt;
+    }
+    CallValue out;
+    if (kept != *callee) {
+        const auto [rets, tail] = Luau::flatten(fn->retTypes);
+        if (value < rets.size()) {
+            out.type = rets[value];
+        } else {
+            out.shown = std::string();
+        }
+        return out;
+    }
+    bool none = false;
+    bool disagree = false;
+    std::vector<std::string> first;
+    judge_returns(env, *fn, none, disagree, &first);
+    if (!disagree) {
+        return std::nullopt;
+    }
+    out.shown = defined_elsewhere(env, *fn) && value < first.size() ? first[value] : std::string();
+    return out;
+}
+
+LuauTypeAt type_at_offset(const WorkerEnv& env, const Luau::SourceModule& source, const Luau::Module& module,
+                          const std::string& text, std::size_t offset) {
     LuauTypeAt out;
     out.ran = true;
     const Luau::Position at = position_of(text, offset);
     Luau::ExprOrLocal found = Luau::findExprOrLocalAtPosition(source, at);
     std::optional<Luau::TypeId> type;
     bool with_self = false;
+    // A key where a table is written: `{ Gold = 1 }` has Gold's value's type.
+    for (Luau::AstNode* node : Luau::findAstAncestryOfPosition(source, at)) {
+        auto* table = node->as<Luau::AstExprTable>();
+        if (table == nullptr) {
+            continue;
+        }
+        for (const Luau::AstExprTable::Item& item : table->items) {
+            auto* key = item.key != nullptr ? item.key->as<Luau::AstExprConstantString>() : nullptr;
+            if (key == nullptr || !key->location.containsClosed(at)) {
+                continue;
+            }
+            if (const Luau::TypeId* value = module.astTypes.find(item.value)) {
+                out.name = std::string(key->value.data, key->value.size);
+                out.kind = "field";
+                type = *value;
+            }
+        }
+    }
+    if (type) {
+        found = Luau::ExprOrLocal{};
+    }
+    // Whether a local is a parameter of a function around the position.
+    const auto parameter = [&](Luau::AstLocal* local) {
+        for (Luau::AstNode* node : Luau::findAstAncestryOfPosition(source, at)) {
+            if (auto* fn = node->as<Luau::AstExprFunction>()) {
+                if (fn->self == local) {
+                    return true;
+                }
+                for (Luau::AstLocal* arg : fn->args) {
+                    if (arg == local) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    };
     if (Luau::AstLocal* local = found.getLocal()) {
         out.name = local->name.value;
-        out.kind = "local";
+        out.kind = parameter(local) ? "parameter" : "local";
         type = local_type(module, local);
     } else if (Luau::AstExpr* expr = found.getExpr()) {
         if (const Luau::TypeId* known = module.astTypes.find(expr)) {
@@ -1438,7 +1883,7 @@ LuauTypeAt type_at_offset(const Luau::SourceModule& source, const Luau::Module& 
         }
         if (auto* named = expr->as<Luau::AstExprLocal>()) {
             out.name = named->local->name.value;
-            out.kind = "local";
+            out.kind = parameter(named->local) ? "parameter" : "local";
         } else if (auto* global = expr->as<Luau::AstExprGlobal>()) {
             out.name = global->name.value;
             out.kind = "global";
@@ -1447,6 +1892,11 @@ LuauTypeAt type_at_offset(const Luau::SourceModule& source, const Luau::Module& 
             out.kind = "member";
             with_self = index->op == ':';
             describe_object(module, index->expr, out.described.owner, out.object_instance_known, out.object_instance);
+            if (auto* object_local = index->expr->as<Luau::AstExprLocal>()) {
+                out.object_name = object_local->local->name.value;
+            } else if (auto* object_global = index->expr->as<Luau::AstExprGlobal>()) {
+                out.object_name = object_global->name.value;
+            }
         } else {
             out.kind = "expression";
         }
@@ -1456,7 +1906,19 @@ LuauTypeAt type_at_offset(const Luau::SourceModule& source, const Luau::Module& 
     }
     out.found = true;
     out.described.name = out.name;
-    out.described.type = Luau::toString(*type);
+    if (out.kind == "local") {
+        if (const std::optional<CallValue> held = call_value(env, source, module, found)) {
+            if (!held->type) {
+                out.described.type = *held->shown;
+                return out;
+            }
+            type = *held->type;
+        }
+    }
+    Luau::TypeId kept = *type;
+    kept_function(env, kept);
+    type = kept;
+    out.described.type = shown_type(*type);
     // A table Luau named after the local that holds it prints as that name,
     // which says nothing. Its shape does.
     if (out.described.type == out.name) {
@@ -1465,12 +1927,20 @@ LuauTypeAt type_at_offset(const Luau::SourceModule& source, const Luau::Module& 
         out.described.type = Luau::toString(*type, shape);
     }
     out.class_name = registered_class(*type);
+    if (const auto* own = Luau::get<Luau::ExternType>(Luau::follow(*type))) {
+        out.raw_class = own->name;
+    }
+    const auto global_function = env.global_functions.find(Luau::follow(*type));
+    if (global_function != env.global_functions.end()) {
+        out.function_owner = global_function->second.first;
+        out.function_name = global_function->second.second;
+    }
     if (const std::optional<InstanceId> tagged = tagged_instance(*type)) {
         out.instance_known = true;
         out.instance = *tagged;
     }
     if (const auto* fn = Luau::get<Luau::FunctionType>(Luau::follow(*type))) {
-        describe_function(*fn, with_self, out.described);
+        describe_function(&env, *fn, with_self, out.described);
     }
     return out;
 }
@@ -1484,10 +1954,31 @@ LuauTypeAt type_job(WorkerEnv& env, const CompleteRequest& request) {
             out.ran = true;
             return;
         }
-        out = type_at_offset(*source, *module, request.source, request.offset);
+        out = type_at_offset(env, *source, *module, request.source, request.offset);
     });
     return out;
 }
+
+// The globals a chunk defines: `function name()` and `name = value`.
+struct DefinedGlobals : Luau::AstVisitor {
+    std::unordered_set<std::string> names;
+
+    bool visit(Luau::AstStatFunction* node) override {
+        if (auto* global = node->name->as<Luau::AstExprGlobal>()) {
+            names.insert(global->name.value);
+        }
+        return true;
+    }
+
+    bool visit(Luau::AstStatAssign* node) override {
+        for (Luau::AstExpr* target : node->vars) {
+            if (auto* global = target->as<Luau::AstExprGlobal>()) {
+                names.insert(global->name.value);
+            }
+        }
+        return true;
+    }
+};
 
 // The completion at the caret, from a buffer already checked.
 LuauCompletion completion_at(WorkerEnv& env, const std::string& module_name, const std::string& text,
@@ -1500,16 +1991,75 @@ LuauCompletion completion_at(WorkerEnv& env, const std::string& module_name, con
         });
     out.context = context_name(result.context);
     const Luau::ModulePtr module = env.frontend->moduleResolver.getModule(module_name);
+    const Luau::Position at = position_of(text, offset);
     // After '.' or ':', the expression before it.
     for (auto node = result.ancestry.rbegin(); node != result.ancestry.rend() && module != nullptr; ++node) {
         if (auto* index = (*node)->as<Luau::AstExprIndexName>()) {
-            bool known = false;
-            InstanceId instance = 0;
-            describe_object(*module, index->expr, out.receiver_class, known, instance);
+            std::string named;
+            describe_object(*module, index->expr, named, out.receiver_instance_known, out.receiver_instance);
+            if (const Luau::TypeId* type = module->astTypes.find(index->expr)) {
+                out.receiver_class = registered_class(*type);
+            }
+            if (const Luau::TypeId* type = module->astTypes.find(index->expr)) {
+                if (const auto* primitive = Luau::get<Luau::PrimitiveType>(Luau::follow(*type))) {
+                    out.receiver_type = primitive->type == Luau::PrimitiveType::String ? "string" : "";
+                } else if (Luau::get<Luau::SingletonType>(Luau::follow(*type)) != nullptr) {
+                    out.receiver_type = Luau::toString(*type).rfind('"', 0) == 0 ? "string" : "";
+                }
+            }
             if (index->expr->is<Luau::AstExprGlobal>()) {
                 out.receiver_global = index->expr->as<Luau::AstExprGlobal>()->name.value;
             }
             break;
+        }
+    }
+    DefinedGlobals defined;
+    if (const Luau::SourceModule* source = env.frontend->getSourceModule(module_name); source != nullptr && source->root) {
+        source->root->visit(&defined);
+    }
+    // The locals in scope at the caret, and where each was declared. A local is
+    // not in scope inside its own initializer.
+    std::unordered_map<std::string, std::uint32_t> locals;
+    std::unordered_set<const Luau::AstLocal*> declaring;
+    for (Luau::AstNode* node : result.ancestry) {
+        if (auto* stat = node->as<Luau::AstStatLocal>()) {
+            for (Luau::AstLocal* var : stat->vars) {
+                declaring.insert(var);
+            }
+        }
+    }
+    if (module != nullptr) {
+        for (Luau::ScopePtr scope = Luau::findScopeAtPosition(*module, at); scope != nullptr; scope = scope->parent) {
+            for (const auto& [symbol, binding] : scope->bindings) {
+                if (symbol.local == nullptr || locals.count(symbol.local->name.value) != 0 ||
+                    declaring.count(symbol.local) != 0) {
+                    continue;
+                }
+                const Luau::Location& where = symbol.local->location;
+                if (where.begin > at) {
+                    continue;
+                }
+                locals.emplace(symbol.local->name.value, where.begin.line * 65536u + where.begin.column);
+            }
+        }
+    }
+    std::vector<Luau::AstLocal*> repeat_locals;
+    for (Luau::AstNode* node : result.ancestry) {
+        auto* loop = node->as<Luau::AstStatRepeat>();
+        if (loop == nullptr || loop->condition == nullptr || !loop->condition->location.containsClosed(at)) {
+            continue;
+        }
+        for (Luau::AstStat* stat : loop->body->body) {
+            if (auto* declared = stat->as<Luau::AstStatLocal>()) {
+                for (Luau::AstLocal* var : declared->vars) {
+                    repeat_locals.push_back(var);
+                    locals[var->name.value] = var->location.begin.line * 65536u + var->location.begin.column;
+                }
+            } else if (auto* function = stat->as<Luau::AstStatLocalFunction>()) {
+                repeat_locals.push_back(function->name);
+                locals[function->name->name.value] =
+                    function->name->location.begin.line * 65536u + function->name->location.begin.column;
+            }
         }
     }
     for (const auto& [name, entry] : result.entryMap) {
@@ -1517,19 +2067,62 @@ LuauCompletion completion_at(WorkerEnv& env, const std::string& module_name, con
         item.name = name;
         item.kind = kind_name(entry.kind);
         if (entry.type) {
-            item.type = Luau::toString(*entry.type);
-            if (const auto* fn = Luau::get<Luau::FunctionType>(Luau::follow(*entry.type))) {
-                describe_function(*fn, entry.indexedWithSelf, item);
+            Luau::TypeId kept = *entry.type;
+            const Luau::FunctionType* fn = kept_function(env, kept);
+            item.type = shown_type(kept);
+            if (fn != nullptr) {
+                describe_function(&env, *fn, entry.indexedWithSelf && fn->hasSelf, item);
             }
         }
         item.call = entry.parens != Luau::ParenthesesRecommendation::None;
         item.wrong_index = entry.wrongIndexType;
         item.type_correct = entry.typeCorrect != Luau::TypeCorrectKind::None;
         if (entry.containingExternType && *entry.containingExternType != nullptr) {
-            item.owner = (*entry.containingExternType)->name == "vector" ? "Vector3"
-                                                                        : (*entry.containingExternType)->name;
+            item.owner = registered_class(*entry.containingExternType);
         } else if (!out.receiver_global.empty()) {
             item.owner = out.receiver_global;
+        }
+        if (entry.type) {
+            item.class_name = registered_class(*entry.type);
+        }
+        if (entry.kind == Luau::AutocompleteEntryKind::Binding) {
+            const bool own_initializer = std::any_of(declaring.begin(), declaring.end(), [&](const Luau::AstLocal* var) {
+                return name == var->name.value;
+            });
+            if (own_initializer && locals.find(name) == locals.end() && defined.names.count(name) == 0) {
+                continue;
+            }
+            const auto local = locals.find(name);
+            if (local != locals.end()) {
+                item.local = true;
+                item.declared = local->second;
+            } else {
+                item.defined_here = defined.names.count(name) != 0;
+            }
+        }
+        out.items.push_back(std::move(item));
+    }
+    for (Luau::AstLocal* var : repeat_locals) {
+        const std::string name = var->name.value;
+        const bool listed = std::any_of(out.items.begin(), out.items.end(),
+                                        [&](const LuauSuggestion& item) { return item.name == name && item.local; });
+        if (listed || module == nullptr) {
+            continue;
+        }
+        out.items.erase(std::remove_if(out.items.begin(), out.items.end(),
+                                       [&](const LuauSuggestion& item) { return item.name == name; }),
+                        out.items.end());
+        LuauSuggestion item;
+        item.name = name;
+        item.kind = "binding";
+        item.local = true;
+        item.declared = locals[name];
+        if (const std::optional<Luau::TypeId> type = local_type(*module, var)) {
+            item.type = shown_type(*type);
+            item.class_name = registered_class(*type);
+            if (const auto* fn = Luau::get<Luau::FunctionType>(Luau::follow(*type))) {
+                describe_function(&env, *fn, false, item);
+            }
         }
         out.items.push_back(std::move(item));
     }
@@ -1549,7 +2142,7 @@ LuauFacts facts_job(WorkerEnv& env, const CompleteRequest& request) {
         }
         for (std::size_t offset : request.offsets) {
             if (source != nullptr && module != nullptr) {
-                out.types.push_back(type_at_offset(*source, *module, request.source, offset));
+                out.types.push_back(type_at_offset(env, *source, *module, request.source, offset));
             } else {
                 out.types.emplace_back();
             }
@@ -1846,8 +2439,10 @@ void ScriptAnalysis::ensure_worker() {
 void ScriptAnalysis::run() {
     // This thread never calls the play VM and never takes the DataModel lock.
     // Jobs carry a copy of Source and Name taken on the gameplay thread.
-    WorkerEnv env;
-    env.init();
+    // On the heap: its frontend points at its own resolvers, so it is rebuilt
+    // in place, not moved, when the registry changed.
+    auto owned = std::make_unique<WorkerEnv>();
+    owned->init();
     while (true) {
         Job job;
         std::shared_ptr<CompleteRequest> request;
@@ -1864,6 +2459,11 @@ void ScriptAnalysis::run() {
                 state_->serving = request;
             }
         }
+        if (owned->revision != lua_registry_revision()) {
+            owned = std::make_unique<WorkerEnv>();
+            owned->init();
+        }
+        WorkerEnv& env = *owned;
         if (request) {
             if (request->facts) {
                 request->answer->facts = facts_job(env, *request);
@@ -1903,9 +2503,9 @@ void ScriptAnalysis::run() {
             ++state_->inflight;
             state_->running = job.id;
         }
-        Finished finished = analyze_job(env, job);
-        if (env.frontend != nullptr) {
-            state_->cached_modules.store(env.frontend->sourceNodes.size(), std::memory_order_relaxed);
+        Finished finished = analyze_job(*owned, job);
+        if (owned->frontend != nullptr) {
+            state_->cached_modules.store(owned->frontend->sourceNodes.size(), std::memory_order_relaxed);
         }
         {
             std::lock_guard<std::mutex> lock(state_->mu);

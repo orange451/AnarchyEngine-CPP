@@ -78,6 +78,22 @@ struct LuauSuggestion {
     bool type_correct = false;
     // A method, declared to take self.
     bool method = false;
+    // The registered class of the value, such as Folder for a child instance.
+    std::string class_name;
+    // The name its definition wrote after `function`, such as module:Test or
+    // module.new. Empty for an anonymous function or a host function.
+    std::string defined_as;
+    // Its returns disagree, as `return 1` in one place and `return "x"` in
+    // another. `returns` then claims nothing.
+    bool returns_disagree = false;
+    // Its body returns no value anywhere, as `function() end`.
+    bool returns_none = false;
+    // A local in scope at the position, and where it was declared, as
+    // line * 65536 + column, so the nearest can come first.
+    bool local = false;
+    std::uint32_t declared = 0;
+    // A global this script defines, as `function take() end` does.
+    bool defined_here = false;
 };
 
 struct LuauTypeAt;
@@ -92,6 +108,10 @@ struct LuauCompletion {
     // After '.' or ':', what the expression before it is. Empty otherwise.
     std::string receiver_class;
     std::string receiver_global;
+    bool receiver_instance_known = false;
+    InstanceId receiver_instance = 0;
+    // The receiver's type when it is a primitive, such as string.
+    std::string receiver_type;
 };
 
 // What Luau's type checker knows about the name or expression at a position.
@@ -106,13 +126,22 @@ struct LuauTypeAt {
     // them. For a member, `described.owner` is its class or library.
     LuauSuggestion described;
     // The registered class of the value, and the instance it is, when Luau
-    // knows. The place's instances each have their own type.
+    // knows. The place's instances each have their own type. `raw_class` is
+    // the value's own class, before walking up to a registered one, such as a
+    // signal's type.
     std::string class_name;
+    std::string raw_class;
+    // The value is this global library function, as `local make = Instance.new`
+    // is Instance.new.
+    std::string function_owner;
+    std::string function_name;
     bool instance_known = false;
     InstanceId instance = 0;
-    // For a member, the instance whose member it is, as FindFirstChild's receiver.
+    // For a member, the instance whose member it is, as FindFirstChild's receiver,
+    // and the object's name when it is written as one, such as `module`.
     bool object_instance_known = false;
     InstanceId object_instance = 0;
+    std::string object_name;
     std::string error;
 };
 

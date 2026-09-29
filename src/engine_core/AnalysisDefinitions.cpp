@@ -181,6 +181,46 @@ std::string operand_type(const char* registered) {
     return out.empty() ? "any" : out;
 }
 
+// A signal's own type, such as Signal_RunService_Heartbeat: a Signal whose
+// Connect takes a callback of the parameters it passes, and whose Wait returns
+// them. Declared after the classes, as Luau reads the file whole.
+struct SignalType {
+    std::string name;
+    std::string params;
+    std::string values;
+};
+
+std::vector<SignalType>& signal_types() {
+    static std::vector<SignalType> types;
+    return types;
+}
+
+std::string signal_type(const std::string& owner, const LuaField& field) {
+    SignalType type;
+    type.name = "Signal_" + owner + "_" + field.name;
+    for (int index = 0; index < field.param_count; ++index) {
+        const LuaParam& param = field.params[index];
+        const std::string luau = to_luau_type(param.type_name != nullptr && param.type_name[0] != '\0' ? param.type_name : "any");
+        type.params += (index > 0 ? ", " : "") + std::string(param.name != nullptr && identifier(param.name) ? std::string(param.name) + ": " : "") + luau;
+        type.values += (index > 0 ? ", " : "") + luau;
+    }
+    signal_types().push_back(type);
+    return type.name;
+}
+
+void emit_signal_types(std::ostringstream& out) {
+    if (!lua_class_known("Signal") || !lua_class_known("Connection")) {
+        return;
+    }
+    for (const SignalType& type : signal_types()) {
+        out << "declare extern type " << type.name << " extends Signal with\n";
+        out << "    function Connect(self, callback: (" << type.params << ") -> ()): Connection\n";
+        out << "    function Wait(self): (" << type.values << ")\n";
+        out << "end\n\n";
+    }
+    signal_types().clear();
+}
+
 void emit_class(std::ostringstream& out, const std::string& name) {
     if (name == "Vector3" || !identifier(name)) {
         return;
@@ -214,7 +254,10 @@ void emit_class(std::ostringstream& out, const std::string& name) {
         if (!field.writable) {
             out << "read ";
         }
-        out << field.name << ": " << to_luau_type(type_name) << "\n";
+        // A signal that passes values has its own type, so a callback's
+        // parameters are typed where it is written.
+        const bool signal = field.params != nullptr && field.param_count > 0 && std::strcmp(type_name, "Signal") == 0;
+        out << field.name << ": " << (signal ? signal_type(name, field) : to_luau_type(type_name)) << "\n";
     }
     // Declared as properties, not methods: a method's first argument is always
     // this class, and `2 * v` passes the number first. Luau moves __ names into
@@ -332,6 +375,7 @@ std::string lua_analysis_definitions() {
         }
     }
 
+    emit_signal_types(out);
     if (lua_class_known("Game")) {
         out << "declare game: Game\n";
     }

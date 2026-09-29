@@ -2,10 +2,20 @@
 
 #include "LuaApi.hpp"
 
+#include <chrono>
+#include <memory>
+#include <optional>
+
 #include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace engine_core {
+class ScriptAnalysis;
+struct LuauAnswer;
+struct LuauFacts;
+}  // namespace engine_core
 
 namespace ide {
 
@@ -97,7 +107,7 @@ struct HoverInfo {
 // return does not replace that list. `local x, y = Module:Test()` types each
 // name from the value in that position.
 // `script_global` is false on the command line, where `script` is nil.
-HoverInfo hover_luau(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world = {},
+HoverInfo resolver_hover(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world = {},
                      std::uint32_t script_id = 0, bool script_global = true);
 
 // `world` is the live instance tree. `script_id` is the script being edited.
@@ -121,7 +131,90 @@ HoverInfo hover_luau(std::string_view source, int index, const std::vector<engin
 // `local UserInputService = game:GetService("UserInputService")`.
 // `script_global` is false on the command line, where `script` is nil. The
 // command line does not complete requires.
-CompletionList complete_luau(std::string_view source, int caret, const std::vector<engine_core::LuaNode>& world = {},
+CompletionList resolver_complete(std::string_view source, int caret, const std::vector<engine_core::LuaNode>& world = {},
                              std::uint32_t script_id = 0, bool script_global = true);
+
+// Completion from Luau's own type checker, with the registry's docs, children,
+// services, requires, and directives. plan_completion reads the text alone and
+// says what Luau must answer; finish_completion builds the list from those
+// answers. A UI asks between the two without waiting. `list` is what shows
+// before an answer, complete when nothing is asked.
+struct CompletionPlanState;
+struct CompletionPlan {
+    CompletionList list;
+    bool needs_luau = false;
+    // The completion at this byte offset, or none when it is npos, and the type
+    // at each of `offsets`, as ScriptAnalysis::luau_facts takes them.
+    std::size_t caret_offset = std::string::npos;
+    std::vector<std::size_t> offsets;
+    // The text to send: the source with open blocks closed at its end.
+    std::string luau_source;
+    std::shared_ptr<const CompletionPlanState> state;
+};
+CompletionPlan plan_completion(std::string_view source, int caret, const std::vector<engine_core::LuaNode>& world,
+                               std::uint32_t script_id, bool script_global);
+CompletionList finish_completion(const CompletionPlan& plan, const engine_core::LuauFacts& facts);
+
+struct HoverPlanState;
+struct HoverPlan {
+    HoverInfo info;
+    bool needs_luau = false;
+    std::vector<std::size_t> offsets;
+    std::string luau_source;
+    std::shared_ptr<const HoverPlanState> state;
+};
+HoverPlan plan_hover(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world,
+                     std::uint32_t script_id, bool script_global);
+HoverInfo finish_hover(const HoverPlan& plan, const engine_core::LuauFacts& facts);
+
+// A completion list Luau is still answering for. A UI asks on a keystroke and
+// shows the list on a later frame, while the text and caret are still what it
+// asked about, so typing never waits on the type checker.
+struct PendingCompletion {
+    std::string source;
+    int caret = 0;
+    bool force = false;
+    // Whether the popup was open once it was asked. The answer shows only while
+    // that still holds, so a popup closed since stays closed.
+    bool shown = false;
+    CompletionPlan plan;
+    std::shared_ptr<const engine_core::LuauAnswer> answer;
+};
+// Plans the list at the caret. A list that needs no type check is `now`, and
+// nothing is pending; otherwise Luau is asked in `analysis`'s completion lane.
+std::optional<PendingCompletion> ask_completion(CompletionList& now, engine_core::ScriptAnalysis& analysis,
+                                                std::string_view source, int caret,
+                                                const std::vector<engine_core::LuaNode>& world,
+                                                std::uint32_t script_id, bool script_global, bool force);
+// The list once Luau has answered. Nothing while it has not.
+std::optional<CompletionList> take_completion(const PendingCompletion& pending);
+// Waits up to `wait` for the answer, as an accept does before it reads the
+// popup. True when it arrived. kSettleWait is how long an accept waits.
+inline constexpr std::chrono::milliseconds kSettleWait{1000};
+bool settle_completion(const PendingCompletion& pending, std::chrono::milliseconds wait);
+
+// A hover Luau is still answering for.
+struct PendingHover {
+    std::string source;
+    HoverPlan plan;
+    std::shared_ptr<const engine_core::LuauAnswer> answer;
+};
+// Plans the hover at `index`. One that needs no type check is `now`.
+std::optional<PendingHover> ask_hover(HoverInfo& now, engine_core::ScriptAnalysis& analysis, std::string_view source,
+                                      int index, const std::vector<engine_core::LuaNode>& world,
+                                      std::uint32_t script_id);
+// The hover once Luau has answered. Nothing while it has not.
+std::optional<HoverInfo> take_hover(const PendingHover& pending);
+
+// Both steps at once, waiting on `analysis` up to `wait`. With no analysis, a
+// shared one serves, as tests use.
+CompletionList complete_luau(std::string_view source, int caret, const std::vector<engine_core::LuaNode>& world = {},
+                             std::uint32_t script_id = 0, bool script_global = true,
+                             engine_core::ScriptAnalysis* analysis = nullptr,
+                             std::chrono::milliseconds wait = std::chrono::seconds(20));
+HoverInfo hover_luau(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world = {},
+                     std::uint32_t script_id = 0, bool script_global = true,
+                     engine_core::ScriptAnalysis* analysis = nullptr,
+                     std::chrono::milliseconds wait = std::chrono::seconds(20));
 
 }  // namespace ide

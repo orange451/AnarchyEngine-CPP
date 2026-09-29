@@ -4,7 +4,6 @@
 #include "ScriptAnalysis.hpp"
 #include "ide/ClassFilter.hpp"
 #include "ide/LuauComplete.hpp"
-#include "ide/LuauTypedCompletion.hpp"
 #include "ide/Utf8.hpp"
 
 #include <algorithm>
@@ -101,137 +100,16 @@ void expect_call(const ide::CompletionList& list, const char* name, bool call, c
     }
 }
 
-// Shadow mode. When ANARCHY_LUAU_SHADOW names a file, every completion made
-// through at_end and at_caret is also asked of Luau's own autocomplete, and the
-// file lists where the two disagree. It checks nothing.
-struct Shadow {
-    std::unique_ptr<engine_core::Game> game;
-    std::unique_ptr<engine_core::ScriptAnalysis> analysis;
-    std::ofstream out;
-    int asked = 0;
-    int same = 0;
-    int differ = 0;
-    int failed = 0;
-};
-
-Shadow* shadow() {
-    static Shadow* made = [] () -> Shadow* {
-        const std::optional<std::string> path = engine_core::environment_variable("ANARCHY_LUAU_SHADOW");
-        if (!path || path->empty()) {
-            return nullptr;
-        }
-        auto* created = new Shadow();
-        created->game = std::make_unique<engine_core::Game>();
-        created->analysis = std::make_unique<engine_core::ScriptAnalysis>(*created->game);
-        created->out.open(*path, std::ios::binary | std::ios::trunc);
-        return created;
-    }();
-    return made;
-}
-
-const char* site_name(ide::CompleteSite site) {
-    switch (site) {
-    case ide::CompleteSite::None:
-        return "none";
-    case ide::CompleteSite::Member:
-        return "member";
-    case ide::CompleteSite::Name:
-        return "name";
-    case ide::CompleteSite::Type:
-        return "type";
-    case ide::CompleteSite::Argument:
-        return "argument";
-    case ide::CompleteSite::Directive:
-        return "directive";
-    case ide::CompleteSite::Require:
-        return "require";
-    }
-    return "?";
-}
-
-bool starts_with_folded(const std::string& name, const std::string& prefix) {
-    if (prefix.size() > name.size()) {
-        return false;
-    }
-    for (std::size_t at = 0; at < prefix.size(); ++at) {
-        if (std::tolower(static_cast<unsigned char>(name[at])) != std::tolower(static_cast<unsigned char>(prefix[at]))) {
-            return false;
-        }
-    }
-    return true;
-}
-
-std::string joined(const std::set<std::string>& names) {
-    std::string text;
-    for (const std::string& name : names) {
-        text += text.empty() ? "" : ", ";
-        text += name;
-    }
-    return text;
-}
-
-void compare_with_luau(std::string_view source, int caret, const std::vector<engine_core::LuaNode>& world,
-                       std::uint32_t script_id, const ide::CompletionList& ours) {
-    Shadow* run = shadow();
-    if (run == nullptr) {
-        return;
-    }
-    // A code point caret, as a byte offset.
-    std::size_t offset = 0;
-    for (int seen = 0; offset < source.size() && seen < caret; ++seen) {
-        ++offset;
-        while (offset < source.size() && (static_cast<unsigned char>(source[offset]) & 0xC0) == 0x80) {
-            ++offset;
-        }
-    }
-    ++run->asked;
-    const engine_core::LuauCompletion luau =
-        run->analysis->luau_complete(world, script_id, std::string(source), offset, std::chrono::seconds(20));
-    std::set<std::string> mine;
-    for (const ide::CompletionItem& item : ours.items) {
-        mine.insert(item.name);
-    }
-    std::set<std::string> theirs;
-    for (const engine_core::LuauSuggestion& item : luau.items) {
-        if (!item.wrong_index && starts_with_folded(item.name, ours.prefix)) {
-            theirs.insert(item.name);
-        }
-    }
-    std::set<std::string> only_mine;
-    std::set<std::string> only_theirs;
-    std::set_difference(mine.begin(), mine.end(), theirs.begin(), theirs.end(),
-                        std::inserter(only_mine, only_mine.begin()));
-    std::set_difference(theirs.begin(), theirs.end(), mine.begin(), mine.end(),
-                        std::inserter(only_theirs, only_theirs.begin()));
-    if (!luau.ran) {
-        ++run->failed;
-    } else if (only_mine.empty() && only_theirs.empty()) {
-        ++run->same;
-        return;
-    } else {
-        ++run->differ;
-    }
-    std::string shown(source.substr(0, offset));
-    shown += "|";
-    shown += std::string(source.substr(offset));
-    run->out << "=== site " << site_name(ours.site) << ", prefix '" << ours.prefix << "', luau context "
-             << luau.context << (luau.ran ? "" : ", luau failed: " + luau.error) << "\n";
-    run->out << shown << "\n";
-    run->out << "  ours only: " << joined(only_mine) << "\n";
-    run->out << "  luau only: " << joined(only_theirs) << "\n";
-    for (const engine_core::LuauSuggestion& item : luau.items) {
-        if (only_theirs.count(item.name) != 0) {
-            run->out << "    " << item.name << " [" << item.kind << "] " << item.type << "\n";
-        }
-    }
-    run->out.flush();
+// An analysis of its own, as the editor has, for tests that ask it directly.
+engine_core::ScriptAnalysis& typed_analysis() {
+    static engine_core::Game game;
+    static engine_core::ScriptAnalysis analysis(game);
+    return analysis;
 }
 
 ide::CompletionList at_end(std::string_view source, const std::vector<engine_core::LuaNode>& world = {},
                            std::uint32_t script_id = 0) {
-    ide::CompletionList list = ide::complete_luau(source, static_cast<int>(source.size()), world, script_id);
-    compare_with_luau(source, static_cast<int>(source.size()), world, script_id, list);
-    return list;
+    return ide::complete_luau(source, static_cast<int>(source.size()), world, script_id);
 }
 
 engine_core::LuaNode node(std::uint32_t id, std::uint32_t parent, const char* name, const char* class_name,
@@ -333,7 +211,8 @@ void testInstances() {
 
     const engine_core::LuaField spark = engine_core::lua_property("Spark", "number", true, nullptr, nullptr);
     engine_core::register_lua_class("Widget", "DataModel", &spark, 1);
-    const ide::CompletionList widget = at_end("local part = Instance.new(\"Widget\")\npart.");
+    // Widget is not creatable, so Instance.new cannot make one; a typed local can hold one.
+    const ide::CompletionList widget = at_end("local part: Widget\npart.");
     expect_has(widget, "Spark", "Widget.Spark");
     expect_has(widget, "Name", "Widget.Name");
     expect_missing(widget, "Position", "Widget.Position");
@@ -648,9 +527,7 @@ void expect_name(const ide::CompletionList& list, const char* label) {
 
 ide::CompletionList at_caret(std::string_view source, int caret,
                              const std::vector<engine_core::LuaNode>& world = {}, std::uint32_t script_id = 0) {
-    ide::CompletionList list = ide::complete_luau(source, caret, world, script_id);
-    compare_with_luau(source, caret, world, script_id, list);
-    return list;
+    return ide::complete_luau(source, caret, world, script_id);
 }
 
 void testNames() {
@@ -2514,12 +2391,6 @@ void testRequire() {
     expect_not_require(console, "the command line");
 }
 
-// The analysis the editor asks when the resolver cannot follow a value.
-engine_core::ScriptAnalysis& typed_analysis() {
-    static engine_core::Game game;
-    static engine_core::ScriptAnalysis analysis(game);
-    return analysis;
-}
 
 // Arithmetic on a vector is a vector, not a number: the VM's native vector,
 // and a class through its registered operators.
@@ -2541,16 +2412,6 @@ void testVectorArithmetic() {
     const char* numbers = "local x = 1 + 2 * 3\nlocal y = -x\nprint(x, y)";
     expect_hover(ide::hover_luau(numbers, find_nth(numbers, "x", 0)), "x: number", nullptr, nullptr, "numbers stay numbers");
     expect_hover(ide::hover_luau(numbers, find_nth(numbers, "y", 0)), "y: number", nullptr, nullptr, "a negated number");
-}
-
-// What the editor shows: the resolver's list, and Luau's when the resolver
-// did not know the receiver.
-ide::CompletionList typed_at_end(std::string_view source, const std::vector<engine_core::LuaNode>& world = {},
-                                 std::uint32_t script_id = 0) {
-    ide::CompletionList list = ide::complete_luau(source, static_cast<int>(source.size()), world, script_id);
-    ide::complete_from_luau(list, typed_analysis(), source, static_cast<int>(source.size()), world, script_id,
-                            std::chrono::seconds(20));
-    return list;
 }
 
 void testTypedFallback() {
@@ -2579,20 +2440,20 @@ void testTypedFallback() {
     const std::string use = "local Account = require(game.Account)\nlocal a = Account.new(\"me\")\n";
 
     // A metatable object from a required class.
-    const ide::CompletionList methods = typed_at_end(use + "a:", world, 9);
+    const ide::CompletionList methods = at_end(use + "a:", world, 9);
     expect_has(methods, "Deposit", "a required class's method");
     expect_call(methods, "Deposit", true, "a required class's method");
-    expect_info(methods, "Deposit", "returns nothing", "function Deposit(amount: number)", nullptr,
-                "a method's row drops self");
+    expect_info(methods, "Deposit", "returns nothing", "function Account:Deposit(self: table, amount: number)", nullptr,
+                "a method's row reads as its definition");
     expect_missing(methods, "balance", "a field after ':'");
     expect_missing(methods, "__index", "a metamethod");
-    const ide::CompletionList fields = typed_at_end(use + "a.", world, 9);
+    const ide::CompletionList fields = at_end(use + "a.", world, 9);
     expect_has(fields, "balance", "a class instance's field");
     expect_has(fields, "owner", "a class instance's field");
     expect_detail(fields, "owner", "string", "a field's type");
     expect_missing(fields, "__index", "a metamethod after '.'");
     expect_missing(fields, "Deposit", "a method after '.'");
-    const ide::CompletionList typed = typed_at_end(use + "a:De", world, 9);
+    const ide::CompletionList typed = at_end(use + "a:De", world, 9);
     expect_has(typed, "Deposit", "a typed prefix");
     if (typed.items.size() != 1) {
         fail("a typed prefix keeps only the names it starts");
@@ -2601,39 +2462,37 @@ void testTypedFallback() {
     // The same class written in the script.
     const std::string local_class = std::string(account).substr(0, std::string(account).rfind("return")) +
                                     "local b = Account.new(\"x\")\nb:";
-    expect_has(typed_at_end(local_class), "Deposit", "a class in the script");
+    expect_has(at_end(local_class), "Deposit", "a class in the script");
 
     // A loop variable, a string from a library call, and a generic result.
-    const ide::CompletionList child = typed_at_end("for _, child in game.Parts:GetChildren() do\n    child.", world, 9);
+    const ide::CompletionList child = at_end("for _, child in game.Parts:GetChildren() do\n    child.", world, 9);
     expect_has(child, "Name", "a loop variable over GetChildren");
     expect_has(child, "Parent", "a loop variable over GetChildren");
-    const ide::CompletionList word = typed_at_end("for index, name in ipairs({ \"a\", \"b\" }) do\n    name:");
-    expect_info(word, "upper", "string", "function upper(): string", nullptr, "a string method drops self");
+    const ide::CompletionList word = at_end("for index, name in ipairs({ \"a\", \"b\" }) do\n    name:");
+    expect_info(word, "upper", "string", "function string:upper(): string", nullptr, "a string method");
     expect_missing(word, "char", "string.char is not a method");
-    expect_has(typed_at_end("local words = string.split(\"a b\", \" \")\nwords[1]:"), "lower", "a string from a call");
-    expect_has(typed_at_end("local function pick<T>(items: { T }): T\n    return items[1]\nend\nlocal s = pick({ \"x\" })\ns:"),
+    expect_has(at_end("local words = string.split(\"a b\", \" \")\nwords[1]:"), "lower", "a string from a call");
+    expect_has(at_end("local function pick<T>(items: { T }): T\n    return items[1]\nend\nlocal s = pick({ \"x\" })\ns:"),
                "upper", "a generic result");
 
     // Fields assigned after the table is made, and a pcall result.
-    const ide::CompletionList assigned = typed_at_end("local t = {}\nt.alpha = 1\nt.beta = function() end\nt.");
+    const ide::CompletionList assigned = at_end("local t = {}\nt.alpha = 1\nt.beta = function() end\nt.");
     expect_detail(assigned, "alpha", "number", "a field assigned later");
     expect_call(assigned, "beta", true, "a function assigned later");
-    expect_has(typed_at_end("local ok, result = pcall(function() return { value = 1 } end)\nresult."), "value",
+    expect_has(at_end("local ok, result = pcall(function() return { value = 1 } end)\nresult."), "value",
                "a pcall result");
 
-    // Nothing the resolver offers changes. A module it ran keeps its own list.
+    // A module's returned table.
     std::vector<engine_core::LuaNode> lib;
     lib.push_back(node(0, 0xffffffffu, "game", "Game"));
     lib.push_back(node(8, 0, "Lib", "ModuleScript",
                        "local extra = { zoom = function() end }\nreturn { alpha = 1, beta = function() end, nested = extra }\n"));
     lib.push_back(node(9, 0, "Main", "Script", ""));
-    const char* lib_use = "local m = require(game:FindFirstChild(\"Lib\"))\nm.";
-    const ide::CompletionList plain = at_end(lib_use, lib, 9);
-    const ide::CompletionList with_luau = typed_at_end(lib_use, lib, 9);
-    if (plain.items.size() != with_luau.items.size()) {
-        fail("a list the resolver filled is left as it is");
-    }
-    // A method the module replaced with a plain function is still not offered after ':'.
+    const ide::CompletionList returned = at_end("local m = require(game:FindFirstChild(\"Lib\"))\nm.", lib, 9);
+    expect_detail(returned, "alpha", "number", "a module's field");
+    expect_call(returned, "beta", true, "a module's function");
+    expect_has(returned, "nested", "a module's table");
+    // A method the module replaced with a plain function is not offered after ':'.
     const char* replaced =
         "local module = {}\n"
         "function module:Test()\n"
@@ -2645,34 +2504,16 @@ void testTypedFallback() {
     replaced_world.push_back(node(0, 0xffffffffu, "game", "Game"));
     replaced_world.push_back(node(3, 0, "Lib", "ModuleScript", replaced));
     replaced_world.push_back(node(4, 0, "Main", "Script"));
-    expect_missing(typed_at_end("local m = require(game:FindFirstChild(\"Lib\"))\nm:", replaced_world, 4), "Test",
-                   "a replaced method stays off ':' with Luau asked too");
-    // A value the resolver names a type for but knows no members of, such as
-    // an annotated table return, still asks Luau.
-    const ide::CompletionList made = typed_at_end(
+    expect_missing(at_end("local m = require(game:FindFirstChild(\"Lib\"))\nm:", replaced_world, 4), "Test",
+                   "a replaced method stays off ':'");
+    // An annotated table return.
+    const ide::CompletionList made = at_end(
         "local function make(): { speed: number, name: string }\n    return { speed = 1, name = \"a\" }\nend\nmake().");
     expect_has(made, "speed", "an annotated table return");
     expect_has(made, "name", "an annotated table return");
-    // Instances, Vector3, and names are still the resolver's.
-    expect_has(typed_at_end("game."), "FindFirstChild", "instance methods after '.'");
-    expect_has(typed_at_end("Vector3.new()."), "Lerp", "Vector3 methods");
-}
-
-// What the editor's hover shows: the resolver's, or Luau's type when the
-// resolver had no more than the name.
-ide::HoverInfo typed_hover(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world = {},
-                           std::uint32_t script_id = 0) {
-    ide::HoverInfo info = ide::hover_luau(source, index, world, script_id);
-    ide::hover_from_luau(info, typed_analysis(), source, index, world, script_id, std::chrono::seconds(20));
-    return info;
-}
-
-// What the editor shows while typing a call's arguments.
-ide::CompletionList typed_signature(std::string_view source, const std::vector<engine_core::LuaNode>& world = {},
-                                    std::uint32_t script_id = 0) {
-    ide::CompletionList list = ide::complete_luau(source, static_cast<int>(source.size()), world, script_id);
-    ide::signature_from_luau(list, typed_analysis(), source, world, script_id, std::chrono::seconds(20));
-    return list;
+    // Instances and Vector3.
+    expect_has(at_end("game."), "FindFirstChild", "instance methods after '.'");
+    expect_has(at_end("Vector3.new()."), "Lerp", "Vector3 methods");
 }
 
 void testTypedHoverAndSignature() {
@@ -2695,27 +2536,24 @@ void testTypedHoverAndSignature() {
     world.push_back(node(8, 0, "Account", "ModuleScript", account));
     const std::string use = "local Account = require(game.Account)\nlocal a = Account.new(\"me\")\na:Deposit(5)\nprint(a.owner)\n";
 
-    // A method the resolver could not type.
-    const ide::HoverInfo method = typed_hover(use, find_nth(use, "Deposit", 0), world, 9);
-    expect_hover(method, "function Deposit(amount: number, note: string?)", "returns nothing", nullptr,
-                 "a required class's method");
+    // A required class's method, named as its definition wrote it.
+    const ide::HoverInfo method = ide::hover_luau(use, find_nth(use, "Deposit", 0), world, 9);
+    expect_hover(method, "function Account:Deposit(self: table, amount: number, note: string?)", "returns nothing",
+                 nullptr, "a required class's method");
     if (method.begin != find_nth(use, "Deposit", 0) || method.end != method.begin + 7) {
         fail("the hover covers the method's name");
     }
-    const ide::HoverInfo field = typed_hover(use, find_nth(use, "owner", 0), world, 9);
+    const ide::HoverInfo field = ide::hover_luau(use, find_nth(use, "owner", 0), world, 9);
     expect_hover(field, "owner: string", "", nullptr, "a class instance's field");
-    const ide::HoverInfo object = typed_hover(use, find_nth(use, "a", 2), world, 9);
+    const ide::HoverInfo object = ide::hover_luau(use, find_nth(use, "a", 2), world, 9);
     if (!object.found || object.title.rfind("a: ", 0) != 0 || object.title.size() <= 3) {
         fail("a metatable object's hover has its type: " + object.title);
-    }
-    if (object.detail != "local") {
-        fail("the resolver's 'local' stays on the hover: '" + object.detail + "'");
     }
 
     // A stray byte that is not UTF-8 counts as one code point, as the editor counts it.
     const std::string stray = "-- 90\xB0 degrees\n" + use;
     const std::size_t a_byte = stray.find("print(a") + 6;
-    const ide::HoverInfo after_stray = typed_hover(stray, ide::CodePointsBefore(stray, a_byte), world, 9);
+    const ide::HoverInfo after_stray = ide::hover_luau(stray, ide::CodePointsBefore(stray, a_byte), world, 9);
     if (!after_stray.found || after_stray.title.rfind("a: ", 0) != 0 ||
         after_stray.begin != ide::CodePointsBefore(stray, a_byte)) {
         fail("a hover after a malformed byte finds its name: " + after_stray.title);
@@ -2723,69 +2561,50 @@ void testTypedHoverAndSignature() {
 
     // A hover that only says table shows the table's shape.
     const char* shaped = "local t = { a = 1, b = \"x\" }\nprint(t)\n";
-    const ide::HoverInfo table = typed_hover(shaped, find_nth(shaped, "t", 1));
+    const ide::HoverInfo table = ide::hover_luau(shaped, find_nth(shaped, "t", 1));
     if (table.title.rfind("t: {", 0) != 0 || table.title.find("a: number") == std::string::npos ||
         table.title.find("b: string") == std::string::npos) {
         fail("a table's hover shows its shape: " + table.title);
     }
 
-    // What the resolver already says stays.
     const char* counted = "local count = 1\nprint(count)\n";
-    expect_hover(typed_hover(counted, find_nth(counted, "count", 1)), "count: number", nullptr, nullptr,
-                 "a typed local stays the resolver's");
-    const char* library = "task.wait(1)\n";
-    const ide::HoverInfo plain_task = ide::hover_luau(library, 0);
-    const ide::HoverInfo typed_task = typed_hover(library, 0);
-    if (plain_task.title != typed_task.title || plain_task.summary != typed_task.summary) {
-        fail("a library's hover stays the resolver's");
-    }
+    expect_hover(ide::hover_luau(counted, find_nth(counted, "count", 1)), "count: number", nullptr, nullptr,
+                 "a typed local");
 
-    // A call's signature the resolver could not write.
-    const ide::CompletionList first = typed_signature(use + "a:Deposit(", world, 9);
+    // A call's signature.
+    const ide::CompletionList first = at_end(use + "a:Deposit(", world, 9);
     expect_signature(first, "(amount: number, note: string?)", "a method's signature drops self");
     expect_bold(first, "amount: number", "the first argument");
-    const ide::CompletionList second = typed_signature(use + "a:Deposit(5, ", world, 9);
+    const ide::CompletionList second = at_end(use + "a:Deposit(5, ", world, 9);
     expect_bold(second, "note: string?", "the second argument");
-    const ide::CompletionList made = typed_signature(use + "local b = Account.new(", world, 9);
+    const ide::CompletionList made = at_end(use + "local b = Account.new(", world, 9);
     expect_signature(made, "(owner: string)", "a required constructor");
 
-    // A signature the resolver wrote stays.
-    const std::string written = "local function move(part: GameObject, by: number)\nend\nmove(";
-    const ide::CompletionList plain_move = ide::complete_luau(written, static_cast<int>(written.size()));
-    const ide::CompletionList typed_move = typed_signature(written);
-    if (plain_move.signature.empty() || plain_move.signature != typed_move.signature) {
-        fail("a signature the resolver wrote stays: '" + typed_move.signature + "'");
-    }
-    // A host function, which the resolver has no parameters for, gets the definitions'.
-    expect_signature(typed_signature("task.wait("), "(seconds: number?)", "a host function's signature");
+    expect_signature(at_end("local function move(part: GameObject, by: number)\nend\nmove("),
+                     "(part: GameObject, by: number)", "a local function's signature");
+    // A host function has its docs' parameters.
+    expect_signature(at_end("task.wait("), "(seconds: number?)", "a host function's signature");
     // Outside a call there is none, and neither while a function's own
     // parameters are being named.
-    if (!typed_signature("local x = 1\nx").signature.empty()) {
+    if (!at_end("local x = 1\nx").signature.empty()) {
         fail("no signature outside a call");
     }
     for (const char* defining : {"local function foo(a, ", "function foo(", "function Account.make(first, ",
                                  "function Account:Do("}) {
-        // Luau is not asked about a function while its parameters are named.
-        // What the resolver shows there, the parameters so far, stays.
-        const ide::CompletionList plain =
-            ide::complete_luau(defining, static_cast<int>(std::string_view(defining).size()));
-        const ide::CompletionList named = typed_signature(defining);
-        if (named.call_open != -1 || named.signature != plain.signature) {
-            fail(std::string("naming parameters asks Luau nothing: ") + defining);
+        // A function's own parameters being named are no call.
+        if (at_end(defining).call_open != -1) {
+            fail(std::string("naming parameters is no call: ") + defining);
         }
     }
 }
 
-// Waits for the pending answers as the editor's frames do. False after 20 seconds.
-bool settle_pending(ide::PendingLuauList& pending, bool& changed) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-    while (!ide::take_luau_answers(pending, changed)) {
-        if (std::chrono::steady_clock::now() > deadline) {
-            return false;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+// The list a pending request settles to, as the editor's frames take it.
+// Nothing after 20 seconds.
+std::optional<ide::CompletionList> settled(const ide::PendingCompletion& pending) {
+    if (!ide::settle_completion(pending, std::chrono::seconds(20))) {
+        return std::nullopt;
     }
-    return true;
+    return ide::take_completion(pending);
 }
 
 bool answered(const std::shared_ptr<const engine_core::LuauAnswer>& answer) {
@@ -2805,22 +2624,26 @@ void testTypedSwitchedOff() {
     engine_core::Game game;
     auto analysis = std::make_unique<engine_core::ScriptAnalysis>(game);
     analysis->set_enabled(false);
-    const engine_core::LuauCompletion off = analysis->luau_complete({}, 0, "local t = {}\nt.", 15, std::chrono::seconds(5));
-    if (off.ran || analysis->luau_complete_later({}, 0, "local t = {}\nt.", 15, "members")) {
+    const engine_core::LuauFacts off = analysis->luau_facts({}, 0, "local t = {}\nt.", 15, {}, std::chrono::seconds(5));
+    if (off.ran || analysis->luau_facts_later({}, 0, "local t = {}\nt.", 15, {}, "completion")) {
         fail("analysis turned off answers no completion");
     }
+    ide::CompletionList now;
+    if (ide::ask_completion(now, *analysis, "local t = {}\nt.", 15, {}, 0, true, false)) {
+        fail("analysis turned off leaves nothing pending");
+    }
     analysis->set_enabled(true);
-    if (!analysis->luau_complete({}, 0, "local t = { x = 1 }\nt.", 22, std::chrono::seconds(20)).ran) {
+    if (!analysis->luau_facts({}, 0, "local t = { x = 1 }\nt.", 22, {}, std::chrono::seconds(20)).ran) {
         fail("analysis turned back on answers again");
     }
     std::string big;
     for (int index = 0; index < 300; ++index) {
         big += "local function f" + std::to_string(index) + "(x: number)\n    return x * 2\nend\n";
     }
-    const auto running = analysis->luau_complete_later({}, 0, big, big.size(), "busy");
-    const auto waiting = analysis->luau_complete_later({}, 0, "local t = {}\nt.", 15, "members");
+    const auto running = analysis->luau_facts_later({}, 0, big, big.size(), {}, "busy");
+    const auto waiting = analysis->luau_facts_later({}, 0, "local t = {}\nt.", 15, {}, "completion");
     analysis.reset();
-    if (!running || !waiting || !running->ready.load() || !waiting->ready.load() || waiting->completion.ran) {
+    if (!running || !waiting || !running->ready.load() || !waiting->ready.load() || waiting->facts.ran) {
         fail("shutdown answers every request still on its way");
     }
 }
@@ -2841,46 +2664,58 @@ void testTypedLater() {
     world.push_back(node(8, 0, "Account", "ModuleScript", account));
     const std::string use = "local Account = require(game.Account)\nlocal a = Account.new(\"me\")\n";
 
-    // The resolver's empty list shows now; Luau's members arrive on a later frame.
+    // Nothing shows while Luau answers; its members arrive on a later frame.
     const std::string members = use + "a:";
-    const ide::CompletionList empty = ide::complete_luau(members, static_cast<int>(members.size()), world, 9);
-    std::optional<ide::PendingLuauList> pending = ide::ask_luau_for_list(
-        empty, typed_analysis(), members, static_cast<int>(members.size()), world, 9, false);
-    if (!pending || !pending->members) {
-        fail("an empty member list asks Luau");
+    const int members_end = static_cast<int>(members.size());
+    ide::CompletionList now;
+    const std::optional<ide::PendingCompletion> pending =
+        ide::ask_completion(now, typed_analysis(), members, members_end, world, 9, true, false);
+    if (!pending) {
+        fail("a member list asks Luau");
     } else {
-        bool changed = false;
-        if (!settle_pending(*pending, changed)) {
-            fail("Luau answers a member list");
+        if (!now.items.empty() || now.site != ide::CompleteSite::Member) {
+            fail("a member list shows nothing before Luau answers");
         }
-        expect_has(pending->list, "Deposit", "Luau's members arrive later");
-        if (!changed || pending->caret != static_cast<int>(members.size()) || pending->source != members) {
-            fail("the answer says what it changed and what it was asked about");
+        if (pending->caret != members_end || pending->source != members) {
+            fail("the request says what it was asked about");
+        }
+        const std::optional<ide::CompletionList> list = settled(*pending);
+        if (!list) {
+            fail("Luau answers a member list");
+        } else {
+            expect_has(*list, "Deposit", "Luau's members arrive later");
         }
     }
 
     // A signature arrives the same way.
     const std::string call = use + "a:Deposit(";
-    const ide::CompletionList unsigned_list = ide::complete_luau(call, static_cast<int>(call.size()), world, 9);
-    std::optional<ide::PendingLuauList> signature = ide::ask_luau_for_list(
-        unsigned_list, typed_analysis(), call, static_cast<int>(call.size()), world, 9, false);
-    if (!signature || !signature->signature) {
-        fail("a call without a signature asks Luau");
+    const std::optional<ide::PendingCompletion> signature =
+        ide::ask_completion(now, typed_analysis(), call, static_cast<int>(call.size()), world, 9, true, false);
+    const std::optional<ide::CompletionList> signed_list = signature ? settled(*signature) : std::nullopt;
+    if (!signed_list) {
+        fail("a call's signature arrives later");
     } else {
-        bool changed = false;
-        settle_pending(*signature, changed);
-        expect_signature(signature->list, "(amount: number)", "Luau's signature arrives later");
+        expect_signature(*signed_list, "(amount: number)", "Luau's signature arrives later");
     }
 
-    // A list the resolver filled asks nothing.
-    std::vector<engine_core::LuaNode> lib;
-    lib.push_back(node(0, 0xffffffffu, "game", "Game"));
-    lib.push_back(node(8, 0, "Lib", "ModuleScript", "return { alpha = 1 }\n"));
-    lib.push_back(node(9, 0, "Main", "Script", ""));
-    const std::string filled = "local m = require(game:FindFirstChild(\"Lib\"))\nm.";
-    const ide::CompletionList known = ide::complete_luau(filled, static_cast<int>(filled.size()), lib, 9);
-    if (ide::ask_luau_for_list(known, typed_analysis(), filled, static_cast<int>(filled.size()), lib, 9, false)) {
-        fail("a list the resolver filled asks Luau nothing");
+    // A list that needs no types is ready at once.
+    ide::CompletionList directive;
+    if (ide::ask_completion(directive, typed_analysis(), "--!", 3, {}, 0, true, false) || directive.items.empty()) {
+        fail("a directive list needs no type check");
+    }
+
+    // A hover arrives the same way.
+    const std::string hovered = use + "a:Deposit(1)\n";
+    ide::HoverInfo hover_now;
+    const std::optional<ide::PendingHover> hover =
+        ide::ask_hover(hover_now, typed_analysis(), hovered, find_nth(hovered, "Deposit", 0), world, 9);
+    if (!hover || hover_now.found || !answered(hover->answer)) {
+        fail("a hover arrives later");
+    } else {
+        const std::optional<ide::HoverInfo> info = ide::take_hover(*hover);
+        if (!info || info->title != "function Account:Deposit(self: table, amount: number)") {
+            fail("Luau's hover arrives later: " + (info ? info->title : std::string()));
+        }
     }
 
     // Typing faster than the worker answers: a newer request in a lane
@@ -2890,202 +2725,19 @@ void testTypedLater() {
         big += "local function f" + std::to_string(index) + "(x: number)\n    return x * 2\nend\n";
     }
     big += "local t = {}\nt.";
-    const auto busy = typed_analysis().luau_complete_later({}, 0, big, big.size(), "busy");
-    const auto older = typed_analysis().luau_complete_later(world, 9, members, members.size(), "members");
-    const auto newer = typed_analysis().luau_complete_later(world, 9, members, members.size(), "members");
+    const auto busy = typed_analysis().luau_facts_later({}, 0, big, big.size(), {}, "busy");
+    const auto older = typed_analysis().luau_facts_later(world, 9, members, members.size(), {}, "completion");
+    const auto newer = typed_analysis().luau_facts_later(world, 9, members, members.size(), {}, "completion");
     if (!busy || !older || !newer || !answered(busy) || !answered(older) || !answered(newer)) {
         fail("every queued request is answered");
     } else {
-        if (older->completion.ran) {
+        if (older->facts.ran) {
             fail("a replaced request answers with nothing");
         }
-        if (!newer->completion.ran) {
-            fail("the newer request is answered: " + newer->completion.error);
+        if (!newer->facts.ran) {
+            fail("the newer request is answered: " + newer->facts.error);
         }
     }
-}
-
-// Where the resolver and Luau together still offer nothing, for everyday code.
-// Shadow mode only; it checks nothing and prints what came back.
-void gapProbes() {
-    if (shadow() == nullptr) {
-        return;
-    }
-    std::vector<engine_core::LuaNode> world;
-    world.push_back(node(0, 0xffffffffu, "game", "Game"));
-    world.push_back(node(9, 0, "Main", "Script"));
-    world.push_back(node(7, 0, "Parts", "Folder"));
-    world.push_back(node(6, 7, "Door", "GameObject"));
-    world.push_back(node(8, 0, "Util", "ModuleScript",
-                         "local Util = {}\nfunction Util.clamp(x: number, lo: number, hi: number): number\n"
-                         "    return math.min(math.max(x, lo), hi)\nend\n"
-                         "function Util.point(x: number, y: number)\n    return { x = x, y = y }\nend\nreturn Util\n"));
-    const char* members[] = {
-        "local function make(): { speed: number, name: string }\n    return { speed = 1, name = \"a\" }\nend\nmake().",
-        "local Util = require(game.Util)\nlocal p = Util.point(1, 2)\np.",
-        "local Util = require(game.Util)\nUtil.point(1, 2).",
-        "local list = {}\ntable.insert(list, { hp = 10 })\nlist[1].",
-        "local parts = game.Parts:GetChildren()\nparts[1].",
-        "local door = game.Parts:FindFirstChild(\"Door\")\nif door then\n    door.",
-        "local v = Vector3.new(1, 2, 3)\nlocal w = v * 2\nw.",
-        "local v = Vector3.new(1, 2, 3) + Vector3.new(4, 5, 6)\nv.",
-        "local c = Color3.new(1, 0, 0)\nc.",
-        "local rs = game:GetService(\"RunService\")\nrs.Heartbeat:",
-        "local t = { a = { b = { c = 1 } } }\nt.a.b.",
-        "local s = \"hello\"\nlocal u = s:upper()\nu:",
-        "local n = tostring(5)\nn:",
-        "local f = function(x: number) return { value = x } end\nf(1).",
-        "local ok, err = pcall(error, \"x\")\nerr:",
-        "local conn = game.Changed:Connect(function() end)\nconn:",
-        "local i = UserInputService\ni.",
-        "local UIS = game:GetService(\"UserInputService\")\nUIS.InputBegan:Connect(function(input)\n    input.",
-        "local state = setmetatable({}, { __index = { go = function() end } })\nstate.",
-        "local vectors: { Vector3 } = {}\nfor _, v in vectors do\n    v.",
-    };
-    for (const char* source : members) {
-        const ide::CompletionList list = typed_at_end(source, world, 9);
-        shadow()->out << "=== gap " << (list.items.empty() ? "EMPTY" : "ok") << " (" << list.items.size()
-                      << " rows, site " << site_name(list.site) << ")\n" << source << "|\n";
-        std::printf("gap %-5s %3zu rows: %s\n", list.items.empty() ? "EMPTY" : "ok", list.items.size(),
-                    std::string(source).substr(std::string(source).rfind('\n') + 1).c_str());
-        if (list.items.empty()) {
-            const std::string text = source;
-            const engine_core::LuauCompletion luau =
-                typed_analysis().luau_complete(world, 9, text, text.size(), std::chrono::seconds(20));
-            std::string names;
-            for (const engine_core::LuauSuggestion& item : luau.items) {
-                if (!item.wrong_index && item.kind == "property") {
-                    names += item.name + ":" + item.type + " ";
-                }
-            }
-            std::printf("    receiver_known=%d luau: %s\n", list.receiver_known ? 1 : 0, names.c_str());
-        }
-    }
-    const char* hovers[][2] = {
-        {"local t = { a = 1, b = \"x\" }\nprint(t)", "t"},
-        {"local Util = require(game.Util)\nlocal p = Util.point(1, 2)\nprint(p)", "p"},
-        {"local Util = require(game.Util)\nprint(Util.clamp(1, 2, 3))\nprint(Util.clamp)", "clamp"},
-        {"local parts = game.Parts:GetChildren()\nprint(parts)", "parts"},
-        {"local v = Vector3.new(1, 2, 3) * 2\nprint(v)", "v"},
-        {"local function add(a: number, b: number)\n    return a + b\nend\nprint(add(1, 2))", "add"},
-        {"local s = string.format(\"%d\", 1)\nprint(s)", "s"},
-    };
-    for (const auto& probe : hovers) {
-        const std::string source = probe[0];
-        const int at = find_nth(source, probe[1], 1);
-        const ide::HoverInfo plain = ide::hover_luau(source, at, world, 9);
-        const ide::HoverInfo info = typed_hover(source, at, world, 9);
-        std::printf("hover %-6s ours '%s' -> '%s' [%s]\n", probe[1], plain.title.c_str(), info.title.c_str(),
-                    info.detail.c_str());
-    }
-}
-
-// Everyday code the tests above do not cover, asked of both engines when the
-// shadow is on. It checks nothing: the shadow file says what each one offered.
-void shadowProbes() {
-    if (shadow() == nullptr) {
-        return;
-    }
-    // How long Luau takes on a large script: the first ask checks it all, and
-    // each later ask checks the edited buffer again.
-    {
-        std::string big = "local Account = {}\nAccount.__index = Account\n";
-        for (int index = 0; index < 400; ++index) {
-            const std::string n = std::to_string(index);
-            big += "function Account:Method" + n + "(value: number, label: string)\n";
-            big += "    local total = value * 2\n";
-            big += "    for i = 1, 10 do\n        total += i\n    end\n";
-            big += "    self.field" + n + " = label .. tostring(total)\n";
-            big += "    return total, label\nend\n";
-        }
-        big += "local a = setmetatable({}, Account)\na:";
-        for (int round = 0; round < 3; ++round) {
-            const auto start = std::chrono::steady_clock::now();
-            const engine_core::LuauCompletion answer =
-                typed_analysis().luau_complete({}, 0, big, big.size(), std::chrono::seconds(60));
-            const auto ms =
-                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-            shadow()->out << "=== timing: " << big.size() << " bytes, round " << round << ", " << ms << " ms, "
-                          << answer.items.size() << " names" << (answer.ran ? "" : " (failed: " + answer.error + ")")
-                          << "\n";
-            std::printf("luau timing: %zu bytes, round %d, %lld ms, %zu names\n", big.size(), round,
-                        static_cast<long long>(ms), answer.items.size());
-        }
-    }
-    // A script that requires forty modules: the first ask checks them all,
-    // later asks only the edited script.
-    {
-        std::vector<engine_core::LuaNode> place;
-        place.push_back(node(0, 0xffffffffu, "game", "Game"));
-        std::string main = "";
-        for (int index = 0; index < 40; ++index) {
-            std::string body = "local M = {}\n";
-            for (int fn = 0; fn < 30; ++fn) {
-                body += "function M.f" + std::to_string(fn) + "(x: number): number\n    return x + " +
-                        std::to_string(fn) + "\nend\n";
-            }
-            body += "return M\n";
-            const std::uint32_t id = static_cast<std::uint32_t>(100 + index);
-            place.push_back(node(id, 0, ("Mod" + std::to_string(index)).c_str(), "ModuleScript", body));
-            main += "local m" + std::to_string(index) + " = require(game.Mod" + std::to_string(index) + ")\n";
-        }
-        main += "local t = setmetatable({}, { __index = m0 })\nt.";
-        place.push_back(node(9, 0, "Main", "Script", main));
-        for (int round = 0; round < 3; ++round) {
-            const auto start = std::chrono::steady_clock::now();
-            const engine_core::LuauCompletion answer =
-                typed_analysis().luau_complete(place, 9, main, main.size(), std::chrono::seconds(60));
-            const auto ms =
-                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-            std::printf("luau timing: 40 modules, round %d, %lld ms, %zu names\n", round, static_cast<long long>(ms),
-                        answer.items.size());
-        }
-    }
-    const char* account =
-        "local Account = {}\n"
-        "Account.__index = Account\n"
-        "\n"
-        "function Account.new(owner: string)\n"
-        "    local self = setmetatable({}, Account)\n"
-        "    self.owner = owner\n"
-        "    self.balance = 0\n"
-        "    return self\n"
-        "end\n"
-        "\n"
-        "function Account:Deposit(amount: number)\n"
-        "    self.balance += amount\n"
-        "end\n"
-        "\n"
-        "return Account\n";
-    std::vector<engine_core::LuaNode> world;
-    world.push_back(node(0, 0xffffffffu, "game", "Game"));
-    world.push_back(node(9, 0, "Main", "Script"));
-    world.push_back(node(8, 0, "Account", "ModuleScript", account));
-    world.push_back(node(7, 0, "Parts", "Folder"));
-    world.push_back(node(6, 7, "Door", "GameObject"));
-    const std::string use = "local Account = require(game.Account)\n";
-    at_end(use + "local a = Account.new(\"me\")\na:", world, 9);
-    at_end(use + "local a = Account.new(\"me\")\na.", world, 9);
-    at_end(use + "Account.", world, 9);
-    // A class written in the script itself.
-    at_end(std::string(account).substr(0, std::string(account).rfind("return")) + "local b = Account.new(\"x\")\nb:");
-    // Annotations and typeof.
-    at_end("local function spin(part: GameObject)\n    part.", world, 9);
-    at_end("local list: { Vector3 } = {}\nlocal first = list[1]\nfirst.", world, 9);
-    at_end("type Point = { x: number, y: number, label: string }\nlocal p: Point = { x = 1, y = 2, label = \"a\" }\np.");
-    // Loops.
-    at_end("for _, child in game.Parts:GetChildren() do\n    child.", world, 9);
-    at_end("for index, name in ipairs({ \"a\", \"b\" }) do\n    name:", world, 9);
-    // Results of library calls and generics.
-    at_end("local words = string.split(\"a b\", \" \")\nwords[1]:");
-    at_end("local found = table.find({ 1, 2 }, 2)\nlocal n = math.max(1, 2)\nn");
-    at_end("local function pick<T>(items: { T }): T\n    return items[1]\nend\nlocal s = pick({ \"x\" })\ns:");
-    // Values that flow through locals.
-    at_end("local config = { speed = 10, name = \"car\", nested = { depth = 2 } }\nlocal alias = config.nested\nalias.");
-    at_end("local t = {}\nt.alpha = 1\nt.beta = function() end\nt.");
-    at_end("local ok, result = pcall(function() return { value = 1 } end)\nresult.");
-    at_end("local door = game.Parts.Door\ndoor.", world, 9);
-    at_end("local folder = game:FindFirstChild(\"Parts\")\nfolder:", world, 9);
 }
 
 int RunLuauCompleteTests() {
@@ -3118,17 +2770,8 @@ int RunLuauCompleteTests() {
         testTypedHoverAndSignature();
         testTypedLater();
         testTypedSwitchedOff();
-        shadowProbes();
-        gapProbes();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());
-    }
-    if (Shadow* run = shadow()) {
-        run->out << "=== " << run->asked << " asked, " << run->same << " the same, " << run->differ << " differ, "
-                 << run->failed << " where Luau gave no answer\n";
-        run->out.flush();
-        std::printf("luau shadow: %d asked, %d the same, %d differ, %d unanswered\n", run->asked, run->same,
-                    run->differ, run->failed);
     }
     return gFailures;
 }

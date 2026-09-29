@@ -112,6 +112,9 @@ inline LuaField lua_signal_member(const char* name, int phase, bool blocked) {
 // earlier one, and static initialization decides which ran first, so those
 // parts must not share a name.
 void register_lua_class(const char* class_name, const char* base, const LuaField* fields, int count);
+// Moves on every registration below. Script analysis reloads its definitions
+// when it moved, so a class registered after it started is known too.
+std::uint64_t lua_registry_revision();
 
 // One operator a value's metatable implements, as script analysis types it.
 // Each operand is a registered class name or number, or several joined by

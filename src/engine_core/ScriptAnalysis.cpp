@@ -383,6 +383,25 @@ std::optional<InstanceId> tagged_instance(Luau::TypeId type) {
     return tag->id;
 }
 
+// The registered class a type is, walking a per-instance type up to it. Empty
+// for anything that is not an instance or datatype class.
+std::string registered_class(Luau::TypeId type) {
+    const Luau::ExternType* extern_type = Luau::get<Luau::ExternType>(Luau::follow(type));
+    for (int depth = 0; extern_type != nullptr && depth < 64; ++depth) {
+        if (extern_type->name == "vector") {
+            return "Vector3";
+        }
+        if (lua_class_known(extern_type->name.c_str())) {
+            return extern_type->name;
+        }
+        if (!extern_type->parent) {
+            break;
+        }
+        extern_type = Luau::get<Luau::ExternType>(Luau::follow(*extern_type->parent));
+    }
+    return {};
+}
+
 bool missing_render_member(const Luau::TypeError& error) {
     if (const Luau::UnknownProperty* property = Luau::get<Luau::UnknownProperty>(error)) {
         return property->key == "PreRender" || property->key == "RenderStepped";
@@ -1126,8 +1145,11 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
 
 // A Luau autocomplete request. The worker answers it ahead of queued checks.
 struct CompleteRequest {
-    // A completion list, or the type at the offset.
+    // A completion list, or the type at the offset, or facts: the completion at
+    // `offset` (none when npos) and the type at each of `offsets`.
     bool type_at = false;
+    bool facts = false;
+    std::vector<std::size_t> offsets;
     // Requests in one lane replace each other while queued. Empty never does.
     std::string lane;
     std::shared_ptr<const WorldSnap> world;
@@ -1348,33 +1370,17 @@ std::string with_checked_buffer(WorkerEnv& env, const CompleteRequest& request, 
     return error;
 }
 
+LuauCompletion completion_at(WorkerEnv& env, const std::string& module_name, const std::string& text,
+                             std::size_t offset);
+
 LuauCompletion complete_job(WorkerEnv& env, const CompleteRequest& request) {
     LuauCompletion out;
-    out.error = with_checked_buffer(env, request, [&](const std::string& module_name) {
-        const Luau::AutocompleteResult result = Luau::autocomplete(
-            *env.frontend, module_name, position_of(request.source, request.offset),
-            [](std::string, std::optional<const Luau::ExternType*>, std::optional<std::string>) {
-                return std::optional<Luau::AutocompleteEntryMap>();
-            });
-        out.context = context_name(result.context);
-        for (const auto& [name, entry] : result.entryMap) {
-            LuauSuggestion item;
-            item.name = name;
-            item.kind = kind_name(entry.kind);
-            if (entry.type) {
-                item.type = Luau::toString(*entry.type);
-                if (const auto* fn = Luau::get<Luau::FunctionType>(Luau::follow(*entry.type))) {
-                    describe_function(*fn, entry.indexedWithSelf, item);
-                }
-            }
-            item.call = entry.parens != Luau::ParenthesesRecommendation::None;
-            item.wrong_index = entry.wrongIndexType;
-            out.items.push_back(std::move(item));
-        }
-        std::sort(out.items.begin(), out.items.end(),
-                  [](const LuauSuggestion& a, const LuauSuggestion& b) { return a.name < b.name; });
-        out.ran = true;
+    const std::string error = with_checked_buffer(env, request, [&](const std::string& module_name) {
+        out = completion_at(env, module_name, request.source, request.offset);
     });
+    if (!error.empty()) {
+        out.error = error;
+    }
     return out;
 }
 
@@ -1394,57 +1400,161 @@ std::optional<Luau::TypeId> local_type(const Luau::Module& module, Luau::AstLoca
     return std::nullopt;
 }
 
+// The object expression of a member, as the owner a docs lookup and a
+// FindFirstChild receiver need: a library global's name, or the registered
+// class and instance of its type.
+void describe_object(const Luau::Module& module, Luau::AstExpr* object, std::string& owner, bool& instance_known,
+                     InstanceId& instance) {
+    if (auto* global = object->as<Luau::AstExprGlobal>()) {
+        owner = global->name.value;
+    }
+    if (const Luau::TypeId* type = module.astTypes.find(object)) {
+        const std::string class_name = registered_class(*type);
+        if (!class_name.empty()) {
+            owner = class_name;
+        }
+        if (const std::optional<InstanceId> tagged = tagged_instance(*type)) {
+            instance_known = true;
+            instance = *tagged;
+        }
+    }
+}
+
+LuauTypeAt type_at_offset(const Luau::SourceModule& source, const Luau::Module& module, const std::string& text,
+                          std::size_t offset) {
+    LuauTypeAt out;
+    out.ran = true;
+    const Luau::Position at = position_of(text, offset);
+    Luau::ExprOrLocal found = Luau::findExprOrLocalAtPosition(source, at);
+    std::optional<Luau::TypeId> type;
+    bool with_self = false;
+    if (Luau::AstLocal* local = found.getLocal()) {
+        out.name = local->name.value;
+        out.kind = "local";
+        type = local_type(module, local);
+    } else if (Luau::AstExpr* expr = found.getExpr()) {
+        if (const Luau::TypeId* known = module.astTypes.find(expr)) {
+            type = *known;
+        }
+        if (auto* named = expr->as<Luau::AstExprLocal>()) {
+            out.name = named->local->name.value;
+            out.kind = "local";
+        } else if (auto* global = expr->as<Luau::AstExprGlobal>()) {
+            out.name = global->name.value;
+            out.kind = "global";
+        } else if (auto* index = expr->as<Luau::AstExprIndexName>()) {
+            out.name = index->index.value;
+            out.kind = "member";
+            with_self = index->op == ':';
+            describe_object(module, index->expr, out.described.owner, out.object_instance_known, out.object_instance);
+        } else {
+            out.kind = "expression";
+        }
+    }
+    if (!type) {
+        return out;
+    }
+    out.found = true;
+    out.described.name = out.name;
+    out.described.type = Luau::toString(*type);
+    // A table Luau named after the local that holds it prints as that name,
+    // which says nothing. Its shape does.
+    if (out.described.type == out.name) {
+        Luau::ToStringOptions shape;
+        shape.ignoreSyntheticName = true;
+        out.described.type = Luau::toString(*type, shape);
+    }
+    out.class_name = registered_class(*type);
+    if (const std::optional<InstanceId> tagged = tagged_instance(*type)) {
+        out.instance_known = true;
+        out.instance = *tagged;
+    }
+    if (const auto* fn = Luau::get<Luau::FunctionType>(Luau::follow(*type))) {
+        describe_function(*fn, with_self, out.described);
+    }
+    return out;
+}
+
 LuauTypeAt type_job(WorkerEnv& env, const CompleteRequest& request) {
     LuauTypeAt out;
     out.error = with_checked_buffer(env, request, [&](const std::string& module_name) {
-        out.ran = true;
         const Luau::SourceModule* source = env.frontend->getSourceModule(module_name);
         const Luau::ModulePtr module = env.frontend->moduleResolver.getModule(module_name);
         if (source == nullptr || module == nullptr) {
+            out.ran = true;
             return;
         }
-        const Luau::Position at = position_of(request.source, request.offset);
-        Luau::ExprOrLocal found = Luau::findExprOrLocalAtPosition(*source, at);
-        std::optional<Luau::TypeId> type;
-        bool with_self = false;
-        if (Luau::AstLocal* local = found.getLocal()) {
-            out.name = local->name.value;
-            out.kind = "local";
-            type = local_type(*module, local);
-        } else if (Luau::AstExpr* expr = found.getExpr()) {
-            if (const Luau::TypeId* known = module->astTypes.find(expr)) {
-                type = *known;
+        out = type_at_offset(*source, *module, request.source, request.offset);
+    });
+    return out;
+}
+
+// The completion at the caret, from a buffer already checked.
+LuauCompletion completion_at(WorkerEnv& env, const std::string& module_name, const std::string& text,
+                             std::size_t offset) {
+    LuauCompletion out;
+    const Luau::AutocompleteResult result = Luau::autocomplete(
+        *env.frontend, module_name, position_of(text, offset),
+        [](std::string, std::optional<const Luau::ExternType*>, std::optional<std::string>) {
+            return std::optional<Luau::AutocompleteEntryMap>();
+        });
+    out.context = context_name(result.context);
+    const Luau::ModulePtr module = env.frontend->moduleResolver.getModule(module_name);
+    // After '.' or ':', the expression before it.
+    for (auto node = result.ancestry.rbegin(); node != result.ancestry.rend() && module != nullptr; ++node) {
+        if (auto* index = (*node)->as<Luau::AstExprIndexName>()) {
+            bool known = false;
+            InstanceId instance = 0;
+            describe_object(*module, index->expr, out.receiver_class, known, instance);
+            if (index->expr->is<Luau::AstExprGlobal>()) {
+                out.receiver_global = index->expr->as<Luau::AstExprGlobal>()->name.value;
             }
-            if (auto* named = expr->as<Luau::AstExprLocal>()) {
-                out.name = named->local->name.value;
-                out.kind = "local";
-            } else if (auto* global = expr->as<Luau::AstExprGlobal>()) {
-                out.name = global->name.value;
-                out.kind = "global";
-            } else if (auto* index = expr->as<Luau::AstExprIndexName>()) {
-                out.name = index->index.value;
-                out.kind = "member";
-                with_self = index->op == ':';
+            break;
+        }
+    }
+    for (const auto& [name, entry] : result.entryMap) {
+        LuauSuggestion item;
+        item.name = name;
+        item.kind = kind_name(entry.kind);
+        if (entry.type) {
+            item.type = Luau::toString(*entry.type);
+            if (const auto* fn = Luau::get<Luau::FunctionType>(Luau::follow(*entry.type))) {
+                describe_function(*fn, entry.indexedWithSelf, item);
+            }
+        }
+        item.call = entry.parens != Luau::ParenthesesRecommendation::None;
+        item.wrong_index = entry.wrongIndexType;
+        item.type_correct = entry.typeCorrect != Luau::TypeCorrectKind::None;
+        if (entry.containingExternType && *entry.containingExternType != nullptr) {
+            item.owner = (*entry.containingExternType)->name == "vector" ? "Vector3"
+                                                                        : (*entry.containingExternType)->name;
+        } else if (!out.receiver_global.empty()) {
+            item.owner = out.receiver_global;
+        }
+        out.items.push_back(std::move(item));
+    }
+    std::sort(out.items.begin(), out.items.end(),
+              [](const LuauSuggestion& a, const LuauSuggestion& b) { return a.name < b.name; });
+    out.ran = true;
+    return out;
+}
+
+LuauFacts facts_job(WorkerEnv& env, const CompleteRequest& request) {
+    LuauFacts out;
+    out.error = with_checked_buffer(env, request, [&](const std::string& module_name) {
+        const Luau::SourceModule* source = env.frontend->getSourceModule(module_name);
+        const Luau::ModulePtr module = env.frontend->moduleResolver.getModule(module_name);
+        if (request.offset != std::string::npos) {
+            out.completion = completion_at(env, module_name, request.source, request.offset);
+        }
+        for (std::size_t offset : request.offsets) {
+            if (source != nullptr && module != nullptr) {
+                out.types.push_back(type_at_offset(*source, *module, request.source, offset));
             } else {
-                out.kind = "expression";
+                out.types.emplace_back();
             }
         }
-        if (!type) {
-            return;
-        }
-        out.found = true;
-        out.described.name = out.name;
-        out.described.type = Luau::toString(*type);
-        // A table Luau named after the local that holds it prints as that name,
-        // which says nothing. Its shape does.
-        if (out.described.type == out.name) {
-            Luau::ToStringOptions shape;
-            shape.ignoreSyntheticName = true;
-            out.described.type = Luau::toString(*type, shape);
-        }
-        if (const auto* fn = Luau::get<Luau::FunctionType>(Luau::follow(*type))) {
-            describe_function(*fn, with_self, out.described);
-        }
+        out.ran = true;
     });
     return out;
 }
@@ -1716,6 +1826,7 @@ void ScriptAnalysis::shutdown() {
     for (const std::shared_ptr<CompleteRequest>& request : stopped) {
         request->answer->completion.error = "script analysis has stopped";
         request->answer->type.error = "script analysis has stopped";
+        request->answer->facts.error = "script analysis has stopped";
         finish_request(*request);
     }
     if (state_->worker.joinable()) {
@@ -1754,7 +1865,9 @@ void ScriptAnalysis::run() {
             }
         }
         if (request) {
-            if (request->type_at) {
+            if (request->facts) {
+                request->answer->facts = facts_job(env, *request);
+            } else if (request->type_at) {
                 request->answer->type = type_job(env, *request);
             } else {
                 request->answer->completion = complete_job(env, *request);
@@ -1813,9 +1926,13 @@ struct ScriptAnalysis::LuauRequest : CompleteRequest {};
 std::shared_ptr<ScriptAnalysis::LuauRequest> ScriptAnalysis::queue_luau(bool type_at,
                                                                         const std::vector<LuaNode>& world,
                                                                         InstanceId script, std::string source,
-                                                                        std::size_t offset, const char* lane) {
+                                                                        std::size_t offset, const char* lane,
+                                                                        std::vector<std::size_t> offsets,
+                                                                        bool facts) {
     auto request = std::make_shared<LuauRequest>();
     request->type_at = type_at;
+    request->facts = facts;
+    request->offsets = std::move(offsets);
     request->lane = lane != nullptr ? lane : "";
     request->world = world_from_nodes(world);
     // The command line has no script. Its buffer gets an id no instance has.
@@ -1846,6 +1963,7 @@ std::shared_ptr<ScriptAnalysis::LuauRequest> ScriptAnalysis::queue_luau(bool typ
     for (const std::shared_ptr<CompleteRequest>& old : replaced) {
         old->answer->completion.error = "replaced by a newer request";
         old->answer->type.error = "replaced by a newer request";
+        old->answer->facts.error = "replaced by a newer request";
         finish_request(*old);
     }
     ensure_worker();
@@ -1894,6 +2012,33 @@ LuauCompletion ScriptAnalysis::luau_complete(const std::vector<LuaNode>& world, 
         return none;
     }
     return answered->answer->completion;
+}
+
+LuauFacts ScriptAnalysis::luau_facts(const std::vector<LuaNode>& world, InstanceId script, std::string source,
+                                     std::size_t caret, std::vector<std::size_t> offsets,
+                                     std::chrono::milliseconds wait) {
+    const std::shared_ptr<LuauRequest> request =
+        queue_luau(false, world, script, std::move(source), caret, "", std::move(offsets), true);
+    LuauFacts none;
+    if (!request) {
+        none.error = "script analysis is off or has stopped";
+        return none;
+    }
+    std::unique_lock<std::mutex> lock(request->mu);
+    if (!request->cv.wait_for(lock, wait, [&] { return request->done; })) {
+        none.error = "timed out";
+        return none;
+    }
+    return request->answer->facts;
+}
+
+std::shared_ptr<const LuauAnswer> ScriptAnalysis::luau_facts_later(const std::vector<LuaNode>& world,
+                                                                   InstanceId script, std::string source,
+                                                                   std::size_t caret, std::vector<std::size_t> offsets,
+                                                                   const char* lane) {
+    const std::shared_ptr<LuauRequest> request =
+        queue_luau(false, world, script, std::move(source), caret, lane, std::move(offsets), true);
+    return request ? request->answer : nullptr;
 }
 
 LuauTypeAt ScriptAnalysis::luau_type_at(const std::vector<LuaNode>& world, InstanceId script, std::string source,

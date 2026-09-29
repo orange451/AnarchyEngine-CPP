@@ -71,7 +71,16 @@ struct LuauSuggestion {
     // The same parameters one by one, as name and type. A name may be empty.
     std::vector<std::pair<std::string, std::string>> param_list;
     bool variadic = false;
+    // The registered class the name is a member of, or for a library's member
+    // the library, such as "task". Empty for a table's own field.
+    std::string owner;
+    // Luau finds the type matches what the position expects.
+    bool type_correct = false;
+    // A method, declared to take self.
+    bool method = false;
 };
+
+struct LuauTypeAt;
 
 struct LuauCompletion {
     // False when the worker did not answer in time, or analysis cannot run.
@@ -80,6 +89,9 @@ struct LuauCompletion {
     std::string context;
     std::vector<LuauSuggestion> items;
     std::string error;
+    // After '.' or ':', what the expression before it is. Empty otherwise.
+    std::string receiver_class;
+    std::string receiver_global;
 };
 
 // What Luau's type checker knows about the name or expression at a position.
@@ -88,11 +100,29 @@ struct LuauTypeAt {
     bool found = false;
     // The local, global, or member written there.
     std::string name;
-    // local, global, member, or expression.
+    // local, global, member, parameter, or expression.
     std::string kind;
-    // The type as Luau prints it, and a function's parts as LuauSuggestion has them.
+    // The type as Luau prints it, and a function's parts as LuauSuggestion has
+    // them. For a member, `described.owner` is its class or library.
     LuauSuggestion described;
+    // The registered class of the value, and the instance it is, when Luau
+    // knows. The place's instances each have their own type.
+    std::string class_name;
+    bool instance_known = false;
+    InstanceId instance = 0;
+    // For a member, the instance whose member it is, as FindFirstChild's receiver.
+    bool object_instance_known = false;
+    InstanceId object_instance = 0;
     std::string error;
+};
+
+// What Luau says about one buffer, from one check: the completion at the
+// caret, and the type at each other offset asked about.
+struct LuauFacts {
+    bool ran = false;
+    std::string error;
+    LuauCompletion completion;
+    std::vector<LuauTypeAt> types;
 };
 
 // A Luau answer on its way from the analysis worker. `ready` turns true once,
@@ -102,6 +132,7 @@ struct LuauAnswer {
     std::atomic<bool> ready{false};
     LuauCompletion completion;
     LuauTypeAt type;
+    LuauFacts facts;
 };
 
 // Incremental analysis of every Lua source in one DataModel.
@@ -202,6 +233,13 @@ public:
                                                           std::string source, std::size_t offset, const char* lane);
     std::shared_ptr<const LuauAnswer> luau_type_at_later(const std::vector<LuaNode>& world, InstanceId script,
                                                          std::string source, std::size_t offset, const char* lane);
+    // One check that answers the completion at `caret` (none when it is npos)
+    // and the type at each of `offsets`, in that order.
+    LuauFacts luau_facts(const std::vector<LuaNode>& world, InstanceId script, std::string source, std::size_t caret,
+                         std::vector<std::size_t> offsets, std::chrono::milliseconds wait);
+    std::shared_ptr<const LuauAnswer> luau_facts_later(const std::vector<LuaNode>& world, InstanceId script,
+                                                       std::string source, std::size_t caret,
+                                                       std::vector<std::size_t> offsets, const char* lane);
 
 private:
     struct State;
@@ -213,7 +251,8 @@ private:
                                                      std::chrono::milliseconds wait, std::string& error);
     // Queues a Luau request without waiting. Null when analysis has stopped.
     std::shared_ptr<LuauRequest> queue_luau(bool type_at, const std::vector<LuaNode>& world, InstanceId script,
-                                            std::string source, std::size_t offset, const char* lane);
+                                            std::string source, std::size_t offset, const char* lane,
+                                            std::vector<std::size_t> offsets = {}, bool facts = false);
 
     void ensure_worker();
     void shutdown();

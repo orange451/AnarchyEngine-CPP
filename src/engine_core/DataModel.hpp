@@ -13,6 +13,7 @@
 #include <memory>
 #include <new>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -60,6 +61,13 @@ struct AuthoredDirty {
 bool valid_guid(std::string_view guid);
 // 16 lowercase hex digits from a seeded 64-bit generator.
 std::string make_guid();
+
+// A create when the place already holds DataModel::kMaxInstances instances.
+// Nothing was created or changed. A caller says so and carries on.
+class InstanceCapacityError : public std::runtime_error {
+public:
+    InstanceCapacityError();
+};
 
 class ChangeHistoryService;
 class Engine;
@@ -137,6 +145,8 @@ public:
     T& create();
     GameObject& create_game_object();
     // How many more instances create can make before the world is full.
+    // How many more instances the place can hold. create throws
+    // InstanceCapacityError when it is 0.
     std::size_t room_left() const;
     void destroy(InstanceId id);
     // Destroys id and every descendant. destroy alone leaves the children alive

@@ -20,6 +20,8 @@ namespace ide {
 // the class could not be created. done is set after id.
 struct InsertResult {
     std::atomic<engine_core::InstanceId> id{0};
+    // Why nothing was made, such as a full place. Written before done.
+    std::string error;
     std::atomic<bool> done{false};
 };
 

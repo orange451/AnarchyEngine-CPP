@@ -96,7 +96,16 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     auto insert = jadefx::make<jadefx::MenuItem>("Insert Triangle");
     AttachIcon(*insert, "Mesh.png");
     insert->setOnAction([this](jadefx::ActionEvent&) {
-        runner_.simulation().on_simulation([](engine_core::DataModel& game) {
+        std::weak_ptr<int> alive = alive_;
+        runner_.simulation().on_simulation([this, alive](engine_core::DataModel& game) {
+            if (game.room_left() == 0) {
+                jadefx::runLater([this, alive] {
+                    if (!alive.expired()) {
+                        show_toast(engine_core::InstanceCapacityError().what());
+                    }
+                });
+                return;
+            }
             int existing = 0;
             for (engine_core::InstanceId id = game.first_child(game.id()); id != 0; id = game.next_sibling(id)) {
                 if (dynamic_cast<engine_core::TestTriangle*>(game.instance(id)) != nullptr) {
@@ -157,7 +166,11 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         runner_.simulation().on_simulation(
             [class_name = std::move(class_name), parent, result](engine_core::DataModel& world) {
                 engine_core::InstanceId made = 0;
-                if (parent_ok(world, parent)) {
+                std::string error;
+                const bool placed = parent_ok(world, parent);
+                if (placed && world.room_left() == 0) {
+                    error = engine_core::InstanceCapacityError().what();
+                } else if (placed) {
                     if (engine_core::DataModel* created = engine_core::lua_create_instance(world, class_name.c_str())) {
                         world.set_parent(created->id(), parent);
                         made = created->id();
@@ -171,6 +184,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
                 }
                 if (result) {
                     result->id.store(made, std::memory_order_relaxed);
+                    result->error = std::move(error);
                     result->done.store(true, std::memory_order_release);
                 }
             });

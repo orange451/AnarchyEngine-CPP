@@ -761,6 +761,9 @@ void IdeExplorer::finish_insert(engine_core::InstanceId made) {
     if (!pending_insert_) {
         return;
     }
+    if (made == 0 && !pending_insert_->error.empty() && host_.notice) {
+        host_.notice(pending_insert_->error);
+    }
     if (made == 0 || (read_ok_ && seen_.find(made) == seen_.end())) {
         pending_insert_.reset();
         return;

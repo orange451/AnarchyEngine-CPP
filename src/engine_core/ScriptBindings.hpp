@@ -119,6 +119,8 @@ inline int lua_guard(lua_State* state, Fn fn) {
         return fn();
     } catch (const ContractViolation& ex) {
         luaL_error(state, "%s", ex.what());
+    } catch (const InstanceCapacityError& ex) {
+        luaL_error(state, "%s", ex.what());
     }
 }
 

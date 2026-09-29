@@ -47,6 +47,8 @@ struct Rig {
     std::vector<std::pair<std::string, engine_core::InstanceId>> inserts;
     // Messages the explorer asked the studio to show.
     std::vector<std::string> notices;
+    // Set, an insert makes nothing and says this, as a full place does.
+    std::string refuse_inserts;
     // The modifier keys the next click sees.
     int mods = 0;
     std::shared_ptr<ide::IdeExplorer> explorer;
@@ -77,6 +79,11 @@ struct Rig {
         host.insert = [this](std::string class_name, engine_core::InstanceId parent,
                              std::shared_ptr<ide::InsertResult> result) {
             inserts.emplace_back(std::move(class_name), parent);
+            if (!refuse_inserts.empty()) {
+                result->error = refuse_inserts;
+                result->done = true;
+                return;
+            }
             engine_core::Folder& made = game.create<engine_core::Folder>();
             game.set_name(made.id(), "Made");
             game.set_parent(made.id(), parent);
@@ -832,6 +839,30 @@ engine_core::DataModel& CreateFolder(engine_core::DataModel& world) {
     return world.create<engine_core::Folder>();
 }
 
+// An insert the studio could not make, as in a full place, says why.
+void TestRefusedInsertSaysWhy() {
+    engine_core::register_lua_creatable("Folder", CreateFolder);
+    Rig rig;
+    rig.refuse_inserts = "The place is full.";
+    const std::vector<jadefx::Node*> found = rig.explorer->getElementsByClassName("explorer-add");
+    if (found.empty()) {
+        Expect(false, "the header has a + button");
+        return;
+    }
+    jadefx::Node* add = found.front();
+    const double x = add->getAbsoluteX() + add->getWidth() * 0.5;
+    const double y = add->getAbsoluteY() + add->getHeight() * 0.5;
+    rig.scene->noteButton(0, true, x, y, 0);
+    rig.scene->noteButton(0, false, x, y, 0);
+    rig.frame(0.1);
+    rig.key(jadefx::Key::Enter);
+    rig.frame(0.2);
+    rig.frame(0.3);
+    Expect(rig.inserts.size() == 1, "the refused insert was asked for");
+    Expect(rig.notices.size() == 1 && rig.notices[0] == "The place is full.", "a refused insert says why");
+    Expect(!rig.painted("Made"), "a refused insert shows nothing new");
+}
+
 void TestHeaderInsertsUnderTheRoot() {
     // The engine's registrars are not linked in here, so the class list needs one.
     engine_core::register_lua_creatable("Folder", CreateFolder);
@@ -913,6 +944,7 @@ int main() {
     TestRevealScrolls();
     TestRevealClearsAHidingFilter();
     TestHeaderInsertsUnderTheRoot();
+    TestRefusedInsertSaysWhy();
     if (gFailures == 0) {
         std::printf("explorer tests passed\n");
         return 0;

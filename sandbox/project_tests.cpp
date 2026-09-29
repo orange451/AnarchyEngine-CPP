@@ -1915,7 +1915,9 @@ TEST_CASE("A4 a loaded property keeps the instance's id", "[A4][disk][project]")
     project.save();
     edit_key(dir.path / leaf(game, a), "Size", triple(2, 2, 2));
     project.apply_disk();
-    REQUIRE(game.find_guid(guid) == a);
+    const std::optional<engine_core::InstanceId> found = game.find_guid(guid);
+    REQUIRE(found.has_value());
+    REQUIRE(*found == a);
 }
 
 TEST_CASE("A5 a rename and a move on disk load together, and the next save is quiet", "[A5][disk][project]") {

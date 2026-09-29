@@ -833,6 +833,10 @@ void add_engine_tools(McpServer& server, engine_core::Engine& engine, McpStudio 
                                  throw std::runtime_error("Instance.new cannot make \"" + class_name +
                                                           "\". list_classes names the ones it can.");
                              }
+                             // Refused before the gesture opens, so a full place leaves nothing pending.
+                             if (world.room_left() == 0) {
+                                 throw engine_core::InstanceCapacityError();
+                             }
                              world.history().set_pending_gesture("Insert " + class_name);
                              DataModel* made = engine_core::lua_create_instance(world, class_name.c_str());
                              if (made == nullptr) {

@@ -4548,6 +4548,62 @@ TEST_CASE("W2 the tree revision moves on names and the hierarchy, and not on pro
     REQUIRE(moved());
 }
 
+namespace {
+
+// The studio installs no contract handler: a contract failure there aborts.
+// These tests run as the studio does, and put the sandbox's handler back after.
+struct StudioContracts {
+    StudioContracts() { engine_core::set_contract_handler(nullptr); }
+    ~StudioContracts() {
+        engine_core::set_contract_handler([](const char* message) { throw engine_core::ContractViolation(message); });
+    }
+};
+
+}  // namespace
+
+TEST_CASE("S47 a full place is a script error in the studio, not an abort", "[S47]") {
+    StudioContracts studio;
+    ScriptRig rig;
+    add_script(rig.game, "Flood", R"(
+        local ok, message = pcall(function()
+            for _ = 1, 20000 do
+                Instance.new("Folder")
+            end
+        end)
+        _G.stopped = not ok
+        _G.said_full = string.find(tostring(message), "full", 1, true) ~= nil
+    )");
+    rig.game.start_simulation();
+    rig.frames(1);
+    INFO(rig.runtime.last_error());
+    bool stopped = false;
+    REQUIRE(rig.runtime.global_boolean("stopped", stopped));
+    REQUIRE(stopped);
+    bool said_full = false;
+    REQUIRE(rig.runtime.global_boolean("said_full", said_full));
+    REQUIRE(said_full);
+    rig.game.stop_simulation();
+}
+
+TEST_CASE("S48 creating past the instance cap throws and changes nothing", "[S48]") {
+    StudioContracts studio;
+    SimRole role;
+    engine_core::Game game;
+    std::vector<engine_core::InstanceId> made;
+    while (game.room_left() > 0) {
+        made.push_back(game.create<engine_core::Folder>().id());
+    }
+    const std::uint64_t tree = game.tree_revision();
+    REQUIRE_THROWS_AS(game.create<engine_core::Folder>(), engine_core::InstanceCapacityError);
+    REQUIRE_THROWS_AS(game.create<engine_core::Script>(), engine_core::InstanceCapacityError);
+    REQUIRE(game.room_left() == 0);
+    REQUIRE(game.tree_revision() == tree);
+    // Room made again is room to create in.
+    game.destroy(made.back());
+    REQUIRE(game.room_left() == 1);
+    REQUIRE_NOTHROW(game.create<engine_core::Script>());
+}
+
 TEST_CASE("S46 Instance.new past the instance cap is a script error, not an abort", "[S46]") {
     ScriptRig rig;
     add_script(rig.game, "Flood", R"(

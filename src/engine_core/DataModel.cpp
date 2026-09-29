@@ -304,6 +304,10 @@ std::size_t DataModel::room_left() const {
     return kMaxInstances - world.slots.size() + world.free_list.size();
 }
 
+InstanceCapacityError::InstanceCapacityError()
+    : std::runtime_error("The place is full: it already holds " + std::to_string(DataModel::kMaxInstances) +
+                         " instances, the most it can. Delete some to make room.") {}
+
 InstanceId DataModel::allocate() {
     State& world = *state_;
     std::uint32_t index = 0;
@@ -378,6 +382,11 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
     }
     if (ops.construct == nullptr || ops.destroy == nullptr || ops.bytes == 0 || ops.align == 0) {
         contract_fail("create is missing a constructor");
+    }
+    // Checked before anything changes. A type's storage never runs out first:
+    // each object it holds is also one of the place's instances.
+    if (room_left() == 0) {
+        throw InstanceCapacityError();
     }
     State& world = *state_;
     InstancePool* pool = nullptr;

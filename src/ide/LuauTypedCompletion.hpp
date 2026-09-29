@@ -25,4 +25,17 @@ bool complete_from_luau(CompletionList& list, engine_core::ScriptAnalysis& analy
                         int caret, const std::vector<engine_core::LuaNode>& world, std::uint32_t script_id,
                         std::chrono::milliseconds wait);
 
+// Writes the signature of the call the caret is inside from Luau's type of the
+// callee, when the resolver wrote none. Returns true when it wrote one.
+bool signature_from_luau(CompletionList& list, engine_core::ScriptAnalysis& analysis, std::string_view source,
+                         const std::vector<engine_core::LuaNode>& world, std::uint32_t script_id,
+                         std::chrono::milliseconds wait);
+
+// Replaces a hover the resolver could not type, one that shows no more than
+// the bare name, with Luau's type for it. A hover with a type or with docs is
+// left as it is. Returns true when it replaced the hover.
+bool hover_from_luau(HoverInfo& info, engine_core::ScriptAnalysis& analysis, std::string_view source, int index,
+                     const std::vector<engine_core::LuaNode>& world, std::uint32_t script_id,
+                     std::chrono::milliseconds wait);
+
 }  // namespace ide

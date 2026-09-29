@@ -1503,6 +1503,8 @@ public:
         if (!slot.found || AnonymousFunctionOpen(tokens_, slot.open)) {
             return;
         }
+        list.call_open = tokens_[static_cast<std::size_t>(slot.open)].begin;
+        list.call_argument = slot.argument;
         Shape* callee = receiver(slot.open);
         if (callee == nullptr || (callee->params.empty() && !callee->variadic)) {
             return;
@@ -3673,6 +3675,18 @@ CompletionList complete_luau(std::string_view source, int caret, const std::vect
     resolver.complete_callback(index, list);
     resolver.complete_signature(index, list);
     return list;
+}
+
+void set_signature(CompletionList& list, const std::vector<SignatureParam>& params, bool variadic, int active) {
+    std::vector<Param> written;
+    for (const SignatureParam& param : params) {
+        Param one;
+        // A parameter with no name shows its type alone.
+        one.name = param.name.empty() ? param.type_name : param.name;
+        one.type_name = param.name.empty() ? std::string() : param.type_name;
+        written.push_back(std::move(one));
+    }
+    SetSignature(list, "", written, variadic, active);
 }
 
 HoverInfo hover_luau(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world,

@@ -67,6 +67,9 @@ struct LuauSuggestion {
     bool function = false;
     std::string params;
     std::string returns;
+    // The same parameters one by one, as name and type. A name may be empty.
+    std::vector<std::pair<std::string, std::string>> param_list;
+    bool variadic = false;
 };
 
 struct LuauCompletion {
@@ -75,6 +78,19 @@ struct LuauCompletion {
     // expression, statement, property, type, keyword, string, hot comment, or unknown.
     std::string context;
     std::vector<LuauSuggestion> items;
+    std::string error;
+};
+
+// What Luau's type checker knows about the name or expression at a position.
+struct LuauTypeAt {
+    bool ran = false;
+    bool found = false;
+    // The local, global, or member written there.
+    std::string name;
+    // local, global, member, or expression.
+    std::string kind;
+    // The type as Luau prints it, and a function's parts as LuauSuggestion has them.
+    LuauSuggestion described;
     std::string error;
 };
 
@@ -165,9 +181,19 @@ public:
     // script's diagnostics. Any thread.
     LuauCompletion luau_complete(const std::vector<LuaNode>& world, InstanceId script, std::string source,
                                  std::size_t offset, std::chrono::milliseconds wait);
+    // The type Luau's checker gives the name or expression at byte `offset`, as
+    // luau_complete checks and answers. A ':' member leaves self out of `params`.
+    LuauTypeAt luau_type_at(const std::vector<LuaNode>& world, InstanceId script, std::string source,
+                            std::size_t offset, std::chrono::milliseconds wait);
 
 private:
     struct State;
+    struct LuauRequest;
+    // Queues a Luau request on the worker and waits for it. Null with `error`
+    // set when it was not answered in time.
+    std::shared_ptr<LuauRequest> ask_luau(bool type_at, const std::vector<LuaNode>& world,
+                                                     InstanceId script, std::string source, std::size_t offset,
+                                                     std::chrono::milliseconds wait, std::string& error);
 
     void ensure_worker();
     void shutdown();

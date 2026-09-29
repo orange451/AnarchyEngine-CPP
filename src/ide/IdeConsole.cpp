@@ -2,10 +2,13 @@
 
 #include "Engine.hpp"
 #include "LuauComplete.hpp"
+#include "LuauTypedCompletion.hpp"
+#include "ScriptAnalysis.hpp"
 #include "ScriptPairs.hpp"
 #include "ScriptRuntime.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <optional>
 #include <string>
@@ -224,8 +227,14 @@ void IdeConsole::refresh_completion(bool force) {
         return;
     }
     const std::string text = command_->getText();
-    completion_.present(complete_luau(text, command_->getCaretPosition(), completion_world(engine_, 0, nullptr), 0, false),
-                        force, *command_, x, y, height);
+    const int caret = command_->getCaretPosition();
+    const std::vector<engine_core::LuaNode> place = completion_world(engine_, 0, nullptr);
+    CompletionList list = complete_luau(text, caret, place, 0, false);
+    // What the resolver cannot follow gets Luau's answer, as in the script editor.
+    constexpr std::chrono::milliseconds kLuauWait(100);
+    complete_from_luau(list, engine_.analysis(), text, caret, place, 0, kLuauWait);
+    signature_from_luau(list, engine_.analysis(), text, place, 0, kLuauWait);
+    completion_.present(std::move(list), force, *command_, x, y, height);
 }
 
 void IdeConsole::accept_completion(bool parentheses) {

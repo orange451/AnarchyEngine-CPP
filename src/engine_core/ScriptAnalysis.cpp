@@ -20,6 +20,7 @@
 #include "Luau/Config.h"
 #include "Luau/Error.h"
 #include "Luau/FileResolver.h"
+#include "Luau/AstQuery.h"
 #include "Luau/Autocomplete.h"
 #include "Luau/Frontend.h"
 #include "Luau/Linter.h"
@@ -1082,6 +1083,8 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
 
 // A Luau autocomplete request. The worker answers it ahead of queued checks.
 struct CompleteRequest {
+    // A completion list, or the type at the offset.
+    bool type_at = false;
     std::shared_ptr<const WorldSnap> world;
     InstanceId script = 0;
     std::string source;
@@ -1090,6 +1093,7 @@ struct CompleteRequest {
     std::condition_variable cv;
     bool done = false;
     LuauCompletion result;
+    LuauTypeAt type_result;
 };
 
 // The place as completion sees it, as the snapshot a check reads. The root is
@@ -1192,16 +1196,21 @@ void describe_function(const Luau::FunctionType& fn, bool with_self, LuauSuggest
     for (std::size_t index = with_self ? 1 : 0; index < args.size(); ++index) {
         params += first ? "" : ", ";
         first = false;
+        std::string name;
         if (index < fn.argNames.size() && fn.argNames[index] && !fn.argNames[index]->name.empty()) {
-            params += fn.argNames[index]->name + ": ";
+            name = fn.argNames[index]->name;
+            params += name + ": ";
         }
-        params += Luau::toString(args[index]);
+        const std::string type = Luau::toString(args[index]);
+        params += type;
+        out.param_list.emplace_back(std::move(name), type);
     }
     // Luau gives a function it inferred a hidden `...` tail. Only a written one shows.
     if (args_tail) {
         const auto* variadic = Luau::get<Luau::VariadicTypePack>(Luau::follow(*args_tail));
         if (variadic == nullptr || !variadic->hidden) {
             params += first ? "..." : ", ...";
+            out.variadic = true;
         }
     }
     out.params = params + ")";
@@ -1221,13 +1230,13 @@ void describe_function(const Luau::FunctionType& fn, bool with_self, LuauSuggest
     out.function = true;
 }
 
-// Checks the request's buffer with full type graphs kept, asks Luau::autocomplete,
-// then marks the module dirty so the next check reads the place's own source.
-LuauCompletion complete_job(WorkerEnv& env, const CompleteRequest& request) {
-    LuauCompletion out;
+// Checks the request's buffer with full type graphs kept and calls `answer`
+// with the module name. Then marks the module dirty, so the next check reads
+// the place's own source. Returns an error, or empty.
+template <typename Answer>
+std::string with_checked_buffer(WorkerEnv& env, const CompleteRequest& request, Answer&& answer) {
     if (!env.init_error.empty() || env.frontend == nullptr || env.frontend->globals.globalScope == nullptr) {
-        out.error = env.init_error.empty() ? "script analysis is unavailable" : env.init_error;
-        return out;
+        return env.init_error.empty() ? "script analysis is unavailable" : env.init_error;
     }
     Luau::Allocator allocator;
     Luau::AstNameTable names(allocator);
@@ -1240,6 +1249,7 @@ LuauCompletion complete_job(WorkerEnv& env, const CompleteRequest& request) {
     const std::string module_name = module_name_of(request.script);
     const NodeSnap* self = request.world->find(request.script);
     const std::string display = self != nullptr && !self->name.empty() ? self->name : std::string("script");
+    std::string error;
     try {
         sync_world(env, request.world);
         env.files.module_name = &module_name;
@@ -1255,6 +1265,25 @@ LuauCompletion complete_job(WorkerEnv& env, const CompleteRequest& request) {
         options.runLintChecks = false;
         options.retainFullTypeGraphs = true;
         env.frontend->check(module_name, options);
+        answer(module_name);
+    } catch (const std::exception& failure) {
+        error = failure.what();
+    } catch (...) {
+        error = "the type check failed";
+    }
+    env.world = nullptr;
+    env.self = 0;
+    env.files.world = nullptr;
+    env.files.module_name = nullptr;
+    env.files.source = nullptr;
+    env.files.display = nullptr;
+    env.frontend->markDirty(module_name);
+    return error;
+}
+
+LuauCompletion complete_job(WorkerEnv& env, const CompleteRequest& request) {
+    LuauCompletion out;
+    out.error = with_checked_buffer(env, request, [&](const std::string& module_name) {
         const Luau::AutocompleteResult result = Luau::autocomplete(
             *env.frontend, module_name, position_of(request.source, request.offset),
             [](std::string, std::optional<const Luau::ExternType*>, std::optional<std::string>) {
@@ -1278,18 +1307,71 @@ LuauCompletion complete_job(WorkerEnv& env, const CompleteRequest& request) {
         std::sort(out.items.begin(), out.items.end(),
                   [](const LuauSuggestion& a, const LuauSuggestion& b) { return a.name < b.name; });
         out.ran = true;
-    } catch (const std::exception& error) {
-        out.error = error.what();
-    } catch (...) {
-        out.error = "autocomplete failed";
+    });
+    return out;
+}
+
+// The type of a local where it is bound: the binding in whichever scope of the
+// module declared it. The scope at the declaration itself does not have it yet.
+std::optional<Luau::TypeId> local_type(const Luau::Module& module, Luau::AstLocal* local) {
+    const Luau::Symbol symbol(local);
+    for (const auto& [location, scope] : module.scopes) {
+        if (scope == nullptr) {
+            continue;
+        }
+        const auto binding = scope->bindings.find(symbol);
+        if (binding != scope->bindings.end()) {
+            return binding->second.typeId;
+        }
     }
-    env.world = nullptr;
-    env.self = 0;
-    env.files.world = nullptr;
-    env.files.module_name = nullptr;
-    env.files.source = nullptr;
-    env.files.display = nullptr;
-    env.frontend->markDirty(module_name);
+    return std::nullopt;
+}
+
+LuauTypeAt type_job(WorkerEnv& env, const CompleteRequest& request) {
+    LuauTypeAt out;
+    out.error = with_checked_buffer(env, request, [&](const std::string& module_name) {
+        out.ran = true;
+        const Luau::SourceModule* source = env.frontend->getSourceModule(module_name);
+        const Luau::ModulePtr module = env.frontend->moduleResolver.getModule(module_name);
+        if (source == nullptr || module == nullptr) {
+            return;
+        }
+        const Luau::Position at = position_of(request.source, request.offset);
+        Luau::ExprOrLocal found = Luau::findExprOrLocalAtPosition(*source, at);
+        std::optional<Luau::TypeId> type;
+        bool with_self = false;
+        if (Luau::AstLocal* local = found.getLocal()) {
+            out.name = local->name.value;
+            out.kind = "local";
+            type = local_type(*module, local);
+        } else if (Luau::AstExpr* expr = found.getExpr()) {
+            if (const Luau::TypeId* known = module->astTypes.find(expr)) {
+                type = *known;
+            }
+            if (auto* named = expr->as<Luau::AstExprLocal>()) {
+                out.name = named->local->name.value;
+                out.kind = "local";
+            } else if (auto* global = expr->as<Luau::AstExprGlobal>()) {
+                out.name = global->name.value;
+                out.kind = "global";
+            } else if (auto* index = expr->as<Luau::AstExprIndexName>()) {
+                out.name = index->index.value;
+                out.kind = "member";
+                with_self = index->op == ':';
+            } else {
+                out.kind = "expression";
+            }
+        }
+        if (!type) {
+            return;
+        }
+        out.found = true;
+        out.described.name = out.name;
+        out.described.type = Luau::toString(*type);
+        if (const auto* fn = Luau::get<Luau::FunctionType>(Luau::follow(*type))) {
+            describe_function(*fn, with_self, out.described);
+        }
+    });
     return out;
 }
 
@@ -1582,8 +1664,13 @@ void ScriptAnalysis::run() {
             }
         }
         if (request) {
-            LuauCompletion answer = complete_job(env, *request);
-            {
+            if (request->type_at) {
+                LuauTypeAt answer = type_job(env, *request);
+                std::lock_guard<std::mutex> done(request->mu);
+                request->type_result = std::move(answer);
+                request->done = true;
+            } else {
+                LuauCompletion answer = complete_job(env, *request);
                 std::lock_guard<std::mutex> done(request->mu);
                 request->result = std::move(answer);
                 request->done = true;
@@ -1633,9 +1720,15 @@ void ScriptAnalysis::run() {
     }
 }
 
-LuauCompletion ScriptAnalysis::luau_complete(const std::vector<LuaNode>& world, InstanceId script, std::string source,
-                                            std::size_t offset, std::chrono::milliseconds wait) {
-    auto request = std::make_shared<CompleteRequest>();
+struct ScriptAnalysis::LuauRequest : CompleteRequest {};
+
+std::shared_ptr<ScriptAnalysis::LuauRequest> ScriptAnalysis::ask_luau(bool type_at, const std::vector<LuaNode>& world,
+                                                                      InstanceId script, std::string source,
+                                                                      std::size_t offset,
+                                                                      std::chrono::milliseconds wait,
+                                                                      std::string& error) {
+    auto request = std::make_shared<LuauRequest>();
+    request->type_at = type_at;
     request->world = world_from_nodes(world);
     // The command line has no script. Its buffer gets an id no instance has.
     request->script = script != 0 ? script : 0xfffffff0u;
@@ -1644,9 +1737,8 @@ LuauCompletion ScriptAnalysis::luau_complete(const std::vector<LuaNode>& world, 
     {
         std::lock_guard<std::mutex> lock(state_->mu);
         if (state_->stop) {
-            LuauCompletion none;
-            none.error = "script analysis has stopped";
-            return none;
+            error = "script analysis has stopped";
+            return nullptr;
         }
         state_->completions.push_back(request);
         state_->cv.notify_all();
@@ -1654,11 +1746,36 @@ LuauCompletion ScriptAnalysis::luau_complete(const std::vector<LuaNode>& world, 
     ensure_worker();
     std::unique_lock<std::mutex> lock(request->mu);
     if (!request->cv.wait_for(lock, wait, [&] { return request->done; })) {
-        LuauCompletion late;
-        late.error = "timed out";
-        return late;
+        error = "timed out";
+        return nullptr;
     }
-    return request->result;
+    return request;
+}
+
+LuauCompletion ScriptAnalysis::luau_complete(const std::vector<LuaNode>& world, InstanceId script, std::string source,
+                                            std::size_t offset, std::chrono::milliseconds wait) {
+    std::string error;
+    const std::shared_ptr<LuauRequest> answered = ask_luau(false, world, script, std::move(source), offset, wait, error);
+    if (!answered) {
+        LuauCompletion none;
+        none.error = error;
+        return none;
+    }
+    std::lock_guard<std::mutex> lock(answered->mu);
+    return answered->result;
+}
+
+LuauTypeAt ScriptAnalysis::luau_type_at(const std::vector<LuaNode>& world, InstanceId script, std::string source,
+                                        std::size_t offset, std::chrono::milliseconds wait) {
+    std::string error;
+    const std::shared_ptr<LuauRequest> answered = ask_luau(true, world, script, std::move(source), offset, wait, error);
+    if (!answered) {
+        LuauTypeAt none;
+        none.error = error;
+        return none;
+    }
+    std::lock_guard<std::mutex> lock(answered->mu);
+    return answered->type_result;
 }
 
 void ScriptAnalysis::set_enabled(bool enabled) {

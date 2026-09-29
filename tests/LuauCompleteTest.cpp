@@ -2628,6 +2628,92 @@ void testTypedFallback() {
     expect_has(typed_at_end("Vector3.new()."), "Lerp", "Vector3 methods");
 }
 
+// What the editor's hover shows: the resolver's, or Luau's type when the
+// resolver had no more than the name.
+ide::HoverInfo typed_hover(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world = {},
+                           std::uint32_t script_id = 0) {
+    ide::HoverInfo info = ide::hover_luau(source, index, world, script_id);
+    ide::hover_from_luau(info, typed_analysis(), source, index, world, script_id, std::chrono::seconds(20));
+    return info;
+}
+
+// What the editor shows while typing a call's arguments.
+ide::CompletionList typed_signature(std::string_view source, const std::vector<engine_core::LuaNode>& world = {},
+                                    std::uint32_t script_id = 0) {
+    ide::CompletionList list = ide::complete_luau(source, static_cast<int>(source.size()), world, script_id);
+    ide::signature_from_luau(list, typed_analysis(), source, world, script_id, std::chrono::seconds(20));
+    return list;
+}
+
+void testTypedHoverAndSignature() {
+    const char* account =
+        "local Account = {}\n"
+        "Account.__index = Account\n"
+        "function Account.new(owner: string)\n"
+        "    local self = setmetatable({}, Account)\n"
+        "    self.owner = owner\n"
+        "    self.balance = 0\n"
+        "    return self\n"
+        "end\n"
+        "function Account:Deposit(amount: number, note: string?)\n"
+        "    self.balance += amount\n"
+        "end\n"
+        "return Account\n";
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
+    world.push_back(node(9, 0, "Main", "Script"));
+    world.push_back(node(8, 0, "Account", "ModuleScript", account));
+    const std::string use = "local Account = require(game.Account)\nlocal a = Account.new(\"me\")\na:Deposit(5)\nprint(a.owner)\n";
+
+    // A method the resolver could not type.
+    const ide::HoverInfo method = typed_hover(use, find_nth(use, "Deposit", 0), world, 9);
+    expect_hover(method, "function Deposit(amount: number, note: string?)", "returns nothing", nullptr,
+                 "a required class's method");
+    if (method.begin != find_nth(use, "Deposit", 0) || method.end != method.begin + 7) {
+        fail("the hover covers the method's name");
+    }
+    const ide::HoverInfo field = typed_hover(use, find_nth(use, "owner", 0), world, 9);
+    expect_hover(field, "owner: string", "", nullptr, "a class instance's field");
+    const ide::HoverInfo object = typed_hover(use, find_nth(use, "a", 2), world, 9);
+    if (!object.found || object.title.rfind("a: ", 0) != 0 || object.title.size() <= 3) {
+        fail("a metatable object's hover has its type: " + object.title);
+    }
+
+    // What the resolver already says stays.
+    const char* counted = "local count = 1\nprint(count)\n";
+    expect_hover(typed_hover(counted, find_nth(counted, "count", 1)), "count: number", nullptr, nullptr,
+                 "a typed local stays the resolver's");
+    const char* library = "task.wait(1)\n";
+    const ide::HoverInfo plain_task = ide::hover_luau(library, 0);
+    const ide::HoverInfo typed_task = typed_hover(library, 0);
+    if (plain_task.title != typed_task.title || plain_task.summary != typed_task.summary) {
+        fail("a library's hover stays the resolver's");
+    }
+
+    // A call's signature the resolver could not write.
+    const ide::CompletionList first = typed_signature(use + "a:Deposit(", world, 9);
+    expect_signature(first, "(amount: number, note: string?)", "a method's signature drops self");
+    expect_bold(first, "amount: number", "the first argument");
+    const ide::CompletionList second = typed_signature(use + "a:Deposit(5, ", world, 9);
+    expect_bold(second, "note: string?", "the second argument");
+    const ide::CompletionList made = typed_signature(use + "local b = Account.new(", world, 9);
+    expect_signature(made, "(owner: string)", "a required constructor");
+
+    // A signature the resolver wrote stays.
+    const std::string written = "local function move(part: GameObject, by: number)\nend\nmove(";
+    const ide::CompletionList plain_move = ide::complete_luau(written, static_cast<int>(written.size()));
+    const ide::CompletionList typed_move = typed_signature(written);
+    if (plain_move.signature.empty() || plain_move.signature != typed_move.signature) {
+        fail("a signature the resolver wrote stays: '" + typed_move.signature + "'");
+    }
+    // A host function, which the resolver has no parameters for, gets the definitions'.
+    expect_signature(typed_signature("task.wait("), "(seconds: number?)", "a host function's signature");
+    // Outside a call there is none.
+    if (!typed_signature("local x = 1\nx").signature.empty()) {
+        fail("no signature outside a call");
+    }
+}
+
 // Everyday code the tests above do not cover, asked of both engines when the
 // shadow is on. It checks nothing: the shadow file says what each one offered.
 void shadowProbes() {
@@ -2707,6 +2793,7 @@ int RunLuauCompleteTests() {
         testRequire();
         testDeepNesting();
         testTypedFallback();
+        testTypedHoverAndSignature();
         shadowProbes();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());

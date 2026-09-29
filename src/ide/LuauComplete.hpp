@@ -47,6 +47,10 @@ struct CompletionList {
     int replace_end = 0;
     std::string prefix;
     std::vector<CompletionItem> items;
+    // Code-point position of the '(' of the call the caret is inside, and the
+    // argument it is in. -1 outside a call.
+    int call_open = -1;
+    int call_argument = 0;
     // Member site: the resolver knew what the receiver holds, so an empty list
     // means it has no such member. False when it could not follow the value.
     bool receiver_known = false;
@@ -62,6 +66,16 @@ struct CompletionList {
     int signature_bold_begin = -1;
     int signature_bold_end = -1;
 };
+
+// One parameter of a call's signature. `name` may be empty.
+struct SignatureParam {
+    std::string name;
+    std::string type_name;
+};
+
+// Writes `list.signature` for a call with these parameters, with `active` drawn
+// bold, as the resolver writes its own.
+void set_signature(CompletionList& list, const std::vector<SignatureParam>& params, bool variadic, int active);
 
 // Text for the popup shown while the pointer rests on a name.
 struct HoverInfo {

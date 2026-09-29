@@ -1170,6 +1170,7 @@ void IdeScriptEditor::refresh_completion(bool force) {
     // A value the resolver cannot follow, such as a metatable object or a loop
     // variable, gets Luau's own answer. The worker is usually idle between checks.
     complete_from_luau(list, engine_.analysis(), text, caret, place, id_, kLuauCompletionWait);
+    signature_from_luau(list, engine_.analysis(), text, place, id_, kLuauCompletionWait);
     completion_.present(std::move(list), force, *area_, bounds.x, bounds.y, bounds.height);
 }
 
@@ -1582,7 +1583,11 @@ void ScriptCodeArea::showHover() {
         showTip(heading, problem_detail(*mark), "", theme_color(title));
         return;
     }
-    const HoverInfo info = hover_luau(getText(), hover_index_, editor->world(), editor->id_);
+    const std::string text = getText();
+    const std::vector<engine_core::LuaNode> place = editor->world();
+    HoverInfo info = hover_luau(text, hover_index_, place, editor->id_);
+    // A name the resolver cannot type gets Luau's type for it.
+    hover_from_luau(info, editor->engine_.analysis(), text, hover_index_, place, editor->id_, kLuauCompletionWait);
     if (!info.found || info.title.empty()) {
         hover_waiting_ = false;
         return;

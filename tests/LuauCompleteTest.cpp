@@ -2850,6 +2850,35 @@ void shadowProbes() {
                         static_cast<long long>(ms), answer.items.size());
         }
     }
+    // A script that requires forty modules: the first ask checks them all,
+    // later asks only the edited script.
+    {
+        std::vector<engine_core::LuaNode> place;
+        place.push_back(node(0, 0xffffffffu, "game", "Game"));
+        std::string main = "";
+        for (int index = 0; index < 40; ++index) {
+            std::string body = "local M = {}\n";
+            for (int fn = 0; fn < 30; ++fn) {
+                body += "function M.f" + std::to_string(fn) + "(x: number): number\n    return x + " +
+                        std::to_string(fn) + "\nend\n";
+            }
+            body += "return M\n";
+            const std::uint32_t id = static_cast<std::uint32_t>(100 + index);
+            place.push_back(node(id, 0, ("Mod" + std::to_string(index)).c_str(), "ModuleScript", body));
+            main += "local m" + std::to_string(index) + " = require(game.Mod" + std::to_string(index) + ")\n";
+        }
+        main += "local t = setmetatable({}, { __index = m0 })\nt.";
+        place.push_back(node(9, 0, "Main", "Script", main));
+        for (int round = 0; round < 3; ++round) {
+            const auto start = std::chrono::steady_clock::now();
+            const engine_core::LuauCompletion answer =
+                typed_analysis().luau_complete(place, 9, main, main.size(), std::chrono::seconds(60));
+            const auto ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+            std::printf("luau timing: 40 modules, round %d, %lld ms, %zu names\n", round, static_cast<long long>(ms),
+                        answer.items.size());
+        }
+    }
     const char* account =
         "local Account = {}\n"
         "Account.__index = Account\n"

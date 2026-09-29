@@ -892,11 +892,52 @@ std::string checked_source(const std::string& source, const Luau::ParseResult& p
     return check_source;
 }
 
+// Two snapshots with the same instances, parents, names, and classes. Sources
+// may differ. Completion's snapshots and the analyzer's are made apart, so
+// they are compared by what they hold, not by identity.
+bool same_tree(const WorldSnap& a, const WorldSnap& b) {
+    if (a.root != b.root || a.nodes.size() != b.nodes.size()) {
+        return false;
+    }
+    std::unordered_map<InstanceId, const NodeSnap*> before;
+    before.reserve(a.nodes.size());
+    for (const NodeSnap& node : a.nodes) {
+        before.emplace(node.id, &node);
+    }
+    for (const NodeSnap& node : b.nodes) {
+        const auto was = before.find(node.id);
+        if (was == before.end() || was->second->parent != node.parent || was->second->name != node.name ||
+            was->second->class_name != node.class_name || was->second->lua != node.lua ||
+            was->second->module != node.module) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Required modules stay cached in the frontend. A new snapshot can change
 // their source or what their paths reach, so recheck them. A script the
 // snapshot lacks is gone, and so is its cached module.
 void sync_world(WorkerEnv& env, const std::shared_ptr<const WorldSnap>& world) {
-    if (env.checked_world == world) {
+    // A place with no root, as when completion could not read it, says nothing
+    // about the tree. The cached modules stay for the next real snapshot.
+    if (env.checked_world == world || world->nodes.empty()) {
+        return;
+    }
+    // The same tree keeps every cached module and the place's types. Only a
+    // script whose source changed, and what requires it, is checked again.
+    if (env.checked_world != nullptr && env.place != nullptr && same_tree(*env.checked_world, *world)) {
+        std::unordered_map<InstanceId, const NodeSnap*> before;
+        before.reserve(env.checked_world->nodes.size());
+        for (const NodeSnap& node : env.checked_world->nodes) {
+            before.emplace(node.id, &node);
+        }
+        for (const NodeSnap& node : world->nodes) {
+            if (node.lua && before.at(node.id)->source != node.source) {
+                env.frontend->markDirty(module_name_of(node.id));
+            }
+        }
+        env.checked_world = world;
         return;
     }
     std::unordered_set<std::string> live;

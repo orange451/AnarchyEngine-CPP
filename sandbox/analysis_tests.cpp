@@ -3,6 +3,7 @@
 #include "Game.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
+#include "LuaSource.hpp"
 #include "ModuleScript.hpp"
 #include "Project.hpp"
 #include "Script.hpp"
@@ -1020,4 +1021,70 @@ TEST_CASE("A27 --!nonstrict below a first comment line still checks unknown memb
         }
     }
     REQUIRE(prerender);
+}
+
+namespace {
+
+// The place as completion sends it: every instance, with `buffer` as the source
+// of `edited`.
+std::vector<engine_core::LuaNode> completion_nodes(engine_core::DataModel& game, engine_core::InstanceId edited,
+                                                   const std::string& buffer) {
+    std::vector<engine_core::LuaNode> nodes;
+    engine_core::LuaNode root;
+    root.id = 0;
+    root.parent = engine_core::DataModel::kNoParent;
+    root.name = game.name(0);
+    root.class_name = game.class_name();
+    nodes.push_back(root);
+    game.for_each_instance([&](engine_core::DataModel& object) {
+        if (object.id() == 0) {
+            return;
+        }
+        engine_core::LuaNode node;
+        node.id = object.id();
+        node.parent = game.parent(object.id());
+        node.name = game.name(object.id());
+        node.class_name = object.class_name();
+        if (auto* source = dynamic_cast<engine_core::LuaSource*>(&object)) {
+            node.source = object.id() == edited ? buffer : source->source();
+        }
+        nodes.push_back(node);
+    });
+    return nodes;
+}
+
+}  // namespace
+
+TEST_CASE("A28 completion against an unsaved buffer never reaches another script's diagnostics", "[A28]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::ModuleScript& module = rig.game.create<engine_core::ModuleScript>();
+    rig.game.set_name(module.id(), "Mod");
+    module.set_source("return { a = 1 }\n");
+    rig.game.set_parent(module.id(), rig.game.id());
+    engine_core::Script& script =
+        add_script(rig.game, "Main", "--!strict\nlocal M = require(script.Parent.Mod)\nlocal value: number = M.b\n");
+    settle(analysis);
+    const std::string before = dump(analysis.diagnostics(script.id()));
+    INFO(before);
+    REQUIRE(before.find("b") != std::string::npos);
+
+    // The module is being edited to add b, and the edit is not saved.
+    const std::string buffer = "return { a = 1, b = 2 }\n";
+    for (int round = 0; round < 3; ++round) {
+        const engine_core::LuauCompletion asked = analysis.luau_complete(
+            completion_nodes(rig.game, module.id(), buffer), module.id(), buffer, buffer.size(), std::chrono::seconds(20));
+        REQUIRE(asked.ran);
+        analysis.invalidate(script.id());
+        settle(analysis);
+        INFO(dump(analysis.diagnostics(script.id())));
+        REQUIRE(dump(analysis.diagnostics(script.id())) == before);
+    }
+
+    // Once the edit is saved, the script sees it.
+    module.set_source(buffer);
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(script.id())));
+    REQUIRE(dump(analysis.diagnostics(script.id())).find("M.b") == std::string::npos);
+    REQUIRE_FALSE(has_code(analysis.diagnostics(script.id()), "Type"));
 }

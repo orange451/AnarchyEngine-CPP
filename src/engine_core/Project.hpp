@@ -188,10 +188,6 @@ public:
     };
     const SaveReport& last_save() const { return last_save_; }
 
-    // How many instances the last load moved from game into Workspace: a place
-    // saved before the scene services kept them under game. 0 for a place saved since.
-    std::size_t moved_to_workspace() const { return moved_to_workspace_; }
-
 private:
     Project();
 
@@ -255,7 +251,6 @@ private:
     std::unordered_map<InstanceId, std::string> id_guid_;
     std::unordered_map<std::string, InstanceId> guid_id_;
     SaveReport last_save_;
-    std::size_t moved_to_workspace_ = 0;
 };
 
 }  // namespace engine_core

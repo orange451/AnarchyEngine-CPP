@@ -280,8 +280,6 @@ struct PlanNode {
     // A scene service the files lack, made by the read at its defaults. It has
     // no file until the next save writes one.
     bool made = false;
-    // Saved under game, before the scene services; the read moved it into Workspace.
-    bool moved_to_workspace = false;
 };
 
 }  // namespace detail
@@ -316,8 +314,7 @@ public:
         }
         PlanNode root;
         read_props(root, init, std::string(), /*root*/ true);
-        // Projects saved before the root was its own class call it DataModel.
-        if (root.class_name != "Game" && root.class_name != "DataModel") {
+        if (root.class_name != "Game") {
             fail(init + ": the root class must be Game");
         }
         claim(root.guid, init);
@@ -520,11 +517,10 @@ private:
         scan(dir, index);
     }
 
-    // Game holds the four scene services and nothing else. A place saved before
-    // them keeps its top-level instances under game: they move to the end of
-    // Workspace, in their order. A service the files lack is made at its
-    // defaults. Each service's GUID is fixed, so every read of the same files
-    // gives the same tree, and nothing is written until the next save.
+    // Game holds the four scene services and nothing else. A service the files
+    // lack is made at its defaults. Each service's GUID is fixed, so every read
+    // of the same files gives the same tree, and nothing is written until the
+    // next save.
     void adopt_scene_services() {
         std::vector<std::size_t> parent(nodes_.size(), 0);
         for (std::size_t index = 0; index < nodes_.size(); ++index) {
@@ -542,6 +538,9 @@ private:
                 // The name is fixed too. A file that says otherwise is read as the service.
                 node.name = node.class_name;
                 continue;
+            }
+            if (parent[index] == 0) {
+                fail(node.props_path + ": only a scene service can be a child of game");
             }
             for (const char* service : kSceneServiceClasses) {
                 if (node.guid == scene_service_guid(service)) {
@@ -571,13 +570,6 @@ private:
                 nodes_.push_back(std::move(made));
             }
             services.push_back(found);
-        }
-        const std::size_t workspace = services[0];
-        for (std::size_t child : nodes_[0].children) {
-            if (!is_scene_service_class(nodes_[child].class_name)) {
-                nodes_[child].moved_to_workspace = true;
-                nodes_[workspace].children.push_back(child);
-            }
         }
         nodes_[0].children = std::move(services);
     }
@@ -1243,13 +1235,11 @@ void Project::read_into_game(const fs::path& root, bool replace) {
         rebuild.finish();
     }
     const std::vector<std::size_t> parents = parents_of(plan);
-    moved_to_workspace_ = 0;
     bool made = false;
     for (std::size_t index = 0; index < plan.size(); ++index) {
         const PlanNode& node = plan[index];
         id_guid_[ids[index]] = node.guid;
         guid_id_[node.guid] = ids[index];
-        moved_to_workspace_ += node.moved_to_workspace ? 1 : 0;
         // A service the read made has no file: to a save, it is new.
         if (node.made) {
             made = true;
@@ -1258,8 +1248,8 @@ void Project::read_into_game(const fs::path& root, bool replace) {
         files_[node.guid] = from_disk(node, index == 0 ? std::string() : plan[parents[index]].guid,
                                       written_doc(*game_, ids[index], node.doc));
     }
-    // game's children are not the ones its file lists, so the next save writes it.
-    if (made || moved_to_workspace_ != 0) {
+    // A service the read made is not among game's children on disk, so the next save writes game.
+    if (made) {
         game_->mark_authored_dirty(0);
     }
 }
@@ -1396,8 +1386,7 @@ bool Project::unsaved() const {
             return true;
         }
         for (const KeyMerge& merged : merge_keys(was.props, was.props, planned.props)) {
-            // The root's class is always the studio's; files saved before say DataModel.
-            if (merged.change == KeyChange::StudioOnly && !(guid == tree[0].guid && merged.key == "class")) {
+            if (merged.change == KeyChange::StudioOnly) {
                 return true;
             }
         }
@@ -1859,7 +1848,7 @@ Project::Comparison Project::compare_disk() const {
         }
         for (const KeyMerge& merged : merge_keys(was, disk, mine)) {
             // game's children are the scene services in a fixed order; a list in
-            // an old root file is nothing to load.
+            // the root file is nothing to load.
             if (merged.key == "class" || (index == 0 && merged.key == "children")) {
                 continue;
             }

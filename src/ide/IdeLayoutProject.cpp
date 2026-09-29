@@ -327,13 +327,6 @@ void IdeLayout::open_project_at(const std::filesystem::path& root) {
     forget_conflicts();
     mark_saved();
     show_toast("Opened " + project_->name());
-    // A place saved before the scene services: its files move at the next save.
-    if (const std::size_t moved = project_->moved_to_workspace(); moved != 0) {
-        runner_.simulation().scripts().append_output(
-            engine_core::ScriptRuntime::OutputKind::Print,
-            "Moved " + std::to_string(moved) + (moved == 1 ? " item" : " items") +
-                " from game into Workspace. Save to keep the new layout.");
-    }
 }
 
 bool IdeLayout::save_open_project(std::function<void()> then,

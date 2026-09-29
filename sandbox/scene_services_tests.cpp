@@ -373,18 +373,21 @@ std::string instance_file(const char* klass, const char* guid, const char* name)
            "\"\n}\n";
 }
 
-// A place saved before the scene services: a triangle, a script, and a folder
-// with a child, all directly under game.
-void write_old_place(const std::filesystem::path& root) {
+// A place whose files hold Workspace but no other scene service: a triangle, a
+// script, and a folder with a child, all in Workspace.
+void write_partial_place(const std::filesystem::path& root) {
+    namespace fs = std::filesystem;
     write_text(root / "project.json",
-               "{\"format\": 1, \"name\": \"Old\", \"engine\": \"engine_core\", \"tree\": {\"src\": \"src\"}, "
+               "{\"format\": 1, \"name\": \"Partial\", \"engine\": \"engine_core\", \"tree\": {\"src\": \"src\"}, "
                "\"resources\": {\"root\": \"resources\"}}\n");
-    write_text(root / "src" / "init.json", instance_file("Game", "root0", "Old"));
-    write_text(root / "src" / "Tri.aaaa.json", instance_file("TestTriangle", "aaaa", "Tri"));
-    write_text(root / "src" / "Main.bbbb.meta.json", instance_file("Script", "bbbb", "Main"));
-    write_text(root / "src" / "Main.bbbb.luau", "_G.migrated = script.Parent == workspace\n");
-    write_text(root / "src" / "Box.cccc" / "init.json", instance_file("Folder", "cccc", "Box"));
-    write_text(root / "src" / "Box.cccc" / "Inner.dddd.json", instance_file("Folder", "dddd", "Inner"));
+    write_text(root / "src" / "init.json", instance_file("Game", "root0", "Partial"));
+    const fs::path workspace = root / "src" / "Workspace.workspace";
+    write_text(workspace / "init.json", instance_file("Workspace", "workspace", "Workspace"));
+    write_text(workspace / "Tri.aaaa.json", instance_file("TestTriangle", "aaaa", "Tri"));
+    write_text(workspace / "Main.bbbb.meta.json", instance_file("Script", "bbbb", "Main"));
+    write_text(workspace / "Main.bbbb.luau", "print('main')\n");
+    write_text(workspace / "Box.cccc" / "init.json", instance_file("Folder", "cccc", "Box"));
+    write_text(workspace / "Box.cccc" / "Inner.dddd.json", instance_file("Folder", "dddd", "Inner"));
 }
 
 std::vector<std::string> child_names(const DataModel& game, InstanceId parent) {
@@ -397,45 +400,35 @@ std::vector<std::string> child_names(const DataModel& game, InstanceId parent) {
 
 }  // namespace
 
-TEST_CASE("SS10 a place saved before the scene services loads into Workspace", "[SS10][project]") {
+TEST_CASE("SS10 a place missing scene services loads with them made", "[SS10][project]") {
     SimRole role;
     TempDir dir;
-    write_old_place(dir.path);
+    write_partial_place(dir.path);
     namespace fs = std::filesystem;
     {
         engine_core::Project project = engine_core::Project::load(dir.path);
         DataModel& game = project.datamodel();
         REQUIRE(child_names(game, 0) == std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts"});
         const InstanceId workspace = game.scene_service("Workspace");
-        // In their saved order under game, which is by GUID.
         REQUIRE(child_names(game, workspace) == std::vector<std::string>{"Tri", "Main", "Box"});
         REQUIRE(child_names(game, *game.find_guid("cccc")) == std::vector<std::string>{"Inner"});
-        REQUIRE(project.moved_to_workspace() == 3);
-        // Reading the disk again gives the same tree: nothing differs but the move.
+        // Reading the disk again gives the same tree: nothing differs but the made services.
         const engine_core::DiskScan scan = project.scan_disk();
         REQUIRE(scan.conflicts.empty());
         REQUIRE_FALSE(scan.has_disk_changes);
         REQUIRE(project.unsaved());
         // Nothing is written until a save.
-        REQUIRE(fs::exists(dir.path / "src" / "Tri.aaaa.json"));
-        REQUIRE_FALSE(fs::exists(dir.path / "src" / "Workspace.workspace"));
+        REQUIRE_FALSE(fs::exists(dir.path / "src" / "Lighting.lighting.json"));
 
         project.save();
-        REQUIRE(fs::exists(dir.path / "src" / "Workspace.workspace" / "init.json"));
-        REQUIRE(fs::exists(dir.path / "src" / "Workspace.workspace" / "Tri.aaaa.json"));
-        REQUIRE(fs::exists(dir.path / "src" / "Workspace.workspace" / "Main.bbbb.luau"));
-        REQUIRE(fs::exists(dir.path / "src" / "Workspace.workspace" / "Box.cccc" / "Inner.dddd.json"));
         REQUIRE(fs::exists(dir.path / "src" / "Lighting.lighting.json"));
         REQUIRE(fs::exists(dir.path / "src" / "Storage.storage.json"));
         REQUIRE(fs::exists(dir.path / "src" / "Scripts.scripts.json"));
-        REQUIRE_FALSE(fs::exists(dir.path / "src" / "Tri.aaaa.json"));
-        REQUIRE_FALSE(fs::exists(dir.path / "src" / "Main.bbbb.luau"));
-        REQUIRE_FALSE(fs::exists(dir.path / "src" / "Box.cccc"));
+        REQUIRE(fs::exists(dir.path / "src" / "Workspace.workspace" / "Box.cccc" / "Inner.dddd.json"));
         REQUIRE_FALSE(project.unsaved());
     }
     engine_core::Project again = engine_core::Project::load(dir.path);
     DataModel& game = again.datamodel();
-    REQUIRE(again.moved_to_workspace() == 0);
     REQUIRE(child_names(game, game.scene_service("Workspace")) == std::vector<std::string>{"Tri", "Main", "Box"});
     again.save();
     REQUIRE(again.last_save().written.empty());
@@ -445,12 +438,12 @@ TEST_CASE("SS10 a place saved before the scene services loads into Workspace", "
 
 // A service the load made has no file until a save writes one, so loading
 // other changes from disk must not give it one.
-TEST_CASE("SS14 changes from disk in an old place still save", "[SS14][project]") {
+TEST_CASE("SS14 changes from disk in a place missing scene services still save", "[SS14][project]") {
     SimRole role;
     TempDir dir;
-    write_old_place(dir.path);
+    write_partial_place(dir.path);
     engine_core::Project project = engine_core::Project::load(dir.path);
-    write_text(dir.path / "src" / "Main.bbbb.luau", "print('edited outside')\n");
+    write_text(dir.path / "src" / "Workspace.workspace" / "Main.bbbb.luau", "print('edited outside')\n");
     const engine_core::DiskScan applied = project.apply_disk();
     REQUIRE(applied.conflicts.empty());
     REQUIRE(applied.loaded == std::vector<std::string>{"Main"});
@@ -460,28 +453,42 @@ TEST_CASE("SS14 changes from disk in an old place still save", "[SS14][project]"
     REQUIRE_FALSE(project.unsaved());
 }
 
-TEST_CASE("SS11 a file may not take a scene service's GUID or put one elsewhere", "[SS11][project]") {
+TEST_CASE("SS11 a file may not take a scene service's GUID, put one elsewhere, or sit under game",
+          "[SS11][project]") {
     SimRole role;
+    const std::filesystem::path box = std::filesystem::path("src") / "Workspace.workspace" / "Box.cccc";
     {
         TempDir dir;
-        write_old_place(dir.path);
-        write_text(dir.path / "src" / "Fake.workspace.json", instance_file("Folder", "workspace", "Fake"));
+        write_partial_place(dir.path);
+        write_text(dir.path / box / "Fake.storage.json", instance_file("Folder", "storage", "Fake"));
         try {
             engine_core::Project::load(dir.path);
             FAIL("the load should refuse the GUID");
         } catch (const engine_core::ProjectError& error) {
-            REQUIRE(std::string(error.what()).find("GUID workspace is reserved for Workspace") != std::string::npos);
+            REQUIRE(std::string(error.what()).find("GUID storage is reserved for Storage") != std::string::npos);
         }
     }
     {
         TempDir dir;
-        write_old_place(dir.path);
-        write_text(dir.path / "src" / "Box.cccc" / "Lighting.lighting.json", instance_file("Lighting", "lighting", "L"));
+        write_partial_place(dir.path);
+        write_text(dir.path / box / "Lighting.lighting.json", instance_file("Lighting", "lighting", "L"));
         try {
             engine_core::Project::load(dir.path);
             FAIL("the load should refuse a service below game");
         } catch (const engine_core::ProjectError& error) {
             REQUIRE(std::string(error.what()).find("Lighting must be a child of game with GUID lighting") !=
+                    std::string::npos);
+        }
+    }
+    {
+        TempDir dir;
+        write_partial_place(dir.path);
+        write_text(dir.path / "src" / "Loose.eeee.json", instance_file("Folder", "eeee", "Loose"));
+        try {
+            engine_core::Project::load(dir.path);
+            FAIL("the load should refuse an instance directly under game");
+        } catch (const engine_core::ProjectError& error) {
+            REQUIRE(std::string(error.what()).find("only a scene service can be a child of game") !=
                     std::string::npos);
         }
     }

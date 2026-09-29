@@ -126,7 +126,7 @@ void write_bare_project(const fs::path& root, const char* root_extra = "", const
     write_file(root / "project.json",
                "{\"format\": 1, \"name\": \"Hand\", \"engine\": \"engine_core\", \"tree\": {\"src\": \"src\"}, "
                "\"resources\": {\"root\": \"resources\"}}\n");
-    write_file(root / "src" / "init.json", meta("DataModel", "root0", "Hand", root_extra));
+    write_file(root / "src" / "init.json", meta("Game", "root0", "Hand", root_extra));
     write_file(root / "src" / kWorkspace / "init.json", meta("Workspace", "workspace", "Workspace", workspace_extra));
     write_file(root / "src" / "Lighting.lighting.json", meta("Lighting", "lighting", "Lighting"));
     write_file(root / "src" / "Storage.storage.json", meta("Storage", "storage", "Storage"));
@@ -618,10 +618,12 @@ TEST_CASE("load errors", "[project]") {
         write_file(dir.path / "src" / kWorkspace / "G.aaa.json", meta("Game", "aaa", "G"));
         REQUIRE_THROWS_AS(Project::load(dir.path), ProjectError);
     }
-    SECTION("the root is a Game or, from before Game, a DataModel") {
+    SECTION("the root is a Game") {
         TempDir dir;
         write_bare_project(dir.path);
         write_file(dir.path / "src" / "init.json", meta("Folder", "root0", "Hand"));
+        REQUIRE_THROWS_AS(Project::load(dir.path), ProjectError);
+        write_file(dir.path / "src" / "init.json", meta("DataModel", "root0", "Hand"));
         REQUIRE_THROWS_AS(Project::load(dir.path), ProjectError);
     }
     SECTION("a .luau without .meta.json is an error") {
@@ -2549,12 +2551,11 @@ TEST_CASE("P21 a save over a conflict that cannot remove the other file leaves t
 TEST_CASE("P19 a project with more instances than a place holds is an error, not an abort", "[P19][project]") {
     SimRole role;
     TempDir dir;
-    Project project = Project::create(dir.path);
-    // Under game, as a place saved before the scene services has them: a load
-    // moves them into Workspace.
+    write_bare_project(dir.path);
+    Project project = Project::load(dir.path);
     for (std::size_t i = 0; i <= DataModel::kMaxInstances; ++i) {
         const std::string guid = "p" + std::to_string(i);
-        std::ofstream out(dir.path / "src" / ("Part." + guid + ".json"), std::ios::binary);
+        std::ofstream out(dir.path / "src" / kWorkspace / ("Part." + guid + ".json"), std::ios::binary);
         out << meta("DataModel", guid.c_str(), "Part");
     }
     REQUIRE_THROWS_AS(project.scan_disk(), ProjectError);

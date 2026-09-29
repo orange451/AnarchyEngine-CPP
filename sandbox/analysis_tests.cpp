@@ -434,12 +434,13 @@ TEST_CASE("A13 a loaded project is analyzed against the whole loaded tree", "[A1
         std::ofstream(dir / path, std::ios::binary) << bytes;
     };
     write("project.json", "{\"format\": 1, \"name\": \"A13\", \"tree\": {\"src\": \"src\"}}\n");
-    write("src/init.json", "{\"class\": \"DataModel\", \"id\": \"root0\", \"Name\": \"A13\"}\n");
+    write("src/init.json", "{\"class\": \"Game\", \"id\": \"root0\", \"Name\": \"A13\"}\n");
+    write("src/Workspace.workspace/init.json", "{\"class\": \"Workspace\", \"id\": \"workspace\", \"Name\": \"Workspace\"}\n");
     // Siblings sort by GUID and the loader parents the last one first, so the
     // script is in the tree before Tri0 is.
-    write("src/Tri0.aaa.json", "{\"class\": \"TestTriangle\", \"id\": \"aaa\", \"Name\": \"Tri0\"}\n");
-    write("src/Hop.zzz.meta.json", "{\"class\": \"Script\", \"id\": \"zzz\", \"Name\": \"Hop\"}\n");
-    write("src/Hop.zzz.luau",
+    write("src/Workspace.workspace/Tri0.aaa.json", "{\"class\": \"TestTriangle\", \"id\": \"aaa\", \"Name\": \"Tri0\"}\n");
+    write("src/Workspace.workspace/Hop.zzz.meta.json", "{\"class\": \"Script\", \"id\": \"zzz\", \"Name\": \"Hop\"}\n");
+    write("src/Workspace.workspace/Hop.zzz.luau",
           "local tri = workspace:FindFirstChild(\"Tri0\")\n"
           "assert(tri)\n"
           "local home = tri.Position\n"

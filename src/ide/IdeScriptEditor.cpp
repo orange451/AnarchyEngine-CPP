@@ -137,6 +137,7 @@ public:
     void handleText(jadefx::TextEvent& event) override;
     bool applyPair(char unit);
     bool applyEnter();
+    bool applyComment();
     void handleMousePressed(const jadefx::MouseEvent& event) override;
     void handleMouseMoved(const jadefx::MouseEvent& event) override;
     void handleScroll(jadefx::ScrollEvent& event) override;
@@ -1211,6 +1212,11 @@ void ScriptCodeArea::handleKey(jadefx::KeyEvent& event) {
         event.consume();
         return;
     }
+    // Ctrl+/ with or without Shift, so Ctrl+? toggles too.
+    if (event.shortcut() && !event.alt && event.key == jadefx::Key::Slash && applyComment()) {
+        event.consume();
+        return;
+    }
     const FindChord chord = find_chord(event);
     if (chord == FindChord::Find || chord == FindChord::Replace) {
         editor->openFind(chord == FindChord::Replace);
@@ -1316,6 +1322,26 @@ bool ScriptCodeArea::applyEnter() {
     transact(false, [&] {
         replaceText(result.begin, result.end, result.text);
         moveTo(result.caret);
+    });
+    return true;
+}
+
+bool ScriptCodeArea::applyComment() {
+    if (!isEditable() || selections().size() != 1) {
+        return false;
+    }
+    const jadefx::IndexRange range = selection();
+    const int caret = caretPosition();
+    const int anchor = caret == range.start ? range.end : range.start;
+    const CommentResult result = comment_luau(getText(), anchor, caret);
+    if (!result.change) {
+        return false;
+    }
+    dismissHover();
+    editor->dismiss_completion();
+    transact(false, [&] {
+        replaceText(result.begin, result.end, result.text);
+        selectRange(result.anchor, result.caret);
     });
     return true;
 }

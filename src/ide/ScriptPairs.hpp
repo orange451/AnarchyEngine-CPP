@@ -15,10 +15,27 @@ struct PairResult {
     char close = 0;
 };
 
-// Quotes and parentheses. Skip steps over a closer that is already there.
+// Quotes, parentheses, and braces. Skip steps over a closer that is already there.
 // Insert writes the pair and leaves the caret between the two characters.
-// Wrap puts the pair around a selection. Strings and comments take the key as typed.
+// Wrap puts the pair around a selection. Strings and comments take the key as typed,
+// except a '{' in an interpolated string, which opens an expression and pairs.
 PairResult pair_luau(std::string_view source, int begin, int end, char32_t typed);
+
+// Ctrl+/ over the lines from `anchor` to `caret`. When every non-blank line already
+// starts with `--` after its indent, those marks come off, with one space after them.
+// Otherwise each non-blank line gains `-- ` after its own indent. A selection that
+// ends at the start of a line leaves that line alone. The replacement covers
+// [begin, end), and the anchor and caret move with the text around them.
+struct CommentResult {
+    bool change = false;
+    int begin = 0;
+    int end = 0;
+    std::string text;
+    int anchor = 0;
+    int caret = 0;
+};
+
+CommentResult comment_luau(std::string_view source, int anchor, int caret);
 
 // Enter at the end of a function, do, for, while, or conditional header.
 // The replacement is inserted at [begin, end) and the caret lands on the new body line.

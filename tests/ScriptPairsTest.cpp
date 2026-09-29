@@ -156,6 +156,25 @@ void ExpectFlatPlain(const std::string& source, int caret, const char* label) {
     }
 }
 
+// Offsets here are bytes, which match code points for the ASCII sources below.
+void ExpectComment(const std::string& source, int anchor, int caret, const std::string& want, int want_anchor,
+                   int want_caret, const char* label) {
+    const ide::CommentResult result = ide::comment_luau(source, anchor, caret);
+    if (!result.change) {
+        std::fprintf(stderr, "FAIL %s (no change)\n", label);
+        ++gFailures;
+        return;
+    }
+    std::string got = source;
+    got.replace(static_cast<std::size_t>(result.begin), static_cast<std::size_t>(result.end - result.begin),
+                result.text);
+    if (got != want || result.anchor != want_anchor || result.caret != want_caret) {
+        std::fprintf(stderr, "FAIL %s\n got:  %s anchor %d caret %d\n want: %s anchor %d caret %d\n", label,
+                     Show(got).c_str(), result.anchor, result.caret, Show(want).c_str(), want_anchor, want_caret);
+        ++gFailures;
+    }
+}
+
 }  // namespace
 
 int RunScriptPairsTests() {
@@ -192,6 +211,31 @@ int RunScriptPairsTests() {
     ExpectPair("hello", 0, 5, U'(', ide::PairAction::Wrap, '(', ')', "a parenthesis wraps the selection");
     ExpectPair("hello", 0, 5, U')', ide::PairAction::None, 0, 0, "a close parenthesis does not wrap");
     ExpectPair("\"hello\"", 1, 6, U'"', ide::PairAction::None, 0, 0, "a selection inside a string is not wrapped");
+
+    ExpectPair("", 0, 0, U'{', ide::PairAction::Insert, '{', '}', "brace opens a pair");
+    ExpectPair("{}", 1, 1, U'}', ide::PairAction::Skip, 0, 0, "close brace steps over the closer");
+    ExpectPair("", 0, 0, U'}', ide::PairAction::None, 0, 0, "a bare close brace is typed");
+    ExpectPair("hello", 0, 5, U'{', ide::PairAction::Wrap, '{', '}', "a brace wraps the selection");
+    ExpectPair("hello", 0, 5, U'}', ide::PairAction::None, 0, 0, "a close brace does not wrap");
+    ExpectPair("\"hello\"", 3, 3, U'{', ide::PairAction::None, 0, 0, "a brace inside a string is typed");
+    ExpectPair("-- hello", 4, 4, U'{', ide::PairAction::None, 0, 0, "a comment takes the brace");
+    ExpectPair("`hello `", 7, 7, U'{', ide::PairAction::Insert, '{', '}', "a brace in an interpolation opens an expression");
+    ExpectPair("`hello \\`", 8, 8, U'{', ide::PairAction::None, 0, 0, "an escaped brace in an interpolation is typed");
+    ExpectPair("`a{x}b`", 4, 4, U'}', ide::PairAction::Skip, 0, 0, "the expression's brace steps back into the string");
+
+    ExpectComment("foo()", 2, 2, "-- foo()", 5, 5, "a caret comments its line");
+    ExpectComment("-- foo()", 5, 5, "foo()", 2, 2, "a commented line comes back");
+    ExpectComment("--foo()", 4, 4, "foo()", 2, 2, "a comment without a space comes back");
+    ExpectComment("\tfoo()", 0, 0, "\t-- foo()", 0, 0, "the mark goes after the indent");
+    ExpectComment("\t-- foo()", 9, 9, "\tfoo()", 6, 6, "an indented comment comes back");
+    ExpectComment("a\n\tb\nc", 0, 6, "-- a\n\t-- b\n-- c", 0, 15, "each line keeps its own indent");
+    ExpectComment("-- a\n\t-- b\n-- c", 0, 15, "a\n\tb\nc", 0, 6, "a commented block comes back");
+    ExpectComment("a\n\nb", 0, 4, "-- a\n\n-- b", 0, 10, "blank lines stay blank");
+    ExpectComment("-- a\nb", 0, 6, "-- -- a\n-- b", 0, 12, "a partly commented block gains marks");
+    ExpectComment("a\nb\n", 0, 4, "-- a\n-- b\n", 0, 10, "a selection ending at a line start leaves that line");
+    ExpectComment("a\nb\nc", 5, 0, "-- a\n-- b\n-- c", 14, 0, "a backward selection keeps its direction");
+    ExpectComment("", 0, 0, "-- ", 3, 3, "an empty line gains a mark");
+    ExpectComment("x = 1\ny = 2", 8, 8, "x = 1\n-- y = 2", 11, 11, "only the caret's line changes");
 
     ExpectEnter("function foo()", -1, "function foo()\n    \nend", "a function gains end");
     ExpectEnter("local function foo()", -1, "local function foo()\n    \nend", "a local function gains end");

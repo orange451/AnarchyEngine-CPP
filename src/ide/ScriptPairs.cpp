@@ -2,6 +2,7 @@
 #include "ScriptPairs.hpp"
 #include "Utf8.hpp"
 
+#include <algorithm>
 #include <vector>
 
 namespace ide {
@@ -914,7 +915,8 @@ char32_t source_code_point(std::string_view source, int index) {
 
 PairResult pair_luau(std::string_view source, int begin, int end, char32_t typed) {
     PairResult result;
-    if (typed != U'"' && typed != U'\'' && typed != U'(' && typed != U')') {
+    const bool closer = typed == U')' || typed == U'}';
+    if (typed != U'"' && typed != U'\'' && typed != U'(' && typed != U'{' && !closer) {
         return result;
     }
     const std::u32string text = Utf32(source);
@@ -927,15 +929,17 @@ PairResult pair_luau(std::string_view source, int begin, int end, char32_t typed
     const bool collapsed = begin == end;
     const char32_t next = begin < size ? text[static_cast<std::size_t>(begin)] : 0;
     const bool escaped = (where.in_short || where.in_interp) && Escaped(text, begin);
-    if (collapsed && !escaped && next != 0 && next == typed && (typed == U'"' || typed == U'\'' || typed == U')')) {
+    if (collapsed && !escaped && next != 0 && next == typed && (typed == U'"' || typed == U'\'' || closer)) {
         result.action = PairAction::Skip;
         return result;
     }
-    if (typed == U')' || where.in_string() || where.in_comment()) {
+    // A '{' in an interpolated string opens an expression, so it pairs there too.
+    const bool opens_expression = typed == U'{' && collapsed && where.in_interp && !escaped && !where.in_comment();
+    if (closer || ((where.in_string() || where.in_comment()) && !opens_expression)) {
         return result;
     }
     result.open = static_cast<char>(typed);
-    result.close = typed == U'(' ? ')' : result.open;
+    result.close = typed == U'(' ? ')' : typed == U'{' ? '}' : result.open;
     result.action = collapsed ? PairAction::Insert : PairAction::Wrap;
     return result;
 }
@@ -1056,6 +1060,114 @@ EnterResult enter_luau(std::string_view source, int caret, int tab_size, bool sp
     result.end = at;
     result.text = Utf8(inserted);
     result.caret = at + 1 + static_cast<int>(body.size());
+    return result;
+}
+
+CommentResult comment_luau(std::string_view source, int anchor, int caret) {
+    CommentResult result;
+    const std::u32string text = Utf32(source);
+    const int size = static_cast<int>(text.size());
+    if (anchor < 0 || caret < 0 || anchor > size || caret > size) {
+        return result;
+    }
+    const auto at = [&](int index) { return index < size ? text[static_cast<std::size_t>(index)] : char32_t{0}; };
+    const int low = std::min(anchor, caret);
+    int high = std::max(anchor, caret);
+    if (high > low && at(high - 1) == U'\n') {
+        --high;
+    }
+
+    struct Line {
+        int indent_end = 0;
+        int end = 0;
+        bool blank = false;
+    };
+    int first = low;
+    while (first > 0 && at(first - 1) != U'\n') {
+        --first;
+    }
+    std::vector<Line> lines;
+    for (int start = first;;) {
+        Line line;
+        line.indent_end = start;
+        while (at(line.indent_end) == U' ' || at(line.indent_end) == U'\t') {
+            ++line.indent_end;
+        }
+        line.end = line.indent_end;
+        while (line.end < size && at(line.end) != U'\n') {
+            ++line.end;
+        }
+        line.blank = line.indent_end == line.end || at(line.indent_end) == U'\r';
+        lines.push_back(line);
+        if (line.end >= high || line.end >= size) {
+            break;
+        }
+        start = line.end + 1;
+    }
+    const int last = lines.back().end;
+
+    bool any_text = false;
+    bool all_commented = true;
+    for (const Line& line : lines) {
+        if (line.blank) {
+            continue;
+        }
+        any_text = true;
+        if (at(line.indent_end) != U'-' || at(line.indent_end + 1) != U'-') {
+            all_commented = false;
+        }
+    }
+    const bool uncomment = any_text && all_commented;
+
+    // One edit per line: `removed` code points at `from` become `added`.
+    struct Edit {
+        int from = 0;
+        int removed = 0;
+        int added = 0;
+    };
+    std::vector<Edit> edits;
+    std::u32string replaced;
+    int copied = first;
+    for (const Line& line : lines) {
+        if (any_text && line.blank) {
+            continue;
+        }
+        Edit edit;
+        edit.from = line.indent_end;
+        if (uncomment) {
+            edit.removed = at(line.indent_end + 2) == U' ' ? 3 : 2;
+        } else {
+            edit.added = 3;
+        }
+        replaced.append(text, static_cast<std::size_t>(copied), static_cast<std::size_t>(edit.from - copied));
+        if (edit.added > 0) {
+            replaced += U"-- ";
+        }
+        copied = edit.from + edit.removed;
+        edits.push_back(edit);
+    }
+    replaced.append(text, static_cast<std::size_t>(copied), static_cast<std::size_t>(last - copied));
+
+    // The low end of a selection stays in front of an insert at its spot, so the
+    // selection takes in the new `--`. The high end and a lone caret move past it.
+    const auto move = [&](int position, bool high_end) {
+        int shift = 0;
+        for (const Edit& edit : edits) {
+            if (edit.added > 0 && (position > edit.from || (high_end && position == edit.from))) {
+                shift += edit.added;
+            } else if (edit.removed > 0 && position > edit.from) {
+                shift -= std::min(edit.removed, position - edit.from);
+            }
+        }
+        return position + shift;
+    };
+    const bool collapsed = anchor == caret;
+    result.change = true;
+    result.begin = first;
+    result.end = last;
+    result.text = Utf8(replaced);
+    result.anchor = move(anchor, collapsed || anchor > caret);
+    result.caret = move(caret, collapsed || caret > anchor);
     return result;
 }
 

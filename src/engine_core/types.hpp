@@ -19,6 +19,8 @@ using InstanceId = std::uint32_t;
 constexpr std::uint32_t id_slot(InstanceId id) { return id & 0xffffu; }
 constexpr std::uint32_t id_generation(InstanceId id) { return id >> 16u; }
 constexpr InstanceId make_instance_id(std::uint32_t generation, std::uint32_t slot) { return (generation << 16u) | slot; }
+// A slot whose generation reaches this is not reused.
+constexpr std::uint32_t kMaxGeneration = 0xffffu;
 
 // Simulation phases stay contiguous at the front. Resume checks treat
 // PreAnimation..Heartbeat as the simulation range.

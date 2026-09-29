@@ -27,6 +27,9 @@
 namespace engine_core {
 namespace {
 
+// pool_index_for found no pool for the type. Also the most pools there can be.
+constexpr std::uint16_t kNoPool = 0xffffu;
+
 
 int field_index(Field field) {
     const int index = static_cast<int>(field);
@@ -144,6 +147,7 @@ struct DataModel::State {
     std::vector<std::unique_ptr<InstancePool>> pools;
     // First child of the root DataModel. 0 means the root has no children.
     InstanceId root_first_child = 0;
+    InstanceId root_last_child = 0;
     InvalidationQueue invalidation;
 
     EventQueue events;
@@ -462,8 +466,10 @@ InstanceId DataModel::allocate() {
     part.pool = 0;
     part.storage = 0;
     part.instance = nullptr;
+    part.body = nullptr;
     part.parent = kNoParent;
     part.first_child = 0;
+    part.last_child = 0;
     part.next_sibling = 0;
     part.prev_sibling = 0;
     return make_instance_id(part.generation, index);
@@ -504,6 +510,7 @@ void DataModel::release_to_pool(Slot& part) {
         state_->pools[part.pool]->free.push_back(part.storage);
     }
     part.instance = nullptr;
+    part.body = nullptr;
     part.alive = false;
 }
 
@@ -525,7 +532,7 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
         }
     }
     if (pool == nullptr) {
-        if (world.pools.size() >= 0xffffu) {
+        if (world.pools.size() >= kNoPool) {
             contract_fail("instance type capacity exhausted");
         }
         const std::size_t align = ops.align;
@@ -557,6 +564,7 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
     part.pool = pool_index;
     part.storage = storage;
     part.instance = object;
+    part.body = as_game_object(object);
     if (dynamic_cast<LuaSource*>(object) != nullptr) {
         if (ScriptAnalysis* analysis = script_analysis()) {
             analysis->invalidate(object->id());
@@ -602,7 +610,7 @@ void DataModel::destroy(InstanceId id) {
     detach_links(id, *part);
     release_signals(id);
     release_to_pool(*part);
-    if (part->generation != 0xffffu) {
+    if (part->generation != kMaxGeneration) {
         ++part->generation;
         state_->free_list.push_back(index);
     }
@@ -745,11 +753,10 @@ void DataModel::integrate_simulated(double dt) {
         if (!part.alive || !part.simulated || part.visual_only) {
             continue;
         }
-        GameObject* object = as_game_object(part.instance);
-        if (object == nullptr) {
+        if (part.body == nullptr) {
             continue;
         }
-        GameObject& body = *object;
+        GameObject& body = *part.body;
         if (body.velocity_[0] == 0.f && body.velocity_[1] == 0.f && body.velocity_[2] == 0.f) {
             continue;
         }
@@ -955,10 +962,13 @@ void DataModel::unlink_parent(InstanceId id, Slot& part) {
     }
     // Parent 0 is the root DataModel, which has no slot of its own.
     InstanceId* head = nullptr;
+    InstanceId* tail = nullptr;
     if (part.parent == 0) {
         head = &state_->root_first_child;
+        tail = &state_->root_last_child;
     } else if (Slot* parent = slot(part.parent)) {
         head = &parent->first_child;
+        tail = &parent->last_child;
     }
     if (part.prev_sibling != 0) {
         Slot* prev = slot(part.prev_sibling);
@@ -973,6 +983,8 @@ void DataModel::unlink_parent(InstanceId id, Slot& part) {
         if (next != nullptr) {
             next->prev_sibling = part.prev_sibling;
         }
+    } else if (tail != nullptr && *tail == id) {
+        *tail = part.prev_sibling;
     }
     part.parent = kNoParent;
     part.prev_sibling = 0;
@@ -985,14 +997,17 @@ void DataModel::link_child(InstanceId parent_id, InstanceId child) {
         contract_fail("set_parent lost an instance");
     }
     InstanceId* head = nullptr;
+    InstanceId* tail = nullptr;
     if (parent_id == 0) {
         head = &state_->root_first_child;
+        tail = &state_->root_last_child;
     } else {
         Slot* parent = slot(parent_id);
         if (parent == nullptr) {
             contract_fail("set_parent lost an instance");
         }
         head = &parent->first_child;
+        tail = &parent->last_child;
     }
     // Last, so siblings stay in the order they arrived.
     part->parent = parent_id;
@@ -1000,18 +1015,16 @@ void DataModel::link_child(InstanceId parent_id, InstanceId child) {
     part->prev_sibling = 0;
     if (*head == 0) {
         *head = child;
+        *tail = child;
         return;
     }
-    InstanceId last = *head;
-    for (Slot* cursor = slot(last); cursor != nullptr && cursor->next_sibling != 0; cursor = slot(last)) {
-        last = cursor->next_sibling;
-    }
-    Slot* tail = slot(last);
-    if (tail == nullptr) {
+    Slot* last = slot(*tail);
+    if (last == nullptr) {
         contract_fail("set_parent lost an instance");
     }
-    tail->next_sibling = child;
-    part->prev_sibling = last;
+    last->next_sibling = child;
+    part->prev_sibling = *tail;
+    *tail = child;
 }
 
 void DataModel::detach_links(InstanceId id, Slot& part) {
@@ -1029,6 +1042,7 @@ void DataModel::detach_links(InstanceId id, Slot& part) {
         child = next;
     }
     part.first_child = 0;
+    part.last_child = 0;
 }
 
 bool DataModel::is_under(InstanceId ancestor, InstanceId node) const {
@@ -1380,7 +1394,7 @@ std::uint16_t DataModel::pool_index_for(const void* type_key) const {
             return index;
         }
     }
-    return 0xffffu;
+    return kNoPool;
 }
 
 void DataModel::retire_slot(std::uint32_t index, bool bump_generation) {
@@ -1401,9 +1415,10 @@ void DataModel::retire_slot(std::uint32_t index, bool bump_generation) {
     part.visual_only = false;
     part.parent = kNoParent;
     part.first_child = 0;
+    part.last_child = 0;
     part.next_sibling = 0;
     part.prev_sibling = 0;
-    if (bump_generation && part.generation != 0xffffu) {
+    if (bump_generation && part.generation != kMaxGeneration) {
         ++part.generation;
     }
 }
@@ -1421,6 +1436,7 @@ void DataModel::adopt_slot(std::uint16_t pool_index, InstanceId id) {
     part.visual_only = false;
     part.parent = kNoParent;
     part.first_child = 0;
+    part.last_child = 0;
     part.next_sibling = 0;
     part.prev_sibling = 0;
 
@@ -1430,6 +1446,7 @@ void DataModel::adopt_slot(std::uint16_t pool_index, InstanceId id) {
     part.pool = pool_index;
     part.storage = storage;
     part.instance = object;
+    part.body = as_game_object(object);
 }
 
 void DataModel::restore_record(const PlaceRecord& record) {
@@ -1443,7 +1460,7 @@ void DataModel::restore_record(const PlaceRecord& record) {
             retire_slot(index, false);
         }
         const std::uint16_t pool_index = pool_index_for(record.type_key);
-        if (pool_index == 0xffffu) {
+        if (pool_index == kNoPool) {
             contract_fail("place restore lost an instance type");
         }
         adopt_slot(pool_index, record.id);
@@ -1463,9 +1480,11 @@ void DataModel::restore_record(const PlaceRecord& record) {
 
 void DataModel::clear_hierarchy() {
     state_->root_first_child = 0;
+    state_->root_last_child = 0;
     for (Slot& part : state_->slots) {
         part.parent = kNoParent;
         part.first_child = 0;
+        part.last_child = 0;
         part.next_sibling = 0;
         part.prev_sibling = 0;
     }
@@ -1501,7 +1520,7 @@ void DataModel::restore_place_unlocked() {
         if (index >= state_->slots.size()) {
             contract_fail("place snapshot has an unknown instance");
         }
-        if (pool_index_for(record.type_key) == 0xffffu) {
+        if (pool_index_for(record.type_key) == kNoPool) {
             contract_fail("place snapshot instance type is missing");
         }
     }
@@ -1838,7 +1857,7 @@ void DataModel::revive_record(const AuthoredRecord& record) {
         contract_fail("history revive collided with a live instance");
     }
     const std::uint16_t pool = pool_index_for(record.type_key);
-    if (pool == 0xffffu) {
+    if (pool == kNoPool) {
         contract_fail("history revive lost an instance type");
     }
     take_free_index(index);

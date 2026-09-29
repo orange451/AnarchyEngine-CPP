@@ -361,8 +361,13 @@ private:
         std::uint16_t pool = 0;
         std::uint32_t storage = 0;
         DataModel* instance = nullptr;
+        // instance as a GameObject, or null. Set with instance, so the physics
+        // step does not cast each body on every substep.
+        GameObject* body = nullptr;
         InstanceId parent = kNoParent;
         InstanceId first_child = 0;
+        // So appending a child does not walk its siblings.
+        InstanceId last_child = 0;
         InstanceId next_sibling = 0;
         InstanceId prev_sibling = 0;
     };

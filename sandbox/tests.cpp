@@ -4475,3 +4475,51 @@ TEST_CASE("S45 a long loop that ends is not stopped as a runaway", "[S45]") {
     REQUIRE(rig.runtime.global_number("cells", cells));
     REQUIRE(cells == 450 * 450);
 }
+
+TEST_CASE("W1 children keep their order through removals at either end", "[W1]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::Folder& parent = game.create<engine_core::Folder>();
+    game.set_parent(parent.id(), game.id());
+    engine_core::Folder& away = game.create<engine_core::Folder>();
+    game.set_parent(away.id(), game.id());
+    auto child = [&](const char* name) {
+        engine_core::Folder& folder = game.create<engine_core::Folder>();
+        game.set_name(folder.id(), name);
+        game.set_parent(folder.id(), parent.id());
+        return folder.id();
+    };
+    auto names = [&](engine_core::InstanceId under) {
+        std::string out;
+        for (engine_core::InstanceId id = game.first_child(under); id != 0; id = game.next_sibling(id)) {
+            out += game.name(id);
+        }
+        return out;
+    };
+    child("A");
+    const engine_core::InstanceId b = child("B");
+    const engine_core::InstanceId c = child("C");
+    REQUIRE(names(parent.id()) == "ABC");
+    game.set_parent(c, away.id());
+    child("D");
+    REQUIRE(names(parent.id()) == "ABD");
+    game.set_parent(game.first_child(parent.id()), away.id());
+    child("E");
+    REQUIRE(names(parent.id()) == "BDE");
+    game.destroy(game.next_sibling(b));
+    child("F");
+    REQUIRE(names(parent.id()) == "BEF");
+    game.set_parent(b, away.id());
+    REQUIRE(names(away.id()) == "CAB");
+    while (game.first_child(parent.id()) != 0) {
+        game.set_parent(game.first_child(parent.id()), away.id());
+    }
+    child("G");
+    REQUIRE(names(parent.id()) == "G");
+    REQUIRE(names(away.id()) == "CABEF");
+    // The root's children keep their order the same way.
+    game.set_parent(parent.id(), away.id());
+    engine_core::Folder& last = game.create<engine_core::Folder>();
+    game.set_parent(last.id(), game.id());
+    REQUIRE(game.next_sibling(away.id()) == last.id());
+}

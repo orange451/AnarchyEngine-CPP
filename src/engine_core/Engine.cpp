@@ -370,7 +370,7 @@ void Engine::render_loop() {
                 // mutation, so the queue still describes real sim state.
                 guarded_step(
                     [&] {
-                        pump_.prepare_copy(game_);
+                        pump_.take_changes(game_);
                         prepared = true;
                     },
                     contract);
@@ -387,6 +387,8 @@ void Engine::render_loop() {
             contract_prepare_ns_.store(hold_ns);
         }
         if (prepared) {
+            // The buffer copy needs no DataModel state, so it is out of the lock.
+            pump_.finish_copy();
             pump_.publish();
         }
         // Perform is outside the pre-draw window. A DataModel write there is path D.

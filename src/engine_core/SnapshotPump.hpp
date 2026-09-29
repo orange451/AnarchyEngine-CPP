@@ -49,9 +49,14 @@ public:
     void override_visual(const SnapshotOverride& override);
     void set_camera(const Transform& camera);
 
-    // Copies dirty DataModel fields into the base snapshot, clones that into
-    // the back buffer, then applies overrides onto the back buffer only.
-    // Does not swap. Call publish() after the DataModel lock is released.
+    // Copies dirty DataModel fields into the base snapshot. Needs the DataModel
+    // lock, and is the only step here that does.
+    void take_changes(DataModel& game);
+    // Clones the base snapshot into the back buffer and applies overrides onto
+    // the back buffer only. Touches no DataModel state, so it runs after the
+    // lock is released. Does not swap.
+    void finish_copy();
+    // take_changes, then finish_copy. Call publish() after.
     void prepare_copy(DataModel& game);
 
     void publish();

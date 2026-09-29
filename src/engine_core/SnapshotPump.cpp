@@ -144,24 +144,37 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
 }
 
 void SnapshotPump::apply_overrides(VisualSnapshot& dst) {
+    // dst is a copy of base_, so base_index_ gives each instance's position.
     for (const SnapshotOverride& override : overrides_) {
-        for (VisualInstance& inst : dst.instances) {
-            if (inst.id != override.id || !inst.alive) {
-                continue;
-            }
-            if (any(override.field, VisualField::Transform)) {
-                inst.world = override.transform;
-                inst.transform_origin = WriteOrigin::SnapshotOverride;
-            }
-            if (any(override.field, VisualField::Color)) {
-                inst.color = override.color;
-                inst.color_origin = WriteOrigin::SnapshotOverride;
-            }
+        const std::uint32_t index = id_slot(override.id);
+        if (index >= base_index_.size()) {
+            continue;
+        }
+        const int position = base_index_[index];
+        if (position < 0 || static_cast<std::size_t>(position) >= dst.instances.size()) {
+            continue;
+        }
+        VisualInstance& inst = dst.instances[static_cast<std::size_t>(position)];
+        if (inst.id != override.id || !inst.alive) {
+            continue;
+        }
+        if (any(override.field, VisualField::Transform)) {
+            inst.world = override.transform;
+            inst.transform_origin = WriteOrigin::SnapshotOverride;
+        }
+        if (any(override.field, VisualField::Color)) {
+            inst.color = override.color;
+            inst.color_origin = WriteOrigin::SnapshotOverride;
         }
     }
 }
 
 void SnapshotPump::prepare_copy(DataModel& game) {
+    take_changes(game);
+    finish_copy();
+}
+
+void SnapshotPump::take_changes(DataModel& game) {
     InvalidationQueue& queue = game.invalidations();
     if (queue.take_overflow() || game.consume_resync()) {
         resync(game);
@@ -172,6 +185,9 @@ void SnapshotPump::prepare_copy(DataModel& game) {
         base_.camera = pending_camera_;
         camera_pending_ = false;
     }
+}
+
+void SnapshotPump::finish_copy() {
     VisualSnapshot& back = buffers_[1 - front_];
     blit(back);
     apply_overrides(back);

@@ -247,6 +247,7 @@ add_library(engine_core STATIC
     src/engine_core/LuaEngine.cpp
     src/engine_core/LuaApi.cpp
     src/engine_core/LuaReflect.cpp
+    src/engine_core/ScriptBindings.cpp
     src/engine_core/ScriptRuntime.cpp
     src/engine_core/TableSnapshot.cpp
     src/engine_core/ScriptAnalysis.cpp

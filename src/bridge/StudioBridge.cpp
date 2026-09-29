@@ -196,9 +196,12 @@ JsonValue StudioBridge::forward(const StudioEntry& studio, const std::string& to
     request.set("id", JsonValue::number(1));
     request.set("method", JsonValue::string("tools/call"));
     request.set("params", std::move(params));
+    // The studio publishes its token in its registry entry. The bridge's own
+    // ANARCHY_MCP_TOKEN is for a studio that published none.
     httplib::Headers headers;
-    if (!options_.token.empty()) {
-        headers.emplace("Authorization", "Bearer " + options_.token);
+    const std::string& token = studio.token.empty() ? options_.token : studio.token;
+    if (!token.empty()) {
+        headers.emplace("Authorization", "Bearer " + token);
     }
     const httplib::Result reply = client.Post("/mcp", headers, ide::compact_json(request), "application/json");
     if (!reply) {
@@ -207,7 +210,7 @@ JsonValue StudioBridge::forward(const StudioEntry& studio, const std::string& to
     }
     if (reply->status == 401) {
         throw std::runtime_error(describe_studio(studio) +
-                                 " refused the call: its ANARCHY_MCP_TOKEN and the bridge's do not match.");
+                                 " refused the call: the token in its registry entry is not the one it wants.");
     }
     if (reply->status != 200) {
         throw std::runtime_error(describe_studio(studio) + " answered HTTP " + std::to_string(reply->status) + ".");

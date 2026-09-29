@@ -25,6 +25,8 @@ constexpr std::size_t kInPlaceEdits = 8;
 // The simulation thread can hold the DataModel lock for a whole step.
 // This wait is short so a busy step does not freeze the shell.
 constexpr std::chrono::milliseconds kLockWait(1);
+// An action the person asked for waits longer than a repaint, then says why it did nothing.
+constexpr std::chrono::milliseconds kActionWait(250);
 
 // A second click on the same row, at least this long after the first, renames it.
 constexpr double kSlowClickSeconds = 0.5;
@@ -352,9 +354,20 @@ bool IdeExplorer::run_on_selection(std::string_view action) {
         return false;
     }
     std::vector<engine_core::InstanceId> ids;
-    for (engine_core::InstanceId id : selected_) {
-        if (shown_row(id) != nullptr && offers(id, action)) {
-            ids.push_back(id);
+    {
+        // One wait for the whole selection, so no instance is left out because
+        // its own short wait ran out. offers() takes the lock again at once.
+        engine_core::DataModelLock lock(root_, engine_core::DataModelLock::Read, kActionWait);
+        if (!lock.owns()) {
+            if (host_.notice) {
+                host_.notice("The place is busy, so " + std::string(action) + " did nothing. Try again.");
+            }
+            return true;
+        }
+        for (engine_core::InstanceId id : selected_) {
+            if (shown_row(id) != nullptr && offers(id, action)) {
+                ids.push_back(id);
+            }
         }
     }
     if (ids.empty()) {

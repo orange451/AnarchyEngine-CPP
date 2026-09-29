@@ -28,7 +28,8 @@ constexpr const char* kUsage =
     "Speaks MCP on stdin and stdout, and sends each tool call to one open Anarchy Engine studio:\n"
     "the one select_studio picked, else the one --project names, else the only one open,\n"
     "else the one whose project folder holds the working directory.\n"
-    "ANARCHY_MCP_TOKEN is sent to the studios as a bearer token.\n";
+    "Each studio's token comes from its registry entry. ANARCHY_MCP_TOKEN is sent\n"
+    "to a studio whose entry has none.\n";
 
 // Every hook set, so the catalog lists every tool a studio can offer. None runs here.
 ide::McpStudio ListingStudio() {

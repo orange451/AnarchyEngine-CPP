@@ -29,6 +29,11 @@ public:
     void appendLine(const engine_core::ScriptRuntime::OutputLine& line);
     void clearLog();
 
+    // The most rows the log keeps, open tables included. Past it the oldest go,
+    // a tenth of the limit at a time, so trimming is not paid on every line.
+    static constexpr int kMaxRows = 5000;
+    void setMaxRows(int rows) { maxRows_ = rows; }
+
     // Opens or closes the table whose braces cover this spot. False when none does.
     bool toggleAt(int paragraph, int column);
     // Called with the script and line when a printed line is clicked.
@@ -99,6 +104,8 @@ private:
     // Styles a toggle's braces and links them.
     void styleToggle(int offset, const Toggle& toggle);
     void syncRows();
+    // Drops the oldest rows past maxRows_, and the links only they used.
+    void trimOldest();
     // The text colors, from the theme.
     void defineStyles();
 
@@ -106,6 +113,7 @@ private:
     std::vector<Link> links_;
     std::function<void(std::uint32_t, int)> onOpenScript_;
     mutable int nextLink_ = 0;
+    int maxRows_ = kMaxRows;
     ThemeListener themeListener_{[this] { defineStyles(); }};
 };
 

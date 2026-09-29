@@ -47,6 +47,9 @@ bool ReadEntry(const fs::path& path, StudioEntry& out) {
     if (const JsonValue* root = value.find("root")) {
         out.root = root->as_string();
     }
+    if (const JsonValue* token = value.find("token")) {
+        out.token = token->as_string();
+    }
     return out.pid > 0 && out.port > 0 && out.port < 65536;
 }
 
@@ -93,6 +96,16 @@ bool write_studio(const fs::path& dir, const StudioEntry& entry, std::string& er
     value.set("port", JsonValue::number(entry.port));
     value.set("project", JsonValue::string(entry.project));
     value.set("root", JsonValue::string(entry.root));
+    value.set("token", JsonValue::string(entry.token));
+    std::error_code failure;
+    fs::create_directories(dir, failure);
+    if (failure) {
+        error = "cannot create " + utf8_path(dir) + ": " + failure.message();
+        return false;
+    }
+    // The entries hold tokens. On Windows the folder is under the user's own
+    // profile, and this only clears a read-only flag.
+    fs::permissions(dir, fs::perms::owner_all, fs::perm_options::replace, failure);
     return write_file(EntryPath(dir, entry), engine_core::write_json(value), error);
 }
 

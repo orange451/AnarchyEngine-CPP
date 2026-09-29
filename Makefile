@@ -28,13 +28,9 @@ all:
 run: all
 	"$(APP_BIN)"
 
+# Every test program CMake registers.
 test: all
-	"$(BIN_DIR)/engine-tests$(EXE)"
-	"$(BIN_DIR)/properties-tests$(EXE)"
-	"$(BIN_DIR)/console-tests$(EXE)"
-	"$(BIN_DIR)/studio-tests$(EXE)"
-	"$(BIN_DIR)/mcp-tests$(EXE)"
-	"$(BIN_DIR)/sandbox$(EXE)"
+	cd $(BUILD_DIR) && ctest -C $(CONFIG) --output-on-failure
 
 clean:
 	cmake -E rm -rf $(BUILD_DIR)

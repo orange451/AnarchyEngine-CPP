@@ -35,6 +35,8 @@ struct ExplorerHost {
     std::function<void(std::string_view action, engine_core::InstanceId id)> run;
     std::function<void(std::string_view action, const std::vector<engine_core::InstanceId>& ids)> run_many;
     std::function<bool(std::string_view action)> enabled;
+    // A short message for the person, such as why an action did nothing.
+    std::function<void(std::string text)> notice;
     std::function<void(std::string class_name, engine_core::InstanceId parent, std::shared_ptr<InsertResult> result)>
         insert;
     std::function<void(engine_core::InstanceId id, std::string name)> rename;

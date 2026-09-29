@@ -528,3 +528,12 @@ else()
         VERBATIM
     )
 endif()
+
+# Every test program, for ctest (with Visual Studio, ctest -C Release). Each
+# runs from the source folder, where resources/ is.
+enable_testing()
+foreach(suite engine-tests properties-tests console-tests studio-tests mcp-tests sandbox shell-tests explorer-tests)
+    if(TARGET ${suite})
+        add_test(NAME ${suite} COMMAND ${suite} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
+endforeach()

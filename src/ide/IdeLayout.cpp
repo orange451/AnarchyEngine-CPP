@@ -31,6 +31,8 @@
 #include "../runner/ViewCapture.hpp"
 
 #include <algorithm>
+#include <cstdio>
+#include <random>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -303,6 +305,24 @@ constexpr const char* kCaretMark = "border-width: 0; background-color: var(--ide
 
 constexpr int kMcpPort = 7777;
 constexpr std::chrono::seconds kUiWait(5);
+// An action the person asked for waits longer than a repaint, then says why it did nothing.
+constexpr std::chrono::milliseconds kActionWait(250);
+
+// 128 random bits as hex: this session's MCP token when none is set.
+std::string session_token() {
+    std::random_device device;
+    std::string out;
+    char word[9];
+    for (int i = 0; i < 4; ++i) {
+        std::snprintf(word, sizeof(word), "%08x", static_cast<unsigned>(device()));
+        out += word;
+    }
+    return out;
+}
+
+std::string busy_message(const char* action) {
+    return std::string("The place is busy, so ") + action + " did nothing. Try again.";
+}
 // How long screenshot waits for the Scene View to paint.
 constexpr std::chrono::seconds kCaptureWait(3);
 
@@ -598,6 +618,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         }
     };
     host.enabled = [this](std::string_view action) { return action_enabled(action); };
+    host.notice = [this](std::string text) { show_toast(std::move(text)); };
     host.rename = [this](engine_core::InstanceId id, std::string name) { rename(id, std::move(name)); };
     host.move = [this](const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId parent) {
         move(ids, parent);
@@ -1362,9 +1383,13 @@ void IdeLayout::start_mcp() {
     };
 
     auto server = std::make_unique<McpServer>();
-    if (const char* token = std::getenv("ANARCHY_MCP_TOKEN")) {
-        server->set_token(token);
-    }
+    // Every client needs this studio's token. The bridge reads it from the
+    // registry entry; a client that connects directly needs ANARCHY_MCP_TOKEN
+    // set to a secret it knows too.
+    const char* fixed = std::getenv("ANARCHY_MCP_TOKEN");
+    const std::string token = fixed != nullptr && fixed[0] != '\0' ? std::string(fixed) : session_token();
+    server->set_token(token);
+    identity->entry.token = token;
     add_engine_tools(*server, runner_.simulation(), std::move(studio));
     engine_core::ScriptRuntime& scripts = runner_.simulation().scripts();
     std::string error;
@@ -2604,8 +2629,9 @@ void IdeLayout::cut(const std::vector<std::uint32_t>& ids) {
     engine_core::DataModel& game = runner_.simulation().datamodel();
     std::vector<engine_core::InstanceId> taken;
     {
-        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionWait);
         if (!lock.owns()) {
+            show_toast(busy_message("Cut"));
             return;
         }
         taken = cut_set(game, ids);
@@ -2651,8 +2677,12 @@ void IdeLayout::paste(std::uint32_t id) {
     engine_core::DataModel& game = runner_.simulation().datamodel();
     std::vector<engine_core::InstanceId> children;
     {
-        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
-        if (!lock.owns() || !parent_ok(game, id)) {
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionWait);
+        if (!lock.owns()) {
+            show_toast(busy_message("Paste"));
+            return;
+        }
+        if (!parent_ok(game, id)) {
             return;
         }
         // A target inside something cut refuses the whole paste, so nothing
@@ -2724,8 +2754,9 @@ void IdeLayout::edit(std::uint32_t id) {
     }
     engine_core::DataModel& game = runner_.simulation().datamodel();
     {
-        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, std::chrono::milliseconds(5));
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionWait);
         if (!lock.owns()) {
+            show_toast(busy_message("Edit"));
             return;
         }
         if (dynamic_cast<const engine_core::LuaSource*>(game.instance(id)) == nullptr) {

@@ -310,6 +310,30 @@ int main() {
     Expect(log->paragraphCount() == 1 && log->getText().empty(), "clearing empties the log");
     Expect(!log->toggleAt(0, 0), "a cleared log has no toggles");
 
+    {
+        // A long session keeps the newest rows, and their links still lead home.
+        auto capped = jadefx::make<ide::ConsoleLog>();
+        capped->setMaxRows(10);
+        std::uint32_t opened = 0;
+        int openedLine = 0;
+        capped->setOnOpenScript([&](std::uint32_t script, int line) {
+            opened = script;
+            openedLine = line;
+        });
+        for (int i = 0; i < 30; ++i) {
+            capped->appendLine(ScriptLine("line " + std::to_string(i) + "\n", static_cast<std::uint32_t>(100 + i), i));
+        }
+        const int rows = capped->paragraphCount() - 1;
+        Expect(rows <= 10 && rows > 0, "the log keeps at most its rows");
+        Expect(Body(*capped, rows - 1) == "line 29", "the newest row stays");
+        Expect(Body(*capped, 0) != "line 0", "the oldest rows go");
+        const int first = 30 - rows;
+        Expect(Body(*capped, 0) == "line " + std::to_string(first), "rows go from the top");
+        Expect(capped->openAt(0, Column(*capped, 0, "line")) && opened == static_cast<std::uint32_t>(100 + first) &&
+                   openedLine == first,
+               "a kept row still opens its own script");
+    }
+
     if (gFailures == 0) {
         std::printf("console log tests passed\n");
         return 0;

@@ -1,5 +1,6 @@
 #include "ide/CutSet.hpp"
 #include "ide/IdeExplorer.hpp"
+#include "DataModelLock.hpp"
 
 #include "DataModel.hpp"
 #include "Folder.hpp"
@@ -10,6 +11,9 @@
 #include <cstdio>
 #include <initializer_list>
 #include <memory>
+#include <atomic>
+#include <thread>
+#include <chrono>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -40,6 +44,8 @@ struct Rig {
     std::vector<std::pair<std::string, std::vector<engine_core::InstanceId>>> batches;
     // Each insert's class and parent. Each makes a Folder there, whatever the class.
     std::vector<std::pair<std::string, engine_core::InstanceId>> inserts;
+    // Messages the explorer asked the studio to show.
+    std::vector<std::string> notices;
     // The modifier keys the next click sees.
     int mods = 0;
     std::shared_ptr<ide::IdeExplorer> explorer;
@@ -58,6 +64,7 @@ struct Rig {
             batches.emplace_back(std::string(action), ids);
         };
         host.enabled = [](std::string_view) { return true; };
+        host.notice = [this](std::string text) { notices.push_back(std::move(text)); };
         host.rename = [this](engine_core::InstanceId id, std::string name) {
             game.set_name(id, name);
             renames.emplace_back(id, std::move(name));
@@ -726,6 +733,33 @@ void TestFilterClearButton() {
     Expect(button->isVisible() && button->isDisabled(), "the clear button is disabled again");
 }
 
+void TestBusyPlaceSaysSo() {
+    Rig rig;
+    rig.game.selection().set(rig.pick({0, 1, 2}));
+    rig.frame(0.2);
+    // Another thread holds the place for longer than an action waits.
+    std::atomic<bool> held{false};
+    std::atomic<bool> release{false};
+    std::thread busy([&] {
+        engine_core::DataModelLock lock(rig.game, engine_core::DataModelLock::Write);
+        held = true;
+        while (!release) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    });
+    while (!held) {
+        std::this_thread::yield();
+    }
+    Expect(rig.explorer->run_on_selection("Delete"), "a busy place still takes Delete");
+    release = true;
+    busy.join();
+    Expect(rig.runs.empty() && rig.batches.empty(), "Delete runs on none of the selection, not part of it");
+    Expect(rig.notices.size() == 1 && rig.notices[0].find("busy") != std::string::npos, "a busy place says so");
+    Expect(rig.explorer->run_on_selection("Delete") && rig.batches.size() == 1 &&
+               rig.batches[0].second == rig.pick({0, 1, 2}),
+           "once the place is free, Delete runs on the whole selection");
+}
+
 void TestFilterKeepsHiddenSelection() {
     Rig rig;
     rig.clickRow("Alpha", 0.1);
@@ -872,6 +906,7 @@ int main() {
     TestFilterEscapeLeavesTheField();
     TestEscapeClearsTheSelection();
     TestFilterClearButton();
+    TestBusyPlaceSaysSo();
     TestFilterKeepsHiddenSelection();
     TestRevealOpensTheBranch();
     TestRevealScrolls();

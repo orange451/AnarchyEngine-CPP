@@ -600,7 +600,7 @@ void TestRegistry() {
     const fs::path dir = TempDir("registry");
     Expect(ide::list_studios(dir).empty(), "a missing registry lists no studios");
     std::string error;
-    const ide::StudioEntry live{ide::current_pid(), 4321, "Alpha", "/somewhere/Alpha"};
+    const ide::StudioEntry live{ide::current_pid(), 4321, "Alpha", "/somewhere/Alpha", "s3cret"};
     Expect(ide::write_studio(dir, live, error), "an entry is written: " + error);
     // Above any pid a system hands out.
     const ide::StudioEntry gone{0x7ffffff0, 4322, "Gone", ""};
@@ -610,6 +610,7 @@ void TestRegistry() {
     Expect(studios.size() == 1 && studios[0].project == "Alpha" && studios[0].port == 4321 &&
                studios[0].root == "/somewhere/Alpha" && studios[0].pid == ide::current_pid(),
            "a running studio is listed with its project and folder");
+    Expect(studios.size() == 1 && studios[0].token == "s3cret", "a studio's token is listed with it");
     Expect(!fs::exists(dir / (std::to_string(gone.pid) + "-4322.json")), "the entry of an ended process is deleted");
     ide::remove_studio(dir, live);
     Expect(ide::list_studios(dir).empty(), "remove_studio takes the entry out");
@@ -756,6 +757,8 @@ void TestImages() {
     const fs::path registry = base / "studios";
     fs::create_directories(base / "Pics");
     ide::McpServer pics;
+    // A studio's own token, which the bridge reads from the registry.
+    pics.set_token("s3cret");
     pics.add_tool({"picture", "", ide::json_literal(R"({"type":"object"})"), [](const JsonValue&) {
                        JsonValue image = JsonValue::object();
                        image.set("data", JsonValue::string("AAAA"));
@@ -767,7 +770,7 @@ void TestImages() {
                    }});
     std::string error;
     Expect(pics.start(0, error), "the picture studio listens: " + error);
-    const ide::StudioEntry entry{ide::current_pid(), pics.port(), "Pics", ide::utf8_path(base / "Pics")};
+    ide::StudioEntry entry{ide::current_pid(), pics.port(), "Pics", ide::utf8_path(base / "Pics"), "s3cret"};
     Expect(ide::write_studio(registry, entry, error), "the picture studio is registered: " + error);
     bridge::StudioBridge bridge({registry, base, "", ""}, {{"picture", "", ide::json_literal(R"({"type":"object"})"), nullptr}});
     const JsonValue forwarded = Request(bridge.server(), "tools/call", R"({"name":"picture","arguments":{}})");
@@ -775,6 +778,13 @@ void TestImages() {
     Expect(items != nullptr && items->items().size() == 2 && items->items()[1].find("data")->as_string() == "AAAA" &&
                items->items()[0].find("text")->as_string() == R"({"width":1})",
            "the bridge forwards the image as image content: " + ide::compact_json(forwarded));
+    entry.token = "stale";
+    Expect(ide::write_studio(registry, entry, error), "the entry is registered again: " + error);
+    const JsonValue refused = Request(bridge.server(), "tools/call", R"({"name":"picture","arguments":{}})");
+    const JsonValue* failed = refused.find("result");
+    Expect(failed != nullptr && failed->find("isError") != nullptr && failed->find("isError")->as_bool() &&
+               failed->find("content")->items()[0].find("text")->as_string().find("refused") != std::string::npos,
+           "a token that does not match is refused: " + ide::compact_json(refused));
     pics.stop();
     ide::remove_studio(registry, entry);
     std::error_code ignored;

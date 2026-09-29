@@ -125,6 +125,38 @@ void ConsoleLog::clearLog() {
     links_.clear();
 }
 
+void ConsoleLog::trimOldest() {
+    // The last row is the empty paragraph after the final newline.
+    const int rows = static_cast<int>(rows_.size()) - 1;
+    if (rows <= maxRows_) {
+        return;
+    }
+    int drop = std::min(rows, rows - maxRows_ + maxRows_ / 10);
+    // An open table's field rows go with the row that opened it.
+    while (drop < rows && rows_[static_cast<std::size_t>(drop)].depth > 0) {
+        ++drop;
+    }
+    {
+        Editable editing(*this);
+        deleteText(0, absolutePosition(drop, 0));
+    }
+    rows_.erase(rows_.begin(), rows_.begin() + drop);
+    std::vector<int> moved(links_.size(), -1);
+    std::vector<Link> kept;
+    for (Row& row : rows_) {
+        if (row.link < 0) {
+            continue;
+        }
+        int& target = moved[static_cast<std::size_t>(row.link)];
+        if (target < 0) {
+            target = static_cast<int>(kept.size());
+            kept.push_back(std::move(links_[static_cast<std::size_t>(row.link)]));
+        }
+        row.link = target;
+    }
+    links_ = std::move(kept);
+}
+
 void ConsoleLog::syncRows() {
     // Only this class edits the text, so this is a guard, not a path that runs.
     const std::size_t count = static_cast<std::size_t>(paragraphCount());
@@ -198,6 +230,7 @@ void ConsoleLog::appendLine(const ScriptRuntime::OutputLine& line) {
     }
     syncRows();
     insertRows(paragraphCount() - 1, std::move(rows));
+    trimOldest();
 }
 
 std::vector<ConsoleLog::Pending> ConsoleLog::fieldRows(const Row& parent, int slot) const {

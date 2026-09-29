@@ -2521,14 +2521,23 @@ std::optional<std::vector<engine_core::SaveConflict>> IdeLayout::check_disk(
         check_pending_ = true;
         if (!noted_play_check_) {
             bool waiting = false;
+            std::string problem;
             run_now([&](engine_core::DataModel&) {
                 try {
                     const engine_core::DiskScan scan = project_->scan_disk();
                     waiting = scan.has_disk_changes || !scan.conflicts.empty();
-                } catch (const std::exception&) {
+                } catch (const std::exception& failure) {
+                    problem = failure.what();
                 }
             });
-            if (waiting) {
+            if (!problem.empty()) {
+                // Said once. The check at Stop reads the disk again.
+                if (problem != disk_problem_) {
+                    show_toast("Can't read the project on disk: " + problem);
+                }
+                disk_problem_ = problem;
+                noted_play_check_ = true;
+            } else if (waiting) {
                 show_toast("Changes on disk will load when the test stops");
                 noted_play_check_ = true;
             }

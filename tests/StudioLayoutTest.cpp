@@ -17,6 +17,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -464,6 +466,39 @@ int main() {
             logged = logged || line.text.find("Opened") != std::string::npos;
         }
         expect(!logged, "and the console does not say it");
+
+        // During a test, a project that stops reading says so once, instead of
+        // failing quietly on every check.
+        auto key = [&](int code, int mods) {
+            scene->noteKey(code, true, false, mods);
+            scene->noteKey(code, false, false, 0);
+        };
+        key(jadefx::Key::F5, 0);
+        std::string saved_json;
+        {
+            std::ifstream in(root / "project.json", std::ios::binary);
+            saved_json.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        }
+        {
+            std::ofstream out(root / "project.json", std::ios::binary | std::ios::trunc);
+            out << "<<<<<<< HEAD\n{";
+        }
+        layout.check_disk();
+        layout.check_disk();
+        scene->layout(1280, 800, 2.1);
+        int told = 0;
+        for (jadefx::Node* node : scene->getElementsByClassName("toast")) {
+            auto* label = dynamic_cast<jadefx::Label*>(node);
+            if (label != nullptr && label->getText().find("Can't read the project on disk") == 0) {
+                ++told;
+            }
+        }
+        expect(told == 1, "a project that stops reading during a test is reported once");
+        {
+            std::ofstream out(root / "project.json", std::ios::binary | std::ios::trunc);
+            out << saved_json;
+        }
+        key(jadefx::Key::F5, jadefx::Key::ModShift);
         std::error_code error;
         fs::remove_all(folder, error);
     }

@@ -109,6 +109,8 @@ private:
     std::vector<int> posted_keys_;
     bool posted_buttons_[3] = {};
     Vec3 posted_mouse_{};
+    // False until the session's first move: nothing before it to measure from.
+    bool posted_mouse_known_ = false;
 
     // SimulationThread only.
     std::vector<InputRecord> dispatched_;

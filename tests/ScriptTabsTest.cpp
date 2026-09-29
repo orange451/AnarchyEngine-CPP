@@ -201,11 +201,54 @@ void TestPickerHookLeavesWithEditor(engine_core::Engine& engine) {
     Expect(!escape(), "once the editor leaves the scene, the picker no longer takes Escape");
 }
 
+// Undo can bring a deleted script back with the same id. Its editor, read-only
+// while the script was gone, takes it up again.
+void TestEditorComesBackWithItsScript(engine_core::Engine& engine) {
+    const engine_core::InstanceId id = AddScript(engine, "Phoenix", "print(1)\n");
+    // Its creation is its own undo step, apart from the delete below.
+    engine.on_simulation([](engine_core::DataModel& game) { game.history().end_gesture(); });
+    auto editor = jadefx::make<ide::IdeScriptEditor>(engine, id);
+    editor->setPrefWidthRatio(1);
+    editor->setPrefHeightRatio(1);
+    auto holder = jadefx::make<jadefx::StackPane>();
+    holder->getChildren().add(editor);
+    auto scene = jadefx::make<jadefx::Scene>(holder, 900, 600);
+    double time = 0;
+    auto frame = [&] {
+        time += 0.1;
+        scene->layout(900, 600, time);
+    };
+    auto area = [&]() -> jadefx::StyledTextArea* {
+        for (jadefx::Node* node : editor->getElementsByClassName("ide-script")) {
+            if (auto* text = dynamic_cast<jadefx::StyledTextArea*>(node)) {
+                return text;
+            }
+        }
+        return nullptr;
+    };
+    frame();
+    frame();
+    Expect(area() != nullptr && area()->isEditable(), "an open script's editor takes typing");
+    engine.on_simulation([id](engine_core::DataModel& game) {
+        game.destroy(id);
+        game.history().end_gesture();
+    });
+    frame();
+    Expect(area() != nullptr && !area()->isEditable(), "the editor of a deleted script is read-only");
+    engine.on_simulation([](engine_core::DataModel& game) { game.history().undo(); });
+    frame();
+    Expect(area() != nullptr && area()->isEditable(), "undoing the delete makes the editor take typing again");
+    ExpectText(editor->text(), "print(1)\n", "and it shows the script's text");
+    holder->getChildren().clear();
+    frame();
+}
+
 }  // namespace
 
 int RunScriptTabTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     gFailures = 0;
     TestClosedTabs(layout, scene);
     TestPickerHookLeavesWithEditor(layout.simulation());
+    TestEditorComesBackWithItsScript(layout.simulation());
     return gFailures;
 }

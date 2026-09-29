@@ -660,7 +660,7 @@ bool IdeScriptEditor::read_source(std::string& text, std::string& name, bool& al
 }
 
 void IdeScriptEditor::load() {
-    if (!area_ || missing_) {
+    if (!area_) {
         return;
     }
     std::string text;
@@ -673,6 +673,11 @@ void IdeScriptEditor::load() {
         missing_ = true;
         area_->setEditable(false);
         return;
+    }
+    if (missing_) {
+        // Undo brought the script back, with the same id.
+        missing_ = false;
+        area_->setEditable(true);
     }
     loading_ = true;
     area_->setText(std::move(text));
@@ -1018,7 +1023,13 @@ void IdeScriptEditor::flush() {
 }
 
 void IdeScriptEditor::reapply() {
-    if (!area_ || missing_ || !loaded_ || !commit_) {
+    if (!area_ || !loaded_ || !commit_) {
+        return;
+    }
+    if (missing_) {
+        // Loads again once the script is back, as after an undo of its delete.
+        loaded_ = false;
+        load();
         return;
     }
     if (commit_->acked.load(std::memory_order_acquire) != commit_->epoch.load(std::memory_order_relaxed)) {

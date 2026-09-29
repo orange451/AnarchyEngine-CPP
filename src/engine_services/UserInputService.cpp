@@ -137,6 +137,7 @@ void UserInputService::set_active(bool active) {
     queue_.clear();
     posted_keys_.clear();
     std::fill(std::begin(posted_buttons_), std::end(posted_buttons_), false);
+    posted_mouse_known_ = false;
 }
 
 bool UserInputService::active() const {
@@ -206,14 +207,14 @@ void UserInputService::post_mouse_move(float x, float y, bool processed) {
         return;
     }
     const Vec3 next{x, y, 0.f};
-    if (next.x == posted_mouse_.x && next.y == posted_mouse_.y) {
+    if (posted_mouse_known_ && next.x == posted_mouse_.x && next.y == posted_mouse_.y) {
         return;
     }
     InputRecord record;
     record.type = kMouseMovement;
     record.state = kChange;
     record.position = next;
-    record.delta = Vec3{next.x - posted_mouse_.x, next.y - posted_mouse_.y, 0.f};
+    record.delta = posted_mouse_known_ ? Vec3{next.x - posted_mouse_.x, next.y - posted_mouse_.y, 0.f} : Vec3{};
     record.processed = processed;
     // A merge does not grow the queue, so only a new record is capped.
     const bool merges = !queue_.empty() && queue_.back().type == kMouseMovement && queue_.back().processed == processed;
@@ -221,6 +222,7 @@ void UserInputService::post_mouse_move(float x, float y, bool processed) {
         return;
     }
     posted_mouse_ = next;
+    posted_mouse_known_ = true;
     push_locked(record);
 }
 

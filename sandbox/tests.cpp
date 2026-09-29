@@ -3828,7 +3828,8 @@ TEST_CASE("UserInputService signals give scripts an InputObject", "[input]") {
     input_frame(rig);
     const engine_core::ScriptRuntime::OutputBatch moved = rig.runtime.drain_output();
     REQUIRE(moved.lines.size() == 1);
-    REQUIRE(has_line(moved, "changed\tMouseMovement\t15\t22\t0\t15\t22\t15\t22\tVector2\n"));
+    // The session's first move has nothing before it, so only the second one moves.
+    REQUIRE(has_line(moved, "changed\tMouseMovement\t15\t22\t0\t5\t2\t15\t22\tVector2\n"));
 
     model.input().post_mouse_button(0, true, 15.f, 22.f);
     input_frame(rig);
@@ -4181,4 +4182,107 @@ TEST_CASE("L2 the same thread takes one world's lock again without blocking", "[
     engine_core::DataModelLock inner(game, engine_core::DataModelLock::Write, std::chrono::milliseconds(20));
     REQUIRE(inner.owns());
     REQUIRE(game.write_depth() == 2);
+}
+
+namespace {
+
+// The service on its own world, stepped by hand: posts, then one dispatch.
+struct InputRig {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::UserInputService& input = game.input();
+    std::vector<engine_core::InputRecord> seen;
+    std::vector<engine_core::Connection> connections;
+
+    InputRig() {
+        input.bind(game.events());
+        for (auto kind : {engine_core::UserInputService::Kind::Began, engine_core::UserInputService::Kind::Changed,
+                          engine_core::UserInputService::Kind::Ended}) {
+            connections.push_back(input.signal(kind)->connect([this](engine_core::InstanceId, engine_core::Field) {
+                if (const engine_core::InputRecord* record = input.record(game.events().payload())) {
+                    seen.push_back(*record);
+                }
+            }));
+        }
+        input.set_active(true);
+    }
+
+    void step() {
+        input.dispatch(game.events());
+        game.events().drain();
+    }
+};
+
+}  // namespace
+
+TEST_CASE("U1 a session's first mouse move has no delta from before it", "[U1][input]") {
+    InputRig rig;
+    rig.input.post_mouse_move(100.f, 100.f);
+    rig.step();
+    REQUIRE(rig.seen.size() == 1);
+    REQUIRE(rig.seen[0].delta.x == 0.f);
+    REQUIRE(rig.seen[0].delta.y == 0.f);
+    rig.input.post_mouse_move(103.f, 104.f);
+    rig.step();
+    REQUIRE(rig.seen.size() == 2);
+    REQUIRE(rig.seen[1].delta.x == 3.f);
+    REQUIRE(rig.seen[1].delta.y == 4.f);
+
+    rig.input.set_active(false);
+    rig.input.reset();
+    rig.input.set_active(true);
+    rig.input.post_mouse_move(10.f, 10.f);
+    rig.step();
+    REQUIRE(rig.seen.size() == 3);
+    REQUIRE(rig.seen[2].position.x == 10.f);
+    REQUIRE(rig.seen[2].delta.x == 0.f);
+    REQUIRE(rig.seen[2].delta.y == 0.f);
+}
+
+TEST_CASE("U2 keys begin once, end once, and read as held between", "[U2][input]") {
+    InputRig rig;
+    const int w = 119;
+    rig.input.post_key(w, true);
+    rig.input.post_key(w, true);
+    rig.step();
+    REQUIRE(rig.seen.size() == 1);
+    REQUIRE(rig.seen[0].state == engine_core::UserInputService::kBegin);
+    REQUIRE(rig.input.key_down(w));
+    rig.input.post_key(w, false);
+    rig.step();
+    REQUIRE(rig.seen.size() == 2);
+    REQUIRE(rig.seen[1].state == engine_core::UserInputService::kEnd);
+    REQUIRE_FALSE(rig.input.key_down(w));
+}
+
+TEST_CASE("U3 losing focus ends what is held, and an inactive service keeps nothing", "[U3][input]") {
+    InputRig rig;
+    rig.input.post_key(119, true);
+    rig.input.post_mouse_button(0, true, 5.f, 5.f);
+    rig.step();
+    REQUIRE(rig.input.key_down(119));
+    REQUIRE(rig.input.button_down(0));
+    rig.input.post_focus_lost();
+    rig.step();
+    REQUIRE_FALSE(rig.input.key_down(119));
+    REQUIRE_FALSE(rig.input.button_down(0));
+
+    const std::size_t before = rig.seen.size();
+    rig.input.set_active(false);
+    rig.input.post_key(119, true);
+    rig.step();
+    REQUIRE(rig.seen.size() == before);
+}
+
+TEST_CASE("U4 moves between steps arrive as one change with the deltas added", "[U4][input]") {
+    InputRig rig;
+    rig.input.post_mouse_move(1.f, 1.f);
+    rig.step();
+    rig.input.post_mouse_move(2.f, 3.f);
+    rig.input.post_mouse_move(4.f, 4.f);
+    rig.step();
+    REQUIRE(rig.seen.size() == 2);
+    REQUIRE(rig.seen[1].position.x == 4.f);
+    REQUIRE(rig.seen[1].delta.x == 3.f);
+    REQUIRE(rig.seen[1].delta.y == 3.f);
 }

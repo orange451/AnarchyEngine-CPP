@@ -1127,3 +1127,40 @@ TEST_CASE("A29 a completion snapshot in another sibling order leaves no stale pl
     INFO(dump(analysis.diagnostics(script.id())));
     REQUIRE_FALSE(has_code(analysis.diagnostics(script.id()), "Type"));
 }
+
+TEST_CASE("A30 a module the analyzer checked still reads as the functions it replaced", "[A30]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    add_module(rig.game, "Mod",
+               "local module = {}\n"
+               "function module.new()\n    return \"nope\"\nend\n"
+               "module.new = function()\n    return 1\nend\n"
+               "function module:Test()\nend\n"
+               "module.Test = function()\nend\n"
+               "return module\n");
+    const std::string use = "local M = require(script.Parent.Mod)\nlocal x = M.new()\n";
+    engine_core::Script& script = add_script(rig.game, "Main", use.c_str());
+    // The analyzer checks the module first, as it does for an open script.
+    settle(analysis);
+
+    const engine_core::LuauFacts typed =
+        analysis.luau_facts(completion_nodes(rig.game, script.id(), use), script.id(), use, std::string::npos,
+                            {use.find("x =")}, std::chrono::seconds(20));
+    REQUIRE(typed.ran);
+    REQUIRE(typed.types.size() == 1);
+    CHECK(typed.types[0].described.type == "number");
+
+    const std::string colon = use + "M:";
+    const engine_core::LuauFacts members = analysis.luau_facts(completion_nodes(rig.game, script.id(), colon),
+                                                               script.id(), colon, colon.size(), {},
+                                                               std::chrono::seconds(20));
+    REQUIRE(members.ran);
+    bool listed = false;
+    for (const engine_core::LuauSuggestion& row : members.completion.items) {
+        if (row.name == "Test") {
+            listed = true;
+            CHECK_FALSE(row.method);
+        }
+    }
+    CHECK(listed);
+}

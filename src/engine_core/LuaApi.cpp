@@ -64,14 +64,17 @@ std::string result_key(std::string_view owner, std::string_view name) {
     return key;
 }
 
-void append_unique(std::vector<LuaField>& out, const LuaField& field) {
+// True when `out` changed: the field is new, or replaces a different one.
+bool append_unique(std::vector<LuaField>& out, const LuaField& field) {
     for (LuaField& existing : out) {
         if (existing.name != nullptr && field.name != nullptr && std::strcmp(existing.name, field.name) == 0) {
+            const bool same = std::memcmp(&existing, &field, sizeof(LuaField)) == 0;
             existing = field;
-            return;
+            return !same;
         }
     }
     out.push_back(field);
+    return true;
 }
 
 void collect(const char* class_name, std::vector<LuaField>& out, int depth) {
@@ -92,34 +95,40 @@ void collect(const char* class_name, std::vector<LuaField>& out, int depth) {
 
 namespace {
 std::atomic<std::uint64_t> g_registry_revision{0};
+
+// Called after a write that changed the registry, so a reader that sees the
+// new revision also sees the write. A write that changes nothing, as a VM
+// noting what every VM notes, leaves the revision alone.
+void registry_changed() { g_registry_revision.fetch_add(1, std::memory_order_acq_rel); }
 }  // namespace
 
 std::uint64_t lua_registry_revision() { return g_registry_revision.load(std::memory_order_acquire); }
 
 void register_lua_class(const char* class_name, const char* base, const LuaField* fields, int count) {
-    g_registry_revision.fetch_add(1, std::memory_order_acq_rel);
     if (class_name == nullptr) {
         return;
     }
+    bool changed = false;
     ClassRecord* record = find_class(class_name);
     if (record == nullptr) {
         classes().push_back(ClassRecord{});
         record = &classes().back();
         record->name = class_name;
+        changed = true;
     }
     if (base != nullptr && record->base == nullptr) {
         record->base = base;
+        changed = true;
     }
-    if (fields == nullptr || count <= 0) {
-        return;
+    for (int index = 0; fields != nullptr && index < count; ++index) {
+        changed = append_unique(record->fields, fields[index]) || changed;
     }
-    for (int index = 0; index < count; ++index) {
-        append_unique(record->fields, fields[index]);
+    if (changed) {
+        registry_changed();
     }
 }
 
 void register_lua_operators(const char* class_name, const LuaOperator* operators, int count) {
-    g_registry_revision.fetch_add(1, std::memory_order_acq_rel);
     if (class_name == nullptr) {
         return;
     }
@@ -136,12 +145,16 @@ void register_lua_operators(const char* class_name, const LuaOperator* operators
         bool replaced = false;
         for (LuaOperator& existing : record->operators) {
             if (std::strcmp(existing.metamethod, row.metamethod) == 0) {
-                existing = row;
+                if (std::memcmp(&existing, &row, sizeof(LuaOperator)) != 0) {
+                    existing = row;
+                    registry_changed();
+                }
                 replaced = true;
             }
         }
         if (!replaced) {
             record->operators.push_back(row);
+            registry_changed();
         }
     }
 }
@@ -238,7 +251,6 @@ std::vector<const char*>& service_names() {
 }  // namespace
 
 void register_lua_service(const char* name) {
-    g_registry_revision.fetch_add(1, std::memory_order_acq_rel);
     if (name == nullptr) {
         return;
     }
@@ -248,6 +260,7 @@ void register_lua_service(const char* name) {
         }
     }
     service_names().push_back(name);
+    registry_changed();
 }
 
 bool lua_service_known(const char* name) {
@@ -298,11 +311,11 @@ const Creatable* find_creatable(const char* class_name) {
 }  // namespace
 
 void register_lua_creatable(const char* class_name, LuaCreate create) {
-    g_registry_revision.fetch_add(1, std::memory_order_acq_rel);
     if (class_name == nullptr || create == nullptr || find_creatable(class_name) != nullptr) {
         return;
     }
     creatables().push_back(Creatable{class_name, create});
+    registry_changed();
 }
 
 bool lua_creatable_known(const char* class_name) { return find_creatable(class_name) != nullptr; }
@@ -325,15 +338,23 @@ DataModel* lua_create_instance(DataModel& world, const char* class_name) {
 }
 
 void lua_note_result(const char* owner, const char* name, const char* type_name, bool class_from_arg) {
-    g_registry_revision.fetch_add(1, std::memory_order_acq_rel);
     if (owner == nullptr || name == nullptr) {
         return;
     }
     ResultNote note;
     note.type_name = type_name != nullptr ? type_name : "";
     note.class_from_arg = class_from_arg;
-    std::lock_guard<std::mutex> lock(result_mu());
-    results()[result_key(owner, name)] = std::move(note);
+    {
+        std::lock_guard<std::mutex> lock(result_mu());
+        const std::string key = result_key(owner, name);
+        const auto found = results().find(key);
+        if (found != results().end() && found->second.type_name == note.type_name &&
+            found->second.class_from_arg == note.class_from_arg) {
+            return;
+        }
+        results()[key] = std::move(note);
+    }
+    registry_changed();
 }
 
 namespace {
@@ -346,7 +367,6 @@ std::vector<const char*>& host_libraries() {
 }  // namespace
 
 void lua_note_host_library(const char* name) {
-    g_registry_revision.fetch_add(1, std::memory_order_acq_rel);
     if (name == nullptr || name[0] == '\0') {
         return;
     }
@@ -356,6 +376,7 @@ void lua_note_host_library(const char* name) {
         }
     }
     host_libraries().push_back(name);
+    registry_changed();
 }
 
 void lua_host_library_names(std::vector<std::string>& out) {

@@ -113,6 +113,9 @@ struct CompletionPlan {
     std::vector<std::size_t> offsets;
     // The text to send: the source with open blocks closed at its end.
     std::string luau_source;
+    // The site, prefix, and range the finished list will have, as far as the
+    // text says, for a popup to narrow to meanwhile. No site when unknown.
+    CompletionList frame;
     std::shared_ptr<const CompletionPlanState> state;
 };
 CompletionPlan plan_completion(std::string_view source, int caret, const std::vector<engine_core::LuaNode>& world,
@@ -138,24 +141,24 @@ struct PendingCompletion {
     std::string source;
     int caret = 0;
     bool force = false;
-    // Whether the popup was open once it was asked. The answer shows only while
-    // that still holds, so a popup closed since stays closed.
+    // Whether the popup was open once it was asked, and how often it had
+    // closed. The answer shows only while both hold, so a popup closed since
+    // stays closed.
     bool shown = false;
+    std::uint64_t dismissals = 0;
     CompletionPlan plan;
     std::shared_ptr<const engine_core::LuauAnswer> answer;
 };
 // Plans the list at the caret. A list that needs no type check is `now`, and
-// nothing is pending; otherwise Luau is asked in `analysis`'s completion lane.
+// nothing is pending; otherwise Luau is asked in `lane`, one per UI, so a
+// newer keystroke there replaces a request still waiting.
 std::optional<PendingCompletion> ask_completion(CompletionList& now, engine_core::ScriptAnalysis& analysis,
                                                 std::string_view source, int caret,
                                                 const std::vector<engine_core::LuaNode>& world,
-                                                std::uint32_t script_id, bool script_global, bool force);
+                                                std::uint32_t script_id, bool script_global, bool force,
+                                                const char* lane);
 // The list once Luau has answered. Nothing while it has not.
 std::optional<CompletionList> take_completion(const PendingCompletion& pending);
-// Waits up to `wait` for the answer, as an accept does before it reads the
-// popup. True when it arrived. kSettleWait is how long an accept waits.
-inline constexpr std::chrono::milliseconds kSettleWait{1000};
-bool settle_completion(const PendingCompletion& pending, std::chrono::milliseconds wait);
 
 // A hover Luau is still answering for.
 struct PendingHover {

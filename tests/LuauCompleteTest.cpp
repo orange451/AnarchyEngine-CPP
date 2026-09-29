@@ -2598,15 +2598,6 @@ void testTypedHoverAndSignature() {
     }
 }
 
-// The list a pending request settles to, as the editor's frames take it.
-// Nothing after 20 seconds.
-std::optional<ide::CompletionList> settled(const ide::PendingCompletion& pending) {
-    if (!ide::settle_completion(pending, std::chrono::seconds(20))) {
-        return std::nullopt;
-    }
-    return ide::take_completion(pending);
-}
-
 bool answered(const std::shared_ptr<const engine_core::LuauAnswer>& answer) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
     while (!answer->ready.load(std::memory_order_acquire)) {
@@ -2616,6 +2607,15 @@ bool answered(const std::shared_ptr<const engine_core::LuauAnswer>& answer) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return true;
+}
+
+// The list a pending request settles to, as the editor's frames take it.
+// Nothing after 20 seconds.
+std::optional<ide::CompletionList> settled(const ide::PendingCompletion& pending) {
+    if (!pending.answer || !answered(pending.answer)) {
+        return std::nullopt;
+    }
+    return ide::take_completion(pending);
 }
 
 // Analysis turned off runs no type checks for completion either, and shutdown
@@ -2629,7 +2629,7 @@ void testTypedSwitchedOff() {
         fail("analysis turned off answers no completion");
     }
     ide::CompletionList now;
-    if (ide::ask_completion(now, *analysis, "local t = {}\nt.", 15, {}, 0, true, false)) {
+    if (ide::ask_completion(now, *analysis, "local t = {}\nt.", 15, {}, 0, true, false, "editor")) {
         fail("analysis turned off leaves nothing pending");
     }
     analysis->set_enabled(true);
@@ -2669,7 +2669,7 @@ void testTypedLater() {
     const int members_end = static_cast<int>(members.size());
     ide::CompletionList now;
     const std::optional<ide::PendingCompletion> pending =
-        ide::ask_completion(now, typed_analysis(), members, members_end, world, 9, true, false);
+        ide::ask_completion(now, typed_analysis(), members, members_end, world, 9, true, false, "editor");
     if (!pending) {
         fail("a member list asks Luau");
     } else {
@@ -2690,7 +2690,7 @@ void testTypedLater() {
     // A signature arrives the same way.
     const std::string call = use + "a:Deposit(";
     const std::optional<ide::PendingCompletion> signature =
-        ide::ask_completion(now, typed_analysis(), call, static_cast<int>(call.size()), world, 9, true, false);
+        ide::ask_completion(now, typed_analysis(), call, static_cast<int>(call.size()), world, 9, true, false, "editor");
     const std::optional<ide::CompletionList> signed_list = signature ? settled(*signature) : std::nullopt;
     if (!signed_list) {
         fail("a call's signature arrives later");
@@ -2698,9 +2698,32 @@ void testTypedLater() {
         expect_signature(*signed_list, "(amount: number)", "Luau's signature arrives later");
     }
 
+    // Meanwhile the popup narrows to what the text alone says: the site, the
+    // prefix, and the range the finished list will replace.
+    const std::string partial = use + "a:De";
+    const ide::CompletionPlan member_plan = ide::plan_completion(partial, static_cast<int>(partial.size()), world, 9, true);
+    if (member_plan.frame.site != ide::CompleteSite::Member || member_plan.frame.prefix != "De" ||
+        member_plan.frame.replace_begin != static_cast<int>(partial.size()) - 2 ||
+        member_plan.frame.replace_end != static_cast<int>(partial.size())) {
+        fail("a member list's frame is its prefix and range");
+    }
+    const std::string argument = "game:FindFirstChild(\"Ho";
+    const ide::CompletionPlan string_plan =
+        ide::plan_completion(argument, static_cast<int>(argument.size()), world, 9, true);
+    if (string_plan.frame.site != ide::CompleteSite::Argument || string_plan.frame.prefix != "Ho" ||
+        string_plan.frame.close_quote != '"') {
+        fail("a string argument's frame is its prefix and quote");
+    }
+
+    // With no answer from Luau, names still list what needs no types.
+    const ide::CompletionPlan keyword_plan = ide::plan_completion("wh", 2, {}, 0, true);
+    expect_has(ide::finish_completion(keyword_plan, engine_core::LuauFacts{}), "while", "a keyword without Luau");
+    expect_has(ide::finish_completion(ide::plan_completion("ga", 2, {}, 0, true), engine_core::LuauFacts{}), "game",
+               "game without Luau");
+
     // A list that needs no types is ready at once.
     ide::CompletionList directive;
-    if (ide::ask_completion(directive, typed_analysis(), "--!", 3, {}, 0, true, false) || directive.items.empty()) {
+    if (ide::ask_completion(directive, typed_analysis(), "--!", 3, {}, 0, true, false, "editor") || directive.items.empty()) {
         fail("a directive list needs no type check");
     }
 

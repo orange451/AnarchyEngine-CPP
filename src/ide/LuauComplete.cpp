@@ -12,7 +12,6 @@
 #include <memory>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1787,6 +1786,7 @@ CompletionPlan plan_completion(std::string_view source, int caret, const std::ve
             return plan;
         }
         state->index = index;
+        BeginStringArgument(plan.frame, scan, text, caret);
         state->scan = std::move(scan);
         state->step = Step::String;
         AskCallee(plan, *state, open);
@@ -1839,10 +1839,12 @@ CompletionPlan plan_completion(std::string_view source, int caret, const std::ve
         state->colon = tokens[static_cast<std::size_t>(index - 1)].kind == Token::Colon;
         state->string_receiver = index >= 2 && tokens[static_cast<std::size_t>(index - 2)].kind == Token::String;
         state->step = Step::Member;
+        plan.frame = list;
         plan.state = state;
         return plan;
     }
     list.site = CompleteSite::Name;
+    plan.frame = list;
     state->step = Step::Name;
     state->slot = CallArgumentAt(tokens, index);
     if (state->slot.found && AnonymousFunctionOpen(tokens, state->slot.open)) {
@@ -1862,10 +1864,18 @@ CompletionPlan plan_completion(std::string_view source, int caret, const std::ve
 
 CompletionList finish_completion(const CompletionPlan& plan, const engine_core::LuauFacts& facts) {
     CompletionList list = plan.list;
-    if (!plan.state || !facts.ran) {
+    if (!plan.state) {
         return list;
     }
     const CompletionPlanState& state = *plan.state;
+    // Luau gave no answer, as when its check failed: names still list the
+    // globals, game, script, and the keywords.
+    if (!facts.ran) {
+        if (state.step == Step::Name) {
+            FinishNames(state, engine_core::LuauCompletion{}, list);
+        }
+        return list;
+    }
     switch (state.step) {
     case Step::Member:
         FinishMember(state, facts.completion, list);
@@ -2110,7 +2120,8 @@ HoverInfo finish_hover(const HoverPlan& plan, const engine_core::LuauFacts& fact
 std::optional<PendingCompletion> ask_completion(CompletionList& now, engine_core::ScriptAnalysis& analysis,
                                                 std::string_view source, int caret,
                                                 const std::vector<engine_core::LuaNode>& world,
-                                                std::uint32_t script_id, bool script_global, bool force) {
+                                                std::uint32_t script_id, bool script_global, bool force,
+                                                const char* lane) {
     PendingCompletion pending;
     pending.plan = plan_completion(source, caret, world, script_id, script_global);
     now = pending.plan.list;
@@ -2118,7 +2129,7 @@ std::optional<PendingCompletion> ask_completion(CompletionList& now, engine_core
         return std::nullopt;
     }
     pending.answer = analysis.luau_facts_later(world, script_id, pending.plan.luau_source, pending.plan.caret_offset,
-                                               pending.plan.offsets, "completion");
+                                               pending.plan.offsets, lane);
     if (!pending.answer) {
         return std::nullopt;
     }
@@ -2133,17 +2144,6 @@ std::optional<CompletionList> take_completion(const PendingCompletion& pending) 
         return std::nullopt;
     }
     return finish_completion(pending.plan, pending.answer->facts);
-}
-
-bool settle_completion(const PendingCompletion& pending, std::chrono::milliseconds wait) {
-    const auto deadline = std::chrono::steady_clock::now() + wait;
-    while (pending.answer && !pending.answer->ready.load(std::memory_order_acquire)) {
-        if (std::chrono::steady_clock::now() >= deadline) {
-            return false;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return pending.answer != nullptr;
 }
 
 std::optional<PendingHover> ask_hover(HoverInfo& now, engine_core::ScriptAnalysis& analysis, std::string_view source,

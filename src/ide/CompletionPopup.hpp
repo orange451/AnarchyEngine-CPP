@@ -55,6 +55,15 @@ public:
 
     void present(const CompletionList& list, bool force, jadefx::Node& owner, double caret_x, double caret_y,
                  double caret_height);
+    // While the list for the text as it is now is on its way: keeps the rows
+    // shown that still start with `frame.prefix` and takes the frame's range,
+    // so accepting in the meantime replaces the right text. Closes when the
+    // frame is another site or starts elsewhere, or no row is left.
+    void narrow(const CompletionList& frame, jadefx::Node& owner, double caret_x, double caret_y,
+                double caret_height);
+    // How many times the list has closed. A list asked for before a close is
+    // not shown after it.
+    std::uint64_t dismissals() const;
     void moveTo(jadefx::Node& owner, double caret_x, double caret_y, double caret_height);
 
 private:

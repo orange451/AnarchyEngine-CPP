@@ -652,6 +652,7 @@ struct CompletionPopup::State {
     bool unclosed = false;
     bool picked = false;
     bool accepting = false;
+    std::uint64_t dismissals = 0;
     jadefx::Node* owner = nullptr;
     double caret_x = 0;
     double caret_y = 0;
@@ -732,6 +733,7 @@ void CompletionPopup::dismiss() {
     if (!state_) {
         return;
     }
+    ++state_->dismissals;
     state_->picked = false;
     state_->prefix.clear();
     state_->signature.clear();
@@ -744,6 +746,30 @@ void CompletionPopup::dismiss() {
         !state_->owner->getScene()->isTearingDown() && state_->owner->getScene()->isPopupShowing(state_->popup.get())) {
         state_->owner->getScene()->hidePopup(state_->popup.get());
     }
+}
+
+std::uint64_t CompletionPopup::dismissals() const { return state_->dismissals; }
+
+void CompletionPopup::narrow(const CompletionList& frame, jadefx::Node& owner, double caret_x, double caret_y,
+                             double caret_height) {
+    if (!isOpen() || state_->accepting) {
+        return;
+    }
+    if (frame.site != state_->site || frame.replace_begin != state_->replace_begin) {
+        dismiss();
+        return;
+    }
+    CompletionList kept = frame;
+    kept.items.clear();
+    for (const CompletionItem& item : state_->items) {
+        if (item.name.compare(0, frame.prefix.size(), frame.prefix) == 0) {
+            kept.items.push_back(item);
+        }
+    }
+    kept.signature = state_->signature;
+    kept.signature_bold_begin = state_->signature_bold_begin;
+    kept.signature_bold_end = state_->signature_bold_end;
+    present(kept, false, owner, caret_x, caret_y, caret_height);
 }
 
 void CompletionPopup::move(int delta) {
@@ -941,10 +967,20 @@ void CompletionPopup::present(const CompletionList& list, bool force, jadefx::No
 
 std::vector<engine_core::LuaNode> completion_world(engine_core::Engine& engine, std::uint32_t script_id,
                                                    const std::string* buffer) {
+    // The last tree read. A read that cannot take the lock in time, as while a
+    // game runs, answers with it, so completion never sees an empty place.
+    // UI thread only.
+    static std::vector<engine_core::LuaNode> last;
     std::vector<engine_core::LuaNode> nodes;
     engine_core::DataModel& game = engine.datamodel();
     engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kLockWait);
     if (!lock.owns()) {
+        nodes = last;
+        for (engine_core::LuaNode& node : nodes) {
+            if (buffer != nullptr && node.id == script_id) {
+                node.source = *buffer;
+            }
+        }
         return nodes;
     }
     engine_core::LuaNode root;
@@ -997,6 +1033,7 @@ std::vector<engine_core::LuaNode> completion_world(engine_core::Engine& engine, 
         }
     });
     game.for_each_instance([&](engine_core::DataModel& object) { add(object.id()); });
+    last = nodes;
     return nodes;
 }
 

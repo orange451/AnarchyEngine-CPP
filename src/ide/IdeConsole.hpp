@@ -66,8 +66,6 @@ private:
     void refresh_completion(bool force);
     // Shows Luau's list for the last keystroke, once it has arrived.
     void take_luau_list();
-    // Before an accept reads the popup: waits for that list and shows it.
-    void settle_luau_list();
     void accept_completion(bool parentheses);
 
     engine_core::Engine& engine_;

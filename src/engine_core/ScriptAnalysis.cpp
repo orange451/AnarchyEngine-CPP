@@ -1548,6 +1548,34 @@ void describe_function(const WorkerEnv* env, const Luau::FunctionType& fn, bool 
     }
 }
 
+// Marks every module `module_name` requires, however deep, whose check kept
+// no expression types. True when there was one.
+bool forget_untyped_requires(WorkerEnv& env, const std::string& module_name) {
+    std::vector<std::string> stack{module_name};
+    std::unordered_set<std::string> seen{module_name};
+    bool marked = false;
+    while (!stack.empty()) {
+        const std::string name = std::move(stack.back());
+        stack.pop_back();
+        const auto node = env.frontend->sourceNodes.find(name);
+        if (node == env.frontend->sourceNodes.end() || node->second == nullptr) {
+            continue;
+        }
+        for (const std::string& required : node->second->requireSet) {
+            if (!seen.insert(required).second) {
+                continue;
+            }
+            stack.push_back(required);
+            const Luau::ModulePtr module = env.frontend->moduleResolver.getModule(required);
+            if (module != nullptr && module->astTypes.empty()) {
+                env.frontend->markDirty(required);
+                marked = true;
+            }
+        }
+    }
+    return marked;
+}
+
 // Checks the request's buffer with full type graphs kept and calls `answer`
 // with the module name. Then marks the module dirty, so the next check reads
 // the place's own source. Returns an error, or empty.
@@ -1584,6 +1612,12 @@ std::string with_checked_buffer(WorkerEnv& env, const CompleteRequest& request, 
         options.retainFullTypeGraphs = true;
         options.cancellationToken = request.cancel;
         env.frontend->check(module_name, options);
+        // A module the analyzer checked keeps no types for its expressions, and
+        // what a required module replaces or returns is read from them. Those
+        // are checked again, with their types kept, until they next change.
+        if (!request.cancel->requested() && forget_untyped_requires(env, module_name)) {
+            env.frontend->check(module_name, options);
+        }
         if (request.cancel->requested()) {
             error = "cancelled";
         } else {

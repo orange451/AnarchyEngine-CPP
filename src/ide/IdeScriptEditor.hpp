@@ -108,19 +108,16 @@ private:
     void refresh_completion(bool force);
     // Shows Luau's list for the last keystroke, once it has arrived.
     void take_luau_list();
-    // Before an accept reads the popup: waits for that list and shows it, so
-    // what is accepted matches the text as it is now.
-    void settle_luau_list();
     void dismiss_completion();
     void accept_completion(bool parentheses);
     void move_completion(int delta);
     void place_completion();
     bool completion_open() const;
-    bool completion_commits_name();
-    bool completion_commits_quote(char quote, bool unclosed_only = true);
+    bool completion_commits_name() const;
+    bool completion_commits_quote(char quote, bool unclosed_only = true) const;
     // Enter and Tab accept when the highlighted name would change the text.
     // A finished name keeps those keys, so a newline or indent still works.
-    bool completion_key_accepts();
+    bool completion_key_accepts() const;
     std::vector<engine_core::LuaNode> world() const;
     // A swatch after each Color3 literal. A click on one opens the color picker on it.
     void refresh_color_swatches();

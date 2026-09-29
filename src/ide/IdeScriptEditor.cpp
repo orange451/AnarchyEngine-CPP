@@ -1111,20 +1111,13 @@ std::vector<engine_core::LuaNode> IdeScriptEditor::world() const {
 
 bool IdeScriptEditor::completion_open() const { return completion_.isOpen(); }
 
-bool IdeScriptEditor::completion_commits_name() {
-    settle_luau_list();
-    return completion_.commitsName();
-}
+bool IdeScriptEditor::completion_commits_name() const { return completion_.commitsName(); }
 
-bool IdeScriptEditor::completion_commits_quote(char quote, bool unclosed_only) {
-    settle_luau_list();
+bool IdeScriptEditor::completion_commits_quote(char quote, bool unclosed_only) const {
     return completion_.commitsQuote(quote, unclosed_only);
 }
 
-bool IdeScriptEditor::completion_key_accepts() {
-    settle_luau_list();
-    return completion_.keyAccepts();
-}
+bool IdeScriptEditor::completion_key_accepts() const { return completion_.keyAccepts(); }
 
 void IdeScriptEditor::dismiss_completion() { completion_.dismiss(); }
 
@@ -1133,10 +1126,6 @@ void IdeScriptEditor::move_completion(int delta) { completion_.move(delta); }
 void IdeScriptEditor::accept_completion(bool parentheses) {
     if (!area_) {
         completion_.dismiss();
-        return;
-    }
-    settle_luau_list();
-    if (!completion_.isOpen()) {
         return;
     }
     const std::optional<CompletionEdit> edit = completion_.take(parentheses, area_->getText());
@@ -1178,14 +1167,16 @@ void IdeScriptEditor::refresh_completion(bool force) {
     const int caret = area_->caretPosition();
     const std::vector<engine_core::LuaNode> place = world();
     // What needs Luau's types shows on a later frame, so typing never waits on
-    // the type checker. The popup keeps what it shows until then.
+    // the type checker. Until then the popup keeps the rows that still fit.
     CompletionList now;
-    luau_list_ = ask_completion(now, engine_.analysis(), text, caret, place, id_, true, force);
+    luau_list_ = ask_completion(now, engine_.analysis(), text, caret, place, id_, true, force, "editor");
     if (!luau_list_) {
         completion_.present(std::move(now), force, *area_, bounds.x, bounds.y, bounds.height);
         return;
     }
+    completion_.narrow(luau_list_->plan.frame, *area_, bounds.x, bounds.y, bounds.height);
     luau_list_->shown = completion_.isOpen();
+    luau_list_->dismissals = completion_.dismissals();
 }
 
 void IdeScriptEditor::take_luau_list() {
@@ -1199,7 +1190,7 @@ void IdeScriptEditor::take_luau_list() {
     PendingCompletion pending = std::move(*luau_list_);
     luau_list_.reset();
     if (!area_ || loading_ || missing_ || completion_.accepting() || completion_.isOpen() != pending.shown ||
-        area_->caretPosition() != pending.caret) {
+        completion_.dismissals() != pending.dismissals || area_->caretPosition() != pending.caret) {
         return;
     }
     const jadefx::TextBounds bounds = area_->caretBounds();
@@ -1209,12 +1200,6 @@ void IdeScriptEditor::take_luau_list() {
     completion_.present(std::move(*list), pending.force, *area_, bounds.x, bounds.y, bounds.height);
 }
 
-void IdeScriptEditor::settle_luau_list() {
-    if (luau_list_ && completion_.isOpen() && !completion_.accepting()) {
-        settle_completion(*luau_list_, kSettleWait);
-        take_luau_list();
-    }
-}
 
 void ScriptCodeArea::handleKey(jadefx::KeyEvent& event) {
     if (editor == nullptr || (!event.pressed && !event.repeat)) {

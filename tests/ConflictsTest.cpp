@@ -251,6 +251,32 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     layout.flushFrame();
     expect(part_color().g == 1.f && part_color().r == 0.f, "coming back to the window checks the disk");
 
+    // A Properties value being typed in holds that check back, as a rename does.
+    layout.simulation().on_simulation(
+        [](engine_core::DataModel& game) { game.selection().set({game.find_first_child(0, "Part")}); });
+    scene.layout(1280, 800, 4.5);
+    scene.layout(1280, 800, 4.55);
+    jadefx::TextField* typing = nullptr;
+    for (jadefx::Node* node : scene.getElementsByClassName("properties-field")) {
+        if (typing == nullptr) {
+            typing = dynamic_cast<jadefx::TextField*>(node);
+        }
+    }
+    expect(typing != nullptr, "Properties shows the part's fields");
+    if (typing != nullptr) {
+        scene.requestFocus(typing);
+        set_disk("Color", 1, 1, 0);
+        scene.noteWindowFocus(false);
+        layout.flushFrame();
+        scene.noteWindowFocus(true);
+        layout.flushFrame();
+        expect(scene.focusedNode() == typing, "the field keeps the focus with the window");
+        expect(part_color().r == 0.f, "a check waits while a Properties field is being typed in");
+        scene.releaseFocus(typing);
+        layout.flushFrame();
+        expect(part_color().r == 1.f && part_color().g == 1.f, "and runs once the field lets go");
+    }
+
     paint(0.25f, 0.5f, 0.75f);
     set_disk("Color", 1, 0, 0);
     layout.check_disk();

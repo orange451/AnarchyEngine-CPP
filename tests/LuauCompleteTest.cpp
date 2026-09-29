@@ -2065,6 +2065,47 @@ void testDotChildren() {
                  "a name that is not there may be nil");
 }
 
+std::string repeated(const char* piece, int count) {
+    std::string out;
+    for (int i = 0; i < count; ++i) {
+        out += piece;
+    }
+    return out;
+}
+
+// Generated or pasted code can nest far deeper than anyone writes by hand.
+// Completing or hovering after it must not overflow the stack.
+void testDeepNesting() {
+    const std::string tail = "\nlocal t = {y = 1}\nt.";
+    const std::string parens = "local x = " + std::string(100000, '(') + "1" + tail;
+    at_end(parens);
+    ide::hover_luau(parens, static_cast<int>(parens.size()) - 1);
+    at_end("local x = " + repeated("not ", 100000) + "true" + tail);
+    at_end("local x = -" + repeated("#-", 100000) + "1" + tail);
+    at_end("local s = \"a\"" + repeated(" .. \"a\"", 100000) + tail);
+    at_end("local v = " + repeated("{", 100000) + tail);
+    at_end(repeated("do ", 100000) + tail);
+    at_end(repeated("function f() ", 50000) + tail);
+    at_end(repeated("local f = function() ", 50000) + tail);
+
+    // Each required module is read by a parser of its own, started from inside the
+    // one that reached the require. They share one depth budget, or a chain of
+    // eight modules could each nest as deep as one.
+    std::vector<engine_core::LuaNode> chain{node(10, 0, "Chain", "Folder")};
+    for (int k = 1; k <= 8; ++k) {
+        const std::string inner = k < 8 ? "require(script.Parent.M" + std::to_string(k + 1) + ")" : "{y = 1}";
+        const std::string name = "M" + std::to_string(k);
+        chain.push_back(node(static_cast<std::uint32_t>(10 + k), 10, name.c_str(), "ModuleScript",
+                             "return " + std::string(130, '(') + inner + std::string(130, ')')));
+    }
+    chain.push_back(node(30, 0, "Main", "Script"));
+    at_end("local m = require(game.Chain.M1)\nm.", chain, 30);
+
+    // Nesting as deep as real code goes still completes.
+    expect_has(at_end("local t = {y = 1}\nprint(" + std::string(40, '(') + "t."), "y", "t. inside 40 parentheses");
+    expect_has(at_end("local t = {y = 1}\n" + repeated("do ", 40) + "t."), "y", "t. inside 40 blocks");
+}
+
 }  // namespace
 
 // A module table written with nested tables: the name, each key, and the local
@@ -2354,6 +2395,7 @@ int RunLuauCompleteTests() {
         testRegisteredMembers();
         testScriptTableKeys();
         testRequire();
+        testDeepNesting();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());
     }

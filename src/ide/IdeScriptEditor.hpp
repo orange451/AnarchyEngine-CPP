@@ -89,6 +89,8 @@ protected:
     void layoutChildren() override;
     void onOpen() override;
     void onClose() override;
+    // Leaving a scene closes the color picker, whose key hook is on that scene.
+    void sceneChanged(jadefx::Scene* previous) override;
 
 private:
     struct Commit;
@@ -120,6 +122,9 @@ private:
     // Ends the picker: keep writes one undo step for the whole session, and
     // otherwise the literal goes back to how it was.
     void close_color_picker(bool keep);
+    // scene is where the picker's key hook and popup are: this editor's scene,
+    // the one it just left, or null when that scene is going away.
+    void close_color_picker(bool keep, jadefx::Scene* scene);
     void write_color(const engine_core::Color3& color);
     // Finds the bar's query in text, the buffer, again. paint calls it, so the
     // matches always belong to the text on screen.

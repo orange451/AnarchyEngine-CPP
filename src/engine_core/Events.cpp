@@ -3,6 +3,8 @@
 #include "Contract.hpp"
 #include "TaskScheduler.hpp"
 
+#include <algorithm>
+
 namespace engine_core {
 namespace {
 
@@ -226,11 +228,15 @@ void EventQueue::invoke(const Event& event) {
     if (signal == nullptr) {
         return;
     }
-    // Immediate events nest, so the outer event's payload comes back after.
-    const std::uint64_t outer = payload_;
+    // Immediate events nest, so the outer event's payload comes back after, even
+    // when a handler throws.
+    struct Restore {
+        std::uint64_t& payload;
+        const std::uint64_t outer;
+        ~Restore() { payload = outer; }
+    } restore{payload_, payload_};
     payload_ = event.payload;
     invoke_connections(*signal, event);
-    payload_ = outer;
 }
 
 void EventQueue::invoke_connections(Signal& signal, const Event& event) {
@@ -238,6 +244,12 @@ void EventQueue::invoke_connections(Signal& signal, const Event& event) {
     const InstanceId owner = signal.owner_;
     (void)owner;
     const std::size_t begin = invoke_list_.size();
+    // A handler that throws would otherwise leave this call's entries behind for good.
+    struct Trim {
+        std::vector<std::uint32_t>& list;
+        const std::size_t size;
+        ~Trim() { list.resize(size); }
+    } trim{invoke_list_, begin};
     for (std::uint32_t index = signal.head_; index != kNone; index = conns_[index].next) {
         invoke_list_.push_back(index);
     }
@@ -260,16 +272,28 @@ void EventQueue::invoke_connections(Signal& signal, const Event& event) {
             handler(event.instance, event.field);
         }
     }
-    invoke_list_.resize(begin);
 }
 
 void EventQueue::enqueue(const Event& event) {
-    if (events_.empty() || size_ == events_.size()) {
-        contract_fail("event queue is full");
+    if (size_ == events_.size()) {
+        grow();
     }
     events_[tail_] = event;
     tail_ = (tail_ + 1) % events_.size();
     ++size_;
+}
+
+// A script can queue more events in one step than the queue first held, as by
+// parenting thousands of instances under a parent with a ChildAdded listener.
+// The ring doubles. Nothing holds a reference into it across a handler.
+void EventQueue::grow() {
+    std::vector<Event> larger(std::max(kEventCapacity, events_.size() * 2));
+    for (std::size_t n = 0; n < size_; ++n) {
+        larger[n] = events_[(head_ + n) % events_.size()];
+    }
+    events_.swap(larger);
+    head_ = 0;
+    tail_ = size_;
 }
 
 EventQueue::Event EventQueue::pop() {

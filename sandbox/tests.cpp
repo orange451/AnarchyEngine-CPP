@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -3908,4 +3909,293 @@ TEST_CASE("UserInputService keeps a release when the queue is full", "[input]") 
     REQUIRE_FALSE(input.key_down(119));
     REQUIRE_FALSE(input.key_down(97));
     REQUIRE_FALSE(input.button_down(1));
+}
+
+TEST_CASE("S36 a finished listener's thread is released", "[S36]") {
+    ScriptRig rig;
+    add_script(rig.game, "Main", R"(
+        local seen = setmetatable({}, {__mode = "k"})
+        local fires = 0
+        game:GetService("RunService").Heartbeat:Connect(function()
+            seen[coroutine.running()] = true
+            fires += 1
+        end)
+        while fires < 200 do
+            task.wait()
+        end
+        -- Enough garbage that the collector finishes several cycles.
+        for _ = 1, 400 do
+            local junk = string.rep("x", 65536)
+        end
+        local kept = 0
+        for _ in pairs(seen) do
+            kept += 1
+        end
+        _G.kept = kept
+    )");
+    rig.game.start_simulation();
+    rig.frames(260);
+    double kept = -1;
+    REQUIRE(rig.runtime.global_number("kept", kept));
+    // Each fire ran on its own thread and finished. Only one still running could stay.
+    REQUIRE(kept < 10);
+}
+
+TEST_CASE("S37 Disconnect releases the callback", "[S37]") {
+    ScriptRig rig;
+    add_script(rig.game, "Main", R"(
+        local held = setmetatable({}, {__mode = "k"})
+        local heartbeat = game:GetService("RunService").Heartbeat
+        for _ = 1, 200 do
+            local calls = 0
+            local callback = function()
+                calls += 1
+            end
+            held[callback] = true
+            heartbeat:Connect(callback):Disconnect()
+        end
+        for _ = 1, 400 do
+            local junk = string.rep("x", 65536)
+        end
+        local kept = 0
+        for _ in pairs(held) do
+            kept += 1
+        end
+        _G.kept_callbacks = kept
+    )");
+    rig.game.start_simulation();
+    rig.frames(2);
+    double kept = -1;
+    REQUIRE(rig.runtime.global_number("kept_callbacks", kept));
+    REQUIRE(kept < 10);
+}
+
+TEST_CASE("S38 running out of Lua memory outside a script stops the scripts instead of throwing", "[S38]") {
+    ScriptRig rig;
+    engine_core::Script& hoard = add_script(rig.game, "Hoard", R"(
+        _G.hoard = false
+        _G.used = 0
+        _G.full = false
+        -- Luau interns strings, so each piece gets a count to make it a new one.
+        local count = 0
+        local function grow(size)
+            while true do
+                count += 1
+                _G.hoard = {_G.hoard, string.rep("x", size) .. count}
+            end
+        end
+        -- Big pieces first, so the loops fit in one step's budget, then smaller ones for the rest.
+        for _, size in ipairs({1048576, 65536, 4096, 256, 0}) do
+            pcall(grow, size)
+        end
+        _G.used = gcinfo()
+        _G.full = true
+        while true do
+            task.wait(1)
+        end
+    )");
+    rig.game.start_simulation();
+    rig.frames(3);
+    bool full = false;
+    double used = 0;
+    INFO("last error: " << rig.runtime.last_error());
+    REQUIRE(rig.runtime.global_boolean("full", full));
+    REQUIRE(full);
+    REQUIRE(rig.runtime.global_number("used", used));
+    REQUIRE(used > 65000);  // KB of the 64 MB the VM may use
+    rig.runtime.drain_output();
+
+    // Starting a script makes its thread from C++, outside any Lua call. Each of
+    // these keeps its thread, so one of them finds the memory gone, even after the
+    // collector frees the fill's temporary strings.
+    std::vector<engine_core::Script*> late;
+    for (int i = 0; i < 2000; ++i) {
+        late.push_back(&add_script(rig.game, "Late", "while true do task.wait(1) end"));
+    }
+    REQUIRE_NOTHROW(rig.frames(3));
+    bool reported = false;
+    for (const engine_core::ScriptRuntime::OutputLine& line : rig.runtime.drain_output().lines) {
+        reported = reported || (line.kind == engine_core::ScriptRuntime::OutputKind::Error &&
+                                line.text.rfind("Scripts stopped: ", 0) == 0 &&
+                                line.text.find("memory") != std::string::npos);
+    }
+    REQUIRE(reported);
+    REQUIRE_NOTHROW(rig.frames(3));
+
+    // The next play session starts with a fresh VM, and scripts run again.
+    rig.game.stop_simulation();
+    hoard.set_enabled(false);
+    for (engine_core::Script* script : late) {
+        script->set_enabled(false);
+    }
+    add_script(rig.game, "Again", "_G.again = true");
+    rig.game.start_simulation();
+    rig.frames(2);
+    bool again = false;
+    REQUIRE(rig.runtime.global_boolean("again", again));
+    REQUIRE(again);
+}
+
+TEST_CASE("T25 an exception on the simulation thread is reported, and stepping goes on", "[T25]") {
+    engine_core::Engine engine;
+    engine.start();
+    engine.resume();
+    engine.on_simulation([](engine_core::DataModel&) { throw std::runtime_error("edit failed on purpose"); });
+    const std::uint64_t frames = engine.sim_frame_count();
+    wait_until([&] { return engine.sim_frame_count() > frames + 3; });
+    bool reported = false;
+    for (const engine_core::ScriptRuntime::OutputLine& line : engine.scripts().output_since(0, 64).lines) {
+        reported = reported || line.text.find("edit failed on purpose") != std::string::npos;
+    }
+    engine.stop();
+    REQUIRE(reported);
+}
+
+TEST_CASE("E1 one drain delivers more events than the queue first held", "[E1]") {
+    engine_core::Game game;
+    game.history().set_enabled(false);
+    int added = 0;
+    game.child_added(game.id()).connect([&](engine_core::InstanceId, engine_core::Field) { ++added; });
+    for (int i = 0; i < 10000; ++i) {
+        game.set_parent(game.create().id(), game.id());
+    }
+    {
+        SimRole role;
+        game.events().drain();
+    }
+    REQUIRE(added == 10000);
+}
+
+TEST_CASE("E2 more worker writes than the command queue first held all apply", "[E2]") {
+    engine_core::Game game;
+    engine_core::GameObject& part = game.create_game_object();
+    std::thread::id simulation;
+    std::thread::id render;
+    std::thread([&simulation] { simulation = std::this_thread::get_id(); }).join();
+    std::thread([&render] { render = std::this_thread::get_id(); }).join();
+    game.set_thread_ids(simulation, render);
+    game.set_threads_running(true);
+    // This thread is neither engine thread, so each write waits as a command.
+    for (int i = 1; i <= 5000; ++i) {
+        part.set_transform(engine_core::transform_translation(static_cast<float>(i), 0.f, 0.f));
+    }
+    game.set_thread_ids(std::this_thread::get_id(), render);
+    {
+        SimRole role;
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Write);
+        game.drain_commands();
+    }
+    game.set_threads_running(false);
+    REQUIRE(near(part.transform(), engine_core::transform_translation(5000.f, 0.f, 0.f)));
+}
+
+TEST_CASE("S39 Color3.fromHSV reads a hue that is not finite as 0", "[S39]") {
+    ScriptRig rig;
+    add_script(rig.game, "Colors", R"(
+        local red = Color3.new(1, 0, 0)
+        _G.nan = Color3.fromHSV(0 / 0, 1, 1) == red
+        _G.inf = Color3.fromHSV(math.huge, 1, 1) == red
+        _G.ninf = Color3.fromHSV(-math.huge, 1, 1) == red
+    )");
+    rig.game.start_simulation();
+    rig.frames(1);
+    for (const char* name : {"nan", "inf", "ninf"}) {
+        bool red = false;
+        INFO(name);
+        REQUIRE(rig.runtime.global_boolean(name, red));
+        REQUIRE(red);
+    }
+}
+
+TEST_CASE("T26 a renderer that throws is reported, and frames go on", "[T26]") {
+    struct Throwing : CountingRenderer {
+        void perform(const engine_core::VisualSnapshot&) override { throw std::runtime_error("render failed on purpose"); }
+    } renderer;
+    engine_core::Engine engine;
+    engine.set_renderer(&renderer);
+    engine.start();
+    engine.resume();
+    const std::uint64_t presents = engine.present_count();
+    wait_until([&] { return engine.present_count() > presents + 3; });
+    bool reported = false;
+    for (const engine_core::ScriptRuntime::OutputLine& line : engine.scripts().output_since(0, 64).lines) {
+        reported = reported || line.text.find("render failed on purpose") != std::string::npos;
+    }
+    engine.stop();
+    REQUIRE(reported);
+}
+
+TEST_CASE("T27 an edit that throws does not drop the edits queued after it", "[T27]") {
+    engine_core::Engine engine;
+    std::atomic<bool> hold{true};
+    std::atomic<bool> held{false};
+    // Holding a step open lets both edits below land in the same batch.
+    engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
+        held.store(true);
+        while (hold.load()) {
+            std::this_thread::yield();
+        }
+    });
+    engine.start();
+    engine.resume();
+    wait_until([&] { return held.load(); });
+    std::atomic<bool> second{false};
+    engine.on_simulation([](engine_core::DataModel&) { throw std::runtime_error("first edit failed on purpose"); });
+    engine.on_simulation([&second](engine_core::DataModel&) { second.store(true); });
+    hold.store(false);
+    wait_until([&] { return second.load(); });
+    engine.stop();
+}
+
+TEST_CASE("E3 a handler that throws leaves the queue as it was", "[E3]") {
+    SimRole role;
+    engine_core::EventQueue events;
+    engine_core::Signal signal;
+    events.host_signal(&signal);
+    signal.connect([](engine_core::InstanceId, engine_core::Field) { throw std::runtime_error("handler failed"); });
+    events.emit_payload(signal.id(), 7);
+    REQUIRE_THROWS_AS(events.drain(), std::runtime_error);
+    REQUIRE(events.payload() == 0);
+    events.release_signal(signal);
+}
+
+TEST_CASE("S40 cancelling a task that finished long ago does nothing", "[S40]") {
+    ScriptRig rig;
+    add_script(rig.game, "Main", R"(
+        local finished = task.spawn(function() end)
+        task.wait()
+        task.wait()
+        task.cancel(finished)
+        _G.after = true
+    )");
+    rig.game.start_simulation();
+    rig.frames(4);
+    bool after = false;
+    REQUIRE(rig.runtime.global_boolean("after", after));
+    REQUIRE(after);
+}
+
+TEST_CASE("S41 a cancelled Wait does not resume when its signal fires later", "[S41]") {
+    ScriptRig rig;
+    add_script(rig.game, "Main", R"(
+        local watched = Instance.new("Folder")
+        watched.Parent = game
+        local waiter = task.spawn(function()
+            watched.Changed:Wait()
+            _G.woke = true
+        end)
+        task.wait()
+        task.cancel(waiter)
+        task.wait()
+        watched.Name = "Renamed"
+        task.wait()
+        task.wait()
+        _G.done = true
+    )");
+    rig.game.start_simulation();
+    rig.frames(6);
+    bool done = false;
+    REQUIRE(rig.runtime.global_boolean("done", done));
+    REQUIRE(done);
+    REQUIRE(rig.runtime.global_is_nil("woke"));
 }

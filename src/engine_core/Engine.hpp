@@ -10,11 +10,14 @@
 #include <memory>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace engine_core {
@@ -83,6 +86,11 @@ private:
     void step_physics(double dt);
     void pace(double hz_anchor_seconds) const;
     void drain_edits();
+    // Runs one step of a loop. A contract failure goes to on_contract. Any other
+    // exception is reported to stderr and the console, and the loop goes on.
+    template <typename Step, typename OnContract>
+    void guarded_step(Step&& step, OnContract&& on_contract);
+    void report_fault(const char* what);
 
     Game game_;
     SnapshotPump pump_;
@@ -129,6 +137,10 @@ private:
     // at the start of the next step, under the write lock.
     std::mutex edit_mu_;
     std::vector<std::function<void(DataModel&)>> edits_;
+
+    // When each recent fault was last reported.
+    std::mutex fault_mu_;
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> recent_faults_;
 
     // Declared last so it is destroyed before the DataModel, after stop() joins
     // the simulation and render threads.

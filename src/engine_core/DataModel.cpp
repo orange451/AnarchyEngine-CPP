@@ -180,7 +180,7 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
     world.slots.reserve(kMaxInstances);
     world.free_list.reserve(kMaxInstances);
     world.invalidation.reserve(kMaxInvalidations);
-    world.commands.assign(kMaxCommands, Command{});
+    world.commands.assign(kInitialCommands, Command{});
     world.bags.resize(kMaxInstances);
     world.walk.reserve(kMaxInstances);
     world.step_ids.reserve(kMaxInstances);
@@ -413,8 +413,16 @@ void DataModel::note(InstanceId id, VisualField fields, WriteOrigin origin) {
 
 void DataModel::enqueue(Command command) {
     std::lock_guard<std::mutex> guard(state_->command_mu);
-    if (state_->commands.empty() || state_->command_size == state_->commands.size()) {
-        contract_fail("simulation command queue is full");
+    if (state_->command_size == state_->commands.size()) {
+        // Workers can post faster than one step drains. The ring doubles under
+        // the same lock drain_commands takes.
+        std::vector<Command> larger(std::max(kInitialCommands, state_->commands.size() * 2));
+        for (std::size_t n = 0; n < state_->command_size; ++n) {
+            larger[n] = state_->commands[(state_->command_head + n) % state_->commands.size()];
+        }
+        state_->commands.swap(larger);
+        state_->command_head = 0;
+        state_->command_tail = state_->command_size;
     }
     state_->commands[state_->command_tail] = command;
     state_->command_tail = (state_->command_tail + 1) % state_->commands.size();
@@ -447,6 +455,11 @@ bool DataModel::consume_resync() {
     const bool was = state_->resync;
     state_->resync = false;
     return was;
+}
+
+std::size_t DataModel::room_left() const {
+    const State& world = *state_;
+    return kMaxInstances - world.slots.size() + world.free_list.size();
 }
 
 InstanceId DataModel::allocate() {

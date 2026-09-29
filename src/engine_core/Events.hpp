@@ -195,6 +195,7 @@ private:
     bool eligible(const ConnSlot& slot) const;
     void invoke(const Event& event);
     void enqueue(const Event& event);
+    void grow();
     Event pop();
     void seal_instance(InstanceId id);
     void invoke_connections(Signal& signal, const Event& event);

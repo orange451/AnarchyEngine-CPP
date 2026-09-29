@@ -2444,3 +2444,198 @@ TEST_CASE("U5 unsaved does not read project.json, so one that does not parse is 
     REQUIRE_NOTHROW(unsaved = project.unsaved());
     REQUIRE_FALSE(unsaved);
 }
+
+TEST_CASE("P17 a save that fails partway leaves the last save on disk", "[P17][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId model = add_part(game, 0, "Model").id();
+    const InstanceId part = add_part(game, model, "Part").id();
+    // The child sorts first by GUID, so the save moves it before it reaches its parent.
+    game.set_guid(model, "b1");
+    game.set_guid(part, "a1");
+    project.save();
+    const std::map<std::string, std::string> saved = tree_files(dir.path);
+    REQUIRE(saved.count("src/Model.b1/init.json") == 1);
+    REQUIRE(saved.count("src/Model.b1/Part.a1.json") == 1);
+
+    game.set_name(model, "Renamed");
+    // A folder where the new init.json's temporary file goes fails that one write,
+    // after the save has already moved the child.
+    const fs::path renamed = dir.path / "src" / "Renamed.b1";
+    fs::create_directories(renamed / "init.json.tmp");
+    REQUIRE_THROWS_AS(project.save(), ProjectError);
+    std::vector<std::string> left;
+    for (const fs::directory_entry& entry : fs::directory_iterator(renamed)) {
+        left.push_back(entry.path().filename().generic_u8string());
+    }
+    REQUIRE(left == std::vector<std::string>{"init.json.tmp"});
+    fs::remove_all(renamed);
+    REQUIRE(tree_files(dir.path) == saved);
+    {
+        Project reopened = Project::load(dir.path);
+        const DataModel& loaded = reopened.datamodel();
+        const InstanceId id = by_guid(loaded, "b1");
+        REQUIRE(loaded.name(id) == "Model");
+        REQUIRE(child_guids(loaded, id) == std::vector<std::string>{"a1"});
+    }
+
+    // The next save sees no change on disk and moves both files.
+    project.save();
+    REQUIRE(project.last_save().moved ==
+            std::vector<std::string>{"src/Model.b1/Part.a1.json -> src/Renamed.b1/Part.a1.json",
+                                     "src/Model.b1/init.json -> src/Renamed.b1/init.json"});
+    REQUIRE_FALSE(fs::exists(dir.path / "src" / "Model.b1"));
+}
+
+#ifdef _WIN32
+// Windows will not delete a file that another handle holds open, which makes
+// a removal fail on purpose.
+TEST_CASE("P18 a save that cannot remove a file changes nothing", "[P18][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId gone = add_part(game, 0, "Gone").id();
+    const InstanceId kept = add_part(game, 0, "Kept").id();
+    project.save();
+    const std::map<std::string, std::string> saved = tree_files(dir.path);
+    const std::string gone_file = leaf(game, gone);
+    const std::string kept_file = leaf(game, kept);
+    game.destroy(gone);
+    game.set_name(kept, "Renamed");
+    {
+        std::ifstream held(dir.path / gone_file, std::ios::binary);
+        REQUIRE(held.is_open());
+        REQUIRE_THROWS_AS(project.save(), ProjectError);
+    }
+    REQUIRE(tree_files(dir.path) == saved);
+
+    project.save();
+    const std::string renamed_file = leaf(game, kept);
+    REQUIRE(project.last_save().removed == std::vector<std::string>{gone_file});
+    REQUIRE(project.last_save().moved == std::vector<std::string>{kept_file + " -> " + renamed_file});
+    REQUIRE_FALSE(fs::exists(dir.path / gone_file));
+    REQUIRE(fs::exists(dir.path / renamed_file));
+}
+
+TEST_CASE("P20 a folder that loses its last child keeps its files when the child's file cannot go",
+          "[P20][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId folder = add_part(game, 0, "Holder").id();
+    const InstanceId child = add_part(game, folder, "Child").id();
+    project.save();
+    const std::map<std::string, std::string> saved = tree_files(dir.path);
+    const std::string folder_dir = "src/Holder." + game.guid(folder);
+    const std::string child_file = folder_dir + "/Child." + game.guid(child) + ".json";
+    REQUIRE(saved.count(child_file) == 1);
+    // Without its child the folder instance becomes a leaf file, and its init.json moves out.
+    game.destroy(child);
+    {
+        std::ifstream held(dir.path / child_file, std::ios::binary);
+        REQUIRE(held.is_open());
+        REQUIRE_THROWS_AS(project.save(), ProjectError);
+    }
+    REQUIRE(tree_files(dir.path) == saved);
+    REQUIRE_NOTHROW(Project::load(dir.path));
+
+    project.save();
+    REQUIRE(fs::exists(dir.path / (folder_dir + ".json")));
+    REQUIRE_FALSE(fs::exists(dir.path / folder_dir));
+}
+
+TEST_CASE("P21 a save over a conflict that cannot remove the other file leaves the conflict", "[P21][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId part = add_part(game, 0, "Part").id();
+    project.save();
+    const std::string planned = leaf(game, part);
+    const std::string moved = "src/Moved." + game.guid(part) + ".json";
+    fs::rename(dir.path / planned, dir.path / moved);
+    game.game_object(part)->set_color(rgb(0.25f, 0.5f, 0.75f));
+    std::vector<engine_core::SaveConflict> conflicts;
+    try {
+        project.save();
+    } catch (const engine_core::ProjectConflict& conflict) {
+        conflicts = conflict.conflicts();
+    }
+    REQUIRE(conflicts.size() == 1);
+    const std::map<std::string, std::string> before = tree_files(dir.path);
+    {
+        // Overwrite writes the studio's file, then has to remove the moved copy.
+        std::ifstream held(dir.path / moved, std::ios::binary);
+        REQUIRE(held.is_open());
+        REQUIRE_THROWS_AS(project.save(conflicts), ProjectError);
+    }
+    REQUIRE(tree_files(dir.path) == before);
+    // The file moved outside is still a conflict for the next save.
+    REQUIRE_THROWS_AS(project.save(), engine_core::ProjectConflict);
+}
+#endif
+
+TEST_CASE("P19 a project with more instances than a place holds is an error, not an abort", "[P19][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    for (std::size_t i = 0; i <= DataModel::kMaxInstances; ++i) {
+        const std::string guid = "p" + std::to_string(i);
+        std::ofstream out(dir.path / "src" / ("Part." + guid + ".json"), std::ios::binary);
+        out << meta("DataModel", guid.c_str(), "Part");
+    }
+    REQUIRE_THROWS_AS(project.scan_disk(), ProjectError);
+    REQUIRE_THROWS_AS(project.apply_disk(), ProjectError);
+    REQUIRE_THROWS_AS(Project::load(dir.path), ProjectError);
+}
+
+TEST_CASE("D14 changes from disk that need more room than the place has left are an error", "[D14][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    project.save();
+    // Unparented instances take slots without being part of the place.
+    game.history().set_enabled(false);
+    for (std::size_t i = 0; i + 2 < DataModel::kMaxInstances; ++i) {
+        game.create();
+    }
+    game.history().set_enabled(true);
+    for (const char* guid : {"n1", "n2", "n3", "n4", "n5"}) {
+        write_file(dir.path / "src" / (std::string("New.") + guid + ".json"), meta("DataModel", guid, "New"));
+    }
+    REQUIRE_THROWS_AS(project.apply_disk(), ProjectError);
+    for (const char* guid : {"n1", "n2", "n3", "n4", "n5"}) {
+        REQUIRE_FALSE(game.find_guid(guid).has_value());
+    }
+}
+
+TEST_CASE("D15 changes from disk that do not fit settle none of the choices", "[D15][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId part = add_part(game, 0, "Part").id();
+    project.save();
+    // Both sides change the color: a row for a person's choice.
+    game.game_object(part)->set_color(rgb(1.f, 0.f, 0.f));
+    edit_key(dir.path / leaf(game, part), "Color", triple(0.f, 0.f, 1.f));
+    const std::vector<engine_core::SaveConflict> rows = project.scan_disk().conflicts;
+    REQUIRE(rows.size() == 1);
+
+    game.history().set_enabled(false);
+    for (std::size_t i = 0; i + 2 < DataModel::kMaxInstances; ++i) {
+        game.create();
+    }
+    game.history().set_enabled(true);
+    for (const char* guid : {"n1", "n2", "n3", "n4", "n5"}) {
+        write_file(dir.path / "src" / (std::string("New.") + guid + ".json"), meta("DataModel", guid, "New"));
+    }
+    // Keeping the studio's color would settle that row, but nothing may change when the rest cannot fit.
+    REQUIRE_THROWS_AS(project.apply_disk({engine_core::DiskChoice{rows.front(), false}}), ProjectError);
+    REQUIRE(project.scan_disk().conflicts == rows);
+}

@@ -5,7 +5,10 @@
 #include "ScriptRuntime.hpp"
 
 #include <chrono>
+#include <cstdio>
+#include <exception>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -142,6 +145,41 @@ void Engine::on_simulation(std::function<void(DataModel&)> fn) {
     edits_.push_back(std::move(fn));
 }
 
+template <typename Step, typename OnContract>
+void Engine::guarded_step(Step&& step, OnContract&& on_contract) {
+    try {
+        step();
+    } catch (const ContractViolation&) {
+        on_contract();
+    } catch (const std::exception& error) {
+        report_fault(error.what());
+    } catch (...) {
+        report_fault("an exception that is not a std::exception");
+    }
+}
+
+void Engine::report_fault(const char* what) {
+    const std::string text = std::string("Engine: ") + (what != nullptr ? what : "unknown error");
+    const auto now = std::chrono::steady_clock::now();
+    {
+        // A fault that repeats every frame, on either thread, is said once every
+        // few seconds rather than once a frame.
+        std::lock_guard<std::mutex> guard(fault_mu_);
+        const auto seen = recent_faults_.find(text);
+        if (seen != recent_faults_.end() && now - seen->second < std::chrono::seconds(5)) {
+            return;
+        }
+        if (recent_faults_.size() >= 64) {
+            recent_faults_.clear();
+        }
+        recent_faults_[text] = now;
+    }
+    std::fprintf(stderr, "%s\n", text.c_str());
+    if (scripts_) {
+        scripts_->append_output(ScriptRuntime::OutputKind::Error, text);
+    }
+}
+
 void Engine::drain_edits() {
     std::vector<std::function<void(DataModel&)>> batch;
     {
@@ -152,7 +190,8 @@ void Engine::drain_edits() {
         batch.swap(edits_);
     }
     for (const std::function<void(DataModel&)>& fn : batch) {
-        fn(game_);
+        // An edit that fails is reported; the edits queued after it still run.
+        guarded_step([&] { fn(game_); }, [this] { contract_count_.fetch_add(1); });
     }
 }
 
@@ -232,40 +271,40 @@ void Engine::simulation_loop() {
         }
 
         int substeps = 0;
-        try {
-            DataModelLock lock(game_, DataModelLock::Write);
-            game_.drain_commands();
-            drain_edits();
-            scheduler_.run_phase(Phase::PreAnimation, render_dt_);
-            // Deferred handlers run on this thread, still under the step lock,
-            // after the phase that queued them and before Prepare can copy.
-            game_.events().drain();
-            accumulator += wall;
-            constexpr int kMaxSubsteps = 32;
-            while (accumulator >= physics_dt_ && substeps < kMaxSubsteps) {
-                scheduler_.run_phase(Phase::PreSimulation, physics_dt_);
+        guarded_step(
+            [&] {
+                DataModelLock lock(game_, DataModelLock::Write);
+                game_.drain_commands();
+                drain_edits();
+                scheduler_.run_phase(Phase::PreAnimation, render_dt_);
+                // Deferred handlers run on this thread, still under the step lock,
+                // after the phase that queued them and before Prepare can copy.
                 game_.events().drain();
-                scheduler_.run_phase(Phase::PhysicsSubstep, physics_dt_);
+                accumulator += wall;
+                constexpr int kMaxSubsteps = 32;
+                while (accumulator >= physics_dt_ && substeps < kMaxSubsteps) {
+                    scheduler_.run_phase(Phase::PreSimulation, physics_dt_);
+                    game_.events().drain();
+                    scheduler_.run_phase(Phase::PhysicsSubstep, physics_dt_);
+                    game_.events().drain();
+                    step_physics(physics_dt_);
+                    scheduler_.run_phase(Phase::PostSimulation, physics_dt_);
+                    game_.events().drain();
+                    accumulator -= physics_dt_;
+                    ++substeps;
+                }
+                scheduler_.run_phase(Phase::Heartbeat, render_dt_);
+                // Descendants of the root step in this phase. Bound Heartbeat jobs
+                // stay for callers that are not instances.
+                game_.step_descendants(render_dt_);
                 game_.events().drain();
-                step_physics(physics_dt_);
-                scheduler_.run_phase(Phase::PostSimulation, physics_dt_);
+                // Same dt Heartbeat jobs just received. Scripts resume after that drain.
+                if (scripts_) {
+                    scripts_->heartbeat(render_dt_);
+                }
                 game_.events().drain();
-                accumulator -= physics_dt_;
-                ++substeps;
-            }
-            scheduler_.run_phase(Phase::Heartbeat, render_dt_);
-            // Descendants of the root step in this phase. Bound Heartbeat jobs
-            // stay for callers that are not instances.
-            game_.step_descendants(render_dt_);
-            game_.events().drain();
-            // Same dt Heartbeat jobs just received. Scripts resume after that drain.
-            if (scripts_) {
-                scripts_->heartbeat(render_dt_);
-            }
-            game_.events().drain();
-        } catch (const ContractViolation&) {
-            contract_count_.fetch_add(1);
-        }
+            },
+            [&] { contract_count_.fetch_add(1); });
         if (game_.take_deferred_violation()) {
             contract_count_.fetch_add(1);
         }
@@ -323,25 +362,18 @@ void Engine::render_loop() {
                 pump_.begin_prerender_window(game_);
                 // Roblox order inside the pre-draw window: RenderStepped, then PreRender.
                 // A failure in one does not skip the other or the copy.
-                try {
-                    scheduler_.run_phase(Phase::RenderStepped, frame_dt);
-                } catch (const ContractViolation&) {
-                    saw_contract = true;
-                }
-                try {
-                    scheduler_.run_phase(Phase::PreRender, frame_dt);
-                } catch (const ContractViolation&) {
-                    saw_contract = true;
-                }
+                const auto contract = [&saw_contract] { saw_contract = true; };
+                guarded_step([&] { scheduler_.run_phase(Phase::RenderStepped, frame_dt); }, contract);
+                guarded_step([&] { scheduler_.run_phase(Phase::PreRender, frame_dt); }, contract);
                 pump_.end_prerender_window(game_);
                 // Copy even after a rejected PreRender write. Authorize fails before
                 // mutation, so the queue still describes real sim state.
-                try {
-                    pump_.prepare_copy(game_);
-                    prepared = true;
-                } catch (const ContractViolation&) {
-                    saw_contract = true;
-                }
+                guarded_step(
+                    [&] {
+                        pump_.prepare_copy(game_);
+                        prepared = true;
+                    },
+                    contract);
                 hold_ns = static_cast<std::uint64_t>(
                     std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - hold_start)
                         .count());
@@ -357,22 +389,19 @@ void Engine::render_loop() {
         if (prepared) {
             pump_.publish();
         }
+        // Perform is outside the pre-draw window. A DataModel write there is path D.
+        const auto late_contract = [this] { contract_count_.fetch_add(1); };
         if (renderer_ != nullptr) {
-            try {
-                renderer_->perform(pump_.front());
-                renderer_->present();
-            } catch (const ContractViolation&) {
-                // Perform is outside the pre-draw window. A DataModel write here is path D.
-                contract_count_.fetch_add(1);
-            }
+            guarded_step(
+                [&] {
+                    renderer_->perform(pump_.front());
+                    renderer_->present();
+                },
+                late_contract);
         }
         // After Present the snapshot for this frame is already published.
         // PostRender does not hold the Prepare lock and is not part of the 2 ms budget.
-        try {
-            scheduler_.run_phase(Phase::PostRender, frame_dt);
-        } catch (const ContractViolation&) {
-            contract_count_.fetch_add(1);
-        }
+        guarded_step([&] { scheduler_.run_phase(Phase::PostRender, frame_dt); }, late_contract);
         present_count_.fetch_add(1);
 
         if (render_pace_hz_ > 0) {

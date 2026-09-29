@@ -1104,6 +1104,7 @@ public:
         Resolver nested(scan.tokens, world_, node.id, true);
         nested.signing_ = true;
         nested.requiring_ = requiring_;
+        nested.nesting_ = nesting_;
         nested.parse_until(static_cast<int>(scan.tokens.size()));
         nested.stamp_onto(adopted);
         requiring_->pop_back();
@@ -1694,7 +1695,30 @@ private:
 
     bool block_end() const { return is_kw("end") || is_kw("else") || is_kw("elseif") || is_kw("until"); }
 
+    // Each nested block, expression, operand, and unary operator recurses. Code
+    // generated or pasted with thousands of levels would overflow the stack, so
+    // past this depth the parse stops there, as if the caret were at that point.
+    // Code as people write it stays far below it.
+    static constexpr int kMaxNesting = 400;
+    struct Nesting {
+        explicit Nesting(Resolver& resolver) : resolver(resolver) {
+            if (++*resolver.nesting_ > kMaxNesting) {
+                resolver.i_ = resolver.limit_;
+                resolver.cut_ = true;
+            }
+        }
+        ~Nesting() { --*resolver.nesting_; }
+        Nesting(const Nesting&) = delete;
+        Nesting& operator=(const Nesting&) = delete;
+        bool deep() const { return *resolver.nesting_ > kMaxNesting; }
+        Resolver& resolver;
+    };
+
     void parse_block() {
+        const Nesting nesting(*this);
+        if (nesting.deep()) {
+            return;
+        }
         while (!at_end() && !block_end()) {
             const int before = i_;
             if (is(Token::Semi)) {
@@ -2263,7 +2287,8 @@ private:
     }
 
     Shape* parse_expr() {
-        if (at_end()) {
+        const Nesting nesting(*this);
+        if (at_end() || nesting.deep()) {
             return none();
         }
         return parse_binary(1);
@@ -2299,6 +2324,11 @@ private:
     }
 
     Shape* parse_binary(int minimum) {
+        // `..` is right associative, so a long chain of it nests here.
+        const Nesting nesting(*this);
+        if (nesting.deep()) {
+            return none();
+        }
         Shape* left = parse_unary();
         while (!at_end()) {
             const int level = precedence();
@@ -2326,6 +2356,10 @@ private:
     }
 
     Shape* parse_unary() {
+        const Nesting nesting(*this);
+        if (nesting.deep()) {
+            return none();
+        }
         if (is_kw("not")) {
             advance();
             if (at_end()) {
@@ -2582,7 +2616,12 @@ private:
     std::vector<Binding> bindings_;
     int i_ = 0;
     int limit_ = 0;
+    // Scope depth, for the bindings each scope declares.
     int depth_ = 0;
+    // How deep the recursive parse is, across the parsers a require chain nests
+    // on this stack. See Nesting.
+    int nesting_storage_ = 0;
+    int* nesting_ = &nesting_storage_;
     // The caret cut a declaration or expression off before it was complete.
     bool cut_ = false;
     // Hover keeps bindings after their scope ends so a name can be resolved later.

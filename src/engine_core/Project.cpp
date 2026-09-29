@@ -121,6 +121,7 @@ void write_file(const fs::path& path, const std::string& bytes) {
     }
     fs::path temp = path;
     temp += ".tmp";
+    bool written = false;
     {
         std::ofstream out(temp, std::ios::binary | std::ios::trunc);
         if (!out) {
@@ -128,14 +129,19 @@ void write_file(const fs::path& path, const std::string& bytes) {
         }
         out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
         out.flush();
-        if (!out) {
-            fail("cannot write " + utf8(temp));
-        }
+        written = static_cast<bool>(out);
+    }
+    // A temporary file left behind, as by a full disk, would keep a new folder
+    // from being removed when a failed save is put back.
+    if (!written) {
+        fs::remove(temp, error);
+        fail("cannot write " + utf8(temp));
     }
     fs::rename(temp, path, error);
     if (error) {
+        const std::string reason = error.message();
         fs::remove(temp, error);
-        fail("cannot replace " + utf8(path));
+        fail("cannot replace " + utf8(path) + ": " + reason);
     }
 }
 
@@ -148,14 +154,6 @@ void move_file(const fs::path& from, const fs::path& to) {
     fs::rename(from, to, error);
     if (error) {
         fail("cannot move " + utf8(from) + " to " + utf8(to) + ": " + error.message());
-    }
-}
-
-void remove_file(const fs::path& path) {
-    std::error_code error;
-    fs::remove(path, error);
-    if (error) {
-        fail("cannot remove " + utf8(path) + ": " + error.message());
     }
 }
 
@@ -391,6 +389,12 @@ private:
     }
 
     std::size_t add(PlanNode node, std::size_t parent) {
+        // Building more would stop the studio at the world's capacity. The root,
+        // nodes_[0], takes no instance slot.
+        if (nodes_.size() > DataModel::kMaxInstances) {
+            fail(layout_.src + " holds more than " + std::to_string(DataModel::kMaxInstances) +
+                 " instances, the most a place can hold");
+        }
         const std::size_t index = nodes_.size();
         nodes_.push_back(std::move(node));
         nodes_[parent].children.push_back(index);
@@ -1554,6 +1558,34 @@ struct Project::Comparison {
     std::string studio_parent(std::size_t index) const {
         return index == 0 ? std::string() : tree[tree_parents[index]].guid;
     }
+    // top and every plan node under it. The plan lists a parent before its children.
+    std::vector<std::size_t> subtree(std::size_t top) const {
+        std::vector<std::size_t> out{top};
+        std::set<std::size_t> within{top};
+        for (std::size_t index = top + 1; index < plan.size(); ++index) {
+            if (within.count(plan_parents[index]) != 0) {
+                within.insert(index);
+                out.push_back(index);
+            }
+        }
+        return out;
+    }
+    // At most how many instances applying actions makes. Every one is made
+    // before anything is destroyed.
+    std::size_t instances_to_make() const {
+        using Type = Action::Type;
+        std::size_t count = 0;
+        for (const Action& action : actions) {
+            if (action.type == Type::Create || action.type == Type::Recreate) {
+                ++count;
+            } else if (action.type == Type::Restore) {
+                for (std::size_t index : subtree(on_disk.at(action.guid))) {
+                    count += in_studio.count(plan[index].guid) == 0 ? 1 : 0;
+                }
+            }
+        }
+        return count;
+    }
 };
 
 Project::Comparison Project::compare_disk() const {
@@ -1776,13 +1808,14 @@ DiskScan Project::apply_disk(const std::vector<DiskChoice>& choices) {
     }
     Comparison compared = compare_disk();
     DiskScan out;
+    std::vector<const SaveConflict*> studio_side;
     for (const DiskChoice& choice : choices) {
         if (std::find(compared.rows.begin(), compared.rows.end(), choice.conflict) == compared.rows.end()) {
             out.skipped.push_back(choice.conflict);
             continue;
         }
         if (!choice.disk) {
-            settle(compared, choice.conflict);
+            studio_side.push_back(&choice.conflict);
             continue;
         }
         Comparison::Action action;
@@ -1798,6 +1831,16 @@ DiskScan Project::apply_disk(const std::vector<DiskChoice>& choices) {
             action.key = choice.conflict.key;
         }
         compared.actions.push_back(std::move(action));
+    }
+    // Checked before anything changes, the base included: running out of room
+    // partway would stop the studio.
+    const std::size_t needed = compared.instances_to_make();
+    if (needed > world.room_left()) {
+        fail("the changes on disk add " + std::to_string(needed) + " instances, and this place has room for " +
+             std::to_string(world.room_left()) + " more");
+    }
+    for (const SaveConflict* conflict : studio_side) {
+        settle(compared, *conflict);
     }
     if (!compared.actions.empty()) {
         // An edit still open is its own step; this one is "Changes from Disk".
@@ -1830,12 +1873,7 @@ void Project::settle(const Comparison& compared, const SaveConflict& conflict) {
     if (conflict.key.empty()) {
         // The studio's delete stands. The base takes the disk's files under it
         // too, so a save removes them all.
-        std::set<std::size_t> within{index};
-        for (std::size_t at = index; at < compared.plan.size(); ++at) {
-            if (at != index && within.count(compared.plan_parents[at]) == 0) {
-                continue;
-            }
-            within.insert(at);
+        for (std::size_t at : compared.subtree(index)) {
             files_[compared.plan[at].guid] =
                 from_disk(compared.plan[at], compared.disk_parent(at), compared.docs[at]);
         }
@@ -1893,13 +1931,7 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
     });
     // An instance the studio deleted, back from the disk with everything under it.
     each(Type::Restore, [&](const Action& action) {
-        const std::size_t top = compared.on_disk.at(action.guid);
-        std::set<std::size_t> within{top};
-        for (std::size_t index = top; index < compared.plan.size(); ++index) {
-            if (index != top && within.count(compared.plan_parents[index]) == 0) {
-                continue;
-            }
-            within.insert(index);
+        for (std::size_t index : compared.subtree(compared.on_disk.at(action.guid))) {
             const detail::PlanNode& node = compared.plan[index];
             const std::string parent = compared.disk_parent(index);
             const std::optional<InstanceId> up = world.find_guid(parent);
@@ -2168,12 +2200,57 @@ void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {
             vacated.insert(path.substr(0, slash));
         }
     };
+
+    // A save is all or nothing. Every move, write, and removal is noted, so a
+    // failure partway puts the disk back as the last save left it. A partial save
+    // could leave a folder without its init.json, or two files claiming one GUID,
+    // and the project would no longer load.
+    struct Undo {
+        enum class Kind { Moved, Created, Replaced, Removed };
+        Kind kind = Kind::Created;
+        fs::path path;
+        // Moved: where the file was.
+        fs::path from;
+        // Replaced and Removed: what the file held.
+        std::string bytes;
+    };
+    std::vector<Undo> undo;
+    std::vector<fs::path> made_dirs;
+    auto note_new_dirs = [&](const fs::path& target) {
+        for (fs::path dir = target.parent_path(); !dir.empty() && !fs::exists(dir, error); dir = dir.parent_path()) {
+            made_dirs.push_back(dir);
+        }
+    };
+    auto put_back = [&] {
+        // Each step is tried even when one before it failed.
+        std::error_code ignored;
+        for (auto it = undo.rbegin(); it != undo.rend(); ++it) {
+            if (it->kind == Undo::Kind::Moved) {
+                fs::rename(it->path, it->from, ignored);
+            } else if (it->kind == Undo::Kind::Created) {
+                fs::remove(it->path, ignored);
+            } else {
+                try {
+                    write_file(it->path, it->bytes);
+                } catch (const ProjectError&) {
+                    // Later steps may still work. The save reports its own error.
+                }
+            }
+        }
+        std::sort(made_dirs.begin(), made_dirs.end(),
+                  [](const fs::path& a, const fs::path& b) { return a.native().size() > b.native().size(); });
+        for (const fs::path& dir : made_dirs) {
+            fs::remove(dir, ignored);
+        }
+    };
     auto place = [&](const std::string& old_path, const std::string& old_bytes, bool had, const std::string& path,
                      const std::string& bytes) {
         const fs::path target = disk_path(root_, path);
         bool present = false;
         if (had && old_path != path && fs::exists(disk_path(root_, old_path), error)) {
+            note_new_dirs(target);
             move_file(disk_path(root_, old_path), target);
+            undo.push_back(Undo{Undo::Kind::Moved, target, disk_path(root_, old_path), std::string()});
             report.moved.push_back(old_path + " -> " + path);
             note_vacated(old_path);
             present = true;
@@ -2181,70 +2258,97 @@ void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {
             present = had && fs::exists(target, error);
         }
         if (!present || old_bytes != bytes) {
+            Undo step;
+            step.path = target;
+            if (fs::exists(target, error)) {
+                step.kind = Undo::Kind::Replaced;
+                step.bytes = read_file(target);
+            }
+            note_new_dirs(target);
             write_file(target, bytes);
+            undo.push_back(std::move(step));
             report.written.push_back(path);
         }
     };
-    for (const auto& [guid, files] : next) {
-        if (left_gone.count(guid) != 0) {
-            // Gone from disk while the studio left it alone: the save leaves it gone.
-            continue;
+    auto remove_path = [&](const std::string& path) {
+        const fs::path target = disk_path(root_, path);
+        Undo step;
+        step.kind = Undo::Kind::Removed;
+        step.path = target;
+        step.bytes = read_file(target);
+        std::error_code failure;
+        fs::remove(target, failure);
+        if (failure) {
+            fail("cannot remove " + utf8(target) + ": " + failure.message());
         }
-        const auto old = files_.find(guid);
-        const bool had = old != files_.end();
-        place(had ? old->second.props_path : std::string(), had ? old->second.props_bytes : std::string(), had,
-              files.props_path, files.props_bytes);
-        if (files.has_source) {
-            const bool had_source = had && old->second.has_source;
-            place(had_source ? old->second.source_path : std::string(),
-                  had_source ? old->second.source_bytes : std::string(), had_source, files.source_path,
-                  files.source_bytes);
-        }
-    }
-    // Overwrite: a GUID the save wrote over a conflict keeps only the files it
-    // wrote. Any other file claiming it, as one moved outside, would load as a
-    // second instance with the same GUID.
-    for (const SaveConflict& conflict : conflicts) {
-        const auto claimed = claims.find(conflict.guid);
-        if (claimed == claims.end()) {
-            continue;
-        }
-        const auto planned = next.find(conflict.guid);
-        // The same file, by name or by the file system: a name that differs
-        // only in case is one file on macOS and Windows.
-        auto wrote = [&](const fs::path& target, const std::string& path) {
-            return !path.empty() && fs::equivalent(target, disk_path(root_, path), error);
-        };
-        for (const std::string& path : claimed->second) {
-            const fs::path target = disk_path(root_, path);
-            if (planned != next.end() && (path == planned->second.props_path || path == planned->second.source_path ||
-                                          wrote(target, planned->second.props_path) ||
-                                          wrote(target, planned->second.source_path))) {
+        undo.push_back(std::move(step));
+        report.removed.push_back(path);
+        note_vacated(path);
+    };
+    try {
+        for (const auto& [guid, files] : next) {
+            if (left_gone.count(guid) != 0) {
+                // Gone from disk while the studio left it alone: the save leaves it gone.
                 continue;
             }
-            if (fs::exists(target, error)) {
-                remove_file(target);
-                report.removed.push_back(path);
-                note_vacated(path);
+            const auto old = files_.find(guid);
+            const bool had = old != files_.end();
+            place(had ? old->second.props_path : std::string(), had ? old->second.props_bytes : std::string(), had,
+                  files.props_path, files.props_bytes);
+            if (files.has_source) {
+                const bool had_source = had && old->second.has_source;
+                place(had_source ? old->second.source_path : std::string(),
+                      had_source ? old->second.source_bytes : std::string(), had_source, files.source_path,
+                      files.source_bytes);
             }
         }
-    }
-    for (const auto& [guid, files] : files_) {
-        if (next.count(guid) != 0) {
-            continue;
-        }
-        for (const std::string* path : {&files.props_path, &files.source_path}) {
-            if (path->empty()) {
+        // Overwrite: a GUID the save wrote over a conflict keeps only the files it
+        // wrote. Any other file claiming it, as one moved outside, would load as a
+        // second instance with the same GUID.
+        for (const SaveConflict& conflict : conflicts) {
+            const auto claimed = claims.find(conflict.guid);
+            if (claimed == claims.end()) {
                 continue;
             }
-            const fs::path target = disk_path(root_, *path);
-            if (fs::exists(target, error)) {
-                remove_file(target);
-                report.removed.push_back(*path);
+            const auto planned = next.find(conflict.guid);
+            // The same file, by name or by the file system: a name that differs
+            // only in case is one file on macOS and Windows.
+            auto wrote = [&](const fs::path& target, const std::string& path) {
+                return !path.empty() && fs::equivalent(target, disk_path(root_, path), error);
+            };
+            for (const std::string& path : claimed->second) {
+                const fs::path target = disk_path(root_, path);
+                if (planned != next.end() && (path == planned->second.props_path ||
+                                              path == planned->second.source_path ||
+                                              wrote(target, planned->second.props_path) ||
+                                              wrote(target, planned->second.source_path))) {
+                    continue;
+                }
+                if (fs::exists(target, error)) {
+                    remove_path(path);
+                }
             }
-            note_vacated(*path);
         }
+        for (const auto& [guid, files] : files_) {
+            if (next.count(guid) != 0) {
+                continue;
+            }
+            for (const std::string* path : {&files.props_path, &files.source_path}) {
+                if (path->empty()) {
+                    continue;
+                }
+                if (fs::exists(disk_path(root_, *path), error)) {
+                    remove_path(*path);
+                } else {
+                    note_vacated(*path);
+                }
+            }
+        }
+    } catch (...) {
+        put_back();
+        throw;
     }
+
     // Folders emptied by a move or a delete go too, up to src/.
     for (auto it = vacated.rbegin(); it != vacated.rend(); ++it) {
         std::string dir = *it;

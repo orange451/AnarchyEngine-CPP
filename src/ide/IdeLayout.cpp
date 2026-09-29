@@ -2513,7 +2513,9 @@ bool IdeLayout::editing_field() const {
         return false;
     }
     jadefx::Node* focused = scene_->focusedNode();
-    return InTextWidget(focused) && (Owning<IdeExplorer>(focused) != nullptr || Owning<PropertiesPanel>(focused) != nullptr);
+    // PropertiesPanel is not a node, so it answers for its own fields.
+    return InTextWidget(focused) &&
+           (Owning<IdeExplorer>(focused) != nullptr || (properties_ != nullptr && properties_->owns(focused)));
 }
 
 std::optional<std::vector<engine_core::SaveConflict>> IdeLayout::check_disk(
@@ -2777,7 +2779,10 @@ void IdeLayout::edit(std::uint32_t id) {
     std::shared_ptr<jadefx::Tab> tab = home->dock(editor);
     if (tab) {
         tab->setOnClosed([this, id, editor] {
-            if (editor && editor->isLoaded()) {
+            // While stopped, closing flushed the text into the place, and Stop has
+            // nothing to restore. A copy kept then would be written back over any
+            // change made later, such as Replace All or a file loaded from disk.
+            if (testing_ && editor && editor->isLoaded()) {
                 kept_sources_[id] = editor->text();
             }
         });

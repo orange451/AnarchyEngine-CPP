@@ -135,7 +135,12 @@ private:
 
     struct Thread {
         lua_State* co = nullptr;
+        // The registry reference that keeps co alive until the thread is released.
         int anchor = -1;
+        // What the coroutine's thread data and task handles hold instead of a pointer.
+        // Lua can keep the coroutine, or a handle, after this thread is released, and
+        // can even resume a killed coroutine. A released serial finds no thread.
+        std::uint64_t serial = 0;
         InstanceId script = 0;
         std::uint32_t generation = 0;
         enum class Park { None, Sleep, Signal, Defer, Child } park = Park::None;
@@ -162,7 +167,12 @@ private:
     static constexpr int kResumeBudget = 32;
     static constexpr std::size_t kMemoryLimit = 64 * 1024 * 1024;
 
+    // A registry reference C++ holds on the play VM, such as a Connect callback.
+    struct HeldRef;
+
+    // Null when state is not a script thread, or its thread was released.
     static Thread* thread_from(lua_State* state);
+    Thread* find_thread(std::uint64_t serial) const;
     static bool gate(InstanceId script, std::uint32_t generation, void* userdata);
     static void* allocate(void* userdata, void* pointer, std::size_t old_size, std::size_t new_size);
     static void* allocate_console(void* userdata, void* pointer, std::size_t old_size, std::size_t new_size);
@@ -199,6 +209,14 @@ private:
     void resume_budget();
     void resume_one(Thread& thread);
     void drop_dead(std::list<Thread*>& queue);
+    // Frees threads that finished or were killed, and lets the collector have
+    // their coroutines. Does nothing while Lua is on the stack.
+    void release_dead_threads();
+    // Luau throws when memory runs out in a call C++ makes outside lua_resume or
+    // lua_pcall. The runtime's own work then stops every script and says why.
+    template <typename Fn>
+    void guarded(Fn&& fn);
+    void halt(const char* why);
     void ready(Thread& thread);
     void make_ready(Thread& thread, const char* result);
     void make_ready_number(Thread& thread, double result);
@@ -245,6 +263,12 @@ private:
     std::uint64_t history_next_ = 0;
 
     std::list<Thread> threads_;
+    std::unordered_map<std::uint64_t, Thread*> by_serial_;
+    std::uint64_t next_serial_ = 0;
+    // Lives as long as the play VM. A HeldRef whose VM has closed releases nothing.
+    std::shared_ptr<void> vm_token_;
+    // Set by halt. No script starts again until the next play session.
+    bool halted_ = false;
     std::list<Thread*> ready_;
     std::list<Thread*> sleep_;
     std::list<Thread*> defer_;

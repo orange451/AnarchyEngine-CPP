@@ -97,7 +97,7 @@ class DataModel {
 public:
     static constexpr std::size_t kMaxInstances = 16384;
     static constexpr std::size_t kMaxInvalidations = 65536;
-    static constexpr std::size_t kMaxCommands = 4096;
+    static constexpr std::size_t kInitialCommands = 4096;
 
     // parent() returns this when an instance has no parent. 0 is the root.
     static constexpr InstanceId kNoParent = 0xffffffffu;
@@ -132,6 +132,8 @@ public:
     template <typename T>
     T& create();
     GameObject& create_game_object();
+    // How many more instances create can make before the world is full.
+    std::size_t room_left() const;
     void destroy(InstanceId id);
     // Destroys id and every descendant. destroy alone leaves the children alive
     // and unparented. Children go first, so undo revives each parent before its

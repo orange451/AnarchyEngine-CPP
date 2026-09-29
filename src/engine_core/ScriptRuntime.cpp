@@ -125,6 +125,11 @@ ScriptRuntime* runtime_from(lua_State* state) {
     return static_cast<ScriptRuntime*>(lua_callbacks(state)->userdata);
 }
 
+// A thread's serial, kept in its coroutine's thread data. 0 is no thread.
+void* serial_data(std::uint64_t serial) { return reinterpret_cast<void*>(static_cast<std::uintptr_t>(serial)); }
+
+std::uint64_t data_serial(void* data) { return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(data)); }
+
 void* test_udata(lua_State* state, int index, const char* name) {
     void* data = lua_touserdata(state, index);
     if (data == nullptr || !lua_getmetatable(state, index)) {
@@ -221,7 +226,6 @@ struct ScriptBindings {
     static int signal_wait(lua_State* state);
     static int signal_index(lua_State* state);
     static int connection_disconnect(lua_State* state);
-    static int connection_gc(lua_State* state);
     static int connection_index(lua_State* state);
     static int service_index(lua_State* state);
     static int selection_get(lua_State* state);
@@ -239,6 +243,57 @@ struct ScriptBindings {
 };
 
 ScriptRuntime::~ScriptRuntime() { detach(); }
+
+// The last copy of a handler lets its reference go. A VM that has closed took
+// every reference with it, so then there is nothing to release.
+struct ScriptRuntime::HeldRef {
+    HeldRef(ScriptRuntime& runtime, int ref) : runtime(&runtime), vm(runtime.vm_token_), ref(ref) {}
+    HeldRef(const HeldRef&) = delete;
+    HeldRef& operator=(const HeldRef&) = delete;
+    ~HeldRef() {
+        if (!vm.expired() && runtime->state_ != nullptr) {
+            lua_unref(runtime->state_, ref);
+        }
+    }
+
+    ScriptRuntime* runtime;
+    std::weak_ptr<void> vm;
+    int ref;
+};
+
+template <typename Fn>
+void ScriptRuntime::guarded(Fn&& fn) {
+    try {
+        fn();
+    } catch (const ContractViolation&) {
+        throw;
+    } catch (const std::exception& error) {
+        halt(error.what());
+    }
+}
+
+void ScriptRuntime::halt(const char* why) {
+    if (game_ != nullptr) {
+        game_->events().disconnect_scripted();
+    }
+    for (Thread& thread : threads_) {
+        thread.dead = true;
+    }
+    ready_.clear();
+    sleep_.clear();
+    defer_.clear();
+    child_waits_.clear();
+    child_found_.clear();
+    next_child_timer_ = std::numeric_limits<double>::infinity();
+    starts_.clear();
+    halted_ = true;
+    if (state_ != nullptr) {
+        // A throw can leave what it was pushing on the main thread's stack.
+        lua_settop(state_, 0);
+    }
+    last_error_ = std::string("Scripts stopped: ") + (why != nullptr ? why : "Luau failed");
+    append_output(OutputKind::Error, last_error_);
+}
 
 void ScriptRuntime::attach(DataModel& game, TaskScheduler& scheduler) {
     if (game_ != nullptr) {
@@ -289,16 +344,19 @@ void ScriptRuntime::heartbeat(double dt) {
         dt = 0;
     }
     sim_clock_ += dt;
-    wake_sleeps();
-    deliver_child_waits();
-    wake_child_timers();
-    launch_starts();
-    flush_defer();
-    resume_budget();
-    if (!starts_.empty()) {
+    guarded([&] {
+        wake_sleeps();
+        deliver_child_waits();
+        wake_child_timers();
         launch_starts();
+        flush_defer();
         resume_budget();
-    }
+        if (!starts_.empty()) {
+            launch_starts();
+            resume_budget();
+        }
+    });
+    release_dead_threads();
 }
 
 bool ScriptRuntime::global_is_nil(const char* name) {
@@ -391,12 +449,18 @@ void ScriptRuntime::on_script_destroyed(Script& script) {
 }
 
 ScriptRuntime::Thread* ScriptRuntime::thread_from(lua_State* state) {
-    return static_cast<Thread*>(lua_getthreaddata(state));
+    const ScriptRuntime* runtime = runtime_from(state);
+    return runtime != nullptr ? runtime->find_thread(data_serial(lua_getthreaddata(state))) : nullptr;
+}
+
+ScriptRuntime::Thread* ScriptRuntime::find_thread(std::uint64_t serial) const {
+    const auto found = by_serial_.find(serial);
+    return found != by_serial_.end() ? found->second : nullptr;
 }
 
 bool ScriptRuntime::gate(InstanceId script, std::uint32_t generation, void* userdata) {
     auto* self = static_cast<ScriptRuntime*>(userdata);
-    if (self == nullptr || self->game_ == nullptr || self->closing_) {
+    if (self == nullptr || self->game_ == nullptr || self->closing_ || self->halted_) {
         return false;
     }
     auto* object = dynamic_cast<Script*>(self->game_->instance(script));
@@ -482,14 +546,17 @@ void ScriptRuntime::on_end_of_drain() {
         return;
     }
     assert_lua_thread();
-    launch_starts();
-    deliver_child_waits();
-    flush_defer();
-    resume_budget();
-    if (!starts_.empty()) {
+    guarded([&] {
         launch_starts();
+        deliver_child_waits();
+        flush_defer();
         resume_budget();
-    }
+        if (!starts_.empty()) {
+            launch_starts();
+            resume_budget();
+        }
+    });
+    release_dead_threads();
 }
 
 void ScriptRuntime::on_start() {
@@ -569,8 +636,6 @@ void open_host_libraries(lua_State* state) {
     const int connection_mt = metatable(kConnectionMeta);
     lua_pushcfunction(state, &ScriptBindings::connection_index, "index");
     lua_setfield(state, connection_mt, "__index");
-    lua_pushcfunction(state, &ScriptBindings::connection_gc, "gc");
-    lua_setfield(state, connection_mt, "__gc");
     lua_setreadonly(state, connection_mt, 1);
 
     const int thread_mt = metatable(kThreadMeta);
@@ -675,6 +740,8 @@ void ScriptRuntime::open_vm() {
     state_ = state;
     steps_ = 0;
     last_error_.clear();
+    vm_token_ = std::make_shared<char>(0);
+    halted_ = false;
     open_ = true;
 }
 
@@ -729,6 +796,9 @@ void ScriptRuntime::close_vm() {
     require_cache_.clear();
     loading_.clear();
     threads_.clear();
+    by_serial_.clear();
+    // lua_close takes every reference with it; a handler dropped later has none to release.
+    vm_token_.reset();
     lua_Callbacks* callbacks = lua_callbacks(state_);
     callbacks->interrupt = nullptr;
     callbacks->panic = nullptr;
@@ -769,7 +839,7 @@ void ScriptRuntime::kill_script(InstanceId id) {
 }
 
 void ScriptRuntime::enqueue_start(Script& script) {
-    if (game_ == nullptr || !open_ || closing_ || !game_->simulation_running()) {
+    if (game_ == nullptr || !open_ || closing_ || halted_ || !game_->simulation_running()) {
         return;
     }
     if (!script.enabled() || game_->parent(script.id()) == DataModel::kNoParent) {
@@ -791,7 +861,7 @@ void ScriptRuntime::launch_starts() {
 }
 
 void ScriptRuntime::launch_one(const Start& start) {
-    if (game_ == nullptr || state_ == nullptr) {
+    if (game_ == nullptr || state_ == nullptr || halted_) {
         return;
     }
     auto* script = dynamic_cast<Script*>(game_->instance(start.id));
@@ -912,6 +982,29 @@ void ScriptRuntime::drop_dead(std::list<Thread*>& queue) {
         } else {
             ++it;
         }
+    }
+}
+
+void ScriptRuntime::release_dead_threads() {
+    // A binding may still hold a Thread while Lua runs.
+    if (lua_depth_ > 0 || state_ == nullptr) {
+        return;
+    }
+    drop_dead(ready_);
+    drop_dead(sleep_);
+    drop_dead(defer_);
+    drop_dead_child_waits();
+    for (auto it = threads_.begin(); it != threads_.end();) {
+        if (!it->dead) {
+            ++it;
+            continue;
+        }
+        // The coroutine may live on in a script variable. Its serial then finds no thread.
+        by_serial_.erase(it->serial);
+        if (it->anchor != kAnchorNone) {
+            lua_unref(state_, it->anchor);
+        }
+        it = threads_.erase(it);
     }
 }
 
@@ -1111,17 +1204,22 @@ ScriptRuntime::Thread& ScriptRuntime::new_thread(InstanceId script, std::uint32_
     thread.script = script;
     thread.generation = generation;
     thread.anchor = kAnchorNone;
-    lua_State* co = lua_newthread(state_);
-    if (co == nullptr) {
+    thread.serial = ++next_serial_;
+    by_serial_[thread.serial] = &thread;
+    try {
+        // Luau reports a failed allocation by throwing, not by returning null.
+        lua_State* co = lua_newthread(state_);
+        thread.co = co;
+        thread.anchor = lua_ref(state_, -1);
+        lua_pop(state_, 1);
+        lua_setthreaddata(co, serial_data(thread.serial));
+        luaL_sandboxthread(co);
+        set_script_global(co, script);
+    } catch (...) {
+        // Half made: never run, and released with the other dead threads.
         thread.dead = true;
-        return thread;
+        throw;
     }
-    thread.co = co;
-    thread.anchor = lua_ref(state_, -1);
-    lua_pop(state_, 1);
-    lua_setthreaddata(co, &thread);
-    luaL_sandboxthread(co);
-    set_script_global(co, script);
     return thread;
 }
 
@@ -1422,18 +1520,20 @@ void ScriptRuntime::run_listener(Thread& thread) {
 
 void ScriptRuntime::invoke_listener(int ref, InstanceId script, std::uint32_t generation, const char* text,
                                     bool pass_number, double number) {
-    Thread* thread = start_listener(ref, script, generation);
-    if (thread == nullptr) {
-        return;
-    }
-    if (text != nullptr) {
-        lua_pushstring(thread->co, text);
-        thread->nargs = 1;
-    } else if (pass_number) {
-        lua_pushnumber(thread->co, number);
-        thread->nargs = 1;
-    }
-    run_listener(*thread);
+    guarded([&] {
+        Thread* thread = start_listener(ref, script, generation);
+        if (thread == nullptr) {
+            return;
+        }
+        if (text != nullptr) {
+            lua_pushstring(thread->co, text);
+            thread->nargs = 1;
+        } else if (pass_number) {
+            lua_pushnumber(thread->co, number);
+            thread->nargs = 1;
+        }
+        run_listener(*thread);
+    });
 }
 
 namespace {
@@ -1449,14 +1549,16 @@ void push_input_object(lua_State* state, const InputRecord& record) {
 
 void ScriptRuntime::invoke_listener_input(int ref, InstanceId script, std::uint32_t generation,
                                           const InputRecord& record) {
-    Thread* thread = start_listener(ref, script, generation);
-    if (thread == nullptr) {
-        return;
-    }
-    push_input_object(thread->co, record);
-    lua_pushboolean(thread->co, record.processed ? 1 : 0);
-    thread->nargs = 2;
-    run_listener(*thread);
+    guarded([&] {
+        Thread* thread = start_listener(ref, script, generation);
+        if (thread == nullptr) {
+            return;
+        }
+        push_input_object(thread->co, record);
+        lua_pushboolean(thread->co, record.processed ? 1 : 0);
+        thread->nargs = 2;
+        run_listener(*thread);
+    });
 }
 
 void ScriptRuntime::make_ready_input(Thread& thread, const InputRecord& record) {
@@ -1640,8 +1742,8 @@ int ScriptBindings::task_spawn(lua_State* state) {
         lua_xmove(state, child.co, count);
         child.nargs = count - 1;
         runtime->ready(child);
-        auto* ud = static_cast<ScriptRuntime::Thread**>(lua_newuserdata(state, sizeof(ScriptRuntime::Thread*)));
-        *ud = &child;
+        auto* ud = static_cast<std::uint64_t*>(lua_newuserdata(state, sizeof(std::uint64_t)));
+        *ud = child.serial;
         luaL_getmetatable(state, kThreadMeta);
         lua_setmetatable(state, -2);
         return 1;
@@ -1665,8 +1767,8 @@ int ScriptBindings::task_defer(lua_State* state) {
         child.nargs = count - 1;
         child.park = ScriptRuntime::Thread::Park::Defer;
         runtime->defer_.push_back(&child);
-        auto* ud = static_cast<ScriptRuntime::Thread**>(lua_newuserdata(state, sizeof(ScriptRuntime::Thread*)));
-        *ud = &child;
+        auto* ud = static_cast<std::uint64_t*>(lua_newuserdata(state, sizeof(std::uint64_t)));
+        *ud = child.serial;
         luaL_getmetatable(state, kThreadMeta);
         lua_setmetatable(state, -2);
         return 1;
@@ -1692,8 +1794,8 @@ int ScriptBindings::task_delay(lua_State* state) {
         child.park = ScriptRuntime::Thread::Park::Sleep;
         child.due = runtime->sim_clock_ + (dt < 0 ? 0 : dt);
         runtime->sleep_.push_back(&child);
-        auto* ud = static_cast<ScriptRuntime::Thread**>(lua_newuserdata(state, sizeof(ScriptRuntime::Thread*)));
-        *ud = &child;
+        auto* ud = static_cast<std::uint64_t*>(lua_newuserdata(state, sizeof(std::uint64_t)));
+        *ud = child.serial;
         luaL_getmetatable(state, kThreadMeta);
         lua_setmetatable(state, -2);
         return 1;
@@ -1703,11 +1805,15 @@ int ScriptBindings::task_delay(lua_State* state) {
 int ScriptBindings::task_cancel(lua_State* state) {
     return lua_guard(state, [&] {
         ScriptRuntime* runtime = runtime_from(state);
-        auto* ud = static_cast<ScriptRuntime::Thread**>(test_udata(state, 1, kThreadMeta));
-        if (runtime == nullptr || ud == nullptr || *ud == nullptr) {
+        const auto* ud = static_cast<const std::uint64_t*>(test_udata(state, 1, kThreadMeta));
+        if (runtime == nullptr || ud == nullptr) {
             luaL_error(state, "task.cancel expects a thread");
         }
-        ScriptRuntime::Thread* thread = *ud;
+        ScriptRuntime::Thread* thread = runtime->find_thread(*ud);
+        if (thread == nullptr) {
+            // It finished, and its thread is gone already.
+            return 0;
+        }
         thread->dead = true;
         runtime->ready_.remove(thread);
         runtime->sleep_.remove(thread);
@@ -2122,7 +2228,7 @@ int ScriptBindings::signal_connect(lua_State* state) {
             luaL_error(state, "script is dead");
         }
         lua_pushvalue(state, 2);
-        const int ref = lua_ref(state, -1);
+        const auto held = std::make_shared<const ScriptRuntime::HeldRef>(*runtime, lua_ref(state, -1));
         lua_pop(state, 1);
         Signal* signal = nullptr;
         if (ud->kind == kSignalChanged) {
@@ -2140,16 +2246,17 @@ int ScriptBindings::signal_connect(lua_State* state) {
         }
         const InstanceId script = caller->script;
         const std::uint32_t generation = caller->generation;
+        // The handler owns the callback's reference; Disconnect drops the handler.
         Connection connection = signal->connect_scripted(
-            [runtime, ref, script, generation, kind = ud->kind](InstanceId, Field field) {
+            [runtime, held, script, generation, kind = ud->kind](InstanceId, Field field) {
                 if (kind == kSignalChanged) {
-                    runtime->invoke_listener(ref, script, generation, field_name(field), false, 0);
+                    runtime->invoke_listener(held->ref, script, generation, field_name(field), false, 0);
                 } else if (kind == kSignalInput) {
                     if (const InputRecord* record = runtime->delivered_input()) {
-                        runtime->invoke_listener_input(ref, script, generation, *record);
+                        runtime->invoke_listener_input(held->ref, script, generation, *record);
                     }
                 } else {
-                    runtime->invoke_listener(ref, script, generation, nullptr, true, runtime->run_service_.dt());
+                    runtime->invoke_listener(held->ref, script, generation, nullptr, true, runtime->run_service_.dt());
                 }
             },
             script, generation, false);
@@ -2191,23 +2298,26 @@ int ScriptBindings::signal_wait(lua_State* state) {
             luaL_error(state, "signal is not available");
         }
         thread->park = ScriptRuntime::Thread::Park::Signal;
+        // By serial: task.cancel can end the thread, and release it, before the signal fires.
         signal->connect_scripted(
-            [runtime, thread, kind](InstanceId, Field field) {
-                if (runtime->closing_ || thread->dead) {
-                    thread->dead = true;
+            [runtime, serial = thread->serial, kind](InstanceId, Field field) {
+                ScriptRuntime::Thread* waiting = runtime->find_thread(serial);
+                if (waiting == nullptr || runtime->closing_ || waiting->dead) {
                     return;
                 }
-                if (kind == kSignalChanged) {
-                    runtime->make_ready(*thread, field_name(field));
-                } else if (kind == kSignalInput) {
-                    if (const InputRecord* record = runtime->delivered_input()) {
-                        runtime->make_ready_input(*thread, *record);
+                runtime->guarded([&] {
+                    if (kind == kSignalChanged) {
+                        runtime->make_ready(*waiting, field_name(field));
+                    } else if (kind == kSignalInput) {
+                        if (const InputRecord* record = runtime->delivered_input()) {
+                            runtime->make_ready_input(*waiting, *record);
+                        } else {
+                            runtime->make_ready(*waiting, nullptr);
+                        }
                     } else {
-                        runtime->make_ready(*thread, nullptr);
+                        runtime->make_ready_number(*waiting, runtime->run_service_.dt());
                     }
-                } else {
-                    runtime->make_ready_number(*thread, runtime->run_service_.dt());
-                }
+                });
             },
             thread->script, thread->generation, true);
         return lua_yield(state, 0);
@@ -2220,14 +2330,6 @@ int ScriptBindings::connection_disconnect(lua_State* state) {
         connection->disconnect();
         return 0;
     });
-}
-
-int ScriptBindings::connection_gc(lua_State* state) {
-    auto* connection = static_cast<Connection*>(lua_touserdata(state, 1));
-    if (connection != nullptr) {
-        connection->~Connection();
-    }
-    return 0;
 }
 
 int ScriptBindings::connection_index(lua_State* state) {

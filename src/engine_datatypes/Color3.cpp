@@ -202,9 +202,14 @@ int hex_digit(char digit) {
 }  // namespace
 
 Color3 color3_from_hsv(double hue, double saturation, double value) {
+    // NaN or infinity has no place on the wheel, and would index outside the table below.
+    if (!std::isfinite(hue)) {
+        hue = 0.0;
+    }
     const double h = (hue - std::floor(hue)) * 6.0;
     const double s = std::clamp(saturation, 0.0, 1.0);
     const double v = std::clamp(value, 0.0, 1.0);
+    // h is in [0, 6] now, so this is a table row.
     const int sector = static_cast<int>(h) % 6;
     const double f = h - std::floor(h);
     const double p = v * (1.0 - s);

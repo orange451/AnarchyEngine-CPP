@@ -793,6 +793,7 @@ void IdeScriptEditor::refresh_color_swatches() {
         if (i == color_swatches_.size()) {
             // The slot takes the click and holds the square, with the gap before it.
             auto slot = std::make_shared<jadefx::Pane>();
+            slot->getClassList().add("script-swatch");
             slot->setPrefSize(kSwatchSlot, kSwatchSize);
             slot->setPadding(jadefx::Insets{0, 0, 0, kSwatchSlot - kSwatchSize});
             // A click on it leaves the focus in the text, so Ctrl/Cmd+Z stays the text's undo.
@@ -875,20 +876,33 @@ void IdeScriptEditor::write_color(const engine_core::Color3& color) {
     area_->moveTo(caret);
 }
 
-void IdeScriptEditor::close_color_picker(bool keep) {
+void IdeScriptEditor::close_color_picker(bool keep) { close_color_picker(keep, getScene()); }
+
+void IdeScriptEditor::sceneChanged(jadefx::Scene* previous) {
+    IdePane::sceneChanged(previous);
+    if (color_edit_ && previous != nullptr) {
+        // The hook stays on the scene it was added to. Left there, it would take
+        // that scene's Enter and Escape, and reach this editor after it is gone.
+        close_color_picker(true, previous->isTearingDown() ? nullptr : previous);
+    }
+}
+
+void IdeScriptEditor::close_color_picker(bool keep, jadefx::Scene* scene) {
     if (!color_edit_) {
         return;
     }
     const std::unique_ptr<ColorEdit> edit = std::move(color_edit_);
-    jadefx::Scene* scene = getScene();
     if (scene != nullptr) {
         scene->removeKeyHook(edit->key_hook);
         if (color_chooser_ && scene->isPopupShowing(color_chooser_.get())) {
             scene->hidePopup(color_chooser_.get());
         }
     }
-    // Back to the text, so the next Ctrl/Cmd+Z undoes the color as one step.
-    area_->requestFocus();
+    // Back to the text, so the next Ctrl/Cmd+Z undoes the color as one step. Not in
+    // a scene this editor is leaving.
+    if (scene != nullptr && scene == getScene()) {
+        area_->requestFocus();
+    }
     const Color3Literal& literal = edit->literal;
     const std::string current = area_->getText(literal.start, literal.end);
     if (!keep) {

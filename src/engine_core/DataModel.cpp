@@ -1623,6 +1623,8 @@ HistoryProp history_prop(Field field) {
         return HistoryProp::Source;
     case Field::Enabled:
         return HistoryProp::Enabled;
+    case Field::Position:
+        return HistoryProp::Position;
     case Field::LinearVelocity:
     case Field::Parent:
     case Field::Count:

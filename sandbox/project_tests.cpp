@@ -2580,3 +2580,15 @@ TEST_CASE("D15 changes from disk that do not fit settle none of the choices", "[
     REQUIRE_THROWS_AS(project.apply_disk({engine_core::DiskChoice{rows.front(), false}}), ProjectError);
     REQUIRE(project.scan_disk().conflicts == rows);
 }
+
+TEST_CASE("P22 creating a project where no folder can go leaves the world as it was", "[P22][project]") {
+    SimRole role;
+    TempDir dir;
+    // A file where a folder would have to go.
+    fs::create_directories(dir.path);
+    std::ofstream(dir.path / "blocker") << "x";
+    Game game;
+    add_part(game, 0, "Keep");
+    REQUIRE_THROWS_AS(Project::create(dir.path / "blocker" / "Place", game), ProjectError);
+    REQUIRE(game.find_first_child(0, "Keep") != 0);
+}

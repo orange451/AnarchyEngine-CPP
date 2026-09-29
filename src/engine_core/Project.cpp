@@ -1037,11 +1037,13 @@ Project Project::create(const fs::path& root, DataModel& into) {
     project.bind(&into, nullptr);
     project.root_ = root;
     project.name_ = project_name_for(root);
+    // The skeleton goes first: a folder that cannot be made fails before the
+    // world is cleared.
+    project.write_skeleton(root);
     {
         Rebuild rebuild(into);
         clear_world(into);
         into.set_name(0, project.name_);
-        project.write_skeleton(root);
         project.save_tree(true);
         rebuild.finish();
     }

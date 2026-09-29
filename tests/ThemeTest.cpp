@@ -141,6 +141,14 @@ void TestMounted(jadefx::Scene& scene) {
     ExpectText(Background(scene, "ide-status"), "#eceff1", "the status bar color");
     ExpectText(Background(scene, "ide-root"), "#d0d0d0", "the root pane's color");
     ExpectText(Background(scene, "properties-pane"), "#ffffff", "the Properties pane's color");
+    ExpectText(Background(scene, "ide-viewport"), "#1e1e1e", "the Scene View's color");
+    // The Scene View takes the theme's color too, not a gray of its own.
+    const ide::IdeTheme before = ide::current_theme();
+    ide::set_current_theme(ide::IdeTheme(":root { --ide-viewport-color: #123456; }"));
+    scene.layout(scene.getWidth(), scene.getHeight(), 50.0);
+    ExpectText(Background(scene, "ide-viewport"), "#123456", "a theme's Scene View color reaches the Scene View");
+    ide::set_current_theme(before);
+    scene.layout(scene.getWidth(), scene.getHeight(), 50.1);
 }
 
 }  // namespace

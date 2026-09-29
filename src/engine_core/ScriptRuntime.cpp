@@ -102,6 +102,8 @@ const char* field_name(Field field) {
         return "Source";
     case Field::Enabled:
         return "Enabled";
+    case Field::Position:
+        return "Position";
     case Field::Count:
         break;
     }
@@ -398,8 +400,9 @@ void ScriptRuntime::on_script_parent(Script& script, InstanceId, InstanceId next
     if (game_ == nullptr || !game_->simulation_running() || closing_) {
         return;
     }
-    kill_script(script.id());
-    if (next != DataModel::kNoParent) {
+    // As in Roblox, a running script keeps running wherever it moves, out of the
+    // tree too. One that has not run this session starts once it has a parent.
+    if (next != DataModel::kNoParent && started_.count(script.id()) == 0) {
         enqueue_start(script);
     }
 }
@@ -491,6 +494,7 @@ void ScriptRuntime::on_start() {
     clear_output();
     open_vm();
     sim_clock_ = 0;
+    started_.clear();
     if (game_ == nullptr) {
         return;
     }
@@ -514,6 +518,7 @@ void ScriptRuntime::on_stop() {
         game_->input().set_active(false);
         game_->input().reset();
     }
+    started_.clear();
     close_vm();
 }
 
@@ -735,6 +740,7 @@ void ScriptRuntime::kill_script(InstanceId id) {
     starts_.erase(std::remove_if(starts_.begin(), starts_.end(),
                                  [&](const Start& start) { return start.id == id; }),
                   starts_.end());
+    started_.erase(id);
     for (Thread& thread : threads_) {
         if (thread.script == id) {
             thread.dead = true;
@@ -760,6 +766,7 @@ void ScriptRuntime::enqueue_start(Script& script) {
         return;
     }
     const std::uint32_t generation = script.bump_start_generation();
+    started_.insert(script.id());
     starts_.erase(std::remove_if(starts_.begin(), starts_.end(),
                                  [&](const Start& start) { return start.id == script.id(); }),
                   starts_.end());

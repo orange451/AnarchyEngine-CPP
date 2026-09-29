@@ -4286,3 +4286,56 @@ TEST_CASE("U4 moves between steps arrive as one change with the deltas added", "
     REQUIRE(rig.seen[1].delta.x == 3.f);
     REQUIRE(rig.seen[1].delta.y == 3.f);
 }
+
+TEST_CASE("TT2 moving a triangle fires Changed for Position", "[TT2]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
+    game.set_parent(triangle.id(), game.id());
+    game.events().drain();
+    std::vector<engine_core::Field> fields;
+    engine_core::Connection watching = game.changed(triangle.id()).connect(
+        [&fields](engine_core::InstanceId, engine_core::Field field) { fields.push_back(field); });
+    triangle.set_position(1.f, 2.f, 3.f);
+    triangle.set_position(1.f, 2.f, 3.f);
+    game.events().drain();
+    REQUIRE(fields == std::vector<engine_core::Field>{engine_core::Field::Position});
+}
+
+TEST_CASE("S42 a script that takes itself out of the tree keeps running", "[S42]") {
+    ScriptRig rig;
+    add_script(rig.game, "Hider", R"(
+        _G.count = 0
+        script.Parent = nil
+        while true do
+            _G.count += 1
+            task.wait(0.05)
+        end
+    )");
+    rig.game.start_simulation();
+    rig.frames(4, 0.05);
+    INFO(rig.runtime.last_error());
+    double count = 0;
+    REQUIRE(rig.runtime.global_number("count", count));
+    REQUIRE(count >= 3);
+}
+
+TEST_CASE("S43 moving a running script does not run it again", "[S43]") {
+    ScriptRig rig;
+    add_script(rig.game, "Mover", R"(
+        _G.runs = (_G.runs or 0) + 1
+        local folder = Instance.new("Folder")
+        folder.Parent = game
+        script.Parent = folder
+        _G.after = true
+    )");
+    rig.game.start_simulation();
+    rig.frames(4, 0.05);
+    INFO(rig.runtime.last_error());
+    double runs = 0;
+    REQUIRE(rig.runtime.global_number("runs", runs));
+    REQUIRE(runs == 1);
+    bool after = false;
+    REQUIRE(rig.runtime.global_boolean("after", after));
+    REQUIRE(after);
+}

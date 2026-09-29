@@ -80,6 +80,9 @@ private:
     int shownFps_ = -1;
     bool graphicsAttempted_ = false;
     bool graphicsReady_ = false;
+    static constexpr int kGraphicsTries = 5;
+    int graphicsTries_ = 0;
+    std::chrono::steady_clock::time_point graphicsRetryAt_{};
     // Waiting for the next paint's pixels. UI thread only.
     std::vector<std::function<void(ViewPixels)>> captures_;
 };

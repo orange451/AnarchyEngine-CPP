@@ -1,5 +1,6 @@
 #include "TestTriangle.hpp"
 
+#include "Contract.hpp"
 #include "LuaApi.hpp"
 
 #include <cmath>
@@ -26,6 +27,9 @@ void TestTriangle::step(double dt) {
 }
 
 void TestTriangle::set_position(float x, float y, float z) {
+    if (!on_gameplay_thread()) {
+        contract_fail("set_position runs on SimulationThread");
+    }
     if (!alive(id())) {
         return;
     }
@@ -37,6 +41,7 @@ void TestTriangle::set_position(float x, float y, float z) {
     y_.store(y);
     z_.store(z);
     record_position(id(), previous, Vec3{x, y, z});
+    emit_own(Field::Position);
 }
 
 double TestTriangle::angle_degrees() const {

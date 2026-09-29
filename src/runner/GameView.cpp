@@ -38,8 +38,8 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
       engine_(&runner.simulation()) {
     setIconFile("Camera.png");
     setMinSize(64, 64);
+    // Its color is the theme's --ide-viewport-color, through the studio's stylesheet.
     getClassList().add("ide-viewport");
-    setBackground(jadefx::Color::rgb8(30, 30, 30));
 
     auto label = jadefx::make<jadefx::Label>("0 FPS");
     label->getClassList().add("ide-fps");
@@ -146,6 +146,9 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
             draw.z = position.z;
             draws.push_back(draw);
         }
+        // The same color as the pane around the drawing, so no seam shows.
+        const jadefx::Color& clear = computedStyle().background.color;
+        renderer_.setClearColor(clear.r, clear.g, clear.b);
         renderer_.draw(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(), scene->getHeight(),
                        draws.data(), static_cast<int>(draws.size()));
         // Read before the children paint, so the FPS label is not in the picture.
@@ -183,6 +186,7 @@ void GameView::sceneChanged(jadefx::Scene* previous) {
     renderer_.shutdown();
     graphicsAttempted_ = false;
     graphicsReady_ = false;
+    graphicsTries_ = 0;
 }
 
 float GameView::localX(double x) const { return static_cast<float>(x - getAbsoluteX()); }
@@ -244,10 +248,15 @@ void GameView::handleFocusLost() {
 }
 
 bool GameView::ensureGraphics() {
-    if (graphicsAttempted_) {
+    // A failed setup tries again a few times, a couple of seconds apart, rather
+    // than leaving the view black for the session.
+    const auto now = std::chrono::steady_clock::now();
+    if (graphicsAttempted_ && (graphicsReady_ || graphicsTries_ >= kGraphicsTries || now < graphicsRetryAt_)) {
         return graphicsReady_;
     }
     graphicsAttempted_ = true;
+    ++graphicsTries_;
+    graphicsRetryAt_ = now + std::chrono::seconds(2);
     const bool loaded = LoadGl([](const char* name) -> void* {
         return reinterpret_cast<void*>(glfwGetProcAddress(name));
     });

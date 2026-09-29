@@ -24,6 +24,8 @@ enum class Field : std::uint8_t {
     Name,
     Source,
     Enabled,
+    // TestTriangle's pose.
+    Position,
     Count
 };
 

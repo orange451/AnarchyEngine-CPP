@@ -33,6 +33,9 @@ public:
     bool read(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
               ViewPixels& out) const;
     void shutdown();
+    // What draw clears the pane to, 0 to 1 per channel. The Scene View passes
+    // its theme color, so the clear matches the pane around it.
+    void setClearColor(float r, float g, float b);
 
 private:
     unsigned program_ = 0;
@@ -41,6 +44,7 @@ private:
     int angleLocation_ = -1;
     int positionLocation_ = -1;
     bool ready_ = false;
+    float clear_[3] = {30.f / 255.f, 30.f / 255.f, 30.f / 255.f};
 };
 
 }  // namespace runner

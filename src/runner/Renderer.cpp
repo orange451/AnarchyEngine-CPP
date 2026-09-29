@@ -28,6 +28,10 @@ bool Renderer::initialize() {
         std::fprintf(stderr, "No current OpenGL context.\n");
         return false;
     }
+    // Errors a pass before this one left behind are not setup's. Bounded, since
+    // a lost context can report an error on every call.
+    for (int stale = 0; stale < 32 && glGetError() != GL_NO_ERROR; ++stale) {
+    }
 
     program_ = LinkProgram(LoadShader("triangle.vert"), LoadShader("triangle.frag"), "Triangle");
     if (program_ == 0) {
@@ -52,9 +56,6 @@ bool Renderer::initialize() {
     glBindVertexArray(0);
     angleLocation_ = glGetUniformLocation(program_, "uAngle");
     positionLocation_ = glGetUniformLocation(program_, "uPosition");
-    // Same dark gray as the Scene View pane, so a one-pixel seam does not show.
-    glClearColor(30.f / 255.f, 30.f / 255.f, 30.f / 255.f, 1.0f);
-
     const GLenum error = glGetError();
     if (error != GL_NO_ERROR) {
         std::fprintf(stderr, "OpenGL error during setup: 0x%x\n", error);
@@ -146,7 +147,7 @@ void Renderer::draw(double x, double y, double width, double height, double scen
     glViewport(pane.x, pane.y, pane.width, pane.height);
     glDisable(GL_BLEND);
     glEnable(GL_DEPTH_TEST);
-    glClearColor(30.f / 255.f, 30.f / 255.f, 30.f / 255.f, 1.0f);
+    glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(program_);
     glBindVertexArray(vao_);
@@ -213,6 +214,12 @@ bool Renderer::read(double x, double y, double width, double height, double scen
                     out.rgba.data() + static_cast<std::size_t>(line) * row);
     }
     return true;
+}
+
+void Renderer::setClearColor(float r, float g, float b) {
+    clear_[0] = r;
+    clear_[1] = g;
+    clear_[2] = b;
 }
 
 void Renderer::shutdown() {

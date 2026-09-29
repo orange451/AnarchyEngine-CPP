@@ -4383,45 +4383,7 @@ TEST_CASE("S44 a runtime attached again fires each phase once", "[S44]") {
     REQUIRE(after - before == 3);
 }
 
-namespace {
-
-std::vector<engine_core::LuaNode> reflect_world(const char* module_source, const char* script_source) {
-    std::vector<engine_core::LuaNode> world;
-    engine_core::LuaNode root;
-    root.id = 1;
-    root.name = "Game";
-    root.class_name = "DataModel";
-    world.push_back(root);
-    engine_core::LuaNode module;
-    module.id = 2;
-    module.parent = 1;
-    module.name = "Counter";
-    module.class_name = "ModuleScript";
-    module.source = module_source;
-    world.push_back(module);
-    engine_core::LuaNode script;
-    script.id = 3;
-    script.parent = 1;
-    script.name = "Main";
-    script.class_name = "Script";
-    script.source = script_source;
-    world.push_back(script);
-    return world;
-}
-
-std::vector<std::string> field_names(const engine_core::LuaShape& shape) {
-    std::vector<std::string> names;
-    for (const auto& field : shape.fields) {
-        names.push_back(field.first);
-    }
-    return names;
-}
-
-}  // namespace
-
 TEST_CASE("R1 reflection answers on two threads at once", "[R1][reflect]") {
-    const char* source = "return { alpha = 1, beta = function() end }";
-    const std::vector<engine_core::LuaNode> world = reflect_world(source, "");
     std::atomic<int> wrong{0};
     auto work = [&] {
         for (int i = 0; i < 300; ++i) {
@@ -4429,11 +4391,8 @@ TEST_CASE("R1 reflection answers on two threads at once", "[R1][reflect]") {
             if (!engine_core::lua_library_members("math", math) || math.size() < 10) {
                 ++wrong;
             }
-            engine_core::LuaShape shape;
-            std::vector<engine_core::LuaNode> mine = world;
-            mine[2].source = std::to_string(i);
-            if (!engine_core::lua_module_exports(source, 2, mine, shape) ||
-                field_names(shape) != std::vector<std::string>{"alpha", "beta"}) {
+            std::vector<engine_core::LuaSymbol> text;
+            if (!engine_core::lua_value_members("string", text) || text.size() < 10) {
                 ++wrong;
             }
         }
@@ -4442,23 +4401,6 @@ TEST_CASE("R1 reflection answers on two threads at once", "[R1][reflect]") {
     work();
     other.join();
     REQUIRE(wrong.load() == 0);
-}
-
-TEST_CASE("R2 typing in a Script does not run the modules again", "[R2][reflect]") {
-    // Each run of this module returns a table keyed by how many runs there were.
-    const char* source = "_G.reflect_runs = (_G.reflect_runs or 0) + 1\n"
-                         "local t = {}\n"
-                         "t['run' .. _G.reflect_runs] = true\n"
-                         "return t";
-    engine_core::LuaShape first;
-    REQUIRE(engine_core::lua_module_exports(source, 2, reflect_world(source, "local a"), first));
-    engine_core::LuaShape typed;
-    REQUIRE(engine_core::lua_module_exports(source, 2, reflect_world(source, "local ab"), typed));
-    REQUIRE(field_names(typed) == field_names(first));
-    const std::string edited = std::string(source) + " -- edited";
-    engine_core::LuaShape changed;
-    REQUIRE(engine_core::lua_module_exports(edited, 2, reflect_world(edited.c_str(), "local ab"), changed));
-    REQUIRE(field_names(changed) != field_names(first));
 }
 
 TEST_CASE("S45 a long loop that ends is not stopped as a runaway", "[S45]") {

@@ -57,13 +57,6 @@ struct CompletionList {
     int replace_end = 0;
     std::string prefix;
     std::vector<CompletionItem> items;
-    // Code-point position of the '(' of the call the caret is inside, and the
-    // argument it is in. -1 outside a call.
-    int call_open = -1;
-    int call_argument = 0;
-    // Member site: the resolver knew what the receiver holds, so an empty list
-    // means it has no such member. False when it could not follow the value.
-    bool receiver_known = false;
     // Wrapping quote of an argument completion. 0 for every other site.
     char close_quote = 0;
     // The closing quote is not in the buffer yet. Accepting can type it.
@@ -76,16 +69,6 @@ struct CompletionList {
     int signature_bold_begin = -1;
     int signature_bold_end = -1;
 };
-
-// One parameter of a call's signature. `name` may be empty.
-struct SignatureParam {
-    std::string name;
-    std::string type_name;
-};
-
-// Writes `list.signature` for a call with these parameters, with `active` drawn
-// bold, as the resolver writes its own.
-void set_signature(CompletionList& list, const std::vector<SignatureParam>& params, bool variadic, int active);
 
 // Text for the popup shown while the pointer rests on a name.
 struct HoverInfo {
@@ -101,44 +84,25 @@ struct HoverInfo {
     std::string summary;
 };
 
-// The name at code-point `index`. A variable reports its type. A function reports
-// its parameters and return. A library such as `task` reports what it is.
-// A function brought in by require uses every value of its first return. A later
-// return does not replace that list. `local x, y = Module:Test()` types each
-// name from the value in that position.
-// `script_global` is false on the command line, where `script` is nil.
-HoverInfo resolver_hover(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world = {},
-                     std::uint32_t script_id = 0, bool script_global = true);
-
-// `world` is the live instance tree. `script_id` is the script being edited.
-// Members come from the class registry and from the libraries the play VM loads.
-// require of a ModuleScript runs that source and completes whatever it returns.
-// GetService("...") completes registered services. FindFirstChild("...") completes
-// the receiver's children. Instance.new("...") completes classes Instance.new can
-// create. Connect(function) completes the signal's callback
-// arguments, so Heartbeat offers function(dt). A function written in the source
-// keeps its parameters: the body uses each annotation as the parameter's type,
-// and a call lists those parameters. A function row also carries the return
-// and the one-sentence explanation the hover tooltip shows. Two or more return
-// values are shown as `(number, string)`. A header comment `--!` completes
-// strict, nonstrict, nocheck, nolint, native, and optimize. `--!nolint` then
-// completes lint rule names, and `--!optimize` completes levels 0, 1, and 2.
-// A directive after the first statement is ignored, so it is not completed.
-// A `.` that starts a line outside every function, block, and bracket completes
-// the ModuleScripts in `world` and the registered services whose names start with
-// what follows it. Accepting writes the whole declaration over the dot and name:
-// `local Config = require(game.Folder.Config)` or
-// `local UserInputService = game:GetService("UserInputService")`.
-// `script_global` is false on the command line, where `script` is nil. The
-// command line does not complete requires.
-CompletionList resolver_complete(std::string_view source, int caret, const std::vector<engine_core::LuaNode>& world = {},
-                             std::uint32_t script_id = 0, bool script_global = true);
-
 // Completion from Luau's own type checker, with the registry's docs, children,
 // services, requires, and directives. plan_completion reads the text alone and
 // says what Luau must answer; finish_completion builds the list from those
 // answers. A UI asks between the two without waiting. `list` is what shows
 // before an answer, complete when nothing is asked.
+//
+// `world` is the live instance tree and `script_id` the script being edited;
+// `script_global` is false on the command line, where `script` is nil.
+// Members come from the class registry for registered classes and from Luau
+// for everything else, so a required module's table, a metatable object, a
+// loop variable, and a generic result complete as Luau types them. A function
+// a module replaces after defining it reads as the replacement.
+// GetService("...") completes registered services, FindFirstChild("...") the
+// receiver's children, and Instance.new("...") the classes it can create.
+// Connect(function) completes the signal's callback arguments. A function row
+// carries its return and the sentence its hover shows. A header comment `--!`
+// completes strict, nonstrict, nocheck, nolint, native, and optimize; a `.`
+// that starts a line at the top of a script completes the ModuleScripts and
+// services to declare, writing `local Config = require(game.Folder.Config)`.
 struct CompletionPlanState;
 struct CompletionPlan {
     CompletionList list;

@@ -1072,8 +1072,9 @@ TEST_CASE("A28 completion against an unsaved buffer never reaches another script
     // The module is being edited to add b, and the edit is not saved.
     const std::string buffer = "return { a = 1, b = 2 }\n";
     for (int round = 0; round < 3; ++round) {
-        const engine_core::LuauCompletion asked = analysis.luau_complete(
-            completion_nodes(rig.game, module.id(), buffer), module.id(), buffer, buffer.size(), std::chrono::seconds(20));
+        const engine_core::LuauFacts asked = analysis.luau_facts(completion_nodes(rig.game, module.id(), buffer),
+                                                                 module.id(), buffer, buffer.size(), {},
+                                                                 std::chrono::seconds(20));
         REQUIRE(asked.ran);
         analysis.invalidate(script.id());
         settle(analysis);
@@ -1114,8 +1115,8 @@ TEST_CASE("A29 a completion snapshot in another sibling order leaves no stale pl
     engine_core::Folder& extra = rig.game.create<engine_core::Folder>();
     rig.game.set_parent(extra.id(), rig.game.id());
     std::vector<engine_core::LuaNode> slot_order = completion_nodes(rig.game, script.id(), script.source());
-    const engine_core::LuauCompletion asked = analysis.luau_complete(
-        slot_order, script.id(), script.source(), script.source().size(), std::chrono::seconds(20));
+    const engine_core::LuauFacts asked = analysis.luau_facts(slot_order, script.id(), script.source(),
+                                                             script.source().size(), {}, std::chrono::seconds(20));
     REQUIRE(asked.ran);
 
     // Analysis then checks the tree in its own order, and game.Dup is still

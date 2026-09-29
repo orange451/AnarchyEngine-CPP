@@ -2592,8 +2592,8 @@ void testTypedHoverAndSignature() {
     for (const char* defining : {"local function foo(a, ", "function foo(", "function Account.make(first, ",
                                  "function Account:Do("}) {
         // A function's own parameters being named are no call.
-        if (at_end(defining).call_open != -1) {
-            fail(std::string("naming parameters is no call: ") + defining);
+        if (!at_end(defining).signature.empty()) {
+            fail(std::string("naming parameters shows no signature: ") + defining);
         }
     }
 }

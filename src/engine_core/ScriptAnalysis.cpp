@@ -1171,12 +1171,9 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
     return finished;
 }
 
-// A Luau autocomplete request. The worker answers it ahead of queued checks.
+// A Luau request: the completion at `offset` (none when npos) and the type at
+// each of `offsets`. The worker answers it ahead of queued checks.
 struct CompleteRequest {
-    // A completion list, or the type at the offset, or facts: the completion at
-    // `offset` (none when npos) and the type at each of `offsets`.
-    bool type_at = false;
-    bool facts = false;
     std::vector<std::size_t> offsets;
     // Requests in one lane replace each other while queued. Empty never does.
     std::string lane;
@@ -1610,17 +1607,6 @@ std::string with_checked_buffer(WorkerEnv& env, const CompleteRequest& request, 
 LuauCompletion completion_at(WorkerEnv& env, const std::string& module_name, const std::string& text,
                              std::size_t offset);
 
-LuauCompletion complete_job(WorkerEnv& env, const CompleteRequest& request) {
-    LuauCompletion out;
-    const std::string error = with_checked_buffer(env, request, [&](const std::string& module_name) {
-        out = completion_at(env, module_name, request.source, request.offset);
-    });
-    if (!error.empty()) {
-        out.error = error;
-    }
-    return out;
-}
-
 // The type of a local where it is bound: the binding in whichever scope of the
 // module declared it. The scope at the declaration itself does not have it yet.
 std::optional<Luau::TypeId> local_type(const Luau::Module& module, Luau::AstLocal* local) {
@@ -1942,20 +1928,6 @@ LuauTypeAt type_at_offset(const WorkerEnv& env, const Luau::SourceModule& source
     if (const auto* fn = Luau::get<Luau::FunctionType>(Luau::follow(*type))) {
         describe_function(&env, *fn, with_self, out.described);
     }
-    return out;
-}
-
-LuauTypeAt type_job(WorkerEnv& env, const CompleteRequest& request) {
-    LuauTypeAt out;
-    out.error = with_checked_buffer(env, request, [&](const std::string& module_name) {
-        const Luau::SourceModule* source = env.frontend->getSourceModule(module_name);
-        const Luau::ModulePtr module = env.frontend->moduleResolver.getModule(module_name);
-        if (source == nullptr || module == nullptr) {
-            out.ran = true;
-            return;
-        }
-        out = type_at_offset(env, *source, *module, request.source, request.offset);
-    });
     return out;
 }
 
@@ -2417,8 +2389,6 @@ void ScriptAnalysis::shutdown() {
         state_->cv.notify_all();
     }
     for (const std::shared_ptr<CompleteRequest>& request : stopped) {
-        request->answer->completion.error = "script analysis has stopped";
-        request->answer->type.error = "script analysis has stopped";
         request->answer->facts.error = "script analysis has stopped";
         finish_request(*request);
     }
@@ -2465,13 +2435,7 @@ void ScriptAnalysis::run() {
         }
         WorkerEnv& env = *owned;
         if (request) {
-            if (request->facts) {
-                request->answer->facts = facts_job(env, *request);
-            } else if (request->type_at) {
-                request->answer->type = type_job(env, *request);
-            } else {
-                request->answer->completion = complete_job(env, *request);
-            }
+            request->answer->facts = facts_job(env, *request);
             {
                 std::lock_guard<std::mutex> lock(state_->mu);
                 state_->serving.reset();
@@ -2523,22 +2487,18 @@ void ScriptAnalysis::run() {
 
 struct ScriptAnalysis::LuauRequest : CompleteRequest {};
 
-std::shared_ptr<ScriptAnalysis::LuauRequest> ScriptAnalysis::queue_luau(bool type_at,
-                                                                        const std::vector<LuaNode>& world,
+std::shared_ptr<ScriptAnalysis::LuauRequest> ScriptAnalysis::queue_luau(const std::vector<LuaNode>& world,
                                                                         InstanceId script, std::string source,
-                                                                        std::size_t offset, const char* lane,
-                                                                        std::vector<std::size_t> offsets,
-                                                                        bool facts) {
+                                                                        std::size_t caret, const char* lane,
+                                                                        std::vector<std::size_t> offsets) {
     auto request = std::make_shared<LuauRequest>();
-    request->type_at = type_at;
-    request->facts = facts;
     request->offsets = std::move(offsets);
     request->lane = lane != nullptr ? lane : "";
     request->world = world_from_nodes(world);
     // The command line has no script. Its buffer gets an id no instance has.
     request->script = script != 0 ? script : 0xfffffff0u;
     request->source = std::move(source);
-    request->offset = offset;
+    request->offset = caret;
     std::vector<std::shared_ptr<CompleteRequest>> replaced;
     {
         std::lock_guard<std::mutex> lock(state_->mu);
@@ -2561,8 +2521,6 @@ std::shared_ptr<ScriptAnalysis::LuauRequest> ScriptAnalysis::queue_luau(bool typ
         state_->cv.notify_all();
     }
     for (const std::shared_ptr<CompleteRequest>& old : replaced) {
-        old->answer->completion.error = "replaced by a newer request";
-        old->answer->type.error = "replaced by a newer request";
         old->answer->facts.error = "replaced by a newer request";
         finish_request(*old);
     }
@@ -2570,55 +2528,11 @@ std::shared_ptr<ScriptAnalysis::LuauRequest> ScriptAnalysis::queue_luau(bool typ
     return request;
 }
 
-std::shared_ptr<const LuauAnswer> ScriptAnalysis::luau_complete_later(const std::vector<LuaNode>& world,
-                                                                      InstanceId script, std::string source,
-                                                                      std::size_t offset, const char* lane) {
-    const std::shared_ptr<LuauRequest> request = queue_luau(false, world, script, std::move(source), offset, lane);
-    return request ? request->answer : nullptr;
-}
-
-std::shared_ptr<const LuauAnswer> ScriptAnalysis::luau_type_at_later(const std::vector<LuaNode>& world,
-                                                                     InstanceId script, std::string source,
-                                                                     std::size_t offset, const char* lane) {
-    const std::shared_ptr<LuauRequest> request = queue_luau(true, world, script, std::move(source), offset, lane);
-    return request ? request->answer : nullptr;
-}
-
-std::shared_ptr<ScriptAnalysis::LuauRequest> ScriptAnalysis::ask_luau(bool type_at, const std::vector<LuaNode>& world,
-                                                                      InstanceId script, std::string source,
-                                                                      std::size_t offset,
-                                                                      std::chrono::milliseconds wait,
-                                                                      std::string& error) {
-    const std::shared_ptr<LuauRequest> request = queue_luau(type_at, world, script, std::move(source), offset, "");
-    if (!request) {
-        error = "script analysis is off or has stopped";
-        return nullptr;
-    }
-    std::unique_lock<std::mutex> lock(request->mu);
-    if (!request->cv.wait_for(lock, wait, [&] { return request->done; })) {
-        error = "timed out";
-        return nullptr;
-    }
-    return request;
-}
-
-LuauCompletion ScriptAnalysis::luau_complete(const std::vector<LuaNode>& world, InstanceId script, std::string source,
-                                            std::size_t offset, std::chrono::milliseconds wait) {
-    std::string error;
-    const std::shared_ptr<LuauRequest> answered = ask_luau(false, world, script, std::move(source), offset, wait, error);
-    if (!answered) {
-        LuauCompletion none;
-        none.error = error;
-        return none;
-    }
-    return answered->answer->completion;
-}
-
 LuauFacts ScriptAnalysis::luau_facts(const std::vector<LuaNode>& world, InstanceId script, std::string source,
                                      std::size_t caret, std::vector<std::size_t> offsets,
                                      std::chrono::milliseconds wait) {
     const std::shared_ptr<LuauRequest> request =
-        queue_luau(false, world, script, std::move(source), caret, "", std::move(offsets), true);
+        queue_luau(world, script, std::move(source), caret, "", std::move(offsets));
     LuauFacts none;
     if (!request) {
         none.error = "script analysis is off or has stopped";
@@ -2637,20 +2551,8 @@ std::shared_ptr<const LuauAnswer> ScriptAnalysis::luau_facts_later(const std::ve
                                                                    std::size_t caret, std::vector<std::size_t> offsets,
                                                                    const char* lane) {
     const std::shared_ptr<LuauRequest> request =
-        queue_luau(false, world, script, std::move(source), caret, lane, std::move(offsets), true);
+        queue_luau(world, script, std::move(source), caret, lane, std::move(offsets));
     return request ? request->answer : nullptr;
-}
-
-LuauTypeAt ScriptAnalysis::luau_type_at(const std::vector<LuaNode>& world, InstanceId script, std::string source,
-                                        std::size_t offset, std::chrono::milliseconds wait) {
-    std::string error;
-    const std::shared_ptr<LuauRequest> answered = ask_luau(true, world, script, std::move(source), offset, wait, error);
-    if (!answered) {
-        LuauTypeAt none;
-        none.error = error;
-        return none;
-    }
-    return answered->answer->type;
 }
 
 void ScriptAnalysis::set_enabled(bool enabled) {

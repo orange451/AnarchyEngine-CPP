@@ -249,22 +249,4 @@ struct LuaNode {
     std::string source;
 };
 
-// Nested table or class produced by running a ModuleScript.
-// `class_name` is set when the value is an instance of a registered class.
-// `fields` are the keys a returned table actually has.
-// `method` is set on a function written as `function obj:name`.
-struct LuaShape {
-    std::string type_name;
-    std::string class_name;
-    bool call = false;
-    bool method = false;
-    std::vector<std::pair<std::string, LuaShape>> fields;
-};
-
-// Runs `source` in the host environment with `world` behind game, script,
-// FindFirstChild, and require. `module_id` is the ModuleScript being run.
-// A chunk that errors leaves `out` empty and returns false.
-bool lua_module_exports(std::string_view source, std::uint32_t module_id, const std::vector<LuaNode>& world,
-                        LuaShape& out);
-
 }  // namespace engine_core

@@ -2037,6 +2037,10 @@ LuauTypeAt type_at_offset(const WorkerEnv& env, const Luau::SourceModule& source
         if (auto* named = expr->as<Luau::AstExprLocal>()) {
             out.name = named->local->name.value;
             out.kind = parameter(named->local) ? "parameter" : "local";
+            // A local being assigned has no expression type; it has its own.
+            if (!type) {
+                type = local_type(module, named->local);
+            }
         } else if (auto* global = expr->as<Luau::AstExprGlobal>()) {
             out.name = global->name.value;
             out.kind = "global";
@@ -2159,6 +2163,7 @@ LuauCompletion completion_at(WorkerEnv& env, const std::string& module_name, con
     // The locals in scope at the caret, and where each was declared. A local is
     // not in scope inside its own initializer.
     std::unordered_map<std::string, std::uint32_t> locals;
+    std::unordered_map<std::string, std::string> written;
     std::unordered_set<const Luau::AstLocal*> declaring;
     for (Luau::AstNode* node : result.ancestry) {
         if (auto* stat = node->as<Luau::AstStatLocal>()) {
@@ -2179,6 +2184,26 @@ LuauCompletion completion_at(WorkerEnv& env, const std::string& module_name, con
                     continue;
                 }
                 locals.emplace(symbol.local->name.value, where.begin.line * 65536u + where.begin.column);
+                if (symbol.local->annotation != nullptr) {
+                    written.emplace(symbol.local->name.value, text_at(text, symbol.local->annotation->location));
+                }
+            }
+        }
+    }
+    // The module whose `type` statements name the types offered: another
+    // module's after `Module.`, else this one.
+    std::string types_module = module_name;
+    for (Luau::AstNode* node : result.ancestry) {
+        auto* reference = node->as<Luau::AstTypeReference>();
+        if (reference == nullptr || !reference->prefix || module == nullptr) {
+            continue;
+        }
+        const std::string alias = reference->prefix->value;
+        for (Luau::ScopePtr step = Luau::findScopeAtPosition(*module, at); step != nullptr; step = step->parent) {
+            const auto imported = step->importedModules.find(alias);
+            if (imported != step->importedModules.end()) {
+                types_module = imported->second;
+                break;
             }
         }
     }
@@ -2224,6 +2249,15 @@ LuauCompletion completion_at(WorkerEnv& env, const std::string& module_name, con
         if (entry.type) {
             item.class_name = registered_class(*entry.type);
         }
+        if (entry.kind == Luau::AutocompleteEntryKind::GeneratedFunction && entry.insertText) {
+            item.insert = *entry.insertText;
+        }
+        if (entry.kind == Luau::AutocompleteEntryKind::Type) {
+            item.declaration = type_declaration(env, types_module, name);
+            if (item.declaration.rfind("export ", 0) == 0) {
+                item.declaration.erase(0, 7);
+            }
+        }
         if (entry.kind == Luau::AutocompleteEntryKind::Binding) {
             const bool own_initializer = std::any_of(declaring.begin(), declaring.end(), [&](const Luau::AstLocal* var) {
                 return name == var->name.value;
@@ -2235,6 +2269,10 @@ LuauCompletion completion_at(WorkerEnv& env, const std::string& module_name, con
             if (local != locals.end()) {
                 item.local = true;
                 item.declared = local->second;
+                const auto annotation = written.find(name);
+                if (annotation != written.end()) {
+                    item.written_type = annotation->second;
+                }
             } else {
                 item.defined_here = defined.names.count(name) != 0;
             }

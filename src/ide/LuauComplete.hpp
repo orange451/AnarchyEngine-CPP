@@ -48,6 +48,9 @@ struct CompletionItem {
     std::string returns;
     // One sentence. The same explanation the hover tooltip shows.
     std::string summary;
+    // The value being written wants this row: a string its type allows, a key
+    // of the table type being built, or a name of the type it expects.
+    bool expected = false;
 };
 
 struct CompletionList {
@@ -68,6 +71,10 @@ struct CompletionList {
     // -1 when no parameter is active.
     int signature_bold_begin = -1;
     int signature_bold_end = -1;
+    // Before a name is typed, the list opens by itself with its expected rows
+    // alone: a type's strings after `local diet: Diet = `, or a table type's
+    // keys after `{`. Never at the start of a line, where Enter makes a line.
+    bool open_expected = false;
 };
 
 // Text for the popup shown while the pointer rests on a name.
@@ -98,7 +105,11 @@ struct HoverInfo {
 // a module replaces after defining it reads as the replacement.
 // GetService("...") completes registered services, FindFirstChild("...") the
 // receiver's children, and Instance.new("...") the classes it can create.
-// Connect(function) completes the signal's callback arguments. A function row
+// Connect(function) completes the signal's callback arguments, and any other
+// function-typed argument a function with its parameters. A value of a written
+// type offers what that type expects first: the strings a literal type allows,
+// in quotes or not, a table type's keys, and names of that type. Keywords are
+// those the position can hold, such as `then` after a condition. A function row
 // carries its return and the sentence its hover shows. A header comment `--!`
 // completes strict, nonstrict, nocheck, nolint, native, and optimize; a `.`
 // that starts a line at the top of a script completes the ModuleScripts and

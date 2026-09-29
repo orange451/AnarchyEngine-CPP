@@ -2887,6 +2887,141 @@ void testExportedTypes() {
                  "an imported type");
 }
 
+// `first` is listed, and ahead of `second` when that is listed.
+void expect_before(const ide::CompletionList& list, const char* first, const char* second, const char* label) {
+    const int a = index_of(list, first);
+    const int b = index_of(list, second);
+    if (a < 0 || (b >= 0 && a > b)) {
+        fail(std::string(label) + ": " + first + " at " + std::to_string(a) + ", " + second + " at " + std::to_string(b));
+    }
+}
+
+// A value of a written type: the strings a literal type allows, a table type's
+// keys, names of the expected type first, and a function for a function-typed
+// argument.
+void testTypedValues() {
+    const std::string types =
+        "--!strict\n"
+        "export type Diet = \"herbivore\" | \"carnivore\" | \"omnivore\"\n"
+        "export type AnimalData = {\n"
+        "    name: string,\n"
+        "    diet: Diet,\n"
+        "}\n"
+        "local favorite: Diet = \"omnivore\"\n"
+        "local count = 1\n";
+
+    // The type row shows its declaration.
+    const ide::CompletionList named = at_end(types + "local test: Die");
+    expect_info(named, "Diet", nullptr, "type Diet = \"herbivore\" | \"carnivore\" | \"omnivore\"", nullptr,
+                "a type's declaration");
+
+    // Inside the quotes: the strings, as an argument completion.
+    const ide::CompletionList quoted = at_end(types + "local test: Diet = \"");
+    expect_has(quoted, "herbivore", "a literal type's string in a local");
+    expect_has(quoted, "omnivore", "a literal type's string in a local");
+    if (quoted.site != ide::CompleteSite::Argument || quoted.close_quote != '"') {
+        fail("a local's literal strings complete inside the quotes");
+    }
+    const ide::CompletionList narrowed = at_end(types + "local test: Diet = \"c");
+    expect_has(narrowed, "carnivore", "a literal typed so far");
+    expect_missing(narrowed, "herbivore", "a literal typed so far");
+    expect_has(at_end(types + "favorite = \""), "carnivore", "a string assigned to a typed local");
+    expect_has(at_end(types + "if favorite == \""), "carnivore", "a string compared to a typed local");
+    expect_has(at_end(types + "local a: AnimalData = {\n    diet = \""), "carnivore", "a string in a typed table");
+    expect_has(at_end(types + "local a: AnimalData = {} :: any\na.diet = \""), "carnivore",
+               "a string assigned to a typed field");
+    expect_missing(at_end(types + "local test: string = \""), "carnivore", "a plain string has no choices");
+
+    // Before the quotes: the quoted strings first, and the list opens by itself.
+    const ide::CompletionList value = at_end(types + "local test: Diet = ");
+    if (value.items.empty() || value.items[0].name.front() != '"' || !value.items[0].expected || !value.open_expected) {
+        fail("a local's literal strings lead and open the list: " +
+             (value.items.empty() ? std::string("none") : value.items[0].name));
+    }
+    expect_has(value, "\"herbivore\"", "a quoted literal string");
+    const ide::CompletionItem* herbivore = find_item(value, "\"herbivore\"");
+    if (herbivore != nullptr && !herbivore->snippet) {
+        fail("'(' or '.' does not accept a quoted string");
+    }
+    expect_detail(value, "favorite", "Diet", "a local shows the type its declaration wrote");
+    expect_before(value, "favorite", "count", "a local of the expected type");
+    expect_before(at_end(types + "favorite = "), "\"carnivore\"", "count", "a string assigned to a typed local");
+    expect_missing(at_end(types + "favorite = "), "local", "a value is no statement");
+    if (at_end(types + "local test: number = ").open_expected) {
+        fail("a type with no strings does not open the list by itself");
+    }
+    const ide::CompletionList flag = at_end(types + "local ok = true\nlocal flag: boolean = ");
+    expect_before(flag, "true", "count", "a boolean's keywords");
+    expect_before(flag, "ok", "count", "a local of the expected type");
+
+    // A table type's keys, written as `key = `.
+    const ide::CompletionList keys = at_end(types + "local a: AnimalData = { ");
+    expect_before(keys, "diet", "favorite", "a table type's key");
+    expect_before(keys, "name", "favorite", "a table type's key");
+    const ide::CompletionItem* diet = find_item(keys, "diet");
+    if (diet == nullptr || diet->insert != "diet = " || !diet->expected) {
+        fail("a key writes `diet = `: " + (diet == nullptr ? std::string("missing") : diet->insert));
+    }
+    if (!keys.open_expected) {
+        fail("a table type's keys open the list");
+    }
+    const ide::CompletionList line = at_end(types + "local a: AnimalData = {\n    ");
+    expect_has(line, "diet", "a table type's key on its own line");
+    if (line.open_expected) {
+        fail("the list does not open by itself at the start of a line");
+    }
+    expect_before(at_end(types + "local a: AnimalData = {\n    n"), "name", "next", "a key typed so far");
+    const std::string before_equals = types + "local a: AnimalData = { na = 1 }";
+    const ide::CompletionList renamed =
+        at_caret(before_equals, static_cast<int>(before_equals.find("na = 1")) + 2);
+    const ide::CompletionItem* name = find_item(renamed, "name");
+    if (name == nullptr || !name->insert.empty()) {
+        fail("a key already followed by '=' writes only its name");
+    }
+    expect_before(at_end(types + "local a: AnimalData = {\n    diet = "), "\"carnivore\"", "count",
+                  "a typed field's strings");
+
+    // A function-typed argument offers a function with its parameters.
+    const ide::CompletionList each = at_end(
+        types + "local function each(list: {number}, visit: (value: number, index: number) -> ()) end\neach({1}, fu");
+    expect_before(each, "function(value: number, index: number)", "function", "a function-typed argument");
+    const ide::CompletionItem* generated = find_item(each, "function(value: number, index: number)");
+    if (generated != nullptr && !generated->snippet) {
+        fail("a generated function is a snippet");
+    }
+}
+
+// Keywords a position can hold: `then` after an if's condition, the words a
+// statement starts with, a block's closers, and those a value can hold.
+void testKeywords() {
+    const std::string code = "local count = 1\n";
+    const ide::CompletionList then = at_end(code + "if count > 1 t");
+    expect_has(then, "then", "an if's condition ends with then");
+    expect_missing(then, "tostring", "only a keyword follows a finished condition");
+    expect_missing(then, "true", "only a keyword follows a finished condition");
+
+    const ide::CompletionList statement = at_end(code + "f");
+    expect_has(statement, "for", "a statement keyword");
+    expect_has(statement, "function", "a statement keyword");
+    expect_missing(statement, "false", "a value keyword at a statement's start");
+    const ide::CompletionList value = at_end(code + "local x = f");
+    expect_has(value, "false", "a value keyword");
+    expect_has(value, "function", "a value keyword");
+    expect_missing(value, "for", "a statement keyword in a value");
+    expect_before(at_end(code + "re"), "return", "require", "keywords come before library globals");
+
+    const ide::CompletionList closers = at_end(code + "if count > 1 then\n    print(count)\n    e");
+    expect_has(closers, "end", "an if's end");
+    expect_has(closers, "else", "an if's else");
+    expect_has(closers, "elseif", "an if's elseif");
+    expect_missing(at_end(code + "e"), "end", "nothing to end at the top");
+    const ide::CompletionList loop = at_end(code + "repeat\n    print(count)\n    u");
+    expect_has(loop, "until", "a repeat's until");
+    expect_has(at_end(code + "while count > 1 do\n    en"), "end", "a loop's end");
+    const ide::CompletionList local = at_end(code + "local fu");
+    expect_has(local, "function", "local function");
+}
+
 int RunLuauCompleteTests() {
     try {
         testLibraries();
@@ -2918,6 +3053,8 @@ int RunLuauCompleteTests() {
         testTypedLater();
         testTypedSwitchedOff();
         testExportedTypes();
+        testTypedValues();
+        testKeywords();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());
     }

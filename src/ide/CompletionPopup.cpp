@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <iterator>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -913,12 +914,16 @@ void CompletionPopup::present(const CompletionList& list, bool force, jadefx::No
     // its parameters still shows that list, without every in-scope name.
     // A finished directive matches exactly and closes the same way. `--!` has an
     // empty prefix and still opens, because the bang is what asked for the list.
+    // A value whose type names its strings or keys opens with those rows alone.
     bool signature_only = false;
+    bool expected_only = false;
     const bool extends = std::any_of(list.items.begin(), list.items.end(), [&](const CompletionItem& item) {
         return item.name.size() > list.prefix.size();
     });
     if (list.site == CompleteSite::Name && !force && (list.prefix.empty() || !extends)) {
-        if (list.signature.empty()) {
+        if (list.prefix.empty() && list.open_expected) {
+            expected_only = true;
+        } else if (list.signature.empty()) {
             dismiss();
             return;
         }
@@ -933,7 +938,13 @@ void CompletionPopup::present(const CompletionList& list, bool force, jadefx::No
     if (keep_pick) {
         previous = state_->items[static_cast<std::size_t>(state_->selected)].name;
     }
-    state_->items = signature_only ? std::vector<CompletionItem>{} : list.items;
+    state_->items.clear();
+    if (expected_only) {
+        std::copy_if(list.items.begin(), list.items.end(), std::back_inserter(state_->items),
+                     [](const CompletionItem& item) { return item.expected; });
+    } else if (!signature_only) {
+        state_->items = list.items;
+    }
     state_->site = list.site;
     state_->prefix = list.prefix;
     state_->signature = list.signature;

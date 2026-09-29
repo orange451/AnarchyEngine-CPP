@@ -455,6 +455,9 @@ bool AcceptsType(const std::string& expected, const CompletionItem& item) {
     if (expected.empty()) {
         return false;
     }
+    if (item.expected) {
+        return true;
+    }
     if (expected == "boolean" && (item.name == "true" || item.name == "false")) {
         return true;
     }
@@ -698,17 +701,17 @@ bool EndsStatement(const Token& token) {
     }
 }
 
-// Tokens [0, count) leave no function, block, loop header, or bracket open, so
-// the next statement belongs to the chunk itself. An `if` that follows `=`, `(`,
-// `return`, or an operator is an if-expression, which has no `end`.
-bool AtChunkTop(const std::vector<Token>& tokens, int count) {
-    // 'b' is a block closed by `end` or `until`. 'h' is a `while` or `for` header
-    // waiting for its `do`. '(' is any bracket.
-    std::vector<char> open;
+// The blocks and brackets tokens [0, count) leave open, innermost last: the
+// keyword that opened each block, such as `function` or `repeat`, or "(" for
+// any bracket. A `while` or `for` header still waiting for its `do` ends in
+// '?'. An `if` that follows `=`, `(`, `return`, or an operator is an
+// if-expression, which has no `end`.
+std::vector<std::string> OpenBlocks(const std::vector<Token>& tokens, int count) {
+    std::vector<std::string> open;
     for (int index = 0; index < count; ++index) {
         const Token& token = tokens[static_cast<std::size_t>(index)];
         if (token.kind == Token::LParen || token.kind == Token::LBrack || token.kind == Token::LBrace) {
-            open.push_back('(');
+            open.emplace_back("(");
         } else if (token.kind == Token::RParen || token.kind == Token::RBrack || token.kind == Token::RBrace) {
             if (!open.empty()) {
                 open.pop_back();
@@ -716,21 +719,21 @@ bool AtChunkTop(const std::vector<Token>& tokens, int count) {
         } else if (token.kind != Token::Keyword) {
             continue;
         } else if (token.text == "function" || token.text == "repeat") {
-            open.push_back('b');
+            open.push_back(token.text);
         } else if (token.text == "if") {
             const Token* before = index > 0 ? &tokens[static_cast<std::size_t>(index - 1)] : nullptr;
             if (before == nullptr || EndsStatement(*before) ||
                 (before->kind == Token::Keyword &&
                  (before->text == "then" || before->text == "else" || before->text == "do" || before->text == "repeat"))) {
-                open.push_back('b');
+                open.push_back(token.text);
             }
         } else if (token.text == "while" || token.text == "for") {
-            open.push_back('h');
+            open.push_back(token.text + "?");
         } else if (token.text == "do") {
-            if (!open.empty() && open.back() == 'h') {
-                open.back() = 'b';
+            if (!open.empty() && open.back().back() == '?') {
+                open.back().pop_back();
             } else {
-                open.push_back('b');
+                open.push_back(token.text);
             }
         } else if (token.text == "end" || token.text == "until") {
             if (!open.empty()) {
@@ -738,7 +741,27 @@ bool AtChunkTop(const std::vector<Token>& tokens, int count) {
             }
         }
     }
-    return open.empty();
+    return open;
+}
+
+// Tokens [0, count) leave no function, block, loop header, or bracket open, so
+// the next statement belongs to the chunk itself.
+bool AtChunkTop(const std::vector<Token>& tokens, int count) { return OpenBlocks(tokens, count).empty(); }
+
+// The words a statement at token `count` can use to close the innermost block:
+// `until` for a repeat, `else`, `elseif`, or `end` for an if, else `end`.
+std::vector<const char*> BlockClosers(const std::vector<Token>& tokens, int count) {
+    const std::vector<std::string> open = OpenBlocks(tokens, count);
+    if (open.empty() || open.back() == "(" || open.back().back() == '?') {
+        return {};
+    }
+    if (open.back() == "repeat") {
+        return {"until"};
+    }
+    if (open.back() == "if") {
+        return {"else", "elseif", "end"};
+    }
+    return {"end"};
 }
 
 // Only spaces and tabs come before code point `index` on its line.
@@ -1334,6 +1357,9 @@ struct CompletionPlanState {
     int object_type = -1;
     std::string callee_name;
     std::string signal_name;
+    // The name the value is assigned or compared to, whose type says which
+    // strings it may be. -1 when not asked.
+    int target_type = -1;
 };
 
 namespace {
@@ -1370,11 +1396,57 @@ void AskCallee(CompletionPlan& plan, CompletionPlanState& state, int open) {
     }
 }
 
+// Asks for the type of the name a value starting at token `value` is assigned
+// or compared to: `diet` in `diet = `, `self.diet == `, or `local diet: Diet = `.
+void AskTarget(CompletionPlan& plan, CompletionPlanState& state, int value) {
+    const std::vector<Token>& tokens = state.tokens;
+    const int sign = value - 1;
+    if (sign < 1) {
+        return;
+    }
+    const Token& op = tokens[static_cast<std::size_t>(sign)];
+    const bool assign = op.kind == Token::Eq;
+    if (!assign && !(op.kind == Token::Op && (op.text == "==" || op.text == "~="))) {
+        return;
+    }
+    int target = tokens[static_cast<std::size_t>(sign - 1)].kind == Token::Name ? sign - 1 : -1;
+    // `local name: Type =`: the local, not the type written for it. A type
+    // can hold nil, true, and false, but no other keyword.
+    for (int at = sign - 1; assign && at >= 0; --at) {
+        const Token& token = tokens[static_cast<std::size_t>(at)];
+        if (token.kind == Token::Keyword && token.text == "local") {
+            const bool annotated = at + 2 < sign && tokens[static_cast<std::size_t>(at + 1)].kind == Token::Name &&
+                                   tokens[static_cast<std::size_t>(at + 2)].kind == Token::Colon;
+            target = annotated ? at + 1 : target;
+            break;
+        }
+        if (token.kind == Token::Eq || token.kind == Token::Semi ||
+            (token.kind == Token::Keyword && token.text != "nil" && token.text != "true" && token.text != "false")) {
+            break;
+        }
+    }
+    if (target < 0) {
+        return;
+    }
+    state.target_type = static_cast<int>(plan.offsets.size());
+    plan.offsets.push_back(TokenByte(state, target));
+}
+
 const engine_core::LuauTypeAt* FactType(const engine_core::LuauFacts& facts, int index) {
     if (index < 0 || static_cast<std::size_t>(index) >= facts.types.size()) {
         return nullptr;
     }
     return &facts.types[static_cast<std::size_t>(index)];
+}
+
+// A type row: its `type` statement as written is its title, as the hover shows it.
+CompletionItem TypeRow(const engine_core::LuauSuggestion& row) {
+    constexpr std::size_t kLongest = 240;
+    CompletionItem item;
+    item.name = row.name;
+    item.detail = row.kind;
+    item.title = row.declaration.size() > kLongest ? row.declaration.substr(0, kLongest) + "..." : row.declaration;
+    return item;
 }
 
 // A type name: the types Luau sees here, local and exported, the modules whose
@@ -1387,10 +1459,7 @@ void FinishTypes(const engine_core::LuauCompletion& luau, CompletionList& list) 
             StartsWith(row.name, "Signal_")) {
             continue;
         }
-        CompletionItem item;
-        item.name = row.name;
-        item.detail = row.kind;
-        rows.push_back(std::move(item));
+        rows.push_back(TypeRow(row));
     }
     std::vector<CompletionItem> registered;
     AddTypes(list.prefix, registered);
@@ -1412,10 +1481,7 @@ void FinishMember(const CompletionPlanState& state, const engine_core::LuauCompl
     if (luau.context == "type") {
         for (const engine_core::LuauSuggestion& row : luau.items) {
             if (row.kind == "type" && StartsWith(row.name, list.prefix)) {
-                CompletionItem item;
-                item.name = row.name;
-                item.detail = "type";
-                list.items.push_back(std::move(item));
+                list.items.push_back(TypeRow(row));
             }
         }
         return;
@@ -1530,7 +1596,91 @@ void FinishMember(const CompletionPlanState& state, const engine_core::LuauCompl
     }
 }
 
-void FinishNames(const CompletionPlanState& state, const engine_core::LuauCompletion& luau, CompletionList& list) {
+// The function Luau writes for a function-typed argument, such as
+// `function(a: number)`, without the return type and `end` it adds. Empty when
+// `insert` is not one.
+// `insert` is not one, or its parameters say nothing, as `function(...)`.
+std::string GeneratedFunction(const std::string& insert) {
+    if (!StartsWith(insert, "function(")) {
+        return {};
+    }
+    int depth = 0;
+    for (std::size_t at = 8; at < insert.size(); ++at) {
+        if (insert[at] == '(') {
+            ++depth;
+        } else if (insert[at] == ')' && --depth == 0) {
+            std::string written = insert.substr(0, at + 1);
+            return written == "function(...)" || written == "function(...: any)" ? std::string() : written;
+        }
+    }
+    return {};
+}
+
+// The strings a type allows when it is only string literals, and maybe nil,
+// as Luau prints `"sit" | "roll"?`. Empty for any other type.
+std::vector<std::string> LiteralStrings(std::string_view type) {
+    std::vector<std::string> out;
+    std::size_t at = 0;
+    const auto space = [&] {
+        while (at < type.size() && (type[at] == ' ' || type[at] == '(' || type[at] == ')' || type[at] == '?')) {
+            ++at;
+        }
+    };
+    while (true) {
+        space();
+        if (at >= type.size()) {
+            break;
+        }
+        if (type.compare(at, 3, "nil") == 0) {
+            at += 3;
+        } else if (type[at] == '"') {
+            std::string literal;
+            for (++at; at < type.size() && type[at] != '"'; ++at) {
+                if (type[at] == '\\' && at + 1 < type.size()) {
+                    ++at;
+                }
+                literal.push_back(type[at]);
+            }
+            if (at >= type.size()) {
+                return {};
+            }
+            ++at;
+            out.push_back(std::move(literal));
+        } else {
+            return {};
+        }
+        space();
+        if (at < type.size() && type[at] != '|') {
+            return {};
+        }
+        ++at;
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+// The strings the value being written may be, from the type of the name it is
+// assigned or compared to, for places Luau does not say, as `diet = "`.
+std::vector<std::string> TargetStrings(const engine_core::LuauTypeAt* target) {
+    if (target == nullptr || !target->found || target->kind == "type" || target->kind == "module") {
+        return {};
+    }
+    return LiteralStrings(target->described.type);
+}
+
+// An `=`, not `==`, follows code point `index` past spaces and tabs.
+bool AssignFollows(const std::u32string& text, int index) {
+    const int size = static_cast<int>(text.size());
+    while (index < size && (text[static_cast<std::size_t>(index)] == U' ' || text[static_cast<std::size_t>(index)] == U'\t')) {
+        ++index;
+    }
+    return index < size && text[static_cast<std::size_t>(index)] == U'=' &&
+           (index + 1 >= size || text[static_cast<std::size_t>(index + 1)] != U'=');
+}
+
+void FinishNames(const CompletionPlanState& state, const engine_core::LuauCompletion& luau,
+                 const engine_core::LuauTypeAt* target, CompletionList& list) {
     std::vector<std::string> seen;
     const auto take = [&](CompletionItem item) {
         if ((!list.prefix.empty() && !StartsWith(item.name, list.prefix)) ||
@@ -1540,6 +1690,147 @@ void FinishNames(const CompletionPlanState& state, const engine_core::LuauComple
         seen.push_back(item.name);
         list.items.push_back(std::move(item));
     };
+    // What the value being written expects: the keys of the table type being
+    // built, written as `name = `; the strings its type allows, which Luau
+    // quotes outside a string; and a function for a function-typed argument.
+    bool literal = false;
+    for (const engine_core::LuauSuggestion& row : luau.items) {
+        if (luau.context != "property" || row.kind != "property" || !IsIdent(row.name) ||
+            KeywordText(row.name) != nullptr) {
+            continue;
+        }
+        CompletionItem item;
+        item.name = row.name;
+        if (row.function) {
+            item.detail = "function";
+        } else if (!row.class_name.empty()) {
+            item.detail = row.class_name;
+        } else {
+            const std::string shown = RowType(row.type);
+            item.detail = shown.empty() ? "field" : shown;
+        }
+        if (ShowType(row.type)) {
+            item.title = row.name + ": " + row.type;
+        }
+        item.insert = AssignFollows(state.text, list.replace_end) ? std::string() : row.name + " = ";
+        item.snippet = true;
+        item.expected = true;
+        literal = true;
+        take(std::move(item));
+    }
+    std::vector<std::string> strings;
+    for (const engine_core::LuauSuggestion& row : luau.items) {
+        if (row.kind == "string") {
+            strings.push_back(row.name);
+        }
+    }
+    if (strings.empty()) {
+        for (const std::string& value : TargetStrings(target)) {
+            strings.push_back(QuoteString(value));
+        }
+    }
+    for (std::string& value : strings) {
+        CompletionItem item;
+        item.name = std::move(value);
+        item.detail = "string";
+        item.snippet = true;
+        item.expected = true;
+        literal = true;
+        take(std::move(item));
+    }
+    for (const engine_core::LuauSuggestion& row : luau.items) {
+        const std::string written = row.kind == "function" ? GeneratedFunction(row.insert) : std::string();
+        if (written.empty()) {
+            continue;
+        }
+        CompletionItem item;
+        item.name = written;
+        item.detail = "function";
+        item.snippet = true;
+        item.expected = true;
+        take(std::move(item));
+    }
+    list.open_expected = literal && list.prefix.empty() && !StartsLine(state.text, state.caret);
+    // The type the value takes from the name it is assigned or compared to,
+    // for places Luau does not say: a name of that type is expected too.
+    const std::string target_type = target != nullptr && target->found && target->kind != "type" &&
+                                            target->kind != "module" && ShowType(target->described.type)
+                                        ? target->described.type
+                                        : std::string();
+    const auto matches = [&](const engine_core::LuauSuggestion& row) {
+        if (row.type_correct) {
+            return true;
+        }
+        if (target_type.empty()) {
+            return false;
+        }
+        if (row.kind == "keyword") {
+            return CoreType(target_type) == "boolean" && (row.name == "true" || row.name == "false");
+        }
+        return row.type == target_type;
+    };
+    // Keywords Luau finds valid here: `then` after an if's condition, the words
+    // a statement starts with, or those an expression can hold. The source Luau
+    // reads has every block closed, so a statement's closers come from the text.
+    // With no word from Luau, every keyword.
+    // Luau reads `x = ` with nothing after it as a broken statement, but a
+    // value starts there.
+    const Token* before = state.index > 0 ? &state.tokens[static_cast<std::size_t>(state.index - 1)] : nullptr;
+    const bool value = luau.context == "statement" && before != nullptr &&
+                       (before->kind == Token::Eq || before->kind == Token::Op ||
+                        (before->kind == Token::Keyword && (before->text == "return" || before->text == "and" ||
+                                                            before->text == "or" || before->text == "not")));
+    std::vector<CompletionItem> keywords;
+    for (const engine_core::LuauSuggestion& row : luau.items) {
+        if (row.kind != "keyword" || value) {
+            continue;
+        }
+        CompletionItem item;
+        item.name = row.name;
+        item.detail = "keyword";
+        item.expected = matches(row);
+        keywords.push_back(std::move(item));
+    }
+    if (value) {
+        for (const char* word : {"false", "function", "if", "nil", "not", "true"}) {
+            engine_core::LuauSuggestion row;
+            row.name = word;
+            row.kind = "keyword";
+            CompletionItem item;
+            item.name = word;
+            item.detail = "keyword";
+            item.expected = matches(row);
+            keywords.push_back(std::move(item));
+        }
+    }
+    const bool statement = luau.context == "statement" && std::any_of(keywords.begin(), keywords.end(), [](const CompletionItem& item) {
+                               return item.name == "local";
+                           });
+    if (statement) {
+        for (const char* closer : BlockClosers(state.tokens, state.index)) {
+            CompletionItem item;
+            item.name = closer;
+            item.detail = "keyword";
+            keywords.push_back(std::move(item));
+        }
+    }
+    if (keywords.empty() && luau.context != "keyword") {
+        for (const char* keyword : CompletionKeywords()) {
+            CompletionItem item;
+            item.name = keyword;
+            item.detail = "keyword";
+            keywords.push_back(std::move(item));
+        }
+    }
+    std::stable_sort(keywords.begin(), keywords.end(),
+                     [](const CompletionItem& a, const CompletionItem& b) { return a.name < b.name; });
+    // After a finished condition, only a keyword can follow.
+    if (luau.context == "keyword") {
+        for (CompletionItem& item : keywords) {
+            take(std::move(item));
+        }
+        return;
+    }
     // Locals, the nearest first.
     std::vector<const engine_core::LuauSuggestion*> locals;
     for (const engine_core::LuauSuggestion& row : luau.items) {
@@ -1561,6 +1852,7 @@ void FinishNames(const CompletionPlanState& state, const engine_core::LuauComple
         CompletionItem item;
         item.name = row->name;
         item.call = row->function;
+        item.expected = matches(*row);
         if (!row->class_name.empty()) {
             item.detail = row->class_name;
         } else if (row->function) {
@@ -1568,7 +1860,11 @@ void FinishNames(const CompletionPlanState& state, const engine_core::LuauComple
             item.detail = params.empty() && !row->variadic ? "function" : JoinParams(params, row->variadic);
             AttachWritten(item, DescribeLuauFunction(row->name, *row));
         } else {
-            std::string shown = RowType(row->type);
+            // The type its declaration wrote, such as Diet, over Luau's expansion.
+            constexpr std::size_t kLongestWritten = 32;
+            std::string shown = !row->written_type.empty() && row->written_type.size() <= kLongestWritten
+                                    ? row->written_type
+                                    : RowType(row->type);
             if (!shown.empty() && shown.back() == '?') {
                 shown.pop_back();
             }
@@ -1576,7 +1872,10 @@ void FinishNames(const CompletionPlanState& state, const engine_core::LuauComple
         }
         take(std::move(item));
     }
-    // The runtime's globals and libraries, then game, script, and keywords.
+    // Then the keywords, the runtime's globals and libraries, game, and script.
+    for (CompletionItem& item : keywords) {
+        take(std::move(item));
+    }
     std::vector<engine_core::LuaSymbol> globals;
     engine_core::lua_library_globals(globals);
     for (const engine_core::LuaSymbol& symbol : globals) {
@@ -1608,12 +1907,8 @@ void FinishNames(const CompletionPlanState& state, const engine_core::LuauComple
         }
         take(std::move(script));
     }
-    for (const char* keyword : CompletionKeywords()) {
-        CompletionItem item;
-        item.name = keyword;
-        item.detail = "keyword";
-        take(std::move(item));
-    }
+    // What the value expects comes first, each group in its order.
+    std::stable_partition(list.items.begin(), list.items.end(), [](const CompletionItem& item) { return item.expected; });
 }
 
 // Connect( offers `function(dt)`, and inside that function the signal's
@@ -1682,9 +1977,11 @@ void FinishCallback(const CompletionPlanState& state, const engine_core::LuauFac
     if (!list.prefix.empty() && !StartsWith(snippet, list.prefix)) {
         return;
     }
+    // The signal's own names replace the keyword and a function Luau wrote.
     list.items.erase(std::remove_if(list.items.begin(), list.items.end(),
                                     [](const CompletionItem& item) {
-                                        return item.name == "function" && item.detail == "keyword";
+                                        return (item.name == "function" && item.detail == "keyword") ||
+                                               (item.snippet && StartsWith(item.name, "function("));
                                     }),
                      list.items.end());
     if (std::any_of(list.items.begin(), list.items.end(), [&](const CompletionItem& item) { return item.name == snippet; })) {
@@ -1791,6 +2088,9 @@ void FinishString(const CompletionPlanState& state, const engine_core::LuauFacts
                                 row.name.back() == row.name.front();
             literals.push_back(quoted ? row.name.substr(1, row.name.size() - 2) : row.name);
         }
+        if (literals.empty()) {
+            literals = TargetStrings(FactType(facts, state.target_type));
+        }
         if (!literals.empty()) {
             BeginStringArgument(list, state.scan, state.text, state.caret);
             std::sort(literals.begin(), literals.end());
@@ -1853,15 +2153,15 @@ CompletionPlan plan_completion(std::string_view source, int caret, const std::ve
         }
         state->first_arg = !state->slot.found || state->slot.argument == 0;
         const int open = state->slot.found ? state->slot.open : (state->callee_end >= 0 ? state->callee_end : -1);
-        if (open <= 0) {
-            return plan;
-        }
         state->index = index;
         plan.caret_offset = ByteOf(state->source, caret);
         BeginStringArgument(plan.frame, scan, text, caret);
         state->scan = std::move(scan);
         state->step = Step::String;
+        // A string outside a call can still be one its type allows, as in
+        // `local diet: Diet = "`, `diet == "`, or `{ diet = "`.
         AskCallee(plan, *state, open);
+        AskTarget(plan, *state, index);
         plan.needs_luau = true;
         plan.state = state;
         return plan;
@@ -1922,6 +2222,7 @@ CompletionPlan plan_completion(std::string_view source, int caret, const std::ve
     list.site = CompleteSite::Name;
     plan.frame = list;
     state->step = Step::Name;
+    AskTarget(plan, *state, index);
     state->slot = CallArgumentAt(tokens, index);
     if (state->slot.found && AnonymousFunctionOpen(tokens, state->slot.open)) {
         state->outer = CallArgumentAt(tokens, state->slot.open - 1);
@@ -1931,8 +2232,6 @@ CompletionPlan plan_completion(std::string_view source, int caret, const std::ve
         }
     } else if (state->slot.found) {
         AskCallee(plan, *state, state->slot.open);
-        if (!NamedFunctionOpen(tokens, state->slot.open)) {
-        }
     }
     plan.state = state;
     return plan;
@@ -1948,7 +2247,7 @@ CompletionList finish_completion(const CompletionPlan& plan, const engine_core::
     // globals, game, script, and the keywords.
     if (!facts.ran) {
         if (state.step == Step::Name) {
-            FinishNames(state, engine_core::LuauCompletion{}, list);
+            FinishNames(state, engine_core::LuauCompletion{}, nullptr, list);
         } else if (state.step == Step::Type) {
             AddTypes(list.prefix, list.items);
         }
@@ -1966,7 +2265,7 @@ CompletionList finish_completion(const CompletionPlan& plan, const engine_core::
             FinishTypes(facts.completion, list);
             break;
         }
-        FinishNames(state, facts.completion, list);
+        FinishNames(state, facts.completion, FactType(facts, state.target_type), list);
         FinishCallback(state, facts, list);
         FinishSignature(state, facts, list);
         break;

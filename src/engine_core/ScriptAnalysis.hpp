@@ -97,6 +97,14 @@ struct LuauSuggestion {
     std::uint32_t declared = 0;
     // A global this script defines, as `function take() end` does.
     bool defined_here = false;
+    // The type a local's declaration wrote, such as Diet. Empty when none.
+    std::string written_type;
+    // A type name's `type` statement as written, such as
+    // `type Diet = "herbivore" | "carnivore"`. Empty when not found.
+    std::string declaration;
+    // What Luau writes for a function it generates for a function-typed
+    // argument, such as `function(a: number)  end`.
+    std::string insert;
 };
 
 struct LuauTypeAt;

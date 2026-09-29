@@ -20,6 +20,7 @@
 #include <string_view>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 namespace engine_core {
@@ -196,6 +197,9 @@ public:
     void set_guid(InstanceId id, std::string guid);
     // Linear. The live instance holding this GUID, or empty.
     std::optional<InstanceId> find_guid(std::string_view guid) const;
+    // Every live GUID and its instance, the root's as 0. Where two share a
+    // GUID, the one find_guid would return.
+    std::unordered_map<std::string, InstanceId> guid_index() const;
 
     // Keys the class does not know. A project load fills them; save writes them back.
     // Empty when id is dead.

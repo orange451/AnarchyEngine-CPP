@@ -16,13 +16,18 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
+#include <locale>
 #include <map>
 #include <memory>
 #include <random>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -2591,4 +2596,61 @@ TEST_CASE("P22 creating a project where no folder can go leaves the world as it 
     add_part(game, 0, "Keep");
     REQUIRE_THROWS_AS(Project::create(dir.path / "blocker" / "Place", game), ProjectError);
     REQUIRE(game.find_first_child(0, "Keep") != 0);
+}
+
+namespace {
+
+// The shortest %g form that reads back as the same value, found the slow way.
+template <typename T>
+std::string reference_shortest(T value, int max_precision) {
+    for (int precision = 1; precision <= max_precision; ++precision) {
+        char buffer[64];
+        std::snprintf(buffer, sizeof(buffer), "%.*g", precision, static_cast<double>(value));
+        std::istringstream stream(buffer);
+        stream.imbue(std::locale::classic());
+        T back{};
+        stream >> back;
+        if (back == value) {
+            return buffer;
+        }
+    }
+    return "";
+}
+
+}  // namespace
+
+TEST_CASE("P23 json numbers are the shortest form that reads back", "[P23][project]") {
+    using engine_core::JsonValue;
+    REQUIRE(engine_core::format_json_number(123.0) == "123");
+    REQUIRE(engine_core::format_json_number(-4096.0) == "-4096");
+    REQUIRE(engine_core::format_json_number(1e14) == "100000000000000");
+    REQUIRE(engine_core::format_json_number(1e15) == "1e+15");
+    REQUIRE(engine_core::format_json_number(1e-7) == "1e-07");
+    REQUIRE(engine_core::format_json_number(0.30000000000000004) == "0.30000000000000004");
+    REQUIRE(engine_core::write_json(JsonValue::number_from_float(std::numeric_limits<float>::max())) == "3.4028235e+38\n");
+    std::mt19937_64 random(12345);
+    std::uniform_real_distribution<double> unit(-1.0, 1.0);
+    std::uniform_int_distribution<int> power(-30, 30);
+    for (int i = 0; i < 100000; ++i) {
+        const double value = unit(random) * std::pow(10.0, power(random));
+        if (value == 0.0 || std::floor(value) == value) {
+            continue;
+        }
+        INFO(value);
+        REQUIRE(engine_core::format_json_number(value) == reference_shortest(value, 17));
+        const float single = static_cast<float>(value);
+        if (single == 0.f || !std::isfinite(single) || std::floor(single) == single) {
+            continue;
+        }
+        REQUIRE(engine_core::write_json(JsonValue::number_from_float(single)) == reference_shortest(single, 9) + "\n");
+    }
+    // JSON text reads back exactly.
+    JsonValue parsed;
+    std::string error;
+    REQUIRE(engine_core::parse_json("[0.1, -2.5e-3, 1e+300]", parsed, error));
+    REQUIRE(parsed.items()[0].as_number() == 0.1);
+    REQUIRE(parsed.items()[1].as_number() == -2.5e-3);
+    REQUIRE(parsed.items()[2].as_number() == 1e300);
+    REQUIRE_FALSE(engine_core::parse_json("[1e999]", parsed, error));
+    REQUIRE_FALSE(engine_core::parse_json("[1.5.2]", parsed, error));
 }

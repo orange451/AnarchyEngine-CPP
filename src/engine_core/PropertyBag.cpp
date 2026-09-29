@@ -1,42 +1,80 @@
 #include "PropertyBag.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
-#include <locale>
-#include <sstream>
 #include <stdexcept>
+#include <system_error>
 
 namespace engine_core {
 namespace {
 
 bool member_less(const JsonValue::Member& member, std::string_view key) { return member.first < key; }
 
-// Reads with the classic locale. strtod follows LC_NUMERIC, which may use a comma.
+// The whole of `text` as one number. from_chars ignores the locale, where
+// strtod follows LC_NUMERIC, which may use a comma.
 template <typename T>
-bool read_decimal(const std::string& text, T& out) {
-    std::istringstream stream(text);
-    stream.imbue(std::locale::classic());
+bool read_decimal(std::string_view text, T& out) {
     T value{};
-    stream >> value;
-    if (stream.fail()) {
-        return false;
-    }
-    stream.peek();
-    if (!stream.eof()) {
+    const std::from_chars_result read = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (read.ec != std::errc() || read.ptr != text.data() + text.size()) {
         return false;
     }
     out = value;
     return true;
 }
 
-std::string print_g(int precision, double value) {
+// The shortest %g form that reads back as `value`, as printf would write it
+// in the C locale. to_chars gives the shortest digits; the layout is %g's:
+// plain notation when -4 <= exponent < digits, else d.ddde+XX.
+template <typename T>
+std::string shortest(T value) {
     char buffer[64];
-    std::snprintf(buffer, sizeof(buffer), "%.*g", precision, value);
-    std::string text = buffer;
-    // snprintf follows LC_NUMERIC too.
-    std::replace(text.begin(), text.end(), ',', '.');
-    return text;
+    const std::to_chars_result written =
+        std::to_chars(buffer, buffer + sizeof(buffer), value, std::chars_format::scientific);
+    const std::string_view text(buffer, static_cast<std::size_t>(written.ptr - buffer));
+    const std::size_t e = text.find('e');
+    std::string_view mantissa = text.substr(0, e);
+    int exponent = 0;
+    std::from_chars(text.data() + e + 1 + (text[e + 1] == '+' ? 1 : 0), text.data() + text.size(), exponent);
+    std::string out;
+    if (!mantissa.empty() && mantissa[0] == '-') {
+        out.push_back('-');
+        mantissa.remove_prefix(1);
+    }
+    std::string digits;
+    for (char c : mantissa) {
+        if (c != '.') {
+            digits.push_back(c);
+        }
+    }
+    const int count = static_cast<int>(digits.size());
+    if (exponent < -4 || exponent >= count) {
+        out.push_back(digits[0]);
+        if (count > 1) {
+            out.push_back('.');
+            out.append(digits, 1, std::string::npos);
+        }
+        out.push_back('e');
+        out.push_back(exponent < 0 ? '-' : '+');
+        const int magnitude = exponent < 0 ? -exponent : exponent;
+        if (magnitude < 10) {
+            out.push_back('0');
+        }
+        out += std::to_string(magnitude);
+    } else if (exponent < 0) {
+        out += "0.";
+        out.append(static_cast<std::size_t>(-exponent - 1), '0');
+        out += digits;
+    } else {
+        out.append(digits, 0, static_cast<std::size_t>(exponent + 1));
+        if (exponent + 1 < count) {
+            out.push_back('.');
+            out.append(digits, static_cast<std::size_t>(exponent + 1), std::string::npos);
+        }
+    }
+    return out;
 }
 
 class Parser {
@@ -337,7 +375,7 @@ private:
             }
         }
         double value = 0.0;
-        if (!read_decimal(std::string(text_.substr(start, at_ - start)), value) || !std::isfinite(value)) {
+        if (!read_decimal(text_.substr(start, at_ - start), value) || !std::isfinite(value)) {
             at_ = start;
             return fail("bad number");
         }
@@ -545,15 +583,11 @@ JsonValue JsonValue::number_from_float(float value) {
     if (!std::isfinite(value)) {
         return number(static_cast<double>(value));
     }
-    for (int precision = 1; precision <= 9; ++precision) {
-        const std::string text = print_g(precision, static_cast<double>(value));
-        float back = 0.f;
-        if (read_decimal(text, back) && back == value) {
-            double exact = 0.0;
-            if (read_decimal(text, exact)) {
-                return number(exact);
-            }
-        }
+    // The double nearest the float's shortest text, so the file shows 0.1, not
+    // 0.10000000149011612.
+    double exact = 0.0;
+    if (read_decimal(shortest(value), exact)) {
+        return number(exact);
     }
     return number(static_cast<double>(value));
 }
@@ -699,17 +733,14 @@ std::string format_json_number(double value) {
     if (value == 0.0) {
         return "0";
     }
+    // Whole numbers are written out in full, 100000000000000 and not 1e+14.
     if (std::floor(value) == value && std::fabs(value) < 1e15) {
-        return print_g(17, value);
+        char buffer[32];
+        const std::to_chars_result written =
+            std::to_chars(buffer, buffer + sizeof(buffer), value, std::chars_format::fixed, 0);
+        return std::string(buffer, written.ptr);
     }
-    for (int precision = 1; precision <= 17; ++precision) {
-        const std::string text = print_g(precision, value);
-        double back = 0.0;
-        if (read_decimal(text, back) && back == value) {
-            return text;
-        }
-    }
-    return print_g(17, value);
+    return shortest(value);
 }
 
 }  // namespace engine_core

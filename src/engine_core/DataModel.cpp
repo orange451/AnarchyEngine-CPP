@@ -2063,6 +2063,21 @@ std::optional<InstanceId> DataModel::find_guid(std::string_view guid) const {
     return std::nullopt;
 }
 
+std::unordered_map<std::string, InstanceId> DataModel::guid_index() const {
+    std::unordered_map<std::string, InstanceId> out;
+    if (state_->root != nullptr && !state_->root->guid_.empty()) {
+        out.emplace(state_->root->guid_, InstanceId{0});
+    }
+    const std::uint32_t count = slot_count();
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const Slot& part = state_->slots[index];
+        if (part.alive && part.instance != nullptr && !part.instance->guid_.empty()) {
+            out.emplace(part.instance->guid_, make_instance_id(part.generation, index));
+        }
+    }
+    return out;
+}
+
 const PropertyBag& DataModel::extra_properties(InstanceId id) const {
     const DataModel* object = id == 0 ? state_->root : instance(id);
     return object != nullptr ? object->extras_ : empty_bag();

@@ -20,6 +20,7 @@
 #include <sstream>
 #include <system_error>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -762,28 +763,45 @@ void set_key(DataModel& world, InstanceId id, DataModel& object, const std::stri
 // in that order, then the rest by GUID. A child moves by leaving and rejoining
 // its parent, since setting the same parent does nothing.
 void order_children_as(DataModel& world, InstanceId id, const JsonValue& doc) {
-    std::vector<std::string> listed;
+    // A listed child's place in the file. The first listing counts.
+    std::unordered_map<std::string, std::size_t> listed;
     if (const JsonValue* children = doc.find("children"); children != nullptr && children->is_array()) {
         for (const JsonValue& item : children->items()) {
             if (item.is_string()) {
-                listed.push_back(item.as_string());
+                listed.emplace(item.as_string(), listed.size());
             }
         }
     }
-    const std::vector<InstanceId> now = world.get_children(id);
-    std::vector<InstanceId> order = now;
-    auto rank = [&](InstanceId child) {
-        const std::string guid = world.guid(child);
-        const auto at = std::find(listed.begin(), listed.end(), guid);
-        return std::make_pair(static_cast<std::size_t>(at - listed.begin()), at == listed.end() ? guid : std::string());
+    // Listed children in file order, then unlisted ones by GUID.
+    struct Ranked {
+        std::size_t at;
+        std::string guid;
+        InstanceId id;
     };
-    std::stable_sort(order.begin(), order.end(), [&](InstanceId a, InstanceId b) { return rank(a) < rank(b); });
-    if (order == now) {
-        return;
+    const std::vector<InstanceId> now = world.get_children(id);
+    std::vector<Ranked> ranked;
+    ranked.reserve(now.size());
+    for (InstanceId child : now) {
+        std::string guid = world.guid(child);
+        const auto found = listed.find(guid);
+        if (found != listed.end()) {
+            ranked.push_back(Ranked{found->second, std::string(), child});
+        } else {
+            ranked.push_back(Ranked{listed.size(), std::move(guid), child});
+        }
     }
-    for (InstanceId child : order) {
-        world.set_parent(child, DataModel::kNoParent);
-        world.set_parent(child, id);
+    std::stable_sort(ranked.begin(), ranked.end(), [](const Ranked& a, const Ranked& b) {
+        return a.at != b.at ? a.at < b.at : a.guid < b.guid;
+    });
+    // Children already in place at the front stay. Moving the rest to the end
+    // in order gives the whole order, with no events for the ones that stayed.
+    std::size_t first = 0;
+    while (first < now.size() && ranked[first].id == now[first]) {
+        ++first;
+    }
+    for (std::size_t at = first; at < ranked.size(); ++at) {
+        world.set_parent(ranked[at].id, DataModel::kNoParent);
+        world.set_parent(ranked[at].id, id);
     }
 }
 
@@ -1863,6 +1881,34 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
     using Type = Comparison::Action::Type;
     using Action = Comparison::Action;
     DataModel& world = *game_;
+    // find_guid walks every instance. This walks them once, and the creates
+    // below add what they make. An entry for an instance destroyed since reads
+    // as stale and is looked up again.
+    std::unordered_map<std::string, InstanceId> ids = world.guid_index();
+    auto find_guid = [&world, &ids](const std::string& guid) -> std::optional<InstanceId> {
+        if (guid.empty()) {
+            return std::nullopt;
+        }
+        const auto found = ids.find(guid);
+        if (found == ids.end()) {
+            return std::nullopt;
+        }
+        if ((found->second == 0 || world.alive(found->second)) && world.guid(found->second) == guid) {
+            return found->second;
+        }
+        const std::optional<InstanceId> live = world.find_guid(guid);
+        if (live) {
+            found->second = *live;
+        } else {
+            ids.erase(found);
+        }
+        return live;
+    };
+    auto create = [&world, &ids](const detail::PlanNode& node, InstanceId parent) {
+        const InstanceId made = create_from(world, node, parent);
+        ids[node.guid] = made;
+        return made;
+    };
     auto note = [&loaded](const std::string& name) {
         if (std::find(loaded.begin(), loaded.end(), name) == loaded.end()) {
             loaded.push_back(name);
@@ -1882,8 +1928,8 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
     each(Type::Create, [&](const Action& action) {
         const std::size_t index = compared.on_disk.at(action.guid);
         const std::string parent = compared.disk_parent(index);
-        if (const std::optional<InstanceId> up = world.find_guid(parent)) {
-            create_from(world, compared.plan[index], *up);
+        if (const std::optional<InstanceId> up = find_guid(parent)) {
+            create(compared.plan[index], *up);
             received.insert(parent);
             note(compared.plan[index].name);
         }
@@ -1893,18 +1939,18 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
         for (std::size_t index : compared.subtree(compared.on_disk.at(action.guid))) {
             const detail::PlanNode& node = compared.plan[index];
             const std::string parent = compared.disk_parent(index);
-            const std::optional<InstanceId> up = world.find_guid(parent);
-            if (world.find_guid(node.guid) || !up) {
+            const std::optional<InstanceId> up = find_guid(parent);
+            if (find_guid(node.guid) || !up) {
                 continue;
             }
-            create_from(world, node, *up);
+            create(node, *up);
             received.insert(parent);
             note(node.name);
         }
     });
     // A new class is a new instance with the same GUID, children, and place among its siblings.
     each(Type::Recreate, [&](const Action& action) {
-        const std::optional<InstanceId> old = world.find_guid(action.guid);
+        const std::optional<InstanceId> old = find_guid(action.guid);
         if (!old || *old == 0) {
             return;
         }
@@ -1913,7 +1959,7 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
         // Under its disk parent, unless that parent is it or under it.
         const InstanceId was = world.parent(*old);
         InstanceId parent = was;
-        if (const std::optional<InstanceId> up = world.find_guid(compared.disk_parent(index))) {
+        if (const std::optional<InstanceId> up = find_guid(compared.disk_parent(index))) {
             bool under = false;
             for (InstanceId cursor = *up; cursor != 0 && cursor != DataModel::kNoParent; cursor = world.parent(cursor)) {
                 under = under || cursor == *old;
@@ -1928,7 +1974,7 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
             world.set_parent(kid, DataModel::kNoParent);
         }
         world.destroy(*old);
-        const InstanceId made = create_from(world, node, parent);
+        const InstanceId made = create(node, parent);
         for (InstanceId kid : kids) {
             world.set_parent(kid, made);
         }
@@ -1959,7 +2005,7 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
     };
     std::stable_sort(sets.begin(), sets.end(), [&](const Action* a, const Action* b) { return depth(a) < depth(b); });
     for (const Action* action : sets) {
-        const std::optional<InstanceId> id = world.find_guid(action->guid);
+        const std::optional<InstanceId> id = find_guid(action->guid);
         if (!id) {
             continue;
         }
@@ -1970,7 +2016,7 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
             world.set_name(*id, node.name);
         } else if (action->key == "Parent") {
             const std::string parent = compared.disk_parent(index);
-            const std::optional<InstanceId> up = world.find_guid(parent);
+            const std::optional<InstanceId> up = find_guid(parent);
             bool cycle = false;
             for (InstanceId cursor = up ? *up : 0; up && cursor != 0 && cursor != DataModel::kNoParent;
                  cursor = world.parent(cursor)) {
@@ -1995,7 +2041,7 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
         const bool open = std::any_of(compared.rows.begin(), compared.rows.end(), [&](const SaveConflict& row) {
             return row.guid == parent && row.key == "children";
         });
-        const std::optional<InstanceId> id = world.find_guid(parent);
+        const std::optional<InstanceId> id = find_guid(parent);
         const auto disk = compared.on_disk.find(parent);
         if (!open && compared.keep_order.count(parent) == 0 && id && disk != compared.on_disk.end()) {
             order_children_as(world, *id, compared.plan[disk->second].doc);
@@ -2003,7 +2049,7 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
     }
     // Deleted on disk, last, after anything under them moved out.
     each(Type::Destroy, [&](const Action& action) {
-        if (const std::optional<InstanceId> id = world.find_guid(action.guid); id && *id != 0) {
+        if (const std::optional<InstanceId> id = find_guid(action.guid); id && *id != 0) {
             note(world.name(*id));
             world.destroy_tree(*id);
         }

@@ -1,5 +1,6 @@
 #include "LuauComplete.hpp"
 
+#include "LuauWords.hpp"
 #include "Utf8.hpp"
 
 #include "ScriptAnalysis.hpp"
@@ -93,17 +94,25 @@ bool IsNameStart(char32_t code) {
 
 bool IsNameContinue(char32_t code) { return IsNameStart(code) || IsDigit(code); }
 
-const char* const kKeywords[] = {"and",  "break",    "continue", "do",    "else", "elseif", "end",  "export", "false", "for",
-                                 "function", "if",    "in",       "local", "nil",  "not",    "or",   "repeat", "return", "then",
-                                 "true", "until", "while"};
+// Completion offers continue and export, but not const or type, which more
+// often name a variable.
+constexpr LuauContextual kCompletionContextual = LuauContextual::Continue | LuauContextual::Export;
 
-const char* KeywordText(std::string_view word) {
-    for (const char* candidate : kKeywords) {
-        if (word == candidate) {
-            return candidate;
+const char* KeywordText(std::string_view word) { return LuauKeyword(word, kCompletionContextual); }
+
+// The keywords completion offers, in alphabetical order.
+const std::vector<const char*>& CompletionKeywords() {
+    static const std::vector<const char*> words = [] {
+        std::vector<const char*> out(std::begin(kLuauReserved), std::end(kLuauReserved));
+        for (const LuauContextualWord& word : kLuauContextual) {
+            if ((static_cast<unsigned>(kCompletionContextual) & static_cast<unsigned>(word.flag)) != 0) {
+                out.push_back(word.text);
+            }
         }
-    }
-    return nullptr;
+        std::sort(out.begin(), out.end(), [](const char* a, const char* b) { return std::strcmp(a, b) < 0; });
+        return out;
+    }();
+    return words;
 }
 
 int LongSeparator(const std::u32string& text, int index) {
@@ -1278,7 +1287,7 @@ public:
             }
             take("script", script_type, false, lookup_global("script"));
         }
-        for (const char* keyword : kKeywords) {
+        for (const char* keyword : CompletionKeywords()) {
             take(keyword, "keyword", false, nullptr);
         }
     }

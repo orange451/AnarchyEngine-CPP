@@ -1,3 +1,4 @@
+#include "LuauWords.hpp"
 #include "ScriptPairs.hpp"
 #include "Utf8.hpp"
 
@@ -19,15 +20,7 @@ bool IsNameStart(char32_t code) {
 bool IsNameContinue(char32_t code) { return IsNameStart(code) || IsDigit(code); }
 
 const char* Keyword(std::string_view word) {
-    static const char* kWords[] = {"and",  "break", "continue", "do",    "else", "elseif", "end",  "export", "false", "for",
-                                   "function", "if", "in",       "local", "nil",  "not",    "or",   "repeat", "return", "then",
-                                   "true", "type",  "until",     "while"};
-    for (const char* candidate : kWords) {
-        if (word == candidate) {
-            return candidate;
-        }
-    }
-    return nullptr;
+    return LuauKeyword(word, LuauContextual::Continue | LuauContextual::Export | LuauContextual::Type);
 }
 
 // [=*[ or ]=*] at `index`. The count of '=' , or -1 when this is not a long bracket.

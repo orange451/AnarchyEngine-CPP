@@ -1,4 +1,5 @@
 #include "LuauHighlight.hpp"
+#include "LuauWords.hpp"
 #include "Utf8.hpp"
 
 #include <string>
@@ -19,17 +20,8 @@ bool IsNameContinue(char32_t code) {
 bool IsDigit(char32_t code) { return code >= U'0' && code <= U'9'; }
 
 const char* Keyword(std::string_view word) {
-    // continue, const, export, and type are contextual in Luau, but read as keywords.
-    static const char* kWords[] = {"and",   "break", "const",  "continue", "do",    "else", "elseif", "end",
-                                   "export", "false", "for",   "function", "if",    "in",   "local",  "nil",
-                                   "not",   "or",    "repeat", "return",   "then",  "true", "type",   "until",
-                                   "while"};
-    for (const char* candidate : kWords) {
-        if (word == candidate) {
-            return "keyword";
-        }
-    }
-    return nullptr;
+    // Every contextual word is painted as a keyword too.
+    return LuauKeyword(word, LuauContextual::All) != nullptr ? "keyword" : nullptr;
 }
 
 const char* Builtin(std::string_view word) {

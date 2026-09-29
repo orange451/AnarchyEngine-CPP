@@ -999,3 +999,25 @@ TEST_CASE("A26 a destroyed script's module leaves the checker's cache", "[A26]")
     settle(analysis);
     REQUIRE(analysis.cached_modules() == 1);
 }
+
+TEST_CASE("A27 --!nonstrict below a first comment line still checks unknown members", "[A27]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Render",
+                                             "-- Render loop\n"
+                                             "--!nonstrict\n"
+                                             "local run = game:GetService(\"RunService\")\n"
+                                             "local blocked = run.PreRender\n"
+                                             "return blocked\n");
+    settle(analysis);
+    const std::vector<engine_core::Diagnostic> diagnostics = analysis.diagnostics(script.id());
+    INFO(dump(diagnostics));
+    bool prerender = false;
+    for (const engine_core::Diagnostic& diagnostic : diagnostics) {
+        if (diagnostic.message.find("PreRender") != std::string::npos) {
+            prerender = true;
+            REQUIRE(diagnostic.severity == engine_core::Severity::Warning);
+        }
+    }
+    REQUIRE(prerender);
+}

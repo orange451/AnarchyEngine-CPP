@@ -945,16 +945,30 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
     // frontend does not lint again.
     // The full checker runs for both strict and nonstrict. Nonstrict then
     // downgrades type errors to warnings. `--!nocheck` never reaches here.
-    // A leading `--!nonstrict` is rewritten so Luau does not switch to its
-    // smaller nonstrict pass, which skips unknown properties such as PreRender.
+    // The `--!nonstrict` that set the mode is rewritten so Luau does not switch
+    // to its smaller nonstrict pass, which skips unknown properties such as
+    // PreRender. It is the first header mode comment, on whatever line.
     try {
         std::string check_source = self->source;
         if (mode == Luau::Mode::Nonstrict) {
-            const std::size_t line_end = check_source.find('\n');
-            const std::size_t head = line_end == std::string::npos ? check_source.size() : line_end;
-            const std::size_t at = check_source.find("--!nonstrict");
-            if (at != std::string::npos && at < head) {
-                check_source.replace(at, std::char_traits<char>::length("--!nonstrict"), "--!strict");
+            for (const Luau::HotComment& comment : parsed.hotcomments) {
+                if (!comment.header ||
+                    (comment.content != "nocheck" && comment.content != "nonstrict" && comment.content != "strict")) {
+                    continue;
+                }
+                std::size_t line_start = 0;
+                for (unsigned line = 0; line < comment.location.begin.line && line_start != std::string::npos; ++line) {
+                    line_start = check_source.find('\n', line_start);
+                    line_start = line_start == std::string::npos ? line_start : line_start + 1;
+                }
+                if (comment.content == "nonstrict" && line_start != std::string::npos) {
+                    const std::size_t line_end = check_source.find('\n', line_start);
+                    const std::size_t at = check_source.find("--!nonstrict", line_start);
+                    if (at != std::string::npos && (line_end == std::string::npos || at < line_end)) {
+                        check_source.replace(at, std::char_traits<char>::length("--!nonstrict"), "--!strict");
+                    }
+                }
+                break;
             }
         }
         const std::string module_name = module_name_of(job.id);
@@ -1411,6 +1425,13 @@ bool ScriptAnalysis::enabled() const {
 void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
     if (ids.empty()) {
         return;
+    }
+    {
+        // The capture copies every script's source. Skip it when nothing will run.
+        std::lock_guard<std::mutex> lock(state_->mu);
+        if (!state_->enabled || state_->stop) {
+            return;
+        }
     }
     const std::shared_ptr<WorldSnap> world = capture_world(game_);
     ensure_worker();

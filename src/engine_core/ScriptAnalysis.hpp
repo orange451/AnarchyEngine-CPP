@@ -3,6 +3,7 @@
 #include "LuaApi.hpp"
 #include "types.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -92,6 +93,15 @@ struct LuauTypeAt {
     // The type as Luau prints it, and a function's parts as LuauSuggestion has them.
     LuauSuggestion described;
     std::string error;
+};
+
+// A Luau answer on its way from the analysis worker. `ready` turns true once,
+// after the worker has written `completion` or `type`; read them only then.
+// A request a newer one in its lane replaced is ready with nothing in it.
+struct LuauAnswer {
+    std::atomic<bool> ready{false};
+    LuauCompletion completion;
+    LuauTypeAt type;
 };
 
 // Incremental analysis of every Lua source in one DataModel.
@@ -185,6 +195,13 @@ public:
     // luau_complete checks and answers. A ':' member leaves self out of `params`.
     LuauTypeAt luau_type_at(const std::vector<LuaNode>& world, InstanceId script, std::string source,
                             std::size_t offset, std::chrono::milliseconds wait);
+    // The same two questions without waiting. Poll the answer's `ready`. A new
+    // request in `lane` replaces one there that the worker has not started, so
+    // typing never queues more than one per lane.
+    std::shared_ptr<const LuauAnswer> luau_complete_later(const std::vector<LuaNode>& world, InstanceId script,
+                                                          std::string source, std::size_t offset, const char* lane);
+    std::shared_ptr<const LuauAnswer> luau_type_at_later(const std::vector<LuaNode>& world, InstanceId script,
+                                                         std::string source, std::size_t offset, const char* lane);
 
 private:
     struct State;
@@ -194,6 +211,9 @@ private:
     std::shared_ptr<LuauRequest> ask_luau(bool type_at, const std::vector<LuaNode>& world,
                                                      InstanceId script, std::string source, std::size_t offset,
                                                      std::chrono::milliseconds wait, std::string& error);
+    // Queues a Luau request without waiting. Null when analysis has stopped.
+    std::shared_ptr<LuauRequest> queue_luau(bool type_at, const std::vector<LuaNode>& world, InstanceId script,
+                                            std::string source, std::size_t offset, const char* lane);
 
     void ensure_worker();
     void shutdown();

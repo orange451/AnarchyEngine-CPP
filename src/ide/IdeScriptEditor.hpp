@@ -2,6 +2,7 @@
 
 #include "ColorLiterals.hpp"
 #include "CompletionPopup.hpp"
+#include "LuauTypedCompletion.hpp"
 #include "IdePane.hpp"
 #include "LuaApi.hpp"
 #include "TextSearch.hpp"
@@ -105,6 +106,8 @@ private:
     void note_text();
     void push(const std::string& text);
     void refresh_completion(bool force);
+    // Shows Luau's answers for the last list, once they have arrived.
+    void take_luau_list();
     void dismiss_completion();
     void accept_completion(bool parentheses);
     void move_completion(int delta);
@@ -148,6 +151,8 @@ private:
     std::shared_ptr<jadefx::CodeArea> area_;
     std::shared_ptr<jadefx::Label> status_;
     CompletionPopup completion_;
+    // Luau's answers for the list the popup last showed, on their way.
+    std::optional<PendingLuauList> luau_list_;
     std::shared_ptr<Commit> commit_;
     std::string shown_name_;
     // DataModel::authored_revision and tree_revision when reapply last read

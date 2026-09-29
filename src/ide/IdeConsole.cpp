@@ -65,6 +65,22 @@ void IdeConsole::layoutChildren() {
         }
         pulling_ = false;
     }
+    if (luau_list_) {
+        bool changed = false;
+        if (take_luau_answers(*luau_list_, changed)) {
+            PendingLuauList pending = std::move(*luau_list_);
+            luau_list_.reset();
+            double x = 0;
+            double y = 0;
+            double height = 0;
+            // Only while the popup, the caret, and the text are as they were asked about.
+            if (changed && command_ && !completion_.accepting() && completion_.isOpen() == pending.shown &&
+                command_->getCaretPosition() == pending.caret && command_->getText() == pending.source &&
+                command_->caretBounds(x, y, height)) {
+                completion_.present(std::move(pending.list), pending.force, *command_, x, y, height);
+            }
+        }
+    }
     if (completion_.isOpen() && command_) {
         double x = 0;
         double y = 0;
@@ -230,11 +246,13 @@ void IdeConsole::refresh_completion(bool force) {
     const int caret = command_->getCaretPosition();
     const std::vector<engine_core::LuaNode> place = completion_world(engine_, 0, nullptr);
     CompletionList list = complete_luau(text, caret, place, 0, false);
-    // What the resolver cannot follow gets Luau's answer, as in the script editor.
-    constexpr std::chrono::milliseconds kLuauWait(100);
-    complete_from_luau(list, engine_.analysis(), text, caret, place, 0, kLuauWait);
-    signature_from_luau(list, engine_.analysis(), text, place, 0, kLuauWait);
+    // What the resolver cannot follow is asked of Luau, as in the script editor.
+    // Its answer shows on a later frame.
+    luau_list_ = ask_luau_for_list(list, engine_.analysis(), text, caret, place, 0, force);
     completion_.present(std::move(list), force, *command_, x, y, height);
+    if (luau_list_) {
+        luau_list_->shown = completion_.isOpen();
+    }
 }
 
 void IdeConsole::accept_completion(bool parentheses) {

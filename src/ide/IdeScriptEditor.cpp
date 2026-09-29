@@ -25,8 +25,6 @@ namespace {
 
 constexpr std::chrono::milliseconds kSaveDelay(50);
 constexpr std::chrono::milliseconds kLockWait(5);
-// How long a completion waits on Luau's own answer when the resolver has none.
-constexpr std::chrono::milliseconds kLuauCompletionWait(100);
 // The most matches the find bar counts and highlights, as in VS Code.
 constexpr std::size_t kFindLimit = 19999;
 
@@ -168,6 +166,12 @@ private:
     double anchor_y_ = 0;
     std::chrono::steady_clock::time_point hover_since_{};
     bool hover_waiting_ = false;
+    // Luau's type for a name the resolver could not type, on its way, with the
+    // name, the resolver's hover, and the text it was asked about.
+    std::shared_ptr<const engine_core::LuauAnswer> hover_answer_;
+    std::optional<HoverWord> hover_word_;
+    HoverInfo hover_ours_;
+    std::string hover_text_;
 };
 
 struct IdeScriptEditor::Commit {
@@ -607,6 +611,7 @@ void IdeScriptEditor::layoutChildren() {
             }
         }
     }
+    take_luau_list();
     if (completion_open()) {
         place_completion();
         if (area_) {
@@ -1167,11 +1172,35 @@ void IdeScriptEditor::refresh_completion(bool force) {
     const int caret = area_->caretPosition();
     const std::vector<engine_core::LuaNode> place = world();
     CompletionList list = complete_luau(text, caret, place, id_);
-    // A value the resolver cannot follow, such as a metatable object or a loop
-    // variable, gets Luau's own answer. The worker is usually idle between checks.
-    complete_from_luau(list, engine_.analysis(), text, caret, place, id_, kLuauCompletionWait);
-    signature_from_luau(list, engine_.analysis(), text, place, id_, kLuauCompletionWait);
+    // What the resolver cannot follow, such as a metatable object or a loop
+    // variable, is asked of Luau. Its answer shows on a later frame; the
+    // resolver's list shows now, so typing never waits on the type checker.
+    luau_list_ = ask_luau_for_list(list, engine_.analysis(), text, caret, place, id_, force);
     completion_.present(std::move(list), force, *area_, bounds.x, bounds.y, bounds.height);
+    if (luau_list_) {
+        luau_list_->shown = completion_.isOpen();
+    }
+}
+
+void IdeScriptEditor::take_luau_list() {
+    if (!luau_list_) {
+        return;
+    }
+    bool changed = false;
+    if (!take_luau_answers(*luau_list_, changed)) {
+        return;
+    }
+    PendingLuauList pending = std::move(*luau_list_);
+    luau_list_.reset();
+    if (!changed || !area_ || loading_ || missing_ || completion_.accepting() ||
+        completion_.isOpen() != pending.shown || area_->caretPosition() != pending.caret) {
+        return;
+    }
+    const jadefx::TextBounds bounds = area_->caretBounds();
+    if (!bounds.valid || area_->getText() != pending.source) {
+        return;
+    }
+    completion_.present(std::move(pending.list), pending.force, *area_, bounds.x, bounds.y, bounds.height);
 }
 
 void ScriptCodeArea::handleKey(jadefx::KeyEvent& event) {
@@ -1445,6 +1474,7 @@ bool ScriptCodeArea::sameWord(int index) const {
 }
 
 void ScriptCodeArea::dismissHover() {
+    hover_answer_.reset();
     hover_index_ = -1;
     hover_begin_ = -1;
     hover_end_ = -1;
@@ -1585,9 +1615,17 @@ void ScriptCodeArea::showHover() {
     }
     const std::string text = getText();
     const std::vector<engine_core::LuaNode> place = editor->world();
-    HoverInfo info = hover_luau(text, hover_index_, place, editor->id_);
-    // A name the resolver cannot type gets Luau's type for it.
-    hover_from_luau(info, editor->engine_.analysis(), text, hover_index_, place, editor->id_, kLuauCompletionWait);
+    const HoverInfo info = hover_luau(text, hover_index_, place, editor->id_);
+    // A name the resolver cannot type is asked of Luau. The resolver's tip, if
+    // any, shows now, and tickHover replaces it when Luau answers.
+    hover_answer_.reset();
+    hover_word_ = hover_word(text, hover_index_);
+    if (hover_word_ && wants_luau_hover(info, *hover_word_)) {
+        hover_answer_ =
+            editor->engine_.analysis().luau_type_at_later(place, editor->id_, text, hover_word_->offset, "hover");
+        hover_ours_ = info;
+        hover_text_ = text;
+    }
     if (!info.found || info.title.empty()) {
         hover_waiting_ = false;
         return;
@@ -1598,6 +1636,18 @@ void ScriptCodeArea::showHover() {
 }
 
 void ScriptCodeArea::tickHover() {
+    if (hover_answer_ && hover_answer_->ready.load(std::memory_order_acquire)) {
+        const std::shared_ptr<const engine_core::LuauAnswer> answer = std::move(hover_answer_);
+        hover_answer_.reset();
+        HoverInfo info = hover_ours_;
+        // Only while the pointer is still on that name and the text is as it was.
+        if (hover_word_ && hover_index_ >= hover_word_->begin && hover_index_ < hover_word_->end &&
+            apply_luau_hover(info, *hover_word_, answer->type) && getText() == hover_text_) {
+            hover_begin_ = info.begin;
+            hover_end_ = info.end;
+            showTip(info.title, info.detail, info.summary, theme_color("--ide-popup-text-color"));
+        }
+    }
     if (!hover_waiting_ || hover_index_ < 0) {
         return;
     }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CompletionPopup.hpp"
+#include "LuauTypedCompletion.hpp"
 #include "ConsoleLog.hpp"
 #include "IdePane.hpp"
 #include "ide/TextUndoStack.hpp"
@@ -8,6 +9,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -69,6 +71,8 @@ private:
     std::shared_ptr<jadefx::TextField> command_;
     std::shared_ptr<jadefx::Menu> menu_;
     CompletionPopup completion_;
+    // Luau's answers for the list the popup last showed, on their way.
+    std::optional<PendingLuauList> luau_list_;
     std::deque<PendingCommand> pending_;
     std::vector<std::string> history_;
     // history_.size() while not browsing.

@@ -18,6 +18,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -2714,11 +2715,140 @@ void testTypedHoverAndSignature() {
     }
 }
 
+// Waits for the pending answers as the editor's frames do. False after 20 seconds.
+bool settle_pending(ide::PendingLuauList& pending, bool& changed) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!ide::take_luau_answers(pending, changed)) {
+        if (std::chrono::steady_clock::now() > deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
+bool answered(const std::shared_ptr<const engine_core::LuauAnswer>& answer) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!answer->ready.load(std::memory_order_acquire)) {
+        if (std::chrono::steady_clock::now() > deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
+void testTypedLater() {
+    const char* account =
+        "local Account = {}\n"
+        "Account.__index = Account\n"
+        "function Account.new(owner: string)\n"
+        "    return setmetatable({ owner = owner }, Account)\n"
+        "end\n"
+        "function Account:Deposit(amount: number)\n"
+        "end\n"
+        "return Account\n";
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
+    world.push_back(node(9, 0, "Main", "Script"));
+    world.push_back(node(8, 0, "Account", "ModuleScript", account));
+    const std::string use = "local Account = require(game.Account)\nlocal a = Account.new(\"me\")\n";
+
+    // The resolver's empty list shows now; Luau's members arrive on a later frame.
+    const std::string members = use + "a:";
+    const ide::CompletionList empty = ide::complete_luau(members, static_cast<int>(members.size()), world, 9);
+    std::optional<ide::PendingLuauList> pending = ide::ask_luau_for_list(
+        empty, typed_analysis(), members, static_cast<int>(members.size()), world, 9, false);
+    if (!pending || !pending->members) {
+        fail("an empty member list asks Luau");
+    } else {
+        bool changed = false;
+        if (!settle_pending(*pending, changed)) {
+            fail("Luau answers a member list");
+        }
+        expect_has(pending->list, "Deposit", "Luau's members arrive later");
+        if (!changed || pending->caret != static_cast<int>(members.size()) || pending->source != members) {
+            fail("the answer says what it changed and what it was asked about");
+        }
+    }
+
+    // A signature arrives the same way.
+    const std::string call = use + "a:Deposit(";
+    const ide::CompletionList unsigned_list = ide::complete_luau(call, static_cast<int>(call.size()), world, 9);
+    std::optional<ide::PendingLuauList> signature = ide::ask_luau_for_list(
+        unsigned_list, typed_analysis(), call, static_cast<int>(call.size()), world, 9, false);
+    if (!signature || !signature->signature) {
+        fail("a call without a signature asks Luau");
+    } else {
+        bool changed = false;
+        settle_pending(*signature, changed);
+        expect_signature(signature->list, "(amount: number)", "Luau's signature arrives later");
+    }
+
+    // A list the resolver filled asks nothing.
+    std::vector<engine_core::LuaNode> lib;
+    lib.push_back(node(0, 0xffffffffu, "game", "Game"));
+    lib.push_back(node(8, 0, "Lib", "ModuleScript", "return { alpha = 1 }\n"));
+    lib.push_back(node(9, 0, "Main", "Script", ""));
+    const std::string filled = "local m = require(game:FindFirstChild(\"Lib\"))\nm.";
+    const ide::CompletionList known = ide::complete_luau(filled, static_cast<int>(filled.size()), lib, 9);
+    if (ide::ask_luau_for_list(known, typed_analysis(), filled, static_cast<int>(filled.size()), lib, 9, false)) {
+        fail("a list the resolver filled asks Luau nothing");
+    }
+
+    // Typing faster than the worker answers: a newer request in a lane
+    // replaces one still waiting there, which then answers with nothing.
+    std::string big;
+    for (int index = 0; index < 300; ++index) {
+        big += "local function f" + std::to_string(index) + "(x: number)\n    return x * 2\nend\n";
+    }
+    big += "local t = {}\nt.";
+    const auto busy = typed_analysis().luau_complete_later({}, 0, big, big.size(), "busy");
+    const auto older = typed_analysis().luau_complete_later(world, 9, members, members.size(), "members");
+    const auto newer = typed_analysis().luau_complete_later(world, 9, members, members.size(), "members");
+    if (!busy || !older || !newer || !answered(busy) || !answered(older) || !answered(newer)) {
+        fail("every queued request is answered");
+    } else {
+        if (older->completion.ran) {
+            fail("a replaced request answers with nothing");
+        }
+        if (!newer->completion.ran) {
+            fail("the newer request is answered: " + newer->completion.error);
+        }
+    }
+}
+
 // Everyday code the tests above do not cover, asked of both engines when the
 // shadow is on. It checks nothing: the shadow file says what each one offered.
 void shadowProbes() {
     if (shadow() == nullptr) {
         return;
+    }
+    // How long Luau takes on a large script: the first ask checks it all, and
+    // each later ask checks the edited buffer again.
+    {
+        std::string big = "local Account = {}\nAccount.__index = Account\n";
+        for (int index = 0; index < 400; ++index) {
+            const std::string n = std::to_string(index);
+            big += "function Account:Method" + n + "(value: number, label: string)\n";
+            big += "    local total = value * 2\n";
+            big += "    for i = 1, 10 do\n        total += i\n    end\n";
+            big += "    self.field" + n + " = label .. tostring(total)\n";
+            big += "    return total, label\nend\n";
+        }
+        big += "local a = setmetatable({}, Account)\na:";
+        for (int round = 0; round < 3; ++round) {
+            const auto start = std::chrono::steady_clock::now();
+            const engine_core::LuauCompletion answer =
+                typed_analysis().luau_complete({}, 0, big, big.size(), std::chrono::seconds(60));
+            const auto ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+            shadow()->out << "=== timing: " << big.size() << " bytes, round " << round << ", " << ms << " ms, "
+                          << answer.items.size() << " names" << (answer.ran ? "" : " (failed: " + answer.error + ")")
+                          << "\n";
+            std::printf("luau timing: %zu bytes, round %d, %lld ms, %zu names\n", big.size(), round,
+                        static_cast<long long>(ms), answer.items.size());
+        }
     }
     const char* account =
         "local Account = {}\n"
@@ -2794,6 +2924,7 @@ int RunLuauCompleteTests() {
         testDeepNesting();
         testTypedFallback();
         testTypedHoverAndSignature();
+        testTypedLater();
         shadowProbes();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());

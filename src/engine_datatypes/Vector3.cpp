@@ -109,19 +109,30 @@ int vector3_lerp(lua_State* state) {
     return 1;
 }
 
-int vector3_max(lua_State* state) {
-    const float* a = check_vector3(state, 1);
-    const float* b = check_vector3(state, 2);
-    lua_pushvector(state, b[0] > a[0] ? b[0] : a[0], b[1] > a[1] ? b[1] : a[1], b[2] > a[2] ? b[2] : a[2]);
+// Max and Min take any number of vectors after the receiver, as Vector2's do.
+int vector3_extreme(lua_State* state, bool max) {
+    const float* first = check_vector3(state, 1);
+    float result[3] = {first[0], first[1], first[2]};
+    const int count = lua_gettop(state);
+    if (count < 2) {
+        check_vector3(state, 2);
+    }
+    for (int index = 2; index <= count; ++index) {
+        const float* other = check_vector3(state, index);
+        for (int axis = 0; axis < 3; ++axis) {
+            const bool take = max ? other[axis] > result[axis] : other[axis] < result[axis];
+            if (take) {
+                result[axis] = other[axis];
+            }
+        }
+    }
+    lua_pushvector(state, result[0], result[1], result[2]);
     return 1;
 }
 
-int vector3_min(lua_State* state) {
-    const float* a = check_vector3(state, 1);
-    const float* b = check_vector3(state, 2);
-    lua_pushvector(state, b[0] < a[0] ? b[0] : a[0], b[1] < a[1] ? b[1] : a[1], b[2] < a[2] ? b[2] : a[2]);
-    return 1;
-}
+int vector3_max(lua_State* state) { return vector3_extreme(state, true); }
+
+int vector3_min(lua_State* state) { return vector3_extreme(state, false); }
 
 // X/Y/Z are also answered by the VM before this runs. Magnitude, Unit, and the
 // methods are not, so they live here. The method table is the closure upvalue.

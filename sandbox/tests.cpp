@@ -7,6 +7,8 @@
 #include "SnapshotPump.hpp"
 #include "TestTriangle.hpp"
 #include "Engine.hpp"
+#include "Enum.hpp"
+#include "UserInputService.hpp"
 #include "Events.hpp"
 #include "IClock.hpp"
 #include "IRenderer.hpp"
@@ -4522,4 +4524,50 @@ TEST_CASE("W1 children keep their order through removals at either end", "[W1]")
     engine_core::Folder& last = game.create<engine_core::Folder>();
     game.set_parent(last.id(), game.id());
     REQUIRE(game.next_sibling(away.id()) == last.id());
+}
+
+TEST_CASE("K1 every KeyCode but Unknown comes from exactly one GLFW key", "[K1][input]") {
+    const engine_core::EnumType& codes = engine_core::key_code_enum();
+    std::vector<int> from(512, 0);
+    for (int glfw = -1; glfw <= 400; ++glfw) {
+        const int code = engine_core::UserInputService::key_code_from_glfw(glfw);
+        if (code == 0) {
+            continue;
+        }
+        INFO("GLFW key " << glfw << " gives " << code);
+        REQUIRE(engine_core::enum_item_name(codes, code) != nullptr);
+        REQUIRE(code < static_cast<int>(from.size()));
+        ++from[static_cast<std::size_t>(code)];
+    }
+    for (int index = 0; index < codes.count; ++index) {
+        const engine_core::EnumEntry& item = codes.items[index];
+        if (item.value == 0) {
+            continue;
+        }
+        INFO(item.name);
+        REQUIRE(from[static_cast<std::size_t>(item.value)] == 1);
+    }
+}
+
+TEST_CASE("V1 Vector3 Max and Min take any number of vectors, as Vector2's do", "[V1]") {
+    ScriptRig rig;
+    add_script(rig.game, "Extremes", R"(
+        local high = Vector3.new(1, 5, 3):Max(Vector3.new(2, 1, 1), Vector3.new(0, 0, 9))
+        local low = Vector3.new(1, 5, 3):Min(Vector3.new(2, 1, 1), Vector3.new(0, 0, 9))
+        _G.high = high.X * 100 + high.Y * 10 + high.Z
+        _G.low = low.X * 100 + low.Y * 10 + low.Z
+        _G.one = Vector3.new(1, 2, 3):Max(Vector3.new(3, 2, 1)).X
+    )");
+    rig.game.start_simulation();
+    rig.frames(1);
+    INFO(rig.runtime.last_error());
+    double high = 0;
+    double low = 0;
+    double one = 0;
+    REQUIRE(rig.runtime.global_number("high", high));
+    REQUIRE(rig.runtime.global_number("low", low));
+    REQUIRE(rig.runtime.global_number("one", one));
+    REQUIRE(high == 259);
+    REQUIRE(low == 1);
+    REQUIRE(one == 3);
 }

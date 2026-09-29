@@ -1,9 +1,13 @@
 #include "UserInputService.hpp"
 
+#include "Contract.hpp"
+#include "Enum.hpp"
 #include "LuaApi.hpp"
 
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
+#include <vector>
 
 namespace engine_core {
 namespace {
@@ -15,120 +19,63 @@ constexpr std::size_t kMaxQueued = 256;
 
 bool valid_button(int button) { return button >= 0 && button < 3; }
 
+// GLFW key numbers, by the KeyCode item each one is. `count` covers GLFW's
+// runs, such as A to Z, whose KeyCode items are consecutive too. The values
+// come from the KeyCode enum, so this table holds no Roblox numbers.
+struct GlfwKeys {
+    int glfw;
+    const char* first;
+    int count;
+};
+
+const GlfwKeys kGlfwKeys[] = {
+    {32, "Space", 1},         {39, "Quote", 1},         {44, "Comma", 1},         {45, "Minus", 1},
+    {46, "Period", 1},        {47, "Slash", 1},         {48, "Zero", 10},         {59, "Semicolon", 1},
+    {61, "Equals", 1},        {65, "A", 26},            {91, "LeftBracket", 1},   {92, "BackSlash", 1},
+    {93, "RightBracket", 1},  {96, "Backquote", 1},     {256, "Escape", 1},       {257, "Return", 1},
+    {258, "Tab", 1},          {259, "Backspace", 1},    {260, "Insert", 1},       {261, "Delete", 1},
+    {262, "Right", 1},        {263, "Left", 1},         {264, "Down", 1},         {265, "Up", 1},
+    {266, "PageUp", 1},       {267, "PageDown", 1},     {268, "Home", 1},         {269, "End", 1},
+    {280, "CapsLock", 1},     {281, "ScrollLock", 1},   {282, "NumLock", 1},      {283, "Print", 1},
+    {284, "Pause", 1},        {290, "F1", 15},          {320, "KeypadZero", 17},  {340, "LeftShift", 1},
+    {341, "LeftControl", 1},  {342, "LeftAlt", 1},      {343, "LeftSuper", 1},    {344, "RightShift", 1},
+    {345, "RightControl", 1}, {346, "RightAlt", 1},     {347, "RightSuper", 1},   {348, "Menu", 1},
+};
+
+// GLFW key number -> KeyCode value, 0 for keys KeyCode does not have.
+std::vector<int> build_key_table() {
+    const EnumType& codes = key_code_enum();
+    std::vector<int> table;
+    for (const GlfwKeys& run : kGlfwKeys) {
+        int first = -1;
+        for (int index = 0; index < codes.count; ++index) {
+            if (std::strcmp(codes.items[index].name, run.first) == 0) {
+                first = index;
+                break;
+            }
+        }
+        if (first < 0 || first + run.count > codes.count) {
+            contract_fail("GLFW key table names a KeyCode the enum does not have");
+        }
+        const std::size_t last = static_cast<std::size_t>(run.glfw + run.count);
+        if (table.size() < last) {
+            table.resize(last, 0);
+        }
+        for (int offset = 0; offset < run.count; ++offset) {
+            table[static_cast<std::size_t>(run.glfw + offset)] = codes.items[first + offset].value;
+        }
+    }
+    return table;
+}
+
 }  // namespace
 
 int UserInputService::key_code_from_glfw(int glfw_key) {
-    // Letters: GLFW has uppercase ASCII, KeyCode lowercase.
-    if (glfw_key >= 65 && glfw_key <= 90) {
-        return glfw_key + 32;
+    static const std::vector<int> table = build_key_table();
+    if (glfw_key < 0 || static_cast<std::size_t>(glfw_key) >= table.size()) {
+        return 0;
     }
-    switch (glfw_key) {
-    // Printable keys other than letters share their ASCII code.
-    case 32:  // Space
-    case 39:  // Quote
-    case 44:  // Comma
-    case 45:  // Minus
-    case 46:  // Period
-    case 47:  // Slash
-    case 48:
-    case 49:
-    case 50:
-    case 51:
-    case 52:
-    case 53:
-    case 54:
-    case 55:
-    case 56:
-    case 57:  // Zero to Nine
-    case 59:  // Semicolon
-    case 61:  // Equals
-    case 91:  // LeftBracket
-    case 92:  // BackSlash
-    case 93:  // RightBracket
-    case 96:  // Backquote
-        return glfw_key;
-    case 256:
-        return 27;  // Escape
-    case 257:
-        return 13;  // Return
-    case 258:
-        return 9;  // Tab
-    case 259:
-        return 8;  // Backspace
-    case 260:
-        return 277;  // Insert
-    case 261:
-        return 127;  // Delete
-    case 262:
-        return 275;  // Right
-    case 263:
-        return 276;  // Left
-    case 264:
-        return 274;  // Down
-    case 265:
-        return 273;  // Up
-    case 266:
-        return 280;  // PageUp
-    case 267:
-        return 281;  // PageDown
-    case 268:
-        return 278;  // Home
-    case 269:
-        return 279;  // End
-    case 280:
-        return 301;  // CapsLock
-    case 281:
-        return 302;  // ScrollLock
-    case 282:
-        return 300;  // NumLock
-    case 283:
-        return 316;  // Print
-    case 284:
-        return 19;  // Pause
-    case 330:
-        return 266;  // KeypadPeriod
-    case 331:
-        return 267;  // KeypadDivide
-    case 332:
-        return 268;  // KeypadMultiply
-    case 333:
-        return 269;  // KeypadMinus
-    case 334:
-        return 270;  // KeypadPlus
-    case 335:
-        return 271;  // KeypadEnter
-    case 336:
-        return 272;  // KeypadEquals
-    case 340:
-        return 304;  // LeftShift
-    case 341:
-        return 306;  // LeftControl
-    case 342:
-        return 308;  // LeftAlt
-    case 343:
-        return 311;  // LeftSuper
-    case 344:
-        return 303;  // RightShift
-    case 345:
-        return 305;  // RightControl
-    case 346:
-        return 307;  // RightAlt
-    case 347:
-        return 312;  // RightSuper
-    case 348:
-        return 319;  // Menu
-    default:
-        break;
-    }
-    // F1 to F15.
-    if (glfw_key >= 290 && glfw_key <= 304) {
-        return glfw_key - 290 + 282;
-    }
-    // Keypad digits.
-    if (glfw_key >= 320 && glfw_key <= 329) {
-        return glfw_key - 320 + 256;
-    }
-    return 0;
+    return table[static_cast<std::size_t>(glfw_key)];
 }
 
 void UserInputService::set_active(bool active) {

@@ -106,7 +106,11 @@ inline LuaField lua_signal_member(const char* name, int phase, bool blocked) {
 
 // Adds `fields` onto a class. `base` is another class name, or null.
 // Safe during static initialization and safe if the base is registered later.
-// Calling again appends. It does not replace fields already added.
+// Calling again adds more fields, so two libraries can each register part of
+// one class (UserInputService's signals in engine_services, its methods in
+// ScriptRuntime). A field whose name the class already has replaces the
+// earlier one, and static initialization decides which ran first, so those
+// parts must not share a name.
 void register_lua_class(const char* class_name, const char* base, const LuaField* fields, int count);
 
 // One operator a value's metatable implements, as script analysis types it.

@@ -16,6 +16,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -307,6 +308,14 @@ double NumberArg(const JsonValue& value, const std::string& what) {
     return value.as_number();
 }
 
+// Checked before the cast, which is undefined past float's range.
+float FloatArg(double number, const std::string& what) {
+    if (!(std::fabs(number) <= static_cast<double>(std::numeric_limits<float>::max()))) {
+        throw std::runtime_error(what + " is out of range.");
+    }
+    return static_cast<float>(number);
+}
+
 // The typed value for one row, from the JSON a client sent.
 PropertyEdit EditFor(const DataModel& world, const PropertyRow& row, const JsonValue& value) {
     PropertyEdit edit;
@@ -342,9 +351,9 @@ PropertyEdit EditFor(const DataModel& world, const PropertyRow& row, const JsonV
             } else {
                 throw std::runtime_error(row.name + " takes [x, y, z].");
             }
-            edit.value.vec.x = static_cast<float>(axes[0]);
-            edit.value.vec.y = static_cast<float>(axes[1]);
-            edit.value.vec.z = static_cast<float>(axes[2]);
+            edit.value.vec.x = FloatArg(axes[0], row.name);
+            edit.value.vec.y = FloatArg(axes[1], row.name);
+            edit.value.vec.z = FloatArg(axes[2], row.name);
             break;
         }
         case PropertyKind::Color3:
@@ -353,9 +362,9 @@ PropertyEdit EditFor(const DataModel& world, const PropertyRow& row, const JsonV
                     throw std::runtime_error(row.name + " takes [r, g, b] from 0 to 1, or a hex code.");
                 }
             } else if (value.is_array() && value.items().size() == 3) {
-                edit.value.color.r = static_cast<float>(NumberArg(value.items()[0], row.name));
-                edit.value.color.g = static_cast<float>(NumberArg(value.items()[1], row.name));
-                edit.value.color.b = static_cast<float>(NumberArg(value.items()[2], row.name));
+                edit.value.color.r = FloatArg(NumberArg(value.items()[0], row.name), row.name);
+                edit.value.color.g = FloatArg(NumberArg(value.items()[1], row.name), row.name);
+                edit.value.color.b = FloatArg(NumberArg(value.items()[2], row.name), row.name);
             } else {
                 throw std::runtime_error(row.name + " takes [r, g, b] from 0 to 1, or a hex code.");
             }

@@ -101,7 +101,7 @@ std::string make_guid() {
 struct DataModel::State {
     // Guards slots, free lists, invalidation, and resync.
     // SimulationThread may hold Write across a whole step and may re-enter
-    // (thread-local depth; the mutex is taken once).
+    // (this world's owner and depth below; the mutex is taken once).
     // RenderThread may hold Write only inside Prepare (RenderStepped, PreRender, copy),
     // budget 2ms. PostRender does not hold it.
     // Workers never take it.
@@ -275,6 +275,19 @@ void DataModel::unlock_write() {
     --state_->write_depth;
     if (state_->write_depth > 0) {
         return;
+    }
+    // The engine loops take their own deferred violations after a step. Any other
+    // thread, such as one running a paused edit, never does, so its entry goes
+    // with its last guard rather than waiting for a thread that reuses its id.
+    const std::thread::id self = std::this_thread::get_id();
+    if (self != state_->simulation_thread && self != state_->render_thread) {
+        std::lock_guard<std::mutex> guard(state_->deferred_mu);
+        for (auto it = state_->deferred.begin(); it != state_->deferred.end(); ++it) {
+            if (it->first == self) {
+                state_->deferred.erase(it);
+                break;
+            }
+        }
     }
     state_->owner.store(std::thread::id{}, std::memory_order_relaxed);
     state_->write_mu.unlock();

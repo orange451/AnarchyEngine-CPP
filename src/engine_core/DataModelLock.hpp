@@ -15,8 +15,8 @@ class DataModelLock {
 public:
     enum Kind { Write, Read };
 
-    // Blocks. SimulationThread may already hold the mutex; that path bumps
-    // a thread-local depth and does not lock again.
+    // Blocks. The thread that already holds this world's mutex, such as
+    // SimulationThread, bumps the world's depth and does not lock again.
     DataModelLock(DataModel& game, Kind kind);
 
     // Render Prepare. On timeout, owns() is false and the destructor is a no-op.

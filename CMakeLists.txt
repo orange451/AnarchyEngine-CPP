@@ -19,13 +19,32 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Everything in the studio except main, so a test can build the real layout.
+# The studio is two static libraries, so each source compiles once for every
+# program and test that uses it. studio_core needs no window: the MCP server
+# and its tools, and the text and script units. studio adds the UI.
+set(STUDIO_CORE_SOURCES
+    src/runner/Runner.cpp
+    src/runner/ViewCapture.cpp
+    src/ide/ColorLiterals.cpp
+    src/ide/IdeResources.cpp
+    src/ide/InputRouter.cpp
+    src/ide/LuauComplete.cpp
+    src/ide/LuauHighlight.cpp
+    src/ide/McpServer.cpp
+    src/ide/McpTools.cpp
+    src/ide/PropertySheet.cpp
+    src/ide/ScriptMarks.cpp
+    src/ide/ScriptPairs.cpp
+    src/ide/StudioRegistry.cpp
+    src/ide/TextSearch.cpp
+    src/ide/TextUndoStack.cpp
+    src/ide/TextWrap.cpp
+)
 set(STUDIO_SOURCES
     src/runner/gl.cpp
     src/runner/ShaderFile.cpp
     src/runner/Renderer.cpp
-    src/runner/Runner.cpp
     src/runner/GameView.cpp
-    src/runner/ViewCapture.cpp
     src/ide/IdePane.cpp
     src/ide/IdeDock.cpp
     src/ide/DockArrange.cpp
@@ -37,37 +56,24 @@ set(STUDIO_SOURCES
     src/ide/InsertPopup.cpp
     src/ide/IdeExplorer.cpp
     src/ide/IdeIcons.cpp
-    src/ide/IdeResources.cpp
     src/ide/IdeScriptEditor.cpp
     src/ide/IdeSearch.cpp
     src/ide/FindBar.cpp
-    src/ide/TextSearch.cpp
-    src/ide/ScriptMarks.cpp
-    src/ide/ScriptPairs.cpp
-    src/ide/ColorLiterals.cpp
-    src/ide/LuauHighlight.cpp
-    src/ide/LuauComplete.cpp
     src/ide/IdeTheme.cpp
     src/ide/IdeLayout.cpp
-    src/ide/TextUndoStack.cpp
-    src/ide/InputRouter.cpp
     src/ide/CutSet.cpp
-    src/ide/PropertySheet.cpp
     src/ide/PropertiesPanel.cpp
     src/ide/Preferences.cpp
     src/ide/PreferencesPanel.cpp
     src/ide/ThemeLibrary.cpp
-    src/ide/TextWrap.cpp
-    src/ide/McpServer.cpp
-    src/ide/McpTools.cpp
-    src/ide/StudioRegistry.cpp
 )
+add_library(studio_core STATIC ${STUDIO_CORE_SOURCES})
+add_library(studio STATIC ${STUDIO_SOURCES})
 
 # MACOSX_BUNDLE is ignored on Windows and Linux, where this stays a normal executable.
 # GLFW comes in with JadeFX. That library creates the window.
 add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
     src/main.cpp
-    ${STUDIO_SOURCES}
 )
 
 # The program icon comes from resources/icon. make_icons.py there rebuilds the
@@ -272,73 +278,42 @@ if(ENGINE_CORE_TSAN AND NOT MSVC)
 endif()
 
 # Sources under src/ include each other as "ide/..." and "runner/...".
-target_include_directories(AnarchyEngine-CPP PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_include_directories(AnarchyEngine-CPP SYSTEM PRIVATE "${httplib_SOURCE_DIR}")
+target_include_directories(studio_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(studio_core SYSTEM PUBLIC "${httplib_SOURCE_DIR}")
 # SYSTEM, so -Wextra does not report on the vendored header.
-target_include_directories(AnarchyEngine-CPP SYSTEM PRIVATE "${stb_image_write_SOURCE_DIR}")
-target_link_libraries(AnarchyEngine-CPP PRIVATE jadefx engine_core)
+target_include_directories(studio_core SYSTEM PRIVATE "${stb_image_write_SOURCE_DIR}")
+target_link_libraries(studio_core PUBLIC engine_core)
+target_compile_features(studio_core PUBLIC cxx_std_17)
 # httplib's sockets. MSVC links these from a pragma in the header; MinGW needs them here.
 if(WIN32)
-    target_link_libraries(AnarchyEngine-CPP PRIVATE ws2_32 crypt32)
+    target_link_libraries(studio_core PUBLIC ws2_32 crypt32)
 endif()
+target_link_libraries(studio PUBLIC studio_core jadefx)
+
+target_link_libraries(AnarchyEngine-CPP PRIVATE studio)
 
 add_executable(shell-tests
     tests/DockArrangeTest.cpp
-    src/ide/DockArrange.cpp
-    src/ide/IdeDock.cpp
-    src/ide/IdeIcons.cpp
-    src/ide/IdePane.cpp
-    src/ide/IdeResources.cpp
 )
-target_include_directories(shell-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(shell-tests PRIVATE jadefx)
-target_compile_features(shell-tests PRIVATE cxx_std_17)
+target_link_libraries(shell-tests PRIVATE studio)
 
 # Drives the explorer through a headless scene: clicks, typing, and keys.
 add_executable(explorer-tests
     tests/ExplorerRenameTest.cpp
-    src/ide/CutSet.cpp
-    src/ide/FindBar.cpp
-    src/ide/IdeExplorer.cpp
-    src/ide/IdeIcons.cpp
-    src/ide/IdePane.cpp
-    src/ide/IdeResources.cpp
-    src/ide/IdeTheme.cpp
-    src/ide/InsertPopup.cpp
 )
-target_include_directories(explorer-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(explorer-tests PRIVATE jadefx engine_core)
-target_compile_features(explorer-tests PRIVATE cxx_std_17)
+target_link_libraries(explorer-tests PRIVATE studio)
 
 # Opens and closes printed tables in the console log, by call and by click.
 add_executable(console-tests
     tests/ConsoleLogTest.cpp
-    src/ide/ConsoleLog.cpp
-    src/ide/IdeResources.cpp
-    src/ide/IdeTheme.cpp
 )
-target_include_directories(console-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(console-tests PRIVATE jadefx engine_core)
-target_compile_features(console-tests PRIVATE cxx_std_17)
+target_link_libraries(console-tests PRIVATE studio)
 
 # Drives the Properties page next to an explorer: selection, mixed rows, commits, and undo.
 add_executable(properties-tests
     tests/PropertiesTest.cpp
-    src/ide/CutSet.cpp
-    src/ide/FindBar.cpp
-    src/ide/IdeExplorer.cpp
-    src/ide/IdeIcons.cpp
-    src/ide/IdePane.cpp
-    src/ide/IdeResources.cpp
-    src/ide/IdeTheme.cpp
-    src/ide/InsertPopup.cpp
-    src/ide/PropertySheet.cpp
-    src/ide/PropertiesPanel.cpp
-    src/ide/TextUndoStack.cpp
 )
-target_include_directories(properties-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(properties-tests PRIVATE jadefx engine_core)
-target_compile_features(properties-tests PRIVATE cxx_std_17)
+target_link_libraries(properties-tests PRIVATE studio)
 
 # R10: the default dock layout, built headless from the studio's own sources.
 add_executable(studio-tests
@@ -349,57 +324,24 @@ add_executable(studio-tests
     tests/SaveConflictTest.cpp
     tests/ConflictsTest.cpp
     tests/ScriptTabsTest.cpp
-    ${STUDIO_SOURCES}
 )
-target_include_directories(studio-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_include_directories(studio-tests SYSTEM PRIVATE "${httplib_SOURCE_DIR}")
-# SYSTEM, so -Wextra does not report on the vendored header.
-target_include_directories(studio-tests SYSTEM PRIVATE "${stb_image_write_SOURCE_DIR}")
-target_link_libraries(studio-tests PRIVATE jadefx engine_core)
-target_compile_features(studio-tests PRIVATE cxx_std_17)
-if(WIN32)
-    target_link_libraries(studio-tests PRIVATE ws2_32 crypt32)
-endif()
+target_link_libraries(studio-tests PRIVATE studio)
 
 # The MCP server: JSON-RPC by call, the engine tools against a live place,
 # round trips over real loopback sockets, the studio registry, and the bridge.
 add_executable(mcp-tests
     tests/McpTest.cpp
     src/bridge/StudioBridge.cpp
-    src/ide/IdeResources.cpp
-    src/ide/McpServer.cpp
-    src/ide/McpTools.cpp
-    src/ide/PropertySheet.cpp
-    src/ide/StudioRegistry.cpp
-    src/ide/TextSearch.cpp
 )
-target_include_directories(mcp-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_include_directories(mcp-tests SYSTEM PRIVATE "${httplib_SOURCE_DIR}")
-target_link_libraries(mcp-tests PRIVATE engine_core)
-target_compile_features(mcp-tests PRIVATE cxx_std_17)
-if(WIN32)
-    target_link_libraries(mcp-tests PRIVATE ws2_32 crypt32)
-endif()
+target_link_libraries(mcp-tests PRIVATE studio_core)
 
 # anarchy-mcp: the MCP server an LLM client runs over stdio. It sends each
 # tool call to one open studio, found through the studio registry.
 add_executable(anarchy-mcp
     src/bridge/main.cpp
     src/bridge/StudioBridge.cpp
-    src/ide/IdeResources.cpp
-    src/ide/McpServer.cpp
-    src/ide/McpTools.cpp
-    src/ide/PropertySheet.cpp
-    src/ide/StudioRegistry.cpp
-    src/ide/TextSearch.cpp
 )
-target_include_directories(anarchy-mcp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_include_directories(anarchy-mcp SYSTEM PRIVATE "${httplib_SOURCE_DIR}")
-target_link_libraries(anarchy-mcp PRIVATE engine_core)
-target_compile_features(anarchy-mcp PRIVATE cxx_std_17)
-if(WIN32)
-    target_link_libraries(anarchy-mcp PRIVATE ws2_32 crypt32)
-endif()
+target_link_libraries(anarchy-mcp PRIVATE studio_core)
 
 add_executable(engine-tests
     tests/LuaEngineTest.cpp
@@ -413,20 +355,8 @@ add_executable(engine-tests
     tests/UiCallsTest.cpp
     tests/Utf8Test.cpp
     tests/ViewCaptureTest.cpp
-    src/ide/ColorLiterals.cpp
-    src/ide/LuauHighlight.cpp
-    src/ide/LuauComplete.cpp
-    src/ide/ScriptMarks.cpp
-    src/ide/ScriptPairs.cpp
-    src/ide/TextSearch.cpp
-    src/ide/TextWrap.cpp
-    src/runner/Runner.cpp
-    src/runner/ViewCapture.cpp
 )
-target_include_directories(engine-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_include_directories(engine-tests SYSTEM PRIVATE "${stb_image_write_SOURCE_DIR}")
-target_link_libraries(engine-tests PRIVATE engine_core)
-target_compile_features(engine-tests PRIVATE cxx_std_17)
+target_link_libraries(engine-tests PRIVATE studio_core)
 
 # Catch2 is only the sandbox acceptance suite.
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.28")
@@ -458,11 +388,8 @@ add_executable(sandbox
     sandbox/history_tests.cpp
     sandbox/project_tests.cpp
     sandbox/merge_tests.cpp
-    src/ide/TextUndoStack.cpp
-    src/ide/InputRouter.cpp
 )
-target_include_directories(sandbox PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(sandbox PRIVATE engine_core Catch2::Catch2WithMain)
+target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 target_compile_features(sandbox PRIVATE cxx_std_17)
 if(ENGINE_CORE_TSAN AND NOT MSVC)
     target_compile_options(sandbox PRIVATE -fsanitize=thread -fno-omit-frame-pointer -g -O1)
@@ -476,8 +403,8 @@ function(anarchy_warnings target)
         target_compile_options(${target} PRIVATE -Wall -Wextra)
     endif()
 endfunction()
-foreach(target IN ITEMS AnarchyEngine-CPP engine-tests shell-tests properties-tests console-tests studio-tests
-                        mcp-tests explorer-tests anarchy-mcp sandbox ${ENGINE_PACKAGES})
+foreach(target IN ITEMS studio_core studio AnarchyEngine-CPP engine-tests shell-tests properties-tests console-tests
+                        studio-tests mcp-tests explorer-tests anarchy-mcp sandbox ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()
 

@@ -754,6 +754,48 @@ void TestBridge() {
     fs::remove_all(base, ignored);
 }
 
+// The bridge lists engine_tool_specs without an engine, so they must be what a
+// studio registers: the same tools, descriptions, and schemas, in the same order.
+void TestToolSpecs() {
+    engine_core::Engine engine;
+    ide::McpStudio studio;
+    studio.start_test = [] {};
+    studio.pause_test = [] {};
+    studio.resume_test = [] {};
+    studio.stop_test = [] {};
+    studio.session = [] { return std::string("stopped"); };
+    studio.info = [] { return JsonValue::object(); };
+    studio.capture_view = [](int) { return ide::McpImage{}; };
+    ide::McpServer every;
+    ide::add_engine_tools(every, engine, studio);
+    const std::vector<ide::McpToolSpec> specs = ide::engine_tool_specs();
+    const bridge::StudioBridge bridge(bridge::BridgeOptions{}, specs);
+
+    const JsonValue offered = Member(Member(Request(every, "tools/list"), "result"), "tools");
+    const JsonValue listed = Member(Member(Request(bridge.server(), "tools/list"), "result"), "tools");
+    Expect(offered.items().size() == specs.size(), "a studio with every hook offers every tool");
+    Expect(listed.items().size() == offered.items().size() + 2, "the bridge lists the studio's tools, then its own two");
+    for (std::size_t i = 0; i < offered.items().size(); ++i) {
+        const JsonValue& tool = offered.items()[i];
+        Expect(Item(listed, i) == tool, "the bridge lists " + Member(tool, "name").as_string() +
+                                            " as the studio registers it: " + Excerpt(Item(listed, i)));
+    }
+
+    ide::McpServer plain;
+    ide::add_engine_tools(plain, engine, {});
+    std::vector<std::string> names;
+    for (const ide::McpTool& tool : plain.tools()) {
+        names.push_back(tool.name);
+    }
+    std::vector<std::string> expected;
+    for (const ide::McpToolSpec& spec : specs) {
+        if (spec.name != "playtest" && spec.name != "screenshot" && spec.name != "get_studio_info") {
+            expected.push_back(spec.name);
+        }
+    }
+    Expect(names == expected, "a studio without the hooks leaves out playtest, screenshot, and get_studio_info");
+}
+
 // An image a tool returns goes out as image content, beside the JSON text.
 void TestImages() {
     Expect(ide::base64_encode("") == "" && ide::base64_encode("f") == "Zg==" && ide::base64_encode("fo") == "Zm8=" &&
@@ -834,6 +876,7 @@ int main() {
     TestHttp();
     TestRegistry();
     TestBridge();
+    TestToolSpecs();
     TestImages();
     if (gFailures == 0) {
         std::printf("mcp tests passed\n");

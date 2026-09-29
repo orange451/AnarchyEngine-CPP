@@ -1,7 +1,9 @@
 #pragma once
 
+#include "LuaApi.hpp"
 #include "types.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <iosfwd>
@@ -44,6 +46,36 @@ struct Diagnostic {
     Severity severity = Severity::Error;
     std::string code;
     std::string message;
+};
+
+// One name Luau's own autocomplete offers at a position.
+struct LuauSuggestion {
+    std::string name;
+    // property, binding, keyword, string, type, module, function, require path,
+    // or hot comment.
+    std::string kind;
+    // The type as Luau prints it. Empty for a keyword.
+    std::string type;
+    // Luau recommends parentheses after the name.
+    bool call = false;
+    // Luau lists the name, but not for this operator: a method after '.', or a
+    // field after ':'.
+    bool wrong_index = false;
+    // A function. `params` is its parameter list as written after its name,
+    // such as "(amount: number)", without self when it is called with ':'.
+    // `returns` is one type, "(a, b)" for several, or empty for none.
+    bool function = false;
+    std::string params;
+    std::string returns;
+};
+
+struct LuauCompletion {
+    // False when the worker did not answer in time, or analysis cannot run.
+    bool ran = false;
+    // expression, statement, property, type, keyword, string, hot comment, or unknown.
+    std::string context;
+    std::vector<LuauSuggestion> items;
+    std::string error;
 };
 
 // Incremental analysis of every Lua source in one DataModel.
@@ -125,6 +157,14 @@ public:
     };
 
     DiagnosticsSignal& diagnostics_changed() { return signal_; }
+
+    // Luau's own autocomplete for `source` as the text of `script`, at byte
+    // `offset`, with `world` as the place. It runs on the analysis worker, ahead
+    // of queued checks, and waits up to `wait` for the answer. The buffer's
+    // types are dropped afterwards, so an unsaved edit never reaches another
+    // script's diagnostics. Any thread.
+    LuauCompletion luau_complete(const std::vector<LuaNode>& world, InstanceId script, std::string source,
+                                 std::size_t offset, std::chrono::milliseconds wait);
 
 private:
     struct State;

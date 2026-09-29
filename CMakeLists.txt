@@ -30,6 +30,7 @@ set(STUDIO_CORE_SOURCES
     src/ide/InputRouter.cpp
     src/ide/LuauComplete.cpp
     src/ide/LuauHighlight.cpp
+    src/ide/LuauTypedCompletion.cpp
     src/ide/McpServer.cpp
     src/ide/McpTools.cpp
     src/ide/PropertySheet.cpp

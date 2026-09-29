@@ -1,10 +1,21 @@
+#include "Environment.hpp"
+#include "Game.hpp"
 #include "LuaApi.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ide/ClassFilter.hpp"
 #include "ide/LuauComplete.hpp"
+#include "ide/LuauTypedCompletion.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <exception>
+#include <fstream>
+#include <iterator>
+#include <memory>
+#include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -88,9 +99,137 @@ void expect_call(const ide::CompletionList& list, const char* name, bool call, c
     }
 }
 
+// Shadow mode. When ANARCHY_LUAU_SHADOW names a file, every completion made
+// through at_end and at_caret is also asked of Luau's own autocomplete, and the
+// file lists where the two disagree. It checks nothing.
+struct Shadow {
+    std::unique_ptr<engine_core::Game> game;
+    std::unique_ptr<engine_core::ScriptAnalysis> analysis;
+    std::ofstream out;
+    int asked = 0;
+    int same = 0;
+    int differ = 0;
+    int failed = 0;
+};
+
+Shadow* shadow() {
+    static Shadow* made = [] () -> Shadow* {
+        const std::optional<std::string> path = engine_core::environment_variable("ANARCHY_LUAU_SHADOW");
+        if (!path || path->empty()) {
+            return nullptr;
+        }
+        auto* created = new Shadow();
+        created->game = std::make_unique<engine_core::Game>();
+        created->analysis = std::make_unique<engine_core::ScriptAnalysis>(*created->game);
+        created->out.open(*path, std::ios::binary | std::ios::trunc);
+        return created;
+    }();
+    return made;
+}
+
+const char* site_name(ide::CompleteSite site) {
+    switch (site) {
+    case ide::CompleteSite::None:
+        return "none";
+    case ide::CompleteSite::Member:
+        return "member";
+    case ide::CompleteSite::Name:
+        return "name";
+    case ide::CompleteSite::Type:
+        return "type";
+    case ide::CompleteSite::Argument:
+        return "argument";
+    case ide::CompleteSite::Directive:
+        return "directive";
+    case ide::CompleteSite::Require:
+        return "require";
+    }
+    return "?";
+}
+
+bool starts_with_folded(const std::string& name, const std::string& prefix) {
+    if (prefix.size() > name.size()) {
+        return false;
+    }
+    for (std::size_t at = 0; at < prefix.size(); ++at) {
+        if (std::tolower(static_cast<unsigned char>(name[at])) != std::tolower(static_cast<unsigned char>(prefix[at]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string joined(const std::set<std::string>& names) {
+    std::string text;
+    for (const std::string& name : names) {
+        text += text.empty() ? "" : ", ";
+        text += name;
+    }
+    return text;
+}
+
+void compare_with_luau(std::string_view source, int caret, const std::vector<engine_core::LuaNode>& world,
+                       std::uint32_t script_id, const ide::CompletionList& ours) {
+    Shadow* run = shadow();
+    if (run == nullptr) {
+        return;
+    }
+    // A code point caret, as a byte offset.
+    std::size_t offset = 0;
+    for (int seen = 0; offset < source.size() && seen < caret; ++seen) {
+        ++offset;
+        while (offset < source.size() && (static_cast<unsigned char>(source[offset]) & 0xC0) == 0x80) {
+            ++offset;
+        }
+    }
+    ++run->asked;
+    const engine_core::LuauCompletion luau =
+        run->analysis->luau_complete(world, script_id, std::string(source), offset, std::chrono::seconds(20));
+    std::set<std::string> mine;
+    for (const ide::CompletionItem& item : ours.items) {
+        mine.insert(item.name);
+    }
+    std::set<std::string> theirs;
+    for (const engine_core::LuauSuggestion& item : luau.items) {
+        if (!item.wrong_index && starts_with_folded(item.name, ours.prefix)) {
+            theirs.insert(item.name);
+        }
+    }
+    std::set<std::string> only_mine;
+    std::set<std::string> only_theirs;
+    std::set_difference(mine.begin(), mine.end(), theirs.begin(), theirs.end(),
+                        std::inserter(only_mine, only_mine.begin()));
+    std::set_difference(theirs.begin(), theirs.end(), mine.begin(), mine.end(),
+                        std::inserter(only_theirs, only_theirs.begin()));
+    if (!luau.ran) {
+        ++run->failed;
+    } else if (only_mine.empty() && only_theirs.empty()) {
+        ++run->same;
+        return;
+    } else {
+        ++run->differ;
+    }
+    std::string shown(source.substr(0, offset));
+    shown += "|";
+    shown += std::string(source.substr(offset));
+    run->out << "=== site " << site_name(ours.site) << ", prefix '" << ours.prefix << "', luau context "
+             << luau.context << (luau.ran ? "" : ", luau failed: " + luau.error) << "\n";
+    run->out << shown << "\n";
+    run->out << "  ours only: " << joined(only_mine) << "\n";
+    run->out << "  luau only: " << joined(only_theirs) << "\n";
+    for (const engine_core::LuauSuggestion& item : luau.items) {
+        if (only_theirs.count(item.name) != 0) {
+            run->out << "    " << item.name << " [" << item.kind << "] " << item.type << "\n";
+        }
+    }
+    run->out.flush();
+}
+
 ide::CompletionList at_end(std::string_view source, const std::vector<engine_core::LuaNode>& world = {},
                            std::uint32_t script_id = 0) {
-    return ide::complete_luau(source, static_cast<int>(source.size()), world, script_id);
+    ide::CompletionList list = ide::complete_luau(source, static_cast<int>(source.size()), world, script_id);
+    compare_with_luau(source, static_cast<int>(source.size()), world, script_id, list);
+    return list;
 }
 
 engine_core::LuaNode node(std::uint32_t id, std::uint32_t parent, const char* name, const char* class_name,
@@ -507,7 +646,9 @@ void expect_name(const ide::CompletionList& list, const char* label) {
 
 ide::CompletionList at_caret(std::string_view source, int caret,
                              const std::vector<engine_core::LuaNode>& world = {}, std::uint32_t script_id = 0) {
-    return ide::complete_luau(source, caret, world, script_id);
+    ide::CompletionList list = ide::complete_luau(source, caret, world, script_id);
+    compare_with_luau(source, caret, world, script_id, list);
+    return list;
 }
 
 void testNames() {
@@ -2371,6 +2512,175 @@ void testRequire() {
     expect_not_require(console, "the command line");
 }
 
+// The analysis the editor asks when the resolver cannot follow a value.
+engine_core::ScriptAnalysis& typed_analysis() {
+    static engine_core::Game game;
+    static engine_core::ScriptAnalysis analysis(game);
+    return analysis;
+}
+
+// What the editor shows: the resolver's list, and Luau's when the resolver
+// did not know the receiver.
+ide::CompletionList typed_at_end(std::string_view source, const std::vector<engine_core::LuaNode>& world = {},
+                                 std::uint32_t script_id = 0) {
+    ide::CompletionList list = ide::complete_luau(source, static_cast<int>(source.size()), world, script_id);
+    ide::complete_from_luau(list, typed_analysis(), source, static_cast<int>(source.size()), world, script_id,
+                            std::chrono::seconds(20));
+    return list;
+}
+
+void testTypedFallback() {
+    const char* account =
+        "local Account = {}\n"
+        "Account.__index = Account\n"
+        "\n"
+        "function Account.new(owner: string)\n"
+        "    local self = setmetatable({}, Account)\n"
+        "    self.owner = owner\n"
+        "    self.balance = 0\n"
+        "    return self\n"
+        "end\n"
+        "\n"
+        "function Account:Deposit(amount: number)\n"
+        "    self.balance += amount\n"
+        "end\n"
+        "\n"
+        "return Account\n";
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
+    world.push_back(node(9, 0, "Main", "Script"));
+    world.push_back(node(8, 0, "Account", "ModuleScript", account));
+    world.push_back(node(7, 0, "Parts", "Folder"));
+    world.push_back(node(6, 7, "Door", "GameObject"));
+    const std::string use = "local Account = require(game.Account)\nlocal a = Account.new(\"me\")\n";
+
+    // A metatable object from a required class.
+    const ide::CompletionList methods = typed_at_end(use + "a:", world, 9);
+    expect_has(methods, "Deposit", "a required class's method");
+    expect_call(methods, "Deposit", true, "a required class's method");
+    expect_info(methods, "Deposit", "returns nothing", "function Deposit(amount: number)", nullptr,
+                "a method's row drops self");
+    expect_missing(methods, "balance", "a field after ':'");
+    expect_missing(methods, "__index", "a metamethod");
+    const ide::CompletionList fields = typed_at_end(use + "a.", world, 9);
+    expect_has(fields, "balance", "a class instance's field");
+    expect_has(fields, "owner", "a class instance's field");
+    expect_detail(fields, "owner", "string", "a field's type");
+    expect_missing(fields, "__index", "a metamethod after '.'");
+    expect_missing(fields, "Deposit", "a method after '.'");
+    const ide::CompletionList typed = typed_at_end(use + "a:De", world, 9);
+    expect_has(typed, "Deposit", "a typed prefix");
+    if (typed.items.size() != 1) {
+        fail("a typed prefix keeps only the names it starts");
+    }
+
+    // The same class written in the script.
+    const std::string local_class = std::string(account).substr(0, std::string(account).rfind("return")) +
+                                    "local b = Account.new(\"x\")\nb:";
+    expect_has(typed_at_end(local_class), "Deposit", "a class in the script");
+
+    // A loop variable, a string from a library call, and a generic result.
+    const ide::CompletionList child = typed_at_end("for _, child in game.Parts:GetChildren() do\n    child.", world, 9);
+    expect_has(child, "Name", "a loop variable over GetChildren");
+    expect_has(child, "Parent", "a loop variable over GetChildren");
+    const ide::CompletionList word = typed_at_end("for index, name in ipairs({ \"a\", \"b\" }) do\n    name:");
+    expect_info(word, "upper", "string", "function upper(): string", nullptr, "a string method drops self");
+    expect_missing(word, "char", "string.char is not a method");
+    expect_has(typed_at_end("local words = string.split(\"a b\", \" \")\nwords[1]:"), "lower", "a string from a call");
+    expect_has(typed_at_end("local function pick<T>(items: { T }): T\n    return items[1]\nend\nlocal s = pick({ \"x\" })\ns:"),
+               "upper", "a generic result");
+
+    // Fields assigned after the table is made, and a pcall result.
+    const ide::CompletionList assigned = typed_at_end("local t = {}\nt.alpha = 1\nt.beta = function() end\nt.");
+    expect_detail(assigned, "alpha", "number", "a field assigned later");
+    expect_call(assigned, "beta", true, "a function assigned later");
+    expect_has(typed_at_end("local ok, result = pcall(function() return { value = 1 } end)\nresult."), "value",
+               "a pcall result");
+
+    // Nothing the resolver offers changes. A module it ran keeps its own list.
+    std::vector<engine_core::LuaNode> lib;
+    lib.push_back(node(0, 0xffffffffu, "game", "Game"));
+    lib.push_back(node(8, 0, "Lib", "ModuleScript",
+                       "local extra = { zoom = function() end }\nreturn { alpha = 1, beta = function() end, nested = extra }\n"));
+    lib.push_back(node(9, 0, "Main", "Script", ""));
+    const char* lib_use = "local m = require(game:FindFirstChild(\"Lib\"))\nm.";
+    const ide::CompletionList plain = at_end(lib_use, lib, 9);
+    const ide::CompletionList with_luau = typed_at_end(lib_use, lib, 9);
+    if (plain.items.size() != with_luau.items.size()) {
+        fail("a list the resolver filled is left as it is");
+    }
+    // A method the module replaced with a plain function is still not offered after ':'.
+    const char* replaced =
+        "local module = {}\n"
+        "function module:Test()\n"
+        "end\n"
+        "module.Test = function()\n"
+        "end\n"
+        "return module\n";
+    std::vector<engine_core::LuaNode> replaced_world;
+    replaced_world.push_back(node(0, 0xffffffffu, "game", "Game"));
+    replaced_world.push_back(node(3, 0, "Lib", "ModuleScript", replaced));
+    replaced_world.push_back(node(4, 0, "Main", "Script"));
+    expect_missing(typed_at_end("local m = require(game:FindFirstChild(\"Lib\"))\nm:", replaced_world, 4), "Test",
+                   "a replaced method stays off ':' with Luau asked too");
+    // Instances, Vector3, and names are still the resolver's.
+    expect_has(typed_at_end("game."), "FindFirstChild", "instance methods after '.'");
+    expect_has(typed_at_end("Vector3.new()."), "Lerp", "Vector3 methods");
+}
+
+// Everyday code the tests above do not cover, asked of both engines when the
+// shadow is on. It checks nothing: the shadow file says what each one offered.
+void shadowProbes() {
+    if (shadow() == nullptr) {
+        return;
+    }
+    const char* account =
+        "local Account = {}\n"
+        "Account.__index = Account\n"
+        "\n"
+        "function Account.new(owner: string)\n"
+        "    local self = setmetatable({}, Account)\n"
+        "    self.owner = owner\n"
+        "    self.balance = 0\n"
+        "    return self\n"
+        "end\n"
+        "\n"
+        "function Account:Deposit(amount: number)\n"
+        "    self.balance += amount\n"
+        "end\n"
+        "\n"
+        "return Account\n";
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
+    world.push_back(node(9, 0, "Main", "Script"));
+    world.push_back(node(8, 0, "Account", "ModuleScript", account));
+    world.push_back(node(7, 0, "Parts", "Folder"));
+    world.push_back(node(6, 7, "Door", "GameObject"));
+    const std::string use = "local Account = require(game.Account)\n";
+    at_end(use + "local a = Account.new(\"me\")\na:", world, 9);
+    at_end(use + "local a = Account.new(\"me\")\na.", world, 9);
+    at_end(use + "Account.", world, 9);
+    // A class written in the script itself.
+    at_end(std::string(account).substr(0, std::string(account).rfind("return")) + "local b = Account.new(\"x\")\nb:");
+    // Annotations and typeof.
+    at_end("local function spin(part: GameObject)\n    part.", world, 9);
+    at_end("local list: { Vector3 } = {}\nlocal first = list[1]\nfirst.", world, 9);
+    at_end("type Point = { x: number, y: number, label: string }\nlocal p: Point = { x = 1, y = 2, label = \"a\" }\np.");
+    // Loops.
+    at_end("for _, child in game.Parts:GetChildren() do\n    child.", world, 9);
+    at_end("for index, name in ipairs({ \"a\", \"b\" }) do\n    name:", world, 9);
+    // Results of library calls and generics.
+    at_end("local words = string.split(\"a b\", \" \")\nwords[1]:");
+    at_end("local found = table.find({ 1, 2 }, 2)\nlocal n = math.max(1, 2)\nn");
+    at_end("local function pick<T>(items: { T }): T\n    return items[1]\nend\nlocal s = pick({ \"x\" })\ns:");
+    // Values that flow through locals.
+    at_end("local config = { speed = 10, name = \"car\", nested = { depth = 2 } }\nlocal alias = config.nested\nalias.");
+    at_end("local t = {}\nt.alpha = 1\nt.beta = function() end\nt.");
+    at_end("local ok, result = pcall(function() return { value = 1 } end)\nresult.");
+    at_end("local door = game.Parts.Door\ndoor.", world, 9);
+    at_end("local folder = game:FindFirstChild(\"Parts\")\nfolder:", world, 9);
+}
+
 int RunLuauCompleteTests() {
     try {
         testLibraries();
@@ -2396,8 +2706,17 @@ int RunLuauCompleteTests() {
         testScriptTableKeys();
         testRequire();
         testDeepNesting();
+        testTypedFallback();
+        shadowProbes();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());
+    }
+    if (Shadow* run = shadow()) {
+        run->out << "=== " << run->asked << " asked, " << run->same << " the same, " << run->differ << " differ, "
+                 << run->failed << " where Luau gave no answer\n";
+        run->out.flush();
+        std::printf("luau shadow: %d asked, %d the same, %d differ, %d unanswered\n", run->asked, run->same,
+                    run->differ, run->failed);
     }
     return gFailures;
 }

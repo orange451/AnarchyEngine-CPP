@@ -3660,6 +3660,11 @@ CompletionList complete_luau(std::string_view source, int caret, const std::vect
         resolver.parse_until(expr_end);
         Shape* shape = resolver.receiver(expr_end);
         resolver.add_members(shape, colon, list.prefix, list.items);
+        // A bare table, or a value of no known type, tells nothing about its members.
+        list.receiver_known =
+            shape != nullptr && (!shape->fields.empty() || !shape->class_name.empty() || !shape->library.empty() ||
+                                 (!shape->value_type.empty() && shape->value_type != "table" &&
+                                  shape->value_type != "any" && shape->value_type != "unknown"));
         return list;
     }
     list.site = CompleteSite::Name;

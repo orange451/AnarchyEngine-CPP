@@ -47,6 +47,9 @@ struct CompletionList {
     int replace_end = 0;
     std::string prefix;
     std::vector<CompletionItem> items;
+    // Member site: the resolver knew what the receiver holds, so an empty list
+    // means it has no such member. False when it could not follow the value.
+    bool receiver_known = false;
     // Wrapping quote of an argument completion. 0 for every other site.
     char close_quote = 0;
     // The closing quote is not in the buffer yet. Accepting can type it.

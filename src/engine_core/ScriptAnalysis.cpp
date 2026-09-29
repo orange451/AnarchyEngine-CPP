@@ -20,6 +20,7 @@
 #include "Luau/Config.h"
 #include "Luau/Error.h"
 #include "Luau/FileResolver.h"
+#include "Luau/Autocomplete.h"
 #include "Luau/Frontend.h"
 #include "Luau/Linter.h"
 #include "Luau/Module.h"
@@ -40,6 +41,7 @@
 #include <chrono>
 #include <climits>
 #include <condition_variable>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -858,6 +860,62 @@ bool NarrowMagic::infer(const Luau::MagicFunctionCallContext& context) {
     return true;
 }
 
+// The source the type check reads. The `--!nonstrict` that set the mode is
+// rewritten so Luau does not switch to its smaller nonstrict pass, which skips
+// unknown properties such as PreRender. It is the first header mode comment,
+// on whatever line.
+std::string checked_source(const std::string& source, const Luau::ParseResult& parsed, Luau::Mode mode) {
+    std::string check_source = source;
+    if (mode != Luau::Mode::Nonstrict) {
+        return check_source;
+    }
+    for (const Luau::HotComment& comment : parsed.hotcomments) {
+        if (!comment.header ||
+            (comment.content != "nocheck" && comment.content != "nonstrict" && comment.content != "strict")) {
+            continue;
+        }
+        std::size_t line_start = 0;
+        for (unsigned line = 0; line < comment.location.begin.line && line_start != std::string::npos; ++line) {
+            line_start = check_source.find('\n', line_start);
+            line_start = line_start == std::string::npos ? line_start : line_start + 1;
+        }
+        if (comment.content == "nonstrict" && line_start != std::string::npos) {
+            const std::size_t line_end = check_source.find('\n', line_start);
+            const std::size_t at = check_source.find("--!nonstrict", line_start);
+            if (at != std::string::npos && (line_end == std::string::npos || at < line_end)) {
+                check_source.replace(at, std::char_traits<char>::length("--!nonstrict"), "--!strict");
+            }
+        }
+        break;
+    }
+    return check_source;
+}
+
+// Required modules stay cached in the frontend. A new snapshot can change
+// their source or what their paths reach, so recheck them. A script the
+// snapshot lacks is gone, and so is its cached module.
+void sync_world(WorkerEnv& env, const std::shared_ptr<const WorldSnap>& world) {
+    if (env.checked_world == world) {
+        return;
+    }
+    std::unordered_set<std::string> live;
+    for (const NodeSnap& node : world->nodes) {
+        if (node.lua) {
+            live.insert(module_name_of(node.id));
+            env.frontend->markDirty(module_name_of(node.id));
+        }
+    }
+    std::vector<Luau::ModuleName> gone;
+    for (const auto& cached : env.frontend->sourceNodes) {
+        if (live.count(cached.first) == 0) {
+            gone.push_back(cached.first);
+        }
+    }
+    env.frontend->clearModules(gone);
+    env.checked_world = world;
+    env.place = build_place_types(*env.frontend->globals.globalScope, world);
+}
+
 Finished analyze_job(WorkerEnv& env, const Job& job) {
     Finished finished;
     finished.id = job.id;
@@ -945,54 +1003,10 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
     // frontend does not lint again.
     // The full checker runs for both strict and nonstrict. Nonstrict then
     // downgrades type errors to warnings. `--!nocheck` never reaches here.
-    // The `--!nonstrict` that set the mode is rewritten so Luau does not switch
-    // to its smaller nonstrict pass, which skips unknown properties such as
-    // PreRender. It is the first header mode comment, on whatever line.
     try {
-        std::string check_source = self->source;
-        if (mode == Luau::Mode::Nonstrict) {
-            for (const Luau::HotComment& comment : parsed.hotcomments) {
-                if (!comment.header ||
-                    (comment.content != "nocheck" && comment.content != "nonstrict" && comment.content != "strict")) {
-                    continue;
-                }
-                std::size_t line_start = 0;
-                for (unsigned line = 0; line < comment.location.begin.line && line_start != std::string::npos; ++line) {
-                    line_start = check_source.find('\n', line_start);
-                    line_start = line_start == std::string::npos ? line_start : line_start + 1;
-                }
-                if (comment.content == "nonstrict" && line_start != std::string::npos) {
-                    const std::size_t line_end = check_source.find('\n', line_start);
-                    const std::size_t at = check_source.find("--!nonstrict", line_start);
-                    if (at != std::string::npos && (line_end == std::string::npos || at < line_end)) {
-                        check_source.replace(at, std::char_traits<char>::length("--!nonstrict"), "--!strict");
-                    }
-                }
-                break;
-            }
-        }
+        const std::string check_source = checked_source(self->source, parsed, mode);
         const std::string module_name = module_name_of(job.id);
-        // Required modules stay cached in the frontend. A new snapshot can
-        // change their source or what their paths reach, so recheck them. A
-        // script the snapshot lacks is gone, and so is its cached module.
-        if (env.checked_world != job.world) {
-            std::unordered_set<std::string> live;
-            for (const NodeSnap& node : job.world->nodes) {
-                if (node.lua) {
-                    live.insert(module_name_of(node.id));
-                    env.frontend->markDirty(module_name_of(node.id));
-                }
-            }
-            std::vector<Luau::ModuleName> gone;
-            for (const auto& cached : env.frontend->sourceNodes) {
-                if (live.count(cached.first) == 0) {
-                    gone.push_back(cached.first);
-                }
-            }
-            env.frontend->clearModules(gone);
-            env.checked_world = job.world;
-            env.place = build_place_types(*env.frontend->globals.globalScope, job.world);
-        }
+        sync_world(env, job.world);
         env.files.module_name = &module_name;
         env.files.world = job.world.get();
         env.files.source = &check_source;
@@ -1064,6 +1078,219 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
     env.files.world = nullptr;
     env.self = 0;
     return finished;
+}
+
+// A Luau autocomplete request. The worker answers it ahead of queued checks.
+struct CompleteRequest {
+    std::shared_ptr<const WorldSnap> world;
+    InstanceId script = 0;
+    std::string source;
+    std::size_t offset = 0;
+    std::mutex mu;
+    std::condition_variable cv;
+    bool done = false;
+    LuauCompletion result;
+};
+
+// The place as completion sees it, as the snapshot a check reads. The root is
+// the parentless Game or DataModel.
+std::shared_ptr<WorldSnap> world_from_nodes(const std::vector<LuaNode>& nodes) {
+    auto world = std::make_shared<WorldSnap>();
+    bool rooted = false;
+    for (const LuaNode& item : nodes) {
+        NodeSnap node;
+        node.id = item.id;
+        node.parent = item.parent;
+        node.name = item.name;
+        node.class_name = item.class_name;
+        node.source = item.source;
+        node.module = item.class_name == "ModuleScript";
+        node.lua = node.module || item.class_name == "Script";
+        if (!rooted && item.parent == DataModel::kNoParent &&
+            (item.class_name == "Game" || item.class_name == "DataModel")) {
+            world->root = item.id;
+            rooted = true;
+        }
+        world->nodes.push_back(std::move(node));
+    }
+    for (NodeSnap& node : world->nodes) {
+        for (const NodeSnap& child : world->nodes) {
+            if (child.parent == node.id && child.id != node.id) {
+                node.children.push_back(child.id);
+            }
+        }
+    }
+    return world;
+}
+
+// Line and byte column of a byte offset, as Luau counts them.
+Luau::Position position_of(const std::string& source, std::size_t offset) {
+    unsigned line = 0;
+    std::size_t line_start = 0;
+    const std::size_t end = offset < source.size() ? offset : source.size();
+    for (std::size_t at = 0; at < end; ++at) {
+        if (source[at] == '\n') {
+            ++line;
+            line_start = at + 1;
+        }
+    }
+    return Luau::Position{line, static_cast<unsigned>(end - line_start)};
+}
+
+const char* kind_name(Luau::AutocompleteEntryKind kind) {
+    switch (kind) {
+    case Luau::AutocompleteEntryKind::Property:
+        return "property";
+    case Luau::AutocompleteEntryKind::Binding:
+        return "binding";
+    case Luau::AutocompleteEntryKind::Keyword:
+        return "keyword";
+    case Luau::AutocompleteEntryKind::String:
+        return "string";
+    case Luau::AutocompleteEntryKind::Type:
+        return "type";
+    case Luau::AutocompleteEntryKind::Module:
+        return "module";
+    case Luau::AutocompleteEntryKind::GeneratedFunction:
+        return "function";
+    case Luau::AutocompleteEntryKind::RequirePath:
+        return "require path";
+    case Luau::AutocompleteEntryKind::HotComment:
+        return "hot comment";
+    }
+    return "unknown";
+}
+
+const char* context_name(Luau::AutocompleteContext context) {
+    switch (context) {
+    case Luau::AutocompleteContext::Expression:
+        return "expression";
+    case Luau::AutocompleteContext::Statement:
+        return "statement";
+    case Luau::AutocompleteContext::Property:
+        return "property";
+    case Luau::AutocompleteContext::Type:
+        return "type";
+    case Luau::AutocompleteContext::Keyword:
+        return "keyword";
+    case Luau::AutocompleteContext::String:
+        return "string";
+    case Luau::AutocompleteContext::HotComment:
+        return "hot comment";
+    case Luau::AutocompleteContext::Unknown:
+        break;
+    }
+    return "unknown";
+}
+
+// A function type as a completion row shows it: its parameters after the name,
+// and what it returns. `with_self` drops the first parameter, as a ':' call does.
+void describe_function(const Luau::FunctionType& fn, bool with_self, LuauSuggestion& out) {
+    const auto [args, args_tail] = Luau::flatten(fn.argTypes);
+    std::string params = "(";
+    bool first = true;
+    for (std::size_t index = with_self ? 1 : 0; index < args.size(); ++index) {
+        params += first ? "" : ", ";
+        first = false;
+        if (index < fn.argNames.size() && fn.argNames[index] && !fn.argNames[index]->name.empty()) {
+            params += fn.argNames[index]->name + ": ";
+        }
+        params += Luau::toString(args[index]);
+    }
+    // Luau gives a function it inferred a hidden `...` tail. Only a written one shows.
+    if (args_tail) {
+        const auto* variadic = Luau::get<Luau::VariadicTypePack>(Luau::follow(*args_tail));
+        if (variadic == nullptr || !variadic->hidden) {
+            params += first ? "..." : ", ...";
+        }
+    }
+    out.params = params + ")";
+    const auto [rets, rets_tail] = Luau::flatten(fn.retTypes);
+    if (rets.size() == 1 && !rets_tail) {
+        out.returns = Luau::toString(rets[0]);
+    } else if (!rets.empty() || rets_tail) {
+        std::string pack = "(";
+        for (std::size_t index = 0; index < rets.size(); ++index) {
+            pack += (index == 0 ? "" : ", ") + Luau::toString(rets[index]);
+        }
+        if (rets_tail) {
+            pack += rets.empty() ? "..." : ", ...";
+        }
+        out.returns = pack + ")";
+    }
+    out.function = true;
+}
+
+// Checks the request's buffer with full type graphs kept, asks Luau::autocomplete,
+// then marks the module dirty so the next check reads the place's own source.
+LuauCompletion complete_job(WorkerEnv& env, const CompleteRequest& request) {
+    LuauCompletion out;
+    if (!env.init_error.empty() || env.frontend == nullptr || env.frontend->globals.globalScope == nullptr) {
+        out.error = env.init_error.empty() ? "script analysis is unavailable" : env.init_error;
+        return out;
+    }
+    Luau::Allocator allocator;
+    Luau::AstNameTable names(allocator);
+    Luau::ParseOptions parse_options;
+    parse_options.captureComments = true;
+    const Luau::ParseResult parsed =
+        Luau::Parser::parse(request.source.c_str(), request.source.size(), names, allocator, parse_options);
+    const Luau::Mode mode = Luau::parseMode(parsed.hotcomments).value_or(Luau::Mode::Nonstrict);
+    const std::string check_source = checked_source(request.source, parsed, mode);
+    const std::string module_name = module_name_of(request.script);
+    const NodeSnap* self = request.world->find(request.script);
+    const std::string display = self != nullptr && !self->name.empty() ? self->name : std::string("script");
+    try {
+        sync_world(env, request.world);
+        env.files.module_name = &module_name;
+        env.files.world = request.world.get();
+        env.files.source = &check_source;
+        env.files.display = &display;
+        env.files.type = self != nullptr && self->module ? Luau::SourceCode::Module : Luau::SourceCode::Script;
+        env.configs.config.mode = Luau::Mode::Strict;
+        env.world = request.world.get();
+        env.self = request.script;
+        env.frontend->markDirty(module_name);
+        Luau::FrontendOptions options;
+        options.runLintChecks = false;
+        options.retainFullTypeGraphs = true;
+        env.frontend->check(module_name, options);
+        const Luau::AutocompleteResult result = Luau::autocomplete(
+            *env.frontend, module_name, position_of(request.source, request.offset),
+            [](std::string, std::optional<const Luau::ExternType*>, std::optional<std::string>) {
+                return std::optional<Luau::AutocompleteEntryMap>();
+            });
+        out.context = context_name(result.context);
+        for (const auto& [name, entry] : result.entryMap) {
+            LuauSuggestion item;
+            item.name = name;
+            item.kind = kind_name(entry.kind);
+            if (entry.type) {
+                item.type = Luau::toString(*entry.type);
+                if (const auto* fn = Luau::get<Luau::FunctionType>(Luau::follow(*entry.type))) {
+                    describe_function(*fn, entry.indexedWithSelf, item);
+                }
+            }
+            item.call = entry.parens != Luau::ParenthesesRecommendation::None;
+            item.wrong_index = entry.wrongIndexType;
+            out.items.push_back(std::move(item));
+        }
+        std::sort(out.items.begin(), out.items.end(),
+                  [](const LuauSuggestion& a, const LuauSuggestion& b) { return a.name < b.name; });
+        out.ran = true;
+    } catch (const std::exception& error) {
+        out.error = error.what();
+    } catch (...) {
+        out.error = "autocomplete failed";
+    }
+    env.world = nullptr;
+    env.self = 0;
+    env.files.world = nullptr;
+    env.files.module_name = nullptr;
+    env.files.source = nullptr;
+    env.files.display = nullptr;
+    env.frontend->markDirty(module_name);
+    return out;
 }
 
 std::shared_ptr<WorldSnap> capture_world(DataModel& game) {
@@ -1147,6 +1374,8 @@ struct ScriptAnalysis::State {
     std::unordered_map<InstanceId, std::unordered_set<InstanceId>> required_by;
 
     AnalysisScope scope = AnalysisScope::All;
+    // Luau autocomplete requests, answered before queued checks.
+    std::deque<std::shared_ptr<CompleteRequest>> completions;
     // Editors showing each script. Open scope analyzes these and what they require.
     std::unordered_map<InstanceId, int> watched;
     // Waiting for pump() to capture the tree: newly watched scripts, and
@@ -1339,11 +1568,36 @@ void ScriptAnalysis::run() {
     env.init();
     while (true) {
         Job job;
+        std::shared_ptr<CompleteRequest> request;
         {
             std::unique_lock<std::mutex> lock(state_->mu);
-            state_->cv.wait(lock, [&] { return state_->stop || !state_->pending.empty(); });
+            state_->cv.wait(lock,
+                            [&] { return state_->stop || !state_->pending.empty() || !state_->completions.empty(); });
             if (state_->stop) {
                 return;
+            }
+            if (!state_->completions.empty()) {
+                request = std::move(state_->completions.front());
+                state_->completions.pop_front();
+            }
+        }
+        if (request) {
+            LuauCompletion answer = complete_job(env, *request);
+            {
+                std::lock_guard<std::mutex> done(request->mu);
+                request->result = std::move(answer);
+                request->done = true;
+            }
+            request->cv.notify_all();
+            continue;
+        }
+        {
+            std::unique_lock<std::mutex> lock(state_->mu);
+            if (state_->stop) {
+                return;
+            }
+            if (state_->pending.empty()) {
+                continue;
             }
             const auto now = std::chrono::steady_clock::now();
             auto due = state_->pending.begin();
@@ -1377,6 +1631,34 @@ void ScriptAnalysis::run() {
             }
         }
     }
+}
+
+LuauCompletion ScriptAnalysis::luau_complete(const std::vector<LuaNode>& world, InstanceId script, std::string source,
+                                            std::size_t offset, std::chrono::milliseconds wait) {
+    auto request = std::make_shared<CompleteRequest>();
+    request->world = world_from_nodes(world);
+    // The command line has no script. Its buffer gets an id no instance has.
+    request->script = script != 0 ? script : 0xfffffff0u;
+    request->source = std::move(source);
+    request->offset = offset;
+    {
+        std::lock_guard<std::mutex> lock(state_->mu);
+        if (state_->stop) {
+            LuauCompletion none;
+            none.error = "script analysis has stopped";
+            return none;
+        }
+        state_->completions.push_back(request);
+        state_->cv.notify_all();
+    }
+    ensure_worker();
+    std::unique_lock<std::mutex> lock(request->mu);
+    if (!request->cv.wait_for(lock, wait, [&] { return request->done; })) {
+        LuauCompletion late;
+        late.error = "timed out";
+        return late;
+    }
+    return request->result;
 }
 
 void ScriptAnalysis::set_enabled(bool enabled) {

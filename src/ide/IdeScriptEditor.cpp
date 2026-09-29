@@ -7,6 +7,7 @@
 #include "IdeTheme.hpp"
 #include "LuaSource.hpp"
 #include "LuauComplete.hpp"
+#include "LuauTypedCompletion.hpp"
 #include "LuauHighlight.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptMarks.hpp"
@@ -24,6 +25,8 @@ namespace {
 
 constexpr std::chrono::milliseconds kSaveDelay(50);
 constexpr std::chrono::milliseconds kLockWait(5);
+// How long a completion waits on Luau's own answer when the resolver has none.
+constexpr std::chrono::milliseconds kLuauCompletionWait(100);
 // The most matches the find bar counts and highlights, as in VS Code.
 constexpr std::size_t kFindLimit = 19999;
 
@@ -1160,8 +1163,14 @@ void IdeScriptEditor::refresh_completion(bool force) {
         completion_.dismiss();
         return;
     }
-    completion_.present(complete_luau(area_->getText(), area_->caretPosition(), world(), id_), force, *area_, bounds.x,
-                        bounds.y, bounds.height);
+    const std::string text = area_->getText();
+    const int caret = area_->caretPosition();
+    const std::vector<engine_core::LuaNode> place = world();
+    CompletionList list = complete_luau(text, caret, place, id_);
+    // A value the resolver cannot follow, such as a metatable object or a loop
+    // variable, gets Luau's own answer. The worker is usually idle between checks.
+    complete_from_luau(list, engine_.analysis(), text, caret, place, id_, kLuauCompletionWait);
+    completion_.present(std::move(list), force, *area_, bounds.x, bounds.y, bounds.height);
 }
 
 void ScriptCodeArea::handleKey(jadefx::KeyEvent& event) {

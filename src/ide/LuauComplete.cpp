@@ -2190,9 +2190,9 @@ private:
                 }
                 if (retain_) {
                     // A later assignment must not change the type of earlier uses.
-                    const int depth = binding.depth;
+                    const int bound_depth = binding.depth;
                     binding.end = i_;
-                    bind(names[index].name, shape, i_, depth, names[index].decl, false);
+                    bind(names[index].name, shape, i_, bound_depth, names[index].decl, false);
                 } else {
                     binding.shape = shape != nullptr ? shape : none();
                 }

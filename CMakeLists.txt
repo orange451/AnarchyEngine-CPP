@@ -272,7 +272,8 @@ if(ENGINE_CORE_TSAN AND NOT MSVC)
 endif()
 
 # Sources under src/ include each other as "ide/..." and "runner/...".
-target_include_directories(AnarchyEngine-CPP PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")
+target_include_directories(AnarchyEngine-CPP PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(AnarchyEngine-CPP SYSTEM PRIVATE "${httplib_SOURCE_DIR}")
 # SYSTEM, so -Wextra does not report on the vendored header.
 target_include_directories(AnarchyEngine-CPP SYSTEM PRIVATE "${stb_image_write_SOURCE_DIR}")
 target_link_libraries(AnarchyEngine-CPP PRIVATE jadefx engine_core)
@@ -350,7 +351,8 @@ add_executable(studio-tests
     tests/ScriptTabsTest.cpp
     ${STUDIO_SOURCES}
 )
-target_include_directories(studio-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")
+target_include_directories(studio-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(studio-tests SYSTEM PRIVATE "${httplib_SOURCE_DIR}")
 # SYSTEM, so -Wextra does not report on the vendored header.
 target_include_directories(studio-tests SYSTEM PRIVATE "${stb_image_write_SOURCE_DIR}")
 target_link_libraries(studio-tests PRIVATE jadefx engine_core)
@@ -371,7 +373,8 @@ add_executable(mcp-tests
     src/ide/StudioRegistry.cpp
     src/ide/TextSearch.cpp
 )
-target_include_directories(mcp-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")
+target_include_directories(mcp-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(mcp-tests SYSTEM PRIVATE "${httplib_SOURCE_DIR}")
 target_link_libraries(mcp-tests PRIVATE engine_core)
 target_compile_features(mcp-tests PRIVATE cxx_std_17)
 if(WIN32)
@@ -390,7 +393,8 @@ add_executable(anarchy-mcp
     src/ide/StudioRegistry.cpp
     src/ide/TextSearch.cpp
 )
-target_include_directories(anarchy-mcp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${httplib_SOURCE_DIR}")
+target_include_directories(anarchy-mcp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(anarchy-mcp SYSTEM PRIVATE "${httplib_SOURCE_DIR}")
 target_link_libraries(anarchy-mcp PRIVATE engine_core)
 target_compile_features(anarchy-mcp PRIVATE cxx_std_17)
 if(WIN32)
@@ -464,33 +468,29 @@ if(ENGINE_CORE_TSAN AND NOT MSVC)
     target_compile_options(sandbox PRIVATE -fsanitize=thread -fno-omit-frame-pointer -g -O1)
 endif()
 
-if(MSVC)
-    target_compile_options(AnarchyEngine-CPP PRIVATE /W4 /utf-8)
-    target_compile_options(engine-tests PRIVATE /W4 /utf-8)
-    target_compile_options(shell-tests PRIVATE /W4 /utf-8)
-    target_compile_options(properties-tests PRIVATE /W4 /utf-8)
-target_compile_options(console-tests PRIVATE /W4 /utf-8)
-    target_compile_options(studio-tests PRIVATE /W4 /utf-8)
-    target_compile_options(mcp-tests PRIVATE /W4 /utf-8)
-    target_compile_options(anarchy-mcp PRIVATE /W4 /utf-8)
-    foreach(package IN LISTS ENGINE_PACKAGES)
-        target_compile_options(${package} PRIVATE /W4 /utf-8)
-    endforeach()
-    target_compile_options(sandbox PRIVATE /W4 /utf-8)
-else()
-    target_compile_options(AnarchyEngine-CPP PRIVATE -Wall -Wextra)
-    target_compile_options(engine-tests PRIVATE -Wall -Wextra)
-    target_compile_options(shell-tests PRIVATE -Wall -Wextra)
-    target_compile_options(properties-tests PRIVATE -Wall -Wextra)
-target_compile_options(console-tests PRIVATE -Wall -Wextra)
-    target_compile_options(studio-tests PRIVATE -Wall -Wextra)
-    target_compile_options(mcp-tests PRIVATE -Wall -Wextra)
-    target_compile_options(anarchy-mcp PRIVATE -Wall -Wextra)
-    foreach(package IN LISTS ENGINE_PACKAGES)
-        target_compile_options(${package} PRIVATE -Wall -Wextra)
-    endforeach()
-    target_compile_options(sandbox PRIVATE -Wall -Wextra)
-endif()
+# The project's own warning level, for every target built from its sources.
+function(anarchy_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /utf-8)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra)
+    endif()
+endfunction()
+foreach(target IN ITEMS AnarchyEngine-CPP engine-tests shell-tests properties-tests console-tests studio-tests
+                        mcp-tests explorer-tests anarchy-mcp sandbox ${ENGINE_PACKAGES})
+    anarchy_warnings(${target})
+endforeach()
+
+# Vendored headers are SYSTEM, so the warnings above report on project code only.
+# GCC and Clang honor this; MSVC does not with this CMake's Visual Studio generator.
+foreach(vendored IN ITEMS Luau.Common Luau.Ast Luau.Compiler Luau.VM Luau.Analysis Luau.Config)
+    if(TARGET ${vendored})
+        get_target_property(vendored_includes ${vendored} INTERFACE_INCLUDE_DIRECTORIES)
+        if(vendored_includes)
+            set_target_properties(${vendored} PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${vendored_includes}")
+        endif()
+    endif()
+endforeach()
 
 if(APPLE)
     set_target_properties(AnarchyEngine-CPP PROPERTIES

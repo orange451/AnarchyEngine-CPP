@@ -1100,8 +1100,8 @@ void testFunctionParameters() {
                                                            {"function(input, ", "gameProcessedEvent: boolean"}};
     for (const auto& [head, part] : closers) {
         const std::string typed = began + head;
-        const std::string text = typed + "))";
-        expect_bold(ide::complete_luau(text, static_cast<int>(typed.size())), part, "before the closing brackets");
+        const std::string closed = typed + "))";
+        expect_bold(ide::complete_luau(closed, static_cast<int>(typed.size())), part, "before the closing brackets");
     }
     expect_has(second, "game", "second argument");
     expect_detail(second, "game", "Game", "second argument");

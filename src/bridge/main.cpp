@@ -3,6 +3,7 @@
 //
 //   claude mcp add anarchy -s user -- /path/to/anarchy-mcp [--project <name|folder|pid>]
 
+#include "Environment.hpp"
 #include "StudioBridge.hpp"
 #include "ide/McpTools.hpp"
 
@@ -13,6 +14,7 @@
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
+#include <optional>
 #include <string>
 #include <system_error>
 
@@ -76,8 +78,8 @@ int main(int argc, char** argv) {
     }
     std::error_code ignored;
     options.cwd = std::filesystem::current_path(ignored);
-    if (const char* token = std::getenv("ANARCHY_MCP_TOKEN")) {
-        options.token = token;
+    if (std::optional<std::string> token = engine_core::environment_variable("ANARCHY_MCP_TOKEN")) {
+        options.token = std::move(*token);
     }
 
     // The studio's own tool definitions, so the list is whole even before a studio opens.

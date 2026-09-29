@@ -1,4 +1,5 @@
 #include "IdeLayout.hpp"
+#include "Environment.hpp"
 
 #include "ChangeHistoryService.hpp"
 #include "CutSet.hpp"
@@ -1289,14 +1290,13 @@ struct IdeLayout::McpIdentity {
 };
 
 void IdeLayout::start_mcp() {
-    const char* enabled = std::getenv("ANARCHY_MCP");
-    if (enabled != nullptr && std::string(enabled) == "0") {
+    if (engine_core::environment_variable("ANARCHY_MCP") == std::optional<std::string>("0")) {
         return;
     }
     int port = kMcpPort;
     bool pinned = false;
-    if (const char* text = std::getenv("ANARCHY_MCP_PORT")) {
-        const int asked = std::atoi(text);
+    if (const std::optional<std::string> text = engine_core::environment_variable("ANARCHY_MCP_PORT")) {
+        const int asked = std::atoi(text->c_str());
         if (asked > 0 && asked < 65536) {
             port = asked;
             pinned = true;
@@ -1386,8 +1386,8 @@ void IdeLayout::start_mcp() {
     // Every client needs this studio's token. The bridge reads it from the
     // registry entry; a client that connects directly needs ANARCHY_MCP_TOKEN
     // set to a secret it knows too.
-    const char* fixed = std::getenv("ANARCHY_MCP_TOKEN");
-    const std::string token = fixed != nullptr && fixed[0] != '\0' ? std::string(fixed) : session_token();
+    const std::optional<std::string> fixed = engine_core::environment_variable("ANARCHY_MCP_TOKEN");
+    const std::string token = fixed && !fixed->empty() ? *fixed : session_token();
     server->set_token(token);
     identity->entry.token = token;
     add_engine_tools(*server, runner_.simulation(), std::move(studio));

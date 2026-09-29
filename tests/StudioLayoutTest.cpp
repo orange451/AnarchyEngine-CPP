@@ -585,8 +585,8 @@ int main() {
                 columns->setDividerPosition(0, 0.3);
             }
             frame(*at);
-            if (ide::IdePane* search = showing(*at, "Search")) {
-                left_width = search->getWidth();
+            if (ide::IdePane* shown = showing(*at, "Search")) {
+                left_width = shown->getWidth();
             }
             expect(left_width > 300, "the left column is wider");
             first.save_layout();
@@ -598,21 +598,22 @@ int main() {
             second.mount(*at);
             frame(*at);
             expect(showing(*at, "Properties") == nullptr, "a closed window stays closed");
-            ide::IdePane* search = showing(*at, "Search");
-            expect(search != nullptr && search->getAbsoluteX() < 300, "Search opens where it was, showing");
-            expect(search != nullptr && std::abs(search->getWidth() - left_width) < 2,
+            ide::IdePane* search_pane = showing(*at, "Search");
+            expect(search_pane != nullptr && search_pane->getAbsoluteX() < 300, "Search opens where it was, showing");
+            expect(search_pane != nullptr && std::abs(search_pane->getWidth() - left_width) < 2,
                    "the left column keeps its width");
             expect(showing(*at, "Game Explorer") == nullptr, "the game explorer is behind Search again");
             bool conflicts_kept = false;
-            if (ide::IdeDock* left = dock_of(search)) {
+            if (ide::IdeDock* left = dock_of(search_pane)) {
                 for (const std::shared_ptr<jadefx::Tab>& tab : left->tabs()->getTabs().items()) {
                     auto* pane = tab ? dynamic_cast<ide::IdePane*>(tab->getContent()) : nullptr;
                     conflicts_kept = conflicts_kept || (pane != nullptr && pane->name() == "Conflicts");
                 }
             }
             expect(conflicts_kept, "Conflicts opens where it was, beside Search");
-            ide::IdePane* console = showing(*at, "Console");
-            expect(console != nullptr && console->getAbsoluteX() > 640, "the console opens with the scene explorer");
+            ide::IdePane* console_pane = showing(*at, "Console");
+            expect(console_pane != nullptr && console_pane->getAbsoluteX() > 640,
+                   "the console opens with the scene explorer");
             expect(showing(*at, "Current Scene") == nullptr, "which is behind it, as it was");
             ide::IdePane* view = showing(*at, "Scene View");
             expect(view != nullptr && view->getHeight() > 600, "the scene view fills the column the console left");

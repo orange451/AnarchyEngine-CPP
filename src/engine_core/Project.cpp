@@ -1410,10 +1410,10 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
         if (own[0].rewritten) {
             const std::string bytes = read_file(disk_path(root_, base.props_path));
             JsonValue disk;
-            std::string error;
+            std::string parse_error;
             if (bytes == base.props_bytes) {
                 // Unchanged on disk.
-            } else if (!parse_json(bytes, disk, error) || !disk.is_object() ||
+            } else if (!parse_json(bytes, disk, parse_error) || !disk.is_object() ||
                        !(disk = as_written(scratch(), disk)).is_object()) {
                 SaveConflict unreadable = row(guid, base.props_path, SaveConflict::Kind::EditedOutside);
                 unreadable.disk = "can't be read";

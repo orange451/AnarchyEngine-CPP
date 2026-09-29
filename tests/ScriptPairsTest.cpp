@@ -68,11 +68,11 @@ int EndCaret(const std::string& text) {
         if (first != std::string::npos) {
             const std::string trimmed = line.substr(first);
             if (trimmed.size() >= 3 && trimmed.compare(0, 3, "end") == 0) {
-                std::size_t index = 3;
-                while (index < trimmed.size() && trimmed[index] == ')') {
-                    ++index;
+                std::size_t after = 3;
+                while (after < trimmed.size() && trimmed[after] == ')') {
+                    ++after;
                 }
-                if (index == trimmed.size() || trimmed[index] == ' ') {
+                if (after == trimmed.size() || trimmed[after] == ' ') {
                     return line_start - 1;
                 }
             }

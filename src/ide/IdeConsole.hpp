@@ -77,6 +77,7 @@ private:
     CompletionPopup completion_;
     // Luau's list for the last keystroke, on its way.
     std::optional<PendingCompletion> luau_list_;
+    CompletionWorldCache world_cache_;
     std::deque<PendingCommand> pending_;
     std::vector<std::string> history_;
     // history_.size() while not browsing.

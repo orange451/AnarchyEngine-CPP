@@ -175,11 +175,6 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
                         world.set_parent(created->id(), parent);
                         made = created->id();
                         CloseGesture(world);
-                        // An edit while stopped is part of the place. One made during
-                        // play is dropped when Stop restores that place.
-                        if (!world.simulation_running()) {
-                            world.capture_place();
-                        }
                     }
                 }
                 if (result) {
@@ -653,6 +648,8 @@ void IdeLayout::start_test() {
     // start_simulation alone keeps the previous snapshot.
     engine.on_simulation([](engine_core::DataModel& game) {
         if (!game.simulation_running()) {
+            // The place Stop brings back. Edits while stopped do not snapshot the
+            // place each time; this one capture, as play starts, holds them all.
             game.capture_place();
             game.start_simulation();
         }

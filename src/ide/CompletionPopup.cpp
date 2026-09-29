@@ -976,76 +976,87 @@ void CompletionPopup::present(const CompletionList& list, bool force, jadefx::No
     place(owner, caret_x, caret_y, caret_height);
 }
 
-std::vector<engine_core::LuaNode> completion_world(engine_core::Engine& engine, std::uint32_t script_id,
-                                                   const std::string* buffer) {
-    // The last tree read. A read that cannot take the lock in time, as while a
-    // game runs, answers with it, so completion never sees an empty place.
-    // UI thread only.
-    static std::vector<engine_core::LuaNode> last;
-    std::vector<engine_core::LuaNode> nodes;
+const std::vector<engine_core::LuaNode>& completion_world(engine_core::Engine& engine, std::uint32_t script_id,
+                                                          const std::string* buffer, CompletionWorldCache& cache) {
     engine_core::DataModel& game = engine.datamodel();
-    engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionLockWait);
-    if (!lock.owns()) {
-        nodes = last;
-        for (engine_core::LuaNode& node : nodes) {
-            if (buffer != nullptr && node.id == script_id) {
+    const std::uint64_t tree = game.tree_revision();
+    const std::uint64_t authored = game.authored_revision();
+    const std::uint64_t sources = game.source_revision();
+    const bool current = cache.world == &game && cache.tree == tree && cache.authored == authored &&
+                         cache.sources == sources;
+    if (!current) {
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionLockWait);
+        if (lock.owns()) {
+            // The revisions were read before the lock. A change that lands in
+            // between is read now and stamped older, so the next call reads once
+            // more; it is never missed.
+            cache.nodes.clear();
+            std::vector<engine_core::LuaNode>& nodes = cache.nodes;
+            engine_core::LuaNode root;
+            root.id = 0;
+            root.parent = engine_core::DataModel::kNoParent;
+            root.name = game.name(0);
+            root.class_name = game.class_name();
+            nodes.push_back(std::move(root));
+            // The tree in sibling order, then any instance outside it with what is under
+            // it, so children keep the order FindFirstChild walks, as analysis sees it.
+            std::unordered_set<engine_core::InstanceId> placed{0};
+            std::vector<engine_core::InstanceId> stack;
+            const auto add = [&](engine_core::InstanceId id) {
+                engine_core::DataModel* object = game.instance(id);
+                if (object == nullptr || !placed.insert(id).second) {
+                    return;
+                }
+                engine_core::LuaNode node;
+                node.id = id;
+                node.parent = game.parent(id);
+                node.name = game.name(id);
+                const char* class_name = object->class_name();
+                node.class_name = class_name != nullptr ? class_name : "";
+                if (auto* source = dynamic_cast<engine_core::LuaSource*>(object)) {
+                    node.source = source->source();
+                }
+                nodes.push_back(std::move(node));
+            };
+            const auto walk = [&](engine_core::InstanceId top) {
+                stack.push_back(top);
+                while (!stack.empty()) {
+                    const engine_core::InstanceId id = stack.back();
+                    stack.pop_back();
+                    if (id != 0) {
+                        add(id);
+                    }
+                    std::vector<engine_core::InstanceId> children;
+                    for (engine_core::InstanceId child = game.first_child(id); child != 0;
+                         child = game.next_sibling(child)) {
+                        children.push_back(child);
+                    }
+                    for (auto child = children.rbegin(); child != children.rend(); ++child) {
+                        stack.push_back(*child);
+                    }
+                }
+            };
+            walk(0);
+            game.for_each_instance([&](engine_core::DataModel& object) {
+                if (placed.count(object.id()) == 0 && game.parent(object.id()) == engine_core::DataModel::kNoParent) {
+                    walk(object.id());
+                }
+            });
+            game.for_each_instance([&](engine_core::DataModel& object) { add(object.id()); });
+            cache.world = &game;
+            cache.tree = tree;
+            cache.authored = authored;
+            cache.sources = sources;
+        }
+    }
+    if (buffer != nullptr) {
+        for (engine_core::LuaNode& node : cache.nodes) {
+            if (node.id == script_id) {
                 node.source = *buffer;
             }
         }
-        return nodes;
     }
-    engine_core::LuaNode root;
-    root.id = 0;
-    root.parent = engine_core::DataModel::kNoParent;
-    root.name = game.name(0);
-    root.class_name = game.class_name();
-    nodes.push_back(std::move(root));
-    // The tree in sibling order, then any instance outside it with what is under
-    // it, so children keep the order FindFirstChild walks, as analysis sees it.
-    std::unordered_set<engine_core::InstanceId> placed{0};
-    std::vector<engine_core::InstanceId> stack;
-    const auto add = [&](engine_core::InstanceId id) {
-        engine_core::DataModel* object = game.instance(id);
-        if (object == nullptr || !placed.insert(id).second) {
-            return;
-        }
-        engine_core::LuaNode node;
-        node.id = id;
-        node.parent = game.parent(id);
-        node.name = game.name(id);
-        const char* class_name = object->class_name();
-        node.class_name = class_name != nullptr ? class_name : "";
-        if (auto* source = dynamic_cast<engine_core::LuaSource*>(object)) {
-            node.source = buffer != nullptr && id == script_id ? *buffer : source->source();
-        }
-        nodes.push_back(std::move(node));
-    };
-    const auto walk = [&](engine_core::InstanceId top) {
-        stack.push_back(top);
-        while (!stack.empty()) {
-            const engine_core::InstanceId id = stack.back();
-            stack.pop_back();
-            if (id != 0) {
-                add(id);
-            }
-            std::vector<engine_core::InstanceId> children;
-            for (engine_core::InstanceId child = game.first_child(id); child != 0; child = game.next_sibling(child)) {
-                children.push_back(child);
-            }
-            for (auto child = children.rbegin(); child != children.rend(); ++child) {
-                stack.push_back(*child);
-            }
-        }
-    };
-    walk(0);
-    game.for_each_instance([&](engine_core::DataModel& object) {
-        if (placed.count(object.id()) == 0 && game.parent(object.id()) == engine_core::DataModel::kNoParent) {
-            walk(object.id());
-        }
-    });
-    game.for_each_instance([&](engine_core::DataModel& object) { add(object.id()); });
-    last = nodes;
-    return nodes;
+    return cache.nodes;
 }
 
 }  // namespace ide

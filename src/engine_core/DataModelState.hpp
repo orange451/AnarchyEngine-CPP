@@ -147,6 +147,7 @@ struct DataModel::State {
     bool dirty_all = false;
     std::atomic<std::uint64_t> revision{0};
     std::atomic<std::uint64_t> tree_revision{0};
+    std::atomic<std::uint64_t> source_revision{0};
 
     // UIs watching instances' properties. watcher_count lets a change skip the
     // lock when nobody watches.

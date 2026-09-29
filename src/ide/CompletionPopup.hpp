@@ -2,6 +2,7 @@
 
 #include "LuauComplete.hpp"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -76,9 +77,23 @@ private:
     std::unique_ptr<State> state_;
 };
 
-// The instance tree completion reads. `buffer` replaces the source of `script_id`
-// when that script is the one open in an editor.
-std::vector<engine_core::LuaNode> completion_world(engine_core::Engine& engine, std::uint32_t script_id,
-                                                   const std::string* buffer);
+// What completion_world read last, and at which revisions of the place. A
+// keystroke that changed nothing in the place copies nothing from it. One per
+// editor or console.
+struct CompletionWorldCache {
+    const void* world = nullptr;
+    std::uint64_t tree = ~std::uint64_t{0};
+    std::uint64_t authored = ~std::uint64_t{0};
+    std::uint64_t sources = ~std::uint64_t{0};
+    std::vector<engine_core::LuaNode> nodes;
+};
+
+// The instance tree completion reads, kept in `cache` and read again only when
+// the tree, an authored value, or a Source changed. `buffer` replaces the
+// source of `script_id` when that script is the one open in an editor. A read
+// that cannot take the lock in time, as while a game runs, answers with the
+// last tree read, so completion never sees an empty place. UI thread only.
+const std::vector<engine_core::LuaNode>& completion_world(engine_core::Engine& engine, std::uint32_t script_id,
+                                                          const std::string* buffer, CompletionWorldCache& cache);
 
 }  // namespace ide

@@ -358,20 +358,15 @@ void IdeLayout::restore_closed_edits() {
         if (edit) {
             recording = game.history().try_begin_recording("Edit Script");
         }
-        bool changed = false;
         for (const auto& entry : pending) {
             auto* source = dynamic_cast<engine_core::LuaSource*>(game.instance(entry.first));
             if (source == nullptr || source->source() == entry.second) {
                 continue;
             }
             source->set_source(entry.second);
-            changed = true;
         }
         if (recording) {
             game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
-        }
-        if (changed && edit) {
-            game.capture_place();
         }
     });
 }

@@ -556,7 +556,6 @@ void IdeSearch::replace(std::uint32_t id, int line) {
             if (!game.simulation_running()) {
                 recording = game.history().try_begin_recording("Replace in Scripts");
             }
-            bool changed = false;
             for (const std::uint32_t script : ids) {
                 auto* source = dynamic_cast<engine_core::LuaSource*>(game.instance(script));
                 if (source == nullptr) {
@@ -566,14 +565,10 @@ void IdeSearch::replace(std::uint32_t id, int line) {
                 std::string next = again.replace_all(source->source(), replacement, line - 1, &count);
                 if (count > 0) {
                     source->set_source(std::move(next));
-                    changed = true;
                 }
             }
             if (recording) {
                 game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
-            }
-            if (changed && !game.simulation_running()) {
-                game.capture_place();
             }
         });
     }

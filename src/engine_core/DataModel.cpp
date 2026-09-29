@@ -824,6 +824,9 @@ void DataModel::notify_all_watchers() {
 }
 
 void DataModel::emit_change(InstanceId id, Field field, WriteOrigin origin) {
+    if (field == Field::Source) {
+        state_->source_revision.fetch_add(1, std::memory_order_relaxed);
+    }
     notify_watchers(id);
     InstanceSignals* bag = bag_for(id);
     if (bag == nullptr) {
@@ -1396,6 +1399,8 @@ void DataModel::mark_authored_dirty(InstanceId id) {
 std::uint64_t DataModel::authored_revision() const { return state_->revision.load(std::memory_order_relaxed); }
 
 std::uint64_t DataModel::tree_revision() const { return state_->tree_revision.load(std::memory_order_relaxed); }
+
+std::uint64_t DataModel::source_revision() const { return state_->source_revision.load(std::memory_order_relaxed); }
 
 namespace {
 

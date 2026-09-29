@@ -1,6 +1,7 @@
 #include "ide/IdeDock.hpp"
 #include "ide/IdeExplorer.hpp"
 #include "ide/IdeLayout.hpp"
+#include "ide/CompletionPopup.hpp"
 #include "ide/IdeScriptEditor.hpp"
 #include "SelectionService.hpp"
 
@@ -285,11 +286,54 @@ void TestProblemsShowAndClear(engine_core::Engine& engine) {
            (std::string("a fixed script clears the banner: ") + banner()).c_str());
 }
 
+// Completion keeps its copy of the place until the place changes: a rename,
+// a Source written while stopped, and one written during play all show.
+void TestCompletionWorldFollowsChanges(engine_core::Engine& engine) {
+    const engine_core::InstanceId id = AddScript(engine, "Lib", "return 1\n");
+    ide::CompletionWorldCache cache;
+    auto source_of = [&](const std::vector<engine_core::LuaNode>& nodes) -> std::string {
+        for (const engine_core::LuaNode& node : nodes) {
+            if (node.id == id) {
+                return node.source;
+            }
+        }
+        return "<missing>";
+    };
+    auto name_of = [&](const std::vector<engine_core::LuaNode>& nodes) -> std::string {
+        for (const engine_core::LuaNode& node : nodes) {
+            if (node.id == id) {
+                return node.name;
+            }
+        }
+        return "<missing>";
+    };
+    ExpectText(source_of(ide::completion_world(engine, 0, nullptr, cache)), "return 1\n", "the first read has the Source");
+    ExpectText(source_of(ide::completion_world(engine, 0, nullptr, cache)), "return 1\n", "an unchanged place reads the same");
+
+    SetSource(engine, id, "return 2\n");
+    ExpectText(source_of(ide::completion_world(engine, 0, nullptr, cache)), "return 2\n",
+               "a Source written while stopped shows");
+    engine.on_simulation([&](engine_core::DataModel& game) { game.set_name(id, "Renamed"); });
+    ExpectText(name_of(ide::completion_world(engine, 0, nullptr, cache)), "Renamed", "a rename shows");
+
+    engine.on_simulation([](engine_core::DataModel& game) {
+        game.capture_place();
+        game.start_simulation();
+    });
+    SetSource(engine, id, "return 3\n");
+    ExpectText(source_of(ide::completion_world(engine, 0, nullptr, cache)), "return 3\n",
+               "a Source written during play shows");
+    engine.on_simulation([](engine_core::DataModel& game) { game.stop_simulation(); });
+    ExpectText(source_of(ide::completion_world(engine, 0, nullptr, cache)), "return 2\n",
+               "Stop's restored Source shows");
+}
+
 int RunScriptTabTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     gFailures = 0;
     TestClosedTabs(layout, scene);
     TestPickerHookLeavesWithEditor(layout.simulation());
     TestEditorComesBackWithItsScript(layout.simulation());
     TestProblemsShowAndClear(layout.simulation());
+    TestCompletionWorldFollowsChanges(layout.simulation());
     return gFailures;
 }

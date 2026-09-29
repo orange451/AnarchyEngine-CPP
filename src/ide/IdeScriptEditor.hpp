@@ -101,12 +101,15 @@ private:
     void show_source(std::string text);
     void load();
     void paint();
+    // The same, for text already read from the area.
+    void paint(const std::string& text);
     void refresh_marks();
     // Every find match and problem, as bands on the scroll bar.
     void refresh_scroll_marks();
     void note_text();
     void push(const std::string& text);
-    void refresh_completion(bool force);
+    // `text` is the area's text when the caller has just read it.
+    void refresh_completion(bool force, const std::string* text = nullptr);
     // Shows Luau's list for the last keystroke, once it has arrived.
     void take_luau_list();
     void dismiss_completion();
@@ -119,9 +122,10 @@ private:
     // Enter and Tab accept when the highlighted name would change the text.
     // A finished name keeps those keys, so a newline or indent still works.
     bool completion_key_accepts() const;
-    std::vector<engine_core::LuaNode> world() const;
+    // The place as completion and hover read it, with `text` as this script's source.
+    const std::vector<engine_core::LuaNode>& world(const std::string& text);
     // A swatch after each Color3 literal. A click on one opens the color picker on it.
-    void refresh_color_swatches();
+    void refresh_color_swatches(const std::string& text);
     void open_color_picker(std::size_t index);
     // Ends the picker: keep writes one undo step for the whole session, and
     // otherwise the literal goes back to how it was.
@@ -172,6 +176,7 @@ private:
     // Set when this script's problems or the text changed. The marks are
     // placed again only then, not every frame.
     ChangeFlag marks_changed_;
+    CompletionWorldCache world_cache_;
     std::uint64_t diagnostics_hook_ = 0;
     bool dirty_ = false;
     // world_generation the buffer last matched. Stop bumps it.

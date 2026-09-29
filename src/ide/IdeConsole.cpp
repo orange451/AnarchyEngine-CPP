@@ -237,7 +237,7 @@ void IdeConsole::refresh_completion(bool force) {
     }
     const std::string text = command_->getText();
     const int caret = command_->getCaretPosition();
-    const std::vector<engine_core::LuaNode> place = completion_world(engine_, 0, nullptr);
+    const std::vector<engine_core::LuaNode>& place = completion_world(engine_, 0, nullptr, world_cache_);
     // As in the script editor, what needs Luau's types shows on a later frame.
     CompletionList now;
     luau_list_ = ask_completion(now, engine_.analysis(), text, caret, place, 0, false, force, "console");

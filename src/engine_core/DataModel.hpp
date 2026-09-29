@@ -255,6 +255,9 @@ public:
     // Moves under the write lock and never resets. A panel that shows the tree
     // reads it again only when this moved. Safe to read from any thread.
     std::uint64_t tree_revision() const;
+    // Bumps on every write to a script's Source, during play too, and with
+    // authored_revision on Stop. Safe to read from any thread.
+    std::uint64_t source_revision() const;
 
     // A UI's interest in the properties of some instances. notify runs on the
     // thread that made the change, whenever a property of a watched instance

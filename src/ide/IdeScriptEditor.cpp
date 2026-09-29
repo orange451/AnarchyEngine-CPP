@@ -714,12 +714,17 @@ void IdeScriptEditor::load() {
 }
 
 void IdeScriptEditor::paint() {
+    if (area_) {
+        paint(area_->getText());
+    }
+}
+
+void IdeScriptEditor::paint(const std::string& text) {
     if (!area_) {
         return;
     }
     // Every text change paints, and moves where the problems sit.
     marks_changed_.set();
-    const std::string text = area_->getText();
     refresh_find(text);
     const int current = current_find();
     painted_find_ = current;
@@ -761,7 +766,7 @@ void IdeScriptEditor::paint() {
     area_->suspendUndo();
     area_->setStyleSpans(0, builder.create());
     area_->resumeUndo();
-    refresh_color_swatches();
+    refresh_color_swatches(text);
     refresh_scroll_marks();
 }
 
@@ -806,8 +811,8 @@ engine_core::Color3 to_color3(const jadefx::Color& color) { return engine_core::
 
 }  // namespace
 
-void IdeScriptEditor::refresh_color_swatches() {
-    color_literals_ = find_color3_literals(area_->getText());
+void IdeScriptEditor::refresh_color_swatches(const std::string& text) {
+    color_literals_ = find_color3_literals(text);
     std::vector<jadefx::StyledTextArea::InlineNode> nodes;
     nodes.reserve(color_literals_.size());
     for (std::size_t i = 0; i < color_literals_.size(); ++i) {
@@ -999,9 +1004,11 @@ void IdeScriptEditor::note_text() {
         return;
     }
     static_cast<ScriptCodeArea*>(area_.get())->dismissHover();
-    paint();
+    // JadeFX builds the text from its lines on each read, so a keystroke reads it once.
+    const std::string text = area_->getText();
+    paint(text);
     if (!completion_.accepting() && !replacing_) {
-        refresh_completion(false);
+        refresh_completion(false, &text);
     }
     dirty_ = true;
     dirty_at_ = std::chrono::steady_clock::now();
@@ -1025,9 +1032,6 @@ void IdeScriptEditor::push(const std::string& text) {
                 source->set_source(text);
                 if (recording) {
                     game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
-                }
-                if (!game.simulation_running()) {
-                    game.capture_place();
                 }
             }
         }
@@ -1118,9 +1122,8 @@ void IdeScriptEditor::show_source(std::string text) {
     dismiss_completion();
 }
 
-std::vector<engine_core::LuaNode> IdeScriptEditor::world() const {
-    const std::string text = area_ ? area_->getText() : std::string();
-    return completion_world(engine_, id_, area_ ? &text : nullptr);
+const std::vector<engine_core::LuaNode>& IdeScriptEditor::world(const std::string& text) {
+    return completion_world(engine_, id_, &text, world_cache_);
 }
 
 bool IdeScriptEditor::completion_open() const { return completion_.isOpen(); }
@@ -1164,7 +1167,7 @@ void IdeScriptEditor::place_completion() {
     completion_.moveTo(*area_, bounds.x, bounds.y, bounds.height);
 }
 
-void IdeScriptEditor::refresh_completion(bool force) {
+void IdeScriptEditor::refresh_completion(bool force, const std::string* text_read) {
     if (!area_ || loading_ || missing_ || completion_.accepting()) {
         return;
     }
@@ -1177,9 +1180,9 @@ void IdeScriptEditor::refresh_completion(bool force) {
         completion_.dismiss();
         return;
     }
-    const std::string text = area_->getText();
+    const std::string text = text_read != nullptr ? *text_read : area_->getText();
     const int caret = area_->caretPosition();
-    const std::vector<engine_core::LuaNode> place = world();
+    const std::vector<engine_core::LuaNode>& place = world(text);
     // What needs Luau's types shows on a later frame, so typing never waits on
     // the type checker. Until then the popup keeps the rows that still fit.
     CompletionList now;
@@ -1651,7 +1654,7 @@ void ScriptCodeArea::showHover() {
         return;
     }
     const std::string text = getText();
-    const std::vector<engine_core::LuaNode> place = editor->world();
+    const std::vector<engine_core::LuaNode>& place = editor->world(text);
     // A name's type comes from Luau; tickHover shows it when it arrives.
     HoverInfo info;
     hover_answer_ = ask_hover(info, editor->engine_.analysis(), text, hover_index_, place, editor->id_);

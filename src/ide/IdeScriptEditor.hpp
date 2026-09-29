@@ -150,6 +150,12 @@ private:
     CompletionPopup completion_;
     std::shared_ptr<Commit> commit_;
     std::string shown_name_;
+    // DataModel::authored_revision and tree_revision when reapply last read
+    // the script, and tree_revision when play last read its name. Neither
+    // reads again until one moves.
+    std::uint64_t seen_authored_ = ~std::uint64_t{0};
+    std::uint64_t seen_tree_ = ~std::uint64_t{0};
+    std::uint64_t seen_title_tree_ = ~std::uint64_t{0};
     TextUndoStack* undo_stack_ = nullptr;
     bool mute_undo_ = false;
     // A replace is writing the buffer. It is not typing, so it does not open completion.

@@ -592,12 +592,16 @@ void IdeScriptEditor::layoutChildren() {
         // Edit mode, after Stop has restored the place. A paused test is still
         // the play session, so its source stays as the session left it.
         reapply();
-    } else {
+    } else if (const std::uint64_t tree = engine_.datamodel().tree_revision(); tree != seen_title_tree_) {
+        // During play only a rename changes what the tab shows.
         std::string text;
         std::string name;
         bool alive = false;
-        if (read_source(text, name, alive) && alive && name != shown_name_) {
-            setTitleText(name);
+        if (read_source(text, name, alive)) {
+            seen_title_tree_ = tree;
+            if (alive && name != shown_name_) {
+                setTitleText(name);
+            }
         }
     }
     if (completion_open()) {
@@ -1026,10 +1030,22 @@ void IdeScriptEditor::reapply() {
     if (!area_ || !loaded_ || !commit_) {
         return;
     }
+    // In edit mode every Source, name, and tree change moves one of these, and
+    // so does Stop. Unmoved, the script is as the last pass here read it.
+    const engine_core::DataModel& game = engine_.datamodel();
+    const std::uint64_t authored = game.authored_revision();
+    const std::uint64_t tree = game.tree_revision();
+    if (authored == seen_authored_ && tree == seen_tree_) {
+        return;
+    }
     if (missing_) {
         // Loads again once the script is back, as after an undo of its delete.
         loaded_ = false;
         load();
+        if (loaded_) {
+            seen_authored_ = authored;
+            seen_tree_ = tree;
+        }
         return;
     }
     if (commit_->acked.load(std::memory_order_acquire) != commit_->epoch.load(std::memory_order_relaxed)) {
@@ -1042,6 +1058,8 @@ void IdeScriptEditor::reapply() {
     if (!read_source(text, name, alive, &world)) {
         return;
     }
+    seen_authored_ = authored;
+    seen_tree_ = tree;
     if (!alive) {
         missing_ = true;
         area_->setEditable(false);

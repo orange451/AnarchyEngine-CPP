@@ -652,6 +652,25 @@ const engine_core::LuaNode* FindChild(const std::vector<engine_core::LuaNode>& w
     return nullptr;
 }
 
+// One operand of a registered operator row, such as "Vector2 | number", names `type`.
+bool OperandIs(const char* operand, const std::string& type) {
+    if (operand == nullptr || type.empty()) {
+        return false;
+    }
+    std::string_view rest = operand;
+    while (!rest.empty()) {
+        const std::size_t bar = rest.find(" | ");
+        if (rest.substr(0, bar) == type) {
+            return true;
+        }
+        if (bar == std::string_view::npos) {
+            break;
+        }
+        rest.remove_prefix(bar + 3);
+    }
+    return false;
+}
+
 std::string DescribeType(const Shape* shape) {
     if (shape == nullptr) {
         return {};
@@ -2309,10 +2328,53 @@ private:
             } else if (level == 3) {
                 left = value_shape("boolean");
             } else {
-                left = value_shape("number");
+                left = arithmetic(op, left, right);
             }
         }
         return left;
+    }
+
+    // An arithmetic result. A vector when either side is one, as the VM does;
+    // then a class's registered operator for these operands; else a number.
+    // `right` is null for unary minus.
+    Shape* arithmetic(const std::string& op, Shape* left, Shape* right) {
+        const std::string a = DescribeType(left);
+        const std::string b = right != nullptr ? DescribeType(right) : std::string();
+        // Vector3 is the VM's native vector, with no operator table of its own.
+        if (a == "vector" || a == "Vector3") {
+            return left;
+        }
+        if (b == "vector" || b == "Vector3") {
+            return right;
+        }
+        const char* metamethod = op == "+"   ? "__add"
+                                 : op == "-" ? (right == nullptr ? "__unm" : "__sub")
+                                 : op == "*" ? "__mul"
+                                 : op == "/" ? "__div"
+                                 : op == "%" ? "__mod"
+                                             : nullptr;
+        for (const std::string& owner : {a, b}) {
+            if (metamethod == nullptr || owner.empty() || owner == "number") {
+                continue;
+            }
+            std::vector<engine_core::LuaOperator> rows;
+            engine_core::lua_class_operators(owner.c_str(), rows);
+            for (const engine_core::LuaOperator& row : rows) {
+                if (row.metamethod == nullptr || std::strcmp(row.metamethod, metamethod) != 0 ||
+                    !OperandIs(row.left, a) || (right != nullptr && !OperandIs(row.right, b))) {
+                    continue;
+                }
+                const std::string result = row.result != nullptr ? row.result : "";
+                if (result == a) {
+                    return left;
+                }
+                if (right != nullptr && result == b) {
+                    return right;
+                }
+                return value_shape(result.empty() ? "number" : result);
+            }
+        }
+        return value_shape("number");
     }
 
     Shape* parse_unary() {
@@ -2330,13 +2392,15 @@ private:
             return value_shape("boolean");
         }
         if (is(Token::Op) && (cur().text == "-" || cur().text == "#")) {
+            const bool negate = cur().text == "-";
             advance();
             if (at_end()) {
                 cut_ = true;
                 return value_shape("number");
             }
-            parse_unary();
-            return value_shape("number");
+            Shape* operand = parse_unary();
+            // The length of anything is a number. A negated vector is a vector.
+            return negate ? arithmetic("-", operand, nullptr) : value_shape("number");
         }
         return parse_simple();
     }
@@ -3684,11 +3748,15 @@ CompletionList complete_luau(std::string_view source, int caret, const std::vect
         resolver.parse_until(expr_end);
         Shape* shape = resolver.receiver(expr_end);
         resolver.add_members(shape, colon, list.prefix, list.items);
-        // A bare table, or a value of no known type, tells nothing about its members.
-        list.receiver_known =
-            shape != nullptr && (!shape->fields.empty() || !shape->class_name.empty() || !shape->library.empty() ||
-                                 (!shape->value_type.empty() && shape->value_type != "table" &&
-                                  shape->value_type != "any" && shape->value_type != "unknown"));
+        // The resolver knew the receiver when it has members after '.' or ':',
+        // even if none match here. A type it names but knows no members of,
+        // such as an annotated table, is not knowing it.
+        std::vector<CompletionItem> any_members;
+        resolver.add_members(shape, false, "", any_members);
+        if (any_members.empty()) {
+            resolver.add_members(shape, true, "", any_members);
+        }
+        list.receiver_known = !any_members.empty();
         return list;
     }
     list.site = CompleteSite::Name;

@@ -50,10 +50,10 @@ bool NameUnit(char unit) {
            unit == '_';
 }
 
-// Types that say nothing a hover could use.
+// Types that say nothing a hover could use, or no more than the resolver did.
 bool Uninformative(const std::string& type) {
     return type.empty() || type == "unknown" || type == "any" || type == "*error-type*" || type == "nil" ||
-           type == "never";
+           type == "never" || type == "table" || type == "{  }" || type == "{ }";
 }
 
 // The byte offset of the callee's last character, just before its '('.
@@ -145,8 +145,19 @@ std::optional<HoverWord> hover_word(std::string_view source, int index) {
 }
 
 bool wants_luau_hover(const HoverInfo& info, const HoverWord& word) {
-    return !info.found ||
-           (info.summary.empty() && (info.title == word.word || info.title == word.word + ": function"));
+    // The bare name, or a type that says no more than its kind.
+    if (!info.found) {
+        return true;
+    }
+    if (!info.summary.empty()) {
+        return false;
+    }
+    for (const char* vague : {"", ": function", ": table", ": any"}) {
+        if (info.title == word.word + vague) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool apply_luau_hover(HoverInfo& info, const HoverWord& word, const engine_core::LuauTypeAt& luau) {

@@ -2521,6 +2521,28 @@ engine_core::ScriptAnalysis& typed_analysis() {
     return analysis;
 }
 
+// Arithmetic on a vector is a vector, not a number: the VM's native vector,
+// and a class through its registered operators.
+void testVectorArithmetic() {
+    const char* cases[] = {
+        "local w = Vector3.new(1, 2, 3) * 2\nw.",
+        "local w = 2 * Vector3.new(1, 2, 3)\nw.",
+        "local w = Vector3.new(1, 2, 3) + Vector3.new(4, 5, 6)\nw.",
+        "local w = Vector3.new(1, 2, 3) / 2 - Vector3.one\nw.",
+        "local w = -Vector3.new(1, 2, 3)\nw.",
+    };
+    for (const char* source : cases) {
+        expect_has(at_end(source), "Lerp", source);
+        const std::string text = source;
+        expect_hover(ide::hover_luau(text, find_nth(text, "w", 0)), "w: Vector3", nullptr, nullptr, source);
+    }
+    expect_has(at_end("local p = Vector2.new(1, 2) * 2\np."), "Lerp", "Vector2 times a number");
+    expect_has(at_end("local p = Vector2.new(1, 2) + Vector2.new(3, 4)\np."), "Lerp", "Vector2 plus Vector2");
+    const char* numbers = "local x = 1 + 2 * 3\nlocal y = -x\nprint(x, y)";
+    expect_hover(ide::hover_luau(numbers, find_nth(numbers, "x", 0)), "x: number", nullptr, nullptr, "numbers stay numbers");
+    expect_hover(ide::hover_luau(numbers, find_nth(numbers, "y", 0)), "y: number", nullptr, nullptr, "a negated number");
+}
+
 // What the editor shows: the resolver's list, and Luau's when the resolver
 // did not know the receiver.
 ide::CompletionList typed_at_end(std::string_view source, const std::vector<engine_core::LuaNode>& world = {},
@@ -2625,6 +2647,12 @@ void testTypedFallback() {
     replaced_world.push_back(node(4, 0, "Main", "Script"));
     expect_missing(typed_at_end("local m = require(game:FindFirstChild(\"Lib\"))\nm:", replaced_world, 4), "Test",
                    "a replaced method stays off ':' with Luau asked too");
+    // A value the resolver names a type for but knows no members of, such as
+    // an annotated table return, still asks Luau.
+    const ide::CompletionList made = typed_at_end(
+        "local function make(): { speed: number, name: string }\n    return { speed = 1, name = \"a\" }\nend\nmake().");
+    expect_has(made, "speed", "an annotated table return");
+    expect_has(made, "name", "an annotated table return");
     // Instances, Vector3, and names are still the resolver's.
     expect_has(typed_at_end("game."), "FindFirstChild", "instance methods after '.'");
     expect_has(typed_at_end("Vector3.new()."), "Lerp", "Vector3 methods");
@@ -2691,6 +2719,14 @@ void testTypedHoverAndSignature() {
     if (!after_stray.found || after_stray.title.rfind("a: ", 0) != 0 ||
         after_stray.begin != ide::CodePointsBefore(stray, a_byte)) {
         fail("a hover after a malformed byte finds its name: " + after_stray.title);
+    }
+
+    // A hover that only says table shows the table's shape.
+    const char* shaped = "local t = { a = 1, b = \"x\" }\nprint(t)\n";
+    const ide::HoverInfo table = typed_hover(shaped, find_nth(shaped, "t", 1));
+    if (table.title.rfind("t: {", 0) != 0 || table.title.find("a: number") == std::string::npos ||
+        table.title.find("b: string") == std::string::npos) {
+        fail("a table's hover shows its shape: " + table.title);
     }
 
     // What the resolver already says stays.
@@ -2869,6 +2905,81 @@ void testTypedLater() {
     }
 }
 
+// Where the resolver and Luau together still offer nothing, for everyday code.
+// Shadow mode only; it checks nothing and prints what came back.
+void gapProbes() {
+    if (shadow() == nullptr) {
+        return;
+    }
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
+    world.push_back(node(9, 0, "Main", "Script"));
+    world.push_back(node(7, 0, "Parts", "Folder"));
+    world.push_back(node(6, 7, "Door", "GameObject"));
+    world.push_back(node(8, 0, "Util", "ModuleScript",
+                         "local Util = {}\nfunction Util.clamp(x: number, lo: number, hi: number): number\n"
+                         "    return math.min(math.max(x, lo), hi)\nend\n"
+                         "function Util.point(x: number, y: number)\n    return { x = x, y = y }\nend\nreturn Util\n"));
+    const char* members[] = {
+        "local function make(): { speed: number, name: string }\n    return { speed = 1, name = \"a\" }\nend\nmake().",
+        "local Util = require(game.Util)\nlocal p = Util.point(1, 2)\np.",
+        "local Util = require(game.Util)\nUtil.point(1, 2).",
+        "local list = {}\ntable.insert(list, { hp = 10 })\nlist[1].",
+        "local parts = game.Parts:GetChildren()\nparts[1].",
+        "local door = game.Parts:FindFirstChild(\"Door\")\nif door then\n    door.",
+        "local v = Vector3.new(1, 2, 3)\nlocal w = v * 2\nw.",
+        "local v = Vector3.new(1, 2, 3) + Vector3.new(4, 5, 6)\nv.",
+        "local c = Color3.new(1, 0, 0)\nc.",
+        "local rs = game:GetService(\"RunService\")\nrs.Heartbeat:",
+        "local t = { a = { b = { c = 1 } } }\nt.a.b.",
+        "local s = \"hello\"\nlocal u = s:upper()\nu:",
+        "local n = tostring(5)\nn:",
+        "local f = function(x: number) return { value = x } end\nf(1).",
+        "local ok, err = pcall(error, \"x\")\nerr:",
+        "local conn = game.Changed:Connect(function() end)\nconn:",
+        "local i = UserInputService\ni.",
+        "local UIS = game:GetService(\"UserInputService\")\nUIS.InputBegan:Connect(function(input)\n    input.",
+        "local state = setmetatable({}, { __index = { go = function() end } })\nstate.",
+        "local vectors: { Vector3 } = {}\nfor _, v in vectors do\n    v.",
+    };
+    for (const char* source : members) {
+        const ide::CompletionList list = typed_at_end(source, world, 9);
+        shadow()->out << "=== gap " << (list.items.empty() ? "EMPTY" : "ok") << " (" << list.items.size()
+                      << " rows, site " << site_name(list.site) << ")\n" << source << "|\n";
+        std::printf("gap %-5s %3zu rows: %s\n", list.items.empty() ? "EMPTY" : "ok", list.items.size(),
+                    std::string(source).substr(std::string(source).rfind('\n') + 1).c_str());
+        if (list.items.empty()) {
+            const std::string text = source;
+            const engine_core::LuauCompletion luau =
+                typed_analysis().luau_complete(world, 9, text, text.size(), std::chrono::seconds(20));
+            std::string names;
+            for (const engine_core::LuauSuggestion& item : luau.items) {
+                if (!item.wrong_index && item.kind == "property") {
+                    names += item.name + ":" + item.type + " ";
+                }
+            }
+            std::printf("    receiver_known=%d luau: %s\n", list.receiver_known ? 1 : 0, names.c_str());
+        }
+    }
+    const char* hovers[][2] = {
+        {"local t = { a = 1, b = \"x\" }\nprint(t)", "t"},
+        {"local Util = require(game.Util)\nlocal p = Util.point(1, 2)\nprint(p)", "p"},
+        {"local Util = require(game.Util)\nprint(Util.clamp(1, 2, 3))\nprint(Util.clamp)", "clamp"},
+        {"local parts = game.Parts:GetChildren()\nprint(parts)", "parts"},
+        {"local v = Vector3.new(1, 2, 3) * 2\nprint(v)", "v"},
+        {"local function add(a: number, b: number)\n    return a + b\nend\nprint(add(1, 2))", "add"},
+        {"local s = string.format(\"%d\", 1)\nprint(s)", "s"},
+    };
+    for (const auto& probe : hovers) {
+        const std::string source = probe[0];
+        const int at = find_nth(source, probe[1], 1);
+        const ide::HoverInfo plain = ide::hover_luau(source, at, world, 9);
+        const ide::HoverInfo info = typed_hover(source, at, world, 9);
+        std::printf("hover %-6s ours '%s' -> '%s' [%s]\n", probe[1], plain.title.c_str(), info.title.c_str(),
+                    info.detail.c_str());
+    }
+}
+
 // Everyday code the tests above do not cover, asked of both engines when the
 // shadow is on. It checks nothing: the shadow file says what each one offered.
 void shadowProbes() {
@@ -3002,11 +3113,13 @@ int RunLuauCompleteTests() {
         testScriptTableKeys();
         testRequire();
         testDeepNesting();
+        testVectorArithmetic();
         testTypedFallback();
         testTypedHoverAndSignature();
         testTypedLater();
         testTypedSwitchedOff();
         shadowProbes();
+        gapProbes();
     } catch (const std::exception& ex) {
         fail(std::string("exception ") + ex.what());
     }

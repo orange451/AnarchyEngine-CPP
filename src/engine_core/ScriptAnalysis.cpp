@@ -1435,6 +1435,13 @@ LuauTypeAt type_job(WorkerEnv& env, const CompleteRequest& request) {
         out.found = true;
         out.described.name = out.name;
         out.described.type = Luau::toString(*type);
+        // A table Luau named after the local that holds it prints as that name,
+        // which says nothing. Its shape does.
+        if (out.described.type == out.name) {
+            Luau::ToStringOptions shape;
+            shape.ignoreSyntheticName = true;
+            out.described.type = Luau::toString(*type, shape);
+        }
         if (const auto* fn = Luau::get<Luau::FunctionType>(Luau::follow(*type))) {
             describe_function(*fn, with_self, out.described);
         }

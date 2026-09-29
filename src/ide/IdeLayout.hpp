@@ -143,10 +143,10 @@ private:
     void save_project(std::function<void()> then = {});
     void save_project_as(std::function<void()> then = {});
     bool save_project_to(const std::filesystem::path& root);
-    // Saves the open project. When files changed on disk since it was opened or
-    // saved, asks whether to overwrite them and returns false; if Overwrite
-    // saves, then runs. overwrite, when set, lists the conflicts to write over;
-    // any other still asks.
+    // Saves the open project and runs then. When files changed on disk since it
+    // was opened or saved, asks whether to overwrite them and returns false; if
+    // Overwrite saves, then runs after that save. overwrite, when set, lists the
+    // conflicts to write over; any other still asks. A failed save skips then.
     bool save_open_project(std::function<void()> then = {},
                            const std::vector<engine_core::SaveConflict>* overwrite = nullptr);
     // Lists the files a save found changed on disk. Overwrite saves over those
@@ -189,6 +189,11 @@ private:
     // Writes the project's name and folder to the registry entry when they changed.
     void publish_studio();
     std::filesystem::path dialog_directory() const;
+    // Shows the folder picker, unless one is up already, starting in
+    // dialog_directory, and calls chosen with the folder picked. `hint` follows
+    // the message shown when the system has no picker.
+    void pick_folder(jadefx::FolderDialogOptions options, const std::string& hint,
+                     std::function<void(const std::filesystem::path&)> chosen);
     void reapply_editors();
     void restore_closed_edits();
     // The keys every studio window routes the same way, in this order.
@@ -298,6 +303,12 @@ private:
     runner::Runner runner_;
     Preferences preferences_;
     ThemeLibrary themes_;
+    // Before the docks and pages below, so it is destroyed after them: the
+    // console and script editors hold raw pointers into it.
+    InputRouter undo_router_;
+    // Edits the selection's properties. Docked under the right-hand explorer,
+    // and declared before the docks so it outlives its own dock page.
+    std::unique_ptr<PropertiesPanel> properties_;
     std::shared_ptr<jadefx::BorderPane> root_;
     std::shared_ptr<jadefx::Node> workArea_;
     std::vector<std::shared_ptr<IdeDock>> docks_;
@@ -368,9 +379,6 @@ private:
     // MCP tools that wait for the UI thread hold this weakly, so a task that
     // runs after the layout is gone does nothing.
     std::shared_ptr<int> alive_ = std::make_shared<int>(0);
-    // Edits the selection's properties. Docked under the right-hand explorer.
-    std::unique_ptr<PropertiesPanel> properties_;
-    InputRouter undo_router_;
     std::uint32_t last_script_focus_ = 0;
     // Source from an editor that was closed while the simulation was running.
     // Stop restores the place, then these strings are written back.

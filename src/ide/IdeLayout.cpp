@@ -996,7 +996,7 @@ IdeDock* IdeLayout::dock_beside(jadefx::Node* target, DropSide side, double dept
     }
     const bool across = side == DropSide::Left || side == DropSide::Right;
     const double span = across ? target->getWidth() : target->getHeight();
-    const double fraction = span > 1.0 ? std::clamp(depth / span, 0.12, 0.5) : 0.25;
+    const double fraction = span > 1.0 ? clampFraction(depth / span) : 0.25;
     auto share = [this](jadefx::Node* node) { return shareNode(node); };
     auto replaced = [this](jadefx::Node& owner, const std::shared_ptr<jadefx::Node>& previous,
                            const std::shared_ptr<jadefx::Node>& replacement) { noteReplaced(owner, previous, replacement); };
@@ -1853,6 +1853,9 @@ jadefx::UtilityWindow* IdeLayout::open_floating(const std::string& title, int wi
     return window.get();
 }
 
+// Free helpers for docking drags and window sizing, local to this file.
+namespace {
+
 struct DragPoint {
     jadefx::Stage* stage = nullptr;
     double x = 0;
@@ -1981,13 +1984,7 @@ DragChoice ChooseDrop(IdeDock& from, const DragPoint& point, const std::vector<s
             const bool horizontal = edge == DockZone::Left || edge == DockZone::Right;
             const double span = horizontal ? work.width : work.height;
             const double desired = horizontal ? kSideWidth : kConsoleHeight;
-            double fraction = span > 1.0 ? desired / span : 0.5;
-            if (fraction < 0.12) {
-                fraction = 0.12;
-            }
-            if (fraction > 0.5) {
-                fraction = 0.5;
-            }
+            const double fraction = clampFraction(span > 1.0 ? desired / span : 0.5);
             choice.kind = DragKind::SplitRoot;
             choice.zone = edge;
             choice.mark = edgePreview(work, edge, fraction * span);
@@ -2026,6 +2023,7 @@ DragChoice ChooseDrop(IdeDock& from, const DragPoint& point, const std::vector<s
     }
     return choice;
 }
+}  // namespace
 
 void IdeLayout::showDropMark(jadefx::Scene& scene, double x, double y, double width, double height, const char* style) {
     if (width < 2.0 || height < 2.0) {
@@ -2164,6 +2162,8 @@ void IdeLayout::onTabDrag(IdeDock& from, const jadefx::TabDrag& drag) {
     }
 }
 
+namespace {
+
 void GrowToFit(const jadefx::Node* area, jadefx::Scene* scene, const std::function<void(int, int)>& resize, int& lastW,
                int& lastH, int& seenW, int& seenH) {
     if (area == nullptr || scene == nullptr || !resize || area->getWidth() < 1.0 || area->getHeight() < 1.0) {
@@ -2188,6 +2188,7 @@ void GrowToFit(const jadefx::Node* area, jadefx::Scene* scene, const std::functi
     seenH = sceneH;
     resize(targetW, targetH);
 }
+}  // namespace
 
 void IdeLayout::flushFrame() {
     ++frames_;
@@ -3274,25 +3275,30 @@ void IdeLayout::new_place() {
 
 void IdeLayout::open_project() {
     confirm_discard("Save changes before opening another project?", [this] {
-        if (dialog_open_) {
-            return;
-        }
-        dialog_open_ = true;
         jadefx::FolderDialogOptions options;
         options.title = "Open Project";
-        options.directory = dialog_directory().u8string();
-        jadefx::showFolderDialog(std::move(options), [this](jadefx::DialogResult result, const std::string& path) {
-            dialog_open_ = false;
-            if (result == jadefx::DialogResult::Unavailable) {
-                show_error("No folder dialog",
-                           "This system has no folder picker. On Linux, install zenity or kdialog. You can also "
-                           "start the studio with a project folder: AnarchyEngine-CPP <folder>");
-                return;
-            }
-            if (result == jadefx::DialogResult::Chosen) {
-                open_project_at(std::filesystem::u8path(path));
-            }
-        });
+        pick_folder(std::move(options), " You can also start the studio with a project folder: AnarchyEngine-CPP <folder>",
+                    [this](const std::filesystem::path& root) { open_project_at(root); });
+    });
+}
+
+void IdeLayout::pick_folder(jadefx::FolderDialogOptions options, const std::string& hint,
+                            std::function<void(const std::filesystem::path&)> chosen) {
+    if (dialog_open_) {
+        return;
+    }
+    dialog_open_ = true;
+    options.directory = dialog_directory().u8string();
+    jadefx::showFolderDialog(std::move(options), [this, hint, chosen = std::move(chosen)](jadefx::DialogResult result,
+                                                                                         const std::string& path) {
+        dialog_open_ = false;
+        if (result == jadefx::DialogResult::Unavailable) {
+            show_error("No folder dialog", "This system has no folder picker. On Linux, install zenity or kdialog." + hint);
+            return;
+        }
+        if (result == jadefx::DialogResult::Chosen) {
+            chosen(std::filesystem::u8path(path));
+        }
     });
 }
 
@@ -3365,6 +3371,9 @@ bool IdeLayout::save_open_project(std::function<void()> then,
     show_toast("Saved " + project_->name() +
                (changed == 0 ? std::string(" (no changes)")
                              : " (" + std::to_string(changed) + (changed == 1 ? " file" : " files") + " changed)"));
+    if (then) {
+        then();
+    }
     return true;
 }
 
@@ -3420,11 +3429,9 @@ void IdeLayout::confirm_overwrite(const std::vector<engine_core::SaveConflict>& 
                 keep.push_back({row, false});
             }
             check_disk(keep);
-            if (save_open_project(then) && then) {
-                then();
-            }
-        } else if (save_open_project(then, &listed) && then) {
-            then();
+            save_open_project(then);
+        } else {
+            save_open_project(then, &listed);
         }
     });
     // Finished alerts are not dropped here: this may run inside the closed
@@ -3447,29 +3454,16 @@ void IdeLayout::save_project(std::function<void()> then) {
         save_project_as(std::move(then));
         return;
     }
-    if (save_open_project(then) && then) {
-        then();
-    }
+    save_open_project(std::move(then));
 }
 
 void IdeLayout::save_project_as(std::function<void()> then) {
-    if (dialog_open_) {
-        return;
-    }
-    dialog_open_ = true;
     jadefx::FolderDialogOptions options;
     options.title = "Save Project As";
     options.save = true;
-    options.directory = dialog_directory().u8string();
     options.name = project_ ? project_->name() : std::string("MyPlace");
-    jadefx::showFolderDialog(std::move(options), [this, then = std::move(then)](jadefx::DialogResult result,
-                                                                              const std::string& path) {
-        dialog_open_ = false;
-        if (result == jadefx::DialogResult::Unavailable) {
-            show_error("No folder dialog", "This system has no folder picker. On Linux, install zenity or kdialog.");
-            return;
-        }
-        if (result == jadefx::DialogResult::Chosen && save_project_to(std::filesystem::u8path(path)) && then) {
+    pick_folder(std::move(options), std::string(), [this, then = std::move(then)](const std::filesystem::path& root) {
+        if (save_project_to(root) && then) {
             then();
         }
     });

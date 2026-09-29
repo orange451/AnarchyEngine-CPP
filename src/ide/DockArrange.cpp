@@ -43,16 +43,6 @@ bool horizontalSide(DropSide side) { return side == DropSide::Left || side == Dr
 
 bool leadingSide(DropSide side) { return side == DropSide::Left || side == DropSide::Top; }
 
-double clampFraction(double fraction) {
-    if (fraction < 0.12) {
-        return 0.12;
-    }
-    if (fraction > 0.5) {
-        return 0.5;
-    }
-    return fraction;
-}
-
 void setPositions(jadefx::SplitPane& split, const std::vector<double>& positions) {
     for (std::size_t i = 0; i < positions.size() && i < split.getDividers().size(); ++i) {
         split.setDividerPosition(static_cast<int>(i), positions[i]);
@@ -383,6 +373,16 @@ bool splitEdge(jadefx::Node& area, const std::shared_ptr<jadefx::Node>& incoming
         return true;
     }
     return wrapNode(area, incoming, side, cut, false, share, replaced);
+}
+
+double clampFraction(double fraction) {
+    if (fraction < kMinSplitFraction) {
+        return kMinSplitFraction;
+    }
+    if (fraction > kMaxSplitFraction) {
+        return kMaxSplitFraction;
+    }
+    return fraction;
 }
 
 }  // namespace ide

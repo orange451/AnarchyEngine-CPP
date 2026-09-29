@@ -56,6 +56,11 @@ bool splitBeside(jadefx::Node& target, const std::shared_ptr<jadefx::Node>& inco
                  const std::function<void(jadefx::Node& parent, const std::shared_ptr<jadefx::Node>& previous,
                                           const std::shared_ptr<jadefx::Node>& replacement)>& replaced);
 
+// The share of an area a docked pane may take when it is split in.
+constexpr double kMinSplitFraction = 0.12;
+constexpr double kMaxSplitFraction = 0.5;
+double clampFraction(double fraction);
+
 // Adds `incoming` on a side of the whole area. A matching split gains a child.
 // Anything else is wrapped. `fraction` is the incoming share of that area.
 // The incoming child keeps its size when the parent split grows.

@@ -6,6 +6,7 @@
 #include "TestTriangle.hpp"
 #include "Runner.hpp"
 #include "gl.hpp"
+#include "UserInputService.hpp"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>

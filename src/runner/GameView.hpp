@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../ide/IdePane.hpp"
+#include "ide/IdePane.hpp"
 #include "Renderer.hpp"
 
 #include <atomic>

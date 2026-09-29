@@ -2,6 +2,7 @@
 #include "ide/IdeExplorer.hpp"
 #include "ide/IdeLayout.hpp"
 #include "ide/IdeScriptEditor.hpp"
+#include "SelectionService.hpp"
 
 #include "DataModel.hpp"
 #include "Engine.hpp"

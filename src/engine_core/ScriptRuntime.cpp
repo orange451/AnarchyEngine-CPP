@@ -1,5 +1,6 @@
 #include "ScriptRuntime.hpp"
 
+#include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
 #include "Enum.hpp"
 #include "Folder.hpp"
@@ -9,6 +10,8 @@
 #include "LuauSandbox.hpp"
 #include "ModuleScript.hpp"
 #include "Script.hpp"
+#include "SelectionService.hpp"
+#include "UserInputService.hpp"
 #include "Vector2.hpp"
 #include "Vector3.hpp"
 

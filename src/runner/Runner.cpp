@@ -1,8 +1,8 @@
 #include "Runner.hpp"
 
-#include "../engine_core/LuaEngine.hpp"
-#include "../engine_core/Engine.hpp"
-#include "../engine_core/ScriptRuntime.hpp"
+#include "LuaEngine.hpp"
+#include "Engine.hpp"
+#include "ScriptRuntime.hpp"
 
 #include <stdexcept>
 #include <utility>

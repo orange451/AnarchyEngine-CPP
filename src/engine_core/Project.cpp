@@ -1,5 +1,6 @@
 #include "Project.hpp"
 
+#include "ChangeHistoryService.hpp"
 #include "Folder.hpp"
 #include "Game.hpp"
 #include "GameObject.hpp"

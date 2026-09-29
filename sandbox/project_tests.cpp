@@ -1,4 +1,5 @@
 #include "DataModel.hpp"
+#include "ChangeHistoryService.hpp"
 #include "Engine.hpp"
 #include "Folder.hpp"
 #include "Game.hpp"

@@ -1,12 +1,9 @@
 #pragma once
 
-#include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
 #include "Events.hpp"
-#include "UserInputService.hpp"
 #include "InvalidationQueue.hpp"
 #include "PropertyBag.hpp"
-#include "SelectionService.hpp"
 #include "types.hpp"
 
 #include <chrono>
@@ -64,10 +61,16 @@ bool valid_guid(std::string_view guid);
 // 16 lowercase hex digits from a seeded 64-bit generator.
 std::string make_guid();
 
+class ChangeHistoryService;
 class Engine;
 class GameObject;
 class ScriptAnalysis;
 class ScriptHost;
+class SelectionService;
+class UserInputService;
+struct AuthoredRecord;
+struct Mutation;
+struct PropertyValue;
 
 // Live source of truth. SimulationThread is the only thread that may run
 // gameplay against it, and the only thread that may hold the write lock

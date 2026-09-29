@@ -2,6 +2,7 @@
 #include "ide/IdeDock.hpp"
 #include "ide/IdeLayout.hpp"
 #include "ide/IdePane.hpp"
+#include "SelectionService.hpp"
 
 #include "DataModel.hpp"
 #include "Engine.hpp"

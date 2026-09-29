@@ -1,7 +1,7 @@
 #pragma once
 
 #include "jadefx/jadefx.hpp"
-#include "../runner/Runner.hpp"
+#include "runner/Runner.hpp"
 #include "InputRouter.hpp"
 #include "Preferences.hpp"
 #include "ThemeLibrary.hpp"

@@ -1,6 +1,7 @@
 #include "ide/CutSet.hpp"
 #include "ide/IdeExplorer.hpp"
 #include "DataModelLock.hpp"
+#include "SelectionService.hpp"
 
 #include "DataModel.hpp"
 #include "Folder.hpp"

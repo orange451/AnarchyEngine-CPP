@@ -1,6 +1,8 @@
 #include "ide/IdeExplorer.hpp"
+#include "ChangeHistoryService.hpp"
 #include "ide/PropertiesPanel.hpp"
 #include "ide/PropertySheet.hpp"
+#include "SelectionService.hpp"
 
 #include "DataModel.hpp"
 #include "Folder.hpp"

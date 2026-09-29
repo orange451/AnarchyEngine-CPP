@@ -1,8 +1,10 @@
 #include "bridge/StudioBridge.hpp"
+#include "ChangeHistoryService.hpp"
 #include "ide/IdeResources.hpp"
 #include "ide/McpServer.hpp"
 #include "ide/McpTools.hpp"
 #include "ide/StudioRegistry.hpp"
+#include "SelectionService.hpp"
 
 #include "Engine.hpp"
 #include "LuaSource.hpp"

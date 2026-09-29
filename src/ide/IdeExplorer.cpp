@@ -4,6 +4,7 @@
 #include "FindBar.hpp"
 #include "IdeIcons.hpp"
 #include "IdeTheme.hpp"
+#include "SelectionService.hpp"
 #include "Strings.hpp"
 
 #include <algorithm>

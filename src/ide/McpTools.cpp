@@ -8,6 +8,7 @@
 #include "PropertySheet.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
+#include "SelectionService.hpp"
 #include "Strings.hpp"
 #include "TextSearch.hpp"
 

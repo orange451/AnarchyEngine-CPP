@@ -1,8 +1,9 @@
 #pragma once
 
-#include "SnapshotPump.hpp"
-
 namespace engine_core {
+
+// Forward declared, so the renderer interface does not compile the world model.
+struct VisualSnapshot;
 
 // Stand-in for the GPU submit. perform() receives the front snapshot only.
 // It must not touch a DataModel.

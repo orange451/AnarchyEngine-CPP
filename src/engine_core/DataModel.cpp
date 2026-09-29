@@ -1,13 +1,16 @@
 #include "DataModel.hpp"
 
+#include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
 #include "Ring.hpp"
 #include "Script.hpp"
 #include "ScriptAnalysis.hpp"
+#include "SelectionService.hpp"
 #include "TaskScheduler.hpp"
 #include "TestTriangle.hpp"
+#include "UserInputService.hpp"
 
 #include <algorithm>
 #include <atomic>

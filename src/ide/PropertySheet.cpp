@@ -1,5 +1,6 @@
 #include "PropertySheet.hpp"
 
+#include "ChangeHistoryService.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <optional>
 #include <unordered_set>
 
 namespace ide {
@@ -10,7 +11,8 @@ std::vector<engine_core::InstanceId> cut_set(const engine_core::DataModel& game,
                                              const std::vector<engine_core::InstanceId>& ids) {
     std::unordered_set<engine_core::InstanceId> wanted;
     for (engine_core::InstanceId id : ids) {
-        if (id != 0 && game.alive(id)) {
+        // Not game, and not a scene service: neither can leave the tree.
+        if (!game.parent_error(id, engine_core::DataModel::kNoParent)) {
             wanted.insert(id);
         }
     }
@@ -41,27 +43,23 @@ std::vector<engine_core::InstanceId> cut_set(const engine_core::DataModel& game,
 }
 
 bool move_set(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids,
-              engine_core::InstanceId parent) {
+              engine_core::InstanceId parent, std::string* refused) {
     constexpr engine_core::InstanceId kNone = engine_core::DataModel::kNoParent;
     if (parent == kNone || (parent != 0 && !world.alive(parent))) {
         return false;
     }
     bool any = false;
     for (engine_core::InstanceId id : ids) {
-        if (id == 0 || !world.alive(id)) {
-            continue;
-        }
-        bool cycle = false;
-        for (engine_core::InstanceId cursor = parent; cursor != 0 && cursor != kNone; cursor = world.parent(cursor)) {
-            if (cursor == id) {
-                cycle = true;
-                break;
-            }
-        }
-        if (cycle) {
+        if (id != 0 && !world.alive(id)) {
             continue;
         }
         if (world.parent(id) == parent) {
+            continue;
+        }
+        if (std::optional<std::string> error = world.parent_error(id, parent)) {
+            if (refused != nullptr && refused->empty()) {
+                *refused = std::move(*error);
+            }
             continue;
         }
         world.set_parent(id, parent);

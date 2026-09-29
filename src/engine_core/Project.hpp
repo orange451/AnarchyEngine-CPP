@@ -91,7 +91,9 @@ struct DiskChoice {
 };
 
 // Classes a project file may name. The built-ins are DataModel, GameObject,
-// Script, ModuleScript, Folder, and TestTriangle. A later class registers here.
+// Script, ModuleScript, Folder, TestTriangle, and the four scene services,
+// whose factory gives the world's own service back at its defaults. A later
+// class registers here.
 using ProjectFactory = DataModel& (*)(DataModel& world);
 void register_project_class(const char* class_name, ProjectFactory factory);
 bool project_class_known(std::string_view class_name);
@@ -186,6 +188,10 @@ public:
     };
     const SaveReport& last_save() const { return last_save_; }
 
+    // How many instances the last load moved from game into Workspace: a place
+    // saved before the scene services kept them under game. 0 for a place saved since.
+    std::size_t moved_to_workspace() const { return moved_to_workspace_; }
+
 private:
     Project();
 
@@ -235,6 +241,9 @@ private:
     // An instance's files as the disk has them, parent its parent's GUID, and
     // props its file as the class stores it.
     static Files from_disk(const detail::PlanNode& node, std::string parent, JsonValue props);
+    // The base takes node's files from disk. A scene service the read made has
+    // none: the base has no entry for it, so a save writes it as new.
+    void take_from_disk(const detail::PlanNode& node, std::string parent, JsonValue props);
 
     std::filesystem::path root_;
     std::string name_;
@@ -246,6 +255,7 @@ private:
     std::unordered_map<InstanceId, std::string> id_guid_;
     std::unordered_map<std::string, InstanceId> guid_id_;
     SaveReport last_save_;
+    std::size_t moved_to_workspace_ = 0;
 };
 
 }  // namespace engine_core

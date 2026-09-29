@@ -185,15 +185,24 @@ void TestEngineTools() {
     ide::add_engine_tools(server, engine, {});
 
     const JsonValue folder = Call(server, "create_instance", R"({"class":"Folder","name":"Stuff"})");
-    Expect(folder.find("path") != nullptr && Member(folder, "path").as_string() == "Stuff",
-           "create_instance puts it under the root");
-    const JsonValue inner = Call(server, "create_instance", R"({"class":"Folder","name":"Inner","parent":"Stuff"})");
-    Expect(Member(inner, "path").as_string() == "Stuff.Inner", "create_instance takes a parent path");
+    Expect(folder.find("path") != nullptr && Member(folder, "path").as_string() == "Workspace.Stuff",
+           "create_instance puts it in Workspace");
+    const JsonValue inner = Call(server, "create_instance", R"({"class":"Folder","name":"Inner","parent":"Workspace.Stuff"})");
+    Expect(Member(inner, "path").as_string() == "Workspace.Stuff.Inner", "create_instance takes a parent path");
     Expect(ErrorText(server, "create_instance", R"({"class":"Banana"})").find("Instance.new cannot make") == 0,
            "an unknown class is refused");
-    AddScript(game, "Hello", "print('hi')", game.find_first_child(game.id(), "Stuff"));
+    // game holds the scene services alone, and they stay where they are.
+    Expect(ErrorText(server, "create_instance", R"({"class":"Folder","parent":"game"})") ==
+               "Only scene services can be children of game; put Folder in Workspace",
+           "create_instance refuses game as the parent");
+    Expect(ErrorText(server, "delete_instance", R"({"instance":"Lighting"})") == "Lighting cannot be destroyed",
+           "delete_instance refuses a scene service");
+    Expect(ErrorText(server, "set_property", R"({"instance":"Storage","property":"Parent","value":"Workspace"})")
+                   .find("read-only") != std::string::npos,
+           "a scene service's Parent is read-only");
+    AddScript(game, "Hello", "print('hi')", game.find_first_child(game.scene_service("Workspace"), "Stuff"));
 
-    const JsonValue tree = Call(server, "get_tree", R"({"depth":1})");
+    const JsonValue tree = Call(server, "get_tree", R"({"instance":"Workspace","depth":1})");
     const JsonValue* top = tree.find("tree");
     Expect(top != nullptr && top->find("children") != nullptr, "get_tree lists the root's children");
     bool saw = false;
@@ -203,28 +212,28 @@ void TestEngineTools() {
         }
     }
     Expect(saw, "a row below depth reports its child count");
-    const JsonValue deep = Call(server, "get_tree", R"({"instance":"game.Stuff","depth":3})");
+    const JsonValue deep = Call(server, "get_tree", R"({"instance":"game.Workspace.Stuff","depth":3})");
     Expect(Member(Member(deep, "tree"), "children").items().size() == 2, "get_tree starts at a path");
 
     const JsonValue found = Call(server, "find_instances", R"({"name":"inn"})");
     Expect(Member(found, "instances").items().size() == 1 &&
-               Member(Item(Member(found, "instances"), 0), "path").as_string() == "Stuff.Inner",
+               Member(Item(Member(found, "instances"), 0), "path").as_string() == "Workspace.Stuff.Inner",
            "find_instances matches part of a name, ignoring case");
 
-    const JsonValue props = Call(server, "get_properties", R"({"instance":"Stuff.Inner"})");
+    const JsonValue props = Call(server, "get_properties", R"({"instance":"Workspace.Stuff.Inner"})");
     const JsonValue* name = props.find("properties") != nullptr ? Member(props, "properties").find("Name") : nullptr;
     Expect(name != nullptr && Member(*name, "value").as_string() == "Inner", "get_properties shows Name");
     const JsonValue* parent = props.find("properties") != nullptr ? Member(props, "properties").find("Parent") : nullptr;
-    Expect(parent != nullptr && Member(Member(*parent, "value"), "path").as_string() == "Stuff",
+    Expect(parent != nullptr && Member(Member(*parent, "value"), "path").as_string() == "Workspace.Stuff",
            "an Instance property shows its target's path");
 
-    Call(server, "set_property", R"({"instance":"Stuff.Inner","property":"Name","value":"Renamed"})");
-    Expect(game.find_first_child(game.find_first_child(game.id(), "Stuff"), "Renamed") != 0,
+    Call(server, "set_property", R"({"instance":"Workspace.Stuff.Inner","property":"Name","value":"Renamed"})");
+    Expect(game.find_first_child(game.find_first_child(game.scene_service("Workspace"), "Stuff"), "Renamed") != 0,
            "set_property renames through the property");
-    Call(server, "set_property", R"({"instance":"Stuff.Renamed","property":"Parent","value":"game"})");
-    Expect(game.find_first_child(game.id(), "Renamed") != 0, "set_property reparents by path");
+    Call(server, "set_property", R"({"instance":"Workspace.Stuff.Renamed","property":"Parent","value":"Workspace"})");
+    Expect(game.find_first_child(game.scene_service("Workspace"), "Renamed") != 0, "set_property reparents by path");
     Expect(game.history().can_undo().first, "an edit is on the undo stack");
-    Expect(!ErrorText(server, "set_property", R"({"instance":"Renamed","property":"Name","value":5})").empty(),
+    Expect(!ErrorText(server, "set_property", R"({"instance":"Workspace.Renamed","property":"Name","value":5})").empty(),
            "a value of the wrong type is refused");
     Expect(ErrorText(server, "get_properties", R"({"instance":"Nope.Missing"})").find("No instance at") == 0,
            "a missing path says where it stopped");
@@ -236,9 +245,9 @@ void TestEngineTools() {
 
     // A Color3 reads as [r, g, b] and takes that or a hex code.
     Call(server, "create_instance", R"({"class":"GameObject","name":"Box"})");
-    Call(server, "set_property", R"({"instance":"Box","property":"Color","value":[1,0.5,0]})");
+    Call(server, "set_property", R"({"instance":"Workspace.Box","property":"Color","value":[1,0.5,0]})");
     auto color_of = [&server]() {
-        const JsonValue box = Call(server, "get_properties", R"({"instance":"Box"})");
+        const JsonValue box = Call(server, "get_properties", R"({"instance":"Workspace.Box"})");
         const JsonValue* entry = box.find("properties") != nullptr ? Member(box, "properties").find("Color") : nullptr;
         return entry != nullptr ? *entry : JsonValue();
     };
@@ -249,11 +258,11 @@ void TestEngineTools() {
     Expect(color.find("value") != nullptr && Member(color, "value").items().size() == 3 &&
                Item(Member(color, "value"), 1).as_number() == 0.5,
            "set_property writes [r, g, b] and get_properties reads it back");
-    Call(server, "set_property", R"({"instance":"Box","property":"Color","value":"#0000FF"})");
+    Call(server, "set_property", R"({"instance":"Workspace.Box","property":"Color","value":"#0000FF"})");
     color = color_of();
     Expect(Item(Member(color, "value"), 0).as_number() == 0 && Item(Member(color, "value"), 2).as_number() == 1,
            "a hex code sets a Color3");
-    Expect(!ErrorText(server, "set_property", R"({"instance":"Box","property":"Color","value":"blue"})").empty(),
+    Expect(!ErrorText(server, "set_property", R"({"instance":"Workspace.Box","property":"Color","value":"blue"})").empty(),
            "a Color3 refuses what is not a color");
 
     const JsonValue run = Call(server, "run_lua", R"j({"source":"print('from mcp', 1 + 2)"})j");
@@ -278,15 +287,15 @@ void TestEngineTools() {
     Expect(Member(Call(server, "get_output", R"({"since":1e300})"), "lines").items().empty(),
            "get_output since a line never written returns nothing");
 
-    const JsonValue source = Call(server, "read_script", R"({"instance":"Stuff.Hello"})");
+    const JsonValue source = Call(server, "read_script", R"({"instance":"Workspace.Stuff.Hello"})");
     Expect(Member(source, "source").as_string() == "print('hi')", "read_script returns the Source");
-    Call(server, "write_script", R"j({"instance":"Stuff.Hello","source":"print('bye')"})j");
+    Call(server, "write_script", R"j({"instance":"Workspace.Stuff.Hello","source":"print('bye')"})j");
     const auto* script = dynamic_cast<const engine_core::LuaSource*>(
-        game.instance(game.find_first_child(game.find_first_child(game.id(), "Stuff"), "Hello")));
+        game.instance(game.find_first_child(game.find_first_child(game.scene_service("Workspace"), "Stuff"), "Hello")));
     Expect(script != nullptr && script->source() == "print('bye')", "write_script replaces the Source");
-    Expect(!ErrorText(server, "read_script", R"({"instance":"Stuff"})").empty(), "read_script refuses a Folder");
+    Expect(!ErrorText(server, "read_script", R"({"instance":"Workspace.Stuff"})").empty(), "read_script refuses a Folder");
 
-    Call(server, "set_selection", R"({"instances":["Stuff","Renamed"]})");
+    Call(server, "set_selection", R"({"instances":["Workspace.Stuff","Workspace.Renamed"]})");
     Expect(game.selection().get().size() == 2, "set_selection selects by path");
     const JsonValue selection = Call(server, "get_selection", "{}");
     Expect(Member(selection, "instances").items().size() == 2 &&
@@ -306,13 +315,13 @@ void TestEngineTools() {
     }
     Expect(has_name, "get_class includes inherited properties");
 
-    Call(server, "delete_instance", R"({"instance":"Stuff"})");
-    Expect(game.find_first_child(game.id(), "Stuff") == 0, "delete_instance removes it");
+    Call(server, "delete_instance", R"({"instance":"Workspace.Stuff"})");
+    Expect(game.find_first_child(game.scene_service("Workspace"), "Stuff") == 0, "delete_instance removes it");
     Expect(!ErrorText(server, "delete_instance", R"({"instance":"game"})").empty(), "the root is not deleted");
 }
 
 const engine_core::LuaSource* ScriptNamed(engine_core::DataModel& game, const char* name) {
-    return dynamic_cast<const engine_core::LuaSource*>(game.instance(game.find_first_child(game.id(), name)));
+    return dynamic_cast<const engine_core::LuaSource*>(game.instance(game.find_first_child(game.scene_service("Workspace"), name)));
 }
 
 bool HasProblem(const JsonValue& problems, const std::string& code, int line) {
@@ -332,63 +341,63 @@ void TestScriptTools() {
     engine.analysis().set_scope(engine_core::AnalysisScope::Open);
     ide::McpServer server;
     ide::add_engine_tools(server, engine, {});
-    AddScript(game, "Main", "print('hi')", game.id());
+    AddScript(game, "Main", "print('hi')", game.scene_service("Workspace"));
     // The explorer ends each of its edits as a step. So does this test's own.
     game.history().end_gesture();
 
-    const JsonValue broken = Call(server, "write_script", R"({"instance":"Main","source":"local x ="})");
+    const JsonValue broken = Call(server, "write_script", R"({"instance":"Workspace.Main","source":"local x ="})");
     const JsonValue* problems = broken.find("problems");
     Expect(problems != nullptr && problems->items().size() == 1 && HasProblem(*problems, "Syntax", 1) &&
                Member(Item(*problems, 0), "severity").as_string() == "error",
            "write_script returns a syntax error, lines from 1: " + ide::compact_json(broken));
-    const JsonValue clean = Call(server, "write_script", R"j({"instance":"Main","source":"local n = 1\nprint(n)\n"})j");
+    const JsonValue clean = Call(server, "write_script", R"j({"instance":"Workspace.Main","source":"local n = 1\nprint(n)\n"})j");
     Expect(clean.find("problems") != nullptr && Member(clean, "problems").items().empty(),
            "a clean script has no problems: " + ide::compact_json(clean));
 
     const JsonValue edited = Call(
         server, "edit_script",
-        R"j({"instance":"Main","edits":[{"old_text":"print(n)","new_text":"print(n + missing)"}]})j");
+        R"j({"instance":"Workspace.Main","edits":[{"old_text":"print(n)","new_text":"print(n + missing)"}]})j");
     Expect(ScriptNamed(game, "Main")->source() == "local n = 1\nprint(n + missing)\n", "edit_script replaces the text");
     Expect(Member(edited, "replaced").as_number() == 1, "edit_script counts its replacements");
     Expect(edited.find("problems") != nullptr && HasProblem(*edited.find("problems"), "Lint/UnknownGlobal", 2),
            "edit_script returns what analysis finds: " + ide::compact_json(edited));
 
     const JsonValue two = Call(server, "write_script",
-                               R"j({"instance":"Main","source":"local n = 1\nprint(n + missing)\nlocal x = n"})j");
+                               R"j({"instance":"Workspace.Main","source":"local n = 1\nprint(n + missing)\nlocal x = n"})j");
     const JsonValue* ordered = two.find("problems");
     Expect(ordered != nullptr && ordered->items().size() == 2 &&
                Member(Item(*ordered, 0), "line").as_number() == 2 && Member(Item(*ordered, 1), "line").as_number() == 3,
            "problems come in line order: " + ide::compact_json(two));
 
-    Call(server, "write_script", R"j({"instance":"Main","source":"local a = 1\nlocal b = a\nlocal c = a\n"})j");
+    Call(server, "write_script", R"j({"instance":"Workspace.Main","source":"local a = 1\nlocal b = a\nlocal c = a\n"})j");
     const std::string twice =
-        ErrorText(server, "edit_script", R"j({"instance":"Main","edits":[{"old_text":"= a","new_text":"= 2"}]})j");
+        ErrorText(server, "edit_script", R"j({"instance":"Workspace.Main","edits":[{"old_text":"= a","new_text":"= 2"}]})j");
     Expect(twice.find("2 times, on lines 2, 3") != std::string::npos,
            "old_text that matches twice is refused, naming the lines: " + twice);
-    Expect(ErrorText(server, "edit_script", R"j({"instance":"Main","edits":[{"old_text":"nope","new_text":""}]})j")
+    Expect(ErrorText(server, "edit_script", R"j({"instance":"Workspace.Main","edits":[{"old_text":"nope","new_text":""}]})j")
                    .find("is not in the Source") != std::string::npos,
            "old_text that does not match is refused");
     ErrorText(server, "edit_script",
-              R"j({"instance":"Main","edits":[{"old_text":"local b","new_text":"local B"},{"old_text":"nope","new_text":""}]})j");
+              R"j({"instance":"Workspace.Main","edits":[{"old_text":"local b","new_text":"local B"},{"old_text":"nope","new_text":""}]})j");
     Expect(ScriptNamed(game, "Main")->source() == "local a = 1\nlocal b = a\nlocal c = a\n",
            "a failed edit leaves the earlier ones unapplied");
     const JsonValue every = Call(
-        server, "edit_script", R"j({"instance":"Main","edits":[{"old_text":"= a","new_text":"= 2","replace_all":true}]})j");
+        server, "edit_script", R"j({"instance":"Workspace.Main","edits":[{"old_text":"= a","new_text":"= 2","replace_all":true}]})j");
     Expect(Member(every, "replaced").as_number() == 2 &&
                ScriptNamed(game, "Main")->source() == "local a = 1\nlocal b = 2\nlocal c = 2\n",
            "replace_all replaces each place");
 
-    Call(server, "write_script", R"j({"instance":"Main","source":"one\ntwo\nthree\n"})j");
-    const JsonValue whole = Call(server, "read_script", R"({"instance":"Main"})");
+    Call(server, "write_script", R"j({"instance":"Workspace.Main","source":"one\ntwo\nthree\n"})j");
+    const JsonValue whole = Call(server, "read_script", R"({"instance":"Workspace.Main"})");
     Expect(Member(whole, "line_count").as_number() == 4 && Member(whole, "source").as_string() == "one\ntwo\nthree\n",
            "read_script returns the whole Source and its line count");
-    const JsonValue middle = Call(server, "read_script", R"({"instance":"Main","first_line":2,"last_line":3})");
+    const JsonValue middle = Call(server, "read_script", R"({"instance":"Workspace.Main","first_line":2,"last_line":3})");
     Expect(Member(middle, "source").as_string() == "two\nthree" && Member(middle, "first_line").as_number() == 2,
            "read_script returns a range of lines");
-    const JsonValue tail = Call(server, "read_script", R"({"instance":"Main","first_line":3})");
+    const JsonValue tail = Call(server, "read_script", R"({"instance":"Workspace.Main","first_line":3})");
     Expect(Member(tail, "source").as_string() == "three\n" && Member(tail, "last_line").as_number() == 4,
            "a range without last_line runs to the end");
-    Expect(ErrorText(server, "read_script", R"({"instance":"Main","first_line":9})") == "The Source has 4 lines.",
+    Expect(ErrorText(server, "read_script", R"({"instance":"Workspace.Main","first_line":9})") == "The Source has 4 lines.",
            "a range past the end is refused");
 
     const JsonValue lib = Call(server, "create_instance", R"({"class":"Folder","name":"Lib"})");
@@ -400,7 +409,7 @@ void TestScriptTools() {
 
     const JsonValue found = Call(server, "search_scripts", R"({"pattern":"VALUE"})");
     const JsonValue& scripts = Member(found, "scripts");
-    Expect(scripts.items().size() == 1 && Member(Item(scripts, 0), "path").as_string() == "Lib.Util" &&
+    Expect(scripts.items().size() == 1 && Member(Item(scripts, 0), "path").as_string() == "Workspace.Lib.Util" &&
                Member(Item(scripts, 0), "lines").items().size() == 2 && Member(found, "matches").as_number() == 2,
            "search_scripts ignores case and lists matching lines: " + ide::compact_json(found));
     const JsonValue cased = Call(server, "search_scripts", R"({"pattern":"value","match_case":true})");
@@ -409,9 +418,9 @@ void TestScriptTools() {
            "match_case finds only the exact case, on its line");
     const JsonValue pattern = Call(server, "search_scripts", R"({"pattern":"^t\\w+","regex":true})");
     Expect(Member(pattern, "matches").as_number() == 2 &&
-               Member(Item(Member(pattern, "scripts"), 0), "path").as_string() == "Main",
+               Member(Item(Member(pattern, "scripts"), 0), "path").as_string() == "Workspace.Main",
            "a regex matches per line, scripts in explorer order: " + ide::compact_json(pattern));
-    const JsonValue scoped = Call(server, "search_scripts", R"({"pattern":"t","instance":"Lib"})");
+    const JsonValue scoped = Call(server, "search_scripts", R"({"pattern":"t","instance":"Workspace.Lib"})");
     Expect(Member(scoped, "scripts").items().size() == 1, "instance limits the search to what is under it");
     const JsonValue capped = Call(server, "search_scripts", R"({"pattern":"e","limit":1})");
     Expect(Member(capped, "matches").as_number() == 1 && capped.find("truncated") != nullptr,
@@ -419,21 +428,21 @@ void TestScriptTools() {
     Expect(ErrorText(server, "search_scripts", R"({"pattern":"(","regex":true})").find("is not a regex") != std::string::npos,
            "a bad regex is refused");
 
-    Call(server, "write_script", R"j({"instance":"Lib.Util","source":"return {"})j");
+    Call(server, "write_script", R"j({"instance":"Workspace.Lib.Util","source":"return {"})j");
     const JsonValue all = Call(server, "get_diagnostics", "{}");
     Expect(Member(all, "checked").as_number() == 2 && Member(all, "errors").as_number() >= 1 &&
                all.find("pending") == nullptr,
            "get_diagnostics checks every script: " + ide::compact_json(all));
     bool util = false;
     for (const JsonValue& entry : Member(all, "scripts").items()) {
-        util = util || (Member(entry, "path").as_string() == "Lib.Util" && HasProblem(Member(entry, "problems"), "Syntax", 1));
+        util = util || (Member(entry, "path").as_string() == "Workspace.Lib.Util" && HasProblem(Member(entry, "problems"), "Syntax", 1));
     }
     Expect(util, "get_diagnostics lists a script's problems under its path");
-    const JsonValue one = Call(server, "get_diagnostics", R"({"instance":"Main"})");
+    const JsonValue one = Call(server, "get_diagnostics", R"({"instance":"Workspace.Main"})");
     Expect(Member(one, "checked").as_number() == 1, "get_diagnostics checks only the scripts asked for");
 
-    Call(server, "write_script", R"j({"instance":"Main","source":"print('v1')"})j");
-    Call(server, "write_script", R"j({"instance":"Main","source":"print('v2')"})j");
+    Call(server, "write_script", R"j({"instance":"Workspace.Main","source":"print('v1')"})j");
+    Call(server, "write_script", R"j({"instance":"Workspace.Main","source":"print('v2')"})j");
     const JsonValue undone = Call(server, "undo", "{}");
     Expect(ScriptNamed(game, "Main")->source() == "print('v1')" && Member(undone, "undone").items().size() == 1 &&
                Member(undone, "next_redo").is_string(),
@@ -441,7 +450,7 @@ void TestScriptTools() {
     Call(server, "undo", R"({"redo":true})");
     Expect(ScriptNamed(game, "Main")->source() == "print('v2')", "redo applies it again");
 
-    const JsonValue several = Call(server, "get_properties", R"({"instances":["Main","Lib"]})");
+    const JsonValue several = Call(server, "get_properties", R"({"instances":["Workspace.Main","Workspace.Lib"]})");
     Expect(Member(several, "instances").items().size() == 2 &&
                Member(Item(Member(several, "instances"), 1), "name").as_string() == "Lib",
            "get_properties reads several instances in order");
@@ -451,7 +460,7 @@ void TestScriptTools() {
 void TestPlaytestRun() {
     engine_core::Engine engine;
     engine_core::DataModel& game = engine.datamodel();
-    AddScript(game, "Hello", "print('from play')", game.id());
+    AddScript(game, "Hello", "print('from play')", game.scene_service("Workspace"));
     // What the studio's Test, Pause, Resume, and Stop do to the engine.
     auto state = std::make_shared<std::string>("stopped");
     auto mu = std::make_shared<std::mutex>();
@@ -507,7 +516,7 @@ void TestPlaytestRun() {
     Expect(Member(Call(server, "playtest", R"({"action":"stop"})"), "session").as_string() == "stopped",
            "stop ends the test");
 
-    Call(server, "write_script", R"j({"instance":"Hello","source":"print('about to fail')\nerror('boom')"})j");
+    Call(server, "write_script", R"j({"instance":"Workspace.Hello","source":"print('about to fail')\nerror('boom')"})j");
     const JsonValue failed = Call(server, "playtest", R"({"action":"start","run_for":10,"then":"stop"})");
     Expect(failed.find("ended_on_error") != nullptr && Member(failed, "ran_for").as_number() < 10 &&
                Member(failed, "errors").as_number() >= 1 && Member(failed, "session").as_string() == "stopped",
@@ -524,7 +533,7 @@ void TestThreadedEdits() {
     engine.start();
     std::thread paused([&] {
         Call(server, "create_instance", R"({"class":"Folder","name":"WhilePaused"})");
-        const JsonValue run = Call(server, "run_lua", R"j({"source":"print(game:FindFirstChild('WhilePaused') ~= nil)"})j");
+        const JsonValue run = Call(server, "run_lua", R"j({"source":"print(workspace:FindFirstChild('WhilePaused') ~= nil)"})j");
         Expect(Member(run, "output").items().size() == 1 && Member(Item(Member(run, "output"), 0), "text").as_string() == "true",
                "run_lua sees an edit made while paused");
     });
@@ -592,10 +601,10 @@ void TestPrintSource() {
     engine_core::ModuleScript& module = game.create<engine_core::ModuleScript>();
     game.set_name(module.id(), "Lib");
     module.set_source("print('top')\nreturn { say = function()\n    pcall(print, 'said')\nend }");
-    game.set_parent(module.id(), game.id());
+    game.set_parent(module.id(), game.scene_service("Workspace"));
 
     const std::uint64_t since = engine.scripts().output_next();
-    Call(server, "run_lua", R"j({"source":"local lib = require(game.Lib)\nprint('console')\nlib.say()"})j");
+    Call(server, "run_lua", R"j({"source":"local lib = require(workspace.Lib)\nprint('console')\nlib.say()"})j");
     const engine_core::ScriptRuntime::OutputHistory history = engine.scripts().output_since(since, 16);
     auto find = [&](const std::string& text) -> const engine_core::ScriptRuntime::OutputLine* {
         for (const auto& line : history.lines) {
@@ -612,7 +621,7 @@ void TestPrintSource() {
     const auto* said = find("said");
     Expect(said != nullptr && said->script == module.id() && said->line == 3,
            "a module function called from elsewhere, through pcall, still names the module");
-    const auto* command = find("local lib = require(game.Lib)\nprint('console')\nlib.say()");
+    const auto* command = find("local lib = require(workspace.Lib)\nprint('console')\nlib.say()");
     Expect(command == nullptr || command->script == 0, "a command line names no script");
 }
 

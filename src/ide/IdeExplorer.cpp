@@ -1291,6 +1291,10 @@ void IdeExplorer::apply(bool batch) {
                 if (std::shared_ptr<jadefx::ImageView> icon = icon_view(snap.classes[i])) {
                     row->setGraphic(std::move(icon));
                 }
+                // Workspace holds what the place shows, so it starts open.
+                if (snap.classes[i] == "Workspace") {
+                    row->setExpanded(true);
+                }
             }
         } else if (row->getValue() != snap.labels[i]) {
             row->setValue(snap.labels[i]);

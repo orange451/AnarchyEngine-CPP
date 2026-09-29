@@ -52,8 +52,8 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         for (const char* name : {"Part", "Spare"}) {
             engine_core::GameObject& part = game.create_game_object();
             game.set_name(part.id(), name);
-            game.set_parent(part.id(), 0);
-            (part_file.empty() ? part_file : spare_file) = "src/" + std::string(name) + "." + game.guid(part.id()) + ".json";
+            game.set_parent(part.id(), game.scene_service("Workspace"));
+            (part_file.empty() ? part_file : spare_file) = "src/Workspace.workspace/" + std::string(name) + "." + game.guid(part.id()) + ".json";
         }
         project.save();
     });
@@ -65,7 +65,7 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
             color.r = 0.25f;
             color.g = 0.5f;
             color.b = blue;
-            game.game_object(game.find_first_child(0, name))->set_color(color);
+            game.game_object(game.find_first_child(game.scene_service("Workspace"), name))->set_color(color);
         });
     };
     // Something outside the studio changes a property in a file.
@@ -93,7 +93,7 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     auto has_part = [&layout] {
         bool found = false;
         layout.simulation().on_simulation(
-            [&found](engine_core::DataModel& game) { found = game.find_first_child(0, "Part") != 0; });
+            [&found](engine_core::DataModel& game) { found = game.find_first_child(game.scene_service("Workspace"), "Part") != 0; });
         return found;
     };
 

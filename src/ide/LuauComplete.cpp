@@ -1872,7 +1872,7 @@ void FinishNames(const CompletionPlanState& state, const engine_core::LuauComple
         }
         take(std::move(item));
     }
-    // Then the keywords, the runtime's globals and libraries, game, and script.
+    // Then the keywords, the runtime's globals and libraries, game, workspace, and script.
     for (CompletionItem& item : keywords) {
         take(std::move(item));
     }
@@ -1896,6 +1896,10 @@ void FinishNames(const CompletionPlanState& state, const engine_core::LuauComple
     game.name = "game";
     game.detail = "Game";
     take(std::move(game));
+    CompletionItem workspace;
+    workspace.name = "workspace";
+    workspace.detail = "Workspace";
+    take(std::move(workspace));
     if (state.script_global) {
         CompletionItem script;
         script.name = "script";

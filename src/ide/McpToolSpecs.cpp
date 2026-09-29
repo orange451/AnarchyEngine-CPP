@@ -43,10 +43,10 @@ constexpr SpecText kSpecs[] = {
      "undo step. Returns its id and path.",
      R"({"type":"object","required":["class"],"properties":{
          "class":{"type":"string"},
-         "parent":{"type":["string","number"],"description":"Id or path. Default: the root, game."},
+         "parent":{"type":["string","number"],"description":"Id or path. Not game, which holds only the scene services Workspace, Lighting, Storage, and Scripts. Default: Workspace."},
          "name":{"type":"string","description":"Default: the class name."}}})"},
     {"delete_instance",
-     "Deletes an instance and everything under it. One undo step.",
+     "Deletes an instance and everything under it. One undo step. game and the scene services cannot be deleted.",
      R"({"type":"object","required":["instance"],"properties":{
          "instance":{"type":["string","number"],"description":"Id or path."}}})"},
     {"read_script",

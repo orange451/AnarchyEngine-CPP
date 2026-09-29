@@ -123,7 +123,7 @@ public:
     // A mismatched generation does not touch the instance slot.
     DataModel* resolve_watch(Watch watch) const;
 
-    void on_script_parent(Script& script, InstanceId previous, InstanceId next) override;
+    void on_moved(InstanceId id) override;
     void on_script_enabled(Script& script, bool enabled) override;
     void on_script_destroyed(Script& script) override;
     void on_child_named(InstanceId parent, InstanceId child, const std::string& name) override;
@@ -195,8 +195,12 @@ private:
     void ensure_console();
     void close_console();
     void refresh_game(lua_State* state);
+    // game and workspace. The global table must be writable.
+    void set_root_globals(lua_State* state);
     void eval_chunk(lua_State* state, std::string_view source);
     void kill_script(InstanceId id);
+    // Whether a script at id is under Workspace or Scripts, where scripts run.
+    bool runs_here(InstanceId id) const;
     void enqueue_start(Script& script);
     void launch_starts();
     void launch_one(const Start& start);

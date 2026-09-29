@@ -112,6 +112,20 @@ struct WorldSnap {
         }
         return fallback;
     }
+
+    // workspace: the root's Workspace child.
+    std::optional<InstanceId> workspace() const {
+        const NodeSnap* root_node = find(root);
+        if (root_node != nullptr) {
+            for (InstanceId child : root_node->children) {
+                const NodeSnap* node = find(child);
+                if (node != nullptr && node->class_name == "Workspace") {
+                    return child;
+                }
+            }
+        }
+        return std::nullopt;
+    }
 };
 
 struct Job {
@@ -207,8 +221,11 @@ std::optional<InstanceId> resolve_expr(const WorldSnap& world, InstanceId self, 
         if (global->name == "script") {
             return self;
         }
-        if (global->name == "game" || global->name == "workspace") {
+        if (global->name == "game") {
             return world.root;
+        }
+        if (global->name == "workspace") {
+            return world.workspace();
         }
         return std::nullopt;
     }
@@ -530,8 +547,10 @@ struct SourceFileResolver : Luau::FileResolver {
         if (auto* global = expr->as<Luau::AstExprGlobal>()) {
             if (global->name == "script") {
                 found = base;
-            } else if (global->name == "game" || global->name == "workspace") {
+            } else if (global->name == "game") {
                 found = world->root;
+            } else if (global->name == "workspace") {
+                found = world->workspace();
             }
         } else if (auto* call = expr->as<Luau::AstExprCall>()) {
             auto* index = call->func->as<Luau::AstExprIndexName>();
@@ -634,6 +653,11 @@ struct WorkerEnv {
             if (place != nullptr) {
                 if (const std::optional<Luau::TypeId> root = place->find(place->world->root)) {
                     scope->bindings[Luau::AstName("game")] = Luau::Binding{*root};
+                }
+                if (const std::optional<InstanceId> workspace = place->world->workspace()) {
+                    if (const std::optional<Luau::TypeId> type = place->find(*workspace)) {
+                        scope->bindings[Luau::AstName("workspace")] = Luau::Binding{*type};
+                    }
                 }
                 if (const std::optional<InstanceId> owner = instance_of_module(name)) {
                     if (const std::optional<Luau::TypeId> self = place->find(*owner)) {

@@ -38,7 +38,7 @@ public:
         for (int index = 0; index < kCount; ++index) {
             engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
             game.set_name(triangle.id(), "Tri" + std::to_string(index));
-            game.set_parent(triangle.id(), game.id());
+            game.set_parent(triangle.id(), game.scene_service("Workspace"));
             triangle.set_position(kPositions[index][0], kPositions[index][1], kPositions[index][2]);
             triangle.step(kStartSeconds[index]);
         }
@@ -48,10 +48,10 @@ public:
             engine_core::Script& script = game.create<engine_core::Script>();
             game.set_name(script.id(), name);
             script.set_source(source);
-            game.set_parent(script.id(), game.id());
+            game.set_parent(script.id(), game.scene_service("Scripts"));
         };
         add_script("HopSlow", R"(
-local tri = game:FindFirstChild("Tri0")
+local tri = workspace:FindFirstChild("Tri0")
 assert(tri)
 local home = tri.Position
 local n = 0
@@ -63,7 +63,7 @@ while true do
 end
 )");
         add_script("HopFast", R"(
-local tri = game:FindFirstChild("Tri1")
+local tri = workspace:FindFirstChild("Tri1")
 assert(tri)
 local home = tri.Position
 local n = 0

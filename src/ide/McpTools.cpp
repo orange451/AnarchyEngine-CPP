@@ -849,13 +849,17 @@ JsonValue SetProperty(const ToolContext& context, const JsonValue& arguments) {
 
 JsonValue CreateInstance(const ToolContext& context, const JsonValue& arguments) {
     const std::string class_name = StringArg(arguments, "class");
-    const JsonValue parent = ValueArg(arguments, "parent", JsonValue::string("game"));
+    const JsonValue parent = ValueArg(arguments, "parent", JsonValue::string("Workspace"));
     const std::string name = OptionalStringArg(arguments, "name");
     return RunEdit(context.engine, [class_name, parent, name](DataModel& world) {
         const InstanceId parent_id = Resolve(world, &parent, "parent");
         if (!engine_core::lua_creatable_known(class_name.c_str())) {
             throw std::runtime_error("Instance.new cannot make \"" + class_name +
                                      "\". list_classes names the ones it can.");
+        }
+        if (parent_id == world.id()) {
+            throw std::runtime_error("Only scene services can be children of game; put " + class_name +
+                                     " in Workspace");
         }
         // Refused before the gesture opens, so a full place leaves nothing pending.
         if (world.room_left() == 0) {
@@ -883,8 +887,8 @@ JsonValue DeleteInstance(const ToolContext& context, const JsonValue& arguments)
     const JsonValue instance = ValueArg(arguments, "instance");
     return RunEdit(context.engine, [instance](DataModel& world) {
         const InstanceId id = Resolve(world, &instance);
-        if (id == world.id()) {
-            throw std::runtime_error("The root cannot be deleted.");
+        if (std::optional<std::string> error = world.destroy_error(id)) {
+            throw std::runtime_error(*error);
         }
         JsonValue out = JsonValue::object();
         out.set("deleted", Brief(world, id));

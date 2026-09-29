@@ -1,6 +1,8 @@
 #include "DataModel.hpp"
 
 #include "DataModelState.hpp"
+#include "LuaApi.hpp"
+#include "PropertyReflection.hpp"
 
 #include <algorithm>
 
@@ -286,6 +288,11 @@ void DataModel::drain_commands() {
             --state_->command_size;
         }
         if (command.type == Command::Type::Destroy) {
+            // Queued from another thread, which could not ask destroy_error: a
+            // scene service stays, as a script's Destroy of one would.
+            if (alive(command.id) && destroy_error(command.id)) {
+                continue;
+            }
             destroy(command.id);
         } else if (command.type == Command::Type::Color) {
             apply_color(command.id, command.color, false);
@@ -469,6 +476,9 @@ void DataModel::destroy(InstanceId id) {
     if (part == nullptr) {
         return;
     }
+    if (part->instance != nullptr && part->instance->is_scene_service()) {
+        contract_fail(destroy_error(id)->c_str());
+    }
     std::optional<AuthoredRecord> captured;
     if (state_->history && state_->history->wants_mutation()) {
         captured = capture_record(id, true);
@@ -476,6 +486,8 @@ void DataModel::destroy(InstanceId id) {
     // The parent's folder may become a leaf and its child order changes.
     mark_authored_dirty(part->parent);
     note_tree_changed();
+    // Its children leave the tree without set_parent, so scripts under them stop here.
+    const std::vector<InstanceId> orphans = state_->script_host != nullptr ? get_children(id) : std::vector<InstanceId>{};
     detach_links(id, *part);
     release_signals(id);
     release_to_pool(*part);
@@ -487,6 +499,9 @@ void DataModel::destroy(InstanceId id) {
     notify_watchers(id);
     if (captured) {
         record_destroyed(std::move(*captured));
+    }
+    for (InstanceId orphan : orphans) {
+        state_->script_host->on_moved(orphan);
     }
 }
 
@@ -828,7 +843,7 @@ void DataModel::notify_all_watchers() {
     }
 }
 
-void DataModel::emit_change(InstanceId id, Field field, WriteOrigin origin) {
+void DataModel::emit_change(InstanceId id, Field field, WriteOrigin origin, std::uint64_t payload) {
     if (field == Field::Source) {
         state_->source_revision.fetch_add(1, std::memory_order_relaxed);
     }
@@ -838,13 +853,13 @@ void DataModel::emit_change(InstanceId id, Field field, WriteOrigin origin) {
         return;
     }
     if (bag->changed.bound() && bag->changed.listeners_ > 0) {
-        state_->events.emit(bag->changed.id(), id, field, origin);
+        state_->events.emit(bag->changed.id(), id, field, origin, payload);
     }
     const int index = static_cast<int>(field);
     if (index >= 0 && index < static_cast<int>(Field::Count)) {
         Signal& prop = bag->property[index];
         if (prop.bound() && prop.listeners_ > 0) {
-            state_->events.emit(prop.id(), id, field, origin);
+            state_->events.emit(prop.id(), id, field, origin, payload);
         }
     }
 }
@@ -1002,7 +1017,7 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
     }
     Slot* part = slot(id);
     if (part == nullptr) {
-        contract_fail("set_parent on a dead instance");
+        contract_fail(id == 0 ? "set_parent on the root" : "set_parent on a dead instance");
     }
     if (new_parent != 0 && new_parent != kNoParent) {
         if (slot(new_parent) == nullptr) {
@@ -1014,6 +1029,9 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
     }
     if (part->parent == new_parent) {
         return;
+    }
+    if (const std::optional<std::string> error = parent_error(id, new_parent)) {
+        contract_fail(error->c_str());
     }
     const int old_index = part->parent == kNoParent ? -1 : sibling_index_of(id);
     const InstanceId old = part->parent;
@@ -1035,8 +1053,11 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
     if (part->instance != nullptr) {
         part->instance->on_parent_changed(old, new_parent);
     }
-    if (new_parent != kNoParent && state_->script_host != nullptr) {
-        state_->script_host->on_child_named(new_parent, id, name(id));
+    if (state_->script_host != nullptr) {
+        state_->script_host->on_moved(id);
+        if (new_parent != kNoParent) {
+            state_->script_host->on_child_named(new_parent, id, name(id));
+        }
     }
     if (DataModel* live = instance(id)) {
         if (dynamic_cast<LuaSource*>(live) != nullptr) {
@@ -1107,9 +1128,79 @@ void DataModel::context_actions(std::vector<ContextAction>& out) const {
     }
 }
 
+InstanceId DataModel::scene_service(std::string_view class_name) const {
+    for (InstanceId child = first_child(0); child != 0; child = next_sibling(child)) {
+        const DataModel* object = instance(child);
+        if (object != nullptr && object->is_scene_service() && class_name == object->class_name()) {
+            return child;
+        }
+    }
+    return 0;
+}
+
+std::optional<std::string> DataModel::parent_error(InstanceId id, InstanceId new_parent) const {
+    if (id == 0) {
+        return std::string("game cannot be moved");
+    }
+    const DataModel* object = instance(id);
+    if (object == nullptr || (new_parent != 0 && new_parent != kNoParent && !alive(new_parent))) {
+        return std::string("That instance no longer exists");
+    }
+    const InstanceId current = parent(id);
+    if (current == new_parent) {
+        return std::nullopt;
+    }
+    if (object->is_scene_service()) {
+        // Game places each one under itself once, when it makes the world.
+        const bool placing = current == kNoParent && new_parent == 0 && scene_service(object->class_name()) == 0;
+        if (!placing) {
+            return name(id) + " cannot be moved";
+        }
+        return std::nullopt;
+    }
+    if (new_parent == 0) {
+        return "Only scene services can be children of game; put " + name(id) + " in Workspace";
+    }
+    if (new_parent != kNoParent && (new_parent == id || is_under(id, new_parent))) {
+        return "Cannot parent " + name(id) + " to itself or a descendant";
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> DataModel::rename_error(InstanceId id, std::string_view new_name) const {
+    if (id == 0) {
+        return std::nullopt;
+    }
+    const DataModel* object = instance(id);
+    if (object == nullptr) {
+        return std::string("That instance no longer exists");
+    }
+    if (object->is_scene_service() && object->name_ != new_name) {
+        return object->name_ + " cannot be renamed";
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> DataModel::destroy_error(InstanceId id) const {
+    if (id == 0) {
+        return std::string("game cannot be destroyed");
+    }
+    const DataModel* object = instance(id);
+    if (object == nullptr) {
+        return std::string("That instance no longer exists");
+    }
+    if (object->is_scene_service()) {
+        return object->name_ + " cannot be destroyed";
+    }
+    return std::nullopt;
+}
+
 void DataModel::destroy_tree(InstanceId id) {
     if (id == 0 || !alive(id)) {
         return;
+    }
+    if (const std::optional<std::string> error = destroy_error(id)) {
+        contract_fail(error->c_str());
     }
     // Preorder, then destroyed back to front: every descendant before its ancestors.
     std::vector<InstanceId> order;
@@ -1139,6 +1230,9 @@ void DataModel::set_name(InstanceId id, std::string name) {
     }
     if (object->name_ == name) {
         return;
+    }
+    if (const std::optional<std::string> error = rename_error(id, name)) {
+        contract_fail(error->c_str());
     }
     const std::string previous = object->name_;
     object->name_ = std::move(name);
@@ -1317,7 +1411,83 @@ void DataModel::erase_extra_property(InstanceId id, std::string_view key) {
     }
 }
 
+namespace {
+
+// A saved registry property's default, as its class registered it.
+JsonValue saved_default(const LuaField& field) {
+    JsonValue value;
+    std::string message;
+    if (field.default_json == nullptr || !parse_json(field.default_json, value, message)) {
+        contract_fail("a saved property has no default");
+    }
+    return value;
+}
+
+// Its value now, as a project file holds it. A read never changes the object.
+bool saved_value(DataModel& world, const DataModel& object, const LuaField& field, JsonValue& out) {
+    DataModel& self = const_cast<DataModel&>(object);
+    LuaSlot slot;
+    return field.read(world, self, slot) && slot_to_json(slot, field.type_name, out);
+}
+
+// value put through the property's write, which validates it.
+bool write_saved(DataModel& world, DataModel& object, const LuaField& field, const JsonValue& value,
+                 std::string& error) {
+    LuaSlot slot;
+    if (!slot_from_json(value, field.type_name, field.name, slot, error)) {
+        return false;
+    }
+    if (!field.write(world, object, slot)) {
+        error = slot.error.empty() ? std::string(field.name) + " was refused" : slot.error;
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+void DataModel::write_place(std::vector<std::byte>& out) const {
+    const std::vector<LuaField> fields = lua_saved_fields(class_name());
+    if (fields.empty()) {
+        return;
+    }
+    // Every saved property, defaults too, as the JSON a file would hold.
+    JsonValue values = JsonValue::object();
+    for (const LuaField& field : fields) {
+        JsonValue value;
+        if (saved_value(*state_->root, *this, field, value)) {
+            values.set(field.name, std::move(value));
+        }
+    }
+    const std::string text = write_json(values);
+    const auto* bytes = reinterpret_cast<const std::byte*>(text.data());
+    out.insert(out.end(), bytes, bytes + text.size());
+}
+
+void DataModel::read_place(const std::byte* data, std::size_t size) {
+    const std::vector<LuaField> fields = lua_saved_fields(class_name());
+    if (fields.empty()) {
+        return;
+    }
+    JsonValue values = JsonValue::object();
+    std::string message;
+    if (data != nullptr && size != 0) {
+        parse_json(std::string(reinterpret_cast<const char*>(data), size), values, message);
+    }
+    for (const LuaField& field : fields) {
+        const JsonValue* value = values.is_object() ? values.find(field.name) : nullptr;
+        std::string error;
+        write_saved(*state_->root, *this, field, value != nullptr ? *value : saved_default(field), error);
+    }
+}
+
 void DataModel::save_properties(PropertyBag& out) const {
+    for (const LuaField& field : lua_saved_fields(class_name())) {
+        JsonValue value;
+        if (saved_value(*state_->root, *this, field, value) && !(value == saved_default(field))) {
+            bag_set(out, field.name, std::move(value));
+        }
+    }
     const Slot* part = slot(id_);
     if (part == nullptr || part->instance != this) {
         return;
@@ -1331,6 +1501,9 @@ void DataModel::save_properties(PropertyBag& out) const {
 }
 
 void DataModel::default_properties(PropertyBag& out) const {
+    for (const LuaField& field : lua_saved_fields(class_name())) {
+        bag_set(out, field.name, saved_default(field));
+    }
     const Slot* part = slot(id_);
     if (part == nullptr || part->instance != this) {
         return;
@@ -1340,6 +1513,12 @@ void DataModel::default_properties(PropertyBag& out) const {
 }
 
 bool DataModel::load_property(const std::string& key, const JsonValue& value, std::string& error) {
+    for (const LuaField& field : lua_saved_fields(class_name())) {
+        if (key == field.name) {
+            write_saved(*state_->root, *this, field, value, error);
+            return true;
+        }
+    }
     if (key != "Simulated" && key != "VisualOnly") {
         return false;
     }
@@ -1416,6 +1595,10 @@ bool read_lua_name(DataModel& world, DataModel& object, LuaSlot& out) {
 }
 
 bool write_lua_name(DataModel& world, DataModel& object, LuaSlot& in) {
+    if (std::optional<std::string> error = world.rename_error(object.id(), in.text)) {
+        in.error = std::move(*error);
+        return false;
+    }
     world.set_name(object.id(), in.text);
     return true;
 }
@@ -1439,7 +1622,12 @@ bool read_lua_parent(DataModel& world, DataModel& object, LuaSlot& out) {
 }
 
 bool write_lua_parent(DataModel& world, DataModel& object, LuaSlot& in) {
-    world.set_parent(object.id(), in.kind == LuaSlot::Kind::Nil ? DataModel::kNoParent : in.id);
+    const InstanceId parent = in.kind == LuaSlot::Kind::Nil ? DataModel::kNoParent : in.id;
+    if (std::optional<std::string> error = world.parent_error(object.id(), parent)) {
+        in.error = std::move(*error);
+        return false;
+    }
+    world.set_parent(object.id(), parent);
     return true;
 }
 

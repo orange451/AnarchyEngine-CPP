@@ -13,7 +13,10 @@ class Script;
 class ScriptHost {
 public:
     virtual ~ScriptHost() = default;
-    virtual void on_script_parent(Script& script, InstanceId previous, InstanceId next) = 0;
+    // id was reparented, so every Script under it, id included, may have gone
+    // into or out of Workspace and Scripts, the only places a script runs.
+    // Runs at the end of set_parent.
+    virtual void on_moved(InstanceId id) = 0;
     virtual void on_script_enabled(Script& script, bool enabled) = 0;
     virtual void on_script_destroyed(Script& script) = 0;
     // `child` is now under `parent` with this name, by a reparent or a rename.

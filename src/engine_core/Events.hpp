@@ -26,6 +26,9 @@ enum class Field : std::uint8_t {
     Enabled,
     // TestTriangle's pose.
     Position,
+    // A property from the class registry, such as Lighting.Brightness. The
+    // event's payload is its lua_property_id.
+    Reflected,
     Count
 };
 
@@ -112,7 +115,9 @@ public:
 
     // 3-argument form matches the public contract. Origin defaults to
     // Simulation. SnapshotOverride is recorded and dropped.
-    void emit(SignalId signal, InstanceId id, Field field, WriteOrigin origin = WriteOrigin::Simulation);
+    // payload is for Field::Reflected: which property.
+    void emit(SignalId signal, InstanceId id, Field field, WriteOrigin origin = WriteOrigin::Simulation,
+              std::uint64_t payload = 0);
     // A host signal event that carries a number for its handlers, such as which
     // UserInputService record it is. Handlers read it with payload().
     void emit_payload(SignalId signal, std::uint64_t payload);

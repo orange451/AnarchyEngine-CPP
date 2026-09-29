@@ -176,6 +176,10 @@ int ScriptBindings::instance_new(lua_State* state) {
                 luaL_error(state, "instance is gone");
             }
             parent_id = parent->id;
+            // Checked by class, before create, for the same reason.
+            if (parent_id == 0 && lua_creatable_known(name)) {
+                luaL_error(state, "Only scene services can be children of game; put %s in Workspace", name);
+            }
         }
         DataModel* created = lua_create_instance(*runtime->game_, name);
         if (created == nullptr) {
@@ -347,6 +351,9 @@ int ScriptBindings::instance_newindex(lua_State* state) {
         } else if (type == "boolean") {
             slot.kind = LuaSlot::Kind::Bool;
             slot.flag = lua_toboolean(state, 3) != 0;
+        } else if (type == "number") {
+            slot.kind = LuaSlot::Kind::Number;
+            slot.number = luaL_checknumber(state, 3);
         } else if (type == "Instance" || type == "Instance?" || type == "DataModel" || type == "DataModel?") {
             if (lua_isnil(state, 3)) {
                 slot.kind = LuaSlot::Kind::Nil;
@@ -389,7 +396,7 @@ int ScriptBindings::instance_newindex(lua_State* state) {
             luaL_error(state, "cannot set %s", key);
         }
         if (!field->write(*runtime->game_, *object, slot)) {
-            luaL_error(state, "property is not available");
+            luaL_error(state, "%s", slot.error.empty() ? "property is not available" : slot.error.c_str());
         }
         return 0;
     });
@@ -402,8 +409,8 @@ int ScriptBindings::instance_destroy(lua_State* state) {
         if (runtime == nullptr || runtime->resolve_id(ud->id, ud->world) == nullptr) {
             luaL_error(state, "instance is gone");
         }
-        if (ud->id == 0) {
-            luaL_error(state, "cannot destroy the root");
+        if (const std::optional<std::string> error = runtime->game_->destroy_error(ud->id)) {
+            luaL_error(state, "%s", error->c_str());
         }
         runtime->game_->destroy(ud->id);
         return 0;
@@ -513,6 +520,11 @@ int ScriptBindings::instance_service(lua_State* state) {
         if (runtime == nullptr || ud->id != 0 || runtime->resolve_id(0, ud->world) == nullptr) {
             luaL_error(state, "GetService is on game");
         }
+        // A scene service is in the tree: GetService gives the instance itself.
+        if (const InstanceId scene = name != nullptr ? runtime->game_->scene_service(name) : 0; scene != 0) {
+            runtime->push_instance(state, scene);
+            return 1;
+        }
         const int kind = name != nullptr && lua_service_known(name) ? service_kind(name) : -1;
         if (kind < 0) {
             luaL_error(state, "unknown service");
@@ -568,7 +580,8 @@ int ScriptBindings::signal_connect(lua_State* state) {
         Connection connection = signal->connect_scripted(
             [runtime, held, script, generation, kind = ud->kind](InstanceId, Field field) {
                 if (kind == kSignalChanged) {
-                    runtime->invoke_listener(held->ref, script, generation, field_name(field), false, 0);
+                    runtime->invoke_listener(held->ref, script, generation,
+                                            changed_name(field, runtime->game_->events().payload()), false, 0);
                 } else if (kind == kSignalInput) {
                     if (const InputRecord* record = runtime->delivered_input()) {
                         runtime->invoke_listener_input(held->ref, script, generation, *record);
@@ -609,7 +622,7 @@ int ScriptBindings::signal_wait(lua_State* state) {
                 }
                 runtime->guarded([&] {
                     if (kind == kSignalChanged) {
-                        runtime->make_ready(*waiting, field_name(field));
+                        runtime->make_ready(*waiting, changed_name(field, runtime->game_->events().payload()));
                     } else if (kind == kSignalInput) {
                         if (const InputRecord* record = runtime->delivered_input()) {
                             runtime->make_ready_input(*waiting, *record);

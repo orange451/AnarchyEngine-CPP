@@ -297,7 +297,7 @@ EventQueue::Event EventQueue::pop() {
     return event;
 }
 
-void EventQueue::emit(SignalId signal, InstanceId id, Field field, WriteOrigin origin) {
+void EventQueue::emit(SignalId signal, InstanceId id, Field field, WriteOrigin origin, std::uint64_t payload) {
     if (origin == WriteOrigin::SnapshotOverride) {
         ++suppressed_overrides_;
         return;
@@ -316,6 +316,7 @@ void EventQueue::emit(SignalId signal, InstanceId id, Field field, WriteOrigin o
     event.owner = live->owner_;
     event.field = field;
     event.origin = origin;
+    event.payload = payload;
     event.live = true;
     post(event);
 }

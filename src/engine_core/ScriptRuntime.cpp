@@ -179,15 +179,49 @@ DataModel* ScriptRuntime::resolve_watch(Watch watch) const {
     return resolve_id(watch.id, watch.world);
 }
 
-void ScriptRuntime::on_script_parent(Script& script, InstanceId, InstanceId next) {
+void ScriptRuntime::on_moved(InstanceId id) {
     if (game_ == nullptr || !game_->simulation_running() || closing_) {
         return;
     }
-    // As in Roblox, a running script keeps running wherever it moves, out of the
-    // tree too. One that has not run this session starts once it has a parent.
-    if (next != DataModel::kNoParent && started_.count(script.id()) == 0) {
-        enqueue_start(script);
+    // A script that leaves Workspace and Scripts stops. One that arrives starts
+    // from the top, unless it already runs this session: a move between the two
+    // does not run it again.
+    std::vector<Script*> scripts;
+    std::vector<InstanceId> pending{id};
+    while (!pending.empty()) {
+        const InstanceId next = pending.back();
+        pending.pop_back();
+        if (auto* script = dynamic_cast<Script*>(game_->instance(next))) {
+            scripts.push_back(script);
+        }
+        for (InstanceId child = game_->first_child(next); child != 0; child = game_->next_sibling(child)) {
+            pending.push_back(child);
+        }
     }
+    for (Script* script : scripts) {
+        if (!runs_here(script->id())) {
+            kill_script(script->id());
+        } else if (started_.count(script->id()) == 0) {
+            enqueue_start(*script);
+        }
+    }
+}
+
+bool ScriptRuntime::runs_here(InstanceId id) const {
+    // The ancestor just under game decides.
+    InstanceId top = id;
+    for (InstanceId up = game_->parent(top); up != 0; up = game_->parent(top)) {
+        if (up == DataModel::kNoParent) {
+            return false;
+        }
+        top = up;
+    }
+    const DataModel* service = game_->instance(top);
+    if (service == nullptr || !service->is_scene_service()) {
+        return false;
+    }
+    const std::string_view name = service->class_name();
+    return name == "Workspace" || name == "Scripts";
 }
 
 void ScriptRuntime::on_script_enabled(Script& script, bool enabled) {
@@ -332,6 +366,9 @@ void open_host_libraries(lua_State* state) {
     lua_setfield(state, instance_mt, "__newindex");
     lua_pushcfunction(state, &ScriptBindings::instance_tostring, "tostring");
     lua_setfield(state, instance_mt, "__tostring");
+    // getmetatable(instance) gives this string instead of the table.
+    lua_pushstring(state, "The metatable is locked");
+    lua_setfield(state, instance_mt, "__metatable");
     lua_setreadonly(state, instance_mt, 1);
 
     const int signal_mt = metatable(kSignalMeta);
@@ -423,8 +460,7 @@ lua_State* ScriptRuntime::create_state(bool console) {
         lua_setglobal(state, "_G");
         lua_newtable(state);
         lua_setglobal(state, "shared");
-        push_instance(state, 0);
-        lua_setglobal(state, "game");
+        set_root_globals(state);
         lua_setreadonly(state, LUA_GLOBALSINDEX, 1);
         lua_callbacks(state)->interrupt = &ScriptRuntime::interrupt;
         return state;
@@ -478,9 +514,15 @@ void ScriptRuntime::refresh_game(lua_State* state) {
     // The global table is sealed. game's userdata carries the world generation,
     // so a command after stop has to see the restored world, not the one from startup.
     lua_setreadonly(state, LUA_GLOBALSINDEX, 0);
+    set_root_globals(state);
+    lua_setreadonly(state, LUA_GLOBALSINDEX, 1);
+}
+
+void ScriptRuntime::set_root_globals(lua_State* state) {
     push_instance(state, 0);
     lua_setglobal(state, "game");
-    lua_setreadonly(state, LUA_GLOBALSINDEX, 1);
+    push_instance(state, game_->scene_service("Workspace"));
+    lua_setglobal(state, "workspace");
 }
 
 void ScriptRuntime::close_vm() {
@@ -546,7 +588,7 @@ void ScriptRuntime::enqueue_start(Script& script) {
     if (game_ == nullptr || !open_ || closing_ || halted_ || !game_->simulation_running()) {
         return;
     }
-    if (!script.enabled() || game_->parent(script.id()) == DataModel::kNoParent) {
+    if (!script.enabled() || !runs_here(script.id())) {
         return;
     }
     const std::uint32_t generation = script.bump_start_generation();
@@ -573,7 +615,7 @@ void ScriptRuntime::launch_one(const Start& start) {
     if (script == nullptr || script->start_generation() != start.generation || !script->enabled()) {
         return;
     }
-    if (game_->parent(script->id()) == DataModel::kNoParent || !game_->simulation_running()) {
+    if (!runs_here(script->id()) || !game_->simulation_running()) {
         return;
     }
     const Bytecode bytecode = compile_luau(script->source());

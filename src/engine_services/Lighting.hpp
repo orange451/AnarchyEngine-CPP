@@ -1,0 +1,60 @@
+#pragma once
+
+#include "SceneService.hpp"
+
+#include <optional>
+#include <string>
+
+namespace engine_core {
+
+// How the scene is lit, set through its properties. The renderer does not
+// read them yet. Each is a saved registry property (lua_saved_property), so
+// DataModel saves, loads, undoes, and restores it at Stop; this class keeps
+// the values and checks them.
+//
+// Ambient     Color3  the light every surface gets, from no direction.
+// Brightness  number  how strong the sun is. Not below 0.
+// ClockTime   number  the hour of the day, from 0 up to 24; 24 wraps to 0.
+// FogColor    Color3
+// FogStart    number  studs from the camera where fog begins. Not below 0.
+// FogEnd      number  studs from the camera where fog is solid. Not below 0.
+class Lighting : public SceneService {
+public:
+    static constexpr ColorRgb kDefaultAmbient{0.5f, 0.5f, 0.5f, 1.f};
+    static constexpr double kDefaultBrightness = 2.0;
+    static constexpr double kDefaultClockTime = 14.0;
+    static constexpr ColorRgb kDefaultFogColor{0.75f, 0.75f, 0.75f, 1.f};
+    static constexpr double kDefaultFogStart = 0.0;
+    static constexpr double kDefaultFogEnd = 100000.0;
+
+    using SceneService::SceneService;
+    const char* class_name() const override;
+
+    // Setters run on SimulationThread. A value that is not finite is refused:
+    // the setter returns why and changes nothing. Otherwise empty.
+    ColorRgb ambient() const { return ambient_; }
+    std::optional<std::string> set_ambient(ColorRgb color);
+    double brightness() const { return brightness_; }
+    std::optional<std::string> set_brightness(double value);
+    double clock_time() const { return clock_time_; }
+    std::optional<std::string> set_clock_time(double value);
+    ColorRgb fog_color() const { return fog_color_; }
+    std::optional<std::string> set_fog_color(ColorRgb color);
+    double fog_start() const { return fog_start_; }
+    std::optional<std::string> set_fog_start(double value);
+    double fog_end() const { return fog_end_; }
+    std::optional<std::string> set_fog_end(double value);
+
+private:
+    std::optional<std::string> set_number(const char* property, double& slot, double value);
+    std::optional<std::string> set_color(const char* property, ColorRgb& slot, ColorRgb color);
+
+    ColorRgb ambient_ = kDefaultAmbient;
+    double brightness_ = kDefaultBrightness;
+    double clock_time_ = kDefaultClockTime;
+    ColorRgb fog_color_ = kDefaultFogColor;
+    double fog_start_ = kDefaultFogStart;
+    double fog_end_ = kDefaultFogEnd;
+};
+
+}  // namespace engine_core

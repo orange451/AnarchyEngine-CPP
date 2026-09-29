@@ -7,6 +7,7 @@
 #include "FileBytes.hpp"
 #include "JsonMerge.hpp"
 #include "ModuleScript.hpp"
+#include "SceneService.hpp"
 #include "Script.hpp"
 #include "TestTriangle.hpp"
 
@@ -67,9 +68,42 @@ struct ClassEntry {
     ProjectFactory factory = nullptr;
 };
 
+// A scene service back at its class defaults, with no extras. Its children stay.
+void reset_scene_service(DataModel& service) {
+    PropertyBag defaults;
+    service.default_properties(defaults);
+    for (const JsonValue::Member& member : defaults) {
+        std::string error;
+        service.load_property(member.first, member.second, error);
+    }
+    std::vector<std::string> keys;
+    for (const JsonValue::Member& member : service.extra_properties(service.id())) {
+        keys.push_back(member.first);
+    }
+    for (const std::string& key : keys) {
+        service.erase_extra_property(service.id(), key);
+    }
+}
+
+// A world has one of each scene service, made with it, so the factory hands
+// back that one, at its defaults, as if it were new.
+template <std::size_t Index>
+DataModel& existing_scene_service(DataModel& world) {
+    DataModel* service = world.instance(world.scene_service(kSceneServiceClasses[Index]));
+    if (service == nullptr) {
+        contract_fail("a Game holds every scene service");
+    }
+    reset_scene_service(*service);
+    return *service;
+}
+
 std::vector<ClassEntry>& class_registry() {
     static std::vector<ClassEntry> entries = [] {
         std::vector<ClassEntry> out;
+        out.push_back({kSceneServiceClasses[0], existing_scene_service<0>});
+        out.push_back({kSceneServiceClasses[1], existing_scene_service<1>});
+        out.push_back({kSceneServiceClasses[2], existing_scene_service<2>});
+        out.push_back({kSceneServiceClasses[3], existing_scene_service<3>});
         out.push_back({"DataModel", [](DataModel& world) -> DataModel& { return world.create(); }});
         out.push_back({"GameObject", [](DataModel& world) -> DataModel& { return world.create_game_object(); }});
         out.push_back({"Script", [](DataModel& world) -> DataModel& { return world.create<Script>(); }});
@@ -243,6 +277,11 @@ struct PlanNode {
     std::vector<std::size_t> children;
     // The properties file as parsed.
     JsonValue doc;
+    // A scene service the files lack, made by the read at its defaults. It has
+    // no file until the next save writes one.
+    bool made = false;
+    // Saved under game, before the scene services; the read moved it into Workspace.
+    bool moved_to_workspace = false;
 };
 
 }  // namespace detail
@@ -287,6 +326,7 @@ public:
         for (PlanNode& node : nodes_) {
             order_children(node);
         }
+        adopt_scene_services();
         return std::move(nodes_);
     }
 
@@ -480,6 +520,68 @@ private:
         scan(dir, index);
     }
 
+    // Game holds the four scene services and nothing else. A place saved before
+    // them keeps its top-level instances under game: they move to the end of
+    // Workspace, in their order. A service the files lack is made at its
+    // defaults. Each service's GUID is fixed, so every read of the same files
+    // gives the same tree, and nothing is written until the next save.
+    void adopt_scene_services() {
+        std::vector<std::size_t> parent(nodes_.size(), 0);
+        for (std::size_t index = 0; index < nodes_.size(); ++index) {
+            for (std::size_t child : nodes_[index].children) {
+                parent[child] = index;
+            }
+        }
+        for (std::size_t index = 1; index < nodes_.size(); ++index) {
+            PlanNode& node = nodes_[index];
+            if (is_scene_service_class(node.class_name)) {
+                const std::string guid = scene_service_guid(node.class_name);
+                if (parent[index] != 0 || node.guid != guid) {
+                    fail(node.props_path + ": " + node.class_name + " must be a child of game with GUID " + guid);
+                }
+                // The name is fixed too. A file that says otherwise is read as the service.
+                node.name = node.class_name;
+                continue;
+            }
+            for (const char* service : kSceneServiceClasses) {
+                if (node.guid == scene_service_guid(service)) {
+                    fail(node.props_path + ": GUID " + node.guid + " is reserved for " + service);
+                }
+            }
+        }
+        std::vector<std::size_t> services;
+        for (const char* service : kSceneServiceClasses) {
+            std::size_t found = 0;
+            for (std::size_t child : nodes_[0].children) {
+                if (nodes_[child].class_name == service) {
+                    found = child;
+                }
+            }
+            if (found == 0) {
+                PlanNode made;
+                made.guid = scene_service_guid(service);
+                made.class_name = service;
+                made.name = service;
+                made.doc = JsonValue::object();
+                made.doc.set("class", JsonValue::string(service));
+                made.doc.set("id", JsonValue::string(made.guid));
+                made.doc.set("Name", JsonValue::string(service));
+                made.made = true;
+                found = nodes_.size();
+                nodes_.push_back(std::move(made));
+            }
+            services.push_back(found);
+        }
+        const std::size_t workspace = services[0];
+        for (std::size_t child : nodes_[0].children) {
+            if (!is_scene_service_class(nodes_[child].class_name)) {
+                nodes_[child].moved_to_workspace = true;
+                nodes_[workspace].children.push_back(child);
+            }
+        }
+        nodes_[0].children = std::move(services);
+    }
+
     // Listed GUIDs first, in the listed order. The rest sort by GUID, not by Name.
     void order_children(PlanNode& node) {
         std::vector<std::size_t> sorted = node.children;
@@ -666,13 +768,23 @@ void clear_extras(DataModel& world, InstanceId id) {
     }
 }
 
-// Destroys every live instance, parented or not, and clears the root's extras.
+// Destroys every live instance, parented or not, but the scene services, which
+// go back to their defaults. Clears the root's extras.
 void clear_world(DataModel& world) {
     std::vector<InstanceId> ids;
-    world.for_each_instance([&ids](DataModel& object) { ids.push_back(object.id()); });
+    world.for_each_instance([&ids](DataModel& object) {
+        if (!object.is_scene_service()) {
+            ids.push_back(object.id());
+        }
+    });
     for (InstanceId id : ids) {
         if (world.alive(id)) {
             world.destroy(id);
+        }
+    }
+    for (const char* name : kSceneServiceClasses) {
+        if (DataModel* service = world.instance(world.scene_service(name))) {
+            reset_scene_service(*service);
         }
     }
     clear_extras(world, 0);
@@ -764,6 +876,10 @@ void set_key(DataModel& world, InstanceId id, DataModel& object, const std::stri
 // in that order, then the rest by GUID. A child moves by leaving and rejoining
 // its parent, since setting the same parent does nothing.
 void order_children_as(DataModel& world, InstanceId id, const JsonValue& doc) {
+    // game's children are the scene services, in the order Game made them.
+    if (id == 0) {
+        return;
+    }
     // A listed child's place in the file. The first listing counts.
     std::unordered_map<std::string, std::size_t> listed;
     if (const JsonValue* children = doc.find("children"); children != nullptr && children->is_array()) {
@@ -889,13 +1005,14 @@ JsonValue instance_json(const AuthoredNode& node, const std::vector<AuthoredNode
         }
         doc.set(member.first, member.second);
     }
-    // Written only when the order is not the default GUID sort.
+    // Written only when the order is not the default GUID sort. game's children
+    // are the scene services, in the order Game makes them, so it has none.
     std::vector<std::string> order;
     order.reserve(node.children.size());
     for (std::size_t child : node.children) {
         order.push_back(tree[child].guid);
     }
-    if (!std::is_sorted(order.begin(), order.end())) {
+    if (node.id != 0 && !std::is_sorted(order.begin(), order.end())) {
         std::vector<JsonValue> items;
         for (std::string& guid : order) {
             items.push_back(JsonValue::string(std::move(guid)));
@@ -1012,6 +1129,14 @@ std::optional<InstanceId> Project::instance_for(std::string_view guid) const {
     return found->second;
 }
 
+void Project::take_from_disk(const detail::PlanNode& node, std::string parent, JsonValue props) {
+    if (node.made) {
+        files_.erase(node.guid);
+        return;
+    }
+    files_[node.guid] = from_disk(node, std::move(parent), std::move(props));
+}
+
 Project::Files Project::from_disk(const detail::PlanNode& node, std::string parent, JsonValue props) {
     Files files;
     files.props_path = node.props_path;
@@ -1118,12 +1243,24 @@ void Project::read_into_game(const fs::path& root, bool replace) {
         rebuild.finish();
     }
     const std::vector<std::size_t> parents = parents_of(plan);
+    moved_to_workspace_ = 0;
+    bool made = false;
     for (std::size_t index = 0; index < plan.size(); ++index) {
         const PlanNode& node = plan[index];
-        files_[node.guid] = from_disk(node, index == 0 ? std::string() : plan[parents[index]].guid,
-                                      written_doc(*game_, ids[index], node.doc));
         id_guid_[ids[index]] = node.guid;
         guid_id_[node.guid] = ids[index];
+        moved_to_workspace_ += node.moved_to_workspace ? 1 : 0;
+        // A service the read made has no file: to a save, it is new.
+        if (node.made) {
+            made = true;
+            continue;
+        }
+        files_[node.guid] = from_disk(node, index == 0 ? std::string() : plan[parents[index]].guid,
+                                      written_doc(*game_, ids[index], node.doc));
+    }
+    // game's children are not the ones its file lists, so the next save writes it.
+    if (made || moved_to_workspace_ != 0) {
+        game_->mark_authored_dirty(0);
     }
 }
 
@@ -1721,7 +1858,9 @@ Project::Comparison Project::compare_disk() const {
             continue;
         }
         for (const KeyMerge& merged : merge_keys(was, disk, mine)) {
-            if (merged.key == "class") {
+            // game's children are the scene services in a fixed order; a list in
+            // an old root file is nothing to load.
+            if (merged.key == "class" || (index == 0 && merged.key == "children")) {
                 continue;
             }
             if (merged.key == "children" &&
@@ -1852,15 +1991,14 @@ void Project::settle(const Comparison& compared, const SaveConflict& conflict) {
         // The studio's delete stands. The base takes the disk's files under it
         // too, so a save removes them all.
         for (std::size_t at : compared.subtree(index)) {
-            files_[compared.plan[at].guid] =
-                from_disk(compared.plan[at], compared.disk_parent(at), compared.docs[at]);
+            take_from_disk(compared.plan[at], compared.disk_parent(at), compared.docs[at]);
         }
         return;
     }
     const detail::PlanNode& node = compared.plan[index];
     const auto base = files_.find(conflict.guid);
     if (base == files_.end() || conflict.key == "class") {
-        files_[conflict.guid] = from_disk(node, compared.disk_parent(index), compared.docs[index]);
+        take_from_disk(node, compared.disk_parent(index), compared.docs[index]);
         return;
     }
     Files& files = base->second;
@@ -2087,7 +2225,7 @@ void Project::refresh_base(const Comparison& before, const Comparison& after) {
             if (files_.count(node.guid) == 0 && after.in_studio.count(node.guid) == 0) {
                 continue;
             }
-            files_[node.guid] = from_disk(node, after.disk_parent(index), after.docs[index]);
+            take_from_disk(node, after.disk_parent(index), after.docs[index]);
             continue;
         }
         // Something open: the base takes the disk key by key, for every key

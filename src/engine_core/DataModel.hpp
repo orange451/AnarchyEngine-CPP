@@ -84,6 +84,7 @@ class SelectionService;
 class UserInputService;
 struct AuthoredRecord;
 struct Mutation;
+struct LuaSlot;
 struct PropertyValue;
 
 // Live source of truth. SimulationThread is the only thread that may run
@@ -132,6 +133,21 @@ public:
     // instance is DataModel. Game overrides it for the root.
     virtual const char* class_name() const { return "DataModel"; }
 
+    // Workspace, Lighting, Storage, and Scripts (engine_services). A Game makes
+    // one of each as its children, and they are the only children game has.
+    // They cannot be moved, renamed, or destroyed.
+    virtual bool is_scene_service() const { return false; }
+    // The root's child of this scene service class, or 0 when there is none.
+    InstanceId scene_service(std::string_view class_name) const;
+
+    // Why set_parent, set_name, or destroy would refuse, worded for the user,
+    // or empty when it would go ahead. Setting the value an instance already
+    // has is allowed. The mutators fail the contract on a reason, so a caller
+    // that takes input from a script or the user asks first.
+    std::optional<std::string> parent_error(InstanceId id, InstanceId new_parent) const;
+    std::optional<std::string> rename_error(InstanceId id, std::string_view name) const;
+    std::optional<std::string> destroy_error(InstanceId id) const;
+
     // Cut, Paste, Rename, and Delete; the root has no Delete. A subclass appends
     // its own, or inserts a primary one.
     virtual void context_actions(std::vector<ContextAction>& out) const;
@@ -156,7 +172,7 @@ public:
     void destroy(InstanceId id);
     // Destroys id and every descendant. destroy alone leaves the children alive
     // and unparented. Children go first, so undo revives each parent before its
-    // children. The root is never destroyed.
+    // children. The root is never destroyed, and a scene service fails the contract.
     void destroy_tree(InstanceId id);
 
     void set_simulated(InstanceId id, bool simulated);
@@ -165,6 +181,7 @@ public:
     // The child goes last among the new parent's children, so siblings keep
     // the order they arrived in. Equal parent is a no-op. Emits Changed, property_changed,
     // ChildRemoved/ChildAdded, and AncestryChanged on this id and descendants.
+    // A move parent_error refuses fails the contract.
     void set_parent(InstanceId id, InstanceId parent);
 
     // Path A. Default is class_name(). Siblings may share a name.
@@ -373,11 +390,19 @@ protected:
     void record_bool(InstanceId id, Field field, bool before, bool after);
     void record_string(InstanceId id, Field field, const std::string& before, const std::string& after);
     void record_position(InstanceId id, const Vec3& before, const Vec3& after);
+    // A registry property of this instance (lua_saved_property) changed from
+    // before to after, as its read gives them. Its setter calls this once the
+    // value is stored. Records undo, which puts values back through the
+    // property's write, and fires Changed with the property's name.
+    void note_property_change(std::string_view property, const LuaSlot& before, const LuaSlot& after);
 
-    // Subclass bytes stored in the place snapshot. The base stores nothing.
-    // Velocity is not place state; GameObject clears it on read.
-    virtual void write_place(std::vector<std::byte>&) const {}
-    virtual void read_place(const std::byte*, std::size_t) {}
+    // Subclass bytes stored in the place snapshot. The base stores the class's
+    // saved registry properties, so Stop puts them back; a class that has none
+    // stores nothing. A subclass that overrides these and also has saved
+    // registry properties calls the base. Velocity is not place state;
+    // GameObject clears it on read.
+    virtual void write_place(std::vector<std::byte>& out) const;
+    virtual void read_place(const std::byte* data, std::size_t size);
 
 private:
     friend class DataModelLock;
@@ -507,7 +532,8 @@ private:
     InstanceSignals* bag_for(InstanceId id);
     InstanceSignals& ensure_bag(InstanceId id);
     Signal& ensure_signal(InstanceId id, SignalKind kind, Field field);
-    void emit_change(InstanceId id, Field field, WriteOrigin origin);
+    // payload is for Field::Reflected: the property's lua_property_id.
+    void emit_change(InstanceId id, Field field, WriteOrigin origin, std::uint64_t payload = 0);
     // Tells the watchers of id, or every watcher, that what they show changed.
     void notify_watchers(InstanceId id);
     void notify_all_watchers();

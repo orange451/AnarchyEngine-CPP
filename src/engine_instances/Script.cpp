@@ -71,12 +71,6 @@ void Script::on_reuse() {
     start_generation_ = 0;
 }
 
-void Script::on_parent_changed(InstanceId previous, InstanceId next) {
-    if (ScriptHost* host = script_host()) {
-        host->on_script_parent(*this, previous, next);
-    }
-}
-
 void Script::write_place(std::vector<std::byte>& out) const {
     out.push_back(std::byte{enabled_ ? std::uint8_t{1} : std::uint8_t{0}});
     LuaSource::write_place(out);

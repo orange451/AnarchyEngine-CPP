@@ -1,5 +1,6 @@
 #pragma once
 
+#include "LuaApi.hpp"
 #include "PropertyBag.hpp"
 #include "types.hpp"
 
@@ -31,7 +32,10 @@ enum class HistoryProp : std::uint8_t {
     Name,
     Source,
     Enabled,
-    Position
+    Position,
+    // A property from the class registry, named by PropertyValue::property and
+    // put back through that property's own write.
+    Reflected
 };
 
 enum class MutationKind : std::uint8_t { SetProperty, SetParent, CreateInstance, DestroyInstance };
@@ -44,6 +48,9 @@ struct PropertyValue {
     bool flag = false;
     std::string text;
     Vec3 vector{};
+    // Reflected only: the lua_property_id, and the value as its read gave it.
+    std::uint32_t property = 0;
+    LuaSlot slot;
 };
 
 // One instance's authored fields. Children are the subtree at capture time.

@@ -1016,11 +1016,11 @@ TEST_CASE("plain instances do not carry transform color size or velocity", "[ins
 TEST_CASE("create<T> makes any subclass", "[instance]") {
     engine_core::Game game;
     engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
-    game.set_parent(triangle.id(), game.id());
+    game.set_parent(triangle.id(), workspace_of(game));
     REQUIRE(game.instance(triangle.id()) == &triangle);
     REQUIRE(game.game_object(triangle.id()) == nullptr);
-    REQUIRE(game.parent(triangle.id()) == game.id());
-    REQUIRE(game.first_child(game.id()) == triangle.id());
+    REQUIRE(game.parent(triangle.id()) == workspace_of(game));
+    REQUIRE(game.first_child(workspace_of(game)) == triangle.id());
     REQUIRE(triangle.angle_degrees() == 0.0);
     REQUIRE(triangle.position().x == 0.f);
     REQUIRE(triangle.position().y == 0.f);
@@ -1035,7 +1035,7 @@ TEST_CASE("create<T> makes any subclass", "[instance]") {
     engine_core::DataModel& plain = game.create();
     REQUIRE(game.parent(plain.id()) == engine_core::DataModel::kNoParent);
     REQUIRE(dynamic_cast<engine_core::TestTriangle*>(game.instance(plain.id())) == nullptr);
-    REQUIRE(game.first_child(game.id()) == triangle.id());
+    REQUIRE(game.first_child(workspace_of(game)) == triangle.id());
 
     const engine_core::InstanceId id = triangle.id();
     game.destroy(id);
@@ -1043,7 +1043,7 @@ TEST_CASE("create<T> makes any subclass", "[instance]") {
     REQUIRE(game.instance(id) == nullptr);
     REQUIRE(triangle.angle_degrees() == 0.0);
     REQUIRE(triangle.position().x == 0.f);
-    REQUIRE(game.first_child(game.id()) == 0);
+    REQUIRE(game.first_child(workspace_of(game)) == 0);
 
     engine_core::TestTriangle& again = game.create<engine_core::TestTriangle>();
     REQUIRE(again.angle_degrees() == 0.0);
@@ -1055,7 +1055,7 @@ TEST_CASE("Heartbeat steps descendants of the root", "[instance]") {
     engine_core::Engine engine;
     engine_core::DataModel& game = engine.datamodel();
     engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
-    game.set_parent(triangle.id(), game.id());
+    game.set_parent(triangle.id(), workspace_of(game));
     engine_core::TestTriangle& nested = game.create<engine_core::TestTriangle>();
     game.set_parent(nested.id(), triangle.id());
     engine_core::TestTriangle& loose = game.create<engine_core::TestTriangle>();
@@ -1304,12 +1304,12 @@ TEST_CASE("a paused edit parents a triangle before the next step", "[edit]") {
     engine_core::InstanceId id = 0;
     engine.on_simulation([&](engine_core::DataModel& game) {
         engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
-        game.set_parent(triangle.id(), game.id());
+        game.set_parent(triangle.id(), workspace_of(game));
         id = triangle.id();
     });
     REQUIRE(id != 0);
     REQUIRE(engine.datamodel().alive(id));
-    REQUIRE(engine.datamodel().parent(id) == engine.datamodel().id());
+    REQUIRE(engine.datamodel().parent(id) == workspace_of(engine.datamodel()));
     REQUIRE(engine.paused());
     REQUIRE(engine.sim_frame_count() == 0);
     engine.stop();
@@ -1321,7 +1321,7 @@ TEST_CASE("a paused edit destroys at once", "[edit]") {
     engine_core::InstanceId id = 0;
     engine.on_simulation([&](engine_core::DataModel& game) {
         engine_core::GameObject& part = game.create<engine_core::GameObject>();
-        game.set_parent(part.id(), game.id());
+        game.set_parent(part.id(), workspace_of(game));
         id = part.id();
     });
     REQUIRE(engine.datamodel().alive(id));
@@ -1346,7 +1346,7 @@ TEST_CASE("a paused edit writes transform, color, and flags at once", "[edit]") 
     const engine_core::Transform moved = engine_core::transform_translation(1.f, 2.f, 3.f);
     engine.on_simulation([&](engine_core::DataModel& game) {
         engine_core::GameObject& part = game.create<engine_core::GameObject>();
-        game.set_parent(part.id(), game.id());
+        game.set_parent(part.id(), workspace_of(game));
         id = part.id();
         engine_core::ColorRgb red;
         red.g = 0.f;
@@ -1388,14 +1388,14 @@ TEST_CASE("an edit during play runs on the simulation thread", "[edit]") {
             on_sim.store(1);
         }
         engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
-        game.set_parent(triangle.id(), game.id());
+        game.set_parent(triangle.id(), workspace_of(game));
         id.store(triangle.id());
     });
     wait_until([&] { return id.load() != 0; });
     engine.stop();
     REQUIRE(on_sim.load() == 1);
     REQUIRE(engine.datamodel().alive(id.load()));
-    REQUIRE(engine.datamodel().parent(id.load()) == engine.datamodel().id());
+    REQUIRE(engine.datamodel().parent(id.load()) == workspace_of(engine.datamodel()));
 }
 
 TEST_CASE("a paced simulation steps at the rate it is given", "[pace]") {
@@ -1504,12 +1504,17 @@ TEST_CASE("N1 default name is the class name and set_name fires Name", "[N1]") {
 
 TEST_CASE("N6 the root Changed signal is not the first instance", "[N6]") {
     engine_core::Game game;
+    // The first slot holds Workspace, the first scene service Game makes.
+    const engine_core::InstanceId first = workspace_of(game);
+    REQUIRE((first & 0xffffu) == 0);
+    REQUIRE(first != game.id());
     engine_core::GameObject& part = game.create<engine_core::GameObject>();
-    REQUIRE((part.id() & 0xffffu) == 0);
-    REQUIRE(part.id() != game.id());
+    game.set_parent(part.id(), first);
 
     int root_changed = 0;
     int root_named = 0;
+    int root_added = 0;
+    int first_changed = 0;
     int part_changed = 0;
     int added = 0;
     engine_core::InstanceId added_id = 0;
@@ -1524,11 +1529,13 @@ TEST_CASE("N6 the root Changed signal is not the first instance", "[N6]") {
             REQUIRE(field == engine_core::Field::Name);
             ++root_named;
         });
+    game.changed(first).connect([&](engine_core::InstanceId, engine_core::Field) { ++first_changed; });
     game.changed(part.id()).connect([&](engine_core::InstanceId id, engine_core::Field) {
         REQUIRE(id == part.id());
         ++part_changed;
     });
-    game.child_added(game.id()).connect([&](engine_core::InstanceId child, engine_core::Field) {
+    game.child_added(game.id()).connect([&](engine_core::InstanceId, engine_core::Field) { ++root_added; });
+    game.child_added(first).connect([&](engine_core::InstanceId child, engine_core::Field) {
         ++added;
         added_id = child;
     });
@@ -1544,13 +1551,15 @@ TEST_CASE("N6 the root Changed signal is not the first instance", "[N6]") {
     game.set_name(game.id(), "Place");
     game.set_name(part.id(), "Brick");
     engine_core::GameObject& extra = game.create<engine_core::GameObject>();
-    game.set_parent(extra.id(), game.id());
+    game.set_parent(extra.id(), first);
     {
         SimRole role;
         game.events().drain();
     }
     REQUIRE(root_changed == 1);
     REQUIRE(root_named == 1);
+    REQUIRE(first_changed == 0);
+    REQUIRE(root_added == 0);
     REQUIRE(part_changed == 1);
     REQUIRE(added == 1);
     REQUIRE(added_id == extra.id());
@@ -1565,6 +1574,7 @@ TEST_CASE("N6 the root Changed signal is not the first instance", "[N6]") {
     }
     REQUIRE(root_changed == 2);
     REQUIRE(root_named == 2);
+    REQUIRE(first_changed == 0);
     REQUIRE(part_changed == part_held);
 }
 
@@ -1572,7 +1582,7 @@ TEST_CASE("N2 siblings may share a name and find_first_child returns the first",
     engine_core::Game game;
     engine_core::DataModel& folder = game.create();
     game.set_name(folder.id(), "Folder");
-    game.set_parent(folder.id(), game.id());
+    game.set_parent(folder.id(), workspace_of(game));
 
     engine_core::GameObject& older = game.create<engine_core::GameObject>();
     engine_core::GameObject& newer = game.create<engine_core::GameObject>();
@@ -1598,8 +1608,8 @@ TEST_CASE("N2 siblings may share a name and find_first_child returns the first",
     REQUIRE(children[2] == metal.id());
     REQUIRE(game.get_children(0xdeadbeefu).empty());
     REQUIRE(game.find_first_child(0xdeadbeefu, "Wood") == 0);
-    REQUIRE(game.get_children(game.id()).size() == 1);
-    REQUIRE(game.get_children(game.id())[0] == folder.id());
+    REQUIRE(game.get_children(workspace_of(game)).size() == 1);
+    REQUIRE(game.get_children(workspace_of(game))[0] == folder.id());
 }
 
 TEST_CASE("N3 place restore reverts play and drops session instances", "[N3]") {
@@ -1607,7 +1617,7 @@ TEST_CASE("N3 place restore reverts play and drops session instances", "[N3]") {
     engine_core::DataModel& folder = game.create();
     const engine_core::InstanceId folder_id = folder.id();
     game.set_name(folder_id, "Folder");
-    game.set_parent(folder_id, game.id());
+    game.set_parent(folder_id, workspace_of(game));
 
     engine_core::GameObject& leaf = game.create<engine_core::GameObject>();
     const engine_core::InstanceId leaf_id = leaf.id();
@@ -1635,7 +1645,7 @@ TEST_CASE("N3 place restore reverts play and drops session instances", "[N3]") {
     leaf.set_color(rgb(0.1f, 0.2f, 0.9f));
     leaf.set_size(9.f, 9.f, 9.f);
     leaf.set_transform(T1());
-    game.set_parent(leaf_id, game.id());
+    game.set_parent(leaf_id, workspace_of(game));
     leaf.set_linear_velocity(10.f, 0.f, 0.f);
     game.integrate_simulated(1.0);
     REQUIRE_FALSE(near(game.game_object(leaf_id)->transform(), posed));
@@ -1652,7 +1662,7 @@ TEST_CASE("N3 place restore reverts play and drops session instances", "[N3]") {
     REQUIRE(recycled_id != sibling_id);
     REQUIRE((recycled_id & 0xffffu) == (sibling_id & 0xffffu));
     game.set_name(recycled_id, "Recycled");
-    game.set_parent(recycled_id, game.id());
+    game.set_parent(recycled_id, workspace_of(game));
 
     game.stop_simulation();
     REQUIRE_FALSE(game.simulation_running());
@@ -1668,7 +1678,7 @@ TEST_CASE("N3 place restore reverts play and drops session instances", "[N3]") {
     REQUIRE(game.name(folder_id) == "Folder");
     REQUIRE(game.parent(leaf_id) == folder_id);
     REQUIRE(game.parent(sibling_id) == folder_id);
-    REQUIRE(game.parent(folder_id) == game.id());
+    REQUIRE(game.parent(folder_id) == workspace_of(game));
     REQUIRE(game.find_first_child(folder_id, "Sibling") == sibling_id);
     REQUIRE(near_color(game.game_object(leaf_id)->color(), red));
     float size[3] = {};
@@ -1710,7 +1720,7 @@ TEST_CASE("N4 a second play restores the original place", "[N4]") {
     engine_core::Game game;
     engine_core::GameObject& part = game.create<engine_core::GameObject>();
     const engine_core::InstanceId id = part.id();
-    game.set_parent(id, game.id());
+    game.set_parent(id, workspace_of(game));
     const engine_core::ColorRgb red = rgb(0.7f, 0.0f, 0.0f);
     part.set_color(red);
     game.set_name(id, "Door");
@@ -1732,7 +1742,7 @@ TEST_CASE("N4 a second play restores the original place", "[N4]") {
     game.set_name(id, "Edited");
     engine_core::GameObject& between = game.create<engine_core::GameObject>();
     const engine_core::InstanceId between_id = between.id();
-    game.set_parent(between_id, game.id());
+    game.set_parent(between_id, workspace_of(game));
 
     game.start_simulation();
     game.game_object(id)->set_color(rgb(0.f, 0.f, 1.f));
@@ -1741,7 +1751,7 @@ TEST_CASE("N4 a second play restores the original place", "[N4]") {
     REQUIRE(game.world_generation() == generation + 2);
     REQUIRE(game.name(id) == "Door");
     REQUIRE(near_color(game.game_object(id)->color(), red));
-    REQUIRE(game.parent(id) == game.id());
+    REQUIRE(game.parent(id) == workspace_of(game));
     REQUIRE_FALSE(game.alive(between_id));
 
     game.stop_simulation();
@@ -1758,20 +1768,20 @@ TEST_CASE("N4 a folder removed in edit mode stays removed after the next stop", 
     engine_core::Folder& folder = game.create<engine_core::Folder>();
     const engine_core::InstanceId folder_id = folder.id();
     game.set_name(folder_id, "Props");
-    game.set_parent(folder_id, game.id());
+    game.set_parent(folder_id, workspace_of(game));
 
     engine_core::Folder& cut = game.create<engine_core::Folder>();
     const engine_core::InstanceId cut_id = cut.id();
     game.set_name(cut_id, "Loose");
-    game.set_parent(cut_id, game.id());
+    game.set_parent(cut_id, workspace_of(game));
     // Insert while stopped replaces the snapshot, which is why the new
     // folders survive the next Stop.
     game.capture_place();
 
     game.start_simulation();
     game.stop_simulation();
-    REQUIRE(game.parent(folder_id) == game.id());
-    REQUIRE(game.parent(cut_id) == game.id());
+    REQUIRE(game.parent(folder_id) == workspace_of(game));
+    REQUIRE(game.parent(cut_id) == workspace_of(game));
 
     game.destroy(folder_id);
     game.set_parent(cut_id, engine_core::DataModel::kNoParent);
@@ -1785,8 +1795,8 @@ TEST_CASE("N4 a folder removed in edit mode stays removed after the next stop", 
     REQUIRE_FALSE(game.alive(folder_id));
     REQUIRE(game.alive(cut_id));
     REQUIRE(game.parent(cut_id) == engine_core::DataModel::kNoParent);
-    REQUIRE(game.find_first_child(game.id(), "Props") == 0);
-    REQUIRE(game.find_first_child(game.id(), "Loose") == 0);
+    REQUIRE(game.find_first_child(workspace_of(game), "Props") == 0);
+    REQUIRE(game.find_first_child(workspace_of(game), "Loose") == 0);
 }
 
 TEST_CASE("edit then play captures the place on start", "[N4]") {
@@ -1796,7 +1806,7 @@ TEST_CASE("edit then play captures the place on start", "[N4]") {
     const engine_core::ColorRgb red = rgb(0.4f, 0.1f, 0.1f);
     part.set_color(red);
     game.set_name(id, "Door");
-    game.set_parent(id, game.id());
+    game.set_parent(id, workspace_of(game));
     REQUIRE_FALSE(game.simulation_running());
     game.start_simulation();
     REQUIRE(game.simulation_running());
@@ -1807,7 +1817,7 @@ TEST_CASE("edit then play captures the place on start", "[N4]") {
     game.stop_simulation();
     REQUIRE(game.name(id) == "Door");
     REQUIRE(near_color(game.game_object(id)->color(), red));
-    REQUIRE(game.parent(id) == game.id());
+    REQUIRE(game.parent(id) == workspace_of(game));
     REQUIRE_FALSE(game.alive(extra_id));
 }
 
@@ -1899,7 +1909,7 @@ TEST_CASE("S1 two scripts wait without blocking each other", "[S1]") {
     )");
     engine_core::GameObject& count_a = add_part(rig.game, first.id(), "0");
     engine_core::GameObject& count_b = add_part(rig.game, second.id(), "0");
-    REQUIRE(rig.game.find_first_child(rig.game.id(), "A") == first.id());
+    REQUIRE(rig.game.find_first_child(workspace_of(rig.game), "A") == first.id());
     REQUIRE(std::string(first.class_name()) == "Script");
 
     rig.game.start_simulation();
@@ -1968,18 +1978,18 @@ TEST_CASE("S3 stop aborts a waiting script and the next start runs from the top"
 
 TEST_CASE("S4 disabling or destroying a script drops only its connections", "[S4]") {
     ScriptRig rig;
-    engine_core::GameObject& part = add_part(rig.game, rig.game.id(), "P");
-    engine_core::GameObject& hits = add_part(rig.game, rig.game.id(), "Hits");
-    engine_core::GameObject& beat = add_part(rig.game, rig.game.id(), "Beat");
-    engine_core::GameObject& other = add_part(rig.game, rig.game.id(), "Other");
+    engine_core::GameObject& part = add_part(rig.game, workspace_of(rig.game), "P");
+    engine_core::GameObject& hits = add_part(rig.game, workspace_of(rig.game), "Hits");
+    engine_core::GameObject& beat = add_part(rig.game, workspace_of(rig.game), "Beat");
+    engine_core::GameObject& other = add_part(rig.game, workspace_of(rig.game), "Other");
     // The find names are the stable names. Counters live on children so renames do not hide them.
     engine_core::GameObject& hit_count = add_part(rig.game, hits.id(), "0");
     engine_core::GameObject& beat_count = add_part(rig.game, beat.id(), "0");
     engine_core::GameObject& other_count = add_part(rig.game, other.id(), "0");
     engine_core::Script& one = add_script(rig.game, "One", R"(
-        local part = game:FindFirstChild("P")
-        local hits = game:FindFirstChild("Hits"):GetChildren()[1]
-        local beat = game:FindFirstChild("Beat"):GetChildren()[1]
+        local part = workspace:FindFirstChild("P")
+        local hits = workspace:FindFirstChild("Hits"):GetChildren()[1]
+        local beat = workspace:FindFirstChild("Beat"):GetChildren()[1]
         part.Changed:Connect(function()
             local n = tonumber(hits.Name) or 0
             hits.Name = tostring(n + 1)
@@ -1990,8 +2000,8 @@ TEST_CASE("S4 disabling or destroying a script drops only its connections", "[S4
         end)
     )");
     engine_core::Script& two = add_script(rig.game, "Two", R"(
-        local part = game:FindFirstChild("P")
-        local other = game:FindFirstChild("Other"):GetChildren()[1]
+        local part = workspace:FindFirstChild("P")
+        local other = workspace:FindFirstChild("Other"):GetChildren()[1]
         part.Changed:Connect(function()
             local n = tonumber(other.Name) or 0
             other.Name = tostring(n + 1)
@@ -2045,7 +2055,7 @@ TEST_CASE("a new ModuleScript returns an empty table", "[module]") {
     module.set_source(kept);
     const engine_core::InstanceId id = module.id();
     rig.game.set_name(id, "Kept");
-    rig.game.set_parent(id, rig.game.id());
+    rig.game.set_parent(id, workspace_of(rig.game));
     rig.game.capture_place();
 
     rig.game.start_simulation();
@@ -2057,7 +2067,7 @@ TEST_CASE("a new ModuleScript returns an empty table", "[module]") {
     add_script(rig.game, "Check", R"lua(
         local made = Instance.new("ModuleScript")
         made.Name = "FromNew"
-        made.Parent = game
+        made.Parent = workspace
         if made.Source ~= "local module = {}\n\nreturn module\n" then
             error("bad source")
         end
@@ -2074,7 +2084,7 @@ TEST_CASE("a new ModuleScript returns an empty table", "[module]") {
         INFO(line.text);
         REQUIRE(line.kind != engine_core::ScriptRuntime::OutputKind::Error);
     }
-    const engine_core::InstanceId from_new = rig.game.find_first_child(rig.game.id(), "FromNew");
+    const engine_core::InstanceId from_new = rig.game.find_first_child(workspace_of(rig.game), "FromNew");
     REQUIRE(from_new != 0);
     const auto* made = dynamic_cast<const engine_core::ModuleScript*>(rig.game.instance(from_new));
     REQUIRE(made != nullptr);
@@ -2100,7 +2110,7 @@ TEST_CASE("a new ModuleScript returns an empty table", "[module]") {
 
 TEST_CASE("S5 require caches one return and drops it when the simulation stops", "[S5]") {
     ScriptRig rig;
-    engine_core::GameObject& runs = add_part(rig.game, rig.game.id(), "0");
+    engine_core::GameObject& runs = add_part(rig.game, workspace_of(rig.game), "0");
     rig.game.set_name(runs.id(), "Runs");
     engine_core::GameObject& run_count = add_part(rig.game, runs.id(), "0");
     engine_core::ModuleScript& mod = rig.game.create<engine_core::ModuleScript>();
@@ -2111,19 +2121,19 @@ TEST_CASE("S5 require caches one return and drops it when the simulation stops",
         flag.Name = tostring(n + 1)
         return { n = n + 1 }
     )");
-    rig.game.set_parent(mod.id(), rig.game.id());
+    rig.game.set_parent(mod.id(), workspace_of(rig.game));
     engine_core::ModuleScript& cycle = rig.game.create<engine_core::ModuleScript>();
     rig.game.set_name(cycle.id(), "Cycle");
     cycle.set_source("return require(script)");
-    rig.game.set_parent(cycle.id(), rig.game.id());
+    rig.game.set_parent(cycle.id(), workspace_of(rig.game));
     add_script(rig.game, "Main", R"(
-        local mod = game:FindFirstChild("Mod")
+        local mod = workspace:FindFirstChild("Mod")
         local a = require(mod)
         local b = require(mod)
         _G.same = (a == b)
         _G.n = a.n
         local ok = pcall(function()
-            require(game:FindFirstChild("Cycle"))
+            require(workspace:FindFirstChild("Cycle"))
         end)
         _G.cycle = not ok
     )");
@@ -2155,7 +2165,7 @@ TEST_CASE("S5 require caches one return and drops it when the simulation stops",
 
 TEST_CASE("S6 stop drops a script-created GameObject and restores an authored name", "[S6]") {
     ScriptRig rig;
-    engine_core::GameObject& door = add_part(rig.game, rig.game.id(), "Door");
+    engine_core::GameObject& door = add_part(rig.game, workspace_of(rig.game), "Door");
     engine_core::Script& maker = add_script(rig.game, "Maker", R"(
         local made = Instance.new("GameObject")
         made.Name = "Session"
@@ -2163,33 +2173,33 @@ TEST_CASE("S6 stop drops a script-created GameObject and restores an authored na
         local door = script.Parent:FindFirstChild("Door")
         door.Name = "Moved"
     )");
-    REQUIRE(rig.game.find_first_child(rig.game.id(), "Maker") == maker.id());
+    REQUIRE(rig.game.find_first_child(workspace_of(rig.game), "Maker") == maker.id());
     REQUIRE(std::string(maker.class_name()) == "Script");
     rig.game.start_simulation();
     rig.frames(1, 0.05);
     REQUIRE(rig.game.name(door.id()) == "Moved");
-    const engine_core::InstanceId session = rig.game.find_first_child(rig.game.id(), "Session");
+    const engine_core::InstanceId session = rig.game.find_first_child(workspace_of(rig.game), "Session");
     REQUIRE(session != 0);
     REQUIRE(std::string(rig.game.instance(session)->class_name()) == "GameObject");
 
     rig.game.stop_simulation();
     REQUIRE(rig.game.name(door.id()) == "Door");
     REQUIRE_FALSE(rig.game.alive(session));
-    REQUIRE(rig.game.find_first_child(rig.game.id(), "Session") == 0);
-    REQUIRE(rig.game.find_first_child(rig.game.id(), "Maker") == maker.id());
+    REQUIRE(rig.game.find_first_child(workspace_of(rig.game), "Session") == 0);
+    REQUIRE(rig.game.find_first_child(workspace_of(rig.game), "Maker") == maker.id());
 }
 
 TEST_CASE("S7 parenting a script while running starts it after the drain", "[S7]") {
     ScriptRig rig;
-    engine_core::GameObject& mark = add_part(rig.game, rig.game.id(), "Mark");
+    engine_core::GameObject& mark = add_part(rig.game, workspace_of(rig.game), "Mark");
     engine_core::GameObject& token = add_part(rig.game, mark.id(), "hidden");
-    engine_core::GameObject& flag = add_part(rig.game, rig.game.id(), "Flag");
-    engine_core::GameObject& trigger = add_part(rig.game, rig.game.id(), "Trigger");
+    engine_core::GameObject& flag = add_part(rig.game, workspace_of(rig.game), "Flag");
+    engine_core::GameObject& trigger = add_part(rig.game, workspace_of(rig.game), "Trigger");
     engine_core::Script& script = rig.game.create<engine_core::Script>();
     rig.game.set_name(script.id(), "Late");
     script.set_source(R"(
-        local mark = game:FindFirstChild("Mark")
-        local flag = game:FindFirstChild("Flag")
+        local mark = workspace:FindFirstChild("Mark")
+        local flag = workspace:FindFirstChild("Flag")
         flag.Name = mark:GetChildren()[1].Name
     )");
     REQUIRE(rig.game.parent(script.id()) == engine_core::DataModel::kNoParent);
@@ -2198,22 +2208,22 @@ TEST_CASE("S7 parenting a script while running starts it after the drain", "[S7]
     bool started_inside = false;
     rig.game.changed(trigger.id()).connect([&](engine_core::InstanceId, engine_core::Field) {
         rig.game.set_name(token.id(), "visible");
-        rig.game.set_parent(script.id(), rig.game.id());
+        rig.game.set_parent(script.id(), workspace_of(rig.game));
         started_inside = rig.game.name(flag.id()) == "visible";
     });
     rig.game.set_name(trigger.id(), "go");
     REQUIRE(rig.game.name(flag.id()) == "Flag");
     rig.game.events().drain();
     REQUIRE_FALSE(started_inside);
-    REQUIRE(rig.game.parent(script.id()) == rig.game.id());
+    REQUIRE(rig.game.parent(script.id()) == workspace_of(rig.game));
     REQUIRE(rig.game.name(flag.id()) == "visible");
 }
 
 TEST_CASE("S8 a script color write is path A", "[S8]") {
     ScriptRig rig;
-    engine_core::GameObject& part = add_part(rig.game, rig.game.id(), "P");
+    engine_core::GameObject& part = add_part(rig.game, workspace_of(rig.game), "P");
     add_script(rig.game, "Painter", R"(
-        local part = game:FindFirstChild("P")
+        local part = workspace:FindFirstChild("P")
         part.Color = Color3.new(0.2, 0.4, 0.6)
     )");
     int hits = 0;
@@ -2272,9 +2282,9 @@ TEST_CASE("S9 binding PreRender from a script errors", "[S9]") {
 
 TEST_CASE("S10 stale userdata after stop does not address the restored tree", "[S10]") {
     ScriptRig rig;
-    engine_core::GameObject& door = add_part(rig.game, rig.game.id(), "Door");
+    engine_core::GameObject& door = add_part(rig.game, workspace_of(rig.game), "Door");
     add_script(rig.game, "Keeper", R"(
-        local door = game:FindFirstChild("Door")
+        local door = workspace:FindFirstChild("Door")
         _G.door = door
         door.Name = "Live"
         local temp = Instance.new("GameObject")
@@ -2344,9 +2354,9 @@ TEST_CASE("S11 spawned wait(0) threads both resume", "[S11]") {
 TEST_CASE("S12 a Luau Heartbeat connection runs on the simulation thread", "[S12]") {
     engine_core::Engine engine;
     engine_core::DataModel& game = engine.datamodel();
-    engine_core::GameObject& part = add_part(game, game.id(), "P");
+    engine_core::GameObject& part = add_part(game, workspace_of(game), "P");
     add_script(game, "Beat", R"(
-        local part = game:FindFirstChild("P")
+        local part = workspace:FindFirstChild("P")
         local n = 0
         game:GetService("RunService").Heartbeat:Connect(function()
             n = n + 1
@@ -2426,10 +2436,10 @@ TEST_CASE("Vector3 is the triangle position", "[vector3]") {
     ScriptRig rig;
     engine_core::TestTriangle& triangle = rig.game.create<engine_core::TestTriangle>();
     rig.game.set_name(triangle.id(), "Tri0");
-    rig.game.set_parent(triangle.id(), rig.game.id());
+    rig.game.set_parent(triangle.id(), workspace_of(rig.game));
     triangle.set_position(-0.58f, 0.38f, 0.f);
     add_script(rig.game, "Main", R"(
-        local tri = game:FindFirstChild("Tri0")
+        local tri = workspace:FindFirstChild("Tri0")
         local home = tri.Position
         _G.read_x = home.X
         _G.read_y = home.Y
@@ -2691,14 +2701,14 @@ TEST_CASE("scene scripts hop a triangle on task.wait and stop restores the pose"
     ScriptRig rig;
     engine_core::TestTriangle& slow = rig.game.create<engine_core::TestTriangle>();
     rig.game.set_name(slow.id(), "Tri0");
-    rig.game.set_parent(slow.id(), rig.game.id());
+    rig.game.set_parent(slow.id(), workspace_of(rig.game));
     slow.set_position(-0.58f, 0.38f, 0.f);
     engine_core::TestTriangle& fast = rig.game.create<engine_core::TestTriangle>();
     rig.game.set_name(fast.id(), "Tri1");
-    rig.game.set_parent(fast.id(), rig.game.id());
+    rig.game.set_parent(fast.id(), workspace_of(rig.game));
     fast.set_position(0.58f, 0.38f, 0.15f);
     add_script(rig.game, "HopSlow", R"(
-        local tri = game:FindFirstChild("Tri0")
+        local tri = workspace:FindFirstChild("Tri0")
         assert(tri)
         local home = tri.Position
         local n = 0
@@ -2710,7 +2720,7 @@ TEST_CASE("scene scripts hop a triangle on task.wait and stop restores the pose"
         end
     )");
     add_script(rig.game, "HopFast", R"(
-        local tri = game:FindFirstChild("Tri1")
+        local tri = workspace:FindFirstChild("Tri1")
         assert(tri)
         local home = tri.Position
         local n = 0
@@ -2750,7 +2760,7 @@ TEST_CASE("scene scripts hop a triangle on task.wait and stop restores the pose"
     REQUIRE(std::fabs(restored_fast.x - 0.58f) < 1e-4f);
     REQUIRE(std::fabs(restored_fast.y - 0.38f) < 1e-4f);
     REQUIRE(std::fabs(restored_fast.z - 0.15f) < 1e-4f);
-    REQUIRE(rig.game.name(rig.game.find_first_child(rig.game.id(), "HopSlow")) == "HopSlow");
+    REQUIRE(rig.game.name(rig.game.find_first_child(workspace_of(rig.game), "HopSlow")) == "HopSlow");
 }
 
 TEST_CASE("S13 print and errors reach the log and a new start clears it", "[S13]") {
@@ -2919,7 +2929,7 @@ TEST_CASE("S35 the command line requires a ModuleScript like a script does", "[S
     ScriptRig rig;
     engine_core::Folder& folder = rig.game.create<engine_core::Folder>();
     rig.game.set_name(folder.id(), "Folder");
-    rig.game.set_parent(folder.id(), rig.game.id());
+    rig.game.set_parent(folder.id(), workspace_of(rig.game));
     engine_core::ModuleScript& config = rig.game.create<engine_core::ModuleScript>();
     rig.game.set_name(config.id(), "Config");
     config.set_source(R"(
@@ -2940,7 +2950,7 @@ return module
     rig.runtime.drain_output();
 
     // Stopped: the console runs the module itself.
-    rig.runtime.run_chunk("print(require(game.Folder.Config))");
+    rig.runtime.run_chunk("print(require(workspace.Folder.Config))");
     engine_core::ScriptRuntime::OutputBatch batch = rig.runtime.drain_output();
     REQUIRE(batch.lines.size() == 1);
     REQUIRE(batch.lines[0].kind == engine_core::ScriptRuntime::OutputKind::Print);
@@ -2954,40 +2964,40 @@ return module
     REQUIRE(table->fields[1].table->fields.size() == 3);
 
     // One command gets one copy, as a script does.
-    rig.runtime.run_chunk("print(require(game.Folder.Config) == require(game.Folder.Config), "
-                          "require(game.Folder.Config).Currencies.Gold)");
+    rig.runtime.run_chunk("print(require(workspace.Folder.Config) == require(workspace.Folder.Config), "
+                          "require(workspace.Folder.Config).Currencies.Gold)");
     batch = rig.runtime.drain_output();
     REQUIRE(batch.lines.size() == 1);
     REQUIRE(batch.lines[0].text == "true\tGold\n");
 
     // The next command reads the module again, so an edit while stopped shows.
     config.set_source("return { Currencies = { Gold = \"Au\" } }");
-    rig.runtime.run_chunk("print(require(game.Folder.Config).Currencies.Gold)");
+    rig.runtime.run_chunk("print(require(workspace.Folder.Config).Currencies.Gold)");
     batch = rig.runtime.drain_output();
     REQUIRE(batch.lines.size() == 1);
     REQUIRE(batch.lines[0].text == "Au\n");
 
     // An error in the module is the command's error, and the next require still works.
     config.set_source("error(\"broken module\")");
-    rig.runtime.run_chunk("print(require(game.Folder.Config))");
+    rig.runtime.run_chunk("print(require(workspace.Folder.Config))");
     batch = rig.runtime.drain_output();
     REQUIRE(batch.lines.size() == 1);
     REQUIRE(batch.lines[0].kind == engine_core::ScriptRuntime::OutputKind::Error);
     REQUIRE(batch.lines[0].text.find("broken module") != std::string::npos);
     config.set_source("return 7");
-    rig.runtime.run_chunk("print(require(game.Folder.Config))");
+    rig.runtime.run_chunk("print(require(workspace.Folder.Config))");
     batch = rig.runtime.drain_output();
     REQUIRE(batch.lines.size() == 1);
     REQUIRE(batch.lines[0].text == "7\n");
 
     // Playing: the same, beside a script that requires it in the play VM.
     config.set_source("return { Gold = \"Gold\" }");
-    add_script(rig.game, "Main", "_G.gold = require(game.Folder.Config).Gold");
+    add_script(rig.game, "Main", "_G.gold = require(workspace.Folder.Config).Gold");
     rig.game.start_simulation();
     rig.frames(1, 0.05);
     REQUIRE(rig.runtime.global_is_nil("gold") == false);
     rig.runtime.drain_output();
-    rig.runtime.run_chunk("print(require(game.Folder.Config).Gold)");
+    rig.runtime.run_chunk("print(require(workspace.Folder.Config).Gold)");
     batch = rig.runtime.drain_output();
     REQUIRE(batch.lines.size() == 1);
     REQUIRE(batch.lines[0].text == "Gold\n");
@@ -3113,9 +3123,9 @@ TEST_CASE("S19 PreSimulation:Wait returns that step", "[S19]") {
 
 TEST_CASE("S20 Changed:Wait returns the property name", "[S20]") {
     ScriptRig rig;
-    add_part(rig.game, rig.game.id(), "P");
+    add_part(rig.game, workspace_of(rig.game), "P");
     add_script(rig.game, "Watch", R"(
-        local part = game:FindFirstChild("P")
+        local part = workspace:FindFirstChild("P")
         task.spawn(function()
             part.Name = "Next"
         end)
@@ -3127,15 +3137,15 @@ TEST_CASE("S20 Changed:Wait returns the property name", "[S20]") {
     bool ok = false;
     REQUIRE(rig.runtime.global_boolean("ok", ok));
     REQUIRE(ok);
-    REQUIRE(rig.game.find_first_child(rig.game.id(), "Next") != 0);
+    REQUIRE(rig.game.find_first_child(workspace_of(rig.game), "Next") != 0);
     REQUIRE(rig.runtime.last_error().empty());
 }
 
 TEST_CASE("S21 game.Changed reports the root property", "[S21]") {
     ScriptRig rig;
-    engine_core::GameObject& part = add_part(rig.game, rig.game.id(), "P");
+    engine_core::GameObject& part = add_part(rig.game, workspace_of(rig.game), "P");
     add_script(rig.game, "Watch", R"(
-        local part = game:FindFirstChild("P")
+        local part = workspace:FindFirstChild("P")
         game.Changed:Connect(function(property)
             _G.hits = (_G.hits or 0) + 1
             _G.ok = (_G.hits == 1 and property == "Name")
@@ -3185,7 +3195,7 @@ TEST_CASE("Folder stores other instances", "[folder]") {
     REQUIRE(game.name(props_id) == "Folder");
     REQUIRE(game.game_object(props_id) == nullptr);
     game.set_name(props_id, "Props");
-    game.set_parent(props_id, game.id());
+    game.set_parent(props_id, workspace_of(game));
 
     engine_core::Folder& inner = game.create<engine_core::Folder>();
     const engine_core::InstanceId inner_id = inner.id();
@@ -3212,14 +3222,14 @@ TEST_CASE("Folder stores other instances", "[folder]") {
     rig.runtime.run_chunk(R"(
         local session = Instance.new("Folder")
         session.Name = "Session"
-        session.Parent = game
+        session.Parent = workspace
         local loose = Instance.new("GameObject")
         loose.Name = "Loose"
         loose.Parent = session
-        local props = game:FindFirstChild("Props")
+        local props = workspace:FindFirstChild("Props")
         props.Name = "Renamed"
         local box = props:FindFirstChild("Inner"):FindFirstChild("Box")
-        box.Parent = game
+        box.Parent = workspace
         if not session:IsA("Folder") or not session:IsA("DataModel") or session:IsA("GameObject") then
             error("folder class")
         end
@@ -3229,11 +3239,11 @@ TEST_CASE("Folder stores other instances", "[folder]") {
         REQUIRE(line.kind != engine_core::ScriptRuntime::OutputKind::Error);
     }
     REQUIRE(rig.runtime.last_error().empty());
-    const engine_core::InstanceId session_id = game.find_first_child(game.id(), "Session");
+    const engine_core::InstanceId session_id = game.find_first_child(workspace_of(game), "Session");
     REQUIRE(session_id != 0);
     REQUIRE(std::string(game.instance(session_id)->class_name()) == "Folder");
     REQUIRE(game.find_first_child(session_id, "Loose") != 0);
-    REQUIRE(game.parent(box_id) == game.id());
+    REQUIRE(game.parent(box_id) == workspace_of(game));
     REQUIRE(game.name(props_id) == "Renamed");
 
     game.stop_simulation();
@@ -3245,10 +3255,10 @@ TEST_CASE("Folder stores other instances", "[folder]") {
     REQUIRE(std::string(game.instance(inner_id)->class_name()) == "Folder");
     REQUIRE(game.name(props_id) == "Props");
     REQUIRE(game.name(inner_id) == "Inner");
-    REQUIRE(game.parent(props_id) == game.id());
+    REQUIRE(game.parent(props_id) == workspace_of(game));
     REQUIRE(game.parent(inner_id) == props_id);
     REQUIRE(game.parent(box_id) == inner_id);
-    REQUIRE(game.find_first_child(game.id(), "Session") == 0);
+    REQUIRE(game.find_first_child(workspace_of(game), "Session") == 0);
     REQUIRE(game.game_object(props_id) == nullptr);
     REQUIRE(game.game_object(inner_id) == nullptr);
 }
@@ -3259,20 +3269,20 @@ TEST_CASE("S22 a script created during play stays parented to game", "[S22]") {
         local made = Instance.new("Script")
         made.Name = "Spawned"
         made.Source = "print('from spawned')"
-        made.Parent = game
-        local also = Instance.new("Script", game)
+        made.Parent = workspace
+        local also = Instance.new("Script", workspace)
         also.Name = "FromNew"
         also.Source = "print('from new')"
     )lua");
     rig.game.start_simulation();
     rig.frames(2, 0.05);
-    const engine_core::InstanceId spawned = rig.game.find_first_child(rig.game.id(), "Spawned");
-    const engine_core::InstanceId from_new = rig.game.find_first_child(rig.game.id(), "FromNew");
+    const engine_core::InstanceId spawned = rig.game.find_first_child(workspace_of(rig.game), "Spawned");
+    const engine_core::InstanceId from_new = rig.game.find_first_child(workspace_of(rig.game), "FromNew");
     REQUIRE(spawned != 0);
     REQUIRE(from_new != 0);
     REQUIRE(std::string(rig.game.instance(spawned)->class_name()) == "Script");
-    REQUIRE(rig.game.parent(spawned) == rig.game.id());
-    REQUIRE(rig.game.parent(from_new) == rig.game.id());
+    REQUIRE(rig.game.parent(spawned) == workspace_of(rig.game));
+    REQUIRE(rig.game.parent(from_new) == workspace_of(rig.game));
     const engine_core::ScriptRuntime::OutputBatch played = rig.runtime.drain_output();
     bool spawned_printed = false;
     bool new_printed = false;
@@ -3295,8 +3305,8 @@ TEST_CASE("S22 a script created during play stays parented to game", "[S22]") {
     rig.game.stop_simulation();
     REQUIRE_FALSE(rig.game.alive(spawned));
     REQUIRE_FALSE(rig.game.alive(from_new));
-    REQUIRE(rig.game.find_first_child(rig.game.id(), "Spawned") == 0);
-    REQUIRE(rig.game.find_first_child(rig.game.id(), "FromNew") == 0);
+    REQUIRE(rig.game.find_first_child(workspace_of(rig.game), "Spawned") == 0);
+    REQUIRE(rig.game.find_first_child(workspace_of(rig.game), "FromNew") == 0);
 }
 
 TEST_CASE("Selection keeps an ordered list without repeats or the root", "[selection]") {
@@ -3320,10 +3330,10 @@ TEST_CASE("Selection Get and Set reach the same list the explorer reads", "[sele
     engine_core::DataModel& game = rig.game;
     engine_core::Folder& a = game.create<engine_core::Folder>();
     game.set_name(a.id(), "A");
-    game.set_parent(a.id(), game.id());
+    game.set_parent(a.id(), workspace_of(game));
     engine_core::Folder& b = game.create<engine_core::Folder>();
     game.set_name(b.id(), "B");
-    game.set_parent(b.id(), game.id());
+    game.set_parent(b.id(), workspace_of(game));
     const engine_core::InstanceId a_id = a.id();
     const engine_core::InstanceId b_id = b.id();
     REQUIRE(engine_core::lua_service_known("Selection"));
@@ -3332,7 +3342,7 @@ TEST_CASE("Selection Get and Set reach the same list the explorer reads", "[sele
     REQUIRE(definitions.find("function Set(self, selection: {Instance}): ()") != std::string::npos);
 
     rig.runtime.run_chunk("local s = game:GetService(\"Selection\")\n"
-                          "local a, b = game:FindFirstChild(\"A\"), game:FindFirstChild(\"B\")\n"
+                          "local a, b = workspace:FindFirstChild(\"A\"), workspace:FindFirstChild(\"B\")\n"
                           "s:Set({b, a, b, game})\n"
                           "local got = s:Get()\n"
                           "print(#got, got[1].Name, got[2].Name)");
@@ -3372,18 +3382,18 @@ TEST_CASE("Selection Get and Set reach the same list the explorer reads", "[sele
 TEST_CASE("S23 WaitForChild yields until the child exists", "[S23]") {
     ScriptRig rig;
     add_script(rig.game, "Waiter", R"(
-        _G.here = game:WaitForChild("Waiter").Name == "Waiter"
-        local later = game:WaitForChild("Later")
+        _G.here = workspace:WaitForChild("Waiter").Name == "Waiter"
+        local later = workspace:WaitForChild("Later")
         _G.got = later.Name == "Later" and _G.made == true
-        local renamed = game:WaitForChild("Renamed")
+        local renamed = workspace:WaitForChild("Renamed")
         _G.renamed = renamed.Name == "Renamed"
-        _G.timed_out = game:WaitForChild("Never", 0.3) == nil
+        _G.timed_out = workspace:WaitForChild("Never", 0.3) == nil
     )");
     add_script(rig.game, "Maker", R"(
         task.wait(0.2)
         local made = Instance.new("Folder")
         made.Name = "Later"
-        made.Parent = game
+        made.Parent = workspace
         _G.made = true
         task.wait(0.1)
         -- A child already there that is renamed to the name wakes the wait too.
@@ -3419,23 +3429,23 @@ TEST_CASE("S23 WaitForChild yields until the child exists", "[S23]") {
 TEST_CASE("S26 WaitForChild ignores other names and a match that leaves before it resumes", "[S26]") {
     ScriptRig rig;
     add_script(rig.game, "Waiter", R"(
-        local found = game:WaitForChild("Target")
-        _G.ok = found.Name == "Target" and found.Parent == game
+        local found = workspace:WaitForChild("Target")
+        _G.ok = found.Name == "Target" and found.Parent == workspace
     )");
     add_script(rig.game, "Maker", R"(
         task.wait(0.1)
         local other = Instance.new("Folder")
         other.Name = "Other"
-        other.Parent = game
+        other.Parent = workspace
         -- Matches, then leaves in the same step, before the waiter can resume.
         local brief = Instance.new("Folder")
         brief.Name = "Target"
-        brief.Parent = game
+        brief.Parent = workspace
         brief.Parent = other
         task.wait(0.1)
         local real = Instance.new("Folder")
         real.Name = "Target"
-        real.Parent = game
+        real.Parent = workspace
     )");
     rig.game.start_simulation();
     rig.frames(3, 0.05);
@@ -3451,7 +3461,7 @@ TEST_CASE("S26 WaitForChild ignores other names and a match that leaves before i
 TEST_CASE("S24 WaitForChild without a timeout notes a possible infinite yield", "[S24]") {
     ScriptRig rig;
     add_script(rig.game, "Stuck", R"(
-        game:WaitForChild("Nothing")
+        workspace:WaitForChild("Nothing")
         _G.after = true
     )");
     rig.game.start_simulation();
@@ -3484,7 +3494,7 @@ TEST_CASE("S24 WaitForChild without a timeout notes a possible infinite yield", 
 TEST_CASE("S25 WaitForChild from the command line only returns a child that is there", "[S25]") {
     ScriptRig rig;
     rig.game.start_simulation();
-    rig.runtime.run_chunk("_G.found = game:WaitForChild('Missing') ~= nil");
+    rig.runtime.run_chunk("_G.found = workspace:WaitForChild('Missing') ~= nil");
     REQUIRE(rig.runtime.last_error().find("WaitForChild yields the running script thread") != std::string::npos);
 }
 
@@ -3496,11 +3506,11 @@ TEST_CASE("S27 every handle to an instance is the same value", "[S27]") {
         local seen = {}
         seen[box] = true
         _G.eq = box == same and rawequal(box, same) and seen[same] == true
-        _G.parent_is_game = script.Parent == game and box.Parent == script
+        _G.parent_is_game = script.Parent == workspace and box.Parent == script
         _G.differs = box ~= script and box ~= game and box ~= nil
         local made = Instance.new("Folder")
-        made.Parent = game
-        _G.made_eq = game:FindFirstChild(made.Name) == made
+        made.Parent = workspace
+        _G.made_eq = workspace:FindFirstChild(made.Name) == made
         local weak = setmetatable({}, { __mode = "k" })
         weak[box] = 1
         _G.keyed = weak[script:FindFirstChild("Box")] == 1
@@ -3532,21 +3542,21 @@ TEST_CASE("S28 the command line gets one handle per instance too", "[S28]") {
     ScriptRig rig;
     engine_core::GameObject& box = rig.game.create<engine_core::GameObject>();
     rig.game.set_name(box.id(), "Box");
-    rig.game.set_parent(box.id(), rig.game.id());
+    rig.game.set_parent(box.id(), workspace_of(rig.game));
     rig.runtime.run_chunk(
-        "local box = game:FindFirstChild('Box') assert(box == game:GetChildren()[1] and box.Parent == game)");
+        "local box = workspace:FindFirstChild('Box') assert(box == workspace:GetChildren()[1] and box.Parent == workspace)");
     INFO(rig.runtime.last_error());
     REQUIRE(rig.runtime.last_error().empty());
-    rig.runtime.run_chunk("assert(game:FindFirstChild('Box') ~= game)");
+    rig.runtime.run_chunk("assert(workspace:FindFirstChild('Box') ~= game)");
     REQUIRE(rig.runtime.last_error().empty());
 }
 
 TEST_CASE("S29 a dot reads a child by name", "[S29]") {
     ScriptRig rig;
-    engine_core::GameObject& door = add_part(rig.game, rig.game.id(), "Door");
+    engine_core::GameObject& door = add_part(rig.game, workspace_of(rig.game), "Door");
     engine_core::Folder& box = rig.game.create<engine_core::Folder>();
     rig.game.set_name(box.id(), "Box");
-    rig.game.set_parent(box.id(), rig.game.id());
+    rig.game.set_parent(box.id(), workspace_of(rig.game));
     engine_core::GameObject& inner = add_part(rig.game, box.id(), "Inner");
     add_part(rig.game, box.id(), "Twin");
     add_part(rig.game, box.id(), "Twin");
@@ -3555,21 +3565,21 @@ TEST_CASE("S29 a dot reads a child by name", "[S29]") {
     engine_core::ModuleScript& module = rig.game.create<engine_core::ModuleScript>();
     rig.game.set_name(module.id(), "Mod");
     module.set_source("return 42\n");
-    rig.game.set_parent(module.id(), rig.game.id());
+    rig.game.set_parent(module.id(), workspace_of(rig.game));
     add_script(rig.game, "Reader", R"(
-        _G.door = game.Door == game:FindFirstChild("Door")
-        _G.nested = game.Box.Inner.Name == "Inner"
-        _G.parent = script.Parent.Box.Inner.Parent == game.Box
-        _G.first = game.Box.Twin == game.Box:FindFirstChild("Twin")
-        _G.property = game.Box.Name == "Box"
+        _G.door = workspace.Door == workspace:FindFirstChild("Door")
+        _G.nested = workspace.Box.Inner.Name == "Inner"
+        _G.parent = script.Parent.Box.Inner.Parent == workspace.Box
+        _G.first = workspace.Box.Twin == workspace.Box:FindFirstChild("Twin")
+        _G.property = workspace.Box.Name == "Box"
         _G.required = require(script.Parent.Mod) == 42
         local ok, message = pcall(function()
-            return game.Box.Missing
+            return workspace.Box.Missing
         end)
         _G.missing_errors = not ok
         _G.missing_message = type(message) == "string"
             and string.find(message, "Missing is not a valid member of Folder \"Box\"", 1, true) ~= nil
-        game.Box.Inner.Name = "Renamed"
+        workspace.Box.Inner.Name = "Renamed"
     )");
     rig.game.start_simulation();
     rig.frames(1, 0.05);
@@ -3608,9 +3618,9 @@ TEST_CASE("S30 game is a Game, a DataModel but not an Instance", "[S30]") {
     add_script(rig.game, "Classes", R"(
         _G.class = game.ClassName == "Game"
         _G.game_isa = game:IsA("Game") and game:IsA("DataModel") and not game:IsA("Instance")
-        local box = Instance.new("Folder", game)
+        local box = Instance.new("Folder", workspace)
         _G.box_isa = box:IsA("Folder") and box:IsA("Instance") and box:IsA("DataModel") and not box:IsA("Game")
-        _G.parent = box.Parent == game
+        _G.parent = box.Parent == workspace
         _G.service = game:GetService("RunService") ~= nil
         local ok, message = pcall(function()
             return box:GetService("RunService")
@@ -3655,7 +3665,7 @@ TEST_CASE("S31 Script and ModuleScript share LuaSource, and only Script has Enab
     engine_core::ModuleScript& module = rig.game.create<engine_core::ModuleScript>();
     rig.game.set_name(module.id(), "Mod");
     module.set_source("return 7\n");
-    rig.game.set_parent(module.id(), rig.game.id());
+    rig.game.set_parent(module.id(), workspace_of(rig.game));
     add_script(rig.game, "Reader", R"(
         local mod = script.Parent.Mod
         _G.module_isa = mod:IsA("LuaSource") and mod:IsA("ModuleScript") and not mod:IsA("Script")
@@ -4021,9 +4031,9 @@ TEST_CASE("E1 one drain delivers more events than the queue first held", "[E1]")
     engine_core::Game game;
     game.history().set_enabled(false);
     int added = 0;
-    game.child_added(game.id()).connect([&](engine_core::InstanceId, engine_core::Field) { ++added; });
+    game.child_added(workspace_of(game)).connect([&](engine_core::InstanceId, engine_core::Field) { ++added; });
     for (int i = 0; i < 10000; ++i) {
-        game.set_parent(game.create().id(), game.id());
+        game.set_parent(game.create().id(), workspace_of(game));
     }
     {
         SimRole role;
@@ -4145,7 +4155,7 @@ TEST_CASE("S41 a cancelled Wait does not resume when its signal fires later", "[
     ScriptRig rig;
     add_script(rig.game, "Main", R"(
         local watched = Instance.new("Folder")
-        watched.Parent = game
+        watched.Parent = workspace
         local waiter = task.spawn(function()
             watched.Changed:Wait()
             _G.woke = true
@@ -4295,7 +4305,7 @@ TEST_CASE("TT2 moving a triangle fires Changed for Position", "[TT2]") {
     SimRole role;
     engine_core::Game game;
     engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
-    game.set_parent(triangle.id(), game.id());
+    game.set_parent(triangle.id(), workspace_of(game));
     game.events().drain();
     std::vector<engine_core::Field> fields;
     engine_core::Connection watching = game.changed(triangle.id()).connect(
@@ -4306,7 +4316,9 @@ TEST_CASE("TT2 moving a triangle fires Changed for Position", "[TT2]") {
     REQUIRE(fields == std::vector<engine_core::Field>{engine_core::Field::Position});
 }
 
-TEST_CASE("S42 a script that takes itself out of the tree keeps running", "[S42]") {
+// A script runs only under Workspace or Scripts. Out of the tree, it stops at
+// its next yield.
+TEST_CASE("S42 a script that takes itself out of the tree stops", "[S42]") {
     ScriptRig rig;
     add_script(rig.game, "Hider", R"(
         _G.count = 0
@@ -4321,7 +4333,7 @@ TEST_CASE("S42 a script that takes itself out of the tree keeps running", "[S42]
     INFO(rig.runtime.last_error());
     double count = 0;
     REQUIRE(rig.runtime.global_number("count", count));
-    REQUIRE(count >= 3);
+    REQUIRE(count == 1);
 }
 
 TEST_CASE("S43 moving a running script does not run it again", "[S43]") {
@@ -4329,7 +4341,7 @@ TEST_CASE("S43 moving a running script does not run it again", "[S43]") {
     add_script(rig.game, "Mover", R"(
         _G.runs = (_G.runs or 0) + 1
         local folder = Instance.new("Folder")
-        folder.Parent = game
+        folder.Parent = workspace
         script.Parent = folder
         _G.after = true
     )");
@@ -4426,9 +4438,9 @@ TEST_CASE("W1 children keep their order through removals at either end", "[W1]")
     SimRole role;
     engine_core::Game game;
     engine_core::Folder& parent = game.create<engine_core::Folder>();
-    game.set_parent(parent.id(), game.id());
+    game.set_parent(parent.id(), workspace_of(game));
     engine_core::Folder& away = game.create<engine_core::Folder>();
-    game.set_parent(away.id(), game.id());
+    game.set_parent(away.id(), workspace_of(game));
     auto child = [&](const char* name) {
         engine_core::Folder& folder = game.create<engine_core::Folder>();
         game.set_name(folder.id(), name);
@@ -4466,7 +4478,7 @@ TEST_CASE("W1 children keep their order through removals at either end", "[W1]")
     // The root's children keep their order the same way.
     game.set_parent(parent.id(), away.id());
     engine_core::Folder& last = game.create<engine_core::Folder>();
-    game.set_parent(last.id(), game.id());
+    game.set_parent(last.id(), workspace_of(game));
     REQUIRE(game.next_sibling(away.id()) == last.id());
 }
 
@@ -4528,7 +4540,7 @@ TEST_CASE("W2 the tree revision moves on names and the hierarchy, and not on pro
     };
     engine_core::GameObject& part = game.create<engine_core::GameObject>();
     REQUIRE_FALSE(moved());
-    game.set_parent(part.id(), game.id());
+    game.set_parent(part.id(), workspace_of(game));
     REQUIRE(moved());
     game.set_name(part.id(), "Brick");
     REQUIRE(moved());
@@ -4540,7 +4552,7 @@ TEST_CASE("W2 the tree revision moves on names and the hierarchy, and not on pro
     game.start_simulation();
     REQUIRE_FALSE(moved());
     engine_core::Folder& folder = game.create<engine_core::Folder>();
-    game.set_parent(folder.id(), game.id());
+    game.set_parent(folder.id(), workspace_of(game));
     REQUIRE(moved());
     game.destroy(folder.id());
     REQUIRE(moved());
@@ -4609,8 +4621,8 @@ TEST_CASE("S49 a change watch hears its instances' changes and no others", "[S49
     engine_core::Game game;
     engine_core::GameObject& watched = game.create_game_object();
     engine_core::GameObject& other = game.create_game_object();
-    game.set_parent(watched.id(), game.id());
-    game.set_parent(other.id(), game.id());
+    game.set_parent(watched.id(), workspace_of(game));
+    game.set_parent(other.id(), workspace_of(game));
     int heard = 0;
     const std::uint64_t watch = game.watch_changes([&heard] { ++heard; });
     game.set_watched(watch, {watched.id()});
@@ -4660,7 +4672,7 @@ TEST_CASE("S50 undo and redo reach a change watch", "[S50]") {
     SimRole role;
     engine_core::Game game;
     engine_core::GameObject& part = game.create_game_object();
-    game.set_parent(part.id(), game.id());
+    game.set_parent(part.id(), workspace_of(game));
     game.capture_place();
     int heard = 0;
     const std::uint64_t watch = game.watch_changes([&heard] { ++heard; });

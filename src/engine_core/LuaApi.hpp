@@ -26,9 +26,12 @@ struct LuaSlot {
     Vec3 vec{};
     ColorRgb color{};
     Transform transform{};
+    // Why a write refused the value, for the user. Empty when it did not say.
+    std::string error;
 };
 
 using LuaRead = bool (*)(DataModel& world, DataModel& object, LuaSlot& out);
+// False when the value was refused; the write may set in.error to say why.
 using LuaWrite = bool (*)(DataModel& world, DataModel& object, LuaSlot& in);
 
 // One argument a Signal passes to Connect, in order.
@@ -65,6 +68,11 @@ struct LuaField {
     LuaRead read = nullptr;
     LuaWrite write = nullptr;
     void* call = nullptr;
+    // A saved property: a project save writes it when it differs from
+    // default_json, a load reads it, and Stop puts it back, all through read
+    // and write. See lua_saved_property.
+    bool saved = false;
+    const char* default_json = nullptr;
 };
 
 inline LuaField lua_property(const char* name, const char* type_name, bool writable, LuaRead read, LuaWrite write) {
@@ -74,6 +82,20 @@ inline LuaField lua_property(const char* name, const char* type_name, bool writa
     field.writable = writable;
     field.read = read;
     field.write = write;
+    return field;
+}
+
+// A property the class keeps no other record of: the registry is the whole
+// list. DataModel saves, loads, and restores it at Stop from read and write,
+// by its type: number, boolean, string, Color3, or Vector3. default_json is
+// the value a new instance has, as the JSON a save would write. The write
+// validates and calls DataModel::note_property_change, which gives undo and
+// Changed.
+inline LuaField lua_saved_property(const char* name, const char* type_name, LuaRead read, LuaWrite write,
+                                   const char* default_json) {
+    LuaField field = lua_property(name, type_name, true, read, write);
+    field.saved = true;
+    field.default_json = default_json;
     return field;
 }
 
@@ -116,6 +138,13 @@ void register_lua_class(const char* class_name, const char* base, const LuaField
 // when it moved, so a class registered after it started is known too.
 std::uint64_t lua_registry_revision();
 
+// A small number for a property name, the same for every class that has a
+// property of that name, so an event or an undo step can carry it. Every
+// registered property has one; 0 is no property. Any thread.
+std::uint32_t lua_property_id(std::string_view name);
+// The name for an id, or "" for one no property has.
+const char* lua_property_name(std::uint32_t id);
+
 // One operator a value's metatable implements, as script analysis types it.
 // Each operand is a registered class name or number, or several joined by
 // " | ". `right` is null for a unary operator. Operators are not members, so
@@ -135,6 +164,10 @@ void lua_class_operators(const char* class_name, std::vector<LuaOperator>& out);
 
 // Base members first. A derived field with the same name replaces the base one.
 void lua_class_members(const char* class_name, std::vector<LuaField>& out);
+// The saved properties (lua_saved_property) of a class and its bases, in
+// lua_class_members order. Kept per class until the registry moves, since a
+// place capture asks for every instance. Any thread.
+std::vector<LuaField> lua_saved_fields(const char* class_name);
 // Fields registered on this class only. Inherited fields are not included.
 void lua_class_own_members(const char* class_name, std::vector<LuaField>& out);
 const char* lua_class_base(const char* class_name);

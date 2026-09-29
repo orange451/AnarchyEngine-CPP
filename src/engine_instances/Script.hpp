@@ -8,7 +8,8 @@
 
 namespace engine_core {
 
-// A LuaSource that runs on its own. It may live anywhere in the tree. The Luau
+// A LuaSource that runs on its own, while it is under Workspace or Scripts. It
+// may live anywhere in the tree; elsewhere it does not run. The Luau
 // global `script` is the userdata for this instance. It does not run inside
 // set_parent, set_enabled, or set_source; the runtime resumes it at the end of
 // a drain or on the next Heartbeat. Enabled false stops it and keeps it from
@@ -34,7 +35,6 @@ public:
 protected:
     void on_release() override;
     void on_reuse() override;
-    void on_parent_changed(InstanceId previous, InstanceId next) override;
     // Enabled as one byte, then the source.
     void write_place(std::vector<std::byte>& out) const override;
     void read_place(const std::byte* data, std::size_t size) override;

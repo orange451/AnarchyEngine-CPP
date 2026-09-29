@@ -379,6 +379,9 @@ std::string lua_analysis_definitions() {
     if (lua_class_known("Game")) {
         out << "declare game: Game\n";
     }
+    if (lua_class_known("Workspace")) {
+        out << "declare workspace: Workspace\n";
+    }
     if (lua_class_known("Script") && lua_class_known("ModuleScript")) {
         out << "declare script: Script | ModuleScript\n";
     }

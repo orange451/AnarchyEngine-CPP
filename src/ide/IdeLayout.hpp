@@ -188,6 +188,10 @@ private:
     // News that needs no answer, as a JadeFX toast at the bottom right of the window.
     // One sent before mount waits for it.
     void show_toast(std::string text, double seconds = jadefx::Toast::LENGTH_SHORT);
+    // show_toast from any thread, such as the simulation's: it runs on the UI
+    // thread, unless the layout is gone by then. alive is alive_, copied on the
+    // UI thread before the work was sent off. layout is used only while alive.
+    static void toast_later(IdeLayout* layout, std::weak_ptr<int> alive, std::string text);
     void update_title();
     // Writes the project's name and folder to the registry entry when they changed.
     void publish_studio();

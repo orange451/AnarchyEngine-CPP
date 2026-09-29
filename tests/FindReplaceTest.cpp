@@ -58,7 +58,7 @@ struct EditorRig {
         engine_core::DataModel& game = engine.datamodel();
         engine_core::Script& script = game.create<engine_core::Script>();
         game.set_name(script.id(), "Mover");
-        game.set_parent(script.id(), game.id());
+        game.set_parent(script.id(), game.scene_service("Workspace"));
         script.set_source(source);
         editor = jadefx::make<ide::IdeScriptEditor>(engine, script.id());
         editor->bindUndo(&stack);
@@ -286,12 +286,9 @@ void TestShowRange(engine_core::Engine& engine) {
 // services. Enter writes the declaration over what was typed.
 void TestRequireCompletion(engine_core::Engine& engine) {
     engine_core::DataModel& game = engine.datamodel();
-    engine_core::Folder& workspace = game.create<engine_core::Folder>();
-    game.set_name(workspace.id(), "Workspace");
-    game.set_parent(workspace.id(), game.id());
     engine_core::Folder& folder = game.create<engine_core::Folder>();
     game.set_name(folder.id(), "Folder");
-    game.set_parent(folder.id(), workspace.id());
+    game.set_parent(folder.id(), game.scene_service("Workspace"));
     engine_core::ModuleScript& config = game.create<engine_core::ModuleScript>();
     game.set_name(config.id(), "Config");
     game.set_parent(config.id(), folder.id());
@@ -325,7 +322,7 @@ void TestRequireCompletion(engine_core::Engine& engine) {
     inner.key(jadefx::Key::Enter);
     Expect(inner.text().find("require") == std::string::npos, "inside a function a dot does not offer a require");
 
-    game.destroy_tree(workspace.id());
+    game.destroy_tree(folder.id());
 }
 
 // A Search pane over a place of its own. One script plays an open editor whose
@@ -358,17 +355,19 @@ struct SearchRig {
 
     explicit SearchRig(engine_core::Engine& engine) : engine(engine) {
         engine_core::DataModel& game = engine.datamodel();
-        // A place of its own: the root starts empty for this rig.
-        for (engine_core::InstanceId child : game.get_children(game.id())) {
-            game.destroy_tree(child);
+        // A place of its own: the scene services start empty for this rig.
+        for (engine_core::InstanceId service : game.get_children(game.id())) {
+            for (engine_core::InstanceId child : game.get_children(service)) {
+                game.destroy_tree(child);
+            }
         }
-        mover = add_script(game, game.id(), "Mover", "local part = 1\nlocal other = part + part\n");
+        mover = add_script(game, game.scene_service("Workspace"), "Mover", "local part = 1\nlocal other = part + part\n");
         engine_core::Folder& folder = game.create<engine_core::Folder>();
         game.set_name(folder.id(), "Tools");
-        game.set_parent(folder.id(), game.id());
+        game.set_parent(folder.id(), game.scene_service("Workspace"));
         util = add_script(game, folder.id(), "Util", "-- nothing here\nreturn { Part = 2 }\n", true);
-        quiet = add_script(game, game.id(), "Quiet", "print('hello')\n");
-        open = add_script(game, game.id(), "Open", "print('stale')\n");
+        quiet = add_script(game, game.scene_service("Workspace"), "Quiet", "print('hello')\n");
+        open = add_script(game, game.scene_service("Workspace"), "Open", "print('stale')\n");
         // The studio closes each edit's gesture, so a replace is a step of its own.
         game.history().end_gesture();
 
@@ -440,7 +439,7 @@ void TestSearchPane(engine_core::Engine& engine) {
         Expect(results[0].id == rig.mover && results[1].id == rig.util && results[2].id == rig.open,
                "scripts come in the explorer's order");
         ExpectText(results[0].name, "Mover", "a script's name");
-        ExpectText(results[1].path, "game.Tools", "a script's path is its parent's");
+        ExpectText(results[1].path, "game.Workspace.Tools", "a script's path is its parent's");
         ExpectText(results[1].class_name, "ModuleScript", "a module script says so");
         Expect(results[0].matches == 3 && results[0].lines.size() == 2, "matches on one line are one row");
         if (results[0].lines.size() == 2) {

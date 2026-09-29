@@ -336,18 +336,10 @@ inline bool parent_ok(const engine_core::DataModel& game, engine_core::InstanceI
     return parent == 0 || (parent != engine_core::DataModel::kNoParent && game.alive(parent));
 }
 
-inline bool would_cycle(const engine_core::DataModel& game, engine_core::InstanceId node, engine_core::InstanceId parent) {
-    if (node == 0 || parent == node) {
-        return true;
-    }
-    engine_core::InstanceId cursor = parent;
-    for (int guard = 0; cursor != 0 && cursor != engine_core::DataModel::kNoParent && guard < 100000; ++guard) {
-        if (cursor == node) {
-            return true;
-        }
-        cursor = game.parent(cursor);
-    }
-    return false;
+// Where an insert or paste at parent lands. game holds only the scene
+// services, so one at the top of the tree goes into Workspace.
+inline engine_core::InstanceId insert_target(const engine_core::DataModel& game, engine_core::InstanceId parent) {
+    return parent == 0 ? game.scene_service("Workspace") : parent;
 }
 
 // An icon and a label on the ribbon. A left click runs action. A disabled

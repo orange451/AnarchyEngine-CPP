@@ -106,14 +106,16 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
                 });
                 return;
             }
+            // Into Workspace, where it renders.
+            const engine_core::InstanceId workspace = game.scene_service("Workspace");
             int existing = 0;
-            for (engine_core::InstanceId id = game.first_child(game.id()); id != 0; id = game.next_sibling(id)) {
+            for (engine_core::InstanceId id = game.first_child(workspace); id != 0; id = game.next_sibling(id)) {
                 if (dynamic_cast<engine_core::TestTriangle*>(game.instance(id)) != nullptr) {
                     ++existing;
                 }
             }
             engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
-            game.set_parent(triangle.id(), game.id());
+            game.set_parent(triangle.id(), workspace);
             // Spread repeats around the view so they do not stack on one point.
             const float angle = static_cast<float>(existing) * 0.9f;
             constexpr float kRadius = 0.42f;
@@ -164,9 +166,10 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     };
     host.insert = [this](std::string class_name, engine_core::InstanceId parent, std::shared_ptr<InsertResult> result) {
         runner_.simulation().on_simulation(
-            [class_name = std::move(class_name), parent, result](engine_core::DataModel& world) {
+            [class_name = std::move(class_name), asked = parent, result](engine_core::DataModel& world) {
                 engine_core::InstanceId made = 0;
                 std::string error;
+                const engine_core::InstanceId parent = insert_target(world, asked);
                 const bool placed = parent_ok(world, parent);
                 if (placed && world.room_left() == 0) {
                     error = engine_core::InstanceCapacityError().what();
@@ -750,6 +753,14 @@ void IdeLayout::show_error(const std::string& heading, const std::string& detail
     alert->setHeaderText(heading);
     alert->show(*scene_);
     alerts_.push_back(std::move(alert));
+}
+
+void IdeLayout::toast_later(IdeLayout* layout, std::weak_ptr<int> alive, std::string text) {
+    jadefx::runLater([layout, alive = std::move(alive), text = std::move(text)]() mutable {
+        if (!alive.expired()) {
+            layout->show_toast(std::move(text));
+        }
+    });
 }
 
 void IdeLayout::show_toast(std::string text, double seconds) {

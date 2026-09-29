@@ -282,6 +282,8 @@ add_library(engine_instances STATIC
 add_library(engine_services STATIC
     src/engine_services/ChangeHistoryService.cpp
     src/engine_services/Game.cpp
+    src/engine_services/Lighting.cpp
+    src/engine_services/SceneService.cpp
     src/engine_services/UserInputService.cpp
     src/engine_services/RunService.cpp
     src/engine_services/SelectionService.cpp
@@ -299,6 +301,7 @@ add_library(engine_core STATIC
     src/engine_core/Engine.cpp
     src/engine_core/LuaEngine.cpp
     src/engine_core/LuaApi.cpp
+    src/engine_core/PropertyReflection.cpp
     src/engine_core/LuaReflect.cpp
     src/engine_core/ScriptBindings.cpp
     src/engine_core/ScriptRuntime.cpp
@@ -467,6 +470,7 @@ add_executable(sandbox
     sandbox/history_tests.cpp
     sandbox/project_tests.cpp
     sandbox/merge_tests.cpp
+    sandbox/scene_services_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 target_compile_features(sandbox PRIVATE cxx_std_17)

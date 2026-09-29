@@ -88,8 +88,14 @@ engine_core::GameObject& add_part(DataModel& game, InstanceId parent, const char
     return part;
 }
 
+// Where a save puts id's file when it has no children: in its ancestors'
+// folders under src/, such as src/Workspace.workspace/Part.<guid>.json.
 std::string leaf(const DataModel& game, InstanceId id, const char* ext = ".json") {
-    return "src/" + engine_core::sanitize_file_name(game.name(id)) + "." + game.guid(id) + ext;
+    std::string path = engine_core::sanitize_file_name(game.name(id)) + "." + game.guid(id) + ext;
+    for (InstanceId up = game.parent(id); up != 0 && up != DataModel::kNoParent; up = game.parent(up)) {
+        path = engine_core::sanitize_file_name(game.name(up)) + "." + game.guid(up) + "/" + path;
+    }
+    return "src/" + path;
 }
 
 InstanceId by_guid(const DataModel& game, const std::string& guid) {
@@ -111,12 +117,20 @@ std::string meta(const char* klass, const char* guid, const char* name, const ch
            "\"" + extra + "\n}\n";
 }
 
-// A hand-made project: project.json and a root with the given children array.
-void write_bare_project(const fs::path& root, const char* root_extra = "") {
+// The folder a save gives Workspace, where a hand-made project's instances go.
+const char* const kWorkspace = "Workspace.workspace";
+
+// A hand-made project: project.json, a root and Workspace with the given extra keys, and the
+// scene services. A test adds instances under src/<kWorkspace>/.
+void write_bare_project(const fs::path& root, const char* root_extra = "", const char* workspace_extra = "") {
     write_file(root / "project.json",
                "{\"format\": 1, \"name\": \"Hand\", \"engine\": \"engine_core\", \"tree\": {\"src\": \"src\"}, "
                "\"resources\": {\"root\": \"resources\"}}\n");
     write_file(root / "src" / "init.json", meta("DataModel", "root0", "Hand", root_extra));
+    write_file(root / "src" / kWorkspace / "init.json", meta("Workspace", "workspace", "Workspace", workspace_extra));
+    write_file(root / "src" / "Lighting.lighting.json", meta("Lighting", "lighting", "Lighting"));
+    write_file(root / "src" / "Storage.storage.json", meta("Storage", "storage", "Storage"));
+    write_file(root / "src" / "Scripts.scripts.json", meta("Scripts", "scripts", "Scripts"));
 }
 
 // Sets one key of an instance file on disk, as another editor would.
@@ -145,10 +159,10 @@ TEST_CASE("P1 save then load keeps names, GUIDs, and source bytes", "[P1][projec
     {
         Project project = Project::create(dir.path);
         DataModel& game = project.datamodel();
-        engine_core::GameObject& part = add_part(game, 0, "Part");
+        engine_core::GameObject& part = add_part(game, workspace_of(game), "Part");
         part.set_color(rgb(0.25f, 0.5f, 0.1f));
         part.set_transform(engine_core::transform_translation(1.5f, -2.f, 0.1f));
-        engine_core::Script& script = add_script(game, 0, "Main", source.c_str());
+        engine_core::Script& script = add_script(game, workspace_of(game), "Main", source.c_str());
         part_guid = game.guid(part.id());
         script_guid = game.guid(script.id());
         root_guid = game.guid(0);
@@ -167,7 +181,7 @@ TEST_CASE("P1 save then load keeps names, GUIDs, and source bytes", "[P1][projec
     const InstanceId script = by_guid(game, script_guid);
     REQUIRE(game.name(part) == "Part");
     REQUIRE(game.name(script) == "Main");
-    REQUIRE(game.parent(part) == 0);
+    REQUIRE(game.parent(part) == workspace_of(game));
     REQUIRE(std::string(game.instance(script)->class_name()) == "Script");
     REQUIRE(dynamic_cast<engine_core::Script*>(game.instance(script))->source() == source);
     const engine_core::GameObject* body = game.game_object(part);
@@ -189,9 +203,9 @@ TEST_CASE("P2 a second save with no edits writes nothing", "[P2][project]") {
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& folderish = add_part(game, 0, "Holder");
+    engine_core::GameObject& folderish = add_part(game, workspace_of(game), "Holder");
     add_part(game, folderish.id(), "Inner").set_color(rgb(0.f, 1.f, 0.f));
-    add_script(game, 0, "Main", "print(1)\n");
+    add_script(game, workspace_of(game), "Main", "print(1)\n");
     project.save();
     const auto before = tree_files(dir.path);
     project.save();
@@ -212,9 +226,9 @@ TEST_CASE("P3 one color edit rewrites only that part", "[P3][project]") {
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
-    add_part(game, 0, "B");
-    add_script(game, 0, "Main", "print(1)\n");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
+    add_part(game, workspace_of(game), "B");
+    add_script(game, workspace_of(game), "Main", "print(1)\n");
     project.save();
     const auto before = tree_files(dir.path);
 
@@ -231,8 +245,8 @@ TEST_CASE("P4 a source edit rewrites only the .luau file", "[P4][project]") {
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    add_part(game, 0, "A");
-    engine_core::Script& main = add_script(game, 0, "Main", "print(1)\n");
+    add_part(game, workspace_of(game), "A");
+    engine_core::Script& main = add_script(game, workspace_of(game), "Main", "print(1)\n");
     project.save();
     const auto before = tree_files(dir.path);
 
@@ -251,8 +265,8 @@ TEST_CASE("P5 a save during play writes the place, never play-only instances", "
     ScriptRig rig;
     {
         Project project = Project::create(dir.path, rig.game);
-        add_part(rig.game, 0, "Door");
-        add_script(rig.game, 0, "Maker", R"(
+        add_part(rig.game, workspace_of(rig.game), "Door");
+        add_script(rig.game, workspace_of(rig.game), "Maker", R"(
             local made = Instance.new("GameObject")
             made.Name = "Session"
             made.Parent = script.Parent
@@ -262,12 +276,12 @@ TEST_CASE("P5 a save during play writes the place, never play-only instances", "
     }
     Project project = Project::load(dir.path, rig.game);
     const auto saved = tree_files(dir.path);
-    const InstanceId door = rig.game.find_first_child(0, "Door");
+    const InstanceId door = rig.game.find_first_child(workspace_of(rig.game), "Door");
     REQUIRE(door != 0);
 
     rig.game.start_simulation();
     rig.frames(1, 0.05);
-    const InstanceId session = rig.game.find_first_child(0, "Session");
+    const InstanceId session = rig.game.find_first_child(workspace_of(rig.game), "Session");
     REQUIRE(session != 0);
     REQUIRE(rig.game.name(door) == "Moved");
 
@@ -295,11 +309,11 @@ TEST_CASE("P6 destroying an authored part deletes its file", "[P6][project]") {
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& keep = add_part(game, 0, "Keep");
-    engine_core::GameObject& gone = add_part(game, 0, "Gone");
+    engine_core::GameObject& keep = add_part(game, workspace_of(game), "Keep");
+    engine_core::GameObject& gone = add_part(game, workspace_of(game), "Gone");
     engine_core::GameObject& child = add_part(game, gone.id(), "Child");
     project.save();
-    const std::string gone_dir = "src/Gone." + game.guid(gone.id());
+    const std::string gone_dir = "src/Workspace.workspace/Gone." + game.guid(gone.id());
     const std::string gone_init = gone_dir + "/init.json";
     const std::string child_file = gone_dir + "/Child." + game.guid(child.id()) + ".json";
     REQUIRE(fs::exists(dir.path / gone_init));
@@ -320,22 +334,22 @@ TEST_CASE("P7 a children array orders siblings; without one they sort by GUID", 
     SimRole role;
     SECTION("hand-written order") {
         TempDir dir;
-        write_bare_project(dir.path, ",\n  \"children\": [\"ccc\", \"aaa\"]");
-        write_file(dir.path / "src" / "Z.aaa.json", meta("Folder", "aaa", "Z"));
-        write_file(dir.path / "src" / "Y.bbb.json", meta("Folder", "bbb", "Y"));
-        write_file(dir.path / "src" / "X.ccc.json", meta("Folder", "ccc", "X"));
+        write_bare_project(dir.path, "", ",\n  \"children\": [\"ccc\", \"aaa\"]");
+        write_file(dir.path / "src" / kWorkspace / "Z.aaa.json", meta("Folder", "aaa", "Z"));
+        write_file(dir.path / "src" / kWorkspace / "Y.bbb.json", meta("Folder", "bbb", "Y"));
+        write_file(dir.path / "src" / kWorkspace / "X.ccc.json", meta("Folder", "ccc", "X"));
         Project project = Project::load(dir.path);
-        REQUIRE(child_guids(project.datamodel(), 0) == std::vector<std::string>{"ccc", "aaa", "bbb"});
+        REQUIRE(child_guids(project.datamodel(), workspace_of(project.datamodel())) == std::vector<std::string>{"ccc", "aaa", "bbb"});
     }
     SECTION("omitted sorts by GUID, not by Name") {
         TempDir dir;
         write_bare_project(dir.path);
-        write_file(dir.path / "src" / "A.ccc.json", meta("Folder", "ccc", "A"));
-        write_file(dir.path / "src" / "B.aaa.json", meta("Folder", "aaa", "B"));
-        write_file(dir.path / "src" / "C.bbb.json", meta("Folder", "bbb", "C"));
+        write_file(dir.path / "src" / kWorkspace / "A.ccc.json", meta("Folder", "ccc", "A"));
+        write_file(dir.path / "src" / kWorkspace / "B.aaa.json", meta("Folder", "aaa", "B"));
+        write_file(dir.path / "src" / kWorkspace / "C.bbb.json", meta("Folder", "bbb", "C"));
         Project project = Project::load(dir.path);
-        REQUIRE(child_guids(project.datamodel(), 0) == std::vector<std::string>{"aaa", "bbb", "ccc"});
-        REQUIRE(project.datamodel().find_first_child(0, "B") == *project.datamodel().find_guid("aaa"));
+        REQUIRE(child_guids(project.datamodel(), workspace_of(project.datamodel())) == std::vector<std::string>{"aaa", "bbb", "ccc"});
+        REQUIRE(project.datamodel().find_first_child(workspace_of(project.datamodel()), "B") == *project.datamodel().find_guid("aaa"));
     }
     SECTION("live order round-trips") {
         TempDir dir;
@@ -344,15 +358,15 @@ TEST_CASE("P7 a children array orders siblings; without one they sort by GUID", 
             Project project = Project::create(dir.path);
             DataModel& game = project.datamodel();
             for (int i = 0; i < 6; ++i) {
-                add_part(game, 0, "Part");
+                add_part(game, workspace_of(game), "Part");
             }
-            order = child_guids(game, 0);
+            order = child_guids(game, workspace_of(game));
             project.save();
             const bool sorted = std::is_sorted(order.begin(), order.end());
-            REQUIRE((read_file(dir.path / "src" / "init.json").find("\"children\"") == std::string::npos) == sorted);
+            REQUIRE((read_file(dir.path / "src" / kWorkspace / "init.json").find("\"children\"") == std::string::npos) == sorted);
         }
         Project loaded = Project::load(dir.path);
-        REQUIRE(child_guids(loaded.datamodel(), 0) == order);
+        REQUIRE(child_guids(loaded.datamodel(), workspace_of(loaded.datamodel())) == order);
     }
 }
 
@@ -391,10 +405,10 @@ TEST_CASE("P16 a ModuleScript saved with Enabled still loads", "[P16][project]")
     SimRole role;
     TempDir dir;
     write_bare_project(dir.path);
-    write_file(dir.path / "src" / "Mod.aaa.luau", "return 1\n");
-    write_file(dir.path / "src" / "Mod.aaa.meta.json", meta("ModuleScript", "aaa", "Mod", ",\n  \"Enabled\": false"));
-    write_file(dir.path / "src" / "Main.bbb.luau", "print(1)\n");
-    write_file(dir.path / "src" / "Main.bbb.meta.json", meta("Script", "bbb", "Main", ",\n  \"Enabled\": false"));
+    write_file(dir.path / "src" / kWorkspace / "Mod.aaa.luau", "return 1\n");
+    write_file(dir.path / "src" / kWorkspace / "Mod.aaa.meta.json", meta("ModuleScript", "aaa", "Mod", ",\n  \"Enabled\": false"));
+    write_file(dir.path / "src" / kWorkspace / "Main.bbb.luau", "print(1)\n");
+    write_file(dir.path / "src" / kWorkspace / "Main.bbb.meta.json", meta("Script", "bbb", "Main", ",\n  \"Enabled\": false"));
 
     Project project = Project::load(dir.path);
     DataModel& game = project.datamodel();
@@ -417,7 +431,7 @@ TEST_CASE("P9 an unknown hand-edited key round-trips through the property bag", 
     std::string path;
     {
         Project project = Project::create(dir.path);
-        engine_core::GameObject& part = add_part(project.datamodel(), 0, "Part");
+        engine_core::GameObject& part = add_part(project.datamodel(), workspace_of(project.datamodel()), "Part");
         guid = project.datamodel().guid(part.id());
         project.save();
         path = leaf(project.datamodel(), part.id());
@@ -454,16 +468,16 @@ TEST_CASE("P11 two siblings named Part are two files", "[P11][project]") {
     {
         Project project = Project::create(dir.path);
         DataModel& game = project.datamodel();
-        first = game.guid(add_part(game, 0, "Part").id());
-        second = game.guid(add_part(game, 0, "Part").id());
+        first = game.guid(add_part(game, workspace_of(game), "Part").id());
+        second = game.guid(add_part(game, workspace_of(game), "Part").id());
         REQUIRE(first != second);
         project.save();
     }
-    REQUIRE(fs::exists(dir.path / "src" / ("Part." + first + ".json")));
-    REQUIRE(fs::exists(dir.path / "src" / ("Part." + second + ".json")));
+    REQUIRE(fs::exists(dir.path / "src" / kWorkspace / ("Part." + first + ".json")));
+    REQUIRE(fs::exists(dir.path / "src" / kWorkspace / ("Part." + second + ".json")));
     Project project = Project::load(dir.path);
     DataModel& game = project.datamodel();
-    REQUIRE(game.get_children(0).size() == 2);
+    REQUIRE(game.get_children(workspace_of(game)).size() == 2);
     REQUIRE(game.name(by_guid(game, first)) == "Part");
     REQUIRE(game.name(by_guid(game, second)) == "Part");
 }
@@ -473,22 +487,22 @@ TEST_CASE("P12 adding a third Part adds one file and renames none", "[P12][proje
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId a = add_part(game, 0, "Part").id();
-    const InstanceId b = add_part(game, 0, "Part").id();
+    const InstanceId a = add_part(game, workspace_of(game), "Part").id();
+    const InstanceId b = add_part(game, workspace_of(game), "Part").id();
     project.save();
     const auto before = tree_files(dir.path);
     const std::string a_file = leaf(game, a);
     const std::string b_file = leaf(game, b);
 
-    const InstanceId c = add_part(game, 0, "Part").id();
+    const InstanceId c = add_part(game, workspace_of(game), "Part").id();
     project.save();
     const auto after = tree_files(dir.path);
     REQUIRE(after.at(a_file) == before.at(a_file));
     REQUIRE(after.at(b_file) == before.at(b_file));
     REQUIRE(project.last_save().moved.empty());
-    // One new instance file. The root's init.json may change only to record child order.
+    // One new instance file. Workspace's init.json may change only to record child order.
     std::set<std::string> diff = changed(before, after);
-    diff.erase("src/init.json");
+    diff.erase("src/Workspace.workspace/init.json");
     REQUIRE(diff == std::set<std::string>{leaf(game, c)});
     REQUIRE(after.size() == before.size() + 1);
 }
@@ -501,8 +515,8 @@ TEST_CASE("P13 two Scripts named Main keep their own source", "[P13][project]") 
     {
         Project project = Project::create(dir.path);
         DataModel& game = project.datamodel();
-        one = game.guid(add_script(game, 0, "Main", "return 'one'\n").id());
-        two = game.guid(add_script(game, 0, "Main", "return 'two'\n").id());
+        one = game.guid(add_script(game, workspace_of(game), "Main", "return 'one'\n").id());
+        two = game.guid(add_script(game, workspace_of(game), "Main", "return 'two'\n").id());
         project.save();
     }
     Project project = Project::load(dir.path);
@@ -519,8 +533,8 @@ TEST_CASE("P14 a rename moves only that file and keeps the GUID", "[P14][project
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId floor = add_part(game, 0, "Part").id();
-    const InstanceId other = add_part(game, 0, "Part").id();
+    const InstanceId floor = add_part(game, workspace_of(game), "Part").id();
+    const InstanceId other = add_part(game, workspace_of(game), "Part").id();
     project.save();
     const std::string guid = game.guid(floor);
     const std::string old_file = leaf(game, floor);
@@ -529,7 +543,7 @@ TEST_CASE("P14 a rename moves only that file and keeps the GUID", "[P14][project
 
     game.set_name(floor, "Floor");
     project.save();
-    const std::string new_file = "src/Floor." + guid + ".json";
+    const std::string new_file = "src/Workspace.workspace/Floor." + guid + ".json";
     REQUIRE(game.guid(floor) == guid);
     REQUIRE_FALSE(fs::exists(dir.path / old_file));
     REQUIRE(fs::exists(dir.path / new_file));
@@ -546,14 +560,14 @@ TEST_CASE("P15 illegal Name characters save as _ with the real Name inside", "[P
     {
         Project project = Project::create(dir.path);
         DataModel& game = project.datamodel();
-        slash = game.guid(add_part(game, 0, "/").id());
-        mixed = game.guid(add_part(game, 0, "a:b*c?").id());
+        slash = game.guid(add_part(game, workspace_of(game), "/").id());
+        mixed = game.guid(add_part(game, workspace_of(game), "a:b*c?").id());
         project.save();
     }
-    const fs::path slash_file = dir.path / "src" / ("_." + slash + ".json");
+    const fs::path slash_file = dir.path / "src" / kWorkspace / ("_." + slash + ".json");
     REQUIRE(fs::exists(slash_file));
     REQUIRE(read_file(slash_file).find("\"Name\": \"/\"") != std::string::npos);
-    REQUIRE(fs::exists(dir.path / "src" / ("a_b_c_." + mixed + ".json")));
+    REQUIRE(fs::exists(dir.path / "src" / kWorkspace / ("a_b_c_." + mixed + ".json")));
     Project project = Project::load(dir.path);
     REQUIRE(project.datamodel().name(by_guid(project.datamodel(), slash)) == "/");
     REQUIRE(project.datamodel().name(by_guid(project.datamodel(), mixed)) == "a:b*c?");
@@ -581,27 +595,27 @@ TEST_CASE("load errors", "[project]") {
     SECTION("filename GUID differs from id") {
         TempDir dir;
         write_bare_project(dir.path);
-        write_file(dir.path / "src" / "Part.aaa.json", meta("GameObject", "bbb", "Part"));
+        write_file(dir.path / "src" / kWorkspace / "Part.aaa.json", meta("GameObject", "bbb", "Part"));
         REQUIRE_THROWS_AS(Project::load(dir.path), ProjectError);
     }
     SECTION("two files claim one GUID") {
         TempDir dir;
         write_bare_project(dir.path);
-        write_file(dir.path / "src" / "Part.aaa.json", meta("GameObject", "aaa", "Part"));
-        write_file(dir.path / "src" / "F.fff" / "init.json", meta("Folder", "fff", "F"));
-        write_file(dir.path / "src" / "F.fff" / "Part.aaa.json", meta("GameObject", "aaa", "Part"));
+        write_file(dir.path / "src" / kWorkspace / "Part.aaa.json", meta("GameObject", "aaa", "Part"));
+        write_file(dir.path / "src" / kWorkspace / "F.fff" / "init.json", meta("Folder", "fff", "F"));
+        write_file(dir.path / "src" / kWorkspace / "F.fff" / "Part.aaa.json", meta("GameObject", "aaa", "Part"));
         REQUIRE_THROWS_AS(Project::load(dir.path), ProjectError);
     }
     SECTION("unknown class") {
         TempDir dir;
         write_bare_project(dir.path);
-        write_file(dir.path / "src" / "T.aaa.json", meta("Texture", "aaa", "T"));
+        write_file(dir.path / "src" / kWorkspace / "T.aaa.json", meta("Texture", "aaa", "T"));
         REQUIRE_THROWS_AS(Project::load(dir.path), ProjectError);
     }
     SECTION("only the root is a Game") {
         TempDir dir;
         write_bare_project(dir.path);
-        write_file(dir.path / "src" / "G.aaa.json", meta("Game", "aaa", "G"));
+        write_file(dir.path / "src" / kWorkspace / "G.aaa.json", meta("Game", "aaa", "G"));
         REQUIRE_THROWS_AS(Project::load(dir.path), ProjectError);
     }
     SECTION("the root is a Game or, from before Game, a DataModel") {
@@ -613,25 +627,25 @@ TEST_CASE("load errors", "[project]") {
     SECTION("a .luau without .meta.json is an error") {
         TempDir dir;
         write_bare_project(dir.path);
-        write_file(dir.path / "src" / "Main.aaa.luau", "print(1)\n");
+        write_file(dir.path / "src" / kWorkspace / "Main.aaa.luau", "print(1)\n");
         REQUIRE_THROWS_AS(Project::load(dir.path), ProjectError);
     }
     SECTION("Source inside json is refused") {
         TempDir dir;
         write_bare_project(dir.path);
-        write_file(dir.path / "src" / "Main.aaa.luau", "print(1)\n");
-        write_file(dir.path / "src" / "Main.aaa.meta.json", meta("Script", "aaa", "Main", ",\n  \"Source\": \"x\""));
+        write_file(dir.path / "src" / kWorkspace / "Main.aaa.luau", "print(1)\n");
+        write_file(dir.path / "src" / kWorkspace / "Main.aaa.meta.json", meta("Script", "aaa", "Main", ",\n  \"Source\": \"x\""));
         REQUIRE_THROWS_AS(Project::load(dir.path), ProjectError);
     }
     SECTION("a bad value leaves the bound DataModel untouched") {
         TempDir dir;
         write_bare_project(dir.path);
-        write_file(dir.path / "src" / "P.aaa.json", meta("GameObject", "aaa", "P", ",\n  \"Color\": [1]"));
+        write_file(dir.path / "src" / kWorkspace / "P.aaa.json", meta("GameObject", "aaa", "P", ",\n  \"Color\": [1]"));
         Game game;
-        const InstanceId keep = add_part(game, 0, "Keep").id();
+        const InstanceId keep = add_part(game, workspace_of(game), "Keep").id();
         REQUIRE_THROWS_AS(Project::load(dir.path, game), ProjectError);
         REQUIRE(game.alive(keep));
-        REQUIRE(game.find_first_child(0, "Keep") == keep);
+        REQUIRE(game.find_first_child(workspace_of(game), "Keep") == keep);
     }
 }
 
@@ -642,16 +656,16 @@ TEST_CASE("folders: first child, folder rename, script with children, undo of a 
     DataModel& game = project.datamodel();
     engine_core::Folder& box = game.create<engine_core::Folder>();
     game.set_name(box.id(), "Box");
-    game.set_parent(box.id(), 0);
+    game.set_parent(box.id(), workspace_of(game));
     project.save();
     const std::string box_guid = game.guid(box.id());
-    REQUIRE(fs::exists(dir.path / "src" / ("Box." + box_guid + ".json")));
+    REQUIRE(fs::exists(dir.path / "src" / kWorkspace / ("Box." + box_guid + ".json")));
 
     // The first child turns the leaf into a folder.
     const InstanceId inner = add_part(game, box.id(), "Inner").id();
     project.save();
-    const std::string box_dir = "src/Box." + box_guid;
-    REQUIRE_FALSE(fs::exists(dir.path / "src" / ("Box." + box_guid + ".json")));
+    const std::string box_dir = "src/Workspace.workspace/Box." + box_guid;
+    REQUIRE_FALSE(fs::exists(dir.path / "src" / kWorkspace / ("Box." + box_guid + ".json")));
     REQUIRE(fs::exists(dir.path / box_dir / "init.json"));
     REQUIRE(fs::exists(dir.path / box_dir / ("Inner." + game.guid(inner) + ".json")));
 
@@ -659,15 +673,15 @@ TEST_CASE("folders: first child, folder rename, script with children, undo of a 
     const std::string inner_bytes = read_file(dir.path / box_dir / ("Inner." + game.guid(inner) + ".json"));
     game.set_name(box.id(), "Crate");
     project.save();
-    const std::string crate_dir = "src/Crate." + box_guid;
+    const std::string crate_dir = "src/Workspace.workspace/Crate." + box_guid;
     REQUIRE_FALSE(fs::exists(dir.path / box_dir));
     REQUIRE(read_file(dir.path / crate_dir / ("Inner." + game.guid(inner) + ".json")) == inner_bytes);
 
     // A script with a child is a folder with init.luau and init.meta.json.
-    engine_core::Script& main = add_script(game, 0, "Main", "print(1)\n");
+    engine_core::Script& main = add_script(game, workspace_of(game), "Main", "print(1)\n");
     add_part(game, main.id(), "Handle");
     project.save();
-    const std::string main_dir = "src/Main." + game.guid(main.id());
+    const std::string main_dir = "src/Workspace.workspace/Main." + game.guid(main.id());
     REQUIRE(read_file(dir.path / main_dir / "init.luau") == "print(1)\n");
     REQUIRE(fs::exists(dir.path / main_dir / "init.meta.json"));
 
@@ -694,7 +708,7 @@ TEST_CASE("save_as writes the whole tree under a new root", "[project]") {
     SimRole role;
     TempDir dir;
     Project project = Project::create(dir.path / "One");
-    add_part(project.datamodel(), 0, "Part");
+    add_part(project.datamodel(), workspace_of(project.datamodel()), "Part");
     project.save();
     write_file(dir.path / "One" / "resources" / "textures" / "brick.png", std::string("\x89PNG", 4));
     project.save_as(dir.path / "Two");
@@ -723,7 +737,7 @@ TEST_CASE("adopt writes an unsaved place without clearing it", "[project]") {
     SimRole role;
     TempDir dir;
     Game game;
-    const InstanceId part = add_part(game, 0, "Part").id();
+    const InstanceId part = add_part(game, workspace_of(game), "Part").id();
     game.history().end_gesture();
     REQUIRE(game.history().can_undo().first);
     const std::string guid = game.guid(part);
@@ -734,7 +748,7 @@ TEST_CASE("adopt writes an unsaved place without clearing it", "[project]") {
     REQUIRE(game.alive(part));
     REQUIRE(game.history().can_undo().first);
     REQUIRE(fs::exists(dir.path / "Adopted" / "project.json"));
-    REQUIRE(fs::exists(dir.path / "Adopted" / "src" / ("Part." + guid + ".json")));
+    REQUIRE(fs::exists(dir.path / "Adopted" / "src" / kWorkspace / ("Part." + guid + ".json")));
     REQUIRE_THROWS_AS(Project::adopt(dir.path / "Adopted", game), ProjectError);
 
     Project loaded = Project::load(dir.path / "Adopted");
@@ -746,8 +760,8 @@ TEST_CASE("the fingerprint changes with the saved bytes, not with edits that can
     ScriptRig rig;
     Project project = Project::create(dir.path, rig.game);
     DataModel& game = rig.game;
-    engine_core::GameObject& part = add_part(game, 0, "Part");
-    engine_core::Script& main = add_script(game, 0, "Main", "print(1)\n");
+    engine_core::GameObject& part = add_part(game, workspace_of(game), "Part");
+    engine_core::Script& main = add_script(game, workspace_of(game), "Main", "print(1)\n");
     project.save();
     const std::uint64_t saved = Project::place_fingerprint(game);
     REQUIRE(Project::place_fingerprint(game) == saved);
@@ -764,7 +778,7 @@ TEST_CASE("the fingerprint changes with the saved bytes, not with edits that can
     REQUIRE(Project::place_fingerprint(game) != saved);
     main.set_source("print(1)\n");
 
-    const InstanceId extra = add_part(game, 0, "Extra").id();
+    const InstanceId extra = add_part(game, workspace_of(game), "Extra").id();
     REQUIRE(Project::place_fingerprint(game) != saved);
     game.destroy(extra);
     REQUIRE(Project::place_fingerprint(game) == saved);
@@ -772,7 +786,7 @@ TEST_CASE("the fingerprint changes with the saved bytes, not with edits that can
     // Play-only instances are not part of what a save writes.
     game.capture_place();
     game.start_simulation();
-    add_part(game, 0, "Session");
+    add_part(game, workspace_of(game), "Session");
     REQUIRE(Project::place_fingerprint(game) == saved);
     game.stop_simulation();
     REQUIRE(Project::place_fingerprint(game) == saved);
@@ -781,8 +795,8 @@ TEST_CASE("the fingerprint changes with the saved bytes, not with edits that can
 TEST_CASE("reset_place empties the place and drops undo", "[project]") {
     SimRole role;
     Game game;
-    add_part(game, 0, "Part");
-    add_script(game, 0, "Main", "print(1)\n");
+    add_part(game, workspace_of(game), "Part");
+    add_script(game, workspace_of(game), "Main", "print(1)\n");
     game.history().end_gesture();
     REQUIRE(game.history().can_undo().first);
     const std::string old_root = game.guid(0);
@@ -790,14 +804,14 @@ TEST_CASE("reset_place empties the place and drops undo", "[project]") {
 
     Project::reset_place(game);
     REQUIRE_FALSE(game.simulation_running());
-    REQUIRE(game.get_children(0).empty());
+    REQUIRE(game.get_children(workspace_of(game)).empty());
     REQUIRE_FALSE(game.history().can_undo().first);
     REQUIRE(game.guid(0) != old_root);
     // Stop Play returns to the empty place, not the old one.
     game.start_simulation();
-    add_part(game, 0, "Session");
+    add_part(game, workspace_of(game), "Session");
     game.stop_simulation();
-    REQUIRE(game.get_children(0).empty());
+    REQUIRE(game.get_children(workspace_of(game)).empty());
 }
 
 TEST_CASE("a project opened in a running engine keeps colors and transforms", "[project]") {
@@ -806,7 +820,7 @@ TEST_CASE("a project opened in a running engine keeps colors and transforms", "[
     {
         SimRole role;
         Project project = Project::create(dir.path);
-        engine_core::GameObject& part = add_part(project.datamodel(), 0, "Part");
+        engine_core::GameObject& part = add_part(project.datamodel(), workspace_of(project.datamodel()), "Part");
         part.set_color(rgb(0.25f, 0.5f, 0.75f));
         part.set_transform(engine_core::transform_translation(4.f, 5.f, 6.f));
         guid = project.datamodel().guid(part.id());
@@ -834,7 +848,7 @@ TEST_CASE("destroy_tree destroys descendants and one undo brings them back", "[p
     SimRole role;
     Game game;
     engine_core::Folder& box = game.create<engine_core::Folder>();
-    game.set_parent(box.id(), 0);
+    game.set_parent(box.id(), workspace_of(game));
     const InstanceId inner = add_part(game, box.id(), "Inner").id();
     const InstanceId deep = add_part(game, inner, "Deep").id();
     game.history().end_gesture();
@@ -850,13 +864,13 @@ TEST_CASE("destroy_tree destroys descendants and one undo brings them back", "[p
 
     game.history().undo();
     REQUIRE(game.alive(box.id()));
-    REQUIRE(game.parent(box.id()) == 0);
+    REQUIRE(game.parent(box.id()) == workspace_of(game));
     REQUIRE(game.parent(inner) == box.id());
     REQUIRE(game.parent(deep) == inner);
     REQUIRE(game.name(deep) == "Deep");
 
     game.destroy_tree(0);
-    REQUIRE(game.get_children(0).size() == 1);
+    REQUIRE(game.get_children(workspace_of(game)).size() == 1);
 
     std::vector<engine_core::ContextAction> root_actions;
     game.context_actions(root_actions);
@@ -889,8 +903,8 @@ TEST_CASE("G1 an outside edit to an instance the studio left alone survives a sa
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
-    engine_core::GameObject& b = add_part(game, 0, "B");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
+    engine_core::GameObject& b = add_part(game, workspace_of(game), "B");
     project.save();
     const std::string outside = read_file(dir.path / leaf(game, a.id())) + "\n";
     write_file(dir.path / leaf(game, a.id()), outside);
@@ -906,8 +920,8 @@ TEST_CASE("G2 an outside edit under a studio edit stops the save and writes noth
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
-    engine_core::GameObject& b = add_part(game, 0, "B");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
+    engine_core::GameObject& b = add_part(game, workspace_of(game), "B");
     project.save();
     const std::string path = leaf(game, a.id());
     edit_key(dir.path / path, "Size", triple(2, 2, 2));
@@ -928,7 +942,7 @@ TEST_CASE("G2 an outside edit under a studio edit stops the save and writes noth
         REQUIRE(conflict.conflicts()[0].studio == "(default)");
         REQUIRE(conflict.conflicts()[0].disk == "2, 2, 2");
         REQUIRE(conflict.conflicts()[0].name == "A");
-        REQUIRE(conflict.conflicts()[0].where == "game");
+        REQUIRE(conflict.conflicts()[0].where == "game.Workspace");
     }
     REQUIRE(message.find(path) != std::string::npos);
     // Nothing was written, B included, and the next save sees the same thing.
@@ -942,7 +956,7 @@ TEST_CASE("G3 a studio delete of a file edited outside stops the save", "[G3][gu
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId a = add_part(game, 0, "A").id();
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
     project.save();
     const std::string path = leaf(game, a);
     edit_key(dir.path / path, "Size", triple(2, 2, 2));
@@ -962,18 +976,18 @@ TEST_CASE("G4 a folder rename carries a child edited outside along", "[G4][guard
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& holder = add_part(game, 0, "Holder");
+    engine_core::GameObject& holder = add_part(game, workspace_of(game), "Holder");
     engine_core::GameObject& inner = add_part(game, holder.id(), "Inner");
     project.save();
     const std::string inner_name = "/Inner." + game.guid(inner.id()) + ".json";
-    const fs::path old_path = dir.path / ("src/Holder." + game.guid(holder.id()) + inner_name);
+    const fs::path old_path = dir.path / ("src/Workspace.workspace/Holder." + game.guid(holder.id()) + inner_name);
     const std::string outside = read_file(old_path) + "\n";
     write_file(old_path, outside);
 
     // Inner's bytes do not change, so the save only moves its file.
     game.set_name(holder.id(), "Box");
     REQUIRE(save_conflicts(project).empty());
-    REQUIRE(read_file(dir.path / ("src/Box." + game.guid(holder.id()) + inner_name)) == outside);
+    REQUIRE(read_file(dir.path / ("src/Workspace.workspace/Box." + game.guid(holder.id()) + inner_name)) == outside);
 }
 
 TEST_CASE("G5 a script's two files are checked one by one", "[G5][guard][project]") {
@@ -981,7 +995,7 @@ TEST_CASE("G5 a script's two files are checked one by one", "[G5][guard][project
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::Script& main = add_script(game, 0, "Main", "print(1)\n");
+    engine_core::Script& main = add_script(game, workspace_of(game), "Main", "print(1)\n");
     project.save();
     const std::string luau = leaf(game, main.id(), ".luau");
     write_file(dir.path / luau, "print(\"outside\")\n");
@@ -1007,7 +1021,7 @@ TEST_CASE("G6 a file rewritten with the same bytes is no conflict", "[G6][guard]
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     const std::string path = leaf(game, a.id());
     write_file(dir.path / path, read_file(dir.path / path));
@@ -1022,11 +1036,11 @@ TEST_CASE("G7 a save during play checks the place captured at Test", "[G7][guard
     ScriptRig rig;
     {
         Project project = Project::create(dir.path, rig.game);
-        add_part(rig.game, 0, "Door");
+        add_part(rig.game, workspace_of(rig.game), "Door");
         project.save();
     }
     Project project = Project::load(dir.path, rig.game);
-    const InstanceId door = rig.game.find_first_child(0, "Door");
+    const InstanceId door = rig.game.find_first_child(workspace_of(rig.game), "Door");
     REQUIRE(door != 0);
     const std::string path = leaf(rig.game, door);
     edit_key(dir.path / path, "Size", triple(2, 2, 2));
@@ -1062,14 +1076,14 @@ struct BoxAndLeaf {
     InstanceId leaf = 0;
 
     BoxAndLeaf(DataModel& game, const char* leaf_name) {
-        box = add_part(game, 0, "Box").id();
+        box = add_part(game, workspace_of(game), "Box").id();
         keep = add_part(game, box, "Keep").id();
-        leaf = add_part(game, 0, leaf_name).id();
+        leaf = add_part(game, workspace_of(game), leaf_name).id();
     }
 
     // Where a file for the leaf lands when it is moved into Box.
     fs::path moved(const fs::path& root, const DataModel& game) const {
-        return root / ("src/Box." + game.guid(box)) /
+        return root / ("src/Workspace.workspace/Box." + game.guid(box)) /
                (engine_core::sanitize_file_name(game.name(leaf)) + "." + game.guid(leaf) + ".json");
     }
 };
@@ -1081,8 +1095,8 @@ TEST_CASE("G8 a file deleted outside stays deleted when the studio left it alone
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
-    engine_core::GameObject& b = add_part(game, 0, "B");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
+    engine_core::GameObject& b = add_part(game, workspace_of(game), "B");
     project.save();
     fs::remove(dir.path / leaf(game, a.id()));
 
@@ -1118,7 +1132,7 @@ TEST_CASE("G10 a file deleted outside under a studio edit stops the save", "[G10
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     const std::string path = leaf(game, a.id());
     fs::remove(dir.path / path);
@@ -1158,7 +1172,7 @@ TEST_CASE("G12 a file deleted on both sides saves quietly", "[G12][guard][projec
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId a = add_part(game, 0, "A").id();
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
     project.save();
     fs::remove(dir.path / leaf(game, a));
 
@@ -1193,7 +1207,7 @@ TEST_CASE("G14 a new child under a folder deleted outside stops the save", "[G14
     DataModel& game = project.datamodel();
     const BoxAndLeaf ids(game, "Loose");
     project.save();
-    const std::string box_dir = "src/Box." + game.guid(ids.box);
+    const std::string box_dir = "src/Workspace.workspace/Box." + game.guid(ids.box);
     fs::remove_all(dir.path / box_dir);
 
     add_part(game, ids.box, "New");
@@ -1212,14 +1226,14 @@ TEST_CASE("G15 junk that mentions a GUID does not make a deleted file look moved
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     const std::string path = leaf(game, a.id());
     const std::string guid = game.guid(a.id());
     const std::string bytes = read_file(dir.path / path);
     write_file(dir.path / "src" / ".DS_Store", "junk");
     write_file(dir.path / "src" / ".backup" / ("A." + guid + ".json"), bytes);
-    write_file(dir.path / "src" / ("A." + guid + " copy.json"), bytes);
+    write_file(dir.path / "src" / kWorkspace / ("A." + guid + " copy.json"), bytes);
     fs::remove(dir.path / path);
 
     a.set_color(rgb(1.f, 0.f, 0.f));
@@ -1233,7 +1247,7 @@ TEST_CASE("G16 Overwrite writes the studio's version over an outside edit", "[G1
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     const std::string path = leaf(game, a.id());
     edit_key(dir.path / path, "Size", triple(2, 2, 2));
@@ -1268,7 +1282,7 @@ TEST_CASE("G17 Overwrite of a file moved outside leaves one file for its GUID", 
     Project loaded = Project::load(dir.path);
     DataModel& again = loaded.datamodel();
     const InstanceId loose = by_guid(again, guid);
-    REQUIRE(again.parent(loose) == 0);
+    REQUIRE(again.parent(loose) == workspace_of(again));
     REQUIRE(again.game_object(loose)->color().b == 0.75f);
 }
 
@@ -1277,7 +1291,7 @@ TEST_CASE("G18 Overwrite puts back a file deleted outside", "[G18][guard][projec
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     const std::string path = leaf(game, a.id());
     const std::string guid = game.guid(a.id());
@@ -1297,11 +1311,11 @@ TEST_CASE("G19 Overwrite after a folder deleted outside leaves a project that lo
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     const InstanceId keep = add_part(game, box, "Keep").id();
     add_part(game, box, "Other");
     project.save();
-    const std::string box_dir = "src/Box." + game.guid(box);
+    const std::string box_dir = "src/Workspace.workspace/Box." + game.guid(box);
     fs::remove_all(dir.path / box_dir);
 
     game.game_object(keep)->set_color(rgb(0.25f, 0.5f, 0.75f));
@@ -1326,11 +1340,11 @@ TEST_CASE("G20 Overwrite of a new child two folders below one deleted outside le
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId a = add_part(game, 0, "A").id();
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
     const InstanceId b = add_part(game, a, "B").id();
     add_part(game, b, "Keep");
     project.save();
-    fs::remove_all(dir.path / ("src/A." + game.guid(a)));
+    fs::remove_all(dir.path / ("src/Workspace.workspace/A." + game.guid(a)));
 
     const InstanceId added = add_part(game, b, "New").id();
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
@@ -1345,13 +1359,13 @@ TEST_CASE("G21 Overwrite of a folder moved outside brings its children back with
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId q = add_part(game, 0, "Q").id();
+    const InstanceId q = add_part(game, workspace_of(game), "Q").id();
     add_part(game, q, "QKeep");
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     const InstanceId keep = add_part(game, box, "Keep").id();
     project.save();
-    fs::rename(dir.path / ("src/Box." + game.guid(box)),
-               dir.path / ("src/Q." + game.guid(q)) / ("Box." + game.guid(box)));
+    fs::rename(dir.path / ("src/Workspace.workspace/Box." + game.guid(box)),
+               dir.path / ("src/Workspace.workspace/Q." + game.guid(q)) / ("Box." + game.guid(box)));
 
     game.game_object(box)->set_color(rgb(0.25f, 0.5f, 0.75f));
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
@@ -1359,7 +1373,7 @@ TEST_CASE("G21 Overwrite of a folder moved outside brings its children back with
     project.save(conflicts);
     Project loaded = Project::load(dir.path);
     DataModel& again = loaded.datamodel();
-    REQUIRE(again.parent(by_guid(again, game.guid(box))) == 0);
+    REQUIRE(again.parent(by_guid(again, game.guid(box))) == workspace_of(again));
     REQUIRE(again.guid(again.parent(by_guid(again, game.guid(keep)))) == game.guid(box));
     REQUIRE(leaf_files_of(dir.path, game.guid(keep)).size() == 1);
 }
@@ -1370,12 +1384,12 @@ TEST_CASE("G22 Overwrite keeps the file it wrote when the name on disk differs o
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& door = add_part(game, 0, "Door");
+    engine_core::GameObject& door = add_part(game, workspace_of(game), "Door");
     project.save();
     const std::string guid = game.guid(door.id());
     std::string bytes = read_file(dir.path / leaf(game, door.id()));
     bytes.replace(bytes.find("\"Name\": \"Door\""), 14, "\"Name\": \"door\"");
-    const fs::path renamed = dir.path / ("src/door." + guid + ".json");
+    const fs::path renamed = dir.path / ("src/Workspace.workspace/door." + guid + ".json");
     fs::rename(dir.path / leaf(game, door.id()), renamed);
     write_file(renamed, bytes);
 
@@ -1394,8 +1408,8 @@ TEST_CASE("G23 Overwrite writes over only the conflicts it lists", "[G23][guard]
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
-    engine_core::GameObject& b = add_part(game, 0, "B");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
+    engine_core::GameObject& b = add_part(game, workspace_of(game), "B");
     project.save();
     const std::string a_path = leaf(game, a.id());
     const std::string b_path = leaf(game, b.id());
@@ -1426,10 +1440,10 @@ TEST_CASE("G24 a file added outside inside a folder the save moves or deletes st
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     const InstanceId keep = add_part(game, box, "Keep").id();
     project.save();
-    const std::string added = "src/Box." + game.guid(box) + "/Added.added-0001.json";
+    const std::string added = "src/Workspace.workspace/Box." + game.guid(box) + "/Added.added-0001.json";
     write_file(dir.path / added, meta("Folder", "added-0001", "Added"));
     auto added_listed = [&added](const std::vector<engine_core::SaveConflict>& conflicts) {
         for (const engine_core::SaveConflict& conflict : conflicts) {
@@ -1467,10 +1481,10 @@ TEST_CASE("G25 a copy of a folder beside it is not taken for a move", "[G25][gua
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     const InstanceId keep = add_part(game, box, "Keep").id();
     project.save();
-    const std::string box_dir = "src/Box." + game.guid(box);
+    const std::string box_dir = "src/Workspace.workspace/Box." + game.guid(box);
     const std::string keep_name = "Keep." + game.guid(keep) + ".json";
     const fs::path copy = dir.path / (box_dir + " copy");
     fs::copy(dir.path / box_dir, copy, fs::copy_options::recursive);
@@ -1490,13 +1504,13 @@ TEST_CASE("G26 part of an instance deleted outside is written back when the stud
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::Script& main = add_script(game, 0, "Main", "print(1)\n");
-    const InstanceId box = add_part(game, 0, "Box").id();
+    engine_core::Script& main = add_script(game, workspace_of(game), "Main", "print(1)\n");
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     add_part(game, box, "Keep");
-    engine_core::GameObject& other = add_part(game, 0, "Other");
+    engine_core::GameObject& other = add_part(game, workspace_of(game), "Other");
     project.save();
     const std::string luau = leaf(game, main.id(), ".luau");
-    const std::string init = "src/Box." + game.guid(box) + "/init.json";
+    const std::string init = "src/Workspace.workspace/Box." + game.guid(box) + "/init.json";
     fs::remove(dir.path / luau);
     fs::remove(dir.path / init);
 
@@ -1512,7 +1526,7 @@ TEST_CASE("G27 a file only reformatted outside is no conflict", "[G27][guard][pr
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     const std::string path = leaf(game, a.id());
     std::string wide = read_file(dir.path / path);
@@ -1531,7 +1545,7 @@ TEST_CASE("G28 a property file that does not parse is one row for its instance",
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     const std::string path = leaf(game, a.id());
     write_file(dir.path / path, "{\"class\": ");
@@ -1553,7 +1567,7 @@ engine_core::SaveConflict only_row(const engine_core::DiskScan& scan) {
     return scan.conflicts[0];
 }
 
-std::string box_dir(const DataModel& game, InstanceId box) { return "src/Box." + game.guid(box); }
+std::string box_dir(const DataModel& game, InstanceId box) { return "src/Workspace.workspace/Box." + game.guid(box); }
 
 }  // namespace
 
@@ -1562,8 +1576,8 @@ TEST_CASE("D1 a scan with nothing changed finds nothing", "[D1][disk][project]")
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    add_part(game, 0, "A");
-    add_script(game, 0, "Main", "print(1)\n");
+    add_part(game, workspace_of(game), "A");
+    add_script(game, workspace_of(game), "Main", "print(1)\n");
     project.save();
     const engine_core::DiskScan scan = project.scan_disk();
     REQUIRE(scan.conflicts.empty());
@@ -1575,7 +1589,7 @@ TEST_CASE("D2 a property only the disk changed is a change to load, not a row", 
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     edit_key(dir.path / leaf(game, a.id()), "Size", triple(2, 2, 2));
     const engine_core::DiskScan scan = project.scan_disk();
@@ -1588,7 +1602,7 @@ TEST_CASE("D3 a property both sides changed differently is a row", "[D3][disk][p
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     engine_core::GameObject& a = add_part(game, box, "A");
     project.save();
     const std::string path = box_dir(game, box) + "/A." + game.guid(a.id()) + ".json";
@@ -1602,7 +1616,7 @@ TEST_CASE("D3 a property both sides changed differently is a row", "[D3][disk][p
     REQUIRE(row.studio == "1, 0, 0");
     REQUIRE(row.disk == "0, 0, 1");
     REQUIRE(row.name == "A");
-    REQUIRE(row.where == "game.Box");
+    REQUIRE(row.where == "game.Workspace.Box");
 }
 
 TEST_CASE("D4 a property both sides changed the same way is nothing", "[D4][disk][project]") {
@@ -1610,7 +1624,7 @@ TEST_CASE("D4 a property both sides changed the same way is nothing", "[D4][disk
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     edit_key(dir.path / leaf(game, a.id()), "Color", triple(0, 0, 1));
     a.set_color(rgb(0.f, 0.f, 1.f));
@@ -1624,11 +1638,11 @@ TEST_CASE("D5 a move on disk is a Parent change", "[D5][disk][project]") {
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     add_part(game, box, "Keep");
-    const InstanceId q = add_part(game, 0, "Q").id();
+    const InstanceId q = add_part(game, workspace_of(game), "Q").id();
     add_part(game, q, "QKeep");
-    const InstanceId loose = add_part(game, 0, "Loose").id();
+    const InstanceId loose = add_part(game, workspace_of(game), "Loose").id();
     project.save();
     fs::rename(dir.path / leaf(game, loose),
                dir.path / box_dir(game, box) / ("Loose." + game.guid(loose) + ".json"));
@@ -1642,8 +1656,8 @@ TEST_CASE("D5 a move on disk is a Parent change", "[D5][disk][project]") {
         game.set_parent(loose, q);
         const engine_core::SaveConflict& row = only_row(project.scan_disk());
         REQUIRE(row.key == "Parent");
-        REQUIRE(row.studio == "game.Q");
-        REQUIRE(row.disk == "game.Box");
+        REQUIRE(row.studio == "game.Workspace.Q");
+        REQUIRE(row.disk == "game.Workspace.Box");
     }
 }
 
@@ -1652,7 +1666,7 @@ TEST_CASE("D6 a source both sides changed is a row showing the first differing l
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::Script& main = add_script(game, 0, "Main", "print(1)\nprint(2)\n");
+    engine_core::Script& main = add_script(game, workspace_of(game), "Main", "print(1)\nprint(2)\n");
     project.save();
     write_file(dir.path / leaf(game, main.id(), ".luau"), "print(1)\nprint(\"disk\")\n");
     main.set_source("print(1)\nprint(\"studio\")\n");
@@ -1667,7 +1681,7 @@ TEST_CASE("D7 an instance deleted on disk", "[D7][disk][project]") {
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     const InstanceId keep = add_part(game, box, "Keep").id();
     add_part(game, box, "Other");
     project.save();
@@ -1699,7 +1713,7 @@ TEST_CASE("D8 an instance deleted in the studio", "[D8][disk][project]") {
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId a = add_part(game, 0, "A").id();
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
     project.save();
     const std::string path = leaf(game, a);
 
@@ -1726,7 +1740,7 @@ TEST_CASE("D9 a class changed on disk", "[D9][disk][project]") {
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     edit_key(dir.path / leaf(game, a.id()), "class", engine_core::JsonValue::string("Folder"));
 
@@ -1749,7 +1763,7 @@ TEST_CASE("D10 an instance added on disk", "[D10][disk][project]") {
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     const InstanceId keep = add_part(game, box, "Keep").id();
     project.save();
     write_file(dir.path / box_dir(game, box) / "Added.added-0001.json", meta("Folder", "added-0001", "Added"));
@@ -1775,7 +1789,7 @@ TEST_CASE("D11 a value a class rejects makes the scan throw", "[D11][disk][proje
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     edit_key(dir.path / leaf(game, a.id()), "Color", engine_core::JsonValue::string("red"));
     REQUIRE_THROWS_AS(project.scan_disk(), ProjectError);
@@ -1786,7 +1800,7 @@ TEST_CASE("D12 a file only reformatted is no change", "[D12][disk][project]") {
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     a.set_color(rgb(1.f, 0.f, 0.f));
     project.save();
     const std::string path = leaf(game, a.id());
@@ -1805,7 +1819,7 @@ TEST_CASE("D13 a key removed on disk is a change to load", "[D13][disk][project]
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     a.set_color(rgb(1.f, 0.f, 0.f));
     project.save();
     const fs::path file = dir.path / leaf(game, a.id());
@@ -1834,8 +1848,8 @@ TEST_CASE("A1 disk changes load as one undo step; undone, a save writes the stud
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId a = add_part(game, 0, "A").id();
-    engine_core::GameObject& b = add_part(game, 0, "B");
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
+    engine_core::GameObject& b = add_part(game, workspace_of(game), "B");
     project.save();
     edit_key(dir.path / leaf(game, a), "Size", triple(2, 2, 2));
     // A studio edit whose gesture is still open.
@@ -1859,8 +1873,8 @@ TEST_CASE("A2 each side of a row", "[A2][disk][project]") {
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
-    engine_core::GameObject& b = add_part(game, 0, "B");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
+    engine_core::GameObject& b = add_part(game, workspace_of(game), "B");
     project.save();
     edit_key(dir.path / leaf(game, a.id()), "Color", triple(0, 0, 1));
     edit_key(dir.path / leaf(game, b.id()), "Color", triple(0, 0, 1));
@@ -1889,7 +1903,7 @@ TEST_CASE("A3 a row that changed after it was listed is skipped and listed again
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     const fs::path file = dir.path / leaf(game, a.id());
     edit_key(file, "Color", triple(0, 0, 1));
@@ -1910,7 +1924,7 @@ TEST_CASE("A4 a loaded property keeps the instance's id", "[A4][disk][project]")
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId a = add_part(game, 0, "A").id();
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
     const std::string guid = game.guid(a);
     project.save();
     edit_key(dir.path / leaf(game, a), "Size", triple(2, 2, 2));
@@ -1925,9 +1939,9 @@ TEST_CASE("A5 a rename and a move on disk load together, and the next save is qu
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     add_part(game, box, "Keep");
-    const InstanceId loose = add_part(game, 0, "Loose").id();
+    const InstanceId loose = add_part(game, workspace_of(game), "Loose").id();
     project.save();
     const fs::path from = dir.path / leaf(game, loose);
     const fs::path to = dir.path / box_dir(game, box) / ("Tight." + game.guid(loose) + ".json");
@@ -1942,7 +1956,7 @@ TEST_CASE("A5 a rename and a move on disk load together, and the next save is qu
     // Only the old parent's file may be rewritten: when it listed its children
     // in order, the move left Loose in that list on disk.
     const std::vector<std::string> quiet;
-    const std::vector<std::string> stale_list{"src/init.json"};
+    const std::vector<std::string> stale_list{"src/Workspace.workspace/init.json"};
     REQUIRE((project.last_save().written == quiet || project.last_save().written == stale_list));
     REQUIRE(project.last_save().moved.empty());
     REQUIRE(project.last_save().removed.empty());
@@ -1954,7 +1968,7 @@ TEST_CASE("A6 an instance added on disk is made with its GUID, and the next save
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     add_part(game, box, "Keep");
     project.save();
     write_file(dir.path / box_dir(game, box) / "Added.added-0001.json", meta("Folder", "added-0001", "Added"));
@@ -1974,7 +1988,7 @@ TEST_CASE("A7 an instance deleted on disk is destroyed, and one undo brings it b
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId a = add_part(game, 0, "A").id();
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
     const std::string guid = game.guid(a);
     project.save();
     fs::remove(dir.path / leaf(game, a));
@@ -1990,7 +2004,7 @@ TEST_CASE("A8 rows for an instance deleted on disk", "[A8][disk][project]") {
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     const InstanceId keep = add_part(game, box, "Keep").id();
     add_part(game, box, "Other");
     project.save();
@@ -2026,7 +2040,7 @@ TEST_CASE("A9 a row for an instance deleted in the studio and changed on disk", 
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     const InstanceId keep = add_part(game, box, "Keep").id();
     project.save();
     const std::string box_guid = game.guid(box);
@@ -2057,11 +2071,11 @@ TEST_CASE("A10 a class changed on disk makes the instance again, keeping its chi
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId a = add_part(game, 0, "A").id();
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
     const InstanceId child = add_part(game, a, "Child").id();
     const std::string guid = game.guid(a);
     project.save();
-    edit_key(dir.path / ("src/A." + guid + "/init.json"), "class", engine_core::JsonValue::string("Folder"));
+    edit_key(dir.path / ("src/Workspace.workspace/A." + guid + "/init.json"), "class", engine_core::JsonValue::string("Folder"));
 
     REQUIRE(project.apply_disk().conflicts.empty());
     const std::optional<InstanceId> made = game.find_guid(guid);
@@ -2075,7 +2089,7 @@ TEST_CASE("A11 a key removed on disk puts the class default back", "[A11][disk][
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     a.set_color(rgb(1.f, 0.f, 0.f));
     project.save();
     const fs::path file = dir.path / leaf(game, a.id());
@@ -2094,7 +2108,7 @@ TEST_CASE("A12 a source only the disk changed loads", "[A12][disk][project]") {
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::Script& main = add_script(game, 0, "Main", "print(1)\n");
+    engine_core::Script& main = add_script(game, workspace_of(game), "Main", "print(1)\n");
     project.save();
     write_file(dir.path / leaf(game, main.id(), ".luau"), "print(\"disk\")\n");
     project.apply_disk();
@@ -2106,7 +2120,7 @@ TEST_CASE("A13 a key the engine does not know loads as an extra, and the next sa
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId a = add_part(game, 0, "A").id();
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
     project.save();
     engine_core::JsonValue custom = engine_core::JsonValue::object();
     custom.set("x", engine_core::JsonValue::number(1));
@@ -2123,7 +2137,7 @@ TEST_CASE("A14 an apply during a test throws", "[A14][disk][project]") {
     ScriptRig rig;
     {
         Project project = Project::create(dir.path, rig.game);
-        add_part(rig.game, 0, "Door");
+        add_part(rig.game, workspace_of(rig.game), "Door");
         project.save();
     }
     Project project = Project::load(dir.path, rig.game);
@@ -2137,7 +2151,7 @@ TEST_CASE("A15 a sibling order only the disk changed loads", "[A15][disk][projec
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     add_part(game, box, "One");
     add_part(game, box, "Two");
     project.save();
@@ -2158,13 +2172,13 @@ TEST_CASE("U1 unsaved follows edits and their undo", "[U1][disk][project]") {
     TempDir dir;
     {
         Project project = Project::create(dir.path);
-        add_part(project.datamodel(), 0, "A");
+        add_part(project.datamodel(), workspace_of(project.datamodel()), "A");
         project.save();
     }
     Project project = Project::load(dir.path);
     DataModel& game = project.datamodel();
     REQUIRE_FALSE(project.unsaved());
-    const InstanceId a = game.find_first_child(0, "A");
+    const InstanceId a = game.find_first_child(workspace_of(game), "A");
     game.history().set_pending_gesture("Color");
     game.game_object(a)->set_color(rgb(1.f, 0.f, 0.f));
     game.history().end_gesture();
@@ -2178,7 +2192,7 @@ TEST_CASE("U2 changes loaded from disk are not unsaved", "[U2][disk][project]") 
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId a = add_part(game, 0, "A").id();
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
     project.save();
     edit_key(dir.path / leaf(game, a), "Size", triple(2, 2, 2));
     project.apply_disk();
@@ -2190,7 +2204,7 @@ TEST_CASE("U3 a file only reformatted on disk is not unsaved", "[U3][disk][proje
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     a.set_color(rgb(1.f, 0.f, 0.f));
     project.save();
     const std::string path = leaf(game, a.id());
@@ -2207,6 +2221,8 @@ TEST_CASE("U4 a root saved as DataModel is not unsaved", "[U4][disk][project]") 
     SimRole role;
     TempDir dir;
     write_bare_project(dir.path);
+    // Something in Workspace, so a save keeps it the folder the files have.
+    write_file(dir.path / "src" / kWorkspace / "P.aaa.json", meta("Folder", "aaa", "P"));
     Project project = Project::load(dir.path);
     REQUIRE_FALSE(project.unsaved());
 }
@@ -2233,10 +2249,10 @@ TEST_CASE("F1 a file written during an apply is still a change afterwards", "[F1
     engine_core::register_project_class("RaceProbe", make_race_probe);
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId b = add_part(game, 0, "B").id();
+    const InstanceId b = add_part(game, workspace_of(game), "B").id();
     project.save();
     // The disk adds an instance; reading it back mid-apply writes B's file.
-    write_file(dir.path / "src/Probe.probe-0001.json", meta("RaceProbe", "probe-0001", "Probe"));
+    write_file(dir.path / "src/Workspace.workspace/Probe.probe-0001.json", meta("RaceProbe", "probe-0001", "Probe"));
     race_file = dir.path / leaf(game, b);
     project.apply_disk();
     race_file.clear();
@@ -2250,9 +2266,9 @@ TEST_CASE("F2 a class change and a move on disk load together", "[F2][disk][proj
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     add_part(game, box, "Keep");
-    const InstanceId a = add_part(game, 0, "A").id();
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
     const std::string guid = game.guid(a);
     project.save();
     const fs::path moved = dir.path / box_dir(game, box) / ("A." + guid + ".json");
@@ -2274,7 +2290,7 @@ TEST_CASE("F3 a value the class stores differently is no row", "[F3][disk][proje
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId a = add_part(game, 0, "A").id();
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
     project.save();
     const fs::path file = dir.path / leaf(game, a);
 
@@ -2302,7 +2318,7 @@ TEST_CASE("F3b a project opened with a precise number is not unsaved", "[F3b][di
     std::string path;
     {
         Project project = Project::create(dir.path);
-        const InstanceId a = add_part(project.datamodel(), 0, "A").id();
+        const InstanceId a = add_part(project.datamodel(), workspace_of(project.datamodel()), "A").id();
         project.save();
         path = leaf(project.datamodel(), a);
     }
@@ -2318,7 +2334,7 @@ TEST_CASE("F4 undoing Changes from Disk sticks for an instance with an open row"
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    engine_core::GameObject& a = add_part(game, 0, "A");
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     const fs::path file = dir.path / leaf(game, a.id());
     edit_key(file, "Size", triple(2, 2, 2));
@@ -2337,7 +2353,7 @@ TEST_CASE("F5 a child added on disk keeps the studio's own sibling order", "[F5]
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     add_part(game, box, "One");
     add_part(game, box, "Two");
     add_part(game, box, "Three");
@@ -2363,7 +2379,7 @@ TEST_CASE("F6 keeping a folder deleted on disk keeps its untouched children", "[
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId box = add_part(game, 0, "Box").id();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
     const InstanceId keep = add_part(game, box, "Keep").id();
     const InstanceId other = add_part(game, box, "Other").id();
     const std::string other_guid = game.guid(other);
@@ -2388,7 +2404,7 @@ TEST_CASE("U5 unsaved does not read project.json, so one that does not parse is 
     SimRole role;
     TempDir dir;
     Project project = Project::create(dir.path);
-    add_part(project.datamodel(), 0, "A");
+    add_part(project.datamodel(), workspace_of(project.datamodel()), "A");
     project.save();
     write_file(dir.path / "project.json", "<<<<<<< HEAD\n{");
     bool unsaved = true;
@@ -2401,20 +2417,20 @@ TEST_CASE("P17 a save that fails partway leaves the last save on disk", "[P17][p
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId model = add_part(game, 0, "Model").id();
+    const InstanceId model = add_part(game, workspace_of(game), "Model").id();
     const InstanceId part = add_part(game, model, "Part").id();
     // The child sorts first by GUID, so the save moves it before it reaches its parent.
     game.set_guid(model, "b1");
     game.set_guid(part, "a1");
     project.save();
     const std::map<std::string, std::string> saved = tree_files(dir.path);
-    REQUIRE(saved.count("src/Model.b1/init.json") == 1);
-    REQUIRE(saved.count("src/Model.b1/Part.a1.json") == 1);
+    REQUIRE(saved.count("src/Workspace.workspace/Model.b1/init.json") == 1);
+    REQUIRE(saved.count("src/Workspace.workspace/Model.b1/Part.a1.json") == 1);
 
     game.set_name(model, "Renamed");
     // A folder where the new init.json's temporary file goes fails that one write,
     // after the save has already moved the child.
-    const fs::path renamed = dir.path / "src" / "Renamed.b1";
+    const fs::path renamed = dir.path / "src" / kWorkspace / "Renamed.b1";
     fs::create_directories(renamed / "init.json.tmp");
     REQUIRE_THROWS_AS(project.save(), ProjectError);
     std::vector<std::string> left;
@@ -2435,9 +2451,9 @@ TEST_CASE("P17 a save that fails partway leaves the last save on disk", "[P17][p
     // The next save sees no change on disk and moves both files.
     project.save();
     REQUIRE(project.last_save().moved ==
-            std::vector<std::string>{"src/Model.b1/Part.a1.json -> src/Renamed.b1/Part.a1.json",
-                                     "src/Model.b1/init.json -> src/Renamed.b1/init.json"});
-    REQUIRE_FALSE(fs::exists(dir.path / "src" / "Model.b1"));
+            std::vector<std::string>{"src/Workspace.workspace/Model.b1/Part.a1.json -> src/Workspace.workspace/Renamed.b1/Part.a1.json",
+                                     "src/Workspace.workspace/Model.b1/init.json -> src/Workspace.workspace/Renamed.b1/init.json"});
+    REQUIRE_FALSE(fs::exists(dir.path / "src" / kWorkspace / "Model.b1"));
 }
 
 #ifdef _WIN32
@@ -2448,8 +2464,8 @@ TEST_CASE("P18 a save that cannot remove a file changes nothing", "[P18][project
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId gone = add_part(game, 0, "Gone").id();
-    const InstanceId kept = add_part(game, 0, "Kept").id();
+    const InstanceId gone = add_part(game, workspace_of(game), "Gone").id();
+    const InstanceId kept = add_part(game, workspace_of(game), "Kept").id();
     project.save();
     const std::map<std::string, std::string> saved = tree_files(dir.path);
     const std::string gone_file = leaf(game, gone);
@@ -2477,11 +2493,11 @@ TEST_CASE("P20 a folder that loses its last child keeps its files when the child
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId folder = add_part(game, 0, "Holder").id();
+    const InstanceId folder = add_part(game, workspace_of(game), "Holder").id();
     const InstanceId child = add_part(game, folder, "Child").id();
     project.save();
     const std::map<std::string, std::string> saved = tree_files(dir.path);
-    const std::string folder_dir = "src/Holder." + game.guid(folder);
+    const std::string folder_dir = "src/Workspace.workspace/Holder." + game.guid(folder);
     const std::string child_file = folder_dir + "/Child." + game.guid(child) + ".json";
     REQUIRE(saved.count(child_file) == 1);
     // Without its child the folder instance becomes a leaf file, and its init.json moves out.
@@ -2504,10 +2520,10 @@ TEST_CASE("P21 a save over a conflict that cannot remove the other file leaves t
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId part = add_part(game, 0, "Part").id();
+    const InstanceId part = add_part(game, workspace_of(game), "Part").id();
     project.save();
     const std::string planned = leaf(game, part);
-    const std::string moved = "src/Moved." + game.guid(part) + ".json";
+    const std::string moved = "src/Workspace.workspace/Moved." + game.guid(part) + ".json";
     fs::rename(dir.path / planned, dir.path / moved);
     game.game_object(part)->set_color(rgb(0.25f, 0.5f, 0.75f));
     std::vector<engine_core::SaveConflict> conflicts;
@@ -2534,6 +2550,8 @@ TEST_CASE("P19 a project with more instances than a place holds is an error, not
     SimRole role;
     TempDir dir;
     Project project = Project::create(dir.path);
+    // Under game, as a place saved before the scene services has them: a load
+    // moves them into Workspace.
     for (std::size_t i = 0; i <= DataModel::kMaxInstances; ++i) {
         const std::string guid = "p" + std::to_string(i);
         std::ofstream out(dir.path / "src" / ("Part." + guid + ".json"), std::ios::binary);
@@ -2549,17 +2567,24 @@ TEST_CASE("D14 changes from disk that need more room than the place has left are
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
+    // So Workspace saves as a folder the new files can go in.
+    add_part(game, workspace_of(game), "Part");
     project.save();
     // Unparented instances take slots without being part of the place.
     game.history().set_enabled(false);
-    for (std::size_t i = 0; i + 2 < DataModel::kMaxInstances; ++i) {
+    while (game.room_left() > 2) {
         game.create();
     }
     game.history().set_enabled(true);
     for (const char* guid : {"n1", "n2", "n3", "n4", "n5"}) {
-        write_file(dir.path / "src" / (std::string("New.") + guid + ".json"), meta("DataModel", guid, "New"));
+        write_file(dir.path / "src" / kWorkspace / (std::string("New.") + guid + ".json"), meta("DataModel", guid, "New"));
     }
-    REQUIRE_THROWS_AS(project.apply_disk(), ProjectError);
+    try {
+        project.apply_disk();
+        FAIL("apply_disk should refuse changes that do not fit");
+    } catch (const ProjectError& error) {
+        REQUIRE(std::string(error.what()).find("room for") != std::string::npos);
+    }
     for (const char* guid : {"n1", "n2", "n3", "n4", "n5"}) {
         REQUIRE_FALSE(game.find_guid(guid).has_value());
     }
@@ -2570,7 +2595,7 @@ TEST_CASE("D15 changes from disk that do not fit settle none of the choices", "[
     TempDir dir;
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
-    const InstanceId part = add_part(game, 0, "Part").id();
+    const InstanceId part = add_part(game, workspace_of(game), "Part").id();
     project.save();
     // Both sides change the color: a row for a person's choice.
     game.game_object(part)->set_color(rgb(1.f, 0.f, 0.f));
@@ -2579,12 +2604,12 @@ TEST_CASE("D15 changes from disk that do not fit settle none of the choices", "[
     REQUIRE(rows.size() == 1);
 
     game.history().set_enabled(false);
-    for (std::size_t i = 0; i + 2 < DataModel::kMaxInstances; ++i) {
+    while (game.room_left() > 2) {
         game.create();
     }
     game.history().set_enabled(true);
     for (const char* guid : {"n1", "n2", "n3", "n4", "n5"}) {
-        write_file(dir.path / "src" / (std::string("New.") + guid + ".json"), meta("DataModel", guid, "New"));
+        write_file(dir.path / "src" / kWorkspace / (std::string("New.") + guid + ".json"), meta("DataModel", guid, "New"));
     }
     // Keeping the studio's color would settle that row, but nothing may change when the rest cannot fit.
     REQUIRE_THROWS_AS(project.apply_disk({engine_core::DiskChoice{rows.front(), false}}), ProjectError);
@@ -2598,9 +2623,9 @@ TEST_CASE("P22 creating a project where no folder can go leaves the world as it 
     fs::create_directories(dir.path);
     std::ofstream(dir.path / "blocker") << "x";
     Game game;
-    add_part(game, 0, "Keep");
+    add_part(game, workspace_of(game), "Keep");
     REQUIRE_THROWS_AS(Project::create(dir.path / "blocker" / "Place", game), ProjectError);
-    REQUIRE(game.find_first_child(0, "Keep") != 0);
+    REQUIRE(game.find_first_child(workspace_of(game), "Keep") != 0);
 }
 
 namespace {

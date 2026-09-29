@@ -71,9 +71,14 @@ inline engine_core::Script& add_script(engine_core::DataModel& game, engine_core
     return script;
 }
 
-// A Script directly under the game.
+// A Script directly under Workspace, where scripts run, beside the parts a test adds there.
 inline engine_core::Script& add_script(engine_core::DataModel& game, const char* name, const char* source) {
-    return add_script(game, game.id(), name, source);
+    return add_script(game, game.scene_service("Workspace"), name, source);
+}
+
+// Where tests put instances that would sit under game: the Workspace service.
+inline engine_core::InstanceId workspace_of(const engine_core::DataModel& game) {
+    return game.scene_service("Workspace");
 }
 
 // Opaque: alpha is 1.

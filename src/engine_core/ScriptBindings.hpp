@@ -98,10 +98,16 @@ inline const char* field_name(Field field) {
         return "Enabled";
     case Field::Position:
         return "Position";
+    case Field::Reflected:
     case Field::Count:
         break;
     }
     return "Unknown";
+}
+
+// The name Changed passes. A registry property's id comes with its event.
+inline const char* changed_name(Field field, std::uint64_t payload) {
+    return field == Field::Reflected ? lua_property_name(static_cast<std::uint32_t>(payload)) : field_name(field);
 }
 
 inline ScriptRuntime* runtime_from(lua_State* state) {

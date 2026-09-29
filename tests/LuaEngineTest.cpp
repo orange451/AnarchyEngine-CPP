@@ -298,6 +298,11 @@ void testContextActions() {
     expect(actions.size() == 3 && actions[1].action == engine_core::InstanceAction::Paste && !actions[1].primary, "paste is not primary");
     expect(actions.size() == 3 && actions[2].action == engine_core::InstanceAction::Rename && !actions[2].primary, "rename is not primary");
 
+    // A scene service takes children, and cannot be cut, renamed, or deleted.
+    actions.clear();
+    game.instance(game.scene_service("Workspace"))->context_actions(actions);
+    expect(actions.size() == 1 && actions[0].action == engine_core::InstanceAction::Paste, "a scene service only pastes");
+
     engine_core::Script& script = game.create<engine_core::Script>();
     actions.clear();
     script.context_actions(actions);
@@ -326,8 +331,8 @@ void testInsertInstance() {
         if (made == nullptr) {
             continue;
         }
-        game.set_parent(made->id(), game.id());
-        expect(game.parent(made->id()) == game.id(), "created instance is parented under the row");
+        game.set_parent(made->id(), game.scene_service("Workspace"));
+        expect(game.parent(made->id()) == game.scene_service("Workspace"), "created instance is parented under the row");
         expect(game.name(made->id()) == name, "a new instance is named for its class");
     }
     expect(engine_core::lua_create_instance(game, "TestTriangle") == nullptr, "TestTriangle is not in the insert list");

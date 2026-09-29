@@ -30,7 +30,7 @@ void close_gesture(engine_core::DataModel& game) { game.history().end_gesture();
 engine_core::GameObject& make_part(engine_core::DataModel& game, const char* name) {
     engine_core::GameObject& part = game.create<engine_core::GameObject>();
     game.set_name(part.id(), name);
-    game.set_parent(part.id(), game.id());
+    game.set_parent(part.id(), workspace_of(game));
     return part;
 }
 
@@ -149,12 +149,12 @@ TEST_CASE("H5 play script writes stay off the edit stack", "[H5][history]") {
     engine_core::Script& script = game.create<engine_core::Script>();
     game.set_name(script.id(), "Paint");
     script.set_source(R"(
-        local part = game:FindFirstChild("Brick")
+        local part = workspace:FindFirstChild("Brick")
         for _ = 1, 100 do
             part.Color = Color3.new(0, 0, 1)
         end
     )");
-    game.set_parent(script.id(), game.id());
+    game.set_parent(script.id(), workspace_of(game));
     close_gesture(game);
     const auto edit = game.history().can_undo();
     REQUIRE(edit.first);
@@ -393,7 +393,7 @@ TEST_CASE("H13 undo destroy restores children and names", "[H13][history]") {
     engine_core::Folder& folder = game.create<engine_core::Folder>();
     const engine_core::InstanceId folder_id = folder.id();
     game.set_name(folder_id, "Box");
-    game.set_parent(folder_id, game.id());
+    game.set_parent(folder_id, workspace_of(game));
 
     engine_core::GameObject& first = game.create<engine_core::GameObject>();
     engine_core::GameObject& second = game.create<engine_core::GameObject>();
@@ -489,7 +489,7 @@ TEST_CASE("H16 a text stack out of sync with the editor refuses the edit", "[H16
 TEST_CASE("H17 set_parent puts a child last and undo puts it back in its old place", "[H17][history]") {
     engine_core::Game game;
     engine_core::Folder& folder = game.create<engine_core::Folder>();
-    game.set_parent(folder.id(), 0);
+    game.set_parent(folder.id(), workspace_of(game));
     const engine_core::InstanceId f = folder.id();
     const engine_core::InstanceId a = make_part(game, "A").id();
     const engine_core::InstanceId b = make_part(game, "B").id();
@@ -497,7 +497,7 @@ TEST_CASE("H17 set_parent puts a child last and undo puts it back in its old pla
     close_gesture(game);
     game.history().reset_waypoints();
     using Ids = std::vector<engine_core::InstanceId>;
-    REQUIRE(game.get_children(0) == Ids{f, a, b, c});
+    REQUIRE(game.get_children(workspace_of(game)) == Ids{f, a, b, c});
 
     game.history().set_pending_gesture("Move");
     game.set_parent(b, f);
@@ -505,14 +505,14 @@ TEST_CASE("H17 set_parent puts a child last and undo puts it back in its old pla
     game.set_parent(a, f);
     close_gesture(game);
     REQUIRE(game.get_children(f) == Ids{b, a});
-    REQUIRE(game.get_children(0) == Ids{f, c});
+    REQUIRE(game.get_children(workspace_of(game)) == Ids{f, c});
 
     game.history().undo();
     game.history().undo();
-    REQUIRE(game.get_children(0) == Ids{f, a, b, c});
+    REQUIRE(game.get_children(workspace_of(game)) == Ids{f, a, b, c});
     game.history().redo();
     REQUIRE(game.get_children(f) == Ids{b});
-    REQUIRE(game.get_children(0) == Ids{f, a, c});
+    REQUIRE(game.get_children(workspace_of(game)) == Ids{f, a, c});
 }
 
 namespace {

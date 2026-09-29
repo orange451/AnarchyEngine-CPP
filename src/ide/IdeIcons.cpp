@@ -13,8 +13,14 @@ namespace {
 
 // ClassName.png when that file exists. These classes have no file of that name.
 const char* IconFileOverride(const std::string& class_name) {
-    if (class_name == "Game") {
+    if (class_name == "Game" || class_name == "Workspace") {
         return "World.png";
+    }
+    if (class_name == "Lighting") {
+        return "Light.png";
+    }
+    if (class_name == "Scripts") {
+        return "ScriptService.png";
     }
     if (class_name == "TestTriangle") {
         return "Mesh.png";

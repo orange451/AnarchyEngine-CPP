@@ -1,6 +1,7 @@
 #include "ChangeHistoryService.hpp"
 
 #include "DataModel.hpp"
+#include "PropertyReflection.hpp"
 
 #include <cstring>
 
@@ -39,6 +40,8 @@ std::string default_gesture(const Mutation& mutation) {
         return "Set Simulated";
     case HistoryProp::VisualOnly:
         return "Set Visual";
+    case HistoryProp::Reflected:
+        return std::string("Set ") + lua_property_name(mutation.after.property);
     }
     return "Edit";
 }
@@ -55,11 +58,12 @@ std::size_t record_bytes(const AuthoredRecord& record) {
 
 std::size_t mutation_bytes(const Mutation& mutation) {
     return sizeof(Mutation) - sizeof(AuthoredRecord) + mutation.before.text.size() + mutation.after.text.size() +
+           mutation.before.slot.text.size() + mutation.after.slot.text.size() +
            record_bytes(mutation.record);
 }
 
 bool same_value(const PropertyValue& a, const PropertyValue& b) {
-    if (a.prop != b.prop) {
+    if (a.prop != b.prop || a.property != b.property) {
         return false;
     }
     switch (a.prop) {
@@ -78,6 +82,8 @@ bool same_value(const PropertyValue& a, const PropertyValue& b) {
         return a.text == b.text;
     case HistoryProp::Position:
         return a.vector.x == b.vector.x && a.vector.y == b.vector.y && a.vector.z == b.vector.z;
+    case HistoryProp::Reflected:
+        return same_slot(a.slot, b.slot);
     }
     return false;
 }
@@ -174,7 +180,7 @@ void ChangeHistoryService::push_or_coalesce(Mutation mutation) {
                 break;
             }
             if (existing.kind == MutationKind::SetProperty && existing.id == mutation.id &&
-                existing.before.prop == mutation.before.prop) {
+                existing.before.prop == mutation.before.prop && existing.before.property == mutation.before.property) {
                 existing.after = std::move(mutation.after);
                 if (same_value(existing.before, existing.after)) {
                     list.erase(list.begin() + static_cast<std::ptrdiff_t>(index - 1));

@@ -152,20 +152,6 @@ void blank_mixed(PropertyRow& row) {
     }
 }
 
-bool under(const DataModel& world, InstanceId ancestor, InstanceId node) {
-    InstanceId cursor = node;
-    for (std::size_t guard = 0; guard <= DataModel::kMaxInstances + 1; ++guard) {
-        if (cursor == ancestor) {
-            return true;
-        }
-        if (cursor == 0 || cursor == DataModel::kNoParent) {
-            return false;
-        }
-        cursor = world.parent(cursor);
-    }
-    return true;
-}
-
 }  // namespace
 
 bool PropertyRow::operator==(const PropertyRow& other) const {
@@ -276,6 +262,10 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
                 break;
             }
             row.writable = row.writable && own->writable && own->write != nullptr;
+            // A scene service keeps its name and its place under game.
+            if (object->is_scene_service() && (row.name == "Name" || row.name == "Parent")) {
+                row.writable = false;
+            }
             PropertyValue value;
             if (!read_value(world, *object, *own, kind, value)) {
                 keep = false;
@@ -359,15 +349,20 @@ EditResult apply_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
             result.error = "That instance no longer exists";
             return result;
         }
-        if (edit.property == "Parent") {
-            for (const Target& target : targets) {
-                // Parent may not be the instance itself or anything under it.
-                if (under(world, target.object->id(), parent)) {
-                    result.rejected = true;
-                    result.error = "Cannot parent " + world.name(target.object->id()) + " to itself or a descendant";
-                    return result;
-                }
-            }
+    }
+    // Checked for every target before any is written, so a refusal changes nothing.
+    for (const Target& target : targets) {
+        std::optional<std::string> error;
+        if (edit.property == "Parent" && edit.kind == PropertyKind::Ref) {
+            const InstanceId parent = edit.value.nil_ref() ? DataModel::kNoParent : edit.value.ref;
+            error = world.parent_error(target.object->id(), parent);
+        } else if (edit.property == "Name" && edit.kind == PropertyKind::String) {
+            error = world.rename_error(target.object->id(), edit.value.text);
+        }
+        if (error) {
+            result.rejected = true;
+            result.error = std::move(*error);
+            return result;
         }
     }
 

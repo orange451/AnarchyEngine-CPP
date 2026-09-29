@@ -74,7 +74,7 @@ engine_core::InstanceId AddScript(engine_core::Engine& engine, const char* name,
         engine_core::Script& script = game.create<engine_core::Script>();
         game.set_name(script.id(), name);
         script.set_source(source);
-        game.set_parent(script.id(), game.id());
+        game.set_parent(script.id(), game.scene_service("Workspace"));
         id = script.id();
     });
     return id;

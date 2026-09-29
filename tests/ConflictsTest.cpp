@@ -192,9 +192,9 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         engine_core::DataModel& game = project.datamodel();
         engine_core::GameObject& part = game.create_game_object();
         game.set_name(part.id(), "Part");
-        game.set_parent(part.id(), 0);
+        game.set_parent(part.id(), game.scene_service("Workspace"));
         project.save();
-        part_file = "src/Part." + game.guid(part.id()) + ".json";
+        part_file = "src/Workspace.workspace/Part." + game.guid(part.id()) + ".json";
     });
     layout.open_project_at(root);
     auto set_disk = [&](const char* key, float x, float y, float z) {
@@ -212,7 +212,7 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     auto part_color = [&layout] {
         engine_core::ColorRgb color;
         layout.simulation().on_simulation([&color](engine_core::DataModel& game) {
-            color = game.game_object(game.find_first_child(0, "Part"))->color();
+            color = game.game_object(game.find_first_child(game.scene_service("Workspace"), "Part"))->color();
         });
         return color;
     };
@@ -220,7 +220,7 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         bool found = false;
         layout.simulation().on_simulation([&found, key](engine_core::DataModel& game) {
             engine_core::PropertyBag bag;
-            game.instance(game.find_first_child(0, "Part"))->save_properties(bag);
+            game.instance(game.find_first_child(game.scene_service("Workspace"), "Part"))->save_properties(bag);
             found = engine_core::bag_find(bag, key) != nullptr;
         });
         return found;
@@ -231,7 +231,7 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
             color.r = r;
             color.g = g;
             color.b = b;
-            game.game_object(game.find_first_child(0, "Part"))->set_color(color);
+            game.game_object(game.find_first_child(game.scene_service("Workspace"), "Part"))->set_color(color);
         });
     };
     auto count_shown = [&scene] {
@@ -254,7 +254,7 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
 
     // A Properties value being typed in holds that check back, as a rename does.
     layout.simulation().on_simulation(
-        [](engine_core::DataModel& game) { game.selection().set({game.find_first_child(0, "Part")}); });
+        [](engine_core::DataModel& game) { game.selection().set({game.find_first_child(game.scene_service("Workspace"), "Part")}); });
     scene.layout(1280, 800, 4.5);
     scene.layout(1280, 800, 4.55);
     jadefx::TextField* typing = nullptr;

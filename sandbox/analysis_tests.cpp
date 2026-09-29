@@ -176,7 +176,7 @@ TEST_CASE("A6 invalidating a required module reanalyzes the script", "[A6]") {
     engine_core::ModuleScript& module = rig.game.create<engine_core::ModuleScript>();
     rig.game.set_name(module.id(), "Mod");
     module.set_source("return 1\n");
-    rig.game.set_parent(module.id(), rig.game.id());
+    rig.game.set_parent(module.id(), workspace_of(rig.game));
     engine_core::Script& script = add_script(rig.game, "Main", "local value = require(script.Parent.Mod)\nreturn value\n");
     settle(analysis);
 
@@ -272,11 +272,11 @@ TEST_CASE("A10 a child in the place is its class and never nil", "[A10]") {
     ScriptRig rig;
     engine_core::TestTriangle& triangle = rig.game.create<engine_core::TestTriangle>();
     rig.game.set_name(triangle.id(), "Tri0");
-    rig.game.set_parent(triangle.id(), rig.game.id());
+    rig.game.set_parent(triangle.id(), workspace_of(rig.game));
     engine_core::ScriptAnalysis analysis(rig.game);
 
     engine_core::Script& bare = add_script(rig.game, "Bare",
-                                            "local tri = game:FindFirstChild(\"Tri0\")\n"
+                                            "local tri = workspace:FindFirstChild(\"Tri0\")\n"
                                             "local home = tri.Position\n"
                                             "return home\n");
     settle(analysis);
@@ -284,7 +284,7 @@ TEST_CASE("A10 a child in the place is its class and never nil", "[A10]") {
     REQUIRE(analysis.diagnostics(bare.id()).empty());
 
     SECTION("the type has no nil in it") {
-        bare.set_source("--!strict\nlocal tri = game:FindFirstChild(\"Tri0\")\nlocal n: number = tri\n");
+        bare.set_source("--!strict\nlocal tri = workspace:FindFirstChild(\"Tri0\")\nlocal n: number = tri\n");
         settle(analysis);
         const std::string report = dump(analysis.diagnostics(bare.id()));
         INFO(report);
@@ -293,7 +293,7 @@ TEST_CASE("A10 a child in the place is its class and never nil", "[A10]") {
     }
 
     SECTION("a name that is not in the place may be nil") {
-        bare.set_source("local tri = game:FindFirstChild(\"Nope\")\nlocal name = tri.Name\nreturn name\n");
+        bare.set_source("local tri = workspace:FindFirstChild(\"Nope\")\nlocal name = tri.Name\nreturn name\n");
         settle(analysis);
         const std::string report = dump(analysis.diagnostics(bare.id()));
         INFO(report);
@@ -301,7 +301,7 @@ TEST_CASE("A10 a child in the place is its class and never nil", "[A10]") {
     }
 
     engine_core::Script& hop = add_script(rig.game, "Hop",
-                                           "local tri = game:FindFirstChild(\"Tri0\")\n"
+                                           "local tri = workspace:FindFirstChild(\"Tri0\")\n"
                                            "assert(tri)\n"
                                            "local home = tri.Position\n"
                                            "tri.Position = home + Vector3.new(0.45, 0, 0)\n"
@@ -311,7 +311,7 @@ TEST_CASE("A10 a child in the place is its class and never nil", "[A10]") {
     REQUIRE(analysis.diagnostics(hop.id()).empty());
 
     engine_core::Script& missing = add_script(rig.game, "Missing",
-                                               "local tri = game:FindFirstChild(\"Nope\")\n"
+                                               "local tri = workspace:FindFirstChild(\"Nope\")\n"
                                                "assert(tri)\n"
                                                "local home = tri.Position\n"
                                                "return home\n");
@@ -338,8 +338,12 @@ TEST_CASE("analysis definitions come from the class registry", "[A11]") {
     REQUIRE(source.find("declare task:") != std::string::npos);
     REQUIRE(source.find("PreRender") == std::string::npos);
     REQUIRE(source.find("RenderStepped") == std::string::npos);
-    REQUIRE(source.find("workspace") == std::string::npos);
     REQUIRE(source.find("BasePart") == std::string::npos);
+    // The scene services are DataModels like Game, and workspace is a global like game.
+    REQUIRE(source.find("declare extern type SceneService extends DataModel with") != std::string::npos);
+    REQUIRE(source.find("declare extern type Workspace extends SceneService with") != std::string::npos);
+    REQUIRE(source.find("declare extern type Lighting extends SceneService with") != std::string::npos);
+    REQUIRE(source.find("declare workspace: Workspace") != std::string::npos);
     REQUIRE(source.find("GetPropertyChangedSignal") == std::string::npos);
     // DataModel is everything in the tree. Instance is what Instance.new makes.
     // Game is the root alone, and GetService is on it.
@@ -399,7 +403,7 @@ TEST_CASE("A12 a script is rechecked when the tree it looks into changes", "[A12
     ScriptRig rig;
     engine_core::ScriptAnalysis analysis(rig.game);
     engine_core::Script& hop = add_script(rig.game, "Hop",
-                                           "local tri = game:FindFirstChild(\"Tri0\")\n"
+                                           "local tri = workspace:FindFirstChild(\"Tri0\")\n"
                                            "assert(tri)\n"
                                            "local home = tri.Position\n"
                                            "return home\n");
@@ -410,7 +414,7 @@ TEST_CASE("A12 a script is rechecked when the tree it looks into changes", "[A12
     // Tri0 arrives after the script. The script did not change; its answer did.
     engine_core::TestTriangle& triangle = rig.game.create<engine_core::TestTriangle>();
     rig.game.set_name(triangle.id(), "Tri0");
-    rig.game.set_parent(triangle.id(), rig.game.id());
+    rig.game.set_parent(triangle.id(), workspace_of(rig.game));
     settle(analysis);
     INFO(dump(analysis.diagnostics(hop.id())));
     REQUIRE(analysis.diagnostics(hop.id()).empty());
@@ -436,7 +440,7 @@ TEST_CASE("A13 a loaded project is analyzed against the whole loaded tree", "[A1
     write("src/Tri0.aaa.json", "{\"class\": \"TestTriangle\", \"id\": \"aaa\", \"Name\": \"Tri0\"}\n");
     write("src/Hop.zzz.meta.json", "{\"class\": \"Script\", \"id\": \"zzz\", \"Name\": \"Hop\"}\n");
     write("src/Hop.zzz.luau",
-          "local tri = game:FindFirstChild(\"Tri0\")\n"
+          "local tri = workspace:FindFirstChild(\"Tri0\")\n"
           "assert(tri)\n"
           "local home = tri.Position\n"
           "return home\n");
@@ -455,7 +459,7 @@ engine_core::ModuleScript& add_module(engine_core::DataModel& game, const char* 
     engine_core::ModuleScript& module = game.create<engine_core::ModuleScript>();
     game.set_name(module.id(), name);
     module.set_source(source);
-    game.set_parent(module.id(), game.id());
+    game.set_parent(module.id(), workspace_of(game));
     return module;
 }
 
@@ -528,7 +532,7 @@ TEST_CASE("A14 open scope checks watched scripts and the modules they require", 
 
     SECTION("a watched script follows the tree") {
         engine_core::Script& hop = add_script(rig.game, "Hop",
-                                               "local tri = game:FindFirstChild(\"Tri0\")\n"
+                                               "local tri = workspace:FindFirstChild(\"Tri0\")\n"
                                                "assert(tri)\n"
                                                "local home = tri.Position\n"
                                                "return home\n");
@@ -537,7 +541,7 @@ TEST_CASE("A14 open scope checks watched scripts and the modules they require", 
         REQUIRE_FALSE(analysis.diagnostics(hop.id()).empty());
         engine_core::TestTriangle& triangle = rig.game.create<engine_core::TestTriangle>();
         rig.game.set_name(triangle.id(), "Tri0");
-        rig.game.set_parent(triangle.id(), rig.game.id());
+        rig.game.set_parent(triangle.id(), workspace_of(rig.game));
         settle(analysis);
         INFO(dump(analysis.diagnostics(hop.id())));
         REQUIRE(analysis.diagnostics(hop.id()).empty());
@@ -569,7 +573,7 @@ TEST_CASE("A16 a require path that reaches a ModuleScript takes its type", "[A16
     engine_core::ScriptAnalysis analysis(rig.game);
     engine_core::Folder& modules = rig.game.create<engine_core::Folder>();
     rig.game.set_name(modules.id(), "Modules");
-    rig.game.set_parent(modules.id(), rig.game.id());
+    rig.game.set_parent(modules.id(), workspace_of(rig.game));
     engine_core::ModuleScript& config = add_module(rig.game, "Config",
                                                    "local Config = {}\n"
                                                    "Config.Currencies = { Gold = \"Gold\" }\n"
@@ -577,7 +581,7 @@ TEST_CASE("A16 a require path that reaches a ModuleScript takes its type", "[A16
                                                    "return Config\n");
     rig.game.set_parent(config.id(), modules.id());
     engine_core::Script& script = add_script(rig.game, "Test",
-                                             "local Config = require(game:FindFirstChild(\"Modules\"):FindFirstChild(\"Config\"))\n"
+                                             "local Config = require(workspace:FindFirstChild(\"Modules\"):FindFirstChild(\"Config\"))\n"
                                              "local currency = Config.Currencies.Gold\n"
                                              "Config.Settings.Enabled = true\n"
                                              "print(\"Currency:\", currency, Config.Settings.Enabled)\n");
@@ -587,7 +591,7 @@ TEST_CASE("A16 a require path that reaches a ModuleScript takes its type", "[A16
 
     SECTION("the module's type reaches the script") {
         script.set_source("--!strict\n"
-                          "local Config = require(game:FindFirstChild(\"Modules\"):FindFirstChild(\"Config\"))\n"
+                          "local Config = require(workspace:FindFirstChild(\"Modules\"):FindFirstChild(\"Config\"))\n"
                           "local gold: number = Config.Currencies.Gold\n");
         settle(analysis);
         INFO(dump(analysis.diagnostics(script.id())));
@@ -597,7 +601,7 @@ TEST_CASE("A16 a require path that reaches a ModuleScript takes its type", "[A16
     }
 
     SECTION("a path to nothing still warns") {
-        script.set_source("local Config = require(game:FindFirstChild(\"Modules\"):FindFirstChild(\"Missing\"))\n");
+        script.set_source("local Config = require(workspace:FindFirstChild(\"Modules\"):FindFirstChild(\"Missing\"))\n");
         settle(analysis);
         INFO(dump(analysis.diagnostics(script.id())));
         REQUIRE(dump(analysis.diagnostics(script.id())).find("Unknown require") != std::string::npos);
@@ -625,11 +629,11 @@ TEST_CASE("A17 any method the API marks resolves_child walks a require path", "[
     engine_core::ScriptAnalysis analysis(rig.game);
     engine_core::Folder& modules = rig.game.create<engine_core::Folder>();
     rig.game.set_name(modules.id(), "Modules");
-    rig.game.set_parent(modules.id(), rig.game.id());
+    rig.game.set_parent(modules.id(), workspace_of(rig.game));
     engine_core::ModuleScript& config = add_module(rig.game, "Config", "return { Gold = 1 }\n");
     rig.game.set_parent(config.id(), modules.id());
     engine_core::Script& script = add_script(
-        rig.game, "Test", "local Config = require(game:ProbeChild(\"Modules\"):ProbeChild(\"Config\"))\nreturn Config\n");
+        rig.game, "Test", "local Config = require(workspace:ProbeChild(\"Modules\"):ProbeChild(\"Config\"))\nreturn Config\n");
     settle(analysis);
     INFO(dump(analysis.diagnostics(script.id())));
     // An undocumented method must not break the definitions and leave nothing checked.
@@ -653,7 +657,7 @@ TEST_CASE("A18 WaitForChild gives the child's class without nil and walks a requ
     engine_core::ScriptAnalysis analysis(rig.game);
     engine_core::Folder& modules = rig.game.create<engine_core::Folder>();
     rig.game.set_name(modules.id(), "Modules");
-    rig.game.set_parent(modules.id(), rig.game.id());
+    rig.game.set_parent(modules.id(), workspace_of(rig.game));
     engine_core::ModuleScript& config = add_module(rig.game, "Config",
                                                    "local Config = {}\n"
                                                    "Config.Currencies = { Gold = \"Gold\" }\n"
@@ -661,7 +665,7 @@ TEST_CASE("A18 WaitForChild gives the child's class without nil and walks a requ
                                                    "return Config\n");
     rig.game.set_parent(config.id(), modules.id());
     engine_core::Script& script = add_script(rig.game, "Test",
-                                             "local Config = require(game:WaitForChild(\"Modules\"):WaitForChild(\"Config\"))\n"
+                                             "local Config = require(workspace:WaitForChild(\"Modules\"):WaitForChild(\"Config\"))\n"
                                              "local currency = Config.Currencies.Gold\n"
                                              "Config.Settings.Enabled = true\n"
                                              "print(\"Currency:\", currency, Config.Settings.Enabled)\n");
@@ -670,7 +674,7 @@ TEST_CASE("A18 WaitForChild gives the child's class without nil and walks a requ
     REQUIRE(analysis.diagnostics(script.id()).empty());
 
     SECTION("the child keeps its class") {
-        script.set_source("--!strict\nlocal folder = game:WaitForChild(\"Modules\")\nlocal n: number = folder\n");
+        script.set_source("--!strict\nlocal folder = workspace:WaitForChild(\"Modules\")\nlocal n: number = folder\n");
         settle(analysis);
         const std::string report = dump(analysis.diagnostics(script.id()));
         INFO(report);
@@ -679,7 +683,7 @@ TEST_CASE("A18 WaitForChild gives the child's class without nil and walks a requ
     }
 
     SECTION("a timeout is accepted") {
-        script.set_source("--!strict\nlocal folder = game:WaitForChild(\"Modules\", 2)\nreturn folder\n");
+        script.set_source("--!strict\nlocal folder = workspace:WaitForChild(\"Modules\", 2)\nreturn folder\n");
         settle(analysis);
         INFO(dump(analysis.diagnostics(script.id())));
         REQUIRE(analysis.diagnostics(script.id()).empty());
@@ -691,12 +695,12 @@ TEST_CASE("A19 a dotted name that reaches a child is not an unknown member", "[A
     engine_core::ScriptAnalysis analysis(rig.game);
     engine_core::GameObject& door = rig.game.create<engine_core::GameObject>();
     rig.game.set_name(door.id(), "Door");
-    rig.game.set_parent(door.id(), rig.game.id());
+    rig.game.set_parent(door.id(), workspace_of(rig.game));
     engine_core::Script& script = add_script(rig.game, "Dot",
-                                              "local d = game.Door\n"
+                                              "local d = workspace.Door\n"
                                               "d.Name = \"x\"\n"
-                                              "local c = game.Door.Color\n"
-                                              "local m = game.Nope\n"
+                                              "local c = workspace.Door.Color\n"
+                                              "local m = workspace.Nope\n"
                                               "return c, m\n");
     settle(analysis);
     std::vector<engine_core::Diagnostic> found = analysis.diagnostics(script.id());
@@ -720,7 +724,7 @@ TEST_CASE("A20 a dotted name is the child it reaches, with its type", "[A20]") {
     engine_core::ScriptAnalysis analysis(rig.game);
     engine_core::Folder& configs = rig.game.create<engine_core::Folder>();
     rig.game.set_name(configs.id(), "Configs");
-    rig.game.set_parent(configs.id(), rig.game.id());
+    rig.game.set_parent(configs.id(), workspace_of(rig.game));
     engine_core::TestTriangle& inner = rig.game.create<engine_core::TestTriangle>();
     rig.game.set_name(inner.id(), "SomeInstance");
     rig.game.set_parent(inner.id(), configs.id());
@@ -731,21 +735,21 @@ TEST_CASE("A20 a dotted name is the child it reaches, with its type", "[A20]") {
     engine_core::ModuleScript& config = add_module(rig.game, "Config", "return { Gold = 1 }\n");
     rig.game.set_parent(config.id(), configs.id());
     engine_core::Script& script = add_script(rig.game, "Test",
-                                             "local some = game.Configs.SomeInstance\n"
+                                             "local some = workspace.Configs.SomeInstance\n"
                                              "local home = some.Position\n"
-                                             "game.Configs.SomeInstance.Position = home\n"
+                                             "workspace.Configs.SomeInstance.Position = home\n"
                                              "local again = script.Parent.Configs.SomeInstance.Position\n"
-                                             "local folder = game.Configs\n"
+                                             "local folder = workspace.Configs\n"
                                              "local found = folder:FindFirstChild(\"SomeInstance\").Position\n"
-                                             "local label: string = game.Configs.Name\n"
-                                             "local gold = require(game.Configs.Config).Gold\n"
+                                             "local label: string = workspace.Configs.Name\n"
+                                             "local gold = require(workspace.Configs.Config).Gold\n"
                                              "return again, found, label, gold\n");
     settle(analysis);
     INFO(dump(analysis.diagnostics(script.id())));
     REQUIRE(analysis.diagnostics(script.id()).empty());
 
     SECTION("the child keeps its class") {
-        script.set_source("--!strict\nlocal n: number = game.Configs.SomeInstance\n");
+        script.set_source("--!strict\nlocal n: number = workspace.Configs.SomeInstance\n");
         settle(analysis);
         const std::string report = dump(analysis.diagnostics(script.id()));
         INFO(report);
@@ -753,7 +757,7 @@ TEST_CASE("A20 a dotted name is the child it reaches, with its type", "[A20]") {
     }
 
     SECTION("a member the child's class lacks is reported") {
-        script.set_source("local s = game.Configs.SomeInstance.Source\nreturn s\n");
+        script.set_source("local s = workspace.Configs.SomeInstance.Source\nreturn s\n");
         settle(analysis);
         const std::string report = dump(analysis.diagnostics(script.id()));
         INFO(report);
@@ -761,7 +765,7 @@ TEST_CASE("A20 a dotted name is the child it reaches, with its type", "[A20]") {
     }
 
     SECTION("a child that is not there is reported, past the first dot too") {
-        script.set_source("local a = game.Configs.Missing\nreturn a\n");
+        script.set_source("local a = workspace.Configs.Missing\nreturn a\n");
         settle(analysis);
         const std::string report = dump(analysis.diagnostics(script.id()));
         INFO(report);
@@ -769,7 +773,7 @@ TEST_CASE("A20 a dotted name is the child it reaches, with its type", "[A20]") {
     }
 
     SECTION("a required module's type comes through a dotted path") {
-        script.set_source("--!strict\nlocal gold: string = require(game.Configs.Config).Gold\n");
+        script.set_source("--!strict\nlocal gold: string = require(workspace.Configs.Config).Gold\n");
         settle(analysis);
         const std::string report = dump(analysis.diagnostics(script.id()));
         INFO(report);
@@ -778,7 +782,7 @@ TEST_CASE("A20 a dotted name is the child it reaches, with its type", "[A20]") {
     }
 
     SECTION("a child is read-only") {
-        script.set_source("game.Configs.SomeInstance = nil\n");
+        script.set_source("workspace.Configs.SomeInstance = nil\n");
         settle(analysis);
         INFO(dump(analysis.diagnostics(script.id())));
         REQUIRE_FALSE(analysis.diagnostics(script.id()).empty());
@@ -793,7 +797,7 @@ TEST_CASE("A21 FindFirstChild chains to a module in the place with no nil warnin
     analysis.set_scope(engine_core::AnalysisScope::Open);
     engine_core::Folder& modules = rig.game.create<engine_core::Folder>();
     rig.game.set_name(modules.id(), "Modules");
-    rig.game.set_parent(modules.id(), rig.game.id());
+    rig.game.set_parent(modules.id(), workspace_of(rig.game));
     engine_core::ModuleScript& config = add_module(rig.game, "Config",
                                                    "local Config = {}\n"
                                                    "Config.Currencies = { Gold = \"Gold\" }\n"
@@ -801,7 +805,7 @@ TEST_CASE("A21 FindFirstChild chains to a module in the place with no nil warnin
                                                    "return Config\n");
     rig.game.set_parent(config.id(), modules.id());
     const char* source =
-        "local Config = require(game:FindFirstChild(\"Modules\"):FindFirstChild(\"Config\"))\n"
+        "local Config = require(workspace:FindFirstChild(\"Modules\"):FindFirstChild(\"Config\"))\n"
         "\n"
         "local currency = Config.Currencies.Gold\n"
         "\n"
@@ -838,20 +842,20 @@ TEST_CASE("A22 Parent takes any DataModel, and game is not an Instance", "[A22]"
     engine_core::ScriptAnalysis analysis(rig.game);
     engine_core::Folder& box = rig.game.create<engine_core::Folder>();
     rig.game.set_name(box.id(), "Box");
-    rig.game.set_parent(box.id(), rig.game.id());
+    rig.game.set_parent(box.id(), workspace_of(rig.game));
     engine_core::TestTriangle& tri = rig.game.create<engine_core::TestTriangle>();
     rig.game.set_name(tri.id(), "Tri0");
     rig.game.set_parent(tri.id(), box.id());
     const char* source =
-        "local box = game:FindFirstChild(\"Box\")\n"
-        "local tri = game.Box.Tri0\n"
+        "local box = workspace:FindFirstChild(\"Box\")\n"
+        "local tri = workspace.Box.Tri0\n"
         "tri.Parent = box\n"
-        "tri.Parent = game\n"
+        "tri.Parent = workspace\n"
         "tri.Parent = nil\n"
         "local folder = Instance.new(\"Folder\", game)\n"
-        "folder.Parent = game\n"
+        "folder.Parent = workspace\n"
         "tri.Parent = folder\n"
-        "for _, child in game:GetChildren() do\n"
+        "for _, child in workspace:GetChildren() do\n"
         "    child.Parent = box\n"
         "end\n"
         "local root: DataModel = game\n"
@@ -882,7 +886,7 @@ TEST_CASE("A22 Parent takes any DataModel, and game is not an Instance", "[A22]"
     }
 
     SECTION("GetService is only on game") {
-        script.set_source("local service = game.Box:GetService(\"RunService\")\nreturn service\n");
+        script.set_source("local service = workspace.Box:GetService(\"RunService\")\nreturn service\n");
         settle(analysis);
         const std::string report = dump(analysis.diagnostics(script.id()));
         INFO(report);
@@ -890,7 +894,7 @@ TEST_CASE("A22 Parent takes any DataModel, and game is not an Instance", "[A22]"
     }
 
     SECTION("a value that is not an instance is still refused") {
-        script.set_source("--!strict\nlocal tri = game.Box.Tri0\ntri.Parent = 5\n");
+        script.set_source("--!strict\nlocal tri = workspace.Box.Tri0\ntri.Parent = 5\n");
         settle(analysis);
         const std::string report = dump(analysis.diagnostics(script.id()));
         INFO(report);
@@ -899,7 +903,7 @@ TEST_CASE("A22 Parent takes any DataModel, and game is not an Instance", "[A22]"
     }
 
     SECTION("a missing child still reads as Instance?") {
-        script.set_source("--!strict\nlocal gone = game:FindFirstChild(\"Nope\")\nlocal n: number = gone\n");
+        script.set_source("--!strict\nlocal gone = workspace:FindFirstChild(\"Nope\")\nlocal n: number = gone\n");
         settle(analysis);
         const std::string report = dump(analysis.diagnostics(script.id()));
         INFO(report);
@@ -1061,7 +1065,7 @@ TEST_CASE("A28 completion against an unsaved buffer never reaches another script
     engine_core::ModuleScript& module = rig.game.create<engine_core::ModuleScript>();
     rig.game.set_name(module.id(), "Mod");
     module.set_source("return { a = 1 }\n");
-    rig.game.set_parent(module.id(), rig.game.id());
+    rig.game.set_parent(module.id(), workspace_of(rig.game));
     engine_core::Script& script =
         add_script(rig.game, "Main", "--!strict\nlocal M = require(script.Parent.Mod)\nlocal value: number = M.b\n");
     settle(analysis);
@@ -1094,17 +1098,17 @@ TEST_CASE("A29 a completion snapshot in another sibling order leaves no stale pl
     ScriptRig rig;
     engine_core::ScriptAnalysis analysis(rig.game);
     // Two folders named Dup. The second one made comes first among the siblings,
-    // and only it holds M, so game.Dup.M reads through it.
+    // and only it holds M, so workspace.Dup.M reads through it.
     engine_core::Folder& first_made = rig.game.create<engine_core::Folder>();
     rig.game.set_name(first_made.id(), "Dup");
     engine_core::Folder& second_made = rig.game.create<engine_core::Folder>();
     rig.game.set_name(second_made.id(), "Dup");
-    rig.game.set_parent(second_made.id(), rig.game.id());
-    rig.game.set_parent(first_made.id(), rig.game.id());
+    rig.game.set_parent(second_made.id(), workspace_of(rig.game));
+    rig.game.set_parent(first_made.id(), workspace_of(rig.game));
     engine_core::Folder& inner = rig.game.create<engine_core::Folder>();
     rig.game.set_name(inner.id(), "M");
     rig.game.set_parent(inner.id(), second_made.id());
-    engine_core::Script& script = add_script(rig.game, "Main", "--!strict\nlocal found = game.Dup.M\nprint(found)\n");
+    engine_core::Script& script = add_script(rig.game, "Main", "--!strict\nlocal found = workspace.Dup.M\nprint(found)\n");
     settle(analysis);
     const std::string clean = dump(analysis.diagnostics(script.id()));
     INFO(clean);
@@ -1113,13 +1117,13 @@ TEST_CASE("A29 a completion snapshot in another sibling order leaves no stale pl
     // The tree changes, and a completion request arrives before analysis
     // checks it, with its instances in slot order: the first-made Dup first.
     engine_core::Folder& extra = rig.game.create<engine_core::Folder>();
-    rig.game.set_parent(extra.id(), rig.game.id());
+    rig.game.set_parent(extra.id(), workspace_of(rig.game));
     std::vector<engine_core::LuaNode> slot_order = completion_nodes(rig.game, script.id(), script.source());
     const engine_core::LuauFacts asked = analysis.luau_facts(slot_order, script.id(), script.source(),
                                                              script.source().size(), {}, std::chrono::seconds(20));
     REQUIRE(asked.ran);
 
-    // Analysis then checks the tree in its own order, and game.Dup is still
+    // Analysis then checks the tree in its own order, and workspace.Dup is still
     // the Dup that holds M.
     analysis.note_world_changed();
     analysis.invalidate(script.id());

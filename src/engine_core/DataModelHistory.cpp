@@ -4,6 +4,7 @@
 #include "DataModel.hpp"
 
 #include "DataModelState.hpp"
+#include "LuaApi.hpp"
 
 namespace engine_core {
 
@@ -75,6 +76,7 @@ HistoryProp history_prop(Field field) {
         return HistoryProp::Position;
     case Field::LinearVelocity:
     case Field::Parent:
+    case Field::Reflected:
     case Field::Count:
         break;
     }
@@ -131,6 +133,19 @@ void DataModel::record_string(InstanceId id, Field field, const std::string& bef
 void DataModel::record_position(InstanceId id, const Vec3& before, const Vec3& after) {
     mark_authored_dirty(id);
     note_property(state_->history.get(), id, value_position(before), value_position(after));
+}
+
+void DataModel::note_property_change(std::string_view property, const LuaSlot& before, const LuaSlot& after) {
+    mark_authored_dirty(id_);
+    const std::uint32_t id = lua_property_id(property);
+    PropertyValue was;
+    was.prop = HistoryProp::Reflected;
+    was.property = id;
+    was.slot = before;
+    PropertyValue now = was;
+    now.slot = after;
+    note_property(state_->history.get(), id_, std::move(was), std::move(now));
+    emit_change(id_, Field::Reflected, current_origin(), id);
 }
 
 void DataModel::record_parent(InstanceId id, InstanceId old_parent, InstanceId new_parent, int old_index) {
@@ -406,6 +421,15 @@ void DataModel::apply_property(InstanceId id, const PropertyValue& value) {
     case HistoryProp::Position:
         if (auto* triangle = dynamic_cast<TestTriangle*>(instance(id))) {
             triangle->set_position(value.vector.x, value.vector.y, value.vector.z);
+        }
+        break;
+    case HistoryProp::Reflected:
+        if (DataModel* object = id == 0 ? state_->root : instance(id)) {
+            const LuaField* field = lua_class_find(object->class_name(), lua_property_name(value.property));
+            if (field != nullptr && field->write != nullptr) {
+                LuaSlot slot = value.slot;
+                field->write(*this, *object, slot);
+            }
         }
         break;
     }

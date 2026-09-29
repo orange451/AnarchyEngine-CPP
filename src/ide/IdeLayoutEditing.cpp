@@ -31,11 +31,16 @@ void IdeLayout::delete_instances(std::vector<std::uint32_t> ids) {
     if (ids.empty()) {
         return;
     }
-    runner_.simulation().on_simulation([ids = std::move(ids)](engine_core::DataModel& world) {
+    runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), ids = std::move(ids)](
+                                           engine_core::DataModel& world) {
         bool any = false;
         for (std::uint32_t id : ids) {
             // A selected child is already gone with its selected parent.
             if (!world.alive(id)) {
+                continue;
+            }
+            if (std::optional<std::string> error = world.destroy_error(id)) {
+                toast_later(this, alive, std::move(*error));
                 continue;
             }
             if (!any) {
@@ -203,6 +208,7 @@ void IdeLayout::paste(std::uint32_t id) {
             show_toast(busy_message("Paste"));
             return;
         }
+        id = insert_target(game, id);
         if (!parent_ok(game, id)) {
             return;
         }
@@ -212,7 +218,8 @@ void IdeLayout::paste(std::uint32_t id) {
             if (!game.alive(child)) {
                 continue;
             }
-            if (would_cycle(game, child, id)) {
+            if (std::optional<std::string> error = game.parent_error(child, id)) {
+                show_toast(std::move(*error));
                 return;
             }
             children.push_back(child);
@@ -232,7 +239,7 @@ void IdeLayout::paste(std::uint32_t id) {
         world.history().set_pending_gesture("Paste");
         // Each goes last, so the pasted instances keep the order they were cut in.
         for (engine_core::InstanceId child : children) {
-            if (world.alive(child) && !would_cycle(world, child, id)) {
+            if (world.alive(child) && !world.parent_error(child, id)) {
                 world.set_parent(child, id);
             }
         }
@@ -244,10 +251,15 @@ void IdeLayout::move(std::vector<std::uint32_t> ids, std::uint32_t parent) {
     if (ids.empty()) {
         return;
     }
-    runner_.simulation().on_simulation([ids = std::move(ids), parent](engine_core::DataModel& world) {
+    runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), ids = std::move(ids),
+                                        parent](engine_core::DataModel& world) {
         world.history().set_pending_gesture("Move");
-        move_set(world, ids, parent);
+        std::string refused;
+        const bool moved = move_set(world, ids, parent, &refused);
         CloseGesture(world);
+        if (!moved && !refused.empty()) {
+            toast_later(this, alive, std::move(refused));
+        }
     });
 }
 
@@ -258,8 +270,13 @@ void IdeLayout::rename(std::uint32_t id, std::string name) {
     if (std::shared_ptr<IdeScriptEditor> editor = open_editor(id)) {
         editor->setTitleText(name);
     }
-    runner_.simulation().on_simulation([id, name = std::move(name)](engine_core::DataModel& world) {
+    runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), id,
+                                        name = std::move(name)](engine_core::DataModel& world) {
         if (id != 0 && !world.alive(id)) {
+            return;
+        }
+        if (std::optional<std::string> error = world.rename_error(id, name)) {
+            toast_later(this, alive, std::move(*error));
             return;
         }
         world.history().set_pending_gesture("Rename");

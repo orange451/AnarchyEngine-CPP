@@ -2,6 +2,7 @@
 
 #include "ide/IdePane.hpp"
 #include "Renderer.hpp"
+#include "types.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -19,7 +20,7 @@ namespace runner {
 
 class Runner;
 
-// Scene viewport. Draws each TestTriangle parented under the root DataModel
+// Scene viewport. Draws each TestTriangle in Workspace, at any depth,
 // at that instance's position. Heartbeat steps those instances, 90 degrees
 // per simulation second. A paused simulation leaves the angles where they
 // are. The studio's first view stays open. Another, from Window > New Scene
@@ -69,6 +70,8 @@ private:
     // each angle. This thread only reads the atomics.
     std::vector<engine_core::TestTriangle*> triangles_;
     std::vector<engine_core::TestTriangle*> triangleScratch_;
+    // The walk through Workspace that fills triangleScratch_.
+    std::vector<engine_core::InstanceId> walkScratch_;
     // The engine that owns game_. Each paint tells its render thread a frame happened.
     engine_core::Engine* engine_ = nullptr;
     // Paints in the current window. The label reads the finished average.

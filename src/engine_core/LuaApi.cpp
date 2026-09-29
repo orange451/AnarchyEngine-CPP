@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -104,6 +105,45 @@ void registry_changed() { g_registry_revision.fetch_add(1, std::memory_order_acq
 
 std::uint64_t lua_registry_revision() { return g_registry_revision.load(std::memory_order_acquire); }
 
+namespace {
+
+// Interned property names. A deque keeps each string where it is, so a name
+// handed out stays valid as more are added.
+struct PropertyNames {
+    std::mutex mu;
+    std::deque<std::string> names{std::string()};
+    std::unordered_map<std::string, std::uint32_t> ids;
+};
+
+PropertyNames& property_names() {
+    static PropertyNames table;
+    return table;
+}
+
+}  // namespace
+
+std::uint32_t lua_property_id(std::string_view name) {
+    if (name.empty()) {
+        return 0;
+    }
+    PropertyNames& table = property_names();
+    std::lock_guard<std::mutex> lock(table.mu);
+    const auto found = table.ids.find(std::string(name));
+    if (found != table.ids.end()) {
+        return found->second;
+    }
+    const auto id = static_cast<std::uint32_t>(table.names.size());
+    table.names.emplace_back(name);
+    table.ids.emplace(table.names.back(), id);
+    return id;
+}
+
+const char* lua_property_name(std::uint32_t id) {
+    PropertyNames& table = property_names();
+    std::lock_guard<std::mutex> lock(table.mu);
+    return id < table.names.size() ? table.names[id].c_str() : "";
+}
+
 void register_lua_class(const char* class_name, const char* base, const LuaField* fields, int count) {
     if (class_name == nullptr) {
         return;
@@ -122,6 +162,9 @@ void register_lua_class(const char* class_name, const char* base, const LuaField
     }
     for (int index = 0; fields != nullptr && index < count; ++index) {
         changed = append_unique(record->fields, fields[index]) || changed;
+        if (!fields[index].method && fields[index].name != nullptr) {
+            lua_property_id(fields[index].name);
+        }
     }
     if (changed) {
         registry_changed();
@@ -169,6 +212,36 @@ void lua_class_operators(const char* class_name, std::vector<LuaOperator>& out) 
 void lua_class_members(const char* class_name, std::vector<LuaField>& out) {
     out.clear();
     collect(class_name, out, 0);
+}
+
+std::vector<LuaField> lua_saved_fields(const char* class_name) {
+    struct Cache {
+        std::mutex mu;
+        std::uint64_t revision = ~std::uint64_t{0};
+        std::unordered_map<std::string, std::vector<LuaField>> by_class;
+    };
+    static Cache cache;
+    const std::string key = class_name != nullptr ? class_name : "";
+    const std::uint64_t revision = lua_registry_revision();
+    std::lock_guard<std::mutex> lock(cache.mu);
+    if (cache.revision != revision) {
+        cache.by_class.clear();
+        cache.revision = revision;
+    }
+    const auto found = cache.by_class.find(key);
+    if (found != cache.by_class.end()) {
+        return found->second;
+    }
+    std::vector<LuaField> members;
+    collect(class_name, members, 0);
+    std::vector<LuaField> saved;
+    for (const LuaField& field : members) {
+        if (field.saved && !field.method && field.read != nullptr && field.write != nullptr) {
+            saved.push_back(field);
+        }
+    }
+    cache.by_class.emplace(key, saved);
+    return saved;
 }
 
 const LuaField* lua_class_find(const char* class_name, std::string_view name) {
@@ -803,7 +876,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Instance", false, {P("name", "string"), P("timeout", "number?")});
     add("DataModel", "IsA", "True when this instance's class is className or a subclass of it.", "boolean", false,
         {P("className", "string")});
-    add("Game", "GetService", "The service with this name: RunService, Selection, or UserInputService.", "Instance", false,
+    add("Game", "GetService",
+        "The service with this name: Workspace, Lighting, Storage, Scripts, RunService, Selection, or "
+        "UserInputService.",
+        "Instance", false,
         {P("className", "string")});
 
     add("LuaSource", "Source", "The Luau source this instance holds.", "string", false, {});

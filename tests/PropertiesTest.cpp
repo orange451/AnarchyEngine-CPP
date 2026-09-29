@@ -143,7 +143,7 @@ struct Rig {
     InstanceId add(const char* name) {
         T& made = game.create<T>();
         game.set_name(made.id(), name);
-        game.set_parent(made.id(), game.id());
+        game.set_parent(made.id(), game.scene_service("Workspace"));
         game.history().end_gesture();
         return made.id();
     }
@@ -616,7 +616,7 @@ void TestColorPicker() {
 void TestR6ParentReference() {
     Rig rig;
     rig.select({rig.a});
-    const std::string root = rig.game.name(0);
+    const std::string root = rig.game.name(rig.game.scene_service("Workspace"));
     Expect(rig.text("Parent") == root, "R6 the Parent shows its Name alone");
     Expect(rig.panel.editor("Parent", 2) == nullptr, "R6 the Name is the Pick button, next to Clear");
 
@@ -637,7 +637,7 @@ void TestR6ParentReference() {
     rig.click(rig.panel.editor("Parent", 0));
     rig.frame();
     rig.clickExplorer("A");
-    Expect(rig.game.parent(rig.folder) == 0, "R6 a descendant cannot be the Parent");
+    Expect(rig.game.parent(rig.folder) == rig.game.scene_service("Workspace"), "R6 a descendant cannot be the Parent");
     rig.frame();
     Expect(!rig.panel.status().empty(), "R6 the refusal is shown");
     // And an instance cannot be its own Parent.
@@ -731,8 +731,8 @@ void TestBooleanAndNumber() {
     Rig rig;
     Probe& p1 = rig.game.create<Probe>();
     Probe& p2 = rig.game.create<Probe>();
-    rig.game.set_parent(p1.id(), 0);
-    rig.game.set_parent(p2.id(), 0);
+    rig.game.set_parent(p1.id(), rig.game.scene_service("Workspace"));
+    rig.game.set_parent(p2.id(), rig.game.scene_service("Workspace"));
     p1.flag = true;
     p1.speed = 1.5;
     p2.speed = 1.5;

@@ -58,7 +58,7 @@ struct Rig {
         for (const char* name : {"Alpha", "Beta", "Gamma"}) {
             engine_core::Folder& folder = game.create<engine_core::Folder>();
             game.set_name(folder.id(), name);
-            game.set_parent(folder.id(), game.id());
+            game.set_parent(folder.id(), game.scene_service("Workspace"));
             ids.push_back(folder.id());
         }
         ide::ExplorerHost host;
@@ -88,7 +88,8 @@ struct Rig {
             }
             engine_core::Folder& made = game.create<engine_core::Folder>();
             game.set_name(made.id(), "Made");
-            game.set_parent(made.id(), parent);
+            // As the studio does: an insert at the top goes into Workspace.
+            game.set_parent(made.id(), parent == 0 ? game.scene_service("Workspace") : parent);
             result->id = made.id();
             result->done = true;
         };
@@ -530,7 +531,7 @@ void TestRebuildKeepsTheSelection() {
     // Enough new rows at once that the explorer rebuilds the tree detached.
     for (int i = 0; i < 12; ++i) {
         engine_core::Folder& folder = rig.game.create<engine_core::Folder>();
-        rig.game.set_parent(folder.id(), rig.game.id());
+        rig.game.set_parent(folder.id(), rig.game.scene_service("Workspace"));
     }
     rig.frame(0.9);
     rig.frame(1.0);
@@ -597,9 +598,9 @@ void TestDragIntoAnotherRow() {
 void TestDragBesideAnotherRow() {
     Rig rig;
     // Folders are parented in order, so the rows read Alpha, Beta, Gamma.
-    Expect(rig.children(0) == rig.pick({0, 1, 2}), "the rows start in the order they arrived");
+    Expect(rig.children(rig.game.scene_service("Workspace")) == rig.pick({0, 1, 2}), "the rows start in the order they arrived");
     rig.drag("Alpha", "Gamma", 0.95, 0.1);
-    Expect(rig.children(0) == rig.pick({0, 1, 2}), "beside a row under the same parent changes nothing");
+    Expect(rig.children(rig.game.scene_service("Workspace")) == rig.pick({0, 1, 2}), "beside a row under the same parent changes nothing");
     rig.drag("Gamma", "Beta", 0.5, 0.5);
     Expect(rig.children(rig.ids[1]) == rig.pick({2}), "the middle of a row puts it inside");
     rig.drag("Alpha", "Gamma", 0.05, 1.0);
@@ -622,7 +623,7 @@ void TestDragRefusesItsOwnChild() {
     rig.frame(0.3);
     rig.drag("Alpha", "Gamma", 0.5, 0.5);
     Expect(rig.moves == 1, "a row cannot drop inside its own child");
-    Expect(rig.game.parent(rig.ids[0]) == rig.game.id(), "the refused drop leaves the row where it was");
+    Expect(rig.game.parent(rig.ids[0]) == rig.game.scene_service("Workspace"), "the refused drop leaves the row where it was");
 }
 
 void TestMoveSet() {
@@ -631,19 +632,28 @@ void TestMoveSet() {
     for (const char* name : {"A", "B", "C", "D"}) {
         engine_core::Folder& folder = game.create<engine_core::Folder>();
         game.set_name(folder.id(), name);
-        game.set_parent(folder.id(), 0);
+        game.set_parent(folder.id(), game.scene_service("Workspace"));
         ids.push_back(folder.id());
     }
-    Expect(game.get_children(0) == ids, "children are in the order they arrived");
-    Expect(!ide::move_set(game, {ids[3]}, 0), "an instance already under the parent stays put");
-    Expect(game.get_children(0) == ids, "and keeps its place");
+    const engine_core::InstanceId workspace = game.scene_service("Workspace");
+    Expect(game.get_children(workspace) == ids, "children are in the order they arrived");
+    Expect(!ide::move_set(game, {ids[3]}, workspace), "an instance already under the parent stays put");
+    Expect(game.get_children(workspace) == ids, "and keeps its place");
     Expect(ide::move_set(game, {ids[3], ids[2]}, ids[0]), "move_set moves");
     Expect(game.get_children(ids[0]) == std::vector<engine_core::InstanceId>{ids[3], ids[2]},
            "the moved instances go last, in the order given");
-    Expect(ide::move_set(game, {ids[3]}, 0), "back to the root");
-    Expect(game.get_children(0) == std::vector<engine_core::InstanceId>{ids[0], ids[1], ids[3]}, "last again");
+    Expect(ide::move_set(game, {ids[3]}, workspace), "back to Workspace");
+    Expect(game.get_children(workspace) == std::vector<engine_core::InstanceId>{ids[0], ids[1], ids[3]},
+           "last again");
     Expect(!ide::move_set(game, {ids[0]}, ids[2]), "an instance never goes inside its own child");
     Expect(!ide::move_set(game, {0}, ids[1]), "the root never moves");
+    // game holds the scene services alone, and they stay where they are.
+    std::string refused;
+    Expect(!ide::move_set(game, {ids[0]}, 0, &refused), "nothing else goes under game");
+    Expect(refused == "Only scene services can be children of game; put A in Workspace", "and move_set says why");
+    refused.clear();
+    Expect(!ide::move_set(game, {workspace}, ids[1], &refused), "a scene service never moves");
+    Expect(refused == "Workspace cannot be moved", "and move_set says why too");
 }
 
 // Alpha holds Inner, which holds Deep.
@@ -805,7 +815,7 @@ void TestRevealScrolls() {
     for (int i = 0; i < 60; ++i) {
         engine_core::Folder& folder = rig.game.create<engine_core::Folder>();
         rig.game.set_name(folder.id(), "Row" + std::to_string(i));
-        rig.game.set_parent(folder.id(), rig.game.id());
+        rig.game.set_parent(folder.id(), rig.game.scene_service("Workspace"));
         last = folder.id();
     }
     rig.frame(0.1);

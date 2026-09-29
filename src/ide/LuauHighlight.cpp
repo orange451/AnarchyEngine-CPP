@@ -32,7 +32,7 @@ const char* Builtin(std::string_view word) {
                                    "pcall",    "print",      "rawequal", "rawget",      "rawlen",    "rawset",
                                    "require",  "script",     "select",   "setmetatable", "shared",   "string",
                                    "table",    "task",       "tonumber", "tostring",    "typeof",    "unpack",
-                                   "utf8",     "vector",     "warn",     "xpcall",      "_G",        "self"};
+                                   "utf8",     "vector",     "warn",     "workspace",   "xpcall",    "_G",        "self"};
     for (const char* candidate : kWords) {
         if (word == candidate) {
             return "builtin";

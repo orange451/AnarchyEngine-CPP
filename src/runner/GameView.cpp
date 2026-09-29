@@ -11,6 +11,7 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <string>
@@ -105,10 +106,22 @@ void GameView::refreshTriangles() {
         return;
     }
     triangleScratch_.clear();
-    for (engine_core::InstanceId id = game_->first_child(game_->id()); id != 0; id = game_->next_sibling(id)) {
+    // What renders is in Workspace, at any depth, in tree order.
+    walkScratch_.clear();
+    if (const engine_core::InstanceId workspace = game_->scene_service("Workspace"); workspace != 0) {
+        walkScratch_.push_back(workspace);
+    }
+    while (!walkScratch_.empty()) {
+        const engine_core::InstanceId id = walkScratch_.back();
+        walkScratch_.pop_back();
         if (auto* triangle = dynamic_cast<engine_core::TestTriangle*>(game_->instance(id))) {
             triangleScratch_.push_back(triangle);
         }
+        const std::size_t first = walkScratch_.size();
+        for (engine_core::InstanceId child = game_->first_child(id); child != 0; child = game_->next_sibling(child)) {
+            walkScratch_.push_back(child);
+        }
+        std::reverse(walkScratch_.begin() + static_cast<std::ptrdiff_t>(first), walkScratch_.end());
     }
     if (triangleScratch_.size() == triangles_.size()) {
         bool same = true;

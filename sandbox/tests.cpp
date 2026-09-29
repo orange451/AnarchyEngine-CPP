@@ -4605,3 +4605,29 @@ TEST_CASE("W2 the tree revision moves on names and the hierarchy, and not on pro
     game.stop_simulation();
     REQUIRE(moved());
 }
+
+TEST_CASE("S46 Instance.new past the instance cap is a script error, not an abort", "[S46]") {
+    ScriptRig rig;
+    add_script(rig.game, "Flood", R"(
+        _G.made = 0
+        local ok, message = pcall(function()
+            for _ = 1, 20000 do
+                Instance.new("Folder")
+                _G.made += 1
+            end
+        end)
+        _G.stopped = not ok
+        _G.message = tostring(message)
+    )");
+    rig.game.start_simulation();
+    rig.frames(1);
+    INFO(rig.runtime.last_error());
+    bool stopped = false;
+    REQUIRE(rig.runtime.global_boolean("stopped", stopped));
+    REQUIRE(stopped);
+    double made = 0;
+    REQUIRE(rig.runtime.global_number("made", made));
+    REQUIRE(made > 16000);
+    REQUIRE(made < 16384);
+    rig.game.stop_simulation();
+}

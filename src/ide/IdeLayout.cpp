@@ -1325,7 +1325,9 @@ void IdeLayout::start_mcp() {
     studio.session = [this, on_ui] {
         // Shared, since a task that runs after a timed-out wait still writes it.
         auto state = std::make_shared<std::string>();
-        on_ui([this, state] { *state = !testing_ ? "stopped" : (stepping_ ? "running" : "paused"); });
+        on_ui([this, state] {
+            *state = play_ == PlayState::Stopped ? "stopped" : (play_ == PlayState::Running ? "running" : "paused");
+        });
         return *state;
     };
     studio.flush_scripts = [this, on_ui] { on_ui([this] { flush_editors(); }); };
@@ -1452,17 +1454,17 @@ void IdeLayout::mount(jadefx::Scene& scene) {
         // F5 tests, or resumes a paused test. Shift+F5 stops. Both as in Roblox Studio.
         if (event.pressed && !event.repeat && !event.consumed && event.key == kKeyF5 && !event.control &&
             !event.alt && !event.meta) {
-            if (event.shift && testing_) {
+            if (event.shift && in_test()) {
                 event.consume();
                 stop_test();
                 return;
             }
-            if (!event.shift && !testing_) {
+            if (!event.shift && !in_test()) {
                 event.consume();
                 start_test();
                 return;
             }
-            if (!event.shift && !stepping_) {
+            if (!event.shift && play_ != PlayState::Running) {
                 event.consume();
                 resume_test();
                 return;
@@ -2198,14 +2200,14 @@ void IdeLayout::flushFrame() {
     // notes that changes wait; after it, or once an edit ends, it runs.
     const bool focused = scene_ != nullptr && scene_->isWindowFocused();
     if (focused && !was_focused_) {
-        if (testing_) {
+        if (in_test()) {
             check_disk();
         } else {
             check_pending_ = true;
         }
     }
     was_focused_ = focused;
-    if (check_pending_ && !testing_ && !editing_field()) {
+    if (check_pending_ && !in_test() && !editing_field()) {
         check_disk();
     }
     refresh_modified();
@@ -2444,7 +2446,7 @@ std::shared_ptr<IdePane> IdeLayout::make_conflicts() {
     };
     conflicts_pane_ = jadefx::make<IdeConflicts>(std::move(host));
     conflicts_pane_->setConflicts(conflicts_);
-    conflicts_pane_->setApplyEnabled(!testing_);
+    conflicts_pane_->setApplyEnabled(!in_test());
     if (!disk_problem_.empty()) {
         conflicts_pane_->setProblem("Can't read the project on disk: " + disk_problem_);
     }
@@ -2469,7 +2471,7 @@ void IdeLayout::forget_conflicts() {
 void IdeLayout::show_conflict_count() {
     if (conflicts_pane_) {
         conflicts_pane_->setConflicts(conflicts_);
-        conflicts_pane_->setApplyEnabled(!testing_);
+        conflicts_pane_->setApplyEnabled(!in_test());
     }
     if (conflict_count_ != nullptr) {
         conflict_count_->setVisible(!conflicts_.empty());
@@ -2518,7 +2520,7 @@ std::optional<std::vector<engine_core::SaveConflict>> IdeLayout::check_disk(
         check_pending_ = false;
         return std::vector<engine_core::SaveConflict>();
     }
-    if (testing_) {
+    if (in_test()) {
         // A test runs on the place captured at Test. Changes on disk wait for Stop.
         check_pending_ = true;
         if (!noted_play_check_) {
@@ -2791,7 +2793,7 @@ void IdeLayout::edit(std::uint32_t id) {
             // While stopped, closing flushed the text into the place, and Stop has
             // nothing to restore. A copy kept then would be written back over any
             // change made later, such as Replace All or a file loaded from disk.
-            if (testing_ && editor && editor->isLoaded()) {
+            if (in_test() && editor && editor->isLoaded()) {
                 kept_sources_[id] = editor->text();
             }
             // A reopened editor starts its undo over, so the closed one's history
@@ -2959,16 +2961,15 @@ void IdeLayout::routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene) {
     });
 }
 
-void IdeLayout::show_session(bool testing, bool stepping) {
-    testing_ = testing;
-    stepping_ = stepping;
+void IdeLayout::show_session(PlayState state) {
+    play_ = state;
     // Changes on disk wait for Stop, and so does Apply.
     if (conflicts_pane_) {
-        conflicts_pane_->setApplyEnabled(!testing);
+        conflicts_pane_->setApplyEnabled(!in_test());
     }
     if (session_buttons_[0] != nullptr) {
-        ShowSession(*session_buttons_[0], *session_buttons_[1], *session_buttons_[2], *session_buttons_[3], testing,
-                    stepping);
+        ShowSession(*session_buttons_[0], *session_buttons_[1], *session_buttons_[2], *session_buttons_[3], in_test(),
+                    play_ == PlayState::Running);
     }
 }
 
@@ -2986,19 +2987,19 @@ void IdeLayout::start_test() {
         }
     });
     engine.resume();
-    show_session(true, true);
+    show_session(PlayState::Running);
 }
 
 void IdeLayout::pause_test() {
     // The session stays active: scripts and the play tree remain, and
     // steps wait until Resume. Stop still restores the authored place.
     runner_.simulation().pause();
-    show_session(true, false);
+    show_session(PlayState::Paused);
 }
 
 void IdeLayout::resume_test() {
     runner_.simulation().resume();
-    show_session(true, true);
+    show_session(PlayState::Running);
 }
 
 void IdeLayout::stop_test() {
@@ -3017,7 +3018,7 @@ void IdeLayout::stop_test() {
     // during play, write their buffers back and capture that place.
     reapply_editors();
     restore_closed_edits();
-    show_session(false, false);
+    show_session(PlayState::Stopped);
     // Changes on disk that waited for the test load on the next frame.
     check_pending_ = true;
 }
@@ -3236,7 +3237,7 @@ void IdeLayout::confirm_discard(const std::string& question, std::function<void(
             proceed();
         } else if (*choice == save) {
             // The editors' text is part of what is saved.
-            if (testing_) {
+            if (in_test()) {
                 stop_test();
             }
             save_project(proceed);
@@ -3260,7 +3261,7 @@ void IdeLayout::confirm_discard(const std::string& question, std::function<void(
 }
 
 void IdeLayout::new_place() {
-    if (testing_) {
+    if (in_test()) {
         stop_test();
     }
     close_script_editors();
@@ -3305,7 +3306,7 @@ void IdeLayout::pick_folder(jadefx::FolderDialogOptions options, const std::stri
 
 void IdeLayout::open_project_at(const std::filesystem::path& root) {
     // The load replaces the tree that Stop would restore.
-    if (testing_) {
+    if (in_test()) {
         stop_test();
     }
     std::unique_ptr<engine_core::Project> loaded;
@@ -3359,7 +3360,7 @@ bool IdeLayout::save_open_project(std::function<void()> then,
         }
     });
     if (!conflicts.empty()) {
-        confirm_overwrite(conflicts, std::move(then), testing_ ? GateRows::DuringTest : GateRows::Guarded);
+        confirm_overwrite(conflicts, std::move(then), in_test() ? GateRows::DuringTest : GateRows::Guarded);
         return false;
     }
     if (!error.empty()) {

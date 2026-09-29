@@ -175,7 +175,10 @@ private:
     // Runs fn on this thread with the simulation paused, then resumes a test
     // that was stepping. Play steps wait meanwhile.
     void run_now(const std::function<void(engine_core::DataModel&)>& fn);
-    void show_session(bool testing, bool stepping);
+    // No play session, or a test running or paused.
+    enum class PlayState { Stopped, Running, Paused };
+    void show_session(PlayState state);
+    bool in_test() const { return play_ != PlayState::Stopped; }
     void start_test();
     void pause_test();
     void resume_test();
@@ -395,10 +398,9 @@ private:
     bool place_modified_ = false;
     // What the window title shows now.
     bool title_modified_ = false;
-    // A play session is active: the ribbon enables Stop, and Shift+F5 stops.
-    bool testing_ = false;
-    // That session is executing, not paused. F5 resumes only a paused one.
-    bool stepping_ = false;
+    // During a test the ribbon enables Stop and Shift+F5 stops. F5 resumes
+    // only a paused one.
+    PlayState play_ = PlayState::Stopped;
     // The ribbon's Test, Pause, Resume, and Stop.
     jadefx::Node* session_buttons_[4] = {};
     // Open alerts. An alert must outlive its popup.

@@ -113,7 +113,6 @@ struct WorldSnap {
 struct Job {
     InstanceId id = 0;
     std::uint64_t generation = 0;
-    TypeMode default_mode = TypeMode::NonStrict;
     std::shared_ptr<const WorldSnap> world;
     std::shared_ptr<Luau::FrontendCancellationToken> cancel;
 };
@@ -132,18 +131,6 @@ struct Finished {
     std::vector<InstanceId> requires;
     bool cancelled = false;
 };
-
-Luau::Mode to_luau_mode(TypeMode mode) {
-    switch (mode) {
-    case TypeMode::NoCheck:
-        return Luau::Mode::NoCheck;
-    case TypeMode::Strict:
-        return Luau::Mode::Strict;
-    case TypeMode::NonStrict:
-        return Luau::Mode::Nonstrict;
-    }
-    return Luau::Mode::Nonstrict;
-}
 
 const char* severity_name(Severity severity) {
     switch (severity) {
@@ -911,7 +898,8 @@ Finished analyze_job(WorkerEnv& env, const Job& job) {
         return finished;
     }
 
-    const Luau::Mode mode = Luau::parseMode(parsed.hotcomments).value_or(to_luau_mode(job.default_mode));
+    // A script without a `--!` mode comment on its first lines is checked nonstrict.
+    const Luau::Mode mode = Luau::parseMode(parsed.hotcomments).value_or(Luau::Mode::Nonstrict);
     if (parsed.root != nullptr) {
         finished.requires = find_requires(*job.world, job.id, parsed.root);
     }
@@ -1107,7 +1095,6 @@ struct ScriptAnalysis::State {
     bool stop = false;
     bool enabled = true;
     bool started = false;
-    TypeMode default_mode = TypeMode::NonStrict;
     std::uint64_t next_token = 0;
     int inflight = 0;
     // The script the worker is checking. 0 between jobs.
@@ -1406,22 +1393,6 @@ bool ScriptAnalysis::enabled() const {
     return state_->enabled;
 }
 
-void ScriptAnalysis::set_default_mode(TypeMode mode) {
-    {
-        std::lock_guard<std::mutex> lock(state_->mu);
-        if (state_->default_mode == mode) {
-            return;
-        }
-        state_->default_mode = mode;
-    }
-    invalidate_all();
-}
-
-TypeMode ScriptAnalysis::default_mode() const {
-    std::lock_guard<std::mutex> lock(state_->mu);
-    return state_->default_mode;
-}
-
 void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
     if (ids.empty()) {
         return;
@@ -1432,7 +1403,6 @@ void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
     if (!state_->enabled || state_->stop) {
         return;
     }
-    const TypeMode mode = state_->default_mode;
     const auto ready_at = std::chrono::steady_clock::now() + kDebounce;
     for (InstanceId id : ids) {
         // Handled either way: a dead or non-script id has nothing to check.
@@ -1452,7 +1422,6 @@ void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
         Job job;
         job.id = id;
         job.generation = generation;
-        job.default_mode = mode;
         job.world = world;
         job.cancel = std::move(token);
         state_->pending[id] = Pending{std::move(job), ready_at};

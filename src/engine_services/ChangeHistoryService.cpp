@@ -43,10 +43,6 @@ std::string default_gesture(const Mutation& mutation) {
     return "Edit";
 }
 
-bool same_transform(const Transform& a, const Transform& b) {
-    return std::memcmp(a.m, b.m, sizeof(a.m)) == 0;
-}
-
 bool same_value(const PropertyValue& a, const PropertyValue& b) {
     if (a.prop != b.prop) {
         return false;
@@ -55,7 +51,7 @@ bool same_value(const PropertyValue& a, const PropertyValue& b) {
     case HistoryProp::Transform:
         return same_transform(a.transform, b.transform);
     case HistoryProp::Color:
-        return a.color.r == b.color.r && a.color.g == b.color.g && a.color.b == b.color.b && a.color.a == b.color.a;
+        return same_color(a.color, b.color);
     case HistoryProp::Size:
         return a.size[0] == b.size[0] && a.size[1] == b.size[1] && a.size[2] == b.size[2];
     case HistoryProp::Simulated:
@@ -288,36 +284,25 @@ void ChangeHistoryService::reset_waypoints() {
     session_redo_.clear();
 }
 
-void ChangeHistoryService::undo() {
-    if (recording_ || applying_ != 0) {
-        return;
-    }
-    std::vector<Waypoint>& undo = undo_stack();
-    if (undo.empty()) {
-        return;
-    }
-    Waypoint waypoint = std::move(undo.back());
-    undo.pop_back();
-    const std::string name = waypoint.display_name;
-    apply_waypoint(waypoint, true);
-    redo_stack().push_back(std::move(waypoint));
-    on_undo.emit(name);
-}
+void ChangeHistoryService::undo() { step(true); }
 
-void ChangeHistoryService::redo() {
+void ChangeHistoryService::redo() { step(false); }
+
+void ChangeHistoryService::step(bool undoing) {
     if (recording_ || applying_ != 0) {
         return;
     }
-    std::vector<Waypoint>& redo = redo_stack();
-    if (redo.empty()) {
+    std::vector<Waypoint>& from = undoing ? undo_stack() : redo_stack();
+    if (from.empty()) {
         return;
     }
-    Waypoint waypoint = std::move(redo.back());
-    redo.pop_back();
+    Waypoint waypoint = std::move(from.back());
+    from.pop_back();
     const std::string name = waypoint.display_name;
-    apply_waypoint(waypoint, false);
-    undo_stack().push_back(std::move(waypoint));
-    on_redo.emit(name);
+    apply_waypoint(waypoint, undoing);
+    std::vector<Waypoint>& to = undoing ? redo_stack() : undo_stack();
+    to.push_back(std::move(waypoint));
+    (undoing ? on_undo : on_redo).emit(name);
 }
 
 std::pair<bool, std::string> ChangeHistoryService::can_undo() const {

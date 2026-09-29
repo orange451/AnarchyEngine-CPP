@@ -125,8 +125,6 @@ class ChangeHistoryService {
 public:
     explicit ChangeHistoryService(DataModel& game);
 
-    void rebind(DataModel& game) { game_ = &game; }
-
     // Null when a recording is already open or history is disabled.
     std::optional<std::string> try_begin_recording(std::string name, std::string display_name = {});
     void finish_recording(const std::string& id, FinishRecordingOperation op);
@@ -189,6 +187,8 @@ private:
     void open_implicit(const Mutation& first);
     void push_or_coalesce(Mutation mutation);
     void apply_waypoint(Waypoint& waypoint, bool inverse);
+    // Undo moves the newest waypoint from the undo stack to the redo stack; redo moves it back.
+    void step(bool undoing);
     std::vector<Waypoint>& undo_stack();
     std::vector<Waypoint>& redo_stack();
     const std::vector<Waypoint>& undo_stack() const;

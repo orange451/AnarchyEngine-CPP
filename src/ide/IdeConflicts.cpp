@@ -1,6 +1,8 @@
 #include "IdeConflicts.hpp"
 
 #include "IdeIcons.hpp"
+#include "Strings.hpp"
+#include "Utf8.hpp"
 
 #include <algorithm>
 #include <string>
@@ -63,14 +65,7 @@ std::shared_ptr<jadefx::Label> text_label(const std::string& text, const char* s
 
 // A value cut to kValueLength code points, whole in a tooltip when cut.
 std::shared_ptr<jadefx::Label> value_label(const std::string& text) {
-    int points = 0;
-    std::size_t cut = text.size();
-    for (std::size_t byte = 0; byte < text.size(); ++byte) {
-        if ((static_cast<unsigned char>(text[byte]) & 0xC0u) != 0x80u && points++ == kValueLength) {
-            cut = byte;
-            break;
-        }
-    }
+    const std::size_t cut = CodePointByte(text, kValueLength);
     if (cut == text.size()) {
         return text_label(text, nullptr);
     }
@@ -133,10 +128,6 @@ std::shared_ptr<jadefx::Pane> spacer() {
     pane->setStyle("width: 100%;");
     pane->setMouseTransparent(true);
     return pane;
-}
-
-std::string counted(std::size_t count, const char* one, const char* many) {
-    return std::to_string(count) + " " + (count == 1 ? one : many);
 }
 
 // What a row with no key is about: the whole instance.

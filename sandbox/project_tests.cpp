@@ -11,6 +11,8 @@
 #include "TaskScheduler.hpp"
 #include "types.hpp"
 
+#include "support.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -32,29 +34,6 @@ using engine_core::Project;
 using engine_core::ProjectError;
 
 namespace {
-
-struct SimRole {
-    SimRole() { engine_core::set_thread_role(engine_core::ThreadRole::Simulation); }
-    ~SimRole() { engine_core::set_thread_role(engine_core::ThreadRole::Unknown); }
-};
-
-// A fresh directory under the system temp dir, removed at the end of the test.
-struct TempDir {
-    fs::path path;
-
-    TempDir() {
-        std::random_device device;
-        path = fs::temp_directory_path() / ("ae-project-" + std::to_string(device()) + std::to_string(device()));
-        fs::remove_all(path);
-    }
-
-    ~TempDir() {
-        std::error_code error;
-        fs::remove_all(path, error);
-    }
-
-    fs::path operator/(const char* child) const { return path / child; }
-};
 
 std::string read_file(const fs::path& path) {
     std::ifstream in(path, std::ios::binary);
@@ -101,22 +80,6 @@ engine_core::GameObject& add_part(DataModel& game, InstanceId parent, const char
     game.set_name(part.id(), name);
     game.set_parent(part.id(), parent);
     return part;
-}
-
-engine_core::Script& add_script(DataModel& game, InstanceId parent, const char* name, const char* source) {
-    engine_core::Script& script = game.create<engine_core::Script>();
-    game.set_name(script.id(), name);
-    script.set_source(source);
-    game.set_parent(script.id(), parent);
-    return script;
-}
-
-engine_core::ColorRgb rgb(float r, float g, float b) {
-    engine_core::ColorRgb color;
-    color.r = r;
-    color.g = g;
-    color.b = b;
-    return color;
 }
 
 std::string leaf(const DataModel& game, InstanceId id, const char* ext = ".json") {
@@ -272,28 +235,6 @@ TEST_CASE("P4 a source edit rewrites only the .luau file", "[P4][project]") {
 }
 
 namespace {
-
-struct ScriptRig {
-    SimRole role;
-    Game game;
-    engine_core::TaskScheduler scheduler;
-    engine_core::ScriptRuntime runtime;
-
-    ScriptRig() {
-        scheduler.reserve(16);
-        game.attach_scheduler(&scheduler);
-        runtime.attach(game, scheduler);
-    }
-
-    void frames(int count, double dt = 1.0 / 60.0) {
-        for (int i = 0; i < count; ++i) {
-            scheduler.run_phase(engine_core::Phase::Heartbeat, dt);
-            game.events().drain();
-            runtime.heartbeat(dt);
-            game.events().drain();
-        }
-    }
-};
 
 }  // namespace
 

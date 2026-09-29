@@ -479,6 +479,51 @@ void write_value(std::string& out, const JsonValue& value, int indent) {
     }
 }
 
+void write_compact(std::string& out, const JsonValue& value) {
+    switch (value.kind()) {
+    case JsonValue::Kind::Null:
+        out += "null";
+        return;
+    case JsonValue::Kind::Bool:
+        out += value.as_bool() ? "true" : "false";
+        return;
+    case JsonValue::Kind::Number:
+        out += format_json_number(value.as_number());
+        return;
+    case JsonValue::Kind::String:
+        write_string(out, value.as_string());
+        return;
+    case JsonValue::Kind::Array: {
+        out.push_back('[');
+        bool first = true;
+        for (const JsonValue& item : value.items()) {
+            if (!first) {
+                out.push_back(',');
+            }
+            first = false;
+            write_compact(out, item);
+        }
+        out.push_back(']');
+        return;
+    }
+    case JsonValue::Kind::Object: {
+        out.push_back('{');
+        bool first = true;
+        for (const JsonValue::Member& member : value.members()) {
+            if (!first) {
+                out.push_back(',');
+            }
+            first = false;
+            write_string(out, member.first);
+            out.push_back(':');
+            write_compact(out, member.second);
+        }
+        out.push_back('}');
+        return;
+    }
+    }
+}
+
 }  // namespace
 
 JsonValue JsonValue::boolean(bool value) {
@@ -638,6 +683,12 @@ std::string write_json(const JsonValue& value) {
     std::string out;
     write_value(out, value, 0);
     out.push_back('\n');
+    return out;
+}
+
+std::string compact_json(const JsonValue& value) {
+    std::string out;
+    write_compact(out, value);
     return out;
 }
 

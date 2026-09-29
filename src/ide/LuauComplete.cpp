@@ -1,5 +1,7 @@
 #include "LuauComplete.hpp"
 
+#include "Utf8.hpp"
+
 #include "ScriptAnalysis.hpp"
 
 #include <algorithm>
@@ -91,90 +93,18 @@ bool IsNameStart(char32_t code) {
 
 bool IsNameContinue(char32_t code) { return IsNameStart(code) || IsDigit(code); }
 
-std::u32string Utf32(std::string_view text) {
-    std::u32string out;
-    out.reserve(text.size());
-    for (std::size_t index = 0; index < text.size();) {
-        const unsigned char lead = static_cast<unsigned char>(text[index++]);
-        if (lead < 0x80) {
-            out.push_back(lead);
-            continue;
-        }
-        int need = 0;
-        char32_t value = 0;
-        if ((lead & 0xE0) == 0xC0 && lead >= 0xC2) {
-            need = 1;
-            value = lead & 0x1F;
-        } else if ((lead & 0xF0) == 0xE0) {
-            need = 2;
-            value = lead & 0x0F;
-        } else if ((lead & 0xF8) == 0xF0 && lead <= 0xF4) {
-            need = 3;
-            value = lead & 0x07;
-        } else {
-            out.push_back(0xFFFD);
-            continue;
-        }
-        bool ok = true;
-        for (int i = 0; i < need; ++i) {
-            if (index >= text.size()) {
-                ok = false;
-                break;
-            }
-            const unsigned char next = static_cast<unsigned char>(text[index]);
-            if ((next & 0xC0) != 0x80) {
-                ok = false;
-                break;
-            }
-            value = (value << 6) | (next & 0x3F);
-            ++index;
-        }
-        if (!ok || value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF)) {
-            out.push_back(0xFFFD);
-            continue;
-        }
-        out.push_back(value);
-    }
-    return out;
-}
-
-std::string Utf8(std::u32string_view text) {
-    std::string out;
-    for (char32_t code : text) {
-        if (code < 0x80) {
-            out.push_back(static_cast<char>(code));
-        } else if (code < 0x800) {
-            out.push_back(static_cast<char>(0xC0 | (code >> 6)));
-            out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
-        } else if (code < 0x10000) {
-            out.push_back(static_cast<char>(0xE0 | (code >> 12)));
-            out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
-            out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
-        } else {
-            out.push_back(static_cast<char>(0xF0 | (code >> 18)));
-            out.push_back(static_cast<char>(0x80 | ((code >> 12) & 0x3F)));
-            out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
-            out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
-        }
-    }
-    return out;
-}
+const char* const kKeywords[] = {"and",  "break",    "continue", "do",    "else", "elseif", "end",  "export", "false", "for",
+                                 "function", "if",    "in",       "local", "nil",  "not",    "or",   "repeat", "return", "then",
+                                 "true", "until", "while"};
 
 const char* KeywordText(std::string_view word) {
-    static const char* kWords[] = {"and",     "break", "continue", "do",   "else",   "elseif", "end",  "export", "false",
-                                   "for",     "function", "if",    "in",   "local",  "nil",    "not",  "or",     "repeat",
-                                   "return",  "then",  "true",     "until", "while"};
-    for (const char* candidate : kWords) {
+    for (const char* candidate : kKeywords) {
         if (word == candidate) {
             return candidate;
         }
     }
     return nullptr;
 }
-
-const char* kKeywords[] = {"and",  "break",    "continue", "do",    "else", "elseif", "end",  "export", "false", "for",
-                           "function", "if",    "in",       "local", "nil",  "not",    "or",   "repeat", "return", "then",
-                           "true", "until", "while"};
 
 int LongSeparator(const std::u32string& text, int index) {
     if (index < 0 || index >= static_cast<int>(text.size())) {
@@ -1029,9 +959,6 @@ public:
     Shape* call_shape(Shape* callee, const std::string* literal) {
         if (callee == nullptr) {
             return none();
-        }
-        if (callee->callee_name == "require" && callee->instance != kNoInstance) {
-            // The receiver of require is the argument, stored on the call below.
         }
         if (callee->resolves_child && literal != nullptr && callee->instance != kNoInstance) {
             // A child that is in the place is that child, not optional, as in
@@ -2539,8 +2466,6 @@ private:
         return call_shape(callee, have_literal ? &literal : nullptr);
     }
 
-    bool callee_token(const Token& token) const { return IsCallPrefix(token); }
-
     int match_open(int close) const {
         Token::Kind open_kind = Token::LParen;
         const Token::Kind close_kind = tokens_[static_cast<std::size_t>(close)].kind;
@@ -2587,7 +2512,7 @@ private:
                 if (open < 0) {
                     break;
                 }
-                if (open > 0 && callee_token(tokens_[static_cast<std::size_t>(open - 1)])) {
+                if (open > 0 && IsCallPrefix(tokens_[static_cast<std::size_t>(open - 1)])) {
                     cursor = open - 1;
                     continue;
                 }

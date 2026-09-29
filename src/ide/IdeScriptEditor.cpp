@@ -12,6 +12,7 @@
 #include "ScriptMarks.hpp"
 #include "ScriptPairs.hpp"
 #include "TextWrap.hpp"
+#include "Utf8.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -38,13 +39,10 @@ struct EditorFont {
         };
         for (const char* path : paths) {
             if (jadefx::Font::loadFile("Editor Mono", path)) {
-                loaded = true;
                 return;
             }
         }
     }
-
-    bool loaded = false;
 };
 
 const EditorFont& editor_font() {
@@ -466,7 +464,7 @@ void IdeScriptEditor::replace_find() {
     replacing_ = true;
     area_->replaceText(match.start, match.end, inserted);
     replacing_ = false;
-    const int after = match.start + code_points(inserted);
+    const int after = match.start + CodePoints(inserted);
     area_->moveTo(after);
     // The edit repainted, so the matches are the new text's. An empty match
     // replaced with nothing is still there; the next one is past it.
@@ -531,7 +529,7 @@ int IdeScriptEditor::apply_replacements(const TextSearch& search, const std::str
         if (caret <= match.start) {
             break;
         }
-        const int inserted = code_points(search.expand(text, match, replacement));
+        const int inserted = CodePoints(search.expand(text, match, replacement));
         if (caret >= match.end) {
             moved += inserted - (match.end - match.start);
             continue;
@@ -1328,39 +1326,6 @@ constexpr double kTipPaddingX = 8;
 // Label's own font is 16px, which is larger than the text around it.
 constexpr const char* kTipFontFamily = "Open Sans";
 constexpr float kTipFontSize = 13.f;
-
-char32_t CodePointAt(std::string_view text, int index) {
-    int count = 0;
-    for (std::size_t cursor = 0; cursor < text.size();) {
-        const unsigned char lead = static_cast<unsigned char>(text[cursor]);
-        std::size_t step = 1;
-        char32_t code = lead;
-        if (lead >= 0x80) {
-            if ((lead & 0xE0) == 0xC0) {
-                step = 2;
-                code = lead & 0x1F;
-            } else if ((lead & 0xF0) == 0xE0) {
-                step = 3;
-                code = lead & 0x0F;
-            } else {
-                step = 4;
-                code = lead & 0x07;
-            }
-            for (std::size_t i = 1; i < step && cursor + i < text.size(); ++i) {
-                code = (code << 6) | (static_cast<unsigned char>(text[cursor + i]) & 0x3F);
-            }
-        }
-        if (count == index) {
-            return code;
-        }
-        if (cursor + step > text.size()) {
-            break;
-        }
-        cursor += step;
-        ++count;
-    }
-    return 0;
-}
 
 int WordStart(std::string_view text, int index) {
     int cursor = index;

@@ -1,6 +1,7 @@
 #include "Enum.hpp"
 
 #include "LuaApi.hpp"
+#include "LuaUserdata.hpp"
 
 #include "lualib.h"
 
@@ -163,17 +164,6 @@ const EnumType kUserInputStateType{"UserInputState", kUserInputStates, count_of(
 
 const EnumType* const kTypes[] = {&kNormalIdType, &kAxisType, &kKeyCodeType, &kUserInputTypeType, &kUserInputStateType};
 
-void* matching_udata(lua_State* state, int index, const char* name) {
-    void* data = lua_touserdata(state, index);
-    if (data == nullptr || !lua_getmetatable(state, index)) {
-        return nullptr;
-    }
-    luaL_getmetatable(state, name);
-    const bool match = lua_rawequal(state, -1, -2) != 0;
-    lua_pop(state, 2);
-    return match ? data : nullptr;
-}
-
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
     const char* key = luaL_checkstring(state, 2);
@@ -212,12 +202,7 @@ int enum_item_tostring(lua_State* state) {
 }
 
 void new_enum_item(lua_State* state, const EnumType& type, const EnumEntry& entry) {
-    auto* item = static_cast<EnumItemUd*>(lua_newuserdata(state, sizeof(EnumItemUd)));
-    item->type = &type;
-    item->name = entry.name;
-    item->value = entry.value;
-    luaL_getmetatable(state, kEnumItemMeta);
-    lua_setmetatable(state, -2);
+    push_userdata(state, EnumItemUd{&type, entry.name, entry.value}, kEnumItemMeta);
 }
 
 void install_enum_items(lua_State* state) {
@@ -282,7 +267,7 @@ void push_enum_item(lua_State* state, const EnumType& type, int value) {
 }
 
 int check_enum_arg(lua_State* state, int index, const EnumType& type) {
-    if (const auto* item = static_cast<const EnumItemUd*>(matching_udata(state, index, kEnumItemMeta))) {
+    if (const auto* item = static_cast<const EnumItemUd*>(test_userdata(state, index, kEnumItemMeta))) {
         if (item->type == &type) {
             return item->value;
         }

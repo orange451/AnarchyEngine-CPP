@@ -1,4 +1,5 @@
 #include "LuaApi.hpp"
+#include "LuauSandbox.hpp"
 
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -424,13 +425,8 @@ int eval_module(lua_State* state, const LuaNode& node) {
         return 1;
     }
     collect_colon_methods(node.id, node.source);
-    lua_CompileOptions options{};
-    options.optimizationLevel = 1;
-    options.debugLevel = 1;
-    std::size_t bytecode_size = 0;
-    std::unique_ptr<char, void (*)(void*)> bytecode(
-        luau_compile(node.source.data(), node.source.size(), &options, &bytecode_size), std::free);
-    if (bytecode == nullptr || bytecode_size == 0) {
+    const Bytecode bytecode = compile_luau(node.source);
+    if (!bytecode) {
         job->loading.erase(node.id);
         lua_pushnil(state);
         return 1;
@@ -450,7 +446,7 @@ int eval_module(lua_State* state, const LuaNode& node) {
 
     // "=id" is the function's debug source, so a method can be matched back to this module.
     const std::string chunk = "=" + std::to_string(node.id);
-    if (luau_load(thread, chunk.c_str(), bytecode.get(), bytecode_size, 0) != 0) {
+    if (luau_load(thread, chunk.c_str(), bytecode.data.get(), bytecode.size, 0) != 0) {
         job->loading.erase(node.id);
         lua_pop(state, 1);
         lua_pushnil(state);

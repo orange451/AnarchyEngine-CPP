@@ -11,6 +11,8 @@
 #include "ide/InputRouter.hpp"
 #include "types.hpp"
 
+#include "support.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstring>
@@ -20,27 +22,8 @@
 
 namespace {
 
-engine_core::ColorRgb rgb(float r, float g, float b) {
-    engine_core::ColorRgb color;
-    color.r = r;
-    color.g = g;
-    color.b = b;
-    color.a = 1.f;
-    return color;
-}
-
-bool same_color(engine_core::ColorRgb a, engine_core::ColorRgb b) {
-    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
-}
-
-bool same_transform(const engine_core::Transform& a, const engine_core::Transform& b) {
-    return std::memcmp(a.m, b.m, sizeof(a.m)) == 0;
-}
-
-struct SimRole {
-    SimRole() { engine_core::set_thread_role(engine_core::ThreadRole::Simulation); }
-    ~SimRole() { engine_core::set_thread_role(engine_core::ThreadRole::Unknown); }
-};
+using engine_core::same_color;
+using engine_core::same_transform;
 
 void close_gesture(engine_core::DataModel& game) { game.history().end_gesture(); }
 

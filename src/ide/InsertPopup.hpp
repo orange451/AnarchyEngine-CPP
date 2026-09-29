@@ -20,7 +20,6 @@ public:
 
     void setOnCreate(std::function<void(const std::string& class_name)> handler);
 
-    bool isOpen() const;
     void show(jadefx::Node& anchor);
     void hide();
 

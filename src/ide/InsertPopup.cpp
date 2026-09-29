@@ -558,8 +558,6 @@ void InsertPopup::setOnCreate(std::function<void(const std::string&)> handler) {
     }
 }
 
-bool InsertPopup::isOpen() const { return list_ && list_->open(); }
-
 void InsertPopup::show(jadefx::Node& anchor) {
     if (list_) {
         list_->showAt(anchor);

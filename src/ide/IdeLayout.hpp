@@ -190,6 +190,8 @@ private:
     std::filesystem::path dialog_directory() const;
     void reapply_editors();
     void restore_closed_edits();
+    // The keys every studio window routes the same way, in this order.
+    void routeKeys(jadefx::KeyEvent& event, jadefx::Scene& scene);
     void routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene);
     // Delete on a focused explorer deletes the selected instances. Text fields keep the key.
     void routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene);

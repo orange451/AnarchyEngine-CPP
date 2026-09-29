@@ -81,6 +81,10 @@ bool parse_json(std::string_view text, JsonValue& out, std::string& error);
 // A non-finite number throws std::invalid_argument.
 std::string write_json(const JsonValue& value);
 
+// One line, no spaces, keys in the value's order: the form for a wire, not for
+// disk. Strings are escaped as write_json escapes them.
+std::string compact_json(const JsonValue& value);
+
 // One formatter for every number written to disk. Integers print without a
 // fraction. Others use the shortest decimal that reads back to the same double.
 std::string format_json_number(double value);

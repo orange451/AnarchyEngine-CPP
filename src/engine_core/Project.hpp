@@ -205,6 +205,9 @@ private:
     };
 
     void bind(DataModel* game, std::unique_ptr<DataModel> owned);
+    // Reads the project at root into the bound world. replace clears a world
+    // that already has content, after a dry run so a bad file leaves it as it was.
+    void read_into_game(const std::filesystem::path& root, bool replace);
     void write_skeleton(const std::filesystem::path& root) const;
     void save_tree(bool full, const std::vector<SaveConflict>& overwrite = {});
     // The files next would write over, delete, or put back that changed on disk

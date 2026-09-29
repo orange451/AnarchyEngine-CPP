@@ -10,6 +10,8 @@
 #include "types.hpp"
 #include "PropertyBag.hpp"
 
+#include "support.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <map>
@@ -90,11 +92,6 @@ TEST_CASE("M4 display_value writes a value on one line", "[M4][merge]") {
 }
 
 namespace {
-
-struct SimRole {
-    SimRole() { engine_core::set_thread_role(engine_core::ThreadRole::Simulation); }
-    ~SimRole() { engine_core::set_thread_role(engine_core::ThreadRole::Unknown); }
-};
 
 std::vector<std::string> default_keys(const engine_core::DataModel& object) {
     engine_core::PropertyBag defaults;

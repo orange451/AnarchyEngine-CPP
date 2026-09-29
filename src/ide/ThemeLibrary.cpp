@@ -1,6 +1,7 @@
 #include "ThemeLibrary.hpp"
 
 #include "IdeResources.hpp"
+#include "Strings.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -21,13 +22,6 @@ bool HasColors(const ThemeValues& declared) {
     return std::any_of(declared.begin(), declared.end(), [](const auto& item) {
         return item.first != "--theme-name" && item.first != "--theme-base" && item.first != "--theme-extends";
     });
-}
-
-std::string Lower(std::string text) {
-    for (char& unit : text) {
-        unit = static_cast<char>(std::tolower(static_cast<unsigned char>(unit)));
-    }
-    return text;
 }
 
 // Its --theme-name, or the file's name without .css when it has none.
@@ -62,7 +56,7 @@ ThemeLibrary::ThemeLibrary(fs::path folder) : folder_(std::move(folder)) {
         }
     }
     std::sort(others.begin(), others.end(), [](const Shipped& a, const Shipped& b) {
-        return Lower(NameOf(a.theme, a.id)) < Lower(NameOf(b.theme, b.id));
+        return AsciiLower(NameOf(a.theme, a.id)) < AsciiLower(NameOf(b.theme, b.id));
     });
     shipped_.insert(shipped_.end(), others.begin(), others.end());
 }
@@ -118,8 +112,8 @@ std::vector<ThemeEntry> ThemeLibrary::list() const {
         own.push_back({UserId(file), NameOf(theme, file), false, file});
     }
     std::sort(own.begin(), own.end(), [](const ThemeEntry& a, const ThemeEntry& b) {
-        const std::string left = Lower(a.name);
-        const std::string right = Lower(b.name);
+        const std::string left = AsciiLower(a.name);
+        const std::string right = AsciiLower(b.name);
         return left != right ? left < right : a.id < b.id;
     });
     entries.insert(entries.end(), own.begin(), own.end());

@@ -79,14 +79,12 @@ JsonValue Call(const ide::McpServer& server, const std::string& tool, const std:
 }
 
 std::string ErrorText(const ide::McpServer& server, const std::string& tool, const std::string& arguments) {
-    bool failed = false;
     const JsonValue reply =
         Request(server, "tools/call", R"({"name":")" + tool + R"(","arguments":)" + arguments + "}");
     const JsonValue* result = reply.find("result");
     if (result == nullptr || result->find("isError") == nullptr || !result->find("isError")->as_bool()) {
         return {};
     }
-    (void)failed;
     return result->find("content")->items()[0].find("text")->as_string();
 }
 

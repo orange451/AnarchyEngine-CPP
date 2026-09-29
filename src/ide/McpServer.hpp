@@ -86,9 +86,8 @@ inline constexpr const char* kImageMember = "image_content";
 const char* default_instructions();
 // Standard base64 with padding, as MCP image content carries bytes.
 std::string base64_encode(std::string_view bytes);
-// One line, no spaces, keys in the value's order. What goes on the wire and
-// into a tool result's text.
-std::string compact_json(const engine_core::JsonValue& value);
+// What goes on the wire and into a tool result's text.
+using engine_core::compact_json;
 // Parses text written in the source, such as a schema. Throws on bad JSON.
 engine_core::JsonValue json_literal(const char* text);
 

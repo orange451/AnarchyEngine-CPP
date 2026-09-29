@@ -1,73 +1,16 @@
 #include "ide/TextUndoStack.hpp"
 
+#include "ide/Utf8.hpp"
+
 #include <algorithm>
 
 namespace ide {
-namespace {
-
-std::size_t utf8_length(unsigned char lead) {
-    if ((lead & 0x80u) == 0) {
-        return 1;
-    }
-    if ((lead & 0xE0u) == 0xC0u) {
-        return 2;
-    }
-    if ((lead & 0xF0u) == 0xE0u) {
-        return 3;
-    }
-    if ((lead & 0xF8u) == 0xF0u) {
-        return 4;
-    }
-    return 1;
-}
-
-int code_points(const std::string& text) {
-    int count = 0;
-    for (std::size_t index = 0; index < text.size();) {
-        index += utf8_length(static_cast<unsigned char>(text[index]));
-        ++count;
-    }
-    return count;
-}
-
-std::size_t byte_at(const std::string& text, int point) {
-    if (point <= 0) {
-        return 0;
-    }
-    std::size_t index = 0;
-    int seen = 0;
-    while (index < text.size() && seen < point) {
-        index += utf8_length(static_cast<unsigned char>(text[index]));
-        ++seen;
-    }
-    if (index > text.size()) {
-        return text.size();
-    }
-    return index;
-}
-
-int point_at(const std::string& text, std::size_t byte) {
-    int count = 0;
-    std::size_t index = 0;
-    const std::size_t end = std::min(byte, text.size());
-    while (index < end) {
-        const std::size_t next = index + utf8_length(static_cast<unsigned char>(text[index]));
-        if (next > end) {
-            break;
-        }
-        index = next;
-        ++count;
-    }
-    return count;
-}
-
-}  // namespace
 
 void TextUndoStack::reset(std::string text) {
     text_ = std::move(text);
     undo_.clear();
     redo_.clear();
-    caret_ = code_points(text_);
+    caret_ = CodePoints(text_);
 }
 
 void TextUndoStack::push(Edit edit) {
@@ -92,9 +35,9 @@ void TextUndoStack::insert(std::size_t index, std::string text) {
     Edit edit;
     edit.byte = index;
     edit.inserted = std::move(text);
-    edit.caret_after_undo = point_at(text_, index);
+    edit.caret_after_undo = CodePointsBefore(text_, index);
     text_.insert(index, edit.inserted);
-    edit.caret_after_redo = point_at(text_, index + edit.inserted.size());
+    edit.caret_after_redo = CodePointsBefore(text_, index + edit.inserted.size());
     caret_ = edit.caret_after_redo;
     push(std::move(edit));
 }
@@ -116,9 +59,9 @@ void TextUndoStack::replace(std::size_t byte, std::size_t remove_count, std::str
     if (edit.removed == edit.inserted) {
         return;
     }
-    edit.caret_after_undo = point_at(text_, byte) + code_points(edit.removed);
+    edit.caret_after_undo = CodePointsBefore(text_, byte) + CodePoints(edit.removed);
     text_.replace(byte, remove_count, edit.inserted);
-    edit.caret_after_redo = point_at(text_, byte) + code_points(edit.inserted);
+    edit.caret_after_redo = CodePointsBefore(text_, byte) + CodePoints(edit.inserted);
     caret_ = edit.caret_after_redo;
     push(std::move(edit));
 }
@@ -136,11 +79,37 @@ void TextUndoStack::erase(std::size_t index, std::size_t count) {
     Edit edit;
     edit.byte = index;
     edit.removed = text_.substr(index, count);
-    edit.caret_after_undo = point_at(text_, index + count);
-    edit.caret_after_redo = point_at(text_, index);
+    edit.caret_after_undo = CodePointsBefore(text_, index + count);
+    edit.caret_after_redo = CodePointsBefore(text_, index);
     text_.erase(index, count);
     caret_ = edit.caret_after_redo;
     push(std::move(edit));
+}
+
+void TextUndoStack::record_text(const std::string& next) {
+    const std::string& previous = text_;
+    if (next == previous) {
+        return;
+    }
+    std::size_t start = 0;
+    while (start < previous.size() && start < next.size() && previous[start] == next[start]) {
+        ++start;
+    }
+    std::size_t previous_end = previous.size();
+    std::size_t next_end = next.size();
+    while (previous_end > start && next_end > start && previous[previous_end - 1] == next[next_end - 1]) {
+        --previous_end;
+        --next_end;
+    }
+    while (start > 0 && (static_cast<unsigned char>(previous[start]) & 0xC0u) == 0x80u) {
+        --start;
+    }
+    while (previous_end < previous.size() && next_end < next.size() &&
+           (static_cast<unsigned char>(previous[previous_end]) & 0xC0u) == 0x80u) {
+        ++previous_end;
+        ++next_end;
+    }
+    replace(start, previous_end - start, next.substr(start, next_end - start));
 }
 
 bool TextUndoStack::record_change(int code_point, const std::string& removed, const std::string& inserted) {
@@ -148,13 +117,13 @@ bool TextUndoStack::record_change(int code_point, const std::string& removed, co
         return true;
     }
     // A position past the end means the widget holds text this stack never saw.
-    // byte_at would clamp it and quietly record the edit against the wrong buffer.
-    if (code_point < 0 || code_point > code_points(text_)) {
+    // CodePointByte would clamp it and quietly record the edit against the wrong buffer.
+    if (code_point < 0 || code_point > CodePoints(text_)) {
         undo_.clear();
         redo_.clear();
         return false;
     }
-    const std::size_t byte = byte_at(text_, code_point);
+    const std::size_t byte = CodePointByte(text_, code_point);
     if (byte > text_.size() || text_.compare(byte, removed.size(), removed) != 0) {
         undo_.clear();
         redo_.clear();
@@ -164,8 +133,8 @@ bool TextUndoStack::record_change(int code_point, const std::string& removed, co
     edit.byte = byte;
     edit.removed = removed;
     edit.inserted = inserted;
-    edit.caret_after_undo = code_point + code_points(removed);
-    edit.caret_after_redo = code_point + code_points(inserted);
+    edit.caret_after_undo = code_point + CodePoints(removed);
+    edit.caret_after_redo = code_point + CodePoints(inserted);
     text_.replace(byte, removed.size(), inserted);
     caret_ = edit.caret_after_redo;
     push(std::move(edit));

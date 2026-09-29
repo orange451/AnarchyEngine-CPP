@@ -1,38 +1,11 @@
 #include "ScriptMarks.hpp"
 
+#include "Utf8.hpp"
+
 #include <cstddef>
 
 namespace ide {
 namespace {
-
-std::size_t utf8_span(std::string_view text, std::size_t index) {
-    if (index >= text.size()) {
-        return 1;
-    }
-    const unsigned char lead = static_cast<unsigned char>(text[index]);
-    if (lead < 0x80) {
-        return 1;
-    }
-    int need = 0;
-    if ((lead & 0xE0) == 0xC0 && lead >= 0xC2) {
-        need = 1;
-    } else if ((lead & 0xF0) == 0xE0) {
-        need = 2;
-    } else if ((lead & 0xF8) == 0xF0 && lead <= 0xF4) {
-        need = 3;
-    } else {
-        return 1;
-    }
-    if (index + 1 + static_cast<std::size_t>(need) > text.size()) {
-        return 1;
-    }
-    for (int i = 0; i < need; ++i) {
-        if ((static_cast<unsigned char>(text[index + 1 + static_cast<std::size_t>(i)]) & 0xC0) != 0x80) {
-            return 1;
-        }
-    }
-    return static_cast<std::size_t>(1 + need);
-}
 
 // Code-point offset of a Luau position. Columns are bytes on that line.
 // A newline is one position. CR LF is one newline, matching the styled document.
@@ -56,12 +29,12 @@ int document_offset(std::string_view source, std::uint32_t line, std::uint32_t b
             ++current;
             continue;
         }
-        index += utf8_span(source, index);
+        index += Utf8Step(source, index);
         ++offset;
     }
     std::uint32_t bytes = 0;
     while (index < source.size() && bytes < byte_column && source[index] != '\n' && source[index] != '\r') {
-        const std::size_t span = utf8_span(source, index);
+        const std::size_t span = Utf8Step(source, index);
         if (bytes + static_cast<std::uint32_t>(span) > byte_column) {
             break;
         }

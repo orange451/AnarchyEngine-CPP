@@ -12,6 +12,8 @@
 #include "TestTriangle.hpp"
 #include "types.hpp"
 
+#include "support.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
@@ -24,33 +26,6 @@
 #include <vector>
 
 namespace {
-
-struct SimRole {
-    SimRole() { engine_core::set_thread_role(engine_core::ThreadRole::Simulation); }
-    ~SimRole() { engine_core::set_thread_role(engine_core::ThreadRole::Unknown); }
-};
-
-struct ScriptRig {
-    SimRole role;
-    engine_core::Game game;
-    engine_core::TaskScheduler scheduler;
-    engine_core::ScriptRuntime runtime;
-
-    ScriptRig() {
-        scheduler.reserve(16);
-        game.attach_scheduler(&scheduler);
-        runtime.attach(game, scheduler);
-    }
-
-    void frames(int count, double dt = 1.0 / 60.0) {
-        for (int i = 0; i < count; ++i) {
-            scheduler.run_phase(engine_core::Phase::Heartbeat, dt);
-            game.events().drain();
-            runtime.heartbeat(dt);
-            game.events().drain();
-        }
-    }
-};
 
 std::string dump(const std::vector<engine_core::Diagnostic>& diagnostics) {
     std::ostringstream out;
@@ -79,14 +54,6 @@ bool has_code(const std::vector<engine_core::Diagnostic>& diagnostics, const cha
         }
     }
     return false;
-}
-
-engine_core::Script& add_script(engine_core::DataModel& game, const char* name, const char* source) {
-    engine_core::Script& script = game.create<engine_core::Script>();
-    game.set_name(script.id(), name);
-    script.set_source(source);
-    game.set_parent(script.id(), game.id());
-    return script;
 }
 
 }  // namespace
@@ -455,8 +422,8 @@ TEST_CASE("A12 a script is rechecked when the tree it looks into changes", "[A12
 
 TEST_CASE("A13 a loaded project is analyzed against the whole loaded tree", "[A13]") {
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / ("ae-a13-" + std::to_string(std::random_device{}()));
-    fs::remove_all(dir);
+    const TempDir temp;
+    const fs::path& dir = temp.path;
     auto write = [&dir](const char* path, const std::string& bytes) {
         fs::create_directories((dir / path).parent_path());
         std::ofstream(dir / path, std::ios::binary) << bytes;
@@ -479,7 +446,6 @@ TEST_CASE("A13 a loaded project is analyzed against the whole loaded tree", "[A1
     const engine_core::InstanceId hop = *rig.game.find_guid("zzz");
     INFO(dump(analysis.diagnostics(hop)));
     REQUIRE(analysis.diagnostics(hop).empty());
-    fs::remove_all(dir);
 }
 
 namespace {

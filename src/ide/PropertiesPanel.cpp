@@ -53,34 +53,6 @@ constexpr const char* kPickingStyle =
     "padding: 0 4px; border-width: 1px; border-style: solid; border-radius: 3px; "
     "border-color: var(--ide-properties-picking-border-color); background-color: var(--ide-properties-picking-color);";
 
-// One replace for the span that differs, so the stack sees a paste or a
-// selection overwrite as one step. Byte ends are pulled to UTF-8 boundaries.
-void RecordChange(TextUndoStack& stack, const std::string& next) {
-    const std::string& previous = stack.text();
-    if (next == previous) {
-        return;
-    }
-    std::size_t start = 0;
-    while (start < previous.size() && start < next.size() && previous[start] == next[start]) {
-        ++start;
-    }
-    std::size_t previous_end = previous.size();
-    std::size_t next_end = next.size();
-    while (previous_end > start && next_end > start && previous[previous_end - 1] == next[next_end - 1]) {
-        --previous_end;
-        --next_end;
-    }
-    while (start > 0 && (static_cast<unsigned char>(previous[start]) & 0xC0u) == 0x80u) {
-        --start;
-    }
-    while (previous_end < previous.size() && next_end < next.size() &&
-           (static_cast<unsigned char>(previous[previous_end]) & 0xC0u) == 0x80u) {
-        ++previous_end;
-        ++next_end;
-    }
-    stack.replace(start, previous_end - start, next.substr(start, next_end - start));
-}
-
 // A value field. dirty is set by typing and cleared by show, a commit, or undo
 // back to where the field started, so a blank mixed field that was only
 // focused commits nothing.
@@ -199,7 +171,7 @@ private:
         if (mute_ || getText() == stack.text()) {
             return;
         }
-        RecordChange(stack, getText());
+        stack.record_text(getText());
         dirty = true;
     }
 

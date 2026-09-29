@@ -84,7 +84,6 @@ private:
     void simulation_loop();
     void render_loop();
     void step_physics(double dt);
-    void pace(double hz_anchor_seconds) const;
     void drain_edits();
     // Runs one step of a loop. A contract failure goes to on_contract. Any other
     // exception is reported to stderr and the console, and the loop goes on.

@@ -1,6 +1,8 @@
 #include "Vector2.hpp"
 
 #include "LuaApi.hpp"
+#include "LuaUserdata.hpp"
+#include "VectorMath.hpp"
 
 #include "lualib.h"
 
@@ -12,38 +14,14 @@ namespace {
 
 const char* kVector2Meta = "AE.Vector2";
 
-// Roblox scales the tolerance by |component| + 1, as Vector3 does.
-bool fuzzy_component(float left, float right, double epsilon) {
-    const double a = left;
-    const double b = right;
-    return a == b || std::fabs(a - b) <= (std::fabs(a) + 1.0) * epsilon;
-}
-
-float sign_of(float value) {
-    if (value > 0.f) {
-        return 1.f;
-    }
-    if (value < 0.f) {
-        return -1.f;
-    }
-    return 0.f;
-}
-
-float lerp_component(float from, float to, double alpha) {
-    if (alpha == 1.0) {
-        return to;
-    }
-    return static_cast<float>(from + (to - from) * alpha);
-}
+using vector_math::fuzzy_component;
+using vector_math::lerp_component;
+using vector_math::sign_of;
 
 double magnitude_of(const Vec2& value) { return std::sqrt(double(value.x) * value.x + double(value.y) * value.y); }
 
 const Vec2& check_vector2(lua_State* state, int index) {
-    const Vec2* value = to_vector2(state, index);
-    if (value == nullptr) {
-        luaL_typeerrorL(state, index, "Vector2");
-    }
-    return *value;
+    return check_userdata<Vec2>(state, index, kVector2Meta, "Vector2");
 }
 
 void push(lua_State* state, float x, float y) { push_vector2(state, Vec2{x, y}); }
@@ -351,22 +329,10 @@ ANARCHY_LUA_REGISTER(register_vector2_lua) {
 
 }  // namespace
 
-void push_vector2(lua_State* state, Vec2 value) {
-    auto* data = static_cast<Vec2*>(lua_newuserdata(state, sizeof(Vec2)));
-    *data = value;
-    luaL_getmetatable(state, kVector2Meta);
-    lua_setmetatable(state, -2);
-}
+void push_vector2(lua_State* state, Vec2 value) { push_userdata(state, value, kVector2Meta); }
 
 const Vec2* to_vector2(lua_State* state, int index) {
-    void* data = lua_touserdata(state, index);
-    if (data == nullptr || !lua_getmetatable(state, index)) {
-        return nullptr;
-    }
-    luaL_getmetatable(state, kVector2Meta);
-    const bool match = lua_rawequal(state, -1, -2) != 0;
-    lua_pop(state, 2);
-    return match ? static_cast<const Vec2*>(data) : nullptr;
+    return static_cast<const Vec2*>(test_userdata(state, index, kVector2Meta));
 }
 
 void open_vector2(lua_State* state) {

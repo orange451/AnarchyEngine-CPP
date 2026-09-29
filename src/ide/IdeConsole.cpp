@@ -265,30 +265,7 @@ void IdeConsole::noteCommandEdit() {
     if (mute_undo_ || undo_stack_ == nullptr || command_ == nullptr) {
         return;
     }
-    const std::string& next = command_->getText();
-    const std::string& previous = undo_stack_->text();
-    if (next == previous) {
-        return;
-    }
-    std::size_t start = 0;
-    while (start < previous.size() && start < next.size() && previous[start] == next[start]) {
-        ++start;
-    }
-    std::size_t previous_end = previous.size();
-    std::size_t next_end = next.size();
-    while (previous_end > start && next_end > start && previous[previous_end - 1] == next[next_end - 1]) {
-        --previous_end;
-        --next_end;
-    }
-    while (start > 0 && (static_cast<unsigned char>(previous[start]) & 0xC0u) == 0x80u) {
-        --start;
-    }
-    while (previous_end < previous.size() && next_end < next.size() &&
-           (static_cast<unsigned char>(previous[previous_end]) & 0xC0u) == 0x80u) {
-        ++previous_end;
-        ++next_end;
-    }
-    undo_stack_->replace(start, previous_end - start, next.substr(start, next_end - start));
+    undo_stack_->record_text(command_->getText());
 }
 
 void IdeConsole::applyUndoText() {

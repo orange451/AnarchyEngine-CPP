@@ -23,6 +23,11 @@ public:
     // caller should reset it from the widget.
     bool record_change(int code_point, const std::string& removed, const std::string& inserted);
 
+    // The whole new text of a field. Records one replace for the span that
+    // differs, so a paste or a selection overwrite is one step. The span's ends
+    // move out to UTF-8 boundaries. Nothing is recorded when next is the same.
+    void record_text(const std::string& next);
+
     bool can_undo() const { return !undo_.empty(); }
     bool can_redo() const { return !redo_.empty(); }
     bool undo();

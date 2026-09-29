@@ -3,7 +3,6 @@
 #include "httplib.h"
 
 #include <cstdint>
-#include <cstdio>
 #include <exception>
 #include <stdexcept>
 #include <string_view>
@@ -34,84 +33,6 @@ constexpr int kParseError = -32700;
 constexpr int kInvalidRequest = -32600;
 constexpr int kMethodNotFound = -32601;
 constexpr int kInvalidParams = -32602;
-
-void AppendString(std::string& out, const std::string& text) {
-    out.push_back('"');
-    for (const char unit : text) {
-        const auto byte = static_cast<unsigned char>(unit);
-        switch (unit) {
-            case '"':
-                out += "\\\"";
-                break;
-            case '\\':
-                out += "\\\\";
-                break;
-            case '\n':
-                out += "\\n";
-                break;
-            case '\r':
-                out += "\\r";
-                break;
-            case '\t':
-                out += "\\t";
-                break;
-            default:
-                if (byte < 0x20) {
-                    char escaped[8];
-                    std::snprintf(escaped, sizeof(escaped), "\\u%04x", byte);
-                    out += escaped;
-                } else {
-                    out.push_back(unit);
-                }
-        }
-    }
-    out.push_back('"');
-}
-
-void AppendJson(std::string& out, const JsonValue& value) {
-    switch (value.kind()) {
-        case JsonValue::Kind::Null:
-            out += "null";
-            break;
-        case JsonValue::Kind::Bool:
-            out += value.as_bool() ? "true" : "false";
-            break;
-        case JsonValue::Kind::Number:
-            out += engine_core::format_json_number(value.as_number());
-            break;
-        case JsonValue::Kind::String:
-            AppendString(out, value.as_string());
-            break;
-        case JsonValue::Kind::Array: {
-            out.push_back('[');
-            bool first = true;
-            for (const JsonValue& item : value.items()) {
-                if (!first) {
-                    out.push_back(',');
-                }
-                first = false;
-                AppendJson(out, item);
-            }
-            out.push_back(']');
-            break;
-        }
-        case JsonValue::Kind::Object: {
-            out.push_back('{');
-            bool first = true;
-            for (const JsonValue::Member& member : value.members()) {
-                if (!first) {
-                    out.push_back(',');
-                }
-                first = false;
-                AppendString(out, member.first);
-                out.push_back(':');
-                AppendJson(out, member.second);
-            }
-            out.push_back('}');
-            break;
-        }
-    }
-}
 
 JsonValue ErrorReply(const JsonValue& id, int code, const std::string& message) {
     JsonValue error = JsonValue::object();
@@ -191,12 +112,6 @@ bool LocalOrigin(const std::string& origin) {
 }
 
 }  // namespace
-
-std::string compact_json(const JsonValue& value) {
-    std::string out;
-    AppendJson(out, value);
-    return out;
-}
 
 JsonValue json_literal(const char* text) {
     JsonValue value;

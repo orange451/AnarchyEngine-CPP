@@ -85,7 +85,4 @@ private:
     std::unique_ptr<Compiled> regex_;
 };
 
-// Code points in text. A continuation byte is part of the code point before it.
-int code_points(std::string_view text);
-
 }  // namespace ide

@@ -309,8 +309,6 @@ protected:
     // A new, empty world with this object as its root, named root_name.
     // Only Game makes one.
     explicit DataModel(const char* root_name);
-    DataModel(DataModel&&) noexcept;
-    DataModel& operator=(DataModel&&) noexcept;
 
     // destroy() keeps the C++ object so a stale reference can fail closed.
     // on_release runs then. on_reuse runs when that storage is issued again.
@@ -433,6 +431,13 @@ private:
     template <typename T>
     static SpawnOps ops_for();
     DataModel& spawn(const SpawnOps& ops);
+    struct InstancePool;
+    // Where the next object in pool lives: the storage freed last, else the next unused.
+    static std::uint32_t take_storage(InstancePool& pool);
+    // The object for id at storage: the one released there, reused, or a new one.
+    DataModel* pooled_object(InstancePool& pool, std::uint32_t storage, InstanceId id);
+    // Gives a slot's object back to its pool. The slot is no longer alive.
+    void release_to_pool(Slot& part);
     void rebind(InstanceId id) { id_ = id; }
 
     void require_simulation_thread(const char* message) const;
@@ -442,6 +447,11 @@ private:
     bool authorize(const Slot& part, bool force_sim_write);
     bool reject_write(const char* message);
     void note(InstanceId id, VisualField fields, WriteOrigin origin);
+    // Whether a Transform or Color write from this thread goes to the command queue.
+    bool queues_visual_write() const;
+    // The GameObject a Transform or Color write lands on, or null after the write
+    // is refused. The messages are literals: a deferred violation keeps the pointer.
+    GameObject* visual_target(InstanceId id, bool force, const char* dead, const char* not_object);
     void apply_transform(InstanceId id, const Transform& transform, bool force);
     void apply_color(InstanceId id, ColorRgb color, bool force);
     void enqueue(Command command);

@@ -1,6 +1,8 @@
 #include "ColorLiterals.hpp"
 
 #include "LuauHighlight.hpp"
+#include "Strings.hpp"
+#include "Utf8.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -21,12 +23,16 @@ struct Cursor {
 
     explicit Cursor(std::string_view source) : text(source) {
         code_point.reserve(source.size() + 1);
+        // A byte inside a code point maps to the code point after it.
         int count = 0;
-        for (const char unit : source) {
+        for (std::size_t index = 0; index < source.size();) {
+            const std::size_t step = Utf8Step(source, index);
             code_point.push_back(count);
-            if ((static_cast<unsigned char>(unit) & 0xC0u) != 0x80u) {
-                ++count;
+            ++count;
+            for (std::size_t i = 1; i < step; ++i) {
+                code_point.push_back(count);
             }
+            index += step;
         }
         code_point.push_back(count);
     }
@@ -218,8 +224,7 @@ std::string format_color3_literal(const Color3Literal& literal, const engine_cor
         case Color3Literal::Form::FromHex: {
             std::string hex = engine_core::color3_to_hex(color);
             if (!literal.upper) {
-                std::transform(hex.begin(), hex.end(), hex.begin(),
-                               [](char unit) { return static_cast<char>(std::tolower(static_cast<unsigned char>(unit))); });
+                hex = AsciiLower(hex);
             }
             const std::string quote(1, literal.quote);
             return "Color3.fromHex(" + quote + (literal.hash ? "#" : "") + hex + quote + ")";

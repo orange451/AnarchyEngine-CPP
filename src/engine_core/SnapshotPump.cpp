@@ -43,7 +43,7 @@ void SnapshotPump::set_camera(const Transform& camera) {
 }
 
 VisualInstance* SnapshotPump::base_find(InstanceId id) {
-    const std::uint32_t index = id & 0xffffu;
+    const std::uint32_t index = id_slot(id);
     if (index >= base_index_.size()) {
         return nullptr;
     }
@@ -59,14 +59,14 @@ VisualInstance* SnapshotPump::base_find(InstanceId id) {
 }
 
 void SnapshotPump::remember(InstanceId id, int position) {
-    const std::uint32_t index = id & 0xffffu;
+    const std::uint32_t index = id_slot(id);
     if (index < base_index_.size()) {
         base_index_[index] = position;
     }
 }
 
 void SnapshotPump::erase_base(InstanceId id) {
-    const std::uint32_t index = id & 0xffffu;
+    const std::uint32_t index = id_slot(id);
     if (index >= base_index_.size()) {
         return;
     }

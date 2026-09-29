@@ -48,7 +48,6 @@ set(STUDIO_SOURCES
     src/ide/LuauHighlight.cpp
     src/ide/LuauComplete.cpp
     src/ide/IdeTheme.cpp
-    src/ide/IdeTreeTest.cpp
     src/ide/IdeLayout.cpp
     src/ide/TextUndoStack.cpp
     src/ide/InputRouter.cpp
@@ -407,6 +406,7 @@ add_executable(engine-tests
     tests/ScriptPairsTest.cpp
     tests/TextSearchTest.cpp
     tests/TextWrapTest.cpp
+    tests/Utf8Test.cpp
     tests/ViewCaptureTest.cpp
     src/ide/ColorLiterals.cpp
     src/ide/LuauHighlight.cpp

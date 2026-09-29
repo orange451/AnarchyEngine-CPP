@@ -3,6 +3,7 @@
 #include "IdeIcons.hpp"
 #include "IdeResources.hpp"
 #include "Preferences.hpp"
+#include "Strings.hpp"
 #include "ThemeLibrary.hpp"
 
 #include <algorithm>
@@ -99,13 +100,6 @@ protected:
     }
 };
 
-std::string Lower(std::string text) {
-    for (char& unit : text) {
-        unit = static_cast<char>(std::tolower(static_cast<unsigned char>(unit)));
-    }
-    return text;
-}
-
 std::string Trim(const std::string& text) {
     const auto space = [](char unit) { return std::isspace(static_cast<unsigned char>(unit)) != 0; };
     const auto begin = std::find_if_not(text.begin(), text.end(), space);
@@ -144,7 +138,7 @@ bool SameValue(const std::string& a, const std::string& b) {
 }
 
 bool IsThemeFile(const std::string& path) {
-    return path.size() > 4 && Lower(path.substr(path.size() - 4)) == ".css";
+    return path.size() > 4 && AsciiLower(path.substr(path.size() - 4)) == ".css";
 }
 
 std::shared_ptr<jadefx::Button> MakeButton(const char* text, std::function<void()> action) {
@@ -505,8 +499,8 @@ void PreferencesPanel::commit_frame_rate(bool restore) {
 }
 
 void PreferencesPanel::layoutChildren() {
-    if (filter_field_ && Lower(Trim(filter_field_->getText())) != filter_) {
-        filter_ = Lower(Trim(filter_field_->getText()));
+    if (filter_field_ && AsciiLower(Trim(filter_field_->getText())) != filter_) {
+        filter_ = AsciiLower(Trim(filter_field_->getText()));
         rebuild_rows();
     }
     jadefx::BorderPane::layoutChildren();
@@ -774,9 +768,9 @@ void PreferencesPanel::rebuild_rows() {
         group->body->getChildren().clear();
         for (Row* row : group->rows) {
             const ThemeVariable& variable = *row->variable;
-            if (filter_.empty() || Lower(variable.label).find(filter_) != std::string::npos ||
-                Lower(variable.name).find(filter_) != std::string::npos ||
-                Lower(variable.group).find(filter_) != std::string::npos) {
+            if (filter_.empty() || AsciiLower(variable.label).find(filter_) != std::string::npos ||
+                AsciiLower(variable.name).find(filter_) != std::string::npos ||
+                AsciiLower(variable.group).find(filter_) != std::string::npos) {
                 group->body->getChildren().add(row->box);
             }
         }

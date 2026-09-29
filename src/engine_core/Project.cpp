@@ -3,6 +3,7 @@
 #include "Folder.hpp"
 #include "Game.hpp"
 #include "GameObject.hpp"
+#include "FileBytes.hpp"
 #include "JsonMerge.hpp"
 #include "ModuleScript.hpp"
 #include "Script.hpp"
@@ -90,8 +91,6 @@ ProjectFactory find_factory(std::string_view class_name) {
 // Paths inside a project are UTF-8 strings joined with '/'.
 fs::path disk_path(const fs::path& root, const std::string& relative) { return root / fs::u8path(relative); }
 
-std::string utf8(const fs::path& path) { return path.u8string(); }
-
 std::string join(const std::string& dir, const std::string& name) { return dir.empty() ? name : dir + "/" + name; }
 
 bool ends_with(const std::string& text, std::string_view suffix) {
@@ -101,47 +100,18 @@ bool ends_with(const std::string& text, std::string_view suffix) {
 [[noreturn]] void fail(const std::string& message) { throw ProjectError(message); }
 
 std::string read_file(const fs::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        fail("cannot read " + utf8(path));
-    }
-    std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    if (in.bad()) {
-        fail("cannot read " + utf8(path));
+    std::string bytes;
+    std::string error;
+    if (!engine_core::read_file(path, bytes, error)) {
+        fail(error);
     }
     return bytes;
 }
 
-// Writes beside the target, then renames over it, so a crash leaves the old file.
 void write_file(const fs::path& path, const std::string& bytes) {
-    std::error_code error;
-    fs::create_directories(path.parent_path(), error);
-    if (error) {
-        fail("cannot create " + utf8(path.parent_path()) + ": " + error.message());
-    }
-    fs::path temp = path;
-    temp += ".tmp";
-    bool written = false;
-    {
-        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-        if (!out) {
-            fail("cannot write " + utf8(temp));
-        }
-        out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-        out.flush();
-        written = static_cast<bool>(out);
-    }
-    // A temporary file left behind, as by a full disk, would keep a new folder
-    // from being removed when a failed save is put back.
-    if (!written) {
-        fs::remove(temp, error);
-        fail("cannot write " + utf8(temp));
-    }
-    fs::rename(temp, path, error);
-    if (error) {
-        const std::string reason = error.message();
-        fs::remove(temp, error);
-        fail("cannot replace " + utf8(path) + ": " + reason);
+    std::string error;
+    if (!engine_core::write_file(path, bytes, error)) {
+        fail(error);
     }
 }
 
@@ -149,11 +119,11 @@ void move_file(const fs::path& from, const fs::path& to) {
     std::error_code error;
     fs::create_directories(to.parent_path(), error);
     if (error) {
-        fail("cannot create " + utf8(to.parent_path()) + ": " + error.message());
+        fail("cannot create " + utf8_path(to.parent_path()) + ": " + error.message());
     }
     fs::rename(from, to, error);
     if (error) {
-        fail("cannot move " + utf8(from) + " to " + utf8(to) + ": " + error.message());
+        fail("cannot move " + utf8_path(from) + " to " + utf8_path(to) + ": " + error.message());
     }
 }
 
@@ -167,9 +137,9 @@ bool missing_or_empty_dir(const fs::path& path) {
 
 std::string project_name_for(const fs::path& root) {
     fs::path normal = root.lexically_normal();
-    std::string name = utf8(normal.filename());
+    std::string name = utf8_path(normal.filename());
     if (name.empty() || name == ".") {
-        name = utf8(normal.parent_path().filename());
+        name = utf8_path(normal.parent_path().filename());
     }
     return name.empty() ? std::string("Project") : name;
 }
@@ -214,33 +184,33 @@ void read_project_json(const fs::path& root, std::string& name, Layout& layout) 
     const fs::path path = root / "project.json";
     std::error_code error;
     if (!fs::is_regular_file(path, error)) {
-        fail(utf8(path) + " is missing");
+        fail(utf8_path(path) + " is missing");
     }
     JsonValue doc;
     std::string message;
     if (!parse_json(read_file(path), doc, message)) {
-        fail(utf8(path) + ": " + message);
+        fail(utf8_path(path) + ": " + message);
     }
     if (!doc.is_object()) {
-        fail(utf8(path) + ": expected an object");
+        fail(utf8_path(path) + ": expected an object");
     }
     const JsonValue* format = doc.find("format");
     if (format == nullptr || !format->is_number() || format->as_number() != kFormat) {
-        fail(utf8(path) + ": format must be " + std::to_string(kFormat));
+        fail(utf8_path(path) + ": format must be " + std::to_string(kFormat));
     }
     const JsonValue* label = doc.find("name");
     name = label != nullptr && label->is_string() ? label->as_string() : project_name_for(root);
     if (const JsonValue* tree = doc.find("tree")) {
         const JsonValue* src = tree->find("src");
         if (src == nullptr || !src->is_string() || !safe_relative(src->as_string())) {
-            fail(utf8(path) + ": tree.src must be a relative directory");
+            fail(utf8_path(path) + ": tree.src must be a relative directory");
         }
         layout.src = src->as_string();
     }
     if (const JsonValue* resources = doc.find("resources")) {
         const JsonValue* dir = resources->find("root");
         if (dir == nullptr || !dir->is_string() || !safe_relative(dir->as_string())) {
-            fail(utf8(path) + ": resources.root must be a relative directory");
+            fail(utf8_path(path) + ": resources.root must be a relative directory");
         }
         layout.resources = dir->as_string();
     }
@@ -297,11 +267,11 @@ public:
         const std::string src = layout_.src;
         std::error_code error;
         if (!fs::is_directory(disk_path(root_, src), error)) {
-            fail(utf8(disk_path(root_, src)) + " is missing");
+            fail(utf8_path(disk_path(root_, src)) + " is missing");
         }
         const std::string init = join(src, "init.json");
         if (!fs::is_regular_file(disk_path(root_, init), error)) {
-            fail(utf8(disk_path(root_, init)) + " is missing");
+            fail(utf8_path(disk_path(root_, init)) + " is missing");
         }
         PlanNode root;
         read_props(root, init, std::string(), /*root*/ true);
@@ -405,7 +375,7 @@ private:
         std::vector<std::pair<std::string, bool>> entries;
         std::error_code error;
         for (fs::directory_iterator it(disk_path(root_, dir), error), end; !error && it != end; it.increment(error)) {
-            const std::string name = utf8(it->path().filename());
+            const std::string name = utf8_path(it->path().filename());
             std::error_code kind;
             entries.emplace_back(name, it->is_directory(kind));
         }
@@ -550,7 +520,7 @@ std::map<std::string, std::vector<std::string>> guid_claims(const fs::path& root
     const fs::path top = disk_path(root, src);
     std::error_code error;
     for (fs::recursive_directory_iterator it(top, error), end; !error && it != end; it.increment(error)) {
-        const std::string name = utf8(it->path().filename());
+        const std::string name = utf8_path(it->path().filename());
         std::error_code kind;
         std::string guid;
         if (it->is_directory(kind)) {
@@ -566,7 +536,7 @@ std::map<std::string, std::vector<std::string>> guid_claims(const fs::path& root
         }
         if (name == "init.json" || name == "init.meta.json" || name == "init.luau") {
             // The root's init.json names no GUID; its GUID is inside.
-            if (it->path().parent_path() == top || !split_stem(utf8(it->path().parent_path().filename()), guid)) {
+            if (it->path().parent_path() == top || !split_stem(utf8_path(it->path().parent_path().filename()), guid)) {
                 continue;
             }
         } else {
@@ -1047,7 +1017,7 @@ void Project::write_skeleton(const fs::path& root) const {
     std::error_code error;
     fs::create_directories(disk_path(root, layout.src), error);
     if (error) {
-        fail("cannot create " + utf8(disk_path(root, layout.src)) + ": " + error.message());
+        fail("cannot create " + utf8_path(disk_path(root, layout.src)) + ": " + error.message());
     }
 }
 
@@ -1061,7 +1031,7 @@ Project Project::create(const fs::path& root) {
 
 Project Project::create(const fs::path& root, DataModel& into) {
     if (!missing_or_empty_dir(root)) {
-        fail(utf8(root) + " is not empty");
+        fail(utf8_path(root) + " is not empty");
     }
     Project project;
     project.bind(&into, nullptr);
@@ -1080,7 +1050,7 @@ Project Project::create(const fs::path& root, DataModel& into) {
 
 Project Project::adopt(const fs::path& root, DataModel& game) {
     if (!missing_or_empty_dir(root)) {
-        fail(utf8(root) + " is not empty");
+        fail(utf8_path(root) + " is not empty");
     }
     Project project;
     project.bind(&game, nullptr);
@@ -1092,68 +1062,55 @@ Project Project::adopt(const fs::path& root, DataModel& game) {
 }
 
 Project Project::load(const fs::path& root) {
-    auto owned = std::make_unique<Game>();
     Project project;
-    project.bind(nullptr, std::move(owned));
-    project.root_ = root;
-    Layout layout;
-    read_project_json(root, project.name_, layout);
-    project.src_ = layout.src;
-    const std::vector<PlanNode> plan = PlanReader(root, layout).read();
-    std::vector<InstanceId> ids;
-    {
-        Rebuild rebuild(*project.game_);
-        ids = build(*project.game_, plan);
-        rebuild.finish();
-    }
-    const std::vector<std::size_t> parents = parents_of(plan);
-    for (std::size_t index = 0; index < plan.size(); ++index) {
-        const PlanNode& node = plan[index];
-        project.files_[node.guid] = from_disk(node, index == 0 ? std::string() : plan[parents[index]].guid,
-                                              written_doc(*project.game_, ids[index], node.doc));
-        project.id_guid_[ids[index]] = node.guid;
-        project.guid_id_[node.guid] = ids[index];
-    }
+    project.bind(nullptr, std::make_unique<Game>());
+    project.read_into_game(root, false);
     return project;
 }
 
 Project Project::load(const fs::path& root, DataModel& into) {
     Project project;
     project.bind(&into, nullptr);
-    project.root_ = root;
+    project.read_into_game(root, true);
+    return project;
+}
+
+void Project::read_into_game(const fs::path& root, bool replace) {
+    root_ = root;
     Layout layout;
-    read_project_json(root, project.name_, layout);
-    project.src_ = layout.src;
+    read_project_json(root, name_, layout);
+    src_ = layout.src;
     const std::vector<PlanNode> plan = PlanReader(root, layout).read();
-    {
-        // A class-level error (a bad Color) must not leave `into` half rebuilt.
+    if (replace) {
+        // A class-level error (a bad Color) must not leave the world half rebuilt.
         Game scratch;
         scratch.history().set_enabled(false);
         build(scratch, plan);
     }
     std::vector<InstanceId> ids;
     {
-        Rebuild rebuild(into);
-        clear_world(into);
-        ids = build(into, plan);
+        Rebuild rebuild(*game_);
+        if (replace) {
+            clear_world(*game_);
+        }
+        ids = build(*game_, plan);
         rebuild.finish();
     }
     const std::vector<std::size_t> parents = parents_of(plan);
     for (std::size_t index = 0; index < plan.size(); ++index) {
         const PlanNode& node = plan[index];
-        project.files_[node.guid] = from_disk(node, index == 0 ? std::string() : plan[parents[index]].guid,
-                                              written_doc(*project.game_, ids[index], node.doc));
-        project.id_guid_[ids[index]] = node.guid;
-        project.guid_id_[node.guid] = ids[index];
+        files_[node.guid] = from_disk(node, index == 0 ? std::string() : plan[parents[index]].guid,
+                                      written_doc(*game_, ids[index], node.doc));
+        id_guid_[ids[index]] = node.guid;
+        guid_id_[node.guid] = ids[index];
     }
-    return project;
 }
 
 void Project::save(const std::vector<SaveConflict>& overwrite) { save_tree(false, overwrite); }
 
 void Project::save_as(const fs::path& root) {
     if (!missing_or_empty_dir(root)) {
-        fail(utf8(root) + " is not empty");
+        fail(utf8_path(root) + " is not empty");
     }
     Layout old_layout;
     std::string ignored;
@@ -1168,7 +1125,7 @@ void Project::save_as(const fs::path& root) {
         fs::copy(from, disk_path(root, Layout{}.resources),
                  fs::copy_options::recursive | fs::copy_options::overwrite_existing, error);
         if (error) {
-            fail("cannot copy " + utf8(from) + ": " + error.message());
+            fail("cannot copy " + utf8_path(from) + ": " + error.message());
         }
     }
     root_ = root;
@@ -2279,7 +2236,7 @@ void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {
         std::error_code failure;
         fs::remove(target, failure);
         if (failure) {
-            fail("cannot remove " + utf8(target) + ": " + failure.message());
+            fail("cannot remove " + utf8_path(target) + ": " + failure.message());
         }
         undo.push_back(std::move(step));
         report.removed.push_back(path);

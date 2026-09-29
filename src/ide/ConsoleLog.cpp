@@ -1,5 +1,7 @@
 #include "ConsoleLog.hpp"
 
+#include "Utf8.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -25,17 +27,6 @@ struct Editable {
     explicit Editable(jadefx::StyledTextArea& area) : area(area), previous(area.isEditable()) { area.setEditable(true); }
     ~Editable() { area.setEditable(previous); }
 };
-
-// Code points, the unit the text area counts in.
-int units(std::string_view text) {
-    int count = 0;
-    for (const char c : text) {
-        if ((static_cast<unsigned char>(c) & 0xC0u) != 0x80u) {
-            ++count;
-        }
-    }
-    return count;
-}
 
 std::string formatStamp(std::chrono::system_clock::time_point when) {
     const std::time_t seconds = std::chrono::system_clock::to_time_t(when);
@@ -124,7 +115,7 @@ std::string ConsoleLog::toggleText(const Toggle& toggle) {
 }
 
 int ConsoleLog::clickEnd(const Toggle& toggle) {
-    return toggle.begin + units(toggle.open ? kOpen : kClosed);
+    return toggle.begin + CodePoints(toggle.open ? kOpen : kClosed);
 }
 
 void ConsoleLog::clearLog() {
@@ -200,7 +191,7 @@ void ConsoleLog::appendLine(const ScriptRuntime::OutputLine& line) {
             Toggle toggle;
             toggle.table = value.table;
             toggle.href = nextHref("table");
-            toggle.begin = units(row.text);
+            toggle.begin = CodePoints(row.text);
             row.text += toggleText(toggle);
             row.row.toggles.push_back(std::move(toggle));
         }
@@ -225,16 +216,16 @@ std::vector<ConsoleLog::Pending> ConsoleLog::fieldRows(const Row& parent, int sl
     for (const TableField& field : table.fields) {
         Pending pending = make(parent.depth + 1);
         std::string& text = pending.text;
-        const int keyAt = units(text);
+        const int keyAt = CodePoints(text);
         text += oneLine(field.key);
-        pending.spans.push_back(Span{keyAt, units(text), "key"});
+        pending.spans.push_back(Span{keyAt, CodePoints(text), "key"});
         text += " = ";
         if (field.table && !isEmpty(*field.table)) {
             Toggle toggle;
             toggle.table = field.table;
             toggle.comma = true;
             toggle.href = nextHref("table");
-            toggle.begin = units(text);
+            toggle.begin = CodePoints(text);
             text += toggleText(toggle);
             pending.row.toggles.push_back(std::move(toggle));
             rows.push_back(std::move(pending));
@@ -243,9 +234,9 @@ std::vector<ConsoleLog::Pending> ConsoleLog::fieldRows(const Row& parent, int sl
         if (field.table) {
             text.append(kEmpty);
         } else if (!field.note.empty()) {
-            const int noteAt = units(text);
+            const int noteAt = CodePoints(text);
             text += "<" + field.note + ">";
-            pending.spans.push_back(Span{noteAt, units(text), "note"});
+            pending.spans.push_back(Span{noteAt, CodePoints(text), "note"});
         } else {
             text += oneLine(field.value);
         }
@@ -254,9 +245,9 @@ std::vector<ConsoleLog::Pending> ConsoleLog::fieldRows(const Row& parent, int sl
     }
     if (table.omitted > 0) {
         Pending pending = make(parent.depth + 1);
-        const int at = units(pending.text);
+        const int at = CodePoints(pending.text);
         pending.text += "... " + std::to_string(table.omitted) + " more";
-        pending.spans.push_back(Span{at, units(pending.text), "note"});
+        pending.spans.push_back(Span{at, CodePoints(pending.text), "note"});
         rows.push_back(std::move(pending));
     }
     // The brace lines up with the row that opened it. A field keeps its comma after it.
@@ -276,7 +267,7 @@ void ConsoleLog::insertRows(int paragraph, std::vector<Pending> rows) {
     // Each row is stamp, space, text, newline, put in front of the paragraph at column 0.
     std::string text;
     for (Pending& pending : rows) {
-        const int prefix = units(pending.row.stamp) + 1;
+        const int prefix = CodePoints(pending.row.stamp) + 1;
         for (Toggle& toggle : pending.row.toggles) {
             toggle.begin += prefix;
         }
@@ -291,9 +282,9 @@ void ConsoleLog::insertRows(int paragraph, std::vector<Pending> rows) {
     std::vector<Row> inserted;
     inserted.reserve(rows.size());
     for (Pending& pending : rows) {
-        const int stampEnd = offset + units(pending.row.stamp);
+        const int stampEnd = offset + CodePoints(pending.row.stamp);
         const int textAt = stampEnd + 1;
-        const int end = textAt + units(pending.text) + 1;
+        const int end = textAt + CodePoints(pending.text) + 1;
         if (stampEnd > offset) {
             setStyleClass(offset, stampEnd, pending.stampStyle);
         }
@@ -340,7 +331,7 @@ const ConsoleLog::Link* ConsoleLog::findLink(int paragraph, int column) const {
     if (row.link < 0 || row.link >= static_cast<int>(links_.size()) || findToggle(paragraph, column) >= 0) {
         return nullptr;
     }
-    const int textAt = units(row.stamp) + 1;
+    const int textAt = CodePoints(row.stamp) + 1;
     if (column < textAt || column >= getParagraph(paragraph).length()) {
         return nullptr;
     }
@@ -416,15 +407,15 @@ bool ConsoleLog::toggleAt(int paragraph, int column) {
         const bool open = toggle.open;
         const std::string after = toggleText(toggle);
         const int marker = absolutePosition(paragraph, toggle.begin);
-        replaceText(marker, marker + units(before), after);
+        replaceText(marker, marker + CodePoints(before), after);
         // The new text takes the style in front of it, so the row's link is put back past the braces.
         const Row& row = rows_[at];
         if (row.link >= 0) {
-            setLink(marker, marker + units(after), links_[static_cast<std::size_t>(row.link)].href);
+            setLink(marker, marker + CodePoints(after), links_[static_cast<std::size_t>(row.link)].href);
         }
         styleToggle(marker, toggle);
         // A later table on the same row moves with the text in front of it.
-        const int shift = units(after) - units(before);
+        const int shift = CodePoints(after) - CodePoints(before);
         for (std::size_t i = static_cast<std::size_t>(slot) + 1; i < toggles.size(); ++i) {
             toggles[i].begin += shift;
         }

@@ -8,6 +8,7 @@
 #include "PropertySheet.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
+#include "Strings.hpp"
 #include "TextSearch.hpp"
 
 #include <algorithm>
@@ -681,11 +682,7 @@ std::string ClipLine(std::string text) {
     if (text.size() <= kMaxLineBytes) {
         return text;
     }
-    std::size_t cut = kMaxLineBytes;
-    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0u) == 0x80u) {
-        --cut;
-    }
-    text.resize(cut);
+    text.resize(engine_core::fit_utf8(text, kMaxLineBytes));
     return text + "...";
 }
 
@@ -728,15 +725,7 @@ void add_engine_tools(McpServer& server, engine_core::Engine& engine, McpStudio 
                          "name":{"type":"string"},
                          "class":{"type":"string","description":"Only instances of this class."}}})"),
                      [live](const JsonValue& arguments) {
-                         auto lower = [](std::string text) {
-                             for (char& unit : text) {
-                                 if (unit >= 'A' && unit <= 'Z') {
-                                     unit = static_cast<char>(unit - 'A' + 'a');
-                                 }
-                             }
-                             return text;
-                         };
-                         const std::string needle = lower(StringArg(arguments, "name"));
+                         const std::string needle = AsciiLower(StringArg(arguments, "name"));
                          const JsonValue* only = arguments.find("class");
                          DataModel& world = live->datamodel();
                          ReadLock lock(world);
@@ -745,7 +734,7 @@ void add_engine_tools(McpServer& server, engine_core::Engine& engine, McpStudio 
                          while (!pending.empty() && found.items().size() < 200) {
                              const InstanceId id = pending.back();
                              pending.pop_back();
-                             if (lower(world.name(id)).find(needle) != std::string::npos &&
+                             if (AsciiLower(world.name(id)).find(needle) != std::string::npos &&
                                  (only == nullptr || ClassOf(world, id) == only->as_string())) {
                                  found.items().push_back(Brief(world, id));
                              }

@@ -118,11 +118,6 @@ fs::path find_resource(const std::string& relative) {
     return {};
 }
 
-std::string utf8_path(const fs::path& path) {
-    const auto utf8 = path.u8string();
-    return std::string(reinterpret_cast<const char*>(utf8.data()), utf8.size());
-}
-
 fs::path path_from_utf8(const std::string& text) { return fs::u8path(text); }
 
 fs::path config_directory() {
@@ -153,48 +148,6 @@ fs::path config_directory() {
     }
     return fs::path(home) / ".config" / "anarchy-engine";
 #endif
-}
-
-bool read_file(const fs::path& path, std::string& out, std::string& error) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        error = "cannot open " + utf8_path(path);
-        return false;
-    }
-    out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    if (in.bad()) {
-        error = "cannot read " + utf8_path(path);
-        return false;
-    }
-    return true;
-}
-
-bool write_file(const fs::path& path, const std::string& bytes, std::string& error) {
-    std::error_code failure;
-    fs::create_directories(path.parent_path(), failure);
-    if (failure) {
-        error = "cannot create " + utf8_path(path.parent_path()) + ": " + failure.message();
-        return false;
-    }
-    fs::path temp = path;
-    temp += ".tmp";
-    {
-        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-        out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-        out.flush();
-        if (!out) {
-            error = "cannot write " + utf8_path(temp);
-            fs::remove(temp, failure);
-            return false;
-        }
-    }
-    fs::rename(temp, path, failure);
-    if (failure) {
-        error = "cannot replace " + utf8_path(path) + ": " + failure.message();
-        fs::remove(temp, failure);
-        return false;
-    }
-    return true;
 }
 
 bool reveal_folder(const fs::path& folder) {

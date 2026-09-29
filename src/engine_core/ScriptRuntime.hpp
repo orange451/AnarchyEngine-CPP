@@ -136,6 +136,7 @@ private:
     struct Thread {
         lua_State* co = nullptr;
         // The registry reference that keeps co alive until the thread is released.
+        // -1 is LUA_NOREF, none.
         int anchor = -1;
         // What the coroutine's thread data and task handles hold instead of a pointer.
         // Lua can keep the coroutine, or a handle, after this thread is released, and
@@ -177,7 +178,6 @@ private:
     static void* allocate(void* userdata, void* pointer, std::size_t old_size, std::size_t new_size);
     static void* allocate_console(void* userdata, void* pointer, std::size_t old_size, std::size_t new_size);
     static void interrupt(lua_State* state, int gc);
-    static void panic(lua_State* state, int code);
     static int lua_print(lua_State* state);
     void print_source(lua_State* state, InstanceId& script, int& line) const;
 
@@ -218,6 +218,9 @@ private:
     void guarded(Fn&& fn);
     void halt(const char* why);
     void ready(Thread& thread);
+    // Takes a thread off every wait before it is made ready. False when it is
+    // dead or has no coroutine.
+    bool unpark(Thread& thread);
     void make_ready(Thread& thread, const char* result);
     void make_ready_number(Thread& thread, double result);
     bool thread_ok(const Thread& thread) const;

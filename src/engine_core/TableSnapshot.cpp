@@ -37,18 +37,6 @@ bool is_name(std::string_view text) {
     return std::find(std::begin(kKeywords), std::end(kKeywords), text) == std::end(kKeywords);
 }
 
-// Cuts at a code point boundary.
-std::size_t fit_utf8(std::string_view text, std::size_t max_bytes) {
-    if (text.size() <= max_bytes) {
-        return text.size();
-    }
-    std::size_t cut = max_bytes;
-    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0u) == 0x80u) {
-        --cut;
-    }
-    return cut;
-}
-
 // A Luau string literal, so a string reads apart from a number or a name.
 std::string quote(std::string_view text) {
     const std::size_t keep = fit_utf8(text, kMaxStringBytes);
@@ -184,6 +172,17 @@ private:
 };
 
 }  // namespace
+
+std::size_t fit_utf8(std::string_view text, std::size_t max_bytes) {
+    if (text.size() <= max_bytes) {
+        return text.size();
+    }
+    std::size_t cut = max_bytes;
+    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0u) == 0x80u) {
+        --cut;
+    }
+    return cut;
+}
 
 bool snapshots_as_table(lua_State* state, int index) {
     if (lua_type(state, index) != LUA_TTABLE) {

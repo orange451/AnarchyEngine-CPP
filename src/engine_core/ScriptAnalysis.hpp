@@ -19,9 +19,6 @@ class DataModel;
 // This is not the compiler. A type warning still compiles and runs.
 enum class Severity { Error, Warning, Information, Hint };
 
-// Default when a script has no `--!` hot comment on the first lines.
-enum class TypeMode { NoCheck, NonStrict, Strict };
-
 // Which scripts are analyzed. All: every Script and ModuleScript. Open: the
 // watched scripts and every ModuleScript they require, recursively, because a
 // required module's types are part of the watched script's check.
@@ -64,9 +61,6 @@ public:
 
     void set_enabled(bool enabled);
     bool enabled() const;
-
-    void set_default_mode(TypeMode mode);
-    TypeMode default_mode() const;
 
     // All is the default. Switching to Open drops every result outside the
     // watched scripts and their required modules.

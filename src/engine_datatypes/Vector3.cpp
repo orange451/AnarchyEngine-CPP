@@ -2,10 +2,12 @@
 
 #include "Enum.hpp"
 #include "LuaApi.hpp"
+#include "VectorMath.hpp"
 
 #include "lualib.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <type_traits>
 
@@ -14,30 +16,9 @@ namespace {
 
 static_assert(std::is_same<LUA_VECTOR_TYPE, float>::value, "Vector3 is stored as float");
 
-// Roblox scales the tolerance by |component| + 1, using the receiver's component.
-// An exact match is equal, including infinities.
-bool fuzzy_component(float left, float right, double epsilon) {
-    const double a = left;
-    const double b = right;
-    return a == b || std::fabs(a - b) <= (std::fabs(a) + 1.0) * epsilon;
-}
-
-float sign_of(float value) {
-    if (value > 0.f) {
-        return 1.f;
-    }
-    if (value < 0.f) {
-        return -1.f;
-    }
-    return 0.f;
-}
-
-float lerp_component(float from, float to, double alpha) {
-    if (alpha == 1.0) {
-        return to;
-    }
-    return static_cast<float>(from + (to - from) * alpha);
-}
+using vector_math::fuzzy_component;
+using vector_math::lerp_component;
+using vector_math::sign_of;
 
 const float* check_vector3(lua_State* state, int index) {
     const float* value = lua_tovector(state, index);
@@ -194,55 +175,44 @@ int vector3_new(lua_State* state) {
     return 1;
 }
 
-struct Normal {
-    const char* name;
+// The unit vector for an enum item, by the item's value.
+struct Direction {
     int value;
     float x;
     float y;
     float z;
 };
 
-// Front points down -Z. Back is +Z.
-const Normal kNormals[] = {
-    {"Right", 0, 1.f, 0.f, 0.f},  {"Top", 1, 0.f, 1.f, 0.f},    {"Back", 2, 0.f, 0.f, 1.f},
-    {"Left", 3, -1.f, 0.f, 0.f},  {"Bottom", 4, 0.f, -1.f, 0.f}, {"Front", 5, 0.f, 0.f, -1.f},
+// Enum.NormalId. Front points down -Z. Back is +Z.
+const Direction kNormals[] = {
+    {0, 1.f, 0.f, 0.f}, {1, 0.f, 1.f, 0.f},  {2, 0.f, 0.f, 1.f},
+    {3, -1.f, 0.f, 0.f}, {4, 0.f, -1.f, 0.f}, {5, 0.f, 0.f, -1.f},
 };
 
-struct Axis {
-    const char* name;
-    int value;
-    float x;
-    float y;
-    float z;
+// Enum.Axis.
+const Direction kAxes[] = {
+    {0, 1.f, 0.f, 0.f},
+    {1, 0.f, 1.f, 0.f},
+    {2, 0.f, 0.f, 1.f},
 };
 
-const Axis kAxes[] = {
-    {"X", 0, 1.f, 0.f, 0.f},
-    {"Y", 1, 0.f, 1.f, 0.f},
-    {"Z", 2, 0.f, 0.f, 1.f},
-};
+template <std::size_t N>
+int push_direction(lua_State* state, const EnumType& type, const Direction (&table)[N], const char* expected) {
+    const int value = check_enum_arg(state, 1, type);
+    for (const Direction& direction : table) {
+        if (direction.value == value) {
+            lua_pushvector(state, direction.x, direction.y, direction.z);
+            return 1;
+        }
+    }
+    luaL_argerror(state, 1, expected);
+}
 
 int vector3_from_normal(lua_State* state) {
-    const int value = check_enum_arg(state, 1, normal_id_enum());
-    for (const Normal& normal : kNormals) {
-        if (normal.value == value) {
-            lua_pushvector(state, normal.x, normal.y, normal.z);
-            return 1;
-        }
-    }
-    luaL_argerror(state, 1, "Enum.NormalId expected");
+    return push_direction(state, normal_id_enum(), kNormals, "Enum.NormalId expected");
 }
 
-int vector3_from_axis(lua_State* state) {
-    const int value = check_enum_arg(state, 1, axis_enum());
-    for (const Axis& axis : kAxes) {
-        if (axis.value == value) {
-            lua_pushvector(state, axis.x, axis.y, axis.z);
-            return 1;
-        }
-    }
-    luaL_argerror(state, 1, "Enum.Axis expected");
-}
+int vector3_from_axis(lua_State* state) { return push_direction(state, axis_enum(), kAxes, "Enum.Axis expected"); }
 
 void install_vector_metatable(lua_State* state) {
     lua_pushvector(state, 0.f, 0.f, 0.f);

@@ -1,6 +1,7 @@
 #include "Color3.hpp"
 
 #include "LuaApi.hpp"
+#include "LuaUserdata.hpp"
 
 #include "lualib.h"
 
@@ -16,11 +17,7 @@ namespace {
 const char* kColor3Meta = "AE.Color3";
 
 const Color3& check_color3(lua_State* state, int index) {
-    const Color3* value = to_color3(state, index);
-    if (value == nullptr) {
-        luaL_typeerrorL(state, index, "Color3");
-    }
-    return *value;
+    return check_userdata<Color3>(state, index, kColor3Meta, "Color3");
 }
 
 // Omitted channels are 0. An explicit nil is not a number.
@@ -271,22 +268,10 @@ bool color3_from_hex(const std::string& text, Color3& color) {
     return true;
 }
 
-void push_color3(lua_State* state, Color3 value) {
-    auto* data = static_cast<Color3*>(lua_newuserdata(state, sizeof(Color3)));
-    *data = value;
-    luaL_getmetatable(state, kColor3Meta);
-    lua_setmetatable(state, -2);
-}
+void push_color3(lua_State* state, Color3 value) { push_userdata(state, value, kColor3Meta); }
 
 const Color3* to_color3(lua_State* state, int index) {
-    void* data = lua_touserdata(state, index);
-    if (data == nullptr || !lua_getmetatable(state, index)) {
-        return nullptr;
-    }
-    luaL_getmetatable(state, kColor3Meta);
-    const bool match = lua_rawequal(state, -1, -2) != 0;
-    lua_pop(state, 2);
-    return match ? static_cast<const Color3*>(data) : nullptr;
+    return static_cast<const Color3*>(test_userdata(state, index, kColor3Meta));
 }
 
 void open_color3(lua_State* state) {

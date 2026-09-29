@@ -5,6 +5,9 @@
 #include "Engine.hpp"
 #include "IdeIcons.hpp"
 #include "LuaSource.hpp"
+#include "NodeClasses.hpp"
+#include "Strings.hpp"
+#include "Utf8.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -90,24 +93,9 @@ void collect(const engine_core::DataModel& game, engine_core::InstanceId parent,
     }
 }
 
-// The byte where code point index starts in text, or text.size() past the end.
-std::size_t byte_at(std::string_view text, int index) {
-    std::size_t byte = 0;
-    for (int count = 0; byte < text.size(); ++byte) {
-        if ((static_cast<unsigned char>(text[byte]) & 0xC0u) == 0x80u) {
-            continue;
-        }
-        if (count == index) {
-            return byte;
-        }
-        ++count;
-    }
-    return text.size();
-}
-
 std::string slice(std::string_view text, int begin, int end) {
-    const std::size_t from = byte_at(text, begin);
-    const std::size_t to = byte_at(text, end);
+    const std::size_t from = CodePointByte(text, begin);
+    const std::size_t to = CodePointByte(text, end);
     std::string out(text.substr(from, to > from ? to - from : 0));
     // A tab would be as wide as a space in a label anyway, and a stray \r shows as a box.
     for (char& unit : out) {
@@ -152,7 +140,7 @@ std::shared_ptr<jadefx::Node> line_graphic(const ScriptHits::Line& line) {
     number->setPadding(jadefx::Insets{0, 8, 0, 0});
     box->getChildren().add(number);
 
-    const int length = code_points(line.text);
+    const int length = CodePoints(line.text);
     int indent = 0;
     while (indent < length && (line.text[static_cast<std::size_t>(indent)] == ' ' ||
                                line.text[static_cast<std::size_t>(indent)] == '\t')) {
@@ -194,19 +182,6 @@ std::shared_ptr<jadefx::Node> line_graphic(const ScriptHits::Line& line) {
         box->getChildren().add(text_label("…", nullptr));
     }
     return box;
-}
-
-std::string counted(std::size_t count, const char* one, const char* many) {
-    return std::to_string(count) + " " + (count == 1 ? one : many);
-}
-
-bool has_class(const jadefx::Node& node, const char* name) {
-    for (const std::string& item : node.getClassList().items()) {
-        if (item == name) {
-            return true;
-        }
-    }
-    return false;
 }
 
 // Enter on a line's row opens it. Enter on a script's row still opens or closes it.
@@ -355,13 +330,7 @@ void IdeSearch::show_summary(const std::string& error) {
     }
     summary_->setText(text);
     const bool bad = !error.empty() || (!searched_.pattern.empty() && results_.empty());
-    if (bad != has_class(*summary_, "error")) {
-        if (bad) {
-            summary_->getClassList().add("error");
-        } else {
-            summary_->getClassList().removeIf([](const std::string& item) { return item == "error"; });
-        }
-    }
+    set_class(*summary_, "error", bad);
 }
 
 void IdeSearch::refresh() {

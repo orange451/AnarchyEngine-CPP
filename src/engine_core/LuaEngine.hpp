@@ -103,7 +103,6 @@ private:
 
     static void* allocate(void* userdata, void* pointer, std::size_t oldSize, std::size_t newSize);
     static void interrupt(lua_State* state, int gc);
-    static void panic(lua_State* state, int code);
     static int print(lua_State* state);
     static int dispatchHost(lua_State* state);
 

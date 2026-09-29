@@ -1,6 +1,7 @@
 #include "Events.hpp"
 
 #include "Contract.hpp"
+#include "Ring.hpp"
 #include "TaskScheduler.hpp"
 
 #include <algorithm>
@@ -286,15 +287,7 @@ void EventQueue::enqueue(const Event& event) {
 // A script can queue more events in one step than the queue first held, as by
 // parenting thousands of instances under a parent with a ChildAdded listener.
 // The ring doubles. Nothing holds a reference into it across a handler.
-void EventQueue::grow() {
-    std::vector<Event> larger(std::max(kEventCapacity, events_.size() * 2));
-    for (std::size_t n = 0; n < size_; ++n) {
-        larger[n] = events_[(head_ + n) % events_.size()];
-    }
-    events_.swap(larger);
-    head_ = 0;
-    tail_ = size_;
-}
+void EventQueue::grow() { grow_ring(events_, head_, tail_, size_, kEventCapacity); }
 
 EventQueue::Event EventQueue::pop() {
     Event event = events_[head_];

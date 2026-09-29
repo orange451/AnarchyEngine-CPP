@@ -1,4 +1,5 @@
 #include "ide/TextSearch.hpp"
+#include "ide/Utf8.hpp"
 
 #include <cstdio>
 #include <string>
@@ -130,6 +131,6 @@ int RunTextSearchTests() {
             Expect(search.replace_span(text, tail, "$2$1") == "2b 3c", "a span runs from the first match to the last");
         }
     }
-    Expect(ide::code_points("a\xc3\xa9\xe2\x82\xac") == 3, "code points count characters, not bytes");
+    Expect(ide::CodePoints("a\xc3\xa9\xe2\x82\xac") == 3, "code points count characters, not bytes");
     return gFailures;
 }

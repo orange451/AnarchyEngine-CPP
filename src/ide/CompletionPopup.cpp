@@ -4,6 +4,7 @@
 #include "Engine.hpp"
 #include "IdeTheme.hpp"
 #include "LuaSource.hpp"
+#include "Utf8.hpp"
 
 #include "jadefx/jadefx.hpp"
 #include "jadefx/scene/controls/ScrollTrack.hpp"
@@ -52,49 +53,6 @@ private:
     static constexpr double kOffset = 0.6;
     std::shared_ptr<jadefx::Label> strikes_[2];
 };
-
-int CodePoints(std::string_view text) {
-    int count = 0;
-    for (std::size_t index = 0; index < text.size();) {
-        const unsigned char lead = static_cast<unsigned char>(text[index]);
-        std::size_t step = 1;
-        if ((lead & 0xE0) == 0xC0) {
-            step = 2;
-        } else if ((lead & 0xF0) == 0xE0) {
-            step = 3;
-        } else if ((lead & 0xF8) == 0xF0) {
-            step = 4;
-        }
-        if (index + step > text.size()) {
-            step = 1;
-        }
-        index += step;
-        ++count;
-    }
-    return count;
-}
-
-char32_t CodeAt(std::string_view text, int index) {
-    int count = 0;
-    for (std::size_t cursor = 0; cursor < text.size();) {
-        const unsigned char lead = static_cast<unsigned char>(text[cursor]);
-        char32_t code = lead;
-        std::size_t step = 1;
-        if (lead >= 0x80) {
-            step = lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
-            code = 0;
-        }
-        if (count == index) {
-            return code;
-        }
-        ++count;
-        if (cursor + step > text.size()) {
-            break;
-        }
-        cursor += step;
-    }
-    return 0;
-}
 
 constexpr int kMaxVisibleRows = 8;
 constexpr double kPopupWidth = 420.0;
@@ -821,13 +779,13 @@ std::optional<CompletionEdit> CompletionPopup::take(bool parentheses, std::strin
     edit.end = end;
     edit.text = written;
     edit.caret = begin + CodePoints(written);
-    if (parentheses && chosen.call && CodeAt(text, end) != U'(') {
+    if (parentheses && chosen.call && CodePointAt(text, end) != U'(') {
         edit.text += "()";
         edit.caret = begin + CodePoints(written) + 1;
     }
     if (state_->close_quote != 0 && !chosen.call) {
         const auto quote = static_cast<char32_t>(static_cast<unsigned char>(state_->close_quote));
-        if (CodeAt(text, end) == quote) {
+        if (CodePointAt(text, end) == quote) {
             edit.caret = begin + CodePoints(edit.text) + 1;
         } else if (parentheses) {
             edit.text.push_back(state_->close_quote);

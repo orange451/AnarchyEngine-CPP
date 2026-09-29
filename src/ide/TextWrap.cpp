@@ -1,34 +1,22 @@
 #include "ide/TextWrap.hpp"
 
+#include "ide/Utf8.hpp"
+
 namespace ide {
 namespace {
-
-// Bytes in the UTF-8 sequence that starts with this byte.
-std::size_t SequenceLength(unsigned char lead) {
-    if (lead >= 0xf0) {
-        return 4;
-    }
-    if (lead >= 0xe0) {
-        return 3;
-    }
-    if (lead >= 0xc0) {
-        return 2;
-    }
-    return 1;
-}
 
 // Moves the widest prefix of `word` that fits onto `out`, one code point at
 // least, so a line always advances.
 void BreakWord(std::string& word, double max_width, const MeasureText& measure, std::vector<std::string>& out) {
     while (!word.empty() && measure(word) > max_width) {
         std::size_t fit = 0;
-        std::size_t next = SequenceLength(static_cast<unsigned char>(word[0]));
+        std::size_t next = Utf8Step(word, 0);
         while (next < word.size() && measure(word.substr(0, next)) <= max_width) {
             fit = next;
-            next += SequenceLength(static_cast<unsigned char>(word[next]));
+            next += Utf8Step(word, next);
         }
         if (fit == 0) {
-            fit = SequenceLength(static_cast<unsigned char>(word[0]));
+            fit = Utf8Step(word, 0);
         }
         if (fit >= word.size()) {
             break;

@@ -1,4 +1,5 @@
 #include "ide/LuauHighlight.hpp"
+#include "ide/Utf8.hpp"
 
 #include "LuaApi.hpp"
 
@@ -26,20 +27,6 @@ int span_length(const std::vector<ide::LuauSpan>& spans) {
     return total;
 }
 
-int code_points(std::string_view text) {
-    int count = 0;
-    for (std::size_t index = 0; index < text.size();) {
-        const unsigned char lead = static_cast<unsigned char>(text[index++]);
-        ++count;
-        if (lead < 0x80) {
-            continue;
-        }
-        int need = lead < 0xE0 ? 1 : lead < 0xF0 ? 2 : 3;
-        index += static_cast<std::size_t>(need);
-    }
-    return count;
-}
-
 const char* style_at(const std::vector<ide::LuauSpan>& spans, int index) {
     int cursor = 0;
     for (const ide::LuauSpan& span : spans) {
@@ -60,7 +47,7 @@ bool same(const char* style, const char* expected) {
 
 void expect_style(const std::string& text, int index, const char* expected, const char* label) {
     const std::vector<ide::LuauSpan> spans = ide::highlight_luau(text);
-    expect(span_length(spans) == code_points(text), label);
+    expect(span_length(spans) == ide::CodePoints(text), label);
     expect(same(style_at(spans, index), expected), label);
 }
 
@@ -119,12 +106,12 @@ int RunLuauHighlightTests() {
 
     const std::string utf = "local café = 1";
     const std::vector<ide::LuauSpan> spans = ide::highlight_luau(utf);
-    expect(span_length(spans) == code_points(utf), "a multibyte character is one code point");
+    expect(span_length(spans) == ide::CodePoints(utf), "a multibyte character is one code point");
     expect(same(style_at(spans, 0), "keyword"), "local before a multibyte name is a keyword");
 
     const std::string sample = "local tri = game:FindFirstChild(\"Tri0\")\n";
     const std::vector<ide::LuauSpan> play = ide::highlight_luau(sample);
-    expect(span_length(play) == code_points(sample), "a play script covers every code point");
+    expect(span_length(play) == ide::CodePoints(sample), "a play script covers every code point");
     expect(same(style_at(play, 0), "keyword"), "a play script keywords local");
     expect(same(style_at(play, 12), "builtin"), "a play script keywords game");
     return gFailures;

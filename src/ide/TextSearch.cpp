@@ -1,12 +1,13 @@
 #include "TextSearch.hpp"
 
+#include "Strings.hpp"
+#include "Utf8.hpp"
+
 #include <regex>
 #include <utility>
 
 namespace ide {
 namespace {
-
-bool continuation(char unit) { return (static_cast<unsigned char>(unit) & 0xC0u) == 0x80u; }
 
 // Letters, digits, and _ in ASCII, and every byte of a non-ASCII code point.
 bool word_unit(char unit) {
@@ -22,23 +23,15 @@ bool word_bounded(std::string_view line, std::size_t begin, std::size_t end) {
     return left && right;
 }
 
-std::string lower_ascii(std::string_view text) {
-    std::string out(text);
-    for (char& unit : out) {
-        if (unit >= 'A' && unit <= 'Z') {
-            unit = static_cast<char>(unit - 'A' + 'a');
-        }
-    }
-    return out;
-}
-
-// The byte after the code point at index.
+// The byte after the code point that holds index. A byte regex can stop inside
+// one. Only a lead byte up to 3 bytes back can start a code point that holds index.
 std::size_t next_unit(std::string_view text, std::size_t index) {
-    std::size_t next = index + 1;
-    while (next < text.size() && continuation(text[next])) {
-        ++next;
+    std::size_t lead = index;
+    while (lead > 0 && index - lead < 3 && (static_cast<unsigned char>(text[lead]) & 0xC0u) == 0x80u) {
+        --lead;
     }
-    return next;
+    const std::size_t end = lead + Utf8Step(text, lead);
+    return end > index ? end : index + Utf8Step(text, index);
 }
 
 // \n, \t, and \\ in a regex replacement, as VS Code reads them. $ forms are left to std::regex.
@@ -89,22 +82,12 @@ struct TextSearch::Compiled {
     std::regex pattern;
 };
 
-int code_points(std::string_view text) {
-    int count = 0;
-    for (const char unit : text) {
-        if (!continuation(unit)) {
-            ++count;
-        }
-    }
-    return count;
-}
-
 TextSearch::TextSearch(SearchQuery query) : query_(std::move(query)) {
     if (query_.pattern.empty()) {
         return;
     }
     if (!query_.regex) {
-        needle_ = query_.match_case ? query_.pattern : lower_ascii(query_.pattern);
+        needle_ = query_.match_case ? query_.pattern : AsciiLower(query_.pattern);
         return;
     }
     auto flags = std::regex::ECMAScript;
@@ -146,12 +129,15 @@ std::vector<TextMatch> TextSearch::find_all(std::string_view text, std::size_t l
             line_end = text.size();
         }
         const std::string_view row = text.substr(line_byte, line_end - line_byte);
-        // Byte offsets in row become code points by counting forward from the last one.
+        // Byte offsets in row become code points by walking forward from the last
+        // one. A byte inside a code point, where a regex can cut, counts it.
         std::size_t counted_byte = 0;
         int counted = 0;
         auto column_of = [&](std::size_t byte) {
-            counted += code_points(row.substr(counted_byte, byte - counted_byte));
-            counted_byte = byte;
+            while (counted_byte < byte) {
+                counted_byte += Utf8Step(row, counted_byte);
+                ++counted;
+            }
             return counted;
         };
         auto emit = [&](std::size_t begin, std::size_t end) {
@@ -168,7 +154,7 @@ std::vector<TextMatch> TextSearch::find_all(std::string_view text, std::size_t l
         };
         bool more = true;
         if (!query_.regex) {
-            const std::string folded = query_.match_case ? std::string() : lower_ascii(row);
+            const std::string folded = query_.match_case ? std::string() : AsciiLower(row);
             const std::string_view hay = query_.match_case ? row : std::string_view(folded);
             std::size_t at = 0;
             while (more && (at = hay.find(needle_, at)) != std::string_view::npos) {
@@ -218,7 +204,7 @@ std::vector<TextMatch> TextSearch::find_all(std::string_view text, std::size_t l
         if (!more || line_end >= text.size()) {
             break;
         }
-        line_start += code_points(row) + 1;
+        line_start += CodePoints(row) + 1;
         line_byte = line_end + 1;
         ++line;
     }

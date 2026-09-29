@@ -17,6 +17,8 @@
 #include "TableSnapshot.hpp"
 #include "TaskScheduler.hpp"
 
+#include "support.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
@@ -72,15 +74,6 @@ engine_core::Transform T0() { return engine_core::transform_translation(3.f, 4.f
 
 engine_core::Transform T1() { return engine_core::transform_translation(50.f, 0.f, 0.f); }
 
-engine_core::ColorRgb rgb(float r, float g, float b) {
-    engine_core::ColorRgb color;
-    color.r = r;
-    color.g = g;
-    color.b = b;
-    color.a = 1.f;
-    return color;
-}
-
 bool near_color(engine_core::ColorRgb a, engine_core::ColorRgb b) {
     return std::fabs(a.r - b.r) < 1e-4f && std::fabs(a.g - b.g) < 1e-4f && std::fabs(a.b - b.b) < 1e-4f &&
            std::fabs(a.a - b.a) < 1e-4f;
@@ -100,11 +93,6 @@ class CountingRenderer : public engine_core::IRenderer {
 public:
     void perform(const engine_core::VisualSnapshot&) override {}
     void present() override {}
-};
-
-struct SimRole {
-    SimRole() { engine_core::set_thread_role(engine_core::ThreadRole::Simulation); }
-    ~SimRole() { engine_core::set_thread_role(engine_core::ThreadRole::Unknown); }
 };
 
 }  // namespace
@@ -1877,41 +1865,11 @@ int name_number(engine_core::DataModel& game, engine_core::InstanceId id) {
     }
 }
 
-struct ScriptRig {
-    SimRole role;
-    engine_core::Game game;
-    engine_core::TaskScheduler scheduler;
-    engine_core::ScriptRuntime runtime;
-
-    ScriptRig() {
-        scheduler.reserve(16);
-        game.attach_scheduler(&scheduler);
-        runtime.attach(game, scheduler);
-    }
-
-    void frames(int count, double dt = 1.0 / 60.0) {
-        for (int i = 0; i < count; ++i) {
-            scheduler.run_phase(engine_core::Phase::Heartbeat, dt);
-            game.events().drain();
-            runtime.heartbeat(dt);
-            game.events().drain();
-        }
-    }
-};
-
 engine_core::GameObject& add_part(engine_core::DataModel& game, engine_core::InstanceId parent, const char* name) {
     engine_core::GameObject& part = game.create<engine_core::GameObject>();
     game.set_name(part.id(), name);
     game.set_parent(part.id(), parent);
     return part;
-}
-
-engine_core::Script& add_script(engine_core::DataModel& game, const char* name, const char* source) {
-    engine_core::Script& script = game.create<engine_core::Script>();
-    game.set_name(script.id(), name);
-    script.set_source(source);
-    game.set_parent(script.id(), game.id());
-    return script;
 }
 
 TEST_CASE("S1 two scripts wait without blocking each other", "[S1]") {

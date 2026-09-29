@@ -657,7 +657,6 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
             });
     };
 
-    // IdeTreeTest is the sample tree page. The Java shell left that dock commented out.
     auto gameExplorer = jadefx::make<IdeExplorer>(game, "Game Explorer", host);
     gameExplorer->setIconFile("Explorer.png");
     explorers_.push_back(gameExplorer);
@@ -1479,10 +1478,7 @@ void IdeLayout::mount(jadefx::Scene& scene) {
             }
         }
         if (scene_ != nullptr) {
-            routeUndo(event, *scene_);
-            routeDelete(event, *scene_);
-            routeReveal(event, *scene_);
-            routeSearch(event, *scene_);
+            routeKeys(event, *scene_);
         }
     });
     for (auto& [text, seconds] : pending_toasts_) {
@@ -1812,12 +1808,7 @@ jadefx::UtilityWindow* IdeLayout::open_floating(const std::string& title, int wi
     auto scene = jadefx::make<jadefx::Scene>(root, static_cast<double>(width), static_cast<double>(height));
     scene->setStylesheet(kStylesheet);
     jadefx::Scene* utilityScene = scene.get();
-    scene->addKeyHook([this, utilityScene](jadefx::KeyEvent& event) {
-        routeUndo(event, *utilityScene);
-        routeDelete(event, *utilityScene);
-        routeReveal(event, *utilityScene);
-        routeSearch(event, *utilityScene);
-    });
+    scene->addKeyHook([this, utilityScene](jadefx::KeyEvent& event) { routeKeys(event, *utilityScene); });
     window->stage().setScene(std::move(scene));
     LeaveFieldsOnEscape(window->stage());
     window->setCanClose([this, raw = window.get()]() {
@@ -2329,6 +2320,13 @@ void IdeLayout::delete_instances(std::vector<std::uint32_t> ids) {
             CloseGesture(world);
         }
     });
+}
+
+void IdeLayout::routeKeys(jadefx::KeyEvent& event, jadefx::Scene& scene) {
+    routeUndo(event, scene);
+    routeDelete(event, scene);
+    routeReveal(event, scene);
+    routeSearch(event, scene);
 }
 
 void IdeLayout::routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene) {

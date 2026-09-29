@@ -4,6 +4,7 @@
 #include "FindBar.hpp"
 #include "IdeIcons.hpp"
 #include "IdeTheme.hpp"
+#include "Strings.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -186,15 +187,6 @@ public:
         setOnMouseExited([this](const jadefx::MouseEvent&) { setBackground(jadefx::Color::transparent()); });
     }
 };
-
-std::string Lower(std::string text) {
-    for (char& unit : text) {
-        if (unit >= 'A' && unit <= 'Z') {
-            unit = static_cast<char>(unit - 'A' + 'a');
-        }
-    }
-    return text;
-}
 
 }  // namespace
 
@@ -797,7 +789,7 @@ void IdeExplorer::poll_filter() {
         return;
     }
     filter_typed_ = filter_field_->getText();
-    const std::string next = Lower(filter_typed_);
+    const std::string next = AsciiLower(filter_typed_);
     if (filter_.empty() && !next.empty()) {
         open_before_filter_.clear();
         for (const auto& entry : items_) {
@@ -1041,7 +1033,7 @@ void IdeExplorer::filter_rows() {
         keep[0] = 1;
     }
     for (std::size_t i = count; i-- > 1;) {
-        if (!keep[i] && Lower(all.labels[i]).find(filter_) != std::string::npos) {
+        if (!keep[i] && AsciiLower(all.labels[i]).find(filter_) != std::string::npos) {
             keep[i] = 1;
         }
         if (keep[i]) {

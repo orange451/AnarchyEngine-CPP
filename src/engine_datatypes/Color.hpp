@@ -10,4 +10,6 @@ struct ColorRgb {
     float a = 1.f;
 };
 
+inline bool same_color(ColorRgb a, ColorRgb b) { return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a; }
+
 }  // namespace engine_core

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct lua_State;
@@ -38,5 +39,9 @@ bool snapshots_as_table(lua_State* state, int index);
 // Copies the table at index. Metamethods are not used to walk it; __tostring still names values.
 // An error from a __tostring propagates the same way it does from print.
 std::shared_ptr<const TableSnapshot> snapshot_table(lua_State* state, int index);
+
+// How much of text fits in max_bytes without cutting a code point, so a capped
+// string is still valid UTF-8.
+std::size_t fit_utf8(std::string_view text, std::size_t max_bytes);
 
 }  // namespace engine_core

@@ -1,5 +1,7 @@
 #include "LuaEngine.hpp"
 
+#include "LuauSandbox.hpp"
+
 #include "lualib.h"
 #include "luacode.h"
 
@@ -61,27 +63,6 @@ struct RunningGuard {
 struct PopThread {
     lua_State* state;
     ~PopThread() { lua_pop(state, 1); }
-};
-
-// Base language, tables, strings, math, coroutines, utf8, bit32, buffer, and vector.
-// debug and os stay closed: debug can see through the sandbox, and os reads the host clock.
-const luaL_Reg kLibraries[] = {
-    {"", luaopen_base},
-    {LUA_COLIBNAME, luaopen_coroutine},
-    {LUA_TABLIBNAME, luaopen_table},
-    {LUA_STRLIBNAME, luaopen_string},
-    {LUA_MATHLIBNAME, luaopen_math},
-    {LUA_UTF8LIBNAME, luaopen_utf8},
-    {LUA_BITLIBNAME, luaopen_bit32},
-    {LUA_BUFFERLIBNAME, luaopen_buffer},
-    {LUA_VECLIBNAME, luaopen_vector},
-    {nullptr, nullptr},
-};
-
-// Luau already omits most of these. Clearing the names means a later library open cannot put them back.
-const char* kRemoved[] = {
-    "getfenv", "setfenv", "loadstring", "dofile", "loadfile", "load", "require", "collectgarbage", "module",
-    "debug",   "os",      "io",         "package", nullptr,
 };
 
 }  // namespace
@@ -216,22 +197,8 @@ void LuaEngine::start() {
         lua_Callbacks* callbacks = lua_callbacks(state);
         callbacks->userdata = this;
         callbacks->interrupt = &LuaEngine::interrupt;
-        callbacks->panic = &LuaEngine::panic;
 
-        for (const luaL_Reg* library = kLibraries; library->func != nullptr; ++library) {
-            lua_pushcfunction(state, library->func, nullptr);
-            lua_pushstring(state, library->name);
-            lua_call(state, 1, 0);
-        }
-
-        // The stock print writes to stdout. This one can only reach the handler we installed.
-        lua_pushcfunction(state, &LuaEngine::print, "print");
-        lua_setglobal(state, "print");
-
-        for (const char* const* name = kRemoved; *name != nullptr; ++name) {
-            lua_pushnil(state);
-            lua_setglobal(state, *name);
-        }
+        open_sandbox_libraries(state, &LuaEngine::print);
 
         for (std::size_t index = 0; index < bindings_.size(); ++index) {
             const Binding& binding = bindings_[index];
@@ -286,16 +253,8 @@ LuaEngine::ScriptResult LuaEngine::execute(std::string_view chunkName, std::stri
     steps_ = 0;
 
     const std::string chunk = chunkName.empty() ? std::string("=script") : std::string(chunkName);
-    const char* text = source.data() != nullptr ? source.data() : "";
-    const std::size_t length = source.size();
-
-    lua_CompileOptions options = {};
-    options.optimizationLevel = 1;
-    options.debugLevel = 1;
-
-    std::size_t bytecodeSize = 0;
-    std::unique_ptr<char, void (*)(void*)> bytecode(luau_compile(text, length, &options, &bytecodeSize), std::free);
-    if (bytecode == nullptr || bytecodeSize == 0) {
+    const Bytecode bytecode = compile_luau(source);
+    if (!bytecode) {
         result.error = "could not compile script";
         return result;
     }
@@ -303,14 +262,10 @@ LuaEngine::ScriptResult LuaEngine::execute(std::string_view chunkName, std::stri
     // The child thread keeps the sealed state untouched. Its globals can read the sealed
     // environment and cannot write it. User code never runs on the main state.
     lua_State* script = lua_newthread(state_);
-    if (script == nullptr) {
-        result.error = "could not create a script thread";
-        return result;
-    }
     PopThread pop{state_};
     luaL_sandboxthread(script);
 
-    const int loaded = luau_load(script, chunk.c_str(), bytecode.get(), bytecodeSize, 0);
+    const int loaded = luau_load(script, chunk.c_str(), bytecode.data.get(), bytecode.size, 0);
     if (loaded != 0) {
         result.error = stackText(script, -1);
         return result;
@@ -368,32 +323,7 @@ std::string LuaEngine::stackText(lua_State* state, int index) const {
 
 void* LuaEngine::allocate(void* userdata, void* pointer, std::size_t oldSize, std::size_t newSize) {
     auto* engine = static_cast<LuaEngine*>(userdata);
-    if (pointer == nullptr) {
-        oldSize = 0;
-    }
-    if (newSize == 0) {
-        if (oldSize <= engine->memoryUsed_) {
-            engine->memoryUsed_ -= oldSize;
-        } else {
-            engine->memoryUsed_ = 0;
-        }
-        std::free(pointer);
-        return nullptr;
-    }
-    if (oldSize > engine->memoryUsed_) {
-        return nullptr;
-    }
-    // Refuse before the OS allocates, so a script cannot grow the process past the limit.
-    const std::size_t retained = engine->memoryUsed_ - oldSize;
-    if (retained > engine->memoryLimit_ || newSize > engine->memoryLimit_ - retained) {
-        return nullptr;
-    }
-    void* block = std::realloc(pointer, newSize);
-    if (block == nullptr) {
-        return nullptr;
-    }
-    engine->memoryUsed_ = retained + newSize;
-    return block;
+    return budget_realloc(engine->memoryUsed_, engine->memoryLimit_, pointer, oldSize, newSize);
 }
 
 void LuaEngine::interrupt(lua_State* state, int gc) {
@@ -411,11 +341,6 @@ void LuaEngine::interrupt(lua_State* state, int gc) {
     }
     InterruptGuard guard(engine->interrupting_);
     luaL_error(state, "script exceeded the execution budget");
-}
-
-void LuaEngine::panic(lua_State* state, int) {
-    const char* message = lua_tostring(state, -1);
-    throw std::runtime_error(message != nullptr ? message : "Luau panic");
 }
 
 int LuaEngine::print(lua_State* state) {

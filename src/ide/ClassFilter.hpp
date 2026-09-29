@@ -1,18 +1,13 @@
 #pragma once
 
+#include "Strings.hpp"
+
 #include <algorithm>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace ide {
-
-inline char AsciiLower(unsigned char c) {
-    if (c >= 'A' && c <= 'Z') {
-        return static_cast<char>(c - 'A' + 'a');
-    }
-    return static_cast<char>(c);
-}
 
 inline std::string_view TrimAscii(std::string_view text) {
     while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) {

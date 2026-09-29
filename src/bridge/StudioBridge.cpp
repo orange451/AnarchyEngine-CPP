@@ -1,6 +1,7 @@
 #include "StudioBridge.hpp"
 
 #include "ide/IdeResources.hpp"
+#include "ide/Strings.hpp"
 
 #include "httplib.h"
 
@@ -48,12 +49,6 @@ int Depth(const fs::path& dir, const fs::path& root) {
         ++depth;
     }
     return depth;
-}
-
-std::string Lower(std::string text) {
-    std::transform(text.begin(), text.end(), text.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return text;
 }
 
 std::string Listing(const std::vector<StudioEntry>& studios) {
@@ -274,10 +269,10 @@ std::vector<StudioEntry> StudioBridge::matching(const std::vector<StudioEntry>& 
         folder = options_.cwd / folder;
     }
     folder = Normal(folder);
-    const std::string name = Lower(query);
+    const std::string name = ide::AsciiLower(query);
     for (const StudioEntry& studio : studios) {
         const bool by_pid = digits && std::to_string(studio.pid) == query;
-        const bool by_name = Lower(studio.project) == name;
+        const bool by_name = ide::AsciiLower(studio.project) == name;
         const bool by_folder = !studio.root.empty() && Normal(ide::path_from_utf8(studio.root)) == folder;
         if (by_pid || by_name || by_folder) {
             out.push_back(studio);

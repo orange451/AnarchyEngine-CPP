@@ -5,14 +5,21 @@
 #include "Folder.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
+#include "LuaUserdata.hpp"
+#include "LuauSandbox.hpp"
 #include "ModuleScript.hpp"
 #include "Script.hpp"
-#include "TestTriangle.hpp"
 #include "Vector2.hpp"
 #include "Vector3.hpp"
 
 #include "lualib.h"
 #include "luacode.h"
+
+// halt() and guarded() catch the exception Luau throws when memory runs out
+// outside lua_resume. A longjmp build would abort instead.
+#if LUA_USE_LONGJMP
+#error "ScriptRuntime expects Luau built with C++ exceptions"
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -26,8 +33,6 @@
 
 namespace engine_core {
 namespace {
-
-constexpr int kAnchorNone = -1;
 
 struct InstanceUd {
     InstanceId id = 0;
@@ -75,24 +80,6 @@ int service_kind(const char* name) {
     return -1;
 }
 
-const luaL_Reg kLibraries[] = {
-    {"", luaopen_base},
-    {LUA_COLIBNAME, luaopen_coroutine},
-    {LUA_TABLIBNAME, luaopen_table},
-    {LUA_STRLIBNAME, luaopen_string},
-    {LUA_MATHLIBNAME, luaopen_math},
-    {LUA_UTF8LIBNAME, luaopen_utf8},
-    {LUA_BITLIBNAME, luaopen_bit32},
-    {LUA_BUFFERLIBNAME, luaopen_buffer},
-    {LUA_VECLIBNAME, luaopen_vector},
-    {nullptr, nullptr},
-};
-
-const char* kRemoved[] = {
-    "getfenv", "setfenv", "loadstring", "dofile", "loadfile", "load", "require", "collectgarbage", "module",
-    "debug",   "os",      "io",         "package", nullptr,
-};
-
 const char* field_name(Field field) {
     switch (field) {
     case Field::Transform:
@@ -129,17 +116,6 @@ ScriptRuntime* runtime_from(lua_State* state) {
 void* serial_data(std::uint64_t serial) { return reinterpret_cast<void*>(static_cast<std::uintptr_t>(serial)); }
 
 std::uint64_t data_serial(void* data) { return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(data)); }
-
-void* test_udata(lua_State* state, int index, const char* name) {
-    void* data = lua_touserdata(state, index);
-    if (data == nullptr || !lua_getmetatable(state, index)) {
-        return nullptr;
-    }
-    luaL_getmetatable(state, name);
-    const bool match = lua_rawequal(state, -1, -2) != 0;
-    lua_pop(state, 2);
-    return match ? data : nullptr;
-}
 
 template <typename Fn>
 int lua_guard(lua_State* state, Fn fn) {
@@ -191,21 +167,29 @@ bool is_a(const DataModel& object, const char* name) {
 constexpr std::size_t kMaxOutputBytes = 16 * 1024;
 constexpr std::size_t kMaxOutputLines = 1024;
 
-// Cut on a code-point boundary so a capped line is still valid UTF-8.
-std::size_t fit_utf8(std::string_view text, std::size_t max_bytes) {
-    if (text.size() <= max_bytes) {
-        return text.size();
+// Calls read with _G[name] on top of the stack, then pops it. Does nothing
+// without a state or a name.
+template <typename Read>
+void with_global(lua_State* state, const char* name, Read&& read) {
+    if (state == nullptr || name == nullptr) {
+        return;
     }
-    std::size_t end = max_bytes;
-    while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xC0) == 0x80) {
-        --end;
-    }
-    return end;
+    lua_getglobal(state, "_G");
+    lua_getfield(state, -1, name);
+    read(state);
+    lua_pop(state, 2);
 }
 
 }  // namespace
 
 struct ScriptBindings {
+    // task.spawn, task.defer, and task.delay. The caller must be a script
+    // thread. task_thread moves the function at first, and the arguments after
+    // it, to a new thread for the caller's script. The handle is what
+    // task.cancel takes.
+    static ScriptRuntime::Thread& task_caller(lua_State* state, const char* name);
+    static ScriptRuntime::Thread& task_thread(lua_State* state, const ScriptRuntime::Thread& caller, int first);
+    static int push_task_handle(lua_State* state, const ScriptRuntime::Thread& thread);
     static int task_wait(lua_State* state);
     static int task_spawn(lua_State* state);
     static int task_defer(lua_State* state);
@@ -222,6 +206,10 @@ struct ScriptBindings {
     static int instance_isa(lua_State* state);
     static int instance_tostring(lua_State* state);
     static int instance_service(lua_State* state);
+    // What a signal userdata names: an instance's Changed, an UserInputService
+    // signal, or a simulation phase on RunService. Callers refuse a blocked
+    // signal, such as a render phase, first. Raises when the instance is gone.
+    static Signal& signal_of(lua_State* state, ScriptRuntime& runtime, const SignalUd& ud);
     static int signal_connect(lua_State* state);
     static int signal_wait(lua_State* state);
     static int signal_index(lua_State* state);
@@ -360,57 +348,42 @@ void ScriptRuntime::heartbeat(double dt) {
 }
 
 bool ScriptRuntime::global_is_nil(const char* name) {
-    if (state_ == nullptr || name == nullptr) {
-        return true;
-    }
-    lua_getglobal(state_, "_G");
-    lua_getfield(state_, -1, name);
-    const bool nil = lua_isnil(state_, -1);
-    lua_pop(state_, 2);
+    bool nil = true;
+    with_global(state_, name, [&](lua_State* state) { nil = lua_isnil(state, -1); });
     return nil;
 }
 
 bool ScriptRuntime::global_number(const char* name, double& out) {
-    if (state_ == nullptr || name == nullptr) {
-        return false;
-    }
-    lua_getglobal(state_, "_G");
-    lua_getfield(state_, -1, name);
-    const bool ok = lua_isnumber(state_, -1);
-    if (ok) {
-        out = lua_tonumber(state_, -1);
-    }
-    lua_pop(state_, 2);
+    bool ok = false;
+    with_global(state_, name, [&](lua_State* state) {
+        ok = lua_isnumber(state, -1);
+        if (ok) {
+            out = lua_tonumber(state, -1);
+        }
+    });
     return ok;
 }
 
 bool ScriptRuntime::global_boolean(const char* name, bool& out) {
-    if (state_ == nullptr || name == nullptr) {
-        return false;
-    }
-    lua_getglobal(state_, "_G");
-    lua_getfield(state_, -1, name);
-    const bool ok = lua_isboolean(state_, -1);
-    if (ok) {
-        out = lua_toboolean(state_, -1) != 0;
-    }
-    lua_pop(state_, 2);
+    bool ok = false;
+    with_global(state_, name, [&](lua_State* state) {
+        ok = lua_isboolean(state, -1);
+        if (ok) {
+            out = lua_toboolean(state, -1) != 0;
+        }
+    });
     return ok;
 }
 
 ScriptRuntime::Watch ScriptRuntime::watch_global(const char* name) {
     Watch watch;
-    if (state_ == nullptr || name == nullptr) {
-        return watch;
-    }
-    lua_getglobal(state_, "_G");
-    lua_getfield(state_, -1, name);
-    if (auto* ud = static_cast<InstanceUd*>(test_udata(state_, -1, kInstanceMeta))) {
-        watch.id = ud->id;
-        watch.world = ud->world;
-        watch.valid = true;
-    }
-    lua_pop(state_, 2);
+    with_global(state_, name, [&](lua_State* state) {
+        if (auto* ud = static_cast<InstanceUd*>(test_userdata(state, -1, kInstanceMeta))) {
+            watch.id = ud->id;
+            watch.world = ud->world;
+            watch.valid = true;
+        }
+    });
     return watch;
 }
 
@@ -470,55 +443,14 @@ bool ScriptRuntime::gate(InstanceId script, std::uint32_t generation, void* user
     return object->start_generation() == generation;
 }
 
-static void* adjust_memory(std::size_t& used, std::size_t limit, void* pointer, std::size_t old_size,
-                            std::size_t new_size) {
-    if (pointer == nullptr) {
-        old_size = 0;
-    }
-    if (new_size == 0) {
-        if (old_size <= used) {
-            used -= old_size;
-        } else {
-            used = 0;
-        }
-        std::free(pointer);
-        return nullptr;
-    }
-    if (old_size > used) {
-        return nullptr;
-    }
-    const std::size_t retained = used - old_size;
-    if (retained > limit || new_size > limit - retained) {
-        return nullptr;
-    }
-    void* block = std::realloc(pointer, new_size);
-    if (block == nullptr) {
-        return nullptr;
-    }
-    used = retained + new_size;
-    return block;
-}
-
 void* ScriptRuntime::allocate(void* userdata, void* pointer, std::size_t old_size, std::size_t new_size) {
     auto* self = static_cast<ScriptRuntime*>(userdata);
-    if (self == nullptr) {
-        if (new_size == 0) {
-            std::free(pointer);
-        }
-        return nullptr;
-    }
-    return adjust_memory(self->memory_used_, kMemoryLimit, pointer, old_size, new_size);
+    return budget_realloc(self->memory_used_, kMemoryLimit, pointer, old_size, new_size);
 }
 
 void* ScriptRuntime::allocate_console(void* userdata, void* pointer, std::size_t old_size, std::size_t new_size) {
     auto* self = static_cast<ScriptRuntime*>(userdata);
-    if (self == nullptr) {
-        if (new_size == 0) {
-            std::free(pointer);
-        }
-        return nullptr;
-    }
-    return adjust_memory(self->console_memory_used_, kMemoryLimit, pointer, old_size, new_size);
+    return budget_realloc(self->console_memory_used_, kMemoryLimit, pointer, old_size, new_size);
 }
 
 void ScriptRuntime::interrupt(lua_State* state, int gc) {
@@ -534,11 +466,6 @@ void ScriptRuntime::interrupt(lua_State* state, int gc) {
         return;
     }
     luaL_error(state, "ScriptTimeout");
-}
-
-void ScriptRuntime::panic(lua_State* state, int) {
-    const char* message = lua_tostring(state, -1);
-    throw std::runtime_error(message != nullptr ? message : "Luau panic");
 }
 
 void ScriptRuntime::on_end_of_drain() {
@@ -603,17 +530,7 @@ void ScriptRuntime::assert_lua_thread() const {
 }
 
 void open_host_libraries(lua_State* state) {
-    for (const luaL_Reg* library = kLibraries; library->func != nullptr; ++library) {
-        lua_pushcfunction(state, library->func, nullptr);
-        lua_pushstring(state, library->name);
-        lua_call(state, 1, 0);
-    }
-    lua_pushcfunction(state, &ScriptRuntime::lua_print, "print");
-    lua_setglobal(state, "print");
-    for (const char* const* name = kRemoved; *name != nullptr; ++name) {
-        lua_pushnil(state);
-        lua_setglobal(state, *name);
-    }
+    open_sandbox_libraries(state, &ScriptRuntime::lua_print);
 
     auto metatable = [&](const char* name) {
         luaL_newmetatable(state, name);
@@ -709,7 +626,6 @@ lua_State* ScriptRuntime::create_state(bool console) {
     try {
         lua_Callbacks* callbacks = lua_callbacks(state);
         callbacks->userdata = this;
-        callbacks->panic = &ScriptRuntime::panic;
         open_host_libraries(state);
 
         luaL_sandbox(state);
@@ -761,7 +677,6 @@ void ScriptRuntime::close_console() {
     console_require_cache_.clear();
     lua_Callbacks* callbacks = lua_callbacks(state);
     callbacks->interrupt = nullptr;
-    callbacks->panic = nullptr;
     callbacks->userdata = nullptr;
     lua_close(state);
     console_memory_used_ = 0;
@@ -801,7 +716,6 @@ void ScriptRuntime::close_vm() {
     vm_token_.reset();
     lua_Callbacks* callbacks = lua_callbacks(state_);
     callbacks->interrupt = nullptr;
-    callbacks->panic = nullptr;
     callbacks->userdata = nullptr;
     lua_State* state = state_;
     state_ = nullptr;
@@ -871,14 +785,8 @@ void ScriptRuntime::launch_one(const Start& start) {
     if (game_->parent(script->id()) == DataModel::kNoParent || !game_->simulation_running()) {
         return;
     }
-    lua_CompileOptions options{};
-    options.optimizationLevel = 1;
-    options.debugLevel = 1;
-    std::size_t bytecode_size = 0;
-    const std::string& source = script->source();
-    std::unique_ptr<char, void (*)(void*)> bytecode(
-        luau_compile(source.data() != nullptr ? source.data() : "", source.size(), &options, &bytecode_size), std::free);
-    if (bytecode == nullptr || bytecode_size == 0) {
+    const Bytecode bytecode = compile_luau(script->source());
+    if (!bytecode) {
         last_error_ = "could not compile script";
         const std::string script_name = game_->name(script->id());
         append_output(OutputKind::Error, script_name.empty() ? last_error_ : script_name + ": " + last_error_);
@@ -886,7 +794,7 @@ void ScriptRuntime::launch_one(const Start& start) {
     }
     Thread& thread = new_thread(script->id(), start.generation);
     const std::string chunk = "=" + game_->name(script->id());
-    const int loaded = luau_load(thread.co, chunk.c_str(), bytecode.get(), bytecode_size, 0);
+    const int loaded = luau_load(thread.co, chunk.c_str(), bytecode.data.get(), bytecode.size, 0);
     if (loaded != LUA_OK) {
         report_error(thread.co);
         thread.dead = true;
@@ -1001,7 +909,7 @@ void ScriptRuntime::release_dead_threads() {
         }
         // The coroutine may live on in a script variable. Its serial then finds no thread.
         by_serial_.erase(it->serial);
-        if (it->anchor != kAnchorNone) {
+        if (it->anchor != LUA_NOREF) {
             lua_unref(state_, it->anchor);
         }
         it = threads_.erase(it);
@@ -1020,31 +928,34 @@ void ScriptRuntime::ready(Thread& thread) {
     ready_.push_back(&thread);
 }
 
-void ScriptRuntime::make_ready(Thread& thread, const char* result) {
+bool ScriptRuntime::unpark(Thread& thread) {
     if (thread.dead || thread.co == nullptr) {
-        return;
+        return false;
     }
     sleep_.remove(&thread);
     defer_.remove(&thread);
     forget_child_wait(thread);
+    thread.park = Thread::Park::None;
+    return true;
+}
+
+void ScriptRuntime::make_ready(Thread& thread, const char* result) {
+    if (!unpark(thread)) {
+        return;
+    }
     if (result != nullptr) {
         lua_pushstring(thread.co, result);
         thread.nargs = 1;
     }
-    thread.park = Thread::Park::None;
     ready(thread);
 }
 
 void ScriptRuntime::make_ready_number(Thread& thread, double result) {
-    if (thread.dead || thread.co == nullptr) {
+    if (!unpark(thread)) {
         return;
     }
-    sleep_.remove(&thread);
-    defer_.remove(&thread);
-    forget_child_wait(thread);
     lua_pushnumber(thread.co, result);
     thread.nargs = 1;
-    thread.park = Thread::Park::None;
     ready(thread);
 }
 
@@ -1203,7 +1114,7 @@ ScriptRuntime::Thread& ScriptRuntime::new_thread(InstanceId script, std::uint32_
     Thread& thread = threads_.back();
     thread.script = script;
     thread.generation = generation;
-    thread.anchor = kAnchorNone;
+    thread.anchor = LUA_NOREF;
     thread.serial = ++next_serial_;
     by_serial_[thread.serial] = &thread;
     try {
@@ -1317,26 +1228,16 @@ void ScriptRuntime::eval_chunk(lua_State* state, std::string_view source) {
         append_output(OutputKind::Error, "could not create the Luau state");
         return;
     }
-    lua_CompileOptions options{};
-    options.optimizationLevel = 1;
-    options.debugLevel = 1;
-    std::size_t bytecode_size = 0;
-    const char* text = source.data() != nullptr ? source.data() : "";
-    std::unique_ptr<char, void (*)(void*)> bytecode(luau_compile(text, source.size(), &options, &bytecode_size),
-                                                    std::free);
-    if (bytecode == nullptr || bytecode_size == 0) {
+    const Bytecode bytecode = compile_luau(source);
+    if (!bytecode) {
         append_output(OutputKind::Error, "could not compile script");
         return;
     }
     lua_State* co = lua_newthread(state);
-    if (co == nullptr) {
-        append_output(OutputKind::Error, "could not create a script thread");
-        return;
-    }
     const int anchor = lua_ref(state, -1);
     lua_pop(state, 1);
     luaL_sandboxthread(co);
-    const int loaded = luau_load(co, "=console", bytecode.get(), bytecode_size, 0);
+    const int loaded = luau_load(co, "=console", bytecode.data.get(), bytecode.size, 0);
     if (loaded != LUA_OK) {
         report_error(co);
         lua_unref(state, anchor);
@@ -1395,7 +1296,7 @@ void ScriptRuntime::print_source(lua_State* state, InstanceId& script, int& line
         lua_getfenv(state, -1);
         if (lua_istable(state, -1)) {
             lua_rawgetfield(state, -1, "script");
-            const auto* ud = static_cast<const InstanceUd*>(test_udata(state, -1, kInstanceMeta));
+            const auto* ud = static_cast<const InstanceUd*>(test_userdata(state, -1, kInstanceMeta));
             if (ud != nullptr && resolve_id(ud->id, ud->world) != nullptr && ud->id != 0) {
                 script = ud->id;
                 line = debug.currentline;
@@ -1452,7 +1353,7 @@ void ScriptRuntime::push_instance(lua_State* state, InstanceId id) {
     if (cached) {
         lua_pushnumber(state, static_cast<double>(id));
         lua_rawget(state, -2);
-        const auto* hit = static_cast<InstanceUd*>(test_udata(state, -1, kInstanceMeta));
+        const auto* hit = static_cast<InstanceUd*>(test_userdata(state, -1, kInstanceMeta));
         // A handle from an earlier world generation names a different instance.
         if (hit != nullptr && hit->world == world) {
             lua_remove(state, -2);
@@ -1562,16 +1463,12 @@ void ScriptRuntime::invoke_listener_input(int ref, InstanceId script, std::uint3
 }
 
 void ScriptRuntime::make_ready_input(Thread& thread, const InputRecord& record) {
-    if (thread.dead || thread.co == nullptr) {
+    if (!unpark(thread)) {
         return;
     }
-    sleep_.remove(&thread);
-    defer_.remove(&thread);
-    forget_child_wait(thread);
     push_input_object(thread.co, record);
     lua_pushboolean(thread.co, record.processed ? 1 : 0);
     thread.nargs = 2;
-    thread.park = Thread::Park::None;
     ready(thread);
 }
 
@@ -1637,9 +1534,6 @@ int ScriptRuntime::require_module(lua_State* state, InstanceId module_id) {
     } anchor;
     if (console) {
         co = lua_newthread(vm);
-        if (co == nullptr) {
-            luaL_error(state, "could not create a ModuleScript thread");
-        }
         anchor.vm = vm;
         anchor.ref = lua_ref(vm, -1);
         lua_pop(vm, 1);
@@ -1662,18 +1556,12 @@ int ScriptRuntime::require_module(lua_State* state, InstanceId module_id) {
         }
     } finish{thread};
 
-    lua_CompileOptions options{};
-    options.optimizationLevel = 1;
-    options.debugLevel = 1;
-    std::size_t bytecode_size = 0;
-    const std::string& source = module->source();
-    std::unique_ptr<char, void (*)(void*)> bytecode(
-        luau_compile(source.data() != nullptr ? source.data() : "", source.size(), &options, &bytecode_size), std::free);
-    if (bytecode == nullptr || bytecode_size == 0) {
+    const Bytecode bytecode = compile_luau(module->source());
+    if (!bytecode) {
         luaL_error(state, "could not compile ModuleScript");
     }
     const std::string chunk = "=" + game_->name(module_id);
-    const int loaded = luau_load(co, chunk.c_str(), bytecode.get(), bytecode_size, 0);
+    const int loaded = luau_load(co, chunk.c_str(), bytecode.data.get(), bytecode.size, 0);
     if (loaded != LUA_OK) {
         remember_error(co);
         const std::string message = last_error_;
@@ -1726,86 +1614,70 @@ int ScriptBindings::task_wait(lua_State* state) {
     });
 }
 
+ScriptRuntime::Thread& ScriptBindings::task_caller(lua_State* state, const char* name) {
+    ScriptRuntime::Thread* caller = ScriptRuntime::thread_from(state);
+    if (caller == nullptr) {
+        luaL_error(state, "%s runs inside a script", name);
+    }
+    return *caller;
+}
+
+ScriptRuntime::Thread& ScriptBindings::task_thread(lua_State* state, const ScriptRuntime::Thread& caller, int first) {
+    luaL_checktype(state, first, LUA_TFUNCTION);
+    ScriptRuntime::Thread& child = runtime_from(state)->new_thread(caller.script, caller.generation);
+    const int count = lua_gettop(state);
+    for (int index = first; index <= count; ++index) {
+        lua_pushvalue(state, index);
+    }
+    lua_xmove(state, child.co, count - first + 1);
+    child.nargs = count - first;
+    return child;
+}
+
+int ScriptBindings::push_task_handle(lua_State* state, const ScriptRuntime::Thread& thread) {
+    auto* ud = static_cast<std::uint64_t*>(lua_newuserdata(state, sizeof(std::uint64_t)));
+    *ud = thread.serial;
+    luaL_getmetatable(state, kThreadMeta);
+    lua_setmetatable(state, -2);
+    return 1;
+}
+
 int ScriptBindings::task_spawn(lua_State* state) {
     return lua_guard(state, [&] {
-        ScriptRuntime* runtime = runtime_from(state);
-        ScriptRuntime::Thread* caller = ScriptRuntime::thread_from(state);
-        if (runtime == nullptr || caller == nullptr) {
-            luaL_error(state, "task.spawn runs inside a script");
-        }
-        luaL_checktype(state, 1, LUA_TFUNCTION);
-        ScriptRuntime::Thread& child = runtime->new_thread(caller->script, caller->generation);
-        const int count = lua_gettop(state);
-        for (int index = 1; index <= count; ++index) {
-            lua_pushvalue(state, index);
-        }
-        lua_xmove(state, child.co, count);
-        child.nargs = count - 1;
-        runtime->ready(child);
-        auto* ud = static_cast<std::uint64_t*>(lua_newuserdata(state, sizeof(std::uint64_t)));
-        *ud = child.serial;
-        luaL_getmetatable(state, kThreadMeta);
-        lua_setmetatable(state, -2);
-        return 1;
+        const ScriptRuntime::Thread& caller = task_caller(state, "task.spawn");
+        ScriptRuntime::Thread& child = task_thread(state, caller, 1);
+        runtime_from(state)->ready(child);
+        return push_task_handle(state, child);
     });
 }
 
 int ScriptBindings::task_defer(lua_State* state) {
     return lua_guard(state, [&] {
-        ScriptRuntime* runtime = runtime_from(state);
-        ScriptRuntime::Thread* caller = ScriptRuntime::thread_from(state);
-        if (runtime == nullptr || caller == nullptr) {
-            luaL_error(state, "task.defer runs inside a script");
-        }
-        luaL_checktype(state, 1, LUA_TFUNCTION);
-        ScriptRuntime::Thread& child = runtime->new_thread(caller->script, caller->generation);
-        const int count = lua_gettop(state);
-        for (int index = 1; index <= count; ++index) {
-            lua_pushvalue(state, index);
-        }
-        lua_xmove(state, child.co, count);
-        child.nargs = count - 1;
+        const ScriptRuntime::Thread& caller = task_caller(state, "task.defer");
+        ScriptRuntime::Thread& child = task_thread(state, caller, 1);
         child.park = ScriptRuntime::Thread::Park::Defer;
-        runtime->defer_.push_back(&child);
-        auto* ud = static_cast<std::uint64_t*>(lua_newuserdata(state, sizeof(std::uint64_t)));
-        *ud = child.serial;
-        luaL_getmetatable(state, kThreadMeta);
-        lua_setmetatable(state, -2);
-        return 1;
+        runtime_from(state)->defer_.push_back(&child);
+        return push_task_handle(state, child);
     });
 }
 
 int ScriptBindings::task_delay(lua_State* state) {
     return lua_guard(state, [&] {
-        ScriptRuntime* runtime = runtime_from(state);
-        ScriptRuntime::Thread* caller = ScriptRuntime::thread_from(state);
-        if (runtime == nullptr || caller == nullptr) {
-            luaL_error(state, "task.delay runs inside a script");
-        }
+        const ScriptRuntime::Thread& caller = task_caller(state, "task.delay");
         const double dt = luaL_checknumber(state, 1);
-        luaL_checktype(state, 2, LUA_TFUNCTION);
-        ScriptRuntime::Thread& child = runtime->new_thread(caller->script, caller->generation);
-        const int count = lua_gettop(state);
-        for (int index = 2; index <= count; ++index) {
-            lua_pushvalue(state, index);
-        }
-        lua_xmove(state, child.co, count - 1);
-        child.nargs = count - 2;
+        ScriptRuntime::Thread& child = task_thread(state, caller, 2);
+        ScriptRuntime* runtime = runtime_from(state);
         child.park = ScriptRuntime::Thread::Park::Sleep;
         child.due = runtime->sim_clock_ + (dt < 0 ? 0 : dt);
         runtime->sleep_.push_back(&child);
-        auto* ud = static_cast<std::uint64_t*>(lua_newuserdata(state, sizeof(std::uint64_t)));
-        *ud = child.serial;
-        luaL_getmetatable(state, kThreadMeta);
-        lua_setmetatable(state, -2);
-        return 1;
+        return push_task_handle(state, child);
     });
 }
 
 int ScriptBindings::task_cancel(lua_State* state) {
     return lua_guard(state, [&] {
         ScriptRuntime* runtime = runtime_from(state);
-        const auto* ud = static_cast<const std::uint64_t*>(test_udata(state, 1, kThreadMeta));
+        const auto* ud = static_cast<const std::uint64_t*>(test_userdata(state, 1, kThreadMeta));
         if (runtime == nullptr || ud == nullptr) {
             luaL_error(state, "task.cancel expects a thread");
         }
@@ -2212,6 +2084,24 @@ int ScriptBindings::instance_service(lua_State* state) {
     });
 }
 
+Signal& ScriptBindings::signal_of(lua_State* state, ScriptRuntime& runtime, const SignalUd& ud) {
+    Signal* signal = nullptr;
+    if (ud.kind == kSignalChanged) {
+        if (runtime.resolve_id(ud.id, ud.world) == nullptr) {
+            luaL_error(state, "instance is gone");
+        }
+        signal = &runtime.game_->changed(ud.id);
+    } else if (ud.kind == kSignalInput) {
+        signal = runtime.game_->input().signal(static_cast<UserInputService::Kind>(ud.phase));
+    } else {
+        signal = runtime.run_service_.signal(static_cast<Phase>(ud.phase));
+    }
+    if (signal == nullptr) {
+        luaL_error(state, "signal is not available");
+    }
+    return *signal;
+}
+
 int ScriptBindings::signal_connect(lua_State* state) {
     return lua_guard(state, [&] {
         auto* ud = static_cast<SignalUd*>(luaL_checkudata(state, 1, kSignalMeta));
@@ -2230,20 +2120,7 @@ int ScriptBindings::signal_connect(lua_State* state) {
         lua_pushvalue(state, 2);
         const auto held = std::make_shared<const ScriptRuntime::HeldRef>(*runtime, lua_ref(state, -1));
         lua_pop(state, 1);
-        Signal* signal = nullptr;
-        if (ud->kind == kSignalChanged) {
-            if (runtime->resolve_id(ud->id, ud->world) == nullptr) {
-                luaL_error(state, "instance is gone");
-            }
-            signal = &runtime->game_->changed(ud->id);
-        } else if (ud->kind == kSignalInput) {
-            signal = runtime->game_->input().signal(static_cast<UserInputService::Kind>(ud->phase));
-        } else {
-            signal = runtime->run_service_.signal(static_cast<Phase>(ud->phase));
-        }
-        if (signal == nullptr) {
-            luaL_error(state, "signal is not available");
-        }
+        Signal* signal = &signal_of(state, *runtime, *ud);
         const InstanceId script = caller->script;
         const std::uint32_t generation = caller->generation;
         // The handler owns the callback's reference; Disconnect drops the handler.
@@ -2279,24 +2156,8 @@ int ScriptBindings::signal_wait(lua_State* state) {
         if (ud->blocked) {
             luaL_error(state, "%s is not available to scripts", ud->blocked_name);
         }
-        // An instance Changed signal, a simulation phase on RunService (Heartbeat
-        // and the other sim steps), or an UserInputService signal. Render phases are
-        // already rejected above.
-        Signal* signal = nullptr;
+        Signal* signal = &signal_of(state, *runtime, *ud);
         const int kind = ud->kind;
-        if (kind == kSignalChanged) {
-            if (runtime->resolve_id(ud->id, ud->world) == nullptr) {
-                luaL_error(state, "instance is gone");
-            }
-            signal = &runtime->game_->changed(ud->id);
-        } else if (kind == kSignalInput) {
-            signal = runtime->game_->input().signal(static_cast<UserInputService::Kind>(ud->phase));
-        } else {
-            signal = runtime->run_service_.signal(static_cast<Phase>(ud->phase));
-        }
-        if (signal == nullptr) {
-            luaL_error(state, "signal is not available");
-        }
         thread->park = ScriptRuntime::Thread::Park::Signal;
         // By serial: task.cancel can end the thread, and release it, before the signal fires.
         signal->connect_scripted(
@@ -2433,7 +2294,7 @@ int ScriptBindings::selection_set(lua_State* state) {
         ids.reserve(static_cast<std::size_t>(count));
         for (int i = 1; i <= count; ++i) {
             lua_rawgeti(state, 2, i);
-            const auto* ud = static_cast<InstanceUd*>(test_udata(state, -1, kInstanceMeta));
+            const auto* ud = static_cast<InstanceUd*>(test_userdata(state, -1, kInstanceMeta));
             if (ud == nullptr) {
                 luaL_error(state, "Set takes a list of instances");
             }

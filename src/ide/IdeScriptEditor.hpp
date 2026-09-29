@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ColorLiterals.hpp"
+#include "ChangeFlag.hpp"
 #include "CompletionPopup.hpp"
 #include "LuauComplete.hpp"
 #include "IdePane.hpp"
@@ -168,6 +169,10 @@ private:
     bool loading_ = false;
     bool loaded_ = false;
     bool missing_ = false;
+    // Set when this script's problems or the text changed. The marks are
+    // placed again only then, not every frame.
+    ChangeFlag marks_changed_;
+    std::uint64_t diagnostics_hook_ = 0;
     bool dirty_ = false;
     // world_generation the buffer last matched. Stop bumps it.
     std::uint32_t world_ = 0;

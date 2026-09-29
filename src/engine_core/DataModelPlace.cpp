@@ -288,6 +288,8 @@ void DataModel::restore_place_unlocked() {
     state_->dirty_all = true;
     state_->revision.fetch_add(1, std::memory_order_relaxed);
     state_->tree_revision.fetch_add(1, std::memory_order_relaxed);
+    // The restore wrote instances without their setters.
+    notify_all_watchers();
 
     {
         std::lock_guard<std::mutex> guard(state_->command_mu);

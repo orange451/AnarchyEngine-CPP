@@ -424,6 +424,8 @@ void DataModel::apply_parent(InstanceId id, InstanceId parent_id, int sibling_in
 }
 
 void DataModel::apply_history(const Mutation& mutation, bool inverse) {
+    // A revive writes an instance's fields without their setters.
+    notify_all_watchers();
     switch (mutation.kind) {
     case MutationKind::SetProperty:
         apply_property(mutation.id, inverse ? mutation.before : mutation.after);

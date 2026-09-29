@@ -4604,6 +4604,72 @@ TEST_CASE("S48 creating past the instance cap throws and changes nothing", "[S48
     REQUIRE_NOTHROW(game.create<engine_core::Script>());
 }
 
+TEST_CASE("S49 a change watch hears its instances' changes and no others", "[S49]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& watched = game.create_game_object();
+    engine_core::GameObject& other = game.create_game_object();
+    game.set_parent(watched.id(), game.id());
+    game.set_parent(other.id(), game.id());
+    int heard = 0;
+    const std::uint64_t watch = game.watch_changes([&heard] { ++heard; });
+    game.set_watched(watch, {watched.id()});
+
+    game.set_name(other.id(), "Other");
+    other.set_color(engine_core::ColorRgb{1.f, 0.f, 0.f, 1.f});
+    REQUIRE(heard == 0);
+
+    game.set_name(watched.id(), "Watched");
+    REQUIRE(heard == 1);
+    watched.set_color(engine_core::ColorRgb{0.f, 1.f, 0.f, 1.f});
+    REQUIRE(heard == 2);
+
+    // Physics moves bodies without their setters.
+    game.start_simulation();
+    game.set_simulated(watched.id(), true);
+    const int before_step = heard;
+    watched.set_linear_velocity(1.f, 0.f, 0.f);
+    const int before_move = heard;
+    game.integrate_simulated(1.0 / 60.0);
+    REQUIRE(heard > before_move);
+    REQUIRE(before_step <= before_move);
+
+    // Stop restores the place without setters, so every watcher hears it.
+    const int before_stop = heard;
+    game.stop_simulation();
+    REQUIRE(heard > before_stop);
+
+    // Destroying a watched instance is a change too.
+    const int before_destroy = heard;
+    game.destroy(watched.id());
+    REQUIRE(heard > before_destroy);
+
+    game.unwatch_changes(watch);
+    const int after = heard;
+    game.set_name(other.id(), "Again");
+    REQUIRE(heard == after);
+}
+
+TEST_CASE("S50 undo and redo reach a change watch", "[S50]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& part = game.create_game_object();
+    game.set_parent(part.id(), game.id());
+    game.capture_place();
+    int heard = 0;
+    const std::uint64_t watch = game.watch_changes([&heard] { ++heard; });
+    game.set_watched(watch, {part.id()});
+    game.history().set_pending_gesture("Recolor");
+    part.set_color(engine_core::ColorRgb{0.f, 0.f, 1.f, 1.f});
+    game.history().end_gesture();
+    const int edited = heard;
+    REQUIRE(edited > 0);
+    REQUIRE(game.history().can_undo().first);
+    game.history().undo();
+    REQUIRE(heard > edited);
+    game.unwatch_changes(watch);
+}
+
 TEST_CASE("S46 Instance.new past the instance cap is a script error, not an abort", "[S46]") {
     ScriptRig rig;
     add_script(rig.game, "Flood", R"(

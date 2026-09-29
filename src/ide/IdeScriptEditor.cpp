@@ -181,6 +181,12 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     setIconFile("Script.png");
     // Checked against the tree as it is now, not as it was at its last check.
     engine_.analysis().watch(id_);
+    diagnostics_hook_ = engine_.analysis().diagnostics_changed().connect(
+        [changed = marks_changed_.setter(), id = id_](engine_core::InstanceId script) {
+            if (script == id) {
+                changed();
+            }
+        });
     commit_->id = id;
     auto area = std::make_shared<ScriptCodeArea>();
     area->editor = this;
@@ -220,6 +226,7 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     find_bar_->setVisible(false);
 
     status_ = jadefx::make<jadefx::Label>("");
+    status_->getClassList().add("script-banner");
     status_->setAlignment(jadefx::Pos::CenterLeft);
     status_->setMouseTransparent(true);
     status_->setVisible(false);
@@ -579,6 +586,7 @@ IdeScriptEditor::~IdeScriptEditor() {
         getScene()->removeKeyHook(color_edit_->key_hook);
         getScene()->hidePopup(color_chooser_.get());
     }
+    engine_.analysis().diagnostics_changed().disconnect(diagnostics_hook_);
     engine_.analysis().unwatch(id_);
 }
 
@@ -709,6 +717,8 @@ void IdeScriptEditor::paint() {
     if (!area_) {
         return;
     }
+    // Every text change paints, and moves where the problems sit.
+    marks_changed_.set();
     const std::string text = area_->getText();
     refresh_find(text);
     const int current = current_find();
@@ -966,6 +976,9 @@ void IdeScriptEditor::refresh_marks() {
     // Publishing here is the UI thread. The engine render thread does not run this.
     engine_.analysis().pump();
     if (!area_ || !status_ || !loaded_ || missing_) {
+        return;
+    }
+    if (!marks_changed_.take()) {
         return;
     }
     const std::optional<std::string> checked = engine_.analysis().analyzed_source(id_);

@@ -2,6 +2,8 @@
 
 #include "DataModelState.hpp"
 
+#include <algorithm>
+
 namespace engine_core {
 
 bool valid_guid(std::string_view guid) {
@@ -482,6 +484,7 @@ void DataModel::destroy(InstanceId id) {
         state_->free_list.push_back(index);
     }
     note(id, VisualField::Removed, current_origin());
+    notify_watchers(id);
     if (captured) {
         record_destroyed(std::move(*captured));
     }
@@ -632,6 +635,7 @@ void DataModel::integrate_simulated(double dt) {
         body.transform_.m[14] += body.velocity_[2] * step;
         const InstanceId id = make_instance_id(part.generation, index);
         note(id, VisualField::Transform, WriteOrigin::Simulation);
+        notify_watchers(id);
     }
 }
 
@@ -765,7 +769,62 @@ Signal& DataModel::ancestry_changed(InstanceId id) {
     return ensure_signal(id, SignalKind::AncestryChanged, Field::Parent);
 }
 
+std::uint64_t DataModel::watch_changes(std::function<void()> notify) {
+    std::lock_guard<std::mutex> guard(state_->watch_mu);
+    State::ChangeWatcher watcher;
+    watcher.watch = state_->next_watch++;
+    watcher.notify = std::move(notify);
+    state_->watchers.push_back(std::move(watcher));
+    state_->watcher_count.store(state_->watchers.size(), std::memory_order_relaxed);
+    return state_->watchers.back().watch;
+}
+
+void DataModel::set_watched(std::uint64_t watch, std::vector<InstanceId> ids) {
+    std::sort(ids.begin(), ids.end());
+    std::lock_guard<std::mutex> guard(state_->watch_mu);
+    for (State::ChangeWatcher& watcher : state_->watchers) {
+        if (watcher.watch == watch) {
+            watcher.ids = std::move(ids);
+            return;
+        }
+    }
+}
+
+void DataModel::unwatch_changes(std::uint64_t watch) {
+    std::lock_guard<std::mutex> guard(state_->watch_mu);
+    auto& watchers = state_->watchers;
+    watchers.erase(std::remove_if(watchers.begin(), watchers.end(),
+                                  [watch](const State::ChangeWatcher& watcher) { return watcher.watch == watch; }),
+                   watchers.end());
+    state_->watcher_count.store(watchers.size(), std::memory_order_relaxed);
+}
+
+void DataModel::notify_watchers(InstanceId id) {
+    if (state_->watcher_count.load(std::memory_order_relaxed) == 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> guard(state_->watch_mu);
+    for (const State::ChangeWatcher& watcher : state_->watchers) {
+        if (watcher.notify && std::binary_search(watcher.ids.begin(), watcher.ids.end(), id)) {
+            watcher.notify();
+        }
+    }
+}
+
+void DataModel::notify_all_watchers() {
+    if (state_->watcher_count.load(std::memory_order_relaxed) == 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> guard(state_->watch_mu);
+    for (const State::ChangeWatcher& watcher : state_->watchers) {
+        if (watcher.notify) {
+            watcher.notify();
+        }
+    }
+}
+
 void DataModel::emit_change(InstanceId id, Field field, WriteOrigin origin) {
+    notify_watchers(id);
     InstanceSignals* bag = bag_for(id);
     if (bag == nullptr) {
         return;

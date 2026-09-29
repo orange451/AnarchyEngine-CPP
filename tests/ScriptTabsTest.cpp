@@ -11,6 +11,9 @@
 
 #include "jadefx/jadefx.hpp"
 
+#include <thread>
+#include <functional>
+#include <chrono>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -246,10 +249,47 @@ void TestEditorComesBackWithItsScript(engine_core::Engine& engine) {
 
 }  // namespace
 
+// The banner and marks are placed again only when the analyzer reports new
+// problems for the script or its text changes, not every frame. Both still
+// reach the screen.
+void TestProblemsShowAndClear(engine_core::Engine& engine) {
+    const engine_core::InstanceId id = AddScript(engine, "Broken", "local x =\n");
+    auto editor = jadefx::make<ide::IdeScriptEditor>(engine, id);
+    editor->setPrefWidthRatio(1);
+    editor->setPrefHeightRatio(1);
+    auto holder = jadefx::make<jadefx::StackPane>();
+    holder->getChildren().add(editor);
+    auto scene = jadefx::make<jadefx::Scene>(holder, 900, 600);
+    double time = 0;
+    auto banner = [&]() -> std::string {
+        const std::vector<jadefx::Node*> found = editor->getElementsByClassName("script-banner");
+        auto* label = found.empty() ? nullptr : dynamic_cast<jadefx::Label*>(found.front());
+        return label != nullptr && label->isVisible() ? label->getText() : std::string();
+    };
+    // Frames until want(banner) holds, while the analyzer works on its thread.
+    auto wait_for = [&](const std::function<bool(const std::string&)>& want) {
+        for (int step = 0; step < 400; ++step) {
+            time += 0.05;
+            scene->layout(900, 600, time);
+            if (want(banner())) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return false;
+    };
+    Expect(wait_for([](const std::string& text) { return text.find("Will not compile") == 0; }),
+           (std::string("a syntax error reaches the banner: ") + banner()).c_str());
+    SetSource(engine, id, "local x = 1\nreturn x\n");
+    Expect(wait_for([](const std::string& text) { return text.empty(); }),
+           (std::string("a fixed script clears the banner: ") + banner()).c_str());
+}
+
 int RunScriptTabTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     gFailures = 0;
     TestClosedTabs(layout, scene);
     TestPickerHookLeavesWithEditor(layout.simulation());
     TestEditorComesBackWithItsScript(layout.simulation());
+    TestProblemsShowAndClear(layout.simulation());
     return gFailures;
 }

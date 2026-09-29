@@ -1,4 +1,5 @@
 #include "PropertiesPanel.hpp"
+#include "ChangeFlag.hpp"
 #include "LockWaits.hpp"
 
 #include "ChangeHistoryService.hpp"
@@ -331,6 +332,13 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     PropertySheet sheet;
     bool force = true;
     bool polling = false;
+    // Set by the world when a property of a shown instance changes. The sheet
+    // is read again only then, or when the selection or the tree moved.
+    ChangeFlag changed;
+    std::uint64_t watch = 0;
+    std::vector<InstanceId> watched;
+    std::uint64_t seen_selection = ~std::uint64_t{0};
+    std::uint64_t seen_tree = ~std::uint64_t{0};
     std::string status;
     std::vector<std::shared_ptr<PendingEdit>> pending;
 
@@ -382,19 +390,29 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     }
 
     void read() {
+        const std::uint64_t tree = world->tree_revision();
+        const bool moved = selection->revision() != seen_selection || tree != seen_tree;
+        // Taken before the read, so a change made while reading reads again next frame.
+        if (!changed.take() && !moved && !force) {
+            return;
+        }
         std::uint64_t revision = 0;
         const std::vector<InstanceId> ids = selection->get(revision);
         PropertySheet next;
         {
             engine_core::DataModelLock lock(*world, engine_core::DataModelLock::Read, kFrameLockWait);
-            if (!lock.owns()) {
-                return;
-            }
-            // Undo writes the world back under this lock. Wait for it to finish.
-            if (history != nullptr && history->applying_undo_redo()) {
+            // Busy, or undo is writing the world back under this lock: try next frame.
+            if (!lock.owns() || (history != nullptr && history->applying_undo_redo())) {
+                changed.set();
                 return;
             }
             next = read_sheet(*world, ids);
+        }
+        seen_selection = revision;
+        seen_tree = tree;
+        if (ids != watched) {
+            watched = ids;
+            world->set_watched(watch, ids);
         }
         if (next == sheet && !force) {
             return;
@@ -1022,13 +1040,21 @@ PropertiesPanel::~PropertiesPanel() {
     if (impl_ && impl_->pane) {
         impl_->pane->owner.reset();
     }
+    if (impl_ && impl_->world != nullptr && impl_->watch != 0) {
+        impl_->world->unwatch_changes(impl_->watch);
+    }
 }
 
 void PropertiesPanel::bind(engine_core::DataModel& world, engine_core::SelectionService& selection,
                            engine_core::ChangeHistoryService& history) {
+    if (impl_->world != nullptr && impl_->watch != 0) {
+        impl_->world->unwatch_changes(impl_->watch);
+    }
     impl_->world = &world;
     impl_->selection = &selection;
     impl_->history = &history;
+    impl_->watch = world.watch_changes(impl_->changed.setter());
+    impl_->watched.clear();
     impl_->force = true;
     impl_->poll();
 }

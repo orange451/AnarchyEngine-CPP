@@ -256,6 +256,16 @@ public:
     // reads it again only when this moved. Safe to read from any thread.
     std::uint64_t tree_revision() const;
 
+    // A UI's interest in the properties of some instances. notify runs on the
+    // thread that made the change, whenever a property of a watched instance
+    // changes, one is destroyed, or a write touches many at once: undo, redo,
+    // and Stop. It must be quick, safe on any thread, and must not call these
+    // three back; a panel sets a flag there and redraws on its own thread.
+    // Any thread.
+    std::uint64_t watch_changes(std::function<void()> notify);
+    void set_watched(std::uint64_t watch, std::vector<InstanceId> ids);
+    void unwatch_changes(std::uint64_t watch);
+
     // Per-instance signals. The reference dies with the instance.
     // Id 0 is the root DataModel. It has no slot; its signals are not bags[0].
     Signal& changed(InstanceId id);
@@ -496,6 +506,9 @@ private:
     InstanceSignals& ensure_bag(InstanceId id);
     Signal& ensure_signal(InstanceId id, SignalKind kind, Field field);
     void emit_change(InstanceId id, Field field, WriteOrigin origin);
+    // Tells the watchers of id, or every watcher, that what they show changed.
+    void notify_watchers(InstanceId id);
+    void notify_all_watchers();
     void emit_child(InstanceId parent, SignalKind kind, InstanceId child, WriteOrigin origin);
     void emit_ancestry(InstanceId id, WriteOrigin origin);
     void detach_links(InstanceId id, Slot& part);

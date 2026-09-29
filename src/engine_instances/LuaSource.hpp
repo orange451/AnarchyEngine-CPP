@@ -16,6 +16,9 @@ public:
 
     void set_source(std::string source);
     const std::string& source() const { return source_; }
+    // Moves each time the source changes, by set_source or a Stop restoring
+    // it. A reader that keeps a copy checks this to know the copy is current.
+    std::uint64_t source_version() const { return source_version_; }
 
     // Edit, then the actions every instance has. Edit is the double-click.
     void context_actions(std::vector<ContextAction>& out) const override;
@@ -31,6 +34,7 @@ protected:
     void read_place(const std::byte* data, std::size_t size) override;
 
     std::string source_;
+    std::uint64_t source_version_ = 1;
 };
 
 }  // namespace engine_core

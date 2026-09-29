@@ -1414,6 +1414,15 @@ void add_engine_tools(McpServer& server, engine_core::Engine& engine, McpStudio 
     if (specs.size() != std::size(kToolCode)) {
         throw std::logic_error("The engine tools' specs and code do not match.");
     }
+    // With the counts equal and no name twice, finding each spec's code below
+    // pairs them one to one.
+    for (std::size_t index = 0; index < specs.size(); ++index) {
+        for (std::size_t other = index + 1; other < specs.size(); ++other) {
+            if (specs[index].name == specs[other].name) {
+                throw std::logic_error("Two engine tools are named " + specs[index].name + ".");
+            }
+        }
+    }
     for (McpToolSpec& spec : specs) {
         const ToolCode* code = std::find_if(std::begin(kToolCode), std::end(kToolCode),
                                             [&spec](const ToolCode& each) { return spec.name == each.name; });

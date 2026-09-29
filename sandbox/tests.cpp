@@ -4614,6 +4614,9 @@ TEST_CASE("S49 a change watch hears its instances' changes and no others", "[S49
     int heard = 0;
     const std::uint64_t watch = game.watch_changes([&heard] { ++heard; });
     game.set_watched(watch, {watched.id()});
+    // A watch with nothing in it hears nothing, not even Stop.
+    int idle_heard = 0;
+    const std::uint64_t idle = game.watch_changes([&idle_heard] { ++idle_heard; });
 
     game.set_name(other.id(), "Other");
     other.set_color(engine_core::ColorRgb{1.f, 0.f, 0.f, 1.f});
@@ -4643,6 +4646,9 @@ TEST_CASE("S49 a change watch hears its instances' changes and no others", "[S49
     const int before_destroy = heard;
     game.destroy(watched.id());
     REQUIRE(heard > before_destroy);
+
+    REQUIRE(idle_heard == 0);
+    game.unwatch_changes(idle);
 
     game.unwatch_changes(watch);
     const int after = heard;

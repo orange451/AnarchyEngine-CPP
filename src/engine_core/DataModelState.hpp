@@ -149,8 +149,8 @@ struct DataModel::State {
     std::atomic<std::uint64_t> tree_revision{0};
     std::atomic<std::uint64_t> source_revision{0};
 
-    // UIs watching instances' properties. watcher_count lets a change skip the
-    // lock when nobody watches.
+    // UIs watching instances' properties. watched_count, the ids watched in
+    // all, lets a change skip the lock when nothing is watched.
     struct ChangeWatcher {
         std::uint64_t watch = 0;
         // Sorted.
@@ -159,7 +159,7 @@ struct DataModel::State {
     };
     std::mutex watch_mu;
     std::vector<ChangeWatcher> watchers;
-    std::atomic<std::size_t> watcher_count{0};
+    std::atomic<std::size_t> watched_count{0};
     std::uint64_t next_watch = 1;
     std::function<void()> on_stop;
     std::function<void()> on_start;

@@ -392,12 +392,17 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     void read() {
         const std::uint64_t tree = world->tree_revision();
         const bool moved = selection->revision() != seen_selection || tree != seen_tree;
+        std::uint64_t revision = 0;
+        const std::vector<InstanceId> ids = selection->get(revision);
+        // Watched before the read, so a write that lands during it is heard.
+        if (ids != watched) {
+            watched = ids;
+            world->set_watched(watch, ids);
+        }
         // Taken before the read, so a change made while reading reads again next frame.
         if (!changed.take() && !moved && !force) {
             return;
         }
-        std::uint64_t revision = 0;
-        const std::vector<InstanceId> ids = selection->get(revision);
         PropertySheet next;
         {
             engine_core::DataModelLock lock(*world, engine_core::DataModelLock::Read, kFrameLockWait);
@@ -410,10 +415,6 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
         seen_selection = revision;
         seen_tree = tree;
-        if (ids != watched) {
-            watched = ids;
-            world->set_watched(watch, ids);
-        }
         if (next == sheet && !force) {
             return;
         }

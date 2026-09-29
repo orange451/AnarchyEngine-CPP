@@ -31,6 +31,7 @@ void LuaSource::set_source(std::string source) {
     }
     const std::string previous = source_;
     source_ = std::move(source);
+    ++source_version_;
     record_string(id(), Field::Source, previous, source_);
     emit_own(Field::Source);
     if (ScriptAnalysis* analysis = script_analysis()) {
@@ -67,6 +68,7 @@ void LuaSource::read_place(const std::byte* data, std::size_t size) {
     }
     // Stop restores authored source through here, not through set_source.
     if (source_ != previous) {
+        ++source_version_;
         if (ScriptAnalysis* analysis = script_analysis()) {
             analysis->invalidate(id());
         }

@@ -683,7 +683,7 @@ void IdeLayout::stop_test() {
         }
     });
     // Stop put the authored scripts back. Open editors, and editors closed
-    // during play, write their buffers back and capture that place.
+    // during play, write their buffers back; the next Test captures them.
     reapply_editors();
     restore_closed_edits();
     show_session(PlayState::Stopped);

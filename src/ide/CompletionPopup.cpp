@@ -982,15 +982,34 @@ const std::vector<engine_core::LuaNode>& completion_world(engine_core::Engine& e
     const std::uint64_t tree = game.tree_revision();
     const std::uint64_t authored = game.authored_revision();
     const std::uint64_t sources = game.source_revision();
-    const bool current = cache.world == &game && cache.tree == tree && cache.authored == authored &&
-                         cache.sources == sources;
-    if (!current) {
+    // The last full read of any place, by world, for a new cache whose first
+    // read cannot take the lock. UI thread only.
+    static const void* shared_world = nullptr;
+    static std::vector<engine_core::LuaNode> shared_nodes;
+    const bool same_place = cache.world == &game && cache.tree == tree && cache.authored == authored;
+    if (same_place && cache.sources != sources) {
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionLockWait);
+        if (lock.owns()) {
+            for (std::size_t index = 0; index < cache.nodes.size(); ++index) {
+                if (cache.versions[index] == 0) {
+                    continue;
+                }
+                const auto* script = dynamic_cast<const engine_core::LuaSource*>(game.instance(cache.nodes[index].id));
+                if (script != nullptr && script->source_version() != cache.versions[index]) {
+                    cache.nodes[index].source = script->source();
+                    cache.versions[index] = script->source_version();
+                }
+            }
+            cache.sources = sources;
+        }
+    } else if (!same_place) {
         engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionLockWait);
         if (lock.owns()) {
             // The revisions were read before the lock. A change that lands in
             // between is read now and stamped older, so the next call reads once
             // more; it is never missed.
             cache.nodes.clear();
+            cache.versions.clear();
             std::vector<engine_core::LuaNode>& nodes = cache.nodes;
             engine_core::LuaNode root;
             root.id = 0;
@@ -998,6 +1017,7 @@ const std::vector<engine_core::LuaNode>& completion_world(engine_core::Engine& e
             root.name = game.name(0);
             root.class_name = game.class_name();
             nodes.push_back(std::move(root));
+            cache.versions.push_back(0);
             // The tree in sibling order, then any instance outside it with what is under
             // it, so children keep the order FindFirstChild walks, as analysis sees it.
             std::unordered_set<engine_core::InstanceId> placed{0};
@@ -1013,10 +1033,13 @@ const std::vector<engine_core::LuaNode>& completion_world(engine_core::Engine& e
                 node.name = game.name(id);
                 const char* class_name = object->class_name();
                 node.class_name = class_name != nullptr ? class_name : "";
+                std::uint64_t version = 0;
                 if (auto* source = dynamic_cast<engine_core::LuaSource*>(object)) {
                     node.source = source->source();
+                    version = source->source_version();
                 }
                 nodes.push_back(std::move(node));
+                cache.versions.push_back(version);
             };
             const auto walk = [&](engine_core::InstanceId top) {
                 stack.push_back(top);
@@ -1047,6 +1070,12 @@ const std::vector<engine_core::LuaNode>& completion_world(engine_core::Engine& e
             cache.tree = tree;
             cache.authored = authored;
             cache.sources = sources;
+            shared_world = &game;
+            shared_nodes = cache.nodes;
+        } else if (cache.world != &game && shared_world == &game) {
+            // Stamped as never read, so the next call reads the place itself.
+            cache.nodes = shared_nodes;
+            cache.versions.assign(cache.nodes.size(), 0);
         }
     }
     if (buffer != nullptr) {

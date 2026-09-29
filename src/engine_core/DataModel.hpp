@@ -25,9 +25,8 @@ namespace engine_core {
 
 class DataModelLock;
 
-// One explorer context action. name is the menu label. primary is the action a
-// double-click runs. The shell performs the action. A subclass adds its own.
-// What the explorer can do to an instance. Each class offers some of them.
+// What the explorer can do to an instance. Each class offers some of them;
+// the shell performs them.
 enum class InstanceAction { Edit, Cut, Paste, Rename, Delete };
 
 // The action's name, as its menu item shows it.
@@ -151,7 +150,6 @@ public:
     template <typename T>
     T& create();
     GameObject& create_game_object();
-    // How many more instances create can make before the world is full.
     // How many more instances the place can hold. create throws
     // InstanceCapacityError when it is 0.
     std::size_t room_left() const;
@@ -255,8 +253,8 @@ public:
     // Moves under the write lock and never resets. A panel that shows the tree
     // reads it again only when this moved. Safe to read from any thread.
     std::uint64_t tree_revision() const;
-    // Bumps on every write to a script's Source, during play too, and with
-    // authored_revision on Stop. Safe to read from any thread.
+    // Bumps on every write to a script's Source through set_source, during
+    // play too. Stop moves authored_revision instead. Safe to read from any thread.
     std::uint64_t source_revision() const;
 
     // A UI's interest in the properties of some instances. notify runs on the
@@ -265,6 +263,7 @@ public:
     // and Stop. It must be quick, safe on any thread, and must not call these
     // three back; a panel sets a flag there and redraws on its own thread.
     // Any thread.
+    // A watch with no instances costs a change nothing.
     std::uint64_t watch_changes(std::function<void()> notify);
     void set_watched(std::uint64_t watch, std::vector<InstanceId> ids);
     void unwatch_changes(std::uint64_t watch);

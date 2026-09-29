@@ -775,19 +775,20 @@ std::uint64_t DataModel::watch_changes(std::function<void()> notify) {
     watcher.watch = state_->next_watch++;
     watcher.notify = std::move(notify);
     state_->watchers.push_back(std::move(watcher));
-    state_->watcher_count.store(state_->watchers.size(), std::memory_order_relaxed);
     return state_->watchers.back().watch;
 }
 
 void DataModel::set_watched(std::uint64_t watch, std::vector<InstanceId> ids) {
     std::sort(ids.begin(), ids.end());
     std::lock_guard<std::mutex> guard(state_->watch_mu);
+    std::size_t watched = 0;
     for (State::ChangeWatcher& watcher : state_->watchers) {
         if (watcher.watch == watch) {
             watcher.ids = std::move(ids);
-            return;
         }
+        watched += watcher.ids.size();
     }
+    state_->watched_count.store(watched, std::memory_order_relaxed);
 }
 
 void DataModel::unwatch_changes(std::uint64_t watch) {
@@ -796,11 +797,15 @@ void DataModel::unwatch_changes(std::uint64_t watch) {
     watchers.erase(std::remove_if(watchers.begin(), watchers.end(),
                                   [watch](const State::ChangeWatcher& watcher) { return watcher.watch == watch; }),
                    watchers.end());
-    state_->watcher_count.store(watchers.size(), std::memory_order_relaxed);
+    std::size_t watched = 0;
+    for (const State::ChangeWatcher& watcher : watchers) {
+        watched += watcher.ids.size();
+    }
+    state_->watched_count.store(watched, std::memory_order_relaxed);
 }
 
 void DataModel::notify_watchers(InstanceId id) {
-    if (state_->watcher_count.load(std::memory_order_relaxed) == 0) {
+    if (state_->watched_count.load(std::memory_order_relaxed) == 0) {
         return;
     }
     std::lock_guard<std::mutex> guard(state_->watch_mu);
@@ -812,12 +817,12 @@ void DataModel::notify_watchers(InstanceId id) {
 }
 
 void DataModel::notify_all_watchers() {
-    if (state_->watcher_count.load(std::memory_order_relaxed) == 0) {
+    if (state_->watched_count.load(std::memory_order_relaxed) == 0) {
         return;
     }
     std::lock_guard<std::mutex> guard(state_->watch_mu);
     for (const State::ChangeWatcher& watcher : state_->watchers) {
-        if (watcher.notify) {
+        if (watcher.notify && !watcher.ids.empty()) {
             watcher.notify();
         }
     }

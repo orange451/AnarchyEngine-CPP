@@ -290,6 +290,7 @@ void TestProblemsShowAndClear(engine_core::Engine& engine) {
 // a Source written while stopped, and one written during play all show.
 void TestCompletionWorldFollowsChanges(engine_core::Engine& engine) {
     const engine_core::InstanceId id = AddScript(engine, "Lib", "return 1\n");
+    const engine_core::InstanceId other = AddScript(engine, "Other", "return 'other'\n");
     ide::CompletionWorldCache cache;
     auto source_of = [&](const std::vector<engine_core::LuaNode>& nodes) -> std::string {
         for (const engine_core::LuaNode& node : nodes) {
@@ -321,8 +322,15 @@ void TestCompletionWorldFollowsChanges(engine_core::Engine& engine) {
         game.start_simulation();
     });
     SetSource(engine, id, "return 3\n");
-    ExpectText(source_of(ide::completion_world(engine, 0, nullptr, cache)), "return 3\n",
-               "a Source written during play shows");
+    const std::vector<engine_core::LuaNode>& playing = ide::completion_world(engine, 0, nullptr, cache);
+    ExpectText(source_of(playing), "return 3\n", "a Source written during play shows");
+    std::string other_source = "<missing>";
+    for (const engine_core::LuaNode& node : playing) {
+        if (node.id == other) {
+            other_source = node.source;
+        }
+    }
+    ExpectText(other_source, "return 'other'\n", "a script nobody wrote keeps its Source");
     engine.on_simulation([](engine_core::DataModel& game) { game.stop_simulation(); });
     ExpectText(source_of(ide::completion_world(engine, 0, nullptr, cache)), "return 2\n",
                "Stop's restored Source shows");

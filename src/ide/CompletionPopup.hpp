@@ -86,10 +86,14 @@ struct CompletionWorldCache {
     std::uint64_t authored = ~std::uint64_t{0};
     std::uint64_t sources = ~std::uint64_t{0};
     std::vector<engine_core::LuaNode> nodes;
+    // Each node's LuaSource::source_version when copied; 0 for a node that is
+    // not a script.
+    std::vector<std::uint64_t> versions;
 };
 
 // The instance tree completion reads, kept in `cache` and read again only when
-// the tree, an authored value, or a Source changed. `buffer` replaces the
+// the tree or an authored value changed. When only Sources did, as the editor's
+// own typing does, only the scripts that changed are copied again. `buffer` replaces the
 // source of `script_id` when that script is the one open in an editor. A read
 // that cannot take the lock in time, as while a game runs, answers with the
 // last tree read, so completion never sees an empty place. UI thread only.

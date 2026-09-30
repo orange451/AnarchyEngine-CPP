@@ -312,6 +312,7 @@ add_library(engine_core STATIC
     src/engine_core/PropertyBag.cpp
     src/engine_core/JsonMerge.cpp
     src/engine_core/Project.cpp
+    src/engine_core/Containment.cpp
 )
 set(ENGINE_PACKAGES engine_core engine_datatypes engine_instances engine_services)
 foreach(package IN LISTS ENGINE_PACKAGES)
@@ -472,6 +473,7 @@ add_executable(sandbox
     sandbox/project_tests.cpp
     sandbox/merge_tests.cpp
     sandbox/scene_services_tests.cpp
+    sandbox/game_services_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 target_compile_features(sandbox PRIVATE cxx_std_17)

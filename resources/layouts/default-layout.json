@@ -1,0 +1,60 @@
+{
+  "closed": [
+    "Current Scene",
+    "Conflicts"
+  ],
+  "floating": [],
+  "main": {
+    "items": [
+      {
+        "fixed": true,
+        "selected": "Search",
+        "tabs": [
+          "Search"
+        ]
+      },
+      {
+        "items": [
+          {
+            "selected": "Scene View",
+            "tabs": [
+              "Scene View"
+            ]
+          },
+          {
+            "fixed": true,
+            "selected": "Assets",
+            "tabs": [
+              "Assets",
+              "Console"
+            ]
+          }
+        ],
+        "sizes": [0.5714, 0.4286],
+        "split": "vertical"
+      },
+      {
+        "fixed": true,
+        "items": [
+          {
+            "selected": "Game Explorer",
+            "tabs": [
+              "Game Explorer"
+            ]
+          },
+          {
+            "selected": "Properties",
+            "tabs": [
+              "Properties"
+            ]
+          }
+        ],
+        "sizes": [0.5, 0.5],
+        "split": "vertical"
+      }
+    ],
+    "sizes": [0.1896, 0.6302, 0.1802],
+    "split": "horizontal"
+  },
+  "version": 1
+}

@@ -31,9 +31,11 @@ struct AssetsHost {
 // search field. The sidebar lists the five categories. The center shows the
 // folder in the chosen view, and the status line counts its items. A click
 // selects through the world's selection, which the explorers and Properties share.
-// A slow second click or Enter renames in place. Right-clicks offer Rename, Cut,
-// Paste, and Delete on items, and New Folder, New <kind>, and Paste on empty space.
-// Items drag onto Folders, Prefabs, categories, and crumbs; a refused move is a notice.
+// A slow second click or Enter renames in place. A double-click on a Prefab runs
+// Edit on it. Right-clicks offer Rename, Cut, Paste, and Delete on items, a
+// Prefab's also Edit and Add as GameObject, and New Folder, New <kind>, and
+// Paste on empty space.
+// Items drag onto Folders, categories, and crumbs; a refused move is a notice.
 class IdeAssets : public IdePane {
 public:
     IdeAssets(engine_core::DataModel& world, AssetsHost host);
@@ -74,7 +76,7 @@ private:
     // The sidebar and scrolling the view has.
     void fit_view();
     bool searching() const { return !browser_.search().empty(); }
-    // Folders, Prefabs, sidebar categories, and crumbs take dragged instances.
+    // Folders, sidebar categories, and crumbs take dragged instances.
     void accept_drops(jadefx::Node& node, engine_core::InstanceId target);
     void show_item_menu(const AssetRow& row, double x, double y);
     void show_empty_menu(double x, double y);

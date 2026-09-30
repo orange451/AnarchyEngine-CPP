@@ -15,7 +15,8 @@ enum class AssetView { Icons, List, Columns };
 const char* asset_view_name(AssetView view);  // "icons", "list", "columns"
 bool asset_view_from(std::string_view name, AssetView& out);
 
-// One row in a view: an asset or a container (Folder, Prefab, category) under Assets.
+// One row in a view: an asset or a container (Folder, category) under Assets. A
+// Prefab is one item: its Models are never rows.
 struct AssetRow {
     engine_core::InstanceId id = 0;
     std::string name;
@@ -23,7 +24,7 @@ struct AssetRow {
     std::string path;  // Path for Texture, Mesh, Sound; empty otherwise
     std::string where;  // search_rows only: names from the folder shown down to it, joined by '/'
     int depth = 0;       // List view: 0 for a child of the folder shown
-    bool opens = false;  // a Folder or Prefab: double-click opens it
+    bool opens = false;  // a Folder: double-click opens it
     bool expanded = false;  // List view only
     bool operator==(const AssetRow&) const;
 };
@@ -36,11 +37,11 @@ class AssetBrowser {
 public:
     explicit AssetBrowser(engine_core::DataModel& world);
 
-    // The folder shown: a category, a Folder, or a Prefab under Assets. Starts
+    // The folder shown: a category or a Folder under Assets. Starts
     // at Materials, the first category.
     engine_core::InstanceId folder() const;
     // Opens id, pushing the current folder on back. False when id cannot be opened
-    // (dead, not under Assets, or not a category, Folder, or Prefab).
+    // (dead, not under Assets, or not a category or Folder).
     bool open(engine_core::InstanceId id);
     bool back();
     bool forward();
@@ -53,7 +54,7 @@ public:
 
     // Icons view: the folder's children in sibling order.
     std::vector<AssetRow> children() const;
-    // List view: the folder's children, sorted, with expanded Folders and Prefabs' children under them.
+    // List view: the folder's children, sorted, with expanded Folders' children under them.
     std::vector<AssetRow> list_rows() const;
     void set_expanded(engine_core::InstanceId id, bool expanded);
     void set_sort(AssetSort sort, bool descending);
@@ -62,8 +63,8 @@ public:
     // Columns view: one column per level from the categories to the folder shown.
     std::vector<std::vector<AssetRow>> columns() const;
 
-    // A non-empty search replaces every view with the matches under the folder:
-    // name contains the text, ignoring case; where holds "Walls/Brick" from the folder.
+    // A non-empty search replaces every view with the matches under the folder,
+    // not counting a Prefab's Models: name contains the text, ignoring case; where holds "Walls/Brick" from the folder.
     void set_search(std::string text);
     const std::string& search() const;
     std::vector<AssetRow> search_rows() const;
@@ -74,7 +75,7 @@ public:
     bool refresh();
 
     // The class New <kind> makes in the folder shown: Material in Materials or
-    // a Folder under it, Model in a Prefab, and so on. Empty when there is none.
+    // a Folder under it, and so on. Empty when there is none.
     std::string new_kind() const;
 
 private:

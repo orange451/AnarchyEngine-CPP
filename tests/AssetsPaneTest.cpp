@@ -11,6 +11,7 @@
 #include "jadefx/jadefx.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -484,6 +485,75 @@ void refused_drop_says_why() {
     Expect(rig.moves == 1 && rig.game.parent(rig.brick) == rig.walls, "a drop on a Folder moves into it");
 }
 
+// A dragged asset's icon follows the pointer until the release.
+void drag_shows_icon() {
+    Rig rig;
+    rig.pane->openFolder(rig.textures);
+    rig.frame(0);
+    jadefx::Node* from = rig.pane->itemNode(rig.brick);
+    Expect(from != nullptr, "Brick has a tile");
+    if (from == nullptr) {
+        return;
+    }
+    const double x = from->getAbsoluteX() + from->getWidth() * 0.5;
+    const double y = from->getAbsoluteY() + from->getHeight() * 0.5;
+    rig.scene->noteButton(0, true, x, y);
+    rig.scene->noteMove(x + 40, y + 30);
+    rig.frame(0.05);
+    rig.scene->noteMove(x + 40, y + 30);
+    jadefx::Node* icon = rig.scene->getElementById("instance-drag-icon");
+    Expect(icon != nullptr && rig.scene->isPopupShowing(icon), "a drag shows the asset's icon");
+    Expect(icon != nullptr && std::abs(icon->getAbsoluteX() + icon->getWidth() * 0.5 - (x + 40)) < 1 &&
+               std::abs(icon->getAbsoluteY() + icon->getHeight() * 0.5 - (y + 30)) < 1,
+           "the icon is centered on the pointer");
+    rig.scene->noteButton(0, false, x + 40, y + 30);
+    rig.frame(0.1);
+    Expect(rig.scene->getElementById("instance-drag-icon") == nullptr, "the release takes the icon away");
+}
+
+// In Columns, an asset in a Folder's column drags back out into an earlier column.
+void columns_drop_into_earlier_column() {
+    Rig rig("columns");
+    rig.pane->openFolder(rig.walls);
+    rig.frame(0);
+    const InstanceId mortar = rig.game.get_children(rig.walls).front();
+    const std::vector<jadefx::Node*> columns = rig.pane->getElementsByClassName("assets-column");
+    Expect(columns.size() == 3, "Columns shows the categories, Textures, and Walls");
+    if (columns.size() != 3) {
+        return;
+    }
+    // Onto the empty space below the Textures column's rows.
+    jadefx::Node* textures_column = columns[1];
+    rig.frame(0.5);
+    const double x = textures_column->getAbsoluteX() + textures_column->getWidth() * 0.5;
+    const double y = textures_column->getAbsoluteY() + textures_column->getHeight() - 20;
+    jadefx::Node* from = rig.pane->itemNode(mortar);
+    Expect(from != nullptr, "Mortar has a row");
+    if (from == nullptr) {
+        return;
+    }
+    const double from_x = from->getAbsoluteX() + from->getWidth() * 0.5;
+    const double from_y = from->getAbsoluteY() + from->getHeight() * 0.5;
+    rig.scene->noteButton(0, true, from_x, from_y);
+    rig.scene->noteMove(from_x + 10, from_y + 10);
+    rig.scene->noteMove(x, y);
+    rig.frame(0.55);
+    rig.scene->noteMove(x, y);
+    rig.scene->noteButton(0, false, x, y);
+    rig.frame(0.6);
+    Expect(rig.moves == 1 && rig.game.parent(mortar) == rig.textures,
+           "a drop on a column's empty space moves into its folder");
+
+    // Onto an asset's row in an earlier column: into that column's folder.
+    rig.pane->openFolder(rig.walls);
+    rig.frame(1.0);
+    rig.drag(rig.pane->itemNode(rig.brick), rig.pane->itemNode(rig.walls), 1.5);
+    Expect(rig.game.parent(rig.brick) == rig.walls, "Brick moves into Walls");
+    rig.drag(rig.pane->itemNode(rig.brick), rig.pane->itemNode(rig.rock), 2.5);
+    Expect(rig.moves == 3 && rig.game.parent(rig.brick) == rig.textures,
+           "a drop on an asset's row moves into its column's folder");
+}
+
 void search_filters() {
     Rig rig;
     const InstanceId trim = rig.make("Texture", "BrickTrim", rig.walls);
@@ -518,19 +588,52 @@ void pane_follows_tree() {
 
 void insert_through_pane() {
     Rig rig;
-    const InstanceId crate = rig.make("Prefab", "Crate", rig.game.service("Prefabs"));
-    rig.pane->openFolder(rig.game.service("Prefabs"));
-    rig.pane->openFolder(crate);
+    const InstanceId prefabs = rig.game.service("Prefabs");
+    rig.pane->openFolder(prefabs);
     rig.frame(0);
     rig.rightClickEmpty(0.1);
-    Expect(rig.menuItem("New Model") != nullptr, "a Prefab offers New Model");
+    Expect(rig.menuItem("New Prefab") != nullptr, "Prefabs offers New Prefab");
     rig.clickMenu("New Folder");
-    Expect((rig.inserts == std::vector<std::pair<std::string, InstanceId>>{{"Folder", crate}}),
-           "New Folder inserts a Folder in the Prefab");
+    Expect((rig.inserts == std::vector<std::pair<std::string, InstanceId>>{{"Folder", prefabs}}),
+           "New Folder inserts a Folder in the folder shown");
+}
+
+// A Prefab is one item: it does not open, and its Models show nowhere.
+void prefab_hides_its_models() {
+    Rig rig("list");
+    const InstanceId prefabs = rig.game.service("Prefabs");
+    const InstanceId crate = rig.make("Prefab", "Crate", prefabs);
+    const InstanceId lid = rig.make("Model", "Lid", crate);
+    rig.pane->openFolder(prefabs);
+    rig.frame(0);
+    Expect(!rig.pane->openFolder(crate), "a Prefab does not open");
+    Expect(rig.pane->browser().folder() == prefabs, "the folder shown stays Prefabs");
+    jadefx::Node* row = rig.pane->itemNode(crate);
+    Expect(row != nullptr, "the Prefab has a row");
+    const std::vector<jadefx::Node*> disclosures =
+        row != nullptr ? row->getElementsByClassName("assets-disclosure") : std::vector<jadefx::Node*>{};
+    Expect(disclosures.size() == 1 && dynamic_cast<jadefx::Labeled*>(disclosures.front())->getGraphic() == nullptr,
+           "the Prefab's row has no disclosure");
+    rig.clickItem(crate, 0.1, 2);
     rig.frame(0.2);
-    Expect((rig.notices == std::vector<std::string>{"A Prefab holds only Models"}), "the refusal is a notice");
-    Expect(rig.game.get_children(crate).empty(), "nothing is left in the Prefab");
-    Expect(!rig.editing(), "nothing is renamed");
+    Expect(rig.pane->browser().folder() == prefabs, "a double-click does not open it");
+    Expect(rig.runs == std::vector<std::pair<std::string, InstanceId>>{{"Edit", crate}},
+           "a double-click runs Edit on the Prefab");
+    Expect(rig.pane->itemNode(lid) == nullptr, "its Model has no row");
+
+    rig.pane->searchField().setText("lid");
+    rig.frame(0.3);
+    Expect(rig.pane->itemNode(lid) == nullptr, "search does not find its Model");
+    rig.pane->searchField().setText("crate");
+    rig.frame(0.4);
+    Expect(rig.pane->itemNode(crate) != nullptr, "search finds the Prefab");
+
+    rig.pane->setView(ide::AssetView::Columns);
+    rig.frame(0.5);
+    rig.clickItem(crate, 0.6);
+    rig.frame(0.7);
+    Expect(rig.pane->browser().folder() == prefabs, "in Columns, selecting it opens no column");
+    Expect(rig.pane->itemNode(lid) == nullptr, "its Model has no row in Columns");
 }
 
 void prefab_menu_offers_add_as_game_object() {
@@ -539,6 +642,7 @@ void prefab_menu_offers_add_as_game_object() {
     rig.frame(0);
     rig.rightClickItem(rig.brick, 0.1);
     Expect(rig.menuItem("Add as GameObject") == nullptr, "a Texture's menu has no such item");
+    Expect(rig.menuItem("Edit") == nullptr, "a Texture's menu has no Edit");
 
     const InstanceId statue = rig.make("Prefab", "Statue", rig.game.service("Prefabs"));
     rig.pane->openFolder(rig.game.service("Prefabs"));
@@ -550,6 +654,14 @@ void prefab_menu_offers_add_as_game_object() {
     rig.clickMenu("Add as GameObject");
     Expect(rig.added_as_game_object == std::vector<InstanceId>{statue},
            "choosing it calls the host with the right-clicked Prefab");
+
+    rig.frame(1.2);
+    rig.rightClickItem(statue, 1.3);
+    Expect(rig.menuItem("Edit") != nullptr, "a Prefab's menu offers Edit");
+    Expect(rig.menuItemHasIcon("Edit"), "Edit shows an icon like its neighbors");
+    rig.clickMenu("Edit");
+    Expect(!rig.runs.empty() && rig.runs.back() == std::pair<std::string, InstanceId>{"Edit", statue},
+           "choosing Edit runs Edit on the right-clicked Prefab");
 }
 
 void up_goes_up_one_level() {
@@ -635,9 +747,12 @@ int main() {
     new_folder_and_kind();
     rename_delete_cut_paste();
     refused_drop_says_why();
+    columns_drop_into_earlier_column();
+    drag_shows_icon();
     search_filters();
     pane_follows_tree();
     insert_through_pane();
+    prefab_hides_its_models();
     prefab_menu_offers_add_as_game_object();
     up_goes_up_one_level();
     status_counts_only_shown();

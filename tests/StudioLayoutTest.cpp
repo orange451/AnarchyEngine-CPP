@@ -1,11 +1,17 @@
+#include "ide/IdeAssets.hpp"
 #include "ide/IdeConsole.hpp"
 #include "ide/IdeDock.hpp"
 #include "ide/IdeLayout.hpp"
+#include "ide/IdePrefabEditor.hpp"
 #include "ide/IdeResources.hpp"
 #include "ide/IdePane.hpp"
 #include "ide/IdeSearch.hpp"
+#include "ide/IdeTerminal.hpp"
 
 #include "Engine.hpp"
+#include "GameObject.hpp"
+#include "LuaApi.hpp"
+#include "SelectionService.hpp"
 #include "Project.hpp"
 #include "ScriptRuntime.hpp"
 
@@ -75,23 +81,55 @@ int main() {
     }
     expect(holding == std::vector<std::string>{"File"}, "Preferences is in the File menu alone");
 
-    std::vector<std::string> names;
+    // A new studio has the layout in resources/layouts/default-layout.json:
+    // Search on the left, the scene view over Assets and the console, and the
+    // game explorer over Properties on the right.
+    auto shown_pane = [&scene](const std::string& name) -> ide::IdePane* {
+        for (jadefx::Node* node : scene->getRoot()->getElementsByClassName("ide-pane")) {
+            auto* pane = dynamic_cast<ide::IdePane*>(node);
+            if (pane != nullptr && pane->name() == name) {
+                return pane;
+            }
+        }
+        return nullptr;
+    };
+    {
+        ide::IdePane* search_pane = shown_pane("Search");
+        ide::IdePane* view = shown_pane("Scene View");
+        ide::IdePane* assets = shown_pane("Assets");
+        ide::IdePane* game = shown_pane("Game Explorer");
+        ide::IdePane* properties = shown_pane("Properties");
+        expect(search_pane != nullptr && search_pane->getAbsoluteX() < 300, "Search is open on the left");
+        expect(view != nullptr && view->getAbsoluteX() > 200 && view->getAbsoluteX() < 640,
+               "the scene view is in the middle");
+        expect(assets != nullptr && view != nullptr && std::abs(assets->getAbsoluteX() - view->getAbsoluteX()) < 1 &&
+                   assets->getAbsoluteY() > view->getAbsoluteY() + view->getHeight() - 1,
+               "Assets is under it, showing");
+        expect(game != nullptr && game->getAbsoluteX() > 640, "the game explorer is on the right");
+        expect(properties != nullptr && game != nullptr && properties->getWidth() > 100 &&
+                   properties->getHeight() > 100 && std::abs(properties->getAbsoluteX() - game->getAbsoluteX()) < 1 &&
+                   properties->getAbsoluteY() > game->getAbsoluteY() + game->getHeight() - 1,
+               "Properties is under the game explorer, with room on screen");
+        expect(shown_pane("Console") == nullptr, "the console is behind Assets");
+        expect(shown_pane("Current Scene") == nullptr, "the scene explorer is closed");
+    }
+    // Picking a window that is behind another tab brings it forward.
+    auto pick_window = [&bar](const std::string& text) {
+        for (const std::shared_ptr<jadefx::Menu>& menu : bar != nullptr ? bar->getMenus().items()
+                                                                         : std::vector<std::shared_ptr<jadefx::Menu>>{}) {
+            for (const std::shared_ptr<jadefx::MenuItem>& item : menu->getItems().items()) {
+                if (menu->getText() == "Window" && item && item->getText() == text) {
+                    item->fire();
+                }
+            }
+        }
+    };
+    pick_window("Console");
+    scene->layout(1280, 800, 0.25);
     std::vector<ide::IdePane*> panes;
     for (jadefx::Node* node : scene->getRoot()->getElementsByClassName("ide-pane")) {
         if (auto* pane = dynamic_cast<ide::IdePane*>(node)) {
-            names.push_back(pane->name());
             panes.push_back(pane);
-        }
-    }
-    auto has = [&names](const char* name) { return std::find(names.begin(), names.end(), name) != names.end(); };
-    expect(has("Game Explorer"), "the left explorer is docked");
-    expect(has("Current Scene"), "the right explorer is docked");
-    expect(has("Console"), "the console is docked");
-    expect(has("Properties"), "Properties is docked");
-    for (ide::IdePane* pane : panes) {
-        if (pane->name() == "Properties") {
-            expect(pane->getWidth() > 100 && pane->getHeight() > 100, "Properties has room on screen");
-            expect(pane->getAbsoluteX() > 640, "Properties is on the right, under the scene explorer");
         }
     }
 
@@ -286,9 +324,10 @@ int main() {
         for (const std::shared_ptr<jadefx::MenuItem>& item : windows->getItems().items()) {
             labels.push_back(item ? item->getText() : std::string());
         }
-        expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "Terminal", "Assets", "",
-                                                  "New Scene View", "", "Reset to Default Layout"},
-               "Window lists the explorers, Properties, Console, Search, Conflicts, Terminal, and Assets, then New Scene View and the reset");
+        expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "Assets", "",
+                                                  "New Scene View", "New Terminal", "", "Save Layout as Default", "Reset to Default Layout",
+                                                  "Restore Built-in Default"},
+               "Window lists the explorers, Properties, Console, Search, Conflicts, and Assets, then New Scene View, New Terminal, and the default layout's items");
         double time = 1.1;
         auto frame = [&] {
             scene->layout(1280, 800, time);
@@ -329,25 +368,35 @@ int main() {
             return nullptr;
         };
 
-        // Search docked beside the left explorer above, so the explorer is behind it.
-        expect(checked("Game Explorer") && checked("Current Scene") && checked("Properties") && checked("Console") &&
-                   checked("Search"),
-               "every window starts open, and has a check");
+        // From the built-in layout, where the console is behind Assets.
+        pick("Reset to Default Layout");
+        expect(checked("Game Explorer") && checked("Properties") && checked("Console") && checked("Search") &&
+                   checked("Assets"),
+               "every window the built-in layout has open has a check");
+        expect(!checked("Current Scene"), "the scene explorer starts closed, with no check");
         expect(!checked("New Scene View"), "New Scene View has no check");
-        expect(showing("Game Explorer") == nullptr && showing("Search") != nullptr,
-               "the left explorer is behind Search");
-        pick("Game Explorer");
-        ide::IdePane* explorer = showing("Game Explorer");
-        expect(explorer != nullptr && showing("Search") == nullptr, "picking a window behind a tab brings it forward");
-        expect(checked("Game Explorer"), "and it keeps its check");
-        pick("Game Explorer");
-        expect(showing("Game Explorer") == nullptr && !checked("Game Explorer"), "picking a showing window closes it");
-        expect(showing("Search") != nullptr, "and the tab beside it shows");
-        pick("Game Explorer");
-        ide::IdePane* reopened = showing("Game Explorer");
-        expect(reopened != nullptr && checked("Game Explorer"), "picking a closed window opens it");
-        expect(reopened == explorer, "it opens as the same page it was");
-        expect(reopened != nullptr && reopened->getAbsoluteX() < 300, "in the dock it closed from");
+        expect(showing("Console") == nullptr && showing("Assets") != nullptr, "the console is behind Assets");
+        pick("Console");
+        ide::IdePane* console_page = showing("Console");
+        ide::IdeDock* console_home = nullptr;
+        for (jadefx::Node* node = console_page; node != nullptr && console_home == nullptr; node = node->getParent()) {
+            console_home = dynamic_cast<ide::IdeDock*>(node);
+        }
+        expect(console_page != nullptr && showing("Assets") == nullptr, "picking a window behind a tab brings it forward");
+        expect(checked("Console"), "and it keeps its check");
+        pick("Console");
+        expect(showing("Console") == nullptr && !checked("Console"), "picking a showing window closes it");
+        expect(showing("Assets") != nullptr, "and the tab beside it shows");
+        pick("Console");
+        ide::IdePane* reopened = showing("Console");
+        expect(reopened != nullptr && checked("Console"), "picking a closed window opens it");
+        expect(reopened == console_page, "it opens as the same page it was");
+        ide::IdeDock* reopened_home = nullptr;
+        for (jadefx::Node* node = reopened; node != nullptr && reopened_home == nullptr; node = node->getParent()) {
+            reopened_home = dynamic_cast<ide::IdeDock*>(node);
+        }
+        expect(reopened_home != nullptr && reopened_home == console_home, "in the dock it closed from");
+        pick("Assets");
 
         pick("Properties");
         expect(showing("Properties") == nullptr && !checked("Properties"), "Properties closes from the menu");
@@ -356,8 +405,7 @@ int main() {
         expect(properties != nullptr && checked("Properties"), "and opens again");
         expect(properties != nullptr && properties->getAbsoluteX() > 640, "on the right, where it was");
 
-        pick("Search");
-        expect(showing("Search") != nullptr, "Search comes forward from behind the explorer");
+        expect(showing("Search") != nullptr, "Search shows on the left");
         pick("Search");
         expect(showing("Search") == nullptr && !checked("Search"), "Search closes from the menu");
         pick("Search");
@@ -388,8 +436,55 @@ int main() {
         expect(showing("Scene View 2") == nullptr && showing("Scene View 3") == nullptr,
                "a new view closes like any tab");
 
+        // Each pick docks another terminal in with the console. Fired without a
+        // frame, so no shell starts, and closed before the next one.
+        {
+            ide::IdePane* assets = showing("Assets");
+            ide::IdeDock* console_dock = nullptr;
+            for (jadefx::Node* node = assets; node != nullptr && console_dock == nullptr;
+                 node = node->getParent()) {
+                console_dock = dynamic_cast<ide::IdeDock*>(node);
+            }
+            auto fire = [&](const std::string& text) {
+                for (const std::shared_ptr<jadefx::MenuItem>& item : windows->getItems().items()) {
+                    if (item && item->getText() == text) {
+                        item->fire();
+                    }
+                }
+            };
+            auto terminals = [&] {
+                std::vector<std::shared_ptr<jadefx::Tab>> found;
+                if (console_dock != nullptr) {
+                    for (const std::shared_ptr<jadefx::Tab>& tab : console_dock->tabs()->getTabs().items()) {
+                        if (tab && dynamic_cast<ide::IdeTerminal*>(tab->getContent()) != nullptr) {
+                            found.push_back(tab);
+                        }
+                    }
+                }
+                return found;
+            };
+            expect(console_dock != nullptr && terminals().empty(), "the studio starts with no terminal");
+            fire("New Terminal");
+            fire("New Terminal");
+            const std::vector<std::shared_ptr<jadefx::Tab>> made = terminals();
+            expect(made.size() == 2 && made[0]->getContent() != made[1]->getContent(),
+                   "New Terminal docks a new terminal each time, in with the console");
+            expect(made.size() == 2 && made[1]->isSelected(), "the newest one is in front");
+            expect(made.size() == 2 && made[0]->isClosable(), "a terminal closes like any tab");
+            for (const std::shared_ptr<jadefx::Tab>& tab : made) {
+                if (tab->getTabPane() != nullptr) {
+                    tab->getTabPane()->close(tab);
+                }
+            }
+            expect(terminals().empty(), "closing their tabs takes them away");
+            if (console_dock != nullptr) {
+                console_dock->select(assets);
+            }
+            frame();
+        }
+
         // Reset to Default Layout puts the windows back as a new studio has
-        // them. Close Properties, move the console in with the scene
+        // them. Close Properties, move the console in with the game
         // explorer, and open another view first.
         auto dock_of = [](jadefx::Node* node) -> ide::IdeDock* {
             for (; node != nullptr; node = node->getParent()) {
@@ -400,36 +495,44 @@ int main() {
             return nullptr;
         };
         pick("Properties");
-        ide::IdeDock* console_dock = dock_of(showing("Console"));
-        ide::IdeDock* scene_dock = dock_of(showing("Current Scene"));
-        if (console_dock != nullptr && scene_dock != nullptr) {
-            const std::shared_ptr<jadefx::Tab> moving = console_dock->tabs()->getTabs().items().front();
-            scene_dock->take(moving);
+        ide::IdeDock* assets_dock = dock_of(showing("Assets"));
+        ide::IdeDock* game_dock = dock_of(showing("Game Explorer"));
+        std::shared_ptr<jadefx::Tab> console_tab;
+        if (assets_dock != nullptr) {
+            for (const std::shared_ptr<jadefx::Tab>& tab : assets_dock->tabs()->getTabs().items()) {
+                if (tab && tab->getText() == "Console") {
+                    console_tab = tab;
+                }
+            }
+        }
+        if (console_tab && game_dock != nullptr) {
+            game_dock->take(console_tab);
         }
         pick("New Scene View");
         expect(showing("Properties") == nullptr && showing("Scene View 4") != nullptr &&
-                   dock_of(showing("Console")) == scene_dock,
+                   dock_of(showing("Console")) == game_dock,
                "the layout is rearranged before the reset");
         pick("Reset to Default Layout");
         frame();
-        ide::IdePane* left = showing("Game Explorer");
+        ide::IdePane* left = showing("Search");
         ide::IdePane* middle = showing("Scene View");
-        ide::IdePane* below = showing("Console");
-        ide::IdePane* right = showing("Current Scene");
+        ide::IdePane* below = showing("Assets");
+        ide::IdePane* right = showing("Game Explorer");
         ide::IdePane* under = showing("Properties");
-        expect(left != nullptr && left->getAbsoluteX() < 300, "the reset puts the game explorer on the left");
+        expect(left != nullptr && left->getAbsoluteX() < 300, "the reset puts Search on the left");
         expect(middle != nullptr && middle->getAbsoluteX() > 200 && middle->getAbsoluteX() < 640,
                "the scene view in the middle, showing");
         expect(below != nullptr && middle != nullptr && std::abs(below->getAbsoluteX() - middle->getAbsoluteX()) < 1 &&
                    below->getAbsoluteY() > middle->getAbsoluteY() + middle->getHeight() - 1,
-               "the console under it");
+               "Assets under it, with the console behind");
         expect(right != nullptr && under != nullptr && right->getAbsoluteX() > 640 &&
                    std::abs(under->getAbsoluteX() - right->getAbsoluteX()) < 1 &&
                    under->getAbsoluteY() > right->getAbsoluteY() + right->getHeight() - 1,
-               "and the scene explorer over Properties on the right");
-        expect(checked("Game Explorer") && checked("Current Scene") && checked("Properties") && checked("Console"),
-               "the four windows are open");
-        expect(!checked("Search"), "Search is closed, as in a new studio");
+               "and the game explorer over Properties on the right");
+        expect(checked("Game Explorer") && checked("Properties") && checked("Console") && checked("Search") &&
+                   checked("Assets"),
+               "the built-in layout's windows are open");
+        expect(!checked("Current Scene"), "the scene explorer is closed, as in a new studio");
         jadefx::TabPane* view_strip = nullptr;
         for (jadefx::Node* node = middle; node != nullptr && view_strip == nullptr; node = node->getParent()) {
             view_strip = dynamic_cast<jadefx::TabPane*>(node);
@@ -447,6 +550,172 @@ int main() {
             view_strip->close(extra);
         }
         frame();
+
+        // A Prefab dragged from Assets onto the Scene View is added as a
+        // GameObject; a Material is not.
+        {
+            engine_core::DataModel& world = layout.simulation().datamodel();
+            engine_core::InstanceId crate = 0;
+            engine_core::InstanceId stone = 0;
+            layout.simulation().on_simulation([&](engine_core::DataModel& game) {
+                engine_core::DataModel* prefab = engine_core::lua_create_instance(game, "Prefab");
+                game.set_name(prefab->id(), "Crate");
+                game.set_parent(prefab->id(), game.service("Prefabs"));
+                crate = prefab->id();
+                engine_core::DataModel* material = engine_core::lua_create_instance(game, "Material");
+                game.set_name(material->id(), "Stone");
+                game.set_parent(material->id(), game.service("Materials"));
+                stone = material->id();
+            });
+            const engine_core::InstanceId workspace = world.scene_service("Workspace");
+            const std::vector<engine_core::InstanceId> before = world.get_children(workspace);
+            auto* assets = dynamic_cast<ide::IdeAssets*>(showing("Assets"));
+            ide::IdePane* view = showing("Scene View");
+            expect(assets != nullptr && view != nullptr, "Assets and the Scene View both show");
+            // The pointer over the Scene View just before the drop.
+            jadefx::Cursor over = jadefx::Cursor::Default;
+            auto drag = [&](engine_core::InstanceId id) {
+                frame();
+                jadefx::Node* from = assets != nullptr ? assets->itemNode(id) : nullptr;
+                expect(from != nullptr && view != nullptr, "the dragged asset has a tile");
+                if (from == nullptr || view == nullptr) {
+                    return;
+                }
+                const double x = from->getAbsoluteX() + from->getWidth() * 0.5;
+                const double y = from->getAbsoluteY() + from->getHeight() * 0.5;
+                const double to_x = view->getAbsoluteX() + view->getWidth() * 0.5;
+                const double to_y = view->getAbsoluteY() + view->getHeight() * 0.5;
+                scene->noteButton(0, true, x, y);
+                scene->noteMove(x + 10, y + 10);
+                scene->noteMove(to_x, to_y);
+                frame();
+                scene->noteMove(to_x, to_y);
+                over = scene->hoverCursor();
+                scene->noteButton(0, false, to_x, to_y);
+                frame();
+            };
+            if (assets != nullptr) {
+                assets->openFolder(world.service("Materials"));
+            }
+            drag(stone);
+            expect(over == jadefx::Cursor::NotAllowed, "a Material over the Scene View shows it cannot drop");
+            expect(world.get_children(workspace) == before, "a Material dropped on the Scene View adds nothing");
+            if (assets != nullptr) {
+                assets->openFolder(world.service("Prefabs"));
+            }
+            drag(crate);
+            expect(over == jadefx::Cursor::Copy, "a Prefab over the Scene View shows the plus");
+            std::vector<engine_core::InstanceId> added;
+            for (engine_core::InstanceId id : world.get_children(workspace)) {
+                if (std::find(before.begin(), before.end(), id) == before.end()) {
+                    added.push_back(id);
+                }
+            }
+            const auto* object =
+                added.size() == 1 ? dynamic_cast<const engine_core::GameObject*>(world.instance(added[0])) : nullptr;
+            expect(object != nullptr && world.name(added[0]) == "Crate" && object->prefab().id == crate,
+                   "a Prefab dropped on the Scene View adds a GameObject linked to it, named after it");
+            expect(world.get_children(world.service("Prefabs")).size() == 1 && world.parent(crate) == world.service("Prefabs"),
+                   "the Prefab stays in Prefabs");
+            expect(added.size() == 1 && world.selection().get() == added, "the new GameObject is selected");
+            layout.simulation().on_simulation([&](engine_core::DataModel& game) {
+                for (engine_core::InstanceId id : added) {
+                    game.destroy_tree(id);
+                }
+                game.destroy_tree(crate);
+                game.destroy_tree(stone);
+            });
+            frame();
+        }
+
+        // A double-click on a Prefab in Assets docks a Prefab editor with the
+        // scene view, one per Prefab: editing one again brings its tab forward.
+        {
+            engine_core::DataModel& world = layout.simulation().datamodel();
+            engine_core::InstanceId crate = 0;
+            engine_core::InstanceId barrel = 0;
+            layout.simulation().on_simulation([&](engine_core::DataModel& game) {
+                for (auto [name, id] : {std::pair{"Crate", &crate}, std::pair{"Barrel", &barrel}}) {
+                    engine_core::DataModel* prefab = engine_core::lua_create_instance(game, "Prefab");
+                    game.set_name(prefab->id(), name);
+                    game.set_parent(prefab->id(), game.service("Prefabs"));
+                    *id = prefab->id();
+                }
+            });
+            auto* assets = dynamic_cast<ide::IdeAssets*>(showing("Assets"));
+            ide::IdeDock* strip = dock_of(showing("Scene View"));
+            expect(assets != nullptr && strip != nullptr, "Assets and the Scene View both show");
+            if (assets != nullptr) {
+                assets->openFolder(world.service("Prefabs"));
+            }
+            auto double_click = [&](engine_core::InstanceId id) {
+                frame();
+                jadefx::Node* tile = assets != nullptr ? assets->itemNode(id) : nullptr;
+                expect(tile != nullptr, "the Prefab has a tile");
+                if (tile == nullptr) {
+                    return;
+                }
+                const double x = tile->getAbsoluteX() + tile->getWidth() * 0.5;
+                const double y = tile->getAbsoluteY() + tile->getHeight() * 0.5;
+                for (int click = 0; click < 2; ++click) {
+                    scene->noteButton(0, true, x, y);
+                    scene->noteButton(0, false, x, y);
+                }
+                frame();
+            };
+            auto editors = [&] {
+                std::vector<std::shared_ptr<jadefx::Tab>> found;
+                if (strip != nullptr) {
+                    for (const std::shared_ptr<jadefx::Tab>& tab : strip->tabs()->getTabs().items()) {
+                        if (tab && dynamic_cast<ide::IdePrefabEditor*>(tab->getContent()) != nullptr) {
+                            found.push_back(tab);
+                        }
+                    }
+                }
+                return found;
+            };
+            auto editing = [](const std::shared_ptr<jadefx::Tab>& tab) {
+                return static_cast<ide::IdePrefabEditor*>(tab->getContent())->prefab();
+            };
+            expect(editors().empty(), "no Prefab editor is open at first");
+            double_click(crate);
+            std::vector<std::shared_ptr<jadefx::Tab>> open = editors();
+            expect(open.size() == 1 && editing(open[0]) == crate && open[0]->isSelected(),
+                   "a double-click on a Prefab docks its editor in front");
+            expect(open.size() == 1 && open[0]->isClosable(), "a Prefab editor closes like any tab");
+            expect(open.size() == 1 && static_cast<ide::IdePane*>(open[0]->getContent())->title() == "Crate",
+                   "its tab shows the Prefab's name");
+            double_click(barrel);
+            open = editors();
+            expect(open.size() == 2 && editing(open[1]) == barrel && open[1]->isSelected(),
+                   "another Prefab gets its own editor, in front");
+            double_click(crate);
+            open = editors();
+            expect(open.size() == 2 && open[0]->isSelected() && !open[1]->isSelected(),
+                   "editing a Prefab that has an editor brings that one forward");
+            layout.simulation().on_simulation([&](engine_core::DataModel& game) { game.set_name(crate, "Box"); });
+            frame();
+            expect(open.size() == 2 && static_cast<ide::IdePane*>(open[0]->getContent())->title() == "Box",
+                   "the tab follows a rename");
+            for (const std::shared_ptr<jadefx::Tab>& tab : open) {
+                if (tab->getTabPane() != nullptr) {
+                    tab->getTabPane()->close(tab);
+                }
+            }
+            expect(editors().empty(), "closing their tabs takes them away");
+            // Barrel: presses on Crate's spot this soon would count on from the last double-click.
+            double_click(barrel);
+            expect(editors().size() == 1 && editing(editors()[0]) == barrel,
+                   "a Prefab whose editor was closed opens a new one");
+            for (const std::shared_ptr<jadefx::Tab>& tab : editors()) {
+                tab->getTabPane()->close(tab);
+            }
+            layout.simulation().on_simulation([&](engine_core::DataModel& game) {
+                game.destroy_tree(crate);
+                game.destroy_tree(barrel);
+            });
+            frame();
+        }
     }
 
     failures += RunThemeTests(*scene);
@@ -519,6 +788,10 @@ int main() {
     }
     failures += RunSaveConflictTests(layout, *scene);
     failures += RunConflictsTests(layout, *scene);
+    // Conflicts opened beside the game explorer, the built-in layout's only
+    // one, and is in front of it. Edit needs an explorer showing.
+    pick_window("Game Explorer");
+    scene->layout(1280, 800, 5.9);
     failures += RunScriptTabTests(layout, *scene);
     failures += RunTerminalPaneTests();
 
@@ -571,26 +844,29 @@ int main() {
             auto at = jadefx::make<jadefx::Scene>(nullptr, 1280, 800);
             first.mount(*at);
             frame(*at);
-            // Close Properties, open Conflicts and then Search beside the game
-            // explorer, move the console in with the scene explorer, and widen
-            // the left column.
+            // Close Properties, open Conflicts beside the game explorer, move
+            // the console in with them, and widen the left column.
             if (jadefx::MenuItem* item = window_item(*at, "Properties")) {
                 item->fire();
             }
             if (jadefx::MenuItem* item = window_item(*at, "Conflicts")) {
                 item->fire();
             }
-            if (jadefx::MenuItem* item = window_item(*at, "Search")) {
-                item->fire();
-            }
             frame(*at);
-            ide::IdeDock* console_dock = dock_of(showing(*at, "Console"));
-            ide::IdeDock* east = dock_of(showing(*at, "Current Scene"));
-            expect(console_dock != nullptr && east != nullptr, "the console and the scene explorer are docked");
-            if (console_dock != nullptr && east != nullptr) {
-                // A copy: the move takes the tab out of the list this came from.
-                const std::shared_ptr<jadefx::Tab> moving = console_dock->tabs()->getTabs().items().front();
-                east->take(moving);
+            ide::IdeDock* assets_dock = dock_of(showing(*at, "Assets"));
+            ide::IdeDock* east = dock_of(showing(*at, "Conflicts"));
+            std::shared_ptr<jadefx::Tab> console_tab;
+            if (assets_dock != nullptr) {
+                for (const std::shared_ptr<jadefx::Tab>& tab : assets_dock->tabs()->getTabs().items()) {
+                    if (tab && tab->getText() == "Console") {
+                        console_tab = tab;
+                    }
+                }
+            }
+            expect(console_tab != nullptr && east != nullptr && east != assets_dock,
+                   "the console is behind Assets, and Conflicts is docked elsewhere");
+            if (console_tab != nullptr && east != nullptr) {
+                east->take(console_tab);
             }
             jadefx::SplitPane* columns = nullptr;
             for (jadefx::Node* node = dock_of(showing(*at, "Search")); node != nullptr && columns == nullptr;
@@ -618,21 +894,22 @@ int main() {
             expect(search_pane != nullptr && search_pane->getAbsoluteX() < 300, "Search opens where it was, showing");
             expect(search_pane != nullptr && std::abs(search_pane->getWidth() - left_width) < 2,
                    "the left column keeps its width");
-            expect(showing(*at, "Game Explorer") == nullptr, "the game explorer is behind Search again");
+            ide::IdePane* console_pane = showing(*at, "Console");
+            expect(console_pane != nullptr && console_pane->getAbsoluteX() > 640,
+                   "the console opens with the game explorer, in front");
             bool conflicts_kept = false;
-            if (ide::IdeDock* left = dock_of(search_pane)) {
-                for (const std::shared_ptr<jadefx::Tab>& tab : left->tabs()->getTabs().items()) {
+            if (ide::IdeDock* right = dock_of(console_pane)) {
+                for (const std::shared_ptr<jadefx::Tab>& tab : right->tabs()->getTabs().items()) {
                     auto* pane = tab ? dynamic_cast<ide::IdePane*>(tab->getContent()) : nullptr;
                     conflicts_kept = conflicts_kept || (pane != nullptr && pane->name() == "Conflicts");
                 }
             }
-            expect(conflicts_kept, "Conflicts opens where it was, beside Search");
-            ide::IdePane* console_pane = showing(*at, "Console");
-            expect(console_pane != nullptr && console_pane->getAbsoluteX() > 640,
-                   "the console opens with the scene explorer");
-            expect(showing(*at, "Current Scene") == nullptr, "which is behind it, as it was");
+            expect(conflicts_kept, "Conflicts opens where it was, beside the console");
+            expect(showing(*at, "Game Explorer") == nullptr, "the game explorer is behind them, as it was");
             ide::IdePane* view = showing(*at, "Scene View");
-            expect(view != nullptr && view->getHeight() > 600, "the scene view fills the column the console left");
+            ide::IdePane* assets = showing(*at, "Assets");
+            expect(view != nullptr && assets != nullptr && assets->getAbsoluteY() > view->getAbsoluteY(),
+                   "Assets stays under the scene view");
             // Opened again from the menu, Properties goes where the default layout has it.
             if (jadefx::MenuItem* item = window_item(*at, "Properties")) {
                 item->fire();
@@ -648,14 +925,139 @@ int main() {
             auto at = jadefx::make<jadefx::Scene>(nullptr, 1280, 800);
             third.mount(*at);
             frame(*at);
-            expect(showing(*at, "Properties") != nullptr && showing(*at, "Console") != nullptr &&
-                       showing(*at, "Game Explorer") != nullptr,
+            expect(showing(*at, "Properties") != nullptr && showing(*at, "Assets") != nullptr &&
+                       showing(*at, "Game Explorer") != nullptr && showing(*at, "Search") != nullptr,
                    "a layout.json that cannot be read starts the default layout");
             bool said = false;
             for (const auto& line : third.simulation().scripts().output_since(0, 1000).lines) {
                 said = said || line.text.rfind("Layout: ", 0) == 0;
             }
             expect(said, "and the console says why");
+        }
+
+        // Save Layout as Default keeps the layout in default-layout.json, and
+        // Reset to Default Layout puts it back, in this studio and the next.
+        // Restore Built-in Default forgets it.
+        const fs::path defaults = config / "defaults";
+        // A frame as the main window runs one: lay out, then flushFrame, which
+        // takes away docks a move left empty.
+        auto step = [&frame](ide::IdeLayout& studio, jadefx::Scene& at) {
+            frame(at);
+            studio.flushFrame();
+            frame(at);
+        };
+        auto pick_in = [&window_item](jadefx::Scene& at, const std::string& text) {
+            if (jadefx::MenuItem* item = window_item(at, text)) {
+                item->fire();
+            }
+        };
+        // As resources/layouts/default-layout.json has it.
+        auto builtin = [&](jadefx::Scene& at) {
+            ide::IdePane* left = showing(at, "Search");
+            ide::IdePane* view = showing(at, "Scene View");
+            ide::IdePane* assets = showing(at, "Assets");
+            ide::IdePane* right = showing(at, "Game Explorer");
+            ide::IdePane* properties = showing(at, "Properties");
+            return left != nullptr && view != nullptr && assets != nullptr && right != nullptr &&
+                   properties != nullptr && left->getAbsoluteX() < 300 &&
+                   std::abs(assets->getAbsoluteX() - view->getAbsoluteX()) < 1 && right->getAbsoluteX() > 640 &&
+                   std::abs(properties->getAbsoluteX() - right->getAbsoluteX()) < 1 &&
+                   showing(at, "Console") == nullptr && showing(at, "Current Scene") == nullptr;
+        };
+        // The saved default: Properties and Search closed, and the console in
+        // front of the game explorer.
+        auto saved_shape = [&](jadefx::Scene& at) {
+            ide::IdePane* console = showing(at, "Console");
+            return showing(at, "Properties") == nullptr && showing(at, "Search") == nullptr && console != nullptr &&
+                   console->getAbsoluteX() > 640 && showing(at, "Game Explorer") == nullptr &&
+                   showing(at, "Assets") != nullptr;
+        };
+        auto restore_disabled = [&window_item](jadefx::Scene& at) {
+            jadefx::MenuItem* item = window_item(at, "Restore Built-in Default");
+            return item != nullptr && item->isDisable();
+        };
+        {
+            ide::IdeLayout first(1280, 800, defaults);
+            auto at = jadefx::make<jadefx::Scene>(nullptr, 1280, 800);
+            first.mount(*at);
+            step(first, *at);
+            expect(restore_disabled(*at), "Restore Built-in Default is greyed out with no saved default");
+            pick_in(*at, "Properties");
+            pick_in(*at, "Search");
+            step(first, *at);
+            ide::IdeDock* assets_dock = dock_of(showing(*at, "Assets"));
+            ide::IdeDock* east = dock_of(showing(*at, "Game Explorer"));
+            if (assets_dock != nullptr && east != nullptr) {
+                // A copy: the move takes the tab out of the list this came from.
+                const std::vector<std::shared_ptr<jadefx::Tab>> tabs = assets_dock->tabs()->getTabs().items();
+                for (const std::shared_ptr<jadefx::Tab>& tab : tabs) {
+                    if (tab && tab->getText() == "Console") {
+                        east->take(tab);
+                    }
+                }
+            }
+            step(first, *at);
+            expect(saved_shape(*at), "the layout is rearranged before it is saved");
+            pick_in(*at, "Save Layout as Default");
+            expect(fs::exists(defaults / "default-layout.json"), "Save Layout as Default writes default-layout.json");
+            expect(!restore_disabled(*at), "and Restore Built-in Default is no longer greyed out");
+            std::string text;
+            std::string error;
+            engine_core::JsonValue saved;
+            expect(ide::read_file(defaults / "default-layout.json", text, error) &&
+                       engine_core::parse_json(text, saved, error) && saved.find("main") != nullptr &&
+                       saved.find("window") == nullptr,
+                   "the default keeps the docks but not the main window's place");
+            // Rearranged again, then reset.
+            pick_in(*at, "Properties");
+            pick_in(*at, "Search");
+            step(first, *at);
+            expect(showing(*at, "Properties") != nullptr && showing(*at, "Search") != nullptr,
+                   "Properties and Search are open before the reset");
+            pick_in(*at, "Reset to Default Layout");
+            step(first, *at);
+            expect(saved_shape(*at), "Reset to Default Layout puts back the saved default");
+            expect(showing(*at, "Current Scene") == nullptr, "with the scene explorer still closed");
+        }
+        {
+            ide::IdeLayout second(1280, 800, defaults);
+            auto at = jadefx::make<jadefx::Scene>(nullptr, 1280, 800);
+            second.mount(*at);
+            step(second, *at);
+            expect(builtin(*at), "a studio with no layout.json starts with the built-in layout");
+            expect(!restore_disabled(*at), "a saved default outlives the studio that saved it");
+            pick_in(*at, "Reset to Default Layout");
+            step(second, *at);
+            expect(saved_shape(*at), "and the next studio's reset puts it back");
+            pick_in(*at, "Restore Built-in Default");
+            step(second, *at);
+            expect(!fs::exists(defaults / "default-layout.json"), "Restore Built-in Default removes default-layout.json");
+            expect(builtin(*at), "and puts back the built-in layout");
+            expect(restore_disabled(*at), "and is greyed out again");
+            pick_in(*at, "Properties");
+            step(second, *at);
+            pick_in(*at, "Reset to Default Layout");
+            step(second, *at);
+            expect(builtin(*at), "with no saved default, the reset is the built-in layout");
+        }
+        {
+            std::string error;
+            ide::write_file(defaults / "default-layout.json", "{ not json", error);
+            ide::IdeLayout third(1280, 800, defaults);
+            auto at = jadefx::make<jadefx::Scene>(nullptr, 1280, 800);
+            third.mount(*at);
+            step(third, *at);
+            pick_in(*at, "Properties");
+            step(third, *at);
+            pick_in(*at, "Reset to Default Layout");
+            step(third, *at);
+            expect(builtin(*at), "a default-layout.json that cannot be read resets to the built-in layout");
+            bool said = false;
+            for (const auto& line : third.simulation().scripts().output_since(0, 1000).lines) {
+                said = said || line.text.rfind("Default layout: ", 0) == 0;
+            }
+            expect(said, "and the console says why");
+            expect(!restore_disabled(*at), "Restore Built-in Default can still clear it");
         }
         std::error_code error;
         fs::remove_all(config, error);

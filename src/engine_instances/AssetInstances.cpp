@@ -56,6 +56,11 @@ const char* Material::class_name() const { return "Material"; }
 const char* Model::class_name() const { return "Model"; }
 const char* Prefab::class_name() const { return "Prefab"; }
 
+void Prefab::context_actions(std::vector<ContextAction>& out) const {
+    out.push_back(ContextAction{InstanceAction::Edit, true});
+    DataModel::context_actions(out);
+}
+
 namespace {
 
 constexpr ReferenceSpec kMaterialRefs[] = {

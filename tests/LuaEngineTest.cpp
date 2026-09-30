@@ -315,6 +315,14 @@ void testContextActions() {
     module.context_actions(actions);
     expect(actions.size() == 7 && actions[0].primary && actions[0].action == engine_core::InstanceAction::Edit, "a module script edits");
 
+    engine_core::DataModel* prefab = engine_core::lua_create_instance(game, "Prefab");
+    actions.clear();
+    if (prefab != nullptr) {
+        prefab->context_actions(actions);
+    }
+    expect(!actions.empty() && actions[0].action == engine_core::InstanceAction::Edit && actions[0].primary,
+           "a Prefab's edit is primary");
+
     engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
     actions.clear();
     triangle.context_actions(actions);

@@ -62,6 +62,8 @@ set(STUDIO_SOURCES
     src/ide/IdeExplorer.cpp
     src/ide/IdeAssets.cpp
     src/ide/IdeIcons.cpp
+    src/ide/IdePrefabEditor.cpp
+    src/ide/PrefabModels.cpp
     src/ide/IdeScriptEditor.cpp
     src/ide/IdeSearch.cpp
     src/ide/FindBar.cpp
@@ -413,6 +415,12 @@ add_executable(assets-tests
 )
 target_link_libraries(assets-tests PRIVATE studio)
 
+# The Prefab editor: its cards, pickers, drops, and the model logic under them.
+add_executable(prefab-editor-tests
+    tests/PrefabEditorTest.cpp
+)
+target_link_libraries(prefab-editor-tests PRIVATE studio)
+
 # Opens and closes printed tables in the console log, by call and by click.
 add_executable(console-tests
     tests/ConsoleLogTest.cpp
@@ -495,6 +503,12 @@ add_executable(assets-demo
 )
 target_link_libraries(assets-demo PRIVATE studio)
 
+# By hand, not ctest: prefab-demo out-dir light saves the Prefab editor as PNGs.
+add_executable(prefab-demo
+    tests/PrefabEditorDemo.cpp
+)
+target_link_libraries(prefab-demo PRIVATE studio)
+
 # Catch2 is only the sandbox acceptance suite.
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.28")
     FetchContent_Declare(
@@ -546,7 +560,7 @@ function(anarchy_warnings target)
     endif()
 endfunction()
 foreach(target IN ITEMS studio_core studio AnarchyEngine-CPP engine-tests shell-tests properties-tests console-tests
-                        studio-tests mcp-tests explorer-tests assets-tests assets-demo terminal-tests terminal-probe anarchy-mcp
+                        studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests assets-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
                         sandbox ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()
@@ -603,7 +617,7 @@ endif()
 # runs from the source folder, where resources/ is.
 enable_testing()
 foreach(suite engine-tests properties-tests console-tests studio-tests mcp-tests sandbox shell-tests explorer-tests assets-tests
-              terminal-tests)
+              prefab-editor-tests terminal-tests)
     if(TARGET ${suite})
         add_test(NAME ${suite} COMMAND ${suite} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()

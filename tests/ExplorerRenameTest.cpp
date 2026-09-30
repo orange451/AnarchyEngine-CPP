@@ -12,6 +12,7 @@
 #include "LuaApi.hpp"
 #include "jadefx/jadefx.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <initializer_list>
 #include <memory>
@@ -598,6 +599,30 @@ void TestDragIntoAnotherRow() {
     Expect(!rig.editing(), "a drag never becomes a slow click");
 }
 
+void TestDragShowsTheIcon() {
+    Rig rig;
+    rig.frame(0.1);
+    jadefx::Node* source = rig.cell("Gamma");
+    jadefx::Node* target = rig.cell("Alpha");
+    Expect(source != nullptr && target != nullptr, "both drag rows are on screen");
+    if (source == nullptr || target == nullptr) {
+        return;
+    }
+    const double x = source->getAbsoluteX() + source->getWidth() * 0.4;
+    rig.scene->noteButton(0, true, x, source->getAbsoluteY() + source->getHeight() * 0.5, 0);
+    const double y = target->getAbsoluteY() + target->getHeight() * 0.5;
+    rig.scene->noteMove(x, y);
+    rig.frame(0.15);
+    jadefx::Node* icon = rig.scene->getElementById("instance-drag-icon");
+    Expect(icon != nullptr && rig.scene->isPopupShowing(icon), "a row drag shows the instance's icon");
+    Expect(icon != nullptr && std::abs(icon->getAbsoluteX() + icon->getWidth() * 0.5 - x) < 1 &&
+               std::abs(icon->getAbsoluteY() + icon->getHeight() * 0.5 - y) < 1,
+           "the icon is centered on the pointer");
+    rig.scene->noteButton(0, false, x, y, 0);
+    rig.frame(0.2);
+    Expect(rig.scene->getElementById("instance-drag-icon") == nullptr, "the release takes the icon away");
+}
+
 void TestDragBesideAnotherRow() {
     Rig rig;
     // Folders are parented in order, so the rows read Alpha, Beta, Gamma.
@@ -1110,6 +1135,7 @@ int main() {
     TestCutRunsOnTheSelection();
     TestCutSet();
     TestDragIntoAnotherRow();
+    TestDragShowsTheIcon();
     TestDragBesideAnotherRow();
     TestDragCarriesTheSelection();
     TestDragRefusesItsOwnChild();

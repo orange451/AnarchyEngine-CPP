@@ -884,6 +884,17 @@ void IdeAssets::show_item_menu(const AssetRow& row, double x, double y) {
     menu_ = jadefx::make<jadefx::Menu>();
     const engine_core::InstanceId id = row.id;
     if (row.class_name == "Prefab") {
+        auto edit = jadefx::make<jadefx::MenuItem>(engine_core::action_label(InstanceAction::Edit));
+        if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic("ModelAlt.png")) {
+            edit->setGraphic(std::move(icon));
+        }
+        edit->setDisable(!static_cast<bool>(host_.actions.run));
+        edit->setOnAction([this, id](jadefx::ActionEvent&) {
+            if (host_.actions.run) {
+                host_.actions.run(InstanceAction::Edit, id);
+            }
+        });
+        menu_->getItems().add(std::move(edit));
         auto add_as_game_object = jadefx::make<jadefx::MenuItem>("Add as GameObject");
         if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic("GameObject.png")) {
             add_as_game_object->setGraphic(std::move(icon));
@@ -952,7 +963,7 @@ void IdeAssets::show_empty_menu(double x, double y) {
     }
     menu_ = jadefx::make<jadefx::Menu>();
     const bool can_insert = static_cast<bool>(host_.actions.insert);
-    // Offered in every folder; the placement rules refuse a Folder in a Prefab with a toast.
+    // Offered in every folder.
     std::vector<std::string> classes = {"Folder"};
     if (!kind.empty() && kind != "Folder") {
         classes.push_back(kind);
@@ -1290,6 +1301,11 @@ void IdeAssets::rebuild_columns(const std::vector<std::pair<engine_core::Instanc
         column->setHbarPolicy(jadefx::ScrollBarPolicy::Never);
         column->setStyle("height: 100%;");
         fix_width(*column, kColumnWidth);
+        // A drop on a column's space or an asset row in it moves into the folder it lists;
+        // a Folder's row takes its own drop first. The categories' column lists Assets, which holds none.
+        if (level > 0 && level < crumbs.size()) {
+            accept_drops(*column, crumbs[level].first);
+        }
         strip->getChildren().add(column);
     }
     rows_ = columns.empty() ? std::vector<AssetRow>{} : columns.back();
@@ -1315,7 +1331,7 @@ void IdeAssets::rebuild_preview() {
     const engine_core::InstanceId id = selected_.front();
     engine_core::DataModel* object = world_.instance(id);
     const auto shown = std::find_if(rows_.begin(), rows_.end(), [id](const AssetRow& row) { return row.id == id; });
-    // A single selected asset in the folder shown; a Folder or Prefab has its own column instead.
+    // A single selected asset in the folder shown; a Folder has its own column instead.
     if (object == nullptr || shown == rows_.end() || shown->opens) {
         return;
     }
@@ -1357,7 +1373,8 @@ void IdeAssets::add_item(const std::shared_ptr<jadefx::Node>& node, const AssetR
         [this, row](const jadefx::MouseEvent& event) { show_item_menu(row, event.x, event.y); });
     jadefx::Node* source = node.get();
     const engine_core::InstanceId id = row.id;
-    node->setOnDragDetected([this, source, id](const jadefx::MouseEvent&) {
+    const std::string class_name = row.class_name;
+    node->setOnDragDetected([this, source, id, class_name](const jadefx::MouseEvent&) {
         finish_rename(false);
         slow_pending_ = false;
         click_id_ = 0;
@@ -1366,8 +1383,13 @@ void IdeAssets::add_item(const std::shared_ptr<jadefx::Node>& node, const AssetR
         if (std::find(ids.begin(), ids.end(), id) == ids.end()) {
             ids = {id};
         }
-        if (jadefx::Dragboard* board = source->startDragAndDrop(jadefx::TransferMode::Move | jadefx::TransferMode::Link)) {
+        // Move into folders, Link into Properties, and Copy onto a Scene View, which adds a GameObject.
+        if (jadefx::Dragboard* board = source->startDragAndDrop(jadefx::TransferMode::Move | jadefx::TransferMode::Copy |
+                                                               jadefx::TransferMode::Link)) {
             board->put(kInstanceDragFormat, instance_drag_text(ids));
+            const std::shared_ptr<jadefx::ImageView> icon = icon_view(class_name);
+            board->setDragView(drag_icon(icon ? icon->getImage() : nullptr), kDragIconSize * 0.5,
+                               kDragIconSize * 0.5);
         }
     });
     if (row.opens) {
@@ -1393,6 +1415,8 @@ void IdeAssets::clicked(const AssetRow& row, const jadefx::MouseEvent& event) {
         click_id_ = 0;
         if (event.clickCount == 2 && row.opens && browser_.folder() != row.id) {
             openFolder(row.id);
+        } else if (event.clickCount == 2 && row.class_name == "Prefab" && host_.actions.run) {
+            host_.actions.run(InstanceAction::Edit, row.id);
         }
         return;
     }
@@ -1452,7 +1476,7 @@ void IdeAssets::clicked(const AssetRow& row, const jadefx::MouseEvent& event) {
     if (view_ != AssetView::Columns || !plain) {
         return;
     }
-    // In Columns, selecting a Folder or Prefab opens its column, and selecting
+    // In Columns, selecting a Folder opens its column, and selecting
     // an asset in an earlier column closes the columns after it.
     if (row.opens) {
         openFolder(row.id);

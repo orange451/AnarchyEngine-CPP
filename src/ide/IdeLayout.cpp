@@ -11,6 +11,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
       clip_(std::make_unique<Clip>()) {
     if (!config.empty()) {
         layout_file_ = config / "layout.json";
+        default_layout_file_ = config / "default-layout.json";
     }
     runner_.prepare();
     // Before any widget reads a color.
@@ -222,6 +223,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     // Docked before the threads start. Its first paint is what lets the
     // uncapped render thread leave its wait.
     scene_view_ = jadefx::make<runner::GameView>(runner_);
+    accept_prefab_drops(*scene_view_);
 
     auto status = jadefx::make<jadefx::Pane>();
     status->getClassList().add("ide-status");
@@ -273,23 +275,11 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     search_window_ = &keep_closed("Search", "Search.png", [this] { return make_search(); });
     search_window_->open = [this] { open_search(false, scene_); };
     conflicts_window_ = &keep_closed("Conflicts", "Warning.png", [this] { return make_conflicts(); });
-    terminal_window_ = &keep_closed("Terminal", "Console.png", [this] { return make_terminal(); });
-    // In with the console, as a code editor docks its terminal under the code.
-    terminal_window_->home = [this] {
-        if (const std::shared_ptr<IdeConsole> log = console_.lock()) {
-            if (IdeDock* dock = dockContaining(log.get())) {
-                return dock;
-            }
-        }
-        IdeDock* above = sceneDock_ != nullptr && sceneDock_->getParent() != nullptr ? sceneDock_ : nullptr;
-        return dock_beside(above, DropSide::Bottom, kConsoleHeight);
-    };
-
     assets_window_ = &keep_closed("Assets", "AssetFolder.png", [this] { return make_assets(); });
     // In with the console, as a project browser docks under the scene.
-    assets_window_->home = terminal_window_->home;
+    assets_window_->home = [this] { return beside_console(); };
 
-    if (!restore_layout()) {
+    if (!restore_layout() && !apply_builtin_layout()) {
         default_layout(windowWidth, windowHeight,
                        [](IdeDock& dock, const std::shared_ptr<IdePane>& page) { dock.dock(page); });
     }
@@ -738,6 +728,13 @@ void IdeLayout::start_test() {
     });
     engine.resume();
     show_session(PlayState::Running);
+    // An open console brings its tab forward for the test's output. A closed one
+    // stays closed, and a floating one is not raised: that would take the
+    // keyboard from the game.
+    const std::shared_ptr<IdeConsole> console = console_.lock();
+    if (IdeDock* dock = dockContaining(console.get())) {
+        dock->select(console.get());
+    }
 }
 
 void IdeLayout::pause_test() {

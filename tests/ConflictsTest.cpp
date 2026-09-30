@@ -161,6 +161,18 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
                                                    : scene.getElementsByClassName("search-pane").front());
     ide::IdeDock* dock = DockOf(search);
     expect(search != nullptr && dock != nullptr, "Find in Scripts docks the Search pane");
+    // The built-in layout gives Search a dock of its own. In with an explorer,
+    // it has a tab to go behind.
+    if (search != nullptr && dock != nullptr && dock->tabs()->getTabs().size() == 1) {
+        for (jadefx::Node* node : scene.getElementsByClassName("explorer-pane")) {
+            ide::IdeDock* beside = DockOf(node);
+            if (beside != nullptr && beside != dock) {
+                beside->take(TabOf(*dock, search));
+                dock = beside;
+                break;
+            }
+        }
+    }
     if (search != nullptr && dock != nullptr) {
         const std::shared_ptr<jadefx::Tab> tab = TabOf(*dock, search);
         for (const std::shared_ptr<jadefx::Tab>& other : dock->tabs()->getTabs().items()) {

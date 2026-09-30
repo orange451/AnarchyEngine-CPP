@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace engine_core {
 
@@ -105,11 +106,12 @@ protected:
     const ReferenceSpec* reference_specs(std::size_t& count) const override;
 };
 
-// A template made of Models, its only children.
+// A template made of Models, its only children. Edit, its primary action, opens it in a Prefab editor.
 class Prefab : public DataModel {
 public:
     Prefab(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
     const char* class_name() const override;
+    void context_actions(std::vector<ContextAction>& out) const override;
 };
 
 }  // namespace engine_core

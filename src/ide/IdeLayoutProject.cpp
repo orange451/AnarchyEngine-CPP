@@ -2,8 +2,11 @@
 
 #include "IdeLayout.hpp"
 
+#include "AssetInstances.hpp"
 #include "IdeAssets.hpp"
 #include "IdeLayoutInternal.hpp"
+#include "LockWaits.hpp"
+#include "PropertySheet.hpp"
 
 namespace ide {
 
@@ -52,23 +55,86 @@ std::shared_ptr<IdePane> IdeLayout::make_assets() {
         std::string error;
         preferences_.save(error);
     };
-    host.add_as_game_object = [this](engine_core::InstanceId prefab) {
-        runner_.simulation().on_simulation(
-            [this, alive = std::weak_ptr<int>(alive_), prefab](engine_core::DataModel& world) {
-                world.history().set_pending_gesture("Add as GameObject");
-                std::string error;
-                const engine_core::InstanceId made = add_prefab_instance(world, prefab, error);
-                CloseGesture(world);
-                if (made == 0) {
-                    toast_later(this, alive, std::move(error));
-                    return;
-                }
-                world.selection().set({made});
-            });
-    };
+    host.add_as_game_object = [this](engine_core::InstanceId prefab) { add_as_game_objects({prefab}); };
     auto pane = jadefx::make<IdeAssets>(runner_.simulation().datamodel(), std::move(host));
     pane->setIconFile("AssetFolder.png");
     return pane;
+}
+
+void IdeLayout::add_as_game_objects(std::vector<engine_core::InstanceId> prefabs) {
+    runner_.simulation().on_simulation(
+        [this, alive = std::weak_ptr<int>(alive_), prefabs = std::move(prefabs)](engine_core::DataModel& world) {
+            world.history().set_pending_gesture("Add as GameObject");
+            std::vector<engine_core::InstanceId> made;
+            std::string error;
+            for (engine_core::InstanceId prefab : prefabs) {
+                std::string refused;
+                if (const engine_core::InstanceId id = add_prefab_instance(world, prefab, refused)) {
+                    made.push_back(id);
+                } else if (error.empty()) {
+                    error = std::move(refused);
+                }
+            }
+            CloseGesture(world);
+            if (made.empty()) {
+                toast_later(this, alive, std::move(error));
+                return;
+            }
+            world.selection().set(std::move(made));
+        });
+}
+
+namespace {
+
+// The Prefabs among ids. Callers hold the world's read lock.
+std::vector<engine_core::InstanceId> PrefabsIn(const engine_core::DataModel& world,
+                                              const std::vector<engine_core::InstanceId>& ids) {
+    std::vector<engine_core::InstanceId> prefabs;
+    for (engine_core::InstanceId id : ids) {
+        if (dynamic_cast<const engine_core::Prefab*>(world.instance(id)) != nullptr) {
+            prefabs.push_back(id);
+        }
+    }
+    return prefabs;
+}
+
+}  // namespace
+
+void IdeLayout::accept_prefab_drops(jadefx::Node& view) {
+    view.setOnDragOver([this](jadefx::DragEvent& event) {
+        if (event.dragboard == nullptr || !event.dragboard->has(kInstanceDragFormat)) {
+            return;
+        }
+        engine_core::DataModel& world = runner_.simulation().datamodel();
+        // A busy place refuses this over; the next one asks again.
+        engine_core::DataModelLock lock(world, engine_core::DataModelLock::Read, kActionLockWait);
+        if (lock.owns() && !PrefabsIn(world, instance_drag_ids(event.dragboard->get(kInstanceDragFormat))).empty()) {
+            // A copy, so the pointer shows a plus: the drop adds a GameObject, and the Prefab stays where it is.
+            event.acceptTransferModes(jadefx::TransferMode::Copy);
+            event.consume();
+        }
+    });
+    view.setOnDragDropped([this](jadefx::DragEvent& event) {
+        if (event.dragboard == nullptr || !event.dragboard->has(kInstanceDragFormat)) {
+            return;
+        }
+        engine_core::DataModel& world = runner_.simulation().datamodel();
+        std::vector<engine_core::InstanceId> prefabs;
+        {
+            engine_core::DataModelLock lock(world, engine_core::DataModelLock::Read, kDropLockWait);
+            if (!lock.owns()) {
+                show_toast("The place is busy, so the drop did nothing. Try again.");
+                return;
+            }
+            prefabs = PrefabsIn(world, instance_drag_ids(event.dragboard->get(kInstanceDragFormat)));
+        }
+        if (prefabs.empty()) {
+            return;
+        }
+        add_as_game_objects(std::move(prefabs));
+        event.setDropCompleted(true);
+        event.consume();
+    });
 }
 
 void IdeLayout::show_conflicts() {

@@ -251,8 +251,12 @@ private:
     // the built-in layout does. Script editors and extra scene views move in
     // beside the scene view.
     void reset_layout();
-    // The built-in layout: the four open, Search and Conflicts closed, and no floating windows.
+    // The built-in layout, as apply_builtin_layout puts it. When that cannot be
+    // read, the studio's own: the four open, Search and Conflicts closed, and no floating windows.
     void reset_builtin_layout();
+    // Docks the pages as resources/layouts/default-layout.json has them. False,
+    // having changed nothing and said why in the console, when it cannot be read or docks nothing.
+    bool apply_builtin_layout();
     // Keeps the layout, but not the main window's place, as the default in
     // default-layout.json. Without a config folder it is kept until the studio closes.
     void save_default_layout();

@@ -125,7 +125,27 @@ void IdeLayout::reset_layout() {
     reset_builtin_layout();
 }
 
+bool IdeLayout::apply_builtin_layout() {
+    const std::filesystem::path file = find_resource("layouts/default-layout.json");
+    std::string why;
+    engine_core::JsonValue saved;
+    if (file.empty()) {
+        why = "resources/layouts/default-layout.json is missing";
+    } else if (ReadLayoutFile(file, saved, why)) {
+        if (apply_layout(saved)) {
+            return true;
+        }
+        why = utf8_path(file) + " docks nothing in the main window";
+    }
+    runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error,
+                                                 "Built-in layout: " + why + ". Using the studio's own.");
+    return false;
+}
+
 void IdeLayout::reset_builtin_layout() {
+    if (apply_builtin_layout()) {
+        return;
+    }
     const std::vector<std::shared_ptr<IdeDock>> old_docks = docks_;
     std::vector<std::shared_ptr<jadefx::UtilityWindow>> old_windows;
     for (const Floating& item : floating_) {

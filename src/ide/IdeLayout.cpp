@@ -290,7 +290,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     // In with the console, as a project browser docks under the scene.
     assets_window_->home = terminal_window_->home;
 
-    if (!restore_layout()) {
+    if (!restore_layout() && !apply_builtin_layout()) {
         default_layout(windowWidth, windowHeight,
                        [](IdeDock& dock, const std::shared_ptr<IdePane>& page) { dock.dock(page); });
     }

@@ -765,7 +765,7 @@ void clear_extras(DataModel& world, InstanceId id) {
 void clear_world(DataModel& world) {
     std::vector<InstanceId> ids;
     world.for_each_instance([&ids](DataModel& object) {
-        if (!object.is_scene_service()) {
+        if (!object.is_service()) {
             ids.push_back(object.id());
         }
     });

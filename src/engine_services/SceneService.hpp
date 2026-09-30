@@ -7,17 +7,25 @@
 
 namespace engine_core {
 
-// A child of game that scripts and the explorer see: Workspace, Lighting,
-// Storage, or Scripts. A DataModel that is not an Instance, like Game. Game
-// makes one of each, and they live as long as the world: they cannot be
-// moved, renamed, or destroyed, and a script cannot make one.
-class SceneService : public DataModel {
+// A service: made with the world, under game or under another service, as
+// Containment's kServices lists it. It lives as long as the world: it cannot
+// be moved, renamed, or destroyed, and a script cannot make one.
+class Service : public DataModel {
 public:
-    SceneService(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
+    Service(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
 
-    bool is_scene_service() const override { return true; }
+    bool is_service() const override { return true; }
     // Paste only: a service takes children, and cannot be cut, renamed, or deleted.
     void context_actions(std::vector<ContextAction>& out) const override;
+};
+
+// A child of game that scripts and the explorer see: Workspace, Lighting,
+// Storage, or Scripts. A DataModel that is not an Instance, like Game.
+class SceneService : public Service {
+public:
+    using Service::Service;
+
+    bool is_scene_service() const override { return true; }
 };
 
 // The scene service classes, in the order game holds them.

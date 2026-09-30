@@ -1,12 +1,13 @@
 #include "SceneService.hpp"
 
+#include "Containment.hpp"
 #include "LuaApi.hpp"
 
 #include <cctype>
 
 namespace engine_core {
 
-void SceneService::context_actions(std::vector<ContextAction>& out) const {
+void Service::context_actions(std::vector<ContextAction>& out) const {
     out.push_back(ContextAction{InstanceAction::Paste, false});
 }
 
@@ -19,13 +20,7 @@ bool is_scene_service_class(std::string_view class_name) {
     return false;
 }
 
-std::string scene_service_guid(std::string_view class_name) {
-    std::string guid(class_name);
-    for (char& c : guid) {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    }
-    return guid;
-}
+std::string scene_service_guid(std::string_view class_name) { return service_guid(class_name); }
 
 const char* Workspace::class_name() const { return "Workspace"; }
 
@@ -36,7 +31,8 @@ const char* Scripts::class_name() const { return "Scripts"; }
 namespace {
 
 ANARCHY_LUA_REGISTER(register_scene_service_lua) {
-    register_lua_class("SceneService", "DataModel", nullptr, 0);
+    register_lua_class("Service", "DataModel", nullptr, 0);
+    register_lua_class("SceneService", "Service", nullptr, 0);
     register_lua_class("Workspace", "SceneService", nullptr, 0);
     register_lua_class("Storage", "SceneService", nullptr, 0);
     register_lua_class("Scripts", "SceneService", nullptr, 0);

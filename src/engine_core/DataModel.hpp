@@ -133,12 +133,20 @@ public:
     // instance is DataModel. Game overrides it for the root.
     virtual const char* class_name() const { return "DataModel"; }
 
-    // Workspace, Lighting, Storage, and Scripts (engine_services). A Game makes
-    // one of each as its children, and they are the only children game has.
-    // They cannot be moved, renamed, or destroyed.
+    // A service (engine_services): made with the world under game or under
+    // another service, as Containment's kServices lists them. None can be
+    // moved, renamed, or destroyed.
+    virtual bool is_service() const { return false; }
+    // Workspace, Lighting, Storage, and Scripts: the services scripts run and
+    // render under. A Game makes one of each as its first children.
     virtual bool is_scene_service() const { return false; }
+    // A game service, and so everything under it, has no row in the Game Explorer.
+    virtual bool hidden_in_explorer() const { return false; }
     // The root's child of this scene service class, or 0 when there is none.
     InstanceId scene_service(std::string_view class_name) const;
+    // The service of this class, under game or under a service directly under
+    // game, or 0 when there is none.
+    InstanceId service(std::string_view class_name) const;
 
     // Why set_parent, set_name, or destroy would refuse, worded for the user,
     // or empty when it would go ahead. Setting the value an instance already
@@ -543,6 +551,12 @@ private:
     void unlink_parent(InstanceId id, Slot& part);
     void link_child(InstanceId parent, InstanceId child);
     bool is_under(InstanceId ancestor, InstanceId node) const;
+    // The class whose rule decides what goes in parent: its own, or for a
+    // Folder, that of the first ancestor that is not a Folder, walking as
+    // though moved were already under moved_to. Empty when the walk leaves the tree.
+    std::string rule_class(InstanceId parent, InstanceId moved, InstanceId moved_to) const;
+    // The first placement rule that id and its descendants would break under new_parent.
+    std::optional<std::string> placement_error_for(InstanceId id, InstanceId new_parent) const;
     void release_signals(InstanceId id);
 
     void capture_place_unlocked();

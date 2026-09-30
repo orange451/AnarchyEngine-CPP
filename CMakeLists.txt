@@ -282,6 +282,7 @@ add_library(engine_instances STATIC
 add_library(engine_services STATIC
     src/engine_services/ChangeHistoryService.cpp
     src/engine_services/Game.cpp
+    src/engine_services/GameService.cpp
     src/engine_services/Lighting.cpp
     src/engine_services/SceneService.cpp
     src/engine_services/UserInputService.cpp

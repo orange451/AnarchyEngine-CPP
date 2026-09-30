@@ -356,7 +356,12 @@ struct SearchRig {
     explicit SearchRig(engine_core::Engine& engine) : engine(engine) {
         engine_core::DataModel& game = engine.datamodel();
         // A place of its own: the scene services start empty for this rig.
+        // Assets and its categories are fixed services, not scripts to search.
         for (engine_core::InstanceId service : game.get_children(game.id())) {
+            const engine_core::DataModel* object = game.instance(service);
+            if (object == nullptr || !object->is_scene_service()) {
+                continue;
+            }
             for (engine_core::InstanceId child : game.get_children(service)) {
                 game.destroy_tree(child);
             }

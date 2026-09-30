@@ -1,5 +1,6 @@
 #include "DataModel.hpp"
 
+#include "Containment.hpp"
 #include "DataModelState.hpp"
 #include "LuaApi.hpp"
 #include "PropertyReflection.hpp"
@@ -476,7 +477,7 @@ void DataModel::destroy(InstanceId id) {
     if (part == nullptr) {
         return;
     }
-    if (part->instance != nullptr && part->instance->is_scene_service()) {
+    if (part->instance != nullptr && part->instance->is_service()) {
         contract_fail(destroy_error(id)->c_str());
     }
     std::optional<AuthoredRecord> captured;
@@ -1138,6 +1139,69 @@ InstanceId DataModel::scene_service(std::string_view class_name) const {
     return 0;
 }
 
+InstanceId DataModel::service(std::string_view class_name) const {
+    // kServices nests one level: a service's parent is game or a child of game.
+    for (InstanceId child = first_child(0); child != 0; child = next_sibling(child)) {
+        const DataModel* object = instance(child);
+        if (object == nullptr || !object->is_service()) {
+            continue;
+        }
+        if (class_name == object->class_name()) {
+            return child;
+        }
+        if (object->is_scene_service()) {
+            continue;
+        }
+        for (InstanceId inner = first_child(child); inner != 0; inner = next_sibling(inner)) {
+            const DataModel* nested = instance(inner);
+            if (nested != nullptr && nested->is_service() && class_name == nested->class_name()) {
+                return inner;
+            }
+        }
+    }
+    return 0;
+}
+
+std::string DataModel::rule_class(InstanceId parent, InstanceId moved, InstanceId moved_to) const {
+    InstanceId at = parent;
+    for (std::size_t guard = 0; guard <= kMaxInstances + 1; ++guard) {
+        if (at == kNoParent) {
+            return {};
+        }
+        const DataModel* holder = at == 0 ? state_->root : instance(at);
+        if (holder == nullptr) {
+            return {};
+        }
+        if (!passes_rule_up(holder->class_name())) {
+            return holder->class_name();
+        }
+        at = at == moved ? moved_to : this->parent(at);
+    }
+    return {};
+}
+
+std::optional<std::string> DataModel::placement_error_for(InstanceId id, InstanceId new_parent) const {
+    std::vector<InstanceId> pending{id};
+    while (!pending.empty()) {
+        const InstanceId at = pending.back();
+        pending.pop_back();
+        const DataModel* object = instance(at);
+        if (object == nullptr) {
+            continue;
+        }
+        const std::string holder = rule_class(at == id ? new_parent : parent(at), id, new_parent);
+        if (!holder.empty()) {
+            if (std::optional<std::string> error = placement_error(holder, object->class_name(), name(at))) {
+                return error;
+            }
+        }
+        for (InstanceId child = first_child(at); child != 0; child = next_sibling(child)) {
+            pending.push_back(child);
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<std::string> DataModel::parent_error(InstanceId id, InstanceId new_parent) const {
     if (id == 0) {
         return std::string("game cannot be moved");
@@ -1150,21 +1214,31 @@ std::optional<std::string> DataModel::parent_error(InstanceId id, InstanceId new
     if (current == new_parent) {
         return std::nullopt;
     }
-    if (object->is_scene_service()) {
-        // Game places each one under itself once, when it makes the world.
-        const bool placing = current == kNoParent && new_parent == 0 && scene_service(object->class_name()) == 0;
+    if (object->is_service()) {
+        // Game places each one under its table parent once, when it makes the
+        // world, and a project read does the same for one its files lack.
+        const ServiceSpec* spec = find_service(object->class_name());
+        InstanceId home = kNoParent;
+        if (spec != nullptr) {
+            home = spec->parent_class == nullptr ? 0 : service(spec->parent_class);
+            if (spec->parent_class != nullptr && home == 0) {
+                home = kNoParent;
+            }
+        }
+        const bool placing = current == kNoParent && home != kNoParent && new_parent == home &&
+                             service(object->class_name()) == 0;
         if (!placing) {
             return name(id) + " cannot be moved";
         }
         return std::nullopt;
     }
-    if (new_parent == 0) {
-        return "Only scene services can be children of game; put " + name(id) + " in Workspace";
+    if (new_parent == kNoParent) {
+        return std::nullopt;
     }
-    if (new_parent != kNoParent && (new_parent == id || is_under(id, new_parent))) {
+    if (new_parent == id || is_under(id, new_parent)) {
         return "Cannot parent " + name(id) + " to itself or a descendant";
     }
-    return std::nullopt;
+    return placement_error_for(id, new_parent);
 }
 
 std::optional<std::string> DataModel::rename_error(InstanceId id, std::string_view new_name) const {
@@ -1175,7 +1249,7 @@ std::optional<std::string> DataModel::rename_error(InstanceId id, std::string_vi
     if (object == nullptr) {
         return std::string("That instance no longer exists");
     }
-    if (object->is_scene_service() && object->name_ != new_name) {
+    if (object->is_service() && object->name_ != new_name) {
         return object->name_ + " cannot be renamed";
     }
     return std::nullopt;
@@ -1189,7 +1263,7 @@ std::optional<std::string> DataModel::destroy_error(InstanceId id) const {
     if (object == nullptr) {
         return std::string("That instance no longer exists");
     }
-    if (object->is_scene_service()) {
+    if (object->is_service()) {
         return object->name_ + " cannot be destroyed";
     }
     return std::nullopt;

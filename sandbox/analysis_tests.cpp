@@ -339,8 +339,10 @@ TEST_CASE("analysis definitions come from the class registry", "[A11]") {
     REQUIRE(source.find("PreRender") == std::string::npos);
     REQUIRE(source.find("RenderStepped") == std::string::npos);
     REQUIRE(source.find("BasePart") == std::string::npos);
-    // The scene services are DataModels like Game, and workspace is a global like game.
-    REQUIRE(source.find("declare extern type SceneService extends DataModel with") != std::string::npos);
+    // Service is a DataModel like Game; the scene services extend it, and
+    // workspace is a global like game.
+    REQUIRE(source.find("declare extern type Service extends DataModel with") != std::string::npos);
+    REQUIRE(source.find("declare extern type SceneService extends Service with") != std::string::npos);
     REQUIRE(source.find("declare extern type Workspace extends SceneService with") != std::string::npos);
     REQUIRE(source.find("declare extern type Lighting extends SceneService with") != std::string::npos);
     REQUIRE(source.find("declare workspace: Workspace") != std::string::npos);

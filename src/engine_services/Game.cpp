@@ -1,6 +1,8 @@
 #include "Game.hpp"
 
 #include "ChangeHistoryService.hpp"
+#include "Containment.hpp"
+#include "GameService.hpp"
 #include "Lighting.hpp"
 #include "LuaApi.hpp"
 #include "SceneService.hpp"
@@ -10,11 +12,16 @@ namespace {
 
 const char* const kClassName = "Game";
 
+// Under its table parent, with its fixed GUID.
 template <typename T>
-void add_scene_service(Game& game) {
+void add_service(Game& game) {
     T& service = game.create<T>();
-    game.set_guid(service.id(), scene_service_guid(service.class_name()));
-    game.set_parent(service.id(), game.id());
+    const ServiceSpec* spec = find_service(service.class_name());
+    if (spec == nullptr) {
+        contract_fail("a service class is missing from kServices");
+    }
+    game.set_guid(service.id(), service_guid(service.class_name()));
+    game.set_parent(service.id(), spec->parent_class == nullptr ? 0 : game.service(spec->parent_class));
 }
 
 }  // namespace
@@ -24,10 +31,17 @@ Game::Game() : DataModel(kClassName) {
     ChangeHistoryService& changes = history();
     const bool enabled = changes.enabled();
     changes.set_enabled(false);
-    add_scene_service<Workspace>(*this);
-    add_scene_service<Lighting>(*this);
-    add_scene_service<Storage>(*this);
-    add_scene_service<Scripts>(*this);
+    // kServices order, parents first.
+    add_service<Workspace>(*this);
+    add_service<Lighting>(*this);
+    add_service<Storage>(*this);
+    add_service<Scripts>(*this);
+    add_service<Assets>(*this);
+    add_service<Materials>(*this);
+    add_service<Prefabs>(*this);
+    add_service<Meshes>(*this);
+    add_service<Textures>(*this);
+    add_service<Audio>(*this);
     changes.set_enabled(enabled);
 }
 

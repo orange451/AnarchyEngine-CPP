@@ -1,5 +1,6 @@
 #include "IdeLayout.hpp"
 
+#include "IdeAssets.hpp"
 #include "IdeLayoutInternal.hpp"
 
 namespace ide {
@@ -542,7 +543,8 @@ bool IdeLayout::editing_field() const {
     jadefx::Node* focused = scene_->focusedNode();
     // PropertiesPanel is not a node, so it answers for its own fields.
     return InTextWidget(focused) &&
-           (Owning<IdeExplorer>(focused) != nullptr || (properties_ != nullptr && properties_->owns(focused)));
+           (Owning<IdeExplorer>(focused) != nullptr || Owning<IdeAssets>(focused) != nullptr ||
+            (properties_ != nullptr && properties_->owns(focused)));
 }
 
 void IdeLayout::noteScriptFocus() {

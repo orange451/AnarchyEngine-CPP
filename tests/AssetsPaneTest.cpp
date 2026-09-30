@@ -3,6 +3,7 @@
 #include "SelectionService.hpp"
 
 #include "DataModel.hpp"
+#include "Folder.hpp"
 #include "Game.hpp"
 #include "LuaApi.hpp"
 #include "ScriptRuntime.hpp"
@@ -509,6 +510,36 @@ void insert_through_pane() {
     Expect(!rig.editing(), "nothing is renamed");
 }
 
+void up_goes_up_one_level() {
+    Rig rig;
+    rig.pane->openFolder(rig.textures);
+    rig.pane->openFolder(rig.walls);
+    rig.frame(0);
+    rig.clickItem(rig.game.get_children(rig.walls).front(), 0.1);
+    rig.key(jadefx::Key::Up, jadefx::Key::ModControl);
+    Expect(rig.pane->browser().folder() == rig.textures, "Ctrl+Up goes from Textures › Walls to Textures");
+    rig.frame(0.5);
+    rig.key(jadefx::Key::Up, jadefx::Key::ModControl);
+    Expect(rig.pane->browser().folder() == rig.textures, "Ctrl+Up stops at the category");
+}
+
+void status_counts_only_shown() {
+    Rig rig;
+    rig.pane->openFolder(rig.textures);
+    rig.frame(0);
+    auto* status = dynamic_cast<jadefx::Labeled*>(rig.first("assets-status"));
+    engine_core::Folder& part = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(part.id(), "Part");
+    rig.game.set_parent(part.id(), rig.game.scene_service("Workspace"));
+    rig.game.selection().set({part.id()});
+    rig.frame(0.1);
+    Expect(status != nullptr && status->getText() == "3 items", "a Workspace selection is not in the status");
+    rig.game.selection().set({part.id(), rig.brick});
+    rig.frame(0.2);
+    Expect(status != nullptr && status->getText() == "3 items · Brick selected",
+           "the status names only the shown selection");
+}
+
 }  // namespace
 
 int main() {
@@ -523,6 +554,8 @@ int main() {
     search_filters();
     pane_follows_tree();
     insert_through_pane();
+    up_goes_up_one_level();
+    status_counts_only_shown();
     if (gFailures == 0) {
         std::printf("assets tests passed\n");
         return 0;

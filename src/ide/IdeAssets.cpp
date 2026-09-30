@@ -9,7 +9,6 @@
 #include "SelectionService.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <iterator>
@@ -378,9 +377,6 @@ constexpr double kSlowClickSeconds = 0.5;
 // JadeFX turns two clicks inside this window into a double-click, so a slow
 // click waits this long before renaming.
 constexpr double kDoubleClickSeconds = 0.4;
-// The simulation thread can hold the world for a whole step; an action waits
-// longer than a repaint before it says the place is busy.
-constexpr std::chrono::milliseconds kActionWait(250);
 
 const char* ActionIcon(InstanceAction action) {
     switch (action) {
@@ -665,10 +661,13 @@ void IdeAssets::handleKey(jadefx::KeyEvent& event) {
         world_.selection().set({});
         event.consume();
     } else if (event.shortcut() && key == jadefx::Key::Up) {
-        // Up one level, but not above the category.
-        const std::vector<std::pair<engine_core::InstanceId, std::string>> crumbs = browser_.crumbs();
-        if (crumbs.size() > 2) {
-            openFolder(crumbs[crumbs.size() - 2].first);
+        // Up one level, but not above the category. The crumbs walk the tree, so under the read lock.
+        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kActionLockWait);
+        if (lock.owns()) {
+            const std::vector<std::pair<engine_core::InstanceId, std::string>> crumbs = browser_.crumbs();
+            if (crumbs.size() > 2) {
+                browser_.open(crumbs[crumbs.size() - 2].first);
+            }
         }
         event.consume();
     } else if (event.shortcut() && (key == jadefx::Key::LeftBracket || key == jadefx::Key::RightBracket)) {
@@ -727,7 +726,7 @@ void IdeAssets::poll_clicks() {
 void IdeAssets::beginRename(engine_core::InstanceId id) {
     std::string name;
     {
-        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kActionWait);
+        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kActionLockWait);
         if (!lock.owns() || !world_.alive(id)) {
             return;
         }
@@ -809,7 +808,7 @@ bool IdeAssets::dropInto(const std::vector<engine_core::InstanceId>& ids, engine
         return false;
     }
     {
-        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kActionWait);
+        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kDropLockWait);
         if (!lock.owns()) {
             if (host_.actions.notice) {
                 host_.actions.notice("The place is busy, so the move did nothing. Try again.");
@@ -914,7 +913,7 @@ void IdeAssets::show_empty_menu(double x, double y) {
     }
     std::string kind;
     {
-        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kActionWait);
+        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kActionLockWait);
         if (lock.owns()) {
             kind = browser_.new_kind();
         }
@@ -1446,11 +1445,18 @@ void IdeAssets::show_selection() {
     for (const auto& [id, node] : items_) {
         set_class(*node, "selected", std::find(selected_.begin(), selected_.end(), id) != selected_.end());
     }
+    // Only what this view shows: a Part picked in an explorer, or a dead id, is not counted.
+    std::vector<engine_core::InstanceId> shown;
+    for (engine_core::InstanceId id : selected_) {
+        if (items_.count(id) != 0) {
+            shown.push_back(id);
+        }
+    }
     std::string text = std::to_string(count_) + (count_ == 1 ? " item" : " items");
-    if (selected_.size() == 1) {
-        text += " · " + world_.name(selected_.front()) + " selected";
-    } else if (selected_.size() > 1) {
-        text += " · " + std::to_string(selected_.size()) + " selected";
+    if (shown.size() == 1) {
+        text += " · " + world_.name(shown.front()) + " selected";
+    } else if (shown.size() > 1) {
+        text += " · " + std::to_string(shown.size()) + " selected";
     }
     status_->setText(text);
     rebuild_preview();

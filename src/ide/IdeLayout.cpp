@@ -223,6 +223,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     // Docked before the threads start. Its first paint is what lets the
     // uncapped render thread leave its wait.
     scene_view_ = jadefx::make<runner::GameView>(runner_);
+    accept_prefab_drops(*scene_view_);
 
     auto status = jadefx::make<jadefx::Pane>();
     status->getClassList().add("ide-status");

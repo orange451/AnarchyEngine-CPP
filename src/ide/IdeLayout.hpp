@@ -300,6 +300,12 @@ private:
     std::shared_ptr<IdePane> make_terminal();
     // The Assets pane, over the place, with the explorers' actions.
     std::shared_ptr<IdePane> make_assets();
+    // Add as GameObject: a GameObject in Workspace for each Prefab in prefabs,
+    // as one undo step, and they become the selection.
+    void add_as_game_objects(std::vector<engine_core::InstanceId> prefabs);
+    // A drag from the Assets pane onto view that holds a Prefab adds each
+    // Prefab in it as a GameObject. A drag with none is refused.
+    void accept_prefab_drops(jadefx::Node& view);
     // Where Search and Conflicts dock: beside the left explorer, else where editors dock.
     IdeDock* side_home();
     // The ribbon's count and the Conflicts window's rows, from conflicts_.

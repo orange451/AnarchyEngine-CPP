@@ -523,7 +523,9 @@ void IdeLayout::new_scene_view() {
         return;
     }
     ++scene_views_;
-    home->dock(jadefx::make<runner::GameView>(runner_, "Scene View " + std::to_string(scene_views_), true));
+    auto view = jadefx::make<runner::GameView>(runner_, "Scene View " + std::to_string(scene_views_), true);
+    accept_prefab_drops(*view);
+    home->dock(view);
 }
 
 void IdeLayout::new_terminal() {

@@ -1,3 +1,4 @@
+#include "ide/IdeAssets.hpp"
 #include "ide/IdeConsole.hpp"
 #include "ide/IdeDock.hpp"
 #include "ide/IdeLayout.hpp"
@@ -7,6 +8,9 @@
 #include "ide/IdeTerminal.hpp"
 
 #include "Engine.hpp"
+#include "GameObject.hpp"
+#include "LuaApi.hpp"
+#include "SelectionService.hpp"
 #include "Project.hpp"
 #include "ScriptRuntime.hpp"
 
@@ -545,6 +549,78 @@ int main() {
             view_strip->close(extra);
         }
         frame();
+
+        // A Prefab dragged from Assets onto the Scene View is added as a
+        // GameObject; a Material is not.
+        {
+            engine_core::DataModel& world = layout.simulation().datamodel();
+            engine_core::InstanceId crate = 0;
+            engine_core::InstanceId stone = 0;
+            layout.simulation().on_simulation([&](engine_core::DataModel& game) {
+                engine_core::DataModel* prefab = engine_core::lua_create_instance(game, "Prefab");
+                game.set_name(prefab->id(), "Crate");
+                game.set_parent(prefab->id(), game.service("Prefabs"));
+                crate = prefab->id();
+                engine_core::DataModel* material = engine_core::lua_create_instance(game, "Material");
+                game.set_name(material->id(), "Stone");
+                game.set_parent(material->id(), game.service("Materials"));
+                stone = material->id();
+            });
+            const engine_core::InstanceId workspace = world.scene_service("Workspace");
+            const std::vector<engine_core::InstanceId> before = world.get_children(workspace);
+            auto* assets = dynamic_cast<ide::IdeAssets*>(showing("Assets"));
+            ide::IdePane* view = showing("Scene View");
+            expect(assets != nullptr && view != nullptr, "Assets and the Scene View both show");
+            auto drag = [&](engine_core::InstanceId id) {
+                frame();
+                jadefx::Node* from = assets != nullptr ? assets->itemNode(id) : nullptr;
+                expect(from != nullptr && view != nullptr, "the dragged asset has a tile");
+                if (from == nullptr || view == nullptr) {
+                    return;
+                }
+                const double x = from->getAbsoluteX() + from->getWidth() * 0.5;
+                const double y = from->getAbsoluteY() + from->getHeight() * 0.5;
+                const double to_x = view->getAbsoluteX() + view->getWidth() * 0.5;
+                const double to_y = view->getAbsoluteY() + view->getHeight() * 0.5;
+                scene->noteButton(0, true, x, y);
+                scene->noteMove(x + 10, y + 10);
+                scene->noteMove(to_x, to_y);
+                frame();
+                scene->noteMove(to_x, to_y);
+                scene->noteButton(0, false, to_x, to_y);
+                frame();
+            };
+            if (assets != nullptr) {
+                assets->openFolder(world.service("Materials"));
+            }
+            drag(stone);
+            expect(world.get_children(workspace) == before, "a Material dropped on the Scene View adds nothing");
+            if (assets != nullptr) {
+                assets->openFolder(world.service("Prefabs"));
+            }
+            drag(crate);
+            std::vector<engine_core::InstanceId> added;
+            for (engine_core::InstanceId id : world.get_children(workspace)) {
+                if (std::find(before.begin(), before.end(), id) == before.end()) {
+                    added.push_back(id);
+                }
+            }
+            const auto* object =
+                added.size() == 1 ? dynamic_cast<const engine_core::GameObject*>(world.instance(added[0])) : nullptr;
+            expect(object != nullptr && world.name(added[0]) == "Crate" && object->prefab().id == crate,
+                   "a Prefab dropped on the Scene View adds a GameObject linked to it, named after it");
+            expect(world.get_children(world.service("Prefabs")).size() == 1 && world.parent(crate) == world.service("Prefabs"),
+                   "the Prefab stays in Prefabs");
+            expect(added.size() == 1 && world.selection().get() == added, "the new GameObject is selected");
+            layout.simulation().on_simulation([&](engine_core::DataModel& game) {
+                for (engine_core::InstanceId id : added) {
+                    game.destroy_tree(id);
+                }
+                game.destroy_tree(crate);
+                game.destroy_tree(stone);
+            });
+            frame();
+        }
     }
 
     failures += RunThemeTests(*scene);

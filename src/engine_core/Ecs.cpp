@@ -1,6 +1,13 @@
 #include "Ecs.hpp"
 
+#include <mutex>
+
 namespace engine_core {
+
+EcsProcessSetup::EcsProcessSetup() {
+    static std::once_flag once;
+    std::call_once(once, [] { ecs_os_api.flags_ &= ~static_cast<ecs_flags32_t>(EcsOsApiHighResolutionTimer); });
+}
 
 EcsIds register_ecs(flecs::world& world) {
     EcsIds ids;

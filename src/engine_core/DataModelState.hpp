@@ -83,6 +83,7 @@ struct DataModel::State {
     // Every instance's entity, with its components and tags. First, so it is
     // destroyed last, after everything that might reach it during teardown.
     // Touched under write_mu, like the slots.
+    EcsProcessSetup ecs_setup;
     flecs::world ecs;
     EcsIds ecs_ids;
     // Built once with the world; after it, so they are destroyed first.

@@ -4,6 +4,7 @@
 
 #include "ChangeHistoryService.hpp"
 #include "DenseIdSet.hpp"
+#include "Ecs.hpp"
 #include "GameObject.hpp"
 #include "SnapshotPump.hpp"
 #include "TestTriangle.hpp"
@@ -131,6 +132,14 @@ TEST_CASE("two DataModels keep separate worlds", "[dense][entity]") {
     REQUIRE(later.copy_size(size));
     REQUIRE(size[2] == 7.f);
     REQUIRE(first.entity_count() == base + 2);
+}
+
+TEST_CASE("flecs leaves the process timer resolution alone", "[dense][entity]") {
+    SimRole role;
+    engine_core::Game game;
+    // flecs raises the Windows timer to 1 ms at each world's start while this
+    // flag is set. The engine paces frames around the default tick instead.
+    REQUIRE((ecs_os_api.flags_ & EcsOsApiHighResolutionTimer) == 0u);
 }
 
 TEST_CASE("a destroyed GameObject reads zero", "[dense][entity]") {

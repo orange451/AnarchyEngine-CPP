@@ -530,6 +530,8 @@ add_executable(sandbox
     sandbox/dense_views_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
+# The dense views tests check flecs state the engine keeps private.
+target_link_libraries(sandbox PRIVATE flecs)
 target_compile_features(sandbox PRIVATE cxx_std_17)
 if(ENGINE_CORE_TSAN AND NOT MSVC)
     target_compile_options(sandbox PRIVATE -fsanitize=thread -fno-omit-frame-pointer -g -O1)

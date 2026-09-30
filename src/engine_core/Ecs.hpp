@@ -62,6 +62,14 @@ struct EcsIds {
 // Registers every component and tag with world and returns their ids.
 EcsIds register_ecs(flecs::world& world);
 
+// Process-wide flecs settings, applied once before the first world. Declared
+// ahead of each world so it is constructed first. It turns off flecs' 1 ms
+// Windows timer resolution: the engine paces frames around the default tick,
+// and a storage library should not change it.
+struct EcsProcessSetup {
+    EcsProcessSetup();
+};
+
 // A component of e, or null when e is 0 or does not have it.
 template <typename T>
 const T* read_component(ecs_world_t* world, ecs_entity_t e, ecs_id_t id) {

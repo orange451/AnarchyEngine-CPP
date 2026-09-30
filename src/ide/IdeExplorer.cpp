@@ -1007,6 +1007,11 @@ void IdeExplorer::read_hierarchy(Snapshot& snap) {
                 if (seen_.find(child) != seen_.end()) {
                     continue;
                 }
+                if (const engine_core::DataModel* object = root_.instance(child);
+                    object != nullptr && object->hidden_in_explorer()) {
+                    // A game service, and everything under it, is shown in the Assets pane.
+                    continue;
+                }
                 if (snap.ids.size() + pending_.size() + static_cast<std::size_t>(count) + 1 >= cap) {
                     break;
                 }

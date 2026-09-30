@@ -336,7 +336,7 @@ inline bool parent_ok(const engine_core::DataModel& game, engine_core::InstanceI
     return parent == 0 || (parent != engine_core::DataModel::kNoParent && game.alive(parent));
 }
 
-// Where an insert or paste at parent lands. game holds only the scene
+// Where a paste at parent lands. game's rows are hidden except the scene
 // services, so one at the top of the tree goes into Workspace.
 inline engine_core::InstanceId insert_target(const engine_core::DataModel& game, engine_core::InstanceId parent) {
     return parent == 0 ? game.scene_service("Workspace") : parent;

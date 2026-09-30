@@ -21,4 +21,10 @@ std::vector<engine_core::InstanceId> cut_set(const engine_core::DataModel& game,
 bool move_set(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids,
               engine_core::InstanceId parent, std::string* refused = nullptr);
 
+// Makes class_name for the explorer's or the Assets pane's insert, under asked,
+// or under Workspace when asked is the root. 0, with error set, when the place
+// is full or refuses the class there; nothing is left behind then.
+engine_core::InstanceId insert_instance(engine_core::DataModel& world, const std::string& class_name,
+                                        engine_core::InstanceId asked, std::string& error);
+
 }  // namespace ide

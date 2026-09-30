@@ -167,19 +167,9 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     host.insert = [this](std::string class_name, engine_core::InstanceId parent, std::shared_ptr<InsertResult> result) {
         runner_.simulation().on_simulation(
             [class_name = std::move(class_name), asked = parent, result](engine_core::DataModel& world) {
-                engine_core::InstanceId made = 0;
                 std::string error;
-                const engine_core::InstanceId parent = insert_target(world, asked);
-                const bool placed = parent_ok(world, parent);
-                if (placed && world.room_left() == 0) {
-                    error = engine_core::InstanceCapacityError().what();
-                } else if (placed) {
-                    if (engine_core::DataModel* created = engine_core::lua_create_instance(world, class_name.c_str())) {
-                        world.set_parent(created->id(), parent);
-                        made = created->id();
-                        CloseGesture(world);
-                    }
-                }
+                const engine_core::InstanceId made = insert_instance(world, class_name, asked, error);
+                CloseGesture(world);
                 if (result) {
                     result->id.store(made, std::memory_order_relaxed);
                     result->error = std::move(error);

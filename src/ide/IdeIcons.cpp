@@ -25,6 +25,24 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "TestTriangle") {
         return "Mesh.png";
     }
+    if (class_name == "Assets" || class_name == "Audio") {
+        return "AssetFolder.png";
+    }
+    if (class_name == "Materials") {
+        return "AssetFolderMaterial.png";
+    }
+    if (class_name == "Meshes") {
+        return "AssetFolderMesh.png";
+    }
+    if (class_name == "Prefabs") {
+        return "AssetFolderPrefab.png";
+    }
+    if (class_name == "Textures") {
+        return "AssetFolderTexture.png";
+    }
+    if (class_name == "Prefab") {
+        return "ModelAlt.png";
+    }
     return nullptr;
 }
 

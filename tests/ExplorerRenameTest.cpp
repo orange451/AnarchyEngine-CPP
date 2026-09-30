@@ -3,6 +3,8 @@
 #include "DataModelLock.hpp"
 #include "SelectionService.hpp"
 
+#include "AssetInstances.hpp"
+#include "ChangeHistoryService.hpp"
 #include "DataModel.hpp"
 #include "Folder.hpp"
 #include "Game.hpp"
@@ -836,6 +838,71 @@ void TestRevealScrolls() {
     Expect(!rig.explorer->reveal_selection(), "reveal does nothing with no selection");
 }
 
+engine_core::DataModel& CreateFolder(engine_core::DataModel& world) {
+    return world.create<engine_core::Folder>();
+}
+
+void hidden_services_have_no_rows() {
+    Rig rig;
+    rig.frame(0);
+    Expect(rig.cell("Workspace") != nullptr, "Workspace has a row");
+    Expect(rig.cell("Assets") == nullptr, "Assets has no row");
+    Expect(rig.cell("Textures") == nullptr, "Textures has no row");
+    // A Folder in Textures is under a hidden service, so it has no row either.
+    engine_core::Folder& walls = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(walls.id(), "Walls");
+    rig.game.set_parent(walls.id(), rig.game.service("Textures"));
+    rig.frame(1);
+    Expect(rig.cell("Walls") == nullptr, "a Folder in Textures has no row");
+    rig.type_filter("Walls", 1.1);
+    Expect(rig.cell("Walls") == nullptr, "the filter never shows a hidden row");
+}
+
+engine_core::DataModel& CreateTexture(engine_core::DataModel& world) {
+    return world.create<engine_core::Texture>();
+}
+
+void insert_list_leaves_out_assets() {
+    // The engine's registrars are not linked in here, so the class list needs
+    // stand-ins: what makes is unimportant, only whether the class is known.
+    engine_core::register_lua_creatable("Folder", CreateFolder);
+    engine_core::register_lua_creatable("Script", CreateFolder);
+    engine_core::register_lua_creatable("Texture", CreateTexture);
+    engine_core::register_lua_creatable("Mesh", CreateFolder);
+    engine_core::register_lua_creatable("Sound", CreateFolder);
+    engine_core::register_lua_creatable("Material", CreateFolder);
+    engine_core::register_lua_creatable("Prefab", CreateFolder);
+    engine_core::register_lua_creatable("Model", CreateFolder);
+    Expect(ide::insert_offers("Folder"), "Insert offers Folder");
+    Expect(ide::insert_offers("Script"), "Insert offers Script");
+    for (const char* klass : {"Texture", "Mesh", "Sound", "Material", "Prefab", "Model"}) {
+        Expect(!ide::insert_offers(klass), "Insert leaves out asset classes");
+    }
+}
+
+void insert_refused_leaves_nothing() {
+    engine_core::register_lua_creatable("Folder", CreateFolder);
+    engine_core::register_lua_creatable("Texture", CreateTexture);
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    engine_core::Game game;
+    const std::size_t before = game.room_left();
+    const std::pair<bool, std::string> undo_before = game.history().can_undo();
+    std::string error;
+    const engine_core::InstanceId made = ide::insert_instance(game, "Folder", game.service("Assets"), error);
+    Expect(made == 0, "Assets refuses a Folder");
+    Expect(error == "Assets holds only Materials, Prefabs, Meshes, Textures, and Audio", "and says why");
+    Expect(game.room_left() == before, "nothing is left behind");
+    Expect(game.get_children(game.service("Assets")).size() == 5, "Assets is unchanged");
+    Expect(game.history().can_undo() == undo_before, "a refused insert leaves no undo step");
+
+    error.clear();
+    const engine_core::InstanceId texture = ide::insert_instance(game, "Texture", game.service("Textures"), error);
+    Expect(texture != 0 && error.empty() && game.parent(texture) == game.service("Textures"), "a Texture goes in");
+    const engine_core::InstanceId top = ide::insert_instance(game, "Folder", 0, error);
+    Expect(game.parent(top) == game.service("Workspace"), "the root still means Workspace");
+    engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+}
+
 void TestRevealClearsAHidingFilter() {
     Rig rig;
     rig.clickRow("Alpha", 0.1);
@@ -845,10 +912,6 @@ void TestRevealClearsAHidingFilter() {
     rig.frame(0.31);
     Expect(rig.filter()->getText().empty(), "reveal clears a filter that hides the selection");
     Expect(rig.painted("Alpha"), "the revealed row shows selected");
-}
-
-engine_core::DataModel& CreateFolder(engine_core::DataModel& world) {
-    return world.create<engine_core::Folder>();
 }
 
 // An insert the studio could not make, as in a full place, says why.
@@ -957,6 +1020,9 @@ int main() {
     TestRevealClearsAHidingFilter();
     TestHeaderInsertsUnderTheRoot();
     TestRefusedInsertSaysWhy();
+    hidden_services_have_no_rows();
+    insert_list_leaves_out_assets();
+    insert_refused_leaves_nothing();
     if (gFailures == 0) {
         std::printf("explorer tests passed\n");
         return 0;

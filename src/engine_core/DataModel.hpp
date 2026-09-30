@@ -155,6 +155,9 @@ public:
     std::optional<std::string> parent_error(InstanceId id, InstanceId new_parent) const;
     std::optional<std::string> rename_error(InstanceId id, std::string_view name) const;
     std::optional<std::string> destroy_error(InstanceId id) const;
+    // Why a not-yet-made class_name would be refused under parent, asked before
+    // creating it so a refused insert leaves nothing behind and no undo step.
+    std::optional<std::string> placement_error_for_class(InstanceId parent, std::string_view class_name) const;
 
     // Cut, Paste, Rename, and Delete; the root has no Delete. A subclass appends
     // its own, or inserts a primary one.

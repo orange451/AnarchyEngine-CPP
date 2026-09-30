@@ -1,5 +1,7 @@
 #include "CutSet.hpp"
 
+#include "LuaApi.hpp"
+
 #include <algorithm>
 #include <cstddef>
 #include <optional>
@@ -66,6 +68,35 @@ bool move_set(engine_core::DataModel& world, const std::vector<engine_core::Inst
         any = true;
     }
     return any;
+}
+
+engine_core::InstanceId insert_instance(engine_core::DataModel& world, const std::string& class_name,
+                                        engine_core::InstanceId asked, std::string& error) {
+    // game holds only services, so an insert at the top goes into Workspace.
+    const engine_core::InstanceId parent = asked == 0 ? world.scene_service("Workspace") : asked;
+    if (parent == engine_core::DataModel::kNoParent || (parent != 0 && !world.alive(parent))) {
+        error = "That instance no longer exists";
+        return 0;
+    }
+    if (world.room_left() == 0) {
+        error = engine_core::InstanceCapacityError().what();
+        return 0;
+    }
+    if (!engine_core::lua_creatable_known(class_name.c_str())) {
+        error = "Cannot make a " + class_name;
+        return 0;
+    }
+    if (std::optional<std::string> refused = world.placement_error_for_class(parent, class_name)) {
+        error = std::move(*refused);
+        return 0;
+    }
+    engine_core::DataModel* created = engine_core::lua_create_instance(world, class_name.c_str());
+    if (created == nullptr) {
+        error = "Cannot make a " + class_name;
+        return 0;
+    }
+    world.set_parent(created->id(), parent);
+    return created->id();
 }
 
 }  // namespace ide

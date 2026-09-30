@@ -1,6 +1,7 @@
 #include "InsertPopup.hpp"
 
 #include "ClassFilter.hpp"
+#include "Containment.hpp"
 #include "IdeIcons.hpp"
 #include "IdeTheme.hpp"
 #include "LuaApi.hpp"
@@ -13,6 +14,10 @@
 #include <utility>
 
 namespace ide {
+
+bool insert_offers(const std::string& class_name) {
+    return engine_core::lua_creatable_known(class_name.c_str()) && !engine_core::is_asset_class(class_name);
+}
 
 constexpr int kMaxVisibleRows = 8;
 constexpr double kPopupWidth = 280;
@@ -104,6 +109,9 @@ public:
 
     void showAt(jadefx::Node& anchor) {
         engine_core::lua_creatable_names(all_);
+        all_.erase(std::remove_if(all_.begin(), all_.end(),
+                                  [](const std::string& name) { return !insert_offers(name); }),
+                   all_.end());
         if (field_) {
             field_->setText("");
         }

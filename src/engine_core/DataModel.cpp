@@ -1202,6 +1202,14 @@ std::optional<std::string> DataModel::placement_error_for(InstanceId id, Instanc
     return std::nullopt;
 }
 
+std::optional<std::string> DataModel::placement_error_for_class(InstanceId parent, std::string_view class_name) const {
+    const std::string holder = rule_class(parent, kNoParent, parent);
+    if (holder.empty()) {
+        return std::nullopt;
+    }
+    return placement_error(holder, class_name, class_name);
+}
+
 std::optional<std::string> DataModel::parent_error(InstanceId id, InstanceId new_parent) const {
     if (id == 0) {
         return std::string("game cannot be moved");

@@ -839,6 +839,10 @@ void clear_world(DataModel& world) {
             reset_service(*service);
         }
     }
+    // The camera a view last used belongs to the place being cleared.
+    if (auto* workspace = dynamic_cast<Workspace*>(world.instance(world.scene_service("Workspace")))) {
+        workspace->set_current_camera(0);
+    }
     clear_extras(world, 0);
 }
 

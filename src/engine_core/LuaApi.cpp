@@ -1053,6 +1053,11 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("RunService", "IsRunning", "True while a play session is open, paused or not. False in edit mode.", "boolean",
         false, {});
 
+    add("Workspace", "CurrentCamera",
+        "The Camera the studio's scene view last used, set when you click in a view or pick its camera. Nil when that "
+        "Camera is gone. Not saved.",
+        "Camera", false, {});
+
     return docs;
 }
 

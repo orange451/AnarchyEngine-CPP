@@ -3,6 +3,10 @@
 
 #include "support.hpp"
 
+#include "Camera.hpp"
+#include "ChangeHistoryService.hpp"
+#include "Project.hpp"
+#include "SceneService.hpp"
 #include "UserInputService.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -149,4 +153,65 @@ TEST_CASE("SC7 RunService:IsRunning is true only in a play session", "[SC7]") {
     rig.game.stop_simulation();
     rig.runtime.run_chunk("print(game:GetService('RunService'):IsRunning())");
     REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"true\n", "false\n"});
+}
+
+namespace {
+
+engine_core::Workspace& workspace_service(engine_core::DataModel& game) {
+    auto* workspace = dynamic_cast<engine_core::Workspace*>(game.instance(workspace_of(game)));
+    REQUIRE(workspace != nullptr);
+    return *workspace;
+}
+
+engine_core::Camera& add_camera(engine_core::DataModel& game) {
+    engine_core::Camera& camera = game.create<engine_core::Camera>();
+    game.set_parent(camera.id(), workspace_of(game));
+    return camera;
+}
+
+}  // namespace
+
+TEST_CASE("SC8 CurrentCamera holds a Camera and forgets it when it is gone", "[SC8]") {
+    ScriptRig rig;
+    engine_core::Workspace& workspace = workspace_service(rig.game);
+    engine_core::Camera& camera = add_camera(rig.game);
+    REQUIRE(workspace.current_camera() == 0);
+    REQUIRE(workspace.set_current_camera(camera.id()));
+    REQUIRE(workspace.current_camera() == camera.id());
+    REQUIRE_FALSE(workspace.set_current_camera(workspace_of(rig.game)));
+    REQUIRE(workspace.current_camera() == camera.id());
+
+    rig.runtime.drain_output();
+    rig.runtime.run_chunk("print(workspace.CurrentCamera.ClassName)\nworkspace.CurrentCamera = nil\nprint(workspace.CurrentCamera)");
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"Camera\n", "nil\n"});
+
+    REQUIRE(workspace.set_current_camera(camera.id()));
+    rig.game.destroy(camera.id());
+    REQUIRE(workspace.current_camera() == 0);
+}
+
+TEST_CASE("SC9 a script cannot make CurrentCamera anything but a Camera", "[SC9]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk("workspace.CurrentCamera = workspace");
+    const ScriptRuntime::OutputBatch batch = rig.runtime.drain_output();
+    REQUIRE(batch.lines.size() == 1);
+    REQUIRE(batch.lines[0].kind == ScriptRuntime::OutputKind::Error);
+}
+
+TEST_CASE("SC10 CurrentCamera is not an edit: no undo step, not saved, cleared by a new place", "[SC10]") {
+    ScriptRig rig;
+    engine_core::Camera& camera = add_camera(rig.game);
+    rig.game.history().end_gesture();
+    rig.game.history().reset_waypoints();
+    const std::uint64_t revision = rig.game.authored_revision();
+    const std::uint64_t fingerprint = engine_core::Project::place_fingerprint(rig.game);
+
+    REQUIRE(workspace_service(rig.game).set_current_camera(camera.id()));
+    rig.game.history().end_gesture();
+    REQUIRE_FALSE(rig.game.history().can_undo().first);
+    REQUIRE(rig.game.authored_revision() == revision);
+    REQUIRE(engine_core::Project::place_fingerprint(rig.game) == fingerprint);
+
+    engine_core::Project::reset_place(rig.game);
+    REQUIRE(workspace_service(rig.game).current_camera() == 0);
 }

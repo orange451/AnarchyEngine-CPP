@@ -27,6 +27,7 @@ Instances stay the model scripts, the editor, saving, and undo see. Flecs is the
 | Step and physics order | Unspecified. Nothing relies on it. |
 | Snapshot | Stays incremental: the invalidation queue plus `DenseIdSet` rows; values are read from flecs. |
 | Flecs threads, pipelines, REST, explorer | Off. Flecs never starts a thread. |
+| Windows timer resolution | Unchanged. flecs raises it to 1 ms per world by default; `EcsProcessSetup` clears that flag once, before the first world, since the engine paces frames around the default tick. |
 | Deferred mode | Never used. Loops that run user code iterate a copied id list, not a live query. |
 
 ## Architecture
@@ -34,7 +35,7 @@ Instances stay the model scripts, the editor, saving, and undo see. Flecs is the
 ### The dependency (`CMakeLists.txt`)
 
 1. **`FetchContent` by URL** fetches `distr/flecs.c` and `distr/flecs.h` at tag `v4.1.6`, as `httplib.h` is fetched. A new `cmake/flecs/CMakeLists.txt`, added with `add_subdirectory`, builds the static library `flecs` from the fetched `flecs.c`. In that directory's scope `/RTC1` and `/Od` are removed from `CMAKE_C_FLAGS_DEBUG` and Debug adds `/O2`, so flecs is optimized in every configuration without touching any other target's flags. `flecs` links into `engine_core`.
-2. **Public definitions:** `FLECS_CPP_NO_ENUM_REFLECTION` — required: without it the world constructor asserts (Debug) or segfaults (Release) on MSVC 19.23, whose `__FUNCSIG__` layout flecs' enum reflection misparses. `FLECS_CUSTOM_BUILD` with `FLECS_CPP`, `FLECS_LOG`, and `FLECS_OS_API_IMPL` only. `FLECS_NDEBUG`, or `FLECS_DEBUG` when the cache option `ENGINE_FLECS_CHECKS` is ON (default OFF). `flecs_STATIC` is **not** defined by the build: the amalgamated header defines it, and a second definition warns (C4005).
+2. **Public definitions:** `FLECS_CPP_NO_ENUM_REFLECTION` — required: without it the world constructor asserts (Debug) or segfaults (Release) on MSVC 19.23, whose `__FUNCSIG__` layout flecs' enum reflection misparses. `FLECS_CUSTOM_BUILD` with `FLECS_CPP`, `FLECS_LOG`, and `FLECS_OS_API_IMPL` only. `FLECS_NDEBUG`, or, when the cache option `ENGINE_FLECS_CHECKS` is ON (default OFF), `FLECS_DEBUG` in Debug and `FLECS_NDEBUG` with `FLECS_KEEP_ASSERT` in the other configurations (flecs rejects `FLECS_DEBUG` beside `NDEBUG`). `flecs_STATIC` is **not** defined by the build: the amalgamated header defines it, and a second definition warns (C4005).
 3. **`engine_core/Ecs.hpp`** is the one include of `flecs.h`, wrapped in `#pragma warning(push, 0)` / `#pragma warning(pop)` so engine code stays warning-free at `/W4`. It declares the components and tags, and `EcsIds`, the component and tag ids a world registered, which the hot paths pass to the C API (`ecs_get_id`, `ecs_set_id`, `ecs_has_id`, `ecs_add_id`, `ecs_remove_id`, `ecs_query_iter`, `ecs_query_next`, `ecs_field_w_size`). Nothing outside `engine_core` includes it.
 
 ### World and entities (`DataModel`, `State`)

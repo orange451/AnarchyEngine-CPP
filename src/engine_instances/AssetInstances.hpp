@@ -1,7 +1,10 @@
 #pragma once
 
 #include "DataModel.hpp"
+#include "InstanceRef.hpp"
 
+#include <array>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -52,17 +55,44 @@ public:
     const char* class_name() const override;
 };
 
-// An asset whose properties point at other assets.
-class ReferenceAsset : public DataModel {
-public:
-    ReferenceAsset(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
+// One reference property: its name and the class it holds.
+struct ReferenceSpec {
+    const char* property;
+    const char* klass;
 };
 
-// A PBR material.
+// An asset whose saved properties are references to other assets, held by
+// GUID (InstanceRef). Its subclass lists them once, in reference_specs.
+class ReferenceAsset : public DataModel {
+public:
+    static constexpr std::size_t kMaxReferences = 4;
+
+    ReferenceAsset(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
+
+    // The GUID in text; the live target, if any, in id, with kind Instance, else Nil.
+    LuaSlot reference(std::size_t index) const;
+    // SimulationThread. nil clears. A live instance of the property's class is
+    // stored by GUID; one of another class is refused. A slot naming a GUID
+    // (a load, Stop, or undo) is stored as it is.
+    std::optional<std::string> set_reference(std::size_t index, const LuaSlot& value);
+
+protected:
+    virtual const ReferenceSpec* reference_specs(std::size_t& count) const = 0;
+    void on_reuse() override;
+
+private:
+    std::array<InstanceRef, kMaxReferences> refs_;
+};
+
+// A PBR material: DiffuseTexture, NormalTexture, RoughnessTexture, and
+// MetalnessTexture, each a Texture or nil.
 class Material : public ReferenceAsset {
 public:
     using ReferenceAsset::ReferenceAsset;
     const char* class_name() const override;
+
+protected:
+    const ReferenceSpec* reference_specs(std::size_t& count) const override;
 };
 
 // Joins a Mesh and a Material. Lives only in a Prefab.
@@ -70,6 +100,9 @@ class Model : public ReferenceAsset {
 public:
     using ReferenceAsset::ReferenceAsset;
     const char* class_name() const override;
+
+protected:
+    const ReferenceSpec* reference_specs(std::size_t& count) const override;
 };
 
 // A template made of Models, its only children.

@@ -10,6 +10,7 @@
 #include "GameService.hpp"
 #include "AssetInstances.hpp"
 #include "LuaApi.hpp"
+#include "PropertyReflection.hpp"
 
 #include "support.hpp"
 
@@ -297,4 +298,157 @@ TEST_CASE("GS7 Path is relative to the resources folder, and saves and undoes", 
     REQUIRE_FALSE(brick.set_path("textures/other.png"));
     game.stop_simulation();
     REQUIRE(brick.path() == "textures/brick.png");
+}
+
+namespace {
+
+engine_core::LuaSlot read_field(DataModel& game, InstanceId id, const char* property) {
+    DataModel* object = game.instance(id);
+    const engine_core::LuaField* field = engine_core::lua_class_find(object->class_name(), property);
+    REQUIRE(field != nullptr);
+    engine_core::LuaSlot slot;
+    REQUIRE(field->read(game, *object, slot));
+    return slot;
+}
+
+bool write_field(DataModel& game, InstanceId id, const char* property, engine_core::LuaSlot slot,
+                 std::string* error = nullptr) {
+    DataModel* object = game.instance(id);
+    const engine_core::LuaField* field = engine_core::lua_class_find(object->class_name(), property);
+    REQUIRE(field != nullptr);
+    const bool ok = field->write(game, *object, slot);
+    if (error != nullptr) {
+        *error = slot.error;
+    }
+    return ok;
+}
+
+engine_core::LuaSlot instance_slot(InstanceId id) {
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = id;
+    return slot;
+}
+
+}  // namespace
+
+TEST_CASE("GS8 a reference takes its class, saves as a GUID, and reads the live target", "[GS8]") {
+    SimRole role;
+    Game game;
+    const InstanceId brick = make(game, "Texture", "Brick", game.service("Textures"));
+    const InstanceId rock = make(game, "Mesh", "Rock", game.service("Meshes"));
+    const InstanceId mat = make(game, "Material", "Wall", game.service("Materials"));
+
+    REQUIRE(engine_core::reference_class("Texture?") == "Texture");
+    REQUIRE(engine_core::reference_class("Texture").empty());
+    REQUIRE(engine_core::reference_class("number").empty());
+
+    // nil by default, and a default saves nothing.
+    REQUIRE(read_field(game, mat, "DiffuseTexture").kind == engine_core::LuaSlot::Kind::Nil);
+    engine_core::PropertyBag saved;
+    game.instance(mat)->save_properties(saved);
+    REQUIRE(saved.empty());
+
+    std::string error;
+    REQUIRE_FALSE(write_field(game, mat, "DiffuseTexture", instance_slot(rock), &error));
+    REQUIRE(error == "DiffuseTexture must be a Texture");
+    REQUIRE(write_field(game, mat, "DiffuseTexture", instance_slot(brick)));
+    const engine_core::LuaSlot read = read_field(game, mat, "DiffuseTexture");
+    REQUIRE(read.kind == engine_core::LuaSlot::Kind::Instance);
+    REQUIRE(read.id == brick);
+    REQUIRE(read.text == game.guid(brick));
+
+    game.instance(mat)->save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "DiffuseTexture")->as_string() == game.guid(brick));
+
+    // A load names the target by GUID, which need not exist yet.
+    Game other;
+    const InstanceId copy = make(other, "Material", "Wall", other.service("Materials"));
+    std::string load_error;
+    REQUIRE(other.instance(copy)->load_property("DiffuseTexture", engine_core::JsonValue::string("zzzz"),
+                                                load_error));
+    REQUIRE(load_error.empty());
+    const engine_core::LuaSlot dangling = read_field(other, copy, "DiffuseTexture");
+    REQUIRE(dangling.kind == engine_core::LuaSlot::Kind::Nil);
+    REQUIRE(dangling.text == "zzzz");
+    // It saves back as it was read.
+    engine_core::PropertyBag kept;
+    other.instance(copy)->save_properties(kept);
+    REQUIRE(engine_core::bag_find(kept, "DiffuseTexture")->as_string() == "zzzz");
+    // Once an instance holds that GUID, the reference finds it.
+    const InstanceId late = make(other, "Texture", "Late", other.service("Textures"));
+    other.set_guid(late, "zzzz");
+    REQUIRE(read_field(other, copy, "DiffuseTexture").id == late);
+
+    // null clears.
+    REQUIRE(other.instance(copy)->load_property("DiffuseTexture", engine_core::JsonValue(), load_error));
+    REQUIRE(read_field(other, copy, "DiffuseTexture").text.empty());
+
+    // Model's two references.
+    const InstanceId crate = make(game, "Prefab", "Crate", game.service("Prefabs"));
+    const InstanceId body = make(game, "Model", "Body", crate);
+    REQUIRE(write_field(game, body, "Mesh", instance_slot(rock)));
+    REQUIRE(write_field(game, body, "Material", instance_slot(mat)));
+    REQUIRE_FALSE(write_field(game, body, "Material", instance_slot(brick), &error));
+    REQUIRE(error == "Material must be a Material");
+}
+
+TEST_CASE("GS9 a reference to a destroyed asset reads nil, and undo brings it back", "[GS9]") {
+    SimRole role;
+    Game game;
+    const InstanceId brick = make(game, "Texture", "Brick", game.service("Textures"));
+    const InstanceId mat = make(game, "Material", "Wall", game.service("Materials"));
+    // Close the implicit gesture the two creates opened, so it does not
+    // absorb the property change below into the same undo step.
+    game.history().end_gesture();
+    game.history().set_pending_gesture("Set DiffuseTexture");
+    REQUIRE(write_field(game, mat, "DiffuseTexture", instance_slot(brick)));
+    game.history().end_gesture();
+    REQUIRE(game.history().can_undo().second == "Set DiffuseTexture");
+
+    game.history().set_pending_gesture("Delete");
+    game.destroy_tree(brick);
+    game.history().end_gesture();
+    REQUIRE(read_field(game, mat, "DiffuseTexture").kind == engine_core::LuaSlot::Kind::Nil);
+
+    game.history().undo();
+    REQUIRE(game.alive(brick));
+    REQUIRE(read_field(game, mat, "DiffuseTexture").id == brick);
+
+    game.history().undo();
+    REQUIRE(read_field(game, mat, "DiffuseTexture").kind == engine_core::LuaSlot::Kind::Nil);
+    game.history().redo();
+    REQUIRE(read_field(game, mat, "DiffuseTexture").id == brick);
+}
+
+TEST_CASE("GS10 Stop restores references and drops assets made in play", "[GS10]") {
+    ScriptRig rig;
+    DataModel& game = rig.game;
+    const InstanceId brick = make(game, "Texture", "Brick", game.service("Textures"));
+    const InstanceId mat = make(game, "Material", "Wall", game.service("Materials"));
+    REQUIRE(write_field(game, mat, "DiffuseTexture", instance_slot(brick)));
+    add_script(game, "Play", R"(
+        local wall = game.Assets.Materials.Wall
+        _G.reads = wall.DiffuseTexture == game.Assets.Textures.Brick
+        local made = Instance.new("Texture")
+        made.Name = "Made"
+        made.Parent = game.Assets.Textures
+        wall.NormalTexture = made
+        wall.DiffuseTexture = nil
+        _G.refused = not pcall(function() wall.RoughnessTexture = workspace end)
+        _G.done = wall.NormalTexture == made and wall.DiffuseTexture == nil
+    )");
+    game.start_simulation();
+    rig.frames(1, 0.05);
+    for (const char* name : {"reads", "refused", "done"}) {
+        bool value = false;
+        INFO(name);
+        INFO(rig.runtime.last_error());
+        REQUIRE(rig.runtime.global_boolean(name, value));
+        REQUIRE(value);
+    }
+    game.stop_simulation();
+    REQUIRE(read_field(game, mat, "DiffuseTexture").id == brick);
+    REQUIRE(read_field(game, mat, "NormalTexture").kind == engine_core::LuaSlot::Kind::Nil);
+    REQUIRE(game.get_children(game.service("Textures")).size() == 1);
 }

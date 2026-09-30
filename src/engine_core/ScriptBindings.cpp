@@ -10,6 +10,7 @@
 #include "LuaUserdata.hpp"
 #include "LuauSandbox.hpp"
 #include "ModuleScript.hpp"
+#include "PropertyReflection.hpp"
 #include "Script.hpp"
 #include "SelectionService.hpp"
 #include "UserInputService.hpp"
@@ -368,7 +369,8 @@ int ScriptBindings::instance_newindex(lua_State* state) {
         } else if (type == "number") {
             slot.kind = LuaSlot::Kind::Number;
             slot.number = luaL_checknumber(state, 3);
-        } else if (type == "Instance" || type == "Instance?" || type == "DataModel" || type == "DataModel?") {
+        } else if (type == "Instance" || type == "Instance?" || type == "DataModel" || type == "DataModel?" ||
+                   !reference_class(type).empty()) {
             if (lua_isnil(state, 3)) {
                 slot.kind = LuaSlot::Kind::Nil;
             } else {

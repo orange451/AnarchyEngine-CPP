@@ -127,6 +127,8 @@ private:
     // Takes every id out of the place as one undo step. A selected child of a
     // selected instance goes with its ancestor.
     void cut(const std::vector<std::uint32_t>& ids);
+    void copy(const std::vector<std::uint32_t>& ids);
+    void duplicate(const std::vector<std::uint32_t>& ids);
     // Destroys each id and its descendants as one undo step.
     void delete_instances(std::vector<std::uint32_t> ids);
     void paste(std::uint32_t id);
@@ -213,6 +215,7 @@ private:
     // Cmd+Shift+F and Cmd+Shift+H in a window whose menu bar does not take them.
     void routeSearch(jadefx::KeyEvent& event, jadefx::Scene& scene);
     void routeZoom(jadefx::KeyEvent& event);
+    void routeClipboard(jadefx::KeyEvent& event, jadefx::Scene& scene);
     void set_zoom(double zoom);
     // Docks the Search pane, or brings it forward, and focuses its find field or,
     // with replace, its replace field. Docked without replace, it starts with

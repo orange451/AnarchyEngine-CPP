@@ -656,6 +656,41 @@ void TestMoveSet() {
     Expect(refused == "Workspace cannot be moved", "and move_set says why too");
 }
 
+engine_core::DataModel& CreateFolder(engine_core::DataModel& world);
+
+void TestCopySet() {
+    engine_core::register_lua_creatable("Folder", CreateFolder);
+    engine_core::Game game;
+    const engine_core::InstanceId workspace = game.scene_service("Workspace");
+    engine_core::Folder& outer = game.create<engine_core::Folder>();
+    game.set_name(outer.id(), "Outer");
+    game.set_parent(outer.id(), workspace);
+    engine_core::Folder& inner = game.create<engine_core::Folder>();
+    game.set_name(inner.id(), "Inner");
+    game.set_parent(inner.id(), outer.id());
+    game.set_extra_property(inner.id(), "Tag", engine_core::JsonValue::string("kept"));
+
+    const std::vector<ide::CopiedNode> copies = ide::copy_set(game, {inner.id(), outer.id()});
+    Expect(copies.size() == 1 && copies.front().name == "Outer" && copies.front().children.size() == 1,
+           "a copy of a parent carries its selected child once");
+
+    std::vector<engine_core::InstanceId> made;
+    Expect(ide::paste_copies(game, copies, workspace, &made), "paste_copies pastes");
+    Expect(made.size() == 1 && made.front() != outer.id(), "a paste makes a new instance");
+    const std::vector<engine_core::InstanceId> kids = made.empty() ? std::vector<engine_core::InstanceId>{}
+                                                                   : game.get_children(made.front());
+    Expect(!made.empty() && game.name(made.front()) == "Outer", "the copy keeps the name");
+    Expect(kids.size() == 1 && game.name(kids.front()) == "Inner", "the copy keeps its children");
+    const engine_core::JsonValue* tag = kids.empty() ? nullptr : engine_core::bag_find(game.extra_properties(kids.front()), "Tag");
+    Expect(tag != nullptr && tag->as_string() == "kept", "the copy keeps properties");
+    Expect(game.get_children(outer.id()).size() == 1, "the original is untouched");
+
+    made.clear();
+    Expect(ide::paste_copies(game, copies, inner.id(), &made) && made.size() == 1,
+           "the same copy pastes again, even inside the original");
+    Expect(ide::copy_set(game, {workspace, 0}).empty(), "the root and scene services are not copied");
+}
+
 // Alpha holds Inner, which holds Deep.
 engine_core::InstanceId NestDeep(Rig& rig) {
     engine_core::Folder& inner = rig.game.create<engine_core::Folder>();
@@ -945,6 +980,7 @@ int main() {
     TestDragCarriesTheSelection();
     TestDragRefusesItsOwnChild();
     TestMoveSet();
+    TestCopySet();
     TestFilterHidesOtherRows();
     TestFilterShowsTheWayToAMatch();
     TestFilterEscapeLeavesTheField();

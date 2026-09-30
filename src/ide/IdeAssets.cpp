@@ -952,7 +952,7 @@ void IdeAssets::show_empty_menu(double x, double y) {
     }
     menu_ = jadefx::make<jadefx::Menu>();
     const bool can_insert = static_cast<bool>(host_.actions.insert);
-    // Offered in every folder; the placement rules refuse a Folder in a Prefab with a toast.
+    // Offered in every folder.
     std::vector<std::string> classes = {"Folder"};
     if (!kind.empty() && kind != "Folder") {
         classes.push_back(kind);
@@ -1315,7 +1315,7 @@ void IdeAssets::rebuild_preview() {
     const engine_core::InstanceId id = selected_.front();
     engine_core::DataModel* object = world_.instance(id);
     const auto shown = std::find_if(rows_.begin(), rows_.end(), [id](const AssetRow& row) { return row.id == id; });
-    // A single selected asset in the folder shown; a Folder or Prefab has its own column instead.
+    // A single selected asset in the folder shown; a Folder has its own column instead.
     if (object == nullptr || shown == rows_.end() || shown->opens) {
         return;
     }
@@ -1452,7 +1452,7 @@ void IdeAssets::clicked(const AssetRow& row, const jadefx::MouseEvent& event) {
     if (view_ != AssetView::Columns || !plain) {
         return;
     }
-    // In Columns, selecting a Folder or Prefab opens its column, and selecting
+    // In Columns, selecting a Folder opens its column, and selecting
     // an asset in an earlier column closes the columns after it.
     if (row.opens) {
         openFolder(row.id);

@@ -518,19 +518,50 @@ void pane_follows_tree() {
 
 void insert_through_pane() {
     Rig rig;
-    const InstanceId crate = rig.make("Prefab", "Crate", rig.game.service("Prefabs"));
-    rig.pane->openFolder(rig.game.service("Prefabs"));
-    rig.pane->openFolder(crate);
+    const InstanceId prefabs = rig.game.service("Prefabs");
+    rig.pane->openFolder(prefabs);
     rig.frame(0);
     rig.rightClickEmpty(0.1);
-    Expect(rig.menuItem("New Model") != nullptr, "a Prefab offers New Model");
+    Expect(rig.menuItem("New Prefab") != nullptr, "Prefabs offers New Prefab");
     rig.clickMenu("New Folder");
-    Expect((rig.inserts == std::vector<std::pair<std::string, InstanceId>>{{"Folder", crate}}),
-           "New Folder inserts a Folder in the Prefab");
+    Expect((rig.inserts == std::vector<std::pair<std::string, InstanceId>>{{"Folder", prefabs}}),
+           "New Folder inserts a Folder in the folder shown");
+}
+
+// A Prefab is one item: it does not open, and its Models show nowhere.
+void prefab_hides_its_models() {
+    Rig rig("list");
+    const InstanceId prefabs = rig.game.service("Prefabs");
+    const InstanceId crate = rig.make("Prefab", "Crate", prefabs);
+    const InstanceId lid = rig.make("Model", "Lid", crate);
+    rig.pane->openFolder(prefabs);
+    rig.frame(0);
+    Expect(!rig.pane->openFolder(crate), "a Prefab does not open");
+    Expect(rig.pane->browser().folder() == prefabs, "the folder shown stays Prefabs");
+    jadefx::Node* row = rig.pane->itemNode(crate);
+    Expect(row != nullptr, "the Prefab has a row");
+    const std::vector<jadefx::Node*> disclosures =
+        row != nullptr ? row->getElementsByClassName("assets-disclosure") : std::vector<jadefx::Node*>{};
+    Expect(disclosures.size() == 1 && dynamic_cast<jadefx::Labeled*>(disclosures.front())->getGraphic() == nullptr,
+           "the Prefab's row has no disclosure");
+    rig.clickItem(crate, 0.1, 2);
     rig.frame(0.2);
-    Expect((rig.notices == std::vector<std::string>{"A Prefab holds only Models"}), "the refusal is a notice");
-    Expect(rig.game.get_children(crate).empty(), "nothing is left in the Prefab");
-    Expect(!rig.editing(), "nothing is renamed");
+    Expect(rig.pane->browser().folder() == prefabs, "a double-click does not open it");
+    Expect(rig.pane->itemNode(lid) == nullptr, "its Model has no row");
+
+    rig.pane->searchField().setText("lid");
+    rig.frame(0.3);
+    Expect(rig.pane->itemNode(lid) == nullptr, "search does not find its Model");
+    rig.pane->searchField().setText("crate");
+    rig.frame(0.4);
+    Expect(rig.pane->itemNode(crate) != nullptr, "search finds the Prefab");
+
+    rig.pane->setView(ide::AssetView::Columns);
+    rig.frame(0.5);
+    rig.clickItem(crate, 0.6);
+    rig.frame(0.7);
+    Expect(rig.pane->browser().folder() == prefabs, "in Columns, selecting it opens no column");
+    Expect(rig.pane->itemNode(lid) == nullptr, "its Model has no row in Columns");
 }
 
 void prefab_menu_offers_add_as_game_object() {
@@ -638,6 +669,7 @@ int main() {
     search_filters();
     pane_follows_tree();
     insert_through_pane();
+    prefab_hides_its_models();
     prefab_menu_offers_add_as_game_object();
     up_goes_up_one_level();
     status_counts_only_shown();

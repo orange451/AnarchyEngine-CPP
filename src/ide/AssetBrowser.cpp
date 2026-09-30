@@ -72,7 +72,7 @@ AssetRow AssetBrowser::row_of(engine_core::InstanceId id, int depth) const {
     if (const auto* file = dynamic_cast<const engine_core::FileAsset*>(object)) {
         row.path = file->path();
     }
-    row.opens = row.class_name == "Folder" || row.class_name == "Prefab";
+    row.opens = row.class_name == "Folder";
     row.expanded = expanded_.count(id) != 0;
     return row;
 }
@@ -83,8 +83,9 @@ bool AssetBrowser::can_open(engine_core::InstanceId id) const {
         return false;
     }
     const std::string klass = object->class_name();
-    const bool container = klass == "Folder" || klass == "Prefab" ||
-                            (object->is_service() && world_.parent(id) == world_.service("Assets"));
+    // A Prefab does not open: its Models are not shown.
+    const bool container =
+        klass == "Folder" || (object->is_service() && world_.parent(id) == world_.service("Assets"));
     if (!container) {
         return false;
     }
@@ -285,7 +286,7 @@ void collect_search(const engine_core::DataModel& world, engine_core::InstanceId
             if (const auto* file = dynamic_cast<const engine_core::FileAsset*>(object)) {
                 row.path = file->path();
             }
-            row.opens = row.class_name == "Folder" || row.class_name == "Prefab";
+            row.opens = row.class_name == "Folder";
             std::string joined;
             for (std::size_t i = 0; i < next_where.size(); ++i) {
                 if (i != 0) {
@@ -296,7 +297,10 @@ void collect_search(const engine_core::DataModel& world, engine_core::InstanceId
             row.where = joined;
             out.push_back(row);
         }
-        collect_search(world, id, lower, next_where, out);
+        // A Prefab's Models are not shown, so they are not found either.
+        if (std::string_view(object->class_name()) != "Prefab") {
+            collect_search(world, id, lower, next_where, out);
+        }
     }
 }
 
@@ -345,9 +349,6 @@ std::string AssetBrowser::new_kind() const {
     const engine_core::DataModel* object = world_.instance(folder_);
     if (object == nullptr) {
         return {};
-    }
-    if (std::string(object->class_name()) == "Prefab") {
-        return "Model";
     }
     // The category above: its asset class is the one whose home it is.
     engine_core::InstanceId at = folder_;

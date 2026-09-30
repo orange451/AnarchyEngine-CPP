@@ -11,8 +11,14 @@ target_include_directories(flecs PUBLIC "${FLECS_SOURCE_DIR}")
 # the engine uses; flecs starts no threads and serves nothing.
 target_compile_definitions(flecs PUBLIC
     FLECS_CPP_NO_ENUM_REFLECTION FLECS_CUSTOM_BUILD FLECS_CPP FLECS_LOG FLECS_OS_API_IMPL)
+# flecs refuses FLECS_DEBUG beside NDEBUG, which every non-Debug configuration
+# defines. So checks are FLECS_DEBUG in Debug and FLECS_KEEP_ASSERT (asserts
+# kept under FLECS_NDEBUG) in the others.
 if(ENGINE_FLECS_CHECKS)
-    target_compile_definitions(flecs PUBLIC FLECS_DEBUG)
+    target_compile_definitions(flecs PUBLIC
+        $<$<CONFIG:Debug>:FLECS_DEBUG>
+        $<$<NOT:$<CONFIG:Debug>>:FLECS_NDEBUG>
+        $<$<NOT:$<CONFIG:Debug>>:FLECS_KEEP_ASSERT>)
 else()
     target_compile_definitions(flecs PUBLIC FLECS_NDEBUG)
 endif()

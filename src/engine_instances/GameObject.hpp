@@ -1,6 +1,10 @@
 #pragma once
 
 #include "DataModel.hpp"
+#include "InstanceRef.hpp"
+
+#include <optional>
+#include <string>
 
 namespace engine_core {
 
@@ -23,6 +27,12 @@ public:
     ColorRgb color() const;
     bool copy_size(float out[3]) const;
 
+    // Nil by default. A write of another live instance whose class inherits
+    // Prefab is stored by GUID; any other is refused. Held like Material's
+    // references, through DataModel::set_instance_reference.
+    LuaSlot prefab() const;
+    std::optional<std::string> set_prefab(const LuaSlot& value);
+
     // Transform, Color, and Size when they differ from a new GameObject.
     void save_properties(PropertyBag& out) const override;
     void default_properties(PropertyBag& out) const override;
@@ -44,6 +54,7 @@ private:
     ColorRgb color_{};
     float size_[3] = {1.f, 1.f, 1.f};
     float velocity_[3] = {};
+    InstanceRef prefab_ref_;
 };
 
 }  // namespace engine_core

@@ -56,6 +56,7 @@ struct Rig {
     std::vector<std::pair<InstanceId, std::string>> renames;
     std::vector<std::pair<std::string, InstanceId>> runs;
     std::vector<std::pair<std::string, std::vector<InstanceId>>> batches;
+    std::vector<InstanceId> added_as_game_object;
     int moves = 0;
     std::string saved;
     std::vector<std::string> saves;
@@ -96,6 +97,7 @@ struct Rig {
             ++moves;
             ide::move_set(game, moved, parent);
         };
+        host.add_as_game_object = [this](InstanceId prefab) { added_as_game_object.push_back(prefab); };
         host.saved_view = [this] { return saved; };
         host.save_view = [this](const std::string& view) { saves.push_back(view); };
         pane = jadefx::make<ide::IdeAssets>(game, std::move(host));
@@ -510,6 +512,23 @@ void insert_through_pane() {
     Expect(!rig.editing(), "nothing is renamed");
 }
 
+void prefab_menu_offers_add_as_game_object() {
+    Rig rig;
+    rig.pane->openFolder(rig.textures);
+    rig.frame(0);
+    rig.rightClickItem(rig.brick, 0.1);
+    Expect(rig.menuItem("Add as GameObject") == nullptr, "a Texture's menu has no such item");
+
+    const InstanceId statue = rig.make("Prefab", "Statue", rig.game.service("Prefabs"));
+    rig.pane->openFolder(rig.game.service("Prefabs"));
+    rig.frame(1.0);
+    rig.rightClickItem(statue, 1.1);
+    Expect(rig.menuItem("Add as GameObject") != nullptr, "a Prefab's menu offers Add as GameObject");
+    rig.clickMenu("Add as GameObject");
+    Expect(rig.added_as_game_object == std::vector<InstanceId>{statue},
+           "choosing it calls the host with the right-clicked Prefab");
+}
+
 void up_goes_up_one_level() {
     Rig rig;
     rig.pane->openFolder(rig.textures);
@@ -554,6 +573,7 @@ int main() {
     search_filters();
     pane_follows_tree();
     insert_through_pane();
+    prefab_menu_offers_add_as_game_object();
     up_goes_up_one_level();
     status_counts_only_shown();
     if (gFailures == 0) {

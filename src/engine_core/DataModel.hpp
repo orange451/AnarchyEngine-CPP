@@ -2,6 +2,7 @@
 
 #include "Contract.hpp"
 #include "Events.hpp"
+#include "InstanceRef.hpp"
 #include "InvalidationQueue.hpp"
 #include "PropertyBag.hpp"
 #include "types.hpp"
@@ -406,6 +407,17 @@ protected:
     // value is stored. Records undo, which puts values back through the
     // property's write, and fires Changed with the property's name.
     void note_property_change(std::string_view property, const LuaSlot& before, const LuaSlot& after);
+
+    // The GUID in text; the live target, if any, in id, with kind Instance, else Nil.
+    LuaSlot instance_reference_slot(const InstanceRef& ref) const;
+    // Shared logic for a saved reference property held by an InstanceRef, as
+    // Material's DiffuseTexture and GameObject's Prefab both use. nil clears; a
+    // live instance whose class inherits klass is stored by GUID; one of
+    // another class is refused as "<property> must be a <klass>"; a slot
+    // naming a GUID (a load, Stop, or undo) is stored as it is. Calls
+    // note_property_change and returns nullopt on success.
+    std::optional<std::string> set_instance_reference(std::string_view property, const char* klass, InstanceRef& ref,
+                                                       const LuaSlot& value);
 
     // Subclass bytes stored in the place snapshot. The base stores the class's
     // saved registry properties, so Stop puts them back; a class that has none

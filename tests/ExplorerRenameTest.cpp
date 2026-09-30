@@ -8,6 +8,7 @@
 #include "DataModel.hpp"
 #include "Folder.hpp"
 #include "Game.hpp"
+#include "GameObject.hpp"
 #include "LuaApi.hpp"
 #include "jadefx/jadefx.hpp"
 
@@ -903,6 +904,46 @@ void insert_refused_leaves_nothing() {
     engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
 }
 
+void add_prefab_instance_places_named_game_object() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    engine_core::Game game;
+    const engine_core::InstanceId statue = game.create<engine_core::Prefab>().id();
+    game.set_name(statue, "Statue");
+    game.set_parent(statue, game.service("Prefabs"));
+    const engine_core::InstanceId brick = game.create<engine_core::Texture>().id();
+    game.set_name(brick, "Brick");
+    game.set_parent(brick, game.service("Textures"));
+
+    std::string error;
+    const engine_core::InstanceId made = ide::add_prefab_instance(game, statue, error);
+    Expect(made != 0 && error.empty(), "a Prefab is added as a GameObject");
+    Expect(game.name(made) == "Statue", "named after the Prefab");
+    Expect(game.parent(made) == game.service("Workspace"), "placed in Workspace");
+    Expect(dynamic_cast<engine_core::GameObject*>(game.instance(made)) != nullptr, "it is a GameObject");
+    const engine_core::LuaField* field = engine_core::lua_class_find("GameObject", "Prefab");
+    Expect(field != nullptr, "GameObject has a Prefab property");
+    if (field != nullptr) {
+        engine_core::LuaSlot slot;
+        Expect(field->read(game, *game.instance(made), slot) && slot.id == statue, "Prefab is set");
+    }
+
+    const std::size_t before_texture = game.room_left();
+    error.clear();
+    const engine_core::InstanceId refused_texture = ide::add_prefab_instance(game, brick, error);
+    Expect(refused_texture == 0 && error == "Only a Prefab can be added as a GameObject",
+           "a Texture is refused with its own message");
+    Expect(game.room_left() == before_texture, "nothing is left behind");
+
+    const engine_core::InstanceId gone = game.create<engine_core::Folder>().id();
+    game.destroy(gone);
+    const std::size_t before_dead = game.room_left();
+    error.clear();
+    const engine_core::InstanceId refused_dead = ide::add_prefab_instance(game, gone, error);
+    Expect(refused_dead == 0 && error == "That instance no longer exists", "a dead id is refused");
+    Expect(game.room_left() == before_dead, "nothing is left behind");
+    engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+}
+
 void TestRevealClearsAHidingFilter() {
     Rig rig;
     rig.clickRow("Alpha", 0.1);
@@ -1023,6 +1064,7 @@ int main() {
     hidden_services_have_no_rows();
     insert_list_leaves_out_assets();
     insert_refused_leaves_nothing();
+    add_prefab_instance_places_named_game_object();
     if (gFailures == 0) {
         std::printf("explorer tests passed\n");
         return 0;

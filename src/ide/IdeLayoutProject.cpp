@@ -52,6 +52,20 @@ std::shared_ptr<IdePane> IdeLayout::make_assets() {
         std::string error;
         preferences_.save(error);
     };
+    host.add_as_game_object = [this](engine_core::InstanceId prefab) {
+        runner_.simulation().on_simulation(
+            [this, alive = std::weak_ptr<int>(alive_), prefab](engine_core::DataModel& world) {
+                world.history().set_pending_gesture("Add as GameObject");
+                std::string error;
+                const engine_core::InstanceId made = add_prefab_instance(world, prefab, error);
+                CloseGesture(world);
+                if (made == 0) {
+                    toast_later(this, alive, std::move(error));
+                    return;
+                }
+                world.selection().set({made});
+            });
+    };
     auto pane = jadefx::make<IdeAssets>(runner_.simulation().datamodel(), std::move(host));
     pane->setIconFile("AssetFolder.png");
     return pane;

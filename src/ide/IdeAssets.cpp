@@ -867,6 +867,16 @@ void IdeAssets::show_item_menu(const AssetRow& row, double x, double y) {
     }
     menu_ = jadefx::make<jadefx::Menu>();
     const engine_core::InstanceId id = row.id;
+    if (row.class_name == "Prefab") {
+        auto add_as_game_object = jadefx::make<jadefx::MenuItem>("Add as GameObject");
+        add_as_game_object->setDisable(!static_cast<bool>(host_.add_as_game_object));
+        add_as_game_object->setOnAction([this, id](jadefx::ActionEvent&) {
+            if (host_.add_as_game_object) {
+                host_.add_as_game_object(id);
+            }
+        });
+        menu_->getItems().add(std::move(add_as_game_object));
+    }
     // Paste goes into the item when it holds things, else beside it.
     const engine_core::InstanceId paste_into = row.opens ? row.id : browser_.folder();
     for (const InstanceAction action :

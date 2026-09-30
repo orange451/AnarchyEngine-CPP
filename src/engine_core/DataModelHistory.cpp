@@ -148,6 +148,42 @@ void DataModel::note_property_change(std::string_view property, const LuaSlot& b
     emit_change(id_, Field::Reflected, current_origin(), id);
 }
 
+LuaSlot DataModel::instance_reference_slot(const InstanceRef& ref) const {
+    LuaSlot slot;
+    slot.text = ref.guid();
+    slot.id = ref.resolve(*this);
+    slot.kind = slot.id != 0 ? LuaSlot::Kind::Instance : LuaSlot::Kind::Nil;
+    return slot;
+}
+
+std::optional<std::string> DataModel::set_instance_reference(std::string_view property, const char* klass,
+                                                              InstanceRef& ref, const LuaSlot& value) {
+    const std::string refused = std::string(property) + " must be a " + klass;
+    std::string guid;
+    if (value.kind == LuaSlot::Kind::Instance && value.id != 0 && alive(value.id)) {
+        const DataModel* target = instance(value.id);
+        if (target == nullptr || !lua_class_inherits(target->class_name(), klass)) {
+            return refused;
+        }
+        guid = this->guid(value.id);
+    } else if (value.kind == LuaSlot::Kind::Nil) {
+        guid = value.text;
+    } else if (value.kind == LuaSlot::Kind::Instance && !value.text.empty()) {
+        guid = value.text;
+    } else if (value.kind == LuaSlot::Kind::Instance) {
+        return std::string("That instance no longer exists");
+    } else {
+        return refused;
+    }
+    if (guid == ref.guid()) {
+        return std::nullopt;
+    }
+    const LuaSlot before = instance_reference_slot(ref);
+    ref.set_guid(std::move(guid));
+    note_property_change(property, before, instance_reference_slot(ref));
+    return std::nullopt;
+}
+
 void DataModel::record_parent(InstanceId id, InstanceId old_parent, InstanceId new_parent, int old_index) {
     // The child's path moves. Each parent's child order, and whether it is a
     // folder or a leaf, may change.

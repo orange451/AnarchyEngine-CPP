@@ -21,6 +21,8 @@ struct AssetsHost {
     ExplorerHost actions;
     std::function<std::string()> saved_view;
     std::function<void(const std::string&)> save_view;
+    // Puts a GameObject in Workspace linked to the Prefab prefab, and selects it.
+    std::function<void(engine_core::InstanceId prefab)> add_as_game_object;
 };
 
 // A Finder-like browser of the Assets tree. The toolbar holds back and forward,

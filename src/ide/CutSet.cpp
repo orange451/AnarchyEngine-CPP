@@ -1,5 +1,7 @@
 #include "CutSet.hpp"
 
+#include "AssetInstances.hpp"
+#include "GameObject.hpp"
 #include "LuaApi.hpp"
 
 #include <algorithm>
@@ -97,6 +99,30 @@ engine_core::InstanceId insert_instance(engine_core::DataModel& world, const std
     }
     world.set_parent(created->id(), parent);
     return created->id();
+}
+
+engine_core::InstanceId add_prefab_instance(engine_core::DataModel& world, engine_core::InstanceId prefab,
+                                            std::string& error) {
+    if (!world.alive(prefab)) {
+        error = "That instance no longer exists";
+        return 0;
+    }
+    if (dynamic_cast<engine_core::Prefab*>(world.instance(prefab)) == nullptr) {
+        error = "Only a Prefab can be added as a GameObject";
+        return 0;
+    }
+    if (world.room_left() == 0) {
+        error = engine_core::InstanceCapacityError().what();
+        return 0;
+    }
+    engine_core::GameObject& object = world.create<engine_core::GameObject>();
+    world.set_name(object.id(), world.name(prefab));
+    world.set_parent(object.id(), world.scene_service("Workspace"));
+    engine_core::LuaSlot value;
+    value.kind = engine_core::LuaSlot::Kind::Instance;
+    value.id = prefab;
+    object.set_prefab(value);
+    return object.id();
 }
 
 }  // namespace ide

@@ -83,14 +83,10 @@ const ReferenceSpec* Model::reference_specs(std::size_t& count) const {
 }
 
 LuaSlot ReferenceAsset::reference(std::size_t index) const {
-    LuaSlot slot;
     if (index >= kMaxReferences) {
-        return slot;
+        return LuaSlot();
     }
-    slot.text = refs_[index].guid();
-    slot.id = refs_[index].resolve(*this);
-    slot.kind = slot.id != 0 ? LuaSlot::Kind::Instance : LuaSlot::Kind::Nil;
-    return slot;
+    return instance_reference_slot(refs_[index]);
 }
 
 std::optional<std::string> ReferenceAsset::set_reference(std::size_t index, const LuaSlot& value) {
@@ -103,30 +99,7 @@ std::optional<std::string> ReferenceAsset::set_reference(std::size_t index, cons
         contract_fail("no such reference");
     }
     const ReferenceSpec& spec = specs[index];
-    const std::string refused = std::string(spec.property) + " must be a " + spec.klass;
-    std::string guid;
-    if (value.kind == LuaSlot::Kind::Instance && value.id != 0 && alive(value.id)) {
-        const DataModel* target = instance(value.id);
-        if (target == nullptr || !lua_class_inherits(target->class_name(), spec.klass)) {
-            return refused;
-        }
-        guid = this->guid(value.id);
-    } else if (value.kind == LuaSlot::Kind::Nil) {
-        guid = value.text;
-    } else if (value.kind == LuaSlot::Kind::Instance && !value.text.empty()) {
-        guid = value.text;
-    } else if (value.kind == LuaSlot::Kind::Instance) {
-        return std::string("That instance no longer exists");
-    } else {
-        return refused;
-    }
-    if (guid == refs_[index].guid()) {
-        return std::nullopt;
-    }
-    const LuaSlot before = reference(index);
-    refs_[index].set_guid(std::move(guid));
-    note_property_change(spec.property, before, reference(index));
-    return std::nullopt;
+    return set_instance_reference(spec.property, spec.klass, refs_[index], value);
 }
 
 void ReferenceAsset::on_reuse() {

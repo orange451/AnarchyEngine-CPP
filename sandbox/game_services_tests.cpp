@@ -659,3 +659,83 @@ TEST_CASE("GS16 apply_disk reorders assets directly under a category, but Assets
     REQUIRE(child_classes(game, game.service("Assets")) ==
             std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio"});
 }
+
+TEST_CASE("GS17 GameObject.Prefab is nil by default, takes a Prefab, undoes, and Stop restores it", "[GS17]") {
+    ScriptRig rig;
+    DataModel& game = rig.game;
+    const InstanceId statue = make(game, "Prefab", "Statue", game.service("Prefabs"));
+    const InstanceId brick = make(game, "Texture", "Brick", game.service("Textures"));
+    const InstanceId body = make(game, "GameObject", "Body", game.scene_service("Workspace"));
+
+    // nil by default, and a default saves nothing.
+    REQUIRE(read_field(game, body, "Prefab").kind == engine_core::LuaSlot::Kind::Nil);
+    engine_core::PropertyBag saved;
+    game.instance(body)->save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "Prefab") == nullptr);
+
+    std::string error;
+    REQUIRE_FALSE(write_field(game, body, "Prefab", instance_slot(brick), &error));
+    REQUIRE(error == "Prefab must be a Prefab");
+
+    // Close the implicit gesture the three creates opened, so it does not
+    // absorb the property change below into the same undo step.
+    game.history().end_gesture();
+    game.history().set_pending_gesture("Set Prefab");
+    REQUIRE(write_field(game, body, "Prefab", instance_slot(statue)));
+    game.history().end_gesture();
+    const engine_core::LuaSlot read = read_field(game, body, "Prefab");
+    REQUIRE(read.kind == engine_core::LuaSlot::Kind::Instance);
+    REQUIRE(read.id == statue);
+    game.instance(body)->save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "Prefab")->as_string() == game.guid(statue));
+
+    // A destroyed Prefab reads nil; undo brings it back.
+    game.history().set_pending_gesture("Delete");
+    game.destroy_tree(statue);
+    game.history().end_gesture();
+    REQUIRE(read_field(game, body, "Prefab").kind == engine_core::LuaSlot::Kind::Nil);
+    game.history().undo();
+    REQUIRE(game.alive(statue));
+    REQUIRE(read_field(game, body, "Prefab").id == statue);
+
+    // Set during play; Stop restores.
+    add_script(game, "Play", R"(
+        local body = workspace.Body
+        _G.reads = body.Prefab == game.Assets.Prefabs.Statue
+        body.Prefab = nil
+        _G.cleared = body.Prefab == nil
+    )");
+    game.start_simulation();
+    rig.frames(1, 0.05);
+    for (const char* name : {"reads", "cleared"}) {
+        bool value = false;
+        INFO(name);
+        INFO(rig.runtime.last_error());
+        REQUIRE(rig.runtime.global_boolean(name, value));
+        REQUIRE(value);
+    }
+    game.stop_simulation();
+    REQUIRE(read_field(game, body, "Prefab").id == statue);
+}
+
+TEST_CASE("GS17b a GameObject's Prefab round-trips through a project", "[GS17b][project]") {
+    SimRole role;
+    TempDir dir;
+    std::string body_guid;
+    {
+        engine_core::Project project = engine_core::Project::create(dir.path);
+        DataModel& game = project.datamodel();
+        const InstanceId statue = make(game, "Prefab", "Statue", game.service("Prefabs"));
+        const InstanceId body = make(game, "GameObject", "Body", game.scene_service("Workspace"));
+        body_guid = game.guid(body);
+        REQUIRE(write_field(game, body, "Prefab", instance_slot(statue)));
+        project.save();
+    }
+    engine_core::Project loaded = engine_core::Project::load(dir.path);
+    DataModel& game = loaded.datamodel();
+    const InstanceId body = *game.find_guid(body_guid);
+    const InstanceId statue = game.find_first_child(game.service("Prefabs"), "Statue");
+    REQUIRE(statue != 0);
+    REQUIRE(read_field(game, body, "Prefab").id == statue);
+    REQUIRE_FALSE(loaded.unsaved());
+}

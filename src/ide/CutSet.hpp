@@ -27,4 +27,10 @@ bool move_set(engine_core::DataModel& world, const std::vector<engine_core::Inst
 engine_core::InstanceId insert_instance(engine_core::DataModel& world, const std::string& class_name,
                                         engine_core::InstanceId asked, std::string& error);
 
+// Puts a GameObject named after prefab in Workspace, its Prefab set to prefab.
+// Refuses (0, with error) a prefab that is not a live Prefab, or a full place;
+// nothing is left behind then. Runs on the simulation thread.
+engine_core::InstanceId add_prefab_instance(engine_core::DataModel& world, engine_core::InstanceId prefab,
+                                            std::string& error);
+
 }  // namespace ide

@@ -426,6 +426,7 @@ TEST_CASE("SS10 a place missing scene services loads with them made", "[SS10][pr
         REQUIRE(fs::exists(dir.path / "src" / "Lighting.lighting.json"));
         REQUIRE(fs::exists(dir.path / "src" / "Storage.storage.json"));
         REQUIRE(fs::exists(dir.path / "src" / "Scripts.scripts.json"));
+        REQUIRE(fs::exists(dir.path / "src" / "Assets.assets" / "init.json"));
         REQUIRE(fs::exists(dir.path / "src" / "Workspace.workspace" / "Box.cccc" / "Inner.dddd.json"));
         REQUIRE_FALSE(project.unsaved());
     }

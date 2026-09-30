@@ -11,11 +11,16 @@
 #include "AssetInstances.hpp"
 #include "LuaApi.hpp"
 #include "PropertyReflection.hpp"
+#include "Project.hpp"
 
 #include "support.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <vector>
@@ -451,4 +456,172 @@ TEST_CASE("GS10 Stop restores references and drops assets made in play", "[GS10]
     REQUIRE(read_field(game, mat, "DiffuseTexture").id == brick);
     REQUIRE(read_field(game, mat, "NormalTexture").kind == engine_core::LuaSlot::Kind::Nil);
     REQUIRE(game.get_children(game.service("Textures")).size() == 1);
+}
+
+namespace {
+
+void write_text(const std::filesystem::path& path, const std::string& bytes) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << bytes;
+}
+
+std::string file_of(const char* klass, const char* guid, const char* name, const std::string& extra = "") {
+    return std::string("{\n  \"class\": \"") + klass + "\",\n  \"id\": \"" + guid + "\",\n  \"Name\": \"" + name +
+           "\"" + extra + "\n}\n";
+}
+
+// A place saved before Assets existed: only Workspace and a Folder in it.
+void write_old_place(const std::filesystem::path& root) {
+    write_text(root / "project.json",
+               "{\"format\": 1, \"name\": \"Old\", \"engine\": \"engine_core\", \"tree\": {\"src\": \"src\"}, "
+               "\"resources\": {\"root\": \"resources\"}}\n");
+    write_text(root / "src" / "init.json", file_of("Game", "root0", "Old"));
+    const std::filesystem::path workspace = root / "src" / "Workspace.workspace";
+    write_text(workspace / "init.json", file_of("Workspace", "workspace", "Workspace"));
+    write_text(workspace / "Box.cccc.json", file_of("Folder", "cccc", "Box"));
+}
+
+}  // namespace
+
+TEST_CASE("GS11 the Assets tree and its references round-trip through a project", "[GS11][project]") {
+    SimRole role;
+    TempDir dir;
+    namespace fs = std::filesystem;
+    std::string brick_guid;
+    {
+        engine_core::Project project = engine_core::Project::create(dir.path);
+        DataModel& game = project.datamodel();
+        const InstanceId walls = make(game, "Folder", "Walls", game.service("Textures"));
+        const InstanceId brick = make(game, "Texture", "Brick", walls);
+        brick_guid = game.guid(brick);
+        REQUIRE_FALSE(dynamic_cast<engine_core::Texture*>(game.instance(brick))->set_path("textures/brick.png"));
+        const InstanceId mat = make(game, "Material", "Wall", game.service("Materials"));
+        REQUIRE(write_field(game, mat, "DiffuseTexture", instance_slot(brick)));
+        const InstanceId crate = make(game, "Prefab", "Crate", game.service("Prefabs"));
+        const InstanceId body = make(game, "Model", "Body", crate);
+        REQUIRE(write_field(game, body, "Material", instance_slot(mat)));
+        project.save();
+    }
+    REQUIRE(fs::is_directory(dir.path / "src" / "Assets.assets"));
+    REQUIRE(fs::exists(dir.path / "src" / "Assets.assets" / "init.json"));
+    REQUIRE(fs::exists(dir.path / "src" / "Assets.assets" / "Audio.audio.json"));
+    REQUIRE(fs::is_directory(dir.path / "src" / "Assets.assets" / "Textures.textures"));
+
+    engine_core::Project loaded = engine_core::Project::load(dir.path);
+    DataModel& game = loaded.datamodel();
+    const InstanceId assets = game.service("Assets");
+    REQUIRE(child_classes(game, assets) ==
+            std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio"});
+    const InstanceId brick = *game.find_guid(brick_guid);
+    REQUIRE(game.name(game.parent(brick)) == "Walls");
+    REQUIRE(dynamic_cast<engine_core::Texture*>(game.instance(brick))->path() == "textures/brick.png");
+    const InstanceId mat = game.find_first_child(game.service("Materials"), "Wall");
+    REQUIRE(read_field(game, mat, "DiffuseTexture").id == brick);
+    const InstanceId body = game.find_first_child(game.find_first_child(game.service("Prefabs"), "Crate"), "Body");
+    REQUIRE(read_field(game, body, "Material").id == mat);
+
+    // Nothing differs from disk, and a second save writes nothing.
+    REQUIRE_FALSE(loaded.unsaved());
+    loaded.save();
+    REQUIRE(loaded.last_save().written.empty());
+}
+
+TEST_CASE("GS12 a reference to a missing GUID loads, reads nil, and saves unchanged", "[GS12][project]") {
+    SimRole role;
+    TempDir dir;
+    {
+        engine_core::Project project = engine_core::Project::create(dir.path);
+        project.save();
+    }
+    const std::filesystem::path mat_file =
+        dir.path / "src" / "Assets.assets" / "Materials.materials" / "Wall.eeee.json";
+    // Materials may be a leaf file until it has children; the load reads either.
+    std::filesystem::remove(dir.path / "src" / "Assets.assets" / "Materials.materials.json");
+    write_text(dir.path / "src" / "Assets.assets" / "Materials.materials" / "init.json",
+               file_of("Materials", "materials", "Materials"));
+    const std::string bytes = file_of("Material", "eeee", "Wall", ",\n  \"DiffuseTexture\": \"gone\"");
+    write_text(mat_file, bytes);
+    engine_core::Project project = engine_core::Project::load(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId mat = *game.find_guid("eeee");
+    REQUIRE(read_field(game, mat, "DiffuseTexture").kind == engine_core::LuaSlot::Kind::Nil);
+    project.save();
+    std::ifstream in(mat_file, std::ios::binary);
+    const std::string after((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    REQUIRE(after.find("\"DiffuseTexture\": \"gone\"") != std::string::npos);
+}
+
+TEST_CASE("GS13 a place saved before Assets loads with the whole tree made", "[GS13][project]") {
+    SimRole role;
+    TempDir dir;
+    write_old_place(dir.path);
+    engine_core::Project project = engine_core::Project::load(dir.path);
+    DataModel& game = project.datamodel();
+    REQUIRE(child_classes(game, 0) ==
+            std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Assets"});
+    REQUIRE(child_classes(game, game.service("Assets")).size() == 5);
+    REQUIRE(project.unsaved());
+    REQUIRE_FALSE(std::filesystem::exists(dir.path / "src" / "Assets.assets"));
+    project.save();
+    REQUIRE(std::filesystem::exists(dir.path / "src" / "Assets.assets" / "Textures.textures.json"));
+    REQUIRE_FALSE(project.unsaved());
+}
+
+TEST_CASE("GS14 an Assets folder that lacks a category gets it", "[GS14][project]") {
+    SimRole role;
+    TempDir dir;
+    write_old_place(dir.path);
+    const std::filesystem::path assets = dir.path / "src" / "Assets.assets";
+    write_text(assets / "init.json", file_of("Assets", "assets", "Assets"));
+    write_text(assets / "Textures.textures.json", file_of("Textures", "textures", "Textures"));
+    engine_core::Project project = engine_core::Project::load(dir.path);
+    DataModel& game = project.datamodel();
+    REQUIRE(child_classes(game, game.service("Assets")) ==
+            std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio"});
+    REQUIRE(game.guid(game.service("Textures")) == "textures");
+}
+
+TEST_CASE("GS15 a file that breaks a placement rule fails the load and names the file", "[GS15][project]") {
+    SimRole role;
+    auto expect_failure = [](const std::function<void(const std::filesystem::path&)>& setup,
+                             const std::string& expected) {
+        TempDir dir;
+        write_old_place(dir.path);
+        setup(dir.path);
+        try {
+            engine_core::Project::load(dir.path);
+            FAIL("the load should refuse: " << expected);
+        } catch (const engine_core::ProjectError& error) {
+            INFO(error.what());
+            REQUIRE(std::string(error.what()).find(expected) != std::string::npos);
+        }
+    };
+    const std::filesystem::path src("src");
+    expect_failure(
+        [&](const std::filesystem::path& root) {
+            write_text(root / src / "Workspace.workspace" / "Brick.ffff.json", file_of("Texture", "ffff", "Brick"));
+        },
+        "Brick.ffff.json: A Texture must be in Assets.Textures");
+    expect_failure(
+        [&](const std::filesystem::path& root) {
+            const std::filesystem::path assets = root / src / "Assets.assets";
+            write_text(assets / "init.json", file_of("Assets", "assets", "Assets"));
+            write_text(assets / "Loose.gggg.json", file_of("Folder", "gggg", "Loose"));
+        },
+        "Loose.gggg.json: Assets holds only Materials, Prefabs, Meshes, Textures, and Audio");
+    expect_failure(
+        [&](const std::filesystem::path& root) {
+            const std::filesystem::path textures = root / src / "Assets.assets" / "Textures.textures";
+            write_text(root / src / "Assets.assets" / "init.json", file_of("Assets", "assets", "Assets"));
+            write_text(textures / "init.json", file_of("Textures", "textures", "Textures"));
+            write_text(textures / "Rock.hhhh.json", file_of("Mesh", "hhhh", "Rock"));
+        },
+        "Rock.hhhh.json: Textures holds Textures and Folders");
+    expect_failure(
+        [&](const std::filesystem::path& root) {
+            write_text(root / src / "Workspace.workspace" / "Textures.textures.json",
+                       file_of("Textures", "textures", "Textures"));
+        },
+        "Textures must be a child of Assets with GUID textures");
 }

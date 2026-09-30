@@ -1,9 +1,12 @@
 #include "Project.hpp"
 
+#include "AssetInstances.hpp"
 #include "ChangeHistoryService.hpp"
+#include "Containment.hpp"
 #include "Folder.hpp"
 #include "Game.hpp"
 #include "GameObject.hpp"
+#include "GameService.hpp"
 #include "FileBytes.hpp"
 #include "JsonMerge.hpp"
 #include "ModuleScript.hpp"
@@ -68,8 +71,8 @@ struct ClassEntry {
     ProjectFactory factory = nullptr;
 };
 
-// A scene service back at its class defaults, with no extras. Its children stay.
-void reset_scene_service(DataModel& service) {
+// A service back at its class defaults, with no extras. Its children stay.
+void reset_service(DataModel& service) {
     PropertyBag defaults;
     service.default_properties(defaults);
     for (const JsonValue::Member& member : defaults) {
@@ -85,31 +88,45 @@ void reset_scene_service(DataModel& service) {
     }
 }
 
-// A world has one of each scene service, made with it, so the factory hands
-// back that one, at its defaults, as if it were new.
+// A world has one of each service, made with it, so the factory hands back
+// that one, at its defaults, as if it were new.
 template <std::size_t Index>
-DataModel& existing_scene_service(DataModel& world) {
-    DataModel* service = world.instance(world.scene_service(kSceneServiceClasses[Index]));
+DataModel& existing_service(DataModel& world) {
+    DataModel* service = world.instance(world.service(kServices[Index].class_name));
     if (service == nullptr) {
-        contract_fail("a Game holds every scene service");
+        contract_fail("a Game holds every service");
     }
-    reset_scene_service(*service);
+    reset_service(*service);
     return *service;
 }
+
+static_assert(std::size(kServices) == 10, "one registry entry per service");
 
 std::vector<ClassEntry>& class_registry() {
     static std::vector<ClassEntry> entries = [] {
         std::vector<ClassEntry> out;
-        out.push_back({kSceneServiceClasses[0], existing_scene_service<0>});
-        out.push_back({kSceneServiceClasses[1], existing_scene_service<1>});
-        out.push_back({kSceneServiceClasses[2], existing_scene_service<2>});
-        out.push_back({kSceneServiceClasses[3], existing_scene_service<3>});
+        out.push_back({kServices[0].class_name, existing_service<0>});
+        out.push_back({kServices[1].class_name, existing_service<1>});
+        out.push_back({kServices[2].class_name, existing_service<2>});
+        out.push_back({kServices[3].class_name, existing_service<3>});
+        out.push_back({kServices[4].class_name, existing_service<4>});
+        out.push_back({kServices[5].class_name, existing_service<5>});
+        out.push_back({kServices[6].class_name, existing_service<6>});
+        out.push_back({kServices[7].class_name, existing_service<7>});
+        out.push_back({kServices[8].class_name, existing_service<8>});
+        out.push_back({kServices[9].class_name, existing_service<9>});
         out.push_back({"DataModel", [](DataModel& world) -> DataModel& { return world.create(); }});
         out.push_back({"GameObject", [](DataModel& world) -> DataModel& { return world.create_game_object(); }});
         out.push_back({"Script", [](DataModel& world) -> DataModel& { return world.create<Script>(); }});
         out.push_back({"ModuleScript", [](DataModel& world) -> DataModel& { return world.create<ModuleScript>(); }});
         out.push_back({"Folder", [](DataModel& world) -> DataModel& { return world.create<Folder>(); }});
         out.push_back({"TestTriangle", [](DataModel& world) -> DataModel& { return world.create<TestTriangle>(); }});
+        out.push_back({"Texture", [](DataModel& world) -> DataModel& { return world.create<Texture>(); }});
+        out.push_back({"Mesh", [](DataModel& world) -> DataModel& { return world.create<Mesh>(); }});
+        out.push_back({"Sound", [](DataModel& world) -> DataModel& { return world.create<Sound>(); }});
+        out.push_back({"Material", [](DataModel& world) -> DataModel& { return world.create<Material>(); }});
+        out.push_back({"Model", [](DataModel& world) -> DataModel& { return world.create<Model>(); }});
+        out.push_back({"Prefab", [](DataModel& world) -> DataModel& { return world.create<Prefab>(); }});
         return out;
     }();
     return entries;
@@ -323,7 +340,8 @@ public:
         for (PlanNode& node : nodes_) {
             order_children(node);
         }
-        adopt_scene_services();
+        adopt_services();
+        check_placement();
         return std::move(nodes_);
     }
 
@@ -517,23 +535,33 @@ private:
         scan(dir, index);
     }
 
-    // Game holds the four scene services and nothing else. A service the files
-    // lack is made at its defaults. Each service's GUID is fixed, so every read
-    // of the same files gives the same tree, and nothing is written until the
-    // next save.
-    void adopt_scene_services() {
+    // Each node's parent index. The root's is 0.
+    std::vector<std::size_t> parents() const {
         std::vector<std::size_t> parent(nodes_.size(), 0);
         for (std::size_t index = 0; index < nodes_.size(); ++index) {
             for (std::size_t child : nodes_[index].children) {
                 parent[child] = index;
             }
         }
+        return parent;
+    }
+
+    // game and Assets hold their services, as kServices lists them. A service
+    // the files lack is made at its defaults. Each service's GUID is fixed, so
+    // every read of the same files gives the same tree, and nothing is written
+    // until the next save.
+    void adopt_services() {
+        const std::vector<std::size_t> parent = parents();
         for (std::size_t index = 1; index < nodes_.size(); ++index) {
             PlanNode& node = nodes_[index];
-            if (is_scene_service_class(node.class_name)) {
-                const std::string guid = scene_service_guid(node.class_name);
-                if (parent[index] != 0 || node.guid != guid) {
-                    fail(node.props_path + ": " + node.class_name + " must be a child of game with GUID " + guid);
+            if (const ServiceSpec* spec = find_service(node.class_name)) {
+                const std::string guid = service_guid(node.class_name);
+                const bool home = spec->parent_class == nullptr
+                                      ? parent[index] == 0
+                                      : parent[index] != 0 && nodes_[parent[index]].class_name == spec->parent_class;
+                if (!home || node.guid != guid) {
+                    fail(node.props_path + ": " + node.class_name + " must be a child of " +
+                         (spec->parent_class != nullptr ? spec->parent_class : "game") + " with GUID " + guid);
                 }
                 // The name is fixed too. A file that says otherwise is read as the service.
                 node.name = node.class_name;
@@ -542,36 +570,68 @@ private:
             if (parent[index] == 0) {
                 fail(node.props_path + ": only a scene service can be a child of game");
             }
-            for (const char* service : kSceneServiceClasses) {
-                if (node.guid == scene_service_guid(service)) {
-                    fail(node.props_path + ": GUID " + node.guid + " is reserved for " + service);
+            for (const ServiceSpec& service : kServices) {
+                if (node.guid == service_guid(service.class_name)) {
+                    fail(node.props_path + ": GUID " + node.guid + " is reserved for " + service.class_name);
                 }
             }
         }
-        std::vector<std::size_t> services;
-        for (const char* service : kSceneServiceClasses) {
+        // Each service, found or made, in table order under its parent, before
+        // any other child that parent has.
+        std::unordered_map<std::string, std::size_t> at;
+        std::unordered_map<std::size_t, std::vector<std::size_t>> services_of;
+        for (const ServiceSpec& spec : kServices) {
+            const std::size_t holder = spec.parent_class == nullptr ? 0 : at.at(spec.parent_class);
             std::size_t found = 0;
-            for (std::size_t child : nodes_[0].children) {
-                if (nodes_[child].class_name == service) {
+            for (std::size_t child : nodes_[holder].children) {
+                if (nodes_[child].class_name == spec.class_name) {
                     found = child;
                 }
             }
             if (found == 0) {
                 PlanNode made;
-                made.guid = scene_service_guid(service);
-                made.class_name = service;
-                made.name = service;
+                made.guid = service_guid(spec.class_name);
+                made.class_name = spec.class_name;
+                made.name = spec.class_name;
                 made.doc = JsonValue::object();
-                made.doc.set("class", JsonValue::string(service));
+                made.doc.set("class", JsonValue::string(spec.class_name));
                 made.doc.set("id", JsonValue::string(made.guid));
-                made.doc.set("Name", JsonValue::string(service));
+                made.doc.set("Name", JsonValue::string(spec.class_name));
                 made.made = true;
                 found = nodes_.size();
                 nodes_.push_back(std::move(made));
             }
-            services.push_back(found);
+            at[spec.class_name] = found;
+            services_of[holder].push_back(found);
         }
-        nodes_[0].children = std::move(services);
+        for (auto& [holder, services] : services_of) {
+            std::vector<std::size_t> children = services;
+            for (std::size_t child : nodes_[holder].children) {
+                if (find_service(nodes_[child].class_name) == nullptr) {
+                    children.push_back(child);
+                }
+            }
+            nodes_[holder].children = std::move(children);
+        }
+    }
+
+    // Every instance where the placement rules allow it, checked before any is made.
+    void check_placement() {
+        const std::vector<std::size_t> parent = parents();
+        for (std::size_t index = 1; index < nodes_.size(); ++index) {
+            const PlanNode& node = nodes_[index];
+            if (find_service(node.class_name) != nullptr) {
+                continue;
+            }
+            std::size_t holder = parent[index];
+            while (holder != 0 && passes_rule_up(nodes_[holder].class_name)) {
+                holder = parent[holder];
+            }
+            const std::string holder_class = holder == 0 ? std::string("Game") : nodes_[holder].class_name;
+            if (std::optional<std::string> error = placement_error(holder_class, node.class_name, node.name)) {
+                fail(node.props_path + ": " + *error);
+            }
+        }
     }
 
     // Listed GUIDs first, in the listed order. The rest sort by GUID, not by Name.
@@ -760,8 +820,8 @@ void clear_extras(DataModel& world, InstanceId id) {
     }
 }
 
-// Destroys every live instance, parented or not, but the scene services, which
-// go back to their defaults. Clears the root's extras.
+// Destroys every live instance, parented or not, but the services, which go
+// back to their defaults. Clears the root's extras.
 void clear_world(DataModel& world) {
     std::vector<InstanceId> ids;
     world.for_each_instance([&ids](DataModel& object) {
@@ -774,9 +834,9 @@ void clear_world(DataModel& world) {
             world.destroy(id);
         }
     }
-    for (const char* name : kSceneServiceClasses) {
-        if (DataModel* service = world.instance(world.scene_service(name))) {
-            reset_scene_service(*service);
+    for (const ServiceSpec& spec : kServices) {
+        if (DataModel* service = world.instance(world.service(spec.class_name))) {
+            reset_service(*service);
         }
     }
     clear_extras(world, 0);
@@ -870,6 +930,11 @@ void set_key(DataModel& world, InstanceId id, DataModel& object, const std::stri
 void order_children_as(DataModel& world, InstanceId id, const JsonValue& doc) {
     // game's children are the scene services, in the order Game made them.
     if (id == 0) {
+        return;
+    }
+    // Assets holds only its categories, made with the world in table order.
+    if (const DataModel* holder = world.instance(id);
+        holder != nullptr && holder->is_service() && !holder->is_scene_service()) {
         return;
     }
     // A listed child's place in the file. The first listing counts.

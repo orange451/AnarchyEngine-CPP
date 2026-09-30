@@ -69,7 +69,10 @@ struct ApplyGuard {
 using engine_core::InstanceAction;
 
 // Actions the explorer runs over the whole selection. The rest run on one row.
-bool Batchable(InstanceAction action) { return action == InstanceAction::Delete || action == InstanceAction::Cut; }
+bool Batchable(InstanceAction action) {
+    return action == InstanceAction::Delete || action == InstanceAction::Cut || action == InstanceAction::Copy ||
+           action == InstanceAction::Duplicate;
+}
 
 // Keys that make a click edit the selection instead of picking one row.
 constexpr int kSelectKeys = jadefx::Key::ModControl | jadefx::Key::ModSuper | jadefx::Key::ModShift;
@@ -80,8 +83,12 @@ const char* ActionIcon(InstanceAction action) {
         return "Script.png";
     case InstanceAction::Cut:
         return "Cut.png";
+    case InstanceAction::Copy:
+        return "Copy.png";
     case InstanceAction::Paste:
         return "Paste.png";
+    case InstanceAction::Duplicate:
+        return "New.png";
     case InstanceAction::Rename:
         return "Rename.png";
     case InstanceAction::Delete:

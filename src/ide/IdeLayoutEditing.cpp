@@ -11,8 +11,14 @@ void IdeLayout::run_action(engine_core::InstanceAction action, std::uint32_t id)
     case engine_core::InstanceAction::Cut:
         cut({id});
         break;
+    case engine_core::InstanceAction::Copy:
+        copy({id});
+        break;
     case engine_core::InstanceAction::Paste:
         paste(id);
+        break;
+    case engine_core::InstanceAction::Duplicate:
+        duplicate({id});
         break;
     case engine_core::InstanceAction::Edit:
         edit(id);
@@ -143,9 +149,88 @@ void IdeLayout::open_search(bool replace, jadefx::Scene* scene) {
 
 bool IdeLayout::action_enabled(engine_core::InstanceAction action) const {
     if (action == engine_core::InstanceAction::Paste) {
-        return clip_ && clip_->held;
+        return clip_ && (clip_->held || clip_->copies);
     }
     return true;
+}
+
+void IdeLayout::copy(const std::vector<std::uint32_t>& ids) {
+    if (!clip_) {
+        return;
+    }
+    engine_core::DataModel& game = runner_.simulation().datamodel();
+    std::vector<CopiedNode> copies;
+    {
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionWait);
+        if (!lock.owns()) {
+            show_toast(busy_message("Copy"));
+            return;
+        }
+        copies = copy_set(game, ids);
+    }
+    if (copies.empty()) {
+        return;
+    }
+    if (clip_->held) {
+        std::vector<engine_core::InstanceId> dropped = clip_->ids;
+        runner_.simulation().on_simulation([dropped](engine_core::DataModel& world) {
+            bool any = false;
+            for (engine_core::InstanceId id : dropped) {
+                if (world.alive(id) && world.parent(id) == engine_core::DataModel::kNoParent) {
+                    if (!any) {
+                        world.history().set_pending_gesture("Copy");
+                        any = true;
+                    }
+                    world.destroy_tree(id);
+                }
+            }
+            if (any) {
+                CloseGesture(world);
+            }
+        });
+    }
+    clip_->held = false;
+    clip_->ids.clear();
+    const std::size_t count = copies.size();
+    clip_->copies = std::make_shared<const std::vector<CopiedNode>>(std::move(copies));
+    show_toast(count == 1 ? "Copied 1 instance" : "Copied " + std::to_string(count) + " instances");
+}
+
+void IdeLayout::duplicate(const std::vector<std::uint32_t>& ids) {
+    engine_core::DataModel& game = runner_.simulation().datamodel();
+    std::vector<std::pair<engine_core::InstanceId, std::vector<CopiedNode>>> groups;
+    {
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionWait);
+        if (!lock.owns()) {
+            show_toast(busy_message("Duplicate"));
+            return;
+        }
+        for (engine_core::InstanceId id : cut_set(game, ids)) {
+            std::vector<CopiedNode> one = copy_set(game, {id});
+            if (!one.empty()) {
+                groups.emplace_back(game.parent(id), std::move(one));
+            }
+        }
+    }
+    if (groups.empty()) {
+        return;
+    }
+    runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_),
+                                        groups = std::move(groups)](engine_core::DataModel& world) {
+        world.history().set_pending_gesture("Duplicate");
+        std::vector<engine_core::InstanceId> made;
+        std::string refused;
+        for (const auto& group : groups) {
+            paste_copies(world, group.second, group.first, &made, &refused);
+        }
+        CloseGesture(world);
+        if (!made.empty()) {
+            world.selection().set(made);
+        }
+        if (!refused.empty()) {
+            toast_later(this, alive, std::move(refused));
+        }
+    });
 }
 
 void IdeLayout::cut(const std::vector<std::uint32_t>& ids) {
@@ -177,6 +262,7 @@ void IdeLayout::cut(const std::vector<std::uint32_t>& ids) {
     }
     clip_->ids = taken;
     clip_->held = true;
+    clip_->copies.reset();
     // The cut instances leave the tree, so they leave the selection. Paste
     // selects them again.
     game.selection().set({});
@@ -197,6 +283,38 @@ void IdeLayout::cut(const std::vector<std::uint32_t>& ids) {
 }
 
 void IdeLayout::paste(std::uint32_t id) {
+    if (clip_ && !clip_->held && clip_->copies) {
+        engine_core::DataModel& game = runner_.simulation().datamodel();
+        {
+            engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionWait);
+            if (!lock.owns()) {
+                show_toast(busy_message("Paste"));
+                return;
+            }
+            id = insert_target(game, id);
+            if (!parent_ok(game, id)) {
+                return;
+            }
+        }
+        runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), copies = clip_->copies,
+                                            id](engine_core::DataModel& world) {
+            if (!parent_ok(world, id)) {
+                return;
+            }
+            world.history().set_pending_gesture("Paste");
+            std::vector<engine_core::InstanceId> made;
+            std::string refused;
+            paste_copies(world, *copies, id, &made, &refused);
+            CloseGesture(world);
+            if (!made.empty()) {
+                world.selection().set(made);
+            }
+            if (!refused.empty()) {
+                toast_later(this, alive, std::move(refused));
+            }
+        });
+        return;
+    }
     if (!clip_ || !clip_->held) {
         return;
     }

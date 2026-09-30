@@ -1109,8 +1109,12 @@ const char* action_label(InstanceAction action) {
         return "Edit";
     case InstanceAction::Cut:
         return "Cut";
+    case InstanceAction::Copy:
+        return "Copy";
     case InstanceAction::Paste:
         return "Paste";
+    case InstanceAction::Duplicate:
+        return "Duplicate";
     case InstanceAction::Rename:
         return "Rename";
     case InstanceAction::Delete:
@@ -1121,7 +1125,13 @@ const char* action_label(InstanceAction action) {
 
 void DataModel::context_actions(std::vector<ContextAction>& out) const {
     out.push_back(ContextAction{InstanceAction::Cut, false});
+    if (id_ != 0) {
+        out.push_back(ContextAction{InstanceAction::Copy, false});
+    }
     out.push_back(ContextAction{InstanceAction::Paste, false});
+    if (id_ != 0) {
+        out.push_back(ContextAction{InstanceAction::Duplicate, false});
+    }
     out.push_back(ContextAction{InstanceAction::Rename, false});
     if (id_ != 0) {
         out.push_back(ContextAction{InstanceAction::Delete, false});

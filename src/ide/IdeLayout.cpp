@@ -163,6 +163,10 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
             delete_instances(ids);
         } else if (action == engine_core::InstanceAction::Cut) {
             cut(ids);
+        } else if (action == engine_core::InstanceAction::Copy) {
+            copy(ids);
+        } else if (action == engine_core::InstanceAction::Duplicate) {
+            duplicate(ids);
         }
     };
     host.enabled = [this](engine_core::InstanceAction action) { return action_enabled(action); };
@@ -492,6 +496,7 @@ IdeLayout::~IdeLayout() {
 void IdeLayout::routeKeys(jadefx::KeyEvent& event, jadefx::Scene& scene) {
     routeUndo(event, scene);
     routeDelete(event, scene);
+    routeClipboard(event, scene);
     routeReveal(event, scene);
     routeSearch(event, scene);
     routeZoom(event);
@@ -544,6 +549,33 @@ void IdeLayout::routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene) {
             event.consume();
         }
     }
+}
+
+void IdeLayout::routeClipboard(jadefx::KeyEvent& event, jadefx::Scene& scene) {
+    if (!event.pressed || event.repeat || event.consumed || !event.shortcut() || event.shift || event.alt) {
+        return;
+    }
+    const int key = event.key;
+    if (key != jadefx::Key::X && key != jadefx::Key::C && key != jadefx::Key::V && key != jadefx::Key::D) {
+        return;
+    }
+    jadefx::Node* focused = scene.focusedNode();
+    if (InTextWidget(focused) || Owning<IdeExplorer>(focused) == nullptr) {
+        return;
+    }
+    const std::vector<engine_core::InstanceId> selected = runner_.simulation().datamodel().selection().get();
+    if (key == jadefx::Key::V) {
+        paste(selected.empty() ? 0 : selected.front());
+    } else if (selected.empty()) {
+        return;
+    } else if (key == jadefx::Key::X) {
+        cut(selected);
+    } else if (key == jadefx::Key::C) {
+        copy(selected);
+    } else {
+        duplicate(selected);
+    }
+    event.consume();
 }
 
 void IdeLayout::routeReveal(jadefx::KeyEvent& event, jadefx::Scene& scene) {

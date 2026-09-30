@@ -408,8 +408,10 @@ protected:
     // property's write, and fires Changed with the property's name.
     void note_property_change(std::string_view property, const LuaSlot& before, const LuaSlot& after);
 
-    // The GUID in text; the live target, if any, in id, with kind Instance, else Nil.
-    LuaSlot instance_reference_slot(const InstanceRef& ref) const;
+    // The GUID in text; the live target, if any, in id, with kind Instance, else
+    // Nil. A target whose class does not inherit klass, as a hand-edited file
+    // can name, reads Nil too.
+    LuaSlot instance_reference_slot(const InstanceRef& ref, const char* klass) const;
     // Shared logic for a saved reference property held by an InstanceRef, as
     // Material's DiffuseTexture and GameObject's Prefab both use. nil clears; a
     // live instance whose class inherits klass is stored by GUID; one of

@@ -148,10 +148,16 @@ void DataModel::note_property_change(std::string_view property, const LuaSlot& b
     emit_change(id_, Field::Reflected, current_origin(), id);
 }
 
-LuaSlot DataModel::instance_reference_slot(const InstanceRef& ref) const {
+LuaSlot DataModel::instance_reference_slot(const InstanceRef& ref, const char* klass) const {
     LuaSlot slot;
     slot.text = ref.guid();
     slot.id = ref.resolve(*this);
+    if (slot.id != 0) {
+        const DataModel* target = instance(slot.id);
+        if (target == nullptr || !lua_class_inherits(target->class_name(), klass)) {
+            slot.id = 0;
+        }
+    }
     slot.kind = slot.id != 0 ? LuaSlot::Kind::Instance : LuaSlot::Kind::Nil;
     return slot;
 }
@@ -178,9 +184,9 @@ std::optional<std::string> DataModel::set_instance_reference(std::string_view pr
     if (guid == ref.guid()) {
         return std::nullopt;
     }
-    const LuaSlot before = instance_reference_slot(ref);
+    const LuaSlot before = instance_reference_slot(ref, klass);
     ref.set_guid(std::move(guid));
-    note_property_change(property, before, instance_reference_slot(ref));
+    note_property_change(property, before, instance_reference_slot(ref, klass));
     return std::nullopt;
 }
 

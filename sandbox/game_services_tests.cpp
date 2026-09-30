@@ -7,6 +7,7 @@
 #include "Game.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
+#include "GameObject.hpp"
 #include "GameService.hpp"
 #include "AssetInstances.hpp"
 #include "LuaApi.hpp"
@@ -432,6 +433,22 @@ TEST_CASE("GS8 a reference takes its class, saves as a GUID, and reads the live 
     other.set_guid(late, "zzzz");
     REQUIRE(read_field(other, copy, "DiffuseTexture").id == late);
 
+    // A GUID whose instance is not a Texture, as a hand edit could leave, reads
+    // nil and keeps the GUID.
+    const InstanceId stone = make(other, "Mesh", "Stone", other.service("Meshes"));
+    for (const std::string& wrong : {other.guid(stone), std::string("textures")}) {
+        INFO(wrong);
+        REQUIRE(other.instance(copy)->load_property("DiffuseTexture", engine_core::JsonValue::string(wrong),
+                                                    load_error));
+        const engine_core::LuaSlot mismatched = read_field(other, copy, "DiffuseTexture");
+        REQUIRE(mismatched.kind == engine_core::LuaSlot::Kind::Nil);
+        REQUIRE(mismatched.text == wrong);
+    }
+    const InstanceId figure = make(other, "GameObject", "Figure", other.service("Workspace"));
+    REQUIRE(other.instance(figure)->load_property("Prefab", engine_core::JsonValue::string(other.guid(stone)),
+                                                  load_error));
+    REQUIRE(read_field(other, figure, "Prefab").kind == engine_core::LuaSlot::Kind::Nil);
+
     // null clears.
     REQUIRE(other.instance(copy)->load_property("DiffuseTexture", engine_core::JsonValue(), load_error));
     REQUIRE(read_field(other, copy, "DiffuseTexture").text.empty());
@@ -772,6 +789,12 @@ TEST_CASE("GS17 GameObject.Prefab is nil by default, takes a Prefab, undoes, and
     }
     game.stop_simulation();
     REQUIRE(read_field(game, body, "Prefab").id == statue);
+
+    // A destroyed GameObject reads no Prefab, as it reads no Color.
+    const engine_core::GameObject* object = game.game_object(body);
+    REQUIRE(object != nullptr);
+    game.destroy_tree(body);
+    REQUIRE(object->prefab().kind == engine_core::LuaSlot::Kind::Nil);
 }
 
 TEST_CASE("GS17b a GameObject's Prefab round-trips through a project", "[GS17b][project]") {

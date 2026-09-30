@@ -83,10 +83,12 @@ const ReferenceSpec* Model::reference_specs(std::size_t& count) const {
 }
 
 LuaSlot ReferenceAsset::reference(std::size_t index) const {
-    if (index >= kMaxReferences) {
+    std::size_t count = 0;
+    const ReferenceSpec* specs = reference_specs(count);
+    if (index >= count || index >= kMaxReferences) {
         return LuaSlot();
     }
-    return instance_reference_slot(refs_[index]);
+    return instance_reference_slot(refs_[index], specs[index].klass);
 }
 
 std::optional<std::string> ReferenceAsset::set_reference(std::size_t index, const LuaSlot& value) {

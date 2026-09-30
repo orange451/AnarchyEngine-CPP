@@ -81,7 +81,12 @@ bool GameObject::copy_size(float out[3]) const {
     return true;
 }
 
-LuaSlot GameObject::prefab() const { return instance_reference_slot(prefab_ref_); }
+LuaSlot GameObject::prefab() const {
+    if (!alive(id_)) {
+        return LuaSlot();
+    }
+    return instance_reference_slot(prefab_ref_, "Prefab");
+}
 
 std::optional<std::string> GameObject::set_prefab(const LuaSlot& value) {
     require_simulation_thread("set_prefab runs on SimulationThread");

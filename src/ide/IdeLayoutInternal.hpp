@@ -167,7 +167,8 @@ scene {
 }
 .ide-ribbon-button {
     padding: 0 8px;
-    border-radius: 4px;
+    border-radius: 6px;
+    transition: background-color 0.12s, opacity 0.12s;
 }
 .ide-ribbon-button:hover {
     background-color: var(--ide-ribbon-hover-color);
@@ -189,9 +190,12 @@ scene {
 }
 textfield {
     background-color: var(--ide-field-color);
-    border-width: 1px 0 0 0;
+    border-width: 1px;
+    border-style: solid;
     border-color: var(--ide-field-border-color);
+    border-radius: 4px;
     padding: 6px 8px;
+    transition: border-color 0.12s;
 }
 styleclassedtextarea {
     background-color: var(--ide-panel-color);
@@ -210,8 +214,8 @@ split-pane:vertical > .split-pane-divider {
     background-color: var(--divider-color);
 }
 .toast {
-    border-radius: 0px;
-    box-shadow: 0px 2px 8px 0px var(--ide-popup-shadow-color);
+    border-radius: 6px;
+    box-shadow: 0px 4px 14px 0px var(--ide-popup-shadow-color);
 }
 )CSS";
 

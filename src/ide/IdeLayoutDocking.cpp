@@ -1075,6 +1075,7 @@ void IdeLayout::showDropMark(jadefx::Scene& scene, double x, double y, double wi
         hideDropMark();
         jadefx::PopupOptions options;
         options.autoHide = false;
+        options.animate = false;
         scene.showPopup(dropMark_, box.x, box.y, box.width, box.height, options);
         dropMarkScene_ = &scene;
         return;

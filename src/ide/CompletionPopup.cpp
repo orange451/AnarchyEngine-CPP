@@ -198,8 +198,8 @@ public:
         setDefaultCursor(jadefx::Cursor::Default);
         setStyle(
             "background-color: var(--ide-popup-color); border-style: solid; border-width: 1px; "
-            "border-color: var(--ide-popup-border-color); box-shadow: 0 2px 8px var(--ide-popup-shadow-color); "
-            "padding: 4px;");
+            "border-color: var(--ide-popup-border-color); border-radius: 6px; "
+            "box-shadow: 0 4px 14px var(--ide-popup-shadow-color); padding: 4px;");
         track_ = std::make_shared<CompletionScrollTrack>(*this);
         children().add(track_);
         if (refocus_) {

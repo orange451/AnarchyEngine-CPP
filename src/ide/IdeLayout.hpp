@@ -212,6 +212,8 @@ private:
     void routeReveal(jadefx::KeyEvent& event, jadefx::Scene& scene);
     // Cmd+Shift+F and Cmd+Shift+H in a window whose menu bar does not take them.
     void routeSearch(jadefx::KeyEvent& event, jadefx::Scene& scene);
+    void routeZoom(jadefx::KeyEvent& event);
+    void set_zoom(double zoom);
     // Docks the Search pane, or brings it forward, and focuses its find field or,
     // with replace, its replace field. Docked without replace, it starts with
     // replace hidden. A selection on one line in the focused

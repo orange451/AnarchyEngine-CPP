@@ -6,14 +6,18 @@
 #include "LuaApi.hpp"
 
 #include "jadefx/jadefx.hpp"
+#include "jadefx/scene/Painter.hpp"
 #include "jadefx/scene/controls/ScrollTrack.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <utility>
 
 namespace ide {
 
+constexpr double kOpenSeconds = 0.16;
+constexpr double kShadowMargin = 12;
 constexpr int kMaxVisibleRows = 8;
 constexpr double kPopupWidth = 280;
 constexpr double kFieldGap = 4;
@@ -108,6 +112,7 @@ public:
             field_->setText("");
         }
         rebuild();
+        openedAt_ = std::chrono::steady_clock::now();
         // The + is hidden, and laid out at the corner, once the pointer leaves
         // the row. Later filter updates keep this opening position.
         pinAnchor(anchor);
@@ -125,6 +130,29 @@ public:
             return;
         }
         scene->hidePopup(this);
+    }
+
+    void render(jadefx::UiRenderer& renderer, float opacity) override {
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - openedAt_).count();
+        const double t = std::clamp(elapsed / kOpenSeconds, 0.0, 1.0);
+        if (t >= 1.0) {
+            jadefx::Controls::render(renderer, opacity);
+            return;
+        }
+        const double eased = 1.0 - std::pow(1.0 - t, 3.0);
+        const float x = static_cast<float>(getAbsoluteX() - kShadowMargin);
+        const float y = static_cast<float>(getAbsoluteY());
+        const float width = static_cast<float>(getWidth() + 2 * kShadowMargin);
+        const float full = static_cast<float>(getHeight() + kShadowMargin);
+        const float shown = static_cast<float>(full * eased);
+        jadefx::Painter painter(renderer);
+        if (dropsUp_) {
+            painter.pushClip(x, y - static_cast<float>(kShadowMargin) + full - shown, width, shown);
+        } else {
+            painter.pushClip(x, y, width, shown);
+        }
+        jadefx::Controls::render(renderer, opacity * static_cast<float>(0.25 + 0.75 * eased));
+        painter.popClip();
     }
 
 protected:
@@ -356,8 +384,10 @@ private:
         if (x < 0) {
             x = 0;
         }
+        dropsUp_ = false;
         if (scene->getHeight() > 0 && y + height > scene->getHeight() && originY > height + 2) {
             y = originY - height - 2;
+            dropsUp_ = true;
         }
         if (y < 0) {
             y = 0;
@@ -513,6 +543,8 @@ private:
     double pinned_w_ = 0;
     double pinned_h_ = 0;
     bool pinned_ = false;
+    bool dropsUp_ = false;
+    std::chrono::steady_clock::time_point openedAt_{};
     jadefx::ScrollTrack bar_{};
     double scroll_ = 0;
     double rowHeight_ = 0;

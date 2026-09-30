@@ -80,8 +80,10 @@ private:
     void refreshFpsLabel();
     // Makes this view's linked Camera the Workspace's CurrentCamera.
     void noteCurrentCamera();
-    // Locks or frees the scene's pointer to match MouseBehavior and focus, and
-    // hands the scene's pointer motion to UserInputService while locked.
+    // Locks or frees the scene's pointer to match MouseBehavior, and hands the
+    // scene's pointer motion to UserInputService while locked. Two views can
+    // share one Scene, so only the focused view locks it or reads it as let
+    // go; an unfocused view only ever releases a lock of its own.
     void syncPointerLock();
     // Walks Workspace for the Cameras, and resolves the link. Skipped when the
     // DataModel is busy; the previous list and link stay.

@@ -105,6 +105,17 @@ void GameView::syncPointerLock() {
     if (game_ == nullptr || scene == nullptr) {
         return;
     }
+    if (!isFocused()) {
+        // Another view of this same Scene may hold the lock now; only the
+        // focused view may lock it or read whether it let the lock go. This
+        // is a safety net for a lock this view still holds from just before
+        // focus moved elsewhere (handleFocusLost is the usual way it drops).
+        if (pointerLocked_) {
+            scene->setPointerLocked(false);
+            pointerLocked_ = false;
+        }
+        return;
+    }
     engine_core::UserInputService& input = game_->input();
     if (pointerLocked_ && !scene->isPointerLocked()) {
         // The scene let the pointer go, as when the window lost focus. Scripts hear it.
@@ -112,7 +123,7 @@ void GameView::syncPointerLock() {
         input.set_mouse_behavior(engine_core::UserInputService::kMouseBehaviorDefault);
         return;
     }
-    const bool wanted = isFocused() && input.mouse_behavior() != engine_core::UserInputService::kMouseBehaviorDefault;
+    const bool wanted = input.mouse_behavior() != engine_core::UserInputService::kMouseBehaviorDefault;
     if (wanted != pointerLocked_) {
         scene->setPointerLocked(wanted);
         pointerLocked_ = wanted;
@@ -426,6 +437,15 @@ void GameView::handleFocusLost() {
     // The release will go to whatever has focus now, so end the held keys here.
     if (game_ != nullptr) {
         game_->input().post_focus_lost();
+    }
+    // Two views can share one Scene. Dropping the lock here, before the node
+    // that took focus next paints, keeps this view from freeing the scene's
+    // pointer out from under a view that just took it.
+    if (pointerLocked_) {
+        if (jadefx::Scene* scene = getScene()) {
+            scene->setPointerLocked(false);
+        }
+        pointerLocked_ = false;
     }
     IdePane::handleFocusLost();
 }

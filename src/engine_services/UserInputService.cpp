@@ -5,6 +5,7 @@
 #include "LuaApi.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <vector>
@@ -173,6 +174,32 @@ void UserInputService::post_mouse_move(float x, float y, bool processed) {
     push_locked(record);
 }
 
+void UserInputService::post_mouse_delta(float dx, float dy, bool processed) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!active_ || (dx == 0.f && dy == 0.f)) {
+        return;
+    }
+    InputRecord record;
+    record.type = kMouseMovement;
+    record.state = kChange;
+    record.position = posted_mouse_;
+    record.delta = Vec3{dx, dy, 0.f};
+    record.processed = processed;
+    const bool merges = !queue_.empty() && queue_.back().type == kMouseMovement && queue_.back().processed == processed;
+    if (!merges && queue_.size() >= kMaxQueued) {
+        return;
+    }
+    push_locked(record);
+}
+
+bool UserInputService::set_mouse_delta_sensitivity(double value) {
+    if (!std::isfinite(value)) {
+        return false;
+    }
+    mouse_delta_sensitivity_ = std::max(0.0, value);
+    return true;
+}
+
 void UserInputService::post_wheel(float x, float y, float amount, bool processed) {
     std::lock_guard<std::mutex> lock(mu_);
     if (!active_ || amount == 0.f || queue_.size() >= kMaxQueued) {
@@ -213,6 +240,7 @@ void UserInputService::end_held_locked() {
 }
 
 void UserInputService::post_focus_lost() {
+    set_mouse_behavior(kMouseBehaviorDefault);
     std::lock_guard<std::mutex> lock(mu_);
     if (!active_) {
         return;
@@ -261,9 +289,14 @@ void UserInputService::dispatch(EventQueue& events) {
     }
     first_payload_ = next_payload_;
     next_payload_ += dispatched_.size();
+    mouse_delta_ = Vec3{};
     for (std::size_t index = 0; index < dispatched_.size(); ++index) {
         const InputRecord& record = dispatched_[index];
         mouse_ = record.position;
+        if (record.type == kMouseMovement) {
+            mouse_delta_.x += record.delta.x;
+            mouse_delta_.y += record.delta.y;
+        }
         Kind kind = Kind::Changed;
         if (record.state == kBegin) {
             kind = Kind::Began;
@@ -306,6 +339,8 @@ void UserInputService::reset() {
     keys_down_.clear();
     std::fill(std::begin(buttons_down_), std::end(buttons_down_), false);
     mouse_ = Vec3{};
+    mouse_delta_ = Vec3{};
+    set_mouse_behavior(kMouseBehaviorDefault);
 }
 
 namespace {

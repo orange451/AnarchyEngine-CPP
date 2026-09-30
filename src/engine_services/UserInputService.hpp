@@ -3,6 +3,7 @@
 #include "Events.hpp"
 #include "types.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -48,6 +49,10 @@ public:
     static constexpr int kChange = 1;
     static constexpr int kEnd = 2;
     static constexpr int kCancel = 3;
+    // MouseBehavior values.
+    static constexpr int kMouseBehaviorDefault = 0;
+    static constexpr int kLockCenter = 1;
+    static constexpr int kLockCurrentPosition = 2;
 
     enum class Kind { Began, Changed, Ended };
 
@@ -69,8 +74,12 @@ public:
     void post_key(int key_code, bool down, bool processed = false);
     void post_mouse_button(int button, bool down, float x, float y, bool processed = false);
     void post_mouse_move(float x, float y, bool processed = false);
+    // Motion while the pointer is locked: a MouseMovement whose Delta is the
+    // motion, at the mouse location as it was. The location does not move.
+    void post_mouse_delta(float dx, float dy, bool processed = false);
     void post_wheel(float x, float y, float amount, bool processed = false);
-    // The scene view lost keyboard focus: every key and button still down ends.
+    // The scene view lost keyboard focus: every key and button still down ends, and
+    // MouseBehavior goes back to Default, since the view let the pointer go.
     void post_focus_lost();
 
     // SimulationThread. Between bind and release the signals belong to one
@@ -92,6 +101,20 @@ public:
     // Keys in the order they went down.
     const std::vector<int>& keys_down() const { return keys_down_; }
     Vec3 mouse_location() const { return mouse_; }
+
+    // SimulationThread. The Delta of every MouseMovement in the latest dispatch,
+    // added up and not scaled. GetMouseDelta scales it by the sensitivity.
+    Vec3 mouse_delta() const { return mouse_delta_; }
+
+    // Any thread. What scripts asked of the pointer. The scene view reads it
+    // each paint and locks the pointer while it is not Default.
+    int mouse_behavior() const { return mouse_behavior_.load(std::memory_order_relaxed); }
+    void set_mouse_behavior(int behavior) { mouse_behavior_.store(behavior, std::memory_order_relaxed); }
+
+    // SimulationThread. Clamped to 0 and up. False, changing nothing, when not finite.
+    double mouse_delta_sensitivity() const { return mouse_delta_sensitivity_; }
+    bool set_mouse_delta_sensitivity(double value);
+
     // SimulationThread. Forgets the dispatched state and records. The play
     // session calls this when it starts and stops.
     void reset();
@@ -119,11 +142,14 @@ private:
     std::vector<int> keys_down_;
     bool buttons_down_[3] = {};
     Vec3 mouse_{};
+    Vec3 mouse_delta_{};
+    double mouse_delta_sensitivity_ = 1.0;
 
     Signal began_;
     Signal changed_;
     Signal ended_;
     bool bound_ = false;
+    std::atomic<int> mouse_behavior_{kMouseBehaviorDefault};
 };
 
 }  // namespace engine_core

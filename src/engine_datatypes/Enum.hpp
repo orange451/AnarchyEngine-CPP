@@ -26,6 +26,7 @@ const EnumType& rotation_order_enum();
 const EnumType& key_code_enum();
 const EnumType& user_input_type_enum();
 const EnumType& user_input_state_enum();
+const EnumType& mouse_behavior_enum();
 
 // Every type the Enum global holds, for script analysis to declare.
 int enum_type_count();

@@ -156,6 +156,10 @@ const EnumEntry kUserInputStates[] = {
     {"Begin", 0}, {"Change", 1}, {"End", 2}, {"Cancel", 3}, {"None", 4},
 };
 
+const EnumEntry kMouseBehaviors[] = {
+    {"Default", 0}, {"LockCenter", 1}, {"LockCurrentPosition", 2},
+};
+
 template <std::size_t N>
 constexpr int count_of(const EnumEntry (&)[N]) {
     return static_cast<int>(N);
@@ -167,9 +171,11 @@ const EnumType kRotationOrderType{"RotationOrder", kRotationOrders, count_of(kRo
 const EnumType kKeyCodeType{"KeyCode", kKeyCodes, count_of(kKeyCodes)};
 const EnumType kUserInputTypeType{"UserInputType", kUserInputTypes, count_of(kUserInputTypes)};
 const EnumType kUserInputStateType{"UserInputState", kUserInputStates, count_of(kUserInputStates)};
+const EnumType kMouseBehaviorType{"MouseBehavior", kMouseBehaviors, count_of(kMouseBehaviors)};
 
-const EnumType* const kTypes[] = {&kNormalIdType, &kAxisType,          &kRotationOrderType,
-                                  &kKeyCodeType,  &kUserInputTypeType, &kUserInputStateType};
+const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kRotationOrderType,
+                                  &kKeyCodeType,        &kUserInputTypeType, &kUserInputStateType,
+                                  &kMouseBehaviorType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -237,6 +243,8 @@ const EnumType& key_code_enum() { return kKeyCodeType; }
 const EnumType& user_input_type_enum() { return kUserInputTypeType; }
 
 const EnumType& user_input_state_enum() { return kUserInputStateType; }
+
+const EnumType& mouse_behavior_enum() { return kMouseBehaviorType; }
 
 int enum_type_count() { return static_cast<int>(sizeof(kTypes) / sizeof(kTypes[0])); }
 

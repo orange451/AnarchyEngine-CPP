@@ -178,8 +178,13 @@ TEST_CASE("a long sim write does not block present", "[T4]") {
         if (stage.load() == 0 && engine.present_count() > 2) {
             // Still inside the sim write lock. Render may Present, but it cannot Prepare.
             presents_at_sleep.store(engine.present_count());
+            // Render publishes after it releases the lock, so a Prepare that
+            // finished just before this step took it may still publish now.
+            // Read the frame once that publish has landed; a later change
+            // would need a Prepare inside this lock.
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
             frame_at_sleep.store(engine.published_frame());
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(40));
             presents_after_sleep.store(engine.present_count());
             frame_after_sleep.store(engine.published_frame());
             stage.store(2);

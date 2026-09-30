@@ -21,6 +21,31 @@ bool insert_offers(const std::string& class_name) {
     return engine_core::lua_creatable_known(class_name.c_str()) && !engine_core::is_asset_class(class_name);
 }
 
+const char* describe_class(const std::string& name) {
+    struct Row {
+        const char* name;
+        const char* text;
+    };
+    static constexpr Row kRows[] = {
+        {"GameObject", "An object in the world you can see."},
+        {"Script", "Code that runs when the game plays."},
+        {"ModuleScript", "Code other scripts load with require."},
+        {"Folder", "Groups things together to stay tidy."},
+        {"Model", "A 3D model asset."},
+        {"Mesh", "A 3D shape asset."},
+        {"Texture", "An image asset."},
+        {"Material", "How a surface looks."},
+        {"Sound", "An audio asset."},
+        {"Prefab", "A reusable object template."},
+    };
+    for (const Row& row : kRows) {
+        if (name == row.name) {
+            return row.text;
+        }
+    }
+    return "";
+}
+
 constexpr double kOpenSeconds = 0.16;
 constexpr double kShadowMargin = 12;
 constexpr int kMaxVisibleRows = 8;
@@ -91,6 +116,14 @@ public:
         field_ = std::make_shared<InsertField>([this] { onTyped(); });
         field_->setOnAction([this](jadefx::ActionEvent&) { choose(selected_); });
         children().add(field_);
+        info_ = jadefx::make<jadefx::Label>("");
+        info_->setMouseTransparent(true);
+        info_->setAlignment(jadefx::Pos::CenterLeft);
+        info_->setOpacity(0.7f);
+        info_->setStyle(
+            "font-size: 12px; padding: 4px 4px 2px 4px; border-style: solid; border-width: 1px 0 0 0; "
+            "border-color: var(--ide-popup-border-color);");
+        children().add(info_);
         actions_ = jadefx::make<jadefx::HBox>();
         actions_->setSpacing(2);
         actions_->setAlignment(jadefx::Pos::CenterLeft);
@@ -201,6 +234,9 @@ protected:
         double height = fieldHeight(innerWidth);
         if (visible > 0) {
             height += kFieldGap + static_cast<double>(visible) * rowExtent(innerWidth);
+            if (info_) {
+                height += kFieldGap + info_->measuredHeight(std::max(0.0, innerWidth), -1);
+            }
         }
         if (!actionList_.empty() && actions_) {
             height += kFieldGap + actions_->measuredHeight(std::max(0.0, innerWidth), -1);
@@ -241,12 +277,24 @@ protected:
             }
             node->performLayout(left, listTop + static_cast<double>(index - start) * row, rowWidth, row);
         }
+        double below = listTop + static_cast<double>(visible) * row;
+        if (info_) {
+            if (visible > 0) {
+                const double infoHeight = info_->measuredHeight(width, -1);
+                info_->setVisible(true);
+                info_->performLayout(left, below + kFieldGap, width, infoHeight);
+                below += kFieldGap + infoHeight;
+            } else {
+                info_->setVisible(false);
+                info_->performLayout(0, 0, 0, 0);
+            }
+        }
         if (actions_) {
             if (actionList_.empty()) {
                 actions_->setVisible(false);
                 actions_->performLayout(0, 0, 0, 0);
             } else {
-                const double actionsTop = listTop + static_cast<double>(visible) * row + kFieldGap;
+                const double actionsTop = below + kFieldGap;
                 actions_->setVisible(true);
                 actions_->performLayout(left, actionsTop, width, actions_->measuredHeight(width, -1));
             }
@@ -354,6 +402,15 @@ private:
             children().insert(at, row);
             rows_.push_back(std::move(row));
         }
+        describe();
+    }
+
+    void describe() {
+        if (!info_) {
+            return;
+        }
+        const bool valid = selected_ >= 0 && selected_ < static_cast<int>(shown_.size());
+        info_->setText(valid ? describe_class(shown_[static_cast<std::size_t>(selected_)]) : "");
     }
 
     void setActions(std::vector<InsertAction> actions) {
@@ -416,6 +473,7 @@ private:
             rows_[static_cast<std::size_t>(index)]->setBackground(index == selected_ ? highlight
                                                                                       : jadefx::Color::transparent());
         }
+        describe();
     }
 
     void choose(int index) {
@@ -653,6 +711,7 @@ private:
     bool dropsUp_ = false;
     bool atPoint_ = false;
     std::shared_ptr<jadefx::HBox> actions_;
+    std::shared_ptr<jadefx::Label> info_;
     std::vector<InsertAction> actionList_;
     std::chrono::steady_clock::time_point openedAt_{};
     jadefx::ScrollTrack bar_{};

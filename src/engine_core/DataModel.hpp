@@ -168,9 +168,11 @@ public:
     // its own, or inserts a primary one.
     virtual void context_actions(std::vector<ContextAction>& out) const;
 
-    // Heartbeat calls this on every descendant of the root. dt is that phase's
-    // step in seconds. The root itself is not stepped.
+    // Heartbeat calls this on each instance under the root whose class steps.
+    // dt is that phase's step in seconds. The root itself is not stepped.
     virtual void step(double dt) { (void)dt; }
+    // True for a class Heartbeat steps. Read once, when its entity is issued.
+    virtual bool steps() const { return false; }
 
     void set_thread_ids(std::thread::id simulation, std::thread::id render);
     void set_threads_running(bool running);
@@ -353,8 +355,12 @@ public:
 
     // Moves every simulated, non-visual GameObject by its velocity and dirties Transform.
     void integrate_simulated(double dt);
-    // Heartbeat. Calls step(dt) on every descendant of the root.
-    void step_descendants(double dt);
+    // Heartbeat. Calls step(dt) on every stepping instance under the root, in
+    // no set order. The ids are gathered first, so a step may create, destroy,
+    // or reparent; an instance destroyed before its turn is skipped.
+    void step_instances(double dt);
+    // How many instances step_instances would step now.
+    std::size_t stepper_count() const;
 
     // Startup and resync. Visits live GameObjects only.
     void for_each_instance(const std::function<void(DataModel&)>& fn);

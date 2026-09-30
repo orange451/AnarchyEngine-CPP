@@ -161,6 +161,9 @@ void DataModel::adopt_slot(std::uint16_t pool_index, InstanceId id) {
     const std::uint32_t storage = take_storage(pool);
     issue_entity(part, id);
     DataModel* object = pooled_object(pool, storage, id);
+    if (object->steps()) {
+        ecs_add_id(ecs_world(), part.entity, state_->ecs_ids.steps);
+    }
     part.pool = pool_index;
     part.storage = storage;
     part.instance = object;

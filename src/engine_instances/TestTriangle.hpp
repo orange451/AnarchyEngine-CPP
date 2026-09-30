@@ -15,6 +15,7 @@ public:
     TestTriangle(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
 
     const char* class_name() const override { return "TestTriangle"; }
+    bool steps() const override { return true; }
 
     void step(double dt) override;
     void set_position(float x, float y, float z);

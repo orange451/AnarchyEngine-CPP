@@ -85,6 +85,12 @@ struct DataModel::State {
     // Touched under write_mu, like the slots.
     flecs::world ecs;
     EcsIds ecs_ids;
+    // Built once with the world; after it, so they are destroyed first.
+    // Stepping instances under game: Instance, with Steps and InGame.
+    flecs::query<> step_query;
+    // Moving bodies: Instance (in), Transform (in-out), Velocity (in), with
+    // Simulated and without VisualOnly.
+    flecs::query<> physics_query;
 
     // Guards slots, free lists, invalidation, and resync.
     // SimulationThread may hold Write across a whole step and may re-enter

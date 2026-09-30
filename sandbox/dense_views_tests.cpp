@@ -5,6 +5,7 @@
 #include "ChangeHistoryService.hpp"
 #include "DenseIdSet.hpp"
 #include "GameObject.hpp"
+#include "TestTriangle.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -269,4 +270,66 @@ TEST_CASE("Stop takes scope from an instance that was unparented at capture", "[
     REQUIRE(game.parent(loose.id()) == engine_core::DataModel::kNoParent);
     REQUIRE_FALSE(game.in_game(loose.id()));
     REQUIRE_FALSE(game.in_workspace(child.id()));
+}
+
+TEST_CASE("a triangle steps only while it is under game", "[dense][step]") {
+    SimRole role;
+    engine_core::Game game;
+    const engine_core::InstanceId ws = workspace_of(game);
+    engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
+    const engine_core::InstanceId id = triangle.id();
+    game.step_instances(0.25);
+    REQUIRE(triangle.angle_degrees() == 0.0);
+    game.set_parent(id, ws);
+    game.step_instances(0.25);  // 90 degrees a second
+    REQUIRE(triangle.angle_degrees() == 22.5);
+    game.set_parent(id, engine_core::DataModel::kNoParent);
+    game.step_instances(0.25);
+    REQUIRE(triangle.angle_degrees() == 22.5);
+    game.set_parent(id, game.scene_service("Storage"));  // anywhere under game steps
+    game.step_instances(0.25);
+    REQUIRE(triangle.angle_degrees() == 45.0);
+    game.destroy(id);
+    game.step_instances(0.25);
+    REQUIRE_FALSE(game.alive(id));
+    REQUIRE(game.stepper_count() == 0);
+}
+
+TEST_CASE("plain instances never step", "[dense][step]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::DataModel& folder = game.create();
+    game.set_parent(folder.id(), workspace_of(game));
+    REQUIRE(game.stepper_count() == 0);
+    engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
+    REQUIRE(game.stepper_count() == 0);  // not under game yet
+    game.set_parent(triangle.id(), folder.id());
+    REQUIRE(game.stepper_count() == 1);
+}
+
+TEST_CASE("physics moves simulated bodies only", "[dense][physics]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& moving = game.create_game_object();
+    engine_core::GameObject& idle = game.create_game_object();
+    engine_core::GameObject& shown = game.create_game_object();
+    engine_core::GameObject& still = game.create_game_object();
+    for (engine_core::GameObject* body : {&moving, &idle, &shown, &still}) {
+        game.set_parent(body->id(), workspace_of(game));
+    }
+    moving.set_linear_velocity(4.f, 0.f, -2.f);
+    idle.set_linear_velocity(4.f, 0.f, 0.f);
+    shown.set_linear_velocity(4.f, 0.f, 0.f);
+    game.set_simulated(moving.id(), true);
+    game.set_simulated(shown.id(), true);
+    game.set_visual_only(shown.id(), true);
+    game.set_simulated(still.id(), true);  // zero velocity
+    game.invalidations().clear();
+    game.integrate_simulated(0.5);
+    REQUIRE(moving.transform().m[12] == 2.f);
+    REQUIRE(moving.transform().m[14] == -1.f);
+    REQUIRE(idle.transform().m[12] == 0.f);
+    REQUIRE(shown.transform().m[12] == 0.f);
+    REQUIRE(still.transform().m[12] == 0.f);
+    REQUIRE(game.invalidations().size() == 1);
 }

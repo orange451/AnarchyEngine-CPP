@@ -41,6 +41,19 @@ std::string make_guid() {
 DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()), state_(owned_.get()) {
     State& world = *state_;
     world.ecs_ids = register_ecs(world.ecs);
+    world.step_query =
+        world.ecs.query_builder<>().with<ecs::Instance>().in().with<ecs::Steps>().with<ecs::InGame>().cached().build();
+    world.physics_query = world.ecs.query_builder<>()
+                              .with<ecs::Instance>()
+                              .in()
+                              .with<Transform>()
+                              .inout()
+                              .with<ecs::Velocity>()
+                              .in()
+                              .with<ecs::Simulated>()
+                              .without<ecs::VisualOnly>()
+                              .cached()
+                              .build();
     world.slots.reserve(kMaxInstances);
     world.free_list.reserve(kMaxInstances);
     world.invalidation.reserve(kMaxInvalidations);
@@ -456,6 +469,9 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
     const std::uint32_t index = id_slot(id);
     issue_entity(world.slots[index], id);
     DataModel* object = pooled_object(*pool, storage, id);
+    if (object->steps()) {
+        ecs_add_id(ecs_world(), world.slots[index].entity, world.ecs_ids.steps);
+    }
     const char* label = object->class_name();
     object->name_ = label != nullptr ? label : std::string();
     // Assigned once. A project load replaces it with the GUID from disk.
@@ -734,68 +750,53 @@ bool DataModel::visual_only(InstanceId id) const {
 
 void DataModel::integrate_simulated(double dt) {
     const float step = static_cast<float>(dt);
-    State& world = *state_;
-    ecs_world_t* ecs = ecs_world();
-    const EcsIds& ids = world.ecs_ids;
-    for (std::uint32_t index = 0; index < world.slots.size(); ++index) {
-        Slot& part = world.slots[index];
-        if (!part.alive || part.body == nullptr || !has_tag(ecs, part.entity, ids.simulated) ||
-            has_tag(ecs, part.entity, ids.visual_only)) {
-            continue;
+    // Writes component values only, so it runs inside the query. note() only
+    // queues, and watcher callbacks must not call back into the DataModel.
+    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->physics_query.c_ptr());
+    while (ecs_query_next(&it)) {
+        const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
+        auto* transforms = static_cast<Transform*>(ecs_field_w_size(&it, sizeof(Transform), 1));
+        const auto* velocities = static_cast<const ecs::Velocity*>(ecs_field_w_size(&it, sizeof(ecs::Velocity), 2));
+        for (std::int32_t i = 0; i < it.count; ++i) {
+            const ecs::Velocity& velocity = velocities[i];
+            if (velocity.x == 0.f && velocity.y == 0.f && velocity.z == 0.f) {
+                continue;
+            }
+            transforms[i].m[12] += velocity.x * step;
+            transforms[i].m[13] += velocity.y * step;
+            transforms[i].m[14] += velocity.z * step;
+            note(owners[i].id, VisualField::Transform, WriteOrigin::Simulation);
+            notify_watchers(owners[i].id);
         }
-        const ecs::Velocity* velocity = read_component<ecs::Velocity>(ecs, part.entity, ids.velocity);
-        if (velocity == nullptr || (velocity->x == 0.f && velocity->y == 0.f && velocity->z == 0.f)) {
-            continue;
-        }
-        Transform moved = part.body->transform();
-        moved.m[12] += velocity->x * step;
-        moved.m[13] += velocity->y * step;
-        moved.m[14] += velocity->z * step;
-        part.body->store_transform(moved);
-        const InstanceId id = make_instance_id(part.generation, index);
-        note(id, VisualField::Transform, WriteOrigin::Simulation);
-        notify_watchers(id);
     }
 }
 
-void DataModel::step_descendants(double dt) {
+void DataModel::step_instances(double dt) {
+    // Gather first: step() may create, destroy, or reparent, which flecs would
+    // defer inside a running query. step_ids is reserved, so this does not allocate.
     std::vector<InstanceId>& ids = state_->step_ids;
     ids.clear();
-    for (InstanceId child = state_->root_first_child; child != 0;) {
-        if (ids.size() == ids.capacity()) {
-            break;
-        }
-        ids.push_back(child);
-        const Slot* part = slot(child);
-        if (part == nullptr) {
-            break;
-        }
-        child = part->next_sibling;
-    }
-    for (std::size_t index = 0; index < ids.size(); ++index) {
-        const Slot* part = slot(ids[index]);
-        if (part == nullptr) {
-            continue;
-        }
-        for (InstanceId child = part->first_child; child != 0;) {
-            if (ids.size() == ids.capacity()) {
-                break;
-            }
-            ids.push_back(child);
-            const Slot* child_slot = slot(child);
-            if (child_slot == nullptr) {
-                break;
-            }
-            child = child_slot->next_sibling;
+    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->step_query.c_ptr());
+    while (ecs_query_next(&it)) {
+        const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
+        for (std::int32_t i = 0; i < it.count; ++i) {
+            ids.push_back(owners[i].id);
         }
     }
-    const std::size_t count = ids.size();
-    for (std::size_t index = 0; index < count; ++index) {
-        DataModel* object = instance(ids[index]);
-        if (object != nullptr) {
+    for (const InstanceId id : ids) {
+        if (DataModel* object = instance(id)) {
             object->step(dt);
         }
     }
+}
+
+std::size_t DataModel::stepper_count() const {
+    std::size_t count = 0;
+    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->step_query.c_ptr());
+    while (ecs_query_next(&it)) {
+        count += static_cast<std::size_t>(it.count);
+    }
+    return count;
 }
 
 DataModel::InstanceSignals* DataModel::bag_for(InstanceId id) {

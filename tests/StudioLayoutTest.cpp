@@ -4,6 +4,7 @@
 #include "ide/IdeResources.hpp"
 #include "ide/IdePane.hpp"
 #include "ide/IdeSearch.hpp"
+#include "ide/IdeTerminal.hpp"
 
 #include "Engine.hpp"
 #include "Project.hpp"
@@ -318,10 +319,10 @@ int main() {
         for (const std::shared_ptr<jadefx::MenuItem>& item : windows->getItems().items()) {
             labels.push_back(item ? item->getText() : std::string());
         }
-        expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "Terminal", "Assets", "",
-                                                  "New Scene View", "", "Save Layout as Default", "Reset to Default Layout",
+        expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "Assets", "",
+                                                  "New Scene View", "New Terminal", "", "Save Layout as Default", "Reset to Default Layout",
                                                   "Restore Built-in Default"},
-               "Window lists the explorers, Properties, Console, Search, Conflicts, Terminal, and Assets, then New Scene View and the default layout's items");
+               "Window lists the explorers, Properties, Console, Search, Conflicts, and Assets, then New Scene View, New Terminal, and the default layout's items");
         double time = 1.1;
         auto frame = [&] {
             scene->layout(1280, 800, time);
@@ -429,6 +430,53 @@ int main() {
         frame();
         expect(showing("Scene View 2") == nullptr && showing("Scene View 3") == nullptr,
                "a new view closes like any tab");
+
+        // Each pick docks another terminal in with the console. Fired without a
+        // frame, so no shell starts, and closed before the next one.
+        {
+            ide::IdePane* assets = showing("Assets");
+            ide::IdeDock* console_dock = nullptr;
+            for (jadefx::Node* node = assets; node != nullptr && console_dock == nullptr;
+                 node = node->getParent()) {
+                console_dock = dynamic_cast<ide::IdeDock*>(node);
+            }
+            auto fire = [&](const std::string& text) {
+                for (const std::shared_ptr<jadefx::MenuItem>& item : windows->getItems().items()) {
+                    if (item && item->getText() == text) {
+                        item->fire();
+                    }
+                }
+            };
+            auto terminals = [&] {
+                std::vector<std::shared_ptr<jadefx::Tab>> found;
+                if (console_dock != nullptr) {
+                    for (const std::shared_ptr<jadefx::Tab>& tab : console_dock->tabs()->getTabs().items()) {
+                        if (tab && dynamic_cast<ide::IdeTerminal*>(tab->getContent()) != nullptr) {
+                            found.push_back(tab);
+                        }
+                    }
+                }
+                return found;
+            };
+            expect(console_dock != nullptr && terminals().empty(), "the studio starts with no terminal");
+            fire("New Terminal");
+            fire("New Terminal");
+            const std::vector<std::shared_ptr<jadefx::Tab>> made = terminals();
+            expect(made.size() == 2 && made[0]->getContent() != made[1]->getContent(),
+                   "New Terminal docks a new terminal each time, in with the console");
+            expect(made.size() == 2 && made[1]->isSelected(), "the newest one is in front");
+            expect(made.size() == 2 && made[0]->isClosable(), "a terminal closes like any tab");
+            for (const std::shared_ptr<jadefx::Tab>& tab : made) {
+                if (tab->getTabPane() != nullptr) {
+                    tab->getTabPane()->close(tab);
+                }
+            }
+            expect(terminals().empty(), "closing their tabs takes them away");
+            if (console_dock != nullptr) {
+                console_dock->select(assets);
+            }
+            frame();
+        }
 
         // Reset to Default Layout puts the windows back as a new studio has
         // them. Close Properties, move the console in with the game

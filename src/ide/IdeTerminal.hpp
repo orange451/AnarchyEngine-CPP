@@ -21,9 +21,9 @@ struct TerminalHost {
 
 // The user's shell on a pseudo-terminal, in a page that docks like any other.
 // The shell starts at the page's first layout, at its size, and lives as long
-// as the page: switching tabs or closing this one leaves it running, so the
-// Window menu brings back the same session. When it exits the page says so,
-// and Enter starts another. The tab shows the title the program sets.
+// as the page: switching tabs leaves it running, and closing the tab ends it.
+// When it exits the page says so, and Enter starts another. The tab shows the
+// title the program sets.
 class IdeTerminal : public IdePane {
 public:
     explicit IdeTerminal(TerminalHost host = {});

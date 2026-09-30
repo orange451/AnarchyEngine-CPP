@@ -172,7 +172,7 @@ void IdeLayout::reset_builtin_layout() {
             tab->getTabPane()->close(tab);
         }
     }
-    // Script editors and extra scene views stay open, beside the scene view.
+    // Script editors, extra scene views, and terminals stay open, beside the scene view.
     std::vector<std::shared_ptr<jadefx::Tab>> others;
     for (const std::shared_ptr<IdeDock>& dock : old_docks) {
         for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
@@ -298,7 +298,7 @@ bool IdeLayout::apply_layout(const engine_core::JsonValue& saved) {
             show_window(*entry);
         }
     }
-    // Script editors and extra scene views stay open, beside the scene view,
+    // Script editors, extra scene views, and terminals stay open, beside the scene view,
     // which keeps the tab the layout selected there.
     if (sceneDock_ != nullptr) {
         jadefx::Tab* selected = sceneDock_->tabs()->getSelectedTab();
@@ -394,6 +394,7 @@ void IdeLayout::fill_window_menu(jadefx::Menu& menu) {
     }
     menu.getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     add("New Scene View", "Camera.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { new_scene_view(); });
+    add("New Terminal", "Console.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { new_terminal(); });
     menu.getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     add("Save Layout as Default", std::string(), nullptr)->setOnAction([this](jadefx::ActionEvent&) {
         save_default_layout();
@@ -525,12 +526,28 @@ void IdeLayout::new_scene_view() {
     home->dock(jadefx::make<runner::GameView>(runner_, "Scene View " + std::to_string(scene_views_), true));
 }
 
+void IdeLayout::new_terminal() {
+    if (IdeDock* home = beside_console()) {
+        home->dock(make_terminal());
+    }
+}
+
+IdeDock* IdeLayout::beside_console() {
+    if (const std::shared_ptr<IdeConsole> log = console_.lock()) {
+        if (IdeDock* dock = dockContaining(log.get())) {
+            return dock;
+        }
+    }
+    IdeDock* above = sceneDock_ != nullptr && sceneDock_->getParent() != nullptr ? sceneDock_ : nullptr;
+    return dock_beside(above, DropSide::Bottom, kConsoleHeight);
+}
+
 LayoutHost IdeLayout::layout_host() {
     // The pages one load has docked, so a name the file repeats docks once.
     auto placed = std::make_shared<std::unordered_set<const IdePane*>>();
     LayoutHost host;
-    // The one-of-a-kind pages and the first scene view. Script editors and
-    // extra views are not kept.
+    // The one-of-a-kind pages and the first scene view. Script editors, extra
+    // views, and terminals are not kept.
     host.name_of = [this](const IdePane& page) -> std::string {
         if (&page == scene_view_.get()) {
             return page.name();

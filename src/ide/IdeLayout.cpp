@@ -274,21 +274,9 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     search_window_ = &keep_closed("Search", "Search.png", [this] { return make_search(); });
     search_window_->open = [this] { open_search(false, scene_); };
     conflicts_window_ = &keep_closed("Conflicts", "Warning.png", [this] { return make_conflicts(); });
-    terminal_window_ = &keep_closed("Terminal", "Console.png", [this] { return make_terminal(); });
-    // In with the console, as a code editor docks its terminal under the code.
-    terminal_window_->home = [this] {
-        if (const std::shared_ptr<IdeConsole> log = console_.lock()) {
-            if (IdeDock* dock = dockContaining(log.get())) {
-                return dock;
-            }
-        }
-        IdeDock* above = sceneDock_ != nullptr && sceneDock_->getParent() != nullptr ? sceneDock_ : nullptr;
-        return dock_beside(above, DropSide::Bottom, kConsoleHeight);
-    };
-
     assets_window_ = &keep_closed("Assets", "AssetFolder.png", [this] { return make_assets(); });
     // In with the console, as a project browser docks under the scene.
-    assets_window_->home = terminal_window_->home;
+    assets_window_->home = [this] { return beside_console(); };
 
     if (!restore_layout() && !apply_builtin_layout()) {
         default_layout(windowWidth, windowHeight,

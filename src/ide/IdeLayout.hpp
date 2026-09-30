@@ -65,14 +65,15 @@ class PropertiesPanel;
 // Picking a closed one opens it where it last was, picking one hidden behind
 // another tab brings it forward, and picking one that is showing closes it.
 // Below them, New Scene View docks another view of the place beside the first,
+// and New Terminal docks another shell in with the console.
 // Save Layout as Default keeps the layout, but not the main window's place, in
 // default-layout.json in the config folder. Reset to Default Layout puts the
 // windows back as that has them, or, with none, as a new studio has them.
 // Restore Built-in Default forgets the saved one and resets to the built-in layout.
 // Where the docks are, what each holds, which windows are closed, and the
 // main window's place and size are kept in layout.json in the config folder
-// when the window closes, and the next start puts them back. Script editors and extra scene views are
-// not kept. Without that file, or when it cannot be read, the studio starts
+// when the window closes, and the next start puts them back. Script editors, extra scene views, and
+// terminals are not kept. Without that file, or when it cannot be read, the studio starts
 // with its default layout.
 class IdeLayout {
 public:
@@ -226,7 +227,7 @@ private:
     // replace hidden. A selection on one line in the focused
     // editor becomes the find text.
     void open_search(bool replace, jadefx::Scene* scene);
-    // Adds the one-of-a-kind windows and New Scene View to the Window menu.
+    // Adds the one-of-a-kind windows, New Scene View, and New Terminal to the Window menu.
     void fill_window_menu(jadefx::Menu& menu);
     struct WindowEntry;
     // Runs open when no dock holds pane. Otherwise brings its tab forward, or
@@ -243,12 +244,16 @@ private:
     // A new dock on one side of target, depth points across. Target null is the whole work area.
     IdeDock* dock_beside(jadefx::Node* target, DropSide side, double depth);
     void new_scene_view();
+    // Docks a new shell in with the console. Closing its tab ends the shell.
+    void new_terminal();
+    // The console's dock, or a new one under the scene view when the console is closed.
+    IdeDock* beside_console();
     // Builds the default layout's docks in the main window, and hands each
     // page to place with the dock it goes in.
     void default_layout(double windowWidth, double windowHeight,
                         const std::function<void(IdeDock&, const std::shared_ptr<IdePane>&)>& place);
     // Puts the windows back as the saved default has them, or, with none, as
-    // the built-in layout does. Script editors and extra scene views move in
+    // the built-in layout does. Script editors, extra scene views, and terminals move in
     // beside the scene view.
     void reset_layout();
     // The built-in layout, as apply_builtin_layout puts it. When that cannot be
@@ -397,7 +402,6 @@ private:
     // Search's and Conflicts' entries in windows_.
     WindowEntry* search_window_ = nullptr;
     WindowEntry* conflicts_window_ = nullptr;
-    WindowEntry* terminal_window_ = nullptr;
     WindowEntry* assets_window_ = nullptr;
     // Scene views opened so far, which numbers the next one's tab.
     int scene_views_ = 1;

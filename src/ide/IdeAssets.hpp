@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AssetBrowser.hpp"
+#include "ChangeFlag.hpp"
 #include "IdeExplorer.hpp"
 #include "IdePane.hpp"
 
@@ -36,6 +37,7 @@ struct AssetsHost {
 class IdeAssets : public IdePane {
 public:
     IdeAssets(engine_core::DataModel& world, AssetsHost host);
+    ~IdeAssets() override;
 
     AssetBrowser& browser() { return browser_; }
     AssetView view() const { return view_; }
@@ -146,6 +148,11 @@ private:
     AssetView built_view_ = AssetView::Icons;
     std::uint64_t selection_seen_ = ~std::uint64_t{0};
     std::vector<engine_core::InstanceId> selected_;
+    // Set when a property of a shown instance changes, as a Path edit or its
+    // undo does, which moves no tree revision; the next frame rebuilds.
+    ChangeFlag edited_;
+    std::uint64_t watch_ = 0;
+    std::vector<engine_core::InstanceId> watched_;
     // The last item clicked, where Shift+click extends from.
     engine_core::InstanceId anchor_ = 0;
 };

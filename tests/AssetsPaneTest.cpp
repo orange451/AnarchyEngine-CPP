@@ -2,6 +2,7 @@
 #include "ide/IdeAssets.hpp"
 #include "SelectionService.hpp"
 
+#include "AssetInstances.hpp"
 #include "DataModel.hpp"
 #include "Folder.hpp"
 #include "Game.hpp"
@@ -583,6 +584,48 @@ void status_counts_only_shown() {
 
 }  // namespace
 
+// A property set in the game, with nothing else changed, shows at the next
+// frame: List's Path column, and the Columns preview.
+void property_edits_refresh() {
+    Rig rig("list");
+    rig.pane->openFolder(rig.textures);
+    rig.frame(0);
+    auto* brick = dynamic_cast<engine_core::Texture*>(rig.game.instance(rig.brick));
+    Expect(brick != nullptr, "Brick is a Texture");
+    if (brick == nullptr) {
+        return;
+    }
+    auto path_cell = [&rig]() -> std::string {
+        jadefx::Node* row = rig.pane->itemNode(rig.brick);
+        const std::vector<jadefx::Node*> cells =
+            row != nullptr ? row->getElementsByClassName("assets-cell") : std::vector<jadefx::Node*>{};
+        auto* label = cells.empty() ? nullptr : dynamic_cast<jadefx::Labeled*>(cells.back());
+        return label != nullptr ? label->getText() : std::string("<no cell>");
+    };
+    Expect(path_cell().empty(), "Brick's Path starts empty");
+    Expect(!brick->set_path("textures/brick.png"), "the Path is taken");
+    rig.frame(0.1);
+    Expect(path_cell() == "textures/brick.png", "List's Path column follows a Path set in the game");
+
+    rig.pane->setView(ide::AssetView::Columns);
+    rig.frame(1.0);
+    rig.clickItem(rig.brick, 1.5);
+    rig.frame(1.6);
+    auto previewed = [&rig](const std::string& text) {
+        for (jadefx::Node* node : rig.pane->getElementsByClassName("assets-preview-value")) {
+            auto* label = dynamic_cast<jadefx::Labeled*>(node);
+            if (label != nullptr && label->getText() == text) {
+                return true;
+            }
+        }
+        return false;
+    };
+    Expect(previewed("textures/brick.png"), "the preview shows Brick's Path");
+    Expect(!brick->set_path("textures/other.png"), "a second Path is taken");
+    rig.frame(2.0);
+    Expect(previewed("textures/other.png"), "the preview follows a Path set in the game");
+}
+
 int main() {
     starts_in_saved_view();
     navigates();
@@ -598,6 +641,7 @@ int main() {
     prefab_menu_offers_add_as_game_object();
     up_goes_up_one_level();
     status_counts_only_shown();
+    property_edits_refresh();
     if (gFailures == 0) {
         std::printf("assets tests passed\n");
         return 0;

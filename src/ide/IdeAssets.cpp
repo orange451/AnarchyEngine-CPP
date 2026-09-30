@@ -438,6 +438,7 @@ void set_class(jadefx::Node& node, const char* name, bool on) {
 
 IdeAssets::IdeAssets(engine_core::DataModel& world, AssetsHost host)
     : IdePane("Assets", true), world_(world), host_(std::move(host)), browser_(world) {
+    watch_ = world_.watch_changes(edited_.setter());
     setPrefWidth(9999999);
     setMinSize(240, 120);
     getClassList().add("assets-pane");
@@ -559,6 +560,8 @@ IdeAssets::IdeAssets(engine_core::DataModel& world, AssetsHost host)
     fit_view();
 }
 
+IdeAssets::~IdeAssets() { world_.unwatch_changes(watch_); }
+
 void IdeAssets::fit_view() {
     // A search lists its matches the way List does, whatever the view.
     const bool columns = view_ == AssetView::Columns && !searching();
@@ -609,9 +612,22 @@ void IdeAssets::layoutChildren() {
     {
         engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kFrameLockWait);
         if (lock.owns()) {
-            const bool changed = browser_.refresh() || dirty_ || !built_ || built_view_ != view_;
+            // Taken before the read, so a change made while reading reads again next frame.
+            const bool edited = edited_.take();
+            const bool changed = browser_.refresh() || dirty_ || !built_ || built_view_ != view_ || edited;
             if (changed) {
                 rebuild();
+                // Every item shown, the preview's among them, so an edit to one rebuilds.
+                std::vector<engine_core::InstanceId> shown;
+                shown.reserve(items_.size());
+                for (const auto& item : items_) {
+                    shown.push_back(item.first);
+                }
+                std::sort(shown.begin(), shown.end());
+                if (shown != watched_) {
+                    watched_ = shown;
+                    world_.set_watched(watch_, std::move(shown));
+                }
             }
             if (pending_insert_ && pending_insert_->done.load(std::memory_order_acquire)) {
                 finish_insert();

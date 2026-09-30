@@ -17,6 +17,12 @@ engine_core::InstanceId test_id(std::uint32_t generation, std::uint32_t slot) {
     return engine_core::make_instance_id(generation, slot);
 }
 
+// One Prepare and publish, without engine threads.
+void pump_frame(engine_core::SnapshotPump& pump, engine_core::DataModel& game) {
+    pump.prepare_copy(game);
+    pump.publish();
+}
+
 }  // namespace
 
 TEST_CASE("DenseIdSet inserts, finds, and rejects duplicates", "[dense]") {
@@ -305,6 +311,72 @@ TEST_CASE("a triangle steps only while it is under game", "[dense][step]") {
     REQUIRE(game.stepper_count() == 0);
 }
 
+TEST_CASE("undo revives a triangle that still steps", "[dense][step]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
+    const engine_core::InstanceId id = triangle.id();
+    game.set_parent(id, workspace_of(game));
+    game.history().end_gesture();
+    game.destroy(id);
+    game.history().end_gesture();
+    REQUIRE(game.stepper_count() == 0);
+    game.history().undo();
+    REQUIRE(game.alive(id));
+    REQUIRE(game.stepper_count() == 1);
+    auto* revived = dynamic_cast<engine_core::TestTriangle*>(game.instance(id));
+    REQUIRE(revived != nullptr);
+    const double before = revived->angle_degrees();
+    game.step_instances(0.25);
+    REQUIRE(revived->angle_degrees() == before + 22.5);
+}
+
+TEST_CASE("Stop rebuilds authored instances whose slots play reused", "[dense][entity]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    const engine_core::InstanceId ws = workspace_of(game);
+    engine_core::GameObject& part = game.create_game_object();
+    const engine_core::InstanceId part_id = part.id();
+    game.set_parent(part_id, ws);
+    part.set_color(rgb(0.25f, 0.5f, 0.75f));
+    game.set_simulated(part_id, true);
+    game.set_visual_only(part_id, true);
+    engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
+    const engine_core::InstanceId triangle_id = triangle.id();
+    game.set_parent(triangle_id, ws);
+    game.capture_place();
+
+    game.start_simulation();
+    game.destroy(part_id);
+    game.destroy(triangle_id);
+    // New instances take the freed slots with newer generations, so Stop must
+    // retire them and rebuild the authored ones from scratch.
+    engine_core::DataModel& squatter = game.create();
+    engine_core::DataModel& other = game.create();
+    game.set_parent(squatter.id(), game.scene_service("Storage"));
+    game.set_parent(other.id(), game.scene_service("Storage"));
+    const auto slot_of = [](engine_core::InstanceId id) { return engine_core::id_slot(id); };
+    const bool reused = (slot_of(squatter.id()) == slot_of(part_id) && slot_of(other.id()) == slot_of(triangle_id)) ||
+                        (slot_of(squatter.id()) == slot_of(triangle_id) && slot_of(other.id()) == slot_of(part_id));
+    REQUIRE(reused);
+    game.stop_simulation();
+
+    REQUIRE(game.alive(part_id));
+    REQUIRE(game.simulated(part_id));
+    REQUIRE(game.visual_only(part_id));
+    REQUIRE(game.in_workspace(part_id));
+    REQUIRE(game.game_object(part_id)->color().g == 0.5f);
+    REQUIRE(game.alive(triangle_id));
+    REQUIRE(game.in_game(triangle_id));
+    REQUIRE(game.stepper_count() == 1);
+    pump_frame(pump, game);
+    const engine_core::VisualInstance* row = pump.find(part_id);
+    REQUIRE(row != nullptr);
+    REQUIRE(row->color.b == 0.75f);
+}
+
 TEST_CASE("plain instances never step", "[dense][step]") {
     SimRole role;
     engine_core::Game game;
@@ -343,16 +415,6 @@ TEST_CASE("physics moves simulated bodies only", "[dense][physics]") {
     REQUIRE(still.transform().m[12] == 0.f);
     REQUIRE(game.invalidations().size() == 1);
 }
-
-namespace {
-
-// One Prepare and publish, without engine threads.
-void pump_frame(engine_core::SnapshotPump& pump, engine_core::DataModel& game) {
-    pump.prepare_copy(game);
-    pump.publish();
-}
-
-}  // namespace
 
 TEST_CASE("only Workspace GameObjects have snapshot rows", "[dense][member]") {
     SimRole role;

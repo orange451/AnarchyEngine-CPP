@@ -9,6 +9,7 @@
 #include "ThemeLibrary.hpp"
 #include "Project.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -191,8 +192,10 @@ private:
     void confirm_discard(const std::string& question, std::function<void()> proceed);
     // The place as it is now is what is on disk, or the starting point of New.
     void mark_saved();
-    // Recomputes the unsaved state when the place or an editor changed.
-    void refresh_modified();
+    // Recomputes the unsaved state when the place or an editor changed. Called
+    // each frame, so while the place keeps changing, as while the camera flies,
+    // it checks at most every 250 ms unless force is set.
+    void refresh_modified(bool force = false);
     bool editors_unflushed() const;
     // Runs fn on this thread with the simulation paused, then resumes a test
     // that was stepping. Play steps wait meanwhile.
@@ -473,6 +476,8 @@ private:
     std::uint64_t saved_fingerprint_ = 0;
     // DataModel::authored_revision when place_modified_ was computed.
     std::uint64_t seen_revision_ = ~std::uint64_t{0};
+    // When place_modified_ was last computed, which refresh_modified paces by.
+    std::chrono::steady_clock::time_point modified_checked_at_{};
     bool place_modified_ = false;
     // What the window title shows now.
     bool title_modified_ = false;

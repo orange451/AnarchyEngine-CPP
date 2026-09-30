@@ -8,7 +8,15 @@
 #include "LockWaits.hpp"
 #include "PropertySheet.hpp"
 
+#include <chrono>
+
 namespace ide {
+namespace {
+
+// How often refresh_modified checks the place while it keeps changing.
+constexpr std::chrono::milliseconds kModifiedCheckInterval{250};
+
+}  // namespace
 
 const std::shared_ptr<IdeConflicts>& IdeLayout::conflicts_pane() {
     window_page(*conflicts_window_);
@@ -271,13 +279,19 @@ void IdeLayout::mark_saved() {
     update_title();
 }
 
-void IdeLayout::refresh_modified() {
+void IdeLayout::refresh_modified(bool force) {
     engine_core::DataModel& game = runner_.simulation().datamodel();
     const std::uint64_t revision = game.authored_revision();
-    if (revision != seen_revision_) {
-        // Only an authored change moves the revision, so this runs at the pace
-        // of edits. Play steps do not move it.
+    const auto checked = std::chrono::steady_clock::now();
+    // Only an authored change moves the revision; play steps do not. Flying the
+    // scene camera moves it every step, though, and the check below reads the
+    // whole place. So while it keeps moving the check waits out the interval.
+    // seen_revision_ stays behind meanwhile, so a later frame checks the place
+    // as it ends up.
+    const bool due = force || checked - modified_checked_at_ >= kModifiedCheckInterval;
+    if (revision != seen_revision_ && due) {
         seen_revision_ = revision;
+        modified_checked_at_ = checked;
         // A project compares key by key, so a file on disk that is only
         // formatted differently does not count. An untitled place has no files.
         std::uint64_t now = 0;
@@ -298,7 +312,8 @@ void IdeLayout::refresh_modified() {
 
 bool IdeLayout::has_unsaved_changes() {
     seen_revision_ = ~std::uint64_t{0};
-    refresh_modified();
+    // Asked before a save or a discard, so it checks now, whatever the pace.
+    refresh_modified(true);
     return place_modified_ || editors_unflushed();
 }
 

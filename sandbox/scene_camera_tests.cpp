@@ -350,3 +350,19 @@ TEST_CASE("SC16 with no CurrentCamera, or in play, the plugin leaves the camera 
     rig.frames(3);
     REQUIRE(rig.runtime.drain_output().lines.empty());
 }
+
+TEST_CASE("SC17 a right-button release in play does not touch the game's own MouseBehavior", "[SC17]") {
+    CameraRig rig;
+    rig.game.start_simulation();
+    rig.runtime.drain_output();
+    // The game locked the pointer itself; the plugin must not be the one to let it go.
+    rig.game.input().set_mouse_behavior(UserInputService::kLockCenter);
+    rig.game.input().post_mouse_button(1, true, 50.f, 50.f);
+    rig.game.input().post_mouse_button(1, false, 50.f, 50.f);
+    // Input dispatches at PreAnimation in play; frames() only runs Heartbeat, so
+    // drive the phase the way the real play step does.
+    rig.scheduler.run_phase(engine_core::Phase::PreAnimation, 1.0 / 60.0);
+    rig.game.events().drain();
+    REQUIRE(rig.game.input().mouse_behavior() == UserInputService::kLockCenter);
+    rig.game.stop_simulation();
+}

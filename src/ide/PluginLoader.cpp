@@ -41,11 +41,24 @@ std::vector<PluginFile> read_builtin_plugins(std::vector<std::string>& errors) {
     return files;
 }
 
+namespace {
+
+// Restores a ChangeHistoryService's recording state when it goes out of scope,
+// even if the guarded code throws.
+struct RecordingGuard {
+    engine_core::ChangeHistoryService& history;
+    bool recording;
+    RecordingGuard(engine_core::ChangeHistoryService& history, bool recording) : history(history), recording(recording) {}
+    ~RecordingGuard() { history.set_enabled(recording); }
+};
+
+}  // namespace
+
 std::size_t PluginLoader::load(engine_core::DataModel& game, engine_core::ScriptRuntime& scripts,
                                const std::vector<PluginFile>& files) {
     // None of this is the user's edit.
     engine_core::ChangeHistoryService& history = game.history();
-    const bool recording = history.enabled();
+    RecordingGuard guard(history, history.enabled());
     history.set_enabled(false);
     for (engine_core::InstanceId id : loaded_) {
         scripts.unregister_plugin(id);
@@ -64,7 +77,6 @@ std::size_t PluginLoader::load(engine_core::DataModel& game, engine_core::Script
             ++registered;
         }
     }
-    history.set_enabled(recording);
     return registered;
 }
 

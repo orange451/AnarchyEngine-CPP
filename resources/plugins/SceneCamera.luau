@@ -16,7 +16,7 @@ UserInputService.InputBegan:Connect(function(input)
 end)
 
 UserInputService.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton2 then
+	if input.UserInputType == Enum.UserInputType.MouseButton2 and not RunService:IsRunning() then
 		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
 	end
 end)

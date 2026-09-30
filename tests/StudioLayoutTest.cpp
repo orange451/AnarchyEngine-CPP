@@ -2,6 +2,7 @@
 #include "ide/IdeConsole.hpp"
 #include "ide/IdeDock.hpp"
 #include "ide/IdeLayout.hpp"
+#include "ide/IdePrefabEditor.hpp"
 #include "ide/IdeResources.hpp"
 #include "ide/IdePane.hpp"
 #include "ide/IdeSearch.hpp"
@@ -623,6 +624,95 @@ int main() {
                 }
                 game.destroy_tree(crate);
                 game.destroy_tree(stone);
+            });
+            frame();
+        }
+
+        // A double-click on a Prefab in Assets docks a Prefab editor with the
+        // scene view, one per Prefab: editing one again brings its tab forward.
+        {
+            engine_core::DataModel& world = layout.simulation().datamodel();
+            engine_core::InstanceId crate = 0;
+            engine_core::InstanceId barrel = 0;
+            layout.simulation().on_simulation([&](engine_core::DataModel& game) {
+                for (auto [name, id] : {std::pair{"Crate", &crate}, std::pair{"Barrel", &barrel}}) {
+                    engine_core::DataModel* prefab = engine_core::lua_create_instance(game, "Prefab");
+                    game.set_name(prefab->id(), name);
+                    game.set_parent(prefab->id(), game.service("Prefabs"));
+                    *id = prefab->id();
+                }
+            });
+            auto* assets = dynamic_cast<ide::IdeAssets*>(showing("Assets"));
+            ide::IdeDock* strip = dock_of(showing("Scene View"));
+            expect(assets != nullptr && strip != nullptr, "Assets and the Scene View both show");
+            if (assets != nullptr) {
+                assets->openFolder(world.service("Prefabs"));
+            }
+            auto double_click = [&](engine_core::InstanceId id) {
+                frame();
+                jadefx::Node* tile = assets != nullptr ? assets->itemNode(id) : nullptr;
+                expect(tile != nullptr, "the Prefab has a tile");
+                if (tile == nullptr) {
+                    return;
+                }
+                const double x = tile->getAbsoluteX() + tile->getWidth() * 0.5;
+                const double y = tile->getAbsoluteY() + tile->getHeight() * 0.5;
+                for (int click = 0; click < 2; ++click) {
+                    scene->noteButton(0, true, x, y);
+                    scene->noteButton(0, false, x, y);
+                }
+                frame();
+            };
+            auto editors = [&] {
+                std::vector<std::shared_ptr<jadefx::Tab>> found;
+                if (strip != nullptr) {
+                    for (const std::shared_ptr<jadefx::Tab>& tab : strip->tabs()->getTabs().items()) {
+                        if (tab && dynamic_cast<ide::IdePrefabEditor*>(tab->getContent()) != nullptr) {
+                            found.push_back(tab);
+                        }
+                    }
+                }
+                return found;
+            };
+            auto editing = [](const std::shared_ptr<jadefx::Tab>& tab) {
+                return static_cast<ide::IdePrefabEditor*>(tab->getContent())->prefab();
+            };
+            expect(editors().empty(), "no Prefab editor is open at first");
+            double_click(crate);
+            std::vector<std::shared_ptr<jadefx::Tab>> open = editors();
+            expect(open.size() == 1 && editing(open[0]) == crate && open[0]->isSelected(),
+                   "a double-click on a Prefab docks its editor in front");
+            expect(open.size() == 1 && open[0]->isClosable(), "a Prefab editor closes like any tab");
+            expect(open.size() == 1 && static_cast<ide::IdePane*>(open[0]->getContent())->title() == "Crate",
+                   "its tab shows the Prefab's name");
+            double_click(barrel);
+            open = editors();
+            expect(open.size() == 2 && editing(open[1]) == barrel && open[1]->isSelected(),
+                   "another Prefab gets its own editor, in front");
+            double_click(crate);
+            open = editors();
+            expect(open.size() == 2 && open[0]->isSelected() && !open[1]->isSelected(),
+                   "editing a Prefab that has an editor brings that one forward");
+            layout.simulation().on_simulation([&](engine_core::DataModel& game) { game.set_name(crate, "Box"); });
+            frame();
+            expect(open.size() == 2 && static_cast<ide::IdePane*>(open[0]->getContent())->title() == "Box",
+                   "the tab follows a rename");
+            for (const std::shared_ptr<jadefx::Tab>& tab : open) {
+                if (tab->getTabPane() != nullptr) {
+                    tab->getTabPane()->close(tab);
+                }
+            }
+            expect(editors().empty(), "closing their tabs takes them away");
+            // Barrel: presses on Crate's spot this soon would count on from the last double-click.
+            double_click(barrel);
+            expect(editors().size() == 1 && editing(editors()[0]) == barrel,
+                   "a Prefab whose editor was closed opens a new one");
+            for (const std::shared_ptr<jadefx::Tab>& tab : editors()) {
+                tab->getTabPane()->close(tab);
+            }
+            layout.simulation().on_simulation([&](engine_core::DataModel& game) {
+                game.destroy_tree(crate);
+                game.destroy_tree(barrel);
             });
             frame();
         }

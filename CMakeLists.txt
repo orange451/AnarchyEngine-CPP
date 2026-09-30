@@ -62,6 +62,7 @@ set(STUDIO_SOURCES
     src/ide/IdeExplorer.cpp
     src/ide/IdeAssets.cpp
     src/ide/IdeIcons.cpp
+    src/ide/IdePrefabEditor.cpp
     src/ide/IdeScriptEditor.cpp
     src/ide/IdeSearch.cpp
     src/ide/FindBar.cpp

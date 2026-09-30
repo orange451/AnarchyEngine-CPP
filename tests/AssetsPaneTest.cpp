@@ -547,6 +547,8 @@ void prefab_hides_its_models() {
     rig.clickItem(crate, 0.1, 2);
     rig.frame(0.2);
     Expect(rig.pane->browser().folder() == prefabs, "a double-click does not open it");
+    Expect(rig.runs == std::vector<std::pair<std::string, InstanceId>>{{"Edit", crate}},
+           "a double-click runs Edit on the Prefab");
     Expect(rig.pane->itemNode(lid) == nullptr, "its Model has no row");
 
     rig.pane->searchField().setText("lid");
@@ -570,6 +572,7 @@ void prefab_menu_offers_add_as_game_object() {
     rig.frame(0);
     rig.rightClickItem(rig.brick, 0.1);
     Expect(rig.menuItem("Add as GameObject") == nullptr, "a Texture's menu has no such item");
+    Expect(rig.menuItem("Edit") == nullptr, "a Texture's menu has no Edit");
 
     const InstanceId statue = rig.make("Prefab", "Statue", rig.game.service("Prefabs"));
     rig.pane->openFolder(rig.game.service("Prefabs"));
@@ -581,6 +584,14 @@ void prefab_menu_offers_add_as_game_object() {
     rig.clickMenu("Add as GameObject");
     Expect(rig.added_as_game_object == std::vector<InstanceId>{statue},
            "choosing it calls the host with the right-clicked Prefab");
+
+    rig.frame(1.2);
+    rig.rightClickItem(statue, 1.3);
+    Expect(rig.menuItem("Edit") != nullptr, "a Prefab's menu offers Edit");
+    Expect(rig.menuItemHasIcon("Edit"), "Edit shows an icon like its neighbors");
+    rig.clickMenu("Edit");
+    Expect(!rig.runs.empty() && rig.runs.back() == std::pair<std::string, InstanceId>{"Edit", statue},
+           "choosing Edit runs Edit on the right-clicked Prefab");
 }
 
 void up_goes_up_one_level() {

@@ -409,15 +409,23 @@ void IdeLayout::edit(std::uint32_t id) {
         return;
     }
     engine_core::DataModel& game = runner_.simulation().datamodel();
+    bool is_prefab = false;
     {
         engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionWait);
         if (!lock.owns()) {
             show_toast(busy_message("Edit"));
             return;
         }
-        if (dynamic_cast<const engine_core::LuaSource*>(game.instance(id)) == nullptr) {
+        const engine_core::DataModel* object = game.instance(id);
+        if (dynamic_cast<const engine_core::Prefab*>(object) != nullptr) {
+            is_prefab = true;
+        } else if (dynamic_cast<const engine_core::LuaSource*>(object) == nullptr) {
             return;
         }
+    }
+    if (is_prefab) {
+        edit_prefab(id, *home);
+        return;
     }
     kept_sources_.erase(id);
     if (std::shared_ptr<IdeScriptEditor> existing = open_editor(id)) {
@@ -448,6 +456,27 @@ void IdeLayout::edit(std::uint32_t id) {
         });
     }
     open_scripts_[id] = editor;
+}
+
+void IdeLayout::edit_prefab(std::uint32_t prefab, IdeDock& home) {
+    // An editor whose tab was closed is not reused: a new one docks at home.
+    const std::shared_ptr<IdePrefabEditor> existing = open_prefab_editor(prefab);
+    if (existing && dockContaining(existing.get()) != nullptr) {
+        // Selects its tab, and brings a floating window that holds it to the front.
+        reveal_window(existing.get());
+        return;
+    }
+    auto editor = jadefx::make<IdePrefabEditor>(runner_.simulation().datamodel(), prefab);
+    home.dock(editor);
+    open_prefabs_[prefab] = editor;
+}
+
+std::shared_ptr<IdePrefabEditor> IdeLayout::open_prefab_editor(std::uint32_t prefab) const {
+    const auto found = open_prefabs_.find(prefab);
+    if (found == open_prefabs_.end()) {
+        return nullptr;
+    }
+    return found->second.lock();
 }
 
 std::shared_ptr<IdeScriptEditor> IdeLayout::open_editor(std::uint32_t id) const {
@@ -513,7 +542,13 @@ void IdeLayout::close_script_editors() {
             editors.push_back(std::move(editor));
         }
     }
-    for (const std::shared_ptr<IdeScriptEditor>& editor : editors) {
+    std::vector<std::shared_ptr<IdePane>> pages(editors.begin(), editors.end());
+    for (const auto& entry : open_prefabs_) {
+        if (std::shared_ptr<IdePrefabEditor> editor = entry.second.lock()) {
+            pages.push_back(std::move(editor));
+        }
+    }
+    for (const std::shared_ptr<IdePane>& editor : pages) {
         IdeDock* dock = dockContaining(editor.get());
         if (dock == nullptr || dock->tabs() == nullptr) {
             continue;
@@ -532,6 +567,7 @@ void IdeLayout::close_script_editors() {
     }
     undo_router_.forget_scripts();
     open_scripts_.clear();
+    open_prefabs_.clear();
     kept_sources_.clear();
     last_script_focus_ = 0;
 }

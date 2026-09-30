@@ -32,6 +32,7 @@ class IdePane;
 enum class DropSide;
 struct LayoutHost;
 class IdeScriptEditor;
+class IdePrefabEditor;
 class IdeSearch;
 class IdeConflicts;
 class McpServer;
@@ -50,6 +51,9 @@ class PropertiesPanel;
 // paused. Shift+F5 is Stop.
 // Explorer rows open Cut, Paste, and Rename. A script also has Edit, and a
 // double-click runs it. Edit docks a script editor on the scene view's tab strip.
+// A Prefab's Edit, and a double-click on it in an explorer or the Assets pane,
+// docks a Prefab editor there instead. Each script or Prefab has at most one:
+// editing it again brings that one's tab forward.
 // The explorer edits a name in place and hands the result to rename. F shows
 // the selection in every explorer: the branches above it open, and it scrolls into view.
 // Properties, under the right-hand explorer, edits the selection's properties.
@@ -72,8 +76,8 @@ class PropertiesPanel;
 // Restore Built-in Default forgets the saved one and resets to the built-in layout.
 // Where the docks are, what each holds, which windows are closed, and the
 // main window's place and size are kept in layout.json in the config folder
-// when the window closes, and the next start puts them back. Script editors, extra scene views, and
-// terminals are not kept. Without that file, or when it cannot be read, the studio starts
+// when the window closes, and the next start puts them back. Script editors, Prefab editors,
+// extra scene views, and terminals are not kept. Without that file, or when it cannot be read, the studio starts
 // with its default layout.
 class IdeLayout {
 public:
@@ -143,6 +147,10 @@ private:
     void rename(std::uint32_t id, std::string name);
     void edit(std::uint32_t id);
     std::shared_ptr<IdeScriptEditor> open_editor(std::uint32_t id) const;
+    // Docks a Prefab editor for prefab on the scene view's tab strip, or brings
+    // the one already open forward. home is where a new one docks.
+    void edit_prefab(std::uint32_t prefab, IdeDock& home);
+    std::shared_ptr<IdePrefabEditor> open_prefab_editor(std::uint32_t prefab) const;
     void flush_editors();
     void new_place();
     void open_project();
@@ -190,6 +198,7 @@ private:
     void pause_test();
     void resume_test();
     void stop_test();
+    // Closes every script editor and Prefab editor: their ids belong to a place that is going away.
     void close_script_editors();
     void show_error(const std::string& heading, const std::string& detail);
     // News that needs no answer, as a JadeFX toast at the bottom right of the window.
@@ -383,6 +392,8 @@ private:
     IdeDock* sceneDock_ = nullptr;
     jadefx::Scene* scene_ = nullptr;
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeScriptEditor>> open_scripts_;
+    // The open Prefab editors, by Prefab id.
+    std::unordered_map<std::uint32_t, std::weak_ptr<IdePrefabEditor>> open_prefabs_;
     std::weak_ptr<class IdeConsole> console_;
     // The Search and Conflicts pages, typed, as their window entries' make last
     // built them. Null until first made. Kept while the tab is closed, so

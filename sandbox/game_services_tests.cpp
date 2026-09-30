@@ -82,7 +82,14 @@ TEST_CASE("GS1 the placement rules, by class name", "[GS1]") {
     REQUIRE_FALSE(placement_error("GameObject", "Script", "Main"));
     REQUIRE(reason(placement_error("Workspace", "Texture", "Brick")) == "A Texture must be in Assets.Textures");
     REQUIRE(reason(placement_error("Storage", "Material", "Brick")) == "A Material must be in Assets.Materials");
-    REQUIRE(reason(placement_error("Model", "Sound", "Boom")) == "A Sound must be in Assets.Audio");
+    REQUIRE(reason(placement_error("GameObject", "Sound", "Boom")) == "A Sound must be in Assets.Audio");
+
+    // A leaf asset holds nothing.
+    REQUIRE(reason(placement_error("Texture", "Folder", "Box")) == "A Texture holds nothing");
+    REQUIRE(reason(placement_error("Mesh", "GameObject", "Box")) == "A Mesh holds nothing");
+    REQUIRE(reason(placement_error("Sound", "Script", "Main")) == "A Sound holds nothing");
+    REQUIRE(reason(placement_error("Material", "Texture", "Brick")) == "A Material holds nothing");
+    REQUIRE(reason(placement_error("Model", "Sound", "Boom")) == "A Model holds nothing");
 }
 
 using engine_core::ContractViolation;
@@ -203,6 +210,15 @@ TEST_CASE("GS4 each category takes its class and Folders", "[GS4]") {
     REQUIRE(reason(game.parent_error(body, game.service("Prefabs"))) == "Prefabs holds Prefabs and Folders");
     // Out of the tree is always allowed.
     REQUIRE_FALSE(game.parent_error(body, DataModel::kNoParent));
+
+    // A leaf asset holds nothing, not even a Folder or a plain instance.
+    const InstanceId box = make(game, "GameObject", "Box", DataModel::kNoParent);
+    const InstanceId loose = make(game, "Folder", "Loose", DataModel::kNoParent);
+    REQUIRE(reason(game.parent_error(box, brick)) == "A Texture holds nothing");
+    REQUIRE(reason(game.parent_error(loose, brick)) == "A Texture holds nothing");
+    REQUIRE(reason(game.parent_error(loose, body)) == "A Model holds nothing");
+    REQUIRE_THROWS_AS(game.set_parent(box, brick), ContractViolation);
+    REQUIRE(game.get_children(brick).empty());
 }
 
 TEST_CASE("GS5 a folder carries its assets' rules with it", "[GS5]") {
@@ -618,6 +634,15 @@ TEST_CASE("GS15 a file that breaks a placement rule fails the load and names the
             write_text(textures / "Rock.hhhh.json", file_of("Mesh", "hhhh", "Rock"));
         },
         "Rock.hhhh.json: Textures holds Textures and Folders");
+    expect_failure(
+        [&](const std::filesystem::path& root) {
+            const std::filesystem::path materials = root / src / "Assets.assets" / "Materials.materials";
+            write_text(root / src / "Assets.assets" / "init.json", file_of("Assets", "assets", "Assets"));
+            write_text(materials / "init.json", file_of("Materials", "materials", "Materials"));
+            write_text(materials / "Wall.eeee" / "init.json", file_of("Material", "eeee", "Wall"));
+            write_text(materials / "Wall.eeee" / "Box.iiii.json", file_of("Folder", "iiii", "Box"));
+        },
+        "Box.iiii.json: A Material holds nothing");
     expect_failure(
         [&](const std::filesystem::path& root) {
             write_text(root / src / "Workspace.workspace" / "Textures.textures.json",

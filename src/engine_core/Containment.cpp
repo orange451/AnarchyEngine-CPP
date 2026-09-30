@@ -97,6 +97,10 @@ std::optional<std::string> placement_error(std::string_view holder_class, std::s
         }
         return std::string("A Prefab holds only Models");
     }
+    // Every other asset is a leaf.
+    if (is_asset_class(holder_class)) {
+        return "A " + std::string(holder_class) + " holds nothing";
+    }
     if (const char* home = asset_home(child_class)) {
         const std::string where = find_service(home) != nullptr ? service_path(home) : std::string("a ") + home;
         return "A " + std::string(child_class) + " must be in " + where;

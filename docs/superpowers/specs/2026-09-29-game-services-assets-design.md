@@ -51,6 +51,7 @@ game
    - `Assets`: only its five categories; otherwise `Assets holds only Materials, Prefabs, Meshes, Textures, and Audio`.
    - Each category: its class and `Folder`; otherwise, for Textures, `Textures holds Textures and Folders` (Audio: `Audio holds Sounds and Folders`).
    - `Prefab`: only `Model`; otherwise `A Prefab holds only Models`.
+   - `Texture`, `Mesh`, `Sound`, `Material`, and `Model` hold nothing: `A Texture holds nothing`.
    - Any other class takes anything but an asset class (item 8).
    A `Folder` is never the holder: the rule that decides what goes in a Folder is that of the first ancestor that is not a Folder (`passes_rule_up`). A Folder chain that ends outside the tree has no rule.
 8. **An asset class belongs to one container.** `Texture`, `Mesh`, `Sound`, `Material`, and `Prefab` may be parented only under their own category (directly or through Folders); `Model` only directly under a `Prefab`. Any other holder refuses them: `A Texture must be in Assets.Textures`, `A Model must be in a Prefab`.

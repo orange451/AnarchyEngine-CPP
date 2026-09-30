@@ -2,6 +2,7 @@
 
 #include "jadefx/jadefx.hpp"
 #include "runner/Runner.hpp"
+#include "IdeExplorer.hpp"
 #include "InputRouter.hpp"
 #include "Preferences.hpp"
 #include "ThemeLibrary.hpp"
@@ -263,6 +264,8 @@ private:
     std::shared_ptr<IdePane> make_conflicts();
     // The user's shell, started in the project's folder.
     std::shared_ptr<IdePane> make_terminal();
+    // The Assets pane, over the place, with the explorers' actions.
+    std::shared_ptr<IdePane> make_assets();
     // Where Search and Conflicts dock: beside the left explorer, else where editors dock.
     IdeDock* side_home();
     // The ribbon's count and the Conflicts window's rows, from conflicts_.
@@ -311,6 +314,8 @@ private:
     // Declared first so the runner outlives the widgets during teardown.
     runner::Runner runner_;
     Preferences preferences_;
+    // The explorers' actions, kept for the Assets pane, which is made later.
+    ExplorerHost explorer_host_;
     ThemeLibrary themes_;
     // Before the docks and pages below, so it is destroyed after them: the
     // console and script editors hold raw pointers into it.
@@ -364,6 +369,7 @@ private:
     WindowEntry* search_window_ = nullptr;
     WindowEntry* conflicts_window_ = nullptr;
     WindowEntry* terminal_window_ = nullptr;
+    WindowEntry* assets_window_ = nullptr;
     // Scene views opened so far, which numbers the next one's tab.
     int scene_views_ = 1;
     // The studio's first scene view. It stays open.

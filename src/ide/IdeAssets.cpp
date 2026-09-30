@@ -9,8 +9,11 @@
 #include "SelectionService.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
+#include <functional>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -361,6 +364,70 @@ void fix_width(jadefx::Node& node, double width) {
     node.setMaxSize(width, 100000);
 }
 
+// A list or column row's name, which a rename covers.
+std::shared_ptr<jadefx::Label> row_name(const std::string& name) {
+    auto label = text_label(name, "assets-cell");
+    label->getClassList().add("assets-name");
+    return label;
+}
+
+using engine_core::InstanceAction;
+
+// A second click on the selected item, at least this long after the first, renames it.
+constexpr double kSlowClickSeconds = 0.5;
+// JadeFX turns two clicks inside this window into a double-click, so a slow
+// click waits this long before renaming.
+constexpr double kDoubleClickSeconds = 0.4;
+// The simulation thread can hold the world for a whole step; an action waits
+// longer than a repaint before it says the place is busy.
+constexpr std::chrono::milliseconds kActionWait(250);
+
+const char* ActionIcon(InstanceAction action) {
+    switch (action) {
+    case InstanceAction::Cut:
+        return "Cut.png";
+    case InstanceAction::Paste:
+        return "Paste.png";
+    case InstanceAction::Rename:
+        return "Rename.png";
+    case InstanceAction::Delete:
+        return "Cross.png";
+    case InstanceAction::Edit:
+        break;
+    }
+    return nullptr;
+}
+
+// The name editor laid over an item. A plain TextField leaves Escape to its
+// parent; this one drops the rename.
+class RenameField : public jadefx::TextField {
+public:
+    explicit RenameField(std::function<void()> cancel) : cancel_(std::move(cancel)) {
+        getClassList().add("assets-rename");
+        setStyle("padding: 0 3px; border-width: 0; border-radius: 3px; background-color: var(--ide-field-color); "
+                 "font-size: 13px;");
+        setPrefColumnCount(1);
+        // Its keys come before a tile's tooltip, which Escape would close first, and before menu shortcuts.
+        setCapturesKeys(true);
+        setVisible(false);
+    }
+
+protected:
+    void handleKey(jadefx::KeyEvent& event) override {
+        if (event.pressed && event.key == jadefx::Key::Escape) {
+            event.consume();
+            if (cancel_) {
+                cancel_();
+            }
+            return;
+        }
+        TextField::handleKey(event);
+    }
+
+private:
+    std::function<void()> cancel_;
+};
+
 void set_class(jadefx::Node& node, const char* name, bool on) {
     jadefx::ObservableList<std::string>& classes = node.getClassList();
     const bool has = std::find(classes.begin(), classes.end(), std::string(name)) != classes.end();
@@ -480,12 +547,25 @@ IdeAssets::IdeAssets(engine_core::DataModel& world, AssetsHost host)
     search_clear_->setAlignment(jadefx::Pos::Center);
     search_clear_->setFont(jadefx::Font("Open Sans", 16.f));
     search_clear_->setDisable(true);
+    search_clear_->setOnMouseClicked([this](const jadefx::MouseEvent& event) {
+        if (event.button == 0 && !search_field_->getText().empty()) {
+            search_field_->clear();
+            requestFocus();
+        }
+    });
     getChildren().add(search_clear_);
+    // After the column, so it draws over the items and is hit first.
+    rename_field_ = jadefx::make<RenameField>([this] { finish_rename(false); });
+    rename_field_->setOnAction([this](jadefx::ActionEvent&) { finish_rename(true); });
+    getChildren().add(rename_field_);
+
+    scroll_->setOnContextMenuRequested([this](const jadefx::MouseEvent& event) { show_empty_menu(event.x, event.y); });
     fit_view();
 }
 
 void IdeAssets::fit_view() {
-    const bool columns = view_ == AssetView::Columns;
+    // A search lists its matches the way List does, whatever the view.
+    const bool columns = view_ == AssetView::Columns && !searching();
     // Columns has no sidebar: its first column lists the categories.
     column_->setLeft(columns ? nullptr : sidebar_);
     // Columns run off to the right and each scrolls on its own; the others wrap
@@ -526,12 +606,19 @@ jadefx::Node* IdeAssets::itemNode(engine_core::InstanceId id) const {
 }
 
 void IdeAssets::layoutChildren() {
+    if (search_field_->getText() != browser_.search()) {
+        browser_.set_search(search_field_->getText());
+        dirty_ = true;
+    }
     {
         engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kFrameLockWait);
         if (lock.owns()) {
             const bool changed = browser_.refresh() || dirty_ || !built_ || built_view_ != view_;
             if (changed) {
                 rebuild();
+            }
+            if (pending_insert_ && pending_insert_->done.load(std::memory_order_acquire)) {
+                finish_insert();
             }
             if (world_.selection().revision() != selection_seen_ || changed) {
                 selected_ = world_.selection().get(selection_seen_);
@@ -541,8 +628,10 @@ void IdeAssets::layoutChildren() {
     }
     back_->setDisable(!browser_.can_back());
     forward_->setDisable(!browser_.can_forward());
+    poll_clicks();
     IdePane::layoutChildren();
     place_clear();
+    place_rename();
     if (scroll_right_) {
         // A deeper folder opened in Columns: show its column, at the right.
         scroll_right_ = false;
@@ -550,7 +639,342 @@ void IdeAssets::layoutChildren() {
     }
 }
 
-void IdeAssets::handleKey(jadefx::KeyEvent& event) { IdePane::handleKey(event); }
+void IdeAssets::handleKey(jadefx::KeyEvent& event) {
+    // Keys bubble here from the items and the fields. The fields keep theirs.
+    const jadefx::Scene* scene = getScene();
+    const jadefx::Node* focus = scene != nullptr ? scene->focusedNode() : nullptr;
+    if (!event.pressed || focus == search_field_.get() || focus == rename_field_.get()) {
+        IdePane::handleKey(event);
+        return;
+    }
+    const std::vector<engine_core::InstanceId> ids = shown_selection();
+    const bool plain = !event.shortcut() && !event.shift && !event.alt;
+    auto enabled = [this](InstanceAction action) {
+        return !host_.actions.enabled || host_.actions.enabled(action);
+    };
+    const int key = event.key;
+    if (plain && (key == jadefx::Key::Delete || key == jadefx::Key::Backspace) && !ids.empty()) {
+        if (host_.actions.run_many && enabled(InstanceAction::Delete)) {
+            host_.actions.run_many(InstanceAction::Delete, ids);
+        }
+        event.consume();
+    } else if (plain && (key == jadefx::Key::Enter || key == jadefx::Key::KpEnter) && ids.size() == 1) {
+        beginRename(ids.front());
+        event.consume();
+    } else if (plain && key == jadefx::Key::Escape && !world_.selection().get().empty()) {
+        world_.selection().set({});
+        event.consume();
+    } else if (event.shortcut() && key == jadefx::Key::Up) {
+        // Up one level, but not above the category.
+        const std::vector<std::pair<engine_core::InstanceId, std::string>> crumbs = browser_.crumbs();
+        if (crumbs.size() > 2) {
+            openFolder(crumbs[crumbs.size() - 2].first);
+        }
+        event.consume();
+    } else if (event.shortcut() && (key == jadefx::Key::LeftBracket || key == jadefx::Key::RightBracket)) {
+        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kActionLockWait);
+        if (lock.owns()) {
+            if (key == jadefx::Key::LeftBracket) {
+                browser_.back();
+            } else {
+                browser_.forward();
+            }
+        }
+        event.consume();
+    } else if (event.shortcut() && !event.shift && key == jadefx::Key::X && !ids.empty()) {
+        if (host_.actions.run_many && enabled(InstanceAction::Cut)) {
+            host_.actions.run_many(InstanceAction::Cut, ids);
+        }
+        event.consume();
+    } else if (event.shortcut() && !event.shift && key == jadefx::Key::V) {
+        // Paste from the keyboard goes into the folder shown.
+        if (host_.actions.run && enabled(InstanceAction::Paste)) {
+            host_.actions.run(InstanceAction::Paste, browser_.folder());
+        }
+        event.consume();
+    }
+    if (!event.consumed) {
+        IdePane::handleKey(event);
+    }
+}
+
+std::vector<engine_core::InstanceId> IdeAssets::shown_selection() const {
+    std::vector<engine_core::InstanceId> out;
+    for (engine_core::InstanceId id : world_.selection().get()) {
+        if (items_.count(id) != 0) {
+            out.push_back(id);
+        }
+    }
+    return out;
+}
+
+double IdeAssets::now() const {
+    const jadefx::Scene* scene = getScene();
+    return scene != nullptr ? scene->timeSeconds() : -1;
+}
+
+void IdeAssets::poll_clicks() {
+    if (!slow_pending_ || now() - slow_at_ < kDoubleClickSeconds) {
+        return;
+    }
+    slow_pending_ = false;
+    if (world_.selection().get() == std::vector<engine_core::InstanceId>{slow_id_} && itemNode(slow_id_) != nullptr &&
+        (!host_.actions.enabled || host_.actions.enabled(InstanceAction::Rename))) {
+        beginRename(slow_id_);
+    }
+}
+
+void IdeAssets::beginRename(engine_core::InstanceId id) {
+    std::string name;
+    {
+        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kActionWait);
+        if (!lock.owns() || !world_.alive(id)) {
+            return;
+        }
+        name = world_.name(id);
+    }
+    begin_rename(id, name);
+}
+
+void IdeAssets::begin_rename(engine_core::InstanceId id, const std::string& name) {
+    finish_rename(false);
+    slow_pending_ = false;
+    click_id_ = 0;
+    if (itemNode(id) == nullptr || getScene() == nullptr) {
+        return;
+    }
+    // Renaming one item of a selection keeps the rest selected.
+    std::vector<engine_core::InstanceId> ids = world_.selection().get();
+    if (std::find(ids.begin(), ids.end(), id) == ids.end()) {
+        world_.selection().set({id});
+    }
+    rename_from_ = name;
+    rename_field_->setText(name);
+    rename_field_->selectAll();
+    rename_field_->setVisible(true);
+    rename_field_->requestFocus();
+    rename_id_ = id;
+    renaming_ = true;
+}
+
+void IdeAssets::finish_rename(bool apply) {
+    if (!renaming_) {
+        return;
+    }
+    renaming_ = false;
+    const bool had_focus = rename_field_->isFocused();
+    rename_field_->setVisible(false);
+    // Enter and Escape give the keys back to the pane. A click elsewhere keeps the focus it moved.
+    if (had_focus) {
+        if (jadefx::Scene* scene = getScene()) {
+            scene->releaseFocus(rename_field_.get());
+        }
+        requestFocus();
+    }
+    std::string name = rename_field_->getText();
+    rename_field_->clear();
+    if (apply && !name.empty() && name != rename_from_ && host_.actions.rename) {
+        host_.actions.rename(rename_id_, std::move(name));
+    }
+}
+
+void IdeAssets::place_rename() {
+    if (!renaming_) {
+        return;
+    }
+    jadefx::Node* item = itemNode(rename_id_);
+    const std::vector<jadefx::Node*> labels =
+        item != nullptr ? item->getElementsByClassName("assets-name") : std::vector<jadefx::Node*>{};
+    if (labels.empty() || !rename_field_->isFocused()) {
+        finish_rename(false);
+        return;
+    }
+    const jadefx::Node& label = *labels.front();
+    const double height = std::max(20.0, label.getHeight() + 4);
+    double left = label.getAbsoluteX() - 3;
+    double width = std::max(80.0, label.getWidth() + 6);
+    if (view_ == AssetView::Icons && !searching()) {
+        // A tile's name is centered; the field takes the tile's width.
+        left = item->getAbsoluteX() + 1;
+        width = item->getWidth() - 2;
+    } else {
+        width = std::min(width, item->getAbsoluteX() + item->getWidth() - left);
+    }
+    const double y = label.getAbsoluteY() + (label.getHeight() - height) * 0.5;
+    rename_field_->performLayout(left - getAbsoluteX(), y - getAbsoluteY(), width, height);
+}
+
+bool IdeAssets::dropInto(const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId target) {
+    if (ids.empty() || !host_.actions.move) {
+        return false;
+    }
+    {
+        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kActionWait);
+        if (!lock.owns()) {
+            if (host_.actions.notice) {
+                host_.actions.notice("The place is busy, so the move did nothing. Try again.");
+            }
+            return false;
+        }
+        for (engine_core::InstanceId id : ids) {
+            if (const std::optional<std::string> error = world_.parent_error(id, target)) {
+                if (host_.actions.notice) {
+                    host_.actions.notice(*error);
+                }
+                return false;
+            }
+        }
+    }
+    host_.actions.move(ids, target);
+    return true;
+}
+
+void IdeAssets::accept_drops(jadefx::Node& node, engine_core::InstanceId target) {
+    node.setOnDragOver([](jadefx::DragEvent& event) {
+        if (event.dragboard != nullptr && event.dragboard->has(kInstanceDragFormat)) {
+            event.acceptTransferModes(jadefx::TransferMode::Move);
+            event.consume();
+        }
+    });
+    node.setOnDragDropped([this, target](jadefx::DragEvent& event) {
+        if (event.dragboard == nullptr || !event.dragboard->has(kInstanceDragFormat)) {
+            return;
+        }
+        event.setDropCompleted(dropInto(instance_drag_ids(event.dragboard->get(kInstanceDragFormat)), target));
+        event.consume();
+    });
+}
+
+void IdeAssets::show_item_menu(const AssetRow& row, double x, double y) {
+    finish_rename(false);
+    slow_pending_ = false;
+    click_id_ = 0;
+    jadefx::Scene* scene = getScene();
+    if (scene == nullptr) {
+        return;
+    }
+    // A right-click on a selected item keeps the rest of the selection.
+    std::vector<engine_core::InstanceId> ids = world_.selection().get();
+    if (std::find(ids.begin(), ids.end(), row.id) == ids.end()) {
+        ids = {row.id};
+        world_.selection().set(ids);
+    }
+    const std::vector<engine_core::InstanceId> shown = shown_selection();
+    if (!shown.empty()) {
+        ids = shown;
+    }
+    if (menu_) {
+        menu_->hide();
+    }
+    menu_ = jadefx::make<jadefx::Menu>();
+    const engine_core::InstanceId id = row.id;
+    // Paste goes into the item when it holds things, else beside it.
+    const engine_core::InstanceId paste_into = row.opens ? row.id : browser_.folder();
+    for (const InstanceAction action :
+         {InstanceAction::Rename, InstanceAction::Cut, InstanceAction::Paste, InstanceAction::Delete}) {
+        if (action == InstanceAction::Cut || action == InstanceAction::Delete) {
+            menu_->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
+        }
+        auto entry = jadefx::make<jadefx::MenuItem>(engine_core::action_label(action));
+        if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic(ActionIcon(action))) {
+            entry->setGraphic(std::move(icon));
+        }
+        bool on = !host_.actions.enabled || host_.actions.enabled(action);
+        if (action == InstanceAction::Rename) {
+            on = on && ids.size() == 1;
+        }
+        entry->setDisable(!on);
+        entry->setOnAction([this, action, id, ids, paste_into](jadefx::ActionEvent&) {
+            switch (action) {
+            case InstanceAction::Rename:
+                beginRename(id);
+                break;
+            case InstanceAction::Paste:
+                if (host_.actions.run) {
+                    host_.actions.run(action, paste_into);
+                }
+                break;
+            default:
+                if (host_.actions.run_many) {
+                    host_.actions.run_many(action, ids);
+                }
+                break;
+            }
+        });
+        menu_->getItems().add(std::move(entry));
+    }
+    menu_->show(*scene, x, y);
+}
+
+void IdeAssets::show_empty_menu(double x, double y) {
+    finish_rename(false);
+    jadefx::Scene* scene = getScene();
+    if (scene == nullptr) {
+        return;
+    }
+    std::string kind;
+    {
+        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kActionWait);
+        if (lock.owns()) {
+            kind = browser_.new_kind();
+        }
+    }
+    if (menu_) {
+        menu_->hide();
+    }
+    menu_ = jadefx::make<jadefx::Menu>();
+    const bool can_insert = static_cast<bool>(host_.actions.insert);
+    // Offered in every folder; the placement rules refuse a Folder in a Prefab with a toast.
+    std::vector<std::string> classes = {"Folder"};
+    if (!kind.empty() && kind != "Folder") {
+        classes.push_back(kind);
+    }
+    for (const std::string& klass : classes) {
+        auto entry = jadefx::make<jadefx::MenuItem>("New " + klass);
+        if (std::shared_ptr<jadefx::ImageView> icon = icon_view(klass)) {
+            icon->setPrefSize(16, 16);
+            icon->setMouseTransparent(true);
+            entry->setGraphic(std::move(icon));
+        }
+        entry->setDisable(!can_insert);
+        entry->setOnAction([this, klass](jadefx::ActionEvent&) { new_item(klass); });
+        menu_->getItems().add(std::move(entry));
+    }
+    menu_->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
+    auto paste = jadefx::make<jadefx::MenuItem>(engine_core::action_label(InstanceAction::Paste));
+    if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic("Paste.png")) {
+        paste->setGraphic(std::move(icon));
+    }
+    paste->setDisable(!host_.actions.run ||
+                      (host_.actions.enabled && !host_.actions.enabled(InstanceAction::Paste)));
+    const engine_core::InstanceId folder = browser_.folder();
+    paste->setOnAction([this, folder](jadefx::ActionEvent&) { host_.actions.run(InstanceAction::Paste, folder); });
+    menu_->getItems().add(std::move(paste));
+    menu_->show(*scene, x, y);
+}
+
+void IdeAssets::new_item(const std::string& class_name) {
+    if (!host_.actions.insert) {
+        return;
+    }
+    pending_insert_ = std::make_shared<InsertResult>();
+    host_.actions.insert(class_name, browser_.folder(), pending_insert_);
+}
+
+void IdeAssets::finish_insert() {
+    const std::shared_ptr<InsertResult> result = std::move(pending_insert_);
+    pending_insert_.reset();
+    const engine_core::InstanceId made = result->id.load(std::memory_order_relaxed);
+    if (made == 0) {
+        if (!result->error.empty() && host_.actions.notice) {
+            host_.actions.notice(result->error);
+        }
+        return;
+    }
+    // The tree moved before done was set, so this frame's rebuild has the new item.
+    world_.selection().set({made});
+    begin_rename(made, world_.name(made));
+}
 
 void IdeAssets::rebuild() {
     built_ = true;
@@ -572,6 +996,7 @@ void IdeAssets::rebuild() {
                 }
             });
             sidebar_->getChildren().add(row);
+            accept_drops(*row, id);
             sidebar_rows_[id] = std::move(row);
         }
     }
@@ -584,6 +1009,14 @@ void IdeAssets::rebuild() {
 
     items_.clear();
     preview_.reset();
+    fit_view();
+    if (searching()) {
+        rows_ = browser_.search_rows();
+        count_ = rows_.size();
+        rebuild_search(rows_);
+        scroll_->applyCss();
+        return;
+    }
     switch (view_) {
     case AssetView::Icons:
         rows_ = browser_.children();
@@ -618,6 +1051,7 @@ void IdeAssets::rebuild_crumbs() {
         crumb->getProperties()["asset-id"] = crumbs[index].first;
         const engine_core::InstanceId id = crumbs[index].first;
         crumb->setOnAction([this, id](jadefx::ActionEvent&) { openFolder(id); });
+        accept_drops(*crumb, id);
         crumbs_->getChildren().add(crumb);
     }
     crumbs_->applyCss();
@@ -726,7 +1160,7 @@ void IdeAssets::rebuild_list(const std::vector<AssetRow>& rows) {
         }
         name->getChildren().add(disclosure);
         name->getChildren().add(sized_icon(row.class_name, 16));
-        name->getChildren().add(text_label(row.name, "assets-cell"));
+        name->getChildren().add(row_name(row.name));
         line->getChildren().add(name);
         auto kind = text_label(row.class_name, "assets-cell");
         kind->getClassList().add("muted");
@@ -739,6 +1173,45 @@ void IdeAssets::rebuild_list(const std::vector<AssetRow>& rows) {
     }
     if (rows.empty()) {
         list->getChildren().add(text_label("This folder is empty.", "assets-empty"));
+    }
+    scroll_->setContent(list);
+}
+
+void IdeAssets::rebuild_search(const std::vector<AssetRow>& rows) {
+    auto list = jadefx::make<jadefx::VBox>();
+    list->getClassList().add("assets-list");
+    list->getClassList().add("assets-search-results");
+    list->setStyle("width: 100%;");
+    auto header = jadefx::make<FractionRow>(kListColumns);
+    header->getClassList().add("assets-list-header");
+    for (const char* title : {"Name", "Kind", "Where"}) {
+        auto label = text_label(title, "assets-sort");
+        label->setStyle("width: 100%;");
+        header->getChildren().add(label);
+    }
+    list->getChildren().add(header);
+    for (const AssetRow& row : rows) {
+        auto line = jadefx::make<FractionRow>(kListColumns);
+        line->getClassList().add("assets-list-row");
+        line->setMinSize(0, kRowHeight);
+        line->setPrefHeight(kRowHeight);
+        auto name = jadefx::make<StretchRow>(1);
+        name->getChildren().add(sized_icon(row.class_name, 16));
+        name->getChildren().add(row_name(row.name));
+        line->getChildren().add(name);
+        auto kind = text_label(row.class_name, "assets-cell");
+        kind->getClassList().add("muted");
+        line->getChildren().add(kind);
+        // From the folder shown down to the match's parent.
+        const std::size_t cut = row.where.rfind('/');
+        auto where = text_label(cut == std::string::npos ? std::string() : row.where.substr(0, cut), "assets-cell");
+        where->getClassList().add("muted");
+        line->getChildren().add(where);
+        add_item(line, row);
+        list->getChildren().add(line);
+    }
+    if (rows.empty()) {
+        list->getChildren().add(text_label("No matches in this folder.", "assets-empty"));
     }
     scroll_->setContent(list);
 }
@@ -762,7 +1235,7 @@ void IdeAssets::rebuild_columns(const std::vector<std::pair<engine_core::Instanc
             line->setMinSize(0, kRowHeight);
             line->setPrefHeight(kRowHeight);
             line->getChildren().add(sized_icon(row.class_name, 16));
-            line->getChildren().add(text_label(row.name, "assets-cell"));
+            line->getChildren().add(row_name(row.name));
             const bool opens = level == 0 || row.opens;
             line->getChildren().add(text_label(opens ? "›" : "", "assets-opens"));
             if (row.id == on_path) {
@@ -777,6 +1250,7 @@ void IdeAssets::rebuild_columns(const std::vector<std::pair<engine_core::Instanc
                         openFolder(id);
                     }
                 });
+                accept_drops(*line, id);
             } else {
                 add_item(line, row);
             }
@@ -851,6 +1325,26 @@ void IdeAssets::add_item(const std::shared_ptr<jadefx::Node>& node, const AssetR
     node->getClassList().add("assets-item");
     node->getProperties()["asset-id"] = row.id;
     node->setOnMouseClicked([this, row](const jadefx::MouseEvent& event) { clicked(row, event); });
+    node->setOnContextMenuRequested(
+        [this, row](const jadefx::MouseEvent& event) { show_item_menu(row, event.x, event.y); });
+    jadefx::Node* source = node.get();
+    const engine_core::InstanceId id = row.id;
+    node->setOnDragDetected([this, source, id](const jadefx::MouseEvent&) {
+        finish_rename(false);
+        slow_pending_ = false;
+        click_id_ = 0;
+        // The selection when the item is in it, else the item alone.
+        std::vector<engine_core::InstanceId> ids = shown_selection();
+        if (std::find(ids.begin(), ids.end(), id) == ids.end()) {
+            ids = {id};
+        }
+        if (jadefx::Dragboard* board = source->startDragAndDrop(jadefx::TransferMode::Move | jadefx::TransferMode::Link)) {
+            board->put(kInstanceDragFormat, instance_drag_text(ids));
+        }
+    });
+    if (row.opens) {
+        accept_drops(*node, row.id);
+    }
     items_[row.id] = node;
 }
 
@@ -863,13 +1357,34 @@ void IdeAssets::clicked(const AssetRow& row, const jadefx::MouseEvent& event) {
         disclosed_ = false;
         return;
     }
-    if (event.clickCount == 2 && row.opens) {
-        if (browser_.folder() != row.id) {
+    // Keys go to the pane from here: Delete, Enter, Escape, and the rest.
+    requestFocus();
+    if (event.clickCount >= 2 || !event.stillSincePress) {
+        // A double-click, or the release that ends a drag, is not half of a rename pair.
+        slow_pending_ = false;
+        click_id_ = 0;
+        if (event.clickCount == 2 && row.opens && browser_.folder() != row.id) {
             openFolder(row.id);
         }
         return;
     }
     std::vector<engine_core::InstanceId> ids = world_.selection().get();
+    const double at = now();
+    if (!event.shortcut() && !event.shift()) {
+        // A second plain click on the only selected item, after a pause, renames it.
+        if (click_id_ == row.id && ids == std::vector<engine_core::InstanceId>{row.id} &&
+            at - click_at_ >= kSlowClickSeconds) {
+            slow_pending_ = true;
+            slow_id_ = row.id;
+            slow_at_ = at;
+            click_id_ = 0;
+        } else {
+            click_id_ = row.id;
+            click_at_ = at;
+        }
+    } else {
+        click_id_ = 0;
+    }
     const bool plain = !event.shortcut() && !event.shift();
     if (event.shortcut()) {
         const auto found = std::find(ids.begin(), ids.end(), row.id);
@@ -880,7 +1395,7 @@ void IdeAssets::clicked(const AssetRow& row, const jadefx::MouseEvent& event) {
         }
         anchor_ = row.id;
     } else if (event.shift() && anchor_ != 0) {
-        auto at = [this](engine_core::InstanceId id) {
+        auto index_of = [this](engine_core::InstanceId id) {
             for (std::size_t index = 0; index < rows_.size(); ++index) {
                 if (rows_[index].id == id) {
                     return static_cast<long long>(index);
@@ -888,8 +1403,8 @@ void IdeAssets::clicked(const AssetRow& row, const jadefx::MouseEvent& event) {
             }
             return -1LL;
         };
-        const long long from = at(anchor_);
-        const long long to = at(row.id);
+        const long long from = index_of(anchor_);
+        const long long to = index_of(row.id);
         ids.clear();
         if (from < 0 || to < 0) {
             ids.push_back(row.id);
@@ -942,6 +1457,12 @@ void IdeAssets::show_selection() {
 }
 
 void IdeAssets::place_clear() {
+    // Greyed out while there is nothing to clear.
+    const bool on = !search_field_->getText().empty();
+    if (on == search_clear_->isDisable()) {
+        search_clear_->setDisable(!on);
+        search_clear_->setCursor(on ? jadefx::Cursor::Pointer : jadefx::Cursor::Default);
+    }
     const double x = search_field_->getAbsoluteX() + search_field_->getWidth() - kClearInset - kClearSize;
     const double y = search_field_->getAbsoluteY() + (search_field_->getHeight() - kClearSize) * 0.5;
     search_clear_->performLayout(x - getAbsoluteX(), y - getAbsoluteY(), kClearSize, kClearSize);

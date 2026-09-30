@@ -178,6 +178,9 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
             });
     };
 
+    // The Assets pane, made later, runs the same actions.
+    explorer_host_ = host;
+
     auto gameExplorer = jadefx::make<IdeExplorer>(game, "Game Explorer", host);
     gameExplorer->setIconFile("Explorer.png");
     explorers_.push_back(gameExplorer);
@@ -269,6 +272,10 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         IdeDock* above = sceneDock_ != nullptr && sceneDock_->getParent() != nullptr ? sceneDock_ : nullptr;
         return dock_beside(above, DropSide::Bottom, kConsoleHeight);
     };
+
+    assets_window_ = &keep_closed("Assets", "AssetFolder.png", [this] { return make_assets(); });
+    // In with the console, as a project browser docks under the scene.
+    assets_window_->home = terminal_window_->home;
 
     if (!restore_layout()) {
         default_layout(windowWidth, windowHeight,

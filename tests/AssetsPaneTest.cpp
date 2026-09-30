@@ -116,12 +116,14 @@ struct Rig {
 
     void frame(double at) { scene->layout(kWidth, kHeight, at); }
 
-    void clickNode(jadefx::Node* node, int clicks = 1, int button = 0) {
+    // along places the click across the node, 0 at its left and 1 at its right. JadeFX counts
+    // presses on one spot within 0.4 s of real time as a double-click, whatever the scene time.
+    void clickNode(jadefx::Node* node, int clicks = 1, int button = 0, double along = 0.5) {
         Expect(node != nullptr, "the node to click is on screen");
         if (node == nullptr) {
             return;
         }
-        const double x = node->getAbsoluteX() + node->getWidth() * 0.5;
+        const double x = node->getAbsoluteX() + node->getWidth() * along;
         const double y = node->getAbsoluteY() + node->getHeight() * 0.5;
         for (int click = 0; click < clicks; ++click) {
             scene->noteButton(button, true, x, y, mods);
@@ -130,9 +132,9 @@ struct Rig {
     }
 
     // Lays out at `at`, then clicks the middle of id's widget `clicks` times.
-    void clickItem(InstanceId id, double at, int clicks = 1) {
+    void clickItem(InstanceId id, double at, int clicks = 1, double along = 0.5) {
         frame(at);
-        clickNode(pane->itemNode(id), clicks);
+        clickNode(pane->itemNode(id), clicks, 0, along);
     }
 
     // The node of that class whose own text, or a label inside it, reads text.
@@ -163,6 +165,75 @@ struct Rig {
     jadefx::Node* first(const char* style_class) {
         const std::vector<jadefx::Node*> found = pane->getElementsByClassName(style_class);
         return found.empty() ? nullptr : found.front();
+    }
+
+    void key(int code, int with = 0) { scene->noteKey(code, true, false, with); }
+
+    // Lays out at `at`, then right-clicks the middle of node.
+    void rightClick(jadefx::Node* node, double at) {
+        frame(at);
+        clickNode(node, 1, 1);
+    }
+
+    void rightClickItem(InstanceId id, double at) { rightClick(pane->itemNode(id), at); }
+
+    // Lays out at `at`, then right-clicks the center's bottom right corner, below every item.
+    void rightClickEmpty(double at) {
+        frame(at);
+        jadefx::Node* center = first("assets-center");
+        Expect(center != nullptr, "the center is on screen");
+        if (center == nullptr) {
+            return;
+        }
+        const double x = center->getAbsoluteX() + center->getWidth() - 20;
+        const double y = center->getAbsoluteY() + center->getHeight() - 20;
+        scene->noteButton(1, true, x, y);
+        scene->noteButton(1, false, x, y);
+    }
+
+    // The open menu's row with that label, or null.
+    jadefx::Node* menuItem(const std::string& label) {
+        jadefx::Node* text = scene->getElementById("menu-label:" + label);
+        return text != nullptr ? text->getParent() : nullptr;
+    }
+
+    void clickMenu(const std::string& label) {
+        jadefx::Node* item = menuItem(label);
+        Expect(item != nullptr, ("the menu lists " + label).c_str());
+        if (item == nullptr) {
+            return;
+        }
+        const double x = item->getAbsoluteX() + item->getWidth() * 0.5;
+        const double y = item->getAbsoluteY() + item->getHeight() * 0.5;
+        scene->noteButton(0, true, x, y);
+        scene->noteButton(0, false, x, y);
+    }
+
+    jadefx::TextField* renameField() { return dynamic_cast<jadefx::TextField*>(first("assets-rename")); }
+
+    bool editing() {
+        jadefx::TextField* field = renameField();
+        return field != nullptr && field->isVisible();
+    }
+
+    // Presses the middle of from, moves to the middle of to, and releases there.
+    void drag(jadefx::Node* from, jadefx::Node* to, double at) {
+        frame(at);
+        Expect(from != nullptr && to != nullptr, "both ends of the drag are on screen");
+        if (from == nullptr || to == nullptr) {
+            return;
+        }
+        const double x = from->getAbsoluteX() + from->getWidth() * 0.5;
+        const double y = from->getAbsoluteY() + from->getHeight() * 0.5;
+        const double to_x = to->getAbsoluteX() + to->getWidth() * 0.5;
+        const double to_y = to->getAbsoluteY() + to->getHeight() * 0.5;
+        scene->noteButton(0, true, x, y);
+        scene->noteMove(x + 10, y + 10);
+        scene->noteMove(to_x, to_y);
+        frame(at + 0.05);
+        scene->noteMove(to_x, to_y);
+        scene->noteButton(0, false, to_x, to_y);
+        frame(at + 0.1);
     }
 };
 
@@ -296,6 +367,148 @@ void list_and_columns() {
     Expect(rig.pane->browser().folder() == rig.textures, "selecting an asset in an earlier column closes the later ones");
 }
 
+void new_folder_and_kind() {
+    Rig rig;
+    rig.pane->openFolder(rig.textures);
+    rig.frame(0);
+    rig.rightClickEmpty(0.1);
+    Expect(rig.menuItem("New Folder") != nullptr, "empty space offers New Folder");
+    Expect(rig.menuItem("New Texture") != nullptr, "empty space in Textures offers New Texture");
+    Expect(rig.menuItem("Paste") != nullptr, "empty space offers Paste");
+    rig.clickMenu("New Texture");
+    Expect((rig.inserts == std::vector<std::pair<std::string, InstanceId>>{{"Texture", rig.textures}}),
+           "New Texture inserts a Texture in the folder");
+    rig.frame(0.2);
+    const InstanceId made = rig.game.get_children(rig.textures).back();
+    Expect(made != rig.rock && rig.game.instance(made) != nullptr && std::string(rig.game.instance(made)->class_name()) == "Texture", "the insert made a Texture");
+    Expect(rig.game.selection().get() == std::vector<InstanceId>{made}, "the new item is selected");
+    Expect(rig.editing(), "the new item's name is open for renaming");
+    rig.frame(0.3);
+    Expect(rig.editing(), "the rename stays open on the next frame");
+}
+
+void rename_delete_cut_paste() {
+    Rig rig;
+    rig.pane->openFolder(rig.textures);
+    rig.frame(0);
+    rig.pane->beginRename(rig.brick);
+    rig.frame(0.1);
+    Expect(rig.editing(), "beginRename opens the field");
+    if (jadefx::TextField* field = rig.renameField()) {
+        Expect(field->getText() == "Brick", "the field starts with the name");
+        field->setText("Stone");
+    }
+    rig.key(jadefx::Key::Enter);
+    rig.frame(0.2);
+    Expect((rig.renames == std::vector<std::pair<InstanceId, std::string>>{{rig.brick, "Stone"}}),
+           "Enter renames Brick to Stone");
+    Expect(!rig.editing(), "Enter closes the field");
+
+    rig.clickItem(rig.brick, 1.0);
+    rig.key(jadefx::Key::Delete);
+    Expect(!rig.batches.empty() && rig.batches.back().first == "Delete" &&
+               rig.batches.back().second == std::vector<InstanceId>{rig.brick},
+           "Delete deletes the selection");
+
+    rig.rightClickItem(rig.brick, 2.0);
+    Expect(rig.menuItem("Rename") != nullptr && rig.menuItem("Delete") != nullptr, "an item's menu");
+    rig.clickMenu("Cut");
+    Expect(!rig.batches.empty() && rig.batches.back().first == "Cut" &&
+               rig.batches.back().second == std::vector<InstanceId>{rig.brick},
+           "Cut runs on the selection");
+    rig.rightClickItem(rig.walls, 3.0);
+    rig.clickMenu("Paste");
+    Expect(!rig.runs.empty() && rig.runs.back() == std::make_pair(std::string("Paste"), rig.walls),
+           "Paste on a Folder's menu goes into it");
+    rig.rightClickItem(rig.rock, 3.5);
+    rig.clickMenu("Paste");
+    Expect(!rig.runs.empty() && rig.runs.back() == std::make_pair(std::string("Paste"), rig.textures),
+           "Paste on an asset's menu goes into the folder");
+    rig.clickItem(rig.brick, 4.0);
+    rig.key(jadefx::Key::V, jadefx::Key::ModControl);
+    Expect(!rig.runs.empty() && rig.runs.back() == std::make_pair(std::string("Paste"), rig.textures),
+           "Paste from the keyboard goes into the folder");
+
+    // A slow second click renames; Escape drops it.
+    rig.clickItem(rig.rock, 5.0);
+    rig.clickItem(rig.rock, 5.8, 1, 0.3);
+    rig.frame(6.4);
+    Expect(rig.editing(), "a slow second click renames");
+    rig.key(jadefx::Key::Escape);
+    rig.frame(6.5);
+    Expect(!rig.editing() && rig.renames.size() == 1, "Escape drops the rename");
+    // Enter on a single selected item renames it; a click elsewhere drops it.
+    rig.key(jadefx::Key::Enter);
+    rig.frame(6.6);
+    Expect(rig.editing(), "Enter renames the selected item");
+    rig.clickItem(rig.brick, 7.5);
+    rig.frame(7.6);
+    Expect(!rig.editing() && rig.renames.size() == 1, "a click elsewhere drops the rename");
+    rig.key(jadefx::Key::Escape);
+    Expect(rig.game.selection().get().empty(), "Escape clears the selection");
+}
+
+void refused_drop_says_why() {
+    Rig rig;
+    rig.pane->openFolder(rig.textures);
+    rig.frame(0);
+    rig.drag(rig.pane->itemNode(rig.walls), rig.labeled("assets-sidebar-row", "Meshes"), 0.5);
+    Expect(std::find(rig.notices.begin(), rig.notices.end(), "Meshes holds Meshes and Folders") != rig.notices.end(),
+           "a refused drop says why");
+    Expect(rig.game.parent(rig.walls) == rig.textures && rig.moves == 0, "Walls did not move");
+    rig.drag(rig.pane->itemNode(rig.brick), rig.pane->itemNode(rig.walls), 1.5);
+    Expect(rig.moves == 1 && rig.game.parent(rig.brick) == rig.walls, "a drop on a Folder moves into it");
+}
+
+void search_filters() {
+    Rig rig;
+    const InstanceId trim = rig.make("Texture", "BrickTrim", rig.walls);
+    rig.pane->openFolder(rig.textures);
+    rig.frame(0);
+    rig.pane->searchField().setText("bri");
+    rig.frame(0.1);
+    Expect(rig.pane->itemNode(rig.brick) != nullptr, "Brick matches");
+    Expect(rig.pane->itemNode(trim) != nullptr, "a match in a Folder under the folder shows");
+    Expect(rig.pane->itemNode(rig.rock) == nullptr && rig.pane->itemNode(rig.walls) == nullptr,
+           "the rest is hidden");
+    rig.clickNode(rig.first("assets-search-clear"));
+    rig.frame(0.2);
+    Expect(rig.pane->searchField().getText().empty(), "× empties the field");
+    Expect(rig.pane->itemNode(rig.rock) != nullptr && rig.pane->itemNode(trim) == nullptr, "× restores the view");
+}
+
+void pane_follows_tree() {
+    Rig rig;
+    rig.pane->openFolder(rig.textures);
+    rig.pane->openFolder(rig.walls);
+    rig.frame(0);
+    const InstanceId fresh = rig.make("Texture", "Fresh", rig.walls);
+    rig.frame(0.1);
+    Expect(rig.pane->itemNode(fresh) != nullptr, "an asset made in the folder shows");
+    rig.game.destroy_tree(rig.walls);
+    rig.frame(0.2);
+    Expect(rig.pane->browser().folder() == rig.textures, "the destroyed folder falls back to its category");
+    Expect(rig.crumbs() == std::vector<std::string>{"Assets", "Textures"}, "the crumbs follow");
+    Expect(rig.pane->itemNode(rig.brick) != nullptr, "the category's items show");
+}
+
+void insert_through_pane() {
+    Rig rig;
+    const InstanceId crate = rig.make("Prefab", "Crate", rig.game.service("Prefabs"));
+    rig.pane->openFolder(rig.game.service("Prefabs"));
+    rig.pane->openFolder(crate);
+    rig.frame(0);
+    rig.rightClickEmpty(0.1);
+    Expect(rig.menuItem("New Model") != nullptr, "a Prefab offers New Model");
+    rig.clickMenu("New Folder");
+    Expect((rig.inserts == std::vector<std::pair<std::string, InstanceId>>{{"Folder", crate}}),
+           "New Folder inserts a Folder in the Prefab");
+    rig.frame(0.2);
+    Expect((rig.notices == std::vector<std::string>{"A Prefab holds only Models"}), "the refusal is a notice");
+    Expect(rig.game.get_children(crate).empty(), "nothing is left in the Prefab");
+    Expect(!rig.editing(), "nothing is renamed");
+}
+
 }  // namespace
 
 int main() {
@@ -304,6 +517,12 @@ int main() {
     selection_is_shared();
     three_views_same_folder();
     list_and_columns();
+    new_folder_and_kind();
+    rename_delete_cut_paste();
+    refused_drop_says_why();
+    search_filters();
+    pane_follows_tree();
+    insert_through_pane();
     if (gFailures == 0) {
         std::printf("assets tests passed\n");
         return 0;

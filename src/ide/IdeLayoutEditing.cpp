@@ -466,9 +466,43 @@ void IdeLayout::edit_prefab(std::uint32_t prefab, IdeDock& home) {
         reveal_window(existing.get());
         return;
     }
-    auto editor = jadefx::make<IdePrefabEditor>(runner_.simulation().datamodel(), prefab);
+    auto editor = jadefx::make<IdePrefabEditor>(runner_.simulation().datamodel(), prefab, prefab_editor_host());
     home.dock(editor);
     open_prefabs_[prefab] = editor;
+}
+
+PrefabEditorHost IdeLayout::prefab_editor_host() {
+    PrefabEditorHost host;
+    host.add_model = [this](engine_core::InstanceId prefab, engine_core::InstanceId mesh,
+                            engine_core::InstanceId material, std::shared_ptr<InsertResult> result) {
+        runner_.simulation().on_simulation([prefab, mesh, material, result](engine_core::DataModel& world) {
+            world.history().set_pending_gesture("Add Model");
+            std::string error;
+            const engine_core::InstanceId made = add_model(world, prefab, mesh, material, error);
+            CloseGesture(world);
+            if (result) {
+                result->id.store(made, std::memory_order_relaxed);
+                result->error = std::move(error);
+                result->done.store(true, std::memory_order_release);
+            }
+        });
+    };
+    host.set_part = [this](engine_core::InstanceId model, ModelPart part, engine_core::InstanceId target) {
+        runner_.simulation().on_simulation(
+            [this, alive = std::weak_ptr<int>(alive_), model, part, target](engine_core::DataModel& world) {
+                world.history().set_pending_gesture(std::string(target != 0 ? "Set " : "Clear ") +
+                                                    model_part_name(part));
+                std::optional<std::string> error = set_model_part(world, model, part, target);
+                CloseGesture(world);
+                if (error) {
+                    toast_later(this, alive, std::move(*error));
+                }
+            });
+    };
+    host.rename = [this](engine_core::InstanceId id, std::string name) { rename(id, std::move(name)); };
+    host.remove = [this](const std::vector<engine_core::InstanceId>& ids) { delete_instances(ids); };
+    host.notice = [this](std::string text) { show_toast(std::move(text)); };
+    return host;
 }
 
 std::shared_ptr<IdePrefabEditor> IdeLayout::open_prefab_editor(std::uint32_t prefab) const {

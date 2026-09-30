@@ -33,6 +33,7 @@ enum class DropSide;
 struct LayoutHost;
 class IdeScriptEditor;
 class IdePrefabEditor;
+struct PrefabEditorHost;
 class IdeSearch;
 class IdeConflicts;
 class McpServer;
@@ -52,8 +53,9 @@ class PropertiesPanel;
 // Explorer rows open Cut, Paste, and Rename. A script also has Edit, and a
 // double-click runs it. Edit docks a script editor on the scene view's tab strip.
 // A Prefab's Edit, and a double-click on it in an explorer or the Assets pane,
-// docks a Prefab editor there instead. Each script or Prefab has at most one:
-// editing it again brings that one's tab forward.
+// docks a Prefab editor there instead, where its Models and the Mesh and
+// Material each pairs are made and changed. Each script or Prefab has at most
+// one editor: editing it again brings that one's tab forward.
 // The explorer edits a name in place and hands the result to rename. F shows
 // the selection in every explorer: the branches above it open, and it scrolls into view.
 // Properties, under the right-hand explorer, edits the selection's properties.
@@ -151,6 +153,8 @@ private:
     // the one already open forward. home is where a new one docks.
     void edit_prefab(std::uint32_t prefab, IdeDock& home);
     std::shared_ptr<IdePrefabEditor> open_prefab_editor(std::uint32_t prefab) const;
+    // A Prefab editor's writes, each one undo step on the simulation thread.
+    PrefabEditorHost prefab_editor_host();
     void flush_editors();
     void new_place();
     void open_project();

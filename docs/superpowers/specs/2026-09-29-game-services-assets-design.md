@@ -30,7 +30,8 @@ game
 | Material | PBR: four Texture references, `DiffuseTexture`, `NormalTexture`, `RoughnessTexture`, `MetalnessTexture`. |
 | The audio class | `Sound`, since `Audio` is the category's class name. |
 | Pane views | Icons, List, and Columns, picked by a toggle in the toolbar and remembered with the layout. |
-| Rule structure | One `Service` base for scene and game services, one table of the fixed tree, and a `child_error` virtual that `parent_error` checks for the whole subtree being moved. |
+| Rule structure | One `Service` base for scene and game services, one table of the fixed tree, and one table of placement rules by class name, which `parent_error` checks for the whole subtree being moved and the project reader checks before any instance exists. |
+| How a reference is held | By the target's GUID, resolved when read, so loads, Stop, and undo need no ordering and a file's references are written back as they were read. |
 
 ## Architecture
 
@@ -38,22 +39,22 @@ game
 
 1. **`Service : DataModel`** is the new base of every service, with `is_service()` true. `SceneService : Service` keeps `is_scene_service()` and its context actions (Paste only). **`GameService : Service`** adds `hidden_in_explorer()`, true, and the same context actions.
 2. **`Assets`, `Materials`, `Prefabs`, `Meshes`, `Textures`, `Audio`** are GameServices. None is an `Instance`, so `Instance.new` refuses them. Each is registered for Lua under `GameService`, which is under `DataModel`.
-3. **One table describes the fixed tree**, in order: `{class, parent class, guid}` for Workspace, Lighting, Storage, Scripts, Assets, Materials, Prefabs, Meshes, Textures, Audio. A service's GUID is its class name in lowercase, as `scene_service_guid` makes it today (renamed `service_guid`). `kSceneServiceClasses` and `is_scene_service_class` are replaced by lookups in this table.
+3. **One table describes the fixed tree**, in order: `{class, parent class}` for Workspace, Lighting, Storage, Scripts, Assets, Materials, Prefabs, Meshes, Textures, Audio, in a new `engine_core/Containment.hpp`. A service's GUID is its class name in lowercase (`service_guid`); `scene_service_guid` stays as a name for it. `kSceneServiceClasses` and `is_scene_service_class` stay for the four scene services.
 4. **`Game()`** makes every service from the table, parents before children, with history disabled as today.
-5. **`DataModel::scene_service(name)` becomes `service(name)`**: the service of that class anywhere in the tree, found through the table's parent chain. `scene_service` callers move to it.
+5. **`DataModel::scene_service(name)` stays** (it has 94 callers, all about scene services). **`DataModel::service(name)`** is new: the service of that class, directly under game or under a service directly under game.
 6. **`parent_error`, `rename_error`, `destroy_error`, and `destroy`** ask `is_service()` where they ask `is_scene_service()` today. Placing a service under its table parent once, when `Game()` builds the tree or a load adopts it, stays the one allowed move.
 
 ### Containment
 
-7. **`virtual std::optional<std::string> DataModel::child_error(const DataModel& world, const DataModel& child) const`** says whether this instance takes `child`. The default takes anything. Overrides:
-   - `Game`: only its services; otherwise today's message, `Only scene services can be children of game; put X in Workspace`.
+7. **Placement rules are a table by class name**, in `Containment.{hpp,cpp}`, so the project reader can check a plan before it creates anything. `placement_error(holder_class, child_class, child_name)` says why a holder refuses a child:
+   - `Game`: only services; otherwise today's message, `Only scene services can be children of game; put X in Workspace`.
    - `Assets`: only its five categories; otherwise `Assets holds only Materials, Prefabs, Meshes, Textures, and Audio`.
-   - Each category: its class and `Folder`; otherwise, for Textures, `Textures holds Textures and Folders`.
-   - `Folder`: refers the check to the nearest service above it. Outside Assets that service is a scene service, and the answer follows item 8.
+   - Each category: its class and `Folder`; otherwise, for Textures, `Textures holds Textures and Folders` (Audio: `Audio holds Sounds and Folders`).
    - `Prefab`: only `Model`; otherwise `A Prefab holds only Models`.
-   - Every other class takes anything but an asset class (item 8).
-8. **An asset class belongs to one container.** `Texture`, `Mesh`, `Sound`, `Material`, and `Prefab` may be parented only under their own category (directly or through Folders); `Model` only directly under a `Prefab`. A container outside that rule refuses them: `A Texture must be in Assets.Textures`, `A Model must be in a Prefab`. `Workspace`, `Storage`, `Scripts`, and plain instances refuse them through the default `child_error`.
-9. **`parent_error(id, new_parent)`** runs `child_error` for `id` against `new_parent`, then for every descendant of `id` against its own parent as though `id` had already moved. The first refusal is the result. Moving to `kNoParent` (out of the tree) checks nothing, as today. Every caller already asks `parent_error` first: scripts, the explorer, cut and paste, Properties, MCP, and project loads.
+   - Any other class takes anything but an asset class (item 8).
+   A `Folder` is never the holder: the rule that decides what goes in a Folder is that of the first ancestor that is not a Folder (`passes_rule_up`). A Folder chain that ends outside the tree has no rule.
+8. **An asset class belongs to one container.** `Texture`, `Mesh`, `Sound`, `Material`, and `Prefab` may be parented only under their own category (directly or through Folders); `Model` only directly under a `Prefab`. Any other holder refuses them: `A Texture must be in Assets.Textures`, `A Model must be in a Prefab`.
+9. **`parent_error(id, new_parent)`** checks `id` against the holder of `new_parent`, then every descendant of `id` against the holder of its own parent, found as though `id` had already moved. The first refusal is the result. Moving to `kNoParent` (out of the tree) checks nothing, as today. Every caller already asks `parent_error` first: scripts, the explorer, cut and paste, Properties, and MCP. The explorer's insert asks it too, and destroys what it made when the place refuses it.
 
 ### Asset classes (`engine_instances`)
 
@@ -72,11 +73,11 @@ game
 
 ### Reference properties (`engine_core`)
 
-12. **A saved property whose type is a registered class name** (`lua_class_known`) is a reference to an instance of that class.
-13. **A write** takes `nil` or an instance that `lua_class_is(target, type)`; otherwise it refuses with `DiffuseTexture must be a Texture`. The class stores the target's `InstanceId`, or 0 for nil.
-14. **A read** gives the target, or `nil` when the stored id is 0 or no longer alive. Undo revives a destroyed instance under its old id, so a reference to it comes back without extra bookkeeping.
-15. **JSON**: `slot_to_json` writes the target's GUID as a string, or `null` for nil and for a target that is not in the authored tree. `slot_from_json` reads a GUID string or `null`. The default is `null`.
-16. **Loads resolve references after the whole tree is built.** The project reader keeps each reference property's GUID until every instance exists, then resolves it with `find_guid`. A GUID that finds nothing loads as nil, and the console warns: `src/…/BrickMat.<guid>.json: DiffuseTexture refers to missing GUID <guid>`.
+12. **A saved property whose type is a registered class name with `?`**, such as `Texture?`, is a reference to an instance of that class (`reference_class`).
+13. **The class holds the target's GUID** in an `InstanceRef`, with the id it last resolved to as a cache. A `LuaSlot` for a reference carries that GUID in `text`, and the resolved id in `id`.
+14. **A write** takes `nil` (which clears), a live instance for which `lua_class_inherits(its class, "Texture")` (which stores its GUID), or a slot whose `text` is a GUID (a load, Stop, or undo, which stores it as it is). A live instance of another class is refused: `DiffuseTexture must be a Texture`.
+15. **A read** gives the live instance holding the GUID, or `nil` when there is none, as after a destroy. Undo revives a destroyed instance with its GUID, so the reference comes back with no extra bookkeeping.
+16. **JSON**: `slot_to_json` writes the GUID as a string, or `null`. `slot_from_json` reads a GUID string or `null`. The default is `null`. A GUID that no instance holds loads as it is, reads as `nil`, and is written back unchanged, so a file never changes because of a reference it could not resolve.
 17. **Nothing else changes.** Undo, `Changed`, Stop's restore, place capture, disk merge and conflicts, and MCP reads and writes go through the saved-property path they already use.
 
 ### Scripts
@@ -88,7 +89,7 @@ game
 
 20. **Files** follow the existing rules: `src/Assets.assets/` holds `Textures.textures/`, and so on, and an asset is `<Name>.<guid>.json`. A Prefab with Models is a folder with its own `init.json`.
 21. **`adopt_scene_services` becomes `adopt_services`** and walks the table: each service must sit under its table parent with its fixed GUID, and a service the files lack is made at its defaults. A project saved before this change loads with an empty Assets tree, and the next Save writes it. A reserved GUID used by another instance fails the load, as today.
-22. **Containment is checked on load** with `child_error` over the planned tree. A file that breaks it fails the load, naming the file: `src/Workspace.workspace/Brick.<guid>.json: A Texture must be in Assets.Textures`. As with any file that does not read, the Conflicts window says which.
+22. **Containment is checked on load** with `placement_error` over the planned tree, before anything is created. A file that breaks it fails the load, naming the file: `src/Workspace.workspace/Brick.<guid>.json: A Texture must be in Assets.Textures`. As with any file that does not read, the Conflicts window says which.
 23. **`clear_world` and `reset_scene_service`** keep and reset every service, not only scene services.
 
 ### Studio (`ide`)
@@ -117,7 +118,8 @@ game
       - A new item is selected and its name is opened for renaming.
     - **Refusals and undo.** Every move asks `parent_error`, and a refusal is a toast. Each action is one undo step.
     - **Updates.** The pane rebuilds when the tree's revision changes, as the explorer does, and follows play-mode changes live.
-    - **Layout.** The view and the column widths are saved in the studio layout, per pane.
+    - **Remembered view.** The view is kept in `preferences.json` as `"assetsView": "icons" | "list" | "columns"`, since `layout.json` holds only docks and tabs.
+    - **A model under the view.** `AssetBrowser` (in `studio_core`, no widgets) holds the current folder, back and forward, the crumbs, the rows of each view, search, and sort, read from the place under its read lock. `IdeAssets` draws it, so the navigation is tested without a scene.
 27. **Icons.** `IdeIcons` gets an icon for each service class and each asset class.
 28. **MCP.** The tools read and edit the Assets tree like the rest of the place. A refused move, rename, or destroy returns the refusal's message.
 
@@ -142,7 +144,7 @@ Engine tests are written first, in `sandbox/game_services_tests.cpp`:
   - Stop restores a reference set during play.
   - `Changed` fires.
   - Save writes the GUID, and load resolves it.
-  - A missing GUID loads as nil with the console warning.
+  - A GUID no instance holds loads, reads as nil, and saves back unchanged.
 - **Path:** absolute, drive-letter, backslash, and `..` paths are refused.
 - **Projects:**
   - The Assets tree round-trips through Save and load.

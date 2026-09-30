@@ -12,6 +12,7 @@
 #include "ScriptAnalysis.hpp"
 #include "ScriptMarks.hpp"
 #include "ScriptPairs.hpp"
+#include "SelectionService.hpp"
 #include "TextWrap.hpp"
 #include "Utf8.hpp"
 
@@ -213,8 +214,18 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     status_->setPrefHeight(0);
     status_->setMaxSize(100000, 0);
 
+    crumbs_ = jadefx::make<jadefx::HBox>();
+    crumbs_->getClassList().add("script-breadcrumb");
+    crumbs_->setAlignment(jadefx::Pos::CenterLeft);
+    crumbs_->setSpacing(2);
+    crumbs_->setPadding(jadefx::Insets{2, 8, 2, 8});
+    crumbs_->setStyle(
+        "font-size: 12px; border-style: solid; border-width: 0 0 1px 0; "
+        "border-color: var(--ide-popup-border-color);");
+
     auto column = jadefx::make<jadefx::BorderPane>();
     Fill(*column);
+    column->setTop(crumbs_);
     column->setCenter(area_);
     column->setBottom(status_);
     getChildren().add(column);
@@ -592,6 +603,9 @@ void IdeScriptEditor::layoutChildren() {
             }
         }
     }
+    if (engine_.datamodel().tree_revision() != seen_crumb_tree_) {
+        refresh_crumbs();
+    }
     take_luau_list();
     if (completion_open()) {
         place_completion();
@@ -615,6 +629,56 @@ void IdeScriptEditor::layoutChildren() {
     }
     StackPane::layoutChildren();
     place_find_bar();
+}
+
+void IdeScriptEditor::refresh_crumbs() {
+    if (!crumbs_) {
+        return;
+    }
+    engine_core::DataModel& game = engine_.datamodel();
+    std::vector<std::pair<engine_core::InstanceId, std::string>> path;
+    {
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionLockWait);
+        if (!lock.owns()) {
+            return;
+        }
+        seen_crumb_tree_ = game.tree_revision();
+        for (engine_core::InstanceId at = id_; at != 0 && at != engine_core::DataModel::kNoParent && game.alive(at);
+             at = game.parent(at)) {
+            path.emplace_back(at, game.name(at));
+        }
+    }
+    std::reverse(path.begin(), path.end());
+    crumbs_->getChildren().clear();
+    for (std::size_t index = 0; index < path.size(); ++index) {
+        if (index > 0) {
+            auto separator = jadefx::make<jadefx::Label>("›");
+            separator->setMouseTransparent(true);
+            separator->setOpacity(0.5f);
+            crumbs_->getChildren().add(std::move(separator));
+        }
+        const bool last = index + 1 == path.size();
+        auto segment = jadefx::make<jadefx::Label>(path[index].second);
+        segment->setPadding(jadefx::Insets{1, 4, 1, 4});
+        segment->setCursor(jadefx::Cursor::Pointer);
+        segment->setOpacity(last ? 1.0f : 0.7f);
+        jadefx::Label* raw = segment.get();
+        segment->setOnMouseEntered([raw](const jadefx::MouseEvent&) {
+            raw->setOpacity(1.0f);
+            raw->setBackground(theme_color("--ide-popup-selection-color"));
+        });
+        segment->setOnMouseExited([raw, last](const jadefx::MouseEvent&) {
+            raw->setOpacity(last ? 1.0f : 0.7f);
+            raw->setBackground(jadefx::Color::transparent());
+        });
+        const engine_core::InstanceId target = path[index].first;
+        segment->setOnMouseClicked([this, target](const jadefx::MouseEvent& event) {
+            if (event.button == 0) {
+                engine_.datamodel().selection().set({target});
+            }
+        });
+        crumbs_->getChildren().add(std::move(segment));
+    }
 }
 
 void IdeScriptEditor::place_find_bar() {

@@ -57,6 +57,17 @@ bool shown(const LuaField& field, PropertyKind& kind) {
     return property_kind_for(field.type_name, kind);
 }
 
+// Degrees to a thousandth, so float noise in
+// the matrix reads as the angle it was set to. -0 reads as 0.
+float shown_angle(float degrees) {
+    const float rounded = static_cast<float>(std::round(static_cast<double>(degrees) * 1000.0) / 1000.0);
+    return rounded == 0.f ? 0.f : rounded;
+}
+
+float& vec_part(engine_core::Vec3& vec, int axis) { return axis == 0 ? vec.x : axis == 1 ? vec.y : vec.z; }
+
+float vec_part(const engine_core::Vec3& vec, int axis) { return axis == 0 ? vec.x : axis == 1 ? vec.y : vec.z; }
+
 bool read_value(DataModel& world, DataModel& object, const LuaField& field, PropertyKind kind, PropertyValue& out) {
     LuaSlot slot;
     if (!field.read(world, object, slot)) {
@@ -78,6 +89,16 @@ bool read_value(DataModel& world, DataModel& object, const LuaField& field, Prop
     case PropertyKind::Color3:
         out.color = engine_core::Color3{slot.color.r, slot.color.g, slot.color.b};
         return slot.kind == LuaSlot::Kind::Color;
+    case PropertyKind::Transform: {
+        if (slot.kind != LuaSlot::Kind::Matrix4) {
+            return false;
+        }
+        out.transform = slot.transform;
+        out.vec = engine_core::matrix4_position(slot.transform);
+        const engine_core::Vec3 angles = transform_orientation(slot.transform);
+        out.orientation = {shown_angle(angles.x), shown_angle(angles.y), shown_angle(angles.z)};
+        return true;
+    }
     case PropertyKind::Ref:
         if (slot.kind == LuaSlot::Kind::Nil) {
             out.ref = DataModel::kNoParent;
@@ -128,6 +149,17 @@ void merge(PropertyRow& row, const PropertyValue& next) {
         row.axis_mixed[2] = row.axis_mixed[2] || !same_component(row.value.vec.z, next.vec.z);
         row.mixed = row.axis_mixed[0] || row.axis_mixed[1] || row.axis_mixed[2];
         break;
+    case PropertyKind::Transform:
+        // Parts compare as shown: two Transforms that differ only past a
+        // thousandth of a degree show one Orientation.
+        for (int axis = 0; axis < 3; ++axis) {
+            row.axis_mixed[axis] =
+                row.axis_mixed[axis] || !same_component(vec_part(row.value.vec, axis), vec_part(next.vec, axis));
+            row.axis_mixed[3 + axis] = row.axis_mixed[3 + axis] || !same_component(vec_part(row.value.orientation, axis),
+                                                                                   vec_part(next.orientation, axis));
+        }
+        row.mixed = row.mixed || !engine_core::same_matrix4(row.value.transform, next.transform);
+        break;
     case PropertyKind::Color3:
         row.mixed = row.mixed || row.value.color.r != next.color.r || row.value.color.g != next.color.g ||
                     row.value.color.b != next.color.b;
@@ -147,6 +179,20 @@ void blank_mixed(PropertyRow& row) {
             if (row.axis_mixed[axis]) {
                 *parts[axis] = 0.f;
             }
+        }
+        return;
+    }
+    if (row.kind == PropertyKind::Transform) {
+        for (int axis = 0; axis < 3; ++axis) {
+            if (row.axis_mixed[axis]) {
+                vec_part(row.value.vec, axis) = 0.f;
+            }
+            if (row.axis_mixed[3 + axis]) {
+                vec_part(row.value.orientation, axis) = 0.f;
+            }
+        }
+        if (row.mixed) {
+            row.value.transform = engine_core::Matrix4{};
         }
         return;
     }
@@ -204,7 +250,7 @@ bool PropertyRow::operator==(const PropertyRow& other) const {
         path != other.path) {
         return false;
     }
-    for (int axis = 0; axis < 3; ++axis) {
+    for (int axis = 0; axis < kTransformParts; ++axis) {
         if (axis_mixed[axis] != other.axis_mixed[axis]) {
             return false;
         }
@@ -212,7 +258,10 @@ bool PropertyRow::operator==(const PropertyRow& other) const {
     return value.text == other.value.text && value.flag == other.value.flag && value.number == other.value.number &&
            value.vec.x == other.value.vec.x && value.vec.y == other.value.vec.y && value.vec.z == other.value.vec.z &&
            value.color.r == other.value.color.r && value.color.g == other.value.color.g &&
-           value.color.b == other.value.color.b && value.ref == other.value.ref;
+           value.color.b == other.value.color.b && value.ref == other.value.ref &&
+           engine_core::same_matrix4(value.transform, other.value.transform) &&
+           value.orientation.x == other.value.orientation.x && value.orientation.y == other.value.orientation.y &&
+           value.orientation.z == other.value.orientation.z;
 }
 
 bool PropertyRow::same_slot(const PropertyRow& other) const {
@@ -242,6 +291,8 @@ bool property_kind_for(const std::string& type_name, PropertyKind& out) {
         out = PropertyKind::Ref;
     } else if (type_name == "Color3") {
         out = PropertyKind::Color3;
+    } else if (type_name == "Matrix4") {
+        out = PropertyKind::Transform;
     } else {
         return false;
     }
@@ -453,6 +504,28 @@ EditResult apply_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
             }
             break;
         }
+        case PropertyKind::Transform: {
+            slot.kind = LuaSlot::Kind::Matrix4;
+            slot.transform = edit.value.transform;
+            if (edit.axis >= 0 && edit.axis < kTransformParts) {
+                // One part: the rest of this instance's Transform stays.
+                LuaSlot current;
+                if (target.field.read == nullptr || !target.field.read(world, *target.object, current) ||
+                    current.kind != LuaSlot::Kind::Matrix4) {
+                    continue;
+                }
+                slot.transform = current.transform;
+                if (edit.axis < 3) {
+                    slot.transform.m[12 + edit.axis] = vec_part(edit.value.vec, edit.axis);
+                } else {
+                    // The other two angles as held, not as shown, so they do not drift.
+                    engine_core::Vec3 angles = transform_orientation(current.transform);
+                    vec_part(angles, edit.axis - 3) = vec_part(edit.value.orientation, edit.axis - 3);
+                    slot.transform = transform_with_orientation(current.transform, angles);
+                }
+            }
+            break;
+        }
         case PropertyKind::Color3:
             // A Color3 has no alpha, so the color is opaque, as a script's write makes it.
             slot.kind = LuaSlot::Kind::Color;
@@ -477,6 +550,34 @@ EditResult apply_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
         history.finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
     }
     return result;
+}
+
+engine_core::Vec3 transform_orientation(const engine_core::Matrix4& transform) {
+    constexpr double kDegrees = 180.0 / 3.14159265358979323846;
+    double radians[3] = {0, 0, 0};
+    engine_core::matrix4_to_euler(transform, engine_core::RotationOrder::YXZ, radians);
+    return {static_cast<float>(radians[0] * kDegrees), static_cast<float>(radians[1] * kDegrees),
+            static_cast<float>(radians[2] * kDegrees)};
+}
+
+engine_core::Matrix4 transform_with_orientation(const engine_core::Matrix4& transform, engine_core::Vec3 orientation) {
+    constexpr double kRadians = 3.14159265358979323846 / 180.0;
+    engine_core::Matrix4 out =
+        engine_core::matrix4_from_euler(orientation.x * kRadians, orientation.y * kRadians, orientation.z * kRadians,
+                                        engine_core::RotationOrder::YXZ);
+    for (int column = 0; column < 3; ++column) {
+        const float* axis = transform.m + column * 4;
+        const float length = static_cast<float>(std::sqrt(static_cast<double>(axis[0]) * axis[0] +
+                                                          static_cast<double>(axis[1]) * axis[1] +
+                                                          static_cast<double>(axis[2]) * axis[2]));
+        for (int row = 0; row < 3; ++row) {
+            out.m[column * 4 + row] *= length;
+        }
+    }
+    for (int row = 0; row < 4; ++row) {
+        out.m[12 + row] = transform.m[12 + row];
+    }
+    return out;
 }
 
 std::string ref_label(const DataModel& world, InstanceId id) {

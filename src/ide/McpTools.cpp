@@ -247,10 +247,17 @@ const char* KindName(PropertyKind kind) {
             return "Color3";
         case PropertyKind::Ref:
             return "Instance";
+        case PropertyKind::Transform:
+            return "Matrix4";
         case PropertyKind::ReadOnlyText:
             return "string";
     }
     return "string";
+}
+
+JsonValue FloatTriple(engine_core::Vec3 value) {
+    return JsonValue::array({JsonValue::number_from_float(value.x), JsonValue::number_from_float(value.y),
+                             JsonValue::number_from_float(value.z)});
 }
 
 JsonValue RowValue(const DataModel& world, const PropertyRow& row) {
@@ -264,9 +271,14 @@ JsonValue RowValue(const DataModel& world, const PropertyRow& row) {
             return JsonValue::number(row.value.number);
         case PropertyKind::Vector3:
             // Floats, written as the shortest decimal that reads back to the same float.
-            return JsonValue::array({JsonValue::number_from_float(row.value.vec.x),
-                                     JsonValue::number_from_float(row.value.vec.y),
-                                     JsonValue::number_from_float(row.value.vec.z)});
+            return FloatTriple(row.value.vec);
+        case PropertyKind::Transform: {
+            // As the Properties panel shows it: Position, and Orientation in degrees.
+            JsonValue out = JsonValue::object();
+            out.set("position", FloatTriple(row.value.vec));
+            out.set("orientation", FloatTriple(row.value.orientation));
+            return out;
+        }
         case PropertyKind::Color3:
             return JsonValue::array({JsonValue::number_from_float(row.value.color.r),
                                      JsonValue::number_from_float(row.value.color.g),
@@ -318,6 +330,23 @@ float FloatArg(double number, const std::string& what) {
     return static_cast<float>(number);
 }
 
+// [x, y, z], or {x, y, z}.
+engine_core::Vec3 Vec3Arg(const JsonValue& value, const std::string& what) {
+    double axes[3] = {0, 0, 0};
+    if (value.is_array() && value.items().size() == 3) {
+        for (int i = 0; i < 3; ++i) {
+            axes[i] = NumberArg(value.items()[static_cast<std::size_t>(i)], what);
+        }
+    } else if (value.is_object() && value.find("x") && value.find("y") && value.find("z")) {
+        axes[0] = NumberArg(*value.find("x"), what);
+        axes[1] = NumberArg(*value.find("y"), what);
+        axes[2] = NumberArg(*value.find("z"), what);
+    } else {
+        throw std::runtime_error(what + " takes [x, y, z].");
+    }
+    return {FloatArg(axes[0], what), FloatArg(axes[1], what), FloatArg(axes[2], what)};
+}
+
 // The typed value for one row, from the JSON a client sent.
 PropertyEdit EditFor(const DataModel& world, const PropertyRow& row, const JsonValue& value) {
     PropertyEdit edit;
@@ -340,22 +369,31 @@ PropertyEdit EditFor(const DataModel& world, const PropertyRow& row, const JsonV
         case PropertyKind::Number:
             edit.value.number = NumberArg(value, row.name);
             break;
-        case PropertyKind::Vector3: {
-            double axes[3] = {0, 0, 0};
-            if (value.is_array() && value.items().size() == 3) {
-                for (int i = 0; i < 3; ++i) {
-                    axes[i] = NumberArg(value.items()[static_cast<std::size_t>(i)], row.name);
+        case PropertyKind::Vector3:
+            edit.value.vec = Vec3Arg(value, row.name);
+            break;
+        case PropertyKind::Transform: {
+            // The whole matrix, built on the one held, so a part left out stays.
+            engine_core::Matrix4 transform = row.value.transform;
+            if (value.is_array() && value.items().size() == 16) {
+                for (std::size_t i = 0; i < 16; ++i) {
+                    transform.m[i] = FloatArg(NumberArg(value.items()[i], row.name), row.name);
                 }
-            } else if (value.is_object() && value.find("x") && value.find("y") && value.find("z")) {
-                axes[0] = NumberArg(*value.find("x"), row.name);
-                axes[1] = NumberArg(*value.find("y"), row.name);
-                axes[2] = NumberArg(*value.find("z"), row.name);
+            } else if (value.is_object() && (value.find("position") || value.find("orientation"))) {
+                if (const JsonValue* orientation = value.find("orientation")) {
+                    transform = transform_with_orientation(transform, Vec3Arg(*orientation, row.name + ".orientation"));
+                }
+                if (const JsonValue* position = value.find("position")) {
+                    const engine_core::Vec3 at = Vec3Arg(*position, row.name + ".position");
+                    transform.m[12] = at.x;
+                    transform.m[13] = at.y;
+                    transform.m[14] = at.z;
+                }
             } else {
-                throw std::runtime_error(row.name + " takes [x, y, z].");
+                throw std::runtime_error(row.name + " takes {\"position\": [x, y, z], \"orientation\": [x, y, z]}, "
+                                         "either part alone, or 16 numbers, column-major.");
             }
-            edit.value.vec.x = FloatArg(axes[0], row.name);
-            edit.value.vec.y = FloatArg(axes[1], row.name);
-            edit.value.vec.z = FloatArg(axes[2], row.name);
+            edit.value.transform = transform;
             break;
         }
         case PropertyKind::Color3:

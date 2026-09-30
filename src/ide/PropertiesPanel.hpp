@@ -37,6 +37,14 @@ using PropertiesRun = std::function<void(std::function<void(engine_core::DataMod
 // Z in turn, wrapping at the ends. Position's axes are tinted red, green, and
 // blue by the theme's --ide-properties-{x,y,z}-color.
 //
+// A Matrix4, such as a GameObject's Transform, is shown as its name with
+// an arrow, then a Position line and an Orientation
+// line, each an X, Y, and Z tinted as above. Orientation is in degrees, turned
+// about Y, then X, then Z, shown to a thousandth. One axis writes only that
+// axis: the rest of each instance's Transform, and the length of its axes,
+// stay. Clicking the arrow or the name folds the row, and it stays folded for
+// the session; Tab passes over a folded row.
+//
 // A Color3 row is a color picker. Closing its chooser on a new color writes
 // it, so the whole pick is one undo step.
 //
@@ -68,8 +76,9 @@ public:
     // here is focused or it has nothing to undo, so the place stack gets it.
     bool field_undo(bool redo);
 
-    // The widget for a row. part picks the Vector3 axis, or for a reference
-    // 0 the Name that picks and 1 Clear. Null when there is no such row.
+    // The widget for a row. part picks the Vector3 axis; for a Transform 0..2
+    // Position's axes, 3..5 Orientation's, and 6 the fold arrow; or for a
+    // reference 0 the Name that picks and 1 Clear. Null when there is no such row.
     jadefx::Node* editor(const std::string& property, int part = 0) const;
 
     // What the rows show now.

@@ -822,7 +822,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Vector2", "Min", "The component-wise minimum with the others.", "Vector2", true, {P("other", "Vector2")});
 
     add("", "Matrix4",
-        "A position and rotation, as Roblox's CFrame: a 4x4 matrix. new, lookAt, Angles, and fromAxisAngle build one. "
+        "A position and rotation: a 4x4 matrix. new, lookAt, Angles, and fromAxisAngle build one. "
         "* composes two or moves a Vector3.",
         nullptr, false, {});
     add("Matrix4", "new",
@@ -965,8 +965,6 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("ModuleScript", "Source", "The Luau source require runs.", "string", false, {});
 
     add("GameObject", "Transform", "Where this object is and how it is turned.", "Matrix4", false, {});
-    add("GameObject", "CFrame", "The same Matrix4 as Transform.", "Matrix4", false, {});
-    add("GameObject", "Position", "Where this object is: its Transform's translation. Setting it keeps the rotation.", "Vector3", false, {});
     add("Camera", "FieldOfView",
         "How many degrees this camera sees from bottom to top, from 1 to 120. A Scene View linked to it draws with it.",
         "number", false, {});

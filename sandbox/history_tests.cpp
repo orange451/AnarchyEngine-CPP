@@ -149,7 +149,7 @@ TEST_CASE("H5 play script writes stay off the edit stack", "[H5][history]") {
     script.set_source(R"(
         local part = workspace:FindFirstChild("Brick")
         for _ = 1, 100 do
-            part.Position = Vector3.new(0, 0, 9)
+            part.Transform = Matrix4.new(0, 0, 9)
         end
     )");
     game.set_parent(script.id(), workspace_of(game));

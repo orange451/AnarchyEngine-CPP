@@ -279,16 +279,18 @@ void testColor3() {
     expectChunkError(runner, "local _ = Color3.new().A", "not a valid member", "a Color3 has no alpha");
     expectPrinted(runner,
                   "local o = Instance.new('GameObject') "
-                  "print(typeof(o.Position), o.Position.X, o.Position.Y, o.Position.Z) "
-                  "o.Position = Vector3.new(1, 2, 3) "
-                  "print(typeof(o.Position), o.Position.X, o.Position.Y, o.Position.Z)",
-                  "Vector3\t0\t0\t0\nVector3\t1\t2\t3", "GameObject.Position is a Vector3");
-    expectChunkError(runner, "Instance.new('GameObject').Position = {x = 1, y = 0, z = 0}", "Vector3",
-                     "a Position property refuses a table");
+                  "local p = o.Transform.Position "
+                  "print(typeof(p), p.X, p.Y, p.Z) "
+                  "o.Transform = o.Transform.Rotation + Vector3.new(1, 2, 3) "
+                  "p = o.Transform.Position "
+                  "print(typeof(p), p.X, p.Y, p.Z)",
+                  "Vector3\t0\t0\t0\nVector3\t1\t2\t3", "a GameObject's Transform.Position is a Vector3");
+    expectChunkError(runner, "local _ = Instance.new('GameObject').Position", "not a valid member",
+                     "a GameObject has no Position; scripts move it through Transform");
     runner.stop();
 }
 
-// Matrix4 is Roblox's CFrame API over a 4x4 matrix.
+// Matrix4 is a position and rotation over a 4x4 matrix.
 void testMatrix4() {
     runner::Runner runner;
     runner.start();
@@ -373,12 +375,14 @@ void testMatrix4() {
     expectChunkError(runner, "local _ = Matrix4.new() * 2", "Matrix4 or Vector3", "* refuses a number");
     expectPrinted(runner,
                   "local o = Instance.new('GameObject') "
-                  "print(typeof(o.CFrame), o.CFrame == Matrix4.identity) "
-                  "o.CFrame = Matrix4.new(1, 2, 3) * Matrix4.Angles(0, 1, 0) "
-                  "print(o.Position == Vector3.new(1, 2, 3), o.Transform == o.CFrame, "
+                  "print(typeof(o.Transform), o.Transform == Matrix4.identity) "
+                  "o.Transform = Matrix4.new(1, 2, 3) * Matrix4.Angles(0, 1, 0) "
+                  "print(o.Transform.Position == Vector3.new(1, 2, 3), o.Transform.Rotation == Matrix4.Angles(0, 1, 0), "
                   "o.Transform == Matrix4.new(1, 2, 3) * Matrix4.Angles(0, 1, 0))",
-                  "Matrix4\ttrue\ntrue\ttrue\ttrue", "GameObject.CFrame and Transform are one Matrix4");
-    expectChunkError(runner, "Instance.new('GameObject').CFrame = {1, 0, 0, 0}", "expects a Matrix4",
+                  "Matrix4\ttrue\ntrue\ttrue\ttrue", "GameObject.Transform is a Matrix4");
+    expectChunkError(runner, "local _ = Instance.new('GameObject').CFrame", "not a valid member",
+                     "a GameObject has no CFrame alias");
+    expectChunkError(runner, "Instance.new('GameObject').Transform = {1, 0, 0, 0}", "expects a Matrix4",
                      "a Transform property refuses a table");
     runner.stop();
 }

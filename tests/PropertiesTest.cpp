@@ -5,6 +5,7 @@
 #include "SelectionService.hpp"
 
 #include "AssetInstances.hpp"
+#include "Camera.hpp"
 #include "DataModel.hpp"
 #include "Folder.hpp"
 #include "Game.hpp"
@@ -391,9 +392,9 @@ void TestR1SingleSelectionEditsName() {
     Expect(rig.text("ClassName") == "GameObject", "R1 ClassName is shown");
     auto* cls = rig.field("ClassName");
     Expect(cls != nullptr && !cls->isEditable(), "R1 ClassName is read-only");
-    Expect(rig.hasRow("Position"), "R1 a GameObject shows Position");
-    Expect(!rig.hasRow("Source") && !rig.hasRow("Changed") && !rig.hasRow("Transform"),
-           "R1 Source, signals, and unknown types have no row");
+    Expect(rig.hasRow("Transform") && !rig.hasRow("Position"), "R1 a GameObject shows Transform, not Position");
+    Expect(!rig.hasRow("Source") && !rig.hasRow("Changed"),
+           "R1 Source and signals have no row");
 
     rig.typeInto("Name", "Hero");
     Expect(rig.game.name(rig.a) == "A", "R1 typing alone does not write");
@@ -459,15 +460,88 @@ void TestR3IntersectionOnly() {
     rig.select({rig.a, rig.script});
     Expect(rig.hasRow("Name"), "R3 Name is shared");
     Expect(rig.hasRow("Parent"), "R3 Parent is shared");
-    Expect(!rig.hasRow("Position"), "R3 Position is not on a Script");
+    Expect(!rig.hasRow("Transform"), "R3 Transform is not on a Script");
     Expect(!rig.hasRow("Enabled"), "R3 Enabled is not on a GameObject");
-    Expect(rig.panel.editor("Position") == nullptr, "R3 no Position widget");
+    Expect(rig.panel.editor("Transform") == nullptr, "R3 no Transform widget");
     // ClassName differs, so it is mixed and blank.
     Expect(rig.mixed("ClassName") && rig.text("ClassName").empty(), "R3 differing classes are mixed");
 
-    // Two classes that each have a Position of the same type share its row.
-    rig.select({rig.marker1, rig.a});
-    Expect(rig.hasRow("Position"), "R3 a field both classes have, with one type, shows");
+    // Two classes that each have a Transform of the same type share its row.
+    const InstanceId camera = rig.add<engine_core::Camera>("Cam");
+    rig.select({camera, rig.a});
+    Expect(rig.hasRow("Transform"), "R3 a field both classes have, with one type, shows");
+}
+
+bool Near(float a, float b) { return a > b - 0.001f && a < b + 0.001f; }
+
+// A Transform is its name and an arrow, then a Position line and an
+// Orientation line, each X, Y, and Z. One part writes only that part.
+void TestTransformRow() {
+    Rig rig;
+    auto* part = rig.game.game_object(rig.a);
+    part->set_transform(engine_core::matrix4_translation(1.f, 2.f, 3.f));
+    rig.game.history().reset_waypoints();
+    rig.select({rig.a});
+    Expect(rig.text("Transform", 0) == "1" && rig.text("Transform", 1) == "2" && rig.text("Transform", 2) == "3",
+           "Transform's Position line shows the translation");
+    Expect(rig.text("Transform", 3) == "0" && rig.text("Transform", 4) == "0" && rig.text("Transform", 5) == "0",
+           "Transform's Orientation line shows no turn");
+    const char* colors[3] = {"--ide-properties-x-color", "--ide-properties-y-color", "--ide-properties-z-color"};
+    for (int axis = 0; axis < ide::kTransformParts; ++axis) {
+        jadefx::TextField* box = rig.field("Transform", axis);
+        Expect(box != nullptr && box->getStyle().find(colors[axis % 3]) != std::string::npos,
+               "Position's and Orientation's X, Y, and Z are red, green, and blue");
+    }
+
+    rig.typeInto("Transform", "5", 1);
+    rig.enter();
+    engine_core::Vec3 at = part->position();
+    Expect(at.x == 1.f && at.y == 5.f && at.z == 3.f, "a Position axis writes only that axis");
+
+    rig.typeInto("Transform", "90", 4);
+    rig.enter();
+    const engine_core::Vec3 turned = ide::transform_orientation(part->transform());
+    at = part->position();
+    Expect(Near(turned.x, 0.f) && Near(turned.y, 90.f) && Near(turned.z, 0.f), "an Orientation axis turns it");
+    Expect(at.x == 1.f && at.y == 5.f && at.z == 3.f, "turning keeps the Position");
+    Expect(rig.text("Transform", 4) == "90", "Orientation reads back as typed");
+    Expect(Near(part->transform().m[8], 1.f), "90 about Y turns the back axis to +X");
+
+    rig.typeInto("Transform", "abc", 3);
+    rig.enter();
+    Expect(rig.panel.status() == "Orientation must be a number" && rig.text("Transform", 3) == "0",
+           "a bad angle is refused and shows the value again");
+
+    // Two that differ in one part leave only that part blank.
+    rig.select({rig.a, rig.b});
+    Expect(rig.text("Transform", 0).empty() && rig.text("Transform", 4).empty() && rig.text("Transform", 3) == "0",
+           "a Transform blanks only the parts that differ");
+
+    // The arrow folds the row, and a fold outlasts the selection.
+    rig.select({rig.a});
+    jadefx::Node* arrow = rig.panel.editor("Transform", ide::kTransformParts);
+    rig.click(arrow);
+    rig.frame();
+    Expect(!rig.field("Transform", 0)->isVisible() && !rig.field("Transform", 5)->isVisible(),
+           "folded, the Position and Orientation lines are hidden");
+    rig.select({rig.b});
+    rig.select({rig.a});
+    Expect(!rig.field("Transform", 0)->isVisible(), "the fold outlasts the selection");
+    rig.click(rig.panel.editor("Transform", ide::kTransformParts));
+    rig.frame();
+    Expect(rig.field("Transform", 0)->isVisible() && rig.field("Transform", 5)->isVisible(),
+           "clicking the arrow again opens it");
+}
+
+void TestTransformOrientationKeepsScale() {
+    engine_core::Matrix4 scaled = engine_core::matrix4_identity();
+    scaled.m[0] = 2.f;
+    scaled.m[12] = 7.f;
+    const engine_core::Matrix4 turned = ide::transform_with_orientation(scaled, engine_core::Vec3{0.f, 90.f, 0.f});
+    Expect(Near(turned.m[2], -2.f) && Near(turned.m[0], 0.f), "the X axis turns and keeps its length");
+    Expect(turned.m[12] == 7.f && turned.m[15] == 1.f, "the translation stays");
+    const engine_core::Vec3 back = ide::transform_orientation(turned);
+    Expect(Near(back.x, 0.f) && Near(back.y, 90.f) && Near(back.z, 0.f), "scale does not change the Orientation");
 }
 
 void TestR4SameValueIsNotMixed() {
@@ -846,11 +920,11 @@ void TestR8NoSelection() {
 void TestR9DestroyedLeavesIntersection() {
     Rig rig;
     rig.select({rig.a, rig.b, rig.script});
-    Expect(!rig.hasRow("Position"), "R9 a Script hides Position");
+    Expect(!rig.hasRow("Transform"), "R9 a Script hides Transform");
     rig.game.destroy(rig.script);
     rig.frame();
     Expect(rig.panel.sheet().ids.size() == 2, "R9 the destroyed instance leaves");
-    Expect(rig.hasRow("Position"), "R9 the intersection widens again");
+    Expect(rig.hasRow("Transform"), "R9 the intersection widens again");
 }
 
 void TestBooleanAndNumber() {
@@ -1060,6 +1134,8 @@ int main() {
     TestFocusSelectsWhole();
     TestTabWalksFields();
     TestPositionAxisColors();
+    TestTransformRow();
+    TestTransformOrientationKeepsScale();
     TestColorPicker();
     TestR6ParentReference();
     TestReferenceRows();

@@ -19,14 +19,19 @@ std::string instance_drag_text(const std::vector<engine_core::InstanceId>& ids);
 std::vector<engine_core::InstanceId> instance_drag_ids(std::string_view text);
 
 // What a Properties row edits. The class registry's type name picks it.
-// ReadOnlyText is shown and never written.
-enum class PropertyKind { String, Bool, Number, Vector3, Color3, Ref, ReadOnlyText };
+// ReadOnlyText is shown and never written. Transform is a Matrix4, edited as
+// its Position and its Orientation.
+enum class PropertyKind { String, Bool, Number, Vector3, Color3, Ref, Transform, ReadOnlyText };
+
+// A Transform row's parts: Position's X, Y, and Z, then Orientation's.
+inline constexpr int kTransformParts = 6;
 
 // Instance rows come first in a fixed order, then Data rows by name.
 enum class PropertyGroup { Instance, Data };
 
 // One value in the panel. Only the fields for its kind mean anything.
-// A Ref with ref == DataModel::kNoParent is nil.
+// A Ref with ref == DataModel::kNoParent is nil. A Transform keeps the matrix
+// in transform, its translation in vec, and its Orientation in orientation.
 struct PropertyValue {
     std::string text;
     bool flag = false;
@@ -34,6 +39,8 @@ struct PropertyValue {
     engine_core::Vec3 vec{};
     engine_core::InstanceId ref = engine_core::DataModel::kNoParent;
     engine_core::Color3 color{};
+    engine_core::Matrix4 transform{};
+    engine_core::Vec3 orientation{};
 
     bool nil_ref() const { return ref == engine_core::DataModel::kNoParent; }
 };
@@ -41,7 +48,8 @@ struct PropertyValue {
 // One property every selected instance has, with the same type.
 // mixed is true when the instances do not all hold the same value. For a
 // Vector3, axis_mixed says which components differ; value keeps the ones that
-// agree. For a Ref, label is the Name and path is the Names from the root
+// agree. A Transform's axis_mixed covers its six parts, in kTransformParts
+// order. For a Ref, label is the Name and path is the Names from the root
 // down, both empty when the value is nil or mixed.
 struct PropertyRow {
     std::string name;
@@ -50,7 +58,7 @@ struct PropertyRow {
     PropertyGroup group = PropertyGroup::Data;
     bool writable = false;
     bool mixed = false;
-    bool axis_mixed[3] = {false, false, false};
+    bool axis_mixed[kTransformParts] = {false, false, false, false, false, false};
     PropertyValue value;
     std::string label;
     std::string path;
@@ -80,8 +88,18 @@ bool property_kind_for(const std::string& type_name, PropertyKind& out);
 // Source is left to the script editor.
 PropertySheet read_sheet(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& selection);
 
+// Orientation: the rotation of transform, scale left out, as degrees
+// about X, Y, and Z, turned about Y first, then X, then Z.
+engine_core::Vec3 transform_orientation(const engine_core::Matrix4& transform);
+// transform turned to orientation, in those degrees. Its translation, and the
+// length of each axis, stay.
+engine_core::Matrix4 transform_with_orientation(const engine_core::Matrix4& transform, engine_core::Vec3 orientation);
+
 // One commit from a row. For a Vector3, axis 0..2 writes only that component
-// and keeps each instance's other two. axis -1 writes the whole value.
+// and keeps each instance's other two. For a Transform, axis 0..2 is one axis
+// of value.vec, the Position, and 3..5 one axis of value.orientation; each
+// instance keeps the rest of its own Transform. axis -1 writes the whole
+// value, for a Transform value.transform.
 struct PropertyEdit {
     std::string property;
     PropertyKind kind = PropertyKind::String;

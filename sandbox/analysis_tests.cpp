@@ -278,7 +278,7 @@ TEST_CASE("A10 a child in the place is its class and never nil", "[A10]") {
 
     engine_core::Script& bare = add_script(rig.game, "Bare",
                                             "local tri = workspace:FindFirstChild(\"Tri0\")\n"
-                                            "local home = tri.Position\n"
+                                            "local home = tri.Transform.Position\n"
                                             "return home\n");
     settle(analysis);
     INFO(dump(analysis.diagnostics(bare.id())));
@@ -304,8 +304,8 @@ TEST_CASE("A10 a child in the place is its class and never nil", "[A10]") {
     engine_core::Script& hop = add_script(rig.game, "Hop",
                                            "local tri = workspace:FindFirstChild(\"Tri0\")\n"
                                            "assert(tri)\n"
-                                           "local home = tri.Position\n"
-                                           "tri.Position = home + Vector3.new(0.45, 0, 0)\n"
+                                           "local home = tri.Transform\n"
+                                           "tri.Transform = home + Vector3.new(0.45, 0, 0)\n"
                                            "return home\n");
     settle(analysis);
     INFO(dump(analysis.diagnostics(hop.id())));
@@ -314,25 +314,25 @@ TEST_CASE("A10 a child in the place is its class and never nil", "[A10]") {
     engine_core::Script& missing = add_script(rig.game, "Missing",
                                                "local tri = workspace:FindFirstChild(\"Nope\")\n"
                                                "assert(tri)\n"
-                                               "local home = tri.Position\n"
+                                               "local home = tri.Transform.Position\n"
                                                "return home\n");
     settle(analysis);
     const std::vector<engine_core::Diagnostic> missing_diagnostics = analysis.diagnostics(missing.id());
     INFO(dump(missing_diagnostics));
-    bool missing_position = false;
+    bool missing_transform = false;
     for (const engine_core::Diagnostic& diagnostic : missing_diagnostics) {
-        if (diagnostic.message.find("Position") != std::string::npos &&
+        if (diagnostic.message.find("Transform") != std::string::npos &&
             diagnostic.message.find("not found") != std::string::npos) {
-            missing_position = true;
+            missing_transform = true;
         }
     }
-    REQUIRE(missing_position);
+    REQUIRE(missing_transform);
 }
 
 TEST_CASE("analysis definitions come from the class registry", "[A11]") {
     const std::string source = engine_core::lua_analysis_definitions();
     REQUIRE(source.find("declare extern type GameObject") != std::string::npos);
-    REQUIRE(source.find("Position: Vector3") != std::string::npos);
+    REQUIRE(source.find("Transform: Matrix4") != std::string::npos);
     REQUIRE(source.find("function FindFirstChild(self, name: string): Instance?") != std::string::npos);
     REQUIRE(source.find("Parent: DataModel?") != std::string::npos);
     REQUIRE(source.find("type Vector3 = vector") != std::string::npos);
@@ -387,10 +387,14 @@ TEST_CASE("analysis definitions come from the class registry", "[A11]") {
     REQUIRE(matrix4_block.find("__mul: ((Matrix4, Matrix4) -> Matrix4) & ((Matrix4, Vector3) -> Vector3)") !=
             std::string::npos);
     REQUIRE(matrix4_block.find("function ToAxisAngle(self): (Vector3, number)") != std::string::npos);
+    REQUIRE(matrix4_block.find("Position: Vector3") != std::string::npos);
+    // A GameObject moves through its Transform; it has no Position of its own.
     const std::size_t game_object = source.find("declare extern type GameObject extends Instance with");
     REQUIRE(game_object != std::string::npos);
     const std::string game_object_block = source.substr(game_object, source.find("end\n", game_object) - game_object);
-    REQUIRE(game_object_block.find("Position: Vector3") != std::string::npos);
+    REQUIRE(game_object_block.find("Transform: Matrix4") != std::string::npos);
+    REQUIRE(game_object_block.find("CFrame") == std::string::npos);
+    REQUIRE(game_object_block.find("Position") == std::string::npos);
     REQUIRE(source.find("declare extern type Color with") == std::string::npos);
     // Operators are not members, so completion does not offer them.
     REQUIRE(engine_core::lua_class_find("Vector2", "__add") == nullptr);
@@ -415,7 +419,7 @@ TEST_CASE("A12 a script is rechecked when the tree it looks into changes", "[A12
     engine_core::Script& hop = add_script(rig.game, "Hop",
                                            "local tri = workspace:FindFirstChild(\"Tri0\")\n"
                                            "assert(tri)\n"
-                                           "local home = tri.Position\n"
+                                           "local home = tri.Transform.Position\n"
                                            "return home\n");
     settle(analysis);
     INFO(dump(analysis.diagnostics(hop.id())));
@@ -453,7 +457,7 @@ TEST_CASE("A13 a loaded project is analyzed against the whole loaded tree", "[A1
     write("src/Workspace.workspace/Hop.zzz.luau",
           "local tri = workspace:FindFirstChild(\"Tri0\")\n"
           "assert(tri)\n"
-          "local home = tri.Position\n"
+          "local home = tri.Transform.Position\n"
           "return home\n");
     ScriptRig rig;
     engine_core::ScriptAnalysis analysis(rig.game);
@@ -545,7 +549,7 @@ TEST_CASE("A14 open scope checks watched scripts and the modules they require", 
         engine_core::Script& hop = add_script(rig.game, "Hop",
                                                "local tri = workspace:FindFirstChild(\"Tri0\")\n"
                                                "assert(tri)\n"
-                                               "local home = tri.Position\n"
+                                               "local home = tri.Transform.Position\n"
                                                "return home\n");
         analysis.watch(hop.id());
         settle(analysis);
@@ -710,7 +714,7 @@ TEST_CASE("A19 a dotted name that reaches a child is not an unknown member", "[A
     engine_core::Script& script = add_script(rig.game, "Dot",
                                               "local d = workspace.Door\n"
                                               "d.Name = \"x\"\n"
-                                              "local c = workspace.Door.Position\n"
+                                              "local c = workspace.Door.Transform\n"
                                               "local m = workspace.Nope\n"
                                               "return c, m\n");
     settle(analysis);
@@ -747,11 +751,11 @@ TEST_CASE("A20 a dotted name is the child it reaches, with its type", "[A20]") {
     rig.game.set_parent(config.id(), configs.id());
     engine_core::Script& script = add_script(rig.game, "Test",
                                              "local some = workspace.Configs.SomeInstance\n"
-                                             "local home = some.Position\n"
-                                             "workspace.Configs.SomeInstance.Position = home\n"
-                                             "local again = script.Parent.Configs.SomeInstance.Position\n"
+                                             "local home = some.Transform\n"
+                                             "workspace.Configs.SomeInstance.Transform = home\n"
+                                             "local again = script.Parent.Configs.SomeInstance.Transform\n"
                                              "local folder = workspace.Configs\n"
-                                             "local found = folder:FindFirstChild(\"SomeInstance\").Position\n"
+                                             "local found = folder:FindFirstChild(\"SomeInstance\").Transform\n"
                                              "local label: string = workspace.Configs.Name\n"
                                              "local gold = require(workspace.Configs.Config).Gold\n"
                                              "return again, found, label, gold\n");

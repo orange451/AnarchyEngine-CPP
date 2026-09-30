@@ -10,7 +10,7 @@ namespace engine_core {
 
 // Column-major 4x4, as GLSL stores one: m[column * 4 + row]. Translation lives
 // in m[12], m[13], m[14]. The upper 3x3's columns are the right, up, and back
-// axes, so the look direction is the third column negated, as in Roblox.
+// axes, so the look direction is the third column negated.
 struct Matrix4 {
     float m[16] = {};
 };
@@ -36,7 +36,7 @@ inline Matrix4 matrix4_translation(float x, float y, float z) {
 
 inline Vec3 matrix4_position(const Matrix4& value) { return Vec3{value.m[12], value.m[13], value.m[14]}; }
 
-// Roblox's Enum.RotationOrder, by value. XYZ is Rx * Ry * Rz: Z applies first.
+// Enum.RotationOrder, by value. XYZ is Rx * Ry * Rz: Z applies first.
 enum class RotationOrder { XYZ = 0, XZY = 1, YZX = 2, YXZ = 3, ZXY = 4, ZYX = 5 };
 
 // a * b: b's transform first, then a's.
@@ -68,7 +68,7 @@ Matrix4 matrix4_orthonormalize(const Matrix4& value);
 // along the shortest arc. alpha 1 is exactly b.
 Matrix4 matrix4_lerp(const Matrix4& a, const Matrix4& b, double alpha);
 
-// Roblox's CFrame as Matrix4, installed into the same state as the rest of the
+// Matrix4, installed into the same state as the rest of the
 // script API. A Matrix4 is a userdata: typeof is "Matrix4", * composes two
 // or moves a Vector3, + and - move it by a Vector3, and == compares it.
 // open_vector3 and open_enum must have run on the state.

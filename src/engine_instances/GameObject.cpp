@@ -169,25 +169,6 @@ bool write_lua_transform(DataModel&, DataModel& object, LuaSlot& in) {
     return true;
 }
 
-bool read_lua_position(DataModel&, DataModel& object, LuaSlot& out) {
-    auto* body = dynamic_cast<GameObject*>(&object);
-    if (body == nullptr) {
-        return false;
-    }
-    out.kind = LuaSlot::Kind::Vec3;
-    out.vec = body->position();
-    return true;
-}
-
-bool write_lua_position(DataModel&, DataModel& object, LuaSlot& in) {
-    auto* body = dynamic_cast<GameObject*>(&object);
-    if (body == nullptr) {
-        return false;
-    }
-    body->set_position(in.vec);
-    return true;
-}
-
 bool read_prefab(DataModel&, DataModel& object, LuaSlot& out) {
     auto* body = dynamic_cast<GameObject*>(&object);
     if (body == nullptr) {
@@ -212,11 +193,9 @@ bool write_prefab(DataModel&, DataModel& object, LuaSlot& in) {
 ANARCHY_LUA_REGISTER(register_game_object_lua) {
     const LuaField fields[] = {
         lua_property("Transform", "Matrix4", true, read_lua_transform, write_lua_transform),
-        lua_property("CFrame", "Matrix4", true, read_lua_transform, write_lua_transform),
-        lua_property("Position", "Vector3", true, read_lua_position, write_lua_position),
         lua_saved_property("Prefab", "Prefab?", read_prefab, write_prefab, "null"),
     };
-    register_lua_class("GameObject", "Instance", fields, 4);
+    register_lua_class("GameObject", "Instance", fields, 2);
 }
 
 }  // namespace

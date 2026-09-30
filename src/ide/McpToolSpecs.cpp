@@ -32,12 +32,14 @@ constexpr SpecText kSpecs[] = {
          "instances":{"type":"array","items":{"type":["string","number"]},"description":"Ids or paths. The result lists each one's properties under instances, in this order."}}})"},
     {"set_property",
      "Sets one property, as an edit in the Properties panel does: one undo step. Vector3 takes "
-     "[x, y, z]. Color3 takes [r, g, b], each 0 to 1, or a hex code such as \"#FF8000\". An "
-     "Instance property (such as Parent) takes an id, a path, or null.",
+     "[x, y, z]. Color3 takes [r, g, b], each 0 to 1, or a hex code such as \"#FF8000\". A "
+     "Matrix4 (Transform) takes {\"position\": [x, y, z], \"orientation\": [x, y, z]}, either one "
+     "alone keeping the other; orientation is in degrees, turned about Y, then X, then Z. It also takes its 16 numbers, "
+     "column-major. An Instance property (such as Parent) takes an id, a path, or null.",
      R"({"type":"object","required":["instance","property","value"],"properties":{
          "instance":{"type":["string","number"],"description":"Id or path."},
          "property":{"type":"string"},
-         "value":{"description":"string, number, boolean, [x,y,z], [r,g,b], hex code, id, path, or null."}}})"},
+         "value":{"description":"string, number, boolean, [x,y,z], [r,g,b], hex code, {position, orientation}, 16 numbers, id, path, or null."}}})"},
     {"create_instance",
      "Creates an instance of a class Instance.new accepts (see list_classes) under a parent. One "
      "undo step. Returns its id and path.",

@@ -431,7 +431,7 @@ RotationOrder opt_order(lua_State* state, int index) {
     return static_cast<RotationOrder>(check_enum_arg(state, index, rotation_order_enum()));
 }
 
-// x, y, z, then the rotation's rows: CFrame.new's twelve and GetComponents's order.
+// x, y, z, then the rotation's rows: Matrix4.new's twelve and GetComponents's order.
 Matrix4 from_components(const double values[12]) {
     Matrix4 out = matrix4_translation(static_cast<float>(values[0]), static_cast<float>(values[1]),
                                       static_cast<float>(values[2]));
@@ -526,7 +526,7 @@ int matrix4_from_axis_angle_lua(lua_State* state) {
     return 1;
 }
 
-// vZ defaults to the unit cross product of vX and vY, as in Roblox.
+// vZ defaults to the unit cross product of vX and vY.
 int matrix4_from_matrix(lua_State* state) {
     const Vec3 position = check_vector(state, 1);
     const D3 x = to_d3(check_vector(state, 2));
@@ -675,7 +675,7 @@ int matrix4_index(lua_State* state) {
         push_column(state, value, 2, -1.f);
         return 1;
     }
-    // XVector, YVector, and ZVector are the rotation's rows, as in Roblox.
+    // XVector, YVector, and ZVector are the rotation's rows.
     if (name[0] >= 'X' && name[0] <= 'Z' && std::strcmp(name + 1, "Vector") == 0) {
         push_row(state, value, name[0] - 'X');
         return 1;
@@ -691,7 +691,7 @@ int matrix4_index(lua_State* state) {
 
 int matrix4_newindex(lua_State* state) { luaL_error(state, "%s cannot be assigned to", luaL_checkstring(state, 2)); }
 
-// The twelve components, "x, y, z, R00, R01, ..., R22", as Roblox prints a CFrame.
+// The twelve components, "x, y, z, R00, R01, ..., R22".
 int matrix4_tostring(lua_State* state) {
     check_matrix4(state, 1);
     const int count = matrix4_get_components(state);

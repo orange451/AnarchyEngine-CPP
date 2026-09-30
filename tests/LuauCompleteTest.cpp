@@ -223,12 +223,15 @@ void testInstances() {
     world.push_back(node(4, 0, "Tri0", "GameObject"));
     world.push_back(node(5, 0, "Main", "Script"));
     const ide::CompletionList triangle = at_end("local tri = game:FindFirstChild(\"Tri0\")\ntri.", world, 5);
-    expect_has(triangle, "Position", "Tri0.Position");
+    expect_has(triangle, "Transform", "Tri0.Transform");
+    expect_missing(triangle, "CFrame", "a GameObject has no CFrame alias");
+    expect_missing(triangle, "Position", "a GameObject moves through Transform, not Position");
     expect_has(triangle, "Name", "Tri0.Name");
     expect_missing(triangle, "Source", "Tri0.Source");
     expect_missing(triangle, "Color", "Tri0.Color");
     const ide::CompletionList waited = at_end("local tri = game:WaitForChild(\"Tri0\")\ntri.", world, 5);
-    expect_has(waited, "Position", "WaitForChild Tri0.Position");
+    expect_has(waited, "Transform", "WaitForChild Tri0.Transform");
+    expect_missing(waited, "Position", "WaitForChild Tri0.Position");
     expect_missing(waited, "Source", "WaitForChild Tri0.Source");
 
     const ide::CompletionList service = at_end("game:GetService(\"RunService\").");
@@ -288,11 +291,12 @@ void testVector3() {
     world.push_back(node(0, 0xffffffffu, "game", "Game"));
     world.push_back(node(4, 0, "Tri0", "GameObject"));
     world.push_back(node(5, 0, "Main", "Script"));
-    const ide::CompletionList position = at_end("local tri = game:FindFirstChild(\"Tri0\")\ntri.Position.", world, 5);
-    expect_has(position, "X", "Position.X");
-    expect_has(position, "Magnitude", "Position.Magnitude");
-    expect_has(position, "Abs", "Position.Abs");
-    expect_missing(position, "x", "Position.x");
+    const ide::CompletionList position =
+        at_end("local tri = game:FindFirstChild(\"Tri0\")\ntri.Transform.Position.", world, 5);
+    expect_has(position, "X", "Transform.Position.X");
+    expect_has(position, "Magnitude", "Transform.Position.Magnitude");
+    expect_has(position, "Abs", "Transform.Position.Abs");
+    expect_missing(position, "x", "Transform.Position.x");
 
     const ide::CompletionList named = at_end("Vec");
     expect_has(named, "Vector3", "Vec");
@@ -335,11 +339,11 @@ void testVector3() {
     const ide::CompletionList color3_method = at_end("local c = Color3.new(1, 0, 0)\nc:");
     expect_has(color3_method, "Lerp", "Color3:Lerp");
     expect_has(color3_method, "ToHex", "Color3:ToHex");
-    const ide::CompletionList placed = at_end("local part = Instance.new(\"GameObject\")\npart.Position.");
-    expect_has(placed, "X", "GameObject.Position.X");
-    expect_missing(placed, "R", "GameObject.Position is not a Color3");
-    const ide::CompletionList placed_method = at_end("local part = Instance.new(\"GameObject\")\npart.Position:");
-    expect_has(placed_method, "Dot", "GameObject.Position:Dot");
+    const ide::CompletionList placed = at_end("local part = Instance.new(\"GameObject\")\npart.Transform.Position.");
+    expect_has(placed, "X", "GameObject.Transform.Position.X");
+    expect_missing(placed, "R", "GameObject.Transform.Position is not a Color3");
+    const ide::CompletionList placed_method = at_end("local part = Instance.new(\"GameObject\")\npart.Transform.Position:");
+    expect_has(placed_method, "Dot", "GameObject.Transform.Position:Dot");
 
     // A Connect callback's parameters take the signal's types without an annotation.
     const ide::CompletionList inferred = at_end(
@@ -1301,7 +1305,8 @@ void testInstanceNew() {
     }
 
     const ide::CompletionList object = at_end("local part = Instance.new(\"GameObject\")\npart.");
-    expect_has(object, "Position", "created GameObject");
+    expect_has(object, "Transform", "created GameObject");
+    expect_missing(object, "Position", "created GameObject");
     expect_missing(object, "Source", "created GameObject");
 
     const ide::CompletionList folder = at_end("local folder = Instance.new(\"Folder\")\nfolder.");
@@ -2054,14 +2059,14 @@ void testDotChildren() {
     expect_has(configs, "Name", "game.Configs.Name");
     expect_detail(configs, "Name", "string", "a member wins over a child of that name");
     expect_missing(configs, "My Part", "a child that is not an identifier");
-    expect_missing(configs, "Position", "Folder has no Position");
+    expect_missing(configs, "Transform", "Folder has no Transform");
 
     const ide::CompletionList triangle = at_end("game.Configs.Tri0.", world, 5);
-    expect_has(triangle, "Position", "game.Configs.Tri0.Position");
+    expect_has(triangle, "Transform", "game.Configs.Tri0.Transform");
     expect_missing(triangle, "Source", "game.Configs.Tri0.Source");
 
     const ide::CompletionList local = at_end("local tri = game.Configs.Tri0\ntri.", world, 5);
-    expect_has(local, "Position", "a local holding a dotted child");
+    expect_has(local, "Transform", "a local holding a dotted child");
 
     const ide::CompletionList parent = at_end("script.Parent.Configs.", world, 5);
     expect_has(parent, "Tri0", "script.Parent.Configs.");

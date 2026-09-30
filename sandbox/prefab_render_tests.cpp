@@ -1,5 +1,5 @@
 // What the Scene View draws: a Workspace GameObject's Prefab, as its Models'
-// Mesh Paths in the render snapshot, and GameObject.Position.
+// Mesh Paths in the render snapshot, and GameObject::position().
 
 #include "support.hpp"
 
@@ -240,7 +240,7 @@ TEST_CASE("Stop puts back the Prefab a GameObject drew before play", "[render]")
     REQUIRE(scene.meshes(id) == Paths{"meshes/body.amesh"});
 }
 
-TEST_CASE("Position is the Transform's translation, and a write keeps the rotation", "[render]") {
+TEST_CASE("position() is the Transform's translation, and set_position() keeps the rotation", "[render]") {
     Scene scene;
     engine_core::GameObject& part = scene.object(0);
     // A quarter turn about Y, at (4, 5, 6).

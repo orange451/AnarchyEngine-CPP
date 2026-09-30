@@ -2215,7 +2215,7 @@ TEST_CASE("S8 a script position write is path A", "[S8]") {
     engine_core::GameObject& part = add_part(rig.game, workspace_of(rig.game), "P");
     add_script(rig.game, "Painter", R"(
         local part = workspace:FindFirstChild("P")
-        part.Position = Vector3.new(0.2, 0.4, 0.6)
+        part.Transform = Matrix4.new(0.2, 0.4, 0.6)
     )");
     int hits = 0;
     engine_core::Field seen = engine_core::Field::Count;
@@ -2351,7 +2351,7 @@ TEST_CASE("S12 a Luau Heartbeat connection runs on the simulation thread", "[S12
         local n = 0
         game:GetService("RunService").Heartbeat:Connect(function()
             n = n + 1
-            part.Position = Vector3.new(n / 100, 0.2, 0.3)
+            part.Transform = Matrix4.new(n / 100, 0.2, 0.3)
         end)
     )");
     std::atomic<int> hits{0};
@@ -2423,7 +2423,7 @@ TEST_CASE("Vector2 is a value with Roblox's API", "[vector2]") {
     REQUIRE(count == 37);
 }
 
-TEST_CASE("Vector3 is a GameObject's Position", "[vector3]") {
+TEST_CASE("Vector3 is a GameObject's Transform.Position", "[vector3]") {
     ScriptRig rig;
     engine_core::GameObject& part = rig.game.create<engine_core::GameObject>();
     rig.game.set_name(part.id(), "Tri0");
@@ -2431,7 +2431,7 @@ TEST_CASE("Vector3 is a GameObject's Position", "[vector3]") {
     part.set_position(engine_core::Vec3{-0.58f, 0.38f, 0.f});
     add_script(rig.game, "Main", R"(
         local tri = workspace:FindFirstChild("Tri0")
-        local home = tri.Position
+        local home = tri.Transform.Position
         _G.read_x = home.X
         _G.read_y = home.Y
         _G.read_z = home.Z
@@ -2540,19 +2540,22 @@ TEST_CASE("Vector3 is a GameObject's Position", "[vector3]") {
         _G.wrong_axis = not pcall(function() return Vector3.FromAxis(Enum.NormalId.Top) end)
 
         local ok, err = pcall(function()
-            tri.Position = {x = 1, y = 2, z = 3}
+            tri.Transform = {x = 1, y = 2, z = 3}
         end)
         _G.table_rejected = not ok
-        _G.table_msg = type(err) == "string" and string.find(err, "Vector3", 1, true) ~= nil
-        _G.held = tri.Position.X == home.X and tri.Position.Y == home.Y and tri.Position.Z == home.Z
+        _G.table_msg = type(err) == "string" and string.find(err, "Matrix4", 1, true) ~= nil
+        local held = tri.Transform.Position
+        _G.held = held.X == home.X and held.Y == home.Y and held.Z == home.Z
 
-        tri.Position = vector.create(3, 4, 5)
-        _G.vec_x, _G.vec_y, _G.vec_z = tri.Position.X, tri.Position.Y, tri.Position.Z
-        tri.Position = home + Vector3.new(0.5, 0, 0)
-        _G.hop_x = tri.Position.X
-        _G.hop_y = tri.Position.Y
-        tri.Position = Vector3.new(1.5, -2, 0.25)
-        _G.set_x, _G.set_y, _G.set_z = tri.Position.X, tri.Position.Y, tri.Position.Z
+        tri.Transform = Matrix4.new(vector.create(3, 4, 5))
+        local placed = tri.Transform.Position
+        _G.vec_x, _G.vec_y, _G.vec_z = placed.X, placed.Y, placed.Z
+        tri.Transform = tri.Transform.Rotation + (home + Vector3.new(0.5, 0, 0))
+        _G.hop_x = tri.Transform.Position.X
+        _G.hop_y = tri.Transform.Position.Y
+        tri.Transform = tri.Transform.Rotation + Vector3.new(1.5, -2, 0.25)
+        local set = tri.Transform.Position
+        _G.set_x, _G.set_y, _G.set_z = set.X, set.Y, set.Z
     )");
 
     rig.game.start_simulation();
@@ -2701,25 +2704,25 @@ TEST_CASE("scene scripts hop a part on task.wait and stop restores the pose", "[
     add_script(rig.game, "HopSlow", R"(
         local tri = workspace:FindFirstChild("Tri0")
         assert(tri)
-        local home = tri.Position
+        local home = tri.Transform
         local n = 0
         while true do
             task.wait(0.5)
             n = n + 1
             local hop = (n % 2 == 1) and 0.45 or 0
-            tri.Position = home + Vector3.new(hop, 0, 0)
+            tri.Transform = home + Vector3.new(hop, 0, 0)
         end
     )");
     add_script(rig.game, "HopFast", R"(
         local tri = workspace:FindFirstChild("Tri1")
         assert(tri)
-        local home = tri.Position
+        local home = tri.Transform
         local n = 0
         while true do
             task.wait(0.2)
             n = n + 1
             local hop = (n % 2 == 1) and 0.35 or 0
-            tri.Position = home + Vector3.new(0, hop, 0)
+            tri.Transform = home + Vector3.new(0, hop, 0)
         end
     )");
 

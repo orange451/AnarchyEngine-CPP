@@ -295,16 +295,25 @@ void TestEngineTools() {
     Expect(!ErrorText(server, "set_property", R"({"instance":"Lighting","property":"Ambient","value":"blue"})").empty(),
            "a Color3 refuses what is not a color");
 
-    // A GameObject's Position is a Vector3, [x, y, z].
+    // A GameObject's Transform is a Matrix4, read and written as its position and orientation.
     Call(server, "create_instance", R"({"class":"GameObject","name":"Box"})");
-    Call(server, "set_property", R"({"instance":"Workspace.Box","property":"Position","value":[1,2,3]})");
+    Call(server, "set_property", R"({"instance":"Workspace.Box","property":"Transform","value":{"position":[1,2,3]}})");
+    Call(server, "set_property",
+         R"({"instance":"Workspace.Box","property":"Transform","value":{"orientation":[0,90,0]}})");
     const JsonValue box = Call(server, "get_properties", R"({"instance":"Workspace.Box"})");
-    const JsonValue* position =
-        box.find("properties") != nullptr ? Member(box, "properties").find("Position") : nullptr;
-    Expect(position != nullptr && position->find("type") != nullptr &&
-               Member(*position, "type").as_string() == "Vector3" && position->find("value") != nullptr &&
-               Item(Member(*position, "value"), 2).as_number() == 3,
-           "set_property writes a GameObject's Position and get_properties reads it back");
+    const JsonValue* transform =
+        box.find("properties") != nullptr ? Member(box, "properties").find("Transform") : nullptr;
+    const JsonValue* value = transform != nullptr ? transform->find("value") : nullptr;
+    Expect(transform != nullptr && transform->find("type") != nullptr &&
+               Member(*transform, "type").as_string() == "Matrix4" && value != nullptr &&
+               value->find("position") != nullptr && Item(Member(*value, "position"), 2).as_number() == 3 &&
+               value->find("orientation") != nullptr && Item(Member(*value, "orientation"), 1).as_number() == 90,
+           "set_property writes a GameObject's Transform a part at a time and get_properties reads it back");
+    Expect(Member(box, "properties").find("Position") == nullptr, "a GameObject has no Position of its own");
+    Expect(!ErrorText(server, "set_property",
+                      R"({"instance":"Workspace.Box","property":"Transform","value":[1,2,3]})")
+                .empty(),
+           "a Transform refuses a bare Vector3");
 
     const JsonValue run = Call(server, "run_lua", R"j({"source":"print('from mcp', 1 + 2)"})j");
     const JsonValue* lines = run.find("output");

@@ -8,10 +8,14 @@
 #include "SelectionService.hpp"
 #include "TextUndoStack.hpp"
 
+#include "jadefx/scene/Painter.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -28,6 +32,10 @@ constexpr double kRowGap = 2;
 constexpr double kIndent = 10;
 constexpr double kAxisGap = 4;
 constexpr double kClearWidth = 24;
+// The fold arrow before a Transform's name sits in the name's indent.
+constexpr double kDisclosureWidth = 12;
+// A Transform's two lines, under its name when it is open.
+constexpr const char* kTransformLines[2] = {"Position", "Orientation"};
 
 constexpr const char* kFieldStyle =
     "padding: 0 4px; border-width: 1px; border-style: solid; border-radius: 3px; "
@@ -36,7 +44,8 @@ constexpr const char* kReadOnlyStyle =
     "padding: 0 4px; border-width: 1px; border-style: solid; border-radius: 3px; "
     "border-color: var(--ide-properties-readonly-border-color); "
     "background-color: var(--ide-properties-readonly-color); color: var(--ide-muted-text-color);";
-// Position's X, Y, and Z fields are tinted red, green, and blue.
+// Position's X, Y, and Z fields are tinted red, green, and blue, and so are a
+// Transform's Position and Orientation.
 constexpr const char* kAxisStyles[3] = {
     "padding: 0 4px; border-width: 1px; border-style: solid; border-radius: 3px; "
     "border-color: var(--ide-field-border-color); background-color: var(--ide-properties-x-color);",
@@ -240,6 +249,51 @@ private:
     bool escaped_ = false;
 };
 
+// The arrow that folds a Transform row: it points right while the row is
+// folded and down while it is open, as the explorer's does.
+class PropertyDisclosure : public jadefx::Region {
+public:
+    PropertyDisclosure() {
+        getClassList().add("properties-disclosure");
+        setDefaultCursor(jadefx::Cursor::Pointer);
+        setStyle("color: var(--ide-muted-text-color);");
+    }
+
+    const char* getElementType() const override { return "properties-disclosure"; }
+
+    bool open = true;
+
+protected:
+    void renderContent(jadefx::UiRenderer& renderer, float opacity) override {
+        jadefx::Color color = computedStyle().color;
+        color.a *= opacity;
+        if (color.a <= 0.f || getWidth() <= 1 || getHeight() <= 1) {
+            return;
+        }
+        jadefx::Painter painter(renderer);
+        // One device pixel per slice, so the slanted edges stay smooth.
+        const float step = 1.f / std::max(1.f, painter.pixelsPerPoint());
+        const float cx = static_cast<float>(getAbsoluteX() + getWidth() * 0.5);
+        const float cy = static_cast<float>(getAbsoluteY() + getHeight() * 0.5);
+        constexpr float kLong = 8.f;
+        constexpr float kShort = 5.f;
+        if (open) {
+            const float top = std::round(cy - kShort * 0.5f);
+            for (float t = 0.f; t < kShort; t += step) {
+                const float width = kLong * (1.f - (t + step * 0.5f) / kShort);
+                painter.fillRect(cx - width * 0.5f, top + t, width, step, color);
+            }
+        } else {
+            const float left = std::round(cx - kShort * 0.5f);
+            const float top = std::round(cy - kLong * 0.5f);
+            for (float t = 0.f; t < kLong; t += step) {
+                const float width = kShort * (1.f - std::fabs(t + step * 0.5f - kLong * 0.5f) / (kLong * 0.5f));
+                painter.fillRect(left, top + t, width, step, color);
+            }
+        }
+    }
+};
+
 // A write handed to the simulation thread. done is set after result.
 struct PendingEdit {
     EditResult result;
@@ -280,12 +334,16 @@ struct RowView {
     std::vector<InstanceId> ids;
     std::shared_ptr<jadefx::Label> name;
     std::shared_ptr<PropertyField> field;
-    std::shared_ptr<PropertyField> axes[3];
+    // A Vector3's X, Y, and Z. A Transform's Position X, Y, Z, then Orientation's.
+    std::shared_ptr<PropertyField> axes[kTransformParts];
     std::shared_ptr<jadefx::CheckBox> check;
     std::shared_ptr<PropertyColor> color;
     std::shared_ptr<jadefx::Button> pick;
     std::shared_ptr<jadefx::Button> clear;
     std::shared_ptr<jadefx::Tooltip> tip;
+    // A Transform's fold arrow, and the names of its Position and Orientation lines.
+    std::shared_ptr<PropertyDisclosure> disclosure;
+    std::shared_ptr<jadefx::Label> lines[2];
     bool tip_installed = false;
     // Where the last layout put the row, in unscrolled content points.
     double top = 0;
@@ -293,12 +351,18 @@ struct RowView {
     std::vector<jadefx::Node*> nodes() const {
         std::vector<jadefx::Node*> out;
         for (jadefx::Node* node : {static_cast<jadefx::Node*>(name.get()), static_cast<jadefx::Node*>(field.get()),
-                                   static_cast<jadefx::Node*>(axes[0].get()), static_cast<jadefx::Node*>(axes[1].get()),
-                                   static_cast<jadefx::Node*>(axes[2].get()), static_cast<jadefx::Node*>(check.get()),
-                                   static_cast<jadefx::Node*>(color.get()), static_cast<jadefx::Node*>(pick.get()),
-                                   static_cast<jadefx::Node*>(clear.get())}) {
+                                   static_cast<jadefx::Node*>(check.get()), static_cast<jadefx::Node*>(color.get()),
+                                   static_cast<jadefx::Node*>(pick.get()), static_cast<jadefx::Node*>(clear.get()),
+                                   static_cast<jadefx::Node*>(disclosure.get()),
+                                   static_cast<jadefx::Node*>(lines[0].get()),
+                                   static_cast<jadefx::Node*>(lines[1].get())}) {
             if (node != nullptr) {
                 out.push_back(node);
+            }
+        }
+        for (const auto& axis : axes) {
+            if (axis) {
+                out.push_back(axis.get());
             }
         }
         return out;
@@ -346,6 +410,10 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     std::string pick_name;
     std::vector<InstanceId> pick_ids;
     std::uint64_t pick_seen = 0;
+
+    // Transform rows folded by name. A row is open until folded, and stays
+    // folded across selections for the session.
+    std::set<std::string> folded;
 
     double scroll = 0;
     double content = 0;
@@ -570,6 +638,33 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                     make_field(view, !row.writable, row.name == "Position" ? kAxisStyles[axis] : kFieldStyle);
             }
             break;
+        case PropertyKind::Transform: {
+            // The arrow and the name both fold it.
+            auto fold = [weak_self, weak_view](const jadefx::MouseEvent&) {
+                const auto self = weak_self.lock();
+                const auto row_view = weak_view.lock();
+                if (self && row_view) {
+                    self->toggle_fold(*row_view);
+                }
+            };
+            view->disclosure = jadefx::make<PropertyDisclosure>();
+            view->disclosure->open = !folded.count(row.name);
+            view->disclosure->setOnMouseClicked(fold);
+            pane->getChildren().add(view->disclosure);
+            view->name->setCursor(jadefx::Cursor::Pointer);
+            view->name->setOnMouseClicked(fold);
+            for (int line = 0; line < 2; ++line) {
+                view->lines[line] = jadefx::make<jadefx::Label>(kTransformLines[line]);
+                view->lines[line]->getClassList().add("properties-name");
+                view->lines[line]->setStyle(row.writable ? "color: var(--ide-text-color);"
+                                                         : "color: var(--ide-properties-readonly-name-color);");
+                pane->getChildren().add(view->lines[line]);
+            }
+            for (int axis = 0; axis < kTransformParts; ++axis) {
+                view->axes[axis] = make_field(view, !row.writable, kAxisStyles[axis % 3]);
+            }
+            break;
+        }
         case PropertyKind::Bool:
             view->check = jadefx::make<jadefx::CheckBox>();
             view->check->getClassList().add("properties-check");
@@ -671,6 +766,34 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
     }
 
+    // The text of one part of a Vector3 or Transform: blank when mixed.
+    static std::string part_text(const PropertyRow& row, int axis) {
+        if (axis < 0 || axis >= kTransformParts || row.axis_mixed[axis]) {
+            return {};
+        }
+        const engine_core::Vec3& vec = axis < 3 ? row.value.vec : row.value.orientation;
+        const int part = axis % 3;
+        return format_float(part == 0 ? vec.x : part == 1 ? vec.y : vec.z);
+    }
+
+    bool open(const RowView& view) const { return view.row.kind != PropertyKind::Transform || !folded.count(view.row.name); }
+
+    // Folding a row leaves any field in it, keeping what was typed.
+    void toggle_fold(RowView& view) {
+        if (folded.erase(view.row.name) == 0) {
+            folded.insert(view.row.name);
+            for (PropertyField* field : view.fields()) {
+                if (field->dirty) {
+                    commit_field(view, *field);
+                }
+                if (field->isFocused()) {
+                    release(*field);
+                }
+            }
+        }
+        view.disclosure->open = open(view);
+    }
+
     // Puts the row's value in its widgets. A field being typed in keeps its text.
     void show_row(RowView& view, const PropertyRow& row) {
         view.row = row;
@@ -686,13 +809,16 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         case PropertyKind::ReadOnlyText:
             put(*view.field, shown_text(row));
             break;
-        case PropertyKind::Vector3: {
-            const float parts[3] = {row.value.vec.x, row.value.vec.y, row.value.vec.z};
+        case PropertyKind::Vector3:
             for (int axis = 0; axis < 3; ++axis) {
-                put(*view.axes[axis], row.axis_mixed[axis] ? std::string() : format_float(parts[axis]));
+                put(*view.axes[axis], part_text(row, axis));
             }
             break;
-        }
+        case PropertyKind::Transform:
+            for (int axis = 0; axis < kTransformParts; ++axis) {
+                put(*view.axes[axis], part_text(row, axis));
+            }
+            break;
         case PropertyKind::Bool:
             // Mixed is an indeterminate box, never an unchecked "false".
             view.check->setSelected(!row.mixed && row.value.flag);
@@ -747,7 +873,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     }
 
     int axis_of(const RowView& view, const PropertyField& field) const {
-        for (int axis = 0; axis < 3; ++axis) {
+        for (int axis = 0; axis < kTransformParts; ++axis) {
             if (view.axes[axis].get() == &field) {
                 return axis;
             }
@@ -780,15 +906,29 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         case PropertyKind::Vector3: {
             double component = 0;
             const int axis = axis_of(view, field);
-            if (axis < 0 || !parse_number(text, component)) {
+            if (axis < 0 || axis >= 3 || !parse_number(text, component)) {
                 status = view.row.name + " must be a number";
-                const float parts[3] = {view.row.value.vec.x, view.row.value.vec.y, view.row.value.vec.z};
-                field.show(axis >= 0 && !view.row.axis_mixed[axis] ? format_float(parts[axis]) : std::string());
+                field.show(part_text(view.row, axis));
                 return;
             }
             edit.axis = axis;
             const float value = static_cast<float>(component);
             edit.value.vec = {axis == 0 ? value : 0.f, axis == 1 ? value : 0.f, axis == 2 ? value : 0.f};
+            break;
+        }
+        case PropertyKind::Transform: {
+            double component = 0;
+            const int axis = axis_of(view, field);
+            if (axis < 0 || !parse_number(text, component)) {
+                status = std::string(kTransformLines[axis >= 3 ? 1 : 0]) + " must be a number";
+                field.show(part_text(view.row, axis));
+                return;
+            }
+            edit.axis = axis;
+            const float value = static_cast<float>(component);
+            const int part = axis % 3;
+            engine_core::Vec3& target = axis < 3 ? edit.value.vec : edit.value.orientation;
+            target = {part == 0 ? value : 0.f, part == 1 ? value : 0.f, part == 2 ? value : 0.f};
             break;
         }
         default:
@@ -867,11 +1007,15 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     // ---- Tab -------------------------------------------------------------
 
     // Tab and Shift+Tab walk the editable fields top to bottom, a Vector3's
-    // X, Y, and Z in turn, and wrap around. The field left commits first.
+    // X, Y, and Z in turn, and wrap around. The field left commits first. A
+    // folded Transform's fields are passed over.
     void tab_from(RowView& view, PropertyField& from, bool back) {
         std::vector<std::pair<RowView*, PropertyField*>> order;
         std::size_t at = 0;
         for (const auto& row : rows) {
+            if (!open(*row)) {
+                continue;
+            }
             for (PropertyField* field : row->fields()) {
                 if (field == &from) {
                     at = order.size();
@@ -885,7 +1029,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             const auto [row, field] = order[index];
             if (field->isEditable()) {
                 field->requestFocus();
-                reveal(*row);
+                reveal(*row, *field);
                 return;
             }
         }
@@ -895,13 +1039,17 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
     }
 
-    // Scrolls just enough to show the row.
-    void reveal(const RowView& view) {
+    // Scrolls just enough to show the line the field is on.
+    void reveal(const RowView& view, const PropertyField& field) {
         const double height = pane ? pane->inner_height() : 0.0;
-        if (view.top - kPad < scroll) {
-            scroll = std::max(0.0, view.top - kPad);
-        } else if (view.top + kRowHeight + kPad > scroll + height) {
-            scroll = view.top + kRowHeight + kPad - height;
+        double top = view.top;
+        if (view.row.kind == PropertyKind::Transform) {
+            top += (axis_of(view, field) >= 3 ? 2 : 1) * (kRowHeight + kRowGap);
+        }
+        if (top - kPad < scroll) {
+            scroll = std::max(0.0, top - kPad);
+        } else if (top + kRowHeight + kPad > scroll + height) {
+            scroll = top + kRowHeight + kPad - height;
         }
     }
 
@@ -998,11 +1146,31 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             }
             view->top = y + scroll;
             place(*view->name, left + kPad + kIndent, name_width - kIndent - 4, kRowHeight);
+            const double each = (editor_width - 2 * kAxisGap) / 3;
             switch (view->row.kind) {
-            case PropertyKind::Vector3: {
-                const double each = (editor_width - 2 * kAxisGap) / 3;
+            case PropertyKind::Vector3:
                 for (int axis = 0; axis < 3; ++axis) {
                     place(*view->axes[axis], editor_x + axis * (each + kAxisGap), each, kRowHeight);
+                }
+                break;
+            case PropertyKind::Transform: {
+                // The name's line holds only the arrow. Open, Position and
+                // Orientation follow, a step further in, each an X, Y, Z line.
+                place(*view->disclosure, left + kPad + kIndent - kDisclosureWidth - 1, kDisclosureWidth, kRowHeight);
+                const bool shown = open(*view);
+                for (int line = 0; line < 2; ++line) {
+                    if (!shown) {
+                        view->lines[line]->setVisible(false);
+                        for (int part = 0; part < 3; ++part) {
+                            view->axes[line * 3 + part]->setVisible(false);
+                        }
+                        continue;
+                    }
+                    y += kRowHeight + kRowGap;
+                    place(*view->lines[line], left + kPad + 2 * kIndent, name_width - 2 * kIndent - 4, kRowHeight);
+                    for (int part = 0; part < 3; ++part) {
+                        place(*view->axes[line * 3 + part], editor_x + part * (each + kAxisGap), each, kRowHeight);
+                    }
                 }
                 break;
             }
@@ -1131,6 +1299,10 @@ jadefx::Node* PropertiesPanel::editor(const std::string& property, int part) con
         switch (view->row.kind) {
         case PropertyKind::Vector3:
             return part >= 0 && part < 3 ? view->axes[part].get() : nullptr;
+        case PropertyKind::Transform:
+            return part >= 0 && part < kTransformParts ? static_cast<jadefx::Node*>(view->axes[part].get())
+                   : part == kTransformParts           ? static_cast<jadefx::Node*>(view->disclosure.get())
+                                                       : nullptr;
         case PropertyKind::Bool:
             return part == 0 ? view->check.get() : nullptr;
         case PropertyKind::Color3:

@@ -99,7 +99,7 @@ TEST_CASE("CAM2 scripts make a Camera and set its FieldOfView", "[camera]") {
         _G.default = camera.FieldOfView == 70
         camera.FieldOfView = 30
         _G.set = camera.FieldOfView == 30
-        camera.Position = Vector3.new(1, 2, 3)
+        camera.Transform = camera.Transform.Rotation + Vector3.new(1, 2, 3)
         _G.moved = camera.Transform.Position == Vector3.new(1, 2, 3)
         _G.no_nan = not pcall(function() camera.FieldOfView = 0 / 0 end)
     )");

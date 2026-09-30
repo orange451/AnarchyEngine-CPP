@@ -375,6 +375,10 @@ public:
         }
     }
 
+    // The GameObjects the render snapshot holds: live and under Workspace.
+    // A query, not a scan of every slot. The snapshot's resync uses it.
+    void for_each_rendered(const std::function<void(const GameObject&)>& fn) const;
+
     void set_prerender_window(bool open);
     bool prerender_window() const;
     int write_depth() const;

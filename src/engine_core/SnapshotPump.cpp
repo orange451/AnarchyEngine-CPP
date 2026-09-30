@@ -63,10 +63,18 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
         erase_base(change.id);
         return;
     }
+    // Only GameObjects under Workspace have rows. This drops the row of one
+    // that left, and ignores a change to one that was never in.
+    if (!game.in_workspace(change.id)) {
+        erase_base(change.id);
+        return;
+    }
     const GameObject* object = game.game_object(change.id);
     if (object == nullptr) {
         return;
     }
+    // A row that joins reads every field: none was kept while it was out.
+    bool whole = any(change.fields, VisualField::Ancestry);
     VisualInstance* inst = base_find(change.id);
     if (inst == nullptr) {
         if (base_.instances.size() == base_.instances.capacity()) {
@@ -76,16 +84,17 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
         base_.instances.push_back(VisualInstance{});
         inst = &base_.instances.back();
         inst->id = change.id;
+        whole = true;
     }
-    if (any(change.fields, VisualField::Transform)) {
+    if (whole || any(change.fields, VisualField::Transform)) {
         inst->world = object->transform();
         inst->transform_origin = change.origin;
     }
-    if (any(change.fields, VisualField::Color)) {
+    if (whole || any(change.fields, VisualField::Color)) {
         inst->color = object->color();
         inst->color_origin = change.origin;
     }
-    if (any(change.fields, VisualField::Size)) {
+    if (whole || any(change.fields, VisualField::Size)) {
         if (object->copy_size(inst->size)) {
             inst->size_origin = change.origin;
         }
@@ -96,7 +105,7 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
 void SnapshotPump::resync(DataModel& game) {
     base_.instances.clear();
     base_ids_.clear();
-    game.for_each_game_object([&](const GameObject& object) {
+    game.for_each_rendered([&](const GameObject& object) {
         VisualInstance inst;
         inst.id = object.id();
         inst.world = object.transform();

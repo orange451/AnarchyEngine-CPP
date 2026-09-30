@@ -4,6 +4,7 @@
 
 #include "DataModel.hpp"
 #include "Game.hpp"
+#include "GameObject.hpp"
 #include "Script.hpp"
 #include "ScriptRuntime.hpp"
 #include "TaskScheduler.hpp"
@@ -79,6 +80,13 @@ inline engine_core::Script& add_script(engine_core::DataModel& game, const char*
 // Where tests put instances that would sit under game: the Workspace service.
 inline engine_core::InstanceId workspace_of(const engine_core::DataModel& game) {
     return game.scene_service("Workspace");
+}
+
+// A GameObject under Workspace, so the render snapshot has a row for it.
+inline engine_core::GameObject& create_part(engine_core::DataModel& game) {
+    engine_core::GameObject& object = game.create_game_object();
+    game.set_parent(object.id(), workspace_of(game));
+    return object;
 }
 
 // Opaque: alpha is 1.

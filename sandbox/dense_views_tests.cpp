@@ -5,6 +5,7 @@
 #include "ChangeHistoryService.hpp"
 #include "DenseIdSet.hpp"
 #include "GameObject.hpp"
+#include "SnapshotPump.hpp"
 #include "TestTriangle.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -332,4 +333,163 @@ TEST_CASE("physics moves simulated bodies only", "[dense][physics]") {
     REQUIRE(shown.transform().m[12] == 0.f);
     REQUIRE(still.transform().m[12] == 0.f);
     REQUIRE(game.invalidations().size() == 1);
+}
+
+namespace {
+
+// One Prepare and publish, without engine threads.
+void pump_frame(engine_core::SnapshotPump& pump, engine_core::DataModel& game) {
+    pump.prepare_copy(game);
+    pump.publish();
+}
+
+}  // namespace
+
+TEST_CASE("only Workspace GameObjects have snapshot rows", "[dense][member]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    engine_core::GameObject& part = game.create_game_object();
+    const engine_core::InstanceId id = part.id();
+    pump_frame(pump, game);
+    REQUIRE(pump.find(id) == nullptr);  // unparented
+    game.set_parent(id, workspace_of(game));
+    pump_frame(pump, game);
+    REQUIRE(pump.find(id) != nullptr);
+    game.set_parent(id, game.scene_service("Storage"));
+    pump_frame(pump, game);
+    REQUIRE(pump.find(id) == nullptr);
+    game.set_parent(id, workspace_of(game));
+    game.set_parent(id, engine_core::DataModel::kNoParent);  // in and out in one frame
+    pump_frame(pump, game);
+    REQUIRE(pump.find(id) == nullptr);
+}
+
+TEST_CASE("a row arrives complete after edits made outside Workspace", "[dense][member]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    engine_core::GameObject& part = game.create_game_object();
+    game.set_parent(part.id(), game.scene_service("Storage"));
+    pump_frame(pump, game);
+    part.set_color(rgb(0.25f, 0.5f, 0.75f));  // no row to patch yet
+    part.set_size(2.f, 3.f, 4.f);
+    pump_frame(pump, game);
+    REQUIRE(pump.find(part.id()) == nullptr);
+    game.set_parent(part.id(), workspace_of(game));
+    pump_frame(pump, game);
+    const engine_core::VisualInstance* row = pump.find(part.id());
+    REQUIRE(row != nullptr);
+    REQUIRE(row->color.r == 0.25f);
+    REQUIRE(row->size[1] == 3.f);
+}
+
+TEST_CASE("a move within Workspace keeps the row", "[dense][member]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    engine_core::DataModel& folder = game.create();
+    game.set_parent(folder.id(), workspace_of(game));
+    engine_core::GameObject& part = game.create_game_object();
+    game.set_parent(part.id(), workspace_of(game));
+    part.set_color(rgb(0.1f, 0.2f, 0.3f));
+    pump_frame(pump, game);
+    game.invalidations().clear();
+    game.set_parent(part.id(), folder.id());
+    REQUIRE(game.invalidations().size() == 0);  // scope unchanged: no Ancestry note
+    pump_frame(pump, game);
+    const engine_core::VisualInstance* row = pump.find(part.id());
+    REQUIRE(row != nullptr);
+    REQUIRE(row->color.g == 0.2f);
+}
+
+TEST_CASE("destroy_tree clears rows and steppers", "[dense][member]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    engine_core::DataModel& folder = game.create();
+    engine_core::GameObject& a = game.create_game_object();
+    engine_core::GameObject& b = game.create_game_object();
+    engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
+    game.set_parent(folder.id(), workspace_of(game));
+    game.set_parent(a.id(), folder.id());
+    game.set_parent(b.id(), a.id());
+    game.set_parent(triangle.id(), folder.id());
+    const engine_core::InstanceId a_id = a.id();
+    const engine_core::InstanceId b_id = b.id();
+    pump_frame(pump, game);
+    REQUIRE(pump.find(a_id) != nullptr);
+    REQUIRE(pump.find(b_id) != nullptr);
+    REQUIRE(game.stepper_count() == 1);
+    game.destroy_tree(folder.id());
+    pump_frame(pump, game);
+    REQUIRE(pump.find(a_id) == nullptr);
+    REQUIRE(pump.find(b_id) == nullptr);
+    REQUIRE(game.stepper_count() == 0);
+}
+
+TEST_CASE("overflow resync keeps Workspace membership", "[dense][member]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    engine_core::GameObject& shown = game.create_game_object();
+    engine_core::GameObject& stored = game.create_game_object();
+    game.set_parent(shown.id(), workspace_of(game));
+    game.set_parent(stored.id(), game.scene_service("Storage"));
+    shown.set_color(rgb(0.5f, 0.25f, 0.125f));
+    engine_core::Transform moved = engine_core::transform_identity();
+    for (std::size_t i = 0; i <= engine_core::DataModel::kMaxInvalidations; ++i) {
+        moved.m[12] = static_cast<float>(i + 1);  // an equal write would skip its note
+        shown.set_transform(moved);
+    }
+    REQUIRE(game.invalidations().overflow());
+    pump_frame(pump, game);
+    const engine_core::VisualInstance* row = pump.find(shown.id());
+    REQUIRE(row != nullptr);
+    REQUIRE(row->color.g == 0.25f);
+    REQUIRE(row->world.m[12] == moved.m[12]);
+    REQUIRE(pump.find(stored.id()) == nullptr);
+}
+
+TEST_CASE("Stop leaves rows for the restored Workspace", "[dense][member]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    engine_core::GameObject& authored = game.create_game_object();
+    engine_core::GameObject& loose = game.create_game_object();
+    game.set_parent(authored.id(), workspace_of(game));
+    game.capture_place();
+    game.start_simulation();
+    game.set_parent(authored.id(), game.scene_service("Storage"));
+    game.set_parent(loose.id(), workspace_of(game));
+    pump_frame(pump, game);
+    REQUIRE(pump.find(authored.id()) == nullptr);
+    REQUIRE(pump.find(loose.id()) != nullptr);
+    game.stop_simulation();
+    pump_frame(pump, game);
+    REQUIRE(pump.find(authored.id()) != nullptr);
+    REQUIRE(pump.find(loose.id()) == nullptr);  // unparented again in the place
+}
+
+TEST_CASE("Instance.new GameObject renders once parented into Workspace", "[dense][member][lua]") {
+    ScriptRig rig;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    add_script(rig.game, "Spawner", R"(
+        local part = Instance.new("GameObject")
+        part.Name = "Spawned"
+        part.Parent = workspace
+    )");
+    rig.game.start_simulation();
+    rig.frames(1, 0.05);
+    const engine_core::InstanceId id = rig.game.find_first_child(workspace_of(rig.game), "Spawned");
+    REQUIRE(id != 0);
+    pump_frame(pump, rig.game);
+    REQUIRE(pump.find(id) != nullptr);
 }

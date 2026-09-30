@@ -200,7 +200,7 @@ TEST_CASE("a long sim write does not block present", "[T4]") {
 
 TEST_CASE("heartbeat transform is live and snapshotted", "[T5]") {
     engine_core::Engine engine;
-    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
+    const engine_core::InstanceId id = create_part(engine.datamodel()).id();
     const engine_core::Transform expected = T0();
     std::atomic<int> ready{0};
     engine_core::Transform snapped{};
@@ -252,7 +252,7 @@ TEST_CASE("heartbeat transform is live and snapshotted", "[T5]") {
 
 TEST_CASE("path C changes pixels for one frame only", "[T6]") {
     engine_core::Engine engine;
-    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
+    const engine_core::InstanceId id = create_part(engine.datamodel()).id();
     const engine_core::Transform sim = T0();
     const engine_core::Transform flash = T1();
     std::atomic<int> heartbeats{0};
@@ -326,7 +326,7 @@ TEST_CASE("path C changes pixels for one frame only", "[T6]") {
 TEST_CASE("path B on a visual-only part becomes sim truth", "[T7]") {
     engine_core::Engine engine;
     engine_core::DataModel& game = engine.datamodel();
-    const engine_core::InstanceId id = game.create_game_object().id();
+    const engine_core::InstanceId id = create_part(game).id();
     game.set_visual_only(id, true);
     const engine_core::Transform posed = T1();
     std::atomic<int> stage{0};
@@ -391,7 +391,7 @@ TEST_CASE("path B on a visual-only part becomes sim truth", "[T7]") {
 TEST_CASE("path B on a simulated part is rejected unless forced", "[T8]") {
     engine_core::Engine engine;
     engine_core::DataModel& game = engine.datamodel();
-    const engine_core::InstanceId id = game.create_game_object().id();
+    const engine_core::InstanceId id = create_part(game).id();
     game.set_simulated(id, true);
     game.game_object(id)->set_linear_velocity(1.f, 0.f, 0.f);
     const engine_core::Transform posed = T1();
@@ -565,7 +565,7 @@ TEST_CASE("simulation stays paused until resume", "[pause]") {
 
 TEST_CASE("heartbeat property change drains before prepare", "[T12]") {
     engine_core::Engine engine;
-    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
+    const engine_core::InstanceId id = create_part(engine.datamodel()).id();
     const engine_core::ColorRgb tint = rgb(0.15f, 0.25f, 0.35f);
     std::atomic<int> handler_ran{0};
     std::atomic<int> bad{0};
@@ -629,7 +629,7 @@ TEST_CASE("heartbeat property change drains before prepare", "[T12]") {
 
 TEST_CASE("handler writes are in the same snapshot", "[T13]") {
     engine_core::Engine engine;
-    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
+    const engine_core::InstanceId id = create_part(engine.datamodel()).id();
     const engine_core::ColorRgb tint = rgb(0.2f, 0.4f, 0.6f);
     const engine_core::Transform posed = T1();
     std::atomic<int> ready{0};
@@ -797,7 +797,7 @@ TEST_CASE("destroy drops queued handlers", "[T16]") {
 TEST_CASE("path B enqueues and the snapshot still updates", "[T17]") {
     engine_core::Engine engine;
     engine_core::DataModel& game = engine.datamodel();
-    const engine_core::InstanceId id = game.create_game_object().id();
+    const engine_core::InstanceId id = create_part(game).id();
     game.set_visual_only(id, true);
     const engine_core::ColorRgb tint = rgb(0.2f, 0.8f, 0.1f);
     std::atomic<int> hits{0};
@@ -1076,7 +1076,7 @@ TEST_CASE("Heartbeat steps descendants of the root", "[instance]") {
 TEST_CASE("RenderStepped writes this frame and PostRender does not", "[T21]") {
     engine_core::Engine engine;
     engine_core::DataModel& game = engine.datamodel();
-    const engine_core::InstanceId id = game.create_game_object().id();
+    const engine_core::InstanceId id = create_part(game).id();
     game.set_visual_only(id, true);
     const engine_core::Transform posed = T1();
     const engine_core::ColorRgb tint = rgb(0.4f, 0.5f, 0.6f);

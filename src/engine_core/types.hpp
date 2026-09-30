@@ -43,7 +43,10 @@ enum class VisualField : std::uint32_t {
     Transform = 1u << 0,
     Color = 1u << 1,
     Size = 1u << 2,
-    Removed = 1u << 3
+    Removed = 1u << 3,
+    // Moved into or out of Workspace. The pump re-evaluates the row, and a
+    // row that joins reads every field, since none was kept while it was out.
+    Ancestry = 1u << 4
 };
 
 // Which writer produced a visual field.

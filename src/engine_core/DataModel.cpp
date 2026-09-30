@@ -54,6 +54,14 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                               .without<ecs::VisualOnly>()
                               .cached()
                               .build();
+    world.render_query = world.ecs.query_builder<>()
+                             .with<ecs::Instance>()
+                             .in()
+                             .with<ecs::InWorkspace>()
+                             .with<Transform>()
+                             .inout_none()
+                             .cached()
+                             .build();
     world.slots.reserve(kMaxInstances);
     world.free_list.reserve(kMaxInstances);
     world.invalidation.reserve(kMaxInvalidations);
@@ -725,6 +733,9 @@ void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_n
         }
         if (had_workspace != workspace) {
             set_tag(world, part->entity, ids.in_workspace, workspace);
+            if (part->body != nullptr) {
+                note(cur, VisualField::Ancestry, current_origin());
+            }
         }
         for (InstanceId child = part->first_child; child != 0;) {
             if (queue.size() == queue.capacity()) {
@@ -786,6 +797,18 @@ void DataModel::step_instances(double dt) {
     for (const InstanceId id : ids) {
         if (DataModel* object = instance(id)) {
             object->step(dt);
+        }
+    }
+}
+
+void DataModel::for_each_rendered(const std::function<void(const GameObject&)>& fn) const {
+    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->render_query.c_ptr());
+    while (ecs_query_next(&it)) {
+        const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
+        for (std::int32_t i = 0; i < it.count; ++i) {
+            if (const GameObject* object = game_object(owners[i].id)) {
+                fn(*object);
+            }
         }
     }
 }

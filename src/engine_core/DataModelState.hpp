@@ -91,6 +91,9 @@ struct DataModel::State {
     // Moving bodies: Instance (in), Transform (in-out), Velocity (in), with
     // Simulated and without VisualOnly.
     flecs::query<> physics_query;
+    // Rendered GameObjects: Instance (in), with InWorkspace and Transform,
+    // which only GameObjects carry.
+    flecs::query<> render_query;
 
     // Guards slots, free lists, invalidation, and resync.
     // SimulationThread may hold Write across a whole step and may re-enter

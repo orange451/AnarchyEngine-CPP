@@ -869,6 +869,9 @@ void IdeAssets::show_item_menu(const AssetRow& row, double x, double y) {
     const engine_core::InstanceId id = row.id;
     if (row.class_name == "Prefab") {
         auto add_as_game_object = jadefx::make<jadefx::MenuItem>("Add as GameObject");
+        if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic("GameObject.png")) {
+            add_as_game_object->setGraphic(std::move(icon));
+        }
         add_as_game_object->setDisable(!static_cast<bool>(host_.add_as_game_object));
         add_as_game_object->setOnAction([this, id](jadefx::ActionEvent&) {
             if (host_.add_as_game_object) {

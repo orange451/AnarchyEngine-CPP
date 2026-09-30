@@ -200,6 +200,26 @@ struct Rig {
         return text != nullptr ? text->getParent() : nullptr;
     }
 
+    // Whether the open menu's row with that label shows an icon.
+    bool menuItemHasIcon(const std::string& label) {
+        // jadefx keeps a node's children protected; a pointer to the member reads them.
+        struct Peek : jadefx::Node {
+            using Kids = jadefx::ObservableList<std::shared_ptr<jadefx::Node>>;
+            static const Kids& of(const jadefx::Node& node) {
+                const Kids& (jadefx::Node::*getter)() const = &Peek::children;
+                return (node.*getter)();
+            }
+        };
+        const jadefx::Node* row = menuItem(label);
+        if (row == nullptr) {
+            return false;
+        }
+        const auto& kids = Peek::of(*row);
+        return std::any_of(kids.begin(), kids.end(), [](const std::shared_ptr<jadefx::Node>& kid) {
+            return kid && std::string(kid->getElementType()) == "image-view";
+        });
+    }
+
     void clickMenu(const std::string& label) {
         jadefx::Node* item = menuItem(label);
         Expect(item != nullptr, ("the menu lists " + label).c_str());
@@ -524,6 +544,8 @@ void prefab_menu_offers_add_as_game_object() {
     rig.frame(1.0);
     rig.rightClickItem(statue, 1.1);
     Expect(rig.menuItem("Add as GameObject") != nullptr, "a Prefab's menu offers Add as GameObject");
+    Expect(rig.menuItemHasIcon("Rename"), "Rename shows its icon");
+    Expect(rig.menuItemHasIcon("Add as GameObject"), "Add as GameObject shows an icon like its neighbors");
     rig.clickMenu("Add as GameObject");
     Expect(rig.added_as_game_object == std::vector<InstanceId>{statue},
            "choosing it calls the host with the right-clicked Prefab");

@@ -9,10 +9,12 @@
 #include "Project.hpp"
 #include "SceneService.hpp"
 #include "UserInputService.hpp"
+#include "ide/PluginLoader.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <string>
 #include <vector>
@@ -235,4 +237,116 @@ TEST_CASE("SC11 moving a Camera marks the place changed but is not an undo step"
     part.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     rig.game.history().end_gesture();
     REQUIRE(rig.game.history().can_undo().first);
+}
+
+namespace {
+
+ide::PluginFile scene_camera_file() {
+    ide::PluginFile file;
+    std::string error;
+    REQUIRE(ide::read_plugin_file(std::filesystem::path(ANARCHY_SOURCE_DIR) / "resources/plugins/SceneCamera.luau", file,
+                                  error));
+    return file;
+}
+
+// A Camera at the origin looking down -Z, the view's current one, and the plugin loaded.
+struct CameraRig : ScriptRig {
+    ide::PluginLoader loader;
+    InstanceId camera = 0;
+
+    CameraRig() {
+        camera = add_camera(game).id();
+        REQUIRE(workspace_service(game).set_current_camera(camera));
+        REQUIRE(loader.load(game, runtime, {scene_camera_file()}) == 1);
+        runtime.drain_output();
+    }
+
+    engine_core::Matrix4 transform() { return dynamic_cast<engine_core::Camera*>(game.instance(camera))->transform(); }
+    engine_core::Vec3 position() {
+        const engine_core::Matrix4 m = transform();
+        return {m.m[12], m.m[13], m.m[14]};
+    }
+    engine_core::Vec3 look() {
+        const engine_core::Matrix4 m = transform();
+        return {-m.m[8], -m.m[9], -m.m[10]};
+    }
+};
+
+}  // namespace
+
+TEST_CASE("SC12 W moves the camera where it looks, and E lifts it", "[SC12]") {
+    CameraRig rig;
+    rig.game.input().post_key(key('W'), true);
+    rig.frames(1, 0.5);
+    REQUIRE(std::abs(rig.position().z + 8.f) < 1e-3f);  // 16 studs/s for half a second, down -Z
+    rig.game.input().post_key(key('W'), false);
+    rig.game.input().post_key(key('E'), true);
+    rig.frames(1, 0.25);
+    REQUIRE(std::abs(rig.position().y - 4.f) < 1e-3f);
+    REQUIRE(rig.runtime.drain_output().lines.empty());
+}
+
+TEST_CASE("SC13 the right button locks the pointer and the locked motion turns the camera", "[SC13]") {
+    CameraRig rig;
+    rig.game.input().post_mouse_button(1, true, 50.f, 50.f);
+    rig.frames(1);
+    REQUIRE(rig.game.input().mouse_behavior() == UserInputService::kLockCurrentPosition);
+
+    // Right is +X from a camera looking down -Z.
+    rig.game.input().post_mouse_delta(100.f, 0.f);
+    rig.frames(1);
+    REQUIRE(rig.look().x > 0.3f);
+
+    // Far up: the pitch stops at 89 degrees.
+    rig.game.input().post_mouse_delta(0.f, -100000.f);
+    rig.frames(1);
+    REQUIRE(rig.look().y > 0.99f);
+    REQUIRE(std::asin(std::min(1.f, rig.look().y)) <= 89.01f * 3.14159265f / 180.f);
+
+    rig.game.input().post_mouse_button(1, false, 50.f, 50.f);
+    rig.frames(1);
+    REQUIRE(rig.game.input().mouse_behavior() == UserInputService::kMouseBehaviorDefault);
+
+    // Loading again, as after opening a place, leaves one plugin.
+    REQUIRE(rig.loader.load(rig.game, rig.runtime, {scene_camera_file()}) == 1);
+    REQUIRE(rig.runtime.plugins().size() == 1);
+}
+
+TEST_CASE("SC14 loading the built-in plugins is not an edit to the place", "[SC14]") {
+    ScriptRig rig;
+    rig.game.history().end_gesture();
+    rig.game.history().reset_waypoints();
+    const std::uint64_t fingerprint = engine_core::Project::place_fingerprint(rig.game);
+    ide::PluginLoader loader;
+    REQUIRE(loader.load(rig.game, rig.runtime, {scene_camera_file()}) == 1);
+    rig.game.history().end_gesture();
+    REQUIRE_FALSE(rig.game.history().can_undo().first);
+    REQUIRE(engine_core::Project::place_fingerprint(rig.game) == fingerprint);
+    REQUIRE(rig.game.get_children(workspace_of(rig.game)).empty());
+}
+
+TEST_CASE("SC15 losing focus mid-turn lets the pointer go", "[SC15]") {
+    CameraRig rig;
+    rig.game.input().post_mouse_button(1, true, 50.f, 50.f);
+    rig.frames(1);
+    REQUIRE(rig.game.input().mouse_behavior() == UserInputService::kLockCurrentPosition);
+    rig.game.input().post_focus_lost();
+    rig.frames(1);
+    REQUIRE(rig.game.input().mouse_behavior() == UserInputService::kMouseBehaviorDefault);
+}
+
+TEST_CASE("SC16 with no CurrentCamera, or in play, the plugin leaves the camera alone", "[SC16]") {
+    CameraRig rig;
+    const engine_core::Vec3 before = rig.position();
+    rig.game.start_simulation();
+    rig.game.input().post_key(key('W'), true);
+    rig.frames(3);
+    REQUIRE(rig.position().z == before.z);
+    rig.game.stop_simulation();
+    rig.runtime.drain_output();
+
+    rig.game.destroy(rig.camera);
+    rig.game.input().post_key(key('S'), true);
+    rig.frames(3);
+    REQUIRE(rig.runtime.drain_output().lines.empty());
 }

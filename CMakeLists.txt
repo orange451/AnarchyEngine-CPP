@@ -35,6 +35,7 @@ set(STUDIO_CORE_SOURCES
     src/ide/McpServer.cpp
     src/ide/McpTools.cpp
     src/ide/McpToolSpecs.cpp
+    src/ide/PluginLoader.cpp
     src/ide/PropertySheet.cpp
     src/ide/ScriptMarks.cpp
     src/ide/ScriptPairs.cpp

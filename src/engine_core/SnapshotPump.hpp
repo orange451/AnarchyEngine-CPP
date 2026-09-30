@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DataModel.hpp"
+#include "DenseIdSet.hpp"
 #include "types.hpp"
 
 #include <atomic>
@@ -68,7 +69,6 @@ public:
 private:
     VisualInstance* base_find(InstanceId id);
     void erase_base(InstanceId id);
-    void remember(InstanceId id, int position);
     void apply_live(DataModel& game, const Invalidation& change);
     void resync(DataModel& game);
     void blit(VisualSnapshot& dst) const;
@@ -83,8 +83,8 @@ private:
     bool camera_pending_ = false;
     Transform pending_camera_ = transform_identity();
     bool window_open_ = false;
-    // Slot index -> position in base_.instances. -1 if that slot is not in the snapshot.
-    std::vector<int> base_index_;
+    // The ids with a row in base_.instances, position for position.
+    DenseIdSet base_ids_;
 };
 
 }  // namespace engine_core

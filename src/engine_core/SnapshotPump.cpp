@@ -11,7 +11,8 @@ void SnapshotPump::reserve(std::size_t instances) {
     buffers_[0].instances.reserve(instances);
     buffers_[1].instances.reserve(instances);
     overrides_.reserve(instances);
-    base_index_.assign(instances, -1);
+    // Keyed by slot, so it covers every slot whatever the row capacity.
+    base_ids_.reserve(DataModel::kMaxInstances);
 }
 
 void SnapshotPump::begin_prerender_window(DataModel& game) {
@@ -43,45 +44,18 @@ void SnapshotPump::set_camera(const Transform& camera) {
 }
 
 VisualInstance* SnapshotPump::base_find(InstanceId id) {
-    const std::uint32_t index = id_slot(id);
-    if (index >= base_index_.size()) {
-        return nullptr;
-    }
-    const int position = base_index_[index];
-    if (position < 0 || static_cast<std::size_t>(position) >= base_.instances.size()) {
-        return nullptr;
-    }
-    VisualInstance& inst = base_.instances[static_cast<std::size_t>(position)];
-    if (inst.id != id) {
-        return nullptr;
-    }
-    return &inst;
-}
-
-void SnapshotPump::remember(InstanceId id, int position) {
-    const std::uint32_t index = id_slot(id);
-    if (index < base_index_.size()) {
-        base_index_[index] = position;
-    }
+    const int position = base_ids_.position(id);
+    return position < 0 ? nullptr : &base_.instances[static_cast<std::size_t>(position)];
 }
 
 void SnapshotPump::erase_base(InstanceId id) {
-    const std::uint32_t index = id_slot(id);
-    if (index >= base_index_.size()) {
+    const int position = base_ids_.erase(id);
+    if (position < 0) {
         return;
     }
-    const int position = base_index_[index];
-    if (position < 0 || static_cast<std::size_t>(position) >= base_.instances.size()) {
-        base_index_[index] = -1;
-        return;
-    }
-    const InstanceId moved = base_.instances.back().id;
+    // base_ids_ swapped its last id into position; mirror that on the rows.
     base_.instances[static_cast<std::size_t>(position)] = base_.instances.back();
     base_.instances.pop_back();
-    base_index_[index] = -1;
-    if (static_cast<std::size_t>(position) < base_.instances.size()) {
-        remember(moved, position);
-    }
 }
 
 void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
@@ -98,7 +72,7 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
         if (base_.instances.size() == base_.instances.capacity()) {
             contract_fail("snapshot instance capacity exhausted");
         }
-        remember(change.id, static_cast<int>(base_.instances.size()));
+        base_ids_.insert(change.id);
         base_.instances.push_back(VisualInstance{});
         inst = &base_.instances.back();
         inst->id = change.id;
@@ -121,7 +95,7 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
 
 void SnapshotPump::resync(DataModel& game) {
     base_.instances.clear();
-    std::fill(base_index_.begin(), base_index_.end(), -1);
+    base_ids_.clear();
     game.for_each_game_object([&](const GameObject& object) {
         VisualInstance inst;
         inst.id = object.id();
@@ -132,7 +106,7 @@ void SnapshotPump::resync(DataModel& game) {
         inst.transform_origin = WriteOrigin::Simulation;
         inst.color_origin = WriteOrigin::Simulation;
         inst.size_origin = WriteOrigin::Simulation;
-        remember(object.id(), static_cast<int>(base_.instances.size()));
+        base_ids_.insert(object.id());
         base_.instances.push_back(inst);
     });
 }
@@ -144,13 +118,9 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
 }
 
 void SnapshotPump::apply_overrides(VisualSnapshot& dst) {
-    // dst is a copy of base_, so base_index_ gives each instance's position.
+    // dst is a copy of base_, so base_ids_ gives each instance's position.
     for (const SnapshotOverride& override : overrides_) {
-        const std::uint32_t index = id_slot(override.id);
-        if (index >= base_index_.size()) {
-            continue;
-        }
-        const int position = base_index_[index];
+        const int position = base_ids_.position(override.id);
         if (position < 0 || static_cast<std::size_t>(position) >= dst.instances.size()) {
             continue;
         }

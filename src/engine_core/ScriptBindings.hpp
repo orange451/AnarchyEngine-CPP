@@ -255,6 +255,7 @@ struct ScriptBindings {
     static int connection_disconnect(lua_State* state);
     static int connection_index(lua_State* state);
     static int service_index(lua_State* state);
+    static int service_newindex(lua_State* state);
     static int selection_get(lua_State* state);
     static int selection_set(lua_State* state);
     // A Mesh's shape methods. Each adds to the Mesh's AMESH file; see Mesh::edit_geometry.
@@ -273,6 +274,8 @@ struct ScriptBindings {
     static int input_get_keys_pressed(lua_State* state);
     static int input_get_mouse_buttons_pressed(lua_State* state);
     static int input_get_mouse_location(lua_State* state);
+    static int input_get_mouse_delta(lua_State* state);
+    static int run_is_running(lua_State* state);
     static int input_object_index(lua_State* state);
     static int input_object_tostring(lua_State* state);
     static int thread_index(lua_State* state);

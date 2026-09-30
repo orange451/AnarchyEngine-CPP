@@ -1,6 +1,7 @@
 #include "UserInputService.hpp"
 
 #include "Contract.hpp"
+#include "DataModel.hpp"
 #include "Enum.hpp"
 #include "LuaApi.hpp"
 
@@ -357,6 +358,20 @@ bool read_false(DataModel&, DataModel&, LuaSlot& out) {
     return true;
 }
 
+bool read_sensitivity(DataModel& world, DataModel&, LuaSlot& out) {
+    out.kind = LuaSlot::Kind::Number;
+    out.number = world.input().mouse_delta_sensitivity();
+    return true;
+}
+
+bool write_sensitivity(DataModel& world, DataModel&, LuaSlot& in) {
+    if (in.kind != LuaSlot::Kind::Number || !world.input().set_mouse_delta_sensitivity(in.number)) {
+        in.error = "MouseDeltaSensitivity must be a number";
+        return false;
+    }
+    return true;
+}
+
 // Every UserInputService signal passes the InputObject and whether the studio took it.
 const LuaParam kInputSignalArgs[] = {{"input", "InputObject"}, {"gameProcessedEvent", "boolean"}};
 
@@ -380,6 +395,9 @@ ANARCHY_LUA_REGISTER(register_input_service_lua) {
         lua_property("KeyboardEnabled", "boolean", false, read_true, nullptr),
         lua_property("MouseEnabled", "boolean", false, read_true, nullptr),
         lua_property("TouchEnabled", "boolean", false, read_false, nullptr),
+        // No read: ScriptBindings pushes and checks the EnumItem itself.
+        lua_property("MouseBehavior", "EnumItem", true, nullptr, nullptr),
+        lua_property("MouseDeltaSensitivity", "number", true, read_sensitivity, write_sensitivity),
     };
     register_lua_class("UserInputService", nullptr, fields, static_cast<int>(sizeof(fields) / sizeof(fields[0])));
     register_lua_service("UserInputService");

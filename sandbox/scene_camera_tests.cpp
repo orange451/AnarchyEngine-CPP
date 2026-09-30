@@ -107,3 +107,46 @@ TEST_CASE("SC4 a plugin hears keys in edit mode, and a focus loss ends them", "[
     rig.frames(1);
     REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"ended\tW\n"});
 }
+
+TEST_CASE("SC5 scripts read and write MouseBehavior", "[SC5]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk(
+        "local uis = game:GetService('UserInputService')\n"
+        "print(uis.MouseBehavior == Enum.MouseBehavior.Default)\n"
+        "uis.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition\n"
+        "print(uis.MouseBehavior.Name)");
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"true\n", "LockCurrentPosition\n"});
+    REQUIRE(rig.game.input().mouse_behavior() == UserInputService::kLockCurrentPosition);
+
+    rig.runtime.run_chunk("game:GetService('UserInputService').MouseBehavior = 'Nope'");
+    const ScriptRuntime::OutputBatch refused = rig.runtime.drain_output();
+    REQUIRE(refused.lines.size() == 1);
+    REQUIRE(refused.lines[0].kind == ScriptRuntime::OutputKind::Error);
+}
+
+TEST_CASE("SC6 GetMouseDelta is the step's motion times MouseDeltaSensitivity", "[SC6]") {
+    ScriptRig rig;
+    add_plugin(rig,
+               "local uis = game:GetService('UserInputService')\n"
+               "uis.MouseDeltaSensitivity = 2\n"
+               "game:GetService('RunService').Heartbeat:Connect(function()\n"
+               "  local d = uis:GetMouseDelta()\n"
+               "  if d.Magnitude > 0 then print(d.X, d.Y) end\n"
+               "end)");
+    rig.runtime.drain_output();
+    rig.game.input().post_mouse_delta(3.f, 4.f);
+    rig.frames(2);
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"6\t8\n"});
+}
+
+TEST_CASE("SC7 RunService:IsRunning is true only in a play session", "[SC7]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk("print(game:GetService('RunService'):IsRunning())");
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"false\n"});
+    // Test clears the Output, so both lines below are printed after it.
+    rig.game.start_simulation();
+    rig.runtime.run_chunk("print(game:GetService('RunService'):IsRunning())");
+    rig.game.stop_simulation();
+    rig.runtime.run_chunk("print(game:GetService('RunService'):IsRunning())");
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"true\n", "false\n"});
+}

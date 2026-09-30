@@ -1021,6 +1021,16 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("UserInputService", "KeyboardEnabled", "True when there is a keyboard.", "boolean", false, {});
     add("UserInputService", "MouseEnabled", "True when there is a mouse.", "boolean", false, {});
     add("UserInputService", "TouchEnabled", "True when there is a touch screen.", "boolean", false, {});
+    add("UserInputService", "MouseBehavior",
+        "What the pointer does. LockCurrentPosition or LockCenter hides it and holds it in the focused scene view, and "
+        "GetMouseDelta reports its motion. Default frees it. Losing the view's focus sets Default.",
+        "EnumItem", false, {});
+    add("UserInputService", "MouseDeltaSensitivity", "Scales GetMouseDelta. 1 by default, never below 0.", "number",
+        false, {});
+    add("UserInputService", "GetMouseDelta",
+        "How far the mouse moved in the latest step, in points, times MouseDeltaSensitivity. It keeps reporting while "
+        "the pointer is locked.",
+        "Vector2", false, {});
     add("InputObject", "KeyCode", "The key, or Enum.KeyCode.Unknown for mouse input.", "EnumItem", false, {});
     add("InputObject", "UserInputType", "What made the input: Keyboard, MouseButton1, MouseMovement, and so on.",
         "EnumItem", false, {});
@@ -1040,6 +1050,8 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Signal", false, {});
     add("RunService", "PreRender", "A render step. Scripts cannot connect to it.", "Signal", false, {});
     add("RunService", "RenderStepped", "A render step. Scripts cannot connect to it.", "Signal", false, {});
+    add("RunService", "IsRunning", "True while a play session is open, paused or not. False in edit mode.", "boolean",
+        false, {});
 
     return docs;
 }

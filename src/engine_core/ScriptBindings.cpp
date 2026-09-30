@@ -718,6 +718,13 @@ int ScriptBindings::service_index(lua_State* state) {
         push_method(state, *field);
         return 1;
     }
+    if (service->kind == kUserInputServiceKind && std::strcmp(field->name, "MouseBehavior") == 0) {
+        ScriptRuntime* runtime = runtime_from(state);
+        const int behavior = runtime != nullptr && runtime->game_ != nullptr ? runtime->game_->input().mouse_behavior()
+                                                                             : UserInputService::kMouseBehaviorDefault;
+        push_enum_item(state, mouse_behavior_enum(), behavior);
+        return 1;
+    }
     if (field->read != nullptr) {
         ScriptRuntime* runtime = runtime_from(state);
         LuaSlot slot;
@@ -739,6 +746,39 @@ int ScriptBindings::service_index(lua_State* state) {
     luaL_getmetatable(state, kSignalMeta);
     lua_setmetatable(state, -2);
     return 1;
+}
+
+int ScriptBindings::service_newindex(lua_State* state) {
+    return lua_guard(state, [&] {
+        const auto* service = static_cast<ServiceUd*>(luaL_checkudata(state, 1, kServiceMeta));
+        const char* key = luaL_checkstring(state, 2);
+        const char* class_name =
+            service->kind >= 0 && service->kind < kServiceKinds ? kServiceClasses[service->kind] : "";
+        const LuaField* field = lua_class_find(class_name, key != nullptr ? key : "");
+        if (field == nullptr || field->method || !field->writable) {
+            luaL_error(state, "%s cannot be assigned to", key != nullptr ? key : "");
+        }
+        ScriptRuntime* runtime = runtime_from(state);
+        if (runtime == nullptr || runtime->game_ == nullptr) {
+            luaL_error(state, "%s is not available here", class_name);
+        }
+        if (service->kind == kUserInputServiceKind && std::strcmp(field->name, "MouseBehavior") == 0) {
+            runtime->game_->input().set_mouse_behavior(check_enum_arg(state, 3, mouse_behavior_enum()));
+            return 0;
+        }
+        LuaSlot slot;
+        if (lua_isnumber(state, 3)) {
+            slot.kind = LuaSlot::Kind::Number;
+            slot.number = lua_tonumber(state, 3);
+        } else if (lua_isboolean(state, 3)) {
+            slot.kind = LuaSlot::Kind::Bool;
+            slot.flag = lua_toboolean(state, 3) != 0;
+        }
+        if (field->write == nullptr || !field->write(*runtime->game_, *runtime->game_, slot)) {
+            luaL_error(state, "%s", slot.error.empty() ? "invalid value" : slot.error.c_str());
+        }
+        return 0;
+    });
 }
 
 int ScriptBindings::selection_get(lua_State* state) {
@@ -1006,6 +1046,29 @@ int ScriptBindings::input_get_mouse_location(lua_State* state) {
     });
 }
 
+int ScriptBindings::input_get_mouse_delta(lua_State* state) {
+    return lua_guard(state, [&] {
+        UserInputService* input = input_service(state);
+        Vec2 delta{0.f, 0.f};
+        if (input != nullptr) {
+            const Vec3 raw = input->mouse_delta();
+            const float scale = static_cast<float>(input->mouse_delta_sensitivity());
+            delta = Vec2{raw.x * scale, raw.y * scale};
+        }
+        push_vector2(state, delta);
+        return 1;
+    });
+}
+
+int ScriptBindings::run_is_running(lua_State* state) {
+    return lua_guard(state, [&] {
+        luaL_checkudata(state, 1, kServiceMeta);
+        ScriptRuntime* runtime = runtime_from(state);
+        lua_pushboolean(state, runtime != nullptr && runtime->vm_open() ? 1 : 0);
+        return 1;
+    });
+}
+
 int ScriptBindings::input_object_index(lua_State* state) {
     const auto* record = static_cast<const InputRecord*>(luaL_checkudata(state, 1, kInputObjectMeta));
     const char* key = luaL_checkstring(state, 2);
@@ -1101,8 +1164,15 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         lua_method("GetMouseButtonsPressed", "InputObject",
                    reinterpret_cast<void*>(&ScriptBindings::input_get_mouse_buttons_pressed), false, false, true),
         lua_method("GetMouseLocation", "Vector2", reinterpret_cast<void*>(&ScriptBindings::input_get_mouse_location)),
+        lua_method("GetMouseDelta", "Vector2", reinterpret_cast<void*>(&ScriptBindings::input_get_mouse_delta)),
     };
     register_lua_class("UserInputService", nullptr, input, static_cast<int>(sizeof(input) / sizeof(input[0])));
+
+    // RunService.cpp declares the class, its signals, and the service.
+    const LuaField run[] = {
+        lua_method("IsRunning", "boolean", reinterpret_cast<void*>(&ScriptBindings::run_is_running)),
+    };
+    register_lua_class("RunService", nullptr, run, 1);
 }
 
 }  // namespace engine_core

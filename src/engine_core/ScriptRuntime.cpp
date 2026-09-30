@@ -512,6 +512,8 @@ void open_host_libraries(lua_State* state) {
     const int service_mt = metatable(kServiceMeta);
     lua_pushcfunction(state, &ScriptBindings::service_index, "index");
     lua_setfield(state, service_mt, "__index");
+    lua_pushcfunction(state, &ScriptBindings::service_newindex, "newindex");
+    lua_setfield(state, service_mt, "__newindex");
     lua_setreadonly(state, service_mt, 1);
 
     const int input_mt = metatable(kInputObjectMeta);

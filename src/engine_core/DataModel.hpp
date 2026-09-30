@@ -28,7 +28,7 @@ class DataModelLock;
 
 // What the explorer can do to an instance. Each class offers some of them;
 // the shell performs them.
-enum class InstanceAction { Edit, Cut, Paste, Rename, Delete };
+enum class InstanceAction { Edit, Cut, Copy, Paste, Duplicate, Rename, Delete };
 
 // The action's name, as its menu item shows it.
 const char* action_label(InstanceAction action);

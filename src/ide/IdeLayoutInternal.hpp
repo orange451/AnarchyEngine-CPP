@@ -452,6 +452,7 @@ using namespace layout_detail;
 struct IdeLayout::Clip {
     std::vector<engine_core::InstanceId> ids;
     bool held = false;
+    std::shared_ptr<const std::vector<CopiedNode>> copies;
 };
 
 // A page the Window menu opens and closes.

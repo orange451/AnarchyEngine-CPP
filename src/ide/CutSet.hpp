@@ -33,4 +33,19 @@ engine_core::InstanceId insert_instance(engine_core::DataModel& world, const std
 engine_core::InstanceId add_prefab_instance(engine_core::DataModel& world, engine_core::InstanceId prefab,
                                             std::string& error);
 
+struct CopiedNode {
+    std::string class_name;
+    std::string name;
+    engine_core::PropertyBag properties;
+    bool has_source = false;
+    std::string source;
+    std::vector<CopiedNode> children;
+};
+
+std::vector<CopiedNode> copy_set(const engine_core::DataModel& game, const std::vector<engine_core::InstanceId>& ids);
+
+bool paste_copies(engine_core::DataModel& world, const std::vector<CopiedNode>& roots,
+                  engine_core::InstanceId parent, std::vector<engine_core::InstanceId>* made = nullptr,
+                  std::string* refused = nullptr);
+
 }  // namespace ide

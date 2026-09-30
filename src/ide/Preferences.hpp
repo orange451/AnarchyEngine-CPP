@@ -41,6 +41,11 @@ public:
     std::string assets_view() const;
     void set_assets_view(const std::string& view);
 
+    static constexpr double kMinZoom = 0.5;
+    static constexpr double kMaxZoom = 3.0;
+    double zoom() const;
+    void set_zoom(double zoom);
+
     // Writes the file. True, doing nothing, when there is no file.
     bool save(std::string& error) const;
 

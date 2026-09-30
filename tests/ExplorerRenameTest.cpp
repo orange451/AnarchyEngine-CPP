@@ -659,6 +659,43 @@ void TestMoveSet() {
     Expect(refused == "Workspace cannot be moved", "and move_set says why too");
 }
 
+engine_core::DataModel& CreateFolder(engine_core::DataModel& world) {
+    return world.create<engine_core::Folder>();
+}
+
+void TestCopySet() {
+    engine_core::register_lua_creatable("Folder", CreateFolder);
+    engine_core::Game game;
+    const engine_core::InstanceId workspace = game.scene_service("Workspace");
+    engine_core::Folder& outer = game.create<engine_core::Folder>();
+    game.set_name(outer.id(), "Outer");
+    game.set_parent(outer.id(), workspace);
+    engine_core::Folder& inner = game.create<engine_core::Folder>();
+    game.set_name(inner.id(), "Inner");
+    game.set_parent(inner.id(), outer.id());
+    game.set_extra_property(inner.id(), "Tag", engine_core::JsonValue::string("kept"));
+
+    const std::vector<ide::CopiedNode> copies = ide::copy_set(game, {inner.id(), outer.id()});
+    Expect(copies.size() == 1 && copies.front().name == "Outer" && copies.front().children.size() == 1,
+           "a copy of a parent carries its selected child once");
+
+    std::vector<engine_core::InstanceId> made;
+    Expect(ide::paste_copies(game, copies, workspace, &made), "paste_copies pastes");
+    Expect(made.size() == 1 && made.front() != outer.id(), "a paste makes a new instance");
+    const std::vector<engine_core::InstanceId> kids = made.empty() ? std::vector<engine_core::InstanceId>{}
+                                                                   : game.get_children(made.front());
+    Expect(!made.empty() && game.name(made.front()) == "Outer", "the copy keeps the name");
+    Expect(kids.size() == 1 && game.name(kids.front()) == "Inner", "the copy keeps its children");
+    const engine_core::JsonValue* tag = kids.empty() ? nullptr : engine_core::bag_find(game.extra_properties(kids.front()), "Tag");
+    Expect(tag != nullptr && tag->as_string() == "kept", "the copy keeps properties");
+    Expect(game.get_children(outer.id()).size() == 1, "the original is untouched");
+
+    made.clear();
+    Expect(ide::paste_copies(game, copies, inner.id(), &made) && made.size() == 1,
+           "the same copy pastes again, even inside the original");
+    Expect(ide::copy_set(game, {workspace, 0}).empty(), "the root and scene services are not copied");
+}
+
 // Alpha holds Inner, which holds Deep.
 engine_core::InstanceId NestDeep(Rig& rig) {
     engine_core::Folder& inner = rig.game.create<engine_core::Folder>();
@@ -839,10 +876,6 @@ void TestRevealScrolls() {
     Expect(!rig.explorer->reveal_selection(), "reveal does nothing with no selection");
 }
 
-engine_core::DataModel& CreateFolder(engine_core::DataModel& world) {
-    return world.create<engine_core::Folder>();
-}
-
 void hidden_services_have_no_rows() {
     Rig rig;
     rig.frame(0);
@@ -979,6 +1012,38 @@ void TestRefusedInsertSaysWhy() {
     Expect(!rig.painted("Made"), "a refused insert shows nothing new");
 }
 
+void TestRightClickInsertsUnderTheRow() {
+    engine_core::register_lua_creatable("Folder", CreateFolder);
+    Rig rig;
+    rig.clickRow("Gamma", 0.1, 1);
+    rig.frame(0.2);
+    rig.key(jadefx::Key::Enter);
+    rig.frame(0.3);
+    Expect(rig.inserts.size() == 1 && rig.inserts.front().second == rig.ids[2],
+           "a right-click insert goes under the row clicked");
+}
+
+void TestRightClickListCloses() {
+    engine_core::register_lua_creatable("Folder", CreateFolder);
+    Rig rig;
+    rig.clickRow("Gamma", 0.1, 1);
+    rig.frame(0.2);
+    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "a right-click opens the list");
+    rig.clickRow("Alpha", 0.5);
+    rig.frame(0.6);
+    Expect(rig.scene->getElementById("menu-label:Rename") == nullptr, "a click on another row closes the list");
+    rig.clickRow("Gamma", 0.7, 1);
+    rig.frame(0.8);
+    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "the list opens again");
+    rig.clickRow("Beta", 0.9, 1);
+    rig.frame(1.0);
+    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "another right-click moves the list");
+    rig.key(jadefx::Key::Enter);
+    rig.frame(1.1);
+    Expect(rig.inserts.size() == 1 && rig.inserts.front().second == rig.ids[1],
+           "the moved list inserts under the row right-clicked last");
+}
+
 void TestHeaderInsertsUnderTheRoot() {
     // The engine's registrars are not linked in here, so the class list needs one.
     engine_core::register_lua_creatable("Folder", CreateFolder);
@@ -1049,6 +1114,7 @@ int main() {
     TestDragCarriesTheSelection();
     TestDragRefusesItsOwnChild();
     TestMoveSet();
+    TestCopySet();
     TestFilterHidesOtherRows();
     TestFilterShowsTheWayToAMatch();
     TestFilterEscapeLeavesTheField();
@@ -1060,6 +1126,8 @@ int main() {
     TestRevealScrolls();
     TestRevealClearsAHidingFilter();
     TestHeaderInsertsUnderTheRoot();
+    TestRightClickInsertsUnderTheRow();
+    TestRightClickListCloses();
     TestRefusedInsertSaysWhy();
     hidden_services_have_no_rows();
     insert_list_leaves_out_assets();

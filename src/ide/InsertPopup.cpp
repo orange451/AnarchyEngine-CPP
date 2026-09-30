@@ -7,9 +7,11 @@
 #include "LuaApi.hpp"
 
 #include "jadefx/jadefx.hpp"
+#include "jadefx/scene/Painter.hpp"
 #include "jadefx/scene/controls/ScrollTrack.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <utility>
 
@@ -19,7 +21,10 @@ bool insert_offers(const std::string& class_name) {
     return engine_core::lua_creatable_known(class_name.c_str()) && !engine_core::is_asset_class(class_name);
 }
 
+constexpr double kOpenSeconds = 0.16;
+constexpr double kShadowMargin = 12;
 constexpr int kMaxVisibleRows = 8;
+constexpr int kMaxPointRows = 10;
 constexpr double kPopupWidth = 280;
 constexpr double kFieldGap = 4;
 
@@ -86,6 +91,14 @@ public:
         field_ = std::make_shared<InsertField>([this] { onTyped(); });
         field_->setOnAction([this](jadefx::ActionEvent&) { choose(selected_); });
         children().add(field_);
+        actions_ = jadefx::make<jadefx::HBox>();
+        actions_->setSpacing(2);
+        actions_->setAlignment(jadefx::Pos::CenterLeft);
+        actions_->setStyle(
+            "border-style: solid; border-width: 1px 0 0 0; border-color: var(--ide-popup-border-color); "
+            "padding: 4px 0 0 0;");
+        actions_->setVisible(false);
+        children().add(actions_);
         track_ = std::make_shared<InsertScrollTrack>(*this);
         children().add(track_);
     }
@@ -107,6 +120,27 @@ public:
         return scene != nullptr && !scene->isTearingDown() && scene->isPopupShowing(this);
     }
 
+    void showAtPoint(jadefx::Node& owner, double x, double y, std::vector<InsertAction> actions) {
+        engine_core::lua_creatable_names(all_);
+        if (field_) {
+            field_->setText("");
+        }
+        rebuild();
+        setActions(std::move(actions));
+        openedAt_ = std::chrono::steady_clock::now();
+        anchor_ = &owner;
+        pinned_x_ = x;
+        pinned_y_ = y;
+        pinned_w_ = 0;
+        pinned_h_ = 0;
+        pinned_ = true;
+        atPoint_ = true;
+        place(owner);
+        if (field_) {
+            field_->requestFocus();
+        }
+    }
+
     void showAt(jadefx::Node& anchor) {
         engine_core::lua_creatable_names(all_);
         all_.erase(std::remove_if(all_.begin(), all_.end(),
@@ -116,6 +150,9 @@ public:
             field_->setText("");
         }
         rebuild();
+        setActions({});
+        atPoint_ = false;
+        openedAt_ = std::chrono::steady_clock::now();
         // The + is hidden, and laid out at the corner, once the pointer leaves
         // the row. Later filter updates keep this opening position.
         pinAnchor(anchor);
@@ -135,12 +172,38 @@ public:
         scene->hidePopup(this);
     }
 
+    void render(jadefx::UiRenderer& renderer, float opacity) override {
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - openedAt_).count();
+        const double t = std::clamp(elapsed / kOpenSeconds, 0.0, 1.0);
+        if (t >= 1.0) {
+            jadefx::Controls::render(renderer, opacity);
+            return;
+        }
+        const double eased = 1.0 - std::pow(1.0 - t, 3.0);
+        const float x = static_cast<float>(getAbsoluteX() - kShadowMargin);
+        const float y = static_cast<float>(getAbsoluteY());
+        const float width = static_cast<float>(getWidth() + 2 * kShadowMargin);
+        const float full = static_cast<float>(getHeight() + kShadowMargin);
+        const float shown = static_cast<float>(full * eased);
+        jadefx::Painter painter(renderer);
+        if (dropsUp_) {
+            painter.pushClip(x, y - static_cast<float>(kShadowMargin) + full - shown, width, shown);
+        } else {
+            painter.pushClip(x, y, width, shown);
+        }
+        jadefx::Controls::render(renderer, opacity * static_cast<float>(0.25 + 0.75 * eased));
+        painter.popClip();
+    }
+
 protected:
     double preferredContentHeight(double innerWidth) const override {
-        const int visible = std::min(static_cast<int>(rows_.size()), kMaxVisibleRows);
+        const int visible = std::min(static_cast<int>(rows_.size()), maxRows());
         double height = fieldHeight(innerWidth);
         if (visible > 0) {
             height += kFieldGap + static_cast<double>(visible) * rowExtent(innerWidth);
+        }
+        if (!actionList_.empty() && actions_) {
+            height += kFieldGap + actions_->measuredHeight(std::max(0.0, innerWidth), -1);
         }
         return height;
     }
@@ -157,14 +220,14 @@ protected:
         const double row = rowExtent(width);
         rowHeight_ = row;
         const int count = static_cast<int>(rows_.size());
-        const int visible = std::min(count, kMaxVisibleRows);
+        const int visible = std::min(count, maxRows());
         const double listTop = top + field + (count > 0 ? kFieldGap : 0);
         if (ensure_ >= 0) {
             reveal(ensure_, row, count, visible);
             ensure_ = -1;
         }
         clampScroll(row, count, visible);
-        const bool bars = count > kMaxVisibleRows && visible > 0 && row > 0.0;
+        const bool bars = count > maxRows() && visible > 0 && row > 0.0;
         const double gutter = bars ? static_cast<double>(jadefx::ScrollTrack::kThickness) : 0.0;
         const double rowWidth = std::max(0.0, width - gutter);
         const int start = windowStart(row, count, visible);
@@ -177,6 +240,16 @@ protected:
                 continue;
             }
             node->performLayout(left, listTop + static_cast<double>(index - start) * row, rowWidth, row);
+        }
+        if (actions_) {
+            if (actionList_.empty()) {
+                actions_->setVisible(false);
+                actions_->performLayout(0, 0, 0, 0);
+            } else {
+                const double actionsTop = listTop + static_cast<double>(visible) * row + kFieldGap;
+                actions_->setVisible(true);
+                actions_->performLayout(left, actionsTop, width, actions_->measuredHeight(width, -1));
+            }
         }
         if (!track_) {
             return;
@@ -199,7 +272,7 @@ protected:
     }
 
     void handleScroll(jadefx::ScrollEvent& event) override {
-        if (static_cast<int>(rows_.size()) <= kMaxVisibleRows) {
+        if (static_cast<int>(rows_.size()) <= maxRows()) {
             return;
         }
         const double delta = event.deltaY != 0.0 ? event.deltaY : event.deltaX;
@@ -283,6 +356,59 @@ private:
         }
     }
 
+    void setActions(std::vector<InsertAction> actions) {
+        actionList_ = std::move(actions);
+        if (!actions_) {
+            return;
+        }
+        actions_->getChildren().clear();
+        for (std::size_t index = 0; index < actionList_.size(); ++index) {
+            const InsertAction& action = actionList_[index];
+            auto button = jadefx::make<jadefx::HBox>();
+            button->setAlignment(jadefx::Pos::Center);
+            button->setPadding(jadefx::Insets{4, 6, 4, 6});
+            if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic(action.icon)) {
+                icon->setMouseTransparent(true);
+                icon->setPrefSize(16, 16);
+                icon->setMinSize(16, 16);
+                icon->setElementId("menu-label:" + action.label);
+                button->getChildren().add(std::move(icon));
+            } else {
+                auto label = jadefx::make<jadefx::Label>(action.label);
+                label->setMouseTransparent(true);
+                label->setElementId("menu-label:" + action.label);
+                button->getChildren().add(std::move(label));
+            }
+            jadefx::Tooltip::install(button.get(), jadefx::make<jadefx::Tooltip>(action.label));
+            if (!action.enabled) {
+                button->setOpacity(0.35f);
+            } else {
+                button->setCursor(jadefx::Cursor::Pointer);
+                jadefx::HBox* raw = button.get();
+                button->setOnMouseEntered([raw](const jadefx::MouseEvent&) {
+                    raw->setBackground(theme_color("--ide-popup-selection-color"));
+                });
+                button->setOnMouseExited(
+                    [raw](const jadefx::MouseEvent&) { raw->setBackground(jadefx::Color::transparent()); });
+                button->setOnMousePressed([this, index](const jadefx::MouseEvent&) { runAction(index); });
+            }
+            actions_->getChildren().add(std::move(button));
+        }
+    }
+
+    int maxRows() const { return atPoint_ ? kMaxPointRows : kMaxVisibleRows; }
+
+    void runAction(std::size_t index) {
+        if (index >= actionList_.size()) {
+            return;
+        }
+        const std::function<void()> run = actionList_[index].run;
+        dismiss();
+        if (run) {
+            run();
+        }
+    }
+
     void paint() {
         const int count = static_cast<int>(rows_.size());
         const jadefx::Color highlight = theme_color("--ide-popup-selection-color");
@@ -338,7 +464,7 @@ private:
             pinAnchor(anchor);
         }
         jadefx::PopupOptions options;
-        options.owner = &anchor;
+        options.owner = atPoint_ ? nullptr : &anchor;
         options.autoHide = true;
         scene->showPopup(self, 0, 0, -1, -1, options);
         double width = getWidth();
@@ -356,16 +482,19 @@ private:
         const double originY = pinned_ ? pinned_y_ : anchor.getAbsoluteY();
         const double originW = pinned_ ? pinned_w_ : anchor.getWidth();
         const double originH = pinned_ ? pinned_h_ : anchor.getHeight();
-        double x = originX + originW - width;
-        double y = originY + originH + 2;
+        const double gap = atPoint_ ? 0.0 : 2.0;
+        double x = atPoint_ ? originX : originX + originW - width;
+        double y = originY + originH + gap;
         if (scene->getWidth() > 0 && x + width > scene->getWidth()) {
             x = scene->getWidth() - width;
         }
         if (x < 0) {
             x = 0;
         }
-        if (scene->getHeight() > 0 && y + height > scene->getHeight() && originY > height + 2) {
-            y = originY - height - 2;
+        dropsUp_ = false;
+        if (scene->getHeight() > 0 && y + height > scene->getHeight() && originY > height + gap) {
+            y = originY - height - gap;
+            dropsUp_ = true;
         }
         if (y < 0) {
             y = 0;
@@ -449,7 +578,7 @@ private:
 
     void scrollBy(double deltaY) {
         const int count = static_cast<int>(rows_.size());
-        const int visible = std::min(count, kMaxVisibleRows);
+        const int visible = std::min(count, maxRows());
         if (count <= visible || rowHeight_ <= 0.0) {
             return;
         }
@@ -485,7 +614,7 @@ private:
         }
         scroll_ = bar_.offsetFromPage(scroll_, where == jadefx::ScrollTrack::Part::After);
         const int count = static_cast<int>(rows_.size());
-        clampScroll(rowHeight_, count, std::min(count, kMaxVisibleRows));
+        clampScroll(rowHeight_, count, std::min(count, maxRows()));
         scrollGrab_ = bar_.thumbLength * 0.5f;
         relayout();
     }
@@ -498,7 +627,7 @@ private:
         const float localY = static_cast<float>(event.y - getAbsoluteY());
         scroll_ = bar_.offsetFromDrag(localX, localY, scrollGrab_);
         const int count = static_cast<int>(rows_.size());
-        clampScroll(rowHeight_, count, std::min(count, kMaxVisibleRows));
+        clampScroll(rowHeight_, count, std::min(count, maxRows()));
         relayout();
     }
 
@@ -521,6 +650,11 @@ private:
     double pinned_w_ = 0;
     double pinned_h_ = 0;
     bool pinned_ = false;
+    bool dropsUp_ = false;
+    bool atPoint_ = false;
+    std::shared_ptr<jadefx::HBox> actions_;
+    std::vector<InsertAction> actionList_;
+    std::chrono::steady_clock::time_point openedAt_{};
     jadefx::ScrollTrack bar_{};
     double scroll_ = 0;
     double rowHeight_ = 0;
@@ -569,6 +703,12 @@ void InsertPopup::setOnCreate(std::function<void(const std::string&)> handler) {
 void InsertPopup::show(jadefx::Node& anchor) {
     if (list_) {
         list_->showAt(anchor);
+    }
+}
+
+void InsertPopup::show_at(jadefx::Node& owner, double x, double y, std::vector<InsertAction> actions) {
+    if (list_) {
+        list_->showAtPoint(owner, x, y, std::move(actions));
     }
 }
 

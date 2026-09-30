@@ -69,7 +69,10 @@ struct ApplyGuard {
 using engine_core::InstanceAction;
 
 // Actions the explorer runs over the whole selection. The rest run on one row.
-bool Batchable(InstanceAction action) { return action == InstanceAction::Delete || action == InstanceAction::Cut; }
+bool Batchable(InstanceAction action) {
+    return action == InstanceAction::Delete || action == InstanceAction::Cut || action == InstanceAction::Copy ||
+           action == InstanceAction::Duplicate;
+}
 
 // Keys that make a click edit the selection instead of picking one row.
 constexpr int kSelectKeys = jadefx::Key::ModControl | jadefx::Key::ModSuper | jadefx::Key::ModShift;
@@ -80,8 +83,12 @@ const char* ActionIcon(InstanceAction action) {
         return "Script.png";
     case InstanceAction::Cut:
         return "Cut.png";
+    case InstanceAction::Copy:
+        return "Copy.png";
     case InstanceAction::Paste:
         return "Paste.png";
+    case InstanceAction::Duplicate:
+        return "New.png";
     case InstanceAction::Rename:
         return "Rename.png";
     case InstanceAction::Delete:
@@ -227,6 +234,8 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
     tree_->setOnContextMenuRequested([this](jadefx::TreeItem& item, const jadefx::MouseEvent& event) {
         show_menu(item, event.x, event.y);
     });
+    static_cast<jadefx::Node&>(*tree_).setOnContextMenuRequested(
+        [this](const jadefx::MouseEvent& event) { show_root_insert(event.x, event.y); });
     tree_->setOnItemActivated([this](jadefx::TreeItem& item) { return activate(item); });
     tree_->setSelectionMode(jadefx::SelectionMode::Multiple);
     tree_->setOnSelectedItemsChanged([this] { tree_selected(); });
@@ -418,40 +427,38 @@ void IdeExplorer::show_menu(jadefx::TreeItem& item, double x, double y) {
     if (!actions_for(id, actions)) {
         return;
     }
-    jadefx::Scene* scene = tree_ ? tree_->getScene() : nullptr;
-    if (scene == nullptr) {
+    if (!tree_ || tree_->getScene() == nullptr) {
         return;
     }
-    if (menu_) {
-        menu_->hide();
-    }
-    menu_ = jadefx::make<jadefx::Menu>();
-    bool any = false;
+    std::vector<InsertAction> buttons;
     for (const engine_core::ContextAction& offered : actions) {
         const InstanceAction action = offered.action;
-        if (any && action == InstanceAction::Cut) {
-            menu_->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
-        }
-        auto entry = jadefx::make<jadefx::MenuItem>(engine_core::action_label(action));
+        InsertAction button;
+        button.label = engine_core::action_label(action);
         if (const char* file = ActionIcon(action)) {
-            if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic(file)) {
-                entry->setGraphic(std::move(icon));
-            }
+            button.icon = file;
         }
-        const bool on = !host_.enabled || host_.enabled(action);
-        entry->setDisable(!on);
+        button.enabled = !host_.enabled || host_.enabled(action);
         const bool batch = many && Batchable(action);
-        entry->setOnAction([this, id, action, batch](jadefx::ActionEvent&) {
+        button.run = [this, id, action, batch] {
             if (!batch || !run_on_selection(action)) {
                 run(action, id);
             }
-        });
-        menu_->getItems().add(std::move(entry));
-        any = true;
+        };
+        buttons.push_back(std::move(button));
     }
-    if (any) {
-        menu_->show(*scene, x, y);
+    insert_parent_ = id;
+    ensure_insert_popup().show_at(*tree_, x, y, std::move(buttons));
+}
+
+void IdeExplorer::show_root_insert(double x, double y) {
+    finish_rename(false);
+    forget_clicks();
+    if (!tree_ || tree_->getScene() == nullptr) {
+        return;
     }
+    insert_parent_ = root_.id();
+    ensure_insert_popup().show_at(*tree_, x, y, {});
 }
 
 bool IdeExplorer::activate(jadefx::TreeItem& item) {
@@ -728,13 +735,15 @@ void IdeExplorer::open_insert() {
     show_insert(*insert_button_);
 }
 
-void IdeExplorer::show_insert(jadefx::Node& anchor) {
+InsertPopup& IdeExplorer::ensure_insert_popup() {
     if (!insert_popup_) {
         insert_popup_ = std::make_unique<InsertPopup>();
         insert_popup_->setOnCreate([this](const std::string& name) { create_child(name); });
     }
-    insert_popup_->show(anchor);
+    return *insert_popup_;
 }
+
+void IdeExplorer::show_insert(jadefx::Node& anchor) { ensure_insert_popup().show(anchor); }
 
 void IdeExplorer::create_child(const std::string& class_name) {
     if (!host_.insert || class_name.empty()) {

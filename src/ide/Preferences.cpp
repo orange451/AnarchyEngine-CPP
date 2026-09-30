@@ -70,6 +70,18 @@ std::string Preferences::assets_view() const {
 
 void Preferences::set_assets_view(const std::string& view) { root_.set("assetsView", engine_core::JsonValue::string(view)); }
 
+double Preferences::zoom() const {
+    const engine_core::JsonValue* zoom = root_.find("zoom");
+    if (zoom == nullptr || !zoom->is_number() || !std::isfinite(zoom->as_number())) {
+        return 1.0;
+    }
+    return std::clamp(zoom->as_number(), kMinZoom, kMaxZoom);
+}
+
+void Preferences::set_zoom(double zoom) {
+    root_.set("zoom", engine_core::JsonValue::number(std::clamp(zoom, kMinZoom, kMaxZoom)));
+}
+
 bool Preferences::save(std::string& error) const {
     if (file_.empty()) {
         return true;

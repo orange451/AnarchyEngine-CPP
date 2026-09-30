@@ -147,6 +147,7 @@ private:
     int current_find() const;
     void show_find_count();
     void place_find_bar();
+    void refresh_crumbs();
     // Replaces matches, which search found in text, with one edit and one undo step.
     int apply_replacements(const TextSearch& search, const std::string& text, const std::vector<TextMatch>& matches,
                            const std::string& replacement);
@@ -155,6 +156,8 @@ private:
     std::uint32_t id_ = 0;
     std::shared_ptr<jadefx::CodeArea> area_;
     std::shared_ptr<jadefx::Label> status_;
+    std::shared_ptr<jadefx::HBox> crumbs_;
+    std::uint64_t seen_crumb_tree_ = ~std::uint64_t{0};
     CompletionPopup completion_;
     // Luau's list for the last keystroke, on its way.
     std::optional<PendingCompletion> luau_list_;

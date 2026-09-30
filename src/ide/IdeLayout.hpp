@@ -65,7 +65,10 @@ class PropertiesPanel;
 // Picking a closed one opens it where it last was, picking one hidden behind
 // another tab brings it forward, and picking one that is showing closes it.
 // Below them, New Scene View docks another view of the place beside the first,
-// and Reset to Default Layout puts the windows back as a new studio has them.
+// Save Layout as Default keeps the layout, but not the main window's place, in
+// default-layout.json in the config folder. Reset to Default Layout puts the
+// windows back as that has them, or, with none, as a new studio has them.
+// Restore Built-in Default forgets the saved one and resets to the built-in layout.
 // Where the docks are, what each holds, which windows are closed, and the
 // main window's place and size are kept in layout.json in the config folder
 // when the window closes, and the next start puts them back. Script editors and extra scene views are
@@ -244,10 +247,27 @@ private:
     // page to place with the dock it goes in.
     void default_layout(double windowWidth, double windowHeight,
                         const std::function<void(IdeDock&, const std::shared_ptr<IdePane>&)>& place);
-    // Puts the windows back as the default layout has them: the four open,
-    // Search and Conflicts closed, and no floating windows. Script editors and extra scene
-    // views move in beside the scene view.
+    // Puts the windows back as the saved default has them, or, with none, as
+    // the built-in layout does. Script editors and extra scene views move in
+    // beside the scene view.
     void reset_layout();
+    // The built-in layout: the four open, Search and Conflicts closed, and no floating windows.
+    void reset_builtin_layout();
+    // Keeps the layout, but not the main window's place, as the default in
+    // default-layout.json. Without a config folder it is kept until the studio closes.
+    void save_default_layout();
+    // Forgets the saved default and resets to the built-in layout.
+    void restore_builtin_layout();
+    // True when there is a saved default for Restore Built-in Default to forget.
+    bool has_default_layout() const;
+    // Docks the pages as saved, a layout capture_layout wrote, moving tabs that
+    // are open and closing the windows it has closed. False, having changed
+    // nothing, when it docks nothing in the main window.
+    bool apply_layout(const engine_core::JsonValue& saved);
+    // The scene view, or the page of the window entry with this name. Null for a name this studio does not know.
+    std::shared_ptr<IdePane> page_named(const std::string& name);
+    // Opens a floating window for each one in windows, a layout's "floating", docking pages through host.
+    void open_saved_floating(const engine_core::JsonValue& windows, const LayoutHost& host);
     // Docks the pages as layout.json left them. False, having docked nothing,
     // when there is no file or nothing in it could be docked.
     bool restore_layout();
@@ -381,6 +401,12 @@ private:
     std::shared_ptr<IdePane> scene_view_;
     // layout.json in the config folder. Empty keeps no layout.
     std::filesystem::path layout_file_;
+    // default-layout.json in the config folder, which Save Layout as Default writes.
+    std::filesystem::path default_layout_file_;
+    // The saved default, as last saved or read. Null when there is none.
+    engine_core::JsonValue default_layout_;
+    // Greyed out while there is no saved default.
+    jadefx::MenuItem* restore_builtin_item_ = nullptr;
     // The floating windows layout.json had, until the main window is up to open them.
     engine_core::JsonValue saved_floating_;
     // The main window's place and size from layout.json, until attachFrame.

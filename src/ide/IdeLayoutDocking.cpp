@@ -6,6 +6,41 @@
 
 namespace ide {
 
+namespace {
+
+// A layout file capture_layout wrote. False, with why set, when it cannot be
+// read or is not version 1.
+bool ReadLayoutFile(const std::filesystem::path& file, engine_core::JsonValue& saved, std::string& why) {
+    std::string text;
+    if (!read_file(file, text, why)) {
+        return false;
+    }
+    if (!engine_core::parse_json(text, saved, why)) {
+        why = utf8_path(file) + ": " + why;
+        return false;
+    }
+    const engine_core::JsonValue* version = saved.find("version");
+    if (version == nullptr || version->as_number() != 1) {
+        why = utf8_path(file) + " is not a layout this studio reads";
+        return false;
+    }
+    return true;
+}
+
+// The tab in one of docks that shows page, or null.
+std::shared_ptr<jadefx::Tab> TabShowing(const std::vector<std::shared_ptr<IdeDock>>& docks, const jadefx::Node* page) {
+    for (const std::shared_ptr<IdeDock>& dock : docks) {
+        for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+            if (tab && tab->getContent() == page) {
+                return tab;
+            }
+        }
+    }
+    return nullptr;
+}
+
+}  // namespace
+
 void IdeLayout::default_layout(double windowWidth, double windowHeight,
                                const std::function<void(IdeDock&, const std::shared_ptr<IdePane>&)>& place) {
     // The game explorer on the left, the scene view over the console, and the
@@ -64,6 +99,33 @@ void IdeLayout::default_layout(double windowWidth, double windowHeight,
 }
 
 void IdeLayout::reset_layout() {
+    // Read again each time, so a default another studio saved is the one used.
+    if (!default_layout_file_.empty()) {
+        default_layout_ = engine_core::JsonValue();
+        std::error_code missing;
+        std::string why;
+        if (std::filesystem::exists(default_layout_file_, missing) &&
+            !ReadLayoutFile(default_layout_file_, default_layout_, why)) {
+            default_layout_ = engine_core::JsonValue();
+            runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error,
+                                                         "Default layout: " + why +
+                                                             ". Resetting to the built-in layout.");
+        }
+    }
+    if (!default_layout_.is_null()) {
+        if (apply_layout(default_layout_)) {
+            return;
+        }
+        const std::string file =
+            default_layout_file_.empty() ? std::string("The saved default") : utf8_path(default_layout_file_);
+        runner_.simulation().scripts().append_output(
+            engine_core::ScriptRuntime::OutputKind::Error,
+            "Default layout: " + file + " docks nothing in the main window. Resetting to the built-in layout.");
+    }
+    reset_builtin_layout();
+}
+
+void IdeLayout::reset_builtin_layout() {
     const std::vector<std::shared_ptr<IdeDock>> old_docks = docks_;
     std::vector<std::shared_ptr<jadefx::UtilityWindow>> old_windows;
     for (const Floating& item : floating_) {
@@ -72,16 +134,7 @@ void IdeLayout::reset_layout() {
         }
     }
     // A copy, since moving a tab takes it out of the list it was found in.
-    auto tab_of = [&old_docks](const jadefx::Node* page) -> std::shared_ptr<jadefx::Tab> {
-        for (const std::shared_ptr<IdeDock>& dock : old_docks) {
-            for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
-                if (tab && tab->getContent() == page) {
-                    return tab;
-                }
-            }
-        }
-        return nullptr;
-    };
+    auto tab_of = [&old_docks](const jadefx::Node* page) { return TabShowing(old_docks, page); };
     auto kept = [this](const jadefx::Node* page) {
         for (const std::unique_ptr<WindowEntry>& entry : windows_) {
             if (entry->pane && entry->pane.get() == page) {
@@ -138,6 +191,166 @@ void IdeLayout::reset_layout() {
     rebindUtilities();
 }
 
+bool IdeLayout::apply_layout(const engine_core::JsonValue& saved) {
+    const engine_core::JsonValue* main = saved.find("main");
+    if (main == nullptr) {
+        return false;
+    }
+    const std::vector<std::shared_ptr<IdeDock>> old_docks = docks_;
+    std::vector<std::shared_ptr<jadefx::UtilityWindow>> old_windows;
+    for (const Floating& item : floating_) {
+        if (item.window) {
+            old_windows.push_back(item.window);
+        }
+    }
+    // As layout_host, except that a page already open moves with its tab.
+    auto placed = std::make_shared<std::unordered_set<const IdePane*>>();
+    LayoutHost host = layout_host();
+    host.dock_page = [this, &old_docks, placed](IdeDock& dock, const std::string& name) {
+        const std::shared_ptr<IdePane> page = page_named(name);
+        if (!page || placed->count(page.get()) != 0) {
+            return false;
+        }
+        placed->insert(page.get());
+        if (const std::shared_ptr<jadefx::Tab> tab = TabShowing(old_docks, page.get())) {
+            dock.take(tab);
+            return true;
+        }
+        dock.dock(page);
+        for (const std::unique_ptr<WindowEntry>& entry : windows_) {
+            if (entry->pane == page) {
+                watch_close(*entry);
+            }
+        }
+        return true;
+    };
+    std::shared_ptr<jadefx::Node> tree = load_layout_node(*main, host);
+    if (!tree) {
+        return false;
+    }
+    adopt_tree(tree);
+    workArea_ = tree;
+    root_->setCenter(tree);
+    // From here the old docks are out of the window. Their tabs are found through old_docks.
+    for (const std::shared_ptr<IdeDock>& dock : old_docks) {
+        forgetDock(dock);
+    }
+    // The first scene view stays in the main window.
+    sceneDock_ = dockContaining(scene_view_.get());
+    if (sceneDock_ == nullptr) {
+        if (IdeDock* home = editorHome()) {
+            if (const std::shared_ptr<jadefx::Tab> tab = TabShowing(old_docks, scene_view_.get())) {
+                home->take(tab);
+            } else {
+                home->dock(scene_view_);
+            }
+            placed->insert(scene_view_.get());
+            sceneDock_ = home;
+        }
+    }
+    std::vector<std::string> named;
+    layout_tab_names(*main, named);
+    const engine_core::JsonValue* floating = saved.find("floating");
+    if (floating != nullptr && floating->is_array()) {
+        for (const engine_core::JsonValue& window : floating->items()) {
+            if (const engine_core::JsonValue* root = window.find("root")) {
+                layout_tab_names(*root, named);
+            }
+        }
+        open_saved_floating(*floating, host);
+    }
+    if (const engine_core::JsonValue* closed = saved.find("closed"); closed != nullptr && closed->is_array()) {
+        for (const engine_core::JsonValue& name : closed->items()) {
+            named.push_back(name.as_string());
+        }
+    }
+    // A window the layout has closed closes. One it does not name, such as one
+    // added since it was saved, goes where the built-in layout has it.
+    for (const std::unique_ptr<WindowEntry>& entry : windows_) {
+        if (!entry->pane || placed->count(entry->pane.get()) != 0) {
+            continue;
+        }
+        if (const std::shared_ptr<jadefx::Tab> tab = TabShowing(old_docks, entry->pane.get());
+            tab && tab->getTabPane() != nullptr) {
+            tab->getTabPane()->close(tab);
+        }
+        if (!entry->starts_closed && std::find(named.begin(), named.end(), entry->name) == named.end()) {
+            show_window(*entry);
+        }
+    }
+    // Script editors and extra scene views stay open, beside the scene view,
+    // which keeps the tab the layout selected there.
+    if (sceneDock_ != nullptr) {
+        jadefx::Tab* selected = sceneDock_->tabs()->getSelectedTab();
+        std::vector<std::shared_ptr<jadefx::Tab>> others;
+        for (const std::shared_ptr<IdeDock>& dock : old_docks) {
+            for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+                if (tab) {
+                    others.push_back(tab);
+                }
+            }
+        }
+        for (const std::shared_ptr<jadefx::Tab>& tab : others) {
+            sceneDock_->take(tab);
+        }
+        if (selected != nullptr) {
+            sceneDock_->tabs()->select(selected);
+        }
+    }
+    for (const std::shared_ptr<jadefx::UtilityWindow>& window : old_windows) {
+        if (window->isOpen()) {
+            window->close();
+        }
+    }
+    rebindUtilities();
+    return true;
+}
+
+void IdeLayout::save_default_layout() {
+    engine_core::JsonValue saved = capture_layout();
+    // A reset keeps the main window where it is.
+    saved.erase("window");
+    if (!default_layout_file_.empty()) {
+        std::string error;
+        if (!write_file(default_layout_file_, engine_core::write_json(saved), error)) {
+            runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error,
+                                                         "Default layout: " + error);
+            return;
+        }
+    }
+    default_layout_ = std::move(saved);
+    if (restore_builtin_item_ != nullptr) {
+        restore_builtin_item_->setDisable(false);
+    }
+    show_toast("Saved this layout as the default");
+}
+
+void IdeLayout::restore_builtin_layout() {
+    default_layout_ = engine_core::JsonValue();
+    if (!default_layout_file_.empty()) {
+        std::error_code failure;
+        std::filesystem::remove(default_layout_file_, failure);
+        if (failure) {
+            runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error,
+                                                         "Default layout: cannot remove " +
+                                                             utf8_path(default_layout_file_) + ": " +
+                                                             failure.message());
+        }
+    }
+    if (restore_builtin_item_ != nullptr) {
+        restore_builtin_item_->setDisable(!has_default_layout());
+    }
+    reset_builtin_layout();
+}
+
+bool IdeLayout::has_default_layout() const {
+    if (default_layout_file_.empty()) {
+        return !default_layout_.is_null();
+    }
+    std::error_code missing;
+    return std::filesystem::exists(default_layout_file_, missing);
+}
+
 void IdeLayout::fill_window_menu(jadefx::Menu& menu) {
     auto add = [&menu](const std::string& label, const std::string& icon, std::function<bool()> open) {
         auto item = jadefx::make<jadefx::MenuItem>(label);
@@ -162,9 +375,15 @@ void IdeLayout::fill_window_menu(jadefx::Menu& menu) {
     menu.getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     add("New Scene View", "Camera.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { new_scene_view(); });
     menu.getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
+    add("Save Layout as Default", std::string(), nullptr)->setOnAction([this](jadefx::ActionEvent&) {
+        save_default_layout();
+    });
     add("Reset to Default Layout", std::string(), nullptr)->setOnAction([this](jadefx::ActionEvent&) {
         reset_layout();
     });
+    restore_builtin_item_ = add("Restore Built-in Default", std::string(), nullptr);
+    restore_builtin_item_->setOnAction([this](jadefx::ActionEvent&) { restore_builtin_layout(); });
+    restore_builtin_item_->setDisable(!has_default_layout());
 }
 
 void IdeLayout::toggle_window(IdePane* pane, const std::function<void()>& open) {
@@ -304,15 +523,7 @@ LayoutHost IdeLayout::layout_host() {
         return {};
     };
     host.dock_page = [this, placed](IdeDock& dock, const std::string& name) {
-        std::shared_ptr<IdePane> page;
-        if (name == scene_view_->name()) {
-            page = scene_view_;
-        }
-        for (const std::unique_ptr<WindowEntry>& entry : windows_) {
-            if (entry->name == name) {
-                page = window_page(*entry);
-            }
-        }
+        const std::shared_ptr<IdePane> page = page_named(name);
         if (!page || placed->count(page.get()) != 0 || dockContaining(page.get()) != nullptr) {
             return false;
         }
@@ -321,6 +532,19 @@ LayoutHost IdeLayout::layout_host() {
         return true;
     };
     return host;
+}
+
+std::shared_ptr<IdePane> IdeLayout::page_named(const std::string& name) {
+    std::shared_ptr<IdePane> page;
+    if (name == scene_view_->name()) {
+        page = scene_view_;
+    }
+    for (const std::unique_ptr<WindowEntry>& entry : windows_) {
+        if (entry->name == name) {
+            page = window_page(*entry);
+        }
+    }
+    return page;
 }
 
 void IdeLayout::adopt_tree(const std::shared_ptr<jadefx::Node>& node) {
@@ -346,20 +570,12 @@ bool IdeLayout::restore_layout() {
                               "Layout: " + why + ". Starting with the default layout.");
         return false;
     };
-    std::string text;
     std::string error;
     engine_core::JsonValue saved;
-    if (!read_file(layout_file_, text, error)) {
+    if (!ReadLayoutFile(layout_file_, saved, error)) {
         return refuse(error);
     }
-    if (!engine_core::parse_json(text, saved, error)) {
-        return refuse(utf8_path(layout_file_) + ": " + error);
-    }
-    const engine_core::JsonValue* version = saved.find("version");
     const engine_core::JsonValue* main = saved.find("main");
-    if (version == nullptr || version->as_number() != 1) {
-        return refuse(utf8_path(layout_file_) + " is not a layout this studio reads");
-    }
     if (const engine_core::JsonValue* window = saved.find("window"); window != nullptr && window->is_object()) {
         saved_window_ = *window;
     }
@@ -411,6 +627,10 @@ bool IdeLayout::restore_layout() {
 void IdeLayout::restore_floating() {
     const engine_core::JsonValue windows = std::move(saved_floating_);
     saved_floating_ = engine_core::JsonValue();
+    open_saved_floating(windows, layout_host());
+}
+
+void IdeLayout::open_saved_floating(const engine_core::JsonValue& windows, const LayoutHost& host) {
     const std::vector<jadefx::ScreenArea> areas = jadefx::screenWorkAreas();
     for (const engine_core::JsonValue& window : windows.items()) {
         const engine_core::JsonValue* tree = window.find("root");
@@ -431,7 +651,7 @@ void IdeLayout::restore_floating() {
         }
         open_floating(names.empty() ? std::string() : names.front(), width, height, x, y,
                       [&] {
-                          std::shared_ptr<jadefx::Node> node = load_layout_node(*tree, layout_host());
+                          std::shared_ptr<jadefx::Node> node = load_layout_node(*tree, host);
                           if (node) {
                               adopt_tree(node);
                           }

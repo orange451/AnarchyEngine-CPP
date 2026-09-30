@@ -11,6 +11,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
       clip_(std::make_unique<Clip>()) {
     if (!config.empty()) {
         layout_file_ = config / "layout.json";
+        default_layout_file_ = config / "default-layout.json";
     }
     runner_.prepare();
     // Before any widget reads a color.

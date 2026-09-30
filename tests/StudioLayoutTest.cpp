@@ -287,8 +287,9 @@ int main() {
             labels.push_back(item ? item->getText() : std::string());
         }
         expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "Terminal", "Assets", "",
-                                                  "New Scene View", "", "Reset to Default Layout"},
-               "Window lists the explorers, Properties, Console, Search, Conflicts, Terminal, and Assets, then New Scene View and the reset");
+                                                  "New Scene View", "", "Save Layout as Default", "Reset to Default Layout",
+                                                  "Restore Built-in Default"},
+               "Window lists the explorers, Properties, Console, Search, Conflicts, Terminal, and Assets, then New Scene View and the default layout's items");
         double time = 1.1;
         auto frame = [&] {
             scene->layout(1280, 800, time);
@@ -656,6 +657,120 @@ int main() {
                 said = said || line.text.rfind("Layout: ", 0) == 0;
             }
             expect(said, "and the console says why");
+        }
+
+        // Save Layout as Default keeps the layout in default-layout.json, and
+        // Reset to Default Layout puts it back, in this studio and the next.
+        // Restore Built-in Default forgets it.
+        const fs::path defaults = config / "defaults";
+        // A frame as the main window runs one: lay out, then flushFrame, which
+        // takes away docks a move left empty.
+        auto step = [&frame](ide::IdeLayout& studio, jadefx::Scene& at) {
+            frame(at);
+            studio.flushFrame();
+            frame(at);
+        };
+        auto pick_in = [&window_item](jadefx::Scene& at, const std::string& text) {
+            if (jadefx::MenuItem* item = window_item(at, text)) {
+                item->fire();
+            }
+        };
+        auto builtin = [&](jadefx::Scene& at) {
+            ide::IdePane* view = showing(at, "Scene View");
+            ide::IdePane* console = showing(at, "Console");
+            ide::IdePane* properties = showing(at, "Properties");
+            ide::IdePane* left = showing(at, "Game Explorer");
+            return view != nullptr && console != nullptr && properties != nullptr && left != nullptr &&
+                   left->getAbsoluteX() < 300 && std::abs(console->getAbsoluteX() - view->getAbsoluteX()) < 1 &&
+                   properties->getAbsoluteX() > 640 && showing(at, "Search") == nullptr;
+        };
+        // The saved default: Properties closed, and the console in with the scene explorer.
+        auto saved_shape = [&](jadefx::Scene& at) {
+            ide::IdePane* console = showing(at, "Console");
+            ide::IdePane* view = showing(at, "Scene View");
+            return showing(at, "Properties") == nullptr && showing(at, "Search") == nullptr && console != nullptr &&
+                   console->getAbsoluteX() > 640 && view != nullptr && view->getHeight() > 600;
+        };
+        auto restore_disabled = [&window_item](jadefx::Scene& at) {
+            jadefx::MenuItem* item = window_item(at, "Restore Built-in Default");
+            return item != nullptr && item->isDisable();
+        };
+        {
+            ide::IdeLayout first(1280, 800, defaults);
+            auto at = jadefx::make<jadefx::Scene>(nullptr, 1280, 800);
+            first.mount(*at);
+            step(first, *at);
+            expect(restore_disabled(*at), "Restore Built-in Default is greyed out with no saved default");
+            pick_in(*at, "Properties");
+            step(first, *at);
+            ide::IdeDock* console_dock = dock_of(showing(*at, "Console"));
+            ide::IdeDock* east = dock_of(showing(*at, "Current Scene"));
+            if (console_dock != nullptr && east != nullptr) {
+                const std::shared_ptr<jadefx::Tab> moving = console_dock->tabs()->getTabs().items().front();
+                east->take(moving);
+            }
+            step(first, *at);
+            expect(saved_shape(*at), "the layout is rearranged before it is saved");
+            pick_in(*at, "Save Layout as Default");
+            expect(fs::exists(defaults / "default-layout.json"), "Save Layout as Default writes default-layout.json");
+            expect(!restore_disabled(*at), "and Restore Built-in Default is no longer greyed out");
+            std::string text;
+            std::string error;
+            engine_core::JsonValue saved;
+            expect(ide::read_file(defaults / "default-layout.json", text, error) &&
+                       engine_core::parse_json(text, saved, error) && saved.find("main") != nullptr &&
+                       saved.find("window") == nullptr,
+                   "the default keeps the docks but not the main window's place");
+            // Rearranged again, then reset.
+            pick_in(*at, "Properties");
+            pick_in(*at, "Search");
+            step(first, *at);
+            expect(showing(*at, "Properties") != nullptr && showing(*at, "Search") != nullptr,
+                   "Properties and Search are open before the reset");
+            pick_in(*at, "Reset to Default Layout");
+            step(first, *at);
+            expect(saved_shape(*at), "Reset to Default Layout puts back the saved default");
+            expect(showing(*at, "Current Scene") == nullptr, "with the scene explorer behind the console, as saved");
+        }
+        {
+            ide::IdeLayout second(1280, 800, defaults);
+            auto at = jadefx::make<jadefx::Scene>(nullptr, 1280, 800);
+            second.mount(*at);
+            step(second, *at);
+            expect(builtin(*at), "a studio with no layout.json starts with the built-in layout");
+            expect(!restore_disabled(*at), "a saved default outlives the studio that saved it");
+            pick_in(*at, "Reset to Default Layout");
+            step(second, *at);
+            expect(saved_shape(*at), "and the next studio's reset puts it back");
+            pick_in(*at, "Restore Built-in Default");
+            step(second, *at);
+            expect(!fs::exists(defaults / "default-layout.json"), "Restore Built-in Default removes default-layout.json");
+            expect(builtin(*at), "and puts back the built-in layout");
+            expect(restore_disabled(*at), "and is greyed out again");
+            pick_in(*at, "Properties");
+            step(second, *at);
+            pick_in(*at, "Reset to Default Layout");
+            step(second, *at);
+            expect(builtin(*at), "with no saved default, the reset is the built-in layout");
+        }
+        {
+            std::string error;
+            ide::write_file(defaults / "default-layout.json", "{ not json", error);
+            ide::IdeLayout third(1280, 800, defaults);
+            auto at = jadefx::make<jadefx::Scene>(nullptr, 1280, 800);
+            third.mount(*at);
+            step(third, *at);
+            pick_in(*at, "Properties");
+            step(third, *at);
+            pick_in(*at, "Reset to Default Layout");
+            step(third, *at);
+            expect(builtin(*at), "a default-layout.json that cannot be read resets to the built-in layout");
+            bool said = false;
+            for (const auto& line : third.simulation().scripts().output_since(0, 1000).lines) {
+                said = said || line.text.rfind("Default layout: ", 0) == 0;
+            }
+            expect(said, "and the console says why");
+            expect(!restore_disabled(*at), "Restore Built-in Default can still clear it");
         }
         std::error_code error;
         fs::remove_all(config, error);

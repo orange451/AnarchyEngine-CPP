@@ -48,6 +48,7 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
     world.bags.resize(kMaxInstances);
     world.walk.reserve(kMaxInstances);
     world.step_ids.reserve(kMaxInstances);
+    world.scope_walk.reserve(kMaxInstances);
     world.events.watch_prerender(&world.prerender_window);
     world.root = this;
     name_ = root_name;
@@ -650,6 +651,79 @@ const GameObject* DataModel::game_object(InstanceId id) const {
 
 bool DataModel::alive(InstanceId id) const { return slot(id) != nullptr; }
 
+bool DataModel::in_game(InstanceId id) const {
+    return has_tag(ecs_world(), entity_of(id), state_->ecs_ids.in_game);
+}
+
+bool DataModel::in_workspace(InstanceId id) const {
+    return has_tag(ecs_world(), entity_of(id), state_->ecs_ids.in_workspace);
+}
+
+void DataModel::refresh_scope(InstanceId id) {
+    const Slot* part = slot(id);
+    if (part == nullptr) {
+        return;
+    }
+    bool game = false;
+    bool workspace = false;
+    if (part->parent == 0) {
+        game = true;
+    } else if (part->parent != kNoParent) {
+        game = in_game(part->parent);
+        workspace = in_workspace(part->parent) || part->parent == scene_service("Workspace");
+    }
+    if (in_game(id) == game && in_workspace(id) == workspace) {
+        return;
+    }
+    apply_scope(id, game, workspace);
+}
+
+void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_now) {
+    // Top-down over the subtree. A node whose tags come out unchanged prunes
+    // its children: their tags were derived from its tags.
+    ecs_world_t* world = ecs_world();
+    const EcsIds& ids = state_->ecs_ids;
+    const InstanceId workspace_id = scene_service("Workspace");
+    std::vector<InstanceId>& queue = state_->scope_walk;
+    queue.clear();
+    queue.push_back(id);
+    for (std::size_t i = 0; i < queue.size(); ++i) {
+        const InstanceId cur = queue[i];
+        const Slot* part = slot(cur);
+        if (part == nullptr) {
+            continue;
+        }
+        bool game = in_game_now;
+        bool workspace = in_workspace_now;
+        if (i > 0) {
+            game = in_game(part->parent);
+            workspace = in_workspace(part->parent) || part->parent == workspace_id;
+        }
+        const bool had_game = has_tag(world, part->entity, ids.in_game);
+        const bool had_workspace = has_tag(world, part->entity, ids.in_workspace);
+        if (had_game == game && had_workspace == workspace) {
+            continue;
+        }
+        if (had_game != game) {
+            set_tag(world, part->entity, ids.in_game, game);
+        }
+        if (had_workspace != workspace) {
+            set_tag(world, part->entity, ids.in_workspace, workspace);
+        }
+        for (InstanceId child = part->first_child; child != 0;) {
+            if (queue.size() == queue.capacity()) {
+                contract_fail("scope walk capacity exhausted");
+            }
+            queue.push_back(child);
+            const Slot* child_slot = slot(child);
+            if (child_slot == nullptr) {
+                break;
+            }
+            child = child_slot->next_sibling;
+        }
+    }
+}
+
 bool DataModel::simulated(InstanceId id) const {
     return has_tag(ecs_world(), entity_of(id), state_->ecs_ids.simulated);
 }
@@ -1020,6 +1094,8 @@ void DataModel::detach_links(InstanceId id, Slot& part) {
         child_slot->parent = kNoParent;
         child_slot->prev_sibling = 0;
         child_slot->next_sibling = 0;
+        // Out of the tree now, with its own subtree.
+        refresh_scope(child);
         child = next;
     }
     part.first_child = 0;
@@ -1069,6 +1145,7 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
     if (new_parent != kNoParent) {
         link_child(new_parent, id);
     }
+    refresh_scope(id);
     record_parent(id, old, new_parent, old_index);
     note_tree_changed();
     const WriteOrigin origin = current_origin();

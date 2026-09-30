@@ -201,18 +201,24 @@ void DataModel::clear_hierarchy() {
     state_->tree_revision.fetch_add(1, std::memory_order_relaxed);
     state_->root_first_child = 0;
     state_->root_last_child = 0;
+    ecs_world_t* world = ecs_world();
     for (Slot& part : state_->slots) {
         part.parent = kNoParent;
         part.first_child = 0;
         part.last_child = 0;
         part.next_sibling = 0;
         part.prev_sibling = 0;
+        // Out of scope with its links. link_children rebuilds the tags, in any
+        // order: a node that gains scope walks whatever is already linked below it.
+        set_tag(world, part.entity, state_->ecs_ids.in_game, false);
+        set_tag(world, part.entity, state_->ecs_ids.in_workspace, false);
     }
 }
 
 void DataModel::link_children(InstanceId parent, const std::vector<InstanceId>& children) {
     for (InstanceId child : children) {
         link_child(parent, child);
+        refresh_scope(child);
     }
 }
 

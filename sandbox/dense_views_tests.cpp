@@ -173,3 +173,100 @@ TEST_CASE("undo and Stop keep spatial values and flags", "[dense][entity]") {
     REQUIRE(game.game_object(id)->copy_size(size));
     REQUIRE(size[1] == 2.f);
 }
+
+TEST_CASE("scope tags follow the tree", "[dense][scope]") {
+    SimRole role;
+    engine_core::Game game;
+    const engine_core::InstanceId ws = workspace_of(game);
+    const engine_core::InstanceId storage = game.scene_service("Storage");
+    REQUIRE(game.in_game(ws));
+    REQUIRE_FALSE(game.in_workspace(ws));  // the service is not inside itself
+    engine_core::GameObject& part = game.create_game_object();
+    const engine_core::InstanceId id = part.id();
+    REQUIRE_FALSE(game.in_game(id));
+    REQUIRE_FALSE(game.in_workspace(id));
+    game.set_parent(id, ws);
+    REQUIRE(game.in_game(id));
+    REQUIRE(game.in_workspace(id));
+    game.set_parent(id, storage);
+    REQUIRE(game.in_game(id));
+    REQUIRE_FALSE(game.in_workspace(id));
+    game.set_parent(id, engine_core::DataModel::kNoParent);
+    REQUIRE_FALSE(game.in_game(id));
+    REQUIRE_FALSE(game.in_workspace(id));
+    REQUIRE_FALSE(game.in_game(engine_core::make_instance_id(9, 999)));  // dead
+}
+
+TEST_CASE("scope tags flip a whole subtree", "[dense][scope]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::DataModel& folder = game.create();
+    engine_core::GameObject& part = game.create_game_object();
+    engine_core::GameObject& nested = game.create_game_object();
+    game.set_parent(part.id(), folder.id());
+    game.set_parent(nested.id(), part.id());
+    REQUIRE_FALSE(game.in_workspace(nested.id()));
+    game.set_parent(folder.id(), workspace_of(game));
+    REQUIRE(game.in_workspace(folder.id()));
+    REQUIRE(game.in_workspace(part.id()));
+    REQUIRE(game.in_workspace(nested.id()));
+    game.set_parent(folder.id(), engine_core::DataModel::kNoParent);
+    REQUIRE_FALSE(game.in_game(part.id()));
+    REQUIRE_FALSE(game.in_workspace(nested.id()));
+}
+
+TEST_CASE("destroy clears scope; undo restores it", "[dense][scope]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& parent = game.create_game_object();
+    engine_core::GameObject& child = game.create_game_object();
+    game.set_parent(parent.id(), workspace_of(game));
+    game.set_parent(child.id(), parent.id());
+    const engine_core::InstanceId parent_id = parent.id();
+    const engine_core::InstanceId child_id = child.id();
+    game.history().end_gesture();
+    // destroy, not destroy_tree: the child lives on, out of the tree.
+    game.destroy(parent_id);
+    game.history().end_gesture();
+    REQUIRE(game.alive(child_id));
+    REQUIRE_FALSE(game.in_game(child_id));
+    REQUIRE_FALSE(game.in_workspace(child_id));
+    game.history().undo();
+    REQUIRE(game.alive(parent_id));
+    REQUIRE(game.parent(child_id) == parent_id);
+    REQUIRE(game.in_workspace(parent_id));
+    REQUIRE(game.in_workspace(child_id));
+}
+
+TEST_CASE("Stop restores scope", "[dense][scope]") {
+    SimRole role;
+    engine_core::Game game;
+    const engine_core::InstanceId ws = workspace_of(game);
+    engine_core::GameObject& authored = game.create_game_object();
+    game.set_parent(authored.id(), ws);
+    game.capture_place();
+    game.start_simulation();
+    engine_core::GameObject& session = game.create_game_object();
+    game.set_parent(session.id(), ws);
+    game.set_parent(authored.id(), game.scene_service("Storage"));
+    REQUIRE_FALSE(game.in_workspace(authored.id()));
+    game.stop_simulation();
+    REQUIRE(game.in_workspace(authored.id()));
+    REQUIRE(game.in_game(ws));
+}
+
+TEST_CASE("Stop takes scope from an instance that was unparented at capture", "[dense][scope]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& loose = game.create_game_object();
+    engine_core::GameObject& child = game.create_game_object();
+    game.set_parent(child.id(), loose.id());
+    game.capture_place();
+    game.start_simulation();
+    game.set_parent(loose.id(), workspace_of(game));
+    REQUIRE(game.in_workspace(child.id()));
+    game.stop_simulation();
+    REQUIRE(game.parent(loose.id()) == engine_core::DataModel::kNoParent);
+    REQUIRE_FALSE(game.in_game(loose.id()));
+    REQUIRE_FALSE(game.in_workspace(child.id()));
+}

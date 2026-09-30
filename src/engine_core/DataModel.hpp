@@ -324,6 +324,11 @@ public:
     const GameObject* game_object(InstanceId id) const;
 
     bool alive(InstanceId id) const;
+    // Scope. in_game: under game. in_workspace: under the Workspace service,
+    // which is not inside itself. Both are false for a dead id. Kept current
+    // at every tree change, so reading them costs no walk.
+    bool in_game(InstanceId id) const;
+    bool in_workspace(InstanceId id) const;
     bool simulated(InstanceId id) const;
     bool visual_only(InstanceId id) const;
     // kNoParent when id is dead or the instance has no parent.
@@ -549,6 +554,10 @@ private:
     const EcsIds& component_ids() const;
     // id's entity, or 0 when id is dead.
     std::uint64_t entity_of(InstanceId id) const;
+    // Recomputes id's scope tags from its parent. Unchanged tags return at
+    // once; changed tags walk the subtree. Runs after every tree change.
+    void refresh_scope(InstanceId id);
+    void apply_scope(InstanceId id, bool in_game_now, bool in_workspace_now);
     void rebind(InstanceId id) { id_ = id; }
 
     void require_simulation_thread(const char* message) const;

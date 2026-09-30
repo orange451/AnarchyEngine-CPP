@@ -142,6 +142,8 @@ struct DataModel::State {
     std::vector<InstanceId> walk;
     // Ids gathered for Heartbeat. Separate from walk, which ancestry mutates.
     std::vector<InstanceId> step_ids;
+    // The subtree refresh_scope walks. Its own, since walk belongs to emit_ancestry.
+    std::vector<InstanceId> scope_walk;
 
     // The root object. Children share this State and reach the root through here.
     DataModel* root = nullptr;

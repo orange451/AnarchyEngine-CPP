@@ -31,9 +31,9 @@ struct InputRecord {
 //
 // The studio posts from the UI thread. Posts wait in a queue behind their own
 // lock, never the DataModel lock, and are only kept while the service is active,
-// which is while the place is playing. SimulationThread dispatches the queue once
-// per step, before PreAnimation's handlers run, so every script sees one frame's
-// input at the same point.
+// which is while a script runtime is attached: the play step dispatches them
+// before PreAnimation, and in edit mode the tool step dispatches them before
+// Heartbeat, so every script sees one frame's input at the same point.
 class UserInputService {
 public:
     // UserInputType values.

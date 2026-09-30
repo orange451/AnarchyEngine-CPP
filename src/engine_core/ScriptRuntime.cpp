@@ -101,6 +101,8 @@ void ScriptRuntime::attach(DataModel& game, TaskScheduler& scheduler) {
     game.events().set_script_gate(&ScriptRuntime::gate, this);
     run_service_.bind(game.events());
     game.input().bind(game.events());
+    // Input is kept whenever a runtime is attached: plugins hear it in edit mode.
+    game.input().set_active(true);
     for (Phase phase : {Phase::PreAnimation, Phase::PreSimulation, Phase::PostSimulation, Phase::Heartbeat}) {
         phase_jobs_.push_back(scheduler.bind(phase, [this, phase](double dt) { fire_phase(phase, dt); }));
     }
@@ -159,17 +161,28 @@ void ScriptRuntime::heartbeat(double dt) {
 }
 
 void ScriptRuntime::step_tools(double dt) {
-    if (game_ == nullptr || (console_.state == nullptr && plugin_.state == nullptr)) {
+    if (game_ == nullptr) {
+        return;
+    }
+    // While the play VM is closed no play step fires Heartbeat or drains, so this does.
+    // During play, and while a play session is paused, the play step's own do that.
+    const bool own_step = !open_;
+    const bool tools_open = console_.state != nullptr || plugin_.state != nullptr;
+    if (!own_step && !tools_open) {
         return;
     }
     assert_lua_thread();
     if (dt < 0) {
         dt = 0;
     }
-    // While the play VM is closed no play step fires Heartbeat or drains, so this does.
-    // During play, and while a play session is paused, the play step's own do that.
-    const bool own_step = !open_;
     if (own_step) {
+        // Edit-mode input, dispatched even with no tool VM open so the queue never
+        // holds presses from before a plugin loaded. Its events drain before Heartbeat's.
+        game_->input().dispatch(game_->events());
+        if (!tools_open) {
+            game_->events().drain();
+            return;
+        }
         run_service_.fire(game_->events(), Phase::Heartbeat, dt);
         game_->events().drain();
     }
@@ -441,7 +454,8 @@ void ScriptRuntime::on_start() {
 void ScriptRuntime::on_stop() {
     if (game_ != nullptr) {
         game_->events().disconnect_scripted();
-        game_->input().set_active(false);
+        // Still active, for the plugins; this drops what the session left queued.
+        game_->input().set_active(true);
         game_->input().reset();
     }
     started_.clear();

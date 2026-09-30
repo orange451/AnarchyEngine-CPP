@@ -3865,10 +3865,10 @@ TEST_CASE("UserInputService signals give scripts an InputObject", "[input]") {
     REQUIRE(has_line(ended, "ended\tUnknown\tMouseButton1\tEnd\n"));
     REQUIRE(model.input().keys_down().empty());
 
-    // Stop turns the service off and forgets what it held.
+    // Stop keeps the service active, for the plugins, but forgets what it held.
     model.input().post_key(119, true);
     rig.game.stop_simulation();
-    REQUIRE_FALSE(model.input().active());
+    REQUIRE(model.input().active());
     REQUIRE_FALSE(model.input().key_down(119));
 }
 

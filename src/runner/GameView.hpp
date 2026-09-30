@@ -40,9 +40,9 @@ class SceneFeed;
 // The corner label is how many times this view is painted per second, averaged
 // over a quarter of a second. That count keeps moving while the simulation is paused.
 //
-// Keys and the mouse over this view go to the place's UserInputService, which keeps
-// them only while the place is playing. A press here takes keyboard focus, and
-// losing focus ends whatever was still held.
+// Keys and the mouse over this view go to the place's UserInputService, which now
+// keeps them in edit mode too, not only while the place is playing. A press here
+// takes keyboard focus, and losing focus ends whatever was still held.
 class GameView : public ide::IdePane {
 public:
     explicit GameView(Runner& runner, std::string name = "Scene View", bool closable = false);

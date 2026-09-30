@@ -71,3 +71,39 @@ TEST_CASE("SC3 MouseDeltaSensitivity is at least 0 and refuses what is not a num
     REQUIRE_FALSE(input.set_mouse_delta_sensitivity(std::numeric_limits<double>::quiet_NaN()));
     REQUIRE(input.mouse_delta_sensitivity() == 0.0);
 }
+
+namespace {
+
+// GLFW's key numbers, which is what the scene view posts.
+int key(char letter) { return UserInputService::key_code_from_glfw(static_cast<int>(letter)); }
+
+// An unparented Script run as a plugin.
+InstanceId add_plugin(ScriptRig& rig, const char* source) {
+    engine_core::Script& script = rig.game.create<engine_core::Script>();
+    rig.game.set_name(script.id(), "Plugin");
+    script.set_source(source);
+    REQUIRE(rig.runtime.register_plugin(script.id()));
+    return script.id();
+}
+
+}  // namespace
+
+TEST_CASE("SC4 a plugin hears keys in edit mode, and a focus loss ends them", "[SC4]") {
+    ScriptRig rig;
+    add_plugin(rig,
+               "local uis = game:GetService('UserInputService')\n"
+               "uis.InputBegan:Connect(function(input) print('began', input.KeyCode.Name) end)\n"
+               "uis.InputEnded:Connect(function(input) print('ended', input.KeyCode.Name) end)\n"
+               "game:GetService('RunService').Heartbeat:Connect(function()\n"
+               "  if uis:IsKeyDown(Enum.KeyCode.W) then print('held') end\n"
+               "end)");
+    rig.runtime.drain_output();
+
+    rig.game.input().post_key(key('W'), true);
+    rig.frames(1);
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"began\tW\n", "held\n"});
+
+    rig.game.input().post_focus_lost();
+    rig.frames(1);
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"ended\tW\n"});
+}

@@ -484,6 +484,49 @@ void refused_drop_says_why() {
     Expect(rig.moves == 1 && rig.game.parent(rig.brick) == rig.walls, "a drop on a Folder moves into it");
 }
 
+// In Columns, an asset in a Folder's column drags back out into an earlier column.
+void columns_drop_into_earlier_column() {
+    Rig rig("columns");
+    rig.pane->openFolder(rig.walls);
+    rig.frame(0);
+    const InstanceId mortar = rig.game.get_children(rig.walls).front();
+    const std::vector<jadefx::Node*> columns = rig.pane->getElementsByClassName("assets-column");
+    Expect(columns.size() == 3, "Columns shows the categories, Textures, and Walls");
+    if (columns.size() != 3) {
+        return;
+    }
+    // Onto the empty space below the Textures column's rows.
+    jadefx::Node* textures_column = columns[1];
+    rig.frame(0.5);
+    const double x = textures_column->getAbsoluteX() + textures_column->getWidth() * 0.5;
+    const double y = textures_column->getAbsoluteY() + textures_column->getHeight() - 20;
+    jadefx::Node* from = rig.pane->itemNode(mortar);
+    Expect(from != nullptr, "Mortar has a row");
+    if (from == nullptr) {
+        return;
+    }
+    const double from_x = from->getAbsoluteX() + from->getWidth() * 0.5;
+    const double from_y = from->getAbsoluteY() + from->getHeight() * 0.5;
+    rig.scene->noteButton(0, true, from_x, from_y);
+    rig.scene->noteMove(from_x + 10, from_y + 10);
+    rig.scene->noteMove(x, y);
+    rig.frame(0.55);
+    rig.scene->noteMove(x, y);
+    rig.scene->noteButton(0, false, x, y);
+    rig.frame(0.6);
+    Expect(rig.moves == 1 && rig.game.parent(mortar) == rig.textures,
+           "a drop on a column's empty space moves into its folder");
+
+    // Onto an asset's row in an earlier column: into that column's folder.
+    rig.pane->openFolder(rig.walls);
+    rig.frame(1.0);
+    rig.drag(rig.pane->itemNode(rig.brick), rig.pane->itemNode(rig.walls), 1.5);
+    Expect(rig.game.parent(rig.brick) == rig.walls, "Brick moves into Walls");
+    rig.drag(rig.pane->itemNode(rig.brick), rig.pane->itemNode(rig.rock), 2.5);
+    Expect(rig.moves == 3 && rig.game.parent(rig.brick) == rig.textures,
+           "a drop on an asset's row moves into its column's folder");
+}
+
 void search_filters() {
     Rig rig;
     const InstanceId trim = rig.make("Texture", "BrickTrim", rig.walls);
@@ -677,6 +720,7 @@ int main() {
     new_folder_and_kind();
     rename_delete_cut_paste();
     refused_drop_says_why();
+    columns_drop_into_earlier_column();
     search_filters();
     pane_follows_tree();
     insert_through_pane();

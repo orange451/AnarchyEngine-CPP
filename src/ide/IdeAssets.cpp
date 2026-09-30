@@ -1301,6 +1301,11 @@ void IdeAssets::rebuild_columns(const std::vector<std::pair<engine_core::Instanc
         column->setHbarPolicy(jadefx::ScrollBarPolicy::Never);
         column->setStyle("height: 100%;");
         fix_width(*column, kColumnWidth);
+        // A drop on a column's space or an asset row in it moves into the folder it lists;
+        // a Folder's row takes its own drop first. The categories' column lists Assets, which holds none.
+        if (level > 0 && level < crumbs.size()) {
+            accept_drops(*column, crumbs[level].first);
+        }
         strip->getChildren().add(column);
     }
     rows_ = columns.empty() ? std::vector<AssetRow>{} : columns.back();

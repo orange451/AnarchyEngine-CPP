@@ -12,11 +12,11 @@
 
 ## Global Constraints
 
-- Base branch is `dense-views` off a3b0198; the worktree is `.worktrees/dense-views`. Do not `cd` out of it.
+- Base branch is `dense-views` (main merged in at 675033b); the worktree is `.worktrees/dense-views`. Do not `cd` out of it.
 - Both dense structures reserve `DataModel::kMaxInstances` (16384) at startup. No allocation in the per-frame step.
 - The step order over the dense list is unspecified; no test may assert an order.
 - `State::walk` stays — `emit_ancestry` uses it. Scope walks use their own scratch vector.
-- Every task ends with the FULL suite green: `./build/Debug/sandbox.exe` → 0 failures (baseline: 306 cases, 1 skipped).
+- Every task ends with the FULL suite green: `./build/Debug/sandbox.exe` → 0 failures (baseline: 322 cases, 1 skipped).
 - Build with: `cmake --build build --target sandbox --parallel`.
 - Never bare `git stash` (shared stash stack across worktrees).
 
@@ -37,7 +37,7 @@ Spec-implied behaviors no existing test exercises; each line's test is pinned to
 **Files:**
 - Create: `src/engine_core/DenseIdSet.hpp` (header-only)
 - Create: `sandbox/dense_views_tests.cpp`
-- Modify: `CMakeLists.txt:469-474` (add the test file to the `sandbox` executable's source list)
+- Modify: `CMakeLists.txt:488-494` (add the test file to the `sandbox` executable's source list)
 
 **Interfaces:**
 - Consumes: `InstanceId`, `id_slot(id)` from `src/engine_core/types.hpp:19`, `contract_fail` from `src/engine_core/Contract.hpp`.
@@ -134,10 +134,10 @@ TEST_CASE("DenseIdSet clear empties and forgets positions", "[dense]") {
 }
 ```
 
-In `CMakeLists.txt`, add the file to the sandbox target's sources after `sandbox/scene_services_tests.cpp` (line 474):
+In `CMakeLists.txt`, add the file to the sandbox target's sources after `sandbox/game_services_tests.cpp` (line 494):
 
 ```cmake
-    sandbox/scene_services_tests.cpp
+    sandbox/game_services_tests.cpp
     sandbox/dense_views_tests.cpp
 ```
 
@@ -365,14 +365,14 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 `in_game` and `in_workspace` on `Slot`, maintained at every tree-mutation completion point, readable through two new accessors. Nothing consumes them yet.
 
 **Files:**
-- Modify: `src/engine_core/DataModel.hpp` (Slot at :421, accessor decls near `alive` at :~318, private decls)
+- Modify: `src/engine_core/DataModel.hpp` (Slot at :446, accessor decls near `alive` at :320, private decls)
 - Modify: `src/engine_core/DataModelState.hpp` (scope scratch vector)
-- Modify: `src/engine_core/DataModel.cpp` (refresh_scope + apply_scope; hooks in set_parent :1014, detach_links :981, destroy :463; reserve in the root constructor :40)
+- Modify: `src/engine_core/DataModel.cpp` (refresh_scope + apply_scope; hooks in set_parent :1015, detach_links :982, destroy :463; reserve in the root constructor :49)
 - Modify: `src/engine_core/DataModelPlace.cpp` (hook in link_children :215)
 - Test: `sandbox/dense_views_tests.cpp`
 
 **Interfaces:**
-- Consumes: `scene_service("Workspace")` (`DataModel.hpp:141`), `slot()`, sibling links, `current_origin()`.
+- Consumes: `scene_service("Workspace")` (`DataModel.hpp:147`), `slot()`, sibling links, `current_origin()`.
 - Produces: `bool DataModel::in_game(InstanceId) const`, `bool DataModel::in_workspace(InstanceId) const` (false for dead ids); `void refresh_scope(InstanceId)` (private, idempotent); `void apply_scope(InstanceId, bool in_game, bool in_workspace)` (private; Tasks 4 and 5 extend its flip handling). `Slot::in_game`, `Slot::in_workspace`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -484,7 +484,7 @@ Expected: compile FAILURE — `in_game` is not a member of `DataModel`.
 
 - [ ] **Step 3: Implement**
 
-`DataModel.hpp` — in `struct Slot` (:421), after `bool visual_only = false;`:
+`DataModel.hpp` — in `struct Slot` (:446), after `bool visual_only = false;`:
 
 ```cpp
         // Scope: reachable from the root, and under the Workspace service.
@@ -518,7 +518,7 @@ Private declarations, near `link_child`:
     std::vector<InstanceId> scope_walk;
 ```
 
-`DataModel.cpp` — reserve in the root constructor (:40 block, after `step_ids.reserve`):
+`DataModel.cpp` — reserve in the root constructor (:49 block, after `step_ids.reserve`):
 
 ```cpp
     world.scope_walk.reserve(kMaxInstances);
@@ -605,10 +605,10 @@ void DataModel::apply_scope(InstanceId id, bool in_game, bool in_workspace) {
 
 Hooks:
 
-1. `set_parent` (:1014): directly after the `unlink_parent` / `link_child` block (lines 1039-1042, before `record_parent`), add `refresh_scope(id);`.
-2. `detach_links` (:981): inside the child loop, right after the three lines that clear the child's parent and siblings, add `refresh_scope(child);` — the child just left the tree, so its subtree's bits clear. (This also runs for a destroyed instance's orphans via `destroy`, and for `DataModelPlace.cpp:127`.)
+1. `set_parent` (:1015): directly after the `unlink_parent` / `link_child` block (lines 1039-1042, before `record_parent`), add `refresh_scope(id);`.
+2. `detach_links` (:982): inside the child loop, right after the three lines that clear the child's parent and siblings, add `refresh_scope(child);` — the child just left the tree, so its subtree's bits clear. (This also runs for a destroyed instance's orphans via `destroy`, and for `DataModelPlace.cpp:127`.)
 3. `destroy` (:463): where the slot is released (next to `++part->generation`), add `part->in_game = false; part->in_workspace = false;` so a reused slot starts unscoped.
-4. `link_children` (`DataModelPlace.cpp:215`): inside the loop, after `link_child(parent, child);`, add `refresh_scope(child);`. This covers place restore (`:276`, `:278`) and history's sibling reorder (`DataModelHistory.cpp:356`, where it is a cheap no-op).
+4. `link_children` (`DataModelPlace.cpp:215`): inside the loop, after `link_child(parent, child);`, add `refresh_scope(child);`. This covers place restore (`:276`, `:278`) and history's sibling reorder (`DataModelHistory.cpp:398`, where it is a cheap no-op).
 5. Check for any other `link_child(`/`unlink_parent(` callers: `grep -n "link_child(\|unlink_parent(" src/engine_core/*.cpp`. Every caller must be followed by a `refresh_scope` on the moved id (or be inside `set_parent`/`link_children`/`detach_links`, which now handle it). If history's revive path (`DataModelHistory.cpp` around `revive_record`) links through `set_parent` or `link_children` it is covered; if it links some other way, add the same one-line hook there.
 6. `clear_hierarchy` (`DataModelPlace.cpp`, called by the place restore) leaves every slot's bits stale on purpose: restore then either relinks each live instance through `link_children` (which refreshes it, per hook 4) or destroys it (which clears its bits, per hook 3). Add that sentence as a comment on `clear_hierarchy`. The "Stop restores scope" test proves it.
 
@@ -636,9 +636,9 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 Heartbeat iterates a dense list of stepping instances; `step_descendants` and its tree walk die.
 
 **Files:**
-- Modify: `src/engine_core/DataModel.hpp` (`steps()` next to `step()` at :162; replace `void step_descendants(double dt);` at :334 with `void step_instances(double dt);`)
+- Modify: `src/engine_core/DataModel.hpp` (`steps()` next to `step()` at :169; replace `void step_descendants(double dt);` at :346 with `void step_instances(double dt);`)
 - Modify: `src/engine_core/DataModelState.hpp` (step list storage)
-- Modify: `src/engine_core/DataModel.cpp` (list maintenance in `apply_scope` and `destroy`; `step_instances`; delete `step_descendants` at :657; reserves at :40)
+- Modify: `src/engine_core/DataModel.cpp` (list maintenance in `apply_scope` and `destroy`; `step_instances`; delete `step_descendants` at :658; reserves at :49)
 - Modify: `src/engine_instances/TestTriangle.hpp` (`steps()` override)
 - Modify: `src/engine_core/Engine.cpp:299` (call site)
 - Test: `sandbox/dense_views_tests.cpp`
@@ -717,8 +717,8 @@ Expected: compile FAILURE — `step_instances` is not a member.
 
 `DataModel.hpp`:
 
-- Next to `step()` (:162): `// True for a class Heartbeat steps. Read when scope changes, never per frame.` / `virtual bool steps() const { return false; }`
-- Replace `void step_descendants(double dt);` (:334) with:
+- Next to `step()` (:169): `// True for a class Heartbeat steps. Read when scope changes, never per frame.` / `virtual bool steps() const { return false; }`
+- Replace `void step_descendants(double dt);` (:346) with:
 
 ```cpp
     // Heartbeat. Steps the dense list of stepping instances under game, in
@@ -745,7 +745,7 @@ Expected: compile FAILURE — `step_instances` is not a member.
 
 `DataModel.cpp`:
 
-- Constructor (:40 block): `world.step_set.reserve(kMaxInstances); world.steppers.reserve(kMaxInstances);`
+- Constructor (:49 block): `world.step_set.reserve(kMaxInstances); world.steppers.reserve(kMaxInstances);`
 - List maintenance:
 
 ```cpp
@@ -783,7 +783,7 @@ std::size_t DataModel::stepper_count() const { return state_->step_set.size(); }
 ```
 
 - In `destroy` (:463), next to the bit clearing added in Task 3: `step_list_erase(id);`
-- Replace `step_descendants` (:657) wholesale:
+- Replace `step_descendants` (:658) wholesale:
 
 ```cpp
 void DataModel::step_instances(double dt) {
@@ -835,7 +835,7 @@ A row exists iff `alive && GameObject && in_workspace`, kept current by `VisualF
 - Test: `sandbox/dense_views_tests.cpp`
 
 **Interfaces:**
-- Consumes: `apply_scope`'s flip point (Task 3/4 shape), `in_workspace(id)` (Task 3), `note(id, fields, origin)` (`DataModel.cpp:258`), pump internals on `base_ids_` (Task 2).
+- Consumes: `apply_scope`'s flip point (Task 3/4 shape), `in_workspace(id)` (Task 3), `note(id, fields, origin)` (`DataModel.cpp:259`), pump internals on `base_ids_` (Task 2).
 - Produces: `VisualField::Ancestry = 1u << 4`. Membership semantics every later renderer relies on.
 
 - [ ] **Step 1: Write the failing tests**

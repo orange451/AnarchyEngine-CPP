@@ -241,6 +241,13 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
     tree_->setOnSelectedItemsChanged([this] { tree_selected(); });
     if (host_.move) {
         tree_->setOnItemsDropped([this](const jadefx::TreeDrop& drop) { dropped(drop); });
+        // The grabbed row's icon follows the pointer.
+        tree_->setDragView(
+            [](jadefx::TreeItem& grabbed) -> std::shared_ptr<jadefx::Node> {
+                const auto* icon = dynamic_cast<const jadefx::ImageView*>(grabbed.getGraphic().get());
+                return drag_icon(icon != nullptr ? icon->getImage() : nullptr);
+            },
+            kDragIconSize * 0.5, kDragIconSize * 0.5);
     }
     // Row clicks bubble here after the row has selected itself.
     tree_->setOnMouseClicked([this](const jadefx::MouseEvent& event) { clicked(event); });

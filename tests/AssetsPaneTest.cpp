@@ -11,6 +11,7 @@
 #include "jadefx/jadefx.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -484,6 +485,32 @@ void refused_drop_says_why() {
     Expect(rig.moves == 1 && rig.game.parent(rig.brick) == rig.walls, "a drop on a Folder moves into it");
 }
 
+// A dragged asset's icon follows the pointer until the release.
+void drag_shows_icon() {
+    Rig rig;
+    rig.pane->openFolder(rig.textures);
+    rig.frame(0);
+    jadefx::Node* from = rig.pane->itemNode(rig.brick);
+    Expect(from != nullptr, "Brick has a tile");
+    if (from == nullptr) {
+        return;
+    }
+    const double x = from->getAbsoluteX() + from->getWidth() * 0.5;
+    const double y = from->getAbsoluteY() + from->getHeight() * 0.5;
+    rig.scene->noteButton(0, true, x, y);
+    rig.scene->noteMove(x + 40, y + 30);
+    rig.frame(0.05);
+    rig.scene->noteMove(x + 40, y + 30);
+    jadefx::Node* icon = rig.scene->getElementById("instance-drag-icon");
+    Expect(icon != nullptr && rig.scene->isPopupShowing(icon), "a drag shows the asset's icon");
+    Expect(icon != nullptr && std::abs(icon->getAbsoluteX() + icon->getWidth() * 0.5 - (x + 40)) < 1 &&
+               std::abs(icon->getAbsoluteY() + icon->getHeight() * 0.5 - (y + 30)) < 1,
+           "the icon is centered on the pointer");
+    rig.scene->noteButton(0, false, x + 40, y + 30);
+    rig.frame(0.1);
+    Expect(rig.scene->getElementById("instance-drag-icon") == nullptr, "the release takes the icon away");
+}
+
 // In Columns, an asset in a Folder's column drags back out into an earlier column.
 void columns_drop_into_earlier_column() {
     Rig rig("columns");
@@ -721,6 +748,7 @@ int main() {
     rename_delete_cut_paste();
     refused_drop_says_why();
     columns_drop_into_earlier_column();
+    drag_shows_icon();
     search_filters();
     pane_follows_tree();
     insert_through_pane();

@@ -102,4 +102,16 @@ std::shared_ptr<jadefx::ImageView> icon_graphic(const std::string& filename) {
     return view;
 }
 
+std::shared_ptr<jadefx::ImageView> drag_icon(std::shared_ptr<jadefx::Image> image) {
+    if (!image) {
+        return nullptr;
+    }
+    auto view = jadefx::make<jadefx::ImageView>(std::move(image));
+    view->setElementId("instance-drag-icon");
+    view->setPrefSize(kDragIconSize, kDragIconSize);
+    view->setMinSize(kDragIconSize, kDragIconSize);
+    view->setMaxSize(kDragIconSize, kDragIconSize);
+    return view;
+}
+
 }  // namespace ide

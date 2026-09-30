@@ -1373,7 +1373,8 @@ void IdeAssets::add_item(const std::shared_ptr<jadefx::Node>& node, const AssetR
         [this, row](const jadefx::MouseEvent& event) { show_item_menu(row, event.x, event.y); });
     jadefx::Node* source = node.get();
     const engine_core::InstanceId id = row.id;
-    node->setOnDragDetected([this, source, id](const jadefx::MouseEvent&) {
+    const std::string class_name = row.class_name;
+    node->setOnDragDetected([this, source, id, class_name](const jadefx::MouseEvent&) {
         finish_rename(false);
         slow_pending_ = false;
         click_id_ = 0;
@@ -1386,6 +1387,9 @@ void IdeAssets::add_item(const std::shared_ptr<jadefx::Node>& node, const AssetR
         if (jadefx::Dragboard* board = source->startDragAndDrop(jadefx::TransferMode::Move | jadefx::TransferMode::Copy |
                                                                jadefx::TransferMode::Link)) {
             board->put(kInstanceDragFormat, instance_drag_text(ids));
+            const std::shared_ptr<jadefx::ImageView> icon = icon_view(class_name);
+            board->setDragView(drag_icon(icon ? icon->getImage() : nullptr), kDragIconSize * 0.5,
+                               kDragIconSize * 0.5);
         }
     });
     if (row.opens) {

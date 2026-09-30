@@ -1,464 +1,416 @@
-# Dense Views Implementation Plan
+# Dense Views Implementation Plan (flecs)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Heartbeat steps a dense list of stepping instances instead of walking the tree, and the render snapshot holds a row only for live GameObjects under Workspace, kept current by scope bits and a new Ancestry invalidation.
+**Goal:** GameObject's spatial data lives in flecs components; Heartbeat stepping and physics are flecs queries; the render snapshot holds a row only for live GameObjects under Workspace, kept current by scope tags and an `Ancestry` invalidation.
 
-**Architecture:** Three primitives — a `DenseIdSet` (packed ids + slot→position map), `in_game`/`in_workspace` bits on `Slot` maintained at the tree-mutation completion points, and a `VisualField::Ancestry` invalidation — composed by two consumers with inlined membership tests. No view registry.
+**Architecture:** Every live instance owns a flecs entity (issued with its slot, deleted with it). Components (`Transform`, `ColorRgb`, `ecs::Size`, `ecs::Velocity`, `ecs::Instance`) and tags (`ecs::InGame`, `ecs::InWorkspace`, `ecs::Steps`, `ecs::Simulated`, `ecs::VisualOnly`) replace GameObject's members and `Slot`'s flags. Hot paths call flecs' C API with ids cached per world. The pump stays incremental on `DenseIdSet`.
 
-**Tech Stack:** C++17, MSVC (Debug config: `./build/Debug/sandbox.exe`), CMake, Catch2 v3 (sandbox target).
+**Tech Stack:** C++17, MSVC 19.23 (Debug config: `./build/Debug/sandbox.exe`), CMake 3.16, flecs v4.1.6, Catch2 v3.
 
-**Spec:** `docs/superpowers/specs/2026-09-29-dense-views-design.md`
+**Spec:** `docs/superpowers/specs/2026-09-29-dense-views-design.md` (revised 2026-09-30 for flecs)
 
 ## Global Constraints
 
-- Base branch is `dense-views` (main merged in at 675033b); the worktree is `.worktrees/dense-views`. Do not `cd` out of it.
-- Both dense structures reserve `DataModel::kMaxInstances` (16384) at startup. No allocation in the per-frame step.
-- The step order over the dense list is unspecified; no test may assert an order.
-- `State::walk` stays — `emit_ancestry` uses it. Scope walks use their own scratch vector.
-- Every task ends with the FULL suite green: `./build/Debug/sandbox.exe` → 0 failures (baseline: 322 cases, 1 skipped).
-- Build with: `cmake --build build --target sandbox --parallel`.
-- Never bare `git stash` (shared stash stack across worktrees).
+- Worktree `.worktrees/dense-views`, branch `dense-views`. Do not `cd` out of it. Never bare `git stash`.
+- flecs v4.1.6, `distr/flecs.h` SHA256 `526036a5a41678e2a43a3cb835e9eaa70fd1993868b1978950c0d275752f69b1`, `distr/flecs.c` SHA256 `6005392eb13c0f3c7abdecb2f85271e50934f63919afebf0bbe85f6dfc7320d6`.
+- Public flecs definitions: `FLECS_CPP_NO_ENUM_REFLECTION FLECS_CUSTOM_BUILD FLECS_CPP FLECS_LOG FLECS_OS_API_IMPL`, plus `FLECS_NDEBUG` (or `FLECS_DEBUG` when `ENGINE_FLECS_CHECKS=ON`). Never define `flecs_STATIC`.
+- `flecs.h` is included only by `src/engine_core/Ecs.hpp`, inside `#pragma warning(push, 0)`/`pop`. Only `engine_core` and `engine_instances` sources include `Ecs.hpp`; `DataModel.hpp` does not.
+- The C++ flecs API is for setup (world, registration, query building). Per-access and per-frame code uses the C API with `EcsIds`.
+- No flecs structural change (add/remove component or tag, create/delete entity) inside a running query iteration.
+- The world is touched only under the DataModel lock or on the gameplay thread before threads start.
+- Engine code builds with no new warnings at `/W4`.
+- Every task ends with the FULL suite green: `./build/Debug/sandbox.exe` → 0 failures (baseline after Task 2: 326 cases, 1 skipped).
+- Build with `cmake --build build --target sandbox --parallel`. After restoring a file from a copy, `touch` it (MSBuild uses timestamps).
+- Step and physics order is unspecified; no test asserts an order.
 
 ## Review Focus
 
-Spec-implied behaviors no existing test exercises; each line's test is pinned to the owning task.
-
-1. A GameObject recolored while in Storage must arrive in the snapshot complete when moved into Workspace — Task 5, "a row arrives complete".
-2. `destroy_tree` of a Folder subtree under Workspace must remove every descendant's row and stepper — Task 5, "destroy_tree clears rows".
-3. Reparenting to `kNoParent` (leaving the tree) must remove the row and stop stepping — Task 4 "a triangle stops when unparented" and Task 5 "leaving the tree removes the row".
-4. Overflow resync must land on the same membership as the incremental path (Storage objects excluded) — Task 5, "resync keeps Workspace membership".
-5. A script's `Instance.new("GameObject")` parented into Workspace must render — today it silently never enters the snapshot — Task 6, "Instance.new renders".
+1. Undo of a destroy, and Stop, recreate the entity with the right components and tags (Simulated, VisualOnly, scope) — Task 4 "undo and Stop keep spatial values and flags", Task 5 "destroy clears scope; undo restores it" and "Stop restores scope".
+2. A stale `GameObject&` held across its destroy reads zero, never another entity's data — Task 4 "a destroyed GameObject reads zero".
+3. A GameObject recolored while in Storage arrives complete when moved into Workspace — Task 7 "a row arrives complete".
+4. `destroy_tree` of a Folder subtree under Workspace removes every row and stepper — Task 7 "destroy_tree clears rows".
+5. `Instance.new("GameObject")` parented into Workspace renders — Task 7 "Instance.new renders".
 
 ---
 
-### Task 1: DenseIdSet
+### Task 1: DenseIdSet — DONE (e7fb497)
+
+`src/engine_core/DenseIdSet.hpp`, `sandbox/dense_views_tests.cpp` `[dense]` tests. See git.
+
+### Task 2: SnapshotPump on DenseIdSet — DONE (87f92a2; T4 race fix c5fe2be)
+
+`base_ids_` replaced `base_index_`/`remember`. See git and the ledger ruling.
+
+---
+
+### Task 3: Flecs dependency, world, and an entity per instance
 
 **Files:**
-- Create: `src/engine_core/DenseIdSet.hpp` (header-only)
-- Create: `sandbox/dense_views_tests.cpp`
-- Modify: `CMakeLists.txt:488-494` (add the test file to the `sandbox` executable's source list)
+- Create: `cmake/flecs/CMakeLists.txt`
+- Create: `src/engine_core/Ecs.hpp`, `src/engine_core/Ecs.cpp`
+- Modify: `CMakeLists.txt` (FetchContent after stb_image_write; `add_subdirectory`; `Ecs.cpp` in `engine_core`; link `flecs` PRIVATE into `engine_core` and `engine_instances`; option)
+- Modify: `src/engine_core/DataModel.hpp` (Slot::entity; `entity_count()`; private ecs accessors; forward decls)
+- Modify: `src/engine_core/DataModelState.hpp` (world + ids)
+- Modify: `src/engine_core/DataModel.cpp` (root ctor; `spawn`; `release_to_pool`; accessors)
+- Modify: `src/engine_core/DataModelPlace.cpp` (`adopt_slot`)
+- Test: `sandbox/dense_views_tests.cpp`
 
 **Interfaces:**
-- Consumes: `InstanceId`, `id_slot(id)` from `src/engine_core/types.hpp:19`, `contract_fail` from `src/engine_core/Contract.hpp`.
-- Produces: `class engine_core::DenseIdSet` with `void reserve(std::size_t slots)`, `std::size_t size() const`, `const std::vector<InstanceId>& ids() const`, `bool contains(InstanceId) const`, `int position(InstanceId) const` (-1 when absent), `bool insert(InstanceId)` (false when present, `contract_fail` when full), `int erase(InstanceId, InstanceId* moved = nullptr)` (vacated position or -1; `*moved` is the id swapped into that position, 0 when none), `void clear()`.
+- Produces: `namespace engine_core::ecs { struct Size{float x=1,y=1,z=1;}; struct Velocity{float x=0,y=0,z=0;}; struct Instance{InstanceId id=0;}; struct InGame{}; struct InWorkspace{}; struct Steps{}; struct Simulated{}; struct VisualOnly{}; }`, `struct engine_core::EcsIds { ecs_id_t transform, color, size, velocity, instance, in_game, in_workspace, steps, simulated, visual_only; }`, `EcsIds register_ecs(flecs::world&)`. `Slot::entity` (`std::uint64_t`, 0 = none). Private `DataModel`: `ecs_world_t* ecs_world() const`, `const EcsIds& ecs_ids() const`, `std::uint64_t entity_of(InstanceId) const` (0 when dead), `void issue_entity(Slot&, InstanceId)`. Public: `std::size_t entity_count() const`.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Failing test**
 
-Create `sandbox/dense_views_tests.cpp`:
+Append to `sandbox/dense_views_tests.cpp`:
 
 ```cpp
-// Dense views: DenseIdSet, scope bits, the step list, and snapshot membership.
-
-#include "support.hpp"
-
-#include "DenseIdSet.hpp"
-
-#include <catch2/catch_test_macros.hpp>
-
-namespace {
-
-engine_core::InstanceId test_id(std::uint32_t generation, std::uint32_t slot) {
-    return engine_core::make_instance_id(generation, slot);
-}
-
-}  // namespace
-
-TEST_CASE("DenseIdSet inserts, finds, and rejects duplicates", "[dense]") {
-    engine_core::DenseIdSet set;
-    set.reserve(engine_core::DataModel::kMaxInstances);
-    const engine_core::InstanceId a = test_id(1, 5);
-    const engine_core::InstanceId b = test_id(1, 9);
-    REQUIRE(set.size() == 0);
-    REQUIRE_FALSE(set.contains(a));
-    REQUIRE(set.position(a) == -1);
-    REQUIRE(set.insert(a));
-    REQUIRE(set.insert(b));
-    REQUIRE_FALSE(set.insert(a));
-    REQUIRE(set.size() == 2);
-    REQUIRE(set.contains(a));
-    REQUIRE(set.position(a) == 0);
-    REQUIRE(set.position(b) == 1);
-    REQUIRE(set.ids()[0] == a);
-    REQUIRE(set.ids()[1] == b);
-}
-
-TEST_CASE("DenseIdSet erase swaps the last id in and reports it", "[dense]") {
-    engine_core::DenseIdSet set;
-    set.reserve(engine_core::DataModel::kMaxInstances);
-    const engine_core::InstanceId a = test_id(1, 1);
-    const engine_core::InstanceId b = test_id(1, 2);
-    const engine_core::InstanceId c = test_id(1, 3);
-    set.insert(a);
-    set.insert(b);
-    set.insert(c);
-    engine_core::InstanceId moved = 123;
-    REQUIRE(set.erase(a, &moved) == 0);
-    REQUIRE(moved == c);
-    REQUIRE(set.position(c) == 0);
-    REQUIRE(set.position(b) == 1);
-    REQUIRE(set.size() == 2);
-    // Erasing the last element swaps nothing.
-    REQUIRE(set.erase(b, &moved) == 1);
-    REQUIRE(moved == 0);
-    // Erasing an absent id reports -1 and no swap.
-    REQUIRE(set.erase(a, &moved) == -1);
-    REQUIRE(moved == 0);
-    REQUIRE(set.size() == 1);
-}
-
-TEST_CASE("DenseIdSet misses a stale generation on a reused slot", "[dense]") {
-    engine_core::DenseIdSet set;
-    set.reserve(engine_core::DataModel::kMaxInstances);
-    const engine_core::InstanceId old_id = test_id(1, 7);
-    const engine_core::InstanceId new_id = test_id(2, 7);
-    set.insert(old_id);
-    REQUIRE_FALSE(set.contains(new_id));
-    REQUIRE(set.position(new_id) == -1);
-    set.erase(old_id);
-    set.insert(new_id);
-    REQUIRE_FALSE(set.contains(old_id));
-    REQUIRE(set.contains(new_id));
-}
-
-TEST_CASE("DenseIdSet clear empties and forgets positions", "[dense]") {
-    engine_core::DenseIdSet set;
-    set.reserve(engine_core::DataModel::kMaxInstances);
-    const engine_core::InstanceId a = test_id(1, 4);
-    set.insert(a);
-    set.clear();
-    REQUIRE(set.size() == 0);
-    REQUIRE_FALSE(set.contains(a));
-    REQUIRE(set.insert(a));
-    REQUIRE(set.position(a) == 0);
+TEST_CASE("every live instance has one entity", "[dense][entity]") {
+    SimRole role;
+    engine_core::Game game;
+    const std::size_t services = game.entity_count();
+    REQUIRE(services > 0);  // the service tree already has entities
+    engine_core::DataModel& folder = game.create();
+    engine_core::GameObject& part = game.create_game_object();
+    REQUIRE(game.entity_count() == services + 2);
+    game.set_parent(part.id(), folder.id());
+    game.destroy(folder.id());  // orphans part, deletes folder's entity
+    REQUIRE(game.entity_count() == services + 1);
+    game.destroy(part.id());
+    REQUIRE(game.entity_count() == services);
+    game.history().undo();  // revives part
+    REQUIRE(game.entity_count() == services + 1);
 }
 ```
 
-In `CMakeLists.txt`, add the file to the sandbox target's sources after `sandbox/game_services_tests.cpp` (line 494):
+(Check `sandbox/history_tests.cpp` for whether a freshly built `Game` records history for these edits; if the first undo revives something else, undo until `game.alive(part_id)` and assert the count then.)
+
+- [ ] **Step 2: Run → compile FAIL** (`entity_count` missing).
+
+- [ ] **Step 3: CMake**
+
+`cmake/flecs/CMakeLists.txt`:
 
 ```cmake
-    sandbox/game_services_tests.cpp
-    sandbox/dense_views_tests.cpp
+# flecs builds in its own directory so its Debug C flags can differ from the
+# engine's: /RTC1 cannot combine with /O2, and flecs is optimized in every
+# configuration (a Debug entity read is ~14 ns instead of ~340 ns).
+string(REPLACE "/RTC1" "" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+string(REPLACE "/Od" "" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+add_library(flecs STATIC "${FLECS_SOURCE_DIR}/flecs.c")
+target_include_directories(flecs PUBLIC "${FLECS_SOURCE_DIR}")
+target_compile_definitions(flecs PUBLIC
+    FLECS_CPP_NO_ENUM_REFLECTION FLECS_CUSTOM_BUILD FLECS_CPP FLECS_LOG FLECS_OS_API_IMPL)
+if(ENGINE_FLECS_CHECKS)
+    target_compile_definitions(flecs PUBLIC FLECS_DEBUG)
+else()
+    target_compile_definitions(flecs PUBLIC FLECS_NDEBUG)
+endif()
+if(MSVC)
+    target_compile_options(flecs PRIVATE $<$<CONFIG:Debug>:/O2>)
+endif()
 ```
 
-- [ ] **Step 2: Run to verify the tests fail**
+Root `CMakeLists.txt`, after the stb_image_write block, two `FetchContent_Declare` blocks in the httplib style (`URL`, `URL_HASH SHA256=...`, `DOWNLOAD_NO_EXTRACT TRUE`, `DOWNLOAD_DIR "${FETCHCONTENT_BASE_DIR}/flecs-src"` for both so the two files share a directory), names `flecs_header` and `flecs_source`, URLs `https://raw.githubusercontent.com/SanderMertens/flecs/v4.1.6/distr/flecs.h` and `.../flecs.c`, populated the same way; then:
 
-Run: `cmake --build build --target sandbox --parallel 2>&1 | tail -5`
-Expected: compile FAILURE — `DenseIdSet.hpp: No such file or directory`.
+```cmake
+option(ENGINE_FLECS_CHECKS "Build flecs with its debug checks (slower entity access)" OFF)
+set(FLECS_SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/flecs-src")
+add_subdirectory(cmake/flecs "${CMAKE_BINARY_DIR}/flecs")
+```
 
-- [ ] **Step 3: Write the implementation**
+Add `src/engine_core/Ecs.cpp` to `engine_core`'s sources, and after the package links: `target_link_libraries(engine_core PRIVATE flecs)` and `target_link_libraries(engine_instances PRIVATE flecs)`.
 
-Create `src/engine_core/DenseIdSet.hpp`:
+- [ ] **Step 4: Ecs.hpp / Ecs.cpp**
+
+`src/engine_core/Ecs.hpp`:
 
 ```cpp
 #pragma once
 
-#include "Contract.hpp"
+// The engine's one include of flecs. engine_core and engine_instances only:
+// flecs ids never leave them. Hot paths use the C API with EcsIds; the C++
+// API is for setup, since its inline wrappers are slow in Debug builds.
+
+#pragma warning(push, 0)
+#include "flecs.h"
+#pragma warning(pop)
+
+#include "Color.hpp"
+#include "Transform.hpp"
 #include "types.hpp"
 
-#include <cstddef>
-#include <vector>
-
 namespace engine_core {
+namespace ecs {
 
-// Dense set of live instance ids. ids() is packed and unordered; contains,
-// position, insert, and erase are O(1) through a per-slot position map keyed
-// by id_slot. A stale generation misses because the mapped entry no longer
-// holds the queried id. erase is swap-and-pop and reports the swap, so an
-// owner keeping a parallel payload array mirrors it. Not thread-safe: the
-// owner touches it under whatever already guards its writes.
-class DenseIdSet {
-public:
-    // Sizes the position map and the dense array. Call once, before use;
-    // nothing here allocates afterwards.
-    void reserve(std::size_t slots) {
-        index_.assign(slots, -1);
-        dense_.reserve(slots);
-    }
-
-    std::size_t size() const { return dense_.size(); }
-    const std::vector<InstanceId>& ids() const { return dense_; }
-    bool contains(InstanceId id) const { return position(id) >= 0; }
-
-    // Position of id in ids(), or -1 when absent.
-    int position(InstanceId id) const {
-        const std::uint32_t slot = id_slot(id);
-        if (slot >= index_.size()) {
-            return -1;
-        }
-        const int pos = index_[slot];
-        if (pos < 0 || dense_[static_cast<std::size_t>(pos)] != id) {
-            return -1;
-        }
-        return pos;
-    }
-
-    // False when id is already present. A full set fails the contract.
-    bool insert(InstanceId id) {
-        if (position(id) >= 0) {
-            return false;
-        }
-        const std::uint32_t slot = id_slot(id);
-        if (slot >= index_.size() || dense_.size() == dense_.capacity()) {
-            contract_fail("DenseIdSet capacity exhausted");
-        }
-        index_[slot] = static_cast<int>(dense_.size());
-        dense_.push_back(id);
-        return true;
-    }
-
-    // Removes id. Returns the position it vacated, or -1 when absent. When
-    // another id was swapped into that position, *moved names it, else 0.
-    int erase(InstanceId id, InstanceId* moved = nullptr) {
-        if (moved != nullptr) {
-            *moved = 0;
-        }
-        const int pos = position(id);
-        if (pos < 0) {
-            return -1;
-        }
-        const InstanceId last = dense_.back();
-        dense_[static_cast<std::size_t>(pos)] = last;
-        dense_.pop_back();
-        index_[id_slot(id)] = -1;
-        if (last != id) {
-            index_[id_slot(last)] = pos;
-            if (moved != nullptr) {
-                *moved = last;
-            }
-        }
-        return pos;
-    }
-
-    void clear() {
-        for (const InstanceId id : dense_) {
-            index_[id_slot(id)] = -1;
-        }
-        dense_.clear();
-    }
-
-private:
-    std::vector<InstanceId> dense_;
-    // id_slot -> position in dense_, -1 when absent.
-    std::vector<int> index_;
+// GameObject's spatial data. Transform and ColorRgb are components as they are.
+struct Size {
+    float x = 1.f;
+    float y = 1.f;
+    float z = 1.f;
 };
+struct Velocity {
+    float x = 0.f;
+    float y = 0.f;
+    float z = 0.f;
+};
+// The instance an entity belongs to.
+struct Instance {
+    InstanceId id = 0;
+};
+// Tags.
+struct InGame {};
+struct InWorkspace {};
+struct Steps {};
+struct Simulated {};
+struct VisualOnly {};
+
+}  // namespace ecs
+
+struct EcsIds {
+    ecs_id_t transform = 0;
+    ecs_id_t color = 0;
+    ecs_id_t size = 0;
+    ecs_id_t velocity = 0;
+    ecs_id_t instance = 0;
+    ecs_id_t in_game = 0;
+    ecs_id_t in_workspace = 0;
+    ecs_id_t steps = 0;
+    ecs_id_t simulated = 0;
+    ecs_id_t visual_only = 0;
+};
+
+// Registers every component and tag with world and returns their ids.
+EcsIds register_ecs(flecs::world& world);
+
+// A component of e, or null when e is 0 or has none.
+template <typename T>
+const T* ecs_read(ecs_world_t* world, ecs_entity_t e, ecs_id_t id) {
+    return e == 0 ? nullptr : static_cast<const T*>(ecs_get_id(world, e, id));
+}
+
+template <typename T>
+void ecs_write(ecs_world_t* world, ecs_entity_t e, ecs_id_t id, const T& value) {
+    ecs_set_id(world, e, id, sizeof(T), &value);
+}
+
+inline bool ecs_tag(ecs_world_t* world, ecs_entity_t e, ecs_id_t tag) {
+    return e != 0 && ecs_has_id(world, e, tag);
+}
+
+inline void ecs_set_tag(ecs_world_t* world, ecs_entity_t e, ecs_id_t tag, bool on) {
+    if (on) {
+        ecs_add_id(world, e, tag);
+    } else {
+        ecs_remove_id(world, e, tag);
+    }
+}
 
 }  // namespace engine_core
 ```
 
-Note: `contract_fail` — confirm the exact header (`Contract.hpp`) and namespace by looking at how `src/engine_core/InvalidationQueue.cpp` or `SnapshotPump.cpp` fails; match it.
+`src/engine_core/Ecs.cpp`: `register_ecs` calls `world.component<T>().id()` for each of the ten types into an `EcsIds`. Verify `ecs_set_id`'s v4 signature (`world, entity, id, size, ptr`) against `flecs.h` before relying on it.
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [ ] **Step 5: DataModel wiring**
 
-Run: `cmake --build build --target sandbox --parallel 2>&1 | tail -3 && ./build/Debug/sandbox.exe "[dense]" 2>&1 | tail -3`
-Expected: all `[dense]` assertions pass.
+`DataModel.hpp`: before `namespace engine_core {` add `struct ecs_world_t;`; inside, forward-declare `struct EcsIds;`. `Slot` gains, after `body`: `// This instance's flecs entity (engine_core only). 0 when the slot is free.` / `std::uint64_t entity = 0;`. Public, next to `room_left`: `// Live flecs entities that belong to instances. Tests and diagnostics.` / `std::size_t entity_count() const;`. Private: the four members listed in Interfaces.
 
-- [ ] **Step 5: Run the full suite, then commit**
+`DataModelState.hpp`: `#include "Ecs.hpp"`; as the FIRST members of `State` (destroyed last):
 
-Run: `./build/Debug/sandbox.exe 2>&1 | tail -3`
-Expected: 0 failures.
-
-```bash
-git add src/engine_core/DenseIdSet.hpp sandbox/dense_views_tests.cpp CMakeLists.txt
-git commit -m "Add DenseIdSet, the dense id primitive for views
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+```cpp
+    // Every instance's components and tags. Declared first so it outlives
+    // everything that might reach it during teardown.
+    flecs::world ecs;
+    EcsIds ecs_ids;
 ```
+
+`DataModel.cpp`:
+- Root ctor: `world.ecs_ids = register_ecs(world.ecs);` before anything else.
+- `issue_entity(Slot& part, InstanceId id)`: `ecs_world_t* w = state_->ecs.c_ptr(); part.entity = ecs_new(w); const ecs::Instance tag{id}; ecs_write(w, part.entity, state_->ecs_ids.instance, tag);` — verify `ecs_new(world)` is v4's plain-entity constructor.
+- `spawn`: call `issue_entity(world.slots[index], id)` between `allocate()` and `pooled_object(...)`.
+- `release_to_pool`: after `on_release()`, `if (part.entity != 0) { ecs_delete(state_->ecs.c_ptr(), part.entity); part.entity = 0; }`.
+- `entity_of(id)`: `const Slot* part = slot(id); return part == nullptr ? 0 : part->entity;`
+- `ecs_world()`: `return state_->ecs.c_ptr();` (const_cast as needed); `ecs_ids()`: `return state_->ecs_ids;`
+- `entity_count()`: `return static_cast<std::size_t>(ecs_count_id(ecs_world(), state_->ecs_ids.instance));`
+
+`DataModelPlace.cpp` `adopt_slot`: `issue_entity(part, id);` right before `pooled_object(...)`.
+
+- [ ] **Step 6: Reconfigure, build, run `[entity]` → PASS; full suite → 0 failures; check no new `/W4` warnings in engine sources** (compare `warning C` lines outside `_deps` with before).
+
+- [ ] **Step 7: Commit** "Give every instance a flecs entity".
 
 ---
 
-### Task 2: SnapshotPump on DenseIdSet
+### Task 4: GameObject's fields into components; Simulated and VisualOnly tags
 
-Behavior-neutral refactor: replace the pump's hand-rolled `base_index_` / `remember` / `erase_base` with a `DenseIdSet` mirroring `base_.instances`. No test changes; the existing suite is the check.
-
-**Files:**
-- Modify: `src/engine_core/SnapshotPump.hpp` (members and private helpers)
-- Modify: `src/engine_core/SnapshotPump.cpp` (reserve, erase_base, apply_live, resync, apply_overrides, base_find)
-
-**Interfaces:**
-- Consumes: `DenseIdSet` from Task 1.
-- Produces: nothing new; the pump's public API is unchanged. Task 5 relies on the private shape: `DenseIdSet base_ids_` mirrored index-for-index by `base_.instances`.
-
-- [ ] **Step 1: Replace the members**
-
-In `SnapshotPump.hpp`: add `#include "DenseIdSet.hpp"`; delete the members `std::vector<int> base_index_;` and the declarations `void remember(InstanceId id, int position);` and `void erase_base(InstanceId id);` — keep `erase_base` (reimplemented) but delete `remember`. Add `DenseIdSet base_ids_;`.
-
-- [ ] **Step 2: Rewrite the implementation**
-
-In `SnapshotPump.cpp`:
-
-`reserve` (sizes `base_index_` today): replace the `base_index_` sizing with `base_ids_.reserve(DataModel::kMaxInstances);` (keep the existing `instances` reserves).
-
-`base_find`:
-
-```cpp
-VisualInstance* SnapshotPump::base_find(InstanceId id) {
-    const int pos = base_ids_.position(id);
-    return pos < 0 ? nullptr : &base_.instances[static_cast<std::size_t>(pos)];
-}
-```
-
-`erase_base` (delete `remember` entirely):
-
-```cpp
-void SnapshotPump::erase_base(InstanceId id) {
-    const int pos = base_ids_.erase(id);
-    if (pos < 0) {
-        return;
-    }
-    // DenseIdSet swapped its last id into pos; mirror that on the rows.
-    base_.instances[static_cast<std::size_t>(pos)] = base_.instances.back();
-    base_.instances.pop_back();
-}
-```
-
-`apply_live` insertion path (currently `remember(...)` + `push_back`):
-
-```cpp
-    VisualInstance* inst = base_find(change.id);
-    if (inst == nullptr) {
-        if (base_.instances.size() == base_.instances.capacity()) {
-            contract_fail("snapshot instance capacity exhausted");
-        }
-        base_ids_.insert(change.id);
-        base_.instances.push_back(VisualInstance{});
-        inst = &base_.instances.back();
-        inst->id = change.id;
-    }
-```
-
-`resync`: replace `base_.instances.clear(); std::fill(base_index_...)` with `base_.instances.clear(); base_ids_.clear();` and replace `remember(object.id(), ...)` before each `push_back` with `base_ids_.insert(object.id());`.
-
-`apply_overrides`: replace the `id_slot`/`base_index_` lookup with:
-
-```cpp
-    for (const SnapshotOverride& override : overrides_) {
-        const int position = base_ids_.position(override.id);
-        if (position < 0 || static_cast<std::size_t>(position) >= dst.instances.size()) {
-            continue;
-        }
-        VisualInstance& inst = dst.instances[static_cast<std::size_t>(position)];
-        // ... rest unchanged (the inst.id != override.id guard can stay; it is
-        // now redundant but harmless) ...
-```
-
-If `std::fill`/`<algorithm>` becomes unused, drop the include.
-
-- [ ] **Step 3: Build and run the full suite**
-
-Run: `cmake --build build --target sandbox --parallel 2>&1 | tail -3 && ./build/Debug/sandbox.exe 2>&1 | tail -3`
-Expected: 0 failures — this refactor must not change behavior. Pay attention to `[T4]`, `[T9]`, and any test using `pump().find`.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add src/engine_core/SnapshotPump.hpp src/engine_core/SnapshotPump.cpp
-git commit -m "Refactor SnapshotPump onto DenseIdSet
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
-```
-
----
-
-### Task 3: Scope bits
-
-`in_game` and `in_workspace` on `Slot`, maintained at every tree-mutation completion point, readable through two new accessors. Nothing consumes them yet.
+No behavior change: the existing suite is the main check. Two new tests pin the edges.
 
 **Files:**
-- Modify: `src/engine_core/DataModel.hpp` (Slot at :446, accessor decls near `alive` at :320, private decls)
-- Modify: `src/engine_core/DataModelState.hpp` (scope scratch vector)
-- Modify: `src/engine_core/DataModel.cpp` (refresh_scope + apply_scope; hooks in set_parent :1015, detach_links :982, destroy :463; reserve in the root constructor :49)
-- Modify: `src/engine_core/DataModelPlace.cpp` (hook in link_children :215)
+- Modify: `src/engine_instances/GameObject.hpp/.cpp`
+- Modify: `src/engine_core/DataModel.hpp` (delete `Slot::simulated`, `Slot::visual_only`)
+- Modify: `src/engine_core/DataModel.cpp` (`authorize`, `allocate`, `apply_transform`, `apply_color`, `set_simulated`, `set_visual_only`, `simulated()`, `visual_only()`, `integrate_simulated`, the property-bag `Simulated`/`VisualOnly` block ~:1587)
+- Modify: `src/engine_core/DataModelPlace.cpp` (capture :94-95, `retire_slot` :135-136, `adopt_slot` :156-157, `restore_record` :190-191)
+- Modify: `src/engine_core/DataModelHistory.cpp` (capture :277-278)
 - Test: `sandbox/dense_views_tests.cpp`
 
 **Interfaces:**
-- Consumes: `scene_service("Workspace")` (`DataModel.hpp:147`), `slot()`, sibling links, `current_origin()`.
-- Produces: `bool DataModel::in_game(InstanceId) const`, `bool DataModel::in_workspace(InstanceId) const` (false for dead ids); `void refresh_scope(InstanceId)` (private, idempotent); `void apply_scope(InstanceId, bool in_game, bool in_workspace)` (private; Tasks 4 and 5 extend its flip handling). `Slot::in_game`, `Slot::in_workspace`.
+- Consumes: Task 3's `entity_of`, `ecs_world`, `ecs_ids`, `ecs_read`, `ecs_write`, `ecs_tag`, `ecs_set_tag`.
+- Produces: GameObject private `void store_transform(const Transform&)`, `void store_color(ColorRgb)` for `DataModel::apply_*`. `GameObject` constructor defined out of line, calling `reset_spatial()`.
 
-- [ ] **Step 1: Write the failing tests**
-
-Append to `sandbox/dense_views_tests.cpp`. These use `SimRole` + `engine_core::Game` + `workspace_of` from `support.hpp` (see `ScriptRig` in `support.hpp:44` for the pattern; `Game.hpp` is already included there).
+- [ ] **Step 1: Guard tests**
 
 ```cpp
-TEST_CASE("scope bits follow the tree", "[dense][scope]") {
+TEST_CASE("a destroyed GameObject reads zero", "[dense][entity]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& part = game.create_game_object();
+    part.set_color(rgb(0.5f, 0.5f, 0.5f));
+    part.set_size(2.f, 2.f, 2.f);
+    game.destroy(part.id());
+    float size[3] = {9.f, 9.f, 9.f};
+    REQUIRE_FALSE(part.copy_size(size));
+    REQUIRE(part.transform().m[0] == 0.f);  // zero matrix, not identity
+    REQUIRE(part.color().r == engine_core::ColorRgb{}.r);
+}
+
+TEST_CASE("undo and Stop keep spatial values and flags", "[dense][entity]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& part = game.create_game_object();
+    const engine_core::InstanceId id = part.id();
+    game.set_parent(id, workspace_of(game));
+    part.set_color(rgb(0.25f, 0.5f, 0.75f));
+    part.set_size(1.f, 2.f, 3.f);
+    game.set_simulated(id, true);
+    game.set_visual_only(id, true);
+    game.destroy(id);
+    game.history().undo();
+    REQUIRE(game.alive(id));
+    REQUIRE(game.simulated(id));
+    REQUIRE(game.visual_only(id));
+    REQUIRE(game.game_object(id)->color().g == 0.5f);
+
+    game.capture_place();
+    game.start_simulation();
+    game.set_simulated(id, false);
+    game.game_object(id)->set_size(5.f, 5.f, 5.f);
+    game.stop_simulation();
+    REQUIRE(game.simulated(id));
+    float size[3] = {};
+    REQUIRE(game.game_object(id)->copy_size(size));
+    REQUIRE(size[1] == 2.f);
+}
+```
+
+Both are guards for behavior that exists today: they should PASS before the change and must stay green through it. The task is a storage refactor; its RED is the compile break when the members go, and the whole suite is its RED→GREEN harness. Ledger that.
+
+- [ ] **Step 2: GameObject**
+
+`GameObject.hpp`: constructor becomes a declaration `GameObject(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);`. Delete `transform_`, `color_`, `size_`, `velocity_`, and `clear_spatial`. Add private `void store_transform(const Transform& transform);` and `void store_color(ColorRgb color);`.
+
+`GameObject.cpp` (`#include "Ecs.hpp"`):
+
+```cpp
+GameObject::GameObject(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {
+    reset_spatial();
+}
+```
+
+- `transform()`: `const Transform* value = ecs_read<Transform>(ecs_world(), entity_of(id_), ecs_ids().transform); return value != nullptr ? *value : Transform{};`
+- `color()`: same with `ColorRgb`, fallback `ColorRgb{}`.
+- `copy_size(out)`: read `ecs::Size`; null → `return false`; else copy x/y/z, `return true`.
+- `set_size`: after the existing guards, read the current size, compare for the early out, write `ecs::Size{x, y, z}`; keep `record_size`, `note`, `emit_change` with the old values as previous.
+- `set_linear_velocity`: same shape with `ecs::Velocity`.
+- `store_transform`/`store_color`: `ecs_write(ecs_world(), entity_of(id_), ecs_ids().transform, transform)` / `.color`.
+- `save_properties`: read `transform()`, `color()`, `copy_size(size)` instead of members; output identical.
+- `on_release()`: nothing left to clear — delete the override (the entity is deleted right after it).
+- `reset_spatial()`: write `transform_identity()`, `ColorRgb{}`, `ecs::Size{}`, `ecs::Velocity{}` to `entity_of(id_)`; nothing when it is 0.
+- `write_place`: fill `pod` from `transform()`, `color()`, `copy_size(pod.size)`.
+- `read_place`: velocity reset → `ecs_write(..., ecs::Velocity{})`; the fallback `reset_spatial()` stays; the success path writes `pod.transform`, `pod.color`, `ecs::Size{pod.size[0], pod.size[1], pod.size[2]}`.
+
+- [ ] **Step 3: DataModel**
+
+- `apply_transform`: `if (target == nullptr) return; const Transform previous = target->transform(); if (same_transform(previous, transform)) return; target->store_transform(transform); record_transform(id, previous, transform);` then unchanged. `apply_color` the same shape.
+- `Slot`: delete `simulated`, `visual_only`. `allocate`: delete their two reset lines.
+- `authorize`: `if (ecs_tag(ecs_world(), part.entity, state_->ecs_ids.visual_only) || force_sim_write)`.
+- `set_simulated`: `const bool previous = ecs_tag(w, part->entity, ids.simulated); if (previous == simulated) return; ecs_set_tag(w, part->entity, ids.simulated, simulated);` then `record_bool`/`emit_change` unchanged. `set_visual_only` likewise.
+- `simulated(id)`/`visual_only(id)`: `ecs_tag(ecs_world(), entity_of(id), ids.x)`.
+- Property bag (~:1587): `if (simulated(id_))` / `if (visual_only(id_))`.
+- `integrate_simulated` keeps its slot scan for now (Task 6 replaces it) but reads through the body: skip unless `simulated(id) && !visual_only(id)`; read velocity via `ecs_read<ecs::Velocity>`, zero → skip; `Transform t = body.transform(); t.m[12..14] += ...; body.store_transform(t);` then `note`/`notify_watchers` unchanged.
+
+`DataModelPlace.cpp`: capture → `record.simulated = simulated(record.id); record.visual_only = visual_only(record.id);`. `retire_slot` and `adopt_slot`: delete the two reset lines (a fresh entity has no tags). `restore_record`: `ecs_set_tag(w, live.entity, ids.simulated, record.simulated)` and the same for visual_only — direct, not through the setters, which record history.
+
+`DataModelHistory.cpp` capture: `record.simulated = simulated(id); record.visual_only = visual_only(id);`.
+
+`grep -n "simulated\b\|visual_only\b\|transform_\|color_\|size_\[\|velocity_" src/engine_core/*.cpp src/engine_instances/*.cpp` must show no remaining member or Slot-field use (Lighting's own `color_` is unrelated).
+
+- [ ] **Step 4: Build; `[entity]` PASS; full suite 0 failures (the path B/D, place, project, and history suites are this task's real check). Commit** "Store GameObject's spatial data and flags in flecs".
+
+---
+
+### Task 5: Scope tags
+
+**Files:** `DataModel.hpp` (public `in_game`, `in_workspace`; private `refresh_scope`, `apply_scope`), `DataModelState.hpp` (`std::vector<InstanceId> scope_walk;` reserved to `kMaxInstances` in the root ctor), `DataModel.cpp` (`set_parent`, `detach_links`), `DataModelPlace.cpp` (`link_children`, comment on `clear_hierarchy`), tests.
+
+**Interfaces:** Produces `bool in_game(InstanceId) const`, `bool in_workspace(InstanceId) const` (false for dead). Task 7 extends `apply_scope`'s flip block with the Ancestry note.
+
+- [ ] **Step 1: Failing tests** — append:
+
+```cpp
+TEST_CASE("scope tags follow the tree", "[dense][scope]") {
     SimRole role;
     engine_core::Game game;
     const engine_core::InstanceId ws = workspace_of(game);
     const engine_core::InstanceId storage = game.scene_service("Storage");
     REQUIRE(game.in_game(ws));
-    REQUIRE_FALSE(game.in_workspace(ws));  // Workspace is not inside itself
-
+    REQUIRE_FALSE(game.in_workspace(ws));
     engine_core::GameObject& part = game.create_game_object();
     const engine_core::InstanceId id = part.id();
     REQUIRE_FALSE(game.in_game(id));
-    REQUIRE_FALSE(game.in_workspace(id));
-
     game.set_parent(id, ws);
     REQUIRE(game.in_game(id));
     REQUIRE(game.in_workspace(id));
-
     game.set_parent(id, storage);
     REQUIRE(game.in_game(id));
     REQUIRE_FALSE(game.in_workspace(id));
-
     game.set_parent(id, engine_core::DataModel::kNoParent);
     REQUIRE_FALSE(game.in_game(id));
-    REQUIRE_FALSE(game.in_workspace(id));
-
-    REQUIRE_FALSE(game.in_game(engine_core::make_instance_id(9, 999)));  // dead id
+    REQUIRE_FALSE(game.in_game(engine_core::make_instance_id(9, 999)));
 }
 
-TEST_CASE("scope bits flip a whole subtree", "[dense][scope]") {
+TEST_CASE("scope tags flip a whole subtree", "[dense][scope]") {
     SimRole role;
     engine_core::Game game;
-    const engine_core::InstanceId ws = workspace_of(game);
     engine_core::DataModel& folder = game.create();
     engine_core::GameObject& part = game.create_game_object();
     engine_core::GameObject& nested = game.create_game_object();
     game.set_parent(part.id(), folder.id());
     game.set_parent(nested.id(), part.id());
-    REQUIRE_FALSE(game.in_workspace(nested.id()));
-
-    game.set_parent(folder.id(), ws);
+    game.set_parent(folder.id(), workspace_of(game));
     REQUIRE(game.in_workspace(folder.id()));
-    REQUIRE(game.in_workspace(part.id()));
     REQUIRE(game.in_workspace(nested.id()));
-
     game.set_parent(folder.id(), engine_core::DataModel::kNoParent);
     REQUIRE_FALSE(game.in_game(part.id()));
     REQUIRE_FALSE(game.in_workspace(nested.id()));
 }
 
-TEST_CASE("destroy clears scope; orphans leave scope; undo restores it", "[dense][scope]") {
+TEST_CASE("destroy clears scope; undo restores it", "[dense][scope]") {
     SimRole role;
     engine_core::Game game;
-    const engine_core::InstanceId ws = workspace_of(game);
     engine_core::GameObject& parent = game.create_game_object();
     engine_core::GameObject& child = game.create_game_object();
-    game.set_parent(parent.id(), ws);
+    game.set_parent(parent.id(), workspace_of(game));
     game.set_parent(child.id(), parent.id());
     const engine_core::InstanceId parent_id = parent.id();
     const engine_core::InstanceId child_id = child.id();
-
-    // destroy (not destroy_tree) orphans the child out of the tree.
     game.destroy(parent_id);
-    REQUIRE_FALSE(game.in_workspace(parent_id));  // dead reads false
     REQUIRE(game.alive(child_id));
     REQUIRE_FALSE(game.in_game(child_id));
-    REQUIRE_FALSE(game.in_workspace(child_id));
-
-    // Undo revives the parent under Workspace and reparents the child back.
     game.history().undo();
-    REQUIRE(game.alive(parent_id));
     REQUIRE(game.in_workspace(parent_id));
     REQUIRE(game.in_workspace(child_id));
 }
-```
 
-Note on the undo test: verify with `sandbox/history_tests.cpp:39` (`H1`) how a destroy is undone in one step; if destroy+reparent takes two `undo()` calls in this history model, call `undo()` until `can_undo().first` is false and assert the final state.
-
-```cpp
-TEST_CASE("Stop restores scope with the place", "[dense][scope]") {
+TEST_CASE("Stop restores scope", "[dense][scope]") {
     SimRole role;
     engine_core::Game game;
     const engine_core::InstanceId ws = workspace_of(game);
@@ -466,79 +418,27 @@ TEST_CASE("Stop restores scope with the place", "[dense][scope]") {
     game.set_parent(authored.id(), ws);
     game.capture_place();
     game.start_simulation();
-    engine_core::GameObject& session = game.create_game_object();
-    game.set_parent(session.id(), ws);
-    const engine_core::InstanceId session_id = session.id();
     game.set_parent(authored.id(), game.scene_service("Storage"));
     REQUIRE_FALSE(game.in_workspace(authored.id()));
     game.stop_simulation();
-    REQUIRE(game.in_workspace(authored.id()));  // back under Workspace with the place
-    REQUIRE_FALSE(game.alive(session_id));      // session object destroyed, bits cleared
+    REQUIRE(game.in_workspace(authored.id()));
 }
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+(If undo in the third test needs more than one step to relink the child, undo until the child's parent is `parent_id`, then assert.)
 
-Run: `cmake --build build --target sandbox --parallel 2>&1 | tail -5`
-Expected: compile FAILURE — `in_game` is not a member of `DataModel`.
+- [ ] **Step 2: Run → compile FAIL.**
 
 - [ ] **Step 3: Implement**
 
-`DataModel.hpp` — in `struct Slot` (:446), after `bool visual_only = false;`:
-
 ```cpp
-        // Scope: reachable from the root, and under the Workspace service.
-        // refresh_scope maintains both at every tree mutation.
-        bool in_game = false;
-        bool in_workspace = false;
-```
-
-Public accessors, next to `alive(InstanceId)`:
-
-```cpp
-    // Scope. Both are false for a dead id. in_workspace(workspace) is false:
-    // the service is not inside itself.
-    bool in_game(InstanceId id) const;
-    bool in_workspace(InstanceId id) const;
-```
-
-Private declarations, near `link_child`:
-
-```cpp
-    // Recomputes id's scope bits from its parent. Unchanged bits return at
-    // once; changed bits walk the subtree and fire membership events.
-    void refresh_scope(InstanceId id);
-    void apply_scope(InstanceId id, bool in_game, bool in_workspace);
-```
-
-`DataModelState.hpp` — next to `step_ids`:
-
-```cpp
-    // Ids gathered by apply_scope's subtree walk. walk belongs to emit_ancestry.
-    std::vector<InstanceId> scope_walk;
-```
-
-`DataModel.cpp` — reserve in the root constructor (:49 block, after `step_ids.reserve`):
-
-```cpp
-    world.scope_walk.reserve(kMaxInstances);
-```
-
-Accessors and the scope engine:
-
-```cpp
-bool DataModel::in_game(InstanceId id) const {
-    const Slot* part = slot(id);
-    return part != nullptr && part->in_game;
-}
-
+bool DataModel::in_game(InstanceId id) const { return ecs_tag(ecs_world(), entity_of(id), state_->ecs_ids.in_game); }
 bool DataModel::in_workspace(InstanceId id) const {
-    const Slot* part = slot(id);
-    return part != nullptr && part->in_workspace;
+    return ecs_tag(ecs_world(), entity_of(id), state_->ecs_ids.in_workspace);
 }
 
 void DataModel::refresh_scope(InstanceId id) {
-    Slot* part = slot(id);
+    const Slot* part = slot(id);
     if (part == nullptr) {
         return;
     }
@@ -547,47 +447,48 @@ void DataModel::refresh_scope(InstanceId id) {
     if (part->parent == 0) {
         game = true;
     } else if (part->parent != kNoParent) {
-        if (const Slot* holder = slot(part->parent)) {
-            game = holder->in_game;
-            workspace = holder->in_workspace || part->parent == scene_service("Workspace");
-        }
+        game = in_game(part->parent);
+        workspace = in_workspace(part->parent) || part->parent == scene_service("Workspace");
     }
-    if (part->in_game == game && part->in_workspace == workspace) {
+    if (in_game(id) == game && in_workspace(id) == workspace) {
         return;
     }
     apply_scope(id, game, workspace);
 }
 
-void DataModel::apply_scope(InstanceId id, bool in_game, bool in_workspace) {
-    // Top-down over the subtree. A node whose bits come out unchanged prunes
-    // its children: their stored bits were derived from its stored bits.
+void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_now) {
+    // Top-down over the subtree. A node whose tags come out unchanged prunes
+    // its children: their tags were derived from its tags.
+    ecs_world_t* w = ecs_world();
+    const EcsIds& ids = state_->ecs_ids;
     const InstanceId workspace_id = scene_service("Workspace");
     std::vector<InstanceId>& queue = state_->scope_walk;
     queue.clear();
     queue.push_back(id);
-    bool game = in_game;
-    bool workspace = in_workspace;
     for (std::size_t i = 0; i < queue.size(); ++i) {
         const InstanceId cur = queue[i];
-        Slot* part = slot(cur);
+        const Slot* part = slot(cur);
         if (part == nullptr) {
             continue;
         }
+        bool game = in_game_now;
+        bool workspace = in_workspace_now;
         if (i > 0) {
-            const Slot* holder = slot(part->parent);
-            if (holder == nullptr) {
-                continue;
-            }
-            game = holder->in_game;
-            workspace = holder->in_workspace || part->parent == workspace_id;
+            game = in_game(part->parent);
+            workspace = in_workspace(part->parent) || part->parent == workspace_id;
         }
-        if (part->in_game == game && part->in_workspace == workspace) {
+        const bool had_game = ecs_tag(w, part->entity, ids.in_game);
+        const bool had_workspace = ecs_tag(w, part->entity, ids.in_workspace);
+        if (had_game == game && had_workspace == workspace) {
             continue;
         }
-        part->in_game = game;
-        part->in_workspace = workspace;
-        // Membership events land here: the step list (Task 4) on an in_game
-        // flip, the Ancestry invalidation (Task 5) on an in_workspace flip.
+        if (had_game != game) {
+            ecs_set_tag(w, part->entity, ids.in_game, game);
+        }
+        if (had_workspace != workspace) {
+            ecs_set_tag(w, part->entity, ids.in_workspace, workspace);
+            // Task 7: Ancestry note for GameObjects goes here.
+        }
         for (InstanceId child = part->first_child; child != 0;) {
             if (queue.size() == queue.capacity()) {
                 contract_fail("scope walk capacity exhausted");
@@ -603,53 +504,19 @@ void DataModel::apply_scope(InstanceId id, bool in_game, bool in_workspace) {
 }
 ```
 
-Hooks:
+Hooks: `set_parent` — `refresh_scope(id);` right after the unlink/link block, before `record_parent`. `detach_links` — after clearing each child's parent/sibling fields, `refresh_scope(child);`. `link_children` — after each `link_child(parent, child)`, `refresh_scope(child);`. `clear_hierarchy` — comment: tags are left stale on purpose; restore relinks every live instance through `link_children`, which refreshes it. Then `grep -n "link_child(\|unlink_parent(" src/engine_core/*.cpp` and confirm every caller is inside `set_parent`, `detach_links`, `link_children`, or history's sibling reorder (which relinks through `link_children`).
 
-1. `set_parent` (:1015): directly after the `unlink_parent` / `link_child` block (lines 1039-1042, before `record_parent`), add `refresh_scope(id);`.
-2. `detach_links` (:982): inside the child loop, right after the three lines that clear the child's parent and siblings, add `refresh_scope(child);` — the child just left the tree, so its subtree's bits clear. (This also runs for a destroyed instance's orphans via `destroy`, and for `DataModelPlace.cpp:127`.)
-3. `destroy` (:463): where the slot is released (next to `++part->generation`), add `part->in_game = false; part->in_workspace = false;` so a reused slot starts unscoped.
-4. `link_children` (`DataModelPlace.cpp:215`): inside the loop, after `link_child(parent, child);`, add `refresh_scope(child);`. This covers place restore (`:276`, `:278`) and history's sibling reorder (`DataModelHistory.cpp:398`, where it is a cheap no-op).
-5. Check for any other `link_child(`/`unlink_parent(` callers: `grep -n "link_child(\|unlink_parent(" src/engine_core/*.cpp`. Every caller must be followed by a `refresh_scope` on the moved id (or be inside `set_parent`/`link_children`/`detach_links`, which now handle it). If history's revive path (`DataModelHistory.cpp` around `revive_record`) links through `set_parent` or `link_children` it is covered; if it links some other way, add the same one-line hook there.
-6. `clear_hierarchy` (`DataModelPlace.cpp`, called by the place restore) leaves every slot's bits stale on purpose: restore then either relinks each live instance through `link_children` (which refreshes it, per hook 4) or destroys it (which clears its bits, per hook 3). Add that sentence as a comment on `clear_hierarchy`. The "Stop restores scope" test proves it.
-
-- [ ] **Step 4: Run to verify the scope tests pass**
-
-Run: `cmake --build build --target sandbox --parallel 2>&1 | tail -3 && ./build/Debug/sandbox.exe "[scope]" 2>&1 | tail -3`
-Expected: PASS.
-
-- [ ] **Step 5: Run the full suite, then commit**
-
-Run: `./build/Debug/sandbox.exe 2>&1 | tail -3`
-Expected: 0 failures (bits are not consumed yet, so nothing else may move).
-
-```bash
-git add src/engine_core/DataModel.hpp src/engine_core/DataModel.cpp src/engine_core/DataModelState.hpp src/engine_core/DataModelPlace.cpp sandbox/dense_views_tests.cpp
-git commit -m "Track in_game and in_workspace scope bits on every slot
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
-```
+- [ ] **Step 4: `[scope]` PASS; full suite 0 failures. Commit** "Keep InGame and InWorkspace tags current across the tree".
 
 ---
 
-### Task 4: The step list
+### Task 6: Stepping and physics as queries
 
-Heartbeat iterates a dense list of stepping instances; `step_descendants` and its tree walk die.
+**Files:** `DataModel.hpp` (`virtual bool steps() const`; `step_descendants` → `step_instances`; public `stepper_count()`), `DataModelState.hpp` (`flecs::query<> step_query; flecs::query<> physics_query;` declared after `ecs`), `DataModel.cpp` (root ctor builds queries; `spawn` adds Steps; `step_instances`; `integrate_simulated`), `DataModelPlace.cpp` (`adopt_slot` adds Steps), `TestTriangle.hpp` (`steps()` true), `Engine.cpp:299`, tests.
 
-**Files:**
-- Modify: `src/engine_core/DataModel.hpp` (`steps()` next to `step()` at :169; replace `void step_descendants(double dt);` at :346 with `void step_instances(double dt);`)
-- Modify: `src/engine_core/DataModelState.hpp` (step list storage)
-- Modify: `src/engine_core/DataModel.cpp` (list maintenance in `apply_scope` and `destroy`; `step_instances`; delete `step_descendants` at :658; reserves at :49)
-- Modify: `src/engine_instances/TestTriangle.hpp` (`steps()` override)
-- Modify: `src/engine_core/Engine.cpp:299` (call site)
-- Test: `sandbox/dense_views_tests.cpp`
+**Interfaces:** Produces `virtual bool steps() const`, `void step_instances(double dt)`, `std::size_t stepper_count() const` (live entities with Steps and InGame).
 
-**Interfaces:**
-- Consumes: `apply_scope`'s flip point (Task 3), `DenseIdSet` (Task 1).
-- Produces: `virtual bool DataModel::steps() const` (false; TestTriangle true), `void DataModel::step_instances(double dt)` (SimulationThread, called by Engine's Heartbeat), `State::step_set` (`DenseIdSet`) + `State::steppers` (`std::vector<DataModel*>`, parallel), private `void step_list_insert(InstanceId, DataModel*)` / `void step_list_erase(InstanceId)`.
-
-- [ ] **Step 1: Write the failing tests**
-
-Append to `sandbox/dense_views_tests.cpp` (`TestTriangle.hpp` include is needed: add `#include "TestTriangle.hpp"` at the top):
+- [ ] **Step 1: Failing tests** — add `#include "TestTriangle.hpp"` at the top of the test file, then:
 
 ```cpp
 TEST_CASE("a triangle steps only while it is under game", "[dense][step]") {
@@ -658,194 +525,130 @@ TEST_CASE("a triangle steps only while it is under game", "[dense][step]") {
     const engine_core::InstanceId ws = workspace_of(game);
     engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
     const engine_core::InstanceId id = triangle.id();
-
-    game.step_instances(0.25);  // unparented: nothing steps
+    game.step_instances(0.25);
     REQUIRE(triangle.angle_degrees() == 0.0);
-
     game.set_parent(id, ws);
     game.step_instances(0.25);  // 90 deg/s
     REQUIRE(triangle.angle_degrees() == 22.5);
-
     game.set_parent(id, engine_core::DataModel::kNoParent);
     game.step_instances(0.25);
     REQUIRE(triangle.angle_degrees() == 22.5);
-
     game.set_parent(id, ws);
     game.destroy(id);
-    game.step_instances(0.25);  // erased on destroy; must not touch freed state
-    // TestTriangle.hpp: a dead id reads as 0. If the released storage reads
-    // recycled state instead, assert !game.alive(id) and drop this line.
-    REQUIRE(triangle.angle_degrees() == 0.0);
-}
-
-TEST_CASE("a step may destroy another stepper mid-frame", "[dense][step]") {
-    SimRole role;
-    engine_core::Game game;
-    const engine_core::InstanceId ws = workspace_of(game);
-    engine_core::TestTriangle& a = game.create<engine_core::TestTriangle>();
-    engine_core::TestTriangle& b = game.create<engine_core::TestTriangle>();
-    game.set_parent(a.id(), ws);
-    game.set_parent(b.id(), ws);
-    // Destroy b from outside, then step: the stale id in the frame's copy
-    // must be skipped, not dereferenced.
-    game.destroy(b.id());
     game.step_instances(0.25);
-    REQUIRE(a.angle_degrees() == 22.5);
+    REQUIRE_FALSE(game.alive(id));
 }
 
-TEST_CASE("plain instances and services never enter the step list", "[dense][step]") {
+TEST_CASE("plain instances never step", "[dense][step]") {
     SimRole role;
     engine_core::Game game;
     engine_core::DataModel& folder = game.create();
     game.set_parent(folder.id(), workspace_of(game));
-    game.step_instances(0.25);  // nothing to step; must not crash or walk the tree
     REQUIRE(game.stepper_count() == 0);
     engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
     game.set_parent(triangle.id(), workspace_of(game));
     REQUIRE(game.stepper_count() == 1);
 }
+
+TEST_CASE("physics moves simulated bodies only", "[dense][physics]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& moving = game.create_game_object();
+    engine_core::GameObject& idle = game.create_game_object();
+    engine_core::GameObject& shown = game.create_game_object();
+    for (engine_core::GameObject* body : {&moving, &idle, &shown}) {
+        game.set_parent(body->id(), workspace_of(game));
+        body->set_linear_velocity(4.f, 0.f, 0.f);
+    }
+    game.set_simulated(moving.id(), true);
+    game.set_simulated(shown.id(), true);
+    game.set_visual_only(shown.id(), true);
+    game.invalidations().clear();
+    game.integrate_simulated(0.5);
+    REQUIRE(moving.transform().m[12] == 2.f);
+    REQUIRE(idle.transform().m[12] == 0.f);
+    REQUIRE(shown.transform().m[12] == 0.f);
+    REQUIRE(game.invalidations().size() == 1);
+}
 ```
 
-One small test hook this needs on `DataModel` (public, next to the other test-facing readers): `std::size_t stepper_count() const` — implemented in Step 3.
+Check `integrate_simulated` and `invalidations()` are callable from a test; if not public, drive physics as the existing physics tests do.
 
-- [ ] **Step 2: Run to verify they fail**
-
-Run: `cmake --build build --target sandbox --parallel 2>&1 | tail -5`
-Expected: compile FAILURE — `step_instances` is not a member.
+- [ ] **Step 2: Run → compile FAIL.**
 
 - [ ] **Step 3: Implement**
 
-`DataModel.hpp`:
-
-- Next to `step()` (:169): `// True for a class Heartbeat steps. Read when scope changes, never per frame.` / `virtual bool steps() const { return false; }`
-- Replace `void step_descendants(double dt);` (:346) with:
-
-```cpp
-    // Heartbeat. Steps the dense list of stepping instances under game, in
-    // unspecified order, over a stable copy so a step may create, destroy,
-    // or reparent instances.
-    void step_instances(double dt);
-    std::size_t stepper_count() const;
-```
-
-- Private: `void step_list_insert(InstanceId id, DataModel* instance);` / `void step_list_erase(InstanceId id);`
-
-`TestTriangle.hpp`, next to `class_name`: `bool steps() const override { return true; }`
-
-`DataModelState.hpp`, next to `step_ids`:
-
-```cpp
-    // The instances Heartbeat steps: in_game and steps(). steppers mirrors
-    // step_set position for position, so the loop needs no slot lookups.
-    DenseIdSet step_set;
-    std::vector<DataModel*> steppers;
-```
-
-(`DataModelState.hpp` needs `#include "DenseIdSet.hpp"`.)
-
-`DataModel.cpp`:
-
-- Constructor (:49 block): `world.step_set.reserve(kMaxInstances); world.steppers.reserve(kMaxInstances);`
-- List maintenance:
-
-```cpp
-void DataModel::step_list_insert(InstanceId id, DataModel* instance) {
-    if (state_->step_set.insert(id)) {
-        state_->steppers.push_back(instance);
-    }
-}
-
-void DataModel::step_list_erase(InstanceId id) {
-    const int pos = state_->step_set.erase(id);
-    if (pos < 0) {
-        return;
-    }
-    state_->steppers[static_cast<std::size_t>(pos)] = state_->steppers.back();
-    state_->steppers.pop_back();
-}
-
-std::size_t DataModel::stepper_count() const { return state_->step_set.size(); }
-```
-
-- In `apply_scope`, at the membership-events comment from Task 3, add (the flip test compares the OLD stored bit, so place this before the two `part->in_...` assignments and restructure like this):
-
-```cpp
-        const bool game_flip = part->in_game != game;
-        part->in_game = game;
-        part->in_workspace = workspace;
-        if (game_flip && part->instance != nullptr && part->instance->steps()) {
-            if (game) {
-                step_list_insert(cur, part->instance);
-            } else {
-                step_list_erase(cur);
-            }
-        }
-```
-
-- In `destroy` (:463), next to the bit clearing added in Task 3: `step_list_erase(id);`
-- Replace `step_descendants` (:658) wholesale:
+- `DataModel.hpp`: `// True for a class Heartbeat steps. Read once, when its entity is issued.` / `virtual bool steps() const { return false; }` next to `step()`; update `step()`'s comment. Replace `step_descendants` with `step_instances` (comment: unspecified order, stable copy, a step may create/destroy/reparent). Add `std::size_t stepper_count() const;`.
+- `TestTriangle.hpp`: `bool steps() const override { return true; }`.
+- `spawn` and `adopt_slot`: after `pooled_object(...)`, `if (object->steps()) { ecs_add_id(ecs_world(), part.entity, state_->ecs_ids.steps); }`.
+- Root ctor: build both queries after `register_ecs` with the C++ builder and caching: step query terms `ecs::Instance`, with `ecs::Steps`, with `ecs::InGame`; physics query terms `ecs::Instance` (in), `Transform` (inout), `ecs::Velocity` (in), with `ecs::Simulated`, without `ecs::VisualOnly`. Confirm v4's spelling of caching (`.cached()` or `.cache_kind(flecs::QueryCacheAuto)`) and term access (`.in()`/`.inout()`). Field indexes follow term order.
+- `step_instances(dt)`:
 
 ```cpp
 void DataModel::step_instances(double dt) {
-    // A stable copy: a step may create, destroy, or reparent, which edits the
-    // dense list. Ids gone stale by the time their turn comes are skipped.
+    // Collect first: step() may create, destroy, or reparent, which flecs
+    // would defer inside a running query.
     std::vector<InstanceId>& ids = state_->step_ids;
     ids.clear();
-    const std::vector<InstanceId>& live = state_->step_set.ids();
-    ids.insert(ids.end(), live.begin(), live.end());
-    for (const InstanceId id : ids) {
-        const int pos = state_->step_set.position(id);
-        if (pos < 0) {
-            continue;
+    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->step_query.c_ptr());
+    while (ecs_query_next(&it)) {
+        const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
+        for (std::int32_t i = 0; i < it.count; ++i) {
+            ids.push_back(owners[i].id);
         }
-        state_->steppers[static_cast<std::size_t>(pos)]->step(dt);
+    }
+    for (const InstanceId id : ids) {
+        if (DataModel* object = instance(id)) {
+            object->step(dt);
+        }
     }
 }
 ```
 
-`Engine.cpp:299`: `game_.step_descendants(render_dt_);` → `game_.step_instances(render_dt_);` (keep the comment, reworded: `// The dense step list runs in this phase. Bound Heartbeat jobs stay for callers that are not instances.`)
+- `stepper_count()`: iterate `step_query` summing `it.count`.
+- `integrate_simulated(dt)`:
 
-- [ ] **Step 4: Run to verify the step tests pass**
-
-Run: `cmake --build build --target sandbox --parallel 2>&1 | tail -3 && ./build/Debug/sandbox.exe "[step]" 2>&1 | tail -3`
-Expected: PASS.
-
-- [ ] **Step 5: Run the full suite, then commit**
-
-Run: `./build/Debug/sandbox.exe 2>&1 | tail -3`
-Expected: 0 failures. The triangle tests around `sandbox/tests.cpp:1018-1061` and `:1306`, `:1390` already parent triangles into Workspace, so they keep stepping; if any triangle test creates one unparented and expects it to step, parent it with `game.set_parent(triangle.id(), workspace_of(game))` — that is the new, correct contract.
-
-```bash
-git add src/engine_core/DataModel.hpp src/engine_core/DataModel.cpp src/engine_core/DataModelState.hpp src/engine_instances/TestTriangle.hpp src/engine_core/Engine.cpp sandbox/dense_views_tests.cpp
-git commit -m "Step Heartbeat over a dense list instead of walking the tree
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+```cpp
+void DataModel::integrate_simulated(double dt) {
+    const float step = static_cast<float>(dt);
+    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->physics_query.c_ptr());
+    while (ecs_query_next(&it)) {
+        const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
+        auto* transforms = static_cast<Transform*>(ecs_field_w_size(&it, sizeof(Transform), 1));
+        const auto* velocities = static_cast<const ecs::Velocity*>(ecs_field_w_size(&it, sizeof(ecs::Velocity), 2));
+        for (std::int32_t i = 0; i < it.count; ++i) {
+            const ecs::Velocity& v = velocities[i];
+            if (v.x == 0.f && v.y == 0.f && v.z == 0.f) {
+                continue;
+            }
+            transforms[i].m[12] += v.x * step;
+            transforms[i].m[13] += v.y * step;
+            transforms[i].m[14] += v.z * step;
+            note(owners[i].id, VisualField::Transform, WriteOrigin::Simulation);
+            notify_watchers(owners[i].id);
+        }
+    }
+}
 ```
+
+  First read `notify_watchers`: if any callback it runs can reach the DataModel or flecs, collect ids during the query and notify after it instead; ledger which.
+- Delete `step_descendants`. `Engine.cpp:299` → `game_.step_instances(render_dt_);` with the comment reworded.
+
+- [ ] **Step 4: `[step]` and `[physics]` PASS; full suite 0 failures. Commit** "Step Heartbeat and integrate physics through flecs queries".
 
 ---
 
-### Task 5: Snapshot membership
+### Task 7: Snapshot membership, test migration, and the Lua regression
 
-A row exists iff `alive && GameObject && in_workspace`, kept current by `VisualField::Ancestry`.
+**Files:** `types.hpp` (Ancestry), `DataModel.cpp` (`apply_scope` note; `for_each_rendered`), `DataModel.hpp`, `DataModelState.hpp` (`flecs::query<> render_query;`, built in the root ctor), `SnapshotPump.cpp` (`apply_live`, `resync`), `sandbox/support.hpp` (`create_part`), `sandbox/tests.cpp` (migration), tests.
 
-**Files:**
-- Modify: `src/engine_core/types.hpp:42` (Ancestry bit)
-- Modify: `src/engine_core/DataModel.cpp` (`apply_scope` emits Ancestry)
-- Modify: `src/engine_core/SnapshotPump.cpp` (`apply_live`, `resync`)
-- Test: `sandbox/dense_views_tests.cpp`
+**Interfaces:** Produces `VisualField::Ancestry = 1u << 4`; `void DataModel::for_each_rendered(const std::function<void(const GameObject&)>&) const`.
 
-**Interfaces:**
-- Consumes: `apply_scope`'s flip point (Task 3/4 shape), `in_workspace(id)` (Task 3), `note(id, fields, origin)` (`DataModel.cpp:259`), pump internals on `base_ids_` (Task 2).
-- Produces: `VisualField::Ancestry = 1u << 4`. Membership semantics every later renderer relies on.
-
-- [ ] **Step 1: Write the failing tests**
-
-Append to `sandbox/dense_views_tests.cpp`. Drive the pump the way `sandbox/tests.cpp:1700` does (see that block for the exact call pattern):
+- [ ] **Step 1: Failing tests** — append:
 
 ```cpp
 namespace {
 
-// One Prepare, without engine threads: the caller is both roles here.
 void pump_frame(engine_core::SnapshotPump& pump, engine_core::DataModel& game) {
     pump.prepare_copy(game);
     pump.publish();
@@ -858,24 +661,18 @@ TEST_CASE("only Workspace GameObjects have snapshot rows", "[dense][member]") {
     engine_core::Game game;
     engine_core::SnapshotPump pump;
     pump.reserve(engine_core::DataModel::kMaxInstances);
-    const engine_core::InstanceId ws = workspace_of(game);
-    const engine_core::InstanceId storage = game.scene_service("Storage");
-
     engine_core::GameObject& part = game.create_game_object();
     const engine_core::InstanceId id = part.id();
     pump_frame(pump, game);
-    REQUIRE(pump.find(id) == nullptr);  // unparented: no row
-
-    game.set_parent(id, ws);
+    REQUIRE(pump.find(id) == nullptr);
+    game.set_parent(id, workspace_of(game));
     pump_frame(pump, game);
     REQUIRE(pump.find(id) != nullptr);
-
-    game.set_parent(id, storage);
+    game.set_parent(id, game.scene_service("Storage"));
     pump_frame(pump, game);
     REQUIRE(pump.find(id) == nullptr);
-
-    game.set_parent(id, ws);
-    game.set_parent(id, engine_core::DataModel::kNoParent);  // leaving the tree removes the row
+    game.set_parent(id, workspace_of(game));
+    game.set_parent(id, engine_core::DataModel::kNoParent);
     pump_frame(pump, game);
     REQUIRE(pump.find(id) == nullptr);
 }
@@ -885,16 +682,13 @@ TEST_CASE("a row arrives complete after edits made outside Workspace", "[dense][
     engine_core::Game game;
     engine_core::SnapshotPump pump;
     pump.reserve(engine_core::DataModel::kMaxInstances);
-    const engine_core::InstanceId storage = game.scene_service("Storage");
-
     engine_core::GameObject& part = game.create_game_object();
-    game.set_parent(part.id(), storage);
+    game.set_parent(part.id(), game.scene_service("Storage"));
     pump_frame(pump, game);
-    part.set_color(rgb(0.25f, 0.5f, 0.75f));  // recolored while it has no row
+    part.set_color(rgb(0.25f, 0.5f, 0.75f));
     part.set_size(2.f, 3.f, 4.f);
     pump_frame(pump, game);
     REQUIRE(pump.find(part.id()) == nullptr);
-
     game.set_parent(part.id(), workspace_of(game));
     pump_frame(pump, game);
     const engine_core::VisualInstance* row = pump.find(part.id());
@@ -903,49 +697,43 @@ TEST_CASE("a row arrives complete after edits made outside Workspace", "[dense][
     REQUIRE(row->size[1] == 3.f);
 }
 
-TEST_CASE("destroy_tree clears rows for a whole subtree", "[dense][member]") {
-    SimRole role;
-    engine_core::Game game;
-    engine_core::SnapshotPump pump;
-    pump.reserve(engine_core::DataModel::kMaxInstances);
-    const engine_core::InstanceId ws = workspace_of(game);
-    engine_core::DataModel& folder = game.create();
-    engine_core::GameObject& a = game.create_game_object();
-    engine_core::GameObject& b = game.create_game_object();
-    game.set_parent(folder.id(), ws);
-    game.set_parent(a.id(), folder.id());
-    game.set_parent(b.id(), folder.id());
-    const engine_core::InstanceId a_id = a.id();
-    const engine_core::InstanceId b_id = b.id();
-    pump_frame(pump, game);
-    REQUIRE(pump.find(a_id) != nullptr);
-    REQUIRE(pump.find(b_id) != nullptr);
-    game.destroy_tree(folder.id());
-    pump_frame(pump, game);
-    REQUIRE(pump.find(a_id) == nullptr);
-    REQUIRE(pump.find(b_id) == nullptr);
-    REQUIRE(game.stepper_count() == 0);
-}
-
 TEST_CASE("a move within Workspace keeps the row", "[dense][member]") {
     SimRole role;
     engine_core::Game game;
     engine_core::SnapshotPump pump;
     pump.reserve(engine_core::DataModel::kMaxInstances);
-    const engine_core::InstanceId ws = workspace_of(game);
     engine_core::DataModel& folder = game.create();
-    game.set_parent(folder.id(), ws);
+    game.set_parent(folder.id(), workspace_of(game));
     engine_core::GameObject& part = game.create_game_object();
-    game.set_parent(part.id(), ws);
+    game.set_parent(part.id(), workspace_of(game));
     part.set_color(rgb(0.1f, 0.2f, 0.3f));
     pump_frame(pump, game);
-    REQUIRE(pump.find(part.id()) != nullptr);
-
-    game.set_parent(part.id(), folder.id());  // still under Workspace: no flicker
+    game.set_parent(part.id(), folder.id());
     pump_frame(pump, game);
     const engine_core::VisualInstance* row = pump.find(part.id());
     REQUIRE(row != nullptr);
     REQUIRE(row->color.g == 0.2f);
+}
+
+TEST_CASE("destroy_tree clears rows and steppers", "[dense][member]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    engine_core::DataModel& folder = game.create();
+    engine_core::GameObject& a = game.create_game_object();
+    engine_core::TestTriangle& t = game.create<engine_core::TestTriangle>();
+    game.set_parent(folder.id(), workspace_of(game));
+    game.set_parent(a.id(), folder.id());
+    game.set_parent(t.id(), folder.id());
+    const engine_core::InstanceId a_id = a.id();
+    pump_frame(pump, game);
+    REQUIRE(pump.find(a_id) != nullptr);
+    REQUIRE(game.stepper_count() == 1);
+    game.destroy_tree(folder.id());
+    pump_frame(pump, game);
+    REQUIRE(pump.find(a_id) == nullptr);
+    REQUIRE(game.stepper_count() == 0);
 }
 
 TEST_CASE("overflow resync keeps Workspace membership", "[dense][member]") {
@@ -957,9 +745,10 @@ TEST_CASE("overflow resync keeps Workspace membership", "[dense][member]") {
     engine_core::GameObject& stored = game.create_game_object();
     game.set_parent(shown.id(), workspace_of(game));
     game.set_parent(stored.id(), game.scene_service("Storage"));
-    // Overflow the ring so the next take_changes resyncs from scratch.
+    engine_core::Transform moved = engine_core::transform_identity();
     for (std::size_t i = 0; i <= engine_core::DataModel::kMaxInvalidations; ++i) {
-        shown.set_transform(engine_core::transform_identity());
+        moved.m[12] = static_cast<float>(i + 1);  // equal writes skip the note
+        shown.set_transform(moved);
     }
     REQUIRE(game.invalidations().overflow());
     pump_frame(pump, game);
@@ -968,127 +757,21 @@ TEST_CASE("overflow resync keeps Workspace membership", "[dense][member]") {
 }
 ```
 
-Check `rgb` and `transform_identity` helpers exist as used (`support.hpp:85`, `types.hpp`); check whether `set_transform` on an equal transform still pushes an invalidation (see `GameObject.cpp` / `DataModel.cpp:545`) — if equal values skip the note, vary the transform per loop iteration to force the overflow.
+(If the overflow loop is slow because each write records undo, disable history for the loop the way other bulk tests in `sandbox/tests.cpp` do.)
 
-- [ ] **Step 2: Run to verify they fail**
-
-Run: `cmake --build build --target sandbox --parallel 2>&1 | tail -3 && ./build/Debug/sandbox.exe "[member]" 2>&1 | tail -5`
-Expected: build OK; the first `[member]` test FAILS (unparented object currently gets a row).
+- [ ] **Step 2: Run → the first `[member]` test FAILS** (unparented object gets a row today).
 
 - [ ] **Step 3: Implement**
 
-`types.hpp:42`: add `Ancestry = 1u << 4` after `Removed`, with the comment `// Scope changed: membership must be re-evaluated, and a joining row read whole.`
+- `types.hpp`: `Ancestry = 1u << 4` after `Removed`, commented: scope changed; re-evaluate membership and read a joining row whole.
+- `apply_scope`: at the Task 5 marker: `if (part->body != nullptr) { note(cur, VisualField::Ancestry, current_origin()); }`.
+- `SnapshotPump::apply_live`: after the Removed/dead erase, `if (!game.in_workspace(change.id)) { erase_base(change.id); return; }`; then `const bool joined = any(change.fields, VisualField::Ancestry);` and each field branch becomes `if (joined || any(change.fields, VisualField::X))`.
+- Root ctor: `render_query` with terms `ecs::Instance`, with `ecs::InWorkspace`, with `Transform` (only GameObjects carry it), cached.
+- `for_each_rendered(fn)`: iterate `render_query` via the C API, map each `ecs::Instance` to `game_object(id)`, call `fn` for non-null. `resync` calls it instead of `for_each_game_object`. If `for_each_game_object` then has no callers, delete it.
 
-`DataModel.cpp`, in `apply_scope`'s flip block (extending Task 4's shape):
+- [ ] **Step 4: `[member]` PASS; full suite — EXPECT failures only in older `sandbox/tests.cpp` tests reading rows of unparented objects. List them. Any other failure is a bug in this step: fix first.**
 
-```cpp
-        const bool game_flip = part->in_game != game;
-        const bool workspace_flip = part->in_workspace != workspace;
-        part->in_game = game;
-        part->in_workspace = workspace;
-        if (game_flip && part->instance != nullptr && part->instance->steps()) {
-            if (game) {
-                step_list_insert(cur, part->instance);
-            } else {
-                step_list_erase(cur);
-            }
-        }
-        if (workspace_flip && part->body != nullptr) {
-            note(cur, VisualField::Ancestry, current_origin());
-        }
-```
-
-`SnapshotPump.cpp` `apply_live` — insert the scope gate and the Ancestry refresh (the erase branch and the field patches already exist):
-
-```cpp
-void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
-    if (any(change.fields, VisualField::Removed) || !game.alive(change.id)) {
-        erase_base(change.id);
-        return;
-    }
-    if (!game.in_workspace(change.id)) {
-        // Out of scope: an Ancestry flip out of Workspace, or a stray note
-        // for an object that has no row. Either way the row goes.
-        erase_base(change.id);
-        return;
-    }
-    const GameObject* object = game.game_object(change.id);
-    if (object == nullptr) {
-        return;
-    }
-    VisualInstance* inst = base_find(change.id);
-    if (inst == nullptr) {
-        if (base_.instances.size() == base_.instances.capacity()) {
-            contract_fail("snapshot instance capacity exhausted");
-        }
-        base_ids_.insert(change.id);
-        base_.instances.push_back(VisualInstance{});
-        inst = &base_.instances.back();
-        inst->id = change.id;
-    }
-    const bool joined = any(change.fields, VisualField::Ancestry);
-    if (joined || any(change.fields, VisualField::Transform)) {
-        inst->world = object->transform();
-        inst->transform_origin = change.origin;
-    }
-    if (joined || any(change.fields, VisualField::Color)) {
-        inst->color = object->color();
-        inst->color_origin = change.origin;
-    }
-    if (joined || any(change.fields, VisualField::Size)) {
-        if (object->copy_size(inst->size)) {
-            inst->size_origin = change.origin;
-        }
-    }
-    inst->alive = true;
-}
-```
-
-`resync` gains one line at the top of the lambda:
-
-```cpp
-    game.for_each_game_object([&](const GameObject& object) {
-        if (!game.in_workspace(object.id())) {
-            return;
-        }
-        ...
-```
-
-(`resync`/`apply_live` take `DataModel& game`; `for_each_game_object` is const — if the lambda's `game.in_workspace` fails on constness, the accessor is const, so it compiles as is.)
-
-- [ ] **Step 4: Run to verify the member tests pass**
-
-Run: `cmake --build build --target sandbox --parallel 2>&1 | tail -3 && ./build/Debug/sandbox.exe "[member]" 2>&1 | tail -3`
-Expected: PASS.
-
-- [ ] **Step 5: Run the full suite — EXPECT failures, do not fix them here**
-
-Run: `./build/Debug/sandbox.exe 2>&1 | tail -3`
-Expected: the `[dense]` tags pass; a batch of older tests in `sandbox/tests.cpp` now fail because they create unparented GameObjects and expect rows. That migration is Task 6 — commit this task only if the ONLY failures are of that shape (list them; each failing test must be reading `pump().find`/snapshot state for an unparented object). Any other failure is a bug in this task: stop and fix it first.
-
-```bash
-git add src/engine_core/types.hpp src/engine_core/DataModel.cpp src/engine_core/SnapshotPump.cpp sandbox/dense_views_tests.cpp
-git commit -m "Limit the snapshot to Workspace GameObjects via Ancestry invalidations
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
-```
-
----
-
-### Task 6: Test migration and the Lua regression
-
-**Files:**
-- Modify: `sandbox/support.hpp` (create_part helper)
-- Modify: `sandbox/tests.cpp` (the create_game_object call sites)
-- Modify: `sandbox/dense_views_tests.cpp` (Lua regression test)
-
-**Interfaces:**
-- Consumes: `workspace_of` (`support.hpp:80`), everything above.
-- Produces: `engine_core::GameObject& create_part(engine_core::DataModel& game)` — create + parent under Workspace; the helper every later snapshot-reading test uses.
-
-- [ ] **Step 1: Add the helper**
-
-In `sandbox/support.hpp`, after `workspace_of`:
+- [ ] **Step 5: Migration** — `sandbox/support.hpp` after `workspace_of`:
 
 ```cpp
 // A GameObject parented under Workspace, so it has a snapshot row.
@@ -1099,19 +782,9 @@ inline engine_core::GameObject& create_part(engine_core::DataModel& game) {
 }
 ```
 
-- [ ] **Step 2: Migrate the call sites**
+For each failing test from Step 4, switch its `create_game_object()` to `create_part(...)`. Leave tests that don't read rows alone.
 
-`grep -n "create_game_object" sandbox/tests.cpp` — 24 sites (133, 146, 198, 250, 324, 389, 466, 520, 563, 627, 685, 720, 765, 795, 858, 900, 947, 1001, 1074, 1241, and the rest the grep prints). For each, decide:
-
-- The test reads the snapshot (`pump().find`, `front().instances`, screen state) or steps physics on it → `create_part(...)`.
-- The test only exercises DataModel state (names, hierarchy, properties, contract failures) → leave it as is; rows are irrelevant to it.
-- `[T11]` (`tests.cpp:511` block) creates 10000 simulated parts and clears the queue; its rejection assertions don't need rows — leave unparented ONLY if it still passes; if its budget arithmetic depended on copied rows, use `create_part` there too and re-check the timing assertion.
-
-One caution: some tests run their creates inside `engine.on_simulation(...)` or with engine threads live; `create_part` calls `set_parent`, which is a SimulationThread call — inside those blocks that is already the right thread. Tests that create from the test thread with threads running would enqueue; none of the 24 sites should be in that state, but if one is, parent it inside the paused-edit block the test already uses.
-
-- [ ] **Step 3: Add the Lua regression test**
-
-Append to `sandbox/dense_views_tests.cpp` (pattern: `ScriptRig` + `add_script` as in `sandbox/tests.cpp:2437`):
+- [ ] **Step 6: Lua regression test** — append:
 
 ```cpp
 TEST_CASE("Instance.new GameObject renders once parented into Workspace", "[dense][member][lua]") {
@@ -1126,26 +799,11 @@ TEST_CASE("Instance.new GameObject renders once parented into Workspace", "[dens
     rig.frames(2);
     const engine_core::InstanceId id = rig.game.find_first_child(workspace_of(rig.game), "Spawned");
     REQUIRE(id != 0);
-    pump.prepare_copy(rig.game);
-    pump.publish();
+    pump_frame(pump, rig.game);
     REQUIRE(pump.find(id) != nullptr);
 }
 ```
 
-`find_first_child(parent, name)` is `DataModel.hpp:193`. Check `add_script`'s signature in `support.hpp`/`tests.cpp` and match it.
+(Match `add_script`'s real signature.)
 
-- [ ] **Step 4: Full suite, both configs**
-
-Run: `cmake --build build --target sandbox --parallel 2>&1 | tail -3 && ./build/Debug/sandbox.exe 2>&1 | tail -3`
-Expected: 0 failures, ~310+ cases.
-
-Then ThreadSanitizer per `src/engine_core/README.md` — on this Windows/MSVC setup TSAN is unavailable; if `cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENGINE_CORE_TSAN=ON` fails to configure, note that in the commit message and move on rather than fighting the toolchain.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add sandbox/support.hpp sandbox/tests.cpp sandbox/dense_views_tests.cpp
-git commit -m "Parent test parts into Workspace and cover script-made parts
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
-```
+- [ ] **Step 7: Full suite 0 failures; run `[T4]` ×20 and the whole suite ×3 for flakes. Commit** "Limit the snapshot to Workspace GameObjects and migrate tests".

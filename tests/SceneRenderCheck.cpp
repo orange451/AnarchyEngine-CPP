@@ -1,3 +1,4 @@
+#include "Camera.hpp"
 #include "amesh.hpp"
 #include "runner/MeshCache.hpp"
 #include "runner/Renderer.hpp"
@@ -154,8 +155,19 @@ int main() {
         // x = 3 at that depth is about 0.68 of the half-width right of the middle.
         Expect(!IsClear(ReadPixel(fbWidth * 27 / 32, fbHeight / 2)), "and draws to the right of it");
 
-        // A Camera's Transform and FieldOfView. Turned away from the origin, it sees nothing.
+        // A new place's Camera sees just what the Renderer's own camera does.
         const engine_core::Vec3 up{0.f, 1.f, 0.f};
+        runner::ViewPixels fixed;
+        runner::ViewPixels followed;
+        renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1);
+        renderer.read(0, 0, kSize, kSize, kSize, kSize, fixed);
+        renderer.setCamera(engine_core::matrix4_look_at({0.f, 3.f, 7.f}, {0.f, 0.f, 0.f}, up),
+                           static_cast<float>(engine_core::Camera::kNewPlaceFieldOfView));
+        renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1);
+        renderer.read(0, 0, kSize, kSize, kSize, kSize, followed);
+        Expect(!fixed.empty() && fixed.rgba == followed.rgba, "a new place's Camera draws what the fixed camera drew");
+
+        // A Camera's Transform and FieldOfView. Turned away from the origin, it sees nothing.
         renderer.setCamera(engine_core::matrix4_look_at({0.f, 3.f, 7.f}, {0.f, 3.f, 14.f}, up), 60.f);
         renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1);
         Expect(IsClear(ReadPixel(fbWidth / 2, fbHeight / 2)), "a Camera turned away does not see the cube");

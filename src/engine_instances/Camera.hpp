@@ -16,6 +16,8 @@ namespace engine_core {
 class Camera : public GameObject {
 public:
     static constexpr double kDefaultFieldOfView = 70.0;
+    // A new place's Camera, which sees what the Scene View drew before there were Cameras.
+    static constexpr double kNewPlaceFieldOfView = 60.0;
     static constexpr double kMinFieldOfView = 1.0;
     static constexpr double kMaxFieldOfView = 120.0;
 

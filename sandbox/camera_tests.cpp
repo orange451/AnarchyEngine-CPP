@@ -147,7 +147,7 @@ TEST_CASE("CAM4 a new place and a new project start with a Camera in Workspace",
         const std::vector<Camera*> cameras = workspace_cameras(project.datamodel());
         REQUIRE(cameras.size() == 1);
         REQUIRE(engine_core::same_matrix4(cameras[0]->transform(), default_view()));
-        REQUIRE(cameras[0]->field_of_view() == Camera::kDefaultFieldOfView);
+        REQUIRE(cameras[0]->field_of_view() == Camera::kNewPlaceFieldOfView);
         REQUIRE_FALSE(project.unsaved());
         REQUIRE_FALSE(cameras[0]->set_field_of_view(90.0));
         project.save();
@@ -168,6 +168,6 @@ TEST_CASE("CAM4 a new place and a new project start with a Camera in Workspace",
     engine_core::Project::reset_place(game);
     cameras = workspace_cameras(game);
     REQUIRE(cameras.size() == 1);
-    REQUIRE(cameras[0]->field_of_view() == Camera::kDefaultFieldOfView);
+    REQUIRE(cameras[0]->field_of_view() == Camera::kNewPlaceFieldOfView);
     REQUIRE_FALSE(game.history().can_undo().first);
 }

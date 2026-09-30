@@ -36,6 +36,11 @@ public:
     // What Stage::setMaxFrameRate takes for fps. Uncapped is 0 there.
     static double stage_frame_rate(int fps);
 
+    // The Assets pane's view: "icons", "list", or "columns". "icons" when none
+    // was chosen or the file holds another value.
+    std::string assets_view() const;
+    void set_assets_view(const std::string& view);
+
     // Writes the file. True, doing nothing, when there is no file.
     bool save(std::string& error) const;
 

@@ -25,6 +25,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(STUDIO_CORE_SOURCES
     src/runner/Runner.cpp
     src/runner/ViewCapture.cpp
+    src/ide/AssetBrowser.cpp
     src/ide/ColorLiterals.cpp
     src/ide/IdeResources.cpp
     src/ide/InputRouter.cpp
@@ -413,6 +414,7 @@ target_link_libraries(anarchy-mcp PRIVATE studio_core)
 
 add_executable(engine-tests
     tests/LuaEngineTest.cpp
+    tests/AssetBrowserTest.cpp
     tests/ColorLiteralsTest.cpp
     tests/LuauHighlightTest.cpp
     tests/LuauCompleteTest.cpp

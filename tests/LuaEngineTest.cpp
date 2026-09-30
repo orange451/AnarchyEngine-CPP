@@ -352,6 +352,7 @@ int RunUiCallsTests();
 int RunViewCaptureTests();
 
 int RunColorLiteralsTests();
+int RunAssetBrowserTests();
 
 int main() {
     try {
@@ -376,6 +377,7 @@ int main() {
         gFailures += RunUiCallsTests();
         gFailures += RunViewCaptureTests();
         gFailures += RunColorLiteralsTests();
+        gFailures += RunAssetBrowserTests();
     } catch (const std::exception& ex) {
         std::fprintf(stderr, "FAIL exception: %s\n", ex.what());
         return EXIT_FAILURE;

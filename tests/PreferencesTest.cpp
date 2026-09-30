@@ -96,6 +96,22 @@ void TestPreferences() {
     Expect(none.save(error), "without a file, saving does nothing");
 }
 
+void TestAssetsView() {
+    Scratch scratch;
+    const fs::path file = scratch.root / "preferences.json";
+    {
+        ide::Preferences preferences(file);
+        ExpectText(preferences.assets_view(), "icons", "a fresh Preferences shows the icon view");
+        preferences.set_assets_view("columns");
+        std::string error;
+        Expect(preferences.save(error), "preferences save");
+    }
+    ExpectText(ide::Preferences(file).assets_view(), "columns", "the view is read back");
+
+    Write(file, "{ \"assetsView\": \"grid\" }");
+    ExpectText(ide::Preferences(file).assets_view(), "icons", "an unknown value reads as icons");
+}
+
 void TestLibrary() {
     Scratch scratch;
     const fs::path folder = scratch.root / "themes";
@@ -509,6 +525,7 @@ void TestFrameRate() {
 int RunPreferencesTests() {
     gFailures = 0;
     TestPreferences();
+    TestAssetsView();
     TestLibrary();
     TestWriteTheme();
     TestCurrentTheme();

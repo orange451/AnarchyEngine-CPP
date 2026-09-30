@@ -4,7 +4,80 @@
 
 #include "IdeLayoutInternal.hpp"
 
+#include "FileBytes.hpp"
+
 namespace ide {
+
+void IdeLayout::sync_fold_file() {
+    const std::filesystem::path wanted =
+        project_ ? project_->root() / ".studio" / "folds.json" : std::filesystem::path();
+    if (wanted == fold_file_) {
+        return;
+    }
+    if (!fold_file_.empty()) {
+        script_folds_.clear();
+    }
+    fold_file_ = wanted;
+    if (fold_file_.empty()) {
+        return;
+    }
+    std::string text;
+    std::string error;
+    engine_core::JsonValue root;
+    if (!engine_core::read_file(fold_file_, text, error) || !engine_core::parse_json(text, root, error) ||
+        !root.is_object()) {
+        return;
+    }
+    for (const engine_core::JsonValue::Member& member : root.members()) {
+        std::vector<int> lines;
+        for (const engine_core::JsonValue& line : member.second.items()) {
+            if (line.is_number() && line.as_number() >= 0) {
+                lines.push_back(static_cast<int>(line.as_number()));
+            }
+        }
+        if (script_folds_.find(member.first) == script_folds_.end()) {
+            script_folds_[member.first] = std::move(lines);
+        }
+    }
+}
+
+std::vector<int> IdeLayout::recall_folds(const std::string& guid) {
+    sync_fold_file();
+    const auto found = script_folds_.find(guid);
+    return found == script_folds_.end() ? std::vector<int>{} : found->second;
+}
+
+void IdeLayout::remember_folds(const std::string& guid, const std::vector<int>& lines) {
+    if (guid.empty()) {
+        return;
+    }
+    sync_fold_file();
+    const auto found = script_folds_.find(guid);
+    if (found != script_folds_.end() && found->second == lines) {
+        return;
+    }
+    if (lines.empty()) {
+        if (found == script_folds_.end()) {
+            return;
+        }
+        script_folds_.erase(found);
+    } else {
+        script_folds_[guid] = lines;
+    }
+    if (fold_file_.empty()) {
+        return;
+    }
+    engine_core::JsonValue root = engine_core::JsonValue::object();
+    for (const auto& entry : script_folds_) {
+        std::vector<engine_core::JsonValue> items;
+        for (int line : entry.second) {
+            items.push_back(engine_core::JsonValue::number(line));
+        }
+        root.set(entry.first, engine_core::JsonValue::array(std::move(items)));
+    }
+    std::string error;
+    engine_core::write_file(fold_file_, engine_core::write_json(root), error);
+}
 
 void IdeLayout::run_action(engine_core::InstanceAction action, std::uint32_t id) {
     switch (action) {
@@ -409,6 +482,7 @@ void IdeLayout::edit(std::uint32_t id) {
         return;
     }
     engine_core::DataModel& game = runner_.simulation().datamodel();
+    std::string guid;
     {
         engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionWait);
         if (!lock.owns()) {
@@ -418,6 +492,7 @@ void IdeLayout::edit(std::uint32_t id) {
         if (dynamic_cast<const engine_core::LuaSource*>(game.instance(id)) == nullptr) {
             return;
         }
+        guid = game.guid(id);
     }
     kept_sources_.erase(id);
     if (std::shared_ptr<IdeScriptEditor> existing = open_editor(id)) {
@@ -430,6 +505,8 @@ void IdeLayout::edit(std::uint32_t id) {
     }
     auto editor = jadefx::make<IdeScriptEditor>(runner_.simulation(), id);
     editor->bindUndo(&undo_router_.script_stack(id));
+    editor->setFoldMemory([this, guid] { return recall_folds(guid); },
+                          [this, guid](const std::vector<int>& lines) { remember_folds(guid, lines); });
     std::shared_ptr<jadefx::Tab> tab = home->dock(editor);
     if (tab) {
         tab->setOnClosed([this, id, editor] {

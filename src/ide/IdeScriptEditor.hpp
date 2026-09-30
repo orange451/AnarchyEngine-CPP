@@ -49,6 +49,7 @@ public:
 
     // Titles the tab with the script's name and the .lua suffix.
     void setTitleText(const std::string& name);
+    void setFoldMemory(std::function<std::vector<int>()> recall, std::function<void(const std::vector<int>&)> remember);
 
     bool isLoaded() const { return loaded_; }
     std::string text() const;
@@ -158,6 +159,15 @@ private:
     std::shared_ptr<jadefx::Label> status_;
     std::shared_ptr<jadefx::HBox> crumbs_;
     std::uint64_t seen_crumb_tree_ = ~std::uint64_t{0};
+    std::vector<int> fold_ends_;
+    bool folds_dirty_ = true;
+    std::function<std::vector<int>()> fold_recall_;
+    std::function<void(const std::vector<int>&)> fold_remember_;
+    bool folds_restored_ = false;
+    bool restoring_folds_ = false;
+    void restore_folds();
+    void remember_folds();
+    int fold_end(int paragraph);
     CompletionPopup completion_;
     // Luau's list for the last keystroke, on its way.
     std::optional<PendingCompletion> luau_list_;

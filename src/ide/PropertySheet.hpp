@@ -7,6 +7,10 @@
 
 namespace ide {
 
+// A drag of instances: their ids in decimal, joined by commas. The Assets
+// pane writes it; a reference row in Properties takes it.
+inline constexpr const char* kInstanceDragFormat = "application/x-anarchy-instances";
+
 // What a Properties row edits. The class registry's type name picks it.
 // ReadOnlyText is shown and never written.
 enum class PropertyKind { String, Bool, Number, Vector3, Color3, Ref, ReadOnlyText };

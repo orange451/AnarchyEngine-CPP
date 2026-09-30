@@ -610,6 +610,36 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                     self->toggle_pick(*row_view);
                 }
             });
+            // Parent already picks by clicking the Explorer; every other
+            // reference also takes a drag from the Assets pane.
+            if (row.name != "Parent") {
+                view->pick->setOnDragOver([](jadefx::DragEvent& event) {
+                    if (event.dragboard != nullptr && event.dragboard->has(kInstanceDragFormat)) {
+                        event.acceptTransferModes(jadefx::TransferMode::Link);
+                        event.consume();
+                    }
+                });
+                view->pick->setOnDragDropped([weak_self, weak_view](jadefx::DragEvent& event) {
+                    const auto self = weak_self.lock();
+                    const auto row_view = weak_view.lock();
+                    if (!self || !row_view || event.dragboard == nullptr) {
+                        return;
+                    }
+                    const std::string ids = event.dragboard->get(kInstanceDragFormat);
+                    const std::size_t comma = ids.find(',');
+                    const std::string first = ids.substr(0, comma);
+                    if (first.empty()) {
+                        return;
+                    }
+                    PropertyEdit edit;
+                    edit.property = row_view->row.name;
+                    edit.kind = PropertyKind::Ref;
+                    edit.value.ref = static_cast<engine_core::InstanceId>(std::stoul(first));
+                    self->submit(row_view->ids, edit);
+                    event.setDropCompleted(true);
+                    event.consume();
+                });
+            }
             view->clear = jadefx::make<jadefx::Button>("x");
             view->clear->getClassList().add("properties-clear");
             view->clear->setStyle(kButtonStyle);

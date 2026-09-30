@@ -4,6 +4,7 @@
 #include "ide/PropertySheet.hpp"
 #include "SelectionService.hpp"
 
+#include "AssetInstances.hpp"
 #include "DataModel.hpp"
 #include "Folder.hpp"
 #include "Game.hpp"
@@ -835,6 +836,77 @@ void TestPlayEditIsUndoable() {
     rig.game.stop_simulation();
 }
 
+// Built directly by class, not through lua_create_instance: that name maps to
+// a factory registered in ScriptBindings.cpp, which only this test's small
+// binary has no other reason to link in.
+InstanceId MakeAsset(Game& game, const char* klass, const char* name, InstanceId parent) {
+    const std::string_view kind = klass;
+    DataModel* object = nullptr;
+    if (kind == "Texture") {
+        object = &game.create<engine_core::Texture>();
+    } else if (kind == "Mesh") {
+        object = &game.create<engine_core::Mesh>();
+    } else if (kind == "Material") {
+        object = &game.create<engine_core::Material>();
+    }
+    game.set_name(object->id(), name);
+    game.set_parent(object->id(), parent);
+    return object->id();
+}
+
+const ide::PropertyRow* RowNamed(const ide::PropertySheet& sheet, const char* name) {
+    for (const ide::PropertyRow& row : sheet.rows) {
+        if (row.name == name) {
+            return &row;
+        }
+    }
+    return nullptr;
+}
+
+ide::PropertyEdit RefEdit(const char* property, InstanceId id) {
+    return {property, ide::PropertyKind::Ref, {"", false, 0, {}, id}, -1};
+}
+
+void TestReferenceRows() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Game game;
+    const InstanceId brick = MakeAsset(game, "Texture", "Brick", game.service("Textures"));
+    const InstanceId rock = MakeAsset(game, "Mesh", "Rock", game.service("Meshes"));
+    const InstanceId wall = MakeAsset(game, "Material", "Wall", game.service("Materials"));
+
+    const ide::PropertySheet before = ide::read_sheet(game, {wall});
+    const ide::PropertyRow* row = RowNamed(before, "DiffuseTexture");
+    Expect(row != nullptr && row->kind == ide::PropertyKind::Ref, "a reference is a Ref row");
+    Expect(row != nullptr && row->writable && row->value.nil_ref(), "it starts nil and writable");
+
+    const ide::EditResult set = ide::apply_edit(game, {wall}, RefEdit("DiffuseTexture", brick));
+    Expect(set.written == 1 && !set.rejected, "a Texture is taken");
+    const ide::PropertySheet after = ide::read_sheet(game, {wall});
+    row = RowNamed(after, "DiffuseTexture");
+    Expect(row != nullptr && row->label == "Brick", "the row shows the Texture's name");
+    Expect(row != nullptr && row->path == "Game.Assets.Textures.Brick", "and its path on hover");
+
+    const ide::EditResult wrong = ide::apply_edit(game, {wall}, RefEdit("DiffuseTexture", rock));
+    Expect(wrong.rejected && wrong.error == "DiffuseTexture must be a Texture", "a Mesh is refused, saying why");
+    Expect(wrong.written == 0, "a refusal writes nothing");
+
+    const ide::EditResult cleared =
+        ide::apply_edit(game, {wall}, RefEdit("DiffuseTexture", engine_core::DataModel::kNoParent));
+    Expect(cleared.written == 1, "nil clears");
+    row = RowNamed(ide::read_sheet(game, {wall}), "DiffuseTexture");
+    Expect(row != nullptr && row->value.nil_ref(), "the row is nil again");
+    engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+}
+
+void TestServiceRowsReadOnly() {
+    Game game;
+    const ide::PropertySheet sheet = ide::read_sheet(game, {game.service("Textures")});
+    const ide::PropertyRow* name = RowNamed(sheet, "Name");
+    const ide::PropertyRow* parent = RowNamed(sheet, "Parent");
+    Expect(name != nullptr && !name->writable, "a game service's Name is read-only");
+    Expect(parent != nullptr && !parent->writable, "a game service's Parent is read-only");
+}
+
 }  // namespace
 
 int main() {
@@ -849,6 +921,8 @@ int main() {
     TestPositionAxisColors();
     TestColorPicker();
     TestR6ParentReference();
+    TestReferenceRows();
+    TestServiceRowsReadOnly();
     TestR7MidEditIsNotClobbered();
     TestR8NoSelection();
     TestR9DestroyedLeavesIntersection();

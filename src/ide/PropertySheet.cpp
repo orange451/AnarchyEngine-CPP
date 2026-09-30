@@ -3,6 +3,7 @@
 #include "ChangeHistoryService.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
+#include "PropertyReflection.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -193,7 +194,7 @@ bool property_kind_for(const std::string& type_name, PropertyKind& out) {
     } else if (type_name == "Vector3") {
         out = PropertyKind::Vector3;
     } else if (type_name == "Instance" || type_name == "Instance?" || type_name == "DataModel" ||
-               type_name == "DataModel?") {
+               type_name == "DataModel?" || !engine_core::reference_class(type_name).empty()) {
         out = PropertyKind::Ref;
     } else if (type_name == "Color3") {
         out = PropertyKind::Color3;
@@ -262,8 +263,8 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
                 break;
             }
             row.writable = row.writable && own->writable && own->write != nullptr;
-            // A scene service keeps its name and its place under game.
-            if (object->is_scene_service() && (row.name == "Name" || row.name == "Parent")) {
+            // A service keeps its name and its place.
+            if (object->is_service() && (row.name == "Name" || row.name == "Parent")) {
                 row.writable = false;
             }
             PropertyValue value;
@@ -358,6 +359,13 @@ EditResult apply_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
             error = world.parent_error(target.object->id(), parent);
         } else if (edit.property == "Name" && edit.kind == PropertyKind::String) {
             error = world.rename_error(target.object->id(), edit.value.text);
+        } else if (edit.kind == PropertyKind::Ref && !edit.value.nil_ref()) {
+            const std::string klass = engine_core::reference_class(target.field.type_name);
+            const DataModel* picked = world.instance(edit.value.ref);
+            if (!klass.empty() && (picked == nullptr ||
+                                   !engine_core::lua_class_inherits(picked->class_name(), klass.c_str()))) {
+                error = edit.property + " must be a " + klass;
+            }
         }
         if (error) {
             result.rejected = true;

@@ -66,6 +66,7 @@ set(STUDIO_SOURCES
     src/ide/IdeSearch.cpp
     src/ide/FindBar.cpp
     src/ide/IdeTheme.cpp
+    src/ide/EditorFont.cpp
     src/ide/IdeLayout.cpp
     src/ide/IdeLayoutDocking.cpp
     src/ide/IdeLayoutEditing.cpp

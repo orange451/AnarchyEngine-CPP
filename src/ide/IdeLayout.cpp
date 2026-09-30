@@ -3,6 +3,8 @@
 #include "IdeAssets.hpp"
 #include "IdeLayoutInternal.hpp"
 
+#include "EditorFont.hpp"
+
 namespace ide {
 
 IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesystem::path& config)
@@ -26,6 +28,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
                               "Theme: " + theme_error + ". Drawing with Light instead.");
         theme = themes_.shipped("light");
     }
+    set_editor_font_choice(preferences_.editor_font());
     set_current_theme(std::move(theme));
     // Only open scripts, and the modules they require, are checked. Nothing
     // else in the studio reads diagnostics.

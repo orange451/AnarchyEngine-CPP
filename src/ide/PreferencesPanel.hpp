@@ -137,6 +137,8 @@ private:
     std::string filter_;
 
     std::shared_ptr<jadefx::ComboBox> theme_list_;
+    std::shared_ptr<jadefx::ComboBox> font_list_;
+    std::shared_ptr<jadefx::HBox> font_row_;
     std::shared_ptr<jadefx::Button> delete_;
     std::shared_ptr<jadefx::Button> folder_;
     std::shared_ptr<jadefx::TextField> filter_field_;

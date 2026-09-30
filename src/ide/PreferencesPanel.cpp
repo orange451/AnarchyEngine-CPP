@@ -1,6 +1,8 @@
 #include "PreferencesPanel.hpp"
 
+#include "EditorFont.hpp"
 #include "IdeIcons.hpp"
+#include "IdeTheme.hpp"
 #include "IdeResources.hpp"
 #include "Preferences.hpp"
 #include "Strings.hpp"
@@ -132,6 +134,8 @@ bool IsThemeFile(const std::string& path) {
     return path.size() > 4 && AsciiLower(path.substr(path.size() - 4)) == ".css";
 }
 
+constexpr const char* kThemeFont = "Theme default";
+
 std::shared_ptr<jadefx::Button> MakeButton(const char* text, std::function<void()> action) {
     auto button = jadefx::make<jadefx::Button>(text);
     button->setOnAction([action = std::move(action)](jadefx::ActionEvent&) { action(); });
@@ -252,6 +256,56 @@ void PreferencesPanel::build() {
     filter_field_->getClassList().add("prefs-filter");
     filter_field_->setPromptText("Filter colors");
     filter_field_->setStyle("width: 100%;");
+
+    font_row_ = jadefx::make<jadefx::HBox>();
+    font_row_->getClassList().add("prefs-color-row");
+    font_row_->setAlignment(jadefx::Pos::CenterLeft);
+    auto font_label = jadefx::make<jadefx::Label>("Font");
+    font_label->setPrefWidth(kLabelWidth);
+    font_label->setMinSize(kLabelWidth, 0);
+    font_row_->getChildren().add(font_label);
+    font_list_ = jadefx::make<jadefx::ComboBox>();
+    font_list_->getClassList().add("prefs-font-list");
+    font_list_->setPrefWidth(220);
+    std::vector<std::string> fonts{kThemeFont};
+    int chosen = 0;
+    const std::string current = preferences_.editor_font();
+    for (const SystemFont& font : system_fonts()) {
+        if (!current.empty() && font.family == current) {
+            chosen = static_cast<int>(fonts.size());
+        }
+        fonts.push_back(font.family);
+    }
+    if (!current.empty() && chosen == 0) {
+        chosen = static_cast<int>(fonts.size());
+        fonts.push_back(current);
+    }
+    font_list_->getItems().setAll(std::move(fonts));
+    font_list_->select(chosen);
+    font_list_->setOnAction([this](jadefx::ActionEvent&) {
+        const int index = font_list_->getSelectionIndex();
+        const std::vector<std::string>& items = font_list_->getItems().items();
+        if (index < 0 || static_cast<std::size_t>(index) >= items.size()) {
+            return;
+        }
+        const std::string family = index == 0 ? std::string() : items[static_cast<std::size_t>(index)];
+        jadefx::runLater([this, alive = std::weak_ptr<bool>(alive_), family] {
+            if (alive.expired() || family == preferences_.editor_font()) {
+                return;
+            }
+            preferences_.set_editor_font(family);
+            std::string failure;
+            if (!preferences_.save(failure)) {
+                set_status(failure, true);
+            }
+            set_editor_font_choice(family);
+            set_current_theme(current_theme());
+        });
+    });
+    font_row_->getChildren().add(font_list_);
+    auto font_hint = jadefx::make<jadefx::Label>("Overrides the theme's font.");
+    font_hint->getClassList().add("prefs-hint");
+    font_row_->getChildren().add(font_hint);
 
     auto top = jadefx::make<jadefx::VBox>();
     top->getClassList().add("prefs-top");
@@ -757,6 +811,11 @@ void PreferencesPanel::rebuild_rows() {
     list_->getChildren().clear();
     for (const std::unique_ptr<Group>& group : groups_) {
         group->body->getChildren().clear();
+        const bool font_group = font_row_ && group->title == "Script Editor";
+        if (font_group && (filter_.empty() || std::string("font").find(filter_) != std::string::npos ||
+                           AsciiLower(group->title).find(filter_) != std::string::npos)) {
+            group->body->getChildren().add(font_row_);
+        }
         for (Row* row : group->rows) {
             const ThemeVariable& variable = *row->variable;
             if (filter_.empty() || AsciiLower(variable.label).find(filter_) != std::string::npos ||
@@ -765,10 +824,11 @@ void PreferencesPanel::rebuild_rows() {
                 group->body->getChildren().add(row->box);
             }
         }
-        const std::size_t shown = group->body->getChildren().size();
-        if (shown == 0) {
+        const std::size_t placed = group->body->getChildren().size();
+        if (placed == 0) {
             continue;
         }
+        const std::size_t shown = placed - (font_group && group->body->getChildren().items().front() == font_row_ ? 1 : 0);
         // A filtered group says how many of its colors match.
         group->count->setText(filter_.empty() ? std::to_string(shown)
                                               : std::to_string(shown) + " of " + std::to_string(group->rows.size()));

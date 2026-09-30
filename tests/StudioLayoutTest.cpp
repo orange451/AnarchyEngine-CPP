@@ -459,13 +459,7 @@ int main() {
         const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
         const fs::path folder = fs::temp_directory_path() / ("anarchy-toast-test-" + std::to_string(stamp));
         const fs::path root = folder / "ToastPlace";
-        try {
-            layout.simulation().on_simulation([&](engine_core::DataModel&) { engine_core::Project::create(root); });
-        } catch (const std::exception& failure) {
-            // The project loader does not know Assets and its categories yet
-            // (a later task teaches it), so a fresh place cannot save.
-            expect(false, (std::string("a new place can be created: ") + failure.what()).c_str());
-        }
+        layout.simulation().on_simulation([&](engine_core::DataModel&) { engine_core::Project::create(root); });
         engine_core::ScriptRuntime& scripts = layout.simulation().scripts();
         const std::uint64_t before = scripts.output_next();
         layout.open_project_at(root);

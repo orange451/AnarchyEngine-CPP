@@ -46,24 +46,17 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     const fs::path root = folder / "ConflictPlace";
     std::string part_file;
     std::string spare_file;
-    try {
-        layout.simulation().on_simulation([&](engine_core::DataModel&) {
-            engine_core::Project project = engine_core::Project::create(root);
-            engine_core::DataModel& game = project.datamodel();
-            for (const char* name : {"Part", "Spare"}) {
-                engine_core::GameObject& part = game.create_game_object();
-                game.set_name(part.id(), name);
-                game.set_parent(part.id(), game.scene_service("Workspace"));
-                (part_file.empty() ? part_file : spare_file) = "src/Workspace.workspace/" + std::string(name) + "." + game.guid(part.id()) + ".json";
-            }
-            project.save();
-        });
-    } catch (const std::exception& failure) {
-        // The project loader does not know Assets and its categories yet
-        // (a later task teaches it), so a fresh place cannot save.
-        expect(false, (std::string("a new place can be created: ") + failure.what()).c_str());
-        return failures;
-    }
+    layout.simulation().on_simulation([&](engine_core::DataModel&) {
+        engine_core::Project project = engine_core::Project::create(root);
+        engine_core::DataModel& game = project.datamodel();
+        for (const char* name : {"Part", "Spare"}) {
+            engine_core::GameObject& part = game.create_game_object();
+            game.set_name(part.id(), name);
+            game.set_parent(part.id(), game.scene_service("Workspace"));
+            (part_file.empty() ? part_file : spare_file) = "src/Workspace.workspace/" + std::string(name) + "." + game.guid(part.id()) + ".json";
+        }
+        project.save();
+    });
     layout.open_project_at(root);
 
     auto paint = [&layout](const char* name, float blue) {

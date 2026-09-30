@@ -187,22 +187,15 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     const fs::path folder = fs::temp_directory_path() / ("anarchy-sync-test-" + std::to_string(stamp));
     const fs::path root = folder / "SyncPlace";
     std::string part_file;
-    try {
-        layout.simulation().on_simulation([&](engine_core::DataModel&) {
-            engine_core::Project project = engine_core::Project::create(root);
-            engine_core::DataModel& game = project.datamodel();
-            engine_core::GameObject& part = game.create_game_object();
-            game.set_name(part.id(), "Part");
-            game.set_parent(part.id(), game.scene_service("Workspace"));
-            project.save();
-            part_file = "src/Workspace.workspace/Part." + game.guid(part.id()) + ".json";
-        });
-    } catch (const std::exception& failure) {
-        // The project loader does not know Assets and its categories yet
-        // (a later task teaches it), so a fresh place cannot save.
-        expect(false, (std::string("a new place can be created: ") + failure.what()).c_str());
-        return failures;
-    }
+    layout.simulation().on_simulation([&](engine_core::DataModel&) {
+        engine_core::Project project = engine_core::Project::create(root);
+        engine_core::DataModel& game = project.datamodel();
+        engine_core::GameObject& part = game.create_game_object();
+        game.set_name(part.id(), "Part");
+        game.set_parent(part.id(), game.scene_service("Workspace"));
+        project.save();
+        part_file = "src/Workspace.workspace/Part." + game.guid(part.id()) + ".json";
+    });
     layout.open_project_at(root);
     auto set_disk = [&](const char* key, float x, float y, float z) {
         std::ifstream in(root / part_file, std::ios::binary);

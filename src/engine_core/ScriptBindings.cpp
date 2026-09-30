@@ -1,5 +1,6 @@
 #include "ScriptBindings.hpp"
 
+#include "AssetInstances.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
 #include "Enum.hpp"
@@ -148,6 +149,13 @@ DataModel& create_module_script(DataModel& world) { return world.create<ModuleSc
 
 DataModel& create_folder(DataModel& world) { return world.create<Folder>(); }
 
+DataModel& create_texture(DataModel& world) { return world.create<Texture>(); }
+DataModel& create_mesh(DataModel& world) { return world.create<Mesh>(); }
+DataModel& create_sound(DataModel& world) { return world.create<Sound>(); }
+DataModel& create_material(DataModel& world) { return world.create<Material>(); }
+DataModel& create_model(DataModel& world) { return world.create<Model>(); }
+DataModel& create_prefab(DataModel& world) { return world.create<Prefab>(); }
+
 // The factories stay here, which ScriptRuntime.cpp links, so each class's
 // object file stays linked.
 // Completion reads the same names Instance.new will construct.
@@ -156,6 +164,12 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Script", create_script);
     register_lua_creatable("ModuleScript", create_module_script);
     register_lua_creatable("Folder", create_folder);
+    register_lua_creatable("Texture", create_texture);
+    register_lua_creatable("Mesh", create_mesh);
+    register_lua_creatable("Sound", create_sound);
+    register_lua_creatable("Material", create_material);
+    register_lua_creatable("Model", create_model);
+    register_lua_creatable("Prefab", create_prefab);
 }
 
 }  // namespace
@@ -520,9 +534,10 @@ int ScriptBindings::instance_service(lua_State* state) {
         if (runtime == nullptr || ud->id != 0 || runtime->resolve_id(0, ud->world) == nullptr) {
             luaL_error(state, "GetService is on game");
         }
-        // A scene service is in the tree: GetService gives the instance itself.
-        if (const InstanceId scene = name != nullptr ? runtime->game_->scene_service(name) : 0; scene != 0) {
-            runtime->push_instance(state, scene);
+        // A service directly under game is in the tree: GetService gives the instance itself.
+        const InstanceId found = name != nullptr ? runtime->game_->service(name) : 0;
+        if (found != 0 && runtime->game_->parent(found) == 0) {
+            runtime->push_instance(state, found);
             return 1;
         }
         const int kind = name != nullptr && lua_service_known(name) ? service_kind(name) : -1;

@@ -8,6 +8,8 @@
 #include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
 #include "GameService.hpp"
+#include "AssetInstances.hpp"
+#include "LuaApi.hpp"
 
 #include "support.hpp"
 
@@ -151,4 +153,107 @@ TEST_CASE("GS3 a game service cannot be moved, renamed, or destroyed", "[GS3]") 
     game.start_simulation();
     game.stop_simulation();
     REQUIRE(child_classes(game, assets).size() == 5);
+}
+
+namespace {
+
+InstanceId make(DataModel& game, const char* klass, const char* name, InstanceId parent) {
+    DataModel* object = engine_core::lua_create_instance(game, klass);
+    REQUIRE(object != nullptr);
+    game.set_name(object->id(), name);
+    if (parent != DataModel::kNoParent) {
+        game.set_parent(object->id(), parent);
+    }
+    return object->id();
+}
+
+}  // namespace
+
+TEST_CASE("GS4 each category takes its class and Folders", "[GS4]") {
+    Game game;
+    const InstanceId textures = game.service("Textures");
+    const InstanceId brick = make(game, "Texture", "Brick", DataModel::kNoParent);
+    const InstanceId rock = make(game, "Mesh", "Rock", DataModel::kNoParent);
+    const InstanceId folder = make(game, "Folder", "Walls", textures);
+
+    REQUIRE_FALSE(game.parent_error(brick, textures));
+    REQUIRE_FALSE(game.parent_error(brick, folder));
+    REQUIRE(reason(game.parent_error(rock, textures)) == "Textures holds Textures and Folders");
+    REQUIRE(reason(game.parent_error(rock, folder)) == "Textures holds Textures and Folders");
+    REQUIRE(reason(game.parent_error(brick, game.service("Workspace"))) == "A Texture must be in Assets.Textures");
+    REQUIRE(reason(game.parent_error(brick, game.service("Assets"))) ==
+            "Assets holds only Materials, Prefabs, Meshes, Textures, and Audio");
+    REQUIRE(reason(game.parent_error(folder, game.service("Assets"))) ==
+            "Assets holds only Materials, Prefabs, Meshes, Textures, and Audio");
+    game.set_parent(brick, folder);
+    REQUIRE(game.parent(brick) == folder);
+
+    // Prefab and Model.
+    const InstanceId crate = make(game, "Prefab", "Crate", game.service("Prefabs"));
+    const InstanceId body = make(game, "Model", "Body", crate);
+    REQUIRE(game.parent(body) == crate);
+    REQUIRE(reason(game.parent_error(folder, crate)) == "A Prefab holds only Models");
+    REQUIRE(reason(game.parent_error(body, game.service("Workspace"))) == "A Model must be in a Prefab");
+    REQUIRE(reason(game.parent_error(body, game.service("Prefabs"))) == "Prefabs holds Prefabs and Folders");
+    // Out of the tree is always allowed.
+    REQUIRE_FALSE(game.parent_error(body, DataModel::kNoParent));
+}
+
+TEST_CASE("GS5 a folder carries its assets' rules with it", "[GS5]") {
+    Game game;
+    const InstanceId walls = make(game, "Folder", "Walls", game.service("Textures"));
+    const InstanceId inner = make(game, "Folder", "Inner", walls);
+    make(game, "Texture", "Brick", inner);
+
+    REQUIRE(reason(game.parent_error(walls, game.service("Workspace"))) == "A Texture must be in Assets.Textures");
+    REQUIRE(reason(game.parent_error(walls, game.service("Meshes"))) == "Meshes holds Meshes and Folders");
+    REQUIRE_THROWS_AS(game.set_parent(walls, game.service("Meshes")), ContractViolation);
+    REQUIRE(game.parent(walls) == game.service("Textures"));
+
+    // A folder of plain instances moves between scene services as before.
+    const InstanceId box = make(game, "Folder", "Box", game.service("Workspace"));
+    make(game, "Script", "Main", box);
+    REQUIRE_FALSE(game.parent_error(box, game.service("Storage")));
+    REQUIRE(reason(game.parent_error(box, game.service("Textures"))) == "Textures holds Textures and Folders");
+
+    // A folder out of the tree takes anything; putting it back is checked.
+    game.set_parent(walls, DataModel::kNoParent);
+    REQUIRE(reason(game.parent_error(walls, game.service("Workspace"))) == "A Texture must be in Assets.Textures");
+    REQUIRE_FALSE(game.parent_error(walls, game.service("Textures")));
+}
+
+TEST_CASE("GS6 scripts see game services and meet the same rules", "[GS6]") {
+    ScriptRig rig;
+    add_script(rig.game, "Assets", R"(
+        local function refuses(fn, expected)
+            local ok, message = pcall(fn)
+            return not ok and string.find(message, expected, 1, true) ~= nil
+        end
+        _G.path = game.Assets.Textures.ClassName == "Textures" and game:GetService("Assets") == game.Assets
+        _G.isa = game.Assets:IsA("GameService") and game.Assets:IsA("Service") and not game.Assets:IsA("Instance")
+            and workspace:IsA("Service")
+        _G.listed = #game:GetChildren() == 5
+        _G.no_move = refuses(function() game.Assets.Textures.Parent = workspace end, "Textures cannot be moved")
+        _G.no_rename = refuses(function() game.Assets.Name = "Stuff" end, "Assets cannot be renamed")
+        _G.no_destroy = refuses(function() game.Assets.Audio:Destroy() end, "Audio cannot be destroyed")
+        _G.no_new = refuses(function() Instance.new("Textures") end, "unknown class Textures")
+        _G.no_nested = not pcall(function() return game:GetService("Textures") end)
+
+        local brick = Instance.new("Texture")
+        brick.Parent = game.Assets.Textures
+        _G.placed = brick.Parent == game.Assets.Textures
+        _G.no_workspace = refuses(function() brick.Parent = workspace end, "A Texture must be in Assets.Textures")
+        local model = Instance.new("Model")
+        _G.no_model = refuses(function() model.Parent = workspace end, "A Model must be in a Prefab")
+    )");
+    rig.game.start_simulation();
+    rig.frames(1, 0.05);
+    INFO(rig.runtime.last_error());
+    for (const char* name : {"path", "isa", "listed", "no_move", "no_rename", "no_destroy", "no_new", "no_nested",
+                             "placed", "no_workspace", "no_model"}) {
+        bool value = false;
+        INFO(name);
+        REQUIRE(rig.runtime.global_boolean(name, value));
+        REQUIRE(value);
+    }
 }

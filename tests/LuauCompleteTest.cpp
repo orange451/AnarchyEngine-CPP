@@ -1181,8 +1181,9 @@ void testInsertFilter() {
     engine_core::lua_creatable_names(names);
     std::vector<std::string> shown;
     ide::filter_class_names(names, "", shown);
-    if (shown.size() != 4 || shown[0] != "Folder" || shown[1] != "GameObject" || shown[2] != "ModuleScript" ||
-        shown[3] != "Script") {
+    const std::vector<std::string> expected = {"Folder",       "GameObject", "Material", "Mesh",  "Model",
+                                                "ModuleScript", "Prefab",     "Script",   "Sound", "Texture"};
+    if (shown != expected) {
         fail("insert list is every creatable class, A to Z");
     }
     ide::filter_class_names(names, "scr", shown);

@@ -625,6 +625,8 @@ void TestR6ParentReference() {
     rig.click(rig.panel.editor("Parent", 0));
     rig.frame();
     Expect(rig.panel.picking() && rig.panel.pick_property() == "Parent", "R6 Pick waits for a click");
+    Expect(rig.panel.status() == "Click an instance in an explorer or the Assets pane to set Parent. Click Parent again to cancel.",
+           "R6 the status line says where to click");
     rig.clickExplorer("Stuff");
     Expect(!rig.panel.picking(), "R6 the click ends the pick");
     Expect(rig.game.parent(rig.a) == rig.folder, "R6 the picked instance is the Parent");

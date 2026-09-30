@@ -916,7 +916,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         pick_name = view.row.name;
         pick_ids = view.ids;
         pick_seen = selection->revision();
-        status = "Click an instance in the Explorer to set " + pick_name + ". Click " + pick_name + " again to cancel.";
+        status = "Click an instance in an explorer or the Assets pane to set " + pick_name + ". Click " + pick_name + " again to cancel.";
         force = true;
     }
 

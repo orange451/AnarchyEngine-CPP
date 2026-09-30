@@ -221,6 +221,14 @@ void TestEngineTools() {
     Expect(ErrorText(server, "set_property", R"({"instance":"Assets.Textures.Brick","property":"Parent","value":"Workspace"})") ==
                "A Texture must be in Assets.Textures",
            "set_property refuses to move a Texture out of Assets.Textures");
+    const std::size_t room = game.room_left();
+    Expect(ErrorText(server, "create_instance", R"({"class":"Texture"})").find("A Texture must be in Assets.Textures") !=
+               std::string::npos,
+           "create_instance refuses a Texture in its default parent, Workspace");
+    Expect(ErrorText(server, "create_instance", R"({"class":"Folder","parent":"Assets"})")
+                   .find("Assets holds only Materials, Prefabs, Meshes, Textures, and Audio") != std::string::npos,
+           "create_instance refuses a Folder in Assets");
+    Expect(game.room_left() == room, "a refused create_instance makes nothing");
 
     AddScript(game, "Hello", "print('hi')", game.find_first_child(game.scene_service("Workspace"), "Stuff"));
 

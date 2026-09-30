@@ -857,9 +857,9 @@ JsonValue CreateInstance(const ToolContext& context, const JsonValue& arguments)
             throw std::runtime_error("Instance.new cannot make \"" + class_name +
                                      "\". list_classes names the ones it can.");
         }
-        if (parent_id == world.id()) {
-            throw std::runtime_error("Only scene services can be children of game; put " + class_name +
-                                     " in Workspace");
+        // Asked by class, before create, so a refused parent leaves nothing behind.
+        if (std::optional<std::string> refused = world.placement_error_for_class(parent_id, class_name)) {
+            throw std::runtime_error(*refused);
         }
         // Refused before the gesture opens, so a full place leaves nothing pending.
         if (world.room_left() == 0) {

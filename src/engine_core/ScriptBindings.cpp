@@ -25,6 +25,7 @@
 #include <exception>
 #include <memory>
 #include <new>
+#include <optional>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -192,8 +193,10 @@ int ScriptBindings::instance_new(lua_State* state) {
             }
             parent_id = parent->id;
             // Checked by class, before create, for the same reason.
-            if (parent_id == 0 && lua_creatable_known(name)) {
-                luaL_error(state, "Only scene services can be children of game; put %s in Workspace", name);
+            if (lua_creatable_known(name)) {
+                if (std::optional<std::string> refused = runtime->game_->placement_error_for_class(parent_id, name)) {
+                    luaL_error(state, "%s", refused->c_str());
+                }
             }
         }
         DataModel* created = lua_create_instance(*runtime->game_, name);

@@ -280,6 +280,37 @@ TEST_CASE("GS6 scripts see game services and meet the same rules", "[GS6]") {
     }
 }
 
+TEST_CASE("GS18 Instance.new with a parent that refuses the class makes nothing", "[GS18]") {
+    ScriptRig rig;
+    add_script(rig.game, "Refused", R"(
+        local function refuses(fn, expected)
+            local ok, message = pcall(fn)
+            return not ok and string.find(message, expected, 1, true) ~= nil
+        end
+        _G.texture = refuses(function() Instance.new("Texture", workspace) end, "A Texture must be in Assets.Textures")
+        _G.folder = refuses(function() Instance.new("Folder", game.Assets) end,
+            "Assets holds only Materials, Prefabs, Meshes, Textures, and Audio")
+        _G.script = refuses(function() Instance.new("Script", game.Assets.Textures) end,
+            "Textures holds Textures and Folders")
+        _G.allowed = Instance.new("Texture", game.Assets.Textures).Parent == game.Assets.Textures
+    )");
+    rig.game.start_simulation();
+    const std::size_t room = rig.game.room_left();
+    rig.frames(1, 0.05);
+    INFO(rig.runtime.last_error());
+    for (const char* name : {"texture", "folder", "script", "allowed"}) {
+        bool value = false;
+        INFO(name);
+        REQUIRE(rig.runtime.global_boolean(name, value));
+        REQUIRE(value);
+    }
+    // Only the allowed Texture was made.
+    REQUIRE(rig.game.room_left() == room - 1);
+    REQUIRE(rig.game.get_children(rig.game.service("Textures")).size() == 1);
+    REQUIRE(rig.game.get_children(rig.game.service("Assets")).size() == 5);
+    REQUIRE(rig.game.get_children(rig.game.service("Workspace")).size() == 1);
+}
+
 TEST_CASE("GS7 Path is relative to the resources folder, and saves and undoes", "[GS7]") {
     SimRole role;
     Game game;

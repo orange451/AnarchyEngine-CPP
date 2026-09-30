@@ -150,10 +150,17 @@ void edit_key(const fs::path& file, const char* key, const engine_core::JsonValu
     write_file(file, engine_core::write_json(doc));
 }
 
-engine_core::JsonValue triple(float x, float y, float z) {
-    const float values[3] = {x, y, z};
-    return engine_core::json_floats(values, 3);
+// A Transform moved to (x, y, z), as a file holds it.
+engine_core::JsonValue translated(float x, float y, float z) {
+    const engine_core::Matrix4 moved = engine_core::matrix4_translation(x, y, z);
+    return engine_core::json_floats(moved.m, 16);
 }
+
+// A translation's 16 numbers as a row shows them, such as transform_text("2, 2, 2").
+std::string transform_text(const char* xyz) { return std::string("1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, ") + xyz + ", 1"; }
+
+// The line a save writes for a Transform moved to xyz.
+std::string transform_line(const char* xyz) { return "\"Transform\": [" + transform_text(xyz) + "]"; }
 
 }  // namespace
 
@@ -168,8 +175,7 @@ TEST_CASE("P1 save then load keeps names, GUIDs, and source bytes", "[P1][projec
         Project project = Project::create(dir.path);
         DataModel& game = project.datamodel();
         engine_core::GameObject& part = add_part(game, workspace_of(game), "Part");
-        part.set_color(rgb(0.25f, 0.5f, 0.1f));
-        part.set_transform(engine_core::transform_translation(1.5f, -2.f, 0.1f));
+        part.set_transform(engine_core::matrix4_translation(1.5f, -2.f, 0.1f));
         engine_core::Script& script = add_script(game, workspace_of(game), "Main", source.c_str());
         part_guid = game.guid(part.id());
         script_guid = game.guid(script.id());
@@ -194,10 +200,8 @@ TEST_CASE("P1 save then load keeps names, GUIDs, and source bytes", "[P1][projec
     REQUIRE(dynamic_cast<engine_core::Script*>(game.instance(script))->source() == source);
     const engine_core::GameObject* body = game.game_object(part);
     REQUIRE(body != nullptr);
-    REQUIRE(body->color().r == 0.25f);
-    REQUIRE(body->color().g == 0.5f);
-    REQUIRE(body->color().b == 0.1f);
     REQUIRE(body->transform().m[12] == 1.5f);
+    REQUIRE(body->transform().m[13] == -2.f);
     REQUIRE(body->transform().m[14] == 0.1f);
     const std::optional<engine_core::InstanceId> found = loaded.instance_for(part_guid);
     REQUIRE(found.has_value());
@@ -212,7 +216,7 @@ TEST_CASE("P2 a second save with no edits writes nothing", "[P2][project]") {
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
     engine_core::GameObject& folderish = add_part(game, workspace_of(game), "Holder");
-    add_part(game, folderish.id(), "Inner").set_color(rgb(0.f, 1.f, 0.f));
+    add_part(game, folderish.id(), "Inner").set_transform(engine_core::matrix4_translation(0.f, 1.f, 0.f));
     add_script(game, workspace_of(game), "Main", "print(1)\n");
     project.save();
     const auto before = tree_files(dir.path);
@@ -229,7 +233,7 @@ TEST_CASE("P2 a second save with no edits writes nothing", "[P2][project]") {
     REQUIRE(tree_files(dir.path) == before);
 }
 
-TEST_CASE("P3 one color edit rewrites only that part", "[P3][project]") {
+TEST_CASE("P3 one transform edit rewrites only that part", "[P3][project]") {
     SimRole role;
     TempDir dir;
     Project project = Project::create(dir.path);
@@ -240,12 +244,12 @@ TEST_CASE("P3 one color edit rewrites only that part", "[P3][project]") {
     project.save();
     const auto before = tree_files(dir.path);
 
-    a.set_color(rgb(0.2f, 0.3f, 0.4f));
+    a.set_transform(engine_core::matrix4_translation(0.2f, 0.3f, 0.4f));
     project.save();
     const std::set<std::string> diff = changed(before, tree_files(dir.path));
     REQUIRE(diff == std::set<std::string>{leaf(game, a.id())});
     REQUIRE(project.last_save().written == std::vector<std::string>{leaf(game, a.id())});
-    REQUIRE(read_file(dir.path / leaf(game, a.id())).find("\"Color\": [0.2, 0.3, 0.4]") != std::string::npos);
+    REQUIRE(read_file(dir.path / leaf(game, a.id())).find(transform_line("0.2, 0.3, 0.4")) != std::string::npos);
 }
 
 TEST_CASE("P4 a source edit rewrites only the .luau file", "[P4][project]") {
@@ -459,7 +463,7 @@ TEST_CASE("P9 an unknown hand-edited key round-trips through the property bag", 
     // Untouched, it is not rewritten. Edited, the key survives the rewrite.
     project.save();
     REQUIRE(read_file(dir.path / path) == edited);
-    game.game_object(part)->set_color(rgb(1.f, 0.f, 0.f));
+    game.game_object(part)->set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     project.save();
     const std::string rewritten = read_file(dir.path / path);
     REQUIRE(rewritten.find("\"path\": \"textures/brick.png\"") != std::string::npos);
@@ -485,7 +489,8 @@ TEST_CASE("P11 two siblings named Part are two files", "[P11][project]") {
     REQUIRE(fs::exists(dir.path / "src" / kWorkspace / ("Part." + second + ".json")));
     Project project = Project::load(dir.path);
     DataModel& game = project.datamodel();
-    REQUIRE(game.get_children(workspace_of(game)).size() == 2);
+    // The two Parts and the Camera a new project starts with.
+    REQUIRE(game.get_children(workspace_of(game)).size() == 3);
     REQUIRE(game.name(by_guid(game, first)) == "Part");
     REQUIRE(game.name(by_guid(game, second)) == "Part");
 }
@@ -650,7 +655,7 @@ TEST_CASE("load errors", "[project]") {
     SECTION("a bad value leaves the bound DataModel untouched") {
         TempDir dir;
         write_bare_project(dir.path);
-        write_file(dir.path / "src" / kWorkspace / "P.aaa.json", meta("GameObject", "aaa", "P", ",\n  \"Color\": [1]"));
+        write_file(dir.path / "src" / kWorkspace / "P.aaa.json", meta("GameObject", "aaa", "P", ",\n  \"Transform\": [1]"));
         Game game;
         const InstanceId keep = add_part(game, workspace_of(game), "Keep").id();
         REQUIRE_THROWS_AS(Project::load(dir.path, game), ProjectError);
@@ -776,9 +781,9 @@ TEST_CASE("the fingerprint changes with the saved bytes, not with edits that can
     const std::uint64_t saved = Project::place_fingerprint(game);
     REQUIRE(Project::place_fingerprint(game) == saved);
 
-    part.set_color(rgb(1.f, 0.f, 0.f));
+    part.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     REQUIRE(Project::place_fingerprint(game) != saved);
-    part.set_color(rgb(1.f, 1.f, 1.f));
+    part.set_transform(engine_core::matrix4_identity());
     REQUIRE(Project::place_fingerprint(game) == saved);
 
     game.set_name(part.id(), "Floor");
@@ -802,7 +807,7 @@ TEST_CASE("the fingerprint changes with the saved bytes, not with edits that can
     REQUIRE(Project::place_fingerprint(game) == saved);
 }
 
-TEST_CASE("reset_place empties the place and drops undo", "[project]") {
+TEST_CASE("reset_place empties the place but for a Camera and drops undo", "[project]") {
     SimRole role;
     Game game;
     add_part(game, workspace_of(game), "Part");
@@ -812,27 +817,31 @@ TEST_CASE("reset_place empties the place and drops undo", "[project]") {
     const std::string old_root = game.guid(0);
     game.start_simulation();
 
+    // Workspace holds only the new place's Camera.
+    const auto only_camera = [&] {
+        const std::vector<InstanceId> children = game.get_children(workspace_of(game));
+        return children.size() == 1 && std::string(game.instance(children[0])->class_name()) == "Camera";
+    };
     Project::reset_place(game);
     REQUIRE_FALSE(game.simulation_running());
-    REQUIRE(game.get_children(workspace_of(game)).empty());
+    REQUIRE(only_camera());
     REQUIRE_FALSE(game.history().can_undo().first);
     REQUIRE(game.guid(0) != old_root);
-    // Stop Play returns to the empty place, not the old one.
+    // Stop Play returns to the new place, not the old one.
     game.start_simulation();
     add_part(game, workspace_of(game), "Session");
     game.stop_simulation();
-    REQUIRE(game.get_children(workspace_of(game)).empty());
+    REQUIRE(only_camera());
 }
 
-TEST_CASE("a project opened in a running engine keeps colors and transforms", "[project]") {
+TEST_CASE("a project opened in a running engine keeps transforms", "[project]") {
     TempDir dir;
     std::string guid;
     {
         SimRole role;
         Project project = Project::create(dir.path);
         engine_core::GameObject& part = add_part(project.datamodel(), workspace_of(project.datamodel()), "Part");
-        part.set_color(rgb(0.25f, 0.5f, 0.75f));
-        part.set_transform(engine_core::transform_translation(4.f, 5.f, 6.f));
+        part.set_transform(engine_core::matrix4_translation(4.f, 5.f, 6.f));
         guid = project.datamodel().guid(part.id());
         project.save();
     }
@@ -844,7 +853,7 @@ TEST_CASE("a project opened in a running engine keeps colors and transforms", "[
     const DataModel& game = engine.datamodel();
     const engine_core::GameObject* part = game.game_object(*game.find_guid(guid));
     REQUIRE(part != nullptr);
-    REQUIRE(part->color().g == 0.5f);
+    REQUIRE(part->transform().m[13] == 5.f);
     REQUIRE(part->transform().m[14] == 6.f);
     // Nothing waits for the next step: a save right away writes the same bytes.
     const auto before = tree_files(dir.path);
@@ -919,7 +928,7 @@ TEST_CASE("G1 an outside edit to an instance the studio left alone survives a sa
     const std::string outside = read_file(dir.path / leaf(game, a.id())) + "\n";
     write_file(dir.path / leaf(game, a.id()), outside);
 
-    b.set_color(rgb(0.f, 0.f, 1.f));
+    b.set_transform(engine_core::matrix4_translation(0.f, 0.f, 1.f));
     REQUIRE(save_conflicts(project).empty());
     REQUIRE(project.last_save().written == std::vector<std::string>{leaf(game, b.id())});
     REQUIRE(read_file(dir.path / leaf(game, a.id())) == outside);
@@ -934,10 +943,11 @@ TEST_CASE("G2 an outside edit under a studio edit stops the save and writes noth
     engine_core::GameObject& b = add_part(game, workspace_of(game), "B");
     project.save();
     const std::string path = leaf(game, a.id());
-    edit_key(dir.path / path, "Size", triple(2, 2, 2));
+    edit_key(dir.path / path, "Transform", translated(2, 2, 2));
 
-    a.set_color(rgb(1.f, 0.f, 0.f));
-    b.set_color(rgb(0.f, 1.f, 0.f));
+    // A studio edit to another of A's keys: the save would write the disk's Transform back to the default.
+    game.set_visual_only(a.id(), true);
+    b.set_transform(engine_core::matrix4_translation(0.f, 1.f, 0.f));
     const auto before = tree_files(dir.path);
     std::string message;
     try {
@@ -948,9 +958,9 @@ TEST_CASE("G2 an outside edit under a studio edit stops the save and writes noth
         REQUIRE(conflict.conflicts()[0].guid == game.guid(a.id()));
         REQUIRE(conflict.conflicts()[0].path == path);
         REQUIRE(conflict.conflicts()[0].kind == engine_core::SaveConflict::Kind::EditedOutside);
-        REQUIRE(conflict.conflicts()[0].key == "Size");
+        REQUIRE(conflict.conflicts()[0].key == "Transform");
         REQUIRE(conflict.conflicts()[0].studio == "(default)");
-        REQUIRE(conflict.conflicts()[0].disk == "2, 2, 2");
+        REQUIRE(conflict.conflicts()[0].disk == transform_text("2, 2, 2"));
         REQUIRE(conflict.conflicts()[0].name == "A");
         REQUIRE(conflict.conflicts()[0].where == "game.Workspace");
     }
@@ -969,7 +979,7 @@ TEST_CASE("G3 a studio delete of a file edited outside stops the save", "[G3][gu
     const InstanceId a = add_part(game, workspace_of(game), "A").id();
     project.save();
     const std::string path = leaf(game, a);
-    edit_key(dir.path / path, "Size", triple(2, 2, 2));
+    edit_key(dir.path / path, "Transform", translated(2, 2, 2));
     const std::string outside = read_file(dir.path / path);
 
     game.destroy(a);
@@ -1036,7 +1046,7 @@ TEST_CASE("G6 a file rewritten with the same bytes is no conflict", "[G6][guard]
     const std::string path = leaf(game, a.id());
     write_file(dir.path / path, read_file(dir.path / path));
 
-    a.set_color(rgb(1.f, 0.f, 0.f));
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     REQUIRE(save_conflicts(project).empty());
     REQUIRE(project.last_save().written == std::vector<std::string>{path});
 }
@@ -1053,9 +1063,9 @@ TEST_CASE("G7 a save during play checks the place captured at Test", "[G7][guard
     const InstanceId door = rig.game.find_first_child(workspace_of(rig.game), "Door");
     REQUIRE(door != 0);
     const std::string path = leaf(rig.game, door);
-    edit_key(dir.path / path, "Size", triple(2, 2, 2));
+    edit_key(dir.path / path, "Transform", translated(2, 2, 2));
     // An edit before Test, recaptured into the place as the studio does after each edit.
-    rig.game.game_object(door)->set_color(rgb(1.f, 0.f, 0.f));
+    rig.game.game_object(door)->set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     rig.game.capture_place();
 
     rig.game.start_simulation();
@@ -1110,7 +1120,7 @@ TEST_CASE("G8 a file deleted outside stays deleted when the studio left it alone
     project.save();
     fs::remove(dir.path / leaf(game, a.id()));
 
-    b.set_color(rgb(0.f, 0.f, 1.f));
+    b.set_transform(engine_core::matrix4_translation(0.f, 0.f, 1.f));
     REQUIRE(save_conflicts(project).empty());
     REQUIRE(project.last_save().written == std::vector<std::string>{leaf(game, b.id())});
     REQUIRE_FALSE(fs::exists(dir.path / leaf(game, a.id())));
@@ -1129,7 +1139,7 @@ TEST_CASE("G9 a leaf moved outside keeps one file when the studio left it alone"
     const std::string guid = game.guid(ids.leaf);
     fs::rename(dir.path / leaf(game, ids.leaf), ids.moved(dir.path, game));
 
-    game.game_object(ids.keep)->set_color(rgb(0.f, 1.f, 0.f));
+    game.game_object(ids.keep)->set_transform(engine_core::matrix4_translation(0.f, 1.f, 0.f));
     REQUIRE(save_conflicts(project).empty());
     REQUIRE(leaf_files_of(dir.path, guid).size() == 1);
     Project loaded = Project::load(dir.path);
@@ -1147,7 +1157,7 @@ TEST_CASE("G10 a file deleted outside under a studio edit stops the save", "[G10
     const std::string path = leaf(game, a.id());
     fs::remove(dir.path / path);
 
-    a.set_color(rgb(1.f, 0.f, 0.f));
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     const auto before = tree_files(dir.path);
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
     REQUIRE(conflicts.size() == 1);
@@ -1167,7 +1177,7 @@ TEST_CASE("G11 a file moved outside under a studio edit stops the save", "[G11][
     const std::string path = leaf(game, ids.leaf);
     fs::rename(dir.path / path, ids.moved(dir.path, game));
 
-    game.game_object(ids.leaf)->set_color(rgb(1.f, 0.f, 0.f));
+    game.game_object(ids.leaf)->set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     const auto before = tree_files(dir.path);
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
     REQUIRE(conflicts.size() == 1);
@@ -1246,7 +1256,7 @@ TEST_CASE("G15 junk that mentions a GUID does not make a deleted file look moved
     write_file(dir.path / "src" / kWorkspace / ("A." + guid + " copy.json"), bytes);
     fs::remove(dir.path / path);
 
-    a.set_color(rgb(1.f, 0.f, 0.f));
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
     REQUIRE(conflicts.size() == 1);
     REQUIRE(conflicts[0].kind == engine_core::SaveConflict::Kind::DeletedOutside);
@@ -1260,14 +1270,14 @@ TEST_CASE("G16 Overwrite writes the studio's version over an outside edit", "[G1
     engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     const std::string path = leaf(game, a.id());
-    edit_key(dir.path / path, "Size", triple(2, 2, 2));
+    edit_key(dir.path / path, "Transform", translated(2, 2, 2));
 
-    a.set_color(rgb(0.25f, 0.5f, 0.75f));
+    a.set_transform(engine_core::matrix4_translation(0.25f, 0.5f, 0.75f));
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
     REQUIRE(conflicts.size() == 1);
     project.save(conflicts);
     REQUIRE(project.last_save().written == std::vector<std::string>{path});
-    REQUIRE(read_file(dir.path / path).find("\"Color\": [0.25, 0.5, 0.75]") != std::string::npos);
+    REQUIRE(read_file(dir.path / path).find(transform_line("0.25, 0.5, 0.75")) != std::string::npos);
     REQUIRE(save_conflicts(project).empty());
     REQUIRE(project.last_save().written.empty());
 }
@@ -1283,7 +1293,7 @@ TEST_CASE("G17 Overwrite of a file moved outside leaves one file for its GUID", 
     const fs::path moved = ids.moved(dir.path, game);
     fs::rename(dir.path / leaf(game, ids.leaf), moved);
 
-    game.game_object(ids.leaf)->set_color(rgb(0.25f, 0.5f, 0.75f));
+    game.game_object(ids.leaf)->set_transform(engine_core::matrix4_translation(0.25f, 0.5f, 0.75f));
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
     REQUIRE(conflicts.size() == 1);
     project.save(conflicts);
@@ -1293,7 +1303,7 @@ TEST_CASE("G17 Overwrite of a file moved outside leaves one file for its GUID", 
     DataModel& again = loaded.datamodel();
     const InstanceId loose = by_guid(again, guid);
     REQUIRE(again.parent(loose) == workspace_of(again));
-    REQUIRE(again.game_object(loose)->color().b == 0.75f);
+    REQUIRE(again.game_object(loose)->position().z == 0.75f);
 }
 
 TEST_CASE("G18 Overwrite puts back a file deleted outside", "[G18][guard][project]") {
@@ -1307,13 +1317,13 @@ TEST_CASE("G18 Overwrite puts back a file deleted outside", "[G18][guard][projec
     const std::string guid = game.guid(a.id());
     fs::remove(dir.path / path);
 
-    a.set_color(rgb(0.25f, 0.5f, 0.75f));
+    a.set_transform(engine_core::matrix4_translation(0.25f, 0.5f, 0.75f));
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
     REQUIRE(conflicts.size() == 1);
     project.save(conflicts);
     REQUIRE(fs::exists(dir.path / path));
     Project loaded = Project::load(dir.path);
-    REQUIRE(loaded.datamodel().game_object(by_guid(loaded.datamodel(), guid))->color().b == 0.75f);
+    REQUIRE(loaded.datamodel().game_object(by_guid(loaded.datamodel(), guid))->position().z == 0.75f);
 }
 
 TEST_CASE("G19 Overwrite after a folder deleted outside leaves a project that loads", "[G19][guard][project]") {
@@ -1328,7 +1338,7 @@ TEST_CASE("G19 Overwrite after a folder deleted outside leaves a project that lo
     const std::string box_dir = "src/Workspace.workspace/Box." + game.guid(box);
     fs::remove_all(dir.path / box_dir);
 
-    game.game_object(keep)->set_color(rgb(0.25f, 0.5f, 0.75f));
+    game.game_object(keep)->set_transform(engine_core::matrix4_translation(0.25f, 0.5f, 0.75f));
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
     bool box_listed = false;
     for (const engine_core::SaveConflict& conflict : conflicts) {
@@ -1341,7 +1351,7 @@ TEST_CASE("G19 Overwrite after a folder deleted outside leaves a project that lo
     DataModel& again = loaded.datamodel();
     const InstanceId kept = by_guid(again, game.guid(keep));
     REQUIRE(again.guid(again.parent(kept)) == game.guid(box));
-    REQUIRE(again.game_object(kept)->color().b == 0.75f);
+    REQUIRE(again.game_object(kept)->position().z == 0.75f);
 }
 
 TEST_CASE("G20 Overwrite of a new child two folders below one deleted outside leaves a project that loads",
@@ -1377,7 +1387,7 @@ TEST_CASE("G21 Overwrite of a folder moved outside brings its children back with
     fs::rename(dir.path / ("src/Workspace.workspace/Box." + game.guid(box)),
                dir.path / ("src/Workspace.workspace/Q." + game.guid(q)) / ("Box." + game.guid(box)));
 
-    game.game_object(box)->set_color(rgb(0.25f, 0.5f, 0.75f));
+    game.game_object(box)->set_transform(engine_core::matrix4_translation(0.25f, 0.5f, 0.75f));
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
     REQUIRE_FALSE(conflicts.empty());
     project.save(conflicts);
@@ -1403,14 +1413,14 @@ TEST_CASE("G22 Overwrite keeps the file it wrote when the name on disk differs o
     fs::rename(dir.path / leaf(game, door.id()), renamed);
     write_file(renamed, bytes);
 
-    door.set_color(rgb(0.25f, 0.5f, 0.75f));
+    door.set_transform(engine_core::matrix4_translation(0.25f, 0.5f, 0.75f));
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
     REQUIRE(conflicts.size() == 1);
     REQUIRE(conflicts[0].key == "Name");
     project.save(conflicts);
     REQUIRE(leaf_files_of(dir.path, guid).size() == 1);
     Project loaded = Project::load(dir.path);
-    REQUIRE(loaded.datamodel().game_object(by_guid(loaded.datamodel(), guid))->color().b == 0.75f);
+    REQUIRE(loaded.datamodel().game_object(by_guid(loaded.datamodel(), guid))->position().z == 0.75f);
 }
 
 TEST_CASE("G23 Overwrite writes over only the conflicts it lists", "[G23][guard][project]") {
@@ -1423,15 +1433,15 @@ TEST_CASE("G23 Overwrite writes over only the conflicts it lists", "[G23][guard]
     project.save();
     const std::string a_path = leaf(game, a.id());
     const std::string b_path = leaf(game, b.id());
-    edit_key(dir.path / a_path, "Size", triple(2, 2, 2));
+    edit_key(dir.path / a_path, "Transform", translated(2, 2, 2));
     const std::string a_outside = read_file(dir.path / a_path);
-    a.set_color(rgb(1.f, 0.f, 0.f));
-    b.set_color(rgb(0.f, 1.f, 0.f));
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
+    b.set_transform(engine_core::matrix4_translation(0.f, 1.f, 0.f));
     const std::vector<engine_core::SaveConflict> listed = save_conflicts(project);
     REQUIRE(listed.size() == 1);
 
     // B changes on disk after the list was made.
-    edit_key(dir.path / b_path, "Size", triple(2, 2, 2));
+    edit_key(dir.path / b_path, "Transform", translated(2, 2, 2));
     const std::string b_outside = read_file(dir.path / b_path);
     std::vector<engine_core::SaveConflict> again;
     try {
@@ -1500,7 +1510,7 @@ TEST_CASE("G25 a copy of a folder beside it is not taken for a move", "[G25][gua
     fs::copy(dir.path / box_dir, copy, fs::copy_options::recursive);
     fs::remove(dir.path / box_dir / keep_name);
 
-    game.game_object(keep)->set_color(rgb(0.25f, 0.5f, 0.75f));
+    game.game_object(keep)->set_transform(engine_core::matrix4_translation(0.25f, 0.5f, 0.75f));
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
     REQUIRE(conflicts.size() == 1);
     REQUIRE(conflicts[0].kind == engine_core::SaveConflict::Kind::DeletedOutside);
@@ -1524,7 +1534,7 @@ TEST_CASE("G26 part of an instance deleted outside is written back when the stud
     fs::remove(dir.path / luau);
     fs::remove(dir.path / init);
 
-    other.set_color(rgb(0.25f, 0.5f, 0.75f));
+    other.set_transform(engine_core::matrix4_translation(0.25f, 0.5f, 0.75f));
     REQUIRE(save_conflicts(project).empty());
     REQUIRE(read_file(dir.path / luau) == "print(1)\n");
     REQUIRE(fs::exists(dir.path / init));
@@ -1545,9 +1555,9 @@ TEST_CASE("G27 a file only reformatted outside is no conflict", "[G27][guard][pr
     }
     write_file(dir.path / path, wide);
 
-    a.set_color(rgb(0.25f, 0.5f, 0.75f));
+    a.set_transform(engine_core::matrix4_translation(0.25f, 0.5f, 0.75f));
     REQUIRE(save_conflicts(project).empty());
-    REQUIRE(read_file(dir.path / path).find("\"Color\": [0.25, 0.5, 0.75]") != std::string::npos);
+    REQUIRE(read_file(dir.path / path).find(transform_line("0.25, 0.5, 0.75")) != std::string::npos);
 }
 
 TEST_CASE("G28 a property file that does not parse is one row for its instance", "[G28][guard][project]") {
@@ -1560,13 +1570,13 @@ TEST_CASE("G28 a property file that does not parse is one row for its instance",
     const std::string path = leaf(game, a.id());
     write_file(dir.path / path, "{\"class\": ");
 
-    a.set_color(rgb(0.25f, 0.5f, 0.75f));
+    a.set_transform(engine_core::matrix4_translation(0.25f, 0.5f, 0.75f));
     const std::vector<engine_core::SaveConflict> conflicts = save_conflicts(project);
     REQUIRE(conflicts.size() == 1);
     REQUIRE(conflicts[0].key.empty());
     REQUIRE(conflicts[0].disk == "can't be read");
     project.save(conflicts);
-    REQUIRE(read_file(dir.path / path).find("\"Color\": [0.25, 0.5, 0.75]") != std::string::npos);
+    REQUIRE(read_file(dir.path / path).find(transform_line("0.25, 0.5, 0.75")) != std::string::npos);
 }
 
 namespace {
@@ -1601,7 +1611,7 @@ TEST_CASE("D2 a property only the disk changed is a change to load, not a row", 
     DataModel& game = project.datamodel();
     engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
-    edit_key(dir.path / leaf(game, a.id()), "Size", triple(2, 2, 2));
+    edit_key(dir.path / leaf(game, a.id()), "Transform", translated(2, 2, 2));
     const engine_core::DiskScan scan = project.scan_disk();
     REQUIRE(scan.conflicts.empty());
     REQUIRE(scan.has_disk_changes);
@@ -1616,15 +1626,15 @@ TEST_CASE("D3 a property both sides changed differently is a row", "[D3][disk][p
     engine_core::GameObject& a = add_part(game, box, "A");
     project.save();
     const std::string path = box_dir(game, box) + "/A." + game.guid(a.id()) + ".json";
-    edit_key(dir.path / path, "Color", triple(0, 0, 1));
-    a.set_color(rgb(1.f, 0.f, 0.f));
+    edit_key(dir.path / path, "Transform", translated(0, 0, 1));
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     const engine_core::SaveConflict& row = only_row(project.scan_disk());
     REQUIRE(row.guid == game.guid(a.id()));
     REQUIRE(row.path == path);
     REQUIRE(row.kind == engine_core::SaveConflict::Kind::EditedOutside);
-    REQUIRE(row.key == "Color");
-    REQUIRE(row.studio == "1, 0, 0");
-    REQUIRE(row.disk == "0, 0, 1");
+    REQUIRE(row.key == "Transform");
+    REQUIRE(row.studio == transform_text("1, 0, 0"));
+    REQUIRE(row.disk == transform_text("0, 0, 1"));
     REQUIRE(row.name == "A");
     REQUIRE(row.where == "game.Workspace.Box");
 }
@@ -1636,8 +1646,8 @@ TEST_CASE("D4 a property both sides changed the same way is nothing", "[D4][disk
     DataModel& game = project.datamodel();
     engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
-    edit_key(dir.path / leaf(game, a.id()), "Color", triple(0, 0, 1));
-    a.set_color(rgb(0.f, 0.f, 1.f));
+    edit_key(dir.path / leaf(game, a.id()), "Transform", translated(0, 0, 1));
+    a.set_transform(engine_core::matrix4_translation(0.f, 0.f, 1.f));
     const engine_core::DiskScan scan = project.scan_disk();
     REQUIRE(scan.conflicts.empty());
     REQUIRE_FALSE(scan.has_disk_changes);
@@ -1703,7 +1713,7 @@ TEST_CASE("D7 an instance deleted on disk", "[D7][disk][project]") {
         REQUIRE(scan.has_disk_changes);
     }
     SECTION("the studio changed something inside it: rows for it and for the child") {
-        game.game_object(keep)->set_color(rgb(1.f, 0.f, 0.f));
+        game.game_object(keep)->set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
         const engine_core::DiskScan scan = project.scan_disk();
         REQUIRE(scan.conflicts.size() == 2);
         std::set<std::string> names;
@@ -1734,7 +1744,7 @@ TEST_CASE("D8 an instance deleted in the studio", "[D8][disk][project]") {
         REQUIRE_FALSE(scan.has_disk_changes);
     }
     SECTION("the disk changed it: a row") {
-        edit_key(dir.path / path, "Size", triple(2, 2, 2));
+        edit_key(dir.path / path, "Transform", translated(2, 2, 2));
         game.destroy(a);
         const engine_core::SaveConflict& row = only_row(project.scan_disk());
         REQUIRE(row.kind == engine_core::SaveConflict::Kind::EditedOutside);
@@ -1760,7 +1770,7 @@ TEST_CASE("D9 a class changed on disk", "[D9][disk][project]") {
         REQUIRE(scan.has_disk_changes);
     }
     SECTION("the studio changed it: a row") {
-        a.set_color(rgb(1.f, 0.f, 0.f));
+        a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
         const engine_core::SaveConflict& row = only_row(project.scan_disk());
         REQUIRE(row.key == "class");
         REQUIRE(row.studio == "GameObject");
@@ -1801,7 +1811,7 @@ TEST_CASE("D11 a value a class rejects makes the scan throw", "[D11][disk][proje
     DataModel& game = project.datamodel();
     engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
-    edit_key(dir.path / leaf(game, a.id()), "Color", engine_core::JsonValue::string("red"));
+    edit_key(dir.path / leaf(game, a.id()), "Transform", engine_core::JsonValue::string("red"));
     REQUIRE_THROWS_AS(project.scan_disk(), ProjectError);
 }
 
@@ -1811,7 +1821,7 @@ TEST_CASE("D12 a file only reformatted is no change", "[D12][disk][project]") {
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
     engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
-    a.set_color(rgb(1.f, 0.f, 0.f));
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     project.save();
     const std::string path = leaf(game, a.id());
     std::string wide = read_file(dir.path / path);
@@ -1830,13 +1840,13 @@ TEST_CASE("D13 a key removed on disk is a change to load", "[D13][disk][project]
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
     engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
-    a.set_color(rgb(1.f, 0.f, 0.f));
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     project.save();
     const fs::path file = dir.path / leaf(game, a.id());
     engine_core::JsonValue doc;
     std::string error;
     REQUIRE(engine_core::parse_json(read_file(file), doc, error));
-    REQUIRE(doc.erase("Color"));
+    REQUIRE(doc.erase("Transform"));
     write_file(file, engine_core::write_json(doc));
     const engine_core::DiskScan scan = project.scan_disk();
     REQUIRE(scan.conflicts.empty());
@@ -1861,21 +1871,21 @@ TEST_CASE("A1 disk changes load as one undo step; undone, a save writes the stud
     const InstanceId a = add_part(game, workspace_of(game), "A").id();
     engine_core::GameObject& b = add_part(game, workspace_of(game), "B");
     project.save();
-    edit_key(dir.path / leaf(game, a), "Size", triple(2, 2, 2));
+    edit_key(dir.path / leaf(game, a), "Transform", translated(2, 2, 2));
     // A studio edit whose gesture is still open.
-    b.set_color(rgb(1.f, 0.f, 0.f));
+    b.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
 
     const engine_core::DiskScan result = project.apply_disk();
     REQUIRE(result.loaded == std::vector<std::string>{"A"});
     REQUIRE(result.conflicts.empty());
-    REQUIRE(has_key(*game.instance(a), "Size"));
+    REQUIRE(has_key(*game.instance(a), "Transform"));
     REQUIRE_FALSE(project.scan_disk().has_disk_changes);
 
     game.history().undo();
-    REQUIRE_FALSE(has_key(*game.instance(a), "Size"));
-    REQUIRE(b.color().r == 1.f);
+    REQUIRE_FALSE(has_key(*game.instance(a), "Transform"));
+    REQUIRE(b.position().x == 1.f);
     REQUIRE(save_conflicts(project).empty());
-    REQUIRE(read_file(dir.path / leaf(game, a)).find("Size") == std::string::npos);
+    REQUIRE(read_file(dir.path / leaf(game, a)).find("Transform") == std::string::npos);
 }
 
 TEST_CASE("A2 each side of a row", "[A2][disk][project]") {
@@ -1886,10 +1896,10 @@ TEST_CASE("A2 each side of a row", "[A2][disk][project]") {
     engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     engine_core::GameObject& b = add_part(game, workspace_of(game), "B");
     project.save();
-    edit_key(dir.path / leaf(game, a.id()), "Color", triple(0, 0, 1));
-    edit_key(dir.path / leaf(game, b.id()), "Color", triple(0, 0, 1));
-    a.set_color(rgb(1.f, 0.f, 0.f));
-    b.set_color(rgb(1.f, 0.f, 0.f));
+    edit_key(dir.path / leaf(game, a.id()), "Transform", translated(0, 0, 1));
+    edit_key(dir.path / leaf(game, b.id()), "Transform", translated(0, 0, 1));
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
+    b.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     const std::vector<engine_core::SaveConflict> rows = project.scan_disk().conflicts;
     REQUIRE(rows.size() == 2);
     std::vector<engine_core::DiskChoice> choices;
@@ -1900,12 +1910,12 @@ TEST_CASE("A2 each side of a row", "[A2][disk][project]") {
     const engine_core::DiskScan result = project.apply_disk(choices);
     REQUIRE(result.conflicts.empty());
     REQUIRE(result.skipped.empty());
-    REQUIRE(a.color().b == 1.f);
-    REQUIRE(b.color().r == 1.f);
+    REQUIRE(a.position().z == 1.f);
+    REQUIRE(b.position().x == 1.f);
     // B's studio value is settled: a save writes it over the disk's.
     REQUIRE(save_conflicts(project).empty());
-    REQUIRE(read_file(dir.path / leaf(game, b.id())).find("\"Color\": [1, 0, 0]") != std::string::npos);
-    REQUIRE(read_file(dir.path / leaf(game, a.id())).find("\"Color\": [0, 0, 1]") != std::string::npos);
+    REQUIRE(read_file(dir.path / leaf(game, b.id())).find(transform_line("1, 0, 0")) != std::string::npos);
+    REQUIRE(read_file(dir.path / leaf(game, a.id())).find(transform_line("0, 0, 1")) != std::string::npos);
 }
 
 TEST_CASE("A3 a row that changed after it was listed is skipped and listed again", "[A3][disk][project]") {
@@ -1916,17 +1926,17 @@ TEST_CASE("A3 a row that changed after it was listed is skipped and listed again
     engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     const fs::path file = dir.path / leaf(game, a.id());
-    edit_key(file, "Color", triple(0, 0, 1));
-    a.set_color(rgb(1.f, 0.f, 0.f));
+    edit_key(file, "Transform", translated(0, 0, 1));
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     const std::vector<engine_core::SaveConflict> listed = project.scan_disk().conflicts;
     REQUIRE(listed.size() == 1);
-    edit_key(file, "Color", triple(0, 1, 0));
+    edit_key(file, "Transform", translated(0, 1, 0));
 
     const engine_core::DiskScan result = project.apply_disk({{listed[0], true}});
     REQUIRE(result.skipped == listed);
     REQUIRE(result.conflicts.size() == 1);
-    REQUIRE(result.conflicts[0].disk == "0, 1, 0");
-    REQUIRE(a.color().r == 1.f);
+    REQUIRE(result.conflicts[0].disk == transform_text("0, 1, 0"));
+    REQUIRE(a.position().x == 1.f);
 }
 
 TEST_CASE("A4 a loaded property keeps the instance's id", "[A4][disk][project]") {
@@ -1937,7 +1947,7 @@ TEST_CASE("A4 a loaded property keeps the instance's id", "[A4][disk][project]")
     const InstanceId a = add_part(game, workspace_of(game), "A").id();
     const std::string guid = game.guid(a);
     project.save();
-    edit_key(dir.path / leaf(game, a), "Size", triple(2, 2, 2));
+    edit_key(dir.path / leaf(game, a), "Transform", translated(2, 2, 2));
     project.apply_disk();
     const std::optional<engine_core::InstanceId> found = game.find_guid(guid);
     REQUIRE(found.has_value());
@@ -2021,7 +2031,7 @@ TEST_CASE("A8 rows for an instance deleted on disk", "[A8][disk][project]") {
     const std::string box_guid = game.guid(box);
     const std::string keep_guid = game.guid(keep);
     fs::remove_all(dir.path / box_dir(game, box));
-    game.game_object(keep)->set_color(rgb(1.f, 0.f, 0.f));
+    game.game_object(keep)->set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     const std::vector<engine_core::SaveConflict> rows = project.scan_disk().conflicts;
     REQUIRE(rows.size() == 2);
 
@@ -2100,17 +2110,17 @@ TEST_CASE("A11 a key removed on disk puts the class default back", "[A11][disk][
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
     engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
-    a.set_color(rgb(1.f, 0.f, 0.f));
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     project.save();
     const fs::path file = dir.path / leaf(game, a.id());
     engine_core::JsonValue doc;
     std::string error;
     REQUIRE(engine_core::parse_json(read_file(file), doc, error));
-    REQUIRE(doc.erase("Color"));
+    REQUIRE(doc.erase("Transform"));
     write_file(file, engine_core::write_json(doc));
 
     project.apply_disk();
-    REQUIRE_FALSE(has_key(a, "Color"));
+    REQUIRE_FALSE(has_key(a, "Transform"));
 }
 
 TEST_CASE("A12 a source only the disk changed loads", "[A12][disk][project]") {
@@ -2189,8 +2199,8 @@ TEST_CASE("U1 unsaved follows edits and their undo", "[U1][disk][project]") {
     DataModel& game = project.datamodel();
     REQUIRE_FALSE(project.unsaved());
     const InstanceId a = game.find_first_child(workspace_of(game), "A");
-    game.history().set_pending_gesture("Color");
-    game.game_object(a)->set_color(rgb(1.f, 0.f, 0.f));
+    game.history().set_pending_gesture("Transform");
+    game.game_object(a)->set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     game.history().end_gesture();
     REQUIRE(project.unsaved());
     game.history().undo();
@@ -2204,7 +2214,7 @@ TEST_CASE("U2 changes loaded from disk are not unsaved", "[U2][disk][project]") 
     DataModel& game = project.datamodel();
     const InstanceId a = add_part(game, workspace_of(game), "A").id();
     project.save();
-    edit_key(dir.path / leaf(game, a), "Size", triple(2, 2, 2));
+    edit_key(dir.path / leaf(game, a), "Transform", translated(2, 2, 2));
     project.apply_disk();
     REQUIRE_FALSE(project.unsaved());
 }
@@ -2215,7 +2225,7 @@ TEST_CASE("U3 a file only reformatted on disk is not unsaved", "[U3][disk][proje
     Project project = Project::create(dir.path);
     DataModel& game = project.datamodel();
     engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
-    a.set_color(rgb(1.f, 0.f, 0.f));
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     project.save();
     const std::string path = leaf(game, a.id());
     std::string wide = read_file(dir.path / path);
@@ -2240,15 +2250,26 @@ TEST_CASE("U4 a root saved as DataModel is not unsaved", "[U4][disk][project]") 
 namespace {
 
 // Stands in for another program writing a file while an apply runs: making a
-// RaceProbe writes a Size into race_file, once.
+// RaceProbe writes a Transform into race_file, once.
 fs::path race_file;
 
 engine_core::DataModel& make_race_probe(DataModel& world) {
     DataModel& made = world.create<engine_core::Folder>();
-    if (!race_file.empty() && read_file(race_file).find("\"Size\"") == std::string::npos) {
-        edit_key(race_file, "Size", triple(3, 3, 3));
+    if (!race_file.empty() && read_file(race_file).find("\"Transform\"") == std::string::npos) {
+        edit_key(race_file, "Transform", translated(3, 3, 3));
     }
     return made;
+}
+
+// A Transform whose x holds more digits than a float does.
+engine_core::JsonValue precise_transform() {
+    const engine_core::Matrix4 identity = engine_core::matrix4_identity();
+    std::vector<engine_core::JsonValue> items;
+    for (const float value : identity.m) {
+        items.push_back(engine_core::JsonValue::number(value));
+    }
+    items[12] = engine_core::JsonValue::number(1.23456789);
+    return engine_core::JsonValue::array(std::move(items));
 }
 
 }  // namespace
@@ -2268,7 +2289,7 @@ TEST_CASE("F1 a file written during an apply is still a change afterwards", "[F1
     race_file.clear();
     REQUIRE(project.scan_disk().has_disk_changes);
     project.apply_disk();
-    REQUIRE(has_key(*game.instance(b), "Size"));
+    REQUIRE(has_key(*game.instance(b), "Transform"));
 }
 
 TEST_CASE("F2 a class change and a move on disk load together", "[F2][disk][project]") {
@@ -2302,19 +2323,8 @@ TEST_CASE("F3 a value the class stores differently is no row", "[F3][disk][proje
     DataModel& game = project.datamodel();
     const InstanceId a = add_part(game, workspace_of(game), "A").id();
     project.save();
-    const fs::path file = dir.path / leaf(game, a);
-
-    SECTION("a float with more digits than a float holds") {
-        engine_core::JsonValue precise = engine_core::JsonValue::array(
-            {engine_core::JsonValue::number(1.23456789), engine_core::JsonValue::number(1), engine_core::JsonValue::number(1)});
-        edit_key(file, "Size", precise);
-    }
-    SECTION("an opaque color written with four channels") {
-        engine_core::JsonValue color = engine_core::JsonValue::array(
-            {engine_core::JsonValue::number(1), engine_core::JsonValue::number(0), engine_core::JsonValue::number(0),
-             engine_core::JsonValue::number(1)});
-        edit_key(file, "Color", color);
-    }
+    // A float with more digits than a float holds.
+    edit_key(dir.path / leaf(game, a), "Transform", precise_transform());
     const engine_core::DiskScan result = project.apply_disk();
     REQUIRE(result.conflicts.empty());
     REQUIRE_FALSE(result.has_disk_changes);
@@ -2332,9 +2342,7 @@ TEST_CASE("F3b a project opened with a precise number is not unsaved", "[F3b][di
         project.save();
         path = leaf(project.datamodel(), a);
     }
-    edit_key(dir.path / path, "Size",
-             engine_core::JsonValue::array({engine_core::JsonValue::number(1.23456789), engine_core::JsonValue::number(1),
-                                            engine_core::JsonValue::number(1)}));
+    edit_key(dir.path / path, "Transform", precise_transform());
     Project project = Project::load(dir.path);
     REQUIRE_FALSE(project.unsaved());
 }
@@ -2347,14 +2355,15 @@ TEST_CASE("F4 undoing Changes from Disk sticks for an instance with an open row"
     engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
     project.save();
     const fs::path file = dir.path / leaf(game, a.id());
-    edit_key(file, "Size", triple(2, 2, 2));
-    edit_key(file, "Color", triple(0, 0, 1));
-    a.set_color(rgb(1.f, 0.f, 0.f));
+    // VisualOnly only the disk changed; Transform both sides changed.
+    edit_key(file, "VisualOnly", engine_core::JsonValue::boolean(true));
+    edit_key(file, "Transform", translated(0, 0, 1));
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     const engine_core::DiskScan result = project.apply_disk();
     REQUIRE(result.conflicts.size() == 1);
-    REQUIRE(has_key(a, "Size"));
+    REQUIRE(has_key(a, "VisualOnly"));
     game.history().undo();
-    REQUIRE_FALSE(has_key(a, "Size"));
+    REQUIRE_FALSE(has_key(a, "VisualOnly"));
     REQUIRE_FALSE(project.scan_disk().has_disk_changes);
 }
 
@@ -2395,7 +2404,7 @@ TEST_CASE("F6 keeping a folder deleted on disk keeps its untouched children", "[
     const std::string other_guid = game.guid(other);
     project.save();
     fs::remove_all(dir.path / box_dir(game, box));
-    game.game_object(keep)->set_color(rgb(1.f, 0.f, 0.f));
+    game.game_object(keep)->set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
 
     const engine_core::DiskScan checked = project.apply_disk();
     REQUIRE(game.find_guid(other_guid).has_value());
@@ -2535,7 +2544,7 @@ TEST_CASE("P21 a save over a conflict that cannot remove the other file leaves t
     const std::string planned = leaf(game, part);
     const std::string moved = "src/Workspace.workspace/Moved." + game.guid(part) + ".json";
     fs::rename(dir.path / planned, dir.path / moved);
-    game.game_object(part)->set_color(rgb(0.25f, 0.5f, 0.75f));
+    game.game_object(part)->set_transform(engine_core::matrix4_translation(0.25f, 0.5f, 0.75f));
     std::vector<engine_core::SaveConflict> conflicts;
     try {
         project.save();
@@ -2606,9 +2615,9 @@ TEST_CASE("D15 changes from disk that do not fit settle none of the choices", "[
     DataModel& game = project.datamodel();
     const InstanceId part = add_part(game, workspace_of(game), "Part").id();
     project.save();
-    // Both sides change the color: a row for a person's choice.
-    game.game_object(part)->set_color(rgb(1.f, 0.f, 0.f));
-    edit_key(dir.path / leaf(game, part), "Color", triple(0.f, 0.f, 1.f));
+    // Both sides change the transform: a row for a person's choice.
+    game.game_object(part)->set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
+    edit_key(dir.path / leaf(game, part), "Transform", translated(0.f, 0.f, 1.f));
     const std::vector<engine_core::SaveConflict> rows = project.scan_disk().conflicts;
     REQUIRE(rows.size() == 1);
 
@@ -2620,7 +2629,7 @@ TEST_CASE("D15 changes from disk that do not fit settle none of the choices", "[
     for (const char* guid : {"n1", "n2", "n3", "n4", "n5"}) {
         write_file(dir.path / "src" / kWorkspace / (std::string("New.") + guid + ".json"), meta("DataModel", guid, "New"));
     }
-    // Keeping the studio's color would settle that row, but nothing may change when the rest cannot fit.
+    // Keeping the studio's transform would settle that row, but nothing may change when the rest cannot fit.
     REQUIRE_THROWS_AS(project.apply_disk({engine_core::DiskChoice{rows.front(), false}}), ProjectError);
     REQUIRE(project.scan_disk().conflicts == rows);
 }

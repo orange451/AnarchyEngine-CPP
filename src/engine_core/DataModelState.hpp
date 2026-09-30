@@ -14,13 +14,13 @@
 #include "ScriptAnalysis.hpp"
 #include "SelectionService.hpp"
 #include "TaskScheduler.hpp"
-#include "TestTriangle.hpp"
 #include "UserInputService.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <mutex>
 #include <new>
 #include <optional>
@@ -176,6 +176,9 @@ struct DataModel::State {
         std::vector<InstanceId> ids;
         std::function<void()> notify;
     };
+    // DataModel::resources_root. The UI thread and SimulationThread both read it.
+    mutable std::mutex resources_mu;
+    std::filesystem::path resources_root;
     std::mutex watch_mu;
     std::vector<ChangeWatcher> watchers;
     std::atomic<std::size_t> watched_count{0};

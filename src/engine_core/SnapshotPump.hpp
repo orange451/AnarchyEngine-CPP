@@ -6,19 +6,49 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
+#include <string>
+#include <unordered_map>
 #include <vector>
+
+namespace anarchy::amesh {
+struct Data;
+}
 
 namespace engine_core {
 
 struct VisualInstance {
     InstanceId id = 0;
-    Transform world = transform_identity();
-    ColorRgb color{};
-    float size[3] = {1.f, 1.f, 1.f};
+    Matrix4 world = matrix4_identity();
     bool alive = true;
     WriteOrigin transform_origin = WriteOrigin::Simulation;
-    WriteOrigin color_origin = WriteOrigin::Simulation;
-    WriteOrigin size_origin = WriteOrigin::Simulation;
+    // What the row draws: its entry in VisualSnapshot::prefabs. 0 is no
+    // Prefab, and a GameObject without one draws nothing.
+    std::uint32_t prefab = 0;
+    // A Camera's FieldOfView, in degrees. 0 when the row is not a Camera.
+    float field_of_view = 0.f;
+};
+
+// One Model's Mesh, as the renderer loads it: a file, or the geometry this
+// play session's edits made (Mesh::session_geometry), which wins while it lasts.
+struct VisualMesh {
+    // Relative to the project's resources folder. Empty when session is set.
+    std::string path;
+    // Immutable once published. revision is unique across every Mesh, so a
+    // renderer uploads again only when it changes.
+    std::shared_ptr<const anarchy::amesh::Data> session;
+    std::uint64_t revision = 0;
+    // The Mesh, which a renderer can key its upload of session by.
+    InstanceId mesh = 0;
+};
+
+// What one Prefab draws, found again at every Prepare, so an edit to its
+// Models or their Meshes shows on the next frame.
+struct VisualPrefab {
+    // One per Model, in child order. A Model with no Mesh, or a Mesh with
+    // neither a Path nor session geometry, adds nothing, and so does a Prefab
+    // no live instance holds.
+    std::vector<VisualMesh> meshes;
 };
 
 // Path C. Applied after the DataModel copy. Gone on the next Prepare
@@ -26,14 +56,15 @@ struct VisualInstance {
 struct SnapshotOverride {
     InstanceId id = 0;
     VisualField field = VisualField::Transform;
-    Transform transform = transform_identity();
-    ColorRgb color{};
+    Matrix4 transform = matrix4_identity();
 };
 
 struct VisualSnapshot {
     std::uint64_t frame = 0;
-    Transform camera = transform_identity();
+    Matrix4 camera = matrix4_identity();
     std::vector<VisualInstance> instances;
+    // Indexed by VisualInstance::prefab. Entry 0 is always empty.
+    std::vector<VisualPrefab> prefabs;
 };
 
 // Double buffer plus the one-frame override list.
@@ -48,7 +79,7 @@ public:
 
     // Path C. No DataModel write.
     void override_visual(const SnapshotOverride& override);
-    void set_camera(const Transform& camera);
+    void set_camera(const Matrix4& camera);
 
     // Copies dirty DataModel fields into the base snapshot. Needs the DataModel
     // lock, and is the only step here that does.
@@ -67,12 +98,27 @@ public:
     std::uint64_t published_frame() const { return published_frame_.load(); }
 
 private:
+    // A Prefab GUID some row names. Rows share an entry, so the Prefab's
+    // Models are found once per Prepare however many rows draw it.
+    struct PrefabEntry {
+        std::string guid;
+        InstanceId cached = 0;
+        std::uint32_t rows = 0;
+    };
+
     VisualInstance* base_find(InstanceId id);
     void erase_base(InstanceId id);
     void apply_live(DataModel& game, const Invalidation& change);
     void resync(DataModel& game);
     void blit(VisualSnapshot& dst) const;
     void apply_overrides(VisualSnapshot& dst);
+    // The row's entry for guid, counting the row; 0 for an empty guid.
+    std::uint32_t acquire_prefab(const std::string& guid);
+    void release_prefab(std::uint32_t entry);
+    // Points inst at guid's entry, when it names another.
+    void set_row_prefab(VisualInstance& inst, const std::string& guid);
+    // Fills base_.prefabs from each entry's Prefab, as the DataModel is now.
+    void resolve_prefabs(DataModel& game);
 
     VisualSnapshot base_{};
     VisualSnapshot buffers_[2]{};
@@ -81,10 +127,16 @@ private:
     std::atomic<std::uint64_t> published_frame_{0};
     std::vector<SnapshotOverride> overrides_;
     bool camera_pending_ = false;
-    Transform pending_camera_ = transform_identity();
+    Matrix4 pending_camera_ = matrix4_identity();
     bool window_open_ = false;
     // The ids with a row in base_.instances, position for position.
     DenseIdSet base_ids_;
+    // Indexed like VisualSnapshot::prefabs; entry 0 is unused. A GUID's entry
+    // is freed when its last row leaves it, and reused. These allocate only
+    // when a row names a Prefab no other row does.
+    std::vector<PrefabEntry> prefab_entries_;
+    std::vector<std::uint32_t> free_prefab_entries_;
+    std::unordered_map<std::string, std::uint32_t> prefab_by_guid_;
 };
 
 }  // namespace engine_core

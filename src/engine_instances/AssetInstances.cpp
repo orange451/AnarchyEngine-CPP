@@ -2,8 +2,13 @@
 
 #include "Contract.hpp"
 #include "LuaApi.hpp"
+#include "Project.hpp"
+#include "amesh.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <string>
 
@@ -51,6 +56,119 @@ std::optional<std::string> FileAsset::set_path(std::string path) {
 
 const char* Texture::class_name() const { return "Texture"; }
 const char* Mesh::class_name() const { return "Mesh"; }
+
+std::optional<std::string> Mesh::read_file(const std::filesystem::path& root, const std::string& path,
+                                           anarchy::amesh::Data& out) const {
+    out = anarchy::amesh::Data{};
+    if (root.empty() || path.empty()) {
+        return std::nullopt;
+    }
+    const std::filesystem::path file = root / std::filesystem::u8path(path);
+    std::error_code error;
+    if (!std::filesystem::exists(file, error)) {
+        return std::nullopt;
+    }
+    const std::uintmax_t size = std::filesystem::file_size(file, error);
+    std::vector<std::byte> bytes(error ? 0 : static_cast<std::size_t>(size));
+    std::ifstream in(file, std::ios::binary);
+    if (error || size > anarchy::amesh::kMaxFileSize ||
+        !in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) {
+        return "Could not read " + path;
+    }
+    try {
+        out = anarchy::amesh::read(bytes);
+    } catch (const std::exception& failure) {
+        return path + " is not an AMESH file, so it is left as it is: " + failure.what();
+    }
+    // New triangles would fall past the last LOD's range.
+    if (out.lods.size() >= 2) {
+        return path + " has LODs, and shapes are added only to a mesh without them";
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> Mesh::edit_geometry(const std::function<void(anarchy::amesh::Data&)>& edit) {
+    if (!on_gameplay_thread()) {
+        contract_fail("asset setters run on SimulationThread");
+    }
+    if (simulation_running()) {
+        // Built on this session's copy, or on the file the first time.
+        anarchy::amesh::Data data;
+        if (const SessionGeometry current = session_geometry(); current.data) {
+            data = *current.data;
+        } else if (std::optional<std::string> error = read_file(resources_root(), path(), data)) {
+            return error;
+        }
+        edit(data);
+        data.lods.clear();
+        if (data.vertices.size() > anarchy::amesh::kMaxVertices || data.indices.size() / 3 > anarchy::amesh::kMaxTriangles) {
+            return std::string("The shapes are more than one mesh can hold");
+        }
+        // Unique across every Mesh, so a renderer can tell any two copies apart.
+        static std::atomic<std::uint64_t> next_revision{1};
+        session_.data = std::make_shared<const anarchy::amesh::Data>(std::move(data));
+        session_.revision = next_revision.fetch_add(1);
+        session_generation_ = world_generation();
+        return std::nullopt;
+    }
+
+    const std::filesystem::path root = resources_root();
+    if (root.empty()) {
+        return std::string("Open or save a project first: a Mesh's shapes are written to its resources folder");
+    }
+    // The GUID keeps two Meshes with one Name from sharing a file.
+    const std::string path =
+        !this->path().empty() ? this->path() : "meshes/" + sanitize_file_name(name(id())) + "." + guid(id()) + ".amesh";
+    const std::filesystem::path file = root / std::filesystem::u8path(path);
+    anarchy::amesh::Data data;
+    if (std::optional<std::string> error = read_file(root, path, data)) {
+        return error;
+    }
+    edit(data);
+    // One LOD over every triangle, whatever the edit added.
+    data.lods.clear();
+    std::vector<std::byte> bytes;
+    try {
+        bytes = anarchy::amesh::write(data);
+    } catch (const std::exception& failure) {
+        return std::string("The shapes do not fit in an AMESH file: ") + failure.what();
+    }
+
+    // Written beside the file and renamed over it, so a reader never sees half a mesh.
+    std::error_code error;
+    std::filesystem::create_directories(file.parent_path(), error);
+    std::filesystem::path partial = file;
+    partial += ".partial";
+    {
+        std::ofstream out(partial, std::ios::binary | std::ios::trunc);
+        if (!out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) {
+            return "Could not write " + path;
+        }
+    }
+    std::filesystem::rename(partial, file, error);
+    if (error) {
+        std::filesystem::remove(partial, error);
+        return "Could not write " + path;
+    }
+    if (this->path() != path) {
+        return set_path(path);
+    }
+    return std::nullopt;
+}
+
+Mesh::SessionGeometry Mesh::session_geometry() const {
+    if (session_.data == nullptr || session_generation_ != world_generation() || !simulation_running()) {
+        return SessionGeometry{};
+    }
+    return session_;
+}
+
+void Mesh::on_reuse() {
+    FileAsset::on_reuse();
+    session_ = SessionGeometry{};
+    session_generation_ = 0;
+}
+
 const char* Sound::class_name() const { return "Sound"; }
 const char* Material::class_name() const { return "Material"; }
 const char* Model::class_name() const { return "Model"; }

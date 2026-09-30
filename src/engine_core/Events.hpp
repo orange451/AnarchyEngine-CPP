@@ -15,8 +15,6 @@ class EventQueue;
 // snapshot dirty mask. Parent and Name are not visual fields.
 enum class Field : std::uint8_t {
     Transform = 0,
-    Color,
-    Size,
     LinearVelocity,
     Simulated,
     VisualOnly,
@@ -24,8 +22,6 @@ enum class Field : std::uint8_t {
     Name,
     Source,
     Enabled,
-    // TestTriangle's pose.
-    Position,
     // A property from the class registry, such as Lighting.Brightness. The
     // event's payload is its lua_property_id.
     Reflected,
@@ -78,6 +74,9 @@ public:
     // script == 0 is an ordinary C++ connection. A non-zero script tags the
     // slot with that Script instance and the start_generation captured here.
     Connection connect_scripted(Handler handler, InstanceId script, std::uint32_t script_generation, bool once);
+    // An untagged connection that disconnect_all leaves alone, so it outlives a play
+    // session: the command line's and plugins' handlers. Its owner disconnects it.
+    Connection connect_kept(Handler handler, bool once);
     // Yields the current simulation job until the next firing.
     // Resumes at a later simulation phase. RenderThread cannot call this.
     void wait();
@@ -134,7 +133,7 @@ public:
 
     // Drops every queued event. Connections stay until disconnect_all().
     void drop_pending();
-    // Tombstones every connection. Signal objects stay so a later connect works.
+    // Tombstones every connection but the kept ones. Signal objects stay so a later connect works.
     void disconnect_all();
     // Tombstones connections tagged with this Script instance.
     void disconnect_script(InstanceId script);
@@ -177,6 +176,7 @@ private:
         std::uint32_t generation = 1;
         bool live = false;
         bool once = false;
+        bool kept = false;
         std::uint32_t signal_index = 0xffffffffu;
         std::uint32_t prev = 0xffffffffu;
         std::uint32_t next = 0xffffffffu;
@@ -194,7 +194,8 @@ private:
 
     void register_signal(Signal* signal);
     void unregister_signal(Signal& signal);
-    Connection connect_to(SignalId id, Handler handler, bool once, InstanceId script, std::uint32_t script_generation);
+    Connection connect_to(SignalId id, Handler handler, bool once, InstanceId script, std::uint32_t script_generation,
+                          bool kept = false);
     void disconnect_slot(std::uint32_t index, std::uint32_t generation);
     void tombstone(std::uint32_t index);
     Signal* resolve(SignalId id);

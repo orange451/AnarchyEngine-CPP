@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ide/IdePane.hpp"
+#include "MeshCache.hpp"
 #include "Renderer.hpp"
 #include "types.hpp"
 
@@ -13,18 +14,29 @@
 namespace engine_core {
 class DataModel;
 class Engine;
-class TestTriangle;
+struct VisualSnapshot;
 }
 
 namespace runner {
 
 class Runner;
+class SceneFeed;
 
-// Scene viewport. Draws each TestTriangle in Workspace, at any depth,
-// at that instance's position. Heartbeat steps those instances, 90 degrees
-// per simulation second. A paused simulation leaves the angles where they
-// are. The studio's first view stays open. Another, from Window > New Scene
-// View, is closable, and draws the same place.
+// Scene viewport. Draws each GameObject in Workspace, at any depth, that has
+// a Prefab: every Model's Mesh, loaded as AMESH from the project's resources
+// folder, at the GameObject's Transform, seen from the view's camera. What it
+// draws comes from the engine's published VisualSnapshot, through the
+// runner's SceneFeed, never from the DataModel. A GameObject with no Prefab
+// draws nothing.
+// The view is linked to one Camera, by GUID, and sees from that Camera's
+// Transform and FieldOfView as the snapshot has them. The list at the top
+// right offers each Camera in Workspace, at any depth, in tree order. A view
+// with no link takes the first one, and so does every view when another place
+// is opened. A linked Camera that is destroyed or leaves Workspace stays
+// linked, and the view keeps drawing from where that Camera last was; if it
+// comes back, as an undo brings it, the view follows it again. Before any
+// Camera, the view sees from Renderer's fixed camera.
+// The studio's first view stays open. Another, from Window > New Scene View, is closable, and draws the same place.
 // The corner label is how many times this view is painted per second, averaged
 // over a quarter of a second. That count keeps moving while the simulation is paused.
 //
@@ -39,6 +51,13 @@ public:
     // done on this thread. A view that does not paint, such as a hidden tab,
     // does not call done until it paints again.
     void requestCapture(std::function<void(ViewPixels)> done);
+
+    // The linked Camera's GUID. Empty before the view has one.
+    const std::string& cameraGuid() const { return cameraGuid_; }
+    // Links the view to the Camera with this GUID, as choosing it in the list does.
+    void linkCamera(std::string guid);
+    // The list at the top right. Its items are the Cameras' names.
+    jadefx::ComboBox& cameraList() { return *cameraBox_; }
 
 protected:
     void layoutChildren() override;
@@ -57,21 +76,51 @@ protected:
 private:
     void notePaint();
     void refreshFpsLabel();
-    void refreshTriangles();
+    // Walks Workspace for the Cameras, and resolves the link. Skipped when the
+    // DataModel is busy; the previous list and link stay.
+    void refreshWorkspace();
+    // Puts the Cameras in the list, and selects the linked one, when either changed.
+    void refreshCameraList();
+    // Points the renderer at the linked Camera's snapshot row, when it has one.
+    void followCamera(const engine_core::VisualSnapshot& snapshot);
+    // Fills meshDraws_ from the feed's newest snapshot. GL context current.
+    void collectMeshes();
     bool ensureGraphics();
     // A window point as UserInputService wants it: points from this view's top-left.
     float localX(double x) const;
     float localY(double y) const;
 
     Renderer renderer_;
+    // The runner's; it outlives the engine that writes it.
+    SceneFeed* feed_ = nullptr;
+    MeshCache meshes_;
+    // Per frame: each snapshot Prefab's loaded meshes, then one draw per row and mesh.
+    std::vector<std::vector<const anarchy::amesh::GpuMesh*>> prefabMeshes_;
+    std::vector<MeshDraw> meshDraws_;
     // The session game. The runner keeps it alive for this view.
     engine_core::DataModel* game_ = nullptr;
-    // Root TestTriangles. Refreshed when the hierarchy changes. Heartbeat writes
-    // each angle. This thread only reads the atomics.
-    std::vector<engine_core::TestTriangle*> triangles_;
-    std::vector<engine_core::TestTriangle*> triangleScratch_;
-    // The walk through Workspace that fills triangleScratch_.
+    // The walk through Workspace that fills cameraScratch_.
     std::vector<engine_core::InstanceId> walkScratch_;
+    struct CameraChoice {
+        engine_core::InstanceId id = 0;
+        std::string guid;
+        std::string name;
+        bool operator==(const CameraChoice& other) const {
+            return id == other.id && guid == other.guid && name == other.name;
+        }
+    };
+    // The Cameras in Workspace, in tree order, as of the last walk.
+    std::vector<CameraChoice> cameras_;
+    std::vector<CameraChoice> cameraScratch_;
+    // The link. cameraId_ is its Camera while that is in Workspace, else 0.
+    std::string cameraGuid_;
+    engine_core::InstanceId cameraId_ = 0;
+    // The root's GUID at the last walk. Another means another place is open.
+    std::string placeGuid_;
+    jadefx::ComboBox* cameraBox_ = nullptr;
+    // What the list shows now, so it is rebuilt only on a change.
+    std::vector<CameraChoice> listed_;
+    std::string listedGuid_;
     // The engine that owns game_. Each paint tells its render thread a frame happened.
     engine_core::Engine* engine_ = nullptr;
     // Paints in the current window. The label reads the finished average.

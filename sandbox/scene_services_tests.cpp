@@ -374,7 +374,7 @@ std::string instance_file(const char* klass, const char* guid, const char* name)
            "\"\n}\n";
 }
 
-// A place whose files hold Workspace but no other scene service: a triangle, a
+// A place whose files hold Workspace but no other scene service: a part, a
 // script, and a folder with a child, all in Workspace.
 void write_partial_place(const std::filesystem::path& root) {
     namespace fs = std::filesystem;
@@ -384,7 +384,7 @@ void write_partial_place(const std::filesystem::path& root) {
     write_text(root / "src" / "init.json", instance_file("Game", "root0", "Partial"));
     const fs::path workspace = root / "src" / "Workspace.workspace";
     write_text(workspace / "init.json", instance_file("Workspace", "workspace", "Workspace"));
-    write_text(workspace / "Tri.aaaa.json", instance_file("TestTriangle", "aaaa", "Tri"));
+    write_text(workspace / "Part.aaaa.json", instance_file("GameObject", "aaaa", "Part"));
     write_text(workspace / "Main.bbbb.meta.json", instance_file("Script", "bbbb", "Main"));
     write_text(workspace / "Main.bbbb.luau", "print('main')\n");
     write_text(workspace / "Box.cccc" / "init.json", instance_file("Folder", "cccc", "Box"));
@@ -412,7 +412,7 @@ TEST_CASE("SS10 a place missing scene services loads with them made", "[SS10][pr
         REQUIRE(child_names(game, 0) ==
                 std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Assets"});
         const InstanceId workspace = game.scene_service("Workspace");
-        REQUIRE(child_names(game, workspace) == std::vector<std::string>{"Tri", "Main", "Box"});
+        REQUIRE(child_names(game, workspace) == std::vector<std::string>{"Part", "Main", "Box"});
         REQUIRE(child_names(game, *game.find_guid("cccc")) == std::vector<std::string>{"Inner"});
         // Reading the disk again gives the same tree: nothing differs but the made services.
         const engine_core::DiskScan scan = project.scan_disk();
@@ -432,7 +432,7 @@ TEST_CASE("SS10 a place missing scene services loads with them made", "[SS10][pr
     }
     engine_core::Project again = engine_core::Project::load(dir.path);
     DataModel& game = again.datamodel();
-    REQUIRE(child_names(game, game.scene_service("Workspace")) == std::vector<std::string>{"Tri", "Main", "Box"});
+    REQUIRE(child_names(game, game.scene_service("Workspace")) == std::vector<std::string>{"Part", "Main", "Box"});
     again.save();
     REQUIRE(again.last_save().written.empty());
     REQUIRE(again.last_save().moved.empty());

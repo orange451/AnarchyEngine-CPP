@@ -1,10 +1,21 @@
 #include "SnapshotPump.hpp"
 
+#include "AssetInstances.hpp"
+#include "Camera.hpp"
 #include "GameObject.hpp"
+#include "LuaApi.hpp"
 
 #include <algorithm>
 
 namespace engine_core {
+namespace {
+
+float field_of_view_of(const GameObject& object) {
+    const auto* camera = dynamic_cast<const Camera*>(&object);
+    return camera != nullptr ? static_cast<float>(camera->field_of_view()) : 0.f;
+}
+
+}  // namespace
 
 void SnapshotPump::reserve(std::size_t instances) {
     base_.instances.reserve(instances);
@@ -35,7 +46,7 @@ void SnapshotPump::override_visual(const SnapshotOverride& override) {
     overrides_.push_back(override);
 }
 
-void SnapshotPump::set_camera(const Transform& camera) {
+void SnapshotPump::set_camera(const Matrix4& camera) {
     if (!window_open_ || thread_role() != ThreadRole::Render) {
         contract_fail("camera snapshot writes happen inside RenderStepped or PreRender");
     }
@@ -49,6 +60,9 @@ VisualInstance* SnapshotPump::base_find(InstanceId id) {
 }
 
 void SnapshotPump::erase_base(InstanceId id) {
+    if (const VisualInstance* inst = base_find(id)) {
+        release_prefab(inst->prefab);
+    }
     const int position = base_ids_.erase(id);
     if (position < 0) {
         return;
@@ -90,14 +104,11 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
         inst->world = object->transform();
         inst->transform_origin = change.origin;
     }
-    if (whole || any(change.fields, VisualField::Color)) {
-        inst->color = object->color();
-        inst->color_origin = change.origin;
+    if (whole || any(change.fields, VisualField::Prefab)) {
+        set_row_prefab(*inst, object->prefab_guid());
     }
-    if (whole || any(change.fields, VisualField::Size)) {
-        if (object->copy_size(inst->size)) {
-            inst->size_origin = change.origin;
-        }
+    if (whole || any(change.fields, VisualField::Camera)) {
+        inst->field_of_view = field_of_view_of(*object);
     }
     inst->alive = true;
 }
@@ -105,25 +116,130 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
 void SnapshotPump::resync(DataModel& game) {
     base_.instances.clear();
     base_ids_.clear();
+    prefab_entries_.clear();
+    free_prefab_entries_.clear();
+    prefab_by_guid_.clear();
     game.for_each_rendered([&](const GameObject& object) {
         VisualInstance inst;
         inst.id = object.id();
         inst.world = object.transform();
-        inst.color = object.color();
-        object.copy_size(inst.size);
         inst.alive = true;
         inst.transform_origin = WriteOrigin::Simulation;
-        inst.color_origin = WriteOrigin::Simulation;
-        inst.size_origin = WriteOrigin::Simulation;
+        inst.prefab = acquire_prefab(object.prefab_guid());
+        inst.field_of_view = field_of_view_of(object);
         base_ids_.insert(object.id());
         base_.instances.push_back(inst);
     });
+}
+
+std::uint32_t SnapshotPump::acquire_prefab(const std::string& guid) {
+    if (guid.empty()) {
+        return 0;
+    }
+    if (const auto found = prefab_by_guid_.find(guid); found != prefab_by_guid_.end()) {
+        ++prefab_entries_[found->second].rows;
+        return found->second;
+    }
+    if (prefab_entries_.empty()) {
+        prefab_entries_.emplace_back();  // entry 0: no Prefab
+    }
+    std::uint32_t entry = 0;
+    if (!free_prefab_entries_.empty()) {
+        entry = free_prefab_entries_.back();
+        free_prefab_entries_.pop_back();
+    } else {
+        entry = static_cast<std::uint32_t>(prefab_entries_.size());
+        prefab_entries_.emplace_back();
+    }
+    PrefabEntry& slot = prefab_entries_[entry];
+    slot.guid = guid;
+    slot.cached = 0;
+    slot.rows = 1;
+    prefab_by_guid_.emplace(guid, entry);
+    return entry;
+}
+
+void SnapshotPump::release_prefab(std::uint32_t entry) {
+    if (entry == 0 || entry >= prefab_entries_.size()) {
+        return;
+    }
+    PrefabEntry& slot = prefab_entries_[entry];
+    if (slot.rows == 0 || --slot.rows != 0) {
+        return;
+    }
+    prefab_by_guid_.erase(slot.guid);
+    slot.guid.clear();
+    slot.cached = 0;
+    free_prefab_entries_.push_back(entry);
+}
+
+void SnapshotPump::set_row_prefab(VisualInstance& inst, const std::string& guid) {
+    if (inst.prefab != 0 && prefab_entries_[inst.prefab].guid == guid) {
+        return;
+    }
+    // Acquire first, so a row moving between two names of one entry keeps it alive.
+    const std::uint32_t next = acquire_prefab(guid);
+    release_prefab(inst.prefab);
+    inst.prefab = next;
+}
+
+void SnapshotPump::resolve_prefabs(DataModel& game) {
+    base_.prefabs.resize(std::max<std::size_t>(prefab_entries_.size(), 1));
+    for (std::size_t index = 1; index < prefab_entries_.size(); ++index) {
+        PrefabEntry& entry = prefab_entries_[index];
+        std::vector<VisualMesh>& meshes = base_.prefabs[index].meshes;
+        std::size_t used = 0;
+        if (entry.rows != 0) {
+            // A Prefab undone, loaded, or brought back by Stop holds its GUID again, maybe under a new id.
+            if (entry.cached == 0 || !game.alive(entry.cached) || game.guid(entry.cached) != entry.guid) {
+                const std::optional<InstanceId> found = game.find_guid(entry.guid);
+                entry.cached = found ? *found : 0;
+            }
+            if (dynamic_cast<const Prefab*>(game.instance(entry.cached)) != nullptr) {
+                for (InstanceId child = game.first_child(entry.cached); child != 0; child = game.next_sibling(child)) {
+                    const auto* model = dynamic_cast<const Model*>(game.instance(child));
+                    if (model == nullptr) {
+                        continue;
+                    }
+                    const LuaSlot mesh_ref = model->reference(Model::kMeshReference);
+                    const auto* mesh = mesh_ref.kind == LuaSlot::Kind::Instance
+                                           ? dynamic_cast<const Mesh*>(game.instance(mesh_ref.id))
+                                           : nullptr;
+                    if (mesh == nullptr) {
+                        continue;
+                    }
+                    Mesh::SessionGeometry session = mesh->session_geometry();
+                    if (session.data == nullptr && mesh->path().empty()) {
+                        continue;
+                    }
+                    if (used == meshes.size()) {
+                        meshes.emplace_back();
+                    }
+                    // Assigned in place, so an unchanged Prefab reuses last frame's strings.
+                    VisualMesh& out = meshes[used++];
+                    out.mesh = mesh->id();
+                    out.revision = session.revision;
+                    if (session.data != nullptr) {
+                        out.path.clear();
+                        out.session = std::move(session.data);
+                    } else {
+                        out.path = mesh->path();
+                        out.session.reset();
+                    }
+                }
+            }
+        }
+        meshes.resize(used);
+    }
 }
 
 void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.camera = base_.camera;
     dst.instances.resize(base_.instances.size());
     std::copy(base_.instances.begin(), base_.instances.end(), dst.instances.begin());
+    // Element by element, so strings that did not change keep their buffers.
+    dst.prefabs.resize(base_.prefabs.size());
+    std::copy(base_.prefabs.begin(), base_.prefabs.end(), dst.prefabs.begin());
 }
 
 void SnapshotPump::apply_overrides(VisualSnapshot& dst) {
@@ -141,10 +257,6 @@ void SnapshotPump::apply_overrides(VisualSnapshot& dst) {
             inst.world = override.transform;
             inst.transform_origin = WriteOrigin::SnapshotOverride;
         }
-        if (any(override.field, VisualField::Color)) {
-            inst.color = override.color;
-            inst.color_origin = WriteOrigin::SnapshotOverride;
-        }
     }
 }
 
@@ -160,6 +272,7 @@ void SnapshotPump::take_changes(DataModel& game) {
     } else {
         queue.drain([&](const Invalidation& change) { apply_live(game, change); });
     }
+    resolve_prefabs(game);
     if (camera_pending_) {
         base_.camera = pending_camera_;
         camera_pending_ = false;

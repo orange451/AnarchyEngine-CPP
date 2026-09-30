@@ -43,8 +43,11 @@ std::shared_ptr<jadefx::Tab> TabOf(ide::IdeDock& dock, const jadefx::Node* pane)
     return nullptr;
 }
 
-engine_core::SaveConflict Row(const char* guid, const char* name, const char* key, const char* studio,
-                              const char* disk,
+// A translation's 16 numbers as a conflict row shows them.
+std::string Moved(const char* xyz) { return std::string("1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, ") + xyz + ", 1"; }
+
+engine_core::SaveConflict Row(const char* guid, const char* name, const char* key, const std::string& studio,
+                              const std::string& disk,
                               engine_core::SaveConflict::Kind kind = engine_core::SaveConflict::Kind::EditedOutside) {
     engine_core::SaveConflict row;
     row.guid = guid;
@@ -78,8 +81,8 @@ int RunConflictsPaneTests() {
     auto pane = jadefx::make<ide::IdeConflicts>(host);
 
     const std::vector<engine_core::SaveConflict> rows = {
-        Row("p", "Part", "Color", "1, 0, 0", "0, 0, 1"),
-        Row("p", "Part", "Size", "(default)", "2, 2, 2"),
+        Row("p", "Part", "Transform", Moved("1, 0, 0"), Moved("0, 0, 1")),
+        Row("p", "Part", "VisualOnly", "(default)", "true"),
         Row("b", "Bounce", "Source", "2: print(2)", "2: print(\"hi\")"),
         Row("c", "Crate", "", "changed in the studio", "deleted", engine_core::SaveConflict::Kind::DeletedOutside),
     };
@@ -94,7 +97,7 @@ int RunConflictsPaneTests() {
     pane->chooseInstance("b", false);
     std::vector<engine_core::DiskChoice> choices = pane->choices();
     expect(choices.size() == 2, "only picked rows are choices");
-    expect(choices.size() == 2 && choices[0].disk && choices[0].conflict.key == "Color", "Disk for Part's Color");
+    expect(choices.size() == 2 && choices[0].disk && choices[0].conflict.key == "Transform", "Disk for Part's Transform");
     expect(choices.size() == 2 && !choices[1].disk && choices[1].conflict.guid == "b", "IDE for Bounce");
     expect(pane->chosenText() == "2 of 4 chosen", "the footer counts the picks");
 
@@ -112,7 +115,7 @@ int RunConflictsPaneTests() {
 
     // The same rows keep their picks; a row whose value changed starts over.
     std::vector<engine_core::SaveConflict> again = rows;
-    again[1].disk = "9, 9, 9";
+    again[1].disk = "false";
     pane->choose(1, true);
     pane->setConflicts(again);
     expect(pane->pick(0) == std::optional<bool>(true), "an unchanged row keeps its pick");
@@ -209,24 +212,25 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         part_file = "src/Workspace.workspace/Part." + game.guid(part.id()) + ".json";
     });
     layout.open_project_at(root);
-    auto set_disk = [&](const char* key, float x, float y, float z) {
+    // Moves Part on disk: its file's Transform becomes a translation to (x, y, z).
+    auto set_disk = [&](float x, float y, float z) {
         std::ifstream in(root / part_file, std::ios::binary);
         const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         in.close();
         engine_core::JsonValue doc;
         std::string error;
         engine_core::parse_json(bytes, doc, error);
-        const float values[3] = {x, y, z};
-        doc.set(key, engine_core::json_floats(values, 3));
+        const engine_core::Matrix4 moved = engine_core::matrix4_translation(x, y, z);
+        doc.set("Transform", engine_core::json_floats(moved.m, 16));
         std::ofstream out(root / part_file, std::ios::binary | std::ios::trunc);
         out << engine_core::write_json(doc);
     };
-    auto part_color = [&layout] {
-        engine_core::ColorRgb color;
-        layout.simulation().on_simulation([&color](engine_core::DataModel& game) {
-            color = game.game_object(game.find_first_child(game.scene_service("Workspace"), "Part"))->color();
+    auto part_position = [&layout] {
+        engine_core::Vec3 position;
+        layout.simulation().on_simulation([&position](engine_core::DataModel& game) {
+            position = game.game_object(game.find_first_child(game.scene_service("Workspace"), "Part"))->position();
         });
-        return color;
+        return position;
     };
     auto part_has = [&layout](const char* key) {
         bool found = false;
@@ -237,13 +241,11 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         });
         return found;
     };
-    auto paint = [&layout](float r, float g, float b) {
-        layout.simulation().on_simulation([r, g, b](engine_core::DataModel& game) {
-            engine_core::ColorRgb color;
-            color.r = r;
-            color.g = g;
-            color.b = b;
-            game.game_object(game.find_first_child(game.scene_service("Workspace"), "Part"))->set_color(color);
+    // Moves Part in the studio.
+    auto move_part = [&layout](float x, float y, float z) {
+        layout.simulation().on_simulation([x, y, z](engine_core::DataModel& game) {
+            game.game_object(game.find_first_child(game.scene_service("Workspace"), "Part"))
+                ->set_position(engine_core::Vec3{x, y, z});
         });
     };
     auto count_shown = [&scene] {
@@ -251,18 +253,18 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         return badge != nullptr && badge->isVisible();
     };
 
-    set_disk("Size", 2, 2, 2);
+    set_disk(2, 2, 2);
     layout.check_disk();
-    expect(part_has("Size"), "a change only the disk made loads when the studio checks");
+    expect(part_has("Transform"), "a change only the disk made loads when the studio checks");
     expect(!layout.has_unsaved_changes(), "and leaves nothing to save");
     expect(!count_shown(), "with no conflict, the ribbon shows no count");
 
-    set_disk("Color", 0, 1, 0);
+    set_disk(0, 1, 0);
     scene.noteWindowFocus(false);
     layout.flushFrame();
     scene.noteWindowFocus(true);
     layout.flushFrame();
-    expect(part_color().g == 1.f && part_color().r == 0.f, "coming back to the window checks the disk");
+    expect(part_position().y == 1.f && part_position().x == 0.f, "coming back to the window checks the disk");
 
     // A Properties value being typed in holds that check back, as a rename does.
     layout.simulation().on_simulation(
@@ -278,20 +280,20 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     expect(typing != nullptr, "Properties shows the part's fields");
     if (typing != nullptr) {
         scene.requestFocus(typing);
-        set_disk("Color", 1, 1, 0);
+        set_disk(1, 1, 0);
         scene.noteWindowFocus(false);
         layout.flushFrame();
         scene.noteWindowFocus(true);
         layout.flushFrame();
         expect(scene.focusedNode() == typing, "the field keeps the focus with the window");
-        expect(part_color().r == 0.f, "a check waits while a Properties field is being typed in");
+        expect(part_position().x == 0.f, "a check waits while a Properties field is being typed in");
         scene.releaseFocus(typing);
         layout.flushFrame();
-        expect(part_color().r == 1.f && part_color().g == 1.f, "and runs once the field lets go");
+        expect(part_position().x == 1.f && part_position().y == 1.f, "and runs once the field lets go");
     }
 
-    paint(0.25f, 0.5f, 0.75f);
-    set_disk("Color", 1, 0, 0);
+    move_part(0.25f, 0.5f, 0.75f);
+    set_disk(1, 0, 0);
     layout.check_disk();
     expect(count_shown(), "a conflict shows a count on the ribbon");
     const auto* count = dynamic_cast<const jadefx::Label*>(scene.getElementById("conflicts-count-text"));
@@ -309,13 +311,13 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     if (pane != nullptr && pane->conflicts().size() == 1) {
         pane->choose(0, true);
         pane->apply();
-        expect(part_color().r == 1.f && part_color().b == 0.f, "Apply takes the disk's side");
+        expect(part_position().x == 1.f && part_position().z == 0.f, "Apply takes the disk's side");
         expect(pane->conflicts().empty() && !count_shown(), "and the row and the count go");
         expect(pane_tab && pane_tab->getText() == "Conflicts", "and the tab drops its count");
     }
 
-    paint(0.25f, 0.5f, 0.75f);
-    set_disk("Color", 0, 0, 1);
+    move_part(0.25f, 0.5f, 0.75f);
+    set_disk(0, 0, 1);
     if (pane_tab) {
         for (const std::shared_ptr<jadefx::Tab>& other : home->tabs()->getTabs().items()) {
             if (other != pane_tab) {
@@ -399,7 +401,7 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         out << "<<<<<<< HEAD\n{";
     }
     layout.check_disk();
-    paint(0.5f, 0.5f, 0.5f);
+    move_part(0.5f, 0.5f, 0.5f);
     layout.flushFrame();
     expect(layout.has_unsaved_changes(), "the place still says it has changes");
     {

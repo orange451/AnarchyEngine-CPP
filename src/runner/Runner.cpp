@@ -2,6 +2,7 @@
 
 #include "LuaEngine.hpp"
 #include "Engine.hpp"
+#include "SceneFeed.hpp"
 #include "ScriptRuntime.hpp"
 
 #include <stdexcept>
@@ -19,7 +20,7 @@ void silencePrint(engine_core::LuaEngine* lua) {
 
 }  // namespace
 
-Runner::Runner() = default;
+Runner::Runner() : feed_(std::make_unique<SceneFeed>()) {}
 
 Runner::~Runner() { silencePrint(lua_.get()); }
 
@@ -35,6 +36,7 @@ void Runner::prepare() {
     simulation->set_simulation_pace_hz(60.0);
     simulation->set_render_pace_hz(0.0);
     simulation->set_render_client_sync(true);
+    simulation->set_renderer(feed_.get());
     // The IDE console reads the script log. Sandbox print shares that log with play scripts.
     engine_core::ScriptRuntime* scripts = &simulation->scripts();
     lua->setPrintHandler([scripts](std::string_view text) {

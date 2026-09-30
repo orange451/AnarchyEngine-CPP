@@ -32,6 +32,8 @@ void (*rt_glBufferData)(GLenum, GLsizeiptr, const void*, GLenum) = nullptr;
 void (*rt_glEnableVertexAttribArray)(GLuint) = nullptr;
 void (*rt_glVertexAttribPointer)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void*) = nullptr;
 void (*rt_glDrawArrays)(GLenum, GLint, GLsizei) = nullptr;
+void (*rt_glVertexAttribIPointer)(GLuint, GLint, GLenum, GLsizei, const void*) = nullptr;
+void (*rt_glDrawElements)(GLenum, GLsizei, GLenum, const void*) = nullptr;
 void (*rt_glEnable)(GLenum) = nullptr;
 void (*rt_glDisable)(GLenum) = nullptr;
 GLboolean (*rt_glIsEnabled)(GLenum) = nullptr;
@@ -40,6 +42,7 @@ void (*rt_glScissor)(GLint, GLint, GLsizei, GLsizei) = nullptr;
 GLint (*rt_glGetUniformLocation)(GLuint, const GLchar*) = nullptr;
 void (*rt_glUniform1f)(GLint, GLfloat) = nullptr;
 void (*rt_glUniform3f)(GLint, GLfloat, GLfloat, GLfloat) = nullptr;
+void (*rt_glUniformMatrix4fv)(GLint, GLsizei, GLboolean, const GLfloat*) = nullptr;
 void (*rt_glReadPixels)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*) = nullptr;
 
 bool LoadGl(GlGetProcAddress get_proc) {
@@ -86,6 +89,8 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(EnableVertexAttribArray);
     LOAD(VertexAttribPointer);
     LOAD(DrawArrays);
+    LOAD(VertexAttribIPointer);
+    LOAD(DrawElements);
     LOAD(Enable);
     LOAD(Disable);
     LOAD(IsEnabled);
@@ -94,6 +99,7 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(GetUniformLocation);
     LOAD(Uniform1f);
     LOAD(Uniform3f);
+    LOAD(UniformMatrix4fv);
     LOAD(ReadPixels);
 
 #undef LOAD

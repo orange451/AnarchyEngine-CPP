@@ -20,6 +20,7 @@ struct EnumType {
 
 const EnumType& normal_id_enum();
 const EnumType& axis_enum();
+const EnumType& rotation_order_enum();
 // Keys by their Roblox value. Letters are lowercase ASCII (A is 97), and
 // Unknown is 0.
 const EnumType& key_code_enum();

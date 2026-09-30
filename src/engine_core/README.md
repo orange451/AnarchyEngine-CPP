@@ -2,7 +2,7 @@
 
 Simulation and render are two threads. The DataModel is live memory. The GPU reads a `VisualSnapshot` only.
 
-`DataModel` is the tree every other package builds on. The instance classes are in `engine_instances`, `Game` and the services are in `engine_services`, and value types such as `Vector3` are in `engine_datatypes`. `GameObject` inherits `DataModel` and is the instance that carries transform, color, size, and velocity. A plain instance has hierarchy and signals, and none of those fields.
+`DataModel` is the tree every other package builds on. The instance classes are in `engine_instances`, `Game` and the services are in `engine_services`, and value types such as `Vector3` are in `engine_datatypes`. `GameObject` inherits `DataModel` and is the instance that carries a transform, a velocity, and a Prefab. A plain instance has hierarchy and signals, and none of those fields.
 
 The root holds only the scene services, which cannot be moved, renamed, or destroyed. `parent_error`, `rename_error`, and `destroy_error` say why a change is refused; every caller that takes input from a script or a person asks them first, and `set_parent`, `set_name`, and `destroy` fail the contract on anything they refuse.
 

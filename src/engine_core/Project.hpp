@@ -91,7 +91,7 @@ struct DiskChoice {
 };
 
 // Classes a project file may name. The built-ins are DataModel, GameObject,
-// Script, ModuleScript, Folder, TestTriangle, and the four scene services,
+// Camera, Script, ModuleScript, Folder, the asset classes, and the scene services,
 // whose factory gives the world's own service back at its defaults. A later
 // class registers here.
 using ProjectFactory = DataModel& (*)(DataModel& world);
@@ -171,8 +171,13 @@ public:
     // File > New: stops a running simulation, destroys every instance, gives the
     // root a fresh GUID, captures the empty place, and drops undo history.
     static void reset_place(DataModel& game);
+    // The Camera a new place starts with, in Workspace: 3 up and 7 back from
+    // the origin, looking at it. create and reset_place add it. Returns its id.
+    static InstanceId add_default_camera(DataModel& game);
 
     const std::filesystem::path& root() const { return root_; }
+    // Where Mesh, Texture, and Sound Paths point: project.json's resources root.
+    std::filesystem::path resources_root() const;
     const std::string& name() const { return name_; }
     DataModel& datamodel() { return *game_; }
     const DataModel& datamodel() const { return *game_; }
@@ -190,6 +195,9 @@ public:
 
 private:
     Project();
+
+    // Tells the bound game where its resources folder is now.
+    void publish_resources_root() const;
 
     // Files on disk for one instance, as last loaded or written.
     struct Files {
@@ -245,6 +253,8 @@ private:
     std::string name_;
     // The tree folder project.json named at the load; create and Save As write "src".
     std::string src_ = "src";
+    // project.json's resources.root, relative to root_.
+    std::string resources_ = "resources";
     std::unique_ptr<DataModel> owned_;
     DataModel* game_ = nullptr;
     std::unordered_map<std::string, Files> files_;

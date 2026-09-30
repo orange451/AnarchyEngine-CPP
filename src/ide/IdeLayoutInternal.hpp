@@ -35,7 +35,6 @@
 #include "McpTools.hpp"
 #include "StudioRegistry.hpp"
 #include "UiCalls.hpp"
-#include "TestTriangle.hpp"
 #include "runner/GameView.hpp"
 #include "runner/ViewCapture.hpp"
 #include <algorithm>

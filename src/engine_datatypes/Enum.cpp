@@ -29,6 +29,11 @@ const EnumEntry kAxes[] = {
     {"Z", 2},
 };
 
+// Matrix4.fromEulerAngles and ToEulerAngles. XYZ is Rx * Ry * Rz.
+const EnumEntry kRotationOrders[] = {
+    {"XYZ", 0}, {"XZY", 1}, {"YZX", 2}, {"YXZ", 3}, {"ZXY", 4}, {"ZYX", 5},
+};
+
 // Roblox's numbering: printable keys are their lowercase ASCII code.
 const EnumEntry kKeyCodes[] = {
     {"Unknown", 0},
@@ -158,11 +163,13 @@ constexpr int count_of(const EnumEntry (&)[N]) {
 
 const EnumType kNormalIdType{"NormalId", kNormalIds, count_of(kNormalIds)};
 const EnumType kAxisType{"Axis", kAxes, count_of(kAxes)};
+const EnumType kRotationOrderType{"RotationOrder", kRotationOrders, count_of(kRotationOrders)};
 const EnumType kKeyCodeType{"KeyCode", kKeyCodes, count_of(kKeyCodes)};
 const EnumType kUserInputTypeType{"UserInputType", kUserInputTypes, count_of(kUserInputTypes)};
 const EnumType kUserInputStateType{"UserInputState", kUserInputStates, count_of(kUserInputStates)};
 
-const EnumType* const kTypes[] = {&kNormalIdType, &kAxisType, &kKeyCodeType, &kUserInputTypeType, &kUserInputStateType};
+const EnumType* const kTypes[] = {&kNormalIdType, &kAxisType,          &kRotationOrderType,
+                                  &kKeyCodeType,  &kUserInputTypeType, &kUserInputStateType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -222,6 +229,8 @@ void install_enum_items(lua_State* state) {
 const EnumType& normal_id_enum() { return kNormalIdType; }
 
 const EnumType& axis_enum() { return kAxisType; }
+
+const EnumType& rotation_order_enum() { return kRotationOrderType; }
 
 const EnumType& key_code_enum() { return kKeyCodeType; }
 

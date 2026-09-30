@@ -5,10 +5,18 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace anarchy::amesh {
+struct Data;
+}
 
 namespace engine_core {
 
@@ -22,7 +30,8 @@ namespace engine_core {
 std::optional<std::string> resource_path_error(std::string_view path);
 
 // An asset that names a file under the project's resources folder, as Path.
-// Nothing checks that the file exists; nothing loads resources yet.
+// Nothing checks that the file exists. The Scene View loads a Mesh's file as AMESH;
+// nothing else loads resources yet.
 class FileAsset : public DataModel {
 public:
     FileAsset(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
@@ -48,6 +57,45 @@ class Mesh : public FileAsset {
 public:
     using FileAsset::FileAsset;
     const char* class_name() const override;
+
+    // What the Add methods and Clear do.
+    //
+    // Stopped: reads the AMESH file at Path, or starts empty when there is no
+    // Path or no file yet, lets edit change it, and writes it back. A Mesh with
+    // no Path gets meshes/<Name>.<guid>.amesh first. Needs an open project,
+    // whose resources folder takes the file. Undo puts back a Path it set, not
+    // the file.
+    //
+    // Playing: changes the session geometry instead, starting from the file
+    // the first time. The file and Path are left alone, and Stop drops what
+    // the session made, so the Mesh draws its file again.
+    //
+    // Never reads from a file that is not AMESH, or adds to one with LODs.
+    // Returns why nothing changed.
+    std::optional<std::string> edit_geometry(const std::function<void(anarchy::amesh::Data&)>& edit);
+
+    // What this play session's edits made, shared with the renderer. data is
+    // replaced whole by each edit and never changed after, so a frame can hold
+    // it while the next edit runs. revision is unique across every Mesh.
+    struct SessionGeometry {
+        std::shared_ptr<const anarchy::amesh::Data> data;
+        std::uint64_t revision = 0;
+    };
+    // Empty when this session made none: the Mesh draws its file.
+    SessionGeometry session_geometry() const;
+
+protected:
+    void on_reuse() override;
+
+private:
+    // Reads the AMESH file at path under root into out. An empty path, or no
+    // file, leaves out empty.
+    std::optional<std::string> read_file(const std::filesystem::path& root, const std::string& path,
+                                         anarchy::amesh::Data& out) const;
+
+    SessionGeometry session_;
+    // world_generation() when session_ was made. Stop bumps it, and the copy lapses.
+    std::uint32_t session_generation_ = 0;
 };
 
 class Sound : public FileAsset {
@@ -99,6 +147,10 @@ protected:
 // Joins a Mesh and a Material. Lives only in a Prefab.
 class Model : public ReferenceAsset {
 public:
+    // reference() indices.
+    static constexpr std::size_t kMeshReference = 0;
+    static constexpr std::size_t kMaterialReference = 1;
+
     using ReferenceAsset::ReferenceAsset;
     const char* class_name() const override;
 

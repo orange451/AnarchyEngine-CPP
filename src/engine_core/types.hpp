@@ -4,7 +4,7 @@
 // uses them, so they come along.
 #include "Color.hpp"
 #include "Color3.hpp"
-#include "Transform.hpp"
+#include "Matrix4.hpp"
 #include "Vector2.hpp"
 #include "Vector3.hpp"
 
@@ -41,12 +41,14 @@ inline constexpr int kPhaseCount = static_cast<int>(Phase::PostRender) + 1;
 
 enum class VisualField : std::uint32_t {
     Transform = 1u << 0,
-    Color = 1u << 1,
-    Size = 1u << 2,
-    Removed = 1u << 3,
+    Removed = 1u << 1,
     // Moved into or out of Workspace. The pump re-evaluates the row, and a
     // row that joins reads every field, since none was kept while it was out.
-    Ancestry = 1u << 4
+    Ancestry = 1u << 2,
+    // GameObject.Prefab: which Prefab's Models the row draws.
+    Prefab = 1u << 3,
+    // Camera.FieldOfView.
+    Camera = 1u << 4
 };
 
 // Which writer produced a visual field.
@@ -59,7 +61,7 @@ enum class WriteOrigin {
     SnapshotOverride
 };
 
-// Passed to GameObject::set_transform / set_color so a RenderStepped or PreRender
+// Passed to GameObject::set_transform so a RenderStepped or PreRender
 // job can write a simulated part. The next physics substep overwrites that transform.
 struct ForceSimWrite {
     explicit ForceSimWrite() = default;

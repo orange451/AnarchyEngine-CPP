@@ -78,6 +78,11 @@ bool append_unique(std::vector<LuaField>& out, const LuaField& field) {
     return true;
 }
 
+// Two operand names match when both are null or both spell the same type.
+bool same_text(const char* a, const char* b) {
+    return a == b || (a != nullptr && b != nullptr && std::strcmp(a, b) == 0);
+}
+
 void collect(const char* class_name, std::vector<LuaField>& out, int depth) {
     if (class_name == nullptr || depth > 32) {
         return;
@@ -187,7 +192,8 @@ void register_lua_operators(const char* class_name, const LuaOperator* operators
         }
         bool replaced = false;
         for (LuaOperator& existing : record->operators) {
-            if (std::strcmp(existing.metamethod, row.metamethod) == 0) {
+            if (std::strcmp(existing.metamethod, row.metamethod) == 0 && same_text(existing.left, row.left) &&
+                same_text(existing.right, row.right)) {
                 if (std::memcmp(&existing, &row, sizeof(LuaOperator)) != 0) {
                     existing = row;
                     registry_changed();
@@ -464,7 +470,6 @@ void lua_host_library_names(std::vector<std::string>& out) {
 namespace {
 
 ANARCHY_LUA_REGISTER(register_value_classes) {
-    register_lua_class("Transform", nullptr, nullptr, 0);
     // DataModel is everything in the tree. Instance is what Instance.new makes;
     // Game, the root that scripts see as game, is not one.
     register_lua_class("Instance", "DataModel", nullptr, 0);
@@ -816,9 +821,81 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Vector2", "Max", "The component-wise maximum with the others.", "Vector2", true, {P("other", "Vector2")});
     add("Vector2", "Min", "The component-wise minimum with the others.", "Vector2", true, {P("other", "Vector2")});
 
+    add("", "Matrix4",
+        "A position and rotation, as Roblox's CFrame: a 4x4 matrix. new, lookAt, Angles, and fromAxisAngle build one. "
+        "* composes two or moves a Vector3.",
+        nullptr, false, {});
+    add("Matrix4", "new",
+        "No arguments: the identity. (pos), (pos, lookAt), (x, y, z), (x, y, z, qX, qY, qZ, qW) from a quaternion, or "
+        "(x, y, z, R00, R01, R02, R10, R11, R12, R20, R21, R22) from the rotation's rows.",
+        "Matrix4", true, {});
+    add("Matrix4", "identity", "No rotation, at the origin.", "Matrix4", false, {});
+    add("Matrix4", "lookAt", "At at, looking toward target. up defaults to Vector3.yAxis.", "Matrix4", false,
+        {P("at", "Vector3"), P("target", "Vector3"), P("up", "Vector3?")});
+    add("Matrix4", "lookAlong", "At at, looking along direction. up defaults to Vector3.yAxis.", "Matrix4", false,
+        {P("at", "Vector3"), P("direction", "Vector3"), P("up", "Vector3?")});
+    add("Matrix4", "fromRotationBetweenVectors", "The shortest rotation that turns from to face along to.", "Matrix4",
+        false, {P("from", "Vector3"), P("to", "Vector3")});
+    add("Matrix4", "fromEulerAngles", "Rotations about X, Y, and Z in radians, composed in order. order defaults to XYZ.",
+        "Matrix4", false, {P("rx", "number"), P("ry", "number"), P("rz", "number"), P("order", "Enum.RotationOrder?")});
+    add("Matrix4", "fromEulerAnglesXYZ", "Rotations about X, Y, and Z in radians, applied Z first, then Y, then X.",
+        "Matrix4", false, {P("rx", "number"), P("ry", "number"), P("rz", "number")});
+    add("Matrix4", "Angles", "The same as fromEulerAnglesXYZ.", "Matrix4", false,
+        {P("rx", "number"), P("ry", "number"), P("rz", "number")});
+    add("Matrix4", "fromEulerAnglesYXZ", "Rotations about X, Y, and Z in radians, applied Z first, then X, then Y.",
+        "Matrix4", false, {P("rx", "number"), P("ry", "number"), P("rz", "number")});
+    add("Matrix4", "fromOrientation", "The same as fromEulerAnglesYXZ.", "Matrix4", false,
+        {P("rx", "number"), P("ry", "number"), P("rz", "number")});
+    add("Matrix4", "fromAxisAngle", "A rotation of angle radians about axis.", "Matrix4", false,
+        {P("axis", "Vector3"), P("angle", "number")});
+    add("Matrix4", "fromMatrix", "At pos, with these right, up, and back axes. vZ defaults to vX:Cross(vY).Unit.",
+        "Matrix4", false, {P("pos", "Vector3"), P("vX", "Vector3"), P("vY", "Vector3"), P("vZ", "Vector3?")});
+    add("Matrix4", "X", "The x of the position.", "number", false, {});
+    add("Matrix4", "Y", "The y of the position.", "number", false, {});
+    add("Matrix4", "Z", "The z of the position.", "number", false, {});
+    add("Matrix4", "Position", "The translation.", "Vector3", false, {});
+    add("Matrix4", "Rotation", "The same rotation at the origin.", "Matrix4", false, {});
+    add("Matrix4", "LookVector", "The forward direction: the third column, negated.", "Vector3", false, {});
+    add("Matrix4", "RightVector", "The right direction: the first column.", "Vector3", false, {});
+    add("Matrix4", "UpVector", "The up direction: the second column.", "Vector3", false, {});
+    add("Matrix4", "XVector", "The rotation's first row: R00, R01, R02.", "Vector3", false, {});
+    add("Matrix4", "YVector", "The rotation's second row: R10, R11, R12.", "Vector3", false, {});
+    add("Matrix4", "ZVector", "The rotation's third row: R20, R21, R22.", "Vector3", false, {});
+    add("Matrix4", "Inverse", "The matrix that undoes this one.", "Matrix4", false, {});
+    add("Matrix4", "Lerp",
+        "A blend toward goal: position in a line, rotation along the shortest arc. alpha 0 returns this and alpha 1 "
+        "returns goal.",
+        "Matrix4", false, {P("goal", "Matrix4"), P("alpha", "number")});
+    add("Matrix4", "Orthonormalize", "The same position, with the rotation made orthonormal and any scale removed.",
+        "Matrix4", false, {});
+    add("Matrix4", "ToWorldSpace", "Each argument, taken as relative to this, in world space: self * other.", "Matrix4",
+        true, {P("other", "Matrix4")});
+    add("Matrix4", "ToObjectSpace", "Each argument relative to this: self:Inverse() * other.", "Matrix4", true,
+        {P("other", "Matrix4")});
+    add("Matrix4", "PointToWorldSpace", "Each point, taken as relative to this, in world space.", "Vector3", true,
+        {P("point", "Vector3")});
+    add("Matrix4", "PointToObjectSpace", "Each world point, relative to this.", "Vector3", true, {P("point", "Vector3")});
+    add("Matrix4", "VectorToWorldSpace", "Each direction, taken as relative to this, in world space. Position is ignored.",
+        "Vector3", true, {P("direction", "Vector3")});
+    add("Matrix4", "VectorToObjectSpace", "Each world direction, relative to this. Position is ignored.", "Vector3",
+        true, {P("direction", "Vector3")});
+    add("Matrix4", "GetComponents", "x, y, z, then the rotation's rows: R00, R01, R02, R10, R11, R12, R20, R21, R22.",
+        "number,number,number,number,number,number,number,number,number,number,number,number", false, {});
+    add("Matrix4", "ToEulerAngles", "rx, ry, and rz that fromEulerAngles takes to build this rotation.",
+        "number,number,number", false, {P("order", "Enum.RotationOrder?")});
+    add("Matrix4", "ToEulerAnglesXYZ", "rx, ry, and rz that fromEulerAnglesXYZ takes to build this rotation.",
+        "number,number,number", false, {});
+    add("Matrix4", "ToEulerAnglesYXZ", "rx, ry, and rz that fromEulerAnglesYXZ takes to build this rotation.",
+        "number,number,number", false, {});
+    add("Matrix4", "ToOrientation", "The same as ToEulerAnglesYXZ.", "number,number,number", false, {});
+    add("Matrix4", "ToAxisAngle", "The rotation as a unit axis and an angle in radians, from 0 to pi.", "Vector3,number",
+        false, {});
+    add("Matrix4", "FuzzyEq", "True when each component is within epsilon. epsilon defaults to 1e-5.", "boolean", false,
+        {P("other", "Matrix4"), P("epsilon", "number?")});
+
     add("", "Enum",
-        "Named constants. NormalId and Axis are used by Vector3.FromNormalId and Vector3.FromAxis. KeyCode, "
-        "UserInputType, and UserInputState describe an InputObject.",
+        "Named constants. NormalId and Axis are used by Vector3.FromNormalId and Vector3.FromAxis, and RotationOrder by "
+        "Matrix4.fromEulerAngles. KeyCode, UserInputType, and UserInputState describe an InputObject.",
         nullptr, false, {});
     add("EnumItem", "Name", "The item's name.", "string", false, {});
     add("EnumItem", "Value", "The item's numeric value.", "number", false, {});
@@ -887,10 +964,31 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Script", "Enabled", "When false, the script does not run.", "boolean", false, {});
     add("ModuleScript", "Source", "The Luau source require runs.", "string", false, {});
 
-    add("GameObject", "Color", "The color stored on this object.", "Color3", false, {});
-    add("GameObject", "Transform", "A table of 16 numbers.", "Transform", false, {});
-    add("GameObject", "CFrame", "The same transform as Transform.", "Transform", false, {});
-    add("TestTriangle", "Position", "Where the triangle is drawn. Positive z is toward the camera.", "Vector3", false, {});
+    add("GameObject", "Transform", "Where this object is and how it is turned.", "Matrix4", false, {});
+    add("GameObject", "CFrame", "The same Matrix4 as Transform.", "Matrix4", false, {});
+    add("GameObject", "Position", "Where this object is: its Transform's translation. Setting it keeps the rotation.", "Vector3", false, {});
+    add("Camera", "FieldOfView",
+        "How many degrees this camera sees from bottom to top, from 1 to 120. A Scene View linked to it draws with it.",
+        "number", false, {});
+    // Every Add writes the Mesh's AMESH file under the project's resources folder, giving
+    // the Mesh a Path first if it has none. During play they change a copy for the session
+    // instead, which the Scene View draws and Stop drops.
+    add("Mesh", "AddBox", "Adds a box of size, centered on position, to this mesh's file.", "nil", false,
+        {P("size", "Vector3"), P("position", "Vector3?")});
+    add("Mesh", "AddSphere", "Adds a sphere, segments around (24 by default), centered on position.", "nil", false,
+        {P("radius", "number"), P("segments", "number?"), P("position", "Vector3?")});
+    add("Mesh", "AddCylinder", "Adds a cylinder along Y, segments around (16 by default), capped unless capped is false.",
+        "nil", false,
+        {P("radius", "number"), P("height", "number"), P("segments", "number?"), P("capped", "boolean?"),
+         P("position", "Vector3?")});
+    add("Mesh", "AddCone", "Adds a cone along Y, its point up, its base capped unless capped is false.", "nil", false,
+        {P("radius", "number"), P("height", "number"), P("segments", "number?"), P("capped", "boolean?"),
+         P("position", "Vector3?")});
+    add("Mesh", "AddPlane", "Adds a flat rectangle facing up, centered on position.", "nil", false,
+        {P("width", "number"), P("depth", "number"), P("position", "Vector3?")});
+    add("Mesh", "AddTeapot", "Adds a teapot size tall, standing on position, its spout toward +X.", "nil", false,
+        {P("size", "number"), P("position", "Vector3?")});
+    add("Mesh", "Clear", "Empties this mesh's file.", "nil", false, {});
 
     add("Signal", "Connect", "Calls callback when the signal fires and returns the connection.", "Connection", false,
         {P("callback", "function")});

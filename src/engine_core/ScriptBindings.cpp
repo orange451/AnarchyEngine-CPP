@@ -1,6 +1,7 @@
 #include "ScriptBindings.hpp"
 
 #include "AssetInstances.hpp"
+#include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
 #include "Enum.hpp"
@@ -9,6 +10,8 @@
 #include "LuaApi.hpp"
 #include "LuaUserdata.hpp"
 #include "LuauSandbox.hpp"
+#include "Matrix4.hpp"
+#include "MeshShapes.hpp"
 #include "ModuleScript.hpp"
 #include "PropertyReflection.hpp"
 #include "Script.hpp"
@@ -21,6 +24,8 @@
 #include "luacode.h"
 
 #include <algorithm>
+#include <cmath>
+#include <functional>
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -51,8 +56,8 @@ int ScriptBindings::task_wait(lua_State* state) {
             dt = 0;
         }
         thread->park = ScriptRuntime::Thread::Park::Sleep;
-        thread->due = runtime->sim_clock_ + dt;
-        runtime->sleep_.push_back(thread);
+        thread->due = thread->vm->clock + dt;
+        thread->vm->sleep.push_back(thread);
         return lua_yield(state, 0);
     });
 }
@@ -67,7 +72,7 @@ ScriptRuntime::Thread& ScriptBindings::task_caller(lua_State* state, const char*
 
 ScriptRuntime::Thread& ScriptBindings::task_thread(lua_State* state, const ScriptRuntime::Thread& caller, int first) {
     luaL_checktype(state, first, LUA_TFUNCTION);
-    ScriptRuntime::Thread& child = runtime_from(state)->new_thread(caller.script, caller.generation);
+    ScriptRuntime::Thread& child = runtime_from(state)->new_thread(*caller.vm, caller.script, caller.generation);
     const int count = lua_gettop(state);
     for (int index = first; index <= count; ++index) {
         lua_pushvalue(state, index);
@@ -99,7 +104,7 @@ int ScriptBindings::task_defer(lua_State* state) {
         const ScriptRuntime::Thread& caller = task_caller(state, "task.defer");
         ScriptRuntime::Thread& child = task_thread(state, caller, 1);
         child.park = ScriptRuntime::Thread::Park::Defer;
-        runtime_from(state)->defer_.push_back(&child);
+        child.vm->defer.push_back(&child);
         return push_task_handle(state, child);
     });
 }
@@ -109,10 +114,9 @@ int ScriptBindings::task_delay(lua_State* state) {
         const ScriptRuntime::Thread& caller = task_caller(state, "task.delay");
         const double dt = luaL_checknumber(state, 1);
         ScriptRuntime::Thread& child = task_thread(state, caller, 2);
-        ScriptRuntime* runtime = runtime_from(state);
         child.park = ScriptRuntime::Thread::Park::Sleep;
-        child.due = runtime->sim_clock_ + (dt < 0 ? 0 : dt);
-        runtime->sleep_.push_back(&child);
+        child.due = child.vm->clock + (dt < 0 ? 0 : dt);
+        child.vm->sleep.push_back(&child);
         return push_task_handle(state, child);
     });
 }
@@ -130,9 +134,9 @@ int ScriptBindings::task_cancel(lua_State* state) {
             return 0;
         }
         thread->dead = true;
-        runtime->ready_.remove(thread);
-        runtime->sleep_.remove(thread);
-        runtime->defer_.remove(thread);
+        thread->vm->ready.remove(thread);
+        thread->vm->sleep.remove(thread);
+        thread->vm->defer.remove(thread);
         runtime->forget_child_wait(*thread);
         if (ScriptRuntime::thread_from(state) == thread) {
             luaL_error(state, "cancelled");
@@ -144,6 +148,8 @@ int ScriptBindings::task_cancel(lua_State* state) {
 namespace {
 
 DataModel& create_game_object(DataModel& world) { return world.create<GameObject>(); }
+
+DataModel& create_camera(DataModel& world) { return world.create<Camera>(); }
 
 DataModel& create_script(DataModel& world) { return world.create<Script>(); }
 
@@ -163,6 +169,7 @@ DataModel& create_prefab(DataModel& world) { return world.create<Prefab>(); }
 // Completion reads the same names Instance.new will construct.
 ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("GameObject", create_game_object);
+    register_lua_creatable("Camera", create_camera);
     register_lua_creatable("Script", create_script);
     register_lua_creatable("ModuleScript", create_module_script);
     register_lua_creatable("Folder", create_folder);
@@ -272,14 +279,9 @@ void push_registered(lua_State* state, ScriptRuntime* runtime, const LuaSlot& sl
     case LuaSlot::Kind::Color:
         push_color3(state, Color3{slot.color.r, slot.color.g, slot.color.b});
         return;
-    case LuaSlot::Kind::Transform: {
-        lua_newtable(state);
-        for (int index = 0; index < 16; ++index) {
-            lua_pushnumber(state, slot.transform.m[index]);
-            lua_rawseti(state, -2, index + 1);
-        }
+    case LuaSlot::Kind::Matrix4:
+        push_matrix4(state, slot.transform);
         return;
-    }
     case LuaSlot::Kind::Signal: {
         auto* signal = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
         *signal = SignalUd{};
@@ -396,21 +398,13 @@ int ScriptBindings::instance_newindex(lua_State* state) {
                 luaL_error(state, "%s expects a Color3", field->name);
             }
             slot.kind = LuaSlot::Kind::Color;
-        } else if (type == "Transform") {
-            if (!lua_istable(state, 3)) {
-                luaL_error(state, "%s expects a table of 16 numbers", field->name);
+        } else if (type == "Matrix4") {
+            const Matrix4* value = to_matrix4(state, 3);
+            if (value == nullptr) {
+                luaL_error(state, "%s expects a Matrix4", field->name);
             }
-            slot.kind = LuaSlot::Kind::Transform;
-            slot.transform = transform_identity();
-            for (int index = 0; index < 16; ++index) {
-                lua_rawgeti(state, 3, index + 1);
-                if (!lua_isnumber(state, -1)) {
-                    lua_pop(state, 1);
-                    luaL_error(state, "%s expects a table of 16 numbers", field->name);
-                }
-                slot.transform.m[index] = static_cast<float>(lua_tonumber(state, -1));
-                lua_pop(state, 1);
-            }
+            slot.kind = LuaSlot::Kind::Matrix4;
+            slot.transform = *value;
         } else {
             luaL_error(state, "cannot set %s", key);
         }
@@ -507,8 +501,8 @@ int ScriptBindings::instance_wait_child(lua_State* state) {
         thread->wait_parent = ud->id;
         thread->wait_world = ud->world;
         thread->wait_name = wanted;
-        thread->due = timeout < 0 ? std::numeric_limits<double>::infinity() : runtime->sim_clock_ + timeout;
-        thread->wait_warn_at = runtime->sim_clock_ + kInfiniteYieldNotice;
+        thread->due = timeout < 0 ? std::numeric_limits<double>::infinity() : thread->vm->clock + timeout;
+        thread->wait_warn_at = thread->vm->clock + kInfiniteYieldNotice;
         // A timeout means the caller expects nil back, so there is no notice.
         thread->wait_warned = timeout >= 0;
         runtime->park_child_wait(*thread);
@@ -587,30 +581,40 @@ int ScriptBindings::signal_connect(lua_State* state) {
         if (ud->blocked) {
             luaL_error(state, "%s is not available to scripts", ud->blocked_name);
         }
-        if (!runtime->gate(caller->script, caller->generation, runtime)) {
+        ScriptRuntime::Vm& vm = *caller->vm;
+        if (!runtime->owner_ok(vm, caller->script, caller->generation)) {
             luaL_error(state, "script is dead");
         }
         lua_pushvalue(state, 2);
-        const auto held = std::make_shared<const ScriptRuntime::HeldRef>(*runtime, lua_ref(state, -1));
+        const auto held = std::make_shared<const ScriptRuntime::HeldRef>(vm, lua_ref(state, -1));
         lua_pop(state, 1);
         Signal* signal = &signal_of(state, *runtime, *ud);
         const InstanceId script = caller->script;
         const std::uint32_t generation = caller->generation;
         // The handler owns the callback's reference; Disconnect drops the handler.
-        Connection connection = signal->connect_scripted(
-            [runtime, held, script, generation, kind = ud->kind](InstanceId, Field field) {
-                if (kind == kSignalChanged) {
-                    runtime->invoke_listener(held->ref, script, generation,
-                                            changed_name(field, runtime->game_->events().payload()), false, 0);
-                } else if (kind == kSignalInput) {
-                    if (const InputRecord* record = runtime->delivered_input()) {
-                        runtime->invoke_listener_input(held->ref, script, generation, *record);
-                    }
-                } else {
-                    runtime->invoke_listener(held->ref, script, generation, nullptr, true, runtime->run_service_.dt());
+        Handler handler = [runtime, held, script, generation, kind = ud->kind](InstanceId, Field field) {
+            ScriptRuntime::Vm& owner = *held->vm;
+            if (kind == kSignalChanged) {
+                runtime->invoke_listener(owner, held->ref, script, generation,
+                                         changed_name(field, runtime->game_->events().payload()), false, 0);
+            } else if (kind == kSignalInput) {
+                if (const InputRecord* record = runtime->delivered_input()) {
+                    runtime->invoke_listener_input(owner, held->ref, script, generation, *record);
                 }
-            },
-            script, generation, false);
+            } else {
+                runtime->invoke_listener(owner, held->ref, script, generation, nullptr, true,
+                                         runtime->run_service_.dt());
+            }
+        };
+        // A play connection is tagged, so the queue's gate and Stop end it. The console's
+        // and a plugin's outlive the play session; their VM ends them.
+        Connection connection;
+        if (vm.kind == ScriptRuntime::VmKind::Play) {
+            connection = signal->connect_scripted(std::move(handler), script, generation, false);
+        } else {
+            connection = signal->connect_kept(std::move(handler), false);
+            runtime->keep(vm, script, generation, connection);
+        }
         auto* box = static_cast<Connection*>(lua_newuserdata(state, sizeof(Connection)));
         new (box) Connection(connection);
         luaL_getmetatable(state, kConnectionMeta);
@@ -634,27 +638,31 @@ int ScriptBindings::signal_wait(lua_State* state) {
         const int kind = ud->kind;
         thread->park = ScriptRuntime::Thread::Park::Signal;
         // By serial: task.cancel can end the thread, and release it, before the signal fires.
-        signal->connect_scripted(
-            [runtime, serial = thread->serial, kind](InstanceId, Field field) {
-                ScriptRuntime::Thread* waiting = runtime->find_thread(serial);
-                if (waiting == nullptr || runtime->closing_ || waiting->dead) {
-                    return;
-                }
-                runtime->guarded([&] {
-                    if (kind == kSignalChanged) {
-                        runtime->make_ready(*waiting, changed_name(field, runtime->game_->events().payload()));
-                    } else if (kind == kSignalInput) {
-                        if (const InputRecord* record = runtime->delivered_input()) {
-                            runtime->make_ready_input(*waiting, *record);
-                        } else {
-                            runtime->make_ready(*waiting, nullptr);
-                        }
+        Handler handler = [runtime, serial = thread->serial, kind](InstanceId, Field field) {
+            ScriptRuntime::Thread* waiting = runtime->find_thread(serial);
+            if (waiting == nullptr || waiting->vm->closing || waiting->dead) {
+                return;
+            }
+            runtime->guarded(*waiting->vm, [&] {
+                if (kind == kSignalChanged) {
+                    runtime->make_ready(*waiting, changed_name(field, runtime->game_->events().payload()));
+                } else if (kind == kSignalInput) {
+                    if (const InputRecord* record = runtime->delivered_input()) {
+                        runtime->make_ready_input(*waiting, *record);
                     } else {
-                        runtime->make_ready_number(*waiting, runtime->run_service_.dt());
+                        runtime->make_ready(*waiting, nullptr);
                     }
-                });
-            },
-            thread->script, thread->generation, true);
+                } else {
+                    runtime->make_ready_number(*waiting, runtime->run_service_.dt());
+                }
+            });
+        };
+        ScriptRuntime::Vm& vm = *thread->vm;
+        if (vm.kind == ScriptRuntime::VmKind::Play) {
+            signal->connect_scripted(std::move(handler), thread->script, thread->generation, true);
+        } else {
+            runtime->keep(vm, thread->script, thread->generation, signal->connect_kept(std::move(handler), true));
+        }
         return lua_yield(state, 0);
     });
 }
@@ -779,6 +787,137 @@ int ScriptBindings::selection_set(lua_State* state) {
             lua_pop(state, 1);
         }
         runtime->game_->selection().set(std::move(ids));
+        return 0;
+    });
+}
+
+namespace {
+
+// A size the shape methods take: a number above 0.
+float shape_size(lua_State* state, int index, const char* what) {
+    const double value = luaL_checknumber(state, index);
+    if (!(value > 0.0) || !std::isfinite(value)) {
+        luaL_error(state, "%s must be a number above 0", what);
+    }
+    return static_cast<float>(value);
+}
+
+// An optional Vector3 argument; nil or none is the origin.
+Vec3 shape_position(lua_State* state, int index) {
+    if (lua_isnoneornil(state, index)) {
+        return Vec3{};
+    }
+    const float* components = lua_tovector(state, index);
+    if (components == nullptr) {
+        luaL_error(state, "position must be a Vector3");
+    }
+    return Vec3{components[0], components[1], components[2]};
+}
+
+int shape_segments(lua_State* state, int index, int fallback) {
+    return lua_isnoneornil(state, index) ? fallback : static_cast<int>(luaL_checkinteger(state, index));
+}
+
+bool shape_flag(lua_State* state, int index, bool fallback) {
+    return lua_isnoneornil(state, index) ? fallback : lua_toboolean(state, index) != 0;
+}
+
+void edit_mesh(lua_State* state, Mesh& mesh, const std::function<void(anarchy::amesh::Data&)>& edit) {
+    if (const std::optional<std::string> error = mesh.edit_geometry(edit)) {
+        luaL_error(state, "%s", error->c_str());
+    }
+}
+
+}  // namespace
+
+Mesh& ScriptBindings::mesh_self(lua_State* state) {
+    auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
+    ScriptRuntime* runtime = runtime_from(state);
+    auto* mesh = runtime == nullptr ? nullptr : dynamic_cast<Mesh*>(runtime->resolve_id(ud->id, ud->world));
+    if (mesh == nullptr) {
+        luaL_error(state, "instance is gone");
+    }
+    return *mesh;
+}
+
+int ScriptBindings::mesh_add_box(lua_State* state) {
+    return lua_guard(state, [&] {
+        Mesh& mesh = mesh_self(state);
+        const float* size = lua_tovector(state, 2);
+        if (size == nullptr || !(size[0] > 0.f && size[1] > 0.f && size[2] > 0.f) ||
+            !(std::isfinite(size[0]) && std::isfinite(size[1]) && std::isfinite(size[2]))) {
+            luaL_error(state, "size must be a Vector3 above 0 on every axis");
+        }
+        const Vec3 extent{size[0], size[1], size[2]};
+        const Vec3 at = shape_position(state, 3);
+        edit_mesh(state, mesh, [&](anarchy::amesh::Data& data) { add_box(data, extent, at); });
+        return 0;
+    });
+}
+
+int ScriptBindings::mesh_add_sphere(lua_State* state) {
+    return lua_guard(state, [&] {
+        Mesh& mesh = mesh_self(state);
+        const float radius = shape_size(state, 2, "radius");
+        const int segments = shape_segments(state, 3, 24);
+        const Vec3 at = shape_position(state, 4);
+        edit_mesh(state, mesh, [&](anarchy::amesh::Data& data) { add_sphere(data, radius, segments, at); });
+        return 0;
+    });
+}
+
+int ScriptBindings::mesh_add_cylinder(lua_State* state) {
+    return lua_guard(state, [&] {
+        Mesh& mesh = mesh_self(state);
+        const float radius = shape_size(state, 2, "radius");
+        const float height = shape_size(state, 3, "height");
+        const int segments = shape_segments(state, 4, 16);
+        const bool capped = shape_flag(state, 5, true);
+        const Vec3 at = shape_position(state, 6);
+        edit_mesh(state, mesh,
+                  [&](anarchy::amesh::Data& data) { add_cylinder(data, radius, height, segments, capped, at); });
+        return 0;
+    });
+}
+
+int ScriptBindings::mesh_add_cone(lua_State* state) {
+    return lua_guard(state, [&] {
+        Mesh& mesh = mesh_self(state);
+        const float radius = shape_size(state, 2, "radius");
+        const float height = shape_size(state, 3, "height");
+        const int segments = shape_segments(state, 4, 16);
+        const bool capped = shape_flag(state, 5, true);
+        const Vec3 at = shape_position(state, 6);
+        edit_mesh(state, mesh, [&](anarchy::amesh::Data& data) { add_cone(data, radius, height, segments, capped, at); });
+        return 0;
+    });
+}
+
+int ScriptBindings::mesh_add_plane(lua_State* state) {
+    return lua_guard(state, [&] {
+        Mesh& mesh = mesh_self(state);
+        const float width = shape_size(state, 2, "width");
+        const float depth = shape_size(state, 3, "depth");
+        const Vec3 at = shape_position(state, 4);
+        edit_mesh(state, mesh, [&](anarchy::amesh::Data& data) { add_plane(data, width, depth, at); });
+        return 0;
+    });
+}
+
+int ScriptBindings::mesh_add_teapot(lua_State* state) {
+    return lua_guard(state, [&] {
+        Mesh& mesh = mesh_self(state);
+        const float size = shape_size(state, 2, "size");
+        const Vec3 at = shape_position(state, 3);
+        edit_mesh(state, mesh, [&](anarchy::amesh::Data& data) { add_teapot(data, size, at); });
+        return 0;
+    });
+}
+
+int ScriptBindings::mesh_clear(lua_State* state) {
+    return lua_guard(state, [&] {
+        Mesh& mesh = mesh_self(state);
+        edit_mesh(state, mesh, [](anarchy::amesh::Data& data) { data = anarchy::amesh::Data{}; });
         return 0;
     });
 }
@@ -939,6 +1078,18 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         lua_method("Set", "nil", reinterpret_cast<void*>(&ScriptBindings::selection_set)),
     };
     register_lua_class("Selection", nullptr, selection, 2);
+
+    // AssetInstances.cpp declares the class and its Path.
+    const LuaField mesh[] = {
+        lua_method("AddBox", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_add_box)),
+        lua_method("AddSphere", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_add_sphere)),
+        lua_method("AddCylinder", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_add_cylinder)),
+        lua_method("AddCone", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_add_cone)),
+        lua_method("AddPlane", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_add_plane)),
+        lua_method("AddTeapot", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_add_teapot)),
+        lua_method("Clear", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_clear)),
+    };
+    register_lua_class("Mesh", nullptr, mesh, static_cast<int>(sizeof(mesh) / sizeof(mesh[0])));
 
     // UserInputService.cpp declares the class, its signals, and the service.
     const LuaField input[] = {

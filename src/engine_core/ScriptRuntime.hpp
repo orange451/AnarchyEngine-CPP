@@ -7,6 +7,7 @@
 #include "TableSnapshot.hpp"
 #include "TaskScheduler.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -28,8 +29,12 @@ struct ScriptBindings;
 struct InputRecord;
 void open_host_libraries(lua_State* state);
 
-// One Luau state for the play session. SimulationThread is the only caller of lua_*.
-// task.wait sleeps on sim_clock, which advances by the Heartbeat dt.
+// Three Luau states, each with its own scheduler: the play VM for the play session,
+// the console VM for the command line, and the plugin VM for plugins. SimulationThread,
+// or a paused edit, is the only caller of lua_*.
+// A play script's task.wait sleeps on sim_clock, which advances by the Heartbeat dt.
+// The console and plugin VMs keep their own clocks, which step_tools advances, so
+// their threads wait, and their connections fire, while the play session is closed too.
 class ScriptRuntime : public ScriptHost {
 public:
     struct Watch {
@@ -50,7 +55,17 @@ public:
     // sim_clock += dt, wake sleeps, resume ready threads. dt is the Heartbeat step.
     void heartbeat(double dt);
 
-    double sim_clock() const { return sim_clock_; }
+    // The console and plugin VMs' heartbeat: their clocks += dt, wake their sleeps,
+    // resume their ready threads. While the play VM is closed there is no play step,
+    // so this also fires RunService.Heartbeat and drains events first. While a play
+    // session is paused it does neither: their waits keep time, but signals wait for
+    // the session to resume, as the play VM's do. The engine calls it after heartbeat
+    // while stepping, and on its own while paused.
+    void step_tools(double dt);
+    // Whether the console or plugin VM is open, so step_tools has work. Any thread may ask.
+    bool tools_open() const { return tools_open_.load(std::memory_order_relaxed); }
+
+    double sim_clock() const { return play_.clock; }
     const std::string& last_error() const { return last_error_; }
     bool vm_open() const { return open_; }
 
@@ -110,10 +125,34 @@ public:
     // The sequence number the next line will get.
     std::uint64_t output_next() const;
 
-    // One chunk against the live data model. Works while the play session is closed.
-    // The caller is the simulation thread, or a paused edit.
-    // print and an uncaught error join the log. No Script instance is attached.
+    // One chunk against the live data model, in the console VM. Works while the play
+    // session is closed. The caller is the simulation thread, or a paused edit.
+    // It runs now until it finishes or yields. A yielded command, and whatever it
+    // spawned or connected, goes on with step_tools, across play sessions, until it
+    // ends or reset_console. print and an uncaught error join the log. No Script
+    // instance is attached.
     void run_chunk(std::string_view source);
+    // Closes the console VM: its threads stop and its connections go. The next
+    // command opens a fresh one.
+    void reset_console();
+
+    // A plugin is an instance whose Scripts run in the plugin VM, apart from the play VM
+    // and the command line: while the play session is closed too, and wherever the
+    // instance sits, parented or not. Registering runs the root when it is a Script,
+    // then every Script under it, depth first in sibling order, each until it finishes
+    // or yields. A disabled Script is skipped, and a ModuleScript runs only through
+    // require. A plugin Script may wait, spawn, and connect; its threads go on with
+    // step_tools until it is destroyed or the plugin is unregistered. print and errors
+    // join the log. Plugins share the plugin VM's _G and shared. It closes when the
+    // last plugin goes. The caller is the simulation thread, or a paused edit. False
+    // when root is not a live instance or is registered already; nothing runs then.
+    bool register_plugin(InstanceId root);
+    // Stops the plugin's threads and connections. False when root is not registered.
+    bool unregister_plugin(InstanceId root);
+    bool is_plugin(InstanceId root) const;
+    // Registered roots in the order they were registered. A root that died drops out.
+    std::vector<InstanceId> plugins() const;
+    bool plugin_vm_open() const { return plugin_.state != nullptr; }
 
     bool global_is_nil(const char* name);
     bool global_number(const char* name, double& out);
@@ -134,7 +173,11 @@ private:
     friend void push_registered(lua_State* state, ScriptRuntime* runtime, const LuaSlot& slot, InstanceId id,
                                 std::uint32_t world);
 
+    struct Vm;
+
     struct Thread {
+        // The VM whose scheduler runs this thread.
+        Vm* vm = nullptr;
         lua_State* co = nullptr;
         // The registry reference that keeps co alive until the thread is released.
         // -1 is LUA_NOREF, none.
@@ -142,7 +185,11 @@ private:
         // What the coroutine's thread data and task handles hold instead of a pointer.
         // Lua can keep the coroutine, or a handle, after this thread is released, and
         // can even resume a killed coroutine. A released serial finds no thread.
+        // Serials are unique across the VMs.
         std::uint64_t serial = 0;
+        // Who owns the thread, which owner_ok checks. In the play VM, a Script and its
+        // start_generation, or 0 for none. In the console VM, 0 and 0. In the plugin VM,
+        // the plugin Script and its registration's serial.
         InstanceId script = 0;
         std::uint32_t generation = 0;
         enum class Park { None, Sleep, Signal, Defer, Child } park = Park::None;
@@ -165,21 +212,73 @@ private:
         std::uint32_t generation = 0;
     };
 
+    // A console or plugin connection. It is kept across play sessions, so the VM
+    // disconnects it itself. script and owner are those of the thread that made it.
+    struct Kept {
+        InstanceId script = 0;
+        std::uint32_t owner = 0;
+        Connection connection;
+    };
+
+    enum class VmKind { Play, Console, Plugin };
+
+    // One Luau state and its scheduler.
+    struct Vm {
+        explicit Vm(VmKind vm_kind) : kind(vm_kind) {}
+        const VmKind kind;
+        lua_State* state = nullptr;
+        std::size_t memory_used = 0;
+        double clock = 0;
+        bool closing = false;
+        // Play only: set by halt. No script starts again until the next play session.
+        bool halted = false;
+        std::list<Thread> threads;
+        std::list<Thread*> ready;
+        std::list<Thread*> sleep;
+        std::list<Thread*> defer;
+        // WaitForChild threads keyed by the parent they wait on, so a reparent or
+        // rename elsewhere is one lookup.
+        std::unordered_map<InstanceId, std::vector<Thread*>> child_waits;
+        std::vector<Thread*> child_found;
+        double next_child_timer = std::numeric_limits<double>::infinity();
+        // ModuleScript results, registry refs in state. The play VM keeps them for the
+        // session. The console clears them before each command and the plugin VM before
+        // each registration, so a module edited since is read again.
+        std::unordered_map<InstanceId, int> require_cache;
+        // Lives as long as state. A HeldRef whose VM has closed releases nothing.
+        std::shared_ptr<void> token;
+        std::vector<Kept> kept;
+        // kept drops disconnected entries when it reaches this size.
+        std::size_t kept_prune_at = 64;
+    };
+
+    struct Plugin {
+        InstanceId root = 0;
+        std::uint32_t serial = 0;
+    };
+
     // Interrupts, loop back-edges and calls, one resume may take before it is
     // stopped as a runaway. The same budget LuaEngine gives a chunk.
     static constexpr std::uint64_t kScriptTimeout = 1000000;
     static constexpr int kResumeBudget = 32;
     static constexpr std::size_t kMemoryLimit = 64 * 1024 * 1024;
+    // The world a console or plugin handle carries. It resolves by id alone, so the
+    // handle outlives a play session; the id's slot generation still tells a dead one.
+    static constexpr std::uint32_t kAnyWorld = 0xffffffffu;
 
-    // A registry reference C++ holds on the play VM, such as a Connect callback.
+    // A registry reference C++ holds on a VM, such as a Connect callback.
     struct HeldRef;
 
     // Null when state is not a script thread, or its thread was released.
     static Thread* thread_from(lua_State* state);
     Thread* find_thread(std::uint64_t serial) const;
+    // The VM state belongs to. Null for none of them.
+    Vm* vm_from(lua_State* state);
+    // The play VM's EventQueue gate for tagged connections.
     static bool gate(InstanceId script, std::uint32_t generation, void* userdata);
+    // Whether a thread owned by script and generation may run in vm. See Thread.
+    bool owner_ok(const Vm& vm, InstanceId script, std::uint32_t generation) const;
     static void* allocate(void* userdata, void* pointer, std::size_t old_size, std::size_t new_size);
-    static void* allocate_console(void* userdata, void* pointer, std::size_t old_size, std::size_t new_size);
     static void interrupt(lua_State* state, int gc);
     static int lua_print(lua_State* state);
     void print_source(lua_State* state, InstanceId& script, int& line) const;
@@ -190,40 +289,53 @@ private:
     void assert_lua_thread() const;
     void open_vm();
     void close_vm();
-    // The command line keeps its own state so game is available while the play VM is closed.
-    lua_State* create_state(bool console);
-    void ensure_console();
-    void close_console();
+    // The console and plugin VMs open on first use.
+    void ensure_state(Vm& vm);
+    lua_State* create_state(Vm& vm);
+    // Closes vm's state: its threads, modules, and kept connections go with it.
+    void close_state(Vm& vm);
+    void update_tools_open();
     void refresh_game(lua_State* state);
     // game and workspace. The global table must be writable.
     void set_root_globals(lua_State* state);
-    void eval_chunk(lua_State* state, std::string_view source);
+    // Loads source on a new thread of vm owned by script and generation, with `script`
+    // set to script, and runs it now until it finishes or yields. chunk names it in errors.
+    void launch_chunk(Vm& vm, std::string_view source, const std::string& chunk, InstanceId script,
+                      std::uint32_t generation);
+    void run_plugin(const Plugin& plugin);
+    // Stops vm's threads and kept connections that match. owner 0 matches any owner.
+    void kill_owned(Vm& vm, InstanceId script, std::uint32_t owner);
+    // Records a console or plugin connection so its VM can disconnect it.
+    void keep(Vm& vm, InstanceId script, std::uint32_t owner, const Connection& connection);
     void kill_script(InstanceId id);
     // Whether a script at id is under Workspace or Scripts, where scripts run.
     bool runs_here(InstanceId id) const;
     void enqueue_start(Script& script);
     void launch_starts();
     void launch_one(const Start& start);
-    void flush_defer();
-    void wake_sleeps();
+    // One scheduler pass over a console or plugin VM: timers, then the ready threads.
+    void step_side(Vm& vm, double dt);
+    void flush_defer(Vm& vm);
+    void wake_sleeps(Vm& vm);
     // WaitForChild. deliver resumes threads on_child_named matched. The timer
     // pass handles timeouts and the notice, and runs only when one is due.
     void park_child_wait(Thread& thread);
     void forget_child_wait(Thread& thread);
-    void drop_dead_child_waits();
-    void deliver_child_waits();
-    void wake_child_timers();
-    void resume_budget();
+    void drop_dead_child_waits(Vm& vm);
+    void deliver_child_waits(Vm& vm);
+    void wake_child_timers(Vm& vm);
+    void resume_budget(Vm& vm);
     void resume_one(Thread& thread);
     void drop_dead(std::list<Thread*>& queue);
+    void drop_dead_queues(Vm& vm);
     // Frees threads that finished or were killed, and lets the collector have
     // their coroutines. Does nothing while Lua is on the stack.
-    void release_dead_threads();
+    void release_dead_threads(Vm& vm);
     // Luau throws when memory runs out in a call C++ makes outside lua_resume or
-    // lua_pcall. The runtime's own work then stops every script and says why.
+    // lua_pcall. The runtime's own work then stops every script in that VM and says why.
     template <typename Fn>
-    void guarded(Fn&& fn);
-    void halt(const char* why);
+    void guarded(Vm& vm, Fn&& fn);
+    void halt(Vm& vm, const char* why);
     void ready(Thread& thread);
     // Takes a thread off every wait before it is made ready. False when it is
     // dead or has no coroutine.
@@ -231,7 +343,7 @@ private:
     void make_ready(Thread& thread, const char* result);
     void make_ready_number(Thread& thread, double result);
     bool thread_ok(const Thread& thread) const;
-    Thread& new_thread(InstanceId script, std::uint32_t generation);
+    Thread& new_thread(Vm& vm, InstanceId script, std::uint32_t generation);
     void set_script_global(lua_State* co, InstanceId script);
     void remember_error(lua_State* state);
     // remember_error plus a console line. require uses remember_error alone so a caught
@@ -240,12 +352,13 @@ private:
     void push_instance(lua_State* state, InstanceId id);
     DataModel* resolve_id(InstanceId id, std::uint32_t world) const;
     void fire_phase(Phase phase, double dt);
-    void invoke_listener(int ref, InstanceId script, std::uint32_t generation, const char* text, bool pass_number,
-                         double number);
+    void invoke_listener(Vm& vm, int ref, InstanceId script, std::uint32_t generation, const char* text,
+                         bool pass_number, double number);
     // An UserInputService signal: the listener gets an InputObject and gameProcessedEvent.
-    void invoke_listener_input(int ref, InstanceId script, std::uint32_t generation, const InputRecord& record);
-    // Null when the gate refuses. The listener is on the new thread's stack.
-    Thread* start_listener(int ref, InstanceId script, std::uint32_t generation);
+    void invoke_listener_input(Vm& vm, int ref, InstanceId script, std::uint32_t generation,
+                               const InputRecord& record);
+    // Null when the owner may not run. The listener is on the new thread's stack.
+    Thread* start_listener(Vm& vm, int ref, InstanceId script, std::uint32_t generation);
     void run_listener(Thread& thread);
     void make_ready_input(Thread& thread, const InputRecord& record);
     // The InputObject for the record being delivered, or null outside an UserInputService handler.
@@ -256,15 +369,15 @@ private:
     TaskScheduler* scheduler_ = nullptr;
     // The phase jobs attach binds, which detach unbinds.
     std::vector<TaskScheduler::JobId> phase_jobs_;
-    lua_State* state_ = nullptr;
-    lua_State* console_state_ = nullptr;
+    Vm play_{VmKind::Play};
+    Vm console_{VmKind::Console};
+    Vm plugin_{VmKind::Plugin};
+    std::atomic<bool> tools_open_{false};
+    // The play VM is open: a play session is running.
     bool open_ = false;
-    bool closing_ = false;
+    // Lua frames on the C++ stack, any VM. Threads are released only at 0.
     int lua_depth_ = 0;
-    double sim_clock_ = 0;
     std::uint64_t steps_ = 0;
-    std::size_t memory_used_ = 0;
-    std::size_t console_memory_used_ = 0;
     std::string last_error_;
 
     // Guards output_, output_epoch_, and the history. Never take the DataModel lock while holding this.
@@ -274,29 +387,13 @@ private:
     std::deque<OutputLine> history_;
     std::uint64_t history_next_ = 0;
 
-    std::list<Thread> threads_;
     std::unordered_map<std::uint64_t, Thread*> by_serial_;
     std::uint64_t next_serial_ = 0;
-    // Lives as long as the play VM. A HeldRef whose VM has closed releases nothing.
-    std::shared_ptr<void> vm_token_;
-    // Set by halt. No script starts again until the next play session.
-    bool halted_ = false;
-    std::list<Thread*> ready_;
-    std::list<Thread*> sleep_;
-    std::list<Thread*> defer_;
-    // WaitForChild threads keyed by the parent they wait on, so a reparent or
-    // rename elsewhere is one lookup.
-    std::unordered_map<InstanceId, std::vector<Thread*>> child_waits_;
-    std::vector<Thread*> child_found_;
-    double next_child_timer_ = std::numeric_limits<double>::infinity();
     std::vector<Start> starts_;
     // Scripts started this session, queued or running. Moving one does not start it again.
     std::unordered_set<InstanceId> started_;
-    std::unordered_map<InstanceId, int> require_cache_;
-    // The command line's own modules, refs in console_state_. A VM cannot hold another VM's
-    // values, so the console runs a ModuleScript itself. Cleared before each command, so a
-    // module edited while stopped is read again.
-    std::unordered_map<InstanceId, int> console_require_cache_;
+    std::vector<Plugin> plugins_;
+    std::uint32_t plugin_serial_ = 0;
     std::vector<InstanceId> loading_;
 
     // The phase signals scripts reach through game:GetService("RunService").

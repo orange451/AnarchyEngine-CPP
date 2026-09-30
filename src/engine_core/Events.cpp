@@ -148,6 +148,7 @@ void EventQueue::tombstone(std::uint32_t index) {
     slot.handler = nullptr;
     slot.script = 0;
     slot.script_generation = 0;
+    slot.kept = false;
     slot.prev = kNone;
     slot.next = kNone;
     slot.signal_index = kNone;
@@ -171,7 +172,7 @@ void EventQueue::disconnect_slot(std::uint32_t index, std::uint32_t generation) 
 }
 
 Connection EventQueue::connect_to(SignalId id, Handler handler, bool once, InstanceId script,
-                                  std::uint32_t script_generation) {
+                                  std::uint32_t script_generation, bool kept) {
     Signal* signal = resolve(id);
     if (signal == nullptr) {
         contract_fail("connect on a dead signal");
@@ -189,6 +190,7 @@ Connection EventQueue::connect_to(SignalId id, Handler handler, bool once, Insta
     slot.once = once;
     slot.script = script;
     slot.script_generation = script_generation;
+    slot.kept = kept;
     slot.signal_index = id.index;
     slot.handler = std::move(handler);
     if (draining_) {
@@ -420,7 +422,7 @@ void EventQueue::drop_pending() {
 void EventQueue::disconnect_all() {
     const std::uint32_t count = static_cast<std::uint32_t>(conns_.size());
     for (std::uint32_t index = 0; index < count; ++index) {
-        if (conns_[index].live) {
+        if (conns_[index].live && !conns_[index].kept) {
             tombstone(index);
         }
     }
@@ -499,6 +501,13 @@ Connection Signal::connect_scripted(Handler handler, InstanceId script, std::uin
         contract_fail("connect on a dead signal");
     }
     return queue_->connect_to(id_, std::move(handler), once, script, script_generation);
+}
+
+Connection Signal::connect_kept(Handler handler, bool once) {
+    if (!bound()) {
+        contract_fail("connect on a dead signal");
+    }
+    return queue_->connect_to(id_, std::move(handler), once, 0, 0, true);
 }
 
 void Signal::wait() {

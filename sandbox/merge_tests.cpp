@@ -1,4 +1,5 @@
 #include "JsonMerge.hpp"
+#include "Camera.hpp"
 #include "Contract.hpp"
 #include "DataModel.hpp"
 #include "Folder.hpp"
@@ -6,7 +7,6 @@
 #include "GameObject.hpp"
 #include "ModuleScript.hpp"
 #include "Script.hpp"
-#include "TestTriangle.hpp"
 #include "types.hpp"
 #include "PropertyBag.hpp"
 
@@ -139,7 +139,7 @@ TEST_CASE("M5 default_properties is what save_properties leaves out", "[M5][merg
     std::vector<engine_core::DataModel*> objects = {
         &game.create(), &game.create<engine_core::GameObject>(), &game.create<engine_core::Script>(),
         &game.create<engine_core::ModuleScript>(), &game.create<engine_core::Folder>(),
-        &game.create<engine_core::TestTriangle>()};
+        &game.create<engine_core::Camera>()};
     for (engine_core::DataModel* object : objects) {
         INFO(object->class_name());
         engine_core::PropertyBag saved;
@@ -158,7 +158,8 @@ TEST_CASE("M5 default_properties is what save_properties leaves out", "[M5][merg
     REQUIRE(default_keys(game).empty());
     REQUIRE(default_keys(*objects[0]) == std::vector<std::string>{"Simulated", "VisualOnly"});
     REQUIRE(default_keys(*objects[1]) ==
-            std::vector<std::string>{"Color", "Prefab", "Simulated", "Size", "Transform", "VisualOnly"});
+            std::vector<std::string>{"Prefab", "Simulated", "Transform", "VisualOnly"});
     REQUIRE(default_keys(*objects[2]) == std::vector<std::string>{"Enabled", "Simulated", "VisualOnly"});
-    REQUIRE(default_keys(*objects[5]) == std::vector<std::string>{"Position", "Simulated", "VisualOnly"});
+    REQUIRE(default_keys(*objects[5]) ==
+            std::vector<std::string>{"FieldOfView", "Prefab", "Simulated", "Transform", "VisualOnly"});
 }

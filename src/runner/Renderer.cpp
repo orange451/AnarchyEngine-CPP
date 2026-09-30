@@ -1,6 +1,7 @@
 #include "Renderer.hpp"
 
 #include "ShaderFile.hpp"
+#include "amesh.hpp"
 #include "gl.hpp"
 
 #include <algorithm>
@@ -9,15 +10,6 @@
 #include <vector>
 
 namespace runner {
-namespace {
-    // Red, green, and blue corners. Interpolation fills in yellow, cyan, and magenta.
-    const float kVertices[] = {
-        // x,      y,     r,    g,    b
-        -0.75f, -0.65f,  1.0f, 0.0f, 0.0f,
-        0.75f, -0.65f,  0.0f, 1.0f, 0.0f,
-        0.00f,  0.75f,  0.0f, 0.0f, 1.0f,
-    };
-}  // namespace
 
 bool Renderer::initialize() {
     if (ready_) {
@@ -33,29 +25,13 @@ bool Renderer::initialize() {
     for (int stale = 0; stale < 32 && glGetError() != GL_NO_ERROR; ++stale) {
     }
 
-    program_ = LinkProgram(LoadShader("triangle.vert"), LoadShader("triangle.frag"), "Triangle");
-    if (program_ == 0) {
+    meshProgram_ = LinkProgram(LoadShader("mesh.vert"), LoadShader("mesh.frag"), "Mesh");
+    if (meshProgram_ == 0) {
         shutdown();
         return false;
     }
-
-    glGenVertexArrays(1, &vao_);
-    glGenBuffers(1, &vbo_);
-    glBindVertexArray(vao_);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-    glBufferData(GL_ARRAY_BUFFER, sizeof kVertices, kVertices, GL_STATIC_DRAW);
-
-    const GLsizei stride = 5 * static_cast<GLsizei>(sizeof(float));
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(0));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(
-        1, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(2 * sizeof(float)));
-
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindVertexArray(0);
-    angleLocation_ = glGetUniformLocation(program_, "uAngle");
-    positionLocation_ = glGetUniformLocation(program_, "uPosition");
+    modelLocation_ = glGetUniformLocation(meshProgram_, "uModel");
+    viewProjectionLocation_ = glGetUniformLocation(meshProgram_, "uViewProjection");
     const GLenum error = glGetError();
     if (error != GL_NO_ERROR) {
         std::fprintf(stderr, "OpenGL error during setup: 0x%x\n", error);
@@ -110,7 +86,7 @@ PixelRect PanePixels(double x, double y, double width, double height, double sce
 }  // namespace
 
 void Renderer::draw(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
-                    const TriangleDraw* triangles, int count) {
+                    const MeshDraw* meshes, int meshCount) {
     if (!ready_ || width <= 0.0 || height <= 0.0 || sceneWidth <= 0.0 || sceneHeight <= 0.0) {
         return;
     }
@@ -141,7 +117,7 @@ void Renderer::draw(double x, double y, double width, double height, double scen
     }
 
     // Scissor limits the clear to this pane. The viewport stays the whole pane
-    // so a parent clip cuts pixels without sliding the triangle.
+    // so a parent clip cuts pixels without sliding the drawing.
     glEnable(GL_SCISSOR_TEST);
     glScissor(clip.x, clip.y, clip.width, clip.height);
     glViewport(pane.x, pane.y, pane.width, pane.height);
@@ -149,21 +125,7 @@ void Renderer::draw(double x, double y, double width, double height, double scen
     glEnable(GL_DEPTH_TEST);
     glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glUseProgram(program_);
-    glBindVertexArray(vao_);
-    if (triangles != nullptr && count > 0) {
-        for (int index = 0; index < count; ++index) {
-            const TriangleDraw& triangle = triangles[index];
-            if (angleLocation_ >= 0) {
-                glUniform1f(angleLocation_, triangle.angleDegrees * 0.01745329252f);
-            }
-            if (positionLocation_ >= 0) {
-                glUniform3f(positionLocation_, triangle.x, triangle.y, triangle.z);
-            }
-            glDrawArrays(GL_TRIANGLES, 0, 3);
-        }
-    }
-    glBindVertexArray(0);
+    drawMeshes(meshes, meshCount, static_cast<float>(pane.width) / static_cast<float>(pane.height));
     if (depthWasOn != GL_TRUE) {
         glDisable(GL_DEPTH_TEST);
     }
@@ -224,18 +186,108 @@ void Renderer::setClearColor(float r, float g, float b) {
 
 void Renderer::shutdown() {
     ready_ = false;
-    if (vbo_ != 0) {
-        glDeleteBuffers(1, &vbo_);
-        vbo_ = 0;
+    if (meshProgram_ != 0) {
+        glDeleteProgram(meshProgram_);
+        meshProgram_ = 0;
     }
-    if (vao_ != 0) {
-        glDeleteVertexArrays(1, &vao_);
-        vao_ = 0;
+}
+
+namespace {
+
+// Column-major 4x4, as Transform and GLSL store them.
+using Matrix = float[16];
+
+void Multiply(const float* a, const float* b, float* out) {
+    for (int column = 0; column < 4; ++column) {
+        for (int row = 0; row < 4; ++row) {
+            float sum = 0.f;
+            for (int k = 0; k < 4; ++k) {
+                sum += a[k * 4 + row] * b[column * 4 + k];
+            }
+            out[column * 4 + row] = sum;
+        }
     }
-    if (program_ != 0) {
-        glDeleteProgram(program_);
-        program_ = 0;
+}
+
+// Right-handed and Y up: the camera looks down its -Z.
+void LookAt(const float* eye, const float* target, float* out) {
+    float f[3] = {target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]};
+    const float fLength = std::sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+    for (float& v : f) {
+        v /= fLength;
     }
+    // side = forward x up, with up = +Y.
+    float s[3] = {-f[2], 0.f, f[0]};
+    const float sLength = std::sqrt(s[0] * s[0] + s[2] * s[2]);
+    for (float& v : s) {
+        v /= sLength;
+    }
+    const float u[3] = {s[1] * f[2] - s[2] * f[1], s[2] * f[0] - s[0] * f[2], s[0] * f[1] - s[1] * f[0]};
+    const float m[16] = {
+        s[0], u[0], -f[0], 0.f,
+        s[1], u[1], -f[1], 0.f,
+        s[2], u[2], -f[2], 0.f,
+        -(s[0] * eye[0] + s[1] * eye[1] + s[2] * eye[2]),
+        -(u[0] * eye[0] + u[1] * eye[1] + u[2] * eye[2]),
+        f[0] * eye[0] + f[1] * eye[1] + f[2] * eye[2],
+        1.f,
+    };
+    std::copy(m, m + 16, out);
+}
+
+// OpenGL clip space: depth -1 at near, 1 at far.
+void Perspective(float fovYDegrees, float aspect, float nearZ, float farZ, float* out) {
+    const float f = 1.f / std::tan(fovYDegrees * 0.5f * 0.01745329252f);
+    std::fill(out, out + 16, 0.f);
+    out[0] = f / aspect;
+    out[5] = f;
+    out[10] = (farZ + nearZ) / (nearZ - farZ);
+    out[11] = -1.f;
+    out[14] = 2.f * farZ * nearZ / (nearZ - farZ);
+}
+
+}  // namespace
+
+engine_core::Matrix4 Renderer::DefaultView() {
+    engine_core::Matrix4 view;
+    LookAt(kCameraEye, kCameraTarget, view.m);
+    return view;
+}
+
+void Renderer::setCamera(const engine_core::Matrix4& world, float fovYDegrees) {
+    if (!(fovYDegrees > 0.f && fovYDegrees < 180.f)) {
+        return;
+    }
+    const engine_core::Matrix4 view = engine_core::matrix4_inverse(engine_core::matrix4_orthonormalize(world));
+    for (const float value : view.m) {
+        if (!std::isfinite(value)) {
+            return;
+        }
+    }
+    view_ = view;
+    fovYDegrees_ = fovYDegrees;
+}
+
+void Renderer::drawMeshes(const MeshDraw* meshes, int count, float aspect) {
+    if (meshProgram_ == 0 || meshes == nullptr || count <= 0 || !(aspect > 0.f)) {
+        return;
+    }
+    Matrix projection;
+    Matrix viewProjection;
+    Perspective(fovYDegrees_, aspect, 0.1f, 1000.f, projection);
+    Multiply(projection, view_.m, viewProjection);
+    glUseProgram(meshProgram_);
+    glUniformMatrix4fv(viewProjectionLocation_, 1, GL_FALSE, viewProjection);
+    for (int index = 0; index < count; ++index) {
+        const MeshDraw& draw = meshes[index];
+        if (draw.mesh == nullptr || !draw.mesh->valid()) {
+            continue;
+        }
+        glUniformMatrix4fv(modelLocation_, 1, GL_FALSE, draw.model.m);
+        draw.mesh->bind();
+        draw.mesh->draw(0);
+    }
+    glBindVertexArray(0);
 }
 
 }  // namespace runner

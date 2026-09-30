@@ -10,6 +10,7 @@
 #include "TaskScheduler.hpp"
 #include "types.hpp"
 
+#include <atomic>
 #include <filesystem>
 #include <random>
 #include <string>
@@ -58,6 +59,7 @@ struct ScriptRig {
             scheduler.run_phase(engine_core::Phase::Heartbeat, dt);
             game.events().drain();
             runtime.heartbeat(dt);
+            runtime.step_tools(dt);
             game.events().drain();
         }
     }
@@ -76,6 +78,27 @@ inline engine_core::Script& add_script(engine_core::DataModel& game, engine_core
 inline engine_core::Script& add_script(engine_core::DataModel& game, const char* name, const char* source) {
     return add_script(game, game.scene_service("Workspace"), name, source);
 }
+
+// A plain instance that steps on Heartbeat, turning 90 degrees a simulation
+// second, so a test can see which instances step. No engine class steps.
+class Spinner : public engine_core::DataModel {
+public:
+    Spinner(engine_core::DataModel::ChildTag tag, engine_core::DataModel::State& state, engine_core::InstanceId id)
+        : DataModel(tag, state, id) {}
+
+    const char* class_name() const override { return "Spinner"; }
+    bool steps() const override { return true; }
+    void step(double dt) override { degrees_.store(degrees_.load() + dt * 90.0); }
+    // A dead id reads as 0. Another thread may read it while Heartbeat steps.
+    double degrees() const { return alive(id()) ? degrees_.load() : 0.0; }
+
+protected:
+    void on_release() override { degrees_.store(0.0); }
+    void on_reuse() override { degrees_.store(0.0); }
+
+private:
+    std::atomic<double> degrees_{0.0};
+};
 
 // Where tests put instances that would sit under game: the Workspace service.
 inline engine_core::InstanceId workspace_of(const engine_core::DataModel& game) {

@@ -9,20 +9,13 @@
 #include "flecs.h"
 #pragma warning(pop)
 
-#include "Color.hpp"
-#include "Transform.hpp"
+#include "Matrix4.hpp"
 #include "types.hpp"
 
 namespace engine_core {
 namespace ecs {
 
-// GameObject's spatial data. Transform and ColorRgb are components as they are.
-struct Size {
-    float x = 1.f;
-    float y = 1.f;
-    float z = 1.f;
-};
-
+// GameObject's spatial data. Transform is a component as it is.
 struct Velocity {
     float x = 0.f;
     float y = 0.f;
@@ -48,8 +41,6 @@ struct VisualOnly {};
 // The ids one world gave the components and tags above.
 struct EcsIds {
     ecs_id_t transform = 0;
-    ecs_id_t color = 0;
-    ecs_id_t size = 0;
     ecs_id_t velocity = 0;
     ecs_id_t instance = 0;
     ecs_id_t in_game = 0;

@@ -25,14 +25,11 @@ enum class FinishRecordingOperation { Commit, Cancel };
 // physics state is not edit history.
 enum class HistoryProp : std::uint8_t {
     Transform = 0,
-    Color,
-    Size,
     Simulated,
     VisualOnly,
     Name,
     Source,
     Enabled,
-    Position,
     // A property from the class registry, named by PropertyValue::property and
     // put back through that property's own write.
     Reflected
@@ -42,12 +39,9 @@ enum class MutationKind : std::uint8_t { SetProperty, SetParent, CreateInstance,
 
 struct PropertyValue {
     HistoryProp prop = HistoryProp::Name;
-    Transform transform = transform_identity();
-    ColorRgb color{};
-    float size[3] = {1.f, 1.f, 1.f};
+    Matrix4 transform = matrix4_identity();
     bool flag = false;
     std::string text;
-    Vec3 vector{};
     // Reflected only: the lua_property_id, and the value as its read gave it.
     std::uint32_t property = 0;
     LuaSlot slot;
@@ -68,14 +62,12 @@ struct AuthoredRecord {
     bool simulated = false;
     bool visual_only = false;
     bool spatial = false;
-    Transform transform = transform_identity();
-    ColorRgb color{};
-    float size[3] = {1.f, 1.f, 1.f};
+    Matrix4 transform = matrix4_identity();
     bool has_source = false;
     std::string source;
     bool enabled = true;
-    // Subclass place bytes for types other than GameObject and LuaSource
-    // (TestTriangle pose). Restored through read_place.
+    // Place bytes for types other than LuaSource: a class's own bytes, such as
+    // a GameObject's Transform, and its saved registry properties. Restored through read_place.
     std::vector<std::byte> extra;
     std::vector<AuthoredRecord> children;
 };

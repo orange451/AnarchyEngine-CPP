@@ -1,6 +1,7 @@
 #include "Project.hpp"
 
 #include "AssetInstances.hpp"
+#include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Containment.hpp"
 #include "Folder.hpp"
@@ -12,7 +13,6 @@
 #include "ModuleScript.hpp"
 #include "SceneService.hpp"
 #include "Script.hpp"
-#include "TestTriangle.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -117,10 +117,10 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({kServices[9].class_name, existing_service<9>});
         out.push_back({"DataModel", [](DataModel& world) -> DataModel& { return world.create(); }});
         out.push_back({"GameObject", [](DataModel& world) -> DataModel& { return world.create_game_object(); }});
+        out.push_back({"Camera", [](DataModel& world) -> DataModel& { return world.create<Camera>(); }});
         out.push_back({"Script", [](DataModel& world) -> DataModel& { return world.create<Script>(); }});
         out.push_back({"ModuleScript", [](DataModel& world) -> DataModel& { return world.create<ModuleScript>(); }});
         out.push_back({"Folder", [](DataModel& world) -> DataModel& { return world.create<Folder>(); }});
-        out.push_back({"TestTriangle", [](DataModel& world) -> DataModel& { return world.create<TestTriangle>(); }});
         out.push_back({"Texture", [](DataModel& world) -> DataModel& { return world.create<Texture>(); }});
         out.push_back({"Mesh", [](DataModel& world) -> DataModel& { return world.create<Mesh>(); }});
         out.push_back({"Sound", [](DataModel& world) -> DataModel& { return world.create<Sound>(); }});
@@ -1168,6 +1168,15 @@ ProjectConflict::ProjectConflict(std::vector<SaveConflict> conflicts)
     : ProjectError(conflict_message(conflicts)), conflicts_(std::move(conflicts)) {}
 
 Project::Project() = default;
+
+std::filesystem::path Project::resources_root() const { return disk_path(root_, resources_); }
+
+void Project::publish_resources_root() const {
+    if (game_ != nullptr) {
+        game_->set_resources_root(resources_root());
+    }
+}
+
 Project::Project(Project&&) = default;
 Project& Project::operator=(Project&&) = default;
 Project::~Project() = default;
@@ -1244,9 +1253,11 @@ Project Project::create(const fs::path& root, DataModel& into) {
         Rebuild rebuild(into);
         clear_world(into);
         into.set_name(0, project.name_);
+        add_default_camera(into);
         project.save_tree(true);
         rebuild.finish();
     }
+    project.publish_resources_root();
     return project;
 }
 
@@ -1260,6 +1271,7 @@ Project Project::adopt(const fs::path& root, DataModel& game) {
     project.name_ = project_name_for(root);
     project.write_skeleton(root);
     project.save_tree(true);
+    project.publish_resources_root();
     return project;
 }
 
@@ -1282,6 +1294,7 @@ void Project::read_into_game(const fs::path& root, bool replace) {
     Layout layout;
     read_project_json(root, name_, layout);
     src_ = layout.src;
+    resources_ = layout.resources;
     const std::vector<PlanNode> plan = PlanReader(root, layout).read();
     if (replace) {
         // A class-level error (a bad Color) must not leave the world half rebuilt.
@@ -1316,6 +1329,7 @@ void Project::read_into_game(const fs::path& root, bool replace) {
     if (made) {
         game_->mark_authored_dirty(0);
     }
+    publish_resources_root();
 }
 
 void Project::save(const std::vector<SaveConflict>& overwrite) { save_tree(false, overwrite); }
@@ -1342,6 +1356,8 @@ void Project::save_as(const fs::path& root) {
     }
     root_ = root;
     src_ = Layout{}.src;
+    resources_ = Layout{}.resources;
+    publish_resources_root();
     files_.clear();
     save_tree(true);
 }
@@ -1463,7 +1479,16 @@ void Project::reset_place(DataModel& game) {
     clear_world(game);
     game.set_name(0, game.class_name());
     game.set_guid(0, make_guid());
+    game.set_resources_root({});
+    add_default_camera(game);
     rebuild.finish();
+}
+
+InstanceId Project::add_default_camera(DataModel& game) {
+    Camera& camera = game.create<Camera>();
+    camera.set_transform(matrix4_look_at(Vec3{0.f, 3.f, 7.f}, Vec3{0.f, 0.f, 0.f}, Vec3{0.f, 1.f, 0.f}));
+    game.set_parent(camera.id(), game.scene_service("Workspace"));
+    return camera.id();
 }
 
 std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNode>& tree,

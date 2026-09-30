@@ -220,7 +220,7 @@ void testInstances() {
 
     std::vector<engine_core::LuaNode> world;
     world.push_back(node(0, 0xffffffffu, "game", "Game"));
-    world.push_back(node(4, 0, "Tri0", "TestTriangle"));
+    world.push_back(node(4, 0, "Tri0", "GameObject"));
     world.push_back(node(5, 0, "Main", "Script"));
     const ide::CompletionList triangle = at_end("local tri = game:FindFirstChild(\"Tri0\")\ntri.", world, 5);
     expect_has(triangle, "Position", "Tri0.Position");
@@ -286,7 +286,7 @@ void testVector3() {
 
     std::vector<engine_core::LuaNode> world;
     world.push_back(node(0, 0xffffffffu, "game", "Game"));
-    world.push_back(node(4, 0, "Tri0", "TestTriangle"));
+    world.push_back(node(4, 0, "Tri0", "GameObject"));
     world.push_back(node(5, 0, "Main", "Script"));
     const ide::CompletionList position = at_end("local tri = game:FindFirstChild(\"Tri0\")\ntri.Position.", world, 5);
     expect_has(position, "X", "Position.X");
@@ -335,11 +335,11 @@ void testVector3() {
     const ide::CompletionList color3_method = at_end("local c = Color3.new(1, 0, 0)\nc:");
     expect_has(color3_method, "Lerp", "Color3:Lerp");
     expect_has(color3_method, "ToHex", "Color3:ToHex");
-    const ide::CompletionList painted = at_end("local part = Instance.new(\"GameObject\")\npart.Color.");
-    expect_has(painted, "R", "GameObject.Color.R");
-    expect_missing(painted, "A", "GameObject.Color has no alpha");
-    const ide::CompletionList painted_method = at_end("local part = Instance.new(\"GameObject\")\npart.Color:");
-    expect_has(painted_method, "ToHex", "GameObject.Color:ToHex");
+    const ide::CompletionList placed = at_end("local part = Instance.new(\"GameObject\")\npart.Position.");
+    expect_has(placed, "X", "GameObject.Position.X");
+    expect_missing(placed, "R", "GameObject.Position is not a Color3");
+    const ide::CompletionList placed_method = at_end("local part = Instance.new(\"GameObject\")\npart.Position:");
+    expect_has(placed_method, "Dot", "GameObject.Position:Dot");
 
     // A Connect callback's parameters take the signal's types without an annotation.
     const ide::CompletionList inferred = at_end(
@@ -824,7 +824,7 @@ void testStringArguments() {
     world.push_back(node(0, 0xffffffffu, "game", "Game"));
     world.push_back(node(1, 0, "HopSlow", "Script"));
     world.push_back(node(2, 0, "HopFast", "Script"));
-    world.push_back(node(3, 0, "Tri0", "TestTriangle"));
+    world.push_back(node(3, 0, "Tri0", "GameObject"));
     world.push_back(node(4, 1, "Inner", "GameObject"));
     world.push_back(node(5, 0, "Main", "Script"));
 
@@ -1181,8 +1181,8 @@ void testInsertFilter() {
     engine_core::lua_creatable_names(names);
     std::vector<std::string> shown;
     ide::filter_class_names(names, "", shown);
-    const std::vector<std::string> expected = {"Folder",       "GameObject", "Material", "Mesh",  "Model",
-                                                "ModuleScript", "Prefab",     "Script",   "Sound", "Texture"};
+    const std::vector<std::string> expected = {"Camera",       "Folder", "GameObject", "Material", "Mesh",   "Model",
+                                                "ModuleScript", "Prefab", "Script",     "Sound",    "Texture"};
     if (shown != expected) {
         fail("insert list is every creatable class, A to Z");
     }
@@ -1209,7 +1209,7 @@ void testInstanceNew() {
         !engine_core::lua_creatable_known("Script") || !engine_core::lua_creatable_known("ModuleScript")) {
         fail("Instance.new classes are not registered");
     }
-    if (engine_core::lua_creatable_known("TestTriangle") || engine_core::lua_creatable_known("DataModel") ||
+    if (engine_core::lua_creatable_known("Workspace") || engine_core::lua_creatable_known("DataModel") ||
         engine_core::lua_creatable_known("Instance") || engine_core::lua_creatable_known("Game") ||
         engine_core::lua_creatable_known("RunService") ||
         engine_core::lua_creatable_known("Vector3")) {
@@ -1223,7 +1223,7 @@ void testInstanceNew() {
     expect_missing(made, "Folder", "Instance.new prefix");
     expect_missing(made, "Script", "Instance.new prefix");
     expect_missing(made, "ModuleScript", "Instance.new prefix");
-    expect_missing(made, "TestTriangle", "Instance.new is not every class");
+    expect_missing(made, "Workspace", "Instance.new is not every class");
     expect_missing(made, "DataModel", "Instance.new is not every class");
     expect_missing(made, "Game", "Instance.new cannot make game");
     expect_missing(made, "RunService", "Instance.new is not a service");
@@ -1242,7 +1242,7 @@ void testInstanceNew() {
     expect_has(open, "GameObject", "open Instance.new");
     expect_has(open, "ModuleScript", "open Instance.new");
     expect_has(open, "Script", "open Instance.new");
-    expect_missing(open, "TestTriangle", "open Instance.new");
+    expect_missing(open, "Workspace", "open Instance.new");
     expect_missing(open, "Widget", "open Instance.new");
     if (index_of(open, "Folder") > index_of(open, "GameObject") ||
         index_of(open, "GameObject") > index_of(open, "ModuleScript") ||
@@ -1301,7 +1301,7 @@ void testInstanceNew() {
     }
 
     const ide::CompletionList object = at_end("local part = Instance.new(\"GameObject\")\npart.");
-    expect_has(object, "Color", "created GameObject");
+    expect_has(object, "Position", "created GameObject");
     expect_missing(object, "Source", "created GameObject");
 
     const ide::CompletionList folder = at_end("local folder = Instance.new(\"Folder\")\nfolder.");
@@ -2037,7 +2037,7 @@ void testDotChildren() {
     std::vector<engine_core::LuaNode> world;
     world.push_back(node(0, 0xffffffffu, "game", "Game"));
     world.push_back(node(3, 0, "Configs", "Folder"));
-    world.push_back(node(4, 3, "Tri0", "TestTriangle"));
+    world.push_back(node(4, 3, "Tri0", "GameObject"));
     world.push_back(node(6, 3, "Name", "Folder"));
     world.push_back(node(7, 3, "My Part", "Folder"));
     world.push_back(node(5, 0, "Main", "Script"));
@@ -2050,7 +2050,7 @@ void testDotChildren() {
 
     const ide::CompletionList configs = at_end("game.Configs.", world, 5);
     expect_has(configs, "Tri0", "game.Configs. child");
-    expect_detail(configs, "Tri0", "TestTriangle", "game.Configs.Tri0 detail");
+    expect_detail(configs, "Tri0", "GameObject", "game.Configs.Tri0 detail");
     expect_has(configs, "Name", "game.Configs.Name");
     expect_detail(configs, "Name", "string", "a member wins over a child of that name");
     expect_missing(configs, "My Part", "a child that is not an identifier");
@@ -2076,10 +2076,10 @@ void testDotChildren() {
     expect_missing(missing, "Name", "a child that is not there");
 
     const char* lookup = "local tri = game:FindFirstChild(\"Configs\"):FindFirstChild(\"Tri0\")\nprint(tri)\n";
-    expect_hover(ide::hover_luau(lookup, find_nth(lookup, "tri", 1), world, 5), "tri: TestTriangle", nullptr, nullptr,
+    expect_hover(ide::hover_luau(lookup, find_nth(lookup, "tri", 1), world, 5), "tri: GameObject", nullptr, nullptr,
                  "a child in the place is not optional");
     const char* dotted = "local tri = game.Configs.Tri0\nprint(tri)\n";
-    expect_hover(ide::hover_luau(dotted, find_nth(dotted, "tri", 1), world, 5), "tri: TestTriangle", nullptr, nullptr,
+    expect_hover(ide::hover_luau(dotted, find_nth(dotted, "tri", 1), world, 5), "tri: GameObject", nullptr, nullptr,
                  "a dotted child");
     const char* absent = "local gone = game:FindFirstChild(\"Nope\")\nprint(gone)\n";
     expect_hover(ide::hover_luau(absent, find_nth(absent, "gone", 1), world, 5), "gone: Instance?", nullptr, nullptr,

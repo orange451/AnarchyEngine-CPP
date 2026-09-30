@@ -5,6 +5,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -236,10 +237,6 @@ void emit_class(std::ostringstream& out, const std::string& name) {
 
     std::vector<LuaField> fields;
     lua_class_own_members(name.c_str(), fields);
-    if (fields.empty() && !has_base) {
-        // No fields and no parent: the VM stores this as a table of numbers (Transform).
-        out << "    [number]: number\n";
-    }
     for (const LuaField& field : fields) {
         if (field.blocked || field.name == nullptr || !identifier(field.name)) {
             continue;
@@ -261,18 +258,38 @@ void emit_class(std::ostringstream& out, const std::string& name) {
     }
     // Declared as properties, not methods: a method's first argument is always
     // this class, and `2 * v` passes the number first. Luau moves __ names into
-    // the metatable.
+    // the metatable. Overloads of one metamethod, such as Matrix4 * Matrix4 and
+    // Matrix4 * Vector3, are one intersection of function types.
     std::vector<LuaOperator> operators;
     lua_class_operators(name.c_str(), operators);
+    std::vector<std::string> metamethods;
+    std::unordered_map<std::string, std::vector<std::string>> signatures;
     for (const LuaOperator& op : operators) {
         if (op.metamethod == nullptr || !identifier(op.metamethod)) {
             continue;
         }
-        out << "    " << op.metamethod << ": (" << operand_type(op.left);
+        std::string signature = "(" + operand_type(op.left);
         if (op.right != nullptr) {
-            out << ", " << operand_type(op.right);
+            signature += ", " + operand_type(op.right);
         }
-        out << ") -> " << operand_type(op.result) << "\n";
+        signature += ") -> " + operand_type(op.result);
+        std::vector<std::string>& overloads = signatures[op.metamethod];
+        if (overloads.empty()) {
+            metamethods.emplace_back(op.metamethod);
+        }
+        overloads.push_back(std::move(signature));
+    }
+    for (const std::string& metamethod : metamethods) {
+        const std::vector<std::string>& overloads = signatures[metamethod];
+        out << "    " << metamethod << ": ";
+        if (overloads.size() == 1) {
+            out << overloads.front() << "\n";
+            continue;
+        }
+        for (std::size_t index = 0; index < overloads.size(); ++index) {
+            out << (index > 0 ? " & " : "") << "(" << overloads[index] << ")";
+        }
+        out << "\n";
     }
     out << "end\n\n";
 }

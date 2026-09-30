@@ -3,8 +3,7 @@
 #include "jadefx/jadefx.hpp"
 
 #include "Engine.hpp"
-#include "Script.hpp"
-#include "TestTriangle.hpp"
+#include "Project.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -22,59 +21,8 @@ public:
         // Preferences and themes live in the user's config folder.
         layout_ = std::make_unique<ide::IdeLayout>(size.width, size.height, ide::config_directory());
         engine_core::Engine& simulation = layout_->simulation();
-        engine_core::DataModel& game = simulation.datamodel();
-        // The demo place is the baseline, not an undo step.
-        game.history().set_enabled(false);
-        // View-space positions. Positive z is toward the camera.
-        const float kPositions[][3] = {
-            {-0.58f, 0.38f, 0.f},
-            {0.58f, 0.38f, 0.15f},
-            {0.f, 0.02f, 0.55f},
-            {-0.58f, -0.48f, -0.4f},
-            {0.58f, -0.48f, -0.15f},
-        };
-        const double kStartSeconds[] = {0.0, 0.4, 0.8, 1.2, 1.6};
-        constexpr int kCount = 5;
-        for (int index = 0; index < kCount; ++index) {
-            engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
-            game.set_name(triangle.id(), "Tri" + std::to_string(index));
-            game.set_parent(triangle.id(), game.scene_service("Workspace"));
-            triangle.set_position(kPositions[index][0], kPositions[index][1], kPositions[index][2]);
-            triangle.step(kStartSeconds[index]);
-        }
-        // Play-solo scripts. Test starts them; Stop restores these poses.
-        // HopSlow and HopFast wait on different clocks so one wait cannot freeze the other.
-        auto add_script = [&](const char* name, const char* source) {
-            engine_core::Script& script = game.create<engine_core::Script>();
-            game.set_name(script.id(), name);
-            script.set_source(source);
-            game.set_parent(script.id(), game.scene_service("Scripts"));
-        };
-        add_script("HopSlow", R"(
-local tri = workspace:FindFirstChild("Tri0")
-assert(tri)
-local home = tri.Position
-local n = 0
-while true do
-    task.wait(0.5)
-    n = n + 1
-    local hop = (n % 2 == 1) and 0.45 or 0
-    tri.Position = home + Vector3.new(hop, 0, 0)
-end
-)");
-        add_script("HopFast", R"(
-local tri = workspace:FindFirstChild("Tri1")
-assert(tri)
-local home = tri.Position
-local n = 0
-while true do
-    task.wait(0.2)
-    n = n + 1
-    local hop = (n % 2 == 1) and 0.35 or 0
-    tri.Position = home + Vector3.new(0, hop, 0)
-end
-)");
-        game.history().set_enabled(true);
+        // A new studio holds a new place, the one File > New makes.
+        engine_core::Project::reset_place(simulation.datamodel());
         layout_->start();
         layout_->start_mcp();
         auto scene = jadefx::make<jadefx::Scene>(nullptr, size.width, size.height);

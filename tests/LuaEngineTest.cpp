@@ -5,7 +5,7 @@
 #include "ModuleScript.hpp"
 #include "Script.hpp"
 #include "ScriptRuntime.hpp"
-#include "TestTriangle.hpp"
+#include "Folder.hpp"
 #include "runner/Runner.hpp"
 
 #include <vector>
@@ -279,12 +279,107 @@ void testColor3() {
     expectChunkError(runner, "local _ = Color3.new().A", "not a valid member", "a Color3 has no alpha");
     expectPrinted(runner,
                   "local o = Instance.new('GameObject') "
-                  "print(typeof(o.Color), o.Color == Color3.new(1, 1, 1)) "
-                  "o.Color = Color3.fromRGB(255, 0, 0) "
-                  "print(typeof(o.Color), o.Color.R, o.Color.G, o.Color.B, o.Color == Color3.new(1, 0, 0))",
-                  "Color3\ttrue\nColor3\t1\t0\t0\ttrue", "GameObject.Color is a Color3");
-    expectChunkError(runner, "Instance.new('GameObject').Color = {r = 1, g = 0, b = 0}", "Color3",
-                     "a Color property refuses a table");
+                  "print(typeof(o.Position), o.Position.X, o.Position.Y, o.Position.Z) "
+                  "o.Position = Vector3.new(1, 2, 3) "
+                  "print(typeof(o.Position), o.Position.X, o.Position.Y, o.Position.Z)",
+                  "Vector3\t0\t0\t0\nVector3\t1\t2\t3", "GameObject.Position is a Vector3");
+    expectChunkError(runner, "Instance.new('GameObject').Position = {x = 1, y = 0, z = 0}", "Vector3",
+                     "a Position property refuses a table");
+    runner.stop();
+}
+
+// Matrix4 is Roblox's CFrame API over a 4x4 matrix.
+void testMatrix4() {
+    runner::Runner runner;
+    runner.start();
+    expectPrinted(runner, "local m = Matrix4.new(1, 2, 3) print(typeof(m), m.X, m.Y, m.Z, m.Position == Vector3.new(1, 2, 3))",
+                  "Matrix4\t1\t2\t3\ttrue", "Matrix4.new(x, y, z) is a translation");
+    expectPrinted(runner, "print(Matrix4.new(1, 2, 3))", "1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1",
+                  "tostring is the twelve components");
+    expectPrinted(runner, "print(Matrix4.new() == Matrix4.identity, select('#', Matrix4.identity:GetComponents()))",
+                  "true\t12", "new() is the identity and GetComponents returns twelve");
+    expectPrinted(runner,
+                  "local m = Matrix4.new(0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9) "
+                  "print(m.XVector == Vector3.new(1, 2, 3), m.RightVector == Vector3.new(1, 4, 7), "
+                  "m.UpVector == Vector3.new(2, 5, 8), m.LookVector == Vector3.new(-3, -6, -9))",
+                  "true\ttrue\ttrue\ttrue", "the twelve-number form takes rows; the axis vectors are columns");
+    expectPrinted(runner, "local r = Matrix4.Angles(0.3, 0.2, 0.1) print(Matrix4.new(r:GetComponents()) == r)", "true",
+                  "GetComponents round-trips through new");
+    expectPrinted(runner,
+                  "local r = Matrix4.Angles(0, math.pi / 2, 0) "
+                  "print(r.LookVector:FuzzyEq(-Vector3.xAxis), r.RightVector:FuzzyEq(-Vector3.zAxis))",
+                  "true\ttrue", "Angles turns right-handed about Y");
+    expectPrinted(runner,
+                  "local m = Matrix4.new(1, 0, 0) * Matrix4.Angles(0, math.pi / 2, 0) "
+                  "print(typeof(m * Vector3.new(0, 0, -1)), (m * Vector3.new(0, 0, -1)):FuzzyEq(Vector3.zero))",
+                  "Vector3\ttrue", "Matrix4 * Vector3 rotates then translates");
+    expectPrinted(runner,
+                  "local a = Matrix4.new(1, 2, 3) * Matrix4.Angles(0.4, -0.2, 1.3) "
+                  "local b = Matrix4.new(-4, 0.5, 9) * Matrix4.fromAxisAngle(Vector3.new(1, 1, 0), 2) "
+                  "local p = Vector3.new(3, -1, 2) "
+                  "print((a:Inverse() * a):FuzzyEq(Matrix4.identity), a:ToWorldSpace(a:ToObjectSpace(b)):FuzzyEq(b), "
+                  "a:PointToObjectSpace(a:PointToWorldSpace(p)):FuzzyEq(p), "
+                  "a:VectorToWorldSpace(p):FuzzyEq(a.Rotation * p), (a * b):FuzzyEq(a:ToWorldSpace(b)))",
+                  "true\ttrue\ttrue\ttrue\ttrue", "inverse and the space conversions agree");
+    expectPrinted(runner,
+                  "local a, b = Matrix4.new(1, 0, 0):ToWorldSpace(Matrix4.new(0, 1, 0), Matrix4.new(0, 0, 1)) "
+                  "print(a == Matrix4.new(1, 1, 0), b == Matrix4.new(1, 0, 1))",
+                  "true\ttrue", "the space methods take several values");
+    expectPrinted(runner,
+                  "local rx, ry, rz = Matrix4.Angles(0.1, 0.2, 0.3):ToEulerAnglesXYZ() "
+                  "local ox, oy, oz = Matrix4.fromOrientation(0.4, 0.5, 0.6):ToOrientation() "
+                  "print(math.abs(rx - 0.1) < 1e-6, math.abs(ry - 0.2) < 1e-6, math.abs(rz - 0.3) < 1e-6, "
+                  "math.abs(ox - 0.4) < 1e-6, math.abs(oy - 0.5) < 1e-6, math.abs(oz - 0.6) < 1e-6)",
+                  "true\ttrue\ttrue\ttrue\ttrue\ttrue", "Euler angles round-trip");
+    expectPrinted(runner,
+                  "print(Matrix4.fromEulerAngles(0.1, 0.2, 0.3, Enum.RotationOrder.YXZ):FuzzyEq("
+                  "Matrix4.fromEulerAnglesYXZ(0.1, 0.2, 0.3)), Matrix4.fromEulerAngles(0.1, 0.2, 0.3) == "
+                  "Matrix4.Angles(0.1, 0.2, 0.3), Enum.RotationOrder.YXZ.Value)",
+                  "true\ttrue\t3", "fromEulerAngles takes a RotationOrder and defaults to XYZ");
+    expectPrinted(runner,
+                  "local axis, angle = Matrix4.fromAxisAngle(Vector3.new(0, 2, 0), 1):ToAxisAngle() "
+                  "print(axis:FuzzyEq(Vector3.yAxis), math.abs(angle - 1) < 1e-6, "
+                  "Matrix4.new(0, 0, 0, 0, math.sin(0.5), 0, math.cos(0.5)):FuzzyEq(Matrix4.fromAxisAngle(Vector3.yAxis, 1)))",
+                  "true\ttrue\ttrue", "axis-angle and quaternion forms");
+    expectPrinted(runner,
+                  "local from = Matrix4.new() local to = Matrix4.new(10, 0, 0) * Matrix4.Angles(0, math.pi / 2, 0) "
+                  "print(from:Lerp(to, 0.5):FuzzyEq(Matrix4.new(5, 0, 0) * Matrix4.Angles(0, math.pi / 4, 0)), "
+                  "from:Lerp(to, 1) == to, from:Lerp(to, 0) == from)",
+                  "true\ttrue\ttrue", "Lerp blends position and rotation");
+    expectPrinted(runner,
+                  "local m = Matrix4.lookAt(Vector3.new(1, 0, 0), Vector3.new(1, 0, 5)) "
+                  "local n = Matrix4.new(Vector3.new(1, 0, 0), Vector3.new(1, 0, 5)) "
+                  "print(m.LookVector:FuzzyEq(Vector3.zAxis), m.UpVector:FuzzyEq(Vector3.yAxis), m.Position == Vector3.xAxis, "
+                  "n == m, Matrix4.lookAlong(Vector3.xAxis, Vector3.new(0, 0, 3)):FuzzyEq(m))",
+                  "true\ttrue\ttrue\ttrue\ttrue", "lookAt, lookAlong, and new(pos, lookAt)");
+    expectPrinted(runner,
+                  "local x = Matrix4.fromRotationBetweenVectors(Vector3.xAxis, Vector3.yAxis) "
+                  "local back = Matrix4.fromRotationBetweenVectors(Vector3.xAxis, -Vector3.xAxis) "
+                  "print((x * Vector3.xAxis):FuzzyEq(Vector3.yAxis), (back * Vector3.xAxis):FuzzyEq(-Vector3.xAxis))",
+                  "true\ttrue", "fromRotationBetweenVectors, including opposite vectors");
+    expectPrinted(runner,
+                  "local s = Matrix4.fromMatrix(Vector3.zero, Vector3.new(2, 0, 0), Vector3.new(0, 3, 0), Vector3.new(0, 0, 4)) "
+                  "print(s * Vector3.one == Vector3.new(2, 3, 4), s:Orthonormalize() == Matrix4.identity, "
+                  "(s:Inverse() * s):FuzzyEq(Matrix4.identity))",
+                  "true\ttrue\ttrue", "a scaled matrix transforms, inverts, and orthonormalizes");
+    expectPrinted(runner,
+                  "local m = Matrix4.Angles(0, 1, 0) + Vector3.new(1, 2, 3) "
+                  "print(m.Position == Vector3.new(1, 2, 3), (m - Vector3.new(1, 2, 3)) == Matrix4.Angles(0, 1, 0), "
+                  "m.Rotation == Matrix4.Angles(0, 1, 0))",
+                  "true\ttrue\ttrue", "+ and - move the position");
+    expectChunkError(runner, "local m = Matrix4.new() m.X = 1", "cannot be assigned", "Matrix4 is read-only");
+    expectChunkError(runner, "local _ = Matrix4.new().Nope", "not a valid member", "an unknown member errors");
+    expectChunkError(runner, "Matrix4.new(1, 2, 3, 4)", "Invalid number of arguments", "new refuses four numbers");
+    expectChunkError(runner, "local _ = Matrix4.new() * 2", "Matrix4 or Vector3", "* refuses a number");
+    expectPrinted(runner,
+                  "local o = Instance.new('GameObject') "
+                  "print(typeof(o.CFrame), o.CFrame == Matrix4.identity) "
+                  "o.CFrame = Matrix4.new(1, 2, 3) * Matrix4.Angles(0, 1, 0) "
+                  "print(o.Position == Vector3.new(1, 2, 3), o.Transform == o.CFrame, "
+                  "o.Transform == Matrix4.new(1, 2, 3) * Matrix4.Angles(0, 1, 0))",
+                  "Matrix4\ttrue\ntrue\ttrue\ttrue", "GameObject.CFrame and Transform are one Matrix4");
+    expectChunkError(runner, "Instance.new('GameObject').CFrame = {1, 0, 0, 0}", "expects a Matrix4",
+                     "a Transform property refuses a table");
     runner.stop();
 }
 
@@ -323,11 +418,11 @@ void testContextActions() {
     expect(!actions.empty() && actions[0].action == engine_core::InstanceAction::Edit && actions[0].primary,
            "a Prefab's edit is primary");
 
-    engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
     actions.clear();
-    triangle.context_actions(actions);
-    expect(actions.size() == 6 && !actions[0].primary, "a triangle uses the plain actions");
-    expect(actions.size() == 6 && actions[5].action == engine_core::InstanceAction::Delete, "a triangle can be deleted");
+    folder.context_actions(actions);
+    expect(actions.size() == 6 && !actions[0].primary, "a folder uses the plain actions");
+    expect(actions.size() == 6 && actions[5].action == engine_core::InstanceAction::Delete, "a folder can be deleted");
 }
 
 void testInsertInstance() {
@@ -343,7 +438,6 @@ void testInsertInstance() {
         expect(game.parent(made->id()) == game.scene_service("Workspace"), "created instance is parented under the row");
         expect(game.name(made->id()) == name, "a new instance is named for its class");
     }
-    expect(engine_core::lua_create_instance(game, "TestTriangle") == nullptr, "TestTriangle is not in the insert list");
     expect(engine_core::lua_create_instance(game, "DataModel") == nullptr, "DataModel is not inserted");
 }
 
@@ -358,6 +452,7 @@ int RunTextWrapTests();
 int RunUtf8Tests();
 int RunUiCallsTests();
 int RunViewCaptureTests();
+int RunSceneFeedTests();
 
 int RunColorLiteralsTests();
 int RunAssetBrowserTests();
@@ -373,6 +468,7 @@ int main() {
         testMemory();
         testRunner();
         testColor3();
+        testMatrix4();
         testContextActions();
         testInsertInstance();
         gFailures += RunLuauHighlightTests();
@@ -384,6 +480,7 @@ int main() {
         gFailures += RunUtf8Tests();
         gFailures += RunUiCallsTests();
         gFailures += RunViewCaptureTests();
+        gFailures += RunSceneFeedTests();
         gFailures += RunColorLiteralsTests();
         gFailures += RunAssetBrowserTests();
     } catch (const std::exception& ex) {

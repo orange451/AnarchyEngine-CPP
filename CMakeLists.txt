@@ -24,6 +24,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # and its tools, and the text and script units. studio adds the UI.
 set(STUDIO_CORE_SOURCES
     src/runner/Runner.cpp
+    src/runner/SceneFeed.cpp
     src/runner/ViewCapture.cpp
     src/ide/AssetBrowser.cpp
     src/ide/ColorLiterals.cpp
@@ -47,6 +48,8 @@ set(STUDIO_SOURCES
     src/runner/gl.cpp
     src/runner/ShaderFile.cpp
     src/runner/Renderer.cpp
+    src/runner/MeshCache.cpp
+    src/amesh/amesh_gl.cpp
     src/runner/GameView.cpp
     src/ide/IdePane.cpp
     src/ide/IdeDock.cpp
@@ -292,7 +295,7 @@ add_subdirectory(cmake/flecs "${CMAKE_BINARY_DIR}/flecs")
 
 # The engine is four packages, each a static library with its own directory:
 #   engine_core       DataModel, events, threads, the script runtime, projects
-#   engine_datatypes  values: Vector2, Vector3, Color, Color3, Transform, Enum
+#   engine_datatypes  values: Vector2, Vector3, Color, Color3, Matrix4, Enum
 #   engine_instances  what Instance.new makes: GameObject, Folder, Script, ...
 #   engine_services   Game and what game:GetService returns
 # The dependencies are not one-way yet: DataModel knows GameObject and Script,
@@ -303,17 +306,19 @@ add_subdirectory(cmake/flecs "${CMAKE_BINARY_DIR}/flecs")
 add_library(engine_datatypes STATIC
     src/engine_datatypes/Color3.cpp
     src/engine_datatypes/Enum.cpp
+    src/engine_datatypes/Matrix4.cpp
     src/engine_datatypes/Vector2.cpp
     src/engine_datatypes/Vector3.cpp
 )
 add_library(engine_instances STATIC
     src/engine_instances/AssetInstances.cpp
+    src/engine_instances/Camera.cpp
+    src/engine_instances/MeshShapes.cpp
     src/engine_instances/Folder.cpp
     src/engine_instances/GameObject.cpp
     src/engine_instances/LuaSource.cpp
     src/engine_instances/ModuleScript.cpp
     src/engine_instances/Script.cpp
-    src/engine_instances/TestTriangle.cpp
 )
 add_library(engine_services STATIC
     src/engine_services/ChangeHistoryService.cpp
@@ -361,7 +366,7 @@ endforeach()
 find_package(Threads REQUIRED)
 target_link_libraries(engine_core PUBLIC Threads::Threads engine_datatypes engine_instances engine_services)
 target_link_libraries(engine_datatypes PUBLIC engine_core)
-target_link_libraries(engine_instances PUBLIC engine_core)
+target_link_libraries(engine_instances PUBLIC engine_core amesh)
 target_link_libraries(engine_services PUBLIC engine_core)
 # flecs stays private: only engine_core and GameObject include Ecs.hpp.
 target_link_libraries(engine_core PRIVATE flecs)
@@ -394,9 +399,14 @@ target_compile_features(studio_core PUBLIC cxx_std_17)
 if(WIN32)
     target_link_libraries(studio_core PUBLIC ws2_32 crypt32)
 endif()
-target_link_libraries(studio PUBLIC studio_core jadefx)
+target_link_libraries(studio PUBLIC studio_core jadefx amesh)
 
 target_link_libraries(AnarchyEngine-CPP PRIVATE studio)
+
+# AMESH, the baked mesh format. Reading, writing, and validation need no
+# window or GL; GpuMesh (amesh_gl.cpp) builds into studio, beside the GL loader.
+add_library(amesh STATIC src/amesh/amesh.cpp)
+target_include_directories(amesh PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/amesh")
 
 add_executable(shell-tests
     tests/DockArrangeTest.cpp
@@ -475,6 +485,7 @@ add_executable(engine-tests
     tests/UiCallsTest.cpp
     tests/Utf8Test.cpp
     tests/ViewCaptureTest.cpp
+    tests/SceneFeedTest.cpp
 )
 target_link_libraries(engine-tests PRIVATE studio_core)
 
@@ -509,6 +520,28 @@ add_executable(prefab-demo
 )
 target_link_libraries(prefab-demo PRIVATE studio)
 
+# AMESH without GL: round trips, the writer's encoding, and the reader's
+# rejections. GpuMesh is built with AE_MESH_NO_GL, so its calls do nothing.
+add_executable(amesh-tests
+    tests/AmeshTest.cpp
+    src/amesh/amesh_gl.cpp
+)
+target_compile_definitions(amesh-tests PRIVATE AE_MESH_NO_GL)
+target_link_libraries(amesh-tests PRIVATE amesh)
+
+# By hand, not ctest: amesh-gl-check draws an AMESH through GpuMesh in a hidden GL 3.3 window.
+add_executable(amesh-gl-check
+    tests/AmeshGlCheck.cpp
+)
+target_link_libraries(amesh-gl-check PRIVATE studio)
+
+# By hand, not ctest, from the repository root: scene-render-check draws a baked
+# cube through MeshCache and the Scene View's Renderer in a hidden window.
+add_executable(scene-render-check
+    tests/SceneRenderCheck.cpp
+)
+target_link_libraries(scene-render-check PRIVATE studio)
+
 # Catch2 is only the sandbox acceptance suite.
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.28")
     FetchContent_Declare(
@@ -542,6 +575,11 @@ add_executable(sandbox
     sandbox/scene_services_tests.cpp
     sandbox/game_services_tests.cpp
     sandbox/dense_views_tests.cpp
+    sandbox/prefab_render_tests.cpp
+    sandbox/mesh_shapes_tests.cpp
+    sandbox/matrix4_tests.cpp
+    sandbox/plugin_tests.cpp
+    sandbox/camera_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.
@@ -561,7 +599,7 @@ function(anarchy_warnings target)
 endfunction()
 foreach(target IN ITEMS studio_core studio AnarchyEngine-CPP engine-tests shell-tests properties-tests console-tests
                         studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests assets-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
-                        sandbox ${ENGINE_PACKAGES})
+                        sandbox amesh amesh-tests amesh-gl-check scene-render-check ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()
 
@@ -617,7 +655,7 @@ endif()
 # runs from the source folder, where resources/ is.
 enable_testing()
 foreach(suite engine-tests properties-tests console-tests studio-tests mcp-tests sandbox shell-tests explorer-tests assets-tests
-              prefab-editor-tests terminal-tests)
+              prefab-editor-tests terminal-tests amesh-tests)
     if(TARGET ${suite})
         add_test(NAME ${suite} COMMAND ${suite} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()

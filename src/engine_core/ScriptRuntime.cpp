@@ -10,6 +10,7 @@
 #include "LuaApi.hpp"
 #include "LuaUserdata.hpp"
 #include "LuauSandbox.hpp"
+#include "Matrix4.hpp"
 #include "ModuleScript.hpp"
 #include "Script.hpp"
 #include "SelectionService.hpp"
@@ -38,28 +39,51 @@
 
 namespace engine_core {
 
+namespace {
+
+void clear_require_cache(lua_State* state, std::unordered_map<InstanceId, int>& cache) {
+    for (const auto& entry : cache) {
+        if (entry.second != LUA_REFNIL) {
+            lua_unref(state, entry.second);
+        }
+    }
+    cache.clear();
+}
+
+}  // namespace
+
 ScriptRuntime::~ScriptRuntime() { detach(); }
 
-void ScriptRuntime::halt(const char* why) {
-    if (game_ != nullptr) {
-        game_->events().disconnect_scripted();
-    }
-    for (Thread& thread : threads_) {
+void ScriptRuntime::halt(Vm& vm, const char* why) {
+    for (Thread& thread : vm.threads) {
         thread.dead = true;
     }
-    ready_.clear();
-    sleep_.clear();
-    defer_.clear();
-    child_waits_.clear();
-    child_found_.clear();
-    next_child_timer_ = std::numeric_limits<double>::infinity();
-    starts_.clear();
-    halted_ = true;
-    if (state_ != nullptr) {
-        // A throw can leave what it was pushing on the main thread's stack.
-        lua_settop(state_, 0);
+    vm.ready.clear();
+    vm.sleep.clear();
+    vm.defer.clear();
+    vm.child_waits.clear();
+    vm.child_found.clear();
+    vm.next_child_timer = std::numeric_limits<double>::infinity();
+    const char* who = "Scripts";
+    if (vm.kind == VmKind::Play) {
+        if (game_ != nullptr) {
+            game_->events().disconnect_scripted();
+        }
+        starts_.clear();
+        vm.halted = true;
+    } else {
+        // The console and plugins stop what runs now. A later command or plugin starts again.
+        for (Kept& kept : vm.kept) {
+            kept.connection.disconnect();
+        }
+        vm.kept.clear();
+        who = vm.kind == VmKind::Console ? "Console" : "Plugins";
     }
-    last_error_ = std::string("Scripts stopped: ") + (why != nullptr ? why : "Luau failed");
+    if (vm.state != nullptr) {
+        // A throw can leave what it was pushing on the main thread's stack.
+        lua_settop(vm.state, 0);
+    }
+    last_error_ = std::string(who) + " stopped: " + (why != nullptr ? why : "Luau failed");
     append_output(OutputKind::Error, last_error_);
 }
 
@@ -83,7 +107,9 @@ void ScriptRuntime::attach(DataModel& game, TaskScheduler& scheduler) {
 }
 
 void ScriptRuntime::detach() {
-    close_console();
+    close_state(console_);
+    close_state(plugin_);
+    plugins_.clear();
     if (game_ != nullptr) {
         game_->events().disconnect_scripted();
     }
@@ -109,38 +135,75 @@ void ScriptRuntime::detach() {
 }
 
 void ScriptRuntime::heartbeat(double dt) {
-    if (!open_ || closing_) {
+    if (!open_ || play_.closing) {
         return;
     }
     assert_lua_thread();
     if (dt < 0) {
         dt = 0;
     }
-    sim_clock_ += dt;
-    guarded([&] {
-        wake_sleeps();
-        deliver_child_waits();
-        wake_child_timers();
+    play_.clock += dt;
+    guarded(play_, [&] {
+        wake_sleeps(play_);
+        deliver_child_waits(play_);
+        wake_child_timers(play_);
         launch_starts();
-        flush_defer();
-        resume_budget();
+        flush_defer(play_);
+        resume_budget(play_);
         if (!starts_.empty()) {
             launch_starts();
-            resume_budget();
+            resume_budget(play_);
         }
     });
-    release_dead_threads();
+    release_dead_threads(play_);
+}
+
+void ScriptRuntime::step_tools(double dt) {
+    if (game_ == nullptr || (console_.state == nullptr && plugin_.state == nullptr)) {
+        return;
+    }
+    assert_lua_thread();
+    if (dt < 0) {
+        dt = 0;
+    }
+    // While the play VM is closed no play step fires Heartbeat or drains, so this does.
+    // During play, and while a play session is paused, the play step's own do that.
+    const bool own_step = !open_;
+    if (own_step) {
+        run_service_.fire(game_->events(), Phase::Heartbeat, dt);
+        game_->events().drain();
+    }
+    step_side(console_, dt);
+    step_side(plugin_, dt);
+    if (own_step) {
+        game_->events().drain();
+    }
+}
+
+void ScriptRuntime::step_side(Vm& vm, double dt) {
+    if (vm.state == nullptr || vm.closing) {
+        return;
+    }
+    vm.clock += dt;
+    guarded(vm, [&] {
+        wake_sleeps(vm);
+        deliver_child_waits(vm);
+        wake_child_timers(vm);
+        flush_defer(vm);
+        resume_budget(vm);
+    });
+    release_dead_threads(vm);
 }
 
 bool ScriptRuntime::global_is_nil(const char* name) {
     bool nil = true;
-    with_global(state_, name, [&](lua_State* state) { nil = lua_isnil(state, -1); });
+    with_global(play_.state, name, [&](lua_State* state) { nil = lua_isnil(state, -1); });
     return nil;
 }
 
 bool ScriptRuntime::global_number(const char* name, double& out) {
     bool ok = false;
-    with_global(state_, name, [&](lua_State* state) {
+    with_global(play_.state, name, [&](lua_State* state) {
         ok = lua_isnumber(state, -1);
         if (ok) {
             out = lua_tonumber(state, -1);
@@ -151,7 +214,7 @@ bool ScriptRuntime::global_number(const char* name, double& out) {
 
 bool ScriptRuntime::global_boolean(const char* name, bool& out) {
     bool ok = false;
-    with_global(state_, name, [&](lua_State* state) {
+    with_global(play_.state, name, [&](lua_State* state) {
         ok = lua_isboolean(state, -1);
         if (ok) {
             out = lua_toboolean(state, -1) != 0;
@@ -162,7 +225,7 @@ bool ScriptRuntime::global_boolean(const char* name, bool& out) {
 
 ScriptRuntime::Watch ScriptRuntime::watch_global(const char* name) {
     Watch watch;
-    with_global(state_, name, [&](lua_State* state) {
+    with_global(play_.state, name, [&](lua_State* state) {
         if (auto* ud = static_cast<InstanceUd*>(test_userdata(state, -1, kInstanceMeta))) {
             watch.id = ud->id;
             watch.world = ud->world;
@@ -180,7 +243,7 @@ DataModel* ScriptRuntime::resolve_watch(Watch watch) const {
 }
 
 void ScriptRuntime::on_moved(InstanceId id) {
-    if (game_ == nullptr || !game_->simulation_running() || closing_) {
+    if (game_ == nullptr || !game_->simulation_running() || play_.closing) {
         return;
     }
     // A script that leaves Workspace and Scripts stops. One that arrives starts
@@ -225,7 +288,7 @@ bool ScriptRuntime::runs_here(InstanceId id) const {
 }
 
 void ScriptRuntime::on_script_enabled(Script& script, bool enabled) {
-    if (game_ == nullptr || !game_->simulation_running() || closing_) {
+    if (game_ == nullptr || !game_->simulation_running() || play_.closing) {
         return;
     }
     kill_script(script.id());
@@ -235,10 +298,13 @@ void ScriptRuntime::on_script_enabled(Script& script, bool enabled) {
 }
 
 void ScriptRuntime::on_script_destroyed(Script& script) {
-    if (closing_) {
-        return;
+    if (!play_.closing) {
+        kill_script(script.id());
     }
-    kill_script(script.id());
+    // A plugin Script that is destroyed stops, with the modules it required.
+    if (plugin_.state != nullptr && !plugin_.closing) {
+        kill_owned(plugin_, script.id(), 0);
+    }
 }
 
 ScriptRuntime::Thread* ScriptRuntime::thread_from(lua_State* state) {
@@ -251,9 +317,22 @@ ScriptRuntime::Thread* ScriptRuntime::find_thread(std::uint64_t serial) const {
     return found != by_serial_.end() ? found->second : nullptr;
 }
 
+ScriptRuntime::Vm* ScriptRuntime::vm_from(lua_State* state) {
+    if (state == nullptr) {
+        return nullptr;
+    }
+    lua_State* main = lua_mainthread(state);
+    for (Vm* vm : {&play_, &console_, &plugin_}) {
+        if (vm->state != nullptr && vm->state == main) {
+            return vm;
+        }
+    }
+    return nullptr;
+}
+
 bool ScriptRuntime::gate(InstanceId script, std::uint32_t generation, void* userdata) {
     auto* self = static_cast<ScriptRuntime*>(userdata);
-    if (self == nullptr || self->game_ == nullptr || self->closing_ || self->halted_) {
+    if (self == nullptr || self->game_ == nullptr || self->play_.closing || self->play_.halted) {
         return false;
     }
     auto* object = dynamic_cast<Script*>(self->game_->instance(script));
@@ -263,14 +342,28 @@ bool ScriptRuntime::gate(InstanceId script, std::uint32_t generation, void* user
     return object->start_generation() == generation;
 }
 
-void* ScriptRuntime::allocate(void* userdata, void* pointer, std::size_t old_size, std::size_t new_size) {
-    auto* self = static_cast<ScriptRuntime*>(userdata);
-    return budget_realloc(self->memory_used_, kMemoryLimit, pointer, old_size, new_size);
+bool ScriptRuntime::owner_ok(const Vm& vm, InstanceId script, std::uint32_t generation) const {
+    if (game_ == nullptr || vm.state == nullptr || vm.closing) {
+        return false;
+    }
+    switch (vm.kind) {
+    case VmKind::Play:
+        return gate(script, generation, const_cast<ScriptRuntime*>(this));
+    case VmKind::Console:
+        return true;
+    case VmKind::Plugin:
+        if (script != 0 && !game_->alive(script)) {
+            return false;
+        }
+        return std::any_of(plugins_.begin(), plugins_.end(),
+                           [&](const Plugin& plugin) { return plugin.serial == generation; });
+    }
+    return false;
 }
 
-void* ScriptRuntime::allocate_console(void* userdata, void* pointer, std::size_t old_size, std::size_t new_size) {
-    auto* self = static_cast<ScriptRuntime*>(userdata);
-    return budget_realloc(self->console_memory_used_, kMemoryLimit, pointer, old_size, new_size);
+void* ScriptRuntime::allocate(void* userdata, void* pointer, std::size_t old_size, std::size_t new_size) {
+    auto* vm = static_cast<Vm*>(userdata);
+    return budget_realloc(vm->memory_used, kMemoryLimit, pointer, old_size, new_size);
 }
 
 void ScriptRuntime::interrupt(lua_State* state, int gc) {
@@ -278,7 +371,11 @@ void ScriptRuntime::interrupt(lua_State* state, int gc) {
         return;
     }
     auto* self = runtime_from(state);
-    if (self == nullptr || self->closing_) {
+    if (self == nullptr) {
+        return;
+    }
+    const Vm* vm = self->vm_from(state);
+    if (vm == nullptr || vm->closing) {
         return;
     }
     if (self->steps_ < kScriptTimeout) {
@@ -289,28 +386,40 @@ void ScriptRuntime::interrupt(lua_State* state, int gc) {
 }
 
 void ScriptRuntime::on_end_of_drain() {
-    if (!open_ || closing_) {
-        return;
-    }
-    assert_lua_thread();
-    guarded([&] {
-        launch_starts();
-        deliver_child_waits();
-        flush_defer();
-        resume_budget();
-        if (!starts_.empty()) {
+    if (open_ && !play_.closing) {
+        assert_lua_thread();
+        guarded(play_, [&] {
             launch_starts();
-            resume_budget();
+            deliver_child_waits(play_);
+            flush_defer(play_);
+            resume_budget(play_);
+            if (!starts_.empty()) {
+                launch_starts();
+                resume_budget(play_);
+            }
+        });
+        release_dead_threads(play_);
+    }
+    // A handler of the console or a plugin that waited on a signal resumes here.
+    for (Vm* vm : {&console_, &plugin_}) {
+        if (vm->state == nullptr || vm->closing) {
+            continue;
         }
-    });
-    release_dead_threads();
+        assert_lua_thread();
+        guarded(*vm, [&] {
+            deliver_child_waits(*vm);
+            flush_defer(*vm);
+            resume_budget(*vm);
+        });
+        release_dead_threads(*vm);
+    }
 }
 
 void ScriptRuntime::on_start() {
     // The previous session's lines are dropped before this session's scripts run.
     clear_output();
     open_vm();
-    sim_clock_ = 0;
+    play_.clock = 0;
     started_.clear();
     if (game_ == nullptr) {
         return;
@@ -442,10 +551,12 @@ void open_host_libraries(lua_State* state) {
     open_color3(state);
     open_vector2(state);
     open_vector3(state);
+    open_matrix4(state);
 }
 
-lua_State* ScriptRuntime::create_state(bool console) {
-    lua_State* state = lua_newstate(console ? &ScriptRuntime::allocate_console : &ScriptRuntime::allocate, this);
+lua_State* ScriptRuntime::create_state(Vm& vm) {
+    // Each VM counts its own memory against its own budget.
+    lua_State* state = lua_newstate(&ScriptRuntime::allocate, &vm);
     if (state == nullptr) {
         return nullptr;
     }
@@ -471,40 +582,73 @@ lua_State* ScriptRuntime::create_state(bool console) {
 }
 
 void ScriptRuntime::open_vm() {
-    if (state_ != nullptr || game_ == nullptr) {
+    if (play_.state != nullptr || game_ == nullptr) {
         return;
     }
-    lua_State* state = create_state(false);
+    lua_State* state = create_state(play_);
     if (state == nullptr) {
         throw std::runtime_error("could not create the Luau state");
     }
-    state_ = state;
+    play_.state = state;
     steps_ = 0;
     last_error_.clear();
-    vm_token_ = std::make_shared<char>('\0');
-    halted_ = false;
+    play_.token = std::make_shared<char>('\0');
+    play_.halted = false;
     open_ = true;
 }
 
-void ScriptRuntime::ensure_console() {
-    if (console_state_ != nullptr || game_ == nullptr) {
+void ScriptRuntime::ensure_state(Vm& vm) {
+    if (vm.state != nullptr || game_ == nullptr) {
         return;
     }
-    console_state_ = create_state(true);
+    vm.state = create_state(vm);
+    if (vm.state != nullptr) {
+        vm.token = std::make_shared<char>('\0');
+    }
+    update_tools_open();
 }
 
-void ScriptRuntime::close_console() {
-    if (console_state_ == nullptr) {
+void ScriptRuntime::close_state(Vm& vm) {
+    if (vm.state == nullptr) {
+        vm.clock = 0;
         return;
     }
-    lua_State* state = console_state_;
-    console_state_ = nullptr;
-    console_require_cache_.clear();
-    lua_Callbacks* callbacks = lua_callbacks(state);
+    vm.closing = true;
+    vm.ready.clear();
+    vm.sleep.clear();
+    vm.defer.clear();
+    vm.child_waits.clear();
+    vm.child_found.clear();
+    vm.next_child_timer = std::numeric_limits<double>::infinity();
+    vm.require_cache.clear();
+    for (const Thread& thread : vm.threads) {
+        by_serial_.erase(thread.serial);
+    }
+    vm.threads.clear();
+    // lua_close takes every reference with it; a handler dropped later has none to release.
+    vm.token.reset();
+    for (Kept& kept : vm.kept) {
+        kept.connection.disconnect();
+    }
+    vm.kept.clear();
+    vm.kept_prune_at = 64;
+    lua_Callbacks* callbacks = lua_callbacks(vm.state);
     callbacks->interrupt = nullptr;
     callbacks->userdata = nullptr;
+    lua_State* state = vm.state;
+    vm.state = nullptr;
+    if (&vm == &play_) {
+        open_ = false;
+    }
     lua_close(state);
-    console_memory_used_ = 0;
+    vm.closing = false;
+    vm.clock = 0;
+    vm.memory_used = 0;
+    update_tools_open();
+}
+
+void ScriptRuntime::update_tools_open() {
+    tools_open_.store(console_.state != nullptr || plugin_.state != nullptr, std::memory_order_relaxed);
 }
 
 void ScriptRuntime::refresh_game(lua_State* state) {
@@ -526,37 +670,46 @@ void ScriptRuntime::set_root_globals(lua_State* state) {
 }
 
 void ScriptRuntime::close_vm() {
-    if (state_ == nullptr) {
+    if (play_.state == nullptr) {
         open_ = false;
-        sim_clock_ = 0;
+        play_.clock = 0;
         return;
     }
-    closing_ = true;
-    ready_.clear();
-    sleep_.clear();
-    defer_.clear();
-    child_waits_.clear();
-    child_found_.clear();
-    next_child_timer_ = std::numeric_limits<double>::infinity();
     starts_.clear();
-    require_cache_.clear();
     loading_.clear();
-    threads_.clear();
-    by_serial_.clear();
-    // lua_close takes every reference with it; a handler dropped later has none to release.
-    vm_token_.reset();
-    lua_Callbacks* callbacks = lua_callbacks(state_);
-    callbacks->interrupt = nullptr;
-    callbacks->userdata = nullptr;
-    lua_State* state = state_;
-    state_ = nullptr;
-    open_ = false;
-    lua_close(state);
-    closing_ = false;
-    sim_clock_ = 0;
-    memory_used_ = 0;
+    close_state(play_);
     lua_depth_ = 0;
     steps_ = 0;
+}
+
+void ScriptRuntime::kill_owned(Vm& vm, InstanceId script, std::uint32_t owner) {
+    auto matches = [&](InstanceId thread_script, std::uint32_t thread_owner) {
+        return (script == 0 || thread_script == script) && (owner == 0 || thread_owner == owner);
+    };
+    for (Thread& thread : vm.threads) {
+        if (matches(thread.script, thread.generation)) {
+            thread.dead = true;
+        }
+    }
+    drop_dead_queues(vm);
+    for (auto it = vm.kept.begin(); it != vm.kept.end();) {
+        if (matches(it->script, it->owner)) {
+            it->connection.disconnect();
+            it = vm.kept.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void ScriptRuntime::keep(Vm& vm, InstanceId script, std::uint32_t owner, const Connection& connection) {
+    if (vm.kept.size() >= vm.kept_prune_at) {
+        vm.kept.erase(std::remove_if(vm.kept.begin(), vm.kept.end(),
+                                     [](const Kept& kept) { return !kept.connection.connected(); }),
+                      vm.kept.end());
+        vm.kept_prune_at = std::max<std::size_t>(64, vm.kept.size() * 2);
+    }
+    vm.kept.push_back(Kept{script, owner, connection});
 }
 
 void ScriptRuntime::kill_script(InstanceId id) {
@@ -567,16 +720,13 @@ void ScriptRuntime::kill_script(InstanceId id) {
                                  [&](const Start& start) { return start.id == id; }),
                   starts_.end());
     started_.erase(id);
-    for (Thread& thread : threads_) {
+    for (Thread& thread : play_.threads) {
         if (thread.script == id) {
             thread.dead = true;
         }
     }
-    drop_dead(ready_);
-    drop_dead(sleep_);
-    drop_dead(defer_);
-    drop_dead_child_waits();
-    if (game_ == nullptr || closing_) {
+    drop_dead_queues(play_);
+    if (game_ == nullptr || play_.closing) {
         return;
     }
     if (auto* script = dynamic_cast<Script*>(game_->instance(id))) {
@@ -585,7 +735,7 @@ void ScriptRuntime::kill_script(InstanceId id) {
 }
 
 void ScriptRuntime::enqueue_start(Script& script) {
-    if (game_ == nullptr || !open_ || closing_ || halted_ || !game_->simulation_running()) {
+    if (game_ == nullptr || !open_ || play_.closing || play_.halted || !game_->simulation_running()) {
         return;
     }
     if (!script.enabled() || !runs_here(script.id())) {
@@ -608,7 +758,7 @@ void ScriptRuntime::launch_starts() {
 }
 
 void ScriptRuntime::launch_one(const Start& start) {
-    if (game_ == nullptr || state_ == nullptr || halted_) {
+    if (game_ == nullptr || play_.state == nullptr || play_.halted) {
         return;
     }
     auto* script = dynamic_cast<Script*>(game_->instance(start.id));
@@ -625,7 +775,7 @@ void ScriptRuntime::launch_one(const Start& start) {
         append_output(OutputKind::Error, script_name.empty() ? last_error_ : script_name + ": " + last_error_);
         return;
     }
-    Thread& thread = new_thread(script->id(), start.generation);
+    Thread& thread = new_thread(play_, script->id(), start.generation);
     const std::string chunk = "=" + game_->name(script->id());
     const int loaded = luau_load(thread.co, chunk.c_str(), bytecode.data.get(), bytecode.size, 0);
     if (loaded != LUA_OK) {
@@ -637,8 +787,38 @@ void ScriptRuntime::launch_one(const Start& start) {
     ready(thread);
 }
 
-void ScriptRuntime::flush_defer() {
-    for (Thread* thread : defer_) {
+void ScriptRuntime::launch_chunk(Vm& vm, std::string_view source, const std::string& chunk, InstanceId script,
+                                 std::uint32_t generation) {
+    // A plugin Script's own failures say which one, as a play script's do.
+    const std::string prefix = script != 0 ? chunk.substr(1) + ": " : std::string();
+    const Bytecode bytecode = compile_luau(source);
+    if (!bytecode) {
+        append_output(OutputKind::Error, prefix + "could not compile script");
+        return;
+    }
+    guarded(vm, [&] {
+        Thread& thread = new_thread(vm, script, generation);
+        const int loaded = luau_load(thread.co, chunk.c_str(), bytecode.data.get(), bytecode.size, 0);
+        if (loaded != LUA_OK) {
+            report_error(thread.co);
+            thread.dead = true;
+            return;
+        }
+        thread.nargs = 0;
+        // The first run is now, so its prints come before the caller's next line, and
+        // what it spawned runs after it, as in one pass of a play step.
+        if (lua_depth_ > 0) {
+            ready(thread);
+        } else {
+            resume_one(thread);
+            resume_budget(vm);
+        }
+    });
+    release_dead_threads(vm);
+}
+
+void ScriptRuntime::flush_defer(Vm& vm) {
+    for (Thread* thread : vm.defer) {
         if (thread->dead || !thread_ok(*thread)) {
             thread->dead = true;
             continue;
@@ -646,20 +826,20 @@ void ScriptRuntime::flush_defer() {
         thread->park = Thread::Park::None;
         ready(*thread);
     }
-    defer_.clear();
+    vm.defer.clear();
 }
 
-void ScriptRuntime::wake_sleeps() {
-    for (auto it = sleep_.begin(); it != sleep_.end();) {
+void ScriptRuntime::wake_sleeps(Vm& vm) {
+    for (auto it = vm.sleep.begin(); it != vm.sleep.end();) {
         Thread* thread = *it;
         if (thread->dead || !thread_ok(*thread)) {
             thread->dead = true;
-            it = sleep_.erase(it);
+            it = vm.sleep.erase(it);
             continue;
         }
-        if (thread->due <= sim_clock_) {
+        if (thread->due <= vm.clock) {
             thread->park = Thread::Park::None;
-            it = sleep_.erase(it);
+            it = vm.sleep.erase(it);
             ready(*thread);
         } else {
             ++it;
@@ -667,11 +847,11 @@ void ScriptRuntime::wake_sleeps() {
     }
 }
 
-void ScriptRuntime::resume_budget() {
+void ScriptRuntime::resume_budget(Vm& vm) {
     int left = kResumeBudget;
-    while (left > 0 && !ready_.empty()) {
-        Thread* thread = ready_.front();
-        ready_.pop_front();
+    while (left > 0 && !vm.ready.empty()) {
+        Thread* thread = vm.ready.front();
+        vm.ready.pop_front();
         if (thread->dead || !thread_ok(*thread)) {
             thread->dead = true;
             continue;
@@ -695,16 +875,13 @@ void ScriptRuntime::resume_one(Thread& thread) {
     const int status = lua_resume(thread.co, nullptr, nargs);
     --lua_depth_;
     if (thread.dead) {
-        drop_dead(ready_);
-        drop_dead(sleep_);
-        drop_dead(defer_);
-        drop_dead_child_waits();
+        drop_dead_queues(*thread.vm);
         return;
     }
     if (status == LUA_YIELD) {
         if (thread.park == Thread::Park::None) {
             thread.park = Thread::Park::Defer;
-            defer_.push_back(&thread);
+            thread.vm->defer.push_back(&thread);
         }
         return;
     }
@@ -726,16 +903,20 @@ void ScriptRuntime::drop_dead(std::list<Thread*>& queue) {
     }
 }
 
-void ScriptRuntime::release_dead_threads() {
+void ScriptRuntime::drop_dead_queues(Vm& vm) {
+    drop_dead(vm.ready);
+    drop_dead(vm.sleep);
+    drop_dead(vm.defer);
+    drop_dead_child_waits(vm);
+}
+
+void ScriptRuntime::release_dead_threads(Vm& vm) {
     // A binding may still hold a Thread while Lua runs.
-    if (lua_depth_ > 0 || state_ == nullptr) {
+    if (lua_depth_ > 0 || vm.state == nullptr) {
         return;
     }
-    drop_dead(ready_);
-    drop_dead(sleep_);
-    drop_dead(defer_);
-    drop_dead_child_waits();
-    for (auto it = threads_.begin(); it != threads_.end();) {
+    drop_dead_queues(vm);
+    for (auto it = vm.threads.begin(); it != vm.threads.end();) {
         if (!it->dead) {
             ++it;
             continue;
@@ -743,9 +924,9 @@ void ScriptRuntime::release_dead_threads() {
         // The coroutine may live on in a script variable. Its serial then finds no thread.
         by_serial_.erase(it->serial);
         if (it->anchor != LUA_NOREF) {
-            lua_unref(state_, it->anchor);
+            lua_unref(vm.state, it->anchor);
         }
-        it = threads_.erase(it);
+        it = vm.threads.erase(it);
     }
 }
 
@@ -753,20 +934,21 @@ void ScriptRuntime::ready(Thread& thread) {
     if (thread.dead) {
         return;
     }
-    for (Thread* queued : ready_) {
+    std::list<Thread*>& queue = thread.vm->ready;
+    for (Thread* queued : queue) {
         if (queued == &thread) {
             return;
         }
     }
-    ready_.push_back(&thread);
+    queue.push_back(&thread);
 }
 
 bool ScriptRuntime::unpark(Thread& thread) {
     if (thread.dead || thread.co == nullptr) {
         return false;
     }
-    sleep_.remove(&thread);
-    defer_.remove(&thread);
+    thread.vm->sleep.remove(&thread);
+    thread.vm->defer.remove(&thread);
     forget_child_wait(thread);
     thread.park = Thread::Park::None;
     return true;
@@ -793,71 +975,76 @@ void ScriptRuntime::make_ready_number(Thread& thread, double result) {
 }
 
 void ScriptRuntime::park_child_wait(Thread& thread) {
+    Vm& vm = *thread.vm;
     thread.park = Thread::Park::Child;
     thread.wait_found = 0;
-    child_waits_[thread.wait_parent].push_back(&thread);
-    next_child_timer_ = std::min(next_child_timer_, thread.due);
+    vm.child_waits[thread.wait_parent].push_back(&thread);
+    vm.next_child_timer = std::min(vm.next_child_timer, thread.due);
     if (!thread.wait_warned) {
-        next_child_timer_ = std::min(next_child_timer_, thread.wait_warn_at);
+        vm.next_child_timer = std::min(vm.next_child_timer, thread.wait_warn_at);
     }
 }
 
 void ScriptRuntime::forget_child_wait(Thread& thread) {
-    child_found_.erase(std::remove(child_found_.begin(), child_found_.end(), &thread), child_found_.end());
-    const auto found = child_waits_.find(thread.wait_parent);
-    if (found == child_waits_.end()) {
+    Vm& vm = *thread.vm;
+    vm.child_found.erase(std::remove(vm.child_found.begin(), vm.child_found.end(), &thread), vm.child_found.end());
+    const auto found = vm.child_waits.find(thread.wait_parent);
+    if (found == vm.child_waits.end()) {
         return;
     }
     std::vector<Thread*>& waiters = found->second;
     waiters.erase(std::remove(waiters.begin(), waiters.end(), &thread), waiters.end());
     if (waiters.empty()) {
-        child_waits_.erase(found);
+        vm.child_waits.erase(found);
     }
 }
 
-void ScriptRuntime::drop_dead_child_waits() {
-    child_found_.erase(std::remove_if(child_found_.begin(), child_found_.end(), [](Thread* thread) { return thread->dead; }),
-                       child_found_.end());
-    for (auto it = child_waits_.begin(); it != child_waits_.end();) {
+void ScriptRuntime::drop_dead_child_waits(Vm& vm) {
+    vm.child_found.erase(
+        std::remove_if(vm.child_found.begin(), vm.child_found.end(), [](Thread* thread) { return thread->dead; }),
+        vm.child_found.end());
+    for (auto it = vm.child_waits.begin(); it != vm.child_waits.end();) {
         std::vector<Thread*>& waiters = it->second;
         waiters.erase(std::remove_if(waiters.begin(), waiters.end(), [](Thread* thread) { return thread->dead; }),
                       waiters.end());
-        it = waiters.empty() ? child_waits_.erase(it) : std::next(it);
+        it = waiters.empty() ? vm.child_waits.erase(it) : std::next(it);
     }
 }
 
 // Runs inside set_parent and set_name, maybe while Lua is running, so it only
-// moves matched threads to child_found_. deliver_child_waits resumes them.
+// moves matched threads to child_found. deliver_child_waits resumes them.
 void ScriptRuntime::on_child_named(InstanceId parent, InstanceId child, const std::string& name) {
-    if (!open_ || closing_) {
-        return;
-    }
-    const auto found = child_waits_.find(parent);
-    if (found == child_waits_.end()) {
-        return;
-    }
-    std::vector<Thread*>& waiters = found->second;
-    for (auto it = waiters.begin(); it != waiters.end();) {
-        Thread* thread = *it;
-        if (thread->dead || thread->wait_name != name) {
-            ++it;
+    for (Vm* vm : {&play_, &console_, &plugin_}) {
+        if (vm->state == nullptr || vm->closing) {
             continue;
         }
-        thread->wait_found = child;
-        child_found_.push_back(thread);
-        it = waiters.erase(it);
-    }
-    if (waiters.empty()) {
-        child_waits_.erase(found);
+        const auto found = vm->child_waits.find(parent);
+        if (found == vm->child_waits.end()) {
+            continue;
+        }
+        std::vector<Thread*>& waiters = found->second;
+        for (auto it = waiters.begin(); it != waiters.end();) {
+            Thread* thread = *it;
+            if (thread->dead || thread->wait_name != name) {
+                ++it;
+                continue;
+            }
+            thread->wait_found = child;
+            vm->child_found.push_back(thread);
+            it = waiters.erase(it);
+        }
+        if (waiters.empty()) {
+            vm->child_waits.erase(found);
+        }
     }
 }
 
-void ScriptRuntime::deliver_child_waits() {
-    if (child_found_.empty()) {
+void ScriptRuntime::deliver_child_waits(Vm& vm) {
+    if (vm.child_found.empty()) {
         return;
     }
     std::vector<Thread*> found;
-    found.swap(child_found_);
+    found.swap(vm.child_found);
     for (Thread* thread : found) {
         if (thread->dead || !thread_ok(*thread) || thread->co == nullptr) {
             thread->dead = true;
@@ -883,13 +1070,13 @@ void ScriptRuntime::deliver_child_waits() {
     }
 }
 
-void ScriptRuntime::wake_child_timers() {
-    if (sim_clock_ < next_child_timer_) {
+void ScriptRuntime::wake_child_timers(Vm& vm) {
+    if (vm.clock < vm.next_child_timer) {
         return;
     }
-    next_child_timer_ = std::numeric_limits<double>::infinity();
+    vm.next_child_timer = std::numeric_limits<double>::infinity();
     std::vector<Thread*> timed_out;
-    for (auto it = child_waits_.begin(); it != child_waits_.end();) {
+    for (auto it = vm.child_waits.begin(); it != vm.child_waits.end();) {
         std::vector<Thread*>& waiters = it->second;
         for (auto wait = waiters.begin(); wait != waiters.end();) {
             Thread* thread = *wait;
@@ -898,12 +1085,12 @@ void ScriptRuntime::wake_child_timers() {
                 wait = waiters.erase(wait);
                 continue;
             }
-            if (thread->due <= sim_clock_) {
+            if (thread->due <= vm.clock) {
                 timed_out.push_back(thread);
                 wait = waiters.erase(wait);
                 continue;
             }
-            if (!thread->wait_warned && thread->wait_warn_at <= sim_clock_) {
+            if (!thread->wait_warned && thread->wait_warn_at <= vm.clock) {
                 thread->wait_warned = true;
                 const std::string parent = resolve_id(thread->wait_parent, thread->wait_world) != nullptr
                                                ? game_->name(thread->wait_parent)
@@ -911,13 +1098,13 @@ void ScriptRuntime::wake_child_timers() {
                 append_output(OutputKind::Print,
                               "Infinite yield possible on '" + parent + ":WaitForChild(\"" + thread->wait_name + "\")'");
             }
-            next_child_timer_ = std::min(next_child_timer_, thread->due);
+            vm.next_child_timer = std::min(vm.next_child_timer, thread->due);
             if (!thread->wait_warned) {
-                next_child_timer_ = std::min(next_child_timer_, thread->wait_warn_at);
+                vm.next_child_timer = std::min(vm.next_child_timer, thread->wait_warn_at);
             }
             ++wait;
         }
-        it = waiters.empty() ? child_waits_.erase(it) : std::next(it);
+        it = waiters.empty() ? vm.child_waits.erase(it) : std::next(it);
     }
     for (Thread* thread : timed_out) {
         lua_pushnil(thread->co);
@@ -928,10 +1115,13 @@ void ScriptRuntime::wake_child_timers() {
 }
 
 bool ScriptRuntime::thread_ok(const Thread& thread) const {
-    if (thread.dead || game_ == nullptr) {
+    if (thread.dead || game_ == nullptr || thread.vm == nullptr) {
         return false;
     }
-    // The command line is not a Script. It stays until the chunk finishes or the VM closes.
+    if (thread.vm->kind != VmKind::Play) {
+        return owner_ok(*thread.vm, thread.script, thread.generation);
+    }
+    // A play thread with no Script stays until it finishes or the VM closes.
     if (thread.script == 0) {
         return true;
     }
@@ -942,9 +1132,10 @@ bool ScriptRuntime::thread_ok(const Thread& thread) const {
     return script->start_generation() == thread.generation;
 }
 
-ScriptRuntime::Thread& ScriptRuntime::new_thread(InstanceId script, std::uint32_t generation) {
-    threads_.emplace_back();
-    Thread& thread = threads_.back();
+ScriptRuntime::Thread& ScriptRuntime::new_thread(Vm& vm, InstanceId script, std::uint32_t generation) {
+    vm.threads.emplace_back();
+    Thread& thread = vm.threads.back();
+    thread.vm = &vm;
     thread.script = script;
     thread.generation = generation;
     thread.anchor = LUA_NOREF;
@@ -952,10 +1143,10 @@ ScriptRuntime::Thread& ScriptRuntime::new_thread(InstanceId script, std::uint32_
     by_serial_[thread.serial] = &thread;
     try {
         // Luau reports a failed allocation by throwing, not by returning null.
-        lua_State* co = lua_newthread(state_);
+        lua_State* co = lua_newthread(vm.state);
         thread.co = co;
-        thread.anchor = lua_ref(state_, -1);
-        lua_pop(state_, 1);
+        thread.anchor = lua_ref(vm.state, -1);
+        lua_pop(vm.state, 1);
         lua_setthreaddata(co, serial_data(thread.serial));
         luaL_sandboxthread(co);
         set_script_global(co, script);
@@ -1056,38 +1247,6 @@ ScriptRuntime::OutputBatch ScriptRuntime::drain_output() {
     return batch;
 }
 
-void ScriptRuntime::eval_chunk(lua_State* state, std::string_view source) {
-    if (state == nullptr) {
-        append_output(OutputKind::Error, "could not create the Luau state");
-        return;
-    }
-    const Bytecode bytecode = compile_luau(source);
-    if (!bytecode) {
-        append_output(OutputKind::Error, "could not compile script");
-        return;
-    }
-    lua_State* co = lua_newthread(state);
-    const int anchor = lua_ref(state, -1);
-    lua_pop(state, 1);
-    luaL_sandboxthread(co);
-    const int loaded = luau_load(co, "=console", bytecode.data.get(), bytecode.size, 0);
-    if (loaded != LUA_OK) {
-        report_error(co);
-        lua_unref(state, anchor);
-        return;
-    }
-    const std::uint64_t saved_steps = steps_;
-    steps_ = 0;
-    const int status = lua_resume(co, nullptr, 0);
-    steps_ = saved_steps;
-    if (status == LUA_YIELD) {
-        append_output(OutputKind::Error, "command yielded");
-    } else if (status != LUA_OK) {
-        report_error(co);
-    }
-    lua_unref(state, anchor);
-}
-
 void ScriptRuntime::run_chunk(std::string_view source) {
     assert_lua_thread();
     if (game_ == nullptr) {
@@ -1095,23 +1254,136 @@ void ScriptRuntime::run_chunk(std::string_view source) {
         return;
     }
     try {
-        ensure_console();
+        ensure_state(console_);
     } catch (const std::exception& ex) {
         append_output(OutputKind::Error, ex.what());
         return;
     }
-    if (console_state_ == nullptr) {
+    if (console_.state == nullptr) {
         append_output(OutputKind::Error, "could not create the Luau state");
         return;
     }
-    refresh_game(console_state_);
-    for (const auto& entry : console_require_cache_) {
-        if (entry.second != LUA_REFNIL) {
-            lua_unref(console_state_, entry.second);
+    guarded(console_, [&] {
+        refresh_game(console_.state);
+        clear_require_cache(console_.state, console_.require_cache);
+    });
+    launch_chunk(console_, source, "=console", 0, 0);
+}
+
+void ScriptRuntime::reset_console() {
+    assert_lua_thread();
+    close_state(console_);
+}
+
+bool ScriptRuntime::register_plugin(InstanceId root) {
+    assert_lua_thread();
+    if (game_ == nullptr || !game_->alive(root)) {
+        return false;
+    }
+    // An id that died may come back as another instance, which is not a plugin.
+    for (auto it = plugins_.begin(); it != plugins_.end();) {
+        if (game_->alive(it->root)) {
+            ++it;
+            continue;
+        }
+        const std::uint32_t serial = it->serial;
+        it = plugins_.erase(it);
+        kill_owned(plugin_, 0, serial);
+    }
+    const bool registered = std::any_of(plugins_.begin(), plugins_.end(),
+                                        [&](const Plugin& plugin) { return plugin.root == root; });
+    if (registered) {
+        return false;
+    }
+    // Serials start at 1: kill_owned takes 0 for any owner.
+    if (++plugin_serial_ == 0) {
+        ++plugin_serial_;
+    }
+    const Plugin plugin{root, plugin_serial_};
+    plugins_.push_back(plugin);
+    try {
+        ensure_state(plugin_);
+    } catch (const std::exception& ex) {
+        append_output(OutputKind::Error, ex.what());
+        return true;
+    }
+    if (plugin_.state == nullptr) {
+        append_output(OutputKind::Error, "could not create the Luau state");
+        return true;
+    }
+    run_plugin(plugin);
+    return true;
+}
+
+bool ScriptRuntime::unregister_plugin(InstanceId root) {
+    assert_lua_thread();
+    const auto found =
+        std::find_if(plugins_.begin(), plugins_.end(), [&](const Plugin& plugin) { return plugin.root == root; });
+    if (found == plugins_.end()) {
+        return false;
+    }
+    const std::uint32_t serial = found->serial;
+    plugins_.erase(found);
+    kill_owned(plugin_, 0, serial);
+    if (game_ != nullptr) {
+        for (auto it = plugins_.begin(); it != plugins_.end();) {
+            if (game_->alive(it->root)) {
+                ++it;
+                continue;
+            }
+            const std::uint32_t dead = it->serial;
+            it = plugins_.erase(it);
+            kill_owned(plugin_, 0, dead);
         }
     }
-    console_require_cache_.clear();
-    eval_chunk(console_state_, source);
+    if (plugins_.empty()) {
+        close_state(plugin_);
+    } else {
+        release_dead_threads(plugin_);
+    }
+    return true;
+}
+
+bool ScriptRuntime::is_plugin(InstanceId root) const {
+    return game_ != nullptr && game_->alive(root) &&
+           std::any_of(plugins_.begin(), plugins_.end(), [&](const Plugin& plugin) { return plugin.root == root; });
+}
+
+std::vector<InstanceId> ScriptRuntime::plugins() const {
+    std::vector<InstanceId> out;
+    if (game_ == nullptr) {
+        return out;
+    }
+    for (const Plugin& plugin : plugins_) {
+        if (game_->alive(plugin.root)) {
+            out.push_back(plugin.root);
+        }
+    }
+    return out;
+}
+
+void ScriptRuntime::run_plugin(const Plugin& plugin) {
+    // The order is fixed before any Script runs, since one may add, move, or destroy instances.
+    std::vector<InstanceId> order;
+    std::vector<InstanceId> pending{plugin.root};
+    while (!pending.empty()) {
+        const InstanceId next = pending.back();
+        pending.pop_back();
+        order.push_back(next);
+        const std::vector<InstanceId> children = game_->get_children(next);
+        pending.insert(pending.end(), children.rbegin(), children.rend());
+    }
+    guarded(plugin_, [&] {
+        refresh_game(plugin_.state);
+        clear_require_cache(plugin_.state, plugin_.require_cache);
+    });
+    for (InstanceId id : order) {
+        auto* script = dynamic_cast<Script*>(game_->instance(id));
+        if (script == nullptr || !script->enabled() || plugin_.state == nullptr) {
+            continue;
+        }
+        launch_chunk(plugin_, script->source(), "=" + game_->name(id), id, plugin.serial);
+    }
 }
 
 // The script whose code called print, and the line it was on. A chunk's functions keep the
@@ -1180,7 +1452,12 @@ int ScriptRuntime::lua_print(lua_State* state) {
 }
 
 void ScriptRuntime::push_instance(lua_State* state, InstanceId id) {
-    const std::uint32_t world = game_ != nullptr ? game_->world_generation() : 0;
+    // A console or plugin handle outlives the play session, so it is not tied to a world.
+    const Vm* vm = vm_from(state);
+    std::uint32_t world = game_ != nullptr ? game_->world_generation() : 0;
+    if (vm != nullptr && vm->kind != VmKind::Play) {
+        world = kAnyWorld;
+    }
     lua_getfield(state, LUA_REGISTRYINDEX, kInstanceCache);
     const bool cached = lua_istable(state, -1);
     if (cached) {
@@ -1210,7 +1487,7 @@ void ScriptRuntime::push_instance(lua_State* state, InstanceId id) {
 }
 
 DataModel* ScriptRuntime::resolve_id(InstanceId id, std::uint32_t world) const {
-    if (game_ == nullptr || world != game_->world_generation()) {
+    if (game_ == nullptr || (world != kAnyWorld && world != game_->world_generation())) {
         return nullptr;
     }
     if (id == 0) {
@@ -1220,7 +1497,7 @@ DataModel* ScriptRuntime::resolve_id(InstanceId id, std::uint32_t world) const {
 }
 
 void ScriptRuntime::fire_phase(Phase phase, double dt) {
-    if (!open_ || closing_ || game_ == nullptr) {
+    if (!open_ || play_.closing || game_ == nullptr) {
         return;
     }
     // A frame's input reaches scripts first, in the drain after PreAnimation,
@@ -1231,16 +1508,16 @@ void ScriptRuntime::fire_phase(Phase phase, double dt) {
     run_service_.fire(game_->events(), phase, dt);
 }
 
-ScriptRuntime::Thread* ScriptRuntime::start_listener(int ref, InstanceId script, std::uint32_t generation) {
-    if (!open_ || closing_ || state_ == nullptr) {
+ScriptRuntime::Thread* ScriptRuntime::start_listener(Vm& vm, int ref, InstanceId script, std::uint32_t generation) {
+    if (vm.state == nullptr || vm.closing || (vm.kind == VmKind::Play && !open_)) {
         return nullptr;
     }
-    if (!gate(script, generation, this)) {
+    if (!owner_ok(vm, script, generation)) {
         return nullptr;
     }
-    Thread& thread = new_thread(script, generation);
-    lua_getref(state_, ref);
-    lua_xmove(state_, thread.co, 1);
+    Thread& thread = new_thread(vm, script, generation);
+    lua_getref(vm.state, ref);
+    lua_xmove(vm.state, thread.co, 1);
     return &thread;
 }
 
@@ -1252,10 +1529,10 @@ void ScriptRuntime::run_listener(Thread& thread) {
     resume_one(thread);
 }
 
-void ScriptRuntime::invoke_listener(int ref, InstanceId script, std::uint32_t generation, const char* text,
+void ScriptRuntime::invoke_listener(Vm& vm, int ref, InstanceId script, std::uint32_t generation, const char* text,
                                     bool pass_number, double number) {
-    guarded([&] {
-        Thread* thread = start_listener(ref, script, generation);
+    guarded(vm, [&] {
+        Thread* thread = start_listener(vm, ref, script, generation);
         if (thread == nullptr) {
             return;
         }
@@ -1270,10 +1547,10 @@ void ScriptRuntime::invoke_listener(int ref, InstanceId script, std::uint32_t ge
     });
 }
 
-void ScriptRuntime::invoke_listener_input(int ref, InstanceId script, std::uint32_t generation,
+void ScriptRuntime::invoke_listener_input(Vm& vm, int ref, InstanceId script, std::uint32_t generation,
                                           const InputRecord& record) {
-    guarded([&] {
-        Thread* thread = start_listener(ref, script, generation);
+    guarded(vm, [&] {
+        Thread* thread = start_listener(vm, ref, script, generation);
         if (thread == nullptr) {
             return;
         }
@@ -1310,13 +1587,12 @@ int ScriptRuntime::require_module(lua_State* state, InstanceId module_id) {
         luaL_error(state, "require expects a ModuleScript");
     }
     // The module runs in the caller's VM and is cached there: the play VM for scripts,
-    // the console's own VM for the command line.
-    lua_State* vm = lua_mainthread(state);
-    const bool console = console_state_ != nullptr && vm == console_state_;
-    if (!console && vm != state_) {
+    // the console's VM for the command line, the plugin VM for plugins.
+    Vm* vm = vm_from(state);
+    if (vm == nullptr) {
         luaL_error(state, "require has no VM for this thread");
     }
-    std::unordered_map<InstanceId, int>& cache = console ? console_require_cache_ : require_cache_;
+    std::unordered_map<InstanceId, int>& cache = vm->require_cache;
     const auto cached = cache.find(module_id);
     if (cached != cache.end()) {
         if (cached->second == LUA_REFNIL) {
@@ -1341,34 +1617,13 @@ int ScriptRuntime::require_module(lua_State* state, InstanceId module_id) {
         }
     } pop{loading_};
 
-    // A script's module gets a scheduler thread, so its signals belong to that script.
-    // The console's is a plain coroutine anchored until this call returns.
-    lua_State* co = nullptr;
-    Thread* thread = nullptr;
-    struct Anchor {
-        lua_State* vm = nullptr;
-        int ref = LUA_NOREF;
-        ~Anchor() {
-            if (vm != nullptr && ref != LUA_NOREF) {
-                lua_unref(vm, ref);
-            }
-        }
-    } anchor;
-    if (console) {
-        co = lua_newthread(vm);
-        anchor.vm = vm;
-        anchor.ref = lua_ref(vm, -1);
-        lua_pop(vm, 1);
-        luaL_sandboxthread(co);
-        set_script_global(co, module_id);
-    } else {
-        Thread* caller = ScriptRuntime::thread_from(state);
-        const InstanceId owner = caller != nullptr ? caller->script : 0;
-        const std::uint32_t generation = caller != nullptr ? caller->generation : 0;
-        thread = &new_thread(owner, generation);
-        set_script_global(thread->co, module_id);
-        co = thread->co;
-    }
+    // The module gets a scheduler thread owned as its caller is, so its signals belong to that owner.
+    Thread* caller = ScriptRuntime::thread_from(state);
+    const InstanceId owner = caller != nullptr ? caller->script : 0;
+    const std::uint32_t generation = caller != nullptr ? caller->generation : 0;
+    Thread* thread = &new_thread(*vm, owner, generation);
+    set_script_global(thread->co, module_id);
+    lua_State* co = thread->co;
     struct Finish {
         Thread* thread;
         ~Finish() {
@@ -1404,9 +1659,9 @@ int ScriptRuntime::require_module(lua_State* state, InstanceId module_id) {
         return 1;
     }
     lua_pushvalue(co, 1);
-    lua_xmove(co, vm, 1);
-    const int ref = lua_ref(vm, -1);
-    lua_pop(vm, 1);
+    lua_xmove(co, vm->state, 1);
+    const int ref = lua_ref(vm->state, -1);
+    lua_pop(vm->state, 1);
     cache[module_id] = ref;
     lua_getref(state, ref);
     return 1;

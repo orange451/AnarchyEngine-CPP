@@ -59,13 +59,11 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     });
     layout.open_project_at(root);
 
-    auto paint = [&layout](const char* name, float blue) {
-        layout.simulation().on_simulation([name, blue](engine_core::DataModel& game) {
-            engine_core::ColorRgb color;
-            color.r = 0.25f;
-            color.g = 0.5f;
-            color.b = blue;
-            game.game_object(game.find_first_child(game.scene_service("Workspace"), name))->set_color(color);
+    // Moves a part in the studio to (0.25, 0.5, z).
+    auto move_part = [&layout](const char* name, float z) {
+        layout.simulation().on_simulation([name, z](engine_core::DataModel& game) {
+            game.game_object(game.find_first_child(game.scene_service("Workspace"), name))
+                ->set_position(engine_core::Vec3{0.25f, 0.5f, z});
         });
     };
     // Something outside the studio changes a property in a file.
@@ -73,9 +71,9 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         engine_core::JsonValue doc;
         std::string error;
         engine_core::parse_json(ReadBytes(root / file), doc, error);
-        // The studio changes Color too, so both sides changed the same property.
-        const float color[3] = {0.f, 1.f, 0.f};
-        doc.set("Color", engine_core::json_floats(color, 3));
+        // The studio changes Transform too, so both sides changed the same property.
+        const engine_core::Matrix4 moved = engine_core::matrix4_translation(0.f, 1.f, 0.f);
+        doc.set("Transform", engine_core::json_floats(moved.m, 16));
         const std::string bytes = engine_core::write_json(doc);
         WriteBytes(root / file, bytes);
         return bytes;
@@ -98,8 +96,8 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     };
 
     // The studio changes both parts while something else edits Part's file.
-    paint("Part", 0.75f);
-    paint("Spare", 0.75f);
+    move_part("Part", 0.75f);
+    move_part("Spare", 0.75f);
     const std::string outside = touch(part_file);
 
     press(jadefx::Key::S);
@@ -116,15 +114,15 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     expect(button("save-conflict-overwrite") != nullptr, "a file that changed while it asked is asked about");
     expect(ReadBytes(root / spare_file) == spare_outside, "and is not written over unasked");
     click("save-conflict-overwrite");
-    expect(ReadBytes(root / part_file).find("\"Color\": [0.25, 0.5, 0.75]") != std::string::npos,
-           "Overwrite writes the studio's color");
-    expect(ReadBytes(root / spare_file).find("\"Color\": [0.25, 0.5, 0.75]") != std::string::npos,
-           "over every file it listed");
+    const std::string studio_transform = "\"Transform\": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0.25, 0.5, 0.75, 1]";
+    expect(ReadBytes(root / part_file).find(studio_transform) != std::string::npos,
+           "Overwrite writes the studio's transform");
+    expect(ReadBytes(root / spare_file).find(studio_transform) != std::string::npos, "over every file it listed");
     expect(!layout.has_unsaved_changes(), "and the place is saved");
 
     // File > New offers to save first; a conflict then asks too, and only a
     // save that happens lets the new place start.
-    paint("Part", 0.5f);
+    move_part("Part", 0.5f);
     touch(part_file);
     press(jadefx::Key::N);
     click("unsaved-save");
@@ -135,8 +133,9 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     click("unsaved-save");
     click("save-conflict-overwrite");
     expect(!has_part(), "Overwrite saves, then the new place starts");
-    expect(ReadBytes(root / part_file).find("\"Color\": [0.25, 0.5, 0.5]") != std::string::npos,
-           "with the studio's color on disk");
+    expect(ReadBytes(root / part_file).find("\"Transform\": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0.25, 0.5, 0.5, 1]") !=
+               std::string::npos,
+           "with the studio's transform on disk");
 
     std::error_code error;
     fs::remove_all(folder, error);

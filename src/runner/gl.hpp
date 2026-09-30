@@ -86,6 +86,18 @@ using GLsizeiptr = std::ptrdiff_t;
 #ifdef GL_UNSIGNED_BYTE
 #undef GL_UNSIGNED_BYTE
 #endif
+#ifdef GL_UNSIGNED_SHORT
+#undef GL_UNSIGNED_SHORT
+#endif
+#ifdef GL_UNSIGNED_INT
+#undef GL_UNSIGNED_INT
+#endif
+#ifdef GL_ELEMENT_ARRAY_BUFFER
+#undef GL_ELEMENT_ARRAY_BUFFER
+#endif
+#ifdef GL_DYNAMIC_DRAW
+#undef GL_DYNAMIC_DRAW
+#endif
 constexpr GLboolean GL_FALSE = 0;
 constexpr GLboolean GL_TRUE = 1;
 constexpr GLenum GL_NO_ERROR = 0;
@@ -108,6 +120,10 @@ constexpr GLenum GL_VIEWPORT = 0x0BA2;
 constexpr GLenum GL_SCISSOR_BOX = 0x0C10;
 constexpr GLenum GL_RGBA = 0x1908;
 constexpr GLenum GL_UNSIGNED_BYTE = 0x1401;
+constexpr GLenum GL_UNSIGNED_SHORT = 0x1403;
+constexpr GLenum GL_UNSIGNED_INT = 0x1405;
+constexpr GLenum GL_ELEMENT_ARRAY_BUFFER = 0x8893;
+constexpr GLenum GL_DYNAMIC_DRAW = 0x88E8;
 
 // Names are prefixed so they do not collide with libGL's exported functions.
 extern const GLubyte* (*rt_glGetString)(GLenum name);
@@ -138,6 +154,8 @@ extern void (*rt_glBufferData)(GLenum target, GLsizeiptr size, const void* data,
 extern void (*rt_glEnableVertexAttribArray)(GLuint index);
 extern void (*rt_glVertexAttribPointer)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer);
 extern void (*rt_glDrawArrays)(GLenum mode, GLint first, GLsizei count);
+extern void (*rt_glVertexAttribIPointer)(GLuint index, GLint size, GLenum type, GLsizei stride, const void* pointer);
+extern void (*rt_glDrawElements)(GLenum mode, GLsizei count, GLenum type, const void* indices);
 extern void (*rt_glEnable)(GLenum cap);
 extern void (*rt_glDisable)(GLenum cap);
 extern GLboolean (*rt_glIsEnabled)(GLenum cap);
@@ -146,6 +164,7 @@ extern void (*rt_glScissor)(GLint x, GLint y, GLsizei width, GLsizei height);
 extern GLint (*rt_glGetUniformLocation)(GLuint program, const GLchar* name);
 extern void (*rt_glUniform1f)(GLint location, GLfloat v0);
 extern void (*rt_glUniform3f)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
+extern void (*rt_glUniformMatrix4fv)(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
 extern void (*rt_glReadPixels)(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
 
 using GlGetProcAddress = void* (*)(const char* name);
@@ -183,6 +202,8 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glEnableVertexAttribArray ::runner::rt_glEnableVertexAttribArray
 #define glVertexAttribPointer ::runner::rt_glVertexAttribPointer
 #define glDrawArrays ::runner::rt_glDrawArrays
+#define glVertexAttribIPointer ::runner::rt_glVertexAttribIPointer
+#define glDrawElements ::runner::rt_glDrawElements
 #define glEnable ::runner::rt_glEnable
 #define glDisable ::runner::rt_glDisable
 #define glIsEnabled ::runner::rt_glIsEnabled
@@ -191,4 +212,5 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glGetUniformLocation ::runner::rt_glGetUniformLocation
 #define glUniform1f ::runner::rt_glUniform1f
 #define glUniform3f ::runner::rt_glUniform3f
+#define glUniformMatrix4fv ::runner::rt_glUniformMatrix4fv
 #define glReadPixels ::runner::rt_glReadPixels

@@ -17,7 +17,7 @@ class DataModel;
 // A value carried between a class's property and the Luau stack.
 // The set of kinds stays small. Property names do not live here.
 struct LuaSlot {
-    enum class Kind { Nil, Bool, Number, String, Instance, Vec3, Color, Transform, Signal };
+    enum class Kind { Nil, Bool, Number, String, Instance, Vec3, Color, Matrix4, Signal };
     Kind kind = Kind::Nil;
     bool flag = false;
     double number = 0;
@@ -25,7 +25,7 @@ struct LuaSlot {
     InstanceId id = 0;
     Vec3 vec{};
     ColorRgb color{};
-    Transform transform{};
+    Matrix4 transform{};
     // Why a write refused the value, for the user. Empty when it did not say.
     std::string error;
 };
@@ -156,8 +156,9 @@ struct LuaOperator {
     const char* result = nullptr;
 };
 
-// Adds operators onto a class. A later row for the same metamethod replaces
-// the earlier one. Safe during static initialization, like register_lua_class.
+// Adds operators onto a class. A later row for the same metamethod and
+// operands replaces the earlier one; other operands add an overload. Safe
+// during static initialization, like register_lua_class.
 void register_lua_operators(const char* class_name, const LuaOperator* operators, int count);
 // This class's operators only, in registration order.
 void lua_class_operators(const char* class_name, std::vector<LuaOperator>& out);

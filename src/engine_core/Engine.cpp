@@ -4,6 +4,7 @@
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <exception>
@@ -15,6 +16,9 @@
 
 namespace engine_core {
 namespace {
+
+// How often a paused engine steps the command line's and the plugins' threads.
+constexpr std::chrono::milliseconds kToolInterval(16);
 
 // Sleeps until the next slot of a fixed hz schedule. Sleeping for the budget
 // less the step's own work dropped each wake-up's lateness, and a sleep on
@@ -238,7 +242,26 @@ void Engine::simulation_loop() {
         {
             std::unique_lock<std::mutex> pause_lock(pause_mu_);
             if (paused_) {
-                pause_cv_.wait(pause_lock, [&] { return !paused_ || !running_.load(); });
+                // Paused, the play step waits, but the command line's and the plugins'
+                // threads keep time. The tool step takes the write lock, as a paused edit
+                // does, so the two take turns. pause_mu_ is let go meanwhile.
+                auto last_tool = std::chrono::steady_clock::now();
+                while (!pause_cv_.wait_for(pause_lock, kToolInterval, [&] { return !paused_ || !running_.load(); })) {
+                    const auto now = std::chrono::steady_clock::now();
+                    const double dt = std::min(0.1, std::chrono::duration<double>(now - last_tool).count());
+                    last_tool = now;
+                    if (!scripts_ || !scripts_->tools_open()) {
+                        continue;
+                    }
+                    pause_lock.unlock();
+                    guarded_step(
+                        [&] {
+                            DataModelLock lock(game_, DataModelLock::Write);
+                            scripts_->step_tools(dt);
+                        },
+                        [&] { contract_count_.fetch_add(1); });
+                    pause_lock.lock();
+                }
                 woke = true;
             }
         }
@@ -301,6 +324,8 @@ void Engine::simulation_loop() {
                 // Same dt Heartbeat jobs just received. Scripts resume after that drain.
                 if (scripts_) {
                     scripts_->heartbeat(render_dt_);
+                    // The command line and plugins keep time with the play step.
+                    scripts_->step_tools(render_dt_);
                 }
                 game_.events().drain();
             },

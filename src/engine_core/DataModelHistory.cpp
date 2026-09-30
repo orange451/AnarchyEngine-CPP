@@ -10,26 +10,10 @@ namespace engine_core {
 
 namespace {
 
-PropertyValue value_transform(const Transform& value) {
+PropertyValue value_transform(const Matrix4& value) {
     PropertyValue out;
     out.prop = HistoryProp::Transform;
     out.transform = value;
-    return out;
-}
-
-PropertyValue value_color(ColorRgb value) {
-    PropertyValue out;
-    out.prop = HistoryProp::Color;
-    out.color = value;
-    return out;
-}
-
-PropertyValue value_size(float x, float y, float z) {
-    PropertyValue out;
-    out.prop = HistoryProp::Size;
-    out.size[0] = x;
-    out.size[1] = y;
-    out.size[2] = z;
     return out;
 }
 
@@ -47,21 +31,10 @@ PropertyValue value_text(HistoryProp prop, std::string value) {
     return out;
 }
 
-PropertyValue value_position(const Vec3& value) {
-    PropertyValue out;
-    out.prop = HistoryProp::Position;
-    out.vector = value;
-    return out;
-}
-
 HistoryProp history_prop(Field field) {
     switch (field) {
     case Field::Transform:
         return HistoryProp::Transform;
-    case Field::Color:
-        return HistoryProp::Color;
-    case Field::Size:
-        return HistoryProp::Size;
     case Field::Simulated:
         return HistoryProp::Simulated;
     case Field::VisualOnly:
@@ -72,8 +45,6 @@ HistoryProp history_prop(Field field) {
         return HistoryProp::Source;
     case Field::Enabled:
         return HistoryProp::Enabled;
-    case Field::Position:
-        return HistoryProp::Position;
     case Field::LinearVelocity:
     case Field::Parent:
     case Field::Reflected:
@@ -97,19 +68,9 @@ void note_property(ChangeHistoryService* history, InstanceId id, PropertyValue b
 
 }  // namespace
 
-void DataModel::record_transform(InstanceId id, const Transform& before, const Transform& after) {
+void DataModel::record_transform(InstanceId id, const Matrix4& before, const Matrix4& after) {
     mark_authored_dirty(id);
     note_property(state_->history.get(), id, value_transform(before), value_transform(after));
-}
-
-void DataModel::record_color(InstanceId id, ColorRgb before, ColorRgb after) {
-    mark_authored_dirty(id);
-    note_property(state_->history.get(), id, value_color(before), value_color(after));
-}
-
-void DataModel::record_size(InstanceId id, float bx, float by, float bz, float ax, float ay, float az) {
-    mark_authored_dirty(id);
-    note_property(state_->history.get(), id, value_size(bx, by, bz), value_size(ax, ay, az));
 }
 
 void DataModel::record_bool(InstanceId id, Field field, bool before, bool after) {
@@ -128,11 +89,6 @@ void DataModel::record_string(InstanceId id, Field field, const std::string& bef
     mark_authored_dirty(id);
     const HistoryProp prop = history_prop(field);
     note_property(state_->history.get(), id, value_text(prop, before), value_text(prop, after));
-}
-
-void DataModel::record_position(InstanceId id, const Vec3& before, const Vec3& after) {
-    mark_authored_dirty(id);
-    note_property(state_->history.get(), id, value_position(before), value_position(after));
 }
 
 void DataModel::note_property_change(std::string_view property, const LuaSlot& before, const LuaSlot& after) {
@@ -279,8 +235,6 @@ AuthoredRecord DataModel::capture_record(InstanceId id, bool subtree) const {
     if (const GameObject* body = dynamic_cast<const GameObject*>(object)) {
         record.spatial = true;
         record.transform = body->transform();
-        record.color = body->color();
-        body->copy_size(record.size);
     }
     if (const LuaSource* source = dynamic_cast<const LuaSource*>(object)) {
         record.has_source = true;
@@ -289,7 +243,10 @@ AuthoredRecord DataModel::capture_record(InstanceId id, bool subtree) const {
     if (const Script* script = dynamic_cast<const Script*>(object)) {
         record.enabled = script->enabled();
     }
-    if (!record.spatial && !record.has_source) {
+    if (record.spatial) {
+        // A GameObject's saved registry properties, its Prefab: the base class's bytes.
+        object->DataModel::write_place(record.extra);
+    } else if (!record.has_source) {
         object->write_place(record.extra);
     }
     if (subtree) {
@@ -312,8 +269,8 @@ void DataModel::apply_record_fields(const AuthoredRecord& record) {
     if (record.spatial) {
         if (GameObject* body = game_object(record.id)) {
             body->set_transform(record.transform);
-            body->set_color(record.color);
-            body->set_size(record.size[0], record.size[1], record.size[2]);
+            const std::byte* bytes = record.extra.empty() ? nullptr : record.extra.data();
+            body->DataModel::read_place(bytes, record.extra.size());
         }
     }
     if (record.has_source) {
@@ -350,7 +307,7 @@ void DataModel::revive_record(const AuthoredRecord& record) {
     adopt_slot(pool, record.id);
     apply_record_fields(record);
     if (record.spatial) {
-        note(record.id, VisualField::Transform | VisualField::Color | VisualField::Size, WriteOrigin::Simulation);
+        note(record.id, VisualField::Transform, WriteOrigin::Simulation);
     }
     if (dynamic_cast<LuaSource*>(instance(record.id)) != nullptr) {
         if (ScriptAnalysis* analysis = script_analysis()) {
@@ -431,16 +388,6 @@ void DataModel::apply_property(InstanceId id, const PropertyValue& value) {
             body->set_transform(value.transform);
         }
         break;
-    case HistoryProp::Color:
-        if (GameObject* body = game_object(id)) {
-            body->set_color(value.color);
-        }
-        break;
-    case HistoryProp::Size:
-        if (GameObject* body = game_object(id)) {
-            body->set_size(value.size[0], value.size[1], value.size[2]);
-        }
-        break;
     case HistoryProp::Simulated:
         set_simulated(id, value.flag);
         break;
@@ -458,11 +405,6 @@ void DataModel::apply_property(InstanceId id, const PropertyValue& value) {
     case HistoryProp::Enabled:
         if (auto* script = dynamic_cast<Script*>(instance(id))) {
             script->set_enabled(value.flag);
-        }
-        break;
-    case HistoryProp::Position:
-        if (auto* triangle = dynamic_cast<TestTriangle*>(instance(id))) {
-            triangle->set_position(value.vector.x, value.vector.y, value.vector.z);
         }
         break;
     case HistoryProp::Reflected:

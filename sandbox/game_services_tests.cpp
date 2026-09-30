@@ -871,6 +871,12 @@ TEST_CASE("GS19b apply_disk swaps what two folders hold across Workspace and Tex
     namespace fs = std::filesystem;
     engine_core::Project project = engine_core::Project::create(dir.path);
     DataModel& game = project.datamodel();
+    // Only the folders in Workspace. Moving files does not rewrite Workspace's
+    // saved child order, so with a second child there, as the new project's
+    // Camera, the place would still have that order to save.
+    for (const InstanceId child : game.get_children(game.service("Workspace"))) {
+        game.destroy(child);
+    }
     const InstanceId f1 = make(game, "Folder", "F1", game.service("Workspace"));
     const InstanceId box = make(game, "GameObject", "Box", f1);
     const InstanceId f2 = make(game, "Folder", "F2", game.service("Textures"));

@@ -7,7 +7,6 @@
 #include "Ecs.hpp"
 #include "GameObject.hpp"
 #include "SnapshotPump.hpp"
-#include "TestTriangle.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -127,16 +126,14 @@ TEST_CASE("two DataModels keep separate worlds", "[dense][entity]") {
         engine_core::Game second;
         REQUIRE(second.entity_count() == base);
         engine_core::GameObject& part = second.create_game_object();
-        part.set_size(2.f, 3.f, 4.f);
+        part.set_transform(engine_core::matrix4_translation(2.f, 3.f, 4.f));
         REQUIRE(second.entity_count() == base + 1);
         REQUIRE(first.entity_count() == base + 1);
     }
     // The first world outlives the second and still works.
     engine_core::GameObject& later = first.create_game_object();
-    later.set_size(5.f, 6.f, 7.f);
-    float size[3] = {};
-    REQUIRE(later.copy_size(size));
-    REQUIRE(size[2] == 7.f);
+    later.set_transform(engine_core::matrix4_translation(5.f, 6.f, 7.f));
+    REQUIRE(later.transform().m[14] == 7.f);
     REQUIRE(first.entity_count() == base + 2);
 }
 
@@ -152,13 +149,11 @@ TEST_CASE("a destroyed GameObject reads zero", "[dense][entity]") {
     SimRole role;
     engine_core::Game game;
     engine_core::GameObject& part = game.create_game_object();
-    part.set_color(rgb(0.5f, 0.5f, 0.5f));
-    part.set_size(2.f, 2.f, 2.f);
+    part.set_transform(engine_core::matrix4_translation(2.f, 2.f, 2.f));
     game.destroy(part.id());
-    float size[3] = {9.f, 9.f, 9.f};
-    REQUIRE_FALSE(part.copy_size(size));
     REQUIRE(part.transform().m[0] == 0.f);  // the zero matrix, not identity
-    REQUIRE(part.color().r == engine_core::ColorRgb{}.r);
+    REQUIRE(part.transform().m[12] == 0.f);  // not the translation it had
+    REQUIRE(part.position().y == 0.f);
 }
 
 TEST_CASE("undo and Stop keep spatial values and flags", "[dense][entity]") {
@@ -167,8 +162,7 @@ TEST_CASE("undo and Stop keep spatial values and flags", "[dense][entity]") {
     engine_core::GameObject& part = game.create_game_object();
     const engine_core::InstanceId id = part.id();
     game.set_parent(id, workspace_of(game));
-    part.set_color(rgb(0.25f, 0.5f, 0.75f));
-    part.set_size(1.f, 2.f, 3.f);
+    part.set_transform(engine_core::matrix4_translation(1.f, 2.f, 3.f));
     game.set_simulated(id, true);
     game.set_visual_only(id, true);
     game.history().end_gesture();
@@ -178,17 +172,15 @@ TEST_CASE("undo and Stop keep spatial values and flags", "[dense][entity]") {
     REQUIRE(game.alive(id));
     REQUIRE(game.simulated(id));
     REQUIRE(game.visual_only(id));
-    REQUIRE(game.game_object(id)->color().g == 0.5f);
+    REQUIRE(game.game_object(id)->transform().m[13] == 2.f);
 
     game.capture_place();
     game.start_simulation();
     game.set_simulated(id, false);
-    game.game_object(id)->set_size(5.f, 5.f, 5.f);
+    game.game_object(id)->set_transform(engine_core::matrix4_translation(5.f, 5.f, 5.f));
     game.stop_simulation();
     REQUIRE(game.simulated(id));
-    float size[3] = {};
-    REQUIRE(game.game_object(id)->copy_size(size));
-    REQUIRE(size[1] == 2.f);
+    REQUIRE(game.game_object(id)->transform().m[13] == 2.f);
 }
 
 TEST_CASE("scope tags follow the tree", "[dense][scope]") {
@@ -288,34 +280,34 @@ TEST_CASE("Stop takes scope from an instance that was unparented at capture", "[
     REQUIRE_FALSE(game.in_workspace(child.id()));
 }
 
-TEST_CASE("a triangle steps only while it is under game", "[dense][step]") {
+TEST_CASE("a Spinner steps only while it is under game", "[dense][step]") {
     SimRole role;
     engine_core::Game game;
     const engine_core::InstanceId ws = workspace_of(game);
-    engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
-    const engine_core::InstanceId id = triangle.id();
+    Spinner& spinner = game.create<Spinner>();
+    const engine_core::InstanceId id = spinner.id();
     game.step_instances(0.25);
-    REQUIRE(triangle.angle_degrees() == 0.0);
+    REQUIRE(spinner.degrees() == 0.0);
     game.set_parent(id, ws);
     game.step_instances(0.25);  // 90 degrees a second
-    REQUIRE(triangle.angle_degrees() == 22.5);
+    REQUIRE(spinner.degrees() == 22.5);
     game.set_parent(id, engine_core::DataModel::kNoParent);
     game.step_instances(0.25);
-    REQUIRE(triangle.angle_degrees() == 22.5);
+    REQUIRE(spinner.degrees() == 22.5);
     game.set_parent(id, game.scene_service("Storage"));  // anywhere under game steps
     game.step_instances(0.25);
-    REQUIRE(triangle.angle_degrees() == 45.0);
+    REQUIRE(spinner.degrees() == 45.0);
     game.destroy(id);
     game.step_instances(0.25);
     REQUIRE_FALSE(game.alive(id));
     REQUIRE(game.stepper_count() == 0);
 }
 
-TEST_CASE("undo revives a triangle that still steps", "[dense][step]") {
+TEST_CASE("undo revives a Spinner that still steps", "[dense][step]") {
     SimRole role;
     engine_core::Game game;
-    engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
-    const engine_core::InstanceId id = triangle.id();
+    Spinner& spinner = game.create<Spinner>();
+    const engine_core::InstanceId id = spinner.id();
     game.set_parent(id, workspace_of(game));
     game.history().end_gesture();
     game.destroy(id);
@@ -324,11 +316,11 @@ TEST_CASE("undo revives a triangle that still steps", "[dense][step]") {
     game.history().undo();
     REQUIRE(game.alive(id));
     REQUIRE(game.stepper_count() == 1);
-    auto* revived = dynamic_cast<engine_core::TestTriangle*>(game.instance(id));
+    auto* revived = dynamic_cast<Spinner*>(game.instance(id));
     REQUIRE(revived != nullptr);
-    const double before = revived->angle_degrees();
+    const double before = revived->degrees();
     game.step_instances(0.25);
-    REQUIRE(revived->angle_degrees() == before + 22.5);
+    REQUIRE(revived->degrees() == before + 22.5);
 }
 
 TEST_CASE("Stop rebuilds authored instances whose slots play reused", "[dense][entity]") {
@@ -340,17 +332,17 @@ TEST_CASE("Stop rebuilds authored instances whose slots play reused", "[dense][e
     engine_core::GameObject& part = game.create_game_object();
     const engine_core::InstanceId part_id = part.id();
     game.set_parent(part_id, ws);
-    part.set_color(rgb(0.25f, 0.5f, 0.75f));
+    part.set_transform(engine_core::matrix4_translation(0.25f, 0.5f, 0.75f));
     game.set_simulated(part_id, true);
     game.set_visual_only(part_id, true);
-    engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
-    const engine_core::InstanceId triangle_id = triangle.id();
-    game.set_parent(triangle_id, ws);
+    Spinner& spinner = game.create<Spinner>();
+    const engine_core::InstanceId spinner_id = spinner.id();
+    game.set_parent(spinner_id, ws);
     game.capture_place();
 
     game.start_simulation();
     game.destroy(part_id);
-    game.destroy(triangle_id);
+    game.destroy(spinner_id);
     // New instances take the freed slots with newer generations, so Stop must
     // retire them and rebuild the authored ones from scratch.
     engine_core::DataModel& squatter = game.create();
@@ -358,8 +350,8 @@ TEST_CASE("Stop rebuilds authored instances whose slots play reused", "[dense][e
     game.set_parent(squatter.id(), game.scene_service("Storage"));
     game.set_parent(other.id(), game.scene_service("Storage"));
     const auto slot_of = [](engine_core::InstanceId id) { return engine_core::id_slot(id); };
-    const bool reused = (slot_of(squatter.id()) == slot_of(part_id) && slot_of(other.id()) == slot_of(triangle_id)) ||
-                        (slot_of(squatter.id()) == slot_of(triangle_id) && slot_of(other.id()) == slot_of(part_id));
+    const bool reused = (slot_of(squatter.id()) == slot_of(part_id) && slot_of(other.id()) == slot_of(spinner_id)) ||
+                        (slot_of(squatter.id()) == slot_of(spinner_id) && slot_of(other.id()) == slot_of(part_id));
     REQUIRE(reused);
     game.stop_simulation();
 
@@ -367,14 +359,14 @@ TEST_CASE("Stop rebuilds authored instances whose slots play reused", "[dense][e
     REQUIRE(game.simulated(part_id));
     REQUIRE(game.visual_only(part_id));
     REQUIRE(game.in_workspace(part_id));
-    REQUIRE(game.game_object(part_id)->color().g == 0.5f);
-    REQUIRE(game.alive(triangle_id));
-    REQUIRE(game.in_game(triangle_id));
+    REQUIRE(game.game_object(part_id)->transform().m[13] == 0.5f);
+    REQUIRE(game.alive(spinner_id));
+    REQUIRE(game.in_game(spinner_id));
     REQUIRE(game.stepper_count() == 1);
     pump_frame(pump, game);
     const engine_core::VisualInstance* row = pump.find(part_id);
     REQUIRE(row != nullptr);
-    REQUIRE(row->color.b == 0.75f);
+    REQUIRE(row->world.m[14] == 0.75f);
 }
 
 TEST_CASE("plain instances never step", "[dense][step]") {
@@ -383,9 +375,9 @@ TEST_CASE("plain instances never step", "[dense][step]") {
     engine_core::DataModel& folder = game.create();
     game.set_parent(folder.id(), workspace_of(game));
     REQUIRE(game.stepper_count() == 0);
-    engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
+    Spinner& spinner = game.create<Spinner>();
     REQUIRE(game.stepper_count() == 0);  // not under game yet
-    game.set_parent(triangle.id(), folder.id());
+    game.set_parent(spinner.id(), folder.id());
     REQUIRE(game.stepper_count() == 1);
 }
 
@@ -445,16 +437,15 @@ TEST_CASE("a row arrives complete after edits made outside Workspace", "[dense][
     engine_core::GameObject& part = game.create_game_object();
     game.set_parent(part.id(), game.scene_service("Storage"));
     pump_frame(pump, game);
-    part.set_color(rgb(0.25f, 0.5f, 0.75f));  // no row to patch yet
-    part.set_size(2.f, 3.f, 4.f);
+    part.set_transform(engine_core::matrix4_translation(0.25f, 3.f, 4.f));  // no row to patch yet
     pump_frame(pump, game);
     REQUIRE(pump.find(part.id()) == nullptr);
     game.set_parent(part.id(), workspace_of(game));
     pump_frame(pump, game);
     const engine_core::VisualInstance* row = pump.find(part.id());
     REQUIRE(row != nullptr);
-    REQUIRE(row->color.r == 0.25f);
-    REQUIRE(row->size[1] == 3.f);
+    REQUIRE(row->world.m[12] == 0.25f);
+    REQUIRE(row->world.m[13] == 3.f);
 }
 
 TEST_CASE("a move within Workspace keeps the row", "[dense][member]") {
@@ -466,7 +457,7 @@ TEST_CASE("a move within Workspace keeps the row", "[dense][member]") {
     game.set_parent(folder.id(), workspace_of(game));
     engine_core::GameObject& part = game.create_game_object();
     game.set_parent(part.id(), workspace_of(game));
-    part.set_color(rgb(0.1f, 0.2f, 0.3f));
+    part.set_transform(engine_core::matrix4_translation(0.1f, 0.2f, 0.3f));
     pump_frame(pump, game);
     game.invalidations().clear();
     game.set_parent(part.id(), folder.id());
@@ -474,7 +465,7 @@ TEST_CASE("a move within Workspace keeps the row", "[dense][member]") {
     pump_frame(pump, game);
     const engine_core::VisualInstance* row = pump.find(part.id());
     REQUIRE(row != nullptr);
-    REQUIRE(row->color.g == 0.2f);
+    REQUIRE(row->world.m[13] == 0.2f);
 }
 
 TEST_CASE("destroy_tree clears rows and steppers", "[dense][member]") {
@@ -485,11 +476,11 @@ TEST_CASE("destroy_tree clears rows and steppers", "[dense][member]") {
     engine_core::DataModel& folder = game.create();
     engine_core::GameObject& a = game.create_game_object();
     engine_core::GameObject& b = game.create_game_object();
-    engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
+    Spinner& spinner = game.create<Spinner>();
     game.set_parent(folder.id(), workspace_of(game));
     game.set_parent(a.id(), folder.id());
     game.set_parent(b.id(), a.id());
-    game.set_parent(triangle.id(), folder.id());
+    game.set_parent(spinner.id(), folder.id());
     const engine_core::InstanceId a_id = a.id();
     const engine_core::InstanceId b_id = b.id();
     pump_frame(pump, game);
@@ -512,8 +503,7 @@ TEST_CASE("overflow resync keeps Workspace membership", "[dense][member]") {
     engine_core::GameObject& stored = game.create_game_object();
     game.set_parent(shown.id(), workspace_of(game));
     game.set_parent(stored.id(), game.scene_service("Storage"));
-    shown.set_color(rgb(0.5f, 0.25f, 0.125f));
-    engine_core::Transform moved = engine_core::transform_identity();
+    engine_core::Matrix4 moved = engine_core::matrix4_identity();
     for (std::size_t i = 0; i <= engine_core::DataModel::kMaxInvalidations; ++i) {
         moved.m[12] = static_cast<float>(i + 1);  // an equal write would skip its note
         shown.set_transform(moved);
@@ -522,7 +512,6 @@ TEST_CASE("overflow resync keeps Workspace membership", "[dense][member]") {
     pump_frame(pump, game);
     const engine_core::VisualInstance* row = pump.find(shown.id());
     REQUIRE(row != nullptr);
-    REQUIRE(row->color.g == 0.25f);
     REQUIRE(row->world.m[12] == moved.m[12]);
     REQUIRE(pump.find(stored.id()) == nullptr);
 }

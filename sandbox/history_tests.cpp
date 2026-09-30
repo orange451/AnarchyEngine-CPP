@@ -7,7 +7,6 @@
 #include "Script.hpp"
 #include "ScriptRuntime.hpp"
 #include "TaskScheduler.hpp"
-#include "TestTriangle.hpp"
 #include "ide/InputRouter.hpp"
 #include "types.hpp"
 
@@ -22,8 +21,7 @@
 
 namespace {
 
-using engine_core::same_color;
-using engine_core::same_transform;
+using engine_core::same_matrix4;
 
 void close_gesture(engine_core::DataModel& game) { game.history().end_gesture(); }
 
@@ -41,7 +39,7 @@ TEST_CASE("H1 edit create undo restores the same id", "[H1][history]") {
     engine_core::GameObject& part = game.create<engine_core::GameObject>();
     const engine_core::InstanceId id = part.id();
     game.set_name(id, "Brick");
-    const engine_core::Transform placed = engine_core::transform_translation(1.f, 2.f, 3.f);
+    const engine_core::Matrix4 placed = engine_core::matrix4_translation(1.f, 2.f, 3.f);
     part.set_transform(placed);
     close_gesture(game);
 
@@ -56,29 +54,29 @@ TEST_CASE("H1 edit create undo restores the same id", "[H1][history]") {
     REQUIRE(game.name(id) == "Brick");
     const engine_core::GameObject* restored = game.game_object(id);
     REQUIRE(restored != nullptr);
-    REQUIRE(same_transform(restored->transform(), placed));
+    REQUIRE(same_matrix4(restored->transform(), placed));
 }
 
-TEST_CASE("H2 three color recordings and a new edit clears redo", "[H2][history]") {
+TEST_CASE("H2 three transform recordings and a new edit clears redo", "[H2][history]") {
     engine_core::Game game;
     engine_core::GameObject& part = make_part(game, "Brick");
     close_gesture(game);
     game.history().reset_waypoints();
 
-    const engine_core::ColorRgb a = rgb(1.f, 0.f, 0.f);
-    const engine_core::ColorRgb b = rgb(0.f, 1.f, 0.f);
-    const engine_core::ColorRgb c = rgb(0.f, 0.f, 1.f);
-    const engine_core::ColorRgb d = rgb(1.f, 1.f, 0.f);
-    part.set_color(a);
+    const engine_core::Matrix4 a = engine_core::matrix4_translation(1.f, 0.f, 0.f);
+    const engine_core::Matrix4 b = engine_core::matrix4_translation(0.f, 1.f, 0.f);
+    const engine_core::Matrix4 c = engine_core::matrix4_translation(0.f, 0.f, 1.f);
+    const engine_core::Matrix4 d = engine_core::matrix4_translation(1.f, 1.f, 0.f);
+    part.set_transform(a);
     close_gesture(game);
-    part.set_color(b);
+    part.set_transform(b);
     close_gesture(game);
-    part.set_color(c);
+    part.set_transform(c);
     close_gesture(game);
 
     game.history().undo();
     game.history().undo();
-    REQUIRE(same_color(part.color(), a));
+    REQUIRE(same_matrix4(part.transform(), a));
     REQUIRE(game.history().can_redo().first);
 
     const auto redo_before = game.history().can_redo();
@@ -87,11 +85,11 @@ TEST_CASE("H2 three color recordings and a new edit clears redo", "[H2][history]
     game.history().finish_recording(*empty, engine_core::FinishRecordingOperation::Commit);
     REQUIRE(game.history().can_redo() == redo_before);
 
-    part.set_color(d);
+    part.set_transform(d);
     close_gesture(game);
     REQUIRE_FALSE(game.history().can_redo().first);
     game.history().redo();
-    REQUIRE(same_color(part.color(), d));
+    REQUIRE(same_matrix4(part.transform(), d));
 }
 
 TEST_CASE("H3 one recording coalesces a drag", "[H3][history]") {
@@ -99,17 +97,17 @@ TEST_CASE("H3 one recording coalesces a drag", "[H3][history]") {
     engine_core::GameObject& part = make_part(game, "Brick");
     close_gesture(game);
     game.history().reset_waypoints();
-    const engine_core::Transform home = part.transform();
+    const engine_core::Matrix4 home = part.transform();
 
     const auto recording = game.history().try_begin_recording("Move");
     REQUIRE(recording.has_value());
     for (int step = 0; step < 50; ++step) {
-        part.set_transform(engine_core::transform_translation(static_cast<float>(step), 0.f, 0.f));
+        part.set_transform(engine_core::matrix4_translation(static_cast<float>(step), 0.f, 0.f));
     }
     game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
 
     game.history().undo();
-    REQUIRE(same_transform(part.transform(), home));
+    REQUIRE(same_matrix4(part.transform(), home));
     REQUIRE_FALSE(game.history().can_undo().first);
     REQUIRE(game.history().can_redo().second == "Move");
 }
@@ -143,15 +141,15 @@ TEST_CASE("H5 play script writes stay off the edit stack", "[H5][history]") {
     runtime.attach(game, scheduler);
 
     engine_core::GameObject& part = make_part(game, "Brick");
-    const engine_core::ColorRgb authored = rgb(1.f, 0.f, 0.f);
-    part.set_color(authored);
+    const engine_core::Matrix4 authored = engine_core::matrix4_translation(1.f, 2.f, 3.f);
+    part.set_transform(authored);
     part.set_linear_velocity(4.f, 0.f, 0.f);
     engine_core::Script& script = game.create<engine_core::Script>();
     game.set_name(script.id(), "Paint");
     script.set_source(R"(
         local part = workspace:FindFirstChild("Brick")
         for _ = 1, 100 do
-            part.Color = Color3.new(0, 0, 1)
+            part.Position = Vector3.new(0, 0, 9)
         end
     )");
     game.set_parent(script.id(), workspace_of(game));
@@ -165,46 +163,46 @@ TEST_CASE("H5 play script writes stay off the edit stack", "[H5][history]") {
     game.events().drain();
     runtime.heartbeat(1.0 / 60.0);
     game.events().drain();
+    REQUIRE(runtime.last_error().empty());
+    // Checked before integrating, so the script's write is what is read.
+    REQUIRE(same_matrix4(part.transform(), engine_core::matrix4_translation(0.f, 0.f, 9.f)));
     game.integrate_simulated(1.0);
 
-    REQUIRE(runtime.last_error().empty());
-    REQUIRE(same_color(part.color(), rgb(0.f, 0.f, 1.f)));
     REQUIRE(game.history().can_undo() == during);
     REQUIRE_FALSE(during.first);
 
     game.stop_simulation();
-    REQUIRE(same_color(part.color(), authored));
-    REQUIRE(same_transform(part.transform(), engine_core::transform_identity()));
+    REQUIRE(same_matrix4(part.transform(), authored));
     REQUIRE(game.history().can_undo() == edit);
 }
 
 TEST_CASE("H6 a play recording undoes, then stop drops it", "[H6][history]") {
     engine_core::Game game;
     engine_core::GameObject& part = make_part(game, "Brick");
-    const engine_core::ColorRgb authored = rgb(1.f, 0.f, 0.f);
-    part.set_color(authored);
+    const engine_core::Matrix4 authored = engine_core::matrix4_translation(1.f, 0.f, 0.f);
+    part.set_transform(authored);
     close_gesture(game);
     const auto edit = game.history().can_undo();
 
     game.start_simulation();
     const auto recording = game.history().try_begin_recording("Play");
     REQUIRE(recording.has_value());
-    part.set_color(rgb(0.f, 0.f, 1.f));
+    part.set_transform(engine_core::matrix4_translation(0.f, 0.f, 1.f));
     game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
     REQUIRE(game.history().can_undo().second == "Play");
 
     game.history().undo();
-    REQUIRE(same_color(part.color(), authored));
+    REQUIRE(same_matrix4(part.transform(), authored));
     REQUIRE(game.history().can_redo().second == "Play");
 
     const auto again = game.history().try_begin_recording("Play");
     REQUIRE(again.has_value());
-    part.set_color(rgb(0.f, 1.f, 0.f));
+    part.set_transform(engine_core::matrix4_translation(0.f, 1.f, 0.f));
     game.history().finish_recording(*again, engine_core::FinishRecordingOperation::Commit);
-    REQUIRE(same_color(part.color(), rgb(0.f, 1.f, 0.f)));
+    REQUIRE(same_matrix4(part.transform(), engine_core::matrix4_translation(0.f, 1.f, 0.f)));
 
     game.stop_simulation();
-    REQUIRE(same_color(part.color(), authored));
+    REQUIRE(same_matrix4(part.transform(), authored));
     REQUIRE(game.history().can_undo() == edit);
     REQUIRE_FALSE(game.history().can_redo().first);
 
@@ -240,20 +238,20 @@ TEST_CASE("H8 a second begin does not replace the open recording", "[H8][history
     engine_core::GameObject& part = make_part(game, "Brick");
     close_gesture(game);
     game.history().reset_waypoints();
-    const engine_core::ColorRgb original = part.color();
+    const engine_core::Matrix4 original = part.transform();
 
     const auto first = game.history().try_begin_recording("Paint", "Paint");
     REQUIRE(first.has_value());
     REQUIRE_FALSE(game.history().try_begin_recording("Other").has_value());
     REQUIRE(game.history().is_recording_in_progress(*first));
-    part.set_color(rgb(0.2f, 0.3f, 0.4f));
+    part.set_transform(engine_core::matrix4_translation(2.f, 3.f, 4.f));
     game.history().finish_recording("nope", engine_core::FinishRecordingOperation::Commit);
     REQUIRE(game.history().is_recording_in_progress(*first));
     game.history().finish_recording(*first, engine_core::FinishRecordingOperation::Commit);
 
     REQUIRE(game.history().can_undo().second == "Paint");
     game.history().undo();
-    REQUIRE(same_color(part.color(), original));
+    REQUIRE(same_matrix4(part.transform(), original));
 }
 
 TEST_CASE("H9 undo during a recording is a no-op", "[H9][history]") {
@@ -264,17 +262,17 @@ TEST_CASE("H9 undo during a recording is a no-op", "[H9][history]") {
 
     const auto recording = game.history().try_begin_recording("Paint");
     REQUIRE(recording.has_value());
-    part.set_color(rgb(0.f, 1.f, 0.f));
-    const engine_core::ColorRgb painted = part.color();
+    part.set_transform(engine_core::matrix4_translation(0.f, 1.f, 0.f));
+    const engine_core::Matrix4 painted = part.transform();
     game.history().undo();
     game.history().redo();
-    REQUIRE(same_color(part.color(), painted));
+    REQUIRE(same_matrix4(part.transform(), painted));
     REQUIRE(game.history().is_recording_in_progress(*recording));
     REQUIRE_FALSE(game.history().can_undo().first);
 
     game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
     game.history().undo();
-    REQUIRE_FALSE(same_color(part.color(), painted));
+    REQUIRE_FALSE(same_matrix4(part.transform(), painted));
 }
 
 TEST_CASE("H10 script focus undoes text and leaves the place alone", "[H10][history]") {
@@ -282,8 +280,8 @@ TEST_CASE("H10 script focus undoes text and leaves the place alone", "[H10][hist
     engine_core::GameObject& part = make_part(game, "Brick");
     close_gesture(game);
     game.history().reset_waypoints();
-    const engine_core::ColorRgb painted = rgb(1.f, 0.f, 0.f);
-    part.set_color(painted);
+    const engine_core::Matrix4 painted = engine_core::matrix4_translation(1.f, 0.f, 0.f);
+    part.set_transform(painted);
     close_gesture(game);
 
     ide::InputRouter router;
@@ -302,7 +300,7 @@ TEST_CASE("H10 script focus undoes text and leaves the place alone", "[H10][hist
     undo.key = ide::ChordKey::Z;
     REQUIRE(router.handle(undo, &game.history()));
     REQUIRE(text.text() == "hi");
-    REQUIRE(same_color(part.color(), painted));
+    REQUIRE(same_matrix4(part.transform(), painted));
     REQUIRE(game.history().can_undo().first);
 
     ide::Focus viewport;
@@ -310,7 +308,7 @@ TEST_CASE("H10 script focus undoes text and leaves the place alone", "[H10][hist
     router.set_focus(viewport);
     REQUIRE(router.handle(undo, &game.history()));
     REQUIRE(text.text() == "hi");
-    REQUIRE_FALSE(same_color(part.color(), painted));
+    REQUIRE_FALSE(same_matrix4(part.transform(), painted));
 }
 
 TEST_CASE("H11 an empty text stack does not undo the place", "[H11][history]") {
@@ -318,7 +316,7 @@ TEST_CASE("H11 an empty text stack does not undo the place", "[H11][history]") {
     engine_core::GameObject& part = make_part(game, "Brick");
     close_gesture(game);
     game.history().reset_waypoints();
-    part.set_color(rgb(0.f, 1.f, 0.f));
+    part.set_transform(engine_core::matrix4_translation(0.f, 1.f, 0.f));
     close_gesture(game);
     const auto edit = game.history().can_undo();
 
@@ -334,7 +332,7 @@ TEST_CASE("H11 an empty text stack does not undo the place", "[H11][history]") {
     undo.key = ide::ChordKey::Z;
     REQUIRE(router.handle(undo, &game.history()));
     REQUIRE(game.history().can_undo() == edit);
-    REQUIRE(same_color(part.color(), rgb(0.f, 1.f, 0.f)));
+    REQUIRE(same_matrix4(part.transform(), engine_core::matrix4_translation(0.f, 1.f, 0.f)));
     REQUIRE_FALSE(game.history().is_recording_in_progress());
 }
 
@@ -343,11 +341,11 @@ TEST_CASE("H12 redo follows focus", "[H12][history]") {
     engine_core::GameObject& part = make_part(game, "Brick");
     close_gesture(game);
     game.history().reset_waypoints();
-    const engine_core::ColorRgb painted = rgb(0.f, 0.f, 1.f);
-    part.set_color(painted);
+    const engine_core::Matrix4 painted = engine_core::matrix4_translation(0.f, 0.f, 1.f);
+    part.set_transform(painted);
     close_gesture(game);
     game.history().undo();
-    REQUIRE_FALSE(same_color(part.color(), painted));
+    REQUIRE_FALSE(same_matrix4(part.transform(), painted));
 
     ide::InputRouter router;
     ide::TextUndoStack& text = router.script_stack(3);
@@ -372,7 +370,7 @@ TEST_CASE("H12 redo follows focus", "[H12][history]") {
     router.set_focus(editor);
     REQUIRE(router.handle(mac_redo, &game.history()));
     REQUIRE(text.text() == "ab");
-    REQUIRE_FALSE(same_color(game.game_object(part.id())->color(), painted));
+    REQUIRE_FALSE(same_matrix4(game.game_object(part.id())->transform(), painted));
 
     text.undo();
     REQUIRE(router.handle(win_redo, &game.history()));
@@ -382,10 +380,10 @@ TEST_CASE("H12 redo follows focus", "[H12][history]") {
     viewport.kind = ide::FocusKind::Viewport;
     router.set_focus(viewport);
     REQUIRE(router.handle(mac_redo, &game.history()));
-    REQUIRE(same_color(game.game_object(part.id())->color(), painted));
+    REQUIRE(same_matrix4(game.game_object(part.id())->transform(), painted));
     game.history().undo();
     REQUIRE(router.handle(win_redo, &game.history()));
-    REQUIRE(same_color(game.game_object(part.id())->color(), painted));
+    REQUIRE(same_matrix4(game.game_object(part.id())->transform(), painted));
 }
 
 TEST_CASE("H13 undo destroy restores children and names", "[H13][history]") {
@@ -442,16 +440,16 @@ TEST_CASE("H15 applying undo does not record a waypoint", "[H15][history]") {
     close_gesture(game);
     game.history().reset_waypoints();
 
-    const engine_core::ColorRgb original = part.color();
-    part.set_color(rgb(1.f, 0.f, 0.f));
+    const engine_core::Matrix4 original = part.transform();
+    part.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     close_gesture(game);
 
     int undos = 0;
     game.history().on_undo.connect([&](const std::string& name) {
-        REQUIRE(name == "Set Color");
+        REQUIRE(name == "Move");
         ++undos;
     });
-    game.property_changed(part.id(), engine_core::Field::Color)
+    game.property_changed(part.id(), engine_core::Field::Transform)
         .connect([&](engine_core::InstanceId, engine_core::Field) {
             REQUIRE(undos == 0);
             game.set_name(part.id(), "from-handler");
@@ -460,10 +458,10 @@ TEST_CASE("H15 applying undo does not record a waypoint", "[H15][history]") {
 
     game.history().undo();
     REQUIRE(undos == 1);
-    REQUIRE(same_color(part.color(), original));
+    REQUIRE(same_matrix4(part.transform(), original));
     REQUIRE(game.name(part.id()) == "from-handler");
     REQUIRE_FALSE(game.history().can_undo().first);
-    REQUIRE(game.history().can_redo().second == "Set Color");
+    REQUIRE(game.history().can_redo().second == "Move");
 }
 
 TEST_CASE("H16 a text stack out of sync with the editor refuses the edit", "[H16][history]") {
@@ -535,12 +533,13 @@ TEST_CASE("H18 edit history keeps the newest waypoints up to its count", "[H18][
     game.history().reset_waypoints();
     game.history().set_limits(5, 1u << 30);
     for (int i = 0; i < 8; ++i) {
-        part.set_color(rgb(static_cast<float>(i) / 10.f, 0.f, 0.f));
+        // From 1, since a move to the origin changes nothing and records nothing.
+        part.set_transform(engine_core::matrix4_translation(static_cast<float>(i + 1), 0.f, 0.f));
         close_gesture(game);
     }
     REQUIRE(undo_all(game) == 5);
-    // The oldest three are gone: undo stops at the color the fourth edit made.
-    REQUIRE(same_color(part.color(), rgb(0.2f, 0.f, 0.f)));
+    // The oldest three are gone: undo stops at the transform the third edit made.
+    REQUIRE(same_matrix4(part.transform(), engine_core::matrix4_translation(3.f, 0.f, 0.f)));
 }
 
 TEST_CASE("H19 edit history keeps its newest waypoints within its size", "[H19][history]") {

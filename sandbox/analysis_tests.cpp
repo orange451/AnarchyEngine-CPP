@@ -12,7 +12,6 @@
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
 #include "TaskScheduler.hpp"
-#include "TestTriangle.hpp"
 #include "types.hpp"
 
 #include "support.hpp"
@@ -272,9 +271,9 @@ TEST_CASE("A9 pump is the only publisher", "[A9]") {
 // is needed. Only a name that is not in the place is Instance?.
 TEST_CASE("A10 a child in the place is its class and never nil", "[A10]") {
     ScriptRig rig;
-    engine_core::TestTriangle& triangle = rig.game.create<engine_core::TestTriangle>();
-    rig.game.set_name(triangle.id(), "Tri0");
-    rig.game.set_parent(triangle.id(), workspace_of(rig.game));
+    engine_core::GameObject& part = rig.game.create<engine_core::GameObject>();
+    rig.game.set_name(part.id(), "Tri0");
+    rig.game.set_parent(part.id(), workspace_of(rig.game));
     engine_core::ScriptAnalysis analysis(rig.game);
 
     engine_core::Script& bare = add_script(rig.game, "Bare",
@@ -290,8 +289,8 @@ TEST_CASE("A10 a child in the place is its class and never nil", "[A10]") {
         settle(analysis);
         const std::string report = dump(analysis.diagnostics(bare.id()));
         INFO(report);
-        REQUIRE(report.find("'TestTriangle'") != std::string::npos);
-        REQUIRE(report.find("TestTriangle?") == std::string::npos);
+        REQUIRE(report.find("'GameObject'") != std::string::npos);
+        REQUIRE(report.find("GameObject?") == std::string::npos);
     }
 
     SECTION("a name that is not in the place may be nil") {
@@ -332,7 +331,7 @@ TEST_CASE("A10 a child in the place is its class and never nil", "[A10]") {
 
 TEST_CASE("analysis definitions come from the class registry", "[A11]") {
     const std::string source = engine_core::lua_analysis_definitions();
-    REQUIRE(source.find("declare extern type TestTriangle") != std::string::npos);
+    REQUIRE(source.find("declare extern type GameObject") != std::string::npos);
     REQUIRE(source.find("Position: Vector3") != std::string::npos);
     REQUIRE(source.find("function FindFirstChild(self, name: string): Instance?") != std::string::npos);
     REQUIRE(source.find("Parent: DataModel?") != std::string::npos);
@@ -379,12 +378,19 @@ TEST_CASE("analysis definitions come from the class registry", "[A11]") {
     std::vector<engine_core::LuaOperator> operators;
     engine_core::lua_class_operators("Vector2", operators);
     REQUIRE(operators.size() == 7);
-    engine_core::lua_class_operators("Transform", operators);
-    REQUIRE(operators.empty());
+    // Two rows for one metamethod are overloads, declared as one intersection.
+    engine_core::lua_class_operators("Matrix4", operators);
+    REQUIRE(operators.size() == 5);
+    const std::size_t matrix4 = source.find("declare extern type Matrix4 with");
+    REQUIRE(matrix4 != std::string::npos);
+    const std::string matrix4_block = source.substr(matrix4, source.find("end\n", matrix4) - matrix4);
+    REQUIRE(matrix4_block.find("__mul: ((Matrix4, Matrix4) -> Matrix4) & ((Matrix4, Vector3) -> Vector3)") !=
+            std::string::npos);
+    REQUIRE(matrix4_block.find("function ToAxisAngle(self): (Vector3, number)") != std::string::npos);
     const std::size_t game_object = source.find("declare extern type GameObject extends Instance with");
     REQUIRE(game_object != std::string::npos);
     const std::string game_object_block = source.substr(game_object, source.find("end\n", game_object) - game_object);
-    REQUIRE(game_object_block.find("Color: Color3") != std::string::npos);
+    REQUIRE(game_object_block.find("Position: Vector3") != std::string::npos);
     REQUIRE(source.find("declare extern type Color with") == std::string::npos);
     // Operators are not members, so completion does not offer them.
     REQUIRE(engine_core::lua_class_find("Vector2", "__add") == nullptr);
@@ -416,15 +422,15 @@ TEST_CASE("A12 a script is rechecked when the tree it looks into changes", "[A12
     REQUIRE_FALSE(analysis.diagnostics(hop.id()).empty());
 
     // Tri0 arrives after the script. The script did not change; its answer did.
-    engine_core::TestTriangle& triangle = rig.game.create<engine_core::TestTriangle>();
-    rig.game.set_name(triangle.id(), "Tri0");
-    rig.game.set_parent(triangle.id(), workspace_of(rig.game));
+    engine_core::GameObject& part = rig.game.create<engine_core::GameObject>();
+    rig.game.set_name(part.id(), "Tri0");
+    rig.game.set_parent(part.id(), workspace_of(rig.game));
     settle(analysis);
     INFO(dump(analysis.diagnostics(hop.id())));
     REQUIRE(analysis.diagnostics(hop.id()).empty());
 
     // A rename away from the looked-up name brings the warning back.
-    rig.game.set_name(triangle.id(), "Tri9");
+    rig.game.set_name(part.id(), "Tri9");
     settle(analysis);
     REQUIRE_FALSE(analysis.diagnostics(hop.id()).empty());
 }
@@ -442,7 +448,7 @@ TEST_CASE("A13 a loaded project is analyzed against the whole loaded tree", "[A1
     write("src/Workspace.workspace/init.json", "{\"class\": \"Workspace\", \"id\": \"workspace\", \"Name\": \"Workspace\"}\n");
     // Siblings sort by GUID and the loader parents the last one first, so the
     // script is in the tree before Tri0 is.
-    write("src/Workspace.workspace/Tri0.aaa.json", "{\"class\": \"TestTriangle\", \"id\": \"aaa\", \"Name\": \"Tri0\"}\n");
+    write("src/Workspace.workspace/Tri0.aaa.json", "{\"class\": \"GameObject\", \"id\": \"aaa\", \"Name\": \"Tri0\"}\n");
     write("src/Workspace.workspace/Hop.zzz.meta.json", "{\"class\": \"Script\", \"id\": \"zzz\", \"Name\": \"Hop\"}\n");
     write("src/Workspace.workspace/Hop.zzz.luau",
           "local tri = workspace:FindFirstChild(\"Tri0\")\n"
@@ -544,9 +550,9 @@ TEST_CASE("A14 open scope checks watched scripts and the modules they require", 
         analysis.watch(hop.id());
         settle(analysis);
         REQUIRE_FALSE(analysis.diagnostics(hop.id()).empty());
-        engine_core::TestTriangle& triangle = rig.game.create<engine_core::TestTriangle>();
-        rig.game.set_name(triangle.id(), "Tri0");
-        rig.game.set_parent(triangle.id(), workspace_of(rig.game));
+        engine_core::GameObject& part = rig.game.create<engine_core::GameObject>();
+        rig.game.set_name(part.id(), "Tri0");
+        rig.game.set_parent(part.id(), workspace_of(rig.game));
         settle(analysis);
         INFO(dump(analysis.diagnostics(hop.id())));
         REQUIRE(analysis.diagnostics(hop.id()).empty());
@@ -704,7 +710,7 @@ TEST_CASE("A19 a dotted name that reaches a child is not an unknown member", "[A
     engine_core::Script& script = add_script(rig.game, "Dot",
                                               "local d = workspace.Door\n"
                                               "d.Name = \"x\"\n"
-                                              "local c = workspace.Door.Color\n"
+                                              "local c = workspace.Door.Position\n"
                                               "local m = workspace.Nope\n"
                                               "return c, m\n");
     settle(analysis);
@@ -730,7 +736,7 @@ TEST_CASE("A20 a dotted name is the child it reaches, with its type", "[A20]") {
     engine_core::Folder& configs = rig.game.create<engine_core::Folder>();
     rig.game.set_name(configs.id(), "Configs");
     rig.game.set_parent(configs.id(), workspace_of(rig.game));
-    engine_core::TestTriangle& inner = rig.game.create<engine_core::TestTriangle>();
+    engine_core::GameObject& inner = rig.game.create<engine_core::GameObject>();
     rig.game.set_name(inner.id(), "SomeInstance");
     rig.game.set_parent(inner.id(), configs.id());
     // A child named like a property: the property wins, as at run time.
@@ -758,7 +764,7 @@ TEST_CASE("A20 a dotted name is the child it reaches, with its type", "[A20]") {
         settle(analysis);
         const std::string report = dump(analysis.diagnostics(script.id()));
         INFO(report);
-        REQUIRE(report.find("'TestTriangle'") != std::string::npos);
+        REQUIRE(report.find("'GameObject'") != std::string::npos);
     }
 
     SECTION("a member the child's class lacks is reported") {
@@ -848,7 +854,7 @@ TEST_CASE("A22 Parent takes any DataModel, and game is not an Instance", "[A22]"
     engine_core::Folder& box = rig.game.create<engine_core::Folder>();
     rig.game.set_name(box.id(), "Box");
     rig.game.set_parent(box.id(), workspace_of(rig.game));
-    engine_core::TestTriangle& tri = rig.game.create<engine_core::TestTriangle>();
+    engine_core::GameObject& tri = rig.game.create<engine_core::GameObject>();
     rig.game.set_name(tri.id(), "Tri0");
     rig.game.set_parent(tri.id(), box.id());
     const char* source =
@@ -979,6 +985,35 @@ print(held, face, state, x, moved, scaled, negated, unit, dot, mouse == Vector2.
     REQUIRE(has_code(wrong, "Type"));
     REQUIRE(dump(wrong).find("@0:") != std::string::npos);
     REQUIRE(dump(wrong).find("@1:") != std::string::npos);
+}
+
+TEST_CASE("A32 Matrix4 is declared to analysis, operators and all", "[A32]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Pose", R"(--!strict
+local m: Matrix4 = Matrix4.new(1, 2, 3) * Matrix4.Angles(0, math.pi, 0)
+local p: Vector3 = m * Vector3.new(1, 0, 0)
+local moved: Matrix4 = m + Vector3.one - Vector3.xAxis
+local look: Vector3 = m.LookVector + m.Position
+local rx: number, ry: number, rz: number = m:ToEulerAnglesXYZ()
+local axis: Vector3, angle: number = m:ToAxisAngle()
+local same: boolean = m == Matrix4.identity
+local blended: Matrix4 = m:Lerp(Matrix4.lookAt(Vector3.zero, Vector3.one), 0.5):Inverse()
+local world: Vector3 = m:PointToWorldSpace(p)
+local turned: Matrix4 = Matrix4.fromEulerAngles(1, 2, 3, Enum.RotationOrder.YXZ)
+print(moved, look, rx, ry, rz, axis, angle, same, blended, world, turned, m.X)
+)");
+    settle(analysis);
+    const std::vector<engine_core::Diagnostic> diagnostics = analysis.diagnostics(script.id());
+    INFO(dump(diagnostics));
+    REQUIRE(diagnostics.empty());
+
+    script.set_source("--!strict\nlocal v: Matrix4 = Matrix4.new() * Vector3.one\nlocal n = Matrix4.new().Nope\n");
+    settle(analysis);
+    const std::vector<engine_core::Diagnostic> wrong = analysis.diagnostics(script.id());
+    INFO(dump(wrong));
+    REQUIRE(dump(wrong).find("@1:") != std::string::npos);
+    REQUIRE(dump(wrong).find("@2:") != std::string::npos);
 }
 
 TEST_CASE("A25 a table type is linted without a crash, and a duplicate key still warns", "[A25]") {

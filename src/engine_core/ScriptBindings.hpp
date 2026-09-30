@@ -24,6 +24,9 @@
 #include <new>
 
 namespace engine_core {
+
+class Mesh;
+
 namespace script_internal {
 
 
@@ -78,10 +81,6 @@ inline const char* field_name(Field field) {
     switch (field) {
     case Field::Transform:
         return "Transform";
-    case Field::Color:
-        return "Color";
-    case Field::Size:
-        return "Size";
     case Field::LinearVelocity:
         return "LinearVelocity";
     case Field::Simulated:
@@ -96,8 +95,6 @@ inline const char* field_name(Field field) {
         return "Source";
     case Field::Enabled:
         return "Enabled";
-    case Field::Position:
-        return "Position";
     case Field::Reflected:
     case Field::Count:
         break;
@@ -199,28 +196,28 @@ using namespace script_internal;
 // The last copy of a handler lets its reference go. A VM that has closed took
 // every reference with it, so then there is nothing to release.
 struct ScriptRuntime::HeldRef {
-    HeldRef(ScriptRuntime& runtime, int ref) : runtime(&runtime), vm(runtime.vm_token_), ref(ref) {}
+    HeldRef(Vm& owner, int held) : vm(&owner), token(owner.token), ref(held) {}
     HeldRef(const HeldRef&) = delete;
     HeldRef& operator=(const HeldRef&) = delete;
     ~HeldRef() {
-        if (!vm.expired() && runtime->state_ != nullptr) {
-            lua_unref(runtime->state_, ref);
+        if (!token.expired() && vm->state != nullptr) {
+            lua_unref(vm->state, ref);
         }
     }
 
-    ScriptRuntime* runtime;
-    std::weak_ptr<void> vm;
+    Vm* vm;
+    std::weak_ptr<void> token;
     int ref;
 };
 
 template <typename Fn>
-void ScriptRuntime::guarded(Fn&& fn) {
+void ScriptRuntime::guarded(Vm& vm, Fn&& fn) {
     try {
         fn();
     } catch (const ContractViolation&) {
         throw;
     } catch (const std::exception& error) {
-        halt(error.what());
+        halt(vm, error.what());
     }
 }
 
@@ -260,6 +257,15 @@ struct ScriptBindings {
     static int service_index(lua_State* state);
     static int selection_get(lua_State* state);
     static int selection_set(lua_State* state);
+    // A Mesh's shape methods. Each adds to the Mesh's AMESH file; see Mesh::edit_geometry.
+    static Mesh& mesh_self(lua_State* state);
+    static int mesh_add_box(lua_State* state);
+    static int mesh_add_sphere(lua_State* state);
+    static int mesh_add_cylinder(lua_State* state);
+    static int mesh_add_cone(lua_State* state);
+    static int mesh_add_plane(lua_State* state);
+    static int mesh_add_teapot(lua_State* state);
+    static int mesh_clear(lua_State* state);
     // The keys and buttons are the service's, read on the simulation thread.
     static UserInputService* input_service(lua_State* state);
     static int input_is_key_down(lua_State* state);

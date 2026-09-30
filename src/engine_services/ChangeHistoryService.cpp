@@ -24,12 +24,7 @@ std::string default_gesture(const Mutation& mutation) {
     }
     switch (mutation.after.prop) {
     case HistoryProp::Transform:
-    case HistoryProp::Position:
         return "Move";
-    case HistoryProp::Color:
-        return "Set Color";
-    case HistoryProp::Size:
-        return "Resize";
     case HistoryProp::Name:
         return "Rename";
     case HistoryProp::Source:
@@ -68,11 +63,7 @@ bool same_value(const PropertyValue& a, const PropertyValue& b) {
     }
     switch (a.prop) {
     case HistoryProp::Transform:
-        return same_transform(a.transform, b.transform);
-    case HistoryProp::Color:
-        return same_color(a.color, b.color);
-    case HistoryProp::Size:
-        return a.size[0] == b.size[0] && a.size[1] == b.size[1] && a.size[2] == b.size[2];
+        return same_matrix4(a.transform, b.transform);
     case HistoryProp::Simulated:
     case HistoryProp::VisualOnly:
     case HistoryProp::Enabled:
@@ -80,8 +71,6 @@ bool same_value(const PropertyValue& a, const PropertyValue& b) {
     case HistoryProp::Name:
     case HistoryProp::Source:
         return a.text == b.text;
-    case HistoryProp::Position:
-        return a.vector.x == b.vector.x && a.vector.y == b.vector.y && a.vector.z == b.vector.z;
     case HistoryProp::Reflected:
         return same_slot(a.slot, b.slot);
     }

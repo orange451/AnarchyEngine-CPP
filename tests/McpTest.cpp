@@ -274,26 +274,37 @@ void TestEngineTools() {
     Expect(Call(server, "get_tree", R"({"depth":1e300})").find("tree") != nullptr, "a huge depth is the deepest allowed");
 
     // A Color3 reads as [r, g, b] and takes that or a hex code.
-    Call(server, "create_instance", R"({"class":"GameObject","name":"Box"})");
-    Call(server, "set_property", R"({"instance":"Workspace.Box","property":"Color","value":[1,0.5,0]})");
+    Call(server, "set_property", R"({"instance":"Lighting","property":"Ambient","value":[1,0.5,0]})");
     auto color_of = [&server]() {
-        const JsonValue box = Call(server, "get_properties", R"({"instance":"Workspace.Box"})");
-        const JsonValue* entry = box.find("properties") != nullptr ? Member(box, "properties").find("Color") : nullptr;
+        const JsonValue lighting = Call(server, "get_properties", R"({"instance":"Lighting"})");
+        const JsonValue* entry =
+            lighting.find("properties") != nullptr ? Member(lighting, "properties").find("Ambient") : nullptr;
         return entry != nullptr ? *entry : JsonValue();
     };
     JsonValue color = color_of();
     Expect(color.find("type") != nullptr && Member(color, "type").as_string() == "Color3" &&
                color.find("readonly") == nullptr,
-           "Color is a writable Color3");
+           "Ambient is a writable Color3");
     Expect(color.find("value") != nullptr && Member(color, "value").items().size() == 3 &&
                Item(Member(color, "value"), 1).as_number() == 0.5,
            "set_property writes [r, g, b] and get_properties reads it back");
-    Call(server, "set_property", R"({"instance":"Workspace.Box","property":"Color","value":"#0000FF"})");
+    Call(server, "set_property", R"({"instance":"Lighting","property":"Ambient","value":"#0000FF"})");
     color = color_of();
     Expect(Item(Member(color, "value"), 0).as_number() == 0 && Item(Member(color, "value"), 2).as_number() == 1,
            "a hex code sets a Color3");
-    Expect(!ErrorText(server, "set_property", R"({"instance":"Workspace.Box","property":"Color","value":"blue"})").empty(),
+    Expect(!ErrorText(server, "set_property", R"({"instance":"Lighting","property":"Ambient","value":"blue"})").empty(),
            "a Color3 refuses what is not a color");
+
+    // A GameObject's Position is a Vector3, [x, y, z].
+    Call(server, "create_instance", R"({"class":"GameObject","name":"Box"})");
+    Call(server, "set_property", R"({"instance":"Workspace.Box","property":"Position","value":[1,2,3]})");
+    const JsonValue box = Call(server, "get_properties", R"({"instance":"Workspace.Box"})");
+    const JsonValue* position =
+        box.find("properties") != nullptr ? Member(box, "properties").find("Position") : nullptr;
+    Expect(position != nullptr && position->find("type") != nullptr &&
+               Member(*position, "type").as_string() == "Vector3" && position->find("value") != nullptr &&
+               Item(Member(*position, "value"), 2).as_number() == 3,
+           "set_property writes a GameObject's Position and get_properties reads it back");
 
     const JsonValue run = Call(server, "run_lua", R"j({"source":"print('from mcp', 1 + 2)"})j");
     const JsonValue* lines = run.find("output");

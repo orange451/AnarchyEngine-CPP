@@ -7,6 +7,7 @@
 #include "ide/IdePane.hpp"
 #include "ide/IdeSearch.hpp"
 #include "ide/IdeTerminal.hpp"
+#include "runner/GameView.hpp"
 
 #include "Engine.hpp"
 #include "GameObject.hpp"
@@ -626,6 +627,85 @@ int main() {
                 game.destroy_tree(stone);
             });
             frame();
+        }
+
+        // The Scene View follows a Camera in Workspace, which its list at the top right offers.
+        {
+            auto* view = dynamic_cast<runner::GameView*>(showing("Scene View"));
+            expect(view != nullptr, "the Scene View shows");
+            if (view != nullptr) {
+                engine_core::DataModel& world = layout.simulation().datamodel();
+                jadefx::ComboBox& list = view->cameraList();
+                expect(list.getItems().size() == 0 && list.getSelectionIndex() == -1,
+                       "with no Camera the list is empty and shows its prompt");
+                expect(list.getAbsoluteX() + list.getWidth() > view->getAbsoluteX() + view->getWidth() - 20 &&
+                           list.getAbsoluteY() < view->getAbsoluteY() + 20,
+                       "the list is in the view's top right corner");
+                auto add_camera = [&](const char* name, engine_core::InstanceId parent) {
+                    engine_core::InstanceId id = 0;
+                    layout.simulation().on_simulation([&](engine_core::DataModel& game) {
+                        engine_core::DataModel* camera = engine_core::lua_create_instance(game, "Camera");
+                        game.set_name(camera->id(), name);
+                        game.set_parent(camera->id(), parent);
+                        id = camera->id();
+                    });
+                    return id;
+                };
+                const engine_core::InstanceId workspace = world.scene_service("Workspace");
+                const engine_core::InstanceId main = add_camera("Main", workspace);
+                const std::string main_guid = world.guid(main);
+                frame();
+                expect(view->cameraGuid() == main_guid, "a view with no Camera takes the first one in Workspace");
+                expect(list.getItems().size() == 1 && list.getItems()[0] == "Main" && list.getSelectionIndex() == 0,
+                       "the list offers it, chosen");
+
+                engine_core::InstanceId folder = 0;
+                layout.simulation().on_simulation([&](engine_core::DataModel& game) {
+                    engine_core::DataModel* made = engine_core::lua_create_instance(game, "Folder");
+                    game.set_parent(made->id(), workspace);
+                    folder = made->id();
+                });
+                const engine_core::InstanceId overhead = add_camera("Overhead", folder);
+                const engine_core::InstanceId stored = add_camera("Stored", world.scene_service("Storage"));
+                frame();
+                expect(list.getItems().size() == 2 && list.getItems()[1] == "Overhead",
+                       "Cameras deeper in Workspace are offered too, in tree order, and none from elsewhere");
+                expect(view->cameraGuid() == main_guid && list.getSelectionIndex() == 0,
+                       "another Camera does not take the link");
+                view->linkCamera(world.guid(overhead));
+                frame();
+                expect(list.getSelectionIndex() == 1, "linking another Camera chooses it in the list");
+
+                layout.simulation().on_simulation([&](engine_core::DataModel& game) { game.set_parent(overhead, engine_core::DataModel::kNoParent); });
+                frame();
+                expect(view->cameraGuid() == world.guid(overhead) && list.getItems().size() == 1 &&
+                           list.getSelectionIndex() == -1,
+                       "a Camera that leaves Workspace stays linked, and the list shows its prompt");
+                layout.simulation().on_simulation([&](engine_core::DataModel& game) { game.set_parent(overhead, folder); });
+                frame();
+                expect(list.getSelectionIndex() == 1, "back in Workspace, the view follows it again");
+
+                layout.simulation().on_simulation([&](engine_core::DataModel& game) {
+                    game.destroy_tree(folder);
+                    game.destroy_tree(stored);
+                });
+                frame();
+                expect(view->cameraGuid() != main_guid && list.getItems().size() == 1 && list.getSelectionIndex() == -1,
+                       "a destroyed Camera stays linked, and no other takes its place");
+
+                layout.simulation().on_simulation([&](engine_core::DataModel& game) { engine_core::Project::reset_place(game); });
+                frame();
+                std::vector<engine_core::InstanceId> fresh = world.get_children(workspace);
+                expect(fresh.size() == 1 && view->cameraGuid() == world.guid(fresh[0]) &&
+                           list.getSelectionIndex() == 0 && list.getItems()[0] == "Camera",
+                       "a new place links the view to its Camera");
+                layout.simulation().on_simulation([&](engine_core::DataModel& game) {
+                    for (engine_core::InstanceId id : game.get_children(workspace)) {
+                        game.destroy_tree(id);
+                    }
+                });
+                frame();
+            }
         }
 
         // A double-click on a Prefab in Assets docks a Prefab editor with the

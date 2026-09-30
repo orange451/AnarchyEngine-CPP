@@ -17,30 +17,34 @@ public:
 
     const char* class_name() const override { return "GameObject"; }
 
-    void set_transform(const Transform& transform);
-    void set_transform(const Transform& transform, ForceSimWrite);
-    void set_color(ColorRgb color);
-    void set_color(ColorRgb color, ForceSimWrite);
-    void set_size(float x, float y, float z);
+    void set_transform(const Matrix4& transform);
+    void set_transform(const Matrix4& transform, ForceSimWrite);
+    // The Transform's translation. A write keeps the rotation and is a
+    // Transform write: it is checked, recorded, and changes as Transform.
+    void set_position(const Vec3& position);
     void set_linear_velocity(float x, float y, float z);
 
     // A dead id fails closed: transform() is a zero matrix, not a recycled slot.
-    Transform transform() const;
-    ColorRgb color() const;
-    bool copy_size(float out[3]) const;
+    Matrix4 transform() const;
+    Vec3 position() const;
 
     // Nil by default. A write of another live instance whose class inherits
     // Prefab is stored by GUID; any other is refused. Held like Material's
     // references, through DataModel::set_instance_reference.
     LuaSlot prefab() const;
     std::optional<std::string> set_prefab(const LuaSlot& value);
+    // The Prefab's GUID as stored, whether or not an instance holds it now. Empty for none.
+    const std::string& prefab_guid() const { return prefab_ref_.guid(); }
 
-    // Transform, Color, and Size when they differ from a new GameObject.
+    // Transform when it differs from a new GameObject's.
     void save_properties(PropertyBag& out) const override;
     void default_properties(PropertyBag& out) const override;
     bool load_property(const std::string& key, const JsonValue& value, std::string& error) override;
 
 protected:
+    // Tells the render snapshot that fields of this row changed, as a
+    // subclass's own visual property does (Camera's FieldOfView).
+    void note_visual(VisualField fields);
     void on_reuse() override;
     void write_place(std::vector<std::byte>& out) const override;
     void read_place(const std::byte* data, std::size_t size) override;
@@ -48,11 +52,10 @@ protected:
 private:
     friend class DataModel;
 
-    // Sets the four spatial components to a new GameObject's values.
+    // Sets the spatial components to a new GameObject's values.
     void reset_spatial();
-    // The component writes behind DataModel's checked transform and color setters.
-    void store_transform(const Transform& transform);
-    void store_color(ColorRgb color);
+    // The component write behind DataModel's checked transform setter.
+    void store_transform(const Matrix4& transform);
 
     InstanceRef prefab_ref_;
 };

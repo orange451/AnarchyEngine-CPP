@@ -46,7 +46,7 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
     world.physics_query = world.ecs.query_builder<>()
                               .with<ecs::Instance>()
                               .in()
-                              .with<Transform>()
+                              .with<Matrix4>()
                               .inout()
                               .with<ecs::Velocity>()
                               .in()
@@ -58,7 +58,7 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                              .with<ecs::Instance>()
                              .in()
                              .with<ecs::InWorkspace>()
-                             .with<Transform>()
+                             .with<Matrix4>()
                              .inout_none()
                              .cached()
                              .build();
@@ -318,8 +318,6 @@ void DataModel::drain_commands() {
                 continue;
             }
             destroy(command.id);
-        } else if (command.type == Command::Type::Color) {
-            apply_color(command.id, command.color, false);
         } else {
             apply_transform(command.id, command.transform, false);
         }
@@ -504,7 +502,7 @@ DataModel& DataModel::create() { return create<DataModel>(); }
 
 GameObject& DataModel::create_game_object() {
     GameObject& object = create<GameObject>();
-    note(object.id(), VisualField::Transform | VisualField::Color | VisualField::Size, WriteOrigin::Simulation);
+    note(object.id(), VisualField::Transform, WriteOrigin::Simulation);
     return object;
 }
 
@@ -573,7 +571,7 @@ GameObject* DataModel::visual_target(InstanceId id, bool force, const char* dead
     return authorize(*part, force) ? object : nullptr;
 }
 
-void DataModel::apply_transform(InstanceId id, const Transform& transform, bool force) {
+void DataModel::apply_transform(InstanceId id, const Matrix4& transform, bool force) {
     if (queues_visual_write()) {
         Command command;
         command.type = Command::Type::Transform;
@@ -587,8 +585,8 @@ void DataModel::apply_transform(InstanceId id, const Transform& transform, bool 
     if (target == nullptr) {
         return;
     }
-    const Transform previous = target->transform();
-    if (same_transform(previous, transform)) {
+    const Matrix4 previous = target->transform();
+    if (same_matrix4(previous, transform)) {
         return;
     }
     target->store_transform(transform);
@@ -598,30 +596,6 @@ void DataModel::apply_transform(InstanceId id, const Transform& transform, bool 
     emit_change(id, Field::Transform, origin);
 }
 
-void DataModel::apply_color(InstanceId id, ColorRgb color, bool force) {
-    if (queues_visual_write()) {
-        Command command;
-        command.type = Command::Type::Color;
-        command.id = id;
-        command.color = color;
-        enqueue(command);
-        return;
-    }
-    GameObject* target = visual_target(id, force, "color write on a dead instance",
-                                       "color write on an instance that is not a GameObject");
-    if (target == nullptr) {
-        return;
-    }
-    const ColorRgb previous = target->color();
-    if (same_color(previous, color)) {
-        return;
-    }
-    target->store_color(color);
-    record_color(id, previous, color);
-    const WriteOrigin origin = current_origin();
-    note(id, VisualField::Color, origin);
-    emit_change(id, Field::Color, origin);
-}
 
 void DataModel::set_simulated(InstanceId id, bool simulated) {
     if (!gameplay_thread()) {
@@ -766,7 +740,7 @@ void DataModel::integrate_simulated(double dt) {
     ecs_iter_t it = ecs_query_iter(ecs_world(), state_->physics_query.c_ptr());
     while (ecs_query_next(&it)) {
         const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
-        auto* transforms = static_cast<Transform*>(ecs_field_w_size(&it, sizeof(Transform), 1));
+        auto* transforms = static_cast<Matrix4*>(ecs_field_w_size(&it, sizeof(Matrix4), 1));
         const auto* velocities = static_cast<const ecs::Velocity*>(ecs_field_w_size(&it, sizeof(ecs::Velocity), 2));
         for (std::int32_t i = 0; i < it.count; ++i) {
             const ecs::Velocity& velocity = velocities[i];
@@ -1554,6 +1528,16 @@ const SelectionService& DataModel::selection() const { return state_->selection;
 UserInputService& DataModel::input() { return state_->input; }
 
 const UserInputService& DataModel::input() const { return state_->input; }
+
+std::filesystem::path DataModel::resources_root() const {
+    std::lock_guard<std::mutex> guard(state_->resources_mu);
+    return state_->resources_root;
+}
+
+void DataModel::set_resources_root(std::filesystem::path root) {
+    std::lock_guard<std::mutex> guard(state_->resources_mu);
+    state_->resources_root = std::move(root);
+}
 
 std::string DataModel::guid(InstanceId id) const {
     const DataModel* object = id == 0 ? state_->root : instance(id);

@@ -12,7 +12,6 @@
 #include "LuaApi.hpp"
 #include "ModuleScript.hpp"
 #include "Script.hpp"
-#include "TestTriangle.hpp"
 #include "jadefx/jadefx.hpp"
 
 #include <algorithm>
@@ -98,6 +97,126 @@ void RegisterProbe() {
     engine_core::register_lua_class("Probe", "DataModel", fields, 2);
 }
 
+engine_core::LuaSlot ColorSlot(engine_core::ColorRgb color) {
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Color;
+    slot.color = color;
+    return slot;
+}
+
+// A class with one Color3, Tint, whose writes are recorded for undo as a
+// registry property's are.
+class Swatch : public DataModel {
+public:
+    Swatch(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
+    const char* class_name() const override { return "Swatch"; }
+
+    engine_core::ColorRgb tint() const { return tint_; }
+
+    void set_tint(engine_core::ColorRgb color) {
+        // A Color3 has no alpha.
+        color.a = 1.f;
+        if (color.r == tint_.r && color.g == tint_.g && color.b == tint_.b) {
+            return;
+        }
+        const engine_core::ColorRgb previous = tint_;
+        tint_ = color;
+        note_property_change("Tint", ColorSlot(previous), ColorSlot(color));
+    }
+
+private:
+    engine_core::ColorRgb tint_{1.f, 1.f, 1.f, 1.f};
+};
+
+bool ReadTint(DataModel&, DataModel& object, engine_core::LuaSlot& out) {
+    auto* swatch = dynamic_cast<Swatch*>(&object);
+    if (swatch == nullptr) {
+        return false;
+    }
+    out = ColorSlot(swatch->tint());
+    return true;
+}
+
+bool WriteTint(DataModel&, DataModel& object, engine_core::LuaSlot& in) {
+    auto* swatch = dynamic_cast<Swatch*>(&object);
+    if (swatch == nullptr) {
+        return false;
+    }
+    swatch->set_tint(in.color);
+    return true;
+}
+
+void RegisterSwatch() {
+    static bool done = false;
+    if (done) {
+        return;
+    }
+    done = true;
+    const engine_core::LuaField fields[] = {
+        engine_core::lua_property("Tint", "Color3", true, ReadTint, WriteTint),
+    };
+    engine_core::register_lua_class("Swatch", "DataModel", fields, 1);
+}
+
+engine_core::LuaSlot Vector3Slot(engine_core::Vec3 value) {
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Vec3;
+    slot.vec = value;
+    return slot;
+}
+
+// A class with one Vector3, Position, and no other property, whose writes are
+// recorded for undo as a registry property's are.
+class Marker : public DataModel {
+public:
+    Marker(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
+    const char* class_name() const override { return "Marker"; }
+
+    engine_core::Vec3 position() const { return position_; }
+
+    void set_position(float x, float y, float z) {
+        if (x == position_.x && y == position_.y && z == position_.z) {
+            return;
+        }
+        const engine_core::Vec3 previous = position_;
+        position_ = engine_core::Vec3{x, y, z};
+        note_property_change("Position", Vector3Slot(previous), Vector3Slot(position_));
+    }
+
+private:
+    engine_core::Vec3 position_{};
+};
+
+bool ReadMarkerPosition(DataModel&, DataModel& object, engine_core::LuaSlot& out) {
+    auto* marker = dynamic_cast<Marker*>(&object);
+    if (marker == nullptr) {
+        return false;
+    }
+    out = Vector3Slot(marker->position());
+    return true;
+}
+
+bool WriteMarkerPosition(DataModel&, DataModel& object, engine_core::LuaSlot& in) {
+    auto* marker = dynamic_cast<Marker*>(&object);
+    if (marker == nullptr) {
+        return false;
+    }
+    marker->set_position(in.vec.x, in.vec.y, in.vec.z);
+    return true;
+}
+
+void RegisterMarker() {
+    static bool done = false;
+    if (done) {
+        return;
+    }
+    done = true;
+    const engine_core::LuaField fields[] = {
+        engine_core::lua_property("Position", "Vector3", true, ReadMarkerPosition, WriteMarkerPosition),
+    };
+    engine_core::register_lua_class("Marker", "Instance", fields, 1);
+}
+
 constexpr double kWidth = 900;
 constexpr double kHeight = 600;
 
@@ -109,8 +228,8 @@ struct Rig {
     InstanceId b = 0;
     InstanceId script = 0;
     InstanceId folder = 0;
-    InstanceId tri1 = 0;
-    InstanceId tri2 = 0;
+    InstanceId marker1 = 0;
+    InstanceId marker2 = 0;
     std::shared_ptr<ide::IdeExplorer> explorer;
     ide::PropertiesPanel panel;
     std::shared_ptr<jadefx::Scene> scene;
@@ -121,8 +240,9 @@ struct Rig {
         b = add<engine_core::GameObject>("B");
         script = add<engine_core::Script>("Main");
         folder = add<engine_core::Folder>("Stuff");
-        tri1 = add<engine_core::TestTriangle>("T1");
-        tri2 = add<engine_core::TestTriangle>("T2");
+        RegisterMarker();
+        marker1 = add<Marker>("M1");
+        marker2 = add<Marker>("M2");
         ide::ExplorerHost host;
         host.enabled = [](engine_core::InstanceAction) { return true; };
         host.rename = [this](InstanceId id, std::string name) { game.set_name(id, name); };
@@ -240,8 +360,8 @@ struct Rig {
     }
 
     engine_core::Vec3 position(InstanceId id) {
-        auto* tri = dynamic_cast<engine_core::TestTriangle*>(game.instance(id));
-        return tri != nullptr ? tri->position() : engine_core::Vec3{};
+        auto* marker = dynamic_cast<Marker*>(game.instance(id));
+        return marker != nullptr ? marker->position() : engine_core::Vec3{};
     }
 
     bool hasRow(const std::string& name) const { return panel.sheet().find(name) != nullptr; }
@@ -271,7 +391,7 @@ void TestR1SingleSelectionEditsName() {
     Expect(rig.text("ClassName") == "GameObject", "R1 ClassName is shown");
     auto* cls = rig.field("ClassName");
     Expect(cls != nullptr && !cls->isEditable(), "R1 ClassName is read-only");
-    Expect(rig.hasRow("Color"), "R1 a GameObject shows Color");
+    Expect(rig.hasRow("Position"), "R1 a GameObject shows Position");
     Expect(!rig.hasRow("Source") && !rig.hasRow("Changed") && !rig.hasRow("Transform"),
            "R1 Source, signals, and unknown types have no row");
 
@@ -339,14 +459,15 @@ void TestR3IntersectionOnly() {
     rig.select({rig.a, rig.script});
     Expect(rig.hasRow("Name"), "R3 Name is shared");
     Expect(rig.hasRow("Parent"), "R3 Parent is shared");
-    Expect(!rig.hasRow("Color"), "R3 Color is not on a Script");
+    Expect(!rig.hasRow("Position"), "R3 Position is not on a Script");
     Expect(!rig.hasRow("Enabled"), "R3 Enabled is not on a GameObject");
-    Expect(rig.panel.editor("Color") == nullptr, "R3 no Color widget");
+    Expect(rig.panel.editor("Position") == nullptr, "R3 no Position widget");
     // ClassName differs, so it is mixed and blank.
     Expect(rig.mixed("ClassName") && rig.text("ClassName").empty(), "R3 differing classes are mixed");
 
-    rig.select({rig.tri1, rig.a});
-    Expect(!rig.hasRow("Position") && !rig.hasRow("Color"), "R3 fields of one class only do not show");
+    // Two classes that each have a Position of the same type share its row.
+    rig.select({rig.marker1, rig.a});
+    Expect(rig.hasRow("Position"), "R3 a field both classes have, with one type, shows");
 }
 
 void TestR4SameValueIsNotMixed() {
@@ -360,20 +481,20 @@ void TestR4SameValueIsNotMixed() {
 
 void TestR5Vector3PerAxis() {
     Rig rig;
-    auto* t1 = dynamic_cast<engine_core::TestTriangle*>(rig.game.instance(rig.tri1));
-    auto* t2 = dynamic_cast<engine_core::TestTriangle*>(rig.game.instance(rig.tri2));
+    auto* t1 = dynamic_cast<Marker*>(rig.game.instance(rig.marker1));
+    auto* t2 = dynamic_cast<Marker*>(rig.game.instance(rig.marker2));
     t1->set_position(1, 2, 3);
     t2->set_position(1, 9, 3);
     rig.game.history().reset_waypoints();
-    rig.select({rig.tri1, rig.tri2});
+    rig.select({rig.marker1, rig.marker2});
     Expect(rig.text("Position", 0) == "1", "R5 X agrees");
     Expect(rig.text("Position", 1).empty(), "R5 Y is mixed and blank");
     Expect(rig.text("Position", 2) == "3", "R5 Z agrees");
 
     rig.typeInto("Position", "5", 1);
     rig.enter();
-    const engine_core::Vec3 p1 = rig.position(rig.tri1);
-    const engine_core::Vec3 p2 = rig.position(rig.tri2);
+    const engine_core::Vec3 p1 = rig.position(rig.marker1);
+    const engine_core::Vec3 p2 = rig.position(rig.marker2);
     Expect(p1.x == 1 && p1.y == 5 && p1.z == 3, "R5 the first is (1,5,3)");
     Expect(p2.x == 1 && p2.y == 5 && p2.z == 3, "R5 the second is (1,5,3)");
     Expect(rig.text("Position", 1) == "5", "R5 Y now shows 5");
@@ -385,13 +506,13 @@ void TestR5Vector3PerAxis() {
     Expect(rig.text("Position", 0).empty(), "R5 X is now mixed");
     rig.typeInto("Position", "8", 2);
     rig.enter();
-    Expect(rig.position(rig.tri1).x == 7 && rig.position(rig.tri2).x == 1, "R5 a Z edit keeps each X");
-    Expect(rig.position(rig.tri1).z == 8 && rig.position(rig.tri2).z == 8, "R5 Z is written to both");
+    Expect(rig.position(rig.marker1).x == 7 && rig.position(rig.marker2).x == 1, "R5 a Z edit keeps each X");
+    Expect(rig.position(rig.marker1).z == 8 && rig.position(rig.marker2).z == 8, "R5 Z is written to both");
 
     // Not a number: nothing is written and the field goes back.
     rig.typeInto("Position", "abc", 2);
     rig.enter();
-    Expect(rig.position(rig.tri1).z == 8, "R5 a bad number does not write");
+    Expect(rig.position(rig.marker1).z == 8, "R5 a bad number does not write");
     Expect(rig.text("Position", 2) == "8", "R5 a bad number shows the value again");
     Expect(!rig.panel.status().empty(), "R5 a bad number says why");
 }
@@ -445,10 +566,10 @@ void TestFocusSelectsWhole() {
 
 void TestTabWalksFields() {
     Rig rig;
-    auto* tri = dynamic_cast<engine_core::TestTriangle*>(rig.game.instance(rig.tri1));
-    tri->set_position(1, 2, 3);
+    auto* marker = dynamic_cast<Marker*>(rig.game.instance(rig.marker1));
+    marker->set_position(1, 2, 3);
     rig.game.history().reset_waypoints();
-    rig.select({rig.tri1});
+    rig.select({rig.marker1});
     jadefx::TextField* name = rig.field("Name");
     jadefx::TextField* axes[3] = {rig.field("Position", 0), rig.field("Position", 1), rig.field("Position", 2)};
     auto tab = [&rig](bool back) {
@@ -462,7 +583,7 @@ void TestTabWalksFields() {
     rig.scene->noteText("5");
     tab(false);
     Expect(axes[1]->isFocused() && SelectedWhole(axes[1]), "Tab goes from X to Y and selects it");
-    Expect(rig.position(rig.tri1).x == 5 && rig.text("Position", 0) == "5", "Tab writes the X typed");
+    Expect(rig.position(rig.marker1).x == 5 && rig.text("Position", 0) == "5", "Tab writes the X typed");
     Expect(rig.undoDepth() == 1, "as one waypoint");
     tab(false);
     Expect(axes[2]->isFocused() && SelectedWhole(axes[2]), "Tab goes from Y to Z");
@@ -475,17 +596,17 @@ void TestTabWalksFields() {
     Expect(axes[2]->isFocused(), "Shift+Tab from the first field wraps to the last");
 
     // A value that changes under a field selected whole stays selected whole.
-    tri->set_position(5, 2, 7.5f);
+    marker->set_position(5, 2, 7.5f);
     rig.frame();
     Expect(axes[2]->getText() == "7.5" && SelectedWhole(axes[2]), "a new value in a selected field is selected");
     rig.clickAway();
-    const engine_core::Vec3 kept = rig.position(rig.tri1);
+    const engine_core::Vec3 kept = rig.position(rig.marker1);
     Expect(kept.x == 5 && kept.y == 2 && kept.z == 7.5f, "moving through fields writes nothing");
 }
 
 void TestPositionAxisColors() {
     Rig rig;
-    rig.select({rig.tri1});
+    rig.select({rig.marker1});
     const char* colors[3] = {"--ide-properties-x-color", "--ide-properties-y-color", "--ide-properties-z-color"};
     for (int axis = 0; axis < 3; ++axis) {
         jadefx::TextField* box = rig.field("Position", axis);
@@ -515,24 +636,27 @@ void Pick(jadefx::ColorPicker& picker, int r, int g, int b) {
     }
 }
 
-// Color is a color picker. Closing the chooser on a new color writes it to every selected instance.
+// A Color3 is a color picker. Closing the chooser on a new color writes it to every selected instance.
 void TestColorPicker() {
+    RegisterSwatch();
     Rig rig;
-    auto* a = dynamic_cast<engine_core::GameObject*>(rig.game.instance(rig.a));
-    auto* b = dynamic_cast<engine_core::GameObject*>(rig.game.instance(rig.b));
-    a->set_color(engine_core::ColorRgb{1.f, 0.f, 0.f, 1.f});
-    b->set_color(engine_core::ColorRgb{1.f, 0.f, 0.f, 1.f});
+    const InstanceId first = rig.add<Swatch>("S1");
+    const InstanceId second = rig.add<Swatch>("S2");
+    auto* a = dynamic_cast<Swatch*>(rig.game.instance(first));
+    auto* b = dynamic_cast<Swatch*>(rig.game.instance(second));
+    a->set_tint(engine_core::ColorRgb{1.f, 0.f, 0.f, 1.f});
+    b->set_tint(engine_core::ColorRgb{1.f, 0.f, 0.f, 1.f});
     rig.game.history().reset_waypoints();
-    rig.select({rig.a});
-    auto* picker = dynamic_cast<jadefx::ColorPicker*>(rig.panel.editor("Color"));
-    Expect(picker != nullptr && picker->isVisible(), "Color is a color picker");
+    rig.select({first});
+    auto* picker = dynamic_cast<jadefx::ColorPicker*>(rig.panel.editor("Tint"));
+    Expect(picker != nullptr && picker->isVisible(), "Tint is a color picker");
     if (picker == nullptr) {
         return;
     }
     Expect(!picker->isDisabled() && picker->getValue().toHex() == "#ff0000", "the picker shows the color");
     Expect(!picker->getColorChooser().isShowAlpha(), "a Color3 has no alpha to pick");
 
-    a->set_color(engine_core::ColorRgb{0.f, 0.f, 1.f, 1.f});
+    a->set_tint(engine_core::ColorRgb{0.f, 0.f, 1.f, 1.f});
     rig.game.history().reset_waypoints();
     rig.frame();
     Expect(picker->getValue().toHex() == "#0000ff", "a color set elsewhere shows at once");
@@ -544,7 +668,7 @@ void TestColorPicker() {
     Pick(*picker, 0, 255, 0);
     rig.key(jadefx::Key::Escape);
     rig.frame();
-    Expect(!picker->isShowing() && SameColor(a->color(), 0.f, 0.f, 1.f), "Escape writes nothing");
+    Expect(!picker->isShowing() && SameColor(a->tint(), 0.f, 0.f, 1.f), "Escape writes nothing");
     Expect(picker->getValue().toHex() == "#0000ff", "and shows the color again");
 
     // Enter keeps the new color, as one undo step.
@@ -554,28 +678,28 @@ void TestColorPicker() {
     Pick(*picker, 0, 255, 0);
     rig.frame();
     Expect(picker->getValue().toHex() == "#00ff00", "the picker follows the chooser");
-    Expect(SameColor(a->color(), 0.f, 0.f, 1.f), "the color is not written while the chooser is open");
+    Expect(SameColor(a->tint(), 0.f, 0.f, 1.f), "the color is not written while the chooser is open");
     rig.key(jadefx::Key::Enter);
     rig.frame();
-    Expect(SameColor(a->color(), 0.f, 1.f, 0.f), "closing on a new color writes it");
+    Expect(SameColor(a->tint(), 0.f, 1.f, 0.f), "closing on a new color writes it");
     Expect(rig.undoDepth() == 1, "one waypoint");
 
     // Two instances that disagree are mixed, and a pick writes both.
-    rig.select({rig.a, rig.b});
-    Expect(rig.mixed("Color"), "different colors are mixed");
+    rig.select({first, second});
+    Expect(rig.mixed("Tint"), "different colors are mixed");
     rig.click(picker);
     rig.frame();
     Pick(*picker, 255, 255, 0);
     rig.key(jadefx::Key::Enter);
     rig.frame();
-    Expect(SameColor(a->color(), 1.f, 1.f, 0.f) && SameColor(b->color(), 1.f, 1.f, 0.f), "a mixed pick writes both");
-    Expect(!rig.mixed("Color") && picker->getValue().toHex() == "#ffff00", "and they agree after");
+    Expect(SameColor(a->tint(), 1.f, 1.f, 0.f) && SameColor(b->tint(), 1.f, 1.f, 0.f), "a mixed pick writes both");
+    Expect(!rig.mixed("Tint") && picker->getValue().toHex() == "#ffff00", "and they agree after");
 
     // A mixed row keeps a color out of sight. Picking that same color still writes it.
-    b->set_color(engine_core::ColorRgb{1.f, 1.f, 1.f, 1.f});
+    b->set_tint(engine_core::ColorRgb{1.f, 1.f, 1.f, 1.f});
     rig.game.history().reset_waypoints();
     rig.frame();
-    Expect(rig.mixed("Color"), "mixed again");
+    Expect(rig.mixed("Tint"), "mixed again");
     const jadefx::Color hidden = picker->getValue();
     rig.click(picker);
     rig.frame();
@@ -585,32 +709,32 @@ void TestColorPicker() {
          static_cast<int>(hidden.b * 255 + 0.5f));
     rig.key(jadefx::Key::Enter);
     rig.frame();
-    Expect(!rig.mixed("Color") && SameColor(b->color(), hidden.r, hidden.g, hidden.b),
+    Expect(!rig.mixed("Tint") && SameColor(b->tint(), hidden.r, hidden.g, hidden.b),
            "picking the hidden color of a mixed row writes it");
     Expect(rig.undoDepth() == 1, "as one waypoint");
 
     // Opening and closing with no pick writes nothing, even over a mixed row.
-    b->set_color(engine_core::ColorRgb{1.f, 1.f, 1.f, 1.f});
+    b->set_tint(engine_core::ColorRgb{1.f, 1.f, 1.f, 1.f});
     rig.game.history().reset_waypoints();
     rig.frame();
     rig.click(picker);
     rig.frame();
     rig.clickAway();
-    Expect(!picker->isShowing() && rig.mixed("Color") && rig.undoDepth() == 0, "a look inside writes nothing");
+    Expect(!picker->isShowing() && rig.mixed("Tint") && rig.undoDepth() == 0, "a look inside writes nothing");
 
     // A chooser open when the selection changes closes, and the color lands on what was selected.
     rig.click(picker);
     rig.frame();
     Pick(*picker, 0, 255, 255);
-    rig.select({rig.b});
+    rig.select({second});
     Expect(!picker->isShowing(), "a new selection closes the chooser");
-    Expect(SameColor(a->color(), 0.f, 1.f, 1.f) && SameColor(b->color(), 0.f, 1.f, 1.f),
+    Expect(SameColor(a->tint(), 0.f, 1.f, 1.f) && SameColor(b->tint(), 0.f, 1.f, 1.f),
            "and the color lands on what was selected");
     rig.click(picker);
     rig.frame();
     Pick(*picker, 255, 0, 255);
     rig.select({rig.script});
-    Expect(rig.panel.editor("Color") == nullptr && SameColor(b->color(), 1.f, 0.f, 1.f),
+    Expect(rig.panel.editor("Tint") == nullptr && SameColor(b->tint(), 1.f, 0.f, 1.f),
            "a row that goes away keeps its pick too");
 }
 
@@ -722,11 +846,11 @@ void TestR8NoSelection() {
 void TestR9DestroyedLeavesIntersection() {
     Rig rig;
     rig.select({rig.a, rig.b, rig.script});
-    Expect(!rig.hasRow("Color"), "R9 a Script hides Color");
+    Expect(!rig.hasRow("Position"), "R9 a Script hides Position");
     rig.game.destroy(rig.script);
     rig.frame();
     Expect(rig.panel.sheet().ids.size() == 2, "R9 the destroyed instance leaves");
-    Expect(rig.hasRow("Color"), "R9 the intersection widens again");
+    Expect(rig.hasRow("Position"), "R9 the intersection widens again");
 }
 
 void TestBooleanAndNumber() {

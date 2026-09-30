@@ -119,7 +119,7 @@ bool same_slot(const LuaSlot& a, const LuaSlot& b) {
         return a.vec.x == b.vec.x && a.vec.y == b.vec.y && a.vec.z == b.vec.z;
     case LuaSlot::Kind::Color:
         return same_color(a.color, b.color);
-    case LuaSlot::Kind::Transform:
+    case LuaSlot::Kind::Matrix4:
         return std::memcmp(a.transform.m, b.transform.m, sizeof(a.transform.m)) == 0;
     }
     return false;

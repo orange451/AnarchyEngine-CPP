@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <new>
@@ -99,7 +100,7 @@ struct PropertyValue;
 // The root owns that world, and every other instance shares it. The root is
 // a Game (engine_services), the only class that makes a new world.
 // create<T>() makes any subclass. This class does not list those types.
-// GameObject adds transform, color, size, and velocity. A plain instance
+// GameObject adds a transform, a velocity, and a Prefab. A plain instance
 // does not have those fields. Every instance has a Name. The place snapshot
 // is the authored tree; stop_simulation restores it.
 //
@@ -177,7 +178,7 @@ public:
     void set_thread_ids(std::thread::id simulation, std::thread::id render);
     void set_threads_running(bool running);
 
-    // Plain instance in this world. No transform, color, size, or velocity.
+    // Plain instance in this world. No transform or velocity.
     DataModel& create();
     // Any subclass. The first create of a type allocates that type's pool.
     // Later creates of the same type do not.
@@ -242,6 +243,12 @@ public:
     // posts to it; the play session's scripts read it.
     UserInputService& input();
     const UserInputService& input() const;
+
+    // The open project's resources folder, where Mesh, Texture, and Sound Paths
+    // point and where a Mesh's shapes are written. Project sets it when it opens
+    // or saves a folder, and reset_place clears it. Empty with no project. Any thread.
+    std::filesystem::path resources_root() const;
+    void set_resources_root(std::filesystem::path root);
 
     // Stable authored identity, written to disk and used by references.
     // create assigns one. Empty when id is dead. Id 0 is the root.
@@ -417,12 +424,9 @@ protected:
 
     // Successful mutators record here. Equal values return before these run.
     // Velocity is not recorded. Undo application does not record.
-    void record_transform(InstanceId id, const Transform& before, const Transform& after);
-    void record_color(InstanceId id, ColorRgb before, ColorRgb after);
-    void record_size(InstanceId id, float bx, float by, float bz, float ax, float ay, float az);
+    void record_transform(InstanceId id, const Matrix4& before, const Matrix4& after);
     void record_bool(InstanceId id, Field field, bool before, bool after);
     void record_string(InstanceId id, Field field, const std::string& before, const std::string& after);
-    void record_position(InstanceId id, const Vec3& before, const Vec3& after);
     // A registry property of this instance (lua_saved_property) changed from
     // before to after, as its read gives them. Its setter calls this once the
     // value is stored. Records undo, which puts values back through the
@@ -495,10 +499,9 @@ private:
     };
 
     struct Command {
-        enum class Type { Transform, Color, Destroy } type = Type::Transform;
+        enum class Type { Transform, Destroy } type = Type::Transform;
         InstanceId id = 0;
-        Transform transform = transform_identity();
-        ColorRgb color{};
+        Matrix4 transform = matrix4_identity();
     };
 
     // Root owns the world. Every child instance points at that same State.
@@ -579,13 +582,12 @@ private:
     // Whether this thread holds this world's write lock.
     bool holds_write() const;
     void note(InstanceId id, VisualField fields, WriteOrigin origin);
-    // Whether a Transform or Color write from this thread goes to the command queue.
+    // Whether a Transform write from this thread goes to the command queue.
     bool queues_visual_write() const;
-    // The GameObject a Transform or Color write lands on, or null after the write
+    // The GameObject a Transform write lands on, or null after the write
     // is refused. The messages are literals: a deferred violation keeps the pointer.
     GameObject* visual_target(InstanceId id, bool force, const char* dead, const char* not_object);
-    void apply_transform(InstanceId id, const Transform& transform, bool force);
-    void apply_color(InstanceId id, ColorRgb color, bool force);
+    void apply_transform(InstanceId id, const Matrix4& transform, bool force);
     void enqueue(Command command);
     WriteOrigin current_origin() const;
 

@@ -1,32 +1,45 @@
 #pragma once
 
+#include "Matrix4.hpp"
 #include "ViewCapture.hpp"
+
+namespace anarchy::amesh {
+class GpuMesh;
+}
 
 namespace runner {
 
-// One triangle in the pane. x, y, and z are its position in view space.
-// angleDegrees spins it about the vertical axis through that position.
-struct TriangleDraw {
-    float angleDegrees = 0.f;
-    float x = 0.f;
-    float y = 0.f;
-    float z = 0.f;
+// One uploaded AMESH at a GameObject's Transform (column-major, world space).
+struct MeshDraw {
+    const anarchy::amesh::GpuMesh* mesh = nullptr;
+    engine_core::Matrix4 model = engine_core::matrix4_identity();
 };
 
-// Draws triangles whose corners are red, green, and blue.
-// The rasterizer interpolates those colors across each face.
+// Draws meshes seen from the camera, lit by one light from above.
 class Renderer {
 public:
-    // The GL context has to be current, and LoadGl has to have run.
+    // The camera until setCamera: where it is and what it looks at, in world units, Y up.
+    static constexpr float kCameraEye[3] = {0.f, 3.f, 7.f};
+    static constexpr float kCameraTarget[3] = {0.f, 0.f, 0.f};
+    static constexpr float kCameraFovYDegrees = 60.f;
+
+    // The GL context has to be current, and LoadGl has to have run. False when
+    // mesh.vert or mesh.frag does not build.
     bool initialize();
+
+    // Where meshes are seen from: a Camera's Transform, looking down its -Z
+    // with its +Y up, and the vertical angle it sees in degrees. Any scale in
+    // world is taken out. A world with no inverse, or an angle not between 0
+    // and 180, is ignored and the camera stays as it was. Needs no GL context.
+    void setCamera(const engine_core::Matrix4& world, float fovYDegrees);
 
     // x, y, width, and height are the pane in window points, origin at the top
     // left. sceneWidth and sceneHeight are the window in the same units.
     // The current GL viewport is the framebuffer. Drawing restores the viewport,
     // scissor, blend, and depth test so a UI pass can continue.
-    // triangles may be null when count is 0. The pane is still cleared.
+    // meshes may be null when meshCount is 0. The pane is still cleared.
     void draw(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
-              const TriangleDraw* triangles, int count);
+              const MeshDraw* meshes, int meshCount);
     // Reads back what draw just drew for the same pane, top row first. Only
     // the part inside the framebuffer and the current scissor. False when
     // there is nothing to read.
@@ -38,13 +51,18 @@ public:
     void setClearColor(float r, float g, float b);
 
 private:
-    unsigned program_ = 0;
-    unsigned vao_ = 0;
-    unsigned vbo_ = 0;
-    int angleLocation_ = -1;
-    int positionLocation_ = -1;
+    void drawMeshes(const MeshDraw* meshes, int count, float aspect);
+
+    unsigned meshProgram_ = 0;
+    int modelLocation_ = -1;
+    int viewProjectionLocation_ = -1;
     bool ready_ = false;
     float clear_[3] = {30.f / 255.f, 30.f / 255.f, 30.f / 255.f};
+    // The inverse of the camera's world, column-major.
+    engine_core::Matrix4 view_ = DefaultView();
+    float fovYDegrees_ = kCameraFovYDegrees;
+
+    static engine_core::Matrix4 DefaultView();
 };
 
 }  // namespace runner

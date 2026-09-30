@@ -95,38 +95,6 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     conflict_count_ = count.get();
     ribbon->getChildren().add(std::move(count));
 
-    auto insert = jadefx::make<jadefx::MenuItem>("Insert Triangle");
-    AttachIcon(*insert, "Mesh.png");
-    insert->setOnAction([this](jadefx::ActionEvent&) {
-        std::weak_ptr<int> alive = alive_;
-        runner_.simulation().on_simulation([this, alive](engine_core::DataModel& game) {
-            if (game.room_left() == 0) {
-                jadefx::runLater([this, alive] {
-                    if (!alive.expired()) {
-                        show_toast(engine_core::InstanceCapacityError().what());
-                    }
-                });
-                return;
-            }
-            // Into Workspace, where it renders.
-            const engine_core::InstanceId workspace = game.scene_service("Workspace");
-            int existing = 0;
-            for (engine_core::InstanceId id = game.first_child(workspace); id != 0; id = game.next_sibling(id)) {
-                if (dynamic_cast<engine_core::TestTriangle*>(game.instance(id)) != nullptr) {
-                    ++existing;
-                }
-            }
-            engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
-            game.set_parent(triangle.id(), workspace);
-            // Spread repeats around the view so they do not stack on one point.
-            const float angle = static_cast<float>(existing) * 0.9f;
-            constexpr float kRadius = 0.42f;
-            triangle.set_position(std::cos(angle) * kRadius, std::sin(angle) * kRadius, 0.15f);
-            CloseGesture(game);
-        });
-    });
-    edit->getItems().add(std::move(insert));
-    edit->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     AddItem(*edit, "Find in Scripts", "Search.png", jadefx::Key::F, jadefx::Key::ModControl | jadefx::Key::ModShift)
         ->setOnAction([this](jadefx::ActionEvent&) { open_search(false, scene_); });
     AddItem(*edit, "Replace in Scripts", nullptr, jadefx::Key::H, jadefx::Key::ModControl | jadefx::Key::ModShift)

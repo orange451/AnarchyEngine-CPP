@@ -158,6 +158,8 @@ private:
     void open_insert();
     // Opens the class list under anchor. The chosen class goes under insert_parent_.
     void show_insert(jadefx::Node& anchor);
+    void show_root_insert(double x, double y);
+    InsertPopup& ensure_insert_popup();
     void create_child(const std::string& class_name);
     void finish_insert(engine_core::InstanceId made);
     // Copies the live hierarchy. False when the lock is busy or nothing changed.

@@ -656,7 +656,9 @@ void TestMoveSet() {
     Expect(refused == "Workspace cannot be moved", "and move_set says why too");
 }
 
-engine_core::DataModel& CreateFolder(engine_core::DataModel& world);
+engine_core::DataModel& CreateFolder(engine_core::DataModel& world) {
+    return world.create<engine_core::Folder>();
+}
 
 void TestCopySet() {
     engine_core::register_lua_creatable("Folder", CreateFolder);
@@ -882,9 +884,6 @@ void TestRevealClearsAHidingFilter() {
     Expect(rig.painted("Alpha"), "the revealed row shows selected");
 }
 
-engine_core::DataModel& CreateFolder(engine_core::DataModel& world) {
-    return world.create<engine_core::Folder>();
-}
 
 // An insert the studio could not make, as in a full place, says why.
 void TestRefusedInsertSaysWhy() {
@@ -908,6 +907,38 @@ void TestRefusedInsertSaysWhy() {
     Expect(rig.inserts.size() == 1, "the refused insert was asked for");
     Expect(rig.notices.size() == 1 && rig.notices[0] == "The place is full.", "a refused insert says why");
     Expect(!rig.painted("Made"), "a refused insert shows nothing new");
+}
+
+void TestRightClickInsertsUnderTheRow() {
+    engine_core::register_lua_creatable("Folder", CreateFolder);
+    Rig rig;
+    rig.clickRow("Gamma", 0.1, 1);
+    rig.frame(0.2);
+    rig.key(jadefx::Key::Enter);
+    rig.frame(0.3);
+    Expect(rig.inserts.size() == 1 && rig.inserts.front().second == rig.ids[2],
+           "a right-click insert goes under the row clicked");
+}
+
+void TestRightClickListCloses() {
+    engine_core::register_lua_creatable("Folder", CreateFolder);
+    Rig rig;
+    rig.clickRow("Gamma", 0.1, 1);
+    rig.frame(0.2);
+    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "a right-click opens the list");
+    rig.clickRow("Alpha", 0.5);
+    rig.frame(0.6);
+    Expect(rig.scene->getElementById("menu-label:Rename") == nullptr, "a click on another row closes the list");
+    rig.clickRow("Gamma", 0.7, 1);
+    rig.frame(0.8);
+    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "the list opens again");
+    rig.clickRow("Beta", 0.9, 1);
+    rig.frame(1.0);
+    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "another right-click moves the list");
+    rig.key(jadefx::Key::Enter);
+    rig.frame(1.1);
+    Expect(rig.inserts.size() == 1 && rig.inserts.front().second == rig.ids[1],
+           "the moved list inserts under the row right-clicked last");
 }
 
 void TestHeaderInsertsUnderTheRoot() {
@@ -992,6 +1023,8 @@ int main() {
     TestRevealScrolls();
     TestRevealClearsAHidingFilter();
     TestHeaderInsertsUnderTheRoot();
+    TestRightClickInsertsUnderTheRow();
+    TestRightClickListCloses();
     TestRefusedInsertSaysWhy();
     if (gFailures == 0) {
         std::printf("explorer tests passed\n");

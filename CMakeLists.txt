@@ -492,6 +492,7 @@ add_executable(sandbox
     sandbox/merge_tests.cpp
     sandbox/scene_services_tests.cpp
     sandbox/game_services_tests.cpp
+    sandbox/dense_views_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 target_compile_features(sandbox PRIVATE cxx_std_17)

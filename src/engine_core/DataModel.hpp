@@ -452,8 +452,6 @@ private:
     struct Slot {
         std::uint32_t generation = 1;
         bool alive = false;
-        bool simulated = false;
-        bool visual_only = false;
         std::uint16_t pool = 0;
         std::uint32_t storage = 0;
         DataModel* instance = nullptr;

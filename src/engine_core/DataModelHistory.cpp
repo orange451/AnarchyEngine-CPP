@@ -274,8 +274,8 @@ AuthoredRecord DataModel::capture_record(InstanceId id, bool subtree) const {
     record.extras = object->extras_;
     record.parent = part->parent;
     record.sibling_index = sibling_index_of(id);
-    record.simulated = part->simulated;
-    record.visual_only = part->visual_only;
+    record.simulated = simulated(id);
+    record.visual_only = visual_only(id);
     if (const GameObject* body = dynamic_cast<const GameObject*>(object)) {
         record.spatial = true;
         record.transform = body->transform();

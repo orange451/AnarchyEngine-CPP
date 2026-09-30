@@ -1,11 +1,16 @@
 #include "GameObject.hpp"
 
+#include "Ecs.hpp"
 #include "LuaApi.hpp"
 
 #include <cstring>
 #include <type_traits>
 
 namespace engine_core {
+
+GameObject::GameObject(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {
+    reset_spatial();
+}
 
 void GameObject::set_transform(const Transform& transform) { apply_transform(id_, transform, false); }
 
@@ -24,16 +29,14 @@ void GameObject::set_size(float x, float y, float z) {
     if (part->instance != this) {
         contract_fail("size write on an instance that is not a GameObject");
     }
-    if (size_[0] == x && size_[1] == y && size_[2] == z) {
+    const EcsIds& ids = component_ids();
+    const ecs::Size* current = read_component<ecs::Size>(ecs_world(), part->entity, ids.size);
+    const ecs::Size previous = current != nullptr ? *current : ecs::Size{};
+    if (previous.x == x && previous.y == y && previous.z == z) {
         return;
     }
-    const float previous_x = size_[0];
-    const float previous_y = size_[1];
-    const float previous_z = size_[2];
-    size_[0] = x;
-    size_[1] = y;
-    size_[2] = z;
-    record_size(id_, previous_x, previous_y, previous_z, x, y, z);
+    write_component(ecs_world(), part->entity, ids.size, ecs::Size{x, y, z});
+    record_size(id_, previous.x, previous.y, previous.z, x, y, z);
     const WriteOrigin origin = current_origin();
     note(id_, VisualField::Size, origin);
     emit_change(id_, Field::Size, origin);
@@ -48,37 +51,43 @@ void GameObject::set_linear_velocity(float x, float y, float z) {
     if (part->instance != this) {
         contract_fail("velocity write on an instance that is not a GameObject");
     }
-    if (velocity_[0] == x && velocity_[1] == y && velocity_[2] == z) {
+    const EcsIds& ids = component_ids();
+    const ecs::Velocity* current = read_component<ecs::Velocity>(ecs_world(), part->entity, ids.velocity);
+    if (current != nullptr && current->x == x && current->y == y && current->z == z) {
         return;
     }
-    velocity_[0] = x;
-    velocity_[1] = y;
-    velocity_[2] = z;
+    write_component(ecs_world(), part->entity, ids.velocity, ecs::Velocity{x, y, z});
     emit_change(id_, Field::LinearVelocity, current_origin());
 }
 
+// A dead id has no entity, so each read below fails closed.
 Transform GameObject::transform() const {
-    if (!alive(id_)) {
-        return Transform{};
-    }
-    return transform_;
+    const Transform* value = read_component<Transform>(ecs_world(), entity_of(id_), component_ids().transform);
+    return value != nullptr ? *value : Transform{};
 }
 
 ColorRgb GameObject::color() const {
-    if (!alive(id_)) {
-        return ColorRgb{};
-    }
-    return color_;
+    const ColorRgb* value = read_component<ColorRgb>(ecs_world(), entity_of(id_), component_ids().color);
+    return value != nullptr ? *value : ColorRgb{};
 }
 
 bool GameObject::copy_size(float out[3]) const {
-    if (!alive(id_)) {
+    const ecs::Size* value = read_component<ecs::Size>(ecs_world(), entity_of(id_), component_ids().size);
+    if (value == nullptr) {
         return false;
     }
-    out[0] = size_[0];
-    out[1] = size_[1];
-    out[2] = size_[2];
+    out[0] = value->x;
+    out[1] = value->y;
+    out[2] = value->z;
     return true;
+}
+
+void GameObject::store_transform(const Transform& transform) {
+    write_component(ecs_world(), entity_of(id_), component_ids().transform, transform);
+}
+
+void GameObject::store_color(ColorRgb color) {
+    write_component(ecs_world(), entity_of(id_), component_ids().color, color);
 }
 
 LuaSlot GameObject::prefab() const {
@@ -95,18 +104,23 @@ std::optional<std::string> GameObject::set_prefab(const LuaSlot& value) {
 
 void GameObject::save_properties(PropertyBag& out) const {
     DataModel::save_properties(out);
+    const Transform transform_value = transform();
     const Transform identity = transform_identity();
-    if (std::memcmp(transform_.m, identity.m, sizeof(identity.m)) != 0) {
-        bag_set(out, "Transform", json_floats(transform_.m, 16));
+    if (std::memcmp(transform_value.m, identity.m, sizeof(identity.m)) != 0) {
+        bag_set(out, "Transform", json_floats(transform_value.m, 16));
     }
+    const ColorRgb color_value = color();
     const ColorRgb white{};
-    if (color_.r != white.r || color_.g != white.g || color_.b != white.b || color_.a != white.a) {
+    if (color_value.r != white.r || color_value.g != white.g || color_value.b != white.b ||
+        color_value.a != white.a) {
         // Opaque colors write three channels.
-        const float channels[4] = {color_.r, color_.g, color_.b, color_.a};
-        bag_set(out, "Color", json_floats(channels, color_.a == 1.f ? 3 : 4));
+        const float channels[4] = {color_value.r, color_value.g, color_value.b, color_value.a};
+        bag_set(out, "Color", json_floats(channels, color_value.a == 1.f ? 3 : 4));
     }
-    if (size_[0] != 1.f || size_[1] != 1.f || size_[2] != 1.f) {
-        bag_set(out, "Size", json_floats(size_, 3));
+    float size[3] = {1.f, 1.f, 1.f};
+    copy_size(size);
+    if (size[0] != 1.f || size[1] != 1.f || size[2] != 1.f) {
+        bag_set(out, "Size", json_floats(size, 3));
     }
 }
 
@@ -157,25 +171,22 @@ bool GameObject::load_property(const std::string& key, const JsonValue& value, s
     return DataModel::load_property(key, value, error);
 }
 
-void GameObject::on_release() { clear_spatial(); }
-
 void GameObject::on_reuse() {
     reset_spatial();
     prefab_ref_.set_guid(std::string());
 }
 
 void GameObject::reset_spatial() {
-    transform_ = transform_identity();
-    color_ = ColorRgb{};
-    size_[0] = size_[1] = size_[2] = 1.f;
-    velocity_[0] = velocity_[1] = velocity_[2] = 0.f;
-}
-
-void GameObject::clear_spatial() {
-    transform_ = Transform{};
-    color_ = ColorRgb{};
-    size_[0] = size_[1] = size_[2] = 0.f;
-    velocity_[0] = velocity_[1] = velocity_[2] = 0.f;
+    const std::uint64_t entity = entity_of(id_);
+    if (entity == 0) {
+        return;
+    }
+    ecs_world_t* world = ecs_world();
+    const EcsIds& ids = component_ids();
+    write_component(world, entity, ids.transform, transform_identity());
+    write_component(world, entity, ids.color, ColorRgb{});
+    write_component(world, entity, ids.size, ecs::Size{});
+    write_component(world, entity, ids.velocity, ecs::Velocity{});
 }
 
 namespace {
@@ -191,11 +202,9 @@ struct SpatialPlace {
 void GameObject::write_place(std::vector<std::byte>& out) const {
     static_assert(std::is_trivially_copyable<SpatialPlace>::value, "place blob must be memcpy-safe");
     SpatialPlace pod;
-    pod.transform = transform_;
-    pod.color = color_;
-    pod.size[0] = size_[0];
-    pod.size[1] = size_[1];
-    pod.size[2] = size_[2];
+    pod.transform = transform();
+    pod.color = color();
+    copy_size(pod.size);
     const auto* bytes = reinterpret_cast<const std::byte*>(&pod);
     out.insert(out.end(), bytes, bytes + sizeof(pod));
     // Prefab, the only saved registry property, follows as DataModel's JSON blob.
@@ -203,8 +212,6 @@ void GameObject::write_place(std::vector<std::byte>& out) const {
 }
 
 void GameObject::read_place(const std::byte* data, std::size_t size) {
-    // Velocity is session-only. A place restore always clears it.
-    velocity_[0] = velocity_[1] = velocity_[2] = 0.f;
     if (data == nullptr || size < sizeof(SpatialPlace)) {
         reset_spatial();
         DataModel::read_place(nullptr, 0);
@@ -212,11 +219,14 @@ void GameObject::read_place(const std::byte* data, std::size_t size) {
     }
     SpatialPlace pod;
     std::memcpy(&pod, data, sizeof(pod));
-    transform_ = pod.transform;
-    color_ = pod.color;
-    size_[0] = pod.size[0];
-    size_[1] = pod.size[1];
-    size_[2] = pod.size[2];
+    const std::uint64_t entity = entity_of(id_);
+    ecs_world_t* world = ecs_world();
+    const EcsIds& ids = component_ids();
+    write_component(world, entity, ids.transform, pod.transform);
+    write_component(world, entity, ids.color, pod.color);
+    write_component(world, entity, ids.size, ecs::Size{pod.size[0], pod.size[1], pod.size[2]});
+    // Velocity is session-only. A place restore always clears it.
+    write_component(world, entity, ids.velocity, ecs::Velocity{});
     DataModel::read_place(data + sizeof(SpatialPlace), size - sizeof(SpatialPlace));
 }
 

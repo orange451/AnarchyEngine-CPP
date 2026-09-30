@@ -91,8 +91,8 @@ void DataModel::capture_place_unlocked() {
         record.parent = part.parent;
         record.children = child_ids(record.id);
         record.name = part.instance->name_;
-        record.simulated = part.simulated;
-        record.visual_only = part.visual_only;
+        record.simulated = has_tag(ecs_world(), part.entity, state_->ecs_ids.simulated);
+        record.visual_only = has_tag(ecs_world(), part.entity, state_->ecs_ids.visual_only);
         part.instance->write_place(record.extra);
         record.guid = part.instance->guid_;
         record.extras = part.instance->extras_;
@@ -132,8 +132,6 @@ void DataModel::retire_slot(std::uint32_t index, bool bump_generation) {
         part.instance->extras_.clear();
     }
     release_to_pool(part);
-    part.simulated = false;
-    part.visual_only = false;
     part.parent = kNoParent;
     part.first_child = 0;
     part.last_child = 0;
@@ -153,8 +151,6 @@ void DataModel::adopt_slot(std::uint16_t pool_index, InstanceId id) {
     Slot& part = state_->slots[index];
     part.generation = generation;
     part.alive = true;
-    part.simulated = false;
-    part.visual_only = false;
     part.parent = kNoParent;
     part.first_child = 0;
     part.last_child = 0;
@@ -188,11 +184,12 @@ void DataModel::restore_record(const PlaceRecord& record) {
         adopt_slot(pool_index, record.id);
     }
     Slot& live = state_->slots[index];
-    live.simulated = record.simulated;
-    live.visual_only = record.visual_only;
     if (live.instance == nullptr) {
         contract_fail("place restore lost an instance");
     }
+    // Direct, not through set_simulated: a restore records no history.
+    set_tag(ecs_world(), live.entity, state_->ecs_ids.simulated, record.simulated);
+    set_tag(ecs_world(), live.entity, state_->ecs_ids.visual_only, record.visual_only);
     live.instance->name_ = record.name;
     live.instance->guid_ = record.guid;
     live.instance->extras_ = record.extras;

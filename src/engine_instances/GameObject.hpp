@@ -8,10 +8,12 @@
 
 namespace engine_core {
 
-// Spatial instance. Plain DataModel instances do not have these fields.
+// Spatial instance. Plain DataModel instances do not have these fields. They
+// live in flecs components on the instance's entity (Ecs.hpp), so render and
+// physics queries read them where they are stored.
 class GameObject : public DataModel {
 public:
-    GameObject(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
+    GameObject(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);
 
     const char* class_name() const override { return "GameObject"; }
 
@@ -39,7 +41,6 @@ public:
     bool load_property(const std::string& key, const JsonValue& value, std::string& error) override;
 
 protected:
-    void on_release() override;
     void on_reuse() override;
     void write_place(std::vector<std::byte>& out) const override;
     void read_place(const std::byte* data, std::size_t size) override;
@@ -47,13 +48,12 @@ protected:
 private:
     friend class DataModel;
 
+    // Sets the four spatial components to a new GameObject's values.
     void reset_spatial();
-    void clear_spatial();
+    // The component writes behind DataModel's checked transform and color setters.
+    void store_transform(const Transform& transform);
+    void store_color(ColorRgb color);
 
-    Transform transform_ = transform_identity();
-    ColorRgb color_{};
-    float size_[3] = {1.f, 1.f, 1.f};
-    float velocity_[3] = {};
     InstanceRef prefab_ref_;
 };
 

@@ -68,9 +68,12 @@ const T* read_component(ecs_world_t* world, ecs_entity_t e, ecs_id_t id) {
     return e == 0 ? nullptr : static_cast<const T*>(ecs_get_id(world, e, id));
 }
 
+// Writes nothing when e is 0: a released instance has no entity.
 template <typename T>
 void write_component(ecs_world_t* world, ecs_entity_t e, ecs_id_t id, const T& value) {
-    ecs_set_id(world, e, id, sizeof(T), &value);
+    if (e != 0) {
+        ecs_set_id(world, e, id, sizeof(T), &value);
+    }
 }
 
 inline bool has_tag(ecs_world_t* world, ecs_entity_t e, ecs_id_t tag) {
@@ -78,6 +81,9 @@ inline bool has_tag(ecs_world_t* world, ecs_entity_t e, ecs_id_t tag) {
 }
 
 inline void set_tag(ecs_world_t* world, ecs_entity_t e, ecs_id_t tag, bool on) {
+    if (e == 0) {
+        return;
+    }
     if (on) {
         ecs_add_id(world, e, tag);
     } else {

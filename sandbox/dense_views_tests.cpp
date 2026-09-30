@@ -130,3 +130,46 @@ TEST_CASE("two DataModels keep separate worlds", "[dense][entity]") {
     REQUIRE(size[2] == 7.f);
     REQUIRE(first.entity_count() == base + 2);
 }
+
+TEST_CASE("a destroyed GameObject reads zero", "[dense][entity]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& part = game.create_game_object();
+    part.set_color(rgb(0.5f, 0.5f, 0.5f));
+    part.set_size(2.f, 2.f, 2.f);
+    game.destroy(part.id());
+    float size[3] = {9.f, 9.f, 9.f};
+    REQUIRE_FALSE(part.copy_size(size));
+    REQUIRE(part.transform().m[0] == 0.f);  // the zero matrix, not identity
+    REQUIRE(part.color().r == engine_core::ColorRgb{}.r);
+}
+
+TEST_CASE("undo and Stop keep spatial values and flags", "[dense][entity]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& part = game.create_game_object();
+    const engine_core::InstanceId id = part.id();
+    game.set_parent(id, workspace_of(game));
+    part.set_color(rgb(0.25f, 0.5f, 0.75f));
+    part.set_size(1.f, 2.f, 3.f);
+    game.set_simulated(id, true);
+    game.set_visual_only(id, true);
+    game.history().end_gesture();
+    game.destroy(id);
+    game.history().end_gesture();
+    game.history().undo();
+    REQUIRE(game.alive(id));
+    REQUIRE(game.simulated(id));
+    REQUIRE(game.visual_only(id));
+    REQUIRE(game.game_object(id)->color().g == 0.5f);
+
+    game.capture_place();
+    game.start_simulation();
+    game.set_simulated(id, false);
+    game.game_object(id)->set_size(5.f, 5.f, 5.f);
+    game.stop_simulation();
+    REQUIRE(game.simulated(id));
+    float size[3] = {};
+    REQUIRE(game.game_object(id)->copy_size(size));
+    REQUIRE(size[1] == 2.f);
+}

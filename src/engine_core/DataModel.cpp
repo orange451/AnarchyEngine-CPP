@@ -249,7 +249,7 @@ bool DataModel::authorize(const Slot& part, bool force_sim_write) {
         if (!state_->prerender_window) {
             return reject_write("DataModel write from RenderThread outside RenderStepped and PreRender");
         }
-        if (part.visual_only || force_sim_write) {
+        if (force_sim_write || has_tag(ecs_world(), part.entity, state_->ecs_ids.visual_only)) {
             return true;
         }
         return reject_write("render-step DataModel write requires visual_only or ForceSimWrite");
@@ -353,8 +353,6 @@ InstanceId DataModel::allocate() {
     }
     Slot& part = world.slots[index];
     part.alive = true;
-    part.simulated = false;
-    part.visual_only = false;
     part.pool = 0;
     part.storage = 0;
     part.instance = nullptr;
@@ -561,12 +559,15 @@ void DataModel::apply_transform(InstanceId id, const Transform& transform, bool 
     }
     GameObject* target = visual_target(id, force, "transform write on a dead instance",
                                        "transform write on an instance that is not a GameObject");
-    if (target == nullptr || same_transform(target->transform_, transform)) {
+    if (target == nullptr) {
         return;
     }
-    const Transform previous = target->transform_;
-    target->transform_ = transform;
-    record_transform(id, previous, target->transform_);
+    const Transform previous = target->transform();
+    if (same_transform(previous, transform)) {
+        return;
+    }
+    target->store_transform(transform);
+    record_transform(id, previous, transform);
     const WriteOrigin origin = current_origin();
     note(id, VisualField::Transform, origin);
     emit_change(id, Field::Transform, origin);
@@ -583,12 +584,15 @@ void DataModel::apply_color(InstanceId id, ColorRgb color, bool force) {
     }
     GameObject* target = visual_target(id, force, "color write on a dead instance",
                                        "color write on an instance that is not a GameObject");
-    if (target == nullptr || same_color(target->color_, color)) {
+    if (target == nullptr) {
         return;
     }
-    const ColorRgb previous = target->color_;
-    target->color_ = color;
-    record_color(id, previous, target->color_);
+    const ColorRgb previous = target->color();
+    if (same_color(previous, color)) {
+        return;
+    }
+    target->store_color(color);
+    record_color(id, previous, color);
     const WriteOrigin origin = current_origin();
     note(id, VisualField::Color, origin);
     emit_change(id, Field::Color, origin);
@@ -602,11 +606,11 @@ void DataModel::set_simulated(InstanceId id, bool simulated) {
     if (part == nullptr) {
         contract_fail("set_simulated on a dead instance");
     }
-    if (part->simulated == simulated) {
+    const bool previous = has_tag(ecs_world(), part->entity, state_->ecs_ids.simulated);
+    if (previous == simulated) {
         return;
     }
-    const bool previous = part->simulated;
-    part->simulated = simulated;
+    set_tag(ecs_world(), part->entity, state_->ecs_ids.simulated, simulated);
     record_bool(id, Field::Simulated, previous, simulated);
     emit_change(id, Field::Simulated, current_origin());
 }
@@ -619,11 +623,11 @@ void DataModel::set_visual_only(InstanceId id, bool visual_only) {
     if (part == nullptr) {
         contract_fail("set_visual_only on a dead instance");
     }
-    if (part->visual_only == visual_only) {
+    const bool previous = has_tag(ecs_world(), part->entity, state_->ecs_ids.visual_only);
+    if (previous == visual_only) {
         return;
     }
-    const bool previous = part->visual_only;
-    part->visual_only = visual_only;
+    set_tag(ecs_world(), part->entity, state_->ecs_ids.visual_only, visual_only);
     record_bool(id, Field::VisualOnly, previous, visual_only);
     emit_change(id, Field::VisualOnly, current_origin());
 }
@@ -647,33 +651,33 @@ const GameObject* DataModel::game_object(InstanceId id) const {
 bool DataModel::alive(InstanceId id) const { return slot(id) != nullptr; }
 
 bool DataModel::simulated(InstanceId id) const {
-    const Slot* part = slot(id);
-    return part != nullptr && part->simulated;
+    return has_tag(ecs_world(), entity_of(id), state_->ecs_ids.simulated);
 }
 
 bool DataModel::visual_only(InstanceId id) const {
-    const Slot* part = slot(id);
-    return part != nullptr && part->visual_only;
+    return has_tag(ecs_world(), entity_of(id), state_->ecs_ids.visual_only);
 }
 
 void DataModel::integrate_simulated(double dt) {
     const float step = static_cast<float>(dt);
     State& world = *state_;
+    ecs_world_t* ecs = ecs_world();
+    const EcsIds& ids = world.ecs_ids;
     for (std::uint32_t index = 0; index < world.slots.size(); ++index) {
         Slot& part = world.slots[index];
-        if (!part.alive || !part.simulated || part.visual_only) {
+        if (!part.alive || part.body == nullptr || !has_tag(ecs, part.entity, ids.simulated) ||
+            has_tag(ecs, part.entity, ids.visual_only)) {
             continue;
         }
-        if (part.body == nullptr) {
+        const ecs::Velocity* velocity = read_component<ecs::Velocity>(ecs, part.entity, ids.velocity);
+        if (velocity == nullptr || (velocity->x == 0.f && velocity->y == 0.f && velocity->z == 0.f)) {
             continue;
         }
-        GameObject& body = *part.body;
-        if (body.velocity_[0] == 0.f && body.velocity_[1] == 0.f && body.velocity_[2] == 0.f) {
-            continue;
-        }
-        body.transform_.m[12] += body.velocity_[0] * step;
-        body.transform_.m[13] += body.velocity_[1] * step;
-        body.transform_.m[14] += body.velocity_[2] * step;
+        Transform moved = part.body->transform();
+        moved.m[12] += velocity->x * step;
+        moved.m[13] += velocity->y * step;
+        moved.m[14] += velocity->z * step;
+        part.body->store_transform(moved);
         const InstanceId id = make_instance_id(part.generation, index);
         note(id, VisualField::Transform, WriteOrigin::Simulation);
         notify_watchers(id);
@@ -1609,10 +1613,10 @@ void DataModel::save_properties(PropertyBag& out) const {
     if (part == nullptr || part->instance != this) {
         return;
     }
-    if (part->simulated) {
+    if (has_tag(ecs_world(), part->entity, state_->ecs_ids.simulated)) {
         bag_set(out, "Simulated", JsonValue::boolean(true));
     }
-    if (part->visual_only) {
+    if (has_tag(ecs_world(), part->entity, state_->ecs_ids.visual_only)) {
         bag_set(out, "VisualOnly", JsonValue::boolean(true));
     }
 }

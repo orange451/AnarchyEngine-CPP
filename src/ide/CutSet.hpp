@@ -21,4 +21,31 @@ std::vector<engine_core::InstanceId> cut_set(const engine_core::DataModel& game,
 bool move_set(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids,
               engine_core::InstanceId parent, std::string* refused = nullptr);
 
+// Makes class_name for the explorer's or the Assets pane's insert, under asked,
+// or under Workspace when asked is the root. 0, with error set, when the place
+// is full or refuses the class there; nothing is left behind then.
+engine_core::InstanceId insert_instance(engine_core::DataModel& world, const std::string& class_name,
+                                        engine_core::InstanceId asked, std::string& error);
+
+// Puts a GameObject named after prefab in Workspace, its Prefab set to prefab.
+// Refuses (0, with error) a prefab that is not a live Prefab, or a full place;
+// nothing is left behind then. Runs on the simulation thread.
+engine_core::InstanceId add_prefab_instance(engine_core::DataModel& world, engine_core::InstanceId prefab,
+                                            std::string& error);
+
+struct CopiedNode {
+    std::string class_name;
+    std::string name;
+    engine_core::PropertyBag properties;
+    bool has_source = false;
+    std::string source;
+    std::vector<CopiedNode> children;
+};
+
+std::vector<CopiedNode> copy_set(const engine_core::DataModel& game, const std::vector<engine_core::InstanceId>& ids);
+
+bool paste_copies(engine_core::DataModel& world, const std::vector<CopiedNode>& roots,
+                  engine_core::InstanceId parent, std::vector<engine_core::InstanceId>* made = nullptr,
+                  std::string* refused = nullptr);
+
 }  // namespace ide

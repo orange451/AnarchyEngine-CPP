@@ -1,7 +1,9 @@
+#include "AssetInstances.hpp"
 #include "DataModel.hpp"
 #include "Folder.hpp"
 #include "Game.hpp"
 #include "GameObject.hpp"
+#include "GameService.hpp"
 #include "LuaApi.hpp"
 #include "LuaSource.hpp"
 #include "ModuleScript.hpp"
@@ -339,8 +341,10 @@ TEST_CASE("analysis definitions come from the class registry", "[A11]") {
     REQUIRE(source.find("PreRender") == std::string::npos);
     REQUIRE(source.find("RenderStepped") == std::string::npos);
     REQUIRE(source.find("BasePart") == std::string::npos);
-    // The scene services are DataModels like Game, and workspace is a global like game.
-    REQUIRE(source.find("declare extern type SceneService extends DataModel with") != std::string::npos);
+    // Service is a DataModel like Game; the scene services extend it, and
+    // workspace is a global like game.
+    REQUIRE(source.find("declare extern type Service extends DataModel with") != std::string::npos);
+    REQUIRE(source.find("declare extern type SceneService extends Service with") != std::string::npos);
     REQUIRE(source.find("declare extern type Workspace extends SceneService with") != std::string::npos);
     REQUIRE(source.find("declare extern type Lighting extends SceneService with") != std::string::npos);
     REQUIRE(source.find("declare workspace: Workspace") != std::string::npos);
@@ -1131,6 +1135,54 @@ TEST_CASE("A29 a completion snapshot in another sibling order leaves no stale pl
     settle(analysis);
     INFO(dump(analysis.diagnostics(script.id())));
     REQUIRE_FALSE(has_code(analysis.diagnostics(script.id()), "Type"));
+}
+
+// Asset classes and their reference properties: Texture, Material, and the
+// Assets service tree resolve through the same registered classes as everything
+// else, so a script that uses them type-checks clean. The assets are placed in
+// the explorer, as Containment requires, and read back by dotted name so the
+// annotations exercise Texture? without depending on Instance.new's narrowing.
+TEST_CASE("A31 a script that uses assets and their references type-checks", "[A31]") {
+    ScriptRig rig;
+    engine_core::Texture& tex = rig.game.create<engine_core::Texture>();
+    rig.game.set_name(tex.id(), "Tex");
+    rig.game.set_parent(tex.id(), rig.game.service("Textures"));
+    engine_core::Material& mat = rig.game.create<engine_core::Material>();
+    rig.game.set_name(mat.id(), "Mat");
+    rig.game.set_parent(mat.id(), rig.game.service("Materials"));
+    engine_core::Prefab& prefab = rig.game.create<engine_core::Prefab>();
+    rig.game.set_name(prefab.id(), "Prefab");
+    rig.game.set_parent(prefab.id(), rig.game.service("Prefabs"));
+    engine_core::Model& model = rig.game.create<engine_core::Model>();
+    rig.game.set_name(model.id(), "Mdl");
+    rig.game.set_parent(model.id(), prefab.id());
+
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Assets",
+                                             "local tex: Texture = game.Assets.Textures.Tex\n"
+                                             "tex.Path = \"textures/brick.png\"\n"
+                                             "local mat = game.Assets.Materials.Mat\n"
+                                             "mat.DiffuseTexture = tex\n"
+                                             "local same: Texture? = mat.DiffuseTexture\n"
+                                             "local assets = game:GetService(\"Assets\")\n"
+                                             "local textures = game.Assets.Textures\n"
+                                             "local model = game.Assets.Prefabs.Prefab.Mdl\n"
+                                             "model.Mesh = nil\n"
+                                             "model.Material = mat\n"
+                                             "print(assets, textures, same)\n");
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(script.id())));
+    REQUIRE(analysis.diagnostics(script.id()).empty());
+
+    SECTION("assigning the wrong instance type to a reference property is a type error") {
+        script.set_source("--!strict\n"
+                          "local mat = game.Assets.Materials.Mat\n"
+                          "mat.DiffuseTexture = workspace\n");
+        settle(analysis);
+        const std::vector<engine_core::Diagnostic> diagnostics = analysis.diagnostics(script.id());
+        INFO(dump(diagnostics));
+        REQUIRE(has_code(diagnostics, "Type"));
+    }
 }
 
 TEST_CASE("A30 a module the analyzer checked still reads as the functions it replaced", "[A30]") {

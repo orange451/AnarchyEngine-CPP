@@ -306,20 +306,20 @@ void testContextActions() {
     engine_core::Script& script = game.create<engine_core::Script>();
     actions.clear();
     script.context_actions(actions);
-    expect(actions.size() == 5 && actions[0].action == engine_core::InstanceAction::Edit && actions[0].primary, "a script's edit is primary");
-    expect(actions.size() == 5 && actions[1].action == engine_core::InstanceAction::Cut, "a script still has cut");
-    expect(actions.size() == 5 && actions[4].action == engine_core::InstanceAction::Delete && !actions[4].primary, "a script can be deleted");
+    expect(actions.size() == 7 && actions[0].action == engine_core::InstanceAction::Edit && actions[0].primary, "a script's edit is primary");
+    expect(actions.size() == 7 && actions[1].action == engine_core::InstanceAction::Cut, "a script still has cut");
+    expect(actions.size() == 7 && actions[6].action == engine_core::InstanceAction::Delete && !actions[6].primary, "a script can be deleted");
 
     engine_core::ModuleScript& module = game.create<engine_core::ModuleScript>();
     actions.clear();
     module.context_actions(actions);
-    expect(actions.size() == 5 && actions[0].primary && actions[0].action == engine_core::InstanceAction::Edit, "a module script edits");
+    expect(actions.size() == 7 && actions[0].primary && actions[0].action == engine_core::InstanceAction::Edit, "a module script edits");
 
     engine_core::TestTriangle& triangle = game.create<engine_core::TestTriangle>();
     actions.clear();
     triangle.context_actions(actions);
-    expect(actions.size() == 4 && !actions[0].primary, "a triangle uses the plain actions");
-    expect(actions.size() == 4 && actions[3].action == engine_core::InstanceAction::Delete, "a triangle can be deleted");
+    expect(actions.size() == 6 && !actions[0].primary, "a triangle uses the plain actions");
+    expect(actions.size() == 6 && actions[5].action == engine_core::InstanceAction::Delete, "a triangle can be deleted");
 }
 
 void testInsertInstance() {
@@ -352,6 +352,7 @@ int RunUiCallsTests();
 int RunViewCaptureTests();
 
 int RunColorLiteralsTests();
+int RunAssetBrowserTests();
 
 int main() {
     try {
@@ -376,6 +377,7 @@ int main() {
         gFailures += RunUiCallsTests();
         gFailures += RunViewCaptureTests();
         gFailures += RunColorLiteralsTests();
+        gFailures += RunAssetBrowserTests();
     } catch (const std::exception& ex) {
         std::fprintf(stderr, "FAIL exception: %s\n", ex.what());
         return EXIT_FAILURE;

@@ -2,6 +2,7 @@
 
 #include "IdeLayout.hpp"
 
+#include "IdeAssets.hpp"
 #include "IdeLayoutInternal.hpp"
 
 namespace ide {
@@ -40,6 +41,34 @@ std::shared_ptr<IdePane> IdeLayout::make_terminal() {
     // The project open when the shell starts; this process's folder before one is.
     host.folder = [this] { return project_ ? project_->root().string() : std::string(); };
     return jadefx::make<IdeTerminal>(std::move(host));
+}
+
+std::shared_ptr<IdePane> IdeLayout::make_assets() {
+    AssetsHost host;
+    host.actions = explorer_host_;
+    host.saved_view = [this] { return preferences_.assets_view(); };
+    host.save_view = [this](const std::string& view) {
+        preferences_.set_assets_view(view);
+        std::string error;
+        preferences_.save(error);
+    };
+    host.add_as_game_object = [this](engine_core::InstanceId prefab) {
+        runner_.simulation().on_simulation(
+            [this, alive = std::weak_ptr<int>(alive_), prefab](engine_core::DataModel& world) {
+                world.history().set_pending_gesture("Add as GameObject");
+                std::string error;
+                const engine_core::InstanceId made = add_prefab_instance(world, prefab, error);
+                CloseGesture(world);
+                if (made == 0) {
+                    toast_later(this, alive, std::move(error));
+                    return;
+                }
+                world.selection().set({made});
+            });
+    };
+    auto pane = jadefx::make<IdeAssets>(runner_.simulation().datamodel(), std::move(host));
+    pane->setIconFile("AssetFolder.png");
+    return pane;
 }
 
 void IdeLayout::show_conflicts() {

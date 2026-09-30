@@ -81,6 +81,18 @@ bool GameObject::copy_size(float out[3]) const {
     return true;
 }
 
+LuaSlot GameObject::prefab() const {
+    if (!alive(id_)) {
+        return LuaSlot();
+    }
+    return instance_reference_slot(prefab_ref_, "Prefab");
+}
+
+std::optional<std::string> GameObject::set_prefab(const LuaSlot& value) {
+    require_simulation_thread("set_prefab runs on SimulationThread");
+    return set_instance_reference("Prefab", "Prefab", prefab_ref_, value);
+}
+
 void GameObject::save_properties(PropertyBag& out) const {
     DataModel::save_properties(out);
     const Transform identity = transform_identity();
@@ -147,7 +159,10 @@ bool GameObject::load_property(const std::string& key, const JsonValue& value, s
 
 void GameObject::on_release() { clear_spatial(); }
 
-void GameObject::on_reuse() { reset_spatial(); }
+void GameObject::on_reuse() {
+    reset_spatial();
+    prefab_ref_.set_guid(std::string());
+}
 
 void GameObject::reset_spatial() {
     transform_ = transform_identity();
@@ -183,6 +198,8 @@ void GameObject::write_place(std::vector<std::byte>& out) const {
     pod.size[2] = size_[2];
     const auto* bytes = reinterpret_cast<const std::byte*>(&pod);
     out.insert(out.end(), bytes, bytes + sizeof(pod));
+    // Prefab, the only saved registry property, follows as DataModel's JSON blob.
+    DataModel::write_place(out);
 }
 
 void GameObject::read_place(const std::byte* data, std::size_t size) {
@@ -190,6 +207,7 @@ void GameObject::read_place(const std::byte* data, std::size_t size) {
     velocity_[0] = velocity_[1] = velocity_[2] = 0.f;
     if (data == nullptr || size < sizeof(SpatialPlace)) {
         reset_spatial();
+        DataModel::read_place(nullptr, 0);
         return;
     }
     SpatialPlace pod;
@@ -199,6 +217,7 @@ void GameObject::read_place(const std::byte* data, std::size_t size) {
     size_[0] = pod.size[0];
     size_[1] = pod.size[1];
     size_[2] = pod.size[2];
+    DataModel::read_place(data + sizeof(SpatialPlace), size - sizeof(SpatialPlace));
 }
 
 namespace {
@@ -241,13 +260,35 @@ bool write_lua_transform(DataModel&, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+bool read_prefab(DataModel&, DataModel& object, LuaSlot& out) {
+    auto* body = dynamic_cast<GameObject*>(&object);
+    if (body == nullptr) {
+        return false;
+    }
+    out = body->prefab();
+    return true;
+}
+
+bool write_prefab(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* body = dynamic_cast<GameObject*>(&object);
+    if (body == nullptr) {
+        return false;
+    }
+    if (std::optional<std::string> error = body->set_prefab(in)) {
+        in.error = std::move(*error);
+        return false;
+    }
+    return true;
+}
+
 ANARCHY_LUA_REGISTER(register_game_object_lua) {
     const LuaField fields[] = {
         lua_property("Color", "Color3", true, read_lua_color, write_lua_color),
         lua_property("Transform", "Transform", true, read_lua_transform, write_lua_transform),
         lua_property("CFrame", "Transform", true, read_lua_transform, write_lua_transform),
+        lua_saved_property("Prefab", "Prefab?", read_prefab, write_prefab, "null"),
     };
-    register_lua_class("GameObject", "Instance", fields, 3);
+    register_lua_class("GameObject", "Instance", fields, 4);
 }
 
 }  // namespace

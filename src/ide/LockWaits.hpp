@@ -10,5 +10,7 @@ namespace ide {
 // waits longer before it gives up.
 inline constexpr std::chrono::milliseconds kFrameLockWait{1};
 inline constexpr std::chrono::milliseconds kActionLockWait{5};
+// A drop cannot be tried again without dragging again, so its checks wait out a simulation step.
+inline constexpr std::chrono::milliseconds kDropLockWait{250};
 
 }  // namespace ide

@@ -11,4 +11,6 @@ A new `Game` makes the four scene services as its children, in order: `Workspace
 
 `Game`, `RunService`, `Selection`, and `UserInputService` each declare their own Lua class. The members that need the script VM, such as `GetService`, `Selection:Get`, `Selection:Set`, and `UserInputService:IsKeyDown`, are added by `ScriptRuntime` in engine_core.
 
+`GameService`, a `Service` the Game Explorer does not show, is the base of `Assets` and its five categories: `Materials`, `Prefabs`, `Meshes`, `Textures`, and `Audio` (`GameService.hpp`). A new `Game` makes them the same way it makes the scene services, under `Assets`, in that order, each with its own fixed GUID.
+
 The scene view posts input from the UI thread into a queue with its own lock. The service keeps posts only while the place is playing. Each simulation step dispatches the queue at PreAnimation, so the drain after it runs `InputBegan`, `InputChanged`, and `InputEnded` before anything else in that step, and `IsKeyDown` agrees with them from then on. Mouse movement between two steps arrives as one `InputChanged` whose `Delta` is the sum.

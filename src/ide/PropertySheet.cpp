@@ -3,11 +3,14 @@
 #include "ChangeHistoryService.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
+#include "PropertyReflection.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -154,6 +157,48 @@ void blank_mixed(PropertyRow& row) {
 
 }  // namespace
 
+std::string instance_drag_text(const std::vector<InstanceId>& ids) {
+    std::string out;
+    for (InstanceId id : ids) {
+        if (!out.empty()) {
+            out += ',';
+        }
+        out += std::to_string(id);
+    }
+    return out;
+}
+
+std::vector<InstanceId> instance_drag_ids(std::string_view text) {
+    std::vector<InstanceId> out;
+    if (text.empty()) {
+        return out;
+    }
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t comma = text.find(',', start);
+        const std::string_view part = text.substr(start, comma - start);
+        if (part.empty()) {
+            return {};
+        }
+        std::uint64_t value = 0;
+        for (char digit : part) {
+            if (digit < '0' || digit > '9') {
+                return {};
+            }
+            value = value * 10 + static_cast<std::uint64_t>(digit - '0');
+            if (value > std::numeric_limits<InstanceId>::max()) {
+                return {};
+            }
+        }
+        out.push_back(static_cast<InstanceId>(value));
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+    return out;
+}
+
 bool PropertyRow::operator==(const PropertyRow& other) const {
     if (!same_slot(other) || writable != other.writable || mixed != other.mixed || label != other.label ||
         path != other.path) {
@@ -193,7 +238,7 @@ bool property_kind_for(const std::string& type_name, PropertyKind& out) {
     } else if (type_name == "Vector3") {
         out = PropertyKind::Vector3;
     } else if (type_name == "Instance" || type_name == "Instance?" || type_name == "DataModel" ||
-               type_name == "DataModel?") {
+               type_name == "DataModel?" || !engine_core::reference_class(type_name).empty()) {
         out = PropertyKind::Ref;
     } else if (type_name == "Color3") {
         out = PropertyKind::Color3;
@@ -262,8 +307,8 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
                 break;
             }
             row.writable = row.writable && own->writable && own->write != nullptr;
-            // A scene service keeps its name and its place under game.
-            if (object->is_scene_service() && (row.name == "Name" || row.name == "Parent")) {
+            // A service keeps its name and its place.
+            if (object->is_service() && (row.name == "Name" || row.name == "Parent")) {
                 row.writable = false;
             }
             PropertyValue value;
@@ -358,6 +403,13 @@ EditResult apply_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
             error = world.parent_error(target.object->id(), parent);
         } else if (edit.property == "Name" && edit.kind == PropertyKind::String) {
             error = world.rename_error(target.object->id(), edit.value.text);
+        } else if (edit.kind == PropertyKind::Ref && !edit.value.nil_ref()) {
+            const std::string klass = engine_core::reference_class(target.field.type_name);
+            const DataModel* picked = world.instance(edit.value.ref);
+            if (!klass.empty() && (picked == nullptr ||
+                                   !engine_core::lua_class_inherits(picked->class_name(), klass.c_str()))) {
+                error = edit.property + " must be a " + klass;
+            }
         }
         if (error) {
             result.rejected = true;

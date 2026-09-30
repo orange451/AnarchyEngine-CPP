@@ -2,6 +2,7 @@
 
 #include "jadefx/jadefx.hpp"
 #include "runner/Runner.hpp"
+#include "IdeExplorer.hpp"
 #include "InputRouter.hpp"
 #include "Preferences.hpp"
 #include "ThemeLibrary.hpp"
@@ -127,6 +128,8 @@ private:
     // Takes every id out of the place as one undo step. A selected child of a
     // selected instance goes with its ancestor.
     void cut(const std::vector<std::uint32_t>& ids);
+    void copy(const std::vector<std::uint32_t>& ids);
+    void duplicate(const std::vector<std::uint32_t>& ids);
     // Destroys each id and its descendants as one undo step.
     void delete_instances(std::vector<std::uint32_t> ids);
     void paste(std::uint32_t id);
@@ -212,6 +215,9 @@ private:
     void routeReveal(jadefx::KeyEvent& event, jadefx::Scene& scene);
     // Cmd+Shift+F and Cmd+Shift+H in a window whose menu bar does not take them.
     void routeSearch(jadefx::KeyEvent& event, jadefx::Scene& scene);
+    void routeZoom(jadefx::KeyEvent& event);
+    void routeClipboard(jadefx::KeyEvent& event, jadefx::Scene& scene);
+    void set_zoom(double zoom);
     // Docks the Search pane, or brings it forward, and focuses its find field or,
     // with replace, its replace field. Docked without replace, it starts with
     // replace hidden. A selection on one line in the focused
@@ -263,6 +269,8 @@ private:
     std::shared_ptr<IdePane> make_conflicts();
     // The user's shell, started in the project's folder.
     std::shared_ptr<IdePane> make_terminal();
+    // The Assets pane, over the place, with the explorers' actions.
+    std::shared_ptr<IdePane> make_assets();
     // Where Search and Conflicts dock: beside the left explorer, else where editors dock.
     IdeDock* side_home();
     // The ribbon's count and the Conflicts window's rows, from conflicts_.
@@ -311,6 +319,8 @@ private:
     // Declared first so the runner outlives the widgets during teardown.
     runner::Runner runner_;
     Preferences preferences_;
+    // The explorers' actions, kept for the Assets pane, which is made later.
+    ExplorerHost explorer_host_;
     ThemeLibrary themes_;
     // Before the docks and pages below, so it is destroyed after them: the
     // console and script editors hold raw pointers into it.
@@ -364,6 +374,7 @@ private:
     WindowEntry* search_window_ = nullptr;
     WindowEntry* conflicts_window_ = nullptr;
     WindowEntry* terminal_window_ = nullptr;
+    WindowEntry* assets_window_ = nullptr;
     // Scene views opened so far, which numbers the next one's tab.
     int scene_views_ = 1;
     // The studio's first scene view. It stays open.

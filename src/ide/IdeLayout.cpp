@@ -1,5 +1,6 @@
 #include "IdeLayout.hpp"
 
+#include "IdeAssets.hpp"
 #include "IdeLayoutInternal.hpp"
 
 namespace ide {
@@ -131,6 +132,13 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         ->setOnAction([this](jadefx::ActionEvent&) { open_search(true, scene_); });
 
     auto view = jadefx::make<jadefx::Menu>("View");
+    AddItem(*view, "Zoom In", nullptr, jadefx::Key::Equal, jadefx::Key::ModControl)
+        ->setOnAction([this](jadefx::ActionEvent&) { set_zoom(jadefx::Stage::getZoom() + 0.1); });
+    AddItem(*view, "Zoom Out", nullptr, jadefx::Key::Minus, jadefx::Key::ModControl)
+        ->setOnAction([this](jadefx::ActionEvent&) { set_zoom(jadefx::Stage::getZoom() - 0.1); });
+    AddItem(*view, "Actual Size", nullptr, jadefx::Key::Digit0, jadefx::Key::ModControl)
+        ->setOnAction([this](jadefx::ActionEvent&) { set_zoom(1.0); });
+    view->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     AddItem(*view, "Maybe :)", "Smile.png", 0, 0);
 
     // Filled once the windows it lists are docked, below.
@@ -156,6 +164,10 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
             delete_instances(ids);
         } else if (action == engine_core::InstanceAction::Cut) {
             cut(ids);
+        } else if (action == engine_core::InstanceAction::Copy) {
+            copy(ids);
+        } else if (action == engine_core::InstanceAction::Duplicate) {
+            duplicate(ids);
         }
     };
     host.enabled = [this](engine_core::InstanceAction action) { return action_enabled(action); };
@@ -167,19 +179,9 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     host.insert = [this](std::string class_name, engine_core::InstanceId parent, std::shared_ptr<InsertResult> result) {
         runner_.simulation().on_simulation(
             [class_name = std::move(class_name), asked = parent, result](engine_core::DataModel& world) {
-                engine_core::InstanceId made = 0;
                 std::string error;
-                const engine_core::InstanceId parent = insert_target(world, asked);
-                const bool placed = parent_ok(world, parent);
-                if (placed && world.room_left() == 0) {
-                    error = engine_core::InstanceCapacityError().what();
-                } else if (placed) {
-                    if (engine_core::DataModel* created = engine_core::lua_create_instance(world, class_name.c_str())) {
-                        world.set_parent(created->id(), parent);
-                        made = created->id();
-                        CloseGesture(world);
-                    }
-                }
+                const engine_core::InstanceId made = insert_instance(world, class_name, asked, error);
+                CloseGesture(world);
                 if (result) {
                     result->id.store(made, std::memory_order_relaxed);
                     result->error = std::move(error);
@@ -187,6 +189,9 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
                 }
             });
     };
+
+    // The Assets pane, made later, runs the same actions.
+    explorer_host_ = host;
 
     auto gameExplorer = jadefx::make<IdeExplorer>(game, "Game Explorer", host);
     gameExplorer->setIconFile("Explorer.png");
@@ -280,6 +285,10 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         return dock_beside(above, DropSide::Bottom, kConsoleHeight);
     };
 
+    assets_window_ = &keep_closed("Assets", "AssetFolder.png", [this] { return make_assets(); });
+    // In with the console, as a project browser docks under the scene.
+    assets_window_->home = terminal_window_->home;
+
     if (!restore_layout()) {
         default_layout(windowWidth, windowHeight,
                        [](IdeDock& dock, const std::shared_ptr<IdePane>& page) { dock.dock(page); });
@@ -337,6 +346,7 @@ void IdeLayout::attachFrame(jadefx::Stage& stage) {
     mainStage_ = &stage;
     // 120 unless Preferences > Performance says otherwise. JadeFX's own default is 60.
     stage.setMaxFrameRate(Preferences::stage_frame_rate(preferences_.frame_rate()));
+    jadefx::Stage::setZoom(preferences_.zoom());
     resizeWindow_ =[&stage](int width, int height) { stage.setSize(width, height); };
     stage.setFrameTail([this]() { flushFrame(); });
     LeaveFieldsOnEscape(stage);
@@ -484,8 +494,38 @@ IdeLayout::~IdeLayout() {
 void IdeLayout::routeKeys(jadefx::KeyEvent& event, jadefx::Scene& scene) {
     routeUndo(event, scene);
     routeDelete(event, scene);
+    routeClipboard(event, scene);
     routeReveal(event, scene);
     routeSearch(event, scene);
+    routeZoom(event);
+}
+
+void IdeLayout::routeZoom(jadefx::KeyEvent& event) {
+    constexpr int kKeypad0 = 320;
+    constexpr int kKeypadSubtract = 333;
+    constexpr int kKeypadAdd = 334;
+    if (!event.pressed || event.consumed || !event.shortcut() || event.alt) {
+        return;
+    }
+    if (event.key == jadefx::Key::Equal || event.key == kKeypadAdd) {
+        set_zoom(jadefx::Stage::getZoom() + 0.1);
+    } else if (event.key == jadefx::Key::Minus || event.key == kKeypadSubtract) {
+        set_zoom(jadefx::Stage::getZoom() - 0.1);
+    } else if ((event.key == jadefx::Key::Digit0 || event.key == kKeypad0) && !event.shift) {
+        set_zoom(1.0);
+    } else {
+        return;
+    }
+    event.consume();
+}
+
+void IdeLayout::set_zoom(double zoom) {
+    const double kept = std::clamp(std::round(zoom * 10.0) / 10.0, Preferences::kMinZoom, Preferences::kMaxZoom);
+    jadefx::Stage::setZoom(kept);
+    preferences_.set_zoom(kept);
+    std::string failure;
+    preferences_.save(failure);
+    show_toast("Zoom " + std::to_string(static_cast<int>(std::lround(kept * 100.0))) + "%");
 }
 
 void IdeLayout::routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene) {
@@ -507,6 +547,33 @@ void IdeLayout::routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene) {
             event.consume();
         }
     }
+}
+
+void IdeLayout::routeClipboard(jadefx::KeyEvent& event, jadefx::Scene& scene) {
+    if (!event.pressed || event.repeat || event.consumed || !event.shortcut() || event.shift || event.alt) {
+        return;
+    }
+    const int key = event.key;
+    if (key != jadefx::Key::X && key != jadefx::Key::C && key != jadefx::Key::V && key != jadefx::Key::D) {
+        return;
+    }
+    jadefx::Node* focused = scene.focusedNode();
+    if (InTextWidget(focused) || Owning<IdeExplorer>(focused) == nullptr) {
+        return;
+    }
+    const std::vector<engine_core::InstanceId> selected = runner_.simulation().datamodel().selection().get();
+    if (key == jadefx::Key::V) {
+        paste(selected.empty() ? 0 : selected.front());
+    } else if (selected.empty()) {
+        return;
+    } else if (key == jadefx::Key::X) {
+        cut(selected);
+    } else if (key == jadefx::Key::C) {
+        copy(selected);
+    } else {
+        duplicate(selected);
+    }
+    event.consume();
 }
 
 void IdeLayout::routeReveal(jadefx::KeyEvent& event, jadefx::Scene& scene) {
@@ -545,7 +612,8 @@ bool IdeLayout::editing_field() const {
     jadefx::Node* focused = scene_->focusedNode();
     // PropertiesPanel is not a node, so it answers for its own fields.
     return InTextWidget(focused) &&
-           (Owning<IdeExplorer>(focused) != nullptr || (properties_ != nullptr && properties_->owns(focused)));
+           (Owning<IdeExplorer>(focused) != nullptr || Owning<IdeAssets>(focused) != nullptr ||
+            (properties_ != nullptr && properties_->owns(focused)));
 }
 
 void IdeLayout::noteScriptFocus() {

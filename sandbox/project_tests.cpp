@@ -131,6 +131,14 @@ void write_bare_project(const fs::path& root, const char* root_extra = "", const
     write_file(root / "src" / "Lighting.lighting.json", meta("Lighting", "lighting", "Lighting"));
     write_file(root / "src" / "Storage.storage.json", meta("Storage", "storage", "Storage"));
     write_file(root / "src" / "Scripts.scripts.json", meta("Scripts", "scripts", "Scripts"));
+    write_file(root / "src" / "Assets.assets" / "init.json",
+               meta("Assets", "assets", "Assets",
+                    ",\n  \"children\": [\"materials\", \"prefabs\", \"meshes\", \"textures\", \"audio\"]"));
+    write_file(root / "src" / "Assets.assets" / "Materials.materials.json", meta("Materials", "materials", "Materials"));
+    write_file(root / "src" / "Assets.assets" / "Prefabs.prefabs.json", meta("Prefabs", "prefabs", "Prefabs"));
+    write_file(root / "src" / "Assets.assets" / "Meshes.meshes.json", meta("Meshes", "meshes", "Meshes"));
+    write_file(root / "src" / "Assets.assets" / "Textures.textures.json", meta("Textures", "textures", "Textures"));
+    write_file(root / "src" / "Assets.assets" / "Audio.audio.json", meta("Audio", "audio", "Audio"));
 }
 
 // Sets one key of an instance file on disk, as another editor would.

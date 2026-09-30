@@ -25,6 +25,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(STUDIO_CORE_SOURCES
     src/runner/Runner.cpp
     src/runner/ViewCapture.cpp
+    src/ide/AssetBrowser.cpp
     src/ide/ColorLiterals.cpp
     src/ide/IdeResources.cpp
     src/ide/InputRouter.cpp
@@ -59,6 +60,7 @@ set(STUDIO_SOURCES
     src/ide/CompletionPopup.cpp
     src/ide/InsertPopup.cpp
     src/ide/IdeExplorer.cpp
+    src/ide/IdeAssets.cpp
     src/ide/IdeIcons.cpp
     src/ide/IdeScriptEditor.cpp
     src/ide/IdeSearch.cpp
@@ -272,6 +274,7 @@ add_library(engine_datatypes STATIC
     src/engine_datatypes/Vector3.cpp
 )
 add_library(engine_instances STATIC
+    src/engine_instances/AssetInstances.cpp
     src/engine_instances/Folder.cpp
     src/engine_instances/GameObject.cpp
     src/engine_instances/LuaSource.cpp
@@ -282,6 +285,7 @@ add_library(engine_instances STATIC
 add_library(engine_services STATIC
     src/engine_services/ChangeHistoryService.cpp
     src/engine_services/Game.cpp
+    src/engine_services/GameService.cpp
     src/engine_services/Lighting.cpp
     src/engine_services/SceneService.cpp
     src/engine_services/UserInputService.cpp
@@ -302,6 +306,7 @@ add_library(engine_core STATIC
     src/engine_core/LuaEngine.cpp
     src/engine_core/LuaApi.cpp
     src/engine_core/PropertyReflection.cpp
+    src/engine_core/InstanceRef.cpp
     src/engine_core/LuaReflect.cpp
     src/engine_core/ScriptBindings.cpp
     src/engine_core/ScriptRuntime.cpp
@@ -312,6 +317,7 @@ add_library(engine_core STATIC
     src/engine_core/PropertyBag.cpp
     src/engine_core/JsonMerge.cpp
     src/engine_core/Project.cpp
+    src/engine_core/Containment.cpp
 )
 set(ENGINE_PACKAGES engine_core engine_datatypes engine_instances engine_services)
 foreach(package IN LISTS ENGINE_PACKAGES)
@@ -366,6 +372,12 @@ add_executable(explorer-tests
 )
 target_link_libraries(explorer-tests PRIVATE studio)
 
+# Drives the Assets pane through a headless scene: navigation, views, selection, and actions.
+add_executable(assets-tests
+    tests/AssetsPaneTest.cpp
+)
+target_link_libraries(assets-tests PRIVATE studio)
+
 # Opens and closes printed tables in the console log, by call and by click.
 add_executable(console-tests
     tests/ConsoleLogTest.cpp
@@ -409,6 +421,7 @@ target_link_libraries(anarchy-mcp PRIVATE studio_core)
 
 add_executable(engine-tests
     tests/LuaEngineTest.cpp
+    tests/AssetBrowserTest.cpp
     tests/ColorLiteralsTest.cpp
     tests/LuauHighlightTest.cpp
     tests/LuauCompleteTest.cpp
@@ -441,6 +454,12 @@ add_executable(terminal-demo
 )
 target_link_libraries(terminal-demo PRIVATE studio)
 
+# By hand, not ctest: assets-demo out-dir light saves the Assets pane in each view as PNGs.
+add_executable(assets-demo
+    tests/AssetsDemo.cpp
+)
+target_link_libraries(assets-demo PRIVATE studio)
+
 # Catch2 is only the sandbox acceptance suite.
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.28")
     FetchContent_Declare(
@@ -472,6 +491,7 @@ add_executable(sandbox
     sandbox/project_tests.cpp
     sandbox/merge_tests.cpp
     sandbox/scene_services_tests.cpp
+    sandbox/game_services_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 target_compile_features(sandbox PRIVATE cxx_std_17)
@@ -488,7 +508,8 @@ function(anarchy_warnings target)
     endif()
 endfunction()
 foreach(target IN ITEMS studio_core studio AnarchyEngine-CPP engine-tests shell-tests properties-tests console-tests
-                        studio-tests mcp-tests explorer-tests terminal-tests terminal-probe anarchy-mcp sandbox ${ENGINE_PACKAGES})
+                        studio-tests mcp-tests explorer-tests assets-tests assets-demo terminal-tests terminal-probe anarchy-mcp
+                        sandbox ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()
 
@@ -543,7 +564,7 @@ endif()
 # Every test program, for ctest (with Visual Studio, ctest -C Release). Each
 # runs from the source folder, where resources/ is.
 enable_testing()
-foreach(suite engine-tests properties-tests console-tests studio-tests mcp-tests sandbox shell-tests explorer-tests
+foreach(suite engine-tests properties-tests console-tests studio-tests mcp-tests sandbox shell-tests explorer-tests assets-tests
               terminal-tests)
     if(TARGET ${suite})
         add_test(NAME ${suite} COMMAND ${suite} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

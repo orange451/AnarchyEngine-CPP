@@ -286,9 +286,9 @@ int main() {
         for (const std::shared_ptr<jadefx::MenuItem>& item : windows->getItems().items()) {
             labels.push_back(item ? item->getText() : std::string());
         }
-        expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "Terminal", "",
+        expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "Terminal", "Assets", "",
                                                   "New Scene View", "", "Reset to Default Layout"},
-               "Window lists the explorers, Properties, Console, Search, Conflicts, and Terminal, then New Scene View and the reset");
+               "Window lists the explorers, Properties, Console, Search, Conflicts, Terminal, and Assets, then New Scene View and the reset");
         double time = 1.1;
         auto frame = [&] {
             scene->layout(1280, 800, time);

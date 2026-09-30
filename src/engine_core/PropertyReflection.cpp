@@ -1,9 +1,20 @@
 #include "PropertyReflection.hpp"
 
+#include "DataModel.hpp"
+#include "LuaApi.hpp"
+
 #include <cstring>
 #include <vector>
 
 namespace engine_core {
+
+std::string reference_class(std::string_view type) {
+    if (type.size() < 2 || type.back() != '?') {
+        return {};
+    }
+    const std::string base(type.substr(0, type.size() - 1));
+    return lua_class_known(base.c_str()) ? base : std::string();
+}
 
 bool slot_to_json(const LuaSlot& slot, std::string_view type, JsonValue& out) {
     if (type == "number" && slot.kind == LuaSlot::Kind::Number) {
@@ -18,6 +29,9 @@ bool slot_to_json(const LuaSlot& slot, std::string_view type, JsonValue& out) {
     } else if (type == "Vector3" && slot.kind == LuaSlot::Kind::Vec3) {
         const float axes[3] = {slot.vec.x, slot.vec.y, slot.vec.z};
         out = json_floats(axes, 3);
+    } else if (!reference_class(type).empty() &&
+               (slot.kind == LuaSlot::Kind::Instance || slot.kind == LuaSlot::Kind::Nil)) {
+        out = slot.text.empty() ? JsonValue() : JsonValue::string(slot.text);
     } else {
         return false;
     }
@@ -63,6 +77,19 @@ bool slot_from_json(const JsonValue& value, std::string_view type, const char* n
         }
         out.kind = LuaSlot::Kind::Vec3;
         out.vec = Vec3{floats[0], floats[1], floats[2]};
+    } else if (!reference_class(type).empty()) {
+        if (value.is_null()) {
+            out.kind = LuaSlot::Kind::Nil;
+            out.text.clear();
+        } else if (value.is_string() && valid_guid(value.as_string())) {
+            // Named by GUID; the class resolves it when read.
+            out.kind = LuaSlot::Kind::Instance;
+            out.id = 0;
+            out.text = value.as_string();
+        } else {
+            error = label + " must be a GUID or null";
+            return false;
+        }
     } else {
         error = label + " has a type a project cannot hold";
         return false;
@@ -76,6 +103,8 @@ bool same_slot(const LuaSlot& a, const LuaSlot& b) {
     }
     switch (a.kind) {
     case LuaSlot::Kind::Nil:
+        // A reference that resolves to nothing still names its GUID.
+        return a.text == b.text;
     case LuaSlot::Kind::Signal:
         return true;
     case LuaSlot::Kind::Bool:
@@ -85,7 +114,7 @@ bool same_slot(const LuaSlot& a, const LuaSlot& b) {
     case LuaSlot::Kind::String:
         return a.text == b.text;
     case LuaSlot::Kind::Instance:
-        return a.id == b.id;
+        return a.id == b.id && a.text == b.text;
     case LuaSlot::Kind::Vec3:
         return a.vec.x == b.vec.x && a.vec.y == b.vec.y && a.vec.z == b.vec.z;
     case LuaSlot::Kind::Color:

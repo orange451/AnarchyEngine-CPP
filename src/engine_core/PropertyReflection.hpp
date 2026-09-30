@@ -9,13 +9,19 @@
 namespace engine_core {
 
 // A saved property's value as the JSON a project file holds, by the type its
-// class registered: number, boolean, string, Color3 as [r, g, b], or Vector3
-// as [x, y, z]. False for any other type.
+// class registered: number, boolean, string, Color3 as [r, g, b], Vector3 as
+// [x, y, z], or a reference as the target's GUID string, or null. False for
+// any other type.
 bool slot_to_json(const LuaSlot& slot, std::string_view type, JsonValue& out);
 // The reverse. False, with error naming the property, when value is not one.
 bool slot_from_json(const JsonValue& value, std::string_view type, const char* name, LuaSlot& out,
                     std::string& error);
 // The same value, compared by kind.
 bool same_slot(const LuaSlot& a, const LuaSlot& b);
+
+// The class a reference property holds, as its type names it: "Texture?" gives
+// "Texture". Empty for any other type. A reference's slot carries the target's
+// GUID in text, and the live target, if any, in id.
+std::string reference_class(std::string_view type);
 
 }  // namespace engine_core

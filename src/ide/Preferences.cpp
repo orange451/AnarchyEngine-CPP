@@ -57,6 +57,31 @@ void Preferences::set_frame_rate(int fps) {
 
 double Preferences::stage_frame_rate(int fps) { return fps == kUncappedFrameRate ? 0.0 : static_cast<double>(fps); }
 
+std::string Preferences::assets_view() const {
+    const engine_core::JsonValue* view = root_.find("assetsView");
+    if (view != nullptr && view->is_string()) {
+        const std::string& text = view->as_string();
+        if (text == "icons" || text == "list" || text == "columns") {
+            return text;
+        }
+    }
+    return "icons";
+}
+
+void Preferences::set_assets_view(const std::string& view) { root_.set("assetsView", engine_core::JsonValue::string(view)); }
+
+double Preferences::zoom() const {
+    const engine_core::JsonValue* zoom = root_.find("zoom");
+    if (zoom == nullptr || !zoom->is_number() || !std::isfinite(zoom->as_number())) {
+        return 1.0;
+    }
+    return std::clamp(zoom->as_number(), kMinZoom, kMaxZoom);
+}
+
+void Preferences::set_zoom(double zoom) {
+    root_.set("zoom", engine_core::JsonValue::number(std::clamp(zoom, kMinZoom, kMaxZoom)));
+}
+
 bool Preferences::save(std::string& error) const {
     if (file_.empty()) {
         return true;

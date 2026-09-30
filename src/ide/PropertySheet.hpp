@@ -3,9 +3,20 @@
 #include "DataModel.hpp"
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ide {
+
+// A drag of instances: their ids in decimal, joined by commas. The Assets
+// pane writes it; a reference row in Properties takes it.
+inline constexpr const char* kInstanceDragFormat = "application/x-anarchy-instances";
+
+// kInstanceDragFormat's text for ids: each in decimal, joined by commas.
+std::string instance_drag_text(const std::vector<engine_core::InstanceId>& ids);
+// The ids in that text, in order. Empty when any part is not a plain decimal
+// id that fits an InstanceId, so a malformed drag is ignored. Never throws.
+std::vector<engine_core::InstanceId> instance_drag_ids(std::string_view text);
 
 // What a Properties row edits. The class registry's type name picks it.
 // ReadOnlyText is shown and never written.

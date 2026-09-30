@@ -610,6 +610,35 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                     self->toggle_pick(*row_view);
                 }
             });
+            // Parent already picks by clicking the Explorer; every other
+            // reference also takes a drag from the Assets pane.
+            if (row.name != "Parent") {
+                view->pick->setOnDragOver([](jadefx::DragEvent& event) {
+                    if (event.dragboard != nullptr && event.dragboard->has(kInstanceDragFormat)) {
+                        event.acceptTransferModes(jadefx::TransferMode::Link);
+                        event.consume();
+                    }
+                });
+                view->pick->setOnDragDropped([weak_self, weak_view](jadefx::DragEvent& event) {
+                    const auto self = weak_self.lock();
+                    const auto row_view = weak_view.lock();
+                    if (!self || !row_view || event.dragboard == nullptr) {
+                        return;
+                    }
+                    const std::vector<engine_core::InstanceId> ids =
+                        instance_drag_ids(event.dragboard->get(kInstanceDragFormat));
+                    if (ids.empty()) {
+                        return;
+                    }
+                    PropertyEdit edit;
+                    edit.property = row_view->row.name;
+                    edit.kind = PropertyKind::Ref;
+                    edit.value.ref = ids.front();
+                    self->submit(row_view->ids, edit);
+                    event.setDropCompleted(true);
+                    event.consume();
+                });
+            }
             view->clear = jadefx::make<jadefx::Button>("x");
             view->clear->getClassList().add("properties-clear");
             view->clear->setStyle(kButtonStyle);
@@ -887,7 +916,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         pick_name = view.row.name;
         pick_ids = view.ids;
         pick_seen = selection->revision();
-        status = "Click an instance in the Explorer to set " + pick_name + ". Click " + pick_name + " again to cancel.";
+        status = "Click an instance in an explorer or the Assets pane to set " + pick_name + ". Click " + pick_name + " again to cancel.";
         force = true;
     }
 

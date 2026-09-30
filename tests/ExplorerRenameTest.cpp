@@ -3,9 +3,12 @@
 #include "DataModelLock.hpp"
 #include "SelectionService.hpp"
 
+#include "AssetInstances.hpp"
+#include "ChangeHistoryService.hpp"
 #include "DataModel.hpp"
 #include "Folder.hpp"
 #include "Game.hpp"
+#include "GameObject.hpp"
 #include "LuaApi.hpp"
 #include "jadefx/jadefx.hpp"
 
@@ -656,6 +659,43 @@ void TestMoveSet() {
     Expect(refused == "Workspace cannot be moved", "and move_set says why too");
 }
 
+engine_core::DataModel& CreateFolder(engine_core::DataModel& world) {
+    return world.create<engine_core::Folder>();
+}
+
+void TestCopySet() {
+    engine_core::register_lua_creatable("Folder", CreateFolder);
+    engine_core::Game game;
+    const engine_core::InstanceId workspace = game.scene_service("Workspace");
+    engine_core::Folder& outer = game.create<engine_core::Folder>();
+    game.set_name(outer.id(), "Outer");
+    game.set_parent(outer.id(), workspace);
+    engine_core::Folder& inner = game.create<engine_core::Folder>();
+    game.set_name(inner.id(), "Inner");
+    game.set_parent(inner.id(), outer.id());
+    game.set_extra_property(inner.id(), "Tag", engine_core::JsonValue::string("kept"));
+
+    const std::vector<ide::CopiedNode> copies = ide::copy_set(game, {inner.id(), outer.id()});
+    Expect(copies.size() == 1 && copies.front().name == "Outer" && copies.front().children.size() == 1,
+           "a copy of a parent carries its selected child once");
+
+    std::vector<engine_core::InstanceId> made;
+    Expect(ide::paste_copies(game, copies, workspace, &made), "paste_copies pastes");
+    Expect(made.size() == 1 && made.front() != outer.id(), "a paste makes a new instance");
+    const std::vector<engine_core::InstanceId> kids = made.empty() ? std::vector<engine_core::InstanceId>{}
+                                                                   : game.get_children(made.front());
+    Expect(!made.empty() && game.name(made.front()) == "Outer", "the copy keeps the name");
+    Expect(kids.size() == 1 && game.name(kids.front()) == "Inner", "the copy keeps its children");
+    const engine_core::JsonValue* tag = kids.empty() ? nullptr : engine_core::bag_find(game.extra_properties(kids.front()), "Tag");
+    Expect(tag != nullptr && tag->as_string() == "kept", "the copy keeps properties");
+    Expect(game.get_children(outer.id()).size() == 1, "the original is untouched");
+
+    made.clear();
+    Expect(ide::paste_copies(game, copies, inner.id(), &made) && made.size() == 1,
+           "the same copy pastes again, even inside the original");
+    Expect(ide::copy_set(game, {workspace, 0}).empty(), "the root and scene services are not copied");
+}
+
 // Alpha holds Inner, which holds Deep.
 engine_core::InstanceId NestDeep(Rig& rig) {
     engine_core::Folder& inner = rig.game.create<engine_core::Folder>();
@@ -836,6 +876,107 @@ void TestRevealScrolls() {
     Expect(!rig.explorer->reveal_selection(), "reveal does nothing with no selection");
 }
 
+void hidden_services_have_no_rows() {
+    Rig rig;
+    rig.frame(0);
+    Expect(rig.cell("Workspace") != nullptr, "Workspace has a row");
+    Expect(rig.cell("Assets") == nullptr, "Assets has no row");
+    Expect(rig.cell("Textures") == nullptr, "Textures has no row");
+    // A Folder in Textures is under a hidden service, so it has no row either.
+    engine_core::Folder& walls = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(walls.id(), "Walls");
+    rig.game.set_parent(walls.id(), rig.game.service("Textures"));
+    rig.frame(1);
+    Expect(rig.cell("Walls") == nullptr, "a Folder in Textures has no row");
+    rig.type_filter("Walls", 1.1);
+    Expect(rig.cell("Walls") == nullptr, "the filter never shows a hidden row");
+}
+
+engine_core::DataModel& CreateTexture(engine_core::DataModel& world) {
+    return world.create<engine_core::Texture>();
+}
+
+void insert_list_leaves_out_assets() {
+    // The engine's registrars are not linked in here, so the class list needs
+    // stand-ins: what makes is unimportant, only whether the class is known.
+    engine_core::register_lua_creatable("Folder", CreateFolder);
+    engine_core::register_lua_creatable("Script", CreateFolder);
+    engine_core::register_lua_creatable("Texture", CreateTexture);
+    engine_core::register_lua_creatable("Mesh", CreateFolder);
+    engine_core::register_lua_creatable("Sound", CreateFolder);
+    engine_core::register_lua_creatable("Material", CreateFolder);
+    engine_core::register_lua_creatable("Prefab", CreateFolder);
+    engine_core::register_lua_creatable("Model", CreateFolder);
+    Expect(ide::insert_offers("Folder"), "Insert offers Folder");
+    Expect(ide::insert_offers("Script"), "Insert offers Script");
+    for (const char* klass : {"Texture", "Mesh", "Sound", "Material", "Prefab", "Model"}) {
+        Expect(!ide::insert_offers(klass), "Insert leaves out asset classes");
+    }
+}
+
+void insert_refused_leaves_nothing() {
+    engine_core::register_lua_creatable("Folder", CreateFolder);
+    engine_core::register_lua_creatable("Texture", CreateTexture);
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    engine_core::Game game;
+    const std::size_t before = game.room_left();
+    const std::pair<bool, std::string> undo_before = game.history().can_undo();
+    std::string error;
+    const engine_core::InstanceId made = ide::insert_instance(game, "Folder", game.service("Assets"), error);
+    Expect(made == 0, "Assets refuses a Folder");
+    Expect(error == "Assets holds only Materials, Prefabs, Meshes, Textures, and Audio", "and says why");
+    Expect(game.room_left() == before, "nothing is left behind");
+    Expect(game.get_children(game.service("Assets")).size() == 5, "Assets is unchanged");
+    Expect(game.history().can_undo() == undo_before, "a refused insert leaves no undo step");
+
+    error.clear();
+    const engine_core::InstanceId texture = ide::insert_instance(game, "Texture", game.service("Textures"), error);
+    Expect(texture != 0 && error.empty() && game.parent(texture) == game.service("Textures"), "a Texture goes in");
+    const engine_core::InstanceId top = ide::insert_instance(game, "Folder", 0, error);
+    Expect(game.parent(top) == game.service("Workspace"), "the root still means Workspace");
+    engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+}
+
+void add_prefab_instance_places_named_game_object() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    engine_core::Game game;
+    const engine_core::InstanceId statue = game.create<engine_core::Prefab>().id();
+    game.set_name(statue, "Statue");
+    game.set_parent(statue, game.service("Prefabs"));
+    const engine_core::InstanceId brick = game.create<engine_core::Texture>().id();
+    game.set_name(brick, "Brick");
+    game.set_parent(brick, game.service("Textures"));
+
+    std::string error;
+    const engine_core::InstanceId made = ide::add_prefab_instance(game, statue, error);
+    Expect(made != 0 && error.empty(), "a Prefab is added as a GameObject");
+    Expect(game.name(made) == "Statue", "named after the Prefab");
+    Expect(game.parent(made) == game.service("Workspace"), "placed in Workspace");
+    Expect(dynamic_cast<engine_core::GameObject*>(game.instance(made)) != nullptr, "it is a GameObject");
+    const engine_core::LuaField* field = engine_core::lua_class_find("GameObject", "Prefab");
+    Expect(field != nullptr, "GameObject has a Prefab property");
+    if (field != nullptr) {
+        engine_core::LuaSlot slot;
+        Expect(field->read(game, *game.instance(made), slot) && slot.id == statue, "Prefab is set");
+    }
+
+    const std::size_t before_texture = game.room_left();
+    error.clear();
+    const engine_core::InstanceId refused_texture = ide::add_prefab_instance(game, brick, error);
+    Expect(refused_texture == 0 && error == "Only a Prefab can be added as a GameObject",
+           "a Texture is refused with its own message");
+    Expect(game.room_left() == before_texture, "nothing is left behind");
+
+    const engine_core::InstanceId gone = game.create<engine_core::Folder>().id();
+    game.destroy(gone);
+    const std::size_t before_dead = game.room_left();
+    error.clear();
+    const engine_core::InstanceId refused_dead = ide::add_prefab_instance(game, gone, error);
+    Expect(refused_dead == 0 && error == "That instance no longer exists", "a dead id is refused");
+    Expect(game.room_left() == before_dead, "nothing is left behind");
+    engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+}
+
 void TestRevealClearsAHidingFilter() {
     Rig rig;
     rig.clickRow("Alpha", 0.1);
@@ -845,10 +986,6 @@ void TestRevealClearsAHidingFilter() {
     rig.frame(0.31);
     Expect(rig.filter()->getText().empty(), "reveal clears a filter that hides the selection");
     Expect(rig.painted("Alpha"), "the revealed row shows selected");
-}
-
-engine_core::DataModel& CreateFolder(engine_core::DataModel& world) {
-    return world.create<engine_core::Folder>();
 }
 
 // An insert the studio could not make, as in a full place, says why.
@@ -873,6 +1010,38 @@ void TestRefusedInsertSaysWhy() {
     Expect(rig.inserts.size() == 1, "the refused insert was asked for");
     Expect(rig.notices.size() == 1 && rig.notices[0] == "The place is full.", "a refused insert says why");
     Expect(!rig.painted("Made"), "a refused insert shows nothing new");
+}
+
+void TestRightClickInsertsUnderTheRow() {
+    engine_core::register_lua_creatable("Folder", CreateFolder);
+    Rig rig;
+    rig.clickRow("Gamma", 0.1, 1);
+    rig.frame(0.2);
+    rig.key(jadefx::Key::Enter);
+    rig.frame(0.3);
+    Expect(rig.inserts.size() == 1 && rig.inserts.front().second == rig.ids[2],
+           "a right-click insert goes under the row clicked");
+}
+
+void TestRightClickListCloses() {
+    engine_core::register_lua_creatable("Folder", CreateFolder);
+    Rig rig;
+    rig.clickRow("Gamma", 0.1, 1);
+    rig.frame(0.2);
+    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "a right-click opens the list");
+    rig.clickRow("Alpha", 0.5);
+    rig.frame(0.6);
+    Expect(rig.scene->getElementById("menu-label:Rename") == nullptr, "a click on another row closes the list");
+    rig.clickRow("Gamma", 0.7, 1);
+    rig.frame(0.8);
+    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "the list opens again");
+    rig.clickRow("Beta", 0.9, 1);
+    rig.frame(1.0);
+    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "another right-click moves the list");
+    rig.key(jadefx::Key::Enter);
+    rig.frame(1.1);
+    Expect(rig.inserts.size() == 1 && rig.inserts.front().second == rig.ids[1],
+           "the moved list inserts under the row right-clicked last");
 }
 
 void TestHeaderInsertsUnderTheRoot() {
@@ -945,6 +1114,7 @@ int main() {
     TestDragCarriesTheSelection();
     TestDragRefusesItsOwnChild();
     TestMoveSet();
+    TestCopySet();
     TestFilterHidesOtherRows();
     TestFilterShowsTheWayToAMatch();
     TestFilterEscapeLeavesTheField();
@@ -956,7 +1126,13 @@ int main() {
     TestRevealScrolls();
     TestRevealClearsAHidingFilter();
     TestHeaderInsertsUnderTheRoot();
+    TestRightClickInsertsUnderTheRow();
+    TestRightClickListCloses();
     TestRefusedInsertSaysWhy();
+    hidden_services_have_no_rows();
+    insert_list_leaves_out_assets();
+    insert_refused_leaves_nothing();
+    add_prefab_instance_places_named_game_object();
     if (gFailures == 0) {
         std::printf("explorer tests passed\n");
         return 0;

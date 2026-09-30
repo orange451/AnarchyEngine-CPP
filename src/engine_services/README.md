@@ -6,7 +6,7 @@ A new `Game` makes the four scene services as its children, in order: `Workspace
 
 - `RunService`: the simulation phase signals, fired with each step's dt. Scripts reach it through `GetService`.
 - `SelectionService`: what the studio has selected. Scripts reach it as `GetService("Selection")`, and the studio through `DataModel::selection()`.
-- `UserInputService`: keys and the mouse over the scene view, as Roblox's `UserInputService` gives them. Scripts reach it as `GetService("UserInputService")`, and the studio posts to it through `DataModel::input()`.
+- `UserInputService`: keys and the mouse over the scene view, as Roblox's `UserInputService` gives them. It works in edit mode too, not only while the place is playing, which is how a plugin such as the studio's built-in SceneCamera uses it. Scripts reach it as `GetService("UserInputService")`, and the studio posts to it through `DataModel::input()`. `MouseBehavior` (`Enum.MouseBehavior`: `Default`, `LockCenter`, `LockCurrentPosition`) locks the pointer in whichever scene view has focus, and `GetMouseDelta` then returns its motion since the last read; `Workspace.CurrentCamera` is the Camera that view last used, which a plugin like that one flies.
 - `ChangeHistoryService`: edit undo, through `DataModel::history()`. Scripts do not see it.
 
 `Game`, `RunService`, `Selection`, and `UserInputService` each declare their own Lua class. The members that need the script VM, such as `GetService`, `Selection:Get`, `Selection:Set`, and `UserInputService:IsKeyDown`, are added by `ScriptRuntime` in engine_core.

@@ -6,6 +6,7 @@
 #include "ScriptAnalysis.hpp"
 #include "Runner.hpp"
 #include "SceneFeed.hpp"
+#include "SceneService.hpp"
 #include "ScriptRuntime.hpp"
 #include "amesh.hpp"
 #include "gl.hpp"
@@ -66,6 +67,7 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
         const int index = cameraBox_->getSelectionIndex();
         if (index >= 0 && static_cast<std::size_t>(index) < listed_.size()) {
             linkCamera(listed_[static_cast<std::size_t>(index)].guid);
+            noteCurrentCamera();
         }
     });
     cameraBox_ = cameras.get();
@@ -84,6 +86,42 @@ void GameView::linkCamera(std::string guid) {
             cameraId_ = choice.id;
             break;
         }
+    }
+}
+
+void GameView::noteCurrentCamera() {
+    if (engine_ == nullptr || cameraId_ == 0) {
+        return;
+    }
+    engine_->on_simulation([camera = cameraId_](engine_core::DataModel& game) {
+        if (auto* workspace = dynamic_cast<engine_core::Workspace*>(game.instance(game.scene_service("Workspace")))) {
+            workspace->set_current_camera(camera);
+        }
+    });
+}
+
+void GameView::syncPointerLock() {
+    jadefx::Scene* scene = getScene();
+    if (game_ == nullptr || scene == nullptr) {
+        return;
+    }
+    engine_core::UserInputService& input = game_->input();
+    if (pointerLocked_ && !scene->isPointerLocked()) {
+        // The scene let the pointer go, as when the window lost focus. Scripts hear it.
+        pointerLocked_ = false;
+        input.set_mouse_behavior(engine_core::UserInputService::kMouseBehaviorDefault);
+        return;
+    }
+    const bool wanted = isFocused() && input.mouse_behavior() != engine_core::UserInputService::kMouseBehaviorDefault;
+    if (wanted != pointerLocked_) {
+        scene->setPointerLocked(wanted);
+        pointerLocked_ = wanted;
+    }
+    if (pointerLocked_) {
+        double dx = 0;
+        double dy = 0;
+        scene->takePointerDelta(dx, dy);
+        input.post_mouse_delta(static_cast<float>(dx), static_cast<float>(dy));
     }
 }
 
@@ -277,6 +315,7 @@ void GameView::renderChildren(jadefx::UiRenderer&, float) {}
 
 void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
     notePaint();
+    syncPointerLock();
     const jadefx::Scene* scene = getScene();
     if (scene != nullptr && scene->getWidth() > 0.0 && scene->getHeight() > 0.0 && getWidth() > 0.0 &&
         getHeight() > 0.0 && ensureGraphics()) {
@@ -311,6 +350,13 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
 }
 
 void GameView::sceneChanged(jadefx::Scene* previous) {
+    // A lock belongs to the window the view is leaving.
+    if (pointerLocked_) {
+        if (previous != nullptr && !previous->isTearingDown()) {
+            previous->setPointerLocked(false);
+        }
+        pointerLocked_ = false;
+    }
     // Leaving a live scene releases the GL objects. The context that created
     // them is still current: a move between windows shuts down before the new
     // window paints, and that paint creates them again. Scene teardown runs
@@ -332,6 +378,7 @@ float GameView::localY(double y) const { return static_cast<float>(y - getAbsolu
 void GameView::handleMousePressed(const jadefx::MouseEvent& event) {
     // Keys go to the focused node, so a click is how a player gives the game the keyboard.
     requestFocus();
+    noteCurrentCamera();
     if (game_ != nullptr) {
         game_->input().post_mouse_button(event.button, true, localX(event.x), localY(event.y));
     }

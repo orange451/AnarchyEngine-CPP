@@ -40,9 +40,11 @@ class SceneFeed;
 // The corner label is how many times this view is painted per second, averaged
 // over a quarter of a second. That count keeps moving while the simulation is paused.
 //
-// Keys and the mouse over this view go to the place's UserInputService, which now
-// keeps them in edit mode too, not only while the place is playing. A press here
-// takes keyboard focus, and losing focus ends whatever was still held.
+// Keys and the mouse over this view go to the place's UserInputService, in edit
+// mode and in play. A press here takes keyboard focus and makes this view's
+// Camera the Workspace's CurrentCamera; losing focus ends whatever was still
+// held. While a script sets MouseBehavior to a lock and this view has focus,
+// the pointer is locked in it and its motion goes to GetMouseDelta.
 class GameView : public ide::IdePane {
 public:
     explicit GameView(Runner& runner, std::string name = "Scene View", bool closable = false);
@@ -76,6 +78,11 @@ protected:
 private:
     void notePaint();
     void refreshFpsLabel();
+    // Makes this view's linked Camera the Workspace's CurrentCamera.
+    void noteCurrentCamera();
+    // Locks or frees the scene's pointer to match MouseBehavior and focus, and
+    // hands the scene's pointer motion to UserInputService while locked.
+    void syncPointerLock();
     // Walks Workspace for the Cameras, and resolves the link. Skipped when the
     // DataModel is busy; the previous list and link stay.
     void refreshWorkspace();
@@ -123,6 +130,8 @@ private:
     std::string listedGuid_;
     // The engine that owns game_. Each paint tells its render thread a frame happened.
     engine_core::Engine* engine_ = nullptr;
+    // Whether this view last locked its scene's pointer.
+    bool pointerLocked_ = false;
     // Paints in the current window. The label reads the finished average.
     std::chrono::steady_clock::time_point paintWindowStart_{};
     int paintWindowFrames_ = 0;

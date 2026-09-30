@@ -4,6 +4,7 @@
 #include "runner/Runner.hpp"
 #include "IdeExplorer.hpp"
 #include "InputRouter.hpp"
+#include "PluginLoader.hpp"
 #include "Preferences.hpp"
 #include "ThemeLibrary.hpp"
 #include "Project.hpp"
@@ -156,6 +157,8 @@ private:
     // A Prefab editor's writes, each one undo step on the simulation thread.
     PrefabEditorHost prefab_editor_host();
     void flush_editors();
+    // Runs the built-in plugins again. The place was just made, opened, or rebuilt.
+    void load_plugins();
     void new_place();
     void open_project();
     // then runs after a successful save. A cancelled dialog or a failure skips it.
@@ -460,6 +463,8 @@ private:
     // Stop restores the place, then these strings are written back.
     std::unordered_map<std::uint32_t, std::string> kept_sources_;
     std::unique_ptr<Clip> clip_;
+    // The studio's built-in plugins, reloaded each time the place is made, opened, or rebuilt.
+    PluginLoader plugins_;
     // The open project. Null until Open or Save As.
     std::unique_ptr<engine_core::Project> project_;
     bool dialog_open_ = false;

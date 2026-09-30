@@ -363,6 +363,7 @@ void IdeLayout::new_place() {
     project_.reset();
     forget_conflicts();
     mark_saved();
+    load_plugins();
     show_toast("New place");
 }
 
@@ -421,6 +422,7 @@ void IdeLayout::open_project_at(const std::filesystem::path& root) {
     project_ = std::move(loaded);
     forget_conflicts();
     mark_saved();
+    load_plugins();
     show_toast("Opened " + project_->name());
 }
 

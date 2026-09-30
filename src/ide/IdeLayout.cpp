@@ -263,6 +263,21 @@ void IdeLayout::start() {
     runner_.start();
     // Whatever the app built before start is the starting point, not an edit.
     mark_saved();
+    // The initial place exists by now: the app makes it right after
+    // constructing this layout, before calling start. Loading here, rather
+    // than in the constructor, keeps the plugins' Scripts out of that place's
+    // clearing.
+    load_plugins();
+}
+
+void IdeLayout::load_plugins() {
+    engine_core::ScriptRuntime& scripts = runner_.simulation().scripts();
+    std::vector<std::string> errors;
+    const std::vector<PluginFile> files = read_builtin_plugins(errors);
+    for (const std::string& error : errors) {
+        scripts.append_output(engine_core::ScriptRuntime::OutputKind::Error, "Plugin: " + error);
+    }
+    run_now([&](engine_core::DataModel& game) { plugins_.load(game, scripts, files); });
 }
 
 void IdeLayout::mount(jadefx::Scene& scene) {

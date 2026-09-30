@@ -625,3 +625,37 @@ TEST_CASE("GS15 a file that breaks a placement rule fails the load and names the
         },
         "Textures must be a child of Assets with GUID textures");
 }
+
+TEST_CASE("GS16 apply_disk reorders assets directly under a category, but Assets stays in table order",
+          "[GS16][project]") {
+    SimRole role;
+    TempDir dir;
+    namespace fs = std::filesystem;
+    engine_core::Project project = engine_core::Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId materials = game.service("Materials");
+    const InstanceId a = make(game, "Material", "A", materials);
+    const InstanceId b = make(game, "Material", "B", materials);
+    project.save();
+
+    // Swap the two Materials on disk, as another editor would reorder them.
+    const std::string a_guid = game.guid(a);
+    const std::string b_guid = game.guid(b);
+    const fs::path materials_dir = dir.path / "src" / "Assets.assets" / "Materials.materials";
+    REQUIRE(fs::exists(materials_dir / "init.json"));
+    write_text(materials_dir / "init.json",
+               file_of("Materials", "materials", "Materials",
+                       ",\n  \"children\": [\"" + b_guid + "\", \"" + a_guid + "\"]"));
+    project.apply_disk();
+    REQUIRE(game.get_children(materials) == std::vector<InstanceId>{b, a});
+
+    // Editing Assets' own "children" on disk does not reorder the categories:
+    // Assets always holds them in table order.
+    const fs::path assets_dir = dir.path / "src" / "Assets.assets";
+    write_text(assets_dir / "init.json",
+               file_of("Assets", "assets", "Assets",
+                       ",\n  \"children\": [\"audio\", \"textures\", \"meshes\", \"prefabs\", \"materials\"]"));
+    project.apply_disk();
+    REQUIRE(child_classes(game, game.service("Assets")) ==
+            std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio"});
+}

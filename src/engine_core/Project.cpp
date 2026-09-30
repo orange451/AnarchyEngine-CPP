@@ -932,9 +932,9 @@ void order_children_as(DataModel& world, InstanceId id, const JsonValue& doc) {
     if (id == 0) {
         return;
     }
-    // Assets holds only its categories, made with the world in table order.
-    if (const DataModel* holder = world.instance(id);
-        holder != nullptr && holder->is_service() && !holder->is_scene_service()) {
+    // Assets holds only its categories, made with the world in table order. A
+    // category's own children are ordinary assets, so they still reorder.
+    if (id == world.service("Assets")) {
         return;
     }
     // A listed child's place in the file. The first listing counts.

@@ -1366,7 +1366,9 @@ void IdeAssets::add_item(const std::shared_ptr<jadefx::Node>& node, const AssetR
         if (std::find(ids.begin(), ids.end(), id) == ids.end()) {
             ids = {id};
         }
-        if (jadefx::Dragboard* board = source->startDragAndDrop(jadefx::TransferMode::Move | jadefx::TransferMode::Link)) {
+        // Move into folders, Link into Properties, and Copy onto a Scene View, which adds a GameObject.
+        if (jadefx::Dragboard* board = source->startDragAndDrop(jadefx::TransferMode::Move | jadefx::TransferMode::Copy |
+                                                               jadefx::TransferMode::Link)) {
             board->put(kInstanceDragFormat, instance_drag_text(ids));
         }
     });

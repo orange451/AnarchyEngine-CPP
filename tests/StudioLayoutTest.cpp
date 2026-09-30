@@ -571,6 +571,8 @@ int main() {
             auto* assets = dynamic_cast<ide::IdeAssets*>(showing("Assets"));
             ide::IdePane* view = showing("Scene View");
             expect(assets != nullptr && view != nullptr, "Assets and the Scene View both show");
+            // The pointer over the Scene View just before the drop.
+            jadefx::Cursor over = jadefx::Cursor::Default;
             auto drag = [&](engine_core::InstanceId id) {
                 frame();
                 jadefx::Node* from = assets != nullptr ? assets->itemNode(id) : nullptr;
@@ -587,6 +589,7 @@ int main() {
                 scene->noteMove(to_x, to_y);
                 frame();
                 scene->noteMove(to_x, to_y);
+                over = scene->hoverCursor();
                 scene->noteButton(0, false, to_x, to_y);
                 frame();
             };
@@ -594,11 +597,13 @@ int main() {
                 assets->openFolder(world.service("Materials"));
             }
             drag(stone);
+            expect(over == jadefx::Cursor::NotAllowed, "a Material over the Scene View shows it cannot drop");
             expect(world.get_children(workspace) == before, "a Material dropped on the Scene View adds nothing");
             if (assets != nullptr) {
                 assets->openFolder(world.service("Prefabs"));
             }
             drag(crate);
+            expect(over == jadefx::Cursor::Copy, "a Prefab over the Scene View shows the plus");
             std::vector<engine_core::InstanceId> added;
             for (engine_core::InstanceId id : world.get_children(workspace)) {
                 if (std::find(before.begin(), before.end(), id) == before.end()) {

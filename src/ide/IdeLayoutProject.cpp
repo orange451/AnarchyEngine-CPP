@@ -109,8 +109,8 @@ void IdeLayout::accept_prefab_drops(jadefx::Node& view) {
         // A busy place refuses this over; the next one asks again.
         engine_core::DataModelLock lock(world, engine_core::DataModelLock::Read, kActionLockWait);
         if (lock.owns() && !PrefabsIn(world, instance_drag_ids(event.dragboard->get(kInstanceDragFormat))).empty()) {
-            // The GameObject links to the Prefab; the Prefab stays where it is.
-            event.acceptTransferModes(jadefx::TransferMode::Link);
+            // A copy, so the pointer shows a plus: the drop adds a GameObject, and the Prefab stays where it is.
+            event.acceptTransferModes(jadefx::TransferMode::Copy);
             event.consume();
         }
     });

@@ -81,6 +81,10 @@ public:
         host.actions.move = [this](const std::vector<InstanceId>& ids, InstanceId parent) {
             ide::move_set(game_, ids, parent);
         };
+        host.add_as_game_object = [this](InstanceId prefab) {
+            std::string error;
+            ide::add_prefab_instance(game_, prefab, error);
+        };
         host.saved_view = [] { return std::string("icons"); };
         host.save_view = [](const std::string&) {};
         auto pane = jadefx::make<ide::IdeAssets>(game_, std::move(host));
@@ -161,6 +165,8 @@ private:
              [this] { right_click(pane_->getElementsByClassName("assets-center").front(), true); }},
             {"menu-item", ide::AssetView::Icons, bricks, brick_red_, {}, "",
              [this] { right_click(pane_->itemNode(brick_red_), false); }},
+            {"menu-prefab", ide::AssetView::Icons, {game_.service("Prefabs")}, crate_, {}, "",
+             [this] { right_click(pane_->itemNode(crate_), false); }},
         };
     }
 
@@ -171,6 +177,11 @@ private:
         }
         const Shot& shot = all[shot_];
         if (settled_ == 0) {
+            // A context menu left open by the previous shot's act() would eat
+            // the next shot's clicks, so close it first with a click on empty space.
+            scene_->noteMove(1, 1);
+            scene_->noteButton(0, true, 1, 1);
+            scene_->noteButton(0, false, 1, 1);
             pane_->searchField().setText(shot.search);
             pane_->setView(shot.view);
             for (InstanceId folder : shot.open) {

@@ -200,6 +200,28 @@ void TestEngineTools() {
     Expect(ErrorText(server, "set_property", R"({"instance":"Storage","property":"Parent","value":"Workspace"})")
                    .find("read-only") != std::string::npos,
            "a scene service's Parent is read-only");
+
+    const JsonValue gameTree = Call(server, "get_tree", R"({"instance":"game","depth":2})");
+    bool sawAssets = false;
+    std::vector<std::string> categories;
+    for (const JsonValue& child : Member(Member(gameTree, "tree"), "children").items()) {
+        if (Member(child, "name").as_string() == "Assets") {
+            sawAssets = true;
+            for (const JsonValue& category : Member(child, "children").items()) {
+                categories.push_back(Member(category, "name").as_string());
+            }
+        }
+    }
+    Expect(sawAssets && categories == std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio"},
+           "get_tree lists Assets and its five categories");
+
+    const JsonValue brick = Call(server, "create_instance",
+                                 R"({"class":"Texture","name":"Brick","parent":"Assets.Textures"})");
+    Expect(Member(brick, "path").as_string() == "Assets.Textures.Brick", "create_instance puts a Texture where it belongs");
+    Expect(ErrorText(server, "set_property", R"({"instance":"Assets.Textures.Brick","property":"Parent","value":"Workspace"})") ==
+               "A Texture must be in Assets.Textures",
+           "set_property refuses to move a Texture out of Assets.Textures");
+
     AddScript(game, "Hello", "print('hi')", game.find_first_child(game.scene_service("Workspace"), "Stuff"));
 
     const JsonValue tree = Call(server, "get_tree", R"({"instance":"Workspace","depth":1})");

@@ -176,8 +176,11 @@ void ScriptRuntime::step_tools(double dt) {
         dt = 0;
     }
     if (own_step) {
-        // Edit-mode input, dispatched even with no tool VM open so the queue never
-        // holds presses from before a plugin loaded. Its events drain before Heartbeat's.
+        // Edit-mode input, dispatched before Heartbeat so a plugin's Heartbeat sees this
+        // step's presses. Its events drain first. A caller that steps with no tool VM
+        // open, such as the running engine loop or a test, still empties the queue here.
+        // The paused engine loop, which is how edit mode runs, only calls this while a
+        // tool VM is open, so there the queue waits, capped, until one opens.
         game_->input().dispatch(game_->events());
         if (!tools_open) {
             game_->events().drain();

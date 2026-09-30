@@ -57,10 +57,11 @@ public:
 
     // The console and plugin VMs' heartbeat: their clocks += dt, wake their sleeps,
     // resume their ready threads. While the play VM is closed there is no play step,
-    // so this also fires RunService.Heartbeat and drains events first. While a play
-    // session is paused it does neither: their waits keep time, but signals wait for
-    // the session to resume, as the play VM's do. The engine calls it after heartbeat
-    // while stepping, and on its own while paused.
+    // so this also dispatches UserInputService's queued input, drains its events, and
+    // then fires RunService.Heartbeat and drains again, all before the tool VMs resume.
+    // While a play session is paused it does none of that: their waits keep time, but
+    // signals wait for the session to resume, as the play VM's do. The engine calls it after heartbeat
+    // while stepping, and on its own while paused, then only while a tool VM is open.
     void step_tools(double dt);
     // Whether the console or plugin VM is open, so step_tools has work. Any thread may ask.
     bool tools_open() const { return tools_open_.load(std::memory_order_relaxed); }

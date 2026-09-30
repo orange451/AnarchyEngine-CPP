@@ -625,16 +625,15 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                     if (!self || !row_view || event.dragboard == nullptr) {
                         return;
                     }
-                    const std::string ids = event.dragboard->get(kInstanceDragFormat);
-                    const std::size_t comma = ids.find(',');
-                    const std::string first = ids.substr(0, comma);
-                    if (first.empty()) {
+                    const std::vector<engine_core::InstanceId> ids =
+                        instance_drag_ids(event.dragboard->get(kInstanceDragFormat));
+                    if (ids.empty()) {
                         return;
                     }
                     PropertyEdit edit;
                     edit.property = row_view->row.name;
                     edit.kind = PropertyKind::Ref;
-                    edit.value.ref = static_cast<engine_core::InstanceId>(std::stoul(first));
+                    edit.value.ref = ids.front();
                     self->submit(row_view->ids, edit);
                     event.setDropCompleted(true);
                     event.consume();

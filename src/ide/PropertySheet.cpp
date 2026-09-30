@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -154,6 +156,48 @@ void blank_mixed(PropertyRow& row) {
 }
 
 }  // namespace
+
+std::string instance_drag_text(const std::vector<InstanceId>& ids) {
+    std::string out;
+    for (InstanceId id : ids) {
+        if (!out.empty()) {
+            out += ',';
+        }
+        out += std::to_string(id);
+    }
+    return out;
+}
+
+std::vector<InstanceId> instance_drag_ids(std::string_view text) {
+    std::vector<InstanceId> out;
+    if (text.empty()) {
+        return out;
+    }
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t comma = text.find(',', start);
+        const std::string_view part = text.substr(start, comma - start);
+        if (part.empty()) {
+            return {};
+        }
+        std::uint64_t value = 0;
+        for (char digit : part) {
+            if (digit < '0' || digit > '9') {
+                return {};
+            }
+            value = value * 10 + static_cast<std::uint64_t>(digit - '0');
+            if (value > std::numeric_limits<InstanceId>::max()) {
+                return {};
+            }
+        }
+        out.push_back(static_cast<InstanceId>(value));
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+    return out;
+}
 
 bool PropertyRow::operator==(const PropertyRow& other) const {
     if (!same_slot(other) || writable != other.writable || mixed != other.mixed || label != other.label ||

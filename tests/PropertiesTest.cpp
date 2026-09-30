@@ -907,6 +907,19 @@ void TestServiceRowsReadOnly() {
     Expect(parent != nullptr && !parent->writable, "a game service's Parent is read-only");
 }
 
+// instance_drag_ids never throws on malformed text: a drop is ignored rather
+// than crashing the app.
+void TestInstanceDragIds() {
+    Expect(ide::instance_drag_text({3, 42}) == "3,42", "ids join with commas");
+    Expect(ide::instance_drag_ids("3,42") == std::vector<InstanceId>{3, 42}, "and split back the same way");
+    Expect(ide::instance_drag_ids("").empty(), "empty text is no ids");
+    Expect(ide::instance_drag_ids("12,x").empty(), "a non-numeric part is ignored");
+    Expect(ide::instance_drag_ids("abc").empty(), "non-numeric text is ignored");
+    Expect(ide::instance_drag_ids("99999999999999999999").empty(), "an id too big to fit is ignored");
+    Expect(ide::instance_drag_ids("7") == std::vector<InstanceId>{7}, "a single id parses");
+    Expect(ide::instance_drag_ids("1,,2").empty(), "an empty part is ignored");
+}
+
 }  // namespace
 
 int main() {
@@ -923,6 +936,7 @@ int main() {
     TestR6ParentReference();
     TestReferenceRows();
     TestServiceRowsReadOnly();
+    TestInstanceDragIds();
     TestR7MidEditIsNotClobbered();
     TestR8NoSelection();
     TestR9DestroyedLeavesIntersection();

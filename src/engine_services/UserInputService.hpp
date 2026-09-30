@@ -103,19 +103,23 @@ public:
     Vec3 mouse_location() const { return mouse_; }
 
     // SimulationThread. The Delta of every MouseMovement in the latest dispatch,
-    // added up and not scaled. GetMouseDelta scales it by the sensitivity.
-    Vec3 mouse_delta() const { return mouse_delta_; }
+    // added up and not scaled. GetMouseDelta scales it by the sensitivity. Zero
+    // once a lock has started since that dispatch: that motion was the pointer
+    // moving about before the lock, not the locked motion that turns a camera.
+    Vec3 mouse_delta() const;
 
     // Any thread. What scripts asked of the pointer. The scene view reads it
-    // each paint and locks the pointer while it is not Default.
+    // each paint and locks the pointer while it is not Default. A change from
+    // Default to a lock drops the motion from before it, queued or dispatched.
     int mouse_behavior() const { return mouse_behavior_.load(std::memory_order_relaxed); }
-    void set_mouse_behavior(int behavior) { mouse_behavior_.store(behavior, std::memory_order_relaxed); }
+    void set_mouse_behavior(int behavior);
 
     // SimulationThread. Clamped to 0 and up. False, changing nothing, when not finite.
     double mouse_delta_sensitivity() const { return mouse_delta_sensitivity_; }
     bool set_mouse_delta_sensitivity(double value);
 
-    // SimulationThread. Forgets the dispatched state and records. The play
+    // SimulationThread. Forgets the dispatched state and records, and puts
+    // MouseBehavior and MouseDeltaSensitivity back to their defaults. The play
     // session calls this when it starts and stops.
     void reset();
 
@@ -143,6 +147,8 @@ private:
     bool buttons_down_[3] = {};
     Vec3 mouse_{};
     Vec3 mouse_delta_{};
+    // lock_starts_ as it was when mouse_delta_ was added up.
+    std::uint64_t delta_lock_starts_ = 0;
     double mouse_delta_sensitivity_ = 1.0;
 
     Signal began_;
@@ -150,6 +156,8 @@ private:
     Signal ended_;
     bool bound_ = false;
     std::atomic<int> mouse_behavior_{kMouseBehaviorDefault};
+    // How many times MouseBehavior has gone from Default to a lock.
+    std::atomic<std::uint64_t> lock_starts_{0};
 };
 
 }  // namespace engine_core

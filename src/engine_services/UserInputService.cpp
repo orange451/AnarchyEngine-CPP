@@ -193,6 +193,30 @@ void UserInputService::post_mouse_delta(float dx, float dy, bool processed) {
     push_locked(record);
 }
 
+void UserInputService::set_mouse_behavior(int behavior) {
+    const int previous = mouse_behavior_.exchange(behavior, std::memory_order_relaxed);
+    if (previous != kMouseBehaviorDefault || behavior == kMouseBehaviorDefault) {
+        return;
+    }
+    // The lock starts. Motion so far is the pointer on its way to the press,
+    // so it must not turn a camera: queued movement keeps its position but
+    // loses its Delta, and mouse_delta() drops what was dispatched already.
+    std::lock_guard<std::mutex> lock(mu_);
+    for (InputRecord& record : queue_) {
+        if (record.type == kMouseMovement) {
+            record.delta = Vec3{};
+        }
+    }
+    lock_starts_.fetch_add(1, std::memory_order_relaxed);
+}
+
+Vec3 UserInputService::mouse_delta() const {
+    if (lock_starts_.load(std::memory_order_relaxed) != delta_lock_starts_) {
+        return Vec3{};
+    }
+    return mouse_delta_;
+}
+
 bool UserInputService::set_mouse_delta_sensitivity(double value) {
     if (!std::isfinite(value)) {
         return false;
@@ -287,6 +311,8 @@ void UserInputService::dispatch(EventQueue& events) {
     {
         std::lock_guard<std::mutex> lock(mu_);
         dispatched_.swap(queue_);
+        // Under the lock, so a lock that starts after this sees these records dispatched.
+        delta_lock_starts_ = lock_starts_.load(std::memory_order_relaxed);
     }
     first_payload_ = next_payload_;
     next_payload_ += dispatched_.size();
@@ -341,6 +367,8 @@ void UserInputService::reset() {
     std::fill(std::begin(buttons_down_), std::end(buttons_down_), false);
     mouse_ = Vec3{};
     mouse_delta_ = Vec3{};
+    // What a session set of the pointer is its own, so the next one starts fresh.
+    mouse_delta_sensitivity_ = 1.0;
     set_mouse_behavior(kMouseBehaviorDefault);
 }
 

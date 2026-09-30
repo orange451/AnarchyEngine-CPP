@@ -153,7 +153,11 @@ TEST_CASE("SC7 RunService:IsRunning is true only in a play session", "[SC7]") {
     // Test clears the Output, so both lines below are printed after it.
     rig.game.start_simulation();
     rig.runtime.run_chunk("print(game:GetService('RunService'):IsRunning())");
+    // A sensitivity the game sets is its own, and goes with the session.
+    rig.runtime.run_chunk("game:GetService('UserInputService').MouseDeltaSensitivity = 3");
+    REQUIRE(rig.game.input().mouse_delta_sensitivity() == 3.0);
     rig.game.stop_simulation();
+    REQUIRE(rig.game.input().mouse_delta_sensitivity() == 1.0);
     rig.runtime.run_chunk("print(game:GetService('RunService'):IsRunning())");
     REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"true\n", "false\n"});
 }
@@ -365,4 +369,73 @@ TEST_CASE("SC17 a right-button release in play does not touch the game's own Mou
     rig.game.events().drain();
     REQUIRE(rig.game.input().mouse_behavior() == UserInputService::kLockCenter);
     rig.game.stop_simulation();
+}
+
+TEST_CASE("SC18 hover motion from before the lock is not turned into look motion", "[SC18]") {
+    SimRole role;
+    engine_core::Game game;
+    UserInputService& input = game.input();
+    input.set_active(true);
+    input.post_mouse_move(0.f, 0.f);
+    input.dispatch(game.events());
+
+    // Dispatched, then the lock starts in the same step, as a handler of the press does.
+    input.post_mouse_move(30.f, 0.f);
+    input.dispatch(game.events());
+    REQUIRE(input.mouse_delta().x == 30.f);
+    input.set_mouse_behavior(UserInputService::kLockCurrentPosition);
+    REQUIRE(input.mouse_delta().x == 0.f);
+
+    // Queued before the lock, dispatched after it.
+    input.set_mouse_behavior(UserInputService::kMouseBehaviorDefault);
+    input.post_mouse_move(50.f, 0.f);
+    input.set_mouse_behavior(UserInputService::kLockCurrentPosition);
+    input.post_mouse_delta(3.f, 0.f);
+    input.dispatch(game.events());
+    REQUIRE(input.mouse_delta().x == 3.f);
+    REQUIRE(input.mouse_location().x == 50.f);
+
+    // Once locked, a change to another lock does not drop the motion.
+    input.post_mouse_delta(4.f, 0.f);
+    input.dispatch(game.events());
+    input.set_mouse_behavior(UserInputService::kLockCenter);
+    REQUIRE(input.mouse_delta().x == 4.f);
+}
+
+TEST_CASE("SC19 the camera does not jump on the step the right button locks the pointer", "[SC19]") {
+    CameraRig rig;
+    rig.game.input().post_mouse_move(50.f, 50.f);
+    rig.frames(1);
+    // The pointer moved on its way to the press, in the same step as the press.
+    rig.game.input().post_mouse_move(250.f, 50.f);
+    rig.game.input().post_mouse_button(1, true, 250.f, 50.f);
+    rig.frames(1);
+    REQUIRE(rig.game.input().mouse_behavior() == UserInputService::kLockCurrentPosition);
+    REQUIRE(std::abs(rig.look().x) < 1e-4f);
+    REQUIRE(std::abs(rig.look().z + 1.f) < 1e-4f);
+}
+
+TEST_CASE("SC20 a plugin that cannot be read or run is reported, and the others still load", "[SC20]") {
+    ide::PluginFile missing;
+    std::string error;
+    REQUIRE_FALSE(ide::read_plugin_file(std::filesystem::path(ANARCHY_SOURCE_DIR) / "resources/plugins/NoSuchPlugin.luau",
+                                        missing, error));
+    REQUIRE(error.find("NoSuchPlugin.luau") != std::string::npos);
+
+    ScriptRig rig;
+    ide::PluginFile good{"Good", "print('good ran')"};
+    ide::PluginFile bad{"Bad", "this is not luau ("};
+    ide::PluginLoader loader;
+    loader.load(rig.game, rig.runtime, {bad, good});
+    const ScriptRuntime::OutputBatch batch = rig.runtime.drain_output();
+    bool good_ran = false;
+    bool bad_reported = false;
+    for (const ScriptRuntime::OutputLine& line : batch.lines) {
+        good_ran = good_ran || (line.kind == ScriptRuntime::OutputKind::Print && line.text == "good ran\n");
+        bad_reported = bad_reported || (line.kind == ScriptRuntime::OutputKind::Error && line.text.find("Bad") != std::string::npos);
+    }
+    REQUIRE(good_ran);
+    REQUIRE(bad_reported);
+    REQUIRE(loader.loaded().size() == 2);
+    REQUIRE(rig.runtime.is_plugin(loader.loaded()[1]));
 }

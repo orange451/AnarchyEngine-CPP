@@ -4,6 +4,8 @@
 #include "DataModelLock.hpp"
 #include "FindBar.hpp"
 #include "IdeIcons.hpp"
+#include "LuaApi.hpp"
+#include "PropertySheet.hpp"
 #include "SelectionService.hpp"
 
 #include <algorithm>
@@ -133,8 +135,78 @@ constexpr const char* kAssetsRules = R"CSS(
 .assets-tile .assets-name {
     font-size: 12px;
 }
+.assets-list-header {
+    padding: 0 4px;
+    border-width: 0 0 1px 0;
+    border-style: solid;
+    border-color: var(--ide-search-divider-color);
+}
+.assets-sort {
+    background-color: rgba(0, 0, 0, 0);
+    border-width: 1px;
+    border-style: solid;
+    border-color: rgba(0, 0, 0, 0);
+    border-radius: 0;
+    color: var(--ide-muted-text-color);
+    font-size: 12px;
+    padding: 3px 0;
+}
+.assets-sort:hover {
+    background-color: var(--ide-find-button-hover-color);
+}
+.assets-sort.active {
+    color: var(--ide-text-color);
+    font-weight: bold;
+}
+.assets-list {
+    padding: 2px 4px;
+}
+.assets-list-row {
+    padding: 0 4px;
+}
+.assets-cell {
+    font-size: 13px;
+}
+.assets-cell.muted, .assets-disclosure, .assets-opens {
+    color: var(--ide-muted-text-color);
+}
+.assets-disclosure image-view, .assets-sort image-view {
+    image-color: currentColor;
+}
+.assets-column {
+    border-width: 0 1px 0 0;
+    border-style: solid;
+    border-color: var(--ide-search-divider-color);
+}
+.assets-column-list {
+    padding: 4px;
+}
+.assets-column-row {
+    padding: 0 6px;
+}
 .assets-on-path {
     background-color: var(--row-hover-color);
+}
+.assets-preview {
+    padding: 14px 12px;
+    spacing: 3px;
+}
+.assets-preview-name {
+    font-size: 14px;
+    font-weight: bold;
+}
+.assets-preview-class {
+    color: var(--ide-muted-text-color);
+    font-size: 12px;
+    padding: 0 0 10px 0;
+}
+.assets-preview-key {
+    color: var(--ide-muted-text-color);
+    font-size: 11px;
+    padding: 6px 0 0 0;
+}
+.assets-preview-value {
+    font-size: 13px;
 }
 .assets-empty {
     color: var(--ide-muted-text-color);
@@ -193,6 +265,100 @@ std::shared_ptr<jadefx::Pane> spacer() {
     pane->setStyle("width: 100%;");
     pane->setMouseTransparent(true);
     return pane;
+}
+
+// A row whose cells take fractions of its width, as the List view's columns.
+class FractionRow : public jadefx::HBox {
+public:
+    explicit FractionRow(std::vector<double> fractions) : fractions_(std::move(fractions)) {
+        setAlignment(jadefx::Pos::CenterLeft);
+        setStyle("width: 100%;");
+    }
+
+protected:
+    double preferredContentWidth(double innerAvailable) const override {
+        return innerAvailable > 0 ? innerAvailable : HBox::preferredContentWidth(innerAvailable);
+    }
+
+    void layoutChildren() override {
+        const std::vector<std::shared_ptr<jadefx::Node>>& children = getChildren().items();
+        const double width = contentWidth();
+        const double height = contentHeight();
+        double x = contentLeft();
+        for (std::size_t index = 0; index < children.size(); ++index) {
+            const double cell = index < fractions_.size() ? width * fractions_[index] : 0;
+            if (jadefx::Node* child = children[index].get()) {
+                const double child_height = std::min(child->measuredHeight(cell, height), height);
+                child->performLayout(x, contentTop() + (height - child_height) * 0.5, cell, child_height);
+            }
+            x += cell;
+        }
+    }
+
+private:
+    std::vector<double> fractions_;
+};
+
+// A line of cells at their own widths, except one that takes what is left, so
+// a long name ends in an ellipsis instead of pushing the rest out.
+class StretchRow : public jadefx::HBox {
+public:
+    explicit StretchRow(std::size_t stretch) : stretch_(stretch) {
+        setAlignment(jadefx::Pos::CenterLeft);
+        setSpacing(5);
+    }
+
+protected:
+    double preferredContentWidth(double innerAvailable) const override {
+        const double wanted = HBox::preferredContentWidth(innerAvailable);
+        return innerAvailable > 0 ? std::min(wanted, innerAvailable) : wanted;
+    }
+
+    void layoutChildren() override {
+        const std::vector<std::shared_ptr<jadefx::Node>>& children = getChildren().items();
+        const double gap = getSpacing();
+        const double height = contentHeight();
+        std::vector<double> widths(children.size(), 0);
+        double used = 0;
+        for (std::size_t index = 0; index < children.size(); ++index) {
+            if (index != stretch_ && children[index]) {
+                widths[index] = children[index]->measuredWidth(contentWidth());
+                used += widths[index];
+            }
+            if (index > 0) {
+                used += gap;
+            }
+        }
+        if (stretch_ < children.size()) {
+            widths[stretch_] = std::max(0.0, contentWidth() - used);
+        }
+        double x = contentLeft();
+        for (std::size_t index = 0; index < children.size(); ++index) {
+            if (jadefx::Node* child = children[index].get()) {
+                const double child_height = std::min(child->measuredHeight(widths[index], height), height);
+                child->performLayout(x, contentTop() + (height - child_height) * 0.5, widths[index], child_height);
+            }
+            x += widths[index] + gap;
+        }
+    }
+
+private:
+    std::size_t stretch_;
+};
+
+// The List view's columns: Name, Kind, and Path.
+const std::vector<double> kListColumns = {0.45, 0.20, 0.35};
+constexpr double kRowHeight = 22;
+constexpr double kIndent = 16;
+constexpr double kDisclosureWidth = 16;
+constexpr double kColumnWidth = 180;
+constexpr double kPreviewWidth = 220;
+constexpr double kPreviewIcon = 64;
+
+void fix_width(jadefx::Node& node, double width) {
+    node.setPrefWidth(width);
+    node.setMinSize(width, 0);
+    node.setMaxSize(width, 100000);
 }
 
 void set_class(jadefx::Node& node, const char* name, bool on) {
@@ -296,8 +462,6 @@ IdeAssets::IdeAssets(engine_core::DataModel& world, AssetsHost host)
 
     scroll_ = jadefx::make<jadefx::ScrollPane>();
     scroll_->getClassList().add("assets-center");
-    scroll_->setFitToWidth(true);
-    scroll_->setHbarPolicy(jadefx::ScrollBarPolicy::Never);
 
     status_ = text_label("", "assets-status");
     status_->setStyle("width: 100%;");
@@ -306,7 +470,6 @@ IdeAssets::IdeAssets(engine_core::DataModel& world, AssetsHost host)
     column_ = jadefx::make<jadefx::BorderPane>();
     Fill(*column_);
     column_->setTop(toolbar);
-    column_->setLeft(view_ == AssetView::Columns ? nullptr : sidebar_);
     column_->setCenter(scroll_);
     column_->setBottom(status_);
     getChildren().add(column_);
@@ -318,6 +481,19 @@ IdeAssets::IdeAssets(engine_core::DataModel& world, AssetsHost host)
     search_clear_->setFont(jadefx::Font("Open Sans", 16.f));
     search_clear_->setDisable(true);
     getChildren().add(search_clear_);
+    fit_view();
+}
+
+void IdeAssets::fit_view() {
+    const bool columns = view_ == AssetView::Columns;
+    // Columns has no sidebar: its first column lists the categories.
+    column_->setLeft(columns ? nullptr : sidebar_);
+    // Columns run off to the right and each scrolls on its own; the others wrap
+    // or stretch to the width and scroll down.
+    scroll_->setFitToWidth(!columns);
+    scroll_->setFitToHeight(columns);
+    scroll_->setHbarPolicy(columns ? jadefx::ScrollBarPolicy::AsNeeded : jadefx::ScrollBarPolicy::Never);
+    scroll_->setVbarPolicy(columns ? jadefx::ScrollBarPolicy::Never : jadefx::ScrollBarPolicy::AsNeeded);
 }
 
 void IdeAssets::setView(AssetView view) {
@@ -327,8 +503,7 @@ void IdeAssets::setView(AssetView view) {
     if (!button.isSelected()) {
         button.setSelected(true);
     }
-    // Columns has no sidebar: its first column lists the categories.
-    column_->setLeft(view == AssetView::Columns ? nullptr : sidebar_);
+    fit_view();
     if (host_.save_view) {
         host_.save_view(asset_view_name(view));
     }
@@ -354,8 +529,8 @@ void IdeAssets::layoutChildren() {
     {
         engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kFrameLockWait);
         if (lock.owns()) {
-            const bool changed = browser_.refresh();
-            if (changed || !built_ || built_view_ != view_) {
+            const bool changed = browser_.refresh() || dirty_ || !built_ || built_view_ != view_;
+            if (changed) {
                 rebuild();
             }
             if (world_.selection().revision() != selection_seen_ || changed) {
@@ -368,12 +543,18 @@ void IdeAssets::layoutChildren() {
     forward_->setDisable(!browser_.can_forward());
     IdePane::layoutChildren();
     place_clear();
+    if (scroll_right_) {
+        // A deeper folder opened in Columns: show its column, at the right.
+        scroll_right_ = false;
+        scroll_->setHvalue(scroll_->getHmax());
+    }
 }
 
 void IdeAssets::handleKey(jadefx::KeyEvent& event) { IdePane::handleKey(event); }
 
 void IdeAssets::rebuild() {
     built_ = true;
+    dirty_ = false;
     built_view_ = view_;
     if (sidebar_rows_.empty()) {
         for (const AssetRow& category : browser_.categories()) {
@@ -402,8 +583,23 @@ void IdeAssets::rebuild() {
     rebuild_crumbs();
 
     items_.clear();
-    rows_ = browser_.children();
-    rebuild_icons(rows_);
+    preview_.reset();
+    switch (view_) {
+    case AssetView::Icons:
+        rows_ = browser_.children();
+        count_ = rows_.size();
+        rebuild_icons(rows_);
+        break;
+    case AssetView::List:
+        rows_ = browser_.list_rows();
+        count_ = static_cast<std::size_t>(
+            std::count_if(rows_.begin(), rows_.end(), [](const AssetRow& row) { return row.depth == 0; }));
+        rebuild_list(rows_);
+        break;
+    case AssetView::Columns:
+        rebuild_columns(crumbs);
+        break;
+    }
     scroll_->applyCss();
 }
 
@@ -436,9 +632,7 @@ void IdeAssets::rebuild_icons(const std::vector<AssetRow>& rows) {
         auto tile = jadefx::make<jadefx::VBox>();
         tile->getClassList().add("assets-tile");
         tile->setAlignment(jadefx::Pos::TopCenter);
-        tile->setPrefWidth(kTileWidth);
-        tile->setMinSize(kTileWidth, 0);
-        tile->setMaxSize(kTileWidth, 100000);
+        fix_width(*tile, kTileWidth);
         tile->getChildren().add(sized_icon(row.class_name, kTileIcon));
         auto name = text_label(row.name, "assets-name");
         name->setAlignment(jadefx::Pos::Center);
@@ -455,6 +649,204 @@ void IdeAssets::rebuild_icons(const std::vector<AssetRow>& rows) {
     scroll_->setContent(flow);
 }
 
+void IdeAssets::rebuild_list(const std::vector<AssetRow>& rows) {
+    auto list = jadefx::make<jadefx::VBox>();
+    list->getClassList().add("assets-list");
+    list->setStyle("width: 100%;");
+
+    auto header = jadefx::make<FractionRow>(kListColumns);
+    header->getClassList().add("assets-list-header");
+    struct SortColumn {
+        AssetSort sort;
+        const char* title;
+    };
+    constexpr SortColumn kSorts[] = {{AssetSort::Name, "Name"}, {AssetSort::Kind, "Kind"}, {AssetSort::Path, "Path"}};
+    for (const SortColumn& entry : kSorts) {
+        const bool active = browser_.sort() == entry.sort;
+        auto button = jadefx::make<jadefx::Button>(entry.title);
+        // Open Sans has no ▲ or ▼, so the direction is the find bar's up or down chevron.
+        if (active) {
+            button->setGraphic(icon_graphic(browser_.descending() ? "FindNext.png" : "FindPrevious.png"));
+            button->setContentDisplay(jadefx::ContentDisplay::Right);
+            button->setGraphicTextGap(3);
+            button->getClassList().add(browser_.descending() ? "descending" : "ascending");
+        }
+        button->getClassList().add("assets-sort");
+        button->getClassList().add(std::string("assets-sort-") + entry.title);
+        if (active) {
+            button->getClassList().add("active");
+        }
+        button->setAlignment(jadefx::Pos::CenterLeft);
+        button->setStyle("width: 100%;");
+        const AssetSort sort = entry.sort;
+        button->setOnAction([this, sort](jadefx::ActionEvent&) {
+            // The active column again reverses it; another starts ascending.
+            browser_.set_sort(sort, browser_.sort() == sort && !browser_.descending());
+            dirty_ = true;
+        });
+        header->getChildren().add(button);
+    }
+    list->getChildren().add(header);
+
+    for (const AssetRow& row : rows) {
+        auto line = jadefx::make<FractionRow>(kListColumns);
+        line->getClassList().add("assets-list-row");
+        line->setMinSize(0, kRowHeight);
+        line->setPrefHeight(kRowHeight);
+
+        auto name = jadefx::make<StretchRow>(3);
+        name->getClassList().add("assets-name-cell");
+        auto indent = jadefx::make<jadefx::Pane>();
+        fix_width(*indent, row.depth * kIndent);
+        indent->setMouseTransparent(true);
+        name->getChildren().add(indent);
+        // The find bar's chevrons, since Open Sans has no ▸ or ▾.
+        auto disclosure = jadefx::make<jadefx::Label>("");
+        disclosure->getClassList().add("assets-disclosure");
+        if (row.opens) {
+            disclosure->setGraphic(icon_graphic(row.expanded ? "FindExpanded.png" : "FindCollapsed.png"));
+            disclosure->setContentDisplay(jadefx::ContentDisplay::GraphicOnly);
+            disclosure->getClassList().add(row.expanded ? "expanded" : "collapsed");
+        }
+        disclosure->setAlignment(jadefx::Pos::Center);
+        fix_width(*disclosure, kDisclosureWidth);
+        if (row.opens) {
+            const engine_core::InstanceId id = row.id;
+            const bool expanded = row.expanded;
+            disclosure->setCursor(jadefx::Cursor::Pointer);
+            disclosure->setOnMouseClicked([this, id, expanded](const jadefx::MouseEvent& event) {
+                if (event.button == 0) {
+                    browser_.set_expanded(id, !expanded);
+                    disclosed_ = true;
+                    dirty_ = true;
+                }
+            });
+        } else {
+            disclosure->setMouseTransparent(true);
+        }
+        name->getChildren().add(disclosure);
+        name->getChildren().add(sized_icon(row.class_name, 16));
+        name->getChildren().add(text_label(row.name, "assets-cell"));
+        line->getChildren().add(name);
+        auto kind = text_label(row.class_name, "assets-cell");
+        kind->getClassList().add("muted");
+        line->getChildren().add(kind);
+        auto path = text_label(row.path, "assets-cell");
+        path->getClassList().add("muted");
+        line->getChildren().add(path);
+        add_item(line, row);
+        list->getChildren().add(line);
+    }
+    if (rows.empty()) {
+        list->getChildren().add(text_label("This folder is empty.", "assets-empty"));
+    }
+    scroll_->setContent(list);
+}
+
+void IdeAssets::rebuild_columns(const std::vector<std::pair<engine_core::InstanceId, std::string>>& crumbs) {
+    auto strip = jadefx::make<jadefx::HBox>();
+    strip->getClassList().add("assets-columns");
+    strip->setStyle("height: 100%;");
+    const std::vector<std::vector<AssetRow>> columns = browser_.columns();
+    for (std::size_t level = 0; level < columns.size(); ++level) {
+        // The row in this column that leads to the folder shown: crumbs are
+        // Assets, the category, and so on down, so column k leads to crumb k + 1.
+        const engine_core::InstanceId on_path = level + 1 < crumbs.size() ? crumbs[level + 1].first : 0;
+        auto list = jadefx::make<jadefx::VBox>();
+        list->getClassList().add("assets-column-list");
+        list->setStyle("width: 100%;");
+        for (const AssetRow& row : columns[level]) {
+            auto line = jadefx::make<StretchRow>(1);
+            line->getClassList().add("assets-column-row");
+            line->setStyle("width: 100%;");
+            line->setMinSize(0, kRowHeight);
+            line->setPrefHeight(kRowHeight);
+            line->getChildren().add(sized_icon(row.class_name, 16));
+            line->getChildren().add(text_label(row.name, "assets-cell"));
+            const bool opens = level == 0 || row.opens;
+            line->getChildren().add(text_label(opens ? "›" : "", "assets-opens"));
+            if (row.id == on_path) {
+                line->getClassList().add("assets-on-path");
+            }
+            if (level == 0) {
+                // A category opens; it is not an asset to select.
+                line->getClassList().add("assets-item");
+                const engine_core::InstanceId id = row.id;
+                line->setOnMouseClicked([this, id](const jadefx::MouseEvent& event) {
+                    if (event.button == 0) {
+                        openFolder(id);
+                    }
+                });
+            } else {
+                add_item(line, row);
+            }
+            list->getChildren().add(line);
+        }
+        auto column = jadefx::make<jadefx::ScrollPane>(list);
+        column->getClassList().add("assets-column");
+        column->setFitToWidth(true);
+        column->setHbarPolicy(jadefx::ScrollBarPolicy::Never);
+        column->setStyle("height: 100%;");
+        fix_width(*column, kColumnWidth);
+        strip->getChildren().add(column);
+    }
+    rows_ = columns.empty() ? std::vector<AssetRow>{} : columns.back();
+    count_ = rows_.size();
+    preview_ = jadefx::make<jadefx::VBox>();
+    preview_->getClassList().add("assets-preview");
+    preview_->setAlignment(jadefx::Pos::TopCenter);
+    preview_->setStyle("height: 100%;");
+    fix_width(*preview_, kPreviewWidth);
+    strip->getChildren().add(preview_);
+    scroll_->setContent(strip);
+    scroll_right_ = true;
+}
+
+void IdeAssets::rebuild_preview() {
+    if (!preview_) {
+        return;
+    }
+    preview_->getChildren().clear();
+    if (selected_.size() != 1) {
+        return;
+    }
+    const engine_core::InstanceId id = selected_.front();
+    engine_core::DataModel* object = world_.instance(id);
+    const auto shown = std::find_if(rows_.begin(), rows_.end(), [id](const AssetRow& row) { return row.id == id; });
+    // A single selected asset in the folder shown; a Folder or Prefab has its own column instead.
+    if (object == nullptr || shown == rows_.end() || shown->opens) {
+        return;
+    }
+    const std::string class_name = object->class_name();
+    const double text_width = kPreviewWidth - 24;
+    preview_->getChildren().add(sized_icon(class_name, kPreviewIcon));
+    auto add = [&](const std::string& text, const char* style_class, jadefx::Pos alignment) {
+        auto label = text_label(text, style_class);
+        label->setAlignment(alignment);
+        label->setStyle("width: 100%;");
+        label->setMaxSize(text_width, 100000);
+        preview_->getChildren().add(label);
+    };
+    add(world_.name(id), "assets-preview-name", jadefx::Pos::Center);
+    add(class_name, "assets-preview-class", jadefx::Pos::Center);
+    // Its saved properties: Path for a file asset, each reference for the rest.
+    for (const engine_core::LuaField& field : engine_core::lua_saved_fields(class_name.c_str())) {
+        engine_core::LuaSlot slot;
+        if (field.read == nullptr || !field.read(world_, *object, slot)) {
+            continue;
+        }
+        std::string value;
+        if (slot.kind == engine_core::LuaSlot::Kind::Instance && slot.id != 0) {
+            value = ref_label(world_, slot.id);
+        } else if (slot.kind == engine_core::LuaSlot::Kind::String) {
+            value = slot.text;
+        }
+        add(field.name, "assets-preview-key", jadefx::Pos::CenterLeft);
+        add(value.empty() ? "None" : value, "assets-preview-value", jadefx::Pos::CenterLeft);
+    }
+    preview_->applyCss();
+}
+
 void IdeAssets::add_item(const std::shared_ptr<jadefx::Node>& node, const AssetRow& row) {
     node->getClassList().add("assets-item");
     node->getProperties()["asset-id"] = row.id;
@@ -466,11 +858,19 @@ void IdeAssets::clicked(const AssetRow& row, const jadefx::MouseEvent& event) {
     if (event.button != 0) {
         return;
     }
+    // The disclosure opened or closed this row just before the click bubbled here; it does not select.
+    if (disclosed_) {
+        disclosed_ = false;
+        return;
+    }
     if (event.clickCount == 2 && row.opens) {
-        openFolder(row.id);
+        if (browser_.folder() != row.id) {
+            openFolder(row.id);
+        }
         return;
     }
     std::vector<engine_core::InstanceId> ids = world_.selection().get();
+    const bool plain = !event.shortcut() && !event.shift();
     if (event.shortcut()) {
         const auto found = std::find(ids.begin(), ids.end(), row.id);
         if (found != ids.end()) {
@@ -491,7 +891,7 @@ void IdeAssets::clicked(const AssetRow& row, const jadefx::MouseEvent& event) {
         const long long from = at(anchor_);
         const long long to = at(row.id);
         ids.clear();
-        if (from < 0) {
+        if (from < 0 || to < 0) {
             ids.push_back(row.id);
             anchor_ = row.id;
         } else {
@@ -506,19 +906,39 @@ void IdeAssets::clicked(const AssetRow& row, const jadefx::MouseEvent& event) {
         anchor_ = row.id;
     }
     world_.selection().set(std::move(ids));
+    if (view_ != AssetView::Columns || !plain) {
+        return;
+    }
+    // In Columns, selecting a Folder or Prefab opens its column, and selecting
+    // an asset in an earlier column closes the columns after it.
+    if (row.opens) {
+        openFolder(row.id);
+        return;
+    }
+    engine_core::InstanceId parent = 0;
+    {
+        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kActionLockWait);
+        if (lock.owns()) {
+            parent = world_.parent(row.id);
+        }
+    }
+    if (parent != 0 && parent != browser_.folder()) {
+        openFolder(parent);
+    }
 }
 
 void IdeAssets::show_selection() {
     for (const auto& [id, node] : items_) {
         set_class(*node, "selected", std::find(selected_.begin(), selected_.end(), id) != selected_.end());
     }
-    std::string text = std::to_string(rows_.size()) + (rows_.size() == 1 ? " item" : " items");
+    std::string text = std::to_string(count_) + (count_ == 1 ? " item" : " items");
     if (selected_.size() == 1) {
         text += " · " + world_.name(selected_.front()) + " selected";
     } else if (selected_.size() > 1) {
         text += " · " + std::to_string(selected_.size()) + " selected";
     }
     status_->setText(text);
+    rebuild_preview();
 }
 
 void IdeAssets::place_clear() {

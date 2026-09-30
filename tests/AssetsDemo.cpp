@@ -23,11 +23,11 @@
 #include <string>
 #include <vector>
 
-// The Assets pane alone in a window, over a small sample place. It shows Textures
-// > Bricks with BrickRed selected in each view, and saves each as a PNG: a look
-// by hand at what the pane draws.
+// The Assets pane alone in a window, over a small sample place. It shows
+// Textures > Bricks with BrickRed selected in each view, then a few other
+// folders, and saves each as a PNG: a look by hand at what the pane draws.
 //   assets-demo <out-dir> <theme>
-// writes <out-dir>/<theme>-icons.png, and the other views' as they exist.
+// writes <out-dir>/<theme>-icons.png, -list.png, -columns.png, and the rest in shots().
 namespace {
 
 using engine_core::InstanceId;
@@ -36,8 +36,6 @@ constexpr int kWidth = 900;
 constexpr int kHeight = 420;
 // Frames each view gets to lay out before it is saved.
 constexpr int kSettleFrames = 3;
-// The views the pane draws so far, saved in this order.
-constexpr ide::AssetView kViews[] = {ide::AssetView::Icons};
 
 template <typename T>
 InstanceId Add(engine_core::Game& game, const char* name, InstanceId parent) {
@@ -87,9 +85,6 @@ public:
         pane->setPrefWidthRatio(1);
         pane->setPrefHeightRatio(1);
         pane_ = pane.get();
-        pane_->openFolder(game_.service("Textures"));
-        pane_->openFolder(bricks_);
-        game_.selection().set({brick_red_});
         stage.setScene(jadefx::make<jadefx::Scene>(pane, kWidth, kHeight));
         stage_ = &stage;
         stage.setRenderingCallback([this](int width, int height) { frame(width, height); });
@@ -108,30 +103,63 @@ private:
         const InstanceId brick_normal = Add<engine_core::Texture>(game_, "BrickRed_N", bricks_);
         Add<engine_core::Texture>(game_, "Moss", textures);
         Add<engine_core::Texture>(game_, "Moss_R", textures);
-        const InstanceId wall = Add<engine_core::Material>(game_, "Wall", game_.service("Materials"));
-        Refer(game_, wall, 0, brick_red_);
-        Refer(game_, wall, 1, brick_normal);
+        wall_ = Add<engine_core::Material>(game_, "Wall", game_.service("Materials"));
+        Refer(game_, wall_, 0, brick_red_);
+        Refer(game_, wall_, 1, brick_normal);
         const InstanceId rock = Add<engine_core::Mesh>(game_, "Rock", game_.service("Meshes"));
-        const InstanceId crate = Add<engine_core::Prefab>(game_, "Crate", game_.service("Prefabs"));
-        const InstanceId body = Add<engine_core::Model>(game_, "Body", crate);
-        Refer(game_, body, 0, rock);
-        Refer(game_, body, 1, wall);
+        crate_ = Add<engine_core::Prefab>(game_, "Crate", game_.service("Prefabs"));
+        body_ = Add<engine_core::Model>(game_, "Body", crate_);
+        Refer(game_, body_, 0, rock);
+        Refer(game_, body_, 1, wall_);
         Add<engine_core::Sound>(game_, "Boom", game_.service("Audio"));
     }
 
+    // One saved picture: its file's suffix, the view, the folders opened in
+    // turn, what is selected, and the Folders or Prefabs opened in place.
+    struct Shot {
+        std::string suffix;
+        ide::AssetView view;
+        std::vector<InstanceId> open;
+        InstanceId selected;
+        std::vector<InstanceId> expanded;
+    };
+
+    std::vector<Shot> shots() const {
+        const InstanceId textures = game_.service("Textures");
+        const std::vector<InstanceId> bricks = {textures, bricks_};
+        return {
+            {"icons", ide::AssetView::Icons, bricks, brick_red_, {}},
+            {"list", ide::AssetView::List, bricks, brick_red_, {}},
+            {"columns", ide::AssetView::Columns, bricks, brick_red_, {}},
+            // Textures with Bricks open in place, and Prefabs with Crate: indent and disclosure.
+            {"list-textures", ide::AssetView::List, {textures}, brick_red_, {bricks_}},
+            {"list-prefabs", ide::AssetView::List, {game_.service("Prefabs")}, body_, {crate_}},
+            {"columns-material", ide::AssetView::Columns, {game_.service("Materials")}, wall_, {}},
+        };
+    }
+
     void frame(int width, int height) {
-        if (view_index_ >= std::size(kViews)) {
+        const std::vector<Shot> all = shots();
+        if (shot_ >= all.size()) {
             return;
         }
+        const Shot& shot = all[shot_];
         if (settled_ == 0) {
-            pane_->setView(kViews[view_index_]);
+            pane_->setView(shot.view);
+            for (InstanceId folder : shot.open) {
+                pane_->openFolder(folder);
+            }
+            for (InstanceId id : shot.expanded) {
+                pane_->browser().set_expanded(id, true);
+            }
+            game_.selection().set({shot.selected});
         }
         if (++settled_ < kSettleFrames) {
             return;
         }
-        save(width, height, out_dir_ + "/" + theme_ + "-" + ide::asset_view_name(kViews[view_index_]) + ".png");
+        save(width, height, out_dir_ + "/" + theme_ + "-" + shot.suffix + ".png");
         settled_ = 0;
-        if (++view_index_ >= std::size(kViews)) {
+        if (++shot_ >= all.size()) {
             stage_->close();
         }
     }
@@ -160,7 +188,10 @@ private:
     std::string theme_;
     InstanceId bricks_ = 0;
     InstanceId brick_red_ = 0;
-    std::size_t view_index_ = 0;
+    InstanceId wall_ = 0;
+    InstanceId crate_ = 0;
+    InstanceId body_ = 0;
+    std::size_t shot_ = 0;
     int settled_ = 0;
 };
 

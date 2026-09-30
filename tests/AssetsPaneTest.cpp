@@ -221,12 +221,89 @@ void selection_is_shared() {
     Expect(rig.pane->browser().folder() == rig.textures, "the folder stays");
 }
 
+void three_views_same_folder() {
+    Rig rig;
+    rig.pane->openFolder(rig.textures);
+    rig.frame(0);
+    double at = 0.5;
+    for (const char* view : {"icons", "list", "columns"}) {
+        rig.clickNode(rig.first((std::string("assets-view-") + view).c_str()));
+        rig.frame(at);
+        rig.frame(at + 0.05);
+        const std::string where = std::string(" in the ") + view + " view";
+        Expect(rig.pane->itemNode(rig.brick) != nullptr, ("Brick shows" + where).c_str());
+        Expect(rig.pane->itemNode(rig.rock) != nullptr, ("Rock shows" + where).c_str());
+        Expect(ide::asset_view_name(rig.pane->view()) == std::string(view), ("the toggle shows" + where).c_str());
+        at += 1.0;
+    }
+    Expect((rig.saves == std::vector<std::string>{"icons", "list", "columns"}), "each view is saved in turn");
+    Expect(rig.pane->browser().folder() == rig.textures, "the folder stays across views");
+}
+
+// The List view sorts by its headers and opens folders in place; Columns marks
+// the path and previews a single selected asset.
+void list_and_columns() {
+    Rig rig("list");
+    rig.pane->openFolder(rig.textures);
+    rig.frame(0);
+    Expect(rig.pane->itemNode(rig.walls) != nullptr, "Walls has a row");
+    jadefx::Node* mortar_before = nullptr;
+    for (InstanceId child : rig.game.get_children(rig.walls)) {
+        mortar_before = rig.pane->itemNode(child);
+    }
+    Expect(mortar_before == nullptr, "Walls starts closed");
+    jadefx::Node* walls = rig.pane->itemNode(rig.walls);
+    const std::vector<jadefx::Node*> disclosures =
+        walls != nullptr ? walls->getElementsByClassName("assets-disclosure") : std::vector<jadefx::Node*>{};
+    rig.clickNode(disclosures.empty() ? nullptr : disclosures.front());
+    rig.frame(0.5);
+    const InstanceId mortar = rig.game.get_children(rig.walls).front();
+    Expect(rig.pane->itemNode(mortar) != nullptr, "the disclosure opens Walls in place");
+    Expect(rig.game.selection().get().empty(), "the disclosure does not select");
+    Expect(rig.pane->browser().folder() == rig.textures, "the disclosure does not open the folder");
+
+    rig.clickNode(rig.first("assets-sort-Name"));
+    Expect(rig.pane->browser().sort() == ide::AssetSort::Name && rig.pane->browser().descending(),
+           "clicking the active header reverses it");
+    rig.frame(1.0);
+    rig.clickNode(rig.first("assets-sort-Kind"));
+    Expect(rig.pane->browser().sort() == ide::AssetSort::Kind && !rig.pane->browser().descending(),
+           "another header sorts ascending");
+    rig.frame(1.5);
+    auto* kind = dynamic_cast<jadefx::Labeled*>(rig.first("assets-sort-Kind"));
+    Expect(HasClass(kind, "ascending") && kind != nullptr && kind->getGraphic() != nullptr,
+           "the active header shows its direction");
+
+    rig.pane->setView(ide::AssetView::Columns);
+    rig.frame(2.0);
+    Expect(rig.first("assets-sidebar") == nullptr, "Columns has no sidebar");
+    jadefx::Node* on_path = rig.first("assets-on-path");
+    const std::vector<jadefx::Node*> on_path_label =
+        on_path != nullptr ? on_path->getElementsByClassName("assets-cell") : std::vector<jadefx::Node*>{};
+    Expect(on_path_label.size() == 1 && dynamic_cast<jadefx::Labeled*>(on_path_label.front())->getText() == "Textures",
+           "the category on the path is marked");
+    rig.clickItem(rig.walls, 2.5);
+    Expect(rig.pane->browser().folder() == rig.walls, "selecting a Folder in Columns opens its column");
+    rig.clickItem(mortar, 3.5);
+    rig.frame(3.6);
+    bool previewed = false;
+    for (jadefx::Node* node : rig.pane->getElementsByClassName("assets-preview-name")) {
+        auto* label = dynamic_cast<jadefx::Labeled*>(node);
+        previewed = previewed || (label != nullptr && label->getText() == "Mortar");
+    }
+    Expect(previewed, "a selected asset has a preview");
+    rig.clickItem(rig.brick, 4.5);
+    Expect(rig.pane->browser().folder() == rig.textures, "selecting an asset in an earlier column closes the later ones");
+}
+
 }  // namespace
 
 int main() {
     starts_in_saved_view();
     navigates();
     selection_is_shared();
+    three_views_same_folder();
+    list_and_columns();
     if (gFailures == 0) {
         std::printf("assets tests passed\n");
         return 0;

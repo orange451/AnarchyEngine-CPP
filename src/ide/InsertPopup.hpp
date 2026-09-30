@@ -3,12 +3,20 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace jadefx {
 class Node;
 }
 
 namespace ide {
+
+struct InsertAction {
+    std::string label;
+    std::string icon;
+    bool enabled = true;
+    std::function<void()> run;
+};
 
 // The insert list anchored to an explorer row's + button.
 // Typing filters the classes Instance.new can create. Enter or a click
@@ -21,6 +29,7 @@ public:
     void setOnCreate(std::function<void(const std::string& class_name)> handler);
 
     void show(jadefx::Node& anchor);
+    void show_at(jadefx::Node& owner, double x, double y, std::vector<InsertAction> actions);
     void hide();
 
 private:

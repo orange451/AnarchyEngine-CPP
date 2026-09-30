@@ -895,7 +895,9 @@ void TestReferenceRows() {
     const ide::EditResult cleared =
         ide::apply_edit(game, {wall}, RefEdit("DiffuseTexture", engine_core::DataModel::kNoParent));
     Expect(cleared.written == 1, "nil clears");
-    row = RowNamed(ide::read_sheet(game, {wall}), "DiffuseTexture");
+    // Kept in a local: row points into the sheet, which must outlive the check.
+    const ide::PropertySheet cleared_sheet = ide::read_sheet(game, {wall});
+    row = RowNamed(cleared_sheet, "DiffuseTexture");
     Expect(row != nullptr && row->value.nil_ref(), "the row is nil again");
     engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
 }

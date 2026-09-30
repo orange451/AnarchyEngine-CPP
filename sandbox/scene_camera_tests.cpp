@@ -5,6 +5,7 @@
 
 #include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
+#include "Matrix4.hpp"
 #include "Project.hpp"
 #include "SceneService.hpp"
 #include "UserInputService.hpp"
@@ -214,4 +215,24 @@ TEST_CASE("SC10 CurrentCamera is not an edit: no undo step, not saved, cleared b
 
     engine_core::Project::reset_place(rig.game);
     REQUIRE(workspace_service(rig.game).current_camera() == 0);
+}
+
+TEST_CASE("SC11 moving a Camera marks the place changed but is not an undo step", "[SC11]") {
+    ScriptRig rig;
+    engine_core::Camera& camera = add_camera(rig.game);
+    engine_core::GameObject& part = create_part(rig.game);
+    rig.game.history().end_gesture();
+    rig.game.history().reset_waypoints();
+    const std::uint64_t revision = rig.game.authored_revision();
+
+    for (int step = 1; step <= 50; ++step) {
+        camera.set_transform(engine_core::matrix4_translation(0.f, 0.f, static_cast<float>(step)));
+    }
+    rig.game.history().end_gesture();
+    REQUIRE_FALSE(rig.game.history().can_undo().first);
+    REQUIRE(rig.game.authored_revision() != revision);
+
+    part.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
+    rig.game.history().end_gesture();
+    REQUIRE(rig.game.history().can_undo().first);
 }

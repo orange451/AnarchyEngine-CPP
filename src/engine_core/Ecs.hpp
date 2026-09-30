@@ -1,0 +1,88 @@
+#pragma once
+
+// The engine's one include of flecs. Only engine_core and engine_instances
+// sources include this: flecs ids never leave them. Hot paths use the C API
+// with the ids in EcsIds; the C++ API is for setup (the world, registration,
+// query building), since its inline wrappers are slow in Debug builds.
+
+#pragma warning(push, 0)
+#include "flecs.h"
+#pragma warning(pop)
+
+#include "Color.hpp"
+#include "Transform.hpp"
+#include "types.hpp"
+
+namespace engine_core {
+namespace ecs {
+
+// GameObject's spatial data. Transform and ColorRgb are components as they are.
+struct Size {
+    float x = 1.f;
+    float y = 1.f;
+    float z = 1.f;
+};
+
+struct Velocity {
+    float x = 0.f;
+    float y = 0.f;
+    float z = 0.f;
+};
+
+// The instance an entity belongs to.
+struct Instance {
+    InstanceId id = 0;
+};
+
+// Under game, and under the Workspace service.
+struct InGame {};
+struct InWorkspace {};
+// Heartbeat steps it: its class's steps() is true.
+struct Steps {};
+// DataModel::set_simulated and set_visual_only.
+struct Simulated {};
+struct VisualOnly {};
+
+}  // namespace ecs
+
+// The ids one world gave the components and tags above.
+struct EcsIds {
+    ecs_id_t transform = 0;
+    ecs_id_t color = 0;
+    ecs_id_t size = 0;
+    ecs_id_t velocity = 0;
+    ecs_id_t instance = 0;
+    ecs_id_t in_game = 0;
+    ecs_id_t in_workspace = 0;
+    ecs_id_t steps = 0;
+    ecs_id_t simulated = 0;
+    ecs_id_t visual_only = 0;
+};
+
+// Registers every component and tag with world and returns their ids.
+EcsIds register_ecs(flecs::world& world);
+
+// A component of e, or null when e is 0 or does not have it.
+template <typename T>
+const T* read_component(ecs_world_t* world, ecs_entity_t e, ecs_id_t id) {
+    return e == 0 ? nullptr : static_cast<const T*>(ecs_get_id(world, e, id));
+}
+
+template <typename T>
+void write_component(ecs_world_t* world, ecs_entity_t e, ecs_id_t id, const T& value) {
+    ecs_set_id(world, e, id, sizeof(T), &value);
+}
+
+inline bool has_tag(ecs_world_t* world, ecs_entity_t e, ecs_id_t tag) {
+    return e != 0 && ecs_has_id(world, e, tag);
+}
+
+inline void set_tag(ecs_world_t* world, ecs_entity_t e, ecs_id_t tag, bool on) {
+    if (on) {
+        ecs_add_id(world, e, tag);
+    } else {
+        ecs_remove_id(world, e, tag);
+    }
+}
+
+}  // namespace engine_core

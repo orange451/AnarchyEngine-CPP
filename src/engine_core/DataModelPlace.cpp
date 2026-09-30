@@ -163,6 +163,7 @@ void DataModel::adopt_slot(std::uint16_t pool_index, InstanceId id) {
 
     InstancePool& pool = *state_->pools[pool_index];
     const std::uint32_t storage = take_storage(pool);
+    issue_entity(part, id);
     DataModel* object = pooled_object(pool, storage, id);
     part.pool = pool_index;
     part.storage = storage;

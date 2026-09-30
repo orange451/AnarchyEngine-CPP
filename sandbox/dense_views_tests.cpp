@@ -2,7 +2,9 @@
 
 #include "support.hpp"
 
+#include "ChangeHistoryService.hpp"
 #include "DenseIdSet.hpp"
+#include "GameObject.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -83,4 +85,48 @@ TEST_CASE("DenseIdSet clear empties and forgets positions", "[dense]") {
     REQUIRE_FALSE(set.contains(a));
     REQUIRE(set.insert(a));
     REQUIRE(set.position(a) == 0);
+}
+
+TEST_CASE("every live instance has one entity", "[dense][entity]") {
+    SimRole role;
+    engine_core::Game game;
+    const std::size_t services = game.entity_count();
+    REQUIRE(services > 0);  // the service tree already has entities
+    engine_core::DataModel& folder = game.create();
+    engine_core::GameObject& part = game.create_game_object();
+    const engine_core::InstanceId part_id = part.id();
+    REQUIRE(game.entity_count() == services + 2);
+    game.set_parent(part_id, folder.id());
+    game.history().end_gesture();
+    game.destroy(folder.id());  // orphans part and deletes folder's entity
+    game.history().end_gesture();
+    REQUIRE(game.entity_count() == services + 1);
+    game.destroy(part_id);
+    game.history().end_gesture();
+    REQUIRE(game.entity_count() == services);
+    game.history().undo();  // revives part through the place-restore path
+    REQUIRE(game.alive(part_id));
+    REQUIRE(game.entity_count() == services + 1);
+}
+
+TEST_CASE("two DataModels keep separate worlds", "[dense][entity]") {
+    SimRole role;
+    engine_core::Game first;
+    const std::size_t base = first.entity_count();
+    first.create_game_object();
+    {
+        engine_core::Game second;
+        REQUIRE(second.entity_count() == base);
+        engine_core::GameObject& part = second.create_game_object();
+        part.set_size(2.f, 3.f, 4.f);
+        REQUIRE(second.entity_count() == base + 1);
+        REQUIRE(first.entity_count() == base + 1);
+    }
+    // The first world outlives the second and still works.
+    engine_core::GameObject& later = first.create_game_object();
+    later.set_size(5.f, 6.f, 7.f);
+    float size[3] = {};
+    REQUIRE(later.copy_size(size));
+    REQUIRE(size[2] == 7.f);
+    REQUIRE(first.entity_count() == base + 2);
 }

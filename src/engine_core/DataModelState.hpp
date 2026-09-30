@@ -6,6 +6,7 @@
 #include "DataModel.hpp"
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
+#include "Ecs.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
 #include "Ring.hpp"
@@ -79,6 +80,12 @@ struct DataModel::InstancePool {
 };
 
 struct DataModel::State {
+    // Every instance's entity, with its components and tags. First, so it is
+    // destroyed last, after everything that might reach it during teardown.
+    // Touched under write_mu, like the slots.
+    flecs::world ecs;
+    EcsIds ecs_ids;
+
     // Guards slots, free lists, invalidation, and resync.
     // SimulationThread may hold Write across a whole step and may re-enter
     // (this world's owner and depth below; the mutex is taken once).

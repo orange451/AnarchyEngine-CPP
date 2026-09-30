@@ -22,9 +22,13 @@
 #include <unordered_map>
 #include <vector>
 
+// flecs' world, declared as flecs.h does. Only engine_core sees the definition.
+struct ecs_world_t;
+
 namespace engine_core {
 
 class DataModelLock;
+struct EcsIds;
 
 // What the explorer can do to an instance. Each class offers some of them;
 // the shell performs them.
@@ -181,6 +185,8 @@ public:
     // How many more instances the place can hold. create throws
     // InstanceCapacityError when it is 0.
     std::size_t room_left() const;
+    // Live flecs entities that belong to instances: one per live instance.
+    std::size_t entity_count() const;
     void destroy(InstanceId id);
     // Destroys id and every descendant. destroy alone leaves the children alive
     // and unparented. Children go first, so undo revives each parent before its
@@ -454,6 +460,9 @@ private:
         // instance as a GameObject, or null. Set with instance, so the physics
         // step does not cast each body on every substep.
         GameObject* body = nullptr;
+        // This instance's flecs entity: issued with the slot, deleted when it
+        // is released. 0 while the slot is free.
+        std::uint64_t entity = 0;
         InstanceId parent = kNoParent;
         InstanceId first_child = 0;
         // So appending a child does not walk its siblings.
@@ -531,8 +540,17 @@ private:
     static std::uint32_t take_storage(InstancePool& pool);
     // The object for id at storage: the one released there, reused, or a new one.
     DataModel* pooled_object(InstancePool& pool, std::uint32_t storage, InstanceId id);
-    // Gives a slot's object back to its pool. The slot is no longer alive.
+    // Gives a slot's object back to its pool and deletes its entity. The slot
+    // is no longer alive.
     void release_to_pool(Slot& part);
+    // Creates part's entity for id. Runs before the object is constructed or
+    // reused, so construction can write its components.
+    void issue_entity(Slot& part, InstanceId id);
+    // This world's flecs state (Ecs.hpp). engine_core and GameObject only.
+    ecs_world_t* ecs_world() const;
+    const EcsIds& component_ids() const;
+    // id's entity, or 0 when id is dead.
+    std::uint64_t entity_of(InstanceId id) const;
     void rebind(InstanceId id) { id_ = id; }
 
     void require_simulation_thread(const char* message) const;

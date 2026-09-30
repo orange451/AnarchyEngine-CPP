@@ -257,6 +257,37 @@ else()
     target_compile_options(vterm PRIVATE -std=c99)
 endif()
 
+# flecs stores GameObject's spatial data and runs the engine's per-frame
+# queries: MIT-licensed C with a C++ API, fetched as its two amalgamated files
+# and pinned by tag and hash. Both land in one directory so flecs.c finds flecs.h.
+FetchContent_Declare(
+    flecs_header
+    URL https://raw.githubusercontent.com/SanderMertens/flecs/v4.1.6/distr/flecs.h
+    URL_HASH SHA256=526036a5a41678e2a43a3cb835e9eaa70fd1993868b1978950c0d275752f69b1
+    DOWNLOAD_NO_EXTRACT TRUE
+    # CMake before 3.18 leaves an unextracted download outside SOURCE_DIR.
+    DOWNLOAD_DIR "${FETCHCONTENT_BASE_DIR}/flecs-src"
+)
+FetchContent_Declare(
+    flecs_source
+    URL https://raw.githubusercontent.com/SanderMertens/flecs/v4.1.6/distr/flecs.c
+    URL_HASH SHA256=6005392eb13c0f3c7abdecb2f85271e50934f63919afebf0bbe85f6dfc7320d6
+    DOWNLOAD_NO_EXTRACT TRUE
+    DOWNLOAD_DIR "${FETCHCONTENT_BASE_DIR}/flecs-src"
+)
+foreach(flecs_part IN ITEMS flecs_header flecs_source)
+    FetchContent_GetProperties(${flecs_part})
+    if(NOT ${flecs_part}_POPULATED)
+        if(POLICY CMP0169)
+            cmake_policy(SET CMP0169 OLD)
+        endif()
+        FetchContent_Populate(${flecs_part})
+    endif()
+endforeach()
+option(ENGINE_FLECS_CHECKS "Build flecs with its debug checks (slower entity access)" OFF)
+set(FLECS_SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/flecs-src")
+add_subdirectory(cmake/flecs "${CMAKE_BINARY_DIR}/flecs")
+
 # The engine is four packages, each a static library with its own directory:
 #   engine_core       DataModel, events, threads, the script runtime, projects
 #   engine_datatypes  values: Vector2, Vector3, Color, Color3, Transform, Enum
@@ -318,6 +349,7 @@ add_library(engine_core STATIC
     src/engine_core/JsonMerge.cpp
     src/engine_core/Project.cpp
     src/engine_core/Containment.cpp
+    src/engine_core/Ecs.cpp
 )
 set(ENGINE_PACKAGES engine_core engine_datatypes engine_instances engine_services)
 foreach(package IN LISTS ENGINE_PACKAGES)
@@ -329,6 +361,9 @@ target_link_libraries(engine_core PUBLIC Threads::Threads engine_datatypes engin
 target_link_libraries(engine_datatypes PUBLIC engine_core)
 target_link_libraries(engine_instances PUBLIC engine_core)
 target_link_libraries(engine_services PUBLIC engine_core)
+# flecs stays private: only engine_core and GameObject include Ecs.hpp.
+target_link_libraries(engine_core PRIVATE flecs)
+target_link_libraries(engine_instances PRIVATE flecs)
 target_link_libraries(engine_core PRIVATE Luau.Compiler Luau.VM Luau.Analysis)
 # Vector3 is a Luau vector, and Enum items are Luau userdata.
 target_link_libraries(engine_datatypes PRIVATE Luau.VM)

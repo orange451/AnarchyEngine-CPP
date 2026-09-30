@@ -40,6 +40,7 @@ std::string make_guid() {
 
 DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()), state_(owned_.get()) {
     State& world = *state_;
+    world.ecs_ids = register_ecs(world.ecs);
     world.slots.reserve(kMaxInstances);
     world.free_list.reserve(kMaxInstances);
     world.invalidation.reserve(kMaxInvalidations);
@@ -309,6 +310,25 @@ bool DataModel::consume_resync() {
     return was;
 }
 
+void DataModel::issue_entity(Slot& part, InstanceId id) {
+    ecs_world_t* world = ecs_world();
+    part.entity = ecs_new(world);
+    write_component(world, part.entity, state_->ecs_ids.instance, ecs::Instance{id});
+}
+
+ecs_world_t* DataModel::ecs_world() const { return state_->ecs.c_ptr(); }
+
+const EcsIds& DataModel::component_ids() const { return state_->ecs_ids; }
+
+std::uint64_t DataModel::entity_of(InstanceId id) const {
+    const Slot* part = slot(id);
+    return part == nullptr ? 0 : part->entity;
+}
+
+std::size_t DataModel::entity_count() const {
+    return static_cast<std::size_t>(ecs_count_id(ecs_world(), state_->ecs_ids.instance));
+}
+
 std::size_t DataModel::room_left() const {
     const State& world = *state_;
     return kMaxInstances - world.slots.size() + world.free_list.size();
@@ -378,6 +398,10 @@ void DataModel::release_to_pool(Slot& part) {
     if (part.instance != nullptr) {
         part.instance->on_release();
     }
+    if (part.entity != 0) {
+        ecs_delete(ecs_world(), part.entity);
+        part.entity = 0;
+    }
     if (part.pool < state_->pools.size() && state_->pools[part.pool] != nullptr) {
         state_->pools[part.pool]->free.push_back(part.storage);
     }
@@ -431,6 +455,7 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
     const std::uint32_t storage = take_storage(*pool);
     const InstanceId id = allocate();
     const std::uint32_t index = id_slot(id);
+    issue_entity(world.slots[index], id);
     DataModel* object = pooled_object(*pool, storage, id);
     const char* label = object->class_name();
     object->name_ = label != nullptr ? label : std::string();

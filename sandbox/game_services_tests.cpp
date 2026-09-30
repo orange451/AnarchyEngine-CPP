@@ -795,3 +795,141 @@ TEST_CASE("GS17b a GameObject's Prefab round-trips through a project", "[GS17b][
     REQUIRE(read_field(game, body, "Prefab").id == statue);
     REQUIRE_FALSE(loaded.unsaved());
 }
+
+namespace {
+
+// Where a project keeps Workspace's files and Textures' files.
+std::filesystem::path workspace_dir(const std::filesystem::path& root) {
+    return root / "src" / "Workspace.workspace";
+}
+
+std::filesystem::path textures_dir(const std::filesystem::path& root) {
+    return root / "src" / "Assets.assets" / "Textures.textures";
+}
+
+// Textures as a folder on disk, so another editor can put files in it.
+void open_textures(const std::filesystem::path& root) {
+    std::filesystem::remove(root / "src" / "Assets.assets" / "Textures.textures.json");
+    write_text(textures_dir(root) / "init.json", file_of("Textures", "textures", "Textures"));
+}
+
+}  // namespace
+
+TEST_CASE("GS19 apply_disk moves a folder into Textures before making a Texture in it", "[GS19][project]") {
+    SimRole role;
+    TempDir dir;
+    engine_core::Project project = engine_core::Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId folder = make(game, "Folder", "F", game.service("Workspace"));
+    const std::string guid = game.guid(folder);
+    project.save();
+
+    // Another editor moves the empty Folder into Textures and adds a Texture in it.
+    std::filesystem::remove(workspace_dir(dir.path) / ("F." + guid + ".json"));
+    open_textures(dir.path);
+    const std::filesystem::path moved = textures_dir(dir.path) / ("F." + guid);
+    write_text(moved / "init.json", file_of("Folder", guid.c_str(), "F"));
+    write_text(moved / "Brick.bbbb.json", file_of("Texture", "bbbb", "Brick"));
+
+    const engine_core::DiskScan result = project.apply_disk();
+    REQUIRE(result.conflicts.empty());
+    REQUIRE_FALSE(result.has_disk_changes);
+    REQUIRE(game.parent(folder) == game.service("Textures"));
+    const std::optional<InstanceId> brick = game.find_guid("bbbb");
+    REQUIRE(brick.has_value());
+    REQUIRE(std::string(game.instance(*brick)->class_name()) == "Texture");
+    REQUIRE(game.parent(*brick) == folder);
+    REQUIRE_FALSE(project.scan_disk().has_disk_changes);
+}
+
+TEST_CASE("GS19b apply_disk swaps what two folders hold across Workspace and Textures", "[GS19b][project]") {
+    SimRole role;
+    TempDir dir;
+    namespace fs = std::filesystem;
+    engine_core::Project project = engine_core::Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId f1 = make(game, "Folder", "F1", game.service("Workspace"));
+    const InstanceId box = make(game, "GameObject", "Box", f1);
+    const InstanceId f2 = make(game, "Folder", "F2", game.service("Textures"));
+    const InstanceId brick = make(game, "Texture", "Brick", f2);
+    project.save();
+
+    // Box goes into F2 and Brick into F1, then F1 into Textures and F2 into Workspace.
+    const fs::path f1_dir = workspace_dir(dir.path) / ("F1." + game.guid(f1));
+    const fs::path f2_dir = textures_dir(dir.path) / ("F2." + game.guid(f2));
+    const std::string box_file = "Box." + game.guid(box) + ".json";
+    const std::string brick_file = "Brick." + game.guid(brick) + ".json";
+    fs::rename(f1_dir / box_file, f2_dir / box_file);
+    fs::rename(f2_dir / brick_file, f1_dir / brick_file);
+    fs::rename(f1_dir, textures_dir(dir.path) / f1_dir.filename());
+    fs::rename(f2_dir, workspace_dir(dir.path) / f2_dir.filename());
+
+    const engine_core::DiskScan result = project.apply_disk();
+    REQUIRE(result.conflicts.empty());
+    REQUIRE_FALSE(result.has_disk_changes);
+    REQUIRE(game.parent(f1) == game.service("Textures"));
+    REQUIRE(game.parent(f2) == game.service("Workspace"));
+    REQUIRE(game.parent(brick) == f1);
+    REQUIRE(game.parent(box) == f2);
+    REQUIRE_FALSE(project.unsaved());
+}
+
+TEST_CASE("GS19c a disk change the studio's own edits make break a rule is a row, not an abort",
+          "[GS19c][project]") {
+    SimRole role;
+    TempDir dir;
+    engine_core::Project project = engine_core::Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId folder = make(game, "Folder", "F", game.service("Workspace"));
+    const std::string guid = game.guid(folder);
+    const InstanceId walls = make(game, "Folder", "Walls", game.service("Textures"));
+    const std::string walls_guid = game.guid(walls);
+    project.save();
+
+    // The disk moves F into Textures and adds a Texture to Walls, while the
+    // studio puts a Script in F and moves Walls to Workspace.
+    std::filesystem::remove(workspace_dir(dir.path) / ("F." + guid + ".json"));
+    std::filesystem::remove(textures_dir(dir.path) / ("Walls." + walls_guid + ".json"));
+    open_textures(dir.path);
+    write_text(textures_dir(dir.path) / ("F." + guid + ".json"), file_of("Folder", guid.c_str(), "F"));
+    const std::filesystem::path walls_dir = textures_dir(dir.path) / ("Walls." + walls_guid);
+    write_text(walls_dir / "init.json", file_of("Folder", walls_guid.c_str(), "Walls"));
+    write_text(walls_dir / "Brick.bbbb.json", file_of("Texture", "bbbb", "Brick"));
+    const InstanceId script = make(game, "Script", "Main", folder);
+    game.set_parent(walls, game.service("Workspace"));
+
+    const engine_core::DiskScan scan = project.scan_disk();
+    REQUIRE_FALSE(scan.has_disk_changes);
+    REQUIRE(scan.conflicts.size() == 2);
+    const engine_core::DiskScan result = project.apply_disk();
+    REQUIRE(result.conflicts == scan.conflicts);
+    REQUIRE_FALSE(result.has_disk_changes);
+    REQUIRE(game.parent(folder) == game.service("Workspace"));
+    REQUIRE(game.parent(script) == folder);
+    REQUIRE_FALSE(game.find_guid("bbbb").has_value());
+
+    const engine_core::SaveConflict* move = nullptr;
+    const engine_core::SaveConflict* added = nullptr;
+    for (const engine_core::SaveConflict& row : scan.conflicts) {
+        (row.guid == guid ? move : added) = &row;
+    }
+    REQUIRE(move != nullptr);
+    REQUIRE(added != nullptr);
+    REQUIRE(move->key == "Parent");
+    REQUIRE(added->guid == "bbbb");
+
+    // Taking the disk's side is refused again, and the rows stay.
+    const engine_core::DiskScan again = project.apply_disk({{*move, true}, {*added, true}});
+    REQUIRE(again.conflicts == scan.conflicts);
+    REQUIRE(game.parent(folder) == game.service("Workspace"));
+    REQUIRE_FALSE(game.find_guid("bbbb").has_value());
+
+    // Keeping the studio's side settles both, and a save writes the studio's tree.
+    const std::vector<engine_core::SaveConflict> rows = again.conflicts;
+    const engine_core::DiskScan kept = project.apply_disk({{rows[0], false}, {rows[1], false}});
+    REQUIRE(kept.conflicts.empty());
+    REQUIRE_FALSE(kept.has_disk_changes);
+    project.save();
+    REQUIRE(std::filesystem::exists(workspace_dir(dir.path) / ("F." + guid) / "init.json"));
+    REQUIRE_FALSE(std::filesystem::exists(walls_dir / "Brick.bbbb.json"));
+}

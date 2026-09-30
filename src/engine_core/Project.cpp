@@ -891,8 +891,8 @@ std::vector<InstanceId> build(DataModel& world, const std::vector<PlanNode>& pla
     return ids;
 }
 
-// A new instance from its disk file, with its GUID, under parent.
-InstanceId create_from(DataModel& world, const PlanNode& node, InstanceId parent) {
+// A new instance from its disk file, with its GUID, out of the tree.
+InstanceId create_from(DataModel& world, const PlanNode& node) {
     DataModel& object = find_factory(node.class_name)(world);
     const InstanceId id = object.id();
     world.set_guid(id, node.guid);
@@ -901,7 +901,6 @@ InstanceId create_from(DataModel& world, const PlanNode& node, InstanceId parent
     if (auto* lua = dynamic_cast<LuaSource*>(&object)) {
         lua->set_source(node.source);
     }
-    world.set_parent(id, parent);
     return id;
 }
 
@@ -1739,6 +1738,29 @@ struct Project::Comparison {
         }
         return out;
     }
+    // An instance as it stands once the actions run: its class, Name, and
+    // parent's GUID, and the actions that made, moved, or remade it.
+    struct Placed {
+        std::string class_name;
+        std::string name;
+        std::string parent;
+        bool alive = true;
+        std::vector<std::size_t> by;
+    };
+    struct Outcome {
+        // Every instance, by GUID; the root's parent is empty.
+        std::map<std::string, Placed> nodes;
+        // Creates whose parent does not end up in the place.
+        std::set<std::size_t> unplaced;
+    };
+    // The place after actions, leaving out those in skip. apply_changes makes
+    // and moves instances to match it.
+    Outcome outcome(const std::set<std::size_t>& skip) const;
+    // Leaves out every action whose result a placement rule refuses, and every
+    // Create whose parent that leaves out, so an apply never passes a refused
+    // move to set_parent. Only the studio's own edits can make a disk plan
+    // that read cleanly break a rule. Returns the refused ones.
+    std::vector<std::pair<Action, std::string>> drop_refused();
     // At most how many instances applying actions makes. Every one is made
     // before anything is destroyed.
     std::size_t instances_to_make() const {
@@ -1756,6 +1778,204 @@ struct Project::Comparison {
         return count;
     }
 };
+
+Project::Comparison::Outcome Project::Comparison::outcome(const std::set<std::size_t>& skip) const {
+    using Type = Action::Type;
+    Outcome out;
+    std::map<std::string, Placed>& nodes = out.nodes;
+    if (tree.empty() || plan.empty()) {
+        return out;
+    }
+    const std::string& root = tree[0].guid;
+    for (std::size_t index = 0; index < tree.size(); ++index) {
+        Placed& node = nodes[tree[index].guid];
+        node.class_name = tree[index].class_name;
+        node.name = tree[index].name;
+        node.parent = studio_parent(index);
+    }
+    // The disk's root is the studio's root, whatever GUID either gives it.
+    auto parent_on_disk = [&](std::size_t index) {
+        const std::string parent = disk_parent(index);
+        return parent == plan[0].guid ? root : parent;
+    };
+    auto alive = [&](const std::string& guid) {
+        const auto found = nodes.find(guid);
+        return found != nodes.end() && found->second.alive;
+    };
+    // guid is top or under it.
+    auto within = [&](std::string guid, const std::string& top) {
+        for (std::size_t guard = 0; guard <= nodes.size() && !guid.empty(); ++guard) {
+            if (guid == top) {
+                return true;
+            }
+            const auto found = nodes.find(guid);
+            guid = found == nodes.end() ? std::string() : found->second.parent;
+        }
+        return false;
+    };
+    auto make = [&](std::size_t index, const std::string& parent, std::size_t action) {
+        Placed& node = nodes[plan[index].guid];
+        node = Placed();
+        node.class_name = plan[index].class_name;
+        node.name = plan[index].name;
+        node.parent = parent;
+        node.by.push_back(action);
+    };
+    // In the order apply_changes runs them: made first, then moved, then destroyed.
+    for (std::size_t at = 0; at < actions.size(); ++at) {
+        const Action& action = actions[at];
+        if (skip.count(at) != 0) {
+            continue;
+        }
+        if (action.type == Type::Create) {
+            const std::size_t index = on_disk.at(action.guid);
+            const std::string parent = parent_on_disk(index);
+            if (alive(parent)) {
+                make(index, parent, at);
+            } else {
+                out.unplaced.insert(at);
+            }
+        } else if (action.type == Type::Restore) {
+            for (std::size_t index : subtree(on_disk.at(action.guid))) {
+                const std::string parent = parent_on_disk(index);
+                if (!alive(plan[index].guid) && alive(parent)) {
+                    make(index, parent, at);
+                }
+            }
+        } else if (action.type == Type::Recreate) {
+            if (action.guid == root || !alive(action.guid)) {
+                continue;
+            }
+            const std::size_t index = on_disk.at(action.guid);
+            Placed& node = nodes[action.guid];
+            node.class_name = plan[index].class_name;
+            node.by.push_back(at);
+            // Under its disk parent, unless that parent is it or under it.
+            const std::string parent = parent_on_disk(index);
+            if (alive(parent) && !within(parent, action.guid)) {
+                node.parent = parent;
+            }
+        }
+    }
+    // Keys, shallowest instance first, so a parent moves before a child moves under it.
+    std::vector<std::size_t> sets;
+    for (std::size_t at = 0; at < actions.size(); ++at) {
+        if (actions[at].type == Type::Set && skip.count(at) == 0) {
+            sets.push_back(at);
+        }
+    }
+    auto depth = [&](std::size_t at) {
+        std::size_t count = 0;
+        for (std::size_t index = on_disk.at(actions[at].guid); index != 0; index = plan_parents[index]) {
+            ++count;
+        }
+        return count;
+    };
+    std::stable_sort(sets.begin(), sets.end(), [&](std::size_t a, std::size_t b) { return depth(a) < depth(b); });
+    for (std::size_t at : sets) {
+        const Action& action = actions[at];
+        if (!alive(action.guid)) {
+            continue;
+        }
+        const std::size_t index = on_disk.at(action.guid);
+        Placed& node = nodes[action.guid];
+        if (action.key == "Name") {
+            node.name = plan[index].name;
+        } else if (action.key == "Parent") {
+            const std::string parent = parent_on_disk(index);
+            if (alive(parent) && !within(parent, action.guid) && node.parent != parent) {
+                node.parent = parent;
+                node.by.push_back(at);
+            }
+        }
+    }
+    // Destroyed, with whatever is still under them.
+    std::set<std::string> gone;
+    for (std::size_t at = 0; at < actions.size(); ++at) {
+        if (actions[at].type == Type::Destroy && skip.count(at) == 0 && actions[at].guid != root) {
+            gone.insert(actions[at].guid);
+        }
+    }
+    if (!gone.empty()) {
+        for (auto& [guid, node] : nodes) {
+            for (std::string at = guid; !at.empty() && node.alive; at = nodes.at(at).parent) {
+                node.alive = gone.count(at) == 0;
+            }
+        }
+    }
+    return out;
+}
+
+std::vector<std::pair<Project::Comparison::Action, std::string>> Project::Comparison::drop_refused() {
+    // Nothing to apply leaves the place as the studio has it, which the rules already passed.
+    if (actions.empty()) {
+        return {};
+    }
+    std::set<std::size_t> skip;
+    std::vector<std::pair<std::size_t, std::string>> refused;
+    Outcome result = outcome(skip);
+    for (bool again = true; again;) {
+        again = false;
+        for (const auto& [guid, node] : result.nodes) {
+            if (!node.alive || node.parent.empty() || find_service(node.class_name) != nullptr) {
+                continue;
+            }
+            // The instance whose rule decides: the first ancestor that is not a Folder.
+            std::string holder = node.parent;
+            for (std::size_t guard = 0; guard <= result.nodes.size(); ++guard) {
+                const Placed& up = result.nodes.at(holder);
+                if (!passes_rule_up(up.class_name) || up.parent.empty()) {
+                    break;
+                }
+                holder = up.parent;
+            }
+            const std::optional<std::string> error =
+                placement_error(result.nodes.at(holder).class_name, node.class_name, node.name);
+            if (!error) {
+                continue;
+            }
+            // The nearest instance on the way up to the holder that an action
+            // made, moved, or remade. Its actions are what the rule refuses.
+            const std::vector<std::size_t>* blame = nullptr;
+            for (std::string at = guid; blame == nullptr;) {
+                const Placed& step = result.nodes.at(at);
+                if (!step.by.empty()) {
+                    blame = &step.by;
+                }
+                if (at == holder || step.parent.empty()) {
+                    break;
+                }
+                at = step.parent;
+            }
+            if (blame == nullptr) {
+                continue;
+            }
+            for (std::size_t at : *blame) {
+                skip.insert(at);
+                refused.emplace_back(at, *error);
+            }
+            again = true;
+            break;
+        }
+        if (again) {
+            result = outcome(skip);
+        }
+    }
+    // A Create under one left out goes with it: that one's row carries it.
+    skip.insert(result.unplaced.begin(), result.unplaced.end());
+    std::vector<std::pair<Action, std::string>> out;
+    for (const auto& [at, reason] : refused) {
+        out.emplace_back(actions[at], reason);
+    }
+    std::vector<Action> kept;
+    for (std::size_t at = 0; at < actions.size(); ++at) {
+        if (skip.count(at) == 0) {
+            kept.push_back(std::move(actions[at]));
+        }
+    }
+    actions = std::move(kept);
+    return out;
+}
 
 Project::Comparison Project::compare_disk() const {
     using Type = Comparison::Action::Type;
@@ -1957,6 +2177,25 @@ Project::Comparison Project::compare_disk() const {
             act(Type::Destroy, guid);
         }
     }
+    // A change the studio's own edits leave nowhere the rules allow is a row.
+    for (const auto& [action, reason] : out.drop_refused()) {
+        const std::size_t index = out.on_disk.at(action.guid);
+        const auto base = files_.find(action.guid);
+        const std::string path = base != files_.end() ? base->second.props_path : out.plan[index].props_path;
+        const std::size_t first = out.rows.size();
+        if (action.type == Type::Create) {
+            add_row(action.guid, path, SaveConflict::Kind::AddedOutside, "", "missing", "added on disk");
+        } else if (action.type == Type::Recreate) {
+            const JsonValue mine = studio_json(out.in_studio.at(action.guid));
+            add_row(action.guid, path, SaveConflict::Kind::EditedOutside, "class", display_value(mine.find("class")),
+                    display_value(disk_json(index).find("class")));
+        } else {
+            key_row(action.guid, path, action.key, studio_json(out.in_studio.at(action.guid)), disk_json(index));
+        }
+        for (std::size_t at = first; at < out.rows.size(); ++at) {
+            out.rows[at].disk += " (" + reason + ")";
+        }
+    }
     std::sort(out.rows.begin(), out.rows.end(), [](const SaveConflict& a, const SaveConflict& b) {
         return std::tie(a.where, a.name, a.guid, a.key) < std::tie(b.where, b.name, b.guid, b.key);
     });
@@ -2003,6 +2242,8 @@ DiskScan Project::apply_disk(const std::vector<DiskChoice>& choices) {
         }
         compared.actions.push_back(std::move(action));
     }
+    // A disk side the rules refuse stays undone; the next scan lists its row again.
+    compared.drop_refused();
     // Checked before anything changes, the base included: running out of room
     // partway would stop the studio.
     const std::size_t needed = compared.instances_to_make();
@@ -2097,8 +2338,8 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
         }
         return live;
     };
-    auto create = [&world, &ids](const detail::PlanNode& node, InstanceId parent) {
-        const InstanceId made = create_from(world, node, parent);
+    auto create = [&world, &ids](const detail::PlanNode& node) {
+        const InstanceId made = create_from(world, node);
         ids[node.guid] = made;
         return made;
     };
@@ -2114,89 +2355,162 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
             }
         }
     };
+    // Where every instance ends up. drop_refused left only actions whose
+    // result the placement rules allow.
+    const Comparison::Outcome outcome = compared.outcome({});
+    auto placed = [&outcome](const std::string& guid) -> const Comparison::Placed* {
+        const auto found = outcome.nodes.find(guid);
+        return found == outcome.nodes.end() || !found->second.alive ? nullptr : &found->second;
+    };
+    // Instances out of the tree until the attach below puts them where the
+    // outcome has them, by GUID, each with whether the disk gave it that parent.
+    std::vector<std::pair<std::string, bool>> pending;
+    std::set<std::string> pending_guids;
+    auto pend = [&](const std::string& guid, bool from_disk) {
+        if (pending_guids.insert(guid).second) {
+            pending.emplace_back(guid, from_disk);
+        }
+    };
     // Parents that took a child from the disk, to order as the disk does.
     std::set<std::string> received;
 
-    // New instances first, parents before children, so every later step finds them.
-    each(Type::Create, [&](const Action& action) {
-        const std::size_t index = compared.on_disk.at(action.guid);
-        const std::string parent = compared.disk_parent(index);
-        if (const std::optional<InstanceId> up = find_guid(parent)) {
-            create(compared.plan[index], *up);
-            received.insert(parent);
-            note(compared.plan[index].name);
+    // Every instance that moves leaves its parent first, so none carries its
+    // children through a place that refuses them on the way to one that takes them.
+    for (std::size_t index = 1; index < compared.tree.size(); ++index) {
+        const std::string& guid = compared.tree[index].guid;
+        const Comparison::Placed* node = placed(guid);
+        if (node == nullptr || node->parent == compared.studio_parent(index)) {
+            continue;
+        }
+        const std::optional<InstanceId> id = find_guid(guid);
+        if (id && !world.parent_error(*id, DataModel::kNoParent)) {
+            world.set_parent(*id, DataModel::kNoParent);
+            pend(guid, true);
+        }
+    }
+    // Deleted on disk, with whatever is still under them.
+    each(Type::Destroy, [&](const Action& action) {
+        if (const std::optional<InstanceId> id = find_guid(action.guid); id && *id != 0) {
+            note(world.name(*id));
+            world.destroy_tree(*id);
         }
     });
-    // An instance the studio deleted, back from the disk with everything under it.
-    each(Type::Restore, [&](const Action& action) {
-        for (std::size_t index : compared.subtree(compared.on_disk.at(action.guid))) {
-            const detail::PlanNode& node = compared.plan[index];
-            const std::string parent = compared.disk_parent(index);
-            const std::optional<InstanceId> up = find_guid(parent);
-            if (find_guid(node.guid) || !up) {
-                continue;
-            }
-            create(node, *up);
-            received.insert(parent);
-            note(node.name);
-        }
-    });
-    // A new class is a new instance with the same GUID, children, and place among its siblings.
+    // A new class is a new instance with the same GUID, children, and place
+    // among its siblings. Its children wait out of the tree for it, since
+    // they may change class too.
+    struct Remade {
+        std::string guid;
+        InstanceId old = 0;
+        InstanceId parent = 0;
+        std::vector<InstanceId> siblings;
+    };
+    std::vector<Remade> remade;
     each(Type::Recreate, [&](const Action& action) {
         const std::optional<InstanceId> old = find_guid(action.guid);
         if (!old || *old == 0) {
             return;
         }
-        const std::size_t index = compared.on_disk.at(action.guid);
-        const detail::PlanNode& node = compared.plan[index];
-        // Under its disk parent, unless that parent is it or under it.
+        const detail::PlanNode& node = compared.plan[compared.on_disk.at(action.guid)];
         const InstanceId was = world.parent(*old);
-        InstanceId parent = was;
-        if (const std::optional<InstanceId> up = find_guid(compared.disk_parent(index))) {
-            bool under = false;
-            for (InstanceId cursor = *up; cursor != 0 && cursor != DataModel::kNoParent; cursor = world.parent(cursor)) {
-                under = under || cursor == *old;
-            }
-            if (!under) {
-                parent = *up;
-            }
+        if (was != DataModel::kNoParent) {
+            remade.push_back({action.guid, *old, was, world.get_children(was)});
         }
-        const std::vector<InstanceId> siblings = world.get_children(was);
-        const std::vector<InstanceId> kids = world.get_children(*old);
-        for (InstanceId kid : kids) {
-            world.set_parent(kid, DataModel::kNoParent);
+        for (InstanceId kid : world.get_children(*old)) {
+            if (!world.parent_error(kid, DataModel::kNoParent)) {
+                world.set_parent(kid, DataModel::kNoParent);
+                pend(world.guid(kid), false);
+            }
         }
         world.destroy(*old);
-        const InstanceId made = create(node, parent);
-        for (InstanceId kid : kids) {
-            world.set_parent(kid, made);
-        }
-        if (parent == was) {
-            for (InstanceId sibling : siblings) {
-                const InstanceId at = sibling == *old ? made : sibling;
-                world.set_parent(at, DataModel::kNoParent);
-                world.set_parent(at, parent);
-            }
-        } else {
-            received.insert(compared.disk_parent(index));
-        }
+        create(node);
+        pend(action.guid, false);
         note(node.name);
     });
-    // Keys, shallowest instance first, so a parent moves before a child moves under it.
+    // New instances, and ones the studio deleted, back from the disk with
+    // everything under them.
+    each(Type::Create, [&](const Action& action) {
+        const detail::PlanNode& node = compared.plan[compared.on_disk.at(action.guid)];
+        if (placed(node.guid) != nullptr && !find_guid(node.guid)) {
+            create(node);
+            pend(node.guid, true);
+            note(node.name);
+        }
+    });
+    each(Type::Restore, [&](const Action& action) {
+        for (std::size_t index : compared.subtree(compared.on_disk.at(action.guid))) {
+            const detail::PlanNode& node = compared.plan[index];
+            if (placed(node.guid) != nullptr && !find_guid(node.guid)) {
+                create(node);
+                pend(node.guid, true);
+                note(node.name);
+            }
+        }
+    });
+    // Each into its parent, parents first. Each parent is where it ends up by
+    // then, and each child carries only what ends up under it, so every move
+    // meets the rules the outcome passed.
+    auto depth = [&](const std::string& guid) {
+        std::size_t count = 0;
+        for (const Comparison::Placed* at = placed(guid); at != nullptr && !at->parent.empty();
+             at = placed(at->parent)) {
+            ++count;
+        }
+        return count;
+    };
+    std::vector<std::pair<std::size_t, std::size_t>> by_depth;
+    for (std::size_t at = 0; at < pending.size(); ++at) {
+        by_depth.emplace_back(depth(pending[at].first), at);
+    }
+    std::stable_sort(by_depth.begin(), by_depth.end(),
+                     [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (const auto& entry : by_depth) {
+        const std::string& guid = pending[entry.second].first;
+        const Comparison::Placed* node = placed(guid);
+        const std::optional<InstanceId> id = find_guid(guid);
+        if (node == nullptr || !id) {
+            continue;
+        }
+        const std::optional<InstanceId> up = find_guid(node->parent);
+        // Asked although the outcome passed, so a case it missed cannot stop the studio.
+        if (!up || world.parent(*id) == *up || world.parent_error(*id, *up)) {
+            continue;
+        }
+        world.set_parent(*id, *up);
+        const auto disk = compared.on_disk.find(guid);
+        if (pending[entry.second].second && disk != compared.on_disk.end()) {
+            received.insert(compared.disk_parent(disk->second));
+        }
+    }
+    // A remade instance back in its old parent takes its old place there.
+    for (const Remade& entry : remade) {
+        const std::optional<InstanceId> made = find_guid(entry.guid);
+        if (!made || world.parent(*made) != entry.parent) {
+            continue;
+        }
+        for (InstanceId sibling : entry.siblings) {
+            const InstanceId at = sibling == entry.old ? *made : sibling;
+            if (world.alive(at) && world.parent(at) == entry.parent) {
+                world.set_parent(at, DataModel::kNoParent);
+                world.set_parent(at, entry.parent);
+            }
+        }
+    }
+    // Keys, shallowest instance first. The moves above took Parent.
     std::vector<const Action*> sets;
     for (const Action& action : compared.actions) {
         if (action.type == Type::Set) {
             sets.push_back(&action);
         }
     }
-    auto depth = [&](const Action* action) {
+    auto disk_depth = [&](const Action* action) {
         std::size_t out = 0;
         for (std::size_t at = compared.on_disk.at(action->guid); at != 0; at = compared.plan_parents[at]) {
             ++out;
         }
         return out;
     };
-    std::stable_sort(sets.begin(), sets.end(), [&](const Action* a, const Action* b) { return depth(a) < depth(b); });
+    std::stable_sort(sets.begin(), sets.end(),
+                     [&](const Action* a, const Action* b) { return disk_depth(a) < disk_depth(b); });
     for (const Action* action : sets) {
         const std::optional<InstanceId> id = find_guid(action->guid);
         if (!id) {
@@ -2207,25 +2521,13 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
         DataModel& object = *id == 0 ? world : *world.instance(*id);
         if (action->key == "Name") {
             world.set_name(*id, node.name);
-        } else if (action->key == "Parent") {
-            const std::string parent = compared.disk_parent(index);
-            const std::optional<InstanceId> up = find_guid(parent);
-            bool cycle = false;
-            for (InstanceId cursor = up ? *up : 0; up && cursor != 0 && cursor != DataModel::kNoParent;
-                 cursor = world.parent(cursor)) {
-                cycle = cycle || cursor == *id;
-            }
-            if (up && !cycle && world.parent(*id) != *up) {
-                world.set_parent(*id, *up);
-                received.insert(parent);
-            }
         } else if (action->key == "Source") {
             if (auto* lua = dynamic_cast<LuaSource*>(&object)) {
                 lua->set_source(node.source);
             }
         } else if (action->key == "children") {
             order_children_as(world, *id, node.doc);
-        } else {
+        } else if (action->key != "Parent") {
             set_key(world, *id, object, action->key, node.doc.find(action->key));
         }
         note(node.name);
@@ -2240,13 +2542,6 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
             order_children_as(world, *id, compared.plan[disk->second].doc);
         }
     }
-    // Deleted on disk, last, after anything under them moved out.
-    each(Type::Destroy, [&](const Action& action) {
-        if (const std::optional<InstanceId> id = find_guid(action.guid); id && *id != 0) {
-            note(world.name(*id));
-            world.destroy_tree(*id);
-        }
-    });
 }
 
 void Project::refresh_base(const Comparison& before, const Comparison& after) {

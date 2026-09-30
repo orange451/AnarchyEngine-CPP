@@ -468,13 +468,16 @@ TEST_CASE("physics substeps follow the sim clock, not present", "[T9]") {
 
 TEST_CASE("destroy removes the instance from the next snapshot", "[T10]") {
     engine_core::Engine engine;
-    engine_core::GameObject& object = engine.datamodel().create_game_object();
+    // Under Workspace, so it has a row for the destroy to remove.
+    engine_core::GameObject& object = create_part(engine.datamodel());
     const engine_core::InstanceId id = object.id();
+    std::atomic<int> seen{0};
     std::atomic<int> destroyed{0};
     std::atomic<int> live_closed{0};
     std::atomic<int> snap_gone{0};
     engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
-        if (engine.sim_frame_count() > 1 && destroyed.load() == 0) {
+        // Only once a snapshot has shown the row, so its absence proves the removal.
+        if (seen.load() == 1 && destroyed.load() == 0) {
             engine.datamodel().destroy(id);
             destroyed.store(1);
         }
@@ -488,21 +491,29 @@ TEST_CASE("destroy removes the instance from the next snapshot", "[T10]") {
     });
     struct Probe : CountingRenderer {
         engine_core::InstanceId id = 0;
+        std::atomic<int>* seen = nullptr;
         std::atomic<int>* destroyed = nullptr;
         std::atomic<int>* snap_gone = nullptr;
         void perform(const engine_core::VisualSnapshot& snapshot) override {
-            if (destroyed->load() == 0) {
-                return;
-            }
+            bool present = false;
             for (const engine_core::VisualInstance& item : snapshot.instances) {
                 if (item.id == id) {
-                    return;
+                    present = true;
                 }
             }
-            snap_gone->store(1);
+            if (destroyed->load() == 0) {
+                if (present) {
+                    seen->store(1);
+                }
+                return;
+            }
+            if (!present) {
+                snap_gone->store(1);
+            }
         }
     } probe;
     probe.id = id;
+    probe.seen = &seen;
     probe.destroyed = &destroyed;
     probe.snap_gone = &snap_gone;
     engine.set_renderer(&probe);
@@ -860,7 +871,22 @@ TEST_CASE("path B enqueues and the snapshot still updates", "[T17]") {
 TEST_CASE("path C emits nothing", "[T18]") {
     engine_core::Engine engine;
     engine_core::DataModel& game = engine.datamodel();
-    const engine_core::InstanceId id = game.create_game_object().id();
+    // Under Workspace, so the overrides land on a row.
+    const engine_core::InstanceId id = create_part(game).id();
+    struct Probe : CountingRenderer {
+        engine_core::InstanceId id = 0;
+        std::atomic<int> red{0};
+        void perform(const engine_core::VisualSnapshot& snapshot) override {
+            for (const engine_core::VisualInstance& item : snapshot.instances) {
+                if (item.id == id && item.color_origin == engine_core::WriteOrigin::SnapshotOverride &&
+                    item.color.r == 1.f && item.color.g == 0.f) {
+                    red.store(1);
+                }
+            }
+        }
+    } probe;
+    probe.id = id;
+    engine.set_renderer(&probe);
     const engine_core::ColorRgb live_color = game.game_object(id)->color();
     const engine_core::Transform live_transform = game.game_object(id)->transform();
     std::atomic<int> hits{0};
@@ -890,6 +916,7 @@ TEST_CASE("path C emits nothing", "[T18]") {
     engine.resume();
     wait_until([&] { return stage.load() == 1 && engine.present_count() > 3; });
     engine.stop();
+    REQUIRE(probe.red.load() == 1);  // the override reached the pixels
     REQUIRE(hits.load() == 0);
     REQUIRE(near_color(game.game_object(id)->color(), live_color));
     REQUIRE(near(game.game_object(id)->transform(), live_transform));

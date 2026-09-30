@@ -2293,9 +2293,11 @@ LuauCompletion completion_at(WorkerEnv& env, const std::string& module_name, con
             }
         }
         if (entry.kind == Luau::AutocompleteEntryKind::Binding) {
-            const bool own_initializer = std::any_of(declaring.begin(), declaring.end(), [&](const Luau::AstLocal* var) {
-                return name == var->name.value;
-            });
+            // C++17 cannot capture a structured binding, so name it again.
+            const bool own_initializer =
+                std::any_of(declaring.begin(), declaring.end(), [&entry_name = name](const Luau::AstLocal* var) {
+                    return entry_name == var->name.value;
+                });
             if (own_initializer && locals.find(name) == locals.end() && defined.names.count(name) == 0) {
                 continue;
             }

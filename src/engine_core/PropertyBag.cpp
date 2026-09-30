@@ -4,6 +4,9 @@
 #include <charconv>
 #include <cmath>
 #include <cstdio>
+#include <limits>
+#include <locale>
+#include <sstream>
 #include <stdexcept>
 #include <system_error>
 
@@ -11,6 +14,12 @@ namespace engine_core {
 namespace {
 
 bool member_less(const JsonValue::Member& member, std::string_view key) { return member.first < key; }
+
+// Floating-point to_chars and from_chars came late to some standard libraries:
+// libc++ added to_chars for double in 14 and from_chars in 20, and Xcode 13
+// has neither. Without them, numbers take the older way below, which P23
+// checks charconv against byte for byte.
+#if defined(__cpp_lib_to_chars)
 
 // The whole of `text` as one number. from_chars ignores the locale, where
 // strtod follows LC_NUMERIC, which may use a comma.
@@ -76,6 +85,53 @@ std::string shortest(T value) {
     }
     return out;
 }
+
+#else
+
+// The whole of `text` as one number, read in the classic locale. strtod
+// follows LC_NUMERIC, which may use a comma.
+template <typename T>
+bool read_decimal(std::string_view text, T& out) {
+    std::istringstream stream{std::string(text)};
+    stream.imbue(std::locale::classic());
+    T value{};
+    stream >> value;
+    if (stream.fail()) {
+        return false;
+    }
+    stream.peek();
+    if (!stream.eof()) {
+        return false;
+    }
+    out = value;
+    return true;
+}
+
+std::string print_g(int precision, double value) {
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%.*g", precision, value);
+    std::string text = buffer;
+    // snprintf follows LC_NUMERIC too.
+    std::replace(text.begin(), text.end(), ',', '.');
+    return text;
+}
+
+// The shortest %g form that reads back as `value`, found by trying each
+// precision in turn.
+template <typename T>
+std::string shortest(T value) {
+    const int most = std::numeric_limits<T>::max_digits10;
+    for (int precision = 1; precision < most; ++precision) {
+        const std::string text = print_g(precision, static_cast<double>(value));
+        T back{};
+        if (read_decimal(text, back) && back == value) {
+            return text;
+        }
+    }
+    return print_g(most, static_cast<double>(value));
+}
+
+#endif
 
 class Parser {
 public:
@@ -734,10 +790,12 @@ std::string format_json_number(double value) {
         return "0";
     }
     // Whole numbers are written out in full, 100000000000000 and not 1e+14.
+    // Below 1e15 a whole double is exact as an integer, and integer to_chars
+    // is in every standard library.
     if (std::floor(value) == value && std::fabs(value) < 1e15) {
         char buffer[32];
         const std::to_chars_result written =
-            std::to_chars(buffer, buffer + sizeof(buffer), value, std::chars_format::fixed, 0);
+            std::to_chars(buffer, buffer + sizeof(buffer), static_cast<long long>(value));
         return std::string(buffer, written.ptr);
     }
     return shortest(value);

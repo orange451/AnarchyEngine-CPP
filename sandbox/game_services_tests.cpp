@@ -257,3 +257,44 @@ TEST_CASE("GS6 scripts see game services and meet the same rules", "[GS6]") {
         REQUIRE(value);
     }
 }
+
+TEST_CASE("GS7 Path is relative to the resources folder, and saves and undoes", "[GS7]") {
+    SimRole role;
+    Game game;
+    const InstanceId id = make(game, "Texture", "Brick", game.service("Textures"));
+    auto& brick = *dynamic_cast<engine_core::Texture*>(game.instance(id));
+    REQUIRE(brick.path().empty());
+
+    for (const char* bad : {"/abs/brick.png", "C:/brick.png", "textures\\brick.png", "../brick.png",
+                            "textures/../../brick.png"}) {
+        INFO(bad);
+        REQUIRE(reason(brick.set_path(bad)) == "Path must be relative to the resources folder");
+    }
+    REQUIRE(brick.path().empty());
+
+    game.history().set_pending_gesture("Set Path");
+    REQUIRE_FALSE(brick.set_path("textures/brick.png"));
+    game.history().end_gesture();
+    REQUIRE(brick.path() == "textures/brick.png");
+    engine_core::PropertyBag saved;
+    brick.save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "Path") != nullptr);
+    REQUIRE(engine_core::bag_find(saved, "Path")->as_string() == "textures/brick.png");
+
+    game.history().undo();
+    REQUIRE(brick.path().empty());
+    game.history().redo();
+    REQUIRE(brick.path() == "textures/brick.png");
+
+    // A default Path saves nothing.
+    const InstanceId other = make(game, "Sound", "Boom", game.service("Audio"));
+    engine_core::PropertyBag none;
+    game.instance(other)->save_properties(none);
+    REQUIRE(none.empty());
+
+    // Stop puts it back.
+    game.start_simulation();
+    REQUIRE_FALSE(brick.set_path("textures/other.png"));
+    game.stop_simulation();
+    REQUIRE(brick.path() == "textures/brick.png");
+}

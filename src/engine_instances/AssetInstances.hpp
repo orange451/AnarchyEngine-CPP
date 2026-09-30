@@ -2,6 +2,10 @@
 
 #include "DataModel.hpp"
 
+#include <optional>
+#include <string>
+#include <string_view>
+
 namespace engine_core {
 
 // Assets, kept under game.Assets. Each lives only under its own category, as
@@ -9,10 +13,25 @@ namespace engine_core {
 // class_name is defined in AssetInstances.cpp so that file, and its Lua
 // registration, stays linked.
 
-// An asset that names a file under the project's resources folder.
+// Why a Path is refused, or empty. A Path is relative to the resources folder,
+// with '/' between names: not absolute, no drive letter, no '\', and no "..".
+std::optional<std::string> resource_path_error(std::string_view path);
+
+// An asset that names a file under the project's resources folder, as Path.
+// Nothing checks that the file exists; nothing loads resources yet.
 class FileAsset : public DataModel {
 public:
     FileAsset(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
+
+    const std::string& path() const { return path_; }
+    // SimulationThread. Returns why a path is refused, changing nothing.
+    std::optional<std::string> set_path(std::string path);
+
+protected:
+    void on_reuse() override { path_.clear(); }
+
+private:
+    std::string path_;
 };
 
 class Texture : public FileAsset {

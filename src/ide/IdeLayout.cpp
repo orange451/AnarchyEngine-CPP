@@ -739,6 +739,13 @@ void IdeLayout::start_test() {
     });
     engine.resume();
     show_session(PlayState::Running);
+    // An open console brings its tab forward for the test's output. A closed one
+    // stays closed, and a floating one is not raised: that would take the
+    // keyboard from the game.
+    const std::shared_ptr<IdeConsole> console = console_.lock();
+    if (IdeDock* dock = dockContaining(console.get())) {
+        dock->select(console.get());
+    }
 }
 
 void IdeLayout::pause_test() {

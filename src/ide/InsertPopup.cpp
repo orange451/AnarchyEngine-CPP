@@ -111,8 +111,8 @@ public:
         setDefaultCursor(jadefx::Cursor::Default);
         setStyle(
             "background-color: var(--ide-popup-color); border-style: solid; border-width: 1px; "
-            "border-color: var(--ide-popup-border-color); box-shadow: 0 2px 8px var(--ide-popup-shadow-color); "
-            "padding: 4px;");
+            "border-color: var(--ide-popup-border-color); border-radius: 6px; "
+            "box-shadow: 0 4px 14px var(--ide-popup-shadow-color); padding: 4px;");
         field_ = std::make_shared<InsertField>([this] { onTyped(); });
         field_->setOnAction([this](jadefx::ActionEvent&) { choose(selected_); });
         children().add(field_);
@@ -378,6 +378,7 @@ private:
             row->setPadding(jadefx::Insets{3, 8, 3, 8});
             row->setAlignment(jadefx::Pos::CenterLeft);
             row->setCursor(jadefx::Cursor::Pointer);
+            row->setStyle("border-radius: 4px; transition: background-color 0.1s;");
             if (index == selected_) {
                 row->setBackground(theme_color("--ide-popup-selection-color"));
             }
@@ -424,6 +425,7 @@ private:
             auto button = jadefx::make<jadefx::HBox>();
             button->setAlignment(jadefx::Pos::Center);
             button->setPadding(jadefx::Insets{4, 6, 4, 6});
+            button->setStyle("border-radius: 4px; transition: background-color 0.1s;");
             if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic(action.icon)) {
                 icon->setMouseTransparent(true);
                 icon->setPrefSize(16, 16);
@@ -524,6 +526,7 @@ private:
         jadefx::PopupOptions options;
         options.owner = atPoint_ ? nullptr : &anchor;
         options.autoHide = true;
+        options.animate = false;
         scene->showPopup(self, 0, 0, -1, -1, options);
         double width = getWidth();
         double height = getHeight();

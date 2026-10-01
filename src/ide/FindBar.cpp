@@ -50,8 +50,8 @@ const char* const kFindStylesheet = R"CSS(
     border-width: 0 1px 1px 1px;
     border-style: solid;
     border-color: var(--ide-find-bar-border-color);
-    border-radius: 0 0 4px 4px;
-    box-shadow: 0px 2px 8px 0px var(--ide-find-bar-shadow-color);
+    border-radius: 0 0 6px 6px;
+    box-shadow: 0px 4px 14px 0px var(--ide-find-bar-shadow-color);
     padding: 4px 6px 4px 2px;
     spacing: 2px;
 }

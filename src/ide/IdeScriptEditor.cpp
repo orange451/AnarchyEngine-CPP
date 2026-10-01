@@ -708,6 +708,7 @@ void IdeScriptEditor::refresh_crumbs() {
         const bool last = index + 1 == path.size();
         auto segment = jadefx::make<jadefx::Label>(path[index].second);
         segment->setPadding(jadefx::Insets{1, 4, 1, 4});
+        segment->setStyle("border-radius: 3px; transition: background-color 0.1s;");
         segment->setCursor(jadefx::Cursor::Pointer);
         segment->setOpacity(last ? 1.0f : 0.7f);
         jadefx::Label* raw = segment.get();
@@ -1665,7 +1666,8 @@ void ScriptCodeArea::showTip(const std::string& title, const std::string& detail
         tip_->setPadding(jadefx::Insets{6, kTipPaddingX, 6, kTipPaddingX});
         tip_->setStyle(
             "background-color: var(--ide-popup-color); border-style: solid; border-width: 1px; "
-            "border-color: var(--ide-popup-border-color); box-shadow: 0 2px 8px var(--ide-popup-shadow-color);");
+            "border-color: var(--ide-popup-border-color); border-radius: 6px; "
+            "box-shadow: 0 4px 14px var(--ide-popup-shadow-color);");
     }
     tip_->getChildren().clear();
     const jadefx::Color body_fill = theme_color("--ide-popup-detail-text-color");

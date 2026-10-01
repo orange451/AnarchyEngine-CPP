@@ -183,6 +183,8 @@ bool Renderer::initialize() {
                      {"pipeline/surface.glsl", "pipeline/lighting.glsl"}) &&
         buildProgram(ibl_, "IBL", "pipeline/fullscreen.vert", "pipeline/ibl.frag", {"pipeline/lighting.glsl"}) &&
         buildProgram(light_, "Light", "pipeline/light.vert", "pipeline/light.frag", {"pipeline/lighting.glsl"}) &&
+        buildProgram(sun_, "Directional light", "pipeline/fullscreen.vert", "pipeline/light.frag",
+                     {"pipeline/lighting.glsl"}) &&
         buildProgram(merge_, "Merge", "pipeline/fullscreen.vert", "pipeline/merge.frag", {}) &&
         buildProgram(tonemap_, "Tone map", "pipeline/fullscreen.vert", "pipeline/tonemap.frag", {});
     if (!built) {
@@ -558,7 +560,8 @@ void Renderer::draw(double x, double y, double width, double height, double scen
         viewLights_.clear();
         for (int index = 0; lights != nullptr && index < lightCount; ++index) {
             const LightDraw& light = lights[index];
-            if (!(light.radius > 0.f) || !(light.intensity > 0.f)) {
+            const bool directional = light.kind == LightDraw::Kind::Directional;
+            if ((!directional && !(light.radius > 0.f)) || !(light.intensity > 0.f)) {
                 continue;
             }
             ViewLight out{};
@@ -574,7 +577,14 @@ void Renderer::draw(double x, double y, double width, double height, double scen
             for (float& value : out.direction) {
                 value = length > 0.f ? value / length : 0.f;
             }
-            if (light.kind == LightDraw::Kind::Spot) {
+            if (directional) {
+                // A sun that faces no way, as with a Transform scaled to nothing, lights nothing.
+                if (!(length > 0.f)) {
+                    continue;
+                }
+                out.cone[0] = -4.f;
+                out.cone[1] = -4.f;
+            } else if (light.kind == LightDraw::Kind::Spot) {
                 constexpr float kHalfDegree = 0.5f * 0.01745329252f;
                 const float outer = std::clamp(light.outerFovDegrees, 0.f, 180.f);
                 const float inner = outer * std::clamp(light.innerFovScale, 0.f, 1.f);
@@ -590,6 +600,10 @@ void Renderer::draw(double x, double y, double width, double height, double scen
             out.intensity = light.intensity;
             viewLights_.push_back(out);
         }
+        // Suns first, so the see-through pass, which takes kMaxForwardLights,
+        // keeps every light that reaches everything.
+        std::stable_partition(viewLights_.begin(), viewLights_.end(),
+                              [](const ViewLight& light) { return light.cone[0] < -3.f; });
 
         glDisable(GL_SCISSOR_TEST);
         glViewport(0, 0, targetWidth_, targetHeight_);
@@ -689,21 +703,51 @@ void Renderer::lightPass(const float* projection, const float* inverseProjection
     glUniform3f(ibl_.skyRadiance, kSkyRadiance, kSkyRadiance, kSkyRadiance);
     DrawFullscreen(emptyVao_);
 
-    // Each light, on the pixels its volume covers. Its inside faces draw, so
-    // a camera within the volume still sees the light.
-    if (!viewLights_.empty()) {
+    const auto useLightProgram = [&](const Program& program) {
+        glUseProgram(program.id);
+        bindGBuffer(program);
+        glUniformMatrix4fv(program.inverseProjection, 1, GL_FALSE, inverseProjection);
+        glUniform2f(program.texel, 1.f / static_cast<float>(targetWidth_), 1.f / static_cast<float>(targetHeight_));
+    };
+    const auto setLight = [](const Program& program, const ViewLight& light) {
+        glUniform3f(program.lightPosition, light.position[0], light.position[1], light.position[2]);
+        glUniform3f(program.lightDirection, light.direction[0], light.direction[1], light.direction[2]);
+        glUniform2f(program.lightCone, light.cone[0], light.cone[1]);
+        glUniform3f(program.lightColor, light.color[0], light.color[1], light.color[2]);
+        glUniform1f(program.lightRadius, light.radius);
+        glUniform1f(program.lightIntensity, light.intensity);
+    };
+    const auto isSun = [](const ViewLight& light) { return light.cone[0] < -3.f; };
+
+    // Each DirectionalLight, on every pixel.
+    bool sunsBound = false;
+    for (const ViewLight& light : viewLights_) {
+        if (!isSun(light)) {
+            continue;
+        }
+        if (!sunsBound) {
+            useLightProgram(sun_);
+            sunsBound = true;
+        }
+        setLight(sun_, light);
+        DrawFullscreen(emptyVao_);
+    }
+
+    // Each PointLight and SpotLight, on the pixels its volume covers. Its
+    // inside faces draw, so a camera within the volume still sees the light.
+    if (std::any_of(viewLights_.begin(), viewLights_.end(), [&](const ViewLight& light) { return !isSun(light); })) {
         Matrix viewProjection;
         Multiply(projection, view_.m, viewProjection);
         const engine_core::Matrix4 world = engine_core::matrix4_inverse(view_);
-        glUseProgram(light_.id);
-        bindGBuffer(light_);
-        glUniformMatrix4fv(light_.inverseProjection, 1, GL_FALSE, inverseProjection);
+        useLightProgram(light_);
         glUniformMatrix4fv(light_.viewProjection, 1, GL_FALSE, viewProjection);
-        glUniform2f(light_.texel, 1.f / static_cast<float>(targetWidth_), 1.f / static_cast<float>(targetHeight_));
         glEnable(RT_GL_CULL_FACE);
         glCullFace(RT_GL_FRONT);
         glBindVertexArray(sphereVao_);
         for (const ViewLight& light : viewLights_) {
+            if (isSun(light)) {
+                continue;
+            }
             // The volume's world position, from the view-space one.
             const float* w = world.m;
             const float* p = light.position;
@@ -717,12 +761,7 @@ void Renderer::lightPass(const float* projection, const float* inverseProjection
             }
             model[15] = 1.f;
             glUniformMatrix4fv(light_.model, 1, GL_FALSE, model);
-            glUniform3f(light_.lightPosition, light.position[0], light.position[1], light.position[2]);
-            glUniform3f(light_.lightDirection, light.direction[0], light.direction[1], light.direction[2]);
-            glUniform2f(light_.lightCone, light.cone[0], light.cone[1]);
-            glUniform3f(light_.lightColor, light.color[0], light.color[1], light.color[2]);
-            glUniform1f(light_.lightRadius, light.radius);
-            glUniform1f(light_.lightIntensity, light.intensity);
+            setLight(light_, light);
             glDrawElements(GL_TRIANGLES, sphereIndexCount_, GL_UNSIGNED_SHORT, nullptr);
         }
         glDisable(RT_GL_CULL_FACE);
@@ -859,7 +898,7 @@ void Renderer::setClearColor(float r, float g, float b) {
 
 void Renderer::shutdown() {
     ready_ = false;
-    for (Program* program : {&geometry_, &forward_, &ibl_, &light_, &merge_, &tonemap_}) {
+    for (Program* program : {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);
         }

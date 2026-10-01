@@ -1,12 +1,14 @@
 #pragma once
 
 #include "McpServer.hpp"
+#include "types.hpp"
 
 #include <functional>
 #include <string>
 #include <vector>
 
 namespace engine_core {
+class DataModel;
 class Engine;
 }  // namespace engine_core
 
@@ -18,6 +20,25 @@ struct McpImage {
     int width = 0;
     int height = 0;
 };
+
+// What import_assets made of one file.
+struct McpImport {
+    std::string file;
+    // "texture" or "model".
+    std::string kind;
+    // Why nothing was made of it. Nothing below is set then.
+    std::string error;
+    // The Texture, or the model's Prefab.
+    engine_core::InstanceId root = 0;
+    // Every instance made, root included, in the order made.
+    std::vector<engine_core::InstanceId> made;
+    // What a model had that was left out, such as a texture not found.
+    std::vector<std::string> notes;
+};
+
+// Makes the instances of the files an import_files hook read. Runs where edits
+// run, inside the tool's undo step. Throws when the place can no longer take them.
+using McpPlaceImports = std::function<std::vector<McpImport>(engine_core::DataModel& world)>;
 
 // What the studio does for the tools that need its UI thread. Each is called
 // on a server thread, returns once the studio has done it, and throws when it
@@ -39,6 +60,11 @@ struct McpStudio {
     // The Scene View as its next paint draws it, scaled down to fit max_size
     // pixels on its longer side.
     std::function<McpImage(int max_size)> capture_view;
+    // Reads image and model files and writes what they need into the place's
+    // resources folder, as dropping them on the studio does, then returns what
+    // makes their instances. Throws when the place cannot take files now, as
+    // during a test.
+    std::function<McpPlaceImports(const std::vector<std::string>& files)> import_files;
 };
 
 // What tools/list shows of a tool, without the code that runs it.

@@ -215,6 +215,7 @@ void DataModel::clear_hierarchy() {
         // order: a node that gains scope walks whatever is already linked below it.
         set_tag(world, part.entity, state_->ecs_ids.in_game, false);
         set_tag(world, part.entity, state_->ecs_ids.in_workspace, false);
+        set_tag(world, part.entity, state_->ecs_ids.in_lighting, false);
     }
 }
 

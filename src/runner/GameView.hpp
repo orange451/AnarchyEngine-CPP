@@ -28,8 +28,9 @@ class SceneFeed;
 // folder, at the GameObject's Transform, seen from the view's camera. What it
 // draws comes from the engine's published VisualSnapshot, through the
 // runner's SceneFeed, never from the DataModel. A GameObject with no Prefab
-// draws nothing. Each enabled PointLight and SpotLight in Workspace lights
-// them, with Lighting's Ambient, Exposure, Saturation, and Gamma.
+// draws nothing. Each enabled PointLight, SpotLight, and DirectionalLight in
+// Workspace or under Lighting lights them, with Lighting's Ambient, Exposure,
+// Saturation, and Gamma.
 // The view is linked to one Camera, by GUID, and sees from that Camera's
 // Transform and FieldOfView as the snapshot has them. The list at the top
 // right offers each Camera in Workspace, at any depth, in tree order. A view
@@ -111,7 +112,7 @@ private:
     // colors, then one draw per row and mesh at that row's Transform.
     std::vector<std::vector<MeshDraw>> prefabMeshes_;
     std::vector<MeshDraw> meshDraws_;
-    // Per frame: each enabled PointLight and SpotLight in the snapshot.
+    // Per frame: each enabled PointLight, SpotLight, and DirectionalLight in the snapshot.
     std::vector<LightDraw> lightDraws_;
     // The session game. The runner keeps it alive for this view.
     engine_core::DataModel* game_ = nullptr;

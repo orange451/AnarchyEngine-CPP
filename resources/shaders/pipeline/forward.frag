@@ -21,9 +21,10 @@ uniform int uLightCount;
 uniform vec4 uLightPositionRadius[kMaxLights];
 // rgb Color, a Intensity.
 uniform vec4 uLightColorIntensity[kMaxLights];
-// xyz where a SpotLight points, w unused.
+// xyz where a SpotLight or DirectionalLight points, w unused.
 uniform vec4 uLightDirection[kMaxLights];
-// x, y the outer and inner cosines; x below -1.5 for a PointLight.
+// x, y the outer and inner cosines; x below -1.5 for a PointLight, below -3
+// for a DirectionalLight.
 uniform vec4 uLightCone[kMaxLights];
 
 void main() {

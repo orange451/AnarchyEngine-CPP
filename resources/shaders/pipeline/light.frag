@@ -1,6 +1,7 @@
 #version 330 core
-// One PointLight or SpotLight, added into the accumulation buffer for each
-// pixel its volume covers (the legacy pointlightDeferred.frag). Renderer puts
+// One light, added into the accumulation buffer: a PointLight or SpotLight on each
+// pixel its volume covers (the legacy pointlightDeferred.frag), a DirectionalLight
+// on every pixel, drawn with fullscreen.vert. Renderer puts
 // lighting.glsl in after the #version line.
 out vec4 outColor;
 
@@ -14,7 +15,7 @@ uniform vec2 uTexel;
 // View space.
 uniform vec3 uLightPosition;
 uniform vec3 uLightDirection;
-// Outer and inner cosines; x below -1.5 for a PointLight.
+// Outer and inner cosines; x below -1.5 for a PointLight, below -3 for a DirectionalLight.
 uniform vec2 uLightCone;
 uniform vec3 uLightColor;
 uniform float uLightRadius;

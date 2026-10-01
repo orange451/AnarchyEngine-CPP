@@ -2,7 +2,9 @@
 
 #include "IdeLayout.hpp"
 
+#include "AssetImport.hpp"
 #include "IdeLayoutInternal.hpp"
+#include "TextureImport.hpp"
 
 namespace ide {
 
@@ -89,6 +91,55 @@ void IdeLayout::start_mcp() {
         image.width = fitted.width;
         image.height = fitted.height;
         return image;
+    };
+    // Only where the files go is asked of the UI thread. They are read here, on
+    // the server thread, so a large model does not hold the window.
+    studio.import_files = [this, on_ui](const std::vector<std::string>& files) -> McpPlaceImports {
+        struct Where {
+            std::filesystem::path resources;
+            bool playing = false;
+        };
+        auto where = std::make_shared<Where>();
+        on_ui([this, where] {
+            where->resources = place_resources();
+            where->playing = in_test();
+        });
+        if (where->playing) {
+            throw std::runtime_error("Stop the test first (playtest with action stop): a test runs on a copy of the "
+                                     "place, and imports go into the place itself.");
+        }
+        if (where->resources.empty()) {
+            throw std::runtime_error("The place has nowhere to keep imported files: it was never saved, and this "
+                                     "system has no temporary folder. Save it first.");
+        }
+        auto prepared = std::make_shared<const std::vector<PreparedAsset>>(prepare_assets(where->resources, files));
+        return [prepared, resources = where->resources](engine_core::DataModel& world) {
+            // Open, New, or Test may have come while the files were read.
+            if (world.resources_root() != resources) {
+                throw std::runtime_error("Another place was opened or made while the files were read, so nothing "
+                                         "was imported. Try again.");
+            }
+            if (world.simulation_running()) {
+                throw std::runtime_error("A test started while the files were read, so nothing was imported. Stop "
+                                         "it and try again.");
+            }
+            const std::vector<PlacedAsset> placed = place_assets(world, *prepared);
+            std::vector<McpImport> imports;
+            for (std::size_t i = 0; i < placed.size(); ++i) {
+                const PreparedAsset& asset = (*prepared)[i];
+                McpImport import;
+                import.file = asset.file;
+                import.kind = asset.model ? "model" : is_texture_file(asset.file) ? "texture" : "unknown";
+                import.error = placed[i].error;
+                import.root = placed[i].root;
+                import.made = placed[i].made;
+                if (asset.model) {
+                    import.notes = asset.imported.notes;
+                }
+                imports.push_back(std::move(import));
+            }
+            return imports;
+        };
     };
     auto identity = std::make_shared<McpIdentity>();
     studio.info = [identity] {

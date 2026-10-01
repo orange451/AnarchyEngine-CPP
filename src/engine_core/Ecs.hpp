@@ -27,9 +27,10 @@ struct Instance {
     InstanceId id = 0;
 };
 
-// Under game, and under the Workspace service.
+// Under game, under the Workspace service, and under the Lighting service.
 struct InGame {};
 struct InWorkspace {};
+struct InLighting {};
 // Heartbeat steps it: its class's steps() is true.
 struct Steps {};
 // DataModel::set_simulated and set_visual_only.
@@ -45,6 +46,7 @@ struct EcsIds {
     ecs_id_t instance = 0;
     ecs_id_t in_game = 0;
     ecs_id_t in_workspace = 0;
+    ecs_id_t in_lighting = 0;
     ecs_id_t steps = 0;
     ecs_id_t simulated = 0;
     ecs_id_t visual_only = 0;

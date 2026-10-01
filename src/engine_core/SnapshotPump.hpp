@@ -17,22 +17,28 @@ struct Data;
 
 namespace engine_core {
 
-// What a Light row shines. It sits at the row's world translation, and a
-// SpotLight points down the row's -Z.
+// What a light's row shines. A PointLight or SpotLight sits at the row's
+// world translation, and a SpotLight points down the row's -Z. A
+// DirectionalLight is not a GameObject: its row's world is the identity, and
+// direction says where it is.
 struct VisualLight {
-    enum class Kind : std::uint8_t { None, Point, Spot };
-    // None when the row is not a Light.
+    enum class Kind : std::uint8_t { None, Point, Spot, Directional };
+    // None when the row is not a light.
     Kind kind = Kind::None;
     bool enabled = false;
     // Linear, as the Color3 holds it.
     float color[3] = {1.f, 1.f, 1.f};
     float intensity = 0.f;
+    // 0 for a DirectionalLight, which reaches everywhere.
     float radius = 0.f;
     // A SpotLight's OuterFOV in degrees, and InnerFOVScale. 0 for a PointLight.
     float outer_fov = 0.f;
     float inner_fov_scale = 0.f;
+    // A DirectionalLight's Direction, toward the light, as given. 0 otherwise.
+    float direction[3] = {0.f, 0.f, 0.f};
 };
 
+// A GameObject in Workspace, or a DirectionalLight there, which has no Transform.
 struct VisualInstance {
     InstanceId id = 0;
     Matrix4 world = matrix4_identity();

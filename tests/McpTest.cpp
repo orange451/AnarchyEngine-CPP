@@ -1,6 +1,8 @@
 #include "bridge/StudioBridge.hpp"
 #include "ChangeHistoryService.hpp"
 #include "ide/IdeResources.hpp"
+#include "AssetInstances.hpp"
+#include "Folder.hpp"
 #include "ide/McpServer.hpp"
 #include "ide/McpTools.hpp"
 #include "ide/StudioRegistry.hpp"
@@ -813,6 +815,109 @@ void TestBridge() {
     fs::remove_all(base, ignored);
 }
 
+// import_assets hands the files to the studio's hook, then makes what the hook
+// returns where edits run, as one undo step, and reports each file.
+void TestImportAssets() {
+    engine_core::Engine engine;
+    engine_core::DataModel& game = engine.datamodel();
+    const std::string brick = ide::utf8_path(fs::temp_directory_path() / "Brick.png");
+    const std::string crate = ide::utf8_path(fs::temp_directory_path() / "Crate.fbx");
+    const std::string broken = ide::utf8_path(fs::temp_directory_path() / "Broken.obj");
+    std::vector<std::string> asked;
+    ide::McpStudio studio;
+    // What the studio's hook does, without reading any file: a Texture, a
+    // model's Prefab with a Mesh in its folder, and a file that failed.
+    studio.import_files = [&asked, brick, crate, broken](const std::vector<std::string>& files) -> ide::McpPlaceImports {
+        asked = files;
+        return [brick, crate, broken](engine_core::DataModel& world) {
+            auto& texture = world.create<engine_core::Texture>();
+            world.set_name(texture.id(), "Brick");
+            (void)texture.set_path("textures/Brick.png");
+            world.set_parent(texture.id(), world.service("Textures"));
+            auto& folder = world.create<engine_core::Folder>();
+            world.set_name(folder.id(), "Crate");
+            world.set_parent(folder.id(), world.service("Meshes"));
+            auto& mesh = world.create<engine_core::Mesh>();
+            world.set_name(mesh.id(), "Wood");
+            world.set_parent(mesh.id(), folder.id());
+            auto& prefab = world.create<engine_core::Prefab>();
+            world.set_name(prefab.id(), "Crate");
+            world.set_parent(prefab.id(), world.service("Prefabs"));
+            std::vector<ide::McpImport> imports(3);
+            imports[0].file = brick;
+            imports[0].kind = "texture";
+            imports[0].root = texture.id();
+            imports[0].made = {texture.id()};
+            imports[1].file = crate;
+            imports[1].kind = "model";
+            imports[1].root = prefab.id();
+            imports[1].made = {folder.id(), mesh.id(), prefab.id()};
+            imports[1].notes = {"Animations are not imported yet"};
+            imports[2].file = broken;
+            imports[2].kind = "model";
+            imports[2].error = "it holds no triangles";
+            return imports;
+        };
+    };
+    ide::McpServer server;
+    ide::add_engine_tools(server, engine, studio);
+
+    JsonValue files = JsonValue::array();
+    for (const std::string& file : {brick, crate, broken}) {
+        files.items().push_back(JsonValue::string(file));
+    }
+    JsonValue arguments = JsonValue::object();
+    arguments.set("files", files);
+    const JsonValue result = Call(server, "import_assets", ide::compact_json(arguments));
+    Expect(asked == std::vector<std::string>{brick, crate, broken}, "import_assets hands the files to the studio");
+    Expect(Member(result, "imported").as_number() == 2 && Member(result, "failed").as_number() == 1,
+           "and counts what was imported and what failed: " + ide::compact_json(result));
+    const JsonValue& rows = Member(result, "files");
+    Expect(rows.items().size() == 3, "one row for each file, in order");
+    if (rows.items().size() == 3) {
+        const JsonValue& texture = Item(rows, 0);
+        Expect(Member(texture, "kind").as_string() == "texture" &&
+                   Member(Member(texture, "texture"), "path").as_string() == "Assets.Textures.Brick" &&
+                   Member(texture, "resource_path").as_string() == "textures/Brick.png",
+               "an image's row names its Texture and the file's Path: " + ide::compact_json(texture));
+        const JsonValue& model = Item(rows, 1);
+        Expect(Member(Member(model, "prefab"), "path").as_string() == "Assets.Prefabs.Crate" &&
+                   Member(model, "meshes").as_number() == 1 && Member(model, "materials").as_number() == 0,
+               "a model's row names its Prefab and counts its assets: " + ide::compact_json(model));
+        Expect(Member(model, "folders").items().size() == 1 &&
+                   Member(Item(Member(model, "folders"), 0), "path").as_string() == "Assets.Meshes.Crate",
+               "and lists the folders that hold them");
+        Expect(Member(model, "left_out").items().size() == 1 &&
+                   Item(Member(model, "left_out"), 0).as_string() == "Animations are not imported yet",
+               "and what the model left out");
+        const JsonValue& failed = Item(rows, 2);
+        Expect(Member(failed, "error").as_string() == "it holds no triangles" && failed.find("prefab") == nullptr,
+               "a file that failed says why, and names nothing");
+    }
+
+    Call(server, "undo", "{}");
+    Expect(game.get_children(game.service("Textures")).empty() && game.get_children(game.service("Prefabs")).empty(),
+           "one undo takes the whole import back");
+
+    asked.clear();
+    Expect(ErrorText(server, "import_assets", R"({"files":["Brick.png"]})").find("is not an absolute path") !=
+               std::string::npos,
+           "a relative path is refused");
+    Expect(ErrorText(server, "import_assets", R"({"files":[]})").find("files is required") == 0,
+           "so is an empty list");
+    Expect(asked.empty(), "and neither reaches the studio");
+
+    ide::McpStudio playing;
+    playing.import_files = [](const std::vector<std::string>&) -> ide::McpPlaceImports {
+        throw std::runtime_error("Stop the test first.");
+    };
+    ide::McpServer refusing;
+    ide::add_engine_tools(refusing, engine, playing);
+    arguments.set("files", JsonValue::array({JsonValue::string(brick)}));
+    Expect(ErrorText(refusing, "import_assets", ide::compact_json(arguments)) == "Stop the test first.",
+           "a studio that cannot take files now says why");
+}
+
 // The bridge lists engine_tool_specs without an engine, so they must be what a
 // studio registers: the same tools, descriptions, and schemas, in the same order.
 void TestToolSpecs() {
@@ -825,6 +930,7 @@ void TestToolSpecs() {
     studio.session = [] { return std::string("stopped"); };
     studio.info = [] { return JsonValue::object(); };
     studio.capture_view = [](int) { return ide::McpImage{}; };
+    studio.import_files = [](const std::vector<std::string>&) { return ide::McpPlaceImports{}; };
     ide::McpServer every;
     ide::add_engine_tools(every, engine, studio);
     const std::vector<ide::McpToolSpec> specs = ide::engine_tool_specs();
@@ -848,11 +954,12 @@ void TestToolSpecs() {
     }
     std::vector<std::string> expected;
     for (const ide::McpToolSpec& spec : specs) {
-        if (spec.name != "playtest" && spec.name != "screenshot" && spec.name != "get_studio_info") {
+        if (spec.name != "playtest" && spec.name != "screenshot" && spec.name != "get_studio_info" &&
+            spec.name != "import_assets") {
             expected.push_back(spec.name);
         }
     }
-    Expect(names == expected, "a studio without the hooks leaves out playtest, screenshot, and get_studio_info");
+    Expect(names == expected, "a studio without the hooks leaves out playtest, screenshot, get_studio_info, and import_assets");
 }
 
 // An image a tool returns goes out as image content, beside the JSON text.
@@ -935,6 +1042,7 @@ int main() {
     TestHttp();
     TestRegistry();
     TestBridge();
+    TestImportAssets();
     TestToolSpecs();
     TestImages();
     if (gFailures == 0) {

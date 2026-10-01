@@ -1,21 +1,26 @@
-// PointLight and SpotLight: GameObjects whose Color, Intensity, Radius,
-// Enabled, and cone the render snapshot carries for the Scene View, and the
-// Lighting properties the snapshot carries beside them.
+// PointLight, SpotLight, and DirectionalLight: GameObjects whose Color,
+// Intensity, Radius, Enabled, and cone the render snapshot carries for the
+// Scene View, and the Lighting properties the snapshot carries beside them.
 
 #include "support.hpp"
 
+#include "AssetInstances.hpp"
 #include "ChangeHistoryService.hpp"
+#include "Folder.hpp"
 #include "Light.hpp"
 #include "Lighting.hpp"
+#include "LuaApi.hpp"
 #include "Project.hpp"
 #include "PropertyBag.hpp"
 #include "SnapshotPump.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <initializer_list>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -126,10 +131,130 @@ TEST_CASE("LIT3 scripts make lights and set them", "[light]") {
         spot.OuterFOV = 1000
         _G.clamped = spot.OuterFOV == 179
         _G.no_nan = not pcall(function() spot.Radius = 0 / 0 end)
+        local sun = Instance.new("DirectionalLight", workspace)
+        _G.sun = not sun:IsA("GameObject") and sun.Intensity == 1 and sun.Enabled == true
+            and sun.Direction == Vector3.new(1, 1, 1)
+            and not pcall(function() return sun.Radius end)
+            and not pcall(function() return sun.Transform end)
+        sun.Direction = Vector3.new(0, 1, 0)
+        _G.sun_set = sun.Direction == Vector3.new(0, 1, 0)
+            and not pcall(function() sun.Direction = Vector3.new(0 / 0, 0, 0) end)
     )");
     rig.game.start_simulation();
     rig.frames(1, 0.05);
-    require_globals(rig, {"isa", "defaults", "set", "spot", "clamped", "no_nan"});
+    require_globals(rig, {"isa", "defaults", "set", "spot", "clamped", "no_nan", "sun", "sun_set"});
+}
+
+TEST_CASE("LIT6 a DirectionalLight has a Direction, and no Transform or Radius", "[light]") {
+    SimRole role;
+    engine_core::Game game;
+    REQUIRE(engine_core::project_class_known("DirectionalLight"));
+    engine_core::DirectionalLight& sun = add_light<engine_core::DirectionalLight>(game);
+    REQUIRE(game.game_object(sun.id()) == nullptr);
+    REQUIRE_FALSE(engine_core::lua_class_inherits("DirectionalLight", "GameObject"));
+    std::vector<std::string> names;
+    for (const engine_core::LuaField& field : engine_core::lua_saved_fields("DirectionalLight")) {
+        names.emplace_back(field.name);
+    }
+    const auto has = [&names](const char* name) {
+        return std::find(names.begin(), names.end(), name) != names.end();
+    };
+    REQUIRE(has("Direction"));
+    REQUIRE(has("Color"));
+    REQUIRE(has("Intensity"));
+    REQUIRE(has("Enabled"));
+    REQUIRE_FALSE(has("Transform"));
+    REQUIRE_FALSE(has("Radius"));
+
+    // The legacy default, and none of it saved while it is the default.
+    REQUIRE(sun.direction().x == 1.f);
+    REQUIRE(sun.direction().y == 1.f);
+    REQUIRE(sun.direction().z == 1.f);
+    engine_core::PropertyBag saved;
+    sun.save_properties(saved);
+    REQUIRE(saved.empty());
+
+    game.history().set_pending_gesture("Set Direction");
+    REQUIRE_FALSE(sun.set_direction(engine_core::Vec3{0.f, 1.f, 0.f}));
+    game.history().end_gesture();
+    REQUIRE(sun.direction().x == 0.f);
+    game.history().undo();
+    REQUIRE(sun.direction().x == 1.f);
+    game.history().redo();
+    REQUIRE(sun.direction().y == 1.f);
+    REQUIRE(sun.direction().x == 0.f);
+    REQUIRE(*sun.set_direction(engine_core::Vec3{std::nanf(""), 0.f, 0.f}) == "Direction must be finite");
+    engine_core::PropertyBag changed;
+    sun.save_properties(changed);
+    REQUIRE(engine_core::bag_find(changed, "Direction") != nullptr);
+
+    game.capture_place();
+    game.start_simulation();
+    REQUIRE_FALSE(sun.set_direction(engine_core::Vec3{0.f, 0.f, 1.f}));
+    REQUIRE_FALSE(sun.set_intensity(-2.0));
+    REQUIRE(sun.intensity() == 0.0);
+    game.stop_simulation();
+    REQUIRE(sun.direction().y == 1.f);
+    REQUIRE(sun.intensity() == 1.0);
+}
+
+TEST_CASE("LIT7 a DirectionalLight in Workspace has a snapshot row", "[light][render]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    const auto frame = [&] {
+        pump.prepare_copy(game);
+        pump.publish();
+    };
+    engine_core::DirectionalLight& sun = add_light<engine_core::DirectionalLight>(game);
+    frame();
+    REQUIRE(pump.find(sun.id()) != nullptr);
+    const VisualLight& shone = pump.find(sun.id())->light;
+    REQUIRE(shone.kind == VisualLight::Kind::Directional);
+    REQUIRE(shone.enabled);
+    REQUIRE(shone.radius == 0.f);
+    REQUIRE(shone.intensity == 1.f);
+    REQUIRE(shone.direction[0] == 1.f);
+
+    REQUIRE_FALSE(sun.set_direction(engine_core::Vec3{0.f, 2.f, 0.f}));
+    REQUIRE_FALSE(sun.set_color(engine_core::ColorRgb{1.f, 0.f, 0.f, 1.f}));
+    sun.set_enabled(false);
+    frame();
+    REQUIRE(pump.find(sun.id())->light.direction[0] == 0.f);
+    REQUIRE(pump.find(sun.id())->light.direction[1] == 2.f);
+    REQUIRE(pump.find(sun.id())->light.color[1] == 0.f);
+    REQUIRE_FALSE(pump.find(sun.id())->light.enabled);
+
+    // In a Folder that leaves Workspace, its row goes; back in, it reads every field.
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    game.set_parent(folder.id(), workspace_of(game));
+    game.set_parent(sun.id(), folder.id());
+    frame();
+    REQUIRE(pump.find(sun.id()) != nullptr);
+    game.set_parent(folder.id(), game.scene_service("Storage"));
+    frame();
+    REQUIRE(pump.find(sun.id()) == nullptr);
+    game.set_parent(folder.id(), workspace_of(game));
+    frame();
+    REQUIRE(pump.find(sun.id()) != nullptr);
+    REQUIRE(pump.find(sun.id())->light.direction[1] == 2.f);
+
+    // An overflowing queue resyncs, and the resync finds it too.
+    bool refused = false;
+    for (std::size_t i = 0; i <= engine_core::DataModel::kMaxInvalidations; ++i) {
+        refused = sun.set_direction(engine_core::Vec3{0.f, static_cast<float>(i + 3), 0.f}).has_value() || refused;
+    }
+    REQUIRE_FALSE(refused);
+    REQUIRE(game.invalidations().overflow());
+    frame();
+    REQUIRE(pump.find(sun.id()) != nullptr);
+    REQUIRE(pump.find(sun.id())->light.kind == VisualLight::Kind::Directional);
+    REQUIRE(pump.find(sun.id())->light.direction[1] == sun.direction().y);
+
+    game.destroy(sun.id());
+    frame();
+    REQUIRE(pump.find(sun.id()) == nullptr);
 }
 
 TEST_CASE("LIT4 a Light's snapshot row carries what it shines", "[light][render]") {
@@ -206,4 +331,83 @@ TEST_CASE("LIT5 the snapshot carries Lighting's Ambient, Exposure, Saturation, a
     REQUIRE(pump.front().lighting.ambient.b == 0.3f);
     REQUIRE_FALSE(lighting->set_exposure(-1.0));
     REQUIRE(lighting->exposure() == 0.0);
+}
+
+TEST_CASE("LIT8 lights under Lighting shine as they do in Workspace", "[light][render]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    const auto frame = [&] {
+        pump.prepare_copy(game);
+        pump.publish();
+    };
+    const engine_core::InstanceId lighting = game.scene_service("Lighting");
+    PointLight& point = game.create<PointLight>();
+    game.set_parent(point.id(), lighting);
+    // At any depth, as in a Folder.
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    game.set_parent(folder.id(), lighting);
+    SpotLight& spot = game.create<SpotLight>();
+    game.set_parent(spot.id(), folder.id());
+    engine_core::DirectionalLight& sun = game.create<engine_core::DirectionalLight>();
+    game.set_parent(sun.id(), folder.id());
+    // Anything else under Lighting draws nothing.
+    engine_core::GameObject& part = game.create_game_object();
+    game.set_parent(part.id(), lighting);
+    REQUIRE(game.in_lighting(spot.id()));
+    REQUIRE_FALSE(game.in_workspace(spot.id()));
+    frame();
+    REQUIRE(pump.find(point.id())->light.kind == VisualLight::Kind::Point);
+    REQUIRE(pump.find(spot.id())->light.kind == VisualLight::Kind::Spot);
+    REQUIRE(pump.find(sun.id())->light.kind == VisualLight::Kind::Directional);
+    REQUIRE(pump.find(part.id()) == nullptr);
+
+    // Its Transform and properties follow.
+    point.set_transform(engine_core::matrix4_translation(1.f, 2.f, 3.f));
+    REQUIRE_FALSE(point.set_radius(5.0));
+    frame();
+    REQUIRE(pump.find(point.id())->world.m[13] == 2.f);
+    REQUIRE(pump.find(point.id())->light.radius == 5.f);
+
+    // Under Lighting a light only shines: its Prefab draws in Workspace alone.
+    engine_core::Prefab& lamp = game.create<engine_core::Prefab>();
+    game.set_parent(lamp.id(), game.service("Prefabs"));
+    engine_core::LuaSlot lamp_slot;
+    lamp_slot.kind = engine_core::LuaSlot::Kind::Instance;
+    lamp_slot.id = lamp.id();
+    REQUIRE_FALSE(point.set_prefab(lamp_slot));
+    frame();
+    REQUIRE(pump.find(point.id())->prefab == 0);
+    game.set_parent(point.id(), workspace_of(game));
+    frame();
+    REQUIRE(pump.find(point.id())->prefab != 0);
+    game.set_parent(point.id(), lighting);
+    frame();
+    REQUIRE(pump.find(point.id())->prefab == 0);
+
+    // Out of both services, the rows go.
+    game.set_parent(folder.id(), game.scene_service("Storage"));
+    frame();
+    REQUIRE(pump.find(spot.id()) == nullptr);
+    REQUIRE(pump.find(sun.id()) == nullptr);
+    game.set_parent(folder.id(), lighting);
+    frame();
+    REQUIRE(pump.find(spot.id()) != nullptr);
+    REQUIRE(pump.find(sun.id()) != nullptr);
+
+    // A resync finds them all again, and still not the plain GameObject.
+    bool refused = false;
+    for (std::size_t i = 0; i <= engine_core::DataModel::kMaxInvalidations; ++i) {
+        refused = spot.set_outer_fov(10.0 + static_cast<double>(i % 100)).has_value() || refused;
+    }
+    REQUIRE_FALSE(refused);
+    REQUIRE(game.invalidations().overflow());
+    frame();
+    REQUIRE(pump.find(point.id()) != nullptr);
+    REQUIRE(pump.find(point.id())->prefab == 0);
+    REQUIRE(pump.find(point.id())->world.m[13] == 2.f);
+    REQUIRE(pump.find(spot.id())->light.outer_fov == static_cast<float>(spot.outer_fov()));
+    REQUIRE(pump.find(sun.id()) != nullptr);
+    REQUIRE(pump.find(part.id()) == nullptr);
 }

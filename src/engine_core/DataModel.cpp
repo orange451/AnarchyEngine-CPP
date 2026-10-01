@@ -279,6 +279,8 @@ bool DataModel::authorize(const Slot& part, bool force_sim_write) {
     return true;
 }
 
+void DataModel::note_visual_row(VisualField fields) { note(id_, fields, current_origin()); }
+
 void DataModel::note(InstanceId id, VisualField fields, WriteOrigin origin) {
     state_->invalidation.push(Invalidation{id, fields, origin});
     if (state_->invalidation.overflow()) {
@@ -661,6 +663,10 @@ bool DataModel::in_workspace(InstanceId id) const {
     return has_tag(ecs_world(), entity_of(id), state_->ecs_ids.in_workspace);
 }
 
+bool DataModel::in_lighting(InstanceId id) const {
+    return has_tag(ecs_world(), entity_of(id), state_->ecs_ids.in_lighting);
+}
+
 void DataModel::refresh_scope(InstanceId id) {
     const Slot* part = slot(id);
     if (part == nullptr) {
@@ -668,24 +674,27 @@ void DataModel::refresh_scope(InstanceId id) {
     }
     bool game = false;
     bool workspace = false;
+    bool lighting = false;
     if (part->parent == 0) {
         game = true;
     } else if (part->parent != kNoParent) {
         game = in_game(part->parent);
         workspace = in_workspace(part->parent) || part->parent == scene_service("Workspace");
+        lighting = in_lighting(part->parent) || part->parent == scene_service("Lighting");
     }
-    if (in_game(id) == game && in_workspace(id) == workspace) {
+    if (in_game(id) == game && in_workspace(id) == workspace && in_lighting(id) == lighting) {
         return;
     }
-    apply_scope(id, game, workspace);
+    apply_scope(id, game, workspace, lighting);
 }
 
-void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_now) {
+void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_now, bool in_lighting_now) {
     // Top-down over the subtree. A node whose tags come out unchanged prunes
     // its children: their tags were derived from its tags.
     ecs_world_t* world = ecs_world();
     const EcsIds& ids = state_->ecs_ids;
     const InstanceId workspace_id = scene_service("Workspace");
+    const InstanceId lighting_id = scene_service("Lighting");
     std::vector<InstanceId>& queue = state_->scope_walk;
     queue.clear();
     queue.push_back(id);
@@ -697,23 +706,31 @@ void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_n
         }
         bool game = in_game_now;
         bool workspace = in_workspace_now;
+        bool lighting = in_lighting_now;
         if (i > 0) {
             game = in_game(part->parent);
             workspace = in_workspace(part->parent) || part->parent == workspace_id;
+            lighting = in_lighting(part->parent) || part->parent == lighting_id;
         }
         const bool had_game = has_tag(world, part->entity, ids.in_game);
         const bool had_workspace = has_tag(world, part->entity, ids.in_workspace);
-        if (had_game == game && had_workspace == workspace) {
+        const bool had_lighting = has_tag(world, part->entity, ids.in_lighting);
+        if (had_game == game && had_workspace == workspace && had_lighting == lighting) {
             continue;
         }
         if (had_game != game) {
             set_tag(world, part->entity, ids.in_game, game);
         }
+        if (had_lighting != lighting) {
+            set_tag(world, part->entity, ids.in_lighting, lighting);
+        }
         if (had_workspace != workspace) {
             set_tag(world, part->entity, ids.in_workspace, workspace);
-            if (part->body != nullptr) {
-                note(cur, VisualField::Ancestry, current_origin());
-            }
+        }
+        // The render snapshot keeps rows for Workspace, and for lights under Lighting.
+        if ((had_workspace != workspace || had_lighting != lighting) &&
+            (part->body != nullptr || (part->instance != nullptr && part->instance->has_visual_row()))) {
+            note(cur, VisualField::Ancestry, current_origin());
         }
         for (InstanceId child = part->first_child; child != 0;) {
             if (queue.size() == queue.capacity()) {

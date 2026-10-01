@@ -156,6 +156,8 @@ DataModel& create_point_light(DataModel& world) { return world.create<PointLight
 
 DataModel& create_spot_light(DataModel& world) { return world.create<SpotLight>(); }
 
+DataModel& create_directional_light(DataModel& world) { return world.create<DirectionalLight>(); }
+
 DataModel& create_script(DataModel& world) { return world.create<Script>(); }
 
 DataModel& create_module_script(DataModel& world) { return world.create<ModuleScript>(); }
@@ -177,6 +179,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Camera", create_camera);
     register_lua_creatable("PointLight", create_point_light);
     register_lua_creatable("SpotLight", create_spot_light);
+    register_lua_creatable("DirectionalLight", create_directional_light);
     register_lua_creatable("Script", create_script);
     register_lua_creatable("ModuleScript", create_module_script);
     register_lua_creatable("Folder", create_folder);

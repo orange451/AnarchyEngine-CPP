@@ -1,8 +1,10 @@
 #include "McpTools.hpp"
 
+#include "AssetInstances.hpp"
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
+#include "IdeResources.hpp"
 #include "LuaApi.hpp"
 #include "LuaSource.hpp"
 #include "PropertySheet.hpp"
@@ -61,6 +63,8 @@ constexpr double kMaxRunFor = 60;
 constexpr std::chrono::milliseconds kPlayPoll(100);
 constexpr int kMaxUndoSteps = 50;
 constexpr int kDefaultCaptureSize = 1024;
+// The most files one import_assets call takes.
+constexpr std::size_t kMaxImports = 64;
 
 // The read lock, taken between simulation steps.
 class ReadLock {
@@ -937,6 +941,101 @@ JsonValue DeleteInstance(const ToolContext& context, const JsonValue& arguments)
     });
 }
 
+// One file's row in import_assets' result.
+JsonValue ImportRow(const DataModel& world, const McpImport& import) {
+    JsonValue row = JsonValue::object();
+    row.set("file", JsonValue::string(import.file));
+    row.set("kind", JsonValue::string(import.kind));
+    if (!import.error.empty() || !world.alive(import.root)) {
+        row.set("error", JsonValue::string(import.error.empty() ? "Nothing was made." : import.error));
+        return row;
+    }
+    if (import.kind == "texture") {
+        row.set("texture", Brief(world, import.root));
+        if (const auto* texture = dynamic_cast<const engine_core::Texture*>(world.instance(import.root))) {
+            row.set("resource_path", JsonValue::string(texture->path()));
+        }
+        return row;
+    }
+    row.set("prefab", Brief(world, import.root));
+    JsonValue folders = JsonValue::array();
+    std::size_t meshes = 0;
+    std::size_t materials = 0;
+    std::size_t textures = 0;
+    for (InstanceId id : import.made) {
+        const std::string klass = ClassOf(world, id);
+        if (klass == "Folder") {
+            folders.items().push_back(Brief(world, id));
+        }
+        meshes += klass == "Mesh";
+        materials += klass == "Material";
+        textures += klass == "Texture";
+    }
+    row.set("folders", std::move(folders));
+    row.set("meshes", JsonValue::number(static_cast<double>(meshes)));
+    row.set("materials", JsonValue::number(static_cast<double>(materials)));
+    row.set("textures", JsonValue::number(static_cast<double>(textures)));
+    if (!import.notes.empty()) {
+        JsonValue notes = JsonValue::array();
+        for (const std::string& note : import.notes) {
+            notes.items().push_back(JsonValue::string(note));
+        }
+        row.set("left_out", std::move(notes));
+    }
+    return row;
+}
+
+JsonValue ImportAssets(const ToolContext& context, const JsonValue& arguments) {
+    const JsonValue* list = arguments.find("files");
+    if (list == nullptr || !list->is_array() || list->items().empty()) {
+        throw std::runtime_error("files is required: a list of absolute paths to image or model files.");
+    }
+    if (list->items().size() > kMaxImports) {
+        throw std::runtime_error("files lists more than " + std::to_string(kMaxImports) + " files. Import them in parts.");
+    }
+    std::vector<std::string> files;
+    for (const JsonValue& item : list->items()) {
+        if (!item.is_string() || item.as_string().empty()) {
+            throw std::runtime_error("Each of files must be a path, as a string.");
+        }
+        // The studio's own working folder means nothing to the caller.
+        if (!path_from_utf8(item.as_string()).is_absolute()) {
+            throw std::runtime_error(item.as_string() + " is not an absolute path.");
+        }
+        files.push_back(item.as_string());
+    }
+    // The files are read and written here, on this server thread, so a large
+    // model does not hold the studio's window. Only the instances wait for the edit.
+    const McpPlaceImports place = context.studio.import_files(files);
+    return RunEdit(context.engine, [place](DataModel& world) {
+        world.history().set_pending_gesture("Import Assets");
+        std::vector<McpImport> imports;
+        try {
+            imports = place(world);
+        } catch (...) {
+            CloseGesture(world);
+            throw;
+        }
+        CloseGesture(world);
+        // An edit while stopped is part of the place, as the explorer's insert is.
+        if (!world.simulation_running()) {
+            world.capture_place();
+        }
+        JsonValue rows = JsonValue::array();
+        std::size_t failed = 0;
+        for (const McpImport& import : imports) {
+            JsonValue row = ImportRow(world, import);
+            failed += row.find("error") != nullptr;
+            rows.items().push_back(std::move(row));
+        }
+        JsonValue out = JsonValue::object();
+        out.set("imported", JsonValue::number(static_cast<double>(imports.size() - failed)));
+        out.set("failed", JsonValue::number(static_cast<double>(failed)));
+        out.set("files", std::move(rows));
+        return out;
+    });
+}
+
 JsonValue ReadScript(const ToolContext& context, const JsonValue& arguments) {
     DataModel& world = context.engine.datamodel();
     JsonValue out;
@@ -1412,6 +1511,8 @@ bool CanPlaytest(const McpStudio& studio) {
 
 bool CanCapture(const McpStudio& studio) { return studio.capture_view != nullptr; }
 
+bool CanImport(const McpStudio& studio) { return studio.import_files != nullptr; }
+
 bool KnowsItself(const McpStudio& studio) { return studio.info != nullptr; }
 
 // The code that runs each tool, found by the name in its spec. offered, when
@@ -1429,6 +1530,7 @@ constexpr ToolCode kToolCode[] = {
     {"set_property", SetProperty, nullptr},
     {"create_instance", CreateInstance, nullptr},
     {"delete_instance", DeleteInstance, nullptr},
+    {"import_assets", ImportAssets, CanImport},
     {"read_script", ReadScript, nullptr},
     {"write_script", WriteScript, nullptr},
     {"edit_script", EditScript, nullptr},

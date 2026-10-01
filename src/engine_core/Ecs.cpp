@@ -16,6 +16,7 @@ EcsIds register_ecs(flecs::world& world) {
     ids.instance = world.component<ecs::Instance>().id();
     ids.in_game = world.component<ecs::InGame>().id();
     ids.in_workspace = world.component<ecs::InWorkspace>().id();
+    ids.in_lighting = world.component<ecs::InLighting>().id();
     ids.steps = world.component<ecs::Steps>().id();
     ids.simulated = world.component<ecs::Simulated>().id();
     ids.visual_only = world.component<ecs::VisualOnly>().id();

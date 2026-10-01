@@ -285,6 +285,46 @@ int main() {
                    "a narrow cone leaves outside it unlit");
             Expect(Sum(ReadPixel(midX, topY)) > Sum(ambientTop) + 30, "and lights inside it");
 
+            // A DirectionalLight shining straight down lights the top face and not the front.
+            runner::LightDraw sun;
+            sun.kind = runner::LightDraw::Kind::Directional;
+            sun.direction[0] = 0.f;
+            sun.direction[1] = -1.f;
+            sun.direction[2] = 0.f;
+            sun.radius = 0.f;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1, &sun, 1);
+            const Pixel sunTop = ReadPixel(midX, topY);
+            Expect(Sum(sunTop) > Sum(ambientTop) + 60, "a DirectionalLight needs no Radius and lights the face toward it (" +
+                                                            Text(sunTop) + ")");
+            Expect(std::abs(Sum(ReadPixel(midX, frontY)) - Sum(ambientFront)) <= 3,
+                   "and leaves a face square to it at the ambient");
+            // Where it is does not matter, only where it points.
+            runner::LightDraw farSun = sun;
+            farSun.position[0] = 500.f;
+            farSun.position[1] = -40.f;
+            farSun.position[2] = 90.f;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1, &farSun, 1);
+            Expect(std::abs(Sum(ReadPixel(midX, topY)) - Sum(sunTop)) <= 3, "a DirectionalLight's position is ignored");
+            runner::LightDraw upSun = sun;
+            upSun.direction[1] = 1.f;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1, &upSun, 1);
+            Expect(std::abs(Sum(ReadPixel(midX, topY)) - Sum(ambientTop)) <= 3,
+                   "a DirectionalLight shining up leaves the top face unlit");
+            // Toward the camera's side, it lights the front face, and adds to a PointLight.
+            runner::LightDraw frontSun = sun;
+            frontSun.direction[1] = 0.f;
+            frontSun.direction[2] = -1.f;
+            const runner::LightDraw sunAndPoint[2] = {point, frontSun};
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1, sunAndPoint, 2);
+            Expect(Sum(ReadPixel(midX, midY)) > Sum(pointLit) + 30, "a DirectionalLight adds to the other lights");
+            // See-through surfaces take it too.
+            runner::MeshDraw clearCube = draw;
+            clearCube.transparency = 0.3f;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &clearCube, 1);
+            const Pixel clearUnlit = ReadPixel(midX, topY);
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &clearCube, 1, &sun, 1);
+            Expect(Sum(ReadPixel(midX, topY)) > Sum(clearUnlit) + 30, "a DirectionalLight lights see-through surfaces");
+
             // Emissive glows with no light at all.
             runner::MeshDraw glowing = draw;
             glowing.emissive[0] = 1.f;

@@ -91,7 +91,7 @@ struct DiskChoice {
 };
 
 // Classes a project file may name. The built-ins are DataModel, GameObject,
-// Camera, PointLight, SpotLight, Script, ModuleScript, Folder, the asset classes, and the scene services,
+// Camera, PointLight, SpotLight, DirectionalLight, Script, ModuleScript, Folder, the asset classes, and the scene services,
 // whose factory gives the world's own service back at its defaults. A later
 // class registers here.
 using ProjectFactory = DataModel& (*)(DataModel& world);

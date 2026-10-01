@@ -3608,7 +3608,8 @@ TEST_CASE("S30 game is a Game, a DataModel but not an Instance", "[S30]") {
     STATIC_REQUIRE_FALSE(std::is_default_constructible<engine_core::DataModel>::value);
     REQUIRE(engine_core::lua_class_inherits("Game", "DataModel"));
     REQUIRE_FALSE(engine_core::lua_class_inherits("Game", "Instance"));
-    for (const char* name : {"Folder", "GameObject", "Camera", "PointLight", "SpotLight", "Script", "ModuleScript"}) {
+    for (const char* name : {"Folder", "GameObject", "Camera", "PointLight", "SpotLight", "DirectionalLight", "Script",
+                             "ModuleScript"}) {
         INFO(name);
         REQUIRE(engine_core::lua_class_inherits(name, "Instance"));
         REQUIRE(engine_core::lua_class_inherits(name, "DataModel"));

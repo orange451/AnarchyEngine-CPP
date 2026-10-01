@@ -204,8 +204,17 @@ void GameView::collectMeshes() {
         }
         if (row.light.kind != engine_core::VisualLight::Kind::None && row.light.enabled) {
             LightDraw light;
-            light.kind = row.light.kind == engine_core::VisualLight::Kind::Spot ? LightDraw::Kind::Spot
-                                                                                : LightDraw::Kind::Point;
+            switch (row.light.kind) {
+            case engine_core::VisualLight::Kind::Spot:
+                light.kind = LightDraw::Kind::Spot;
+                break;
+            case engine_core::VisualLight::Kind::Directional:
+                light.kind = LightDraw::Kind::Directional;
+                break;
+            default:
+                light.kind = LightDraw::Kind::Point;
+                break;
+            }
             const engine_core::Vec3 position = engine_core::matrix4_position(row.world);
             light.position[0] = position.x;
             light.position[1] = position.y;
@@ -214,6 +223,12 @@ void GameView::collectMeshes() {
             light.direction[0] = -row.world.m[8];
             light.direction[1] = -row.world.m[9];
             light.direction[2] = -row.world.m[10];
+            if (light.kind == LightDraw::Kind::Directional) {
+                // Its Direction is toward the light, so it shines the other way.
+                for (int axis = 0; axis < 3; ++axis) {
+                    light.direction[axis] = -row.light.direction[axis];
+                }
+            }
             std::copy(row.light.color, row.light.color + 3, light.color);
             light.intensity = row.light.intensity;
             light.radius = row.light.radius;

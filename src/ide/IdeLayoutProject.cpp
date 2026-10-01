@@ -2,6 +2,7 @@
 
 #include "IdeLayout.hpp"
 
+#include "AssetImport.hpp"
 #include "AssetInstances.hpp"
 #include "IdeAssets.hpp"
 #include "IdeLayoutInternal.hpp"
@@ -125,8 +126,7 @@ std::vector<std::string> ModelFiles(const std::vector<std::string>& files) {
 }
 
 bool HasImports(const std::vector<std::string>& files) {
-    return std::any_of(files.begin(), files.end(),
-                       [](const std::string& file) { return is_texture_file(file) || is_model_file(file); });
+    return std::any_of(files.begin(), files.end(), is_importable_file);
 }
 
 // "1 model", "3 textures".
@@ -237,8 +237,7 @@ void IdeLayout::import_files(const std::vector<std::string>& files) {
                                                  std::vector<jadefx::ButtonType>{import, jadefx::ButtonType::Cancel()});
     alert->setTitle("Anarchy Engine");
     alert->setHeaderText(header + "?");
-    alert->setOnClosed([this, import, resources, images = std::move(images),
-                        models = std::move(models)](const jadefx::ButtonType* choice) {
+    alert->setOnClosed([this, import, resources, named = std::move(named)](const jadefx::ButtonType* choice) {
         prompt_open_ = false;
         if (choice == nullptr || !(*choice == import)) {
             return;
@@ -248,87 +247,60 @@ void IdeLayout::import_files(const std::vector<std::string>& files) {
             show_toast("Nothing was imported: the place changed while it asked");
             return;
         }
-        // Each copied file's Texture Name and Path.
-        std::vector<std::pair<std::string, std::string>> textures;
-        std::string problem;
-        for (const std::string& image : images) {
-            std::string error;
-            if (std::optional<std::string> path = import_texture_file(resources, image, error)) {
-                textures.emplace_back(utf8_path(path_from_utf8(image).stem()), std::move(*path));
-            } else if (problem.empty()) {
-                problem = "Could not import " + utf8_path(path_from_utf8(image).filename()) + ": " + error;
-            }
-        }
         // Read here, on the UI thread: a large model holds the window until it is read.
-        std::vector<ImportedModel> imported;
-        for (const std::string& file : models) {
-            std::string error;
-            if (std::optional<ImportedModel> model = import_model_file(resources, file, error)) {
-                imported.push_back(std::move(*model));
-            } else if (problem.empty()) {
-                problem = "Could not import " + utf8_path(path_from_utf8(file).filename()) + ": " + error;
+        std::vector<PreparedAsset> prepared = prepare_assets(resources, named);
+        std::string problem;
+        for (const PreparedAsset& asset : prepared) {
+            if (!asset.error.empty()) {
+                problem = "Could not import " + utf8_path(path_from_utf8(asset.file).filename()) + ": " + asset.error;
+                break;
             }
         }
-        if (textures.empty() && imported.empty()) {
+        if (std::all_of(prepared.begin(), prepared.end(), [](const PreparedAsset& asset) { return !asset.error.empty(); })) {
             show_toast(std::move(problem));
             return;
         }
         engine_core::ScriptRuntime* scripts = &runner_.simulation().scripts();
         runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), scripts,
-                                            textures = std::move(textures), imported = std::move(imported),
+                                            prepared = std::move(prepared),
                                             problem = std::move(problem)](engine_core::DataModel& world) mutable {
-            world.history().set_pending_gesture(imported.empty() ? "Import Textures" : "Import Models");
+            const bool models = std::any_of(prepared.begin(), prepared.end(),
+                                            [](const PreparedAsset& asset) { return asset.model; });
+            world.history().set_pending_gesture(models ? "Import Models" : "Import Textures");
+            const std::vector<PlacedAsset> placed = place_assets(world, prepared);
+            CloseGesture(world);
             std::vector<engine_core::InstanceId> made;
-            const engine_core::InstanceId folder = world.service("Textures");
-            if (!textures.empty() && folder == 0 && problem.empty()) {
-                problem = "This place has no Assets.Textures to import into";
-            }
-            for (const auto& [name, path] : textures) {
-                if (folder == 0) {
-                    break;
-                }
-                std::string refused;
-                const engine_core::InstanceId id = insert_instance(world, "Texture", folder, refused);
-                if (id == 0) {
-                    if (problem.empty()) {
-                        problem = std::move(refused);
-                    }
-                    break;
-                }
-                world.set_name(id, name);
-                if (std::optional<std::string> error = static_cast<engine_core::Texture*>(world.instance(id))->set_path(path)) {
-                    if (problem.empty()) {
-                        problem = std::move(*error);
-                    }
-                }
-                made.push_back(id);
-            }
+            std::size_t model_count = 0;
             std::string summary;
             bool noted = false;
-            for (const ImportedModel& model : imported) {
-                std::string error;
-                const engine_core::InstanceId prefab = build_model_assets(world, model, error);
-                if (prefab == 0) {
+            for (std::size_t i = 0; i < placed.size(); ++i) {
+                const PreparedAsset& asset = prepared[i];
+                if (placed[i].root == 0) {
                     if (problem.empty()) {
-                        problem = "Could not import " + model.name + ": " + error;
+                        problem = "Could not import " + utf8_path(path_from_utf8(asset.file).filename()) + ": " +
+                                  placed[i].error;
                     }
                     continue;
                 }
-                made.push_back(prefab);
+                made.push_back(placed[i].root);
+                if (!asset.model) {
+                    continue;
+                }
+                const ImportedModel& model = asset.imported;
                 for (const std::string& note : model.notes) {
                     scripts->append_output(engine_core::ScriptRuntime::OutputKind::Print, model.name + ": " + note);
                 }
                 noted = noted || !model.notes.empty();
+                ++model_count;
                 summary = "Imported " + model.name + ": " + Count(model.meshes.size(), "mesh", "meshes") + ", " +
                           Count(model.materials.size(), "material", "materials") + ", " +
                           Count(model.textures.size(), "texture", "textures");
             }
-            CloseGesture(world);
             if (!problem.empty()) {
                 toast_later(this, alive, std::move(problem));
             } else if (!summary.empty()) {
-                if (imported.size() > 1) {
-                    summary = "Imported " + Count(imported.size(), "model", "models");
+                if (model_count > 1) {
+                    summary = "Imported " + Count(model_count, "model", "models");
                 }
                 toast_later(this, alive, summary + (noted ? ". The console says what was left out" : ""));
             }

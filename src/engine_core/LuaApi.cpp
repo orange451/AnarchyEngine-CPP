@@ -971,6 +971,13 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Light", "Color", "The color of the light this gives.", "Color3", false, {});
     add("Light", "Intensity", "How bright this light is. 0 gives none.", "number", false, {});
     add("Light", "Radius", "How many studs this light reaches. It fades to nothing there.", "number", false, {});
+    add("DirectionalLight", "Direction",
+        "Which way the light is, as the sun is in the sky: (0, 1, 0) shines straight down. It shines on everything "
+        "alike, with no position or reach.",
+        "Vector3", false, {});
+    add("DirectionalLight", "Color", "The color of the light this gives.", "Color3", false, {});
+    add("DirectionalLight", "Intensity", "How bright this light is. 0 gives none.", "number", false, {});
+    add("DirectionalLight", "Enabled", "When false, this light gives none.", "boolean", false, {});
     add("Light", "Enabled", "When false, this light gives none.", "boolean", false, {});
     add("SpotLight", "OuterFOV",
         "The whole angle of this light's cone, in degrees, from 1 to 179. The cone points down the Transform's -Z.",

@@ -36,16 +36,18 @@ struct MeshDraw {
     float transparency = 0.f;
 };
 
-// A PointLight or SpotLight, in world space.
+// A PointLight, SpotLight, or DirectionalLight, in world space.
 struct LightDraw {
-    enum class Kind { Point, Spot };
+    enum class Kind { Point, Spot, Directional };
     Kind kind = Kind::Point;
+    // Unused for a DirectionalLight.
     float position[3] = {0.f, 0.f, 0.f};
-    // Where a SpotLight points, a unit vector. Unused for a PointLight.
+    // Where a SpotLight or DirectionalLight points. Unused for a PointLight.
     float direction[3] = {0.f, 0.f, -1.f};
     // Linear, as the Color3 holds it.
     float color[3] = {1.f, 1.f, 1.f};
     float intensity = 1.f;
+    // Unused for a DirectionalLight, which reaches everywhere.
     float radius = 8.f;
     // A SpotLight's whole cone, in degrees, and the part of it at full brightness.
     float outerFovDegrees = 80.f;
@@ -63,7 +65,8 @@ struct SceneLighting {
 // Draws meshes seen from the camera, through the legacy AnarchyEngine
 // pipeline (engine/gl): a G-buffer of each opaque surface's albedo, normal,
 // material, and glow; a light pass that adds the ambient and sky light and
-// then each light's volume; a forward pass that blends see-through surfaces
+// then each light: a DirectionalLight over the whole view, a PointLight or
+// SpotLight over its volume; a forward pass that blends see-through surfaces
 // over that, farthest first; a merge; and a filmic tone map onto the pane.
 // Every pass but the last draws into this renderer's own buffers, the pane's
 // size in pixels.
@@ -74,7 +77,8 @@ public:
     static constexpr float kCameraTarget[3] = {0.f, 0.f, 0.f};
     static constexpr float kCameraFovYDegrees = 60.f;
     // The see-through pass lights each surface with at most this many lights,
-    // the first in the list. The opaque pass takes any number.
+    // DirectionalLights first, then the first in the list. The opaque pass
+    // takes any number.
     static constexpr int kMaxForwardLights = 32;
 
     // The GL context has to be current, and LoadGl has to have run. False when
@@ -166,6 +170,8 @@ private:
     struct ViewLight {
         float position[3];
         float direction[3];
+        // A SpotLight's outer and inner cosines. x is -2 for a PointLight and
+        // -4 for a DirectionalLight, as lighting.glsl's shadeLight reads it.
         float cone[2];
         float color[3];
         float radius;
@@ -191,6 +197,8 @@ private:
     Program forward_;
     Program ibl_;
     Program light_;
+    // light.frag over the whole view, for a DirectionalLight.
+    Program sun_;
     Program merge_;
     Program tonemap_;
     // 1 by 1 white, bound for a texture a draw does not have.

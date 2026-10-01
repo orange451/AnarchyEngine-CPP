@@ -35,17 +35,27 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
 }
 
-// One light's Cook-Torrance contribution at P, fading linearly to nothing at
-// radius. cone is a SpotLight's cosines, outer then inner, around direction
-// (where it points); a PointLight passes x below -1.5 and has no cone.
+// One light's Cook-Torrance contribution at P. cone is a SpotLight's cosines,
+// outer then inner, around direction (where it points). A PointLight passes x
+// below -1.5 and has no cone. Both fade linearly to nothing at radius. A
+// DirectionalLight passes x below -3: it shines down direction on everything,
+// with no position, radius, or falloff.
 vec3 shadeLight(vec3 N, vec3 P, vec3 albedo, float metallic, float roughness, vec3 lightPosition,
                 vec3 direction, vec2 cone, vec3 lightColor, float radius, float intensity) {
-    vec3 toLight = lightPosition - P;
-    float distance = length(toLight);
-    if (distance <= 0.0 || distance >= radius) {
-        return vec3(0.0);
+    vec3 L;
+    float attenuation = 1.0;
+    if (cone.x < -3.0) {
+        L = -direction;
+    } else {
+        vec3 toLight = lightPosition - P;
+        float distance = length(toLight);
+        if (distance <= 0.0 || distance >= radius) {
+            return vec3(0.0);
+        }
+        L = toLight / distance;
+        // The legacy falloff, kept from blowing up right at the light.
+        attenuation = (1.0 - distance / radius) / max(distance, 0.25);
     }
-    vec3 L = toLight / distance;
     float NdotL = max(dot(N, L), 0.0);
     if (NdotL <= 0.0) {
         return vec3(0.0);
@@ -66,9 +76,6 @@ vec3 shadeLight(vec3 N, vec3 P, vec3 albedo, float metallic, float roughness, ve
     vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
     vec3 specular = (NDF * G * F) / max(4.0 * max(dot(N, V), 0.0) * NdotL, 0.01);
     vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
-
-    // The legacy falloff, kept from blowing up right at the light.
-    float attenuation = (1.0 - distance / radius) / max(distance, 0.25);
     vec3 radiance = lightColor * attenuation * intensity * spot;
     return (kD * albedo + specular) * radiance * NdotL;
 }

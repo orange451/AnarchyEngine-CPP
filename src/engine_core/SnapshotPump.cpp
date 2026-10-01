@@ -46,6 +46,41 @@ VisualLight light_of(const GameObject& object) {
     return out;
 }
 
+VisualLight light_of(const DirectionalLight& sun) {
+    VisualLight out;
+    out.kind = VisualLight::Kind::Directional;
+    out.enabled = sun.enabled();
+    const ColorRgb color = sun.color();
+    out.color[0] = color.r;
+    out.color[1] = color.g;
+    out.color[2] = color.b;
+    out.intensity = static_cast<float>(sun.intensity());
+    const Vec3 direction = sun.direction();
+    out.direction[0] = direction.x;
+    out.direction[1] = direction.y;
+    out.direction[2] = direction.z;
+    return out;
+}
+
+bool is_light(const DataModel* instance) {
+    return dynamic_cast<const Light*>(instance) != nullptr || dynamic_cast<const DirectionalLight*>(instance) != nullptr;
+}
+
+// Whether id has a row: a GameObject or DirectionalLight in Workspace, or any
+// light under Lighting.
+bool has_row(const DataModel& game, InstanceId id) {
+    return game.in_workspace(id) || (game.in_lighting(id) && is_light(game.instance(id)));
+}
+
+// A DirectionalLight's row: no Transform, no Prefab, only what it shines.
+VisualInstance sun_row(const DirectionalLight& sun) {
+    VisualInstance row;
+    row.id = sun.id();
+    row.alive = true;
+    row.light = light_of(sun);
+    return row;
+}
+
 // The live T that asset's reference at index holds, or null.
 template <typename T>
 const T* ReferencedAs(const DataModel& game, const ReferenceAsset& asset, std::size_t index) {
@@ -115,14 +150,28 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
         erase_base(change.id);
         return;
     }
-    // Only GameObjects under Workspace have rows. This drops the row of one
-    // that left, and ignores a change to one that was never in.
-    if (!game.in_workspace(change.id)) {
+    // Only GameObjects and DirectionalLights under Workspace, and lights under
+    // Lighting, have rows. This drops the row of one that left, and ignores a
+    // change to one that was never in.
+    if (!has_row(game, change.id)) {
         erase_base(change.id);
         return;
     }
     const GameObject* object = game.game_object(change.id);
     if (object == nullptr) {
+        const auto* sun = dynamic_cast<const DirectionalLight*>(game.instance(change.id));
+        if (sun == nullptr) {
+            return;
+        }
+        if (VisualInstance* row = base_find(change.id)) {
+            row->light = light_of(*sun);
+            return;
+        }
+        if (base_.instances.size() == base_.instances.capacity()) {
+            contract_fail("snapshot instance capacity exhausted");
+        }
+        base_ids_.insert(change.id);
+        base_.instances.push_back(sun_row(*sun));
         return;
     }
     // A row that joins reads every field: none was kept while it was out.
@@ -143,7 +192,9 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
         inst->transform_origin = change.origin;
     }
     if (whole || any(change.fields, VisualField::Prefab)) {
-        set_row_prefab(*inst, object->prefab_guid());
+        // A light under Lighting only shines: Lighting is not part of the scene.
+        static const std::string kNoPrefab;
+        set_row_prefab(*inst, game.in_workspace(change.id) ? object->prefab_guid() : kNoPrefab);
     }
     if (whole || any(change.fields, VisualField::Camera)) {
         inst->field_of_view = field_of_view_of(*object);
@@ -172,6 +223,43 @@ void SnapshotPump::resync(DataModel& game) {
         base_ids_.insert(object.id());
         base_.instances.push_back(inst);
     });
+    // The render query sees only GameObjects in Workspace. DirectionalLights
+    // there, and every light under Lighting, are found by walking those two
+    // services. A resync is rare, so the walk is cheap enough.
+    std::vector<InstanceId> walk;
+    for (const char* service : {"Workspace", "Lighting"}) {
+        if (const InstanceId root = game.scene_service(service); root != 0) {
+            walk.push_back(root);
+        }
+    }
+    while (!walk.empty()) {
+        const InstanceId id = walk.back();
+        walk.pop_back();
+        const DataModel* instance = game.instance(id);
+        const bool sun = dynamic_cast<const DirectionalLight*>(instance) != nullptr;
+        // A light GameObject in Workspace already has its row from the query.
+        const bool lit = !game.in_workspace(id) && dynamic_cast<const Light*>(instance) != nullptr;
+        if (sun || lit) {
+            if (base_.instances.size() == base_.instances.capacity()) {
+                contract_fail("snapshot instance capacity exhausted");
+            }
+            VisualInstance row;
+            if (sun) {
+                row = sun_row(*static_cast<const DirectionalLight*>(instance));
+            } else {
+                // Under Lighting: it shines, and draws no Prefab.
+                const auto& light = *static_cast<const Light*>(instance);
+                row.id = id;
+                row.world = light.transform();
+                row.light = light_of(light);
+            }
+            base_ids_.insert(id);
+            base_.instances.push_back(row);
+        }
+        for (InstanceId child = game.first_child(id); child != 0; child = game.next_sibling(child)) {
+            walk.push_back(child);
+        }
+    }
 }
 
 std::uint32_t SnapshotPump::acquire_prefab(const std::string& guid) {

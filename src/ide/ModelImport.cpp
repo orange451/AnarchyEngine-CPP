@@ -571,7 +571,7 @@ std::optional<ImportedModel> import_model_file(const fs::path& resources_root, c
 }
 
 engine_core::InstanceId build_model_assets(engine_core::DataModel& world, const ImportedModel& model,
-                                           std::string& error) {
+                                           std::string& error, std::vector<engine_core::InstanceId>* made_out) {
     const engine_core::InstanceId textures = world.service("Textures");
     const engine_core::InstanceId materials = world.service("Materials");
     const engine_core::InstanceId meshes = world.service("Meshes");
@@ -674,6 +674,9 @@ engine_core::InstanceId build_model_assets(engine_core::DataModel& world, const 
         if (imported.material >= 0 && static_cast<std::size_t>(imported.material) < material_ids.size()) {
             reference(joined, engine_core::Model::kMaterialReference, material_ids[imported.material]);
         }
+    }
+    if (made_out != nullptr) {
+        *made_out = std::move(made);
     }
     return prefab;
 }

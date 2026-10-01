@@ -9,6 +9,17 @@
 #include <memory>
 #include <string>
 
+#if defined(_WIN32)
+// On a machine with integrated and discrete GPUs, the NVIDIA and AMD drivers
+// read these from the exe and run it on the discrete one. Without them Windows
+// may hand the GL context to the integrated GPU. They must be exported by the
+// exe itself; the same symbols in a DLL are ignored.
+extern "C" {
+__declspec(dllexport) unsigned long NvOptimusEnablement = 0x00000001;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
 namespace {
 
 // Desktop shell. JadeFX owns the window, the GL context, and the frame loop.

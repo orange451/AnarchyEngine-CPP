@@ -82,6 +82,7 @@ set(STUDIO_SOURCES
     src/ide/CutSet.cpp
     src/ide/TextureImport.cpp
     src/ide/ModelImport.cpp
+    src/ide/AssetImport.cpp
     src/ide/PropertiesPanel.cpp
     src/ide/Preferences.cpp
     src/ide/PreferencesPanel.cpp

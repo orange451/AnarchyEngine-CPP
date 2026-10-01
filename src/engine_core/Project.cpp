@@ -121,6 +121,8 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"Camera", [](DataModel& world) -> DataModel& { return world.create<Camera>(); }});
         out.push_back({"PointLight", [](DataModel& world) -> DataModel& { return world.create<PointLight>(); }});
         out.push_back({"SpotLight", [](DataModel& world) -> DataModel& { return world.create<SpotLight>(); }});
+        out.push_back(
+            {"DirectionalLight", [](DataModel& world) -> DataModel& { return world.create<DirectionalLight>(); }});
         out.push_back({"Script", [](DataModel& world) -> DataModel& { return world.create<Script>(); }});
         out.push_back({"ModuleScript", [](DataModel& world) -> DataModel& { return world.create<ModuleScript>(); }});
         out.push_back({"Folder", [](DataModel& world) -> DataModel& { return world.create<Folder>(); }});

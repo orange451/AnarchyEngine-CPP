@@ -334,10 +334,12 @@ public:
 
     bool alive(InstanceId id) const;
     // Scope. in_game: under game. in_workspace: under the Workspace service,
-    // which is not inside itself. Both are false for a dead id. Kept current
-    // at every tree change, so reading them costs no walk.
+    // which is not inside itself. in_lighting: under the Lighting service, the
+    // same way. All are false for a dead id. Kept current at every tree
+    // change, so reading them costs no walk.
     bool in_game(InstanceId id) const;
     bool in_workspace(InstanceId id) const;
+    bool in_lighting(InstanceId id) const;
     bool simulated(InstanceId id) const;
     bool visual_only(InstanceId id) const;
     // kNoParent when id is dead or the instance has no parent.
@@ -421,6 +423,14 @@ protected:
 
     void emit_own(Field field);
     ScriptHost* script_host() const;
+
+    // True for a class that is not a GameObject but still has a render
+    // snapshot row while it is in Workspace, as DirectionalLight does. Moving
+    // it into or out of Workspace then tells the snapshot, as it does for a
+    // GameObject.
+    virtual bool has_visual_row() const { return false; }
+    // Tells the render snapshot that fields of this instance's row changed.
+    void note_visual_row(VisualField fields);
 
     // Successful mutators record here. Equal values return before these run.
     // Velocity is not recorded. Undo application does not record.
@@ -570,7 +580,7 @@ private:
     // Recomputes id's scope tags from its parent. Unchanged tags return at
     // once; changed tags walk the subtree. Runs after every tree change.
     void refresh_scope(InstanceId id);
-    void apply_scope(InstanceId id, bool in_game_now, bool in_workspace_now);
+    void apply_scope(InstanceId id, bool in_game_now, bool in_workspace_now, bool in_lighting_now);
     void rebind(InstanceId id) { id_ = id; }
 
     void require_simulation_thread(const char* message) const;

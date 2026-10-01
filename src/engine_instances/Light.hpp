@@ -8,8 +8,9 @@
 namespace engine_core {
 
 // A light the Scene View shades with, at its Transform's translation. Like a
-// Camera, it is a GameObject, and a Light in Workspace has a render snapshot
-// row that carries what it shines (VisualLight).
+// Camera, it is a GameObject. A Light in Workspace, or anywhere under
+// Lighting, has a render snapshot row that carries what it shines
+// (VisualLight). Under Lighting it only shines: its Prefab is not drawn.
 //
 // Color      Color3  white.
 // Intensity  number  how bright, 1. Not below 0; the slider runs to 8.
@@ -19,7 +20,8 @@ namespace engine_core {
 //
 // Each is a saved registry property (lua_saved_property), so DataModel saves,
 // loads, undoes, and restores it at Stop. "Light" itself is only a base class:
-// Instance.new makes a PointLight or a SpotLight.
+// Instance.new makes a PointLight or a SpotLight. A DirectionalLight, below,
+// is not one: it has no Transform.
 class Light : public GameObject {
 public:
     static constexpr ColorRgb kDefaultColor{1.f, 1.f, 1.f, 1.f};
@@ -59,6 +61,49 @@ class PointLight : public Light {
 public:
     using Light::Light;
     const char* class_name() const override { return "PointLight"; }
+};
+
+// Shines on everything at once and equally, as the sun does. It is not a
+// GameObject: it has no Transform and no place, only a Direction, and no
+// Radius. In Workspace or under Lighting it still has a render snapshot row
+// (has_visual_row).
+//
+// Direction  Vector3  toward the light, as the legacy engine had it: (0, 1, 0)
+//                     shines straight down. (1, 1, 1). Any length; a zero
+//                     vector shines nowhere.
+// Color      Color3   white.
+// Intensity  number   how bright, 1. Not below 0; the slider runs to 8.
+// Enabled    boolean  when false it gives no light.
+//
+// Each is a saved registry property, as a Light's are.
+class DirectionalLight : public DataModel {
+public:
+    static constexpr Vec3 kDefaultDirection{1.f, 1.f, 1.f};
+
+    DirectionalLight(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
+    const char* class_name() const override { return "DirectionalLight"; }
+
+    Vec3 direction() const { return direction_; }
+    ColorRgb color() const { return color_; }
+    double intensity() const { return intensity_; }
+    bool enabled() const { return enabled_; }
+
+    // SimulationThread. A value that is not finite is refused: the setter
+    // returns why and changes nothing. A negative Intensity is taken as 0.
+    std::optional<std::string> set_direction(Vec3 direction);
+    std::optional<std::string> set_color(ColorRgb color);
+    std::optional<std::string> set_intensity(double value);
+    void set_enabled(bool enabled);
+
+protected:
+    bool has_visual_row() const override { return true; }
+    void on_reuse() override;
+
+private:
+    Vec3 direction_ = kDefaultDirection;
+    ColorRgb color_ = Light::kDefaultColor;
+    double intensity_ = Light::kDefaultIntensity;
+    bool enabled_ = true;
 };
 
 // Shines a cone down its Transform's -Z, as a Camera looks, out to Radius.

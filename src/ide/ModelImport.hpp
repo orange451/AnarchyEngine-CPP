@@ -77,9 +77,10 @@ std::optional<ImportedModel> import_model_file(const std::filesystem::path& reso
 // SimulationThread. Makes the instances for model: a Folder named after it in
 // Assets.Textures, Assets.Materials, and Assets.Meshes, holding its Textures,
 // Materials, and Meshes, and a Prefab in Assets.Prefabs holding a Model for
-// each Mesh. A Folder that would be empty is not made. Returns the Prefab.
-// 0, with error set and nothing made, when the place has no room or no Assets.
+// each Mesh. A Folder that would be empty is not made. Returns the Prefab,
+// and, when made is set, every instance made, in the order made. 0, with
+// error set and nothing made, when the place has no room or no Assets.
 engine_core::InstanceId build_model_assets(engine_core::DataModel& world, const ImportedModel& model,
-                                           std::string& error);
+                                           std::string& error, std::vector<engine_core::InstanceId>* made = nullptr);
 
 }  // namespace ide

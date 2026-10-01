@@ -414,10 +414,10 @@ void new_folder_and_kind() {
         const jadefx::Node* kind = rig.menuItem("New Texture");
         const jadefx::Node* folder = rig.menuItem("New Folder");
         const jadefx::Node* import = rig.menuItem("Import Texture…");
+        Expect(import != nullptr && kind != nullptr && import->getAbsoluteY() < kind->getAbsoluteY(),
+               "Import Texture… comes first, above New Texture");
         Expect(kind != nullptr && folder != nullptr && kind->getAbsoluteY() < folder->getAbsoluteY(),
-               "New Texture comes above New Folder");
-        Expect(import != nullptr && folder != nullptr && folder->getAbsoluteY() < import->getAbsoluteY(),
-               "and Import Texture… below it");
+               "and New Texture above New Folder");
     }
     rig.clickMenu("Import Texture…");
     Expect((rig.imports == std::vector<std::pair<std::string, InstanceId>>{{"Texture", rig.textures}}),

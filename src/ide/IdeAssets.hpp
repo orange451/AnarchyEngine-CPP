@@ -111,8 +111,8 @@ private:
     void show_empty_menu(double x, double y);
     // A category's menu: what can be added into it, and Paste into it.
     void show_category_menu(engine_core::InstanceId category, double x, double y);
-    // "<verb> <kind>", "<verb> Folder", Import <kind> where the kind comes
-    // from files, and Paste, each into folder.
+    // Import <kind> where the kind comes from files, "<verb> <kind>",
+    // "<verb> Folder", and Paste, each into folder.
     void show_insert_menu(engine_core::InstanceId folder, const std::string& verb, double x, double y);
     // Makes class_name in folder, opening folder first when it is not the one shown.
     void new_item(const std::string& class_name, engine_core::InstanceId folder);

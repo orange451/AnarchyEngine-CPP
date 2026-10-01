@@ -1024,7 +1024,23 @@ void IdeAssets::show_insert_menu(engine_core::InstanceId folder, const std::stri
     }
     menu_ = jadefx::make<jadefx::Menu>();
     const bool can_insert = static_cast<bool>(host_.actions.insert);
-    // The folder's own kind first, then a Folder, which every folder offers.
+    // Import first, where a Texture, a Sound, or a Prefab comes from files on disk: an image, a sound, a model.
+    if (kind == "Texture" || kind == "Sound" || kind == "Prefab") {
+        auto entry = jadefx::make<jadefx::MenuItem>("Import " + std::string(kind == "Prefab" ? "Model" : kind) + "…");
+        if (std::shared_ptr<jadefx::ImageView> icon = icon_view(kind)) {
+            icon->setPrefSize(16, 16);
+            icon->setMouseTransparent(true);
+            entry->setGraphic(std::move(icon));
+        }
+        entry->setDisable(!host_.import_assets);
+        entry->setOnAction([this, folder, kind](jadefx::ActionEvent&) {
+            if (host_.import_assets) {
+                host_.import_assets(folder, kind);
+            }
+        });
+        menu_->getItems().add(std::move(entry));
+    }
+    // Then the folder's own kind, then a Folder, which every folder offers.
     std::vector<std::string> classes;
     if (!kind.empty() && kind != "Folder") {
         classes.push_back(kind);
@@ -1039,22 +1055,6 @@ void IdeAssets::show_insert_menu(engine_core::InstanceId folder, const std::stri
         }
         entry->setDisable(!can_insert);
         entry->setOnAction([this, klass, folder](jadefx::ActionEvent&) { new_item(klass, folder); });
-        menu_->getItems().add(std::move(entry));
-    }
-    // A Texture, a Sound, and a Prefab come from files on disk as well: an image, a sound, a model.
-    if (kind == "Texture" || kind == "Sound" || kind == "Prefab") {
-        auto entry = jadefx::make<jadefx::MenuItem>("Import " + std::string(kind == "Prefab" ? "Model" : kind) + "…");
-        if (std::shared_ptr<jadefx::ImageView> icon = icon_view(kind)) {
-            icon->setPrefSize(16, 16);
-            icon->setMouseTransparent(true);
-            entry->setGraphic(std::move(icon));
-        }
-        entry->setDisable(!host_.import_assets);
-        entry->setOnAction([this, folder, kind](jadefx::ActionEvent&) {
-            if (host_.import_assets) {
-                host_.import_assets(folder, kind);
-            }
-        });
         menu_->getItems().add(std::move(entry));
     }
     menu_->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());

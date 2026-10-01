@@ -387,7 +387,7 @@ ANARCHY_LUA_REGISTER(register_physics_object_lua) {
         lua_saved_property("GameObject", "GameObject?", read_reference<&PhysicsObject::game_object>,
                            write_reference<&PhysicsObject::set_game_object>, "null"),
     };
-    register_lua_class("PhysicsObject", "Instance", fields, static_cast<int>(std::size(fields)));
+    register_lua_class("PhysicsObject", "PVInstance", fields, static_cast<int>(std::size(fields)));
 }
 
 }  // namespace

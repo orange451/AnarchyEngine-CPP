@@ -169,6 +169,15 @@ const EnumEntry kPhysicsShapes[] = {
     {"Custom", 4},
 };
 
+// SoundEmitter.RollOffMode: miniaudio's attenuation models. Inverse and
+// Linear keep Roblox's values; Exponential and None are miniaudio's own.
+const EnumEntry kRollOffModes[] = {
+    {"Inverse", 0},
+    {"Linear", 1},
+    {"Exponential", 2},
+    {"None", 3},
+};
+
 template <std::size_t N>
 constexpr int count_of(const EnumEntry (&)[N]) {
     return static_cast<int>(N);
@@ -182,10 +191,11 @@ const EnumType kUserInputTypeType{"UserInputType", kUserInputTypes, count_of(kUs
 const EnumType kUserInputStateType{"UserInputState", kUserInputStates, count_of(kUserInputStates)};
 const EnumType kMouseBehaviorType{"MouseBehavior", kMouseBehaviors, count_of(kMouseBehaviors)};
 const EnumType kPhysicsShapeType{"PhysicsShape", kPhysicsShapes, count_of(kPhysicsShapes)};
+const EnumType kRollOffModeType{"RollOffMode", kRollOffModes, count_of(kRollOffModes)};
 
 const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kRotationOrderType,
                                   &kKeyCodeType,        &kUserInputTypeType, &kUserInputStateType,
-                                  &kMouseBehaviorType,  &kPhysicsShapeType};
+                                  &kMouseBehaviorType,  &kPhysicsShapeType,  &kRollOffModeType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -257,6 +267,8 @@ const EnumType& user_input_state_enum() { return kUserInputStateType; }
 const EnumType& mouse_behavior_enum() { return kMouseBehaviorType; }
 
 const EnumType& physics_shape_enum() { return kPhysicsShapeType; }
+
+const EnumType& roll_off_mode_enum() { return kRollOffModeType; }
 
 int enum_item_value(const EnumType& type, std::string_view name) {
     for (int index = 0; index < type.count; ++index) {

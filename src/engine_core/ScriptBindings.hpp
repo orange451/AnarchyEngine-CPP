@@ -26,6 +26,7 @@
 namespace engine_core {
 
 class Mesh;
+class SoundEmitter;
 
 namespace script_internal {
 
@@ -267,6 +268,9 @@ struct ScriptBindings {
     static int mesh_add_plane(lua_State* state);
     static int mesh_add_teapot(lua_State* state);
     static int mesh_clear(lua_State* state);
+    static SoundEmitter& emitter_self(lua_State* state);
+    static int emitter_play(lua_State* state);
+    static int emitter_stop(lua_State* state);
     // The keys and buttons are the service's, read on the simulation thread.
     static UserInputService* input_service(lua_State* state);
     static int input_is_key_down(lua_State* state);

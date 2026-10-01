@@ -8,7 +8,7 @@
 
 namespace engine_core {
 
-GameObject::GameObject(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {
+GameObject::GameObject(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : PVInstance(tag, state, id) {
     reset_spatial();
 }
 
@@ -191,11 +191,15 @@ bool write_prefab(DataModel&, DataModel& object, LuaSlot& in) {
 }
 
 ANARCHY_LUA_REGISTER(register_game_object_lua) {
+    // PVInstance has no source file of its own, which would not stay linked.
+    // It is abstract, and adds no members: IsA("PVInstance") is true of every
+    // class with a Transform.
+    register_lua_class("PVInstance", "Instance", nullptr, 0);
     const LuaField fields[] = {
         lua_property("Transform", "Matrix4", true, read_lua_transform, write_lua_transform),
         lua_saved_property("Prefab", "Prefab?", read_prefab, write_prefab, "null"),
     };
-    register_lua_class("GameObject", "Instance", fields, 2);
+    register_lua_class("GameObject", "PVInstance", fields, 2);
 }
 
 }  // namespace

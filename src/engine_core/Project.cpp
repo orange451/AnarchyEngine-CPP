@@ -14,6 +14,7 @@
 #include "ModuleScript.hpp"
 #include "PhysicsObject.hpp"
 #include "SceneService.hpp"
+#include "SoundEmitter.hpp"
 #include "Script.hpp"
 
 #include <algorithm>
@@ -129,6 +130,8 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"Folder", [](DataModel& world) -> DataModel& { return world.create<Folder>(); }});
         out.push_back(
             {"PhysicsObject", [](DataModel& world) -> DataModel& { return world.create<PhysicsObject>(); }});
+        out.push_back(
+            {"SoundEmitter", [](DataModel& world) -> DataModel& { return world.create<SoundEmitter>(); }});
         out.push_back({"Texture", [](DataModel& world) -> DataModel& { return world.create<Texture>(); }});
         out.push_back({"Mesh", [](DataModel& world) -> DataModel& { return world.create<Mesh>(); }});
         out.push_back({"Sound", [](DataModel& world) -> DataModel& { return world.create<Sound>(); }});

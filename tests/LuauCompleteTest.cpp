@@ -1187,7 +1187,7 @@ void testInsertFilter() {
     ide::filter_class_names(names, "", shown);
     const std::vector<std::string> expected = {"Camera",    "DirectionalLight", "Folder",     "GameObject", "Material",
                                                 "Mesh",      "Model",            "ModuleScript", "PhysicsObject", "PointLight", "Prefab",
-                                                "Script",    "Sound",            "SpotLight",  "Texture"};
+                                                "Script",    "Sound",            "SoundEmitter", "SpotLight",  "Texture"};
     if (shown != expected) {
         fail("insert list is every creatable class, A to Z");
     }

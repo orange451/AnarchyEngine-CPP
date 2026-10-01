@@ -129,7 +129,10 @@ void IdeLayout::start_mcp() {
                 const PreparedAsset& asset = (*prepared)[i];
                 McpImport import;
                 import.file = asset.file;
-                import.kind = asset.model ? "model" : is_texture_file(asset.file) ? "texture" : "unknown";
+                import.kind = asset.model   ? "model"
+                              : asset.sound ? "sound"
+                              : is_texture_file(asset.file) ? "texture"
+                                                            : "unknown";
                 import.error = placed[i].error;
                 import.root = placed[i].root;
                 import.made = placed[i].made;

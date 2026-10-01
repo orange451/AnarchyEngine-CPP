@@ -1016,6 +1016,27 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         {P("size", "number"), P("position", "Vector3?")});
     add("Mesh", "Clear", "Empties this mesh's file.", "nil", false, {});
 
+    add("SoundEmitter", "Play",
+        "Plays Sound from TimePosition, or from the start when it is already playing. Parented to a PVInstance, it is "
+        "heard from there and follows it; anywhere else it is heard the same in both ears.",
+        "nil", false, {});
+    add("SoundEmitter", "Stop", "Stops the sound and puts TimePosition back to 0.", "nil", false, {});
+    add("SoundEmitter", "Sound", "The Sound this plays.", "Sound?", false, {});
+    add("SoundEmitter", "Volume", "How loud this plays, from 0 to 5. 1 is the file as it is.", "number", false, {});
+    add("SoundEmitter", "Pitch", "How fast this plays, from 0 to 5, which moves its pitch with it. 1 is as recorded.",
+        "number", false, {});
+    add("SoundEmitter", "Looped", "When true, the sound plays again from the start each time it ends.", "boolean",
+        false, {});
+    add("SoundEmitter", "RollOffMode", "How the sound gets quieter with distance from its PVInstance.", "EnumItem", false,
+        {});
+    add("SoundEmitter", "RollOffMinDistance", "Within this many studs, from 0 to 512, the sound is at full volume.",
+        "number", false, {});
+    add("SoundEmitter", "RollOffMaxDistance", "Past this many studs, from 0 to 512, the sound gets no quieter.",
+        "number", false, {});
+    add("SoundEmitter", "TimePosition", "How many seconds into the sound it is. Writing it while playing seeks.",
+        "number", false, {});
+    add("SoundEmitter", "IsPlaying", "True while the sound plays. Read-only.", "boolean", false, {});
+
     add("Signal", "Connect", "Calls callback when the signal fires and returns the connection.", "Connection", false,
         {P("callback", "function")});
     add("Signal", "Wait", "Yields until the signal fires, then returns the signal's arguments.", "", false, {});

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "DataModel.hpp"
+#include "PVInstance.hpp"
 #include "InstanceRef.hpp"
 #include "Matrix4.hpp"
 
@@ -43,7 +43,7 @@ namespace engine_core {
 // Each is a saved registry property, so DataModel saves, loads, undoes, and
 // restores it at Stop. A value that is not finite is refused. Writes made by
 // the physics world itself go through store_simulated and are none of those.
-class PhysicsObject : public DataModel {
+class PhysicsObject : public PVInstance {
 public:
     enum class Shape { Box = 0, Sphere = 1, Capsule = 2, Hull = 3, Custom = 4 };
 
@@ -64,12 +64,12 @@ public:
     static constexpr double kDefaultFriction = 0.6;
     static constexpr float kMinSize = 0.01f;
 
-    PhysicsObject(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
+    PhysicsObject(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : PVInstance(tag, state, id) {}
 
     const char* class_name() const override { return "PhysicsObject"; }
     bool physics_body() const override { return true; }
 
-    const Matrix4& transform() const { return transform_; }
+    Matrix4 transform() const override { return transform_; }
     Vec3 velocity() const { return velocity_; }
     Vec3 angular_velocity() const { return angular_velocity_; }
     bool anchored() const { return anchored_; }

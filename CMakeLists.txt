@@ -380,6 +380,24 @@ endif()
 set(BOX3D_SOURCE_DIR "${box3d_SOURCE_DIR}")
 add_subdirectory(cmake/box3d "${CMAKE_BINARY_DIR}/box3d")
 
+# miniaudio plays SoundEmitters: public-domain (or MIT-0) C by David Reid,
+# pinned by tag and hash. cmake/miniaudio builds it with its bundled
+# stb_vorbis, so Ogg Vorbis decodes beside WAV, MP3, and FLAC.
+FetchContent_Declare(
+    miniaudio
+    URL https://github.com/mackron/miniaudio/archive/refs/tags/0.11.25.tar.gz
+    URL_HASH SHA256=b900edcffe979816e2560a0580b9b1216d674b4f17fbadeca8f777a7f8ab0274
+)
+FetchContent_GetProperties(miniaudio)
+if(NOT miniaudio_POPULATED)
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
+    FetchContent_Populate(miniaudio)
+endif()
+set(MINIAUDIO_SOURCE_DIR "${miniaudio_SOURCE_DIR}")
+add_subdirectory(cmake/miniaudio "${CMAKE_BINARY_DIR}/miniaudio")
+
 # The engine is four packages, each a static library with its own directory:
 #   engine_core       DataModel, events, threads, the script runtime, projects
 #   engine_datatypes  values: Vector2, Vector3, Color, Color3, Matrix4, Enum
@@ -407,6 +425,7 @@ add_library(engine_instances STATIC
     src/engine_instances/LuaSource.cpp
     src/engine_instances/ModuleScript.cpp
     src/engine_instances/PhysicsObject.cpp
+    src/engine_instances/SoundEmitter.cpp
     src/engine_instances/Script.cpp
 )
 add_library(engine_services STATIC
@@ -447,6 +466,7 @@ add_library(engine_core STATIC
     src/engine_core/Containment.cpp
     src/engine_core/Ecs.cpp
     src/engine_core/PhysicsWorld.cpp
+    src/engine_core/AudioWorld.cpp
 )
 set(ENGINE_PACKAGES engine_core engine_datatypes engine_instances engine_services)
 foreach(package IN LISTS ENGINE_PACKAGES)
@@ -463,6 +483,8 @@ target_link_libraries(engine_core PRIVATE flecs)
 target_link_libraries(engine_instances PRIVATE flecs)
 # Box3D stays private too: only PhysicsWorld.cpp includes it.
 target_link_libraries(engine_core PRIVATE box3d)
+# So does miniaudio: only AudioWorld.cpp includes it.
+target_link_libraries(engine_core PRIVATE miniaudio)
 target_link_libraries(engine_core PRIVATE Luau.Compiler Luau.VM Luau.Analysis)
 # Vector3 is a Luau vector, and Enum items are Luau userdata.
 target_link_libraries(engine_datatypes PRIVATE Luau.VM)
@@ -683,6 +705,7 @@ add_executable(sandbox
     sandbox/camera_tests.cpp
     sandbox/light_tests.cpp
     sandbox/physics_tests.cpp
+    sandbox/audio_tests.cpp
     sandbox/scene_camera_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)

@@ -1,3 +1,5 @@
+#include "ide/AssetImport.hpp"
+#include "ide/CutSet.hpp"
 #include "ide/IdeLayout.hpp"
 #include "ide/IdeResources.hpp"
 #include "ide/TextureImport.hpp"
@@ -141,6 +143,45 @@ int RunTextureImportTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     made = textures();
     expect(made.size() == 5 && made.back().path == "textures/Brick-2.png", "a resource file is not copied again");
     expect(!fs::exists(root / "resources" / "textures" / "Brick-2-2.png"), "and leaves no copy");
+
+    // Sounds: a Sound under Assets.Audio, its file in resources/sounds.
+    expect(ide::is_sound_file("Boom.WAV") && ide::is_sound_file("a.mp3") && ide::is_sound_file("a.flac") &&
+               ide::is_sound_file("a.ogg"),
+           "WAV, MP3, FLAC, and Ogg files are sounds in any case");
+    expect(!ide::is_sound_file("a.png") && !ide::is_sound_file("wav"), "an image, or no extension, is not");
+    WriteBytes(outside / "Boom.wav", "boom bytes");
+    auto sounds = [&layout](engine_core::InstanceId folder) {
+        std::vector<Imported> found;
+        layout.simulation().on_simulation([&found, folder](engine_core::DataModel& game) {
+            for (engine_core::InstanceId id : game.get_children(folder != 0 ? folder : game.service("Audio"))) {
+                if (const auto* sound = dynamic_cast<const engine_core::Sound*>(game.instance(id))) {
+                    found.push_back({id, game.name(id), sound->path()});
+                }
+            }
+        });
+        return found;
+    };
+    expect(drop({outside / "Boom.wav"}), "a drop with a sound is taken");
+    click("import-files-import");
+    std::vector<Imported> boom = sounds(0);
+    expect(boom.size() == 1 && boom[0].name == "Boom" && boom[0].path == "sounds/Boom.wav",
+           "Import makes a Sound in Assets.Audio, Path at the copy");
+    expect(ReadBytes(root / "resources" / "sounds" / "Boom.wav") == "boom bytes",
+           "the file is copied into resources/sounds");
+    expect(!boom.empty() && selection() == std::vector<engine_core::InstanceId>{boom[0].id}, "and it is selected");
+
+    // Import Sound into a Folder under Assets.Audio puts it there.
+    engine_core::InstanceId effects = 0;
+    layout.simulation().on_simulation([&effects](engine_core::DataModel& game) {
+        std::string refused;
+        effects = ide::insert_instance(game, "Folder", game.service("Audio"), refused);
+    });
+    const std::vector<ide::PreparedAsset> prepared =
+        ide::prepare_assets(root / "resources", {ide::utf8_path(outside / "Boom.wav")});
+    expect(prepared.size() == 1 && prepared[0].sound && prepared[0].error.empty(), "prepare reads a sound");
+    layout.simulation().on_simulation(
+        [&prepared, effects](engine_core::DataModel& game) { ide::place_assets(game, prepared, effects); });
+    expect(sounds(effects).size() == 1, "place_assets puts a sound in the folder it is given");
 
     std::error_code error;
     fs::remove_all(folder, error);

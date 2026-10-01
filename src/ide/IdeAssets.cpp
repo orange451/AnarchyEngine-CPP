@@ -997,6 +997,22 @@ void IdeAssets::show_insert_menu(engine_core::InstanceId folder, const std::stri
         entry->setOnAction([this, klass, folder](jadefx::ActionEvent&) { new_item(klass, folder); });
         menu_->getItems().add(std::move(entry));
     }
+    // A Sound is a file's: offered from a file on disk as well as empty.
+    if (kind == "Sound") {
+        auto entry = jadefx::make<jadefx::MenuItem>("Import Sound…");
+        if (std::shared_ptr<jadefx::ImageView> icon = icon_view("Sound")) {
+            icon->setPrefSize(16, 16);
+            icon->setMouseTransparent(true);
+            entry->setGraphic(std::move(icon));
+        }
+        entry->setDisable(!host_.import_sound);
+        entry->setOnAction([this, folder](jadefx::ActionEvent&) {
+            if (host_.import_sound) {
+                host_.import_sound(folder);
+            }
+        });
+        menu_->getItems().add(std::move(entry));
+    }
     menu_->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     auto paste = jadefx::make<jadefx::MenuItem>(engine_core::action_label(InstanceAction::Paste));
     if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic("Paste.png")) {

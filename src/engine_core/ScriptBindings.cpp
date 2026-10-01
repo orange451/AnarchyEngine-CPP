@@ -18,6 +18,7 @@
 #include "PropertyReflection.hpp"
 #include "Script.hpp"
 #include "SelectionService.hpp"
+#include "SoundEmitter.hpp"
 #include "UserInputService.hpp"
 #include "Vector2.hpp"
 #include "Vector3.hpp"
@@ -167,6 +168,8 @@ DataModel& create_folder(DataModel& world) { return world.create<Folder>(); }
 
 DataModel& create_physics_object(DataModel& world) { return world.create<PhysicsObject>(); }
 
+DataModel& create_sound_emitter(DataModel& world) { return world.create<SoundEmitter>(); }
+
 DataModel& create_texture(DataModel& world) { return world.create<Texture>(); }
 DataModel& create_mesh(DataModel& world) { return world.create<Mesh>(); }
 DataModel& create_sound(DataModel& world) { return world.create<Sound>(); }
@@ -187,6 +190,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("ModuleScript", create_module_script);
     register_lua_creatable("Folder", create_folder);
     register_lua_creatable("PhysicsObject", create_physics_object);
+    register_lua_creatable("SoundEmitter", create_sound_emitter);
     register_lua_creatable("Texture", create_texture);
     register_lua_creatable("Mesh", create_mesh);
     register_lua_creatable("Sound", create_sound);
@@ -906,6 +910,30 @@ Mesh& ScriptBindings::mesh_self(lua_State* state) {
     return *mesh;
 }
 
+SoundEmitter& ScriptBindings::emitter_self(lua_State* state) {
+    auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
+    ScriptRuntime* runtime = runtime_from(state);
+    auto* emitter = runtime == nullptr ? nullptr : dynamic_cast<SoundEmitter*>(runtime->resolve_id(ud->id, ud->world));
+    if (emitter == nullptr) {
+        luaL_error(state, "instance is gone");
+    }
+    return *emitter;
+}
+
+int ScriptBindings::emitter_play(lua_State* state) {
+    return lua_guard(state, [&] {
+        emitter_self(state).play();
+        return 0;
+    });
+}
+
+int ScriptBindings::emitter_stop(lua_State* state) {
+    return lua_guard(state, [&] {
+        emitter_self(state).stop();
+        return 0;
+    });
+}
+
 int ScriptBindings::mesh_add_box(lua_State* state) {
     return lua_guard(state, [&] {
         Mesh& mesh = mesh_self(state);
@@ -1179,6 +1207,13 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         lua_method("Clear", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_clear)),
     };
     register_lua_class("Mesh", nullptr, mesh, static_cast<int>(sizeof(mesh) / sizeof(mesh[0])));
+
+    // SoundEmitter.cpp declares the class and its properties.
+    const LuaField emitter[] = {
+        lua_method("Play", "nil", reinterpret_cast<void*>(&ScriptBindings::emitter_play)),
+        lua_method("Stop", "nil", reinterpret_cast<void*>(&ScriptBindings::emitter_stop)),
+    };
+    register_lua_class("SoundEmitter", nullptr, emitter, static_cast<int>(sizeof(emitter) / sizeof(emitter[0])));
 
     // UserInputService.cpp declares the class, its signals, and the service.
     const LuaField input[] = {

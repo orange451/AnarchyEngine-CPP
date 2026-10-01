@@ -53,6 +53,10 @@ Engine::Engine() {
     physics_.set_warning_sink([this](const std::string& text) {
         scripts_->append_output(ScriptRuntime::OutputKind::Print, text);
     });
+    // So do audio warnings, such as a Sound whose file cannot be played.
+    audio_.set_warning_sink([this](const std::string& text) {
+        scripts_->append_output(ScriptRuntime::OutputKind::Print, text);
+    });
     analysis_ = std::make_unique<ScriptAnalysis>(game_);
 }
 
@@ -124,8 +128,12 @@ void Engine::resume() {
 }
 
 void Engine::pause() {
-    std::lock_guard<std::mutex> guard(pause_mu_);
-    paused_ = true;
+    {
+        std::lock_guard<std::mutex> guard(pause_mu_);
+        paused_ = true;
+    }
+    // Paused sounds wait where they are; the first step after resume plays them on.
+    audio_.suspend();
 }
 
 bool Engine::paused() const {
@@ -332,6 +340,8 @@ void Engine::simulation_loop() {
                     scripts_->step_tools(render_dt_);
                 }
                 game_.events().drain();
+                // After the scripts, so a Play, Stop, or Destroy this frame is heard this frame.
+                audio_.step(game_, render_dt_);
             },
             [&] { contract_count_.fetch_add(1); });
         if (game_.take_deferred_violation()) {

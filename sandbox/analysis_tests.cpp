@@ -389,7 +389,8 @@ TEST_CASE("analysis definitions come from the class registry", "[A11]") {
     REQUIRE(matrix4_block.find("function ToAxisAngle(self): (Vector3, number)") != std::string::npos);
     REQUIRE(matrix4_block.find("Position: Vector3") != std::string::npos);
     // A GameObject moves through its Transform; it has no Position of its own.
-    const std::size_t game_object = source.find("declare extern type GameObject extends Instance with");
+    REQUIRE(source.find("declare extern type PVInstance extends Instance with") != std::string::npos);
+    const std::size_t game_object = source.find("declare extern type GameObject extends PVInstance with");
     REQUIRE(game_object != std::string::npos);
     const std::string game_object_block = source.substr(game_object, source.find("end\n", game_object) - game_object);
     REQUIRE(game_object_block.find("Transform: Matrix4") != std::string::npos);

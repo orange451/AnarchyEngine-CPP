@@ -52,9 +52,10 @@ constexpr SpecText kSpecs[] = {
      R"({"type":"object","required":["instance"],"properties":{
          "instance":{"type":["string","number"],"description":"Id or path."}}})"},
     {"import_assets",
-     "Imports image and model files from the computer the studio runs on, as dropping them on the "
+     "Imports image, sound, and model files from the computer the studio runs on, as dropping them on the "
      "studio does: one undo step. An image (PNG, JPEG, TGA, BMP, GIF, HDR, PSD) becomes a Texture in "
-     "Assets.Textures. A model (OBJ, FBX, glTF, GLB, DAE, 3DS, PLY, STL) becomes a Prefab in "
+     "Assets.Textures. A sound (WAV, MP3, FLAC, OGG) becomes a Sound in Assets.Audio. A model (OBJ, "
+     "FBX, glTF, GLB, DAE, 3DS, PLY, STL) becomes a Prefab in "
      "Assets.Prefabs with one Model per material, and its Meshes, Materials, and Textures go in a "
      "Folder named after it in each of those categories; the textures it names are found beside it. "
      "Files are copied into the project's resources folder; a place never saved keeps them in a "

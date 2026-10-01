@@ -69,6 +69,7 @@ std::shared_ptr<IdePane> IdeLayout::make_assets() {
         preferences_.save(error);
     };
     host.add_as_game_object = [this](engine_core::InstanceId prefab) { add_as_game_objects({prefab}); };
+    host.import_sound = [this](engine_core::InstanceId folder) { choose_sound_import(folder); };
     auto pane = jadefx::make<IdeAssets>(runner_.simulation().datamodel(), std::move(host));
     pane->setIconFile("AssetFolder.png");
     return pane;
@@ -123,6 +124,13 @@ std::vector<std::string> ModelFiles(const std::vector<std::string>& files) {
     std::vector<std::string> models;
     std::copy_if(files.begin(), files.end(), std::back_inserter(models), is_model_file);
     return models;
+}
+
+// The sound files among a drop's files.
+std::vector<std::string> SoundFiles(const std::vector<std::string>& files) {
+    std::vector<std::string> sounds;
+    std::copy_if(files.begin(), files.end(), std::back_inserter(sounds), is_sound_file);
+    return sounds;
 }
 
 bool HasImports(const std::vector<std::string>& files) {
@@ -194,13 +202,45 @@ void IdeLayout::accept_file_drops(jadefx::Node& node) {
     });
 }
 
-void IdeLayout::import_files(const std::vector<std::string>& files) {
-    std::vector<std::string> images = ImageFiles(files);
-    std::vector<std::string> models = ModelFiles(files);
-    if ((images.empty() && models.empty()) || scene_ == nullptr || prompt_open_ || dialog_open_) {
+void IdeLayout::choose_sound_import(engine_core::InstanceId folder) {
+    if (dialog_open_ || prompt_open_) {
         return;
     }
-    const std::string what = models.empty() ? "textures" : images.empty() ? "models" : "files";
+    dialog_open_ = true;
+    jadefx::FolderDialogOptions options;
+    options.title = "Import Sound";
+    options.file = true;
+    options.extensions = sound_file_extensions();
+    jadefx::showFolderDialog(std::move(options), [this, alive = std::weak_ptr<int>(alive_),
+                                                  folder](jadefx::DialogResult result, const std::string& path) {
+        if (alive.expired()) {
+            return;
+        }
+        dialog_open_ = false;
+        if (result == jadefx::DialogResult::Unavailable) {
+            show_error("No file dialog",
+                       "This system has no file picker. On Linux, install zenity or kdialog. You can also drop sound "
+                       "files on the studio.");
+            return;
+        }
+        if (result == jadefx::DialogResult::Chosen) {
+            import_files({path}, folder);
+        }
+    });
+}
+
+void IdeLayout::import_files(const std::vector<std::string>& files, engine_core::InstanceId sound_folder) {
+    std::vector<std::string> images = ImageFiles(files);
+    std::vector<std::string> models = ModelFiles(files);
+    std::vector<std::string> sounds = SoundFiles(files);
+    if ((images.empty() && models.empty() && sounds.empty()) || scene_ == nullptr || prompt_open_ || dialog_open_) {
+        return;
+    }
+    const int kinds = !images.empty() + !models.empty() + !sounds.empty();
+    const std::string what = kinds > 1            ? "files"
+                             : !models.empty()    ? "models"
+                             : !sounds.empty()    ? "sounds"
+                                                  : "textures";
     if (in_test()) {
         show_toast("Stop the test to import " + what);
         return;
@@ -215,6 +255,7 @@ void IdeLayout::import_files(const std::vector<std::string>& files) {
     // Models first, as the question names them.
     std::vector<std::string> named = models;
     named.insert(named.end(), images.begin(), images.end());
+    named.insert(named.end(), sounds.begin(), sounds.end());
     const std::size_t count = named.size();
     std::string listed;
     for (std::size_t i = 0; i < count && i < kListedImports; ++i) {
@@ -223,12 +264,20 @@ void IdeLayout::import_files(const std::vector<std::string>& files) {
     if (count > kListedImports) {
         listed += "\nand " + std::to_string(count - kListedImports) + " more";
     }
-    std::string header = "Import ";
+    // "Import 1 model, 2 textures and 1 sound".
+    std::vector<std::string> parts;
     if (!models.empty()) {
-        header += Count(models.size(), "model", "models") + (images.empty() ? "" : " and ");
+        parts.push_back(Count(models.size(), "model", "models"));
     }
     if (!images.empty()) {
-        header += Count(images.size(), "texture", "textures");
+        parts.push_back(Count(images.size(), "texture", "textures"));
+    }
+    if (!sounds.empty()) {
+        parts.push_back(Count(sounds.size(), "sound", "sounds"));
+    }
+    std::string header = "Import ";
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        header += (i == 0 ? "" : i + 1 == parts.size() ? " and " : ", ") + parts[i];
     }
 
     prompt_open_ = true;
@@ -237,7 +286,8 @@ void IdeLayout::import_files(const std::vector<std::string>& files) {
                                                  std::vector<jadefx::ButtonType>{import, jadefx::ButtonType::Cancel()});
     alert->setTitle("Anarchy Engine");
     alert->setHeaderText(header + "?");
-    alert->setOnClosed([this, import, resources, named = std::move(named)](const jadefx::ButtonType* choice) {
+    alert->setOnClosed([this, import, resources, sound_folder,
+                        named = std::move(named)](const jadefx::ButtonType* choice) {
         prompt_open_ = false;
         if (choice == nullptr || !(*choice == import)) {
             return;
@@ -261,13 +311,23 @@ void IdeLayout::import_files(const std::vector<std::string>& files) {
             return;
         }
         engine_core::ScriptRuntime* scripts = &runner_.simulation().scripts();
-        runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), scripts,
+        runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), scripts, sound_folder,
                                             prepared = std::move(prepared),
                                             problem = std::move(problem)](engine_core::DataModel& world) mutable {
             const bool models = std::any_of(prepared.begin(), prepared.end(),
                                             [](const PreparedAsset& asset) { return asset.model; });
-            world.history().set_pending_gesture(models ? "Import Models" : "Import Textures");
-            const std::vector<PlacedAsset> placed = place_assets(world, prepared);
+            const bool sounds = std::any_of(prepared.begin(), prepared.end(),
+                                            [](const PreparedAsset& asset) { return asset.sound; });
+            const bool images = std::any_of(prepared.begin(), prepared.end(), [](const PreparedAsset& asset) {
+                return !asset.model && !asset.sound && asset.error.empty();
+            });
+            world.history().set_pending_gesture(models            ? "Import Models"
+                                                : sounds && images ? "Import Assets"
+                                                : sounds          ? "Import Sounds"
+                                                                  : "Import Textures");
+            // The folder the import was asked for may be gone by now; Assets.Audio then takes them.
+            const engine_core::InstanceId into = sound_folder != 0 && world.alive(sound_folder) ? sound_folder : 0;
+            const std::vector<PlacedAsset> placed = place_assets(world, prepared, into);
             CloseGesture(world);
             std::vector<engine_core::InstanceId> made;
             std::size_t model_count = 0;

@@ -335,19 +335,24 @@ private:
     // A drag from the Assets pane onto view that holds a Prefab adds each
     // Prefab in it as a GameObject. A drag with none is refused.
     void accept_prefab_drops(jadefx::Node& view);
-    // Image and model files dropped on node, or on anything under it that does
-    // not take them, go to import_files. A drop with neither is refused.
+    // Image, model, and sound files dropped on node, or on anything under it
+    // that does not take them, go to import_files. A drop with none is refused.
     void accept_file_drops(jadefx::Node& node);
-    // Asks whether to import the image and model files among files. Yes copies
-    // each image into the project's resources, as import_texture_file does,
-    // and makes a Texture under Assets.Textures named after its file with Path
-    // set to the copy. Each model is read and written out as import_model_file
-    // does, then made a Prefab with its assets, as build_model_assets does;
-    // what it left out goes to the console. All of it is one undo step, and
-    // the Textures and Prefabs made are selected. Needs a stopped test. A
-    // place never saved imports into its scratch folder, which its first Save
-    // moves into the project.
-    void import_files(const std::vector<std::string>& files);
+    // Asks whether to import the image, model, and sound files among files.
+    // Yes copies each image into the project's resources, as
+    // import_texture_file does, and makes a Texture under Assets.Textures named
+    // after its file with Path set to the copy; each sound the same way, into
+    // resources/sounds and a Sound under Assets.Audio, or under sound_folder
+    // when it is not 0. Each model is read and written out as
+    // import_model_file does, then made a Prefab with its assets, as
+    // build_model_assets does; what it left out goes to the console. All of
+    // it is one undo step, and the Textures, Sounds, and Prefabs made are
+    // selected. Needs a stopped test. A place never saved imports into its
+    // scratch folder, which its first Save moves into the project.
+    void import_files(const std::vector<std::string>& files, engine_core::InstanceId sound_folder = 0);
+    // The Assets pane's Import Sound: picks a sound file, then imports it into
+    // folder as import_files does.
+    void choose_sound_import(engine_core::InstanceId folder);
     // Where Search and Conflicts dock: beside the left explorer, else where editors dock.
     IdeDock* side_home();
     // The ribbon's count and the Conflicts window's rows, from conflicts_.

@@ -46,6 +46,10 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "SpotLight") {
         return "LightSpot.png";
     }
+    // A speaker, as the Sound it plays has.
+    if (class_name == "SoundEmitter") {
+        return "Sound.png";
+    }
     // The default icon, named so no PhysicsObject.png is looked for first.
     if (class_name == "PhysicsObject") {
         return "wat.gif";

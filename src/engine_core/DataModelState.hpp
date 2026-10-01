@@ -98,6 +98,9 @@ struct DataModel::State {
     // Rigid bodies the physics world simulates: Instance (in), with
     // PhysicsBody and InWorkspace.
     flecs::query<> body_query;
+    // Audio sources the audio world plays: Instance (in), with SoundSource
+    // and InGame.
+    flecs::query<> source_query;
 
     // Guards slots, free lists, invalidation, and resync.
     // SimulationThread may hold Write across a whole step and may re-enter

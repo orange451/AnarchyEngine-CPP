@@ -177,6 +177,9 @@ public:
     // True for a class the physics world simulates while it is in Workspace
     // (PhysicsObject). Read once, when its entity is issued.
     virtual bool physics_body() const { return false; }
+    // True for a class the audio world plays while it is under game
+    // (SoundEmitter). Read once, when its entity is issued.
+    virtual bool sound_source() const { return false; }
 
     void set_thread_ids(std::thread::id simulation, std::thread::id render);
     void set_threads_running(bool running);
@@ -370,6 +373,9 @@ public:
     // The physics bodies in Workspace (physics_body()), in no set order, into
     // out, which is cleared first.
     void physics_bodies(std::vector<InstanceId>& out) const;
+    // The audio sources under game (sound_source()), in no set order, into
+    // out, which is cleared first.
+    void sound_sources(std::vector<InstanceId>& out) const;
     // A GameObject's Transform as the physics world moved it: stored and
     // drawn, as integrate_simulated moves one, with no Changed, no history,
     // and no check. SimulationThread. A dead id or a non-GameObject does nothing.

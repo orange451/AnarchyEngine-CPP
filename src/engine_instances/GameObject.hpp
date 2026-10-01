@@ -1,6 +1,6 @@
 #pragma once
 
-#include "DataModel.hpp"
+#include "PVInstance.hpp"
 #include "InstanceRef.hpp"
 
 #include <optional>
@@ -11,7 +11,7 @@ namespace engine_core {
 // Spatial instance. Plain DataModel instances do not have these fields. They
 // live in flecs components on the instance's entity (Ecs.hpp), so render and
 // physics queries read them where they are stored.
-class GameObject : public DataModel {
+class GameObject : public PVInstance {
 public:
     GameObject(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);
 
@@ -29,7 +29,7 @@ public:
     virtual bool transform_in_history() const { return true; }
 
     // A dead id fails closed: transform() is a zero matrix, not a recycled slot.
-    Matrix4 transform() const;
+    Matrix4 transform() const override;
     Vec3 position() const;
 
     // Nil by default. A write of another live instance whose class inherits

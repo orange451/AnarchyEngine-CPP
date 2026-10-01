@@ -31,6 +31,8 @@ const EnumType& user_input_state_enum();
 const EnumType& mouse_behavior_enum();
 // Box 0, Sphere 1, Capsule 2, Hull 3, Custom 4.
 const EnumType& physics_shape_enum();
+// Inverse 0, Linear 1, Exponential 2, None 3.
+const EnumType& roll_off_mode_enum();
 
 // Every type the Enum global holds, for script analysis to declare.
 int enum_type_count();

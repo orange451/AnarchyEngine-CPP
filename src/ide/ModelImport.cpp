@@ -450,13 +450,13 @@ bool is_model_file(const std::string& path) {
     if (dot == std::string::npos) {
         return false;
     }
-    const std::string extension = AsciiLower(path.substr(dot + 1));
-    for (const char* known : {"obj", "fbx", "gltf", "glb", "dae", "3ds", "ply", "stl"}) {
-        if (extension == known) {
-            return true;
-        }
-    }
-    return false;
+    const std::vector<std::string>& known = model_file_extensions();
+    return std::find(known.begin(), known.end(), AsciiLower(path.substr(dot + 1))) != known.end();
+}
+
+const std::vector<std::string>& model_file_extensions() {
+    static const std::vector<std::string> extensions = {"obj", "fbx", "gltf", "glb", "dae", "3ds", "ply", "stl"};
+    return extensions;
 }
 
 std::optional<ImportedModel> import_model_file(const fs::path& resources_root, const std::string& source,

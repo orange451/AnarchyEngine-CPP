@@ -1024,11 +1024,12 @@ void IdeAssets::show_insert_menu(engine_core::InstanceId folder, const std::stri
     }
     menu_ = jadefx::make<jadefx::Menu>();
     const bool can_insert = static_cast<bool>(host_.actions.insert);
-    // Offered in every folder.
-    std::vector<std::string> classes = {"Folder"};
+    // The folder's own kind first, then a Folder, which every folder offers.
+    std::vector<std::string> classes;
     if (!kind.empty() && kind != "Folder") {
         classes.push_back(kind);
     }
+    classes.push_back("Folder");
     for (const std::string& klass : classes) {
         auto entry = jadefx::make<jadefx::MenuItem>(verb + " " + klass);
         if (std::shared_ptr<jadefx::ImageView> icon = icon_view(klass)) {
@@ -1040,18 +1041,18 @@ void IdeAssets::show_insert_menu(engine_core::InstanceId folder, const std::stri
         entry->setOnAction([this, klass, folder](jadefx::ActionEvent&) { new_item(klass, folder); });
         menu_->getItems().add(std::move(entry));
     }
-    // A Sound is a file's: offered from a file on disk as well as empty.
-    if (kind == "Sound") {
-        auto entry = jadefx::make<jadefx::MenuItem>("Import Sound…");
-        if (std::shared_ptr<jadefx::ImageView> icon = icon_view("Sound")) {
+    // A Texture, a Sound, and a Prefab come from files on disk as well: an image, a sound, a model.
+    if (kind == "Texture" || kind == "Sound" || kind == "Prefab") {
+        auto entry = jadefx::make<jadefx::MenuItem>("Import " + std::string(kind == "Prefab" ? "Model" : kind) + "…");
+        if (std::shared_ptr<jadefx::ImageView> icon = icon_view(kind)) {
             icon->setPrefSize(16, 16);
             icon->setMouseTransparent(true);
             entry->setGraphic(std::move(icon));
         }
-        entry->setDisable(!host_.import_sound);
-        entry->setOnAction([this, folder](jadefx::ActionEvent&) {
-            if (host_.import_sound) {
-                host_.import_sound(folder);
+        entry->setDisable(!host_.import_assets);
+        entry->setOnAction([this, folder, kind](jadefx::ActionEvent&) {
+            if (host_.import_assets) {
+                host_.import_assets(folder, kind);
             }
         });
         menu_->getItems().add(std::move(entry));

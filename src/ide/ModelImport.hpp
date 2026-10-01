@@ -17,6 +17,8 @@ namespace ide {
 // Whether path, in UTF-8, names a model file Assimp reads, by its extension:
 // OBJ, FBX, glTF, GLB, DAE, 3DS, PLY, or STL, in any case.
 bool is_model_file(const std::string& path);
+// The extensions is_model_file takes, without the dot, for a file dialog.
+const std::vector<std::string>& model_file_extensions();
 
 // A Texture import_model_file put in the resources folder: its Name and Path.
 struct ImportedTexture {

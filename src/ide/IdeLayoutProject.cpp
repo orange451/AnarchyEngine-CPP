@@ -69,7 +69,9 @@ std::shared_ptr<IdePane> IdeLayout::make_assets() {
         preferences_.save(error);
     };
     host.add_as_game_object = [this](engine_core::InstanceId prefab) { add_as_game_objects({prefab}); };
-    host.import_sound = [this](engine_core::InstanceId folder) { choose_sound_import(folder); };
+    host.import_assets = [this](engine_core::InstanceId folder, const std::string& kind) {
+        choose_import(folder, kind);
+    };
     auto pane = jadefx::make<IdeAssets>(runner_.simulation().datamodel(), std::move(host));
     pane->setIconFile("AssetFolder.png");
     return pane;
@@ -202,34 +204,39 @@ void IdeLayout::accept_file_drops(jadefx::Node& node) {
     });
 }
 
-void IdeLayout::choose_sound_import(engine_core::InstanceId folder) {
+void IdeLayout::choose_import(engine_core::InstanceId folder, const std::string& kind) {
     if (dialog_open_ || prompt_open_) {
         return;
     }
     dialog_open_ = true;
     jadefx::FolderDialogOptions options;
-    options.title = "Import Sound";
+    // A Prefab is a model's.
+    options.title = "Import " + std::string(kind == "Prefab" ? "Model" : kind);
     options.file = true;
-    options.extensions = sound_file_extensions();
-    jadefx::showFolderDialog(std::move(options), [this, alive = std::weak_ptr<int>(alive_),
-                                                  folder](jadefx::DialogResult result, const std::string& path) {
+    options.multiple = true;
+    options.extensions = kind == "Texture"  ? texture_file_extensions()
+                         : kind == "Prefab" ? model_file_extensions()
+                                            : sound_file_extensions();
+    jadefx::showFilesDialog(std::move(options), [this, alive = std::weak_ptr<int>(alive_), folder](
+                                                    jadefx::DialogResult result, const std::vector<std::string>& paths) {
         if (alive.expired()) {
             return;
         }
         dialog_open_ = false;
         if (result == jadefx::DialogResult::Unavailable) {
             show_error("No file dialog",
-                       "This system has no file picker. On Linux, install zenity or kdialog. You can also drop sound "
-                       "files on the studio.");
+                       "This system has no file picker. On Linux, install zenity or kdialog. You can also drop files "
+                       "on the studio.");
             return;
         }
         if (result == jadefx::DialogResult::Chosen) {
-            import_files({path}, folder);
+            // Picked to import, so not asked again.
+            import_files(paths, folder, false);
         }
     });
 }
 
-void IdeLayout::import_files(const std::vector<std::string>& files, engine_core::InstanceId sound_folder) {
+void IdeLayout::import_files(const std::vector<std::string>& files, engine_core::InstanceId folder, bool ask) {
     std::vector<std::string> images = ImageFiles(files);
     std::vector<std::string> models = ModelFiles(files);
     std::vector<std::string> sounds = SoundFiles(files);
@@ -256,6 +263,10 @@ void IdeLayout::import_files(const std::vector<std::string>& files, engine_core:
     std::vector<std::string> named = models;
     named.insert(named.end(), images.begin(), images.end());
     named.insert(named.end(), sounds.begin(), sounds.end());
+    if (!ask) {
+        place_imports(resources, named, folder);
+        return;
+    }
     const std::size_t count = named.size();
     std::string listed;
     for (std::size_t i = 0; i < count && i < kListedImports; ++i) {
@@ -286,8 +297,7 @@ void IdeLayout::import_files(const std::vector<std::string>& files, engine_core:
                                                  std::vector<jadefx::ButtonType>{import, jadefx::ButtonType::Cancel()});
     alert->setTitle("Anarchy Engine");
     alert->setHeaderText(header + "?");
-    alert->setOnClosed([this, import, resources, sound_folder,
-                        named = std::move(named)](const jadefx::ButtonType* choice) {
+    alert->setOnClosed([this, import, resources, folder, named = std::move(named)](const jadefx::ButtonType* choice) {
         prompt_open_ = false;
         if (choice == nullptr || !(*choice == import)) {
             return;
@@ -297,88 +307,7 @@ void IdeLayout::import_files(const std::vector<std::string>& files, engine_core:
             show_toast("Nothing was imported: the place changed while it asked");
             return;
         }
-        // Read here, on the UI thread: a large model holds the window until it is read.
-        std::vector<PreparedAsset> prepared = prepare_assets(resources, named);
-        std::string problem;
-        for (const PreparedAsset& asset : prepared) {
-            if (!asset.error.empty()) {
-                problem = "Could not import " + utf8_path(path_from_utf8(asset.file).filename()) + ": " + asset.error;
-                break;
-            }
-        }
-        if (std::all_of(prepared.begin(), prepared.end(), [](const PreparedAsset& asset) { return !asset.error.empty(); })) {
-            show_toast(std::move(problem));
-            return;
-        }
-        engine_core::ScriptRuntime* scripts = &runner_.simulation().scripts();
-        runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), scripts, sound_folder,
-                                            prepared = std::move(prepared),
-                                            problem = std::move(problem)](engine_core::DataModel& world) mutable {
-            const bool models = std::any_of(prepared.begin(), prepared.end(),
-                                            [](const PreparedAsset& asset) { return asset.model; });
-            const bool sounds = std::any_of(prepared.begin(), prepared.end(),
-                                            [](const PreparedAsset& asset) { return asset.sound; });
-            const bool images = std::any_of(prepared.begin(), prepared.end(), [](const PreparedAsset& asset) {
-                return !asset.model && !asset.sound && asset.error.empty();
-            });
-            world.history().set_pending_gesture(models            ? "Import Models"
-                                                : sounds && images ? "Import Assets"
-                                                : sounds          ? "Import Sounds"
-                                                                  : "Import Textures");
-            // The folder the import was asked for may be gone by now; Assets.Audio then takes them.
-            const engine_core::InstanceId into = sound_folder != 0 && world.alive(sound_folder) ? sound_folder : 0;
-            const std::vector<PlacedAsset> placed = place_assets(world, prepared, into);
-            CloseGesture(world);
-            std::vector<engine_core::InstanceId> made;
-            std::size_t model_count = 0;
-            std::string summary;
-            bool noted = false;
-            for (std::size_t i = 0; i < placed.size(); ++i) {
-                const PreparedAsset& asset = prepared[i];
-                if (placed[i].root == 0) {
-                    if (problem.empty()) {
-                        problem = "Could not import " + utf8_path(path_from_utf8(asset.file).filename()) + ": " +
-                                  placed[i].error;
-                    }
-                    continue;
-                }
-                made.push_back(placed[i].root);
-                if (!asset.model) {
-                    continue;
-                }
-                const ImportedModel& model = asset.imported;
-                for (const std::string& note : model.notes) {
-                    scripts->append_output(engine_core::ScriptRuntime::OutputKind::Print, model.name + ": " + note);
-                }
-                noted = noted || !model.notes.empty();
-                ++model_count;
-                summary = "Imported " + model.name + ": " + Count(model.meshes.size(), "mesh", "meshes") + ", " +
-                          Count(model.materials.size(), "material", "materials") + ", " +
-                          Count(model.textures.size(), "texture", "textures");
-            }
-            if (!problem.empty()) {
-                toast_later(this, alive, std::move(problem));
-            } else if (!summary.empty()) {
-                if (model_count > 1) {
-                    summary = "Imported " + Count(model_count, "model", "models");
-                }
-                toast_later(this, alive, summary + (noted ? ". The console says what was left out" : ""));
-            }
-            if (!made.empty()) {
-                // The Assets pane comes to the front, opened if it was closed, on the folder the first one went into.
-                const engine_core::InstanceId folder = world.parent(made.front());
-                world.selection().set(std::move(made));
-                jadefx::runLater([this, alive, folder] {
-                    if (alive.expired()) {
-                        return;
-                    }
-                    open_window(*assets_window_);
-                    if (auto* assets = dynamic_cast<IdeAssets*>(assets_window_->pane.get())) {
-                        assets->openFolder(folder);
-                    }
-                });
-            }
-        });
+        place_imports(resources, named, folder);
     });
     alerts_.erase(std::remove_if(alerts_.begin(), alerts_.end(),
                                  [](const std::shared_ptr<jadefx::Alert>& item) {
@@ -398,6 +327,91 @@ void IdeLayout::import_files(const std::vector<std::string>& files, engine_core:
         button->setElementId("import-files-cancel");
     }
     alerts_.push_back(std::move(alert));
+}
+
+void IdeLayout::place_imports(const std::filesystem::path& resources, const std::vector<std::string>& files,
+                              engine_core::InstanceId folder) {
+    // Read here, on the UI thread: a large model holds the window until it is read.
+    std::vector<PreparedAsset> prepared = prepare_assets(resources, files);
+    std::string problem;
+    for (const PreparedAsset& asset : prepared) {
+        if (!asset.error.empty()) {
+            problem = "Could not import " + utf8_path(path_from_utf8(asset.file).filename()) + ": " + asset.error;
+            break;
+        }
+    }
+    if (std::all_of(prepared.begin(), prepared.end(), [](const PreparedAsset& asset) { return !asset.error.empty(); })) {
+        show_toast(std::move(problem));
+        return;
+    }
+    engine_core::ScriptRuntime* scripts = &runner_.simulation().scripts();
+    runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), scripts, folder,
+                                        prepared = std::move(prepared),
+                                        problem = std::move(problem)](engine_core::DataModel& world) mutable {
+        const bool models = std::any_of(prepared.begin(), prepared.end(),
+                                        [](const PreparedAsset& asset) { return asset.model; });
+        const bool sounds = std::any_of(prepared.begin(), prepared.end(),
+                                        [](const PreparedAsset& asset) { return asset.sound; });
+        const bool images = std::any_of(prepared.begin(), prepared.end(), [](const PreparedAsset& asset) {
+            return !asset.model && !asset.sound && asset.error.empty();
+        });
+        world.history().set_pending_gesture(models            ? "Import Models"
+                                            : sounds && images ? "Import Assets"
+                                            : sounds          ? "Import Sounds"
+                                                              : "Import Textures");
+        // The folder the import was asked for may be gone by now; each category then takes its own.
+        const std::vector<PlacedAsset> placed = place_assets(world, prepared, folder);
+        CloseGesture(world);
+        std::vector<engine_core::InstanceId> made;
+        std::size_t model_count = 0;
+        std::string summary;
+        bool noted = false;
+        for (std::size_t i = 0; i < placed.size(); ++i) {
+            const PreparedAsset& asset = prepared[i];
+            if (placed[i].root == 0) {
+                if (problem.empty()) {
+                    problem = "Could not import " + utf8_path(path_from_utf8(asset.file).filename()) + ": " +
+                              placed[i].error;
+                }
+                continue;
+            }
+            made.push_back(placed[i].root);
+            if (!asset.model) {
+                continue;
+            }
+            const ImportedModel& model = asset.imported;
+            for (const std::string& note : model.notes) {
+                scripts->append_output(engine_core::ScriptRuntime::OutputKind::Print, model.name + ": " + note);
+            }
+            noted = noted || !model.notes.empty();
+            ++model_count;
+            summary = "Imported " + model.name + ": " + Count(model.meshes.size(), "mesh", "meshes") + ", " +
+                      Count(model.materials.size(), "material", "materials") + ", " +
+                      Count(model.textures.size(), "texture", "textures");
+        }
+        if (!problem.empty()) {
+            toast_later(this, alive, std::move(problem));
+        } else if (!summary.empty()) {
+            if (model_count > 1) {
+                summary = "Imported " + Count(model_count, "model", "models");
+            }
+            toast_later(this, alive, summary + (noted ? ". The console says what was left out" : ""));
+        }
+        if (!made.empty()) {
+            // The Assets pane comes to the front, opened if it was closed, on the folder the first one went into.
+            const engine_core::InstanceId shown = world.parent(made.front());
+            world.selection().set(std::move(made));
+            jadefx::runLater([this, alive, shown] {
+                if (alive.expired()) {
+                    return;
+                }
+                open_window(*assets_window_);
+                if (auto* assets = dynamic_cast<IdeAssets*>(assets_window_->pane.get())) {
+                    assets->openFolder(shown);
+                }
+            });
+        }
+    });
 }
 
 void IdeLayout::show_conflicts() {

@@ -3,12 +3,15 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace ide {
 
 // Whether path, in UTF-8, names an image file by its extension: PNG, JPEG,
 // TGA, BMP, GIF, HDR, PSD, DDS, KTX, WebP, EXR, or TIFF, in any case.
 bool is_texture_file(const std::string& path);
+// The extensions is_texture_file takes, without the dot, for a file dialog.
+const std::vector<std::string>& texture_file_extensions();
 
 // file as a Path relative to root, when it is inside root and a Path can name
 // it. Empty otherwise.

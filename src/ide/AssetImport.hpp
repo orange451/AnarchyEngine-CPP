@@ -63,10 +63,11 @@ struct PlacedAsset {
 
 // SimulationThread. Makes the instances for each prepared file: a Texture in
 // Assets.Textures for an image, a Sound in Assets.Audio for a sound, and what
-// build_model_assets makes for a model. A sound goes into sound_folder
-// instead when it is not 0, such as a Folder under Assets.Audio. One entry
-// for each in prepared, in order. The caller holds the undo gesture.
+// build_model_assets makes for a model. Each goes into folder instead, the
+// Prefab of a model, when folder is its category or a Folder under it, such as
+// a Folder under Assets.Audio for a sound. One entry for each in prepared, in
+// order. The caller holds the undo gesture.
 std::vector<PlacedAsset> place_assets(engine_core::DataModel& world, const std::vector<PreparedAsset>& prepared,
-                                      engine_core::InstanceId sound_folder = 0);
+                                      engine_core::InstanceId folder = 0);
 
 }  // namespace ide

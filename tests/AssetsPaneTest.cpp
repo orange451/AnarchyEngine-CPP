@@ -62,6 +62,8 @@ struct Rig {
     InstanceId rock = 0;
     std::vector<std::string> notices;
     std::vector<std::pair<std::string, InstanceId>> inserts;
+    // Each Import <kind>'s kind and folder.
+    std::vector<std::pair<std::string, InstanceId>> imports;
     std::vector<std::pair<InstanceId, std::string>> renames;
     std::vector<std::pair<std::string, InstanceId>> runs;
     std::vector<std::pair<std::string, std::vector<InstanceId>>> batches;
@@ -107,6 +109,7 @@ struct Rig {
             ide::move_set(game, moved, parent);
         };
         host.add_as_game_object = [this](InstanceId prefab) { added_as_game_object.push_back(prefab); };
+        host.import_assets = [this](InstanceId folder, const std::string& kind) { imports.emplace_back(kind, folder); };
         host.saved_view = [this] { return saved; };
         host.save_view = [this](const std::string& view) { saves.push_back(view); };
         pane = jadefx::make<ide::IdeAssets>(game, std::move(host));
@@ -407,6 +410,19 @@ void new_folder_and_kind() {
     Expect(rig.menuItem("New Folder") != nullptr, "empty space offers New Folder");
     Expect(rig.menuItem("New Texture") != nullptr, "empty space in Textures offers New Texture");
     Expect(rig.menuItem("Paste") != nullptr, "empty space offers Paste");
+    {
+        const jadefx::Node* kind = rig.menuItem("New Texture");
+        const jadefx::Node* folder = rig.menuItem("New Folder");
+        const jadefx::Node* import = rig.menuItem("Import Texture…");
+        Expect(kind != nullptr && folder != nullptr && kind->getAbsoluteY() < folder->getAbsoluteY(),
+               "New Texture comes above New Folder");
+        Expect(import != nullptr && folder != nullptr && folder->getAbsoluteY() < import->getAbsoluteY(),
+               "and Import Texture… below it");
+    }
+    rig.clickMenu("Import Texture…");
+    Expect((rig.imports == std::vector<std::pair<std::string, InstanceId>>{{"Texture", rig.textures}}),
+           "Import Texture… imports Textures into the folder");
+    rig.rightClickEmpty(0.15);
     rig.clickMenu("New Texture");
     Expect((rig.inserts == std::vector<std::pair<std::string, InstanceId>>{{"Texture", rig.textures}}),
            "New Texture inserts a Texture in the folder");

@@ -77,10 +77,25 @@ void place_file(engine_core::DataModel& world, const PreparedAsset& asset, const
     out.made.push_back(id);
 }
 
+// folder when it is category or under it, otherwise category.
+engine_core::InstanceId FolderIn(const engine_core::DataModel& world, engine_core::InstanceId folder,
+                                 engine_core::InstanceId category) {
+    if (folder == 0 || !world.alive(folder)) {
+        return category;
+    }
+    for (engine_core::InstanceId at = folder; at != 0 && at != engine_core::DataModel::kNoParent;
+         at = world.parent(at)) {
+        if (at == category) {
+            return folder;
+        }
+    }
+    return category;
+}
+
 }  // namespace
 
 std::vector<PlacedAsset> place_assets(engine_core::DataModel& world, const std::vector<PreparedAsset>& prepared,
-                                      engine_core::InstanceId sound_folder) {
+                                      engine_core::InstanceId folder) {
     std::vector<PlacedAsset> placed;
     for (const PreparedAsset& asset : prepared) {
         PlacedAsset out;
@@ -88,17 +103,18 @@ std::vector<PlacedAsset> place_assets(engine_core::DataModel& world, const std::
             out.error = asset.error;
         } else if (asset.model) {
             out.root = build_model_assets(world, asset.imported, out.error, &out.made);
-        } else if (asset.sound) {
-            const engine_core::InstanceId folder = sound_folder != 0 ? sound_folder : world.service("Audio");
-            if (folder == 0) {
-                out.error = "this place has no Assets.Audio to import into";
-            } else {
-                place_file(world, asset, "Sound", folder, out);
+            const engine_core::InstanceId prefabs = world.service("Prefabs");
+            if (const engine_core::InstanceId into = FolderIn(world, folder, prefabs); out.root != 0 && into != prefabs) {
+                world.set_parent(out.root, into);
             }
-        } else if (const engine_core::InstanceId folder = world.service("Textures"); folder == 0) {
+        } else if (const engine_core::InstanceId audio = world.service("Audio"); asset.sound && audio == 0) {
+            out.error = "this place has no Assets.Audio to import into";
+        } else if (asset.sound) {
+            place_file(world, asset, "Sound", FolderIn(world, folder, audio), out);
+        } else if (const engine_core::InstanceId textures = world.service("Textures"); textures == 0) {
             out.error = "this place has no Assets.Textures to import into";
         } else {
-            place_file(world, asset, "Texture", folder, out);
+            place_file(world, asset, "Texture", FolderIn(world, folder, textures), out);
         }
         placed.push_back(std::move(out));
     }

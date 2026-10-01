@@ -28,8 +28,8 @@ struct AssetsHost {
     std::function<void(const std::string&)> save_view;
     // Puts a GameObject in Workspace linked to the Prefab prefab, and selects it.
     std::function<void(engine_core::InstanceId prefab)> add_as_game_object;
-    // Import Sound: picks a sound file and imports it as a Sound in folder.
-    std::function<void(engine_core::InstanceId folder)> import_sound;
+    // Import <kind>: picks files of kind, Texture, Prefab, or Sound, and imports them into folder.
+    std::function<void(engine_core::InstanceId folder, const std::string& kind)> import_assets;
 };
 
 // A Finder-like browser of the Assets tree. The toolbar holds back and forward,
@@ -111,8 +111,8 @@ private:
     void show_empty_menu(double x, double y);
     // A category's menu: what can be added into it, and Paste into it.
     void show_category_menu(engine_core::InstanceId category, double x, double y);
-    // "<verb> Folder", "<verb> <kind>", Import Sound where the kind is Sound,
-    // and Paste, each into folder.
+    // "<verb> <kind>", "<verb> Folder", Import <kind> where the kind comes
+    // from files, and Paste, each into folder.
     void show_insert_menu(engine_core::InstanceId folder, const std::string& verb, double x, double y);
     // Makes class_name in folder, opening folder first when it is not the one shown.
     void new_item(const std::string& class_name, engine_core::InstanceId folder);

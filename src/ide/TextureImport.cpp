@@ -49,14 +49,14 @@ bool is_texture_file(const std::string& path) {
     if (dot == std::string::npos) {
         return false;
     }
-    const std::string extension = AsciiLower(path.substr(dot + 1));
-    for (const char* known : {"png", "jpg", "jpeg", "tga", "bmp", "gif", "hdr", "psd", "dds", "ktx", "ktx2", "webp",
-                              "exr", "tif", "tiff"}) {
-        if (extension == known) {
-            return true;
-        }
-    }
-    return false;
+    const std::vector<std::string>& known = texture_file_extensions();
+    return std::find(known.begin(), known.end(), AsciiLower(path.substr(dot + 1))) != known.end();
+}
+
+const std::vector<std::string>& texture_file_extensions() {
+    static const std::vector<std::string> extensions = {"png", "jpg", "jpeg", "tga", "bmp",  "gif", "hdr", "psd",
+                                                        "dds", "ktx", "ktx2", "webp", "exr", "tif", "tiff"};
+    return extensions;
 }
 
 std::optional<std::string> store_resource_file(const std::filesystem::path& resources_root, const std::string& folder,

@@ -183,6 +183,30 @@ int RunTextureImportTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         [&prepared, effects](engine_core::DataModel& game) { ide::place_assets(game, prepared, effects); });
     expect(sounds(effects).size() == 1, "place_assets puts a sound in the folder it is given");
 
+    // Import Texture into a Folder under Assets.Textures puts it there; a folder in another category does not take it.
+    engine_core::InstanceId walls = 0;
+    layout.simulation().on_simulation([&walls](engine_core::DataModel& game) {
+        std::string refused;
+        walls = ide::insert_instance(game, "Folder", game.service("Textures"), refused);
+    });
+    const std::vector<ide::PreparedAsset> brick =
+        ide::prepare_assets(root / "resources", {ide::utf8_path(outside / "Brick.png")});
+    std::vector<ide::PlacedAsset> placed;
+    layout.simulation().on_simulation([&](engine_core::DataModel& game) {
+        placed = ide::place_assets(game, brick, walls);
+        const std::vector<ide::PlacedAsset> elsewhere = ide::place_assets(game, brick, effects);
+        placed.insert(placed.end(), elsewhere.begin(), elsewhere.end());
+    });
+    engine_core::InstanceId walls_parent = 0;
+    engine_core::InstanceId elsewhere_parent = 0;
+    layout.simulation().on_simulation([&](engine_core::DataModel& game) {
+        walls_parent = placed.size() == 2 ? game.parent(placed[0].root) : 0;
+        elsewhere_parent = placed.size() == 2 && placed[1].root != 0 ? game.parent(placed[1].root) : 0;
+        elsewhere_parent = elsewhere_parent == game.service("Textures") ? elsewhere_parent : 0;
+    });
+    expect(walls != 0 && walls_parent == walls, "place_assets puts a texture in a Folder under Textures it is given");
+    expect(elsewhere_parent != 0, "and a folder under Audio leaves a texture in Assets.Textures");
+
     std::error_code error;
     fs::remove_all(folder, error);
     return failures;

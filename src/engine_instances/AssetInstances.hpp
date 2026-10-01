@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -109,6 +110,18 @@ class Sound : public FileAsset {
 public:
     using FileAsset::FileAsset;
     const char* class_name() const override;
+
+    // TimeLength: how long Path's file under root plays, in seconds; 0 with
+    // no Path or root, or a file that is missing or does not decode. The file
+    // is read again only when Path, root, or its time on disk changes. Any thread.
+    double time_length(const std::filesystem::path& root) const;
+
+private:
+    mutable std::mutex length_mutex_;
+    // The file and its time on disk when length_ was read.
+    mutable std::filesystem::path length_file_;
+    mutable std::filesystem::file_time_type length_stamp_{};
+    mutable double length_ = 0;
 };
 
 // One reference property: its name and the class it holds.

@@ -1490,6 +1490,12 @@ void TestSoundPreviewStops() {
     ide::apply_edit(rig.game, {speaker}, RefEdit("Sound", heard));
     ide::apply_edit(rig.game, {other}, RefEdit("Sound", kept));
 
+    // A Sound's TimeLength is a read-only row, read from its file.
+    const ide::PropertySheet sheet = ide::read_sheet(rig.game, {alone});
+    const ide::PropertyRow* length = RowNamed(sheet, "TimeLength");
+    Expect(length != nullptr && !length->writable, "a Sound shows TimeLength, read-only");
+    Expect(length != nullptr && std::fabs(length->value.number - 2.0) < 0.01, "as its file's two seconds");
+
     auto play = [&rig](InstanceId id) {
         rig.select({id});
         rig.frame();

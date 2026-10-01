@@ -20,8 +20,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -460,3 +462,47 @@ TEST_CASE("A11 SoundEmitter properties save, load, and come back at Stop", "[aud
     REQUIRE(emitter.volume() == SoundEmitter::kDefaultVolume);
 }
 
+
+TEST_CASE("A12 a Sound's TimeLength is how long its file plays, read-only and not saved", "[audio]") {
+    ScriptRig rig;
+    TempDir dir;
+    write_tone(dir / "sounds/tone.wav", 1.0);
+    write_tone(dir / "sounds/long.wav", 2.0);
+    rig.game.set_resources_root(dir.path);
+    engine_core::Sound& sound = rig.game.create<engine_core::Sound>();
+    rig.game.set_name(sound.id(), "Tone");
+    rig.game.set_parent(sound.id(), rig.game.service("Audio"));
+    REQUIRE(sound.time_length(dir.path) == 0);
+
+    REQUIRE_FALSE(sound.set_path("sounds/tone.wav"));
+    add_script(rig.game, "Reader", R"(
+        local tone = game:GetService("Assets"):FindFirstChild("Audio"):FindFirstChild("Tone")
+        _G.length = tone.TimeLength
+        _G.refused = not pcall(function() tone.TimeLength = 5 end)
+    )");
+    rig.game.start_simulation();
+    rig.frames(1, 0.05);
+    INFO(rig.runtime.last_error());
+    double length = 0;
+    REQUIRE(rig.runtime.global_number("length", length));
+    REQUIRE(std::fabs(length - 1.0) < 0.01);
+    bool refused = false;
+    REQUIRE(rig.runtime.global_boolean("refused", refused));
+    REQUIRE(refused);
+    rig.game.stop_simulation();
+
+    // It follows Path, and the file when it changes on disk.
+    REQUIRE_FALSE(sound.set_path("sounds/long.wav"));
+    REQUIRE(std::fabs(sound.time_length(dir.path) - 2.0) < 0.01);
+    const std::filesystem::path file = dir / "sounds/long.wav";
+    const auto before = std::filesystem::last_write_time(file);
+    write_tone(file, 3.0);
+    std::filesystem::last_write_time(file, before + std::chrono::seconds(2));
+    REQUIRE(std::fabs(sound.time_length(dir.path) - 3.0) < 0.01);
+    REQUIRE_FALSE(sound.set_path("sounds/missing.wav"));
+    REQUIRE(sound.time_length(dir.path) == 0);
+
+    engine_core::PropertyBag saved;
+    sound.save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "TimeLength") == nullptr);
+}

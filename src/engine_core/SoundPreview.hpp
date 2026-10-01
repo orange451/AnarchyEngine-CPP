@@ -44,10 +44,6 @@ public:
     // The file last played, empty after stop.
     const std::filesystem::path& file() const;
 
-    // How long file plays, in seconds, read without a device; 0 when it does
-    // not decode.
-    static double length_of(const std::filesystem::path& file);
-
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

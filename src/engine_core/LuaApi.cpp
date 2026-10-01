@@ -1049,6 +1049,9 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("SoundEmitter", "TimePosition", "How many seconds into the sound it is. Writing it while playing seeks.",
         "number", false, {});
     add("SoundEmitter", "IsPlaying", "True while the sound plays. Read-only.", "boolean", false, {});
+    add("Sound", "TimeLength",
+        "How long this Sound's file plays, in seconds. 0 when Path names no file that plays. Read-only.", "number",
+        false, {});
 
     add("GuiBase", "ClassList", "CSS classes, separated by spaces, that a stylesheet's .class selectors match.",
         "string", false, {});

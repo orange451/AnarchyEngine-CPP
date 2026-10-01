@@ -9,6 +9,7 @@
 #include "ThumbnailLoader.hpp"
 
 #include "AssetInstances.hpp"
+#include "AudioWorld.hpp"
 
 #include "ChangeHistoryService.hpp"
 #include "Containment.hpp"
@@ -817,7 +818,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         if (asset_preview.kind != AssetPreview::Kind::Sound) {
             sound_length = 0;
         } else if (new_sound) {
-            sound_length = asset_preview.file.empty() ? 0.0 : engine_core::SoundPreview::length_of(asset_preview.file);
+            sound_length = asset_preview.file.empty() ? 0.0 : engine_core::audio_file_seconds(asset_preview.file);
         }
         if (asset_preview.kind == AssetPreview::Kind::Texture && !asset_preview.file.empty()) {
             thumbnails->retain({asset_preview.file});

@@ -3,6 +3,7 @@
 #include "types.hpp"
 
 #include <cstddef>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -73,5 +74,9 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+
+// How long file plays, in seconds, read from its header without a device;
+// 0 when it is missing or does not decode. Any thread.
+double audio_file_seconds(const std::filesystem::path& file);
 
 }  // namespace engine_core

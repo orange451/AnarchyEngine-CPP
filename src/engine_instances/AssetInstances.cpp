@@ -1,5 +1,6 @@
 #include "AssetInstances.hpp"
 
+#include "AudioWorld.hpp"
 #include "Contract.hpp"
 #include "LuaApi.hpp"
 #include "Project.hpp"
@@ -222,6 +223,25 @@ void Mesh::on_reuse() {
 }
 
 const char* Sound::class_name() const { return "Sound"; }
+
+double Sound::time_length(const std::filesystem::path& root) const {
+    if (path().empty() || root.empty()) {
+        return 0;
+    }
+    const std::filesystem::path file = root / std::filesystem::u8path(path());
+    std::error_code error;
+    const std::filesystem::file_time_type stamp = std::filesystem::last_write_time(file, error);
+    if (error) {
+        return 0;
+    }
+    std::lock_guard<std::mutex> lock(length_mutex_);
+    if (file != length_file_ || stamp != length_stamp_) {
+        length_ = audio_file_seconds(file);
+        length_file_ = file;
+        length_stamp_ = stamp;
+    }
+    return length_;
+}
 const char* Material::class_name() const { return "Material"; }
 const char* Model::class_name() const { return "Model"; }
 const char* Prefab::class_name() const { return "Prefab"; }
@@ -379,6 +399,16 @@ bool read_path(DataModel&, DataModel& object, LuaSlot& out) {
     return true;
 }
 
+bool read_time_length(DataModel& game, DataModel& object, LuaSlot& out) {
+    const auto* sound = dynamic_cast<const Sound*>(&object);
+    if (sound == nullptr) {
+        return false;
+    }
+    out.kind = LuaSlot::Kind::Number;
+    out.number = sound->time_length(game.resources_root());
+    return true;
+}
+
 bool write_path(DataModel&, DataModel& object, LuaSlot& in) {
     auto* asset = dynamic_cast<FileAsset*>(&object);
     if (asset == nullptr) {
@@ -481,7 +511,12 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
     register_lua_class("FileAsset", "Instance", nullptr, 0);
     register_lua_class("Texture", "FileAsset", file_fields, 1);
     register_lua_class("Mesh", "FileAsset", file_fields, 1);
-    register_lua_class("Sound", "FileAsset", file_fields, 1);
+    // TimeLength is read from the file, never written or saved.
+    const LuaField sound_fields[] = {
+        file_fields[0],
+        lua_property("TimeLength", "number", false, read_time_length, nullptr),
+    };
+    register_lua_class("Sound", "FileAsset", sound_fields, 2);
     register_lua_class("ReferenceAsset", "Instance", nullptr, 0);
     const LuaField material_fields[] = {
         lua_saved_property("DiffuseTexture", "Texture?", read_reference<0>, write_reference<0>, "null"),

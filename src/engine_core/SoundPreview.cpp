@@ -141,22 +141,4 @@ double SoundPreview::length() const {
 
 const std::filesystem::path& SoundPreview::file() const { return impl_->file; }
 
-double SoundPreview::length_of(const std::filesystem::path& file) {
-    ma_decoder decoder;
-#if defined(_WIN32)
-    if (ma_decoder_init_file_w(file.c_str(), nullptr, &decoder) != MA_SUCCESS) {
-#else
-    if (ma_decoder_init_file(file.c_str(), nullptr, &decoder) != MA_SUCCESS) {
-#endif
-        return 0;
-    }
-    ma_uint64 frames = 0;
-    double seconds = 0;
-    if (ma_decoder_get_length_in_pcm_frames(&decoder, &frames) == MA_SUCCESS && decoder.outputSampleRate > 0) {
-        seconds = static_cast<double>(frames) / decoder.outputSampleRate;
-    }
-    ma_decoder_uninit(&decoder);
-    return seconds;
-}
-
 }  // namespace engine_core

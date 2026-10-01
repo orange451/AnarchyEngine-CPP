@@ -99,13 +99,15 @@ void GameView::linkCamera(std::string guid) {
     }
 }
 
-void GameView::noteCurrentCamera() {
+void GameView::noteCurrentCamera(bool onlyIfNone) {
     if (engine_ == nullptr || cameraId_ == 0) {
         return;
     }
-    engine_->on_simulation([camera = cameraId_](engine_core::DataModel& game) {
+    engine_->on_simulation([camera = cameraId_, onlyIfNone](engine_core::DataModel& game) {
         if (auto* workspace = dynamic_cast<engine_core::Workspace*>(game.instance(game.scene_service("Workspace")))) {
-            workspace->set_current_camera(camera);
+            if (!onlyIfNone || workspace->current_camera() == 0) {
+                workspace->set_current_camera(camera);
+            }
         }
     });
 }
@@ -308,6 +310,17 @@ void GameView::layoutChildren() {
 }
 
 void GameView::refreshWorkspace() {
+    const engine_core::InstanceId was = cameraId_;
+    readWorkspace();
+    // A link that just resolved, as after a load, gives the place its
+    // CurrentCamera when it has none, without waiting for a click. Posted
+    // after the read lock is let go: a paused edit takes the write lock.
+    if (cameraId_ != 0 && cameraId_ != was) {
+        noteCurrentCamera(true);
+    }
+}
+
+void GameView::readWorkspace() {
     if (game_ == nullptr) {
         return;
     }

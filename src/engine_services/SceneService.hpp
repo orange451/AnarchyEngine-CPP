@@ -38,16 +38,19 @@ std::string scene_service_guid(std::string_view class_name);
 
 // Instances here render in the game. Anything may go in it.
 // CurrentCamera is the Camera the studio's scene view last used: set when you
-// press in a view or pick its camera. It is session state: never saved, never
-// an undo step, 0 once that Camera is gone, and cleared when the place is
-// rebuilt. A script may set it too; the views do not follow a script's write.
+// press in a view or pick its camera, and, while none is set, when a view
+// links to a Camera, as it does once a place loads. It is session state: never
+// saved, never an undo step, 0 once that Camera is gone, and cleared when the
+// place is rebuilt. A change fires Changed, so Properties shows it at once. A
+// script may set it too; the views do not follow a script's write.
 class Workspace : public SceneService {
 public:
     using SceneService::SceneService;
     const char* class_name() const override;
 
     InstanceId current_camera() const;
-    // 0 clears it. False, changing nothing, when id is a live instance that is not a Camera.
+    // 0 clears it. False, changing nothing, when id is a live instance that is
+    // not a Camera. A new value fires Changed with "CurrentCamera".
     bool set_current_camera(InstanceId id);
 
 private:

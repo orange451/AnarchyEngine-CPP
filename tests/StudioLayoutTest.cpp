@@ -14,6 +14,7 @@
 #include "LuaApi.hpp"
 #include "SelectionService.hpp"
 #include "Project.hpp"
+#include "SceneService.hpp"
 #include "ScriptRuntime.hpp"
 
 #include "jadefx/jadefx.hpp"
@@ -687,6 +688,11 @@ int main() {
                 const std::string main_guid = world.guid(main);
                 frame();
                 expect(view->cameraGuid() == main_guid, "a view with no Camera takes the first one in Workspace");
+                auto current_camera = [&] {
+                    auto* service = dynamic_cast<engine_core::Workspace*>(world.instance(workspace));
+                    return service != nullptr ? service->current_camera() : engine_core::InstanceId{0};
+                };
+                expect(current_camera() == main, "and, with none set, makes it the CurrentCamera without a click");
                 expect(list.getItems().size() == 1 && list.getItems()[0] == "Main" && list.getSelectionIndex() == 0,
                        "the list offers it, chosen");
 
@@ -730,6 +736,8 @@ int main() {
                 expect(fresh.size() == 1 && view->cameraGuid() == world.guid(fresh[0]) &&
                            list.getSelectionIndex() == 0 && list.getItems()[0] == "Camera",
                        "a new place links the view to its Camera");
+                expect(fresh.size() == 1 && current_camera() == fresh[0],
+                       "and makes it the CurrentCamera, as loading a place does");
                 layout.simulation().on_simulation([&](engine_core::DataModel& game) {
                     for (engine_core::InstanceId id : game.get_children(workspace)) {
                         game.destroy_tree(id);

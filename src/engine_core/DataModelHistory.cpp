@@ -104,6 +104,10 @@ void DataModel::note_property_change(std::string_view property, const LuaSlot& b
     emit_change(id_, Field::Reflected, current_origin(), id);
 }
 
+void DataModel::emit_property(std::string_view property) {
+    emit_change(id_, Field::Reflected, current_origin(), lua_property_id(property));
+}
+
 LuaSlot DataModel::instance_reference_slot(const InstanceRef& ref, const char* klass) const {
     LuaSlot slot;
     slot.text = ref.guid();

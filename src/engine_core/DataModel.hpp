@@ -458,6 +458,10 @@ protected:
     // value is stored. Records undo, which puts values back through the
     // property's write, and fires Changed with the property's name.
     void note_property_change(std::string_view property, const LuaSlot& before, const LuaSlot& after);
+    // A registry property of this instance that is not an edit changed: fires
+    // Changed with its name, and tells the panels that show it, but records
+    // nothing and leaves the place unchanged.
+    void emit_property(std::string_view property);
 
     // The GUID in text; the live target, if any, in id, with kind Instance, else
     // Nil. A target whose class does not inherit klass, as a hand-edited file

@@ -39,7 +39,11 @@ bool Workspace::set_current_camera(InstanceId id) {
             return false;
         }
     }
+    if (id == current_camera_) {
+        return true;
+    }
     current_camera_ = id;
+    emit_property("CurrentCamera");
     return true;
 }
 

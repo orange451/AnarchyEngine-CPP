@@ -244,6 +244,27 @@ TEST_CASE("SC10 CurrentCamera is not an edit: no undo step, not saved, cleared b
     REQUIRE(workspace_service(rig.game).current_camera() == 0);
 }
 
+TEST_CASE("SC10b a new CurrentCamera is heard by the Properties page and by Changed", "[SC10b]") {
+    ScriptRig rig;
+    engine_core::Workspace& workspace = workspace_service(rig.game);
+    engine_core::Camera& camera = add_camera(rig.game);
+    int heard = 0;
+    const std::uint64_t watch = rig.game.watch_changes([&heard] { ++heard; });
+    rig.game.set_watched(watch, {workspace.id()});
+    rig.runtime.run_chunk("workspace.Changed:Connect(function(name) print(name) end)");
+    rig.runtime.drain_output();
+
+    REQUIRE(workspace.set_current_camera(camera.id()));
+    REQUIRE(heard == 1);
+    rig.game.events().drain();
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"CurrentCamera\n"});
+
+    // The same Camera again changes nothing, and says nothing.
+    REQUIRE(workspace.set_current_camera(camera.id()));
+    REQUIRE(heard == 1);
+    rig.game.unwatch_changes(watch);
+}
+
 TEST_CASE("SC11 moving a Camera marks the place changed but is not an undo step", "[SC11]") {
     ScriptRig rig;
     engine_core::Camera& camera = add_camera(rig.game);

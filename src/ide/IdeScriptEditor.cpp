@@ -1,4 +1,5 @@
 #include "IdeScriptEditor.hpp"
+#include "EditorFont.hpp"
 #include "LockWaits.hpp"
 
 #include "ChangeHistoryService.hpp"
@@ -173,8 +174,10 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     // Load before the area is laid out. The stylesheet asks for this family.
     (void)editor_mono_family();
     define_styles(*area_);
+    area_->setStyle("font-family: \"" + editor_font_family() + "\";");
     theme_listener_ = std::make_unique<ThemeListener>([this] {
         define_styles(*area_);
+        area_->setStyle("font-family: \"" + editor_font_family() + "\";");
         refresh_scroll_marks();
     });
     area_->setFoldRanges([this](int paragraph) { return fold_end(paragraph); });

@@ -46,6 +46,9 @@ public:
     double zoom() const;
     void set_zoom(double zoom);
 
+    std::string editor_font() const;
+    void set_editor_font(const std::string& family);
+
     // Writes the file. True, doing nothing, when there is no file.
     bool save(std::string& error) const;
 

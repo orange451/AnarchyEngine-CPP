@@ -82,6 +82,19 @@ void Preferences::set_zoom(double zoom) {
     root_.set("zoom", engine_core::JsonValue::number(std::clamp(zoom, kMinZoom, kMaxZoom)));
 }
 
+std::string Preferences::editor_font() const {
+    const engine_core::JsonValue* font = root_.find("editorFont");
+    return font != nullptr && font->is_string() ? font->as_string() : std::string();
+}
+
+void Preferences::set_editor_font(const std::string& family) {
+    if (family.empty()) {
+        root_.erase("editorFont");
+    } else {
+        root_.set("editorFont", engine_core::JsonValue::string(family));
+    }
+}
+
 bool Preferences::save(std::string& error) const {
     if (file_.empty()) {
         return true;

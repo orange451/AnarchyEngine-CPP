@@ -583,6 +583,7 @@ add_executable(studio-tests
     tests/ConflictsTest.cpp
     tests/ScriptTabsTest.cpp
     tests/TerminalPaneTest.cpp
+    tests/GuiStyleTest.cpp
 )
 target_link_libraries(studio-tests PRIVATE studio)
 

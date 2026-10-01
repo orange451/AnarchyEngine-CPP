@@ -110,6 +110,26 @@ struct GuiLayer::Entry {
     std::string fieldText;
 };
 
+const char* GuiLayer::defaultStylesheet() {
+    return R"CSS(
+/* The game UI's starting point: no outlines, backgrounds, or padding.
+   Hover, press, and focus feedback stay, colored by the variables below. */
+:root {
+    --text-color: #000000;
+    --border-color: transparent;
+    --surface-color: transparent;
+    --accent-color: #1a73e8;
+    --outline-color: var(--accent-color);
+    --wash-color: rgba(0, 0, 0, 0.04);
+    --text-selection-color: rgba(26, 115, 232, 0.3);
+    color: var(--text-color);
+}
+button, textfield {
+    padding: 0;
+}
+)CSS";
+}
+
 GuiLayer::GuiLayer(engine_core::Engine& engine, GuiInput input)
     : engine_(engine), game_(engine.datamodel()), input_(std::make_shared<GuiInput>(std::move(input))) {
     setMinSize(0, 0);
@@ -131,8 +151,20 @@ void GuiLayer::sync() {
     }
     ++pass_;
     std::vector<std::shared_ptr<jadefx::Node>> screens;
+    std::string css;
     if (const engine_core::InstanceId service = game_.scene_service("Gui"); service != 0) {
         collectScreens(service, screens);
+        // The CSS instances under the service style every ScreenGui.
+        for (engine_core::InstanceId child = game_.first_child(service); child != 0; child = game_.next_sibling(child)) {
+            if (const auto* sheet = dynamic_cast<const engine_core::Css*>(game_.instance(child))) {
+                css += sheet->source();
+                css += '\n';
+            }
+        }
+    }
+    if (css != css_) {
+        setStylesheet(css);
+        css_ = std::move(css);
     }
     std::vector<jadefx::Node*> shown;
     shown.reserve(screens.size());

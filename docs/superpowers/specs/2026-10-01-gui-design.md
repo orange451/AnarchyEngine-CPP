@@ -83,6 +83,16 @@ subset, so the mapping carries over almost one to one.
   closing brace after `{`, writing Source back half a second after typing as
   one undo step, like the script editor. Properties does not show Source, as it does not a script's.
 
+## Changes
+
+- 2026-10-01: the game GUIs have a cascade of their own
+  (`2026-10-01-game-ui-subscene-design.md`). The Gui layer is the root of a
+  JadeFX `SubScene` whose user-agent stylesheet is a blank default (no
+  outlines, backgrounds, or padding), so the studio's theme, stylesheets, and
+  text color no longer reach them; that replaces the layer resetting the
+  inherited text color and size. CSS directly under the Gui service now
+  styles every ScreenGui.
+
 ## Not done here
 
 - Source in its own `.css` file on disk, as a Script's is `.luau`; it is a

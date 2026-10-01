@@ -36,7 +36,12 @@ struct GuiInput {
 // class's element type (screengui, pane, hbox, vbox, label, button,
 // textfield) whose id is its Name and whose classes are its ClassList. The
 // CSS instances under a GuiBase, joined in child order, are that node's
-// stylesheet.
+// stylesheet, and those directly under the service are the layer's, so they
+// style every ScreenGui.
+//
+// The layer is the root of a jadefx::SubScene whose user-agent stylesheet is
+// defaultStylesheet, so the studio's theme and stylesheets do not reach the
+// game's nodes, and :root is the layer.
 //
 // sync reads the tree under a short read lock, on the UI thread, and changes
 // only the nodes whose instance changed: a node keeps its state, such as a
@@ -50,6 +55,11 @@ public:
     ~GuiLayer() override;
 
     const char* getElementType() const override { return "gui-layer"; }
+
+    // The game UI's user-agent stylesheet: no outlines, backgrounds, or
+    // padding. The hover wash, the focus ring, and a TextField's caret and
+    // selection stay. Any CSS a project has wins over it.
+    static const char* defaultStylesheet();
 
     // Brings the nodes up to date with the Gui service. Skipped, keeping the
     // nodes as they are, when the DataModel is busy.
@@ -82,6 +92,8 @@ private:
     std::unordered_map<engine_core::InstanceId, std::unique_ptr<Entry>> entries_;
     std::uint64_t pass_ = 0;
     std::vector<jadefx::Node*> shown_;
+    // The service's CSS at the last sync, so it is parsed again only when it changes.
+    std::string css_;
     // The root's GUID at the last sync. Another place starts the nodes over.
     std::string placeGuid_;
 };

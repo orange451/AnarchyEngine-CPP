@@ -38,8 +38,11 @@ namespace engine_core {
 // TextField  Text (""), Prompt ("Prompt"), and the event Action, on Enter.
 //            Typing writes Text.
 // CSS        Source ("/* CSS Document */"): a stylesheet for its parent
-//            GuiBase and everything inside it. The CSS editor edits Source;
-//            Properties does not show it.
+//            GuiBase and everything inside it, or, directly under the Gui
+//            service, for every ScreenGui. The CSS editor edits Source;
+//            Properties does not show it. The studio's styles never reach
+//            the game's GUIs; they start from a blank default sheet
+//            (runner::GuiLayer::defaultStylesheet).
 //
 // The Name of a GuiBase is its CSS id, its ClassList its classes, and its
 // class, lowercase, its element type: screengui, pane, hbox, vbox, label,

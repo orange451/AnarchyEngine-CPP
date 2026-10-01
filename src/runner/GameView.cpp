@@ -90,7 +90,13 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
     input.moved = input.dragged;
     auto gui = jadefx::make<GuiLayer>(runner.simulation(), std::move(input));
     guiLayer_ = gui.get();
-    getChildren().add(std::move(gui));
+    // The GUIs have a cascade of their own: the studio's theme and stylesheets
+    // stop at the SubScene, and the game's default sheet starts there.
+    auto guiScene = jadefx::make<jadefx::SubScene>(std::move(gui));
+    guiScene->setPickOnBounds(false);
+    guiScene->setUserAgentStylesheet(GuiLayer::defaultStylesheet());
+    guiScene_ = guiScene.get();
+    getChildren().add(std::move(guiScene));
 
     auto label = jadefx::make<jadefx::Label>("0 FPS");
     label->getClassList().add("ide-fps");
@@ -330,7 +336,7 @@ void GameView::layoutChildren() {
     guiLayer_->sync();
     StackPane::layoutChildren();
     // The GUIs cover the whole view, whatever they would rather be.
-    guiLayer_->performLayout(contentLeft(), contentTop(), contentWidth(), contentHeight());
+    guiScene_->performLayout(contentLeft(), contentTop(), contentWidth(), contentHeight());
     // The list sits in the top right corner, over the drawing, clear of the
     // FPS label on the left when the view is wide enough for both.
     constexpr double kMargin = 6.0;

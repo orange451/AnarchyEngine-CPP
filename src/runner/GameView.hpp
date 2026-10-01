@@ -54,9 +54,10 @@ class SceneFeed;
 // stays as the script set it, so that click locks the pointer again.
 //
 // Over the drawing, under the FPS label and the camera list, the Gui service's
-// ScreenGuis are drawn (GuiLayer). A press on a GUI element goes to it, and to
-// UserInputService with gameProcessedEvent true; a press on a ScreenGui's own
-// area goes on to the scene as if no GUI were there.
+// ScreenGuis are drawn (GuiLayer), in a SubScene so the studio's styles do not
+// reach them. A press on a GUI element goes to it, and to UserInputService with
+// gameProcessedEvent true; a press on a ScreenGui's own area goes on to the
+// scene as if no GUI were there.
 class GameView : public ide::IdePane {
 public:
     explicit GameView(Runner& runner, std::string name = "Scene View", bool closable = false);
@@ -150,6 +151,8 @@ private:
     std::string placeGuid_;
     jadefx::ComboBox* cameraBox_ = nullptr;
     GuiLayer* guiLayer_ = nullptr;
+    // Holds guiLayer_ as its root.
+    jadefx::SubScene* guiScene_ = nullptr;
     // What the list shows now, so it is rebuilt only on a change.
     std::vector<CameraChoice> listed_;
     std::string listedGuid_;

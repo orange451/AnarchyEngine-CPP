@@ -67,6 +67,7 @@ set(STUDIO_SOURCES
     src/ide/InsertPopup.cpp
     src/ide/IdeExplorer.cpp
     src/ide/IdeAssets.cpp
+    src/ide/ThumbnailLoader.cpp
     src/ide/IdeIcons.cpp
     src/ide/IdePrefabEditor.cpp
     src/ide/PrefabModels.cpp

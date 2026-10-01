@@ -12,11 +12,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -773,33 +776,116 @@ void texture_preview_shows_file() {
                view->getImage()->getHeight() == 1 && view->getPrefWidth() == width && view->getPrefHeight() == height;
     };
 
+    // Waits out the loader's thread, then draws the frame that shows what it loaded.
+    auto stream_in = [&rig](double at) {
+        for (int tries = 0; tries < 1000 && !rig.pane->thumbnailsIdle(); ++tries) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        rig.frame(at);
+    };
+
     rig.pane->openFolder(rig.textures);
     rig.frame(0);
     rig.clickItem(rig.brick, 0.5);
     rig.frame(0.6);
-    Expect(draws_file(texture_image(preview()), 64, 32), "the preview draws the file, keeping its shape");
+    stream_in(0.7);
+    Expect(draws_file(texture_image(preview()), 64, 32), "the preview draws the file once loaded, keeping its shape");
 
     rig.pane->setView(ide::AssetView::Icons);
     rig.frame(1.0);
+    stream_in(1.1);
     Expect(draws_file(texture_image(rig.pane->itemNode(rig.brick)), 40, 20), "the Icons tile draws the file too");
     Expect(rig.pane->itemNode(rig.rock) != nullptr && texture_image(rig.pane->itemNode(rig.rock)) == nullptr,
            "a Texture with no Path keeps the Texture icon");
 
+    // Into Walls and back: Brick's thumbnail is kept while Brick names its file, so it draws at once.
+    rig.pane->openFolder(rig.walls);
+    rig.frame(1.2);
+    rig.pane->openFolder(rig.textures);
+    rig.frame(1.3);
+    Expect(draws_file(texture_image(rig.pane->itemNode(rig.brick)), 40, 20),
+           "a folder shown again draws its thumbnails without loading them");
+
     Expect(brick != nullptr && !brick->set_path("missing.png"), "a Path with no file is taken");
     rig.frame(1.5);
+    stream_in(1.6);
     Expect(rig.pane->itemNode(rig.brick) != nullptr && texture_image(rig.pane->itemNode(rig.brick)) == nullptr,
            "with no file, the tile draws the Texture icon");
     rig.pane->setView(ide::AssetView::Columns);
     rig.frame(2.0);
     rig.clickItem(rig.brick, 2.5);
     rig.frame(2.6);
+    stream_in(2.7);
     Expect(preview() != nullptr && texture_image(preview()) == nullptr,
            "with no file, the preview draws the Texture icon");
     std::error_code ignored;
     std::filesystem::remove_all(root, ignored);
 }
 
+// A thumbnail averages the pixels each of its own covers, weighting color by
+// alpha, and comes out top row first.
+void thumbnails_shrink() {
+    // 4x2, bottom row first: the bottom row opaque red, the top row half clear blue and fully clear.
+    std::vector<std::uint8_t> rgba = {
+        255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+        0,   0, 255, 255, 0, 0, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0,
+    };
+    int width = 4;
+    int height = 2;
+    const std::vector<std::uint8_t> small = ide::shrink_pixels(rgba, width, height, 2);
+    Expect(width == 2 && height == 1 && small.size() == 8, "4x2 fits 2 as 2x1");
+    // Left: two red, two blue, all opaque. Right: two red opaque, two clear.
+    Expect(small.size() == 8 && small[0] == 128 && small[2] == 128 && small[3] == 255, "the left pixel mixes red and blue");
+    Expect(small.size() == 8 && small[4] == 255 && small[6] == 0 && small[7] == 128,
+           "clear pixels thin the alpha, not the color");
+
+    width = 2;
+    height = 2;
+    const std::vector<std::uint8_t> flipped = ide::shrink_pixels({1, 1, 1, 255, 1, 1, 1, 255, 9, 9, 9, 255, 9, 9, 9, 255},
+                                                                 width, height, 128);
+    Expect(width == 2 && height == 2 && flipped.size() == 16 && flipped[0] == 9 && flipped[8] == 1,
+           "a small image keeps its size, turned top row first");
+}
+
+// A loaded thumbnail stays while retain lists its file, however long it goes
+// unasked for, and goes once retain leaves it out.
+void thumbnails_kept_while_in_use() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "anarchy-thumbnail-keep-test";
+    std::filesystem::create_directories(root);
+    const std::filesystem::path file = root / "pixel.bmp";
+    // A 1x1 24-bit BMP, its row padded to 4 bytes.
+    const unsigned char bmp[] = {'B', 'M', 58, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0,
+                                 40, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 24, 0, 0, 0, 0, 0, 4, 0, 0, 0,
+                                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                 0, 255, 0, 0};
+    {
+        std::ofstream out(file, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(bmp), sizeof(bmp));
+    }
+    {
+        ide::ThumbnailLoader loader(128, {});
+        auto settle = [&loader] {
+            for (int tries = 0; tries < 1000 && !loader.idle(); ++tries) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        };
+        Expect(loader.get(file) == nullptr, "a file's first ask queues it");
+        settle();
+        Expect(loader.get(file) != nullptr, "it streams in");
+        loader.retain({file});
+        loader.retain({file});
+        Expect(loader.get(file) != nullptr, "it stays while in use, though not asked for");
+        loader.retain({});
+        Expect(loader.get(file) == nullptr, "it goes once nothing uses it");
+        settle();
+    }
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+}
+
 int main() {
+    thumbnails_shrink();
+    thumbnails_kept_while_in_use();
     starts_in_saved_view();
     navigates();
     selection_is_shared();

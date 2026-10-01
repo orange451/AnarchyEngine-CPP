@@ -1,6 +1,7 @@
 #include "IdeAssets.hpp"
 #include "LockWaits.hpp"
 
+#include "AssetInstances.hpp"
 #include "DataModelLock.hpp"
 #include "FindBar.hpp"
 #include "IdeIcons.hpp"
@@ -15,7 +16,6 @@
 #include <iterator>
 #include <memory>
 #include <string>
-#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -358,6 +358,8 @@ constexpr double kDisclosureWidth = 16;
 constexpr double kColumnWidth = 180;
 constexpr double kPreviewWidth = 220;
 constexpr double kPreviewIcon = 64;
+// The longer side of a texture's thumbnail, in pixels: the preview's icon at twice its points, for HiDPI.
+constexpr int kThumbnailSize = 128;
 
 void fix_width(jadefx::Node& node, double width) {
     node.setPrefWidth(width);
@@ -439,7 +441,8 @@ void set_class(jadefx::Node& node, const char* name, bool on) {
 }  // namespace
 
 IdeAssets::IdeAssets(engine_core::DataModel& world, AssetsHost host)
-    : IdePane("Assets", true), world_(world), host_(std::move(host)), browser_(world) {
+    : IdePane("Assets", true), world_(world), host_(std::move(host)), browser_(world),
+      thumbnails_(kThumbnailSize, thumbnails_ready_.setter()) {
     watch_ = world_.watch_changes(edited_.setter());
     setPrefWidth(9999999);
     setMinSize(240, 120);
@@ -619,6 +622,10 @@ void IdeAssets::layoutChildren() {
             const bool changed = browser_.refresh() || dirty_ || !built_ || built_view_ != view_ || edited;
             if (changed) {
                 rebuild();
+                // Keeps the thumbnail of every file a Texture under Assets names, so a
+                // folder shown again draws at once, and lets the rest go. After the
+                // rebuild, so only what it shows stays queued to load.
+                thumbnails_.retain(texture_files());
                 // Every item shown, the preview's among them, so an edit to one rebuilds.
                 std::vector<engine_core::InstanceId> shown;
                 shown.reserve(items_.size());
@@ -639,6 +646,9 @@ void IdeAssets::layoutChildren() {
                 show_selection();
             }
         }
+    }
+    if (thumbnails_ready_.take()) {
+        refresh_icons();
     }
     back_->setDisable(!browser_.can_back());
     forward_->setDisable(!browser_.can_forward());
@@ -1021,13 +1031,7 @@ void IdeAssets::rebuild() {
     built_ = true;
     dirty_ = false;
     built_view_ = view_;
-    // Keeps the texture images the last rebuild used, so a folder left behind lets its go.
-    for (auto it = texture_images_.begin(); it != texture_images_.end();) {
-        it = it->second.used ? std::next(it) : texture_images_.erase(it);
-    }
-    for (auto& [file, entry] : texture_images_) {
-        entry.used = false;
-    }
+    icon_slots_.clear();
     if (sidebar_rows_.empty()) {
         for (const AssetRow& category : browser_.categories()) {
             auto row = jadefx::make<jadefx::HBox>();
@@ -1374,51 +1378,91 @@ void IdeAssets::rebuild_preview() {
     preview_->applyCss();
 }
 
-std::shared_ptr<jadefx::Image> IdeAssets::texture_image(const std::string& path) {
+std::filesystem::path IdeAssets::texture_file(const std::string& path) const {
     const std::filesystem::path root = world_.resources_root();
     if (path.empty() || root.empty()) {
-        return nullptr;
+        return {};
     }
     // Texture Paths use '/', which every platform's path splits on.
-    const std::filesystem::path file = root / path_from_utf8(path);
-    std::error_code error;
-    const std::filesystem::file_time_type stamp = std::filesystem::last_write_time(file, error);
-    if (error) {
-        return nullptr;
+    return root / path_from_utf8(path);
+}
+
+std::vector<std::filesystem::path> IdeAssets::texture_files() const {
+    std::vector<std::filesystem::path> files;
+    std::vector<engine_core::InstanceId> pending = {world_.service("Assets")};
+    while (!pending.empty()) {
+        const engine_core::InstanceId id = pending.back();
+        pending.pop_back();
+        if (id == 0) {
+            continue;
+        }
+        if (const auto* texture = dynamic_cast<const engine_core::Texture*>(world_.instance(id))) {
+            std::filesystem::path file = texture_file(texture->path());
+            if (!file.empty()) {
+                files.push_back(std::move(file));
+            }
+        }
+        const std::vector<engine_core::InstanceId> children = world_.get_children(id);
+        pending.insert(pending.end(), children.begin(), children.end());
     }
-    const std::string key = utf8_path(file);
-    const auto found = texture_images_.find(key);
-    TextureImage& entry = texture_images_[key];
-    if (found == texture_images_.end() || stamp != entry.stamp) {
-        entry.stamp = stamp;
-        entry.image = jadefx::Image::load(key);
-    }
-    entry.used = true;
-    return entry.image;
+    return files;
 }
 
 std::shared_ptr<jadefx::Node> IdeAssets::asset_icon(const AssetRow& row, double size) {
-    const std::shared_ptr<jadefx::Image> image = row.class_name == "Texture" ? texture_image(row.path) : nullptr;
-    if (!image || image->getWidth() <= 0 || image->getHeight() <= 0) {
+    std::filesystem::path file = row.class_name == "Texture" ? texture_file(row.path) : std::filesystem::path();
+    if (file.empty()) {
         return sized_icon(row.class_name, size);
     }
-    const double scale = size / std::max(image->getWidth(), image->getHeight());
-    const double width = std::max(1.0, image->getWidth() * scale);
-    const double height = std::max(1.0, image->getHeight() * scale);
-    auto view = jadefx::make<jadefx::ImageView>(image);
-    view->getClassList().add("assets-texture-image");
-    view->setPrefSize(width, height);
-    view->setMinSize(width, height);
-    view->setMaxSize(width, height);
-    view->setMouseTransparent(true);
     // A square box either way, so a wide or tall texture lines up with the icons beside it.
-    auto box = jadefx::make<jadefx::StackPane>(view);
+    auto box = jadefx::make<jadefx::StackPane>();
     box->setAlignment(jadefx::Pos::Center);
     box->setPrefSize(size, size);
     box->setMinSize(size, size);
     box->setMaxSize(size, size);
     box->setMouseTransparent(true);
+    IconSlot slot;
+    slot.file = std::move(file);
+    slot.class_name = row.class_name;
+    slot.size = size;
+    slot.box = box;
+    show_icon(slot, thumbnails_.get(slot.file));
+    icon_slots_.push_back(std::move(slot));
     return box;
+}
+
+bool IdeAssets::show_icon(IconSlot& slot, std::shared_ptr<jadefx::Image> image) {
+    const std::shared_ptr<jadefx::StackPane> box = slot.box.lock();
+    if (!box || (!box->getChildren().empty() && image == slot.shown)) {
+        return false;
+    }
+    slot.shown = image;
+    box->getChildren().clear();
+    if (!image || image->getWidth() <= 0 || image->getHeight() <= 0) {
+        box->getChildren().add(sized_icon(slot.class_name, slot.size));
+        return true;
+    }
+    const double scale = slot.size / std::max(image->getWidth(), image->getHeight());
+    const double width = std::max(1.0, image->getWidth() * scale);
+    const double height = std::max(1.0, image->getHeight() * scale);
+    auto view = jadefx::make<jadefx::ImageView>(std::move(image));
+    view->getClassList().add("assets-texture-image");
+    view->setPrefSize(width, height);
+    view->setMinSize(width, height);
+    view->setMaxSize(width, height);
+    view->setMouseTransparent(true);
+    box->getChildren().add(view);
+    return true;
+}
+
+void IdeAssets::refresh_icons() {
+    icon_slots_.erase(std::remove_if(icon_slots_.begin(), icon_slots_.end(),
+                                     [](const IconSlot& slot) { return slot.box.expired(); }),
+                      icon_slots_.end());
+    for (IconSlot& slot : icon_slots_) {
+        if (show_icon(slot, thumbnails_.get(slot.file))) {
+            slot.box.lock()->applyCss();
+        }
+    }
 }
 
 void IdeAssets::add_item(const std::shared_ptr<jadefx::Node>& node, const AssetRow& row) {

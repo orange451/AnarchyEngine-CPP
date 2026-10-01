@@ -4,6 +4,7 @@
 #include "ChangeFlag.hpp"
 #include "IdeExplorer.hpp"
 #include "IdePane.hpp"
+#include "ThumbnailLoader.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -56,6 +57,8 @@ public:
     jadefx::TextField& searchField() const { return *search_field_; }
     // Moves ids into target, or says why the first refused one cannot go. What a drop does.
     bool dropInto(const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId target);
+    // Whether no texture thumbnail waits or loads. For tests.
+    bool thumbnailsIdle() { return thumbnails_.idle(); }
 
 protected:
     void layoutChildren() override;
@@ -72,11 +75,20 @@ private:
     // The Columns view's last column: a single selected asset's icon, name,
     // class, and saved properties. Callers hold the world's read lock.
     void rebuild_preview();
-    // The image a Texture's Path names under the resources folder, decoded
-    // once per version of the file, or null when there is none to show.
-    std::shared_ptr<jadefx::Image> texture_image(const std::string& path);
-    // A size box holding row's icon: a Texture's file, fit and centered, or the class's icon.
+    // The file a Texture Path names under the resources folder; empty without either.
+    std::filesystem::path texture_file(const std::string& path) const;
+    // The file of every Texture under Assets: the thumbnails worth keeping.
+    // Callers hold the world's read lock.
+    std::vector<std::filesystem::path> texture_files() const;
+    // A size box holding row's icon: the class's, until a Texture's file has
+    // loaded on thumbnails_'s thread, then that, fit and centered.
     std::shared_ptr<jadefx::Node> asset_icon(const AssetRow& row, double size);
+    struct IconSlot;
+    // Puts image in slot's box, or the class's icon when it is null. False,
+    // changing nothing, when the box shows it already or is gone.
+    bool show_icon(IconSlot& slot, std::shared_ptr<jadefx::Image> image);
+    // Puts each thumbnail that loaded since the last frame in the boxes waiting for it.
+    void refresh_icons();
     // A flat list of the search's matches, with where each is from the folder.
     void rebuild_search(const std::vector<AssetRow>& rows);
     // The sidebar and scrolling the view has.
@@ -132,14 +144,15 @@ private:
     // How many items the folder shown holds, for the status line.
     std::size_t count_ = 0;
     std::shared_ptr<jadefx::VBox> preview_;
-    // The files texture_image decoded: each one's time then, what it gave, and
-    // whether the last rebuild used it. A rebuild drops the ones it did not use.
-    struct TextureImage {
-        std::filesystem::file_time_type stamp{};
-        std::shared_ptr<jadefx::Image> image;
-        bool used = false;
+    // A box showing a Texture's file once it loads, and what it shows now.
+    struct IconSlot {
+        std::filesystem::path file;
+        std::string class_name;
+        double size = 0;
+        std::weak_ptr<jadefx::StackPane> box;
+        std::shared_ptr<jadefx::Image> shown;
     };
-    std::unordered_map<std::string, TextureImage> texture_images_;
+    std::vector<IconSlot> icon_slots_;
 
     // What the widgets were last built from. dirty_ asks for a rebuild, as a sort or a disclosure does.
     bool built_ = false;
@@ -171,6 +184,11 @@ private:
     std::vector<engine_core::InstanceId> watched_;
     // The last item clicked, where Shift+click extends from.
     engine_core::InstanceId anchor_ = 0;
+    // Set by thumbnails_'s thread when a thumbnail loads; the next frame shows it.
+    ChangeFlag thumbnails_ready_;
+    // Texture files as thumbnails, loaded off the UI thread. Last, so its
+    // thread stops before the rest of the pane goes.
+    ThumbnailLoader thumbnails_;
 };
 
 }  // namespace ide

@@ -451,6 +451,7 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.camera = base_.camera;
     dst.lighting = base_.lighting;
     dst.sky = base_.sky;
+    dst.resources_root = base_.resources_root;
     dst.instances.resize(base_.instances.size());
     std::copy(base_.instances.begin(), base_.instances.end(), dst.instances.begin());
     // Element by element, so strings that did not change keep their buffers.
@@ -490,6 +491,7 @@ void SnapshotPump::take_changes(DataModel& game) {
     }
     resolve_prefabs(game);
     resolve_lighting(game);
+    base_.resources_root = game.resources_root();
     if (camera_pending_) {
         base_.camera = pending_camera_;
         camera_pending_ = false;

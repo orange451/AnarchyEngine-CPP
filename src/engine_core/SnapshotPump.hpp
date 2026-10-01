@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -131,6 +132,9 @@ struct VisualSnapshot {
     std::vector<VisualPrefab> prefabs;
     VisualLighting lighting;
     VisualSky sky;
+    // DataModel::resources_root as the snapshot was taken: the folder the
+    // paths above are under.
+    std::filesystem::path resources_root;
 };
 
 // Double buffer plus the one-frame override list.

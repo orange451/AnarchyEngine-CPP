@@ -194,11 +194,11 @@ void GameView::requestCapture(std::function<void(ViewPixels)> done) {
 
 void GameView::collectMeshes() {
     meshDraws_.clear();
-    // The open project's resources folder, which Project keeps on the game.
-    const std::filesystem::path root = game_ != nullptr ? game_->resources_root() : std::filesystem::path();
-    meshes_.setRoot(root);
-    textures_.setRoot(root);
     const engine_core::VisualSnapshot& snapshot = feed_->latest();
+    // The folder the snapshot's paths are under, not the game's: a project
+    // switch changes the game's before the snapshot catches up.
+    meshes_.setRoot(snapshot.resources_root);
+    textures_.setRoot(snapshot.resources_root);
     followCamera(snapshot);
     // Each Prefab's meshes once, however many GameObjects draw it.
     if (prefabMeshes_.size() < snapshot.prefabs.size()) {

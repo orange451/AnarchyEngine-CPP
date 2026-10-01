@@ -54,7 +54,22 @@ bool shown(const LuaField& field, PropertyKind& kind) {
     if (std::string_view(field.name) == "Source") {
         return false;
     }
-    return property_kind_for(field.type_name, kind);
+    // An EnumItem the registry gives no type for has no items to pick from.
+    return property_kind_for(field.type_name, kind) && (kind != PropertyKind::Enum || field.enum_type != nullptr);
+}
+
+// False when field has a display rule its object does not meet: the enum
+// property it names holds another item, or the object has no such property.
+bool rule_met(DataModel& world, DataModel& object, const LuaField& field) {
+    if (field.shown_when == nullptr) {
+        return true;
+    }
+    const LuaField* gate = engine_core::lua_class_find(object.class_name(), field.shown_when);
+    LuaSlot slot;
+    if (gate == nullptr || gate->read == nullptr || !gate->read(world, object, slot)) {
+        return false;
+    }
+    return slot.kind == LuaSlot::Kind::Enum && static_cast<int>(slot.number) == field.shown_when_value;
 }
 
 // Degrees to a thousandth, so float noise in
@@ -83,6 +98,9 @@ bool read_value(DataModel& world, DataModel& object, const LuaField& field, Prop
     case PropertyKind::Number:
         out.number = slot.number;
         return slot.kind == LuaSlot::Kind::Number;
+    case PropertyKind::Enum:
+        out.number = slot.number;
+        return slot.kind == LuaSlot::Kind::Enum && slot.enum_type == field.enum_type;
     case PropertyKind::Vector3:
         out.vec = slot.vec;
         return slot.kind == LuaSlot::Kind::Vec3;
@@ -141,6 +159,7 @@ void merge(PropertyRow& row, const PropertyValue& next) {
         row.mixed = row.mixed || row.value.flag != next.flag;
         break;
     case PropertyKind::Number:
+    case PropertyKind::Enum:
         row.mixed = row.mixed || row.value.number != next.number;
         break;
     case PropertyKind::Vector3:
@@ -266,7 +285,7 @@ bool PropertyRow::operator==(const PropertyRow& other) const {
 
 bool PropertyRow::same_slot(const PropertyRow& other) const {
     return name == other.name && type_name == other.type_name && kind == other.kind && group == other.group &&
-           slider_min == other.slider_min && slider_max == other.slider_max;
+           slider_min == other.slider_min && slider_max == other.slider_max && enum_type == other.enum_type;
 }
 
 const PropertyRow* PropertySheet::find(const std::string& name) const {
@@ -294,13 +313,15 @@ bool property_kind_for(const std::string& type_name, PropertyKind& out) {
         out = PropertyKind::Color3;
     } else if (type_name == "Matrix4") {
         out = PropertyKind::Transform;
+    } else if (type_name == "EnumItem") {
+        out = PropertyKind::Enum;
     } else {
         return false;
     }
     return true;
 }
 
-PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& selection) {
+PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& selection, bool with_hidden) {
     PropertySheet sheet;
     for (InstanceId id : selection) {
         if (id != 0 && world.alive(id) && std::find(sheet.ids.begin(), sheet.ids.end(), id) == sheet.ids.end()) {
@@ -352,13 +373,15 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
             row.slider_min = field.slider_min;
             row.slider_max = field.slider_max;
         }
+        row.enum_type = field.enum_type;
         bool keep = true;
         bool have_first = false;
         for (InstanceId id : sheet.ids) {
             DataModel* object = object_of(world, id);
             const LuaField* own = object != nullptr ? field_named(fields_of(object->class_name()), row.name) : nullptr;
             if (own == nullptr || own->method || own->read == nullptr || own->type_name == nullptr ||
-                row.type_name != own->type_name) {
+                row.type_name != own->type_name || own->enum_type != row.enum_type ||
+                (!with_hidden && !rule_met(world, *object, *own))) {
                 keep = false;
                 break;
             }
@@ -495,7 +518,8 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
         const LuaField* field = engine_core::lua_class_find(object->class_name(), edit.property);
         PropertyKind kind{};
         if (field == nullptr || field->method || !field->writable || field->write == nullptr ||
-            field->type_name == nullptr || !property_kind_for(field->type_name, kind) || kind != edit.kind) {
+            field->type_name == nullptr || !property_kind_for(field->type_name, kind) || kind != edit.kind ||
+            (kind == PropertyKind::Enum && field->enum_type == nullptr)) {
             continue;
         }
         targets.push_back({object, *field});
@@ -568,6 +592,12 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
             break;
         case PropertyKind::Number:
             slot.kind = LuaSlot::Kind::Number;
+            slot.number = edit.value.number;
+            break;
+        case PropertyKind::Enum:
+            // The write refuses a value its type has no item for.
+            slot.kind = LuaSlot::Kind::Enum;
+            slot.enum_type = target.field.enum_type;
             slot.number = edit.value.number;
             break;
         case PropertyKind::Vector3: {

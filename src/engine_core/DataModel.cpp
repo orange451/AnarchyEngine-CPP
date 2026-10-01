@@ -62,6 +62,13 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                              .inout_none()
                              .cached()
                              .build();
+    world.body_query = world.ecs.query_builder<>()
+                           .with<ecs::Instance>()
+                           .in()
+                           .with<ecs::PhysicsBody>()
+                           .with<ecs::InWorkspace>()
+                           .cached()
+                           .build();
     world.slots.reserve(kMaxInstances);
     world.free_list.reserve(kMaxInstances);
     world.invalidation.reserve(kMaxInvalidations);
@@ -480,6 +487,9 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
     if (object->steps()) {
         ecs_add_id(ecs_world(), world.slots[index].entity, world.ecs_ids.steps);
     }
+    if (object->physics_body()) {
+        ecs_add_id(ecs_world(), world.slots[index].entity, world.ecs_ids.physics_body);
+    }
     const char* label = object->class_name();
     object->name_ = label != nullptr ? label : std::string();
     // Assigned once. A project load replaces it with the GUID from disk.
@@ -775,6 +785,27 @@ void DataModel::integrate_simulated(double dt) {
             notify_watchers(owners[i].id);
         }
     }
+}
+
+void DataModel::physics_bodies(std::vector<InstanceId>& out) const {
+    out.clear();
+    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->body_query.c_ptr());
+    while (ecs_query_next(&it)) {
+        const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
+        for (std::int32_t i = 0; i < it.count; ++i) {
+            out.push_back(owners[i].id);
+        }
+    }
+}
+
+void DataModel::write_simulated_transform(InstanceId id, const Matrix4& transform) {
+    const Slot* part = slot(id);
+    if (part == nullptr || part->body == nullptr) {
+        return;
+    }
+    write_component(ecs_world(), part->entity, state_->ecs_ids.transform, transform);
+    note(id, VisualField::Transform, WriteOrigin::Simulation);
+    notify_watchers(id);
 }
 
 void DataModel::step_instances(double dt) {
@@ -1661,7 +1692,7 @@ bool saved_value(DataModel& world, const DataModel& object, const LuaField& fiel
 bool write_saved(DataModel& world, DataModel& object, const LuaField& field, const JsonValue& value,
                  std::string& error) {
     LuaSlot slot;
-    if (!slot_from_json(value, field.type_name, field.name, slot, error)) {
+    if (!slot_from_json(value, field.type_name, field.name, slot, error, field.enum_type)) {
         return false;
     }
     if (!field.write(world, object, slot)) {

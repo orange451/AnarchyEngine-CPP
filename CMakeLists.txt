@@ -362,6 +362,24 @@ option(ENGINE_FLECS_CHECKS "Build flecs with its debug checks (slower entity acc
 set(FLECS_SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/flecs-src")
 add_subdirectory(cmake/flecs "${CMAKE_BINARY_DIR}/flecs")
 
+# Box3D simulates PhysicsObject rigid bodies: MIT-licensed C by Erin Catto,
+# pinned by commit. Only fetched here; cmake/box3d builds its sources, since
+# its own CMakeLists needs a newer CMake and compiler than the engine requires.
+FetchContent_Declare(
+    box3d
+    GIT_REPOSITORY https://github.com/erincatto/box3d.git
+    GIT_TAG 9f998c862d54c03a633ecea3831937385c78b532
+)
+FetchContent_GetProperties(box3d)
+if(NOT box3d_POPULATED)
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
+    FetchContent_Populate(box3d)
+endif()
+set(BOX3D_SOURCE_DIR "${box3d_SOURCE_DIR}")
+add_subdirectory(cmake/box3d "${CMAKE_BINARY_DIR}/box3d")
+
 # The engine is four packages, each a static library with its own directory:
 #   engine_core       DataModel, events, threads, the script runtime, projects
 #   engine_datatypes  values: Vector2, Vector3, Color, Color3, Matrix4, Enum
@@ -388,6 +406,7 @@ add_library(engine_instances STATIC
     src/engine_instances/Light.cpp
     src/engine_instances/LuaSource.cpp
     src/engine_instances/ModuleScript.cpp
+    src/engine_instances/PhysicsObject.cpp
     src/engine_instances/Script.cpp
 )
 add_library(engine_services STATIC
@@ -427,6 +446,7 @@ add_library(engine_core STATIC
     src/engine_core/Project.cpp
     src/engine_core/Containment.cpp
     src/engine_core/Ecs.cpp
+    src/engine_core/PhysicsWorld.cpp
 )
 set(ENGINE_PACKAGES engine_core engine_datatypes engine_instances engine_services)
 foreach(package IN LISTS ENGINE_PACKAGES)
@@ -441,6 +461,8 @@ target_link_libraries(engine_services PUBLIC engine_core)
 # flecs stays private: only engine_core and GameObject include Ecs.hpp.
 target_link_libraries(engine_core PRIVATE flecs)
 target_link_libraries(engine_instances PRIVATE flecs)
+# Box3D stays private too: only PhysicsWorld.cpp includes it.
+target_link_libraries(engine_core PRIVATE box3d)
 target_link_libraries(engine_core PRIVATE Luau.Compiler Luau.VM Luau.Analysis)
 # Vector3 is a Luau vector, and Enum items are Luau userdata.
 target_link_libraries(engine_datatypes PRIVATE Luau.VM)
@@ -660,6 +682,7 @@ add_executable(sandbox
     sandbox/plugin_tests.cpp
     sandbox/camera_tests.cpp
     sandbox/light_tests.cpp
+    sandbox/physics_tests.cpp
     sandbox/scene_camera_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)

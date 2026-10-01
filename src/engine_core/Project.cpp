@@ -12,6 +12,7 @@
 #include "JsonMerge.hpp"
 #include "Light.hpp"
 #include "ModuleScript.hpp"
+#include "PhysicsObject.hpp"
 #include "SceneService.hpp"
 #include "Script.hpp"
 
@@ -126,6 +127,8 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"Script", [](DataModel& world) -> DataModel& { return world.create<Script>(); }});
         out.push_back({"ModuleScript", [](DataModel& world) -> DataModel& { return world.create<ModuleScript>(); }});
         out.push_back({"Folder", [](DataModel& world) -> DataModel& { return world.create<Folder>(); }});
+        out.push_back(
+            {"PhysicsObject", [](DataModel& world) -> DataModel& { return world.create<PhysicsObject>(); }});
         out.push_back({"Texture", [](DataModel& world) -> DataModel& { return world.create<Texture>(); }});
         out.push_back({"Mesh", [](DataModel& world) -> DataModel& { return world.create<Mesh>(); }});
         out.push_back({"Sound", [](DataModel& world) -> DataModel& { return world.create<Sound>(); }});

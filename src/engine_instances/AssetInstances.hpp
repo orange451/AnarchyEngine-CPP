@@ -84,6 +84,10 @@ public:
     // Empty when this session made none: the Mesh draws its file.
     SessionGeometry session_geometry() const;
 
+    // Every vertex position of what the Mesh draws now: this session's
+    // geometry while playing, else its AMESH file. Returns why there are none.
+    std::optional<std::string> vertex_positions(std::vector<Vec3>& out) const;
+
 protected:
     void on_reuse() override;
 

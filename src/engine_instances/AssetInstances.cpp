@@ -165,6 +165,33 @@ Mesh::SessionGeometry Mesh::session_geometry() const {
     return session_;
 }
 
+std::optional<std::string> Mesh::vertex_positions(std::vector<Vec3>& out) const {
+    out.clear();
+    anarchy::amesh::Data file;
+    const anarchy::amesh::Data* data = nullptr;
+    if (const SessionGeometry current = session_geometry(); current.data) {
+        data = current.data.get();
+    } else {
+        if (path().empty()) {
+            return std::string("the Mesh has no Path");
+        }
+        // A file with LODs still has its points.
+        const std::optional<std::string> error = read_file(resources_root(), path(), file);
+        if (error && file.vertices.empty()) {
+            return error;
+        }
+        data = &file;
+    }
+    out.reserve(data->vertices.size());
+    for (const anarchy::amesh::Vertex& vertex : data->vertices) {
+        out.push_back(Vec3{vertex.p[0], vertex.p[1], vertex.p[2]});
+    }
+    if (out.empty()) {
+        return path() + " has no vertices";
+    }
+    return std::nullopt;
+}
+
 void Mesh::on_reuse() {
     FileAsset::on_reuse();
     session_ = SessionGeometry{};

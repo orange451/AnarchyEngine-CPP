@@ -1,6 +1,7 @@
 #include "PropertyReflection.hpp"
 
 #include "DataModel.hpp"
+#include "Enum.hpp"
 #include "LuaApi.hpp"
 
 #include <cstring>
@@ -17,7 +18,15 @@ std::string reference_class(std::string_view type) {
 }
 
 bool slot_to_json(const LuaSlot& slot, std::string_view type, JsonValue& out) {
-    if (type == "number" && slot.kind == LuaSlot::Kind::Number) {
+    if (slot.kind == LuaSlot::Kind::Enum) {
+        const char* item = slot.enum_type != nullptr
+                               ? enum_item_name(*slot.enum_type, static_cast<int>(slot.number))
+                               : nullptr;
+        if (item == nullptr) {
+            return false;
+        }
+        out = JsonValue::string(item);
+    } else if (type == "number" && slot.kind == LuaSlot::Kind::Number) {
         out = JsonValue::number(slot.number);
     } else if (type == "boolean" && slot.kind == LuaSlot::Kind::Bool) {
         out = JsonValue::boolean(slot.flag);
@@ -29,6 +38,8 @@ bool slot_to_json(const LuaSlot& slot, std::string_view type, JsonValue& out) {
     } else if (type == "Vector3" && slot.kind == LuaSlot::Kind::Vec3) {
         const float axes[3] = {slot.vec.x, slot.vec.y, slot.vec.z};
         out = json_floats(axes, 3);
+    } else if (type == "Matrix4" && slot.kind == LuaSlot::Kind::Matrix4) {
+        out = json_floats(slot.transform.m, 16);
     } else if (!reference_class(type).empty() &&
                (slot.kind == LuaSlot::Kind::Instance || slot.kind == LuaSlot::Kind::Nil)) {
         out = slot.text.empty() ? JsonValue() : JsonValue::string(slot.text);
@@ -39,10 +50,19 @@ bool slot_to_json(const LuaSlot& slot, std::string_view type, JsonValue& out) {
 }
 
 bool slot_from_json(const JsonValue& value, std::string_view type, const char* name, LuaSlot& out,
-                    std::string& error) {
+                    std::string& error, const EnumType* enum_type) {
     const std::string label = name != nullptr ? name : "";
     std::vector<float> floats;
-    if (type == "number") {
+    if (enum_type != nullptr) {
+        const int item = value.is_string() ? enum_item_value(*enum_type, value.as_string()) : -1;
+        if (item < 0) {
+            error = label + " must be the name of an Enum." + enum_type->name + " item";
+            return false;
+        }
+        out.kind = LuaSlot::Kind::Enum;
+        out.enum_type = enum_type;
+        out.number = item;
+    } else if (type == "number") {
         if (!value.is_number()) {
             error = label + " must be a number";
             return false;
@@ -77,6 +97,13 @@ bool slot_from_json(const JsonValue& value, std::string_view type, const char* n
         }
         out.kind = LuaSlot::Kind::Vec3;
         out.vec = Vec3{floats[0], floats[1], floats[2]};
+    } else if (type == "Matrix4") {
+        if (!read_json_floats(value, 16, 16, floats)) {
+            error = label + " must be 16 numbers, column-major";
+            return false;
+        }
+        out.kind = LuaSlot::Kind::Matrix4;
+        std::memcpy(out.transform.m, floats.data(), sizeof(out.transform.m));
     } else if (!reference_class(type).empty()) {
         if (value.is_null()) {
             out.kind = LuaSlot::Kind::Nil;
@@ -121,6 +148,8 @@ bool same_slot(const LuaSlot& a, const LuaSlot& b) {
         return same_color(a.color, b.color);
     case LuaSlot::Kind::Matrix4:
         return std::memcmp(a.transform.m, b.transform.m, sizeof(a.transform.m)) == 0;
+    case LuaSlot::Kind::Enum:
+        return a.enum_type == b.enum_type && a.number == b.number;
     }
     return false;
 }

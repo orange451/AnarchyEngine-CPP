@@ -13,14 +13,18 @@ struct lua_State;
 namespace engine_core {
 
 class DataModel;
+struct EnumType;
 
 // A value carried between a class's property and the Luau stack.
 // The set of kinds stays small. Property names do not live here.
 struct LuaSlot {
-    enum class Kind { Nil, Bool, Number, String, Instance, Vec3, Color, Matrix4, Signal };
+    enum class Kind { Nil, Bool, Number, String, Instance, Vec3, Color, Matrix4, Signal, Enum };
     Kind kind = Kind::Nil;
     bool flag = false;
+    // A Number's value, or an Enum item's value.
     double number = 0;
+    // An Enum's type. Null for every other kind.
+    const EnumType* enum_type = nullptr;
     std::string text;
     InstanceId id = 0;
     Vec3 vec{};
@@ -78,6 +82,14 @@ struct LuaField {
     // lua_slider. Equal bounds are a plain field.
     double slider_min = 0;
     double slider_max = 0;
+    // An enum property: type_name is "EnumItem", and its slots are Kind::Enum
+    // of this type. Saved as the item's name. See lua_saved_enum.
+    const EnumType* enum_type = nullptr;
+    // Properties shows the field only while the sibling property shown_when
+    // (an enum property) holds the item shown_when_value. A display rule:
+    // the value is still saved, loaded, and scriptable. See lua_shown_when.
+    const char* shown_when = nullptr;
+    int shown_when_value = 0;
 
     bool slider() const { return slider_max > slider_min; }
 };
@@ -111,6 +123,24 @@ inline LuaField lua_saved_property(const char* name, const char* type_name, LuaR
 inline LuaField lua_slider(LuaField field, double min, double max) {
     field.slider_min = min;
     field.slider_max = max;
+    return field;
+}
+
+// A saved property holding an item of `type`. A script may write the
+// EnumItem, its name, or its value; default_json is the item's name as JSON,
+// such as "\"Box\"".
+inline LuaField lua_saved_enum(const char* name, const EnumType& type, LuaRead read, LuaWrite write,
+                               const char* default_json) {
+    LuaField field = lua_saved_property(name, "EnumItem", read, write, default_json);
+    field.enum_type = &type;
+    return field;
+}
+
+// field, shown in Properties only while the enum property `property` holds
+// the item whose value is `value`.
+inline LuaField lua_shown_when(LuaField field, const char* property, int value) {
+    field.shown_when = property;
+    field.shown_when_value = value;
     return field;
 }
 

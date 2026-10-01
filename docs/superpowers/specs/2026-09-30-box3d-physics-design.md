@@ -12,7 +12,7 @@ Rigid-body physics during play, simulated by [Box3D](https://github.com/erincatt
 | --- | --- |
 | Box3D version | FetchContent, pinned to commit `9f998c86` (HEAD on 2026-09-27; v0.1.0 is the only tag and 29 commits older). MIT. |
 | Who includes Box3D | `engine_core/PhysicsWorld.cpp` only. Linked PRIVATE to `engine_core`, as flecs is. |
-| C runtime | Box3D's top-level CMake forces `/MT`. The project uses the default `/MD`, so after `FetchContent_MakeAvailable` the build sets `MSVC_RUNTIME_LIBRARY` on `box3d` to `MultiThreaded$<$<CONFIG:Debug>:Debug>DLL`. |
+| C runtime and compiler | Box3D's own CMakeLists needs CMake 3.22 and `/std:c17` (VS 16.8), and forces `/MT`. The engine builds with CMake 3.16 and MSVC 19.23, so `cmake/box3d` compiles Box3D's sources itself, with the engine's runtime library, and force-includes `c11_shim.h`, which gives old MSVC `_Static_assert`, `_Alignas`, and `restrict`. |
 | Threads | Single-threaded (`workerCount` 1, no task callbacks). |
 | Step rate | Each engine physics substep (240 Hz) is one `b3World_Step(physics_dt, 1)`, before Heartbeat. Equivalent in the solver to Box3D's recommended 60 Hz × 4 substeps. |
 | When it simulates | Only during play. Edit mode and pause step nothing. |
@@ -34,9 +34,9 @@ Rigid-body physics during play, simulated by [Box3D](https://github.com/erincatt
 
 ### 1. Build (`CMakeLists.txt`)
 
-1. `FetchContent_Declare(box3d GIT_REPOSITORY https://github.com/erincatto/box3d.git GIT_TAG 9f998c862d54c03a633ecea3831937385c78b532)`, then `FetchContent_MakeAvailable`. Samples, tests, and benchmarks are already skipped when Box3D is not the top-level project.
-2. Override the C runtime as in the decisions table. `BOX3D_DOUBLE_PRECISION` stays OFF, so `b3Pos` is `b3Vec3`.
-3. `target_link_libraries(engine_core PRIVATE box3d::box3d)`. Box3D's include directory is added as SYSTEM so the engine's warnings do not report on it.
+1. `FetchContent_Declare(box3d GIT_REPOSITORY https://github.com/erincatto/box3d.git GIT_TAG 9f998c862d54c03a633ecea3831937385c78b532)`, then `FetchContent_Populate` only. `cmake/box3d/CMakeLists.txt` builds every `src/*.c` as the `box3d` static library, optimized in every configuration as flecs is.
+2. `BOX3D_DOUBLE_PRECISION` stays undefined, so `b3Pos` is `b3Vec3`.
+3. `target_link_libraries(engine_core PRIVATE box3d)`. Box3D's include directory is SYSTEM, so the engine's warnings do not report on it.
 
 ### 2. `PhysicsObject` (`engine_instances/PhysicsObject.{hpp,cpp}`)
 
@@ -65,7 +65,7 @@ What `Size` means for each Shape:
 - **Box**: full extents. `b3MakeBoxHull(Size / 2)`.
 - **Sphere**: diameter `Size.X`. Radius `Size.X / 2`.
 - **Capsule**: along local Y, total height `Size.Y`, diameter `Size.X`. The segment between the cap centers is `max(Size.Y - Size.X, 0)` long; the radius is `Size.X / 2`.
-- **Hull**: the Mesh's vertices are scaled per axis so their bounding box is `Size`, centered on the body's origin, then passed to `b3CreateHull(points, count, B3_MAX_HULL_VERTICES)`. `b3CreateHull` fails past 128 vertices, faces, or edges, so a mesh with more than 128 distinct vertices is first reduced to support points: for each of 128 directions spread evenly over the sphere (a Fibonacci lattice), the vertex farthest along it, with duplicates dropped. If Mesh is nil, its AMESH cannot be read, or the hull still cannot be built, the body gets a Box of `Size` and the PhysicsObject warns once: `PhysicsObject <name>: Hull fell back to Box (<reason>)`. During play, a Mesh with a session copy (MeshShapes) builds from the copy, as the Scene View draws it.
+- **Hull**: the Mesh's vertices are scaled per axis so their bounding box is `Size`, centered on the body's origin, then passed to `b3CreateHull(points, count, 64)`, which reduces the points to at most 64 hull vertices itself; a hull past 128 faces or edges fails, so a failure retries with 32. If Mesh is nil, its AMESH cannot be read, or the hull still cannot be built, the body gets a Box of `Size` and the PhysicsObject warns once: `PhysicsObject <name>: Hull fell back to Box (<reason>)`. During play, a Mesh with a session copy (MeshShapes) builds from the copy, as the Scene View draws it.
 
 Non-finite numbers and vectors are refused with a message, as Light's setters refuse them. Every setter records which parts of the body it changed (a dirty mask: Pose, Velocity, Material, Shape, Mass, Type, Damping) so `PhysicsWorld` can apply only those.
 

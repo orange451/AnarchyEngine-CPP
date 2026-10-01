@@ -21,9 +21,10 @@ std::string instance_drag_text(const std::vector<engine_core::InstanceId>& ids);
 std::vector<engine_core::InstanceId> instance_drag_ids(std::string_view text);
 
 // What a Properties row edits. The class registry's type name picks it.
-// ReadOnlyText is shown and never written. Transform is a Matrix4, edited as
+// ReadOnlyText is shown and never written. Enum is an EnumItem property
+// (LuaField::enum_type), picked from its items. Transform is a Matrix4, edited as
 // its Position and its Orientation.
-enum class PropertyKind { String, Bool, Number, Vector3, Color3, Ref, Transform, ReadOnlyText };
+enum class PropertyKind { String, Bool, Number, Vector3, Color3, Ref, Transform, ReadOnlyText, Enum };
 
 // A Transform row's parts: Position's X, Y, and Z, then Orientation's.
 inline constexpr int kTransformParts = 6;
@@ -57,6 +58,9 @@ struct PropertyValue {
 // A Number whose property registers a slider (lua_slider) has slider_min
 // below slider_max, and every selected instance's property registers that
 // same range; otherwise both are 0 and the row is a plain field.
+//
+// An Enum row's value is value.number, the item's value, and enum_type is
+// the type every selected instance's property holds.
 struct PropertyRow {
     std::string name;
     std::string type_name;
@@ -64,6 +68,7 @@ struct PropertyRow {
     PropertyGroup group = PropertyGroup::Data;
     double slider_min = 0;
     double slider_max = 0;
+    const engine_core::EnumType* enum_type = nullptr;
     bool writable = false;
     bool mixed = false;
     bool axis_mixed[kTransformParts] = {false, false, false, false, false, false};
@@ -94,9 +99,14 @@ struct PropertySheet {
 bool property_kind_for(const std::string& type_name, PropertyKind& out);
 
 // The caller holds the DataModel lock. Dead ids and the root are left out.
-// A property is a row only when every instance has it with the same type.
+// A property is a row only when every instance has it with the same type,
+// and, for a field with a display rule (lua_shown_when), only when every
+// instance's named enum property holds the item the rule names.
 // Source is left to the script editor.
-PropertySheet read_sheet(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& selection);
+// with_hidden keeps the rows a display rule hides, for a caller that is not
+// the panel, such as MCP, which can still read and set them.
+PropertySheet read_sheet(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& selection,
+                         bool with_hidden = false);
 
 // Orientation: the rotation of transform, scale left out, as degrees
 // about X, Y, and Z, turned about Y first, then X, then Z.

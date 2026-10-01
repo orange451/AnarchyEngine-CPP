@@ -12,6 +12,8 @@
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
 #include "ModuleScript.hpp"
+#include "PhysicsObject.hpp"
+#include "Enum.hpp"
 #include "Script.hpp"
 #include "jadefx/jadefx.hpp"
 
@@ -1277,7 +1279,50 @@ void TestInstanceDragIds() {
 
 }  // namespace
 
+// PhysicsObject's Shape is an Enum row, a dropdown of Enum.PhysicsShape's
+// items, and its Mesh row shows only while Shape is Hull.
+void TestEnumRowAndShownWhen() {
+    Rig rig;
+    const InstanceId body = rig.add<engine_core::PhysicsObject>("Body");
+    const InstanceId other = rig.add<engine_core::PhysicsObject>("Other");
+    rig.select({body});
+    const ide::PropertyRow* shape = rig.panel.sheet().find("Shape");
+    Expect(shape != nullptr && shape->kind == ide::PropertyKind::Enum, "Shape is an Enum row");
+    Expect(shape != nullptr && shape->enum_type == &engine_core::physics_shape_enum(), "of Enum.PhysicsShape");
+    Expect(shape != nullptr && shape->value.number == 0, "Box by default");
+    auto* choice = dynamic_cast<jadefx::ComboBox*>(rig.panel.editor("Shape"));
+    Expect(choice != nullptr, "an Enum row is a dropdown");
+    Expect(choice != nullptr && choice->getItems().items() ==
+                                    std::vector<std::string>{"Box", "Sphere", "Capsule", "Hull"},
+           "listing the items in value order");
+    Expect(choice != nullptr && choice->getSelectionIndex() == 0, "Box is picked");
+    Expect(!rig.hasRow("Mesh"), "a Box has no Mesh row");
+    Expect(ide::read_sheet(rig.game, {body}, true).find("Mesh") != nullptr, "MCP still sees the hidden row");
+
+    ide::PropertyEdit edit;
+    edit.property = "Shape";
+    edit.kind = ide::PropertyKind::Enum;
+    edit.value.number = 3;
+    const ide::EditResult result = ide::apply_edit(rig.game, {body}, edit);
+    Expect(result.written == 1 && !result.rejected, "a pick writes the item");
+    rig.frame();
+    rig.frame();
+    Expect(rig.hasRow("Mesh"), "a Hull shows its Mesh row");
+    choice = dynamic_cast<jadefx::ComboBox*>(rig.panel.editor("Shape"));
+    Expect(choice != nullptr && choice->getSelectionIndex() == 3, "the dropdown follows the write");
+
+    edit.value.number = 9;
+    const ide::EditResult refused = ide::apply_edit(rig.game, {body}, edit);
+    Expect(refused.written == 0, "a value with no item is refused");
+
+    // Two bodies, one a Hull: Shape is mixed, and Mesh shows only if both are Hulls.
+    rig.select({body, other});
+    Expect(rig.mixed("Shape"), "different Shapes are mixed");
+    Expect(!rig.hasRow("Mesh"), "Mesh hides unless every selected body is a Hull");
+}
+
 int main() {
+    TestEnumRowAndShownWhen();
     TestR1SingleSelectionEditsName();
     TestR2MixedNameWritesEveryone();
     TestMixedBlankIsNotEmptyName();

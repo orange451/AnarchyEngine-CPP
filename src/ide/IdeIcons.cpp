@@ -46,6 +46,9 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "SpotLight") {
         return "LightSpot.png";
     }
+    if (class_name == "PhysicsObject") {
+        return "Box.png";
+    }
     return nullptr;
 }
 

@@ -14,6 +14,7 @@
 #include "Matrix4.hpp"
 #include "MeshShapes.hpp"
 #include "ModuleScript.hpp"
+#include "PhysicsObject.hpp"
 #include "PropertyReflection.hpp"
 #include "Script.hpp"
 #include "SelectionService.hpp"
@@ -164,6 +165,8 @@ DataModel& create_module_script(DataModel& world) { return world.create<ModuleSc
 
 DataModel& create_folder(DataModel& world) { return world.create<Folder>(); }
 
+DataModel& create_physics_object(DataModel& world) { return world.create<PhysicsObject>(); }
+
 DataModel& create_texture(DataModel& world) { return world.create<Texture>(); }
 DataModel& create_mesh(DataModel& world) { return world.create<Mesh>(); }
 DataModel& create_sound(DataModel& world) { return world.create<Sound>(); }
@@ -183,6 +186,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Script", create_script);
     register_lua_creatable("ModuleScript", create_module_script);
     register_lua_creatable("Folder", create_folder);
+    register_lua_creatable("PhysicsObject", create_physics_object);
     register_lua_creatable("Texture", create_texture);
     register_lua_creatable("Mesh", create_mesh);
     register_lua_creatable("Sound", create_sound);
@@ -292,6 +296,13 @@ void push_registered(lua_State* state, ScriptRuntime* runtime, const LuaSlot& sl
     case LuaSlot::Kind::Matrix4:
         push_matrix4(state, slot.transform);
         return;
+    case LuaSlot::Kind::Enum:
+        if (slot.enum_type == nullptr) {
+            lua_pushnil(state);
+            return;
+        }
+        push_enum_item(state, *slot.enum_type, static_cast<int>(slot.number));
+        return;
     case LuaSlot::Kind::Signal: {
         auto* signal = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
         *signal = SignalUd{};
@@ -373,7 +384,12 @@ int ScriptBindings::instance_newindex(lua_State* state) {
         }
         LuaSlot slot;
         const std::string_view type = field->type_name;
-        if (type == "string") {
+        if (field->enum_type != nullptr) {
+            // The EnumItem, its name, or its value; anything else raises.
+            slot.kind = LuaSlot::Kind::Enum;
+            slot.enum_type = field->enum_type;
+            slot.number = check_enum_arg(state, 3, *field->enum_type);
+        } else if (type == "string") {
             std::size_t length = 0;
             const char* text = luaL_checklstring(state, 3, &length);
             slot.kind = LuaSlot::Kind::String;

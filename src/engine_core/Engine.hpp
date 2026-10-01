@@ -4,6 +4,7 @@
 #include "Game.hpp"
 #include "IClock.hpp"
 #include "IRenderer.hpp"
+#include "PhysicsWorld.hpp"
 #include "SnapshotPump.hpp"
 #include "TaskScheduler.hpp"
 
@@ -95,6 +96,8 @@ private:
     SnapshotPump pump_;
     TaskScheduler scheduler_;
     std::unique_ptr<ScriptRuntime> scripts_;
+    // PhysicsObject bodies, stepped in step_physics while the place plays.
+    PhysicsWorld physics_;
     IRenderer* renderer_ = nullptr;
     IClock* clock_ = nullptr;
     double render_dt_ = 1.0 / 60.0;

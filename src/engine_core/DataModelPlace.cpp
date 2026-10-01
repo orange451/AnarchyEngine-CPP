@@ -164,6 +164,9 @@ void DataModel::adopt_slot(std::uint16_t pool_index, InstanceId id) {
     if (object->steps()) {
         ecs_add_id(ecs_world(), part.entity, state_->ecs_ids.steps);
     }
+    if (object->physics_body()) {
+        ecs_add_id(ecs_world(), part.entity, state_->ecs_ids.physics_body);
+    }
     part.pool = pool_index;
     part.storage = storage;
     part.instance = object;

@@ -4,6 +4,7 @@
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
+#include "Enum.hpp"
 #include "IdeResources.hpp"
 #include "LuaApi.hpp"
 #include "LuaSource.hpp"
@@ -255,6 +256,8 @@ const char* KindName(PropertyKind kind) {
             return "Matrix4";
         case PropertyKind::ReadOnlyText:
             return "string";
+        case PropertyKind::Enum:
+            return "EnumItem";
     }
     return "string";
 }
@@ -292,6 +295,13 @@ JsonValue RowValue(const DataModel& world, const PropertyRow& row) {
                 return JsonValue();
             }
             return Brief(world, row.value.ref);
+        case PropertyKind::Enum: {
+            // The item's name, as a project file holds it.
+            const char* item = row.enum_type != nullptr
+                                   ? engine_core::enum_item_name(*row.enum_type, static_cast<int>(row.value.number))
+                                   : nullptr;
+            return item != nullptr ? JsonValue::string(item) : JsonValue();
+        }
     }
     return JsonValue();
 }
@@ -300,7 +310,7 @@ JsonValue RowValue(const DataModel& world, const PropertyRow& row) {
 JsonValue Properties(DataModel& world, InstanceId id) {
     JsonValue out = Brief(world, id);
     JsonValue properties = JsonValue::object();
-    for (const PropertyRow& row : read_sheet(world, {id}).rows) {
+    for (const PropertyRow& row : read_sheet(world, {id}, true).rows) {
         JsonValue entry = JsonValue::object();
         entry.set("type", JsonValue::string(row.type_name.empty() ? KindName(row.kind) : row.type_name));
         entry.set("value", RowValue(world, row));
@@ -416,6 +426,26 @@ PropertyEdit EditFor(const DataModel& world, const PropertyRow& row, const JsonV
         case PropertyKind::Ref:
             edit.value.ref = value.is_null() ? DataModel::kNoParent : Resolve(world, &value, row.name.c_str());
             break;
+        case PropertyKind::Enum: {
+            // An item's name or its value, as a script may write it.
+            int item = -1;
+            if (row.enum_type != nullptr && value.is_string()) {
+                item = engine_core::enum_item_value(*row.enum_type, value.as_string());
+            } else if (row.enum_type != nullptr && value.is_number() &&
+                       engine_core::enum_item_name(*row.enum_type, static_cast<int>(value.as_number())) != nullptr) {
+                item = static_cast<int>(value.as_number());
+            }
+            if (item < 0) {
+                std::string names;
+                for (int i = 0; row.enum_type != nullptr && i < row.enum_type->count; ++i) {
+                    names += (i == 0 ? "" : ", ");
+                    names += row.enum_type->items[i].name;
+                }
+                throw std::runtime_error(row.name + " takes one of: " + names + ".");
+            }
+            edit.value.number = item;
+            break;
+        }
     }
     return edit;
 }
@@ -873,7 +903,7 @@ JsonValue SetProperty(const ToolContext& context, const JsonValue& arguments) {
     const JsonValue value = *given;
     return RunEdit(context.engine, [instance, property, value](DataModel& world) {
         const InstanceId id = Resolve(world, &instance);
-        const PropertySheet sheet = read_sheet(world, {id});
+        const PropertySheet sheet = read_sheet(world, {id}, true);
         const PropertyRow* row = sheet.find(property);
         if (row == nullptr) {
             throw std::runtime_error(PathOf(world, id) + " has no property " + property + " that can be set here.");

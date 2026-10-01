@@ -5,10 +5,12 @@
 #include "ChangeHistoryService.hpp"
 #include "DataModel.hpp"
 #include "DataModelLock.hpp"
+#include "Enum.hpp"
 #include "SelectionService.hpp"
 #include "TextUndoStack.hpp"
 
 #include "jadefx/scene/Painter.hpp"
+#include "jadefx/scene/controls/ComboBox.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -441,6 +443,8 @@ struct RowView {
     std::shared_ptr<PropertyColor> color;
     // A Number row with a range, beside its field.
     std::shared_ptr<PropertySlider> slider;
+    // An Enum row's items, in value order.
+    std::shared_ptr<jadefx::ComboBox> choice;
     std::shared_ptr<jadefx::Button> pick;
     std::shared_ptr<jadefx::Button> clear;
     std::shared_ptr<jadefx::Tooltip> tip;
@@ -456,6 +460,7 @@ struct RowView {
         for (jadefx::Node* node : {static_cast<jadefx::Node*>(name.get()), static_cast<jadefx::Node*>(field.get()),
                                    static_cast<jadefx::Node*>(check.get()), static_cast<jadefx::Node*>(color.get()),
                                    static_cast<jadefx::Node*>(slider.get()), static_cast<jadefx::Node*>(pick.get()), static_cast<jadefx::Node*>(clear.get()),
+                                   static_cast<jadefx::Node*>(choice.get()),
                                    static_cast<jadefx::Node*>(disclosure.get()),
                                    static_cast<jadefx::Node*>(lines[0].get()),
                                    static_cast<jadefx::Node*>(lines[1].get())}) {
@@ -804,6 +809,25 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             }
             break;
         }
+        case PropertyKind::Enum: {
+            view->choice = jadefx::make<jadefx::ComboBox>();
+            view->choice->getClassList().add("properties-choice");
+            view->choice->setDisable(!row.writable);
+            std::vector<std::string> names;
+            for (int index = 0; row.enum_type != nullptr && index < row.enum_type->count; ++index) {
+                names.emplace_back(row.enum_type->items[index].name);
+            }
+            view->choice->getItems().setAll(std::move(names));
+            view->choice->setOnAction([weak_self, weak_view](jadefx::ActionEvent&) {
+                const auto self = weak_self.lock();
+                const auto row_view = weak_view.lock();
+                if (self && row_view) {
+                    self->commit_choice(*row_view);
+                }
+            });
+            pane->getChildren().add(view->choice);
+            break;
+        }
         case PropertyKind::Bool:
             view->check = jadefx::make<jadefx::CheckBox>();
             view->check->getClassList().add("properties-check");
@@ -969,6 +993,18 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 put(*view.axes[axis], part_text(row, axis));
             }
             break;
+        case PropertyKind::Enum: {
+            // Mixed shows no item.
+            int selected = -1;
+            for (int index = 0; !row.mixed && row.enum_type != nullptr && index < row.enum_type->count; ++index) {
+                if (row.enum_type->items[index].value == static_cast<int>(row.value.number)) {
+                    selected = index;
+                    break;
+                }
+            }
+            view.choice->select(selected);
+            break;
+        }
         case PropertyKind::Bool:
             // Mixed is an indeterminate box, never an unchecked "false".
             view.check->setSelected(!row.mixed && row.value.flag);
@@ -1148,6 +1184,22 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             scene->releaseFocus(&field);
         }
         field.was_focused = false;
+    }
+
+    void commit_choice(RowView& view) {
+        const int index = view.choice->getSelectionIndex();
+        if (!view.row.writable || view.row.enum_type == nullptr || index < 0 || index >= view.row.enum_type->count) {
+            return;
+        }
+        const int value = view.row.enum_type->items[index].value;
+        if (!view.row.mixed && static_cast<int>(view.row.value.number) == value) {
+            return;
+        }
+        PropertyEdit edit;
+        edit.property = view.row.name;
+        edit.kind = PropertyKind::Enum;
+        edit.value.number = value;
+        submit(view.ids, edit);
     }
 
     void commit_check(RowView& view) {
@@ -1438,6 +1490,9 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             case PropertyKind::Bool:
                 place(*view->check, editor_x, std::min(editor_width, kRowHeight), kRowHeight);
                 break;
+            case PropertyKind::Enum:
+                place(*view->choice, editor_x, editor_width, kRowHeight);
+                break;
             case PropertyKind::Color3:
                 place(*view->color, editor_x, editor_width, kRowHeight);
                 break;
@@ -1574,6 +1629,8 @@ jadefx::Node* PropertiesPanel::editor(const std::string& property, int part) con
                                                        : nullptr;
         case PropertyKind::Bool:
             return part == 0 ? view->check.get() : nullptr;
+        case PropertyKind::Enum:
+            return part == 0 ? view->choice.get() : nullptr;
         case PropertyKind::Color3:
             return part == 0 ? view->color.get() : nullptr;
         case PropertyKind::Ref:

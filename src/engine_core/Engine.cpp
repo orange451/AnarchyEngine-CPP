@@ -49,6 +49,10 @@ Engine::Engine() {
     game_.attach_scheduler(&scheduler_);
     scripts_ = std::make_unique<ScriptRuntime>();
     scripts_->attach(game_, scheduler_);
+    // Physics warnings, such as a Hull that fell back to a Box, go to the console.
+    physics_.set_warning_sink([this](const std::string& text) {
+        scripts_->append_output(ScriptRuntime::OutputKind::Print, text);
+    });
     analysis_ = std::make_unique<ScriptAnalysis>(game_);
 }
 
@@ -445,6 +449,9 @@ void Engine::render_loop() {
     }
 }
 
-void Engine::step_physics(double dt) { game_.integrate_simulated(dt); }
+void Engine::step_physics(double dt) {
+    game_.integrate_simulated(dt);
+    physics_.step(game_, dt);
+}
 
 }  // namespace engine_core

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string_view>
+
 struct lua_State;
 
 namespace engine_core {
@@ -27,6 +29,8 @@ const EnumType& key_code_enum();
 const EnumType& user_input_type_enum();
 const EnumType& user_input_state_enum();
 const EnumType& mouse_behavior_enum();
+// Box 0, Sphere 1, Capsule 2, Hull 3.
+const EnumType& physics_shape_enum();
 
 // Every type the Enum global holds, for script analysis to declare.
 int enum_type_count();
@@ -34,6 +38,8 @@ const EnumType& enum_type_at(int index);
 
 // Null when no item of the type has this value.
 const char* enum_item_name(const EnumType& type, int value);
+// The value of the item with this name, or -1 when the type has none.
+int enum_item_value(const EnumType& type, std::string_view name);
 
 // Pushes Enum.<Type>.<Name>: the same userdata every time, so == holds and the
 // item works as a table key. Pushes nil when the value has no item.

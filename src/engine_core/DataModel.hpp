@@ -174,6 +174,9 @@ public:
     virtual void step(double dt) { (void)dt; }
     // True for a class Heartbeat steps. Read once, when its entity is issued.
     virtual bool steps() const { return false; }
+    // True for a class the physics world simulates while it is in Workspace
+    // (PhysicsObject). Read once, when its entity is issued.
+    virtual bool physics_body() const { return false; }
 
     void set_thread_ids(std::thread::id simulation, std::thread::id render);
     void set_threads_running(bool running);
@@ -364,6 +367,13 @@ public:
 
     // Moves every simulated, non-visual GameObject by its velocity and dirties Transform.
     void integrate_simulated(double dt);
+    // The physics bodies in Workspace (physics_body()), in no set order, into
+    // out, which is cleared first.
+    void physics_bodies(std::vector<InstanceId>& out) const;
+    // A GameObject's Transform as the physics world moved it: stored and
+    // drawn, as integrate_simulated moves one, with no Changed, no history,
+    // and no check. SimulationThread. A dead id or a non-GameObject does nothing.
+    void write_simulated_transform(InstanceId id, const Matrix4& transform);
     // Heartbeat. Calls step(dt) on every stepping instance under the root, in
     // no set order. The ids are gathered first, so a step may create, destroy,
     // or reparent; an instance destroyed before its turn is skipped.

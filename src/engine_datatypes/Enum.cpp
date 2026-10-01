@@ -160,6 +160,14 @@ const EnumEntry kMouseBehaviors[] = {
     {"Default", 0}, {"LockCenter", 1}, {"LockCurrentPosition", 2},
 };
 
+// PhysicsObject.Shape. The engine's own: Roblox has no enum of this name.
+const EnumEntry kPhysicsShapes[] = {
+    {"Box", 0},
+    {"Sphere", 1},
+    {"Capsule", 2},
+    {"Hull", 3},
+};
+
 template <std::size_t N>
 constexpr int count_of(const EnumEntry (&)[N]) {
     return static_cast<int>(N);
@@ -172,10 +180,11 @@ const EnumType kKeyCodeType{"KeyCode", kKeyCodes, count_of(kKeyCodes)};
 const EnumType kUserInputTypeType{"UserInputType", kUserInputTypes, count_of(kUserInputTypes)};
 const EnumType kUserInputStateType{"UserInputState", kUserInputStates, count_of(kUserInputStates)};
 const EnumType kMouseBehaviorType{"MouseBehavior", kMouseBehaviors, count_of(kMouseBehaviors)};
+const EnumType kPhysicsShapeType{"PhysicsShape", kPhysicsShapes, count_of(kPhysicsShapes)};
 
 const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kRotationOrderType,
                                   &kKeyCodeType,        &kUserInputTypeType, &kUserInputStateType,
-                                  &kMouseBehaviorType};
+                                  &kMouseBehaviorType,  &kPhysicsShapeType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -245,6 +254,17 @@ const EnumType& user_input_type_enum() { return kUserInputTypeType; }
 const EnumType& user_input_state_enum() { return kUserInputStateType; }
 
 const EnumType& mouse_behavior_enum() { return kMouseBehaviorType; }
+
+const EnumType& physics_shape_enum() { return kPhysicsShapeType; }
+
+int enum_item_value(const EnumType& type, std::string_view name) {
+    for (int index = 0; index < type.count; ++index) {
+        if (name == type.items[index].name) {
+            return type.items[index].value;
+        }
+    }
+    return -1;
+}
 
 int enum_type_count() { return static_cast<int>(sizeof(kTypes) / sizeof(kTypes[0])); }
 

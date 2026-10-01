@@ -1171,4 +1171,122 @@ CommentResult comment_luau(std::string_view source, int anchor, int caret) {
     return result;
 }
 
+std::vector<int> fold_ranges_luau(std::string_view source) {
+    int lines = 1;
+    for (char c : source) {
+        if (c == '\n') {
+            ++lines;
+        }
+    }
+    std::vector<int> ends(static_cast<std::size_t>(lines), -1);
+    std::vector<int> open;
+    const std::size_t size = source.size();
+    int line = 0;
+    std::size_t at = 0;
+    const auto long_level = [&](std::size_t from) -> int {
+        if (from >= size || source[from] != '[') {
+            return -1;
+        }
+        std::size_t scan = from + 1;
+        int level = 0;
+        while (scan < size && source[scan] == '=') {
+            ++level;
+            ++scan;
+        }
+        return scan < size && source[scan] == '[' ? level : -1;
+    };
+    const auto skip_long = [&](std::size_t from, int level) {
+        std::size_t scan = from + 2 + static_cast<std::size_t>(level);
+        while (scan < size) {
+            if (source[scan] == '\n') {
+                ++line;
+            } else if (source[scan] == ']') {
+                std::size_t close = scan + 1;
+                int count = 0;
+                while (close < size && source[close] == '=') {
+                    ++count;
+                    ++close;
+                }
+                if (count == level && close < size && source[close] == ']') {
+                    return close + 1;
+                }
+            }
+            ++scan;
+        }
+        return size;
+    };
+    const auto is_word = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+    };
+    const auto close_block = [&]() {
+        if (open.empty()) {
+            return;
+        }
+        const int header = open.back();
+        open.pop_back();
+        const int last = line - 1;
+        if (last > header) {
+            int& end = ends[static_cast<std::size_t>(header)];
+            end = std::max(end, last);
+        }
+    };
+    while (at < size) {
+        const char c = source[at];
+        if (c == '\n') {
+            ++line;
+            ++at;
+        } else if (c == '-' && at + 1 < size && source[at + 1] == '-') {
+            const int level = long_level(at + 2);
+            if (level >= 0) {
+                at = skip_long(at + 2, level);
+            } else {
+                while (at < size && source[at] != '\n') {
+                    ++at;
+                }
+            }
+        } else if (c == '"' || c == '\'' || c == '`') {
+            ++at;
+            while (at < size && source[at] != c) {
+                if (source[at] == '\\' && at + 1 < size) {
+                    if (source[at + 1] == '\n') {
+                        ++line;
+                    }
+                    at += 2;
+                    continue;
+                }
+                if (source[at] == '\n') {
+                    if (c != '`') {
+                        break;
+                    }
+                    ++line;
+                }
+                ++at;
+            }
+            if (at < size && source[at] == c) {
+                ++at;
+            }
+        } else if (c == '[' && long_level(at) >= 0) {
+            at = skip_long(at, long_level(at));
+        } else if (is_word(c)) {
+            const bool after_member = at > 0 && (source[at - 1] == '.' || source[at - 1] == ':');
+            std::size_t stop = at;
+            while (stop < size && is_word(source[stop])) {
+                ++stop;
+            }
+            const std::string_view word = source.substr(at, stop - at);
+            if (!after_member) {
+                if (word == "function" || word == "if" || word == "do" || word == "repeat") {
+                    open.push_back(line);
+                } else if (word == "end" || word == "until") {
+                    close_block();
+                }
+            }
+            at = stop;
+        } else {
+            ++at;
+        }
+    }
+    return ends;
+}
+
 }  // namespace ide

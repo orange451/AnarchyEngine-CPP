@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace ide {
 
@@ -66,5 +67,7 @@ EnterResult enter_luau(std::string_view source, int caret, int tab_size, bool sp
 
 // Code point at `index`, or 0 when `index` is past the end.
 char32_t source_code_point(std::string_view source, int index);
+
+std::vector<int> fold_ranges_luau(std::string_view source);
 
 }  // namespace ide

@@ -177,7 +177,14 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
         define_styles(*area_);
         refresh_scroll_marks();
     });
+    area_->setFoldRanges([this](int paragraph) { return fold_end(paragraph); });
+    area_->setOnFoldsChanged([this] {
+        if (!restoring_folds_) {
+            remember_folds();
+        }
+    });
     area_->setOnPlainTextChange([this](const jadefx::PlainTextChange& change) {
+        folds_dirty_ = true;
         if (!loading_ && !mute_undo_ && undo_stack_ != nullptr) {
             if (!undo_stack_->record_change(change.position, change.removed, change.inserted)) {
                 // The stack lost track of the buffer. Restart it from what is on screen so
@@ -232,6 +239,44 @@ IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     // After the text, so it draws over it and is hit first.
     getChildren().add(find_bar_);
     load();
+}
+
+int IdeScriptEditor::fold_end(int paragraph) {
+    if (folds_dirty_ && area_) {
+        fold_ends_ = fold_ranges_luau(area_->getText());
+        folds_dirty_ = false;
+    }
+    return paragraph >= 0 && paragraph < static_cast<int>(fold_ends_.size())
+               ? fold_ends_[static_cast<std::size_t>(paragraph)]
+               : -1;
+}
+
+void IdeScriptEditor::setFoldMemory(std::function<std::vector<int>()> recall,
+                                    std::function<void(const std::vector<int>&)> remember) {
+    fold_recall_ = std::move(recall);
+    fold_remember_ = std::move(remember);
+    restore_folds();
+}
+
+void IdeScriptEditor::restore_folds() {
+    if (folds_restored_ || !loaded_ || !area_ || !fold_recall_) {
+        return;
+    }
+    folds_restored_ = true;
+    restoring_folds_ = true;
+    for (int header : fold_recall_()) {
+        const int end = fold_end(header);
+        if (end > header) {
+            area_->foldParagraphs(header, end);
+        }
+    }
+    restoring_folds_ = false;
+}
+
+void IdeScriptEditor::remember_folds() {
+    if (fold_remember_ && area_ && loaded_ && folds_restored_) {
+        fold_remember_(area_->foldedParagraphs());
+    }
 }
 
 void IdeScriptEditor::setTitleText(const std::string& name) {
@@ -747,6 +792,7 @@ void IdeScriptEditor::load() {
     paint();
     loaded_ = true;
     setTitleText(name);
+    restore_folds();
     if (pending_range_) {
         const PendingRange range = *pending_range_;
         pending_range_.reset();
@@ -1086,6 +1132,7 @@ void IdeScriptEditor::flush() {
     }
     dirty_ = false;
     push(area_->getText());
+    remember_folds();
 }
 
 void IdeScriptEditor::reapply() {

@@ -146,6 +146,9 @@ private:
     void cut(const std::vector<std::uint32_t>& ids);
     void copy(const std::vector<std::uint32_t>& ids);
     void duplicate(const std::vector<std::uint32_t>& ids);
+    std::vector<int> recall_folds(const std::string& guid);
+    void remember_folds(const std::string& guid, const std::vector<int>& lines);
+    void sync_fold_file();
     // Destroys each id and its descendants as one undo step.
     void delete_instances(std::vector<std::uint32_t> ids);
     void paste(std::uint32_t id);
@@ -496,6 +499,8 @@ private:
     std::unique_ptr<Clip> clip_;
     // The studio's built-in plugins, reloaded each time the place is made, opened, or rebuilt.
     PluginLoader plugins_;
+    std::unordered_map<std::string, std::vector<int>> script_folds_;
+    std::filesystem::path fold_file_;
     // The open project. Null until Open or Save As.
     std::unique_ptr<engine_core::Project> project_;
     // While there is no project, the place's resources folder: what imports

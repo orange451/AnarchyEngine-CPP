@@ -182,6 +182,30 @@ int RunScriptPairsTests() {
     Expect(ide::source_code_point("\xC3\xA9x", 1) == U'x', "code point after é");
     Expect(ide::source_code_point("ab", 2) == 0, "code point past the end");
 
+    {
+        const std::vector<int> ends = ide::fold_ranges_luau("local function f()\n  print(1)\n  print(2)\nend\n");
+        Expect(ends.size() == 5 && ends[0] == 2, "a function folds its body and keeps its end line");
+        Expect(ends.size() == 5 && ends[1] == -1 && ends[3] == -1, "body and end lines do not fold");
+    }
+    {
+        const std::vector<int> ends = ide::fold_ranges_luau("if a then b() end\nx()\n");
+        Expect(!ends.empty() && ends[0] == -1, "a one-line block does not fold");
+    }
+    {
+        const std::vector<int> ends = ide::fold_ranges_luau("function f()\nend\n");
+        Expect(!ends.empty() && ends[0] == -1, "an empty body does not fold");
+    }
+    {
+        const std::vector<int> ends =
+            ide::fold_ranges_luau("game.Changed:Connect(function()\n  local s = \"end\" -- end\n  if x then\n    y()\n  end\nend)\n");
+        Expect(ends.size() >= 5 && ends[0] == 4, "strings and comments hold no keywords");
+        Expect(ends.size() >= 5 && ends[2] == 3, "a nested if folds on its own");
+    }
+    {
+        const std::vector<int> ends = ide::fold_ranges_luau("for i = 1, 3 do\n  --[[ end\n  ]]\n  print(i)\nend\n");
+        Expect(!ends.empty() && ends[0] == 3, "a for loop folds past a long comment");
+    }
+
     ExpectPair("", 0, 0, U'"', ide::PairAction::Insert, '"', '"', "double quote opens a pair");
     ExpectPair("", 0, 0, U'\'', ide::PairAction::Insert, '\'', '\'', "quote opens a pair");
     ExpectPair("\"\"", 1, 1, U'"', ide::PairAction::Skip, 0, 0, "double quote steps over the closer");

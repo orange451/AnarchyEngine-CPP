@@ -30,8 +30,13 @@ namespace engine_core {
 // Shape            Enum.PhysicsShape  Box.
 // Size             Vector3   (1, 1, 1); each axis at least kMinSize. Box: its
 //                            extents. Sphere: diameter X. Capsule: diameter X,
-//                            height Y, along Y. Hull: the hull fits it.
-// Mesh             Mesh?     the Hull's points. Shown only for a Hull.
+//                            height Y, along Y. Hull and Custom: the mesh
+//                            fits it.
+// Mesh             Mesh?     a Hull's points, or a Custom's triangles: the
+//                            whole mesh, which collides only while Anchored
+//                            (Box3D gives a mesh contacts only on a static
+//                            body); unanchored, a Custom is a Hull of it.
+//                            Shown only for a Hull or a Custom.
 // GameObject       GameObject?  what the body moves. Nil: the parent, if it
 //                               is a GameObject.
 //
@@ -40,7 +45,7 @@ namespace engine_core {
 // the physics world itself go through store_simulated and are none of those.
 class PhysicsObject : public DataModel {
 public:
-    enum class Shape { Box = 0, Sphere = 1, Capsule = 2, Hull = 3 };
+    enum class Shape { Box = 0, Sphere = 1, Capsule = 2, Hull = 3, Custom = 4 };
 
     // What a write changed, for the physics world to push into the body.
     enum Dirty : std::uint32_t {
@@ -116,6 +121,8 @@ public:
     // GameObject to an earlier PhysicsObject, or its Hull fell back to a Box.
     bool warned_shared = false;
     bool warned_hull = false;
+    // Once, until it is reused: this unanchored Custom collides as a Hull.
+    bool warned_custom = false;
 
 protected:
     void on_reuse() override;

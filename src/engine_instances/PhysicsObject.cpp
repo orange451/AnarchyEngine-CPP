@@ -234,6 +234,7 @@ void PhysicsObject::on_reuse() {
     dirty_ = kDirtyAll;
     warned_shared = false;
     warned_hull = false;
+    warned_custom = false;
 }
 
 namespace {
@@ -381,7 +382,8 @@ ANARCHY_LUA_REGISTER(register_physics_object_lua) {
                            "[1,1,1]"),
         lua_shown_when(lua_saved_property("Mesh", "Mesh?", read_reference<&PhysicsObject::mesh>,
                                           write_reference<&PhysicsObject::set_mesh>, "null"),
-                       "Shape", static_cast<int>(PhysicsObject::Shape::Hull)),
+                       "Shape",
+                       {static_cast<int>(PhysicsObject::Shape::Hull), static_cast<int>(PhysicsObject::Shape::Custom)}),
         lua_saved_property("GameObject", "GameObject?", read_reference<&PhysicsObject::game_object>,
                            write_reference<&PhysicsObject::set_game_object>, "null"),
     };

@@ -348,6 +348,46 @@ TEST_CASE("P15 a PhysicsObject under a GameObject moves it until it is moved els
     REQUIRE(y_of(part.transform()) == left);
 }
 
+TEST_CASE("P16 an anchored Custom collides as its whole mesh; unanchored it is a Hull", "[physics]") {
+    PhysicsRig rig;
+    engine_core::Mesh& mesh = rig.game.create<engine_core::Mesh>();
+    // A floor with a step: only a whole-mesh collider has the gap between the two.
+    PhysicsObject& ground = rig.body(at(0.f, -0.5f, 0.f), Vec3{20.f, 2.f, 20.f}, true);
+    REQUIRE_FALSE(ground.set_shape(static_cast<int>(PhysicsObject::Shape::Custom)));
+    REQUIRE_FALSE(ground.set_mesh(instance_slot(mesh.id())));
+    PhysicsObject& on_low = rig.body(at(5.f, 4.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    PhysicsObject& on_high = rig.body(at(-5.f, 4.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    rig.play();
+    // Two slabs, x from -10 to 0 one unit higher than x from 0 to 10, so the
+    // whole surface fitted to Size runs from y -1.5 to 0.5 with its top step at
+    // x = 0: the high slab's top is 0.5, the low one's -0.5.
+    REQUIRE_FALSE(mesh.edit_geometry([](anarchy::amesh::Data& data) {
+        engine_core::add_box(data, Vec3{10.f, 2.f, 20.f}, Vec3{-5.f, 0.f, 0.f});
+        engine_core::add_box(data, Vec3{10.f, 1.f, 20.f}, Vec3{5.f, -0.5f, 0.f});
+    }));
+    rig.seconds(3.0);
+    INFO(y_of(on_low.transform()) << " " << y_of(on_high.transform()));
+    REQUIRE(near(y_of(on_high.transform()), 1.f, 0.05f));
+    REQUIRE(near(y_of(on_low.transform()), 0.f, 0.05f));
+    REQUIRE(rig.warnings.empty());
+
+    // Unanchored, it falls as a hull of the same mesh, and says so once.
+    PhysicsObject& loose = rig.body(at(30.f, 10.f, 0.f), Vec3{2.f, 2.f, 2.f}, false);
+    REQUIRE_FALSE(loose.set_shape(static_cast<int>(PhysicsObject::Shape::Custom)));
+    REQUIRE_FALSE(loose.set_mesh(instance_slot(mesh.id())));
+    rig.seconds(0.5);
+    REQUIRE(y_of(loose.transform()) < 10.f);
+    REQUIRE(rig.warnings.size() == 1);
+    REQUIRE(rig.warnings.front().find("only while Anchored") != std::string::npos);
+    // Anchoring it makes it its whole mesh, and holds it there.
+    loose.set_anchored(true);
+    rig.steps(1);
+    const float held = y_of(loose.transform());
+    rig.seconds(0.25);
+    REQUIRE(y_of(loose.transform()) == held);
+    REQUIRE(rig.warnings.size() == 1);
+}
+
 TEST_CASE("P13 PhysicsObject properties are checked, saved, and come back at Stop", "[physics]") {
     SimRole role;
     engine_core::Game game;
@@ -403,7 +443,9 @@ TEST_CASE("P13 PhysicsObject properties are checked, saved, and come back at Sto
     const engine_core::LuaField* mesh = engine_core::lua_class_find("PhysicsObject", "Mesh");
     REQUIRE(mesh != nullptr);
     REQUIRE(std::string(mesh->shown_when) == "Shape");
-    REQUIRE(mesh->shown_when_value == static_cast<int>(PhysicsObject::Shape::Hull));
+    REQUIRE(mesh->shown_for(static_cast<int>(PhysicsObject::Shape::Hull)));
+    REQUIRE(mesh->shown_for(static_cast<int>(PhysicsObject::Shape::Custom)));
+    REQUIRE_FALSE(mesh->shown_for(static_cast<int>(PhysicsObject::Shape::Box)));
 }
 
 TEST_CASE("P14 scripts set Shape by item, name, or value, and nothing else", "[physics]") {

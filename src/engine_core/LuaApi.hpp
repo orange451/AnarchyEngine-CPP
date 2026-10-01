@@ -3,6 +3,7 @@
 #include "types.hpp"
 
 #include <cstdint>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -86,10 +87,13 @@ struct LuaField {
     // of this type. Saved as the item's name. See lua_saved_enum.
     const EnumType* enum_type = nullptr;
     // Properties shows the field only while the sibling property shown_when
-    // (an enum property) holds the item shown_when_value. A display rule:
-    // the value is still saved, loaded, and scriptable. See lua_shown_when.
+    // (an enum property) holds an item whose value's bit is set in
+    // shown_when_items. A display rule: the value is still saved, loaded,
+    // and scriptable. See lua_shown_when.
     const char* shown_when = nullptr;
-    int shown_when_value = 0;
+    std::uint32_t shown_when_items = 0;
+
+    bool shown_for(int value) const { return value >= 0 && value < 32 && ((shown_when_items >> value) & 1u) != 0; }
 
     bool slider() const { return slider_max > slider_min; }
 };
@@ -137,10 +141,13 @@ inline LuaField lua_saved_enum(const char* name, const EnumType& type, LuaRead r
 }
 
 // field, shown in Properties only while the enum property `property` holds
-// the item whose value is `value`.
-inline LuaField lua_shown_when(LuaField field, const char* property, int value) {
+// one of the items whose values are `values`, each from 0 to 31.
+inline LuaField lua_shown_when(LuaField field, const char* property, std::initializer_list<int> values) {
     field.shown_when = property;
-    field.shown_when_value = value;
+    field.shown_when_items = 0;
+    for (int value : values) {
+        field.shown_when_items |= 1u << value;
+    }
     return field;
 }
 

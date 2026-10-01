@@ -84,6 +84,8 @@ struct PhysicsWorld::Impl {
         b3ShapeId shape = b3_nullShapeId;
         // The shape's volume, which turns Mass into a density.
         float volume = 1.f;
+        // An anchored Custom's triangles, which its shape points into.
+        b3MeshData* mesh = nullptr;
         // The GameObject it moves, or 0, and the Transform it last gave it.
         InstanceId driven = 0;
         Matrix4 driven_pose{};
@@ -103,6 +105,8 @@ struct PhysicsWorld::Impl {
     std::vector<InstanceId> gone;
     std::vector<b3Vec3> points;
     std::vector<Vec3> mesh_points;
+    std::vector<std::uint32_t> triangles;
+    std::vector<std::int32_t> indices;
 
     Impl() {
         bodies.reserve(1024);
@@ -119,6 +123,12 @@ struct PhysicsWorld::Impl {
             b3DestroyWorld(world);
         }
         world = b3_nullWorldId;
+        // The world took its shapes with it; the meshes they pointed into are ours.
+        for (auto& [id, record] : bodies) {
+            if (record.mesh != nullptr) {
+                b3DestroyMesh(record.mesh);
+            }
+        }
         bodies.clear();
     }
 
@@ -218,6 +228,7 @@ struct PhysicsWorld::Impl {
         if (found == bodies.end()) {
             return;
         }
+        drop_shape(found->second);
         if (b3Body_IsValid(found->second.body)) {
             b3DestroyBody(found->second.body);
         }
@@ -272,16 +283,13 @@ struct PhysicsWorld::Impl {
     // Puts the object's Shape on the body, replacing any shape it had, with
     // Friction, Bounciness, and a density that gives it its Mass.
     void make_shape(DataModel& game, PhysicsObject& object, Body& record) {
-        if (b3Shape_IsValid(record.shape)) {
-            b3DestroyShape(record.shape, false);
-        }
+        drop_shape(record);
         b3ShapeDef def = b3DefaultShapeDef();
         def.baseMaterial.friction = static_cast<float>(object.friction());
         def.baseMaterial.restitution = static_cast<float>(object.bounciness());
         def.userData = user_data(object.id());
         def.updateBodyMass = false;
         const Vec3 size = object.size();
-        record.shape = b3_nullShapeId;
         switch (object.shape()) {
         case PhysicsObject::Shape::Sphere: {
             const b3Sphere sphere{b3Vec3{0.f, 0.f, 0.f}, size.x * 0.5f};
@@ -299,6 +307,24 @@ struct PhysicsWorld::Impl {
             record.shape = b3CreateCapsuleShape(record.body, &def, &capsule);
             break;
         }
+        case PhysicsObject::Shape::Custom:
+            // Box3D gives a mesh contacts only on a static body, so an
+            // unanchored Custom is a hull of its mesh until it is anchored.
+            if (object.anchored()) {
+                if (b3MeshData* mesh = make_mesh(game, object)) {
+                    record.mesh = mesh;
+                    record.volume = size.x * size.y * size.z;
+                    def.density = density(object, record.volume);
+                    record.shape = b3CreateMeshShape(record.body, &def, mesh, b3Vec3{1.f, 1.f, 1.f});
+                }
+                break;
+            }
+            if (!object.warned_custom) {
+                object.warned_custom = true;
+                say("PhysicsObject " + game.name(object.id()) +
+                    ": a Custom collides as its whole mesh only while Anchored; until then it is a Hull of it");
+            }
+            [[fallthrough]];
         case PhysicsObject::Shape::Hull:
             if (b3HullData* hull = make_hull(game, object)) {
                 record.volume = b3ComputeHullMass(hull, 1.f).mass;
@@ -324,34 +350,42 @@ struct PhysicsWorld::Impl {
         return static_cast<float>(object.mass()) / std::max(volume, 1e-9f);
     }
 
-    // The Mesh's points, fitted to Size around the body's origin. Null, with
-    // one warning, when there is no hull to build.
-    b3HullData* make_hull(DataModel& game, PhysicsObject& object) {
+    // The Mesh's points into points, fitted to Size around the body's
+    // origin, and with triangles, its triangles into triangles. Returns why
+    // there are none, or an empty string.
+    std::string fitted_mesh(DataModel& game, const PhysicsObject& object, bool with_triangles) {
         const InstanceId mesh_id = object.mesh_id();
         const auto* mesh = mesh_id != 0 ? dynamic_cast<const Mesh*>(game.instance(mesh_id)) : nullptr;
-        std::string why;
         if (mesh == nullptr) {
-            why = "it has no Mesh";
-        } else if (std::optional<std::string> error = mesh->vertex_positions(mesh_points)) {
-            why = *error;
+            return "it has no Mesh";
         }
+        if (std::optional<std::string> error =
+                mesh->vertex_positions(mesh_points, with_triangles ? &triangles : nullptr)) {
+            return *error;
+        }
+        Vec3 low = mesh_points.front();
+        Vec3 high = low;
+        for (const Vec3& p : mesh_points) {
+            low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
+            high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
+        }
+        const Vec3 size = object.size();
+        const Vec3 center{(low.x + high.x) * 0.5f, (low.y + high.y) * 0.5f, (low.z + high.z) * 0.5f};
+        auto fit = [](float target, float extent) { return extent > 1e-6f ? target / extent : 1.f; };
+        const Vec3 scale{fit(size.x, high.x - low.x), fit(size.y, high.y - low.y), fit(size.z, high.z - low.z)};
+        points.clear();
+        for (const Vec3& p : mesh_points) {
+            points.push_back(b3Vec3{(p.x - center.x) * scale.x, (p.y - center.y) * scale.y, (p.z - center.z) * scale.z});
+        }
+        return {};
+    }
+
+    // A hull of the Mesh's points. Null, with one warning, when there is no
+    // hull to build.
+    b3HullData* make_hull(DataModel& game, PhysicsObject& object) {
+        std::string why = fitted_mesh(game, object, false);
         b3HullData* hull = nullptr;
         if (why.empty()) {
-            Vec3 low = mesh_points.front();
-            Vec3 high = low;
-            for (const Vec3& p : mesh_points) {
-                low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
-                high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
-            }
-            const Vec3 size = object.size();
-            const Vec3 center{(low.x + high.x) * 0.5f, (low.y + high.y) * 0.5f, (low.z + high.z) * 0.5f};
-            auto fit = [](float target, float extent) { return extent > 1e-6f ? target / extent : 1.f; };
-            const Vec3 scale{fit(size.x, high.x - low.x), fit(size.y, high.y - low.y), fit(size.z, high.z - low.z)};
-            points.clear();
-            for (const Vec3& p : mesh_points) {
-                points.push_back(
-                    b3Vec3{(p.x - center.x) * scale.x, (p.y - center.y) * scale.y, (p.z - center.z) * scale.z});
-            }
             const int count = static_cast<int>(points.size());
             hull = b3CreateHull(points.data(), count, kHullVertices);
             if (hull == nullptr) {
@@ -363,11 +397,60 @@ struct PhysicsWorld::Impl {
         }
         if (hull == nullptr && !object.warned_hull) {
             object.warned_hull = true;
-            say("PhysicsObject " + game.name(object.id()) + ": Hull fell back to Box (" + why + ")");
+            say("PhysicsObject " + game.name(object.id()) + ": " + shape_name(object) + " fell back to Box (" + why +
+                ")");
         } else if (hull != nullptr) {
             object.warned_hull = false;
         }
         return hull;
+    }
+
+    // The whole Mesh as triangles, for an anchored Custom. Box3D keeps a
+    // pointer to it, so the body record owns it. Null, with one warning, when
+    // there is none.
+    b3MeshData* make_mesh(DataModel& game, PhysicsObject& object) {
+        std::string why = fitted_mesh(game, object, true);
+        b3MeshData* mesh = nullptr;
+        if (why.empty()) {
+            indices.assign(triangles.begin(), triangles.end());
+            b3MeshDef def{};
+            def.vertices = points.data();
+            def.indices = indices.data();
+            def.vertexCount = static_cast<int>(points.size());
+            def.triangleCount = static_cast<int>(indices.size() / 3);
+            // A mesh's faces each have their own corners; welding joins them
+            // so edges between triangles are known.
+            def.weldVertices = true;
+            def.weldTolerance = 1e-4f;
+            def.identifyEdges = true;
+            mesh = b3CreateMesh(&def, nullptr, 0);
+            if (mesh == nullptr) {
+                why = "Box3D could not build a mesh from its triangles";
+            }
+        }
+        if (mesh == nullptr && !object.warned_hull) {
+            object.warned_hull = true;
+            say("PhysicsObject " + game.name(object.id()) + ": Custom fell back to Box (" + why + ")");
+        } else if (mesh != nullptr) {
+            object.warned_hull = false;
+        }
+        return mesh;
+    }
+
+    static std::string shape_name(const PhysicsObject& object) {
+        return object.shape() == PhysicsObject::Shape::Custom ? "Custom" : "Hull";
+    }
+
+    // Destroys the record's shape, and the mesh it held, if any.
+    static void drop_shape(Body& record) {
+        if (b3Shape_IsValid(record.shape)) {
+            b3DestroyShape(record.shape, false);
+        }
+        record.shape = b3_nullShapeId;
+        if (record.mesh != nullptr) {
+            b3DestroyMesh(record.mesh);
+            record.mesh = nullptr;
+        }
     }
 
     // What writes changed since the last step, into the body.
@@ -376,10 +459,17 @@ struct PhysicsWorld::Impl {
         if (dirty == 0) {
             return;
         }
+        // Anchoring a Custom turns its hull into its whole mesh, and back. The
+        // old shape goes first, so a mesh is never on a dynamic body.
+        const bool custom_type = (dirty & PhysicsObject::kDirtyType) != 0 &&
+                                 object.shape() == PhysicsObject::Shape::Custom;
+        if (custom_type) {
+            drop_shape(record);
+        }
         if ((dirty & PhysicsObject::kDirtyType) != 0) {
             b3Body_SetType(record.body, object.anchored() ? b3_staticBody : b3_dynamicBody);
         }
-        if ((dirty & PhysicsObject::kDirtyShape) != 0) {
+        if ((dirty & PhysicsObject::kDirtyShape) != 0 || custom_type) {
             // A new shape takes the current Friction, Bounciness, and Mass too.
             make_shape(game, object, record);
         } else {

@@ -166,6 +166,7 @@ const EnumEntry kPhysicsShapes[] = {
     {"Sphere", 1},
     {"Capsule", 2},
     {"Hull", 3},
+    {"Custom", 4},
 };
 
 template <std::size_t N>

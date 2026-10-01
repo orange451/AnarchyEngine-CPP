@@ -1293,7 +1293,7 @@ void TestEnumRowAndShownWhen() {
     auto* choice = dynamic_cast<jadefx::ComboBox*>(rig.panel.editor("Shape"));
     Expect(choice != nullptr, "an Enum row is a dropdown");
     Expect(choice != nullptr && choice->getItems().items() ==
-                                    std::vector<std::string>{"Box", "Sphere", "Capsule", "Hull"},
+                                    std::vector<std::string>{"Box", "Sphere", "Capsule", "Hull", "Custom"},
            "listing the items in value order");
     Expect(choice != nullptr && choice->getSelectionIndex() == 0, "Box is picked");
     Expect(!rig.hasRow("Mesh"), "a Box has no Mesh row");
@@ -1310,6 +1310,15 @@ void TestEnumRowAndShownWhen() {
     Expect(rig.hasRow("Mesh"), "a Hull shows its Mesh row");
     choice = dynamic_cast<jadefx::ComboBox*>(rig.panel.editor("Shape"));
     Expect(choice != nullptr && choice->getSelectionIndex() == 3, "the dropdown follows the write");
+
+    edit.value.number = 4;
+    ide::apply_edit(rig.game, {body}, edit);
+    rig.frame();
+    rig.frame();
+    Expect(rig.hasRow("Mesh"), "a Custom shows its Mesh row too");
+    edit.value.number = 3;
+    ide::apply_edit(rig.game, {body}, edit);
+    rig.frame();
 
     edit.value.number = 9;
     const ide::EditResult refused = ide::apply_edit(rig.game, {body}, edit);

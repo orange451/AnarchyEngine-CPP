@@ -69,7 +69,7 @@ bool rule_met(DataModel& world, DataModel& object, const LuaField& field) {
     if (gate == nullptr || gate->read == nullptr || !gate->read(world, object, slot)) {
         return false;
     }
-    return slot.kind == LuaSlot::Kind::Enum && static_cast<int>(slot.number) == field.shown_when_value;
+    return slot.kind == LuaSlot::Kind::Enum && field.shown_for(static_cast<int>(slot.number));
 }
 
 // Degrees to a thousandth, so float noise in

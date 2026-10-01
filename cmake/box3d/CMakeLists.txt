@@ -21,4 +21,11 @@ else()
         target_link_libraries(box3d PUBLIC m)
     endif()
 endif()
+# MSVC 19.23 at /O2 miscompiles mesh.c: copying a 12-byte b3Vec3 into a
+# b3MeshNode writes 16 bytes, over the bitfields after it, so the BVH a
+# triangle mesh builds is corrupt and its first walk crashes. Unoptimized,
+# it builds as written. Only the Custom shape uses meshes.
+if(MSVC AND CMAKE_C_COMPILER_VERSION VERSION_LESS 19.28)
+    set_source_files_properties("${BOX3D_SOURCE_DIR}/src/mesh.c" PROPERTIES COMPILE_OPTIONS "/Od")
+endif()
 add_library(box3d::box3d ALIAS box3d)

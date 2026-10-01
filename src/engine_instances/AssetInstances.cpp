@@ -165,8 +165,11 @@ Mesh::SessionGeometry Mesh::session_geometry() const {
     return session_;
 }
 
-std::optional<std::string> Mesh::vertex_positions(std::vector<Vec3>& out) const {
+std::optional<std::string> Mesh::vertex_positions(std::vector<Vec3>& out, std::vector<std::uint32_t>* triangles) const {
     out.clear();
+    if (triangles != nullptr) {
+        triangles->clear();
+    }
     anarchy::amesh::Data file;
     const anarchy::amesh::Data* data = nullptr;
     if (const SessionGeometry current = session_geometry(); current.data) {
@@ -188,6 +191,26 @@ std::optional<std::string> Mesh::vertex_positions(std::vector<Vec3>& out) const 
     }
     if (out.empty()) {
         return path() + " has no vertices";
+    }
+    if (triangles != nullptr) {
+        // The finest LOD only; the rest are the same surface again, coarser.
+        std::size_t begin = 0;
+        std::size_t count = data->indices.size() / 3;
+        if (!data->lods.empty()) {
+            begin = std::min<std::size_t>(data->lods.front().tri_begin, count);
+            count = std::min<std::size_t>(data->lods.front().tri_count, count - begin);
+        }
+        triangles->reserve(count * 3);
+        for (std::size_t index = begin * 3; index < (begin + count) * 3; ++index) {
+            if (data->indices[index] >= out.size()) {
+                triangles->clear();
+                return path() + " has a triangle past its last vertex";
+            }
+            triangles->push_back(data->indices[index]);
+        }
+        if (triangles->empty()) {
+            return path() + " has no triangles";
+        }
     }
     return std::nullopt;
 }

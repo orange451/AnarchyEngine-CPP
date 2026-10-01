@@ -85,8 +85,11 @@ public:
     SessionGeometry session_geometry() const;
 
     // Every vertex position of what the Mesh draws now: this session's
-    // geometry while playing, else its AMESH file. Returns why there are none.
-    std::optional<std::string> vertex_positions(std::vector<Vec3>& out) const;
+    // geometry while playing, else its AMESH file. With triangles, also its
+    // finest LOD's triangles, three indices into out each. Returns why there
+    // are none.
+    std::optional<std::string> vertex_positions(std::vector<Vec3>& out,
+                                                std::vector<std::uint32_t>* triangles = nullptr) const;
 
 protected:
     void on_reuse() override;

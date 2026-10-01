@@ -29,7 +29,7 @@ const EnumType& key_code_enum();
 const EnumType& user_input_type_enum();
 const EnumType& user_input_state_enum();
 const EnumType& mouse_behavior_enum();
-// Box 0, Sphere 1, Capsule 2, Hull 3.
+// Box 0, Sphere 1, Capsule 2, Hull 3, Custom 4.
 const EnumType& physics_shape_enum();
 
 // Every type the Enum global holds, for script analysis to declare.

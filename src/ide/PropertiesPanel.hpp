@@ -45,13 +45,17 @@ using PropertiesRun = std::function<void(std::function<void(engine_core::DataMod
 // stay. Clicking the arrow or the name folds the row, and it stays folded for
 // the session; Tab passes over a folded row.
 //
-// A Color3 row is a color picker. Closing its chooser on a new color writes
-// it, so the whole pick is one undo step.
+// A Color3 row is a color picker. While its chooser is open, each color shows
+// on the instances at once, but the history does not hear of it. Closing the
+// chooser on a new color records the whole pick as one undo step, from the
+// color before it opened. Escape, or closing on the color it opened with, puts
+// that color back and records nothing.
 //
 // A number whose property registers a range (lua_slider) is a slider with
 // the field beside it. Dragging moves the field's number, rounded to a step
-// that suits the range, and letting go writes it, so a drag is one undo step;
-// an arrow key writes at once. The field takes any number, past either end;
+// that suits the range, and the instances follow as it moves. Letting go
+// records the drag as one undo step from the value before it; an arrow key
+// writes at once. The field takes any number, past either end;
 // the thumb then rests at that end.
 //
 // A reference row shows the instance's Name, with its path as a tooltip.

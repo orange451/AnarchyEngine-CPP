@@ -196,21 +196,32 @@ private:
     bool select_on_release_ = false;
 };
 
-// A Color3 value. on_pick runs when the chooser closes on a pick, so a drag
-// through the chooser is one undo step. Escape closes without one. A mixed row
-// draws no color, as a mixed field shows no text, and any pick in it counts,
-// even of the color it keeps out of sight.
+// A Color3 value. on_live runs at each change while the chooser is open, so
+// the instances follow the drag. on_done runs once when it closes after any
+// change: with true on a pick, so the drag is one undo step, and with false
+// when Escape closed it or it closed on the color it opened with, so the
+// instances go back. A mixed row draws no color, as a mixed field shows no
+// text, and any pick in it counts, even of the color it keeps out of sight.
 class PropertyColor : public jadefx::ColorPicker {
 public:
     PropertyColor() {
         getClassList().add("properties-color");
         getColorChooser().setShowAlpha(false);
         // While the chooser is open, only the chooser changes the value.
-        setOnValueChanged([this] { touched_ = touched_ || isShowing(); });
+        setOnValueChanged([this] {
+            if (!isShowing()) {
+                return;
+            }
+            touched_ = true;
+            if (on_live) {
+                on_live();
+            }
+        });
     }
 
     bool mixed = false;
-    std::function<void()> on_pick;
+    std::function<void()> on_live;
+    std::function<void(bool)> on_done;
 
 protected:
     void popupShowing() override {
@@ -231,10 +242,11 @@ protected:
 
     void popupHidden() override {
         jadefx::ColorPicker::popupHidden();
+        const bool touched = touched_;
         const bool picked = touched_ && !escaped_ && (mixed || getValue().toHex() != before_);
         touched_ = false;
-        if (picked && on_pick) {
-            on_pick();
+        if (touched && on_done) {
+            on_done(picked);
         }
     }
 
@@ -252,10 +264,12 @@ private:
 };
 
 // The slider of a Number row with a range. on_move runs as the user moves it,
-// so the row's field can follow, and on_commit once per gesture: when the
-// button comes up after a press that moved it, or at each key that moves it.
-// So a drag is one undo step. A value from the world, shown through show,
-// is neither. The thumb stops at the ends; the field beside it does not.
+// so the row's field and, while the button is held, the instances follow.
+// on_done runs when the button comes up after a press: true when it moved, so
+// the drag is one undo step, and false when it came back to where it began.
+// on_commit runs at each key that moves it. A value from the world, shown
+// through show, is none of these. The thumb stops at the ends; the field
+// beside it does not.
 class PropertySlider : public jadefx::Slider {
 public:
     PropertySlider(double min, double max) : jadefx::Slider(min, max, min) {
@@ -269,6 +283,7 @@ public:
     }
 
     std::function<void()> on_move;
+    std::function<void(bool)> on_done;
     std::function<void()> on_commit;
 
     // Shows a value from the world, clamped to the track.
@@ -292,7 +307,9 @@ protected:
         jadefx::Slider::handleMouseReleased(event);
         if (held_) {
             held_ = false;
-            finish(start_);
+            if (on_done) {
+                on_done(getValue() != start_);
+            }
         }
     }
 
@@ -480,6 +497,12 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     std::shared_ptr<jadefx::Label> status_label;
     std::vector<std::shared_ptr<RowView>> rows;
     PropertySheet sheet;
+    // The drag that shows on the instances as it goes, or null. Only the
+    // writes posted to the simulation thread read or change what it holds;
+    // live_ids and live_edit, its instances and its last value, are this thread's.
+    std::shared_ptr<LiveEdit> live;
+    std::vector<InstanceId> live_ids;
+    PropertyEdit live_edit;
     bool force = true;
     bool polling = false;
     // Set by the world when a property of a shown instance changes. The sheet
@@ -610,6 +633,10 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             for (const auto& view : rows) {
                 finish_typing(*view);
             }
+            // A drag still under way, as a held slider, keeps its value for the instances it was dragged on.
+            if (live) {
+                finish_live(live_ids, live_edit, true);
+            }
         }
         if (!same_layout(next, sheet) || rows.size() != next.rows.size()) {
             rebuild_rows(next);
@@ -727,6 +754,13 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                         self->follow_slider(*row_view);
                     }
                 };
+                view->slider->on_done = [weak_self, weak_view](bool moved) {
+                    const auto self = weak_self.lock();
+                    const auto row_view = weak_view.lock();
+                    if (self && row_view) {
+                        self->finish_slider(*row_view, moved);
+                    }
+                };
                 view->slider->on_commit = [weak_self, weak_view]() {
                     const auto self = weak_self.lock();
                     const auto row_view = weak_view.lock();
@@ -786,11 +820,18 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         case PropertyKind::Color3:
             view->color = jadefx::make<PropertyColor>();
             view->color->setDisable(!row.writable);
-            view->color->on_pick = [weak_self, weak_view]() {
+            view->color->on_live = [weak_self, weak_view]() {
                 const auto self = weak_self.lock();
                 const auto row_view = weak_view.lock();
                 if (self && row_view) {
-                    self->commit_color(*row_view);
+                    self->live_color(*row_view);
+                }
+            };
+            view->color->on_done = [weak_self, weak_view](bool picked) {
+                const auto self = weak_self.lock();
+                const auto row_view = weak_view.lock();
+                if (self && row_view) {
+                    self->finish_color(*row_view, picked);
                 }
             };
             pane->getChildren().add(view->color);
@@ -962,23 +1003,72 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
 
     // ---- Writing ---------------------------------------------------------
 
-    void submit(const std::vector<InstanceId>& ids, const PropertyEdit& edit) {
-        if (world == nullptr || ids.empty()) {
-            return;
-        }
-        status.clear();
-        auto result = std::make_shared<PendingEdit>();
-        pending.push_back(result);
-        auto write = [ids, edit, result](engine_core::DataModel& game) {
-            result->result = apply_edit(game, ids, edit);
-            result->done.store(true, std::memory_order_release);
-        };
+    // Runs write where the world may be written, and reads the rows again after.
+    void post(std::function<void(engine_core::DataModel&)> write) {
         if (run) {
             run(std::move(write));
         } else {
             write(*world);
         }
         force = true;
+    }
+
+    // Runs edit_fn there, keeping its result so a refusal shows under the rows.
+    void post_recorded(std::function<EditResult(engine_core::DataModel&)> edit_fn) {
+        status.clear();
+        auto result = std::make_shared<PendingEdit>();
+        pending.push_back(result);
+        post([edit_fn = std::move(edit_fn), result](engine_core::DataModel& game) {
+            result->result = edit_fn(game);
+            result->done.store(true, std::memory_order_release);
+        });
+    }
+
+    void submit(const std::vector<InstanceId>& ids, const PropertyEdit& edit) {
+        if (world == nullptr || ids.empty()) {
+            return;
+        }
+        post_recorded([ids, edit](engine_core::DataModel& game) { return apply_edit(game, ids, edit); });
+    }
+
+    // One step of a drag: the instances show edit now, and the history does
+    // not hear of it until finish_live.
+    void preview(const std::vector<InstanceId>& ids, const PropertyEdit& edit) {
+        if (world == nullptr || ids.empty()) {
+            return;
+        }
+        // A drag whose end never came, as when its row went away, keeps its last value.
+        if (live && (live_edit.property != edit.property || live_ids != ids)) {
+            finish_live(live_ids, live_edit, true);
+        }
+        if (!live) {
+            live = std::make_shared<LiveEdit>();
+            live_ids = ids;
+        }
+        live_edit = edit;
+        post([ids, edit, target = live](engine_core::DataModel& game) { preview_edit(game, ids, edit, *target); });
+    }
+
+    // The end of a drag. commit records edit as one undo step from the value
+    // before the drag; otherwise the instances go back to that value. With no
+    // drag under way, a commit is an ordinary edit.
+    void finish_live(const std::vector<InstanceId>& ids, const PropertyEdit& edit, bool commit) {
+        if (!live) {
+            if (commit) {
+                submit(ids, edit);
+            }
+            return;
+        }
+        std::shared_ptr<LiveEdit> target = std::move(live);
+        live.reset();
+        const std::vector<InstanceId> drag_ids = std::move(live_ids);
+        live_ids.clear();
+        if (world == nullptr) {
+            return;
+        }
+        post_recorded([drag_ids, edit, target, commit](engine_core::DataModel& game) {
+            return finish_live_edit(game, drag_ids, edit, *target, commit);
+        });
     }
 
     int axis_of(const RowView& view, const PropertyField& field) const {
@@ -1073,25 +1163,64 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         submit(view.ids, edit);
     }
 
-    void commit_color(RowView& view) {
-        if (!view.row.writable) {
-            return;
-        }
+    PropertyEdit color_edit(const RowView& view) const {
         PropertyEdit edit;
         edit.property = view.row.name;
         edit.kind = PropertyKind::Color3;
         const jadefx::Color picked = view.color->getValue();
         edit.value.color = engine_core::Color3{picked.r, picked.g, picked.b};
-        view.color->mixed = false;
-        submit(view.ids, edit);
+        return edit;
+    }
+
+    // The chooser moved: the instances take its color now.
+    void live_color(RowView& view) {
+        if (view.row.writable) {
+            preview(view.ids, color_edit(view));
+        }
+    }
+
+    // The chooser closed: a pick is one undo step; anything else puts the color back.
+    void finish_color(RowView& view, bool picked) {
+        if (!view.row.writable) {
+            return;
+        }
+        if (picked) {
+            view.color->mixed = false;
+        }
+        finish_live(view.ids, color_edit(view), picked);
     }
 
     double slider_value(const RowView& view) const {
         return slider_round(view.slider->getValue(), view.row.slider_min, view.row.slider_max);
     }
 
+    PropertyEdit slider_edit(const RowView& view) const {
+        PropertyEdit edit;
+        edit.property = view.row.name;
+        edit.kind = PropertyKind::Number;
+        edit.value.number = slider_value(view);
+        return edit;
+    }
+
     // The field shows where the thumb is. Anything typed in it gives way.
-    void follow_slider(RowView& view) { view.field->show(format_number(slider_value(view))); }
+    // While the button is held, the instances take the value too.
+    void follow_slider(RowView& view) {
+        view.field->show(format_number(slider_value(view)));
+        if (view.slider->held() && view.row.writable) {
+            preview(view.ids, slider_edit(view));
+        }
+    }
+
+    // The button came up: a move is one undo step, and a press that came back
+    // to where it began puts the value back.
+    void finish_slider(RowView& view, bool moved) {
+        if (!view.row.writable) {
+            return;
+        }
+        const PropertyEdit edit = slider_edit(view);
+        view.field->show(format_number(edit.value.number));
+        finish_live(view.ids, edit, moved);
+    }
 
     void commit_slider(RowView& view) {
         if (!view.row.writable) {

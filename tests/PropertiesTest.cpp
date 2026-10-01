@@ -736,28 +736,43 @@ void TestColorPicker() {
     rig.frame();
     Expect(picker->getValue().toHex() == "#0000ff", "a color set elsewhere shows at once");
 
-    // Escape puts the color back and writes nothing.
+    // Escape puts the color back and records nothing.
     rig.click(picker);
     rig.frame();
     Expect(picker->isShowing(), "a click opens the chooser");
     Pick(*picker, 0, 255, 0);
+    rig.frame();
+    Expect(SameColor(a->tint(), 0.f, 1.f, 0.f), "the instance takes the color while the chooser is open");
     rig.key(jadefx::Key::Escape);
     rig.frame();
-    Expect(!picker->isShowing() && SameColor(a->tint(), 0.f, 0.f, 1.f), "Escape writes nothing");
+    Expect(!picker->isShowing() && SameColor(a->tint(), 0.f, 0.f, 1.f), "Escape puts the color back");
     Expect(picker->getValue().toHex() == "#0000ff", "and shows the color again");
+    Expect(rig.undoDepth() == 0, "and records nothing");
 
-    // Enter keeps the new color, as one undo step.
+    // The instance follows every color the drag passes through; the history hears of none of them.
     rig.click(picker);
     rig.frame();
     Expect(picker->isShowing(), "a click opens it again");
+    Pick(*picker, 255, 0, 255);
+    rig.frame();
+    Expect(SameColor(a->tint(), 1.f, 0.f, 1.f), "the instance follows the drag");
     Pick(*picker, 0, 255, 0);
     rig.frame();
     Expect(picker->getValue().toHex() == "#00ff00", "the picker follows the chooser");
-    Expect(SameColor(a->tint(), 0.f, 0.f, 1.f), "the color is not written while the chooser is open");
+    Expect(SameColor(a->tint(), 0.f, 1.f, 0.f), "and so does the instance");
+    Expect(rig.undoDepth() == 0, "nothing is recorded while the chooser is open");
+    // Enter keeps the new color, as one undo step from the color before the chooser opened.
     rig.key(jadefx::Key::Enter);
     rig.frame();
-    Expect(SameColor(a->tint(), 0.f, 1.f, 0.f), "closing on a new color writes it");
+    Expect(SameColor(a->tint(), 0.f, 1.f, 0.f), "closing on a new color keeps it");
     Expect(rig.undoDepth() == 1, "one waypoint");
+    rig.game.history().undo();
+    rig.frame();
+    Expect(SameColor(a->tint(), 0.f, 0.f, 1.f), "undo goes back to the color before the chooser opened");
+    rig.game.history().redo();
+    rig.frame();
+    Expect(SameColor(a->tint(), 0.f, 1.f, 0.f), "and redo to the pick");
+    Expect(picker->getValue().toHex() == "#00ff00", "which the picker shows");
 
     // Two instances that disagree are mixed, and a pick writes both.
     rig.select({first, second});
@@ -796,6 +811,22 @@ void TestColorPicker() {
     rig.frame();
     rig.clickAway();
     Expect(!picker->isShowing() && rig.mixed("Tint") && rig.undoDepth() == 0, "a look inside writes nothing");
+
+    // A drag over a mixed row shows on both; Escape gives each its own color back.
+    const engine_core::ColorRgb own_a = a->tint();
+    rig.click(picker);
+    rig.frame();
+    // Neither instance holds blue, so the pick is a change for both.
+    Pick(*picker, 0, 0, 255);
+    rig.frame();
+    Expect(!SameColor(own_a, 0.f, 0.f, 1.f), "the first instance did not already hold blue");
+    Expect(SameColor(a->tint(), 0.f, 0.f, 1.f) && SameColor(b->tint(), 0.f, 0.f, 1.f),
+           "a drag over a mixed row shows on every instance");
+    rig.key(jadefx::Key::Escape);
+    rig.frame();
+    Expect(SameColor(a->tint(), own_a.r, own_a.g, own_a.b) && SameColor(b->tint(), 1.f, 1.f, 1.f),
+           "Escape gives each its own color back");
+    Expect(rig.mixed("Tint") && rig.undoDepth() == 0, "still mixed, and nothing recorded");
 
     // A chooser open when the selection changes closes, and the color lands on what was selected.
     rig.click(picker);
@@ -1165,11 +1196,53 @@ void TestSliderRows() {
     rig.frame();
     Expect(rig.undoDepth() == 2, "a click where the thumb is writes nothing");
 
+    // A drag shows on the instances as it goes, and is one undo step from where it began.
+    if (slider != nullptr) {
+        const double before = Reflectivity(rig.game, wall);
+        const double y = slider->getAbsoluteY() + slider->getHeight() * 0.5;
+        const double left = slider->getAbsoluteX();
+        const double width = slider->getWidth();
+        rig.scene->noteButton(0, true, left + width * 0.5, y);
+        rig.scene->noteMove(left + width * 0.8, y);
+        rig.frame();
+        const double dragged = Reflectivity(rig.game, wall);
+        Expect(dragged > before + 0.1 && Reflectivity(rig.game, floor) == dragged,
+               "the instances follow the thumb while it is held");
+        Expect(rig.undoDepth() == 2, "and nothing is recorded yet");
+        rig.scene->noteMove(left + width * 0.2, y);
+        rig.frame();
+        const double released = Reflectivity(rig.game, wall);
+        Expect(released < before - 0.1, "they follow it back the other way");
+        rig.scene->noteButton(0, false, left + width * 0.2, y);
+        rig.frame();
+        Expect(Reflectivity(rig.game, wall) == released, "letting go keeps where it stopped");
+        Expect(rig.undoDepth() == 3, "as one undo step");
+        rig.game.history().undo();
+        rig.frame();
+        Expect(Reflectivity(rig.game, wall) == before && Reflectivity(rig.game, floor) == before,
+               "undo goes back to where the drag began");
+        rig.game.history().redo();
+        rig.frame();
+        Expect(Reflectivity(rig.game, wall) == released, "and redo to where it stopped");
+
+        // A drag that comes back to where it began records nothing.
+        rig.scene->noteButton(0, true, left + width * 0.2, y);
+        rig.scene->noteMove(left + width * 0.7, y);
+        rig.frame();
+        rig.scene->noteMove(left + width * 0.2, y);
+        rig.scene->noteButton(0, false, left + width * 0.2, y);
+        rig.frame();
+        Expect(Reflectivity(rig.game, wall) == released && rig.undoDepth() == 3,
+               "a drag back to where it began writes nothing");
+    }
+
     // An arrow key moves it a twentieth and writes at once.
+    const double keyed = Reflectivity(rig.game, wall);
+    const int depth = rig.undoDepth();
     rig.key(jadefx::Key::Right);
     rig.frame();
-    Expect(std::fabs(Reflectivity(rig.game, wall) - (clicked + 0.05)) < 1e-9, "Right moves up a twentieth");
-    Expect(rig.undoDepth() == 3, "each key is its own step");
+    Expect(std::fabs(Reflectivity(rig.game, wall) - (keyed + 0.05)) < 1e-9, "Right moves up a twentieth");
+    Expect(rig.undoDepth() == depth + 1, "each key is its own step");
 
     // Mixed values rest the thumb at the start and blank the field.
     auto* floor_material = dynamic_cast<engine_core::Material*>(rig.game.instance(floor));

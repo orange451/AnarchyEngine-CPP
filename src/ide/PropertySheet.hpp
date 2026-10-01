@@ -1,9 +1,11 @@
 #pragma once
 
 #include "DataModel.hpp"
+#include "LuaApi.hpp"
 
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ide {
@@ -128,6 +130,29 @@ struct EditResult {
 // rejects the whole edit, as does an edit during undo or redo.
 EditResult apply_edit(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids,
                       const PropertyEdit& edit);
+
+// A drag through an editor, such as a color chooser or a slider, that shows
+// on the instances as it goes. before is what each instance held when the
+// drag's first write reached it, as its property's read gave it.
+struct LiveEdit {
+    std::string property;
+    std::vector<std::pair<engine_core::InstanceId, engine_core::LuaSlot>> before;
+};
+
+// Writes the edit to every id that has the property, as apply_edit does, but
+// records no undo: the instance shows it at once, and the history does not
+// hear of it. The first write of the drag fills live.before. Runs on the
+// simulation thread.
+EditResult preview_edit(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids,
+                        const PropertyEdit& edit, LiveEdit& live);
+
+// Ends the drag. Every instance gets its value from before the drag back,
+// unrecorded. Then, when commit is true, the edit is written as apply_edit
+// writes it, so the whole drag is one undo step from the value before it;
+// when false, nothing is recorded and the drag is undone. live is emptied.
+// Runs on the simulation thread.
+EditResult finish_live_edit(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids,
+                            const PropertyEdit& edit, LiveEdit& live, bool commit);
 
 // The Name of a Ref value, and the Names from the root down. The caller
 // holds the DataModel lock.

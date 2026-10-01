@@ -407,7 +407,63 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
     return sheet;
 }
 
+namespace {
+
+// Turns history off for a scope, so writes in it record nothing, and puts it back as it was.
+class HistoryOff {
+public:
+    explicit HistoryOff(engine_core::ChangeHistoryService& history) : history_(history), was_(history.enabled()) {
+        history_.set_enabled(false);
+    }
+    ~HistoryOff() { history_.set_enabled(was_); }
+    HistoryOff(const HistoryOff&) = delete;
+    HistoryOff& operator=(const HistoryOff&) = delete;
+
+private:
+    engine_core::ChangeHistoryService& history_;
+    bool was_;
+};
+
+// apply_edit's work. record false writes with history off, as a live drag
+// does; live, when given and still empty, takes each target's value first.
+EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, const PropertyEdit& edit, bool record,
+                      LiveEdit* live);
+
+}  // namespace
+
 EditResult apply_edit(DataModel& world, const std::vector<InstanceId>& ids, const PropertyEdit& edit) {
+    return write_edit(world, ids, edit, true, nullptr);
+}
+
+EditResult preview_edit(DataModel& world, const std::vector<InstanceId>& ids, const PropertyEdit& edit,
+                        LiveEdit& live) {
+    return write_edit(world, ids, edit, false, &live);
+}
+
+EditResult finish_live_edit(DataModel& world, const std::vector<InstanceId>& ids, const PropertyEdit& edit,
+                            LiveEdit& live, bool commit) {
+    {
+        // Back to where the drag began, so the commit below records from there.
+        HistoryOff off(world.history());
+        for (auto& [id, slot] : live.before) {
+            DataModel* object = world.alive(id) ? object_of(world, id) : nullptr;
+            const LuaField* field =
+                object != nullptr ? engine_core::lua_class_find(object->class_name(), live.property) : nullptr;
+            if (field != nullptr && field->write != nullptr) {
+                LuaSlot copy = slot;
+                field->write(world, *object, copy);
+            }
+        }
+    }
+    live.before.clear();
+    live.property.clear();
+    return commit ? apply_edit(world, ids, edit) : EditResult{};
+}
+
+namespace {
+
+EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, const PropertyEdit& edit, bool record,
+                      LiveEdit* live) {
     EditResult result;
     engine_core::ChangeHistoryService& history = world.history();
     if (history.applying_undo_redo()) {
@@ -479,9 +535,26 @@ EditResult apply_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
         }
     }
 
+    // A drag's first write keeps what each instance held, so its end can put it back.
+    if (live != nullptr && live->before.empty()) {
+        live->property = edit.property;
+        for (const Target& target : targets) {
+            LuaSlot current;
+            if (target.field.read != nullptr && target.field.read(world, *target.object, current)) {
+                live->before.emplace_back(target.object->id(), std::move(current));
+            }
+        }
+    }
+
     // A gesture left open by an earlier edit is its own waypoint, not part of this one.
-    history.end_gesture();
-    const std::optional<std::string> recording = history.try_begin_recording("Set " + edit.property);
+    std::optional<std::string> recording;
+    std::optional<HistoryOff> off;
+    if (record) {
+        history.end_gesture();
+        recording = history.try_begin_recording("Set " + edit.property);
+    } else {
+        off.emplace(history);
+    }
     for (Target& target : targets) {
         LuaSlot slot;
         switch (edit.kind) {
@@ -561,6 +634,8 @@ EditResult apply_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
     }
     return result;
 }
+
+}  // namespace
 
 engine_core::Vec3 transform_orientation(const engine_core::Matrix4& transform) {
     constexpr double kDegrees = 180.0 / 3.14159265358979323846;

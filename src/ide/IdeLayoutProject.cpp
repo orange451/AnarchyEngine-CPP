@@ -386,6 +386,10 @@ void IdeLayout::import_files(const std::vector<std::string>& files, engine_core:
                                  }),
                   alerts_.end());
     alert->show(*scene_);
+    // A drop comes from another program, over this window, which may be behind it and hide the question.
+    if (mainStage_ != nullptr) {
+        mainStage_->toFront();
+    }
     // Stable names for the two answers, so a test can find them.
     if (jadefx::Button* button = alert->lookupButton(import)) {
         button->setElementId("import-files-import");

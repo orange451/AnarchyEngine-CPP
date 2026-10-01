@@ -1,5 +1,6 @@
 #include "Camera.hpp"
 #include "amesh.hpp"
+#include "ide/MaterialBall.hpp"
 #include "runner/MeshCache.hpp"
 #include "runner/Renderer.hpp"
 #include "runner/TextureCache.hpp"
@@ -9,6 +10,7 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <cstdio>
@@ -475,6 +477,50 @@ int main() {
         renderer.shutdown();
     }
     Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "shutdown leaves no GL error");
+
+    // A Material's preview: a ball in its Color, lit from the upper left and
+    // clear around it, drawn off screen, leaving the window's framebuffer as it was.
+    {
+        ide::MaterialBall ball(64, 32);
+        runner::GLint viewportBefore[4] = {};
+        glGetIntegerv(runner::GL_VIEWPORT, viewportBefore);
+        ide::MaterialLook red;
+        red.color = {1.f, 0.f, 0.f, 1.f};
+        runner::ViewPixels pixels;
+        Expect(ball.draw(red, pixels), "a context with nothing waiting draws the ball at once");
+        Expect(pixels.width == 32 && pixels.height == 32 && pixels.rgba.size() == 32 * 32 * 4,
+               "the ball comes back at the size asked");
+        if (pixels.rgba.size() == 32 * 32 * 4) {
+            auto at = [&pixels](int x, int y) { return pixels.rgba.data() + (y * 32 + x) * 4; };
+            auto text = [](const unsigned char* p) {
+                return std::to_string(p[0]) + "," + std::to_string(p[1]) + "," + std::to_string(p[2]) + "," +
+                       std::to_string(p[3]);
+            };
+            Expect(at(0, 0)[3] == 0 && at(31, 31)[3] == 0, "the corners are clear");
+            const unsigned char* middle = at(16, 16);
+            Expect(middle[3] == 255 && middle[0] > middle[1] + 20 && middle[0] > middle[2] + 20,
+                   "the middle is the red ball (" + text(middle) + ")");
+            const unsigned char* lit = at(11, 11);
+            const unsigned char* shaded = at(21, 21);
+            Expect(lit[0] > shaded[0] + 20, "its upper left is lit brighter than its lower right (" + text(lit) +
+                                                " over " + text(shaded) + ")");
+        }
+        ide::MaterialLook glowing;
+        glowing.color = {0.f, 0.f, 0.f, 1.f};
+        glowing.emissive = {0.f, 1.f, 0.f, 1.f};
+        runner::ViewPixels glow;
+        ball.draw(glowing, glow);
+        Expect(glow.rgba.size() == 32 * 32 * 4 && glow.rgba[(16 * 32 + 16) * 4 + 1] > glow.rgba[(16 * 32 + 16) * 4] + 40,
+               "an Emissive glows on a black ball");
+        runner::GLint viewportAfter[4] = {};
+        glGetIntegerv(runner::GL_VIEWPORT, viewportAfter);
+        runner::GLint framebuffer = -1;
+        glGetIntegerv(runner::RT_GL_FRAMEBUFFER_BINDING, &framebuffer);
+        Expect(framebuffer == 0 && std::equal(viewportBefore, viewportBefore + 4, viewportAfter),
+               "the window's framebuffer and viewport are as they were");
+        ball.release();
+        Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the ball leaves no GL error");
+    }
 
     glfwDestroyWindow(window);
     glfwTerminate();

@@ -1,5 +1,6 @@
 #include "ide/CutSet.hpp"
 #include "ide/IdeAssets.hpp"
+#include "ide/MaterialPreviews.hpp"
 #include "SelectionService.hpp"
 
 #include "AssetInstances.hpp"
@@ -18,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -883,7 +885,162 @@ void thumbnails_kept_while_in_use() {
     std::filesystem::remove_all(root, ignored);
 }
 
+// A ball cut from its render and shrunk: clear outside the circle, opaque in
+// it, partly clear at its edge, and the edge's color only the ball's.
+void ball_cut_from_render() {
+    // 8x8, red inside a circle of radius 3 about the middle, blue outside it.
+    runner::ViewPixels render;
+    render.width = 8;
+    render.height = 8;
+    for (int y = 0; y < 8; ++y) {
+        for (int x = 0; x < 8; ++x) {
+            const bool inside = std::hypot(x + 0.5 - 4, y + 0.5 - 4) < 3;
+            render.rgba.insert(render.rgba.end(), {static_cast<std::uint8_t>(inside ? 255 : 0), 0,
+                                                   static_cast<std::uint8_t>(inside ? 0 : 255), 255});
+        }
+    }
+    const runner::ViewPixels ball = ide::cut_ball(render, 0.75, 4);
+    Expect(ball.width == 4 && ball.height == 4 && ball.rgba.size() == 64, "the ball is shrunk to the size asked");
+    if (ball.rgba.size() != 64) {
+        return;
+    }
+    auto at = [&ball](int x, int y) { return ball.rgba.data() + (y * 4 + x) * 4; };
+    Expect(at(0, 0)[3] == 0, "a corner is clear");
+    Expect(at(1, 1)[3] == 255 && at(1, 1)[0] == 255 && at(1, 1)[2] == 0, "the middle is the ball, opaque");
+    Expect(at(1, 0)[3] > 0 && at(1, 0)[3] < 255, "the edge is partly clear");
+    Expect(at(1, 0)[0] == 255 && at(1, 0)[2] == 0, "the edge takes no color from around the ball");
+}
+
+// What a Material looks like, read from the place: its numbers, colors, and
+// each Texture's Path; nothing for an instance that is not a Material.
+void material_look_reads_material() {
+    Rig rig;
+    const InstanceId gold = rig.make("Material", "Gold", rig.game.service("Materials"));
+    auto* material = dynamic_cast<engine_core::Material*>(rig.game.instance(gold));
+    auto* brick = dynamic_cast<engine_core::Texture*>(rig.game.instance(rig.brick));
+    Expect(material != nullptr && brick != nullptr, "Gold is a Material and Brick a Texture");
+    if (material == nullptr || brick == nullptr) {
+        return;
+    }
+    Expect(!brick->set_path("textures/brick.png"), "Brick names a file");
+    Expect(!material->set_color({1.f, 0.8f, 0.2f, 1.f}) && !material->set_metalness(0.9) &&
+               !material->set_roughness(1.5),
+           "Gold's properties are set");
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = rig.brick;
+    Expect(!material->set_reference(engine_core::Material::kDiffuseTextureReference, slot), "Gold uses Brick");
+
+    const std::optional<ide::MaterialLook> look = ide::material_look(rig.game, gold);
+    Expect(look.has_value(), "a Material has a look");
+    if (!look) {
+        return;
+    }
+    Expect(look->color.r == 1.f && look->color.g == 0.8f && look->color.b == 0.2f, "the look has the Color");
+    Expect(look->metalness == 0.9f && look->roughness == 1.f, "and the numbers, held between 0 and 1");
+    Expect(look->diffuse_texture == "textures/brick.png" && look->normal_texture.empty(),
+           "and the Path of each Texture it uses");
+    Expect(!ide::material_look(rig.game, rig.brick).has_value(), "a Texture has no look");
+
+    ide::MaterialLook other = *look;
+    other.roughness = 0.5f;
+    Expect(other != *look, "looks differ by a number");
+    other = *look;
+    other.diffuse_texture = "textures/rock.png";
+    Expect(other != *look, "and by a Texture's Path");
+}
+
+// Previews drawn a few a pass, kept until the look changes or the Material
+// goes, and the last one shown while a new one waits.
+void material_previews_draw_and_keep() {
+    std::vector<float> drawn;
+    bool fail = false;
+    ide::MaterialPreviews previews(
+        [&drawn, &fail](const ide::MaterialLook& look, std::shared_ptr<jadefx::Image>& image) {
+            drawn.push_back(look.roughness);
+            image = fail ? nullptr : jadefx::Image::fromRgba(1, 1, std::vector<std::uint8_t>{0, 0, 0, 255});
+            return true;
+        },
+        2);
+    ide::MaterialLook look;
+    Expect(previews.idle(), "nothing waits at first");
+    Expect(previews.get(1, look) == nullptr, "a preview not drawn yet is null");
+    Expect(previews.get(1, look) == nullptr && !previews.idle(), "and waits, once however often it is asked for");
+    Expect(previews.draw_pending() && drawn.size() == 1, "a pass draws it");
+    const std::shared_ptr<jadefx::Image> first = previews.get(1, look);
+    Expect(first != nullptr && previews.idle(), "then it is kept");
+    Expect(!previews.draw_pending() && drawn.size() == 1, "and not drawn again for the same look");
+
+    ide::MaterialLook rough = look;
+    rough.roughness = 0.9f;
+    Expect(previews.get(1, rough) == first, "a changed look shows the last preview while the new one waits");
+    previews.draw_pending();
+    Expect(drawn.size() == 2 && drawn.back() == 0.9f && previews.get(1, rough) != first,
+           "then shows the one drawn for it");
+
+    for (InstanceId id = 2; id <= 6; ++id) {
+        previews.get(id, look);
+    }
+    previews.draw_pending();
+    Expect(drawn.size() == 4 && !previews.idle(), "a pass draws only as many as it may");
+
+    previews.retain({1, 2, 3});
+    previews.draw_pending();
+    Expect(drawn.size() == 4 && previews.idle(), "a Material no longer kept is not drawn");
+    Expect(previews.get(2, look) != nullptr && previews.get(4, look) == nullptr,
+           "and its preview is gone, while a kept one stays");
+
+    fail = true;
+    previews.draw_pending();
+    Expect(drawn.size() == 5 && previews.get(4, look) == nullptr, "a draw that fails shows no preview");
+    previews.draw_pending();
+    Expect(drawn.size() == 5 && previews.idle(), "and is not tried again until the look changes");
+}
+
+// A draw that is not ready yet, as while GL prepares the renderer, stays
+// queued and ends the pass; a later pass draws it. One never ready gives up.
+void material_previews_wait_for_renderer() {
+    int ready_after = 2;
+    int calls = 0;
+    ide::MaterialPreviews previews(
+        [&ready_after, &calls](const ide::MaterialLook&, std::shared_ptr<jadefx::Image>& image) {
+            ++calls;
+            if (ready_after > 0) {
+                --ready_after;
+                return false;
+            }
+            image = jadefx::Image::fromRgba(1, 1, std::vector<std::uint8_t>{0, 0, 0, 255});
+            return true;
+        },
+        2);
+    ide::MaterialLook look;
+    previews.get(1, look);
+    previews.get(2, look);
+    Expect(!previews.draw_pending() && calls == 1, "a draw not ready yet ends the pass, drawing nothing");
+    Expect(previews.get(1, look) == nullptr && !previews.idle(), "and its Material still waits");
+    previews.draw_pending();
+    Expect(previews.draw_pending() && calls == 4, "once ready, a pass draws as many as it may");
+    Expect(previews.get(1, look) != nullptr && previews.get(2, look) != nullptr && previews.idle(),
+           "and each waiting Material has its preview");
+
+    ready_after = 1000;
+    calls = 0;
+    ide::MaterialLook rough = look;
+    rough.roughness = 0.9f;
+    const std::shared_ptr<jadefx::Image> shown = previews.get(1, rough);
+    for (int pass = 0; pass < ide::MaterialPreviews::kMaxWaits; ++pass) {
+        previews.draw_pending();
+    }
+    Expect(calls == ide::MaterialPreviews::kMaxWaits && previews.idle(),
+           "a renderer never ready is given up on after kMaxWaits passes");
+    Expect(shown != nullptr && previews.get(1, rough) == nullptr, "which counts as a draw that failed");
+}
+
 int main() {
+    ball_cut_from_render();
+    material_look_reads_material();
+    material_previews_draw_and_keep();
+    material_previews_wait_for_renderer();
     thumbnails_shrink();
     thumbnails_kept_while_in_use();
     starts_in_saved_view();

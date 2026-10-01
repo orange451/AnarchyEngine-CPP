@@ -71,6 +71,8 @@ set(STUDIO_SOURCES
     src/ide/IdeExplorer.cpp
     src/ide/IdeAssets.cpp
     src/ide/ThumbnailLoader.cpp
+    src/ide/MaterialPreviews.cpp
+    src/ide/MaterialBall.cpp
     src/ide/IdeIcons.cpp
     src/ide/IdePrefabEditor.cpp
     src/ide/PrefabModels.cpp

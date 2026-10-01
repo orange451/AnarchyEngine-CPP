@@ -4,6 +4,8 @@
 #include "ChangeFlag.hpp"
 #include "IdeExplorer.hpp"
 #include "IdePane.hpp"
+#include "MaterialBall.hpp"
+#include "MaterialPreviews.hpp"
 #include "ThumbnailLoader.hpp"
 
 #include <cstddef>
@@ -36,7 +38,9 @@ struct AssetsHost {
 // folder in the chosen view, and the status line counts its items. A click
 // selects through the world's selection, which the explorers and Properties share.
 // A slow second click or Enter renames in place. A double-click on a Prefab runs
-// Edit on it. Right-clicks offer Rename, Cut, Paste, and Delete on items, a
+// Edit on it. A Material's icon in Icons and the Columns preview is the
+// Material on a lit ball, drawn a few a frame and again after an edit; the
+// Material icon shows until its ball is drawn. Right-clicks offer Rename, Cut, Paste, and Delete on items, a
 // Prefab's also Edit and Add as GameObject, and New Folder, New <kind>, and
 // Paste on empty space.
 // Items drag onto Folders, categories, and crumbs; a refused move is a notice.
@@ -64,6 +68,9 @@ public:
 
 protected:
     void layoutChildren() override;
+    // Draws a few waiting Material balls, while the GL context is current.
+    void renderContent(jadefx::UiRenderer& renderer, float opacity) override;
+    void sceneChanged(jadefx::Scene* previous) override;
     void handleKey(jadefx::KeyEvent& event) override;
 
 private:
@@ -79,17 +86,19 @@ private:
     void rebuild_preview();
     // The file a Texture Path names under the resources folder; empty without either.
     std::filesystem::path texture_file(const std::string& path) const;
-    // The file of every Texture under Assets: the thumbnails worth keeping.
-    // Callers hold the world's read lock.
-    std::vector<std::filesystem::path> texture_files() const;
+    // The file of every Texture under Assets, and every Material there: the
+    // thumbnails and balls worth keeping. Callers hold the world's read lock.
+    void kept_icons(std::vector<std::filesystem::path>& texture_files,
+                    std::vector<engine_core::InstanceId>& materials) const;
     // A size box holding row's icon: the class's, until a Texture's file has
-    // loaded on thumbnails_'s thread, then that, fit and centered.
+    // loaded on thumbnails_'s thread or a Material's ball is drawn, then that,
+    // fit and centered. Callers hold the world's read lock.
     std::shared_ptr<jadefx::Node> asset_icon(const AssetRow& row, double size);
     struct IconSlot;
     // Puts image in slot's box, or the class's icon when it is null. False,
     // changing nothing, when the box shows it already or is gone.
     bool show_icon(IconSlot& slot, std::shared_ptr<jadefx::Image> image);
-    // Puts each thumbnail that loaded since the last frame in the boxes waiting for it.
+    // Puts each thumbnail that loaded and ball drawn since the last frame in the boxes waiting for it.
     void refresh_icons();
     // A flat list of the search's matches, with where each is from the folder.
     void rebuild_search(const std::vector<AssetRow>& rows);
@@ -152,9 +161,12 @@ private:
     // How many items the folder shown holds, for the status line.
     std::size_t count_ = 0;
     std::shared_ptr<jadefx::VBox> preview_;
-    // A box showing a Texture's file once it loads, and what it shows now.
+    // A box showing a Texture's file once it loads, or a Material's ball once
+    // drawn for look, and what it shows now.
     struct IconSlot {
         std::filesystem::path file;
+        engine_core::InstanceId material = 0;
+        MaterialLook look;
         std::string class_name;
         double size = 0;
         std::weak_ptr<jadefx::StackPane> box;
@@ -194,6 +206,11 @@ private:
     engine_core::InstanceId anchor_ = 0;
     // Set by thumbnails_'s thread when a thumbnail loads; the next frame shows it.
     ChangeFlag thumbnails_ready_;
+    // Each Material's ball, drawn by ball_ in the paint; balls_drawn_ says a
+    // paint drew one, which the next frame shows.
+    MaterialBall ball_;
+    MaterialPreviews previews_;
+    bool balls_drawn_ = false;
     // Texture files as thumbnails, loaded off the UI thread. Last, so its
     // thread stops before the rest of the pane goes.
     ThumbnailLoader thumbnails_;

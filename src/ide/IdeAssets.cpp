@@ -15,6 +15,7 @@
 #include <functional>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -360,6 +361,10 @@ constexpr double kPreviewWidth = 220;
 constexpr double kPreviewIcon = 64;
 // The longer side of a texture's thumbnail, in pixels: the preview's icon at twice its points, for HiDPI.
 constexpr int kThumbnailSize = 128;
+// A Material's ball is drawn this big, then shrunk to kThumbnailSize, smoothing its edge and highlights.
+constexpr int kBallRenderSize = 256;
+// A ball takes a few milliseconds to draw, so a folder of Materials fills in over some frames.
+constexpr int kBallsPerFrame = 2;
 
 void fix_width(jadefx::Node& node, double width) {
     node.setPrefWidth(width);
@@ -442,6 +447,19 @@ void set_class(jadefx::Node& node, const char* name, bool on) {
 
 IdeAssets::IdeAssets(engine_core::DataModel& world, AssetsHost host)
     : IdePane("Assets", true), world_(world), host_(std::move(host)), browser_(world),
+      ball_(kBallRenderSize, kThumbnailSize),
+      previews_(
+          [this](const MaterialLook& look, std::shared_ptr<jadefx::Image>& image) {
+              runner::ViewPixels pixels;
+              if (!ball_.draw(look, pixels)) {
+                  return false;
+              }
+              if (!pixels.empty()) {
+                  image = jadefx::Image::fromRgba(pixels.width, pixels.height, std::move(pixels.rgba));
+              }
+              return true;
+          },
+          kBallsPerFrame),
       thumbnails_(kThumbnailSize, thumbnails_ready_.setter()) {
     watch_ = world_.watch_changes(edited_.setter());
     setPrefWidth(9999999);
@@ -622,10 +640,14 @@ void IdeAssets::layoutChildren() {
             const bool changed = browser_.refresh() || dirty_ || !built_ || built_view_ != view_ || edited;
             if (changed) {
                 rebuild();
-                // Keeps the thumbnail of every file a Texture under Assets names, so a
-                // folder shown again draws at once, and lets the rest go. After the
-                // rebuild, so only what it shows stays queued to load.
-                thumbnails_.retain(texture_files());
+                // Keeps the thumbnail of every file a Texture under Assets names, and
+                // every Material's ball, so a folder shown again draws at once, and lets
+                // the rest go. After the rebuild, so only what it shows stays queued.
+                std::vector<std::filesystem::path> texture_files;
+                std::vector<engine_core::InstanceId> materials;
+                kept_icons(texture_files, materials);
+                thumbnails_.retain(texture_files);
+                previews_.retain(materials);
                 // Every item shown, the preview's among them, so an edit to one rebuilds.
                 std::vector<engine_core::InstanceId> shown;
                 shown.reserve(items_.size());
@@ -647,7 +669,8 @@ void IdeAssets::layoutChildren() {
             }
         }
     }
-    if (thumbnails_ready_.take()) {
+    const bool balls_drawn = std::exchange(balls_drawn_, false);
+    if (thumbnails_ready_.take() || balls_drawn) {
         refresh_icons();
     }
     back_->setDisable(!browser_.can_back());
@@ -661,6 +684,26 @@ void IdeAssets::layoutChildren() {
         scroll_right_ = false;
         scroll_->setHvalue(scroll_->getHmax());
     }
+}
+
+void IdeAssets::renderContent(jadefx::UiRenderer& renderer, float opacity) {
+    IdePane::renderContent(renderer, opacity);
+    if (!previews_.idle()) {
+        // The open project's resources folder, which Project keeps on the game.
+        ball_.setRoot(world_.resources_root());
+        balls_drawn_ = previews_.draw_pending() || balls_drawn_;
+    }
+}
+
+void IdeAssets::sceneChanged(jadefx::Scene* previous) {
+    IdePane::sceneChanged(previous);
+    // Leaving a live scene releases the ball's GL objects while the context
+    // that made them is current, as the Scene View does; the next paint makes
+    // them again. Scene teardown runs after JadeFX destroyed the context.
+    if (previous == nullptr || previous->isTearingDown() || getScene() == previous) {
+        return;
+    }
+    ball_.release();
 }
 
 void IdeAssets::handleKey(jadefx::KeyEvent& event) {
@@ -1416,8 +1459,8 @@ std::filesystem::path IdeAssets::texture_file(const std::string& path) const {
     return root / path_from_utf8(path);
 }
 
-std::vector<std::filesystem::path> IdeAssets::texture_files() const {
-    std::vector<std::filesystem::path> files;
+void IdeAssets::kept_icons(std::vector<std::filesystem::path>& texture_files,
+                           std::vector<engine_core::InstanceId>& materials) const {
     std::vector<engine_core::InstanceId> pending = {world_.service("Assets")};
     while (!pending.empty()) {
         const engine_core::InstanceId id = pending.back();
@@ -1428,18 +1471,21 @@ std::vector<std::filesystem::path> IdeAssets::texture_files() const {
         if (const auto* texture = dynamic_cast<const engine_core::Texture*>(world_.instance(id))) {
             std::filesystem::path file = texture_file(texture->path());
             if (!file.empty()) {
-                files.push_back(std::move(file));
+                texture_files.push_back(std::move(file));
             }
+        } else if (dynamic_cast<const engine_core::Material*>(world_.instance(id)) != nullptr) {
+            materials.push_back(id);
         }
         const std::vector<engine_core::InstanceId> children = world_.get_children(id);
         pending.insert(pending.end(), children.begin(), children.end());
     }
-    return files;
 }
 
 std::shared_ptr<jadefx::Node> IdeAssets::asset_icon(const AssetRow& row, double size) {
     std::filesystem::path file = row.class_name == "Texture" ? texture_file(row.path) : std::filesystem::path();
-    if (file.empty()) {
+    const std::optional<MaterialLook> look =
+        row.class_name == "Material" ? material_look(world_, row.id) : std::optional<MaterialLook>();
+    if (file.empty() && !look) {
         return sized_icon(row.class_name, size);
     }
     // A square box either way, so a wide or tall texture lines up with the icons beside it.
@@ -1451,10 +1497,14 @@ std::shared_ptr<jadefx::Node> IdeAssets::asset_icon(const AssetRow& row, double 
     box->setMouseTransparent(true);
     IconSlot slot;
     slot.file = std::move(file);
+    if (look) {
+        slot.material = row.id;
+        slot.look = *look;
+    }
     slot.class_name = row.class_name;
     slot.size = size;
     slot.box = box;
-    show_icon(slot, thumbnails_.get(slot.file));
+    show_icon(slot, slot.material != 0 ? previews_.get(slot.material, slot.look) : thumbnails_.get(slot.file));
     icon_slots_.push_back(std::move(slot));
     return box;
 }
@@ -1474,7 +1524,7 @@ bool IdeAssets::show_icon(IconSlot& slot, std::shared_ptr<jadefx::Image> image) 
     const double width = std::max(1.0, image->getWidth() * scale);
     const double height = std::max(1.0, image->getHeight() * scale);
     auto view = jadefx::make<jadefx::ImageView>(std::move(image));
-    view->getClassList().add("assets-texture-image");
+    view->getClassList().add(slot.material != 0 ? "assets-material-image" : "assets-texture-image");
     view->setPrefSize(width, height);
     view->setMinSize(width, height);
     view->setMaxSize(width, height);
@@ -1488,7 +1538,7 @@ void IdeAssets::refresh_icons() {
                                      [](const IconSlot& slot) { return slot.box.expired(); }),
                       icon_slots_.end());
     for (IconSlot& slot : icon_slots_) {
-        if (show_icon(slot, thumbnails_.get(slot.file))) {
+        if (show_icon(slot, slot.material != 0 ? previews_.get(slot.material, slot.look) : thumbnails_.get(slot.file))) {
             slot.box.lock()->applyCss();
         }
     }

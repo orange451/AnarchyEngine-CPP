@@ -74,6 +74,14 @@ InstanceId PhysicsObject::game_object_id() const {
     return slot.kind == LuaSlot::Kind::Instance ? slot.id : 0;
 }
 
+InstanceId PhysicsObject::driven_game_object() const {
+    if (const InstanceId linked = game_object_id(); linked != 0) {
+        return linked;
+    }
+    const InstanceId above = parent(id());
+    return above != kNoParent && above != 0 && DataModel::game_object(above) != nullptr ? above : 0;
+}
+
 std::optional<std::string> PhysicsObject::set_transform(const Matrix4& transform) {
     require_thread(*this);
     for (float value : transform.m) {

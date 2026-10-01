@@ -161,7 +161,7 @@ struct PhysicsWorld::Impl {
             if (object == nullptr) {
                 continue;
             }
-            const InstanceId target = object->game_object_id();
+            const InstanceId target = object->driven_game_object();
             wanted.emplace_back(id, target);
             if (target != 0 && !claims.emplace(target, id).second) {
                 shared = true;
@@ -204,7 +204,7 @@ struct PhysicsWorld::Impl {
             const InstanceId id = stack.back();
             stack.pop_back();
             if (const auto* object = dynamic_cast<const PhysicsObject*>(game.instance(id))) {
-                if (const InstanceId target = object->game_object_id(); target != 0) {
+                if (const InstanceId target = object->driven_game_object(); target != 0) {
                     claims.emplace(target, id);
                 }
             }

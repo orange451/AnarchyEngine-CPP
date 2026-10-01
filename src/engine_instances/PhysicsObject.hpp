@@ -13,9 +13,10 @@ namespace engine_core {
 // One rigid body. While it is in Workspace, at any depth, and the place is
 // playing, the physics world (PhysicsWorld) simulates it; anywhere else it
 // is only data. It is not a GameObject: it has a Transform but draws nothing.
-// When GameObject names one, the body starts at that GameObject's Transform
-// and moves it. Of several PhysicsObjects naming one GameObject, only the
-// first in tree order gets a body.
+// When GameObject names one, or else when its parent is a GameObject, the
+// body starts at that GameObject's Transform and moves it. Of several
+// PhysicsObjects moving one GameObject, only the first in tree order gets a
+// body.
 //
 // Transform        Matrix4   where the body is. Identity.
 // Velocity         Vector3   world units per second. (0, 0, 0).
@@ -31,7 +32,8 @@ namespace engine_core {
 //                            extents. Sphere: diameter X. Capsule: diameter X,
 //                            height Y, along Y. Hull: the hull fits it.
 // Mesh             Mesh?     the Hull's points. Shown only for a Hull.
-// GameObject       GameObject?  what the body moves.
+// GameObject       GameObject?  what the body moves. Nil: the parent, if it
+//                               is a GameObject.
 //
 // Each is a saved registry property, so DataModel saves, loads, undoes, and
 // restores it at Stop. A value that is not finite is refused. Writes made by
@@ -79,6 +81,11 @@ public:
     // The live targets, or 0.
     InstanceId mesh_id() const;
     InstanceId game_object_id() const;
+    // The GameObject the body moves: GameObject when it names one, else the
+    // parent when that is a GameObject, else 0. The parent link is never
+    // written to GameObject, so a PhysicsObject moved out from under it
+    // stops moving it.
+    InstanceId driven_game_object() const;
 
     // SimulationThread. Each returns why it refused the value, changing nothing.
     std::optional<std::string> set_transform(const Matrix4& transform);

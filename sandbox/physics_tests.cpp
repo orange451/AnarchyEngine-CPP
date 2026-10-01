@@ -314,6 +314,40 @@ TEST_CASE("P12 Shape, Size, Mass, and Anchored change a body during play", "[phy
     REQUIRE(near(y_of(body.transform()), 1.5f, 0.05f));
 }
 
+TEST_CASE("P15 a PhysicsObject under a GameObject moves it until it is moved elsewhere", "[physics]") {
+    PhysicsRig rig;
+    GameObject& part = create_part(rig.game);
+    part.set_transform(at(0.f, 20.f, 0.f));
+    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+    REQUIRE(body.driven_game_object() == part.id());
+    rig.play();
+    rig.seconds(0.5);
+    REQUIRE(y_of(part.transform()) < 20.f);
+    REQUIRE(near(y_of(part.transform()), y_of(body.transform()), 1e-5f));
+    // The link is the parent, never written to the GameObject property.
+    REQUIRE(body.game_object().kind == engine_core::LuaSlot::Kind::Nil);
+
+    rig.game.set_parent(body.id(), workspace_of(rig.game));
+    rig.steps(1);
+    REQUIRE(body.driven_game_object() == 0);
+    REQUIRE(rig.physics.has_body(body.id()));
+    const float left = y_of(part.transform());
+    rig.seconds(0.5);
+    REQUIRE(y_of(part.transform()) == left);
+    REQUIRE(y_of(body.transform()) < left);
+
+    // An explicit link wins over the parent.
+    GameObject& other = create_part(rig.game);
+    other.set_transform(at(10.f, 30.f, 0.f));
+    rig.game.set_parent(body.id(), part.id());
+    REQUIRE_FALSE(body.set_game_object(instance_slot(other.id())));
+    rig.steps(1);
+    REQUIRE(body.driven_game_object() == other.id());
+    rig.seconds(0.25);
+    REQUIRE(y_of(other.transform()) < 30.f);
+    REQUIRE(y_of(part.transform()) == left);
+}
+
 TEST_CASE("P13 PhysicsObject properties are checked, saved, and come back at Stop", "[physics]") {
     SimRole role;
     engine_core::Game game;

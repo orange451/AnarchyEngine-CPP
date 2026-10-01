@@ -72,14 +72,16 @@ subset, so the mapping carries over almost one to one.
   which fires them.
 - **Rendering**: `runner::GuiLayer`, a JadeFX node in each Scene View above the
   3D drawing, rebuilt from the tree each layout under a short read lock, the
-  way the camera list is. Only what changed is touched; a stylesheet is parsed
+  way the camera list is. The layer and each ScreenGui do not pick on their own bounds (a
+  `setPickOnBounds(false)` added to JadeFX for this), so only elements take the
+  mouse, even with several full-view ScreenGuis stacked. Only what changed is touched; a stylesheet is parsed
   again only when its text changes. The MCP screenshot reads the 3D image
   before child nodes paint, so it does not show GUIs.
 - **CSS editor**: double-clicking a CSS instance (or Edit) docks a CSS editor
   tab beside the scripts: a CodeArea with CSS highlighting (comments,
   selectors, properties, values, strings, numbers, colors), auto-indent and a
   closing brace after `{`, writing Source back half a second after typing as
-  one undo step, like the script editor. Properties shows Source read-only.
+  one undo step, like the script editor. Properties does not show Source, as it does not a script's.
 
 ## Not done here
 

@@ -1,6 +1,6 @@
 # engine_instances
 
-The instance classes: `GameObject`, `Camera`, `Folder`, `Script`, `ModuleScript`, `PhysicsObject`, `SoundEmitter`, and the six asset classes. Each inherits `DataModel` from engine_core and registers its Lua class, with any properties, in its own `.cpp`.
+The instance classes: `GameObject`, `Camera`, `Folder`, `Script`, `ModuleScript`, `PhysicsObject`, `SoundEmitter`, the GUI classes, and the six asset classes. Each inherits `DataModel` from engine_core and registers its Lua class, with any properties, in its own `.cpp`.
 
 The asset classes live in `AssetInstances.{hpp,cpp}`, each only under its own category in `Assets`. `Texture`, `Mesh`, and `Sound` are a `FileAsset`, with a `Path`. `Material` and `Model` are a `ReferenceAsset`, whose saved properties are references held by GUID (`InstanceRef`, from engine_core): `Material` has `DiffuseTexture`, `NormalTexture`, `RoughnessTexture`, and `MetalnessTexture`, each a `Texture?`, plus `Color` (a `Color3`, white) and `Reflectivity` (0.5) and `Transparency` (0), numbers shown on a 0 to 1 slider; `Model` has `Mesh` and `Material`. `Prefab` holds `Model`s as its only children.
 
@@ -15,3 +15,5 @@ The asset classes live in `AssetInstances.{hpp,cpp}`, each only under its own ca
 `Script` and `ModuleScript` are separate classes that share `LuaSource`, which holds `Source` and the editor's Edit action. `Script` adds `Enabled` and the start generation the runtime checks; `ModuleScript` adds only its starter source.
 
 A registration runs only if its object file is linked, and that happens only when something uses the class. The `Instance.new` factories in `ScriptRuntime` keep the classes a script can make linked.
+
+The GUI classes live in `Gui.{hpp,cpp}`: `ScreenGui`, `Pane`, `HBox`, `VBox`, `Label`, `Button`, and `TextField`, each a `GuiBase` (the Panes through `GuiBasePane`), and `CSS` (`Css` in C++), a stylesheet for its parent. They share `GuiValues`, which keeps every property as the `LuaSlot` a script reads, indexed by `GuiProperty`, and checks each write against one table of names, types, and ranges, so a class only lists which properties it registers. `revision()` moves on every change, which is how `runner::GuiLayer` knows a node to update. A GuiBase's events (`MouseClicked` and the rest, and `Action`) are `lua_event` fields, fired with `DataModel::fire_event`.

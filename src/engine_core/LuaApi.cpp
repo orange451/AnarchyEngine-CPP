@@ -1037,6 +1037,40 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "number", false, {});
     add("SoundEmitter", "IsPlaying", "True while the sound plays. Read-only.", "boolean", false, {});
 
+    add("GuiBase", "ClassList", "CSS classes, separated by spaces, that a stylesheet's .class selectors match.",
+        "string", false, {});
+    add("GuiBase", "Style", "Inline CSS declarations, as an HTML style attribute. They win over stylesheets.",
+        "string", false, {});
+    add("GuiBase", "Size", "The preferred size in points. 0 on an axis leaves it to the content and CSS.", "Vector2",
+        false, {});
+    add("GuiBase", "Alignment", "Where the children sit, as an Enum.GuiAlignment.", "EnumItem", false, {});
+    add("GuiBase", "Visible", "When false, it and everything in it is hidden.", "boolean", false, {});
+    add("GuiBase", "MouseTransparent", "When true the mouse passes through it to what is behind.", "boolean", false,
+        {});
+    add("GuiBase", "MouseClicked", "Fires when the left button is pressed and released on it, or on what is in it.",
+        "Signal", false, {});
+    add("GuiBase", "MousePressed", "Fires when the left button goes down on it, or on what is in it.", "Signal", false,
+        {});
+    add("GuiBase", "MouseReleased", "Fires when the left button comes up after a press on it.", "Signal", false, {});
+    add("GuiBase", "MouseEntered", "Fires when the pointer moves onto it.", "Signal", false, {});
+    add("GuiBase", "MouseExited", "Fires when the pointer leaves it.", "Signal", false, {});
+    add("GuiBasePane", "BackgroundColor", "The color behind its children. A stylesheet's background-color wins.",
+        "Color3", false, {});
+    add("GuiBasePane", "BackgroundTransparency", "0 is the BackgroundColor as it is, 1 is no background.", "number",
+        false, {});
+    add("HBox", "Spacing", "Points between its children.", "number", false, {});
+    add("VBox", "Spacing", "Points between its children.", "number", false, {});
+    add("Label", "Text", "The text it shows.", "string", false, {});
+    add("Label", "TextColor", "The text's color. A stylesheet's color wins.", "Color3", false, {});
+    add("Label", "FontSize", "The text's size in points, from 1 to 512.", "number", false, {});
+    add("Button", "Text", "The text on the button.", "string", false, {});
+    add("Button", "Action", "Fires when the button is clicked, or Enter is pressed while it has focus.", "Signal",
+        false, {});
+    add("TextField", "Text", "The text in the field. Typing changes it.", "string", false, {});
+    add("TextField", "Prompt", "Shown while the field is empty.", "string", false, {});
+    add("TextField", "Action", "Fires when Enter is pressed in the field.", "Signal", false, {});
+    add("CSS", "Source", "The stylesheet for its parent GuiBase and everything inside it.", "string", false, {});
+
     add("Signal", "Connect", "Calls callback when the signal fires and returns the connection.", "Connection", false,
         {P("callback", "function")});
     add("Signal", "Wait", "Yields until the signal fires, then returns the signal's arguments.", "", false, {});

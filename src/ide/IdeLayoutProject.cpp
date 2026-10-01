@@ -366,6 +366,12 @@ void IdeLayout::import_files(const std::vector<std::string>& files, engine_core:
             }
             if (!made.empty()) {
                 world.selection().set(std::move(made));
+                // The Assets pane comes to the front, opened if it was closed, to show what came in.
+                jadefx::runLater([this, alive] {
+                    if (!alive.expired()) {
+                        open_window(*assets_window_);
+                    }
+                });
             }
         });
     });

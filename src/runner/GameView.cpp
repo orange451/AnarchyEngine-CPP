@@ -64,6 +64,34 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
     // tab drag or a dock action here.
     setReceivesAllButtons(true);
 
+    // First, so the label and the list draw over the GUIs and are hit before them.
+    GuiInput input;
+    input.pressed = [this](const jadefx::MouseEvent& event, bool keepFocus) {
+        // A click on a GUI still gives the game the keyboard, unless what was
+        // clicked takes the keys itself, as a TextField does.
+        if (!keepFocus) {
+            requestFocus();
+        }
+        noteCurrentCamera();
+        if (game_ != nullptr) {
+            game_->input().post_mouse_button(event.button, true, localX(event.x), localY(event.y), true);
+        }
+    };
+    input.released = [this](const jadefx::MouseEvent& event) {
+        if (game_ != nullptr) {
+            game_->input().post_mouse_button(event.button, false, localX(event.x), localY(event.y), true);
+        }
+    };
+    input.dragged = [this](const jadefx::MouseEvent& event) {
+        if (game_ != nullptr) {
+            game_->input().post_mouse_move(localX(event.x), localY(event.y), true);
+        }
+    };
+    input.moved = input.dragged;
+    auto gui = jadefx::make<GuiLayer>(runner.simulation(), std::move(input));
+    guiLayer_ = gui.get();
+    getChildren().add(std::move(gui));
+
     auto label = jadefx::make<jadefx::Label>("0 FPS");
     label->getClassList().add("ide-fps");
     label->setMouseTransparent(true);
@@ -299,7 +327,10 @@ void GameView::layoutChildren() {
     // current when the list lays out and when the paint follows the Camera.
     refreshWorkspace();
     refreshCameraList();
+    guiLayer_->sync();
     StackPane::layoutChildren();
+    // The GUIs cover the whole view, whatever they would rather be.
+    guiLayer_->performLayout(contentLeft(), contentTop(), contentWidth(), contentHeight());
     // The list sits in the top right corner, over the drawing, clear of the
     // FPS label on the left when the view is wide enough for both.
     constexpr double kMargin = 6.0;

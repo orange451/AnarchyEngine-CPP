@@ -54,6 +54,7 @@ set(STUDIO_SOURCES
     src/runner/TextureCache.cpp
     src/amesh/amesh_gl.cpp
     src/runner/GameView.cpp
+    src/runner/GuiLayer.cpp
     src/ide/IdePane.cpp
     src/ide/IdeDock.cpp
     src/ide/DockArrange.cpp

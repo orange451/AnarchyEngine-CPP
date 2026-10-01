@@ -357,7 +357,7 @@ void IdeLayout::cut(const std::vector<std::uint32_t>& ids) {
     });
 }
 
-void IdeLayout::paste(std::uint32_t id) {
+void IdeLayout::paste(std::uint32_t id, bool beside) {
     if (clip_ && !clip_->held && clip_->copies) {
         engine_core::DataModel& game = runner_.simulation().datamodel();
         {
@@ -366,7 +366,7 @@ void IdeLayout::paste(std::uint32_t id) {
                 show_toast(busy_message("Paste"));
                 return;
             }
-            id = insert_target(game, id);
+            id = insert_target(game, beside && id != 0 ? game.parent(id) : id);
             if (!parent_ok(game, id)) {
                 return;
             }
@@ -401,7 +401,7 @@ void IdeLayout::paste(std::uint32_t id) {
             show_toast(busy_message("Paste"));
             return;
         }
-        id = insert_target(game, id);
+        id = insert_target(game, beside && id != 0 ? game.parent(id) : id);
         if (!parent_ok(game, id)) {
             return;
         }

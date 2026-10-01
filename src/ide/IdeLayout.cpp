@@ -535,11 +535,15 @@ void IdeLayout::routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene) {
 }
 
 void IdeLayout::routeClipboard(jadefx::KeyEvent& event, jadefx::Scene& scene) {
-    if (!event.pressed || event.repeat || event.consumed || !event.shortcut() || event.shift || event.alt) {
+    if (!event.pressed || event.repeat || event.consumed || !event.shortcut() || event.alt) {
         return;
     }
     const int key = event.key;
     if (key != jadefx::Key::X && key != jadefx::Key::C && key != jadefx::Key::V && key != jadefx::Key::D) {
+        return;
+    }
+    // Shift only changes V: Paste goes beside the selection, Shift+Paste into it.
+    if (event.shift && key != jadefx::Key::V) {
         return;
     }
     jadefx::Node* focused = scene.focusedNode();
@@ -548,7 +552,7 @@ void IdeLayout::routeClipboard(jadefx::KeyEvent& event, jadefx::Scene& scene) {
     }
     const std::vector<engine_core::InstanceId> selected = runner_.simulation().datamodel().selection().get();
     if (key == jadefx::Key::V) {
-        paste(selected.empty() ? 0 : selected.front());
+        paste(selected.empty() ? 0 : selected.front(), !event.shift);
     } else if (selected.empty()) {
         return;
     } else if (key == jadefx::Key::X) {

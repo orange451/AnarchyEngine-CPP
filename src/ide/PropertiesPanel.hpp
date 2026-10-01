@@ -69,6 +69,11 @@ using PropertiesRun = std::function<void(std::function<void(engine_core::DataMod
 // Prefab editor's slots use: every asset of that class under Assets, filtered
 // as you type. A pick is one undo step; None, there while one is set, sets nil.
 //
+// The rows come in categories, Instance and Data, each under a header with an
+// arrow. Clicking either folds the category, and it stays folded across
+// selections for the session; folding commits what was typed in it, and Tab
+// passes over its fields. The Preview section folds the same way.
+//
 // A single selected Texture, Material, or Sound has a Preview section under
 // its rows. A Texture shows its image and a Material its look on a ball, as
 // the Assets pane draws them, fitted in a square frame; either follows an
@@ -124,6 +129,8 @@ public:
     std::string preview_class() const;
     // The scroll pane the rows are in.
     jadefx::ScrollPane* scroll_pane() const;
+    // A category's header, "Instance", "Data", or "Preview", which a click folds.
+    jadefx::Node* group_header(const std::string& title) const;
     // Silences the Preview's sound, as a test starting or stopping does, so
     // it is never heard over the game, nor left from before it.
     void stop_sound();

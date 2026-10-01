@@ -1525,7 +1525,100 @@ void TestSoundPreviewStops() {
     engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
 }
 
+// Rows taller than the page scroll in a ScrollPane: the wheel moves them, and
+// tabbing to a field out of view scrolls just far enough to show it.
+void TestRowsScroll() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Rig rig;
+    const InstanceId wall = MakeAsset(rig.game, "Material", "Wall", rig.game.service("Materials"));
+    rig.select({wall});
+    auto frame = [&rig] {
+        rig.clock += 0.05;
+        rig.scene->layout(kWidth, 220, rig.clock);
+    };
+    frame();
+    frame();
+    jadefx::ScrollPane* scroll = rig.panel.scroll_pane();
+    Expect(scroll != nullptr, "the rows are in a scroll pane");
+    if (scroll == nullptr) {
+        return;
+    }
+    Expect(scroll->getContentBounds().height > scroll->getViewportBounds().height + 1,
+           "a Material's rows and preview run past a short page");
+    Expect(scroll->getVvalue() == scroll->getVmin(), "which starts at the top");
+
+    jadefx::Node* name = rig.panel.editor("Name");
+    rig.scene->noteScroll(name->getAbsoluteX() + 4, name->getAbsoluteY() + 4, 0, -3);
+    frame();
+    Expect(scroll->getVvalue() > scroll->getVmin(), "the wheel scrolls it");
+
+    scroll->setVvalue(scroll->getVmin());
+    frame();
+    rig.click(rig.field("Name"));
+    frame();
+    // Shift+Tab from the first field wraps to the last, at the bottom.
+    rig.scene->noteKey(jadefx::Key::Tab, true, false, jadefx::Key::ModShift);
+    frame();
+    jadefx::TextField* last = rig.field("Transparency");
+    Expect(last != nullptr && last->isFocused(), "Shift+Tab wraps to Transparency");
+    Expect(scroll->getVvalue() > scroll->getVmin(), "and scrolls down to it");
+    const double view_top = scroll->getAbsoluteY();
+    const double view_bottom = view_top + scroll->getViewportBounds().height;
+    Expect(last != nullptr && last->getAbsoluteY() >= view_top - 0.5 &&
+               last->getAbsoluteY() + last->getHeight() <= view_bottom + 0.5,
+           "showing it whole");
+    engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+}
+
+// Clicking a category's header folds it: its rows go, what was typed in them
+// is kept, Tab passes them over, and it stays folded for the next selection.
+void TestGroupsFold() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Rig rig;
+    const InstanceId wall = MakeAsset(rig.game, "Material", "Wall", rig.game.service("Materials"));
+    const InstanceId floor = MakeAsset(rig.game, "Material", "Floor", rig.game.service("Materials"));
+    rig.select({wall});
+    rig.frame();
+    jadefx::ScrollPane* scroll = rig.panel.scroll_pane();
+    const double open_height = scroll->getContentBounds().height;
+    Expect(rig.panel.editor("Roughness")->isVisible(), "Data's rows show");
+
+    rig.typeInto("Roughness", "0.25");
+    rig.click(rig.panel.group_header("Data"));
+    rig.frame();
+    rig.frame();
+    Expect(!rig.panel.editor("Roughness")->isVisible() && !rig.panel.editor("Color")->isVisible(),
+           "clicking Data folds its rows");
+    Expect(rig.panel.editor("Name")->isVisible(), "and leaves Instance's");
+    auto* material = dynamic_cast<engine_core::Material*>(rig.game.instance(wall));
+    Expect(material != nullptr && std::fabs(material->roughness() - 0.25) < 1e-6, "keeping what was typed");
+    Expect(scroll->getContentBounds().height < open_height, "the page gets shorter");
+
+    rig.click(rig.field("Name"));
+    rig.scene->noteKey(jadefx::Key::Tab, true, false, 0);
+    rig.frame();
+    Expect(rig.field("Name")->isFocused(), "Tab passes over the folded fields");
+
+    rig.select({floor});
+    rig.frame();
+    Expect(!rig.panel.editor("Roughness")->isVisible(), "another selection keeps Data folded");
+    rig.click(rig.panel.group_header("Data"));
+    rig.frame();
+    Expect(rig.panel.editor("Roughness")->isVisible(), "and a second click opens it");
+
+    const double with_preview = scroll->getContentBounds().height;
+    rig.click(rig.panel.group_header("Preview"));
+    rig.frame();
+    rig.frame();
+    Expect(scroll->getContentBounds().height < with_preview - 100, "the Preview folds too");
+    rig.click(rig.panel.group_header("Preview"));
+    rig.frame();
+    engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+}
+
 int main() {
+    TestGroupsFold();
+    TestRowsScroll();
     TestAssetPreview();
     TestSoundPreviewStops();
     TestEnumRowAndShownWhen();

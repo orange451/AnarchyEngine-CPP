@@ -68,6 +68,11 @@ constexpr const char* kSoundButtonIcon[kSoundButtons] = {"Play.png", "Pause.png"
 constexpr double kSoundButtonWidth = 84;
 // The time beside the track, as "1:05 / 2:30".
 constexpr double kSoundTimeWidth = 84;
+// The categories, each under a header that folds it: a row's PropertyGroup,
+// then the Preview section.
+constexpr int kGroups = 3;
+constexpr int kPreviewGroup = 2;
+constexpr const char* kGroupTitles[kGroups] = {"Instance", "Data", "Preview"};
 // A Transform's two lines, under its name when it is open.
 constexpr const char* kTransformLines[2] = {"Position", "Orientation"};
 
@@ -567,7 +572,12 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
 
     std::shared_ptr<PropertiesPane> pane;
     std::shared_ptr<jadefx::Label> empty;
-    std::shared_ptr<jadefx::Label> headers[2];
+    // Each category's header, Instance, Data, and Preview, and the arrow that
+    // folds it. A category is open until folded, and stays folded across
+    // selections for the session.
+    std::shared_ptr<jadefx::Label> headers[kGroups];
+    std::shared_ptr<PropertyDisclosure> header_arrows[kGroups];
+    bool group_folded[kGroups] = {};
     std::shared_ptr<jadefx::Label> status_label;
     std::vector<std::shared_ptr<RowView>> rows;
     PropertySheet sheet;
@@ -641,16 +651,31 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         empty->getClassList().add("properties-empty");
         empty->setStyle("color: var(--ide-muted-text-color);");
         body->getChildren().add(empty);
-        const char* titles[2] = {"Instance", "Data"};
-        for (int index = 0; index < 2; ++index) {
-            headers[index] = jadefx::make<jadefx::Label>(titles[index]);
+        std::weak_ptr<Impl> weak_self = weak_from_this();
+        for (int index = 0; index < kGroups; ++index) {
+            // The title and its arrow both fold it.
+            auto fold = [weak_self, index](const jadefx::MouseEvent&) {
+                if (const auto self = weak_self.lock()) {
+                    self->toggle_group(index);
+                }
+            };
+            headers[index] = jadefx::make<jadefx::Label>(kGroupTitles[index]);
             headers[index]->getClassList().add("properties-group");
             headers[index]->setStyle(
-                "padding: 0 6px; background-color: var(--ide-properties-group-color); "
+                "padding: 0 6px 0 20px; background-color: var(--ide-properties-group-color); "
                 "color: var(--ide-properties-group-text-color);");
+            headers[index]->setCursor(jadefx::Cursor::Pointer);
+            headers[index]->setOnMouseClicked(fold);
             headers[index]->setVisible(false);
             body->getChildren().add(headers[index]);
+            // After the title, so it paints over the title's background.
+            header_arrows[index] = jadefx::make<PropertyDisclosure>();
+            header_arrows[index]->setStyle("color: var(--ide-properties-group-text-color);");
+            header_arrows[index]->setOnMouseClicked(fold);
+            header_arrows[index]->setVisible(false);
+            body->getChildren().add(header_arrows[index]);
         }
+        preview_header = headers[kPreviewGroup];
         status_label = jadefx::make<jadefx::Label>("");
         status_label->getClassList().add("properties-status");
         status_label->setStyle(kErrorStyle);
@@ -660,11 +685,6 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     }
 
     void build_preview() {
-        preview_header = jadefx::make<jadefx::Label>("Preview");
-        preview_header->getClassList().add("properties-group");
-        preview_header->setStyle(headers[0]->getStyle());
-        preview_header->setVisible(false);
-        body->getChildren().add(preview_header);
         // Added before the image, so it paints behind it.
         preview_frame = jadefx::make<jadefx::StackPane>();
         preview_frame->getClassList().add("properties-preview-frame");
@@ -1293,7 +1313,48 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         return format_float(part == 0 ? vec.x : part == 1 ? vec.y : vec.z);
     }
 
-    bool open(const RowView& view) const { return view.row.kind != PropertyKind::Transform || !folded.count(view.row.name); }
+    // Whether a row's fields show: its category is open, and a Transform is unfolded.
+    bool open(const RowView& view) const {
+        return !group_folded[group_index(view.row.group)] &&
+               (view.row.kind != PropertyKind::Transform || !folded.count(view.row.name));
+    }
+
+    static int group_index(PropertyGroup group) { return group == PropertyGroup::Instance ? 0 : 1; }
+
+    // Folding a category leaves any field in it, keeping what was typed, and
+    // closes a color chooser open in it.
+    void toggle_group(int index) {
+        group_folded[index] = !group_folded[index];
+        if (!group_folded[index] || index == kPreviewGroup) {
+            return;
+        }
+        for (const auto& view : rows) {
+            if (group_index(view->row.group) != index) {
+                continue;
+            }
+            finish_typing(*view);
+            for (PropertyField* field : view->fields()) {
+                if (field->isFocused()) {
+                    release(*field);
+                }
+            }
+            if (picking && pick_name == view->row.name) {
+                cancel_pick();
+            }
+            if (asset_pick_view.lock() == view) {
+                close_asset_picker();
+            }
+        }
+    }
+
+    // Puts a category's header, with its arrow, at y. True while it is open.
+    template <typename Place>
+    bool place_header(Place& place, int index, double left, double width) {
+        place(*headers[index], left, width, kRowHeight - 2);
+        place(*header_arrows[index], left + 4, kDisclosureWidth, kRowHeight - 2);
+        header_arrows[index]->open = !group_folded[index];
+        return !group_folded[index];
+    }
 
     // Folding a row leaves any field in it, keeping what was typed.
     void toggle_fold(RowView& view) {
@@ -1874,19 +1935,27 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         } else {
             empty->setVisible(false);
         }
-        headers[0]->setVisible(false);
-        headers[1]->setVisible(false);
+        for (int index = 0; index < kGroups; ++index) {
+            headers[index]->setVisible(false);
+            header_arrows[index]->setVisible(false);
+        }
         PropertyGroup group = PropertyGroup::Instance;
         bool any = false;
+        bool group_open = true;
         for (const auto& view : rows) {
             if (!any || view->row.group != group) {
                 group = view->row.group;
                 any = true;
-                jadefx::Label& header = *headers[group == PropertyGroup::Instance ? 0 : 1];
-                place(header, left, width, kRowHeight - 2);
+                group_open = place_header(place, group_index(group), left, width);
                 y += kRowHeight - 2 + kRowGap;
             }
             view->top = y;
+            if (!group_open) {
+                for (jadefx::Node* node : view->nodes()) {
+                    node->setVisible(false);
+                }
+                continue;
+            }
             place(*view->name, left + kPad + kIndent, name_width - kIndent - 4, kRowHeight);
             const double each = (editor_width - 2 * kAxisGap) / 3;
             switch (view->row.kind) {
@@ -1969,7 +2038,6 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     // The Preview section, from y down, which it moves past it.
     template <typename Place>
     void layout_preview(Place& place, double& y, double left, double width, double inner) {
-        preview_header->setVisible(false);
         preview_frame->setVisible(false);
         preview_image->setVisible(false);
         preview_note->setVisible(false);
@@ -1981,8 +2049,12 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         if (asset_preview.kind == AssetPreview::Kind::None) {
             return;
         }
-        place(*preview_header, left, width, kRowHeight - 2);
-        y += kRowHeight - 2 + kRowGap + kPad;
+        const bool shown = place_header(place, kPreviewGroup, left, width);
+        y += kRowHeight - 2 + kRowGap;
+        if (!shown) {
+            return;
+        }
+        y += kPad;
         if (asset_preview.kind == AssetPreview::Kind::Sound) {
             layout_sound(place, y, left, inner);
             return;
@@ -2226,6 +2298,15 @@ std::string PropertiesPanel::preview_class() const {
 }
 
 jadefx::ScrollPane* PropertiesPanel::scroll_pane() const { return impl_->scroller.get(); }
+
+jadefx::Node* PropertiesPanel::group_header(const std::string& title) const {
+    for (int index = 0; index < kGroups; ++index) {
+        if (title == kGroupTitles[index]) {
+            return impl_->headers[index].get();
+        }
+    }
+    return nullptr;
+}
 
 void PropertiesPanel::stop_sound() {
     if (impl_->sound) {

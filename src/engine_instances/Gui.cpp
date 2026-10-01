@@ -1,5 +1,6 @@
 #include "Gui.hpp"
 
+#include "Containment.hpp"
 #include "Contract.hpp"
 #include "Enum.hpp"
 #include "PropertyBag.hpp"
@@ -374,6 +375,15 @@ ANARCHY_LUA_REGISTER(register_gui_lua) {
 
     const LuaField css[] = {gui_field<GuiProperty::Source>("CSS")};
     add_class("CSS", "Instance", css);
+
+    // A ScreenGui goes only in Gui. Panes and controls go in a ScreenGui or a
+    // pane; a control holds no GUI of its own. CSS styles Gui or any GUI.
+    register_suited_parents("ScreenGui", {"Gui"});
+    register_suited_parents("GuiBasePane", {"ScreenGui", "GuiBasePane"});
+    for (const char* control : {"Label", "Button", "TextField"}) {
+        register_suited_parents(control, {"ScreenGui", "GuiBasePane"});
+    }
+    register_suited_parents("CSS", {"Gui", "GuiBase"});
 }
 
 }  // namespace

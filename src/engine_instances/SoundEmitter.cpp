@@ -2,6 +2,7 @@
 
 #include "Contract.hpp"
 #include "Enum.hpp"
+#include "Containment.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
 
@@ -285,6 +286,7 @@ ANARCHY_LUA_REGISTER(register_sound_emitter_lua) {
         lua_property("IsPlaying", "boolean", false, read_is_playing, nullptr),
     };
     register_lua_class("SoundEmitter", "Instance", fields, static_cast<int>(std::size(fields)));
+    register_suited_parents("SoundEmitter", {"Workspace", "PVInstance"});
 }
 
 }  // namespace

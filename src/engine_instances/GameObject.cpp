@@ -1,6 +1,7 @@
 #include "GameObject.hpp"
 
 #include "Ecs.hpp"
+#include "Containment.hpp"
 #include "LuaApi.hpp"
 
 #include <cstring>
@@ -200,6 +201,8 @@ ANARCHY_LUA_REGISTER(register_game_object_lua) {
         lua_saved_property("Prefab", "Prefab?", read_prefab, write_prefab, "null"),
     };
     register_lua_class("GameObject", "PVInstance", fields, 2);
+    // Camera and the Lights inherit these.
+    register_suited_parents("GameObject", {"Workspace", "PVInstance"});
 }
 
 }  // namespace

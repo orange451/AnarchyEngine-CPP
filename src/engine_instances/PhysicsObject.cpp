@@ -2,6 +2,7 @@
 
 #include "Contract.hpp"
 #include "Enum.hpp"
+#include "Containment.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
 
@@ -388,6 +389,7 @@ ANARCHY_LUA_REGISTER(register_physics_object_lua) {
                            write_reference<&PhysicsObject::set_game_object>, "null"),
     };
     register_lua_class("PhysicsObject", "PVInstance", fields, static_cast<int>(std::size(fields)));
+    register_suited_parents("PhysicsObject", {"Workspace", "PVInstance"});
 }
 
 }  // namespace

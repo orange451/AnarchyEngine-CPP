@@ -1,6 +1,10 @@
 #include "Containment.hpp"
 
+#include "LuaApi.hpp"
+
+#include <algorithm>
 #include <cctype>
+#include <vector>
 
 namespace engine_core {
 namespace {
@@ -33,6 +37,20 @@ std::string service_path(std::string_view class_name) {
         return std::string(class_name);
     }
     return std::string(spec->parent_class) + "." + std::string(class_name);
+}
+
+struct SuitedParents {
+    const char* class_name;
+    std::vector<const char*> parents;
+};
+
+std::vector<SuitedParents>& suited_parents() {
+    static std::vector<SuitedParents> records;
+    return records;
+}
+
+bool is_a(const std::string& class_name, const char* ancestor) {
+    return class_name == ancestor || lua_class_inherits(class_name.c_str(), ancestor);
 }
 
 }  // namespace
@@ -115,6 +133,45 @@ std::optional<std::string> placement_error(std::string_view holder_class, std::s
         return "A " + std::string(child_class) + " must be in " + where;
     }
     return std::nullopt;
+}
+
+void register_suited_parents(const char* class_name, std::initializer_list<const char*> parents) {
+    if (class_name == nullptr) {
+        return;
+    }
+    std::vector<SuitedParents>& records = suited_parents();
+    auto record = std::find_if(records.begin(), records.end(), [&](const SuitedParents& row) {
+        return std::string_view(row.class_name) == class_name;
+    });
+    if (record == records.end()) {
+        record = records.insert(records.end(), SuitedParents{class_name, {}});
+    }
+    for (const char* parent : parents) {
+        if (parent != nullptr &&
+            std::find_if(record->parents.begin(), record->parents.end(), [&](const char* known) {
+                return std::string_view(known) == parent;
+            }) == record->parents.end()) {
+            record->parents.push_back(parent);
+        }
+    }
+}
+
+bool parent_suits(std::string_view holder_class, std::string_view child_class) {
+    const std::string holder(holder_class);
+    const std::string child(child_class);
+    bool named = false;
+    for (const SuitedParents& record : suited_parents()) {
+        for (const char* parent : record.parents) {
+            if (!is_a(holder, parent)) {
+                continue;
+            }
+            if (is_a(child, record.class_name)) {
+                return true;
+            }
+            named = true;
+        }
+    }
+    return !named;
 }
 
 }  // namespace engine_core

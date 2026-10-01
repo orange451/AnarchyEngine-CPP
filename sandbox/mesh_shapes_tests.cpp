@@ -430,6 +430,8 @@ TEST_CASE("a Script that rebuilds a Mesh every Heartbeat never writes its file",
         rig.frames(2);
         REQUIRE(cube.session_geometry().data == nullptr);
     }
-    REQUIRE(std::filesystem::last_write_time(file) == written);
+    // A bool, since Catch cannot print a file time's __int128 count on older libc++.
+    const bool unwritten = std::filesystem::last_write_time(file) == written;
+    REQUIRE(unwritten);
     REQUIRE(triangles(rig.file_of(cube)) == 12);
 }

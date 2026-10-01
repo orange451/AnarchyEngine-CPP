@@ -1,5 +1,6 @@
 #include "ModuleScript.hpp"
 
+#include "Containment.hpp"
 #include "LuaApi.hpp"
 
 namespace engine_core {
@@ -20,7 +21,10 @@ void ModuleScript::on_reuse() {
 
 namespace {
 
-ANARCHY_LUA_REGISTER(register_module_script_lua) { register_lua_class("ModuleScript", "LuaSource", nullptr, 0); }
+ANARCHY_LUA_REGISTER(register_module_script_lua) {
+    register_lua_class("ModuleScript", "LuaSource", nullptr, 0);
+    register_suited_parents("ModuleScript", {"Scripts"});
+}
 
 }  // namespace
 

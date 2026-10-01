@@ -1,5 +1,6 @@
 #pragma once
 
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -45,5 +46,16 @@ bool passes_rule_up(std::string_view class_name);
 // child_class named child_name. Empty when it takes it. "Game" is the root.
 std::optional<std::string> placement_error(std::string_view holder_class, std::string_view child_class,
                                            std::string_view child_name);
+
+// The parents a class belongs under: a service such as Lighting, or a class
+// whose instances hold it, such as GuiBase. Both sides go by IsA, so a parent
+// covers its subclasses and a class's subclasses inherit its parents. Each
+// class registers its own, at load. This only ranks the explorer's Insert
+// list; placement_error is what refuses.
+void register_suited_parents(const char* class_name, std::initializer_list<const char*> parents);
+// True when some class registered child_class, or one of its bases, under
+// holder_class or one of its bases. A holder no class names, such as Storage,
+// suits every class.
+bool parent_suits(std::string_view holder_class, std::string_view child_class);
 
 }  // namespace engine_core

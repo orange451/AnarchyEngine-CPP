@@ -5,6 +5,7 @@
 
 #include "AssetInstances.hpp"
 #include "ChangeHistoryService.hpp"
+#include "Containment.hpp"
 #include "DataModel.hpp"
 #include "Folder.hpp"
 #include "Game.hpp"
@@ -953,6 +954,20 @@ void insert_list_suits_the_parent() {
     Expect(ide::insert_suits("Lighting", "Folder"), "Every holder suits a Folder");
     Expect(!ide::insert_suits("Assets", "Folder"), "but not where its rule refuses one");
     Expect(ide::insert_suits("", "PointLight"), "No holder suits everything");
+    // Parents go by IsA on both sides.
+    Expect(ide::insert_suits("HBox", "Pane"), "A pane suits a pane");
+    Expect(!ide::insert_suits("Label", "Pane"), "A control does not suit a pane");
+    Expect(ide::insert_suits("Button", "CSS"), "Any GUI suits CSS");
+    Expect(ide::insert_suits("Camera", "SpotLight"), "A GameObject's subclass suits a Light");
+    Expect(!ide::insert_suits("Scripts", "PointLight"), "Scripts does not suit a light");
+}
+
+void insert_list_suits_registered_parents() {
+    Expect(!ide::insert_suits("Lighting", "TestLightProbe"), "An unregistered class does not suit Lighting");
+    engine_core::register_suited_parents("TestLightProbe", {"Lighting"});
+    Expect(ide::insert_suits("Lighting", "TestLightProbe"), "A class suits the parents it registers");
+    Expect(!ide::insert_suits("Workspace", "TestLightProbe"), "but no others");
+    Expect(ide::insert_suits("TestUnnamedHolder", "TestLightProbe"), "A holder no class names suits it");
 }
 
 void insert_refused_leaves_nothing() {
@@ -1174,6 +1189,7 @@ int main() {
     hidden_services_have_no_rows();
     insert_list_leaves_out_assets();
     insert_list_suits_the_parent();
+    insert_list_suits_registered_parents();
     insert_refused_leaves_nothing();
     add_prefab_instance_places_named_game_object();
     if (gFailures == 0) {

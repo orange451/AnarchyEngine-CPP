@@ -1,5 +1,6 @@
 #include "Light.hpp"
 
+#include "Containment.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
 
@@ -332,6 +333,9 @@ ANARCHY_LUA_REGISTER(register_light_lua) {
                    0.0, 1.0),
     };
     register_lua_class("SpotLight", "Light", spot_fields, static_cast<int>(std::size(spot_fields)));
+    // Light adds Lighting to what it inherits from GameObject.
+    register_suited_parents("Light", {"Lighting"});
+    register_suited_parents("DirectionalLight", {"Lighting", "Workspace", "PVInstance"});
 }
 
 }  // namespace

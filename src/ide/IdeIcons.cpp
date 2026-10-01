@@ -46,8 +46,9 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "SpotLight") {
         return "LightSpot.png";
     }
+    // The default icon, named so no PhysicsObject.png is looked for first.
     if (class_name == "PhysicsObject") {
-        return "Box.png";
+        return "wat.gif";
     }
     return nullptr;
 }

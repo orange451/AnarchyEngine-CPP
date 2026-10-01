@@ -23,7 +23,9 @@
 
 #include "jadefx/scene/Painter.hpp"
 #include "jadefx/scene/controls/ComboBox.hpp"
+#include "jadefx/scene/controls/ScrollPane.hpp"
 #include "jadefx/scene/image/ImageView.hpp"
+#include "jadefx/scene/layout/Pane.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -433,7 +435,7 @@ struct PendingEdit {
 
 }  // namespace
 
-// The docked page. Rows are placed by hand, so a layout pass is also the
+// The docked page: a ScrollPane over the rows. Its layout pass is also the
 // moment the panel reads the world.
 class PropertiesPane : public IdePane {
 public:
@@ -447,7 +449,7 @@ public:
 
     std::weak_ptr<PropertiesPanel::Impl> owner;
 
-    // The padded box the rows fill, in this pane's coordinates.
+    // The padded box the scroll pane fills, in this pane's coordinates.
     double inner_left() const { return contentLeft(); }
     double inner_top() const { return contentTop(); }
     double inner_width() const { return contentWidth(); }
@@ -455,9 +457,22 @@ public:
 
 protected:
     void layoutChildren() override;
-    void handleScroll(jadefx::ScrollEvent& event) override;
     void renderContent(jadefx::UiRenderer& renderer, float opacity) override;
     void sceneChanged(jadefx::Scene* previous) override;
+};
+
+// What the scroll pane scrolls: every row's widgets, placed by hand in its
+// layout pass. It is as tall as the rows' last layout made it.
+class PropertiesBody : public jadefx::Pane {
+public:
+    PropertiesBody() { getClassList().add("properties-body"); }
+
+    std::weak_ptr<PropertiesPanel::Impl> owner;
+
+protected:
+    void layoutChildren() override;
+    double preferredContentWidth(double) const override { return 0; }
+    double preferredContentHeight(double) const override;
 };
 
 // What the Preview section under the rows is for: a single selected Texture,
@@ -506,7 +521,7 @@ struct RowView {
     std::shared_ptr<PropertyDisclosure> disclosure;
     std::shared_ptr<jadefx::Label> lines[2];
     bool tip_installed = false;
-    // Where the last layout put the row, in unscrolled content points.
+    // Where the last layout put the row in body, which scrolls.
     double top = 0;
 
     std::vector<jadefx::Node*> nodes() const {
@@ -587,7 +602,10 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     // folded across selections for the session.
     std::set<std::string> folded;
 
-    double scroll = 0;
+    // The page holds scroller, and scroller body, which holds every widget.
+    std::shared_ptr<jadefx::ScrollPane> scroller;
+    std::shared_ptr<PropertiesBody> body;
+    // How tall the rows came out in the last layout.
     double content = 0;
 
     // The Preview section: a Texture's image or a Material's ball in a frame,
@@ -613,10 +631,16 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
 
     void build() {
         pane = jadefx::make<PropertiesPane>();
+        body = jadefx::make<PropertiesBody>();
+        scroller = jadefx::make<jadefx::ScrollPane>(body);
+        scroller->getClassList().add("properties-scroll");
+        scroller->setFitToWidth(true);
+        scroller->setHbarPolicy(jadefx::ScrollBarPolicy::Never);
+        pane->getChildren().add(scroller);
         empty = jadefx::make<jadefx::Label>("No selection");
         empty->getClassList().add("properties-empty");
         empty->setStyle("color: var(--ide-muted-text-color);");
-        pane->getChildren().add(empty);
+        body->getChildren().add(empty);
         const char* titles[2] = {"Instance", "Data"};
         for (int index = 0; index < 2; ++index) {
             headers[index] = jadefx::make<jadefx::Label>(titles[index]);
@@ -625,13 +649,13 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 "padding: 0 6px; background-color: var(--ide-properties-group-color); "
                 "color: var(--ide-properties-group-text-color);");
             headers[index]->setVisible(false);
-            pane->getChildren().add(headers[index]);
+            body->getChildren().add(headers[index]);
         }
         status_label = jadefx::make<jadefx::Label>("");
         status_label->getClassList().add("properties-status");
         status_label->setStyle(kErrorStyle);
         status_label->setVisible(false);
-        pane->getChildren().add(status_label);
+        body->getChildren().add(status_label);
         build_preview();
     }
 
@@ -640,7 +664,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         preview_header->getClassList().add("properties-group");
         preview_header->setStyle(headers[0]->getStyle());
         preview_header->setVisible(false);
-        pane->getChildren().add(preview_header);
+        body->getChildren().add(preview_header);
         // Added before the image, so it paints behind it.
         preview_frame = jadefx::make<jadefx::StackPane>();
         preview_frame->getClassList().add("properties-preview-frame");
@@ -649,19 +673,19 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             "border-color: var(--ide-field-border-color); background-color: var(--ide-field-color);");
         preview_frame->setMouseTransparent(true);
         preview_frame->setVisible(false);
-        pane->getChildren().add(preview_frame);
+        body->getChildren().add(preview_frame);
         preview_image = jadefx::make<jadefx::ImageView>();
         preview_image->getClassList().add("properties-preview-image");
         preview_image->setMouseTransparent(true);
         preview_image->setVisible(false);
-        pane->getChildren().add(preview_image);
+        body->getChildren().add(preview_image);
         preview_note = jadefx::make<jadefx::Label>("");
         preview_note->getClassList().add("properties-preview-note");
         preview_note->setStyle("color: var(--ide-muted-text-color);");
         preview_note->setAlignment(jadefx::Pos::Center);
         preview_note->setMouseTransparent(true);
         preview_note->setVisible(false);
-        pane->getChildren().add(preview_note);
+        body->getChildren().add(preview_note);
         std::weak_ptr<Impl> weak_self = weak_from_this();
         for (int part = 0; part < kSoundButtons; ++part) {
             auto button = jadefx::make<jadefx::Button>(kSoundButtonText[part]);
@@ -677,7 +701,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                     self->sound_action(static_cast<SoundButton>(part));
                 }
             });
-            pane->getChildren().add(button);
+            body->getChildren().add(button);
             sound_buttons[part] = std::move(button);
         }
         // Dragging the thumb seeks as it goes; an arrow key seeks a step.
@@ -695,13 +719,13 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 self->seek_sound();
             }
         };
-        pane->getChildren().add(sound_track);
+        body->getChildren().add(sound_track);
         sound_time = jadefx::make<jadefx::Label>("");
         sound_time->getClassList().add("properties-sound-time");
         sound_time->setStyle("color: var(--ide-muted-text-color);");
         sound_time->setAlignment(jadefx::Pos::CenterRight);
         sound_time->setVisible(false);
-        pane->getChildren().add(sound_time);
+        body->getChildren().add(sound_time);
 
         thumbnails = std::make_unique<ThumbnailLoader>(kPreviewPixels, std::function<void()>());
         ball = std::make_unique<MaterialBall>(kBallRenderSize, kPreviewPixels);
@@ -998,7 +1022,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 if (jadefx::Scene* scene = node->getScene()) {
                     scene->releaseFocus(node);
                 }
-                pane->getChildren().removeIf(
+                body->getChildren().removeIf(
                     [node](const std::shared_ptr<jadefx::Node>& child) { return child.get() == node; });
             }
         }
@@ -1035,7 +1059,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 self->tab_from(*row, *raw, back);
             }
         };
-        pane->getChildren().add(field);
+        body->getChildren().add(field);
         return field;
     }
 
@@ -1046,7 +1070,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         view->name->getClassList().add("properties-name");
         view->name->setStyle(row.writable ? "color: var(--ide-text-color);"
                                           : "color: var(--ide-properties-readonly-name-color);");
-        pane->getChildren().add(view->name);
+        body->getChildren().add(view->name);
         std::weak_ptr<Impl> weak_self = shared_from_this();
         std::weak_ptr<RowView> weak_view = view;
         switch (row.kind) {
@@ -1078,7 +1102,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                         self->commit_slider(*row_view);
                     }
                 };
-                pane->getChildren().add(view->slider);
+                body->getChildren().add(view->slider);
             }
             break;
         case PropertyKind::Vector2:
@@ -1100,7 +1124,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             view->disclosure = jadefx::make<PropertyDisclosure>();
             view->disclosure->open = !folded.count(row.name);
             view->disclosure->setOnMouseClicked(fold);
-            pane->getChildren().add(view->disclosure);
+            body->getChildren().add(view->disclosure);
             view->name->setCursor(jadefx::Cursor::Pointer);
             view->name->setOnMouseClicked(fold);
             for (int line = 0; line < 2; ++line) {
@@ -1108,7 +1132,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 view->lines[line]->getClassList().add("properties-name");
                 view->lines[line]->setStyle(row.writable ? "color: var(--ide-text-color);"
                                                          : "color: var(--ide-properties-readonly-name-color);");
-                pane->getChildren().add(view->lines[line]);
+                body->getChildren().add(view->lines[line]);
             }
             for (int axis = 0; axis < kTransformParts; ++axis) {
                 view->axes[axis] = make_field(view, !row.writable, kAxisStyles[axis % 3]);
@@ -1131,7 +1155,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                     self->commit_choice(*row_view);
                 }
             });
-            pane->getChildren().add(view->choice);
+            body->getChildren().add(view->choice);
             break;
         }
         case PropertyKind::Bool:
@@ -1145,7 +1169,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                     self->commit_check(*row_view);
                 }
             });
-            pane->getChildren().add(view->check);
+            body->getChildren().add(view->check);
             break;
         case PropertyKind::Color3:
             view->color = jadefx::make<PropertyColor>();
@@ -1164,7 +1188,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                     self->finish_color(*row_view, picked);
                 }
             };
-            pane->getChildren().add(view->color);
+            body->getChildren().add(view->color);
             break;
         case PropertyKind::Ref: {
             // The value is never typed in. Clicking it picks, and Clear sets nil.
@@ -1237,8 +1261,8 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                     self->clear_ref(*row_view);
                 }
             });
-            pane->getChildren().add(view->pick);
-            pane->getChildren().add(view->clear);
+            body->getChildren().add(view->pick);
+            body->getChildren().add(view->clear);
             break;
         }
         }
@@ -1679,15 +1703,26 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
 
     // Scrolls just enough to show the line the field is on.
     void reveal(const RowView& view, const PropertyField& field) {
-        const double height = pane ? pane->inner_height() : 0.0;
+        const double height = scroller->getViewportBounds().height;
+        const double range = content - height;
+        if (!(range > 0)) {
+            return;
+        }
         double top = view.top;
         if (view.row.kind == PropertyKind::Transform) {
             top += (axis_of(view, field) >= 3 ? 2 : 1) * (kRowHeight + kRowGap);
         }
-        if (top - kPad < scroll) {
-            scroll = std::max(0.0, top - kPad);
-        } else if (top + kRowHeight + kPad > scroll + height) {
-            scroll = top + kRowHeight + kPad - height;
+        // vvalue runs from vmin at the top to vmax at the bottom.
+        const double span = scroller->getVmax() - scroller->getVmin();
+        const double offset = (scroller->getVvalue() - scroller->getVmin()) / span * range;
+        double next = offset;
+        if (top - kPad < offset) {
+            next = std::max(0.0, top - kPad);
+        } else if (top + kRowHeight + kPad > offset + height) {
+            next = top + kRowHeight + kPad - height;
+        }
+        if (next != offset) {
+            scroller->setVvalue(scroller->getVmin() + std::min(next, range) / range * span);
         }
     }
 
@@ -1800,26 +1835,37 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
 
     // ---- Layout ----------------------------------------------------------
 
+    // Lays the scroll pane over the page. The rows' height is known only once
+    // they are placed, so a change lays it out again with the new height.
+    void layout_page() {
+        const double before = content;
+        auto lay = [this] {
+            scroller->performLayout(pane->inner_left(), pane->inner_top(), std::max(0.0, pane->inner_width()),
+                                    std::max(0.0, pane->inner_height()));
+        };
+        lay();
+        if (content != before) {
+            lay();
+        }
+    }
+
+    // Places every widget in body, top down, from body's top-left.
     void layout() {
-        if (!pane) {
+        if (!body) {
             return;
         }
-        const double left = pane->inner_left();
-        const double top = pane->inner_top();
-        const double width = std::max(0.0, pane->inner_width());
-        const double height = std::max(0.0, pane->inner_height());
+        const double left = 0;
+        const double top = 0;
+        const double width = std::max(0.0, body->getWidth());
         const double inner = std::max(0.0, width - 2 * kPad);
         const double name_width = std::clamp(inner * 0.38, 64.0, 180.0);
         const double editor_x = left + kPad + name_width;
         const double editor_width = std::max(24.0, inner - name_width);
 
-        double y = kPad - scroll;
+        double y = kPad;
         auto place = [&](jadefx::Node& node, double x, double w, double h) {
-            const bool inside = y + h > 0 && y < height;
-            node.setVisible(inside);
-            if (inside) {
-                node.performLayout(x, top + y, std::max(0.0, w), h);
-            }
+            node.setVisible(true);
+            node.performLayout(x, top + y, std::max(0.0, w), h);
         };
 
         if (sheet.ids.empty()) {
@@ -1840,7 +1886,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 place(header, left, width, kRowHeight - 2);
                 y += kRowHeight - 2 + kRowGap;
             }
-            view->top = y + scroll;
+            view->top = y;
             place(*view->name, left + kPad + kIndent, name_width - kIndent - 4, kRowHeight);
             const double each = (editor_width - 2 * kAxisGap) / 3;
             switch (view->row.kind) {
@@ -1917,11 +1963,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         } else {
             status_label->setVisible(false);
         }
-        content = y + scroll + kPad;
-        const double limit = std::max(0.0, content - height);
-        if (scroll > limit) {
-            scroll = limit;
-        }
+        content = y + kPad;
     }
 
     // The Preview section, from y down, which it moves past it.
@@ -2013,25 +2055,24 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         place(*sound_time, left + kPad + track + kAxisGap, time_width, kRowHeight);
         y += kRowHeight + kRowGap;
     }
-
-    void scroll_by(double delta) {
-        const double limit = std::max(0.0, content - (pane ? pane->inner_height() : 0.0));
-        scroll = std::clamp(scroll - delta * kRowHeight, 0.0, limit);
-    }
 };
 
 void PropertiesPane::layoutChildren() {
     if (const auto impl = owner.lock()) {
         impl->poll();
+        impl->layout_page();
+    }
+}
+
+void PropertiesBody::layoutChildren() {
+    if (const auto impl = owner.lock()) {
         impl->layout();
     }
 }
 
-void PropertiesPane::handleScroll(jadefx::ScrollEvent& event) {
-    if (const auto impl = owner.lock()) {
-        impl->scroll_by(event.deltaY);
-        event.consume();
-    }
+double PropertiesBody::preferredContentHeight(double) const {
+    const auto impl = owner.lock();
+    return impl ? impl->content : 0.0;
 }
 
 void PropertiesPane::renderContent(jadefx::UiRenderer& renderer, float opacity) {
@@ -2056,6 +2097,7 @@ void PropertiesPane::sceneChanged(jadefx::Scene* previous) {
 PropertiesPanel::PropertiesPanel() : impl_(std::make_shared<Impl>()) {
     impl_->build();
     impl_->pane->owner = impl_;
+    impl_->body->owner = impl_;
 }
 
 PropertiesPanel::~PropertiesPanel() {
@@ -2182,6 +2224,8 @@ std::string PropertiesPanel::preview_class() const {
     }
     return {};
 }
+
+jadefx::ScrollPane* PropertiesPanel::scroll_pane() const { return impl_->scroller.get(); }
 
 void PropertiesPanel::stop_sound() {
     if (impl_->sound) {

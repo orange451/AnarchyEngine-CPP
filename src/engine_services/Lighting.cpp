@@ -34,12 +34,7 @@ std::optional<std::string> Lighting::set_number(const char* property, double& sl
     if (!std::isfinite(value)) {
         return std::string(property) + " must be a finite number";
     }
-    if (&slot == &clock_time_) {
-        value = std::fmod(value, 24.0);
-        if (value < 0) {
-            value += 24.0;
-        }
-    } else if (value < 0) {
+    if (value < 0) {
         value = 0;
     }
     if (slot == value) {
@@ -73,10 +68,6 @@ std::optional<std::string> Lighting::set_ambient(ColorRgb color) { return set_co
 
 std::optional<std::string> Lighting::set_brightness(double value) {
     return set_number("Brightness", brightness_, value);
-}
-
-std::optional<std::string> Lighting::set_clock_time(double value) {
-    return set_number("ClockTime", clock_time_, value);
 }
 
 std::optional<std::string> Lighting::set_fog_color(ColorRgb color) { return set_color("FogColor", fog_color_, color); }
@@ -148,7 +139,6 @@ ANARCHY_LUA_REGISTER(register_lighting_lua) {
     // The defaults, as a file would hold them, from the class's own constants.
     static const std::string ambient = color_json(Lighting::kDefaultAmbient);
     static const std::string brightness = number_json(Lighting::kDefaultBrightness);
-    static const std::string clock_time = number_json(Lighting::kDefaultClockTime);
     static const std::string fog_color = color_json(Lighting::kDefaultFogColor);
     static const std::string fog_start = number_json(Lighting::kDefaultFogStart);
     static const std::string fog_end = number_json(Lighting::kDefaultFogEnd);
@@ -160,8 +150,6 @@ ANARCHY_LUA_REGISTER(register_lighting_lua) {
                            ambient.c_str()),
         lua_saved_property("Brightness", "number", read_number<&Lighting::brightness>,
                            write_number<&Lighting::set_brightness>, brightness.c_str()),
-        lua_saved_property("ClockTime", "number", read_number<&Lighting::clock_time>,
-                           write_number<&Lighting::set_clock_time>, clock_time.c_str()),
         lua_saved_property("FogColor", "Color3", read_color<&Lighting::fog_color>,
                            write_color<&Lighting::set_fog_color>, fog_color.c_str()),
         lua_saved_property("FogStart", "number", read_number<&Lighting::fog_start>,

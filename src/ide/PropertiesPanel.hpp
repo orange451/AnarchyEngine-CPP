@@ -122,6 +122,8 @@ public:
     // The Preview section's class, "Texture", "Material", or "Sound", or
     // empty while there is none.
     std::string preview_class() const;
+    // The scroll pane the rows are in.
+    jadefx::ScrollPane* scroll_pane() const;
     // Silences the Preview's sound, as a test starting or stopping does, so
     // it is never heard over the game, nor left from before it.
     void stop_sound();

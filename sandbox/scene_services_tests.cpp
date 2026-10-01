@@ -165,7 +165,6 @@ TEST_CASE("SS5 Lighting's properties save, undo, and come back at Stop", "[SS5]"
     Game game;
     engine_core::Lighting& lighting = lighting_of(game);
     REQUIRE(lighting.brightness() == engine_core::Lighting::kDefaultBrightness);
-    REQUIRE(lighting.clock_time() == 14.0);
 
     // A default place saves nothing.
     engine_core::PropertyBag saved;
@@ -182,11 +181,7 @@ TEST_CASE("SS5 Lighting's properties save, undo, and come back at Stop", "[SS5]"
     game.history().redo();
     REQUIRE(lighting.brightness() == 3.5);
 
-    // ClockTime wraps into a day; the others do not go below 0.
-    REQUIRE_FALSE(lighting.set_clock_time(25.0));
-    REQUIRE(lighting.clock_time() == 1.0);
-    REQUIRE_FALSE(lighting.set_clock_time(-2.0));
-    REQUIRE(lighting.clock_time() == 22.0);
+    // Numbers do not go below 0.
     REQUIRE_FALSE(lighting.set_fog_end(-5.0));
     REQUIRE(lighting.fog_end() == 0.0);
     REQUIRE(*lighting.set_brightness(std::nan("")) == "Brightness must be a finite number");
@@ -209,7 +204,6 @@ TEST_CASE("SS5 Lighting's properties save, undo, and come back at Stop", "[SS5]"
         REQUIRE(error.empty());
     }
     REQUIRE(loaded.brightness() == 3.5);
-    REQUIRE(loaded.clock_time() == 22.0);
     REQUIRE(loaded.fog_end() == 0.0);
     REQUIRE(engine_core::same_color(loaded.ambient(), red));
     std::string error;
@@ -258,7 +252,7 @@ TEST_CASE("SS6 scripts see the scene services and cannot move them", "[SS6]") {
         _G.in_workspace = folder.Parent == workspace
 
         game.Lighting.Brightness = 4
-        _G.lighting = game.Lighting.Brightness == 4 and game.Lighting.ClockTime == 14
+        _G.lighting = game.Lighting.Brightness == 4
         _G.no_nan = refuses(function() game.Lighting.FogEnd = 0 / 0 end, "FogEnd must be a finite number")
     )");
     rig.game.start_simulation();

@@ -288,13 +288,14 @@ TEST_CASE("SS9 a path through game or workspace reads the live value", "[SS9]") 
     require_globals(rig, {"game_path", "found", "workspace_path", "script_path"});
 }
 
-TEST_CASE("SS7 a script runs only under Workspace or Scripts", "[SS7]") {
+TEST_CASE("SS7 a script runs only under Workspace, Scripts, or Gui", "[SS7]") {
     ScriptRig rig;
     const InstanceId workspace = rig.game.scene_service("Workspace");
     const InstanceId storage = rig.game.scene_service("Storage");
     const InstanceId lighting = rig.game.scene_service("Lighting");
     add_script(rig.game, workspace, "InWorkspace", "_G.workspace_ran = true");
     add_script(rig.game, rig.game.scene_service("Scripts"), "InScripts", "_G.scripts_ran = true");
+    add_script(rig.game, rig.game.scene_service("Gui"), "InGui", "_G.gui_ran = true");
     add_script(rig.game, storage, "InStorage", "_G.storage_ran = true");
     add_script(rig.game, lighting, "InLighting", "_G.lighting_ran = true");
     Folder& nested = rig.game.create<Folder>();
@@ -302,7 +303,7 @@ TEST_CASE("SS7 a script runs only under Workspace or Scripts", "[SS7]") {
     add_script(rig.game, nested.id(), "Nested", "_G.nested_ran = true");
     rig.game.start_simulation();
     rig.frames(1, 0.05);
-    require_globals(rig, {"workspace_ran", "scripts_ran", "nested_ran"});
+    require_globals(rig, {"workspace_ran", "scripts_ran", "gui_ran", "nested_ran"});
     bool ran = false;
     REQUIRE_FALSE(rig.runtime.global_boolean("storage_ran", ran));
     REQUIRE_FALSE(rig.runtime.global_boolean("lighting_ran", ran));

@@ -309,7 +309,7 @@ private:
     // Records a console or plugin connection so its VM can disconnect it.
     void keep(Vm& vm, InstanceId script, std::uint32_t owner, const Connection& connection);
     void kill_script(InstanceId id);
-    // Whether a script at id is under Workspace or Scripts, where scripts run.
+    // Whether a script at id is under Workspace, Scripts, or Gui, where scripts run.
     bool runs_here(InstanceId id) const;
     void enqueue_start(Script& script);
     void launch_starts();

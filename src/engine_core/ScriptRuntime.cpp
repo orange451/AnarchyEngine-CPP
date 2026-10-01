@@ -262,9 +262,9 @@ void ScriptRuntime::on_moved(InstanceId id) {
     if (game_ == nullptr || !game_->simulation_running() || play_.closing) {
         return;
     }
-    // A script that leaves Workspace and Scripts stops. One that arrives starts
-    // from the top, unless it already runs this session: a move between the two
-    // does not run it again.
+    // A script that leaves Workspace, Scripts, and Gui stops. One that arrives
+    // starts from the top, unless it already runs this session: a move between
+    // them does not run it again.
     std::vector<Script*> scripts;
     std::vector<InstanceId> pending{id};
     while (!pending.empty()) {
@@ -300,7 +300,7 @@ bool ScriptRuntime::runs_here(InstanceId id) const {
         return false;
     }
     const std::string_view name = service->class_name();
-    return name == "Workspace" || name == "Scripts";
+    return name == "Workspace" || name == "Scripts" || name == "Gui";
 }
 
 void ScriptRuntime::on_script_enabled(Script& script, bool enabled) {

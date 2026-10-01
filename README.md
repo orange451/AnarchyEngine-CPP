@@ -16,7 +16,7 @@ Everything in the tree is a `DataModel`: it has `Name`, `Parent`, `FindFirstChil
 - `Lighting` is how the scene is lit, through its properties: `Ambient`, `Brightness`, `ClockTime`, `FogColor`, `FogStart`, and `FogEnd`. The renderer does not read them yet.
 - `Storage` keeps assets a place uses at runtime. Nothing in it renders or runs.
 - `Scripts` holds scripts that run at runtime.
-- `Gui` holds the screen GUIs: every `ScreenGui` in it is drawn over the Scene View, in edit mode and in play.
+- `Gui` holds the screen GUIs: every `ScreenGui` in it is drawn over the Scene View, in edit mode and in play. Scripts in it run, as they do in `Workspace`.
 
 A scene service is a `SceneService`, a `DataModel` that is not an `Instance`, like `Game`. Every place has each of them, always: none can be moved, renamed, destroyed, or made with `Instance.new`, and anything else put directly under `game` is refused with a message that says to put it in `Workspace`. Scripts reach them as `game.Workspace` or `game:GetService("Workspace")`, and `workspace` is `game.Workspace`. `getmetatable` on any instance gives `"The metatable is locked"`.
 
@@ -71,7 +71,7 @@ while true do
 end
 ```
 
-A script runs only under `Workspace` or `Scripts`, at any depth. It starts when it is there, enabled, and the place is playing. Moved out, into `Storage` or out of the tree, it stops; moved back, it starts again from the top. A move between `Workspace` and `Scripts` does not restart it. A `ModuleScript` can be required from anywhere. It runs on the simulation, on the same clock as Heartbeat. The code is sandboxed to the libraries the engine opens: the Luau base libraries, `task`, and the instance API.
+A script runs only under `Workspace`, `Scripts`, or `Gui`, at any depth. It starts when it is there, enabled, and the place is playing. Moved out, into `Storage` or out of the tree, it stops; moved back, it starts again from the top. A move among `Workspace`, `Scripts`, and `Gui` does not restart it. A `ModuleScript` can be required from anywhere. It runs on the simulation, on the same clock as Heartbeat. The code is sandboxed to the libraries the engine opens: the Luau base libraries, `task`, and the instance API.
 
 `game:GetService("UserInputService")` is the keyboard and mouse, the way Roblox's `UserInputService` has them. Click the scene view during a test to give it the keyboard. `InputBegan`, `InputChanged`, and `InputEnded` fire with an `InputObject`, whose `KeyCode`, `UserInputType`, `UserInputState`, `Position`, and `Delta` say what happened, and `gameProcessedEvent`. `IsKeyDown`, `IsMouseButtonPressed`, `GetKeysPressed`, `GetMouseButtonsPressed`, and `GetMouseLocation` ask what is held now. Positions are points from the scene view's top-left corner. As in Roblox, `GetMouseLocation` returns a `Vector2`, and an `InputObject`'s `Position` and `Delta` are `Vector3`s whose z is 0, except that a `MouseWheel` input's `Position.Z` is how far the wheel turned. A key still held when the view loses focus gets its `InputEnded` then, and Stop forgets whatever was held. Setting `MouseBehavior` to a lock locks the pointer only in the scene view that has focus, the one last clicked. Shift+Esc takes the focus from that view and frees the pointer until you click the view again, which locks it again; `MouseBehavior` keeps what the script set.
 

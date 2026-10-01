@@ -64,7 +64,7 @@ public:
     const char* class_name() const override;
 };
 
-// Scripts that run at runtime. A Script runs only under Workspace or Scripts.
+// Scripts that run at runtime. A Script runs only under Workspace, Scripts, or Gui.
 class Scripts : public SceneService {
 public:
     using SceneService::SceneService;
@@ -72,7 +72,8 @@ public:
 };
 
 // The screen GUIs: every ScreenGui in it, directly or through Folders, is drawn
-// over each Scene View, in edit mode and in play. Anything may go in it.
+// over each Scene View, in edit mode and in play. Anything may go in it, and a
+// Script in it runs, as in Workspace.
 // Its class, and its name in scripts, is Gui (game.Gui).
 class GuiService : public SceneService {
 public:

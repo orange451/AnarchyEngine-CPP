@@ -14,7 +14,7 @@ class ScriptHost {
 public:
     virtual ~ScriptHost() = default;
     // id was reparented, so every Script under it, id included, may have gone
-    // into or out of Workspace and Scripts, the only places a script runs.
+    // into or out of Workspace, Scripts, and Gui, the only places a script runs.
     // Runs at the end of set_parent.
     virtual void on_moved(InstanceId id) = 0;
     virtual void on_script_enabled(Script& script, bool enabled) = 0;

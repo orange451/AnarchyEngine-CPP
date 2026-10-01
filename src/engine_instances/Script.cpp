@@ -113,7 +113,7 @@ ANARCHY_LUA_REGISTER(register_script_lua) {
         lua_property("Enabled", "boolean", true, read_lua_enabled, write_lua_enabled),
     };
     register_lua_class("Script", "LuaSource", fields, 1);
-    register_suited_parents("Script", {"Scripts", "Workspace", "PVInstance", "GuiBase"});
+    register_suited_parents("Script", {"Scripts", "Workspace", "Gui", "PVInstance", "GuiBase"});
 }
 
 }  // namespace

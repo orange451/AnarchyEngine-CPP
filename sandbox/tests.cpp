@@ -4305,7 +4305,7 @@ TEST_CASE("U4 moves between steps arrive as one change with the deltas added", "
     REQUIRE(rig.seen[1].delta.y == 3.f);
 }
 
-// A script runs only under Workspace or Scripts. Out of the tree, it stops at
+// A script runs only under Workspace, Scripts, or Gui. Out of the tree, it stops at
 // its next yield.
 TEST_CASE("S42 a script that takes itself out of the tree stops", "[S42]") {
     ScriptRig rig;

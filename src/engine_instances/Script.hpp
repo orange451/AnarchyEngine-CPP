@@ -8,8 +8,8 @@
 
 namespace engine_core {
 
-// A LuaSource that runs on its own, while it is under Workspace or Scripts. It
-// may live anywhere in the tree; elsewhere it does not run. The Luau
+// A LuaSource that runs on its own, while it is under Workspace, Scripts, or
+// Gui. It may live anywhere in the tree; elsewhere it does not run. The Luau
 // global `script` is the userdata for this instance. It does not run inside
 // set_parent, set_enabled, or set_source; the runtime resumes it at the end of
 // a drain or on the next Heartbeat. Enabled false stops it and keeps it from

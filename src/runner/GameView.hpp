@@ -64,7 +64,8 @@ public:
 
     // The next paint reads back what it drew, before the label, and hands it to
     // done on this thread. A view that does not paint, such as a hidden tab,
-    // does not call done until it paints again.
+    // does not call done until it paints again, nor does a paint the renderer
+    // was not ready to draw.
     void requestCapture(std::function<void(ViewPixels)> done);
 
     // The linked Camera's GUID. Empty before the view has one.

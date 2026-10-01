@@ -68,6 +68,9 @@ using GLsizeiptr = std::ptrdiff_t;
 #ifdef GL_LINK_STATUS
 #undef GL_LINK_STATUS
 #endif
+#ifdef GL_VALIDATE_STATUS
+#undef GL_VALIDATE_STATUS
+#endif
 #ifdef GL_BLEND
 #undef GL_BLEND
 #endif
@@ -151,6 +154,7 @@ constexpr GLenum GL_FRAGMENT_SHADER = 0x8B30;
 constexpr GLenum GL_VERTEX_SHADER = 0x8B31;
 constexpr GLenum GL_COMPILE_STATUS = 0x8B81;
 constexpr GLenum GL_LINK_STATUS = 0x8B82;
+constexpr GLenum GL_VALIDATE_STATUS = 0x8B83;
 constexpr GLenum GL_BLEND = 0x0BE2;
 constexpr GLenum GL_SCISSOR_TEST = 0x0C11;
 constexpr GLenum GL_DEPTH_TEST = 0x0B71;
@@ -225,6 +229,7 @@ extern void (*rt_glAttachShader)(GLuint program, GLuint shader);
 extern void (*rt_glLinkProgram)(GLuint program);
 extern void (*rt_glDeleteProgram)(GLuint program);
 extern void (*rt_glGetProgramiv)(GLuint program, GLenum pname, GLint* params);
+extern void (*rt_glValidateProgram)(GLuint program);
 extern void (*rt_glGetProgramInfoLog)(GLuint program, GLsizei bufSize, GLsizei* length, GLchar* infoLog);
 extern void (*rt_glUseProgram)(GLuint program);
 extern void (*rt_glGenVertexArrays)(GLsizei n, GLuint* arrays);
@@ -299,6 +304,7 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glLinkProgram ::runner::rt_glLinkProgram
 #define glDeleteProgram ::runner::rt_glDeleteProgram
 #define glGetProgramiv ::runner::rt_glGetProgramiv
+#define glValidateProgram ::runner::rt_glValidateProgram
 #define glGetProgramInfoLog ::runner::rt_glGetProgramInfoLog
 #define glUseProgram ::runner::rt_glUseProgram
 #define glGenVertexArrays ::runner::rt_glGenVertexArrays

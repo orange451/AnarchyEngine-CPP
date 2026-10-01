@@ -101,7 +101,14 @@ public:
     // clear color.
     // meshes may be null when meshCount is 0, and lights when lightCount is 0.
     // The pane is still cleared.
-    void draw(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
+    // True when the meshes were drawn, or there were none. False when the pane
+    // got only the clear: the render buffers were refused, or a pass cannot draw
+    // yet. macOS's OpenGL on Metal cannot ready a program for render buffers
+    // made in this frame until the next one, and a draw there would fail with
+    // GL_INVALID_OPERATION, so each pass asks first; drawing again in a later
+    // frame draws them. False with nothing done before initialize, or for an
+    // empty pane.
+    bool draw(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
               const MeshDraw* meshes, int meshCount, const LightDraw* lights = nullptr, int lightCount = 0);
     // Reads back what draw just drew for the same pane, top row first. Only
     // the part inside the framebuffer and the current scissor. False when
@@ -186,10 +193,11 @@ private:
     void destroyTargets();
     void createSphere();
 
-    void geometryPass(const MeshDraw* meshes, int count, const float* projection);
-    void lightPass(const float* projection, const float* inverseProjection);
-    void transparencyPass(const MeshDraw* meshes, int count, const float* projection, const float* inverseProjection);
-    void mergePass();
+    // Each pass is false, having stopped before its first draw, when its program cannot draw yet.
+    bool geometryPass(const MeshDraw* meshes, int count, const float* projection);
+    bool lightPass(const float* projection, const float* inverseProjection);
+    bool transparencyPass(const MeshDraw* meshes, int count, const float* projection, const float* inverseProjection);
+    bool mergePass();
     void bindMaterial(const Program& program, const MeshDraw& draw);
     void bindGBuffer(const Program& program);
 

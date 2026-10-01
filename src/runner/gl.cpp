@@ -20,6 +20,7 @@ void (*rt_glAttachShader)(GLuint, GLuint) = nullptr;
 void (*rt_glLinkProgram)(GLuint) = nullptr;
 void (*rt_glDeleteProgram)(GLuint) = nullptr;
 void (*rt_glGetProgramiv)(GLuint, GLenum, GLint*) = nullptr;
+void (*rt_glValidateProgram)(GLuint) = nullptr;
 void (*rt_glGetProgramInfoLog)(GLuint, GLsizei, GLsizei*, GLchar*) = nullptr;
 void (*rt_glUseProgram)(GLuint) = nullptr;
 void (*rt_glGenVertexArrays)(GLsizei, GLuint*) = nullptr;
@@ -103,6 +104,7 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(LinkProgram);
     LOAD(DeleteProgram);
     LOAD(GetProgramiv);
+    LOAD(ValidateProgram);
     LOAD(GetProgramInfoLog);
     LOAD(UseProgram);
     LOAD(GenVertexArrays);

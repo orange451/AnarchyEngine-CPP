@@ -465,11 +465,12 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
         const jadefx::Color& clear = computedStyle().background.color;
         renderer_.setClearColor(clear.r, clear.g, clear.b);
         collectMeshes();
-        renderer_.draw(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(), scene->getHeight(),
-                       meshDraws_.data(), static_cast<int>(meshDraws_.size()), lightDraws_.data(),
-                       static_cast<int>(lightDraws_.size()));
+        const bool drawn = renderer_.draw(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(),
+                                          scene->getHeight(), meshDraws_.data(), static_cast<int>(meshDraws_.size()),
+                                          lightDraws_.data(), static_cast<int>(lightDraws_.size()));
         // Read before the children paint, so the FPS label is not in the picture.
-        if (!captures_.empty()) {
+        // A frame the driver was not ready for shows only the clear, so a capture waits for the next.
+        if (drawn && !captures_.empty()) {
             ViewPixels pixels;
             renderer_.read(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(),
                            scene->getHeight(), pixels);

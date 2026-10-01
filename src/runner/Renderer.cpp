@@ -52,6 +52,19 @@ void DrawFullscreen(unsigned emptyVao) {
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
+// Whether program can draw in the state set for it now, its vertex array
+// bound. macOS's OpenGL on Metal readies a program for the state it draws in
+// when asked, here or at the draw, but not for render buffers made this frame:
+// until the next one, a draw there fails with GL_INVALID_OPERATION, which
+// stops the window. Asking raises no error. A pass asks once, before its first
+// draw; it costs a few microseconds.
+bool CanDraw(GLuint program) {
+    glValidateProgram(program);
+    GLint status = GL_FALSE;
+    glGetProgramiv(program, GL_VALIDATE_STATUS, &status);
+    return status == GL_TRUE;
+}
+
 // The main file with each library spliced in after its #version line, as the
 // legacy BaseShader linked several fragment files into one program.
 std::string Spliced(const std::string& main, std::initializer_list<const char*> libraries, bool& ok) {
@@ -511,21 +524,21 @@ struct SavedState {
 
 }  // namespace
 
-void Renderer::draw(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
+bool Renderer::draw(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
                     const MeshDraw* meshes, int meshCount, const LightDraw* lights, int lightCount) {
     if (!ready_ || width <= 0.0 || height <= 0.0 || sceneWidth <= 0.0 || sceneHeight <= 0.0) {
-        return;
+        return false;
     }
 
     GLint viewport[4] = {};
     glGetIntegerv(GL_VIEWPORT, viewport);
     if (viewport[2] <= 0 || viewport[3] <= 0) {
-        return;
+        return false;
     }
 
     const PixelRect pane = PanePixels(x, y, width, height, sceneWidth, sceneHeight, viewport);
     if (pane.width <= 0 || pane.height <= 0) {
-        return;
+        return false;
     }
 
     const SavedState saved;
@@ -534,7 +547,7 @@ void Renderer::draw(double x, double y, double width, double height, double scen
         const PixelRect outer{saved.scissorBox[0], saved.scissorBox[1], saved.scissorBox[2], saved.scissorBox[3]};
         clip = Intersect(pane, outer);
         if (clip.width <= 0 || clip.height <= 0) {
-            return;
+            return false;
         }
     }
 
@@ -548,7 +561,8 @@ void Renderer::draw(double x, double y, double width, double height, double scen
     glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    if (meshes != nullptr && meshCount > 0 && ensureTargets(pane.width, pane.height)) {
+    bool drawn = meshes == nullptr || meshCount <= 0;
+    if (!drawn && ensureTargets(pane.width, pane.height)) {
         Matrix projection;
         Perspective(fovYDegrees_, static_cast<float>(pane.width) / static_cast<float>(pane.height), kNear, kFar,
                     projection);
@@ -607,11 +621,10 @@ void Renderer::draw(double x, double y, double width, double height, double scen
 
         glDisable(GL_SCISSOR_TEST);
         glViewport(0, 0, targetWidth_, targetHeight_);
-        geometryPass(meshes, meshCount, projection);
-        lightPass(projection, inverseProjection.m);
-        transparencyPass(meshes, meshCount, projection, inverseProjection.m);
-        mergePass();
-
+        drawn = geometryPass(meshes, meshCount, projection) && lightPass(projection, inverseProjection.m) &&
+                transparencyPass(meshes, meshCount, projection, inverseProjection.m) && mergePass();
+    }
+    if (drawn && meshes != nullptr && meshCount > 0) {
         // The tone map, blended over the clear: where nothing was drawn the pane shows through.
         glBindFramebuffer(RT_GL_FRAMEBUFFER, static_cast<GLuint>(saved.framebuffer));
         glEnable(GL_SCISSOR_TEST);
@@ -626,10 +639,15 @@ void Renderer::draw(double x, double y, double width, double height, double scen
         glUniform1f(tonemap_.exposure, std::max(lighting_.exposure, 0.f));
         glUniform1f(tonemap_.inverseGamma, 1.f / std::max(lighting_.gamma, 0.01f));
         glUniform1f(tonemap_.saturation, std::max(lighting_.saturation, 0.f));
-        DrawFullscreen(emptyVao_);
+        glBindVertexArray(emptyVao_);
+        drawn = CanDraw(tonemap_.id);
+        if (drawn) {
+            DrawFullscreen(emptyVao_);
+        }
     }
 
     saved.restore(viewport);
+    return drawn;
 }
 
 void Renderer::bindMaterial(const Program& program, const MeshDraw& draw) {
@@ -656,7 +674,7 @@ void Renderer::bindGBuffer(const Program& program) {
     BindTexture(kUnitEmissive, emissiveTexture_);
 }
 
-void Renderer::geometryPass(const MeshDraw* meshes, int count, const float* projection) {
+bool Renderer::geometryPass(const MeshDraw* meshes, int count, const float* projection) {
     glBindFramebuffer(RT_GL_FRAMEBUFFER, gbufferFbo_);
     glDisable(GL_BLEND);
     glDisable(RT_GL_CULL_FACE);
@@ -670,6 +688,7 @@ void Renderer::geometryPass(const MeshDraw* meshes, int count, const float* proj
     glUniformMatrix4fv(geometry_.view, 1, GL_FALSE, view_.m);
     glUniformMatrix4fv(geometry_.projection, 1, GL_FALSE, projection);
     transparent_.clear();
+    bool asked = false;
     for (int index = 0; index < count; ++index) {
         const MeshDraw& draw = meshes[index];
         if (draw.mesh == nullptr || !draw.mesh->valid() || draw.transparency >= 1.f) {
@@ -682,11 +701,16 @@ void Renderer::geometryPass(const MeshDraw* meshes, int count, const float* proj
         }
         bindMaterial(geometry_, draw);
         draw.mesh->bind();
+        if (!asked && !CanDraw(geometry_.id)) {
+            return false;
+        }
+        asked = true;
         draw.mesh->draw(0);
     }
+    return true;
 }
 
-void Renderer::lightPass(const float* projection, const float* inverseProjection) {
+bool Renderer::lightPass(const float* projection, const float* inverseProjection) {
     glBindFramebuffer(RT_GL_FRAMEBUFFER, accumulationFbo_);
     glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -701,6 +725,10 @@ void Renderer::lightPass(const float* projection, const float* inverseProjection
     glUniformMatrix4fv(ibl_.inverseProjection, 1, GL_FALSE, inverseProjection);
     glUniform3f(ibl_.ambient, lighting_.ambient[0], lighting_.ambient[1], lighting_.ambient[2]);
     glUniform3f(ibl_.skyRadiance, kSkyRadiance, kSkyRadiance, kSkyRadiance);
+    glBindVertexArray(emptyVao_);
+    if (!CanDraw(ibl_.id)) {
+        return false;
+    }
     DrawFullscreen(emptyVao_);
 
     const auto useLightProgram = [&](const Program& program) {
@@ -727,6 +755,10 @@ void Renderer::lightPass(const float* projection, const float* inverseProjection
         }
         if (!sunsBound) {
             useLightProgram(sun_);
+            glBindVertexArray(emptyVao_);
+            if (!CanDraw(sun_.id)) {
+                return false;
+            }
             sunsBound = true;
         }
         setLight(sun_, light);
@@ -744,6 +776,9 @@ void Renderer::lightPass(const float* projection, const float* inverseProjection
         glEnable(RT_GL_CULL_FACE);
         glCullFace(RT_GL_FRONT);
         glBindVertexArray(sphereVao_);
+        if (!CanDraw(light_.id)) {
+            return false;
+        }
         for (const ViewLight& light : viewLights_) {
             if (isSun(light)) {
                 continue;
@@ -769,15 +804,16 @@ void Renderer::lightPass(const float* projection, const float* inverseProjection
     }
     glDisable(GL_BLEND);
     glDepthMask(GL_TRUE);
+    return true;
 }
 
-void Renderer::transparencyPass(const MeshDraw* meshes, int count, const float* projection,
+bool Renderer::transparencyPass(const MeshDraw* meshes, int count, const float* projection,
                                 const float* inverseProjection) {
     glBindFramebuffer(RT_GL_FRAMEBUFFER, transparencyFbo_);
     glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT);
     if (transparent_.empty()) {
-        return;
+        return true;
     }
 
     // Farthest first, by each Transform's distance along the view.
@@ -832,17 +868,23 @@ void Renderer::transparencyPass(const MeshDraw* meshes, int count, const float* 
         glUniform4fv(forward_.lightDirections, lightCount, directions);
         glUniform4fv(forward_.lightCones, lightCount, cones);
     }
+    bool asked = false;
     for (const int index : transparent_) {
         const MeshDraw& draw = meshes[index];
         bindMaterial(forward_, draw);
         draw.mesh->bind();
+        if (!asked && !CanDraw(forward_.id)) {
+            return false;
+        }
+        asked = true;
         draw.mesh->draw(0);
     }
     glDisable(GL_BLEND);
     glDepthMask(GL_TRUE);
+    return true;
 }
 
-void Renderer::mergePass() {
+bool Renderer::mergePass() {
     glBindFramebuffer(RT_GL_FRAMEBUFFER, mergeFbo_);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
@@ -851,7 +893,12 @@ void Renderer::mergePass() {
     BindTexture(kUnitEmissive, emissiveTexture_);
     BindTexture(kUnitAccumulation, accumulationTexture_);
     BindTexture(kUnitTransparency, transparencyTexture_);
+    glBindVertexArray(emptyVao_);
+    if (!CanDraw(merge_.id)) {
+        return false;
+    }
     DrawFullscreen(emptyVao_);
+    return true;
 }
 
 bool Renderer::read(double x, double y, double width, double height, double sceneWidth, double sceneHeight,

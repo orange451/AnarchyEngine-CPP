@@ -98,7 +98,12 @@ private:
     void accept_drops(jadefx::Node& node, engine_core::InstanceId target);
     void show_item_menu(const AssetRow& row, double x, double y);
     void show_empty_menu(double x, double y);
-    void new_item(const std::string& class_name);
+    // A category's menu: what can be added into it, and Paste into it.
+    void show_category_menu(engine_core::InstanceId category, double x, double y);
+    // "<verb> Folder", "<verb> <kind>", and Paste, each into folder.
+    void show_insert_menu(engine_core::InstanceId folder, const std::string& verb, double x, double y);
+    // Makes class_name in folder, opening folder first when it is not the one shown.
+    void new_item(const std::string& class_name, engine_core::InstanceId folder);
     // The pending insert finished: select what it made and rename it, or say why nothing was made.
     // Callers hold the world's read lock.
     void finish_insert();

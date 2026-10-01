@@ -957,7 +957,13 @@ void IdeAssets::show_item_menu(const AssetRow& row, double x, double y) {
     menu_->show(*scene, x, y);
 }
 
-void IdeAssets::show_empty_menu(double x, double y) {
+void IdeAssets::show_empty_menu(double x, double y) { show_insert_menu(browser_.folder(), "New", x, y); }
+
+void IdeAssets::show_category_menu(engine_core::InstanceId category, double x, double y) {
+    show_insert_menu(category, "Add", x, y);
+}
+
+void IdeAssets::show_insert_menu(engine_core::InstanceId folder, const std::string& verb, double x, double y) {
     finish_rename(false);
     jadefx::Scene* scene = getScene();
     if (scene == nullptr) {
@@ -967,7 +973,7 @@ void IdeAssets::show_empty_menu(double x, double y) {
     {
         engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kActionLockWait);
         if (lock.owns()) {
-            kind = browser_.new_kind();
+            kind = browser_.new_kind(folder);
         }
     }
     if (menu_) {
@@ -981,14 +987,14 @@ void IdeAssets::show_empty_menu(double x, double y) {
         classes.push_back(kind);
     }
     for (const std::string& klass : classes) {
-        auto entry = jadefx::make<jadefx::MenuItem>("New " + klass);
+        auto entry = jadefx::make<jadefx::MenuItem>(verb + " " + klass);
         if (std::shared_ptr<jadefx::ImageView> icon = icon_view(klass)) {
             icon->setPrefSize(16, 16);
             icon->setMouseTransparent(true);
             entry->setGraphic(std::move(icon));
         }
         entry->setDisable(!can_insert);
-        entry->setOnAction([this, klass](jadefx::ActionEvent&) { new_item(klass); });
+        entry->setOnAction([this, klass, folder](jadefx::ActionEvent&) { new_item(klass, folder); });
         menu_->getItems().add(std::move(entry));
     }
     menu_->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
@@ -998,18 +1004,21 @@ void IdeAssets::show_empty_menu(double x, double y) {
     }
     paste->setDisable(!host_.actions.run ||
                       (host_.actions.enabled && !host_.actions.enabled(InstanceAction::Paste)));
-    const engine_core::InstanceId folder = browser_.folder();
     paste->setOnAction([this, folder](jadefx::ActionEvent&) { host_.actions.run(InstanceAction::Paste, folder); });
     menu_->getItems().add(std::move(paste));
     menu_->show(*scene, x, y);
 }
 
-void IdeAssets::new_item(const std::string& class_name) {
+void IdeAssets::new_item(const std::string& class_name, engine_core::InstanceId folder) {
     if (!host_.actions.insert) {
         return;
     }
+    // The new item is selected and renamed where it shows.
+    if (folder != browser_.folder()) {
+        openFolder(folder);
+    }
     pending_insert_ = std::make_shared<InsertResult>();
-    host_.actions.insert(class_name, browser_.folder(), pending_insert_);
+    host_.actions.insert(class_name, folder, pending_insert_);
 }
 
 void IdeAssets::finish_insert() {
@@ -1047,6 +1056,8 @@ void IdeAssets::rebuild() {
                     openFolder(id);
                 }
             });
+            row->setOnContextMenuRequested(
+                [this, id](const jadefx::MouseEvent& event) { show_category_menu(id, event.x, event.y); });
             sidebar_->getChildren().add(row);
             accept_drops(*row, id);
             sidebar_rows_[id] = std::move(row);
@@ -1302,6 +1313,8 @@ void IdeAssets::rebuild_columns(const std::vector<std::pair<engine_core::Instanc
                         openFolder(id);
                     }
                 });
+                line->setOnContextMenuRequested(
+                    [this, id](const jadefx::MouseEvent& event) { show_category_menu(id, event.x, event.y); });
                 accept_drops(*line, id);
             } else {
                 add_item(line, row);

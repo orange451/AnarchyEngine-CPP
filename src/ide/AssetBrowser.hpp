@@ -77,6 +77,8 @@ public:
     // The class New <kind> makes in the folder shown: Material in Materials or
     // a Folder under it, and so on. Empty when there is none.
     std::string new_kind() const;
+    // The same for folder, shown or not.
+    std::string new_kind(engine_core::InstanceId folder) const;
 
 private:
     AssetRow row_of(engine_core::InstanceId id, int depth) const;

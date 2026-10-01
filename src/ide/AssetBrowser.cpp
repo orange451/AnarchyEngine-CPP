@@ -345,13 +345,15 @@ bool AssetBrowser::refresh() {
     return changed;
 }
 
-std::string AssetBrowser::new_kind() const {
-    const engine_core::DataModel* object = world_.instance(folder_);
+std::string AssetBrowser::new_kind() const { return new_kind(folder_); }
+
+std::string AssetBrowser::new_kind(engine_core::InstanceId folder) const {
+    const engine_core::DataModel* object = world_.instance(folder);
     if (object == nullptr) {
         return {};
     }
     // The category above: its asset class is the one whose home it is.
-    engine_core::InstanceId at = folder_;
+    engine_core::InstanceId at = folder;
     while (at != 0 && at != engine_core::DataModel::kNoParent) {
         const engine_core::DataModel* here = world_.instance(at);
         if (here != nullptr && here->is_service()) {

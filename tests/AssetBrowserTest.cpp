@@ -113,6 +113,9 @@ void TestListsSortsAndSearches() {
     browser.set_search("");
     browser.open(game.service("Audio"));
     Expect(browser.new_kind() == "Sound", "New Sound in Audio");
+    Expect(browser.new_kind(game.service("Textures")) == "Texture", "Add Texture on Textures, not shown");
+    Expect(browser.new_kind(b) == "Texture", "and on a Folder under it");
+    Expect(browser.new_kind(game.service("Assets")).empty(), "nothing to add on Assets");
     engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
 }
 

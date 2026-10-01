@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <utility>
@@ -738,6 +740,65 @@ void property_edits_refresh() {
     Expect(previewed("textures/other.png"), "the preview follows a Path set in the game");
 }
 
+// The Columns preview and the Icons tile of a Texture draw the file its Path
+// names, fit in the icon's box; with no file there, the Texture icon.
+void texture_preview_shows_file() {
+    Rig rig("columns");
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "anarchy-assets-preview-test";
+    std::filesystem::create_directories(root);
+    // A 2x1 24-bit BMP: one red pixel, one blue, the row padded to 4 bytes.
+    const unsigned char bmp[] = {'B', 'M', 62, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0,
+                                 40, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 1, 0, 24, 0, 0, 0, 0, 0, 8, 0, 0, 0,
+                                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                 0, 0, 255, 255, 0, 0, 0, 0};
+    {
+        std::ofstream out(root / "wide.bmp", std::ios::binary);
+        out.write(reinterpret_cast<const char*>(bmp), sizeof(bmp));
+    }
+    rig.game.set_resources_root(root);
+    auto* brick = dynamic_cast<engine_core::Texture*>(rig.game.instance(rig.brick));
+    Expect(brick != nullptr && !brick->set_path("wide.bmp"), "Brick's Path names the file");
+    // The texture image under node, or null when it shows the class's icon.
+    auto texture_image = [](jadefx::Node* node) -> jadefx::ImageView* {
+        const std::vector<jadefx::Node*> found =
+            node != nullptr ? node->getElementsByClassName("assets-texture-image") : std::vector<jadefx::Node*>{};
+        return found.empty() ? nullptr : dynamic_cast<jadefx::ImageView*>(found.front());
+    };
+    auto preview = [&rig]() -> jadefx::Node* {
+        const std::vector<jadefx::Node*> found = rig.pane->getElementsByClassName("assets-preview");
+        return found.empty() ? nullptr : found.front();
+    };
+    auto draws_file = [](jadefx::ImageView* view, double width, double height) {
+        return view != nullptr && view->getImage() && view->getImage()->getWidth() == 2 &&
+               view->getImage()->getHeight() == 1 && view->getPrefWidth() == width && view->getPrefHeight() == height;
+    };
+
+    rig.pane->openFolder(rig.textures);
+    rig.frame(0);
+    rig.clickItem(rig.brick, 0.5);
+    rig.frame(0.6);
+    Expect(draws_file(texture_image(preview()), 64, 32), "the preview draws the file, keeping its shape");
+
+    rig.pane->setView(ide::AssetView::Icons);
+    rig.frame(1.0);
+    Expect(draws_file(texture_image(rig.pane->itemNode(rig.brick)), 40, 20), "the Icons tile draws the file too");
+    Expect(rig.pane->itemNode(rig.rock) != nullptr && texture_image(rig.pane->itemNode(rig.rock)) == nullptr,
+           "a Texture with no Path keeps the Texture icon");
+
+    Expect(brick != nullptr && !brick->set_path("missing.png"), "a Path with no file is taken");
+    rig.frame(1.5);
+    Expect(rig.pane->itemNode(rig.brick) != nullptr && texture_image(rig.pane->itemNode(rig.brick)) == nullptr,
+           "with no file, the tile draws the Texture icon");
+    rig.pane->setView(ide::AssetView::Columns);
+    rig.frame(2.0);
+    rig.clickItem(rig.brick, 2.5);
+    rig.frame(2.6);
+    Expect(preview() != nullptr && texture_image(preview()) == nullptr,
+           "with no file, the preview draws the Texture icon");
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+}
+
 int main() {
     starts_in_saved_view();
     navigates();
@@ -757,6 +818,7 @@ int main() {
     up_goes_up_one_level();
     status_counts_only_shown();
     property_edits_refresh();
+    texture_preview_shows_file();
     if (gFailures == 0) {
         std::printf("assets tests passed\n");
         return 0;

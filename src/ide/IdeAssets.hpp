@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -71,6 +72,11 @@ private:
     // The Columns view's last column: a single selected asset's icon, name,
     // class, and saved properties. Callers hold the world's read lock.
     void rebuild_preview();
+    // The image a Texture's Path names under the resources folder, decoded
+    // once per version of the file, or null when there is none to show.
+    std::shared_ptr<jadefx::Image> texture_image(const std::string& path);
+    // A size box holding row's icon: a Texture's file, fit and centered, or the class's icon.
+    std::shared_ptr<jadefx::Node> asset_icon(const AssetRow& row, double size);
     // A flat list of the search's matches, with where each is from the folder.
     void rebuild_search(const std::vector<AssetRow>& rows);
     // The sidebar and scrolling the view has.
@@ -126,6 +132,14 @@ private:
     // How many items the folder shown holds, for the status line.
     std::size_t count_ = 0;
     std::shared_ptr<jadefx::VBox> preview_;
+    // The files texture_image decoded: each one's time then, what it gave, and
+    // whether the last rebuild used it. A rebuild drops the ones it did not use.
+    struct TextureImage {
+        std::filesystem::file_time_type stamp{};
+        std::shared_ptr<jadefx::Image> image;
+        bool used = false;
+    };
+    std::unordered_map<std::string, TextureImage> texture_images_;
 
     // What the widgets were last built from. dirty_ asks for a rebuild, as a sort or a disclosure does.
     bool built_ = false;

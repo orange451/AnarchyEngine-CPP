@@ -4,6 +4,7 @@
 #include "DataModelLock.hpp"
 #include "FindBar.hpp"
 #include "IdeIcons.hpp"
+#include "IdeResources.hpp"
 #include "LuaApi.hpp"
 #include "PropertySheet.hpp"
 #include "SelectionService.hpp"
@@ -14,6 +15,7 @@
 #include <iterator>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -1019,6 +1021,13 @@ void IdeAssets::rebuild() {
     built_ = true;
     dirty_ = false;
     built_view_ = view_;
+    // Keeps the texture images the last rebuild used, so a folder left behind lets its go.
+    for (auto it = texture_images_.begin(); it != texture_images_.end();) {
+        it = it->second.used ? std::next(it) : texture_images_.erase(it);
+    }
+    for (auto& [file, entry] : texture_images_) {
+        entry.used = false;
+    }
     if (sidebar_rows_.empty()) {
         for (const AssetRow& category : browser_.categories()) {
             auto row = jadefx::make<jadefx::HBox>();
@@ -1106,7 +1115,7 @@ void IdeAssets::rebuild_icons(const std::vector<AssetRow>& rows) {
         tile->getClassList().add("assets-tile");
         tile->setAlignment(jadefx::Pos::TopCenter);
         fix_width(*tile, kTileWidth);
-        tile->getChildren().add(sized_icon(row.class_name, kTileIcon));
+        tile->getChildren().add(asset_icon(row, kTileIcon));
         auto name = text_label(row.name, "assets-name");
         name->setAlignment(jadefx::Pos::Center);
         name->setMaxSize(kTileWidth - 6, 100000);
@@ -1337,7 +1346,7 @@ void IdeAssets::rebuild_preview() {
     }
     const std::string class_name = object->class_name();
     const double text_width = kPreviewWidth - 24;
-    preview_->getChildren().add(sized_icon(class_name, kPreviewIcon));
+    preview_->getChildren().add(asset_icon(*shown, kPreviewIcon));
     auto add = [&](const std::string& text, const char* style_class, jadefx::Pos alignment) {
         auto label = text_label(text, style_class);
         label->setAlignment(alignment);
@@ -1363,6 +1372,53 @@ void IdeAssets::rebuild_preview() {
         add(value.empty() ? "None" : value, "assets-preview-value", jadefx::Pos::CenterLeft);
     }
     preview_->applyCss();
+}
+
+std::shared_ptr<jadefx::Image> IdeAssets::texture_image(const std::string& path) {
+    const std::filesystem::path root = world_.resources_root();
+    if (path.empty() || root.empty()) {
+        return nullptr;
+    }
+    // Texture Paths use '/', which every platform's path splits on.
+    const std::filesystem::path file = root / path_from_utf8(path);
+    std::error_code error;
+    const std::filesystem::file_time_type stamp = std::filesystem::last_write_time(file, error);
+    if (error) {
+        return nullptr;
+    }
+    const std::string key = utf8_path(file);
+    const auto found = texture_images_.find(key);
+    TextureImage& entry = texture_images_[key];
+    if (found == texture_images_.end() || stamp != entry.stamp) {
+        entry.stamp = stamp;
+        entry.image = jadefx::Image::load(key);
+    }
+    entry.used = true;
+    return entry.image;
+}
+
+std::shared_ptr<jadefx::Node> IdeAssets::asset_icon(const AssetRow& row, double size) {
+    const std::shared_ptr<jadefx::Image> image = row.class_name == "Texture" ? texture_image(row.path) : nullptr;
+    if (!image || image->getWidth() <= 0 || image->getHeight() <= 0) {
+        return sized_icon(row.class_name, size);
+    }
+    const double scale = size / std::max(image->getWidth(), image->getHeight());
+    const double width = std::max(1.0, image->getWidth() * scale);
+    const double height = std::max(1.0, image->getHeight() * scale);
+    auto view = jadefx::make<jadefx::ImageView>(image);
+    view->getClassList().add("assets-texture-image");
+    view->setPrefSize(width, height);
+    view->setMinSize(width, height);
+    view->setMaxSize(width, height);
+    view->setMouseTransparent(true);
+    // A square box either way, so a wide or tall texture lines up with the icons beside it.
+    auto box = jadefx::make<jadefx::StackPane>(view);
+    box->setAlignment(jadefx::Pos::Center);
+    box->setPrefSize(size, size);
+    box->setMinSize(size, size);
+    box->setMaxSize(size, size);
+    box->setMouseTransparent(true);
+    return box;
 }
 
 void IdeAssets::add_item(const std::shared_ptr<jadefx::Node>& node, const AssetRow& row) {

@@ -7,8 +7,10 @@
 #include "IdeLayoutInternal.hpp"
 #include "LockWaits.hpp"
 #include "PropertySheet.hpp"
+#include "TextureImport.hpp"
 
 #include <chrono>
+#include <iterator>
 
 namespace ide {
 namespace {
@@ -106,6 +108,16 @@ std::vector<engine_core::InstanceId> PrefabsIn(const engine_core::DataModel& wor
     return prefabs;
 }
 
+// The image files among a drop's files.
+std::vector<std::string> ImageFiles(const std::vector<std::string>& files) {
+    std::vector<std::string> images;
+    std::copy_if(files.begin(), files.end(), std::back_inserter(images), is_texture_file);
+    return images;
+}
+
+// How many file names the import question lists before it counts the rest.
+constexpr std::size_t kListedImports = 12;
+
 }  // namespace
 
 void IdeLayout::accept_prefab_drops(jadefx::Node& view) {
@@ -143,6 +155,130 @@ void IdeLayout::accept_prefab_drops(jadefx::Node& view) {
         event.setDropCompleted(true);
         event.consume();
     });
+}
+
+void IdeLayout::accept_texture_drops(jadefx::Node& node) {
+    node.setOnDragOver([](jadefx::DragEvent& event) {
+        if (event.dragboard != nullptr && !ImageFiles(event.getDragboard().getFiles()).empty()) {
+            event.acceptTransferModes(jadefx::TransferMode::Copy);
+            event.consume();
+        }
+    });
+    node.setOnDragDropped([this](jadefx::DragEvent& event) {
+        if (event.dragboard == nullptr || ImageFiles(event.getDragboard().getFiles()).empty()) {
+            return;
+        }
+        // Taken even when it asks nothing: the reason shows as a toast.
+        import_textures(event.getDragboard().getFiles());
+        event.setDropCompleted(true);
+        event.consume();
+    });
+}
+
+void IdeLayout::import_textures(const std::vector<std::string>& files) {
+    std::vector<std::string> images = ImageFiles(files);
+    if (images.empty() || scene_ == nullptr || prompt_open_ || dialog_open_) {
+        return;
+    }
+    if (in_test()) {
+        show_toast("Stop the test to import textures");
+        return;
+    }
+    if (!project_) {
+        show_toast("Open or save a project first: imported textures are copied into its resources folder");
+        return;
+    }
+
+    const std::size_t count = images.size();
+    std::string listed;
+    for (std::size_t i = 0; i < count && i < kListedImports; ++i) {
+        listed += (i == 0 ? "" : "\n") + utf8_path(path_from_utf8(images[i]).filename());
+    }
+    if (count > kListedImports) {
+        listed += "\nand " + std::to_string(count - kListedImports) + " more";
+    }
+
+    prompt_open_ = true;
+    const jadefx::ButtonType import("Import", jadefx::ButtonType::Data::OkDone);
+    auto alert = std::make_shared<jadefx::Alert>(jadefx::AlertType::Confirmation, listed,
+                                                 std::vector<jadefx::ButtonType>{import, jadefx::ButtonType::Cancel()});
+    alert->setTitle("Anarchy Engine");
+    alert->setHeaderText(count == 1 ? "Import 1 texture?" : "Import " + std::to_string(count) + " textures?");
+    alert->setOnClosed([this, import, images = std::move(images)](const jadefx::ButtonType* choice) {
+        prompt_open_ = false;
+        if (choice == nullptr || !(*choice == import)) {
+            return;
+        }
+        // The project or the test may have changed while it asked.
+        if (!project_ || in_test()) {
+            show_toast("The textures were not imported: the project changed while it asked");
+            return;
+        }
+        const std::filesystem::path resources = project_->resources_root();
+        // Each copied file's Texture Name and Path.
+        std::vector<std::pair<std::string, std::string>> textures;
+        std::string problem;
+        for (const std::string& image : images) {
+            std::string error;
+            if (std::optional<std::string> path = import_texture_file(resources, image, error)) {
+                textures.emplace_back(utf8_path(path_from_utf8(image).stem()), std::move(*path));
+            } else if (problem.empty()) {
+                problem = "Could not import " + utf8_path(path_from_utf8(image).filename()) + ": " + error;
+            }
+        }
+        if (textures.empty()) {
+            show_toast(std::move(problem));
+            return;
+        }
+        runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), textures = std::move(textures),
+                                            problem = std::move(problem)](engine_core::DataModel& world) mutable {
+            const engine_core::InstanceId folder = world.service("Textures");
+            if (folder == 0) {
+                toast_later(this, alive, "This place has no Assets.Textures to import into");
+                return;
+            }
+            world.history().set_pending_gesture("Import Textures");
+            std::vector<engine_core::InstanceId> made;
+            for (const auto& [name, path] : textures) {
+                std::string refused;
+                const engine_core::InstanceId id = insert_instance(world, "Texture", folder, refused);
+                if (id == 0) {
+                    if (problem.empty()) {
+                        problem = std::move(refused);
+                    }
+                    break;
+                }
+                world.set_name(id, name);
+                if (std::optional<std::string> error = static_cast<engine_core::Texture*>(world.instance(id))->set_path(path)) {
+                    if (problem.empty()) {
+                        problem = std::move(*error);
+                    }
+                }
+                made.push_back(id);
+            }
+            CloseGesture(world);
+            if (!problem.empty()) {
+                toast_later(this, alive, std::move(problem));
+            }
+            if (!made.empty()) {
+                world.selection().set(std::move(made));
+            }
+        });
+    });
+    alerts_.erase(std::remove_if(alerts_.begin(), alerts_.end(),
+                                 [](const std::shared_ptr<jadefx::Alert>& item) {
+                                     return !item || item->getResult() != nullptr;
+                                 }),
+                  alerts_.end());
+    alert->show(*scene_);
+    // Stable names for the two answers, so a test can find them.
+    if (jadefx::Button* button = alert->lookupButton(import)) {
+        button->setElementId("import-textures-import");
+    }
+    if (jadefx::Button* button = alert->lookupButton(jadefx::ButtonType::Cancel())) {
+        button->setElementId("import-textures-cancel");
+    }
+    alerts_.push_back(std::move(alert));
 }
 
 void IdeLayout::show_conflicts() {

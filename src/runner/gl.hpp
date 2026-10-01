@@ -98,6 +98,45 @@ using GLsizeiptr = std::ptrdiff_t;
 #ifdef GL_DYNAMIC_DRAW
 #undef GL_DYNAMIC_DRAW
 #endif
+#ifdef GL_TEXTURE_2D
+#undef GL_TEXTURE_2D
+#endif
+#ifdef GL_TEXTURE0
+#undef GL_TEXTURE0
+#endif
+#ifdef GL_ACTIVE_TEXTURE
+#undef GL_ACTIVE_TEXTURE
+#endif
+#ifdef GL_TEXTURE_BINDING_2D
+#undef GL_TEXTURE_BINDING_2D
+#endif
+#ifdef GL_TEXTURE_MIN_FILTER
+#undef GL_TEXTURE_MIN_FILTER
+#endif
+#ifdef GL_TEXTURE_MAG_FILTER
+#undef GL_TEXTURE_MAG_FILTER
+#endif
+#ifdef GL_TEXTURE_WRAP_S
+#undef GL_TEXTURE_WRAP_S
+#endif
+#ifdef GL_TEXTURE_WRAP_T
+#undef GL_TEXTURE_WRAP_T
+#endif
+#ifdef GL_LINEAR
+#undef GL_LINEAR
+#endif
+#ifdef GL_LINEAR_MIPMAP_LINEAR
+#undef GL_LINEAR_MIPMAP_LINEAR
+#endif
+#ifdef GL_REPEAT
+#undef GL_REPEAT
+#endif
+#ifdef GL_RGBA8
+#undef GL_RGBA8
+#endif
+#ifdef GL_UNPACK_ALIGNMENT
+#undef GL_UNPACK_ALIGNMENT
+#endif
 constexpr GLboolean GL_FALSE = 0;
 constexpr GLboolean GL_TRUE = 1;
 constexpr GLenum GL_NO_ERROR = 0;
@@ -124,6 +163,19 @@ constexpr GLenum GL_UNSIGNED_SHORT = 0x1403;
 constexpr GLenum GL_UNSIGNED_INT = 0x1405;
 constexpr GLenum GL_ELEMENT_ARRAY_BUFFER = 0x8893;
 constexpr GLenum GL_DYNAMIC_DRAW = 0x88E8;
+constexpr GLenum GL_TEXTURE_2D = 0x0DE1;
+constexpr GLenum GL_TEXTURE0 = 0x84C0;
+constexpr GLenum GL_ACTIVE_TEXTURE = 0x84E0;
+constexpr GLenum GL_TEXTURE_BINDING_2D = 0x8069;
+constexpr GLenum GL_TEXTURE_MIN_FILTER = 0x2801;
+constexpr GLenum GL_TEXTURE_MAG_FILTER = 0x2800;
+constexpr GLenum GL_TEXTURE_WRAP_S = 0x2802;
+constexpr GLenum GL_TEXTURE_WRAP_T = 0x2803;
+constexpr GLenum GL_LINEAR = 0x2601;
+constexpr GLenum GL_LINEAR_MIPMAP_LINEAR = 0x2703;
+constexpr GLenum GL_REPEAT = 0x2901;
+constexpr GLenum GL_RGBA8 = 0x8058;
+constexpr GLenum GL_UNPACK_ALIGNMENT = 0x0CF5;
 
 // Names are prefixed so they do not collide with libGL's exported functions.
 extern const GLubyte* (*rt_glGetString)(GLenum name);
@@ -166,6 +218,16 @@ extern void (*rt_glUniform1f)(GLint location, GLfloat v0);
 extern void (*rt_glUniform3f)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
 extern void (*rt_glUniformMatrix4fv)(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
 extern void (*rt_glReadPixels)(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
+extern void (*rt_glGenTextures)(GLsizei n, GLuint* textures);
+extern void (*rt_glDeleteTextures)(GLsizei n, const GLuint* textures);
+extern void (*rt_glBindTexture)(GLenum target, GLuint texture);
+extern void (*rt_glActiveTexture)(GLenum texture);
+extern void (*rt_glTexImage2D)(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void* pixels);
+extern void (*rt_glTexParameteri)(GLenum target, GLenum pname, GLint param);
+extern void (*rt_glGenerateMipmap)(GLenum target);
+extern void (*rt_glPixelStorei)(GLenum pname, GLint param);
+extern void (*rt_glUniform1i)(GLint location, GLint v0);
+extern void (*rt_glUniform4f)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
 
 using GlGetProcAddress = void* (*)(const char* name);
 
@@ -214,3 +276,13 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glUniform3f ::runner::rt_glUniform3f
 #define glUniformMatrix4fv ::runner::rt_glUniformMatrix4fv
 #define glReadPixels ::runner::rt_glReadPixels
+#define glGenTextures ::runner::rt_glGenTextures
+#define glDeleteTextures ::runner::rt_glDeleteTextures
+#define glBindTexture ::runner::rt_glBindTexture
+#define glActiveTexture ::runner::rt_glActiveTexture
+#define glTexImage2D ::runner::rt_glTexImage2D
+#define glTexParameteri ::runner::rt_glTexParameteri
+#define glGenerateMipmap ::runner::rt_glGenerateMipmap
+#define glPixelStorei ::runner::rt_glPixelStorei
+#define glUniform1i ::runner::rt_glUniform1i
+#define glUniform4f ::runner::rt_glUniform4f

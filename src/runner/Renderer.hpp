@@ -9,10 +9,16 @@ class GpuMesh;
 
 namespace runner {
 
-// One uploaded AMESH at a GameObject's Transform (column-major, world space).
+// One uploaded AMESH at a GameObject's Transform (column-major, world space),
+// colored by its Material: the diffuse texture times color times the mesh's
+// vertex colors, then lit.
 struct MeshDraw {
     const anarchy::amesh::GpuMesh* mesh = nullptr;
     engine_core::Matrix4 model = engine_core::matrix4_identity();
+    // A GL texture, sampled at the mesh's UVs. 0 draws white.
+    unsigned texture = 0;
+    // RGBA, 0 to 1. Alpha is not drawn yet.
+    float color[4] = {1.f, 1.f, 1.f, 1.f};
 };
 
 // Draws meshes seen from the camera, lit by one light from above.
@@ -56,6 +62,10 @@ private:
     unsigned meshProgram_ = 0;
     int modelLocation_ = -1;
     int viewProjectionLocation_ = -1;
+    int diffuseLocation_ = -1;
+    int colorLocation_ = -1;
+    // 1 by 1 white, bound for a draw with no texture.
+    unsigned whiteTexture_ = 0;
     bool ready_ = false;
     float clear_[3] = {30.f / 255.f, 30.f / 255.f, 30.f / 255.f};
     // The inverse of the camera's world, column-major.

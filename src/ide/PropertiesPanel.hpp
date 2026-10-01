@@ -48,6 +48,12 @@ using PropertiesRun = std::function<void(std::function<void(engine_core::DataMod
 // A Color3 row is a color picker. Closing its chooser on a new color writes
 // it, so the whole pick is one undo step.
 //
+// A number whose property registers a range (lua_slider) is a slider with
+// the field beside it. Dragging moves the field's number, rounded to a step
+// that suits the range, and letting go writes it, so a drag is one undo step;
+// an arrow key writes at once. The field takes any number, past either end;
+// the thumb then rests at that end.
+//
 // A reference row shows the instance's Name, with its path as a tooltip.
 // Clicking the Name waits for the next selection change, such as a click in
 // the explorer, uses the instance picked, and puts the selection back.
@@ -77,8 +83,9 @@ public:
     bool field_undo(bool redo);
 
     // The widget for a row. part picks the Vector3 axis; for a Transform 0..2
-    // Position's axes, 3..5 Orientation's, and 6 the fold arrow; or for a
-    // reference 0 the Name that picks and 1 Clear. Null when there is no such row.
+    // Position's axes, 3..5 Orientation's, and 6 the fold arrow; for a
+    // reference 0 the Name that picks and 1 Clear; or for a slider row 0 the
+    // field and 1 the slider. Null when there is no such row.
     jadefx::Node* editor(const std::string& property, int part = 0) const;
 
     // What the rows show now.

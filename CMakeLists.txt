@@ -50,6 +50,7 @@ set(STUDIO_SOURCES
     src/runner/ShaderFile.cpp
     src/runner/Renderer.cpp
     src/runner/MeshCache.cpp
+    src/runner/TextureCache.cpp
     src/amesh/amesh_gl.cpp
     src/runner/GameView.cpp
     src/ide/IdePane.cpp
@@ -78,6 +79,7 @@ set(STUDIO_SOURCES
     src/ide/IdeLayoutMcp.cpp
     src/ide/IdeLayoutProject.cpp
     src/ide/CutSet.cpp
+    src/ide/TextureImport.cpp
     src/ide/PropertiesPanel.cpp
     src/ide/Preferences.cpp
     src/ide/PreferencesPanel.cpp
@@ -224,6 +226,24 @@ if(NOT stb_image_write_POPULATED)
         cmake_policy(SET CMP0169 OLD)
     endif()
     FetchContent_Populate(stb_image_write)
+endif()
+
+# stb_image decodes the Scene View's textures. The same pinned header JadeFX
+# fetches; JadeFX may have declared it already, and the first declaration wins.
+FetchContent_Declare(
+    stb_image
+    URL https://raw.githubusercontent.com/nothings/stb/2c980bb59875b0d32144a71867fbdebb2f77cd20/stb_image.h
+    URL_HASH SHA256=594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3
+    DOWNLOAD_NO_EXTRACT TRUE
+    # CMake before 3.18 leaves an unextracted download outside SOURCE_DIR.
+    DOWNLOAD_DIR "${FETCHCONTENT_BASE_DIR}/stb_image-src"
+)
+FetchContent_GetProperties(stb_image)
+if(NOT stb_image_POPULATED)
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
+    FetchContent_Populate(stb_image)
 endif()
 
 # libvterm parses what a program writes to the terminal page, and encodes the
@@ -389,6 +409,8 @@ target_include_directories(studio_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_include_directories(studio_core SYSTEM PUBLIC "${httplib_SOURCE_DIR}")
 # SYSTEM, so -Wextra does not report on the vendored header.
 target_include_directories(studio_core SYSTEM PRIVATE "${stb_image_write_SOURCE_DIR}")
+# TextureCache.cpp compiles stb_image static, apart from the copy JadeFX links.
+target_include_directories(studio SYSTEM PRIVATE "${stb_image_SOURCE_DIR}")
 target_link_libraries(studio_core PUBLIC engine_core)
 target_link_libraries(studio_core PRIVATE vterm)
 # forkpty is in libutil on Linux, and in libc on macOS and the BSDs.
@@ -451,6 +473,7 @@ add_executable(studio-tests
     tests/ThemeTest.cpp
     tests/PreferencesTest.cpp
     tests/SaveConflictTest.cpp
+    tests/TextureImportTest.cpp
     tests/ConflictsTest.cpp
     tests/ScriptTabsTest.cpp
     tests/TerminalPaneTest.cpp

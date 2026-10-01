@@ -1089,6 +1089,7 @@ jadefx::UtilityWindow* IdeLayout::open_floating(const std::string& title, int wi
         return nullptr;
     }
     StretchRoot(*root);
+    accept_texture_drops(*root);
     auto scene = jadefx::make<jadefx::Scene>(root, static_cast<double>(width), static_cast<double>(height));
     scene->setStylesheet(kStylesheet);
     jadefx::Scene* utilityScene = scene.get();

@@ -47,6 +47,12 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
               engine_->scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error, message);
           }
       }),
+      // So does a texture.
+      textures_([this](const std::string& message) {
+          if (engine_ != nullptr) {
+              engine_->scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error, message);
+          }
+      }),
       game_(&runner.simulation().datamodel()),
       engine_(&runner.simulation()) {
     setIconFile("Camera.png");
@@ -149,7 +155,9 @@ void GameView::requestCapture(std::function<void(ViewPixels)> done) {
 void GameView::collectMeshes() {
     meshDraws_.clear();
     // The open project's resources folder, which Project keeps on the game.
-    meshes_.setRoot(game_ != nullptr ? game_->resources_root() : std::filesystem::path());
+    const std::filesystem::path root = game_ != nullptr ? game_->resources_root() : std::filesystem::path();
+    meshes_.setRoot(root);
+    textures_.setRoot(root);
     const engine_core::VisualSnapshot& snapshot = feed_->latest();
     followCamera(snapshot);
     // Each Prefab's meshes once, however many GameObjects draw it.
@@ -157,16 +165,24 @@ void GameView::collectMeshes() {
         prefabMeshes_.resize(snapshot.prefabs.size());
     }
     for (std::size_t index = 0; index < snapshot.prefabs.size(); ++index) {
-        std::vector<const anarchy::amesh::GpuMesh*>& loaded = prefabMeshes_[index];
+        std::vector<MeshDraw>& loaded = prefabMeshes_[index];
         loaded.clear();
         for (const engine_core::VisualMesh& source : snapshot.prefabs[index].meshes) {
             // A play session's geometry, while it lasts, else the Mesh's file.
             const anarchy::amesh::GpuMesh* mesh = source.session != nullptr
                                                       ? meshes_.getSession(source.mesh, *source.session, source.revision)
                                                       : meshes_.get(source.path);
-            if (mesh != nullptr) {
-                loaded.push_back(mesh);
+            if (mesh == nullptr) {
+                continue;
             }
+            MeshDraw draw;
+            draw.mesh = mesh;
+            draw.texture = textures_.get(source.diffuse_texture);
+            draw.color[0] = source.color.r;
+            draw.color[1] = source.color.g;
+            draw.color[2] = source.color.b;
+            draw.color[3] = source.color.a;
+            loaded.push_back(draw);
         }
     }
     // Uploads for sessions no Mesh draws now, as after a Stop. None this frame uses.
@@ -175,8 +191,9 @@ void GameView::collectMeshes() {
         if (!row.alive || row.prefab == 0 || row.prefab >= snapshot.prefabs.size()) {
             continue;
         }
-        for (const anarchy::amesh::GpuMesh* mesh : prefabMeshes_[row.prefab]) {
-            meshDraws_.push_back(MeshDraw{mesh, row.world});
+        for (const MeshDraw& model : prefabMeshes_[row.prefab]) {
+            meshDraws_.push_back(model);
+            meshDraws_.back().model = row.world;
         }
     }
 }
@@ -381,6 +398,7 @@ void GameView::sceneChanged(jadefx::Scene* previous) {
     }
     renderer_.shutdown();
     meshes_.clear();
+    textures_.clear();
     graphicsAttempted_ = false;
     graphicsReady_ = false;
     graphicsTries_ = 0;

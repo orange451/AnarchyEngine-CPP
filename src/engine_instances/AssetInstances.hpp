@@ -134,14 +134,43 @@ private:
 };
 
 // A PBR material: DiffuseTexture, NormalTexture, RoughnessTexture, and
-// MetalnessTexture, each a Texture or nil.
+// MetalnessTexture, each a Texture or nil; Color, a Color3 that tints the
+// surface; and Reflectivity and Transparency, each 0 to 1 on its slider.
+// Those two take any finite number, as a Roblox Transparency does; whatever
+// draws them reads them clamped to 0..1.
 class Material : public ReferenceAsset {
 public:
+    // reference() indices.
+    static constexpr std::size_t kDiffuseTextureReference = 0;
+    static constexpr std::size_t kNormalTextureReference = 1;
+    static constexpr std::size_t kRoughnessTextureReference = 2;
+    static constexpr std::size_t kMetalnessTextureReference = 3;
+
+    static constexpr double kDefaultReflectivity = 0.5;
+    static constexpr double kDefaultTransparency = 0.0;
+    static constexpr ColorRgb kDefaultColor{1.f, 1.f, 1.f, 1.f};
+
     using ReferenceAsset::ReferenceAsset;
     const char* class_name() const override;
 
+    double reflectivity() const { return reflectivity_; }
+    double transparency() const { return transparency_; }
+    ColorRgb color() const { return color_; }
+    // SimulationThread. A value that is not finite is refused: returns why and changes nothing.
+    std::optional<std::string> set_reflectivity(double value);
+    std::optional<std::string> set_transparency(double value);
+    std::optional<std::string> set_color(ColorRgb color);
+
 protected:
     const ReferenceSpec* reference_specs(std::size_t& count) const override;
+    void on_reuse() override;
+
+private:
+    std::optional<std::string> set_number(const char* property, double& slot, double value);
+
+    double reflectivity_ = kDefaultReflectivity;
+    double transparency_ = kDefaultTransparency;
+    ColorRgb color_ = kDefaultColor;
 };
 
 // Joins a Mesh and a Material. Lives only in a Prefab.

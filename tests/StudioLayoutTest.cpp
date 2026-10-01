@@ -33,6 +33,7 @@ int RunFindReplaceTests(engine_core::Engine& engine);
 int RunThemeTests(jadefx::Scene& scene);
 int RunPreferencesTests();
 int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene);
+int RunTextureImportTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunScriptTabTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunTerminalPaneTests();
@@ -867,6 +868,7 @@ int main() {
         fs::remove_all(folder, error);
     }
     failures += RunSaveConflictTests(layout, *scene);
+    failures += RunTextureImportTests(layout, *scene);
     failures += RunConflictsTests(layout, *scene);
     // Conflicts opened beside the game explorer, the built-in layout's only
     // one, and is in front of it. Edit needs an explorer showing.

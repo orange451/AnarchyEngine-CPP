@@ -73,6 +73,13 @@ struct LuaField {
     // and write. See lua_saved_property.
     bool saved = false;
     const char* default_json = nullptr;
+    // A number the Properties page shows as a slider from slider_min to
+    // slider_max, beside a field that takes any value the write does. See
+    // lua_slider. Equal bounds are a plain field.
+    double slider_min = 0;
+    double slider_max = 0;
+
+    bool slider() const { return slider_max > slider_min; }
 };
 
 inline LuaField lua_property(const char* name, const char* type_name, bool writable, LuaRead read, LuaWrite write) {
@@ -96,6 +103,14 @@ inline LuaField lua_saved_property(const char* name, const char* type_name, LuaR
     LuaField field = lua_property(name, type_name, true, read, write);
     field.saved = true;
     field.default_json = default_json;
+    return field;
+}
+
+// field, shown in Properties as a slider from min to max. The slider is only
+// the UI's range: the write still decides what the property takes.
+inline LuaField lua_slider(LuaField field, double min, double max) {
+    field.slider_min = min;
+    field.slider_max = max;
     return field;
 }
 

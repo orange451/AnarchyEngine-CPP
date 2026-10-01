@@ -32,6 +32,8 @@ constexpr double kRowGap = 2;
 constexpr double kIndent = 10;
 constexpr double kAxisGap = 4;
 constexpr double kClearWidth = 24;
+// The widest a slider row's field gets. The track takes the rest.
+constexpr double kSliderFieldWidth = 72;
 // The fold arrow before a Transform's name sits in the name's indent.
 constexpr double kDisclosureWidth = 12;
 // A Transform's two lines, under its name when it is open.
@@ -249,6 +251,88 @@ private:
     bool escaped_ = false;
 };
 
+// The slider of a Number row with a range. on_move runs as the user moves it,
+// so the row's field can follow, and on_commit once per gesture: when the
+// button comes up after a press that moved it, or at each key that moves it.
+// So a drag is one undo step. A value from the world, shown through show,
+// is neither. The thumb stops at the ends; the field beside it does not.
+class PropertySlider : public jadefx::Slider {
+public:
+    PropertySlider(double min, double max) : jadefx::Slider(min, max, min) {
+        getClassList().add("properties-slider");
+        setBlockIncrement((max - min) / 20);
+        setOnValueChanged([this] {
+            if (!mute_ && on_move) {
+                on_move();
+            }
+        });
+    }
+
+    std::function<void()> on_move;
+    std::function<void()> on_commit;
+
+    // Shows a value from the world, clamped to the track.
+    void show(double value) {
+        mute_ = true;
+        setValue(value);
+        mute_ = false;
+    }
+
+    // Pressed, and not yet let go. The world does not move the thumb meanwhile.
+    bool held() const { return held_; }
+
+protected:
+    void handleMousePressed(const jadefx::MouseEvent& event) override {
+        held_ = !isDisabled();
+        start_ = getValue();
+        jadefx::Slider::handleMousePressed(event);
+    }
+
+    void handleMouseReleased(const jadefx::MouseEvent& event) override {
+        jadefx::Slider::handleMouseReleased(event);
+        if (held_) {
+            held_ = false;
+            finish(start_);
+        }
+    }
+
+    void handleKey(jadefx::KeyEvent& event) override {
+        const double before = getValue();
+        jadefx::Slider::handleKey(event);
+        if (!held_) {
+            finish(before);
+        }
+    }
+
+private:
+    void finish(double before) {
+        if (getValue() != before && on_commit) {
+            on_commit();
+        }
+    }
+
+    bool mute_ = false;
+    bool held_ = false;
+    double start_ = 0;
+};
+
+// A slider's value rounded to a step that suits its range: two digits below
+// the span's own, so 0..1 moves by hundredths and 1..120 by whole degrees.
+double slider_round(double value, double min, double max) {
+    const double span = max - min;
+    if (!(span > 0) || !std::isfinite(value)) {
+        return value;
+    }
+    const int digits = 2 - static_cast<int>(std::floor(std::log10(span)));
+    if (digits <= 0) {
+        const double step = std::pow(10.0, -digits);
+        return std::round(value / step) * step;
+    }
+    // Divided by a whole power of ten, so 0.35 reads back as 0.35.
+    const double scale = std::pow(10.0, digits);
+    return std::round(value * scale) / scale;
+}
+
 // The arrow that folds a Transform row: it points right while the row is
 // folded and down while it is open, as the explorer's does.
 class PropertyDisclosure : public jadefx::Region {
@@ -338,6 +422,8 @@ struct RowView {
     std::shared_ptr<PropertyField> axes[kTransformParts];
     std::shared_ptr<jadefx::CheckBox> check;
     std::shared_ptr<PropertyColor> color;
+    // A Number row with a range, beside its field.
+    std::shared_ptr<PropertySlider> slider;
     std::shared_ptr<jadefx::Button> pick;
     std::shared_ptr<jadefx::Button> clear;
     std::shared_ptr<jadefx::Tooltip> tip;
@@ -352,7 +438,7 @@ struct RowView {
         std::vector<jadefx::Node*> out;
         for (jadefx::Node* node : {static_cast<jadefx::Node*>(name.get()), static_cast<jadefx::Node*>(field.get()),
                                    static_cast<jadefx::Node*>(check.get()), static_cast<jadefx::Node*>(color.get()),
-                                   static_cast<jadefx::Node*>(pick.get()), static_cast<jadefx::Node*>(clear.get()),
+                                   static_cast<jadefx::Node*>(slider.get()), static_cast<jadefx::Node*>(pick.get()), static_cast<jadefx::Node*>(clear.get()),
                                    static_cast<jadefx::Node*>(disclosure.get()),
                                    static_cast<jadefx::Node*>(lines[0].get()),
                                    static_cast<jadefx::Node*>(lines[1].get())}) {
@@ -631,6 +717,25 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         case PropertyKind::Number:
         case PropertyKind::ReadOnlyText:
             view->field = make_field(view, !row.writable);
+            if (row.slider()) {
+                view->slider = jadefx::make<PropertySlider>(row.slider_min, row.slider_max);
+                view->slider->setDisable(!row.writable);
+                view->slider->on_move = [weak_self, weak_view]() {
+                    const auto self = weak_self.lock();
+                    const auto row_view = weak_view.lock();
+                    if (self && row_view) {
+                        self->follow_slider(*row_view);
+                    }
+                };
+                view->slider->on_commit = [weak_self, weak_view]() {
+                    const auto self = weak_self.lock();
+                    const auto row_view = weak_view.lock();
+                    if (self && row_view) {
+                        self->commit_slider(*row_view);
+                    }
+                };
+                pane->getChildren().add(view->slider);
+            }
             break;
         case PropertyKind::Vector3:
             for (int axis = 0; axis < 3; ++axis) {
@@ -808,6 +913,10 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         case PropertyKind::Number:
         case PropertyKind::ReadOnlyText:
             put(*view.field, shown_text(row));
+            // A mixed row rests the thumb at the start. A held one keeps the drag.
+            if (view.slider && !view.slider->held()) {
+                view.slider->show(row.mixed ? row.slider_min : row.value.number);
+            }
             break;
         case PropertyKind::Vector3:
             for (int axis = 0; axis < 3; ++axis) {
@@ -974,6 +1083,29 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         const jadefx::Color picked = view.color->getValue();
         edit.value.color = engine_core::Color3{picked.r, picked.g, picked.b};
         view.color->mixed = false;
+        submit(view.ids, edit);
+    }
+
+    double slider_value(const RowView& view) const {
+        return slider_round(view.slider->getValue(), view.row.slider_min, view.row.slider_max);
+    }
+
+    // The field shows where the thumb is. Anything typed in it gives way.
+    void follow_slider(RowView& view) { view.field->show(format_number(slider_value(view))); }
+
+    void commit_slider(RowView& view) {
+        if (!view.row.writable) {
+            return;
+        }
+        PropertyEdit edit;
+        edit.property = view.row.name;
+        edit.kind = PropertyKind::Number;
+        edit.value.number = slider_value(view);
+        view.field->show(format_number(edit.value.number));
+        // A nudge that rounds back to the value held is no edit.
+        if (!view.row.mixed && edit.value.number == view.row.value.number) {
+            return;
+        }
         submit(view.ids, edit);
     }
 
@@ -1187,7 +1319,15 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 break;
             }
             default:
-                place(*view->field, editor_x, editor_width, kRowHeight);
+                if (view->slider) {
+                    // The track first, then the field that takes any number.
+                    const double typed = std::clamp(editor_width * 0.35, 40.0, kSliderFieldWidth);
+                    const double track = std::max(0.0, editor_width - typed - kAxisGap);
+                    place(*view->slider, editor_x, track, kRowHeight);
+                    place(*view->field, editor_x + track + kAxisGap, typed, kRowHeight);
+                } else {
+                    place(*view->field, editor_x, editor_width, kRowHeight);
+                }
                 break;
             }
             y += kRowHeight + kRowGap;
@@ -1312,7 +1452,9 @@ jadefx::Node* PropertiesPanel::editor(const std::string& property, int part) con
                    : part == 1 ? static_cast<jadefx::Node*>(view->clear.get())
                                : nullptr;
         default:
-            return part == 0 ? view->field.get() : nullptr;
+            return part == 0 ? static_cast<jadefx::Node*>(view->field.get())
+                   : part == 1 ? static_cast<jadefx::Node*>(view->slider.get())
+                               : nullptr;
         }
     }
     return nullptr;

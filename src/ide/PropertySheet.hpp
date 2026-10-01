@@ -51,17 +51,25 @@ struct PropertyValue {
 // agree. A Transform's axis_mixed covers its six parts, in kTransformParts
 // order. For a Ref, label is the Name and path is the Names from the root
 // down, both empty when the value is nil or mixed.
+//
+// A Number whose property registers a slider (lua_slider) has slider_min
+// below slider_max, and every selected instance's property registers that
+// same range; otherwise both are 0 and the row is a plain field.
 struct PropertyRow {
     std::string name;
     std::string type_name;
     PropertyKind kind = PropertyKind::String;
     PropertyGroup group = PropertyGroup::Data;
+    double slider_min = 0;
+    double slider_max = 0;
     bool writable = false;
     bool mixed = false;
     bool axis_mixed[kTransformParts] = {false, false, false, false, false, false};
     PropertyValue value;
     std::string label;
     std::string path;
+
+    bool slider() const { return kind == PropertyKind::Number && slider_max > slider_min; }
 
     bool operator==(const PropertyRow& other) const;
     bool operator!=(const PropertyRow& other) const { return !(*this == other); }

@@ -32,6 +32,18 @@ bool Renderer::initialize() {
     }
     modelLocation_ = glGetUniformLocation(meshProgram_, "uModel");
     viewProjectionLocation_ = glGetUniformLocation(meshProgram_, "uViewProjection");
+    diffuseLocation_ = glGetUniformLocation(meshProgram_, "uDiffuse");
+    colorLocation_ = glGetUniformLocation(meshProgram_, "uColor");
+
+    const unsigned char white[4] = {255, 255, 255, 255};
+    glGenTextures(1, &whiteTexture_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, whiteTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(GL_RGBA8), 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
+    glBindTexture(GL_TEXTURE_2D, 0);
+
     const GLenum error = glGetError();
     if (error != GL_NO_ERROR) {
         std::fprintf(stderr, "OpenGL error during setup: 0x%x\n", error);
@@ -190,6 +202,10 @@ void Renderer::shutdown() {
         glDeleteProgram(meshProgram_);
         meshProgram_ = 0;
     }
+    if (whiteTexture_ != 0) {
+        glDeleteTextures(1, &whiteTexture_);
+        whiteTexture_ = 0;
+    }
 }
 
 namespace {
@@ -278,15 +294,21 @@ void Renderer::drawMeshes(const MeshDraw* meshes, int count, float aspect) {
     Multiply(projection, view_.m, viewProjection);
     glUseProgram(meshProgram_);
     glUniformMatrix4fv(viewProjectionLocation_, 1, GL_FALSE, viewProjection);
+    // Unit 0, the one JadeFX draws with, left active with nothing bound after.
+    glActiveTexture(GL_TEXTURE0);
+    glUniform1i(diffuseLocation_, 0);
     for (int index = 0; index < count; ++index) {
         const MeshDraw& draw = meshes[index];
         if (draw.mesh == nullptr || !draw.mesh->valid()) {
             continue;
         }
         glUniformMatrix4fv(modelLocation_, 1, GL_FALSE, draw.model.m);
+        glUniform4f(colorLocation_, draw.color[0], draw.color[1], draw.color[2], draw.color[3]);
+        glBindTexture(GL_TEXTURE_2D, draw.texture != 0 ? draw.texture : whiteTexture_);
         draw.mesh->bind();
         draw.mesh->draw(0);
     }
+    glBindTexture(GL_TEXTURE_2D, 0);
     glBindVertexArray(0);
 }
 

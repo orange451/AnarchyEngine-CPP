@@ -40,6 +40,11 @@ struct VisualMesh {
     std::uint64_t revision = 0;
     // The Mesh, which a renderer can key its upload of session by.
     InstanceId mesh = 0;
+    // The Model's Material: its DiffuseTexture's Path, relative to the
+    // resources folder, and its Color. An empty path, as with no Material or
+    // no DiffuseTexture, draws the Color alone; no Material is white.
+    std::string diffuse_texture;
+    ColorRgb color{};
 };
 
 // What one Prefab draws, found again at every Prepare, so an edit to its

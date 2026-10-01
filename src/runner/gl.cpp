@@ -44,6 +44,16 @@ void (*rt_glUniform1f)(GLint, GLfloat) = nullptr;
 void (*rt_glUniform3f)(GLint, GLfloat, GLfloat, GLfloat) = nullptr;
 void (*rt_glUniformMatrix4fv)(GLint, GLsizei, GLboolean, const GLfloat*) = nullptr;
 void (*rt_glReadPixels)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*) = nullptr;
+void (*rt_glGenTextures)(GLsizei, GLuint*) = nullptr;
+void (*rt_glDeleteTextures)(GLsizei, const GLuint*) = nullptr;
+void (*rt_glBindTexture)(GLenum, GLuint) = nullptr;
+void (*rt_glActiveTexture)(GLenum) = nullptr;
+void (*rt_glTexImage2D)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*) = nullptr;
+void (*rt_glTexParameteri)(GLenum, GLenum, GLint) = nullptr;
+void (*rt_glGenerateMipmap)(GLenum) = nullptr;
+void (*rt_glPixelStorei)(GLenum, GLint) = nullptr;
+void (*rt_glUniform1i)(GLint, GLint) = nullptr;
+void (*rt_glUniform4f)(GLint, GLfloat, GLfloat, GLfloat, GLfloat) = nullptr;
 
 bool LoadGl(GlGetProcAddress get_proc) {
     if (get_proc == nullptr) {
@@ -101,6 +111,16 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(Uniform3f);
     LOAD(UniformMatrix4fv);
     LOAD(ReadPixels);
+    LOAD(GenTextures);
+    LOAD(DeleteTextures);
+    LOAD(BindTexture);
+    LOAD(ActiveTexture);
+    LOAD(TexImage2D);
+    LOAD(TexParameteri);
+    LOAD(GenerateMipmap);
+    LOAD(PixelStorei);
+    LOAD(Uniform1i);
+    LOAD(Uniform4f);
 
 #undef LOAD
     return true;

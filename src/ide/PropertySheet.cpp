@@ -265,7 +265,8 @@ bool PropertyRow::operator==(const PropertyRow& other) const {
 }
 
 bool PropertyRow::same_slot(const PropertyRow& other) const {
-    return name == other.name && type_name == other.type_name && kind == other.kind && group == other.group;
+    return name == other.name && type_name == other.type_name && kind == other.kind && group == other.group &&
+           slider_min == other.slider_min && slider_max == other.slider_max;
 }
 
 const PropertyRow* PropertySheet::find(const std::string& name) const {
@@ -347,6 +348,10 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
         row.kind = kind;
         row.group = instance_rank(row.name) >= 0 ? PropertyGroup::Instance : PropertyGroup::Data;
         row.writable = field.writable && field.write != nullptr && kind != PropertyKind::ReadOnlyText;
+        if (kind == PropertyKind::Number && field.slider()) {
+            row.slider_min = field.slider_min;
+            row.slider_max = field.slider_max;
+        }
         bool keep = true;
         bool have_first = false;
         for (InstanceId id : sheet.ids) {
@@ -358,6 +363,11 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
                 break;
             }
             row.writable = row.writable && own->writable && own->write != nullptr;
+            // Classes that disagree on the range get a plain field.
+            if (own->slider_min != row.slider_min || own->slider_max != row.slider_max) {
+                row.slider_min = 0;
+                row.slider_max = 0;
+            }
             // A service keeps its name and its place.
             if (object->is_service() && (row.name == "Name" || row.name == "Parent")) {
                 row.writable = false;

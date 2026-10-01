@@ -16,6 +16,7 @@
 #include "jadefx/jadefx.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -1100,6 +1101,85 @@ void TestReferenceRows() {
     engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
 }
 
+double Reflectivity(Game& game, InstanceId id) {
+    auto* material = dynamic_cast<engine_core::Material*>(game.instance(id));
+    return material != nullptr ? material->reflectivity() : -1;
+}
+
+// Material's Reflectivity and Transparency, and Camera's FieldOfView, register
+// a range, so each is a slider beside its field.
+void TestSliderRows() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Rig rig;
+    const InstanceId wall = MakeAsset(rig.game, "Material", "Wall", rig.game.service("Materials"));
+    const InstanceId floor = MakeAsset(rig.game, "Material", "Floor", rig.game.service("Materials"));
+    const InstanceId camera = rig.add<engine_core::Camera>("Cam");
+    rig.game.history().reset_waypoints();
+
+    const ide::PropertySheet sheet = ide::read_sheet(rig.game, {wall});
+    const ide::PropertyRow* reflectivity = RowNamed(sheet, "Reflectivity");
+    Expect(reflectivity != nullptr && reflectivity->slider() && reflectivity->slider_min == 0 &&
+               reflectivity->slider_max == 1 && reflectivity->value.number == 0.5,
+           "Reflectivity is a 0..1 slider at 0.5");
+    const ide::PropertyRow* transparency = RowNamed(sheet, "Transparency");
+    Expect(transparency != nullptr && transparency->slider() && transparency->value.number == 0,
+           "Transparency is a slider at 0");
+    const ide::PropertyRow* color = RowNamed(sheet, "Color");
+    Expect(color != nullptr && color->kind == ide::PropertyKind::Color3 && color->value.color.r == 1 &&
+               color->value.color.g == 1 && color->value.color.b == 1,
+           "Color is a white Color3");
+    const ide::PropertySheet camera_sheet = ide::read_sheet(rig.game, {camera});
+    const ide::PropertyRow* fov = RowNamed(camera_sheet, "FieldOfView");
+    Expect(fov != nullptr && fov->slider() && fov->slider_min == engine_core::Camera::kMinFieldOfView &&
+               fov->slider_max == engine_core::Camera::kMaxFieldOfView,
+           "FieldOfView is a slider over its own range");
+    const ide::PropertyRow* name = RowNamed(camera_sheet, "Name");
+    Expect(name != nullptr && !name->slider(), "a row without a range is no slider");
+
+    rig.select({wall, floor});
+    auto* slider = dynamic_cast<jadefx::Slider*>(rig.panel.editor("Reflectivity", 1));
+    Expect(slider != nullptr && slider->isVisible(), "the slider is on screen");
+    Expect(rig.text("Reflectivity") == "0.5", "the field beside it shows the value");
+    Expect(slider != nullptr && slider->getValue() == 0.5, "and so does the thumb");
+
+    // The field goes past the end; the thumb stops there.
+    rig.typeInto("Reflectivity", "2");
+    rig.enter();
+    Expect(Reflectivity(rig.game, wall) == 2 && Reflectivity(rig.game, floor) == 2,
+           "a typed number past the end writes every one");
+    Expect(slider != nullptr && slider->getValue() == 1, "the thumb rests at the end");
+    Expect(rig.undoDepth() == 1, "the typed number is one undo step");
+
+    // A click on the middle of the track jumps there and writes on release, rounded.
+    rig.click(slider);
+    rig.frame();
+    const double clicked = Reflectivity(rig.game, wall);
+    Expect(clicked > 0.4 && clicked < 0.6 && clicked == std::round(clicked * 100) / 100,
+           "a track click writes where it landed, to a hundredth");
+    Expect(Reflectivity(rig.game, floor) == clicked, "to every selected one");
+    Expect(rig.text("Reflectivity") == ide::format_number(clicked), "the field follows the thumb");
+    Expect(rig.undoDepth() == 2, "the click is one more undo step");
+
+    // A press that does not move the thumb writes nothing.
+    rig.click(slider);
+    rig.frame();
+    Expect(rig.undoDepth() == 2, "a click where the thumb is writes nothing");
+
+    // An arrow key moves it a twentieth and writes at once.
+    rig.key(jadefx::Key::Right);
+    rig.frame();
+    Expect(std::fabs(Reflectivity(rig.game, wall) - (clicked + 0.05)) < 1e-9, "Right moves up a twentieth");
+    Expect(rig.undoDepth() == 3, "each key is its own step");
+
+    // Mixed values rest the thumb at the start and blank the field.
+    auto* floor_material = dynamic_cast<engine_core::Material*>(rig.game.instance(floor));
+    floor_material->set_reflectivity(0.1);
+    rig.frame();
+    Expect(rig.mixed("Reflectivity") && rig.text("Reflectivity").empty(), "a mixed slider row blanks its field");
+    Expect(slider != nullptr && slider->getValue() == 0, "and rests its thumb at the start");
+    engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+}
+
 void TestServiceRowsReadOnly() {
     Game game;
     const ide::PropertySheet sheet = ide::read_sheet(game, {game.service("Textures")});
@@ -1139,6 +1219,7 @@ int main() {
     TestColorPicker();
     TestR6ParentReference();
     TestReferenceRows();
+    TestSliderRows();
     TestServiceRowsReadOnly();
     TestInstanceDragIds();
     TestR7MidEditIsNotClobbered();

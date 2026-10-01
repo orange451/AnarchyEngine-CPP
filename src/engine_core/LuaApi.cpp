@@ -968,6 +968,12 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Camera", "FieldOfView",
         "How many degrees this camera sees from bottom to top, from 1 to 120. A Scene View linked to it draws with it.",
         "number", false, {});
+    add("Material", "Color", "The color that tints this material's surface. White leaves it as it is.", "Color3",
+        false, {});
+    add("Material", "Reflectivity", "How much this material reflects its surroundings, from 0 to 1.", "number", false,
+        {});
+    add("Material", "Transparency", "How much this material lets through what is behind it, from 0 (opaque) to 1.",
+        "number", false, {});
     // Every Add writes the Mesh's AMESH file under the project's resources folder, giving
     // the Mesh a Path first if it has none. During play they change a copy for the session
     // instead, which the Scene View draws and Stop drops.

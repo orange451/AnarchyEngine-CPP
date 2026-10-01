@@ -68,7 +68,9 @@ ANARCHY_LUA_REGISTER(register_camera_lua) {
     // The default, as a file would hold it, from the class's own constant.
     static const std::string field_of_view = write_json(JsonValue::number(Camera::kDefaultFieldOfView));
     const LuaField fields[] = {
-        lua_saved_property("FieldOfView", "number", read_field_of_view, write_field_of_view, field_of_view.c_str()),
+        lua_slider(lua_saved_property("FieldOfView", "number", read_field_of_view, write_field_of_view,
+                                      field_of_view.c_str()),
+                   Camera::kMinFieldOfView, Camera::kMaxFieldOfView),
     };
     register_lua_class("Camera", "GameObject", fields, 1);
 }

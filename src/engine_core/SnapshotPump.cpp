@@ -15,6 +15,13 @@ float field_of_view_of(const GameObject& object) {
     return camera != nullptr ? static_cast<float>(camera->field_of_view()) : 0.f;
 }
 
+// The live T that asset's reference at index holds, or null.
+template <typename T>
+const T* ReferencedAs(const DataModel& game, const ReferenceAsset& asset, std::size_t index) {
+    const LuaSlot slot = asset.reference(index);
+    return slot.kind == LuaSlot::Kind::Instance ? dynamic_cast<const T*>(game.instance(slot.id)) : nullptr;
+}
+
 }  // namespace
 
 void SnapshotPump::reserve(std::size_t instances) {
@@ -226,6 +233,17 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
                         out.path = mesh->path();
                         out.session.reset();
                     }
+                    const Material* material = ReferencedAs<Material>(game, *model, Model::kMaterialReference);
+                    const Texture* diffuse =
+                        material != nullptr
+                            ? ReferencedAs<Texture>(game, *material, Material::kDiffuseTextureReference)
+                            : nullptr;
+                    if (diffuse != nullptr) {
+                        out.diffuse_texture = diffuse->path();
+                    } else {
+                        out.diffuse_texture.clear();
+                    }
+                    out.color = material != nullptr ? material->color() : ColorRgb{};
                 }
             }
         }

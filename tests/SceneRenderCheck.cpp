@@ -2,6 +2,7 @@
 #include "amesh.hpp"
 #include "runner/MeshCache.hpp"
 #include "runner/Renderer.hpp"
+#include "runner/TextureCache.hpp"
 #include "runner/gl.hpp"
 
 // Only GLFW's window calls: the GL names come from runner/gl.hpp.
@@ -47,9 +48,13 @@ Data Cube() {
     };
     for (const auto& face : faces) {
         const auto base = static_cast<std::uint32_t>(data.vertices.size());
-        for (const auto& corner : face) {
+        // Corner order runs bottom left, bottom right, top right, top left on the +Z face.
+        const float uvs[4][2] = {{0.f, 0.f}, {1.f, 0.f}, {1.f, 1.f}, {0.f, 1.f}};
+        for (int corner = 0; corner < 4; ++corner) {
             Vertex v;
-            std::copy(corner, corner + 3, v.p);
+            std::copy(face[corner], face[corner] + 3, v.p);
+            v.uv[0] = uvs[corner][0];
+            v.uv[1] = uvs[corner][1];
             data.vertices.push_back(v);
         }
         data.indices.insert(data.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
@@ -74,6 +79,24 @@ bool IsClear(Pixel p) {
 
 std::string Text(Pixel p) {
     return std::to_string(p.r) + "," + std::to_string(p.g) + "," + std::to_string(p.b);
+}
+
+// An uncompressed 24-bit TGA, 4 by 4, written top row first: the top two rows
+// red, the bottom two blue.
+std::string StripesTga() {
+    std::string bytes(18, '\0');
+    bytes[2] = 2;     // true color, uncompressed
+    bytes[12] = 4;    // width
+    bytes[14] = 4;    // height
+    bytes[16] = 24;   // bits per pixel
+    bytes[17] = 0x20; // top row first
+    for (int row = 0; row < 4; ++row) {
+        for (int column = 0; column < 4; ++column) {
+            // Blue, green, red.
+            bytes += row < 2 ? std::string("\x00\x00\xff", 3) : std::string("\xff\x00\x00", 3);
+        }
+    }
+    return bytes;
 }
 
 }  // namespace
@@ -187,6 +210,52 @@ int main() {
         Expect(!IsClear(ReadPixel(fbWidth * 7 / 8, fbHeight / 2)), "a bad Camera is ignored");
         renderer.setCamera(engine_core::matrix4_look_at({0.f, 3.f, 7.f}, {0.f, 0.f, 0.f}, up),
                            runner::Renderer::kCameraFovYDegrees);
+
+        // A Material's DiffuseTexture, read from the resources folder, and its Color.
+        {
+            std::filesystem::create_directories(root / "textures");
+            std::ofstream(root / "textures" / "stripes.tga", std::ios::binary) << StripesTga();
+            std::ofstream(root / "textures" / "junk.png", std::ios::binary) << "not an image";
+            const std::string tga = StripesTga();
+            runner::TexturePixels pixels;
+            std::string why;
+            Expect(runner::DecodeTexture(reinterpret_cast<const std::uint8_t*>(tga.data()), tga.size(), pixels, why) &&
+                       pixels.width == 4 && pixels.height == 4,
+                   "a TGA decodes to 4 by 4 (" + why + ")");
+            Expect(pixels.rgba.size() == 64 && pixels.rgba[2] == 255 && pixels.rgba[0] == 0 && pixels.rgba[60] == 255,
+                   "bottom row first, as OpenGL takes it: blue, then red at the top");
+
+            std::vector<std::string> said;
+            runner::TextureCache textures([&said](const std::string& message) { said.push_back(message); });
+            Expect(textures.get("textures/stripes.tga") == 0, "no root loads no texture");
+            textures.setRoot(root);
+            const unsigned stripes = textures.get("textures/stripes.tga");
+            Expect(stripes != 0, "the texture loads from the resources folder");
+            Expect(textures.get("textures/stripes.tga") == stripes, "a second get is the same upload");
+            Expect(textures.get("textures/missing.png") == 0 && textures.get("textures/junk.png") == 0,
+                   "a missing file and a file that is not an image have no texture");
+            Expect(said.size() == 2, "each says why once (" + std::to_string(said.size()) + " reports)");
+
+            // The front face's v runs from 0 at its bottom, 10 of 128 rows below the middle, to 1 at its
+            // top, 4 above: the middle is in the image's top half, 6 rows below in its bottom half.
+            runner::MeshDraw textured{cube, engine_core::matrix4_identity(), stripes};
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &textured, 1);
+            const Pixel upper = ReadPixel(fbWidth / 2, fbHeight / 2);
+            const Pixel lower = ReadPixel(fbWidth / 2, fbHeight / 2 - fbHeight * 3 / 64);
+            Expect(upper.r > 0 && upper.b == 0 && upper.g == 0, "the image's top is at the face's top (" + Text(upper) + ")");
+            Expect(lower.b > 0 && lower.r == 0 && lower.g == 0, "and its bottom at the bottom (" + Text(lower) + ")");
+
+            // Color tints the texture, and draws alone with none.
+            runner::MeshDraw tinted{cube, engine_core::matrix4_identity(), stripes, {0.f, 1.f, 1.f, 1.f}};
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &tinted, 1);
+            Expect(ReadPixel(fbWidth / 2, fbHeight / 2).r == 0, "a cyan Color takes out the red");
+            runner::MeshDraw green{cube, engine_core::matrix4_identity(), 0, {0.f, 1.f, 0.f, 1.f}};
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &green, 1);
+            const Pixel plain = ReadPixel(fbWidth / 2, fbHeight / 2);
+            Expect(plain.g > 0 && plain.r == 0 && plain.b == 0, "no texture draws the Color alone (" + Text(plain) + ")");
+            Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "textures leave no GL error");
+            textures.clear();
+        }
 
         // A file that changes is read again after the recheck interval: this one stops drawing.
         std::ofstream(root / "meshes" / "cube.amesh", std::ios::binary | std::ios::trunc) << "broken now";

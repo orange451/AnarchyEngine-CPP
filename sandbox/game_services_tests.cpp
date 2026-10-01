@@ -22,6 +22,7 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -460,6 +461,58 @@ TEST_CASE("GS8 a reference takes its class, saves as a GUID, and reads the live 
     REQUIRE(write_field(game, body, "Material", instance_slot(mat)));
     REQUIRE_FALSE(write_field(game, body, "Material", instance_slot(brick), &error));
     REQUIRE(error == "Material must be a Material");
+}
+
+TEST_CASE("GS8b Material's Color, Reflectivity, and Transparency save when changed", "[GS8]") {
+    SimRole role;
+    Game game;
+    const InstanceId mat = make(game, "Material", "Wall", game.service("Materials"));
+
+    REQUIRE(read_field(game, mat, "Reflectivity").number == 0.5);
+    REQUIRE(read_field(game, mat, "Transparency").number == 0);
+    const engine_core::LuaSlot white = read_field(game, mat, "Color");
+    REQUIRE(white.kind == engine_core::LuaSlot::Kind::Color);
+    REQUIRE((white.color.r == 1 && white.color.g == 1 && white.color.b == 1));
+    engine_core::PropertyBag saved;
+    game.instance(mat)->save_properties(saved);
+    REQUIRE(saved.empty());
+
+    // The slider stops at 0..1; the property takes any finite number.
+    engine_core::LuaSlot number;
+    number.kind = engine_core::LuaSlot::Kind::Number;
+    number.number = 1.5;
+    REQUIRE(write_field(game, mat, "Reflectivity", number));
+    number.number = -0.25;
+    REQUIRE(write_field(game, mat, "Transparency", number));
+    number.number = std::numeric_limits<double>::quiet_NaN();
+    std::string error;
+    REQUIRE_FALSE(write_field(game, mat, "Transparency", number, &error));
+    REQUIRE(error == "Transparency must be a finite number");
+    engine_core::LuaSlot red;
+    red.kind = engine_core::LuaSlot::Kind::Color;
+    red.color = {1.f, 0.f, 0.f, 1.f};
+    REQUIRE(write_field(game, mat, "Color", red));
+
+    game.instance(mat)->save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "Reflectivity")->as_number() == 1.5);
+    REQUIRE(engine_core::bag_find(saved, "Transparency")->as_number() == -0.25);
+    REQUIRE(engine_core::bag_find(saved, "Color") != nullptr);
+
+    Game other;
+    const InstanceId copy = make(other, "Material", "Wall", other.service("Materials"));
+    for (const auto& [name, value] : saved) {
+        std::string load_error;
+        REQUIRE(other.instance(copy)->load_property(name, value, load_error));
+    }
+    REQUIRE(read_field(other, copy, "Reflectivity").number == 1.5);
+    REQUIRE(read_field(other, copy, "Transparency").number == -0.25);
+    const engine_core::LuaSlot loaded = read_field(other, copy, "Color");
+    REQUIRE((loaded.color.r == 1 && loaded.color.g == 0 && loaded.color.b == 0));
+
+    const engine_core::LuaField* field = engine_core::lua_class_find("Material", "Reflectivity");
+    REQUIRE(field != nullptr);
+    REQUIRE(field->slider());
+    REQUIRE((field->slider_min == 0 && field->slider_max == 1));
 }
 
 TEST_CASE("GS9 a reference to a destroyed asset reads nil, and undo brings it back", "[GS9]") {

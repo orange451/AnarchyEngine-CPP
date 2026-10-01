@@ -2,6 +2,7 @@
 
 #include "ide/IdePane.hpp"
 #include "MeshCache.hpp"
+#include "TextureCache.hpp"
 #include "Renderer.hpp"
 #include "types.hpp"
 
@@ -103,8 +104,10 @@ private:
     // The runner's; it outlives the engine that writes it.
     SceneFeed* feed_ = nullptr;
     MeshCache meshes_;
-    // Per frame: each snapshot Prefab's loaded meshes, then one draw per row and mesh.
-    std::vector<std::vector<const anarchy::amesh::GpuMesh*>> prefabMeshes_;
+    TextureCache textures_;
+    // Per frame: each snapshot Prefab's loaded meshes, with their textures and
+    // colors, then one draw per row and mesh at that row's Transform.
+    std::vector<std::vector<MeshDraw>> prefabMeshes_;
     std::vector<MeshDraw> meshDraws_;
     // The session game. The runner keeps it alive for this view.
     engine_core::DataModel* game_ = nullptr;

@@ -202,6 +202,8 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     root_->setPrefWidthRatio(1);
     root_->setPrefHeightRatio(1);
     root_->getClassList().add("ide-root");
+    // Image files dropped anywhere a pane does not take them are imported as Textures.
+    accept_texture_drops(*root_);
     root_->setTop(top);
     root_->setBottom(status);
 

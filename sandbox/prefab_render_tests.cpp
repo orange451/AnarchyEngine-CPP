@@ -150,6 +150,53 @@ TEST_CASE("GameObjects on one Prefab share its entry, and edits show on the next
     REQUIRE(scene.meshes(a.id()) == Paths{"meshes/wheel.amesh"});
 }
 
+TEST_CASE("a Model draws its Material's DiffuseTexture Path and Color", "[render]") {
+    Scene scene;
+    engine_core::Mesh& body = scene.mesh("Body", "meshes/body.amesh");
+    engine_core::Prefab& crate = scene.prefab("Crate");
+    engine_core::Model& part = scene.model(crate, body.id());
+    engine_core::GameObject& box = scene.object(crate.id());
+    auto surface = [&scene, &box]() -> const engine_core::VisualMesh& {
+        const engine_core::VisualSnapshot& front = scene.pump.front();
+        const std::uint32_t entry = scene.row(box.id())->prefab;
+        REQUIRE(entry < front.prefabs.size());
+        REQUIRE(front.prefabs[entry].meshes.size() == 1);
+        return front.prefabs[entry].meshes[0];
+    };
+
+    // No Material: no texture, and white.
+    scene.frame();
+    REQUIRE(surface().diffuse_texture.empty());
+    REQUIRE(surface().color.r == 1.f);
+    REQUIRE(surface().color.b == 1.f);
+
+    engine_core::Texture& wood = scene.game.create<engine_core::Texture>();
+    scene.game.set_parent(wood.id(), scene.game.service("Textures"));
+    REQUIRE_FALSE(wood.set_path("textures/wood.png"));
+    engine_core::Material& varnish = scene.game.create<engine_core::Material>();
+    scene.game.set_parent(varnish.id(), scene.game.service("Materials"));
+    REQUIRE_FALSE(varnish.set_color(engine_core::ColorRgb{1.f, 0.5f, 0.25f, 1.f}));
+    REQUIRE_FALSE(part.set_reference(engine_core::Model::kMaterialReference, instance_slot(varnish.id())));
+    scene.frame();
+    // A Material with no DiffuseTexture draws its Color alone.
+    REQUIRE(surface().diffuse_texture.empty());
+    REQUIRE(surface().color.g == 0.5f);
+    REQUIRE(surface().color.b == 0.25f);
+
+    REQUIRE_FALSE(varnish.set_reference(engine_core::Material::kDiffuseTextureReference, instance_slot(wood.id())));
+    scene.frame();
+    REQUIRE(surface().diffuse_texture == "textures/wood.png");
+
+    // Edits to the Texture's Path show on the next frame, and clearing the Material undoes both.
+    REQUIRE_FALSE(wood.set_path("textures/oak.png"));
+    scene.frame();
+    REQUIRE(surface().diffuse_texture == "textures/oak.png");
+    REQUIRE_FALSE(part.set_reference(engine_core::Model::kMaterialReference, engine_core::LuaSlot()));
+    scene.frame();
+    REQUIRE(surface().diffuse_texture.empty());
+    REQUIRE(surface().color.g == 1.f);
+}
+
 TEST_CASE("changing or clearing a GameObject's Prefab changes what it draws", "[render]") {
     Scene scene;
     engine_core::Mesh& body = scene.mesh("Body", "meshes/body.amesh");

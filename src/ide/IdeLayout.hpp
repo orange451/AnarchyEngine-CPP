@@ -325,6 +325,14 @@ private:
     // A drag from the Assets pane onto view that holds a Prefab adds each
     // Prefab in it as a GameObject. A drag with none is refused.
     void accept_prefab_drops(jadefx::Node& view);
+    // Image files dropped on node, or on anything under it that does not take
+    // them, go to import_textures. A drop with none is refused.
+    void accept_texture_drops(jadefx::Node& node);
+    // Asks whether to import the image files among files. Yes copies each into
+    // the project's resources, as import_texture_file does, makes a Texture
+    // under Assets.Textures named after its file with Path set to the copy, as
+    // one undo step, and selects them. Needs a project, and a stopped test.
+    void import_textures(const std::vector<std::string>& files);
     // Where Search and Conflicts dock: beside the left explorer, else where editors dock.
     IdeDock* side_home();
     // The ribbon's count and the Conflicts window's rows, from conflicts_.

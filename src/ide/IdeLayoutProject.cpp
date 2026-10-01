@@ -365,11 +365,16 @@ void IdeLayout::import_files(const std::vector<std::string>& files, engine_core:
                 toast_later(this, alive, summary + (noted ? ". The console says what was left out" : ""));
             }
             if (!made.empty()) {
+                // The Assets pane comes to the front, opened if it was closed, on the folder the first one went into.
+                const engine_core::InstanceId folder = world.parent(made.front());
                 world.selection().set(std::move(made));
-                // The Assets pane comes to the front, opened if it was closed, to show what came in.
-                jadefx::runLater([this, alive] {
-                    if (!alive.expired()) {
-                        open_window(*assets_window_);
+                jadefx::runLater([this, alive, folder] {
+                    if (alive.expired()) {
+                        return;
+                    }
+                    open_window(*assets_window_);
+                    if (auto* assets = dynamic_cast<IdeAssets*>(assets_window_->pane.get())) {
+                        assets->openFolder(folder);
                     }
                 });
             }

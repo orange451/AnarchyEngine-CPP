@@ -2,6 +2,7 @@
 #include "LockWaits.hpp"
 
 #include "AssetInstances.hpp"
+#include "AssetPicker.hpp"
 #include "DataModelLock.hpp"
 #include "IdeIcons.hpp"
 #include "PropertySheet.hpp"
@@ -22,9 +23,7 @@ constexpr double kCardWidth = 272;
 constexpr double kGap = 16;
 // About a card's height, so the New Model tile lines up with the cards beside it.
 constexpr double kTileHeight = 228;
-constexpr double kPickerWidth = 300;
-constexpr double kPickerRowHeight = 38;
-constexpr int kPickerRows = 7;
+
 // Frames a picker waits for its card to be laid out and scrolled into view.
 constexpr int kPickerWaitFrames = 30;
 
@@ -244,62 +243,6 @@ constexpr const char* kEditorRules = R"CSS(
     background-color: var(--selection-color);
 }
 )CSS";
-
-// The picker is a popup, outside the page, so it carries its own rules.
-constexpr const char* kPickerRules = R"CSS(
-.pe-picker {
-    background-color: var(--ide-popup-color);
-    border-width: 1px;
-    border-style: solid;
-    border-color: var(--ide-popup-border-color);
-    border-radius: 10px;
-    box-shadow: 0 10px 28px var(--ide-popup-shadow-color);
-    padding: 8px;
-    spacing: 6px;
-}
-.pe-picker-field {
-    width: 100%;
-    border-radius: 6px;
-    padding: 5px 8px;
-}
-.pe-picker-list {
-    background-color: rgba(0, 0, 0, 0);
-}
-.pe-pick-row {
-    border-radius: 6px;
-    padding: 0 8px;
-    spacing: 10px;
-    cursor: pointer;
-}
-.pe-pick-row.active {
-    background-color: var(--ide-popup-selection-color);
-}
-.pe-pick-name {
-    color: var(--ide-popup-text-color);
-    font-size: 13px;
-}
-.pe-pick-where {
-    color: var(--ide-popup-detail-text-color);
-    font-size: 11px;
-}
-.pe-pick-check image-view {
-    image-color: var(--accent-color);
-}
-.pe-pick-none image-view {
-    image-color: var(--ide-popup-detail-text-color);
-}
-.pe-picker-empty {
-    color: var(--ide-popup-detail-text-color);
-    font-size: 12px;
-    padding: 10px 8px;
-}
-.pe-picker-hint {
-    color: var(--ide-popup-detail-text-color);
-    font-size: 11px;
-    padding: 2px 4px 0 4px;
-}
-)CSS";
-
 std::shared_ptr<jadefx::Label> text_label(const std::string& text, const char* style_class) {
     auto label = jadefx::make<jadefx::Label>(text);
     label->getClassList().add(style_class);
@@ -375,36 +318,6 @@ std::shared_ptr<jadefx::StackPane> icon_button(const std::string& file, const st
 
 const char* part_icon(ModelPart part) { return part == ModelPart::Mesh ? "Mesh.png" : "Material.png"; }
 const char* part_word(ModelPart part) { return part == ModelPart::Mesh ? "mesh" : "material"; }
-const char* part_plural(ModelPart part) { return part == ModelPart::Mesh ? "meshes" : "materials"; }
-
-// A field whose Up, Down, and Escape go to the picker, not the caret.
-class PickerField : public jadefx::TextField {
-public:
-    PickerField(std::function<void(int)> move, std::function<void()> cancel)
-        : move_(std::move(move)), cancel_(std::move(cancel)) {
-        getClassList().add("pe-picker-field");
-        setCapturesKeys(true);
-    }
-
-protected:
-    void handleKey(jadefx::KeyEvent& event) override {
-        if (event.pressed && (event.key == jadefx::Key::Up || event.key == jadefx::Key::Down)) {
-            event.consume();
-            move_(event.key == jadefx::Key::Up ? -1 : 1);
-            return;
-        }
-        if (event.pressed && event.key == jadefx::Key::Escape) {
-            event.consume();
-            cancel_();
-            return;
-        }
-        TextField::handleKey(event);
-    }
-
-private:
-    std::function<void(int)> move_;
-    std::function<void()> cancel_;
-};
 
 // A rename field: Escape drops the typing.
 class NameField : public jadefx::TextField {
@@ -430,216 +343,6 @@ private:
 };
 
 }  // namespace
-
-// The popover a slot opens: a search field, the assets that fit, and None.
-class PartPicker : public jadefx::VBox {
-public:
-    PartPicker() {
-        getClassList().add("pe-picker");
-        setStylesheet(kPickerRules);
-        setPrefWidth(kPickerWidth);
-        field_ = std::make_shared<PickerField>([this](int delta) { move(delta); }, [this] { dismiss(); });
-        field_->setOnAction([this](jadefx::ActionEvent&) { choose(active_); });
-        getChildren().add(field_);
-        list_ = jadefx::make<jadefx::VBox>();
-        list_->setSpacing(1);
-        scroll_ = jadefx::make<jadefx::ScrollPane>(list_);
-        scroll_->getClassList().add("pe-picker-list");
-        scroll_->setFitToWidth(true);
-        scroll_->setHbarPolicy(jadefx::ScrollBarPolicy::Never);
-        getChildren().add(scroll_);
-        hint_ = text_label("Enter to choose  ·  Esc to close", "pe-picker-hint");
-        getChildren().add(hint_);
-    }
-
-    void open(jadefx::Node& anchor, ModelPart part, std::vector<AssetChoice> choices, engine_core::InstanceId current,
-              std::function<void(engine_core::InstanceId)> pick) {
-        jadefx::Scene* scene = anchor.getScene();
-        if (scene == nullptr) {
-            return;
-        }
-        part_ = part;
-        all_ = std::move(choices);
-        current_ = current;
-        pick_ = std::move(pick);
-        field_->setPromptText(std::string("Search ") + part_plural(part));
-        field_->setText("");
-        query_.clear();
-        rebuild();
-        // A steady height, so filtering does not make the popover jump.
-        const int rows = std::clamp(static_cast<int>(all_.size()) + (current_ != 0 ? 1 : 0), 1, kPickerRows);
-        scroll_->setPrefViewportHeight(rows * (kPickerRowHeight + 1));
-        setPrefWidth(std::max(kPickerWidth, anchor.getWidth()));
-        jadefx::PopupOptions options;
-        options.autoHide = true;
-        scene->showPopupNear(self(), &anchor, jadefx::Side::Bottom, options);
-        field_->requestFocus();
-    }
-
-    void dismiss() {
-        jadefx::Scene* scene = getScene();
-        if (scene != nullptr && !scene->isTearingDown() && scene->isPopupShowing(this)) {
-            scene->hidePopup(this);
-        }
-    }
-
-    bool showing() const {
-        const jadefx::Scene* scene = getScene();
-        return scene != nullptr && !scene->isTearingDown() && scene->isPopupShowing(this);
-    }
-
-    jadefx::TextField* field() const { return field_.get(); }
-
-    jadefx::Node* row(engine_core::InstanceId id) const {
-        for (const auto& [row_id, node] : rows_) {
-            if (row_id == id) {
-                return node.get();
-            }
-        }
-        return nullptr;
-    }
-
-    void bind(const std::shared_ptr<PartPicker>& self) { self_ = self; }
-
-protected:
-    void layoutChildren() override {
-        if (field_->getText() != query_) {
-            query_ = field_->getText();
-            rebuild();
-        }
-        jadefx::VBox::layoutChildren();
-    }
-
-private:
-    std::shared_ptr<PartPicker> self() const { return self_.lock(); }
-
-    void rebuild() {
-        list_->getChildren().clear();
-        rows_.clear();
-        // None comes first while the slot holds something, and only with no search typed.
-        if (current_ != 0 && query_.empty()) {
-            add_row(0, std::string("No ") + part_word(part_), "Leave this slot empty", "Cross.png", "pe-pick-none");
-        }
-        for (const AssetChoice& choice : filter_choices(all_, query_)) {
-            add_row(choice.id, choice.name, choice.where, part_icon(part_), nullptr);
-        }
-        if (rows_.empty()) {
-            const std::string text = all_.empty()
-                                         ? std::string("No ") + part_plural(part_) + " yet. Add one under Assets › " +
-                                               (part_ == ModelPart::Mesh ? "Meshes." : "Materials.")
-                                         : std::string("Nothing matches “") + query_ + "”";
-            list_->getChildren().add(text_label(text, "pe-picker-empty"));
-        }
-        // The current asset starts highlighted, else the first row.
-        active_ = rows_.empty() ? -1 : 0;
-        for (std::size_t index = 0; index < rows_.size(); ++index) {
-            if (rows_[index].first == current_ && current_ != 0 && query_.empty()) {
-                active_ = static_cast<int>(index);
-            }
-        }
-        paint();
-    }
-
-    void add_row(engine_core::InstanceId id, const std::string& name, const std::string& where, const char* icon,
-                 const char* extra_class) {
-        auto row = jadefx::make<jadefx::HBox>();
-        row->getClassList().add("pe-pick-row");
-        if (extra_class != nullptr) {
-            row->getClassList().add(extra_class);
-        }
-        row->setAlignment(jadefx::Pos::CenterLeft);
-        row->setPrefHeight(kPickerRowHeight);
-        row->setMinSize(0, kPickerRowHeight);
-        if (std::shared_ptr<jadefx::ImageView> image = icon_graphic(icon)) {
-            row->getChildren().add(std::move(image));
-        }
-        auto text = jadefx::make<jadefx::VBox>();
-        text->setAlignment(jadefx::Pos::CenterLeft);
-        text->setMouseTransparent(true);
-        text->getChildren().add(text_label(name, "pe-pick-name"));
-        if (!where.empty()) {
-            text->getChildren().add(text_label(where, "pe-pick-where"));
-        }
-        row->getChildren().add(std::move(text));
-        row->getChildren().add(spacer());
-        if (id != 0 && id == current_) {
-            auto check = jadefx::make<jadefx::StackPane>();
-            check->getClassList().add("pe-pick-check");
-            check->setMouseTransparent(true);
-            if (std::shared_ptr<jadefx::ImageView> image = icon_graphic("Check.png")) {
-                check->getChildren().add(std::move(image));
-            }
-            row->getChildren().add(std::move(check));
-        }
-        const int index = static_cast<int>(rows_.size());
-        row->setOnMouseEntered([this, index](const jadefx::MouseEvent&) {
-            active_ = index;
-            paint();
-        });
-        row->setOnMouseClicked([this, index](const jadefx::MouseEvent& event) {
-            if (event.button == 0) {
-                choose(index);
-            }
-        });
-        row->setElementId("pe-pick:" + std::to_string(id));
-        list_->getChildren().add(row);
-        rows_.emplace_back(id, std::move(row));
-    }
-
-    void paint() {
-        for (std::size_t index = 0; index < rows_.size(); ++index) {
-            set_class(*rows_[index].second, "active", static_cast<int>(index) == active_);
-        }
-    }
-
-    void move(int delta) {
-        if (rows_.empty()) {
-            return;
-        }
-        const int count = static_cast<int>(rows_.size());
-        active_ = std::clamp(active_ + delta, 0, count - 1);
-        paint();
-        // Keeps the highlighted row in view: the scroll value runs 0 to 1 over what is hidden.
-        const double row = kPickerRowHeight + 1;
-        const double view = scroll_->getPrefViewportHeight();
-        const double hidden = count * row - view;
-        if (hidden > 0) {
-            const double top = scroll_->getVvalue() * hidden;
-            const double at = active_ * row;
-            if (at < top) {
-                scroll_->setVvalue(at / hidden);
-            } else if (at + row > top + view) {
-                scroll_->setVvalue(std::min(1.0, (at + row - view) / hidden));
-            }
-        }
-    }
-
-    void choose(int index) {
-        if (index < 0 || index >= static_cast<int>(rows_.size())) {
-            return;
-        }
-        const engine_core::InstanceId id = rows_[static_cast<std::size_t>(index)].first;
-        // Closed before the pick runs, which may open the next picker.
-        auto pick = pick_;
-        dismiss();
-        if (pick) {
-            pick(id);
-        }
-    }
-
-    std::weak_ptr<PartPicker> self_;
-    std::shared_ptr<PickerField> field_;
-    std::shared_ptr<jadefx::VBox> list_;
-    std::shared_ptr<jadefx::ScrollPane> scroll_;
-    std::shared_ptr<jadefx::Label> hint_;
-    std::vector<std::pair<engine_core::InstanceId, std::shared_ptr<jadefx::HBox>>> rows_;
-    std::vector<AssetChoice> all_;
-    std::string query_;
-    ModelPart part_ = ModelPart::Mesh;
-    engine_core::InstanceId current_ = 0;
-    int active_ = -1;
-    std::function<void(engine_core::InstanceId)> pick_;
-};
 
 // One Model's card and the widgets that change with it.
 struct IdePrefabEditor::Card {
@@ -788,8 +491,7 @@ IdePrefabEditor::IdePrefabEditor(engine_core::DataModel& world, engine_core::Ins
     root->setCenter(canvas);
     getChildren().add(root);
 
-    picker_ = std::make_shared<PartPicker>();
-    picker_->bind(picker_);
+    picker_ = AssetPicker::create();
 }
 
 IdePrefabEditor::~IdePrefabEditor() {
@@ -1192,7 +894,7 @@ void IdePrefabEditor::openPicker(engine_core::InstanceId model, ModelPart part, 
         }
         choices = part_choices(world_, part);
     }
-    picker_->open(*anchor, part, std::move(choices), view->part(part).id,
+    picker_->open(*anchor, model_part_name(part), std::move(choices), view->part(part).id,
                   [this, model, part, guided](engine_core::InstanceId asset) { picked(model, part, asset, guided); });
 }
 

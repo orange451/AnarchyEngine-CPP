@@ -34,6 +34,8 @@ std::string service_guid(std::string_view class_name);
 // for a class that is not an asset.
 const char* asset_home(std::string_view class_name);
 bool is_asset_class(std::string_view class_name);
+// An asset class's plural, such as "Meshes". Null for a class that is not an asset.
+const char* asset_plural(std::string_view class_name);
 
 // A Folder has no rule of its own: what goes in it is decided by the first
 // ancestor that is not a Folder.

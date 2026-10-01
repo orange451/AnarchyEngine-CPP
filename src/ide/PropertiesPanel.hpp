@@ -63,6 +63,11 @@ using PropertiesRun = std::function<void(std::function<void(engine_core::DataMod
 // the explorer, uses the instance picked, and puts the selection back.
 // Clicking it again cancels. Clear sets nil. A Parent that
 // would put an instance under itself is refused.
+//
+// A reference to an asset class, such as a PhysicsObject's Mesh, shows the
+// class's icon before the Name, and clicking it opens the asset picker the
+// Prefab editor's slots use: every asset of that class under Assets, filtered
+// as you type. A pick is one undo step; None, there while one is set, sets nil.
 class PropertiesPanel {
 public:
     PropertiesPanel();
@@ -99,6 +104,11 @@ public:
     const std::string& pick_property() const;
     // The last message under the rows: a refused edit, or pick instructions.
     const std::string& status() const;
+    // An asset reference's picker is open; its search field, and its row for
+    // asset, or None's for 0. Null while it is closed.
+    bool asset_picking() const;
+    jadefx::TextField* asset_pick_field() const;
+    jadefx::Node* asset_pick_row(engine_core::InstanceId asset) const;
 
     struct Impl;
 

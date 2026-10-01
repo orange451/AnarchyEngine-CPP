@@ -71,6 +71,8 @@ set(STUDIO_SOURCES
     src/ide/IdeIcons.cpp
     src/ide/IdePrefabEditor.cpp
     src/ide/PrefabModels.cpp
+    src/ide/AssetChoices.cpp
+    src/ide/AssetPicker.cpp
     src/ide/IdeScriptEditor.cpp
     src/ide/IdeSearch.cpp
     src/ide/FindBar.cpp

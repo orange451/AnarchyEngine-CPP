@@ -13,6 +13,9 @@ namespace ide {
 // One image view for this instance class. Rows share the decoded bitmap.
 // Empty when that class has no icon file.
 std::shared_ptr<jadefx::ImageView> icon_view(const std::string& class_name);
+// The icon file a class's icon is drawn from, such as "Mesh.png". The file may
+// not exist.
+std::string icon_filename(const std::string& class_name);
 
 // An icon file under resources/icons, such as "Plus.png".
 // Empty when the file is missing. The decoded bitmap is shared.

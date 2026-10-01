@@ -81,14 +81,17 @@ std::shared_ptr<jadefx::ImageView> icon_view(const std::string& class_name) {
     if (class_name.empty()) {
         return nullptr;
     }
-    const char* aliased = IconFileOverride(class_name);
-    const std::string filename = aliased != nullptr ? aliased : class_name + ".png";
-    const std::shared_ptr<jadefx::ImageView> icon = icon_file(filename);
+    const std::shared_ptr<jadefx::ImageView> icon = icon_file(icon_filename(class_name));
     if ( !icon ) {
         return icon_file("wat.gif");
     }
     
     return icon;
+}
+
+std::string icon_filename(const std::string& class_name) {
+    const char* aliased = IconFileOverride(class_name);
+    return aliased != nullptr ? aliased : class_name + ".png";
 }
 
 std::shared_ptr<jadefx::ImageView> icon_file(const std::string& filename) {

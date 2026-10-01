@@ -33,7 +33,7 @@ struct PrefabEditorHost {
     std::function<void(std::string text)> notice;
 };
 
-class PartPicker;
+class AssetPicker;
 
 // Edits one Prefab: its Models, and the Mesh and Material each one pairs.
 //
@@ -147,7 +147,7 @@ private:
     std::shared_ptr<jadefx::Node> gone_;
     std::vector<std::shared_ptr<Card>> cards_;
 
-    std::shared_ptr<PartPicker> picker_;
+    std::shared_ptr<AssetPicker> picker_;
     std::shared_ptr<jadefx::Menu> menu_;
     jadefx::Node* drop_mark_ = nullptr;
 

@@ -1330,8 +1330,68 @@ void TestEnumRowAndShownWhen() {
     Expect(!rig.hasRow("Mesh"), "Mesh hides unless every selected body is a Hull");
 }
 
+InstanceId BodyMesh(Game& game, InstanceId body) {
+    auto* object = dynamic_cast<engine_core::PhysicsObject*>(game.instance(body));
+    return object != nullptr ? object->mesh().id : 0;
+}
+
+// A reference to an asset class, as a PhysicsObject's Mesh, opens the asset
+// picker the Prefab editor's slots use, not a pick from the selection.
+void TestAssetReferencePicker() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Rig rig;
+    const InstanceId body = rig.add<engine_core::PhysicsObject>("Body");
+    const InstanceId rock = MakeAsset(rig.game, "Mesh", "Rock", rig.game.service("Meshes"));
+    const InstanceId lid = MakeAsset(rig.game, "Mesh", "Lid", rig.game.service("Meshes"));
+    MakeAsset(rig.game, "Material", "Wall", rig.game.service("Materials"));
+    ide::PropertyEdit hull;
+    hull.property = "Shape";
+    hull.kind = ide::PropertyKind::Enum;
+    hull.value.number = 3;
+    ide::apply_edit(rig.game, {body}, hull);
+    rig.game.history().reset_waypoints();
+    rig.select({body});
+    rig.frame();
+
+    rig.click(rig.panel.editor("Mesh", 0));
+    rig.frame();
+    Expect(rig.panel.asset_picking() && !rig.panel.picking(), "Mesh opens the asset picker, not a selection pick");
+    Expect(rig.panel.asset_pick_row(rock) != nullptr && rig.panel.asset_pick_row(lid) != nullptr,
+           "listing every Mesh");
+    Expect(rig.panel.asset_pick_row(0) == nullptr, "and no None while Mesh is nil");
+
+    rig.click(rig.panel.asset_pick_row(rock));
+    rig.frame();
+    rig.frame();
+    Expect(!rig.panel.asset_picking(), "a pick closes it");
+    Expect(BodyMesh(rig.game, body) == rock, "and writes the Mesh");
+    Expect(rig.text("Mesh") == "Rock", "which the row shows");
+    Expect(rig.undoDepth() == 1, "as one undo step");
+
+    rig.click(rig.panel.editor("Mesh", 0));
+    rig.frame();
+    Expect(rig.panel.asset_pick_row(0) != nullptr, "a set Mesh offers None");
+    rig.panel.asset_pick_field()->setText("li");
+    rig.frame();
+    Expect(rig.panel.asset_pick_row(rock) == nullptr && rig.panel.asset_pick_row(lid) != nullptr,
+           "typing filters the list");
+    rig.panel.asset_pick_field()->setText("");
+    rig.frame();
+    rig.click(rig.panel.asset_pick_row(0));
+    rig.frame();
+    rig.frame();
+    Expect(BodyMesh(rig.game, body) == 0, "None clears the Mesh");
+
+    // A reference to a class that is not an asset still picks from the selection.
+    rig.click(rig.panel.editor("GameObject", 0));
+    rig.frame();
+    Expect(rig.panel.picking() && !rig.panel.asset_picking(), "GameObject picks from the selection");
+    engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+}
+
 int main() {
     TestEnumRowAndShownWhen();
+    TestAssetReferencePicker();
     TestR1SingleSelectionEditsName();
     TestR2MixedNameWritesEveryone();
     TestMixedBlankIsNotEmptyName();

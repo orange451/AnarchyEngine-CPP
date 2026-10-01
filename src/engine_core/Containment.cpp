@@ -68,6 +68,15 @@ const char* asset_home(std::string_view class_name) {
 
 bool is_asset_class(std::string_view class_name) { return asset_home(class_name) != nullptr; }
 
+const char* asset_plural(std::string_view class_name) {
+    for (const Category& category : kCategories) {
+        if (class_name == category.asset) {
+            return category.plural;
+        }
+    }
+    return nullptr;
+}
+
 bool passes_rule_up(std::string_view class_name) { return class_name == "Folder"; }
 
 std::optional<std::string> placement_error(std::string_view holder_class, std::string_view child_class,

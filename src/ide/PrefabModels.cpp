@@ -16,13 +16,6 @@ constexpr const char* kDefaultModelName = "Model";
 
 std::size_t part_index(ModelPart part) { return part == ModelPart::Mesh ? 0 : 1; }
 
-std::string lower(std::string_view text) {
-    std::string out(text);
-    std::transform(out.begin(), out.end(), out.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return out;
-}
-
 bool is_part(const engine_core::DataModel* object, ModelPart part) {
     return part == ModelPart::Mesh ? dynamic_cast<const engine_core::Mesh*>(object) != nullptr
                                    : dynamic_cast<const engine_core::Material*>(object) != nullptr;
@@ -78,22 +71,6 @@ std::string unique_name(const engine_core::DataModel& world, engine_core::Instan
         name = base + " " + std::to_string(number);
     }
     return name;
-}
-
-void collect(const engine_core::DataModel& world, engine_core::InstanceId folder, const std::string& where,
-             ModelPart part, std::vector<AssetChoice>& out) {
-    for (engine_core::InstanceId child : world.get_children(folder)) {
-        const engine_core::DataModel* object = world.instance(child);
-        if (object == nullptr) {
-            continue;
-        }
-        const std::string name = world.name(child);
-        if (is_part(object, part)) {
-            out.push_back(AssetChoice{child, name, where});
-        } else {
-            collect(world, child, where + "/" + name, part, out);
-        }
-    }
 }
 
 }  // namespace
@@ -161,30 +138,7 @@ std::vector<ModelView> read_models(const engine_core::DataModel& world, engine_c
 }
 
 std::vector<AssetChoice> part_choices(const engine_core::DataModel& world, ModelPart part) {
-    const char* category = part == ModelPart::Mesh ? "Meshes" : "Materials";
-    std::vector<AssetChoice> choices;
-    if (const engine_core::InstanceId root = world.service(category)) {
-        collect(world, root, category, part, choices);
-    }
-    std::stable_sort(choices.begin(), choices.end(), [](const AssetChoice& a, const AssetChoice& b) {
-        return lower(a.name) < lower(b.name);
-    });
-    return choices;
-}
-
-std::vector<AssetChoice> filter_choices(const std::vector<AssetChoice>& choices, std::string_view query) {
-    const std::string needle = lower(query);
-    if (needle.empty()) {
-        return choices;
-    }
-    std::vector<AssetChoice> kept;
-    for (const AssetChoice& choice : choices) {
-        if (lower(choice.name).find(needle) != std::string::npos ||
-            lower(choice.where).find(needle) != std::string::npos) {
-            kept.push_back(choice);
-        }
-    }
-    return kept;
+    return asset_choices(world, model_part_name(part));
 }
 
 DraggedParts dragged_parts(const engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids) {

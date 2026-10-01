@@ -1,11 +1,15 @@
 #include "PropertiesPanel.hpp"
+#include "AssetPicker.hpp"
 #include "ChangeFlag.hpp"
+#include "IdeIcons.hpp"
 #include "LockWaits.hpp"
 
 #include "ChangeHistoryService.hpp"
+#include "Containment.hpp"
 #include "DataModel.hpp"
 #include "DataModelLock.hpp"
 #include "Enum.hpp"
+#include "PropertyReflection.hpp"
 #include "SelectionService.hpp"
 #include "TextUndoStack.hpp"
 
@@ -448,6 +452,9 @@ struct RowView {
     std::shared_ptr<jadefx::Button> pick;
     std::shared_ptr<jadefx::Button> clear;
     std::shared_ptr<jadefx::Tooltip> tip;
+    // A reference to an asset, such as "Mesh": its Name opens the asset picker.
+    // Empty for any other reference, which picks from the selection.
+    std::string asset_class;
     // A Transform's fold arrow, and the names of its Position and Orientation lines.
     std::shared_ptr<PropertyDisclosure> disclosure;
     std::shared_ptr<jadefx::Label> lines[2];
@@ -524,6 +531,10 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     std::string pick_name;
     std::vector<InstanceId> pick_ids;
     std::uint64_t pick_seen = 0;
+
+    // The popover an asset reference opens, and the row it is open for.
+    std::shared_ptr<AssetPicker> asset_picker;
+    std::weak_ptr<RowView> asset_pick_view;
 
     // Transform rows folded by name. A row is open until folded, and stays
     // folded across selections for the session.
@@ -688,6 +699,9 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             finish_typing(gone);
             if (picking && pick_name == gone.row.name) {
                 cancel_pick();
+            }
+            if (asset_pick_view.lock().get() == &gone) {
+                close_asset_picker();
             }
             for (jadefx::Node* node : gone.nodes()) {
                 if (jadefx::Scene* scene = node->getScene()) {
@@ -860,19 +874,35 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             };
             pane->getChildren().add(view->color);
             break;
-        case PropertyKind::Ref:
+        case PropertyKind::Ref: {
             // The value is never typed in. Clicking it picks, and Clear sets nil.
+            // An asset reference picks from a list of that asset's class.
+            const std::string referred = engine_core::reference_class(row.type_name);
+            if (engine_core::is_asset_class(referred)) {
+                view->asset_class = referred;
+            }
             view->tip = jadefx::make<jadefx::Tooltip>("");
             view->pick = jadefx::make<jadefx::Button>("");
             view->pick->getClassList().add("properties-pick");
             view->pick->setStyle(row.writable ? kFieldStyle : kReadOnlyStyle);
             view->pick->setAlignment(jadefx::Pos::CenterLeft);
             view->pick->setDisable(!row.writable);
+            if (!view->asset_class.empty()) {
+                if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic(icon_filename(view->asset_class))) {
+                    view->pick->setGraphic(std::move(icon));
+                    view->pick->setGraphicTextGap(4);
+                }
+            }
             view->pick->setOnAction([weak_self, weak_view](jadefx::ActionEvent&) {
                 const auto self = weak_self.lock();
                 const auto row_view = weak_view.lock();
-                if (self && row_view) {
+                if (!self || !row_view) {
+                    return;
+                }
+                if (row_view->asset_class.empty()) {
                     self->toggle_pick(*row_view);
+                } else {
+                    self->open_asset_picker(row_view);
                 }
             });
             // Parent already picks by clicking the Explorer; every other
@@ -918,6 +948,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             pane->getChildren().add(view->pick);
             pane->getChildren().add(view->clear);
             break;
+        }
         }
         return view;
     }
@@ -1389,6 +1420,64 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         force = true;
     }
 
+    // An asset reference lists every asset of its class under its Name. A
+    // pick writes it to the instances the row was showing; None sets nil.
+    void open_asset_picker(const std::shared_ptr<RowView>& view) {
+        if (world == nullptr || !view->pick || !view->row.writable) {
+            return;
+        }
+        if (picking) {
+            cancel_pick();
+        }
+        std::vector<AssetChoice> choices;
+        {
+            engine_core::DataModelLock lock(*world, engine_core::DataModelLock::Read, kActionLockWait);
+            if (!lock.owns()) {
+                return;
+            }
+            choices = asset_choices(*world, view->asset_class);
+        }
+        if (!asset_picker) {
+            asset_picker = AssetPicker::create();
+        }
+        asset_pick_view = view;
+        const InstanceId current = view->row.mixed || view->row.value.nil_ref() ? 0 : view->row.value.ref;
+        std::weak_ptr<Impl> weak_self = shared_from_this();
+        std::weak_ptr<RowView> weak_view = view;
+        asset_picker->open(*view->pick, view->asset_class, std::move(choices), current,
+                           [weak_self, weak_view](InstanceId id) {
+                               const auto self = weak_self.lock();
+                               const auto row_view = weak_view.lock();
+                               if (self && row_view) {
+                                   self->picked_asset(*row_view, id);
+                               }
+                           });
+    }
+
+    void close_asset_picker() {
+        if (asset_picker) {
+            asset_picker->dismiss();
+        }
+        asset_pick_view.reset();
+    }
+
+    void picked_asset(RowView& view, InstanceId id) {
+        asset_pick_view.reset();
+        if (id == 0) {
+            clear_ref(view);
+            return;
+        }
+        // Picking what every instance already holds is no edit.
+        if (!view.row.mixed && view.row.value.ref == id) {
+            return;
+        }
+        PropertyEdit edit;
+        edit.property = view.row.name;
+        edit.kind = PropertyKind::Ref;
+        edit.value.ref = id;
+        submit(view.ids, edit);
+    }
+
     // The explorer click lands in the selection. The last instance picked is
     // the value; then the selection goes back to what was being edited.
     void check_pick() {
@@ -1559,6 +1648,9 @@ PropertiesPanel::PropertiesPanel() : impl_(std::make_shared<Impl>()) {
 }
 
 PropertiesPanel::~PropertiesPanel() {
+    if (impl_) {
+        impl_->close_asset_picker();
+    }
     if (impl_ && impl_->pane) {
         impl_->pane->owner.reset();
     }
@@ -1653,5 +1745,15 @@ bool PropertiesPanel::picking() const { return impl_->picking; }
 const std::string& PropertiesPanel::pick_property() const { return impl_->pick_name; }
 
 const std::string& PropertiesPanel::status() const { return impl_->status; }
+
+bool PropertiesPanel::asset_picking() const { return impl_->asset_picker && impl_->asset_picker->showing(); }
+
+jadefx::TextField* PropertiesPanel::asset_pick_field() const {
+    return asset_picking() ? impl_->asset_picker->field() : nullptr;
+}
+
+jadefx::Node* PropertiesPanel::asset_pick_row(engine_core::InstanceId asset) const {
+    return asset_picking() ? impl_->asset_picker->row(asset) : nullptr;
+}
 
 }  // namespace ide

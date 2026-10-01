@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AssetChoices.hpp"
+
 #include "DataModel.hpp"
 
 #include <optional>
@@ -42,14 +44,6 @@ struct ModelView {
     bool operator==(const ModelView&) const;
 };
 
-// A Mesh or Material a slot can pick. where is its folder from its category
-// down, such as "Meshes/Props".
-struct AssetChoice {
-    engine_core::InstanceId id = 0;
-    std::string name;
-    std::string where;
-};
-
 // The words a card shows under a Model's name.
 const char* model_status_text(ModelStatus status);
 
@@ -58,8 +52,6 @@ const char* model_status_text(ModelStatus status);
 std::vector<ModelView> read_models(const engine_core::DataModel& world, engine_core::InstanceId prefab);
 // Every Mesh, or every Material, under its Assets category, by name, ignoring case.
 std::vector<AssetChoice> part_choices(const engine_core::DataModel& world, ModelPart part);
-// The choices whose name or folder contains query, ignoring case. An empty query keeps all.
-std::vector<AssetChoice> filter_choices(const std::vector<AssetChoice>& choices, std::string_view query);
 // Of the dragged ids, the first live Mesh and the first live Material, 0 for none.
 struct DraggedParts {
     engine_core::InstanceId mesh = 0;

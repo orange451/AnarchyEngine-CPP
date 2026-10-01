@@ -1,8 +1,10 @@
 #pragma once
 
+#include "EnvironmentMap.hpp"
 #include "Matrix4.hpp"
 #include "ViewCapture.hpp"
 
+#include <cstdint>
 #include <initializer_list>
 #include <vector>
 
@@ -54,22 +56,41 @@ struct LightDraw {
     float innerFovScale = 0.1f;
 };
 
+// The Skybox, as the renderer reads it. Each image is a GL texture as
+// TextureCache::getEnvironment uploads it, with its revision.
+struct SceneSky {
+    // 0 draws no sky: surfaces take the legacy stand-in sky's light.
+    unsigned image = 0;
+    std::uint64_t imageRevision = 0;
+    // 0 reflects image.
+    unsigned reflections = 0;
+    std::uint64_t reflectionsRevision = 0;
+    float exposure = 1.f;
+    // Degrees about the world's Y axis.
+    float rotationDegrees = 0.f;
+    // As the Color3 holds it (sRGB).
+    float tint[3] = {1.f, 1.f, 1.f};
+};
+
 // Lighting's properties the renderer reads. The defaults are a new Lighting's.
 struct SceneLighting {
     float ambient[3] = {0.5f, 0.5f, 0.5f};
     float exposure = 1.f;
     float saturation = 1.2f;
     float gamma = 2.2f;
+    SceneSky sky;
 };
 
 // Draws meshes seen from the camera, through the legacy AnarchyEngine
 // pipeline (engine/gl): a G-buffer of each opaque surface's albedo, normal,
 // material, and glow; a light pass that adds the ambient and sky light and
 // then each light: a DirectionalLight over the whole view, a PointLight or
-// SpotLight over its volume; a forward pass that blends see-through surfaces
-// over that, farthest first; a merge; and a filmic tone map onto the pane.
-// Every pass but the last draws into this renderer's own buffers, the pane's
-// size in pixels.
+// SpotLight over its volume; then the Skybox behind every surface; a forward
+// pass that blends see-through surfaces over that, farthest first; a merge;
+// and a filmic tone map onto the pane. Every pass but the last draws into this
+// renderer's own buffers, the pane's size in pixels. With a Skybox, its
+// image-based lighting (EnvironmentMap) is the sky light, and the sky fills
+// the pane wherever nothing opaque was drawn, even with no meshes.
 class Renderer {
 public:
     // The camera until setCamera: where it is and what it looks at, in world units, Y up.
@@ -100,7 +121,7 @@ public:
     // so a UI pass can continue. Where no surface is drawn, the pane is the
     // clear color.
     // meshes may be null when meshCount is 0, and lights when lightCount is 0.
-    // The pane is still cleared.
+    // The pane is still cleared, and the Skybox, if any, drawn.
     // True when the meshes were drawn, or there were none. False when the pane
     // got only the clear: the render buffers were refused, or a pass cannot draw
     // yet. macOS's OpenGL on Metal cannot ready a program for render buffers
@@ -133,6 +154,11 @@ private:
         int texel = -1;
         int ambient = -1;
         int skyRadiance = -1;
+        // Skybox (image_lighting.glsl, sky.frag, merge.frag).
+        int skyEnabled = -1;
+        int viewToSky = -1;
+        int skyColor = -1;
+        int prefilteredMaxLod = -1;
         // Material.
         int diffuse = -1;
         int normalMap = -1;
@@ -196,10 +222,16 @@ private:
     // Each pass is false, having stopped before its first draw, when its program cannot draw yet.
     bool geometryPass(const MeshDraw* meshes, int count, const float* projection);
     bool lightPass(const float* projection, const float* inverseProjection);
+    // The Skybox where no opaque surface was drawn. True with no Skybox.
+    bool skyPass(const float* inverseProjection);
     bool transparencyPass(const MeshDraw* meshes, int count, const float* projection, const float* inverseProjection);
     bool mergePass();
     void bindMaterial(const Program& program, const MeshDraw& draw);
     void bindGBuffer(const Program& program);
+    // viewToSky_ and skyColor_ from the camera and the Skybox.
+    void prepareSky();
+    // The Skybox's uniforms and cubes, or uSkyEnabled 0 with none.
+    void bindSky(const Program& program);
 
     Program geometry_;
     Program forward_;
@@ -209,8 +241,17 @@ private:
     Program sun_;
     Program merge_;
     Program tonemap_;
+    Program sky_;
+    EnvironmentMap environment_;
+    // Whether this draw has a Skybox whose cubes are made.
+    bool skyReady_ = false;
+    // From view space to the sky's, column-major, and Exposure times Tint, linear.
+    float viewToSky_[9] = {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
+    float skyColor_[3] = {1.f, 1.f, 1.f};
     // 1 by 1 white, bound for a texture a draw does not have.
     unsigned whiteTexture_ = 0;
+    // 1 by 1 black on each face, bound for the Skybox's cubes when there is none.
+    unsigned blackCube_ = 0;
     // No attributes: the full-screen triangle comes from gl_VertexID.
     unsigned emptyVao_ = 0;
     // A unit sphere, positions only, for each light's volume.

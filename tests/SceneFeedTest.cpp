@@ -43,6 +43,10 @@ engine_core::VisualSnapshot Frame(std::uint64_t number, std::size_t rows) {
     session.revision = number;
     session.mesh = 7;
     snapshot.prefabs[1].meshes.push_back(session);
+    snapshot.lighting.exposure = static_cast<float>(number);
+    snapshot.sky.present = true;
+    snapshot.sky.image = "textures/" + std::to_string(number) + ".hdr";
+    snapshot.sky.rotation = static_cast<float>(number);
     return snapshot;
 }
 
@@ -53,7 +57,9 @@ bool Whole(const engine_core::VisualSnapshot& snapshot) {
         }
     }
     return snapshot.frame == 0 ||
-           (snapshot.prefabs.size() == 2 && snapshot.prefabs[1].meshes.size() == 2 &&
+           (snapshot.lighting.exposure == static_cast<float>(snapshot.frame) && snapshot.sky.present &&
+            snapshot.sky.image == "textures/" + std::to_string(snapshot.frame) + ".hdr" &&
+            snapshot.sky.rotation == static_cast<float>(snapshot.frame) && snapshot.prefabs.size() == 2 && snapshot.prefabs[1].meshes.size() == 2 &&
             snapshot.prefabs[1].meshes[0].path == "meshes/" + std::to_string(snapshot.frame) + ".amesh" &&
             snapshot.prefabs[1].meshes[1].session != nullptr && snapshot.prefabs[1].meshes[1].revision == snapshot.frame);
 }

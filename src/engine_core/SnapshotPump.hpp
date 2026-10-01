@@ -17,6 +17,8 @@ struct Data;
 
 namespace engine_core {
 
+class Skybox;
+
 // What a light's row shines. A PointLight or SpotLight sits at the row's
 // world translation, and a SpotLight points down the row's -Z. A
 // DirectionalLight is not a GameObject: its row's world is the identity, and
@@ -50,6 +52,21 @@ struct VisualInstance {
     // A Camera's FieldOfView, in degrees. 0 when the row is not a Camera.
     float field_of_view = 0.f;
     VisualLight light;
+};
+
+// The first Skybox under Lighting, in tree order, as the renderer reads it.
+// present is false with no Skybox, and image is empty when it has no Image;
+// either way the renderer draws no sky.
+struct VisualSky {
+    bool present = false;
+    // Texture Paths, relative to the resources folder. Empty for none.
+    std::string image;
+    std::string reflections;
+    float exposure = 1.f;
+    // Degrees about the world's Y axis, 0 up to 360.
+    float rotation = 0.f;
+    // As the Color3 holds it.
+    ColorRgb tint{1.f, 1.f, 1.f, 1.f};
 };
 
 // Lighting's properties the renderer reads, found again at every Prepare.
@@ -113,6 +130,7 @@ struct VisualSnapshot {
     // Indexed by VisualInstance::prefab. Entry 0 is always empty.
     std::vector<VisualPrefab> prefabs;
     VisualLighting lighting;
+    VisualSky sky;
 };
 
 // Double buffer plus the one-frame override list.
@@ -167,8 +185,10 @@ private:
     void set_row_prefab(VisualInstance& inst, const std::string& guid);
     // Fills base_.prefabs from each entry's Prefab, as the DataModel is now.
     void resolve_prefabs(DataModel& game);
-    // Fills base_.lighting from the place's Lighting, as the DataModel is now.
+    // Fills base_.lighting and base_.sky from the place's Lighting, as the DataModel is now.
     void resolve_lighting(DataModel& game);
+    // The first Skybox under root, depth first in child order, or null.
+    const Skybox* find_skybox(const DataModel& game, InstanceId root);
 
     VisualSnapshot base_{};
     VisualSnapshot buffers_[2]{};
@@ -187,6 +207,8 @@ private:
     std::vector<PrefabEntry> prefab_entries_;
     std::vector<std::uint32_t> free_prefab_entries_;
     std::unordered_map<std::string, std::uint32_t> prefab_by_guid_;
+    // find_skybox's walk, kept so a Prepare allocates nothing.
+    std::vector<InstanceId> sky_walk_;
 };
 
 }  // namespace engine_core

@@ -6,6 +6,7 @@
 #include "Light.hpp"
 #include "Lighting.hpp"
 #include "LuaApi.hpp"
+#include "Skybox.hpp"
 
 #include <algorithm>
 
@@ -388,6 +389,33 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
 
 void SnapshotPump::resolve_lighting(DataModel& game) {
     const auto* lighting = dynamic_cast<const Lighting*>(game.instance(game.scene_service("Lighting")));
+    VisualSky& sky = base_.sky;
+    const Skybox* skybox = lighting != nullptr ? find_skybox(game, lighting->id()) : nullptr;
+    sky.present = skybox != nullptr;
+    // Assigned in place, so an unchanged sky reuses last frame's strings.
+    const auto texture_path = [&](const LuaSlot& slot, std::string& path) {
+        const auto* texture =
+            slot.kind == LuaSlot::Kind::Instance ? dynamic_cast<const Texture*>(game.instance(slot.id)) : nullptr;
+        if (texture != nullptr) {
+            path = texture->path();
+        } else {
+            path.clear();
+        }
+    };
+    if (skybox != nullptr) {
+        texture_path(skybox->image(), sky.image);
+        texture_path(skybox->reflections(), sky.reflections);
+        sky.exposure = static_cast<float>(skybox->exposure());
+        sky.rotation = static_cast<float>(skybox->rotation());
+        sky.tint = skybox->tint();
+    } else {
+        sky.image.clear();
+        sky.reflections.clear();
+        sky.exposure = static_cast<float>(Skybox::kDefaultExposure);
+        sky.rotation = static_cast<float>(Skybox::kDefaultRotation);
+        sky.tint = Skybox::kDefaultTint;
+    }
+
     if (lighting == nullptr) {
         base_.lighting = VisualLighting{};
         return;
@@ -398,9 +426,31 @@ void SnapshotPump::resolve_lighting(DataModel& game) {
     base_.lighting.gamma = static_cast<float>(lighting->gamma());
 }
 
+const Skybox* SnapshotPump::find_skybox(const DataModel& game, InstanceId root) {
+    // Children are pushed last first, so the first child comes off the walk first.
+    sky_walk_.clear();
+    sky_walk_.push_back(root);
+    while (!sky_walk_.empty()) {
+        const InstanceId id = sky_walk_.back();
+        sky_walk_.pop_back();
+        if (id != root) {
+            if (const auto* skybox = dynamic_cast<const Skybox*>(game.instance(id))) {
+                return skybox;
+            }
+        }
+        const std::size_t first = sky_walk_.size();
+        for (InstanceId child = game.first_child(id); child != 0; child = game.next_sibling(child)) {
+            sky_walk_.push_back(child);
+        }
+        std::reverse(sky_walk_.begin() + static_cast<std::ptrdiff_t>(first), sky_walk_.end());
+    }
+    return nullptr;
+}
+
 void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.camera = base_.camera;
     dst.lighting = base_.lighting;
+    dst.sky = base_.sky;
     dst.instances.resize(base_.instances.size());
     std::copy(base_.instances.begin(), base_.instances.end(), dst.instances.begin());
     // Element by element, so strings that did not change keep their buffers.

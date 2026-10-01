@@ -291,6 +291,21 @@ void GameView::collectMeshes() {
     lighting.exposure = snapshot.lighting.exposure;
     lighting.saturation = snapshot.lighting.saturation;
     lighting.gamma = snapshot.lighting.gamma;
+    // The Skybox's images, uploaded linear; a missing or unreadable one draws no sky.
+    const engine_core::VisualSky& sky = snapshot.sky;
+    if (sky.present) {
+        const EnvironmentTexture image = textures_.getEnvironment(sky.image);
+        const EnvironmentTexture reflections = textures_.getEnvironment(sky.reflections);
+        lighting.sky.image = image.texture;
+        lighting.sky.imageRevision = image.revision;
+        lighting.sky.reflections = reflections.texture;
+        lighting.sky.reflectionsRevision = reflections.revision;
+        lighting.sky.exposure = sky.exposure;
+        lighting.sky.rotationDegrees = sky.rotation;
+        lighting.sky.tint[0] = sky.tint.r;
+        lighting.sky.tint[1] = sky.tint.g;
+        lighting.sky.tint[2] = sky.tint.b;
+    }
     renderer_.setLighting(lighting);
 }
 

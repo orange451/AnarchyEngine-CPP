@@ -22,6 +22,32 @@ struct TexturePixels {
 // stb_image reads. False, with error set, when it cannot.
 bool DecodeTexture(const std::uint8_t* bytes, std::size_t size, TexturePixels& out, std::string& error);
 
+// An image decoded to linear light, RGB floats, bottom row first.
+struct LinearPixels {
+    int width = 0;
+    int height = 0;
+    std::vector<float> rgb;
+};
+
+// The widest a sky is kept. Each halving averages 2 by 2 pixels.
+constexpr int kMaxEnvironmentWidth = 4096;
+
+// Decodes what DecodeTexture does, for a Skybox. A Radiance HDR file keeps the
+// light it holds, brighter than white; any other image is taken as sRGB and
+// made linear. Each value is kept between 0 and 65000, which half float
+// holds. Halved until it is no wider than maxWidth. False, with error set,
+// when it cannot.
+bool DecodeLinearTexture(const std::uint8_t* bytes, std::size_t size, LinearPixels& out, std::string& error,
+                         int maxWidth = kMaxEnvironmentWidth);
+
+// An uploaded sky image and which upload it is: revision changes each time the
+// file is read again, and is never reused, so a renderer rebuilds what it made
+// from the image only when it changes. 0 for no image.
+struct EnvironmentTexture {
+    unsigned texture = 0;
+    std::uint64_t revision = 0;
+};
+
 // A Scene View's uploaded textures, by Texture Path, as MeshCache keeps its
 // meshes: a path loads the first time a frame draws it, from the project's
 // resources folder, and its file is looked at again at most once a second and
@@ -44,6 +70,10 @@ public:
     // The GL texture for path, relative to the root with '/' between names, or
     // 0 when there is none to draw. Mipmapped, repeating, and RGBA8.
     unsigned get(const std::string& path);
+    // The same file decoded by DecodeLinearTexture, for a Skybox: RGBA16F,
+    // mipmapped, repeating across and clamped at the poles. Kept apart from
+    // get's upload of the same path.
+    EnvironmentTexture getEnvironment(const std::string& path);
     // Deletes every texture.
     void clear();
 
@@ -54,14 +84,17 @@ private:
         std::filesystem::file_time_type stamp{};
         bool tried = false;
         std::chrono::steady_clock::time_point checked{};
+        std::uint64_t revision = 0;
     };
 
-    void load(const std::string& path, Entry& entry);
+    Entry& find(std::unordered_map<std::string, Entry>& entries, const std::string& path, bool linear);
+    void load(const std::string& path, Entry& entry, bool linear);
     void fail(Entry& entry, const std::string& message);
 
     Report report_;
     std::filesystem::path root_;
     std::unordered_map<std::string, Entry> entries_;
+    std::unordered_map<std::string, Entry> environments_;
 };
 
 }  // namespace runner

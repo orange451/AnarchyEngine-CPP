@@ -11,7 +11,9 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstdio>
 #include <filesystem>
@@ -106,6 +108,44 @@ std::string StripesTga() {
         }
     }
     return bytes;
+}
+
+// A Radiance HDR image, written top row first, uncompressed: color(x, y)
+// gives each pixel's linear RGB, which may be brighter than 1.
+template <typename Color>
+std::string Hdr(int width, int height, Color color) {
+    std::string bytes = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y " + std::to_string(height) + " +X " +
+                        std::to_string(width) + "\n";
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const std::array<float, 3> rgb = color(x, y);
+            const float brightest = std::max({rgb[0], rgb[1], rgb[2]});
+            if (brightest < 1e-32f) {
+                bytes.append(4, '\0');
+                continue;
+            }
+            int exponent = 0;
+            const float scale = std::frexp(brightest, &exponent) * 256.f / brightest;
+            for (const float channel : rgb) {
+                bytes += static_cast<char>(static_cast<unsigned char>(channel * scale));
+            }
+            bytes += static_cast<char>(exponent + 128);
+        }
+    }
+    return bytes;
+}
+
+// The test sky, 16 by 8: above the horizon red (4, brighter than white) on
+// the image's left half and green on its right; below it, blue. The image's
+// middle is straight down -Z, so a camera looking down -Z sees red on its
+// left, green on its right, and blue below.
+std::string TestSky() {
+    return Hdr(16, 8, [](int x, int y) -> std::array<float, 3> {
+        if (y >= 4) {
+            return {0.f, 0.f, 1.f};
+        }
+        return x < 8 ? std::array<float, 3>{4.f, 0.f, 0.f} : std::array<float, 3>{0.f, 4.f, 0.f};
+    });
 }
 
 }  // namespace
@@ -447,6 +487,141 @@ int main() {
             Expect(plain.g > 30 && plain.r < kSkyTint && plain.b < kSkyTint,
                    "no texture draws the Color alone (" + Text(plain) + ")");
             Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "textures leave no GL error");
+            textures.clear();
+        }
+
+        // A Skybox: drawn behind everything, and lighting what it surrounds.
+        {
+            std::filesystem::create_directories(root / "textures");
+            std::ofstream(root / "textures" / "sky.hdr", std::ios::binary) << TestSky();
+            std::ofstream(root / "textures" / "white.hdr", std::ios::binary)
+                << Hdr(16, 8, [](int, int) { return std::array<float, 3>{1.f, 1.f, 1.f}; });
+            std::ofstream(root / "textures" / "sky.exr", std::ios::binary) << "v/1\x01 not really";
+
+            // Decoded linear, brighter than white, bottom row first, and halved when too wide.
+            const std::string hdr = TestSky();
+            runner::LinearPixels linear;
+            std::string why;
+            Expect(runner::DecodeLinearTexture(reinterpret_cast<const std::uint8_t*>(hdr.data()), hdr.size(), linear,
+                                               why) &&
+                       linear.width == 16 && linear.height == 8,
+                   "an HDR decodes to 16 by 8 (" + why + ")");
+            Expect(linear.rgb.size() == 16 * 8 * 3 && linear.rgb[2] > 0.9f && linear.rgb[0] == 0.f,
+                   "bottom row first: blue");
+            Expect(linear.rgb.size() == 16 * 8 * 3 && linear.rgb[(7 * 16) * 3] > 3.9f,
+                   "the top row keeps light brighter than white");
+            runner::LinearPixels halved;
+            runner::DecodeLinearTexture(reinterpret_cast<const std::uint8_t*>(hdr.data()), hdr.size(), halved, why, 8);
+            Expect(halved.width == 8 && halved.height == 4 && halved.rgb[(3 * 8) * 3] > 3.9f,
+                   "an image wider than the limit is halved");
+            const std::string tga = StripesTga();
+            runner::DecodeLinearTexture(reinterpret_cast<const std::uint8_t*>(tga.data()), tga.size(), linear, why);
+            Expect(linear.width == 4 && std::abs(linear.rgb[2] - 1.f) < 1e-3f,
+                   "an ordinary image decodes too, sRGB made linear");
+
+            std::vector<std::string> said;
+            runner::TextureCache textures([&said](const std::string& message) { said.push_back(message); });
+            textures.setRoot(root);
+            const runner::EnvironmentTexture skyImage = textures.getEnvironment("textures/sky.hdr");
+            const runner::EnvironmentTexture white = textures.getEnvironment("textures/white.hdr");
+            Expect(skyImage.texture != 0 && skyImage.revision != 0 && white.revision != skyImage.revision,
+                   "a sky uploads with a revision of its own");
+            Expect(textures.getEnvironment("textures/sky.hdr").revision == skyImage.revision,
+                   "an unchanged file keeps its revision");
+            Expect(textures.get("textures/sky.hdr") != skyImage.texture,
+                   "a Material's upload of the same file is a separate texture");
+            Expect(textures.getEnvironment("textures/sky.exr").texture == 0 && !said.empty() &&
+                       said.back().find("OpenEXR") != std::string::npos,
+                   "an .exr says it is OpenEXR, which cannot be read (" + (said.empty() ? "" : said.back()) + ")");
+
+            runner::SceneLighting lit;
+            lit.ambient[0] = lit.ambient[1] = lit.ambient[2] = 0.f;
+            lit.sky.image = skyImage.texture;
+            lit.sky.imageRevision = skyImage.revision;
+            renderer.setLighting(lit);
+            // On macOS the cubes cannot be drawn into the frame they are made in: draw again.
+            const auto drawSky = [&](const runner::MeshDraw* meshes, int count) {
+                bool drawn = false;
+                for (int attempt = 0; attempt < 3 && !drawn; ++attempt) {
+                    drawn = renderer.draw(0, 0, kSize, kSize, kSize, kSize, meshes, count);
+                }
+                return drawn;
+            };
+
+            // Looking straight down -Z, level: the sky fills the pane even with nothing in it.
+            renderer.setCamera(engine_core::matrix4_look_at({0.f, 0.f, 7.f}, {0.f, 0.f, 0.f}, up), 60.f);
+            Expect(drawSky(nullptr, 0), "a sky with no meshes draws");
+            const Pixel upperLeft = ReadPixel(fbWidth / 4, fbHeight * 3 / 4);
+            const Pixel upperRight = ReadPixel(fbWidth * 3 / 4, fbHeight * 3 / 4);
+            const Pixel below = ReadPixel(fbWidth / 2, fbHeight / 4);
+            Expect(upperLeft.r > 150 && upperLeft.g < 30 && upperLeft.b < 30,
+                   "the image's left half is on the left, above the horizon (" + Text(upperLeft) + ")");
+            Expect(upperRight.g > 150 && upperRight.r < 30 && upperRight.b < 30,
+                   "and its right half on the right (" + Text(upperRight) + ")");
+            Expect(below.b > 60 && below.r < 30 && below.g < 30, "and below the horizon, blue (" + Text(below) + ")");
+            Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "making the cubes leaves no GL error");
+
+            // Rotation turns it about Y: half a turn swaps left and right.
+            runner::SceneLighting turned = lit;
+            turned.sky.rotationDegrees = 180.f;
+            renderer.setLighting(turned);
+            Expect(drawSky(nullptr, 0), "a turned sky draws at once, with the cubes it has");
+            const Pixel turnedLeft = ReadPixel(fbWidth / 4, fbHeight * 3 / 4);
+            Expect(turnedLeft.g > 150 && turnedLeft.r < 30, "Rotation 180 puts green on the left (" +
+                                                                Text(turnedLeft) + ")");
+            // Exposure 0 is black, not the pane's clear color; Tint multiplies.
+            runner::SceneLighting dark = lit;
+            dark.sky.exposure = 0.f;
+            renderer.setLighting(dark);
+            drawSky(nullptr, 0);
+            Expect(Sum(ReadPixel(fbWidth / 4, fbHeight * 3 / 4)) < 6, "Exposure 0 is a black sky");
+            runner::SceneLighting cyan = lit;
+            cyan.sky.tint[0] = 0.f;
+            renderer.setLighting(cyan);
+            drawSky(nullptr, 0);
+            const Pixel tinted = ReadPixel(fbWidth / 4, fbHeight * 3 / 4);
+            const Pixel tintedRight = ReadPixel(fbWidth * 3 / 4, fbHeight * 3 / 4);
+            Expect(Sum(tinted) < 10 && tintedRight.g > 150,
+                   "a cyan Tint takes the red out and leaves the green (" + Text(tinted) + ")");
+
+            // The sky lights a white cube: its top takes the red and green above,
+            // its front some of the blue below too.
+            renderer.setLighting(lit);
+            renderer.setCamera(engine_core::matrix4_look_at({0.f, 3.f, 7.f}, {0.f, 0.f, 0.f}, up),
+                               runner::Renderer::kCameraFovYDegrees);
+            runner::MeshDraw matte{cube, engine_core::matrix4_identity()};
+            matte.roughness = 1.f;
+            Expect(drawSky(&matte, 1), "a cube under a sky draws");
+            const int topY = fbHeight / 2 + fbHeight * 3 / 64;
+            const int frontY = fbHeight / 2 - fbHeight * 3 / 64;
+            const Pixel skyTop = ReadPixel(fbWidth / 2, topY);
+            const Pixel skyFront = ReadPixel(fbWidth / 2, frontY);
+            Expect(skyTop.r > 40 && skyTop.g > 40 && skyTop.b + 20 < skyTop.r,
+                   "the top face takes the sky above it (" + Text(skyTop) + ")");
+            Expect(skyFront.b > skyTop.b + 10, "the front face takes more of the blue below (" + Text(skyFront) +
+                                                   " against " + Text(skyTop) + ")");
+
+            // A mirror reflects: with Reflections white, a mirror's front is gray, not the sky's colors.
+            runner::MeshDraw mirror = matte;
+            mirror.metalness = 1.f;
+            mirror.roughness = 0.f;
+            drawSky(&mirror, 1);
+            const Pixel reflecting = ReadPixel(fbWidth / 2, frontY);
+            runner::SceneLighting whiteReflections = lit;
+            whiteReflections.sky.reflections = white.texture;
+            whiteReflections.sky.reflectionsRevision = white.revision;
+            renderer.setLighting(whiteReflections);
+            drawSky(&mirror, 1);
+            const Pixel reflectingWhite = ReadPixel(fbWidth / 2, frontY);
+            Expect(std::abs(reflectingWhite.r - reflectingWhite.b) < 12 && Sum(reflectingWhite) > 60,
+                   "Reflections is what a mirror shows (" + Text(reflectingWhite) + ", not " + Text(reflecting) +
+                       ")");
+            Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the sky leaves no GL error");
+
+            // With no image, today's stand-in again, and the corner the clear color.
+            renderer.setLighting(runner::SceneLighting{});
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &matte, 1);
+            Expect(IsClear(ReadPixel(2, 2)), "no Skybox leaves the pane's clear color around the cube");
             textures.clear();
         }
 

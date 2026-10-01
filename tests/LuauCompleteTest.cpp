@@ -1188,8 +1188,8 @@ void testInsertFilter() {
     const std::vector<std::string> expected = {
         "Button",       "Camera",        "CSS",        "DirectionalLight", "Folder",    "GameObject", "HBox",
         "Label",        "Material",      "Mesh",       "Model",            "ModuleScript", "Pane",    "PhysicsObject",
-        "PointLight",   "Prefab",        "ScreenGui",  "Script",           "Sound",     "SoundEmitter", "SpotLight",
-        "TextField",    "Texture",       "VBox"};
+        "PointLight",   "Prefab",        "ScreenGui",  "Script",           "Skybox",    "Sound",      "SoundEmitter",
+        "SpotLight",    "TextField",     "Texture",    "VBox"};
     if (shown != expected) {
         fail("insert list is every creatable class, A to Z");
     }

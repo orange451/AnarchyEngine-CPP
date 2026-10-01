@@ -51,6 +51,7 @@ set(STUDIO_SOURCES
     src/runner/gl.cpp
     src/runner/ShaderFile.cpp
     src/runner/Renderer.cpp
+    src/runner/EnvironmentMap.cpp
     src/runner/MeshCache.cpp
     src/runner/TextureCache.cpp
     src/amesh/amesh_gl.cpp
@@ -434,6 +435,7 @@ add_library(engine_instances STATIC
     src/engine_instances/LuaSource.cpp
     src/engine_instances/ModuleScript.cpp
     src/engine_instances/PhysicsObject.cpp
+    src/engine_instances/Skybox.cpp
     src/engine_instances/SoundEmitter.cpp
     src/engine_instances/Script.cpp
 )
@@ -715,6 +717,7 @@ add_executable(sandbox
     sandbox/plugin_tests.cpp
     sandbox/camera_tests.cpp
     sandbox/light_tests.cpp
+    sandbox/skybox_tests.cpp
     sandbox/physics_tests.cpp
     sandbox/audio_tests.cpp
     sandbox/scene_camera_tests.cpp

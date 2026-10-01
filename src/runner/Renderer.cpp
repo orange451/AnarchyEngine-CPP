@@ -27,7 +27,12 @@ constexpr int kUnitEmissive = 8;
 constexpr int kUnitAccumulation = 9;
 constexpr int kUnitTransparency = 10;
 constexpr int kUnitScene = 11;
-constexpr int kUnitCount = 12;
+// The Skybox: its image, cubes, and lookup table.
+constexpr int kUnitSky = 12;
+constexpr int kUnitIrradiance = 13;
+constexpr int kUnitPrefiltered = 14;
+constexpr int kUnitBrdf = 15;
+constexpr int kUnitCount = 16;
 
 // The legacy pipeline's stand-in sky when there is no Skybox: a flat dark
 // gray (64 of 255) times its light multiplier of 1/255.
@@ -47,56 +52,23 @@ void BindTexture(int unit, unsigned texture) {
     glBindTexture(GL_TEXTURE_2D, texture);
 }
 
+void BindCube(int unit, unsigned texture) {
+    glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(unit));
+    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, texture);
+}
+
 void DrawFullscreen(unsigned emptyVao) {
     glBindVertexArray(emptyVao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
-}
-
-// Whether program can draw in the state set for it now, its vertex array
-// bound. macOS's OpenGL on Metal readies a program for the state it draws in
-// when asked, here or at the draw, but not for render buffers made this frame:
-// until the next one, a draw there fails with GL_INVALID_OPERATION, which
-// stops the window. Asking raises no error. A pass asks once, before its first
-// draw; it costs a few microseconds.
-bool CanDraw(GLuint program) {
-    glValidateProgram(program);
-    GLint status = GL_FALSE;
-    glGetProgramiv(program, GL_VALIDATE_STATUS, &status);
-    return status == GL_TRUE;
-}
-
-// The main file with each library spliced in after its #version line, as the
-// legacy BaseShader linked several fragment files into one program.
-std::string Spliced(const std::string& main, std::initializer_list<const char*> libraries, bool& ok) {
-    if (main.empty()) {
-        ok = false;
-        return {};
-    }
-    const std::size_t lineEnd = main.find('\n');
-    std::string out = main.substr(0, lineEnd == std::string::npos ? main.size() : lineEnd + 1);
-    for (const char* library : libraries) {
-        const std::string source = LoadShader(library);
-        if (source.empty()) {
-            ok = false;
-            return {};
-        }
-        out += source;
-        out += '\n';
-    }
-    if (lineEnd != std::string::npos) {
-        out += main.substr(lineEnd + 1);
-    }
-    return out;
 }
 
 }  // namespace
 
 bool Renderer::buildProgram(Program& program, const char* name, const char* vertex, const char* fragment,
                             std::initializer_list<const char*> libraries) {
-    bool ok = true;
-    const std::string fragmentSource = Spliced(LoadShader(fragment), libraries, ok);
+    const std::string fragmentSource = LoadShader(fragment, libraries);
     program = Program{};
-    if (!ok) {
+    if (fragmentSource.empty()) {
         return false;
     }
     program.id = LinkProgram(LoadShader(vertex), fragmentSource, name);
@@ -113,6 +85,10 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.texel = at("uTexel");
     program.ambient = at("uAmbient");
     program.skyRadiance = at("uSkyRadiance");
+    program.skyEnabled = at("uSkyEnabled");
+    program.viewToSky = at("uViewToSky");
+    program.skyColor = at("uSkyColor");
+    program.prefilteredMaxLod = at("uPrefilteredMaxLod");
     program.diffuse = at("uDiffuse");
     program.normalMap = at("uNormalMap");
     program.roughnessMap = at("uRoughnessMap");
@@ -167,6 +143,10 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     sampler("uMaterial", kUnitMaterial);
     sampler("uAccumulation", kUnitAccumulation);
     sampler("uScene", kUnitScene);
+    sampler("uSky", kUnitSky);
+    sampler("uIrradiance", kUnitIrradiance);
+    sampler("uPrefiltered", kUnitPrefiltered);
+    sampler("uBrdf", kUnitBrdf);
     if (&program == &merge_) {
         sampler("uEmissive", kUnitEmissive);
         sampler("uTransparency", kUnitTransparency);
@@ -193,13 +173,18 @@ bool Renderer::initialize() {
         buildProgram(geometry_, "G-buffer", "pipeline/geometry.vert", "pipeline/deferred.frag",
                      {"pipeline/surface.glsl"}) &&
         buildProgram(forward_, "Transparency", "pipeline/geometry.vert", "pipeline/forward.frag",
-                     {"pipeline/surface.glsl", "pipeline/lighting.glsl"}) &&
-        buildProgram(ibl_, "IBL", "pipeline/fullscreen.vert", "pipeline/ibl.frag", {"pipeline/lighting.glsl"}) &&
+                     {"pipeline/surface.glsl", "pipeline/lighting.glsl", "pipeline/environment.glsl",
+                      "pipeline/image_lighting.glsl"}) &&
+        buildProgram(ibl_, "IBL", "pipeline/fullscreen.vert", "pipeline/ibl.frag",
+                     {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/image_lighting.glsl"}) &&
+        buildProgram(sky_, "Sky", "pipeline/fullscreen.vert", "pipeline/sky.frag",
+                     {"pipeline/lighting.glsl", "pipeline/environment.glsl"}) &&
         buildProgram(light_, "Light", "pipeline/light.vert", "pipeline/light.frag", {"pipeline/lighting.glsl"}) &&
         buildProgram(sun_, "Directional light", "pipeline/fullscreen.vert", "pipeline/light.frag",
                      {"pipeline/lighting.glsl"}) &&
         buildProgram(merge_, "Merge", "pipeline/fullscreen.vert", "pipeline/merge.frag", {}) &&
-        buildProgram(tonemap_, "Tone map", "pipeline/fullscreen.vert", "pipeline/tonemap.frag", {});
+        buildProgram(tonemap_, "Tone map", "pipeline/fullscreen.vert", "pipeline/tonemap.frag", {}) &&
+        environment_.initialize();
     if (!built) {
         shutdown();
         return false;
@@ -213,6 +198,17 @@ bool Renderer::initialize() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR));
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
     glBindTexture(GL_TEXTURE_2D, 0);
+
+    const unsigned char black[4] = {0, 0, 0, 255};
+    glGenTextures(1, &blackCube_);
+    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, blackCube_);
+    for (int face = 0; face < 6; ++face) {
+        glTexImage2D(RT_GL_TEXTURE_CUBE_MAP_POSITIVE_X + static_cast<GLenum>(face), 0, static_cast<GLint>(GL_RGBA8), 1,
+                     1, 0, GL_RGBA, GL_UNSIGNED_BYTE, black);
+    }
+    glTexParameteri(RT_GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR));
+    glTexParameteri(RT_GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
+    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, 0);
 
     glGenVertexArrays(1, &emptyVao_);
     createSphere();
@@ -471,6 +467,7 @@ struct SavedState {
     GLint program = 0;
     GLint vertexArray = 0;
     GLint activeTexture = 0;
+    GLboolean seamlessCubes = GL_FALSE;
 
     SavedState() {
         glGetIntegerv(RT_GL_FRAMEBUFFER_BINDING, &framebuffer);
@@ -489,6 +486,7 @@ struct SavedState {
         glGetIntegerv(RT_GL_CURRENT_PROGRAM, &program);
         glGetIntegerv(RT_GL_VERTEX_ARRAY_BINDING, &vertexArray);
         glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
+        seamlessCubes = glIsEnabled(RT_GL_TEXTURE_CUBE_MAP_SEAMLESS);
     }
 
     static void Set(GLenum cap, GLboolean on) {
@@ -512,10 +510,12 @@ struct SavedState {
         glDepthFunc(static_cast<GLenum>(depthFunc));
         Set(RT_GL_CULL_FACE, cull);
         glCullFace(static_cast<GLenum>(cullMode));
+        Set(RT_GL_TEXTURE_CUBE_MAP_SEAMLESS, seamlessCubes);
         glUseProgram(static_cast<GLuint>(program));
         glBindVertexArray(static_cast<GLuint>(vertexArray));
         // The units the passes used are left empty, as the old single pass left unit 0.
         for (int unit = kUnitCount - 1; unit >= 0; --unit) {
+            BindCube(unit, 0);
             BindTexture(unit, 0);
         }
         glActiveTexture(static_cast<GLenum>(activeTexture));
@@ -561,7 +561,14 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    bool drawn = meshes == nullptr || meshCount <= 0;
+    const bool hasMeshes = meshes != nullptr && meshCount > 0;
+    if (!hasMeshes) {
+        meshes = nullptr;
+        meshCount = 0;
+    }
+    // A sky whose cubes can never be made is drawn as no sky, rather than never drawing.
+    const bool hasSky = lighting_.sky.image != 0 && environment_.available();
+    bool drawn = !hasMeshes && !hasSky;
     if (!drawn && ensureTargets(pane.width, pane.height)) {
         Matrix projection;
         Perspective(fovYDegrees_, static_cast<float>(pane.width) / static_cast<float>(pane.height), kNear, kFar,
@@ -619,12 +626,25 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         std::stable_partition(viewLights_.begin(), viewLights_.end(),
                               [](const ViewLight& light) { return light.cone[0] < -3.f; });
 
+        // The Skybox's cubes, made again only when an image changes.
+        skyReady_ = false;
+        bool cubesReady = true;
+        if (hasSky) {
+            const SceneSky& sky = lighting_.sky;
+            cubesReady = environment_.update(sky.image, sky.imageRevision, sky.reflections, sky.reflectionsRevision,
+                                             emptyVao_);
+            skyReady_ = cubesReady;
+            prepareSky();
+        }
+        glEnable(RT_GL_TEXTURE_CUBE_MAP_SEAMLESS);
+
         glDisable(GL_SCISSOR_TEST);
         glViewport(0, 0, targetWidth_, targetHeight_);
-        drawn = geometryPass(meshes, meshCount, projection) && lightPass(projection, inverseProjection.m) &&
+        drawn = cubesReady && geometryPass(meshes, meshCount, projection) &&
+                lightPass(projection, inverseProjection.m) && skyPass(inverseProjection.m) &&
                 transparencyPass(meshes, meshCount, projection, inverseProjection.m) && mergePass();
     }
-    if (drawn && meshes != nullptr && meshCount > 0) {
+    if (drawn && (hasMeshes || hasSky)) {
         // The tone map, blended over the clear: where nothing was drawn the pane shows through.
         glBindFramebuffer(RT_GL_FRAMEBUFFER, static_cast<GLuint>(saved.framebuffer));
         glEnable(GL_SCISSOR_TEST);
@@ -663,6 +683,57 @@ void Renderer::bindMaterial(const Program& program, const MeshDraw& draw) {
     glUniform1f(program.normalMapEnabled, draw.normalTexture != 0 ? 1.f : 0.f);
     glUniform1f(program.transparency, std::clamp(draw.transparency, 0.f, 1.f));
     glUniformMatrix4fv(program.model, 1, GL_FALSE, draw.model.m);
+}
+
+void Renderer::prepareSky() {
+    // The view's turn back to the world's: view_ is a rotation and a
+    // translation, so its 3 by 3 transposed. Column-major, as GLSL takes it.
+    float viewToWorld[9];
+    for (int column = 0; column < 3; ++column) {
+        for (int row = 0; row < 3; ++row) {
+            viewToWorld[column * 3 + row] = view_.m[row * 4 + column];
+        }
+    }
+    // Then the sky turned back by its Rotation: what the camera sees at a
+    // world direction is the sky's at that direction turned by -Rotation.
+    const float angle = -lighting_.sky.rotationDegrees * 0.01745329252f;
+    const float c = std::cos(angle);
+    const float s = std::sin(angle);
+    const float turn[9] = {c, 0.f, -s, 0.f, 1.f, 0.f, s, 0.f, c};
+    for (int column = 0; column < 3; ++column) {
+        for (int row = 0; row < 3; ++row) {
+            float sum = 0.f;
+            for (int k = 0; k < 3; ++k) {
+                sum += turn[k * 3 + row] * viewToWorld[column * 3 + k];
+            }
+            viewToSky_[column * 3 + row] = sum;
+        }
+    }
+    // Tint is a color as picked, sRGB, made linear as surface.glsl makes a Material's.
+    const float exposure = std::max(lighting_.sky.exposure, 0.f);
+    for (int channel = 0; channel < 3; ++channel) {
+        skyColor_[channel] = exposure * std::pow(std::max(lighting_.sky.tint[channel], 0.f), 2.2f);
+    }
+}
+
+void Renderer::bindSky(const Program& program) {
+    glUniform1f(program.skyEnabled, skyReady_ ? 1.f : 0.f);
+    if (!skyReady_) {
+        // Unread with no sky, but a sampler with nothing whole bound makes
+        // macOS's driver complain, so each gets something.
+        BindTexture(kUnitSky, whiteTexture_);
+        BindCube(kUnitIrradiance, blackCube_);
+        BindCube(kUnitPrefiltered, blackCube_);
+        BindTexture(kUnitBrdf, whiteTexture_);
+        return;
+    }
+    glUniformMatrix3fv(program.viewToSky, 1, GL_FALSE, viewToSky_);
+    glUniform3f(program.skyColor, skyColor_[0], skyColor_[1], skyColor_[2]);
+    glUniform1f(program.prefilteredMaxLod, EnvironmentMap::prefilteredMaxLod());
+    BindTexture(kUnitSky, lighting_.sky.image);
+    BindCube(kUnitIrradiance, environment_.irradiance());
+    BindCube(kUnitPrefiltered, environment_.prefiltered());
+    BindTexture(kUnitBrdf, environment_.brdf());
 }
 
 void Renderer::bindGBuffer(const Program& program) {
@@ -725,6 +796,7 @@ bool Renderer::lightPass(const float* projection, const float* inverseProjection
     glUniformMatrix4fv(ibl_.inverseProjection, 1, GL_FALSE, inverseProjection);
     glUniform3f(ibl_.ambient, lighting_.ambient[0], lighting_.ambient[1], lighting_.ambient[2]);
     glUniform3f(ibl_.skyRadiance, kSkyRadiance, kSkyRadiance, kSkyRadiance);
+    bindSky(ibl_);
     glBindVertexArray(emptyVao_);
     if (!CanDraw(ibl_.id)) {
         return false;
@@ -807,6 +879,26 @@ bool Renderer::lightPass(const float* projection, const float* inverseProjection
     return true;
 }
 
+bool Renderer::skyPass(const float* inverseProjection) {
+    if (!skyReady_) {
+        return true;
+    }
+    // Only where no opaque surface is, which no light pass wrote: no blending needed.
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, accumulationFbo_);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glUseProgram(sky_.id);
+    BindTexture(kUnitDepth, depthTexture_);
+    glUniformMatrix4fv(sky_.inverseProjection, 1, GL_FALSE, inverseProjection);
+    bindSky(sky_);
+    glBindVertexArray(emptyVao_);
+    if (!CanDraw(sky_.id)) {
+        return false;
+    }
+    DrawFullscreen(emptyVao_);
+    return true;
+}
+
 bool Renderer::transparencyPass(const MeshDraw* meshes, int count, const float* projection,
                                 const float* inverseProjection) {
     glBindFramebuffer(RT_GL_FRAMEBUFFER, transparencyFbo_);
@@ -842,6 +934,7 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, int count, const float* 
     glUniformMatrix4fv(forward_.inverseProjection, 1, GL_FALSE, inverseProjection);
     glUniform3f(forward_.ambient, lighting_.ambient[0], lighting_.ambient[1], lighting_.ambient[2]);
     glUniform3f(forward_.skyRadiance, kSkyRadiance, kSkyRadiance, kSkyRadiance);
+    bindSky(forward_);
     const int lightCount = std::min(static_cast<int>(viewLights_.size()), kMaxForwardLights);
     float positionRadius[kMaxForwardLights * 4] = {};
     float colorIntensity[kMaxForwardLights * 4] = {};
@@ -893,6 +986,7 @@ bool Renderer::mergePass() {
     BindTexture(kUnitEmissive, emissiveTexture_);
     BindTexture(kUnitAccumulation, accumulationTexture_);
     BindTexture(kUnitTransparency, transparencyTexture_);
+    glUniform1f(merge_.skyEnabled, skyReady_ ? 1.f : 0.f);
     glBindVertexArray(emptyVao_);
     if (!CanDraw(merge_.id)) {
         return false;
@@ -945,15 +1039,19 @@ void Renderer::setClearColor(float r, float g, float b) {
 
 void Renderer::shutdown() {
     ready_ = false;
-    for (Program* program : {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_}) {
+    for (Program* program : {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &sky_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);
         }
         *program = Program{};
     }
-    if (whiteTexture_ != 0) {
-        glDeleteTextures(1, &whiteTexture_);
-        whiteTexture_ = 0;
+    environment_.shutdown();
+    skyReady_ = false;
+    for (unsigned* texture : {&whiteTexture_, &blackCube_}) {
+        if (*texture != 0) {
+            glDeleteTextures(1, texture);
+            *texture = 0;
+        }
     }
     for (unsigned* vao : {&emptyVao_, &sphereVao_}) {
         if (*vao != 0) {

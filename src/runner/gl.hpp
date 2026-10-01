@@ -189,6 +189,7 @@ constexpr GLenum RT_GL_FRAMEBUFFER_COMPLETE = 0x8CD5;
 constexpr GLenum RT_GL_COLOR_ATTACHMENT0 = 0x8CE0;
 constexpr GLenum RT_GL_DEPTH_ATTACHMENT = 0x8D00;
 constexpr GLenum RT_GL_RGBA16F = 0x881A;
+constexpr GLenum RT_GL_RGB = 0x1907;
 constexpr GLenum RT_GL_HALF_FLOAT = 0x140B;
 constexpr GLenum RT_GL_DEPTH_COMPONENT = 0x1902;
 constexpr GLenum RT_GL_DEPTH_COMPONENT24 = 0x81A6;
@@ -211,6 +212,13 @@ constexpr GLenum RT_GL_BLEND_SRC_ALPHA = 0x80CB;
 constexpr GLenum RT_GL_BLEND_DST_ALPHA = 0x80CA;
 constexpr GLenum RT_GL_CURRENT_PROGRAM = 0x8B8D;
 constexpr GLenum RT_GL_VERTEX_ARRAY_BINDING = 0x85B5;
+// The Skybox's environment cubes.
+constexpr GLenum RT_GL_TEXTURE_CUBE_MAP = 0x8513;
+constexpr GLenum RT_GL_TEXTURE_CUBE_MAP_POSITIVE_X = 0x8515;
+constexpr GLenum RT_GL_TEXTURE_CUBE_MAP_SEAMLESS = 0x884F;
+constexpr GLenum RT_GL_TEXTURE_WRAP_R = 0x8072;
+constexpr GLenum RT_GL_TEXTURE_BASE_LEVEL = 0x813C;
+constexpr GLenum RT_GL_TEXTURE_MAX_LEVEL = 0x813D;
 
 // Names are prefixed so they do not collide with libGL's exported functions.
 extern const GLubyte* (*rt_glGetString)(GLenum name);
@@ -253,6 +261,7 @@ extern GLint (*rt_glGetUniformLocation)(GLuint program, const GLchar* name);
 extern void (*rt_glUniform1f)(GLint location, GLfloat v0);
 extern void (*rt_glUniform3f)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
 extern void (*rt_glUniformMatrix4fv)(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
+extern void (*rt_glUniformMatrix3fv)(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
 extern void (*rt_glReadPixels)(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
 extern void (*rt_glGenTextures)(GLsizei n, GLuint* textures);
 extern void (*rt_glDeleteTextures)(GLsizei n, const GLuint* textures);
@@ -328,6 +337,7 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glUniform1f ::runner::rt_glUniform1f
 #define glUniform3f ::runner::rt_glUniform3f
 #define glUniformMatrix4fv ::runner::rt_glUniformMatrix4fv
+#define glUniformMatrix3fv ::runner::rt_glUniformMatrix3fv
 #define glReadPixels ::runner::rt_glReadPixels
 #define glGenTextures ::runner::rt_glGenTextures
 #define glDeleteTextures ::runner::rt_glDeleteTextures

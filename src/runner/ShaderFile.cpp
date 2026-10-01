@@ -52,6 +52,34 @@ std::string LoadShader(const char* filename) {
     return source;
 }
 
+std::string LoadShader(const char* filename, std::initializer_list<const char*> libraries) {
+    const std::string main = LoadShader(filename);
+    if (main.empty()) {
+        return {};
+    }
+    const std::size_t lineEnd = main.find('\n');
+    std::string out = main.substr(0, lineEnd == std::string::npos ? main.size() : lineEnd + 1);
+    for (const char* library : libraries) {
+        const std::string source = LoadShader(library);
+        if (source.empty()) {
+            return {};
+        }
+        out += source;
+        out += '\n';
+    }
+    if (lineEnd != std::string::npos) {
+        out += main.substr(lineEnd + 1);
+    }
+    return out;
+}
+
+bool CanDraw(GLuint program) {
+    glValidateProgram(program);
+    GLint status = GL_FALSE;
+    glGetProgramiv(program, GL_VALIDATE_STATUS, &status);
+    return status == GL_TRUE;
+}
+
 GLuint LinkProgram(const std::string& vertexSource, const std::string& fragmentSource, const char* name) {
     if (vertexSource.empty() || fragmentSource.empty()) {
         return 0;

@@ -1,7 +1,8 @@
 #version 330 core
 // A see-through surface, lit whole in one pass and blended over what is
-// behind it (the legacy forward.frag). Renderer puts surface.glsl and
-// lighting.glsl in after the #version line.
+// behind it (the legacy forward.frag). Renderer puts surface.glsl,
+// lighting.glsl, environment.glsl, and image_lighting.glsl in after the
+// #version line.
 in vec3 vViewPosition;
 in vec3 vViewNormal;
 in vec2 vUv;
@@ -33,8 +34,8 @@ void main() {
         discard;
     }
     vec3 viewDirection = normalize(vViewPosition);
-    vec3 color = ambientLight(viewDirection, s.normal, s.albedo, s.metalness, s.roughness, s.reflectivity, uAmbient,
-                              uSkyRadiance);
+    vec3 color = skyLight(viewDirection, s.normal, s.albedo, s.metalness, s.roughness, s.reflectivity, uAmbient,
+                          uSkyRadiance);
     for (int i = 0; i < uLightCount && i < kMaxLights; ++i) {
         color += shadeLight(s.normal, vViewPosition, s.albedo, s.metalness, s.roughness, uLightPositionRadius[i].xyz,
                             uLightDirection[i].xyz, uLightCone[i].xy, uLightColorIntensity[i].rgb,

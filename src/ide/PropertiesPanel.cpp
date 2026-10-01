@@ -2,7 +2,13 @@
 #include "AssetPicker.hpp"
 #include "ChangeFlag.hpp"
 #include "IdeIcons.hpp"
+#include "IdeResources.hpp"
 #include "LockWaits.hpp"
+#include "MaterialBall.hpp"
+#include "MaterialPreviews.hpp"
+#include "ThumbnailLoader.hpp"
+
+#include "AssetInstances.hpp"
 
 #include "ChangeHistoryService.hpp"
 #include "Containment.hpp"
@@ -11,16 +17,20 @@
 #include "Enum.hpp"
 #include "PropertyReflection.hpp"
 #include "SelectionService.hpp"
+#include "SoundEmitter.hpp"
+#include "SoundPreview.hpp"
 #include "TextUndoStack.hpp"
 
 #include "jadefx/scene/Painter.hpp"
 #include "jadefx/scene/controls/ComboBox.hpp"
+#include "jadefx/scene/image/ImageView.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <set>
 #include <utility>
 #include <vector>
@@ -42,6 +52,20 @@ constexpr double kClearWidth = 24;
 constexpr double kSliderFieldWidth = 72;
 // The fold arrow before a Transform's name sits in the name's indent.
 constexpr double kDisclosureWidth = 12;
+// The widest side of a Texture's or Material's preview, in points.
+constexpr double kPreviewSide = 192;
+// Its image's longer side, in pixels: the preview at twice its points, for HiDPI.
+constexpr int kPreviewPixels = 384;
+// A Material's ball is drawn this big, then shrunk to kPreviewPixels.
+constexpr int kBallRenderSize = 768;
+// A Sound's transport: its buttons, in order, each with its toolbar icon.
+constexpr int kSoundButtons = 4;
+enum SoundButton { kSoundPlay, kSoundPause, kSoundResume, kSoundStop };
+constexpr const char* kSoundButtonText[kSoundButtons] = {"Play", "Pause", "Resume", "Stop"};
+constexpr const char* kSoundButtonIcon[kSoundButtons] = {"Play.png", "Pause.png", "Resume.png", "Stop.png"};
+constexpr double kSoundButtonWidth = 84;
+// The time beside the track, as "1:05 / 2:30".
+constexpr double kSoundTimeWidth = 84;
 // A Transform's two lines, under its name when it is open.
 constexpr const char* kTransformLines[2] = {"Position", "Orientation"};
 
@@ -432,6 +456,29 @@ public:
 protected:
     void layoutChildren() override;
     void handleScroll(jadefx::ScrollEvent& event) override;
+    void renderContent(jadefx::UiRenderer& renderer, float opacity) override;
+    void sceneChanged(jadefx::Scene* previous) override;
+};
+
+// What the Preview section under the rows is for: a single selected Texture,
+// Material, Sound, or SoundEmitter. A SoundEmitter's is its Sound's, played
+// at its Volume and Pitch, looping when it is Looped.
+struct AssetPreview {
+    enum class Kind { None, Texture, Material, Sound };
+    Kind kind = Kind::None;
+    InstanceId id = 0;
+    // A Texture's or Sound's file; empty when its Path is, or a SoundEmitter has no Sound.
+    std::filesystem::path file;
+    MaterialLook look;
+    double volume = 1;
+    double pitch = 1;
+    bool looped = false;
+
+    bool operator==(const AssetPreview& other) const {
+        return kind == other.kind && id == other.id && file == other.file && look == other.look &&
+               volume == other.volume && pitch == other.pitch && looped == other.looped;
+    }
+    bool operator!=(const AssetPreview& other) const { return !(*this == other); }
 };
 
 // One row's widgets. Which editors exist depends on the row's kind.
@@ -543,6 +590,27 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     double scroll = 0;
     double content = 0;
 
+    // The Preview section: a Texture's image or a Material's ball in a frame,
+    // or a Sound's transport: Play, Pause, Resume, and Stop, then a track to
+    // seek on with the time beside it. The ball is drawn in the pane's paint,
+    // where GL is current; the texture loads on the loader's thread.
+    AssetPreview asset_preview;
+    std::shared_ptr<jadefx::Label> preview_header;
+    std::shared_ptr<jadefx::StackPane> preview_frame;
+    std::shared_ptr<jadefx::ImageView> preview_image;
+    std::shared_ptr<jadefx::Label> preview_note;
+    std::shared_ptr<jadefx::Button> sound_buttons[kSoundButtons];
+    std::shared_ptr<PropertySlider> sound_track;
+    std::shared_ptr<jadefx::Label> sound_time;
+    // The shown Sound's length, read when it is selected, so the track and
+    // time read right before it plays.
+    double sound_length = 0;
+    std::unique_ptr<ThumbnailLoader> thumbnails;
+    std::unique_ptr<MaterialBall> ball;
+    std::unique_ptr<MaterialPreviews> balls;
+    // Opened on the first Play, so a studio that never plays one opens no device.
+    std::unique_ptr<engine_core::SoundPreview> sound;
+
     void build() {
         pane = jadefx::make<PropertiesPane>();
         empty = jadefx::make<jadefx::Label>("No selection");
@@ -564,6 +632,226 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         status_label->setStyle(kErrorStyle);
         status_label->setVisible(false);
         pane->getChildren().add(status_label);
+        build_preview();
+    }
+
+    void build_preview() {
+        preview_header = jadefx::make<jadefx::Label>("Preview");
+        preview_header->getClassList().add("properties-group");
+        preview_header->setStyle(headers[0]->getStyle());
+        preview_header->setVisible(false);
+        pane->getChildren().add(preview_header);
+        // Added before the image, so it paints behind it.
+        preview_frame = jadefx::make<jadefx::StackPane>();
+        preview_frame->getClassList().add("properties-preview-frame");
+        preview_frame->setStyle(
+            "border-width: 1px; border-style: solid; border-radius: 3px; "
+            "border-color: var(--ide-field-border-color); background-color: var(--ide-field-color);");
+        preview_frame->setMouseTransparent(true);
+        preview_frame->setVisible(false);
+        pane->getChildren().add(preview_frame);
+        preview_image = jadefx::make<jadefx::ImageView>();
+        preview_image->getClassList().add("properties-preview-image");
+        preview_image->setMouseTransparent(true);
+        preview_image->setVisible(false);
+        pane->getChildren().add(preview_image);
+        preview_note = jadefx::make<jadefx::Label>("");
+        preview_note->getClassList().add("properties-preview-note");
+        preview_note->setStyle("color: var(--ide-muted-text-color);");
+        preview_note->setAlignment(jadefx::Pos::Center);
+        preview_note->setMouseTransparent(true);
+        preview_note->setVisible(false);
+        pane->getChildren().add(preview_note);
+        std::weak_ptr<Impl> weak_self = weak_from_this();
+        for (int part = 0; part < kSoundButtons; ++part) {
+            auto button = jadefx::make<jadefx::Button>(kSoundButtonText[part]);
+            button->getClassList().add("properties-sound-button");
+            button->setStyle(kButtonStyle);
+            button->setVisible(false);
+            if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic(kSoundButtonIcon[part])) {
+                button->setGraphic(std::move(icon));
+                button->setGraphicTextGap(4);
+            }
+            button->setOnAction([weak_self, part](jadefx::ActionEvent&) {
+                if (const auto self = weak_self.lock()) {
+                    self->sound_action(static_cast<SoundButton>(part));
+                }
+            });
+            pane->getChildren().add(button);
+            sound_buttons[part] = std::move(button);
+        }
+        // Dragging the thumb seeks as it goes; an arrow key seeks a step.
+        sound_track = jadefx::make<PropertySlider>(0.0, 1.0);
+        sound_track->getClassList().add("properties-sound-track");
+        sound_track->setVisible(false);
+        sound_track->on_move = [weak_self] {
+            const auto self = weak_self.lock();
+            if (self && self->sound_track->held()) {
+                self->seek_sound();
+            }
+        };
+        sound_track->on_commit = [weak_self] {
+            if (const auto self = weak_self.lock()) {
+                self->seek_sound();
+            }
+        };
+        pane->getChildren().add(sound_track);
+        sound_time = jadefx::make<jadefx::Label>("");
+        sound_time->getClassList().add("properties-sound-time");
+        sound_time->setStyle("color: var(--ide-muted-text-color);");
+        sound_time->setAlignment(jadefx::Pos::CenterRight);
+        sound_time->setVisible(false);
+        pane->getChildren().add(sound_time);
+
+        thumbnails = std::make_unique<ThumbnailLoader>(kPreviewPixels, std::function<void()>());
+        ball = std::make_unique<MaterialBall>(kBallRenderSize, kPreviewPixels);
+        balls = std::make_unique<MaterialPreviews>(
+            [this](const MaterialLook& look, std::shared_ptr<jadefx::Image>& image) {
+                runner::ViewPixels pixels;
+                if (!ball->draw(look, pixels)) {
+                    return false;
+                }
+                if (!pixels.empty()) {
+                    image = jadefx::Image::fromRgba(pixels.width, pixels.height, std::move(pixels.rgba));
+                }
+                return true;
+            },
+            1);
+    }
+
+    // ---- Preview ---------------------------------------------------------
+
+    // The preview for ids. Callers hold the world's read lock.
+    AssetPreview read_preview(const std::vector<InstanceId>& ids) const {
+        AssetPreview next;
+        if (ids.size() != 1) {
+            return next;
+        }
+        const engine_core::DataModel* object = world->instance(ids.front());
+        auto file_of = [this](const std::string& path) {
+            const std::filesystem::path root = world->resources_root();
+            return path.empty() || root.empty() ? std::filesystem::path() : root / path_from_utf8(path);
+        };
+        if (const auto* texture = dynamic_cast<const engine_core::Texture*>(object)) {
+            next.kind = AssetPreview::Kind::Texture;
+            next.file = file_of(texture->path());
+        } else if (const auto* sound_asset = dynamic_cast<const engine_core::Sound*>(object)) {
+            next.kind = AssetPreview::Kind::Sound;
+            next.file = file_of(sound_asset->path());
+        } else if (const auto* emitter = dynamic_cast<const engine_core::SoundEmitter*>(object)) {
+            next.kind = AssetPreview::Kind::Sound;
+            const auto* played = dynamic_cast<const engine_core::Sound*>(world->instance(emitter->sound_id()));
+            next.file = played != nullptr ? file_of(played->path()) : std::filesystem::path();
+            next.volume = emitter->volume();
+            next.pitch = emitter->pitch();
+            next.looped = emitter->looped();
+        } else if (const std::optional<MaterialLook> look = material_look(*world, ids.front())) {
+            next.kind = AssetPreview::Kind::Material;
+            next.look = *look;
+        } else {
+            return next;
+        }
+        next.id = ids.front();
+        return next;
+    }
+
+    void set_preview(AssetPreview next) {
+        if (next == asset_preview) {
+            return;
+        }
+        // A sound plays only while its Sound is the one shown.
+        if (sound && (next.kind != AssetPreview::Kind::Sound || next.file != sound->file())) {
+            sound->stop();
+        }
+        const bool new_sound = next.kind == AssetPreview::Kind::Sound &&
+                               (asset_preview.kind != AssetPreview::Kind::Sound || next.file != asset_preview.file);
+        asset_preview = std::move(next);
+        // A SoundEmitter's Volume, Pitch, and Looped are heard at once, as they are edited.
+        if (sound) {
+            sound->set_mix(asset_preview.volume, asset_preview.pitch, asset_preview.looped);
+        }
+        if (asset_preview.kind != AssetPreview::Kind::Sound) {
+            sound_length = 0;
+        } else if (new_sound) {
+            sound_length = asset_preview.file.empty() ? 0.0 : engine_core::SoundPreview::length_of(asset_preview.file);
+        }
+        if (asset_preview.kind == AssetPreview::Kind::Texture && !asset_preview.file.empty()) {
+            thumbnails->retain({asset_preview.file});
+        } else {
+            thumbnails->retain({});
+        }
+        balls->retain(asset_preview.kind == AssetPreview::Kind::Material
+                          ? std::vector<InstanceId>{asset_preview.id}
+                          : std::vector<InstanceId>{});
+    }
+
+    engine_core::SoundPreview::State sound_state() const {
+        return sound ? sound->state() : engine_core::SoundPreview::State::Stopped;
+    }
+
+    void sound_action(SoundButton action) {
+        if (asset_preview.kind != AssetPreview::Kind::Sound) {
+            return;
+        }
+        switch (action) {
+        case kSoundPlay: {
+            if (asset_preview.file.empty()) {
+                status = "This Sound has no Path to play";
+                return;
+            }
+            if (!sound) {
+                sound = std::make_unique<engine_core::SoundPreview>();
+                sound->set_mix(asset_preview.volume, asset_preview.pitch, asset_preview.looped);
+            }
+            std::string error;
+            if (!sound->play(asset_preview.file, error)) {
+                status = "Could not play " + utf8_path(asset_preview.file) + " (" + error + ")";
+                return;
+            }
+            status.clear();
+            if (sound->length() > 0) {
+                sound_length = sound->length();
+            }
+            break;
+        }
+        case kSoundPause:
+            if (sound) {
+                sound->pause();
+            }
+            break;
+        case kSoundResume:
+            if (sound) {
+                sound->resume();
+            }
+            break;
+        case kSoundStop:
+            if (sound) {
+                sound->stop();
+            }
+            break;
+        }
+    }
+
+    void seek_sound() {
+        if (sound && sound_state() != engine_core::SoundPreview::State::Stopped) {
+            sound->seek(sound_track->getValue());
+        }
+    }
+
+    // Seconds as "m:ss".
+    static std::string clock_text(double seconds) {
+        const long whole = std::lround(std::max(0.0, std::floor(seconds)));
+        char text[32];
+        std::snprintf(text, sizeof text, "%ld:%02ld", whole / 60, whole % 60);
+        return text;
+    }
+
+    // Draws a queued Material ball. GL is current: the pane is painting.
+    void draw_previews() {
+        if (balls && !balls->idle() && world != nullptr) {
+            ball->setRoot(world->resources_root());
+            balls->draw_pending();
+        }
     }
 
     // ---- Reading ---------------------------------------------------------
@@ -597,6 +885,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             return;
         }
         PropertySheet next;
+        AssetPreview next_preview;
         {
             engine_core::DataModelLock lock(*world, engine_core::DataModelLock::Read, kFrameLockWait);
             // Busy, or undo is writing the world back under this lock: try next frame.
@@ -605,9 +894,11 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 return;
             }
             next = read_sheet(*world, ids);
+            next_preview = read_preview(ids);
         }
         seen_selection = revision;
         seen_tree = tree;
+        set_preview(std::move(next_preview));
         if (next == sheet && !force) {
             return;
         }
@@ -1615,6 +1906,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             }
             y += kRowHeight + kRowGap;
         }
+        layout_preview(place, y, left, width, inner);
         status_label->setText(status);
         // Pick instructions are a hint. Anything else is a refused edit.
         status_label->setStyle(picking ? kHintStyle : kErrorStyle);
@@ -1630,6 +1922,96 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         if (scroll > limit) {
             scroll = limit;
         }
+    }
+
+    // The Preview section, from y down, which it moves past it.
+    template <typename Place>
+    void layout_preview(Place& place, double& y, double left, double width, double inner) {
+        preview_header->setVisible(false);
+        preview_frame->setVisible(false);
+        preview_image->setVisible(false);
+        preview_note->setVisible(false);
+        for (const auto& button : sound_buttons) {
+            button->setVisible(false);
+        }
+        sound_track->setVisible(false);
+        sound_time->setVisible(false);
+        if (asset_preview.kind == AssetPreview::Kind::None) {
+            return;
+        }
+        place(*preview_header, left, width, kRowHeight - 2);
+        y += kRowHeight - 2 + kRowGap + kPad;
+        if (asset_preview.kind == AssetPreview::Kind::Sound) {
+            layout_sound(place, y, left, inner);
+            return;
+        }
+        // A square frame, as wide as the page allows, with the image fitted in it.
+        const double side = std::min(inner, kPreviewSide);
+        const double frame_x = left + kPad + (inner - side) / 2;
+        place(*preview_frame, frame_x, side, side);
+        std::shared_ptr<jadefx::Image> image;
+        if (asset_preview.kind == AssetPreview::Kind::Material) {
+            image = balls->get(asset_preview.id, asset_preview.look);
+        } else if (!asset_preview.file.empty()) {
+            image = thumbnails->get(asset_preview.file);
+        }
+        if (image && image->getWidth() > 0 && image->getHeight() > 0) {
+            if (preview_image->getImage() != image) {
+                preview_image->setImage(image);
+            }
+            const double fit = side - 8;
+            const double scale = fit / std::max(image->getWidth(), image->getHeight());
+            const double w = std::max(1.0, image->getWidth() * scale);
+            const double h = std::max(1.0, image->getHeight() * scale);
+            const double frame_y = y;
+            y = frame_y + (side - h) / 2;
+            place(*preview_image, frame_x + (side - w) / 2, w, h);
+            y = frame_y;
+        } else {
+            const bool no_path = asset_preview.kind == AssetPreview::Kind::Texture && asset_preview.file.empty();
+            preview_note->setText(no_path ? "No Path" : "No preview");
+            const double frame_y = y;
+            y = frame_y + (side - kRowHeight) / 2;
+            place(*preview_note, frame_x, side, kRowHeight);
+            y = frame_y;
+        }
+        y += side + kRowGap;
+    }
+
+    // A Sound's transport, from y down. Each button is enabled only when it
+    // does something: Pause while playing, Resume while paused, Stop while
+    // either. The track follows the sound unless its thumb is held.
+    template <typename Place>
+    void layout_sound(Place& place, double& y, double left, double inner) {
+        using State = engine_core::SoundPreview::State;
+        const State state = sound_state();
+        const bool enabled[kSoundButtons] = {!asset_preview.file.empty(), state == State::Playing,
+                                             state == State::Paused, state != State::Stopped};
+        const double each =
+            std::min(kSoundButtonWidth, (inner - (kSoundButtons - 1) * kAxisGap) / kSoundButtons);
+        for (int part = 0; part < kSoundButtons; ++part) {
+            sound_buttons[part]->setDisable(!enabled[part]);
+            place(*sound_buttons[part], left + kPad + part * (each + kAxisGap), each, kRowHeight);
+        }
+        y += kRowHeight + kRowGap;
+
+        const double length = state != State::Stopped && sound->length() > 0 ? sound->length() : sound_length;
+        const double position = state != State::Stopped ? std::min(sound->position(), length) : 0.0;
+        sound_track->setDisable(state == State::Stopped || !(length > 0));
+        if (sound_track->getMax() != std::max(length, 0.001)) {
+            sound_track->setMax(std::max(length, 0.001));
+            sound_track->setBlockIncrement(std::max(length, 0.001) / 20);
+        }
+        if (!sound_track->held()) {
+            sound_track->show(position);
+        }
+        const double shown = sound_track->held() ? sound_track->getValue() : position;
+        sound_time->setText(clock_text(shown) + " / " + clock_text(length));
+        const double time_width = std::min(kSoundTimeWidth, inner / 2);
+        const double track = std::max(0.0, inner - time_width - kAxisGap);
+        place(*sound_track, left + kPad, track, kRowHeight);
+        place(*sound_time, left + kPad + track + kAxisGap, time_width, kRowHeight);
+        y += kRowHeight + kRowGap;
     }
 
     void scroll_by(double delta) {
@@ -1649,6 +2031,25 @@ void PropertiesPane::handleScroll(jadefx::ScrollEvent& event) {
     if (const auto impl = owner.lock()) {
         impl->scroll_by(event.deltaY);
         event.consume();
+    }
+}
+
+void PropertiesPane::renderContent(jadefx::UiRenderer& renderer, float opacity) {
+    IdePane::renderContent(renderer, opacity);
+    if (const auto impl = owner.lock()) {
+        impl->draw_previews();
+    }
+}
+
+void PropertiesPane::sceneChanged(jadefx::Scene* previous) {
+    IdePane::sceneChanged(previous);
+    // As the Assets pane does: release the ball's GL objects while the context
+    // that made them is current. Scene teardown runs after the context is gone.
+    if (previous == nullptr || previous->isTearingDown() || getScene() == previous) {
+        return;
+    }
+    if (const auto impl = owner.lock()) {
+        impl->ball->release();
     }
 }
 
@@ -1766,6 +2167,40 @@ jadefx::TextField* PropertiesPanel::asset_pick_field() const {
 
 jadefx::Node* PropertiesPanel::asset_pick_row(engine_core::InstanceId asset) const {
     return asset_picking() ? impl_->asset_picker->row(asset) : nullptr;
+}
+
+std::string PropertiesPanel::preview_class() const {
+    switch (impl_->asset_preview.kind) {
+    case AssetPreview::Kind::Texture:
+        return "Texture";
+    case AssetPreview::Kind::Material:
+        return "Material";
+    case AssetPreview::Kind::Sound:
+        return "Sound";
+    case AssetPreview::Kind::None:
+        break;
+    }
+    return {};
+}
+
+void PropertiesPanel::stop_sound() {
+    if (impl_->sound) {
+        impl_->sound->stop();
+    }
+}
+
+bool PropertiesPanel::sound_live() const {
+    return impl_->sound_state() != engine_core::SoundPreview::State::Stopped;
+}
+
+jadefx::Node* PropertiesPanel::sound_control(int part) const {
+    if (impl_->asset_preview.kind != AssetPreview::Kind::Sound || part < 0) {
+        return nullptr;
+    }
+    return part < kSoundButtons      ? static_cast<jadefx::Node*>(impl_->sound_buttons[part].get())
+           : part == kSoundButtons   ? static_cast<jadefx::Node*>(impl_->sound_track.get())
+           : part == kSoundButtons + 1 ? static_cast<jadefx::Node*>(impl_->sound_time.get())
+                                     : nullptr;
 }
 
 }  // namespace ide

@@ -712,6 +712,8 @@ void IdeLayout::show_session(PlayState state) {
 
 void IdeLayout::start_test() {
     engine_core::Engine& engine = runner_.simulation();
+    // A sound auditioned in Properties is not heard over the game.
+    properties_->stop_sound();
     // Open editors write Source before the place is frozen.
     flush_editors();
     // Edit mode is the authored place. Freeze that tree before play so
@@ -750,6 +752,8 @@ void IdeLayout::resume_test() {
 
 void IdeLayout::stop_test() {
     engine_core::Engine& engine = runner_.simulation();
+    // Nor one started during the test left playing after it.
+    properties_->stop_sound();
     // Pause first so stop_simulation runs on this thread once the sim
     // step has released the write lock. That aborts scripts and restores
     // the place before another Heartbeat can run. Already paused is the

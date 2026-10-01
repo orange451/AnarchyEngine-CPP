@@ -478,6 +478,7 @@ add_library(engine_core STATIC
     src/engine_core/Ecs.cpp
     src/engine_core/PhysicsWorld.cpp
     src/engine_core/AudioWorld.cpp
+    src/engine_core/SoundPreview.cpp
 )
 set(ENGINE_PACKAGES engine_core engine_datatypes engine_instances engine_services)
 foreach(package IN LISTS ENGINE_PACKAGES)
@@ -494,7 +495,7 @@ target_link_libraries(engine_core PRIVATE flecs)
 target_link_libraries(engine_instances PRIVATE flecs)
 # Box3D stays private too: only PhysicsWorld.cpp includes it.
 target_link_libraries(engine_core PRIVATE box3d)
-# So does miniaudio: only AudioWorld.cpp includes it.
+# So does miniaudio: only AudioWorld.cpp and SoundPreview.cpp include it.
 target_link_libraries(engine_core PRIVATE miniaudio)
 target_link_libraries(engine_core PRIVATE Luau.Compiler Luau.VM Luau.Analysis)
 # Vector3 is a Luau vector, and Enum items are Luau userdata.

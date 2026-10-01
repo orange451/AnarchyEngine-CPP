@@ -68,6 +68,16 @@ using PropertiesRun = std::function<void(std::function<void(engine_core::DataMod
 // class's icon before the Name, and clicking it opens the asset picker the
 // Prefab editor's slots use: every asset of that class under Assets, filtered
 // as you type. A pick is one undo step; None, there while one is set, sets nil.
+//
+// A single selected Texture, Material, or Sound has a Preview section under
+// its rows. A Texture shows its image and a Material its look on a ball, as
+// the Assets pane draws them, fitted in a square frame; either follows an
+// edit as it is made. A Sound has Play, Pause, Resume, and Stop, which play
+// its file once through even while the place is not playing, each enabled
+// only when it applies, and a track under them that follows the sound, with
+// the time and length beside it. Dragging the track's thumb seeks. Selecting
+// anything else stops it. A SoundEmitter has the same, for its Sound, played
+// at its Volume and Pitch and looping when Looped; editing those is heard at once.
 class PropertiesPanel {
 public:
     PropertiesPanel();
@@ -109,6 +119,17 @@ public:
     bool asset_picking() const;
     jadefx::TextField* asset_pick_field() const;
     jadefx::Node* asset_pick_row(engine_core::InstanceId asset) const;
+    // The Preview section's class, "Texture", "Material", or "Sound", or
+    // empty while there is none.
+    std::string preview_class() const;
+    // Silences the Preview's sound, as a test starting or stopping does, so
+    // it is never heard over the game, nor left from before it.
+    void stop_sound();
+    // Whether the Preview's sound plays or is paused.
+    bool sound_live() const;
+    // A shown Sound's transport: 0 Play, 1 Pause, 2 Resume, 3 Stop, 4 the
+    // track, 5 the time beside it. Null while no Sound is shown.
+    jadefx::Node* sound_control(int part) const;
 
     struct Impl;
 

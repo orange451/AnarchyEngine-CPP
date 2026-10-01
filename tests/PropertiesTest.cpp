@@ -15,11 +15,14 @@
 #include "PhysicsObject.hpp"
 #include "Enum.hpp"
 #include "Script.hpp"
+#include "SoundEmitter.hpp"
 #include "jadefx/jadefx.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -1082,6 +1085,8 @@ InstanceId MakeAsset(Game& game, const char* klass, const char* name, InstanceId
         object = &game.create<engine_core::Mesh>();
     } else if (kind == "Material") {
         object = &game.create<engine_core::Material>();
+    } else if (kind == "Sound") {
+        object = &game.create<engine_core::Sound>();
     }
     game.set_name(object->id(), name);
     game.set_parent(object->id(), parent);
@@ -1389,7 +1394,140 @@ void TestAssetReferencePicker() {
     engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
 }
 
+// A single Texture, Material, or Sound has a Preview section; a Sound's is a
+// Play button. Anything else, or more than one, has none.
+void TestAssetPreview() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Rig rig;
+    const InstanceId brick = MakeAsset(rig.game, "Texture", "Brick", rig.game.service("Textures"));
+    const InstanceId wall = MakeAsset(rig.game, "Material", "Wall", rig.game.service("Materials"));
+    const InstanceId boom = MakeAsset(rig.game, "Sound", "Boom", rig.game.service("Audio"));
+    rig.frame();
+
+    rig.select({brick});
+    Expect(rig.panel.preview_class() == "Texture", "a Texture has a preview");
+    Expect(rig.panel.sound_control(0) == nullptr, "with no transport");
+    rig.select({wall});
+    Expect(rig.panel.preview_class() == "Material", "a Material has a preview");
+    rig.select({boom});
+    rig.frame();
+    Expect(rig.panel.preview_class() == "Sound", "a Sound has a preview");
+    const char* names[4] = {"Play", "Pause", "Resume", "Stop"};
+    for (int part = 0; part < 4; ++part) {
+        auto* button = dynamic_cast<jadefx::Button*>(rig.panel.sound_control(part));
+        Expect(button != nullptr && button->isVisible() && button->getText() == names[part],
+               "Play, Pause, Resume, and Stop, in order");
+        // Stopped, with no Path: nothing applies.
+        Expect(button != nullptr && button->isDisabled(), "each disabled while there is nothing to play");
+    }
+    jadefx::Node* track = rig.panel.sound_control(4);
+    auto* time = dynamic_cast<jadefx::Label*>(rig.panel.sound_control(5));
+    Expect(track != nullptr && track->isVisible() && track->isDisabled(), "a track, disabled while stopped");
+    Expect(time != nullptr && time->getText() == "0:00 / 0:00", "and the time beside it");
+    // A SoundEmitter has the same transport, for its Sound.
+    const InstanceId speaker = rig.add<engine_core::SoundEmitter>("Speaker");
+    rig.select({speaker});
+    rig.frame();
+    Expect(rig.panel.preview_class() == "Sound", "a SoundEmitter has a Sound's preview");
+    auto* emitter_play = dynamic_cast<jadefx::Button*>(rig.panel.sound_control(0));
+    Expect(emitter_play != nullptr && emitter_play->isVisible() && emitter_play->isDisabled(),
+           "with Play disabled while it has no Sound");
+    ide::apply_edit(rig.game, {speaker}, RefEdit("Sound", boom));
+    rig.frame();
+    Expect(rig.panel.preview_class() == "Sound", "and still once it has one");
+    rig.select({brick, wall});
+    Expect(rig.panel.preview_class().empty(), "two assets have no preview");
+    rig.select({rig.a});
+    rig.frame();
+    Expect(rig.panel.preview_class().empty(), "nor does a GameObject");
+    Expect(track != nullptr && !track->isVisible(), "and the transport goes");
+    engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+}
+
+// Two seconds of silence as a 16-bit mono WAV, for the preview to play.
+void WriteSilentWav(const std::filesystem::path& file) {
+    const std::uint32_t rate = 8000;
+    const std::uint32_t bytes = rate * 2 * 2;
+    std::ofstream out(file, std::ios::binary);
+    auto u32 = [&out](std::uint32_t v) { out.write(reinterpret_cast<const char*>(&v), 4); };
+    auto u16 = [&out](std::uint16_t v) { out.write(reinterpret_cast<const char*>(&v), 2); };
+    out.write("RIFF", 4);
+    u32(36 + bytes);
+    out.write("WAVEfmt ", 8);
+    u32(16);
+    u16(1);
+    u16(1);
+    u32(rate);
+    u32(rate * 2);
+    u16(2);
+    u16(16);
+    out.write("data", 4);
+    u32(bytes);
+    const std::vector<char> silence(bytes, 0);
+    out.write(silence.data(), silence.size());
+}
+
+// Deleting what the preview plays, a Sound, an emitter's Sound, or the
+// emitter, stops it, and so does stop_sound, which a test starting or
+// stopping calls. Skipped where no audio device opens.
+void TestSoundPreviewStops() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Rig rig;
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "anarchy-properties-sound";
+    std::filesystem::create_directories(root);
+    WriteSilentWav(root / "hush.wav");
+    rig.game.set_resources_root(root);
+    auto make_sound = [&rig](const char* name) {
+        const InstanceId id = MakeAsset(rig.game, "Sound", name, rig.game.service("Audio"));
+        dynamic_cast<engine_core::Sound*>(rig.game.instance(id))->set_path("hush.wav");
+        return id;
+    };
+    const InstanceId alone = make_sound("Alone");
+    const InstanceId heard = make_sound("Heard");
+    const InstanceId kept = make_sound("Kept");
+    const InstanceId speaker = rig.add<engine_core::SoundEmitter>("Speaker");
+    const InstanceId other = rig.add<engine_core::SoundEmitter>("Other");
+    ide::apply_edit(rig.game, {speaker}, RefEdit("Sound", heard));
+    ide::apply_edit(rig.game, {other}, RefEdit("Sound", kept));
+
+    auto play = [&rig](InstanceId id) {
+        rig.select({id});
+        rig.frame();
+        rig.click(rig.panel.sound_control(0));
+        rig.frame();
+        return rig.panel.sound_live();
+    };
+    if (!play(alone)) {
+        std::fprintf(stderr, "skip TestSoundPreviewStops: no audio device (%s)\n", rig.panel.status().c_str());
+        engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+        return;
+    }
+    rig.game.destroy(alone);
+    rig.frame();
+    Expect(!rig.panel.sound_live(), "deleting the Sound playing stops it");
+
+    Expect(play(speaker), "an emitter's Sound plays");
+    rig.game.destroy(heard);
+    rig.frame();
+    Expect(!rig.panel.sound_live(), "deleting the emitter's Sound stops it");
+
+    Expect(play(other), "another emitter's Sound plays");
+    rig.game.destroy(other);
+    rig.frame();
+    Expect(!rig.panel.sound_live(), "deleting the emitter stops it");
+
+    Expect(play(kept), "a Sound plays");
+    rig.panel.stop_sound();
+    rig.frame();
+    Expect(!rig.panel.sound_live(), "stop_sound stops it, as Test and Stop do");
+    auto* stop = dynamic_cast<jadefx::Button*>(rig.panel.sound_control(3));
+    Expect(stop != nullptr && stop->isDisabled(), "and the transport reads stopped");
+    engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+}
+
 int main() {
+    TestAssetPreview();
+    TestSoundPreviewStops();
     TestEnumRowAndShownWhen();
     TestAssetReferencePicker();
     TestR1SingleSelectionEditsName();

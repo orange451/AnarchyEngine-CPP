@@ -109,6 +109,10 @@ public:
     // Stops a running test, closes script editors, and loads the project at root.
     // A failure shows an alert and leaves the current place open.
     void open_project_at(const std::filesystem::path& root);
+    // Writes the place to root as Save As does, and binds there. A place never
+    // saved also moves what its scratch folder holds into the project's
+    // resources/. False, after an alert saying why, when it cannot.
+    bool save_project_to(const std::filesystem::path& root);
     // True when a save would write something, or an editor holds text its
     // script's Source does not have yet.
     bool has_unsaved_changes();
@@ -160,12 +164,12 @@ private:
     void flush_editors();
     // Runs the built-in plugins again. The place was just made, opened, or rebuilt.
     void load_plugins();
+    // An empty, untitled place, with a new scratch folder for its resources.
     void new_place();
     void open_project();
     // then runs after a successful save. A cancelled dialog or a failure skips it.
     void save_project(std::function<void()> then = {});
     void save_project_as(std::function<void()> then = {});
-    bool save_project_to(const std::filesystem::path& root);
     // Saves the open project and runs then. When files changed on disk since it
     // was opened or saved, asks whether to overwrite them and returns false; if
     // Overwrite saves, then runs after that save. overwrite, when set, lists the
@@ -222,6 +226,12 @@ private:
     // Writes the project's name and folder to the registry entry when they changed.
     void publish_studio();
     std::filesystem::path dialog_directory() const;
+    // The place's resources folder: the project's, or scratch_resources_.
+    std::filesystem::path place_resources() const;
+    // Points the place's resources at a new scratch folder, deleting the old one.
+    void begin_scratch();
+    // Deletes the scratch folder and forgets it.
+    void end_scratch();
     // Shows the folder picker, unless one is up already, starting in
     // dialog_directory, and calls chosen with the folder picked. `hint` follows
     // the message shown when the system has no picker.
@@ -325,14 +335,19 @@ private:
     // A drag from the Assets pane onto view that holds a Prefab adds each
     // Prefab in it as a GameObject. A drag with none is refused.
     void accept_prefab_drops(jadefx::Node& view);
-    // Image files dropped on node, or on anything under it that does not take
-    // them, go to import_textures. A drop with none is refused.
-    void accept_texture_drops(jadefx::Node& node);
-    // Asks whether to import the image files among files. Yes copies each into
-    // the project's resources, as import_texture_file does, makes a Texture
-    // under Assets.Textures named after its file with Path set to the copy, as
-    // one undo step, and selects them. Needs a project, and a stopped test.
-    void import_textures(const std::vector<std::string>& files);
+    // Image and model files dropped on node, or on anything under it that does
+    // not take them, go to import_files. A drop with neither is refused.
+    void accept_file_drops(jadefx::Node& node);
+    // Asks whether to import the image and model files among files. Yes copies
+    // each image into the project's resources, as import_texture_file does,
+    // and makes a Texture under Assets.Textures named after its file with Path
+    // set to the copy. Each model is read and written out as import_model_file
+    // does, then made a Prefab with its assets, as build_model_assets does;
+    // what it left out goes to the console. All of it is one undo step, and
+    // the Textures and Prefabs made are selected. Needs a stopped test. A
+    // place never saved imports into its scratch folder, which its first Save
+    // moves into the project.
+    void import_files(const std::vector<std::string>& files);
     // Where Search and Conflicts dock: beside the left explorer, else where editors dock.
     IdeDock* side_home();
     // The ribbon's count and the Conflicts window's rows, from conflicts_.
@@ -478,6 +493,11 @@ private:
     PluginLoader plugins_;
     // The open project. Null until Open or Save As.
     std::unique_ptr<engine_core::Project> project_;
+    // While there is no project, the place's resources folder: what imports
+    // and Mesh shapes write goes here until the first Save moves it into the
+    // project. Made by start and New, deleted by New, Open, and the destructor.
+    // Empty while a project is open.
+    std::filesystem::path scratch_resources_;
     bool dialog_open_ = false;
     bool prompt_open_ = false;
     // Project::place_fingerprint when the place was last opened, saved, or made new.

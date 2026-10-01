@@ -103,16 +103,16 @@ int RunTextureImportTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     };
 
     expect(!drop({outside / "notes.txt"}), "a drop with no image is not taken");
-    expect(button("import-textures-import") == nullptr, "and asks nothing");
+    expect(button("import-files-import") == nullptr, "and asks nothing");
 
     expect(drop({outside / "Brick.png", outside / "notes.txt", outside / "Stone.jpg"}), "a drop with images is taken");
-    expect(button("import-textures-import") != nullptr, "and asks before importing");
-    click("import-textures-cancel");
+    expect(button("import-files-import") != nullptr, "and asks before importing");
+    click("import-files-cancel");
     expect(textures().empty(), "Cancel makes no Texture");
     expect(!fs::exists(root / "resources" / "textures" / "Brick.png"), "and copies no file");
 
     drop({outside / "Brick.png", outside / "notes.txt", outside / "Stone.jpg"});
-    click("import-textures-import");
+    click("import-files-import");
     std::vector<Imported> made = textures();
     expect(made.size() == 2, "Import makes a Texture for each image, and none for the other file");
     if (made.size() == 2) {
@@ -126,7 +126,7 @@ int RunTextureImportTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     // The same file again shares the copy; another with its name gets its own.
     WriteBytes(folder / "Brick.png", "other brick");
     drop({outside / "Brick.png", folder / "Brick.png"});
-    click("import-textures-import");
+    click("import-files-import");
     made = textures();
     expect(made.size() == 4, "a second import adds Textures");
     if (made.size() == 4) {
@@ -137,7 +137,7 @@ int RunTextureImportTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
 
     // A file already in the resources folder is named where it is.
     drop({root / "resources" / "textures" / "Brick-2.png"});
-    click("import-textures-import");
+    click("import-files-import");
     made = textures();
     expect(made.size() == 5 && made.back().path == "textures/Brick-2.png", "a resource file is not copied again");
     expect(!fs::exists(root / "resources" / "textures" / "Brick-2-2.png"), "and leaves no copy");

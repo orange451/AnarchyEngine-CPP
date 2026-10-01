@@ -135,9 +135,11 @@ private:
 
 // A PBR material: DiffuseTexture, NormalTexture, RoughnessTexture, and
 // MetalnessTexture, each a Texture or nil; Color, a Color3 that tints the
-// surface; and Reflectivity and Transparency, each 0 to 1 on its slider.
-// Those two take any finite number, as a Roblox Transparency does; whatever
-// draws them reads them clamped to 0..1.
+// surface; Emissive, a Color3 of light the surface gives off itself; and
+// Metalness, Roughness, Reflectivity, and Transparency, each 0 to 1 on its
+// slider. Metalness and Roughness scale their textures. Those four take any
+// finite number, as a Roblox Transparency does; whatever draws them reads
+// them clamped to 0..1.
 class Material : public ReferenceAsset {
 public:
     // reference() indices.
@@ -148,18 +150,27 @@ public:
 
     static constexpr double kDefaultReflectivity = 0.5;
     static constexpr double kDefaultTransparency = 0.0;
+    static constexpr double kDefaultMetalness = 0.0;
+    static constexpr double kDefaultRoughness = 0.4;
     static constexpr ColorRgb kDefaultColor{1.f, 1.f, 1.f, 1.f};
+    static constexpr ColorRgb kDefaultEmissive{0.f, 0.f, 0.f, 1.f};
 
     using ReferenceAsset::ReferenceAsset;
     const char* class_name() const override;
 
     double reflectivity() const { return reflectivity_; }
     double transparency() const { return transparency_; }
+    double metalness() const { return metalness_; }
+    double roughness() const { return roughness_; }
     ColorRgb color() const { return color_; }
+    ColorRgb emissive() const { return emissive_; }
     // SimulationThread. A value that is not finite is refused: returns why and changes nothing.
     std::optional<std::string> set_reflectivity(double value);
     std::optional<std::string> set_transparency(double value);
+    std::optional<std::string> set_metalness(double value);
+    std::optional<std::string> set_roughness(double value);
     std::optional<std::string> set_color(ColorRgb color);
+    std::optional<std::string> set_emissive(ColorRgb color);
 
 protected:
     const ReferenceSpec* reference_specs(std::size_t& count) const override;
@@ -167,10 +178,14 @@ protected:
 
 private:
     std::optional<std::string> set_number(const char* property, double& slot, double value);
+    std::optional<std::string> set_color3(const char* property, ColorRgb& slot, ColorRgb color);
 
     double reflectivity_ = kDefaultReflectivity;
     double transparency_ = kDefaultTransparency;
+    double metalness_ = kDefaultMetalness;
+    double roughness_ = kDefaultRoughness;
     ColorRgb color_ = kDefaultColor;
+    ColorRgb emissive_ = kDefaultEmissive;
 };
 
 // Joins a Mesh and a Material. Lives only in a Prefab.

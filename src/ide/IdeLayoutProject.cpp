@@ -6,7 +6,9 @@
 #include "IdeAssets.hpp"
 #include "IdeLayoutInternal.hpp"
 #include "LockWaits.hpp"
+#include "ModelImport.hpp"
 #include "PropertySheet.hpp"
+#include "ScratchResources.hpp"
 #include "TextureImport.hpp"
 
 #include <chrono>
@@ -115,6 +117,23 @@ std::vector<std::string> ImageFiles(const std::vector<std::string>& files) {
     return images;
 }
 
+// The model files among a drop's files.
+std::vector<std::string> ModelFiles(const std::vector<std::string>& files) {
+    std::vector<std::string> models;
+    std::copy_if(files.begin(), files.end(), std::back_inserter(models), is_model_file);
+    return models;
+}
+
+bool HasImports(const std::vector<std::string>& files) {
+    return std::any_of(files.begin(), files.end(),
+                       [](const std::string& file) { return is_texture_file(file) || is_model_file(file); });
+}
+
+// "1 model", "3 textures".
+std::string Count(std::size_t count, const char* one, const char* many) {
+    return std::to_string(count) + " " + (count == 1 ? one : many);
+}
+
 // How many file names the import question lists before it counts the rest.
 constexpr std::size_t kListedImports = 12;
 
@@ -157,45 +176,59 @@ void IdeLayout::accept_prefab_drops(jadefx::Node& view) {
     });
 }
 
-void IdeLayout::accept_texture_drops(jadefx::Node& node) {
+void IdeLayout::accept_file_drops(jadefx::Node& node) {
     node.setOnDragOver([](jadefx::DragEvent& event) {
-        if (event.dragboard != nullptr && !ImageFiles(event.getDragboard().getFiles()).empty()) {
+        if (event.dragboard != nullptr && HasImports(event.getDragboard().getFiles())) {
             event.acceptTransferModes(jadefx::TransferMode::Copy);
             event.consume();
         }
     });
     node.setOnDragDropped([this](jadefx::DragEvent& event) {
-        if (event.dragboard == nullptr || ImageFiles(event.getDragboard().getFiles()).empty()) {
+        if (event.dragboard == nullptr || !HasImports(event.getDragboard().getFiles())) {
             return;
         }
         // Taken even when it asks nothing: the reason shows as a toast.
-        import_textures(event.getDragboard().getFiles());
+        import_files(event.getDragboard().getFiles());
         event.setDropCompleted(true);
         event.consume();
     });
 }
 
-void IdeLayout::import_textures(const std::vector<std::string>& files) {
+void IdeLayout::import_files(const std::vector<std::string>& files) {
     std::vector<std::string> images = ImageFiles(files);
-    if (images.empty() || scene_ == nullptr || prompt_open_ || dialog_open_) {
+    std::vector<std::string> models = ModelFiles(files);
+    if ((images.empty() && models.empty()) || scene_ == nullptr || prompt_open_ || dialog_open_) {
         return;
     }
+    const std::string what = models.empty() ? "textures" : images.empty() ? "models" : "files";
     if (in_test()) {
-        show_toast("Stop the test to import textures");
+        show_toast("Stop the test to import " + what);
         return;
     }
-    if (!project_) {
-        show_toast("Open or save a project first: imported textures are copied into its resources folder");
+    // A place never saved imports into its scratch folder.
+    const std::filesystem::path resources = place_resources();
+    if (resources.empty()) {
+        show_toast("Nowhere to import " + what + ": this system has no temporary folder. Save the place first");
         return;
     }
 
-    const std::size_t count = images.size();
+    // Models first, as the question names them.
+    std::vector<std::string> named = models;
+    named.insert(named.end(), images.begin(), images.end());
+    const std::size_t count = named.size();
     std::string listed;
     for (std::size_t i = 0; i < count && i < kListedImports; ++i) {
-        listed += (i == 0 ? "" : "\n") + utf8_path(path_from_utf8(images[i]).filename());
+        listed += (i == 0 ? "" : "\n") + utf8_path(path_from_utf8(named[i]).filename());
     }
     if (count > kListedImports) {
         listed += "\nand " + std::to_string(count - kListedImports) + " more";
+    }
+    std::string header = "Import ";
+    if (!models.empty()) {
+        header += Count(models.size(), "model", "models") + (images.empty() ? "" : " and ");
+    }
+    if (!images.empty()) {
+        header += Count(images.size(), "texture", "textures");
     }
 
     prompt_open_ = true;
@@ -203,18 +236,18 @@ void IdeLayout::import_textures(const std::vector<std::string>& files) {
     auto alert = std::make_shared<jadefx::Alert>(jadefx::AlertType::Confirmation, listed,
                                                  std::vector<jadefx::ButtonType>{import, jadefx::ButtonType::Cancel()});
     alert->setTitle("Anarchy Engine");
-    alert->setHeaderText(count == 1 ? "Import 1 texture?" : "Import " + std::to_string(count) + " textures?");
-    alert->setOnClosed([this, import, images = std::move(images)](const jadefx::ButtonType* choice) {
+    alert->setHeaderText(header + "?");
+    alert->setOnClosed([this, import, resources, images = std::move(images),
+                        models = std::move(models)](const jadefx::ButtonType* choice) {
         prompt_open_ = false;
         if (choice == nullptr || !(*choice == import)) {
             return;
         }
-        // The project or the test may have changed while it asked.
-        if (!project_ || in_test()) {
-            show_toast("The textures were not imported: the project changed while it asked");
+        // The place may have been replaced, or a test started, while it asked.
+        if (place_resources() != resources || in_test()) {
+            show_toast("Nothing was imported: the place changed while it asked");
             return;
         }
-        const std::filesystem::path resources = project_->resources_root();
         // Each copied file's Texture Name and Path.
         std::vector<std::pair<std::string, std::string>> textures;
         std::string problem;
@@ -226,20 +259,34 @@ void IdeLayout::import_textures(const std::vector<std::string>& files) {
                 problem = "Could not import " + utf8_path(path_from_utf8(image).filename()) + ": " + error;
             }
         }
-        if (textures.empty()) {
+        // Read here, on the UI thread: a large model holds the window until it is read.
+        std::vector<ImportedModel> imported;
+        for (const std::string& file : models) {
+            std::string error;
+            if (std::optional<ImportedModel> model = import_model_file(resources, file, error)) {
+                imported.push_back(std::move(*model));
+            } else if (problem.empty()) {
+                problem = "Could not import " + utf8_path(path_from_utf8(file).filename()) + ": " + error;
+            }
+        }
+        if (textures.empty() && imported.empty()) {
             show_toast(std::move(problem));
             return;
         }
-        runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), textures = std::move(textures),
+        engine_core::ScriptRuntime* scripts = &runner_.simulation().scripts();
+        runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), scripts,
+                                            textures = std::move(textures), imported = std::move(imported),
                                             problem = std::move(problem)](engine_core::DataModel& world) mutable {
-            const engine_core::InstanceId folder = world.service("Textures");
-            if (folder == 0) {
-                toast_later(this, alive, "This place has no Assets.Textures to import into");
-                return;
-            }
-            world.history().set_pending_gesture("Import Textures");
+            world.history().set_pending_gesture(imported.empty() ? "Import Textures" : "Import Models");
             std::vector<engine_core::InstanceId> made;
+            const engine_core::InstanceId folder = world.service("Textures");
+            if (!textures.empty() && folder == 0 && problem.empty()) {
+                problem = "This place has no Assets.Textures to import into";
+            }
             for (const auto& [name, path] : textures) {
+                if (folder == 0) {
+                    break;
+                }
                 std::string refused;
                 const engine_core::InstanceId id = insert_instance(world, "Texture", folder, refused);
                 if (id == 0) {
@@ -256,9 +303,34 @@ void IdeLayout::import_textures(const std::vector<std::string>& files) {
                 }
                 made.push_back(id);
             }
+            std::string summary;
+            bool noted = false;
+            for (const ImportedModel& model : imported) {
+                std::string error;
+                const engine_core::InstanceId prefab = build_model_assets(world, model, error);
+                if (prefab == 0) {
+                    if (problem.empty()) {
+                        problem = "Could not import " + model.name + ": " + error;
+                    }
+                    continue;
+                }
+                made.push_back(prefab);
+                for (const std::string& note : model.notes) {
+                    scripts->append_output(engine_core::ScriptRuntime::OutputKind::Print, model.name + ": " + note);
+                }
+                noted = noted || !model.notes.empty();
+                summary = "Imported " + model.name + ": " + Count(model.meshes.size(), "mesh", "meshes") + ", " +
+                          Count(model.materials.size(), "material", "materials") + ", " +
+                          Count(model.textures.size(), "texture", "textures");
+            }
             CloseGesture(world);
             if (!problem.empty()) {
                 toast_later(this, alive, std::move(problem));
+            } else if (!summary.empty()) {
+                if (imported.size() > 1) {
+                    summary = "Imported " + Count(imported.size(), "model", "models");
+                }
+                toast_later(this, alive, summary + (noted ? ". The console says what was left out" : ""));
             }
             if (!made.empty()) {
                 world.selection().set(std::move(made));
@@ -273,10 +345,10 @@ void IdeLayout::import_textures(const std::vector<std::string>& files) {
     alert->show(*scene_);
     // Stable names for the two answers, so a test can find them.
     if (jadefx::Button* button = alert->lookupButton(import)) {
-        button->setElementId("import-textures-import");
+        button->setElementId("import-files-import");
     }
     if (jadefx::Button* button = alert->lookupButton(jadefx::ButtonType::Cancel())) {
-        button->setElementId("import-textures-cancel");
+        button->setElementId("import-files-cancel");
     }
     alerts_.push_back(std::move(alert));
 }
@@ -512,6 +584,8 @@ void IdeLayout::new_place() {
     }
     run_now([](engine_core::DataModel& game) { engine_core::Project::reset_place(game); });
     project_.reset();
+    // Whatever the last untitled place imported went with it.
+    begin_scratch();
     forget_conflicts();
     mark_saved();
     load_plugins();
@@ -571,6 +645,7 @@ void IdeLayout::open_project_at(const std::filesystem::path& root) {
         clip_->held = false;
     }
     project_ = std::move(loaded);
+    end_scratch();
     forget_conflicts();
     mark_saved();
     load_plugins();
@@ -732,6 +807,15 @@ bool IdeLayout::save_project_to(const std::filesystem::path& root) {
     if (!error.empty()) {
         show_error("Could not save project", error);
         return false;
+    }
+    // A first save: what the place added to resources so far joins the project.
+    if (!scratch_resources_.empty()) {
+        if (!move_scratch_resources(scratch_resources_, project_->resources_root(), error)) {
+            // Left where it is, and no longer deleted, so the files can still be found.
+            show_error("Some resources were not moved into the project",
+                       "They are still in " + utf8_path(scratch_resources_) + ": " + error);
+        }
+        scratch_resources_.clear();
     }
     // Another folder, which this save wrote whole.
     forget_conflicts();

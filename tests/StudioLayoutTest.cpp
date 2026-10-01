@@ -34,6 +34,8 @@ int RunThemeTests(jadefx::Scene& scene);
 int RunPreferencesTests();
 int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunTextureImportTests(ide::IdeLayout& layout, jadefx::Scene& scene);
+int RunModelImportTests(ide::IdeLayout& layout, jadefx::Scene& scene);
+int RunScratchResourcesTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunScriptTabTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunTerminalPaneTests();
@@ -869,6 +871,8 @@ int main() {
     }
     failures += RunSaveConflictTests(layout, *scene);
     failures += RunTextureImportTests(layout, *scene);
+    failures += RunModelImportTests(layout, *scene);
+    failures += RunScratchResourcesTests(layout, *scene);
     failures += RunConflictsTests(layout, *scene);
     // Conflicts opened beside the game explorer, the built-in layout's only
     // one, and is in front of it. Edit needs an explorer showing.

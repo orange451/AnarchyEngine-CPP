@@ -10,6 +10,7 @@
 #include <GLFW/glfw3.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -19,7 +20,7 @@
 
 // By hand, not ctest (it needs a GL 3.3 context), from the repository root so
 // resources/shaders is found: scene-render-check draws what the Scene View
-// draws for a GameObject with a Prefab. A cube baked to AMESH in a scratch
+// draws for a GameObject with a Prefab, lit through the legacy pipeline. A cube baked to AMESH in a scratch
 // resources folder goes through MeshCache and Renderer, with the fixed
 // camera, and the check reads the pixels back.
 namespace {
@@ -80,6 +81,12 @@ bool IsClear(Pixel p) {
 std::string Text(Pixel p) {
     return std::to_string(p.r) + "," + std::to_string(p.g) + "," + std::to_string(p.b);
 }
+
+int Sum(Pixel p) { return p.r + p.g + p.b; }
+
+// The legacy pipeline's stand-in sky lights every surface a faint gray, so a
+// channel the surface's color has none of still reads a little above 0.
+constexpr int kSkyTint = 4;
 
 // An uncompressed 24-bit TGA, 4 by 4, written top row first: the top two rows
 // red, the bottom two blue.
@@ -162,13 +169,24 @@ int main() {
         const Pixel corner = ReadPixel(2, 2);
         Expect(!IsClear(middle), "the cube covers the middle of the view (" + Text(middle) + ")");
         Expect(IsClear(corner), "the corner is the clear color (" + Text(corner) + ")");
-        // Lit from above: the top face is brighter than the front face, and both are gray.
+        // With no lights, only the ambient: every face the same gray.
         // From (0, 3, 7) the top face is 4 to 9 of 64 half-height pixels above the
         // middle, and the front face runs from 4 above to 10 below.
-        const Pixel top = ReadPixel(fbWidth / 2, fbHeight / 2 + fbHeight * 3 / 64);
-        const Pixel front = ReadPixel(fbWidth / 2, fbHeight / 2 - fbHeight * 3 / 64);
-        Expect(top.r > front.r && top.r == top.g && top.g == top.b, "the top face is lit brighter (" + Text(top) +
-                                                                        " over " + Text(front) + ")");
+        const int topY = fbHeight / 2 + fbHeight * 3 / 64;
+        const int frontY = fbHeight / 2 - fbHeight * 3 / 64;
+        const Pixel ambientTop = ReadPixel(fbWidth / 2, topY);
+        const Pixel ambientFront = ReadPixel(fbWidth / 2, frontY);
+        Expect(Sum(ambientTop) > 0 && std::abs(Sum(ambientTop) - Sum(ambientFront)) <= 3,
+               "the ambient lights every face alike (" + Text(ambientTop) + " and " + Text(ambientFront) + ")");
+        // A PointLight above: the top face is brighter than the front face, and both are gray.
+        runner::LightDraw above;
+        above.position[1] = 3.f;
+        renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1, &above, 1);
+        const Pixel top = ReadPixel(fbWidth / 2, topY);
+        const Pixel front = ReadPixel(fbWidth / 2, frontY);
+        Expect(top.r > front.r && top.r == top.g && top.g == top.b, "a light above lights the top face brighter (" +
+                                                                        Text(top) + " over " + Text(front) + ")");
+        Expect(std::abs(Sum(front) - Sum(ambientFront)) <= 3, "and leaves the face turned from it at the ambient");
         Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "drawing leaves no GL error");
 
         // Moved by its Transform: 3 units right leaves the middle clear.
@@ -211,6 +229,136 @@ int main() {
         renderer.setCamera(engine_core::matrix4_look_at({0.f, 3.f, 7.f}, {0.f, 0.f, 0.f}, up),
                            runner::Renderer::kCameraFovYDegrees);
 
+        // The legacy pipeline's lights, glow, see-through surfaces, and tone map.
+        {
+            const int midX = fbWidth / 2;
+            const int midY = fbHeight / 2;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1);
+            const Pixel unlit = ReadPixel(midX, midY);
+
+            // A PointLight in front of the cube, within its Radius, lights the front face.
+            runner::LightDraw point;
+            point.position[2] = 3.f;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1, &point, 1);
+            const Pixel pointLit = ReadPixel(midX, midY);
+            Expect(Sum(pointLit) > Sum(unlit) + 30, "a PointLight lights the face toward it (" + Text(pointLit) +
+                                                        " over " + Text(unlit) + ")");
+            runner::LightDraw shortReach = point;
+            shortReach.radius = 1.f;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1, &shortReach, 1);
+            Expect(std::abs(Sum(ReadPixel(midX, midY)) - Sum(unlit)) <= 3, "a light does not reach past its Radius");
+            runner::LightDraw dark = point;
+            dark.intensity = 0.f;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1, &dark, 1);
+            Expect(std::abs(Sum(ReadPixel(midX, midY)) - Sum(unlit)) <= 3, "a light of Intensity 0 gives none");
+            runner::LightDraw red = point;
+            red.color[1] = 0.f;
+            red.color[2] = 0.f;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1, &red, 1);
+            const Pixel redLit = ReadPixel(midX, midY);
+            Expect(redLit.r > redLit.g + 20 && redLit.g == redLit.b, "a light's Color tints it (" + Text(redLit) + ")");
+            // Two lights add.
+            const runner::LightDraw pair[2] = {point, point};
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1, pair, 2);
+            Expect(Sum(ReadPixel(midX, midY)) > Sum(pointLit), "two lights are brighter than one");
+
+            // A SpotLight lights what its cone points at, and nothing behind it.
+            runner::LightDraw spot = point;
+            spot.kind = runner::LightDraw::Kind::Spot;
+            spot.direction[2] = -1.f;
+            spot.outerFovDegrees = 60.f;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1, &spot, 1);
+            Expect(Sum(ReadPixel(midX, midY)) > Sum(unlit) + 30, "a SpotLight lights what it points at");
+            spot.direction[2] = 1.f;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1, &spot, 1);
+            Expect(std::abs(Sum(ReadPixel(midX, midY)) - Sum(unlit)) <= 3, "and not what is behind it");
+            // Pointed straight down from above the cube's front edge, a narrow cone
+            // misses the front face entirely.
+            runner::LightDraw down = spot;
+            down.position[1] = 3.f;
+            down.position[2] = 0.f;
+            down.direction[1] = -1.f;
+            down.direction[2] = 0.f;
+            down.outerFovDegrees = 10.f;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1, &down, 1);
+            Expect(std::abs(Sum(ReadPixel(midX, frontY)) - Sum(ambientFront)) <= 3,
+                   "a narrow cone leaves outside it unlit");
+            Expect(Sum(ReadPixel(midX, topY)) > Sum(ambientTop) + 30, "and lights inside it");
+
+            // Emissive glows with no light at all.
+            runner::MeshDraw glowing = draw;
+            glowing.emissive[0] = 1.f;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &glowing, 1);
+            const Pixel glow = ReadPixel(midX, midY);
+            // Green and blue gain nothing (Saturation above 1 even pulls them down a little).
+            Expect(glow.r > unlit.r + 60 && glow.g <= unlit.g + 3 && glow.g == glow.b,
+                   "Emissive glows (" + Text(glow) + ")");
+
+            // Exposure and Saturation, from Lighting.
+            runner::SceneLighting dim;
+            dim.exposure = 0.4f;
+            renderer.setLighting(dim);
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1, &point, 1);
+            Expect(Sum(ReadPixel(midX, midY)) + 20 < Sum(pointLit), "a lower Exposure is darker");
+            runner::SceneLighting gray;
+            gray.saturation = 0.f;
+            renderer.setLighting(gray);
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1, &red, 1);
+            const Pixel grayLit = ReadPixel(midX, midY);
+            Expect(grayLit.r == grayLit.g && grayLit.g == grayLit.b, "Saturation 0 is gray (" + Text(grayLit) + ")");
+            renderer.setLighting(runner::SceneLighting{});
+
+            // Transparency 1 draws nothing; between 0 and 1 the pane shows through.
+            runner::MeshDraw gone = draw;
+            gone.transparency = 1.f;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &gone, 1);
+            Expect(IsClear(ReadPixel(midX, midY)), "Transparency 1 draws nothing");
+            runner::MeshDraw half = glowing;
+            half.transparency = 0.5f;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &half, 1);
+            const Pixel halfOverClear = ReadPixel(midX, midY);
+            Expect(!IsClear(halfOverClear) && halfOverClear.r < glow.r && halfOverClear.r > 30,
+                   "half Transparency blends with the pane (" + Text(halfOverClear) + ")");
+            Expect(IsClear(ReadPixel(2, 2)), "and the corner stays the clear color");
+            // A half see-through red cube in front of an opaque green one: both
+            // colors show. Blue is the baseline: the light's white highlight
+            // adds to every channel alike, and neither cube has blue of its own.
+            runner::MeshDraw greenCube = draw;
+            greenCube.color[0] = 0.f;
+            greenCube.color[2] = 0.f;
+            runner::MeshDraw seeThrough = half;
+            seeThrough.color[1] = 0.f;
+            seeThrough.color[2] = 0.f;
+            seeThrough.model = engine_core::matrix4_translation(0.f, 0.f, 1.5f);
+            const runner::MeshDraw layered[2] = {seeThrough, greenCube};
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, layered, 2, &point, 1);
+            const Pixel mixed = ReadPixel(midX, midY);
+            Expect(mixed.r > mixed.b + 30 && mixed.g > mixed.b + 30,
+                   "a see-through surface blends over an opaque one behind it (" + Text(mixed) + ")");
+            // Behind the opaque one, it is hidden: no red over the baseline.
+            runner::MeshDraw hidden = seeThrough;
+            hidden.model = engine_core::matrix4_translation(0.f, 0.f, -1.5f);
+            const runner::MeshDraw occluded[2] = {hidden, greenCube};
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, occluded, 2, &point, 1);
+            const Pixel front2 = ReadPixel(midX, midY);
+            Expect(front2.r <= front2.b + 2 && front2.g > front2.b + 30,
+                   "the opaque surface hides one behind it (" + Text(front2) + ")");
+
+            // The UI pass after a draw finds its GL state as it left it.
+            runner::rt_glEnable(runner::GL_BLEND);
+            runner::rt_glBlendFunc(runner::RT_GL_SRC_ALPHA, runner::RT_GL_ONE_MINUS_SRC_ALPHA);
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, layered, 2, &point, 1);
+            runner::GLint source = 0;
+            runner::GLint framebuffer = -1;
+            glGetIntegerv(runner::RT_GL_BLEND_SRC_RGB, &source);
+            glGetIntegerv(runner::RT_GL_FRAMEBUFFER_BINDING, &framebuffer);
+            Expect(runner::rt_glIsEnabled(runner::GL_BLEND) == runner::GL_TRUE &&
+                       source == static_cast<runner::GLint>(runner::RT_GL_SRC_ALPHA) && framebuffer == 0,
+                   "drawing restores blending and the framebuffer");
+            runner::rt_glDisable(runner::GL_BLEND);
+            Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the pipeline leaves no GL error");
+        }
+
         // A Material's DiffuseTexture, read from the resources folder, and its Color.
         {
             std::filesystem::create_directories(root / "textures");
@@ -242,17 +390,20 @@ int main() {
             renderer.draw(0, 0, kSize, kSize, kSize, kSize, &textured, 1);
             const Pixel upper = ReadPixel(fbWidth / 2, fbHeight / 2);
             const Pixel lower = ReadPixel(fbWidth / 2, fbHeight / 2 - fbHeight * 3 / 64);
-            Expect(upper.r > 0 && upper.b == 0 && upper.g == 0, "the image's top is at the face's top (" + Text(upper) + ")");
-            Expect(lower.b > 0 && lower.r == 0 && lower.g == 0, "and its bottom at the bottom (" + Text(lower) + ")");
+            Expect(upper.r > 30 && upper.b < kSkyTint && upper.g < kSkyTint,
+                   "the image's top is at the face's top (" + Text(upper) + ")");
+            Expect(lower.b > 30 && lower.r < kSkyTint && lower.g < kSkyTint,
+                   "and its bottom at the bottom (" + Text(lower) + ")");
 
             // Color tints the texture, and draws alone with none.
             runner::MeshDraw tinted{cube, engine_core::matrix4_identity(), stripes, {0.f, 1.f, 1.f, 1.f}};
             renderer.draw(0, 0, kSize, kSize, kSize, kSize, &tinted, 1);
-            Expect(ReadPixel(fbWidth / 2, fbHeight / 2).r == 0, "a cyan Color takes out the red");
+            Expect(ReadPixel(fbWidth / 2, fbHeight / 2).r < kSkyTint, "a cyan Color takes out the red");
             runner::MeshDraw green{cube, engine_core::matrix4_identity(), 0, {0.f, 1.f, 0.f, 1.f}};
             renderer.draw(0, 0, kSize, kSize, kSize, kSize, &green, 1);
             const Pixel plain = ReadPixel(fbWidth / 2, fbHeight / 2);
-            Expect(plain.g > 0 && plain.r == 0 && plain.b == 0, "no texture draws the Color alone (" + Text(plain) + ")");
+            Expect(plain.g > 30 && plain.r < kSkyTint && plain.b < kSkyTint,
+                   "no texture draws the Color alone (" + Text(plain) + ")");
             Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "textures leave no GL error");
             textures.clear();
         }

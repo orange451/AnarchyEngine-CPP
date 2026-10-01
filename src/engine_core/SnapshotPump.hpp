@@ -17,6 +17,22 @@ struct Data;
 
 namespace engine_core {
 
+// What a Light row shines. It sits at the row's world translation, and a
+// SpotLight points down the row's -Z.
+struct VisualLight {
+    enum class Kind : std::uint8_t { None, Point, Spot };
+    // None when the row is not a Light.
+    Kind kind = Kind::None;
+    bool enabled = false;
+    // Linear, as the Color3 holds it.
+    float color[3] = {1.f, 1.f, 1.f};
+    float intensity = 0.f;
+    float radius = 0.f;
+    // A SpotLight's OuterFOV in degrees, and InnerFOVScale. 0 for a PointLight.
+    float outer_fov = 0.f;
+    float inner_fov_scale = 0.f;
+};
+
 struct VisualInstance {
     InstanceId id = 0;
     Matrix4 world = matrix4_identity();
@@ -27,6 +43,16 @@ struct VisualInstance {
     std::uint32_t prefab = 0;
     // A Camera's FieldOfView, in degrees. 0 when the row is not a Camera.
     float field_of_view = 0.f;
+    VisualLight light;
+};
+
+// Lighting's properties the renderer reads, found again at every Prepare.
+// Each is as Lighting has it; a place with no Lighting has the defaults.
+struct VisualLighting {
+    ColorRgb ambient{0.5f, 0.5f, 0.5f, 1.f};
+    float exposure = 1.f;
+    float saturation = 1.2f;
+    float gamma = 2.2f;
 };
 
 // One Model's Mesh, as the renderer loads it: a file, or the geometry this
@@ -45,6 +71,16 @@ struct VisualMesh {
     // no DiffuseTexture, draws the Color alone; no Material is white.
     std::string diffuse_texture;
     ColorRgb color{};
+    // Its other textures' Paths, each empty for none, and its numbers, each
+    // clamped to 0..1. No Material has a Material's defaults.
+    std::string normal_texture;
+    std::string roughness_texture;
+    std::string metalness_texture;
+    ColorRgb emissive{0.f, 0.f, 0.f, 1.f};
+    float metalness = 0.f;
+    float roughness = 0.4f;
+    float reflectivity = 0.5f;
+    float transparency = 0.f;
 };
 
 // What one Prefab draws, found again at every Prepare, so an edit to its
@@ -70,6 +106,7 @@ struct VisualSnapshot {
     std::vector<VisualInstance> instances;
     // Indexed by VisualInstance::prefab. Entry 0 is always empty.
     std::vector<VisualPrefab> prefabs;
+    VisualLighting lighting;
 };
 
 // Double buffer plus the one-frame override list.
@@ -124,6 +161,8 @@ private:
     void set_row_prefab(VisualInstance& inst, const std::string& guid);
     // Fills base_.prefabs from each entry's Prefab, as the DataModel is now.
     void resolve_prefabs(DataModel& game);
+    // Fills base_.lighting from the place's Lighting, as the DataModel is now.
+    void resolve_lighting(DataModel& game);
 
     VisualSnapshot base_{};
     VisualSnapshot buffers_[2]{};

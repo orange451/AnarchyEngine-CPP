@@ -538,7 +538,8 @@ TEST_CASE("SS13 registry properties fire Changed by name and default to a new in
     Game fresh;
     int checked = 0;
     for (const std::string& name : classes) {
-        if (engine_core::lua_saved_fields(name.c_str()).empty()) {
+        // A base class only for IsA, as Light, inherits saved fields but no file can hold one.
+        if (engine_core::lua_saved_fields(name.c_str()).empty() || !engine_core::project_class_known(name)) {
             continue;
         }
         DataModel* object = fresh.instance(fresh.scene_service(name));

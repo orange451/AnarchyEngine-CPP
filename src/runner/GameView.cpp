@@ -178,17 +178,50 @@ void GameView::collectMeshes() {
             MeshDraw draw;
             draw.mesh = mesh;
             draw.texture = textures_.get(source.diffuse_texture);
+            draw.normalTexture = textures_.get(source.normal_texture);
+            draw.roughnessTexture = textures_.get(source.roughness_texture);
+            draw.metalnessTexture = textures_.get(source.metalness_texture);
             draw.color[0] = source.color.r;
             draw.color[1] = source.color.g;
             draw.color[2] = source.color.b;
             draw.color[3] = source.color.a;
+            draw.emissive[0] = source.emissive.r;
+            draw.emissive[1] = source.emissive.g;
+            draw.emissive[2] = source.emissive.b;
+            draw.metalness = source.metalness;
+            draw.roughness = source.roughness;
+            draw.reflectivity = source.reflectivity;
+            draw.transparency = source.transparency;
             loaded.push_back(draw);
         }
     }
     // Uploads for sessions no Mesh draws now, as after a Stop. None this frame uses.
     meshes_.sweepSessions();
+    lightDraws_.clear();
     for (const engine_core::VisualInstance& row : snapshot.instances) {
-        if (!row.alive || row.prefab == 0 || row.prefab >= snapshot.prefabs.size()) {
+        if (!row.alive) {
+            continue;
+        }
+        if (row.light.kind != engine_core::VisualLight::Kind::None && row.light.enabled) {
+            LightDraw light;
+            light.kind = row.light.kind == engine_core::VisualLight::Kind::Spot ? LightDraw::Kind::Spot
+                                                                                : LightDraw::Kind::Point;
+            const engine_core::Vec3 position = engine_core::matrix4_position(row.world);
+            light.position[0] = position.x;
+            light.position[1] = position.y;
+            light.position[2] = position.z;
+            // Down the row's -Z, as a Camera looks. The renderer makes it unit length.
+            light.direction[0] = -row.world.m[8];
+            light.direction[1] = -row.world.m[9];
+            light.direction[2] = -row.world.m[10];
+            std::copy(row.light.color, row.light.color + 3, light.color);
+            light.intensity = row.light.intensity;
+            light.radius = row.light.radius;
+            light.outerFovDegrees = row.light.outer_fov;
+            light.innerFovScale = row.light.inner_fov_scale;
+            lightDraws_.push_back(light);
+        }
+        if (row.prefab == 0 || row.prefab >= snapshot.prefabs.size()) {
             continue;
         }
         for (const MeshDraw& model : prefabMeshes_[row.prefab]) {
@@ -196,6 +229,14 @@ void GameView::collectMeshes() {
             meshDraws_.back().model = row.world;
         }
     }
+    SceneLighting lighting;
+    lighting.ambient[0] = snapshot.lighting.ambient.r;
+    lighting.ambient[1] = snapshot.lighting.ambient.g;
+    lighting.ambient[2] = snapshot.lighting.ambient.b;
+    lighting.exposure = snapshot.lighting.exposure;
+    lighting.saturation = snapshot.lighting.saturation;
+    lighting.gamma = snapshot.lighting.gamma;
+    renderer_.setLighting(lighting);
 }
 
 void GameView::notePaint() {
@@ -356,7 +397,8 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
         renderer_.setClearColor(clear.r, clear.g, clear.b);
         collectMeshes();
         renderer_.draw(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(), scene->getHeight(),
-                       meshDraws_.data(), static_cast<int>(meshDraws_.size()));
+                       meshDraws_.data(), static_cast<int>(meshDraws_.size()), lightDraws_.data(),
+                       static_cast<int>(lightDraws_.size()));
         // Read before the children paint, so the FPS label is not in the picture.
         if (!captures_.empty()) {
             ViewPixels pixels;

@@ -968,8 +968,23 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Camera", "FieldOfView",
         "How many degrees this camera sees from bottom to top, from 1 to 120. A Scene View linked to it draws with it.",
         "number", false, {});
+    add("Light", "Color", "The color of the light this gives.", "Color3", false, {});
+    add("Light", "Intensity", "How bright this light is. 0 gives none.", "number", false, {});
+    add("Light", "Radius", "How many studs this light reaches. It fades to nothing there.", "number", false, {});
+    add("Light", "Enabled", "When false, this light gives none.", "boolean", false, {});
+    add("SpotLight", "OuterFOV",
+        "The whole angle of this light's cone, in degrees, from 1 to 179. The cone points down the Transform's -Z.",
+        "number", false, {});
+    add("SpotLight", "InnerFOVScale",
+        "How much of the cone, from 0 to 1, is at full brightness. The light fades from there to the cone's edge.",
+        "number", false, {});
     add("Material", "Color", "The color that tints this material's surface. White leaves it as it is.", "Color3",
         false, {});
+    add("Material", "Metalness", "How metallic this material is, from 0 to 1. Scales its MetalnessTexture.", "number",
+        false, {});
+    add("Material", "Roughness", "How rough this material is, from 0 (shiny) to 1. Scales its RoughnessTexture.",
+        "number", false, {});
+    add("Material", "Emissive", "The light this material gives off itself. Black gives none.", "Color3", false, {});
     add("Material", "Reflectivity", "How much this material reflects its surroundings, from 0 to 1.", "number", false,
         {});
     add("Material", "Transparency", "How much this material lets through what is behind it, from 0 (opaque) to 1.",

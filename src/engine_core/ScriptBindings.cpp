@@ -7,6 +7,7 @@
 #include "Enum.hpp"
 #include "Folder.hpp"
 #include "GameObject.hpp"
+#include "Light.hpp"
 #include "LuaApi.hpp"
 #include "LuaUserdata.hpp"
 #include "LuauSandbox.hpp"
@@ -151,6 +152,10 @@ DataModel& create_game_object(DataModel& world) { return world.create<GameObject
 
 DataModel& create_camera(DataModel& world) { return world.create<Camera>(); }
 
+DataModel& create_point_light(DataModel& world) { return world.create<PointLight>(); }
+
+DataModel& create_spot_light(DataModel& world) { return world.create<SpotLight>(); }
+
 DataModel& create_script(DataModel& world) { return world.create<Script>(); }
 
 DataModel& create_module_script(DataModel& world) { return world.create<ModuleScript>(); }
@@ -170,6 +175,8 @@ DataModel& create_prefab(DataModel& world) { return world.create<Prefab>(); }
 ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("GameObject", create_game_object);
     register_lua_creatable("Camera", create_camera);
+    register_lua_creatable("PointLight", create_point_light);
+    register_lua_creatable("SpotLight", create_spot_light);
     register_lua_creatable("Script", create_script);
     register_lua_creatable("ModuleScript", create_module_script);
     register_lua_creatable("Folder", create_folder);

@@ -29,6 +29,7 @@ set(STUDIO_CORE_SOURCES
     src/ide/AssetBrowser.cpp
     src/ide/ColorLiterals.cpp
     src/ide/IdeResources.cpp
+    src/ide/ScratchResources.cpp
     src/ide/InputRouter.cpp
     src/ide/LuauComplete.cpp
     src/ide/LuauHighlight.cpp
@@ -80,6 +81,7 @@ set(STUDIO_SOURCES
     src/ide/IdeLayoutProject.cpp
     src/ide/CutSet.cpp
     src/ide/TextureImport.cpp
+    src/ide/ModelImport.cpp
     src/ide/PropertiesPanel.cpp
     src/ide/Preferences.cpp
     src/ide/PreferencesPanel.cpp
@@ -246,6 +248,50 @@ if(NOT stb_image_POPULATED)
     FetchContent_Populate(stb_image)
 endif()
 
+# Assimp reads the model files dropped on the studio, which ModelImport.cpp
+# bakes into AMESH and Materials. BSD-licensed, pinned by tag and hash. 5.3.1
+# is the last release whose build takes CMake before 3.22. Only the formats the
+# drop takes are built, with no exporters, tools, or tests, and it links
+# static. zlib comes with it on Windows and from the system elsewhere.
+FetchContent_Declare(
+    assimp
+    URL https://github.com/assimp/assimp/archive/refs/tags/v5.3.1.tar.gz
+    URL_HASH SHA256=a07666be71afe1ad4bc008c2336b7c688aca391271188eb9108d0c6db1be53f1
+)
+FetchContent_GetProperties(assimp)
+if(NOT assimp_POPULATED)
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
+    FetchContent_Populate(assimp)
+    # 5.3.1's StackAllocator.inl calls std::min and std::max without including
+    # <algorithm>, which MSVC's other headers do not bring in.
+    set(assimp_stack_allocator "${assimp_SOURCE_DIR}/code/Common/StackAllocator.inl")
+    file(READ "${assimp_stack_allocator}" assimp_stack_allocator_text)
+    if(NOT assimp_stack_allocator_text MATCHES "#include <algorithm>")
+        file(WRITE "${assimp_stack_allocator}" "#include <algorithm>\n${assimp_stack_allocator_text}")
+    endif()
+    # Its option() calls keep these instead of their own defaults.
+    set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+    set(BUILD_SHARED_LIBS OFF)
+    set(ASSIMP_BUILD_TESTS OFF)
+    set(ASSIMP_BUILD_ASSIMP_TOOLS OFF)
+    set(ASSIMP_BUILD_SAMPLES OFF)
+    set(ASSIMP_BUILD_DOCS OFF)
+    set(ASSIMP_INSTALL OFF)
+    set(ASSIMP_INJECT_DEBUG_POSTFIX OFF)
+    set(ASSIMP_WARNINGS_AS_ERRORS OFF)
+    set(ASSIMP_NO_EXPORT ON)
+    set(ASSIMP_BUILD_ALL_EXPORTERS_BY_DEFAULT OFF)
+    set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF)
+    foreach(format IN ITEMS OBJ FBX GLTF COLLADA 3DS PLY STL)
+        set(ASSIMP_BUILD_${format}_IMPORTER ON)
+    endforeach()
+    add_subdirectory("${assimp_SOURCE_DIR}" "${assimp_BINARY_DIR}" EXCLUDE_FROM_ALL)
+    unset(BUILD_SHARED_LIBS)
+    unset(CMAKE_POLICY_DEFAULT_CMP0077)
+endif()
+
 # libvterm parses what a program writes to the terminal page, and encodes the
 # keys it reads. MIT-licensed C. Neovim's mirror is pinned because its tree
 # carries the generated encoding tables, which the upstream tarball builds with Perl.
@@ -337,6 +383,7 @@ add_library(engine_instances STATIC
     src/engine_instances/MeshShapes.cpp
     src/engine_instances/Folder.cpp
     src/engine_instances/GameObject.cpp
+    src/engine_instances/Light.cpp
     src/engine_instances/LuaSource.cpp
     src/engine_instances/ModuleScript.cpp
     src/engine_instances/Script.cpp
@@ -411,6 +458,10 @@ target_include_directories(studio_core SYSTEM PUBLIC "${httplib_SOURCE_DIR}")
 target_include_directories(studio_core SYSTEM PRIVATE "${stb_image_write_SOURCE_DIR}")
 # TextureCache.cpp compiles stb_image static, apart from the copy JadeFX links.
 target_include_directories(studio SYSTEM PRIVATE "${stb_image_SOURCE_DIR}")
+# ModelImport.cpp writes the maps it splits from a packed glTF map with the
+# stb_image_write ViewCapture.cpp compiles.
+target_include_directories(studio SYSTEM PRIVATE "${stb_image_write_SOURCE_DIR}")
+target_link_libraries(studio PRIVATE assimp)
 target_link_libraries(studio_core PUBLIC engine_core)
 target_link_libraries(studio_core PRIVATE vterm)
 # forkpty is in libutil on Linux, and in libc on macOS and the BSDs.
@@ -474,6 +525,8 @@ add_executable(studio-tests
     tests/PreferencesTest.cpp
     tests/SaveConflictTest.cpp
     tests/TextureImportTest.cpp
+    tests/ModelImportTest.cpp
+    tests/ScratchResourcesTest.cpp
     tests/ConflictsTest.cpp
     tests/ScriptTabsTest.cpp
     tests/TerminalPaneTest.cpp
@@ -604,6 +657,7 @@ add_executable(sandbox
     sandbox/matrix4_tests.cpp
     sandbox/plugin_tests.cpp
     sandbox/camera_tests.cpp
+    sandbox/light_tests.cpp
     sandbox/scene_camera_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)

@@ -48,7 +48,9 @@ enum class VisualField : std::uint32_t {
     // GameObject.Prefab: which Prefab's Models the row draws.
     Prefab = 1u << 3,
     // Camera.FieldOfView.
-    Camera = 1u << 4
+    Camera = 1u << 4,
+    // A Light's Color, Intensity, Radius, Enabled, or a SpotLight's cone.
+    Light = 1u << 5
 };
 
 // Which writer produced a visual field.

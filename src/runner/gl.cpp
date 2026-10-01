@@ -54,6 +54,22 @@ void (*rt_glGenerateMipmap)(GLenum) = nullptr;
 void (*rt_glPixelStorei)(GLenum, GLint) = nullptr;
 void (*rt_glUniform1i)(GLint, GLint) = nullptr;
 void (*rt_glUniform4f)(GLint, GLfloat, GLfloat, GLfloat, GLfloat) = nullptr;
+void (*rt_glUniform2f)(GLint, GLfloat, GLfloat) = nullptr;
+void (*rt_glUniform1fv)(GLint, GLsizei, const GLfloat*) = nullptr;
+void (*rt_glUniform3fv)(GLint, GLsizei, const GLfloat*) = nullptr;
+void (*rt_glUniform4fv)(GLint, GLsizei, const GLfloat*) = nullptr;
+void (*rt_glGenFramebuffers)(GLsizei, GLuint*) = nullptr;
+void (*rt_glDeleteFramebuffers)(GLsizei, const GLuint*) = nullptr;
+void (*rt_glBindFramebuffer)(GLenum, GLuint) = nullptr;
+void (*rt_glFramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint) = nullptr;
+GLenum (*rt_glCheckFramebufferStatus)(GLenum) = nullptr;
+void (*rt_glDrawBuffers)(GLsizei, const GLenum*) = nullptr;
+void (*rt_glBlendFunc)(GLenum, GLenum) = nullptr;
+void (*rt_glBlendFuncSeparate)(GLenum, GLenum, GLenum, GLenum) = nullptr;
+void (*rt_glCullFace)(GLenum) = nullptr;
+void (*rt_glDepthFunc)(GLenum) = nullptr;
+void (*rt_glDepthMask)(GLboolean) = nullptr;
+void (*rt_glGetBooleanv)(GLenum, GLboolean*) = nullptr;
 
 bool LoadGl(GlGetProcAddress get_proc) {
     if (get_proc == nullptr) {
@@ -121,6 +137,22 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(PixelStorei);
     LOAD(Uniform1i);
     LOAD(Uniform4f);
+    LOAD(Uniform2f);
+    LOAD(Uniform1fv);
+    LOAD(Uniform3fv);
+    LOAD(Uniform4fv);
+    LOAD(GenFramebuffers);
+    LOAD(DeleteFramebuffers);
+    LOAD(BindFramebuffer);
+    LOAD(FramebufferTexture2D);
+    LOAD(CheckFramebufferStatus);
+    LOAD(DrawBuffers);
+    LOAD(BlendFunc);
+    LOAD(BlendFuncSeparate);
+    LOAD(CullFace);
+    LOAD(DepthFunc);
+    LOAD(DepthMask);
+    LOAD(GetBooleanv);
 
 #undef LOAD
     return true;

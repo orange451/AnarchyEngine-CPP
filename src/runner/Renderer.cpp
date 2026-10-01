@@ -7,9 +7,160 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 namespace runner {
+namespace {
+
+// Texture units. A pass binds what it reads to these, and each program's
+// samplers are pointed at them once, when it links.
+constexpr int kUnitDiffuse = 0;
+constexpr int kUnitNormalMap = 1;
+constexpr int kUnitRoughnessMap = 2;
+constexpr int kUnitMetalnessMap = 3;
+constexpr int kUnitDepth = 4;
+constexpr int kUnitAlbedo = 5;
+constexpr int kUnitNormal = 6;
+constexpr int kUnitMaterial = 7;
+constexpr int kUnitEmissive = 8;
+constexpr int kUnitAccumulation = 9;
+constexpr int kUnitTransparency = 10;
+constexpr int kUnitScene = 11;
+constexpr int kUnitCount = 12;
+
+// The legacy pipeline's stand-in sky when there is no Skybox: a flat dark
+// gray (64 of 255) times its light multiplier of 1/255.
+constexpr float kSkyRadiance = (64.f / 255.f) / 255.f;
+
+// A light volume is a sphere of triangles inside the true sphere. This much
+// larger, it holds the whole Radius.
+constexpr float kSphereSlack = 1.05f;
+constexpr int kSphereStacks = 12;
+constexpr int kSphereSlices = 16;
+
+constexpr float kNear = 0.1f;
+constexpr float kFar = 1000.f;
+
+void BindTexture(int unit, unsigned texture) {
+    glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(unit));
+    glBindTexture(GL_TEXTURE_2D, texture);
+}
+
+void DrawFullscreen(unsigned emptyVao) {
+    glBindVertexArray(emptyVao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+}
+
+// The main file with each library spliced in after its #version line, as the
+// legacy BaseShader linked several fragment files into one program.
+std::string Spliced(const std::string& main, std::initializer_list<const char*> libraries, bool& ok) {
+    if (main.empty()) {
+        ok = false;
+        return {};
+    }
+    const std::size_t lineEnd = main.find('\n');
+    std::string out = main.substr(0, lineEnd == std::string::npos ? main.size() : lineEnd + 1);
+    for (const char* library : libraries) {
+        const std::string source = LoadShader(library);
+        if (source.empty()) {
+            ok = false;
+            return {};
+        }
+        out += source;
+        out += '\n';
+    }
+    if (lineEnd != std::string::npos) {
+        out += main.substr(lineEnd + 1);
+    }
+    return out;
+}
+
+}  // namespace
+
+bool Renderer::buildProgram(Program& program, const char* name, const char* vertex, const char* fragment,
+                            std::initializer_list<const char*> libraries) {
+    bool ok = true;
+    const std::string fragmentSource = Spliced(LoadShader(fragment), libraries, ok);
+    program = Program{};
+    if (!ok) {
+        return false;
+    }
+    program.id = LinkProgram(LoadShader(vertex), fragmentSource, name);
+    if (program.id == 0) {
+        return false;
+    }
+    const unsigned id = program.id;
+    const auto at = [id](const char* uniform) { return glGetUniformLocation(id, uniform); };
+    program.model = at("uModel");
+    program.view = at("uView");
+    program.projection = at("uProjection");
+    program.viewProjection = at("uViewProjection");
+    program.inverseProjection = at("uInverseProjection");
+    program.texel = at("uTexel");
+    program.ambient = at("uAmbient");
+    program.skyRadiance = at("uSkyRadiance");
+    program.diffuse = at("uDiffuse");
+    program.normalMap = at("uNormalMap");
+    program.roughnessMap = at("uRoughnessMap");
+    program.metalnessMap = at("uMetalnessMap");
+    program.color = at("uColor");
+    program.emissive = at("uEmissive");
+    program.metalness = at("uMetalness");
+    program.roughness = at("uRoughness");
+    program.reflectivity = at("uReflectivity");
+    program.normalMapEnabled = at("uNormalMapEnabled");
+    program.transparency = at("uTransparency");
+    program.depth = at("uDepth");
+    program.albedo = at("uAlbedo");
+    program.normal = at("uNormal");
+    program.material = at("uMaterial");
+    program.emissiveBuffer = at("uEmissive");
+    program.accumulation = at("uAccumulation");
+    program.transparencyBuffer = at("uTransparency");
+    program.scene = at("uScene");
+    program.lightPosition = at("uLightPosition");
+    program.lightDirection = at("uLightDirection");
+    program.lightCone = at("uLightCone");
+    program.lightColor = at("uLightColor");
+    program.lightRadius = at("uLightRadius");
+    program.lightIntensity = at("uLightIntensity");
+    program.lightCount = at("uLightCount");
+    program.lightPositionRadius = at("uLightPositionRadius");
+    program.lightColorIntensity = at("uLightColorIntensity");
+    program.lightDirections = at("uLightDirection");
+    program.lightCones = at("uLightCone");
+    program.exposure = at("uExposure");
+    program.inverseGamma = at("uInverseGamma");
+    program.saturation = at("uSaturation");
+
+    // Samplers keep their unit for the program's life. A name two passes use
+    // for different things (uEmissive, uTransparency) is a sampler only in
+    // merge.frag, which has no material uniforms.
+    glUseProgram(id);
+    const auto sampler = [&](const char* uniform, int unit) {
+        const int location = at(uniform);
+        if (location >= 0) {
+            glUniform1i(location, unit);
+        }
+    };
+    sampler("uDiffuse", kUnitDiffuse);
+    sampler("uNormalMap", kUnitNormalMap);
+    sampler("uRoughnessMap", kUnitRoughnessMap);
+    sampler("uMetalnessMap", kUnitMetalnessMap);
+    sampler("uDepth", kUnitDepth);
+    sampler("uAlbedo", kUnitAlbedo);
+    sampler("uNormal", kUnitNormal);
+    sampler("uMaterial", kUnitMaterial);
+    sampler("uAccumulation", kUnitAccumulation);
+    sampler("uScene", kUnitScene);
+    if (&program == &merge_) {
+        sampler("uEmissive", kUnitEmissive);
+        sampler("uTransparency", kUnitTransparency);
+    }
+    glUseProgram(0);
+    return true;
+}
 
 bool Renderer::initialize() {
     if (ready_) {
@@ -25,15 +176,19 @@ bool Renderer::initialize() {
     for (int stale = 0; stale < 32 && glGetError() != GL_NO_ERROR; ++stale) {
     }
 
-    meshProgram_ = LinkProgram(LoadShader("mesh.vert"), LoadShader("mesh.frag"), "Mesh");
-    if (meshProgram_ == 0) {
+    const bool built =
+        buildProgram(geometry_, "G-buffer", "pipeline/geometry.vert", "pipeline/deferred.frag",
+                     {"pipeline/surface.glsl"}) &&
+        buildProgram(forward_, "Transparency", "pipeline/geometry.vert", "pipeline/forward.frag",
+                     {"pipeline/surface.glsl", "pipeline/lighting.glsl"}) &&
+        buildProgram(ibl_, "IBL", "pipeline/fullscreen.vert", "pipeline/ibl.frag", {"pipeline/lighting.glsl"}) &&
+        buildProgram(light_, "Light", "pipeline/light.vert", "pipeline/light.frag", {"pipeline/lighting.glsl"}) &&
+        buildProgram(merge_, "Merge", "pipeline/fullscreen.vert", "pipeline/merge.frag", {}) &&
+        buildProgram(tonemap_, "Tone map", "pipeline/fullscreen.vert", "pipeline/tonemap.frag", {});
+    if (!built) {
         shutdown();
         return false;
     }
-    modelLocation_ = glGetUniformLocation(meshProgram_, "uModel");
-    viewProjectionLocation_ = glGetUniformLocation(meshProgram_, "uViewProjection");
-    diffuseLocation_ = glGetUniformLocation(meshProgram_, "uDiffuse");
-    colorLocation_ = glGetUniformLocation(meshProgram_, "uColor");
 
     const unsigned char white[4] = {255, 255, 255, 255};
     glGenTextures(1, &whiteTexture_);
@@ -44,6 +199,9 @@ bool Renderer::initialize() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
     glBindTexture(GL_TEXTURE_2D, 0);
 
+    glGenVertexArrays(1, &emptyVao_);
+    createSphere();
+
     const GLenum error = glGetError();
     if (error != GL_NO_ERROR) {
         std::fprintf(stderr, "OpenGL error during setup: 0x%x\n", error);
@@ -53,6 +211,139 @@ bool Renderer::initialize() {
 
     ready_ = true;
     return true;
+}
+
+void Renderer::createSphere() {
+    std::vector<float> positions;
+    positions.reserve(static_cast<std::size_t>((kSphereStacks + 1) * (kSphereSlices + 1) * 3));
+    for (int stack = 0; stack <= kSphereStacks; ++stack) {
+        const float phi = 3.14159265f * static_cast<float>(stack) / kSphereStacks;
+        for (int slice = 0; slice <= kSphereSlices; ++slice) {
+            const float theta = 6.28318531f * static_cast<float>(slice) / kSphereSlices;
+            positions.push_back(std::sin(phi) * std::cos(theta));
+            positions.push_back(std::cos(phi));
+            positions.push_back(std::sin(phi) * std::sin(theta));
+        }
+    }
+    // Counter-clockwise seen from outside, so culling front faces keeps the inside.
+    std::vector<unsigned short> indices;
+    for (int stack = 0; stack < kSphereStacks; ++stack) {
+        for (int slice = 0; slice < kSphereSlices; ++slice) {
+            const auto a = static_cast<unsigned short>(stack * (kSphereSlices + 1) + slice);
+            const auto b = static_cast<unsigned short>(a + kSphereSlices + 1);
+            const auto c = static_cast<unsigned short>(b + 1);
+            const auto d = static_cast<unsigned short>(a + 1);
+            indices.insert(indices.end(), {a, c, b, a, d, c});
+        }
+    }
+    sphereIndexCount_ = static_cast<int>(indices.size());
+
+    glGenVertexArrays(1, &sphereVao_);
+    glBindVertexArray(sphereVao_);
+    glGenBuffers(1, &sphereVbo_);
+    glBindBuffer(GL_ARRAY_BUFFER, sphereVbo_);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(positions.size() * sizeof(float)), positions.data(),
+                 GL_STATIC_DRAW);
+    glGenBuffers(1, &sphereEbo_);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sphereEbo_);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(indices.size() * sizeof(unsigned short)),
+                 indices.data(), GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+namespace {
+
+unsigned MakeTarget(GLenum internalFormat, GLenum format, GLenum type, int width, int height) {
+    unsigned texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(internalFormat), width, height, 0, format, type, nullptr);
+    // Every pass reads its inputs texel for texel.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(RT_GL_NEAREST));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(RT_GL_NEAREST));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLint>(RT_GL_CLAMP_TO_EDGE));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<GLint>(RT_GL_CLAMP_TO_EDGE));
+    return texture;
+}
+
+// The framebuffer bound now, with these attached. False when it cannot be drawn into.
+bool Attach(std::initializer_list<unsigned> colors, unsigned depth) {
+    GLenum buffers[4] = {};
+    GLsizei count = 0;
+    for (const unsigned color : colors) {
+        buffers[count] = RT_GL_COLOR_ATTACHMENT0 + static_cast<GLenum>(count);
+        glFramebufferTexture2D(RT_GL_FRAMEBUFFER, buffers[count], GL_TEXTURE_2D, color, 0);
+        ++count;
+    }
+    if (depth != 0) {
+        glFramebufferTexture2D(RT_GL_FRAMEBUFFER, RT_GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depth, 0);
+    }
+    glDrawBuffers(count, buffers);
+    return glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) == RT_GL_FRAMEBUFFER_COMPLETE;
+}
+
+}  // namespace
+
+bool Renderer::ensureTargets(int width, int height) {
+    if (gbufferFbo_ != 0 && width == targetWidth_ && height == targetHeight_) {
+        return true;
+    }
+    destroyTargets();
+    targetWidth_ = width;
+    targetHeight_ = height;
+    albedoTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height);
+    normalTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height);
+    materialTexture_ = MakeTarget(GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, width, height);
+    emissiveTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height);
+    depthTexture_ = MakeTarget(RT_GL_DEPTH_COMPONENT24, RT_GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, width, height);
+    accumulationTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height);
+    transparencyTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height);
+    mergeTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    bool complete = true;
+    glGenFramebuffers(1, &gbufferFbo_);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, gbufferFbo_);
+    complete = Attach({albedoTexture_, normalTexture_, materialTexture_, emissiveTexture_}, depthTexture_) && complete;
+    glGenFramebuffers(1, &accumulationFbo_);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, accumulationFbo_);
+    complete = Attach({accumulationTexture_}, 0) && complete;
+    glGenFramebuffers(1, &transparencyFbo_);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, transparencyFbo_);
+    complete = Attach({transparencyTexture_}, depthTexture_) && complete;
+    glGenFramebuffers(1, &mergeFbo_);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, mergeFbo_);
+    complete = Attach({mergeTexture_}, 0) && complete;
+    if (!complete) {
+        if (!targetsRefused_) {
+            std::fprintf(stderr, "The Scene View's %d by %d render buffers are not supported.\n", width, height);
+            targetsRefused_ = true;
+        }
+        destroyTargets();
+        return false;
+    }
+    return true;
+}
+
+void Renderer::destroyTargets() {
+    for (unsigned* fbo : {&gbufferFbo_, &accumulationFbo_, &transparencyFbo_, &mergeFbo_}) {
+        if (*fbo != 0) {
+            glDeleteFramebuffers(1, fbo);
+            *fbo = 0;
+        }
+    }
+    for (unsigned* texture : {&albedoTexture_, &normalTexture_, &materialTexture_, &emissiveTexture_, &depthTexture_,
+                              &accumulationTexture_, &transparencyTexture_, &mergeTexture_}) {
+        if (*texture != 0) {
+            glDeleteTextures(1, texture);
+            *texture = 0;
+        }
+    }
+    targetWidth_ = 0;
+    targetHeight_ = 0;
 }
 
 namespace {
@@ -94,121 +385,6 @@ PixelRect PanePixels(double x, double y, double width, double height, double sce
     rect.y = viewport[1] + viewport[3] - bottom;
     return rect;
 }
-
-}  // namespace
-
-void Renderer::draw(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
-                    const MeshDraw* meshes, int meshCount) {
-    if (!ready_ || width <= 0.0 || height <= 0.0 || sceneWidth <= 0.0 || sceneHeight <= 0.0) {
-        return;
-    }
-
-    GLint viewport[4] = {};
-    GLint scissorBox[4] = {};
-    glGetIntegerv(GL_VIEWPORT, viewport);
-    glGetIntegerv(GL_SCISSOR_BOX, scissorBox);
-    if (viewport[2] <= 0 || viewport[3] <= 0) {
-        return;
-    }
-
-    const PixelRect pane = PanePixels(x, y, width, height, sceneWidth, sceneHeight, viewport);
-    if (pane.width <= 0 || pane.height <= 0) {
-        return;
-    }
-
-    const GLboolean scissorWasOn = glIsEnabled(GL_SCISSOR_TEST);
-    const GLboolean blendWasOn = glIsEnabled(GL_BLEND);
-    const GLboolean depthWasOn = glIsEnabled(GL_DEPTH_TEST);
-    PixelRect clip = pane;
-    if (scissorWasOn == GL_TRUE) {
-        const PixelRect outer{scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3]};
-        clip = Intersect(pane, outer);
-        if (clip.width <= 0 || clip.height <= 0) {
-            return;
-        }
-    }
-
-    // Scissor limits the clear to this pane. The viewport stays the whole pane
-    // so a parent clip cuts pixels without sliding the drawing.
-    glEnable(GL_SCISSOR_TEST);
-    glScissor(clip.x, clip.y, clip.width, clip.height);
-    glViewport(pane.x, pane.y, pane.width, pane.height);
-    glDisable(GL_BLEND);
-    glEnable(GL_DEPTH_TEST);
-    glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    drawMeshes(meshes, meshCount, static_cast<float>(pane.width) / static_cast<float>(pane.height));
-    if (depthWasOn != GL_TRUE) {
-        glDisable(GL_DEPTH_TEST);
-    }
-
-    glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
-    if (scissorWasOn == GL_TRUE) {
-        glEnable(GL_SCISSOR_TEST);
-        glScissor(scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3]);
-    } else {
-        glDisable(GL_SCISSOR_TEST);
-    }
-    if (blendWasOn == GL_TRUE) {
-        glEnable(GL_BLEND);
-    }
-}
-
-bool Renderer::read(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
-                    ViewPixels& out) const {
-    out = ViewPixels{};
-    if (!ready_ || width <= 0.0 || height <= 0.0 || sceneWidth <= 0.0 || sceneHeight <= 0.0) {
-        return false;
-    }
-    GLint viewport[4] = {};
-    glGetIntegerv(GL_VIEWPORT, viewport);
-    if (viewport[2] <= 0 || viewport[3] <= 0) {
-        return false;
-    }
-    // Only what draw could reach: the pane, inside the framebuffer and any parent clip.
-    PixelRect clip = Intersect(PanePixels(x, y, width, height, sceneWidth, sceneHeight, viewport),
-                               PixelRect{viewport[0], viewport[1], viewport[2], viewport[3]});
-    if (glIsEnabled(GL_SCISSOR_TEST) == GL_TRUE) {
-        GLint scissorBox[4] = {};
-        glGetIntegerv(GL_SCISSOR_BOX, scissorBox);
-        clip = Intersect(clip, PixelRect{scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3]});
-    }
-    if (clip.width <= 0 || clip.height <= 0) {
-        return false;
-    }
-    // RGBA rows are whole words, so the default pack alignment of 4 adds no padding.
-    std::vector<unsigned char> bottomUp(static_cast<std::size_t>(clip.width) * clip.height * 4);
-    glReadPixels(clip.x, clip.y, clip.width, clip.height, GL_RGBA, GL_UNSIGNED_BYTE, bottomUp.data());
-    out.width = clip.width;
-    out.height = clip.height;
-    out.rgba.resize(bottomUp.size());
-    const std::size_t row = static_cast<std::size_t>(clip.width) * 4;
-    for (int line = 0; line < clip.height; ++line) {
-        std::copy_n(bottomUp.data() + static_cast<std::size_t>(clip.height - 1 - line) * row, row,
-                    out.rgba.data() + static_cast<std::size_t>(line) * row);
-    }
-    return true;
-}
-
-void Renderer::setClearColor(float r, float g, float b) {
-    clear_[0] = r;
-    clear_[1] = g;
-    clear_[2] = b;
-}
-
-void Renderer::shutdown() {
-    ready_ = false;
-    if (meshProgram_ != 0) {
-        glDeleteProgram(meshProgram_);
-        meshProgram_ = 0;
-    }
-    if (whiteTexture_ != 0) {
-        glDeleteTextures(1, &whiteTexture_);
-        whiteTexture_ = 0;
-    }
-}
-
-namespace {
 
 // Column-major 4x4, as Transform and GLSL store them.
 using Matrix = float[16];
@@ -262,7 +438,453 @@ void Perspective(float fovYDegrees, float aspect, float nearZ, float farZ, float
     out[14] = 2.f * farZ * nearZ / (nearZ - farZ);
 }
 
+// The GL state a draw changes, so the UI pass after it finds its own.
+struct SavedState {
+    GLint framebuffer = 0;
+    GLint scissorBox[4] = {};
+    GLboolean scissor = GL_FALSE;
+    GLboolean blend = GL_FALSE;
+    GLint blendSrcRgb = 0;
+    GLint blendDstRgb = 0;
+    GLint blendSrcAlpha = 0;
+    GLint blendDstAlpha = 0;
+    GLboolean depthTest = GL_FALSE;
+    GLboolean depthMask = GL_TRUE;
+    GLint depthFunc = 0;
+    GLboolean cull = GL_FALSE;
+    GLint cullMode = 0;
+    GLint program = 0;
+    GLint vertexArray = 0;
+    GLint activeTexture = 0;
+
+    SavedState() {
+        glGetIntegerv(RT_GL_FRAMEBUFFER_BINDING, &framebuffer);
+        glGetIntegerv(GL_SCISSOR_BOX, scissorBox);
+        scissor = glIsEnabled(GL_SCISSOR_TEST);
+        blend = glIsEnabled(GL_BLEND);
+        glGetIntegerv(RT_GL_BLEND_SRC_RGB, &blendSrcRgb);
+        glGetIntegerv(RT_GL_BLEND_DST_RGB, &blendDstRgb);
+        glGetIntegerv(RT_GL_BLEND_SRC_ALPHA, &blendSrcAlpha);
+        glGetIntegerv(RT_GL_BLEND_DST_ALPHA, &blendDstAlpha);
+        depthTest = glIsEnabled(GL_DEPTH_TEST);
+        glGetBooleanv(RT_GL_DEPTH_WRITEMASK, &depthMask);
+        glGetIntegerv(RT_GL_DEPTH_FUNC, &depthFunc);
+        cull = glIsEnabled(RT_GL_CULL_FACE);
+        glGetIntegerv(RT_GL_CULL_FACE_MODE, &cullMode);
+        glGetIntegerv(RT_GL_CURRENT_PROGRAM, &program);
+        glGetIntegerv(RT_GL_VERTEX_ARRAY_BINDING, &vertexArray);
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
+    }
+
+    static void Set(GLenum cap, GLboolean on) {
+        if (on == GL_TRUE) {
+            glEnable(cap);
+        } else {
+            glDisable(cap);
+        }
+    }
+
+    void restore(const GLint viewport[4]) const {
+        glBindFramebuffer(RT_GL_FRAMEBUFFER, static_cast<GLuint>(framebuffer));
+        glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+        glScissor(scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3]);
+        Set(GL_SCISSOR_TEST, scissor);
+        Set(GL_BLEND, blend);
+        glBlendFuncSeparate(static_cast<GLenum>(blendSrcRgb), static_cast<GLenum>(blendDstRgb),
+                            static_cast<GLenum>(blendSrcAlpha), static_cast<GLenum>(blendDstAlpha));
+        Set(GL_DEPTH_TEST, depthTest);
+        glDepthMask(depthMask);
+        glDepthFunc(static_cast<GLenum>(depthFunc));
+        Set(RT_GL_CULL_FACE, cull);
+        glCullFace(static_cast<GLenum>(cullMode));
+        glUseProgram(static_cast<GLuint>(program));
+        glBindVertexArray(static_cast<GLuint>(vertexArray));
+        // The units the passes used are left empty, as the old single pass left unit 0.
+        for (int unit = kUnitCount - 1; unit >= 0; --unit) {
+            BindTexture(unit, 0);
+        }
+        glActiveTexture(static_cast<GLenum>(activeTexture));
+    }
+};
+
 }  // namespace
+
+void Renderer::draw(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
+                    const MeshDraw* meshes, int meshCount, const LightDraw* lights, int lightCount) {
+    if (!ready_ || width <= 0.0 || height <= 0.0 || sceneWidth <= 0.0 || sceneHeight <= 0.0) {
+        return;
+    }
+
+    GLint viewport[4] = {};
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    if (viewport[2] <= 0 || viewport[3] <= 0) {
+        return;
+    }
+
+    const PixelRect pane = PanePixels(x, y, width, height, sceneWidth, sceneHeight, viewport);
+    if (pane.width <= 0 || pane.height <= 0) {
+        return;
+    }
+
+    const SavedState saved;
+    PixelRect clip = pane;
+    if (saved.scissor == GL_TRUE) {
+        const PixelRect outer{saved.scissorBox[0], saved.scissorBox[1], saved.scissorBox[2], saved.scissorBox[3]};
+        clip = Intersect(pane, outer);
+        if (clip.width <= 0 || clip.height <= 0) {
+            return;
+        }
+    }
+
+    // Scissor limits the clear to this pane. The viewport stays the whole pane
+    // so a parent clip cuts pixels without sliding the drawing.
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(clip.x, clip.y, clip.width, clip.height);
+    glViewport(pane.x, pane.y, pane.width, pane.height);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    if (meshes != nullptr && meshCount > 0 && ensureTargets(pane.width, pane.height)) {
+        Matrix projection;
+        Perspective(fovYDegrees_, static_cast<float>(pane.width) / static_cast<float>(pane.height), kNear, kFar,
+                    projection);
+        engine_core::Matrix4 projectionMatrix;
+        std::copy(projection, projection + 16, projectionMatrix.m);
+        const engine_core::Matrix4 inverseProjection = engine_core::matrix4_inverse(projectionMatrix);
+
+        // The lights in view space, as every pass takes them.
+        viewLights_.clear();
+        for (int index = 0; lights != nullptr && index < lightCount; ++index) {
+            const LightDraw& light = lights[index];
+            if (!(light.radius > 0.f) || !(light.intensity > 0.f)) {
+                continue;
+            }
+            ViewLight out{};
+            const float* v = view_.m;
+            const float* p = light.position;
+            const float* d = light.direction;
+            for (int row = 0; row < 3; ++row) {
+                out.position[row] = v[row] * p[0] + v[4 + row] * p[1] + v[8 + row] * p[2] + v[12 + row];
+                out.direction[row] = v[row] * d[0] + v[4 + row] * d[1] + v[8 + row] * d[2];
+            }
+            const float length = std::sqrt(out.direction[0] * out.direction[0] + out.direction[1] * out.direction[1] +
+                                           out.direction[2] * out.direction[2]);
+            for (float& value : out.direction) {
+                value = length > 0.f ? value / length : 0.f;
+            }
+            if (light.kind == LightDraw::Kind::Spot) {
+                constexpr float kHalfDegree = 0.5f * 0.01745329252f;
+                const float outer = std::clamp(light.outerFovDegrees, 0.f, 180.f);
+                const float inner = outer * std::clamp(light.innerFovScale, 0.f, 1.f);
+                out.cone[0] = std::cos(outer * kHalfDegree);
+                // Equal edges would leave no fade, which smoothstep cannot take.
+                out.cone[1] = std::max(std::cos(inner * kHalfDegree), out.cone[0] + 1e-4f);
+            } else {
+                out.cone[0] = -2.f;
+                out.cone[1] = -2.f;
+            }
+            std::copy(light.color, light.color + 3, out.color);
+            out.radius = light.radius;
+            out.intensity = light.intensity;
+            viewLights_.push_back(out);
+        }
+
+        glDisable(GL_SCISSOR_TEST);
+        glViewport(0, 0, targetWidth_, targetHeight_);
+        geometryPass(meshes, meshCount, projection);
+        lightPass(projection, inverseProjection.m);
+        transparencyPass(meshes, meshCount, projection, inverseProjection.m);
+        mergePass();
+
+        // The tone map, blended over the clear: where nothing was drawn the pane shows through.
+        glBindFramebuffer(RT_GL_FRAMEBUFFER, static_cast<GLuint>(saved.framebuffer));
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(clip.x, clip.y, clip.width, clip.height);
+        glViewport(pane.x, pane.y, pane.width, pane.height);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(RT_GL_CULL_FACE);
+        glEnable(GL_BLEND);
+        glBlendFuncSeparate(RT_GL_ONE, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ZERO, RT_GL_ONE);
+        glUseProgram(tonemap_.id);
+        BindTexture(kUnitScene, mergeTexture_);
+        glUniform1f(tonemap_.exposure, std::max(lighting_.exposure, 0.f));
+        glUniform1f(tonemap_.inverseGamma, 1.f / std::max(lighting_.gamma, 0.01f));
+        glUniform1f(tonemap_.saturation, std::max(lighting_.saturation, 0.f));
+        DrawFullscreen(emptyVao_);
+    }
+
+    saved.restore(viewport);
+}
+
+void Renderer::bindMaterial(const Program& program, const MeshDraw& draw) {
+    BindTexture(kUnitDiffuse, draw.texture != 0 ? draw.texture : whiteTexture_);
+    BindTexture(kUnitNormalMap, draw.normalTexture != 0 ? draw.normalTexture : whiteTexture_);
+    BindTexture(kUnitRoughnessMap, draw.roughnessTexture != 0 ? draw.roughnessTexture : whiteTexture_);
+    BindTexture(kUnitMetalnessMap, draw.metalnessTexture != 0 ? draw.metalnessTexture : whiteTexture_);
+    glUniform4f(program.color, draw.color[0], draw.color[1], draw.color[2], draw.color[3]);
+    glUniform3f(program.emissive, draw.emissive[0], draw.emissive[1], draw.emissive[2]);
+    glUniform1f(program.metalness, std::clamp(draw.metalness, 0.f, 1.f));
+    glUniform1f(program.roughness, std::clamp(draw.roughness, 0.f, 1.f));
+    glUniform1f(program.reflectivity, std::clamp(draw.reflectivity, 0.f, 1.f));
+    glUniform1f(program.normalMapEnabled, draw.normalTexture != 0 ? 1.f : 0.f);
+    glUniform1f(program.transparency, std::clamp(draw.transparency, 0.f, 1.f));
+    glUniformMatrix4fv(program.model, 1, GL_FALSE, draw.model.m);
+}
+
+void Renderer::bindGBuffer(const Program& program) {
+    (void)program;
+    BindTexture(kUnitDepth, depthTexture_);
+    BindTexture(kUnitAlbedo, albedoTexture_);
+    BindTexture(kUnitNormal, normalTexture_);
+    BindTexture(kUnitMaterial, materialTexture_);
+    BindTexture(kUnitEmissive, emissiveTexture_);
+}
+
+void Renderer::geometryPass(const MeshDraw* meshes, int count, const float* projection) {
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, gbufferFbo_);
+    glDisable(GL_BLEND);
+    glDisable(RT_GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(RT_GL_LESS);
+    glDepthMask(GL_TRUE);
+    glClearColor(0.f, 0.f, 0.f, 0.f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    glUseProgram(geometry_.id);
+    glUniformMatrix4fv(geometry_.view, 1, GL_FALSE, view_.m);
+    glUniformMatrix4fv(geometry_.projection, 1, GL_FALSE, projection);
+    transparent_.clear();
+    for (int index = 0; index < count; ++index) {
+        const MeshDraw& draw = meshes[index];
+        if (draw.mesh == nullptr || !draw.mesh->valid() || draw.transparency >= 1.f) {
+            continue;
+        }
+        // See-through surfaces wait for the forward pass, as the legacy pipeline queued them.
+        if (draw.transparency > 0.f) {
+            transparent_.push_back(index);
+            continue;
+        }
+        bindMaterial(geometry_, draw);
+        draw.mesh->bind();
+        draw.mesh->draw(0);
+    }
+}
+
+void Renderer::lightPass(const float* projection, const float* inverseProjection) {
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, accumulationFbo_);
+    glClearColor(0.f, 0.f, 0.f, 0.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFunc(RT_GL_ONE, RT_GL_ONE);
+
+    // The ambient and the sky, on every opaque surface.
+    glUseProgram(ibl_.id);
+    bindGBuffer(ibl_);
+    glUniformMatrix4fv(ibl_.inverseProjection, 1, GL_FALSE, inverseProjection);
+    glUniform3f(ibl_.ambient, lighting_.ambient[0], lighting_.ambient[1], lighting_.ambient[2]);
+    glUniform3f(ibl_.skyRadiance, kSkyRadiance, kSkyRadiance, kSkyRadiance);
+    DrawFullscreen(emptyVao_);
+
+    // Each light, on the pixels its volume covers. Its inside faces draw, so
+    // a camera within the volume still sees the light.
+    if (!viewLights_.empty()) {
+        Matrix viewProjection;
+        Multiply(projection, view_.m, viewProjection);
+        const engine_core::Matrix4 world = engine_core::matrix4_inverse(view_);
+        glUseProgram(light_.id);
+        bindGBuffer(light_);
+        glUniformMatrix4fv(light_.inverseProjection, 1, GL_FALSE, inverseProjection);
+        glUniformMatrix4fv(light_.viewProjection, 1, GL_FALSE, viewProjection);
+        glUniform2f(light_.texel, 1.f / static_cast<float>(targetWidth_), 1.f / static_cast<float>(targetHeight_));
+        glEnable(RT_GL_CULL_FACE);
+        glCullFace(RT_GL_FRONT);
+        glBindVertexArray(sphereVao_);
+        for (const ViewLight& light : viewLights_) {
+            // The volume's world position, from the view-space one.
+            const float* w = world.m;
+            const float* p = light.position;
+            const float scale = light.radius * kSphereSlack;
+            float model[16] = {};
+            model[0] = scale;
+            model[5] = scale;
+            model[10] = scale;
+            for (int row = 0; row < 3; ++row) {
+                model[12 + row] = w[row] * p[0] + w[4 + row] * p[1] + w[8 + row] * p[2] + w[12 + row];
+            }
+            model[15] = 1.f;
+            glUniformMatrix4fv(light_.model, 1, GL_FALSE, model);
+            glUniform3f(light_.lightPosition, light.position[0], light.position[1], light.position[2]);
+            glUniform3f(light_.lightDirection, light.direction[0], light.direction[1], light.direction[2]);
+            glUniform2f(light_.lightCone, light.cone[0], light.cone[1]);
+            glUniform3f(light_.lightColor, light.color[0], light.color[1], light.color[2]);
+            glUniform1f(light_.lightRadius, light.radius);
+            glUniform1f(light_.lightIntensity, light.intensity);
+            glDrawElements(GL_TRIANGLES, sphereIndexCount_, GL_UNSIGNED_SHORT, nullptr);
+        }
+        glDisable(RT_GL_CULL_FACE);
+        glCullFace(RT_GL_BACK);
+    }
+    glDisable(GL_BLEND);
+    glDepthMask(GL_TRUE);
+}
+
+void Renderer::transparencyPass(const MeshDraw* meshes, int count, const float* projection,
+                                const float* inverseProjection) {
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, transparencyFbo_);
+    glClearColor(0.f, 0.f, 0.f, 0.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    if (transparent_.empty()) {
+        return;
+    }
+
+    // Farthest first, by each Transform's distance along the view.
+    transparentDepth_.assign(static_cast<std::size_t>(count), 0.f);
+    for (const int index : transparent_) {
+        const float* v = view_.m;
+        const float* t = meshes[index].model.m + 12;
+        transparentDepth_[static_cast<std::size_t>(index)] = v[2] * t[0] + v[6] * t[1] + v[10] * t[2] + v[14];
+    }
+    std::stable_sort(transparent_.begin(), transparent_.end(), [this](int a, int b) {
+        return transparentDepth_[static_cast<std::size_t>(a)] < transparentDepth_[static_cast<std::size_t>(b)];
+    });
+
+    // Tested against the opaque surfaces' depth, but writing none, so each
+    // see-through surface blends over every one behind it.
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(RT_GL_LESS);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    // Color blends over; alpha gathers coverage, so the result is premultiplied.
+    glBlendFuncSeparate(RT_GL_SRC_ALPHA, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ONE, RT_GL_ONE_MINUS_SRC_ALPHA);
+
+    glUseProgram(forward_.id);
+    glUniformMatrix4fv(forward_.view, 1, GL_FALSE, view_.m);
+    glUniformMatrix4fv(forward_.projection, 1, GL_FALSE, projection);
+    glUniformMatrix4fv(forward_.inverseProjection, 1, GL_FALSE, inverseProjection);
+    glUniform3f(forward_.ambient, lighting_.ambient[0], lighting_.ambient[1], lighting_.ambient[2]);
+    glUniform3f(forward_.skyRadiance, kSkyRadiance, kSkyRadiance, kSkyRadiance);
+    const int lightCount = std::min(static_cast<int>(viewLights_.size()), kMaxForwardLights);
+    float positionRadius[kMaxForwardLights * 4] = {};
+    float colorIntensity[kMaxForwardLights * 4] = {};
+    float directions[kMaxForwardLights * 4] = {};
+    float cones[kMaxForwardLights * 4] = {};
+    for (int index = 0; index < lightCount; ++index) {
+        const ViewLight& light = viewLights_[static_cast<std::size_t>(index)];
+        float* pr = positionRadius + index * 4;
+        float* ci = colorIntensity + index * 4;
+        float* di = directions + index * 4;
+        float* co = cones + index * 4;
+        std::copy(light.position, light.position + 3, pr);
+        pr[3] = light.radius;
+        std::copy(light.color, light.color + 3, ci);
+        ci[3] = light.intensity;
+        std::copy(light.direction, light.direction + 3, di);
+        co[0] = light.cone[0];
+        co[1] = light.cone[1];
+    }
+    glUniform1i(forward_.lightCount, lightCount);
+    if (lightCount > 0) {
+        glUniform4fv(forward_.lightPositionRadius, lightCount, positionRadius);
+        glUniform4fv(forward_.lightColorIntensity, lightCount, colorIntensity);
+        glUniform4fv(forward_.lightDirections, lightCount, directions);
+        glUniform4fv(forward_.lightCones, lightCount, cones);
+    }
+    for (const int index : transparent_) {
+        const MeshDraw& draw = meshes[index];
+        bindMaterial(forward_, draw);
+        draw.mesh->bind();
+        draw.mesh->draw(0);
+    }
+    glDisable(GL_BLEND);
+    glDepthMask(GL_TRUE);
+}
+
+void Renderer::mergePass() {
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, mergeFbo_);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glUseProgram(merge_.id);
+    BindTexture(kUnitDepth, depthTexture_);
+    BindTexture(kUnitEmissive, emissiveTexture_);
+    BindTexture(kUnitAccumulation, accumulationTexture_);
+    BindTexture(kUnitTransparency, transparencyTexture_);
+    DrawFullscreen(emptyVao_);
+}
+
+bool Renderer::read(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
+                    ViewPixels& out) const {
+    out = ViewPixels{};
+    if (!ready_ || width <= 0.0 || height <= 0.0 || sceneWidth <= 0.0 || sceneHeight <= 0.0) {
+        return false;
+    }
+    GLint viewport[4] = {};
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    if (viewport[2] <= 0 || viewport[3] <= 0) {
+        return false;
+    }
+    // Only what draw could reach: the pane, inside the framebuffer and any parent clip.
+    PixelRect clip = Intersect(PanePixels(x, y, width, height, sceneWidth, sceneHeight, viewport),
+                               PixelRect{viewport[0], viewport[1], viewport[2], viewport[3]});
+    if (glIsEnabled(GL_SCISSOR_TEST) == GL_TRUE) {
+        GLint scissorBox[4] = {};
+        glGetIntegerv(GL_SCISSOR_BOX, scissorBox);
+        clip = Intersect(clip, PixelRect{scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3]});
+    }
+    if (clip.width <= 0 || clip.height <= 0) {
+        return false;
+    }
+    // RGBA rows are whole words, so the default pack alignment of 4 adds no padding.
+    std::vector<unsigned char> bottomUp(static_cast<std::size_t>(clip.width) * clip.height * 4);
+    glReadPixels(clip.x, clip.y, clip.width, clip.height, GL_RGBA, GL_UNSIGNED_BYTE, bottomUp.data());
+    out.width = clip.width;
+    out.height = clip.height;
+    out.rgba.resize(bottomUp.size());
+    const std::size_t row = static_cast<std::size_t>(clip.width) * 4;
+    for (int line = 0; line < clip.height; ++line) {
+        std::copy_n(bottomUp.data() + static_cast<std::size_t>(clip.height - 1 - line) * row, row,
+                    out.rgba.data() + static_cast<std::size_t>(line) * row);
+    }
+    return true;
+}
+
+void Renderer::setClearColor(float r, float g, float b) {
+    clear_[0] = r;
+    clear_[1] = g;
+    clear_[2] = b;
+}
+
+void Renderer::shutdown() {
+    ready_ = false;
+    for (Program* program : {&geometry_, &forward_, &ibl_, &light_, &merge_, &tonemap_}) {
+        if (program->id != 0) {
+            glDeleteProgram(program->id);
+        }
+        *program = Program{};
+    }
+    if (whiteTexture_ != 0) {
+        glDeleteTextures(1, &whiteTexture_);
+        whiteTexture_ = 0;
+    }
+    for (unsigned* vao : {&emptyVao_, &sphereVao_}) {
+        if (*vao != 0) {
+            glDeleteVertexArrays(1, vao);
+            *vao = 0;
+        }
+    }
+    for (unsigned* buffer : {&sphereVbo_, &sphereEbo_}) {
+        if (*buffer != 0) {
+            glDeleteBuffers(1, buffer);
+            *buffer = 0;
+        }
+    }
+    sphereIndexCount_ = 0;
+    destroyTargets();
+    targetsRefused_ = false;
+}
 
 engine_core::Matrix4 Renderer::DefaultView() {
     engine_core::Matrix4 view;
@@ -282,34 +904,6 @@ void Renderer::setCamera(const engine_core::Matrix4& world, float fovYDegrees) {
     }
     view_ = view;
     fovYDegrees_ = fovYDegrees;
-}
-
-void Renderer::drawMeshes(const MeshDraw* meshes, int count, float aspect) {
-    if (meshProgram_ == 0 || meshes == nullptr || count <= 0 || !(aspect > 0.f)) {
-        return;
-    }
-    Matrix projection;
-    Matrix viewProjection;
-    Perspective(fovYDegrees_, aspect, 0.1f, 1000.f, projection);
-    Multiply(projection, view_.m, viewProjection);
-    glUseProgram(meshProgram_);
-    glUniformMatrix4fv(viewProjectionLocation_, 1, GL_FALSE, viewProjection);
-    // Unit 0, the one JadeFX draws with, left active with nothing bound after.
-    glActiveTexture(GL_TEXTURE0);
-    glUniform1i(diffuseLocation_, 0);
-    for (int index = 0; index < count; ++index) {
-        const MeshDraw& draw = meshes[index];
-        if (draw.mesh == nullptr || !draw.mesh->valid()) {
-            continue;
-        }
-        glUniformMatrix4fv(modelLocation_, 1, GL_FALSE, draw.model.m);
-        glUniform4f(colorLocation_, draw.color[0], draw.color[1], draw.color[2], draw.color[3]);
-        glBindTexture(GL_TEXTURE_2D, draw.texture != 0 ? draw.texture : whiteTexture_);
-        draw.mesh->bind();
-        draw.mesh->draw(0);
-    }
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glBindVertexArray(0);
 }
 
 }  // namespace runner

@@ -10,6 +10,7 @@
 #include "GameService.hpp"
 #include "FileBytes.hpp"
 #include "JsonMerge.hpp"
+#include "Light.hpp"
 #include "ModuleScript.hpp"
 #include "SceneService.hpp"
 #include "Script.hpp"
@@ -118,6 +119,8 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"DataModel", [](DataModel& world) -> DataModel& { return world.create(); }});
         out.push_back({"GameObject", [](DataModel& world) -> DataModel& { return world.create_game_object(); }});
         out.push_back({"Camera", [](DataModel& world) -> DataModel& { return world.create<Camera>(); }});
+        out.push_back({"PointLight", [](DataModel& world) -> DataModel& { return world.create<PointLight>(); }});
+        out.push_back({"SpotLight", [](DataModel& world) -> DataModel& { return world.create<SpotLight>(); }});
         out.push_back({"Script", [](DataModel& world) -> DataModel& { return world.create<Script>(); }});
         out.push_back({"ModuleScript", [](DataModel& world) -> DataModel& { return world.create<ModuleScript>(); }});
         out.push_back({"Folder", [](DataModel& world) -> DataModel& { return world.create<Folder>(); }});

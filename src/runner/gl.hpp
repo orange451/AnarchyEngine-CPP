@@ -177,6 +177,37 @@ constexpr GLenum GL_REPEAT = 0x2901;
 constexpr GLenum GL_RGBA8 = 0x8058;
 constexpr GLenum GL_UNPACK_ALIGNMENT = 0x0CF5;
 
+// The Scene View's offscreen passes. Prefixed RT_ so no platform header's
+// macros of the GL names can collide with them.
+constexpr GLenum RT_GL_FRAMEBUFFER = 0x8D40;
+constexpr GLenum RT_GL_FRAMEBUFFER_BINDING = 0x8CA6;
+constexpr GLenum RT_GL_FRAMEBUFFER_COMPLETE = 0x8CD5;
+constexpr GLenum RT_GL_COLOR_ATTACHMENT0 = 0x8CE0;
+constexpr GLenum RT_GL_DEPTH_ATTACHMENT = 0x8D00;
+constexpr GLenum RT_GL_RGBA16F = 0x881A;
+constexpr GLenum RT_GL_HALF_FLOAT = 0x140B;
+constexpr GLenum RT_GL_DEPTH_COMPONENT = 0x1902;
+constexpr GLenum RT_GL_DEPTH_COMPONENT24 = 0x81A6;
+constexpr GLenum RT_GL_NEAREST = 0x2600;
+constexpr GLenum RT_GL_CLAMP_TO_EDGE = 0x812F;
+constexpr GLenum RT_GL_CULL_FACE = 0x0B44;
+constexpr GLenum RT_GL_CULL_FACE_MODE = 0x0B45;
+constexpr GLenum RT_GL_FRONT = 0x0404;
+constexpr GLenum RT_GL_BACK = 0x0405;
+constexpr GLenum RT_GL_LESS = 0x0201;
+constexpr GLenum RT_GL_DEPTH_FUNC = 0x0B74;
+constexpr GLenum RT_GL_DEPTH_WRITEMASK = 0x0B72;
+constexpr GLenum RT_GL_ZERO = 0;
+constexpr GLenum RT_GL_ONE = 1;
+constexpr GLenum RT_GL_SRC_ALPHA = 0x0302;
+constexpr GLenum RT_GL_ONE_MINUS_SRC_ALPHA = 0x0303;
+constexpr GLenum RT_GL_BLEND_SRC_RGB = 0x80C9;
+constexpr GLenum RT_GL_BLEND_DST_RGB = 0x80C8;
+constexpr GLenum RT_GL_BLEND_SRC_ALPHA = 0x80CB;
+constexpr GLenum RT_GL_BLEND_DST_ALPHA = 0x80CA;
+constexpr GLenum RT_GL_CURRENT_PROGRAM = 0x8B8D;
+constexpr GLenum RT_GL_VERTEX_ARRAY_BINDING = 0x85B5;
+
 // Names are prefixed so they do not collide with libGL's exported functions.
 extern const GLubyte* (*rt_glGetString)(GLenum name);
 extern GLenum (*rt_glGetError)();
@@ -228,6 +259,22 @@ extern void (*rt_glGenerateMipmap)(GLenum target);
 extern void (*rt_glPixelStorei)(GLenum pname, GLint param);
 extern void (*rt_glUniform1i)(GLint location, GLint v0);
 extern void (*rt_glUniform4f)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
+extern void (*rt_glUniform2f)(GLint location, GLfloat v0, GLfloat v1);
+extern void (*rt_glUniform1fv)(GLint location, GLsizei count, const GLfloat* value);
+extern void (*rt_glUniform3fv)(GLint location, GLsizei count, const GLfloat* value);
+extern void (*rt_glUniform4fv)(GLint location, GLsizei count, const GLfloat* value);
+extern void (*rt_glGenFramebuffers)(GLsizei n, GLuint* framebuffers);
+extern void (*rt_glDeleteFramebuffers)(GLsizei n, const GLuint* framebuffers);
+extern void (*rt_glBindFramebuffer)(GLenum target, GLuint framebuffer);
+extern void (*rt_glFramebufferTexture2D)(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+extern GLenum (*rt_glCheckFramebufferStatus)(GLenum target);
+extern void (*rt_glDrawBuffers)(GLsizei n, const GLenum* bufs);
+extern void (*rt_glBlendFunc)(GLenum sfactor, GLenum dfactor);
+extern void (*rt_glBlendFuncSeparate)(GLenum srcRGB, GLenum dstRGB, GLenum srcAlpha, GLenum dstAlpha);
+extern void (*rt_glCullFace)(GLenum mode);
+extern void (*rt_glDepthFunc)(GLenum func);
+extern void (*rt_glDepthMask)(GLboolean flag);
+extern void (*rt_glGetBooleanv)(GLenum pname, GLboolean* data);
 
 using GlGetProcAddress = void* (*)(const char* name);
 
@@ -286,3 +333,19 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glPixelStorei ::runner::rt_glPixelStorei
 #define glUniform1i ::runner::rt_glUniform1i
 #define glUniform4f ::runner::rt_glUniform4f
+#define glUniform2f ::runner::rt_glUniform2f
+#define glUniform1fv ::runner::rt_glUniform1fv
+#define glUniform3fv ::runner::rt_glUniform3fv
+#define glUniform4fv ::runner::rt_glUniform4fv
+#define glGenFramebuffers ::runner::rt_glGenFramebuffers
+#define glDeleteFramebuffers ::runner::rt_glDeleteFramebuffers
+#define glBindFramebuffer ::runner::rt_glBindFramebuffer
+#define glFramebufferTexture2D ::runner::rt_glFramebufferTexture2D
+#define glCheckFramebufferStatus ::runner::rt_glCheckFramebufferStatus
+#define glDrawBuffers ::runner::rt_glDrawBuffers
+#define glBlendFunc ::runner::rt_glBlendFunc
+#define glBlendFuncSeparate ::runner::rt_glBlendFuncSeparate
+#define glCullFace ::runner::rt_glCullFace
+#define glDepthFunc ::runner::rt_glDepthFunc
+#define glDepthMask ::runner::rt_glDepthMask
+#define glGetBooleanv ::runner::rt_glGetBooleanv

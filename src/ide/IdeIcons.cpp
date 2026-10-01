@@ -40,6 +40,12 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "Prefab") {
         return "ModelAlt.png";
     }
+    if (class_name == "PointLight") {
+        return "Light.png";
+    }
+    if (class_name == "SpotLight") {
+        return "LightSpot.png";
+    }
     return nullptr;
 }
 

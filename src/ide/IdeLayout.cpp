@@ -2,6 +2,7 @@
 
 #include "IdeAssets.hpp"
 #include "IdeLayoutInternal.hpp"
+#include "ScratchResources.hpp"
 
 namespace ide {
 
@@ -202,8 +203,8 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     root_->setPrefWidthRatio(1);
     root_->setPrefHeightRatio(1);
     root_->getClassList().add("ide-root");
-    // Image files dropped anywhere a pane does not take them are imported as Textures.
-    accept_texture_drops(*root_);
+    // Image and model files dropped anywhere a pane does not take them are imported.
+    accept_file_drops(*root_);
     root_->setTop(top);
     root_->setBottom(status);
 
@@ -263,6 +264,10 @@ engine_core::Engine& IdeLayout::simulation() { return runner_.simulation(); }
 
 void IdeLayout::start() {
     runner_.start();
+    // The app made an untitled place, which keeps its resources in scratch.
+    if (!project_) {
+        begin_scratch();
+    }
     // Whatever the app built before start is the starting point, not an edit.
     mark_saved();
     // The initial place exists by now: the app makes it right after
@@ -464,6 +469,8 @@ IdeLayout::~IdeLayout() {
         preferences_window_->setOnClosed(nullptr);
         preferences_window_->setCanClose(nullptr);
     }
+    // Closing asked to save first; what is still in scratch was not kept.
+    remove_scratch_resources(scratch_resources_);
 }
 
 void IdeLayout::routeKeys(jadefx::KeyEvent& event, jadefx::Scene& scene) {
@@ -774,6 +781,21 @@ std::filesystem::path IdeLayout::dialog_directory() const {
         return {};
     }
     return project_->root().parent_path();
+}
+
+std::filesystem::path IdeLayout::place_resources() const {
+    return project_ ? project_->resources_root() : scratch_resources_;
+}
+
+void IdeLayout::begin_scratch() {
+    end_scratch();
+    scratch_resources_ = new_scratch_resources();
+    run_now([this](engine_core::DataModel& game) { game.set_resources_root(scratch_resources_); });
+}
+
+void IdeLayout::end_scratch() {
+    remove_scratch_resources(scratch_resources_);
+    scratch_resources_.clear();
 }
 
 void IdeLayout::update_title() {

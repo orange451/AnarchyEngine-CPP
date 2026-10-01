@@ -197,6 +197,53 @@ TEST_CASE("a Model draws its Material's DiffuseTexture Path and Color", "[render
     REQUIRE(surface().color.g == 1.f);
 }
 
+TEST_CASE("a Model draws its Material's other textures and numbers, clamped", "[render]") {
+    Scene scene;
+    engine_core::Mesh& body = scene.mesh("Body", "meshes/body.amesh");
+    engine_core::Prefab& crate = scene.prefab("Crate");
+    engine_core::Model& part = scene.model(crate, body.id());
+    engine_core::GameObject& box = scene.object(crate.id());
+    auto surface = [&scene, &box]() -> const engine_core::VisualMesh& {
+        const engine_core::VisualSnapshot& front = scene.pump.front();
+        const std::uint32_t entry = scene.row(box.id())->prefab;
+        REQUIRE(entry < front.prefabs.size());
+        REQUIRE(front.prefabs[entry].meshes.size() == 1);
+        return front.prefabs[entry].meshes[0];
+    };
+
+    // No Material has a Material's defaults.
+    scene.frame();
+    REQUIRE(surface().metalness == 0.f);
+    REQUIRE(surface().roughness == 0.4f);
+    REQUIRE(surface().reflectivity == 0.5f);
+    REQUIRE(surface().transparency == 0.f);
+    REQUIRE(surface().emissive.r == 0.f);
+    REQUIRE(surface().normal_texture.empty());
+
+    engine_core::Texture& bumps = scene.game.create<engine_core::Texture>();
+    scene.game.set_parent(bumps.id(), scene.game.service("Textures"));
+    REQUIRE_FALSE(bumps.set_path("textures/bumps.png"));
+    engine_core::Material& steel = scene.game.create<engine_core::Material>();
+    scene.game.set_parent(steel.id(), scene.game.service("Materials"));
+    REQUIRE_FALSE(steel.set_reference(engine_core::Material::kNormalTextureReference, instance_slot(bumps.id())));
+    REQUIRE_FALSE(steel.set_reference(engine_core::Material::kRoughnessTextureReference, instance_slot(bumps.id())));
+    REQUIRE_FALSE(steel.set_metalness(1.0));
+    REQUIRE_FALSE(steel.set_roughness(3.0));
+    REQUIRE_FALSE(steel.set_transparency(-1.0));
+    REQUIRE_FALSE(steel.set_emissive(engine_core::ColorRgb{0.f, 0.25f, 0.f, 1.f}));
+    REQUIRE_FALSE(part.set_reference(engine_core::Model::kMaterialReference, instance_slot(steel.id())));
+    scene.frame();
+    REQUIRE(surface().normal_texture == "textures/bumps.png");
+    REQUIRE(surface().roughness_texture == "textures/bumps.png");
+    REQUIRE(surface().metalness_texture.empty());
+    REQUIRE(surface().metalness == 1.f);
+    // Stored as given, drawn clamped.
+    REQUIRE(steel.roughness() == 3.0);
+    REQUIRE(surface().roughness == 1.f);
+    REQUIRE(surface().transparency == 0.f);
+    REQUIRE(surface().emissive.g == 0.25f);
+}
+
 TEST_CASE("changing or clearing a GameObject's Prefab changes what it draws", "[render]") {
     Scene scene;
     engine_core::Mesh& body = scene.mesh("Body", "meshes/body.amesh");

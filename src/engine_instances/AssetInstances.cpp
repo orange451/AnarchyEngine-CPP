@@ -277,29 +277,44 @@ std::optional<std::string> Material::set_transparency(double value) {
     return set_number("Transparency", transparency_, value);
 }
 
-std::optional<std::string> Material::set_color(ColorRgb color) {
+std::optional<std::string> Material::set_metalness(double value) {
+    return set_number("Metalness", metalness_, value);
+}
+
+std::optional<std::string> Material::set_roughness(double value) {
+    return set_number("Roughness", roughness_, value);
+}
+
+std::optional<std::string> Material::set_color3(const char* property, ColorRgb& slot, ColorRgb color) {
     if (!on_gameplay_thread()) {
         contract_fail("asset setters run on SimulationThread");
     }
     if (!std::isfinite(color.r) || !std::isfinite(color.g) || !std::isfinite(color.b)) {
-        return std::string("Color must be finite");
+        return std::string(property) + " must be finite";
     }
     // A Color3 has no alpha.
     color.a = 1.f;
-    if (same_color(color_, color)) {
+    if (same_color(slot, color)) {
         return std::nullopt;
     }
-    const ColorRgb previous = color_;
-    color_ = color;
-    note_property_change("Color", color_slot(previous), color_slot(color));
+    const ColorRgb previous = slot;
+    slot = color;
+    note_property_change(property, color_slot(previous), color_slot(color));
     return std::nullopt;
 }
+
+std::optional<std::string> Material::set_color(ColorRgb color) { return set_color3("Color", color_, color); }
+
+std::optional<std::string> Material::set_emissive(ColorRgb color) { return set_color3("Emissive", emissive_, color); }
 
 void Material::on_reuse() {
     ReferenceAsset::on_reuse();
     reflectivity_ = kDefaultReflectivity;
     transparency_ = kDefaultTransparency;
+    metalness_ = kDefaultMetalness;
+    roughness_ = kDefaultRoughness;
     color_ = kDefaultColor;
+    emissive_ = kDefaultEmissive;
 }
 
 namespace {
@@ -374,35 +389,42 @@ bool write_material_number(DataModel&, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+template <ColorRgb (Material::*Get)() const>
 bool read_material_color(DataModel&, DataModel& object, LuaSlot& out) {
     const Material* material = material_of(object);
     if (material == nullptr) {
         return false;
     }
-    out = color_slot(material->color());
+    out = color_slot((material->*Get)());
     return true;
 }
 
+template <std::optional<std::string> (Material::*Set)(ColorRgb)>
 bool write_material_color(DataModel&, DataModel& object, LuaSlot& in) {
     Material* material = material_of(object);
     if (material == nullptr) {
         return false;
     }
-    if (std::optional<std::string> error = material->set_color(in.color)) {
+    if (std::optional<std::string> error = (material->*Set)(in.color)) {
         in.error = std::move(*error);
         return false;
     }
     return true;
 }
 
+std::string color_json(ColorRgb color) {
+    const float channels[3] = {color.r, color.g, color.b};
+    return write_json(json_floats(channels, 3));
+}
+
 ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
     // The defaults, as a file would hold them, from the class's own constants.
     static const std::string reflectivity = write_json(JsonValue::number(Material::kDefaultReflectivity));
     static const std::string transparency = write_json(JsonValue::number(Material::kDefaultTransparency));
-    static const std::string color = [] {
-        const float channels[3] = {Material::kDefaultColor.r, Material::kDefaultColor.g, Material::kDefaultColor.b};
-        return write_json(json_floats(channels, 3));
-    }();
+    static const std::string metalness = write_json(JsonValue::number(Material::kDefaultMetalness));
+    static const std::string roughness = write_json(JsonValue::number(Material::kDefaultRoughness));
+    static const std::string color = color_json(Material::kDefaultColor);
+    static const std::string emissive = color_json(Material::kDefaultEmissive);
     const LuaField file_fields[] = {
         lua_saved_property("Path", "string", read_path, write_path, "\"\""),
     };
@@ -416,7 +438,16 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
         lua_saved_property("NormalTexture", "Texture?", read_reference<1>, write_reference<1>, "null"),
         lua_saved_property("RoughnessTexture", "Texture?", read_reference<2>, write_reference<2>, "null"),
         lua_saved_property("MetalnessTexture", "Texture?", read_reference<3>, write_reference<3>, "null"),
-        lua_saved_property("Color", "Color3", read_material_color, write_material_color, color.c_str()),
+        lua_saved_property("Color", "Color3", read_material_color<&Material::color>,
+                           write_material_color<&Material::set_color>, color.c_str()),
+        lua_saved_property("Emissive", "Color3", read_material_color<&Material::emissive>,
+                           write_material_color<&Material::set_emissive>, emissive.c_str()),
+        lua_slider(lua_saved_property("Metalness", "number", read_material_number<&Material::metalness>,
+                                      write_material_number<&Material::set_metalness>, metalness.c_str()),
+                   0.0, 1.0),
+        lua_slider(lua_saved_property("Roughness", "number", read_material_number<&Material::roughness>,
+                                      write_material_number<&Material::set_roughness>, roughness.c_str()),
+                   0.0, 1.0),
         lua_slider(lua_saved_property("Reflectivity", "number", read_material_number<&Material::reflectivity>,
                                       write_material_number<&Material::set_reflectivity>, reflectivity.c_str()),
                    0.0, 1.0),

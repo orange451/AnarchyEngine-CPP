@@ -85,6 +85,14 @@ std::optional<std::string> Lighting::set_fog_start(double value) { return set_nu
 
 std::optional<std::string> Lighting::set_fog_end(double value) { return set_number("FogEnd", fog_end_, value); }
 
+std::optional<std::string> Lighting::set_exposure(double value) { return set_number("Exposure", exposure_, value); }
+
+std::optional<std::string> Lighting::set_saturation(double value) {
+    return set_number("Saturation", saturation_, value);
+}
+
+std::optional<std::string> Lighting::set_gamma(double value) { return set_number("Gamma", gamma_, value); }
+
 namespace {
 
 Lighting* lighting_of(DataModel& object) { return dynamic_cast<Lighting*>(&object); }
@@ -144,6 +152,9 @@ ANARCHY_LUA_REGISTER(register_lighting_lua) {
     static const std::string fog_color = color_json(Lighting::kDefaultFogColor);
     static const std::string fog_start = number_json(Lighting::kDefaultFogStart);
     static const std::string fog_end = number_json(Lighting::kDefaultFogEnd);
+    static const std::string exposure = number_json(Lighting::kDefaultExposure);
+    static const std::string saturation = number_json(Lighting::kDefaultSaturation);
+    static const std::string gamma = number_json(Lighting::kDefaultGamma);
     const LuaField fields[] = {
         lua_saved_property("Ambient", "Color3", read_color<&Lighting::ambient>, write_color<&Lighting::set_ambient>,
                            ambient.c_str()),
@@ -157,8 +168,17 @@ ANARCHY_LUA_REGISTER(register_lighting_lua) {
                            write_number<&Lighting::set_fog_start>, fog_start.c_str()),
         lua_saved_property("FogEnd", "number", read_number<&Lighting::fog_end>, write_number<&Lighting::set_fog_end>,
                            fog_end.c_str()),
+        lua_slider(lua_saved_property("Exposure", "number", read_number<&Lighting::exposure>,
+                                      write_number<&Lighting::set_exposure>, exposure.c_str()),
+                   0.0, 2.0),
+        lua_slider(lua_saved_property("Saturation", "number", read_number<&Lighting::saturation>,
+                                      write_number<&Lighting::set_saturation>, saturation.c_str()),
+                   0.0, 2.0),
+        lua_slider(lua_saved_property("Gamma", "number", read_number<&Lighting::gamma>,
+                                      write_number<&Lighting::set_gamma>, gamma.c_str()),
+                   0.0, 4.0),
     };
-    register_lua_class("Lighting", "SceneService", fields, 6);
+    register_lua_class("Lighting", "SceneService", fields, static_cast<int>(sizeof(fields) / sizeof(fields[0])));
 }
 
 }  // namespace

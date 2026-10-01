@@ -3,6 +3,8 @@
 #include "AssetInstances.hpp"
 #include "Camera.hpp"
 #include "GameObject.hpp"
+#include "Light.hpp"
+#include "Lighting.hpp"
 #include "LuaApi.hpp"
 
 #include <algorithm>
@@ -10,9 +12,38 @@
 namespace engine_core {
 namespace {
 
+static_assert(VisualLighting{}.exposure == static_cast<float>(Lighting::kDefaultExposure) &&
+                  VisualLighting{}.saturation == static_cast<float>(Lighting::kDefaultSaturation) &&
+                  VisualLighting{}.gamma == static_cast<float>(Lighting::kDefaultGamma),
+              "a place with no Lighting draws with Lighting's defaults");
+
 float field_of_view_of(const GameObject& object) {
     const auto* camera = dynamic_cast<const Camera*>(&object);
     return camera != nullptr ? static_cast<float>(camera->field_of_view()) : 0.f;
+}
+
+float unit(double value) { return static_cast<float>(std::clamp(value, 0.0, 1.0)); }
+
+VisualLight light_of(const GameObject& object) {
+    VisualLight out;
+    const auto* light = dynamic_cast<const Light*>(&object);
+    if (light == nullptr) {
+        return out;
+    }
+    out.kind = VisualLight::Kind::Point;
+    out.enabled = light->enabled();
+    const ColorRgb color = light->color();
+    out.color[0] = color.r;
+    out.color[1] = color.g;
+    out.color[2] = color.b;
+    out.intensity = static_cast<float>(light->intensity());
+    out.radius = static_cast<float>(light->radius());
+    if (const auto* spot = dynamic_cast<const SpotLight*>(light)) {
+        out.kind = VisualLight::Kind::Spot;
+        out.outer_fov = static_cast<float>(spot->outer_fov());
+        out.inner_fov_scale = static_cast<float>(spot->inner_fov_scale());
+    }
+    return out;
 }
 
 // The live T that asset's reference at index holds, or null.
@@ -117,6 +148,9 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
     if (whole || any(change.fields, VisualField::Camera)) {
         inst->field_of_view = field_of_view_of(*object);
     }
+    if (whole || any(change.fields, VisualField::Light)) {
+        inst->light = light_of(*object);
+    }
     inst->alive = true;
 }
 
@@ -134,6 +168,7 @@ void SnapshotPump::resync(DataModel& game) {
         inst.transform_origin = WriteOrigin::Simulation;
         inst.prefab = acquire_prefab(object.prefab_guid());
         inst.field_of_view = field_of_view_of(object);
+        inst.light = light_of(object);
         base_ids_.insert(object.id());
         base_.instances.push_back(inst);
     });
@@ -234,16 +269,28 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
                         out.session.reset();
                     }
                     const Material* material = ReferencedAs<Material>(game, *model, Model::kMaterialReference);
-                    const Texture* diffuse =
-                        material != nullptr
-                            ? ReferencedAs<Texture>(game, *material, Material::kDiffuseTextureReference)
-                            : nullptr;
-                    if (diffuse != nullptr) {
-                        out.diffuse_texture = diffuse->path();
-                    } else {
-                        out.diffuse_texture.clear();
-                    }
+                    // Assigned in place, as above. Empty for no Material or no Texture.
+                    const auto texture_path = [&](std::size_t index, std::string& path) {
+                        const Texture* texture =
+                            material != nullptr ? ReferencedAs<Texture>(game, *material, index) : nullptr;
+                        if (texture != nullptr) {
+                            path = texture->path();
+                        } else {
+                            path.clear();
+                        }
+                    };
+                    texture_path(Material::kDiffuseTextureReference, out.diffuse_texture);
+                    texture_path(Material::kNormalTextureReference, out.normal_texture);
+                    texture_path(Material::kRoughnessTextureReference, out.roughness_texture);
+                    texture_path(Material::kMetalnessTextureReference, out.metalness_texture);
                     out.color = material != nullptr ? material->color() : ColorRgb{};
+                    out.emissive = material != nullptr ? material->emissive() : Material::kDefaultEmissive;
+                    out.metalness = unit(material != nullptr ? material->metalness() : Material::kDefaultMetalness);
+                    out.roughness = unit(material != nullptr ? material->roughness() : Material::kDefaultRoughness);
+                    out.reflectivity =
+                        unit(material != nullptr ? material->reflectivity() : Material::kDefaultReflectivity);
+                    out.transparency =
+                        unit(material != nullptr ? material->transparency() : Material::kDefaultTransparency);
                 }
             }
         }
@@ -251,8 +298,21 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
     }
 }
 
+void SnapshotPump::resolve_lighting(DataModel& game) {
+    const auto* lighting = dynamic_cast<const Lighting*>(game.instance(game.scene_service("Lighting")));
+    if (lighting == nullptr) {
+        base_.lighting = VisualLighting{};
+        return;
+    }
+    base_.lighting.ambient = lighting->ambient();
+    base_.lighting.exposure = static_cast<float>(lighting->exposure());
+    base_.lighting.saturation = static_cast<float>(lighting->saturation());
+    base_.lighting.gamma = static_cast<float>(lighting->gamma());
+}
+
 void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.camera = base_.camera;
+    dst.lighting = base_.lighting;
     dst.instances.resize(base_.instances.size());
     std::copy(base_.instances.begin(), base_.instances.end(), dst.instances.begin());
     // Element by element, so strings that did not change keep their buffers.
@@ -291,6 +351,7 @@ void SnapshotPump::take_changes(DataModel& game) {
         queue.drain([&](const Invalidation& change) { apply_live(game, change); });
     }
     resolve_prefabs(game);
+    resolve_lighting(game);
     if (camera_pending_) {
         base_.camera = pending_camera_;
         camera_pending_ = false;

@@ -53,7 +53,7 @@ bool asset_view_from(std::string_view name, AssetView& out) {
 }
 
 AssetBrowser::AssetBrowser(engine_core::DataModel& world) : world_(world) {
-    folder_ = world_.service(engine_core::kServices[5].class_name);  // Materials
+    folder_ = world_.service("Materials");
     remember_chain();
 }
 

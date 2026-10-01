@@ -448,6 +448,7 @@ void testInsertInstance() {
 }  // namespace
 
 int RunLuauHighlightTests();
+int RunCssHighlightTests();
 int RunLuauCompleteTests();
 int RunScriptMarksTests();
 int RunScriptPairsTests();
@@ -476,6 +477,7 @@ int main() {
         testContextActions();
         testInsertInstance();
         gFailures += RunLuauHighlightTests();
+        gFailures += RunCssHighlightTests();
         gFailures += RunLuauCompleteTests();
         gFailures += RunScriptMarksTests();
         gFailures += RunScriptPairsTests();

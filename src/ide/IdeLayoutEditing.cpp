@@ -3,8 +3,10 @@
 #include "IdeLayout.hpp"
 
 #include "IdeLayoutInternal.hpp"
+#include "IdeCssEditor.hpp"
 
 #include "FileBytes.hpp"
+#include "Gui.hpp"
 
 namespace ide {
 
@@ -483,6 +485,7 @@ void IdeLayout::edit(std::uint32_t id) {
     }
     engine_core::DataModel& game = runner_.simulation().datamodel();
     bool is_prefab = false;
+    bool is_css = false;
     std::string guid;
     {
         engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionWait);
@@ -493,6 +496,8 @@ void IdeLayout::edit(std::uint32_t id) {
         const engine_core::DataModel* object = game.instance(id);
         if (dynamic_cast<const engine_core::Prefab*>(object) != nullptr) {
             is_prefab = true;
+        } else if (dynamic_cast<const engine_core::Css*>(object) != nullptr) {
+            is_css = true;
         } else if (dynamic_cast<const engine_core::LuaSource*>(object) == nullptr) {
             return;
         }
@@ -500,6 +505,10 @@ void IdeLayout::edit(std::uint32_t id) {
     }
     if (is_prefab) {
         edit_prefab(id, *home);
+        return;
+    }
+    if (is_css) {
+        edit_css(id, *home);
         return;
     }
     kept_sources_.erase(id);
@@ -546,6 +555,26 @@ void IdeLayout::edit_prefab(std::uint32_t prefab, IdeDock& home) {
     auto editor = jadefx::make<IdePrefabEditor>(runner_.simulation().datamodel(), prefab, prefab_editor_host());
     home.dock(editor);
     open_prefabs_[prefab] = editor;
+}
+
+void IdeLayout::edit_css(std::uint32_t css, IdeDock& home) {
+    const auto found = open_css_.find(css);
+    if (found != open_css_.end()) {
+        if (const std::shared_ptr<IdeCssEditor> existing = found->second.lock()) {
+            if (dockContaining(existing.get()) != nullptr) {
+                reveal_window(existing.get());
+                existing->focus();
+                return;
+            }
+        }
+    }
+    auto editor = jadefx::make<IdeCssEditor>(runner_.simulation(), css);
+    std::shared_ptr<jadefx::Tab> tab = home.dock(editor);
+    if (tab) {
+        // Closing flushes the text into the place, so nothing is kept.
+        tab->setOnClosed([this, css] { open_css_.erase(css); });
+    }
+    open_css_[css] = editor;
 }
 
 PrefabEditorHost IdeLayout::prefab_editor_host() {
@@ -604,6 +633,11 @@ void IdeLayout::flush_editors() {
             editor->flush();
         }
     }
+    for (const auto& entry : open_css_) {
+        if (std::shared_ptr<IdeCssEditor> editor = entry.second.lock()) {
+            editor->flush();
+        }
+    }
 }
 
 void IdeLayout::reapply_editors() {
@@ -659,6 +693,11 @@ void IdeLayout::close_script_editors() {
             pages.push_back(std::move(editor));
         }
     }
+    for (const auto& entry : open_css_) {
+        if (std::shared_ptr<IdeCssEditor> editor = entry.second.lock()) {
+            pages.push_back(std::move(editor));
+        }
+    }
     for (const std::shared_ptr<IdePane>& editor : pages) {
         IdeDock* dock = dockContaining(editor.get());
         if (dock == nullptr || dock->tabs() == nullptr) {
@@ -679,6 +718,7 @@ void IdeLayout::close_script_editors() {
     undo_router_.forget_scripts();
     open_scripts_.clear();
     open_prefabs_.clear();
+    open_css_.clear();
     kept_sources_.clear();
     last_script_focus_ = 0;
 }
@@ -686,6 +726,13 @@ void IdeLayout::close_script_editors() {
 bool IdeLayout::editors_unflushed() const {
     for (const auto& entry : open_scripts_) {
         if (std::shared_ptr<IdeScriptEditor> editor = entry.second.lock()) {
+            if (editor->hasUnflushedText()) {
+                return true;
+            }
+        }
+    }
+    for (const auto& entry : open_css_) {
+        if (std::shared_ptr<IdeCssEditor> editor = entry.second.lock()) {
             if (editor->hasUnflushedText()) {
                 return true;
             }

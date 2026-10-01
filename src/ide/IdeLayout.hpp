@@ -35,6 +35,7 @@ enum class DropSide;
 struct LayoutHost;
 class IdeScriptEditor;
 class IdePrefabEditor;
+class IdeCssEditor;
 struct PrefabEditorHost;
 class IdeSearch;
 class IdeConflicts;
@@ -161,6 +162,8 @@ private:
     // Docks a Prefab editor for prefab on the scene view's tab strip, or brings
     // the one already open forward. home is where a new one docks.
     void edit_prefab(std::uint32_t prefab, IdeDock& home);
+    // A CSS instance's editor: the open one, or a new one docked at home.
+    void edit_css(std::uint32_t css, IdeDock& home);
     std::shared_ptr<IdePrefabEditor> open_prefab_editor(std::uint32_t prefab) const;
     // A Prefab editor's writes, each one undo step on the simulation thread.
     PrefabEditorHost prefab_editor_host();
@@ -435,6 +438,7 @@ private:
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeScriptEditor>> open_scripts_;
     // The open Prefab editors, by Prefab id.
     std::unordered_map<std::uint32_t, std::weak_ptr<IdePrefabEditor>> open_prefabs_;
+    std::unordered_map<std::uint32_t, std::weak_ptr<IdeCssEditor>> open_css_;
     std::weak_ptr<class IdeConsole> console_;
     // The Search and Conflicts pages, typed, as their window entries' make last
     // built them. Null until first made. Kept while the tab is closed, so

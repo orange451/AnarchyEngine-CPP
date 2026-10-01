@@ -50,6 +50,22 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "SoundEmitter") {
         return "Sound.png";
     }
+    // The GUI classes, with the legacy engine's icons.
+    if (class_name == "Gui" || class_name == "ScreenGui") {
+        return "Gui.png";
+    }
+    if (class_name == "HBox") {
+        return "hbox.png";
+    }
+    if (class_name == "VBox") {
+        return "vbox.png";
+    }
+    if (class_name == "Label") {
+        return "TextLabel.png";
+    }
+    if (class_name == "Button") {
+        return "TextButton.png";
+    }
     // The default icon, named so no PhysicsObject.png is looked for first.
     if (class_name == "PhysicsObject") {
         return "wat.gif";

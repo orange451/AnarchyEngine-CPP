@@ -33,6 +33,7 @@ set(STUDIO_CORE_SOURCES
     src/ide/InputRouter.cpp
     src/ide/LuauComplete.cpp
     src/ide/LuauHighlight.cpp
+    src/ide/CssHighlight.cpp
     src/ide/McpServer.cpp
     src/ide/McpTools.cpp
     src/ide/McpToolSpecs.cpp
@@ -61,6 +62,7 @@ set(STUDIO_SOURCES
     src/ide/SavedLayout.cpp
     src/ide/IdeConflicts.cpp
     src/ide/IdeConsole.cpp
+    src/ide/IdeCssEditor.cpp
     src/ide/IdeTerminal.cpp
     src/ide/TerminalView.cpp
     src/ide/ConsoleLog.cpp
@@ -605,6 +607,7 @@ add_executable(engine-tests
     tests/AssetBrowserTest.cpp
     tests/ColorLiteralsTest.cpp
     tests/LuauHighlightTest.cpp
+    tests/CssHighlightTest.cpp
     tests/LuauCompleteTest.cpp
     tests/ScriptMarksTest.cpp
     tests/ScriptPairsTest.cpp

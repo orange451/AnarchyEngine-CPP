@@ -1185,14 +1185,17 @@ void testInsertFilter() {
     engine_core::lua_creatable_names(names);
     std::vector<std::string> shown;
     ide::filter_class_names(names, "", shown);
-    const std::vector<std::string> expected = {"Camera",    "DirectionalLight", "Folder",     "GameObject", "Material",
-                                                "Mesh",      "Model",            "ModuleScript", "PhysicsObject", "PointLight", "Prefab",
-                                                "Script",    "Sound",            "SoundEmitter", "SpotLight",  "Texture"};
+    const std::vector<std::string> expected = {
+        "Button",       "Camera",        "CSS",        "DirectionalLight", "Folder",    "GameObject", "HBox",
+        "Label",        "Material",      "Mesh",       "Model",            "ModuleScript", "Pane",    "PhysicsObject",
+        "PointLight",   "Prefab",        "ScreenGui",  "Script",           "Sound",     "SoundEmitter", "SpotLight",
+        "TextField",    "Texture",       "VBox"};
     if (shown != expected) {
         fail("insert list is every creatable class, A to Z");
     }
     ide::filter_class_names(names, "scr", shown);
-    if (shown.size() != 2 || shown[0] != "Script" || shown[1] != "ModuleScript") {
+    // Names that start with it first, A to Z, then those that have it inside.
+    if (shown != std::vector<std::string>{"ScreenGui", "Script", "ModuleScript"}) {
         fail("scr lists Script before ModuleScript");
     }
     ide::filter_class_names(names, "Ga", shown);

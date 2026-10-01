@@ -351,6 +351,14 @@ bool IdeExplorer::actions_for(engine_core::InstanceId id, std::vector<engine_cor
     return !out.empty();
 }
 
+std::string IdeExplorer::insert_holder() const {
+    engine_core::DataModelLock lock(root_, engine_core::DataModelLock::Read, kFrameLockWait);
+    if (!lock.owns()) {
+        return {};
+    }
+    return root_.placement_holder(insert_parent_);
+}
+
 bool IdeExplorer::offers(engine_core::InstanceId id, InstanceAction action) const {
     std::vector<engine_core::ContextAction> actions;
     if (!actions_for(id, actions)) {
@@ -455,7 +463,7 @@ void IdeExplorer::show_menu(jadefx::TreeItem& item, double x, double y) {
         buttons.push_back(std::move(button));
     }
     insert_parent_ = id;
-    ensure_insert_popup().show_at(*tree_, x, y, std::move(buttons));
+    ensure_insert_popup().show_at(*tree_, x, y, std::move(buttons), insert_holder());
 }
 
 void IdeExplorer::show_root_insert(double x, double y) {
@@ -465,7 +473,7 @@ void IdeExplorer::show_root_insert(double x, double y) {
         return;
     }
     insert_parent_ = root_.id();
-    ensure_insert_popup().show_at(*tree_, x, y, {});
+    ensure_insert_popup().show_at(*tree_, x, y, {}, insert_holder());
 }
 
 bool IdeExplorer::activate(jadefx::TreeItem& item) {
@@ -750,7 +758,7 @@ InsertPopup& IdeExplorer::ensure_insert_popup() {
     return *insert_popup_;
 }
 
-void IdeExplorer::show_insert(jadefx::Node& anchor) { ensure_insert_popup().show(anchor); }
+void IdeExplorer::show_insert(jadefx::Node& anchor) { ensure_insert_popup().show(anchor, insert_holder()); }
 
 void IdeExplorer::create_child(const std::string& class_name) {
     if (!host_.insert || class_name.empty()) {

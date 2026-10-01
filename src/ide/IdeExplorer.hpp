@@ -130,6 +130,8 @@ private:
     void place_reveal();
     bool find_id(const jadefx::TreeItem* item, engine_core::InstanceId& id) const;
     bool actions_for(engine_core::InstanceId id, std::vector<engine_core::ContextAction>& out) const;
+    // The class whose rule decides what goes under insert_parent_, for the class list.
+    std::string insert_holder() const;
     bool offers(engine_core::InstanceId id, engine_core::InstanceAction action) const;
     void run(engine_core::InstanceAction action, engine_core::InstanceId id);
     void show_menu(jadefx::TreeItem& item, double x, double y);

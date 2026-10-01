@@ -939,6 +939,22 @@ void insert_list_leaves_out_assets() {
     }
 }
 
+void insert_list_suits_the_parent() {
+    Expect(ide::insert_suits("Gui", "ScreenGui"), "Gui suits a ScreenGui");
+    Expect(!ide::insert_suits("Gui", "PointLight"), "Gui does not suit a light");
+    Expect(ide::insert_suits("ScreenGui", "Button"), "A ScreenGui suits a Button");
+    Expect(!ide::insert_suits("ScreenGui", "ScreenGui"), "A ScreenGui does not suit another");
+    Expect(ide::insert_suits("Lighting", "SpotLight"), "Lighting suits a light");
+    Expect(!ide::insert_suits("Lighting", "Label"), "Lighting does not suit a Label");
+    Expect(ide::insert_suits("Scripts", "ModuleScript"), "Scripts suits a ModuleScript");
+    Expect(ide::insert_suits("Workspace", "GameObject"), "Workspace suits a GameObject");
+    Expect(!ide::insert_suits("Workspace", "Texture"), "Workspace does not suit an asset");
+    Expect(ide::insert_suits("Storage", "Label"), "Storage suits anything it takes");
+    Expect(ide::insert_suits("Lighting", "Folder"), "Every holder suits a Folder");
+    Expect(!ide::insert_suits("Assets", "Folder"), "but not where its rule refuses one");
+    Expect(ide::insert_suits("", "PointLight"), "No holder suits everything");
+}
+
 void insert_refused_leaves_nothing() {
     engine_core::register_lua_creatable("Folder", CreateFolder);
     engine_core::register_lua_creatable("Texture", CreateTexture);
@@ -1157,6 +1173,7 @@ int main() {
     TestRefusedInsertSaysWhy();
     hidden_services_have_no_rows();
     insert_list_leaves_out_assets();
+    insert_list_suits_the_parent();
     insert_refused_leaves_nothing();
     add_prefab_instance_places_named_game_object();
     if (gFailures == 0) {

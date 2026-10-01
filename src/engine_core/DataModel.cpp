@@ -1425,8 +1425,10 @@ std::optional<std::string> DataModel::placement_error_for(InstanceId id, Instanc
     return std::nullopt;
 }
 
+std::string DataModel::placement_holder(InstanceId parent) const { return rule_class(parent, kNoParent, parent); }
+
 std::optional<std::string> DataModel::placement_error_for_class(InstanceId parent, std::string_view class_name) const {
-    const std::string holder = rule_class(parent, kNoParent, parent);
+    const std::string holder = placement_holder(parent);
     if (holder.empty()) {
         return std::nullopt;
     }

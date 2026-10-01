@@ -13,12 +13,68 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <initializer_list>
+#include <string_view>
 #include <utility>
 
 namespace ide {
 
 bool insert_offers(const std::string& class_name) {
     return engine_core::lua_creatable_known(class_name.c_str()) && !engine_core::is_asset_class(class_name);
+}
+
+namespace {
+
+bool one_of(std::string_view name, std::initializer_list<std::string_view> names) {
+    return std::find(names.begin(), names.end(), name) != names.end();
+}
+
+bool is_light(std::string_view name) { return one_of(name, {"PointLight", "SpotLight", "DirectionalLight"}); }
+
+bool is_gui_container(std::string_view name) { return one_of(name, {"ScreenGui", "Pane", "HBox", "VBox"}); }
+
+bool is_gui_control(std::string_view name) { return one_of(name, {"Label", "Button", "TextField"}); }
+
+bool is_world_object(std::string_view name) { return one_of(name, {"GameObject", "PhysicsObject"}); }
+
+}  // namespace
+
+bool insert_suits(std::string_view holder_class, std::string_view child_class) {
+    if (holder_class.empty()) {
+        return true;
+    }
+    if (engine_core::placement_error(holder_class, child_class, child_class)) {
+        return false;
+    }
+    // A Folder organizes whatever its holder takes.
+    if (child_class == "Folder") {
+        return true;
+    }
+    if (holder_class == "Lighting") {
+        return is_light(child_class);
+    }
+    if (holder_class == "Gui") {
+        return child_class == "ScreenGui" || child_class == "CSS";
+    }
+    if (is_gui_container(holder_class)) {
+        if (child_class == "ScreenGui") {
+            return false;
+        }
+        return is_gui_container(child_class) || is_gui_control(child_class) || child_class == "CSS" ||
+               child_class == "Script";
+    }
+    if (is_gui_control(holder_class)) {
+        return child_class == "CSS" || child_class == "Script";
+    }
+    if (holder_class == "Scripts") {
+        return child_class == "Script" || child_class == "ModuleScript";
+    }
+    if (holder_class == "Workspace" || is_world_object(holder_class)) {
+        return is_world_object(child_class) || is_light(child_class) ||
+               one_of(child_class, {"Camera", "SoundEmitter", "Script"});
+    }
+    // Storage, and anything without a theme of its own, takes what its rule allows.
+    return true;
 }
 
 const char* describe_class(const std::string& name) {
@@ -153,7 +209,8 @@ public:
         return scene != nullptr && !scene->isTearingDown() && scene->isPopupShowing(this);
     }
 
-    void showAtPoint(jadefx::Node& owner, double x, double y, std::vector<InsertAction> actions) {
+    void showAtPoint(jadefx::Node& owner, double x, double y, std::vector<InsertAction> actions, std::string holder) {
+        holder_ = std::move(holder);
         engine_core::lua_creatable_names(all_);
         if (field_) {
             field_->setText("");
@@ -174,7 +231,8 @@ public:
         }
     }
 
-    void showAt(jadefx::Node& anchor) {
+    void showAt(jadefx::Node& anchor, std::string holder) {
+        holder_ = std::move(holder);
         engine_core::lua_creatable_names(all_);
         all_.erase(std::remove_if(all_.begin(), all_.end(),
                                   [](const std::string& name) { return !insert_offers(name); }),
@@ -367,6 +425,9 @@ private:
         rows_.clear();
         const std::string query = field_ ? field_->getText() : std::string();
         filter_class_names(all_, query, shown_);
+        // The classes that belong here first, each group in the filter's order.
+        std::stable_partition(shown_.begin(), shown_.end(),
+                              [this](const std::string& name) { return insert_suits(holder_, name); });
         selected_ = shown_.empty() ? -1 : 0;
         scroll_ = 0;
         ensure_ = selected_;
@@ -379,6 +440,9 @@ private:
             row->setAlignment(jadefx::Pos::CenterLeft);
             row->setCursor(jadefx::Cursor::Pointer);
             row->setStyle("border-radius: 4px; transition: background-color 0.1s;");
+            if (!insert_suits(holder_, name)) {
+                row->setOpacity(0.5f);
+            }
             if (index == selected_) {
                 row->setBackground(theme_color("--ide-popup-selection-color"));
             }
@@ -704,6 +768,7 @@ private:
     std::shared_ptr<InsertScrollTrack> track_;
     std::vector<std::string> all_;
     std::vector<std::string> shown_;
+    std::string holder_;
     std::vector<std::shared_ptr<jadefx::HBox>> rows_;
     jadefx::Node* anchor_ = nullptr;
     double pinned_x_ = 0;
@@ -762,15 +827,16 @@ void InsertPopup::setOnCreate(std::function<void(const std::string&)> handler) {
     }
 }
 
-void InsertPopup::show(jadefx::Node& anchor) {
+void InsertPopup::show(jadefx::Node& anchor, std::string holder) {
     if (list_) {
-        list_->showAt(anchor);
+        list_->showAt(anchor, std::move(holder));
     }
 }
 
-void InsertPopup::show_at(jadefx::Node& owner, double x, double y, std::vector<InsertAction> actions) {
+void InsertPopup::show_at(jadefx::Node& owner, double x, double y, std::vector<InsertAction> actions,
+                          std::string holder) {
     if (list_) {
-        list_->showAtPoint(owner, x, y, std::move(actions));
+        list_->showAtPoint(owner, x, y, std::move(actions), std::move(holder));
     }
 }
 

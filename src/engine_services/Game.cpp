@@ -36,6 +36,7 @@ Game::Game() : DataModel(kClassName) {
     add_service<Lighting>(*this);
     add_service<Storage>(*this);
     add_service<Scripts>(*this);
+    add_service<GuiService>(*this);
     add_service<Assets>(*this);
     add_service<Materials>(*this);
     add_service<Prefabs>(*this);

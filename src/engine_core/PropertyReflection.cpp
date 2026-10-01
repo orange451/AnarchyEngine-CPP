@@ -38,6 +38,9 @@ bool slot_to_json(const LuaSlot& slot, std::string_view type, JsonValue& out) {
     } else if (type == "Vector3" && slot.kind == LuaSlot::Kind::Vec3) {
         const float axes[3] = {slot.vec.x, slot.vec.y, slot.vec.z};
         out = json_floats(axes, 3);
+    } else if (type == "Vector2" && slot.kind == LuaSlot::Kind::Vec2) {
+        const float axes[2] = {slot.vec.x, slot.vec.y};
+        out = json_floats(axes, 2);
     } else if (type == "Matrix4" && slot.kind == LuaSlot::Kind::Matrix4) {
         out = json_floats(slot.transform.m, 16);
     } else if (!reference_class(type).empty() &&
@@ -97,6 +100,13 @@ bool slot_from_json(const JsonValue& value, std::string_view type, const char* n
         }
         out.kind = LuaSlot::Kind::Vec3;
         out.vec = Vec3{floats[0], floats[1], floats[2]};
+    } else if (type == "Vector2") {
+        if (!read_json_floats(value, 2, 2, floats)) {
+            error = label + " must be 2 numbers";
+            return false;
+        }
+        out.kind = LuaSlot::Kind::Vec2;
+        out.vec = Vec3{floats[0], floats[1], 0.f};
     } else if (type == "Matrix4") {
         if (!read_json_floats(value, 16, 16, floats)) {
             error = label + " must be 16 numbers, column-major";
@@ -144,6 +154,8 @@ bool same_slot(const LuaSlot& a, const LuaSlot& b) {
         return a.id == b.id && a.text == b.text;
     case LuaSlot::Kind::Vec3:
         return a.vec.x == b.vec.x && a.vec.y == b.vec.y && a.vec.z == b.vec.z;
+    case LuaSlot::Kind::Vec2:
+        return a.vec.x == b.vec.x && a.vec.y == b.vec.y;
     case LuaSlot::Kind::Color:
         return same_color(a.color, b.color);
     case LuaSlot::Kind::Matrix4:

@@ -51,6 +51,8 @@ const char* Storage::class_name() const { return "Storage"; }
 
 const char* Scripts::class_name() const { return "Scripts"; }
 
+const char* GuiService::class_name() const { return "Gui"; }
+
 namespace {
 
 bool read_current_camera(DataModel&, DataModel& object, LuaSlot& out) {
@@ -86,6 +88,7 @@ ANARCHY_LUA_REGISTER(register_scene_service_lua) {
     register_lua_class("Workspace", "SceneService", workspace, 1);
     register_lua_class("Storage", "SceneService", nullptr, 0);
     register_lua_class("Scripts", "SceneService", nullptr, 0);
+    register_lua_class("Gui", "SceneService", nullptr, 0);
     // So completion offers them to GetService.
     for (const char* name : kSceneServiceClasses) {
         register_lua_service(name);

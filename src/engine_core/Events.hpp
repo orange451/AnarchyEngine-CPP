@@ -33,7 +33,9 @@ enum class SignalKind : std::uint8_t {
     PropertyChanged,
     ChildAdded,
     ChildRemoved,
-    AncestryChanged
+    AncestryChanged,
+    // An event a class declares (lua_event), such as Button.Action.
+    Event
 };
 
 // Deferred: emit enqueues, handlers run at the next SimulationThread drain.

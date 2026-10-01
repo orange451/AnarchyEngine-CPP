@@ -104,6 +104,9 @@ bool read_value(DataModel& world, DataModel& object, const LuaField& field, Prop
     case PropertyKind::Vector3:
         out.vec = slot.vec;
         return slot.kind == LuaSlot::Kind::Vec3;
+    case PropertyKind::Vector2:
+        out.vec = engine_core::Vec3{slot.vec.x, slot.vec.y, 0.f};
+        return slot.kind == LuaSlot::Kind::Vec2;
     case PropertyKind::Color3:
         out.color = engine_core::Color3{slot.color.r, slot.color.g, slot.color.b};
         return slot.kind == LuaSlot::Kind::Color;
@@ -162,6 +165,8 @@ void merge(PropertyRow& row, const PropertyValue& next) {
     case PropertyKind::Enum:
         row.mixed = row.mixed || row.value.number != next.number;
         break;
+    // A Vector2's z is 0 in both, so its third part never differs.
+    case PropertyKind::Vector2:
     case PropertyKind::Vector3:
         row.axis_mixed[0] = row.axis_mixed[0] || !same_component(row.value.vec.x, next.vec.x);
         row.axis_mixed[1] = row.axis_mixed[1] || !same_component(row.value.vec.y, next.vec.y);
@@ -192,7 +197,7 @@ void merge(PropertyRow& row, const PropertyValue& next) {
 // Mixed parts read as empty, so two sheets that differ only in a hidden
 // first-instance value compare equal and the widgets do not churn.
 void blank_mixed(PropertyRow& row) {
-    if (row.kind == PropertyKind::Vector3) {
+    if (row.kind == PropertyKind::Vector3 || row.kind == PropertyKind::Vector2) {
         float* parts[3] = {&row.value.vec.x, &row.value.vec.y, &row.value.vec.z};
         for (int axis = 0; axis < 3; ++axis) {
             if (row.axis_mixed[axis]) {
@@ -306,6 +311,8 @@ bool property_kind_for(const std::string& type_name, PropertyKind& out) {
         out = PropertyKind::Number;
     } else if (type_name == "Vector3") {
         out = PropertyKind::Vector3;
+    } else if (type_name == "Vector2") {
+        out = PropertyKind::Vector2;
     } else if (type_name == "Instance" || type_name == "Instance?" || type_name == "DataModel" ||
                type_name == "DataModel?" || !engine_core::reference_class(type_name).empty()) {
         out = PropertyKind::Ref;
@@ -600,14 +607,18 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
             slot.enum_type = target.field.enum_type;
             slot.number = edit.value.number;
             break;
+        case PropertyKind::Vector2:
         case PropertyKind::Vector3: {
-            slot.kind = LuaSlot::Kind::Vec3;
+            slot.kind = edit.kind == PropertyKind::Vector2 ? LuaSlot::Kind::Vec2 : LuaSlot::Kind::Vec3;
             slot.vec = edit.value.vec;
-            if (edit.axis >= 0 && edit.axis < 3) {
-                // One component: the other two stay what this instance has.
+            if (edit.kind == PropertyKind::Vector2) {
+                slot.vec.z = 0.f;
+            }
+            if (edit.axis >= 0 && edit.axis < vector_axes(edit.kind)) {
+                // One component: the others stay what this instance has.
                 LuaSlot current;
                 if (target.field.read == nullptr || !target.field.read(world, *target.object, current) ||
-                    current.kind != LuaSlot::Kind::Vec3) {
+                    current.kind != slot.kind) {
                     continue;
                 }
                 slot.vec = current.vec;

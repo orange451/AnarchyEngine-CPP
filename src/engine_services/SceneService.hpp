@@ -20,7 +20,7 @@ public:
 };
 
 // A child of game that scripts and the explorer see: Workspace, Lighting,
-// Storage, or Scripts. A DataModel that is not an Instance, like Game.
+// Storage, Scripts, or Gui. A DataModel that is not an Instance, like Game.
 class SceneService : public Service {
 public:
     using Service::Service;
@@ -29,7 +29,7 @@ public:
 };
 
 // The scene service classes, in the order game holds them.
-inline constexpr const char* kSceneServiceClasses[] = {"Workspace", "Lighting", "Storage", "Scripts"};
+inline constexpr const char* kSceneServiceClasses[] = {"Workspace", "Lighting", "Storage", "Scripts", "Gui"};
 
 bool is_scene_service_class(std::string_view class_name);
 // Each service's GUID is its class name in lowercase, the same in every
@@ -66,6 +66,15 @@ public:
 
 // Scripts that run at runtime. A Script runs only under Workspace or Scripts.
 class Scripts : public SceneService {
+public:
+    using SceneService::SceneService;
+    const char* class_name() const override;
+};
+
+// The screen GUIs: every ScreenGui in it, directly or through Folders, is drawn
+// over each Scene View, in edit mode and in play. Anything may go in it.
+// Its class, and its name in scripts, is Gui (game.Gui).
+class GuiService : public SceneService {
 public:
     using SceneService::SceneService;
     const char* class_name() const override;

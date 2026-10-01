@@ -959,6 +959,42 @@ Signal& DataModel::ancestry_changed(InstanceId id) {
     return ensure_signal(id, SignalKind::AncestryChanged, Field::Parent);
 }
 
+Signal& DataModel::event_signal(InstanceId id, std::string_view name) {
+    InstanceSignals& bag = ensure_bag(id);
+    for (const std::unique_ptr<InstanceSignals::Event>& event : bag.events) {
+        if (event->name == name) {
+            return event->signal;
+        }
+    }
+    // Boxed, so a Signal never moves once the queue knows its address.
+    bag.events.push_back(std::make_unique<InstanceSignals::Event>());
+    InstanceSignals::Event& event = *bag.events.back();
+    event.name.assign(name.data(), name.size());
+    event.signal.owner_ = id;
+    event.signal.kind_ = SignalKind::Event;
+    event.signal.field_ = Field::Reflected;
+    state_->events.register_signal(&event.signal);
+    return event.signal;
+}
+
+void DataModel::fire_event(InstanceId id, std::string_view name) {
+    if (!on_gameplay_thread()) {
+        contract_fail("fire_event runs on SimulationThread");
+    }
+    InstanceSignals* bag = bag_for(id);
+    if (bag == nullptr) {
+        return;
+    }
+    for (const std::unique_ptr<InstanceSignals::Event>& event : bag->events) {
+        if (event->name == name) {
+            if (event->signal.bound() && event->signal.listeners_ > 0) {
+                state_->events.emit(event->signal.id(), id, Field::Reflected);
+            }
+            return;
+        }
+    }
+}
+
 std::uint64_t DataModel::watch_changes(std::function<void()> notify) {
     std::lock_guard<std::mutex> guard(state_->watch_mu);
     State::ChangeWatcher watcher;

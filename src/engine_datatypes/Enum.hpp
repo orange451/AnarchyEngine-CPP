@@ -33,6 +33,9 @@ const EnumType& mouse_behavior_enum();
 const EnumType& physics_shape_enum();
 // Inverse 0, Linear 1, Exponential 2, None 3.
 const EnumType& roll_off_mode_enum();
+// Where a GuiBase puts its children: TopLeft 0, TopCenter 1, TopRight 2,
+// CenterLeft 3, Center 4, CenterRight 5, BottomLeft 6, BottomCenter 7, BottomRight 8.
+const EnumType& gui_alignment_enum();
 
 // Every type the Enum global holds, for script analysis to declare.
 int enum_type_count();

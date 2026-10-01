@@ -7,6 +7,7 @@
 #include "Folder.hpp"
 #include "Game.hpp"
 #include "GameObject.hpp"
+#include "Gui.hpp"
 #include "GameService.hpp"
 #include "FileBytes.hpp"
 #include "JsonMerge.hpp"
@@ -103,7 +104,7 @@ DataModel& existing_service(DataModel& world) {
     return *service;
 }
 
-static_assert(std::size(kServices) == 10, "one registry entry per service");
+static_assert(std::size(kServices) == 11, "one registry entry per service");
 
 std::vector<ClassEntry>& class_registry() {
     static std::vector<ClassEntry> entries = [] {
@@ -118,6 +119,7 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({kServices[7].class_name, existing_service<7>});
         out.push_back({kServices[8].class_name, existing_service<8>});
         out.push_back({kServices[9].class_name, existing_service<9>});
+        out.push_back({kServices[10].class_name, existing_service<10>});
         out.push_back({"DataModel", [](DataModel& world) -> DataModel& { return world.create(); }});
         out.push_back({"GameObject", [](DataModel& world) -> DataModel& { return world.create_game_object(); }});
         out.push_back({"Camera", [](DataModel& world) -> DataModel& { return world.create<Camera>(); }});
@@ -132,6 +134,14 @@ std::vector<ClassEntry>& class_registry() {
             {"PhysicsObject", [](DataModel& world) -> DataModel& { return world.create<PhysicsObject>(); }});
         out.push_back(
             {"SoundEmitter", [](DataModel& world) -> DataModel& { return world.create<SoundEmitter>(); }});
+        out.push_back({"ScreenGui", [](DataModel& world) -> DataModel& { return world.create<ScreenGui>(); }});
+        out.push_back({"Pane", [](DataModel& world) -> DataModel& { return world.create<Pane>(); }});
+        out.push_back({"HBox", [](DataModel& world) -> DataModel& { return world.create<HBox>(); }});
+        out.push_back({"VBox", [](DataModel& world) -> DataModel& { return world.create<VBox>(); }});
+        out.push_back({"Label", [](DataModel& world) -> DataModel& { return world.create<Label>(); }});
+        out.push_back({"Button", [](DataModel& world) -> DataModel& { return world.create<Button>(); }});
+        out.push_back({"TextField", [](DataModel& world) -> DataModel& { return world.create<TextField>(); }});
+        out.push_back({"CSS", [](DataModel& world) -> DataModel& { return world.create<Css>(); }});
         out.push_back({"Texture", [](DataModel& world) -> DataModel& { return world.create<Texture>(); }});
         out.push_back({"Mesh", [](DataModel& world) -> DataModel& { return world.create<Mesh>(); }});
         out.push_back({"Sound", [](DataModel& world) -> DataModel& { return world.create<Sound>(); }});

@@ -790,8 +790,9 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 pane->getChildren().add(view->slider);
             }
             break;
+        case PropertyKind::Vector2:
         case PropertyKind::Vector3:
-            for (int axis = 0; axis < 3; ++axis) {
+            for (int axis = 0; axis < vector_axes(row.kind); ++axis) {
                 view->axes[axis] =
                     make_field(view, !row.writable, row.name == "Position" ? kAxisStyles[axis] : kFieldStyle);
             }
@@ -1014,8 +1015,9 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 view.slider->show(row.mixed ? row.slider_min : row.value.number);
             }
             break;
+        case PropertyKind::Vector2:
         case PropertyKind::Vector3:
-            for (int axis = 0; axis < 3; ++axis) {
+            for (int axis = 0; axis < vector_axes(row.kind); ++axis) {
                 put(*view.axes[axis], part_text(row, axis));
             }
             break;
@@ -1169,10 +1171,11 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 return;
             }
             break;
+        case PropertyKind::Vector2:
         case PropertyKind::Vector3: {
             double component = 0;
             const int axis = axis_of(view, field);
-            if (axis < 0 || axis >= 3 || !parse_number(text, component)) {
+            if (axis < 0 || axis >= vector_axes(view.row.kind) || !parse_number(text, component)) {
                 status = view.row.name + " must be a number";
                 field.show(part_text(view.row, axis));
                 return;
@@ -1550,6 +1553,13 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             place(*view->name, left + kPad + kIndent, name_width - kIndent - 4, kRowHeight);
             const double each = (editor_width - 2 * kAxisGap) / 3;
             switch (view->row.kind) {
+            case PropertyKind::Vector2: {
+                const double half = (editor_width - kAxisGap) / 2;
+                for (int axis = 0; axis < 2; ++axis) {
+                    place(*view->axes[axis], editor_x + axis * (half + kAxisGap), half, kRowHeight);
+                }
+                break;
+            }
             case PropertyKind::Vector3:
                 for (int axis = 0; axis < 3; ++axis) {
                     place(*view->axes[axis], editor_x + axis * (each + kAxisGap), each, kRowHeight);
@@ -1715,6 +1725,8 @@ jadefx::Node* PropertiesPanel::editor(const std::string& property, int part) con
         switch (view->row.kind) {
         case PropertyKind::Vector3:
             return part >= 0 && part < 3 ? view->axes[part].get() : nullptr;
+        case PropertyKind::Vector2:
+            return part >= 0 && part < 2 ? view->axes[part].get() : nullptr;
         case PropertyKind::Transform:
             return part >= 0 && part < kTransformParts ? static_cast<jadefx::Node*>(view->axes[part].get())
                    : part == kTransformParts           ? static_cast<jadefx::Node*>(view->disclosure.get())

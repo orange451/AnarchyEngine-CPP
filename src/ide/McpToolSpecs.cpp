@@ -32,7 +32,7 @@ constexpr SpecText kSpecs[] = {
          "instances":{"type":"array","items":{"type":["string","number"]},"description":"Ids or paths. The result lists each one's properties under instances, in this order."}}})"},
     {"set_property",
      "Sets one property, as an edit in the Properties panel does: one undo step. Vector3 takes "
-     "[x, y, z]. Color3 takes [r, g, b], each 0 to 1, or a hex code such as \"#FF8000\". A "
+     "[x, y, z] and Vector2 [x, y]. Color3 takes [r, g, b], each 0 to 1, or a hex code such as \"#FF8000\". A "
      "Matrix4 (Transform) takes {\"position\": [x, y, z], \"orientation\": [x, y, z]}, either one "
      "alone keeping the other; orientation is in degrees, turned about Y, then X, then Z. It also takes its 16 numbers, "
      "column-major. An Instance property (such as Parent) takes an id, a path, or null.",

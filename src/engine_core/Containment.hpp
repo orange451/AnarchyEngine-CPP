@@ -20,7 +20,7 @@ struct ServiceSpec {
 // Every service, parents first, in the order their parents hold them.
 inline constexpr ServiceSpec kServices[] = {
     {"Workspace", nullptr}, {"Lighting", nullptr},  {"Storage", nullptr},  {"Scripts", nullptr},
-    {"Assets", nullptr},    {"Materials", "Assets"}, {"Prefabs", "Assets"}, {"Meshes", "Assets"},
+    {"Gui", nullptr},       {"Assets", nullptr},    {"Materials", "Assets"}, {"Prefabs", "Assets"}, {"Meshes", "Assets"},
     {"Textures", "Assets"}, {"Audio", "Assets"},
 };
 

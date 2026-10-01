@@ -424,6 +424,7 @@ add_library(engine_instances STATIC
     src/engine_instances/MeshShapes.cpp
     src/engine_instances/Folder.cpp
     src/engine_instances/GameObject.cpp
+    src/engine_instances/Gui.cpp
     src/engine_instances/Light.cpp
     src/engine_instances/LuaSource.cpp
     src/engine_instances/ModuleScript.cpp
@@ -710,6 +711,7 @@ add_executable(sandbox
     sandbox/physics_tests.cpp
     sandbox/audio_tests.cpp
     sandbox/scene_camera_tests.cpp
+    sandbox/gui_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

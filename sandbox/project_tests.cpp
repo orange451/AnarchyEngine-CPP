@@ -131,6 +131,7 @@ void write_bare_project(const fs::path& root, const char* root_extra = "", const
     write_file(root / "src" / "Lighting.lighting.json", meta("Lighting", "lighting", "Lighting"));
     write_file(root / "src" / "Storage.storage.json", meta("Storage", "storage", "Storage"));
     write_file(root / "src" / "Scripts.scripts.json", meta("Scripts", "scripts", "Scripts"));
+    write_file(root / "src" / "Gui.gui.json", meta("Gui", "gui", "Gui"));
     write_file(root / "src" / "Assets.assets" / "init.json",
                meta("Assets", "assets", "Assets",
                     ",\n  \"children\": [\"materials\", \"prefabs\", \"meshes\", \"textures\", \"audio\"]"));

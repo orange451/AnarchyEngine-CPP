@@ -7,6 +7,7 @@
 #include "Enum.hpp"
 #include "Folder.hpp"
 #include "GameObject.hpp"
+#include "Gui.hpp"
 #include "Light.hpp"
 #include "LuaApi.hpp"
 #include "LuaUserdata.hpp"
@@ -169,6 +170,14 @@ DataModel& create_folder(DataModel& world) { return world.create<Folder>(); }
 DataModel& create_physics_object(DataModel& world) { return world.create<PhysicsObject>(); }
 
 DataModel& create_sound_emitter(DataModel& world) { return world.create<SoundEmitter>(); }
+DataModel& create_screen_gui(DataModel& world) { return world.create<ScreenGui>(); }
+DataModel& create_pane(DataModel& world) { return world.create<Pane>(); }
+DataModel& create_hbox(DataModel& world) { return world.create<HBox>(); }
+DataModel& create_vbox(DataModel& world) { return world.create<VBox>(); }
+DataModel& create_label(DataModel& world) { return world.create<Label>(); }
+DataModel& create_button(DataModel& world) { return world.create<Button>(); }
+DataModel& create_text_field(DataModel& world) { return world.create<TextField>(); }
+DataModel& create_css(DataModel& world) { return world.create<Css>(); }
 
 DataModel& create_texture(DataModel& world) { return world.create<Texture>(); }
 DataModel& create_mesh(DataModel& world) { return world.create<Mesh>(); }
@@ -191,6 +200,14 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Folder", create_folder);
     register_lua_creatable("PhysicsObject", create_physics_object);
     register_lua_creatable("SoundEmitter", create_sound_emitter);
+    register_lua_creatable("ScreenGui", create_screen_gui);
+    register_lua_creatable("Pane", create_pane);
+    register_lua_creatable("HBox", create_hbox);
+    register_lua_creatable("VBox", create_vbox);
+    register_lua_creatable("Label", create_label);
+    register_lua_creatable("Button", create_button);
+    register_lua_creatable("TextField", create_text_field);
+    register_lua_creatable("CSS", create_css);
     register_lua_creatable("Texture", create_texture);
     register_lua_creatable("Mesh", create_mesh);
     register_lua_creatable("Sound", create_sound);
@@ -294,6 +311,9 @@ void push_registered(lua_State* state, ScriptRuntime* runtime, const LuaSlot& sl
     case LuaSlot::Kind::Vec3:
         lua_pushvector(state, slot.vec.x, slot.vec.y, slot.vec.z);
         return;
+    case LuaSlot::Kind::Vec2:
+        push_vector2(state, Vec2{slot.vec.x, slot.vec.y});
+        return;
     case LuaSlot::Kind::Color:
         push_color3(state, Color3{slot.color.r, slot.color.g, slot.color.b});
         return;
@@ -360,6 +380,17 @@ int ScriptBindings::instance_index(lua_State* state) {
             push_method(state, *field);
             return 1;
         }
+        if (field->event) {
+            auto* signal = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
+            *signal = SignalUd{};
+            signal->kind = kSignalEvent;
+            signal->id = object->id();
+            signal->world = ud->world;
+            signal->event_name = field->name;
+            luaL_getmetatable(state, kSignalMeta);
+            lua_setmetatable(state, -2);
+            return 1;
+        }
         LuaSlot slot;
         if (field->read == nullptr || !field->read(*runtime->game_, *object, slot)) {
             lua_pushnil(state);
@@ -423,6 +454,13 @@ int ScriptBindings::instance_newindex(lua_State* state) {
             }
             slot.kind = LuaSlot::Kind::Vec3;
             slot.vec = Vec3{components[0], components[1], components[2]};
+        } else if (type == "Vector2") {
+            const Vec2* value = to_vector2(state, 3);
+            if (value == nullptr) {
+                luaL_error(state, "%s expects a Vector2", field->name);
+            }
+            slot.kind = LuaSlot::Kind::Vec2;
+            slot.vec = Vec3{value->x, value->y, 0.f};
         } else if (type == "Color3") {
             if (!read_color3(state, 3, slot.color)) {
                 luaL_error(state, "%s expects a Color3", field->name);
@@ -588,6 +626,11 @@ Signal& ScriptBindings::signal_of(lua_State* state, ScriptRuntime& runtime, cons
             luaL_error(state, "instance is gone");
         }
         signal = &runtime.game_->changed(ud.id);
+    } else if (ud.kind == kSignalEvent) {
+        if (runtime.resolve_id(ud.id, ud.world) == nullptr) {
+            luaL_error(state, "instance is gone");
+        }
+        signal = &runtime.game_->event_signal(ud.id, ud.event_name != nullptr ? ud.event_name : "");
     } else if (ud.kind == kSignalInput) {
         signal = runtime.game_->input().signal(static_cast<UserInputService::Kind>(ud.phase));
     } else {
@@ -631,6 +674,8 @@ int ScriptBindings::signal_connect(lua_State* state) {
                 if (const InputRecord* record = runtime->delivered_input()) {
                     runtime->invoke_listener_input(owner, held->ref, script, generation, *record);
                 }
+            } else if (kind == kSignalEvent) {
+                runtime->invoke_listener(owner, held->ref, script, generation, nullptr, false, 0);
             } else {
                 runtime->invoke_listener(owner, held->ref, script, generation, nullptr, true,
                                          runtime->run_service_.dt());
@@ -682,6 +727,8 @@ int ScriptBindings::signal_wait(lua_State* state) {
                     } else {
                         runtime->make_ready(*waiting, nullptr);
                     }
+                } else if (kind == kSignalEvent) {
+                    runtime->make_ready(*waiting, nullptr);
                 } else {
                     runtime->make_ready_number(*waiting, runtime->run_service_.dt());
                 }

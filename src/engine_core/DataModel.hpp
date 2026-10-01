@@ -325,6 +325,12 @@ public:
     Signal& child_added(InstanceId id);
     Signal& child_removed(InstanceId id);
     Signal& ancestry_changed(InstanceId id);
+    // An event the instance's class declares with lua_event, such as a Button's
+    // Action, made on first use. name is the field's name.
+    Signal& event_signal(InstanceId id, std::string_view name);
+    // Fires that event for whatever is connected to it; nothing when nothing
+    // is. Its handlers get the instance and Field::Reflected. SimulationThread.
+    void fire_event(InstanceId id, std::string_view name);
 
     EventQueue& events();
     const EventQueue& events() const;
@@ -526,6 +532,12 @@ private:
         Signal child_added;
         Signal child_removed;
         Signal ancestry;
+        // The lua_event signals made so far, by name.
+        struct Event {
+            std::string name;
+            Signal signal;
+        };
+        std::vector<std::unique_ptr<Event>> events;
     };
 
     struct Command {

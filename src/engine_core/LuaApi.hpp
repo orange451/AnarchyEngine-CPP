@@ -19,7 +19,8 @@ struct EnumType;
 // A value carried between a class's property and the Luau stack.
 // The set of kinds stays small. Property names do not live here.
 struct LuaSlot {
-    enum class Kind { Nil, Bool, Number, String, Instance, Vec3, Color, Matrix4, Signal, Enum };
+    // A Vec2 (a Vector2) keeps its x and y in vec, with z 0.
+    enum class Kind { Nil, Bool, Number, String, Instance, Vec3, Color, Matrix4, Signal, Enum, Vec2 };
     Kind kind = Kind::Nil;
     bool flag = false;
     // A Number's value, or an Enum item's value.
@@ -69,6 +70,8 @@ struct LuaField {
     int param_count = 0;
     // Signal phase, or a non-instance property tag (Connection.Connected).
     int tag = -1;
+    // An event on each instance of the class (lua_event).
+    bool event = false;
     bool blocked = false;
     LuaRead read = nullptr;
     LuaWrite write = nullptr;
@@ -175,6 +178,16 @@ inline LuaField lua_signal_member(const char* name, int phase, bool blocked) {
     field.blocked = blocked;
     field.params = kPhaseSignalArgs;
     field.param_count = 1;
+    return field;
+}
+
+// A signal on each instance of the class, such as a Button's Action. The
+// engine fires it with DataModel::fire_event; its callbacks get no arguments.
+inline LuaField lua_event(const char* name) {
+    LuaField field;
+    field.name = name;
+    field.type_name = "Signal";
+    field.event = true;
     return field;
 }
 

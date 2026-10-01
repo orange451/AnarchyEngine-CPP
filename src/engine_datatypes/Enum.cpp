@@ -178,6 +178,12 @@ const EnumEntry kRollOffModes[] = {
     {"None", 3},
 };
 
+// GuiBase.Alignment, as the legacy engine had it: rows top to bottom, each left to right.
+const EnumEntry kGuiAlignments[] = {
+    {"TopLeft", 0},    {"TopCenter", 1},    {"TopRight", 2},    {"CenterLeft", 3},   {"Center", 4},
+    {"CenterRight", 5}, {"BottomLeft", 6}, {"BottomCenter", 7}, {"BottomRight", 8},
+};
+
 template <std::size_t N>
 constexpr int count_of(const EnumEntry (&)[N]) {
     return static_cast<int>(N);
@@ -192,10 +198,12 @@ const EnumType kUserInputStateType{"UserInputState", kUserInputStates, count_of(
 const EnumType kMouseBehaviorType{"MouseBehavior", kMouseBehaviors, count_of(kMouseBehaviors)};
 const EnumType kPhysicsShapeType{"PhysicsShape", kPhysicsShapes, count_of(kPhysicsShapes)};
 const EnumType kRollOffModeType{"RollOffMode", kRollOffModes, count_of(kRollOffModes)};
+const EnumType kGuiAlignmentType{"GuiAlignment", kGuiAlignments, count_of(kGuiAlignments)};
 
 const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kRotationOrderType,
                                   &kKeyCodeType,        &kUserInputTypeType, &kUserInputStateType,
-                                  &kMouseBehaviorType,  &kPhysicsShapeType,  &kRollOffModeType};
+                                  &kMouseBehaviorType,  &kPhysicsShapeType,  &kRollOffModeType,
+                                  &kGuiAlignmentType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -269,6 +277,8 @@ const EnumType& mouse_behavior_enum() { return kMouseBehaviorType; }
 const EnumType& physics_shape_enum() { return kPhysicsShapeType; }
 
 const EnumType& roll_off_mode_enum() { return kRollOffModeType; }
+
+const EnumType& gui_alignment_enum() { return kGuiAlignmentType; }
 
 int enum_item_value(const EnumType& type, std::string_view name) {
     for (int index = 0; index < type.count; ++index) {

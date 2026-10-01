@@ -44,6 +44,8 @@ struct SignalUd {
     bool blocked = false;
     // The registered field's name, which lives as long as the class registry.
     const char* blocked_name = nullptr;
+    // kSignalEvent: the event's name, the registered field's, like blocked_name.
+    const char* event_name = nullptr;
 };
 
 inline constexpr const char* kInstanceMeta = "AE.Instance";
@@ -63,10 +65,12 @@ struct ServiceUd {
 inline constexpr const char* kServiceClasses[] = {"RunService", "Selection", "UserInputService"};
 constexpr int kUserInputServiceKind = 2;
 
-// SignalUd kinds. An instance's Changed, a RunService phase, or an UserInputService signal.
+// SignalUd kinds. An instance's Changed, a RunService phase, an UserInputService
+// signal, or an event the instance's class declares (lua_event).
 constexpr int kSignalChanged = 0;
 constexpr int kSignalPhase = 1;
 constexpr int kSignalInput = 2;
+constexpr int kSignalEvent = 3;
 constexpr int kServiceKinds = static_cast<int>(sizeof(kServiceClasses) / sizeof(kServiceClasses[0]));
 
 inline int service_kind(const char* name) {

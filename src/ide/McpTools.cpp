@@ -248,6 +248,8 @@ const char* KindName(PropertyKind kind) {
             return "number";
         case PropertyKind::Vector3:
             return "Vector3";
+        case PropertyKind::Vector2:
+            return "Vector2";
         case PropertyKind::Color3:
             return "Color3";
         case PropertyKind::Ref:
@@ -279,6 +281,9 @@ JsonValue RowValue(const DataModel& world, const PropertyRow& row) {
         case PropertyKind::Vector3:
             // Floats, written as the shortest decimal that reads back to the same float.
             return FloatTriple(row.value.vec);
+        case PropertyKind::Vector2:
+            return JsonValue::array({JsonValue::number_from_float(row.value.vec.x),
+                                     JsonValue::number_from_float(row.value.vec.y)});
         case PropertyKind::Transform: {
             // As the Properties panel shows it: Position, and Orientation in degrees.
             JsonValue out = JsonValue::object();
@@ -361,6 +366,21 @@ engine_core::Vec3 Vec3Arg(const JsonValue& value, const std::string& what) {
     return {FloatArg(axes[0], what), FloatArg(axes[1], what), FloatArg(axes[2], what)};
 }
 
+engine_core::Vec3 Vec2Arg(const JsonValue& value, const std::string& what) {
+    double axes[2] = {0, 0};
+    if (value.is_array() && value.items().size() == 2) {
+        for (int i = 0; i < 2; ++i) {
+            axes[i] = NumberArg(value.items()[static_cast<std::size_t>(i)], what);
+        }
+    } else if (value.is_object() && value.find("x") && value.find("y")) {
+        axes[0] = NumberArg(*value.find("x"), what);
+        axes[1] = NumberArg(*value.find("y"), what);
+    } else {
+        throw std::runtime_error(what + " takes [x, y].");
+    }
+    return {FloatArg(axes[0], what), FloatArg(axes[1], what), 0.f};
+}
+
 // The typed value for one row, from the JSON a client sent.
 PropertyEdit EditFor(const DataModel& world, const PropertyRow& row, const JsonValue& value) {
     PropertyEdit edit;
@@ -385,6 +405,9 @@ PropertyEdit EditFor(const DataModel& world, const PropertyRow& row, const JsonV
             break;
         case PropertyKind::Vector3:
             edit.value.vec = Vec3Arg(value, row.name);
+            break;
+        case PropertyKind::Vector2:
+            edit.value.vec = Vec2Arg(value, row.name);
             break;
         case PropertyKind::Transform: {
             // The whole matrix, built on the one held, so a part left out stays.

@@ -78,8 +78,8 @@ public:
     // motion, at the mouse location as it was. The location does not move.
     void post_mouse_delta(float dx, float dy, bool processed = false);
     void post_wheel(float x, float y, float amount, bool processed = false);
-    // The scene view lost keyboard focus: every key and button still down ends, and
-    // MouseBehavior goes back to Default, since the view let the pointer go.
+    // The scene view lost keyboard focus: every key and button still down ends.
+    // MouseBehavior stays, so the lock comes back when the view is focused again.
     void post_focus_lost();
 
     // SimulationThread. Between bind and release the signals belong to one
@@ -113,6 +113,9 @@ public:
     // Default to a lock drops the motion from before it, queued or dispatched.
     int mouse_behavior() const { return mouse_behavior_.load(std::memory_order_relaxed); }
     void set_mouse_behavior(int behavior);
+    // Any thread. The pointer was just locked, as when a script's lock waited
+    // for the scene view to be focused again: drops the motion from before it.
+    void note_lock_started();
 
     // SimulationThread. Clamped to 0 and up. False, changing nothing, when not finite.
     double mouse_delta_sensitivity() const { return mouse_delta_sensitivity_; }

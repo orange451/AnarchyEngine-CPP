@@ -54,7 +54,7 @@ TEST_CASE("SC1 locked mouse motion adds up for one step and leaves the location"
     REQUIRE(input.mouse_delta().y == 0.f);
 }
 
-TEST_CASE("SC2 MouseBehavior holds what was asked until the view loses focus", "[SC2]") {
+TEST_CASE("SC2 MouseBehavior holds what was asked, through a focus loss", "[SC2]") {
     SimRole role;
     engine_core::Game game;
     UserInputService& input = game.input();
@@ -62,8 +62,29 @@ TEST_CASE("SC2 MouseBehavior holds what was asked until the view loses focus", "
     REQUIRE(input.mouse_behavior() == UserInputService::kMouseBehaviorDefault);
     input.set_mouse_behavior(UserInputService::kLockCurrentPosition);
     REQUIRE(input.mouse_behavior() == UserInputService::kLockCurrentPosition);
+    // The view locks again when it is clicked, so the ask stays.
     input.post_focus_lost();
-    REQUIRE(input.mouse_behavior() == UserInputService::kMouseBehaviorDefault);
+    REQUIRE(input.mouse_behavior() == UserInputService::kLockCurrentPosition);
+}
+
+TEST_CASE("SC21 a lock that starts again drops the motion from before it", "[SC21]") {
+    SimRole role;
+    engine_core::Game game;
+    UserInputService& input = game.input();
+    input.set_active(true);
+    input.set_mouse_behavior(UserInputService::kLockCurrentPosition);
+    // The pointer, free while the view was not focused, moves to the click.
+    input.post_mouse_move(0.f, 0.f);
+    input.post_mouse_move(40.f, 30.f);
+    input.note_lock_started();
+    input.dispatch(game.events());
+    REQUIRE(input.mouse_delta().x == 0.f);
+    REQUIRE(input.mouse_delta().y == 0.f);
+
+    input.post_mouse_delta(2.f, -1.f);
+    input.dispatch(game.events());
+    REQUIRE(input.mouse_delta().x == 2.f);
+    REQUIRE(input.mouse_delta().y == -1.f);
 }
 
 TEST_CASE("SC3 MouseDeltaSensitivity is at least 0 and refuses what is not a number", "[SC3]") {

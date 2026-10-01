@@ -128,15 +128,19 @@ void GameView::syncPointerLock() {
     }
     engine_core::UserInputService& input = game_->input();
     if (pointerLocked_ && !scene->isPointerLocked()) {
-        // The scene let the pointer go, as when the window lost focus. Scripts hear it.
+        // The scene let the pointer go, as when the window lost focus. The view
+        // lets go of the focus too, so it does not lock again until clicked.
         pointerLocked_ = false;
-        input.set_mouse_behavior(engine_core::UserInputService::kMouseBehaviorDefault);
+        scene->releaseFocus(this);
         return;
     }
     const bool wanted = input.mouse_behavior() != engine_core::UserInputService::kMouseBehaviorDefault;
     if (wanted != pointerLocked_) {
         scene->setPointerLocked(wanted);
         pointerLocked_ = wanted;
+        if (wanted) {
+            input.note_lock_started();
+        }
     }
     if (pointerLocked_) {
         double dx = 0;

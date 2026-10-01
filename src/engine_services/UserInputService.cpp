@@ -198,9 +198,13 @@ void UserInputService::set_mouse_behavior(int behavior) {
     if (previous != kMouseBehaviorDefault || behavior == kMouseBehaviorDefault) {
         return;
     }
-    // The lock starts. Motion so far is the pointer on its way to the press,
-    // so it must not turn a camera: queued movement keeps its position but
-    // loses its Delta, and mouse_delta() drops what was dispatched already.
+    note_lock_started();
+}
+
+void UserInputService::note_lock_started() {
+    // Motion so far is the pointer on its way to the press, so it must not
+    // turn a camera: queued movement keeps its position but loses its Delta,
+    // and mouse_delta() drops what was dispatched already.
     std::lock_guard<std::mutex> lock(mu_);
     for (InputRecord& record : queue_) {
         if (record.type == kMouseMovement) {
@@ -265,7 +269,6 @@ void UserInputService::end_held_locked() {
 }
 
 void UserInputService::post_focus_lost() {
-    set_mouse_behavior(kMouseBehaviorDefault);
     std::lock_guard<std::mutex> lock(mu_);
     if (!active_) {
         return;

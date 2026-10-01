@@ -49,7 +49,8 @@ class SceneFeed;
 // held. While a script sets MouseBehavior to a lock and this view has focus,
 // the pointer is locked in it and its motion goes to GetMouseDelta. Only the
 // focused view, the one last clicked, ever locks it. Shift+Esc takes the focus
-// away, which frees the pointer until the view is clicked again.
+// away, which frees the pointer until the view is clicked again; MouseBehavior
+// stays as the script set it, so that click locks the pointer again.
 class GameView : public ide::IdePane {
 public:
     explicit GameView(Runner& runner, std::string name = "Scene View", bool closable = false);

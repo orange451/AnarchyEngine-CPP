@@ -632,6 +632,34 @@ int main() {
             frame();
         }
 
+        // A click selects the Scene View. Escape goes to the game and leaves it
+        // selected; only Shift+Esc deselects it, which frees a locked pointer.
+        {
+            auto* view = dynamic_cast<runner::GameView*>(showing("Scene View"));
+            expect(view != nullptr, "the Scene View shows");
+            if (view != nullptr) {
+                frame();
+                const double x = view->getAbsoluteX() + view->getWidth() * 0.5;
+                const double y = view->getAbsoluteY() + view->getHeight() * 0.5;
+                scene->noteButton(0, true, x, y);
+                scene->noteButton(0, false, x, y);
+                frame();
+                expect(view->isFocused(), "a click selects the Scene View");
+                scene->noteKey(jadefx::Key::Escape, true, false, 0);
+                scene->noteKey(jadefx::Key::Escape, false, false, 0);
+                frame();
+                expect(view->isFocused(), "Escape leaves the Scene View selected");
+                scene->noteKey(jadefx::Key::Escape, true, false, jadefx::Key::ModShift);
+                scene->noteKey(jadefx::Key::Escape, false, false, jadefx::Key::ModShift);
+                frame();
+                expect(!view->isFocused(), "Shift+Esc deselects the Scene View");
+                scene->noteButton(0, true, x, y);
+                scene->noteButton(0, false, x, y);
+                frame();
+                expect(view->isFocused(), "a click selects the Scene View again");
+            }
+        }
+
         // The Scene View follows a Camera in Workspace, which its list at the top right offers.
         {
             auto* view = dynamic_cast<runner::GameView*>(showing("Scene View"));

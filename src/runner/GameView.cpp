@@ -504,6 +504,16 @@ void GameView::handleScroll(jadefx::ScrollEvent& event) {
 }
 
 void GameView::handleKey(jadefx::KeyEvent& event) {
+    // Shift+Esc deselects the view, and so frees the pointer whatever a script
+    // keeps asking for. The game does not hear it.
+    if (event.pressed && event.key == jadefx::Key::Escape && event.shift && !event.control && !event.alt &&
+        !event.meta) {
+        event.consume();
+        if (jadefx::Scene* scene = getScene()) {
+            scene->releaseFocus(this);
+        }
+        return;
+    }
     // A held key repeats. InputBegan fires once, on the first press.
     if (game_ != nullptr && !event.repeat) {
         const int key = engine_core::UserInputService::key_code_from_glfw(event.key);

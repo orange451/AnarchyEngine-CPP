@@ -47,7 +47,9 @@ class SceneFeed;
 // mode and in play. A press here takes keyboard focus and makes this view's
 // Camera the Workspace's CurrentCamera; losing focus ends whatever was still
 // held. While a script sets MouseBehavior to a lock and this view has focus,
-// the pointer is locked in it and its motion goes to GetMouseDelta.
+// the pointer is locked in it and its motion goes to GetMouseDelta. Only the
+// focused view, the one last clicked, ever locks it. Shift+Esc takes the focus
+// away, which frees the pointer until the view is clicked again.
 class GameView : public ide::IdePane {
 public:
     explicit GameView(Runner& runner, std::string name = "Scene View", bool closable = false);

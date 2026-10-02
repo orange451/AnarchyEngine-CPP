@@ -50,6 +50,17 @@ ShadowRequest Point(std::uint64_t key, Vec3 at, float radius) {
     return request;
 }
 
+ShadowRequest Spot(std::uint64_t key, Vec3 at, Vec3 direction, float radius) {
+    ShadowRequest request;
+    request.key = key;
+    request.owner = key;
+    request.kind = ShadowKind::Spot;
+    request.position = at;
+    request.direction = direction;
+    request.radius = radius;
+    return request;
+}
+
 ShadowCaster Box(std::uint64_t mesh, Vec3 at, std::uint64_t owner = 0, std::uint64_t revision = 0) {
     ShadowCaster caster;
     caster.mesh = mesh;
@@ -216,6 +227,8 @@ TEST_CASE("PN8 the atlas grows, then the lights that look smallest get smaller t
         REQUIRE(planner.find(key) != nullptr);
         REQUIRE(planner.find(key)->tiles[0].size == expected[key - 1]);
     }
+    // Nothing changed: a kept, downsized tile does not churn.
+    REQUIRE(Frame(planner, lights, {}, camera, Small()).draws.empty());
 }
 
 TEST_CASE("PN9 a light that is gone gives its tiles back", "[shadow]") {
@@ -226,4 +239,109 @@ TEST_CASE("PN9 a light that is gone gives its tiles back", "[shadow]") {
     Frame(planner, {}, {}, camera, Small());
     REQUIRE(planner.atlasFreeTexels() == 512 * 512);
     REQUIRE(planner.find(1) == nullptr);
+}
+
+TEST_CASE("a SpotLight is drawn once and cached, with its tile and viewProjection set", "[shadow]") {
+    ShadowPlanner planner;
+    const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f});
+    const std::vector<ShadowRequest> lights = {Spot(1, {0.f, 1.f, 0.f}, {0.f, 0.f, -1.f}, 5.f)};
+    const std::vector<ShadowCaster> casters = {Box(100, {0.f, 1.f, -1.f})};
+    const ShadowPlan first = Frame(planner, lights, casters, camera, Small());
+    REQUIRE(Draws(first, 1) == 1);
+    REQUIRE(first.draws[0].face == 0);
+    REQUIRE(planner.find(1) != nullptr);
+    REQUIRE(planner.find(1)->tiles[0].size > 0);
+    REQUIRE_FALSE(engine_core::same_matrix4(planner.find(1)->viewProjection, engine_core::matrix4_identity()));
+    const ShadowPlan second = Frame(planner, lights, casters, camera, Small());
+    REQUIRE(second.draws.empty());
+}
+
+TEST_CASE("a caster owned by its light is excluded from that light's draws, a non-owned one is not", "[shadow]") {
+    ShadowPlanner planner;
+    const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f});
+    const std::vector<ShadowRequest> lights = {Point(1, {0.f, 1.f, 0.f}, 5.f)};
+    // Caster 100 belongs to light 1, right on it; caster 101 does not, and is also in reach.
+    const std::vector<ShadowCaster> casters = {Box(100, {0.f, 1.2f, 0.f}, 1), Box(101, {1.f, 0.f, 0.f})};
+    const ShadowPlan plan = Frame(planner, lights, casters, camera, Small());
+    REQUIRE_FALSE(plan.draws.empty());
+    bool sawOther = false;
+    for (const TileDraw& draw : plan.draws) {
+        for (int index : draw.casters) {
+            REQUIRE(index != 0);  // never caster 100: it is light 1's own
+            sawOther = sawOther || index == 1;
+        }
+    }
+    REQUIRE(sawOther);  // caster 101 does show up somewhere
+}
+
+TEST_CASE("PN10 a newly seen face that was never drawn is drawn now, or the light reads as having no map",
+          "[shadow]") {
+    const CameraView ahead = Camera({0.f, 0.f, 0.f}, {0.f, 0.f, -1.f});
+    const CameraView turned = Camera({0.f, 0.f, 0.f}, {0.f, 0.f, 1.f});
+    ShadowSettings cramped = Small();
+    cramped.maxTexelsPerFrame = 1;
+
+    // A must-draw light (a newly visible face it has never drawn) goes
+    // ahead of one that is merely due: A already matches everything the
+    // turned camera can see of it (warmed up turned, the same view the
+    // critical frame below uses), B does not.
+    {
+        ShadowPlanner planner;
+        ShadowRequest a = Point(1, {5.f, 0.f, 0.f}, 50.f);       // huge reach
+        const ShadowRequest b = Point(2, {0.f, 0.f, 3.f}, 5.f);  // PN6's geometry: only -Z visible, ahead
+        Frame(planner, {a}, {}, turned, Small());    // A alone: warms up what turned can see of it
+        Frame(planner, {a, b}, {}, ahead, Small());  // both kept alive; B gets its one visible face
+        REQUIRE(planner.find(1) != nullptr);
+        REQUIRE(planner.find(2) != nullptr);
+
+        a.cached = false;  // forced due every frame, but it already matches everything turned can see
+        const ShadowPlan plan = Frame(planner, {a, b}, {}, turned, cramped);
+        REQUIRE(Draws(plan, 2) > 0);   // B: must-draw (newly visible faces), goes first
+        REQUIRE(Draws(plan, 1) == 0);  // A: merely due, loses the one slot
+    }
+
+    // A must-draw light can still lose to a higher-priority must-draw light:
+    // it then reads as having no map, until a later frame lets it through.
+    {
+        ShadowPlanner planner;
+        const ShadowRequest b = Point(2, {0.f, 0.f, 3.f}, 5.f);
+        Frame(planner, {b}, {}, ahead, Small());
+        REQUIRE(planner.find(2) != nullptr);
+
+        // Turned, B's remaining faces are must-draw. C, brand new, is ordered first and takes the one slot.
+        const ShadowRequest c = Point(3, {5.f, 0.f, 0.f}, 50.f);
+        const ShadowPlan blocked = Frame(planner, {c, b}, {}, turned, cramped);
+        REQUIRE(Draws(blocked, 3) > 0);
+        REQUIRE(Draws(blocked, 2) == 0);
+        REQUIRE(planner.find(2) == nullptr);  // null, not B's stale, now-mismatched map
+
+        // Next frame, C already matches, so B gets the slot.
+        const ShadowPlan recovered = Frame(planner, {c, b}, {}, turned, cramped);
+        REQUIRE(Draws(recovered, 2) > 0);
+        REQUIRE(planner.find(2) != nullptr);
+    }
+}
+
+TEST_CASE("PN11 a light that keeps losing the cap is redrawn within a few frames", "[shadow]") {
+    ShadowPlanner planner;
+    const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f});
+    const ShadowRequest warmA = Point(1, {0.f, 0.f, 0.f}, 50.f);
+    const ShadowRequest warmB = Point(2, {1.f, 0.f, 0.f}, 50.f);
+    Frame(planner, {warmA, warmB}, {}, camera, Small());  // both ready and fully matched
+    REQUIRE(planner.find(1) != nullptr);
+    REQUIRE(planner.find(2) != nullptr);
+
+    ShadowSettings settings = Small();
+    settings.maxTexelsPerFrame = 1;  // one light's worth per frame, at most
+    ShadowRequest a = warmA;
+    a.cached = false;  // always due: a tied-priority light that never finishes
+
+    bool drawn = false;
+    for (int frame = 0; frame < kMaxShadowWait + 1 && !drawn; ++frame) {
+        ShadowRequest b = warmB;
+        b.position.y = 0.01f * static_cast<float>(frame + 1);  // moved: due, but still matches everywhere
+        const ShadowPlan plan = Frame(planner, {a, b}, {}, camera, settings);
+        drawn = Draws(plan, 2) > 0;
+    }
+    REQUIRE(drawn);
 }

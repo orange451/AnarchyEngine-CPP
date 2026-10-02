@@ -58,6 +58,7 @@ void ShadowPlanner::releaseTiles(Record& record) {
     record.tileCount = 0;
     record.size = 0;
     record.ready = false;
+    std::fill(record.matches, record.matches + 6, false);
 }
 
 void ShadowPlanner::resetAtlas(int size, int minTile) {
@@ -69,6 +70,7 @@ void ShadowPlanner::resetAtlas(int size, int minTile) {
         record.tileCount = 0;
         record.size = 0;
         record.ready = false;
+        std::fill(record.matches, record.matches + 6, false);
     }
 }
 
@@ -116,6 +118,7 @@ bool ShadowPlanner::allocate(const std::vector<ShadowRequest>& requests, const s
             }
         }
         std::fill(record.dirty, record.dirty + 6, true);
+        std::fill(record.matches, record.matches + 6, false);
         record.ready = false;
         all = all && record.size >= record.wanted;
     }
@@ -199,10 +202,42 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
         }
     }
 
-    // Lights with no map first, then the ones that look biggest, until the budget is spent.
+    // Whether the camera can see a kind's face at position, radius: the same
+    // test used both to decide what must draw and what is due to draw.
+    auto faceVisible = [&](ShadowKind kind, Vec3 position, float radius, int face) {
+        return kind == ShadowKind::Spot ? SphereInFrustum(camera.viewProjection, Sphere{position, radius})
+                                         : CubeFaceVisible(camera.viewProjection, position, radius, face);
+    };
+    // Not ready, or a face the camera can see was never actually drawn from
+    // the map it has now: reading that face would be a misread, so it must
+    // draw before anything else, cap or no cap.
+    auto mustDraw = [&](int i) {
+        const ShadowRequest& request = requests[static_cast<std::size_t>(i)];
+        const Record& record = records_.at(request.key);
+        if (!record.ready) {
+            return true;
+        }
+        const int faceLimit = request.kind == ShadowKind::Spot ? 1 : 6;
+        for (int face = 0; face < faceLimit; ++face) {
+            if (!record.matches[face] && faceVisible(request.kind, request.position, request.radius, face)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Lights that must draw first, then ones that have lost the cap
+    // kMaxShadowWait frames running, then the rest; biggest look first
+    // within each (order is already sorted that way, and stable_sort keeps it).
     std::vector<int> drawOrder = order;
-    std::stable_partition(drawOrder.begin(), drawOrder.end(), [&](int i) {
-        return !records_.at(requests[static_cast<std::size_t>(i)].key).ready;
+    std::stable_sort(drawOrder.begin(), drawOrder.end(), [&](int a, int b) {
+        const auto tier = [&](int i) {
+            if (mustDraw(i)) {
+                return 0;
+            }
+            return records_.at(requests[static_cast<std::size_t>(i)].key).waited >= kMaxShadowWait ? 1 : 2;
+        };
+        return tier(a) < tier(b);
     });
     std::int64_t spent = 0;
     for (const int i : drawOrder) {
@@ -211,19 +246,16 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
         if (record.size == 0) {
             continue;
         }
+        const bool must = mustDraw(i);
+        record.readable = true;
+
         // The faces due that the camera can see. One it cannot is never read, so it waits.
         int faces[6];
         int faceCount = 0;
-        if (request.kind == ShadowKind::Spot) {
-            if (record.dirty[0] && SphereInFrustum(camera.viewProjection, {request.position, request.radius})) {
-                faces[faceCount++] = 0;
-            }
-        } else {
-            for (int face = 0; face < 6; ++face) {
-                if (record.dirty[face] &&
-                    CubeFaceVisible(camera.viewProjection, request.position, request.radius, face)) {
-                    faces[faceCount++] = face;
-                }
+        const int faceLimit = request.kind == ShadowKind::Spot ? 1 : 6;
+        for (int face = 0; face < faceLimit; ++face) {
+            if (record.dirty[face] && faceVisible(request.kind, request.position, request.radius, face)) {
+                faces[faceCount++] = face;
             }
         }
         if (faceCount == 0) {
@@ -231,6 +263,10 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
         }
         const std::int64_t cost = static_cast<std::int64_t>(faceCount) * record.size * record.size;
         if (spent > 0 && spent + cost > settings.maxTexelsPerFrame) {
+            ++record.waited;
+            if (must) {
+                record.readable = false;
+            }
             continue;
         }
         spent += cost;
@@ -291,8 +327,23 @@ void ShadowPlanner::commit() {
         record.drawn = pending.shadow;
         record.hash = pending.hash;
         record.ready = true;
+        record.readable = true;
+        record.waited = 0;
+        bool drawnFace[6] = {};
         for (int k = 0; k < pending.faceCount; ++k) {
+            drawnFace[pending.faces[k]] = true;
             record.dirty[pending.faces[k]] = false;
+        }
+        // Drawn faces now match the map just committed; a face left dirty
+        // and undrawn does not (drawn's state moved on without it); a face
+        // that was neither drawn nor dirty was already fine, and stays so.
+        const int faceLimit = record.kind == ShadowKind::Spot ? 1 : 6;
+        for (int face = 0; face < faceLimit; ++face) {
+            if (drawnFace[face]) {
+                record.matches[face] = true;
+            } else if (record.dirty[face]) {
+                record.matches[face] = false;
+            }
         }
     }
     pending_.clear();
@@ -300,7 +351,8 @@ void ShadowPlanner::commit() {
 
 const LocalShadow* ShadowPlanner::find(std::uint64_t key) const {
     const auto it = records_.find(key);
-    return it != records_.end() && it->second.ready && it->second.size > 0 ? &it->second.drawn : nullptr;
+    return it != records_.end() && it->second.ready && it->second.size > 0 && it->second.readable ? &it->second.drawn
+                                                                                                    : nullptr;
 }
 
 }  // namespace runner

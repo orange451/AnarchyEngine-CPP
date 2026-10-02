@@ -92,7 +92,8 @@ struct CameraView {
 
 // A light's map as it was last drawn. The light pass reads it until it is
 // drawn again, so a light that moved and waits for a redraw still reads its
-// map consistently.
+// map consistently; find() withholds it instead, rather than a face that was
+// never actually drawn from it.
 struct LocalShadow {
     ShadowKind kind = ShadowKind::Point;
     // A SpotLight's tile is [0]; a PointLight's are its cube faces in GL's order.
@@ -125,19 +126,32 @@ struct ShadowPlan {
     bool atlasResized = false;
 };
 
+// A ready light that keeps losing the redraw cap to higher-priority lights
+// waits at most this many frames before it is aged ahead of them.
+constexpr int kMaxShadowWait = 4;
+
 // Decides, with no GL, which PointLight and SpotLight shadow tiles to draw
 // each frame, in an atlas it keeps. A light's map is redrawn only when its
 // fingerprint changes (the light, its tile, and every caster within its
-// Radius); lights with no map come first, then those that look biggest, up
-// to the frame's texel budget; and a cube face the camera cannot see waits.
+// Radius); a cube face the camera cannot see waits. Priority: a light with
+// a face the camera can see that was never actually drawn from its current
+// map goes first (find() withholds the map until it is); then a light that
+// has lost the cap kMaxShadowWait frames running; then the rest, biggest
+// look first, up to the frame's texel budget.
 class ShadowPlanner {
 public:
     ShadowPlan plan(const std::vector<ShadowRequest>& requests, const std::vector<ShadowCaster>& casters,
                     const CameraView& camera, const ShadowSettings& settings);
-    // Once plan's draws are drawn: they become what find returns. A plan
-    // that is never committed is dropped, and its lights stay due.
+    // Once plan's draws are drawn: they become what find returns, each
+    // drawn face now matching the committed map (a dirty face left undrawn
+    // does not, until it too is drawn), the light's redraw wait reset to 0,
+    // and it made readable again. A plan that is never committed is
+    // dropped, and its lights stay due.
     void commit();
-    // The light's map as last drawn, or null when it has none.
+    // The light's map as last drawn, or null when it has none, or when a
+    // face the camera can currently see was never actually drawn from it
+    // (newly visible, or in a tile the atlas just reused) and this frame's
+    // cap held the redraw back.
     const LocalShadow* find(std::uint64_t key) const;
     int atlasSize() const { return atlas_.atlasSize(); }
     std::int64_t atlasFreeTexels() const { return atlas_.freeTexels(); }
@@ -153,10 +167,22 @@ private:
         int tileCount = 0;
         AtlasTile tiles[6];
         bool dirty[6] = {};
+        // Whether a face's content in drawn actually came from drawn's own
+        // state: false right after its tile is (re)allocated, and for any
+        // face left dirty and undrawn at a commit; a hash change alone
+        // (the light moved, a caster changed) never clears it, because the
+        // old, slightly stale drawn is still self-consistent.
+        bool matches[6] = {};
+        // Frames in a row a visible due face has lost the redraw cap.
+        int waited = 0;
         // The fingerprint its map was drawn from, and the one it should be now.
         std::uint64_t hash = 0;
         std::uint64_t wantHash = 0;
         bool ready = false;
+        // False when a face the camera can see was due a first (or
+        // re-matching) draw this frame and the cap held it back: find()
+        // will not hand out drawn until it is readable again.
+        bool readable = false;
         bool seen = false;
         LocalShadow drawn;
     };

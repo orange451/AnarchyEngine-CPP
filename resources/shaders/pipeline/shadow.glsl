@@ -7,8 +7,8 @@
 uniform mat4 uInverseView;
 // ShadowLookup::Kind: 0 none, 1 SpotLight, 2 PointLight, 3 DirectionalLight.
 uniform int uShadowKind;
-// Every PointLight's and SpotLight's tiles.
-uniform sampler2DShadow uShadowAtlas;
+// Every PointLight's and SpotLight's tiles, on the atlas's pages (layers).
+uniform sampler2DArrayShadow uShadowAtlas;
 // The DirectionalLight's cascades.
 uniform sampler2DArrayShadow uShadowCascades;
 // World to a map's clip space: the SpotLight's, or each cascade's.
@@ -23,7 +23,7 @@ uniform vec4 uShadowTexel;
 // One texel of the texture the light reads, in its 0 to 1 coordinates.
 uniform float uShadowTexelUv;
 // A SpotLight's tile ([0]) or a PointLight's six, in GL's cube-face order:
-// the corner (xy) and size (z) in the atlas's 0 to 1 coordinates.
+// the corner (xy) and size (z) in a page's 0 to 1 coordinates, and the page (w).
 uniform vec4 uShadowTiles[6];
 // How far a PointLight's 90 degrees reach across its faces' tiles.
 uniform float uShadowFaceScale;
@@ -43,7 +43,7 @@ float atlasTaps(vec2 uv, vec4 tile, float depth) {
     float lit = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
-            lit += texture(uShadowAtlas, vec3(clamp(at + vec2(x, y) * uShadowTexelUv, low, high), depth));
+            lit += texture(uShadowAtlas, vec4(clamp(at + vec2(x, y) * uShadowTexelUv, low, high), tile.w, depth));
         }
     }
     return lit / 9.0;

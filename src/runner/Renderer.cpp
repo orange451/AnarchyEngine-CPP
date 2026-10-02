@@ -820,7 +820,7 @@ bool Renderer::shadowPass(const MeshDraw* meshes, int count, const float* projec
 }
 
 void Renderer::bindShadow(const Program& program, const ShadowLookup& lookup) {
-    BindTexture(kUnitShadowAtlas, shadows_.atlasMap());
+    BindArray(kUnitShadowAtlas, shadows_.atlasMap());
     BindArray(kUnitShadowCascades, shadows_.cascadeMap());
     glUniform1i(program.shadowKind, lookup.kind);
     if (lookup.kind == ShadowLookup::kNone) {

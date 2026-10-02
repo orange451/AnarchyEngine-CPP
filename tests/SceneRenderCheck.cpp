@@ -559,6 +559,39 @@ int main() {
             Expect(std::abs(pointShadowed[1] - pointOpen[1]) <= 3,
                    "and leaves the open floor lit, with no seam or acne (" + std::to_string(pointShadowed[1]) + ")");
 
+            // Two 1024 pages. A SpotLight the camera is inside the Radius of
+            // wants a 1024 tile, which fills page 0, so the PointLight's faces
+            // go on page 1. The SpotLight points up, away from the floor and
+            // the cube: its map holds nothing, so a PointLight that read page 0
+            // instead would light the floor behind the cube.
+            {
+                runner::ShadowSettings paged;
+                paged.atlasMinSize = 1024;
+                paged.atlasMaxSize = 1024;
+                paged.maxTile = 1024;
+                paged.atlasMaxPages = 2;
+                // The PointLight, outside its Radius, looks small enough for a 64.
+                paged.texelsPerPixel = 1.f / 64.f;
+                renderer.setShadowSettings(paged);
+                runner::LightDraw upward = spotLight;
+                upward.direction[0] = 0.f;
+                upward.direction[1] = 1.f;
+                upward.direction[2] = 0.f;
+                const runner::LightDraw both[2] = {upward, pointLight};
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, scene, 2, both, 2);
+                const std::array<int, 2> pageOne{sample(inShadow), sample(openFloor)};
+                Expect(renderer.shadowAtlasPages() == 2,
+                       "a SpotLight filling a page puts the PointLight on a second (" +
+                           std::to_string(renderer.shadowAtlasPages()) + " pages)");
+                Expect(std::abs(pageOne[0] - ambientFloor) <= 4,
+                       "a shadow on the second page falls behind the cube (" + std::to_string(pageOne[0]) + ")");
+                Expect(std::abs(pageOne[1] - pointOpen[1]) <= 3,
+                       "and leaves the open floor lit (" + std::to_string(pageOne[1]) + " and " +
+                           std::to_string(pointOpen[1]) + ")");
+                Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "two atlas pages leave no GL error");
+                renderer.setShadowSettings(runner::ShadowSettings{});
+            }
+
             // A DirectionalLight shining from the -X side and down, as the others did.
             runner::LightDraw sunLight;
             sunLight.kind = runner::LightDraw::Kind::Directional;

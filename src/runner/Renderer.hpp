@@ -131,6 +131,8 @@ public:
     void setGridVisible(bool visible) { gridVisible_ = visible; }
     // How shadows are drawn, until set again. Needs no GL context.
     void setShadowSettings(const ShadowSettings& settings) { shadowSettings_ = settings; }
+    // The shadow atlas texture's pages (ShadowRenderer::atlasPages), 0 with none.
+    int shadowAtlasPages() const { return shadows_.atlasPages(); }
 
     // x, y, width, and height are the pane in window points, origin at the top
     // left. sceneWidth and sceneHeight are the window in the same units.

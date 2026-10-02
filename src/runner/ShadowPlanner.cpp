@@ -42,6 +42,47 @@ void HashCasters(const std::vector<ShadowCaster>& casters, std::vector<std::uint
     }
 }
 
+int TileCount(ShadowKind kind) {
+    return kind == ShadowKind::Spot ? 1 : 6;
+}
+
+std::int64_t Texels(int tiles, int size) {
+    return static_cast<std::int64_t>(tiles) * size * size;
+}
+
+// Shrinks sizes (each light's tile size, tiles[i] tiles each) until they
+// fit capacity texels: one light's size halved at a time, from the lowest
+// priority in order up and round again, so the lights that look biggest
+// keep their size longest. One at minTile is passed over; only once every
+// light is there do the lowest go to 0, no shadow. None is bigger than a page.
+void FitTiles(std::vector<int>& sizes, const std::vector<int>& tiles, const std::vector<int>& order,
+              std::int64_t capacity, int pageSize, int minTile) {
+    std::int64_t demand = 0;
+    for (std::size_t i = 0; i < sizes.size(); ++i) {
+        while (sizes[i] > pageSize) {
+            sizes[i] /= 2;
+        }
+        demand += Texels(tiles[i], sizes[i]);
+    }
+    bool halved = true;
+    while (demand > capacity && halved) {
+        halved = false;
+        for (auto it = order.rbegin(); it != order.rend() && demand > capacity; ++it) {
+            const auto i = static_cast<std::size_t>(*it);
+            if (sizes[i] > minTile) {
+                demand -= Texels(tiles[i], sizes[i]) - Texels(tiles[i], sizes[i] / 2);
+                sizes[i] /= 2;
+                halved = true;
+            }
+        }
+    }
+    for (auto it = order.rbegin(); it != order.rend() && demand > capacity; ++it) {
+        const auto i = static_cast<std::size_t>(*it);
+        demand -= Texels(tiles[i], sizes[i]);
+        sizes[i] = 0;
+    }
+}
+
 }  // namespace
 
 int TileSizeFor(float reach, int previous, int paneHeight, const ShadowSettings& settings) {
@@ -75,8 +116,8 @@ void ShadowPlanner::releaseTiles(Record& record) {
     std::fill(record.matches, record.matches + 6, false);
 }
 
-void ShadowPlanner::resetAtlas(int size, int minTile) {
-    atlas_.reset(size, minTile);
+void ShadowPlanner::resetAtlas(int pageSize, int pages, int minTile) {
+    atlas_.reset(pageSize, pages, minTile);
     for (auto& [key, record] : records_) {
         for (AtlasTile& tile : record.tiles) {
             tile = {};
@@ -92,63 +133,80 @@ void ShadowPlanner::resetAtlas(int size, int minTile) {
 void ShadowPlanner::clear() {
     records_.clear();
     pending_.clear();
-    atlas_.reset(0, 0);
+    atlas_.reset(0, 0, 0);
     cascadeReady_ = false;
     cascadePending_ = false;
 }
 
-bool ShadowPlanner::allocate(const std::vector<ShadowRequest>& requests, const std::vector<int>& order,
-                             const std::vector<int>& wanted, const ShadowSettings& settings) {
-    // Each light whose wish changed gives its tiles back first, so the others can use them.
-    for (std::size_t i = 0; i < requests.size(); ++i) {
-        Record& record = records_.at(requests[i].key);
-        if (record.wanted != wanted[i]) {
-            releaseTiles(record);
-            record.wanted = wanted[i];
+bool ShadowPlanner::takeTiles(int size, int count, AtlasTile* tiles) {
+    for (int got = 0; got < count; ++got) {
+        tiles[got] = atlas_.allocate(size);
+        if (tiles[got].size == 0) {
+            for (int t = 0; t < got; ++t) {
+                atlas_.release(tiles[t]);
+            }
+            return false;
         }
     }
-    bool all = true;
-    for (const int i : order) {
+    return true;
+}
+
+void ShadowPlanner::allocate(const std::vector<ShadowRequest>& requests, const std::vector<int>& order,
+                             const std::vector<int>& fitted, const ShadowSettings& settings) {
+    // Each light whose fitted size changed gives its tiles back first, so the others can use them.
+    for (std::size_t i = 0; i < requests.size(); ++i) {
+        Record& record = records_.at(requests[i].key);
+        if (record.fitted != fitted[i]) {
+            releaseTiles(record);
+            record.fitted = fitted[i];
+        }
+    }
+    // Biggest tiles first: power-of-two squares taken largest to smallest
+    // leave the quadtree no gaps, so sizes that fit the atlas's texels all
+    // get their tiles. Lights that kept theirs can still break the free
+    // blocks up; a light short of its size then takes a smaller one.
+    std::vector<int> packing = order;
+    std::stable_sort(packing.begin(), packing.end(), [&](int a, int b) {
+        return fitted[static_cast<std::size_t>(a)] > fitted[static_cast<std::size_t>(b)];
+    });
+    for (const int i : packing) {
         Record& record = records_.at(requests[static_cast<std::size_t>(i)].key);
-        // Kept, even below its wish: retrying every frame would redraw it every frame.
-        if (record.size > 0 || record.wanted == 0) {
-            all = all && record.size >= record.wanted;
+        // Kept: no change, no redraw.
+        if (record.size == record.fitted) {
             continue;
         }
-        const int tileCount = record.kind == ShadowKind::Spot ? 1 : 6;
-        for (int size = record.wanted; size >= settings.minTile && record.size == 0; size /= 2) {
-            int got = 0;
-            for (; got < tileCount; ++got) {
-                record.tiles[got] = atlas_.allocate(size);
-                if (record.tiles[got].size == 0) {
-                    break;
-                }
-            }
-            if (got == tileCount) {
-                record.size = size;
-                record.tileCount = tileCount;
-            } else {
-                for (int t = 0; t < got; ++t) {
-                    atlas_.release(record.tiles[t]);
-                    record.tiles[t] = {};
-                }
-            }
+        // A light with none takes the biggest size there is room for; one
+        // short of its size moves only to a bigger one, so a frame with no
+        // more room than the last changes nothing.
+        const int tileCount = TileCount(record.kind);
+        const int floor = record.size > 0 ? record.size * 2 : settings.minTile;
+        AtlasTile tiles[6];
+        int size = record.fitted;
+        while (size >= floor && !takeTiles(size, tileCount, tiles)) {
+            size /= 2;
         }
+        if (size < floor) {
+            continue;
+        }
+        for (int t = 0; t < record.tileCount; ++t) {
+            atlas_.release(record.tiles[t]);
+        }
+        std::copy(tiles, tiles + 6, record.tiles);
+        record.size = size;
+        record.tileCount = tileCount;
         std::fill(record.dirty, record.dirty + 6, true);
         std::fill(record.matches, record.matches + 6, false);
         record.ready = false;
         record.waited = 0;
-        all = all && record.size >= record.wanted;
     }
-    return all;
 }
 
 ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const std::vector<ShadowCaster>& casters,
                                const CameraView& camera, const ShadowSettings& settings) {
     ShadowPlan out;
     pending_.clear();
-    if (atlas_.atlasSize() == 0) {
-        resetAtlas(settings.atlasMinSize, settings.minTile);
+    if (atlas_.pageSize() == 0) {
+        resetAtlas(settings.atlasMinSize, 1, settings.minTile);
         out.atlasResized = true;
     }
 
@@ -157,6 +215,7 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
     const std::size_t count = requests.size();
     std::vector<float> reach(count);
     std::vector<int> wanted(count);
+    std::vector<int> tiles(count);
     for (auto& [key, record] : records_) {
         record.seen = false;
     }
@@ -168,9 +227,12 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
             releaseTiles(record);
             record.kind = request.kind;
             record.wanted = 0;
+            record.fitted = 0;
         }
         reach[i] = ProjectedReach(request.position, request.radius, eye, camera.fovYDegrees);
         wanted[i] = TileSizeFor(reach[i], record.wanted, camera.paneHeight, settings);
+        record.wanted = wanted[i];
+        tiles[i] = TileCount(request.kind);
     }
     // Lights gone since last frame give their tiles back.
     for (auto it = records_.begin(); it != records_.end();) {
@@ -185,11 +247,28 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
     std::vector<int> order(count);
     std::iota(order.begin(), order.end(), 0);
     std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return reach[a] > reach[b]; });
-    if (!allocate(requests, order, wanted, settings) && atlas_.atlasSize() < settings.atlasMaxSize) {
-        resetAtlas(atlas_.atlasSize() * 2, settings.minTile);
-        out.atlasResized = true;
-        allocate(requests, order, wanted, settings);
+
+    // Wanting more texels than the atlas has grows it a step: the page
+    // doubles, or once it is at atlasMaxSize, a page is added. Every map is
+    // drawn again after. Then, grown or not, the sizes are fitted to it.
+    std::int64_t demand = 0;
+    for (std::size_t i = 0; i < count; ++i) {
+        demand += Texels(tiles[i], wanted[i]);
     }
+    const int pageSize = atlas_.pageSize();
+    const int pages = atlas_.pageCount();
+    if (demand > Texels(pages, pageSize)) {
+        if (pageSize < settings.atlasMaxSize) {
+            resetAtlas(pageSize * 2, pages, settings.minTile);
+            out.atlasResized = true;
+        } else if (pages < settings.atlasMaxPages) {
+            resetAtlas(pageSize, pages + 1, settings.minTile);
+            out.atlasResized = true;
+        }
+    }
+    std::vector<int> fitted = wanted;
+    FitTiles(fitted, tiles, order, Texels(atlas_.pageCount(), atlas_.pageSize()), atlas_.pageSize(), settings.minTile);
+    allocate(requests, order, fitted, settings);
 
     // What each map should be drawn from: the light, its tile, and every
     // caster in its reach. A PointLight's cube is world-aligned, so where it

@@ -26,13 +26,14 @@ struct ShadowLookup {
     // One texel of the texture it reads, in that texture's 0 to 1 coordinates.
     float texelUv = 0.f;
     // A SpotLight's tile ([0]) or a PointLight's six: corner x and y, and
-    // size, in the atlas's 0 to 1 coordinates.
+    // size, in a page's 0 to 1 coordinates, then the page.
     float tiles[6][4] = {};
     float faceScale = 1.f;
 };
 
 // Draws the shadow maps ShadowPlanner picks each frame into one atlas, a
-// 24-bit depth texture it grows as the planner does. Run before the
+// 2D array of 24-bit depth whose layers are the atlas's pages, made again
+// whenever the planner grows the page or adds one. Run before the
 // G-buffer: it leaves the shadow framebuffer bound and the viewport,
 // scissor, and depth state changed.
 class ShadowRenderer {
@@ -57,9 +58,11 @@ public:
     // How the light pass reads the sun's cascades: kNone without them, or once refused.
     ShadowLookup sunLookup() const;
 
-    // The textures, or a 1 by 1 stand-in of the same kind, so each sampler always has one.
+    // The textures, both 2D arrays, or a 1 by 1 by 1 stand-in, so each sampler always has one.
     unsigned atlasMap() const { return atlas_ != 0 ? atlas_ : atlasStandIn_; }
     unsigned cascadeMap() const { return cascades_ != 0 ? cascades_ : cascadeStandIn_; }
+    // The atlas texture's pages, 0 with none.
+    int atlasPages() const { return atlas_ != 0 ? atlasTexturePages_ : 0; }
 
 private:
     struct DepthProgram {
@@ -68,9 +71,9 @@ private:
         int viewProjection = -1;
     };
 
-    // The atlas texture made size texels square and attached. False when
-    // the driver will not draw into it.
-    bool makeAtlas(int size);
+    // The atlas texture made pages layers of size texels square, and its
+    // first page attached. False when the driver will not draw into it.
+    bool makeAtlas(int size, int pages);
     // Depth on, polygon offset on, both sides drawn, scissor on.
     void begin();
     void end();
@@ -86,10 +89,12 @@ private:
     unsigned atlasFbo_ = 0;
     unsigned atlas_ = 0;
     int atlasTextureSize_ = 0;
+    int atlasTexturePages_ = 0;
     bool refused_ = false;
     // The settings the atlas was planned under: a change starts it over.
     int plannedMin_ = 0;
     int plannedMax_ = 0;
+    int plannedMaxPages_ = 0;
     int plannedMinTile_ = 0;
     int plannedMaxTile_ = 0;
     unsigned cascadeFbo_ = 0;

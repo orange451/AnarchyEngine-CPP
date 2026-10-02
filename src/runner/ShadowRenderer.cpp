@@ -30,21 +30,16 @@ void DepthParameters(GLenum target) {
     glTexParameteri(target, RT_GL_TEXTURE_COMPARE_FUNC, static_cast<GLint>(RT_GL_LEQUAL));
 }
 
-// A 24-bit depth texture size texels square: a GL_TEXTURE_2D, or a 2D array
-// of layers. pixels is null or one GL_UNSIGNED_INT depth per texel per layer.
-unsigned MakeDepth(GLenum target, int size, int layers, const void* pixels) {
+// A 2D array of layers of 24-bit depth, each size texels square. pixels is
+// null or one GL_UNSIGNED_INT depth per texel per layer.
+unsigned MakeDepth(int size, int layers, const void* pixels) {
     unsigned texture = 0;
     glGenTextures(1, &texture);
-    glBindTexture(target, texture);
-    const auto format = static_cast<GLint>(RT_GL_DEPTH_COMPONENT24);
-    if (target == RT_GL_TEXTURE_2D_ARRAY) {
-        glTexImage3D(RT_GL_TEXTURE_2D_ARRAY, 0, format, size, size, layers, 0, RT_GL_DEPTH_COMPONENT, GL_UNSIGNED_INT,
-                     pixels);
-    } else {
-        glTexImage2D(GL_TEXTURE_2D, 0, format, size, size, 0, RT_GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, pixels);
-    }
-    DepthParameters(target);
-    glBindTexture(target, 0);
+    glBindTexture(RT_GL_TEXTURE_2D_ARRAY, texture);
+    glTexImage3D(RT_GL_TEXTURE_2D_ARRAY, 0, static_cast<GLint>(RT_GL_DEPTH_COMPONENT24), size, size, layers, 0,
+                 RT_GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, pixels);
+    DepthParameters(RT_GL_TEXTURE_2D_ARRAY);
+    glBindTexture(RT_GL_TEXTURE_2D_ARRAY, 0);
     return texture;
 }
 
@@ -60,8 +55,8 @@ bool ShadowRenderer::initialize() {
     depth_.viewProjection = glGetUniformLocation(depth_.id, "uViewProjection");
     glGenFramebuffers(1, &atlasFbo_);
     glGenFramebuffers(1, &cascadeFbo_);
-    atlasStandIn_ = MakeDepth(GL_TEXTURE_2D, 1, 1, &kFarDepth);
-    cascadeStandIn_ = MakeDepth(RT_GL_TEXTURE_2D_ARRAY, 1, 1, &kFarDepth);
+    atlasStandIn_ = MakeDepth(1, 1, &kFarDepth);
+    cascadeStandIn_ = MakeDepth(1, 1, &kFarDepth);
     return true;
 }
 
@@ -85,20 +80,23 @@ void ShadowRenderer::shutdown() {
         }
     }
     atlasTextureSize_ = 0;
+    atlasTexturePages_ = 0;
     cascadeSize_ = 0;
     planner_.clear();
     // A context made again may draw shadow maps where this one would not.
     refused_ = false;
 }
 
-bool ShadowRenderer::makeAtlas(int size) {
+bool ShadowRenderer::makeAtlas(int size, int pages) {
     if (atlas_ != 0) {
         glDeleteTextures(1, &atlas_);
     }
-    atlas_ = MakeDepth(GL_TEXTURE_2D, size, 1, nullptr);
+    // GL cannot add a layer in place, so a new page makes the whole array again.
+    atlas_ = MakeDepth(size, pages, nullptr);
     atlasTextureSize_ = size;
+    atlasTexturePages_ = pages;
     glBindFramebuffer(RT_GL_FRAMEBUFFER, atlasFbo_);
-    glFramebufferTexture2D(RT_GL_FRAMEBUFFER, RT_GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, atlas_, 0);
+    glFramebufferTextureLayer(RT_GL_FRAMEBUFFER, RT_GL_DEPTH_ATTACHMENT, atlas_, 0, 0);
     // Depth only: no color is drawn or read.
     const GLenum none = RT_GL_NONE;
     glDrawBuffers(1, &none);
@@ -113,6 +111,7 @@ bool ShadowRenderer::makeAtlas(int size) {
     glDeleteTextures(1, &atlas_);
     atlas_ = 0;
     atlasTextureSize_ = 0;
+    atlasTexturePages_ = 0;
     return false;
 }
 
@@ -157,10 +156,12 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
     }
     // New atlas settings start every map over.
     if (settings.atlasMinSize != plannedMin_ || settings.atlasMaxSize != plannedMax_ ||
-        settings.minTile != plannedMinTile_ || settings.maxTile != plannedMaxTile_) {
+        settings.atlasMaxPages != plannedMaxPages_ || settings.minTile != plannedMinTile_ ||
+        settings.maxTile != plannedMaxTile_) {
         planner_.clear();
         plannedMin_ = settings.atlasMinSize;
         plannedMax_ = settings.atlasMaxSize;
+        plannedMaxPages_ = settings.atlasMaxPages;
         plannedMinTile_ = settings.minTile;
         plannedMaxTile_ = settings.maxTile;
     }
@@ -183,14 +184,29 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
     }
 
     const ShadowPlan plan = planner_.plan(requests, casters_, camera, settings);
-    if (planner_.atlasSize() != atlasTextureSize_ && !makeAtlas(planner_.atlasSize())) {
+    if ((planner_.atlasSize() != atlasTextureSize_ || planner_.atlasPages() != atlasTexturePages_) &&
+        !makeAtlas(planner_.atlasSize(), planner_.atlasPages())) {
         return true;
     }
     if (!plan.draws.empty()) {
         glBindFramebuffer(RT_GL_FRAMEBUFFER, atlasFbo_);
         begin();
         bool asked = false;
+        // Each page's tiles together, so each page is attached once.
+        std::vector<const TileDraw*> byPage;
+        byPage.reserve(plan.draws.size());
         for (const TileDraw& tile : plan.draws) {
+            byPage.push_back(&tile);
+        }
+        std::stable_sort(byPage.begin(), byPage.end(),
+                         [](const TileDraw* a, const TileDraw* b) { return a->tile.page < b->tile.page; });
+        int attached = -1;
+        for (const TileDraw* draw : byPage) {
+            const TileDraw& tile = *draw;
+            if (tile.tile.page != attached) {
+                glFramebufferTextureLayer(RT_GL_FRAMEBUFFER, RT_GL_DEPTH_ATTACHMENT, atlas_, 0, tile.tile.page);
+                attached = tile.tile.page;
+            }
             glViewport(tile.tile.x, tile.tile.y, tile.tile.size, tile.tile.size);
             glScissor(tile.tile.x, tile.tile.y, tile.tile.size, tile.tile.size);
             glClear(GL_DEPTH_BUFFER_BIT);
@@ -228,6 +244,7 @@ ShadowLookup ShadowRenderer::lookup(std::uint64_t key) const {
         out.tiles[t][0] = static_cast<float>(shadow->tiles[t].x) / atlas;
         out.tiles[t][1] = static_cast<float>(shadow->tiles[t].y) / atlas;
         out.tiles[t][2] = static_cast<float>(shadow->tiles[t].size) / atlas;
+        out.tiles[t][3] = static_cast<float>(shadow->tiles[t].page);
     }
     return out;
 }
@@ -242,7 +259,7 @@ bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, cons
         if (cascades_ != 0) {
             glDeleteTextures(1, &cascades_);
         }
-        cascades_ = MakeDepth(RT_GL_TEXTURE_2D_ARRAY, size, kMaxCascades, nullptr);
+        cascades_ = MakeDepth(size, kMaxCascades, nullptr);
         cascadeSize_ = size;
         glBindFramebuffer(RT_GL_FRAMEBUFFER, cascadeFbo_);
         const GLenum none = RT_GL_NONE;

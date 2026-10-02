@@ -13,11 +13,15 @@ namespace runner {
 struct ShadowSettings {
     // False draws every light unshadowed, whatever its Shadows says.
     bool enabled = true;
-    // The atlas every PointLight's and SpotLight's maps share, in texels
-    // square: it starts at atlasMinSize and doubles, up to atlasMaxSize,
-    // when the lights' tiles do not fit. Powers of two.
+    // The atlas every PointLight's and SpotLight's maps share: pages (the
+    // layers of a texture array), each square. When the tiles the lights
+    // want do not fit, it grows a step a frame: its page doubles from
+    // atlasMinSize up to atlasMaxSize texels, then pages are added, up to
+    // atlasMaxPages. Past that, the lights that look smallest get smaller
+    // tiles. Sizes are powers of two.
     int atlasMinSize = 1024;
     int atlasMaxSize = 4096;
+    int atlasMaxPages = 4;
     // A tile's size range. A SpotLight takes one; a PointLight six, one per cube face.
     int minTile = 64;
     int maxTile = 1024;
@@ -180,7 +184,10 @@ public:
     // or it was scheduled but the caller has not committed it yet. A light
     // that is not cached has a map only once this frame's draw of it commits.
     const LocalShadow* find(std::uint64_t key) const;
-    int atlasSize() const { return atlas_.atlasSize(); }
+    // The atlas's page size in texels square, and its page count.
+    int atlasSize() const { return atlas_.pageSize(); }
+    int atlasPages() const { return atlas_.pageCount(); }
+    // Free texels over every page.
     std::int64_t atlasFreeTexels() const { return atlas_.freeTexels(); }
     // Forgets every map and the atlas, as when the settings or the context change.
     void clear();
@@ -198,8 +205,12 @@ public:
 private:
     struct Record {
         ShadowKind kind = ShadowKind::Point;
-        // The size it asked for, and the size it got, which may be smaller.
+        // The size it asked for (TileSizeFor's, which next frame's holds
+        // to), the size that fits the atlas beside every other light's, and
+        // the size it got: below fitted only while the free blocks are too
+        // broken up for fitted.
         int wanted = 0;
+        int fitted = 0;
         int size = 0;
         int tileCount = 0;
         AtlasTile tiles[6];
@@ -236,14 +247,19 @@ private:
         int faceCount = 0;
     };
 
-    // Gives each light, in order, tiles of its wanted size or the biggest
-    // smaller size that fits. False when one got less than it wanted.
-    bool allocate(const std::vector<ShadowRequest>& requests, const std::vector<int>& order,
-                  const std::vector<int>& wanted, const ShadowSettings& settings);
+    // Gives each light tiles of its fitted size, biggest first and order's
+    // priority between equals. A light whose fitted size has not changed
+    // keeps its tiles. One the free blocks are too broken up for takes the
+    // biggest smaller size there is room for, and moves up to its fitted
+    // size on a later frame that has room.
+    void allocate(const std::vector<ShadowRequest>& requests, const std::vector<int>& order,
+                  const std::vector<int>& fitted, const ShadowSettings& settings);
+    // count free tiles size texels across into tiles, or none and false.
+    bool takeTiles(int size, int count, AtlasTile* tiles);
     void releaseTiles(Record& record);
-    void resetAtlas(int size, int minTile);
+    void resetAtlas(int pageSize, int pages, int minTile);
 
-    ShadowAtlasAllocator atlas_;
+    ShadowAtlasPages atlas_;
     std::unordered_map<std::uint64_t, Record> records_;
     std::vector<Pending> pending_;
     CascadeShadow cascade_;

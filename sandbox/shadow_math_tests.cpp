@@ -129,3 +129,108 @@ TEST_CASE("CS6 pulling a cascade's near plane reaches casters toward the sun", "
     REQUIRE(matrix4_point(pulled.viewProjection, {2.f, 0.f, 1.f}).x ==
             Approx(matrix4_point(plain.viewProjection, {2.f, 0.f, 1.f}).x));
 }
+
+TEST_CASE("SP1 a SpotLight's map looks down its cone, from a part of its Radius out to it", "[shadow]") {
+    const SpotShadow shadow = SpotShadowFor({2.f, 5.f, -1.f}, {0.f, -1.f, 0.f}, 60.f, 10.f, 1024);
+    for (const float value : shadow.viewProjection.m) {
+        REQUIRE(std::isfinite(value));
+    }
+    const Vec3 axis = matrix4_point(shadow.viewProjection, {2.f, 0.f, -1.f});
+    REQUIRE(axis.x == Approx(0.f).margin(1e-5));
+    REQUIRE(axis.y == Approx(0.f).margin(1e-5));
+    REQUIRE(matrix4_point(shadow.viewProjection, {2.f, -5.f, -1.f}).z == Approx(1.f));
+    REQUIRE(matrix4_point(shadow.viewProjection, {2.f, 5.f - ShadowNear(10.f), -1.f}).z == Approx(-1.f));
+    // The cone's edge, 30 degrees off the axis, is on the map.
+    const Vec3 rim = matrix4_point(shadow.viewProjection, {2.f + std::tan(30.f * kDegree) * 5.f, 0.f, -1.f});
+    REQUIRE(std::fabs(rim.x) < 1.f);
+    REQUIRE(std::fabs(rim.y) < 1.f);
+    REQUIRE(shadow.texelPerDistance == Approx(2.f * std::tan(31.f * kDegree) / 1024.f));
+}
+
+TEST_CASE("SP2 the near plane is a part of the Radius, at any scale", "[shadow]") {
+    REQUIRE(ShadowNear(10.f) == Approx(0.1f));
+    REQUIRE(ShadowNear(1000.f) == Approx(10.f));
+    REQUIRE(ShadowNear(0.f) > 0.f);
+}
+
+TEST_CASE("CU1 a cube face looks down its axis, and CubeDepth is the depth it draws", "[shadow]") {
+    const Vec3 light{1.f, 2.f, 3.f};
+    const auto faces = CubeFaceViewProjections(light, 8.f);
+    const Vec3 axes[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    for (int face = 0; face < 6; ++face) {
+        INFO(face);
+        const Vec3 along = Scale(axes[face], 3.f);
+        const Vec3 p = matrix4_point(faces[face], Add(light, along));
+        REQUIRE(p.x == Approx(0.f).margin(1e-5));
+        REQUIRE(p.y == Approx(0.f).margin(1e-5));
+        REQUIRE(CubeDepth(along, 8.f) == Approx(p.z * 0.5f + 0.5f));
+    }
+    // Off the axis, the dominant axis's face still matches.
+    const Vec3 off{3.f, 1.f, -0.5f};
+    REQUIRE(CubeDepth(off, 8.f) == Approx(matrix4_point(faces[0], Add(light, off)).z * 0.5f + 0.5f));
+}
+
+TEST_CASE("CU2 CubeFaceUv lands where the widened face matrices draw", "[shadow]") {
+    const Vec3 light{-2.f, 1.f, 4.f};
+    constexpr float kScale = 0.9f;
+    const auto faces = CubeFaceViewProjections(light, 10.f, kScale);
+    for (const Vec3 direction : {Vec3{1.f, 0.3f, -0.2f}, Vec3{-1.f, -0.4f, 0.6f}, Vec3{0.2f, 1.f, 0.5f},
+                                 Vec3{-0.3f, -1.f, -0.7f}, Vec3{0.6f, 0.1f, 1.f}, Vec3{-0.5f, 0.8f, -1.f}}) {
+        INFO(direction.x << " " << direction.y << " " << direction.z);
+        const CubeTexel texel = CubeFaceUv(direction, kScale);
+        const Vec3 p = matrix4_point(faces[texel.face], Add(light, Scale(direction, 3.f)));
+        REQUIRE(texel.u == Approx(p.x * 0.5f + 0.5f).margin(1e-5));
+        REQUIRE(texel.v == Approx(p.y * 0.5f + 0.5f).margin(1e-5));
+    }
+    // A face's 45 degree edge stays the guard's part inside its tile.
+    REQUIRE(CubeFaceUv({1.f, 1.f, 0.999f}, kScale).u <= 0.5f + 0.5f * kScale + 1e-4f);
+}
+
+TEST_CASE("CV1 a cube face the camera cannot see is skipped", "[shadow]") {
+    const Matrix4 camera = engine_core::matrix4_multiply(Perspective(60.f, 1.f, 0.1f, 1000.f),
+                                                         LookAtView({0, 0, 0}, {0, 0, -1}, {0, 1, 0}));
+    // Just behind the camera: only the face toward -Z reaches anything it sees.
+    for (int face = 0; face < 6; ++face) {
+        INFO(face);
+        REQUIRE(CubeFaceVisible(camera, {0.f, 0.f, 3.f}, 5.f, face) == (face == 5));
+    }
+    // In plain view, every face is.
+    for (int face = 0; face < 6; ++face) {
+        REQUIRE(CubeFaceVisible(camera, {0.f, 0.f, -10.f}, 2.f, face));
+    }
+}
+
+TEST_CASE("PL1 how big a light looks is the same at any scale", "[shadow]") {
+    const float small = ProjectedReach({0.f, 0.f, -20.f}, 2.f, {0.f, 0.f, 0.f}, 70.f);
+    const float big = ProjectedReach({0.f, 0.f, -200.f}, 20.f, {0.f, 0.f, 0.f}, 70.f);
+    REQUIRE(small == Approx(big));
+    REQUIRE(ProjectedReach({0.f, 0.f, -40.f}, 2.f, {0.f, 0.f, 0.f}, 70.f) < small);
+    REQUIRE(std::isinf(ProjectedReach({0.f, 0.f, -1.f}, 2.f, {0.f, 0.f, 0.f}, 70.f)));
+}
+
+TEST_CASE("CL1 casters are culled by their bounds", "[shadow]") {
+    Matrix4 model = engine_core::matrix4_translation(5.f, 0.f, 0.f);
+    model.m[0] = model.m[5] = model.m[10] = 2.f;
+    const float low[3] = {-0.5f, -0.5f, -0.5f};
+    const float high[3] = {0.5f, 0.5f, 0.5f};
+    const Sphere bounds = WorldBounds(model, low, high);
+    REQUIRE(bounds.center.x == Approx(5.f));
+    REQUIRE(bounds.radius == Approx(std::sqrt(0.75f) * 2.f));
+
+    const Matrix4 camera = engine_core::matrix4_multiply(Perspective(60.f, 1.f, 0.1f, 50.f),
+                                                         LookAtView({0, 0, 0}, {0, 0, -1}, {0, 1, 0}));
+    REQUIRE(SphereInFrustum(camera, {{0.f, 0.f, -10.f}, 1.f}));
+    REQUIRE_FALSE(SphereInFrustum(camera, {{0.f, 0.f, 10.f}, 1.f}));
+    REQUIRE(SphereInFrustum(camera, {{0.f, 0.f, 0.5f}, 1.f}));  // across the near plane
+    REQUIRE_FALSE(SphereInFrustum(camera, {{0.f, 0.f, -60.f}, 1.f}));
+
+    // A sun's box: a caster between it and the light counts when the near plane is ignored.
+    const Matrix4 box = engine_core::matrix4_multiply(Orthographic(-5, 5, -5, 5, 0, 10),
+                                                      LookAtView({0, 0, 0}, {0, 0, -1}, {0, 1, 0}));
+    REQUIRE_FALSE(SphereInFrustum(box, {{0.f, 0.f, 20.f}, 1.f}));
+    REQUIRE(SphereInFrustum(box, {{0.f, 0.f, 20.f}, 1.f}, true));
+    REQUIRE_FALSE(SphereInFrustum(box, {{20.f, 0.f, 20.f}, 1.f}, true));
+
+    REQUIRE(SpheresTouch({{0, 0, 0}, 1.f}, {{2.5f, 0, 0}, 2.f}));
+    REQUIRE_FALSE(SpheresTouch({{0, 0, 0}, 1.f}, {{3.5f, 0, 0}, 2.f}));
+}

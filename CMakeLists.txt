@@ -27,6 +27,7 @@ set(STUDIO_CORE_SOURCES
     src/runner/SceneFeed.cpp
     src/runner/ViewCapture.cpp
     src/runner/RenderMath.cpp
+    src/runner/ShadowMath.cpp
     src/ide/AssetBrowser.cpp
     src/ide/ColorLiterals.cpp
     src/ide/IdeResources.cpp
@@ -735,6 +736,7 @@ add_executable(sandbox
     sandbox/scene_camera_tests.cpp
     sandbox/gui_tests.cpp
     sandbox/render_math_tests.cpp
+    sandbox/shadow_math_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

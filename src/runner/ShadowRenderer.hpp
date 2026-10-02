@@ -72,8 +72,11 @@ private:
     };
 
     // The atlas texture made pages layers of size texels square, and its
-    // first page attached. False when the driver will not draw into it.
+    // first page attached. False, with no atlas, when the GPU will not make
+    // it (past its limits or memory) or draw into it.
     bool makeAtlas(int size, int pages);
+    // Every light drawn unshadowed from now on, said once.
+    void refuse();
     // Depth on, polygon offset on, both sides drawn, scissor on.
     void begin();
     void end();
@@ -91,6 +94,8 @@ private:
     int atlasTextureSize_ = 0;
     int atlasTexturePages_ = 0;
     bool refused_ = false;
+    // Whether an atlas the GPU would not make has been said.
+    bool capSaid_ = false;
     // The settings the atlas was planned under: a change starts it over.
     int plannedMin_ = 0;
     int plannedMax_ = 0;

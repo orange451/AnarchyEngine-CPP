@@ -592,6 +592,26 @@ int main() {
                 renderer.setShadowSettings(runner::ShadowSettings{});
             }
 
+            // An atlas page bigger than any GPU makes: the SpotLight wants it,
+            // the texture cannot be made, and the atlas stays at the size that
+            // works, with the SpotLight fitted to it, rather than every shadow going.
+            {
+                runner::ShadowSettings huge;
+                huge.atlasMaxSize = 1 << 17;
+                huge.maxTile = 1 << 17;
+                huge.atlasMaxPages = 1;
+                renderer.setShadowSettings(huge);
+                const std::array<int, 2> capped = lit(spotLight, scene, 2);
+                Expect(renderer.shadowAtlasPages() == 1, "an atlas the GPU cannot make falls back to one it can (" +
+                                                             std::to_string(renderer.shadowAtlasPages()) + " pages)");
+                Expect(std::abs(capped[0] - ambientFloor) <= 4 && std::abs(capped[1] - spotOpen[1]) <= 3,
+                       "and the SpotLight still casts its shadow (" + std::to_string(capped[0]) + " and " +
+                           std::to_string(capped[1]) + ")");
+                Expect(lit(spotLight, scene, 2) == capped, "a second frame draws the same, without trying again");
+                Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the failed atlas leaves no GL error behind");
+                renderer.setShadowSettings(runner::ShadowSettings{});
+            }
+
             // A DirectionalLight shining from the -X side and down, as the others did.
             runner::LightDraw sunLight;
             sunLight.kind = runner::LightDraw::Kind::Directional;

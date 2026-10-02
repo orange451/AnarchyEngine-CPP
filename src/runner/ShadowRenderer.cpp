@@ -83,36 +83,46 @@ void ShadowRenderer::shutdown() {
     atlasTexturePages_ = 0;
     cascadeSize_ = 0;
     planner_.clear();
-    // A context made again may draw shadow maps where this one would not.
+    // A context made again may draw shadow maps, or atlases, where this one would not.
     refused_ = false;
+    capSaid_ = false;
 }
 
 bool ShadowRenderer::makeAtlas(int size, int pages) {
     if (atlas_ != 0) {
         glDeleteTextures(1, &atlas_);
     }
-    // GL cannot add a layer in place, so a new page makes the whole array again.
-    atlas_ = MakeDepth(size, pages, nullptr);
+    atlas_ = 0;
+    atlasTextureSize_ = 0;
+    atlasTexturePages_ = 0;
+    // GL cannot add a layer in place, so a new page makes the whole array
+    // again. Past the GPU's limits, or its memory, glTexImage3D says so.
+    unsigned texture = MakeDepth(size, pages, nullptr);
+    bool made = glGetError() == GL_NO_ERROR;
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, atlasFbo_);
+    if (made) {
+        glFramebufferTextureLayer(RT_GL_FRAMEBUFFER, RT_GL_DEPTH_ATTACHMENT, texture, 0, 0);
+        // Depth only: no color is drawn or read.
+        const GLenum none = RT_GL_NONE;
+        glDrawBuffers(1, &none);
+        glReadBuffer(RT_GL_NONE);
+        made = glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) == RT_GL_FRAMEBUFFER_COMPLETE;
+    }
+    if (!made) {
+        glDeleteTextures(1, &texture);
+        return false;
+    }
+    atlas_ = texture;
     atlasTextureSize_ = size;
     atlasTexturePages_ = pages;
-    glBindFramebuffer(RT_GL_FRAMEBUFFER, atlasFbo_);
-    glFramebufferTextureLayer(RT_GL_FRAMEBUFFER, RT_GL_DEPTH_ATTACHMENT, atlas_, 0, 0);
-    // Depth only: no color is drawn or read.
-    const GLenum none = RT_GL_NONE;
-    glDrawBuffers(1, &none);
-    glReadBuffer(RT_GL_NONE);
-    if (glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) == RT_GL_FRAMEBUFFER_COMPLETE) {
-        return true;
-    }
+    return true;
+}
+
+void ShadowRenderer::refuse() {
     if (!refused_) {
         std::fprintf(stderr, "This driver will not draw shadow maps; lights are drawn without shadows.\n");
         refused_ = true;
     }
-    glDeleteTextures(1, &atlas_);
-    atlas_ = 0;
-    atlasTextureSize_ = 0;
-    atlasTexturePages_ = 0;
-    return false;
 }
 
 void ShadowRenderer::begin() {
@@ -183,10 +193,31 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         casterMeshes_.push_back(index);
     }
 
-    const ShadowPlan plan = planner_.plan(requests, casters_, camera, settings);
-    if ((planner_.atlasSize() != atlasTextureSize_ || planner_.atlasPages() != atlasTexturePages_) &&
-        !makeAtlas(planner_.atlasSize(), planner_.atlasPages())) {
-        return true;
+    ShadowPlan plan = planner_.plan(requests, casters_, camera, settings);
+    const int size = planner_.atlasSize();
+    const int pages = planner_.atlasPages();
+    if (size != atlasTextureSize_ || pages != atlasTexturePages_) {
+        // What works now, within the settings, or the smallest atlas when
+        // there is none yet.
+        const int workingSize = atlas_ != 0 ? std::min(atlasTextureSize_, settings.atlasMaxSize) : settings.atlasMinSize;
+        const int workingPages = atlas_ != 0 ? std::clamp(settings.atlasMaxPages, 1, atlasTexturePages_) : 1;
+        if (!makeAtlas(size, pages)) {
+            // Even the smallest will not do: no shadows, said once.
+            if ((size == workingSize && pages == workingPages) || !makeAtlas(workingSize, workingPages)) {
+                refuse();
+                return true;
+            }
+            // Kept at what works, with the lights fitted to it, planned again.
+            if (!capSaid_) {
+                std::fprintf(stderr,
+                             "The GPU will not make a shadow atlas of %d pages %d texels square; it keeps %d of %d, "
+                             "and lights that look small get softer shadows.\n",
+                             pages, size, workingPages, workingSize);
+                capSaid_ = true;
+            }
+            planner_.capAtlas(workingSize, workingPages);
+            plan = planner_.plan(requests, casters_, camera, settings);
+        }
     }
     if (!plan.draws.empty()) {
         glBindFramebuffer(RT_GL_FRAMEBUFFER, atlasFbo_);
@@ -282,10 +313,7 @@ bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, cons
     for (const CascadeDraw& draw : draws) {
         glFramebufferTextureLayer(RT_GL_FRAMEBUFFER, RT_GL_DEPTH_ATTACHMENT, cascades_, 0, draw.layer);
         if (glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) != RT_GL_FRAMEBUFFER_COMPLETE) {
-            if (!refused_) {
-                std::fprintf(stderr, "This driver will not draw shadow maps; lights are drawn without shadows.\n");
-                refused_ = true;
-            }
+            refuse();
             end();
             return true;
         }

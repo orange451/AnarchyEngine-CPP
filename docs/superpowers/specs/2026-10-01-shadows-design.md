@@ -55,11 +55,12 @@ On tile-based GPUs (every phone), switching framebuffers in the middle of lighti
   - A light keeps its size until the ideal leaves that size's band by 15%, so a light near a boundary does not flip between sizes from frame to frame.
 - **Allocation.**
   - The atlas is a set of square pages, each with its own quadtree buddy allocator. A tile comes from the first page with room, and a light's tiles may sit on different pages.
-  - **Growth.** When the lights' wanted tiles (1 for a SpotLight, 6 for a PointLight, each wanted size squared) add up to more texels than the atlas has, it grows one step that frame: the page doubles from `atlasMinSize` up to `atlasMaxSize`, then pages are added up to `atlasMaxPages`. Each step reallocates everything and redraws every map.
+  - **Growth.** When the lights' wanted tiles (1 for a SpotLight, 6 for a PointLight, each wanted size squared) add up to more texels than the atlas has, it grows in one step to the smallest page size (doubling from `atlasMinSize` up to `atlasMaxSize`), then the fewest pages (up to `atlasMaxPages`), that hold them. A growth reallocates everything and redraws every map.
   - **Fit everyone.** The wanted sizes are then fitted to the atlas as it is now. While they need more texels than it has, one light's size is halved at a time, from the lowest priority up and round again, skipping lights already at `minTile`. Only when every light is at `minTile` and it still does not fit do the lowest-priority lights drop to no shadow. Lights shrink only once the atlas cannot grow, and the lights that look biggest keep their size longest.
   - **Packing.** Tiles are allocated biggest first, priority breaking ties. Power-of-two squares packed largest first leave the quadtree no gaps, so sizes that fit the atlas's texels all get their tiles.
   - A light whose fitted size has not changed keeps its tiles, so nothing is redrawn while the scene holds still. The wanted size (before fitting) is what the 15% band holds to.
-  - Tiles that lights kept can still break the free blocks up. A light that then cannot get its fitted size takes the biggest smaller size there is room for (always at least `minTile`, since the fitted sizes fit), and moves up to its fitted size on a later frame with room.
+  - Tiles that lights kept can still break the free blocks up. A light that then cannot get its fitted size takes the biggest smaller size there is room for (always at least `minTile`, since the fitted sizes fit), and moves up to its fitted size on a later frame with room. A light still short after 8 frames running (`kShortFramesBeforeRepack`) has it and every light packed after it give their tiles back and packed again, biggest first, which always fits; waiting first keeps a moving camera from making the atlas thrash.
+  - A short light whose fitted size drops to what it already holds keeps its tiles.
 - **Caching.**
   - Each light's map is fingerprinted with a 64-bit FNV-1a hash of its kind, position, direction, Radius, FOV, tile size, and every caster within its Radius (mesh, revision, transform).
   - A map whose hash matches is not redrawn.
@@ -80,7 +81,7 @@ On tile-based GPUs (every phone), switching framebuffers in the middle of lighti
   - picks the face from the dominant axis (GL's cube-face table, pinned by tests against the face matrices);
   - clamps the taps two texels inside the tile, so they never read another light's map;
   - turns the distance into the face's perspective depth.
-- If the driver will not draw into the atlas, lights are drawn unshadowed, and this is said once.
+- If the GPU will not make a bigger atlas (past its texture limits, or out of memory), the atlas stays at the size that works, the planner is capped there so the lights are fitted to it, and this is said once. Only if even the smallest atlas cannot be made or drawn into are lights drawn unshadowed, also said once.
 
 ### Cascades
 

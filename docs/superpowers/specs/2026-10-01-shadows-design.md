@@ -54,9 +54,12 @@ On tile-based GPUs (every phone), switching framebuffers in the middle of lighti
   - A light below `minReach` has no shadow.
   - A light keeps its size until the ideal leaves that size's band by 15%, so a light near a boundary does not flip between sizes from frame to frame.
 - **Allocation.**
-  - The atlas uses a quadtree buddy allocator. In priority order, each light gets tiles of its wanted size, or the biggest smaller size that fits.
-  - A light whose wanted size has not changed keeps its tiles, even if they are smaller than wanted.
-  - If any light got less than it wanted, the atlas doubles (from `atlasMinSize` up to `atlasMaxSize`, at most once per frame) and everything is reallocated.
+  - The atlas is a set of square pages, each with its own quadtree buddy allocator. A tile comes from the first page with room, and a light's tiles may sit on different pages.
+  - **Growth.** When the lights' wanted tiles (1 for a SpotLight, 6 for a PointLight, each wanted size squared) add up to more texels than the atlas has, it grows one step that frame: the page doubles from `atlasMinSize` up to `atlasMaxSize`, then pages are added up to `atlasMaxPages`. Each step reallocates everything and redraws every map.
+  - **Fit everyone.** The wanted sizes are then fitted to the atlas as it is now. While they need more texels than it has, one light's size is halved at a time, from the lowest priority up and round again, skipping lights already at `minTile`. Only when every light is at `minTile` and it still does not fit do the lowest-priority lights drop to no shadow. Lights shrink only once the atlas cannot grow, and the lights that look biggest keep their size longest.
+  - **Packing.** Tiles are allocated biggest first, priority breaking ties. Power-of-two squares packed largest first leave the quadtree no gaps, so sizes that fit the atlas's texels all get their tiles.
+  - A light whose fitted size has not changed keeps its tiles, so nothing is redrawn while the scene holds still. The wanted size (before fitting) is what the 15% band holds to.
+  - Tiles that lights kept can still break the free blocks up. A light that then cannot get its fitted size takes the biggest smaller size there is room for (always at least `minTile`, since the fitted sizes fit), and moves up to its fitted size on a later frame with room.
 - **Caching.**
   - Each light's map is fingerprinted with a 64-bit FNV-1a hash of its kind, position, direction, Radius, FOV, tile size, and every caster within its Radius (mesh, revision, transform).
   - A map whose hash matches is not redrawn.
@@ -69,8 +72,9 @@ On tile-based GPUs (every phone), switching framebuffers in the middle of lighti
 
 ### The atlas (`ShadowRenderer`)
 
-- One 2D 24-bit depth texture, with hardware comparison and 2×2 filtering.
-- Each tile is drawn with a viewport and scissor, and cleared with a scissored clear.
+- One 2D array of 24-bit depth, a layer per page, with hardware comparison and 2×2 filtering. GL cannot add a layer in place, so the array is made again whenever the page grows or a page is added.
+- Each page is attached with `glFramebufferTextureLayer`, and its tiles are drawn together. Each tile is drawn with a viewport and scissor, and cleared with a scissored clear.
+- The lookup passes each tile's page in `uShadowTiles[i].w` and samples a `sampler2DArrayShadow`.
 - PointLight faces are drawn wider than 90° (`faceScale = (size − 4) / size`), so the 3×3 filter taps near a face's edge read real depth. Hardware cube filtering is not needed, and there is no seam.
 - The lookup:
   - picks the face from the dominant axis (GL's cube-face table, pinned by tests against the face matrices);
@@ -100,7 +104,8 @@ On tile-based GPUs (every phone), switching framebuffers in the middle of lighti
 
 | Setting | Default |
 | --- | --- |
-| Atlas size | 1024², growing to 4096² |
+| Atlas page size | 1024², growing to 4096² |
+| Atlas pages | 1, growing to 4 once a page is 4096² |
 | Atlas depth | 24-bit |
 | Tile size | 64–1024 |
 | Redraw cap | 8M texels per frame |
@@ -123,7 +128,7 @@ There is no mobile work now. These rules only keep a later port from having to r
 - A per-object `CastShadow`.
 - A Preferences shadow-quality page.
 - Any mobile work: a GLES build, a phone settings tier, a 16-bit atlas, or fewer filter taps.
-- Upgrading a downsized light's tiles when space frees up without its wanted size changing.
+- Shrinking the atlas, or dropping pages, once the lights that grew it are gone.
 - A spatial index for the casters-per-light test, which is O(lights × casters) on the CPU.
 - More than one shadowed DirectionalLight.
 - PCSS soft shadows.

@@ -345,3 +345,24 @@ TEST_CASE("PN11 a light that keeps losing the cap is redrawn within a few frames
     }
     REQUIRE(drawn);
 }
+
+TEST_CASE("a must-draw light scheduled but not committed still reads as having no map", "[shadow]") {
+    ShadowPlanner planner;
+    const CameraView ahead = Camera({0.f, 0.f, 0.f}, {0.f, 0.f, -1.f});
+    const CameraView turned = Camera({0.f, 0.f, 0.f}, {0.f, 0.f, 1.f});
+    const std::vector<ShadowRequest> lights = {Point(1, {0.f, 0.f, 3.f}, 5.f)};  // PN6's geometry
+    Frame(planner, lights, {}, ahead, Small());
+    REQUIRE(planner.find(1) != nullptr);
+
+    // Turned, the light's unmatched faces are visible, so it is must-draw
+    // and (an infinite cap) gets scheduled. Without a commit, the draw
+    // never actually happened: find() must not hand out a map with a
+    // visible face it never drew.
+    const ShadowPlan plan = planner.plan(lights, {}, turned, Small());
+    REQUIRE_FALSE(Draws(plan, 1) == 0);  // it was in fact scheduled, not skipped by any cap
+    REQUIRE(planner.find(1) == nullptr);
+
+    // A normal, committed frame makes it readable again.
+    REQUIRE(Draws(Frame(planner, lights, {}, turned, Small()), 1) > 0);
+    REQUIRE(planner.find(1) != nullptr);
+}

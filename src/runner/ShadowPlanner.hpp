@@ -135,9 +135,10 @@ constexpr int kMaxShadowWait = 4;
 // fingerprint changes (the light, its tile, and every caster within its
 // Radius); a cube face the camera cannot see waits. Priority: a light with
 // a face the camera can see that was never actually drawn from its current
-// map goes first (find() withholds the map until it is); then a light that
-// has lost the cap kMaxShadowWait frames running; then the rest, biggest
-// look first, up to the frame's texel budget.
+// map goes first (find() withholds the map until that light is committed,
+// whether or not this frame's cap let it draw); then a light that has lost
+// the cap kMaxShadowWait frames running; then the rest, biggest look first,
+// up to the frame's texel budget.
 class ShadowPlanner {
 public:
     ShadowPlan plan(const std::vector<ShadowRequest>& requests, const std::vector<ShadowCaster>& casters,
@@ -150,8 +151,9 @@ public:
     void commit();
     // The light's map as last drawn, or null when it has none, or when a
     // face the camera can currently see was never actually drawn from it
-    // (newly visible, or in a tile the atlas just reused) and this frame's
-    // cap held the redraw back.
+    // (newly visible, or in a tile the atlas just reused) and that draw has
+    // not yet reached a commit() — whether the cap held it back this frame
+    // or it was scheduled but the caller has not committed it yet.
     const LocalShadow* find(std::uint64_t key) const;
     int atlasSize() const { return atlas_.atlasSize(); }
     std::int64_t atlasFreeTexels() const { return atlas_.freeTexels(); }
@@ -179,9 +181,12 @@ private:
         std::uint64_t hash = 0;
         std::uint64_t wantHash = 0;
         bool ready = false;
-        // False when a face the camera can see was due a first (or
-        // re-matching) draw this frame and the cap held it back: find()
-        // will not hand out drawn until it is readable again.
+        // False whenever this light must draw (plan() set it so for every
+        // such light, whether or not the cap let it through this frame):
+        // find() will not hand out drawn with a visible face unmatched
+        // until the light's own commit() makes it true again. A scheduled
+        // draw that never reaches commit() (the caller's draw calls failed,
+        // or the plan was simply never committed) leaves it false.
         bool readable = false;
         bool seen = false;
         LocalShadow drawn;

@@ -58,6 +58,7 @@ void ShadowPlanner::releaseTiles(Record& record) {
     record.tileCount = 0;
     record.size = 0;
     record.ready = false;
+    record.waited = 0;
     std::fill(record.matches, record.matches + 6, false);
 }
 
@@ -70,6 +71,7 @@ void ShadowPlanner::resetAtlas(int size, int minTile) {
         record.tileCount = 0;
         record.size = 0;
         record.ready = false;
+        record.waited = 0;
         std::fill(record.matches, record.matches + 6, false);
     }
 }
@@ -120,6 +122,7 @@ bool ShadowPlanner::allocate(const std::vector<ShadowRequest>& requests, const s
         std::fill(record.dirty, record.dirty + 6, true);
         std::fill(record.matches, record.matches + 6, false);
         record.ready = false;
+        record.waited = 0;
         all = all && record.size >= record.wanted;
     }
     return all;
@@ -210,34 +213,31 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
     };
     // Not ready, or a face the camera can see was never actually drawn from
     // the map it has now: reading that face would be a misread, so it must
-    // draw before anything else, cap or no cap.
-    auto mustDraw = [&](int i) {
-        const ShadowRequest& request = requests[static_cast<std::size_t>(i)];
+    // draw before anything else, cap or no cap. Computed once per light here
+    // (not per comparison, and not again in the loop below).
+    std::vector<bool> must(count);
+    std::vector<int> tier(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        const ShadowRequest& request = requests[i];
         const Record& record = records_.at(request.key);
-        if (!record.ready) {
-            return true;
-        }
-        const int faceLimit = request.kind == ShadowKind::Spot ? 1 : 6;
-        for (int face = 0; face < faceLimit; ++face) {
-            if (!record.matches[face] && faceVisible(request.kind, request.position, request.radius, face)) {
-                return true;
+        bool mustDraw = !record.ready;
+        if (!mustDraw) {
+            const int faceLimit = request.kind == ShadowKind::Spot ? 1 : 6;
+            for (int face = 0; face < faceLimit && !mustDraw; ++face) {
+                mustDraw = !record.matches[face] &&
+                           faceVisible(request.kind, request.position, request.radius, face);
             }
         }
-        return false;
-    };
+        must[i] = mustDraw;
+        tier[i] = mustDraw ? 0 : (record.waited >= kMaxShadowWait ? 1 : 2);
+    }
 
     // Lights that must draw first, then ones that have lost the cap
     // kMaxShadowWait frames running, then the rest; biggest look first
     // within each (order is already sorted that way, and stable_sort keeps it).
     std::vector<int> drawOrder = order;
     std::stable_sort(drawOrder.begin(), drawOrder.end(), [&](int a, int b) {
-        const auto tier = [&](int i) {
-            if (mustDraw(i)) {
-                return 0;
-            }
-            return records_.at(requests[static_cast<std::size_t>(i)].key).waited >= kMaxShadowWait ? 1 : 2;
-        };
-        return tier(a) < tier(b);
+        return tier[static_cast<std::size_t>(a)] < tier[static_cast<std::size_t>(b)];
     });
     std::int64_t spent = 0;
     for (const int i : drawOrder) {
@@ -246,8 +246,11 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
         if (record.size == 0) {
             continue;
         }
-        const bool must = mustDraw(i);
-        record.readable = true;
+        // Unreadable until this light's own commit: a scheduled draw can
+        // still fail to reach commit() (the frame's draw calls may fail, or
+        // the plan may simply never be committed), and until then a visible
+        // face it must draw has not actually been drawn from drawn.
+        record.readable = !must[static_cast<std::size_t>(i)];
 
         // The faces due that the camera can see. One it cannot is never read, so it waits.
         int faces[6];
@@ -264,9 +267,6 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
         const std::int64_t cost = static_cast<std::int64_t>(faceCount) * record.size * record.size;
         if (spent > 0 && spent + cost > settings.maxTexelsPerFrame) {
             ++record.waited;
-            if (must) {
-                record.readable = false;
-            }
             continue;
         }
         spent += cost;

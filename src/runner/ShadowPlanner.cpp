@@ -1,0 +1,306 @@
+#include "ShadowPlanner.hpp"
+
+#include "RenderMath.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <numeric>
+
+namespace runner {
+namespace {
+
+using engine_core::Matrix4;
+using engine_core::Vec3;
+
+// 64-bit FNV-1a over the bytes of what is added.
+class Hasher {
+public:
+    template <typename T>
+    void add(const T& value) {
+        const auto* bytes = reinterpret_cast<const unsigned char*>(&value);
+        for (std::size_t i = 0; i < sizeof(T); ++i) {
+            value_ ^= bytes[i];
+            value_ *= 1099511628211ull;
+        }
+    }
+    std::uint64_t value() const { return value_; }
+
+private:
+    std::uint64_t value_ = 1469598103934665603ull;
+};
+
+}  // namespace
+
+int TileSizeFor(float reach, int previous, int paneHeight, const ShadowSettings& settings) {
+    const float h = settings.hysteresis;
+    if (!(reach >= settings.minReach * (previous > 0 ? 1.f - h : 1.f))) {
+        return 0;
+    }
+    const float ideal = reach * static_cast<float>(paneHeight) * settings.texelsPerPixel;
+    if (previous > 0) {
+        const int kept = std::clamp(previous, settings.minTile, settings.maxTile);
+        if (ideal > static_cast<float>(kept) * 0.5f * (1.f - h) && ideal <= static_cast<float>(kept) * (1.f + h)) {
+            return kept;
+        }
+    }
+    int size = settings.minTile;
+    while (static_cast<float>(size) < ideal && size < settings.maxTile) {
+        size *= 2;
+    }
+    return size;
+}
+
+void ShadowPlanner::releaseTiles(Record& record) {
+    for (int t = 0; t < record.tileCount; ++t) {
+        atlas_.release(record.tiles[t]);
+        record.tiles[t] = {};
+    }
+    record.tileCount = 0;
+    record.size = 0;
+    record.ready = false;
+}
+
+void ShadowPlanner::resetAtlas(int size, int minTile) {
+    atlas_.reset(size, minTile);
+    for (auto& [key, record] : records_) {
+        for (AtlasTile& tile : record.tiles) {
+            tile = {};
+        }
+        record.tileCount = 0;
+        record.size = 0;
+        record.ready = false;
+    }
+}
+
+void ShadowPlanner::clear() {
+    records_.clear();
+    pending_.clear();
+    atlas_.reset(0, 0);
+}
+
+bool ShadowPlanner::allocate(const std::vector<ShadowRequest>& requests, const std::vector<int>& order,
+                             const std::vector<int>& wanted, const ShadowSettings& settings) {
+    // Each light whose wish changed gives its tiles back first, so the others can use them.
+    for (std::size_t i = 0; i < requests.size(); ++i) {
+        Record& record = records_.at(requests[i].key);
+        if (record.wanted != wanted[i]) {
+            releaseTiles(record);
+            record.wanted = wanted[i];
+        }
+    }
+    bool all = true;
+    for (const int i : order) {
+        Record& record = records_.at(requests[static_cast<std::size_t>(i)].key);
+        // Kept, even below its wish: retrying every frame would redraw it every frame.
+        if (record.size > 0 || record.wanted == 0) {
+            all = all && record.size >= record.wanted;
+            continue;
+        }
+        const int tileCount = record.kind == ShadowKind::Spot ? 1 : 6;
+        for (int size = record.wanted; size >= settings.minTile && record.size == 0; size /= 2) {
+            int got = 0;
+            for (; got < tileCount; ++got) {
+                record.tiles[got] = atlas_.allocate(size);
+                if (record.tiles[got].size == 0) {
+                    break;
+                }
+            }
+            if (got == tileCount) {
+                record.size = size;
+                record.tileCount = tileCount;
+            } else {
+                for (int t = 0; t < got; ++t) {
+                    atlas_.release(record.tiles[t]);
+                    record.tiles[t] = {};
+                }
+            }
+        }
+        std::fill(record.dirty, record.dirty + 6, true);
+        record.ready = false;
+        all = all && record.size >= record.wanted;
+    }
+    return all;
+}
+
+ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const std::vector<ShadowCaster>& casters,
+                               const CameraView& camera, const ShadowSettings& settings) {
+    ShadowPlan out;
+    pending_.clear();
+    if (atlas_.atlasSize() == 0) {
+        resetAtlas(settings.atlasMinSize, settings.minTile);
+        out.atlasResized = true;
+    }
+
+    // How big each light looks, and the tile that earns it.
+    const Vec3 eye = engine_core::matrix4_position(camera.world);
+    const std::size_t count = requests.size();
+    std::vector<float> reach(count);
+    std::vector<int> wanted(count);
+    for (auto& [key, record] : records_) {
+        record.seen = false;
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        const ShadowRequest& request = requests[i];
+        Record& record = records_[request.key];
+        record.seen = true;
+        if (record.kind != request.kind) {
+            releaseTiles(record);
+            record.kind = request.kind;
+            record.wanted = 0;
+        }
+        reach[i] = ProjectedReach(request.position, request.radius, eye, camera.fovYDegrees);
+        wanted[i] = TileSizeFor(reach[i], record.wanted, camera.paneHeight, settings);
+    }
+    // Lights gone since last frame give their tiles back.
+    for (auto it = records_.begin(); it != records_.end();) {
+        if (!it->second.seen) {
+            releaseTiles(it->second);
+            it = records_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    std::vector<int> order(count);
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return reach[a] > reach[b]; });
+    if (!allocate(requests, order, wanted, settings) && atlas_.atlasSize() < settings.atlasMaxSize) {
+        resetAtlas(atlas_.atlasSize() * 2, settings.minTile);
+        out.atlasResized = true;
+        allocate(requests, order, wanted, settings);
+    }
+
+    // What each map should be drawn from: the light, its tile, and every caster in its reach.
+    for (std::size_t i = 0; i < count; ++i) {
+        const ShadowRequest& request = requests[i];
+        Record& record = records_.at(request.key);
+        if (record.size == 0) {
+            continue;
+        }
+        Hasher hash;
+        hash.add(request.kind);
+        hash.add(request.position);
+        hash.add(request.direction);
+        hash.add(request.radius);
+        hash.add(request.outerFovDegrees);
+        hash.add(record.size);
+        const Sphere reachSphere{request.position, request.radius};
+        for (const ShadowCaster& caster : casters) {
+            if ((request.owner != 0 && caster.owner == request.owner) || !SpheresTouch(reachSphere, caster.bounds)) {
+                continue;
+            }
+            hash.add(caster.mesh);
+            hash.add(caster.revision);
+            hash.add(caster.model);
+        }
+        record.wantHash = hash.value();
+        if (!request.cached || record.wantHash != record.hash) {
+            std::fill(record.dirty, record.dirty + 6, true);
+        }
+    }
+
+    // Lights with no map first, then the ones that look biggest, until the budget is spent.
+    std::vector<int> drawOrder = order;
+    std::stable_partition(drawOrder.begin(), drawOrder.end(), [&](int i) {
+        return !records_.at(requests[static_cast<std::size_t>(i)].key).ready;
+    });
+    std::int64_t spent = 0;
+    for (const int i : drawOrder) {
+        const ShadowRequest& request = requests[static_cast<std::size_t>(i)];
+        Record& record = records_.at(request.key);
+        if (record.size == 0) {
+            continue;
+        }
+        // The faces due that the camera can see. One it cannot is never read, so it waits.
+        int faces[6];
+        int faceCount = 0;
+        if (request.kind == ShadowKind::Spot) {
+            if (record.dirty[0] && SphereInFrustum(camera.viewProjection, {request.position, request.radius})) {
+                faces[faceCount++] = 0;
+            }
+        } else {
+            for (int face = 0; face < 6; ++face) {
+                if (record.dirty[face] &&
+                    CubeFaceVisible(camera.viewProjection, request.position, request.radius, face)) {
+                    faces[faceCount++] = face;
+                }
+            }
+        }
+        if (faceCount == 0) {
+            continue;
+        }
+        const std::int64_t cost = static_cast<std::int64_t>(faceCount) * record.size * record.size;
+        if (spent > 0 && spent + cost > settings.maxTexelsPerFrame) {
+            continue;
+        }
+        spent += cost;
+
+        LocalShadow shadow;
+        shadow.kind = request.kind;
+        std::copy(record.tiles, record.tiles + 6, shadow.tiles);
+        shadow.position = request.position;
+        shadow.nearZ = ShadowNear(request.radius);
+        shadow.farZ = request.radius;
+        Matrix4 matrices[6];
+        if (request.kind == ShadowKind::Spot) {
+            const SpotShadow spot =
+                SpotShadowFor(request.position, request.direction, request.outerFovDegrees, request.radius, record.size);
+            shadow.viewProjection = spot.viewProjection;
+            shadow.texelPerDistance = spot.texelPerDistance;
+            matrices[0] = spot.viewProjection;
+        } else {
+            shadow.faceScale = static_cast<float>(record.size - 2 * kTileGuard) / static_cast<float>(record.size);
+            const auto cube = CubeFaceViewProjections(request.position, request.radius, shadow.faceScale);
+            std::copy(cube.begin(), cube.end(), matrices);
+            shadow.texelPerDistance = 2.f / (shadow.faceScale * static_cast<float>(record.size));
+        }
+        Pending pending;
+        pending.key = request.key;
+        pending.shadow = shadow;
+        pending.hash = record.wantHash;
+        for (int k = 0; k < faceCount; ++k) {
+            const int face = faces[k];
+            TileDraw draw;
+            draw.key = request.key;
+            draw.face = face;
+            draw.tile = record.tiles[face];
+            draw.viewProjection = matrices[face];
+            for (std::size_t c = 0; c < casters.size(); ++c) {
+                if (request.owner != 0 && casters[c].owner == request.owner) {
+                    continue;
+                }
+                if (SphereInFrustum(matrices[face], casters[c].bounds)) {
+                    draw.casters.push_back(static_cast<int>(c));
+                }
+            }
+            out.draws.push_back(std::move(draw));
+            pending.faces[pending.faceCount++] = face;
+        }
+        pending_.push_back(pending);
+    }
+    return out;
+}
+
+void ShadowPlanner::commit() {
+    for (const Pending& pending : pending_) {
+        const auto it = records_.find(pending.key);
+        if (it == records_.end()) {
+            continue;
+        }
+        Record& record = it->second;
+        record.drawn = pending.shadow;
+        record.hash = pending.hash;
+        record.ready = true;
+        for (int k = 0; k < pending.faceCount; ++k) {
+            record.dirty[pending.faces[k]] = false;
+        }
+    }
+    pending_.clear();
+}
+
+const LocalShadow* ShadowPlanner::find(std::uint64_t key) const {
+    const auto it = records_.find(key);
+    return it != records_.end() && it->second.ready && it->second.size > 0 ? &it->second.drawn : nullptr;
+}
+
+}  // namespace runner

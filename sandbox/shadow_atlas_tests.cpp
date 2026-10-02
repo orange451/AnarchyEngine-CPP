@@ -78,3 +78,34 @@ TEST_CASE("AT3 releasing a tile twice, or one from before a reset, changes nothi
     REQUIRE(a.size == 512);
     REQUIRE(atlas.allocate(64).size == 0);
 }
+
+TEST_CASE("AT4 pages hand out tiles from page 0 until it is full, then from page 1", "[shadow]") {
+    runner::ShadowAtlasPages atlas;
+    atlas.reset(256, 2, 64);
+    REQUIRE(atlas.pageSize() == 256);
+    REQUIRE(atlas.pageCount() == 2);
+    REQUIRE(atlas.freeTexels() == 2 * 256 * 256);
+    std::vector<AtlasTile> tiles;
+    for (int i = 0; i < 16; ++i) {
+        const AtlasTile tile = atlas.allocate(64);
+        REQUIRE(tile.size == 64);
+        REQUIRE(tile.page == 0);
+        tiles.push_back(tile);
+    }
+    const AtlasTile next = atlas.allocate(128);
+    REQUIRE(next.size == 128);
+    REQUIRE(next.page == 1);
+    REQUIRE(atlas.allocate(256).size == 0);  // neither page has that much left
+    REQUIRE(atlas.freeTexels() == 256 * 256 - 128 * 128);
+
+    // A tile goes back to its own page: page 0 can give a whole page again, page 1 still cannot.
+    for (const AtlasTile& tile : tiles) {
+        atlas.release(tile);
+    }
+    const AtlasTile whole = atlas.allocate(256);
+    REQUIRE(whole.size == 256);
+    REQUIRE(whole.page == 0);
+    REQUIRE(atlas.allocate(256).size == 0);
+    atlas.release(next);
+    REQUIRE(atlas.allocate(256).page == 1);
+}

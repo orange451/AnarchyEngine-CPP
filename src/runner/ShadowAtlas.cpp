@@ -88,4 +88,37 @@ std::int64_t ShadowAtlasAllocator::freeTexels() const {
     return total;
 }
 
+void ShadowAtlasPages::reset(int pageSize, int pageCount, int minTile) {
+    pageSize_ = pageSize;
+    pages_.assign(static_cast<std::size_t>(std::max(pageCount, 0)), ShadowAtlasAllocator{});
+    for (ShadowAtlasAllocator& page : pages_) {
+        page.reset(pageSize, minTile);
+    }
+}
+
+AtlasTile ShadowAtlasPages::allocate(int size) {
+    for (std::size_t page = 0; page < pages_.size(); ++page) {
+        AtlasTile tile = pages_[page].allocate(size);
+        if (tile.size > 0) {
+            tile.page = static_cast<int>(page);
+            return tile;
+        }
+    }
+    return {};
+}
+
+void ShadowAtlasPages::release(const AtlasTile& tile) {
+    if (tile.page >= 0 && tile.page < pageCount()) {
+        pages_[static_cast<std::size_t>(tile.page)].release(tile);
+    }
+}
+
+std::int64_t ShadowAtlasPages::freeTexels() const {
+    std::int64_t total = 0;
+    for (const ShadowAtlasAllocator& page : pages_) {
+        total += page.freeTexels();
+    }
+    return total;
+}
+
 }  // namespace runner

@@ -362,9 +362,12 @@ public:
         if (std::shared_ptr<jadefx::ImageView> view = icon_graphic(icon)) {
             getChildren().add(std::move(view));
         }
-        auto text = jadefx::make<jadefx::Label>(label);
-        text->setMouseTransparent(true);
-        getChildren().add(std::move(text));
+        // An empty label is the icon alone.
+        if (label[0] != '\0') {
+            auto text = jadefx::make<jadefx::Label>(label);
+            text->setMouseTransparent(true);
+            getChildren().add(std::move(text));
+        }
         setOnMouseClicked([this](const jadefx::MouseEvent& event) {
             if (event.button == 0 && action_) {
                 action_();

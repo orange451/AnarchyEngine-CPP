@@ -101,7 +101,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     conflict_count_ = count.get();
     ribbon->getChildren().add(std::move(count));
     // The Scene Views' floor grid, at the right end: lit while on.
-    auto grid = jadefx::make<RibbonButton>("Grid", "Grid.png", [this] { set_grid(!grid_on_); });
+    auto grid = jadefx::make<RibbonButton>("", "Grid.png", [this] { set_grid(!grid_on_); });
     grid->setElementId("grid-toggle");
     jadefx::Tooltip::install(grid.get(), jadefx::make<jadefx::Tooltip>("Show the floor grid and the world's axes"));
     grid_button_ = grid.get();

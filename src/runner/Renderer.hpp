@@ -87,7 +87,7 @@ struct SceneLighting {
 // then each light: a DirectionalLight over the whole view, a PointLight or
 // SpotLight over its volume; then the Skybox behind every surface; a forward
 // pass that blends see-through surfaces over that, farthest first; a merge;
-// and a filmic tone map onto the pane. Every pass but the last draws into this
+// a filmic tone map onto the pane; and, when set, the floor grid over it. Every pass but the last draws into this
 // renderer's own buffers, the pane's size in pixels. With a Skybox, its
 // image-based lighting (EnvironmentMap) is the sky light, and the sky fills
 // the pane wherever nothing opaque was drawn, even with no meshes.
@@ -113,6 +113,11 @@ public:
     void setCamera(const engine_core::Matrix4& world, float fovYDegrees);
     // How the next draws are lit, until it is set again. Needs no GL context.
     void setLighting(const SceneLighting& lighting) { lighting_ = lighting; }
+    // Whether draw lays the editor's floor grid over the pane, as Blender
+    // does: the world's Y = 0 plane ruled every 1, 10, and 100 units, with the
+    // X axis in red and the Z axis in blue, hidden behind nearer surfaces.
+    // Off until set. Needs no GL context.
+    void setGridVisible(bool visible) { gridVisible_ = visible; }
 
     // x, y, width, and height are the pane in window points, origin at the top
     // left. sceneWidth and sceneHeight are the window in the same units.
@@ -151,6 +156,7 @@ private:
         int projection = -1;
         int viewProjection = -1;
         int inverseProjection = -1;
+        int inverseView = -1;
         int texel = -1;
         int ambient = -1;
         int skyRadiance = -1;
@@ -226,6 +232,9 @@ private:
     bool skyPass(const float* inverseProjection);
     bool transparencyPass(const MeshDraw* meshes, int count, const float* projection, const float* inverseProjection);
     bool mergePass();
+    // The floor grid over the pane, on the pane's framebuffer. depth is the
+    // scene's, or a texture of 1s where nothing was drawn.
+    void gridPass(unsigned depth, const float* inverseProjection);
     void bindMaterial(const Program& program, const MeshDraw& draw);
     void bindGBuffer(const Program& program);
     // viewToSky_ and skyColor_ from the camera and the Skybox.
@@ -242,6 +251,7 @@ private:
     Program merge_;
     Program tonemap_;
     Program sky_;
+    Program grid_;
     EnvironmentMap environment_;
     // Whether this draw has a Skybox whose cubes are made.
     bool skyReady_ = false;
@@ -288,6 +298,7 @@ private:
     engine_core::Matrix4 view_ = DefaultView();
     float fovYDegrees_ = kCameraFovYDegrees;
     SceneLighting lighting_;
+    bool gridVisible_ = false;
 
     // Per draw, reused.
     std::vector<ViewLight> viewLights_;

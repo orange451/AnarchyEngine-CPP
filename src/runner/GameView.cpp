@@ -59,6 +59,7 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
     setMinSize(64, 64);
     // Its color is the theme's --ide-viewport-color, through the studio's stylesheet.
     getClassList().add("ide-viewport");
+    renderer_.setGridVisible(true);
     // The game hears MouseButton2 and 3 too; holding the right button turns the
     // scene camera. IdePane does nothing with a press, so no button starts a
     // tab drag or a dock action here.

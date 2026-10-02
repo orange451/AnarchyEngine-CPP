@@ -625,6 +625,34 @@ int main() {
             textures.clear();
         }
 
+        // The floor grid: from (0, 3, 7), the X axis crosses the view through
+        // its middle, red, and the Z axis runs down from the middle, blue.
+        {
+            renderer.setCamera(engine_core::matrix4_look_at({0.f, 3.f, 7.f}, {0.f, 0.f, 0.f}, up),
+                               runner::Renderer::kCameraFovYDegrees);
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, nullptr, 0);
+            Expect(IsClear(ReadPixel(fbWidth / 4, fbHeight / 2)), "the grid is off until set");
+            renderer.setGridVisible(true);
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, nullptr, 0);
+            const Pixel xAxis = ReadPixel(fbWidth / 4, fbHeight / 2);
+            const Pixel zAxis = ReadPixel(fbWidth / 2, fbHeight / 4);
+            Expect(xAxis.r > xAxis.g + 60 && xAxis.r > xAxis.b + 40, "the X axis is red (" + Text(xAxis) + ")");
+            Expect(zAxis.b > zAxis.r + 60 && zAxis.b > zAxis.g + 20, "the Z axis is blue (" + Text(zAxis) + ")");
+            Expect(IsClear(ReadPixel(2, fbHeight - 3)), "above the horizon there is no grid");
+            // The cube hides the floor behind it, and stands on nothing it lets show.
+            renderer.setGridVisible(false);
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1);
+            const Pixel bare = ReadPixel(fbWidth / 2, fbHeight / 2);
+            renderer.setGridVisible(true);
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1);
+            const Pixel gridded = ReadPixel(fbWidth / 2, fbHeight / 2);
+            Expect(std::abs(Sum(gridded) - Sum(bare)) <= 3,
+                   "a surface in front of the floor hides the grid (" + Text(gridded) + " and " + Text(bare) + ")");
+            Expect(ReadPixel(fbWidth / 4, fbHeight / 2).r > xAxis.r - 10, "and the axis beside it still shows");
+            Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the grid leaves no GL error");
+            renderer.setGridVisible(false);
+        }
+
         // A file that changes is read again after the recheck interval: this one stops drawing.
         std::ofstream(root / "meshes" / "cube.amesh", std::ios::binary | std::ios::trunc) << "broken now";
         std::filesystem::last_write_time(root / "meshes" / "cube.amesh",

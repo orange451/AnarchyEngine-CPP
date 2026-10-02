@@ -32,7 +32,8 @@ class SceneFeed;
 // draws nothing. Each enabled PointLight, SpotLight, and DirectionalLight in
 // Workspace or under Lighting lights them, with Lighting's Ambient, Exposure,
 // Saturation, and Gamma. The first Skybox under Lighting is drawn behind
-// them and lights them too.
+// them and lights them too. Over them lies the floor grid, with the world's
+// X and Z axes on it (Renderer::setGridVisible).
 // The view is linked to one Camera, by GUID, and sees from that Camera's
 // Transform and FieldOfView as the snapshot has them. The list at the top
 // right offers each Camera in Workspace, at any depth, in tree order. A view

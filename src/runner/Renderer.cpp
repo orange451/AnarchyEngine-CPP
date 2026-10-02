@@ -82,6 +82,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.projection = at("uProjection");
     program.viewProjection = at("uViewProjection");
     program.inverseProjection = at("uInverseProjection");
+    program.inverseView = at("uInverseView");
     program.texel = at("uTexel");
     program.ambient = at("uAmbient");
     program.skyRadiance = at("uSkyRadiance");
@@ -184,6 +185,7 @@ bool Renderer::initialize() {
                      {"pipeline/lighting.glsl"}) &&
         buildProgram(merge_, "Merge", "pipeline/fullscreen.vert", "pipeline/merge.frag", {}) &&
         buildProgram(tonemap_, "Tone map", "pipeline/fullscreen.vert", "pipeline/tonemap.frag", {}) &&
+        buildProgram(grid_, "Grid", "pipeline/fullscreen.vert", "pipeline/grid.frag", {}) &&
         environment_.initialize();
     if (!built) {
         shutdown();
@@ -578,15 +580,15 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     }
     // A sky whose cubes can never be made is drawn as no sky, rather than never drawing.
     const bool hasSky = lighting_.sky.image != 0 && environment_.available();
+    Matrix projection;
+    Perspective(fovYDegrees_, static_cast<float>(pane.width) / static_cast<float>(pane.height), kNear, kFar,
+                projection);
+    engine_core::Matrix4 projectionMatrix;
+    std::copy(projection, projection + 16, projectionMatrix.m);
+    const engine_core::Matrix4 inverseProjection = engine_core::matrix4_inverse(projectionMatrix);
+
     bool drawn = !hasMeshes && !hasSky;
     if (!drawn && ensureTargets(pane.width, pane.height)) {
-        Matrix projection;
-        Perspective(fovYDegrees_, static_cast<float>(pane.width) / static_cast<float>(pane.height), kNear, kFar,
-                    projection);
-        engine_core::Matrix4 projectionMatrix;
-        std::copy(projection, projection + 16, projectionMatrix.m);
-        const engine_core::Matrix4 inverseProjection = engine_core::matrix4_inverse(projectionMatrix);
-
         // The lights in view space, as every pass takes them.
         viewLights_.clear();
         for (int index = 0; lights != nullptr && index < lightCount; ++index) {
@@ -675,9 +677,32 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
             DrawFullscreen(emptyVao_);
         }
     }
+    // Over a pane that got only the clear, the grid would show through the
+    // surfaces that should hide it, so it waits for a frame that draws them.
+    if (drawn && gridVisible_) {
+        gridPass(hasMeshes || hasSky ? depthTexture_ : whiteTexture_, inverseProjection.m);
+    }
 
     saved.restore(viewport);
     return drawn;
+}
+
+void Renderer::gridPass(unsigned depth, const float* inverseProjection) {
+    glDisable(GL_DEPTH_TEST);
+    glDisable(RT_GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    // Straight alpha over the pane, leaving its alpha as it was.
+    glBlendFuncSeparate(RT_GL_SRC_ALPHA, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ZERO, RT_GL_ONE);
+    glUseProgram(grid_.id);
+    BindTexture(kUnitDepth, depth);
+    const engine_core::Matrix4 inverseView = engine_core::matrix4_inverse(view_);
+    glUniformMatrix4fv(grid_.inverseProjection, 1, GL_FALSE, inverseProjection);
+    glUniformMatrix4fv(grid_.inverseView, 1, GL_FALSE, inverseView.m);
+    glBindVertexArray(emptyVao_);
+    // A grid the driver is not ready for is left out of this frame, not the scene with it.
+    if (CanDraw(grid_.id)) {
+        DrawFullscreen(emptyVao_);
+    }
 }
 
 void Renderer::bindMaterial(const Program& program, const MeshDraw& draw) {
@@ -1056,7 +1081,7 @@ void Renderer::setClearColor(float r, float g, float b) {
 
 void Renderer::shutdown() {
     ready_ = false;
-    for (Program* program : {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &sky_}) {
+    for (Program* program : {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &sky_, &grid_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);
         }

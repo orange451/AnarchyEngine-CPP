@@ -985,6 +985,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("DirectionalLight", "Intensity", "How bright this light is. 0 gives none.", "number", false, {});
     add("DirectionalLight", "Enabled", "When false, this light gives none.", "boolean", false, {});
     add("Light", "Enabled", "When false, this light gives none.", "boolean", false, {});
+    add("Light", "Shadows", "When true, this light casts shadows.", "boolean", false, {});
+    add("DirectionalLight", "Shadows", "When true, this light casts shadows.", "boolean", false, {});
+    add("DirectionalLight", "ShadowDistance", "How many studs from the camera get this light's shadows.", "number",
+        false, {});
     add("Skybox", "Image",
         "The sky, an equirectangular image drawn behind everything and lighting every surface. An .hdr gives light "
         "brighter than white. Nil draws no sky.",

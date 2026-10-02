@@ -90,12 +90,25 @@ void Light::set_enabled(bool enabled) {
     note_visual(VisualField::Light);
 }
 
+void Light::set_shadows(bool shadows) {
+    if (!on_gameplay_thread()) {
+        contract_fail("Light setters run on SimulationThread");
+    }
+    if (shadows_ == shadows) {
+        return;
+    }
+    shadows_ = shadows;
+    note_property_change("Shadows", bool_slot(!shadows), bool_slot(shadows));
+    note_visual(VisualField::Light);
+}
+
 void Light::on_reuse() {
     GameObject::on_reuse();
     color_ = kDefaultColor;
     intensity_ = kDefaultIntensity;
     radius_ = kDefaultRadius;
     enabled_ = true;
+    shadows_ = kDefaultShadows;
 }
 
 std::optional<std::string> SpotLight::set_outer_fov(double degrees) {
@@ -190,11 +203,43 @@ void DirectionalLight::set_enabled(bool enabled) {
     note_visual_row(VisualField::Light);
 }
 
+void DirectionalLight::set_shadows(bool shadows) {
+    if (!on_gameplay_thread()) {
+        contract_fail("DirectionalLight setters run on SimulationThread");
+    }
+    if (shadows_ == shadows) {
+        return;
+    }
+    shadows_ = shadows;
+    note_property_change("Shadows", bool_slot(!shadows), bool_slot(shadows));
+    note_visual_row(VisualField::Light);
+}
+
+std::optional<std::string> DirectionalLight::set_shadow_distance(double value) {
+    if (!on_gameplay_thread()) {
+        contract_fail("DirectionalLight setters run on SimulationThread");
+    }
+    if (!std::isfinite(value)) {
+        return std::string("ShadowDistance must be a finite number");
+    }
+    value = std::max(value, 0.0);
+    if (shadow_distance_ == value) {
+        return std::nullopt;
+    }
+    const double previous = shadow_distance_;
+    shadow_distance_ = value;
+    note_property_change("ShadowDistance", number_slot(previous), number_slot(value));
+    note_visual_row(VisualField::Light);
+    return std::nullopt;
+}
+
 void DirectionalLight::on_reuse() {
     direction_ = kDefaultDirection;
     color_ = Light::kDefaultColor;
     intensity_ = Light::kDefaultIntensity;
     enabled_ = true;
+    shadows_ = kDefaultShadows;
+    shadow_distance_ = kDefaultShadowDistance;
 }
 
 namespace {
@@ -269,6 +314,26 @@ bool read_direction(DataModel&, DataModel& object, LuaSlot& out) {
     return true;
 }
 
+template <typename T>
+bool read_shadows(DataModel&, DataModel& object, LuaSlot& out) {
+    const auto* light = dynamic_cast<const T*>(&object);
+    if (light == nullptr) {
+        return false;
+    }
+    out = bool_slot(light->shadows());
+    return true;
+}
+
+template <typename T>
+bool write_shadows(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* light = dynamic_cast<T*>(&object);
+    if (light == nullptr) {
+        return false;
+    }
+    light->set_shadows(in.flag);
+    return true;
+}
+
 bool write_direction(DataModel&, DataModel& object, LuaSlot& in) {
     auto* sun = dynamic_cast<DirectionalLight*>(&object);
     return sun != nullptr && refuse(in, sun->set_direction(in.vec));
@@ -286,6 +351,7 @@ ANARCHY_LUA_REGISTER(register_light_lua) {
     static const std::string radius = number_json(Light::kDefaultRadius);
     static const std::string outer_fov = number_json(SpotLight::kDefaultOuterFov);
     static const std::string inner_fov_scale = number_json(SpotLight::kDefaultInnerFovScale);
+    static const std::string shadow_distance = number_json(DirectionalLight::kDefaultShadowDistance);
     // Each class that can be made lists the fields, as FileAsset's subclasses
     // list Path: Light itself is only for IsA, and is never made.
     const LuaField point_fields[] = {
@@ -297,6 +363,7 @@ ANARCHY_LUA_REGISTER(register_light_lua) {
                                       write_number<Light, &Light::set_radius>, radius.c_str()),
                    0.0, Light::kMaxRadiusSlider),
         lua_saved_property("Enabled", "boolean", read_enabled<Light>, write_enabled<Light>, "true"),
+        lua_saved_property("Shadows", "boolean", read_shadows<Light>, write_shadows<Light>, "false"),
     };
     register_lua_class("Light", "GameObject", nullptr, 0);
     register_lua_class("PointLight", "Light", point_fields, static_cast<int>(std::size(point_fields)));
@@ -316,6 +383,13 @@ ANARCHY_LUA_REGISTER(register_light_lua) {
                    0.0, Light::kMaxIntensitySlider),
         lua_saved_property("Enabled", "boolean", read_enabled<DirectionalLight>, write_enabled<DirectionalLight>,
                            "true"),
+        lua_saved_property("Shadows", "boolean", read_shadows<DirectionalLight>, write_shadows<DirectionalLight>,
+                           "true"),
+        lua_slider(lua_saved_property("ShadowDistance", "number",
+                                      read_number<DirectionalLight, &DirectionalLight::shadow_distance>,
+                                      write_number<DirectionalLight, &DirectionalLight::set_shadow_distance>,
+                                      shadow_distance.c_str()),
+                   0.0, DirectionalLight::kMaxShadowDistanceSlider),
     };
     register_lua_class("DirectionalLight", "Instance", directional_fields,
                        static_cast<int>(std::size(directional_fields)));
@@ -324,6 +398,7 @@ ANARCHY_LUA_REGISTER(register_light_lua) {
         point_fields[1],
         point_fields[2],
         point_fields[3],
+        point_fields[4],
         lua_slider(lua_saved_property("OuterFOV", "number", read_number<SpotLight, &SpotLight::outer_fov>,
                                       write_number<SpotLight, &SpotLight::set_outer_fov>, outer_fov.c_str()),
                    SpotLight::kMinOuterFov, SpotLight::kMaxOuterFov),

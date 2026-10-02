@@ -233,6 +233,7 @@ void GameView::collectMeshes() {
             draw.roughness = source.roughness;
             draw.reflectivity = source.reflectivity;
             draw.transparency = source.transparency;
+            draw.revision = source.session != nullptr ? source.revision : 0;
             loaded.push_back(draw);
         }
     }
@@ -275,6 +276,9 @@ void GameView::collectMeshes() {
             light.radius = row.light.radius;
             light.outerFovDegrees = row.light.outer_fov;
             light.innerFovScale = row.light.inner_fov_scale;
+            light.id = row.id;
+            light.shadows = row.light.shadows;
+            light.shadowDistance = row.light.shadow_distance;
             lightDraws_.push_back(light);
         }
         if (row.prefab == 0 || row.prefab >= snapshot.prefabs.size()) {
@@ -285,6 +289,7 @@ void GameView::collectMeshes() {
         for (const MeshDraw& model : prefabMeshes_[row.prefab]) {
             MeshDraw& draw = meshDraws_.emplace_back(model);
             draw.model = row.world;
+            draw.owner = row.id;
             draw.color[0] *= row.color.r;
             draw.color[1] *= row.color.g;
             draw.color[2] *= row.color.b;

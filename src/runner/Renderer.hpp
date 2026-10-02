@@ -36,6 +36,12 @@ struct MeshDraw {
     float roughness = 0.4f;
     float reflectivity = 0.5f;
     float transparency = 0.f;
+    // The instance that draws it, or 0. A light never shadows itself, so
+    // meshes whose owner is a LightDraw's id cast nothing for that light.
+    std::uint64_t owner = 0;
+    // A play session's upload revision of its geometry, 0 for a file's: a
+    // shadow map it is in is drawn again when it changes.
+    std::uint64_t revision = 0;
 };
 
 // A PointLight, SpotLight, or DirectionalLight, in world space.
@@ -54,6 +60,12 @@ struct LightDraw {
     // A SpotLight's whole cone, in degrees, and the part of it at full brightness.
     float outerFovDegrees = 80.f;
     float innerFovScale = 0.1f;
+    // Its instance, so its shadow map is kept from frame to frame and its
+    // own meshes cast nothing for it. 0 for none: its map is drawn every frame.
+    std::uint64_t id = 0;
+    bool shadows = false;
+    // A DirectionalLight's: studs from the camera its cascades cover.
+    float shadowDistance = 100.f;
 };
 
 // The Skybox, as the renderer reads it. Each image is a GL texture as

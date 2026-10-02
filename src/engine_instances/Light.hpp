@@ -17,6 +17,7 @@ namespace engine_core {
 // Radius     number  studs it reaches; it fades to nothing there. 8, not below
 //                    0; the slider runs to 64.
 // Enabled    boolean when false it gives no light.
+// Shadows    boolean when true it casts shadows in the Scene View. false.
 //
 // Each is a saved registry property (lua_saved_property), so DataModel saves,
 // loads, undoes, and restores it at Stop. "Light" itself is only a base class:
@@ -29,6 +30,7 @@ public:
     static constexpr double kMaxIntensitySlider = 8.0;
     static constexpr double kDefaultRadius = 8.0;
     static constexpr double kMaxRadiusSlider = 64.0;
+    static constexpr bool kDefaultShadows = false;
 
     using GameObject::GameObject;
 
@@ -36,6 +38,7 @@ public:
     double intensity() const { return intensity_; }
     double radius() const { return radius_; }
     bool enabled() const { return enabled_; }
+    bool shadows() const { return shadows_; }
 
     // SimulationThread. A value that is not finite is refused: the setter
     // returns why and changes nothing. A negative number is taken as 0.
@@ -43,6 +46,7 @@ public:
     std::optional<std::string> set_intensity(double value);
     std::optional<std::string> set_radius(double value);
     void set_enabled(bool enabled);
+    void set_shadows(bool shadows);
 
 protected:
     void on_reuse() override;
@@ -54,6 +58,7 @@ private:
     double intensity_ = kDefaultIntensity;
     double radius_ = kDefaultRadius;
     bool enabled_ = true;
+    bool shadows_ = kDefaultShadows;
 };
 
 // Shines every way from its translation, out to Radius.
@@ -74,11 +79,17 @@ public:
 // Color      Color3   white.
 // Intensity  number   how bright, 1. Not below 0; the slider runs to 8.
 // Enabled    boolean  when false it gives no light.
+// Shadows         boolean  when true it casts shadows. true.
+// ShadowDistance  number   studs from the camera that get its shadows, 100.
+//                          Not below 0; the slider runs to 1000.
 //
 // Each is a saved registry property, as a Light's are.
 class DirectionalLight : public DataModel {
 public:
     static constexpr Vec3 kDefaultDirection{1.f, 1.f, 1.f};
+    static constexpr bool kDefaultShadows = true;
+    static constexpr double kDefaultShadowDistance = 100.0;
+    static constexpr double kMaxShadowDistanceSlider = 1000.0;
 
     DirectionalLight(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
     const char* class_name() const override { return "DirectionalLight"; }
@@ -87,6 +98,8 @@ public:
     ColorRgb color() const { return color_; }
     double intensity() const { return intensity_; }
     bool enabled() const { return enabled_; }
+    bool shadows() const { return shadows_; }
+    double shadow_distance() const { return shadow_distance_; }
 
     // SimulationThread. A value that is not finite is refused: the setter
     // returns why and changes nothing. A negative Intensity is taken as 0.
@@ -94,6 +107,8 @@ public:
     std::optional<std::string> set_color(ColorRgb color);
     std::optional<std::string> set_intensity(double value);
     void set_enabled(bool enabled);
+    void set_shadows(bool shadows);
+    std::optional<std::string> set_shadow_distance(double value);
 
 protected:
     bool has_visual_row() const override { return true; }
@@ -104,6 +119,8 @@ private:
     ColorRgb color_ = Light::kDefaultColor;
     double intensity_ = Light::kDefaultIntensity;
     bool enabled_ = true;
+    bool shadows_ = kDefaultShadows;
+    double shadow_distance_ = kDefaultShadowDistance;
 };
 
 // Shines a cone down its Transform's -Z, as a Camera looks, out to Radius.

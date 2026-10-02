@@ -24,6 +24,7 @@
 
 namespace {
 
+using engine_core::DirectionalLight;
 using engine_core::PointLight;
 using engine_core::SpotLight;
 using engine_core::VisualLight;
@@ -410,4 +411,86 @@ TEST_CASE("LIT8 lights under Lighting shine as they do in Workspace", "[light][r
     REQUIRE(pump.find(spot.id())->light.outer_fov == static_cast<float>(spot.outer_fov()));
     REQUIRE(pump.find(sun.id()) != nullptr);
     REQUIRE(pump.find(part.id()) == nullptr);
+}
+
+TEST_CASE("LIT9 Shadows and ShadowDistance are checked, undo, save, and come back at Stop", "[light][shadow]") {
+    SimRole role;
+    engine_core::Game game;
+    PointLight& point = add_light<PointLight>(game);
+    SpotLight& spot = add_light<SpotLight>(game);
+    DirectionalLight& sun = game.create<DirectionalLight>();
+    game.set_parent(sun.id(), workspace_of(game));
+    REQUIRE_FALSE(point.shadows());
+    REQUIRE(sun.shadows());
+    REQUIRE(sun.shadow_distance() == DirectionalLight::kDefaultShadowDistance);
+
+    // Defaults are not saved.
+    engine_core::PropertyBag point_saved;
+    point.save_properties(point_saved);
+    REQUIRE(engine_core::bag_find(point_saved, "Shadows") == nullptr);
+    engine_core::PropertyBag sun_saved;
+    sun.save_properties(sun_saved);
+    REQUIRE(engine_core::bag_find(sun_saved, "Shadows") == nullptr);
+    REQUIRE(engine_core::bag_find(sun_saved, "ShadowDistance") == nullptr);
+
+    game.history().set_pending_gesture("Set Shadows");
+    point.set_shadows(true);
+    game.history().end_gesture();
+    REQUIRE(point.shadows());
+    game.history().undo();
+    REQUIRE_FALSE(point.shadows());
+    game.history().redo();
+    REQUIRE(point.shadows());
+
+    // A SpotLight has it too, and saves it.
+    spot.set_shadows(true);
+    engine_core::PropertyBag spot_saved;
+    spot.save_properties(spot_saved);
+    REQUIRE(engine_core::bag_find(spot_saved, "Shadows") != nullptr);
+
+    // Negative is taken as 0; not finite is refused.
+    REQUIRE_FALSE(sun.set_shadow_distance(-5.0));
+    REQUIRE(sun.shadow_distance() == 0.0);
+    REQUIRE(*sun.set_shadow_distance(std::nan("")) == "ShadowDistance must be a finite number");
+    REQUIRE_FALSE(sun.set_shadow_distance(250.0));
+    sun.set_shadows(false);
+    engine_core::PropertyBag changed;
+    sun.save_properties(changed);
+    REQUIRE(engine_core::bag_find(changed, "Shadows") != nullptr);
+    REQUIRE(engine_core::bag_find(changed, "ShadowDistance") != nullptr);
+
+    game.capture_place();
+    game.start_simulation();
+    point.set_shadows(false);
+    REQUIRE_FALSE(sun.set_shadow_distance(10.0));
+    game.stop_simulation();
+    REQUIRE(point.shadows());
+    REQUIRE(sun.shadow_distance() == 250.0);
+    REQUIRE_FALSE(sun.shadows());
+}
+
+TEST_CASE("LIT10 a light's snapshot row carries its shadows", "[light][render][shadow]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    const auto frame = [&] {
+        pump.prepare_copy(game);
+        pump.publish();
+    };
+    PointLight& point = add_light<PointLight>(game);
+    DirectionalLight& sun = game.create<DirectionalLight>();
+    game.set_parent(sun.id(), workspace_of(game));
+    frame();
+    REQUIRE_FALSE(pump.find(point.id())->light.shadows);
+    REQUIRE(pump.find(sun.id())->light.shadows);
+    REQUIRE(pump.find(sun.id())->light.shadow_distance == 100.f);
+
+    point.set_shadows(true);
+    sun.set_shadows(false);
+    REQUIRE_FALSE(sun.set_shadow_distance(40.0));
+    frame();
+    REQUIRE(pump.find(point.id())->light.shadows);
+    REQUIRE_FALSE(pump.find(sun.id())->light.shadows);
+    REQUIRE(pump.find(sun.id())->light.shadow_distance == 40.f);
 }

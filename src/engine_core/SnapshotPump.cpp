@@ -39,6 +39,7 @@ VisualLight light_of(const GameObject& object) {
     out.color[2] = color.b;
     out.intensity = static_cast<float>(light->intensity());
     out.radius = static_cast<float>(light->radius());
+    out.shadows = light->shadows();
     if (const auto* spot = dynamic_cast<const SpotLight*>(light)) {
         out.kind = VisualLight::Kind::Spot;
         out.outer_fov = static_cast<float>(spot->outer_fov());
@@ -56,6 +57,8 @@ VisualLight light_of(const DirectionalLight& sun) {
     out.color[1] = color.g;
     out.color[2] = color.b;
     out.intensity = static_cast<float>(sun.intensity());
+    out.shadows = sun.shadows();
+    out.shadow_distance = static_cast<float>(sun.shadow_distance());
     const Vec3 direction = sun.direction();
     out.direction[0] = direction.x;
     out.direction[1] = direction.y;

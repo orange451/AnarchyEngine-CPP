@@ -37,6 +37,9 @@ struct VisualLight {
     // A SpotLight's OuterFOV in degrees, and InnerFOVScale. 0 for a PointLight.
     float outer_fov = 0.f;
     float inner_fov_scale = 0.f;
+    // Its Shadows, and a DirectionalLight's ShadowDistance (0 otherwise).
+    bool shadows = false;
+    float shadow_distance = 0.f;
     // A DirectionalLight's Direction, toward the light, as given. 0 otherwise.
     float direction[3] = {0.f, 0.f, 0.f};
 };

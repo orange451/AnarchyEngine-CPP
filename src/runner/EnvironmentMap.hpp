@@ -36,15 +36,13 @@ public:
     void shutdown();
 
     // Makes the cubes for image, when it is not what they were made from: the
-    // irradiance from image, and the reflections from reflections, or from
-    // image when reflections is 0. emptyVao is a vertex array with nothing
-    // bound, for full-screen triangles. True when the cubes are ready. False
+    // irradiance and the reflections, both from image. emptyVao is a vertex
+    // array with nothing bound, for full-screen triangles. True when the cubes are ready. False
     // when a pass cannot draw yet, as with render buffers made this frame on
     // macOS: nothing is drawn with half-made cubes, and the next call tries
     // again. Leaves the framebuffer, viewport, program, and texture unit 0
     // changed, blending, depth testing, and culling off, and cube maps seamless.
-    bool update(unsigned image, std::uint64_t imageRevision, unsigned reflections, std::uint64_t reflectionsRevision,
-                unsigned emptyVao);
+    bool update(unsigned image, std::uint64_t imageRevision, unsigned emptyVao);
 
     // False when update can never make the cubes: initialize failed, or the
     // driver would not render into them.
@@ -87,7 +85,6 @@ private:
     bool brdfDrawn_ = false;
     // What the cubes were made from; 0 before they were.
     std::uint64_t imageRevision_ = 0;
-    std::uint64_t reflectionsRevision_ = 0;
     bool refused_ = false;
 };
 

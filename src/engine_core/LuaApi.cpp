@@ -995,13 +995,14 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Texture?", false, {});
     add("Skybox", "Exposure", "How bright the sky and its light are, from 0 to 10. 1 is the image as it is.", "number",
         false, {});
+    add("Skybox", "LightScale",
+        "Multiplies the light the sky gives surfaces, from 0 to 10, without changing how the sky looks behind them. "
+        "Lower it to let shadows show against a bright sky.",
+        "number", false, {});
     add("Skybox", "Rotation", "How many degrees the sky is turned about the world's Y axis, from 0 up to 360.",
         "number", false, {});
     add("Skybox", "Tint", "A color the sky and its light are multiplied by. White leaves them as they are.", "Color3",
         false, {});
-    add("Skybox", "Reflections",
-        "An image surfaces reflect in place of Image, which still lights them and is drawn behind. Nil reflects Image.",
-        "Texture?", false, {});
     add("SpotLight", "OuterFOV",
         "The whole angle of this light's cone, in degrees, from 1 to 179. The cone points down the Transform's -Z.",
         "number", false, {});

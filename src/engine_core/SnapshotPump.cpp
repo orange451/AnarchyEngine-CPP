@@ -413,14 +413,14 @@ void SnapshotPump::resolve_lighting(DataModel& game) {
     };
     if (skybox != nullptr) {
         texture_path(skybox->image(), sky.image);
-        texture_path(skybox->reflections(), sky.reflections);
         sky.exposure = static_cast<float>(skybox->exposure());
+        sky.light_scale = static_cast<float>(skybox->light_scale());
         sky.rotation = static_cast<float>(skybox->rotation());
         sky.tint = skybox->tint();
     } else {
         sky.image.clear();
-        sky.reflections.clear();
         sky.exposure = static_cast<float>(Skybox::kDefaultExposure);
+        sky.light_scale = static_cast<float>(Skybox::kDefaultLightScale);
         sky.rotation = static_cast<float>(Skybox::kDefaultRotation);
         sky.tint = Skybox::kDefaultTint;
     }

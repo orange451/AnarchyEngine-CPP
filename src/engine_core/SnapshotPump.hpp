@@ -69,8 +69,9 @@ struct VisualSky {
     bool present = false;
     // Texture Paths, relative to the resources folder. Empty for none.
     std::string image;
-    std::string reflections;
     float exposure = 1.f;
+    // Multiplies the light the sky gives surfaces, not the sky as drawn.
+    float light_scale = 1.f;
     // Degrees about the world's Y axis, 0 up to 360.
     float rotation = 0.f;
     // As the Color3 holds it.

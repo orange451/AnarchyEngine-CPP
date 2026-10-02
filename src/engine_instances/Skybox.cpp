@@ -35,16 +35,9 @@ void require_thread(const DataModel& object) {
 
 LuaSlot Skybox::image() const { return instance_reference_slot(image_ref_, "Texture"); }
 
-LuaSlot Skybox::reflections() const { return instance_reference_slot(reflections_ref_, "Texture"); }
-
 std::optional<std::string> Skybox::set_image(const LuaSlot& value) {
     require_thread(*this);
     return set_instance_reference("Image", "Texture", image_ref_, value);
-}
-
-std::optional<std::string> Skybox::set_reflections(const LuaSlot& value) {
-    require_thread(*this);
-    return set_instance_reference("Reflections", "Texture", reflections_ref_, value);
 }
 
 std::optional<std::string> Skybox::set_number(const char* property, double& slot, double value) {
@@ -62,7 +55,7 @@ std::optional<std::string> Skybox::set_number(const char* property, double& slot
             value = 0.0;
         }
     } else {
-        value = std::clamp(value, 0.0, kMaxExposure);
+        value = std::clamp(value, 0.0, &slot == &light_scale_ ? kMaxLightScale : kMaxExposure);
     }
     if (slot == value) {
         return std::nullopt;
@@ -74,6 +67,10 @@ std::optional<std::string> Skybox::set_number(const char* property, double& slot
 }
 
 std::optional<std::string> Skybox::set_exposure(double value) { return set_number("Exposure", exposure_, value); }
+
+std::optional<std::string> Skybox::set_light_scale(double value) {
+    return set_number("LightScale", light_scale_, value);
+}
 
 std::optional<std::string> Skybox::set_rotation(double degrees) {
     return set_number("Rotation", rotation_, degrees);
@@ -97,8 +94,8 @@ std::optional<std::string> Skybox::set_tint(ColorRgb color) {
 
 void Skybox::on_reuse() {
     image_ref_.set_guid(std::string());
-    reflections_ref_.set_guid(std::string());
     exposure_ = kDefaultExposure;
+    light_scale_ = kDefaultLightScale;
     rotation_ = kDefaultRotation;
     tint_ = kDefaultTint;
 }
@@ -166,6 +163,7 @@ std::string number_json(double value) { return write_json(JsonValue::number(valu
 ANARCHY_LUA_REGISTER(register_skybox_lua) {
     // The defaults, as a file would hold them, from the class's own constants.
     static const std::string exposure = number_json(Skybox::kDefaultExposure);
+    static const std::string light_scale = number_json(Skybox::kDefaultLightScale);
     static const std::string rotation = number_json(Skybox::kDefaultRotation);
     static const std::string tint = [] {
         const float channels[3] = {Skybox::kDefaultTint.r, Skybox::kDefaultTint.g, Skybox::kDefaultTint.b};
@@ -177,12 +175,13 @@ ANARCHY_LUA_REGISTER(register_skybox_lua) {
         lua_slider(lua_saved_property("Exposure", "number", read_number<&Skybox::exposure>,
                                       write_number<&Skybox::set_exposure>, exposure.c_str()),
                    0.0, Skybox::kMaxExposure),
+        lua_slider(lua_saved_property("LightScale", "number", read_number<&Skybox::light_scale>,
+                                      write_number<&Skybox::set_light_scale>, light_scale.c_str()),
+                   0.0, Skybox::kMaxLightScale),
         lua_slider(lua_saved_property("Rotation", "number", read_number<&Skybox::rotation>,
                                       write_number<&Skybox::set_rotation>, rotation.c_str()),
                    0.0, 360.0),
         lua_saved_property("Tint", "Color3", read_tint, write_tint, tint.c_str()),
-        lua_saved_property("Reflections", "Texture?", read_texture<&Skybox::reflections>,
-                           write_texture<&Skybox::set_reflections>, "null"),
     };
     register_lua_class("Skybox", "Instance", fields, static_cast<int>(std::size(fields)));
     register_suited_parents("Skybox", {"Lighting"});

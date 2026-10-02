@@ -87,7 +87,6 @@ void EnvironmentMap::shutdown() {
     }
     brdfDrawn_ = false;
     imageRevision_ = 0;
-    reflectionsRevision_ = 0;
     refused_ = false;
 }
 
@@ -177,15 +176,11 @@ bool EnvironmentMap::drawEnvironment(unsigned image, unsigned emptyVao) {
     return true;
 }
 
-bool EnvironmentMap::update(unsigned image, std::uint64_t imageRevision, unsigned reflections,
-                            std::uint64_t reflectionsRevision, unsigned emptyVao) {
+bool EnvironmentMap::update(unsigned image, std::uint64_t imageRevision, unsigned emptyVao) {
     if (image == 0 || equirect_.id == 0) {
         return false;
     }
-    if (reflections == 0) {
-        reflectionsRevision = 0;
-    }
-    if (brdfDrawn_ && imageRevision == imageRevision_ && reflectionsRevision == reflectionsRevision_) {
+    if (brdfDrawn_ && imageRevision == imageRevision_) {
         return true;
     }
     if (!ensureTextures()) {
@@ -199,7 +194,6 @@ bool EnvironmentMap::update(unsigned image, std::uint64_t imageRevision, unsigne
     glEnable(RT_GL_TEXTURE_CUBE_MAP_SEAMLESS);
     // Whatever was made before is not the sky now, whether or not this finishes.
     imageRevision_ = 0;
-    reflectionsRevision_ = 0;
 
     if (!brdfDrawn_) {
         glBindFramebuffer(RT_GL_FRAMEBUFFER, framebuffer_);
@@ -226,10 +220,7 @@ bool EnvironmentMap::update(unsigned image, std::uint64_t imageRevision, unsigne
         return false;
     }
 
-    // The reflections, from their own image when there is one.
-    if (reflections != 0 && !drawEnvironment(reflections, emptyVao)) {
-        return false;
-    }
+    // The reflections, from the same environment cube.
     glActiveTexture(GL_TEXTURE0 + kUnitSource);
     glBindTexture(RT_GL_TEXTURE_CUBE_MAP, environment_);
     glUseProgram(prefilter_.id);
@@ -247,7 +238,6 @@ bool EnvironmentMap::update(unsigned image, std::uint64_t imageRevision, unsigne
     glBindTexture(RT_GL_TEXTURE_CUBE_MAP, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
     imageRevision_ = imageRevision;
-    reflectionsRevision_ = reflectionsRevision;
     return true;
 }
 

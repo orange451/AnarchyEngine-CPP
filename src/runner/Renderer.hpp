@@ -72,10 +72,10 @@ struct SceneSky {
     // 0 draws no sky: surfaces take the legacy stand-in sky's light.
     unsigned image = 0;
     std::uint64_t imageRevision = 0;
-    // 0 reflects image.
-    unsigned reflections = 0;
-    std::uint64_t reflectionsRevision = 0;
     float exposure = 1.f;
+    // Multiplies the light the sky gives surfaces (image-based lighting),
+    // not the sky drawn behind them.
+    float lightScale = 1.f;
     // Degrees about the world's Y axis.
     float rotationDegrees = 0.f;
     // As the Color3 holds it (sRGB).
@@ -177,6 +177,7 @@ private:
         int skyEnabled = -1;
         int viewToSky = -1;
         int skyColor = -1;
+        int skyLightScale = -1;
         int prefilteredMaxLod = -1;
         // Material.
         int diffuse = -1;

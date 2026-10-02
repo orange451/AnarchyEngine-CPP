@@ -102,6 +102,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.skyEnabled = at("uSkyEnabled");
     program.viewToSky = at("uViewToSky");
     program.skyColor = at("uSkyColor");
+    program.skyLightScale = at("uSkyLightScale");
     program.prefilteredMaxLod = at("uPrefilteredMaxLod");
     program.diffuse = at("uDiffuse");
     program.normalMap = at("uNormalMap");
@@ -652,8 +653,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         bool cubesReady = true;
         if (hasSky) {
             const SceneSky& sky = lighting_.sky;
-            cubesReady = environment_.update(sky.image, sky.imageRevision, sky.reflections, sky.reflectionsRevision,
-                                             emptyVao_);
+            cubesReady = environment_.update(sky.image, sky.imageRevision, emptyVao_);
             skyReady_ = cubesReady;
             prepareSky();
         }
@@ -774,6 +774,7 @@ void Renderer::bindSky(const Program& program) {
     }
     glUniformMatrix3fv(program.viewToSky, 1, GL_FALSE, viewToSky_);
     glUniform3f(program.skyColor, skyColor_[0], skyColor_[1], skyColor_[2]);
+    glUniform1f(program.skyLightScale, std::max(lighting_.sky.lightScale, 0.f));
     glUniform1f(program.prefilteredMaxLod, EnvironmentMap::prefilteredMaxLod());
     BindTexture(kUnitSky, lighting_.sky.image);
     BindCube(kUnitIrradiance, environment_.irradiance());

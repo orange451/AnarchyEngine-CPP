@@ -13,6 +13,9 @@ uniform sampler2D uBrdf;
 uniform mat3 uViewToSky;
 // Exposure times Tint, linear.
 uniform vec3 uSkyColor;
+// The Skybox's LightScale: how much of the sky's light surfaces take. The sky
+// drawn behind them (sky.frag) does not read it.
+uniform float uSkyLightScale;
 // The prefiltered cube's last mip, which roughness 1 reads.
 uniform float uPrefilteredMaxLod;
 
@@ -33,7 +36,7 @@ vec3 skyLight(vec3 viewDirection, vec3 N, vec3 albedo, float metallic, float rou
     vec3 irradiance = texture(uIrradiance, uViewToSky * N).rgb;
     vec3 R = reflect(viewDirection, N);
     vec3 reflected = textureLod(uPrefiltered, uViewToSky * R, roughness * uPrefilteredMaxLod).rgb;
-    vec3 sky = (kD * albedo * irradiance + reflected * (F0 * brdf.x + brdf.y)) * uSkyColor;
+    vec3 sky = (kD * albedo * irradiance + reflected * (F0 * brdf.x + brdf.y)) * uSkyColor * uSkyLightScale;
     // Lighting.Ambient lights every surface alike, as light from no direction.
     return sky + albedo * (1.0 - metallic) * ambient / kPi;
 }

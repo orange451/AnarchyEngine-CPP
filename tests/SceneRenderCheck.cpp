@@ -754,21 +754,24 @@ int main() {
             Expect(skyFront.b > skyTop.b + 10, "the front face takes more of the blue below (" + Text(skyFront) +
                                                    " against " + Text(skyTop) + ")");
 
-            // A mirror reflects: with Reflections white, a mirror's front is gray, not the sky's colors.
-            runner::MeshDraw mirror = matte;
-            mirror.metalness = 1.f;
-            mirror.roughness = 0.f;
-            drawSky(&mirror, 1);
-            const Pixel reflecting = ReadPixel(fbWidth / 2, frontY);
-            runner::SceneLighting whiteReflections = lit;
-            whiteReflections.sky.reflections = white.texture;
-            whiteReflections.sky.reflectionsRevision = white.revision;
-            renderer.setLighting(whiteReflections);
-            drawSky(&mirror, 1);
-            const Pixel reflectingWhite = ReadPixel(fbWidth / 2, frontY);
-            Expect(std::abs(reflectingWhite.r - reflectingWhite.b) < 12 && Sum(reflectingWhite) > 60,
-                   "Reflections is what a mirror shows (" + Text(reflectingWhite) + ", not " + Text(reflecting) +
-                       ")");
+            // LightScale dims the light the sky gives surfaces, and leaves the sky behind them alone.
+            const Pixel skyCorner = ReadPixel(fbWidth / 8, fbHeight * 7 / 8);
+            runner::SceneLighting dimLight = lit;
+            dimLight.sky.lightScale = 0.f;
+            renderer.setLighting(dimLight);
+            drawSky(&matte, 1);
+            Expect(Sum(ReadPixel(fbWidth / 2, topY)) < 6,
+                   "LightScale 0 takes the sky's light off the cube (" + Text(ReadPixel(fbWidth / 2, topY)) + ")");
+            const Pixel dimCorner = ReadPixel(fbWidth / 8, fbHeight * 7 / 8);
+            Expect(dimCorner.r == skyCorner.r && dimCorner.g == skyCorner.g && dimCorner.b == skyCorner.b,
+                   "and leaves the sky behind it as it was (" + Text(dimCorner) + " and " + Text(skyCorner) + ")");
+            dimLight.sky.lightScale = 0.5f;
+            renderer.setLighting(dimLight);
+            drawSky(&matte, 1);
+            const int halfTop = Sum(ReadPixel(fbWidth / 2, topY));
+            Expect(halfTop > 6 && halfTop < Sum(skyTop), "LightScale 0.5 is between (" + std::to_string(halfTop) +
+                                                             " under " + std::to_string(Sum(skyTop)) + ")");
+            renderer.setLighting(lit);
             Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the sky leaves no GL error");
 
             // With no image, today's stand-in again, and the corner the clear color.

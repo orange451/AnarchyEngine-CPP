@@ -1,4 +1,4 @@
-// Skybox: the sky under Lighting, whose Image, Reflections, Exposure,
+// Skybox: the sky under Lighting, whose Image, Exposure, LightScale,
 // Rotation, and Tint the render snapshot carries for the Scene View.
 
 #include "support.hpp"
@@ -56,8 +56,8 @@ TEST_CASE("SKY1 a Skybox's properties are checked, undo, save, and come back at 
     REQUIRE(engine_core::project_class_known("Skybox"));
     Skybox& sky = add_skybox(game, game.scene_service("Lighting"));
     REQUIRE(sky.image().kind == engine_core::LuaSlot::Kind::Nil);
-    REQUIRE(sky.reflections().kind == engine_core::LuaSlot::Kind::Nil);
     REQUIRE(sky.exposure() == 1.0);
+    REQUIRE(sky.light_scale() == 1.0);
     REQUIRE(sky.rotation() == 0.0);
     REQUIRE(sky.tint().r == 1.f);
 
@@ -88,23 +88,35 @@ TEST_CASE("SKY1 a Skybox's properties are checked, undo, save, and come back at 
     REQUIRE(sky.rotation() == 0.0);
     REQUIRE_FALSE(sky.set_rotation(-1e-300));
     REQUIRE(sky.rotation() < 360.0);
+    // LightScale is clamped to 0..10 too, and undoes.
+    game.history().set_pending_gesture("Set LightScale");
+    REQUIRE_FALSE(sky.set_light_scale(0.25));
+    game.history().end_gesture();
+    REQUIRE(sky.light_scale() == 0.25);
+    game.history().undo();
+    REQUIRE(sky.light_scale() == 1.0);
+    REQUIRE_FALSE(sky.set_light_scale(50.0));
+    REQUIRE(sky.light_scale() == Skybox::kMaxLightScale);
+    REQUIRE_FALSE(sky.set_light_scale(-1.0));
+    REQUIRE(sky.light_scale() == 0.0);
+    REQUIRE(*sky.set_light_scale(std::nan("")) == "LightScale must be a finite number");
     REQUIRE(*sky.set_exposure(std::nan("")) == "Exposure must be a finite number");
     REQUIRE(*sky.set_rotation(INFINITY) == "Rotation must be a finite number");
     REQUIRE(*sky.set_tint(engine_core::ColorRgb{std::nanf(""), 0.f, 0.f, 1.f}) == "Tint must be finite");
 
-    // Image and Reflections take a Texture, and nothing else.
+    // Image takes a Texture, and nothing else.
     engine_core::Texture& day = add_texture(game, "Day", "textures/day.hdr");
     REQUIRE_FALSE(sky.set_image(instance_slot(day.id())));
     REQUIRE(sky.image().id == day.id());
     engine_core::GameObject& part = create_part(game);
-    REQUIRE(reason(sky.set_reflections(instance_slot(part.id()))) == "Reflections must be a Texture");
-    REQUIRE(sky.reflections().kind == engine_core::LuaSlot::Kind::Nil);
+    REQUIRE(reason(sky.set_image(instance_slot(part.id()))) == "Image must be a Texture");
+    REQUIRE(sky.image().id == day.id());
 
     REQUIRE_FALSE(sky.set_rotation(45.0));
     REQUIRE_FALSE(sky.set_tint(engine_core::ColorRgb{1.f, 0.5f, 0.25f, 1.f}));
     engine_core::PropertyBag changed;
     sky.save_properties(changed);
-    for (const char* name : {"Image", "Exposure", "Rotation", "Tint"}) {
+    for (const char* name : {"Image", "Exposure", "LightScale", "Rotation", "Tint"}) {
         INFO(name);
         REQUIRE(engine_core::bag_find(changed, name) != nullptr);
     }
@@ -166,8 +178,8 @@ TEST_CASE("SKY3 the snapshot carries the first Skybox under Lighting", "[skybox]
     Skybox& first = add_skybox(game, folder.id());
     Skybox& second = add_skybox(game, lighting);
     REQUIRE_FALSE(first.set_image(instance_slot(day.id())));
-    REQUIRE_FALSE(first.set_reflections(instance_slot(chrome.id())));
     REQUIRE_FALSE(first.set_exposure(2.0));
+    REQUIRE_FALSE(first.set_light_scale(0.5));
     REQUIRE_FALSE(first.set_rotation(90.0));
     REQUIRE_FALSE(first.set_tint(engine_core::ColorRgb{1.f, 0.f, 0.f, 1.f}));
     REQUIRE_FALSE(second.set_exposure(5.0));
@@ -177,8 +189,8 @@ TEST_CASE("SKY3 the snapshot carries the first Skybox under Lighting", "[skybox]
         const engine_core::VisualSky& sky = pump.front().sky;
         REQUIRE(sky.present);
         REQUIRE(sky.image == "textures/day.hdr");
-        REQUIRE(sky.reflections == "textures/chrome.png");
         REQUIRE(sky.exposure == 2.f);
+        REQUIRE(sky.light_scale == 0.5f);
         REQUIRE(sky.rotation == 90.f);
         REQUIRE(sky.tint.g == 0.f);
     }
@@ -205,6 +217,7 @@ TEST_CASE("SKY3 the snapshot carries the first Skybox under Lighting", "[skybox]
     frame();
     REQUIRE_FALSE(pump.front().sky.present);
     REQUIRE(pump.front().sky.exposure == 1.f);
+    REQUIRE(pump.front().sky.light_scale == 1.f);
 }
 
 TEST_CASE("SKY4 scripts make a Skybox and set it", "[skybox]") {
@@ -215,12 +228,14 @@ TEST_CASE("SKY4 scripts make a Skybox and set it", "[skybox]") {
     add_script(rig.game, "Sky", R"(
         local sky = Instance.new("Skybox", game.Lighting)
         _G.defaults = sky.Exposure == 1 and sky.Rotation == 0 and sky.Tint == Color3.new(1, 1, 1)
-            and sky.Image == nil and sky.Reflections == nil
+            and sky.Image == nil and sky.LightScale == 1
         sky.Image = game.Assets.Textures.Day
         sky.Exposure = 20
+        sky.LightScale = 0.3
         sky.Rotation = -90
         sky.Tint = Color3.new(0.5, 0.5, 1)
-        _G.set = sky.Image == game.Assets.Textures.Day and sky.Exposure == 10 and sky.Rotation == 270
+        _G.set = sky.Image == game.Assets.Textures.Day and sky.Exposure == 10
+            and math.abs(sky.LightScale - 0.3) < 1e-9 and sky.Rotation == 270
             and sky.Tint == Color3.new(0.5, 0.5, 1)
         _G.refused = not pcall(function() sky.Image = workspace end)
             and not pcall(function() sky.Exposure = 0 / 0 end)

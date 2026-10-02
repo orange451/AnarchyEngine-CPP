@@ -131,6 +131,21 @@ void TestMcpEnabled() {
     Expect(!ide::Preferences(file).mcp_enabled(), "a value that is not true reads as off");
 }
 
+void TestSceneGrid() {
+    Scratch scratch;
+    const fs::path file = scratch.root / "preferences.json";
+    {
+        ide::Preferences preferences(file);
+        Expect(preferences.scene_grid(), "the floor grid shows until turned off");
+        preferences.set_scene_grid(false);
+        std::string error;
+        Expect(preferences.save(error), "preferences save");
+    }
+    Expect(!ide::Preferences(file).scene_grid(), "turning it off is remembered");
+    Write(file, "{ \"sceneGrid\": 0 }");
+    Expect(ide::Preferences(file).scene_grid(), "a value that is not a boolean reads as on");
+}
+
 void TestLibrary() {
     Scratch scratch;
     const fs::path folder = scratch.root / "themes";
@@ -655,6 +670,7 @@ int RunPreferencesTests() {
     TestPreferences();
     TestAssetsView();
     TestMcpEnabled();
+    TestSceneGrid();
     TestLibrary();
     TestWriteTheme();
     TestCurrentTheme();

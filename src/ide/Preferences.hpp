@@ -54,6 +54,10 @@ public:
     bool mcp_enabled() const;
     void set_mcp_enabled(bool enabled);
 
+    // Whether the Scene Views draw the floor grid while no test runs. On unless turned off.
+    bool scene_grid() const;
+    void set_scene_grid(bool shown);
+
     // Writes the file. True, doing nothing, when there is no file.
     bool save(std::string& error) const;
 

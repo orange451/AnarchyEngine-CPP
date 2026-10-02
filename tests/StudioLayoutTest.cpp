@@ -1187,6 +1187,42 @@ int main() {
         fs::remove_all(config, error);
     }
 
+    // Grid, at the ribbon's right end, shows the Scene Views' floor grid. A
+    // test hides it, and Stop brings it back.
+    {
+        jadefx::Node* grid = scene->getElementById("grid-toggle");
+        auto lit = [&grid] {
+            const auto& names = grid->getClassList().items();
+            return std::find(names.begin(), names.end(), "on") != names.end();
+        };
+        expect(grid != nullptr, "the ribbon has Grid");
+        if (grid != nullptr) {
+            expect(grid->getAbsoluteX() + grid->getWidth() > 1280 - 20, "at its right end");
+            expect(layout.scene_grid() && lit(), "the grid shows from the start, and Grid is lit");
+            auto press_grid = [&] {
+                const double x = grid->getAbsoluteX() + grid->getWidth() * 0.5;
+                const double y = grid->getAbsoluteY() + grid->getHeight() * 0.5;
+                scene->noteButton(0, true, x, y);
+                scene->noteButton(0, false, x, y);
+            };
+            auto key = [&](int code, int mods) {
+                scene->noteKey(code, true, false, mods);
+                scene->noteKey(code, false, false, 0);
+            };
+            key(jadefx::Key::F5, 0);
+            expect(!layout.scene_grid() && lit(), "a test hides the grid, and Grid stays lit");
+            key(jadefx::Key::F5, jadefx::Key::ModShift);
+            expect(layout.scene_grid(), "Stop shows it again");
+            press_grid();
+            expect(!layout.scene_grid() && !lit(), "pressing Grid hides it");
+            key(jadefx::Key::F5, 0);
+            key(jadefx::Key::F5, jadefx::Key::ModShift);
+            expect(!layout.scene_grid(), "and a test does not bring it back");
+            press_grid();
+            expect(layout.scene_grid() && lit(), "pressing Grid again shows it");
+        }
+    }
+
     if (failures == 0) {
         std::printf("studio layout tests passed\n");
         return 0;

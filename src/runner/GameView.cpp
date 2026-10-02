@@ -40,6 +40,7 @@ int FramesPerSecond(double dt) {
 
 GameView::GameView(Runner& runner, std::string name, bool closable)
     : ide::IdePane(std::move(name), closable),
+      runner_(&runner),
       feed_(&runner.feed()),
       // A mesh that does not draw says why in the Output console.
       meshes_([this](const std::string& message) {
@@ -59,7 +60,6 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
     setMinSize(64, 64);
     // Its color is the theme's --ide-viewport-color, through the studio's stylesheet.
     getClassList().add("ide-viewport");
-    renderer_.setGridVisible(true);
     // The game hears MouseButton2 and 3 too; holding the right button turns the
     // scene camera. IdePane does nothing with a press, so no button starts a
     // tab drag or a dock action here.
@@ -486,6 +486,7 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
         // The same color as the pane around the drawing, so no seam shows.
         const jadefx::Color& clear = computedStyle().background.color;
         renderer_.setClearColor(clear.r, clear.g, clear.b);
+        renderer_.setGridVisible(runner_->sceneGrid());
         collectMeshes();
         const bool drawn = renderer_.draw(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(),
                                           scene->getHeight(), meshDraws_.data(), static_cast<int>(meshDraws_.size()),

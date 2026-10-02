@@ -100,6 +100,14 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     jadefx::Tooltip::install(count.get(), conflict_tip_);
     conflict_count_ = count.get();
     ribbon->getChildren().add(std::move(count));
+    // The Scene Views' floor grid, at the right end: lit while on.
+    auto grid = jadefx::make<RibbonButton>("Grid", "Grid.png", [this] { set_grid(!grid_on_); });
+    grid->setElementId("grid-toggle");
+    jadefx::Tooltip::install(grid.get(), jadefx::make<jadefx::Tooltip>("Show the floor grid and the world's axes"));
+    grid_button_ = grid.get();
+    ribbon->getChildren().add(std::move(grid));
+    grid_on_ = preferences_.scene_grid();
+    show_grid();
 
     AddItem(*edit, "Find in Scripts", "Search.png", jadefx::Key::F, jadefx::Key::ModControl | jadefx::Key::ModShift)
         ->setOnAction([this](jadefx::ActionEvent&) { open_search(false, scene_); });
@@ -702,6 +710,31 @@ void IdeLayout::show_session(PlayState state) {
     if (session_buttons_[0] != nullptr) {
         ShowSession(*session_buttons_[0], *session_buttons_[1], *session_buttons_[2], *session_buttons_[3], in_test(),
                     play_ == PlayState::Running);
+    }
+    // A test shows the game as it plays, without the editor's grid.
+    show_grid();
+}
+
+void IdeLayout::set_grid(bool on) {
+    grid_on_ = on;
+    preferences_.set_scene_grid(on);
+    std::string error;
+    preferences_.save(error);
+    show_grid();
+}
+
+void IdeLayout::show_grid() {
+    runner_.setSceneGrid(grid_on_ && !in_test());
+    if (grid_button_ == nullptr) {
+        return;
+    }
+    auto& classes = grid_button_->getClassList();
+    const auto& names = classes.items();
+    const bool marked = std::find(names.begin(), names.end(), "on") != names.end();
+    if (grid_on_ && !marked) {
+        classes.add("on");
+    } else if (!grid_on_ && marked) {
+        classes.removeIf([](const std::string& name) { return name == "on"; });
     }
 }
 

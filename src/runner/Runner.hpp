@@ -33,6 +33,10 @@ public:
     engine_core::Engine& simulation();
     // What the Scene Views draw: the snapshots the simulation's render thread publishes.
     SceneFeed& feed() { return *feed_; }
+    // Whether every Scene View draws the floor grid. The IDE turns it off
+    // during a test and when the ribbon's Grid is off. UI thread only.
+    bool sceneGrid() const { return sceneGrid_; }
+    void setSceneGrid(bool shown) { sceneGrid_ = shown; }
 
 private:
     // Declared first, so it outlives the engine whose render thread writes it.
@@ -40,6 +44,7 @@ private:
     std::unique_ptr<engine_core::LuaEngine> lua_;
     std::unique_ptr<engine_core::Engine> simulation_;
     bool threadsStarted_ = false;
+    bool sceneGrid_ = true;
 };
 
 }  // namespace runner

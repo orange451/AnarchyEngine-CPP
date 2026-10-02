@@ -104,6 +104,13 @@ void Preferences::set_mcp_enabled(bool enabled) {
     root_.set("mcpEnabled", engine_core::JsonValue::boolean(enabled));
 }
 
+bool Preferences::scene_grid() const {
+    const engine_core::JsonValue* shown = root_.find("sceneGrid");
+    return shown == nullptr || !shown->is_bool() || shown->as_bool();
+}
+
+void Preferences::set_scene_grid(bool shown) { root_.set("sceneGrid", engine_core::JsonValue::boolean(shown)); }
+
 bool Preferences::save(std::string& error) const {
     if (file_.empty()) {
         return true;

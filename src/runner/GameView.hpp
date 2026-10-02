@@ -33,7 +33,7 @@ class SceneFeed;
 // Workspace or under Lighting lights them, with Lighting's Ambient, Exposure,
 // Saturation, and Gamma. The first Skybox under Lighting is drawn behind
 // them and lights them too. Over them lies the floor grid, with the world's
-// X and Z axes on it (Renderer::setGridVisible).
+// X and Z axes on it, while the Runner's sceneGrid is on.
 // The view is linked to one Camera, by GUID, and sees from that Camera's
 // Transform and FieldOfView as the snapshot has them. The list at the top
 // right offers each Camera in Workspace, at any depth, in tree order. A view
@@ -122,6 +122,8 @@ private:
     float localY(double y) const;
 
     Renderer renderer_;
+    // The IDE's; it outlives the view. Its sceneGrid is read each paint.
+    Runner* runner_ = nullptr;
     // The runner's; it outlives the engine that writes it.
     SceneFeed* feed_ = nullptr;
     MeshCache meshes_;

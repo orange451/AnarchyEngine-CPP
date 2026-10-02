@@ -52,7 +52,8 @@ class PropertiesPanel;
 // restores the place, including when that test is already paused.
 // The ribbon under the menu bar holds Test, Pause, Resume, and Stop. Only
 // the ones that apply to the session are enabled. F5 is Test, or Resume when
-// paused. Shift+F5 is Stop.
+// paused. Shift+F5 is Stop. Grid, at its right end, shows or hides the Scene
+// Views' floor grid; a test hides it until Stop either way.
 // Explorer rows open Cut, Paste, and Rename. A script also has Edit, and a
 // double-click runs it. Edit docks a script editor on the scene view's tab strip.
 // A Prefab's Edit, and a double-click on it in an explorer or the Assets pane,
@@ -133,6 +134,8 @@ public:
         const std::vector<engine_core::DiskChoice>& choices = {});
     // Shows the Conflicts window, docking it beside the left explorer when it is closed.
     void show_conflicts();
+    // Whether the Scene Views draw the floor grid now: Grid is on and no test runs.
+    bool scene_grid() const { return runner_.sceneGrid(); }
     // Once a frame, after the scene lays out; the main window's stage calls it.
     // Coming back to the window checks the disk here.
     void flushFrame();
@@ -217,6 +220,10 @@ private:
     // No play session, or a test running or paused.
     enum class PlayState { Stopped, Running, Paused };
     void show_session(PlayState state);
+    // Turns the ribbon's Grid on or off, and keeps the choice.
+    void set_grid(bool on);
+    // Tells the Scene Views whether to draw the grid, and lights the button to match.
+    void show_grid();
     bool in_test() const { return play_ != PlayState::Stopped; }
     void start_test();
     void pause_test();
@@ -542,6 +549,10 @@ private:
     PlayState play_ = PlayState::Stopped;
     // The ribbon's Test, Pause, Resume, and Stop.
     jadefx::Node* session_buttons_[4] = {};
+    // The ribbon's Grid, and whether it is on: the Scene Views draw the floor
+    // grid while it is on and no test runs. Kept in the preferences.
+    jadefx::Node* grid_button_ = nullptr;
+    bool grid_on_ = true;
     // Open alerts. An alert must outlive its popup.
     std::vector<std::shared_ptr<jadefx::Alert>> alerts_;
     // Toasts sent before mount, with their seconds. Mount shows them.

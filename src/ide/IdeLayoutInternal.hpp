@@ -177,6 +177,9 @@ scene {
 .ide-ribbon-button:active {
     background-color: var(--ide-ribbon-pressed-color);
 }
+.ide-ribbon-button.on {
+    background-color: var(--ide-ribbon-pressed-color);
+}
 .ide-ribbon-button:disabled {
     background-color: transparent;
     opacity: 0.4;

@@ -212,6 +212,7 @@ bool Renderer::initialize() {
         buildProgram(merge_, "Merge", "pipeline/fullscreen.vert", "pipeline/merge.frag", {}) &&
         buildProgram(tonemap_, "Tone map", "pipeline/fullscreen.vert", "pipeline/tonemap.frag", {}) &&
         buildProgram(grid_, "Grid", "pipeline/fullscreen.vert", "pipeline/grid.frag", {}) &&
+        buildProgram(outline_, "Outline", "pipeline/outline.vert", "pipeline/outline.frag", {}) &&
         environment_.initialize() && shadows_.initialize();
     if (!built) {
         shutdown();
@@ -240,6 +241,14 @@ bool Renderer::initialize() {
 
     glGenVertexArrays(1, &emptyVao_);
     createSphere();
+    glGenVertexArrays(1, &outlineVao_);
+    glBindVertexArray(outlineVao_);
+    glGenBuffers(1, &outlineVbo_);
+    glBindBuffer(GL_ARRAY_BUFFER, outlineVbo_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     const GLenum error = glGetError();
     if (error != GL_NO_ERROR) {
@@ -692,6 +701,10 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     if (drawn && gridVisible_) {
         gridPass(hasMeshes || hasSky ? depthTexture_ : whiteTexture_, inverseProjection.m);
     }
+    // Likewise the outlines, which would show at full strength through them.
+    if (drawn && !outlines_.empty()) {
+        outlinePass(hasMeshes || hasSky ? depthTexture_ : whiteTexture_, projection, inverseProjection.m);
+    }
 
     saved.restore(viewport);
     return drawn;
@@ -713,6 +726,34 @@ void Renderer::gridPass(unsigned depth, const float* inverseProjection) {
     if (CanDraw(grid_.id)) {
         DrawFullscreen(emptyVao_);
     }
+}
+
+void Renderer::setOutlines(const float* points, int pointCount) {
+    outlines_.assign(points, points + std::max(pointCount, 0) / 2 * 2 * 3);
+}
+
+void Renderer::outlinePass(unsigned depth, const float* projection, const float* inverseProjection) {
+    glDisable(GL_DEPTH_TEST);
+    glDisable(RT_GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    // Straight alpha over the pane, leaving its alpha as it was.
+    glBlendFuncSeparate(RT_GL_SRC_ALPHA, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ZERO, RT_GL_ONE);
+    glUseProgram(outline_.id);
+    BindTexture(kUnitDepth, depth);
+    glUniformMatrix4fv(outline_.view, 1, GL_FALSE, view_.m);
+    glUniformMatrix4fv(outline_.projection, 1, GL_FALSE, projection);
+    glUniformMatrix4fv(outline_.inverseProjection, 1, GL_FALSE, inverseProjection);
+    // The UI pass after this one finds the buffer it had bound.
+    GLint arrayBuffer = 0;
+    glGetIntegerv(RT_GL_ARRAY_BUFFER_BINDING, &arrayBuffer);
+    glBindVertexArray(outlineVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, outlineVbo_);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(outlines_.size() * sizeof(float)), outlines_.data(),
+                 GL_DYNAMIC_DRAW);
+    if (CanDraw(outline_.id)) {
+        glDrawArrays(RT_GL_LINES, 0, static_cast<GLsizei>(outlines_.size() / 3));
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(arrayBuffer));
 }
 
 void Renderer::bindMaterial(const Program& program, const MeshDraw& draw) {
@@ -1154,7 +1195,8 @@ void Renderer::setClearColor(float r, float g, float b) {
 
 void Renderer::shutdown() {
     ready_ = false;
-    for (Program* program : {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &sky_, &grid_}) {
+    for (Program* program :
+         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &sky_, &grid_, &outline_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);
         }
@@ -1169,13 +1211,13 @@ void Renderer::shutdown() {
             *texture = 0;
         }
     }
-    for (unsigned* vao : {&emptyVao_, &sphereVao_}) {
+    for (unsigned* vao : {&emptyVao_, &sphereVao_, &outlineVao_}) {
         if (*vao != 0) {
             glDeleteVertexArrays(1, vao);
             *vao = 0;
         }
     }
-    for (unsigned* buffer : {&sphereVbo_, &sphereEbo_}) {
+    for (unsigned* buffer : {&sphereVbo_, &sphereEbo_, &outlineVbo_}) {
         if (*buffer != 0) {
             glDeleteBuffers(1, buffer);
             *buffer = 0;

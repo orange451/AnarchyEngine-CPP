@@ -92,6 +92,16 @@ public:
     std::optional<std::string> vertex_positions(std::vector<Vec3>& out,
                                                 std::vector<std::uint32_t>* triangles = nullptr) const;
 
+    // The box around every vertex position of what the Mesh draws now, as
+    // vertex_positions gives them. False, setting nothing, when it has none.
+    // Measured again only when its session geometry changes, or its Path, the
+    // resources folder, or the file's time on disk. Needs the DataModel lock;
+    // a read lock is enough.
+    bool bounds(Vec3& low, Vec3& high) const;
+    // OriginOffset: from the Mesh's origin to the middle of bounds. (0, 0, 0)
+    // when it has none.
+    Vec3 origin_offset() const;
+
 protected:
     void on_reuse() override;
 
@@ -104,6 +114,18 @@ private:
     SessionGeometry session_;
     // world_generation() when session_ was made. Stop bumps it, and the copy lapses.
     std::uint32_t session_generation_ = 0;
+
+    // bounds, as last measured, and what from: a session's revision, or else
+    // the file and its time on disk. Readers share the DataModel lock, so the
+    // cache has its own.
+    mutable std::mutex bounds_mutex_;
+    mutable bool bounds_measured_ = false;
+    mutable std::uint64_t bounds_revision_ = 0;
+    mutable std::filesystem::path bounds_file_;
+    mutable std::filesystem::file_time_type bounds_stamp_{};
+    mutable bool bounds_found_ = false;
+    mutable Vec3 bounds_low_{};
+    mutable Vec3 bounds_high_{};
 };
 
 class Sound : public FileAsset {
@@ -228,6 +250,15 @@ public:
     Prefab(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
     const char* class_name() const override;
     void context_actions(std::vector<ContextAction>& out) const override;
+
+    // The box around the bounds of every Model's Mesh (Mesh::bounds), as the
+    // Prefab draws them all at its origin. False, setting nothing, when none
+    // has any. Needs the DataModel lock; a read lock is enough.
+    bool bounds(Vec3& low, Vec3& high) const;
+    // OriginOffset: from the Prefab's origin to the middle of bounds, so it
+    // moves as Models come and go or their Meshes change. (0, 0, 0) when it
+    // has none.
+    Vec3 origin_offset() const;
 };
 
 }  // namespace engine_core

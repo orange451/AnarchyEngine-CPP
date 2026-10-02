@@ -98,7 +98,8 @@ struct SceneLighting {
 // then each light: a DirectionalLight over the whole view, a PointLight or
 // SpotLight over its volume; then the Skybox behind every surface; a forward
 // pass that blends see-through surfaces over that, farthest first; a merge;
-// a filmic tone map onto the pane; and, when set, the floor grid over it. Every pass but the last draws into this
+// a filmic tone map onto the pane; and, when set, the floor grid and then the
+// outlines over it. Every pass but those last ones draws into this
 // renderer's own buffers, the pane's size in pixels. With a Skybox, its
 // image-based lighting (EnvironmentMap) is the sky light, and the sky fills
 // the pane wherever nothing opaque was drawn, even with no meshes.
@@ -129,6 +130,12 @@ public:
     // X axis in red and the Z axis in blue, hidden behind nearer surfaces.
     // Off until set. Needs no GL context.
     void setGridVisible(bool visible) { gridVisible_ = visible; }
+    // Line segments draw lays over the pane after the grid, as the Scene View
+    // outlines a selected PhysicsObject's collision shape: world space, x, y,
+    // and z for each point, two points to a segment. Where a nearer surface
+    // hides a line it is drawn faint, so a shape inside a mesh still shows.
+    // Copied, and drawn by every draw until set again. Needs no GL context.
+    void setOutlines(const float* points, int pointCount);
     // How shadows are drawn, until set again. Needs no GL context.
     void setShadowSettings(const ShadowSettings& settings) { shadowSettings_ = settings; }
     // The shadow atlas texture's pages (ShadowRenderer::atlasPages), 0 with none.
@@ -264,6 +271,8 @@ private:
     // The floor grid over the pane, on the pane's framebuffer. depth is the
     // scene's, or a texture of 1s where nothing was drawn.
     void gridPass(unsigned depth, const float* inverseProjection);
+    // outlines_ over the pane, on the pane's framebuffer, with depth as gridPass takes it.
+    void outlinePass(unsigned depth, const float* projection, const float* inverseProjection);
     void bindMaterial(const Program& program, const MeshDraw& draw);
     void bindGBuffer(const Program& program);
     // viewToSky_ and skyColor_ from the camera and the Skybox.
@@ -285,6 +294,7 @@ private:
     Program tonemap_;
     Program sky_;
     Program grid_;
+    Program outline_;
     EnvironmentMap environment_;
     // Whether this draw has a Skybox whose cubes are made.
     bool skyReady_ = false;
@@ -302,6 +312,9 @@ private:
     unsigned sphereVbo_ = 0;
     unsigned sphereEbo_ = 0;
     int sphereIndexCount_ = 0;
+    // The outlines' points, uploaded again by every draw that has any.
+    unsigned outlineVao_ = 0;
+    unsigned outlineVbo_ = 0;
 
     // The offscreen buffers, all targetWidth_ by targetHeight_.
     int targetWidth_ = 0;
@@ -332,6 +345,7 @@ private:
     float fovYDegrees_ = kCameraFovYDegrees;
     SceneLighting lighting_;
     bool gridVisible_ = false;
+    std::vector<float> outlines_;
 
     // Per draw, reused.
     std::vector<ViewLight> viewLights_;

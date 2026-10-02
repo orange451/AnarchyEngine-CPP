@@ -1,8 +1,12 @@
 #include "GameView.hpp"
 
+#include "AssetInstances.hpp"
 #include "Camera.hpp"
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
+#include "PhysicsObject.hpp"
+#include "PhysicsWorld.hpp"
+#include "SelectionService.hpp"
 #include "ScriptAnalysis.hpp"
 #include "Runner.hpp"
 #include "SceneFeed.hpp"
@@ -201,6 +205,7 @@ void GameView::collectMeshes() {
     meshes_.setRoot(snapshot.resources_root);
     textures_.setRoot(snapshot.resources_root);
     followCamera(snapshot);
+    collectOutlines(snapshot);
     // Each Prefab's meshes once, however many GameObjects draw it.
     if (prefabMeshes_.size() < snapshot.prefabs.size()) {
         prefabMeshes_.resize(snapshot.prefabs.size());
@@ -436,6 +441,97 @@ void GameView::readWorkspace() {
             break;
         }
     }
+    readSelectedBodies();
+}
+
+void GameView::readSelectedBodies() {
+    const engine_core::SelectionService& selection = game_->selection();
+    if (selection.revision() != selectionSeen_) {
+        selected_ = selection.get(selectionSeen_);
+    }
+    outlineScratch_.clear();
+    for (const engine_core::InstanceId id : selected_) {
+        const auto* body = dynamic_cast<const engine_core::PhysicsObject*>(game_->instance(id));
+        if (body == nullptr || !game_->in_workspace(id)) {
+            continue;
+        }
+        // Last read's outline, taken over, or a new one.
+        BodyOutline& outline = outlineScratch_.emplace_back();
+        for (BodyOutline& kept : outlines_) {
+            if (kept.id == id) {
+                outline = std::move(kept);
+                kept.id = 0;
+                break;
+            }
+        }
+        const bool made = outline.id == id;
+        outline.id = id;
+        // Only a Hull or a Custom is made from its Mesh.
+        const engine_core::PhysicsObject::Shape shape = body->shape();
+        const bool meshed =
+            shape == engine_core::PhysicsObject::Shape::Hull || shape == engine_core::PhysicsObject::Shape::Custom;
+        const auto* mesh = meshed ? dynamic_cast<const engine_core::Mesh*>(game_->instance(body->mesh_id())) : nullptr;
+        const engine_core::InstanceId meshId = mesh != nullptr ? mesh->id() : 0;
+        static const std::string kNoPath;
+        const std::string& meshPath = mesh != nullptr ? mesh->path() : kNoPath;
+        const std::uint64_t meshRevision = mesh != nullptr ? mesh->session_geometry().revision : 0;
+        const bool meshChanged =
+            !made || outline.mesh != meshId || outline.meshPath != meshPath || outline.meshRevision != meshRevision;
+        if (meshChanged) {
+            outline.mesh = meshId;
+            outline.meshPath = meshPath;
+            outline.meshRevision = meshRevision;
+            outline.meshPoints.clear();
+            outline.meshTriangles.clear();
+            // A Mesh with no points to read outlines as no Mesh: the Box it falls back to.
+            if (mesh != nullptr && mesh->vertex_positions(outline.meshPoints, &outline.meshTriangles)) {
+                outline.meshPoints.clear();
+                outline.meshTriangles.clear();
+            }
+        }
+        const engine_core::Vec3 size = body->size();
+        // Centered in its GameObject's Prefab, which changes as the Prefab's Models and Meshes do.
+        const engine_core::Vec3 center = engine_core::PhysicsWorld::shape_center(*game_, *body);
+        const auto same = [](engine_core::Vec3 a, engine_core::Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; };
+        if (meshChanged || outline.shape != static_cast<int>(shape) || outline.anchored != body->anchored() ||
+            !same(outline.size, size) || !same(outline.center, center)) {
+            outline.shape = static_cast<int>(shape);
+            outline.size = size;
+            outline.anchored = body->anchored();
+            outline.center = center;
+            engine_core::PhysicsWorld::collision_outline(*body, center, outline.meshPoints, outline.meshTriangles,
+                                                         outline.lines);
+        }
+        // Its body starts at the GameObject it moves.
+        outline.driven = body->driven_game_object();
+        const engine_core::GameObject* driven = outline.driven != 0 ? game_->game_object(outline.driven) : nullptr;
+        outline.transform = driven != nullptr ? driven->transform() : body->transform();
+    }
+    outlines_.swap(outlineScratch_);
+}
+
+void GameView::collectOutlines(const engine_core::VisualSnapshot& snapshot) {
+    outlinePoints_.clear();
+    for (const BodyOutline& outline : outlines_) {
+        engine_core::Matrix4 world = outline.transform;
+        // The GameObject's row is where its mesh is drawn this frame.
+        if (outline.driven != 0) {
+            for (const engine_core::VisualInstance& row : snapshot.instances) {
+                if (row.id == outline.driven) {
+                    if (row.alive) {
+                        world = row.world;
+                    }
+                    break;
+                }
+            }
+        }
+        const engine_core::Matrix4 pose = engine_core::PhysicsWorld::body_pose(world);
+        for (const engine_core::Vec3& point : outline.lines) {
+            const engine_core::Vec3 placed = engine_core::matrix4_point(pose, point);
+            outlinePoints_.insert(outlinePoints_.end(), {placed.x, placed.y, placed.z});
+        }
+    }
+    renderer_.setOutlines(outlinePoints_.data(), static_cast<int>(outlinePoints_.size() / 3));
 }
 
 void GameView::refreshCameraList() {

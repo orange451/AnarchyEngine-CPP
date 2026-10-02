@@ -212,6 +212,8 @@ constexpr GLenum RT_GL_BLEND_SRC_ALPHA = 0x80CB;
 constexpr GLenum RT_GL_BLEND_DST_ALPHA = 0x80CA;
 constexpr GLenum RT_GL_CURRENT_PROGRAM = 0x8B8D;
 constexpr GLenum RT_GL_VERTEX_ARRAY_BINDING = 0x85B5;
+constexpr GLenum RT_GL_ARRAY_BUFFER_BINDING = 0x8894;
+constexpr GLenum RT_GL_LINES = 0x0001;
 // The Skybox's environment cubes.
 constexpr GLenum RT_GL_TEXTURE_CUBE_MAP = 0x8513;
 constexpr GLenum RT_GL_TEXTURE_CUBE_MAP_POSITIVE_X = 0x8515;

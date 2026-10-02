@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -33,7 +34,11 @@ class SceneFeed;
 // Workspace or under Lighting lights them, with Lighting's Ambient, Exposure,
 // Saturation, and Gamma. The first Skybox under Lighting is drawn behind
 // them and lights them too. Over them lies the floor grid, with the world's
-// X and Z axes on it, while the Runner's sceneGrid is on.
+// X and Z axes on it, while the Runner's sceneGrid is on. Over that, each
+// selected PhysicsObject in Workspace is outlined as it collides
+// (PhysicsWorld::collision_outline), at its GameObject's Transform as the
+// snapshot has it, so the outline stays on the drawn mesh during play, or at
+// its own Transform when it moves none.
 // The view is linked to one Camera, by GUID, and sees from that Camera's
 // Transform and FieldOfView as the snapshot has them. The list at the top
 // right offers each Camera in Workspace, at any depth, in tree order. A view
@@ -109,6 +114,12 @@ private:
     // to a new Camera makes it the CurrentCamera when the Workspace has none.
     void refreshWorkspace();
     void readWorkspace();
+    // Fills outlines_ from the selection, under readWorkspace's lock. An
+    // outline is made again only when what it was made from changed.
+    void readSelectedBodies();
+    // The outlines in world space, into the renderer, each placed by the
+    // snapshot's row of its GameObject when it has one.
+    void collectOutlines(const engine_core::VisualSnapshot& snapshot);
     // Puts the Cameras in the list, and selects the linked one, when either changed.
     void refreshCameraList();
     // Points the renderer at the linked Camera's snapshot row, when it has one.
@@ -154,6 +165,36 @@ private:
     engine_core::InstanceId cameraId_ = 0;
     // The root's GUID at the last walk. Another means another place is open.
     std::string placeGuid_;
+    // A selected PhysicsObject in Workspace, as of the last read.
+    struct BodyOutline {
+        engine_core::InstanceId id = 0;
+        // What lines was made from: the Shape, Size, and Anchored, where the
+        // shape is centered, and the Mesh, its file, and its session
+        // geometry's revision, with the points and triangles read from it.
+        // No Mesh for a Box, Sphere, or Capsule.
+        int shape = -1;
+        engine_core::Vec3 size{};
+        bool anchored = false;
+        engine_core::Vec3 center{};
+        engine_core::InstanceId mesh = 0;
+        std::string meshPath;
+        std::uint64_t meshRevision = 0;
+        std::vector<engine_core::Vec3> meshPoints;
+        std::vector<std::uint32_t> meshTriangles;
+        // Segments in the body's space.
+        std::vector<engine_core::Vec3> lines;
+        // The GameObject it moves, or 0, and where the body is: that
+        // GameObject's Transform, else its own.
+        engine_core::InstanceId driven = 0;
+        engine_core::Matrix4 transform = engine_core::matrix4_identity();
+    };
+    std::vector<BodyOutline> outlines_;
+    std::vector<BodyOutline> outlineScratch_;
+    // The selection and the revision it was read at.
+    std::vector<engine_core::InstanceId> selected_;
+    std::uint64_t selectionSeen_ = ~std::uint64_t{0};
+    // Per frame: the outlines in world space, as Renderer::setOutlines takes them.
+    std::vector<float> outlinePoints_;
     jadefx::ComboBox* cameraBox_ = nullptr;
     GuiLayer* guiLayer_ = nullptr;
     // Holds guiLayer_ as its root.

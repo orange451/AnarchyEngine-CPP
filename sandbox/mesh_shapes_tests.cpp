@@ -12,6 +12,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -434,4 +435,59 @@ TEST_CASE("a Script that rebuilds a Mesh every Heartbeat never writes its file",
     const bool unwritten = std::filesystem::last_write_time(file) == written;
     REQUIRE(unwritten);
     REQUIRE(triangles(rig.file_of(cube)) == 12);
+}
+
+TEST_CASE("OriginOffset runs from a Mesh's origin to the middle of its box, and a Prefab's of its Models'", "[shapes]") {
+    ShapeRig rig;
+    engine_core::Mesh& low = rig.mesh("Low");
+    engine_core::Mesh& high = rig.mesh("High");
+    rig.run(R"(
+        local prefab = Instance.new("Prefab", game.Assets.Prefabs)
+        prefab.Name = "Pair"
+        Instance.new("Model", prefab).Mesh = game.Assets.Meshes.Low
+        -- A Model with no Mesh adds nothing.
+        Instance.new("Model", prefab)
+    )");
+    const auto* pair = dynamic_cast<const engine_core::Prefab*>(
+        rig.game.instance(rig.game.find_first_child(rig.game.service("Prefabs"), "Pair")));
+    REQUIRE(pair != nullptr);
+    const auto same = [](Vec3 a, Vec3 b) { return near(a.x, b.x) && near(a.y, b.y) && near(a.z, b.z); };
+
+    // Nothing to measure yet.
+    REQUIRE(same(low.origin_offset(), Vec3{}));
+    REQUIRE(same(pair->origin_offset(), Vec3{}));
+
+    INFO(rig.run(R"(
+        game.Assets.Meshes.Low:AddBox(Vector3.new(2, 2, 2), Vector3.new(0, 1, 0))
+        game.Assets.Meshes.High:AddBox(Vector3.new(2, 2, 2), Vector3.new(4, 0, 0))
+    )"));
+    REQUIRE(same(low.origin_offset(), Vec3{0.f, 1.f, 0.f}));
+    REQUIRE(same(high.origin_offset(), Vec3{4.f, 0.f, 0.f}));
+    REQUIRE(same(pair->origin_offset(), Vec3{0.f, 1.f, 0.f}));
+
+    // Another Model widens the box: x -1 to 5, y -1 to 2.
+    rig.run(R"(Instance.new("Model", game.Assets.Prefabs.Pair).Mesh = game.Assets.Meshes.High)");
+    REQUIRE(same(pair->origin_offset(), Vec3{2.f, 0.5f, 0.f}));
+
+    // The file is read again when it changes on disk. Its time is moved on, so
+    // a file system that keeps whole seconds still sees the change.
+    rig.run("game.Assets.Meshes.Low:AddBox(Vector3.new(2, 2, 2), Vector3.new(0, 5, 0))");
+    const std::filesystem::path file = rig.resources / std::filesystem::u8path(low.path());
+    std::filesystem::last_write_time(file, std::filesystem::last_write_time(file) + std::chrono::seconds(5));
+    REQUIRE(same(low.origin_offset(), Vec3{0.f, 3.f, 0.f}));
+    REQUIRE(same(pair->origin_offset(), Vec3{2.f, 2.5f, 0.f}));
+
+    // Scripts read it and cannot write it.
+    REQUIRE(rig.run(R"(
+        local mesh = game.Assets.Meshes.Low
+        local prefab = game.Assets.Prefabs.Pair
+        print(mesh.OriginOffset == Vector3.new(0, 3, 0), prefab.OriginOffset == Vector3.new(2, 2.5, 0),
+            pcall(function() mesh.OriginOffset = Vector3.new() end),
+            (pcall(function() prefab.OriginOffset = Vector3.new() end)))
+    )") == "true\ttrue\tfalse\tfalse\n");
+
+    // During play it is the session's geometry.
+    rig.game.start_simulation();
+    rig.run("game.Assets.Meshes.Low:AddBox(Vector3.new(2, 2, 2), Vector3.new(0, -10, 0))");
+    REQUIRE(same(low.origin_offset(), Vec3{0.f, -2.5f, 0.f}));
 }

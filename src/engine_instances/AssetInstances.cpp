@@ -216,10 +216,77 @@ std::optional<std::string> Mesh::vertex_positions(std::vector<Vec3>& out, std::v
     return std::nullopt;
 }
 
+bool Mesh::bounds(Vec3& low, Vec3& high) const {
+    const SessionGeometry session = session_geometry();
+    std::filesystem::path file;
+    std::filesystem::file_time_type stamp{};
+    if (session.data == nullptr) {
+        const std::filesystem::path root = resources_root();
+        if (!root.empty() && !path().empty()) {
+            file = root / std::filesystem::u8path(path());
+            std::error_code error;
+            stamp = std::filesystem::last_write_time(file, error);
+            if (error) {
+                stamp = {};
+            }
+        }
+    }
+    std::lock_guard<std::mutex> lock(bounds_mutex_);
+    if (!bounds_measured_ || bounds_revision_ != session.revision || bounds_file_ != file || bounds_stamp_ != stamp) {
+        bounds_measured_ = true;
+        bounds_revision_ = session.revision;
+        bounds_file_ = file;
+        bounds_stamp_ = stamp;
+        anarchy::amesh::Data read;
+        const anarchy::amesh::Data* data = session.data.get();
+        if (data == nullptr && !file.empty()) {
+            // A file with LODs still has its points, as vertex_positions reads them.
+            read_file(resources_root(), path(), read);
+            data = &read;
+        }
+        bounds_found_ = data != nullptr && !data->vertices.empty();
+        if (bounds_found_) {
+            const float* first = data->vertices.front().p;
+            bounds_low_ = Vec3{first[0], first[1], first[2]};
+            bounds_high_ = bounds_low_;
+            for (const anarchy::amesh::Vertex& vertex : data->vertices) {
+                const float* p = vertex.p;
+                bounds_low_ = {std::min(bounds_low_.x, p[0]), std::min(bounds_low_.y, p[1]),
+                               std::min(bounds_low_.z, p[2])};
+                bounds_high_ = {std::max(bounds_high_.x, p[0]), std::max(bounds_high_.y, p[1]),
+                                std::max(bounds_high_.z, p[2])};
+            }
+        }
+    }
+    if (!bounds_found_) {
+        return false;
+    }
+    low = bounds_low_;
+    high = bounds_high_;
+    return true;
+}
+
+namespace {
+
+Vec3 middle(Vec3 low, Vec3 high) {
+    return Vec3{(low.x + high.x) * 0.5f, (low.y + high.y) * 0.5f, (low.z + high.z) * 0.5f};
+}
+
+}  // namespace
+
+Vec3 Mesh::origin_offset() const {
+    Vec3 low{};
+    Vec3 high{};
+    return bounds(low, high) ? middle(low, high) : Vec3{};
+}
+
 void Mesh::on_reuse() {
     FileAsset::on_reuse();
     session_ = SessionGeometry{};
     session_generation_ = 0;
+    std::lock_guard<std::mutex> lock(bounds_mutex_);
+    bounds_measured_ = false;
+    bounds_found_ = false;
 }
 
 const char* Sound::class_name() const { return "Sound"; }
@@ -249,6 +316,39 @@ const char* Prefab::class_name() const { return "Prefab"; }
 void Prefab::context_actions(std::vector<ContextAction>& out) const {
     out.push_back(ContextAction{InstanceAction::Edit, true});
     DataModel::context_actions(out);
+}
+
+bool Prefab::bounds(Vec3& low, Vec3& high) const {
+    bool found = false;
+    for (InstanceId child = first_child(id()); child != 0; child = next_sibling(child)) {
+        const auto* model = dynamic_cast<const Model*>(instance(child));
+        if (model == nullptr) {
+            continue;
+        }
+        const LuaSlot slot = model->reference(Model::kMeshReference);
+        const auto* mesh =
+            slot.kind == LuaSlot::Kind::Instance ? dynamic_cast<const Mesh*>(instance(slot.id)) : nullptr;
+        Vec3 mesh_low{};
+        Vec3 mesh_high{};
+        if (mesh == nullptr || !mesh->bounds(mesh_low, mesh_high)) {
+            continue;
+        }
+        if (!found) {
+            low = mesh_low;
+            high = mesh_high;
+            found = true;
+            continue;
+        }
+        low = {std::min(low.x, mesh_low.x), std::min(low.y, mesh_low.y), std::min(low.z, mesh_low.z)};
+        high = {std::max(high.x, mesh_high.x), std::max(high.y, mesh_high.y), std::max(high.z, mesh_high.z)};
+    }
+    return found;
+}
+
+Vec3 Prefab::origin_offset() const {
+    Vec3 low{};
+    Vec3 high{};
+    return bounds(low, high) ? middle(low, high) : Vec3{};
 }
 
 namespace {
@@ -409,6 +509,21 @@ bool read_time_length(DataModel& game, DataModel& object, LuaSlot& out) {
     return true;
 }
 
+// OriginOffset, of a Mesh or a Prefab.
+bool read_origin_offset(DataModel&, DataModel& object, LuaSlot& out) {
+    Vec3 offset{};
+    if (const auto* mesh = dynamic_cast<const Mesh*>(&object)) {
+        offset = mesh->origin_offset();
+    } else if (const auto* prefab = dynamic_cast<const Prefab*>(&object)) {
+        offset = prefab->origin_offset();
+    } else {
+        return false;
+    }
+    out.kind = LuaSlot::Kind::Vec3;
+    out.vec = offset;
+    return true;
+}
+
 bool write_path(DataModel&, DataModel& object, LuaSlot& in) {
     auto* asset = dynamic_cast<FileAsset*>(&object);
     if (asset == nullptr) {
@@ -510,7 +625,12 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
     };
     register_lua_class("FileAsset", "Instance", nullptr, 0);
     register_lua_class("Texture", "FileAsset", file_fields, 1);
-    register_lua_class("Mesh", "FileAsset", file_fields, 1);
+    // OriginOffset is measured from the geometry, never written or saved.
+    const LuaField mesh_fields[] = {
+        file_fields[0],
+        lua_property("OriginOffset", "Vector3", false, read_origin_offset, nullptr),
+    };
+    register_lua_class("Mesh", "FileAsset", mesh_fields, 2);
     // TimeLength is read from the file, never written or saved.
     const LuaField sound_fields[] = {
         file_fields[0],
@@ -547,7 +667,10 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
         lua_saved_property("Material", "Material?", read_reference<1>, write_reference<1>, "null"),
     };
     register_lua_class("Model", "ReferenceAsset", model_fields, 2);
-    register_lua_class("Prefab", "Instance", nullptr, 0);
+    const LuaField prefab_fields[] = {
+        lua_property("OriginOffset", "Vector3", false, read_origin_offset, nullptr),
+    };
+    register_lua_class("Prefab", "Instance", prefab_fields, 1);
 }
 
 }  // namespace

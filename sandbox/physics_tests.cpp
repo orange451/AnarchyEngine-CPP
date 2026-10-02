@@ -16,7 +16,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <initializer_list>
 #include <string>
 #include <vector>
@@ -479,5 +481,250 @@ TEST_CASE("P14 scripts set Shape by item, name, or value, and nothing else", "[p
         bool value = false;
         REQUIRE(rig.runtime.global_boolean(name, value));
         REQUIRE(value);
+    }
+}
+
+namespace {
+
+// A unit cube's 12 triangles, each with corners of its own, as an AMESH's
+// faces have: points three to a triangle, and triangles indexing them in turn.
+void unwelded_cube(std::vector<Vec3>& points, std::vector<std::uint32_t>& triangles) {
+    const Vec3 c[8] = {{-.5f, -.5f, -.5f}, {.5f, -.5f, -.5f}, {.5f, .5f, -.5f}, {-.5f, .5f, -.5f},
+                       {-.5f, -.5f, .5f},  {.5f, -.5f, .5f},  {.5f, .5f, .5f},  {-.5f, .5f, .5f}};
+    const int faces[12][3] = {{0, 2, 1}, {0, 3, 2}, {4, 5, 6}, {4, 6, 7}, {0, 1, 5}, {0, 5, 4},
+                              {3, 6, 2}, {3, 7, 6}, {0, 4, 7}, {0, 7, 3}, {1, 2, 6}, {1, 6, 5}};
+    points.clear();
+    triangles.clear();
+    for (const auto& face : faces) {
+        for (int corner : face) {
+            triangles.push_back(static_cast<std::uint32_t>(points.size()));
+            points.push_back(c[corner]);
+        }
+    }
+}
+
+bool on_box_corner(Vec3 p, Vec3 half) {
+    return near(std::fabs(p.x), half.x, 1e-4f) && near(std::fabs(p.y), half.y, 1e-4f) &&
+           near(std::fabs(p.z), half.z, 1e-4f);
+}
+
+}  // namespace
+
+TEST_CASE("P17 a collision outline traces what the body collides as, in the body's space", "[physics]") {
+    PhysicsRig rig;
+    PhysicsObject& body = rig.body(at(4.f, 5.f, 6.f), Vec3{2.f, 4.f, 6.f}, false);
+    const Vec3 half{1.f, 2.f, 3.f};
+    const std::vector<Vec3> no_points;
+    const std::vector<std::uint32_t> no_triangles;
+    std::vector<Vec3> lines{Vec3{9.f, 9.f, 9.f}};
+
+    SECTION("a Box is its twelve edges, whatever Mesh it has") {
+        std::vector<Vec3> points;
+        std::vector<std::uint32_t> triangles;
+        unwelded_cube(points, triangles);
+        engine_core::PhysicsWorld::collision_outline(body, Vec3{}, points, triangles, lines);
+        REQUIRE(lines.size() == 24);
+        for (const Vec3& p : lines) {
+            REQUIRE(on_box_corner(p, half));
+        }
+    }
+
+    SECTION("a Sphere is rings at its radius, half of Size's X") {
+        REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Sphere)));
+        engine_core::PhysicsWorld::collision_outline(body, Vec3{}, no_points, no_triangles, lines);
+        REQUIRE(lines.size() >= 6);
+        REQUIRE(lines.size() % 2 == 0);
+        for (const Vec3& p : lines) {
+            REQUIRE(near(std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z), 1.f, 1e-4f));
+        }
+    }
+
+    SECTION("a Capsule is its radius around a segment along Y, Size's Y tall") {
+        REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Capsule)));
+        REQUIRE_FALSE(body.set_size(Vec3{1.f, 3.f, 1.f}));
+        engine_core::PhysicsWorld::collision_outline(body, Vec3{}, no_points, no_triangles, lines);
+        REQUIRE(lines.size() % 2 == 0);
+        float low = 0.f;
+        float high = 0.f;
+        for (const Vec3& p : lines) {
+            const float y = std::clamp(p.y, -1.f, 1.f);
+            REQUIRE(near(std::sqrt(p.x * p.x + (p.y - y) * (p.y - y) + p.z * p.z), 0.5f, 1e-4f));
+            low = std::min(low, p.y);
+            high = std::max(high, p.y);
+        }
+        REQUIRE(near(low, -1.5f, 1e-4f));
+        REQUIRE(near(high, 1.5f, 1e-4f));
+    }
+
+    SECTION("a Hull is the hull of its Mesh's points, fitted to Size") {
+        REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Hull)));
+        std::vector<Vec3> points;
+        std::vector<std::uint32_t> triangles;
+        unwelded_cube(points, triangles);
+        // A point inside is not on the hull.
+        points.push_back(Vec3{0.1f, 0.f, -0.2f});
+        engine_core::PhysicsWorld::collision_outline(body, Vec3{}, points, no_triangles, lines);
+        REQUIRE(lines.size() >= 24);
+        REQUIRE(lines.size() % 2 == 0);
+        for (const Vec3& p : lines) {
+            REQUIRE(on_box_corner(p, half));
+        }
+    }
+
+    SECTION("a Hull with no Mesh, or points with no volume, is the Box it falls back to") {
+        REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Hull)));
+        engine_core::PhysicsWorld::collision_outline(body, Vec3{}, no_points, no_triangles, lines);
+        REQUIRE(lines.size() == 24);
+        for (const Vec3& p : lines) {
+            REQUIRE(on_box_corner(p, half));
+        }
+        const std::vector<Vec3> flat{{0.f, 0.f, 0.f}, {1.f, 0.f, 0.f}, {0.f, 1.f, 0.f}, {1.f, 1.f, 0.f}};
+        engine_core::PhysicsWorld::collision_outline(body, Vec3{}, flat, no_triangles, lines);
+        REQUIRE(lines.size() == 24);
+    }
+
+    SECTION("an anchored Custom is each edge of its triangles once; unanchored it is a Hull") {
+        REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Custom)));
+        std::vector<Vec3> points;
+        std::vector<std::uint32_t> triangles;
+        unwelded_cube(points, triangles);
+        body.set_anchored(true);
+        engine_core::PhysicsWorld::collision_outline(body, Vec3{}, points, triangles, lines);
+        // Twelve box edges and a diagonal across each of the six faces.
+        REQUIRE(lines.size() == 2 * 18);
+        for (const Vec3& p : lines) {
+            REQUIRE(on_box_corner(p, half));
+        }
+        body.set_anchored(false);
+        std::vector<Vec3> hull;
+        engine_core::PhysicsWorld::collision_outline(body, Vec3{}, points, triangles, hull);
+        engine_core::PhysicsWorld::collision_outline(body, Vec3{}, points, no_triangles, lines);
+        REQUIRE_FALSE(hull.empty());
+        REQUIRE(hull.size() == lines.size());
+    }
+}
+
+TEST_CASE("P18 a body's pose is its Transform's position and rotation, without the scale", "[physics]") {
+    Matrix4 transform = engine_core::matrix4_axis_angle(Vec3{0.f, 1.f, 0.f}, 0.5);
+    for (int column = 0; column < 3; ++column) {
+        for (int row = 0; row < 3; ++row) {
+            transform.m[column * 4 + row] *= static_cast<float>(column + 2);
+        }
+    }
+    transform.m[12] = 1.f;
+    transform.m[13] = 2.f;
+    transform.m[14] = 3.f;
+    const Matrix4 pose = engine_core::PhysicsWorld::body_pose(transform);
+    for (int column = 0; column < 3; ++column) {
+        REQUIRE(near(column_length(pose, column), 1.f, 1e-5f));
+        const float scale = column_length(transform, column);
+        for (int row = 0; row < 3; ++row) {
+            REQUIRE(near(pose.m[column * 4 + row], transform.m[column * 4 + row] / scale, 1e-5f));
+        }
+    }
+    REQUIRE(x_of(pose) == 1.f);
+    REQUIRE(y_of(pose) == 2.f);
+    REQUIRE(pose.m[14] == 3.f);
+}
+
+namespace {
+
+// A GameObject at where in Workspace, drawing a Prefab of one Model whose
+// Mesh is returned, and the PhysicsObject under it that moves it.
+struct PrefabBody {
+    engine_core::Mesh* mesh = nullptr;
+    engine_core::Prefab* prefab = nullptr;
+    GameObject* object = nullptr;
+    PhysicsObject* body = nullptr;
+};
+
+PrefabBody prefab_body(PhysicsRig& rig, const Matrix4& where, Vec3 size, bool linked = true) {
+    PrefabBody out;
+    engine_core::Game& game = rig.game;
+    out.mesh = &game.create<engine_core::Mesh>();
+    game.set_parent(out.mesh->id(), game.service("Meshes"));
+    out.prefab = &game.create<engine_core::Prefab>();
+    game.set_parent(out.prefab->id(), game.service("Prefabs"));
+    auto& model = game.create<engine_core::Model>();
+    game.set_parent(model.id(), out.prefab->id());
+    REQUIRE_FALSE(model.set_reference(engine_core::Model::kMeshReference, instance_slot(out.mesh->id())));
+    out.object = &game.create<GameObject>();
+    out.object->set_transform(where);
+    if (linked) {
+        REQUIRE_FALSE(out.object->set_prefab(instance_slot(out.prefab->id())));
+    }
+    game.set_parent(out.object->id(), workspace_of(game));
+    out.body = &rig.body(engine_core::matrix4_identity(), size, false, out.object->id());
+    return out;
+}
+
+// A 2 by 2 by 2 box whose bottom is at the Mesh's origin: its box's middle is (0, 1, 0).
+void box_above_origin(anarchy::amesh::Data& data) { engine_core::add_box(data, Vec3{2.f, 2.f, 2.f}, Vec3{0.f, 1.f, 0.f}); }
+
+}  // namespace
+
+TEST_CASE("P19 a body sits in the middle of its GameObject's Prefab", "[physics]") {
+    PhysicsRig rig;
+    rig.floor();
+
+    SECTION("its shape is centered on the Prefab's OriginOffset, so the mesh's bottom rests on the floor") {
+        PrefabBody pot = prefab_body(rig, at(0.f, 5.f, 0.f), Vec3{2.f, 2.f, 2.f});
+        rig.play();
+        REQUIRE_FALSE(pot.mesh->edit_geometry(box_above_origin));
+        rig.seconds(3.0);
+        INFO(y_of(pot.object->transform()));
+        REQUIRE(near(y_of(pot.object->transform()), 0.f, 0.05f));
+        // The body's origin stays the GameObject's.
+        REQUIRE(near(y_of(pot.body->transform()), y_of(pot.object->transform()), 1e-4f));
+    }
+
+    SECTION("the offset grows with the GameObject's scale, as the drawn mesh does") {
+        Matrix4 tall = at(0.f, 5.f, 0.f);
+        tall.m[5] = 2.f;
+        PrefabBody pot = prefab_body(rig, tall, Vec3{2.f, 4.f, 2.f});
+        rig.play();
+        REQUIRE_FALSE(pot.mesh->edit_geometry(box_above_origin));
+        rig.seconds(3.0);
+        INFO(y_of(pot.object->transform()));
+        // The middle is 2 above the origin, and the 4 tall shape reaches down to it.
+        REQUIRE(near(y_of(pot.object->transform()), 0.f, 0.05f));
+        REQUIRE(near(column_length(pot.object->transform(), 1), 2.f, 1e-4f));
+    }
+
+    SECTION("a GameObject that gets its Prefab during play centers its body then") {
+        PrefabBody pot = prefab_body(rig, at(0.f, 3.f, 0.f), Vec3{2.f, 2.f, 2.f}, false);
+        rig.play();
+        REQUIRE_FALSE(pot.mesh->edit_geometry(box_above_origin));
+        rig.seconds(2.0);
+        REQUIRE(near(y_of(pot.object->transform()), 1.f, 0.05f));
+        REQUIRE_FALSE(pot.object->set_prefab(instance_slot(pot.prefab->id())));
+        rig.seconds(2.0);
+        INFO(y_of(pot.object->transform()));
+        REQUIRE(near(y_of(pot.object->transform()), 0.f, 0.05f));
+    }
+
+    SECTION("a PhysicsObject that moves no GameObject is centered on its own origin") {
+        PhysicsObject& loose = rig.body(at(0.f, 3.f, 0.f), Vec3{2.f, 2.f, 2.f}, false);
+        REQUIRE(engine_core::PhysicsWorld::shape_center(rig.game, loose).y == 0.f);
+        rig.play();
+        rig.seconds(2.0);
+        REQUIRE(near(y_of(loose.transform()), 1.f, 0.05f));
+    }
+}
+
+TEST_CASE("P20 a collision outline is centered where the body's shape is", "[physics]") {
+    PhysicsRig rig;
+    PrefabBody pot = prefab_body(rig, at(0.f, 5.f, 0.f), Vec3{2.f, 2.f, 2.f});
+    rig.play();
+    REQUIRE_FALSE(pot.mesh->edit_geometry(box_above_origin));
+    const Vec3 center = engine_core::PhysicsWorld::shape_center(rig.game, *pot.body);
+    REQUIRE(near(center.x, 0.f, 1e-5f));
+    REQUIRE(near(center.y, 1.f, 1e-5f));
+    REQUIRE(near(center.z, 0.f, 1e-5f));
+    std::vector<Vec3> lines;
+    engine_core::PhysicsWorld::collision_outline(*pot.body, center, {}, {}, lines);
+    REQUIRE(lines.size() == 24);
+    for (const Vec3& p : lines) {
+        REQUIRE(on_box_corner(Vec3{p.x, p.y - 1.f, p.z}, Vec3{1.f, 1.f, 1.f}));
     }
 }

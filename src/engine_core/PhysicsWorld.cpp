@@ -3,6 +3,7 @@
 #include "AssetInstances.hpp"
 #include "DataModel.hpp"
 #include "GameObject.hpp"
+#include "LuaApi.hpp"
 #include "PhysicsObject.hpp"
 
 #pragma warning(push, 0)
@@ -13,6 +14,7 @@
 #include <cmath>
 #include <cstdint>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -24,6 +26,8 @@ constexpr float kGravity = -9.81f;
 // a hull past 128 faces or edges fails, and fewer vertices make fewer.
 constexpr int kHullVertices = 64;
 constexpr int kHullVerticesRetry = 32;
+// How near two corners of a Custom's triangles are to be joined as one.
+constexpr float kWeldTolerance = 1e-4f;
 
 b3Vec3 to_b3(Vec3 v) { return b3Vec3{v.x, v.y, v.z}; }
 
@@ -76,6 +80,170 @@ void* user_data(InstanceId id) { return reinterpret_cast<void*>(static_cast<std:
 
 InstanceId id_of(void* data) { return static_cast<InstanceId>(reinterpret_cast<std::uintptr_t>(data)); }
 
+// A Mesh's points, which are not empty, fitted to size around center in the
+// body's space: centered on their bounds, each axis scaled so the bounds are size.
+void fit_points(const std::vector<Vec3>& mesh_points, Vec3 size, Vec3 center, std::vector<b3Vec3>& points) {
+    Vec3 low = mesh_points.front();
+    Vec3 high = low;
+    for (const Vec3& p : mesh_points) {
+        low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
+        high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
+    }
+    const Vec3 middle{(low.x + high.x) * 0.5f, (low.y + high.y) * 0.5f, (low.z + high.z) * 0.5f};
+    auto fit = [](float target, float extent) { return extent > 1e-6f ? target / extent : 1.f; };
+    const Vec3 scale{fit(size.x, high.x - low.x), fit(size.y, high.y - low.y), fit(size.z, high.z - low.z)};
+    points.clear();
+    for (const Vec3& p : mesh_points) {
+        points.push_back(b3Vec3{(p.x - middle.x) * scale.x + center.x, (p.y - middle.y) * scale.y + center.y,
+                                (p.z - middle.z) * scale.z + center.z});
+    }
+}
+
+// shape_center for a body that moves driven, or none at 0.
+Vec3 center_for(const DataModel& game, InstanceId driven) {
+    const GameObject* object = driven != 0 ? game.game_object(driven) : nullptr;
+    if (object == nullptr) {
+        return {};
+    }
+    const LuaSlot slot = object->prefab();
+    const auto* prefab =
+        slot.kind == LuaSlot::Kind::Instance ? dynamic_cast<const Prefab*>(game.instance(slot.id)) : nullptr;
+    if (prefab == nullptr) {
+        return {};
+    }
+    // The body's space has the GameObject's rotation but not its scale, which
+    // the Prefab is drawn with.
+    const Vec3 offset = prefab->origin_offset();
+    const Matrix4 transform = object->transform();
+    return Vec3{offset.x * column_length(transform, 0), offset.y * column_length(transform, 1),
+                offset.z * column_length(transform, 2)};
+}
+
+bool same_vec3(Vec3 a, Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
+
+// A hull of points, as a Hull's shape takes it. Null when Box3D builds none.
+b3HullData* build_hull(const std::vector<b3Vec3>& points) {
+    const int count = static_cast<int>(points.size());
+    b3HullData* hull = b3CreateHull(points.data(), count, kHullVertices);
+    if (hull == nullptr) {
+        hull = b3CreateHull(points.data(), count, kHullVerticesRetry);
+    }
+    return hull;
+}
+
+// points and triangles as one mesh, as an anchored Custom's shape takes it,
+// with indices as scratch. Null when Box3D builds none.
+b3MeshData* build_mesh(std::vector<b3Vec3>& points, const std::vector<std::uint32_t>& triangles,
+                       std::vector<std::int32_t>& indices) {
+    indices.assign(triangles.begin(), triangles.end());
+    b3MeshDef def{};
+    def.vertices = points.data();
+    def.indices = indices.data();
+    def.vertexCount = static_cast<int>(points.size());
+    def.triangleCount = static_cast<int>(indices.size() / 3);
+    // A mesh's faces each have their own corners; welding joins them
+    // so edges between triangles are known.
+    def.weldVertices = true;
+    def.weldTolerance = kWeldTolerance;
+    def.identifyEdges = true;
+    return b3CreateMesh(&def, nullptr, 0);
+}
+
+// ---- Outlines ---------------------------------------------------------
+
+void add_line(std::vector<Vec3>& lines, Vec3 a, Vec3 b) {
+    lines.push_back(a);
+    lines.push_back(b);
+}
+
+// The arc of a circle of radius about center, in the plane of the unit
+// axes u and v, from angle from to angle to, where angle 0 is along u.
+void add_arc(std::vector<Vec3>& lines, Vec3 center, Vec3 u, Vec3 v, float radius, float from, float to) {
+    constexpr float kSegmentsPerTurn = 32.f;
+    constexpr float kTurn = 6.28318530718f;
+    const int segments = std::max(1, static_cast<int>(std::ceil(std::fabs(to - from) / kTurn * kSegmentsPerTurn)));
+    const auto at = [&](int step) {
+        const float angle = from + (to - from) * static_cast<float>(step) / static_cast<float>(segments);
+        const float c = std::cos(angle) * radius;
+        const float s = std::sin(angle) * radius;
+        return Vec3{center.x + u.x * c + v.x * s, center.y + u.y * c + v.y * s, center.z + u.z * c + v.z * s};
+    };
+    for (int step = 0; step < segments; ++step) {
+        add_line(lines, at(step), at(step + 1));
+    }
+}
+
+void outline_box(Vec3 half, Vec3 center, std::vector<Vec3>& lines) {
+    const auto corner = [&](int index) {
+        return Vec3{center.x + (index & 1 ? half.x : -half.x), center.y + (index & 2 ? half.y : -half.y),
+                    center.z + (index & 4 ? half.z : -half.z)};
+    };
+    // Each pair of corners one bit apart.
+    for (int index = 0; index < 8; ++index) {
+        for (int bit = 1; bit < 8; bit <<= 1) {
+            if ((index & bit) == 0) {
+                add_line(lines, corner(index), corner(index | bit));
+            }
+        }
+    }
+}
+
+// Its points, which the hull's half-edges index: each edge once.
+void outline_hull(const b3HullData& hull, std::vector<Vec3>& lines) {
+    const b3Vec3* points = b3GetHullPoints(&hull);
+    const b3HullHalfEdge* edges = b3GetHullEdges(&hull);
+    for (int index = 0; index < hull.edgeCount; ++index) {
+        const b3HullHalfEdge& edge = edges[index];
+        if (index < edge.twin) {
+            add_line(lines, from_b3(points[edge.origin]), from_b3(points[edges[edge.twin].origin]));
+        }
+    }
+}
+
+// Each edge of the triangles once, joining corners within the weld
+// tolerance as the mesh shape does.
+void outline_triangles(const std::vector<b3Vec3>& points, const std::vector<std::uint32_t>& triangles,
+                       std::vector<Vec3>& lines) {
+    struct Cell {
+        std::int64_t x, y, z;
+        bool operator==(const Cell& other) const { return x == other.x && y == other.y && z == other.z; }
+    };
+    struct CellHash {
+        std::size_t operator()(const Cell& cell) const {
+            const std::uint64_t h = static_cast<std::uint64_t>(cell.x) * 0x9E3779B97F4A7C15ull ^
+                                    static_cast<std::uint64_t>(cell.y) * 0xC2B2AE3D27D4EB4Full ^
+                                    static_cast<std::uint64_t>(cell.z) * 0x165667B19E3779F9ull;
+            return static_cast<std::size_t>(h ^ (h >> 29));
+        }
+    };
+    const auto cell_of = [](const b3Vec3& p) {
+        return Cell{std::llround(p.x / kWeldTolerance), std::llround(p.y / kWeldTolerance),
+                    std::llround(p.z / kWeldTolerance)};
+    };
+    std::unordered_map<Cell, std::uint32_t, CellHash> welded;
+    welded.reserve(points.size());
+    std::vector<std::uint32_t> corner(points.size());
+    for (std::size_t index = 0; index < points.size(); ++index) {
+        corner[index] = welded.emplace(cell_of(points[index]), static_cast<std::uint32_t>(index)).first->second;
+    }
+    std::unordered_set<std::uint64_t> seen;
+    seen.reserve(triangles.size());
+    for (std::size_t first = 0; first + 2 < triangles.size(); first += 3) {
+        for (int side = 0; side < 3; ++side) {
+            const std::uint32_t from = triangles[first + static_cast<std::size_t>(side)];
+            const std::uint32_t to = triangles[first + static_cast<std::size_t>((side + 1) % 3)];
+            if (from >= points.size() || to >= points.size()) {
+                continue;
+            }
+            const std::uint32_t a = std::min(corner[from], corner[to]);
+            const std::uint32_t b = std::max(corner[from], corner[to]);
+            if (a != b && seen.insert(static_cast<std::uint64_t>(a) << 32 | b).second) {
+                add_line(lines, from_b3(points[a]), from_b3(points[b]));
+            }
+        }
+    }
+}
+
 }  // namespace
 
 struct PhysicsWorld::Impl {
@@ -89,6 +257,10 @@ struct PhysicsWorld::Impl {
         // The GameObject it moves, or 0, and the Transform it last gave it.
         InstanceId driven = 0;
         Matrix4 driven_pose{};
+        // Where the shape was centered when it was made (shape_center), and
+        // the GUID of the driven GameObject's Prefab as last seen.
+        Vec3 center{};
+        std::string prefab;
         std::uint64_t seen = 0;
     };
 
@@ -248,7 +420,20 @@ struct PhysicsWorld::Impl {
         }
         Body& body = found->second;
         body.seen = pass;
-        follow_driven(game, object, body);
+        recenter(game, object, body, follow_driven(game, object, body));
+    }
+
+    // A GameObject with another Prefab, or one moved or scaled by someone
+    // else (moved), may center the shape elsewhere: it is made again there.
+    void recenter(DataModel& game, PhysicsObject& object, Body& record, bool moved) {
+        const GameObject* driven = record.driven != 0 ? game.game_object(record.driven) : nullptr;
+        if (driven == nullptr || (!moved && driven->prefab_guid() == record.prefab)) {
+            return;
+        }
+        record.prefab = driven->prefab_guid();
+        if (!same_vec3(center_for(game, record.driven), record.center)) {
+            make_shape(game, object, record);
+        }
     }
 
     // ---- Bodies -------------------------------------------------------
@@ -290,9 +475,13 @@ struct PhysicsWorld::Impl {
         def.userData = user_data(object.id());
         def.updateBodyMass = false;
         const Vec3 size = object.size();
+        record.center = center_for(game, record.driven);
+        const GameObject* driven = record.driven != 0 ? game.game_object(record.driven) : nullptr;
+        record.prefab = driven != nullptr ? driven->prefab_guid() : std::string();
+        const b3Vec3 center = to_b3(record.center);
         switch (object.shape()) {
         case PhysicsObject::Shape::Sphere: {
-            const b3Sphere sphere{b3Vec3{0.f, 0.f, 0.f}, size.x * 0.5f};
+            const b3Sphere sphere{center, size.x * 0.5f};
             record.volume = b3ComputeSphereMass(&sphere, 1.f).mass;
             def.density = density(object, record.volume);
             record.shape = b3CreateSphereShape(record.body, &def, &sphere);
@@ -301,7 +490,8 @@ struct PhysicsWorld::Impl {
         case PhysicsObject::Shape::Capsule: {
             const float radius = size.x * 0.5f;
             const float half = std::max(size.y - size.x, 0.f) * 0.5f;
-            const b3Capsule capsule{b3Vec3{0.f, -half, 0.f}, b3Vec3{0.f, half, 0.f}, radius};
+            const b3Capsule capsule{b3Vec3{center.x, center.y - half, center.z},
+                                    b3Vec3{center.x, center.y + half, center.z}, radius};
             record.volume = b3ComputeCapsuleMass(&capsule, 1.f).mass;
             def.density = density(object, record.volume);
             record.shape = b3CreateCapsuleShape(record.body, &def, &capsule);
@@ -311,7 +501,7 @@ struct PhysicsWorld::Impl {
             // Box3D gives a mesh contacts only on a static body, so an
             // unanchored Custom is a hull of its mesh until it is anchored.
             if (object.anchored()) {
-                if (b3MeshData* mesh = make_mesh(game, object)) {
+                if (b3MeshData* mesh = make_mesh(game, object, record.center)) {
                     record.mesh = mesh;
                     record.volume = size.x * size.y * size.z;
                     def.density = density(object, record.volume);
@@ -326,7 +516,7 @@ struct PhysicsWorld::Impl {
             }
             [[fallthrough]];
         case PhysicsObject::Shape::Hull:
-            if (b3HullData* hull = make_hull(game, object)) {
+            if (b3HullData* hull = make_hull(game, object, record.center)) {
                 record.volume = b3ComputeHullMass(hull, 1.f).mass;
                 def.density = density(object, record.volume);
                 // Box3D copies the hull into the shape.
@@ -338,7 +528,7 @@ struct PhysicsWorld::Impl {
             break;
         }
         if (!b3Shape_IsValid(record.shape)) {
-            const b3BoxHull box = b3MakeBoxHull(size.x * 0.5f, size.y * 0.5f, size.z * 0.5f);
+            const b3BoxHull box = b3MakeOffsetBoxHull(size.x * 0.5f, size.y * 0.5f, size.z * 0.5f, center);
             record.volume = size.x * size.y * size.z;
             def.density = density(object, record.volume);
             record.shape = b3CreateHullShape(record.body, &def, &box.base);
@@ -350,10 +540,10 @@ struct PhysicsWorld::Impl {
         return static_cast<float>(object.mass()) / std::max(volume, 1e-9f);
     }
 
-    // The Mesh's points into points, fitted to Size around the body's
-    // origin, and with triangles, its triangles into triangles. Returns why
-    // there are none, or an empty string.
-    std::string fitted_mesh(DataModel& game, const PhysicsObject& object, bool with_triangles) {
+    // The Mesh's points into points, fitted to Size around center, and with
+    // triangles, its triangles into triangles. Returns why there are none,
+    // or an empty string.
+    std::string fitted_mesh(DataModel& game, const PhysicsObject& object, Vec3 center, bool with_triangles) {
         const InstanceId mesh_id = object.mesh_id();
         const auto* mesh = mesh_id != 0 ? dynamic_cast<const Mesh*>(game.instance(mesh_id)) : nullptr;
         if (mesh == nullptr) {
@@ -363,34 +553,17 @@ struct PhysicsWorld::Impl {
                 mesh->vertex_positions(mesh_points, with_triangles ? &triangles : nullptr)) {
             return *error;
         }
-        Vec3 low = mesh_points.front();
-        Vec3 high = low;
-        for (const Vec3& p : mesh_points) {
-            low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
-            high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
-        }
-        const Vec3 size = object.size();
-        const Vec3 center{(low.x + high.x) * 0.5f, (low.y + high.y) * 0.5f, (low.z + high.z) * 0.5f};
-        auto fit = [](float target, float extent) { return extent > 1e-6f ? target / extent : 1.f; };
-        const Vec3 scale{fit(size.x, high.x - low.x), fit(size.y, high.y - low.y), fit(size.z, high.z - low.z)};
-        points.clear();
-        for (const Vec3& p : mesh_points) {
-            points.push_back(b3Vec3{(p.x - center.x) * scale.x, (p.y - center.y) * scale.y, (p.z - center.z) * scale.z});
-        }
+        fit_points(mesh_points, object.size(), center, points);
         return {};
     }
 
     // A hull of the Mesh's points. Null, with one warning, when there is no
     // hull to build.
-    b3HullData* make_hull(DataModel& game, PhysicsObject& object) {
-        std::string why = fitted_mesh(game, object, false);
+    b3HullData* make_hull(DataModel& game, PhysicsObject& object, Vec3 center) {
+        std::string why = fitted_mesh(game, object, center, false);
         b3HullData* hull = nullptr;
         if (why.empty()) {
-            const int count = static_cast<int>(points.size());
-            hull = b3CreateHull(points.data(), count, kHullVertices);
-            if (hull == nullptr) {
-                hull = b3CreateHull(points.data(), count, kHullVerticesRetry);
-            }
+            hull = build_hull(points);
             if (hull == nullptr) {
                 why = "Box3D could not build a hull from its points";
             }
@@ -408,22 +581,11 @@ struct PhysicsWorld::Impl {
     // The whole Mesh as triangles, for an anchored Custom. Box3D keeps a
     // pointer to it, so the body record owns it. Null, with one warning, when
     // there is none.
-    b3MeshData* make_mesh(DataModel& game, PhysicsObject& object) {
-        std::string why = fitted_mesh(game, object, true);
+    b3MeshData* make_mesh(DataModel& game, PhysicsObject& object, Vec3 center) {
+        std::string why = fitted_mesh(game, object, center, true);
         b3MeshData* mesh = nullptr;
         if (why.empty()) {
-            indices.assign(triangles.begin(), triangles.end());
-            b3MeshDef def{};
-            def.vertices = points.data();
-            def.indices = indices.data();
-            def.vertexCount = static_cast<int>(points.size());
-            def.triangleCount = static_cast<int>(indices.size() / 3);
-            // A mesh's faces each have their own corners; welding joins them
-            // so edges between triangles are known.
-            def.weldVertices = true;
-            def.weldTolerance = 1e-4f;
-            def.identifyEdges = true;
-            mesh = b3CreateMesh(&def, nullptr, 0);
+            mesh = build_mesh(points, triangles, indices);
             if (mesh == nullptr) {
                 why = "Box3D could not build a mesh from its triangles";
             }
@@ -507,15 +669,15 @@ struct PhysicsWorld::Impl {
     }
 
     // A driven GameObject that is not where physics last put it was moved by
-    // a script or Properties: the body jumps there.
-    void follow_driven(DataModel& game, PhysicsObject& object, Body& record) {
+    // a script or Properties: the body jumps there. True when it did.
+    bool follow_driven(DataModel& game, PhysicsObject& object, Body& record) {
         const GameObject* driven = record.driven != 0 ? game.game_object(record.driven) : nullptr;
         if (driven == nullptr) {
-            return;
+            return false;
         }
         const Matrix4 now = driven->transform();
         if (same_matrix4(now, record.driven_pose)) {
-            return;
+            return false;
         }
         b3Vec3 position{};
         b3Quat rotation{};
@@ -527,6 +689,7 @@ struct PhysicsWorld::Impl {
         record.driven_pose = now;
         object.store_simulated(matrix_of(position, rotation, object.transform()), object.velocity(),
                                object.angular_velocity());
+        return true;
     }
 
     // What Box3D moved, back onto the instances.
@@ -565,5 +728,85 @@ std::size_t PhysicsWorld::body_count() const { return impl_->bodies.size(); }
 bool PhysicsWorld::has_body(InstanceId id) const { return impl_->bodies.count(id) != 0; }
 
 void PhysicsWorld::set_warning_sink(std::function<void(const std::string&)> sink) { impl_->warn = std::move(sink); }
+
+Vec3 PhysicsWorld::shape_center(const DataModel& game, const PhysicsObject& object) {
+    return center_for(game, object.driven_game_object());
+}
+
+void PhysicsWorld::collision_outline(const PhysicsObject& object, Vec3 center, const std::vector<Vec3>& mesh_points,
+                                     const std::vector<std::uint32_t>& triangles, std::vector<Vec3>& lines) {
+    constexpr float kPi = 3.14159265359f;
+    const Vec3 x{1.f, 0.f, 0.f};
+    const Vec3 y{0.f, 1.f, 0.f};
+    const Vec3 z{0.f, 0.f, 1.f};
+    lines.clear();
+    const Vec3 size = object.size();
+    switch (object.shape()) {
+    case PhysicsObject::Shape::Sphere: {
+        const float radius = size.x * 0.5f;
+        add_arc(lines, center, x, y, radius, 0.f, 2.f * kPi);
+        add_arc(lines, center, y, z, radius, 0.f, 2.f * kPi);
+        add_arc(lines, center, z, x, radius, 0.f, 2.f * kPi);
+        return;
+    }
+    case PhysicsObject::Shape::Capsule: {
+        // As make_shape builds it: a segment half tall each way along Y.
+        const float radius = size.x * 0.5f;
+        const float half = std::max(size.y - size.x, 0.f) * 0.5f;
+        const Vec3 top{center.x, center.y + half, center.z};
+        const Vec3 bottom{center.x, center.y - half, center.z};
+        add_arc(lines, top, x, z, radius, 0.f, 2.f * kPi);
+        add_arc(lines, bottom, x, z, radius, 0.f, 2.f * kPi);
+        if (half > 0.f) {
+            for (const Vec3& side : {Vec3{radius, 0.f, 0.f}, Vec3{-radius, 0.f, 0.f}, Vec3{0.f, 0.f, radius},
+                                     Vec3{0.f, 0.f, -radius}}) {
+                add_line(lines, Vec3{bottom.x + side.x, bottom.y, bottom.z + side.z},
+                         Vec3{top.x + side.x, top.y, top.z + side.z});
+            }
+        }
+        // The caps, across X and across Z.
+        add_arc(lines, top, x, y, radius, 0.f, kPi);
+        add_arc(lines, top, z, y, radius, 0.f, kPi);
+        add_arc(lines, bottom, x, y, radius, kPi, 2.f * kPi);
+        add_arc(lines, bottom, z, y, radius, kPi, 2.f * kPi);
+        return;
+    }
+    case PhysicsObject::Shape::Custom:
+    case PhysicsObject::Shape::Hull: {
+        if (mesh_points.empty()) {
+            break;
+        }
+        std::vector<b3Vec3> points;
+        fit_points(mesh_points, size, center, points);
+        if (object.shape() == PhysicsObject::Shape::Custom && object.anchored()) {
+            std::vector<std::int32_t> indices;
+            b3MeshData* mesh = build_mesh(points, triangles, indices);
+            if (mesh == nullptr) {
+                break;
+            }
+            b3DestroyMesh(mesh);
+            outline_triangles(points, triangles, lines);
+            return;
+        }
+        b3HullData* hull = build_hull(points);
+        if (hull == nullptr) {
+            break;
+        }
+        outline_hull(*hull, lines);
+        b3DestroyHull(hull);
+        return;
+    }
+    case PhysicsObject::Shape::Box:
+        break;
+    }
+    outline_box(Vec3{size.x * 0.5f, size.y * 0.5f, size.z * 0.5f}, center, lines);
+}
+
+Matrix4 PhysicsWorld::body_pose(const Matrix4& transform) {
+    b3Vec3 position;
+    b3Quat rotation;
+    pose_of(transform, position, rotation);
+    return matrix_of(position, rotation, matrix4_identity());
+}
 
 }  // namespace engine_core

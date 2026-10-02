@@ -200,6 +200,10 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
     if (whole || any(change.fields, VisualField::Camera)) {
         inst->field_of_view = field_of_view_of(*object);
     }
+    if (whole || any(change.fields, VisualField::Appearance)) {
+        inst->color = object->color();
+        inst->transparency = unit(object->transparency());
+    }
     if (whole || any(change.fields, VisualField::Light)) {
         inst->light = light_of(*object);
     }
@@ -220,6 +224,8 @@ void SnapshotPump::resync(DataModel& game) {
         inst.transform_origin = WriteOrigin::Simulation;
         inst.prefab = acquire_prefab(object.prefab_guid());
         inst.field_of_view = field_of_view_of(object);
+        inst.color = object.color();
+        inst.transparency = unit(object.transparency());
         inst.light = light_of(object);
         base_ids_.insert(object.id());
         base_.instances.push_back(inst);

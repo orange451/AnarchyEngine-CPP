@@ -52,6 +52,10 @@ struct VisualInstance {
     std::uint32_t prefab = 0;
     // A Camera's FieldOfView, in degrees. 0 when the row is not a Camera.
     float field_of_view = 0.f;
+    // The GameObject's Color, which multiplies each Material Color it draws,
+    // and its Transparency, clamped to 0..1, which stacks on each Material's.
+    ColorRgb color{1.f, 1.f, 1.f, 1.f};
+    float transparency = 0.f;
     VisualLight light;
 };
 

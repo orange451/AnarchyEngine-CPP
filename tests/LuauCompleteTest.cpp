@@ -228,7 +228,8 @@ void testInstances() {
     expect_missing(triangle, "Position", "a GameObject moves through Transform, not Position");
     expect_has(triangle, "Name", "Tri0.Name");
     expect_missing(triangle, "Source", "Tri0.Source");
-    expect_missing(triangle, "Color", "Tri0.Color");
+    expect_has(triangle, "Color", "Tri0.Color");
+    expect_has(triangle, "Transparency", "Tri0.Transparency");
     const ide::CompletionList waited = at_end("local tri = game:WaitForChild(\"Tri0\")\ntri.", world, 5);
     expect_has(waited, "Transform", "WaitForChild Tri0.Transform");
     expect_missing(waited, "Position", "WaitForChild Tri0.Position");

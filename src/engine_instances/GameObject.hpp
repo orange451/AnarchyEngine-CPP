@@ -40,6 +40,20 @@ public:
     // The Prefab's GUID as stored, whether or not an instance holds it now. Empty for none.
     const std::string& prefab_guid() const { return prefab_ref_.guid(); }
 
+    // Color multiplies the Color of each Material the Prefab draws with, and
+    // Transparency stacks on each Material's: what shows is the product of
+    // their opacities. Saved registry properties, like Camera's FieldOfView.
+    // Transparency is stored as any finite number and drawn clamped to 0..1,
+    // as a Material's is. A Light's own Color shadows this one, so a Light's
+    // Color is the light it gives, and its meshes draw untinted.
+    static constexpr ColorRgb kDefaultColor{1.f, 1.f, 1.f, 1.f};
+    static constexpr double kDefaultTransparency = 0.0;
+    ColorRgb color() const { return color_; }
+    double transparency() const { return transparency_; }
+    // SimulationThread. A value that is not finite is refused: returns why and changes nothing.
+    std::optional<std::string> set_color(ColorRgb color);
+    std::optional<std::string> set_transparency(double value);
+
     // Transform when it differs from a new GameObject's.
     void save_properties(PropertyBag& out) const override;
     void default_properties(PropertyBag& out) const override;
@@ -62,6 +76,8 @@ private:
     void store_transform(const Matrix4& transform);
 
     InstanceRef prefab_ref_;
+    ColorRgb color_ = kDefaultColor;
+    double transparency_ = kDefaultTransparency;
 };
 
 }  // namespace engine_core

@@ -7,10 +7,12 @@
 #include "ChangeHistoryService.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
+#include "PropertyBag.hpp"
 #include "SnapshotPump.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -366,4 +368,76 @@ TEST_CASE("position() is the Transform's translation, and set_position() keeps t
     // One Transform edit: undo puts back the whole matrix.
     scene.game.history().undo();
     REQUIRE(engine_core::same_matrix4(part.transform(), turned));
+}
+
+TEST_CASE("a GameObject's Color and Transparency reach its row, undo, save, and come back at Stop", "[render]") {
+    Scene scene;
+    engine_core::GameObject& box = scene.object(0);
+    const InstanceId id = box.id();
+    scene.game.history().end_gesture();
+    scene.frame();
+    REQUIRE(scene.row(id)->color.g == 1.f);
+    REQUIRE(scene.row(id)->transparency == 0.f);
+
+    // Defaults save nothing.
+    engine_core::PropertyBag saved;
+    box.save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "Color") == nullptr);
+    REQUIRE(engine_core::bag_find(saved, "Transparency") == nullptr);
+
+    scene.game.history().set_pending_gesture("Tint");
+    REQUIRE_FALSE(box.set_color(rgb(1.f, 0.5f, 0.25f)));
+    REQUIRE_FALSE(box.set_transparency(0.5));
+    scene.game.history().end_gesture();
+    scene.frame();
+    REQUIRE(scene.row(id)->color.g == 0.5f);
+    REQUIRE(scene.row(id)->color.b == 0.25f);
+    REQUIRE(scene.row(id)->transparency == 0.5f);
+
+    // Stored as given, drawn clamped.
+    scene.game.history().set_pending_gesture("Hide");
+    REQUIRE_FALSE(box.set_transparency(3.0));
+    scene.game.history().end_gesture();
+    scene.frame();
+    REQUIRE(box.transparency() == 3.0);
+    REQUIRE(scene.row(id)->transparency == 1.f);
+    REQUIRE(*box.set_transparency(std::nan("")) == "Transparency must be a finite number");
+    REQUIRE(*box.set_color(rgb(std::nanf(""), 0.f, 0.f)) == "Color must be finite");
+
+    saved.clear();
+    box.save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "Color") != nullptr);
+    REQUIRE(engine_core::bag_find(saved, "Transparency")->as_number() == 3.0);
+
+    scene.game.history().undo();
+    REQUIRE(box.transparency() == 0.5);
+    scene.game.history().undo();
+    REQUIRE(box.color().g == 1.f);
+    REQUIRE(box.transparency() == 0.0);
+    scene.frame();
+    REQUIRE(scene.row(id)->color.g == 1.f);
+
+    REQUIRE_FALSE(box.set_transparency(0.25));
+    scene.game.capture_place();
+    scene.game.start_simulation();
+    REQUIRE_FALSE(scene.game.game_object(id)->set_transparency(0.75));
+    REQUIRE_FALSE(scene.game.game_object(id)->set_color(rgb(0.f, 0.f, 0.f)));
+    scene.game.stop_simulation();
+    scene.frame();
+    REQUIRE(scene.game.game_object(id)->transparency() == 0.25);
+    REQUIRE(scene.game.game_object(id)->color().r == 1.f);
+    REQUIRE(scene.row(id)->transparency == 0.25f);
+}
+
+TEST_CASE("a Light's Color is its own, not the GameObject tint", "[render]") {
+    const engine_core::LuaField* field = engine_core::lua_class_find("PointLight", "Color");
+    REQUIRE(field != nullptr);
+    std::vector<engine_core::LuaField> saved = engine_core::lua_saved_fields("PointLight");
+    int colors = 0;
+    for (const engine_core::LuaField& each : saved) {
+        colors += std::string(each.name) == "Color" ? 1 : 0;
+    }
+    REQUIRE(colors == 1);
+    REQUIRE(field->read == engine_core::lua_class_find("SpotLight", "Color")->read);
+    REQUIRE(field->read != engine_core::lua_class_find("GameObject", "Color")->read);
 }

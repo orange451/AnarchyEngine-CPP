@@ -279,9 +279,15 @@ void GameView::collectMeshes() {
         if (row.prefab == 0 || row.prefab >= snapshot.prefabs.size()) {
             continue;
         }
+        // The GameObject's Color tints each Material's, and its opacity multiplies each Material's.
+        const float opacity = 1.f - row.transparency;
         for (const MeshDraw& model : prefabMeshes_[row.prefab]) {
-            meshDraws_.push_back(model);
-            meshDraws_.back().model = row.world;
+            MeshDraw& draw = meshDraws_.emplace_back(model);
+            draw.model = row.world;
+            draw.color[0] *= row.color.r;
+            draw.color[1] *= row.color.g;
+            draw.color[2] *= row.color.b;
+            draw.transparency = 1.f - (1.f - std::clamp(draw.transparency, 0.f, 1.f)) * opacity;
         }
     }
     SceneLighting lighting;

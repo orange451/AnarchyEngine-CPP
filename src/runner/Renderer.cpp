@@ -412,6 +412,16 @@ void Multiply(const float* a, const float* b, float* out) {
     }
 }
 
+// Culls the faces turned away from the camera. Meshes are wound CCW, but a
+// Transform that mirrors, scaled negative on an odd number of axes, turns
+// the winding around, so its back faces are the CW ones.
+void CullBackFaces(const float* model) {
+    const float* m = model;
+    const float determinant = m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2]) +
+                              m[8] * (m[1] * m[6] - m[5] * m[2]);
+    glCullFace(determinant < 0.f ? RT_GL_FRONT : RT_GL_BACK);
+}
+
 // Right-handed and Y up: the camera looks down its -Z.
 void LookAt(const float* eye, const float* target, float* out) {
     float f[3] = {target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]};
@@ -748,7 +758,7 @@ void Renderer::bindGBuffer(const Program& program) {
 bool Renderer::geometryPass(const MeshDraw* meshes, int count, const float* projection) {
     glBindFramebuffer(RT_GL_FRAMEBUFFER, gbufferFbo_);
     glDisable(GL_BLEND);
-    glDisable(RT_GL_CULL_FACE);
+    glEnable(RT_GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(RT_GL_LESS);
     glDepthMask(GL_TRUE);
@@ -771,6 +781,7 @@ bool Renderer::geometryPass(const MeshDraw* meshes, int count, const float* proj
             continue;
         }
         bindMaterial(geometry_, draw);
+        CullBackFaces(draw.model.m);
         draw.mesh->bind();
         if (!asked && !CanDraw(geometry_.id)) {
             return false;
@@ -778,6 +789,8 @@ bool Renderer::geometryPass(const MeshDraw* meshes, int count, const float* proj
         asked = true;
         draw.mesh->draw(0);
     }
+    glDisable(RT_GL_CULL_FACE);
+    glCullFace(RT_GL_BACK);
     return true;
 }
 
@@ -961,10 +974,12 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, int count, const float* 
         glUniform4fv(forward_.lightDirections, lightCount, directions);
         glUniform4fv(forward_.lightCones, lightCount, cones);
     }
+    glEnable(RT_GL_CULL_FACE);
     bool asked = false;
     for (const int index : transparent_) {
         const MeshDraw& draw = meshes[index];
         bindMaterial(forward_, draw);
+        CullBackFaces(draw.model.m);
         draw.mesh->bind();
         if (!asked && !CanDraw(forward_.id)) {
             return false;
@@ -972,6 +987,8 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, int count, const float* 
         asked = true;
         draw.mesh->draw(0);
     }
+    glDisable(RT_GL_CULL_FACE);
+    glCullFace(RT_GL_BACK);
     glDisable(GL_BLEND);
     glDepthMask(GL_TRUE);
     return true;

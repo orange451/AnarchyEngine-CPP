@@ -182,8 +182,8 @@ TEST_CASE("SS5 Lighting's properties save, undo, and come back at Stop", "[SS5]"
     REQUIRE(lighting.brightness() == 3.5);
 
     // Numbers do not go below 0.
-    REQUIRE_FALSE(lighting.set_fog_end(-5.0));
-    REQUIRE(lighting.fog_end() == 0.0);
+    REQUIRE_FALSE(lighting.set_exposure(-5.0));
+    REQUIRE(lighting.exposure() == 0.0);
     REQUIRE(*lighting.set_brightness(std::nan("")) == "Brightness must be a finite number");
     REQUIRE(lighting.brightness() == 3.5);
 
@@ -204,7 +204,7 @@ TEST_CASE("SS5 Lighting's properties save, undo, and come back at Stop", "[SS5]"
         REQUIRE(error.empty());
     }
     REQUIRE(loaded.brightness() == 3.5);
-    REQUIRE(loaded.fog_end() == 0.0);
+    REQUIRE(loaded.exposure() == 0.0);
     REQUIRE(engine_core::same_color(loaded.ambient(), red));
     std::string error;
     REQUIRE(loaded.load_property("Brightness", engine_core::JsonValue::string("bright"), error));
@@ -253,7 +253,7 @@ TEST_CASE("SS6 scripts see the scene services and cannot move them", "[SS6]") {
 
         game.Lighting.Brightness = 4
         _G.lighting = game.Lighting.Brightness == 4
-        _G.no_nan = refuses(function() game.Lighting.FogEnd = 0 / 0 end, "FogEnd must be a finite number")
+        _G.no_nan = refuses(function() game.Lighting.Exposure = 0 / 0 end, "Exposure must be a finite number")
     )");
     rig.game.start_simulation();
     rig.frames(1, 0.05);
@@ -519,10 +519,10 @@ TEST_CASE("SS13 registry properties fire Changed by name and default to a new in
         local seen = {}
         game.Lighting.Changed:Connect(function(property)
             table.insert(seen, property)
-            _G.names = table.concat(seen, ",") == "Brightness,FogColor"
+            _G.names = table.concat(seen, ",") == "Brightness,Ambient"
         end)
         game.Lighting.Brightness = 3
-        game.Lighting.FogColor = Color3.new(1, 0, 0)
+        game.Lighting.Ambient = Color3.new(1, 0, 0)
     )");
     rig.game.start_simulation();
     rig.frames(3, 0.05);

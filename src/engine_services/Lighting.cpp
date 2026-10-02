@@ -70,12 +70,6 @@ std::optional<std::string> Lighting::set_brightness(double value) {
     return set_number("Brightness", brightness_, value);
 }
 
-std::optional<std::string> Lighting::set_fog_color(ColorRgb color) { return set_color("FogColor", fog_color_, color); }
-
-std::optional<std::string> Lighting::set_fog_start(double value) { return set_number("FogStart", fog_start_, value); }
-
-std::optional<std::string> Lighting::set_fog_end(double value) { return set_number("FogEnd", fog_end_, value); }
-
 std::optional<std::string> Lighting::set_exposure(double value) { return set_number("Exposure", exposure_, value); }
 
 std::optional<std::string> Lighting::set_saturation(double value) {
@@ -139,9 +133,6 @@ ANARCHY_LUA_REGISTER(register_lighting_lua) {
     // The defaults, as a file would hold them, from the class's own constants.
     static const std::string ambient = color_json(Lighting::kDefaultAmbient);
     static const std::string brightness = number_json(Lighting::kDefaultBrightness);
-    static const std::string fog_color = color_json(Lighting::kDefaultFogColor);
-    static const std::string fog_start = number_json(Lighting::kDefaultFogStart);
-    static const std::string fog_end = number_json(Lighting::kDefaultFogEnd);
     static const std::string exposure = number_json(Lighting::kDefaultExposure);
     static const std::string saturation = number_json(Lighting::kDefaultSaturation);
     static const std::string gamma = number_json(Lighting::kDefaultGamma);
@@ -150,12 +141,6 @@ ANARCHY_LUA_REGISTER(register_lighting_lua) {
                            ambient.c_str()),
         lua_saved_property("Brightness", "number", read_number<&Lighting::brightness>,
                            write_number<&Lighting::set_brightness>, brightness.c_str()),
-        lua_saved_property("FogColor", "Color3", read_color<&Lighting::fog_color>,
-                           write_color<&Lighting::set_fog_color>, fog_color.c_str()),
-        lua_saved_property("FogStart", "number", read_number<&Lighting::fog_start>,
-                           write_number<&Lighting::set_fog_start>, fog_start.c_str()),
-        lua_saved_property("FogEnd", "number", read_number<&Lighting::fog_end>, write_number<&Lighting::set_fog_end>,
-                           fog_end.c_str()),
         lua_slider(lua_saved_property("Exposure", "number", read_number<&Lighting::exposure>,
                                       write_number<&Lighting::set_exposure>, exposure.c_str()),
                    0.0, 2.0),

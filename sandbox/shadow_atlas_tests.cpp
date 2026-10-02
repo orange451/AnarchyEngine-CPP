@@ -54,3 +54,27 @@ TEST_CASE("AT2 sizes mix without overlapping, and a size it cannot give is refus
     atlas.release(small);
     REQUIRE(atlas.allocate(256).size == 256);
 }
+
+TEST_CASE("AT3 releasing a tile twice, or one from before a reset, changes nothing", "[shadow]") {
+    ShadowAtlasAllocator atlas;
+    atlas.reset(512, 64);
+    const AtlasTile t = atlas.allocate(64);
+    REQUIRE(t.size == 64);
+    atlas.release(t);
+    REQUIRE(atlas.freeTexels() == 512 * 512);
+    atlas.release(t);
+    REQUIRE(atlas.freeTexels() == 512 * 512);
+    const AtlasTile big = atlas.allocate(512);
+    REQUIRE(big.size == 512);
+    REQUIRE(atlas.allocate(64).size == 0);
+
+    atlas.reset(512, 64);
+    const AtlasTile stale = atlas.allocate(64);
+    REQUIRE(stale.size == 64);
+    atlas.reset(512, 64);
+    atlas.release(stale);
+    REQUIRE(atlas.freeTexels() == 512 * 512);
+    const AtlasTile a = atlas.allocate(512);
+    REQUIRE(a.size == 512);
+    REQUIRE(atlas.allocate(64).size == 0);
+}

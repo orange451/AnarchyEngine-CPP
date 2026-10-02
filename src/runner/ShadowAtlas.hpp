@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <map>
+#include <set>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -24,6 +26,8 @@ public:
     // A free tile size texels across, or size 0 when size is not a power of
     // two from minTile to the atlas's size, or no block that big is free.
     AtlasTile allocate(int size);
+    // Return a tile to the atlas. A tile that is not outstanding (already
+    // released, or from before the last reset) is ignored.
     void release(const AtlasTile& tile);
     std::int64_t freeTexels() const;
     int atlasSize() const { return atlasSize_; }
@@ -32,6 +36,8 @@ private:
     using Corner = std::pair<int, int>;
     // Free blocks' corners, by size.
     std::map<int, std::vector<Corner>> free_;
+    // Tiles currently allocated: (x, y, size).
+    std::set<std::tuple<int, int, int>> allocated_;
     int atlasSize_ = 0;
     int minTile_ = 0;
 };

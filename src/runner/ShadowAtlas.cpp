@@ -6,6 +6,7 @@ namespace runner {
 
 void ShadowAtlasAllocator::reset(int atlasSize, int minTile) {
     free_.clear();
+    allocated_.clear();
     atlasSize_ = atlasSize;
     minTile_ = minTile;
     if (atlasSize > 0) {
@@ -34,13 +35,20 @@ AtlasTile ShadowAtlasAllocator::allocate(int size) {
         free_[block].push_back({corner.first, corner.second + block});
         free_[block].push_back({corner.first + block, corner.second + block});
     }
-    return {corner.first, corner.second, size};
+    const AtlasTile tile{corner.first, corner.second, size};
+    allocated_.insert(std::make_tuple(tile.x, tile.y, tile.size));
+    return tile;
 }
 
 void ShadowAtlasAllocator::release(const AtlasTile& tile) {
     if (tile.size <= 0) {
         return;
     }
+    // Only release tiles that are currently allocated.
+    if (allocated_.find(std::make_tuple(tile.x, tile.y, tile.size)) == allocated_.end()) {
+        return;
+    }
+    allocated_.erase(std::make_tuple(tile.x, tile.y, tile.size));
     int size = tile.size;
     int x = tile.x;
     int y = tile.y;

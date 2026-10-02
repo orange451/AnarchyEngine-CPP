@@ -241,7 +241,8 @@ private:
         float color[3];
         float radius;
         float intensity;
-        // Its entry in shadowRequests_ and shadowLookups_, or -1 for none.
+        // Its entry in shadowRequests_ and shadowLookups_, -1 for none, or
+        // kSunShadow for the sun's cascades.
         int shadow = -1;
     };
 
@@ -338,6 +339,10 @@ private:
     std::vector<float> transparentDepth_;
     std::vector<ShadowRequest> shadowRequests_;
     std::vector<ShadowLookup> shadowLookups_;
+    // The first shadowed DirectionalLight this frame, if any, and its lookup.
+    SunRequest sunShadow_;
+    bool hasSunShadow_ = false;
+    ShadowLookup sunLookup_;
     ShadowRenderer shadows_;
     ShadowSettings shadowSettings_;
 

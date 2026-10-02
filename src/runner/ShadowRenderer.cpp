@@ -59,6 +59,7 @@ bool ShadowRenderer::initialize() {
     depth_.model = glGetUniformLocation(depth_.id, "uModel");
     depth_.viewProjection = glGetUniformLocation(depth_.id, "uViewProjection");
     glGenFramebuffers(1, &atlasFbo_);
+    glGenFramebuffers(1, &cascadeFbo_);
     atlasStandIn_ = MakeDepth(GL_TEXTURE_2D, 1, 1, &kFarDepth);
     cascadeStandIn_ = MakeDepth(RT_GL_TEXTURE_2D_ARRAY, 1, 1, &kFarDepth);
     return true;
@@ -73,6 +74,10 @@ void ShadowRenderer::shutdown() {
         glDeleteFramebuffers(1, &atlasFbo_);
         atlasFbo_ = 0;
     }
+    if (cascadeFbo_ != 0) {
+        glDeleteFramebuffers(1, &cascadeFbo_);
+        cascadeFbo_ = 0;
+    }
     for (unsigned* texture : {&atlas_, &cascades_, &atlasStandIn_, &cascadeStandIn_}) {
         if (*texture != 0) {
             glDeleteTextures(1, texture);
@@ -80,6 +85,7 @@ void ShadowRenderer::shutdown() {
         }
     }
     atlasTextureSize_ = 0;
+    cascadeSize_ = 0;
     planner_.clear();
 }
 
@@ -220,6 +226,70 @@ ShadowLookup ShadowRenderer::lookup(std::uint64_t key) const {
         out.tiles[t][1] = static_cast<float>(shadow->tiles[t].y) / atlas;
         out.tiles[t][2] = static_cast<float>(shadow->tiles[t].size) / atlas;
     }
+    return out;
+}
+
+bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, const CameraView& camera,
+                             const ShadowSettings& settings) {
+    if (refused_) {
+        return true;
+    }
+    const int size = std::max(settings.cascadeSize, 16);
+    if (sun != nullptr && size != cascadeSize_) {
+        if (cascades_ != 0) {
+            glDeleteTextures(1, &cascades_);
+        }
+        cascades_ = MakeDepth(RT_GL_TEXTURE_2D_ARRAY, size, kMaxCascades, nullptr);
+        cascadeSize_ = size;
+        glBindFramebuffer(RT_GL_FRAMEBUFFER, cascadeFbo_);
+        const GLenum none = RT_GL_NONE;
+        glDrawBuffers(1, &none);
+        glReadBuffer(RT_GL_NONE);
+        planner_.forgetCascades();
+    }
+    const std::vector<CascadeDraw> draws = planner_.planCascades(sun, casters_, camera, settings);
+    if (draws.empty()) {
+        return true;
+    }
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, cascadeFbo_);
+    begin();
+    glViewport(0, 0, size, size);
+    glScissor(0, 0, size, size);
+    bool asked = false;
+    for (const CascadeDraw& draw : draws) {
+        glFramebufferTextureLayer(RT_GL_FRAMEBUFFER, RT_GL_DEPTH_ATTACHMENT, cascades_, 0, draw.layer);
+        if (glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) != RT_GL_FRAMEBUFFER_COMPLETE) {
+            if (!refused_) {
+                std::fprintf(stderr, "This driver will not draw shadow maps; lights are drawn without shadows.\n");
+                refused_ = true;
+            }
+            end();
+            return true;
+        }
+        glClear(GL_DEPTH_BUFFER_BIT);
+        if (!drawCasters(draw.viewProjection, draw.casters, meshes, asked)) {
+            end();
+            return false;
+        }
+    }
+    end();
+    planner_.commitCascades();
+    return true;
+}
+
+ShadowLookup ShadowRenderer::sunLookup() const {
+    ShadowLookup out;
+    const CascadeShadow* shadow = planner_.cascades();
+    if (shadow == nullptr || cascades_ == 0) {
+        return out;
+    }
+    out.kind = ShadowLookup::kCascades;
+    out.cascades = shadow->count;
+    for (int i = 0; i < shadow->count; ++i) {
+        out.matrices[i] = shadow->viewProjection[i];
+        out.texel[i] = shadow->texelWorld[i];
+    }
+    out.texelUv = 1.f / static_cast<float>(cascadeSize_);
     return out;
 }
 

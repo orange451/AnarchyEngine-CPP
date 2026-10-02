@@ -366,3 +366,71 @@ TEST_CASE("a must-draw light scheduled but not committed still reads as having n
     REQUIRE(Draws(Frame(planner, lights, {}, turned, Small()), 1) > 0);
     REQUIRE(planner.find(1) != nullptr);
 }
+
+TEST_CASE("CP1 the sun's cascades are reused while the camera and casters hold still", "[shadow]") {
+    ShadowPlanner planner;
+    SunRequest sun;
+    sun.shine = Normalize({0.3f, -1.f, 0.2f});
+    sun.shadowDistance = 20.f;
+    const std::vector<ShadowCaster> casters = {Box(100, {0.f, 0.f, 0.f})};
+    const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f});
+    REQUIRE(planner.planCascades(&sun, casters, camera, Small()).size() == 4);
+    REQUIRE(planner.cascades() == nullptr);  // not committed yet
+    planner.commitCascades();
+    REQUIRE(planner.cascades() != nullptr);
+    REQUIRE(planner.cascades()->count == 4);
+    REQUIRE(planner.planCascades(&sun, casters, camera, Small()).empty());
+    // The camera moves, or a caster does: drawn again.
+    REQUIRE_FALSE(planner.planCascades(&sun, casters, Camera({0.f, 2.f, 11.f}, {0.f, 0.f, 0.f}), Small()).empty());
+    planner.commitCascades();
+    REQUIRE_FALSE(planner.planCascades(&sun, {Box(100, {0.5f, 0.f, 0.f})}, Camera({0.f, 2.f, 11.f}, {0.f, 0.f, 0.f}),
+                                       Small())
+                      .empty());
+}
+
+TEST_CASE("CP2 a cascade reaches toward the sun for casters, up to its limit", "[shadow]") {
+    ShadowPlanner planner;
+    SunRequest sun;
+    sun.shine = {0.f, -1.f, 0.f};
+    sun.shadowDistance = 20.f;  // a 4 x 20 = 80 stud reach
+    const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f});
+    float splits[kMaxCascades + 1];
+    CascadeSplits(camera.nearZ, sun.shadowDistance, 4, 0.75f, splits);
+    const Sphere first = FrustumSliceSphere(camera.world, 60.f, 1.f, splits[0], splits[1]);
+    const std::vector<ShadowCaster> casters = {
+        Box(100, Add(first.center, {0.f, first.radius + 60.f, 0.f})),   // above, within reach
+        Box(101, Add(first.center, {0.f, first.radius + 200.f, 0.f})),  // above, past it
+    };
+    const std::vector<CascadeDraw> draws = planner.planCascades(&sun, casters, camera, Small());
+    REQUIRE(draws.size() == 4);
+    REQUIRE(std::count(draws[0].casters.begin(), draws[0].casters.end(), 0) == 1);
+    REQUIRE(std::count(draws[0].casters.begin(), draws[0].casters.end(), 1) == 0);
+}
+
+TEST_CASE("CP3 with no sun, or a ShadowDistance inside the near plane, there are no cascades", "[shadow]") {
+    ShadowPlanner planner;
+    const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f});
+    REQUIRE(planner.planCascades(nullptr, {}, camera, Small()).empty());
+    SunRequest sun;
+    sun.shadowDistance = 0.05f;
+    REQUIRE(planner.planCascades(&sun, {}, camera, Small()).empty());
+    planner.commitCascades();
+    REQUIRE(planner.cascades() == nullptr);
+}
+
+TEST_CASE("CP4 the sun's own meshes cast nothing for it", "[shadow]") {
+    ShadowPlanner planner;
+    SunRequest sun;
+    sun.owner = 7;
+    sun.shadowDistance = 20.f;
+    const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f});
+    const std::vector<CascadeDraw> draws =
+        planner.planCascades(&sun, {Box(100, {0.f, 0.f, 0.f}, 7), Box(101, {0.f, 0.f, 0.f}, 8)}, camera, Small());
+    REQUIRE_FALSE(draws.empty());
+    bool otherDrawn = false;
+    for (const CascadeDraw& draw : draws) {
+        REQUIRE(std::count(draw.casters.begin(), draw.casters.end(), 0) == 0);
+        otherDrawn = otherDrawn || std::count(draw.casters.begin(), draw.casters.end(), 1) == 1;
+    }
+    REQUIRE(otherDrawn);
+}

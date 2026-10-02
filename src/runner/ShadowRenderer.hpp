@@ -49,6 +49,12 @@ public:
               const ShadowSettings& settings);
     // How the light pass reads key's map: kNone before it has one.
     ShadowLookup lookup(std::uint64_t key) const;
+    // Draws the sun's cascades when they changed, after draw in the same
+    // frame (it casts from the same meshes). sun null draws none.
+    bool drawSun(const SunRequest* sun, const MeshDraw* meshes, const CameraView& camera,
+                 const ShadowSettings& settings);
+    // How the light pass reads the sun's cascades: kNone without them.
+    ShadowLookup sunLookup() const;
 
     // The textures, or a 1 by 1 stand-in of the same kind, so each sampler always has one.
     unsigned atlasMap() const { return atlas_ != 0 ? atlas_ : atlasStandIn_; }
@@ -85,7 +91,9 @@ private:
     int plannedMax_ = 0;
     int plannedMinTile_ = 0;
     int plannedMaxTile_ = 0;
+    unsigned cascadeFbo_ = 0;
     unsigned cascades_ = 0;
+    int cascadeSize_ = 0;
     unsigned atlasStandIn_ = 0;
     unsigned cascadeStandIn_ = 0;
 };

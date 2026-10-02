@@ -80,6 +80,8 @@ void ShadowPlanner::clear() {
     records_.clear();
     pending_.clear();
     atlas_.reset(0, 0);
+    cascadeReady_ = false;
+    cascadePending_ = false;
 }
 
 bool ShadowPlanner::allocate(const std::vector<ShadowRequest>& requests, const std::vector<int>& order,
@@ -353,6 +355,74 @@ const LocalShadow* ShadowPlanner::find(std::uint64_t key) const {
     const auto it = records_.find(key);
     return it != records_.end() && it->second.ready && it->second.size > 0 && it->second.readable ? &it->second.drawn
                                                                                                     : nullptr;
+}
+
+std::vector<CascadeDraw> ShadowPlanner::planCascades(const SunRequest* sun, const std::vector<ShadowCaster>& casters,
+                                                     const CameraView& camera, const ShadowSettings& settings) {
+    std::vector<CascadeDraw> draws;
+    cascadePending_ = false;
+    if (sun == nullptr || !(sun->shadowDistance > camera.nearZ)) {
+        cascadeReady_ = false;
+        return draws;
+    }
+    const int count = std::clamp(settings.cascadeCount, 1, kMaxCascades);
+    float splits[kMaxCascades + 1];
+    CascadeSplits(camera.nearZ, sun->shadowDistance, count, settings.cascadeLambda, splits);
+    const float pullLimit = sun->shadowDistance * settings.cascadePullLimit;
+    CascadeShadow next;
+    next.count = count;
+    Hasher hash;
+    for (int i = 0; i < count; ++i) {
+        const Sphere slice =
+            FrustumSliceSphere(camera.world, camera.fovYDegrees, camera.aspect, splits[i], splits[i + 1]);
+        const CascadeFit box = FitCascade(slice, sun->shine, settings.cascadeSize);
+        // How far toward the sun to reach, so a caster outside the slice that
+        // shades it is still drawn. The sun's own meshes cast nothing for it.
+        float pull = 0.f;
+        for (const ShadowCaster& caster : casters) {
+            if ((sun->owner != 0 && caster.owner == sun->owner) ||
+                !SphereInFrustum(box.viewProjection, caster.bounds, true)) {
+                continue;
+            }
+            const float nearest =
+                -engine_core::matrix4_point(box.lightView, caster.bounds.center).z - caster.bounds.radius;
+            pull = std::max(pull, box.nearDepth - nearest);
+        }
+        const CascadeFit fit = FitCascade(slice, sun->shine, settings.cascadeSize, std::min(pull, pullLimit));
+        CascadeDraw draw;
+        draw.layer = i;
+        draw.viewProjection = fit.viewProjection;
+        hash.add(fit.viewProjection);
+        for (std::size_t c = 0; c < casters.size(); ++c) {
+            if ((sun->owner == 0 || casters[c].owner != sun->owner) &&
+                SphereInFrustum(fit.viewProjection, casters[c].bounds)) {
+                draw.casters.push_back(static_cast<int>(c));
+                hash.add(casters[c].mesh);
+                hash.add(casters[c].revision);
+                hash.add(casters[c].model);
+            }
+        }
+        next.viewProjection[i] = fit.viewProjection;
+        next.texelWorld[i] = fit.texelWorld;
+        draws.push_back(std::move(draw));
+    }
+    if (cascadeReady_ && hash.value() == cascadeHash_) {
+        return {};
+    }
+    pendingCascade_ = next;
+    pendingCascadeHash_ = hash.value();
+    cascadePending_ = true;
+    return draws;
+}
+
+void ShadowPlanner::commitCascades() {
+    if (!cascadePending_) {
+        return;
+    }
+    cascade_ = pendingCascade_;
+    cascadeHash_ = pendingCascadeHash_;
+    cascadeReady_ = true;
+    cascadePending_ = false;
 }
 
 }  // namespace runner

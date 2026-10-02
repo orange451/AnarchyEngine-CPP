@@ -39,6 +39,8 @@ constexpr int kUnitShadowAtlas = kUnitDiffuse;
 constexpr int kUnitShadowCascades = kUnitNormalMap;
 // A light with no instance names its map for one frame only.
 constexpr std::uint64_t kUncachedShadowKey = 1ull << 63;
+// A ViewLight's shadow: the sun's cascades.
+constexpr int kSunShadow = -2;
 
 // The legacy pipeline's stand-in sky when there is no Skybox: a flat dark
 // gray (64 of 255) times its light multiplier of 1/255.
@@ -577,6 +579,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         // The lights in view space, as every pass takes them.
         viewLights_.clear();
         shadowRequests_.clear();
+        hasSunShadow_ = false;
         for (int index = 0; lights != nullptr && index < lightCount; ++index) {
             const LightDraw& light = lights[index];
             const bool directional = light.kind == LightDraw::Kind::Directional;
@@ -629,6 +632,13 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
                 request.outerFovDegrees = light.outerFovDegrees;
                 out.shadow = static_cast<int>(shadowRequests_.size());
                 shadowRequests_.push_back(request);
+            }
+            if (light.shadows && shadowSettings_.enabled && directional && !hasSunShadow_) {
+                sunShadow_.owner = light.id;
+                sunShadow_.shine = Normalize({d[0], d[1], d[2]});
+                sunShadow_.shadowDistance = light.shadowDistance;
+                hasSunShadow_ = true;
+                out.shadow = kSunShadow;
             }
             viewLights_.push_back(out);
         }
@@ -782,7 +792,8 @@ void Renderer::bindGBuffer(const Program& program) {
 
 bool Renderer::shadowPass(const MeshDraw* meshes, int count, const float* projection) {
     shadowLookups_.assign(shadowRequests_.size(), ShadowLookup{});
-    if (shadowRequests_.empty()) {
+    sunLookup_ = ShadowLookup{};
+    if (shadowRequests_.empty() && !hasSunShadow_) {
         return true;
     }
     CameraView camera;
@@ -797,6 +808,10 @@ bool Renderer::shadowPass(const MeshDraw* meshes, int count, const float* projec
     if (!shadows_.draw(shadowRequests_, meshes, count, camera, shadowSettings_)) {
         return false;
     }
+    if (!shadows_.drawSun(hasSunShadow_ ? &sunShadow_ : nullptr, meshes, camera, shadowSettings_)) {
+        return false;
+    }
+    sunLookup_ = shadows_.sunLookup();
     for (std::size_t index = 0; index < shadowRequests_.size(); ++index) {
         shadowLookups_[index] = shadows_.lookup(shadowRequests_[index].key);
     }
@@ -906,6 +921,9 @@ bool Renderer::lightPass(const float* projection, const float* inverseProjection
     };
     const auto isSun = [](const ViewLight& light) { return light.cone[0] < -3.f; };
     const auto shadowOf = [this](const ViewLight& light) {
+        if (light.shadow == kSunShadow) {
+            return sunLookup_;
+        }
         return light.shadow >= 0 ? shadowLookups_[static_cast<std::size_t>(light.shadow)] : ShadowLookup{};
     };
 

@@ -130,6 +130,29 @@ struct ShadowPlan {
 // waits at most this many frames before it is aged ahead of them.
 constexpr int kMaxShadowWait = 4;
 
+// The first shadowed DirectionalLight this frame.
+struct SunRequest {
+    std::uint64_t owner = 0;
+    // Where it shines, unit length.
+    engine_core::Vec3 shine{0.f, -1.f, 0.f};
+    float shadowDistance = 100.f;
+};
+
+// One cascade to draw this frame: its layer of the cascade texture.
+struct CascadeDraw {
+    int layer = 0;
+    engine_core::Matrix4 viewProjection = engine_core::matrix4_identity();
+    // Indices into the casters planCascades was given.
+    std::vector<int> casters;
+};
+
+// The cascades as last drawn, which the light pass reads.
+struct CascadeShadow {
+    int count = 0;
+    engine_core::Matrix4 viewProjection[kMaxCascades] = {};
+    float texelWorld[kMaxCascades] = {};
+};
+
 // Decides, with no GL, which PointLight and SpotLight shadow tiles to draw
 // each frame, in an atlas it keeps. A light's map is redrawn only when its
 // fingerprint changes (the light, its tile, and every caster within its
@@ -159,6 +182,16 @@ public:
     std::int64_t atlasFreeTexels() const { return atlas_.freeTexels(); }
     // Forgets every map and the atlas, as when the settings or the context change.
     void clear();
+
+    // The sun's cascades to draw this frame: none when nothing they are fitted
+    // to or cast from changed since the last committed ones, or with no sun.
+    std::vector<CascadeDraw> planCascades(const SunRequest* sun, const std::vector<ShadowCaster>& casters,
+                                          const CameraView& camera, const ShadowSettings& settings);
+    void commitCascades();
+    // The cascades as last drawn, or null with none.
+    const CascadeShadow* cascades() const { return cascadeReady_ ? &cascade_ : nullptr; }
+    // Drops the cascades, as when their texture is made again.
+    void forgetCascades() { cascadeReady_ = false; }
 
 private:
     struct Record {
@@ -210,6 +243,12 @@ private:
     ShadowAtlasAllocator atlas_;
     std::unordered_map<std::uint64_t, Record> records_;
     std::vector<Pending> pending_;
+    CascadeShadow cascade_;
+    std::uint64_t cascadeHash_ = 0;
+    bool cascadeReady_ = false;
+    CascadeShadow pendingCascade_;
+    std::uint64_t pendingCascadeHash_ = 0;
+    bool cascadePending_ = false;
 };
 
 }  // namespace runner

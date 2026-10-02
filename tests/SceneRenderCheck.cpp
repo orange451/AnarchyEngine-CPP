@@ -540,6 +540,32 @@ int main() {
             Expect(std::abs(pointShadowed[1] - pointOpen[1]) <= 3,
                    "and leaves the open floor lit, with no seam or acne (" + std::to_string(pointShadowed[1]) + ")");
 
+            // A DirectionalLight shining from the -X side and down, as the others did.
+            runner::LightDraw sunLight;
+            sunLight.kind = runner::LightDraw::Kind::Directional;
+            sunLight.direction[0] = 0.894f;
+            sunLight.direction[1] = -0.447f;
+            sunLight.direction[2] = 0.f;
+            sunLight.intensity = 2.f;
+            sunLight.id = 11;
+            const std::array<int, 2> sunOpen = lit(sunLight, scene, 2);
+            sunLight.shadows = true;
+            const std::array<int, 2> sunShadowed = lit(sunLight, scene, 2);
+            Expect(sunOpen[0] > ambientFloor + 20 && std::abs(sunShadowed[0] - ambientFloor) <= 4,
+                   "a DirectionalLight's shadow falls behind the cube (" + std::to_string(sunShadowed[0]) + ")");
+            Expect(std::abs(sunShadowed[1] - sunOpen[1]) <= 3,
+                   "and leaves the open floor lit (" + std::to_string(sunShadowed[1]) + ")");
+            Expect(lit(sunLight, scene, 2) == sunShadowed, "a still camera reuses the cascades and draws the same");
+            // The floor is about 7.6 from the camera: past a ShadowDistance of 2, unshadowed.
+            sunLight.shadowDistance = 2.f;
+            Expect(std::abs(lit(sunLight, scene, 2)[0] - sunOpen[0]) <= 3, "past ShadowDistance there is no shadow");
+            // Straight down: the cube's shadow is under it, hidden, and nothing is NaN.
+            sunLight.shadowDistance = 100.f;
+            sunLight.direction[0] = 0.f;
+            sunLight.direction[1] = -1.f;
+            Expect(lit(sunLight, scene, 2)[0] > ambientFloor + 20, "a sun straight down lights the floor beside the cube");
+            Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "cascades leave no GL error");
+
             // Shadows off in the settings draws every light unshadowed.
             runner::ShadowSettings off;
             off.enabled = false;

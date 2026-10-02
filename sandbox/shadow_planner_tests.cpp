@@ -586,42 +586,75 @@ TEST_CASE("PN15 past what even the smallest tiles hold, only the lights that loo
     REQUIRE(Frame(planner, lights, {}, camera, settings).draws.empty());
 }
 
-TEST_CASE("PN16 the atlas adds a page only once a page is at its biggest", "[shadow]") {
-    ShadowPlanner planner;
-    ShadowSettings settings = Small();  // 256 growing to 512
-    settings.atlasMaxPages = 2;
+TEST_CASE("PN16 the atlas grows in one step to the smallest page, then fewest pages, that hold what is wanted",
+          "[shadow]") {
     const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f});
-    // Five lights the camera is inside want 491520 texels: more than two 256
-    // pages, so a page is not added while 256 can still double.
-    std::vector<ShadowRequest> lights;
-    for (std::uint64_t key = 1; key <= 5; ++key) {
-        lights.push_back(Point(key, {static_cast<float>(key), 0.f, 0.f}, 50.f));
-    }
-    REQUIRE(Frame(planner, lights, {}, camera, settings).atlasResized);
-    REQUIRE(planner.atlasSize() == 512);
-    REQUIRE(planner.atlasPages() == 1);
-    // Still more than one 512 page: the next frame adds a page.
-    REQUIRE(Frame(planner, lights, {}, camera, settings).atlasResized);
-    REQUIRE(planner.atlasSize() == 512);
-    REQUIRE(planner.atlasPages() == 2);
-    REQUIRE(planner.atlasFreeTexels() == 2 * 512 * 512 - 5 * 6 * 128 * 128);
-    for (std::uint64_t key = 1; key <= 5; ++key) {
-        INFO(key);
-        REQUIRE(TilesOf(planner, key).at(0).size == 128);
-    }
-    // Everyone fits: no more growth, and nothing redrawn.
-    const ShadowPlan still = Frame(planner, lights, {}, camera, settings);
-    REQUIRE_FALSE(still.atlasResized);
-    REQUIRE(still.draws.empty());
-    REQUIRE(planner.atlasPages() == 2);
+    // Lights the camera is inside, each wanting 128s.
+    const auto points = [](int count) {
+        std::vector<ShadowRequest> lights;
+        for (int key = 1; key <= count; ++key) {
+            lights.push_back(Point(static_cast<std::uint64_t>(key), {static_cast<float>(key), 0.f, 0.f}, 50.f));
+        }
+        return lights;
+    };
 
-    // A frame wanting no more than one 256 page does not grow it either.
-    ShadowPlanner small;
-    const ShadowRequest one = Spot(1, {0.f, 0.f, 0.f}, {0.f, 0.f, -1.f}, 50.f);  // one 128
-    REQUIRE(Frame(small, {one}, {}, camera, settings).atlasResized);
-    REQUIRE(small.atlasSize() == 256);
-    REQUIRE(small.atlasPages() == 1);
-    REQUIRE_FALSE(Frame(small, {one}, {}, camera, settings).atlasResized);
+    // Five want 491520 texels, more than one 512 page: from 256, straight
+    // to two 512 pages in the first frame.
+    {
+        ShadowPlanner planner;
+        ShadowSettings settings = Small();  // 256 growing to 512
+        settings.atlasMaxPages = 2;
+        const std::vector<ShadowRequest> lights = points(5);
+        REQUIRE(Frame(planner, lights, {}, camera, settings).atlasResized);
+        REQUIRE(planner.atlasSize() == 512);
+        REQUIRE(planner.atlasPages() == 2);
+        REQUIRE(planner.atlasFreeTexels() == 2 * 512 * 512 - 5 * 6 * 128 * 128);
+        for (std::uint64_t key = 1; key <= 5; ++key) {
+            INFO(key);
+            REQUIRE(TilesOf(planner, key).at(0).size == 128);
+        }
+        // Everyone fits: no more growth, and nothing redrawn.
+        const ShadowPlan still = Frame(planner, lights, {}, camera, settings);
+        REQUIRE_FALSE(still.atlasResized);
+        REQUIRE(still.draws.empty());
+    }
+    // Two want 196608: one 512 page holds them, so 256 doubles rather than
+    // taking three 256 pages.
+    {
+        ShadowPlanner planner;
+        ShadowSettings settings = Small();
+        settings.atlasMaxPages = 4;
+        Frame(planner, points(2), {}, camera, settings);
+        REQUIRE(planner.atlasSize() == 512);
+        REQUIRE(planner.atlasPages() == 1);
+    }
+    // Pages already at their biggest: nine SpotLights' 147456 texels take
+    // three 256 pages, added in one frame.
+    {
+        ShadowPlanner planner;
+        ShadowSettings settings = Small();
+        settings.atlasMaxSize = 256;
+        settings.atlasMaxPages = 4;
+        std::vector<ShadowRequest> spots;
+        for (std::uint64_t key = 1; key <= 9; ++key) {
+            spots.push_back(Spot(key, {static_cast<float>(key), 0.f, 0.f}, {0.f, 0.f, -1.f}, 50.f));
+        }
+        REQUIRE(Frame(planner, spots, {}, camera, settings).atlasResized);
+        REQUIRE(planner.atlasSize() == 256);
+        REQUIRE(planner.atlasPages() == 3);
+        REQUIRE_FALSE(Frame(planner, spots, {}, camera, settings).atlasResized);
+    }
+    // A frame wanting no more than one 256 page does not grow it.
+    {
+        ShadowPlanner planner;
+        ShadowSettings settings = Small();
+        settings.atlasMaxPages = 2;
+        const ShadowRequest one = Spot(1, {0.f, 0.f, 0.f}, {0.f, 0.f, -1.f}, 50.f);  // one 128
+        REQUIRE(Frame(planner, {one}, {}, camera, settings).atlasResized);
+        REQUIRE(planner.atlasSize() == 256);
+        REQUIRE(planner.atlasPages() == 1);
+        REQUIRE_FALSE(Frame(planner, {one}, {}, camera, settings).atlasResized);
+    }
 }
 
 TEST_CASE("PN17 a light the free blocks are too broken up for gets a smaller tile, and its own once there is room",
@@ -664,8 +697,150 @@ TEST_CASE("PN17 a light the free blocks are too broken up for gets a smaller til
     }
     REQUIRE(Frame(planner, lights, {}, camera, settings).draws.empty());
 
-    // The others go: now a 128 is free, and it moves into one.
-    Frame(planner, {lights.back()}, {}, camera, settings);
-    REQUIRE(TilesOf(planner, 17).at(0).size == 128);
-    REQUIRE(Frame(planner, {lights.back()}, {}, camera, settings).draws.empty());
+    SECTION("the others go: now a 128 is free, and it moves into one at once") {
+        Frame(planner, {lights.back()}, {}, camera, settings);
+        REQUIRE(TilesOf(planner, 17).at(0).size == 128);
+        REQUIRE(Frame(planner, {lights.back()}, {}, camera, settings).draws.empty());
+    }
+    SECTION("the others stay: once it has been short long enough, the atlas is packed again around it") {
+        // Two frames short so far; it waits out the rest.
+        for (int frame = 3; frame < kShortFramesBeforeRepack; ++frame) {
+            REQUIRE(Frame(planner, lights, {}, camera, settings).draws.empty());
+            REQUIRE(TilesOf(planner, 17).at(0).size == 64);
+        }
+        Frame(planner, lights, {}, camera, settings);
+        REQUIRE(TilesOf(planner, 17).at(0).size == 128);
+        for (const ShadowRequest& light : kept) {
+            REQUIRE(TilesOf(planner, light.key).at(0).size == 64);
+        }
+        REQUIRE(Frame(planner, lights, {}, camera, settings).draws.empty());
+    }
+}
+
+namespace {
+
+// One 256 page: two SpotLights hold 128s in two of its blocks, and the
+// other two blocks each hold two 64s with two free. Then the nearest light
+// of all arrives wanting a 128. What everyone wants is exactly the page, so
+// nobody is fitted smaller, but no 128 block is free.
+std::vector<ShadowRequest> Fragmented(ShadowPlanner& planner, const CameraView& camera,
+                                      const ShadowSettings& settings) {
+    std::vector<ShadowRequest> first = {Spot(1, {-5.f, 0.f, -50.f}, {0.f, 0.f, 1.f}, 5.f),
+                                        Spot(2, {5.f, 0.f, -50.f}, {0.f, 0.f, 1.f}, 5.f)};
+    for (std::uint64_t key = 3; key <= 10; ++key) {
+        first.push_back(Spot(key, {3.f * (static_cast<float>(key) - 6.f), 0.f, -100.f}, {0.f, 0.f, 1.f}, 5.f));
+    }
+    Frame(planner, first, {}, camera, settings);
+    REQUIRE(planner.atlasFreeTexels() == 0);
+    REQUIRE(TilesOf(planner, 1).at(0).size == 128);
+    REQUIRE(TilesOf(planner, 2).at(0).size == 128);
+
+    std::vector<ShadowRequest> lights = {first[0], first[1]};
+    int inBlock[4] = {};
+    for (std::size_t i = 2; i < first.size(); ++i) {
+        const AtlasTile tile = TilesOf(planner, first[i].key).at(0);
+        REQUIRE(tile.size == 64);
+        const int block = tile.x / 128 + 2 * (tile.y / 128);
+        if (++inBlock[block] > 2) {
+            lights.push_back(first[i]);
+        }
+    }
+    REQUIRE(lights.size() == 6);
+    lights.push_back(Spot(11, {0.f, 0.f, -30.f}, {0.f, 0.f, 1.f}, 5.f));
+    return lights;
+}
+
+}  // namespace
+
+TEST_CASE("PN18 a light held short by kept tiles gets its size back by a packing again, a few frames later",
+          "[shadow]") {
+    ShadowPlanner planner;
+    ShadowSettings settings = Small();
+    settings.atlasMaxSize = 256;
+    const CameraView camera = Camera({0.f, 0.f, 0.f}, {0.f, 0.f, -1.f});
+    const std::vector<ShadowRequest> lights = Fragmented(planner, camera, settings);
+
+    // At first it takes a 64 rather than none, and the farther ones keep their 128s.
+    Frame(planner, lights, {}, camera, settings);
+    REQUIRE(TilesOf(planner, 11).at(0).size == 64);
+    REQUIRE(TilesOf(planner, 1).at(0).size == 128);
+    for (int frame = 2; frame < kShortFramesBeforeRepack; ++frame) {
+        REQUIRE(Frame(planner, lights, {}, camera, settings).draws.empty());
+        REQUIRE(TilesOf(planner, 11).at(0).size == 64);
+    }
+    // Short that many frames running: everyone is packed again, biggest first.
+    REQUIRE_FALSE(Frame(planner, lights, {}, camera, settings).draws.empty());
+    REQUIRE(TilesOf(planner, 11).at(0).size == 128);
+    REQUIRE(TilesOf(planner, 1).at(0).size == 128);
+    REQUIRE(TilesOf(planner, 2).at(0).size == 128);
+    for (std::size_t i = 2; i + 1 < lights.size(); ++i) {
+        REQUIRE(TilesOf(planner, lights[i].key).at(0).size == 64);
+    }
+    REQUIRE(Frame(planner, lights, {}, camera, settings).draws.empty());
+}
+
+TEST_CASE("PN19 a short light fitted down to the size it already holds keeps its tile", "[shadow]") {
+    ShadowPlanner planner;
+    ShadowSettings settings = Small();
+    settings.atlasMaxSize = 256;
+    const CameraView camera = Camera({0.f, 0.f, 0.f}, {0.f, 0.f, -1.f});
+    const std::vector<ShadowRequest> lights = Fragmented(planner, camera, settings);
+    Frame(planner, lights, {}, camera, settings);
+    const AtlasTile held = TilesOf(planner, 11).at(0);
+    REQUIRE(held.size == 64);
+
+    // Tiles top out at 64 now: what it holds is all it wants.
+    settings.maxTile = 64;
+    const ShadowPlan plan = Frame(planner, lights, {}, camera, settings);
+    REQUIRE(Draws(plan, 11) == 0);
+    REQUIRE(Draws(plan, 1) > 0);  // its 128 went
+    const AtlasTile now = TilesOf(planner, 11).at(0);
+    REQUIRE((now.x == held.x && now.y == held.y && now.page == held.page && now.size == 64));
+}
+
+TEST_CASE("PN20 an atlas capped below its settings fits the lights to the cap instead of growing", "[shadow]") {
+    const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f});
+    // Two lights the camera is inside, wanting six 128s each: 196608 texels,
+    // which would grow 256 to 512.
+    const std::vector<ShadowRequest> lights = {Point(1, {0.f, 0.f, 0.f}, 50.f), Point(2, {1.f, 0.f, 0.f}, 50.f)};
+    ShadowSettings settings = Small();
+    settings.atlasMaxPages = 2;
+
+    ShadowPlanner capped;
+    capped.capAtlas(256, 1);
+    Frame(capped, lights, {}, camera, settings);
+    REQUIRE(capped.atlasSize() == 256);
+    REQUIRE(capped.atlasPages() == 1);
+    // 65536 texels: 2 halved to 64 (122880), then 1 (49152).
+    REQUIRE(TilesOf(capped, 1).at(0).size == 64);
+    REQUIRE(TilesOf(capped, 2).at(0).size == 64);
+    REQUIRE(Frame(capped, lights, {}, camera, settings).draws.empty());
+
+    // Capped after it grew: it goes back down, and everyone still gets a tile.
+    ShadowPlanner grown;
+    Frame(grown, lights, {}, camera, settings);
+    REQUIRE(grown.atlasSize() == 512);
+    grown.capAtlas(256, 1);
+    REQUIRE(Frame(grown, lights, {}, camera, settings).atlasResized);
+    REQUIRE(grown.atlasSize() == 256);
+    REQUIRE(TilesOf(grown, 1).at(0).size == 64);
+    REQUIRE(TilesOf(grown, 2).at(0).size == 64);
+}
+
+TEST_CASE("PN21 a growth step leaves every light without a map until its redraw commits", "[shadow]") {
+    ShadowPlanner planner;
+    const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f});
+    const ShadowRequest spot = Spot(1, {0.f, 0.f, 0.f}, {0.f, 0.f, -1.f}, 50.f);  // one 128
+    Frame(planner, {spot}, {}, camera, Small());
+    REQUIRE(planner.find(1) != nullptr);
+    REQUIRE(planner.atlasSize() == 256);
+
+    // Two PointLights more need a 512 page: every tile moves.
+    const std::vector<ShadowRequest> lights = {spot, Point(2, {1.f, 0.f, 0.f}, 50.f), Point(3, {2.f, 0.f, 0.f}, 50.f)};
+    const ShadowPlan plan = planner.plan(lights, {}, camera, Small());
+    REQUIRE(plan.atlasResized);
+    REQUIRE(Draws(plan, 1) > 0);
+    REQUIRE(planner.find(1) == nullptr);
+    planner.commit();
+    REQUIRE(planner.find(1) != nullptr);
 }

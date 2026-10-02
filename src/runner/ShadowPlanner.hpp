@@ -135,6 +135,10 @@ struct ShadowPlan {
 // waits at most this many frames before it is aged ahead of them.
 constexpr int kMaxShadowWait = 4;
 
+// A light held below its fitted size by how the kept tiles break the atlas
+// up, this many frames running, packs the atlas again around it.
+constexpr int kShortFramesBeforeRepack = 8;
+
 // The first shadowed DirectionalLight this frame.
 struct SunRequest {
     std::uint64_t owner = 0;
@@ -187,6 +191,13 @@ public:
     // The atlas's page size in texels square, and its page count.
     int atlasSize() const { return atlas_.pageSize(); }
     int atlasPages() const { return atlas_.pageCount(); }
+    // Caps the atlas at pageSize texels square and pages pages, below what
+    // the settings allow, as when the GPU would not make a bigger one. Past
+    // the cap the lights are fitted smaller. clear() lifts it.
+    void capAtlas(int pageSize, int pages) {
+        capSize_ = pageSize;
+        capPages_ = pages;
+    }
     // Free texels over every page.
     std::int64_t atlasFreeTexels() const { return atlas_.freeTexels(); }
     // Forgets every map and the atlas, as when the settings or the context change.
@@ -223,6 +234,8 @@ private:
         bool matches[6] = {};
         // Frames in a row a visible due face has lost the redraw cap.
         int waited = 0;
+        // Frames in a row it has ended allocation below its fitted size.
+        int shortFor = 0;
         // The fingerprint its map was drawn from, and the one it should be now.
         std::uint64_t hash = 0;
         std::uint64_t wantHash = 0;
@@ -251,15 +264,23 @@ private:
     // priority between equals. A light whose fitted size has not changed
     // keeps its tiles. One the free blocks are too broken up for takes the
     // biggest smaller size there is room for, and moves up to its fitted
-    // size on a later frame that has room.
+    // size on a later frame that has room; once a light has been short
+    // kShortFramesBeforeRepack frames running, it and every light packed
+    // after it give their tiles back and are packed again, biggest first.
     void allocate(const std::vector<ShadowRequest>& requests, const std::vector<int>& order,
                   const std::vector<int>& fitted, const ShadowSettings& settings);
     // count free tiles size texels across into tiles, or none and false.
     bool takeTiles(int size, int count, AtlasTile* tiles);
+    // Gives record tiles of its fitted size, or the biggest smaller size
+    // there is room for; one already holding tiles moves only to bigger ones.
+    void place(Record& record, int minTile);
     void releaseTiles(Record& record);
     void resetAtlas(int pageSize, int pages, int minTile);
 
     ShadowAtlasPages atlas_;
+    // capAtlas's cap, 0 for none.
+    int capSize_ = 0;
+    int capPages_ = 0;
     std::unordered_map<std::uint64_t, Record> records_;
     std::vector<Pending> pending_;
     CascadeShadow cascade_;

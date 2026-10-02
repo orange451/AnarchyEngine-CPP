@@ -1,7 +1,9 @@
 #include "IdeLayout.hpp"
 
+#include "AiClientsPage.hpp"
 #include "IdeAssets.hpp"
 #include "IdeLayoutInternal.hpp"
+#include "McpSetup.hpp"
 #include "ScratchResources.hpp"
 
 #include "EditorFont.hpp"
@@ -449,16 +451,9 @@ void IdeLayout::flushFrame() {
 }
 
 IdeLayout::~IdeLayout() {
-    // Before anything its tools reach is torn down. A tool call waiting for this
-    // thread gives up now, so joining the server below does not wait it out.
-    if (ui_calls_) {
-        ui_calls_->close();
-    }
+    // Before anything its tools reach is torn down.
+    stop_mcp();
     alive_.reset();
-    if (mcp_identity_ && !mcp_identity_->dir.empty()) {
-        remove_studio(mcp_identity_->dir, mcp_identity_->entry);
-    }
-    mcp_.reset();
     // Window teardown calls the close hook. Drop it first so that hook does not
     // touch docks that are already being destroyed.
     for (Floating& item : floating_) {
@@ -879,6 +874,22 @@ void IdeLayout::open_preferences() {
             mainStage_->setMaxFrameRate(Preferences::stage_frame_rate(fps));
         }
     });
+    AiClientsPage::Server server;
+    server.setting = [this] { return decide_mcp(preferences_.mcp_enabled(), engine_core::environment_variable); };
+    server.set_enabled = [this](bool on) {
+        preferences_.set_mcp_enabled(on);
+        std::string error;
+        if (!preferences_.save(error)) {
+            runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error,
+                                                         "Could not save your preferences: " + error);
+        }
+        apply_mcp_setting();
+    };
+    server.status = [this] { return mcp_status(); };
+    AiClientsPage::ClaudeCode claude;
+    claude.cli = find_claude_cli();
+    claude.bridge = find_bridge(executable_directory());
+    panel->add_page("AI", jadefx::make<AiClientsPage>(std::move(server), std::move(claude)));
     auto scene = jadefx::make<jadefx::Scene>(panel, static_cast<double>(kWidth), static_cast<double>(kHeight));
     window->stage().setScene(std::move(scene));
     LeaveFieldsOnEscape(window->stage());

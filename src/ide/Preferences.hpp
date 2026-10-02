@@ -49,6 +49,11 @@ public:
     std::string editor_font() const;
     void set_editor_font(const std::string& family);
 
+    // Whether the studio runs its MCP server, so AI clients can drive it. Off
+    // unless turned on; ANARCHY_MCP and its kin can still decide (see decide_mcp).
+    bool mcp_enabled() const;
+    void set_mcp_enabled(bool enabled);
+
     // Writes the file. True, doing nothing, when there is no file.
     bool save(std::string& error) const;
 

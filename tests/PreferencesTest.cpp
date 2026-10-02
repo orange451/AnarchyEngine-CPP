@@ -1,3 +1,4 @@
+#include "ide/AiClientsPage.hpp"
 #include "ide/IdeResources.hpp"
 #include "ide/IdeTheme.hpp"
 #include "ide/Preferences.hpp"
@@ -11,8 +12,11 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <functional>
+#include <memory>
 #include <string>
 #include <system_error>
+#include <vector>
 
 // preferences.json, the themes folder, and the Preferences window's Appearance
 // tab, each against a scratch config folder.
@@ -110,6 +114,21 @@ void TestAssetsView() {
 
     Write(file, "{ \"assetsView\": \"grid\" }");
     ExpectText(ide::Preferences(file).assets_view(), "icons", "an unknown value reads as icons");
+}
+
+void TestMcpEnabled() {
+    Scratch scratch;
+    const fs::path file = scratch.root / "preferences.json";
+    {
+        ide::Preferences preferences(file);
+        Expect(!preferences.mcp_enabled(), "the MCP server is off until turned on");
+        preferences.set_mcp_enabled(true);
+        std::string error;
+        Expect(preferences.save(error), "preferences save");
+    }
+    Expect(ide::Preferences(file).mcp_enabled(), "turning it on is remembered");
+    Write(file, "{ \"mcpEnabled\": \"yes\" }");
+    Expect(!ide::Preferences(file).mcp_enabled(), "a value that is not true reads as off");
 }
 
 void TestLibrary() {
@@ -522,10 +541,120 @@ void TestFrameRate() {
 
 }  // namespace
 
+// The AI tab against a pretend claude, which keeps what is registered as anarchy.
+void TestAiPage() {
+    struct FakeClaude {
+        std::string registered;  // The command, or empty.
+        int fail_add = 0;
+        std::vector<std::string> calls;
+    };
+    auto fake = std::make_shared<FakeClaude>();
+    auto enabled = std::make_shared<bool>(false);
+    const fs::path bridge = ide::path_from_utf8("C:/Anarchy/anarchy-mcp.exe");
+
+    const auto make_page = [&](fs::path cli, ide::McpSwitch forced) {
+        ide::AiClientsPage::Server server;
+        server.setting = [enabled, forced] {
+            return forced.forced_by.empty() ? ide::McpSwitch{*enabled, {}} : forced;
+        };
+        server.set_enabled = [enabled](bool on) { *enabled = on; };
+        server.status = [enabled] { return *enabled ? std::string("Listening") : std::string("Off"); };
+        ide::AiClientsPage::ClaudeCode claude;
+        claude.cli = std::move(cli);
+        claude.bridge = bridge;
+        claude.run = [fake](const std::vector<std::string>& args) {
+            std::string joined;
+            for (const std::string& arg : args) {
+                joined += (joined.empty() ? "" : " ") + arg;
+            }
+            fake->calls.push_back(joined);
+            ide::ProcessResult result;
+            result.started = true;
+            result.exit_code = 0;
+            if (args[1] == "get") {
+                if (fake->registered.empty()) {
+                    result.exit_code = 1;
+                    result.output = "No MCP server named \"anarchy\".\n";
+                } else {
+                    result.output = "anarchy:\n  Command: " + fake->registered + "\n  Args: \n";
+                }
+            } else if (args[1] == "add") {
+                if (fake->fail_add != 0) {
+                    result.exit_code = fake->fail_add;
+                    result.output = "\nboom\nmore\n";
+                } else {
+                    fake->registered = args.back();
+                }
+            } else if (args[1] == "remove") {
+                fake->registered.clear();
+            }
+            return result;
+        };
+        claude.async = [](std::function<void()> work, std::function<void()> done) {
+            work();
+            done();
+        };
+        return jadefx::make<ide::AiClientsPage>(std::move(server), std::move(claude));
+    };
+
+    auto page = make_page("claude", {});
+    Expect(!page->server_box()->isSelected() && !page->server_box()->isDisable(), "the server box starts off, and works");
+    ExpectText(page->server_status(), "Off", "the server's state shows");
+    Expect(fake->calls.size() == 1 && fake->calls[0] == "mcp get anarchy", "opening the tab asks what is registered");
+    Expect(page->registration() == ide::ClaudeRegistration::NotRegistered, "nothing is");
+    Expect(!page->connect_button()->isDisable() && page->disconnect_button()->isDisable(),
+           "so Connect works and Disconnect does not");
+
+    page->connect_claude();
+    ExpectText(fake->calls[1], "mcp add anarchy --scope user -- " + ide::utf8_path(bridge), "Connect adds the bridge");
+    ExpectText(fake->calls[2], "mcp get anarchy", "then looks again");
+    Expect(page->registration() == ide::ClaudeRegistration::Connected, "and finds it connected");
+    Expect(page->claude_message().find("Turn on the MCP server") != std::string::npos,
+           "with a reminder while the server is off");
+    Expect(page->connect_button()->isDisable() && !page->disconnect_button()->isDisable(), "Disconnect now works");
+
+    page->set_server_enabled(true);
+    Expect(*enabled && page->server_box()->isSelected(), "the box turns the server on");
+    ExpectText(page->server_status(), "Listening", "and its state shows");
+    Expect(page->claude_message().find("Turn on") == std::string::npos, "and the reminder goes");
+
+    fake->registered = "C:/Old/anarchy-mcp.exe";
+    fake->calls.clear();
+    page->refresh_claude();
+    Expect(page->registration() == ide::ClaudeRegistration::Elsewhere, "another bridge is seen");
+    Expect(page->claude_status().find("C:/Old/anarchy-mcp.exe") != std::string::npos, "and named");
+    page->connect_claude();
+    Expect(fake->calls.size() == 4 && fake->calls[1] == "mcp remove anarchy --scope user" &&
+               fake->calls[2].rfind("mcp add", 0) == 0,
+           "Connect replaces it");
+    Expect(page->registration() == ide::ClaudeRegistration::Connected, "with this one");
+
+    page->disconnect_claude();
+    Expect(page->registration() == ide::ClaudeRegistration::NotRegistered && fake->registered.empty(),
+           "Disconnect takes it out");
+
+    fake->fail_add = 1;
+    page->connect_claude();
+    ExpectText(page->claude_message(), "Could not connect: boom", "a failure shows what claude said first");
+    Expect(page->registration() == ide::ClaudeRegistration::NotRegistered, "and nothing changed");
+    fake->fail_add = 0;
+
+    auto forced = make_page("claude", {true, "ANARCHY_MCP_PORT"});
+    Expect(forced->server_box()->isSelected() && forced->server_box()->isDisable(),
+           "an environment variable decides, and the box cannot");
+
+    fake->calls.clear();
+    auto missing = make_page({}, {});
+    Expect(fake->calls.empty(), "without claude, nothing runs");
+    Expect(missing->claude_status().find("not found") != std::string::npos, "and the tab says it was not found");
+    Expect(missing->connect_button()->isDisable(), "so Connect does not work");
+}
+
 int RunPreferencesTests() {
     gFailures = 0;
     TestPreferences();
     TestAssetsView();
+    TestMcpEnabled();
     TestLibrary();
     TestWriteTheme();
     TestCurrentTheme();
@@ -533,5 +662,6 @@ int RunPreferencesTests() {
     TestPickFromList();
     TestGroups();
     TestFrameRate();
+    TestAiPage();
     return gFailures;
 }

@@ -37,8 +37,10 @@ set(STUDIO_CORE_SOURCES
     src/ide/McpServer.cpp
     src/ide/McpTools.cpp
     src/ide/McpToolSpecs.cpp
+    src/ide/McpSetup.cpp
     src/ide/PluginLoader.cpp
     src/ide/PropertySheet.cpp
+    src/ide/RunProcess.cpp
     src/ide/ScriptMarks.cpp
     src/ide/ScriptPairs.cpp
     src/ide/StudioRegistry.cpp
@@ -94,6 +96,7 @@ set(STUDIO_SOURCES
     src/ide/ModelImport.cpp
     src/ide/AssetImport.cpp
     src/ide/PropertiesPanel.cpp
+    src/ide/AiClientsPage.cpp
     src/ide/Preferences.cpp
     src/ide/PreferencesPanel.cpp
     src/ide/ThemeLibrary.cpp
@@ -600,6 +603,13 @@ add_executable(mcp-tests
 )
 target_link_libraries(mcp-tests PRIVATE studio_core)
 
+# Turning the MCP server on and off, registering it with Claude Code, and
+# running a program for its output.
+add_executable(mcp-setup-tests
+    tests/McpSetupTest.cpp
+)
+target_link_libraries(mcp-setup-tests PRIVATE studio_core)
+
 # anarchy-mcp: the MCP server an LLM client runs over stdio. It sends each
 # tool call to one open studio, found through the studio registry.
 add_executable(anarchy-mcp
@@ -798,7 +808,7 @@ endif()
 # Every test program, for ctest (with Visual Studio, ctest -C Release). Each
 # runs from the source folder, where resources/ is.
 enable_testing()
-foreach(suite engine-tests properties-tests console-tests studio-tests mcp-tests sandbox shell-tests explorer-tests assets-tests
+foreach(suite engine-tests properties-tests console-tests studio-tests mcp-tests mcp-setup-tests sandbox shell-tests explorer-tests assets-tests
               prefab-editor-tests terminal-tests amesh-tests)
     if(TARGET ${suite})
         add_test(NAME ${suite} COMMAND ${suite} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

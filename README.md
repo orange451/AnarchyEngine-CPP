@@ -146,12 +146,14 @@ The Appearance tab lists every color with its variable's name, in groups such as
 
 ## Talking to an LLM (MCP)
 
-While the studio is open it runs a [Model Context Protocol](https://modelcontextprotocol.io) server, so an LLM client can read and edit the place. The first studio listens at `http://127.0.0.1:7777/mcp`; one opened while another has 7777 listens on any free port. A toast at the bottom right of the window says where, and if the server could not start, the console says why.
+The studio can run a [Model Context Protocol](https://modelcontextprotocol.io) server, so an LLM client can read and edit the place. It is off until you turn it on: File > Preferences, AI tab, check Let AI clients drive this studio. The choice is kept in `preferences.json` as `mcpEnabled`, and the server starts and stops at once. The first studio listens at `http://127.0.0.1:7777/mcp`; one opened while another has 7777 listens on any free port. A toast at the bottom right of the window says where, the AI tab shows it too, and if the server could not start, both the tab and the console say why.
 
-Several studios can be open at once, so clients go through `anarchy-mcp`, a bridge the build puts in `build/`. Register it once, for every folder you work in. With Claude Code:
+The same tab connects Claude Code. Connect runs `claude mcp add` for you, registering the `anarchy-mcp` beside the studio for every folder you work in, and the tab shows whether Claude Code has this studio's bridge, another one (such as an older build's, which Connect replaces), or none. Disconnect takes it out, and Copy Command copies the command to run by hand. The tab looks for `claude` in `PATH`, then in `~/.local/bin`, and on Windows in npm's folder; when it is not found, Copy Command still works. Claude Code picks the server up when it next starts, or after `/mcp` in a running session.
+
+Several studios can be open at once, so clients go through `anarchy-mcp`, a bridge the build puts beside the studio in `build/`. Other clients register it by hand, once, for every folder you work in. With Claude Code, that is what Connect runs:
 
 ```
-claude mcp add anarchy -s user -- /path/to/AnarchyEngine-CPP/build/anarchy-mcp
+claude mcp add anarchy --scope user -- /path/to/AnarchyEngine-CPP/build/anarchy-mcp
 ```
 
 Each studio names its project and port in a `studios` folder beside `preferences.json`, and the bridge sends each tool call to one of them:
@@ -167,4 +169,4 @@ With only one studio open, a client that speaks MCP over HTTP can also connect t
 
 The tools read the tree (`get_tree`, `find_instances`), read and set properties, create and delete instances, read and write scripts, get and set the explorers' selection, list classes and their Luau API, run Luau with `run_lua` and read what it printed, read the console with `get_output`, and start, pause, and stop a test with `playtest`. An instance is named by its id or by its path of names, such as `Folder.Part`. Edits go through undo like edits made by hand, and a chunk from `run_lua` shows in the console.
 
-The server listens on the loopback address only, and refuses requests from a web page on another site. `ANARCHY_MCP_PORT` pins the port, and the server does not start when that port is taken. `ANARCHY_MCP=0` turns the server off. Every request needs `Authorization: Bearer <token>`: each studio makes a random token when it starts and writes it in its registry entry, in a folder only you can read, and the bridge sends it from there. To connect a client directly, start the studio with `ANARCHY_MCP_TOKEN=<secret>`, which it uses instead, and give the client the same secret (with Claude Code, add `--header "Authorization: Bearer <secret>"`).
+The server listens on the loopback address only, and refuses requests from a web page on another site. The environment decides over the AI tab's box, which then cannot be changed: `ANARCHY_MCP=0` turns the server off and any other value turns it on, and `ANARCHY_MCP_PORT` or `ANARCHY_MCP_TOKEN` turns it on too. `ANARCHY_MCP_PORT` pins the port, and the server does not start when that port is taken. Every request needs `Authorization: Bearer <token>`: each studio makes a random token when it starts and writes it in its registry entry, in a folder only you can read, and the bridge sends it from there. To connect a client directly, start the studio with `ANARCHY_MCP_TOKEN=<secret>`, which it uses instead, and give the client the same secret (with Claude Code, add `--header "Authorization: Bearer <secret>"`).

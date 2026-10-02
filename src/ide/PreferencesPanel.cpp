@@ -423,16 +423,16 @@ void PreferencesPanel::build() {
     appearance->setTop(top);
     appearance->setCenter(scroll);
     appearance->setBottom(bottom_);
-    auto tabs = jadefx::make<jadefx::TabPane>();
-    tabs->setPrefWidthRatio(1);
-    tabs->setPrefHeightRatio(1);
+    tabs_ = jadefx::make<jadefx::TabPane>();
+    tabs_->setPrefWidthRatio(1);
+    tabs_->setPrefHeightRatio(1);
     auto tab = std::make_shared<jadefx::Tab>("Appearance", appearance);
     tab->setClosable(false);
-    tabs->getTabs().add(tab);
+    tabs_->getTabs().add(tab);
     auto performance = std::make_shared<jadefx::Tab>("Performance", build_performance());
     performance->setClosable(false);
-    tabs->getTabs().add(performance);
-    setCenter(tabs);
+    tabs_->getTabs().add(performance);
+    setCenter(tabs_);
 
     // A theme file dropped on the window is imported.
     setOnDragOver([](jadefx::DragEvent& event) {
@@ -457,6 +457,12 @@ void PreferencesPanel::build() {
         event.consume();
     });
     rebuild_rows();
+}
+
+void PreferencesPanel::add_page(const std::string& title, std::shared_ptr<jadefx::Node> page) {
+    auto tab = std::make_shared<jadefx::Tab>(title, std::move(page));
+    tab->setClosable(false);
+    tabs_->getTabs().add(tab);
 }
 
 std::shared_ptr<jadefx::Node> PreferencesPanel::build_performance() {

@@ -95,6 +95,15 @@ void Preferences::set_editor_font(const std::string& family) {
     }
 }
 
+bool Preferences::mcp_enabled() const {
+    const engine_core::JsonValue* enabled = root_.find("mcpEnabled");
+    return enabled != nullptr && enabled->is_bool() && enabled->as_bool();
+}
+
+void Preferences::set_mcp_enabled(bool enabled) {
+    root_.set("mcpEnabled", engine_core::JsonValue::boolean(enabled));
+}
+
 bool Preferences::save(std::string& error) const {
     if (file_.empty()) {
         return true;

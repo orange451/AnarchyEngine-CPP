@@ -32,6 +32,8 @@ public:
     ~PreferencesPanel() override;
 
     void set_file_picker(FilePicker picker) { file_picker_ = std::move(picker); }
+    // Adds a tab after the panel's own, for a page the studio builds, such as AI.
+    void add_page(const std::string& title, std::shared_ptr<jadefx::Node> page);
     // Runs with the frame rate the Performance tab keeps, so the studio draws at it.
     void set_on_frame_rate(std::function<void(int fps)> handler) { on_frame_rate_ = std::move(handler); }
 
@@ -136,6 +138,7 @@ private:
     std::vector<std::unique_ptr<Group>> groups_;
     std::string filter_;
 
+    std::shared_ptr<jadefx::TabPane> tabs_;
     std::shared_ptr<jadefx::ComboBox> theme_list_;
     std::shared_ptr<jadefx::ComboBox> font_list_;
     std::shared_ptr<jadefx::HBox> font_row_;

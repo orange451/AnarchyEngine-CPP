@@ -13,6 +13,9 @@ namespace ide {
 // after a note on stderr of where it looked, when no copy exists.
 std::filesystem::path find_resource(const std::string& relative);
 
+// The folder of the running program. Empty when the system will not say.
+std::filesystem::path executable_directory();
+
 using engine_core::utf8_path;
 // A UTF-8 string as a path.
 std::filesystem::path path_from_utf8(const std::string& text);

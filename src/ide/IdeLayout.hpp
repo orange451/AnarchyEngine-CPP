@@ -95,13 +95,16 @@ public:
     engine_core::Engine& simulation();
     // Binds the scene view, then starts the simulation and render threads.
     void start();
-    // Starts the MCP server, so an LLM client can read and edit the place.
-    // It listens on 7777, or on any free port when another studio has 7777,
-    // and names itself and its project in the studio registry, where the
-    // anarchy-mcp bridge finds it. ANARCHY_MCP_PORT pins the port,
-    // ANARCHY_MCP=0 turns it off, and ANARCHY_MCP_TOKEN makes clients send
+    // Starts or stops the MCP server, as decide_mcp says from the preference
+    // Preferences' AI tab sets and the ANARCHY_MCP variables. The server lets
+    // an LLM client read and edit the place. It listens on 7777, or on any free
+    // port when another studio has 7777, and names itself and its project in
+    // the studio registry, where the anarchy-mcp bridge finds it.
+    // ANARCHY_MCP_PORT pins the port, and ANARCHY_MCP_TOKEN makes clients send
     // that bearer token. A toast says where it listens; the console says why it could not.
-    void start_mcp();
+    void apply_mcp_setting();
+    // Where the server listens, that it is off, or why it could not start.
+    std::string mcp_status() const;
     void mount(jadefx::Scene& scene);
     // Grows the window after a frame when a dock's minimum no longer fits.
     // Gives the window the place and size layout.json had, and opens its
@@ -493,7 +496,12 @@ private:
     // that was in. A save in that same frame is a quit, and writes this instead.
     engine_core::JsonValue quit_layout_;
     std::uint64_t quit_frame_ = ~std::uint64_t{0};
+    void start_mcp();
+    // Closes the server and takes this studio out of the registry.
+    void stop_mcp();
     std::unique_ptr<McpServer> mcp_;
+    // Why the server last failed to start. Cleared when it starts or is turned off.
+    std::string mcp_error_;
     // The server's calls into the UI thread. Closed first as the studio closes.
     std::shared_ptr<UiCalls> ui_calls_;
     struct McpIdentity;

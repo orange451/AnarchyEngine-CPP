@@ -4,12 +4,47 @@
 
 #include "AssetImport.hpp"
 #include "IdeLayoutInternal.hpp"
+#include "McpSetup.hpp"
 #include "TextureImport.hpp"
 
 namespace ide {
 
+void IdeLayout::apply_mcp_setting() {
+    const McpSwitch setting = decide_mcp(preferences_.mcp_enabled(), engine_core::environment_variable);
+    if (setting.on) {
+        start_mcp();
+    } else {
+        stop_mcp();
+    }
+}
+
+std::string IdeLayout::mcp_status() const {
+    if (mcp_) {
+        return "Listening on http://127.0.0.1:" + std::to_string(mcp_->port()) + "/mcp";
+    }
+    return mcp_error_.empty() ? "Off" : "Could not start: " + mcp_error_;
+}
+
+void IdeLayout::stop_mcp() {
+    mcp_error_.clear();
+    if (!mcp_) {
+        return;
+    }
+    // A tool call waiting for the UI thread gives up now, so joining the
+    // server's threads below does not wait it out.
+    if (ui_calls_) {
+        ui_calls_->close();
+    }
+    if (mcp_identity_ && !mcp_identity_->dir.empty()) {
+        remove_studio(mcp_identity_->dir, mcp_identity_->entry);
+    }
+    mcp_.reset();
+    mcp_identity_.reset();
+    ui_calls_.reset();
+}
+
 void IdeLayout::start_mcp() {
-    if (engine_core::environment_variable("ANARCHY_MCP") == std::optional<std::string>("0")) {
+    if (mcp_) {
         return;
     }
     int port = kMcpPort;
@@ -170,8 +205,10 @@ void IdeLayout::start_mcp() {
     // registry entry is how the bridge finds it there.
     if (!server->start(port, error) && (pinned || !server->start(0, error))) {
         scripts.append_output(engine_core::ScriptRuntime::OutputKind::Error, "MCP server: " + error);
+        mcp_error_ = error;
         return;
     }
+    mcp_error_.clear();
     identity->entry.pid = current_pid();
     identity->entry.port = server->port();
     identity->dir = studio_registry_dir();

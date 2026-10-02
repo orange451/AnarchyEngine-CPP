@@ -91,6 +91,8 @@ bool IsFile(const fs::path& path) {
 
 }  // namespace
 
+fs::path executable_directory() { return ExecutableDirectory(); }
+
 fs::path find_resource(const std::string& relative) {
     const fs::path exeDir = ExecutableDirectory();
     const fs::path tail = fs::path(relative);

@@ -35,7 +35,7 @@ public:
         // A new studio holds a new place, the one File > New makes.
         engine_core::Project::reset_place(simulation.datamodel());
         layout_->start();
-        layout_->start_mcp();
+        layout_->apply_mcp_setting();
         auto scene = jadefx::make<jadefx::Scene>(nullptr, size.width, size.height);
         layout_->mount(*scene);
         // Setting the scene sizes the window to it, so the saved size goes on after.

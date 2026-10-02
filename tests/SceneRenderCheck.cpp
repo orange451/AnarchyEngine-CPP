@@ -2,6 +2,7 @@
 #include "amesh.hpp"
 #include "ide/MaterialBall.hpp"
 #include "runner/MeshCache.hpp"
+#include "runner/RenderMath.hpp"
 #include "runner/Renderer.hpp"
 #include "runner/TextureCache.hpp"
 #include "runner/gl.hpp"
@@ -442,6 +443,110 @@ int main() {
                    "drawing restores blending and the framebuffer");
             runner::rt_glDisable(runner::GL_BLEND);
             Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the pipeline leaves no GL error");
+
+        // Shadows. A floor under the cube, lit from the -X side and down, so
+        // the cube's shadow falls on the floor at +X: (1, -0.5, 0) is in it,
+        // and (1, -0.5, 2) is open floor at about the same distance.
+        {
+            engine_core::Matrix4 floorModel = engine_core::matrix4_identity();
+            floorModel.m[0] = 8.f;
+            floorModel.m[5] = 0.2f;
+            floorModel.m[10] = 8.f;
+            floorModel.m[13] = -0.6f;
+            runner::MeshDraw scene[2] = {runner::MeshDraw{cube, engine_core::matrix4_identity()},
+                                         runner::MeshDraw{cube, floorModel}};
+            // Where a world point lands in the pane, through the camera a Renderer starts with.
+            const auto pixelOf = [&](engine_core::Vec3 world) {
+                const engine_core::Matrix4 view =
+                    runner::LookAtView({0.f, 3.f, 7.f}, {0.f, 0.f, 0.f}, {0.f, 1.f, 0.f});
+                const engine_core::Matrix4 projection = runner::Perspective(
+                    runner::Renderer::kCameraFovYDegrees,
+                    static_cast<float>(fbWidth) / static_cast<float>(fbHeight), 0.1f, 1000.f);
+                const engine_core::Vec3 ndc =
+                    engine_core::matrix4_point(engine_core::matrix4_multiply(projection, view), world);
+                return std::array<int, 2>{static_cast<int>((ndc.x * 0.5f + 0.5f) * fbWidth),
+                                          static_cast<int>((ndc.y * 0.5f + 0.5f) * fbHeight)};
+            };
+            const std::array<int, 2> inShadow = pixelOf({1.f, -0.5f, 0.f});
+            const std::array<int, 2> openFloor = pixelOf({1.f, -0.5f, 2.f});
+            const auto sample = [&](const std::array<int, 2>& at) { return Sum(ReadPixel(at[0], at[1])); };
+            // The two floor points' brightness under one light.
+            const auto lit = [&](const runner::LightDraw& light, const runner::MeshDraw* meshes, int count) {
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, meshes, count, &light, 1);
+                return std::array<int, 2>{sample(inShadow), sample(openFloor)};
+            };
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, scene, 2);
+            const int ambientFloor = sample(inShadow);
+
+            runner::LightDraw spotLight;
+            spotLight.kind = runner::LightDraw::Kind::Spot;
+            spotLight.position[0] = -4.f;
+            spotLight.position[1] = 2.f;
+            spotLight.position[2] = 0.f;
+            spotLight.direction[0] = 0.894f;
+            spotLight.direction[1] = -0.447f;
+            spotLight.direction[2] = 0.f;
+            spotLight.outerFovDegrees = 90.f;
+            spotLight.radius = 12.f;
+            spotLight.intensity = 4.f;
+            spotLight.id = 7;
+            const std::array<int, 2> spotOpen = lit(spotLight, scene, 2);
+            Expect(spotOpen[0] > ambientFloor + 20, "with no shadow, the SpotLight reaches the floor behind the cube (" +
+                                                        std::to_string(spotOpen[0]) + " over " +
+                                                        std::to_string(ambientFloor) + ")");
+            spotLight.shadows = true;
+            const std::array<int, 2> spotShadowed = lit(spotLight, scene, 2);
+            Expect(std::abs(spotShadowed[0] - ambientFloor) <= 4,
+                   "a SpotLight's shadow leaves the floor behind the cube at the ambient (" +
+                       std::to_string(spotShadowed[0]) + ")");
+            Expect(std::abs(spotShadowed[1] - spotOpen[1]) <= 3,
+                   "and the open floor lit as before, with no acne (" + std::to_string(spotShadowed[1]) + " and " +
+                       std::to_string(spotOpen[1]) + ")");
+            Expect(lit(spotLight, scene, 2) == spotShadowed, "a second frame reuses the cached map and draws the same");
+            Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "drawing shadows leaves no GL error");
+
+            // Moving the cube away moves its shadow: the cache sees the change.
+            runner::MeshDraw movedScene[2] = {runner::MeshDraw{cube, engine_core::matrix4_translation(0.f, 0.f, -3.f)},
+                                              scene[1]};
+            Expect(std::abs(lit(spotLight, movedScene, 2)[0] - spotOpen[0]) <= 4, "moving the cube moves its shadow");
+            Expect(std::abs(lit(spotLight, scene, 2)[0] - ambientFloor) <= 4, "and moving it back brings it back");
+
+            // A see-through cube casts nothing.
+            runner::MeshDraw glassScene[2] = {scene[0], scene[1]};
+            glassScene[0].transparency = 0.5f;
+            Expect(lit(spotLight, glassScene, 2)[0] > ambientFloor + 20, "a see-through mesh casts no shadow");
+
+            // A light's own Prefab does not shadow it: a box around the light, owned by it.
+            runner::MeshDraw lampScene[3] = {scene[0], scene[1],
+                                             runner::MeshDraw{cube, engine_core::matrix4_translation(-4.f, 2.f, 0.f)}};
+            lampScene[2].owner = 7;
+            Expect(std::abs(lit(spotLight, lampScene, 3)[1] - spotOpen[1]) <= 3,
+                   "a light's own Prefab does not shadow it");
+            lampScene[2].owner = 8;
+            Expect(lit(spotLight, lampScene, 3)[1] < spotOpen[1] - 20, "but anyone else's box around it does");
+
+            // A PointLight in the same place: its cube faces in the atlas shadow the same way.
+            runner::LightDraw pointLight;
+            pointLight.position[0] = -4.f;
+            pointLight.position[1] = 2.f;
+            pointLight.radius = 7.5f;
+            pointLight.intensity = 8.f;
+            pointLight.id = 9;
+            const std::array<int, 2> pointOpen = lit(pointLight, scene, 2);
+            pointLight.shadows = true;
+            const std::array<int, 2> pointShadowed = lit(pointLight, scene, 2);
+            Expect(pointOpen[0] > ambientFloor + 20 && std::abs(pointShadowed[0] - ambientFloor) <= 4,
+                   "a PointLight's shadow falls behind the cube (" + std::to_string(pointShadowed[0]) + ")");
+            Expect(std::abs(pointShadowed[1] - pointOpen[1]) <= 3,
+                   "and leaves the open floor lit, with no seam or acne (" + std::to_string(pointShadowed[1]) + ")");
+
+            // Shadows off in the settings draws every light unshadowed.
+            runner::ShadowSettings off;
+            off.enabled = false;
+            renderer.setShadowSettings(off);
+            Expect(lit(spotLight, scene, 2)[0] > ambientFloor + 20, "ShadowSettings::enabled false draws no shadows");
+            renderer.setShadowSettings(runner::ShadowSettings{});
+        }
         }
 
         // A Material's DiffuseTexture, read from the resources folder, and its Color.

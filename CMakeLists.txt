@@ -57,6 +57,7 @@ set(STUDIO_SOURCES
     src/runner/gl.cpp
     src/runner/ShaderFile.cpp
     src/runner/Renderer.cpp
+    src/runner/ShadowRenderer.cpp
     src/runner/EnvironmentMap.cpp
     src/runner/MeshCache.cpp
     src/runner/TextureCache.cpp

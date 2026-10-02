@@ -1,8 +1,8 @@
 #version 330 core
 // One light, added into the accumulation buffer: a PointLight or SpotLight on each
 // pixel its volume covers (the legacy pointlightDeferred.frag), a DirectionalLight
-// on every pixel, drawn with fullscreen.vert. Renderer puts
-// lighting.glsl in after the #version line.
+// on every pixel, drawn with fullscreen.vert. Renderer puts lighting.glsl and
+// shadow.glsl in after the #version line.
 out vec4 outColor;
 
 uniform sampler2D uDepth;
@@ -31,7 +31,11 @@ void main() {
     vec3 N = texture(uNormal, uv).rgb;
     vec3 material = texture(uMaterial, uv).rgb;
     vec3 albedo = texture(uAlbedo, uv).rgb;
-    outColor = vec4(shadeLight(N, P, albedo, material.x, material.y, uLightPosition, uLightDirection, uLightCone,
-                               uLightColor, uLightRadius, uLightIntensity),
-                    1.0);
+    vec3 shade = shadeLight(N, P, albedo, material.x, material.y, uLightPosition, uLightDirection, uLightCone,
+                            uLightColor, uLightRadius, uLightIntensity);
+    // Only a lit point needs its shadow looked up.
+    if (any(greaterThan(shade, vec3(0.0)))) {
+        shade *= shadowFactor(P, N);
+    }
+    outColor = vec4(shade, 1.0);
 }

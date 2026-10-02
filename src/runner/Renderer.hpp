@@ -2,6 +2,7 @@
 
 #include "EnvironmentMap.hpp"
 #include "Matrix4.hpp"
+#include "ShadowRenderer.hpp"
 #include "ViewCapture.hpp"
 
 #include <cstdint>
@@ -94,7 +95,8 @@ struct SceneLighting {
 };
 
 // Draws meshes seen from the camera, through the legacy AnarchyEngine
-// pipeline (engine/gl): a G-buffer of each opaque surface's albedo, normal,
+// pipeline (engine/gl): first the shadow maps of the lights that cast them
+// (ShadowRenderer), then a G-buffer of each opaque surface's albedo, normal,
 // material, and glow; a light pass that adds the ambient and sky light and
 // then each light: a DirectionalLight over the whole view, a PointLight or
 // SpotLight over its volume; then the Skybox behind every surface; a forward
@@ -130,6 +132,8 @@ public:
     // X axis in red and the Z axis in blue, hidden behind nearer surfaces.
     // Off until set. Needs no GL context.
     void setGridVisible(bool visible) { gridVisible_ = visible; }
+    // How shadows are drawn, until set again. Needs no GL context.
+    void setShadowSettings(const ShadowSettings& settings) { shadowSettings_ = settings; }
 
     // x, y, width, and height are the pane in window points, origin at the top
     // left. sceneWidth and sceneHeight are the window in the same units.
@@ -205,6 +209,16 @@ private:
         int lightColor = -1;
         int lightRadius = -1;
         int lightIntensity = -1;
+        // One light's shadow (shadow.glsl).
+        int shadowKind = -1;
+        int shadowMatrix = -1;
+        int shadowCascadeCount = -1;
+        int shadowLight = -1;
+        int shadowNearFar = -1;
+        int shadowTexel = -1;
+        int shadowTexelUv = -1;
+        int shadowTiles = -1;
+        int shadowFaceScale = -1;
         // Every light (forward.frag).
         int lightCount = -1;
         int lightPositionRadius = -1;
@@ -227,6 +241,8 @@ private:
         float color[3];
         float radius;
         float intensity;
+        // Its entry in shadowRequests_ and shadowLookups_, or -1 for none.
+        int shadow = -1;
     };
 
     bool buildProgram(Program& program, const char* name, const char* vertex, const char* fragment,
@@ -253,6 +269,10 @@ private:
     void prepareSky();
     // The Skybox's uniforms and cubes, or uSkyEnabled 0 with none.
     void bindSky(const Program& program);
+    // Draws this frame's due shadow maps, before the G-buffer, and fills shadowLookups_.
+    bool shadowPass(const MeshDraw* meshes, int count, const float* projection);
+    // Points program at lookup's map, and every shadow sampler at a texture of its kind.
+    void bindShadow(const Program& program, const ShadowLookup& lookup);
 
     Program geometry_;
     Program forward_;
@@ -316,6 +336,10 @@ private:
     std::vector<ViewLight> viewLights_;
     std::vector<int> transparent_;
     std::vector<float> transparentDepth_;
+    std::vector<ShadowRequest> shadowRequests_;
+    std::vector<ShadowLookup> shadowLookups_;
+    ShadowRenderer shadows_;
+    ShadowSettings shadowSettings_;
 
     static engine_core::Matrix4 DefaultView();
 };

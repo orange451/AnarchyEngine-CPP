@@ -34,6 +34,11 @@ constexpr int kUnitIrradiance = 13;
 constexpr int kUnitPrefiltered = 14;
 constexpr int kUnitBrdf = 15;
 constexpr int kUnitCount = 16;
+// The light pass reads no Material, so its shadow maps take the Material's units.
+constexpr int kUnitShadowAtlas = kUnitDiffuse;
+constexpr int kUnitShadowCascades = kUnitNormalMap;
+// A light with no instance names its map for one frame only.
+constexpr std::uint64_t kUncachedShadowKey = 1ull << 63;
 
 // The legacy pipeline's stand-in sky when there is no Skybox: a flat dark
 // gray (64 of 255) times its light multiplier of 1/255.
@@ -56,6 +61,11 @@ void BindTexture(int unit, unsigned texture) {
 void BindCube(int unit, unsigned texture) {
     glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(unit));
     glBindTexture(RT_GL_TEXTURE_CUBE_MAP, texture);
+}
+
+void BindArray(int unit, unsigned texture) {
+    glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(unit));
+    glBindTexture(RT_GL_TEXTURE_2D_ARRAY, texture);
 }
 
 void DrawFullscreen(unsigned emptyVao) {
@@ -116,6 +126,15 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.lightColor = at("uLightColor");
     program.lightRadius = at("uLightRadius");
     program.lightIntensity = at("uLightIntensity");
+    program.shadowKind = at("uShadowKind");
+    program.shadowMatrix = at("uShadowMatrix");
+    program.shadowCascadeCount = at("uShadowCascadeCount");
+    program.shadowLight = at("uShadowLight");
+    program.shadowNearFar = at("uShadowNearFar");
+    program.shadowTexel = at("uShadowTexel");
+    program.shadowTexelUv = at("uShadowTexelUv");
+    program.shadowTiles = at("uShadowTiles");
+    program.shadowFaceScale = at("uShadowFaceScale");
     program.lightCount = at("uLightCount");
     program.lightPositionRadius = at("uLightPositionRadius");
     program.lightColorIntensity = at("uLightColorIntensity");
@@ -149,6 +168,8 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     sampler("uIrradiance", kUnitIrradiance);
     sampler("uPrefiltered", kUnitPrefiltered);
     sampler("uBrdf", kUnitBrdf);
+    sampler("uShadowAtlas", kUnitShadowAtlas);
+    sampler("uShadowCascades", kUnitShadowCascades);
     if (&program == &merge_) {
         sampler("uEmissive", kUnitEmissive);
         sampler("uTransparency", kUnitTransparency);
@@ -181,13 +202,14 @@ bool Renderer::initialize() {
                      {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/image_lighting.glsl"}) &&
         buildProgram(sky_, "Sky", "pipeline/fullscreen.vert", "pipeline/sky.frag",
                      {"pipeline/lighting.glsl", "pipeline/environment.glsl"}) &&
-        buildProgram(light_, "Light", "pipeline/light.vert", "pipeline/light.frag", {"pipeline/lighting.glsl"}) &&
+        buildProgram(light_, "Light", "pipeline/light.vert", "pipeline/light.frag",
+                     {"pipeline/lighting.glsl", "pipeline/shadow.glsl"}) &&
         buildProgram(sun_, "Directional light", "pipeline/fullscreen.vert", "pipeline/light.frag",
-                     {"pipeline/lighting.glsl"}) &&
+                     {"pipeline/lighting.glsl", "pipeline/shadow.glsl"}) &&
         buildProgram(merge_, "Merge", "pipeline/fullscreen.vert", "pipeline/merge.frag", {}) &&
         buildProgram(tonemap_, "Tone map", "pipeline/fullscreen.vert", "pipeline/tonemap.frag", {}) &&
         buildProgram(grid_, "Grid", "pipeline/fullscreen.vert", "pipeline/grid.frag", {}) &&
-        environment_.initialize();
+        environment_.initialize() && shadows_.initialize();
     if (!built) {
         shutdown();
         return false;
@@ -491,6 +513,7 @@ struct SavedState {
         glBindVertexArray(static_cast<GLuint>(vertexArray));
         // The units the passes used are left empty, as the old single pass left unit 0.
         for (int unit = kUnitCount - 1; unit >= 0; --unit) {
+            BindArray(unit, 0);
             BindCube(unit, 0);
             BindTexture(unit, 0);
         }
@@ -553,6 +576,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     if (!drawn && ensureTargets(pane.width, pane.height)) {
         // The lights in view space, as every pass takes them.
         viewLights_.clear();
+        shadowRequests_.clear();
         for (int index = 0; lights != nullptr && index < lightCount; ++index) {
             const LightDraw& light = lights[index];
             const bool directional = light.kind == LightDraw::Kind::Directional;
@@ -593,6 +617,19 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
             std::copy(light.color, light.color + 3, out.color);
             out.radius = light.radius;
             out.intensity = light.intensity;
+            if (light.shadows && shadowSettings_.enabled && !directional) {
+                ShadowRequest request;
+                request.key = light.id != 0 ? light.id : kUncachedShadowKey | static_cast<std::uint64_t>(index);
+                request.cached = light.id != 0;
+                request.owner = light.id;
+                request.kind = light.kind == LightDraw::Kind::Spot ? ShadowKind::Spot : ShadowKind::Point;
+                request.position = {p[0], p[1], p[2]};
+                request.direction = Normalize({d[0], d[1], d[2]});
+                request.radius = light.radius;
+                request.outerFovDegrees = light.outerFovDegrees;
+                out.shadow = static_cast<int>(shadowRequests_.size());
+                shadowRequests_.push_back(request);
+            }
             viewLights_.push_back(out);
         }
         // Suns first, so the see-through pass, which takes kMaxForwardLights,
@@ -614,9 +651,10 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
 
         glDisable(GL_SCISSOR_TEST);
         glViewport(0, 0, targetWidth_, targetHeight_);
-        drawn = cubesReady && geometryPass(meshes, meshCount, projection) &&
-                lightPass(projection, inverseProjection.m) && skyPass(inverseProjection.m) &&
-                transparencyPass(meshes, meshCount, projection, inverseProjection.m) && mergePass();
+        drawn = cubesReady && shadowPass(meshes, meshCount, projection) &&
+                geometryPass(meshes, meshCount, projection) && lightPass(projection, inverseProjection.m) &&
+                skyPass(inverseProjection.m) && transparencyPass(meshes, meshCount, projection, inverseProjection.m) &&
+                mergePass();
     }
     if (drawn && (hasMeshes || hasSky)) {
         // The tone map, blended over the clear: where nothing was drawn the pane shows through.
@@ -742,7 +780,52 @@ void Renderer::bindGBuffer(const Program& program) {
     BindTexture(kUnitEmissive, emissiveTexture_);
 }
 
+bool Renderer::shadowPass(const MeshDraw* meshes, int count, const float* projection) {
+    shadowLookups_.assign(shadowRequests_.size(), ShadowLookup{});
+    if (shadowRequests_.empty()) {
+        return true;
+    }
+    CameraView camera;
+    camera.world = engine_core::matrix4_inverse(view_);
+    Matrix viewProjection;
+    Multiply(projection, view_.m, viewProjection);
+    std::copy(viewProjection, viewProjection + 16, camera.viewProjection.m);
+    camera.fovYDegrees = fovYDegrees_;
+    camera.aspect = static_cast<float>(targetWidth_) / static_cast<float>(targetHeight_);
+    camera.nearZ = kNear;
+    camera.paneHeight = targetHeight_;
+    if (!shadows_.draw(shadowRequests_, meshes, count, camera, shadowSettings_)) {
+        return false;
+    }
+    for (std::size_t index = 0; index < shadowRequests_.size(); ++index) {
+        shadowLookups_[index] = shadows_.lookup(shadowRequests_[index].key);
+    }
+    return true;
+}
+
+void Renderer::bindShadow(const Program& program, const ShadowLookup& lookup) {
+    BindTexture(kUnitShadowAtlas, shadows_.atlasMap());
+    BindArray(kUnitShadowCascades, shadows_.cascadeMap());
+    glUniform1i(program.shadowKind, lookup.kind);
+    if (lookup.kind == ShadowLookup::kNone) {
+        return;
+    }
+    float matrices[16 * kMaxCascades];
+    for (int i = 0; i < kMaxCascades; ++i) {
+        std::copy(lookup.matrices[i].m, lookup.matrices[i].m + 16, matrices + 16 * i);
+    }
+    glUniformMatrix4fv(program.shadowMatrix, kMaxCascades, GL_FALSE, matrices);
+    glUniform1i(program.shadowCascadeCount, lookup.cascades);
+    glUniform3f(program.shadowLight, lookup.light[0], lookup.light[1], lookup.light[2]);
+    glUniform2f(program.shadowNearFar, lookup.nearFar[0], lookup.nearFar[1]);
+    glUniform4f(program.shadowTexel, lookup.texel[0], lookup.texel[1], lookup.texel[2], lookup.texel[3]);
+    glUniform1f(program.shadowTexelUv, lookup.texelUv);
+    glUniform4fv(program.shadowTiles, 6, lookup.tiles[0]);
+    glUniform1f(program.shadowFaceScale, lookup.faceScale);
+}
+
 bool Renderer::geometryPass(const MeshDraw* meshes, int count, const float* projection) {
+    glViewport(0, 0, targetWidth_, targetHeight_);
     glBindFramebuffer(RT_GL_FRAMEBUFFER, gbufferFbo_);
     glDisable(GL_BLEND);
     glEnable(RT_GL_CULL_FACE);
@@ -782,6 +865,7 @@ bool Renderer::geometryPass(const MeshDraw* meshes, int count, const float* proj
 }
 
 bool Renderer::lightPass(const float* projection, const float* inverseProjection) {
+    const engine_core::Matrix4 inverseView = engine_core::matrix4_inverse(view_);
     glBindFramebuffer(RT_GL_FRAMEBUFFER, accumulationFbo_);
     glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -808,6 +892,9 @@ bool Renderer::lightPass(const float* projection, const float* inverseProjection
         bindGBuffer(program);
         glUniformMatrix4fv(program.inverseProjection, 1, GL_FALSE, inverseProjection);
         glUniform2f(program.texel, 1.f / static_cast<float>(targetWidth_), 1.f / static_cast<float>(targetHeight_));
+        glUniformMatrix4fv(program.inverseView, 1, GL_FALSE, inverseView.m);
+        // Each shadow sampler gets a texture before CanDraw asks.
+        bindShadow(program, ShadowLookup{});
     };
     const auto setLight = [](const Program& program, const ViewLight& light) {
         glUniform3f(program.lightPosition, light.position[0], light.position[1], light.position[2]);
@@ -818,6 +905,9 @@ bool Renderer::lightPass(const float* projection, const float* inverseProjection
         glUniform1f(program.lightIntensity, light.intensity);
     };
     const auto isSun = [](const ViewLight& light) { return light.cone[0] < -3.f; };
+    const auto shadowOf = [this](const ViewLight& light) {
+        return light.shadow >= 0 ? shadowLookups_[static_cast<std::size_t>(light.shadow)] : ShadowLookup{};
+    };
 
     // Each DirectionalLight, on every pixel.
     bool sunsBound = false;
@@ -834,6 +924,7 @@ bool Renderer::lightPass(const float* projection, const float* inverseProjection
             sunsBound = true;
         }
         setLight(sun_, light);
+        bindShadow(sun_, shadowOf(light));
         DrawFullscreen(emptyVao_);
     }
 
@@ -869,6 +960,7 @@ bool Renderer::lightPass(const float* projection, const float* inverseProjection
             model[15] = 1.f;
             glUniformMatrix4fv(light_.model, 1, GL_FALSE, model);
             setLight(light_, light);
+            bindShadow(light_, shadowOf(light));
             glDrawElements(GL_TRIANGLES, sphereIndexCount_, GL_UNSIGNED_SHORT, nullptr);
         }
         glDisable(RT_GL_CULL_FACE);
@@ -1050,6 +1142,7 @@ void Renderer::shutdown() {
         *program = Program{};
     }
     environment_.shutdown();
+    shadows_.shutdown();
     skyReady_ = false;
     for (unsigned* texture : {&whiteTexture_, &blackCube_}) {
         if (*texture != 0) {

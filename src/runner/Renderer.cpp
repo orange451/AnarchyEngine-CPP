@@ -1,5 +1,6 @@
 #include "Renderer.hpp"
 
+#include "RenderMath.hpp"
 #include "ShaderFile.hpp"
 #include "amesh.hpp"
 #include "gl.hpp"
@@ -424,43 +425,6 @@ void CullBackFaces(const float* model) {
     glCullFace(determinant < 0.f ? RT_GL_FRONT : RT_GL_BACK);
 }
 
-// Right-handed and Y up: the camera looks down its -Z.
-void LookAt(const float* eye, const float* target, float* out) {
-    float f[3] = {target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]};
-    const float fLength = std::sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
-    for (float& v : f) {
-        v /= fLength;
-    }
-    // side = forward x up, with up = +Y.
-    float s[3] = {-f[2], 0.f, f[0]};
-    const float sLength = std::sqrt(s[0] * s[0] + s[2] * s[2]);
-    for (float& v : s) {
-        v /= sLength;
-    }
-    const float u[3] = {s[1] * f[2] - s[2] * f[1], s[2] * f[0] - s[0] * f[2], s[0] * f[1] - s[1] * f[0]};
-    const float m[16] = {
-        s[0], u[0], -f[0], 0.f,
-        s[1], u[1], -f[1], 0.f,
-        s[2], u[2], -f[2], 0.f,
-        -(s[0] * eye[0] + s[1] * eye[1] + s[2] * eye[2]),
-        -(u[0] * eye[0] + u[1] * eye[1] + u[2] * eye[2]),
-        f[0] * eye[0] + f[1] * eye[1] + f[2] * eye[2],
-        1.f,
-    };
-    std::copy(m, m + 16, out);
-}
-
-// OpenGL clip space: depth -1 at near, 1 at far.
-void Perspective(float fovYDegrees, float aspect, float nearZ, float farZ, float* out) {
-    const float f = 1.f / std::tan(fovYDegrees * 0.5f * 0.01745329252f);
-    std::fill(out, out + 16, 0.f);
-    out[0] = f / aspect;
-    out[5] = f;
-    out[10] = (farZ + nearZ) / (nearZ - farZ);
-    out[11] = -1.f;
-    out[14] = 2.f * farZ * nearZ / (nearZ - farZ);
-}
-
 // The GL state a draw changes, so the UI pass after it finds its own.
 struct SavedState {
     GLint framebuffer = 0;
@@ -580,11 +544,9 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     }
     // A sky whose cubes can never be made is drawn as no sky, rather than never drawing.
     const bool hasSky = lighting_.sky.image != 0 && environment_.available();
-    Matrix projection;
-    Perspective(fovYDegrees_, static_cast<float>(pane.width) / static_cast<float>(pane.height), kNear, kFar,
-                projection);
-    engine_core::Matrix4 projectionMatrix;
-    std::copy(projection, projection + 16, projectionMatrix.m);
+    const engine_core::Matrix4 projectionMatrix =
+        Perspective(fovYDegrees_, static_cast<float>(pane.width) / static_cast<float>(pane.height), kNear, kFar);
+    const float* projection = projectionMatrix.m;
     const engine_core::Matrix4 inverseProjection = engine_core::matrix4_inverse(projectionMatrix);
 
     bool drawn = !hasMeshes && !hasSky;
@@ -1114,7 +1076,8 @@ void Renderer::shutdown() {
 
 engine_core::Matrix4 Renderer::DefaultView() {
     engine_core::Matrix4 view;
-    LookAt(kCameraEye, kCameraTarget, view.m);
+    view = LookAtView({kCameraEye[0], kCameraEye[1], kCameraEye[2]},
+                      {kCameraTarget[0], kCameraTarget[1], kCameraTarget[2]}, {0.f, 1.f, 0.f});
     return view;
 }
 

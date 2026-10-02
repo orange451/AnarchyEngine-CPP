@@ -82,7 +82,7 @@ float cascadeShadow(vec3 W, vec3 N) {
             if (i + 1 < uShadowCascadeCount) {
                 vec3 n = cascadePoint(i + 1, W, N);
                 // Only a next cascade that holds the point too; else this one alone.
-                next = max(abs(n.x), abs(n.y)) < limit ? cascadeTaps(n * 0.5 + 0.5, float(i + 1)) : lit;
+                next = max(abs(n.x), abs(n.y)) < limit && n.z <= 1.0 ? cascadeTaps(n * 0.5 + 0.5, float(i + 1)) : lit;
             }
             lit = mix(lit, next, blend);
         }

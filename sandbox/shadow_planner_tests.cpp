@@ -434,3 +434,56 @@ TEST_CASE("CP4 the sun's own meshes cast nothing for it", "[shadow]") {
     }
     REQUIRE(otherDrawn);
 }
+
+TEST_CASE("PN12 a light that is not cached reads as having no map on a frame the cap skips it", "[shadow]") {
+    ShadowPlanner planner;
+    const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f});
+    // A light with no instance: its key is only a place in this frame's list.
+    const std::uint64_t key = (std::uint64_t{1} << 63) | 0u;
+    ShadowRequest first = Point(key, {0.f, 0.f, 0.f}, 50.f);
+    first.cached = false;
+    first.owner = 0;
+    Frame(planner, {first}, {}, camera, Small());
+    REQUIRE(planner.find(key) != nullptr);
+
+    // Next frame another light holds that place, somewhere else, and a new
+    // light takes the frame's one redraw: last frame's map is not this light's.
+    ShadowSettings cramped = Small();
+    cramped.maxTexelsPerFrame = 1;
+    ShadowRequest second = first;
+    second.position = {3.f, 0.f, 0.f};
+    const ShadowPlan plan = Frame(planner, {Point(2, {1.f, 0.f, 0.f}, 50.f), second}, {}, camera, cramped);
+    REQUIRE(Draws(plan, 2) > 0);
+    REQUIRE(Draws(plan, key) == 0);
+    REQUIRE(planner.find(key) == nullptr);
+}
+
+TEST_CASE("PN13 a PointLight that turns keeps its map: its cube does not turn with it", "[shadow]") {
+    ShadowPlanner planner;
+    const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f});
+    const std::vector<ShadowCaster> casters = {Box(100, {1.f, 0.f, 0.f})};
+    ShadowRequest light = Point(1, {0.f, 1.f, 0.f}, 5.f);
+    REQUIRE(Draws(Frame(planner, {light}, casters, camera, Small()), 1) > 0);
+    light.direction = Normalize({1.f, -1.f, 0.f});
+    light.outerFovDegrees = 30.f;
+    REQUIRE(Frame(planner, {light}, casters, camera, Small()).draws.empty());
+    REQUIRE(planner.find(1) != nullptr);
+}
+
+TEST_CASE("CP5 cascades dropped before their redraw commits stay unreadable until it does", "[shadow]") {
+    ShadowPlanner planner;
+    SunRequest sun;
+    sun.shadowDistance = 20.f;
+    const std::vector<ShadowCaster> casters = {Box(100, {0.f, 0.f, 0.f})};
+    REQUIRE_FALSE(planner.planCascades(&sun, casters, Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f}), Small()).empty());
+    planner.commitCascades();
+    REQUIRE(planner.cascades() != nullptr);
+    // The camera moved: planned, then dropped before the draws, which never commit.
+    REQUIRE_FALSE(planner.planCascades(&sun, casters, Camera({0.f, 2.f, 11.f}, {0.f, 0.f, 0.f}), Small()).empty());
+    planner.forgetCascades();
+    REQUIRE(planner.cascades() == nullptr);
+    // Dropped, the same view is drawn again, and readable once that commits.
+    REQUIRE_FALSE(planner.planCascades(&sun, casters, Camera({0.f, 2.f, 11.f}, {0.f, 0.f, 0.f}), Small()).empty());
+    planner.commitCascades();
+    REQUIRE(planner.cascades() != nullptr);
+}

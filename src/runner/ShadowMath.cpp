@@ -14,28 +14,32 @@ using engine_core::Vec3;
 
 namespace {
 
-// The six planes of viewProjection's clip volume, left, right, bottom, top,
-// far, then near (Gribb and Hartmann), each a, b, c, d with the inside where
-// a x + b y + c z + d >= 0.
-void FrustumPlanes(const engine_core::Matrix4& viewProjection, float planes[6][4]) {
-    const float* m = viewProjection.m;
-    // Row i of the matrix, which is stored by column.
-    const auto row = [m](int i, int k) { return m[k * 4 + i]; };
-    for (int k = 0; k < 4; ++k) {
-        planes[0][k] = row(3, k) + row(0, k);
-        planes[1][k] = row(3, k) - row(0, k);
-        planes[2][k] = row(3, k) + row(1, k);
-        planes[3][k] = row(3, k) - row(1, k);
-        planes[4][k] = row(3, k) - row(2, k);
-        planes[5][k] = row(3, k) + row(2, k);
-    }
-}
-
 float PlaneDistance(const float plane[4], engine_core::Vec3 p) {
     return plane[0] * p.x + plane[1] * p.y + plane[2] * p.z + plane[3];
 }
 
 }  // namespace
+
+// Gribb and Hartmann: each plane is the last row of viewProjection plus or less another.
+Frustum MakeFrustum(const Matrix4& viewProjection) {
+    const float* m = viewProjection.m;
+    // Row i of the matrix, which is stored by column.
+    const auto row = [m](int i, int k) { return m[k * 4 + i]; };
+    Frustum out;
+    for (int k = 0; k < 4; ++k) {
+        out.planes[0][k] = row(3, k) + row(0, k);
+        out.planes[1][k] = row(3, k) - row(0, k);
+        out.planes[2][k] = row(3, k) + row(1, k);
+        out.planes[3][k] = row(3, k) - row(1, k);
+        out.planes[4][k] = row(3, k) - row(2, k);
+        out.planes[5][k] = row(3, k) + row(2, k);
+    }
+    for (int p = 0; p < 6; ++p) {
+        const float* plane = out.planes[p];
+        out.lengths[p] = std::sqrt(plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]);
+    }
+    return out;
+}
 
 void CascadeSplits(float nearZ, float shadowDistance, int count, float lambda, float* out) {
     count = std::clamp(count, 1, kMaxCascades);
@@ -150,6 +154,10 @@ float CubeDepth(Vec3 fromLight, float radius) {
 }
 
 bool CubeFaceVisible(const Matrix4& cameraViewProjection, Vec3 position, float radius, int face) {
+    return CubeFaceVisible(MakeFrustum(cameraViewProjection), position, radius, face);
+}
+
+bool CubeFaceVisible(const Frustum& camera, Vec3 position, float radius, int face) {
     static const Vec3 kAxis[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
     static const Vec3 kSideA[6] = {{0, 1, 0}, {0, 1, 0}, {1, 0, 0}, {1, 0, 0}, {1, 0, 0}, {1, 0, 0}};
     static const Vec3 kSideB[6] = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}};
@@ -162,10 +170,8 @@ bool CubeFaceVisible(const Matrix4& cameraViewProjection, Vec3 position, float r
             points[count++] = Add(position, Scale(corner, radius));
         }
     }
-    float planes[6][4];
-    FrustumPlanes(cameraViewProjection, planes);
     // Hidden when every point is outside one plane.
-    for (const auto& plane : planes) {
+    for (const auto& plane : camera.planes) {
         bool outside = true;
         for (const Vec3& point : points) {
             if (PlaneDistance(plane, point) >= 0.f) {
@@ -199,17 +205,17 @@ Sphere WorldBounds(const Matrix4& model, const float boxMin[3], const float boxM
     return {engine_core::matrix4_point(model, center), Length(extent) * scale};
 }
 
-bool SphereInFrustum(const Matrix4& viewProjection, const Sphere& sphere, bool ignoreNear) {
-    float planes[6][4];
-    FrustumPlanes(viewProjection, planes);
+bool SphereInFrustum(const Frustum& frustum, const Sphere& sphere, bool ignoreNear) {
     for (int p = 0; p < (ignoreNear ? 5 : 6); ++p) {
-        const float* plane = planes[p];
-        const float length = std::sqrt(plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]);
-        if (PlaneDistance(plane, sphere.center) / length < -sphere.radius) {
+        if (PlaneDistance(frustum.planes[p], sphere.center) / frustum.lengths[p] < -sphere.radius) {
             return false;
         }
     }
     return true;
+}
+
+bool SphereInFrustum(const Matrix4& viewProjection, const Sphere& sphere, bool ignoreNear) {
+    return SphereInFrustum(MakeFrustum(viewProjection), sphere, ignoreNear);
 }
 
 bool SpheresTouch(const Sphere& a, const Sphere& b) { return Length(Sub(a.center, b.center)) <= a.radius + b.radius; }

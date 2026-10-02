@@ -51,7 +51,8 @@ int TileSizeFor(float reach, int previous, int paneHeight, const ShadowSettings&
 // A mesh that casts shadows, as the planner sees it.
 struct ShadowCaster {
     // Which geometry it draws (its GpuMesh's address), and that geometry's
-    // revision, which changes when it is uploaded again in place.
+    // revision (its GpuMesh's generation), which changes whenever it is
+    // uploaded again in place, a file's or a play session's.
     std::uint64_t mesh = 0;
     std::uint64_t revision = 0;
     // The instance that draws it: a light never shadows itself.
@@ -176,7 +177,8 @@ public:
     // face the camera can currently see was never actually drawn from it
     // (newly visible, or in a tile the atlas just reused) and that draw has
     // not yet reached a commit() — whether the cap held it back this frame
-    // or it was scheduled but the caller has not committed it yet.
+    // or it was scheduled but the caller has not committed it yet. A light
+    // that is not cached has a map only once this frame's draw of it commits.
     const LocalShadow* find(std::uint64_t key) const;
     int atlasSize() const { return atlas_.atlasSize(); }
     std::int64_t atlasFreeTexels() const { return atlas_.freeTexels(); }
@@ -217,7 +219,8 @@ private:
         // False whenever this light must draw (plan() set it so for every
         // such light, whether or not the cap let it through this frame):
         // find() will not hand out drawn with a visible face unmatched
-        // until the light's own commit() makes it true again. A scheduled
+        // until the light's own commit() makes it true again; nor, for a
+        // light that is not cached, anything at all. A scheduled
         // draw that never reaches commit() (the caller's draw calls failed,
         // or the plan was simply never committed) leaves it false.
         bool readable = false;
@@ -249,6 +252,9 @@ private:
     CascadeShadow pendingCascade_;
     std::uint64_t pendingCascadeHash_ = 0;
     bool cascadePending_ = false;
+    // Scratch kept between calls: each caster's fingerprint, and the casters inside each cascade.
+    std::vector<std::uint64_t> casterHashes_;
+    std::vector<int> cascadeCasters_[kMaxCascades];
 };
 
 }  // namespace runner

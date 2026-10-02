@@ -319,9 +319,15 @@ public:
     // The local box around the last upload's vertices, for culling. Zeros before one. Needs no GL.
     const float* bounds_min() const { return bounds_min_; }
     const float* bounds_max() const { return bounds_max_; }
+    // Which upload this mesh holds: a new value, never used before by any
+    // GpuMesh, on every successful upload(); 0 before one. A cache keyed on
+    // the mesh's address sees geometry uploaded again in place by it. Needs no GL.
+    std::uint64_t generation() const { return generation_; }
 
 private:
     void keep_bounds(const Data& data);
+    // Takes the next generation, once an upload has succeeded.
+    void next_generation();
     void draw_range(std::uint32_t tri_begin, std::uint32_t tri_count) const;
 
     unsigned vao_ = 0;
@@ -331,6 +337,7 @@ private:
     std::vector<LodRange> subsets_;
     float bounds_min_[3] = {0.f, 0.f, 0.f};
     float bounds_max_[3] = {0.f, 0.f, 0.f};
+    std::uint64_t generation_ = 0;
 };
 
 }  // namespace anarchy::amesh

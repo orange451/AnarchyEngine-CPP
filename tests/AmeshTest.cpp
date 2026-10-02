@@ -515,6 +515,18 @@ void TestGpuMeshWithoutGl() {
            "GpuMesh keeps its box's low corner");
     Expect(bounded.bounds_max()[0] == 2.f && bounded.bounds_max()[1] == 6.f && bounded.bounds_max()[2] == 0.5f,
            "and its high corner");
+
+    // Each upload is a generation of its own, so a cache keyed on the mesh's
+    // address still sees geometry uploaded again in place.
+    GpuMesh fresh;
+    Expect(fresh.generation() == 0, "a mesh never uploaded is generation 0");
+    GpuMesh again;
+    again.upload(box);
+    const std::uint64_t first = again.generation();
+    again.upload(box);
+    Expect(first != 0 && again.generation() != first, "uploading again in place moves the generation on");
+    Expect(bounded.generation() != first && bounded.generation() != again.generation(),
+           "two meshes never share a generation");
 }
 
 }  // namespace

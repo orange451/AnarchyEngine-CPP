@@ -29,6 +29,19 @@ private:
     std::uint64_t value_ = 1469598103934665603ull;
 };
 
+// Each caster's own fingerprint, worked out once a call: which geometry, which
+// upload of it, and where. A light or cascade folds in these, not their bytes.
+void HashCasters(const std::vector<ShadowCaster>& casters, std::vector<std::uint64_t>& out) {
+    out.resize(casters.size());
+    for (std::size_t c = 0; c < casters.size(); ++c) {
+        Hasher hash;
+        hash.add(casters[c].mesh);
+        hash.add(casters[c].revision);
+        hash.add(casters[c].model);
+        out[c] = hash.value();
+    }
+}
+
 }  // namespace
 
 int TileSizeFor(float reach, int previous, int paneHeight, const ShadowSettings& settings) {
@@ -178,7 +191,10 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
         allocate(requests, order, wanted, settings);
     }
 
-    // What each map should be drawn from: the light, its tile, and every caster in its reach.
+    // What each map should be drawn from: the light, its tile, and every
+    // caster in its reach. A PointLight's cube is world-aligned, so where it
+    // points and its cone do not change its map.
+    HashCasters(casters, casterHashes_);
     for (std::size_t i = 0; i < count; ++i) {
         const ShadowRequest& request = requests[i];
         Record& record = records_.at(request.key);
@@ -188,18 +204,19 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
         Hasher hash;
         hash.add(request.kind);
         hash.add(request.position);
-        hash.add(request.direction);
+        if (request.kind == ShadowKind::Spot) {
+            hash.add(request.direction);
+            hash.add(request.outerFovDegrees);
+        }
         hash.add(request.radius);
-        hash.add(request.outerFovDegrees);
         hash.add(record.size);
         const Sphere reachSphere{request.position, request.radius};
-        for (const ShadowCaster& caster : casters) {
+        for (std::size_t c = 0; c < casters.size(); ++c) {
+            const ShadowCaster& caster = casters[c];
             if ((request.owner != 0 && caster.owner == request.owner) || !SpheresTouch(reachSphere, caster.bounds)) {
                 continue;
             }
-            hash.add(caster.mesh);
-            hash.add(caster.revision);
-            hash.add(caster.model);
+            hash.add(casterHashes_[c]);
         }
         record.wantHash = hash.value();
         if (!request.cached || record.wantHash != record.hash) {
@@ -209,9 +226,10 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
 
     // Whether the camera can see a kind's face at position, radius: the same
     // test used both to decide what must draw and what is due to draw.
+    const Frustum view = MakeFrustum(camera.viewProjection);
     auto faceVisible = [&](ShadowKind kind, Vec3 position, float radius, int face) {
-        return kind == ShadowKind::Spot ? SphereInFrustum(camera.viewProjection, Sphere{position, radius})
-                                         : CubeFaceVisible(camera.viewProjection, position, radius, face);
+        return kind == ShadowKind::Spot ? SphereInFrustum(view, Sphere{position, radius})
+                                         : CubeFaceVisible(view, position, radius, face);
     };
     // Not ready, or a face the camera can see was never actually drawn from
     // the map it has now: reading that face would be a misread, so it must
@@ -251,8 +269,12 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
         // Unreadable until this light's own commit: a scheduled draw can
         // still fail to reach commit() (the frame's draw calls may fail, or
         // the plan may simply never be committed), and until then a visible
-        // face it must draw has not actually been drawn from drawn.
-        record.readable = !must[static_cast<std::size_t>(i)];
+        // face it must draw has not actually been drawn from drawn. A light
+        // that is not cached is unreadable the same way: its key is only its
+        // place in this frame's list, so last frame's map at that key may be
+        // another light's. It keeps its place in the order, though, so an
+        // aged light still gets past the cap ahead of it.
+        record.readable = !must[static_cast<std::size_t>(i)] && request.cached;
 
         // The faces due that the camera can see. One it cannot is never read, so it waits.
         int faces[6];
@@ -303,11 +325,12 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
             draw.face = face;
             draw.tile = record.tiles[face];
             draw.viewProjection = matrices[face];
+            const Frustum tileView = MakeFrustum(matrices[face]);
             for (std::size_t c = 0; c < casters.size(); ++c) {
                 if (request.owner != 0 && casters[c].owner == request.owner) {
                     continue;
                 }
-                if (SphereInFrustum(matrices[face], casters[c].bounds)) {
+                if (SphereInFrustum(tileView, casters[c].bounds)) {
                     draw.casters.push_back(static_cast<int>(c));
                 }
             }
@@ -372,16 +395,17 @@ std::vector<CascadeDraw> ShadowPlanner::planCascades(const SunRequest* sun, cons
     CascadeShadow next;
     next.count = count;
     Hasher hash;
+    HashCasters(casters, casterHashes_);
     for (int i = 0; i < count; ++i) {
         const Sphere slice =
             FrustumSliceSphere(camera.world, camera.fovYDegrees, camera.aspect, splits[i], splits[i + 1]);
         const CascadeFit box = FitCascade(slice, sun->shine, settings.cascadeSize);
+        const Frustum boxView = MakeFrustum(box.viewProjection);
         // How far toward the sun to reach, so a caster outside the slice that
         // shades it is still drawn. The sun's own meshes cast nothing for it.
         float pull = 0.f;
         for (const ShadowCaster& caster : casters) {
-            if ((sun->owner != 0 && caster.owner == sun->owner) ||
-                !SphereInFrustum(box.viewProjection, caster.bounds, true)) {
+            if ((sun->owner != 0 && caster.owner == sun->owner) || !SphereInFrustum(boxView, caster.bounds, true)) {
                 continue;
             }
             const float nearest =
@@ -389,25 +413,29 @@ std::vector<CascadeDraw> ShadowPlanner::planCascades(const SunRequest* sun, cons
             pull = std::max(pull, box.nearDepth - nearest);
         }
         const CascadeFit fit = FitCascade(slice, sun->shine, settings.cascadeSize, std::min(pull, pullLimit));
-        CascadeDraw draw;
-        draw.layer = i;
-        draw.viewProjection = fit.viewProjection;
+        const Frustum fitView = MakeFrustum(fit.viewProjection);
         hash.add(fit.viewProjection);
+        // Kept from frame to frame, so a frame that changes nothing allocates nothing.
+        std::vector<int>& inside = cascadeCasters_[i];
+        inside.clear();
         for (std::size_t c = 0; c < casters.size(); ++c) {
-            if ((sun->owner == 0 || casters[c].owner != sun->owner) &&
-                SphereInFrustum(fit.viewProjection, casters[c].bounds)) {
-                draw.casters.push_back(static_cast<int>(c));
-                hash.add(casters[c].mesh);
-                hash.add(casters[c].revision);
-                hash.add(casters[c].model);
+            if ((sun->owner == 0 || casters[c].owner != sun->owner) && SphereInFrustum(fitView, casters[c].bounds)) {
+                inside.push_back(static_cast<int>(c));
+                hash.add(casterHashes_[c]);
             }
         }
         next.viewProjection[i] = fit.viewProjection;
         next.texelWorld[i] = fit.texelWorld;
-        draws.push_back(std::move(draw));
     }
     if (cascadeReady_ && hash.value() == cascadeHash_) {
-        return {};
+        return draws;
+    }
+    for (int i = 0; i < count; ++i) {
+        CascadeDraw draw;
+        draw.layer = i;
+        draw.viewProjection = next.viewProjection[i];
+        draw.casters = cascadeCasters_[i];
+        draws.push_back(std::move(draw));
     }
     pendingCascade_ = next;
     pendingCascadeHash_ = hash.value();

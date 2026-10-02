@@ -233,7 +233,6 @@ void GameView::collectMeshes() {
             draw.roughness = source.roughness;
             draw.reflectivity = source.reflectivity;
             draw.transparency = source.transparency;
-            draw.revision = source.session != nullptr ? source.revision : 0;
             loaded.push_back(draw);
         }
     }

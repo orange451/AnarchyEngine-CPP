@@ -40,9 +40,6 @@ struct MeshDraw {
     // The instance that draws it, or 0. A light never shadows itself, so
     // meshes whose owner is a LightDraw's id cast nothing for that light.
     std::uint64_t owner = 0;
-    // A play session's upload revision of its geometry, 0 for a file's: a
-    // shadow map it is in is drawn again when it changes.
-    std::uint64_t revision = 0;
 };
 
 // A PointLight, SpotLight, or DirectionalLight, in world space.

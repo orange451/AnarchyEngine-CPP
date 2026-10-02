@@ -17,6 +17,15 @@ struct Sphere {
     float radius = 0.f;
 };
 
+// The six planes of a clip volume, worked out once to test many spheres or
+// cube faces against: left, right, bottom, top, far, then near, each a, b,
+// c, d with the inside where a x + b y + c z + d >= 0, and each one's length.
+struct Frustum {
+    float planes[6][4] = {};
+    float lengths[6] = {};
+};
+Frustum MakeFrustum(const engine_core::Matrix4& viewProjection);
+
 // Where each of count cascades ends, in view depth: out[0] is nearZ and
 // out[count] is shadowDistance. lambda blends an even split (0) with a
 // logarithmic one (1). out holds count + 1 values; count is 1 to kMaxCascades.
@@ -93,6 +102,7 @@ float CubeDepth(engine_core::Vec3 fromLight, float radius);
 // inside the camera's frustum. A face that cannot is never read this frame.
 bool CubeFaceVisible(const engine_core::Matrix4& cameraViewProjection, engine_core::Vec3 position, float radius,
                      int face);
+bool CubeFaceVisible(const Frustum& camera, engine_core::Vec3 position, float radius, int face);
 
 // How big a light's sphere of reach looks: the tangent of its angular
 // radius over the tangent of half the view's vertical angle, so 1 fills the
@@ -105,6 +115,7 @@ float ProjectedReach(engine_core::Vec3 lightPosition, float radius, engine_core:
 Sphere WorldBounds(const engine_core::Matrix4& model, const float boxMin[3], const float boxMax[3]);
 // Whether any of sphere is inside the clip volume of viewProjection. With
 // ignoreNear, anything on the near plane's far side counts too.
+bool SphereInFrustum(const Frustum& frustum, const Sphere& sphere, bool ignoreNear = false);
 bool SphereInFrustum(const engine_core::Matrix4& viewProjection, const Sphere& sphere, bool ignoreNear = false);
 bool SpheresTouch(const Sphere& a, const Sphere& b);
 

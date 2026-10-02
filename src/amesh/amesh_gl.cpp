@@ -1,6 +1,7 @@
 #include "amesh.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -24,7 +25,8 @@ GpuMesh::GpuMesh(GpuMesh&& other) noexcept
       vbo_(std::exchange(other.vbo_, 0)),
       ebo_(std::exchange(other.ebo_, 0)),
       lods_(std::move(other.lods_)),
-      subsets_(std::move(other.subsets_)) {
+      subsets_(std::move(other.subsets_)),
+      generation_(std::exchange(other.generation_, 0)) {
     for (int i = 0; i < 3; ++i) {
         bounds_min_[i] = other.bounds_min_[i];
         bounds_max_[i] = other.bounds_max_[i];
@@ -39,6 +41,7 @@ GpuMesh& GpuMesh::operator=(GpuMesh&& other) noexcept {
         ebo_ = std::exchange(other.ebo_, 0);
         lods_ = std::move(other.lods_);
         subsets_ = std::move(other.subsets_);
+        generation_ = std::exchange(other.generation_, 0);
         for (int i = 0; i < 3; ++i) {
             bounds_min_[i] = other.bounds_min_[i];
             bounds_max_[i] = other.bounds_max_[i];
@@ -58,6 +61,13 @@ void GpuMesh::keep_bounds(const Data& data) {
             bounds_max_[axis] = std::max(bounds_max_[axis], vertex.p[axis]);
         }
     }
+}
+
+void GpuMesh::next_generation() {
+    // Process-wide, so no two meshes ever share one. Atomic: uploads run on
+    // the GL thread, but without GL nothing stops a caller using threads.
+    static std::atomic<std::uint64_t> last{0};
+    generation_ = ++last;
 }
 
 bool GpuMesh::valid() const {
@@ -93,7 +103,10 @@ void GpuMesh::draw_subset(std::size_t subset) const {
 
 #ifdef AE_MESH_NO_GL
 
-void GpuMesh::upload(const Data& data, bool) { keep_bounds(data); }
+void GpuMesh::upload(const Data& data, bool) {
+    keep_bounds(data);
+    next_generation();
+}
 void GpuMesh::bind() const {}
 void GpuMesh::draw_range(std::uint32_t, std::uint32_t) const {}
 void GpuMesh::destroy() {
@@ -189,6 +202,7 @@ void GpuMesh::upload(const Data& data, bool dynamic) {
 
     lods_ = std::move(lods);
     subsets_ = std::move(subsets);
+    next_generation();
 }
 
 void GpuMesh::bind() const {

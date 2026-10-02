@@ -511,6 +511,25 @@ int main() {
             Expect(std::abs(lit(spotLight, movedScene, 2)[0] - spotOpen[0]) <= 4, "moving the cube moves its shadow");
             Expect(std::abs(lit(spotLight, scene, 2)[0] - ambientFloor) <= 4, "and moving it back brings it back");
 
+            // Geometry uploaded again in place, as MeshCache does when a mesh
+            // file changes: the same GpuMesh, so the same address, but the
+            // map is drawn again from the new shape.
+            {
+                GpuMesh rebaked;
+                rebaked.upload(Cube());
+                runner::MeshDraw rebakedScene[2] = {runner::MeshDraw{&rebaked, engine_core::matrix4_identity()},
+                                                    scene[1]};
+                Expect(std::abs(lit(spotLight, rebakedScene, 2)[0] - ambientFloor) <= 4,
+                       "a second upload of the cube shadows the same");
+                Data away = Cube();
+                for (Vertex& vertex : away.vertices) {
+                    vertex.p[2] -= 3.f;
+                }
+                rebaked.upload(away);
+                Expect(std::abs(lit(spotLight, rebakedScene, 2)[0] - spotOpen[0]) <= 4,
+                       "a mesh uploaded again in place, away from the light's path, takes its shadow with it");
+            }
+
             // A see-through cube casts nothing.
             runner::MeshDraw glassScene[2] = {scene[0], scene[1]};
             glassScene[0].transparency = 0.5f;

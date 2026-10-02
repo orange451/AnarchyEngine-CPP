@@ -87,6 +87,8 @@ void ShadowRenderer::shutdown() {
     atlasTextureSize_ = 0;
     cascadeSize_ = 0;
     planner_.clear();
+    // A context made again may draw shadow maps where this one would not.
+    refused_ = false;
 }
 
 bool ShadowRenderer::makeAtlas(int size) {
@@ -172,7 +174,7 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         }
         ShadowCaster caster;
         caster.mesh = reinterpret_cast<std::uintptr_t>(mesh.mesh);
-        caster.revision = mesh.revision;
+        caster.revision = mesh.mesh->generation();
         caster.owner = mesh.owner;
         caster.model = mesh.model;
         caster.bounds = WorldBounds(mesh.model, mesh.mesh->bounds_min(), mesh.mesh->bounds_max());
@@ -206,7 +208,8 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
 ShadowLookup ShadowRenderer::lookup(std::uint64_t key) const {
     ShadowLookup out;
     const LocalShadow* shadow = planner_.find(key);
-    if (shadow == nullptr || atlas_ == 0) {
+    // Refused, every light is drawn unshadowed, not from a map that no longer changes.
+    if (refused_ || shadow == nullptr || atlas_ == 0) {
         return out;
     }
     const float atlas = static_cast<float>(atlasTextureSize_);
@@ -251,6 +254,9 @@ bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, cons
     if (draws.empty()) {
         return true;
     }
+    // Unreadable until these draws commit: a layer redrawn before one fails
+    // would no longer match the matrices the last commit kept.
+    planner_.forgetCascades();
     glBindFramebuffer(RT_GL_FRAMEBUFFER, cascadeFbo_);
     begin();
     glViewport(0, 0, size, size);
@@ -280,7 +286,7 @@ bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, cons
 ShadowLookup ShadowRenderer::sunLookup() const {
     ShadowLookup out;
     const CascadeShadow* shadow = planner_.cascades();
-    if (shadow == nullptr || cascades_ == 0) {
+    if (refused_ || shadow == nullptr || cascades_ == 0) {
         return out;
     }
     out.kind = ShadowLookup::kCascades;

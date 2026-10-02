@@ -47,13 +47,14 @@ public:
     // said once.
     bool draw(const std::vector<ShadowRequest>& requests, const MeshDraw* meshes, int count, const CameraView& camera,
               const ShadowSettings& settings);
-    // How the light pass reads key's map: kNone before it has one.
+    // How the light pass reads key's map: kNone before it has one, or once
+    // the driver has refused to draw shadow maps.
     ShadowLookup lookup(std::uint64_t key) const;
     // Draws the sun's cascades when they changed, after draw in the same
     // frame (it casts from the same meshes). sun null draws none.
     bool drawSun(const SunRequest* sun, const MeshDraw* meshes, const CameraView& camera,
                  const ShadowSettings& settings);
-    // How the light pass reads the sun's cascades: kNone without them.
+    // How the light pass reads the sun's cascades: kNone without them, or once refused.
     ShadowLookup sunLookup() const;
 
     // The textures, or a 1 by 1 stand-in of the same kind, so each sampler always has one.

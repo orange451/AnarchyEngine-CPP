@@ -200,6 +200,10 @@ public:
     }
     // Free texels over every page.
     std::int64_t atlasFreeTexels() const { return atlas_.freeTexels(); }
+    // Every map unreadable and due, its tiles kept, as when the atlas
+    // texture is made again: find() returns null for each light until its
+    // redraw commits.
+    void forgetMaps();
     // Forgets every map and the atlas, as when the settings or the context change.
     void clear();
 

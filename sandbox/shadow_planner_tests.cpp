@@ -844,3 +844,27 @@ TEST_CASE("PN21 a growth step leaves every light without a map until its redraw 
     planner.commit();
     REQUIRE(planner.find(1) != nullptr);
 }
+
+TEST_CASE("PN22 maps forgotten, as when the atlas texture is made again, read as none until redrawn", "[shadow]") {
+    ShadowPlanner planner;
+    const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f});
+    const std::vector<ShadowRequest> lights = {Point(1, {0.f, 1.f, 0.f}, 5.f),
+                                               Spot(2, {2.f, 1.f, 0.f}, {0.f, 0.f, -1.f}, 5.f)};
+    Frame(planner, lights, {}, camera, Small());
+    REQUIRE(Frame(planner, lights, {}, camera, Small()).draws.empty());
+    const AtlasTile held = TilesOf(planner, 1).at(0);
+
+    planner.forgetMaps();
+    REQUIRE(planner.find(1) == nullptr);
+    REQUIRE(planner.find(2) == nullptr);
+    // The same tiles, every face the camera can see drawn again.
+    const ShadowPlan plan = planner.plan(lights, {}, camera, Small());
+    REQUIRE(Draws(plan, 1) > 0);
+    REQUIRE(Draws(plan, 2) == 1);
+    REQUIRE(planner.find(1) == nullptr);
+    planner.commit();
+    REQUIRE(planner.find(1) != nullptr);
+    REQUIRE(planner.find(2) != nullptr);
+    const AtlasTile now = TilesOf(planner, 1).at(0);
+    REQUIRE((now.x == held.x && now.y == held.y && now.page == held.page && now.size == held.size));
+}

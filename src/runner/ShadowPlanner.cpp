@@ -130,6 +130,17 @@ void ShadowPlanner::resetAtlas(int pageSize, int pages, int minTile) {
     }
 }
 
+void ShadowPlanner::forgetMaps() {
+    for (auto& [key, record] : records_) {
+        record.ready = false;
+        record.readable = false;
+        record.waited = 0;
+        std::fill(record.dirty, record.dirty + 6, true);
+        std::fill(record.matches, record.matches + 6, false);
+    }
+    pending_.clear();
+}
+
 void ShadowPlanner::clear() {
     records_.clear();
     pending_.clear();

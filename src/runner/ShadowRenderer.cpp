@@ -197,17 +197,19 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
     const int size = planner_.atlasSize();
     const int pages = planner_.atlasPages();
     if (size != atlasTextureSize_ || pages != atlasTexturePages_) {
-        // What works now, within the settings, or the smallest atlas when
-        // there is none yet.
-        const int workingSize = atlas_ != 0 ? std::min(atlasTextureSize_, settings.atlasMaxSize) : settings.atlasMinSize;
-        const int workingPages = atlas_ != 0 ? std::clamp(settings.atlasMaxPages, 1, atlasTexturePages_) : 1;
+        // What works now, within the settings and no bigger than what was
+        // asked for, or the smallest atlas when there is none yet.
+        const int workingSize =
+            std::min(size, atlas_ != 0 ? std::min(atlasTextureSize_, settings.atlasMaxSize) : settings.atlasMinSize);
+        const int workingPages =
+            std::min(pages, atlas_ != 0 ? std::clamp(settings.atlasMaxPages, 1, atlasTexturePages_) : 1);
         if (!makeAtlas(size, pages)) {
             // Even the smallest will not do: no shadows, said once.
             if ((size == workingSize && pages == workingPages) || !makeAtlas(workingSize, workingPages)) {
                 refuse();
                 return true;
             }
-            // Kept at what works, with the lights fitted to it, planned again.
+            // Kept at what works, with the lights fitted to it.
             if (!capSaid_) {
                 std::fprintf(stderr,
                              "The GPU will not make a shadow atlas of %d pages %d texels square; it keeps %d of %d, "
@@ -216,8 +218,11 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
                 capSaid_ = true;
             }
             planner_.capAtlas(workingSize, workingPages);
-            plan = planner_.plan(requests, casters_, camera, settings);
         }
+        // A texture made again holds nothing yet, whatever the planner
+        // thinks: every map is unreadable until drawn into it, planned again.
+        planner_.forgetMaps();
+        plan = planner_.plan(requests, casters_, camera, settings);
     }
     if (!plan.draws.empty()) {
         glBindFramebuffer(RT_GL_FRAMEBUFFER, atlasFbo_);

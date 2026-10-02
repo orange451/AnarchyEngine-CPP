@@ -497,6 +497,24 @@ void TestGpuMeshWithoutGl() {
     mesh.draw(3);
     mesh.draw_subset(3);
     mesh.destroy();
+
+    // The bounds of what was uploaded, kept for culling, with or without GL.
+    Data box;
+    for (const float x : {-1.f, 2.f}) {
+        Vertex v;
+        v.p[0] = x;
+        v.p[1] = x * 3.f;
+        v.p[2] = 0.5f;
+        box.vertices.push_back(v);
+    }
+    box.vertices.push_back(box.vertices[0]);
+    box.indices = {0, 1, 2};
+    GpuMesh bounded;
+    bounded.upload(box);
+    Expect(bounded.bounds_min()[0] == -1.f && bounded.bounds_min()[1] == -3.f && bounded.bounds_min()[2] == 0.5f,
+           "GpuMesh keeps its box's low corner");
+    Expect(bounded.bounds_max()[0] == 2.f && bounded.bounds_max()[1] == 6.f && bounded.bounds_max()[2] == 0.5f,
+           "and its high corner");
 }
 
 }  // namespace

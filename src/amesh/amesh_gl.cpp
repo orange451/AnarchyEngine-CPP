@@ -1,5 +1,6 @@
 #include "amesh.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -23,7 +24,12 @@ GpuMesh::GpuMesh(GpuMesh&& other) noexcept
       vbo_(std::exchange(other.vbo_, 0)),
       ebo_(std::exchange(other.ebo_, 0)),
       lods_(std::move(other.lods_)),
-      subsets_(std::move(other.subsets_)) {}
+      subsets_(std::move(other.subsets_)) {
+    for (int i = 0; i < 3; ++i) {
+        bounds_min_[i] = other.bounds_min_[i];
+        bounds_max_[i] = other.bounds_max_[i];
+    }
+}
 
 GpuMesh& GpuMesh::operator=(GpuMesh&& other) noexcept {
     if (this != &other) {
@@ -33,8 +39,25 @@ GpuMesh& GpuMesh::operator=(GpuMesh&& other) noexcept {
         ebo_ = std::exchange(other.ebo_, 0);
         lods_ = std::move(other.lods_);
         subsets_ = std::move(other.subsets_);
+        for (int i = 0; i < 3; ++i) {
+            bounds_min_[i] = other.bounds_min_[i];
+            bounds_max_[i] = other.bounds_max_[i];
+        }
     }
     return *this;
+}
+
+void GpuMesh::keep_bounds(const Data& data) {
+    for (int axis = 0; axis < 3; ++axis) {
+        bounds_min_[axis] = data.vertices.empty() ? 0.f : data.vertices[0].p[axis];
+        bounds_max_[axis] = bounds_min_[axis];
+    }
+    for (const Vertex& vertex : data.vertices) {
+        for (int axis = 0; axis < 3; ++axis) {
+            bounds_min_[axis] = std::min(bounds_min_[axis], vertex.p[axis]);
+            bounds_max_[axis] = std::max(bounds_max_[axis], vertex.p[axis]);
+        }
+    }
 }
 
 bool GpuMesh::valid() const {
@@ -70,7 +93,7 @@ void GpuMesh::draw_subset(std::size_t subset) const {
 
 #ifdef AE_MESH_NO_GL
 
-void GpuMesh::upload(const Data&, bool) {}
+void GpuMesh::upload(const Data& data, bool) { keep_bounds(data); }
 void GpuMesh::bind() const {}
 void GpuMesh::draw_range(std::uint32_t, std::uint32_t) const {}
 void GpuMesh::destroy() {
@@ -111,6 +134,8 @@ void GpuMesh::upload(const Data& data, bool dynamic) {
             }
         }
     }
+
+    keep_bounds(data);
 
     // A static mesh still fills the bone and weight attributes, with no influences.
     const bool skinned = !data.bones.empty();

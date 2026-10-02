@@ -316,8 +316,12 @@ public:
 
     std::size_t lod_count() const { return lods_.size(); }
     std::size_t subset_count() const { return subsets_.size(); }
+    // The local box around the last upload's vertices, for culling. Zeros before one. Needs no GL.
+    const float* bounds_min() const { return bounds_min_; }
+    const float* bounds_max() const { return bounds_max_; }
 
 private:
+    void keep_bounds(const Data& data);
     void draw_range(std::uint32_t tri_begin, std::uint32_t tri_count) const;
 
     unsigned vao_ = 0;
@@ -325,6 +329,8 @@ private:
     unsigned ebo_ = 0;
     std::vector<LodRange> lods_;
     std::vector<LodRange> subsets_;
+    float bounds_min_[3] = {0.f, 0.f, 0.f};
+    float bounds_max_[3] = {0.f, 0.f, 0.f};
 };
 
 }  // namespace anarchy::amesh

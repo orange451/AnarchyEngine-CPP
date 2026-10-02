@@ -219,6 +219,14 @@ constexpr GLenum RT_GL_TEXTURE_CUBE_MAP_SEAMLESS = 0x884F;
 constexpr GLenum RT_GL_TEXTURE_WRAP_R = 0x8072;
 constexpr GLenum RT_GL_TEXTURE_BASE_LEVEL = 0x813C;
 constexpr GLenum RT_GL_TEXTURE_MAX_LEVEL = 0x813D;
+// Shadow maps. Each is in GLES 3.0 too.
+constexpr GLenum RT_GL_NONE = 0;
+constexpr GLenum RT_GL_TEXTURE_2D_ARRAY = 0x8C1A;
+constexpr GLenum RT_GL_TEXTURE_COMPARE_MODE = 0x884C;
+constexpr GLenum RT_GL_TEXTURE_COMPARE_FUNC = 0x884D;
+constexpr GLenum RT_GL_COMPARE_REF_TO_TEXTURE = 0x884E;
+constexpr GLenum RT_GL_LEQUAL = 0x0203;
+constexpr GLenum RT_GL_POLYGON_OFFSET_FILL = 0x8037;
 
 // Names are prefixed so they do not collide with libGL's exported functions.
 extern const GLubyte* (*rt_glGetString)(GLenum name);
@@ -283,6 +291,12 @@ extern void (*rt_glBindFramebuffer)(GLenum target, GLuint framebuffer);
 extern void (*rt_glFramebufferTexture2D)(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
 extern GLenum (*rt_glCheckFramebufferStatus)(GLenum target);
 extern void (*rt_glDrawBuffers)(GLsizei n, const GLenum* bufs);
+extern void (*rt_glTexImage3D)(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
+                               GLsizei depth, GLint border, GLenum format, GLenum type, const void* pixels);
+extern void (*rt_glFramebufferTextureLayer)(GLenum target, GLenum attachment, GLuint texture, GLint level,
+                                            GLint layer);
+extern void (*rt_glPolygonOffset)(GLfloat factor, GLfloat units);
+extern void (*rt_glReadBuffer)(GLenum mode);
 extern void (*rt_glBlendFunc)(GLenum sfactor, GLenum dfactor);
 extern void (*rt_glBlendFuncSeparate)(GLenum srcRGB, GLenum dstRGB, GLenum srcAlpha, GLenum dstAlpha);
 extern void (*rt_glCullFace)(GLenum mode);
@@ -359,6 +373,10 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glFramebufferTexture2D ::runner::rt_glFramebufferTexture2D
 #define glCheckFramebufferStatus ::runner::rt_glCheckFramebufferStatus
 #define glDrawBuffers ::runner::rt_glDrawBuffers
+#define glTexImage3D ::runner::rt_glTexImage3D
+#define glFramebufferTextureLayer ::runner::rt_glFramebufferTextureLayer
+#define glPolygonOffset ::runner::rt_glPolygonOffset
+#define glReadBuffer ::runner::rt_glReadBuffer
 #define glBlendFunc ::runner::rt_glBlendFunc
 #define glBlendFuncSeparate ::runner::rt_glBlendFuncSeparate
 #define glCullFace ::runner::rt_glCullFace

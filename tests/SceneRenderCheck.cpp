@@ -183,6 +183,9 @@ int main() {
     if (!runner::LoadGl([](const char* name) { return reinterpret_cast<void*>(glfwGetProcAddress(name)); })) {
         return 1;
     }
+    Expect(runner::rt_glTexImage3D != nullptr && runner::rt_glFramebufferTextureLayer != nullptr &&
+               runner::rt_glPolygonOffset != nullptr && runner::rt_glReadBuffer != nullptr,
+           "the shadow maps' GL calls load");
     int fbWidth = 0;
     int fbHeight = 0;
     glfwGetFramebufferSize(window, &fbWidth, &fbHeight);

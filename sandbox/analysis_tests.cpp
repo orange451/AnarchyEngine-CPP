@@ -1210,8 +1210,13 @@ TEST_CASE("A34 an editor request is answered while a long check runs", "[A34]") 
     engine_core::Script& small = add_script(rig.game, "Small", "local x = 1\n");
     settle(analysis);
     add_script(rig.game, "Huge", long_source(60000, false, 0).c_str());
-    // Past the debounce, so the place checker is inside Huge's check.
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    // Pumping clears world_stale and moves Huge from pending into the running
+    // check, so busy() below reflects real checker work, not the stale flag.
+    for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+         std::chrono::steady_clock::now() < deadline;) {
+        analysis.pump();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     REQUIRE(analysis.busy());
     const engine_core::LuauFacts asked =
         analysis.luau_facts(completion_nodes(rig.game, small.id(), small.source()), small.id(), small.source(),

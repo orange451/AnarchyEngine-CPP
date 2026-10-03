@@ -6,6 +6,7 @@
 #include "DataModel.hpp"
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
+#include "DraggerWorld.hpp"
 #include "Ecs.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
@@ -148,6 +149,8 @@ struct DataModel::State {
     SelectionService selection;
     // Its signals are hosted by events below. ScriptRuntime binds and releases them.
     UserInputService input;
+    // Turns the input's mouse records into Dragger hovers and drags.
+    DraggerWorld draggers;
     std::vector<std::unique_ptr<InstancePool>> pools;
     // First child of the root DataModel. 0 means the root has no children.
     InstanceId root_first_child = 0;

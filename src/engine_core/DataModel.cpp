@@ -92,6 +92,8 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                               .with<ecs::InGame>()
                               .cached()
                               .build();
+    // Every dispatch of this world's input passes through its Draggers first.
+    world.input.set_filter([this](std::vector<InputRecord>& records) { state_->draggers.dispatch(*this, records); });
     world.slots.reserve(kMaxInstances);
     world.free_list.reserve(kMaxInstances);
     world.invalidation.reserve(kMaxInvalidations);

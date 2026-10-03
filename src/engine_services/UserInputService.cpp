@@ -316,6 +316,9 @@ void UserInputService::dispatch(EventQueue& events) {
         // Under the lock, so a lock that starts after this sees these records dispatched.
         delta_lock_starts_ = lock_starts_.load(std::memory_order_relaxed);
     }
+    if (filter_) {
+        filter_(records);
+    }
     mouse_delta_ = Vec3{};
     for (const InputRecord& record : records) {
         mouse_ = record.position;

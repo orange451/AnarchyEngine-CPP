@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <vector>
 
@@ -79,6 +80,11 @@ public:
     // read, then queues one signal event for each, carrying its InputObject
     // and whether the studio took it.
     void dispatch(EventQueue& events);
+    // SimulationThread. Sees every record of each dispatch, possibly none,
+    // before they are applied and fired, and may mark them processed. The
+    // data model's DraggerWorld is the one filter.
+    using DispatchFilter = std::function<void(std::vector<InputRecord>&)>;
+    void set_filter(DispatchFilter filter) { filter_ = std::move(filter); }
 
     // SimulationThread. What the dispatched events add up to.
     bool key_down(int key_code) const;
@@ -129,6 +135,7 @@ private:
 
     // SimulationThread only.
     std::vector<int> keys_down_;
+    DispatchFilter filter_;
     bool buttons_down_[3] = {};
     Vec3 mouse_{};
     Vec3 mouse_delta_{};

@@ -519,6 +519,7 @@ add_library(engine_core STATIC
     src/engine_core/Containment.cpp
     src/engine_core/Ecs.cpp
     src/engine_core/PhysicsWorld.cpp
+    src/engine_core/DraggerMath.cpp
     src/engine_core/AudioWorld.cpp
     src/engine_core/SoundPreview.cpp
 )

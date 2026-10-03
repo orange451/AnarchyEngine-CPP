@@ -192,6 +192,18 @@ scene {
     padding: 6px 8px;
     background-color: var(--ide-fps-color);
 }
+.ide-gui-toggle {
+    padding: 0 6px;
+    border-radius: 3px;
+    background-color: var(--ide-fps-color);
+}
+.ide-gui-toggle image-view {
+    image-color: var(--ide-fps-text-color);
+    opacity: 0.5;
+}
+.ide-gui-toggle:hover image-view, .ide-gui-toggle:selected image-view {
+    opacity: 1;
+}
 textfield {
     background-color: var(--ide-field-color);
     border-width: 1px;

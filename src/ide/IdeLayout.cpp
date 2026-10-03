@@ -704,6 +704,7 @@ void IdeLayout::routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene) {
 
 void IdeLayout::show_session(PlayState state) {
     play_ = state;
+    runner_.setTesting(in_test());
     // Changes on disk wait for Stop, and so does Apply.
     if (conflicts_pane_) {
         conflicts_pane_->setApplyEnabled(!in_test());

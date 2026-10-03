@@ -62,7 +62,9 @@ class SceneFeed;
 //
 // Over the drawing, under the FPS label and the camera list, the Gui service's
 // ScreenGuis are drawn (GuiLayer), in a SubScene so the studio's styles do not
-// reach them. A press on a GUI element goes to it, and to UserInputService with
+// reach them. The eye left of the camera list turns them off in edit mode, to
+// see the scene without them; a test always draws them, and hides the eye and
+// the camera list. A press on a GUI element goes to it, and to UserInputService with
 // gameProcessedEvent true; a press on a ScreenGui's own area goes on to the
 // scene as if no GUI were there.
 class GameView : public ide::IdePane {
@@ -83,6 +85,8 @@ public:
     jadefx::ComboBox& cameraList() { return *cameraBox_; }
     // The GUIs drawn over the view.
     GuiLayer& guiLayer() { return *guiLayer_; }
+    // The eye left of the camera list. Selected, as it starts, draws the GUIs.
+    jadefx::ToggleButton& guiToggle() { return *guiToggle_; }
     // The player's view: no FPS label or camera list, since a game shows only
     // itself, and the view follows the Workspace's CurrentCamera, as a script
     // sets it, rather than the Camera picked in the list.
@@ -128,6 +132,9 @@ private:
     void collectOutlines(const engine_core::VisualSnapshot& snapshot);
     // Builds the snapshot's Dragger handles for this view's camera and size.
     void collectHandles(const engine_core::VisualSnapshot& snapshot);
+    // Shows the GUIs, the eye, and the camera list as the toggle, a test, and
+    // the player's view want them.
+    void refreshOverlays();
     // Puts the Cameras in the list, and selects the linked one, when either changed.
     void refreshCameraList();
     // Points the renderer at the linked Camera's snapshot row, when it has one.
@@ -214,6 +221,7 @@ private:
     std::vector<engine_core::HandleVertex> handleVertices_;
     std::vector<engine_core::HandleVertex> handleScratch_;
     jadefx::ComboBox* cameraBox_ = nullptr;
+    jadefx::ToggleButton* guiToggle_ = nullptr;
     GuiLayer* guiLayer_ = nullptr;
     // Holds guiLayer_ as its root.
     jadefx::SubScene* guiScene_ = nullptr;
@@ -226,6 +234,8 @@ private:
     bool pointerLocked_ = false;
     // setPlayerView: the link follows the Workspace's CurrentCamera.
     bool followCurrentCamera_ = false;
+    // setPlayerView: no camera list or eye, and the GUIs always drawn.
+    bool playerView_ = false;
     // Paints in the current window. The label reads the finished average.
     std::chrono::steady_clock::time_point paintWindowStart_{};
     int paintWindowFrames_ = 0;

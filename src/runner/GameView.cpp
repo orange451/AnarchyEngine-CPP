@@ -14,6 +14,7 @@
 #include "ScriptRuntime.hpp"
 #include "amesh.hpp"
 #include "gl.hpp"
+#include "ide/IdeIcons.hpp"
 #include "UserInputService.hpp"
 
 #define GLFW_INCLUDE_NONE
@@ -121,13 +122,33 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
     });
     cameraBox_ = cameras.get();
     getChildren().add(std::move(cameras));
+
+    auto eye = jadefx::make<jadefx::ToggleButton>();
+    eye->getClassList().add("ide-gui-toggle");
+    eye->setSelected(true);
+    eye->setGraphic(ide::icon_graphic("Eye.png"));
+    jadefx::Tooltip::install(eye.get(), jadefx::make<jadefx::Tooltip>("Show GUI"));
+    eye->setOnAction([this](jadefx::ActionEvent&) {
+        guiToggle_->setGraphic(ide::icon_graphic(guiToggle_->isSelected() ? "Eye.png" : "EyeClosed.png"));
+        refreshOverlays();
+    });
+    guiToggle_ = eye.get();
+    getChildren().add(std::move(eye));
     refreshWorkspace();
 }
 
 void GameView::setPlayerView(bool player) {
     fpsLabel_->setVisible(!player);
-    cameraBox_->setVisible(!player);
+    playerView_ = player;
     followCurrentCamera_ = player;
+    refreshOverlays();
+}
+
+void GameView::refreshOverlays() {
+    const bool editing = !playerView_ && !runner_->testing();
+    cameraBox_->setVisible(editing);
+    guiToggle_->setVisible(editing);
+    guiScene_->setVisible(!editing || guiToggle_->isSelected());
 }
 
 void GameView::linkCamera(std::string guid) {
@@ -392,6 +413,7 @@ void GameView::layoutChildren() {
     // current when the list lays out and when the paint follows the Camera.
     refreshWorkspace();
     refreshCameraList();
+    refreshOverlays();
     guiLayer_->sync();
     StackPane::layoutChildren();
     // The GUIs cover the whole view, whatever they would rather be.
@@ -403,7 +425,12 @@ void GameView::layoutChildren() {
     constexpr double kListWidth = 160.0;
     const double width = std::max(0.0, std::min(kListWidth, contentWidth() - 2 * kMargin));
     const double height = cameraBox_->measuredHeight(width, contentHeight());
-    cameraBox_->performLayout(contentLeft() + contentWidth() - kMargin - width, contentTop() + kMargin, width, height);
+    const double listLeft = contentLeft() + contentWidth() - kMargin - width;
+    cameraBox_->performLayout(listLeft, contentTop() + kMargin, width, height);
+    // The eye sits just left of the list, as tall as it.
+    constexpr double kGap = 4.0;
+    const double eyeWidth = guiToggle_->measuredWidth(height);
+    guiToggle_->performLayout(listLeft - kGap - eyeWidth, contentTop() + kMargin, eyeWidth, height);
 }
 
 void GameView::refreshWorkspace() {

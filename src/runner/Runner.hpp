@@ -37,6 +37,10 @@ public:
     // during a test and when the ribbon's Grid is off. UI thread only.
     bool sceneGrid() const { return sceneGrid_; }
     void setSceneGrid(bool shown) { sceneGrid_ = shown; }
+    // Whether the IDE is in a test, paused or not. The Scene Views then always
+    // draw the GUIs, and hide their camera list and GUI toggle. UI thread only.
+    bool testing() const { return testing_; }
+    void setTesting(bool testing) { testing_ = testing; }
 
 private:
     // Declared first, so it outlives the engine whose render thread writes it.
@@ -45,6 +49,7 @@ private:
     std::unique_ptr<engine_core::Engine> simulation_;
     bool threadsStarted_ = false;
     bool sceneGrid_ = true;
+    bool testing_ = false;
 };
 
 }  // namespace runner

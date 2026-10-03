@@ -147,7 +147,7 @@ public:
     // For a write that changes what a save writes without entering history.
     void mark_dirty();
     // The place is what is on disk: a save wrote every file, or it was just built from disk.
-    void mark_saved() { dirty_.store(false, std::memory_order_relaxed); }
+    void mark_saved();
 
     // The most waypoints each undo stack keeps, and roughly how many bytes of
     // recorded state. The oldest go first; the newest always stays.
@@ -198,7 +198,8 @@ private:
         std::string name;
         std::string display_name;
         std::vector<Mutation> mutations;
-        // dirty() when it opened, which a cancel or an empty commit puts back.
+        // dirty() when it opened, which a cancel or an empty commit puts back. A
+        // save while it is open resets it to whether that place differs from disk.
         bool was_dirty = false;
     };
 

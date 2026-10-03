@@ -848,3 +848,61 @@ TEST_CASE("H33 writes that change a file without entering history dirty the plac
     game.set_extra_property(tool.id(), "Note", engine_core::JsonValue::string("x"));
     REQUIRE_FALSE(game.history().dirty());
 }
+
+TEST_CASE("H34 a save inside a recording that is then cancelled leaves the place dirty", "[H34][history]") {
+    engine_core::Game game;
+    engine_core::GameObject& part = make_part(game, "Brick");
+    game.history().reset_waypoints();
+
+    const std::optional<std::string> recording = game.history().try_begin_recording("Rename");
+    REQUIRE(recording.has_value());
+    game.set_name(part.id(), "A");
+    // A save wrote "A"; the cancel puts back what is no longer on disk.
+    game.history().mark_saved();
+    game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Cancel);
+    REQUIRE(game.name(part.id()) == "Brick");
+    REQUIRE(game.history().dirty());
+}
+
+TEST_CASE("H35 a save inside a recording that then coalesces to nothing leaves the place dirty", "[H35][history]") {
+    engine_core::Game game;
+    engine_core::GameObject& part = make_part(game, "Brick");
+    game.history().reset_waypoints();
+
+    begin_step(game, "Rename");
+    game.set_name(part.id(), "A");
+    game.history().mark_saved();
+    game.set_name(part.id(), "Brick");
+    end_step(game);
+    REQUIRE_FALSE(game.history().can_undo().first);
+    REQUIRE(game.history().dirty());
+}
+
+TEST_CASE("H36 a save inside a recording that holds nothing, then a cancel, leaves the place clean", "[H36][history]") {
+    engine_core::Game game;
+    make_part(game, "Brick");
+    game.history().reset_waypoints();
+
+    const std::optional<std::string> recording = game.history().try_begin_recording("Nothing");
+    REQUIRE(recording.has_value());
+    game.history().mark_saved();
+    game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Cancel);
+    REQUIRE_FALSE(game.history().dirty());
+}
+
+TEST_CASE("H37 a save inside a recording that holds nothing, on a dirty place, then a cancel, leaves the place clean",
+          "[H37][history]") {
+    engine_core::Game game;
+    engine_core::GameObject& part = make_part(game, "Brick");
+    game.history().reset_waypoints();
+    begin_step(game, "Rename");
+    game.set_name(part.id(), "A");
+    end_step(game);
+    REQUIRE(game.history().dirty());
+
+    const std::optional<std::string> recording = game.history().try_begin_recording("Nothing");
+    REQUIRE(recording.has_value());
+    game.history().mark_saved();
+    game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Cancel);
+    REQUIRE_FALSE(game.history().dirty());
+}

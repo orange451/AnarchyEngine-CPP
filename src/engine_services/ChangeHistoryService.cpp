@@ -197,6 +197,16 @@ void ChangeHistoryService::note(Mutation mutation) {
     }
 }
 
+void ChangeHistoryService::mark_saved() {
+    dirty_.store(false, std::memory_order_relaxed);
+    // What the open recording holds is now on disk. A cancel or an empty commit
+    // puts back the place it opened on, which differs from disk only if the
+    // recording holds something.
+    if (recording_) {
+        recording_->was_dirty = !recording_->mutations.empty();
+    }
+}
+
 void ChangeHistoryService::mark_dirty() {
     dirty_.store(true, std::memory_order_relaxed);
     // What a cancel reverts does not include this write, so it must not put the flag back.
@@ -243,8 +253,8 @@ void ChangeHistoryService::finish_recording(std::string id, FinishRecordingOpera
         Waypoint inverse;
         inverse.mutations = std::move(recording.mutations);
         apply_waypoint(inverse, true);
-        if (edit && !recording.was_dirty) {
-            mark_saved();
+        if (edit) {
+            dirty_.store(recording.was_dirty, std::memory_order_relaxed);
         }
     } else if (!recording.mutations.empty()) {
         Waypoint waypoint;
@@ -259,8 +269,8 @@ void ChangeHistoryService::finish_recording(std::string id, FinishRecordingOpera
         undo.push_back(std::move(waypoint));
         redo_stack().clear();
         trim(undo);
-    } else if (edit && !recording.was_dirty) {
-        mark_saved();
+    } else if (edit) {
+        dirty_.store(recording.was_dirty, std::memory_order_relaxed);
     }
     on_recording_finished.emit(recording.name, recording.display_name, recording.id, op);
 }

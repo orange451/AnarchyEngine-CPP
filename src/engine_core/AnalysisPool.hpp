@@ -17,7 +17,8 @@ namespace engine_core {
 // waits. Each thread has a stack as deep as Luau needs.
 //
 // A task must not throw. Luau's own task reports itself done only by returning.
-// run_all must not be called from one of the pool's threads.
+// run_all must not be called from one of the pool's threads. The pool must not
+// be destroyed while a run_all call is waiting.
 class AnalysisPool {
 public:
     // At least one thread, whatever `threads` says.

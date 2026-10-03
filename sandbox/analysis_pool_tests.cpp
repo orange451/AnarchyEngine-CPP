@@ -40,16 +40,20 @@ TEST_CASE("APL2 tasks run on several threads at once", "[APL2]") {
     engine_core::AnalysisPool pool(4, kStack);
     REQUIRE(pool.size() == 4);
     std::atomic<int> arrived{0};
+    std::atomic<int> saw_all{0};
     std::vector<std::function<void()>> tasks;
     for (int i = 0; i < 4; ++i) {
         // Each waits for all four, which only happens if all four run together.
-        tasks.push_back([&arrived] {
+        tasks.push_back([&arrived, &saw_all] {
             arrived.fetch_add(1);
-            wait_for([&arrived] { return arrived.load() == 4; });
+            if (wait_for([&arrived] { return arrived.load() == 4; })) {
+                saw_all.fetch_add(1);
+            }
         });
     }
     pool.run_all(std::move(tasks));
     REQUIRE(arrived.load() == 4);
+    REQUIRE(saw_all.load() == 4);
 }
 
 TEST_CASE("APL3 post returns before its tasks finish", "[APL3]") {

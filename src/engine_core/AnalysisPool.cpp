@@ -9,8 +9,20 @@ namespace engine_core {
 AnalysisPool::AnalysisPool(unsigned threads, std::size_t stack_bytes) {
     threads = std::max(1u, threads);
     threads_.reserve(threads);
-    for (unsigned i = 0; i < threads; ++i) {
-        threads_.emplace_back(stack_bytes, [this] { work(); });
+    try {
+        for (unsigned i = 0; i < threads; ++i) {
+            threads_.emplace_back(stack_bytes, [this] { work(); });
+        }
+    } catch (...) {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            stop_ = true;
+        }
+        cv_.notify_all();
+        for (StackThread& thread : threads_) {
+            thread.join();
+        }
+        throw;
     }
 }
 

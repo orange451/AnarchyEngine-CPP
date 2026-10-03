@@ -30,8 +30,12 @@ namespace engine_core {
 // Shape            Enum.PhysicsShape  Box.
 // Size             Vector3   (1, 1, 1); each axis at least kMinSize. Box: its
 //                            extents. Sphere: diameter X. Capsule: diameter X,
-//                            height Y, along Y. Hull and Custom: the mesh
-//                            fits it.
+//                            height Y, along Y. Cylinder: diameter X,
+//                            height Y, along Y. Cone: base diameter X at
+//                            the bottom, height Y to its tip. Wedge: Size's
+//                            box halved by a slope from its bottom front
+//                            (-Z) edge up to its top back (+Z) edge. Hull
+//                            and Custom: the mesh fits it.
 // Mesh             Mesh?     a Hull's points, or a Custom's triangles: the
 //                            whole mesh, which collides only while Anchored
 //                            (Box3D gives a mesh contacts only on a static
@@ -45,7 +49,7 @@ namespace engine_core {
 // the physics world itself go through store_simulated and are none of those.
 class PhysicsObject : public PVInstance {
 public:
-    enum class Shape { Box = 0, Sphere = 1, Capsule = 2, Hull = 3, Custom = 4 };
+    enum class Shape { Box = 0, Sphere = 1, Capsule = 2, Hull = 3, Custom = 4, Cylinder = 5, Cone = 6, Wedge = 7 };
 
     // What a write changed, for the physics world to push into the body.
     enum Dirty : std::uint32_t {

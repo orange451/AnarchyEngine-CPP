@@ -4,6 +4,7 @@
 #include "DataModel.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
+#include "MeshShapes.hpp"
 #include "PhysicsObject.hpp"
 
 #pragma warning(push, 0)
@@ -28,6 +29,9 @@ constexpr int kHullVertices = 64;
 constexpr int kHullVerticesRetry = 32;
 // How near two corners of a Custom's triangles are to be joined as one.
 constexpr float kWeldTolerance = 1e-4f;
+// The sides around a Cylinder or a Cone, as Box3D builds no round hull. A
+// Cylinder of n sides has 6n half-edges, and a hull keeps at most 128.
+constexpr int kRoundSides = 16;
 
 b3Vec3 to_b3(Vec3 v) { return b3Vec3{v.x, v.y, v.z}; }
 
@@ -129,6 +133,36 @@ b3HullData* build_hull(const std::vector<b3Vec3>& points) {
         hull = b3CreateHull(points.data(), count, kHullVerticesRetry);
     }
     return hull;
+}
+
+// The corners of a Cylinder, Cone, or Wedge of size around center, into
+// points. Each stands along Y; a Cylinder and a Cone are round across X, as
+// a Mesh's AddCylinder and AddCone build them.
+void primitive_points(PhysicsObject::Shape shape, Vec3 size, Vec3 center, std::vector<b3Vec3>& points) {
+    points.clear();
+    if (shape == PhysicsObject::Shape::Wedge) {
+        const float half_x = size.x * 0.5f;
+        const float half_y = size.y * 0.5f;
+        const float half_z = size.z * 0.5f;
+        // The bottom face, then the top edge along its back.
+        for (const float x : {-half_x, half_x}) {
+            points.push_back(b3Vec3{center.x + x, center.y - half_y, center.z - half_z});
+            points.push_back(b3Vec3{center.x + x, center.y - half_y, center.z + half_z});
+            points.push_back(b3Vec3{center.x + x, center.y + half_y, center.z + half_z});
+        }
+        return;
+    }
+    // Its sides alone: the hull closes the ends, and joins the corners the
+    // mesh repeats at its seam and tip.
+    anarchy::amesh::Data mesh;
+    if (shape == PhysicsObject::Shape::Cylinder) {
+        add_cylinder(mesh, size.x * 0.5f, size.y, kRoundSides, false, center);
+    } else {
+        add_cone(mesh, size.x * 0.5f, size.y, kRoundSides, false, center);
+    }
+    for (const anarchy::amesh::Vertex& vertex : mesh.vertices) {
+        points.push_back(b3Vec3{vertex.p[0], vertex.p[1], vertex.p[2]});
+    }
 }
 
 // points and triangles as one mesh, as an anchored Custom's shape takes it,
@@ -524,6 +558,17 @@ struct PhysicsWorld::Impl {
                 b3DestroyHull(hull);
             }
             break;
+        case PhysicsObject::Shape::Cylinder:
+        case PhysicsObject::Shape::Cone:
+        case PhysicsObject::Shape::Wedge:
+            primitive_points(object.shape(), size, record.center, points);
+            if (b3HullData* hull = build_hull(points)) {
+                record.volume = b3ComputeHullMass(hull, 1.f).mass;
+                def.density = density(object, record.volume);
+                record.shape = b3CreateHullShape(record.body, &def, hull);
+                b3DestroyHull(hull);
+            }
+            break;
         case PhysicsObject::Shape::Box:
             break;
         }
@@ -788,6 +833,19 @@ void PhysicsWorld::collision_outline(const PhysicsObject& object, Vec3 center, c
             outline_triangles(points, triangles, lines);
             return;
         }
+        b3HullData* hull = build_hull(points);
+        if (hull == nullptr) {
+            break;
+        }
+        outline_hull(*hull, lines);
+        b3DestroyHull(hull);
+        return;
+    }
+    case PhysicsObject::Shape::Cylinder:
+    case PhysicsObject::Shape::Cone:
+    case PhysicsObject::Shape::Wedge: {
+        std::vector<b3Vec3> points;
+        primitive_points(object.shape(), size, center, points);
         b3HullData* hull = build_hull(points);
         if (hull == nullptr) {
             break;

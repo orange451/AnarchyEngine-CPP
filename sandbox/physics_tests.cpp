@@ -429,7 +429,7 @@ TEST_CASE("P13 PhysicsObject properties are checked, saved, and come back at Sto
     REQUIRE(copy.load_property("Shape", engine_core::JsonValue::string("Hull"), error));
     REQUIRE(error.empty());
     REQUIRE(copy.shape() == PhysicsObject::Shape::Hull);
-    copy.load_property("Shape", engine_core::JsonValue::string("Cylinder"), error);
+    copy.load_property("Shape", engine_core::JsonValue::string("Torus"), error);
     REQUIRE(error.find("Enum.PhysicsShape") != std::string::npos);
     REQUIRE(copy.shape() == PhysicsObject::Shape::Hull);
 
@@ -462,7 +462,7 @@ TEST_CASE("P14 scripts set Shape by item, name, or value, and nothing else", "[p
         _G.name = body.Shape == Enum.PhysicsShape.Capsule
         body.Shape = 3
         _G.value = body.Shape == Enum.PhysicsShape.Hull and body.Shape.Name == "Hull"
-        _G.refused = not pcall(function() body.Shape = "Cylinder" end)
+        _G.refused = not pcall(function() body.Shape = "Torus" end)
             and not pcall(function() body.Shape = Enum.KeyCode.A end)
             and not pcall(function() body.Shape = Vector3.new() end)
             and body.Shape == Enum.PhysicsShape.Hull
@@ -602,6 +602,48 @@ TEST_CASE("P17 a collision outline traces what the body collides as, in the body
         REQUIRE_FALSE(hull.empty());
         REQUIRE(hull.size() == lines.size());
     }
+
+    SECTION("a Cylinder is sixteen sides around Y at half of Size's X, Size's Y tall") {
+        REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
+        engine_core::PhysicsWorld::collision_outline(body, Vec3{}, no_points, no_triangles, lines);
+        // Sixteen edges around each cap and sixteen between them.
+        REQUIRE(lines.size() == 2 * 48);
+        for (const Vec3& p : lines) {
+            REQUIRE(near(std::sqrt(p.x * p.x + p.z * p.z), 1.f, 1e-4f));
+            REQUIRE(near(std::fabs(p.y), 2.f, 1e-4f));
+        }
+    }
+
+    SECTION("a Cone is a base at half of Size's X, Size's Y below its tip") {
+        REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Cone)));
+        engine_core::PhysicsWorld::collision_outline(body, Vec3{}, no_points, no_triangles, lines);
+        // Sixteen edges around the base and sixteen up to the tip.
+        REQUIRE(lines.size() == 2 * 32);
+        int tips = 0;
+        for (const Vec3& p : lines) {
+            if (near(p.y, 2.f, 1e-4f)) {
+                REQUIRE(near(p.x, 0.f, 1e-4f));
+                REQUIRE(near(p.z, 0.f, 1e-4f));
+                ++tips;
+            } else {
+                REQUIRE(near(p.y, -2.f, 1e-4f));
+                REQUIRE(near(std::sqrt(p.x * p.x + p.z * p.z), 1.f, 1e-4f));
+            }
+        }
+        REQUIRE(tips == 16);
+    }
+
+    SECTION("a Wedge is Size's box sloped from its bottom front up to its top back") {
+        REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Wedge)));
+        engine_core::PhysicsWorld::collision_outline(body, Vec3{}, no_points, no_triangles, lines);
+        // Six corners, five faces, nine edges.
+        REQUIRE(lines.size() == 2 * 9);
+        for (const Vec3& p : lines) {
+            REQUIRE(on_box_corner(p, half));
+            // No corner at the top front.
+            REQUIRE_FALSE((p.y > 0.f && p.z < 0.f));
+        }
+    }
 }
 
 TEST_CASE("P18 a body's pose is its Transform's position and rotation, without the scale", "[physics]") {
@@ -727,4 +769,34 @@ TEST_CASE("P20 a collision outline is centered where the body's shape is", "[phy
     for (const Vec3& p : lines) {
         REQUIRE(on_box_corner(Vec3{p.x, p.y - 1.f, p.z}, Vec3{1.f, 1.f, 1.f}));
     }
+}
+
+TEST_CASE("P21 a Cylinder, a Cone, and a Wedge rest on their bottoms, a Cylinder on its side rolls", "[physics]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& cylinder = rig.body(at(-4.f, 3.f, 0.f), Vec3{1.f, 2.f, 1.f}, false);
+    REQUIRE_FALSE(cylinder.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
+    PhysicsObject& cone = rig.body(at(0.f, 3.f, 0.f), Vec3{2.f, 2.f, 2.f}, false);
+    REQUIRE_FALSE(cone.set_shape(static_cast<int>(PhysicsObject::Shape::Cone)));
+    PhysicsObject& wedge = rig.body(at(4.f, 3.f, 0.f), Vec3{2.f, 1.f, 2.f}, false);
+    REQUIRE_FALSE(wedge.set_shape(static_cast<int>(PhysicsObject::Shape::Wedge)));
+    // On its side, along X, and pushed along Z.
+    PhysicsObject& log = rig.body(engine_core::matrix4_axis_angle(Vec3{0.f, 0.f, 1.f}, 1.5707963), Vec3{1.f, 2.f, 1.f},
+                                  false);
+    Matrix4 above = log.transform();
+    above.m[12] = 8.f;
+    above.m[13] = 0.6f;
+    REQUIRE_FALSE(log.set_transform(above));
+    REQUIRE_FALSE(log.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
+    REQUIRE_FALSE(log.set_velocity(Vec3{0.f, 0.f, 2.f}));
+    rig.play();
+    rig.seconds(3.0);
+    INFO(y_of(cylinder.transform()) << " " << y_of(cone.transform()) << " " << y_of(wedge.transform()));
+    REQUIRE(near(y_of(cylinder.transform()), 1.f, 0.05f));
+    REQUIRE(near(y_of(cone.transform()), 1.f, 0.05f));
+    REQUIRE(near(y_of(wedge.transform()), 0.5f, 0.05f));
+    REQUIRE(near(y_of(log.transform()), 0.5f, 0.05f));
+    // A box pushed so slides to a stop within a third of a unit; a log rolls on.
+    REQUIRE(log.transform().m[14] > 1.f);
+    REQUIRE(rig.warnings.empty());
 }

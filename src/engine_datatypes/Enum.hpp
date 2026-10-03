@@ -29,7 +29,7 @@ const EnumType& key_code_enum();
 const EnumType& user_input_type_enum();
 const EnumType& user_input_state_enum();
 const EnumType& mouse_behavior_enum();
-// Box 0, Sphere 1, Capsule 2, Hull 3, Custom 4.
+// Box 0, Sphere 1, Capsule 2, Hull 3, Custom 4, Cylinder 5, Cone 6, Wedge 7.
 const EnumType& physics_shape_enum();
 // Inverse 0, Linear 1, Exponential 2, None 3.
 const EnumType& roll_off_mode_enum();

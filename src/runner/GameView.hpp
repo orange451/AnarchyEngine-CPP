@@ -190,7 +190,7 @@ private:
         // What lines was made from: the Shape, Size, and Anchored, where the
         // shape is centered, and the Mesh, its file, and its session
         // geometry's revision, with the points and triangles read from it.
-        // No Mesh for a Box, Sphere, or Capsule.
+        // No Mesh for any Shape but a Hull or a Custom.
         int shape = -1;
         engine_core::Vec3 size{};
         bool anchored = false;

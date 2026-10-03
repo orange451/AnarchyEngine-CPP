@@ -167,6 +167,9 @@ const EnumEntry kPhysicsShapes[] = {
     {"Capsule", 2},
     {"Hull", 3},
     {"Custom", 4},
+    {"Cylinder", 5},
+    {"Cone", 6},
+    {"Wedge", 7},
 };
 
 // SoundEmitter.RollOffMode: miniaudio's attenuation models. Inverse and

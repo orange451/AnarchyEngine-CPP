@@ -1311,7 +1311,8 @@ void TestEnumRowAndShownWhen() {
     auto* choice = dynamic_cast<jadefx::ComboBox*>(rig.panel.editor("Shape"));
     Expect(choice != nullptr, "an Enum row is a dropdown");
     Expect(choice != nullptr && choice->getItems().items() ==
-                                    std::vector<std::string>{"Box", "Sphere", "Capsule", "Hull", "Custom"},
+                                    std::vector<std::string>{"Box", "Sphere", "Capsule", "Hull", "Custom",
+                                                             "Cylinder", "Cone", "Wedge"},
            "listing the items in value order");
     Expect(choice != nullptr && choice->getSelectionIndex() == 0, "Box is picked");
     Expect(!rig.hasRow("Mesh"), "a Box has no Mesh row");

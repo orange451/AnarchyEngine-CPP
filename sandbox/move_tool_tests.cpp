@@ -5,6 +5,7 @@
 #include "ChangeHistoryService.hpp"
 #include "Dragger.hpp"
 #include "Folder.hpp"
+#include "Project.hpp"
 #include "ide/PluginLoader.hpp"
 #include "SelectionService.hpp"
 
@@ -164,4 +165,29 @@ TEST_CASE("MT3 the Move tool lets go during play and takes the selection back af
     rig.game.stop_simulation();
     rig.frames(1);
     REQUIRE(move_target(rig.game) == a);
+}
+
+TEST_CASE("MT4 New and Open clear the selection, so the Move tool lets go", "[MT4][project]") {
+    ScriptRig rig;
+    TempDir dir;
+    engine_core::Project project = engine_core::Project::create(dir.path, rig.game);
+    const InstanceId a = add_part(rig.game, "A");
+    project.save();
+    ide::PluginLoader loader;
+    REQUIRE(loader.load(rig.game, rig.runtime, {move_tool_file()}) == 1);
+    rig.game.selection().set({a});
+    rig.frames(1);
+    REQUIRE(move_target(rig.game) == a);
+    // Reopening the same project brings back an instance with A's GUID.
+    engine_core::Project reopened = engine_core::Project::load(dir.path, rig.game);
+    rig.frames(1);
+    REQUIRE(rig.game.selection().get().empty());
+    REQUIRE(move_target(rig.game) == 0);
+    rig.game.selection().set({rig.game.find_first_child(rig.game.scene_service("Workspace"), "A")});
+    rig.frames(1);
+    REQUIRE(move_target(rig.game) != 0);
+    engine_core::Project::reset_place(rig.game);
+    rig.frames(1);
+    REQUIRE(rig.game.selection().get().empty());
+    REQUIRE(move_target(rig.game) == 0);
 }

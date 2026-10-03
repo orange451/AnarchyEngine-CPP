@@ -15,6 +15,7 @@
 #include "ModuleScript.hpp"
 #include "PhysicsObject.hpp"
 #include "SceneService.hpp"
+#include "SelectionService.hpp"
 #include "Skybox.hpp"
 #include "SoundEmitter.hpp"
 #include "Script.hpp"
@@ -1071,6 +1072,9 @@ public:
         world_.capture_place();
         world_.history().reset_waypoints();
         world_.clear_authored_dirty();
+        // The old place's instances are gone. A new one may reuse their GUIDs,
+        // so what named them, as the Move tool's Adornee does, must not follow.
+        world_.selection().set({});
     }
 
 private:

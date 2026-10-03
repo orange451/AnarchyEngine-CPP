@@ -2,6 +2,8 @@
 
 #include "LuaApi.hpp"
 
+#include <iterator>
+
 namespace engine_core {
 
 void RunService::bind(EventQueue& events) {
@@ -13,6 +15,8 @@ void RunService::bind(EventQueue& events) {
     events.host_signal(&post_simulation_);
     events.host_signal(&heartbeat_);
     events.host_signal(&render_stepped_);
+    events.host_signal(&started_);
+    events.host_signal(&stopped_);
     bound_ = true;
 }
 
@@ -25,6 +29,8 @@ void RunService::release(EventQueue& events) {
     events.release_signal(post_simulation_);
     events.release_signal(heartbeat_);
     events.release_signal(render_stepped_);
+    events.release_signal(started_);
+    events.release_signal(stopped_);
     bound_ = false;
 }
 
@@ -77,8 +83,10 @@ ANARCHY_LUA_REGISTER(register_run_service_lua) {
         lua_signal_member("PreAnimation", static_cast<int>(Phase::PreAnimation), false),
         lua_signal_member("PreRender", static_cast<int>(Phase::PreRender), true),
         lua_signal_member("RenderStepped", static_cast<int>(Phase::RenderStepped), false),
+        lua_host_signal("Started", HostSignal::Started),
+        lua_host_signal("Stopped", HostSignal::Stopped),
     };
-    register_lua_class("RunService", nullptr, fields, 6);
+    register_lua_class("RunService", nullptr, fields, static_cast<int>(std::size(fields)));
     register_lua_service("RunService");
 }
 

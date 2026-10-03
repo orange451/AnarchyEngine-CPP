@@ -151,6 +151,9 @@ public:
     // last plugin goes. The caller is the simulation thread, or a paused edit. False
     // when root is not a live instance or is registered already; nothing runs then.
     bool register_plugin(InstanceId root);
+    // Selection.SelectionChanged, RunService.Started, and RunService.Stopped.
+    // Null before attach.
+    Signal* host_signal(HostSignal which);
     // Scripts in Core run in the plugin VM, as plugins: one that enters Core
     // while Enabled starts, and one that leaves, is disabled, or is destroyed
     // stops. The script host's hooks queue them, and this registers or
@@ -411,6 +414,13 @@ private:
 
     // The phase signals scripts reach through game:GetService("RunService").
     RunService run_service_;
+    // Selection.SelectionChanged. The selection changes on any thread, so
+    // step_tools fires it, and Started and Stopped, for what changed since
+    // the step before.
+    Signal selection_changed_;
+    std::uint64_t selection_revision_ = 0;
+    bool was_running_ = false;
+    void fire_host_changes();
 };
 
 }  // namespace engine_core

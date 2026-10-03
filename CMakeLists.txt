@@ -785,6 +785,7 @@ add_executable(sandbox
     sandbox/core_tests.cpp
     sandbox/archivable_tests.cpp
     sandbox/dragger_tests.cpp
+    sandbox/move_tool_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

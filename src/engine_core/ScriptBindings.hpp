@@ -71,6 +71,8 @@ constexpr int kSignalChanged = 0;
 constexpr int kSignalPhase = 1;
 constexpr int kSignalInput = 2;
 constexpr int kSignalEvent = 3;
+// A service's signal with no arguments, found by its HostSignal tag in phase.
+constexpr int kSignalHost = 4;
 constexpr int kServiceKinds = static_cast<int>(sizeof(kServiceClasses) / sizeof(kServiceClasses[0]));
 
 inline int service_kind(const char* name) {

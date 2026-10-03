@@ -42,6 +42,10 @@ public:
     // Fires RenderStepped once for the frames noted since the last call, with
     // their time summed. Nothing when no frame was drawn.
     void fire_render_stepped(EventQueue& events);
+    // Started fires when a play session opens, after the place is captured;
+    // Stopped after Stop has restored it. Neither carries arguments.
+    Signal* started() { return bound_ ? &started_ : nullptr; }
+    Signal* stopped() { return bound_ ? &stopped_ : nullptr; }
     // Forgets the frames noted so far. Any thread may call it.
     void drop_frames() { frame_ns_.store(0, std::memory_order_relaxed); }
 
@@ -51,6 +55,8 @@ private:
     Signal post_simulation_;
     Signal heartbeat_;
     Signal render_stepped_;
+    Signal started_;
+    Signal stopped_;
     double dt_[kPhaseCount] = {};
     // Nanoseconds of the frames noted and not yet fired. A frame counts at least 1,
     // so a frame noted with dt 0 is still a frame.

@@ -653,6 +653,8 @@ Signal& ScriptBindings::signal_of(lua_State* state, ScriptRuntime& runtime, cons
         signal = &runtime.game_->event_signal(ud.id, ud.event_name != nullptr ? ud.event_name : "");
     } else if (ud.kind == kSignalInput) {
         signal = runtime.game_->input().signal(static_cast<UserInputService::Kind>(ud.phase));
+    } else if (ud.kind == kSignalHost) {
+        signal = runtime.host_signal(static_cast<HostSignal>(ud.phase));
     } else {
         signal = runtime.run_service_.signal(static_cast<Phase>(ud.phase));
     }
@@ -691,7 +693,7 @@ int ScriptBindings::signal_connect(lua_State* state) {
             if (kind == kSignalChanged) {
                 runtime->invoke_listener(owner, held->ref, script, generation,
                                          changed_name(field, runtime->game_->events().payload()), false, 0);
-            } else if (kind == kSignalInput || kind == kSignalEvent) {
+            } else if (kind == kSignalInput || kind == kSignalEvent || kind == kSignalHost) {
                 runtime->invoke_listener_args(owner, held->ref, script, generation,
                                               runtime->game_->events().current_args());
             } else {
@@ -740,7 +742,7 @@ int ScriptBindings::signal_wait(lua_State* state) {
             runtime->guarded(*waiting->vm, [&] {
                 if (kind == kSignalChanged) {
                     runtime->make_ready(*waiting, changed_name(field, runtime->game_->events().payload()));
-                } else if (kind == kSignalInput || kind == kSignalEvent) {
+                } else if (kind == kSignalInput || kind == kSignalEvent || kind == kSignalHost) {
                     runtime->make_ready_args(*waiting, runtime->game_->events().current_args());
                 } else {
                     runtime->make_ready_number(*waiting, runtime->run_service_.dt(phase));
@@ -827,7 +829,11 @@ int ScriptBindings::service_index(lua_State* state) {
     }
     auto* ud = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
     *ud = SignalUd{};
-    ud->kind = service->kind == kUserInputServiceKind ? kSignalInput : kSignalPhase;
+    if (field->host_signal) {
+        ud->kind = kSignalHost;
+    } else {
+        ud->kind = service->kind == kUserInputServiceKind ? kSignalInput : kSignalPhase;
+    }
     ud->phase = field->tag;
     ud->blocked = field->blocked;
     if (field->blocked) {

@@ -39,7 +39,9 @@ namespace {
 
 // ScriptRuntime adds Get and Set, since those calls need the script VM.
 ANARCHY_LUA_REGISTER(register_selection_lua) {
-    register_lua_class("Selection", nullptr, nullptr, 0);
+    // ScriptRuntime fires SelectionChanged from the simulation thread, after a step that changed it.
+    const LuaField changed = lua_host_signal("SelectionChanged", HostSignal::SelectionChanged);
+    register_lua_class("Selection", nullptr, &changed, 1);
     register_lua_service("Selection");
 }
 

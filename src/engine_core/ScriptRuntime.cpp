@@ -116,6 +116,9 @@ void ScriptRuntime::attach(DataModel& game, TaskScheduler& scheduler) {
     game.events().set_after_drain([this] { on_end_of_drain(); });
     game.events().set_script_gate(&ScriptRuntime::gate, this);
     run_service_.bind(game.events());
+    game.events().host_signal(&selection_changed_);
+    selection_revision_ = game.selection().revision();
+    was_running_ = game.simulation_running();
     game.input().bind(game.events());
     // Input is kept whenever a runtime is attached: plugins hear it in edit mode.
     game.input().set_active(true);
@@ -136,6 +139,7 @@ void ScriptRuntime::detach() {
     close_vm();
     if (game_ != nullptr) {
         run_service_.release(game_->events());
+        game_->events().release_signal(selection_changed_);
         game_->input().release(game_->events());
         game_->input().set_active(false);
         game_->set_stop_hook(nullptr);
@@ -183,6 +187,7 @@ void ScriptRuntime::step_tools(double dt) {
         return;
     }
     start_core_scripts();
+    fire_host_changes();
     // While the play VM is closed no play step fires Heartbeat or drains, so this does.
     // During play, and while a play session is paused, the play step's own do that.
     const bool own_step = !open_;
@@ -722,6 +727,38 @@ void ScriptRuntime::note_core(InstanceId id) {
         }
     }
     update_tools_open();
+}
+
+Signal* ScriptRuntime::host_signal(HostSignal which) {
+    if (game_ == nullptr) {
+        return nullptr;
+    }
+    switch (which) {
+    case HostSignal::SelectionChanged:
+        return &selection_changed_;
+    case HostSignal::Started:
+        return run_service_.started();
+    case HostSignal::Stopped:
+        return run_service_.stopped();
+    }
+    return nullptr;
+}
+
+void ScriptRuntime::fire_host_changes() {
+    EventQueue& events = game_->events();
+    const std::uint64_t revision = game_->selection().revision();
+    if (revision != selection_revision_) {
+        selection_revision_ = revision;
+        events.emit_args(selection_changed_.id(), 0, {});
+    }
+    const bool running = game_->simulation_running();
+    if (running != was_running_) {
+        was_running_ = running;
+        Signal* signal = running ? run_service_.started() : run_service_.stopped();
+        if (signal != nullptr) {
+            events.emit_args(signal->id(), 0, {});
+        }
+    }
 }
 
 void ScriptRuntime::start_core_scripts() {

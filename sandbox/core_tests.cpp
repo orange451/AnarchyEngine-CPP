@@ -5,12 +5,15 @@
 #include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
 #include "Folder.hpp"
+#include "PhysicsObject.hpp"
 #include "Project.hpp"
 #include "SceneService.hpp"
 #include "Script.hpp"
+#include "SnapshotPump.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -338,4 +341,27 @@ TEST_CASE("CO7d a Script orphaned when its Folder in Core is destroyed stops", "
     rig.frames(1);
     REQUIRE(rig.game.alive(script.id()));
     REQUIRE_FALSE(rig.runtime.is_plugin(script.id()));
+}
+
+TEST_CASE("CO8 a GameObject in Core has a snapshot row, and a PhysicsObject in Core never simulates", "[CO8]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& shown = game.create_game_object();
+    game.set_name(shown.id(), "Shown");
+    game.set_parent(shown.id(), game.core());
+    std::vector<InstanceId> rendered;
+    game.for_each_rendered([&](const engine_core::GameObject& object) { rendered.push_back(object.id()); });
+    REQUIRE(std::find(rendered.begin(), rendered.end(), shown.id()) != rendered.end());
+
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    pump.prepare_copy(game);
+    pump.publish();
+    REQUIRE(pump.find(shown.id()) != nullptr);
+
+    engine_core::PhysicsObject& body = game.create<engine_core::PhysicsObject>();
+    game.set_parent(body.id(), game.core());
+    std::vector<InstanceId> bodies;
+    game.physics_bodies(bodies);
+    REQUIRE(bodies.empty());
 }

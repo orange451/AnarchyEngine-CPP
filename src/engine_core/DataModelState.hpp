@@ -95,6 +95,8 @@ struct DataModel::State {
     // Rendered GameObjects: Instance (in), with InWorkspace and Transform,
     // which only GameObjects carry.
     flecs::query<> render_query;
+    // Rendered GameObjects in Core: the same, with InCore. Core draws as Workspace does.
+    flecs::query<> core_render_query;
     // Rigid bodies the physics world simulates: Instance (in), with
     // PhysicsBody and InWorkspace.
     flecs::query<> body_query;

@@ -62,6 +62,14 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                              .inout_none()
                              .cached()
                              .build();
+    world.core_render_query = world.ecs.query_builder<>()
+                                  .with<ecs::Instance>()
+                                  .in()
+                                  .with<ecs::InCore>()
+                                  .with<Matrix4>()
+                                  .inout_none()
+                                  .cached()
+                                  .build();
     world.body_query = world.ecs.query_builder<>()
                            .with<ecs::Instance>()
                            .in()
@@ -877,12 +885,14 @@ void DataModel::step_instances(double dt) {
 }
 
 void DataModel::for_each_rendered(const std::function<void(const GameObject&)>& fn) const {
-    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->render_query.c_ptr());
-    while (ecs_query_next(&it)) {
-        const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
-        for (std::int32_t i = 0; i < it.count; ++i) {
-            if (const GameObject* object = game_object(owners[i].id)) {
-                fn(*object);
+    for (const flecs::query<>* query : {&state_->render_query, &state_->core_render_query}) {
+        ecs_iter_t it = ecs_query_iter(ecs_world(), query->c_ptr());
+        while (ecs_query_next(&it)) {
+            const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
+            for (std::int32_t i = 0; i < it.count; ++i) {
+                if (const GameObject* object = game_object(owners[i].id)) {
+                    fn(*object);
+                }
             }
         }
     }

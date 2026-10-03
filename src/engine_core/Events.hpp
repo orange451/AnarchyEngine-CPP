@@ -166,6 +166,13 @@ public:
     void host_signal(Signal* signal);
     void release_signal(Signal& signal);
 
+    // Runs this host signal's handlers now, on RenderThread inside the prerender
+    // window, where drain is forbidden. include_tagged false skips the slots a
+    // script tagged, which is how a paused play session stays silent; the kept
+    // slots, the console's and plugins', always run. The script gate still
+    // guards the tagged slots it runs. Handlers may connect and disconnect.
+    void invoke_render(Signal& signal, bool include_tagged);
+
     std::uint64_t count(WriteOrigin origin) const;
     std::uint64_t suppressed_overrides() const { return suppressed_overrides_; }
 

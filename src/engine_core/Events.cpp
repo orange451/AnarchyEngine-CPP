@@ -285,6 +285,82 @@ void EventQueue::invoke_connections(Signal& signal, const Event& event) {
     }
 }
 
+// The render thread's synchronous counterpart to invoke(): no queued Event,
+// no drain, no invoke_epoch_ bookkeeping (nothing here is deferred, so there
+// is nothing for a later drain to pick up). A host signal's slots are walked
+// directly off signal.head_/ConnSlot::next, mirroring invoke's save-restore
+// and once-tombstoning, because drain() refuses to run inside the prerender
+// window and this is the only other door in.
+void EventQueue::invoke_render(Signal& signal, bool include_tagged) {
+    if (prerender_open_ == nullptr || !*prerender_open_) {
+        contract_fail("invoke_render runs inside RenderStepped or PreRender");
+    }
+    // Same payload_/current_args_ save-and-restore as invoke(), just with
+    // nothing to restore to but zero/null: a host signal carries neither.
+    struct Restore {
+        std::uint64_t& payload;
+        const std::uint64_t outer;
+        const EventArgs*& args;
+        const EventArgs* const outer_args;
+        ~Restore() {
+            payload = outer;
+            args = outer_args;
+        }
+    } restore{payload_, payload_, current_args_, current_args_};
+    payload_ = 0;
+    current_args_ = nullptr;
+
+    // Snapshot (index, generation) pairs from head_ up to the tail as it
+    // stood when the walk began, before any handler runs. A connect from
+    // inside a handler appends past this captured tail, so it is visited on
+    // a later invoke_render call, not this one. Keeping the generation lets
+    // the loop below notice a slot that was tombstoned and its index handed
+    // to a brand new connection by a handler earlier in this same walk.
+    struct Visit {
+        std::uint32_t index;
+        std::uint32_t generation;
+    };
+    std::vector<Visit> visits;
+    const std::uint32_t tail = signal.tail_;
+    std::uint32_t cursor = signal.head_;
+    while (cursor != kNone) {
+        visits.push_back(Visit{cursor, conns_[cursor].generation});
+        if (cursor == tail) {
+            break;
+        }
+        cursor = conns_[cursor].next;
+    }
+
+    for (const Visit& visit : visits) {
+        if (visit.index >= conns_.size()) {
+            continue;
+        }
+        ConnSlot& slot = conns_[visit.index];
+        if (!slot.live || slot.generation != visit.generation) {
+            continue;
+        }
+        if (slot.script != 0) {
+            if (!include_tagged) {
+                continue;
+            }
+            if (script_gate_ != nullptr && !script_gate_(slot.script, slot.script_generation, script_gate_ud_)) {
+                continue;
+            }
+        }
+        Handler handler = slot.handler;
+        const bool once = slot.once;
+        if (once) {
+            tombstone(visit.index);
+        }
+        if (handler) {
+            // Matches RunService::fire's events.emit(target->id(), 0,
+            // Field::Name): a host signal's own field_ is never what it fires
+            // with, so this does not read it.
+            handler(0, Field::Name);
+        }
+    }
+}
+
 void EventQueue::enqueue(const Event& event) {
     if (size_ == events_.size()) {
         grow();

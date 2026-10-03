@@ -4789,3 +4789,45 @@ TEST_CASE("S53 frames dropped before a step are not heard as RenderStepped", "[S
     REQUIRE(rig.runtime.global_number("dt", dt));
     REQUIRE(std::fabs(dt - 0.02) < 1e-6);
 }
+
+TEST_CASE("RW1 invoke_render runs a host signal's handlers in the window", "[RW1]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::EventQueue& events = game.events();
+    engine_core::Signal signal;
+    events.host_signal(&signal);
+    int kept_runs = 0;
+    int tagged_runs = 0;
+    int once_runs = 0;
+    engine_core::Connection self_made;
+    engine_core::Connection self_gone =
+        signal.connect_kept([&](engine_core::InstanceId, engine_core::Field) { self_gone.disconnect(); }, false);
+    signal.connect_kept(
+        [&](engine_core::InstanceId, engine_core::Field) {
+            ++kept_runs;
+            if (kept_runs == 1) {
+                // A connect from inside a handler joins next frame, not this walk.
+                self_made = signal.connect_kept(
+                    [&](engine_core::InstanceId, engine_core::Field) { ++once_runs; }, false);
+            }
+        },
+        false);
+    signal.connect_scripted([&](engine_core::InstanceId, engine_core::Field) { ++tagged_runs; }, 7, 1, false);
+
+    std::thread render([&] {
+        engine_core::set_thread_role(engine_core::ThreadRole::Render);
+        game.set_prerender_window(true);
+        events.invoke_render(signal, false);  // paused: tagged skipped
+        REQUIRE(kept_runs == 1);
+        REQUIRE(tagged_runs == 0);
+        REQUIRE(once_runs == 0);
+        events.invoke_render(signal, true);
+        REQUIRE(kept_runs == 2);
+        REQUIRE(tagged_runs == 1);
+        REQUIRE(once_runs == 1);
+        game.set_prerender_window(false);
+        engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+    });
+    render.join();
+    events.release_signal(signal);
+}

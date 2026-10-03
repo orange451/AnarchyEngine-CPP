@@ -63,7 +63,6 @@ struct VisualInstance {
     VisualLight light;
 };
 
-// The first Skybox under Lighting, in tree order, as the renderer reads it.
 // An active Dragger as a scene view draws it: where its handles sit, the one
 // the mouse is over, and the one being dragged.
 struct VisualDragger {
@@ -72,6 +71,7 @@ struct VisualDragger {
     DraggerHandle active = DraggerHandle::None;
 };
 
+// The first Skybox under Lighting, in tree order, as the renderer reads it.
 // present is false with no Skybox, and image is empty when it has no Image;
 // either way the renderer draws no sky.
 struct VisualSky {

@@ -18,9 +18,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <random>
 #include <sstream>
 #include <string>
@@ -1225,4 +1227,150 @@ TEST_CASE("A34 an editor request is answered while a long check runs", "[A34]") 
     // Answered before Huge's check finished, not after it.
     REQUIRE(analysis.busy());
     settle(analysis);
+}
+
+namespace {
+
+// Ten modules, every other one with a strict-mode error, and twenty scripts that
+// require them and each have a type error and an unknown global. Returns the
+// modules' ids, then the scripts'.
+std::vector<engine_core::InstanceId> build_place(engine_core::DataModel& game) {
+    std::vector<engine_core::InstanceId> ids;
+    for (int i = 0; i < 10; ++i) {
+        const std::string name = "Mod" + std::to_string(i);
+        const char* source = i % 2 == 0 ? "local M = {}\n"
+                                          "function M.add(a: number, b: number): number\n"
+                                          "    return a + b\n"
+                                          "end\n"
+                                          "return M\n"
+                                        : "--!strict\n"
+                                          "local M = {}\n"
+                                          "local wrong: number = \"x\"\n"
+                                          "function M.add(a: number, b: number): number\n"
+                                          "    return a + b + wrong\n"
+                                          "end\n"
+                                          "return M\n";
+        ids.push_back(add_module(game, name.c_str(), source).id());
+    }
+    for (int j = 0; j < 20; ++j) {
+        const std::string name = "User" + std::to_string(j);
+        const std::string source = "local M = require(workspace.Mod" + std::to_string(j % 10) +
+                                   ")\nprint(M.add(1, \"two\"))\nprint(undefined" + std::to_string(j) + ")\n";
+        ids.push_back(add_script(game, name.c_str(), source.c_str()).id());
+    }
+    return ids;
+}
+
+std::vector<std::string> place_report(unsigned threads) {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game, threads);
+    REQUIRE(analysis.threads() == threads);
+    const std::vector<engine_core::InstanceId> ids = build_place(rig.game);
+    settle(analysis);
+    std::vector<std::string> out;
+    for (engine_core::InstanceId id : ids) {
+        out.push_back(std::string(rig.game.name(id)) + "\n" + dump(analysis.diagnostics(id)));
+    }
+    return out;
+}
+
+bool contains(const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId id) {
+    return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
+
+}  // namespace
+
+TEST_CASE("A35 a script's reached set is the instances its expressions are typed as", "[A35]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Folder& lights = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(lights.id(), "Lights");
+    rig.game.set_parent(lights.id(), workspace_of(rig.game));
+    engine_core::GameObject& lamp = rig.game.create<engine_core::GameObject>();
+    rig.game.set_name(lamp.id(), "Lamp");
+    rig.game.set_parent(lamp.id(), lights.id());
+    engine_core::GameObject& crate = rig.game.create<engine_core::GameObject>();
+    rig.game.set_name(crate.id(), "Crate");
+    rig.game.set_parent(crate.id(), workspace_of(rig.game));
+    // Lamp is reached only through a parameter and FindFirstChild.
+    engine_core::Script& script = add_script(rig.game, "Show",
+                                             "local folder = workspace.Lights\n"
+                                             "local function show(f: typeof(folder))\n"
+                                             "    print(f:FindFirstChild(\"Lamp\"))\n"
+                                             "end\n"
+                                             "show(folder)\n");
+    settle(analysis);
+    const std::vector<engine_core::InstanceId> reached = analysis.reached(script.id());
+    REQUIRE(contains(reached, workspace_of(rig.game)));
+    REQUIRE(contains(reached, lights.id()));
+    REQUIRE(contains(reached, lamp.id()));
+    REQUIRE_FALSE(contains(reached, crate.id()));
+    REQUIRE(analysis.checks(script.id()) >= 1);
+}
+
+TEST_CASE("A36 checking on several threads finds what checking on one does", "[A36]") {
+    const std::vector<std::string> serial = place_report(1);
+    const std::vector<std::string> parallel = place_report(4);
+    REQUIRE(serial == parallel);
+    // The first script found its type error, so the comparison is about something.
+    INFO(serial[10]);
+    REQUIRE(serial[10].find("Type") != std::string::npos);
+}
+
+TEST_CASE("A37 turning analysis off or destroying it during a batch stops cleanly", "[A37]") {
+    ScriptRig rig;
+    SECTION("off during a batch, then on again") {
+        engine_core::ScriptAnalysis analysis(rig.game);
+        const std::vector<engine_core::InstanceId> ids = build_place(rig.game);
+        add_script(rig.game, "Huge", long_source(20000, false, 0).c_str());
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        analysis.set_enabled(false);
+        settle(analysis);
+        REQUIRE(analysis.diagnostics().empty());
+        analysis.set_enabled(true);
+        settle(analysis);
+        REQUIRE_FALSE(analysis.diagnostics(ids[10]).empty());
+    }
+    SECTION("destroyed during a batch") {
+        auto analysis = std::make_unique<engine_core::ScriptAnalysis>(rig.game);
+        build_place(rig.game);
+        add_script(rig.game, "Huge", long_source(20000, false, 0).c_str());
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        const auto started = std::chrono::steady_clock::now();
+        analysis.reset();
+        REQUIRE(std::chrono::steady_clock::now() - started < std::chrono::seconds(2));
+    }
+}
+
+TEST_CASE("A38 a require cycle and a module with a syntax error still finish", "[A38]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game, 4);
+    engine_core::ModuleScript& a = add_module(rig.game, "A", "local B = require(script.Parent.B)\nreturn {}\n");
+    engine_core::ModuleScript& b = add_module(rig.game, "B", "local A = require(script.Parent.A)\nreturn {}\n");
+    engine_core::ModuleScript& broken = add_module(rig.game, "Broken", "return {\n");
+    engine_core::Script& user =
+        add_script(rig.game, "User", "local Broken = require(workspace.Broken)\nprint(Broken, undefinedName)\n");
+    settle(analysis);
+    REQUIRE(analysis.analyzed_source(a.id()).has_value());
+    REQUIRE(analysis.analyzed_source(b.id()).has_value());
+    INFO(dump(analysis.diagnostics(broken.id())));
+    REQUIRE(has_code(analysis.diagnostics(broken.id()), "Syntax"));
+    INFO(dump(analysis.diagnostics(user.id())));
+    REQUIRE(has_code(analysis.diagnostics(user.id()), "Lint/UnknownGlobal"));
+}
+
+TEST_CASE("A39 a script edited while a batch checks it ends with its newest source", "[A39]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game, 4);
+    add_script(rig.game, "Huge", long_source(20000, false, 0).c_str());
+    engine_core::Script& script = add_script(rig.game, "Edited", "print(first)\n");
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    script.set_source("print(second)\n");
+    settle(analysis);
+    REQUIRE(analysis.analyzed_source(script.id()) == std::optional<std::string>("print(second)\n"));
+    const std::string report = dump(analysis.diagnostics(script.id()));
+    INFO(report);
+    // Luau's message ends "consider assigning to it first", so look for the quoted name.
+    REQUIRE(report.find("'second'") != std::string::npos);
+    REQUIRE(report.find("'first'") == std::string::npos);
 }

@@ -1,5 +1,6 @@
 #include "ScriptAnalysis.hpp"
 
+#include "AnalysisPool.hpp"
 #include "AnalysisWorld.hpp"
 #include "DataModel.hpp"
 #include "DataModelLock.hpp"
@@ -71,8 +72,6 @@ using analysis::world_from_nodes;
 struct Job {
     InstanceId id = 0;
     std::uint64_t generation = 0;
-    std::shared_ptr<const WorldSnap> world;
-    std::shared_ptr<Luau::FrontendCancellationToken> cancel;
 };
 
 struct Pending {
@@ -87,7 +86,7 @@ struct Finished {
     std::string source;
     std::vector<Diagnostic> diagnostics;
     std::vector<InstanceId> requires;
-    bool cancelled = false;
+    std::vector<InstanceId> reached;
 };
 
 const char* severity_name(Severity severity) {
@@ -402,6 +401,7 @@ struct FindChildMagic final : Luau::MagicFunction {
     }
 
     bool infer(const Luau::MagicFunctionCallContext& context) override;
+    bool infer_child(const Luau::MagicFunctionCallContext& context);
 };
 
 struct NarrowMagic final : Luau::MagicFunction {
@@ -419,6 +419,7 @@ struct NarrowMagic final : Luau::MagicFunction {
     }
 
     bool infer(const Luau::MagicFunctionCallContext& context) override;
+    bool infer_narrow(const Luau::MagicFunctionCallContext& context);
 };
 
 void stamp_vector(Luau::Frontend& frontend);
@@ -456,8 +457,20 @@ struct SourceFileResolver : Luau::FileResolver {
     const std::string* display = nullptr;
     Luau::SourceCode::Type type = Luau::SourceCode::Script;
     const WorldSnap* world = nullptr;
+    // While the place checker runs a batch: what Luau checks for each script in
+    // it, by module name, with a header --!nonstrict made --!strict.
+    const std::unordered_map<std::string, std::string>* batch_sources = nullptr;
 
     std::optional<Luau::SourceCode> readSource(const Luau::ModuleName& name) override {
+        if (batch_sources != nullptr) {
+            const auto found = batch_sources->find(name);
+            if (found != batch_sources->end()) {
+                const std::optional<InstanceId> id = instance_of_module(name);
+                const NodeSnap* node = id && world != nullptr ? world->find(*id) : nullptr;
+                const bool module = node != nullptr && node->module;
+                return Luau::SourceCode{found->second, module ? Luau::SourceCode::Module : Luau::SourceCode::Script};
+            }
+        }
         if (module_name != nullptr && source != nullptr && name == *module_name) {
             return Luau::SourceCode{*source, type};
         }
@@ -560,7 +573,6 @@ struct WorkerEnv {
     std::string init_error;
     // The place copied for the check that is running. The magic reads it.
     const WorldSnap* world = nullptr;
-    InstanceId self = 0;
     // The snapshot the frontend's cached modules were checked against.
     std::shared_ptr<const WorldSnap> checked_world;
     // Built from checked_world. Every script is marked dirty when it is
@@ -590,28 +602,31 @@ struct WorkerEnv {
         // `game` is this place's root and `script` is the instance the module
         // belongs to, children and all, instead of their bare classes.
         frontend->prepareModuleScope = [this](const Luau::ModuleName& name, const Luau::ScopePtr& scope, bool) {
-            if (place != nullptr) {
-                if (const std::optional<Luau::TypeId> root = place->find(place->world->root)) {
-                    scope->bindings[Luau::AstName("game")] = Luau::Binding{*root};
-                }
-                if (const std::optional<InstanceId> workspace = place->world->workspace()) {
-                    if (const std::optional<Luau::TypeId> type = place->find(*workspace)) {
-                        scope->bindings[Luau::AstName("workspace")] = Luau::Binding{*type};
+            try {
+                if (place != nullptr) {
+                    if (const std::optional<Luau::TypeId> root = place->find(place->world->root)) {
+                        scope->bindings[Luau::AstName("game")] = Luau::Binding{*root};
+                    }
+                    if (const std::optional<InstanceId> workspace = place->world->workspace()) {
+                        if (const std::optional<Luau::TypeId> type = place->find(*workspace)) {
+                            scope->bindings[Luau::AstName("workspace")] = Luau::Binding{*type};
+                        }
+                    }
+                    if (const std::optional<InstanceId> owner = instance_of_module(name)) {
+                        if (const std::optional<Luau::TypeId> self = place->find(*owner)) {
+                            scope->bindings[Luau::AstName("script")] = Luau::Binding{*self};
+                            return;
+                        }
                     }
                 }
-                if (const std::optional<InstanceId> owner = instance_of_module(name)) {
-                    if (const std::optional<Luau::TypeId> self = place->find(*owner)) {
-                        scope->bindings[Luau::AstName("script")] = Luau::Binding{*self};
-                        return;
+                // A buffer the place does not hold yet is the kind of script it says it is.
+                if (files.module_name != nullptr && name == *files.module_name && frontend != nullptr) {
+                    const char* kind = files.type == Luau::SourceCode::Module ? "ModuleScript" : "Script";
+                    if (const std::optional<Luau::TypeId> type = class_type(*frontend->globals.globalScope, kind)) {
+                        scope->bindings[Luau::AstName("script")] = Luau::Binding{*type};
                     }
                 }
-            }
-            // A buffer the place does not hold yet is the kind of script it says it is.
-            if (files.module_name != nullptr && name == *files.module_name && frontend != nullptr) {
-                const char* kind = files.type == Luau::SourceCode::Module ? "ModuleScript" : "Script";
-                if (const std::optional<Luau::TypeId> type = class_type(*frontend->globals.globalScope, kind)) {
-                    scope->bindings[Luau::AstName("script")] = Luau::Binding{*type};
-                }
+            } catch (...) {
             }
         };
         revision = lua_registry_revision();
@@ -802,18 +817,35 @@ void attach_api(WorkerEnv& env) {
     }
 }
 
+// On a pool thread an exception escaping a Luau task leaves checkQueuedModules
+// waiting for it forever, so a hook that fails keeps the declared type instead.
 bool FindChildMagic::infer(const Luau::MagicFunctionCallContext& context) {
+    try {
+        return infer_child(context);
+    } catch (...) {
+        return false;
+    }
+}
+
+bool FindChildMagic::infer_child(const Luau::MagicFunctionCallContext& context) {
     if (env == nullptr || env->world == nullptr) {
         return false;
     }
-    // A required module is checked in the same pass, so `script` is whichever
-    // module this call is in.
-    InstanceId self = env->self;
-    if (context.constraint->moduleName != nullptr) {
-        if (const std::optional<InstanceId> owner = instance_of_module(*context.constraint->moduleName)) {
-            self = *owner;
-        }
+    // Modules are checked on several threads, a required one in the same pass,
+    // so `script` is whichever module this call is in. The constraint names it
+    // only under LuauCyclicRequireTypeInference; otherwise the solver's module does.
+    const Luau::ModuleName* module_name = context.constraint->moduleName.get();
+    if (module_name == nullptr && context.solver->module != nullptr) {
+        module_name = &context.solver->module->name;
     }
+    if (module_name == nullptr) {
+        return false;
+    }
+    const std::optional<InstanceId> owner = instance_of_module(*module_name);
+    if (!owner) {
+        return false;
+    }
+    const InstanceId self = *owner;
     // The receiver's type names its instance when it came from game, script, a
     // dotted child, or an earlier lookup, even through a local. Otherwise the
     // call's own path is followed.
@@ -851,6 +883,14 @@ bool FindChildMagic::infer(const Luau::MagicFunctionCallContext& context) {
 }
 
 bool NarrowMagic::infer(const Luau::MagicFunctionCallContext& context) {
+    try {
+        return infer_narrow(context);
+    } catch (...) {
+        return false;
+    }
+}
+
+bool NarrowMagic::infer_narrow(const Luau::MagicFunctionCallContext& context) {
     const Luau::AstExprCall* call = context.callSite.get();
     if (call == nullptr || call->args.size < 1) {
         return false;
@@ -953,170 +993,6 @@ void sync_world(WorkerEnv& env, const std::shared_ptr<const WorldSnap>& world, b
     env.frontend->clearModules(gone);
     env.checked_world = world;
     env.place = build_place_types(*env.frontend->globals.globalScope, world);
-}
-
-Finished analyze_job(WorkerEnv& env, const Job& job) {
-    Finished finished;
-    finished.id = job.id;
-    finished.generation = job.generation;
-    if (job.world == nullptr) {
-        finished.cancelled = true;
-        return finished;
-    }
-    const NodeSnap* self = job.world->find(job.id);
-    if (self == nullptr || !self->lua) {
-        finished.cancelled = true;
-        return finished;
-    }
-    finished.name = self->name.empty() ? self->class_name : self->name;
-    finished.source = self->source;
-
-    if (job.cancel && job.cancel->requested()) {
-        finished.cancelled = true;
-        return finished;
-    }
-
-    Luau::Allocator allocator;
-    Luau::AstNameTable names(allocator);
-    Luau::ParseOptions parse_options;
-    parse_options.captureComments = true;
-    const Luau::ParseResult parsed =
-        Luau::Parser::parse(self->source.c_str(), self->source.size(), names, allocator, parse_options);
-
-    // Stage 1. A parse failure stops the pipeline. The compiler is unchanged.
-    if (!parsed.errors.empty()) {
-        for (const Luau::ParseError& error : parsed.errors) {
-            finished.diagnostics.push_back(make_diagnostic(job.id, range_from(error.getLocation()), Severity::Error,
-                                                           "Syntax", error.getMessage()));
-        }
-        if (parsed.root != nullptr) {
-            finished.requires = find_requires(*job.world, job.id, parsed.root);
-        }
-        return finished;
-    }
-
-    // A script without a `--!` mode comment on its first lines is checked nonstrict.
-    const Luau::Mode mode = Luau::parseMode(parsed.hotcomments).value_or(Luau::Mode::Nonstrict);
-    if (parsed.root != nullptr) {
-        finished.requires = find_requires(*job.world, job.id, parsed.root);
-    }
-    if (mode == Luau::Mode::NoCheck) {
-        return finished;
-    }
-
-    if (!env.init_error.empty() || env.frontend == nullptr || env.frontend->globals.globalScope == nullptr) {
-        const std::string message = env.init_error.empty() ? "script analysis is unavailable" : env.init_error;
-        finished.diagnostics.push_back(
-            make_diagnostic(job.id, TextRange{}, Severity::Error, "Analysis", message));
-        return finished;
-    }
-
-    // Stage 2. Builtin lints. Unknown globals are left to the type checker.
-    Luau::LintOptions lint_options;
-    lint_options.setDefaults();
-    lint_options.warningMask &= ~Luau::LintWarning::parseMask(parsed.hotcomments);
-    lint_options.disableWarning(Luau::LintWarning::Code_UnknownGlobal);
-    if (mode == Luau::Mode::Strict) {
-        lint_options.disableWarning(Luau::LintWarning::Code_ImplicitReturn);
-    }
-    const std::vector<Luau::LintWarning> lints = Luau::lint(parsed.root, names, env.frontend->globals.globalScope,
-                                                            env.untyped.get(), parsed.hotcomments, lint_options);
-    for (const Luau::LintWarning& warning : lints) {
-        Severity severity = Severity::Warning;
-        if (warning.code == Luau::LintWarning::Code_LocalUnused || warning.code == Luau::LintWarning::Code_FunctionUnused ||
-            warning.code == Luau::LintWarning::Code_ImportUnused) {
-            severity = Severity::Hint;
-        }
-        const char* name = Luau::LintWarning::getName(warning.code);
-        finished.diagnostics.push_back(make_diagnostic(job.id, range_from(warning.location), severity,
-                                                       std::string("Lint/") + (name != nullptr ? name : "Unknown"),
-                                                       warning.text));
-    }
-
-    if (job.cancel && job.cancel->requested()) {
-        finished.cancelled = true;
-        return finished;
-    }
-
-    // Stage 3. Type check against the registered API. Lint already ran, so the
-    // frontend does not lint again.
-    // The full checker runs for both strict and nonstrict. Nonstrict then
-    // downgrades type errors to warnings. `--!nocheck` never reaches here.
-    try {
-        const std::string check_source = checked_source(self->source, parsed, mode);
-        const std::string module_name = module_name_of(job.id);
-        sync_world(env, job.world, true);
-        env.files.module_name = &module_name;
-        env.files.world = job.world.get();
-        env.files.source = &check_source;
-        env.files.display = &finished.name;
-        env.files.type = self->module ? Luau::SourceCode::Module : Luau::SourceCode::Script;
-        env.configs.config.mode = Luau::Mode::Strict;
-        env.world = job.world.get();
-        env.self = job.id;
-        env.frontend->markDirty(module_name);
-
-        Luau::FrontendOptions options;
-        options.runLintChecks = false;
-        options.retainFullTypeGraphs = false;
-        options.cancellationToken = job.cancel;
-        const Luau::CheckResult checked = env.frontend->check(module_name, options);
-        env.world = nullptr;
-        env.files.world = nullptr;
-        env.self = 0;
-        if (job.cancel && job.cancel->requested()) {
-            finished.cancelled = true;
-            return finished;
-        }
-        Luau::TypeErrorToStringOptions stringify;
-        stringify.fileResolver = &env.files;
-        for (const Luau::TypeError& error : checked.errors) {
-            // A required module reports its own problems when it is analyzed.
-            if (error.moduleName != module_name) {
-                continue;
-            }
-            if (Luau::get<Luau::SyntaxError>(error) != nullptr) {
-                finished.diagnostics.push_back(make_diagnostic(job.id, range_from(error.location), Severity::Error, "Syntax",
-                                                               Luau::toString(error, stringify)));
-                continue;
-            }
-            if (const Luau::UnknownSymbol* symbol = Luau::get<Luau::UnknownSymbol>(error)) {
-                if (symbol->context == Luau::UnknownSymbol::Binding) {
-                    finished.diagnostics.push_back(make_diagnostic(job.id, range_from(error.location), Severity::Warning,
-                                                                   "Lint/UnknownGlobal", Luau::toString(error, stringify)));
-                    continue;
-                }
-            }
-            Severity severity = mode == Luau::Mode::Strict ? Severity::Error : Severity::Warning;
-            if (missing_render_member(error)) {
-                severity = Severity::Warning;
-            }
-            finished.diagnostics.push_back(
-                make_diagnostic(job.id, range_from(error.location), severity, "Type", Luau::toString(error, stringify)));
-        }
-    } catch (const std::exception& error) {
-        env.world = nullptr;
-        env.files.world = nullptr;
-        env.self = 0;
-        if (job.cancel && job.cancel->requested()) {
-            finished.cancelled = true;
-            return finished;
-        }
-        finished.diagnostics.push_back(make_diagnostic(job.id, TextRange{}, Severity::Error, "Analysis", error.what()));
-    } catch (...) {
-        env.world = nullptr;
-        env.files.world = nullptr;
-        env.self = 0;
-        if (job.cancel && job.cancel->requested()) {
-            finished.cancelled = true;
-            return finished;
-        }
-        finished.diagnostics.push_back(make_diagnostic(job.id, TextRange{}, Severity::Error, "Analysis", "analysis failed"));
-    }
-    env.world = nullptr;
-    env.files.world = nullptr;
-    env.self = 0;
-    return finished;
 }
 
 // A Luau request: the completion at `offset` (none when npos) and the type at
@@ -1579,7 +1455,6 @@ std::string with_checked_buffer(WorkerEnv& env, const CompleteRequest& request, 
         env.files.type = self != nullptr && self->module ? Luau::SourceCode::Module : Luau::SourceCode::Script;
         env.configs.config.mode = Luau::Mode::Strict;
         env.world = request.world.get();
-        env.self = request.script;
         env.frontend->markDirty(module_name);
         Luau::FrontendOptions options;
         options.runLintChecks = false;
@@ -1603,7 +1478,6 @@ std::string with_checked_buffer(WorkerEnv& env, const CompleteRequest& request, 
         error = request.cancel->requested() ? "cancelled" : "the type check failed";
     }
     env.world = nullptr;
-    env.self = 0;
     env.files.world = nullptr;
     env.files.module_name = nullptr;
     env.files.source = nullptr;
@@ -2242,6 +2116,354 @@ LuauFacts facts_job(WorkerEnv& env, const CompleteRequest& request) {
     return out;
 }
 
+// One script in a batch: stages 1 and 2 of its check, and what the type check
+// needs. prepare_script reads only the snapshot and the frozen globals, so a
+// batch prepares its scripts in parallel.
+struct CheckInput {
+    InstanceId id = 0;
+    std::uint64_t generation = 0;
+    std::string name;
+    std::string source;
+    std::string module_name;
+    std::string check_source;
+    Luau::Mode mode = Luau::Mode::Nonstrict;
+    // False after a syntax error, under --!nocheck, or when analysis cannot run.
+    bool type_check = false;
+    std::vector<Diagnostic> diagnostics;
+    std::vector<InstanceId> requires;
+};
+
+void prepare_script(const WorkerEnv& env, const WorldSnap& world, CheckInput& input) {
+    const NodeSnap* self = world.find(input.id);
+    if (self == nullptr || !self->lua) {
+        return;
+    }
+    input.name = self->name.empty() ? self->class_name : self->name;
+    input.source = self->source;
+    input.module_name = module_name_of(input.id);
+
+    Luau::Allocator allocator;
+    Luau::AstNameTable names(allocator);
+    Luau::ParseOptions parse_options;
+    parse_options.captureComments = true;
+    const Luau::ParseResult parsed =
+        Luau::Parser::parse(self->source.c_str(), self->source.size(), names, allocator, parse_options);
+
+    // Stage 1. A parse failure stops the pipeline. The compiler is unchanged.
+    if (!parsed.errors.empty()) {
+        for (const Luau::ParseError& error : parsed.errors) {
+            input.diagnostics.push_back(make_diagnostic(input.id, range_from(error.getLocation()), Severity::Error,
+                                                        "Syntax", error.getMessage()));
+        }
+        if (parsed.root != nullptr) {
+            input.requires = find_requires(world, input.id, parsed.root);
+        }
+        return;
+    }
+
+    // A script without a `--!` mode comment on its first lines is checked nonstrict.
+    input.mode = Luau::parseMode(parsed.hotcomments).value_or(Luau::Mode::Nonstrict);
+    if (parsed.root != nullptr) {
+        input.requires = find_requires(world, input.id, parsed.root);
+    }
+    if (input.mode == Luau::Mode::NoCheck) {
+        return;
+    }
+    if (!env.init_error.empty() || env.frontend == nullptr || env.frontend->globals.globalScope == nullptr) {
+        const std::string message = env.init_error.empty() ? "script analysis is unavailable" : env.init_error;
+        input.diagnostics.push_back(make_diagnostic(input.id, TextRange{}, Severity::Error, "Analysis", message));
+        return;
+    }
+
+    // Stage 2. Builtin lints. Unknown globals are left to the type checker.
+    Luau::LintOptions lint_options;
+    lint_options.setDefaults();
+    lint_options.warningMask &= ~Luau::LintWarning::parseMask(parsed.hotcomments);
+    lint_options.disableWarning(Luau::LintWarning::Code_UnknownGlobal);
+    if (input.mode == Luau::Mode::Strict) {
+        lint_options.disableWarning(Luau::LintWarning::Code_ImplicitReturn);
+    }
+    const std::vector<Luau::LintWarning> lints = Luau::lint(parsed.root, names, env.frontend->globals.globalScope,
+                                                            env.untyped.get(), parsed.hotcomments, lint_options);
+    for (const Luau::LintWarning& warning : lints) {
+        Severity severity = Severity::Warning;
+        if (warning.code == Luau::LintWarning::Code_LocalUnused ||
+            warning.code == Luau::LintWarning::Code_FunctionUnused ||
+            warning.code == Luau::LintWarning::Code_ImportUnused) {
+            severity = Severity::Hint;
+        }
+        const char* name = Luau::LintWarning::getName(warning.code);
+        input.diagnostics.push_back(make_diagnostic(input.id, range_from(warning.location), severity,
+                                                    std::string("Lint/") + (name != nullptr ? name : "Unknown"),
+                                                    warning.text));
+    }
+    input.check_source = checked_source(self->source, parsed, input.mode);
+    input.type_check = true;
+}
+
+// Stage 3's diagnostics: the module's own type errors. The full checker runs for
+// strict and nonstrict alike; nonstrict then reads type errors as warnings.
+void add_type_errors(const Luau::Module& module, const CheckInput& input, Luau::FileResolver& files,
+                     std::vector<Diagnostic>& out) {
+    Luau::TypeErrorToStringOptions stringify;
+    stringify.fileResolver = &files;
+    for (const Luau::TypeError& error : module.errors) {
+        // A required module reports its own problems when it is analyzed.
+        if (error.moduleName != input.module_name) {
+            continue;
+        }
+        if (Luau::get<Luau::SyntaxError>(error) != nullptr) {
+            out.push_back(make_diagnostic(input.id, range_from(error.location), Severity::Error, "Syntax",
+                                          Luau::toString(error, stringify)));
+            continue;
+        }
+        if (const Luau::UnknownSymbol* symbol = Luau::get<Luau::UnknownSymbol>(error)) {
+            if (symbol->context == Luau::UnknownSymbol::Binding) {
+                out.push_back(make_diagnostic(input.id, range_from(error.location), Severity::Warning,
+                                              "Lint/UnknownGlobal", Luau::toString(error, stringify)));
+                continue;
+            }
+        }
+        Severity severity = input.mode == Luau::Mode::Strict ? Severity::Error : Severity::Warning;
+        if (missing_render_member(error)) {
+            severity = Severity::Warning;
+        }
+        out.push_back(
+            make_diagnostic(input.id, range_from(error.location), severity, "Type", Luau::toString(error, stringify)));
+    }
+}
+
+// Every instance one of the module's expressions is typed as, directly or as an
+// option of a union or intersection, as Door? is. Locals, parameters, script,
+// and FindFirstChild all end up here, because this reads what Luau inferred.
+// A call written last in an argument list or a return is typed as a pack, so
+// the packs' values count too.
+std::vector<InstanceId> reached_instances(const Luau::Module& module) {
+    std::vector<InstanceId> out;
+    std::unordered_set<InstanceId> seen;
+    const auto take = [&](Luau::TypeId type) {
+        if (const std::optional<InstanceId> id = tagged_instance(type)) {
+            if (seen.insert(*id).second) {
+                out.push_back(*id);
+            }
+        }
+    };
+    const auto take_all = [&](Luau::TypeId type) {
+        type = Luau::follow(type);
+        take(type);
+        if (const Luau::UnionType* options = Luau::get<Luau::UnionType>(type)) {
+            for (Luau::TypeId option : options->options) {
+                take(option);
+            }
+        } else if (const Luau::IntersectionType* parts = Luau::get<Luau::IntersectionType>(type)) {
+            for (Luau::TypeId part : parts->parts) {
+                take(part);
+            }
+        }
+    };
+    for (const auto& entry : module.astTypes) {
+        take_all(entry.second);
+    }
+    for (const auto& entry : module.astTypePacks) {
+        for (Luau::TypeId type : Luau::flatten(entry.second).first) {
+            take_all(type);
+        }
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+// `name` and every module that requires it, however deep, as far as the
+// frontend knows. markDirty's own list stops at modules already dirty, so it
+// cannot say this.
+void add_dependents(const Luau::Frontend& frontend, const std::string& name, std::unordered_set<std::string>& out) {
+    std::vector<std::string> stack{name};
+    while (!stack.empty()) {
+        std::string next = std::move(stack.back());
+        stack.pop_back();
+        if (!out.insert(next).second) {
+            continue;
+        }
+        const auto node = frontend.sourceNodes.find(next);
+        if (node == frontend.sourceNodes.end() || node->second == nullptr) {
+            continue;
+        }
+        for (const std::string& dependent : node->second->dependents) {
+            stack.push_back(dependent);
+        }
+    }
+}
+
+// The place checker's own state, kept between batches on its thread.
+struct PlaceChecker {
+    std::unique_ptr<WorkerEnv> env;
+    // Each script's reached set from its last check. Written from pool threads.
+    std::mutex reached_mu;
+    std::unordered_map<InstanceId, std::vector<InstanceId>> reached;
+};
+
+// The scripts a batch checks, each with its generation when the batch took it.
+using Claimed = std::unordered_map<InstanceId, std::uint64_t>;
+
+struct BatchHost {
+    // Takes a script into the batch and returns its generation now, or nothing
+    // when it is waiting for its own batch with a newer source.
+    std::function<std::optional<std::uint64_t>(InstanceId)> claim;
+    // Hands one script's result to pump(). Any thread.
+    std::function<void(Finished)> publish;
+};
+
+Finished finished_from(const CheckInput& input) {
+    Finished finished;
+    finished.id = input.id;
+    finished.generation = input.generation;
+    finished.name = input.name;
+    finished.source = input.source;
+    finished.diagnostics = input.diagnostics;
+    finished.requires = input.requires;
+    return finished;
+}
+
+void run_batch(PlaceChecker& checker, AnalysisPool& pool, const std::shared_ptr<const WorldSnap>& world,
+               Claimed& claimed, const std::shared_ptr<Luau::FrontendCancellationToken>& cancel,
+               const BatchHost& host) {
+    WorkerEnv& env = *checker.env;
+    sync_world(env, world, true);
+
+    // Every module the batch changes: the scripts taken, and what requires them.
+    std::unordered_set<std::string> names;
+    for (const auto& entry : claimed) {
+        add_dependents(*env.frontend, module_name_of(entry.first), names);
+    }
+    std::vector<CheckInput> inputs;
+    inputs.reserve(names.size());
+    for (const std::string& name : names) {
+        const std::optional<InstanceId> id = instance_of_module(name);
+        const NodeSnap* node = id ? world->find(*id) : nullptr;
+        if (node == nullptr || !node->lua) {
+            continue;
+        }
+        if (claimed.count(*id) == 0) {
+            const std::optional<std::uint64_t> generation = host.claim(*id);
+            if (!generation) {
+                continue;
+            }
+            claimed.emplace(*id, *generation);
+        }
+        CheckInput input;
+        input.id = *id;
+        input.generation = claimed.at(*id);
+        inputs.push_back(std::move(input));
+        env.frontend->markDirty(name);
+    }
+
+    std::vector<std::function<void()>> prepare;
+    prepare.reserve(inputs.size());
+    for (CheckInput& input : inputs) {
+        // A pool task must not throw: run_all would wait for it forever.
+        prepare.push_back([&env, &world, &input] {
+            try {
+                prepare_script(env, *world, input);
+            } catch (...) {
+                input.type_check = false;
+                input.diagnostics.push_back(
+                    make_diagnostic(input.id, TextRange{}, Severity::Error, "Analysis", "analysis failed"));
+            }
+        });
+    }
+    pool.run_all(std::move(prepare));
+
+    std::unordered_map<std::string, std::string> sources;
+    std::unordered_map<InstanceId, const CheckInput*> by_id;
+    std::vector<Luau::ModuleName> queue;
+    for (const CheckInput& input : inputs) {
+        by_id.emplace(input.id, &input);
+        if (!input.type_check) {
+            host.publish(finished_from(input));
+            continue;
+        }
+        sources.emplace(input.module_name, input.check_source);
+        queue.push_back(input.module_name);
+    }
+    if (queue.empty() || cancel->requested()) {
+        return;
+    }
+
+    std::mutex done_mu;
+    std::unordered_set<InstanceId> done;
+    env.files.batch_sources = &sources;
+    env.files.world = world.get();
+    // A script's own --!nonstrict header was rewritten to --!strict, and one
+    // without a header is checked by the full checker too.
+    env.configs.config.mode = Luau::Mode::Strict;
+    env.world = world.get();
+    Luau::FrontendOptions options;
+    options.runLintChecks = false;
+    options.retainFullTypeGraphs = false;
+    options.cancellationToken = cancel;
+    // Runs on a pool thread as each module finishes, before Luau drops its
+    // expression types, so its reached set can still be read.
+    options.customModuleCheck = [&](const Luau::SourceModule& source, const Luau::Module& module) {
+        const std::optional<InstanceId> id = instance_of_module(source.name);
+        const auto found = id ? by_id.find(*id) : by_id.end();
+        if (found == by_id.end() || !found->second->type_check || module.cancelled) {
+            return;
+        }
+        const CheckInput& input = *found->second;
+        Finished finished = finished_from(input);
+        add_type_errors(module, input, env.files, finished.diagnostics);
+        finished.reached = reached_instances(module);
+        {
+            std::lock_guard<std::mutex> lock(checker.reached_mu);
+            checker.reached[input.id] = finished.reached;
+        }
+        {
+            std::lock_guard<std::mutex> lock(done_mu);
+            done.insert(input.id);
+        }
+        host.publish(std::move(finished));
+    };
+    try {
+        env.frontend->queueModuleCheck(queue);
+        env.frontend->checkQueuedModules(
+            options, [&pool](std::vector<std::function<void()>> tasks) { pool.post(std::move(tasks)); });
+    } catch (...) {
+        // One module's internal error stops Luau's whole batch. What did not
+        // finish is checked one at a time, so only the broken one says so.
+        for (const std::string& name : queue) {
+            if (cancel->requested()) {
+                break;
+            }
+            const InstanceId id = *instance_of_module(name);
+            {
+                std::lock_guard<std::mutex> lock(done_mu);
+                if (done.count(id) != 0) {
+                    continue;
+                }
+            }
+            std::string failure;
+            try {
+                env.frontend->check(name, options);
+                continue;
+            } catch (const std::exception& error) {
+                failure = error.what();
+            } catch (...) {
+                failure = "analysis failed";
+            }
+            if (cancel->requested()) {
+                break;
+            }
+            Finished finished = finished_from(*by_id.at(id));
+            finished.diagnostics.push_back(
+                make_diagnostic(id, TextRange{}, Severity::Error, "Analysis", "could not be checked: " + failure));
+            host.publish(std::move(finished));
+        }
+    }
+    env.files.batch_sources = nullptr;
+    env.files.world = nullptr;
+    env.world = nullptr;
+}
+
 }  // namespace
 
 void lint_rule_names(std::vector<std::string>& out) {
@@ -2266,9 +2488,6 @@ struct ScriptAnalysis::State {
     bool enabled = true;
     bool started = false;
     std::uint64_t next_token = 0;
-    int inflight = 0;
-    // The script the worker is checking. 0 between jobs.
-    InstanceId running = 0;
     // The place checker's thread, and the editor checker's, which answers Luau
     // requests so typing never waits behind a check of the place.
     StackThread place;
@@ -2286,12 +2505,12 @@ struct ScriptAnalysis::State {
     // Written by the worker after each job.
     std::atomic<std::size_t> cached_modules{0};
     std::unordered_map<InstanceId, Pending> pending;
-    std::unordered_map<InstanceId, std::shared_ptr<Luau::FrontendCancellationToken>> tokens;
     std::vector<Finished> results;
     struct Record {
         std::string name;
         std::string source;
         std::vector<Diagnostic> diagnostics;
+        std::vector<InstanceId> reached;
     };
     std::unordered_map<InstanceId, Record> published;
     std::unordered_map<InstanceId, std::unordered_set<InstanceId>> requires_of;
@@ -2301,6 +2520,25 @@ struct ScriptAnalysis::State {
     // the worker is answering now.
     std::deque<std::shared_ptr<CompleteRequest>> completions;
     std::shared_ptr<CompleteRequest> serving;
+
+    // The newest tree captured, and its capture number: two captures can finish
+    // out of order, and the newer one wins.
+    std::shared_ptr<const WorldSnap> latest_world;
+    std::uint64_t latest_seq = 0;
+    std::atomic<std::uint64_t> world_seq{0};
+    // Scripts in the batch the place checker is running, including what
+    // requires them, and the batch's cancel.
+    std::unordered_set<InstanceId> in_batch;
+    std::shared_ptr<Luau::FrontendCancellationToken> batch_cancel;
+    // Results pump() published, per script.
+    std::unordered_map<InstanceId, std::uint64_t> checks;
+
+    void adopt(std::shared_ptr<const WorldSnap> world, std::uint64_t seq) {
+        if (seq > latest_seq) {
+            latest_world = std::move(world);
+            latest_seq = seq;
+        }
+    }
 };
 
 void ScriptAnalysis::replace_requires(InstanceId script, const std::vector<InstanceId>& targets) {
@@ -2361,7 +2599,8 @@ void ScriptAnalysis::collect_dependents(InstanceId id, std::vector<InstanceId>& 
     }
 }
 
-ScriptAnalysis::ScriptAnalysis(DataModel& game) : game_(game), state_(std::make_unique<State>()) {
+ScriptAnalysis::ScriptAnalysis(DataModel& game, unsigned threads)
+    : game_(game), state_(std::make_unique<State>()), threads_(threads == 0 ? AnalysisPool::default_size() : threads) {
     signal_.owner_ = this;
     game_.set_script_analysis(this);
 }
@@ -2379,12 +2618,9 @@ void ScriptAnalysis::shutdown() {
         state_->stop = true;
         state_->enabled = false;
         state_->pending.clear();
-        for (auto& entry : state_->tokens) {
-            if (entry.second) {
-                entry.second->cancel();
-            }
+        if (state_->batch_cancel) {
+            state_->batch_cancel->cancel();
         }
-        state_->tokens.clear();
         state_->results.clear();
         state_->handlers.clear();
         // Luau requests still queued are answered with nothing, and the one
@@ -2454,14 +2690,36 @@ void ScriptAnalysis::run_editor() {
 }
 
 void ScriptAnalysis::run_place() {
-    // This thread never calls the play VM and never takes the DataModel lock.
-    // Jobs carry a copy of Source and Name taken on the gameplay thread.
-    // On the heap: its frontend points at its own resolvers, so it is rebuilt
-    // in place, not moved, when the registry changed.
-    auto owned = std::make_unique<WorkerEnv>();
-    owned->init();
+    // This thread and the pool never call the play VM and never take the
+    // DataModel lock. They read snapshots captured on the gameplay thread.
+    PlaceChecker checker;
+    checker.env = std::make_unique<WorkerEnv>();
+    checker.env->init();
+    AnalysisPool pool(threads_, kWorkerStackBytes);
+    BatchHost host;
+    host.claim = [this](InstanceId id) -> std::optional<std::uint64_t> {
+        std::lock_guard<std::mutex> lock(state_->mu);
+        if (state_->pending.count(id) != 0) {
+            return std::nullopt;
+        }
+        state_->in_batch.insert(id);
+        return state_->generations[id];
+    };
+    host.publish = [this](Finished finished) {
+        std::lock_guard<std::mutex> lock(state_->mu);
+        if (state_->stop || !state_->enabled) {
+            return;
+        }
+        const auto generation = state_->generations.find(finished.id);
+        if (generation == state_->generations.end() || generation->second != finished.generation) {
+            return;
+        }
+        state_->results.push_back(std::move(finished));
+    };
     while (true) {
-        Job job;
+        Claimed claimed;
+        std::shared_ptr<const WorldSnap> world;
+        std::shared_ptr<Luau::FrontendCancellationToken> cancel;
         {
             std::unique_lock<std::mutex> lock(state_->mu);
             state_->cv.wait(lock, [&] { return state_->stop || !state_->pending.empty(); });
@@ -2469,39 +2727,43 @@ void ScriptAnalysis::run_place() {
                 return;
             }
             const auto now = std::chrono::steady_clock::now();
-            auto due = state_->pending.begin();
-            for (auto it = state_->pending.begin(); it != state_->pending.end(); ++it) {
-                if (it->second.ready_at < due->second.ready_at) {
-                    due = it;
+            auto next = std::chrono::steady_clock::time_point::max();
+            for (auto it = state_->pending.begin(); it != state_->pending.end();) {
+                if (it->second.ready_at <= now) {
+                    claimed.emplace(it->first, it->second.job.generation);
+                    state_->in_batch.insert(it->first);
+                    it = state_->pending.erase(it);
+                } else {
+                    next = std::min(next, it->second.ready_at);
+                    ++it;
                 }
             }
-            if (due->second.ready_at > now) {
-                state_->cv.wait_until(lock, due->second.ready_at);
+            if (claimed.empty()) {
+                state_->cv.wait_until(lock, next);
                 continue;
             }
-            job = std::move(due->second.job);
-            state_->pending.erase(due);
-            ++state_->inflight;
-            state_->running = job.id;
+            world = state_->latest_world;
+            cancel = std::make_shared<Luau::FrontendCancellationToken>();
+            state_->batch_cancel = cancel;
         }
-        if (owned->revision != lua_registry_revision()) {
-            owned = std::make_unique<WorkerEnv>();
-            owned->init();
+        if (checker.env->revision != lua_registry_revision()) {
+            checker.env = std::make_unique<WorkerEnv>();
+            checker.env->init();
+            std::lock_guard<std::mutex> lock(checker.reached_mu);
+            checker.reached.clear();
         }
-        Finished finished = analyze_job(*owned, job);
-        if (owned->frontend != nullptr) {
-            state_->cached_modules.store(owned->frontend->sourceNodes.size(), std::memory_order_relaxed);
+        if (world != nullptr) {
+            run_batch(checker, pool, world, claimed, cancel, host);
         }
-        {
-            std::lock_guard<std::mutex> lock(state_->mu);
-            --state_->inflight;
-            state_->running = 0;
-            const auto generation = state_->generations.find(job.id);
-            const bool current = generation != state_->generations.end() && generation->second == job.generation;
-            if (!state_->stop && state_->enabled && current && !finished.cancelled &&
-                !(job.cancel && job.cancel->requested())) {
-                state_->results.push_back(std::move(finished));
-            }
+        if (checker.env->frontend != nullptr) {
+            state_->cached_modules.store(checker.env->frontend->sourceNodes.size(), std::memory_order_relaxed);
+        }
+        std::lock_guard<std::mutex> lock(state_->mu);
+        for (const auto& entry : claimed) {
+            state_->in_batch.erase(entry.first);
+        }
+        if (state_->batch_cancel == cancel) {
+            state_->batch_cancel.reset();
         }
     }
 }
@@ -2588,12 +2850,9 @@ void ScriptAnalysis::set_enabled(bool enabled) {
         changed = true;
         if (!enabled) {
             state_->pending.clear();
-            for (auto& entry : state_->tokens) {
-                if (entry.second) {
-                    entry.second->cancel();
-                }
+            if (state_->batch_cancel) {
+                state_->batch_cancel->cancel();
             }
-            state_->tokens.clear();
             state_->results.clear();
             for (auto& entry : state_->generations) {
                 ++entry.second;
@@ -2630,32 +2889,27 @@ void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
             return;
         }
     }
+    const std::uint64_t seq = state_->world_seq.fetch_add(1) + 1;
     const std::shared_ptr<WorldSnap> world = capture_world(game_);
     ensure_worker();
     std::lock_guard<std::mutex> lock(state_->mu);
     if (!state_->enabled || state_->stop) {
         return;
     }
+    state_->adopt(world, seq);
     const auto ready_at = std::chrono::steady_clock::now() + kDebounce;
     for (InstanceId id : ids) {
+        // Handled either way: a dead or non-script id has nothing to check.
         const NodeSnap* node = world->find(id);
         if (node == nullptr || !node->lua) {
             continue;
         }
         std::uint64_t& generation = state_->generations[id];
         ++generation;
-        const auto previous = state_->tokens.find(id);
-        if (previous != state_->tokens.end() && previous->second) {
-            previous->second->cancel();
-        }
-        auto token = std::make_shared<Luau::FrontendCancellationToken>();
-        state_->tokens[id] = token;
         Job job;
         job.id = id;
         job.generation = generation;
-        job.world = world;
-        job.cancel = std::move(token);
-        state_->pending[id] = Pending{std::move(job), ready_at};
+        state_->pending[id] = Pending{job, ready_at};
     }
     state_->cv.notify_all();
 }
@@ -2707,11 +2961,6 @@ void ScriptAnalysis::remove(InstanceId script) {
         std::uint64_t& generation = state_->generations[script];
         ++generation;
         state_->pending.erase(script);
-        const auto token = state_->tokens.find(script);
-        if (token != state_->tokens.end() && token->second) {
-            token->second->cancel();
-        }
-        state_->tokens.erase(script);
         state_->results.erase(std::remove_if(state_->results.begin(), state_->results.end(),
                                              [&](const Finished& finished) { return finished.id == script; }),
                               state_->results.end());
@@ -2813,11 +3062,27 @@ void ScriptAnalysis::pump() {
             record.name = std::move(finished.name);
             record.source = std::move(finished.source);
             record.diagnostics = std::move(finished.diagnostics);
+            record.reached = std::move(finished.reached);
+            ++state_->checks[finished.id];
             replace_requires(finished.id, finished.requires);
             fired.push_back(finished.id);
         }
     }
     fire(fired);
+}
+
+unsigned ScriptAnalysis::threads() const { return threads_; }
+
+std::uint64_t ScriptAnalysis::checks(InstanceId script) const {
+    std::lock_guard<std::mutex> lock(state_->mu);
+    const auto found = state_->checks.find(script);
+    return found == state_->checks.end() ? 0 : found->second;
+}
+
+std::vector<InstanceId> ScriptAnalysis::reached(InstanceId script) const {
+    std::lock_guard<std::mutex> lock(state_->mu);
+    const auto found = state_->published.find(script);
+    return found == state_->published.end() ? std::vector<InstanceId>{} : found->second.reached;
 }
 
 void ScriptAnalysis::print_report(std::ostream& out) const {
@@ -2857,7 +3122,7 @@ bool ScriptAnalysis::busy() const {
         return true;
     }
     std::lock_guard<std::mutex> lock(state_->mu);
-    return !state_->pending.empty() || state_->inflight > 0;
+    return !state_->pending.empty() || !state_->in_batch.empty();
 }
 
 bool ScriptAnalysis::idle() const {
@@ -2865,7 +3130,7 @@ bool ScriptAnalysis::idle() const {
         return false;
     }
     std::lock_guard<std::mutex> lock(state_->mu);
-    return state_->pending.empty() && state_->inflight == 0 && state_->results.empty();
+    return state_->pending.empty() && state_->in_batch.empty() && state_->results.empty();
 }
 
 bool ScriptAnalysis::settled(InstanceId script) const {
@@ -2874,7 +3139,7 @@ bool ScriptAnalysis::settled(InstanceId script) const {
     }
     std::lock_guard<std::mutex> lock(state_->mu);
     if (state_->published.count(script) == 0 || state_->pending.count(script) != 0 ||
-        state_->running == script) {
+        state_->in_batch.count(script) != 0) {
         return false;
     }
     return std::none_of(state_->results.begin(), state_->results.end(),

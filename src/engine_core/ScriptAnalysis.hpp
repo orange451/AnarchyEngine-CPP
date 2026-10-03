@@ -173,14 +173,17 @@ struct LuauAnswer {
 };
 
 // Incremental analysis of every Lua source in one DataModel, whether or not anything shows it.
-// Source is copied on the gameplay thread. A background worker parses, lints,
-// and typechecks that copy. pump() is the only publisher. It runs on the
-// gameplay thread, as DataModel::gameplay_thread counts it (the simulation
-// thread, or the thread running a paused edit), or on the UI thread. Never on
+// Source is copied on the gameplay thread. A coordinator thread takes due
+// scripts in batches and parses, lints, and type-checks them on a pool of
+// threads; a second thread answers Luau requests from editors. pump() is the
+// only publisher. It runs on the gameplay thread, as
+// DataModel::gameplay_thread counts it (the simulation thread, or the thread
+// running a paused edit), or on the UI thread. Never on
 // RenderThread, and never inside lua_resume or Prepare.
 class ScriptAnalysis {
 public:
-    explicit ScriptAnalysis(DataModel& game);
+    // `threads` type-check the place at once; 0 means one fewer than the hardware has, and at least one.
+    explicit ScriptAnalysis(DataModel& game, unsigned threads = 0);
     ~ScriptAnalysis();
 
     ScriptAnalysis(const ScriptAnalysis&) = delete;
@@ -198,7 +201,8 @@ public:
     // pump() rechecks every script against one new snapshot of the tree.
     // Waits while the simulation runs; Stop restores the authored tree.
     void note_world_changed();
-    // The instance is gone. Drops its diagnostics and cancels its job.
+    // The instance is gone. Drops its diagnostics; a result a running batch
+    // still finishes for it is never published.
     void remove(InstanceId script);
     // Modules the checker holds, as of its last job: one per script it has
     // checked in the tree it last saw.
@@ -218,6 +222,13 @@ public:
     // One row per diagnostic: name | severity | code | message | line.
     // The printed line is 1-based.
     void print_report(std::ostream& out) const;
+
+    unsigned threads() const;
+    // How many results pump() has published for this script. For tests.
+    std::uint64_t checks(InstanceId script) const;
+    // The instances the script's last published check typed an expression as,
+    // sorted. A tree change at one of them, or among its children, rechecks it.
+    std::vector<InstanceId> reached(InstanceId script) const;
 
     // A snapshot is waiting out the debounce, the worker is inside a job, or a
     // tree change is waiting for pump().
@@ -278,6 +289,7 @@ private:
     DataModel& game_;
     std::unique_ptr<State> state_;
     DiagnosticsSignal signal_;
+    unsigned threads_;
 };
 
 }  // namespace engine_core

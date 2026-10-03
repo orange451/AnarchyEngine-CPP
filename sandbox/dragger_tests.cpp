@@ -604,3 +604,29 @@ TEST_CASE("RD3 handle_mesh draws what can be grabbed, colored by axis and state"
                              engine_core::DraggerHandle::None, mesh);
     REQUIRE(mesh.empty());
 }
+
+TEST_CASE("DR23 a drag after an edit that left its undo step open gets a step of its own", "[DR23]") {
+    DragRig drag;
+    drag.rig.runtime.run_chunk(R"(
+        local part = workspace.Part
+        workspace:FindFirstChild("Dragger").Dragged:Connect(function(_, offset)
+            part.Transform = Matrix4.new(Vector3.new(offset.X, 5, -10))
+        end)
+    )");
+    drag.rig.frames(1);
+    // As a command line edit does: the place changes, and nothing closes the step.
+    drag.rig.game.set_name(drag.part, "Edited");
+    REQUIRE(drag.rig.game.history().is_recording_in_progress());
+    drag.press(150, 100);
+    drag.move(170, 100);
+    drag.release(170, 100);
+    drag.rig.frames(1);
+    INFO(drag.rig.runtime.last_error());
+    REQUIRE_FALSE(drag.rig.game.history().is_recording_in_progress());
+    REQUIRE(drag.rig.game.history().can_undo().second == "Move");
+    drag.rig.game.history().undo();
+    REQUIRE(close(drag.transform(drag.part).m[12], 0));
+    REQUIRE(drag.rig.game.name(drag.part) == "Edited");
+    drag.rig.game.history().undo();
+    REQUIRE(drag.rig.game.name(drag.part) == "Part");
+}

@@ -155,9 +155,8 @@ std::shared_ptr<WorldSnap> world_from_nodes(const std::vector<LuaNode>& nodes) {
     return world;
 }
 
-// Two snapshots with the same instances, parents, names, and classes. Sources
-// may differ. Completion's snapshots and the analyzer's are made apart, so
-// they are compared by what they hold, not by identity.
+// Completion's snapshots and the analyzer's are made apart, so they are
+// compared by what they hold, not by identity.
 bool same_tree(const WorldSnap& a, const WorldSnap& b) {
     if (a.root != b.root || a.nodes.size() != b.nodes.size()) {
         return false;

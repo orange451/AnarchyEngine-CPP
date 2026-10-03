@@ -6,7 +6,6 @@
 #include "DataModelLock.hpp"
 #include "LuaApi.hpp"
 #include "LuaSource.hpp"
-#include "ModuleScript.hpp"
 #include "StackThread.hpp"
 #include "TableSnapshot.hpp"
 
@@ -518,8 +517,10 @@ struct SourceFileResolver : Luau::FileResolver {
     const std::string* display = nullptr;
     Luau::SourceCode::Type type = Luau::SourceCode::Script;
     const WorldSnap* world = nullptr;
-    // While the place checker runs a batch: what Luau checks for each script in
-    // it, by module name, with a header --!nonstrict made --!strict.
+    // While the place checker runs a batch: the source Luau checks for each
+    // script the batch took, by module name, with a header --!nonstrict made
+    // --!strict. A module one of them requires that the batch did not take is
+    // read from `world` as written.
     const std::unordered_map<std::string, std::string>* batch_sources = nullptr;
 
     std::optional<Luau::SourceCode> readSource(const Luau::ModuleName& name) override {
@@ -1016,11 +1017,8 @@ std::string checked_source(const std::string& source, const Luau::ParseResult& p
 // Required modules stay cached in the frontend. A new snapshot can change
 // their source or what their paths reach, so recheck them. A script the
 // snapshot lacks is gone, and so is its cached module.
-void sync_world(WorkerEnv& env, const std::shared_ptr<const WorldSnap>& world, bool keep_on_empty) {
-    // A place with no root, as when an analysis pass could not read it, says
-    // nothing about the tree. The cached modules stay for the next real
-    // snapshot. A completion asked with no place means none.
-    if (env.checked_world == world || (keep_on_empty && world->nodes.empty())) {
+void sync_world(WorkerEnv& env, const std::shared_ptr<const WorldSnap>& world) {
+    if (env.checked_world == world) {
         return;
     }
     // The same tree keeps every cached module and the place's types. Only a
@@ -1058,7 +1056,7 @@ void sync_world(WorkerEnv& env, const std::shared_ptr<const WorldSnap>& world, b
 }
 
 // A Luau request: the completion at `offset` (none when npos) and the type at
-// each of `offsets`. The worker answers it ahead of queued checks.
+// each of `offsets`. The editor checker answers it, never behind a check of the place.
 struct CompleteRequest {
     std::vector<std::size_t> offsets;
     // Requests in one lane replace each other while queued. Empty never does.
@@ -1165,7 +1163,7 @@ std::string self_type(Luau::TypeId type) {
     return class_name.empty() ? std::string("table") : class_name;
 }
 
-// The source of a module the worker can read: the buffer being answered, or a
+// The source of a module the checker can read: the buffer being answered, or a
 // script in the place.
 const std::string* module_text(const WorkerEnv& env, const std::string& module) {
     if (env.files.module_name != nullptr && env.files.source != nullptr && module == *env.files.module_name) {
@@ -1343,7 +1341,7 @@ std::string pack_text(const std::vector<std::string>& types) {
 }
 
 // The definition of a function in its module's source, and that source, when
-// the worker can read both.
+// the checker can read both.
 struct Definition {
     Luau::AstExprFunction* node = nullptr;
     const std::string* text = nullptr;
@@ -1509,7 +1507,7 @@ std::string with_checked_buffer(WorkerEnv& env, const CompleteRequest& request, 
     const std::string display = self != nullptr && !self->name.empty() ? self->name : std::string("script");
     std::string error;
     try {
-        sync_world(env, request.world, false);
+        sync_world(env, request.world);
         env.files.module_name = &module_name;
         env.files.world = request.world.get();
         env.files.source = &check_source;
@@ -2843,7 +2841,7 @@ struct ScriptAnalysis::State {
     };
     std::vector<Handler> handlers;
     std::unordered_map<InstanceId, std::uint64_t> generations;
-    // Written by the worker after each job.
+    // Written by the place checker after each batch.
     std::atomic<std::size_t> cached_modules{0};
     std::unordered_map<InstanceId, Pending> pending;
     std::vector<Finished> results;
@@ -2858,7 +2856,7 @@ struct ScriptAnalysis::State {
     std::unordered_map<InstanceId, std::unordered_set<InstanceId>> required_by;
 
     // Luau autocomplete requests, answered before queued checks, and the one
-    // the worker is answering now.
+    // the editor checker is answering now.
     std::deque<std::shared_ptr<CompleteRequest>> completions;
     std::shared_ptr<CompleteRequest> serving;
 
@@ -3006,7 +3004,7 @@ void ScriptAnalysis::shutdown() {
 
 // Luau's parser allows 1000 levels of nesting and its checker hundreds more;
 // a Debug build spends a few KB of stack on each. std::thread's default of 1 MB
-// overflows on code nested that deep, so the worker reserves this much.
+// overflows on code nested that deep, so every analysis thread reserves this much.
 constexpr std::size_t kWorkerStackBytes = std::size_t{16} << 20;
 
 void ScriptAnalysis::ensure_threads() {

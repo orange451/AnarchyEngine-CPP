@@ -109,7 +109,7 @@ struct LuauSuggestion {
 struct LuauTypeAt;
 
 struct LuauCompletion {
-    // False when the worker did not answer in time, or analysis cannot run.
+    // False when the editor checker did not answer in time, or analysis cannot run.
     bool ran = false;
     // expression, statement, property, type, keyword, string, hot comment, or unknown.
     std::string context;
@@ -164,8 +164,8 @@ struct LuauFacts {
     std::vector<LuauTypeAt> types;
 };
 
-// A Luau answer on its way from the analysis worker. `ready` turns true once,
-// after the worker has written `facts`; read them only then. A request a newer
+// A Luau answer on its way from the editor checker. `ready` turns true once,
+// after the checker has written `facts`; read them only then. A request a newer
 // one in its lane replaced is ready with nothing in it.
 struct LuauAnswer {
     std::atomic<bool> ready{false};
@@ -173,7 +173,8 @@ struct LuauAnswer {
 };
 
 // Incremental analysis of every Lua source in one DataModel, whether or not anything shows it.
-// Source is copied on the gameplay thread. A coordinator thread takes due
+// pump() copies the tree, sources and all, under the DataModel lock, once for
+// every change since its last copy. A coordinator thread takes due
 // scripts in batches and parses, lints, and type-checks them on a pool of
 // threads; a second thread answers Luau requests from editors. pump() is the
 // only publisher. It runs on the gameplay thread, as
@@ -192,7 +193,9 @@ public:
     void set_enabled(bool enabled);
     bool enabled() const;
 
-    // Source, name, or parent changed. Also used after place restore.
+    // Source, name, or parent changed. Also used after place restore. Cheap:
+    // it queues the script and what requires it, if it is in the place, and
+    // the next pump() captures the tree once for every script queued since.
     void invalidate(InstanceId script);
     void invalidate_all();
     // The tree changed around the scripts: a parent, a name, an order, a
@@ -205,8 +208,8 @@ public:
     // The instance is gone. Drops its diagnostics; a result a running batch
     // still finishes for it is never published.
     void remove(InstanceId script);
-    // Modules the checker holds, as of its last job: one per script it has
-    // checked in the tree it last saw.
+    // Modules the place checker holds, as of its last batch: one per script it
+    // has checked in the authored tree it last saw.
     std::size_t cached_modules() const;
 
     std::vector<Diagnostic> diagnostics() const;
@@ -217,7 +220,8 @@ public:
     // Empty when this script has no published result yet.
     std::optional<std::string> analyzed_source(InstanceId script) const;
 
-    // Applies finished jobs and fires diagnostics_changed. Does not run analysis.
+    // Captures the tree when a change waits for it, publishes finished checks,
+    // and fires diagnostics_changed. Does not run analysis.
     void pump();
 
     // One row per diagnostic: name | severity | code | message | line.
@@ -231,15 +235,15 @@ public:
     // sorted. A tree change at one of them, or among its children, rechecks it.
     std::vector<InstanceId> reached(InstanceId script) const;
 
-    // A snapshot is waiting out the debounce, the worker is inside a job, or a
-    // tree change is waiting for pump() or the place checker.
+    // A script is queued or waiting out the debounce, the place checker is in
+    // a batch, or a tree change is waiting for pump() or the place checker.
     bool busy() const;
-    // busy() is false and pump() has published every finished job.
+    // busy() is false and pump() has published every finished check.
     bool idle() const;
     // This script has a published result, and no newer check of it is queued,
     // running, or waiting for pump(). A tree change pump() has not taken yet
     // counts as newer while the simulation is stopped. A script outside the
-    // place, never checked, is settled with no result.
+    // place, or one a playtest added, is never checked: settled with no result.
     bool settled(InstanceId script) const;
 
     class DiagnosticsSignal {
@@ -257,13 +261,13 @@ public:
     // One type check of `source` as the text of `script`, with `world` as the
     // place, that answers Luau's autocomplete at byte `caret` (none when it is
     // npos) and the type at each byte of `offsets`, in that order. It runs on
-    // the analysis worker, ahead of queued checks, and waits up to `wait`. The
+    // the editor checker, never behind a check of the place, and waits up to `wait`. The
     // buffer's types are dropped afterwards, so an unsaved edit never reaches
     // another script's diagnostics. Any thread.
     LuauFacts luau_facts(const std::vector<LuaNode>& world, InstanceId script, std::string source, std::size_t caret,
                          std::vector<std::size_t> offsets, std::chrono::milliseconds wait);
     // The same without waiting. Poll the answer's `ready`. A new request in
-    // `lane` replaces one there that the worker has not started, so typing
+    // `lane` replaces one there that the editor checker has not started, so typing
     // never queues more than one per lane.
     std::shared_ptr<const LuauAnswer> luau_facts_later(const std::vector<LuaNode>& world, InstanceId script,
                                                        std::string source, std::size_t caret,

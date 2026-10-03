@@ -48,6 +48,7 @@ TEST_CASE("HL1 a chunk's write is an undo step only when the chunk records it", 
 
     rig.runtime.run_chunk("workspace.Brick.Name = 'Loose'");
     INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
     REQUIRE(rig.game.name(part.id()) == "Loose");
     REQUIRE_FALSE(rig.game.history().can_undo().first);
     REQUIRE_FALSE(rig.game.history().dirty());
@@ -59,6 +60,7 @@ TEST_CASE("HL1 a chunk's write is an undo step only when the chunk records it", 
         history:FinishRecording(id, Enum.FinishRecordingOperation.Commit)
     )");
     INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
     REQUIRE(rig.game.history().can_undo().second == "Rename Brick");
     REQUIRE(rig.game.history().dirty());
     rig.game.history().undo();
@@ -75,6 +77,7 @@ TEST_CASE("HL2 FinishRecording with Cancel puts the value back", "[HL2][history]
         history:FinishRecording(id, Enum.FinishRecordingOperation.Cancel)
     )");
     INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
     REQUIRE(rig.game.name(part.id()) == "Brick");
     REQUIRE_FALSE(rig.game.history().can_undo().first);
     REQUIRE_FALSE(rig.game.history().dirty());
@@ -104,6 +107,7 @@ TEST_CASE("HL3 the queries name the step and the signals fire with their argumen
     )");
     rig.frames(1);
     INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
     const std::vector<std::string> all = lines(rig.runtime);
     REQUIRE(has(all, "second\ttrue\tnil\n"));
     REQUIRE(has(all, "open\ttrue\ttrue\tfalse\n"));
@@ -130,6 +134,7 @@ TEST_CASE("HL4 a stale id is a no-op and a bad operation is an error a pcall cat
         history:FinishRecording(id, Enum.FinishRecordingOperation.Commit)
     )");
     INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
     const std::vector<std::string> all = lines(rig.runtime);
     REQUIRE(std::count(all.begin(), all.end(), "still open\ttrue\n") == 2);
     REQUIRE(std::any_of(all.begin(), all.end(),

@@ -14,7 +14,9 @@ namespace engine_core {
 // registry property (lua_saved_property), so DataModel saves, loads, undoes,
 // and restores it at Stop. A Camera in Workspace has a render snapshot row
 // like any GameObject, and the row carries FieldOfView too.
-// Its Transform writes are not undo steps (transform_in_history), though they save.
+// Its Transform is an ordinary property: a write inside a recording is an undo
+// step. Flying the view writes it outside any recording, so that is not one,
+// though a save writes where the camera is.
 class Camera : public GameObject {
 public:
     static constexpr double kDefaultFieldOfView = 70.0;
@@ -26,9 +28,6 @@ public:
     using GameObject::GameObject;
 
     const char* class_name() const override { return "Camera"; }
-
-    // Flying the camera is looking around, not editing.
-    bool transform_in_history() const override { return false; }
 
     double field_of_view() const { return field_of_view_; }
     // SimulationThread. Clamped to kMinFieldOfView..kMaxFieldOfView. A value

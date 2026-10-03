@@ -28,10 +28,6 @@ public:
     void set_position(const Vec3& position);
     void set_linear_velocity(float x, float y, float z);
 
-    // False for a class whose moves are a viewpoint, not content: its Transform
-    // writes still mark the place changed, so they save, but are not undo steps.
-    virtual bool transform_in_history() const { return true; }
-
     // A dead id fails closed: transform() is a zero matrix, not a recycled slot.
     Matrix4 transform() const override;
     Vec3 position() const;

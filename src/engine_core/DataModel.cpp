@@ -695,11 +695,7 @@ void DataModel::apply_transform(InstanceId id, const Matrix4& transform, bool fo
         return;
     }
     target->store_transform(transform);
-    if (target->transform_in_history()) {
-        record_transform(id, previous, transform);
-    } else {
-        mark_authored_dirty(id);
-    }
+    record_transform(id, previous, transform);
     const WriteOrigin origin = current_origin();
     note(id, VisualField::Transform, origin);
     emit_change(id, Field::Transform, origin);

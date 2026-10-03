@@ -171,3 +171,19 @@ TEST_CASE("CAM4 a new place and a new project start with a Camera in Workspace",
     REQUIRE(cameras[0]->field_of_view() == Camera::kNewPlaceFieldOfView);
     REQUIRE_FALSE(game.history().can_undo().first);
 }
+
+TEST_CASE("CAM5 a camera flown outside any recording is written by the next save", "[camera][project]") {
+    SimRole role;
+    TempDir dir;
+    const engine_core::Matrix4 flown = engine_core::matrix4_translation(3.f, 4.f, 5.f);
+    {
+        engine_core::Project project = engine_core::Project::create(dir.path);
+        Camera* camera = workspace_cameras(project.datamodel())[0];
+        camera->set_transform(flown);
+        REQUIRE_FALSE(project.datamodel().history().can_undo().first);
+        project.save();
+    }
+    engine_core::Game game;
+    engine_core::Project loaded = engine_core::Project::load(dir.path, game);
+    REQUIRE(engine_core::same_matrix4(workspace_cameras(game)[0]->transform(), flown));
+}

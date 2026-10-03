@@ -13,6 +13,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <limits>
@@ -263,25 +264,28 @@ TEST_CASE("SC10b a new CurrentCamera is heard by the Properties page and by Chan
     rig.game.unwatch_changes(watch);
 }
 
-TEST_CASE("SC11 moving a Camera marks the place changed but is not an undo step", "[SC11]") {
+TEST_CASE("SC11 a Camera's Transform is an undo step only inside a recording", "[SC11]") {
     ScriptRig rig;
     engine_core::Camera& camera = add_camera(rig.game);
-    engine_core::GameObject& part = create_part(rig.game);
     rig.game.history().reset_waypoints();
-    const std::uint64_t revision = rig.game.authored_revision();
+    rig.game.clear_authored_dirty();
 
-    begin_step(rig.game);
+    // Flying: no recording is open, so nothing is undoable, but a save writes it.
     for (int step = 1; step <= 50; ++step) {
         camera.set_transform(engine_core::matrix4_translation(0.f, 0.f, static_cast<float>(step)));
     }
-    end_step(rig.game);
     REQUIRE_FALSE(rig.game.history().can_undo().first);
-    REQUIRE(rig.game.authored_revision() != revision);
+    const engine_core::AuthoredDirty dirty = rig.game.authored_dirty();
+    REQUIRE(std::find(dirty.ids.begin(), dirty.ids.end(), camera.id()) != dirty.ids.end());
 
-    begin_step(rig.game);
-    part.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
+    // An edit, as a dragger or the Properties panel makes: one step.
+    const engine_core::Matrix4 flown = camera.transform();
+    begin_step(rig.game, "Move");
+    camera.set_transform(engine_core::matrix4_translation(5.f, 0.f, 0.f));
     end_step(rig.game);
-    REQUIRE(rig.game.history().can_undo().first);
+    REQUIRE(rig.game.history().can_undo().second == "Move");
+    rig.game.history().undo();
+    REQUIRE(engine_core::same_matrix4(camera.transform(), flown));
 }
 
 namespace {

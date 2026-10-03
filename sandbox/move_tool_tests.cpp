@@ -344,3 +344,26 @@ TEST_CASE("MT10 deleting the selected part takes it out of the selection, so the
     REQUIRE(move.rig.game.selection().revision() != before);
     REQUIRE_FALSE(handles_at(move.rig.game));
 }
+
+TEST_CASE("MT11 dragging a Camera the view does not look through is one Move step", "[MT11]") {
+    MoveRig move;
+    // Where MT6's handles sat: the middle of its two parts. The same pixels hit the X arrow.
+    engine_core::Camera& shot = move.rig.game.create<engine_core::Camera>();
+    move.rig.game.set_name(shot.id(), "Shot");
+    move.rig.game.set_parent(shot.id(), move.rig.game.scene_service("Workspace"));
+    shot.set_transform(engine_core::matrix4_translation(0, 0, -10));
+    move.rig.game.history().reset_waypoints();
+    move.rig.game.selection().set({shot.id()});
+    move.rig.frames(1);
+    move.post(true, 150, 100);
+    move.move(160, 100);
+    move.move(170, 100);
+    move.post(false, 170, 100);
+    move.rig.frames(1);
+    INFO(move.rig.runtime.last_error());
+    REQUIRE(near(move.x_of(shot.id()), 2));
+    REQUIRE(move.rig.game.history().can_undo().second == "Move");
+    move.rig.game.history().undo();
+    move.rig.frames(1);
+    REQUIRE(near(move.x_of(shot.id()), 0));
+}

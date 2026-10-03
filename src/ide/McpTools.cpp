@@ -9,6 +9,7 @@
 #include "LuaApi.hpp"
 #include "LuaSource.hpp"
 #include "PropertySheet.hpp"
+#include "ScopedRecording.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
 #include "SelectionService.hpp"
@@ -518,9 +519,6 @@ JsonValue OutputLines(const engine_core::ScriptRuntime::OutputHistory& history) 
     return lines;
 }
 
-// Ends the edit's undo step, as the explorer's edits do.
-void CloseGesture(DataModel& world) { world.history().end_gesture(); }
-
 const char* SeverityName(engine_core::Severity severity) {
     switch (severity) {
         case engine_core::Severity::Error:
@@ -956,25 +954,28 @@ JsonValue CreateInstance(const ToolContext& context, const JsonValue& arguments)
         if (std::optional<std::string> refused = world.placement_error_for_class(parent_id, class_name)) {
             throw std::runtime_error(*refused);
         }
-        // Refused before the gesture opens, so a full place leaves nothing pending.
+        // Refused before the recording opens, so a full place leaves no empty step.
         if (world.room_left() == 0) {
             throw engine_core::InstanceCapacityError();
         }
-        world.history().set_pending_gesture("Insert " + class_name);
-        DataModel* made = engine_core::lua_create_instance(world, class_name.c_str());
-        if (made == nullptr) {
-            throw std::runtime_error("Could not create " + class_name + ".");
+        engine_core::InstanceId made_id = 0;
+        {
+            ScopedRecording step(world, "Insert " + class_name);
+            DataModel* made = engine_core::lua_create_instance(world, class_name.c_str());
+            if (made == nullptr) {
+                throw std::runtime_error("Could not create " + class_name + ".");
+            }
+            if (!name.empty()) {
+                world.set_name(made->id(), name);
+            }
+            world.set_parent(made->id(), parent_id);
+            made_id = made->id();
         }
-        if (!name.empty()) {
-            world.set_name(made->id(), name);
-        }
-        world.set_parent(made->id(), parent_id);
-        CloseGesture(world);
         // An edit while stopped is part of the place, as the explorer's insert is.
         if (!world.simulation_running()) {
             world.capture_place();
         }
-        return Brief(world, made->id());
+        return Brief(world, made_id);
     });
 }
 
@@ -987,9 +988,10 @@ JsonValue DeleteInstance(const ToolContext& context, const JsonValue& arguments)
         }
         JsonValue out = JsonValue::object();
         out.set("deleted", Brief(world, id));
-        world.history().set_pending_gesture("Delete");
-        world.destroy_tree(id);
-        CloseGesture(world);
+        {
+            ScopedRecording step(world, "Delete");
+            world.destroy_tree(id);
+        }
         return out;
     });
 }
@@ -1061,15 +1063,11 @@ JsonValue ImportAssets(const ToolContext& context, const JsonValue& arguments) {
     // model does not hold the studio's window. Only the instances wait for the edit.
     const McpPlaceImports place = context.studio.import_files(files);
     return RunEdit(context.engine, [place](DataModel& world) {
-        world.history().set_pending_gesture("Import Assets");
         std::vector<McpImport> imports;
-        try {
+        {
+            ScopedRecording step(world, "Import Assets");
             imports = place(world);
-        } catch (...) {
-            CloseGesture(world);
-            throw;
         }
-        CloseGesture(world);
         // An edit while stopped is part of the place, as the explorer's insert is.
         if (!world.simulation_running()) {
             world.capture_place();

@@ -33,6 +33,7 @@
 #include "IdeResources.hpp"
 #include "McpServer.hpp"
 #include "McpTools.hpp"
+#include "ScopedRecording.hpp"
 #include "StudioRegistry.hpp"
 #include "UiCalls.hpp"
 #include "runner/GameView.hpp"
@@ -142,8 +143,6 @@ inline KeyChord ChordOf(const jadefx::KeyEvent& event) {
     }
     return chord;
 }
-
-inline void CloseGesture(engine_core::DataModel& world) { world.history().end_gesture(); }
 
 // Every color is a variable of the current theme, which set_current_theme puts in
 // JadeFX's user-agent stylesheet. See resources/themes/light.css.

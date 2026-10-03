@@ -82,7 +82,7 @@ std::shared_ptr<IdePane> IdeLayout::make_assets() {
 void IdeLayout::add_as_game_objects(std::vector<engine_core::InstanceId> prefabs) {
     runner_.simulation().on_simulation(
         [this, alive = std::weak_ptr<int>(alive_), prefabs = std::move(prefabs)](engine_core::DataModel& world) {
-            world.history().set_pending_gesture("Add as GameObject");
+            ScopedRecording step(world, "Add as GameObject");
             std::vector<engine_core::InstanceId> made;
             std::string error;
             for (engine_core::InstanceId prefab : prefabs) {
@@ -93,7 +93,6 @@ void IdeLayout::add_as_game_objects(std::vector<engine_core::InstanceId> prefabs
                     error = std::move(refused);
                 }
             }
-            CloseGesture(world);
             if (made.empty()) {
                 toast_later(this, alive, std::move(error));
                 return;
@@ -357,13 +356,12 @@ void IdeLayout::place_imports(const std::filesystem::path& resources, const std:
         const bool images = std::any_of(prepared.begin(), prepared.end(), [](const PreparedAsset& asset) {
             return !asset.model && !asset.sound && asset.error.empty();
         });
-        world.history().set_pending_gesture(models            ? "Import Models"
-                                            : sounds && images ? "Import Assets"
-                                            : sounds          ? "Import Sounds"
-                                                              : "Import Textures");
+        ScopedRecording step(world, models            ? "Import Models"
+                                   : sounds && images ? "Import Assets"
+                                   : sounds          ? "Import Sounds"
+                                                     : "Import Textures");
         // The folder the import was asked for may be gone by now; each category then takes its own.
         const std::vector<PlacedAsset> placed = place_assets(world, prepared, folder);
-        CloseGesture(world);
         std::vector<engine_core::InstanceId> made;
         std::size_t model_count = 0;
         std::string summary;

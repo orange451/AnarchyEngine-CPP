@@ -114,7 +114,7 @@ void IdeLayout::delete_instances(std::vector<std::uint32_t> ids) {
     }
     runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), ids = std::move(ids)](
                                            engine_core::DataModel& world) {
-        bool any = false;
+        ScopedRecording step(world, "Delete");
         for (std::uint32_t id : ids) {
             // A selected child is already gone with its selected parent.
             if (!world.alive(id)) {
@@ -124,14 +124,7 @@ void IdeLayout::delete_instances(std::vector<std::uint32_t> ids) {
                 toast_later(this, alive, std::move(*error));
                 continue;
             }
-            if (!any) {
-                world.history().set_pending_gesture("Delete");
-                any = true;
-            }
             world.destroy_tree(id);
-        }
-        if (any) {
-            CloseGesture(world);
         }
     });
 }
@@ -249,18 +242,11 @@ void IdeLayout::copy(const std::vector<std::uint32_t>& ids) {
     if (clip_->held) {
         std::vector<engine_core::InstanceId> dropped = clip_->ids;
         runner_.simulation().on_simulation([dropped](engine_core::DataModel& world) {
-            bool any = false;
+            ScopedRecording step(world, "Copy");
             for (engine_core::InstanceId id : dropped) {
                 if (world.alive(id) && world.parent(id) == engine_core::DataModel::kNoParent) {
-                    if (!any) {
-                        world.history().set_pending_gesture("Copy");
-                        any = true;
-                    }
                     world.destroy_tree(id);
                 }
-            }
-            if (any) {
-                CloseGesture(world);
             }
         });
     }
@@ -292,13 +278,12 @@ void IdeLayout::duplicate(const std::vector<std::uint32_t>& ids) {
     }
     runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_),
                                         groups = std::move(groups)](engine_core::DataModel& world) {
-        world.history().set_pending_gesture("Duplicate");
+        ScopedRecording step(world, "Duplicate");
         std::vector<engine_core::InstanceId> made;
         std::string refused;
         for (const auto& group : groups) {
             paste_copies(world, group.second, group.first, &made, &refused);
         }
-        CloseGesture(world);
         if (!made.empty()) {
             world.selection().set(made);
         }
@@ -342,7 +327,7 @@ void IdeLayout::cut(const std::vector<std::uint32_t>& ids) {
     // selects them again.
     game.selection().set({});
     runner_.simulation().on_simulation([taken, dropped](engine_core::DataModel& world) {
-        world.history().set_pending_gesture("Cut");
+        ScopedRecording step(world, "Cut");
         for (engine_core::InstanceId id : dropped) {
             if (world.alive(id) && world.parent(id) == engine_core::DataModel::kNoParent) {
                 world.destroy_tree(id);
@@ -353,7 +338,6 @@ void IdeLayout::cut(const std::vector<std::uint32_t>& ids) {
                 world.set_parent(id, engine_core::DataModel::kNoParent);
             }
         }
-        CloseGesture(world);
     });
 }
 
@@ -376,11 +360,10 @@ void IdeLayout::paste(std::uint32_t id, bool beside) {
             if (!parent_ok(world, id)) {
                 return;
             }
-            world.history().set_pending_gesture("Paste");
+            ScopedRecording step(world, "Paste");
             std::vector<engine_core::InstanceId> made;
             std::string refused;
             paste_copies(world, *copies, id, &made, &refused);
-            CloseGesture(world);
             if (!made.empty()) {
                 world.selection().set(made);
             }
@@ -429,14 +412,13 @@ void IdeLayout::paste(std::uint32_t id, bool beside) {
         if (!parent_ok(world, id)) {
             return;
         }
-        world.history().set_pending_gesture("Paste");
+        ScopedRecording step(world, "Paste");
         // Each goes last, so the pasted instances keep the order they were cut in.
         for (engine_core::InstanceId child : children) {
             if (world.alive(child) && !world.parent_error(child, id)) {
                 world.set_parent(child, id);
             }
         }
-        CloseGesture(world);
     });
 }
 
@@ -446,10 +428,9 @@ void IdeLayout::move(std::vector<std::uint32_t> ids, std::uint32_t parent) {
     }
     runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), ids = std::move(ids),
                                         parent](engine_core::DataModel& world) {
-        world.history().set_pending_gesture("Move");
+        ScopedRecording step(world, "Move");
         std::string refused;
         const bool moved = move_set(world, ids, parent, &refused);
-        CloseGesture(world);
         if (!moved && !refused.empty()) {
             toast_later(this, alive, std::move(refused));
         }
@@ -472,9 +453,8 @@ void IdeLayout::rename(std::uint32_t id, std::string name) {
             toast_later(this, alive, std::move(*error));
             return;
         }
-        world.history().set_pending_gesture("Rename");
+        ScopedRecording step(world, "Rename");
         world.set_name(id, name);
-        CloseGesture(world);
     });
 }
 
@@ -582,10 +562,9 @@ PrefabEditorHost IdeLayout::prefab_editor_host() {
     host.add_model = [this](engine_core::InstanceId prefab, engine_core::InstanceId mesh,
                             engine_core::InstanceId material, std::shared_ptr<InsertResult> result) {
         runner_.simulation().on_simulation([prefab, mesh, material, result](engine_core::DataModel& world) {
-            world.history().set_pending_gesture("Add Model");
+            ScopedRecording step(world, "Add Model");
             std::string error;
             const engine_core::InstanceId made = add_model(world, prefab, mesh, material, error);
-            CloseGesture(world);
             if (result) {
                 result->id.store(made, std::memory_order_relaxed);
                 result->error = std::move(error);
@@ -596,10 +575,8 @@ PrefabEditorHost IdeLayout::prefab_editor_host() {
     host.set_part = [this](engine_core::InstanceId model, ModelPart part, engine_core::InstanceId target) {
         runner_.simulation().on_simulation(
             [this, alive = std::weak_ptr<int>(alive_), model, part, target](engine_core::DataModel& world) {
-                world.history().set_pending_gesture(std::string(target != 0 ? "Set " : "Clear ") +
-                                                    model_part_name(part));
+                ScopedRecording step(world, std::string(target != 0 ? "Set " : "Clear ") + model_part_name(part));
                 std::optional<std::string> error = set_model_part(world, model, part, target);
-                CloseGesture(world);
                 if (error) {
                     toast_later(this, alive, std::move(*error));
                 }

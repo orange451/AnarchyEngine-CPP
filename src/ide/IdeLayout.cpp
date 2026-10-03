@@ -164,8 +164,11 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         runner_.simulation().on_simulation(
             [class_name = std::move(class_name), asked = parent, result](engine_core::DataModel& world) {
                 std::string error;
-                const engine_core::InstanceId made = insert_instance(world, class_name, asked, error);
-                CloseGesture(world);
+                engine_core::InstanceId made = 0;
+                {
+                    ScopedRecording step(world, "Insert " + class_name);
+                    made = insert_instance(world, class_name, asked, error);
+                }
                 if (result) {
                     result->id.store(made, std::memory_order_relaxed);
                     result->error = std::move(error);

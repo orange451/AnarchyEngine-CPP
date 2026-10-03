@@ -8,6 +8,7 @@
 #include "ScriptRuntime.hpp"
 #include "TaskScheduler.hpp"
 #include "ide/InputRouter.hpp"
+#include "ide/ScopedRecording.hpp"
 #include "types.hpp"
 
 #include "support.hpp"
@@ -15,6 +16,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstring>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -634,4 +636,38 @@ TEST_CASE("H24 the router forgets a script's text stack", "[H24][history]") {
     REQUIRE(router.focused_stack() != nullptr);
     router.forget_scripts();
     REQUIRE(router.focused_stack() == nullptr);
+}
+
+TEST_CASE("H25 a ScopedRecording is one named step, committed when it leaves scope", "[H25][history]") {
+    engine_core::Game game;
+    engine_core::GameObject& part = make_part(game, "Brick");
+    game.history().reset_waypoints();
+    {
+        ide::ScopedRecording step(game, "Rename");
+        REQUIRE(game.history().is_recording_in_progress());
+        game.set_name(part.id(), "A");
+        game.set_name(part.id(), "B");
+    }
+    REQUIRE_FALSE(game.history().is_recording_in_progress());
+    REQUIRE(game.history().can_undo().second == "Rename");
+    game.history().undo();
+    REQUIRE(game.name(part.id()) == "Brick");
+}
+
+TEST_CASE("H26 a ScopedRecording inside an open recording joins it and leaves it open", "[H26][history]") {
+    engine_core::Game game;
+    engine_core::GameObject& part = make_part(game, "Brick");
+    game.history().reset_waypoints();
+    const std::optional<std::string> drag = game.history().try_begin_recording("Move");
+    REQUIRE(drag.has_value());
+    {
+        // As an IDE command issued while a drag is in progress.
+        ide::ScopedRecording step(game, "Rename");
+        game.set_name(part.id(), "A");
+    }
+    REQUIRE(game.history().is_recording_in_progress(*drag));
+    game.history().finish_recording(*drag, engine_core::FinishRecordingOperation::Commit);
+    REQUIRE(game.history().can_undo().second == "Move");
+    game.history().undo();
+    REQUIRE(game.name(part.id()) == "Brick");
 }

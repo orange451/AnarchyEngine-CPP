@@ -4816,6 +4816,8 @@ TEST_CASE("RW1 invoke_render runs a host signal's handlers in the window", "[RW1
 
     std::thread render([&] {
         engine_core::set_thread_role(engine_core::ThreadRole::Render);
+        // Right thread, window still closed: the window-flag guard must fire.
+        REQUIRE_THROWS_AS(events.invoke_render(signal, false), engine_core::ContractViolation);
         game.set_prerender_window(true);
         events.invoke_render(signal, false);  // paused: tagged skipped
         REQUIRE(kept_runs == 1);
@@ -4829,5 +4831,10 @@ TEST_CASE("RW1 invoke_render runs a host signal's handlers in the window", "[RW1
         engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
     });
     render.join();
+    // Window open, wrong thread (this test case runs under SimRole): the
+    // thread-role guard must fire even though the window flag would pass.
+    game.set_prerender_window(true);
+    REQUIRE_THROWS_AS(events.invoke_render(signal, false), engine_core::ContractViolation);
+    game.set_prerender_window(false);
     events.release_signal(signal);
 }

@@ -292,6 +292,9 @@ void EventQueue::invoke_connections(Signal& signal, const Event& event) {
 // and once-tombstoning, because drain() refuses to run inside the prerender
 // window and this is the only other door in.
 void EventQueue::invoke_render(Signal& signal, bool include_tagged) {
+    if (thread_role() != ThreadRole::Render) {
+        contract_fail("invoke_render runs on RenderThread");
+    }
     if (prerender_open_ == nullptr || !*prerender_open_) {
         contract_fail("invoke_render runs inside RenderStepped or PreRender");
     }

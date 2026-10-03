@@ -844,11 +844,12 @@ void clear_extras(DataModel& world, InstanceId id) {
 }
 
 // Destroys every live instance, parented or not, but the services, which go
-// back to their defaults. Clears the root's extras.
+// back to their defaults, and Core with all it holds, which stays as it is.
+// Clears the root's extras.
 void clear_world(DataModel& world) {
     std::vector<InstanceId> ids;
-    world.for_each_instance([&ids](DataModel& object) {
-        if (!object.is_service()) {
+    world.for_each_instance([&world, &ids](DataModel& object) {
+        if (!object.is_service() && !world.core_holds(object.id())) {
             ids.push_back(object.id());
         }
     });

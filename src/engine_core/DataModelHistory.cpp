@@ -216,6 +216,8 @@ int DataModel::sibling_index_of(InstanceId id) const {
 void DataModel::take_free_index(std::uint32_t index) {
     std::vector<std::uint32_t>& free = state_->free_list;
     free.erase(std::remove(free.begin(), free.end(), index), free.end());
+    std::vector<std::uint32_t>& held = state_->history_held;
+    held.erase(std::remove(held.begin(), held.end(), index), held.end());
 }
 
 AuthoredRecord DataModel::capture_record(InstanceId id, bool subtree) const {

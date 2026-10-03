@@ -70,10 +70,10 @@ bool is_light(const DataModel* instance) {
     return dynamic_cast<const Light*>(instance) != nullptr || dynamic_cast<const DirectionalLight*>(instance) != nullptr;
 }
 
-// Whether id has a row: a GameObject or DirectionalLight in Workspace, or any
-// light under Lighting.
+// Whether id has a row: a GameObject or DirectionalLight in Workspace or Core,
+// or any light under Lighting.
 bool has_row(const DataModel& game, InstanceId id) {
-    return game.in_workspace(id) || (game.in_lighting(id) && is_light(game.instance(id)));
+    return game.in_workspace(id) || game.in_core(id) || (game.in_lighting(id) && is_light(game.instance(id)));
 }
 
 // A DirectionalLight's row: no Transform, no Prefab, only what it shines.
@@ -198,7 +198,8 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
     if (whole || any(change.fields, VisualField::Prefab)) {
         // A light under Lighting only shines: Lighting is not part of the scene.
         static const std::string kNoPrefab;
-        set_row_prefab(*inst, game.in_workspace(change.id) ? object->prefab_guid() : kNoPrefab);
+        const bool scene = game.in_workspace(change.id) || game.in_core(change.id);
+        set_row_prefab(*inst, scene ? object->prefab_guid() : kNoPrefab);
     }
     if (whole || any(change.fields, VisualField::Camera)) {
         inst->field_of_view = field_of_view_of(*object);
@@ -247,8 +248,9 @@ void SnapshotPump::resync(DataModel& game) {
         walk.pop_back();
         const DataModel* instance = game.instance(id);
         const bool sun = dynamic_cast<const DirectionalLight*>(instance) != nullptr;
-        // A light GameObject in Workspace already has its row from the query.
-        const bool lit = !game.in_workspace(id) && dynamic_cast<const Light*>(instance) != nullptr;
+        // A light GameObject in Workspace or Core already has its row from the query.
+        const bool lit =
+            !game.in_workspace(id) && !game.in_core(id) && dynamic_cast<const Light*>(instance) != nullptr;
         if (sun || lit) {
             if (base_.instances.size() == base_.instances.capacity()) {
                 contract_fail("snapshot instance capacity exhausted");

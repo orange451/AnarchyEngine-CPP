@@ -1659,7 +1659,8 @@ TEST_CASE("N3 place restore reverts play and drops session instances", "[N3]") {
     engine_core::GameObject& recycled = game.create<engine_core::GameObject>();
     const engine_core::InstanceId recycled_id = recycled.id();
     REQUIRE(recycled_id != sibling_id);
-    REQUIRE((recycled_id & 0xffffu) == (sibling_id & 0xffffu));
+    // A captured instance's slot waits for Stop, so play does not reuse it.
+    REQUIRE((recycled_id & 0xffffu) != (sibling_id & 0xffffu));
     game.set_name(recycled_id, "Recycled");
     game.set_parent(recycled_id, workspace_of(game));
 

@@ -62,6 +62,14 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                              .inout_none()
                              .cached()
                              .build();
+    world.core_render_query = world.ecs.query_builder<>()
+                                  .with<ecs::Instance>()
+                                  .in()
+                                  .with<ecs::InCore>()
+                                  .with<Matrix4>()
+                                  .inout_none()
+                                  .cached()
+                                  .build();
     world.body_query = world.ecs.query_builder<>()
                            .with<ecs::Instance>()
                            .in()
@@ -367,7 +375,7 @@ std::size_t DataModel::entity_count() const {
 
 std::size_t DataModel::room_left() const {
     const State& world = *state_;
-    return kMaxInstances - world.slots.size() + world.free_list.size();
+    return kMaxInstances - world.slots.size() + world.free_list.size() + world.history_held.size();
 }
 
 InstanceCapacityError::InstanceCapacityError()
@@ -377,6 +385,18 @@ InstanceCapacityError::InstanceCapacityError()
 InstanceId DataModel::allocate() {
     State& world = *state_;
     std::uint32_t index = 0;
+    if (world.free_list.empty() && world.slots.size() >= kMaxInstances && !world.history_held.empty()) {
+        // Full but for the slots kept for undo: room to create wins over undo.
+        if (world.history) {
+            world.history->reset_waypoints();
+        }
+        for (std::uint32_t held : world.history_held) {
+            if (!world.slots[held].alive) {
+                world.free_list.push_back(held);
+            }
+        }
+        world.history_held.clear();
+    }
     if (!world.free_list.empty()) {
         index = world.free_list.back();
         world.free_list.pop_back();
@@ -549,7 +569,8 @@ void DataModel::destroy(InstanceId id) {
         contract_fail(destroy_error(id)->c_str());
     }
     std::optional<AuthoredRecord> captured;
-    if (state_->history && state_->history->wants_mutation()) {
+    // Noted after the instance is gone, when Core no longer holds it, so the check is here.
+    if (state_->history && state_->history->wants_mutation() && !core_holds(id)) {
         captured = capture_record(id, true);
     }
     // The parent's folder may become a leaf and its child order changes.
@@ -562,7 +583,17 @@ void DataModel::destroy(InstanceId id) {
     release_to_pool(*part);
     if (part->generation != kMaxGeneration) {
         ++part->generation;
-        state_->free_list.push_back(index);
+        // A captured instance's slot waits for Stop, which brings it back there.
+        const bool held_for_stop = state_->simulation_running && index < state_->place_slots.size() &&
+                                   state_->place_slots[index];
+        // Undo brings back a recorded destroy, and redo a create that undo
+        // destroys, into this same slot. An unrecorded instance, such as one
+        // made in Core, must not be in it then, so the slot waits too.
+        const bool held_for_history =
+            captured.has_value() || (state_->history != nullptr && state_->history->applying_undo_redo());
+        if (!held_for_stop) {
+            (held_for_history ? state_->history_held : state_->free_list).push_back(index);
+        }
     }
     note(id, VisualField::Removed, current_origin());
     notify_watchers(id);
@@ -687,6 +718,17 @@ bool DataModel::in_lighting(InstanceId id) const {
     return has_tag(ecs_world(), entity_of(id), state_->ecs_ids.in_lighting);
 }
 
+bool DataModel::in_core(InstanceId id) const {
+    return has_tag(ecs_world(), entity_of(id), state_->ecs_ids.in_core);
+}
+
+bool DataModel::core_holds(InstanceId id) const {
+    if (id == 0 || !alive(id)) {
+        return false;
+    }
+    return in_core(id) || id == core();
+}
+
 void DataModel::refresh_scope(InstanceId id) {
     const Slot* part = slot(id);
     if (part == nullptr) {
@@ -695,26 +737,31 @@ void DataModel::refresh_scope(InstanceId id) {
     bool game = false;
     bool workspace = false;
     bool lighting = false;
+    bool in_core_now = false;
     if (part->parent == 0) {
         game = true;
     } else if (part->parent != kNoParent) {
         game = in_game(part->parent);
         workspace = in_workspace(part->parent) || part->parent == scene_service("Workspace");
         lighting = in_lighting(part->parent) || part->parent == scene_service("Lighting");
+        in_core_now = in_core(part->parent) || part->parent == core();
     }
-    if (in_game(id) == game && in_workspace(id) == workspace && in_lighting(id) == lighting) {
+    if (in_game(id) == game && in_workspace(id) == workspace && in_lighting(id) == lighting &&
+        in_core(id) == in_core_now) {
         return;
     }
-    apply_scope(id, game, workspace, lighting);
+    apply_scope(id, game, workspace, lighting, in_core_now);
 }
 
-void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_now, bool in_lighting_now) {
+void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_now, bool in_lighting_now,
+                            bool in_core_now) {
     // Top-down over the subtree. A node whose tags come out unchanged prunes
     // its children: their tags were derived from its tags.
     ecs_world_t* world = ecs_world();
     const EcsIds& ids = state_->ecs_ids;
     const InstanceId workspace_id = scene_service("Workspace");
     const InstanceId lighting_id = scene_service("Lighting");
+    const InstanceId core_id = core();
     std::vector<InstanceId>& queue = state_->scope_walk;
     queue.clear();
     queue.push_back(id);
@@ -727,15 +774,18 @@ void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_n
         bool game = in_game_now;
         bool workspace = in_workspace_now;
         bool lighting = in_lighting_now;
+        bool under_core = in_core_now;
         if (i > 0) {
             game = in_game(part->parent);
             workspace = in_workspace(part->parent) || part->parent == workspace_id;
             lighting = in_lighting(part->parent) || part->parent == lighting_id;
+            under_core = in_core(part->parent) || part->parent == core_id;
         }
         const bool had_game = has_tag(world, part->entity, ids.in_game);
         const bool had_workspace = has_tag(world, part->entity, ids.in_workspace);
         const bool had_lighting = has_tag(world, part->entity, ids.in_lighting);
-        if (had_game == game && had_workspace == workspace && had_lighting == lighting) {
+        const bool had_core = has_tag(world, part->entity, ids.in_core);
+        if (had_game == game && had_workspace == workspace && had_lighting == lighting && had_core == under_core) {
             continue;
         }
         if (had_game != game) {
@@ -747,8 +797,11 @@ void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_n
         if (had_workspace != workspace) {
             set_tag(world, part->entity, ids.in_workspace, workspace);
         }
-        // The render snapshot keeps rows for Workspace, and for lights under Lighting.
-        if ((had_workspace != workspace || had_lighting != lighting) &&
+        if (had_core != under_core) {
+            set_tag(world, part->entity, ids.in_core, under_core);
+        }
+        // The render snapshot keeps rows for Workspace and Core, and for lights under Lighting.
+        if ((had_workspace != workspace || had_lighting != lighting || had_core != under_core) &&
             (part->body != nullptr || (part->instance != nullptr && part->instance->has_visual_row()))) {
             note(cur, VisualField::Ancestry, current_origin());
         }
@@ -849,12 +902,14 @@ void DataModel::step_instances(double dt) {
 }
 
 void DataModel::for_each_rendered(const std::function<void(const GameObject&)>& fn) const {
-    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->render_query.c_ptr());
-    while (ecs_query_next(&it)) {
-        const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
-        for (std::int32_t i = 0; i < it.count; ++i) {
-            if (const GameObject* object = game_object(owners[i].id)) {
-                fn(*object);
+    for (const flecs::query<>* query : {&state_->render_query, &state_->core_render_query}) {
+        ecs_iter_t it = ecs_query_iter(ecs_world(), query->c_ptr());
+        while (ecs_query_next(&it)) {
+            const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
+            for (std::int32_t i = 0; i < it.count; ++i) {
+                if (const GameObject* object = game_object(owners[i].id)) {
+                    fn(*object);
+                }
             }
         }
     }
@@ -1467,6 +1522,8 @@ InstanceId DataModel::service(std::string_view class_name) const {
     return 0;
 }
 
+InstanceId DataModel::core() const { return service(kCoreClass); }
+
 std::string DataModel::rule_class(InstanceId parent, InstanceId moved, InstanceId moved_to) const {
     InstanceId at = parent;
     for (std::size_t guard = 0; guard <= kMaxInstances + 1; ++guard) {
@@ -1539,6 +1596,8 @@ std::optional<std::string> DataModel::parent_error(InstanceId id, InstanceId new
             if (spec->parent_class != nullptr && home == 0) {
                 home = kNoParent;
             }
+        } else if (std::string_view(object->class_name()) == kCoreClass) {
+            home = 0;
         }
         const bool placing = current == kNoParent && home != kNoParent && new_parent == home &&
                              service(object->class_name()) == 0;
@@ -1546,6 +1605,22 @@ std::optional<std::string> DataModel::parent_error(InstanceId id, InstanceId new
             return name(id) + " cannot be moved";
         }
         return std::nullopt;
+    }
+    // Core's contents stay in Core, so history and the place never meet them.
+    // An instance with no parent may go in. Destroy is the only way out.
+    const bool from_core = in_core(id);
+    const bool to_core = new_parent != kNoParent && (new_parent == core() || in_core(new_parent));
+    if (from_core && !to_core) {
+        return name(id) + " is in Core, and what is in Core stays there";
+    }
+    if (!from_core && to_core && current != kNoParent) {
+        return std::string("Only an instance with no parent can go into Core");
+    }
+    // Stop puts the place's instances back where they were, so none may be in Core then.
+    const std::uint32_t index = id_slot(id);
+    if (!from_core && to_core && state_->simulation_running && index < state_->place_slots.size() &&
+        state_->place_slots[index]) {
+        return name(id) + " is part of the place, so it cannot go into Core during play";
     }
     if (new_parent == kNoParent) {
         return std::nullopt;

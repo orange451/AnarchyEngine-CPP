@@ -323,7 +323,7 @@ TEST_CASE("undo revives a Spinner that still steps", "[dense][step]") {
     REQUIRE(revived->degrees() == before + 22.5);
 }
 
-TEST_CASE("Stop rebuilds authored instances whose slots play reused", "[dense][entity]") {
+TEST_CASE("Stop rebuilds authored instances that play destroyed, in their own slots", "[dense][entity]") {
     SimRole role;
     engine_core::Game game;
     engine_core::SnapshotPump pump;
@@ -343,16 +343,16 @@ TEST_CASE("Stop rebuilds authored instances whose slots play reused", "[dense][e
     game.start_simulation();
     game.destroy(part_id);
     game.destroy(spinner_id);
-    // New instances take the freed slots with newer generations, so Stop must
-    // retire them and rebuild the authored ones from scratch.
+    // A captured instance's slot waits for Stop, so new instances made in play
+    // go elsewhere, and Stop rebuilds the authored ones in their own slots.
     engine_core::DataModel& squatter = game.create();
     engine_core::DataModel& other = game.create();
     game.set_parent(squatter.id(), game.scene_service("Storage"));
     game.set_parent(other.id(), game.scene_service("Storage"));
     const auto slot_of = [](engine_core::InstanceId id) { return engine_core::id_slot(id); };
-    const bool reused = (slot_of(squatter.id()) == slot_of(part_id) && slot_of(other.id()) == slot_of(spinner_id)) ||
-                        (slot_of(squatter.id()) == slot_of(spinner_id) && slot_of(other.id()) == slot_of(part_id));
-    REQUIRE(reused);
+    const bool reused = slot_of(squatter.id()) == slot_of(part_id) || slot_of(squatter.id()) == slot_of(spinner_id) ||
+                        slot_of(other.id()) == slot_of(part_id) || slot_of(other.id()) == slot_of(spinner_id);
+    REQUIRE_FALSE(reused);
     game.stop_simulation();
 
     REQUIRE(game.alive(part_id));

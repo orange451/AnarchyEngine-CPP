@@ -116,7 +116,7 @@ std::vector<std::string> child_classes(const DataModel& game, InstanceId parent)
 TEST_CASE("GS2 a new Game holds Assets and its five categories, hidden from the explorer", "[GS2]") {
     Game game;
     REQUIRE(child_classes(game, 0) ==
-            std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "Assets"});
+            std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "Assets", "Core"});
     const InstanceId assets = game.service("Assets");
     REQUIRE(assets != 0);
     REQUIRE(game.parent(assets) == 0);
@@ -677,7 +677,7 @@ TEST_CASE("GS13 a place saved before Assets loads with the whole tree made", "[G
     engine_core::Project project = engine_core::Project::load(dir.path);
     DataModel& game = project.datamodel();
     REQUIRE(child_classes(game, 0) ==
-            std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "Assets"});
+            std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "Assets", "Core"});
     REQUIRE(child_classes(game, game.service("Assets")).size() == 5);
     REQUIRE(project.unsaved());
     REQUIRE_FALSE(std::filesystem::exists(dir.path / "src" / "Assets.assets"));

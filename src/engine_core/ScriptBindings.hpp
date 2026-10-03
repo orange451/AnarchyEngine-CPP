@@ -239,6 +239,8 @@ struct ScriptBindings {
     static int task_defer(lua_State* state);
     static int task_delay(lua_State* state);
     static int task_cancel(lua_State* state);
+    // A game script never sees Core or what is in it. The command line and plugins do.
+    static bool hidden_from_play(lua_State* state, ScriptRuntime& runtime, InstanceId id);
     static int instance_new(lua_State* state);
     static int require(lua_State* state);
     static int instance_index(lua_State* state);

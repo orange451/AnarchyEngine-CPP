@@ -38,7 +38,7 @@ std::string reason(const std::optional<std::string>& error) { return error.value
 TEST_CASE("SS1 a new Game holds the five scene services, in order", "[SS1]") {
     Game game;
     const std::vector<InstanceId> children = game.get_children(0);
-    REQUIRE(children.size() == 6);
+    REQUIRE(children.size() == 7);
     const char* const classes[] = {"Workspace", "Lighting", "Storage", "Scripts", "Gui"};
     const char* const guids[] = {"workspace", "lighting", "storage", "scripts", "gui"};
     for (std::size_t index = 0; index < 5; ++index) {
@@ -52,6 +52,8 @@ TEST_CASE("SS1 a new Game holds the five scene services, in order", "[SS1]") {
         REQUIRE(game.scene_service(classes[index]) == children[index]);
     }
     REQUIRE(std::string(game.instance(children[5])->class_name()) == "Assets");
+    // Then Core, last.
+    REQUIRE(std::string(game.instance(children[6])->class_name()) == "Core");
     REQUIRE(game.scene_service("Folder") == 0);
     REQUIRE_FALSE(game.is_scene_service());
     // Nothing to undo: a new place starts with them.
@@ -86,7 +88,7 @@ TEST_CASE("SS2 a scene service cannot be moved, renamed, or destroyed", "[SS2]")
     REQUIRE(game.alive(workspace));
     REQUIRE(game.parent(workspace) == 0);
     REQUIRE(game.name(workspace) == "Workspace");
-    REQUIRE(game.get_children(0).size() == 6);
+    REQUIRE(game.get_children(0).size() == 7);
 }
 
 TEST_CASE("SS3 only scene services are children of game", "[SS3]") {
@@ -260,7 +262,7 @@ TEST_CASE("SS6 scripts see the scene services and cannot move them", "[SS6]") {
     require_globals(rig, {"workspace", "classes", "isa", "run_service", "locked", "no_move", "no_move_in", "no_rename",
                           "same_name", "no_destroy", "no_game_destroy", "no_game_move", "no_new", "no_setmetatable",
                           "no_root", "no_root_new", "no_cycle", "in_workspace", "lighting", "no_nan"});
-    REQUIRE(rig.game.get_children(0).size() == 6);
+    REQUIRE(rig.game.get_children(0).size() == 7);
 }
 
 // Luau would otherwise read a path of up to three names from a global once,
@@ -405,7 +407,7 @@ TEST_CASE("SS10 a place missing scene services loads with them made", "[SS10][pr
         engine_core::Project project = engine_core::Project::load(dir.path);
         DataModel& game = project.datamodel();
         REQUIRE(child_names(game, 0) ==
-                std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "Assets"});
+                std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "Assets", "Core"});
         const InstanceId workspace = game.scene_service("Workspace");
         REQUIRE(child_names(game, workspace) == std::vector<std::string>{"Part", "Main", "Box"});
         REQUIRE(child_names(game, *game.find_guid("cccc")) == std::vector<std::string>{"Inner"});
@@ -508,7 +510,7 @@ TEST_CASE("SS12 a loaded place keeps its Lighting, and a new place resets it", "
     // The same service, back at its defaults.
     REQUIRE(game.scene_service("Lighting") == lighting);
     REQUIRE(lighting_of(game).brightness() == engine_core::Lighting::kDefaultBrightness);
-    REQUIRE(game.get_children(0).size() == 6);
+    REQUIRE(game.get_children(0).size() == 7);
 }
 
 // A saved registry property gets Changed with its own name, and its registered

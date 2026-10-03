@@ -83,6 +83,10 @@ struct Source {
 void collect(const engine_core::DataModel& game, engine_core::InstanceId parent, const std::string& path,
              std::vector<Source>& out, int depth) {
     for (engine_core::InstanceId child = game.first_child(parent); child != 0; child = game.next_sibling(child)) {
+        // Core holds the studio's own tools, which are not the place's scripts.
+        if (child == game.core()) {
+            continue;
+        }
         std::string name = game.name(child);
         if (const auto* script = dynamic_cast<const engine_core::LuaSource*>(game.instance(child))) {
             out.push_back(Source{child, name, script->class_name(), path, script->source()});

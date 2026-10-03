@@ -147,6 +147,12 @@ public:
     // last plugin goes. The caller is the simulation thread, or a paused edit. False
     // when root is not a live instance or is registered already; nothing runs then.
     bool register_plugin(InstanceId root);
+    // Scripts in Core run in the plugin VM, as plugins: one that enters Core
+    // while Enabled starts, and one that leaves, is disabled, or is destroyed
+    // stops. The script host's hooks queue them, and this registers or
+    // unregisters what is queued. step_tools calls it first, and tools_open()
+    // is true while something waits. SimulationThread, outside any Lua call.
+    void start_core_scripts();
     // Stops the plugin's threads and connections. False when root is not registered.
     bool unregister_plugin(InstanceId root);
     bool is_plugin(InstanceId root) const;
@@ -295,6 +301,8 @@ private:
     // Closes vm's state: its threads, modules, and kept connections go with it.
     void close_state(Vm& vm);
     void update_tools_open();
+    // Queues every Script in id's subtree that start_core_scripts must look at.
+    void note_core(InstanceId id);
     void refresh_game(lua_State* state);
     // game and workspace. The global table must be writable.
     void set_root_globals(lua_State* state);
@@ -391,6 +399,9 @@ private:
     // Scripts started this session, queued or running. Moving one does not start it again.
     std::unordered_set<InstanceId> started_;
     std::vector<Plugin> plugins_;
+    // Scripts in Core waiting for start_core_scripts, and those it registered.
+    std::vector<InstanceId> core_pending_;
+    std::unordered_set<InstanceId> core_scripts_;
     std::uint32_t plugin_serial_ = 0;
     std::vector<InstanceId> loading_;
 

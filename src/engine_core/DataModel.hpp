@@ -153,6 +153,8 @@ public:
     // The service of this class, under game or under a service directly under
     // game, or 0 when there is none.
     InstanceId service(std::string_view class_name) const;
+    // The Core service, or 0 in a DataModel that is not a Game.
+    InstanceId core() const;
 
     // Why set_parent, set_name, or destroy would refuse, worded for the user,
     // or empty when it would go ahead. Setting the value an instance already
@@ -354,12 +356,16 @@ public:
 
     bool alive(InstanceId id) const;
     // Scope. in_game: under game. in_workspace: under the Workspace service,
-    // which is not inside itself. in_lighting: under the Lighting service, the
-    // same way. All are false for a dead id. Kept current at every tree
-    // change, so reading them costs no walk.
+    // which is not inside itself. in_lighting and in_core: under the Lighting
+    // and Core services, the same way. All are false for a dead id. Kept
+    // current at every tree change, so reading them costs no walk.
     bool in_game(InstanceId id) const;
     bool in_workspace(InstanceId id) const;
     bool in_lighting(InstanceId id) const;
+    bool in_core(InstanceId id) const;
+    // Core or anything under it: what is never saved, never undone, and left
+    // alone by New, Open, Play, and Stop. False for 0 and for a dead id.
+    bool core_holds(InstanceId id) const;
     bool simulated(InstanceId id) const;
     bool visual_only(InstanceId id) const;
     // kNoParent when id is dead or the instance has no parent.
@@ -620,7 +626,7 @@ private:
     // Recomputes id's scope tags from its parent. Unchanged tags return at
     // once; changed tags walk the subtree. Runs after every tree change.
     void refresh_scope(InstanceId id);
-    void apply_scope(InstanceId id, bool in_game_now, bool in_workspace_now, bool in_lighting_now);
+    void apply_scope(InstanceId id, bool in_game_now, bool in_workspace_now, bool in_lighting_now, bool in_core_now);
     void rebind(InstanceId id) { id_ = id; }
 
     void require_simulation_thread(const char* message) const;

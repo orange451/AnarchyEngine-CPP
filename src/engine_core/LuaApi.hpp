@@ -99,6 +99,9 @@ struct LuaField {
     // and scriptable. See lua_shown_when.
     const char* shown_when = nullptr;
     std::uint32_t shown_when_items = 0;
+    // Never a row in the Properties panel, though scripts, the command line,
+    // and MCP read and write it. Archivable is one.
+    bool hidden = false;
 
     bool shown_for(int value) const { return value >= 0 && value < 32 && ((shown_when_items >> value) & 1u) != 0; }
 
@@ -144,6 +147,12 @@ inline LuaField lua_saved_enum(const char* name, const EnumType& type, LuaRead r
                                const char* default_json) {
     LuaField field = lua_saved_property(name, "EnumItem", read, write, default_json);
     field.enum_type = &type;
+    return field;
+}
+
+// field, kept out of the Properties panel (LuaField::hidden).
+inline LuaField lua_hidden(LuaField field) {
+    field.hidden = true;
     return field;
 }
 

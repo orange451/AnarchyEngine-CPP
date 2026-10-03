@@ -997,6 +997,8 @@ void TestBooleanAndNumber() {
     std::vector<InstanceId> ids{p1.id(), p2.id()};
     p2.speed = 3;
     const ide::PropertySheet sheet = ide::read_sheet(rig.game, ids);
+    Expect(sheet.find("Archivable") == nullptr, "the panel never lists Archivable");
+    Expect(ide::read_sheet(rig.game, ids, true).find("Archivable") != nullptr, "MCP still reads Archivable");
     const ide::PropertyRow* speed = sheet.find("Speed");
     Expect(speed != nullptr && speed->mixed && speed->value.number == 0, "a mixed number hides the first value");
     Expect(sheet.rows.size() >= 3 && sheet.rows[0].name == "Name" && sheet.rows[1].name == "Parent" &&

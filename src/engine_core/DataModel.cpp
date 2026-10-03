@@ -2165,7 +2165,7 @@ ANARCHY_LUA_REGISTER(register_datamodel_lua) {
         // game is a parent too, and it is not an Instance.
         lua_property("Parent", "DataModel?", true, read_lua_parent, write_lua_parent),
         changed,
-        lua_property("Archivable", "boolean", true, read_lua_archivable, write_lua_archivable),
+        lua_hidden(lua_property("Archivable", "boolean", true, read_lua_archivable, write_lua_archivable)),
     };
     register_lua_class("DataModel", nullptr, fields, static_cast<int>(std::size(fields)));
 }

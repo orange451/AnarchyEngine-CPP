@@ -367,7 +367,7 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
     const std::vector<LuaField>& first = fields_of(class_of(world, sheet.ids.front()));
     for (const LuaField& field : first) {
         PropertyKind kind{};
-        if (!shown(field, kind)) {
+        if (!shown(field, kind) || (field.hidden && !with_hidden)) {
             continue;
         }
         PropertyRow row;

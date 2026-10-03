@@ -62,7 +62,7 @@ Drag math. At drag start, store the parent's Transform and the starting hit.
 
 This follows how selection outlines work: GameView builds world-space geometry each frame, hands it to `Renderer`, and a pass after the scene draws it.
 
-**Depends on branch `physics-collision-outlines`** (commit `cd71d73`, not merged to main as of this writing). It adds `Renderer::setOutlines`/`outlinePass`, `GameView::collectOutlines`, and `resources/shaders/pipeline/outline.{vert,frag}`. Merge it first, or build the handle pass without it.
+The pattern to copy is the collision outlines (commit `cd71d73`): `Renderer::setOutlines`/`outlinePass`, `GameView::collectOutlines`, and `resources/shaders/pipeline/outline.{vert,frag}`.
 
 - `VisualSnapshot` (`engine_core/SnapshotPump.hpp`) gains `draggers`, one row per active Dragger: origin, three unit axes, hovered handle, active handle. It is filled on the simulation thread.
 - Hover is computed on the simulation thread on every mouse move, with the same `pick` that starts drags.

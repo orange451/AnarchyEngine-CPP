@@ -4813,24 +4813,40 @@ TEST_CASE("S52 RenderStepped:Wait resumes in the window with the frame's dt", "[
 
 TEST_CASE("RW4 task.wait in a window handler resumes the continuation on the sim side", "[RW4]") {
     ScriptRig rig;
+    engine_core::GameObject& part = create_part(rig.game);
+    rig.game.set_name(part.id(), "Mark");
+    // A listener, so each Transform write is counted by its origin.
+    rig.game.changed(part.id()).connect([](engine_core::InstanceId, engine_core::Field) {});
     add_script(rig.game, "Yielder", R"(
+        local part = workspace:FindFirstChild("Mark")
         game:GetService("RunService").RenderStepped:Connect(function()
             _G.before = (_G.before or 0) + 1
+            part.Transform = Matrix4.new(1, 0, 0)
             task.wait(0.01)
             _G.after = (_G.after or 0) + 1
+            part.Transform = Matrix4.new(2, 0, 0)
         end)
     )");
     rig.game.start_simulation();
     play_step(rig, 0.05);
+    const std::uint64_t window_writes = rig.game.events().count(engine_core::WriteOrigin::PreRenderDataModel);
     rig.render(0.016);
     double before = 0;
     REQUIRE(rig.runtime.global_number("before", before));
     REQUIRE(before == 1);
     REQUIRE(rig.runtime.global_is_nil("after"));  // parked, not run in the window
+    // The write before the yield is a window write.
+    REQUIRE(rig.game.events().count(engine_core::WriteOrigin::PreRenderDataModel) == window_writes + 1);
+    const std::uint64_t sim_writes = rig.game.events().count(engine_core::WriteOrigin::Simulation);
     play_step(rig, 0.05);  // the step wakes the sleep
     double after = 0;
     REQUIRE(rig.runtime.global_number("after", after));
     REQUIRE(after == 1);
+    // The continuation's write is an ordinary sim write: path A, not path B.
+    REQUIRE(rig.game.events().count(engine_core::WriteOrigin::PreRenderDataModel) == window_writes + 1);
+    REQUIRE(rig.game.events().count(engine_core::WriteOrigin::Simulation) == sim_writes + 1);
+    REQUIRE(near(part.transform(), engine_core::matrix4_translation(2.f, 0.f, 0.f)));
+    REQUIRE(rig.render_violations == 0);
     REQUIRE(rig.runtime.last_error().empty());
 }
 
@@ -4973,28 +4989,21 @@ TEST_CASE("RW9 a window script write authorizes as a sim write, untagged or not"
     REQUIRE(std::fabs(vis_b->world.m[13] - 7.0f) < 1e-4f);
 }
 
-TEST_CASE("RW7 the old refusal case now succeeds: a window script write authorizes", "[RW7]") {
-    // Threads on and this thread registered as render, with the write lock held
-    // across the phase run (see RW6's comment and Engine.cpp's render loop): the
-    // same conditions that make authorize's render-thread branch real instead of
-    // the early "threads not running" pass-through. "Solid" carries no
-    // visual_only tag; before Task 8, authorize's render-step branch refused a
-    // Transform write to it (reject_write, deferred, then raised through
-    // instance_newindex's check -- see git history for that version of this
-    // test). The ruling in the design doc's Writes row reverses that: a write a
-    // window SCRIPT makes authorizes like a sim write, tag or no tag. So the
-    // pcall below now succeeds end to end, and nothing is left deferred.
-    //
-    // The raise-on-refusal net Task 5 built (instance_newindex/service_newindex
-    // consuming a deferred violation and raising) is still there, still correct
-    // for whatever authorize does refuse -- but with authorize no longer
-    // refusing a plain window-script property write, that net is currently
-    // unexercised by any sandbox test; RW6 and this test both take the
-    // succeeding path now.
+TEST_CASE("RW7 a C++ job's refusal in the window is counted with its reason, not blamed on a handler", "[RW7]") {
+    // rig.render() runs the window as the engine does (threads running, write
+    // lock held), so authorize's render-thread branch is the real one. A window
+    // SCRIPT's write authorizes like a sim write (RW9), so no script write can be
+    // refused here any more. A C++ RenderStepped job still can: it runs with
+    // window_script false. Bound above the script runtime's job, it refuses
+    // first and the violation is deferred. The handler's write after it must
+    // not raise for that deferral (it was not the handler's), and the engine
+    // must still count it, with authorize's reason kept.
     ScriptRig rig;
     engine_core::GameObject& part = create_part(rig.game);
     rig.game.set_name(part.id(), "Solid");
-    add_script(rig.game, "Refused", R"(
+    engine_core::GameObject& other = create_part(rig.game);
+    const engine_core::Matrix4 other_before = other.transform();
+    add_script(rig.game, "Writer", R"(
         local part = workspace:FindFirstChild("Solid")
         game:GetService("RunService").RenderStepped:Connect(function()
             local ok, err = pcall(function()
@@ -5004,33 +5013,26 @@ TEST_CASE("RW7 the old refusal case now succeeds: a window script write authoriz
             _G.err = tostring(err)
         end)
     )");
+    rig.scheduler.bind(
+        engine_core::Phase::RenderStepped,
+        [&](double) { rig.game.game_object(other.id())->set_transform(engine_core::matrix4_translation(9.f, 9.f, 9.f)); },
+        3000);
     rig.game.start_simulation();
     play_step(rig, 0.05);
-    // has_deferred_violation keys off the calling thread's id, so it has to be
-    // read from inside the render thread; checking it from the main thread
-    // after join() would trivially see nothing deferred either way.
-    bool deferred_left = true;
-    std::thread render([&] {
-        engine_core::set_thread_role(engine_core::ThreadRole::Render);
-        rig.game.set_thread_ids(std::thread::id(), std::this_thread::get_id());
-        rig.game.set_threads_running(true);
-        {
-            engine_core::DataModelLock lock(rig.game, engine_core::DataModelLock::Write);
-            rig.game.set_prerender_window(true);
-            rig.scheduler.run_phase(engine_core::Phase::RenderStepped, 0.016);
-            rig.game.set_prerender_window(false);
-            deferred_left = rig.game.has_deferred_violation();
-        }
-        rig.game.set_threads_running(false);
-        engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
-    });
-    render.join();
+    rig.render(0.016);
     bool ok = false;
     REQUIRE(rig.runtime.global_boolean("ok", ok));
-    REQUIRE(ok);  // the write went through: authorize no longer refuses it
+    INFO(rig.runtime.last_error());
+    REQUIRE(ok);  // the handler's own write went through
     REQUIRE(rig.runtime.last_error().empty());
-    REQUIRE_FALSE(deferred_left);  // nothing was ever deferred
     REQUIRE(near(rig.game.game_object(part.id())->transform(), engine_core::matrix4_translation(1.f, 2.f, 3.f)));
+    // The C++ job's write was refused before it changed anything, and counted.
+    REQUIRE(near(rig.game.game_object(other.id())->transform(), other_before));
+    REQUIRE(rig.render_violations == 1);
+    // The reason the binding puts in a refused script write's Lua error
+    // ("<key> cannot be written in a render step: <reason>").
+    REQUIRE(rig.last_render_violation == "render-step DataModel write requires visual_only or ForceSimWrite");
+    rig.game.stop_simulation();
 }
 
 TEST_CASE("RW11 a window handler creates, reparents, renames, destroys, and sets Velocity", "[RW11]") {
@@ -5180,37 +5182,153 @@ TEST_CASE("RW13 frames that miss the Prepare lock carry their time to the next R
 
 TEST_CASE("RW8 pause silences play handlers, Stop removes them, plugins run through", "[RW8]") {
     ScriptRig rig;
+    // A real plugin, loaded as the studio loads SceneCamera: its connection is
+    // the plugin VM's, delivered in the window in edit mode, through pause, and
+    // after Stop.
+    ide::PluginLoader loader;
+    ide::PluginFile file;
+    file.name = "Counter";
+    file.source = R"(
+        game:GetService("RunService").RenderStepped:Connect(function()
+            print("plugin frame")
+        end)
+    )";
+    REQUIRE(loader.load(rig.game, rig.runtime, {file}) == 1);
     add_script(rig.game, "Watch", R"(
         game:GetService("RunService").RenderStepped:Connect(function()
             _G.n = (_G.n or 0) + 1
+            print("play frame")
         end)
     )");
-    rig.runtime.run_chunk(R"(
-        game:GetService("RunService").RenderStepped:Connect(function()
-            _G.plugin_like = (_G.plugin_like or 0) + 1
-        end)
-    )");
-    // run_chunk is the console VM: its connection takes the sim-side fallback
-    // (see S53 below), not the window, so it is not exercised again here.
+    rig.runtime.drain_output();
+    int plugin = 0;
+    int play = 0;
+    const auto count = [&] {
+        for (const engine_core::ScriptRuntime::OutputLine& line : rig.runtime.drain_output().lines) {
+            if (line.text.rfind("plugin frame", 0) == 0) {
+                ++plugin;
+            } else if (line.text.rfind("play frame", 0) == 0) {
+                ++play;
+            }
+        }
+    };
+
+    rig.render(0.016);  // edit mode
+    count();
+    REQUIRE(plugin == 1);
+    REQUIRE(play == 0);
+
     rig.game.start_simulation();
     play_step(rig, 0.05);
     rig.render(0.016);
+    count();
+    REQUIRE(plugin == 2);
+    REQUIRE(play == 1);
     double n = 0;
     REQUIRE(rig.runtime.global_number("n", n));
     REQUIRE(n == 1);
+
     rig.runtime.set_render_paused(true);
     rig.render(0.016);
+    count();
+    REQUIRE(play == 1);    // paused: the play handler is silent
+    REQUIRE(plugin == 3);  // the plugin is not
     REQUIRE(rig.runtime.global_number("n", n));
-    REQUIRE(n == 1);  // paused: silent
+    REQUIRE(n == 1);
+
     rig.runtime.set_render_paused(false);
     rig.render(0.016);
-    REQUIRE(rig.runtime.global_number("n", n));
-    REQUIRE(n == 2);
+    count();
+    REQUIRE(play == 2);
+    REQUIRE(plugin == 4);
+
     rig.game.stop_simulation();
     rig.render(0.016);
     rig.frames(1, 0.05);
-    // The play VM closed; its connection is gone and nothing errors.
+    rig.render(0.016);
+    count();
+    REQUIRE(play == 2);    // Stop removed the play connection: frozen across renders
+    REQUIRE(plugin == 6);  // the plugin's stays
     REQUIRE(rig.runtime.last_error().empty());
+    REQUIRE(rig.render_violations == 0);
+}
+
+TEST_CASE("RW14 window delivery for play handlers is paused exactly when the engine is", "[RW14]") {
+    // The engine starts paused; its play handlers must start paused with it, so
+    // none can run between a start_simulation and the first resume(). Stop
+    // clears paused_, and delivery with it, so a later start() matches.
+    engine_core::Engine engine;
+    REQUIRE(engine.paused());
+    REQUIRE(engine.scripts().render_paused());
+    engine.start();
+    REQUIRE(engine.scripts().render_paused());
+    engine.resume();
+    REQUIRE_FALSE(engine.paused());
+    REQUIRE_FALSE(engine.scripts().render_paused());
+    engine.pause();
+    REQUIRE(engine.scripts().render_paused());
+    engine.stop();
+    REQUIRE_FALSE(engine.paused());
+    REQUIRE_FALSE(engine.scripts().render_paused());
+}
+
+TEST_CASE("RW10 RenderStepped and Heartbeat handlers share state with both threads live", "[RW10]") {
+    // A real engine, both loops running: the play VM is entered by the render
+    // thread (RenderStepped, in the Prepare window) and by the sim thread
+    // (Heartbeat, in the step), turn about under the write lock. Both handlers
+    // bump shared _G counters and write the same part's Transform, and each
+    // checks on entry that the part still holds the last value either one
+    // wrote. Run under ThreadSanitizer as well.
+    engine_core::Engine engine;
+    engine_core::DataModel& game = engine.datamodel();
+    engine_core::GameObject& part = create_part(game);
+    game.set_name(part.id(), "Shared");
+    add_script(game, "Both", R"(
+        local RunService = game:GetService("RunService")
+        local part = workspace:FindFirstChild("Shared")
+        _G.rs = 0
+        _G.hb = 0
+        _G.total = 0
+        _G.bad = 0
+        local function touch(counter)
+            if part.Transform.X ~= _G.total then
+                _G.bad += 1
+            end
+            _G[counter] += 1
+            _G.total += 1
+            part.Transform = Matrix4.new(_G.total, 0, 0)
+        end
+        RunService.RenderStepped:Connect(function() touch("rs") end)
+        RunService.Heartbeat:Connect(function() touch("hb") end)
+    )");
+    // Paced so neither loop starves the other of the lock: many turns each way.
+    engine.set_simulation_pace_hz(240);
+    engine.set_render_pace_hz(480);
+    engine.start();
+    engine.on_simulation([](engine_core::DataModel& g) { g.start_simulation(); });
+    engine.resume();
+    const std::uint64_t presents = engine.present_count();
+    const std::uint64_t steps = engine.sim_frame_count();
+    wait_until([&] { return engine.present_count() >= presents + 120 && engine.sim_frame_count() >= steps + 60; },
+               std::chrono::seconds(30));
+    engine.stop();
+
+    double rs = 0;
+    double hb = 0;
+    double total = 0;
+    double bad = -1;
+    REQUIRE(engine.scripts().global_number("rs", rs));
+    REQUIRE(engine.scripts().global_number("hb", hb));
+    REQUIRE(engine.scripts().global_number("total", total));
+    REQUIRE(engine.scripts().global_number("bad", bad));
+    INFO("rs=" << rs << " hb=" << hb << " total=" << total);
+    REQUIRE(rs > 0);
+    REQUIRE(hb > 0);
+    REQUIRE(rs + hb == total);
+    REQUIRE(bad == 0);
+    REQUIRE(part.transform().m[12] == static_cast<float>(total));
+    REQUIRE(engine.scripts().last_error().empty());
+    REQUIRE(engine.contract_count() == 0);
 }
 
 TEST_CASE("S53 a console connection falls back to sim-side delivery with summed dt", "[S53]") {

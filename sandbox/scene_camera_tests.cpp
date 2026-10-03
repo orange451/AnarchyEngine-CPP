@@ -377,10 +377,10 @@ TEST_CASE("SC14 the scene camera moves per rendered frame in edit mode", "[SC14]
     rig.frames(1, 0.0);           // input reaches the plugin VM
     rig.render(0.25);             // one rendered frame moves the camera
     rig.render(0.25);
-    REQUIRE(std::abs(rig.position().z + 8.f) < 1e-1f);  // 16 studs/s for half a second
+    REQUIRE(std::abs(rig.position().z + 8.f) < 1e-3f);  // 16 studs/s for half a second
 }
 
-TEST_CASE("SC14 loading the built-in plugins is not an edit to the place", "[SC14]") {
+TEST_CASE("SC22 loading the built-in plugins is not an edit to the place", "[SC22]") {
     ScriptRig rig;
     rig.game.history().end_gesture();
     rig.game.history().reset_waypoints();

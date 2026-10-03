@@ -18,6 +18,10 @@ namespace engine_core {
 
 class DataModel;
 
+namespace analysis {
+struct WorldSnap;
+}
+
 // Studio-style static check of Script and ModuleScript source.
 // This is not the compiler. A type warning still compiles and runs.
 enum class Severity { Error, Warning, Information, Hint };
@@ -282,6 +286,10 @@ private:
     void run_place();
     // The tree changed: capture it, and let the place checker diff it against the last.
     void note_tree();
+    // Captures the tree and numbers the capture. Notes a play tree, so the
+    // authored one is diffed after Stop. Gameplay thread, or a thread that
+    // holds the DataModel lock.
+    std::shared_ptr<analysis::WorldSnap> capture(std::uint64_t& seq);
     // A play tree was captured and the simulation has stopped since: the
     // authored tree is waiting for pump() to diff it.
     bool play_stale_now() const;

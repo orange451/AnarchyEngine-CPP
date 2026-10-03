@@ -3253,6 +3253,18 @@ bool ScriptAnalysis::enabled() const {
     return state_->enabled;
 }
 
+std::shared_ptr<WorldSnap> ScriptAnalysis::capture(std::uint64_t& seq) {
+    seq = state_->world_seq.fetch_add(1) + 1;
+    std::shared_ptr<WorldSnap> world = capture_world(game_);
+    // Play can start after pump() looks and before the capture takes the lock.
+    // A play tree is not the authored one, so once stopped pump() diffs the
+    // authored tree again.
+    if (world->play) {
+        state_->play_stale.store(true, std::memory_order_relaxed);
+    }
+    return world;
+}
+
 void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
     if (ids.empty()) {
         return;
@@ -3264,11 +3276,8 @@ void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
             return;
         }
     }
-    const std::uint64_t seq = state_->world_seq.fetch_add(1) + 1;
-    const std::shared_ptr<WorldSnap> world = capture_world(game_);
-    if (world->play) {
-        state_->play_stale.store(true, std::memory_order_relaxed);
-    }
+    std::uint64_t seq = 0;
+    const std::shared_ptr<WorldSnap> world = capture(seq);
     ensure_worker();
     std::lock_guard<std::mutex> lock(state_->mu);
     if (!state_->enabled || state_->stop) {
@@ -3300,8 +3309,8 @@ void ScriptAnalysis::note_tree() {
             return;
         }
     }
-    const std::uint64_t seq = state_->world_seq.fetch_add(1) + 1;
-    const std::shared_ptr<WorldSnap> world = capture_world(game_);
+    std::uint64_t seq = 0;
+    const std::shared_ptr<WorldSnap> world = capture(seq);
     ensure_worker();
     std::lock_guard<std::mutex> lock(state_->mu);
     if (!state_->enabled || state_->stop) {

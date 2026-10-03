@@ -16,12 +16,14 @@
 #include "IRenderer.hpp"
 #include "LuaApi.hpp"
 #include "ModuleScript.hpp"
+#include "PhysicsObject.hpp"
 #include "Script.hpp"
 #include "ScriptRuntime.hpp"
 #include "TableSnapshot.hpp"
 #include "TaskScheduler.hpp"
 
 #include "support.hpp"
+#include "ide/PluginLoader.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -5029,6 +5031,130 @@ TEST_CASE("RW7 the old refusal case now succeeds: a window script write authoriz
     REQUIRE(rig.runtime.last_error().empty());
     REQUIRE_FALSE(deferred_left);  // nothing was ever deferred
     REQUIRE(near(rig.game.game_object(part.id())->transform(), engine_core::matrix4_translation(1.f, 2.f, 3.f)));
+}
+
+TEST_CASE("RW11 a window handler creates, reparents, renames, destroys, and sets Velocity", "[RW11]") {
+    // As the studio runs: no contract handler, so a SimulationThread guard that
+    // refused the render thread would abort the run here, not fail a REQUIRE.
+    StudioContracts studio;
+    ScriptRig rig;
+    const engine_core::InstanceId ws = workspace_of(rig.game);
+    engine_core::Folder& doomed = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(doomed.id(), "Doomed");
+    rig.game.set_parent(doomed.id(), ws);
+    engine_core::Folder& mover = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(mover.id(), "Mover");
+    rig.game.set_parent(mover.id(), ws);
+    engine_core::PhysicsObject& body = rig.game.create<engine_core::PhysicsObject>();
+    rig.game.set_name(body.id(), "Body");
+    rig.game.set_parent(body.id(), ws);
+    add_script(rig.game, "Ops", R"(
+        game:GetService("RunService").RenderStepped:Connect(function()
+            if _G.ran then return end
+            _G.ran = true
+            local made = Instance.new("Folder", workspace)
+            made.Name = "Made"
+            local mover = workspace:FindFirstChild("Mover")
+            mover.Parent = made
+            mover.Name = "Moved"
+            workspace:FindFirstChild("Doomed"):Destroy()
+            workspace:FindFirstChild("Body").Velocity = Vector3.new(1, 2, 3)
+            _G.ok = true
+        end)
+    )");
+    rig.game.start_simulation();
+    play_step(rig, 0.05);
+    rig.render(0.016);
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
+    bool ok = false;
+    REQUIRE(rig.runtime.global_boolean("ok", ok));
+    REQUIRE(ok);
+    REQUIRE(rig.render_violations == 0);
+
+    // Visible afterward, to C++ and to the next sim step's scripts.
+    const engine_core::InstanceId made = rig.game.find_first_child(ws, "Made");
+    REQUIRE(made != 0);
+    REQUIRE(rig.game.parent(mover.id()) == made);
+    REQUIRE(rig.game.name(mover.id()) == "Moved");
+    REQUIRE_FALSE(rig.game.alive(doomed.id()));
+    REQUIRE(body.velocity().x == 1.f);
+    REQUIRE(body.velocity().y == 2.f);
+    REQUIRE(body.velocity().z == 3.f);
+    rig.runtime.drain_output();
+    rig.runtime.run_chunk(R"(
+        local made = workspace:FindFirstChild("Made")
+        print(string.format("%s %s", tostring(made ~= nil and made:FindFirstChild("Moved") ~= nil),
+                            tostring(workspace:FindFirstChild("Doomed") == nil)))
+    )");
+    play_step(rig, 0.05);
+    const engine_core::ScriptRuntime::OutputBatch batch = rig.runtime.drain_output();
+    REQUIRE(batch.lines.size() == 1);
+    REQUIRE(batch.lines[0].text.rfind("true true", 0) == 0);
+    rig.game.stop_simulation();
+}
+
+TEST_CASE("RW11 a plugin's window handler makes an instance in edit mode", "[RW11]") {
+    StudioContracts studio;
+    ScriptRig rig;
+    ide::PluginLoader loader;
+    ide::PluginFile file;
+    file.name = "Maker";
+    file.source = R"(
+        local made = false
+        game:GetService("RunService").RenderStepped:Connect(function()
+            if made then return end
+            made = true
+            local folder = Instance.new("Folder")
+            folder.Name = "FromPlugin"
+            folder.Parent = workspace
+        end)
+    )";
+    REQUIRE(loader.load(rig.game, rig.runtime, {file}) == 1);
+    rig.render(0.016);
+    REQUIRE(rig.runtime.last_error().empty());
+    REQUIRE(rig.render_violations == 0);
+    REQUIRE(rig.game.find_first_child(workspace_of(rig.game), "FromPlugin") != 0);
+}
+
+TEST_CASE("RW12 a refusal a window script reaches is a Lua error, with no contract handler", "[RW12]") {
+    // Every operation a window handler can reach is admitted now (RW11), so the
+    // refusal is made on purpose: a C++ RenderStepped job, which runs in the
+    // window with window_script false and keeps the SimulationThread guards,
+    // enters a VM itself, and the chunk asks for Instance.new. spawn's guard
+    // refuses the render thread; with no handler installed, contract_fail would
+    // abort. Inside the VM it throws instead, and pcall catches it.
+    StudioContracts studio;
+    ScriptRig rig;
+    rig.runtime.drain_output();
+    bool ran = false;
+    rig.scheduler.bind(engine_core::Phase::RenderStepped, [&](double) {
+        if (ran) {
+            return;
+        }
+        ran = true;
+        rig.runtime.run_chunk(R"(
+            local ok, err = pcall(function() Instance.new("Folder") end)
+            print(ok, err)
+        )");
+    });
+    rig.render(0.016);
+    REQUIRE(ran);
+    const engine_core::ScriptRuntime::OutputBatch batch = rig.runtime.drain_output();
+    REQUIRE(batch.lines.size() == 1);
+    INFO(batch.lines[0].text);
+    REQUIRE(batch.lines[0].text.rfind("false", 0) == 0);
+    REQUIRE(batch.lines[0].text.find("create runs on SimulationThread") != std::string::npos);
+    REQUIRE(rig.game.get_children(workspace_of(rig.game)).empty());
+
+    // The scope is Lua's only: outside one, the handler (or abort) decides.
+    REQUIRE_FALSE(engine_core::in_script_contract_scope());
+    {
+        engine_core::ScriptContractScope scope;
+        REQUIRE(engine_core::in_script_contract_scope());
+        REQUIRE_THROWS_AS(engine_core::contract_fail("in a script"), engine_core::ContractViolation);
+    }
+    REQUIRE_FALSE(engine_core::in_script_contract_scope());
 }
 
 TEST_CASE("RW8 pause silences play handlers, Stop removes them, plugins run through", "[RW8]") {

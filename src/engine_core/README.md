@@ -17,10 +17,12 @@ Roblox fires `RenderStepped`, then `PreRender`, before the frame is drawn. Both 
 | Path | Who | What it changes |
 | --- | --- | --- |
 | A | SimulationThread phases | DataModel. Snapshot on the next Prepare. |
-| B | RenderStepped or PreRender. A C++ job needs visual-only or ForceSimWrite. A script running here — a RenderStepped/PreRender handler, or a Wait resumption — is unrestricted, as a sim write, and records `PreRenderDataModel` | DataModel, and this frame's snapshot. |
+| B | RenderStepped or PreRender. A C++ job needs visual-only or ForceSimWrite. A script running here — a RenderStepped/PreRender handler, or a Wait resumption — is unrestricted, as a sim write, and records `PreRenderDataModel`. Its instance operations (`Instance.new`, `Destroy`, `Parent`, `Name`, every setter) pass the SimulationThread guards too: they ask `DataModel::mutation_thread`, which admits the render thread while `window_script` is set | DataModel, and this frame's snapshot. |
 | C | `SnapshotPump::override_visual` | This frame's snapshot only. |
 | D | RenderThread outside that window, including Perform, Present, and PostRender | Contract failure (abort, or the test handler). |
 | E | Any other thread | Command queue, applied on the next sim step. |
+
+While Lua runs, on any thread, a contract failure a script reaches throws `ContractViolation` instead of calling the handler or aborting, and the script sees a Lua error it can `pcall` (`ScriptContractScope`, held around every `lua_resume`). The studio installs no handler, so this is what keeps a refused script operation from ending it.
 
 `print(transform)` reads the GameObject. Pixels read the snapshot. A path-C write changes pixels and not the print. A path-B write changes both. A write after the copy changes the print and not this frame's pixels.
 

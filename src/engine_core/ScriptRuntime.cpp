@@ -1044,7 +1044,12 @@ void ScriptRuntime::resume_one(Thread& thread) {
     thread.nargs = 0;
     steps_ = 0;
     ++lua_depth_;
-    const int status = lua_resume(thread.co, nullptr, nargs);
+    int status = LUA_OK;
+    {
+        // A contract a script reaches from here throws, and Luau makes it a Lua error.
+        ScriptContractScope script_contracts;
+        status = lua_resume(thread.co, nullptr, nargs);
+    }
     --lua_depth_;
     if (thread.dead) {
         drop_dead_queues(*thread.vm);

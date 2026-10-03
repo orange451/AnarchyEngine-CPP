@@ -191,6 +191,11 @@ public:
 
     void set_thread_ids(std::thread::id simulation, std::thread::id render);
     void set_threads_running(bool running);
+    // What the two setters above last stored, so a test rig that borrows the
+    // engine's thread roles can put them back.
+    std::thread::id simulation_thread_id() const;
+    std::thread::id render_thread_id() const;
+    bool threads_running() const;
 
     // Plain instance in this world. No transform or velocity.
     DataModel& create();
@@ -443,7 +448,10 @@ public:
     void set_window_script(bool active);
     bool window_script() const;
     int write_depth() const;
-    // SimulationThread, or the caller when the engine threads are not running.
+    // Whether this thread may mutate the world now: SimulationThread, a paused
+    // edit, the caller when the engine threads are not running, or a script
+    // running in the render window (see mutation_thread). Every setter's
+    // SimulationThread guard asks this.
     bool on_gameplay_thread() const;
 
     // Pool construction. Outsiders cannot build a ChildTag or a State.
@@ -648,8 +656,16 @@ private:
     void rebind(InstanceId id) { id_ = id; }
 
     void require_simulation_thread(const char* message) const;
-    // SimulationThread, or the paused-edit caller Engine admitted.
+    // SimulationThread, or the paused-edit caller Engine admitted. Place
+    // capture, start, and stop ask only this: they swap the whole tree and
+    // close the play VM, which a window handler must not do from inside it.
     bool gameplay_thread() const;
+    // gameplay_thread, or the render thread while a script runs in the window
+    // (prerender_window and window_script both set). The write lock serializes
+    // a window script's mutation as it does a sim step's, so the instance
+    // operations a script reaches (create, destroy, Parent, Name, every
+    // property setter) guard on this.
+    bool mutation_thread() const;
     void perform_paused_edit(const std::function<void(DataModel&)>& fn);
     bool authorize(const Slot& part, bool force_sim_write);
     bool reject_write(const char* message);

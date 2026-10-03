@@ -131,8 +131,14 @@ void DataModel::set_thread_ids(std::thread::id simulation, std::thread::id rende
 
 void DataModel::set_threads_running(bool running) { state_->threads_running = running; }
 
+std::thread::id DataModel::simulation_thread_id() const { return state_->simulation_thread; }
+
+std::thread::id DataModel::render_thread_id() const { return state_->render_thread; }
+
+bool DataModel::threads_running() const { return state_->threads_running; }
+
 void DataModel::require_simulation_thread(const char* message) const {
-    if (!gameplay_thread()) {
+    if (!mutation_thread()) {
         contract_fail(message);
     }
 }
@@ -143,6 +149,19 @@ bool DataModel::gameplay_thread() const {
     }
     const std::thread::id self = std::this_thread::get_id();
     return self == state_->simulation_thread || self == state_->edit_owner;
+}
+
+bool DataModel::mutation_thread() const {
+    if (gameplay_thread()) {
+        return true;
+    }
+    // A script running in the render window: the render thread holds the write
+    // lock for the whole window, exactly as SimulationThread holds it for a step,
+    // and Prepare copies only after the phases. Both flags are written only by
+    // the render thread, so it alone may read them here, and checks its id first.
+    // A C++ render job runs with window_script false and keeps today's limits.
+    return std::this_thread::get_id() == state_->render_thread && state_->prerender_window &&
+           state_->window_script;
 }
 
 void DataModel::perform_paused_edit(const std::function<void(DataModel&)>& fn) {
@@ -487,7 +506,7 @@ void DataModel::release_to_pool(Slot& part) {
 }
 
 DataModel& DataModel::spawn(const SpawnOps& ops) {
-    if (!gameplay_thread()) {
+    if (!mutation_thread()) {
         contract_fail("create runs on SimulationThread");
     }
     if (ops.construct == nullptr || ops.destroy == nullptr || ops.bytes == 0 || ops.align == 0) {
@@ -575,7 +594,7 @@ GameObject& DataModel::create_game_object() {
 
 void DataModel::destroy(InstanceId id) {
     // A paused edit owns the world like SimulationThread does, so it destroys now.
-    if (!gameplay_thread()) {
+    if (!mutation_thread()) {
         if (std::this_thread::get_id() == state_->render_thread) {
             contract_fail("destroy from RenderThread");
         }
@@ -680,7 +699,7 @@ void DataModel::apply_transform(InstanceId id, const Matrix4& transform, bool fo
 
 
 void DataModel::set_simulated(InstanceId id, bool simulated) {
-    if (!gameplay_thread()) {
+    if (!mutation_thread()) {
         contract_fail("set_simulated runs on SimulationThread");
     }
     Slot* part = slot(id);
@@ -697,7 +716,7 @@ void DataModel::set_simulated(InstanceId id, bool simulated) {
 }
 
 void DataModel::set_visual_only(InstanceId id, bool visual_only) {
-    if (!gameplay_thread()) {
+    if (!mutation_thread()) {
         contract_fail("set_visual_only runs on SimulationThread");
     }
     Slot* part = slot(id);
@@ -1398,7 +1417,7 @@ bool DataModel::is_under(InstanceId ancestor, InstanceId node) const {
 }
 
 void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
-    if (!gameplay_thread()) {
+    if (!mutation_thread()) {
         contract_fail("set_parent runs on SimulationThread");
     }
     Slot* part = slot(id);
@@ -1745,7 +1764,7 @@ void DataModel::destroy_tree(InstanceId id) {
 }
 
 void DataModel::set_name(InstanceId id, std::string name) {
-    if (!gameplay_thread()) {
+    if (!mutation_thread()) {
         contract_fail("set_name runs on SimulationThread");
     }
     DataModel* object = id == 0 ? state_->root : instance(id);
@@ -1839,7 +1858,7 @@ void DataModel::emit_own(Field field) { emit_change(id_, field, current_origin()
 
 ScriptHost* DataModel::script_host() const { return state_->script_host; }
 
-bool DataModel::on_gameplay_thread() const { return gameplay_thread(); }
+bool DataModel::on_gameplay_thread() const { return mutation_thread(); }
 
 std::uint32_t DataModel::world_generation() const { return state_->world_generation; }
 

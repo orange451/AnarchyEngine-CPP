@@ -265,3 +265,69 @@ TEST_CASE("MT6 one drag moves every selected PVInstance and the handles alike, a
     REQUIRE((at && near(at->x, 0)));
     REQUIRE_FALSE(move.rig.game.history().can_undo().first);
 }
+
+TEST_CASE("MT7 selecting a Folder of parts puts the handles at their middle, and one drag moves them all", "[MT7]") {
+    MoveRig move;
+    engine_core::Folder& folder = move.rig.game.create<engine_core::Folder>();
+    move.rig.game.set_parent(folder.id(), move.rig.game.scene_service("Workspace"));
+    const InstanceId a = move.part_at("A", -2, 0, -10);
+    const InstanceId b = move.part_at("B", 0, 0, -10);
+    const InstanceId c = move.part_at("C", 2, 0, -10);
+    for (InstanceId id : {a, b, c}) {
+        move.rig.game.set_parent(id, folder.id());
+    }
+    move.rig.game.history().end_gesture();
+    move.rig.game.history().reset_waypoints();
+    move.rig.game.selection().set({folder.id()});
+    move.rig.frames(1);
+    INFO(move.rig.runtime.last_error());
+    const auto at = handles_at(move.rig.game);
+    REQUIRE((at && near(at->x, 0) && near(at->z, -10)));
+    move.post(true, 150, 100);
+    move.move(170, 100);
+    move.post(false, 170, 100);
+    move.rig.frames(1);
+    REQUIRE(near(move.x_of(a), 0));
+    REQUIRE(near(move.x_of(b), 2));
+    REQUIRE(near(move.x_of(c), 4));
+    move.rig.game.history().undo();
+    REQUIRE(near(move.x_of(a), -2));
+    REQUIRE(near(move.x_of(c), 2));
+}
+
+TEST_CASE("MT8 selecting Workspace never moves the camera the view looks through", "[MT8]") {
+    MoveRig move;
+    const InstanceId a = move.part_at("A", -2, 0, -10);
+    const InstanceId b = move.part_at("B", 2, 0, -10);
+    const InstanceId camera =
+        dynamic_cast<engine_core::Workspace*>(move.rig.game.instance(move.rig.game.scene_service("Workspace")))
+            ->current_camera();
+    move.rig.game.selection().set({move.rig.game.scene_service("Workspace")});
+    move.rig.frames(1);
+    INFO(move.rig.runtime.last_error());
+    // The camera at the origin is left out of the middle too.
+    const auto at = handles_at(move.rig.game);
+    REQUIRE((at && near(at->x, 0) && near(at->z, -10)));
+    move.post(true, 150, 100);
+    move.move(170, 100);
+    move.post(false, 170, 100);
+    move.rig.frames(1);
+    REQUIRE(near(move.x_of(a), 0));
+    REQUIRE(near(move.x_of(b), 4));
+    REQUIRE(near(move.rig.game.game_object(camera)->transform().m[12], 0));
+}
+
+TEST_CASE("MT9 a part both selected and inside a selected Folder moves once", "[MT9]") {
+    MoveRig move;
+    engine_core::Folder& folder = move.rig.game.create<engine_core::Folder>();
+    move.rig.game.set_parent(folder.id(), move.rig.game.scene_service("Workspace"));
+    const InstanceId a = move.part_at("A", 0, 0, -10);
+    move.rig.game.set_parent(a, folder.id());
+    move.rig.game.selection().set({a, folder.id()});
+    move.rig.frames(1);
+    move.post(true, 150, 100);
+    move.move(170, 100);
+    move.post(false, 170, 100);
+    move.rig.frames(1);
+    REQUIRE(near(move.x_of(a), 2));
+}

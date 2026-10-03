@@ -69,14 +69,13 @@ using analysis::diff_worlds;
 using analysis::same_tree;
 using analysis::world_from_nodes;
 
-struct Job {
-    InstanceId id = 0;
-    std::uint64_t generation = 0;
-};
-
+// A script waiting for the place checker.
 struct Pending {
-    Job job;
+    std::uint64_t generation = 0;
     std::chrono::steady_clock::time_point ready_at{};
+    // The capture count when it was queued. The place checker takes it only
+    // once a tree captured after that is adopted, so its batch sees the change.
+    std::uint64_t after = 0;
 };
 
 struct Finished {
@@ -2774,8 +2773,12 @@ void lint_rule_names(std::vector<std::string>& out) {
 
 struct ScriptAnalysis::State {
     std::mutex mu;
-    // Set by note_world_changed. pump() turns it into one note_tree().
+    // Set by note_world_changed. pump() turns it into one capture of the tree.
     std::atomic<bool> world_stale{false};
+    // A script was queued, and pump() has not captured the tree since. pump()
+    // takes one capture however many came in. True at first, so the first
+    // pump() captures the place even when nothing is queued yet.
+    std::atomic<bool> capture_needed{true};
     // A tree was captured while the simulation ran. Stop restores the
     // authored tree without a note, so once stopped pump() takes it as a tree
     // change.
@@ -2820,9 +2823,12 @@ struct ScriptAnalysis::State {
     std::shared_ptr<CompleteRequest> serving;
 
     // The newest tree captured, and its capture number: two captures can finish
-    // out of order, and the newer one wins.
+    // out of order, and the newer one wins. `authored_world` is the newest one
+    // captured while the simulation was stopped.
     std::shared_ptr<const WorldSnap> latest_world;
     std::uint64_t latest_seq = 0;
+    std::shared_ptr<const WorldSnap> authored_world;
+    std::uint64_t authored_seq = 0;
     std::atomic<std::uint64_t> world_seq{0};
     // Scripts in the batch the place checker is running, including what
     // requires them, and the batch's cancel.
@@ -2841,10 +2847,14 @@ struct ScriptAnalysis::State {
     // checked before it was removed.
     std::unordered_set<InstanceId> removed;
 
-    void adopt(std::shared_ptr<const WorldSnap> world, std::uint64_t seq) {
+    void adopt(const std::shared_ptr<const WorldSnap>& world, std::uint64_t seq) {
         if (seq > latest_seq) {
-            latest_world = std::move(world);
+            latest_world = world;
             latest_seq = seq;
+        }
+        if (!world->play && seq > authored_seq) {
+            authored_world = world;
+            authored_seq = seq;
         }
     }
 };
@@ -2959,7 +2969,7 @@ void ScriptAnalysis::shutdown() {
 // overflows on code nested that deep, so the worker reserves this much.
 constexpr std::size_t kWorkerStackBytes = std::size_t{16} << 20;
 
-void ScriptAnalysis::ensure_worker() {
+void ScriptAnalysis::ensure_threads() {
     std::lock_guard<std::mutex> start(state_->start_mu);
     if (state_->started) {
         return;
@@ -3055,13 +3065,17 @@ void ScriptAnalysis::run_place() {
             const auto now = std::chrono::steady_clock::now();
             auto next = std::chrono::steady_clock::time_point::max();
             for (auto it = state_->pending.begin(); it != state_->pending.end();) {
-                if (it->second.ready_at <= now) {
-                    claimed.emplace(it->first, it->second.job.generation);
-                    state_->in_batch.insert(it->first);
-                    it = state_->pending.erase(it);
-                } else {
+                if (it->second.ready_at > now) {
                     next = std::min(next, it->second.ready_at);
                     ++it;
+                } else if (state_->latest_seq <= it->second.after) {
+                    // Waiting for pump() to capture the tree it changed. The
+                    // capture wakes this thread.
+                    ++it;
+                } else {
+                    claimed.emplace(it->first, it->second.generation);
+                    state_->in_batch.insert(it->first);
+                    it = state_->pending.erase(it);
                 }
             }
             if (state_->tree_pending) {
@@ -3073,7 +3087,11 @@ void ScriptAnalysis::run_place() {
                 }
             }
             if (claimed.empty() && !tree) {
-                state_->cv.wait_until(lock, next);
+                if (next == std::chrono::steady_clock::time_point::max()) {
+                    state_->cv.wait(lock);
+                } else {
+                    state_->cv.wait_until(lock, next);
+                }
                 continue;
             }
             state_->tree_in_batch = tree;
@@ -3181,7 +3199,7 @@ std::shared_ptr<ScriptAnalysis::LuauRequest> ScriptAnalysis::queue_luau(const st
         old->answer->facts.error = "replaced by a newer request";
         finish_request(*old);
     }
-    ensure_worker();
+    ensure_threads();
     return request;
 }
 
@@ -3253,92 +3271,133 @@ bool ScriptAnalysis::enabled() const {
     return state_->enabled;
 }
 
-std::shared_ptr<WorldSnap> ScriptAnalysis::capture(std::uint64_t& seq) {
-    seq = state_->world_seq.fetch_add(1) + 1;
-    std::shared_ptr<WorldSnap> world = capture_world(game_);
+namespace {
+
+// A Script or ModuleScript under the root. Only these are checked: an instance
+// outside the place, such as one a paste builds before adding it, does not run.
+// Id 0 is the root DataModel.
+bool placed_script(const DataModel& game, InstanceId id) {
+    if (dynamic_cast<const LuaSource*>(game.instance(id)) == nullptr) {
+        return false;
+    }
+    for (InstanceId at = id; at != 0; at = game.parent(at)) {
+        if (at == DataModel::kNoParent) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+void ScriptAnalysis::capture_tree(bool tree_changed) {
+    {
+        std::lock_guard<std::mutex> lock(state_->mu);
+        if (!state_->enabled || state_->stop) {
+            // Nothing will check it. busy() must not wait for it.
+            state_->capture_needed.store(false, std::memory_order_relaxed);
+            if (tree_changed) {
+                state_->world_stale.store(false, std::memory_order_relaxed);
+            }
+            return;
+        }
+    }
+    // Every script queued before here is in this capture. One queued after
+    // sets the flag again and waits for the next.
+    state_->capture_needed.store(false, std::memory_order_relaxed);
+    const std::uint64_t seq = state_->world_seq.fetch_add(1) + 1;
+    const std::shared_ptr<WorldSnap> world = capture_world(game_);
     // Play can start after pump() looks and before the capture takes the lock.
     // A play tree is not the authored one, so once stopped pump() diffs the
     // authored tree again.
     if (world->play) {
         state_->play_stale.store(true, std::memory_order_relaxed);
     }
-    return world;
+    ensure_threads();
+    std::lock_guard<std::mutex> lock(state_->mu);
+    if (!state_->enabled || state_->stop) {
+        return;
+    }
+    state_->adopt(world, seq);
+    // Cleared only now, with tree_pending set, so settled() never sees neither.
+    // The DataModel lock is held, so no tree change came in since pump() looked.
+    if (tree_changed) {
+        state_->world_stale.store(false, std::memory_order_relaxed);
+        state_->tree_pending = true;
+        state_->tree_due = std::chrono::steady_clock::now() + kDebounce;
+        // A script remove() dropped that is in the tree again, as Stop brings
+        // back one a playtest destroyed, is checked as new.
+        for (auto it = state_->removed.begin(); it != state_->removed.end();) {
+            const NodeSnap* node = world->find(*it);
+            if (node == nullptr || !node->lua) {
+                ++it;
+                continue;
+            }
+            Pending pending;
+            pending.generation = ++state_->generations[*it];
+            pending.ready_at = state_->tree_due;
+            pending.after = seq - 1;
+            state_->pending[*it] = pending;
+            it = state_->removed.erase(it);
+        }
+    }
+    if (state_->authored_world == world) {
+        // A rename the place checker does not recheck still shows in the report.
+        for (auto& entry : state_->published) {
+            if (const NodeSnap* node = world->find(entry.first)) {
+                entry.second.name = node->name.empty() ? node->class_name : node->name;
+            }
+        }
+    }
+    state_->cv.notify_all();
 }
 
 void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
     if (ids.empty()) {
         return;
     }
-    {
-        // The capture copies every script's source. Skip it when nothing will run.
-        std::lock_guard<std::mutex> lock(state_->mu);
-        if (!state_->enabled || state_->stop) {
-            return;
-        }
-    }
-    std::uint64_t seq = 0;
-    const std::shared_ptr<WorldSnap> world = capture(seq);
-    ensure_worker();
-    std::lock_guard<std::mutex> lock(state_->mu);
-    if (!state_->enabled || state_->stop) {
-        return;
-    }
-    state_->adopt(world, seq);
-    const auto ready_at = std::chrono::steady_clock::now() + kDebounce;
+    std::vector<InstanceId> placed;
+    placed.reserve(ids.size());
     for (InstanceId id : ids) {
-        // Handled either way: a dead or non-script id has nothing to check.
-        const NodeSnap* node = world->find(id);
-        if (node == nullptr || !node->lua) {
-            continue;
+        if (placed_script(game_, id)) {
+            placed.push_back(id);
         }
-        std::uint64_t& generation = state_->generations[id];
-        ++generation;
-        state_->removed.erase(id);
-        Job job;
-        job.id = id;
-        job.generation = generation;
-        state_->pending[id] = Pending{job, ready_at};
     }
-    state_->cv.notify_all();
-}
-
-void ScriptAnalysis::note_tree() {
+    if (placed.empty()) {
+        return;
+    }
+    const bool playing = game_.simulation_running();
     {
         std::lock_guard<std::mutex> lock(state_->mu);
         if (!state_->enabled || state_->stop) {
             return;
         }
-    }
-    std::uint64_t seq = 0;
-    const std::shared_ptr<WorldSnap> world = capture(seq);
-    ensure_worker();
-    std::lock_guard<std::mutex> lock(state_->mu);
-    if (!state_->enabled || state_->stop) {
-        return;
-    }
-    state_->adopt(world, seq);
-    state_->tree_pending = true;
-    state_->tree_due = std::chrono::steady_clock::now() + kDebounce;
-    // A script remove() dropped that is in the tree again, as Stop brings back
-    // one a playtest destroyed, is checked as new.
-    for (auto it = state_->removed.begin(); it != state_->removed.end();) {
-        const NodeSnap* node = world->find(*it);
-        if (node == nullptr || !node->lua) {
-            ++it;
-            continue;
+        const auto ready_at = std::chrono::steady_clock::now() + kDebounce;
+        const std::uint64_t after = state_->world_seq.load();
+        const WorldSnap* authored = state_->authored_world.get();
+        for (InstanceId id : placed) {
+            // A script that exists only in the play tree, such as a clone, is
+            // never checked: Stop destroys it.
+            if (playing && authored != nullptr) {
+                const NodeSnap* node = authored->find(id);
+                if (node == nullptr || !node->lua) {
+                    continue;
+                }
+            }
+            Pending pending;
+            pending.generation = ++state_->generations[id];
+            pending.ready_at = ready_at;
+            pending.after = after;
+            state_->removed.erase(id);
+            state_->pending[id] = pending;
         }
-        Job job;
-        job.id = *it;
-        job.generation = ++state_->generations[*it];
-        state_->pending[*it] = Pending{job, state_->tree_due};
-        it = state_->removed.erase(it);
     }
-    state_->cv.notify_all();
+    state_->capture_needed.store(true, std::memory_order_relaxed);
+    ensure_threads();
 }
 
 void ScriptAnalysis::invalidate(InstanceId script) {
-    DataModel* object = game_.instance(script);
-    if (dynamic_cast<LuaSource*>(object) == nullptr) {
+    if (!placed_script(game_, script)) {
         return;
     }
     std::vector<InstanceId> chain;
@@ -3377,6 +3436,11 @@ void ScriptAnalysis::remove(InstanceId script) {
     std::vector<InstanceId> dependents;
     bool notify = false;
     bool enabled = false;
+    // Stop may bring it back without a note of its own. The tree diffed after
+    // Stop checks it again then.
+    if (game_.simulation_running()) {
+        state_->play_stale.store(true, std::memory_order_relaxed);
+    }
     {
         std::lock_guard<std::mutex> lock(state_->mu);
         enabled = state_->enabled;
@@ -3458,15 +3522,19 @@ void ScriptAnalysis::note_world_changed() { state_->world_stale.store(true, std:
 void ScriptAnalysis::pump() {
     // A tree change is diffed once, however many changes came in. Only while
     // stopped: play changes are not the authored tree. The UI thread pumps
-    // outside a step, so the read lock is short and uncontended.
+    // outside a step, so the read lock is short, and a pump() that cannot take
+    // it captures next time.
     if (state_->play_stale.load(std::memory_order_relaxed) && !game_.simulation_running() &&
         state_->play_stale.exchange(false, std::memory_order_relaxed)) {
         state_->world_stale.store(true, std::memory_order_relaxed);
     }
-    if (state_->world_stale.load(std::memory_order_relaxed) && !game_.simulation_running()) {
+    // Queued scripts wait for one capture too, however many were queued, and
+    // that one capture is the tree change's as well.
+    const bool tree = state_->world_stale.load(std::memory_order_relaxed) && !game_.simulation_running();
+    if (tree || state_->capture_needed.load(std::memory_order_relaxed)) {
         DataModelLock lock(game_, DataModelLock::Read, std::chrono::milliseconds(2));
-        if (lock.owns() && state_->world_stale.exchange(false, std::memory_order_relaxed)) {
-            note_tree();
+        if (lock.owns()) {
+            capture_tree(tree);
         }
     }
     std::vector<Finished> ready;
@@ -3584,9 +3652,14 @@ bool ScriptAnalysis::settled(InstanceId script) const {
     if (state_->published.count(script) != 0) {
         return true;
     }
-    // A script outside the place is never checked: settled, with nothing to say.
-    const NodeSnap* node = state_->latest_world != nullptr ? state_->latest_world->find(script) : nullptr;
-    return state_->latest_world != nullptr && (node == nullptr || !node->lua);
+    // A script outside the authored place, or one a playtest added, is never
+    // checked: settled, with nothing to say.
+    const WorldSnap* authored = state_->authored_world.get();
+    if (authored == nullptr) {
+        return false;
+    }
+    const NodeSnap* node = authored->find(script);
+    return node == nullptr || !node->lua;
 }
 
 bool ScriptAnalysis::play_stale_now() const {

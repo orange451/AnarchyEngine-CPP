@@ -277,6 +277,10 @@ TEST_CASE("A9 pump is the only publisher", "[A9]") {
     REQUIRE(analysis.diagnostics(script.id()).empty());
     REQUIRE(analysis.analyzed_source(script.id()) == std::string("return 1\n"));
     script.set_source("local x =\n");
+    // This pump() captures the tree the check reads. Nothing is finished yet,
+    // so it publishes nothing.
+    analysis.pump();
+    REQUIRE(analysis.analyzed_source(script.id()) == std::string("return 1\n"));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
     while (analysis.busy()) {
         if (std::chrono::steady_clock::now() > deadline) {
@@ -1384,10 +1388,11 @@ TEST_CASE("A40 a script destroyed before a batch reaches it as a dependent is ne
         add_script(rig.game, "User", "local Shared = require(workspace.Shared)\nprint(Shared.value)\n").id();
     settle(analysis);
     REQUIRE(analysis.analyzed_source(user).has_value());
-    // The edit captures a tree that still holds User. Destroying User takes no
-    // capture of its own, so the batch the edit starts finds User in that tree
-    // as a dependent of Shared after User is gone.
+    // The pump() after the edit captures a tree that still holds User.
+    // Destroying User takes no capture of its own, so the batch the edit starts
+    // finds User in that tree as a dependent of Shared after User is gone.
     module.set_source("return { value = 2 }\n");
+    analysis.pump();
     rig.game.destroy(user);
     REQUIRE_FALSE(analysis.analyzed_source(user).has_value());
     // No pump yet: pump() would capture a new tree before the batch starts.
@@ -1713,4 +1718,58 @@ TEST_CASE("A-perf timing of a large script and a large place", "[.perf]") {
                     analysis.threads(), place, edit, rename,
                     analysis.checks(scripts[1]->id()) != before ? "yes" : "no");
     }
+}
+
+// Hidden: run with ./build/sandbox "[.perf]". The cost of a change in a large
+// place: 16000 plain instances, near the most a place holds, and 50 small
+// scripts. Each time is the change itself, then until analysis settles, which
+// includes the debounce.
+TEST_CASE("A-perf a change in a large place", "[.perf]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    const engine_core::InstanceId workspace = workspace_of(rig.game);
+    std::vector<engine_core::Script*> scripts;
+    for (int i = 0; i < 50; ++i) {
+        const std::string name = "Base" + std::to_string(i);
+        const std::string source = "local found = workspace:FindFirstChild(\"Group" + std::to_string(i) +
+                                   "\")\nprint(found)\n";
+        scripts.push_back(&add_script(rig.game, name.c_str(), source.c_str()));
+    }
+    for (int group = 0; group < 160; ++group) {
+        engine_core::Folder& folder = rig.game.create<engine_core::Folder>();
+        rig.game.set_name(folder.id(), "Group" + std::to_string(group));
+        for (int i = 0; i < 99; ++i) {
+            engine_core::GameObject& part = rig.game.create<engine_core::GameObject>();
+            rig.game.set_name(part.id(), "Part" + std::to_string(i));
+            rig.game.set_parent(part.id(), folder.id());
+        }
+        rig.game.set_parent(folder.id(), workspace);
+    }
+    settle(analysis);
+
+    // A model of 50 scripts, built outside the place and then added at once, as a paste is.
+    auto started = std::chrono::steady_clock::now();
+    engine_core::Folder& model = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(model.id(), "Model");
+    std::vector<engine_core::InstanceId> pasted;
+    for (int i = 0; i < 50; ++i) {
+        const std::string name = "Pasted" + std::to_string(i);
+        pasted.push_back(add_script(rig.game, model.id(), name.c_str(), "local x = script.Parent\nprint(x)\n").id());
+    }
+    rig.game.set_parent(model.id(), workspace);
+    const double add_edit = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    const double add_settle = settle_ms(analysis);
+    for (engine_core::InstanceId id : pasted) {
+        REQUIRE(analysis.analyzed_source(id).has_value());
+    }
+
+    started = std::chrono::steady_clock::now();
+    scripts[0]->set_source(scripts[0]->source() + "\n-- edit\n");
+    const double one_edit = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    const double one_settle = settle_ms(analysis);
+    std::size_t instances = 0;
+    rig.game.for_each_instance([&instances](engine_core::DataModel&) { ++instances; });
+    std::printf("%zu instances, 50 scripts: adding a model of 50 scripts %.2f ms to change, %.0f ms to settle; "
+                "one script edit %.3f ms to change, %.0f ms to settle\n",
+                instances, add_edit, add_settle, one_edit, one_settle);
 }

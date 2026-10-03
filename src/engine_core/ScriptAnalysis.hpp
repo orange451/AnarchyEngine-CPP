@@ -18,10 +18,6 @@ namespace engine_core {
 
 class DataModel;
 
-namespace analysis {
-struct WorldSnap;
-}
-
 // Studio-style static check of Script and ModuleScript source.
 // This is not the compiler. A type warning still compiles and runs.
 enum class Severity { Error, Warning, Information, Hint };
@@ -280,22 +276,23 @@ private:
     std::shared_ptr<LuauRequest> queue_luau(const std::vector<LuaNode>& world, InstanceId script, std::string source,
                                             std::size_t caret, const char* lane, std::vector<std::size_t> offsets);
 
-    void ensure_worker();
+    void ensure_threads();
     void shutdown();
     void run_editor();
     void run_place();
-    // The tree changed: capture it, and let the place checker diff it against the last.
-    void note_tree();
-    // Captures the tree and numbers the capture. Notes a play tree, so the
-    // authored one is diffed after Stop. Gameplay thread, or a thread that
-    // holds the DataModel lock.
-    std::shared_ptr<analysis::WorldSnap> capture(std::uint64_t& seq);
+    // pump() captures the tree once for every script queued since the last
+    // capture, and when `tree_changed`, lets the place checker diff it against
+    // the last. A play tree is noted, so the authored one is diffed after
+    // Stop. Under the DataModel lock.
+    void capture_tree(bool tree_changed);
     // A play tree was captured and the simulation has stopped since: the
     // authored tree is waiting for pump() to diff it.
     bool play_stale_now() const;
     void fire(const std::vector<InstanceId>& ids);
-    // Captures the tree once and queues these scripts. Gameplay thread, or a
-    // thread that holds the DataModel lock.
+    // Queues the scripts among these that are in the place for the place
+    // checker, which takes them once pump() has captured the tree. While the
+    // simulation runs, a script only the play tree has is left out. Gameplay
+    // thread, or a thread that holds the DataModel lock.
     void schedule(const std::vector<InstanceId>& ids);
     void replace_requires(InstanceId script, const std::vector<InstanceId>& targets);
     void forget_requires(InstanceId script);

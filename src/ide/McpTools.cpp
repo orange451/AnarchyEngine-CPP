@@ -30,6 +30,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -560,6 +561,8 @@ struct Checked {
     std::unordered_map<InstanceId, std::vector<engine_core::Diagnostic>> problems;
     // Scripts analysis had not finished when the wait ran out. A deleted script is in neither.
     std::vector<InstanceId> pending;
+    // Scripts analysis does not check: outside the place, or added during a playtest.
+    std::vector<InstanceId> unchecked;
     // Analysis is turned off, so nothing was checked.
     bool off = false;
 };
@@ -576,6 +579,7 @@ Checked CheckScripts(engine_core::Engine& engine, const std::vector<InstanceId>&
     struct Progress {
         std::vector<InstanceId> waiting;
         std::unordered_map<InstanceId, std::vector<engine_core::Diagnostic>> done;
+        std::unordered_set<InstanceId> unchecked;
     };
     auto progress = std::make_shared<Progress>();
     progress->waiting = ids;
@@ -595,8 +599,10 @@ Checked CheckScripts(engine_core::Engine& engine, const std::vector<InstanceId>&
                         continue;
                     }
                     const std::optional<std::string> checked = analysis.analyzed_source(id);
-                    // Settled with nothing checked: the script is outside the place.
-                    if (analysis.settled(id) && (!checked || *checked == script->source())) {
+                    if (analysis.settled(id) && !checked) {
+                        // Settled with nothing checked: analysis does not check this script.
+                        progress->unchecked.insert(id);
+                    } else if (analysis.settled(id) && *checked == script->source()) {
                         progress->done[id] = analysis.diagnostics(id);
                     } else {
                         still.push_back(id);
@@ -618,6 +624,8 @@ Checked CheckScripts(engine_core::Engine& engine, const std::vector<InstanceId>&
         const auto found = progress->done.find(id);
         if (found != progress->done.end()) {
             out.problems.emplace(id, found->second);
+        } else if (progress->unchecked.count(id) != 0) {
+            out.unchecked.push_back(id);
         } else if (std::find(progress->waiting.begin(), progress->waiting.end(), id) != progress->waiting.end()) {
             out.pending.push_back(id);
         }
@@ -626,14 +634,15 @@ Checked CheckScripts(engine_core::Engine& engine, const std::vector<InstanceId>&
 }
 
 // Adds what analysis found in the script to out: its problems, or analysis
-// "pending" or "off" when there is no answer to give.
+// "pending", "not checked", or "off" when there is no answer to give.
 void AddProblems(engine_core::Engine& engine, InstanceId id, JsonValue& out) {
     const Checked checked = CheckScripts(engine, {id});
     const auto found = checked.problems.find(id);
     if (found != checked.problems.end()) {
         out.set("problems", ProblemList(found->second));
     } else {
-        out.set("analysis", JsonValue::string(checked.off ? "off" : "pending"));
+        const bool unchecked = !checked.unchecked.empty();
+        out.set("analysis", JsonValue::string(checked.off ? "off" : unchecked ? "not checked" : "pending"));
     }
 }
 
@@ -1223,6 +1232,12 @@ JsonValue GetDiagnostics(const ToolContext& context, const JsonValue& arguments)
             pending.items().push_back(JsonValue::string(PathOf(world, id)));
         }
     }
+    JsonValue unchecked = JsonValue::array();
+    for (InstanceId id : checked.unchecked) {
+        if (Exists(world, id)) {
+            unchecked.items().push_back(JsonValue::string(PathOf(world, id)));
+        }
+    }
     JsonValue out = JsonValue::object();
     out.set("checked", JsonValue::number(static_cast<double>(checked.problems.size())));
     out.set("errors", JsonValue::number(errors));
@@ -1230,6 +1245,9 @@ JsonValue GetDiagnostics(const ToolContext& context, const JsonValue& arguments)
     out.set("scripts", std::move(scripts));
     if (!pending.items().empty()) {
         out.set("pending", std::move(pending));
+    }
+    if (!unchecked.items().empty()) {
+        out.set("unchecked", std::move(unchecked));
     }
     return out;
 }

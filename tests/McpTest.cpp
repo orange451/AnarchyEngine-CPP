@@ -487,6 +487,11 @@ void TestScriptTools() {
     Expect(util, "get_diagnostics lists a script's problems under its path");
     const JsonValue one = Call(server, "get_diagnostics", R"({"instance":"Workspace.Main"})");
     Expect(Member(one, "checked").as_number() == 1, "get_diagnostics checks only the scripts asked for");
+    engine_core::ModuleScript& loose = game.create<engine_core::ModuleScript>();
+    const std::string loose_args = "{\"instance\":" + std::to_string(loose.id()) + ",\"source\":\"return {\"}";
+    const JsonValue outside = Call(server, "write_script", loose_args);
+    Expect(outside.find("problems") == nullptr && Member(outside, "analysis").as_string() == "not checked",
+           "a script outside the place is not checked, rather than checked clean: " + ide::compact_json(outside));
 
     Call(server, "write_script", R"j({"instance":"Workspace.Main","source":"print('v1')"})j");
     Call(server, "write_script", R"j({"instance":"Workspace.Main","source":"print('v2')"})j");

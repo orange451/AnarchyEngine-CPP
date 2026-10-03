@@ -599,10 +599,13 @@ Checked CheckScripts(engine_core::Engine& engine, const std::vector<InstanceId>&
                         continue;
                     }
                     const std::optional<std::string> checked = analysis.analyzed_source(id);
-                    if (analysis.settled(id) && !checked) {
+                    // Ask once. The place thread can change the answer between two
+                    // calls, and a second answer of settled would read an empty checked.
+                    const bool settled = analysis.settled(id);
+                    if (settled && !checked) {
                         // Settled with nothing checked: analysis does not check this script.
                         progress->unchecked.insert(id);
-                    } else if (analysis.settled(id) && *checked == script->source()) {
+                    } else if (settled && *checked == script->source()) {
                         progress->done[id] = analysis.diagnostics(id);
                     } else {
                         still.push_back(id);

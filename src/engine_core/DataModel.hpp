@@ -153,6 +153,8 @@ public:
     // The service of this class, under game or under a service directly under
     // game, or 0 when there is none.
     InstanceId service(std::string_view class_name) const;
+    // The Core service, or 0 in a DataModel that is not a Game.
+    InstanceId core() const;
 
     // Why set_parent, set_name, or destroy would refuse, worded for the user,
     // or empty when it would go ahead. Setting the value an instance already

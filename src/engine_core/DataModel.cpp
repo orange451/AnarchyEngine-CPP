@@ -1467,6 +1467,8 @@ InstanceId DataModel::service(std::string_view class_name) const {
     return 0;
 }
 
+InstanceId DataModel::core() const { return service(kCoreClass); }
+
 std::string DataModel::rule_class(InstanceId parent, InstanceId moved, InstanceId moved_to) const {
     InstanceId at = parent;
     for (std::size_t guard = 0; guard <= kMaxInstances + 1; ++guard) {
@@ -1539,6 +1541,8 @@ std::optional<std::string> DataModel::parent_error(InstanceId id, InstanceId new
             if (spec->parent_class != nullptr && home == 0) {
                 home = kNoParent;
             }
+        } else if (std::string_view(object->class_name()) == kCoreClass) {
+            home = 0;
         }
         const bool placing = current == kNoParent && home != kNoParent && new_parent == home &&
                              service(object->class_name()) == 0;

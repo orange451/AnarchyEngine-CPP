@@ -100,7 +100,7 @@ bool passes_rule_up(std::string_view class_name) { return class_name == "Folder"
 std::optional<std::string> placement_error(std::string_view holder_class, std::string_view child_class,
                                            std::string_view child_name) {
     if (holder_class == "Game") {
-        if (find_service(child_class) != nullptr) {
+        if (find_service(child_class) != nullptr || child_class == kCoreClass) {
             return std::nullopt;
         }
         return "Only scene services can be children of game; put " + std::string(child_name) + " in Workspace";

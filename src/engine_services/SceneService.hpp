@@ -81,4 +81,15 @@ public:
     const char* class_name() const override;
 };
 
+// The studio's own tools: plugins and what they make, such as the Move tool's
+// Dragger. A child of game the explorer does not show and game scripts cannot
+// reach. Nothing under it is saved or undone, and New, Open, Play, and Stop
+// leave it as it is. Not a scene service: no play script runs under it.
+class Core : public Service {
+public:
+    using Service::Service;
+    const char* class_name() const override;
+    bool hidden_in_explorer() const override { return true; }
+};
+
 }  // namespace engine_core

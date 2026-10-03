@@ -25,6 +25,11 @@ inline constexpr ServiceSpec kServices[] = {
     {"Textures", "Assets"}, {"Audio", "Assets"},
 };
 
+// The studio's own service, outside the place: never saved or undone, and left
+// as it is by New, Open, Play, and Stop. Not in kServices, which is the place's
+// services, the ones a project reads and writes. Game makes it last.
+inline constexpr const char* kCoreClass = "Core";
+
 // Null for a class that is not a service.
 const ServiceSpec* find_service(std::string_view class_name);
 // A service's GUID is its class name in lowercase, the same in every place, so

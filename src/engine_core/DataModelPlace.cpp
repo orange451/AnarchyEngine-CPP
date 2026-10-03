@@ -340,7 +340,8 @@ std::vector<AuthoredNode> DataModel::authored_tree(const std::function<bool(Inst
             const InstanceId parent_id = out[at].id;
             for (InstanceId child = first_child(parent_id); child != 0; child = next_sibling(child)) {
                 const DataModel* object = instance(child);
-                if (object == nullptr) {
+                // Core is the studio's, not the place's: it and all it holds are never saved.
+                if (object == nullptr || child == core()) {
                     continue;
                 }
                 AuthoredNode node;

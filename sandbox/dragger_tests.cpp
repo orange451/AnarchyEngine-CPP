@@ -519,3 +519,59 @@ TEST_CASE("DR20 what a Dragged handler moves joins the drag's undo step", "[DR20
     REQUIRE(close(drag.transform(other).m[12], 0));
     REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
 }
+
+TEST_CASE("DR13c a PhysicsObject held still in play stays where the drag put it, with no speed", "[DR13c]") {
+    DragRig drag;
+    engine_core::DataModel& game = drag.rig.game;
+    engine_core::PhysicsObject& body = game.create<engine_core::PhysicsObject>();
+    game.set_parent(body.id(), game.scene_service("Workspace"));
+    REQUIRE_FALSE(body.set_transform(engine_core::matrix4_translation(0, 0, -10)).has_value());
+    game.set_parent(drag.dragger, body.id());
+    game.capture_place();
+    game.start_simulation();
+    drag.press(150, 100);
+    drag.move(170, 100);
+    // Between steps, as gravity would, with no mouse motion.
+    REQUIRE_FALSE(body.set_transform(engine_core::matrix4_translation(2, -1, -10)).has_value());
+    REQUIRE_FALSE(body.set_velocity({0, -9, 0}).has_value());
+    drag.step();
+    REQUIRE(close(body.transform().m[13], 0));
+    REQUIRE(close(body.transform().m[12], 2));
+    REQUIRE(body.velocity().y == 0);
+    drag.release(170, 100);
+}
+
+TEST_CASE("DR11b a press a game GUI took does not start a drag", "[DR11b]") {
+    DragRig drag;
+    drag.rig.game.input().post_mouse_button(0, true, 150, 100, true);
+    drag.step();
+    REQUIRE_FALSE(drag.handles().dragging());
+}
+
+TEST_CASE("DR14b Play or Stop ends a drag", "[DR14b]") {
+    DragRig drag;
+    drag.press(150, 100);
+    REQUIRE(drag.handles().dragging());
+    drag.rig.game.capture_place();
+    drag.rig.game.start_simulation();
+    drag.step();
+    REQUIRE_FALSE(drag.handles().dragging());
+    drag.press(150, 100);
+    REQUIRE(drag.handles().dragging());
+    drag.rig.game.stop_simulation();
+    drag.step();
+    REQUIRE_FALSE(drag.handles().dragging());
+}
+
+TEST_CASE("DR12b a click with no motion keeps what its handlers changed", "[DR12b]") {
+    DragRig drag;
+    drag.rig.runtime.run_chunk(R"(
+        local dragger = workspace:FindFirstChild("GameObject"):FindFirstChild("Dragger")
+        dragger.DragBegan:Connect(function() dragger.Parent.Name = "Clicked" end)
+    )");
+    drag.rig.frames(1);
+    drag.press(150, 100);
+    drag.release(150, 100);
+    drag.rig.frames(1);
+    REQUIRE(drag.rig.game.name(drag.part) == "Clicked");
+}

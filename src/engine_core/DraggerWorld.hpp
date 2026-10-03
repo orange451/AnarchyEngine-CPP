@@ -37,14 +37,12 @@ private:
         InstanceId target = 0;
         DragStart start;
         Matrix4 start_transform = matrix4_identity();
-        bool moved = false;
+        // The offset last applied, which play re-applies each step while held.
+        Vec3 offset{};
+        // Whether the place was playing when the drag began. Play and Stop end it.
+        bool playing = false;
         // The undo step this drag opened, or empty when it joined one already open.
         std::string recording;
-    };
-    // A drag's undo step waiting to close, and whether the drag moved anything.
-    struct Closing {
-        std::string recording;
-        bool moved = false;
     };
 
     // The view to pick and drag in, or false when input should pass through.
@@ -56,11 +54,16 @@ private:
     void move(DataModel& game, const DraggerView& view, Vec2 point);
     void end(DataModel& game);
     void close_step(DataModel& game);
-    // True while the drag's Dragger is alive and still bound to its target.
+    // Puts a held target back where the drag has it, with no speed: in play,
+    // physics moves it between the mouse's moves.
+    void hold(DataModel& game);
+    // True while the drag's Dragger is alive and still bound to its target,
+    // and the place has neither started nor stopped playing since it began.
     bool drag_holds(DataModel& game) const;
 
     std::optional<Drag> drag_;
-    std::optional<Closing> closing_;
+    // The undo step of a drag that ended, which closes at the next dispatch.
+    std::string closing_;
     std::vector<InstanceId> scratch_;
 };
 

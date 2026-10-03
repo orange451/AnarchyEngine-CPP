@@ -44,18 +44,20 @@ void DraggerWorld::dispatch(DataModel& game, std::vector<InputRecord>& records) 
         }
         return;
     }
+    hold(game);
     for (InputRecord& record : records) {
         const Vec2 point{record.position.x, record.position.y};
         if (record.type == UserInputService::kMouseMovement) {
             if (drag_) {
                 move(game, view, point);
                 record.processed = true;
-            } else {
+            } else if (!record.processed) {
                 hover(game, view, point);
             }
         } else if (record.type == UserInputService::kMouseButton1) {
-            if (record.state == UserInputService::kBegin && !drag_) {
-                record.processed = begin(game, view, point) || record.processed;
+            // A press a game GUI took is not the handles'.
+            if (record.state == UserInputService::kBegin && !drag_ && !record.processed) {
+                record.processed = begin(game, view, point);
             } else if ((record.state == UserInputService::kEnd || record.state == UserInputService::kCancel) && drag_) {
                 end(game);
                 record.processed = true;
@@ -132,6 +134,7 @@ bool DraggerWorld::begin(DataModel& game, const DraggerView& view, Vec2 point) {
     drag.dragger = dragger->id();
     drag.target = target;
     drag.start_transform = pv->transform();
+    drag.playing = game.simulation_running();
     if (!begin_drag(dragger_frame(drag.start_transform, dragger->local_space()), view, point, handle, drag.start)) {
         return false;
     }
@@ -158,11 +161,38 @@ void DraggerWorld::move(DataModel& game, const DraggerView& view, Vec2 point) {
     if (!offset) {
         return;
     }
-    Matrix4 moved = drag_->start_transform;
-    moved.m[12] += offset->x;
-    moved.m[13] += offset->y;
-    moved.m[14] += offset->z;
-    if (pv->set_pv_transform(moved)) {
+    drag_->offset = *offset;
+    hold(game);
+    if (!drag_) {
+        return;
+    }
+    game.fire_event(dragger->id(), "Dragged", {handle_slot(drag_->start.handle), vector_slot(*offset)});
+}
+
+void DraggerWorld::end(DataModel& game) {
+    const Drag drag = *drag_;
+    drag_.reset();
+    closing_ = drag.recording;
+    if (auto* dragger = dynamic_cast<Dragger*>(game.instance(drag.dragger))) {
+        dragger->set_drag(false, DraggerHandle::None);
+        game.fire_event(dragger->id(), "DragEnded", {handle_slot(drag.start.handle)});
+    }
+}
+
+void DraggerWorld::hold(DataModel& game) {
+    if (!drag_) {
+        return;
+    }
+    PVInstance* pv = pv_of(game, drag_->target);
+    if (pv == nullptr) {
+        end(game);
+        return;
+    }
+    Matrix4 placed = drag_->start_transform;
+    placed.m[12] += drag_->offset.x;
+    placed.m[13] += drag_->offset.y;
+    placed.m[14] += drag_->offset.z;
+    if (pv->set_pv_transform(placed)) {
         end(game);
         return;
     }
@@ -173,39 +203,26 @@ void DraggerWorld::move(DataModel& game, const DraggerView& view, Vec2 point) {
             body->set_angular_velocity(Vec3{});
         }
     }
-    drag_->moved = drag_->moved || offset->x != 0.f || offset->y != 0.f || offset->z != 0.f;
-    game.fire_event(dragger->id(), "Dragged", {handle_slot(drag_->start.handle), vector_slot(*offset)});
-}
-
-void DraggerWorld::end(DataModel& game) {
-    const Drag drag = *drag_;
-    drag_.reset();
-    if (!drag.recording.empty()) {
-        closing_ = Closing{drag.recording, drag.moved};
-    }
-    if (auto* dragger = dynamic_cast<Dragger*>(game.instance(drag.dragger))) {
-        dragger->set_drag(false, DraggerHandle::None);
-        game.fire_event(dragger->id(), "DragEnded", {handle_slot(drag.start.handle)});
-    }
 }
 
 void DraggerWorld::close_step(DataModel& game) {
-    if (!closing_) {
+    if (closing_.empty()) {
         return;
     }
-    const Closing closing = *closing_;
-    closing_.reset();
+    const std::string closing = std::move(closing_);
+    closing_.clear();
     // Play seals an edit recording when it starts; one sealed so is gone.
     ChangeHistoryService& history = game.history();
-    if (history.is_recording_in_progress(closing.recording)) {
-        history.finish_recording(closing.recording,
-                                 closing.moved ? FinishRecordingOperation::Commit : FinishRecordingOperation::Cancel);
+    if (history.is_recording_in_progress(closing)) {
+        // Commit even when nothing moved: an empty step records nothing, and
+        // what the drag's handlers changed stays changed.
+        history.finish_recording(closing, FinishRecordingOperation::Commit);
     }
 }
 
 bool DraggerWorld::drag_holds(DataModel& game) const {
     const auto* dragger = dynamic_cast<const Dragger*>(game.instance(drag_->dragger));
-    return dragger != nullptr && dragger->target() == drag_->target;
+    return dragger != nullptr && dragger->target() == drag_->target && game.simulation_running() == drag_->playing;
 }
 
 }  // namespace engine_core

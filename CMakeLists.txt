@@ -58,6 +58,7 @@ set(STUDIO_CORE_SOURCES
     src/ide/PluginLoader.cpp
     src/ide/PropertySheet.cpp
     src/ide/RunProcess.cpp
+    src/ide/ProblemsModel.cpp
     src/ide/ScriptMarks.cpp
     src/ide/ScriptPairs.cpp
     src/ide/StudioRegistry.cpp
@@ -670,6 +671,7 @@ add_executable(engine-tests
     tests/LuauHighlightTest.cpp
     tests/CssHighlightTest.cpp
     tests/LuauCompleteTest.cpp
+    tests/ProblemsModelTest.cpp
     tests/ScriptMarksTest.cpp
     tests/ScriptPairsTest.cpp
     tests/TextSearchTest.cpp

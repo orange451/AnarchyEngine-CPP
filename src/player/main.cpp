@@ -27,6 +27,9 @@ namespace {
 
 namespace fs = std::filesystem;
 
+// Frames per second the player draws at most, the studio's default.
+constexpr double kFrameRate = 120.0;
+
 // The player draws only the game, so its stylesheet is only the view's own
 // background and the message shown when there is no game to play.
 constexpr const char* kStylesheet = R"(
@@ -130,8 +133,9 @@ public:
         scene->setRoot(std::move(view));
         stage.setScene(std::move(scene));
         stage.setTitle(project_->name());
-        // The swap interval paces the frames, at the display's refresh rate.
-        stage.setMaxFrameRate(0);
+        // Paced as the studio paces it: no swap wait, frames capped at kFrameRate.
+        // Pacing by the swap interval held the player near 60 on a Mac laptop.
+        stage.setMaxFrameRate(kFrameRate);
         engine_core::ScriptRuntime* scripts = &engine.scripts();
         stage.setFrameTail([scripts] { PrintOutput(*scripts); });
         // The view's first paint is what lets the render thread leave its wait.
@@ -153,7 +157,8 @@ protected:
 
     std::string defaultTitle() const override { return "Anarchy Player"; }
 
-    int swapInterval() const override { return 1; }
+    // The scene draws as fast as the cap allows. The simulation stays at 60 Hz.
+    int swapInterval() const override { return 0; }
 
 private:
     static void showMessage(jadefx::Stage& stage, std::shared_ptr<jadefx::Scene> scene, const std::string& text) {

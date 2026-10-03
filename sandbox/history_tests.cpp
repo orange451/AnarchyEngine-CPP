@@ -906,3 +906,126 @@ TEST_CASE("H37 a save inside a recording that holds nothing, on a dirty place, t
     game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Cancel);
     REQUIRE_FALSE(game.history().dirty());
 }
+
+TEST_CASE("H38 undo of a move whose old parent a write outside any recording destroyed leaves the instance where it is",
+          "[H38][history]") {
+    engine_core::Game game;
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    const engine_core::InstanceId folder_id = folder.id();
+    game.set_parent(folder_id, workspace_of(game));
+    engine_core::GameObject& part = game.create<engine_core::GameObject>();
+    const engine_core::InstanceId part_id = part.id();
+    game.set_parent(part_id, folder_id);
+    game.history().reset_waypoints();
+    {
+        ide::ScopedRecording step(game, "Move");
+        game.set_parent(part_id, workspace_of(game));
+    }
+
+    // As the command line does: workspace.Folder:Destroy().
+    game.destroy(folder_id);
+    game.history().undo();
+    REQUIRE_FALSE(game.alive(folder_id));
+    REQUIRE(game.alive(part_id));
+    REQUIRE(game.parent(part_id) == workspace_of(game));
+
+    game.history().redo();
+    REQUIRE(game.parent(part_id) == workspace_of(game));
+}
+
+TEST_CASE("H39 undo of a move that would now make a cycle leaves the instance where it is", "[H39][history]") {
+    engine_core::Game game;
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    const engine_core::InstanceId folder_id = folder.id();
+    game.set_parent(folder_id, workspace_of(game));
+    engine_core::Folder& inner = game.create<engine_core::Folder>();
+    const engine_core::InstanceId inner_id = inner.id();
+    game.set_parent(inner_id, folder_id);
+    game.history().reset_waypoints();
+    {
+        ide::ScopedRecording step(game, "Move");
+        game.set_parent(inner_id, workspace_of(game));
+    }
+
+    // As the command line does: workspace.Folder.Parent = workspace.Inner.
+    game.set_parent(folder_id, inner_id);
+    game.history().undo();
+    REQUIRE(game.parent(inner_id) == workspace_of(game));
+    REQUIRE(game.parent(folder_id) == inner_id);
+}
+
+TEST_CASE("H40 redo of an insert whose parent a write outside any recording destroyed brings the instance back unparented",
+          "[H40][history]") {
+    engine_core::Game game;
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    const engine_core::InstanceId folder_id = folder.id();
+    game.set_parent(folder_id, workspace_of(game));
+    game.history().reset_waypoints();
+    engine_core::InstanceId made = 0;
+    {
+        ide::ScopedRecording step(game, "Insert GameObject");
+        engine_core::GameObject& part = game.create<engine_core::GameObject>();
+        game.set_name(part.id(), "Brick");
+        game.set_parent(part.id(), folder_id);
+        made = part.id();
+    }
+    game.history().undo();
+    REQUIRE_FALSE(game.alive(made));
+
+    game.destroy(folder_id);
+    game.history().redo();
+    REQUIRE(game.alive(made));
+    REQUIRE(game.name(made) == "Brick");
+    REQUIRE(game.parent(made) == engine_core::DataModel::kNoParent);
+}
+
+TEST_CASE("H41 undo of a delete whose parent a write outside any recording destroyed brings the instance back unparented",
+          "[H41][history]") {
+    engine_core::Game game;
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    const engine_core::InstanceId folder_id = folder.id();
+    game.set_parent(folder_id, workspace_of(game));
+    engine_core::GameObject& part = game.create<engine_core::GameObject>();
+    const engine_core::InstanceId part_id = part.id();
+    game.set_name(part_id, "Brick");
+    game.set_parent(part_id, folder_id);
+    game.history().reset_waypoints();
+    {
+        ide::ScopedRecording step(game, "Delete");
+        game.destroy(part_id);
+    }
+
+    game.destroy(folder_id);
+    game.history().undo();
+    REQUIRE(game.alive(part_id));
+    REQUIRE(game.name(part_id) == "Brick");
+    REQUIRE(game.parent(part_id) == engine_core::DataModel::kNoParent);
+}
+
+TEST_CASE("H42 undo of a delete leaves a live child where it is when putting it back would make a cycle",
+          "[H42][history]") {
+    engine_core::Game game;
+    engine_core::Folder& other = game.create<engine_core::Folder>();
+    const engine_core::InstanceId other_id = other.id();
+    game.set_parent(other_id, workspace_of(game));
+    engine_core::Folder& box = game.create<engine_core::Folder>();
+    const engine_core::InstanceId box_id = box.id();
+    game.set_parent(box_id, other_id);
+    engine_core::GameObject& child = game.create<engine_core::GameObject>();
+    const engine_core::InstanceId child_id = child.id();
+    game.set_parent(child_id, box_id);
+    game.history().reset_waypoints();
+    {
+        ide::ScopedRecording step(game, "Delete");
+        game.destroy(box_id);
+    }
+    // The destroy leaves the child unparented. The command line then puts Other under it.
+    REQUIRE(game.parent(child_id) == engine_core::DataModel::kNoParent);
+    game.set_parent(other_id, child_id);
+
+    game.history().undo();
+    REQUIRE(game.alive(box_id));
+    REQUIRE(game.parent(box_id) == other_id);
+    REQUIRE(game.parent(other_id) == child_id);
+    REQUIRE(game.parent(child_id) == engine_core::DataModel::kNoParent);
+}

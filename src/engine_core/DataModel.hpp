@@ -733,6 +733,11 @@ private:
     void revive_record(const AuthoredRecord& record);
     void revive_tree(const AuthoredRecord& record);
     void reparent_record(const AuthoredRecord& record);
+    // Moves for undo or redo when parent_error allows it. A write outside any
+    // recording may have destroyed the parent, put it under the instance, or
+    // made it refuse the instance; then the instance stays where it is, which
+    // for one just revived is unparented. True when it is under parent after.
+    bool history_move(InstanceId id, InstanceId parent);
     void place_at_sibling(InstanceId id, int index);
     void apply_record_fields(const AuthoredRecord& record);
     // Scripts look the tree up by name. Tells analysis the tree moved.

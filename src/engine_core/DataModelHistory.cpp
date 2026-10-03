@@ -361,14 +361,23 @@ void DataModel::place_at_sibling(InstanceId id, int index) {
     link_children(parent, kids);
 }
 
+bool DataModel::history_move(InstanceId id, InstanceId parent_id) {
+    if (parent(id) == parent_id) {
+        return true;
+    }
+    if (parent_error(id, parent_id)) {
+        return false;
+    }
+    set_parent(id, parent_id);
+    return true;
+}
+
 void DataModel::reparent_record(const AuthoredRecord& record) {
     if (!alive(record.id)) {
         return;
     }
-    if (parent(record.id) != record.parent) {
-        set_parent(record.id, record.parent);
-    }
-    if (record.parent != kNoParent && record.sibling_index >= 0) {
+    const bool placed = history_move(record.id, record.parent);
+    if (placed && record.parent != kNoParent && record.sibling_index >= 0) {
         place_at_sibling(record.id, record.sibling_index);
     }
     std::vector<const AuthoredRecord*> ordered;
@@ -429,10 +438,8 @@ void DataModel::apply_parent(InstanceId id, InstanceId parent_id, int sibling_in
     if (!alive(id)) {
         return;
     }
-    if (parent(id) != parent_id) {
-        set_parent(id, parent_id);
-    }
-    if (sibling_index >= 0 && parent_id != kNoParent) {
+    const bool placed = history_move(id, parent_id);
+    if (placed && sibling_index >= 0 && parent_id != kNoParent) {
         place_at_sibling(id, sibling_index);
     }
 }

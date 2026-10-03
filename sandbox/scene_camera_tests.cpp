@@ -307,15 +307,12 @@ struct CameraRig : ScriptRig {
         runtime.drain_output();
     }
 
-    // The plugin moves the camera on RenderStepped. Input dispatches in step_tools,
-    // so it runs first, the same order the engine's two threads settle into: a
-    // key pressed before this call is current by the window's next handler run.
-    void frames(int count, double dt = 1.0 / 60.0) {
-        for (int i = 0; i < count; ++i) {
-            ScriptRig::frames(1, dt);
-            render(dt);
-        }
-    }
+    // The plugin moves the camera on RenderStepped, which only runs in rig.render()
+    // (the window), not in frames() (the sim step). Input dispatches in step_tools,
+    // so a key pressed before a frames() call is current by the next render() call's
+    // handler run. A test that wants the plugin to actually move or turn the camera
+    // calls render() itself, same as ScriptRig::render does for any other window test.
+    using ScriptRig::frames;
 
     engine_core::Matrix4 transform() { return dynamic_cast<engine_core::Camera*>(game.instance(camera))->transform(); }
     engine_core::Vec3 position() {
@@ -334,10 +331,12 @@ TEST_CASE("SC12 W moves the camera where it looks, and E lifts it", "[SC12]") {
     CameraRig rig;
     rig.game.input().post_key(key('W'), true);
     rig.frames(1, 0.5);
+    rig.render(0.5);
     REQUIRE(std::abs(rig.position().z + 8.f) < 1e-3f);  // 16 studs/s for half a second, down -Z
     rig.game.input().post_key(key('W'), false);
     rig.game.input().post_key(key('E'), true);
     rig.frames(1, 0.25);
+    rig.render(0.25);
     REQUIRE(std::abs(rig.position().y - 4.f) < 1e-3f);
     REQUIRE(rig.runtime.drain_output().lines.empty());
 }
@@ -346,26 +345,39 @@ TEST_CASE("SC13 the right button locks the pointer and the locked motion turns t
     CameraRig rig;
     rig.game.input().post_mouse_button(1, true, 50.f, 50.f);
     rig.frames(1);
+    rig.render();
     REQUIRE(rig.game.input().mouse_behavior() == UserInputService::kLockCurrentPosition);
 
     // Right is +X from a camera looking down -Z.
     rig.game.input().post_mouse_delta(100.f, 0.f);
     rig.frames(1);
+    rig.render();
     REQUIRE(rig.look().x > 0.3f);
 
     // Far up: the pitch stops at 89 degrees.
     rig.game.input().post_mouse_delta(0.f, -100000.f);
     rig.frames(1);
+    rig.render();
     REQUIRE(rig.look().y > 0.99f);
     REQUIRE(std::asin(std::min(1.f, rig.look().y)) <= 89.01f * 3.14159265f / 180.f);
 
     rig.game.input().post_mouse_button(1, false, 50.f, 50.f);
     rig.frames(1);
+    rig.render();
     REQUIRE(rig.game.input().mouse_behavior() == UserInputService::kMouseBehaviorDefault);
 
     // Loading again, as after opening a place, leaves one plugin.
     REQUIRE(rig.loader.load(rig.game, rig.runtime, {scene_camera_file()}) == 1);
     REQUIRE(rig.runtime.plugins().size() == 1);
+}
+
+TEST_CASE("SC14 the scene camera moves per rendered frame in edit mode", "[SC14]") {
+    CameraRig rig;
+    rig.game.input().post_key(key('W'), true);
+    rig.frames(1, 0.0);           // input reaches the plugin VM
+    rig.render(0.25);             // one rendered frame moves the camera
+    rig.render(0.25);
+    REQUIRE(std::abs(rig.position().z + 8.f) < 1e-1f);  // 16 studs/s for half a second
 }
 
 TEST_CASE("SC14 loading the built-in plugins is not an edit to the place", "[SC14]") {
@@ -385,9 +397,11 @@ TEST_CASE("SC15 losing focus mid-turn lets the pointer go", "[SC15]") {
     CameraRig rig;
     rig.game.input().post_mouse_button(1, true, 50.f, 50.f);
     rig.frames(1);
+    rig.render();
     REQUIRE(rig.game.input().mouse_behavior() == UserInputService::kLockCurrentPosition);
     rig.game.input().post_focus_lost();
     rig.frames(1);
+    rig.render();
     REQUIRE(rig.game.input().mouse_behavior() == UserInputService::kMouseBehaviorDefault);
 }
 
@@ -396,14 +410,20 @@ TEST_CASE("SC16 with no CurrentCamera, or in play, the plugin leaves the camera 
     const engine_core::Vec3 before = rig.position();
     rig.game.start_simulation();
     rig.game.input().post_key(key('W'), true);
-    rig.frames(3);
+    for (int i = 0; i < 3; ++i) {
+        rig.frames(1);
+        rig.render();
+    }
     REQUIRE(rig.position().z == before.z);
     rig.game.stop_simulation();
     rig.runtime.drain_output();
 
     rig.game.destroy(rig.camera);
     rig.game.input().post_key(key('S'), true);
-    rig.frames(3);
+    for (int i = 0; i < 3; ++i) {
+        rig.frames(1);
+        rig.render();
+    }
     REQUIRE(rig.runtime.drain_output().lines.empty());
 }
 
@@ -458,10 +478,12 @@ TEST_CASE("SC19 the camera does not jump on the step the right button locks the 
     CameraRig rig;
     rig.game.input().post_mouse_move(50.f, 50.f);
     rig.frames(1);
+    rig.render();
     // The pointer moved on its way to the press, in the same step as the press.
     rig.game.input().post_mouse_move(250.f, 50.f);
     rig.game.input().post_mouse_button(1, true, 250.f, 50.f);
     rig.frames(1);
+    rig.render();
     REQUIRE(rig.game.input().mouse_behavior() == UserInputService::kLockCurrentPosition);
     REQUIRE(std::abs(rig.look().x) < 1e-4f);
     REQUIRE(std::abs(rig.look().z + 1.f) < 1e-4f);

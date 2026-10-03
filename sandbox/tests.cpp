@@ -4947,33 +4947,89 @@ TEST_CASE("RW7 a write the window refuses raises a Lua error the handler can cat
     REQUIRE_FALSE(deferred_left);  // consumed by the Lua error, not left for the engine
 }
 
-TEST_CASE("S53 frames dropped before a step are not heard as RenderStepped", "[S53]") {
-    // Window delivery runs the handler inside rig.render itself, so
-    // drop_render_frames (which only forgets note_frame's summed ns, the sim-side
-    // fallback's bookkeeping) no longer withholds anything from it. Rewritten
-    // properly in a later task; this keeps the suite green under the new delivery.
+TEST_CASE("RW8 pause silences play handlers, Stop removes them, plugins run through", "[RW8]") {
     ScriptRig rig;
     add_script(rig.game, "Watch", R"(
+        game:GetService("RunService").RenderStepped:Connect(function()
+            _G.n = (_G.n or 0) + 1
+        end)
+    )");
+    rig.runtime.run_chunk(R"(
+        game:GetService("RunService").RenderStepped:Connect(function()
+            _G.plugin_like = (_G.plugin_like or 0) + 1
+        end)
+    )");
+    // run_chunk is the console VM: its connection takes the sim-side fallback
+    // (see S53 below), not the window, so it is not exercised again here.
+    rig.game.start_simulation();
+    play_step(rig, 0.05);
+    rig.render(0.016);
+    double n = 0;
+    REQUIRE(rig.runtime.global_number("n", n));
+    REQUIRE(n == 1);
+    rig.runtime.set_render_paused(true);
+    rig.render(0.016);
+    REQUIRE(rig.runtime.global_number("n", n));
+    REQUIRE(n == 1);  // paused: silent
+    rig.runtime.set_render_paused(false);
+    rig.render(0.016);
+    REQUIRE(rig.runtime.global_number("n", n));
+    REQUIRE(n == 2);
+    rig.game.stop_simulation();
+    rig.render(0.016);
+    rig.frames(1, 0.05);
+    // The play VM closed; its connection is gone and nothing errors.
+    REQUIRE(rig.runtime.last_error().empty());
+}
+
+TEST_CASE("S53 a console connection falls back to sim-side delivery with summed dt", "[S53]") {
+    ScriptRig rig;
+    rig.runtime.drain_output();
+    rig.runtime.run_chunk(R"(
         game:GetService("RunService").RenderStepped:Connect(function(dt)
             _G.n = (_G.n or 0) + 1
             _G.dt = dt
         end)
     )");
-    rig.game.start_simulation();
-    play_step(rig, 0.05);
-    rig.render(0.5);
-    double n = 0;
-    REQUIRE(rig.runtime.global_number("n", n));
-    REQUIRE(n == 1);  // delivered already, in the window
-    rig.runtime.drop_render_frames();
-    play_step(rig, 0.05);
-    REQUIRE(rig.runtime.global_number("n", n));
-    REQUIRE(n == 1);  // the step adds nothing; delivery does not run there anymore
+    rig.render(0.01);
     rig.render(0.02);
-    play_step(rig, 0.05);
-    double dt = 0;
-    REQUIRE(rig.runtime.global_number("dt", dt));
-    REQUIRE(std::fabs(dt - 0.02) < 1e-6);
+    rig.frames(1, 0.05);  // step_tools fires the fallback with the summed time
+    // Console globals live in the console VM's own lua_State, not the play VM's,
+    // so global_number (which only reads play_.state) cannot see them; read them
+    // back by printing, as S15 does.
+    rig.runtime.run_chunk(R"(print(string.format("%d,%.6f", _G.n, _G.dt)))");
+    const engine_core::ScriptRuntime::OutputBatch batch = rig.runtime.drain_output();
+    bool saw = false;
+    for (const engine_core::ScriptRuntime::OutputLine& line : batch.lines) {
+        if (line.kind == engine_core::ScriptRuntime::OutputKind::Print) {
+            const std::size_t comma = line.text.find(',');
+            REQUIRE(comma != std::string::npos);
+            REQUIRE(line.text.substr(0, comma) == "1");
+            REQUIRE(std::fabs(std::stod(line.text.substr(comma + 1)) - 0.03) < 1e-6);
+            saw = true;
+        }
+    }
+    REQUIRE(saw);
+}
+
+// Pin: a console-VM RenderStepped:Wait() also stays on sim-side delivery. It
+// must resume on a step (step_tools' fallback), never inside the render
+// window, since render_window_routed excludes VmKind::Console from the start.
+TEST_CASE("S53 a console RenderStepped:Wait() also stays on sim-side delivery", "[S53]") {
+    ScriptRig rig;
+    rig.runtime.drain_output();
+    rig.runtime.run_chunk(R"(
+        local dt = game:GetService("RunService").RenderStepped:Wait()
+        print(string.format("resumed %.6f", dt))
+    )");
+    rig.render(0.016);  // a window frame must not resume a console Wait
+    const engine_core::ScriptRuntime::OutputBatch mid = rig.runtime.drain_output();
+    REQUIRE(mid.lines.empty());
+    rig.frames(1, 0.03);  // step_tools fires the fallback, which resumes it
+    const engine_core::ScriptRuntime::OutputBatch batch = rig.runtime.drain_output();
+    REQUIRE(batch.lines.size() == 1);
+    REQUIRE(batch.lines[0].kind == engine_core::ScriptRuntime::OutputKind::Print);
+    REQUIRE(batch.lines[0].text.rfind("resumed ", 0) == 0);
 }
 
 TEST_CASE("RW1 invoke_render runs a host signal's handlers in the window", "[RW1]") {

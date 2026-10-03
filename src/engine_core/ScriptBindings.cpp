@@ -722,6 +722,19 @@ int ScriptBindings::signal_connect(lua_State* state) {
         };
         // A play connection is tagged, so the queue's gate and Stop end it. The console's
         // and a plugin's outlive the play session; their VM ends them.
+        //
+        // `script` is never 0 here for VmKind::Play: every play Thread traces back to
+        // launch_one's Script-owned thread (new_thread(play_, script->id(), ...), always
+        // a real, nonzero InstanceId), and every path that derives a child thread from a
+        // caller (task.spawn/task.delay's task_thread, a signal listener's start_listener,
+        // require's module thread) carries the caller's script id forward rather than
+        // defaulting to 0. So connect_scripted's tagged slot is never accidentally
+        // untagged here, and invoke_render's include_tagged/pause gate (Events.cpp,
+        // EventQueue::invoke_render: "if (slot.script != 0) { if (!include_tagged) ...")
+        // always sees this slot as tagged. (That gate's shape means an untagged slot, as
+        // a plugin's connect_kept makes via the `else` branch below, always runs in the
+        // window regardless of pause -- by design, since plugins keep stepping while
+        // paused; see ScriptRuntime::render_step's comment.)
         Connection connection;
         if (vm.kind == ScriptRuntime::VmKind::Play) {
             connection = signal->connect_scripted(std::move(handler), script, generation, false);
@@ -777,6 +790,9 @@ int ScriptBindings::signal_wait(lua_State* state) {
                 }
             });
         };
+        // See signal_connect's comment above on why thread->script is never 0 for
+        // VmKind::Play, so this Wait slot stays correctly tagged for invoke_render's
+        // pause gate the same way a Connect slot does.
         if (vm.kind == ScriptRuntime::VmKind::Play) {
             signal->connect_scripted(std::move(handler), thread->script, thread->generation, true);
         } else {

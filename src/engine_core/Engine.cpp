@@ -126,6 +126,8 @@ void Engine::resume() {
         std::lock_guard<std::mutex> guard(pause_mu_);
         paused_ = false;
     }
+    // A resumed session's window handlers resume delivery with its signals.
+    scripts_->set_render_paused(false);
     pause_cv_.notify_all();
 }
 
@@ -134,6 +136,8 @@ void Engine::pause() {
         std::lock_guard<std::mutex> guard(pause_mu_);
         paused_ = true;
     }
+    // A paused session's window handlers wait with its signals.
+    scripts_->set_render_paused(true);
     // Paused sounds wait where they are; the first step after resume plays them on.
     audio_.suspend();
 }

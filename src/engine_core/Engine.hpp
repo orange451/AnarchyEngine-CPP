@@ -24,6 +24,28 @@
 
 namespace engine_core {
 
+// RenderStepped's dt in the render loop. A frame that misses the 2 ms Prepare
+// lock runs no RenderStepped, so its time carries to the next frame that does:
+// dt-integrated motion keeps pace under load. Every pass adds its time; a
+// prepared pass takes the sum, clamped at kMaxDt as one frame's dt always was.
+// RenderThread only.
+struct RenderStepTime {
+    static constexpr double kMaxDt = 0.1;
+    double pending = 0;
+
+    void add(double seconds) {
+        if (seconds > 0) {
+            pending += seconds;
+        }
+    }
+    // The carried time, or fallback when there is none. Starts the next sum.
+    double take(double fallback) {
+        const double dt = pending > kMaxDt ? kMaxDt : pending;
+        pending = 0;
+        return dt > 0.0 ? dt : fallback;
+    }
+};
+
 // Two loops. SimulationThread steps the DataModel. RenderThread prepares a
 // snapshot under a short write lock, then Perform/Present with the lock down.
 // PostRender runs after Present, still on RenderThread, without the lock.

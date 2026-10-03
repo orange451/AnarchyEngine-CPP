@@ -377,6 +377,7 @@ void Engine::render_loop() {
 
     auto last_frame = std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point next_frame;
+    RenderStepTime step_time;
     while (running_.load()) {
         // Sample before the work so a paint that arrives during the step is not missed.
         std::uint64_t client_seen = 0;
@@ -388,6 +389,7 @@ void Engine::render_loop() {
         const auto frame_start = std::chrono::steady_clock::now();
         double frame_dt = std::chrono::duration<double>(frame_start - last_frame).count();
         last_frame = frame_start;
+        step_time.add(frame_dt);
         if (frame_dt < 0) {
             frame_dt = 0;
         }
@@ -404,12 +406,14 @@ void Engine::render_loop() {
             DataModelLock lock(game_, DataModelLock::Write, std::chrono::milliseconds(2));
             if (lock.owns()) {
                 const auto hold_start = std::chrono::steady_clock::now();
+                // Includes the frames since the last prepared one, which ran no RenderStepped.
+                const double step_dt = step_time.take(render_dt_);
                 pump_.begin_prerender_window(game_);
                 // Roblox order inside the pre-draw window: RenderStepped, then PreRender.
                 // A failure in one does not skip the other or the copy.
                 const auto contract = [&saw_contract] { saw_contract = true; };
-                guarded_step([&] { scheduler_.run_phase(Phase::RenderStepped, frame_dt); }, contract);
-                guarded_step([&] { scheduler_.run_phase(Phase::PreRender, frame_dt); }, contract);
+                guarded_step([&] { scheduler_.run_phase(Phase::RenderStepped, step_dt); }, contract);
+                guarded_step([&] { scheduler_.run_phase(Phase::PreRender, step_dt); }, contract);
                 pump_.end_prerender_window(game_);
                 // Copy even after a rejected PreRender write. Authorize fails before
                 // mutation, so the queue still describes real sim state.

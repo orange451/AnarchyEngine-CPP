@@ -5157,6 +5157,27 @@ TEST_CASE("RW12 a refusal a window script reaches is a Lua error, with no contra
     REQUIRE_FALSE(engine_core::in_script_contract_scope());
 }
 
+TEST_CASE("RW13 frames that miss the Prepare lock carry their time to the next RenderStepped", "[RW13]") {
+    // Engine::render_loop adds every pass's time and takes it only when it
+    // holds the lock, so RenderStepped's dt covers the frames it skipped.
+    engine_core::RenderStepTime time;
+    time.add(0.016);  // missed the 2 ms lock
+    time.add(0.016);  // missed again
+    time.add(0.016);  // prepared
+    REQUIRE(std::fabs(time.take(1.0 / 60.0) - 0.048) < 1e-12);
+    // Taken: the next frame starts from nothing.
+    time.add(0.008);
+    REQUIRE(std::fabs(time.take(1.0 / 60.0) - 0.008) < 1e-12);
+    // The sum clamps at 0.1, as one frame's dt did.
+    time.add(0.06);
+    time.add(0.06);
+    REQUIRE(time.take(1.0 / 60.0) == engine_core::RenderStepTime::kMaxDt);
+    REQUIRE(engine_core::RenderStepTime::kMaxDt == 0.1);
+    // A clock that went back adds nothing; no time at all is the fallback.
+    time.add(-0.5);
+    REQUIRE(time.take(0.02) == 0.02);
+}
+
 TEST_CASE("RW8 pause silences play handlers, Stop removes them, plugins run through", "[RW8]") {
     ScriptRig rig;
     add_script(rig.game, "Watch", R"(

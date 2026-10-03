@@ -664,6 +664,11 @@ Signal& ScriptBindings::signal_of(lua_State* state, ScriptRuntime& runtime, cons
     return *signal;
 }
 
+bool ScriptBindings::render_window_routed(const SignalUd& ud, ScriptRuntime::VmKind vm_kind) {
+    return ud.kind == kSignalPhase && static_cast<Phase>(ud.phase) == Phase::RenderStepped &&
+           vm_kind != ScriptRuntime::VmKind::Console;
+}
+
 int ScriptBindings::signal_connect(lua_State* state) {
     return lua_guard(state, [&] {
         auto* ud = static_cast<SignalUd*>(luaL_checkudata(state, 1, kSignalMeta));
@@ -684,9 +689,7 @@ int ScriptBindings::signal_connect(lua_State* state) {
         const auto held = std::make_shared<const ScriptRuntime::HeldRef>(vm, lua_ref(state, -1));
         lua_pop(state, 1);
         Signal* signal = &signal_of(state, *runtime, *ud);
-        if (ud->kind != kSignalChanged && ud->kind != kSignalEvent && ud->kind != kSignalInput &&
-            static_cast<Phase>(ud->phase) == Phase::RenderStepped &&
-            vm.kind != ScriptRuntime::VmKind::Console) {
+        if (render_window_routed(*ud, vm.kind)) {
             // Play and plugin handlers run in the render window; the console VM
             // keeps the sim-side delivery, since its command line enters it
             // without the write lock.
@@ -738,6 +741,13 @@ int ScriptBindings::signal_wait(lua_State* state) {
             luaL_error(state, "%s is not available to scripts", ud->blocked_name);
         }
         Signal* signal = &signal_of(state, *runtime, *ud);
+        ScriptRuntime::Vm& vm = *thread->vm;
+        if (render_window_routed(*ud, vm.kind)) {
+            // Play and plugin handlers run in the render window; the console VM
+            // keeps the sim-side delivery, since its command line enters it
+            // without the write lock.
+            signal = runtime->run_service_.window_signal();
+        }
         const int kind = ud->kind;
         thread->park = ScriptRuntime::Thread::Park::Signal;
         // By serial: task.cancel can end the thread, and release it, before the signal fires.
@@ -752,12 +762,13 @@ int ScriptBindings::signal_wait(lua_State* state) {
                     runtime->make_ready(*waiting, changed_name(field, runtime->game_->events().payload()));
                 } else if (kind == kSignalInput || kind == kSignalEvent || kind == kSignalHost) {
                     runtime->make_ready_args(*waiting, runtime->game_->events().current_args());
+                } else if (runtime->in_render_window_) {
+                    runtime->resume_waiting_now(*waiting, runtime->run_service_.dt(phase));
                 } else {
                     runtime->make_ready_number(*waiting, runtime->run_service_.dt(phase));
                 }
             });
         };
-        ScriptRuntime::Vm& vm = *thread->vm;
         if (vm.kind == ScriptRuntime::VmKind::Play) {
             signal->connect_scripted(std::move(handler), thread->script, thread->generation, true);
         } else {

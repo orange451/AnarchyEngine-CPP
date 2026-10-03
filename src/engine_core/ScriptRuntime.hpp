@@ -363,6 +363,10 @@ private:
     void make_ready_number(Thread& thread, double result);
     // Resumes a Wait with an event's values as its results. Null resumes it with none.
     void make_ready_args(Thread& thread, const EventArgs* args);
+    // Pushes dt and resumes the thread now. Window Wait handlers use it: in the
+    // window there is no later drain to resume a ready thread, so the resume is
+    // the delivery.
+    void resume_waiting_now(Thread& thread, double dt);
     bool thread_ok(const Thread& thread) const;
     Thread& new_thread(Vm& vm, InstanceId script, std::uint32_t generation);
     void set_script_global(lua_State* co, InstanceId script);

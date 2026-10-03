@@ -4785,20 +4785,68 @@ TEST_CASE("RW3 a handler that errors reports every frame and stays connected", "
     REQUIRE(errors == 2);
 }
 
-TEST_CASE("S52 RenderStepped:Wait resumes after a rendered frame with its dt", "[S52]") {
+TEST_CASE("S52 RenderStepped:Wait resumes in the window with the frame's dt", "[S52]") {
     ScriptRig rig;
     add_script(rig.game, "Waiter", R"(
-        _G.dt = game:GetService("RunService").RenderStepped:Wait()
+        while true do
+            local dt = game:GetService("RunService").RenderStepped:Wait()
+            _G.n = (_G.n or 0) + 1
+            _G.dt = dt
+        end
     )");
     rig.game.start_simulation();
     play_step(rig, 0.05);
     play_step(rig, 0.05);
-    REQUIRE(rig.runtime.global_is_nil("dt"));
-    rig.render(0.025);
-    play_step(rig, 0.05);
+    REQUIRE(rig.runtime.global_is_nil("n"));
+    rig.render(0.004);
+    rig.render(0.008);
+    double n = 0;
     double dt = 0;
+    REQUIRE(rig.runtime.global_number("n", n));
+    REQUIRE(n == 2);  // one resume per frame, no sim step between
     REQUIRE(rig.runtime.global_number("dt", dt));
-    REQUIRE(std::fabs(dt - 0.025) < 1e-6);
+    REQUIRE(std::fabs(dt - 0.008) < 1e-9);
+    REQUIRE(rig.runtime.last_error().empty());
+}
+
+TEST_CASE("RW4 task.wait in a window handler resumes the continuation on the sim side", "[RW4]") {
+    ScriptRig rig;
+    add_script(rig.game, "Yielder", R"(
+        game:GetService("RunService").RenderStepped:Connect(function()
+            _G.before = (_G.before or 0) + 1
+            task.wait(0.01)
+            _G.after = (_G.after or 0) + 1
+        end)
+    )");
+    rig.game.start_simulation();
+    play_step(rig, 0.05);
+    rig.render(0.016);
+    double before = 0;
+    REQUIRE(rig.runtime.global_number("before", before));
+    REQUIRE(before == 1);
+    REQUIRE(rig.runtime.global_is_nil("after"));  // parked, not run in the window
+    play_step(rig, 0.05);  // the step wakes the sleep
+    double after = 0;
+    REQUIRE(rig.runtime.global_number("after", after));
+    REQUIRE(after == 1);
+    REQUIRE(rig.runtime.last_error().empty());
+}
+
+TEST_CASE("RW5 a continuation parked at Stop never resumes into the restored world", "[RW5]") {
+    ScriptRig rig;
+    add_script(rig.game, "Yielder", R"(
+        game:GetService("RunService").RenderStepped:Connect(function()
+            task.wait(0.01)
+            _G.leaked = true
+        end)
+    )");
+    rig.game.start_simulation();
+    play_step(rig, 0.05);
+    rig.render(0.016);
+    rig.game.stop_simulation();
+    rig.frames(4, 0.05);
+    rig.render(0.016);
+    REQUIRE(rig.runtime.global_is_nil("leaked"));
     REQUIRE(rig.runtime.last_error().empty());
 }
 

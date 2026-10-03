@@ -258,6 +258,10 @@ struct ScriptBindings {
     // signal, or a simulation phase on RunService. Callers refuse a blocked
     // signal, such as a render phase, first. Raises when the instance is gone.
     static Signal& signal_of(lua_State* state, ScriptRuntime& runtime, const SignalUd& ud);
+    // Play and plugin handlers run in the render window; the console VM keeps
+    // the sim-side delivery, since its command line enters it without the
+    // write lock.
+    static bool render_window_routed(const SignalUd& ud, ScriptRuntime::VmKind vm_kind);
     static int signal_connect(lua_State* state);
     static int signal_wait(lua_State* state);
     static int signal_index(lua_State* state);

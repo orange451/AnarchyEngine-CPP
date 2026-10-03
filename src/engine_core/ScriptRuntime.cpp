@@ -1148,6 +1148,15 @@ void ScriptRuntime::make_ready_args(Thread& thread, const EventArgs* args) {
     ready(thread);
 }
 
+void ScriptRuntime::resume_waiting_now(Thread& thread, double dt) {
+    make_ready_number(thread, dt);
+    // make_ready_number queues the thread for the next drain; there is none in
+    // the window, so take it back off the ready list the way the drain-side
+    // resume does, and resume it directly instead.
+    thread.vm->ready.remove(&thread);
+    resume_one(thread);
+}
+
 void ScriptRuntime::park_child_wait(Thread& thread) {
     Vm& vm = *thread.vm;
     thread.park = Thread::Park::Child;

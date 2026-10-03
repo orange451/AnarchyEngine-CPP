@@ -1522,7 +1522,13 @@ InstanceId DataModel::service(std::string_view class_name) const {
     return 0;
 }
 
-InstanceId DataModel::core() const { return service(kCoreClass); }
+InstanceId DataModel::core() const {
+    // Game makes Core once; until then, and in a DataModel that is not a Game, there is none.
+    if (state_->core_id == 0 || !alive(state_->core_id)) {
+        state_->core_id = service(kCoreClass);
+    }
+    return state_->core_id;
+}
 
 std::string DataModel::rule_class(InstanceId parent, InstanceId moved, InstanceId moved_to) const {
     InstanceId at = parent;
@@ -2048,6 +2054,10 @@ void DataModel::note_tree_changed() {
 
 void DataModel::mark_authored_dirty(InstanceId id) {
     if (id == kNoParent || state_->simulation_running) {
+        return;
+    }
+    // Core is not the place: what changes there is never saved.
+    if (core_holds(id)) {
         return;
     }
     state_->dirty.insert(id);

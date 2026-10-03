@@ -1636,6 +1636,14 @@ TEST_CASE("A42 a change rechecks only the scripts it can affect", "[A42]") {
 }
 
 TEST_CASE("A43 a playtest's tree changes leave the authored results as they were", "[A43]") {
+    {
+        // The first playtest in the process can add to the class registry,
+        // which starts a new checker. One beforehand keeps the registry still below.
+        ScriptRig warm;
+        warm.game.start_simulation();
+        warm.frames(1);
+        warm.game.stop_simulation();
+    }
     ScriptRig rig;
     engine_core::ScriptAnalysis analysis(rig.game);
     engine_core::Folder& holder = rig.game.create<engine_core::Folder>();
@@ -1653,6 +1661,8 @@ TEST_CASE("A43 a playtest's tree changes leave the authored results as they were
         before.push_back(*analysis.analyzed_source(id) + "\n" + dump(analysis.diagnostics(id)));
     }
     REQUIRE(has_code(analysis.diagnostics(kept.id()), "Type"));
+    const std::size_t cached = analysis.cached_modules();
+    const std::uint64_t kept_checks = analysis.checks(kept.id());
 
     rig.game.start_simulation();
     rig.frames(1);
@@ -1660,12 +1670,25 @@ TEST_CASE("A43 a playtest's tree changes leave the authored results as they were
     rig.game.set_parent(moved.id(), engine_core::DataModel::kNoParent);
     const engine_core::InstanceId runtime =
         add_script(rig.game, "Runtime", "--!strict\nprint(workspace.Kept.Name)\n").id();
+    // A module only the play tree has, which an authored script requires
+    // during play, so the checker loads it.
+    const engine_core::InstanceId extra = add_module(rig.game, "Extra", "return { value = 1 }\n").id();
+    kept.set_source("--!strict\nlocal Extra = require(workspace.Extra)\nprint(Extra.value)\n");
     settle(analysis);
+    const std::uint64_t revision = engine_core::lua_registry_revision();
+    REQUIRE(analysis.checks(kept.id()) > kept_checks);
+    REQUIRE(analysis.cached_modules() > cached);
     rig.game.stop_simulation();
     settle(analysis);
 
+    // Scripts only the play tree had were never checked, and the checker
+    // holds no module of theirs once the authored tree is back.
+    REQUIRE(analysis.checks(runtime) == 0);
+    REQUIRE(analysis.checks(extra) == 0);
     REQUIRE_FALSE(analysis.analyzed_source(runtime).has_value());
     REQUIRE(analysis.diagnostics(runtime).empty());
+    REQUIRE(engine_core::lua_registry_revision() == revision);
+    REQUIRE(analysis.cached_modules() == cached);
     for (std::size_t at = 0; at < authored.size(); ++at) {
         INFO(rig.game.name(authored[at]));
         REQUIRE(analysis.analyzed_source(authored[at]).has_value());

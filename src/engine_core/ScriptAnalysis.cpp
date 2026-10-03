@@ -47,6 +47,7 @@
 #include <climits>
 #include <condition_variable>
 #include <deque>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -2375,6 +2376,37 @@ struct PlaceChecker {
     std::unordered_set<InstanceId> play_checked;
 };
 
+// Back on the authored tree after a playtest: drops every cached module, and
+// every record, of a script neither `world` nor the last authored tree has,
+// such as a module a play script required. They were never in an authored
+// tree, so no diff names them. A script the last authored tree has is left
+// for the diff, which also rechecks what required it.
+void forget_play_scripts(PlaceChecker& checker, const std::shared_ptr<const WorldSnap>& world) {
+    const auto authored = [&](InstanceId id) {
+        const NodeSnap* now = world->find(id);
+        const NodeSnap* was = checker.last_world != nullptr ? checker.last_world->find(id) : nullptr;
+        return (now != nullptr && now->lua) || (was != nullptr && was->lua);
+    };
+    std::vector<Luau::ModuleName> gone;
+    for (const auto& cached : checker.env->frontend->sourceNodes) {
+        const std::optional<InstanceId> id = instance_of_module(cached.first);
+        if (!id || !authored(*id)) {
+            gone.push_back(cached.first);
+        }
+    }
+    checker.env->frontend->clearModules(gone);
+    std::lock_guard<std::mutex> lock(checker.reached_mu);
+    for (auto it = checker.reached.begin(); it != checker.reached.end();) {
+        it = authored(it->first) ? std::next(it) : checker.reached.erase(it);
+    }
+    for (auto it = checker.by_name.begin(); it != checker.by_name.end();) {
+        it = authored(it->first) ? std::next(it) : checker.by_name.erase(it);
+    }
+    for (auto it = checker.failed.begin(); it != checker.failed.end();) {
+        it = authored(*it) ? std::next(it) : checker.failed.erase(it);
+    }
+}
+
 // Brings the place checker to `world` and adds to `names` every module the
 // change can affect: scripts added or edited, scripts whose last check reached
 // an instance the diff names, scripts that require by a name the change adds,
@@ -2398,6 +2430,9 @@ void sync_place(PlaceChecker& checker, const std::shared_ptr<const WorldSnap>& w
     }
     if (checker.last_world == world && env.place != nullptr && !env.place->world->play) {
         return;
+    }
+    if (!checker.play_checked.empty() || (env.place != nullptr && env.place->world->play)) {
+        forget_play_scripts(checker, world);
     }
     for (InstanceId id : checker.play_checked) {
         names.insert(module_name_of(id));

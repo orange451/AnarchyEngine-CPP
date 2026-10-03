@@ -1,6 +1,5 @@
 #include "PluginLoader.hpp"
 
-#include "ChangeHistoryService.hpp"
 #include "DataModel.hpp"
 #include "IdeResources.hpp"
 #include "Script.hpp"
@@ -41,39 +40,27 @@ std::vector<PluginFile> read_builtin_plugins(std::vector<std::string>& errors) {
     return files;
 }
 
-namespace {
-
-// Restores a ChangeHistoryService's recording state when it goes out of scope,
-// even if the guarded code throws.
-struct RecordingGuard {
-    engine_core::ChangeHistoryService& history;
-    bool recording;
-    RecordingGuard(engine_core::ChangeHistoryService& history, bool recording) : history(history), recording(recording) {}
-    ~RecordingGuard() { history.set_enabled(recording); }
-};
-
-}  // namespace
-
 std::size_t PluginLoader::load(engine_core::DataModel& game, engine_core::ScriptRuntime& scripts,
                                const std::vector<PluginFile>& files) {
-    // None of this is the user's edit.
-    engine_core::ChangeHistoryService& history = game.history();
-    RecordingGuard guard(history, history.enabled());
-    history.set_enabled(false);
+    // In Core, so none of this is the user's edit.
     for (engine_core::InstanceId id : loaded_) {
-        scripts.unregister_plugin(id);
         if (game.alive(id)) {
             game.destroy(id);
         }
     }
     loaded_.clear();
-    std::size_t registered = 0;
+    const engine_core::InstanceId core = game.core();
     for (const PluginFile& file : files) {
         engine_core::Script& script = game.create<engine_core::Script>();
         game.set_name(script.id(), file.name);
         script.set_source(file.source);
+        game.set_parent(script.id(), core);
         loaded_.push_back(script.id());
-        if (scripts.register_plugin(script.id())) {
+    }
+    scripts.start_core_scripts();
+    std::size_t registered = 0;
+    for (engine_core::InstanceId id : loaded_) {
+        if (scripts.is_plugin(id)) {
             ++registered;
         }
     }

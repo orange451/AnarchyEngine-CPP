@@ -651,7 +651,6 @@ void IdeLayout::new_place() {
     begin_scratch();
     forget_conflicts();
     mark_saved();
-    load_plugins();
     show_toast("New place");
 }
 
@@ -711,7 +710,6 @@ void IdeLayout::open_project_at(const std::filesystem::path& root) {
     end_scratch();
     forget_conflicts();
     mark_saved();
-    load_plugins();
     show_toast("Opened " + project_->name());
 }
 

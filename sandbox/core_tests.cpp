@@ -10,6 +10,7 @@
 #include "SceneService.hpp"
 #include "Script.hpp"
 #include "SnapshotPump.hpp"
+#include "ide/PluginLoader.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -364,4 +365,23 @@ TEST_CASE("CO8 a GameObject in Core has a snapshot row, and a PhysicsObject in C
     std::vector<InstanceId> bodies;
     game.physics_bodies(bodies);
     REQUIRE(bodies.empty());
+}
+
+TEST_CASE("CO10 the built-in plugins load into Core, and New and Open keep them", "[CO10][project]") {
+    ScriptRig rig;
+    TempDir dir;
+    engine_core::Project project = engine_core::Project::create(dir.path, rig.game);
+    rig.game.history().reset_waypoints();
+    ide::PluginLoader loader;
+    REQUIRE(loader.load(rig.game, rig.runtime, {ide::PluginFile{"Hello", "print('hello')"}}) == 1);
+    const InstanceId plugin = loader.loaded()[0];
+    REQUIRE(rig.game.parent(plugin) == rig.game.core());
+    REQUIRE(rig.runtime.is_plugin(plugin));
+    REQUIRE_FALSE(rig.game.history().can_undo().first);
+
+    engine_core::Project::reset_place(rig.game);
+    engine_core::Project reopened = engine_core::Project::load(dir.path, rig.game);
+    rig.frames(1);
+    REQUIRE(rig.game.alive(plugin));
+    REQUIRE(rig.runtime.is_plugin(plugin));
 }

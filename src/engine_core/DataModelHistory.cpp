@@ -54,10 +54,10 @@ HistoryProp history_prop(Field field) {
     return HistoryProp::Name;
 }
 
+// Whether a mutator should build what history keeps: outside a recording it would only be dropped.
+bool capturing(const ChangeHistoryService* history) { return history != nullptr && history->wants_mutation(); }
+
 void note_property(ChangeHistoryService* history, InstanceId id, PropertyValue before, PropertyValue after) {
-    if (history == nullptr) {
-        return;
-    }
     Mutation mutation;
     mutation.kind = MutationKind::SetProperty;
     mutation.id = id;
@@ -70,6 +70,9 @@ void note_property(ChangeHistoryService* history, InstanceId id, PropertyValue b
 
 void DataModel::record_transform(InstanceId id, const Matrix4& before, const Matrix4& after) {
     mark_authored_dirty(id);
+    if (!capturing(state_->history.get())) {
+        return;
+    }
     note_property(state_->history.get(), id, value_transform(before), value_transform(after));
 }
 
@@ -78,6 +81,9 @@ void DataModel::record_bool(InstanceId id, Field field, bool before, bool after)
         return;
     }
     mark_authored_dirty(id);
+    if (!capturing(state_->history.get())) {
+        return;
+    }
     const HistoryProp prop = history_prop(field);
     note_property(state_->history.get(), id, value_flag(prop, before), value_flag(prop, after));
 }
@@ -87,6 +93,9 @@ void DataModel::record_string(InstanceId id, Field field, const std::string& bef
         return;
     }
     mark_authored_dirty(id);
+    if (!capturing(state_->history.get())) {
+        return;
+    }
     const HistoryProp prop = history_prop(field);
     note_property(state_->history.get(), id, value_text(prop, before), value_text(prop, after));
 }
@@ -94,13 +103,15 @@ void DataModel::record_string(InstanceId id, Field field, const std::string& bef
 void DataModel::note_property_change(std::string_view property, const LuaSlot& before, const LuaSlot& after) {
     mark_authored_dirty(id_);
     const std::uint32_t id = lua_property_id(property);
-    PropertyValue was;
-    was.prop = HistoryProp::Reflected;
-    was.property = id;
-    was.slot = before;
-    PropertyValue now = was;
-    now.slot = after;
-    note_property(state_->history.get(), id_, std::move(was), std::move(now));
+    if (capturing(state_->history.get())) {
+        PropertyValue was;
+        was.prop = HistoryProp::Reflected;
+        was.property = id;
+        was.slot = before;
+        PropertyValue now = was;
+        now.slot = after;
+        note_property(state_->history.get(), id_, std::move(was), std::move(now));
+    }
     emit_change(id_, Field::Reflected, current_origin(), id);
 }
 
@@ -156,7 +167,7 @@ void DataModel::record_parent(InstanceId id, InstanceId old_parent, InstanceId n
     mark_authored_dirty(id);
     mark_authored_dirty(old_parent);
     mark_authored_dirty(new_parent);
-    if (state_->history == nullptr) {
+    if (!capturing(state_->history.get())) {
         return;
     }
     Mutation mutation;
@@ -169,7 +180,7 @@ void DataModel::record_parent(InstanceId id, InstanceId old_parent, InstanceId n
 }
 
 void DataModel::record_created(InstanceId id) {
-    if (state_->history == nullptr || !state_->history->wants_mutation()) {
+    if (!capturing(state_->history.get())) {
         return;
     }
     Mutation mutation;

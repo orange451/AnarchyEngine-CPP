@@ -415,7 +415,8 @@ TEST_CASE("SS10 a place missing scene services loads with them made", "[SS10][pr
         const engine_core::DiskScan scan = project.scan_disk();
         REQUIRE(scan.conflicts.empty());
         REQUIRE_FALSE(scan.has_disk_changes);
-        REQUIRE(project.unsaved());
+        // A load that filled in what the files lacked opens clean; the next save still writes them.
+        REQUIRE_FALSE(project.unsaved());
         // Nothing is written until a save.
         REQUIRE_FALSE(fs::exists(dir.path / "src" / "Lighting.lighting.json"));
 

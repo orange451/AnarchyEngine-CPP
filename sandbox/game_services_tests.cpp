@@ -676,7 +676,8 @@ TEST_CASE("GS13 a place saved before Assets loads with the whole tree made", "[G
     REQUIRE(child_classes(game, 0) ==
             std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "Assets", "Core"});
     REQUIRE(child_classes(game, game.service("Assets")).size() == 5);
-    REQUIRE(project.unsaved());
+    // A load that filled in what the files lacked opens clean; the next save still writes them.
+    REQUIRE_FALSE(project.unsaved());
     REQUIRE_FALSE(std::filesystem::exists(dir.path / "src" / "Assets.assets"));
     project.save();
     REQUIRE(std::filesystem::exists(dir.path / "src" / "Assets.assets" / "Textures.textures.json"));

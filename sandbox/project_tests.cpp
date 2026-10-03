@@ -2205,8 +2205,9 @@ TEST_CASE("U1 unsaved follows edits and their undo", "[U1][disk][project]") {
     game.game_object(a)->set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
     end_step(game);
     REQUIRE(project.unsaved());
+    // Undoing an edit is itself a change since the last save.
     game.history().undo();
-    REQUIRE_FALSE(project.unsaved());
+    REQUIRE(project.unsaved());
 }
 
 TEST_CASE("U2 changes loaded from disk are not unsaved", "[U2][disk][project]") {
@@ -2219,6 +2220,48 @@ TEST_CASE("U2 changes loaded from disk are not unsaved", "[U2][disk][project]") 
     edit_key(dir.path / leaf(game, a), "Transform", translated(2, 2, 2));
     project.apply_disk();
     REQUIRE_FALSE(project.unsaved());
+    // Undoing what came from disk leaves the place different from disk.
+    REQUIRE(game.history().can_undo().second == "Changes from Disk");
+    game.history().undo();
+    REQUIRE(project.unsaved());
+}
+
+TEST_CASE("P24 changes from disk leave a dirty place dirty, and a save cleans it", "[P24][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
+    const InstanceId b = add_part(game, workspace_of(game), "B").id();
+    project.save();
+    REQUIRE_FALSE(project.unsaved());
+
+    begin_step(game, "Move");
+    game.game_object(b)->set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
+    end_step(game);
+    REQUIRE(project.unsaved());
+
+    edit_key(dir.path / leaf(game, a), "Transform", translated(2, 2, 2));
+    project.apply_disk();
+    REQUIRE(project.unsaved());
+
+    project.save();
+    REQUIRE_FALSE(project.unsaved());
+}
+
+TEST_CASE("P25 an edit to a script's Source alone dirties the place", "[P25][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::Script& script = add_script(game, workspace_of(game), "Main", "print(1)\n");
+    project.save();
+    REQUIRE_FALSE(project.unsaved());
+
+    begin_step(game, "Edit Script");
+    script.set_source("print(2)\n");
+    end_step(game);
+    REQUIRE(project.unsaved());
 }
 
 TEST_CASE("U3 a file only reformatted on disk is not unsaved", "[U3][disk][project]") {
@@ -2448,12 +2491,15 @@ TEST_CASE("P17 a save that fails partway leaves the last save on disk", "[P17][p
     REQUIRE(saved.count("src/Workspace.workspace/Model.b1/init.json") == 1);
     REQUIRE(saved.count("src/Workspace.workspace/Model.b1/Part.a1.json") == 1);
 
+    begin_step(game, "Edit");
     game.set_name(model, "Renamed");
+    end_step(game);
     // A folder where the new init.json's temporary file goes fails that one write,
     // after the save has already moved the child.
     const fs::path renamed = dir.path / "src" / kWorkspace / "Renamed.b1";
     fs::create_directories(renamed / "init.json.tmp");
     REQUIRE_THROWS_AS(project.save(), ProjectError);
+    REQUIRE(project.unsaved());
     std::vector<std::string> left;
     for (const fs::directory_entry& entry : fs::directory_iterator(renamed)) {
         left.push_back(entry.path().filename().generic_u8string());

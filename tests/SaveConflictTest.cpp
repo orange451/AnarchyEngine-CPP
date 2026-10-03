@@ -1,5 +1,6 @@
 #include "ide/IdeLayout.hpp"
 
+#include "ChangeHistoryService.hpp"
 #include "DataModel.hpp"
 #include "Engine.hpp"
 #include "GameObject.hpp"
@@ -13,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <string>
 
 namespace {
@@ -62,8 +64,13 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     // Moves a part in the studio to (0.25, 0.5, z).
     auto move_part = [&layout](const char* name, float z) {
         layout.simulation().on_simulation([name, z](engine_core::DataModel& game) {
+            // As an edit made in the studio: one undo step, so there is something to save.
+            const std::optional<std::string> step = game.history().try_begin_recording("Move");
             game.game_object(game.find_first_child(game.scene_service("Workspace"), name))
                 ->set_position(engine_core::Vec3{0.25f, 0.5f, z});
+            if (step) {
+                game.history().finish_recording(*step, engine_core::FinishRecordingOperation::Commit);
+            }
         });
     };
     // Something outside the studio changes a property in a file.

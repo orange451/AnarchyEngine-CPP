@@ -290,7 +290,7 @@ public:
     // Keys the class does not know. A project load fills them; save writes them back.
     // Empty when id is dead.
     const PropertyBag& extra_properties(InstanceId id) const;
-    // Marks the instance dirty. Not recorded in undo history.
+    // Marks the instance and the place dirty. Not an undo step.
     void set_extra_property(InstanceId id, std::string key, JsonValue value);
     void erase_extra_property(InstanceId id, std::string_view key);
 
@@ -492,6 +492,11 @@ protected:
     virtual bool has_visual_row() const { return false; }
     // Tells the render snapshot that fields of this instance's row changed.
     void note_visual_row(VisualField fields);
+
+    // A write that changes what a save writes but is never an undo step: it
+    // marks the save set and the place dirty. Not during play, not in Core,
+    // and the place only while history is on.
+    void note_unrecorded_edit(InstanceId id);
 
     // Successful mutators record here. Equal values return before these run.
     // Velocity is not recorded. Undo application does not record.

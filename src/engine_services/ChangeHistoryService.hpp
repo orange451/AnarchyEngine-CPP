@@ -4,6 +4,7 @@
 #include "PropertyBag.hpp"
 #include "types.hpp"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -138,6 +139,15 @@ public:
     void set_waypoint(std::string name);
     // Clears the undo and redo stacks and drops an open recording without reverting.
     void reset_waypoints();
+    // True when the place has changed since mark_saved: a mutation entered an
+    // edit recording that was not then cancelled or emptied, an undo or redo
+    // ran on the edit stack, or a writer called mark_dirty. Play does not
+    // dirty: Stop puts the place back. Any thread may read it.
+    bool dirty() const { return dirty_.load(std::memory_order_relaxed); }
+    // For a write that changes what a save writes without entering history.
+    void mark_dirty();
+    // The place is what is on disk: a save wrote every file, or it was just built from disk.
+    void mark_saved() { dirty_.store(false, std::memory_order_relaxed); }
 
     // The most waypoints each undo stack keeps, and roughly how many bytes of
     // recorded state. The oldest go first; the newest always stays.
@@ -188,6 +198,8 @@ private:
         std::string name;
         std::string display_name;
         std::vector<Mutation> mutations;
+        // dirty() when it opened, which a cancel or an empty commit puts back.
+        bool was_dirty = false;
     };
 
     struct Waypoint {
@@ -226,6 +238,7 @@ private:
     // revivable_slots as of the last change to the stacks or the open recording.
     mutable std::unordered_set<std::uint32_t> named_slots_;
     mutable bool named_slots_stale_ = true;
+    std::atomic<bool> dirty_{false};
 };
 
 }  // namespace engine_core

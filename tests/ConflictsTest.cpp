@@ -4,6 +4,7 @@
 #include "ide/IdePane.hpp"
 #include "SelectionService.hpp"
 
+#include "ChangeHistoryService.hpp"
 #include "DataModel.hpp"
 #include "Engine.hpp"
 #include "GameObject.hpp"
@@ -20,6 +21,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -244,8 +246,13 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     // Moves Part in the studio.
     auto move_part = [&layout](float x, float y, float z) {
         layout.simulation().on_simulation([x, y, z](engine_core::DataModel& game) {
+            // As an edit made in the studio: one undo step, so there is something to save.
+            const std::optional<std::string> step = game.history().try_begin_recording("Move");
             game.game_object(game.find_first_child(game.scene_service("Workspace"), "Part"))
                 ->set_position(engine_core::Vec3{x, y, z});
+            if (step) {
+                game.history().finish_recording(*step, engine_core::FinishRecordingOperation::Commit);
+            }
         });
     };
     auto count_shown = [&scene] {

@@ -1594,7 +1594,7 @@ void DataModel::set_archivable(InstanceId id, bool archivable) {
     }
     object->archivable_ = archivable;
     // What a save writes changed: the parent's folder gains or loses it.
-    mark_authored_dirty(id);
+    note_unrecorded_edit(id);
     mark_authored_dirty(parent(id));
     object->emit_property("Archivable");
 }
@@ -1907,7 +1907,7 @@ void DataModel::set_guid(InstanceId id, std::string guid) {
         return;
     }
     object->guid_ = std::move(guid);
-    mark_authored_dirty(id);
+    note_unrecorded_edit(id);
 }
 
 std::optional<InstanceId> DataModel::find_guid(std::string_view guid) const {
@@ -1958,13 +1958,13 @@ void DataModel::set_extra_property(InstanceId id, std::string key, JsonValue val
         }
     }
     bag_set(object->extras_, std::move(key), std::move(value));
-    mark_authored_dirty(id);
+    note_unrecorded_edit(id);
 }
 
 void DataModel::erase_extra_property(InstanceId id, std::string_view key) {
     DataModel* object = id == 0 ? state_->root : instance(id);
     if (object != nullptr && bag_erase(object->extras_, key)) {
-        mark_authored_dirty(id);
+        note_unrecorded_edit(id);
     }
 }
 
@@ -2139,6 +2139,16 @@ void DataModel::mark_authored_dirty(InstanceId id) {
     }
     state_->dirty.insert(id);
     state_->revision.fetch_add(1, std::memory_order_relaxed);
+}
+
+void DataModel::note_unrecorded_edit(InstanceId id) {
+    mark_authored_dirty(id);
+    // History is off while a place is built, as Game's services are given their GUIDs.
+    if (id == kNoParent || state_->simulation_running || core_holds(id) || !state_->history ||
+        !state_->history->enabled()) {
+        return;
+    }
+    state_->history->mark_dirty();
 }
 
 std::uint64_t DataModel::authored_revision() const { return state_->revision.load(std::memory_order_relaxed); }

@@ -741,3 +741,110 @@ TEST_CASE("H28 undo brings back a deleted instance that a write outside any reco
     REQUIRE(game.alive(other));
     REQUIRE(engine_core::id_slot(other) != engine_core::id_slot(id));
 }
+
+TEST_CASE("H29 the place is dirty once a recording holds a change, and after undo and redo", "[H29][history]") {
+    engine_core::Game game;
+    engine_core::GameObject& part = make_part(game, "Brick");
+    game.history().reset_waypoints();
+    REQUIRE_FALSE(game.history().dirty());
+
+    // A write no recording covers does not dirty.
+    game.set_name(part.id(), "Loose");
+    REQUIRE_FALSE(game.history().dirty());
+
+    begin_step(game, "Rename");
+    game.set_name(part.id(), "A");
+    end_step(game);
+    REQUIRE(game.history().dirty());
+
+    game.history().mark_saved();
+    REQUIRE_FALSE(game.history().dirty());
+    game.history().undo();
+    REQUIRE(game.history().dirty());
+
+    game.history().mark_saved();
+    game.history().redo();
+    REQUIRE(game.history().dirty());
+}
+
+TEST_CASE("H30 a cancelled recording, and one that commits nothing, leave the place clean", "[H30][history]") {
+    engine_core::Game game;
+    engine_core::GameObject& part = make_part(game, "Brick");
+    game.history().reset_waypoints();
+
+    const std::optional<std::string> cancelled = game.history().try_begin_recording("Rename");
+    game.set_name(part.id(), "A");
+    game.history().finish_recording(*cancelled, engine_core::FinishRecordingOperation::Cancel);
+    REQUIRE(game.name(part.id()) == "Brick");
+    REQUIRE_FALSE(game.history().dirty());
+
+    begin_step(game, "Nothing");
+    end_step(game);
+    REQUIRE_FALSE(game.history().dirty());
+
+    // There and back coalesces to no change at all.
+    begin_step(game, "Rename");
+    game.set_name(part.id(), "A");
+    game.set_name(part.id(), "Brick");
+    end_step(game);
+    REQUIRE_FALSE(game.history().can_undo().first);
+    REQUIRE_FALSE(game.history().dirty());
+}
+
+TEST_CASE("H31 a recording left open still makes the place dirty", "[H31][history]") {
+    engine_core::Game game;
+    engine_core::GameObject& part = make_part(game, "Brick");
+    game.history().reset_waypoints();
+
+    // As a plugin that errors after TryBeginRecording leaves it.
+    REQUIRE(game.history().try_begin_recording("Stuck").has_value());
+    game.set_name(part.id(), "A");
+    REQUIRE(game.history().dirty());
+}
+
+TEST_CASE("H32 a play recording and Stop do not dirty the place", "[H32][history]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& part = make_part(game, "Brick");
+    game.history().reset_waypoints();
+    game.capture_place();
+
+    game.start_simulation();
+    begin_step(game, "Play Move");
+    part.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
+    end_step(game);
+    REQUIRE_FALSE(game.history().dirty());
+    game.history().undo();
+    REQUIRE_FALSE(game.history().dirty());
+
+    game.stop_simulation();
+    REQUIRE_FALSE(game.history().dirty());
+}
+
+TEST_CASE("H33 writes that change a file without entering history dirty the place", "[H33][history]") {
+    engine_core::Game game;
+    engine_core::GameObject& part = make_part(game, "Brick");
+    game.history().reset_waypoints();
+
+    game.set_extra_property(part.id(), "Note", engine_core::JsonValue::string("kept"));
+    REQUIRE(game.history().dirty());
+
+    game.history().mark_saved();
+    game.erase_extra_property(part.id(), "Note");
+    REQUIRE(game.history().dirty());
+
+    game.history().mark_saved();
+    game.set_guid(part.id(), "abcd");
+    REQUIRE(game.history().dirty());
+
+    game.history().mark_saved();
+    game.set_archivable(part.id(), false);
+    REQUIRE(game.history().dirty());
+
+    // Core is not the place.
+    game.history().mark_saved();
+    engine_core::GameObject& tool = game.create<engine_core::GameObject>();
+    game.set_parent(tool.id(), game.core());
+    game.set_extra_property(tool.id(), "Note", engine_core::JsonValue::string("x"));
+    REQUIRE_FALSE(game.history().dirty());
+}

@@ -1072,6 +1072,7 @@ public:
         world_.capture_place();
         world_.history().reset_waypoints();
         world_.clear_authored_dirty();
+        world_.history().mark_saved();
         // The old place's instances are gone. A new one may reuse their GUIDs,
         // so what named them, as the Move tool's Adornee does, must not follow.
         world_.selection().set({});
@@ -1478,35 +1479,7 @@ std::uint64_t Project::place_fingerprint(const DataModel& game) {
     return hash;
 }
 
-bool Project::unsaved() const {
-    const std::vector<AuthoredNode> tree = game_->authored_tree(nullptr);
-    std::map<std::string, Files> next;
-    try {
-        next = plan_files(tree, src_, files_);
-    } catch (const ProjectError&) {
-        return true;
-    }
-    if (next.size() != files_.size()) {
-        return true;
-    }
-    for (const auto& [guid, planned] : next) {
-        const auto base = files_.find(guid);
-        if (base == files_.end()) {
-            return true;
-        }
-        const Files& was = base->second;
-        if (planned.props_path != was.props_path || planned.has_source != was.has_source ||
-            planned.source_path != was.source_path || planned.source_bytes != was.source_bytes) {
-            return true;
-        }
-        for (const KeyMerge& merged : merge_keys(was.props, was.props, planned.props)) {
-            if (merged.change == KeyChange::StudioOnly) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
+bool Project::unsaved() const { return game_->history().dirty(); }
 
 void Project::reset_place(DataModel& game) {
     Rebuild rebuild(game);
@@ -2315,10 +2288,15 @@ DiskScan Project::apply_disk(const std::vector<DiskChoice>& choices) {
         settle(compared, *conflict);
     }
     if (!compared.actions.empty()) {
+        // What comes from disk is on disk: applying it leaves the place as dirty as it was.
+        const bool was_dirty = world.history().dirty();
         const std::optional<std::string> recording = world.history().try_begin_recording("Changes from Disk");
         apply_changes(compared, out.loaded);
         if (recording) {
             world.history().finish_recording(*recording, FinishRecordingOperation::Commit);
+        }
+        if (!was_dirty) {
+            world.history().mark_saved();
         }
         world.capture_place();
     }
@@ -2929,6 +2907,9 @@ void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {
     if (!playing) {
         world.clear_authored_dirty();
     }
+    // Every file is written. During play that is the place as it was at Play,
+    // which is all the edit stack has changed.
+    world.history().mark_saved();
     std::sort(report.written.begin(), report.written.end());
     std::sort(report.moved.begin(), report.moved.end());
     std::sort(report.removed.begin(), report.removed.end());

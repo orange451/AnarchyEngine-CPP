@@ -93,6 +93,7 @@ std::optional<std::string> ChangeHistoryService::try_begin_recording(std::string
     recording.id = std::to_string(next_id_++);
     recording.name = std::move(name);
     recording.display_name = std::move(display_name);
+    recording.was_dirty = dirty();
     const std::string started_name = recording.name;
     const std::string started_display = recording.display_name;
     const std::string id = recording.id;
@@ -190,6 +191,18 @@ void ChangeHistoryService::note(Mutation mutation) {
         return;
     }
     push_or_coalesce(std::move(mutation));
+    // Now, not at the commit: a recording left open must not hide an edit from the save prompt.
+    if (!playing()) {
+        dirty_.store(true, std::memory_order_relaxed);
+    }
+}
+
+void ChangeHistoryService::mark_dirty() {
+    dirty_.store(true, std::memory_order_relaxed);
+    // What a cancel reverts does not include this write, so it must not put the flag back.
+    if (recording_) {
+        recording_->was_dirty = true;
+    }
 }
 
 void ChangeHistoryService::apply_waypoint(Waypoint& waypoint, bool inverse) {
@@ -225,10 +238,14 @@ void ChangeHistoryService::finish_recording(std::string id, FinishRecordingOpera
     Recording recording = std::move(*recording_);
     recording_.reset();
     named_slots_stale_ = true;
+    const bool edit = !playing();
     if (op == FinishRecordingOperation::Cancel) {
         Waypoint inverse;
         inverse.mutations = std::move(recording.mutations);
         apply_waypoint(inverse, true);
+        if (edit && !recording.was_dirty) {
+            mark_saved();
+        }
     } else if (!recording.mutations.empty()) {
         Waypoint waypoint;
         waypoint.name = recording.name;
@@ -242,6 +259,8 @@ void ChangeHistoryService::finish_recording(std::string id, FinishRecordingOpera
         undo.push_back(std::move(waypoint));
         redo_stack().clear();
         trim(undo);
+    } else if (edit && !recording.was_dirty) {
+        mark_saved();
     }
     on_recording_finished.emit(recording.name, recording.display_name, recording.id, op);
 }
@@ -314,6 +333,9 @@ void ChangeHistoryService::step(bool undoing) {
     apply_waypoint(waypoint, undoing);
     std::vector<Waypoint>& to = undoing ? redo_stack() : undo_stack();
     to.push_back(std::move(waypoint));
+    if (!playing()) {
+        dirty_.store(true, std::memory_order_relaxed);
+    }
     (undoing ? on_undo : on_redo).emit(name);
 }
 

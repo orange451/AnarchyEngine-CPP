@@ -8,14 +8,14 @@ ifeq ($(OS),Windows_NT)
 # Visual Studio builds every configuration into its own folder, picked at build time.
 BIN_DIR := $(BUILD_DIR)/$(CONFIG)
 EXE := .exe
-APP_BIN := $(BIN_DIR)/AnarchyEngine-CPP$(EXE)
+APP_BIN := $(BIN_DIR)/AnarchyStudio$(EXE)
 else
 BIN_DIR := $(BUILD_DIR)
 EXE :=
 ifeq ($(shell uname),Darwin)
-APP_BIN := $(BUILD_DIR)/AnarchyEngine-CPP.app/Contents/MacOS/AnarchyEngine-CPP
+APP_BIN := $(BUILD_DIR)/AnarchyStudio.app/Contents/MacOS/AnarchyStudio
 else
-APP_BIN := $(BUILD_DIR)/AnarchyEngine-CPP
+APP_BIN := $(BUILD_DIR)/AnarchyStudio
 endif
 endif
 

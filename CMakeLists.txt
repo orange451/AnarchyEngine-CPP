@@ -130,7 +130,7 @@ add_library(studio STATIC ${STUDIO_SOURCES})
 
 # MACOSX_BUNDLE is ignored on Windows and Linux, where this stays a normal executable.
 # GLFW comes in with JadeFX. That library creates the window.
-add_executable(AnarchyEngine-CPP MACOSX_BUNDLE
+add_executable(AnarchyStudio MACOSX_BUNDLE
     src/main.cpp
 )
 
@@ -141,16 +141,16 @@ if(WIN32)
     # Written with an absolute path so rc and windres find the icon from any directory.
     set(ANARCHY_ICON_ICO "${ANARCHY_ICON_DIR}/anarchy.ico")
     configure_file("${ANARCHY_ICON_DIR}/anarchy.rc.in" "${CMAKE_CURRENT_BINARY_DIR}/anarchy.rc" @ONLY)
-    target_sources(AnarchyEngine-CPP PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/anarchy.rc")
+    target_sources(AnarchyStudio PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/anarchy.rc")
     # A GUI-subsystem program, so launching the IDE opens no console window.
     # MSVC looks for WinMain there; the entry point keeps the ordinary main().
-    set_target_properties(AnarchyEngine-CPP PROPERTIES WIN32_EXECUTABLE TRUE)
+    set_target_properties(AnarchyStudio PROPERTIES WIN32_EXECUTABLE TRUE)
     if(MSVC)
-        target_link_options(AnarchyEngine-CPP PRIVATE /ENTRY:mainCRTStartup)
+        target_link_options(AnarchyStudio PRIVATE /ENTRY:mainCRTStartup)
     endif()
 elseif(APPLE)
     # Lands in Contents/Resources, where CFBundleIconFile looks.
-    target_sources(AnarchyEngine-CPP PRIVATE "${ANARCHY_ICON_DIR}/anarchy.icns")
+    target_sources(AnarchyStudio PRIVATE "${ANARCHY_ICON_DIR}/anarchy.icns")
     set_source_files_properties("${ANARCHY_ICON_DIR}/anarchy.icns" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 endif()
 
@@ -162,7 +162,7 @@ add_executable(AnarchyPlayer MACOSX_BUNDLE
     src/player/main.cpp
 )
 # The studio exports with the player beside it, so building the studio builds both.
-add_dependencies(AnarchyEngine-CPP AnarchyPlayer)
+add_dependencies(AnarchyStudio AnarchyPlayer)
 if(WIN32)
     target_sources(AnarchyPlayer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/anarchy.rc")
     # No console window opens behind a game.
@@ -575,7 +575,7 @@ if(WIN32)
 endif()
 target_link_libraries(studio PUBLIC studio_core jadefx amesh)
 
-target_link_libraries(AnarchyEngine-CPP PRIVATE studio)
+target_link_libraries(AnarchyStudio PRIVATE studio)
 target_link_libraries(AnarchyPlayer PRIVATE studio)
 
 # AMESH, the baked mesh format. Reading, writing, and validation need no
@@ -797,7 +797,7 @@ function(anarchy_warnings target)
         target_compile_options(${target} PRIVATE -Wall -Wextra)
     endif()
 endfunction()
-foreach(target IN ITEMS studio_core studio AnarchyEngine-CPP AnarchyPlayer engine-tests shell-tests properties-tests console-tests
+foreach(target IN ITEMS studio_core studio AnarchyStudio AnarchyPlayer engine-tests shell-tests properties-tests console-tests
                         studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests assets-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
                         sandbox amesh amesh-tests amesh-gl-check scene-render-check ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
@@ -815,9 +815,9 @@ foreach(vendored IN ITEMS Luau.Common Luau.Ast Luau.Compiler Luau.VM Luau.Analys
 endforeach()
 
 if(APPLE)
-    set_target_properties(AnarchyEngine-CPP PROPERTIES
-        OUTPUT_NAME "AnarchyEngine-CPP"
-        MACOSX_BUNDLE_BUNDLE_NAME "AnarchyEngine-CPP"
+    set_target_properties(AnarchyStudio PROPERTIES
+        OUTPUT_NAME "AnarchyStudio"
+        MACOSX_BUNDLE_BUNDLE_NAME "AnarchyStudio"
         MACOSX_BUNDLE_GUI_IDENTIFIER "local.anarchyengine-cpp"
         MACOSX_BUNDLE_BUNDLE_VERSION "1.0"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
@@ -855,28 +855,28 @@ if(APPLE)
     # Contents/Resources/shaders. JadeFX's interface shaders join that directory,
     # and the signed player goes in beside them, where Export Game finds it.
     add_custom_target(bundle-resources ALL
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyEngine-CPP>/Resources"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyStudio>/Resources"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/resources"
-            "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyEngine-CPP>/Resources"
+            "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyStudio>/Resources"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${JADEFX_SOURCE_ROOT}/res/shaders"
-            "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyEngine-CPP>/Resources/shaders"
-        COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyEngine-CPP>/Resources/AnarchyPlayer.app"
+            "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyStudio>/Resources/shaders"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyStudio>/Resources/AnarchyPlayer.app"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "$<TARGET_BUNDLE_DIR:AnarchyPlayer>"
-            "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyEngine-CPP>/Resources/AnarchyPlayer.app"
-        COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:AnarchyEngine-CPP>"
-        DEPENDS AnarchyEngine-CPP bundle-player
+            "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyStudio>/Resources/AnarchyPlayer.app"
+        COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:AnarchyStudio>"
+        DEPENDS AnarchyStudio bundle-player
         VERBATIM
     )
 else()
-    add_custom_command(TARGET AnarchyEngine-CPP POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:AnarchyEngine-CPP>/resources"
+    add_custom_command(TARGET AnarchyStudio POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:AnarchyStudio>/resources"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_CURRENT_SOURCE_DIR}/resources" "$<TARGET_FILE_DIR:AnarchyEngine-CPP>/resources"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources" "$<TARGET_FILE_DIR:AnarchyStudio>/resources"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${JADEFX_SOURCE_ROOT}/res/shaders" "$<TARGET_FILE_DIR:AnarchyEngine-CPP>/resources/shaders"
+            "${JADEFX_SOURCE_ROOT}/res/shaders" "$<TARGET_FILE_DIR:AnarchyStudio>/resources/shaders"
         VERBATIM
     )
 endif()

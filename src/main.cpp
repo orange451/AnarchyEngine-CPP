@@ -41,7 +41,7 @@ public:
         // Setting the scene sizes the window to it, so the saved size goes on after.
         stage.setScene(std::move(scene));
         layout_->attachFrame(stage);
-        // AnarchyEngine-CPP <folder> opens that project on the first frame.
+        // AnarchyStudio <folder> opens that project on the first frame.
         // Finder may pass -psn_ arguments; flags are not folders.
         if (argc > 1 && argv[1] != nullptr && argv[1][0] != '-') {
             const std::filesystem::path root(argv[1]);

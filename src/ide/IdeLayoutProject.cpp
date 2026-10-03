@@ -659,7 +659,7 @@ void IdeLayout::open_project() {
     confirm_discard("Save changes before opening another project?", [this] {
         jadefx::FolderDialogOptions options;
         options.title = "Open Project";
-        pick_folder(std::move(options), " You can also start the studio with a project folder: AnarchyEngine-CPP <folder>",
+        pick_folder(std::move(options), " You can also start the studio with a project folder: AnarchyStudio <folder>",
                     [this](const std::filesystem::path& root) { open_project_at(root); });
     });
 }

@@ -1697,6 +1697,65 @@ TEST_CASE("A43 a playtest's tree changes leave the authored results as they were
     }
 }
 
+TEST_CASE("A44 a class registry change rechecks every script in the place once", "[A44]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::ModuleScript& util = add_module(rig.game, "Util",
+                                                 "--!strict\n"
+                                                 "local Util = {}\n"
+                                                 "local wrong: number = \"x\"\n"
+                                                 "function Util.add(a: number, b: number): number\n"
+                                                 "    return a + b + wrong\n"
+                                                 "end\n"
+                                                 "return Util\n");
+    engine_core::Script& user = add_script(rig.game, "User",
+                                           "--!strict\nlocal Util = require(workspace.Util)\n"
+                                           "print(Util.add(1, \"two\"))\nprint(undefinedThing)\n");
+    engine_core::Script& plain = add_script(rig.game, "Plain", "print(\"hi\")\n");
+    engine_core::Script& doomed = add_script(rig.game, "Doomed", "local x =\n");
+    settle(analysis);
+    const std::vector<engine_core::InstanceId> kept{util.id(), user.id(), plain.id()};
+    std::vector<std::string> before;
+    std::vector<std::uint64_t> checks;
+    for (engine_core::InstanceId id : kept) {
+        before.push_back(dump(analysis.diagnostics(id)));
+        checks.push_back(analysis.checks(id));
+    }
+    REQUIRE(has_code(analysis.diagnostics(util.id()), "Type"));
+    REQUIRE(has_code(analysis.diagnostics(user.id()), "Type"));
+    REQUIRE(has_code(analysis.diagnostics(user.id()), "Lint/UnknownGlobal"));
+    REQUIRE(analysis.diagnostics(plain.id()).empty());
+    const engine_core::InstanceId doomed_id = doomed.id();
+    const std::uint64_t doomed_checks = analysis.checks(doomed_id);
+    REQUIRE(has_code(analysis.diagnostics(doomed_id), "Syntax"));
+
+    // The editor checker reads the registry once, when it starts. An answer
+    // from it means it has, so nothing reads the registry while it changes.
+    const engine_core::LuauFacts asked = analysis.luau_facts(completion_nodes(rig.game, plain.id(), plain.source()),
+                                                             plain.id(), plain.source(), 0, {}, std::chrono::seconds(20));
+    REQUIRE(asked.ran);
+
+    // Destroyed with no pump, so the last tree the checker diffed still holds it.
+    rig.game.destroy(doomed_id);
+    const std::uint64_t revision = engine_core::lua_registry_revision();
+    engine_core::register_lua_class("RegistryProbe", "DataModel", nullptr, 0);
+    REQUIRE(engine_core::lua_registry_revision() != revision);
+    // A registry change queues nothing by itself. The next check of any script
+    // rebuilds the checker, and the whole place is checked against it.
+    plain.set_source("print(\"hi\")\n\n");
+    settle(analysis);
+
+    for (std::size_t at = 0; at < kept.size(); ++at) {
+        INFO(rig.game.name(kept[at]));
+        REQUIRE(analysis.checks(kept[at]) > checks[at]);
+        REQUIRE(dump(analysis.diagnostics(kept[at])) == before[at]);
+    }
+    REQUIRE(analysis.checks(doomed_id) == doomed_checks);
+    REQUIRE_FALSE(analysis.analyzed_source(doomed_id).has_value());
+    REQUIRE(analysis.diagnostics(doomed_id).empty());
+    REQUIRE(analysis.cached_modules() == 3);
+}
+
 namespace {
 
 double settle_ms(engine_core::ScriptAnalysis& analysis) {

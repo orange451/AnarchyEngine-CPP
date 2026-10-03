@@ -10,6 +10,7 @@
 #include "Light.hpp"
 #include "PhysicsObject.hpp"
 #include "SceneService.hpp"
+#include "SelectionService.hpp"
 #include "SnapshotPump.hpp"
 #include "UserInputService.hpp"
 #include "Matrix4.hpp"
@@ -47,13 +48,15 @@ engine_core::DraggerFrame world_frame(engine_core::Vec3 origin) {
 bool close(float a, float b, float tolerance = 1e-3f) { return std::abs(a - b) <= tolerance; }
 
 // A camera at the origin looking down -Z with a 90 degree view, 200 x 200 points,
-// and a part at (0, 0, -10) with a Dragger under it. The X arrow runs along
-// screen y = 100 from x = 100 to 200, and 20 points drag it 2 studs.
+// a Dragger at (0, 0, -10), and a part beside it for listeners to move. The X
+// arrow runs along screen y = 100 from x = 100 to 200, and 20 points drag 2 studs.
 struct DragRig {
     ScriptRig rig;
     InstanceId camera = 0;
     InstanceId part = 0;
     InstanceId dragger = 0;
+    // What Dragged reported, in order: the X of each offset.
+    std::vector<float> offsets;
 
     DragRig() {
         engine_core::DataModel& game = rig.game;
@@ -63,10 +66,9 @@ struct DragRig {
         made.set_field_of_view(90);
         made.set_viewport_size(engine_core::Vec2{200, 200});
         workspace().set_current_camera(camera);
-        part = add_part(game.scene_service("Workspace"), engine_core::matrix4_translation(0, 0, -10));
-        engine_core::Dragger& handles = game.create<engine_core::Dragger>();
-        dragger = handles.id();
-        game.set_parent(dragger, part);
+        part = add_part(game.scene_service("Workspace"), engine_core::matrix4_translation(0, 5, -10));
+        rig.game.set_name(part, "Part");
+        dragger = add_dragger(game.scene_service("Workspace"), engine_core::matrix4_translation(0, 0, -10));
         game.history().end_gesture();
         game.history().reset_waypoints();
     }
@@ -80,7 +82,22 @@ struct DragRig {
         made.set_transform(transform);
         return made.id();
     }
-    engine_core::Matrix4 transform(InstanceId id) { return rig.game.game_object(id)->transform(); }
+    InstanceId add_dragger(InstanceId parent, const engine_core::Matrix4& transform) {
+        engine_core::Dragger& made = rig.game.create<engine_core::Dragger>();
+        rig.game.set_parent(made.id(), parent);
+        REQUIRE_FALSE(made.set_transform(transform).has_value());
+        return made.id();
+    }
+    // Records each Dragged offset's X into offsets.
+    void listen(InstanceId id) {
+        rig.game.event_signal(id, "Dragged").connect([this](InstanceId, engine_core::Field) {
+            const engine_core::EventArgs* args = rig.game.events().current_args();
+            offsets.push_back((*args)[1].vec.x);
+        });
+    }
+    engine_core::Matrix4 transform(InstanceId id) {
+        return dynamic_cast<engine_core::PVInstance*>(rig.game.instance(id))->transform();
+    }
     engine_core::Dragger& handles() { return *dynamic_cast<engine_core::Dragger*>(rig.game.instance(dragger)); }
 
     // One step: in play, the input is dispatched before PreAnimation; in edit, by the tool step.
@@ -104,7 +121,6 @@ struct DragRig {
         step();
     }
 };
-
 }  // namespace
 
 TEST_CASE("VP1 Camera.ViewportSize is read-only to scripts, unsaved, and not undone", "[VP1]") {
@@ -235,59 +251,30 @@ TEST_CASE("DR8 a ray along the axis gives no offset, and nothing is NaN", "[DR8]
     REQUIRE_FALSE(engine_core::drag_offset(start, view, {100, 50}, 0).has_value());
 }
 
-TEST_CASE("DR9 a Dragger binds to its Adornee or its PVInstance parent under game, and to nothing else", "[DR9]") {
-    SimRole role;
-    engine_core::Game game;
-    const InstanceId workspace = game.scene_service("Workspace");
-    engine_core::GameObject& part = game.create_game_object();
-    game.set_parent(part.id(), workspace);
-    engine_core::Dragger& dragger = game.create<engine_core::Dragger>();
-    REQUIRE(dragger.target() == 0);
-    game.set_parent(dragger.id(), part.id());
-    REQUIRE(dragger.target() == part.id());
-
-    engine_core::Folder& folder = game.create<engine_core::Folder>();
-    game.set_parent(folder.id(), workspace);
-    game.set_parent(dragger.id(), folder.id());
-    REQUIRE(dragger.target() == 0);
-    engine_core::LuaSlot adornee;
-    adornee.kind = engine_core::LuaSlot::Kind::Instance;
-    adornee.id = part.id();
-    REQUIRE_FALSE(dragger.set_adornee(adornee).has_value());
-    REQUIRE(dragger.target() == part.id());
-
-    // A target that left game binds nothing.
-    game.set_parent(part.id(), engine_core::DataModel::kNoParent);
-    REQUIRE(dragger.target() == 0);
-
-    engine_core::DirectionalLight& sun = game.create<engine_core::DirectionalLight>();
-    game.set_parent(sun.id(), game.scene_service("Lighting"));
-    engine_core::Dragger& on_sun = game.create<engine_core::Dragger>();
-    game.set_parent(on_sun.id(), sun.id());
-    REQUIRE(on_sun.target() == 0);
-}
-
-TEST_CASE("DR21 a PointLight and a SpotLight can be dragged", "[DR21]") {
-    SimRole role;
-    engine_core::Game game;
-    for (int kind = 0; kind < 2; ++kind) {
-        engine_core::DataModel& light = kind == 0 ? static_cast<engine_core::DataModel&>(game.create<engine_core::PointLight>())
-                                                  : static_cast<engine_core::DataModel&>(game.create<engine_core::SpotLight>());
-        game.set_parent(light.id(), game.scene_service("Workspace"));
-        engine_core::Dragger& dragger = game.create<engine_core::Dragger>();
-        game.set_parent(dragger.id(), light.id());
-        REQUIRE(dragger.target() == light.id());
-    }
+TEST_CASE("DR9 a Dragger is a PVInstance, takes input anywhere under game, and none outside it", "[DR9]") {
+    DragRig drag;
+    REQUIRE(dynamic_cast<engine_core::PVInstance*>(drag.rig.game.instance(drag.dragger)) != nullptr);
+    engine_core::Folder& folder = drag.rig.game.create<engine_core::Folder>();
+    drag.rig.game.set_parent(folder.id(), drag.rig.game.scene_service("Storage"));
+    drag.rig.game.set_parent(drag.dragger, folder.id());
+    drag.press(150, 100);
+    REQUIRE(drag.handles().dragging());
+    drag.release(150, 100);
+    drag.rig.game.set_parent(drag.dragger, engine_core::DataModel::kNoParent);
+    drag.press(150, 100);
+    REQUIRE_FALSE(drag.handles().dragging());
 }
 
 TEST_CASE("DR18 a script makes a Dragger, and Space, Increment, and Dragging refuse what they must", "[DR18]") {
     ScriptRig rig;
     add_script(rig.game, "Probe", R"(
         local dragger = Instance.new("Dragger")
-        print("class", dragger.ClassName, dragger.Space == Enum.DraggerSpace.World, dragger.Increment, dragger.Dragging)
+        print("class", dragger.ClassName, dragger:IsA("PVInstance"), dragger.Space == Enum.DraggerSpace.World,
+            dragger.Increment, dragger.Dragging)
         dragger.Space = Enum.DraggerSpace.Local
         dragger.Increment = 0.5
-        print("set", dragger.Space == Enum.DraggerSpace.Local, dragger.Increment)
+        dragger.Transform = Matrix4.new(Vector3.new(1, 2, 3))
+        print("set", dragger.Space == Enum.DraggerSpace.Local, dragger.Increment, dragger.Transform.Position.Y)
         print("negative", pcall(function() dragger.Increment = -1 end))
         print("nan", pcall(function() dragger.Increment = 0 / 0 end))
         print("dragging", pcall(function() dragger.Dragging = true end))
@@ -297,8 +284,8 @@ TEST_CASE("DR18 a script makes a Dragger, and Space, Increment, and Dragging ref
     rig.frames(1);
     const auto output = rig.runtime.drain_output();
     INFO(rig.runtime.last_error());
-    REQUIRE(has_line(output, "class\tDragger\ttrue\t0\tfalse\n"));
-    REQUIRE(has_line(output, "set\ttrue\t0.5\n"));
+    REQUIRE(has_line(output, "class\tDragger\ttrue\ttrue\t0\tfalse\n"));
+    REQUIRE(has_line(output, "set\ttrue\t0.5\t2\n"));
     bool negative_refused = false;
     bool nan_refused = false;
     bool dragging_refused = false;
@@ -313,10 +300,10 @@ TEST_CASE("DR18 a script makes a Dragger, and Space, Increment, and Dragging ref
     REQUIRE(has_line(output, "handle\t5\n"));
 }
 
-TEST_CASE("DR10 pressing, moving, and releasing an arrow drags the target and fires the events in order", "[DR10]") {
+TEST_CASE("DR10 a drag fires its events in order, and moves nothing, not even the Dragger", "[DR10]") {
     DragRig drag;
     drag.rig.runtime.run_chunk(R"(
-        local dragger = workspace:FindFirstChild("GameObject"):FindFirstChild("Dragger")
+        local dragger = workspace:FindFirstChild("Dragger")
         dragger.DragBegan:Connect(function(handle) print("began", handle.Name, dragger.Dragging) end)
         dragger.Dragged:Connect(function(handle, offset) print("dragged", handle.Name, string.format("%.2f", offset.X), dragger.Dragging) end)
         dragger.DragEnded:Connect(function(handle) print("ended", handle.Name, dragger.Dragging) end)
@@ -328,7 +315,8 @@ TEST_CASE("DR10 pressing, moving, and releasing an arrow drags the target and fi
     drag.move(170, 100);
     drag.release(170, 100);
     REQUIRE_FALSE(drag.handles().dragging());
-    REQUIRE(close(drag.transform(drag.part).m[12], 2));
+    REQUIRE(close(drag.transform(drag.dragger).m[12], 0));
+    REQUIRE(close(drag.transform(drag.part).m[12], 0));
     std::vector<std::string> lines;
     for (const auto& line : drag.rig.runtime.drain_output().lines) {
         lines.push_back(line.text);
@@ -354,199 +342,32 @@ TEST_CASE("DR11 the records a drag uses are processed, and a press that misses i
     REQUIRE(processed == std::vector<bool>{false, true});
 }
 
-TEST_CASE("DR13b a PhysicsObject dragged in play ends with no velocity", "[DR13b]") {
-    DragRig drag;
-    engine_core::DataModel& game = drag.rig.game;
-    engine_core::PhysicsObject& body = game.create<engine_core::PhysicsObject>();
-    game.set_parent(body.id(), game.scene_service("Workspace"));
-    REQUIRE_FALSE(body.set_transform(engine_core::matrix4_translation(0, 0, -10)).has_value());
-    game.set_parent(drag.dragger, body.id());
-    game.capture_place();
-    game.start_simulation();
-    REQUIRE_FALSE(body.set_velocity({5, 0, 0}).has_value());
-    drag.press(150, 100);
-    drag.move(170, 100);
-    drag.release(170, 100);
-    REQUIRE(close(body.transform().m[12], 2));
-    REQUIRE((body.velocity().x == 0 && body.velocity().y == 0 && body.velocity().z == 0));
-}
-
-TEST_CASE("DR14 a drag ends when its target or its Dragger goes away", "[DR14]") {
-    DragRig drag;
-    drag.rig.runtime.run_chunk(R"(
-        local dragger = workspace:FindFirstChild("GameObject"):FindFirstChild("Dragger")
-        dragger.DragEnded:Connect(function(handle) print("ended", handle.Name) end)
-    )");
-    drag.rig.frames(1);
-    drag.press(150, 100);
-    // The Dragger moves under a Folder, where it has no target.
-    engine_core::Folder& folder = drag.rig.game.create<engine_core::Folder>();
-    drag.rig.game.set_parent(folder.id(), drag.rig.game.scene_service("Workspace"));
-    drag.rig.game.set_parent(drag.dragger, folder.id());
-    drag.move(170, 100);
-    REQUIRE_FALSE(drag.handles().dragging());
-    REQUIRE(close(drag.transform(drag.part).m[12], 0));
-    REQUIRE(has_line(drag.rig.runtime.drain_output(), "ended\tX\n"));
-
-    // Destroyed mid-drag: nothing moves after.
-    drag.rig.game.set_parent(drag.dragger, drag.part);
-    drag.press(150, 100);
-    drag.rig.game.destroy(drag.dragger);
-    drag.move(170, 100);
-    drag.release(170, 100);
-    REQUIRE(close(drag.transform(drag.part).m[12], 0));
-}
-
-TEST_CASE("DR15 of two Draggers whose arrows overlap, the nearer drags", "[DR15]") {
-    DragRig drag;
-    const InstanceId far = drag.add_part(drag.rig.game.scene_service("Workspace"), engine_core::matrix4_translation(0, 0, -20));
-    engine_core::Dragger& other = drag.rig.game.create<engine_core::Dragger>();
-    drag.rig.game.set_parent(other.id(), far);
-    drag.press(150, 100);
-    drag.move(170, 100);
-    drag.release(170, 100);
-    REQUIRE(close(drag.transform(drag.part).m[12], 2));
-    REQUIRE(close(drag.transform(far).m[12], 0));
-}
-
-TEST_CASE("DR16 a drag keeps the target's rotation and scale", "[DR16]") {
-    DragRig drag;
-    const engine_core::Matrix4 turned = engine_core::matrix4_multiply(
-        engine_core::matrix4_translation(0, 0, -10),
-        engine_core::matrix4_multiply(engine_core::matrix4_axis_angle({0, 1, 0}, 0.3), [] {
-            engine_core::Matrix4 scaled = engine_core::matrix4_identity();
-            scaled.m[0] = 2;
-            scaled.m[5] = 3;
-            scaled.m[10] = 4;
-            return scaled;
-        }()));
-    drag.rig.game.game_object(drag.part)->set_transform(turned);
-    drag.press(150, 100);
-    drag.move(170, 100);
-    drag.release(170, 100);
-    const engine_core::Matrix4 after = drag.transform(drag.part);
-    for (int i = 0; i < 12; ++i) {
-        REQUIRE(close(after.m[i], turned.m[i]));
-    }
-    REQUIRE(close(after.m[12], turned.m[12] + 2));
-}
-
-TEST_CASE("DR17 with no camera, no view size, or a locked pointer, input passes through", "[DR17]") {
-    for (int way = 0; way < 3; ++way) {
-        DragRig drag;
-        if (way == 0) {
-            drag.workspace().set_current_camera(0);
-        } else if (way == 1) {
-            dynamic_cast<engine_core::Camera*>(drag.rig.game.instance(drag.camera))->set_viewport_size({0, 0});
-        } else {
-            drag.rig.game.input().set_mouse_behavior(engine_core::UserInputService::kLockCurrentPosition);
-        }
-        drag.press(150, 100);
-        drag.move(170, 100);
-        drag.release(170, 100);
-        INFO(way);
-        REQUIRE_FALSE(drag.handles().dragging());
-        REQUIRE(close(drag.transform(drag.part).m[12], 0));
-    }
-}
-
-TEST_CASE("DR19 the offset stays total since the drag began when Increment changes mid-drag", "[DR19]") {
-    DragRig drag;
-    drag.press(150, 100);
-    drag.move(174, 100);
-    REQUIRE(close(drag.transform(drag.part).m[12], 2.4f));
-    REQUIRE_FALSE(drag.handles().set_increment(1).has_value());
-    drag.move(175, 100);
-    REQUIRE(close(drag.transform(drag.part).m[12], 3));
-    drag.release(175, 100);
-}
-
-TEST_CASE("DR12 in edit mode a drag is one undo step, and a press with no motion is none", "[DR12]") {
-    DragRig drag;
-    drag.press(150, 100);
-    drag.release(150, 100);
-    drag.rig.frames(1);
-    REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
-    REQUIRE_FALSE(drag.rig.game.history().is_recording_in_progress());
-
-    drag.press(150, 100);
-    drag.move(160, 100);
-    drag.move(170, 100);
-    drag.release(170, 100);
-    drag.rig.frames(1);
-    REQUIRE_FALSE(drag.rig.game.history().is_recording_in_progress());
-    REQUIRE(drag.rig.game.history().can_undo().first);
-    REQUIRE(drag.rig.game.history().can_undo().second == "Move");
-    drag.rig.game.history().undo();
-    REQUIRE(close(drag.transform(drag.part).m[12], 0));
-    REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
-}
-
-TEST_CASE("DR13 in play a drag records no history", "[DR13]") {
-    DragRig drag;
-    drag.rig.game.capture_place();
-    drag.rig.game.start_simulation();
-    drag.press(150, 100);
-    drag.move(170, 100);
-    drag.release(170, 100);
-    drag.rig.frames(1);
-    REQUIRE(close(drag.transform(drag.part).m[12], 2));
-    REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
-    drag.rig.game.stop_simulation();
-    REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
-}
-
-TEST_CASE("DR20 what a Dragged handler moves joins the drag's undo step", "[DR20]") {
-    DragRig drag;
-    const InstanceId other = drag.add_part(drag.rig.game.scene_service("Workspace"), engine_core::matrix4_translation(0, 5, -10));
-    drag.rig.game.set_name(other, "Other");
-    drag.rig.game.history().end_gesture();
-    drag.rig.game.history().reset_waypoints();
-    drag.rig.runtime.run_chunk(R"(
-        local dragger = workspace:FindFirstChild("GameObject"):FindFirstChild("Dragger")
-        dragger.Dragged:Connect(function(handle, offset)
-            workspace.Other.Transform = Matrix4.new(Vector3.new(offset.X, 5, -10))
-        end)
-    )");
-    drag.rig.frames(1);
-    drag.press(150, 100);
-    drag.move(170, 100);
-    drag.release(170, 100);
-    drag.rig.frames(1);
-    INFO(drag.rig.runtime.last_error());
-    REQUIRE(close(drag.transform(other).m[12], 2));
-    drag.rig.game.history().undo();
-    REQUIRE(close(drag.transform(drag.part).m[12], 0));
-    REQUIRE(close(drag.transform(other).m[12], 0));
-    REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
-}
-
-TEST_CASE("DR13c a PhysicsObject held still in play stays where the drag put it, with no speed", "[DR13c]") {
-    DragRig drag;
-    engine_core::DataModel& game = drag.rig.game;
-    engine_core::PhysicsObject& body = game.create<engine_core::PhysicsObject>();
-    game.set_parent(body.id(), game.scene_service("Workspace"));
-    REQUIRE_FALSE(body.set_transform(engine_core::matrix4_translation(0, 0, -10)).has_value());
-    game.set_parent(drag.dragger, body.id());
-    game.capture_place();
-    game.start_simulation();
-    drag.press(150, 100);
-    drag.move(170, 100);
-    // Between steps, as gravity would, with no mouse motion.
-    REQUIRE_FALSE(body.set_transform(engine_core::matrix4_translation(2, -1, -10)).has_value());
-    REQUIRE_FALSE(body.set_velocity({0, -9, 0}).has_value());
-    drag.step();
-    REQUIRE(close(body.transform().m[13], 0));
-    REQUIRE(close(body.transform().m[12], 2));
-    REQUIRE(body.velocity().y == 0);
-    drag.release(170, 100);
-}
-
 TEST_CASE("DR11b a press a game GUI took does not start a drag", "[DR11b]") {
     DragRig drag;
     drag.rig.game.input().post_mouse_button(0, true, 150, 100, true);
     drag.step();
     REQUIRE_FALSE(drag.handles().dragging());
+}
+
+TEST_CASE("DR14 a drag ends when its Dragger leaves game or is destroyed", "[DR14]") {
+    DragRig drag;
+    drag.rig.runtime.run_chunk(R"(
+        workspace:FindFirstChild("Dragger").DragEnded:Connect(function(handle) print("ended", handle.Name) end)
+    )");
+    drag.rig.frames(1);
+    drag.press(150, 100);
+    drag.rig.game.set_parent(drag.dragger, engine_core::DataModel::kNoParent);
+    drag.move(170, 100);
+    REQUIRE_FALSE(drag.handles().dragging());
+    REQUIRE(has_line(drag.rig.runtime.drain_output(), "ended\tX\n"));
+
+    drag.rig.game.set_parent(drag.dragger, drag.rig.game.scene_service("Workspace"));
+    drag.listen(drag.dragger);
+    drag.press(150, 100);
+    drag.rig.game.destroy(drag.dragger);
+    drag.move(170, 100);
+    drag.release(170, 100);
+    REQUIRE(drag.offsets.empty());
 }
 
 TEST_CASE("DR14b Play or Stop ends a drag", "[DR14b]") {
@@ -564,11 +385,126 @@ TEST_CASE("DR14b Play or Stop ends a drag", "[DR14b]") {
     REQUIRE_FALSE(drag.handles().dragging());
 }
 
+TEST_CASE("DR15 of two Draggers whose arrows overlap, the nearer gets the drag", "[DR15]") {
+    DragRig drag;
+    const InstanceId far = drag.add_dragger(drag.rig.game.scene_service("Workspace"), engine_core::matrix4_translation(0, 0, -20));
+    drag.listen(drag.dragger);
+    std::vector<float> far_offsets;
+    drag.rig.game.event_signal(far, "Dragged").connect([&](InstanceId, engine_core::Field) { far_offsets.push_back(1); });
+    drag.press(150, 100);
+    drag.move(170, 100);
+    drag.release(170, 100);
+    REQUIRE(drag.offsets.size() == 1);
+    REQUIRE(far_offsets.empty());
+}
+
+TEST_CASE("DR16 in Local space the drag runs along the Dragger's own turned axes", "[DR16]") {
+    DragRig drag;
+    REQUIRE_FALSE(drag.handles().set_space(1).has_value());
+    // Turned 90 degrees about Y: its X axis points down -Z, away from the camera, hidden;
+    // its Z axis points along +X, so the arrow right of the middle is Z.
+    REQUIRE_FALSE(drag.handles()
+                      .set_transform(engine_core::matrix4_multiply(engine_core::matrix4_translation(0, 0, -10),
+                                                                   engine_core::matrix4_axis_angle({0, 1, 0}, 3.14159265 / 2)))
+                      .has_value());
+    std::vector<engine_core::Vec3> offsets;
+    drag.rig.game.event_signal(drag.dragger, "Dragged").connect([&](InstanceId, engine_core::Field) {
+        offsets.push_back((*drag.rig.game.events().current_args())[1].vec);
+    });
+    drag.press(150, 100);
+    REQUIRE(drag.handles().active_handle() == engine_core::DraggerHandle::Z);
+    drag.move(170, 100);
+    drag.release(170, 100);
+    REQUIRE(offsets.size() == 1);
+    REQUIRE((close(offsets[0].x, 2) && close(offsets[0].y, 0) && close(offsets[0].z, 0)));
+}
+
+TEST_CASE("DR17 with no camera, no view size, or a locked pointer, input passes through", "[DR17]") {
+    for (int way = 0; way < 3; ++way) {
+        DragRig drag;
+        if (way == 0) {
+            drag.workspace().set_current_camera(0);
+        } else if (way == 1) {
+            dynamic_cast<engine_core::Camera*>(drag.rig.game.instance(drag.camera))->set_viewport_size({0, 0});
+        } else {
+            drag.rig.game.input().set_mouse_behavior(engine_core::UserInputService::kLockCurrentPosition);
+        }
+        drag.listen(drag.dragger);
+        drag.press(150, 100);
+        drag.move(170, 100);
+        drag.release(170, 100);
+        INFO(way);
+        REQUIRE_FALSE(drag.handles().dragging());
+        REQUIRE(drag.offsets.empty());
+    }
+}
+
+TEST_CASE("DR19 the offset stays total since the drag began when Increment changes mid-drag", "[DR19]") {
+    DragRig drag;
+    drag.listen(drag.dragger);
+    drag.press(150, 100);
+    drag.move(174, 100);
+    REQUIRE_FALSE(drag.handles().set_increment(1).has_value());
+    drag.move(175, 100);
+    drag.release(175, 100);
+    REQUIRE(drag.offsets.size() == 2);
+    REQUIRE(close(drag.offsets[0], 2.4f));
+    REQUIRE(close(drag.offsets[1], 3));
+}
+
+TEST_CASE("DR22 a listener that moves the Dragger does not change what the drag is measured from", "[DR22]") {
+    DragRig drag;
+    drag.listen(drag.dragger);
+    drag.rig.runtime.run_chunk(R"(
+        local dragger = workspace:FindFirstChild("Dragger")
+        local start
+        dragger.DragBegan:Connect(function() start = dragger.Transform end)
+        dragger.Dragged:Connect(function(_, offset) dragger.Transform = Matrix4.new(offset) * start end)
+    )");
+    drag.rig.frames(1);
+    drag.press(150, 100);
+    drag.move(160, 100);
+    drag.move(170, 100);
+    drag.release(170, 100);
+    INFO(drag.rig.runtime.last_error());
+    REQUIRE(drag.offsets.size() == 2);
+    REQUIRE(close(drag.offsets[0], 1));
+    REQUIRE(close(drag.offsets[1], 2));
+    REQUIRE(close(drag.transform(drag.dragger).m[12], 2));
+}
+
+TEST_CASE("DR12 in edit mode a drag is one undo step for what its listeners move", "[DR12]") {
+    DragRig drag;
+    drag.press(150, 100);
+    drag.release(150, 100);
+    drag.rig.frames(1);
+    REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
+    REQUIRE_FALSE(drag.rig.game.history().is_recording_in_progress());
+
+    drag.rig.runtime.run_chunk(R"(
+        workspace:FindFirstChild("Dragger").Dragged:Connect(function(_, offset)
+            workspace.Part.Transform = Matrix4.new(Vector3.new(offset.X, 5, -10))
+        end)
+    )");
+    drag.rig.frames(1);
+    drag.press(150, 100);
+    drag.move(160, 100);
+    drag.move(170, 100);
+    drag.release(170, 100);
+    drag.rig.frames(1);
+    INFO(drag.rig.runtime.last_error());
+    REQUIRE(close(drag.transform(drag.part).m[12], 2));
+    REQUIRE_FALSE(drag.rig.game.history().is_recording_in_progress());
+    REQUIRE(drag.rig.game.history().can_undo().second == "Move");
+    drag.rig.game.history().undo();
+    REQUIRE(close(drag.transform(drag.part).m[12], 0));
+    REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
+}
+
 TEST_CASE("DR12b a click with no motion keeps what its handlers changed", "[DR12b]") {
     DragRig drag;
     drag.rig.runtime.run_chunk(R"(
-        local dragger = workspace:FindFirstChild("GameObject"):FindFirstChild("Dragger")
-        dragger.DragBegan:Connect(function() dragger.Parent.Name = "Clicked" end)
+        workspace:FindFirstChild("Dragger").DragBegan:Connect(function() workspace.Part.Name = "Clicked" end)
     )");
     drag.rig.frames(1);
     drag.press(150, 100);
@@ -577,7 +513,27 @@ TEST_CASE("DR12b a click with no motion keeps what its handlers changed", "[DR12
     REQUIRE(drag.rig.game.name(drag.part) == "Clicked");
 }
 
-TEST_CASE("RD1 an active Dragger has a snapshot row with its frame and states, an inactive one none", "[RD1]") {
+TEST_CASE("DR13 in play a drag records no history", "[DR13]") {
+    DragRig drag;
+    drag.rig.runtime.run_chunk(R"(
+        workspace:FindFirstChild("Dragger").Dragged:Connect(function(_, offset)
+            workspace.Part.Transform = Matrix4.new(Vector3.new(offset.X, 5, -10))
+        end)
+    )");
+    drag.rig.frames(1);
+    drag.rig.game.capture_place();
+    drag.rig.game.start_simulation();
+    drag.press(150, 100);
+    drag.move(170, 100);
+    drag.release(170, 100);
+    drag.rig.frames(1);
+    REQUIRE(close(drag.transform(drag.part).m[12], 2));
+    REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
+    drag.rig.game.stop_simulation();
+    REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
+}
+
+TEST_CASE("RD1 a Dragger under game has a snapshot row at its own Transform, one outside game none", "[RD1]") {
     DragRig drag;
     engine_core::SnapshotPump pump;
     pump.reserve(engine_core::DataModel::kMaxInstances);
@@ -597,9 +553,7 @@ TEST_CASE("RD1 an active Dragger has a snapshot row with its frame and states, a
     drag.press(150, 100);
     REQUIRE(frame().draggers[0].active == engine_core::DraggerHandle::X);
     drag.release(150, 100);
-    engine_core::Folder& folder = drag.rig.game.create<engine_core::Folder>();
-    drag.rig.game.set_parent(folder.id(), drag.rig.game.scene_service("Workspace"));
-    drag.rig.game.set_parent(drag.dragger, folder.id());
+    drag.rig.game.set_parent(drag.dragger, engine_core::DataModel::kNoParent);
     REQUIRE(frame().draggers.empty());
 }
 

@@ -2,18 +2,23 @@
 
 #include "support.hpp"
 
+#include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Dragger.hpp"
 #include "Folder.hpp"
 #include "PhysicsObject.hpp"
 #include "SnapshotPump.hpp"
 #include "Project.hpp"
+#include "SceneService.hpp"
+#include "UserInputService.hpp"
 #include "ide/PluginLoader.hpp"
 #include "SelectionService.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -54,10 +59,54 @@ engine_core::Dragger* move_dragger(engine_core::DataModel& game) {
     return nullptr;
 }
 
-InstanceId move_target(engine_core::DataModel& game) {
+// Where the Move tool's handles sit, or nullopt when it shows none.
+std::optional<engine_core::Vec3> handles_at(engine_core::DataModel& game) {
     const engine_core::Dragger* dragger = move_dragger(game);
-    return dragger != nullptr ? dragger->target() : 0;
+    if (dragger == nullptr) {
+        return std::nullopt;
+    }
+    const engine_core::Matrix4 at = dragger->transform();
+    return engine_core::Vec3{at.m[12], at.m[13], at.m[14]};
 }
+
+bool near(float a, float b) { return std::abs(a - b) <= 1e-3f; }
+
+// The Move tool loaded, and a camera at the origin looking down -Z with a 90
+// degree view, 200 x 200 points: handles at (0, 0, -10) put the X arrow along
+// screen y = 100 from x = 100 to 200, and 20 points drag 2 studs.
+struct MoveRig {
+    ScriptRig rig;
+    ide::PluginLoader loader;
+
+    MoveRig() {
+        engine_core::Camera& camera = rig.game.create<engine_core::Camera>();
+        rig.game.set_parent(camera.id(), rig.game.scene_service("Workspace"));
+        camera.set_field_of_view(90);
+        camera.set_viewport_size(engine_core::Vec2{200, 200});
+        dynamic_cast<engine_core::Workspace*>(rig.game.instance(rig.game.scene_service("Workspace")))
+            ->set_current_camera(camera.id());
+        rig.game.history().end_gesture();
+        rig.game.history().reset_waypoints();
+        REQUIRE(loader.load(rig.game, rig.runtime, {move_tool_file()}) == 1);
+        rig.frames(1);
+    }
+    InstanceId part_at(const char* name, float x, float y, float z) {
+        const InstanceId id = add_part(rig.game, name);
+        rig.game.game_object(id)->set_transform(engine_core::matrix4_translation(x, y, z));
+        rig.game.history().end_gesture();
+        rig.game.history().reset_waypoints();
+        return id;
+    }
+    float x_of(InstanceId id) { return rig.game.game_object(id)->transform().m[12]; }
+    void post(bool down, float x, float y) {
+        rig.game.input().post_mouse_button(0, down, x, y);
+        rig.frames(1);
+    }
+    void move(float x, float y) {
+        rig.game.input().post_mouse_move(x, y);
+        rig.frames(1);
+    }
+};
 
 }  // namespace
 
@@ -111,102 +160,108 @@ TEST_CASE("EV2 Started fires at Play and Stopped after Stop has restored the pla
     REQUIRE(lines_of(rig.runtime) == std::vector<std::string>{"started\ttrue\n", "stopped\tfalse\ttrue\n"});
 }
 
-TEST_CASE("MT1 the Move tool puts handles on the first selected PVInstance, and follows the selection", "[MT1]") {
-    ScriptRig rig;
-    const InstanceId a = add_part(rig.game, "A");
-    const InstanceId b = add_part(rig.game, "B");
-    rig.game.history().end_gesture();
-    rig.game.history().reset_waypoints();
-    ide::PluginLoader loader;
-    REQUIRE(loader.load(rig.game, rig.runtime, {move_tool_file()}) == 1);
-    rig.frames(1);
-    INFO(rig.runtime.last_error());
-    REQUIRE(move_target(rig.game) == 0);
-    rig.game.selection().set({a, b});
-    rig.frames(1);
-    REQUIRE(move_target(rig.game) == a);
-    rig.game.selection().set({b});
-    rig.frames(1);
-    REQUIRE(move_target(rig.game) == b);
-    rig.game.selection().set({});
-    rig.frames(1);
-    REQUIRE(move_target(rig.game) == 0);
-    // One Dragger the whole time, and none of it is an undo step.
-    int draggers = 0;
-    for (InstanceId child : rig.game.get_children(rig.game.core())) {
-        draggers += dynamic_cast<engine_core::Dragger*>(rig.game.instance(child)) != nullptr ? 1 : 0;
-    }
-    REQUIRE(draggers == 1);
-    rig.game.history().end_gesture();
-    REQUIRE_FALSE(rig.game.history().can_undo().first);
+TEST_CASE("MT1 the Move tool puts its handles at the middle of the selected PVInstances", "[MT1]") {
+    MoveRig move;
+    const InstanceId a = move.part_at("A", -2, 0, -10);
+    const InstanceId b = move.part_at("B", 2, 4, -10);
+    REQUIRE_FALSE(handles_at(move.rig.game));
+    move.rig.game.selection().set({a, b});
+    move.rig.frames(1);
+    INFO(move.rig.runtime.last_error());
+    auto at = handles_at(move.rig.game);
+    REQUIRE(at);
+    REQUIRE((near(at->x, 0) && near(at->y, 2) && near(at->z, -10)));
+    move.rig.game.selection().set({b});
+    move.rig.frames(1);
+    at = handles_at(move.rig.game);
+    REQUIRE((at && near(at->x, 2) && near(at->y, 4)));
+    move.rig.game.selection().set({});
+    move.rig.frames(1);
+    REQUIRE_FALSE(handles_at(move.rig.game));
+    move.rig.game.history().end_gesture();
+    REQUIRE_FALSE(move.rig.game.history().can_undo().first);
 }
 
-TEST_CASE("MT2 a selection that is not a PVInstance gets no handles", "[MT2]") {
-    ScriptRig rig;
-    engine_core::Folder& folder = rig.game.create<engine_core::Folder>();
-    rig.game.set_parent(folder.id(), rig.game.scene_service("Workspace"));
-    ide::PluginLoader loader;
-    REQUIRE(loader.load(rig.game, rig.runtime, {move_tool_file()}) == 1);
-    rig.game.selection().set({folder.id()});
-    rig.frames(1);
-    REQUIRE(move_target(rig.game) == 0);
+TEST_CASE("MT2 a selection with no PVInstance gets no handles", "[MT2]") {
+    MoveRig move;
+    engine_core::Folder& folder = move.rig.game.create<engine_core::Folder>();
+    move.rig.game.set_parent(folder.id(), move.rig.game.scene_service("Workspace"));
+    move.rig.game.selection().set({folder.id()});
+    move.rig.frames(1);
+    REQUIRE_FALSE(handles_at(move.rig.game));
 }
 
 TEST_CASE("MT3 the Move tool lets go during play and takes the selection back after Stop", "[MT3]") {
-    ScriptRig rig;
-    const InstanceId a = add_part(rig.game, "A");
-    ide::PluginLoader loader;
-    REQUIRE(loader.load(rig.game, rig.runtime, {move_tool_file()}) == 1);
-    rig.game.selection().set({a});
-    rig.frames(1);
-    REQUIRE(move_target(rig.game) == a);
-    rig.game.capture_place();
-    rig.game.start_simulation();
-    rig.frames(1);
-    REQUIRE(move_target(rig.game) == 0);
-    rig.game.stop_simulation();
-    rig.frames(1);
-    REQUIRE(move_target(rig.game) == a);
+    MoveRig move;
+    const InstanceId a = move.part_at("A", 1, 0, -10);
+    move.rig.game.selection().set({a});
+    move.rig.frames(1);
+    REQUIRE(handles_at(move.rig.game));
+    move.rig.game.capture_place();
+    move.rig.game.start_simulation();
+    move.rig.frames(1);
+    REQUIRE_FALSE(handles_at(move.rig.game));
+    move.rig.game.stop_simulation();
+    move.rig.frames(1);
+    const auto at = handles_at(move.rig.game);
+    REQUIRE((at && near(at->x, 1)));
 }
 
 TEST_CASE("MT4 New and Open clear the selection, so the Move tool lets go", "[MT4][project]") {
-    ScriptRig rig;
+    MoveRig move;
     TempDir dir;
-    engine_core::Project project = engine_core::Project::create(dir.path, rig.game);
-    const InstanceId a = add_part(rig.game, "A");
+    engine_core::Project project = engine_core::Project::create(dir.path, move.rig.game);
+    const InstanceId a = move.part_at("A", 0, 0, -10);
     project.save();
-    ide::PluginLoader loader;
-    REQUIRE(loader.load(rig.game, rig.runtime, {move_tool_file()}) == 1);
-    rig.game.selection().set({a});
-    rig.frames(1);
-    REQUIRE(move_target(rig.game) == a);
-    // Reopening the same project brings back an instance with A's GUID.
-    engine_core::Project reopened = engine_core::Project::load(dir.path, rig.game);
-    rig.frames(1);
-    REQUIRE(rig.game.selection().get().empty());
-    REQUIRE(move_target(rig.game) == 0);
-    rig.game.selection().set({rig.game.find_first_child(rig.game.scene_service("Workspace"), "A")});
-    rig.frames(1);
-    REQUIRE(move_target(rig.game) != 0);
-    engine_core::Project::reset_place(rig.game);
-    rig.frames(1);
-    REQUIRE(rig.game.selection().get().empty());
-    REQUIRE(move_target(rig.game) == 0);
+    move.rig.game.selection().set({a});
+    move.rig.frames(1);
+    REQUIRE(handles_at(move.rig.game));
+    engine_core::Project reopened = engine_core::Project::load(dir.path, move.rig.game);
+    move.rig.frames(1);
+    REQUIRE(move.rig.game.selection().get().empty());
+    REQUIRE_FALSE(handles_at(move.rig.game));
 }
 
-TEST_CASE("MT5 selecting a PhysicsObject puts handles on it, and the snapshot carries them", "[MT5]") {
-    ScriptRig rig;
-    engine_core::PhysicsObject& body = rig.game.create<engine_core::PhysicsObject>();
-    rig.game.set_parent(body.id(), rig.game.scene_service("Workspace"));
-    ide::PluginLoader loader;
-    REQUIRE(loader.load(rig.game, rig.runtime, {move_tool_file()}) == 1);
-    rig.game.selection().set({body.id()});
-    rig.frames(1);
-    INFO(rig.runtime.last_error());
-    REQUIRE(move_target(rig.game) == body.id());
+TEST_CASE("MT5 a selected PhysicsObject gets handles, and the snapshot carries them", "[MT5]") {
+    MoveRig move;
+    engine_core::PhysicsObject& body = move.rig.game.create<engine_core::PhysicsObject>();
+    move.rig.game.set_parent(body.id(), move.rig.game.scene_service("Workspace"));
+    REQUIRE_FALSE(body.set_transform(engine_core::matrix4_translation(3, 0, -10)).has_value());
+    move.rig.game.selection().set({body.id()});
+    move.rig.frames(1);
+    const auto at = handles_at(move.rig.game);
+    REQUIRE((at && near(at->x, 3)));
     engine_core::SnapshotPump pump;
     pump.reserve(engine_core::DataModel::kMaxInstances);
-    pump.prepare_copy(rig.game);
+    pump.prepare_copy(move.rig.game);
     pump.publish();
     REQUIRE(pump.front().draggers.size() == 1);
+}
+
+TEST_CASE("MT6 one drag moves every selected PVInstance and the handles alike, and one undo puts them back",
+          "[MT6]") {
+    MoveRig move;
+    const InstanceId a = move.part_at("A", -2, 0, -10);
+    const InstanceId b = move.part_at("B", 2, 0, -10);
+    move.rig.game.selection().set({a, b});
+    move.rig.frames(1);
+    move.post(true, 150, 100);
+    move.move(160, 100);
+    move.move(170, 100);
+    move.post(false, 170, 100);
+    move.rig.frames(1);
+    INFO(move.rig.runtime.last_error());
+    REQUIRE(near(move.x_of(a), 0));
+    REQUIRE(near(move.x_of(b), 4));
+    auto at = handles_at(move.rig.game);
+    REQUIRE((at && near(at->x, 2)));
+    REQUIRE(move.rig.game.history().can_undo().second == "Move");
+    move.rig.game.history().undo();
+    move.rig.frames(1);
+    REQUIRE(near(move.x_of(a), -2));
+    REQUIRE(near(move.x_of(b), 2));
+    // The handles follow the selection back.
+    at = handles_at(move.rig.game);
+    REQUIRE((at && near(at->x, 0)));
+    REQUIRE_FALSE(move.rig.game.history().can_undo().first);
 }

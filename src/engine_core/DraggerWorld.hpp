@@ -19,8 +19,9 @@ class Dragger;
 // the view from Workspace.CurrentCamera (Transform, FieldOfView, and
 // ViewportSize); with no camera, no size, or the pointer locked, input
 // passes through. A press on a handle starts a drag of the nearest Dragger,
-// moves move its target, and the release ends it, each firing the Dragger's
-// event; the records a drag uses are marked processed. One drag runs at a
+// each move reports how far the drag has gone, and the release ends it, each
+// firing the Dragger's event. It moves nothing itself: the listeners do. The
+// records a drag uses are marked processed. One drag runs at a
 // time. In edit mode a drag is one undo step, "Move", which closes at the
 // next dispatch after it ends: events are deferred, so what the ending
 // step's handlers move joins it. SimulationThread only.
@@ -34,11 +35,7 @@ public:
 private:
     struct Drag {
         InstanceId dragger = 0;
-        InstanceId target = 0;
         DragStart start;
-        Matrix4 start_transform = matrix4_identity();
-        // The offset last applied, which play re-applies each step while held.
-        Vec3 offset{};
         // Whether the place was playing when the drag began. Play and Stop end it.
         bool playing = false;
         // The undo step this drag opened, or empty when it joined one already open.
@@ -54,11 +51,8 @@ private:
     void move(DataModel& game, const DraggerView& view, Vec2 point);
     void end(DataModel& game);
     void close_step(DataModel& game);
-    // Puts a held target back where the drag has it, with no speed: in play,
-    // physics moves it between the mouse's moves.
-    void hold(DataModel& game);
-    // True while the drag's Dragger is alive and still bound to its target,
-    // and the place has neither started nor stopped playing since it began.
+    // True while the drag's Dragger is alive and under game, and the place
+    // has neither started nor stopped playing since it began.
     bool drag_holds(DataModel& game) const;
 
     std::optional<Drag> drag_;

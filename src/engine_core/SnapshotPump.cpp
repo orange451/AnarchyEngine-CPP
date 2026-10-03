@@ -2,7 +2,6 @@
 
 #include "AssetInstances.hpp"
 #include "Dragger.hpp"
-#include "PVInstance.hpp"
 #include "Camera.hpp"
 #include "GameObject.hpp"
 #include "Light.hpp"
@@ -501,12 +500,11 @@ void SnapshotPump::resolve_draggers(DataModel& game) {
     game.draggers(dragger_ids_);
     for (InstanceId id : dragger_ids_) {
         const auto* dragger = dynamic_cast<const Dragger*>(game.instance(id));
-        const auto* target = dragger != nullptr ? dynamic_cast<const PVInstance*>(game.instance(dragger->target())) : nullptr;
-        if (target == nullptr) {
+        if (dragger == nullptr) {
             continue;
         }
         VisualDragger row;
-        row.frame = dragger_frame(target->transform(), dragger->local_space());
+        row.frame = dragger_frame(dragger->transform(), dragger->local_space());
         row.hovered = dragger->hovered();
         row.active = dragger->active_handle();
         base_.draggers.push_back(row);

@@ -20,6 +20,13 @@ LuaSlot number_slot(double value) {
     return slot;
 }
 
+LuaSlot matrix_slot(const Matrix4& value) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Matrix4;
+    slot.transform = value;
+    return slot;
+}
+
 LuaSlot space_slot(bool local) {
     LuaSlot slot;
     slot.kind = LuaSlot::Kind::Enum;
@@ -36,20 +43,20 @@ void require_thread(const DataModel& object) {
 
 }  // namespace
 
-LuaSlot Dragger::adornee() const { return instance_reference_slot(adornee_, "PVInstance"); }
-
-InstanceId Dragger::target() const {
-    const LuaSlot bound = adornee();
-    const InstanceId id = bound.kind == LuaSlot::Kind::Instance ? bound.id : parent(this->id());
-    if (id == 0 || id == kNoParent || !alive(id) || !in_game(id)) {
-        return 0;
-    }
-    return dynamic_cast<const PVInstance*>(instance(id)) != nullptr ? id : 0;
-}
-
-std::optional<std::string> Dragger::set_adornee(const LuaSlot& value) {
+std::optional<std::string> Dragger::set_transform(const Matrix4& transform) {
     require_thread(*this);
-    return set_instance_reference("Adornee", "PVInstance", adornee_, value);
+    for (float value : transform.m) {
+        if (!std::isfinite(value)) {
+            return std::string("Transform must be finite");
+        }
+    }
+    if (same_matrix4(transform_, transform)) {
+        return std::nullopt;
+    }
+    const Matrix4 previous = transform_;
+    transform_ = transform;
+    note_property_change("Transform", matrix_slot(previous), matrix_slot(transform));
+    return std::nullopt;
 }
 
 std::optional<std::string> Dragger::set_space(int space) {
@@ -91,7 +98,7 @@ void Dragger::set_drag(bool dragging, DraggerHandle handle) {
 }
 
 void Dragger::on_reuse() {
-    adornee_.set_guid(std::string());
+    transform_ = matrix4_identity();
     local_ = false;
     increment_ = 0.0;
     dragging_ = false;
@@ -111,18 +118,18 @@ bool refuse(LuaSlot& in, std::optional<std::string> error) {
 
 Dragger* dragger_of(DataModel& object) { return dynamic_cast<Dragger*>(&object); }
 
-bool read_adornee(DataModel&, DataModel& object, LuaSlot& out) {
+bool read_transform(DataModel&, DataModel& object, LuaSlot& out) {
     const Dragger* dragger = dragger_of(object);
     if (dragger == nullptr) {
         return false;
     }
-    out = dragger->adornee();
+    out = matrix_slot(dragger->transform());
     return true;
 }
 
-bool write_adornee(DataModel&, DataModel& object, LuaSlot& in) {
+bool write_transform(DataModel&, DataModel& object, LuaSlot& in) {
     Dragger* dragger = dragger_of(object);
-    return dragger != nullptr && refuse(in, dragger->set_adornee(in));
+    return dragger != nullptr && refuse(in, dragger->set_transform(in.transform));
 }
 
 bool read_space(DataModel&, DataModel& object, LuaSlot& out) {
@@ -180,8 +187,12 @@ bool read_dragging(DataModel&, DataModel& object, LuaSlot& out) {
 ANARCHY_LUA_REGISTER(register_dragger_lua) {
     static const LuaParam kHandleArgs[] = {{"handle", "EnumItem"}};
     static const LuaParam kDraggedArgs[] = {{"handle", "EnumItem"}, {"offset", "Vector3"}};
+    static const std::string identity = [] {
+        const Matrix4 value = matrix4_identity();
+        return write_json(json_floats(value.m, 16));
+    }();
     const LuaField fields[] = {
-        lua_saved_property("Adornee", "PVInstance?", read_adornee, write_adornee, "null"),
+        lua_saved_property("Transform", "Matrix4", read_transform, write_transform, identity.c_str()),
         lua_saved_enum("Space", dragger_space_enum(), read_space, write_space, "\"World\""),
         lua_saved_property("Increment", "number", read_increment, write_increment, "0"),
         lua_property("Dragging", "boolean", false, read_dragging, nullptr),
@@ -189,8 +200,7 @@ ANARCHY_LUA_REGISTER(register_dragger_lua) {
         lua_event("Dragged", kDraggedArgs, 2),
         lua_event("DragEnded", kHandleArgs, 1),
     };
-    register_lua_class("Dragger", "Instance", fields, static_cast<int>(std::size(fields)));
-    register_suited_parents("Dragger", {"PVInstance"});
+    register_lua_class("Dragger", "PVInstance", fields, static_cast<int>(std::size(fields)));
 }
 
 }  // namespace

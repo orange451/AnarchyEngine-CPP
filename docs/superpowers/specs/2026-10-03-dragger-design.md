@@ -2,6 +2,15 @@
 
 2026-10-03 · Builds on event arguments (`2026-10-02-event-arguments-design.md`) and the Core service (`2026-10-02-core-service-design.md`), both on main. Written from the approved brainstorm (`2026-10-02-dragger-brainstorm.md`) and its revisions; where the two differ, this spec wins.
 
+## Revision (2026-10-03, after phase 6)
+
+This replaces the sections below wherever they differ.
+
+- **A Dragger is a PVInstance with its own Transform,** saved and scriptable. The handles sit there; Local space follows its rotation. It binds to nothing: `Adornee` and the parent rule are gone. It is active anywhere under `game`.
+- **A drag moves nothing.** DraggerWorld measures the offset from the Dragger's Transform at the press and fires `DragBegan`, `Dragged(handle, offset)`, and `DragEnded`. Listeners move what they like, the Dragger included. In edit mode the drag is still one "Move" undo step that the listeners' writes join; the physics hold during play is gone.
+- **The Move tool** keeps one Dragger in Core at the middle of the box around the selected PVInstances, made when something is selected and destroyed when nothing is. On `DragBegan` it records the start Transform of each selected PVInstance and of its Dragger; on `Dragged` it sets each to start plus offset, so the whole selection moves by the same snapped amount in one undo step. It watches the selected instances' `Changed`, so the handles follow an undo or a Properties edit.
+- Tests: DR9 (active anywhere under game), DR10 (events only, nothing moves), DR16 (Local axes from its own rotation), DR22 (a listener moving the Dragger does not change the drag's base), MT1 (handles at the selection's middle), MT6 (one drag moves the whole selection; one undo puts it and the handles back).
+
 ## Goal
 
 A `Dragger` instance that binds to a PVInstance and draws translate handles at it: three axis arrows and three plane squares. Dragging a handle moves the PVInstance. It works in edit mode, where the studio's Move tool drives it, and in play, where games create their own. Roblox Studio's Move tool and Unity's translate gizmo are the model.

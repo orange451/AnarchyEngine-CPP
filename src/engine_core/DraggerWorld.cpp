@@ -6,7 +6,6 @@
 #include "Dragger.hpp"
 #include "Enum.hpp"
 #include "LuaApi.hpp"
-#include "PhysicsObject.hpp"
 #include "SceneService.hpp"
 #include "UserInputService.hpp"
 
@@ -28,8 +27,6 @@ LuaSlot vector_slot(Vec3 value) {
     return slot;
 }
 
-PVInstance* pv_of(DataModel& game, InstanceId id) { return dynamic_cast<PVInstance*>(game.instance(id)); }
-
 }  // namespace
 
 void DraggerWorld::dispatch(DataModel& game, std::vector<InputRecord>& records) {
@@ -44,7 +41,6 @@ void DraggerWorld::dispatch(DataModel& game, std::vector<InputRecord>& records) 
         }
         return;
     }
-    hold(game);
     for (InputRecord& record : records) {
         const Vec2 point{record.position.x, record.position.y};
         if (record.type == UserInputService::kMouseMovement) {
@@ -94,13 +90,11 @@ Dragger* DraggerWorld::pick(DataModel& game, const DraggerView& view, Vec2 point
     handle = DraggerHandle::None;
     for (InstanceId id : ids) {
         auto* dragger = dynamic_cast<Dragger*>(game.instance(id));
-        const InstanceId target = dragger != nullptr ? dragger->target() : 0;
-        const PVInstance* pv = pv_of(game, target);
-        if (pv == nullptr) {
+        if (dragger == nullptr) {
             continue;
         }
         float depth = 0.f;
-        const DraggerFrame frame = dragger_frame(pv->transform(), dragger->local_space());
+        const DraggerFrame frame = dragger_frame(dragger->transform(), dragger->local_space());
         const DraggerHandle hit = pick_handle(frame, view, point, &depth);
         if (hit != DraggerHandle::None && (best == nullptr || depth < best_depth)) {
             best = dragger;
@@ -128,14 +122,12 @@ bool DraggerWorld::begin(DataModel& game, const DraggerView& view, Vec2 point) {
     if (dragger == nullptr) {
         return false;
     }
-    const InstanceId target = dragger->target();
-    const PVInstance* pv = pv_of(game, target);
     Drag drag;
     drag.dragger = dragger->id();
-    drag.target = target;
-    drag.start_transform = pv->transform();
     drag.playing = game.simulation_running();
-    if (!begin_drag(dragger_frame(drag.start_transform, dragger->local_space()), view, point, handle, drag.start)) {
+    // The drag is measured from where the handles sat at the press, wherever
+    // the listeners move the Dragger after.
+    if (!begin_drag(dragger_frame(dragger->transform(), dragger->local_space()), view, point, handle, drag.start)) {
         return false;
     }
     // Edit mode only: play writes are not edits.
@@ -152,18 +144,12 @@ bool DraggerWorld::begin(DataModel& game, const DraggerView& view, Vec2 point) {
 
 void DraggerWorld::move(DataModel& game, const DraggerView& view, Vec2 point) {
     auto* dragger = dynamic_cast<Dragger*>(game.instance(drag_->dragger));
-    PVInstance* pv = pv_of(game, drag_->target);
-    if (dragger == nullptr || pv == nullptr) {
+    if (dragger == nullptr) {
         end(game);
         return;
     }
     const std::optional<Vec3> offset = drag_offset(drag_->start, view, point, dragger->increment());
     if (!offset) {
-        return;
-    }
-    drag_->offset = *offset;
-    hold(game);
-    if (!drag_) {
         return;
     }
     game.fire_event(dragger->id(), "Dragged", {handle_slot(drag_->start.handle), vector_slot(*offset)});
@@ -176,32 +162,6 @@ void DraggerWorld::end(DataModel& game) {
     if (auto* dragger = dynamic_cast<Dragger*>(game.instance(drag.dragger))) {
         dragger->set_drag(false, DraggerHandle::None);
         game.fire_event(dragger->id(), "DragEnded", {handle_slot(drag.start.handle)});
-    }
-}
-
-void DraggerWorld::hold(DataModel& game) {
-    if (!drag_) {
-        return;
-    }
-    PVInstance* pv = pv_of(game, drag_->target);
-    if (pv == nullptr) {
-        end(game);
-        return;
-    }
-    Matrix4 placed = drag_->start_transform;
-    placed.m[12] += drag_->offset.x;
-    placed.m[13] += drag_->offset.y;
-    placed.m[14] += drag_->offset.z;
-    if (pv->set_pv_transform(placed)) {
-        end(game);
-        return;
-    }
-    // Held by the hand: whatever speed it had would carry it off on release.
-    if (game.simulation_running()) {
-        if (auto* body = dynamic_cast<PhysicsObject*>(pv)) {
-            body->set_velocity(Vec3{});
-            body->set_angular_velocity(Vec3{});
-        }
     }
 }
 
@@ -221,8 +181,7 @@ void DraggerWorld::close_step(DataModel& game) {
 }
 
 bool DraggerWorld::drag_holds(DataModel& game) const {
-    const auto* dragger = dynamic_cast<const Dragger*>(game.instance(drag_->dragger));
-    return dragger != nullptr && dragger->target() == drag_->target && game.simulation_running() == drag_->playing;
+    return game.alive(drag_->dragger) && game.in_game(drag_->dragger) && game.simulation_running() == drag_->playing;
 }
 
 }  // namespace engine_core

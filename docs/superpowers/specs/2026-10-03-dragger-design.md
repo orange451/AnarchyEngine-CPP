@@ -30,7 +30,7 @@ A `Dragger` instance that binds to a PVInstance and draws translate handles at i
 ### 1. `Archivable` (`engine_core/DataModel`, `PropertyReflection`, `LuaApi`)
 
 1. Every instance has `Archivable`, a boolean, default true, readable and writable from Lua. It is not saved (an instance that is not archivable is not written at all), records no history, and does not mark the place changed.
-2. `LuaField` gains `hidden`: a field Properties never lists. `Archivable` is the first one. Properties (`ide/PropertySheet`) skips hidden fields, and the MCP `get_properties` tool does too.
+2. `LuaField` gains `hidden`: a field the Properties panel never lists. `Archivable` is the first one. Only Properties (`ide/PropertySheet`) skips hidden fields; the MCP tools, scripts, and the command line see them.
 3. `authored_tree` skips an instance whose `Archivable` is false, with its subtree, in edit mode. The place capture keeps it: Archivable is about saving, and Stop still restores it.
 
 ### 2. `Camera.ViewportSize` (`engine_instances/Camera`, `runner/GameView`)
@@ -75,7 +75,7 @@ Events, declared with arguments (`lua_event` with `LuaParam`s), `handle` an `Enu
 
 The bound target is `Adornee` if set, else the parent, and only when it is a live PVInstance under `game`; otherwise the Dragger is inactive: no row, no picking. `Instance.new("Dragger")` works (added to ScriptRuntime's factories).
 
-`PVInstance` gains `virtual void set_pv_transform(const Matrix4&)`, the class's ordinary Transform setter: GameObject's `set_transform`, PhysicsObject's `set_transform` (its refusal is reported to the console and ends the drag). So a drag's writes fire Changed, mark the snapshot, and record history like any edit.
+`PVInstance` gains `virtual void set_pv_transform(const Matrix4&)`, the class's ordinary Transform setter: GameObject's `set_transform`, PhysicsObject's `set_transform` (its refusal is reported to the console and ends the drag). So a drag's writes fire Changed, mark the snapshot, and record history like any edit. Every GameObject is a PVInstance, so Camera, PointLight, and SpotLight (through `Light`) can be dragged too. DirectionalLight is not: it has a direction, no position.
 
 ### 5. Input and drags (`engine_core/DraggerWorld.{hpp,cpp}`, `engine_services/UserInputService`)
 
@@ -96,10 +96,17 @@ The bound target is `Adornee` if set, else the parent, and only when it is a liv
 3. `Renderer::setHandles` and `handlePass`, after the outline pass: depth test off, straight-alpha blending as the grid and outline passes use, planes first then arrows, the outline pass's VAO and VBO pattern, guarded by `CanDraw`. Shaders `resources/shaders/pipeline/handle.{vert,frag}`: per-vertex color, no lighting.
 4. Handles draw in edit mode and in play.
 
-### 7. The Move tool (`resources/plugins/MoveTool.luau`)
+### 7. Selection and run-state events (`engine_services/SelectionService`, `RunService`)
+
+The Move tool needs to hear selection and Play/Stop changes, and polling them would cost every frame and drift as the tool grows. These are host signals, as RunService's phase signals are, with no arguments.
+
+1. **`Selection.SelectionChanged`**, Roblox's name. `SelectionService::set` fires it once when the selection actually changes (a set to the same list fires nothing), after the new list is in place, so a handler's `Selection:Get()` sees it.
+2. **`RunService.Started`** fires when a play session opens, after the place is captured and `IsRunning()` is true. **`RunService.Stopped`** fires after Stop has restored the place, when `IsRunning()` is false and the tree is the edit tree again. Roblox has neither; plugins there poll `IsRunning()`. Both reach plugins and the command line; game scripts in play see `Stopped` never fire, since their VM closes first.
+
+### 8. The Move tool (`resources/plugins/MoveTool.luau`)
 
 1. A built-in plugin, listed in `kBuiltinPlugins`, so it loads into Core at startup.
-2. There is no `SelectionChanged` event and no Lua event for Play and Stop, so on each `Heartbeat` it reads `Selection:Get()` and `RunService:IsRunning()` and, only when the wanted target differs from `Adornee`, updates it: the first selected instance when it is a PVInstance and the place is not running, nil otherwise. It keeps one Dragger in Core, made on first need. `Space` World and `Increment` 1 are constants at the top of the file.
+2. It connects `Selection.SelectionChanged`, `RunService.Started`, and `RunService.Stopped` to one update: `Adornee` becomes the first selected instance when it is a PVInstance and the place is not running, nil otherwise. It keeps one Dragger in Core, made on first need, and runs the update once at load. `Space` World and `Increment` 1 are constants at the top of the file.
 
 ## Tests
 
@@ -111,6 +118,8 @@ Sandbox Catch2, `sandbox/dragger_tests.cpp` unless noted.
 - **Math, DR1–DR8.** DR1: the center ray is the camera's look vector, a corner ray matches the Perspective frustum corner. DR2: `handle_scale` gives the same pixel length at 5 and 500 studs. DR3: an arrow picks at 8 px, misses at 9; a plane square wins over an arrow where both are hit. DR4: a near-parallel arrow and an edge-on plane are neither picked nor meshed. DR5: an axis drag stays on its axis and does not depend on where along the arrow it was grabbed. DR6: a plane drag stays in its plane. DR7: snapping rounds each component, along rotated axes in Local space. DR8: a parallel ray gives nullopt, and no value is NaN.
 - **Instance and world, DR9–DR20.** DR9: active with a PVInstance parent or Adornee under game; inactive otherwise, with no row. DR10: press, moves, release move the target and fire DragBegan, Dragged (right offset), DragEnded in order; `Dragging` is true between. DR11: those records are processed; input that misses every handle is not. DR12: edit mode: one drag is one undo step and undo restores the start; a press and release with no motion records nothing. DR13: play: no history; a dragged PhysicsObject ends with zero velocity. DR14: focus loss, destroying the Dragger, or destroying the target ends the drag and fires DragEnded. DR15: two overlapping Draggers: the nearer wins. DR16: rotation and scale survive a drag. DR17: no CurrentCamera, a zero ViewportSize, or a locked pointer: input passes through. DR18: `Space` and `Increment` refuse bad values. DR19: offsets stay total since the drag began, also when `Increment` changes mid-drag. DR20: a Lua `Dragged` handler that moves a second object lands in the same undo step.
 - **Rendering.** RD1: an active Dragger has a snapshot row with its frame and states; an inactive one has none. RD2 (`scene-render-check`): a Dragger draws red, green, and blue pixels along its arrows, with no GL error.
+- **Events, EV1–EV3** (`game_services_tests.cpp`). EV1: `SelectionChanged` fires once per change and not for a set to the same list; a handler's `Get()` sees the new list. EV2: `Started` fires at Play with `IsRunning()` true; `Stopped` fires after Stop with `IsRunning()` false and the place restored. EV3: a plugin's connections to both outlive a play session.
+- **Lights.** DR21: a PointLight and a SpotLight can be dragged; a Dragger bound to a DirectionalLight is inactive.
 - **Move tool, MT1–MT3** (`plugin_tests.cpp`). MT1: selecting a PVInstance sets the one Dragger's Adornee to it; another selection retargets it; clearing sets nil. MT2: a non-PVInstance selection sets nil. MT3: during play Adornee is nil; after Stop it follows the selection again. Loading MoveTool leaves no undo step.
 - **By hand.** Drag each arrow and plane in the studio, with snapping, in Local space, then undo.
 
@@ -121,4 +130,5 @@ Each phase ends with passing tests and can merge alone.
 2. `ViewportSize` and DraggerMath.
 3. Dragger instance, DraggerWorld, input, undo, and events.
 4. Snapshot rows and the handle pass.
-5. The Move tool.
+5. Selection and run-state events.
+6. The Move tool.

@@ -223,6 +223,11 @@ public:
     std::string name(InstanceId id) const;
     // First direct child in sibling order, or 0 when none matches.
     InstanceId find_first_child(InstanceId parent, std::string_view name) const;
+    // Whether a save writes this instance and its subtree. Not saved itself,
+    // not undone, and true for a new instance. The place capture keeps a
+    // non-archivable instance, so Stop restores it like any other.
+    bool archivable(InstanceId id) const;
+    void set_archivable(InstanceId id, bool archivable);
     // Direct children in sibling order. A missing parent returns an empty vector.
     std::vector<InstanceId> get_children(InstanceId parent) const;
 
@@ -593,6 +598,7 @@ private:
     InstanceId id_ = 0;
     std::string name_;
     std::string guid_;
+    bool archivable_ = true;
     PropertyBag extras_;
 
     bool lock_write_blocking();

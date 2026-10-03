@@ -6,6 +6,7 @@
 #include "PropertyReflection.hpp"
 
 #include <algorithm>
+#include <iterator>
 
 namespace engine_core {
 
@@ -1522,6 +1523,23 @@ InstanceId DataModel::service(std::string_view class_name) const {
     return 0;
 }
 
+bool DataModel::archivable(InstanceId id) const {
+    const DataModel* object = instance(id);
+    return object == nullptr || object->archivable_;
+}
+
+void DataModel::set_archivable(InstanceId id, bool archivable) {
+    DataModel* object = instance(id);
+    if (object == nullptr || object->archivable_ == archivable) {
+        return;
+    }
+    object->archivable_ = archivable;
+    // What a save writes changed: the parent's folder gains or loses it.
+    mark_authored_dirty(id);
+    mark_authored_dirty(parent(id));
+    object->emit_property("Archivable");
+}
+
 InstanceId DataModel::core() const {
     // Game makes Core once; until then, and in a DataModel that is not a Game, there is none.
     if (state_->core_id == 0 || !alive(state_->core_id)) {
@@ -2115,6 +2133,21 @@ bool write_lua_parent(DataModel& world, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+bool read_lua_archivable(DataModel& world, DataModel& object, LuaSlot& out) {
+    out.kind = LuaSlot::Kind::Bool;
+    out.flag = world.archivable(object.id());
+    return true;
+}
+
+bool write_lua_archivable(DataModel& world, DataModel& object, LuaSlot& in) {
+    if (in.kind != LuaSlot::Kind::Bool) {
+        in.error = "Archivable must be true or false";
+        return false;
+    }
+    world.set_archivable(object.id(), in.flag);
+    return true;
+}
+
 bool read_lua_changed(DataModel&, DataModel&, LuaSlot& out) {
     out.kind = LuaSlot::Kind::Signal;
     return true;
@@ -2132,8 +2165,9 @@ ANARCHY_LUA_REGISTER(register_datamodel_lua) {
         // game is a parent too, and it is not an Instance.
         lua_property("Parent", "DataModel?", true, read_lua_parent, write_lua_parent),
         changed,
+        lua_property("Archivable", "boolean", true, read_lua_archivable, write_lua_archivable),
     };
-    register_lua_class("DataModel", nullptr, fields, 4);
+    register_lua_class("DataModel", nullptr, fields, static_cast<int>(std::size(fields)));
 }
 
 }  // namespace

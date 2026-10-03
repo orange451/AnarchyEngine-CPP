@@ -444,6 +444,8 @@ DataModel* DataModel::pooled_object(InstancePool& pool, std::uint32_t storage, I
         pool.objects[storage] = object;
     } else {
         object->rebind(id);
+        // Reused storage starts as a new instance would.
+        object->archivable_ = true;
         object->on_reuse();
     }
     return object;
@@ -1530,7 +1532,8 @@ bool DataModel::archivable(InstanceId id) const {
 
 void DataModel::set_archivable(InstanceId id, bool archivable) {
     DataModel* object = instance(id);
-    if (object == nullptr || object->archivable_ == archivable) {
+    // A service holds the place: it is always written.
+    if (object == nullptr || object->is_service() || object->archivable_ == archivable) {
         return;
     }
     object->archivable_ = archivable;
@@ -2142,6 +2145,10 @@ bool read_lua_archivable(DataModel& world, DataModel& object, LuaSlot& out) {
 bool write_lua_archivable(DataModel& world, DataModel& object, LuaSlot& in) {
     if (in.kind != LuaSlot::Kind::Bool) {
         in.error = "Archivable must be true or false";
+        return false;
+    }
+    if (object.is_service() && !in.flag) {
+        in.error = world.name(object.id()) + " is a service, and a service is always archivable";
         return false;
     }
     world.set_archivable(object.id(), in.flag);

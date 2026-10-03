@@ -106,6 +106,7 @@ void DataModel::capture_place_unlocked() {
         record.name = part.instance->name_;
         record.simulated = has_tag(ecs_world(), part.entity, state_->ecs_ids.simulated);
         record.visual_only = has_tag(ecs_world(), part.entity, state_->ecs_ids.visual_only);
+        record.archivable = part.instance->archivable_;
         part.instance->write_place(record.extra);
         record.guid = part.instance->guid_;
         record.extras = part.instance->extras_;
@@ -214,6 +215,7 @@ void DataModel::restore_record(const PlaceRecord& record) {
     set_tag(ecs_world(), live.entity, state_->ecs_ids.visual_only, record.visual_only);
     live.instance->name_ = record.name;
     live.instance->guid_ = record.guid;
+    live.instance->archivable_ = record.archivable;
     live.instance->extras_ = record.extras;
     const std::byte* bytes = record.extra.empty() ? nullptr : record.extra.data();
     live.instance->read_place(bytes, record.extra.size());
@@ -431,6 +433,10 @@ std::vector<AuthoredNode> DataModel::authored_tree(const std::function<bool(Inst
                 continue;
             }
             const PlaceRecord& record = *found->second;
+            // As at Test: what was not archivable then is not saved, with all it holds.
+            if (!record.archivable) {
+                continue;
+            }
             AuthoredNode node;
             node.id = record.id;
             node.guid = record.guid;

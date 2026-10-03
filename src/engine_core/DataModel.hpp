@@ -582,6 +582,7 @@ private:
         std::string source;
         bool simulated = false;
         bool visual_only = false;
+        bool archivable = true;
         std::vector<std::byte> extra;
     };
 

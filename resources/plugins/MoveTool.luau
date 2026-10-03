@@ -1,6 +1,7 @@
--- The studio's Move tool: translate handles at the middle of the selected
--- PVInstances while the place is not playing. Dragging them moves the Dragger
--- and every selected PVInstance by the same offset, as one undo step. The
+-- The studio's Move tool: translate handles at the middle of the PVInstances
+-- selected or inside what is selected, while the place is not playing, so
+-- selecting a Folder moves everything in it. Dragging them moves the Dragger
+-- and each of those PVInstances by the same offset, as one undo step. The
 -- Dragger lives in Core, so it is never saved and its own moves are never
 -- undo steps.
 local RunService = game:GetService("RunService")
@@ -16,15 +17,31 @@ local starts = {}
 -- The selection's Changed connections, so the handles follow an edit or an undo.
 local watching = {}
 
--- The selected PVInstances, or none while the place plays.
+-- The PVInstances selected or under what is selected, each once, or none
+-- while the place plays. The camera the view looks through stays out:
+-- moving it would move the view the drag is measured in.
 local function selected()
 	local list = {}
 	if RunService:IsRunning() then
 		return list
 	end
-	for _, item in Selection:Get() do
-		if item:IsA("PVInstance") and item.Parent ~= nil then
+	local seen = {}
+	local viewing = workspace.CurrentCamera
+	local function gather(item)
+		if seen[item] then
+			return
+		end
+		seen[item] = true
+		if item:IsA("PVInstance") and item ~= viewing then
 			table.insert(list, item)
+		end
+		for _, child in item:GetChildren() do
+			gather(child)
+		end
+	end
+	for _, item in Selection:Get() do
+		if item.Parent ~= nil then
+			gather(item)
 		end
 	end
 	return list

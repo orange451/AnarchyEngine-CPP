@@ -595,7 +595,8 @@ Checked CheckScripts(engine_core::Engine& engine, const std::vector<InstanceId>&
                         continue;
                     }
                     const std::optional<std::string> checked = analysis.analyzed_source(id);
-                    if (analysis.settled(id) && checked && *checked == script->source()) {
+                    // Settled with nothing checked: the script is outside the place.
+                    if (analysis.settled(id) && (!checked || *checked == script->source())) {
                         progress->done[id] = analysis.diagnostics(id);
                     } else {
                         still.push_back(id);

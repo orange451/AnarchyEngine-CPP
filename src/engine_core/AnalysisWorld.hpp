@@ -36,6 +36,8 @@ struct NodeSnap {
 // go through `index`, which reindex() rebuilds after nodes change.
 struct WorldSnap {
     InstanceId root = 0;
+    // Captured while the simulation ran: the play tree, not the authored one.
+    bool play = false;
     std::vector<NodeSnap> nodes;
     std::unordered_map<InstanceId, std::size_t> index;
 

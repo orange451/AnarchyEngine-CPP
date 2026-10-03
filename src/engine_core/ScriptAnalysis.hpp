@@ -238,7 +238,8 @@ public:
     bool idle() const;
     // This script has a published result, and no newer check of it is queued,
     // running, or waiting for pump(). A tree change pump() has not taken yet
-    // counts as newer while the simulation is stopped.
+    // counts as newer while the simulation is stopped. A script outside the
+    // place, never checked, is settled with no result.
     bool settled(InstanceId script) const;
 
     class DiagnosticsSignal {
@@ -281,6 +282,9 @@ private:
     void run_place();
     // The tree changed: capture it, and let the place checker diff it against the last.
     void note_tree();
+    // A play tree was captured and the simulation has stopped since: the
+    // authored tree is waiting for pump() to diff it.
+    bool play_stale_now() const;
     void fire(const std::vector<InstanceId>& ids);
     // Captures the tree once and queues these scripts. Gameplay thread, or a
     // thread that holds the DataModel lock.

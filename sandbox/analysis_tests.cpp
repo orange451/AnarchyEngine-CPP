@@ -1576,6 +1576,45 @@ TEST_CASE("A42 a change rechecks only the scripts it can affect", "[A42]") {
         REQUIRE(analysis.diagnostics(uses_inner.id()).empty());
         REQUIRE(rechecked(destroyed) == std::vector<bool>{false, false, false, false, false});
     }
+    SECTION("a reparent rechecks only the scripts that reached either folder") {
+        rig.game.set_parent(crate.id(), lights.id());
+        settle(analysis);
+        REQUIRE(rechecked(before) == std::vector<bool>{false, false, true, true, false});
+        REQUIRE_FALSE(analysis.diagnostics(uses_props.id()).empty());
+    }
+    SECTION("a module leaving the place through its parent is dropped, and what required it rechecked") {
+        rig.game.set_parent(util.id(), engine_core::DataModel::kNoParent);
+        settle(analysis);
+        REQUIRE_FALSE(analysis.analyzed_source(util.id()).has_value());
+        REQUIRE(analysis.diagnostics(util.id()).empty());
+        REQUIRE(rechecked(before)[1]);
+        REQUIRE_FALSE(rechecked(before)[4]);
+        REQUIRE_FALSE(analysis.diagnostics(uses_util.id()).empty());
+        // Back in the place, it is checked again.
+        rig.game.set_parent(util.id(), workspace);
+        settle(analysis);
+        REQUIRE(analysis.analyzed_source(util.id()).has_value());
+        REQUIRE(analysis.diagnostics(uses_util.id()).empty());
+    }
+    SECTION("a module added under a name a script requires rechecks the script") {
+        engine_core::Script& by_name = add_script(rig.game, "ByName",
+                                                  "--!strict\nlocal Missing = require(\"Missing\")\n"
+                                                  "print(Missing.value)\n");
+        settle(analysis);
+        INFO(dump(analysis.diagnostics(by_name.id())));
+        REQUIRE_FALSE(analysis.diagnostics(by_name.id()).empty());
+        const std::uint64_t by_name_checks = analysis.checks(by_name.id());
+        engine_core::ModuleScript& missing = add_module(rig.game, "Missing", "return { value = 1 }\n");
+        rig.game.set_parent(missing.id(), extra.id());
+        settle(analysis);
+        REQUIRE(analysis.checks(by_name.id()) > by_name_checks);
+        INFO(dump(analysis.diagnostics(by_name.id())));
+        REQUIRE(analysis.diagnostics(by_name.id()).empty());
+        // Renamed away, the require fails again.
+        rig.game.set_name(missing.id(), "Gone");
+        settle(analysis);
+        REQUIRE_FALSE(analysis.diagnostics(by_name.id()).empty());
+    }
     SECTION("undoing a rename rechecks what the rename did") {
         begin_step(rig.game, "Rename");
         rig.game.set_name(crate.id(), "Box");
@@ -1587,5 +1626,44 @@ TEST_CASE("A42 a change rechecks only the scripts it can affect", "[A42]") {
         settle(analysis);
         REQUIRE(rechecked(renamed) == std::vector<bool>{false, false, true, false, false});
         REQUIRE(analysis.diagnostics(uses_props.id()).empty());
+    }
+}
+
+TEST_CASE("A43 a playtest's tree changes leave the authored results as they were", "[A43]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Folder& holder = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(holder.id(), "Holder");
+    rig.game.set_parent(holder.id(), workspace_of(rig.game));
+    engine_core::Script& kept =
+        add_script(rig.game, "Kept", "--!strict\nlocal value: number = \"nope\"\nprint(workspace.Holder.Moved)\n");
+    engine_core::Script& doomed = add_script(rig.game, "Doomed", "--!strict\nprint(workspace.Kept.Name)\n");
+    engine_core::Script& moved = add_script(rig.game, holder.id(), "Moved", "--!strict\nprint(script.Parent.Name)\n");
+    settle(analysis);
+    const std::vector<engine_core::InstanceId> authored{kept.id(), doomed.id(), moved.id()};
+    std::vector<std::string> before;
+    for (engine_core::InstanceId id : authored) {
+        REQUIRE(analysis.analyzed_source(id).has_value());
+        before.push_back(*analysis.analyzed_source(id) + "\n" + dump(analysis.diagnostics(id)));
+    }
+    REQUIRE(has_code(analysis.diagnostics(kept.id()), "Type"));
+
+    rig.game.start_simulation();
+    rig.frames(1);
+    rig.game.destroy(doomed.id());
+    rig.game.set_parent(moved.id(), engine_core::DataModel::kNoParent);
+    const engine_core::InstanceId runtime =
+        add_script(rig.game, "Runtime", "--!strict\nprint(workspace.Kept.Name)\n").id();
+    settle(analysis);
+    rig.game.stop_simulation();
+    settle(analysis);
+
+    REQUIRE_FALSE(analysis.analyzed_source(runtime).has_value());
+    REQUIRE(analysis.diagnostics(runtime).empty());
+    for (std::size_t at = 0; at < authored.size(); ++at) {
+        INFO(rig.game.name(authored[at]));
+        REQUIRE(analysis.analyzed_source(authored[at]).has_value());
+        REQUIRE(*analysis.analyzed_source(authored[at]) + "\n" + dump(analysis.diagnostics(authored[at])) ==
+                before[at]);
     }
 }

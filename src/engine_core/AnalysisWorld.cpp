@@ -68,6 +68,7 @@ std::optional<InstanceId> WorldSnap::workspace() const {
 std::shared_ptr<WorldSnap> capture_world(DataModel& game) {
     auto world = std::make_shared<WorldSnap>();
     world->root = game.id();
+    world->play = game.simulation_running();
     NodeSnap root;
     root.id = world->root;
     root.parent = DataModel::kNoParent;

@@ -218,10 +218,22 @@ struct RequireWalk : Luau::AstVisitor {
     const WorldSnap* world = nullptr;
     InstanceId self = 0;
     std::vector<InstanceId> required;
+    // Each `require("Name")`: it looks the name up across the whole place.
+    std::vector<std::string> by_name;
 
     bool visit(Luau::AstExprCall* call) override {
         auto* global = call->func != nullptr ? call->func->as<Luau::AstExprGlobal>() : nullptr;
         if (global != nullptr && global->name == "require" && call->args.size > 0 && world != nullptr) {
+            Luau::AstExpr* arg = call->args.data[0];
+            while (auto* group = arg->as<Luau::AstExprGroup>()) {
+                arg = group->expr;
+            }
+            if (auto* literal = arg->as<Luau::AstExprConstantString>()) {
+                std::string name = string_literal(literal->value);
+                if (literal->isQuoted() && std::find(by_name.begin(), by_name.end(), name) == by_name.end()) {
+                    by_name.push_back(std::move(name));
+                }
+            }
             const std::optional<InstanceId> target = resolve_expr(*world, self, call->args.data[0]);
             if (target && *target != self) {
                 const NodeSnap* node = world->find(*target);
@@ -235,7 +247,9 @@ struct RequireWalk : Luau::AstVisitor {
     }
 };
 
-std::vector<InstanceId> find_requires(const WorldSnap& world, InstanceId self, Luau::AstStat* root) {
+// The modules the script requires, and in `by_name` the names it requires by name.
+std::vector<InstanceId> find_requires(const WorldSnap& world, InstanceId self, Luau::AstStat* root,
+                                      std::vector<std::string>* by_name = nullptr) {
     if (root == nullptr) {
         return {};
     }
@@ -243,6 +257,9 @@ std::vector<InstanceId> find_requires(const WorldSnap& world, InstanceId self, L
     walk.world = &world;
     walk.self = self;
     root->visit(&walk);
+    if (by_name != nullptr) {
+        *by_name = std::move(walk.by_name);
+    }
     return walk.required;
 }
 
@@ -2171,8 +2188,12 @@ struct CheckInput {
     Luau::Mode mode = Luau::Mode::Nonstrict;
     // False after a syntax error, under --!nocheck, or when analysis cannot run.
     bool type_check = false;
+    // Preparing it threw, so it says it could not be checked.
+    bool failed = false;
     std::vector<Diagnostic> diagnostics;
     std::vector<InstanceId> requires;
+    // The names it requires by name, as `require("Util")`.
+    std::vector<std::string> by_name;
 };
 
 void prepare_script(const WorkerEnv& env, const WorldSnap& world, CheckInput& input) {
@@ -2206,7 +2227,7 @@ void prepare_script(const WorkerEnv& env, const WorldSnap& world, CheckInput& in
     // A script without a `--!` mode comment on its first lines is checked nonstrict.
     input.mode = Luau::parseMode(parsed.hotcomments).value_or(Luau::Mode::Nonstrict);
     if (parsed.root != nullptr) {
-        input.requires = find_requires(world, input.id, parsed.root);
+        input.requires = find_requires(world, input.id, parsed.root, &input.by_name);
     }
     if (input.mode == Luau::Mode::NoCheck) {
         return;
@@ -2342,25 +2363,51 @@ struct PlaceChecker {
     // Each script's reached set from its last check. Written from pool threads.
     std::mutex reached_mu;
     std::unordered_map<InstanceId, std::vector<InstanceId>> reached;
-    // The tree its cached modules and place types were checked against.
+    // Scripts whose last check failed, so it said nothing of what it reached.
+    // Any tree change checks them again. Guarded by reached_mu.
+    std::unordered_set<InstanceId> failed;
+    // The authored tree its cached modules and place types were checked
+    // against. A play tree never replaces it.
     std::shared_ptr<const WorldSnap> last_world;
+    // Each type-checked script's `require("Name")` names, from its last
+    // check. Which module a name finds depends on the whole place.
+    std::unordered_map<InstanceId, std::vector<std::string>> by_name;
+    // Scripts checked against a play tree. The next authored tree checks them again.
+    std::unordered_set<InstanceId> play_checked;
 };
 
 // Brings the place checker to `world` and adds to `names` every module the
-// change can affect: scripts added or edited, and scripts whose last check
-// reached an instance the diff names. A script that left the place leaves the
-// cache and goes in `removed`, and what required it is added.
+// change can affect: scripts added or edited, scripts whose last check reached
+// an instance the diff names, scripts that require by a name the change adds,
+// removes, or moves, and scripts whose last check failed. A script that left
+// the place leaves the cache and goes in `removed`, and what required it is
+// added. A play tree changes none of this: scripts checked against it are
+// noted, and the next authored tree checks them again.
 void sync_place(PlaceChecker& checker, const std::shared_ptr<const WorldSnap>& world,
                 std::unordered_set<std::string>& names, std::vector<InstanceId>& removed) {
     WorkerEnv& env = *checker.env;
     // A place with no root says nothing about the tree.
-    if (world->nodes.empty() || (checker.last_world == world && env.place != nullptr)) {
+    if (world->nodes.empty()) {
         return;
     }
-    // The first tree, or a new frontend after a registry change: every script
-    // is checked against new types. Scripts gone since the last tree are still
-    // dropped.
-    if (checker.last_world == nullptr || env.place == nullptr) {
+    if (world->play) {
+        // Something to check play scripts against until the authored tree comes back.
+        if (env.place == nullptr) {
+            env.place = build_place_types(*env.frontend->globals.globalScope, world);
+        }
+        return;
+    }
+    if (checker.last_world == world && env.place != nullptr && !env.place->world->play) {
+        return;
+    }
+    for (InstanceId id : checker.play_checked) {
+        names.insert(module_name_of(id));
+    }
+    checker.play_checked.clear();
+    // The first tree, a new frontend after a registry change, or types last
+    // built from a play tree: every script is checked against new types.
+    // Scripts gone since the last authored tree are still dropped.
+    if (checker.last_world == nullptr || env.place == nullptr || env.place->world->play) {
         if (checker.last_world != nullptr) {
             for (const NodeSnap& node : checker.last_world->nodes) {
                 if (node.lua && world->find(node.id) == nullptr) {
@@ -2370,6 +2417,8 @@ void sync_place(PlaceChecker& checker, const std::shared_ptr<const WorldSnap>& w
             std::lock_guard<std::mutex> lock(checker.reached_mu);
             for (InstanceId id : removed) {
                 checker.reached.erase(id);
+                checker.failed.erase(id);
+                checker.by_name.erase(id);
             }
         }
         env.place = build_place_types(*env.frontend->globals.globalScope, world);
@@ -2389,10 +2438,36 @@ void sync_place(PlaceChecker& checker, const std::shared_ptr<const WorldSnap>& w
     for (InstanceId id : diff.edited_scripts) {
         names.insert(module_name_of(id));
     }
+    // Module names a by-name require may now find differently: a module added,
+    // removed, renamed, or moved, by its old name and its new one.
+    std::unordered_set<std::string> module_names;
+    for (InstanceId id : diff.moved) {
+        if (const NodeSnap* was = checker.last_world->find(id)) {
+            if (was->module) {
+                module_names.insert(was->name);
+            }
+        }
+        if (const NodeSnap* now = world->find(id)) {
+            if (now->module) {
+                module_names.insert(now->name);
+            }
+        }
+    }
+    for (InstanceId id : diff.added_scripts) {
+        if (const NodeSnap* now = world->find(id)) {
+            if (now->module) {
+                module_names.insert(now->name);
+            }
+        }
+    }
+    const bool changed = !diff.parents.empty() || !diff.moved.empty() || !diff.added_scripts.empty() ||
+                         !diff.removed_scripts.empty() || !diff.edited_scripts.empty();
     {
         std::lock_guard<std::mutex> lock(checker.reached_mu);
         for (InstanceId id : diff.removed_scripts) {
             checker.reached.erase(id);
+            checker.failed.erase(id);
+            checker.by_name.erase(id);
         }
         for (const auto& entry : checker.reached) {
             for (InstanceId id : entry.second) {
@@ -2401,6 +2476,21 @@ void sync_place(PlaceChecker& checker, const std::shared_ptr<const WorldSnap>& w
                     break;
                 }
             }
+        }
+        if (changed) {
+            for (InstanceId id : checker.failed) {
+                names.insert(module_name_of(id));
+            }
+        }
+    }
+    for (const auto& entry : checker.by_name) {
+        // A script that moved prefers modules beside its new parent.
+        bool affected = diff.moved.count(entry.first) != 0;
+        for (const std::string& name : entry.second) {
+            affected = affected || module_names.count(name) != 0;
+        }
+        if (affected) {
+            names.insert(module_name_of(entry.first));
         }
     }
     std::vector<Luau::ModuleName> gone;
@@ -2509,12 +2599,27 @@ void run_batch(PlaceChecker& checker, AnalysisPool& pool, const std::shared_ptr<
                 prepare_script(env, *world, input);
             } catch (...) {
                 input.type_check = false;
+                input.failed = true;
                 input.diagnostics.push_back(
                     make_diagnostic(input.id, TextRange{}, Severity::Error, "Analysis", "analysis failed"));
             }
         });
     }
     pool.run_all(std::move(prepare));
+    // The authored tree after a playtest checks these again.
+    if (world->play) {
+        for (const CheckInput& input : inputs) {
+            checker.play_checked.insert(input.id);
+        }
+    }
+    // Any failure below marks its script, so the next tree change retries it.
+    const auto note_failed = [&checker](InstanceId id) {
+        try {
+            std::lock_guard<std::mutex> lock(checker.reached_mu);
+            checker.failed.insert(id);
+        } catch (...) {
+        }
+    };
 
     std::unordered_map<std::string, std::string> sources;
     std::unordered_map<InstanceId, const CheckInput*> by_id;
@@ -2526,9 +2631,20 @@ void run_batch(PlaceChecker& checker, AnalysisPool& pool, const std::shared_ptr<
             {
                 std::lock_guard<std::mutex> lock(checker.reached_mu);
                 checker.reached.erase(input.id);
+                if (input.failed) {
+                    checker.failed.insert(input.id);
+                } else {
+                    checker.failed.erase(input.id);
+                }
             }
+            checker.by_name.erase(input.id);
             host.publish(finished_from(input));
             continue;
+        }
+        if (input.by_name.empty()) {
+            checker.by_name.erase(input.id);
+        } else {
+            checker.by_name[input.id] = input.by_name;
         }
         sources.emplace(input.module_name, input.check_source);
         queue.push_back(input.module_name);
@@ -2585,11 +2701,18 @@ void run_batch(PlaceChecker& checker, AnalysisPool& pool, const std::shared_ptr<
             {
                 std::lock_guard<std::mutex> lock(checker.reached_mu);
                 checker.reached[input->id] = finished.reached;
+                checker.failed.erase(input->id);
             }
             host.publish(std::move(finished));
         } catch (const std::exception& error) {
+            if (input != nullptr) {
+                note_failed(input->id);
+            }
             publish_failure(host, input, error.what());
         } catch (...) {
+            if (input != nullptr) {
+                note_failed(input->id);
+            }
             publish_failure(host, input, "analysis failed");
         }
     };
@@ -2629,6 +2752,7 @@ void run_batch(PlaceChecker& checker, AnalysisPool& pool, const std::shared_ptr<
                     continue;
                 }
             }
+            note_failed(id);
             publish_failure(host, by_id.at(id), failure.c_str());
         }
     }
@@ -2652,6 +2776,10 @@ struct ScriptAnalysis::State {
     std::mutex mu;
     // Set by note_world_changed. pump() turns it into one note_tree().
     std::atomic<bool> world_stale{false};
+    // A tree was captured while the simulation ran. Stop restores the
+    // authored tree without a note, so once stopped pump() takes it as a tree
+    // change.
+    std::atomic<bool> play_stale{false};
     std::condition_variable cv;
     std::mutex start_mu;
     bool stop = false;
@@ -2984,6 +3112,10 @@ void ScriptAnalysis::run_place() {
             // Each script the batch took says it could not be checked.
             for (const auto& entry : claimed) {
                 try {
+                    {
+                        std::lock_guard<std::mutex> lock(checker.reached_mu);
+                        checker.failed.insert(entry.first);
+                    }
                     CheckInput input;
                     input.id = entry.first;
                     input.generation = entry.second;
@@ -3134,6 +3266,9 @@ void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
     }
     const std::uint64_t seq = state_->world_seq.fetch_add(1) + 1;
     const std::shared_ptr<WorldSnap> world = capture_world(game_);
+    if (world->play) {
+        state_->play_stale.store(true, std::memory_order_relaxed);
+    }
     ensure_worker();
     std::lock_guard<std::mutex> lock(state_->mu);
     if (!state_->enabled || state_->stop) {
@@ -3175,6 +3310,20 @@ void ScriptAnalysis::note_tree() {
     state_->adopt(world, seq);
     state_->tree_pending = true;
     state_->tree_due = std::chrono::steady_clock::now() + kDebounce;
+    // A script remove() dropped that is in the tree again, as Stop brings back
+    // one a playtest destroyed, is checked as new.
+    for (auto it = state_->removed.begin(); it != state_->removed.end();) {
+        const NodeSnap* node = world->find(*it);
+        if (node == nullptr || !node->lua) {
+            ++it;
+            continue;
+        }
+        Job job;
+        job.id = *it;
+        job.generation = ++state_->generations[*it];
+        state_->pending[*it] = Pending{job, state_->tree_due};
+        it = state_->removed.erase(it);
+    }
     state_->cv.notify_all();
 }
 
@@ -3301,6 +3450,10 @@ void ScriptAnalysis::pump() {
     // A tree change is diffed once, however many changes came in. Only while
     // stopped: play changes are not the authored tree. The UI thread pumps
     // outside a step, so the read lock is short and uncontended.
+    if (state_->play_stale.load(std::memory_order_relaxed) && !game_.simulation_running() &&
+        state_->play_stale.exchange(false, std::memory_order_relaxed)) {
+        state_->world_stale.store(true, std::memory_order_relaxed);
+    }
     if (state_->world_stale.load(std::memory_order_relaxed) && !game_.simulation_running()) {
         DataModelLock lock(game_, DataModelLock::Read, std::chrono::milliseconds(2));
         if (lock.owns() && state_->world_stale.exchange(false, std::memory_order_relaxed)) {
@@ -3391,7 +3544,7 @@ void ScriptAnalysis::print_report(std::ostream& out) const {
 }
 
 bool ScriptAnalysis::busy() const {
-    if (state_->world_stale.load(std::memory_order_relaxed)) {
+    if (state_->world_stale.load(std::memory_order_relaxed) || play_stale_now()) {
         return true;
     }
     std::lock_guard<std::mutex> lock(state_->mu);
@@ -3399,7 +3552,7 @@ bool ScriptAnalysis::busy() const {
 }
 
 bool ScriptAnalysis::idle() const {
-    if (state_->world_stale.load(std::memory_order_relaxed)) {
+    if (state_->world_stale.load(std::memory_order_relaxed) || play_stale_now()) {
         return false;
     }
     std::lock_guard<std::mutex> lock(state_->mu);
@@ -3408,20 +3561,27 @@ bool ScriptAnalysis::idle() const {
 }
 
 bool ScriptAnalysis::settled(InstanceId script) const {
-    if (state_->world_stale.load(std::memory_order_relaxed) && !game_.simulation_running()) {
+    if ((state_->world_stale.load(std::memory_order_relaxed) && !game_.simulation_running()) || play_stale_now()) {
         return false;
     }
     std::lock_guard<std::mutex> lock(state_->mu);
     // A tree change not yet diffed, or being diffed, may check it again.
-    if (state_->tree_pending || state_->tree_in_batch) {
+    if (state_->tree_pending || state_->tree_in_batch || state_->pending.count(script) != 0 ||
+        state_->in_batch.count(script) != 0 ||
+        std::any_of(state_->results.begin(), state_->results.end(),
+                    [script](const Finished& finished) { return finished.id == script; })) {
         return false;
     }
-    if (state_->published.count(script) == 0 || state_->pending.count(script) != 0 ||
-        state_->in_batch.count(script) != 0) {
-        return false;
+    if (state_->published.count(script) != 0) {
+        return true;
     }
-    return std::none_of(state_->results.begin(), state_->results.end(),
-                        [script](const Finished& finished) { return finished.id == script; });
+    // A script outside the place is never checked: settled, with nothing to say.
+    const NodeSnap* node = state_->latest_world != nullptr ? state_->latest_world->find(script) : nullptr;
+    return state_->latest_world != nullptr && (node == nullptr || !node->lua);
+}
+
+bool ScriptAnalysis::play_stale_now() const {
+    return state_->play_stale.load(std::memory_order_relaxed) && !game_.simulation_running();
 }
 
 void ScriptAnalysis::fire(const std::vector<InstanceId>& ids) {

@@ -237,11 +237,16 @@ void TestFindBar(engine_core::Engine& engine) {
     // The clear buttons empty their fields and leave the focus in them.
     ide::SearchInput& find = rig.bar().findInput();
     ide::SearchInput& replace = rig.bar().replaceInput();
-    Expect(!find.text().empty() && !find.clearButton().isDisabled(), "find's clear button is enabled with find text");
-    Expect(find.clearButton().getAbsoluteX() + find.clearButton().getWidth() <=
-                   find.field().getAbsoluteX() + find.field().getWidth() &&
-               find.clearButton().getAbsoluteX() > find.field().getAbsoluteX() + find.field().getWidth() - 30,
-           "the clear button sits at the field's right end, after the toggles");
+    Expect(!find.text().empty() && find.clearButton().isVisible(), "find's clear button shows with find text");
+    // The three toggles take some 63 pixels of the field's right end.
+    const double find_right = find.field().getAbsoluteX() + find.field().getWidth();
+    Expect(find.clearButton().getAbsoluteX() + find.clearButton().getWidth() <= find_right - 60 &&
+               find.clearButton().getAbsoluteX() > find_right - 95,
+           "the clear button sits left of the find field's toggles");
+    const double replace_right = replace.field().getAbsoluteX() + replace.field().getWidth();
+    Expect(replace.clearButton().getAbsoluteX() + replace.clearButton().getWidth() <= replace_right &&
+               replace.clearButton().getAbsoluteX() > replace_right - 30,
+           "with no toggles, the clear button sits at the replace field's right end");
     Click(*rig.scene, find.clearButton());
     rig.frame();
     rig.frame();
@@ -249,12 +254,13 @@ void TestFindBar(engine_core::Engine& engine) {
     Expect(find.field().isFocused(), "the find field keeps the focus after clearing");
     ExpectText(rig.count(), "No results", "an empty find has no results");
     Expect(!Has(rig.classesAt(0), "find"), "clearing find drops the highlights");
-    Expect(find.clearButton().isDisabled(), "the clear button is disabled once the field is empty");
-    Expect(!replace.text().empty() && !replace.clearButton().isDisabled(), "replace has a clear button of its own");
+    Expect(!find.clearButton().isVisible(), "the clear button is hidden once the field is empty");
+    Expect(!replace.text().empty() && replace.clearButton().isVisible(), "replace has a clear button of its own");
     Click(*rig.scene, replace.clearButton());
     rig.frame();
     ExpectText(replace.text(), "", "the clear button empties the replace field");
     Expect(replace.field().isFocused(), "the replace field takes the focus when cleared");
+    Expect(!replace.clearButton().isVisible(), "replace's clear button is hidden once it is empty");
 }
 
 // Find matches and problems as bands on the editor's scroll bar.
@@ -573,7 +579,7 @@ void TestSearchPane(engine_core::Engine& engine) {
     Expect(rig.pane->findInput().field().isFocused(), "the search field has the focus after clearing");
     Expect(rig.pane->results().empty(), "clearing the search drops its results");
     ExpectText(rig.pane->summary(), "Search every Script and ModuleScript", "a cleared search says what it does");
-    Expect(rig.pane->findInput().clearButton().isDisabled(), "the search's clear button is disabled when empty");
+    Expect(!rig.pane->findInput().clearButton().isVisible(), "the search's clear button is hidden when empty");
     Click(*rig.scene, rig.pane->replaceInput().clearButton());
     rig.frame();
     ExpectText(rig.pane->replaceInput().text(), "", "the clear button empties the replacement");

@@ -191,7 +191,7 @@ SearchInput::SearchInput(std::string prompt) {
     clear_->setMinSize(kToggle, kToggle);
     clear_->setPrefSize(kToggle, kToggle);
     clear_->setMaxSize(kToggle, kToggle);
-    clear_->setDisable(true);
+    clear_->setVisible(false);
     clear_->setOnAction([this] {
         field_->clear();
         field_->requestFocus();
@@ -232,20 +232,20 @@ void SearchInput::focusAll() {
 
 void SearchInput::layoutChildren() {
     StackPane::layoutChildren();
+    // Nothing to clear, no button.
     const bool on = !field_->getText().empty();
-    if (on == clear_->isDisabled()) {
-        clear_->setDisable(!on);
-        clear_->setCursor(on ? jadefx::Cursor::Pointer : jadefx::Cursor::Default);
+    if (on != clear_->isVisible()) {
+        clear_->setVisible(on);
     }
-    double x = field_->getX() + field_->getWidth() - kToggleInset - kToggle;
+    double x = field_->getX() + field_->getWidth() - kToggleInset;
     const double y = field_->getY() + (field_->getHeight() - kToggle) * 0.5;
-    clear_->performLayout(x, y, kToggle, kToggle);
-    x -= kToggleGap;
     for (auto it = toggles_.rbegin(); it != toggles_.rend(); ++it) {
         x -= kToggle;
         (*it)->performLayout(x, y, kToggle, kToggle);
         x -= kToggleGap;
     }
+    // The clear button comes first, left of the toggles.
+    clear_->performLayout(x - kToggle, y, kToggle, kToggle);
 }
 
 void SearchToggles::attach(SearchInput& input, const std::function<void()>& changed) {

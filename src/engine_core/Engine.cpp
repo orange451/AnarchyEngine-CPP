@@ -120,6 +120,8 @@ void Engine::start() {
 }
 
 void Engine::resume() {
+    // The frames drawn while paused are not the first step's RenderStepped time.
+    scripts_->drop_render_frames();
     {
         std::lock_guard<std::mutex> guard(pause_mu_);
         paused_ = false;

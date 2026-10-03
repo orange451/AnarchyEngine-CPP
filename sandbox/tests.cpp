@@ -2246,7 +2246,7 @@ TEST_CASE("S8 a script position write is path A", "[S8]") {
     REQUIRE(vis->transform_origin == engine_core::WriteOrigin::Simulation);
 }
 
-TEST_CASE("S9 binding PreRender from a script errors", "[S9]") {
+TEST_CASE("S9 binding PreRender from a script errors, and RenderStepped does not", "[S9]") {
     ScriptRig rig;
     add_script(rig.game, "Bad", R"(
         local pre_ok = pcall(function()
@@ -2256,7 +2256,7 @@ TEST_CASE("S9 binding PreRender from a script errors", "[S9]") {
             game:GetService("RunService").RenderStepped:Connect(function() end)
         end)
         _G.pre = not pre_ok
-        _G.step = not step_ok
+        _G.step = step_ok
     )");
     add_script(rig.game, "Other", "_G.other = true");
     rig.game.start_simulation();
@@ -3039,11 +3039,7 @@ TEST_CASE("S18 Heartbeat:Wait yields until the next Heartbeat", "[S18]") {
         local pre_ok = pcall(function()
             game:GetService("RunService").PreRender:Wait()
         end)
-        local step_ok = pcall(function()
-            game:GetService("RunService").RenderStepped:Wait()
-        end)
         _G.pre = not pre_ok
-        _G.step = not step_ok
         while true do
             local dt = game:GetService("RunService").Heartbeat:Wait()
             _G.n = (_G.n or 0) + 1
@@ -3063,11 +3059,8 @@ TEST_CASE("S18 Heartbeat:Wait yields until the next Heartbeat", "[S18]") {
     rig.game.start_simulation();
     rig.frames(1, 0.05);
     bool pre = false;
-    bool step = false;
     REQUIRE(rig.runtime.global_boolean("pre", pre));
     REQUIRE(pre);
-    REQUIRE(rig.runtime.global_boolean("step", step));
-    REQUIRE(step);
     REQUIRE(rig.runtime.global_is_nil("n"));
     REQUIRE(rig.runtime.global_is_nil("inside"));
     REQUIRE(rig.runtime.last_error().empty());
@@ -4708,4 +4701,91 @@ TEST_CASE("S46 Instance.new past the instance cap is a script error, not an abor
     REQUIRE(made > 16000);
     REQUIRE(made < 16384);
     rig.game.stop_simulation();
+}
+
+namespace {
+
+// One play step as the engine runs it: PreAnimation and its drain, then Heartbeat.
+void play_step(ScriptRig& rig, double dt) {
+    rig.scheduler.run_phase(engine_core::Phase::PreAnimation, dt);
+    rig.game.events().drain();
+    rig.frames(1, dt);
+}
+
+}  // namespace
+
+TEST_CASE("S51 RenderStepped reaches a script once a step, with the rendered frames' time, before Heartbeat",
+          "[S51]") {
+    ScriptRig rig;
+    add_script(rig.game, "Watch", R"(
+        local rs = game:GetService("RunService")
+        rs.RenderStepped:Connect(function(dt)
+            _G.n = (_G.n or 0) + 1
+            _G.dt = dt
+        end)
+        rs.Heartbeat:Connect(function()
+            _G.seen = _G.n or 0
+        end)
+    )");
+    rig.game.start_simulation();
+    play_step(rig, 0.05);
+    REQUIRE(rig.runtime.last_error().empty());
+    REQUIRE(rig.runtime.global_is_nil("n"));
+
+    rig.render(0.01);
+    rig.render(0.02);
+    play_step(rig, 0.05);
+    double n = 0;
+    double dt = 0;
+    double seen = 0;
+    REQUIRE(rig.runtime.global_number("n", n));
+    REQUIRE(n == 1);
+    REQUIRE(rig.runtime.global_number("dt", dt));
+    REQUIRE(std::fabs(dt - 0.03) < 1e-6);
+    REQUIRE(rig.runtime.global_number("seen", seen));
+    REQUIRE(seen == 1);
+
+    // No frame was rendered since, so no RenderStepped.
+    play_step(rig, 0.05);
+    REQUIRE(rig.runtime.global_number("n", n));
+    REQUIRE(n == 1);
+    REQUIRE(rig.runtime.last_error().empty());
+}
+
+TEST_CASE("S52 RenderStepped:Wait resumes after a rendered frame with its dt", "[S52]") {
+    ScriptRig rig;
+    add_script(rig.game, "Waiter", R"(
+        _G.dt = game:GetService("RunService").RenderStepped:Wait()
+    )");
+    rig.game.start_simulation();
+    play_step(rig, 0.05);
+    play_step(rig, 0.05);
+    REQUIRE(rig.runtime.global_is_nil("dt"));
+    rig.render(0.025);
+    play_step(rig, 0.05);
+    double dt = 0;
+    REQUIRE(rig.runtime.global_number("dt", dt));
+    REQUIRE(std::fabs(dt - 0.025) < 1e-6);
+    REQUIRE(rig.runtime.last_error().empty());
+}
+
+TEST_CASE("S53 frames dropped before a step are not heard as RenderStepped", "[S53]") {
+    ScriptRig rig;
+    add_script(rig.game, "Watch", R"(
+        game:GetService("RunService").RenderStepped:Connect(function(dt)
+            _G.n = (_G.n or 0) + 1
+            _G.dt = dt
+        end)
+    )");
+    rig.game.start_simulation();
+    play_step(rig, 0.05);
+    rig.render(0.5);
+    rig.runtime.drop_render_frames();
+    play_step(rig, 0.05);
+    REQUIRE(rig.runtime.global_is_nil("n"));
+    rig.render(0.02);
+    play_step(rig, 0.05);
+    double dt = 0;
+    REQUIRE(rig.runtime.global_number("dt", dt));
+    REQUIRE(std::fabs(dt - 0.02) < 1e-6);
 }

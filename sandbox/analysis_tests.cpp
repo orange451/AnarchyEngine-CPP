@@ -338,7 +338,7 @@ TEST_CASE("analysis definitions come from the class registry", "[A11]") {
     REQUIRE(source.find("type Vector3 = vector") != std::string::npos);
     REQUIRE(source.find("declare task:") != std::string::npos);
     REQUIRE(source.find("PreRender") == std::string::npos);
-    REQUIRE(source.find("RenderStepped") == std::string::npos);
+    REQUIRE(source.find("RenderStepped: Signal_RunService_RenderStepped") != std::string::npos);
     REQUIRE(source.find("BasePart") == std::string::npos);
     // Service is a DataModel like Game; the scene services extend it, and
     // workspace is a global like game.

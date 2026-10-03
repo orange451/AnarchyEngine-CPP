@@ -171,7 +171,7 @@ inline LuaField lua_method(const char* name, const char* type_name, void* call, 
     return field;
 }
 
-// Every RunService signal passes the simulation step's delta as `dt`.
+// Every RunService signal passes its step's delta as `dt`.
 inline const LuaParam kPhaseSignalArgs[] = {{"dt", "number"}};
 
 inline LuaField lua_signal_member(const char* name, int phase, bool blocked) {

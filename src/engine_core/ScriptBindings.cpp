@@ -682,7 +682,8 @@ int ScriptBindings::signal_connect(lua_State* state) {
         const InstanceId script = caller->script;
         const std::uint32_t generation = caller->generation;
         // The handler owns the callback's reference; Disconnect drops the handler.
-        Handler handler = [runtime, held, script, generation, kind = ud->kind](InstanceId, Field field) {
+        Handler handler = [runtime, held, script, generation, kind = ud->kind,
+                           phase = static_cast<Phase>(ud->phase)](InstanceId, Field field) {
             ScriptRuntime::Vm& owner = *held->vm;
             if (kind == kSignalChanged) {
                 runtime->invoke_listener(owner, held->ref, script, generation,
@@ -692,7 +693,7 @@ int ScriptBindings::signal_connect(lua_State* state) {
                                               runtime->game_->events().current_args());
             } else {
                 runtime->invoke_listener(owner, held->ref, script, generation, nullptr, true,
-                                         runtime->run_service_.dt());
+                                         runtime->run_service_.dt(phase));
             }
         };
         // A play connection is tagged, so the queue's gate and Stop end it. The console's
@@ -727,7 +728,8 @@ int ScriptBindings::signal_wait(lua_State* state) {
         const int kind = ud->kind;
         thread->park = ScriptRuntime::Thread::Park::Signal;
         // By serial: task.cancel can end the thread, and release it, before the signal fires.
-        Handler handler = [runtime, serial = thread->serial, kind](InstanceId, Field field) {
+        const Phase phase = static_cast<Phase>(ud->phase);
+        Handler handler = [runtime, serial = thread->serial, kind, phase](InstanceId, Field field) {
             ScriptRuntime::Thread* waiting = runtime->find_thread(serial);
             if (waiting == nullptr || waiting->vm->closing || waiting->dead) {
                 return;
@@ -738,7 +740,7 @@ int ScriptBindings::signal_wait(lua_State* state) {
                 } else if (kind == kSignalInput || kind == kSignalEvent) {
                     runtime->make_ready_args(*waiting, runtime->game_->events().current_args());
                 } else {
-                    runtime->make_ready_number(*waiting, runtime->run_service_.dt());
+                    runtime->make_ready_number(*waiting, runtime->run_service_.dt(phase));
                 }
             });
         };

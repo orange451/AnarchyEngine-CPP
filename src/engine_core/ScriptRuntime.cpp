@@ -122,6 +122,8 @@ void ScriptRuntime::attach(DataModel& game, TaskScheduler& scheduler) {
     for (Phase phase : {Phase::PreAnimation, Phase::PreSimulation, Phase::PostSimulation, Phase::Heartbeat}) {
         phase_jobs_.push_back(scheduler.bind(phase, [this, phase](double dt) { fire_phase(phase, dt); }));
     }
+    // On RenderThread this only counts the frame. The next step fires the script signal.
+    phase_jobs_.push_back(scheduler.bind(Phase::RenderStepped, [this](double dt) { run_service_.note_frame(dt); }));
 }
 
 void ScriptRuntime::detach() {
@@ -200,9 +202,12 @@ void ScriptRuntime::step_tools(double dt) {
         // tool VM is open, so there the queue waits, capped, until one opens.
         game_->input().dispatch(game_->events());
         if (!tools_open) {
+            run_service_.drop_frames();
             game_->events().drain();
             return;
         }
+        // Roblox order: input, RenderStepped, then the step.
+        run_service_.fire_render_stepped(game_->events());
         run_service_.fire(game_->events(), Phase::Heartbeat, dt);
         game_->events().drain();
     }
@@ -1610,8 +1615,10 @@ void ScriptRuntime::fire_phase(Phase phase, double dt) {
     }
     // A frame's input reaches scripts first, in the drain after PreAnimation,
     // so everything later in the step reads the keys as they are now.
+    // RenderStepped follows the input, as in Roblox, and comes before the step.
     if (phase == Phase::PreAnimation) {
         game_->input().dispatch(game_->events());
+        run_service_.fire_render_stepped(game_->events());
     }
     run_service_.fire(game_->events(), phase, dt);
 }

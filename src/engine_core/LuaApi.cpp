@@ -1159,7 +1159,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("RunService", "PreAnimation", "Fires before animation in the simulation step. The argument dt is the step length.",
         "Signal", false, {});
     add("RunService", "PreRender", "A render step. Scripts cannot connect to it.", "Signal", false, {});
-    add("RunService", "RenderStepped", "A render step. Scripts cannot connect to it.", "Signal", false, {});
+    add("RunService", "RenderStepped",
+        "Fires once a step after a frame is drawn, before the simulation step. The argument dt is the time of the "
+        "frames drawn since.",
+        "Signal", false, {});
     add("RunService", "IsRunning", "True while a play session is open, paused or not. False in edit mode.", "boolean",
         false, {});
 

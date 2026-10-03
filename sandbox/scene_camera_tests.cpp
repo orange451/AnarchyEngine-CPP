@@ -307,6 +307,14 @@ struct CameraRig : ScriptRig {
         runtime.drain_output();
     }
 
+    // The plugin moves the camera on RenderStepped, so each step follows a rendered frame.
+    void frames(int count, double dt = 1.0 / 60.0) {
+        for (int i = 0; i < count; ++i) {
+            render(dt);
+            ScriptRig::frames(1, dt);
+        }
+    }
+
     engine_core::Matrix4 transform() { return dynamic_cast<engine_core::Camera*>(game.instance(camera))->transform(); }
     engine_core::Vec3 position() {
         const engine_core::Matrix4 m = transform();

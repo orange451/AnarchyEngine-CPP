@@ -435,10 +435,10 @@ std::string registered_class(Luau::TypeId type) {
 
 bool missing_render_member(const Luau::TypeError& error) {
     if (const Luau::UnknownProperty* property = Luau::get<Luau::UnknownProperty>(error)) {
-        return property->key == "PreRender" || property->key == "RenderStepped";
+        return property->key == "PreRender";
     }
     if (const Luau::UnknownPropButFoundLikeProp* property = Luau::get<Luau::UnknownPropButFoundLikeProp>(error)) {
-        return property->key == "PreRender" || property->key == "RenderStepped";
+        return property->key == "PreRender";
     }
     return false;
 }

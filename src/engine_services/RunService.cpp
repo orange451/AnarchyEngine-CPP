@@ -12,6 +12,7 @@ void RunService::bind(EventQueue& events) {
     events.host_signal(&pre_simulation_);
     events.host_signal(&post_simulation_);
     events.host_signal(&heartbeat_);
+    events.host_signal(&render_stepped_);
     bound_ = true;
 }
 
@@ -23,6 +24,7 @@ void RunService::release(EventQueue& events) {
     events.release_signal(pre_simulation_);
     events.release_signal(post_simulation_);
     events.release_signal(heartbeat_);
+    events.release_signal(render_stepped_);
     bound_ = false;
 }
 
@@ -36,6 +38,8 @@ Signal* RunService::signal(Phase phase) {
         return &post_simulation_;
     case Phase::Heartbeat:
         return &heartbeat_;
+    case Phase::RenderStepped:
+        return &render_stepped_;
     default:
         return nullptr;
     }
@@ -46,8 +50,21 @@ void RunService::fire(EventQueue& events, Phase phase, double dt) {
     if (target == nullptr || !target->id().valid()) {
         return;
     }
-    dt_ = dt;
+    dt_[static_cast<int>(phase)] = dt;
     events.emit(target->id(), 0, Field::Name);
+}
+
+void RunService::note_frame(double dt) {
+    const double ns = dt > 0 ? dt * 1e9 : 0;
+    frame_ns_.fetch_add(ns >= 1 ? static_cast<std::uint64_t>(ns) : 1, std::memory_order_relaxed);
+}
+
+void RunService::fire_render_stepped(EventQueue& events) {
+    const std::uint64_t ns = frame_ns_.exchange(0, std::memory_order_relaxed);
+    if (ns == 0) {
+        return;
+    }
+    fire(events, Phase::RenderStepped, static_cast<double>(ns) * 1e-9);
 }
 
 namespace {
@@ -59,7 +76,7 @@ ANARCHY_LUA_REGISTER(register_run_service_lua) {
         lua_signal_member("PostSimulation", static_cast<int>(Phase::PostSimulation), false),
         lua_signal_member("PreAnimation", static_cast<int>(Phase::PreAnimation), false),
         lua_signal_member("PreRender", static_cast<int>(Phase::PreRender), true),
-        lua_signal_member("RenderStepped", static_cast<int>(Phase::RenderStepped), true),
+        lua_signal_member("RenderStepped", static_cast<int>(Phase::RenderStepped), false),
     };
     register_lua_class("RunService", nullptr, fields, 6);
     register_lua_service("RunService");

@@ -15,6 +15,7 @@
 #include <random>
 #include <string>
 #include <system_error>
+#include <thread>
 
 // A fresh directory under the system temp dir, removed at the end of the test.
 struct TempDir {
@@ -62,6 +63,17 @@ struct ScriptRig {
             runtime.step_tools(dt);
             game.events().drain();
         }
+    }
+
+    // One rendered frame: RenderStepped run on a thread of its own in the render
+    // role, as the engine's render thread runs it.
+    void render(double dt = 1.0 / 60.0) {
+        std::thread render_thread([&] {
+            engine_core::set_thread_role(engine_core::ThreadRole::Render);
+            scheduler.run_phase(engine_core::Phase::RenderStepped, dt);
+            engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+        });
+        render_thread.join();
     }
 };
 

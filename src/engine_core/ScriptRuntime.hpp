@@ -64,6 +64,10 @@ public:
     void step_tools(double dt);
     // Whether the console or plugin VM is open, so step_tools has work. Any thread may ask.
     bool tools_open() const { return tools_open_.load(std::memory_order_relaxed); }
+    // Forgets the frames drawn since the last step, so the next RenderStepped does not
+    // count them. The engine calls it on resume, for the frames drawn while paused.
+    // Any thread may call it.
+    void drop_render_frames() { run_service_.drop_frames(); }
 
     double sim_clock() const { return play_.clock; }
     const std::string& last_error() const { return last_error_; }

@@ -21,7 +21,7 @@ struct PluginFile {
 };
 
 // The studio's own plugins, under resources/.
-inline constexpr const char* kBuiltinPlugins[] = {"plugins/SceneCamera.luau"};
+inline constexpr const char* kBuiltinPlugins[] = {"plugins/SceneCamera.luau", "plugins/MoveTool.luau"};
 
 // Reads a .luau file. The name is the file's stem. False, with why, when it cannot be read.
 bool read_plugin_file(const std::filesystem::path& path, PluginFile& out, std::string& error);

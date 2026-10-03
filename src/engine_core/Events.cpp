@@ -1,10 +1,12 @@
 #include "Events.hpp"
 
 #include "Contract.hpp"
+#include "LuaApi.hpp"
 #include "Ring.hpp"
 #include "TaskScheduler.hpp"
 
 #include <algorithm>
+#include <utility>
 
 namespace engine_core {
 namespace {
@@ -231,14 +233,20 @@ void EventQueue::invoke(const Event& event) {
     if (signal == nullptr) {
         return;
     }
-    // Immediate events nest, so the outer event's payload comes back after, even
-    // when a handler throws.
+    // Immediate events nest, so the outer event's payload and values come back
+    // after, even when a handler throws.
     struct Restore {
         std::uint64_t& payload;
         const std::uint64_t outer;
-        ~Restore() { payload = outer; }
-    } restore{payload_, payload_};
+        const EventArgs*& args;
+        const EventArgs* const outer_args;
+        ~Restore() {
+            payload = outer;
+            args = outer_args;
+        }
+    } restore{payload_, payload_, current_args_, current_args_};
     payload_ = event.payload;
+    current_args_ = event.args.get();
     invoke_connections(*signal, event);
 }
 
@@ -338,6 +346,36 @@ void EventQueue::emit_payload(SignalId signal, std::uint64_t payload) {
     post(event);
 }
 
+void EventQueue::emit_args(SignalId signal, InstanceId id, EventArgs args) {
+    Signal* live = resolve(signal);
+    if (live == nullptr || live->listeners_ <= 0) {
+        return;
+    }
+    ++counts_[origin_index(WriteOrigin::Simulation)];
+    Event event;
+    event.signal = signal;
+    event.instance = id;
+    event.owner = live->owner_;
+    event.field = Field::Reflected;
+    event.live = true;
+    if (!args.empty()) {
+        event.args = std::make_shared<const EventArgs>(std::move(args));
+    }
+    post(event);
+}
+
+std::size_t EventQueue::queued_with_args() const {
+    std::size_t count = 0;
+    std::size_t index = head_;
+    for (std::size_t n = 0; n < size_; ++n) {
+        if (events_[index].args) {
+            ++count;
+        }
+        index = (index + 1) % events_.size();
+    }
+    return count;
+}
+
 void EventQueue::post(const Event& event) {
     const bool on_sim = thread_role() == ThreadRole::Simulation;
     const bool run_now = policy_ == EventPolicy::Immediate && on_sim && immediate_depth_ < kImmediateCap;
@@ -387,6 +425,7 @@ void EventQueue::seal_instance(InstanceId id) {
         if (event.live && (event.owner == id || event.instance == id)) {
             event.live = false;
             event.signal = SignalId{};
+            event.args.reset();
         }
         index = (index + 1) % events_.size();
     }
@@ -476,6 +515,10 @@ void EventQueue::shutdown() {
             slot.signal->id_ = SignalId{};
             slot.signal = nullptr;
         }
+    }
+    // Queued events let their values go with them.
+    for (Event& event : events_) {
+        event = Event{};
     }
     size_ = 0;
     head_ = 0;

@@ -778,6 +778,7 @@ add_executable(sandbox
     sandbox/shadow_math_tests.cpp
     sandbox/shadow_atlas_tests.cpp
     sandbox/shadow_planner_tests.cpp
+    sandbox/event_args_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

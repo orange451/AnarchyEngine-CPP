@@ -2,14 +2,20 @@
 
 #include "types.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace engine_core {
 
 class TaskScheduler;
 class EventQueue;
+struct LuaSlot;
+
+// The values an event carries to its handlers, in the order its class declares them.
+using EventArgs = std::vector<LuaSlot>;
 
 // Property identity for signals. Distinct from VisualField, which is the
 // snapshot dirty mask. Parent and Name are not visual fields.
@@ -125,6 +131,15 @@ public:
     // The payload of the event whose handlers are running. 0 outside a handler,
     // and for an event emitted without one.
     std::uint64_t payload() const { return payload_; }
+    // An event that carries values for its handlers, such as an instance event
+    // declared with arguments. Its field is Reflected and its origin Simulation.
+    // Nothing is kept when nothing listens.
+    void emit_args(SignalId signal, InstanceId id, EventArgs args);
+    // The values of the event whose handlers are running. Null outside a handler,
+    // and for an event emitted without values.
+    const EventArgs* current_args() const { return current_args_; }
+    // Queued events still holding values. For tests.
+    std::size_t queued_with_args() const;
 
     // Runs handlers for events already queued. SimulationThread only.
     // Events enqueued by those handlers wait for the next drain.
@@ -171,6 +186,8 @@ private:
         Field field = Field::Transform;
         WriteOrigin origin = WriteOrigin::Simulation;
         std::uint64_t payload = 0;
+        // Shared, so the copies the ring makes are cheap. Null for none.
+        std::shared_ptr<const EventArgs> args;
         bool live = true;
     };
 
@@ -235,6 +252,7 @@ private:
     std::uint64_t counts_[3] = {};
     std::uint64_t suppressed_overrides_ = 0;
     std::uint64_t payload_ = 0;
+    const EventArgs* current_args_ = nullptr;
     // Snapshot of connection indices for the active invoke. Nested invokes append.
     std::vector<std::uint32_t> invoke_list_;
 };

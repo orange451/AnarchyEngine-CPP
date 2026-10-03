@@ -805,13 +805,33 @@ void IdeLayout::save_project_as(std::function<void()> then) {
     });
 }
 
+bool IdeLayout::export_needs_save() {
+    if (has_unsaved_changes()) {
+        return true;
+    }
+    bool written = false;
+    run_now([&](engine_core::DataModel& game) {
+        const engine_core::AuthoredDirty dirty = game.authored_dirty();
+        written = dirty.all || !dirty.ids.empty();
+    });
+    return written;
+}
+
 void IdeLayout::export_game() {
     if (exporting_ || dialog_open_ || prompt_open_) {
         return;
     }
-    // The game is the project as it is on disk, so changes are saved first.
-    if (!project_ || has_unsaved_changes()) {
-        save_project([this] { export_game(); });
+    // The game is the project as it is on disk, so changes are saved first,
+    // with what writes outside any recording changed.
+    if (!project_ || export_needs_save()) {
+        save_project([this] { export_saved_game(); });
+        return;
+    }
+    export_saved_game();
+}
+
+void IdeLayout::export_saved_game() {
+    if (!project_ || exporting_ || dialog_open_ || prompt_open_) {
         return;
     }
     // A save dialog: the name typed there is the game's file.

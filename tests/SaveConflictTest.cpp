@@ -138,6 +138,10 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     });
     layout.flushFrame();
     expect(!layout.has_unsaved_changes(), "flying the camera leaves nothing to save");
+    // The camera's file still changed, and Export Game reads the place from disk.
+    expect(layout.export_needs_save(), "but Export Game saves it first");
+    press(jadefx::Key::S);
+    expect(!layout.export_needs_save(), "and after a save it does not");
 
     // File > New offers to save first; a conflict then asks too, and only a
     // save that happens lets the new place start.

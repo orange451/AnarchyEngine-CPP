@@ -120,6 +120,10 @@ public:
     // True when a save would write something, or an editor holds text its
     // script's Source does not have yet.
     bool has_unsaved_changes();
+    // Whether export_game saves first: has_unsaved_changes, or a write no
+    // recording covered, such as one from the command line or the flown camera,
+    // changed what a save writes.
+    bool export_needs_save();
     // Opens the Preferences window, or leaves the open one be.
     void open_preferences();
     // Shows a dockable pane: open docks it when no dock holds it. Otherwise its
@@ -255,6 +259,10 @@ private:
     // the message shown when the system has no picker.
     void pick_folder(jadefx::FolderDialogOptions options, const std::string& hint,
                      std::function<void(const std::filesystem::path&)> chosen);
+    // export_game after any save: asks for the game's file name and exports
+    // the project as it is on disk. It does not check for changes again, since
+    // a save during play leaves the edit dirty set as it was.
+    void export_saved_game();
     void reapply_editors();
     void restore_closed_edits();
     // The keys every studio window routes the same way, in this order.

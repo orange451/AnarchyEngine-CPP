@@ -272,7 +272,6 @@ struct Rig {
         T& made = game.create<T>();
         game.set_name(made.id(), name);
         game.set_parent(made.id(), game.scene_service("Workspace"));
-        game.history().end_gesture();
         return made.id();
     }
 

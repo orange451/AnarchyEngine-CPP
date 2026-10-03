@@ -281,12 +281,12 @@ TEST_CASE("a destroyed Prefab draws nothing until undo brings it back", "[render
     scene.model(crate, body.id());
     engine_core::GameObject& box = scene.object(crate.id());
     const InstanceId crate_id = crate.id();
-    scene.game.history().end_gesture();
     scene.frame();
     REQUIRE(scene.meshes(box.id()) == Paths{"meshes/body.amesh"});
 
+    begin_step(scene.game);
     scene.game.destroy(crate_id);
-    scene.game.history().end_gesture();
+    end_step(scene.game);
     scene.frame();
     REQUIRE(scene.meshes(box.id()).empty());
 
@@ -302,11 +302,11 @@ TEST_CASE("undo of a GameObject's delete keeps its Prefab", "[render]") {
     scene.model(crate, body.id());
     engine_core::GameObject& box = scene.object(crate.id());
     const InstanceId id = box.id();
-    scene.game.history().end_gesture();
     scene.frame();
 
+    begin_step(scene.game);
     scene.game.destroy(id);
-    scene.game.history().end_gesture();
+    end_step(scene.game);
     scene.frame();
     REQUIRE(scene.row(id) == nullptr);
 
@@ -353,9 +353,9 @@ TEST_CASE("position() is the Transform's translation, and set_position() keeps t
     REQUIRE(part.position().y == 5.f);
     REQUIRE(part.position().z == 6.f);
 
-    scene.game.history().end_gesture();
+    begin_step(scene.game);
     part.set_position(engine_core::Vec3{-1.f, 0.5f, 2.f});
-    scene.game.history().end_gesture();
+    end_step(scene.game);
     const engine_core::Matrix4 moved = part.transform();
     REQUIRE(moved.m[2] == -1.f);
     REQUIRE(moved.m[8] == 1.f);
@@ -374,7 +374,6 @@ TEST_CASE("a GameObject's Color and Transparency reach its row, undo, save, and 
     Scene scene;
     engine_core::GameObject& box = scene.object(0);
     const InstanceId id = box.id();
-    scene.game.history().end_gesture();
     scene.frame();
     REQUIRE(scene.row(id)->color.g == 1.f);
     REQUIRE(scene.row(id)->transparency == 0.f);
@@ -385,19 +384,19 @@ TEST_CASE("a GameObject's Color and Transparency reach its row, undo, save, and 
     REQUIRE(engine_core::bag_find(saved, "Color") == nullptr);
     REQUIRE(engine_core::bag_find(saved, "Transparency") == nullptr);
 
-    scene.game.history().set_pending_gesture("Tint");
+    begin_step(scene.game, "Tint");
     REQUIRE_FALSE(box.set_color(rgb(1.f, 0.5f, 0.25f)));
     REQUIRE_FALSE(box.set_transparency(0.5));
-    scene.game.history().end_gesture();
+    end_step(scene.game);
     scene.frame();
     REQUIRE(scene.row(id)->color.g == 0.5f);
     REQUIRE(scene.row(id)->color.b == 0.25f);
     REQUIRE(scene.row(id)->transparency == 0.5f);
 
     // Stored as given, drawn clamped.
-    scene.game.history().set_pending_gesture("Hide");
+    begin_step(scene.game, "Hide");
     REQUIRE_FALSE(box.set_transparency(3.0));
-    scene.game.history().end_gesture();
+    end_step(scene.game);
     scene.frame();
     REQUIRE(box.transparency() == 3.0);
     REQUIRE(scene.row(id)->transparency == 1.f);

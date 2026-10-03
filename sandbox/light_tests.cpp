@@ -67,9 +67,9 @@ TEST_CASE("LIT1 a Light's properties are checked, undo, save, and come back at S
         REQUIRE(engine_core::bag_find(saved, name) == nullptr);
     }
 
-    game.history().set_pending_gesture("Set Radius");
+    begin_step(game, "Set Radius");
     REQUIRE_FALSE(light.set_radius(20.0));
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(light.radius() == 20.0);
     game.history().undo();
     REQUIRE(light.radius() == PointLight::kDefaultRadius);
@@ -175,9 +175,9 @@ TEST_CASE("LIT6 a DirectionalLight has a Direction, and no Transform or Radius",
     sun.save_properties(saved);
     REQUIRE(saved.empty());
 
-    game.history().set_pending_gesture("Set Direction");
+    begin_step(game, "Set Direction");
     REQUIRE_FALSE(sun.set_direction(engine_core::Vec3{0.f, 1.f, 0.f}));
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(sun.direction().x == 0.f);
     game.history().undo();
     REQUIRE(sun.direction().x == 1.f);
@@ -433,9 +433,9 @@ TEST_CASE("LIT9 Shadows and ShadowDistance are checked, undo, save, and come bac
     REQUIRE(engine_core::bag_find(sun_saved, "Shadows") == nullptr);
     REQUIRE(engine_core::bag_find(sun_saved, "ShadowDistance") == nullptr);
 
-    game.history().set_pending_gesture("Set Shadows");
+    begin_step(game, "Set Shadows");
     point.set_shadows(true);
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(point.shadows());
     game.history().undo();
     REQUIRE_FALSE(point.shadows());

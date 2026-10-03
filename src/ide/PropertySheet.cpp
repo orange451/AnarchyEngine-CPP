@@ -577,11 +577,9 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
         }
     }
 
-    // A gesture left open by an earlier edit is its own waypoint, not part of this one.
     std::optional<std::string> recording;
     std::optional<HistoryOff> off;
     if (record) {
-        history.end_gesture();
         recording = history.try_begin_recording("Set " + edit.property);
     } else {
         off.emplace(history);

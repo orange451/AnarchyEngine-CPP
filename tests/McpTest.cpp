@@ -394,8 +394,6 @@ void TestScriptTools() {
     ide::McpServer server;
     ide::add_engine_tools(server, engine, {});
     AddScript(game, "Main", "print('hi')", game.scene_service("Workspace"));
-    // The explorer ends each of its edits as a step. So does this test's own.
-    game.history().end_gesture();
 
     const JsonValue broken = Call(server, "write_script", R"({"instance":"Workspace.Main","source":"local x ="})");
     const JsonValue* problems = broken.find("problems");
@@ -457,7 +455,6 @@ void TestScriptTools() {
     game.set_name(module.id(), "Util");
     module.set_source("local Value = 1\nreturn value\n");
     game.set_parent(module.id(), static_cast<engine_core::InstanceId>(Member(lib, "id").as_number()));
-    game.history().end_gesture();
 
     const JsonValue found = Call(server, "search_scripts", R"({"pattern":"VALUE"})");
     const JsonValue& scripts = Member(found, "scripts");

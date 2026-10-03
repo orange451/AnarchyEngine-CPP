@@ -328,9 +328,9 @@ TEST_CASE("GS7 Path is relative to the resources folder, and saves and undoes", 
     }
     REQUIRE(brick.path().empty());
 
-    game.history().set_pending_gesture("Set Path");
+    begin_step(game, "Set Path");
     REQUIRE_FALSE(brick.set_path("textures/brick.png"));
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(brick.path() == "textures/brick.png");
     engine_core::PropertyBag saved;
     brick.save_properties(saved);
@@ -521,17 +521,14 @@ TEST_CASE("GS9 a reference to a destroyed asset reads nil, and undo brings it ba
     Game game;
     const InstanceId brick = make(game, "Texture", "Brick", game.service("Textures"));
     const InstanceId mat = make(game, "Material", "Wall", game.service("Materials"));
-    // Close the implicit gesture the two creates opened, so it does not
-    // absorb the property change below into the same undo step.
-    game.history().end_gesture();
-    game.history().set_pending_gesture("Set DiffuseTexture");
+    begin_step(game, "Set DiffuseTexture");
     REQUIRE(write_field(game, mat, "DiffuseTexture", instance_slot(brick)));
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(game.history().can_undo().second == "Set DiffuseTexture");
 
-    game.history().set_pending_gesture("Delete");
+    begin_step(game, "Delete");
     game.destroy_tree(brick);
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(read_field(game, mat, "DiffuseTexture").kind == engine_core::LuaSlot::Kind::Nil);
 
     game.history().undo();
@@ -804,12 +801,9 @@ TEST_CASE("GS17 GameObject.Prefab is nil by default, takes a Prefab, undoes, and
     REQUIRE_FALSE(write_field(game, body, "Prefab", instance_slot(brick), &error));
     REQUIRE(error == "Prefab must be a Prefab");
 
-    // Close the implicit gesture the three creates opened, so it does not
-    // absorb the property change below into the same undo step.
-    game.history().end_gesture();
-    game.history().set_pending_gesture("Set Prefab");
+    begin_step(game, "Set Prefab");
     REQUIRE(write_field(game, body, "Prefab", instance_slot(statue)));
-    game.history().end_gesture();
+    end_step(game);
     const engine_core::LuaSlot read = read_field(game, body, "Prefab");
     REQUIRE(read.kind == engine_core::LuaSlot::Kind::Instance);
     REQUIRE(read.id == statue);
@@ -817,9 +811,9 @@ TEST_CASE("GS17 GameObject.Prefab is nil by default, takes a Prefab, undoes, and
     REQUIRE(engine_core::bag_find(saved, "Prefab")->as_string() == game.guid(statue));
 
     // A destroyed Prefab reads nil; undo brings it back.
-    game.history().set_pending_gesture("Delete");
+    begin_step(game, "Delete");
     game.destroy_tree(statue);
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(read_field(game, body, "Prefab").kind == engine_core::LuaSlot::Kind::Nil);
     game.history().undo();
     REQUIRE(game.alive(statue));

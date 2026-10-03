@@ -66,7 +66,7 @@ struct PlacedAsset {
 // build_model_assets makes for a model. Each goes into folder instead, the
 // Prefab of a model, when folder is its category or a Folder under it, such as
 // a Folder under Assets.Audio for a sound. One entry for each in prepared, in
-// order. The caller holds the undo gesture.
+// order. The caller holds the undo recording.
 std::vector<PlacedAsset> place_assets(engine_core::DataModel& world, const std::vector<PreparedAsset>& prepared,
                                       engine_core::InstanceId folder = 0);
 

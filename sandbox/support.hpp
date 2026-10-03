@@ -2,6 +2,7 @@
 
 // Helpers the sandbox test files share.
 
+#include "ChangeHistoryService.hpp"
 #include "DataModel.hpp"
 #include "DataModelLock.hpp"
 #include "Game.hpp"
@@ -11,12 +12,15 @@
 #include "TaskScheduler.hpp"
 #include "types.hpp"
 
+#include <catch2/catch_test_macros.hpp>
+
 #include <atomic>
 #include <filesystem>
 #include <random>
 #include <string>
 #include <system_error>
 #include <thread>
+#include <utility>
 
 // A fresh directory under the system temp dir, removed at the end of the test.
 struct TempDir {
@@ -148,6 +152,15 @@ private:
 inline engine_core::InstanceId workspace_of(const engine_core::DataModel& game) {
     return game.scene_service("Workspace");
 }
+
+// A test's stand-in for an IDE command: the writes between begin_step and
+// end_step are one undo step. A write outside them is not undoable.
+inline void begin_step(engine_core::DataModel& game, std::string name = "Edit") {
+    REQUIRE(game.history().try_begin_recording(std::move(name)).has_value());
+}
+
+// Commits the step begin_step opened.
+inline void end_step(engine_core::DataModel& game) { game.history().seal_edit_recording(); }
 
 // A GameObject under Workspace, so the render snapshot has a row for it.
 inline engine_core::GameObject& create_part(engine_core::DataModel& game) {

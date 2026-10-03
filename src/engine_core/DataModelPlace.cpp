@@ -30,7 +30,7 @@ void DataModel::start_simulation() {
         contract_fail("start_simulation while simulation is running");
     }
     DataModelLock lock(*this, DataModelLock::Write);
-    // Close an edit gesture before play. Play writes stay off the edit stack.
+    // Commit an open edit recording before play. Play writes stay off the edit stack.
     if (state_->history) {
         state_->history->seal_edit_recording();
     }

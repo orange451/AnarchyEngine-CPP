@@ -110,12 +110,10 @@ TEST_CASE("GUI3 writes are checked and clamped, undo, and come back at Stop", "[
     REQUIRE(pane.vec2(GuiProperty::Size).x == 0.f);
     REQUIRE(pane.vec2(GuiProperty::Size).y == 40.f);
 
-    // The writes above are one open gesture; this one is its own.
-    game.history().end_gesture();
     const std::uint64_t before = pane.revision();
-    game.history().set_pending_gesture("Set Size");
+    begin_step(game, "Set Size");
     REQUIRE_FALSE(pane.set_value(GuiProperty::Size, vec2(20.f, 30.f)));
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(pane.revision() != before);
     game.history().undo();
     REQUIRE(pane.vec2(GuiProperty::Size).y == 40.f);

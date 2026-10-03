@@ -15,6 +15,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -24,8 +25,6 @@
 namespace {
 
 using engine_core::same_matrix4;
-
-void close_gesture(engine_core::DataModel& game) { game.history().end_gesture(); }
 
 engine_core::GameObject& make_part(engine_core::DataModel& game, const char* name) {
     engine_core::GameObject& part = game.create<engine_core::GameObject>();
@@ -38,12 +37,13 @@ engine_core::GameObject& make_part(engine_core::DataModel& game, const char* nam
 
 TEST_CASE("H1 edit create undo restores the same id", "[H1][history]") {
     engine_core::Game game;
+    begin_step(game, "Insert GameObject");
     engine_core::GameObject& part = game.create<engine_core::GameObject>();
     const engine_core::InstanceId id = part.id();
     game.set_name(id, "Brick");
     const engine_core::Matrix4 placed = engine_core::matrix4_translation(1.f, 2.f, 3.f);
     part.set_transform(placed);
-    close_gesture(game);
+    end_step(game);
 
     REQUIRE(game.history().can_undo().first);
     game.history().undo();
@@ -62,19 +62,21 @@ TEST_CASE("H1 edit create undo restores the same id", "[H1][history]") {
 TEST_CASE("H2 three transform recordings and a new edit clears redo", "[H2][history]") {
     engine_core::Game game;
     engine_core::GameObject& part = make_part(game, "Brick");
-    close_gesture(game);
     game.history().reset_waypoints();
 
     const engine_core::Matrix4 a = engine_core::matrix4_translation(1.f, 0.f, 0.f);
     const engine_core::Matrix4 b = engine_core::matrix4_translation(0.f, 1.f, 0.f);
     const engine_core::Matrix4 c = engine_core::matrix4_translation(0.f, 0.f, 1.f);
     const engine_core::Matrix4 d = engine_core::matrix4_translation(1.f, 1.f, 0.f);
+    begin_step(game);
     part.set_transform(a);
-    close_gesture(game);
+    end_step(game);
+    begin_step(game);
     part.set_transform(b);
-    close_gesture(game);
+    end_step(game);
+    begin_step(game);
     part.set_transform(c);
-    close_gesture(game);
+    end_step(game);
 
     game.history().undo();
     game.history().undo();
@@ -87,8 +89,9 @@ TEST_CASE("H2 three transform recordings and a new edit clears redo", "[H2][hist
     game.history().finish_recording(*empty, engine_core::FinishRecordingOperation::Commit);
     REQUIRE(game.history().can_redo() == redo_before);
 
+    begin_step(game);
     part.set_transform(d);
-    close_gesture(game);
+    end_step(game);
     REQUIRE_FALSE(game.history().can_redo().first);
     game.history().redo();
     REQUIRE(same_matrix4(part.transform(), d));
@@ -97,7 +100,6 @@ TEST_CASE("H2 three transform recordings and a new edit clears redo", "[H2][hist
 TEST_CASE("H3 one recording coalesces a drag", "[H3][history]") {
     engine_core::Game game;
     engine_core::GameObject& part = make_part(game, "Brick");
-    close_gesture(game);
     game.history().reset_waypoints();
     const engine_core::Matrix4 home = part.transform();
 
@@ -114,16 +116,15 @@ TEST_CASE("H3 one recording coalesces a drag", "[H3][history]") {
     REQUIRE(game.history().can_redo().second == "Move");
 }
 
-TEST_CASE("H4 implicit names coalesce until the gesture ends", "[H4][history]") {
+TEST_CASE("H4 writes inside one recording coalesce into one named step", "[H4][history]") {
     engine_core::Game game;
     engine_core::GameObject& part = make_part(game, "Brick");
-    close_gesture(game);
     game.history().reset_waypoints();
 
-    game.history().set_pending_gesture("Rename");
+    begin_step(game, "Rename");
     game.set_name(part.id(), "A");
     game.set_name(part.id(), "B");
-    close_gesture(game);
+    end_step(game);
 
     REQUIRE(game.history().can_undo().second == "Rename");
     game.history().undo();
@@ -131,6 +132,22 @@ TEST_CASE("H4 implicit names coalesce until the gesture ends", "[H4][history]") 
     REQUIRE_FALSE(game.history().can_undo().first);
     game.history().redo();
     REQUIRE(game.name(part.id()) == "B");
+}
+
+TEST_CASE("H4b a write outside a recording is not an undo step, but a save writes it", "[H4b][history]") {
+    engine_core::Game game;
+    engine_core::GameObject& part = make_part(game, "Brick");
+    game.history().reset_waypoints();
+    game.clear_authored_dirty();
+
+    REQUIRE_FALSE(game.history().wants_mutation());
+    game.set_name(part.id(), "A");
+    part.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
+
+    REQUIRE_FALSE(game.history().is_recording_in_progress());
+    REQUIRE_FALSE(game.history().can_undo().first);
+    const engine_core::AuthoredDirty dirty = game.authored_dirty();
+    REQUIRE(std::find(dirty.ids.begin(), dirty.ids.end(), part.id()) != dirty.ids.end());
 }
 
 TEST_CASE("H5 play script writes stay off the edit stack", "[H5][history]") {
@@ -142,6 +159,7 @@ TEST_CASE("H5 play script writes stay off the edit stack", "[H5][history]") {
     game.attach_scheduler(&scheduler);
     runtime.attach(game, scheduler);
 
+    begin_step(game);
     engine_core::GameObject& part = make_part(game, "Brick");
     const engine_core::Matrix4 authored = engine_core::matrix4_translation(1.f, 2.f, 3.f);
     part.set_transform(authored);
@@ -155,7 +173,7 @@ TEST_CASE("H5 play script writes stay off the edit stack", "[H5][history]") {
         end
     )");
     game.set_parent(script.id(), workspace_of(game));
-    close_gesture(game);
+    end_step(game);
     const auto edit = game.history().can_undo();
     REQUIRE(edit.first);
 
@@ -180,10 +198,11 @@ TEST_CASE("H5 play script writes stay off the edit stack", "[H5][history]") {
 
 TEST_CASE("H6 a play recording undoes, then stop drops it", "[H6][history]") {
     engine_core::Game game;
+    begin_step(game);
     engine_core::GameObject& part = make_part(game, "Brick");
     const engine_core::Matrix4 authored = engine_core::matrix4_translation(1.f, 0.f, 0.f);
     part.set_transform(authored);
-    close_gesture(game);
+    end_step(game);
     const auto edit = game.history().can_undo();
 
     game.start_simulation();
@@ -216,9 +235,10 @@ TEST_CASE("H6 a play recording undoes, then stop drops it", "[H6][history]") {
 
 TEST_CASE("H7 cancel restores the destroyed part and leaves the stacks", "[H7][history]") {
     engine_core::Game game;
+    begin_step(game);
     engine_core::GameObject& part = make_part(game, "Brick");
     const engine_core::InstanceId id = part.id();
-    close_gesture(game);
+    end_step(game);
     const auto undo_before = game.history().can_undo();
     const auto redo_before = game.history().can_redo();
 
@@ -238,7 +258,6 @@ TEST_CASE("H7 cancel restores the destroyed part and leaves the stacks", "[H7][h
 TEST_CASE("H8 a second begin does not replace the open recording", "[H8][history]") {
     engine_core::Game game;
     engine_core::GameObject& part = make_part(game, "Brick");
-    close_gesture(game);
     game.history().reset_waypoints();
     const engine_core::Matrix4 original = part.transform();
 
@@ -259,7 +278,6 @@ TEST_CASE("H8 a second begin does not replace the open recording", "[H8][history
 TEST_CASE("H9 undo during a recording is a no-op", "[H9][history]") {
     engine_core::Game game;
     engine_core::GameObject& part = make_part(game, "Brick");
-    close_gesture(game);
     game.history().reset_waypoints();
 
     const auto recording = game.history().try_begin_recording("Paint");
@@ -280,11 +298,11 @@ TEST_CASE("H9 undo during a recording is a no-op", "[H9][history]") {
 TEST_CASE("H10 script focus undoes text and leaves the place alone", "[H10][history]") {
     engine_core::Game game;
     engine_core::GameObject& part = make_part(game, "Brick");
-    close_gesture(game);
     game.history().reset_waypoints();
     const engine_core::Matrix4 painted = engine_core::matrix4_translation(1.f, 0.f, 0.f);
+    begin_step(game);
     part.set_transform(painted);
-    close_gesture(game);
+    end_step(game);
 
     ide::InputRouter router;
     ide::TextUndoStack& text = router.script_stack(42);
@@ -316,10 +334,10 @@ TEST_CASE("H10 script focus undoes text and leaves the place alone", "[H10][hist
 TEST_CASE("H11 an empty text stack does not undo the place", "[H11][history]") {
     engine_core::Game game;
     engine_core::GameObject& part = make_part(game, "Brick");
-    close_gesture(game);
     game.history().reset_waypoints();
+    begin_step(game);
     part.set_transform(engine_core::matrix4_translation(0.f, 1.f, 0.f));
-    close_gesture(game);
+    end_step(game);
     const auto edit = game.history().can_undo();
 
     ide::InputRouter router;
@@ -341,11 +359,11 @@ TEST_CASE("H11 an empty text stack does not undo the place", "[H11][history]") {
 TEST_CASE("H12 redo follows focus", "[H12][history]") {
     engine_core::Game game;
     engine_core::GameObject& part = make_part(game, "Brick");
-    close_gesture(game);
     game.history().reset_waypoints();
     const engine_core::Matrix4 painted = engine_core::matrix4_translation(0.f, 0.f, 1.f);
+    begin_step(game);
     part.set_transform(painted);
-    close_gesture(game);
+    end_step(game);
     game.history().undo();
     REQUIRE_FALSE(same_matrix4(part.transform(), painted));
 
@@ -407,7 +425,6 @@ TEST_CASE("H13 undo destroy restores children and names", "[H13][history]") {
     const engine_core::InstanceId grand_id = grand.id();
     game.set_name(grand_id, "Cara");
     game.set_parent(grand_id, second_id);
-    close_gesture(game);
     game.history().reset_waypoints();
 
     const auto recording = game.history().try_begin_recording("Delete");
@@ -439,12 +456,12 @@ TEST_CASE("H15 applying undo does not record a waypoint", "[H15][history]") {
     engine_core::Game game;
     game.events().set_policy(engine_core::EventPolicy::Immediate);
     engine_core::GameObject& part = make_part(game, "Brick");
-    close_gesture(game);
     game.history().reset_waypoints();
 
     const engine_core::Matrix4 original = part.transform();
+    begin_step(game, "Move");
     part.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
-    close_gesture(game);
+    end_step(game);
 
     int undos = 0;
     game.history().on_undo.connect([&](const std::string& name) {
@@ -494,16 +511,16 @@ TEST_CASE("H17 set_parent puts a child last and undo puts it back in its old pla
     const engine_core::InstanceId a = make_part(game, "A").id();
     const engine_core::InstanceId b = make_part(game, "B").id();
     const engine_core::InstanceId c = make_part(game, "C").id();
-    close_gesture(game);
     game.history().reset_waypoints();
     using Ids = std::vector<engine_core::InstanceId>;
     REQUIRE(game.get_children(workspace_of(game)) == Ids{f, a, b, c});
 
-    game.history().set_pending_gesture("Move");
+    begin_step(game, "Move");
     game.set_parent(b, f);
-    close_gesture(game);
+    end_step(game);
+    begin_step(game);
     game.set_parent(a, f);
-    close_gesture(game);
+    end_step(game);
     REQUIRE(game.get_children(f) == Ids{b, a});
     REQUIRE(game.get_children(workspace_of(game)) == Ids{f, c});
 
@@ -531,13 +548,13 @@ int undo_all(engine_core::DataModel& game) {
 TEST_CASE("H18 edit history keeps the newest waypoints up to its count", "[H18][history]") {
     engine_core::Game game;
     engine_core::GameObject& part = make_part(game, "Brick");
-    close_gesture(game);
     game.history().reset_waypoints();
     game.history().set_limits(5, 1u << 30);
     for (int i = 0; i < 8; ++i) {
         // From 1, since a move to the origin changes nothing and records nothing.
+        begin_step(game);
         part.set_transform(engine_core::matrix4_translation(static_cast<float>(i + 1), 0.f, 0.f));
-        close_gesture(game);
+        end_step(game);
     }
     REQUIRE(undo_all(game) == 5);
     // The oldest three are gone: undo stops at the transform the third edit made.
@@ -547,13 +564,13 @@ TEST_CASE("H18 edit history keeps the newest waypoints up to its count", "[H18][
 TEST_CASE("H19 edit history keeps its newest waypoints within its size", "[H19][history]") {
     engine_core::Game game;
     engine_core::Script& script = add_script(game, "Big", "");
-    close_gesture(game);
     game.history().reset_waypoints();
     // Each edit keeps the text before and after, about 200 KB, so 1 MB holds four.
     game.history().set_limits(1000, 1u << 20);
     for (int i = 0; i < 10; ++i) {
+        begin_step(game);
         script.set_source(std::string(100 * 1024, static_cast<char>('a' + i)));
-        close_gesture(game);
+        end_step(game);
     }
     const int kept = undo_all(game);
     REQUIRE(kept >= 1);
@@ -564,11 +581,11 @@ TEST_CASE("H19 edit history keeps its newest waypoints within its size", "[H19][
 TEST_CASE("H20 the newest waypoint stays however large it is", "[H20][history]") {
     engine_core::Game game;
     engine_core::Script& script = add_script(game, "Huge", "small");
-    close_gesture(game);
     game.history().reset_waypoints();
     game.history().set_limits(1000, 1024);
+    begin_step(game);
     script.set_source(std::string(64 * 1024, 'x'));
-    close_gesture(game);
+    end_step(game);
     REQUIRE(undo_all(game) == 1);
     REQUIRE(script.source() == "small");
 }

@@ -1357,12 +1357,14 @@ TEST_CASE("a paused edit writes transform and flags at once", "[edit]") {
     bool seen_inside = false;
     const engine_core::Matrix4 moved = engine_core::matrix4_translation(1.f, 2.f, 3.f);
     engine.on_simulation([&](engine_core::DataModel& game) {
+        begin_step(game);
         engine_core::GameObject& part = game.create<engine_core::GameObject>();
         game.set_parent(part.id(), workspace_of(game));
         id = part.id();
         part.set_transform(moved);
         game.set_simulated(id, true);
         game.set_visual_only(id, true);
+        end_step(game);
         // A project load reads these back before it captures the place.
         seen_inside = part.transform().m[12] == 1.f && game.simulated(id);
     });
@@ -1372,10 +1374,7 @@ TEST_CASE("a paused edit writes transform and flags at once", "[edit]") {
     REQUIRE(part->transform().m[13] == 2.f);
     REQUIRE(engine.datamodel().visual_only(id));
     // Undo of those writes runs as a paused edit too.
-    engine.on_simulation([&](engine_core::DataModel& game) {
-        game.history().end_gesture();
-        game.history().undo();
-    });
+    engine.on_simulation([&](engine_core::DataModel& game) { game.history().undo(); });
     REQUIRE_FALSE(engine.datamodel().alive(id));
     engine.on_simulation([&](engine_core::DataModel& game) { game.history().redo(); });
     REQUIRE(engine.datamodel().visual_only(id));
@@ -4669,9 +4668,9 @@ TEST_CASE("S50 undo and redo reach a change watch", "[S50]") {
     int heard = 0;
     const std::uint64_t watch = game.watch_changes([&heard] { ++heard; });
     game.set_watched(watch, {part.id()});
-    game.history().set_pending_gesture("Move");
+    begin_step(game, "Move");
     part.set_transform(T0());
-    game.history().end_gesture();
+    end_step(game);
     const int edited = heard;
     REQUIRE(edited > 0);
     REQUIRE(game.history().can_undo().first);

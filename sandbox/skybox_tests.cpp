@@ -66,9 +66,9 @@ TEST_CASE("SKY1 a Skybox's properties are checked, undo, save, and come back at 
     sky.save_properties(saved);
     REQUIRE(saved.empty());
 
-    game.history().set_pending_gesture("Set Exposure");
+    begin_step(game, "Set Exposure");
     REQUIRE_FALSE(sky.set_exposure(2.5));
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(sky.exposure() == 2.5);
     game.history().undo();
     REQUIRE(sky.exposure() == 1.0);
@@ -89,9 +89,9 @@ TEST_CASE("SKY1 a Skybox's properties are checked, undo, save, and come back at 
     REQUIRE_FALSE(sky.set_rotation(-1e-300));
     REQUIRE(sky.rotation() < 360.0);
     // LightScale is clamped to 0..10 too, and undoes.
-    game.history().set_pending_gesture("Set LightScale");
+    begin_step(game, "Set LightScale");
     REQUIRE_FALSE(sky.set_light_scale(0.25));
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(sky.light_scale() == 0.25);
     game.history().undo();
     REQUIRE(sky.light_scale() == 1.0);

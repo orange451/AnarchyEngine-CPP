@@ -132,9 +132,6 @@ bool DraggerWorld::begin(DataModel& game, const DraggerView& view, Vec2 point) {
     }
     // Edit mode only: play writes are not edits.
     if (!game.simulation_running()) {
-        // An edit that left its undo step open, as the command line's do, is
-        // its own step, not part of the drag's: close it first.
-        game.history().end_gesture();
         if (std::optional<std::string> id = game.history().try_begin_recording("Move")) {
             drag.recording = std::move(*id);
         }

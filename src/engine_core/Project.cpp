@@ -2315,8 +2315,6 @@ DiskScan Project::apply_disk(const std::vector<DiskChoice>& choices) {
         settle(compared, *conflict);
     }
     if (!compared.actions.empty()) {
-        // An edit still open is its own step; this one is "Changes from Disk".
-        world.history().end_gesture();
         const std::optional<std::string> recording = world.history().try_begin_recording("Changes from Disk");
         apply_changes(compared, out.loaded);
         if (recording) {

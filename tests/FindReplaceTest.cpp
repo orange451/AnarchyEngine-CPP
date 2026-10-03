@@ -411,8 +411,6 @@ struct SearchRig {
         open = add_script(game, game.scene_service("Workspace"), "Open", "print('stale')\n");
         // The studio's own tools are in Core, which the search leaves out.
         add_script(game, game.core(), "Tool", "local part = 0\n");
-        // The studio closes each edit's gesture, so a replace is a step of its own.
-        game.history().end_gesture();
 
         ide::SearchHost host;
         host.editor_text = [this](std::uint32_t id) -> std::optional<std::string> {

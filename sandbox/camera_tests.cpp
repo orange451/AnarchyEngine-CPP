@@ -67,9 +67,9 @@ TEST_CASE("CAM1 a Camera's FieldOfView is clamped, undoes, and comes back at Sto
     camera.save_properties(saved);
     REQUIRE(engine_core::bag_find(saved, "FieldOfView") == nullptr);
 
-    game.history().set_pending_gesture("Set FieldOfView");
+    begin_step(game, "Set FieldOfView");
     REQUIRE_FALSE(camera.set_field_of_view(45.0));
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(camera.field_of_view() == 45.0);
     game.history().undo();
     REQUIRE(camera.field_of_view() == Camera::kDefaultFieldOfView);

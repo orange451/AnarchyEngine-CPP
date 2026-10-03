@@ -215,9 +215,9 @@ TEST_CASE("the console builds a Mesh's file, and Clear empties it", "[shapes]") 
 TEST_CASE("undo puts back the Path a shape set, and the file stays", "[shapes]") {
     ShapeRig rig;
     engine_core::Mesh& cube = rig.mesh("Cube");
-    rig.game.history().end_gesture();
+    begin_step(rig.game);
     rig.run("game.Assets.Meshes.Cube:AddSphere(1)");
-    rig.game.history().end_gesture();
+    end_step(rig.game);
     const std::string path = cube.path();
     REQUIRE_FALSE(path.empty());
     rig.game.history().undo();

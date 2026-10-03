@@ -60,7 +60,7 @@ struct DraggedParts {
 };
 DraggedParts dragged_parts(const engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids);
 
-// These run on the simulation thread, inside the caller's undo gesture.
+// These run on the simulation thread, inside the caller's undo recording.
 // A new Model last in prefab, holding mesh and material when they are not 0.
 // It is named after its Mesh, or "Model", with a number when a sibling has
 // that name. 0, with error set, when prefab is gone or the place is full.

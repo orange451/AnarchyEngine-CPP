@@ -119,8 +119,10 @@ private:
     std::uint64_t next_ = 1;
 };
 
-// Edit undo for DataModel mutations. A second stack holds waypoints committed
-// during play and is dropped on stop. Text keystrokes do not come here.
+// Edit undo for DataModel mutations. A mutation is recorded only while a
+// recording is open; a write no recording covers is not an undo step. A
+// second stack holds waypoints committed during play and is dropped on stop.
+// Text keystrokes do not come here.
 class ChangeHistoryService {
 public:
     explicit ChangeHistoryService(DataModel& game);
@@ -132,7 +134,7 @@ public:
     // Empty id asks whether any recording is open.
     bool is_recording_in_progress(std::optional<std::string> id = std::nullopt) const;
 
-    // Commits the open recording under this name. Empty when nothing is open.
+    // Commits the open recording under this name. Does nothing when none is open.
     void set_waypoint(std::string name);
     // Clears the undo and redo stacks and drops an open recording without reverting.
     void reset_waypoints();
@@ -158,13 +160,8 @@ public:
     // on the redo stacks. Nothing else may be in them.
     std::unordered_set<std::uint32_t> revivable_slots() const;
 
-    // Name used the next time edit mode opens an implicit recording.
-    void set_pending_gesture(std::string name);
-    // Commits an implicit recording. An explicit recording stays open.
-    void end_gesture();
-
-    // True when a mutator should capture. Play writes are included only
-    // inside an open recording. Undo application is not.
+    // True when a mutator should capture: a recording is open, history is on,
+    // and no undo is being applied.
     bool wants_mutation() const;
 
     void note(Mutation mutation);
@@ -185,7 +182,6 @@ private:
         std::string id;
         std::string name;
         std::string display_name;
-        bool implicit = false;
         std::vector<Mutation> mutations;
     };
 
@@ -197,11 +193,8 @@ private:
         std::size_t bytes = 0;
     };
 
-    void open_implicit(const Mutation& first);
     void push_or_coalesce(Mutation mutation);
-    // Drops what the open recording holds about instances now in Core. An
-    // implicit recording left empty is cancelled, so it does not wait to merge
-    // into the next gesture.
+    // Drops what the open recording holds about instances now in Core.
     void forget_core();
     void apply_waypoint(Waypoint& waypoint, bool inverse);
     // Undo moves the newest waypoint from the undo stack to the redo stack; redo moves it back.
@@ -218,7 +211,6 @@ private:
     bool enabled_ = true;
     int applying_ = 0;
     std::uint64_t next_id_ = 1;
-    std::string pending_;
     std::optional<Recording> recording_;
     std::vector<Waypoint> edit_undo_;
     std::vector<Waypoint> edit_redo_;

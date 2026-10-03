@@ -85,7 +85,6 @@ struct MoveRig {
         camera.set_viewport_size(engine_core::Vec2{200, 200});
         dynamic_cast<engine_core::Workspace*>(rig.game.instance(rig.game.scene_service("Workspace")))
             ->set_current_camera(camera.id());
-        rig.game.history().end_gesture();
         rig.game.history().reset_waypoints();
         REQUIRE(loader.load(rig.game, rig.runtime, {move_tool_file()}) == 1);
         rig.frames(1);
@@ -93,7 +92,6 @@ struct MoveRig {
     InstanceId part_at(const char* name, float x, float y, float z) {
         const InstanceId id = add_part(rig.game, name);
         rig.game.game_object(id)->set_transform(engine_core::matrix4_translation(x, y, z));
-        rig.game.history().end_gesture();
         rig.game.history().reset_waypoints();
         return id;
     }
@@ -164,6 +162,7 @@ TEST_CASE("MT1 the Move tool puts its handles at the middle of the selected PVIn
     MoveRig move;
     const InstanceId a = move.part_at("A", -2, 0, -10);
     const InstanceId b = move.part_at("B", 2, 4, -10);
+    begin_step(move.rig.game);
     REQUIRE_FALSE(handles_at(move.rig.game));
     move.rig.game.selection().set({a, b});
     move.rig.frames(1);
@@ -178,7 +177,7 @@ TEST_CASE("MT1 the Move tool puts its handles at the middle of the selected PVIn
     move.rig.game.selection().set({});
     move.rig.frames(1);
     REQUIRE_FALSE(handles_at(move.rig.game));
-    move.rig.game.history().end_gesture();
+    end_step(move.rig.game);
     REQUIRE_FALSE(move.rig.game.history().can_undo().first);
 }
 
@@ -276,7 +275,6 @@ TEST_CASE("MT7 selecting a Folder of parts puts the handles at their middle, and
     for (InstanceId id : {a, b, c}) {
         move.rig.game.set_parent(id, folder.id());
     }
-    move.rig.game.history().end_gesture();
     move.rig.game.history().reset_waypoints();
     move.rig.game.selection().set({folder.id()});
     move.rig.frames(1);

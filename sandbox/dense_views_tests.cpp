@@ -105,12 +105,11 @@ TEST_CASE("every live instance has one entity", "[dense][entity]") {
     const engine_core::InstanceId part_id = part.id();
     REQUIRE(game.entity_count() == services + 2);
     game.set_parent(part_id, folder.id());
-    game.history().end_gesture();
     game.destroy(folder.id());  // orphans part and deletes folder's entity
-    game.history().end_gesture();
     REQUIRE(game.entity_count() == services + 1);
+    begin_step(game);
     game.destroy(part_id);
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(game.entity_count() == services);
     game.history().undo();  // revives part through the place-restore path
     REQUIRE(game.alive(part_id));
@@ -165,9 +164,9 @@ TEST_CASE("undo and Stop keep spatial values and flags", "[dense][entity]") {
     part.set_transform(engine_core::matrix4_translation(1.f, 2.f, 3.f));
     game.set_simulated(id, true);
     game.set_visual_only(id, true);
-    game.history().end_gesture();
+    begin_step(game);
     game.destroy(id);
-    game.history().end_gesture();
+    end_step(game);
     game.history().undo();
     REQUIRE(game.alive(id));
     REQUIRE(game.simulated(id));
@@ -233,10 +232,10 @@ TEST_CASE("destroy clears scope; undo restores it", "[dense][scope]") {
     game.set_parent(child.id(), parent.id());
     const engine_core::InstanceId parent_id = parent.id();
     const engine_core::InstanceId child_id = child.id();
-    game.history().end_gesture();
     // destroy, not destroy_tree: the child lives on, out of the tree.
+    begin_step(game);
     game.destroy(parent_id);
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(game.alive(child_id));
     REQUIRE_FALSE(game.in_game(child_id));
     REQUIRE_FALSE(game.in_workspace(child_id));
@@ -309,9 +308,9 @@ TEST_CASE("undo revives a Spinner that still steps", "[dense][step]") {
     Spinner& spinner = game.create<Spinner>();
     const engine_core::InstanceId id = spinner.id();
     game.set_parent(id, workspace_of(game));
-    game.history().end_gesture();
+    begin_step(game);
     game.destroy(id);
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(game.stepper_count() == 0);
     game.history().undo();
     REQUIRE(game.alive(id));

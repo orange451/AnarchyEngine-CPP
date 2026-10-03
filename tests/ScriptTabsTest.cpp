@@ -5,6 +5,7 @@
 #include "ide/IdeScriptEditor.hpp"
 #include "SelectionService.hpp"
 
+#include "ChangeHistoryService.hpp"
 #include "DataModel.hpp"
 #include "Engine.hpp"
 #include "LuaSource.hpp"
@@ -17,6 +18,7 @@
 #include <chrono>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -210,8 +212,6 @@ void TestPickerHookLeavesWithEditor(engine_core::Engine& engine) {
 // while the script was gone, takes it up again.
 void TestEditorComesBackWithItsScript(engine_core::Engine& engine) {
     const engine_core::InstanceId id = AddScript(engine, "Phoenix", "print(1)\n");
-    // Its creation is its own undo step, apart from the delete below.
-    engine.on_simulation([](engine_core::DataModel& game) { game.history().end_gesture(); });
     auto editor = jadefx::make<ide::IdeScriptEditor>(engine, id);
     editor->setPrefWidthRatio(1);
     editor->setPrefHeightRatio(1);
@@ -235,8 +235,11 @@ void TestEditorComesBackWithItsScript(engine_core::Engine& engine) {
     frame();
     Expect(area() != nullptr && area()->isEditable(), "an open script's editor takes typing");
     engine.on_simulation([id](engine_core::DataModel& game) {
+        const std::optional<std::string> step = game.history().try_begin_recording("Delete");
         game.destroy(id);
-        game.history().end_gesture();
+        if (step) {
+            game.history().finish_recording(*step, engine_core::FinishRecordingOperation::Commit);
+        }
     });
     frame();
     Expect(area() != nullptr && !area()->isEditable(), "the editor of a deleted script is read-only");

@@ -702,10 +702,10 @@ TEST_CASE("folders: first child, folder rename, script with children, undo of a 
     REQUIRE(fs::exists(dir.path / main_dir / "init.meta.json"));
 
     // Undo of a delete brings back the same GUID, so the same file.
-    game.history().end_gesture();
     const std::string inner_guid = game.guid(inner);
+    begin_step(game);
     game.destroy(inner);
-    game.history().end_gesture();
+    end_step(game);
     project.save();
     REQUIRE_FALSE(fs::exists(dir.path / crate_dir / ("Inner." + inner_guid + ".json")));
     game.history().undo();
@@ -753,8 +753,9 @@ TEST_CASE("adopt writes an unsaved place without clearing it", "[project]") {
     SimRole role;
     TempDir dir;
     Game game;
+    begin_step(game);
     const InstanceId part = add_part(game, workspace_of(game), "Part").id();
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(game.history().can_undo().first);
     const std::string guid = game.guid(part);
 
@@ -811,9 +812,10 @@ TEST_CASE("the fingerprint changes with the saved bytes, not with edits that can
 TEST_CASE("reset_place empties the place but for a Camera and drops undo", "[project]") {
     SimRole role;
     Game game;
+    begin_step(game);
     add_part(game, workspace_of(game), "Part");
     add_script(game, workspace_of(game), "Main", "print(1)\n");
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(game.history().can_undo().first);
     const std::string old_root = game.guid(0);
     game.start_simulation();
@@ -871,12 +873,11 @@ TEST_CASE("destroy_tree destroys descendants and one undo brings them back", "[p
     game.set_parent(box.id(), workspace_of(game));
     const InstanceId inner = add_part(game, box.id(), "Inner").id();
     const InstanceId deep = add_part(game, inner, "Deep").id();
-    game.history().end_gesture();
     game.history().reset_waypoints();
 
-    game.history().set_pending_gesture("Delete");
+    begin_step(game, "Delete");
     game.destroy_tree(box.id());
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE_FALSE(game.alive(box.id()));
     REQUIRE_FALSE(game.alive(inner));
     REQUIRE_FALSE(game.alive(deep));
@@ -1873,7 +1874,7 @@ TEST_CASE("A1 disk changes load as one undo step; undone, a save writes the stud
     engine_core::GameObject& b = add_part(game, workspace_of(game), "B");
     project.save();
     edit_key(dir.path / leaf(game, a), "Transform", translated(2, 2, 2));
-    // A studio edit whose gesture is still open.
+    // A studio write outside any recording, which the disk step leaves alone.
     b.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
 
     const engine_core::DiskScan result = project.apply_disk();
@@ -2200,9 +2201,9 @@ TEST_CASE("U1 unsaved follows edits and their undo", "[U1][disk][project]") {
     DataModel& game = project.datamodel();
     REQUIRE_FALSE(project.unsaved());
     const InstanceId a = game.find_first_child(workspace_of(game), "A");
-    game.history().set_pending_gesture("Transform");
+    begin_step(game, "Transform");
     game.game_object(a)->set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(project.unsaved());
     game.history().undo();
     REQUIRE_FALSE(project.unsaved());

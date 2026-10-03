@@ -188,15 +188,19 @@ TEST_CASE("CO4 changes under Core record no history", "[CO4]") {
     SimRole role;
     engine_core::Game game;
     game.history().reset_waypoints();
+    begin_step(game);
     const InstanceId tools = add_folder(game, "Tools", game.core());
-    game.history().end_gesture();
+    end_step(game);
+    begin_step(game);
     game.set_name(tools, "Renamed");
-    game.history().end_gesture();
+    end_step(game);
+    begin_step(game);
     const InstanceId other = add_folder(game, "Other", game.core());
     game.set_parent(tools, other);
-    game.history().end_gesture();
+    end_step(game);
+    begin_step(game);
     game.destroy(tools);
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE_FALSE(game.history().can_undo().first);
     REQUIRE_FALSE(game.history().is_recording_in_progress());
 }
@@ -206,14 +210,15 @@ TEST_CASE("CO4b making an instance and putting it in Core leaves no undo step, a
     SimRole role;
     engine_core::Game game;
     game.history().reset_waypoints();
-    // As a plugin does: made with no parent, named, then put in Core, with no gesture between.
+    // As a plugin does: made with no parent, named, then put in Core, outside any recording.
     const InstanceId tool = add_folder(game, "Tool", engine_core::DataModel::kNoParent);
     game.set_name(tool, "Dragger");
     game.set_parent(tool, game.core());
     REQUIRE_FALSE(game.history().is_recording_in_progress());
     // The user's next edit is its own step, and undoing it leaves the tool alone.
+    begin_step(game, "Insert Folder");
     const InstanceId part = add_folder(game, "Part", game.scene_service("Workspace"));
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(game.history().can_undo().first);
     game.history().undo();
     REQUIRE_FALSE(game.alive(part));
@@ -225,12 +230,15 @@ TEST_CASE("CO4c undoing a step recorded before an instance went into Core does n
     SimRole role;
     engine_core::Game game;
     game.history().reset_waypoints();
+    begin_step(game);
     const InstanceId part = add_folder(game, "Part", game.scene_service("Workspace"));
-    game.history().end_gesture();
+    end_step(game);
+    begin_step(game);
     game.set_parent(part, engine_core::DataModel::kNoParent);
-    game.history().end_gesture();
+    end_step(game);
+    begin_step(game);
     game.set_parent(part, game.core());
-    game.history().end_gesture();
+    end_step(game);
     while (game.history().can_undo().first) {
         game.history().undo();
     }
@@ -390,10 +398,12 @@ TEST_CASE("CO4d undoing a delete after a Core instance was made brings the delet
     SimRole role;
     engine_core::Game game;
     game.history().reset_waypoints();
+    begin_step(game);
     const InstanceId part = add_folder(game, "Part", game.scene_service("Workspace"));
-    game.history().end_gesture();
+    end_step(game);
+    begin_step(game);
     game.destroy(part);
-    game.history().end_gesture();
+    end_step(game);
     // As a plugin makes its Dragger: no undo step, so its slot must not be the deleted one's.
     const InstanceId tool = add_folder(game, "Tool", engine_core::DataModel::kNoParent);
     game.set_parent(tool, game.core());
@@ -406,8 +416,9 @@ TEST_CASE("CO4e redoing a create after a Core instance was made brings the creat
     SimRole role;
     engine_core::Game game;
     game.history().reset_waypoints();
+    begin_step(game);
     const InstanceId part = add_folder(game, "Part", game.scene_service("Workspace"));
-    game.history().end_gesture();
+    end_step(game);
     game.history().undo();
     REQUIRE_FALSE(game.alive(part));
     const InstanceId tool = add_folder(game, "Tool", engine_core::DataModel::kNoParent);
@@ -421,10 +432,12 @@ TEST_CASE("CO4f a delete undone after Play and Stop still has its slot, though C
     SimRole role;
     engine_core::Game game;
     game.history().reset_waypoints();
+    begin_step(game);
     const InstanceId part = add_folder(game, "Part", game.scene_service("Workspace"));
-    game.history().end_gesture();
+    end_step(game);
+    begin_step(game);
     game.destroy(part);
-    game.history().end_gesture();
+    end_step(game);
     game.start_simulation();
     game.stop_simulation();
     const InstanceId tool = add_folder(game, "Tool", engine_core::DataModel::kNoParent);

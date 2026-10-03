@@ -15,8 +15,6 @@ namespace ide {
 class ScopedRecording {
 public:
     ScopedRecording(engine_core::DataModel& world, std::string name) : history_(world.history()) {
-        // An implicit recording left open would refuse this one. Goes with the implicit gesture.
-        history_.end_gesture();
         id_ = history_.try_begin_recording(std::move(name));
     }
 

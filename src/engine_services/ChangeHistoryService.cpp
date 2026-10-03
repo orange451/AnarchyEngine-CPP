@@ -9,39 +9,6 @@
 namespace engine_core {
 namespace {
 
-std::string default_gesture(const Mutation& mutation) {
-    switch (mutation.kind) {
-    case MutationKind::CreateInstance:
-        if (mutation.record.class_name.empty()) {
-            return "Create";
-        }
-        return "Create " + mutation.record.class_name;
-    case MutationKind::DestroyInstance:
-        return "Delete";
-    case MutationKind::SetParent:
-        return "Set Parent";
-    case MutationKind::SetProperty:
-        break;
-    }
-    switch (mutation.after.prop) {
-    case HistoryProp::Transform:
-        return "Move";
-    case HistoryProp::Name:
-        return "Rename";
-    case HistoryProp::Source:
-        return "Edit Source";
-    case HistoryProp::Enabled:
-        return "Set Enabled";
-    case HistoryProp::Simulated:
-        return "Set Simulated";
-    case HistoryProp::VisualOnly:
-        return "Set Visual";
-    case HistoryProp::Reflected:
-        return std::string("Set ") + lua_property_name(mutation.after.property);
-    }
-    return "Edit";
-}
-
 // Roughly what a record keeps alive: its strings, its bag, and its subtree.
 std::size_t record_bytes(const AuthoredRecord& record) {
     std::size_t bytes = sizeof(AuthoredRecord) + record.class_name.size() + record.name.size() + record.guid.size() +
@@ -110,18 +77,10 @@ const std::vector<ChangeHistoryService::Waypoint>& ChangeHistoryService::redo_st
 }
 
 bool ChangeHistoryService::wants_mutation() const {
-    if (!enabled_ || applying_ != 0 || game_ == nullptr) {
-        return false;
-    }
-    if (playing() && !recording_) {
-        return false;
-    }
-    return true;
+    return enabled_ && applying_ == 0 && game_ != nullptr && recording_.has_value();
 }
 
 void ChangeHistoryService::set_enabled(bool enabled) { enabled_ = enabled; }
-
-void ChangeHistoryService::set_pending_gesture(std::string name) { pending_ = std::move(name); }
 
 std::optional<std::string> ChangeHistoryService::try_begin_recording(std::string name, std::string display_name) {
     if (!enabled_ || recording_ || applying_ != 0) {
@@ -134,28 +93,12 @@ std::optional<std::string> ChangeHistoryService::try_begin_recording(std::string
     recording.id = std::to_string(next_id_++);
     recording.name = std::move(name);
     recording.display_name = std::move(display_name);
-    recording.implicit = false;
     const std::string started_name = recording.name;
     const std::string started_display = recording.display_name;
     const std::string id = recording.id;
     recording_ = std::move(recording);
     on_recording_started.emit(started_name, started_display);
     return id;
-}
-
-void ChangeHistoryService::open_implicit(const Mutation& first) {
-    Recording recording;
-    recording.id = std::to_string(next_id_++);
-    if (!pending_.empty()) {
-        recording.name = pending_;
-        recording.display_name = pending_;
-        pending_.clear();
-    } else {
-        recording.name = default_gesture(first);
-        recording.display_name = recording.name;
-    }
-    recording.implicit = true;
-    recording_ = std::move(recording);
 }
 
 void ChangeHistoryService::push_or_coalesce(Mutation mutation) {
@@ -229,14 +172,10 @@ void ChangeHistoryService::forget_core() {
     list.erase(std::remove_if(list.begin(), list.end(),
                               [this](const Mutation& mutation) { return game_->core_holds(mutation.id); }),
                list.end());
-    if (recording_->implicit && list.empty()) {
-        const std::string id = recording_->id;
-        finish_recording(id, FinishRecordingOperation::Cancel);
-    }
 }
 
 void ChangeHistoryService::note(Mutation mutation) {
-    if (!enabled_ || applying_ != 0 || game_ == nullptr) {
+    if (!enabled_ || applying_ != 0 || game_ == nullptr || !recording_) {
         return;
     }
     // Core is the studio's, not the place's: what happens there is never an
@@ -245,26 +184,7 @@ void ChangeHistoryService::note(Mutation mutation) {
         forget_core();
         return;
     }
-    if (playing() && !recording_) {
-        return;
-    }
-    bool opened = false;
-    if (!recording_) {
-        if (playing()) {
-            return;
-        }
-        open_implicit(mutation);
-        opened = true;
-    }
-    if (!recording_) {
-        return;
-    }
-    const std::string started_name = recording_->name;
-    const std::string started_display = recording_->display_name;
     push_or_coalesce(std::move(mutation));
-    if (opened) {
-        on_recording_started.emit(started_name, started_display);
-    }
 }
 
 void ChangeHistoryService::apply_waypoint(Waypoint& waypoint, bool inverse) {
@@ -330,26 +250,12 @@ bool ChangeHistoryService::is_recording_in_progress(std::optional<std::string> i
     return recording_->id == *id;
 }
 
-void ChangeHistoryService::end_gesture() {
-    if (recording_ && recording_->implicit && !pending_.empty()) {
-        recording_->name = pending_;
-        recording_->display_name = pending_;
-    }
-    pending_.clear();
-    if (!recording_ || !recording_->implicit) {
-        return;
-    }
-    finish_recording(recording_->id, FinishRecordingOperation::Commit);
-}
-
 void ChangeHistoryService::set_waypoint(std::string name) {
     if (!recording_) {
-        pending_.clear();
         return;
     }
     recording_->name = name;
     recording_->display_name = std::move(name);
-    pending_.clear();
     finish_recording(recording_->id, FinishRecordingOperation::Commit);
 }
 
@@ -359,7 +265,6 @@ void ChangeHistoryService::reset_waypoints() {
         recording_.reset();
         on_recording_finished.emit(recording.name, recording.display_name, recording.id, FinishRecordingOperation::Cancel);
     }
-    pending_.clear();
     edit_undo_.clear();
     edit_redo_.clear();
     session_undo_.clear();

@@ -69,7 +69,6 @@ struct DragRig {
         part = add_part(game.scene_service("Workspace"), engine_core::matrix4_translation(0, 5, -10));
         rig.game.set_name(part, "Part");
         dragger = add_dragger(game.scene_service("Workspace"), engine_core::matrix4_translation(0, 0, -10));
-        game.history().end_gesture();
         game.history().reset_waypoints();
     }
 
@@ -127,10 +126,10 @@ TEST_CASE("VP1 Camera.ViewportSize is read-only to scripts, unsaved, and not und
     ScriptRig rig;
     engine_core::Camera& camera = rig.game.create<engine_core::Camera>();
     rig.game.set_parent(camera.id(), rig.game.scene_service("Workspace"));
-    rig.game.history().end_gesture();
     rig.game.history().reset_waypoints();
+    begin_step(rig.game);
     camera.set_viewport_size(engine_core::Vec2{800.f, 600.f});
-    rig.game.history().end_gesture();
+    end_step(rig.game);
     REQUIRE_FALSE(rig.game.history().can_undo().first);
     rig.runtime.run_chunk(R"(
         local camera
@@ -605,7 +604,8 @@ TEST_CASE("RD3 handle_mesh draws what can be grabbed, colored by axis and state"
     REQUIRE(mesh.empty());
 }
 
-TEST_CASE("DR23 a drag after an edit that left its undo step open gets a step of its own", "[DR23]") {
+TEST_CASE("DR23 a drag after a write outside any recording is a step of its own, and the write is not undone",
+          "[DR23]") {
     DragRig drag;
     drag.rig.runtime.run_chunk(R"(
         local part = workspace.Part
@@ -614,9 +614,9 @@ TEST_CASE("DR23 a drag after an edit that left its undo step open gets a step of
         end)
     )");
     drag.rig.frames(1);
-    // As a command line edit does: the place changes, and nothing closes the step.
+    // As a command line edit does: the place changes outside any recording.
     drag.rig.game.set_name(drag.part, "Edited");
-    REQUIRE(drag.rig.game.history().is_recording_in_progress());
+    REQUIRE_FALSE(drag.rig.game.history().is_recording_in_progress());
     drag.press(150, 100);
     drag.move(170, 100);
     drag.release(170, 100);
@@ -627,6 +627,5 @@ TEST_CASE("DR23 a drag after an edit that left its undo step open gets a step of
     drag.rig.game.history().undo();
     REQUIRE(close(drag.transform(drag.part).m[12], 0));
     REQUIRE(drag.rig.game.name(drag.part) == "Edited");
-    drag.rig.game.history().undo();
-    REQUIRE(drag.rig.game.name(drag.part) == "Part");
+    REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
 }

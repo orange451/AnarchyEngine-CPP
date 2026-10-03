@@ -125,10 +125,10 @@ TEST_CASE("SS4 undo and Stop keep the scene services", "[SS4]") {
     const std::vector<InstanceId> before = game.get_children(0);
     const InstanceId workspace = game.scene_service("Workspace");
 
-    game.history().set_pending_gesture("Insert Folder");
+    begin_step(game, "Insert Folder");
     Folder& folder = game.create<Folder>();
     game.set_parent(folder.id(), workspace);
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(game.history().can_undo().first);
     while (game.history().can_undo().first) {
         game.history().undo();
@@ -173,9 +173,9 @@ TEST_CASE("SS5 Lighting's properties save, undo, and come back at Stop", "[SS5]"
     lighting.save_properties(saved);
     REQUIRE(saved.empty());
 
-    game.history().set_pending_gesture("Set Brightness");
+    begin_step(game, "Set Brightness");
     REQUIRE_FALSE(lighting.set_brightness(3.5));
-    game.history().end_gesture();
+    end_step(game);
     REQUIRE(lighting.brightness() == 3.5);
     REQUIRE(game.history().can_undo().second == "Set Brightness");
     game.history().undo();

@@ -229,13 +229,11 @@ TEST_CASE("SC9 a script cannot make CurrentCamera anything but a Camera", "[SC9]
 TEST_CASE("SC10 CurrentCamera is not an edit: no undo step, not saved, cleared by a new place", "[SC10]") {
     ScriptRig rig;
     engine_core::Camera& camera = add_camera(rig.game);
-    rig.game.history().end_gesture();
     rig.game.history().reset_waypoints();
     const std::uint64_t revision = rig.game.authored_revision();
     const std::uint64_t fingerprint = engine_core::Project::place_fingerprint(rig.game);
 
     REQUIRE(workspace_service(rig.game).set_current_camera(camera.id()));
-    rig.game.history().end_gesture();
     REQUIRE_FALSE(rig.game.history().can_undo().first);
     REQUIRE(rig.game.authored_revision() == revision);
     REQUIRE(engine_core::Project::place_fingerprint(rig.game) == fingerprint);
@@ -269,19 +267,20 @@ TEST_CASE("SC11 moving a Camera marks the place changed but is not an undo step"
     ScriptRig rig;
     engine_core::Camera& camera = add_camera(rig.game);
     engine_core::GameObject& part = create_part(rig.game);
-    rig.game.history().end_gesture();
     rig.game.history().reset_waypoints();
     const std::uint64_t revision = rig.game.authored_revision();
 
+    begin_step(rig.game);
     for (int step = 1; step <= 50; ++step) {
         camera.set_transform(engine_core::matrix4_translation(0.f, 0.f, static_cast<float>(step)));
     }
-    rig.game.history().end_gesture();
+    end_step(rig.game);
     REQUIRE_FALSE(rig.game.history().can_undo().first);
     REQUIRE(rig.game.authored_revision() != revision);
 
+    begin_step(rig.game);
     part.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
-    rig.game.history().end_gesture();
+    end_step(rig.game);
     REQUIRE(rig.game.history().can_undo().first);
 }
 
@@ -382,12 +381,10 @@ TEST_CASE("SC14 the scene camera moves per rendered frame in edit mode", "[SC14]
 
 TEST_CASE("SC22 loading the built-in plugins is not an edit to the place", "[SC22]") {
     ScriptRig rig;
-    rig.game.history().end_gesture();
     rig.game.history().reset_waypoints();
     const std::uint64_t fingerprint = engine_core::Project::place_fingerprint(rig.game);
     ide::PluginLoader loader;
     REQUIRE(loader.load(rig.game, rig.runtime, {scene_camera_file()}) == 1);
-    rig.game.history().end_gesture();
     REQUIRE_FALSE(rig.game.history().can_undo().first);
     REQUIRE(engine_core::Project::place_fingerprint(rig.game) == fingerprint);
     REQUIRE(rig.game.get_children(workspace_of(rig.game)).empty());

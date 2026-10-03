@@ -22,11 +22,6 @@ class DataModel;
 // This is not the compiler. A type warning still compiles and runs.
 enum class Severity { Error, Warning, Information, Hint };
 
-// Which scripts are analyzed. All: every Script and ModuleScript. Open: the
-// watched scripts and every ModuleScript they require, recursively, because a
-// required module's types are part of the watched script's check.
-enum class AnalysisScope { All, Open };
-
 // Rule names a header `--!nolint` comment can name. Unknown is not a rule.
 void lint_rule_names(std::vector<std::string>& out);
 
@@ -177,7 +172,7 @@ struct LuauAnswer {
     LuauFacts facts;
 };
 
-// Incremental analysis of every Lua source in one DataModel.
+// Incremental analysis of every Lua source in one DataModel, whether or not anything shows it.
 // Source is copied on the gameplay thread. A background worker parses, lints,
 // and typechecks that copy. pump() is the only publisher. It runs on the
 // gameplay thread, as DataModel::gameplay_thread counts it (the simulation
@@ -193,17 +188,6 @@ public:
 
     void set_enabled(bool enabled);
     bool enabled() const;
-
-    // All is the default. Switching to Open drops every result outside the
-    // watched scripts and their required modules.
-    void set_scope(AnalysisScope scope);
-    AnalysisScope scope() const;
-    // An editor is showing this script. It is checked against the current tree
-    // on the next pump(), whatever result it had. Counted: each watch needs an unwatch.
-    void watch(InstanceId script);
-    // In Open scope, the last unwatch drops this script's result, and the
-    // result of every module no other watched script still requires.
-    void unwatch(InstanceId script);
 
     // Source, name, or parent changed. Also used after place restore.
     void invalidate(InstanceId script);
@@ -286,12 +270,6 @@ private:
     // Captures the tree once and queues these scripts. Gameplay thread, or a
     // thread that holds the DataModel lock.
     void schedule(const std::vector<InstanceId>& ids);
-    // Open scope with the state mutex held: the watched scripts and every
-    // script they reach through recorded requires.
-    std::unordered_set<InstanceId> active_locked() const;
-    // Open scope with the state mutex held: forgets every script outside
-    // active_locked(). Returns the ones that had a published result.
-    std::vector<InstanceId> drop_inactive_locked();
     void replace_requires(InstanceId script, const std::vector<InstanceId>& targets);
     void forget_requires(InstanceId script);
     void collect_dependents(InstanceId id, std::vector<InstanceId>& out, std::unordered_set<InstanceId>& seen) const;

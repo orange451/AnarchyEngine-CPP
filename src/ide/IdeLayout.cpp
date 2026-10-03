@@ -34,9 +34,6 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     }
     set_editor_font_choice(preferences_.editor_font());
     set_current_theme(std::move(theme));
-    // Only open scripts, and the modules they require, are checked. Nothing
-    // else in the studio reads diagnostics.
-    runner_.simulation().analysis().set_scope(engine_core::AnalysisScope::Open);
 
     auto file = jadefx::make<jadefx::Menu>("File");
     AddItem(*file, "New", "New.png", jadefx::Key::N, jadefx::Key::ModControl)->setOnAction([this](jadefx::ActionEvent&) {

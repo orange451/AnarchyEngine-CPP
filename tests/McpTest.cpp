@@ -385,12 +385,10 @@ bool HasProblem(const JsonValue& problems, const std::string& code, int line) {
     return false;
 }
 
-// Scripts are checked, edited in part, searched, and undone. Analysis looks
-// only at open scripts, as in the studio, so the tools watch what they ask about.
+// Scripts are checked, edited in part, searched, and undone.
 void TestScriptTools() {
     engine_core::Engine engine;
     engine_core::DataModel& game = engine.datamodel();
-    engine.analysis().set_scope(engine_core::AnalysisScope::Open);
     ide::McpServer server;
     ide::add_engine_tools(server, engine, {});
     AddScript(game, "Main", "print('hi')", game.scene_service("Workspace"));

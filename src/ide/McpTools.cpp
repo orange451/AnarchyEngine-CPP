@@ -555,28 +555,6 @@ JsonValue ProblemList(std::vector<engine_core::Diagnostic> diagnostics) {
     return list;
 }
 
-// Watches scripts for as long as it lives, as an open editor does.
-class Watching {
-public:
-    Watching(engine_core::ScriptAnalysis& analysis, std::vector<InstanceId> ids)
-        : analysis_(analysis), ids_(std::move(ids)) {
-        for (InstanceId id : ids_) {
-            analysis_.watch(id);
-        }
-    }
-    ~Watching() {
-        for (InstanceId id : ids_) {
-            analysis_.unwatch(id);
-        }
-    }
-    Watching(const Watching&) = delete;
-    Watching& operator=(const Watching&) = delete;
-
-private:
-    engine_core::ScriptAnalysis& analysis_;
-    std::vector<InstanceId> ids_;
-};
-
 // What analysis found in some scripts, each checked against the Source it has now.
 struct Checked {
     std::unordered_map<InstanceId, std::vector<engine_core::Diagnostic>> problems;
@@ -586,8 +564,7 @@ struct Checked {
     bool off = false;
 };
 
-// Waits up to kAnalysisWait for analysis to check these scripts. The studio
-// analyzes only scripts open in an editor, so each is watched while this waits.
+// Waits up to kAnalysisWait for analysis to check these scripts.
 Checked CheckScripts(engine_core::Engine& engine, const std::vector<InstanceId>& ids) {
     engine_core::ScriptAnalysis& analysis = engine.analysis();
     Checked out;
@@ -595,7 +572,6 @@ Checked CheckScripts(engine_core::Engine& engine, const std::vector<InstanceId>&
         out.off = true;
         return out;
     }
-    const Watching watching(analysis, ids);
     // Shared, since an edit that runs after a timed-out wait still writes it.
     struct Progress {
         std::vector<InstanceId> waiting;

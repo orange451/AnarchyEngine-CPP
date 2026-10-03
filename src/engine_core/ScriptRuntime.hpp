@@ -227,6 +227,8 @@ private:
         bool wait_warned = false;
         int nargs = 0;
         bool dead = false;
+        // Ended with an uncaught error, or its VM halted.
+        bool errored = false;
     };
 
     struct Start {
@@ -243,6 +245,17 @@ private:
     };
 
     enum class VmKind { Play, Console, Plugin };
+
+    // A ChangeHistoryService recording a console or plugin thread opened, and
+    // that thread's serial and owner. A console thread that ends with it still
+    // open closes it; a plugin's stay open until the plugin stops.
+    struct HeldRecording {
+        std::string id;
+        std::string name;
+        std::uint64_t thread = 0;
+        InstanceId script = 0;
+        std::uint32_t owner = 0;
+    };
 
     // One Luau state and its scheduler.
     struct Vm {
@@ -272,6 +285,7 @@ private:
         std::vector<Kept> kept;
         // kept drops disconnected entries when it reaches this size.
         std::size_t kept_prune_at = 64;
+        std::vector<HeldRecording> recordings;
     };
 
     struct Plugin {
@@ -331,6 +345,13 @@ private:
     void kill_owned(Vm& vm, InstanceId script, std::uint32_t owner);
     // Records a console or plugin connection so its VM can disconnect it.
     void keep(Vm& vm, InstanceId script, std::uint32_t owner, const Connection& connection);
+    // TryBeginRecording opened this recording on state's thread. Only the
+    // console and plugin VMs keep it.
+    void hold_recording(lua_State* state, const std::string& id, const std::string& name);
+    // Finishes each recording in vm.recordings that match picks and that is
+    // still open, and says so in the output: cancelled or committed, and when.
+    template <typename Match>
+    void close_recordings(Vm& vm, Match&& match, bool cancel, const char* when);
     void kill_script(InstanceId id);
     // Whether a script at id is under Workspace, Scripts, or Gui, where scripts run.
     bool runs_here(InstanceId id) const;
@@ -403,6 +424,8 @@ private:
     bool open_ = false;
     // Lua frames on the C++ stack, any VM. Threads are released only at 0.
     int lua_depth_ = 0;
+    // The thread resume_one is running, which a coroutine inside it runs for.
+    Thread* running_ = nullptr;
     // The render job that runs window handlers. RenderThread, inside Prepare.
     void render_step(double dt);
     // True while render_step invokes handlers. Bindings branch on it: a Wait on

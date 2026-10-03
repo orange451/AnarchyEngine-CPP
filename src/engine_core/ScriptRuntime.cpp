@@ -85,9 +85,53 @@ void clear_require_cache(lua_State* state, std::unordered_map<InstanceId, int>& 
 
 ScriptRuntime::~ScriptRuntime() { detach(); }
 
+template <typename Match>
+void ScriptRuntime::close_recordings(Vm& vm, Match&& match, bool cancel, const char* when) {
+    std::vector<HeldRecording> closing;
+    for (auto it = vm.recordings.begin(); it != vm.recordings.end();) {
+        if (match(*it)) {
+            closing.push_back(std::move(*it));
+            it = vm.recordings.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (game_ == nullptr) {
+        return;
+    }
+    ChangeHistoryService& history = game_->history();
+    for (HeldRecording& held : closing) {
+        if (!history.is_recording_in_progress(held.id)) {
+            continue;
+        }
+        history.finish_recording(held.id, cancel ? FinishRecordingOperation::Cancel : FinishRecordingOperation::Commit);
+        append_output(OutputKind::Print, "ChangeHistoryService: recording \"" + held.name + "\" was still open when " +
+                                             when + ", so it was " + (cancel ? "cancelled" : "committed"));
+    }
+}
+
+void ScriptRuntime::hold_recording(lua_State* state, const std::string& id, const std::string& name) {
+    Vm* vm = vm_from(state);
+    if (vm == nullptr || vm->kind == VmKind::Play) {
+        return;
+    }
+    Thread* thread = thread_from(state);
+    // A coroutine has no Thread of its own; it runs for the one being resumed.
+    if (thread == nullptr && running_ != nullptr && running_->vm == vm) {
+        thread = running_;
+    }
+    if (thread == nullptr) {
+        return;
+    }
+    // One recording is open at a time, so the rest have closed.
+    vm->recordings.clear();
+    vm->recordings.push_back(HeldRecording{id, name, thread->serial, thread->script, thread->generation});
+}
+
 void ScriptRuntime::halt(Vm& vm, const char* why) {
     for (Thread& thread : vm.threads) {
         thread.dead = true;
+        thread.errored = true;
     }
     vm.ready.clear();
     vm.sleep.clear();
@@ -109,6 +153,11 @@ void ScriptRuntime::halt(Vm& vm, const char* why) {
         }
         vm.kept.clear();
         who = vm.kind == VmKind::Console ? "Console" : "Plugins";
+        // No plugin thread is left to finish what a plugin opened. A console
+        // thread's recording closes when the thread is released.
+        if (vm.kind == VmKind::Plugin) {
+            close_recordings(vm, [](const HeldRecording&) { return true; }, false, "the plugins stopped");
+        }
     }
     if (vm.state != nullptr) {
         // A throw can leave what it was pushing on the main thread's stack.
@@ -755,7 +804,17 @@ void ScriptRuntime::ensure_state(Vm& vm) {
 void ScriptRuntime::close_state(Vm& vm) {
     if (vm.state == nullptr) {
         vm.clock = 0;
+        vm.recordings.clear();
         return;
+    }
+    if (vm.kind == VmKind::Console) {
+        close_recordings(vm, [&](const HeldRecording& held) {
+            const Thread* thread = find_thread(held.thread);
+            return thread == nullptr || !thread->errored;
+        }, false, "the console was reset");
+        close_recordings(vm, [](const HeldRecording&) { return true; }, true, "the console was reset");
+    } else if (vm.kind == VmKind::Plugin) {
+        close_recordings(vm, [](const HeldRecording&) { return true; }, false, "its plugin stopped");
     }
     vm.closing = true;
     vm.ready.clear();
@@ -936,6 +995,11 @@ void ScriptRuntime::kill_owned(Vm& vm, InstanceId script, std::uint32_t owner) {
             ++it;
         }
     }
+    // A plugin may hold a recording across frames; once it stops, nothing will finish it.
+    if (vm.kind == VmKind::Plugin) {
+        close_recordings(vm, [&](const HeldRecording& held) { return matches(held.script, held.owner); }, false,
+                         "its plugin stopped");
+    }
 }
 
 void ScriptRuntime::keep(Vm& vm, InstanceId script, std::uint32_t owner, const Connection& connection) {
@@ -1108,12 +1172,15 @@ void ScriptRuntime::resume_one(Thread& thread) {
     thread.nargs = 0;
     steps_ = 0;
     ++lua_depth_;
+    Thread* const outer = running_;
+    running_ = &thread;
     int status = LUA_OK;
     {
         // A contract a script reaches from here throws, and Luau makes it a Lua error.
         ScriptContractScope script_contracts;
         status = lua_resume(thread.co, nullptr, nargs);
     }
+    running_ = outer;
     --lua_depth_;
     if (thread.dead) {
         drop_dead_queues(*thread.vm);
@@ -1129,6 +1196,7 @@ void ScriptRuntime::resume_one(Thread& thread) {
     if (status != LUA_OK) {
         report_error(thread.co);
         thread.dead = true;
+        thread.errored = true;
         return;
     }
     thread.dead = true;
@@ -1157,10 +1225,15 @@ void ScriptRuntime::release_dead_threads(Vm& vm) {
         return;
     }
     drop_dead_queues(vm);
+    // A console thread's recording ends with it: an error cancels it, and anything else commits it.
+    std::vector<std::pair<std::uint64_t, bool>> ended;
     for (auto it = vm.threads.begin(); it != vm.threads.end();) {
         if (!it->dead) {
             ++it;
             continue;
+        }
+        if (vm.kind == VmKind::Console && !vm.recordings.empty()) {
+            ended.emplace_back(it->serial, it->errored);
         }
         // The coroutine may live on in a script variable. Its serial then finds no thread.
         by_serial_.erase(it->serial);
@@ -1168,6 +1241,13 @@ void ScriptRuntime::release_dead_threads(Vm& vm) {
             lua_unref(vm.state, it->anchor);
         }
         it = vm.threads.erase(it);
+    }
+    for (const auto& entry : ended) {
+        const std::uint64_t serial = entry.first;
+        const bool errored = entry.second;
+        close_recordings(vm, [&](const HeldRecording& held) { return held.thread == serial; }, errored,
+                         errored ? "the script that opened it stopped with an error"
+                                 : "the script that opened it ended");
     }
 }
 

@@ -1,4 +1,6 @@
 #include "ChangeHistoryService.hpp"
+#include "ide/PluginLoader.hpp"
+#include "ide/ScopedRecording.hpp"
 
 #include "support.hpp"
 
@@ -20,6 +22,14 @@ std::vector<std::string> lines(engine_core::ScriptRuntime& runtime) {
 
 bool has(const std::vector<std::string>& all, const std::string& line) {
     return std::find(all.begin(), all.end(), line) != all.end();
+}
+
+// Whether a line holds every one of these pieces.
+bool has_line_with(const std::vector<std::string>& all, std::initializer_list<const char*> pieces) {
+    return std::any_of(all.begin(), all.end(), [&](const std::string& line) {
+        return std::all_of(pieces.begin(), pieces.end(),
+                           [&](const char* piece) { return line.find(piece) != std::string::npos; });
+    });
 }
 
 engine_core::GameObject& brick(ScriptRig& rig) {
@@ -126,4 +136,121 @@ TEST_CASE("HL4 a stale id is a no-op and a bad operation is an error a pcall cat
                         [](const std::string& line) { return line.rfind("bad op\tfalse", 0) == 0; }));
     REQUIRE(rig.game.history().can_undo().second == "Rename");
     REQUIRE(rig.game.name(part.id()) == "A");
+}
+
+TEST_CASE("HL5 a chunk that errors with its recording open cancels it, so undo works again", "[HL5][history]") {
+    ScriptRig rig;
+    engine_core::GameObject& part = brick(rig);
+    begin_step(rig.game, "Move");
+    part.set_position({1.f, 2.f, 3.f});
+    end_step(rig.game);
+
+    rig.runtime.run_chunk(R"(
+        local history = game:GetService("ChangeHistoryService")
+        history:TryBeginRecording("Paint")
+        workspace.Brick.Name = "Painted"
+        error("boom")
+    )");
+    REQUIRE(rig.runtime.last_error().find("boom") != std::string::npos);
+    REQUIRE_FALSE(rig.game.history().is_recording_in_progress());
+    REQUIRE(rig.game.name(part.id()) == "Brick");
+    REQUIRE(has_line_with(lines(rig.runtime), {"\"Paint\"", "cancelled"}));
+
+    // A studio command after it is its own step, and undo reaches it.
+    {
+        ide::ScopedRecording step(rig.game, "Rename");
+        rig.game.set_name(part.id(), "Renamed");
+    }
+    REQUIRE(rig.game.history().can_undo().second == "Rename");
+    rig.game.history().undo();
+    REQUIRE(rig.game.name(part.id()) == "Brick");
+    REQUIRE(rig.game.history().can_undo().second == "Move");
+}
+
+TEST_CASE("HL6 a chunk that finishes with its recording open commits it", "[HL6][history]") {
+    ScriptRig rig;
+    engine_core::GameObject& part = brick(rig);
+    rig.runtime.run_chunk(R"(
+        local history = game:GetService("ChangeHistoryService")
+        history:TryBeginRecording("Forgot")
+        workspace.Brick.Name = "Kept"
+    )");
+    REQUIRE(rig.runtime.last_error().empty());
+    REQUIRE_FALSE(rig.game.history().is_recording_in_progress());
+    REQUIRE(rig.game.name(part.id()) == "Kept");
+    REQUIRE(rig.game.history().can_undo().second == "Forgot");
+    REQUIRE(has_line_with(lines(rig.runtime), {"\"Forgot\"", "committed"}));
+    rig.game.history().undo();
+    REQUIRE(rig.game.name(part.id()) == "Brick");
+}
+
+TEST_CASE("HL7 a chunk that yields with its recording open closes it when it finishes, not before", "[HL7][history]") {
+    ScriptRig rig;
+    engine_core::GameObject& part = brick(rig);
+    rig.runtime.run_chunk(R"(
+        local history = game:GetService("ChangeHistoryService")
+        history:TryBeginRecording("Slow")
+        workspace.Brick.Name = "A"
+        task.wait(0.1)
+        workspace.A.Name = "B"
+    )");
+    REQUIRE(rig.runtime.last_error().empty());
+    REQUIRE(rig.game.history().is_recording_in_progress());
+    rig.frames(1);
+    REQUIRE(rig.game.history().is_recording_in_progress());
+    REQUIRE_FALSE(has_line_with(lines(rig.runtime), {"\"Slow\""}));
+
+    rig.frames(12);
+    REQUIRE(rig.runtime.last_error().empty());
+    REQUIRE_FALSE(rig.game.history().is_recording_in_progress());
+    REQUIRE(rig.game.name(part.id()) == "B");
+    REQUIRE(rig.game.history().can_undo().second == "Slow");
+    REQUIRE(has_line_with(lines(rig.runtime), {"\"Slow\"", "committed"}));
+    rig.game.history().undo();
+    REQUIRE(rig.game.name(part.id()) == "Brick");
+}
+
+TEST_CASE("HL8 a plugin may hold a recording past its thread, and unregistering it commits the recording",
+          "[HL8][history]") {
+    ScriptRig rig;
+    engine_core::GameObject& part = brick(rig);
+    engine_core::Script& plugin = rig.game.create<engine_core::Script>();
+    rig.game.set_name(plugin.id(), "Painter");
+    plugin.set_source(R"(
+        local history = game:GetService("ChangeHistoryService")
+        history:TryBeginRecording("Drag")
+        workspace.Brick.Name = "Dragged"
+    )");
+    REQUIRE(rig.runtime.register_plugin(plugin.id()));
+    REQUIRE(rig.runtime.last_error().empty());
+    rig.frames(2);
+    REQUIRE(rig.game.history().is_recording_in_progress());
+
+    REQUIRE(rig.runtime.unregister_plugin(plugin.id()));
+    REQUIRE_FALSE(rig.game.history().is_recording_in_progress());
+    REQUIRE(rig.game.name(part.id()) == "Dragged");
+    REQUIRE(rig.game.history().can_undo().second == "Drag");
+    REQUIRE(has_line_with(lines(rig.runtime), {"\"Drag\"", "committed"}));
+}
+
+TEST_CASE("HL9 reloading the plugins commits a recording one of them left open", "[HL9][history]") {
+    ScriptRig rig;
+    engine_core::GameObject& part = brick(rig);
+    const std::vector<ide::PluginFile> files{{"Painter", R"(
+        local history = game:GetService("ChangeHistoryService")
+        history:TryBeginRecording("Drag")
+        workspace.Brick.Name = "Dragged"
+    )"}};
+    ide::PluginLoader loader;
+    REQUIRE(loader.load(rig.game, rig.runtime, files) == 1);
+    REQUIRE(rig.game.history().is_recording_in_progress());
+
+    // The reloaded plugin opens a recording again, after the old one is committed.
+    REQUIRE(loader.load(rig.game, rig.runtime, files) == 1);
+    REQUIRE(has_line_with(lines(rig.runtime), {"\"Drag\"", "committed"}));
+    REQUIRE(rig.game.history().is_recording_in_progress());
+    rig.game.history().seal_edit_recording();
+    REQUIRE(rig.game.history().can_undo().second == "Drag");
+    rig.game.history().undo();
+    REQUIRE(rig.game.name(part.id()) == "Brick");
 }

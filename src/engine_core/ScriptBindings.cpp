@@ -994,6 +994,7 @@ int ScriptBindings::history_try_begin_recording(lua_State* state) {
         const char* display = luaL_optstring(state, 3, "");
         const std::optional<std::string> id = history.try_begin_recording(name, display);
         if (id) {
+            runtime_from(state)->hold_recording(state, *id, name);
             lua_pushlstring(state, id->data(), id->size());
         } else {
             lua_pushnil(state);

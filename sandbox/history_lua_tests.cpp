@@ -254,3 +254,28 @@ TEST_CASE("HL9 reloading the plugins commits a recording one of them left open",
     rig.game.history().undo();
     REQUIRE(rig.game.name(part.id()) == "Brick");
 }
+
+TEST_CASE("HL10 FinishRecordingOperation has Roblox's values: Cancel 0, Commit 1", "[HL10][history]") {
+    ScriptRig rig;
+    engine_core::GameObject& part = brick(rig);
+    rig.runtime.run_chunk(R"(
+        local history = game:GetService("ChangeHistoryService")
+        history.OnRecordingFinished:Connect(function(name, display, id, op) print("finished", name, op, op.Value) end)
+        print("values", Enum.FinishRecordingOperation.Cancel.Value, Enum.FinishRecordingOperation.Commit.Value)
+        local one = history:TryBeginRecording("One")
+        workspace.Brick.Name = "A"
+        history:FinishRecording(one, 1)
+        local two = history:TryBeginRecording("Two")
+        workspace.A.Name = "B"
+        history:FinishRecording(two, 0)
+    )");
+    rig.frames(1);
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
+    REQUIRE(rig.game.name(part.id()) == "A");
+    REQUIRE(rig.game.history().can_undo().second == "One");
+    const std::vector<std::string> all = lines(rig.runtime);
+    REQUIRE(has(all, "values\t0\t1\n"));
+    REQUIRE(has(all, "finished\tOne\tEnum.FinishRecordingOperation.Commit\t1\n"));
+    REQUIRE(has(all, "finished\tTwo\tEnum.FinishRecordingOperation.Cancel\t0\n"));
+}

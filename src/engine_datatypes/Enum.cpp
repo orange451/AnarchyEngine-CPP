@@ -210,8 +210,8 @@ const EnumType kKeyCodeType{"KeyCode", kKeyCodes, count_of(kKeyCodes)};
 const EnumType kUserInputTypeType{"UserInputType", kUserInputTypes, count_of(kUserInputTypes)};
 const EnumType kUserInputStateType{"UserInputState", kUserInputStates, count_of(kUserInputStates)};
 const EnumType kMouseBehaviorType{"MouseBehavior", kMouseBehaviors, count_of(kMouseBehaviors)};
-// Roblox's values. It has Append too, which this engine has no use for.
-const EnumEntry kFinishRecordingOperations[] = {{"Commit", 0}, {"Cancel", 1}};
+// Roblox's values. It has Append 2 too, which this engine has no use for.
+const EnumEntry kFinishRecordingOperations[] = {{"Cancel", 0}, {"Commit", 1}};
 const EnumType kFinishRecordingOperationType{"FinishRecordingOperation", kFinishRecordingOperations,
                                              count_of(kFinishRecordingOperations)};
 const EnumType kPhysicsShapeType{"PhysicsShape", kPhysicsShapes, count_of(kPhysicsShapes)};

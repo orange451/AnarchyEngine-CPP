@@ -28,6 +28,12 @@ namespace engine_core {
 class ChangeHistoryService;
 class Mesh;
 class SoundEmitter;
+enum class FinishRecordingOperation;
+
+// Enum.FinishRecordingOperation's values, which are Roblox's (Cancel 0,
+// Commit 1), to and from the C++ enum, whatever order that has.
+FinishRecordingOperation finish_operation_from_lua(int value);
+int finish_operation_to_lua(FinishRecordingOperation op);
 
 namespace script_internal {
 

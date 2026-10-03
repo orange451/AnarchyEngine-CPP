@@ -978,6 +978,20 @@ int ScriptBindings::selection_set(lua_State* state) {
     });
 }
 
+FinishRecordingOperation finish_operation_from_lua(int value) {
+    return value == 0 ? FinishRecordingOperation::Cancel : FinishRecordingOperation::Commit;
+}
+
+int finish_operation_to_lua(FinishRecordingOperation op) {
+    switch (op) {
+    case FinishRecordingOperation::Cancel:
+        return 0;
+    case FinishRecordingOperation::Commit:
+        return 1;
+    }
+    return 1;
+}
+
 ChangeHistoryService& ScriptBindings::history_service(lua_State* state) {
     luaL_checkudata(state, 1, kServiceMeta);
     ScriptRuntime* runtime = runtime_from(state);
@@ -1008,7 +1022,7 @@ int ScriptBindings::history_finish_recording(lua_State* state) {
         ChangeHistoryService& history = history_service(state);
         const char* id = luaL_checkstring(state, 2);
         const int op = check_enum_arg(state, 3, finish_recording_operation_enum());
-        history.finish_recording(id, static_cast<FinishRecordingOperation>(op));
+        history.finish_recording(id, finish_operation_from_lua(op));
         return 0;
     });
 }

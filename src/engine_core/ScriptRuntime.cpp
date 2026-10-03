@@ -68,7 +68,7 @@ LuaSlot operation_slot(FinishRecordingOperation op) {
     LuaSlot slot;
     slot.kind = LuaSlot::Kind::Enum;
     slot.enum_type = &finish_recording_operation_enum();
-    slot.number = static_cast<int>(op);
+    slot.number = finish_operation_to_lua(op);
     return slot;
 }
 

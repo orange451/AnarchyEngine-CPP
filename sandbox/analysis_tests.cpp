@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -1665,5 +1666,51 @@ TEST_CASE("A43 a playtest's tree changes leave the authored results as they were
         REQUIRE(analysis.analyzed_source(authored[at]).has_value());
         REQUIRE(*analysis.analyzed_source(authored[at]) + "\n" + dump(analysis.diagnostics(authored[at])) ==
                 before[at]);
+    }
+}
+
+namespace {
+
+double settle_ms(engine_core::ScriptAnalysis& analysis) {
+    const auto started = std::chrono::steady_clock::now();
+    settle(analysis);
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+}
+
+}  // namespace
+
+// Hidden: run with ./build/sandbox "[.perf]". Each time includes the 75 ms debounce.
+TEST_CASE("A-perf timing of a large script and a large place", "[.perf]") {
+    for (bool strict : {false, true}) {
+        ScriptRig rig;
+        engine_core::ScriptAnalysis analysis(rig.game);
+        const std::string source = long_source(1000, strict, 0);
+        engine_core::Script& script = add_script(rig.game, "Big", source.c_str());
+        const double first = settle_ms(analysis);
+        script.set_source(source + "\n-- edit\n");
+        const double again = settle_ms(analysis);
+        std::printf("1000 lines %s: first %.0f ms, after an edit %.0f ms\n", strict ? "strict" : "nonstrict", first,
+                    again);
+    }
+    for (unsigned threads : {1u, 0u}) {
+        ScriptRig rig;
+        engine_core::ScriptAnalysis analysis(rig.game, threads);
+        std::vector<engine_core::Script*> scripts;
+        for (int i = 0; i < 20; ++i) {
+            const std::string name = "Big" + std::to_string(i);
+            scripts.push_back(&add_script(rig.game, name.c_str(), long_source(1000, false, i).c_str()));
+        }
+        const double place = settle_ms(analysis);
+        scripts[0]->set_source(scripts[0]->source() + "\n-- edit\n");
+        const double edit = settle_ms(analysis);
+        engine_core::Folder& away = rig.game.create<engine_core::Folder>();
+        rig.game.set_parent(away.id(), scripts[0]->id());
+        const std::uint64_t before = analysis.checks(scripts[1]->id());
+        rig.game.set_name(away.id(), "Renamed");
+        const double rename = settle_ms(analysis);
+        std::printf("20 x 1000 lines on %u threads: place %.0f ms, one edit %.0f ms, unrelated rename %.0f ms "
+                    "(script 2 rechecked: %s)\n",
+                    analysis.threads(), place, edit, rename,
+                    analysis.checks(scripts[1]->id()) != before ? "yes" : "no");
     }
 }

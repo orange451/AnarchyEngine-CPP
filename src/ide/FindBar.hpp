@@ -32,8 +32,9 @@ private:
 };
 
 // A find or replace field. Toggles sit inside its right end, the way VS Code puts
-// Match Case, Match Whole Word, and Use Regular Expression in the find field.
-// Keys the field does not use bubble up to the bar that holds it.
+// Match Case, Match Whole Word, and Use Regular Expression in the find field,
+// and after them a clear button like the explorer filter's. Keys the field does
+// not use bubble up to the bar that holds it.
 class SearchInput : public jadefx::StackPane {
 public:
     explicit SearchInput(std::string prompt);
@@ -43,6 +44,8 @@ public:
     jadefx::TextField& field() const { return *field_; }
     const std::string& text() const { return field_->getText(); }
     void addToggle(const std::shared_ptr<FindButton>& toggle);
+    // The × at the field's right end. It is disabled while the field is empty.
+    FindButton& clearButton() const { return *clear_; }
     // A red border, for a regex that does not compile.
     void setInvalid(bool invalid);
     // Focuses the field and selects its text.
@@ -52,8 +55,11 @@ protected:
     void layoutChildren() override;
 
 private:
+    void pad_field();
+
     std::shared_ptr<jadefx::TextField> field_;
     std::vector<std::shared_ptr<FindButton>> toggles_;
+    std::shared_ptr<FindButton> clear_;
     bool invalid_ = false;
 };
 

@@ -96,6 +96,9 @@ const char* const kFindStylesheet = R"CSS(
     background-color: rgba(0, 0, 0, 0);
     opacity: 0.4;
 }
+.find-button.search-clear {
+    font-size: 16px;
+}
 .find-count {
     color: var(--ide-search-status-color);
     font-size: 12px;
@@ -180,8 +183,22 @@ SearchInput::SearchInput(std::string prompt) {
     field_ = jadefx::make<SearchField>();
     field_->getClassList().add("search-field");
     field_->setPromptText(std::move(prompt));
-    field_->setStyle("width: 100%; padding: 3px 6px 3px 6px;");
     getChildren().add(field_);
+    // The same glyph as the explorer filter's clear button. Clearing keeps the
+    // focus in the field, so the next search can be typed at once.
+    clear_ = jadefx::make<FindButton>("", "\u00d7", "Clear");
+    clear_->getClassList().add("search-clear");
+    clear_->setMinSize(kToggle, kToggle);
+    clear_->setPrefSize(kToggle, kToggle);
+    clear_->setMaxSize(kToggle, kToggle);
+    clear_->setDisable(true);
+    clear_->setOnAction([this] {
+        field_->clear();
+        field_->requestFocus();
+    });
+    // After the field, so it draws over it and is hit first.
+    getChildren().add(clear_);
+    pad_field();
 }
 
 void SearchInput::addToggle(const std::shared_ptr<FindButton>& toggle) {
@@ -191,8 +208,12 @@ void SearchInput::addToggle(const std::shared_ptr<FindButton>& toggle) {
     toggles_.push_back(toggle);
     // After the field, so a toggle draws over it and is hit first.
     getChildren().add(toggle);
-    // The text stops short of the toggles.
-    const double room = kToggleInset + static_cast<double>(toggles_.size()) * (kToggle + kToggleGap) + 2;
+    pad_field();
+}
+
+void SearchInput::pad_field() {
+    // The text stops short of the toggles and the clear button.
+    const double room = kToggleInset + static_cast<double>(toggles_.size() + 1) * (kToggle + kToggleGap) + 2;
     field_->setStyle("width: 100%; padding: 3px " + std::to_string(static_cast<int>(room)) + "px 3px 6px;");
 }
 
@@ -211,8 +232,15 @@ void SearchInput::focusAll() {
 
 void SearchInput::layoutChildren() {
     StackPane::layoutChildren();
-    double x = field_->getX() + field_->getWidth() - kToggleInset;
+    const bool on = !field_->getText().empty();
+    if (on == clear_->isDisabled()) {
+        clear_->setDisable(!on);
+        clear_->setCursor(on ? jadefx::Cursor::Pointer : jadefx::Cursor::Default);
+    }
+    double x = field_->getX() + field_->getWidth() - kToggleInset - kToggle;
     const double y = field_->getY() + (field_->getHeight() - kToggle) * 0.5;
+    clear_->performLayout(x, y, kToggle, kToggle);
+    x -= kToggleGap;
     for (auto it = toggles_.rbegin(); it != toggles_.rend(); ++it) {
         x -= kToggle;
         (*it)->performLayout(x, y, kToggle, kToggle);

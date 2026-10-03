@@ -518,15 +518,30 @@ void ScriptRuntime::render_step(double dt) {
     // A paused play session's handlers wait for resume; plugins keep stepping.
     const bool include_play = open_ && !play_.closing && !render_paused_.load(std::memory_order_relaxed);
     run_service_.set_window_dt(dt);
-    in_render_window_ = true;
-    // A write a window handler (or a Wait resumption it parks) makes authorizes
-    // as a sim write would; see DataModel::authorize. Cleared right after, same
-    // as in_render_window_ above: both are written only here, by the render
-    // thread, while it holds the write lock for the whole window.
-    game_->set_window_script(true);
-    game_->events().invoke_render(*window, include_play);
-    game_->set_window_script(false);
-    in_render_window_ = false;
+    {
+        // While handlers run (or Wait resumptions it parks): bindings know they are
+        // in the window, and a write or instance operation authorizes as a sim one
+        // would (DataModel::authorize, mutation_thread). Both are written only here,
+        // by the render thread, which holds the write lock for the whole window; the
+        // scope clears them even when a contract failure unwinds the walk.
+        struct WindowScope {
+            ScriptRuntime& runtime;
+            explicit WindowScope(ScriptRuntime& owner) : runtime(owner) {
+                runtime.in_render_window_ = true;
+                runtime.game_->set_window_script(true);
+            }
+            ~WindowScope() {
+                runtime.game_->set_window_script(false);
+                runtime.in_render_window_ = false;
+            }
+            WindowScope(const WindowScope&) = delete;
+            WindowScope& operator=(const WindowScope&) = delete;
+        } window_scope(*this);
+        game_->events().invoke_render(*window, include_play);
+    }
+    // A handler coroutine that finished is let go now, not at the next sim step.
+    release_dead_threads(plugin_);
+    release_dead_threads(play_);
 }
 
 void ScriptRuntime::assert_lua_thread() const {

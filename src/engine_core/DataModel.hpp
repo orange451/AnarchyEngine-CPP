@@ -393,8 +393,9 @@ public:
 
     // A rejected write while this thread holds the DataModel lock is stored
     // instead of thrown. Throwing with the mutex locked deadlocks under TSan.
-    // Returns true once, then clears the stored rejection.
-    bool take_deferred_violation();
+    // Returns true once, then clears the stored rejection. reason, when given,
+    // receives its message (a literal) on true.
+    bool take_deferred_violation(const char** reason = nullptr);
     bool has_deferred_violation() const;
 
     // SimulationThread, under the write lock, at the start of the step.

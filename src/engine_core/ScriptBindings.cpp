@@ -44,6 +44,16 @@
 
 namespace engine_core {
 
+void ScriptBindings::raise_window_refusal(lua_State* state, ScriptRuntime& runtime, const char* key,
+                                          bool deferred_before) {
+    if (!runtime.in_render_window_ || deferred_before || !runtime.game_->has_deferred_violation()) {
+        return;
+    }
+    const char* reason = nullptr;
+    runtime.game_->take_deferred_violation(&reason);
+    luaL_error(state, "%s cannot be written in a render step: %s", key, reason != nullptr ? reason : "refused");
+}
+
 int ScriptBindings::task_wait(lua_State* state) {
     return lua_guard(state, [&] {
         ScriptRuntime* runtime = runtime_from(state);
@@ -485,17 +495,16 @@ int ScriptBindings::instance_newindex(lua_State* state) {
         } else {
             luaL_error(state, "cannot set %s", key);
         }
-        if (!field->write(*runtime->game_, *object, slot)) {
-            luaL_error(state, "%s", slot.error.empty() ? "property is not available" : slot.error.c_str());
-        }
         // In the window, authorize refuses silently and defers the violation for
         // the engine to count. A script deserves the message instead: consume the
         // deferral and raise, so pcall catches it and the frame is not charged
-        // with a contract.
-        if (runtime->in_render_window_ && runtime->game_->has_deferred_violation()) {
-            runtime->game_->take_deferred_violation();
-            luaL_error(state, "%s cannot be written in a render step", key);
+        // with a contract. Only a deferral this write made: one a C++ render job
+        // left earlier in the window stays for the engine to count.
+        const bool deferred_before = runtime->in_render_window_ && runtime->game_->has_deferred_violation();
+        if (!field->write(*runtime->game_, *object, slot)) {
+            luaL_error(state, "%s", slot.error.empty() ? "property is not available" : slot.error.c_str());
         }
+        raise_window_refusal(state, *runtime, key, deferred_before);
         return 0;
     });
 }
@@ -907,16 +916,14 @@ int ScriptBindings::service_newindex(lua_State* state) {
             slot.kind = LuaSlot::Kind::Bool;
             slot.flag = lua_toboolean(state, 3) != 0;
         }
-        if (field->write == nullptr || !field->write(*runtime->game_, *runtime->game_, slot)) {
-            luaL_error(state, "%s", slot.error.empty() ? "invalid value" : slot.error.c_str());
-        }
         // See instance_newindex: a window write authorize refused is deferred for
         // the engine to count, not aborted. Consume it here and raise instead, so
         // pcall catches it and the frame is not charged with a contract.
-        if (runtime->in_render_window_ && runtime->game_->has_deferred_violation()) {
-            runtime->game_->take_deferred_violation();
-            luaL_error(state, "%s cannot be written in a render step", key);
+        const bool deferred_before = runtime->in_render_window_ && runtime->game_->has_deferred_violation();
+        if (field->write == nullptr || !field->write(*runtime->game_, *runtime->game_, slot)) {
+            luaL_error(state, "%s", slot.error.empty() ? "invalid value" : slot.error.c_str());
         }
+        raise_window_refusal(state, *runtime, key, deferred_before);
         return 0;
     });
 }

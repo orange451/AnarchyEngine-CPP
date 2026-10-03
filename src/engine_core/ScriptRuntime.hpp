@@ -29,8 +29,10 @@ struct ScriptBindings;
 void open_host_libraries(lua_State* state);
 
 // Three Luau states, each with its own scheduler: the play VM for the play session,
-// the console VM for the command line, and the plugin VM for plugins. SimulationThread,
-// or a paused edit, is the only caller of lua_*.
+// the console VM for the command line, and the plugin VM for plugins. Every caller of
+// lua_* holds the DataModel write lock: SimulationThread's step, a paused edit (the
+// command line arrives as one, through Engine::on_simulation), or RenderThread inside
+// the Prepare window, which enters only the play and plugin VMs (render_step).
 // A play script's task.wait sleeps on sim_clock, which advances by the Heartbeat dt.
 // The console and plugin VMs keep their own clocks, which step_tools advances, so
 // their threads wait, and their connections fire, while the play session is closed too.
@@ -74,6 +76,7 @@ public:
     // but plugins keep their render step. The engine calls it from pause and
     // resume on whatever thread holds pause_mu_, so it is atomic.
     void set_render_paused(bool paused) { render_paused_.store(paused, std::memory_order_relaxed); }
+    bool render_paused() const { return render_paused_.load(std::memory_order_relaxed); }
 
     double sim_clock() const { return play_.clock; }
     const std::string& last_error() const { return last_error_; }

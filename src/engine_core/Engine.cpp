@@ -49,6 +49,9 @@ Engine::Engine() {
     game_.attach_scheduler(&scheduler_);
     scripts_ = std::make_unique<ScriptRuntime>();
     scripts_->attach(game_, scheduler_);
+    // The engine starts paused, so play handlers wait for resume() like its
+    // signals do, even across a start_simulation that comes first.
+    scripts_->set_render_paused(paused_);
     // Physics warnings, such as a Hull that fell back to a Box, go to the console.
     physics_.set_warning_sink([this](const std::string& text) {
         scripts_->append_output(ScriptRuntime::OutputKind::Print, text);
@@ -227,6 +230,8 @@ void Engine::stop() {
         std::lock_guard<std::mutex> guard(pause_mu_);
         paused_ = false;
     }
+    // Kept with paused_, so a later start() delivers as it steps.
+    scripts_->set_render_paused(false);
     start_cv_.notify_all();
     pause_cv_.notify_all();
     client_frame_cv_.notify_all();

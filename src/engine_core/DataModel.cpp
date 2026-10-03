@@ -291,11 +291,14 @@ bool DataModel::reject_write(const char* message) {
     contract_fail(message);
 }
 
-bool DataModel::take_deferred_violation() {
+bool DataModel::take_deferred_violation(const char** reason) {
     const std::thread::id self = std::this_thread::get_id();
     std::lock_guard<std::mutex> guard(state_->deferred_mu);
     for (auto it = state_->deferred.begin(); it != state_->deferred.end(); ++it) {
         if (it->first == self) {
+            if (reason != nullptr) {
+                *reason = it->second;
+            }
             state_->deferred.erase(it);
             return true;
         }

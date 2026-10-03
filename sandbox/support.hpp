@@ -80,6 +80,7 @@ struct ScriptRig {
         const bool saved_running = game.threads_running();
         const std::thread::id sim = std::this_thread::get_id();
         bool violated = false;
+        const char* reason = nullptr;
         std::thread render_thread([&] {
             engine_core::set_thread_role(engine_core::ThreadRole::Render);
             game.set_thread_ids(sim, std::this_thread::get_id());
@@ -90,7 +91,7 @@ struct ScriptRig {
                 scheduler.run_phase(engine_core::Phase::RenderStepped, dt);
                 game.set_prerender_window(false);
             }
-            violated = game.take_deferred_violation();
+            violated = game.take_deferred_violation(&reason);
             game.set_threads_running(saved_running);
             game.set_thread_ids(saved_sim, saved_render);
             engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
@@ -98,12 +99,14 @@ struct ScriptRig {
         render_thread.join();
         if (violated) {
             ++render_violations;
+            last_render_violation = reason != nullptr ? reason : "";
         }
     }
 
     // Refused writes the render thread deferred, one per render() call at most,
-    // as the engine counts them.
+    // as the engine counts them, and the last one's reason.
     int render_violations = 0;
+    std::string last_render_violation;
 };
 
 inline engine_core::Script& add_script(engine_core::DataModel& game, engine_core::InstanceId parent, const char* name,

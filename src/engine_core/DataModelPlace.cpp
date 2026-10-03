@@ -5,6 +5,9 @@
 
 #include "DataModelState.hpp"
 
+#include <algorithm>
+#include <utility>
+
 namespace engine_core {
 
 void DataModel::capture_place() {
@@ -75,13 +78,22 @@ void DataModel::capture_place_unlocked() {
         shot.root_extras = state_->root->extras_;
     }
     shot.root_children = child_ids(0);
+    const InstanceId core_id = core();
+    shot.root_children.erase(std::remove(shot.root_children.begin(), shot.root_children.end(), core_id),
+                             shot.root_children.end());
     const std::uint32_t count = slot_count();
     shot.instances.reserve(count);
+    state_->place_slots.assign(count, false);
     for (std::uint32_t index = 0; index < count; ++index) {
         Slot& part = state_->slots[index];
         if (!part.alive || part.instance == nullptr) {
             continue;
         }
+        // Core is outside the place: Stop leaves it as play left it.
+        if (core_holds(make_instance_id(part.generation, index))) {
+            continue;
+        }
+        state_->place_slots[index] = true;
         if (part.pool >= state_->pools.size() || state_->pools[part.pool] == nullptr) {
             contract_fail("place capture lost an instance type");
         }
@@ -274,13 +286,25 @@ void DataModel::restore_place_unlocked() {
         }
     }
 
+    // Core and what it holds stay as they are, links included.
+    const InstanceId core_id = core();
+    std::vector<std::pair<InstanceId, std::vector<InstanceId>>> core_links;
+    if (core_id != 0) {
+        std::vector<InstanceId> walk{core_id};
+        for (std::size_t at = 0; at < walk.size(); ++at) {
+            std::vector<InstanceId> children = child_ids(walk[at]);
+            walk.insert(walk.end(), children.begin(), children.end());
+            core_links.emplace_back(walk[at], std::move(children));
+        }
+    }
+
     for (std::uint32_t index = 0; index < state_->slots.size(); ++index) {
         Slot& part = state_->slots[index];
         if (!part.alive) {
             continue;
         }
         const InstanceId id = make_instance_id(part.generation, index);
-        if (ids.count(id) == 0) {
+        if (ids.count(id) == 0 && !core_holds(id)) {
             retire_slot(index, true);
         }
     }
@@ -291,6 +315,12 @@ void DataModel::restore_place_unlocked() {
     link_children(0, place.root_children);
     for (const PlaceRecord& record : place.instances) {
         link_children(record.id, record.children);
+    }
+    if (core_id != 0) {
+        link_children(0, {core_id});
+        for (const auto& [parent, children] : core_links) {
+            link_children(parent, children);
+        }
     }
     if (state_->root != nullptr) {
         state_->root->name_ = place.root_name;

@@ -562,7 +562,12 @@ void DataModel::destroy(InstanceId id) {
     release_to_pool(*part);
     if (part->generation != kMaxGeneration) {
         ++part->generation;
-        state_->free_list.push_back(index);
+        // A captured instance's slot waits for Stop, which brings it back there.
+        const bool captured = state_->simulation_running && index < state_->place_slots.size() &&
+                              state_->place_slots[index];
+        if (!captured) {
+            state_->free_list.push_back(index);
+        }
     }
     note(id, VisualField::Removed, current_origin());
     notify_watchers(id);

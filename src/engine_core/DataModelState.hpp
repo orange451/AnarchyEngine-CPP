@@ -167,6 +167,10 @@ struct DataModel::State {
     bool simulation_running = false;
     bool place_captured = false;
     PlaceSnapshot place;
+    // place_slots[index]: a captured instance owns slot index. While the
+    // simulation runs, destroying one keeps its slot off the free list, so no
+    // new instance, such as one made in Core, takes it before Stop restores it.
+    std::vector<bool> place_slots;
     // Edit-mode authored changes a project save has not written yet.
     std::unordered_set<InstanceId> dirty;
     bool dirty_all = false;

@@ -126,6 +126,8 @@ private:
     // The outlines in world space, into the renderer, each placed by the
     // snapshot's row of its GameObject when it has one.
     void collectOutlines(const engine_core::VisualSnapshot& snapshot);
+    // Builds the snapshot's Dragger handles for this view's camera and size.
+    void collectHandles(const engine_core::VisualSnapshot& snapshot);
     // Puts the Cameras in the list, and selects the linked one, when either changed.
     void refreshCameraList();
     // Points the renderer at the linked Camera's snapshot row, when it has one.
@@ -205,6 +207,12 @@ private:
     std::uint64_t selectionSeen_ = ~std::uint64_t{0};
     // Per frame: the outlines in world space, as Renderer::setOutlines takes them.
     std::vector<float> outlinePoints_;
+    // The camera followCamera last followed, which the handles are sized for.
+    engine_core::Matrix4 viewCamera_ = engine_core::matrix4_identity();
+    float viewFov_ = 0.f;
+    // Per frame: every Dragger's handles, and one Dragger's at a time.
+    std::vector<engine_core::HandleVertex> handleVertices_;
+    std::vector<engine_core::HandleVertex> handleScratch_;
     jadefx::ComboBox* cameraBox_ = nullptr;
     GuiLayer* guiLayer_ = nullptr;
     // Holds guiLayer_ as its root.

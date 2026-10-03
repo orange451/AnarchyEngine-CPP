@@ -235,6 +235,7 @@ void GameView::collectMeshes() {
     textures_.setRoot(snapshot.resources_root);
     followCamera(snapshot);
     collectOutlines(snapshot);
+    collectHandles(snapshot);
     // Each Prefab's meshes once, however many GameObjects draw it.
     if (prefabMeshes_.size() < snapshot.prefabs.size()) {
         prefabMeshes_.resize(snapshot.prefabs.size());
@@ -600,6 +601,21 @@ void GameView::refreshCameraList() {
     cameraBox_->select(selected);
 }
 
+void GameView::collectHandles(const engine_core::VisualSnapshot& snapshot) {
+    handleVertices_.clear();
+    if (viewFov_ > 0.f && getWidth() > 0.0 && getHeight() > 0.0) {
+        engine_core::DraggerView view;
+        view.camera = viewCamera_;
+        view.fov_degrees = viewFov_;
+        view.size = engine_core::Vec2{static_cast<float>(getWidth()), static_cast<float>(getHeight())};
+        for (const engine_core::VisualDragger& row : snapshot.draggers) {
+            engine_core::handle_mesh(row.frame, view, row.hovered, row.active, handleScratch_);
+            handleVertices_.insert(handleVertices_.end(), handleScratch_.begin(), handleScratch_.end());
+        }
+    }
+    renderer_.setHandles(handleVertices_.data(), static_cast<int>(handleVertices_.size()));
+}
+
 void GameView::followCamera(const engine_core::VisualSnapshot& snapshot) {
     if (cameraId_ == 0) {
         return;
@@ -608,6 +624,8 @@ void GameView::followCamera(const engine_core::VisualSnapshot& snapshot) {
         if (row.id == cameraId_) {
             if (row.alive && row.field_of_view > 0.f) {
                 renderer_.setCamera(row.world, row.field_of_view);
+                viewCamera_ = row.world;
+                viewFov_ = row.field_of_view;
             }
             return;
         }

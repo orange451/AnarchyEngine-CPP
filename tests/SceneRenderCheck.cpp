@@ -3,6 +3,7 @@
 #include "ide/MaterialBall.hpp"
 #include "runner/MeshCache.hpp"
 #include "runner/RenderMath.hpp"
+#include "DraggerMath.hpp"
 #include "runner/Renderer.hpp"
 #include "runner/TextureCache.hpp"
 #include "runner/gl.hpp"
@@ -932,6 +933,34 @@ int main() {
                "the window's framebuffer and viewport are as they were");
         ball.release();
         Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the ball leaves no GL error");
+    }
+
+    {
+        // RD2: a Dragger's handles at (0, 0, -10), seen from the origin down -Z
+        // with a 90 degree view: the X shaft runs right of the middle, the Y
+        // shaft up from it, each 30 points out at the middle of its length.
+        runner::Renderer renderer;
+        Expect(renderer.initialize(), "the renderer builds for the handles");
+        renderer.setCamera(engine_core::matrix4_identity(), 90.f);
+        engine_core::DraggerView view;
+        view.camera = engine_core::matrix4_identity();
+        view.fov_degrees = 90.f;
+        view.size = engine_core::Vec2{static_cast<float>(kSize), static_cast<float>(kSize)};
+        std::vector<engine_core::HandleVertex> mesh;
+        engine_core::handle_mesh(engine_core::dragger_frame(engine_core::matrix4_translation(0.f, 0.f, -10.f), false),
+                                 view, engine_core::DraggerHandle::None, engine_core::DraggerHandle::None, mesh);
+        renderer.setHandles(mesh.data(), static_cast<int>(mesh.size()));
+        renderer.draw(0, 0, kSize, kSize, kSize, kSize, nullptr, 0);
+        const Pixel right = ReadPixel(fbWidth * 94 / kSize, fbHeight / 2);
+        const Pixel up = ReadPixel(fbWidth / 2, fbHeight * 94 / kSize);
+        Expect(right.r > 150 && right.g < 100 && right.b < 100, "the X shaft draws red (" + Text(right) + ")");
+        Expect(up.g > 150 && up.r < 150 && up.b < 150, "the Y shaft draws green (" + Text(up) + ")");
+        Expect(IsClear(ReadPixel(2, 2)), "away from the handles is the clear color");
+        renderer.setHandles(nullptr, 0);
+        renderer.draw(0, 0, kSize, kSize, kSize, kSize, nullptr, 0);
+        Expect(IsClear(ReadPixel(fbWidth * 94 / kSize, fbHeight / 2)), "no handles set, none drawn");
+        Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the handles leave no GL error");
+        renderer.shutdown();
     }
 
     glfwDestroyWindow(window);

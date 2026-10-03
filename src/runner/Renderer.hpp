@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DraggerMath.hpp"
 #include "EnvironmentMap.hpp"
 #include "Matrix4.hpp"
 #include "ShadowRenderer.hpp"
@@ -136,6 +137,12 @@ public:
     // hides a line it is drawn faint, so a shape inside a mesh still shows.
     // Copied, and drawn by every draw until set again. Needs no GL context.
     void setOutlines(const float* points, int pointCount);
+    // Dragger handles draw lays over everything after the outlines, as
+    // handle_mesh builds them: world-space triangles, each corner colored,
+    // drawn unlit with straight alpha and no depth test, so a handle behind a
+    // surface still shows. Copied, and drawn by every draw until set again.
+    // Needs no GL context.
+    void setHandles(const engine_core::HandleVertex* vertices, int count);
     // How shadows are drawn, until set again. Needs no GL context.
     void setShadowSettings(const ShadowSettings& settings) { shadowSettings_ = settings; }
     // The shadow atlas texture's pages (ShadowRenderer::atlasPages), 0 with none.
@@ -273,6 +280,7 @@ private:
     void gridPass(unsigned depth, const float* inverseProjection);
     // outlines_ over the pane, on the pane's framebuffer, with depth as gridPass takes it.
     void outlinePass(unsigned depth, const float* projection, const float* inverseProjection);
+    void handlePass(const float* projection);
     void bindMaterial(const Program& program, const MeshDraw& draw);
     void bindGBuffer(const Program& program);
     // viewToSky_ and skyColor_ from the camera and the Skybox.
@@ -295,6 +303,7 @@ private:
     Program sky_;
     Program grid_;
     Program outline_;
+    Program handle_;
     EnvironmentMap environment_;
     // Whether this draw has a Skybox whose cubes are made.
     bool skyReady_ = false;
@@ -315,6 +324,8 @@ private:
     // The outlines' points, uploaded again by every draw that has any.
     unsigned outlineVao_ = 0;
     unsigned outlineVbo_ = 0;
+    unsigned handleVao_ = 0;
+    unsigned handleVbo_ = 0;
 
     // The offscreen buffers, all targetWidth_ by targetHeight_.
     int targetWidth_ = 0;
@@ -346,6 +357,7 @@ private:
     SceneLighting lighting_;
     bool gridVisible_ = false;
     std::vector<float> outlines_;
+    std::vector<engine_core::HandleVertex> handles_;
 
     // Per draw, reused.
     std::vector<ViewLight> viewLights_;

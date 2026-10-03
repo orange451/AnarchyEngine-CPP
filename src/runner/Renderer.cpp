@@ -213,6 +213,7 @@ bool Renderer::initialize() {
         buildProgram(tonemap_, "Tone map", "pipeline/fullscreen.vert", "pipeline/tonemap.frag", {}) &&
         buildProgram(grid_, "Grid", "pipeline/fullscreen.vert", "pipeline/grid.frag", {}) &&
         buildProgram(outline_, "Outline", "pipeline/outline.vert", "pipeline/outline.frag", {}) &&
+        buildProgram(handle_, "Handle", "pipeline/handle.vert", "pipeline/handle.frag", {}) &&
         environment_.initialize() && shadows_.initialize();
     if (!built) {
         shutdown();
@@ -247,6 +248,19 @@ bool Renderer::initialize() {
     glBindBuffer(GL_ARRAY_BUFFER, outlineVbo_);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    // Handle corners: position, then color.
+    glGenVertexArrays(1, &handleVao_);
+    glBindVertexArray(handleVao_);
+    glGenBuffers(1, &handleVbo_);
+    glBindBuffer(GL_ARRAY_BUFFER, handleVbo_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(engine_core::HandleVertex), nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(engine_core::HandleVertex),
+                          reinterpret_cast<const void*>(3 * sizeof(float)));
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
@@ -705,6 +719,10 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     if (drawn && !outlines_.empty()) {
         outlinePass(hasMeshes || hasSky ? depthTexture_ : whiteTexture_, projection, inverseProjection.m);
     }
+    // The handles last, over everything, so they can always be grabbed.
+    if (drawn && !handles_.empty()) {
+        handlePass(projection);
+    }
 
     saved.restore(viewport);
     return drawn;
@@ -752,6 +770,32 @@ void Renderer::outlinePass(unsigned depth, const float* projection, const float*
                  GL_DYNAMIC_DRAW);
     if (CanDraw(outline_.id)) {
         glDrawArrays(RT_GL_LINES, 0, static_cast<GLsizei>(outlines_.size() / 3));
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(arrayBuffer));
+}
+
+void Renderer::setHandles(const engine_core::HandleVertex* vertices, int count) {
+    handles_.assign(vertices, vertices + std::max(count, 0) / 3 * 3);
+}
+
+void Renderer::handlePass(const float* projection) {
+    glDisable(GL_DEPTH_TEST);
+    glDisable(RT_GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    // Straight alpha over the pane, leaving its alpha as it was.
+    glBlendFuncSeparate(RT_GL_SRC_ALPHA, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ZERO, RT_GL_ONE);
+    glUseProgram(handle_.id);
+    glUniformMatrix4fv(handle_.view, 1, GL_FALSE, view_.m);
+    glUniformMatrix4fv(handle_.projection, 1, GL_FALSE, projection);
+    // The UI pass after this one finds the buffer it had bound.
+    GLint arrayBuffer = 0;
+    glGetIntegerv(RT_GL_ARRAY_BUFFER_BINDING, &arrayBuffer);
+    glBindVertexArray(handleVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, handleVbo_);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(handles_.size() * sizeof(engine_core::HandleVertex)),
+                 handles_.data(), GL_DYNAMIC_DRAW);
+    if (CanDraw(handle_.id)) {
+        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(handles_.size()));
     }
     glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(arrayBuffer));
 }
@@ -1196,7 +1240,7 @@ void Renderer::setClearColor(float r, float g, float b) {
 void Renderer::shutdown() {
     ready_ = false;
     for (Program* program :
-         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &sky_, &grid_, &outline_}) {
+         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &sky_, &grid_, &outline_, &handle_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);
         }
@@ -1211,13 +1255,13 @@ void Renderer::shutdown() {
             *texture = 0;
         }
     }
-    for (unsigned* vao : {&emptyVao_, &sphereVao_, &outlineVao_}) {
+    for (unsigned* vao : {&emptyVao_, &sphereVao_, &outlineVao_, &handleVao_}) {
         if (*vao != 0) {
             glDeleteVertexArrays(1, vao);
             *vao = 0;
         }
     }
-    for (unsigned* buffer : {&sphereVbo_, &sphereEbo_, &outlineVbo_}) {
+    for (unsigned* buffer : {&sphereVbo_, &sphereEbo_, &outlineVbo_, &handleVbo_}) {
         if (*buffer != 0) {
             glDeleteBuffers(1, buffer);
             *buffer = 0;

@@ -549,7 +549,8 @@ void DataModel::destroy(InstanceId id) {
         contract_fail(destroy_error(id)->c_str());
     }
     std::optional<AuthoredRecord> captured;
-    if (state_->history && state_->history->wants_mutation()) {
+    // Noted after the instance is gone, when Core no longer holds it, so the check is here.
+    if (state_->history && state_->history->wants_mutation() && !core_holds(id)) {
         captured = capture_record(id, true);
     }
     // The parent's folder may become a leaf and its child order changes.

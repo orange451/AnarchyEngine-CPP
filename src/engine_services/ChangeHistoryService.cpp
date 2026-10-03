@@ -3,6 +3,7 @@
 #include "DataModel.hpp"
 #include "PropertyReflection.hpp"
 
+#include <algorithm>
 #include <cstring>
 
 namespace engine_core {
@@ -181,8 +182,28 @@ void ChangeHistoryService::push_or_coalesce(Mutation mutation) {
     list.push_back(std::move(mutation));
 }
 
+void ChangeHistoryService::forget_core() {
+    if (!recording_) {
+        return;
+    }
+    std::vector<Mutation>& list = recording_->mutations;
+    list.erase(std::remove_if(list.begin(), list.end(),
+                              [this](const Mutation& mutation) { return game_->core_holds(mutation.id); }),
+               list.end());
+    if (recording_->implicit && list.empty()) {
+        const std::string id = recording_->id;
+        finish_recording(id, FinishRecordingOperation::Cancel);
+    }
+}
+
 void ChangeHistoryService::note(Mutation mutation) {
     if (!enabled_ || applying_ != 0 || game_ == nullptr) {
+        return;
+    }
+    // Core is the studio's, not the place's: what happens there is never an
+    // undo step, and what entered it leaves the open recording.
+    if (game_->core_holds(mutation.id)) {
+        forget_core();
         return;
     }
     if (playing() && !recording_) {
@@ -218,11 +239,17 @@ void ChangeHistoryService::apply_waypoint(Waypoint& waypoint, bool inverse) {
     } guard(applying_);
     if (inverse) {
         for (std::size_t index = waypoint.mutations.size(); index > 0; --index) {
-            game_->apply_history(waypoint.mutations[index - 1], true);
+            const Mutation& mutation = waypoint.mutations[index - 1];
+            // A step recorded before its instance went into Core no longer reaches it.
+            if (!game_->core_holds(mutation.id)) {
+                game_->apply_history(mutation, true);
+            }
         }
     } else {
         for (const Mutation& mutation : waypoint.mutations) {
-            game_->apply_history(mutation, false);
+            if (!game_->core_holds(mutation.id)) {
+                game_->apply_history(mutation, false);
+            }
         }
     }
 }

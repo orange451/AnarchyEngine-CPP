@@ -2,6 +2,7 @@
 
 #include "support.hpp"
 
+#include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
 #include "Folder.hpp"
 #include "Project.hpp"
@@ -167,4 +168,58 @@ TEST_CASE("CO3 Core is never saved and never makes the place unsaved", "[CO3][pr
     engine_core::Game other;
     engine_core::Project read = engine_core::Project::load(dir.path, other);
     REQUIRE(other.get_children(other.core()).empty());
+}
+
+TEST_CASE("CO4 changes under Core record no history", "[CO4]") {
+    SimRole role;
+    engine_core::Game game;
+    game.history().reset_waypoints();
+    const InstanceId tools = add_folder(game, "Tools", game.core());
+    game.history().end_gesture();
+    game.set_name(tools, "Renamed");
+    game.history().end_gesture();
+    const InstanceId other = add_folder(game, "Other", game.core());
+    game.set_parent(tools, other);
+    game.history().end_gesture();
+    game.destroy(tools);
+    game.history().end_gesture();
+    REQUIRE_FALSE(game.history().can_undo().first);
+    REQUIRE_FALSE(game.history().is_recording_in_progress());
+}
+
+TEST_CASE("CO4b making an instance and putting it in Core leaves no undo step, and the next edit stands alone",
+          "[CO4b]") {
+    SimRole role;
+    engine_core::Game game;
+    game.history().reset_waypoints();
+    // As a plugin does: made with no parent, named, then put in Core, with no gesture between.
+    const InstanceId tool = add_folder(game, "Tool", engine_core::DataModel::kNoParent);
+    game.set_name(tool, "Dragger");
+    game.set_parent(tool, game.core());
+    REQUIRE_FALSE(game.history().is_recording_in_progress());
+    // The user's next edit is its own step, and undoing it leaves the tool alone.
+    const InstanceId part = add_folder(game, "Part", game.scene_service("Workspace"));
+    game.history().end_gesture();
+    REQUIRE(game.history().can_undo().first);
+    game.history().undo();
+    REQUIRE_FALSE(game.alive(part));
+    REQUIRE(game.alive(tool));
+    REQUIRE_FALSE(game.history().can_undo().first);
+}
+
+TEST_CASE("CO4c undoing a step recorded before an instance went into Core does not touch it", "[CO4c]") {
+    SimRole role;
+    engine_core::Game game;
+    game.history().reset_waypoints();
+    const InstanceId part = add_folder(game, "Part", game.scene_service("Workspace"));
+    game.history().end_gesture();
+    game.set_parent(part, engine_core::DataModel::kNoParent);
+    game.history().end_gesture();
+    game.set_parent(part, game.core());
+    game.history().end_gesture();
+    while (game.history().can_undo().first) {
+        game.history().undo();
+    }
+    REQUIRE(game.alive(part));
+    REQUIRE(game.parent(part) == game.core());
 }

@@ -194,6 +194,10 @@ private:
 
     void open_implicit(const Mutation& first);
     void push_or_coalesce(Mutation mutation);
+    // Drops what the open recording holds about instances now in Core. An
+    // implicit recording left empty is cancelled, so it does not wait to merge
+    // into the next gesture.
+    void forget_core();
     void apply_waypoint(Waypoint& waypoint, bool inverse);
     // Undo moves the newest waypoint from the undo stack to the redo stack; redo moves it back.
     void step(bool undoing);

@@ -1,5 +1,6 @@
 #include "ScriptAnalysis.hpp"
 
+#include "AnalysisWorld.hpp"
 #include "DataModel.hpp"
 #include "DataModelLock.hpp"
 #include "LuaApi.hpp"
@@ -59,75 +60,13 @@ namespace {
 
 constexpr std::chrono::milliseconds kDebounce{75};
 
-struct NodeSnap {
-    InstanceId id = 0;
-    InstanceId parent = DataModel::kNoParent;
-    std::string name;
-    std::string class_name;
-    std::string source;
-    bool lua = false;
-    bool module = false;
-    // Direct children in the same order FindFirstChild walks them.
-    std::vector<InstanceId> children;
-};
-
-struct WorldSnap {
-    InstanceId root = 0;
-    std::vector<NodeSnap> nodes;
-
-    const NodeSnap* find(InstanceId id) const {
-        for (const NodeSnap& node : nodes) {
-            if (node.id == id) {
-                return &node;
-            }
-        }
-        return nullptr;
-    }
-
-    std::optional<InstanceId> child_named(InstanceId parent, std::string_view name) const {
-        const NodeSnap* parent_node = find(parent);
-        if (parent_node == nullptr) {
-            return std::nullopt;
-        }
-        for (InstanceId child : parent_node->children) {
-            const NodeSnap* node = find(child);
-            if (node != nullptr && node->name == name) {
-                return child;
-            }
-        }
-        return std::nullopt;
-    }
-
-    std::optional<InstanceId> module_named(std::string_view name, std::optional<InstanceId> prefer_parent) const {
-        std::optional<InstanceId> fallback;
-        for (const NodeSnap& node : nodes) {
-            if (!node.module || node.name != name) {
-                continue;
-            }
-            if (prefer_parent && node.parent == *prefer_parent) {
-                return node.id;
-            }
-            if (!fallback) {
-                fallback = node.id;
-            }
-        }
-        return fallback;
-    }
-
-    // workspace: the root's Workspace child.
-    std::optional<InstanceId> workspace() const {
-        const NodeSnap* root_node = find(root);
-        if (root_node != nullptr) {
-            for (InstanceId child : root_node->children) {
-                const NodeSnap* node = find(child);
-                if (node != nullptr && node->class_name == "Workspace") {
-                    return child;
-                }
-            }
-        }
-        return std::nullopt;
-    }
-};
+using analysis::NodeSnap;
+using analysis::TreeDiff;
+using analysis::WorldSnap;
+using analysis::capture_world;
+using analysis::diff_worlds;
+using analysis::same_tree;
+using analysis::world_from_nodes;
 
 struct Job {
     InstanceId id = 0;
@@ -972,31 +911,6 @@ std::string checked_source(const std::string& source, const Luau::ParseResult& p
     return check_source;
 }
 
-// Two snapshots with the same instances, parents, names, and classes. Sources
-// may differ. Completion's snapshots and the analyzer's are made apart, so
-// they are compared by what they hold, not by identity.
-bool same_tree(const WorldSnap& a, const WorldSnap& b) {
-    if (a.root != b.root || a.nodes.size() != b.nodes.size()) {
-        return false;
-    }
-    std::unordered_map<InstanceId, const NodeSnap*> before;
-    before.reserve(a.nodes.size());
-    for (const NodeSnap& node : a.nodes) {
-        before.emplace(node.id, &node);
-    }
-    for (const NodeSnap& node : b.nodes) {
-        const auto was = before.find(node.id);
-        // Children in the same order too: FindFirstChild takes the first of two
-        // siblings with one name, and the place's types follow that order.
-        if (was == before.end() || was->second->parent != node.parent || was->second->name != node.name ||
-            was->second->class_name != node.class_name || was->second->lua != node.lua ||
-            was->second->module != node.module || was->second->children != node.children) {
-            return false;
-        }
-    }
-    return true;
-}
-
 // Required modules stay cached in the frontend. A new snapshot can change
 // their source or what their paths reach, so recheck them. A script the
 // snapshot lacks is gone, and so is its cached module.
@@ -1231,43 +1145,6 @@ void finish_request(CompleteRequest& request) {
         request.done = true;
     }
     request.cv.notify_all();
-}
-
-// The place as completion sees it, as the snapshot a check reads. The root is
-// the parentless Game or DataModel.
-std::shared_ptr<WorldSnap> world_from_nodes(const std::vector<LuaNode>& nodes) {
-    auto world = std::make_shared<WorldSnap>();
-    bool rooted = false;
-    for (const LuaNode& item : nodes) {
-        NodeSnap node;
-        node.id = item.id;
-        node.parent = item.parent;
-        node.name = item.name;
-        node.class_name = item.class_name;
-        node.source = item.source;
-        node.module = item.class_name == "ModuleScript";
-        node.lua = node.module || item.class_name == "Script";
-        if (!rooted && item.parent == DataModel::kNoParent &&
-            (item.class_name == "Game" || item.class_name == "DataModel")) {
-            world->root = item.id;
-            rooted = true;
-        }
-        world->nodes.push_back(std::move(node));
-    }
-    // Children in the order the nodes came, which completion_world makes the
-    // tree's sibling order, as capture_world has it.
-    std::unordered_map<InstanceId, std::size_t> index;
-    index.reserve(world->nodes.size());
-    for (std::size_t at = 0; at < world->nodes.size(); ++at) {
-        index.emplace(world->nodes[at].id, at);
-    }
-    for (const NodeSnap& child : world->nodes) {
-        const auto parent = index.find(child.parent);
-        if (parent != index.end() && child.parent != child.id) {
-            world->nodes[parent->second].children.push_back(child.id);
-        }
-    }
-    return world;
 }
 
 // Line and byte column of a byte offset, as Luau counts them.
@@ -2363,36 +2240,6 @@ LuauFacts facts_job(WorkerEnv& env, const CompleteRequest& request) {
         out.ran = true;
     });
     return out;
-}
-
-std::shared_ptr<WorldSnap> capture_world(DataModel& game) {
-    auto world = std::make_shared<WorldSnap>();
-    world->root = game.id();
-    NodeSnap root;
-    root.id = world->root;
-    root.parent = DataModel::kNoParent;
-    root.name = game.name(world->root);
-    root.class_name = game.class_name();
-    world->nodes.push_back(std::move(root));
-    game.for_each_instance([&](DataModel& object) {
-        NodeSnap node;
-        node.id = object.id();
-        node.parent = game.parent(object.id());
-        node.name = game.name(object.id());
-        node.class_name = object.class_name() != nullptr ? object.class_name() : "";
-        if (auto* source = dynamic_cast<LuaSource*>(&object)) {
-            node.lua = true;
-            node.module = dynamic_cast<ModuleScript*>(source) != nullptr;
-            node.source = source->source();
-        }
-        world->nodes.push_back(std::move(node));
-    });
-    for (NodeSnap& node : world->nodes) {
-        for (InstanceId child = game.first_child(node.id); child != 0; child = game.next_sibling(child)) {
-            node.children.push_back(child);
-        }
-    }
-    return world;
 }
 
 }  // namespace

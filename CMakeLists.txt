@@ -512,6 +512,7 @@ add_library(engine_core STATIC
     src/engine_core/ScriptRuntime.cpp
     src/engine_core/TableSnapshot.cpp
     src/engine_core/ScriptAnalysis.cpp
+    src/engine_core/AnalysisWorld.cpp
     src/engine_core/StackThread.cpp
     src/engine_core/AnalysisDefinitions.cpp
     src/engine_core/PropertyBag.cpp
@@ -760,6 +761,7 @@ endif()
 add_executable(sandbox
     sandbox/tests.cpp
     sandbox/analysis_tests.cpp
+    sandbox/analysis_world_tests.cpp
     sandbox/history_tests.cpp
     sandbox/history_lua_tests.cpp
     sandbox/project_tests.cpp

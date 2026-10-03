@@ -886,3 +886,23 @@ In the studio: open the CannonVsPigs project (`~/Documents/AnarchyEngineProjects
 git add src/engine_core/README.md src/engine_core/TaskScheduler.hpp src/engine_core/DataModel.hpp src/engine_core/DataModelState.hpp
 git commit -m "Document the render window running script handlers"
 ```
+
+---
+
+### Task 8: Window script writes authorize as sim writes
+
+Live use found the gap the rigs hid: with engine threads running, `authorize` (DataModel.cpp:~306) admits a window write only for `visual_only`-tagged instances, so SceneCamera's `camera.Transform = ...` raised "Transform cannot be written in a render step" in the real studio (sandbox rigs run with `threads_running` false, where authorize admits everything). Ruling: window Lua writes authorize like sim writes.
+
+**Files:**
+- Modify: `src/engine_core/DataModel.hpp`/`.cpp` (window-script flag + authorize), `src/engine_core/DataModelState.hpp` (the flag), `src/engine_core/ScriptRuntime.cpp` (`render_step` sets it around `invoke_render`), `src/engine_core/README.md` (path-B row)
+- Test: `sandbox/tests.cpp` (new `[RW9]`; rework `[RW7]`)
+
+**Interfaces:**
+- Produces: `DataModel::set_window_script(bool)` (or equivalent on the window begin/end path) — set only by the render thread while it holds the write lock inside the window.
+
+Steps (same TDD rhythm as the other tasks):
+1. Failing test RW9, using RW7's harness (threads_running on, render thread registered, write lock held, window open): an UNTAGGED part's `Transform` written from a window handler succeeds — no Lua error, the DataModel shows the new transform, the pump's published snapshot for that frame shows it, and no deferred violation is left. Also write a non-visual scriptable property (pick one that reaches a plain reflected setter, e.g. the part's `Name` via core field or a registered property that calls `authorize` — read the setters and choose one that would have been refused before) and assert it sticks.
+2. Watch RW9 fail with the current refusal.
+3. Implement: a `window_script` flag beside `prerender_window` in DataModelState, set/cleared by `ScriptRuntime::render_step` around `invoke_render` through a small DataModel method; `authorize`'s render-thread branch returns true when the window is open and the flag is set, before the visual-only check. Transform writes from that context take the ForceSimWrite route so they land in this frame's snapshot (trace `apply_transform`/`visual_target` and pass the force flag from the script context rather than changing the C++ callers). Keep Task 5's refusal net untouched.
+4. Rework RW7: its refusal premise is gone for ordinary properties; repurpose it to assert the old refusal case now succeeds end to end while pcall sees no error, and leave one comment that the raise-on-refusal net is currently unexercised by design.
+5. Full suites; update the README path-B row to say script window writes are unrestricted and recorded `PreRenderDataModel`; commit.

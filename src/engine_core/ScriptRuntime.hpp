@@ -65,8 +65,10 @@ public:
     // Whether the console or plugin VM is open, so step_tools has work. Any thread may ask.
     bool tools_open() const { return tools_open_.load(std::memory_order_relaxed); }
     // Forgets the frames drawn since the last step, so the next RenderStepped does not
-    // count them. The engine calls it on resume, for the frames drawn while paused.
-    // Any thread may call it.
+    // count them. Only the console's sim-side fallback accumulates frames this way;
+    // play and plugin handlers run in the window directly and are unaffected. The
+    // engine calls it on resume, for the frames drawn while paused. Any thread may
+    // call it.
     void drop_render_frames() { run_service_.drop_frames(); }
     // Pauses window delivery for play handlers: a paused session's signals wait,
     // but plugins keep their render step. The engine calls it from pause and

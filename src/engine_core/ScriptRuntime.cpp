@@ -512,7 +512,7 @@ void ScriptRuntime::render_step(double dt) {
         return;
     }
     Signal* window = run_service_.window_signal();
-    if (window == nullptr || !window->id().valid()) {
+    if (!window->id().valid()) {
         return;
     }
     // A paused play session's handlers wait for resume; plugins keep stepping.
@@ -1153,6 +1153,8 @@ void ScriptRuntime::resume_waiting_now(Thread& thread, double dt) {
     // make_ready_number queues the thread for the next drain; there is none in
     // the window, so take it back off the ready list the way the drain-side
     // resume does, and resume it directly instead.
+    // Resuming directly is safe here because the window is never entered from
+    // inside Lua: lua_depth_ is 0 whenever this runs.
     thread.vm->ready.remove(&thread);
     resume_one(thread);
 }

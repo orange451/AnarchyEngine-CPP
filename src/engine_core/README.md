@@ -10,14 +10,14 @@ The root holds only the scene services, which cannot be moved, renamed, or destr
 
 A class's properties are listed once, in its Lua registration (`LuaApi.hpp`). One registered with `lua_saved_property` needs nothing else from the core: `DataModel` saves it, loads it, gives it a default, puts it back at Stop, and undoes it, all through its registered read and write. Its setter validates the value, stores it, and calls `note_property_change`, which records undo and fires `Changed` with the property's name. The `Field` enum is only for the properties the core itself tracks, such as Transform and Parent.
 
-Prepare holds the DataModel write lock: RenderStepped, PreRender, then the dirty copy, then path-C overrides. Perform/Present runs with the lock released and reads the front snapshot. PostRender runs after Present, still on the render thread, without that lock. If the lock is not acquired within 2 ms, Present repeats the previous snapshot and PostRender still runs.
+Prepare holds the DataModel write lock: RenderStepped, PreRender, then the dirty copy, then path-C overrides. Perform/Present runs with the lock released and reads the front snapshot. PostRender runs after Present, still on the render thread, without that lock. If the lock is not acquired within 2 ms, Present repeats the previous snapshot and PostRender still runs. Play and plugin RenderStepped handlers run inside this window; the write lock that serializes Prepare against the sim step is what makes Lua safe here.
 
 Roblox fires `RenderStepped`, then `PreRender`, before the frame is drawn. Both are that locked window here, RenderStepped first. A write from either one is path B and records `PreRenderDataModel`. Job priority inside a phase is unchanged: a larger value runs first. Roblox does not publish a PostRender script event; the task scheduler's render section ends at the asynchronous render. PostRender is the boundary after this frame's snapshot has been presented. A DataModel write there is path D, and a snapshot override is rejected. It is outside the 2 ms budget and does not drain signals.
 
 | Path | Who | What it changes |
 | --- | --- | --- |
 | A | SimulationThread phases | DataModel. Snapshot on the next Prepare. |
-| B | RenderStepped or PreRender, visual-only or `ForceSimWrite` | DataModel, and this frame's snapshot. |
+| B | RenderStepped or PreRender, visual-only or ForceSimWrite — including script RenderStepped handlers, which run here | DataModel, and this frame's snapshot. |
 | C | `SnapshotPump::override_visual` | This frame's snapshot only. |
 | D | RenderThread outside that window, including Perform, Present, and PostRender | Contract failure (abort, or the test handler). |
 | E | Any other thread | Command queue, applied on the next sim step. |

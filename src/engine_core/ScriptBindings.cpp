@@ -698,9 +698,6 @@ int ScriptBindings::signal_connect(lua_State* state) {
         lua_pop(state, 1);
         Signal* signal = &signal_of(state, *runtime, *ud);
         if (render_window_routed(*ud, vm.kind)) {
-            // Play and plugin handlers run in the render window; the console VM
-            // keeps the sim-side delivery, since its command line enters it
-            // without the write lock.
             signal = runtime->run_service_.window_signal();
         }
         const InstanceId script = caller->script;
@@ -764,9 +761,6 @@ int ScriptBindings::signal_wait(lua_State* state) {
         Signal* signal = &signal_of(state, *runtime, *ud);
         ScriptRuntime::Vm& vm = *thread->vm;
         if (render_window_routed(*ud, vm.kind)) {
-            // Play and plugin handlers run in the render window; the console VM
-            // keeps the sim-side delivery, since its command line enters it
-            // without the write lock.
             signal = runtime->run_service_.window_signal();
         }
         const int kind = ud->kind;

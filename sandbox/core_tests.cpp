@@ -7,6 +7,7 @@
 #include "Folder.hpp"
 #include "Project.hpp"
 #include "SceneService.hpp"
+#include "Script.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -25,6 +26,15 @@ InstanceId add_folder(engine_core::DataModel& game, const char* name, InstanceId
         game.set_parent(folder.id(), parent);
     }
     return folder.id();
+}
+
+bool has_line(const engine_core::ScriptRuntime::OutputBatch& batch, const std::string& text) {
+    for (const engine_core::ScriptRuntime::OutputLine& line : batch.lines) {
+        if (line.text == text) {
+            return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace
@@ -222,4 +232,110 @@ TEST_CASE("CO4c undoing a step recorded before an instance went into Core does n
     }
     REQUIRE(game.alive(part));
     REQUIRE(game.parent(part) == game.core());
+}
+
+TEST_CASE("CO6 a game script cannot reach Core, while a plugin and the command line can", "[CO6]") {
+    ScriptRig rig;
+    add_script(rig.game, "Probe", R"(
+        print("service", pcall(function() return game:GetService("Core") end))
+        print("index", pcall(function() return game.Core end))
+        print("find", game:FindFirstChild("Core"))
+        local listed = false
+        for _, child in game:GetChildren() do
+            if child.Name == "Core" then listed = true end
+        end
+        print("listed", listed)
+        print("wait", game:WaitForChild("Core", 0.05))
+    )");
+    rig.game.start_simulation();
+    rig.frames(10, 0.02);
+    const auto output = rig.runtime.drain_output();
+    INFO(rig.runtime.last_error());
+    REQUIRE(has_line(output, "find\tnil\n"));
+    REQUIRE(has_line(output, "listed\tfalse\n"));
+    REQUIRE(has_line(output, "wait\tnil\n"));
+    bool service_refused = false;
+    bool index_refused = false;
+    for (const auto& line : output.lines) {
+        service_refused = service_refused || line.text.rfind("service\tfalse", 0) == 0;
+        index_refused = index_refused || line.text.rfind("index\tfalse", 0) == 0;
+    }
+    REQUIRE(service_refused);
+    REQUIRE(index_refused);
+    rig.game.stop_simulation();
+
+    rig.runtime.run_chunk(R"(print("console", game:GetService("Core").Name, game:FindFirstChild("Core") ~= nil))");
+    rig.frames(1);
+    REQUIRE(has_line(rig.runtime.drain_output(), "console\tCore\ttrue\n"));
+}
+
+TEST_CASE("CO7 a Script in Core runs in the plugin VM, in edit mode and through Play, Stop, and New", "[CO7]") {
+    ScriptRig rig;
+    engine_core::Script& script = add_script(rig.game, rig.game.core(), "Tool", R"(
+        print("tool started")
+        game:GetService("RunService").Heartbeat:Connect(function()
+            _G.ticks = (_G.ticks or 0) + 1
+        end)
+    )");
+    rig.frames(1);
+    REQUIRE(has_line(rig.runtime.drain_output(), "tool started\n"));
+    REQUIRE(rig.runtime.is_plugin(script.id()));
+
+    rig.game.start_simulation();
+    rig.frames(2);
+    rig.game.stop_simulation();
+    engine_core::Project::reset_place(rig.game);
+    rig.frames(2);
+    REQUIRE(rig.runtime.is_plugin(script.id()));
+    REQUIRE_FALSE(has_line(rig.runtime.drain_output(), "tool started\n"));
+}
+
+TEST_CASE("CO7b disabling or destroying a Script in Core stops it, and enabling it starts it again", "[CO7b]") {
+    ScriptRig rig;
+    engine_core::Script& script = add_script(rig.game, rig.game.core(), "Tool", R"(print("tool started"))");
+    rig.frames(1);
+    REQUIRE(rig.runtime.is_plugin(script.id()));
+    script.set_enabled(false);
+    rig.frames(1);
+    REQUIRE_FALSE(rig.runtime.is_plugin(script.id()));
+    rig.runtime.drain_output();
+    script.set_enabled(true);
+    rig.frames(1);
+    REQUIRE(rig.runtime.is_plugin(script.id()));
+    REQUIRE(has_line(rig.runtime.drain_output(), "tool started\n"));
+    const InstanceId id = script.id();
+    rig.game.destroy(id);
+    rig.frames(1);
+    REQUIRE_FALSE(rig.runtime.is_plugin(id));
+}
+
+TEST_CASE("CO7c a plugin that puts a Script into Core starts it on the next step", "[CO7c]") {
+    ScriptRig rig;
+    add_script(rig.game, rig.game.core(), "Maker", R"lua(
+        local made = Instance.new("Script")
+        made.Name = "Made"
+        made.Source = "print('made ran')"
+        made.Parent = script.Parent
+        print("maker done")
+    )lua");
+    rig.frames(1);
+    const auto first = rig.runtime.drain_output();
+    REQUIRE(has_line(first, "maker done\n"));
+    rig.frames(1);
+    const auto second = rig.runtime.drain_output();
+    INFO(rig.runtime.last_error());
+    REQUIRE((has_line(first, "made ran\n") || has_line(second, "made ran\n")));
+}
+
+TEST_CASE("CO7d a Script orphaned when its Folder in Core is destroyed stops", "[CO7d]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "Kit", rig.game.core());
+    engine_core::Script& script = add_script(rig.game, folder, "Tool", R"(print("tool started"))");
+    rig.frames(1);
+    REQUIRE(rig.runtime.is_plugin(script.id()));
+    // As Destroy from Lua does: the Folder goes, and its children are left with no parent.
+    rig.game.destroy(folder);
+    rig.frames(1);
+    REQUIRE(rig.game.alive(script.id()));
+    REQUIRE_FALSE(rig.runtime.is_plugin(script.id()));
 }

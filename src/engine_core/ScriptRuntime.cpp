@@ -180,6 +180,7 @@ void ScriptRuntime::step_tools(double dt) {
     if (game_ == nullptr) {
         return;
     }
+    start_core_scripts();
     // While the play VM is closed no play step fires Heartbeat or drains, so this does.
     // During play, and while a play session is paused, the play step's own do that.
     const bool own_step = !open_;
@@ -275,6 +276,13 @@ DataModel* ScriptRuntime::resolve_watch(Watch watch) const {
 }
 
 void ScriptRuntime::on_moved(InstanceId id) {
+    // Core's Scripts run whether or not the place plays. Nothing moves out of
+    // Core but the children of an instance destroyed there, which are left with
+    // no parent, so a move anywhere else costs no walk.
+    if (game_ != nullptr && (game_->core_holds(id) ||
+                             (!core_scripts_.empty() && game_->parent(id) == DataModel::kNoParent))) {
+        note_core(id);
+    }
     if (game_ == nullptr || !game_->simulation_running() || play_.closing) {
         return;
     }
@@ -320,6 +328,10 @@ bool ScriptRuntime::runs_here(InstanceId id) const {
 }
 
 void ScriptRuntime::on_script_enabled(Script& script, bool enabled) {
+    if (game_ != nullptr && (game_->core_holds(script.id()) || core_scripts_.count(script.id()) != 0)) {
+        note_core(script.id());
+        return;
+    }
     if (game_ == nullptr || !game_->simulation_running() || play_.closing) {
         return;
     }
@@ -330,6 +342,7 @@ void ScriptRuntime::on_script_enabled(Script& script, bool enabled) {
 }
 
 void ScriptRuntime::on_script_destroyed(Script& script) {
+    core_scripts_.erase(script.id());
     if (!play_.closing) {
         kill_script(script.id());
     }
@@ -683,7 +696,49 @@ void ScriptRuntime::close_state(Vm& vm) {
 }
 
 void ScriptRuntime::update_tools_open() {
-    tools_open_.store(console_.state != nullptr || plugin_.state != nullptr, std::memory_order_relaxed);
+    tools_open_.store(console_.state != nullptr || plugin_.state != nullptr || !core_pending_.empty(),
+                      std::memory_order_relaxed);
+}
+
+void ScriptRuntime::note_core(InstanceId id) {
+    if (game_ == nullptr) {
+        return;
+    }
+    std::vector<InstanceId> pending{id};
+    while (!pending.empty()) {
+        const InstanceId next = pending.back();
+        pending.pop_back();
+        if (dynamic_cast<Script*>(game_->instance(next)) != nullptr &&
+            (game_->core_holds(next) || core_scripts_.count(next) != 0)) {
+            core_pending_.push_back(next);
+        }
+        for (InstanceId child = game_->first_child(next); child != 0; child = game_->next_sibling(child)) {
+            pending.push_back(child);
+        }
+    }
+    update_tools_open();
+}
+
+void ScriptRuntime::start_core_scripts() {
+    if (game_ == nullptr || core_pending_.empty()) {
+        return;
+    }
+    std::vector<InstanceId> pending;
+    pending.swap(core_pending_);
+    for (InstanceId id : pending) {
+        auto* script = dynamic_cast<Script*>(game_->instance(id));
+        const bool want = script != nullptr && script->enabled() && game_->core_holds(id);
+        const bool have = core_scripts_.count(id) != 0;
+        if (want && !have) {
+            if (register_plugin(id)) {
+                core_scripts_.insert(id);
+            }
+        } else if (!want && have) {
+            core_scripts_.erase(id);
+            unregister_plugin(id);
+        }
+    }
+    update_tools_open();
 }
 
 void ScriptRuntime::refresh_game(lua_State* state) {

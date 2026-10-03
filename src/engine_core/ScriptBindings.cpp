@@ -374,7 +374,7 @@ int ScriptBindings::instance_index(lua_State* state) {
             // Not a property or method: a child by that name, the first in sibling
             // order, like FindFirstChild. A property of the same name wins.
             const InstanceId child = runtime->game_->find_first_child(object->id(), key != nullptr ? key : "");
-            if (child != 0) {
+            if (child != 0 && !hidden_from_play(state, *runtime, child)) {
                 runtime->push_instance(state, child);
                 return 1;
             }
@@ -516,6 +516,9 @@ int ScriptBindings::instance_children(lua_State* state) {
         lua_newtable(state);
         int index = 1;
         for (InstanceId child : children) {
+            if (hidden_from_play(state, *runtime, child)) {
+                continue;
+            }
             runtime->push_instance(state, child);
             lua_rawseti(state, -2, index);
             ++index;
@@ -534,7 +537,7 @@ int ScriptBindings::instance_find(lua_State* state) {
             return 1;
         }
         const InstanceId child = runtime->game_->find_first_child(ud->id, name != nullptr ? name : "");
-        if (child == 0) {
+        if (child == 0 || hidden_from_play(state, *runtime, child)) {
             lua_pushnil(state);
         } else {
             runtime->push_instance(state, child);
@@ -560,7 +563,7 @@ int ScriptBindings::instance_wait_child(lua_State* state) {
         }
         const std::string wanted = name != nullptr ? name : "";
         const InstanceId child = runtime->game_->find_first_child(ud->id, wanted);
-        if (child != 0) {
+        if (child != 0 && !hidden_from_play(state, *runtime, child)) {
             runtime->push_instance(state, child);
             return 1;
         }
@@ -599,6 +602,11 @@ int ScriptBindings::instance_isa(lua_State* state) {
     });
 }
 
+bool ScriptBindings::hidden_from_play(lua_State* state, ScriptRuntime& runtime, InstanceId id) {
+    const ScriptRuntime::Vm* vm = runtime.vm_from(state);
+    return vm != nullptr && vm->kind == ScriptRuntime::VmKind::Play && runtime.game_->core_holds(id);
+}
+
 int ScriptBindings::instance_service(lua_State* state) {
     return lua_guard(state, [&] {
         auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
@@ -609,6 +617,9 @@ int ScriptBindings::instance_service(lua_State* state) {
         }
         // A service directly under game is in the tree: GetService gives the instance itself.
         const InstanceId found = name != nullptr ? runtime->game_->service(name) : 0;
+        if (found != 0 && hidden_from_play(state, *runtime, found)) {
+            luaL_error(state, "%s is not available to game scripts", name);
+        }
         if (found != 0 && runtime->game_->parent(found) == 0) {
             runtime->push_instance(state, found);
             return 1;

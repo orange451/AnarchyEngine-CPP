@@ -6,6 +6,7 @@
 #include "DataModelState.hpp"
 
 #include <algorithm>
+#include <unordered_set>
 #include <utility>
 
 namespace engine_core {
@@ -247,9 +248,20 @@ void DataModel::link_children(InstanceId parent, const std::vector<InstanceId>& 
 
 void DataModel::rebuild_free_list() {
     state_->free_list.clear();
+    // Edit history outlives a play session, and undo may bring its instances back.
+    std::unordered_set<std::uint32_t> held;
+    if (state_->history != nullptr) {
+        held = state_->history->revivable_slots();
+    }
+    state_->history_held.clear();
     for (std::uint32_t index = 0; index < state_->slots.size(); ++index) {
-        if (!state_->slots[index].alive) {
+        if (state_->slots[index].alive) {
+            continue;
+        }
+        if (held.count(index) == 0) {
             state_->free_list.push_back(index);
+        } else {
+            state_->history_held.push_back(index);
         }
     }
 }

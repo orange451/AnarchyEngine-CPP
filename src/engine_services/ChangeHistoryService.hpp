@@ -9,6 +9,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -152,6 +153,10 @@ public:
     bool enabled() const { return enabled_; }
     // True while undo, redo, or a cancel is writing the place back.
     bool applying_undo_redo() const { return applying_ != 0; }
+    // The slots undo or redo would bring an instance back into: those of the
+    // destroys on the undo stacks and in the open recording, and of the creates
+    // on the redo stacks. Nothing else may be in them.
+    std::unordered_set<std::uint32_t> revivable_slots() const;
 
     // Name used the next time edit mode opens an implicit recording.
     void set_pending_gesture(std::string name);

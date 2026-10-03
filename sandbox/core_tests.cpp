@@ -385,3 +385,78 @@ TEST_CASE("CO10 the built-in plugins load into Core, and New and Open keep them"
     REQUIRE(rig.game.alive(plugin));
     REQUIRE(rig.runtime.is_plugin(plugin));
 }
+
+TEST_CASE("CO4d undoing a delete after a Core instance was made brings the deleted instance back", "[CO4d]") {
+    SimRole role;
+    engine_core::Game game;
+    game.history().reset_waypoints();
+    const InstanceId part = add_folder(game, "Part", game.scene_service("Workspace"));
+    game.history().end_gesture();
+    game.destroy(part);
+    game.history().end_gesture();
+    // As a plugin makes its Dragger: no undo step, so its slot must not be the deleted one's.
+    const InstanceId tool = add_folder(game, "Tool", engine_core::DataModel::kNoParent);
+    game.set_parent(tool, game.core());
+    REQUIRE_NOTHROW(game.history().undo());
+    REQUIRE(game.alive(part));
+    REQUIRE(game.alive(tool));
+}
+
+TEST_CASE("CO4e redoing a create after a Core instance was made brings the created instance back", "[CO4e]") {
+    SimRole role;
+    engine_core::Game game;
+    game.history().reset_waypoints();
+    const InstanceId part = add_folder(game, "Part", game.scene_service("Workspace"));
+    game.history().end_gesture();
+    game.history().undo();
+    REQUIRE_FALSE(game.alive(part));
+    const InstanceId tool = add_folder(game, "Tool", engine_core::DataModel::kNoParent);
+    game.set_parent(tool, game.core());
+    REQUIRE_NOTHROW(game.history().redo());
+    REQUIRE(game.alive(part));
+    REQUIRE(game.alive(tool));
+}
+
+TEST_CASE("CO4f a delete undone after Play and Stop still has its slot, though Core made instances", "[CO4f]") {
+    SimRole role;
+    engine_core::Game game;
+    game.history().reset_waypoints();
+    const InstanceId part = add_folder(game, "Part", game.scene_service("Workspace"));
+    game.history().end_gesture();
+    game.destroy(part);
+    game.history().end_gesture();
+    game.start_simulation();
+    game.stop_simulation();
+    const InstanceId tool = add_folder(game, "Tool", engine_core::DataModel::kNoParent);
+    game.set_parent(tool, game.core());
+    REQUIRE_NOTHROW(game.history().undo());
+    REQUIRE(game.alive(part));
+    REQUIRE(game.alive(tool));
+}
+
+TEST_CASE("CO5b a place instance cannot go into Core during play", "[CO5b]") {
+    SimRole role;
+    engine_core::Game game;
+    const InstanceId part = add_folder(game, "Part", game.scene_service("Workspace"));
+    game.start_simulation();
+    game.set_parent(part, engine_core::DataModel::kNoParent);
+    REQUIRE(game.parent_error(part, game.core()).has_value());
+    // One made in play may.
+    const InstanceId made = add_folder(game, "Made", engine_core::DataModel::kNoParent);
+    REQUIRE_NOTHROW(game.set_parent(made, game.core()));
+    game.stop_simulation();
+    REQUIRE(game.parent(part) == game.scene_service("Workspace"));
+    REQUIRE(game.parent(made) == game.core());
+}
+
+TEST_CASE("CO7e a Script under another Script in Core runs once", "[CO7e]") {
+    ScriptRig rig;
+    engine_core::Script& outer = add_script(rig.game, rig.game.core(), "Outer", R"(print("outer ran"))");
+    add_script(rig.game, outer.id(), "Inner", R"(print("inner ran"))");
+    rig.frames(2);
+    int inner_runs = 0;
+    for (const auto& line : rig.runtime.drain_output().lines) {
+        inner_runs += line.text == "inner ran\n" ? 1 : 0;
+    }
+    REQUIRE(inner_runs == 1);
+}

@@ -375,7 +375,7 @@ std::size_t DataModel::entity_count() const {
 
 std::size_t DataModel::room_left() const {
     const State& world = *state_;
-    return kMaxInstances - world.slots.size() + world.free_list.size();
+    return kMaxInstances - world.slots.size() + world.free_list.size() + world.history_held.size();
 }
 
 InstanceCapacityError::InstanceCapacityError()
@@ -385,6 +385,18 @@ InstanceCapacityError::InstanceCapacityError()
 InstanceId DataModel::allocate() {
     State& world = *state_;
     std::uint32_t index = 0;
+    if (world.free_list.empty() && world.slots.size() >= kMaxInstances && !world.history_held.empty()) {
+        // Full but for the slots kept for undo: room to create wins over undo.
+        if (world.history) {
+            world.history->reset_waypoints();
+        }
+        for (std::uint32_t held : world.history_held) {
+            if (!world.slots[held].alive) {
+                world.free_list.push_back(held);
+            }
+        }
+        world.history_held.clear();
+    }
     if (!world.free_list.empty()) {
         index = world.free_list.back();
         world.free_list.pop_back();
@@ -572,10 +584,15 @@ void DataModel::destroy(InstanceId id) {
     if (part->generation != kMaxGeneration) {
         ++part->generation;
         // A captured instance's slot waits for Stop, which brings it back there.
-        const bool captured = state_->simulation_running && index < state_->place_slots.size() &&
-                              state_->place_slots[index];
-        if (!captured) {
-            state_->free_list.push_back(index);
+        const bool held_for_stop = state_->simulation_running && index < state_->place_slots.size() &&
+                                   state_->place_slots[index];
+        // Undo brings back a recorded destroy, and redo a create that undo
+        // destroys, into this same slot. An unrecorded instance, such as one
+        // made in Core, must not be in it then, so the slot waits too.
+        const bool held_for_history =
+            captured.has_value() || (state_->history != nullptr && state_->history->applying_undo_redo());
+        if (!held_for_stop) {
+            (held_for_history ? state_->history_held : state_->free_list).push_back(index);
         }
     }
     note(id, VisualField::Removed, current_origin());
@@ -1598,6 +1615,12 @@ std::optional<std::string> DataModel::parent_error(InstanceId id, InstanceId new
     }
     if (!from_core && to_core && current != kNoParent) {
         return std::string("Only an instance with no parent can go into Core");
+    }
+    // Stop puts the place's instances back where they were, so none may be in Core then.
+    const std::uint32_t index = id_slot(id);
+    if (!from_core && to_core && state_->simulation_running && index < state_->place_slots.size() &&
+        state_->place_slots[index]) {
+        return name(id) + " is part of the place, so it cannot go into Core during play";
     }
     if (new_parent == kNoParent) {
         return std::nullopt;

@@ -182,6 +182,45 @@ void ChangeHistoryService::push_or_coalesce(Mutation mutation) {
     list.push_back(std::move(mutation));
 }
 
+namespace {
+
+void add_record_slots(const AuthoredRecord& record, std::unordered_set<std::uint32_t>& out) {
+    if (record.id != 0) {
+        out.insert(id_slot(record.id));
+    }
+    for (const AuthoredRecord& child : record.children) {
+        add_record_slots(child, out);
+    }
+}
+
+void add_slots(const std::vector<Mutation>& mutations, MutationKind kind, std::unordered_set<std::uint32_t>& out) {
+    for (const Mutation& mutation : mutations) {
+        if (mutation.kind == kind) {
+            add_record_slots(mutation.record, out);
+        }
+    }
+}
+
+}  // namespace
+
+std::unordered_set<std::uint32_t> ChangeHistoryService::revivable_slots() const {
+    std::unordered_set<std::uint32_t> out;
+    for (const std::vector<Waypoint>* stack : {&edit_undo_, &session_undo_}) {
+        for (const Waypoint& waypoint : *stack) {
+            add_slots(waypoint.mutations, MutationKind::DestroyInstance, out);
+        }
+    }
+    for (const std::vector<Waypoint>* stack : {&edit_redo_, &session_redo_}) {
+        for (const Waypoint& waypoint : *stack) {
+            add_slots(waypoint.mutations, MutationKind::CreateInstance, out);
+        }
+    }
+    if (recording_) {
+        add_slots(recording_->mutations, MutationKind::DestroyInstance, out);
+    }
+    return out;
+}
+
 void ChangeHistoryService::forget_core() {
     if (!recording_) {
         return;

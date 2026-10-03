@@ -373,6 +373,8 @@ struct SearchRig {
         util = add_script(game, folder.id(), "Util", "-- nothing here\nreturn { Part = 2 }\n", true);
         quiet = add_script(game, game.scene_service("Workspace"), "Quiet", "print('hello')\n");
         open = add_script(game, game.scene_service("Workspace"), "Open", "print('stale')\n");
+        // The studio's own tools are in Core, which the search leaves out.
+        add_script(game, game.core(), "Tool", "local part = 0\n");
         // The studio closes each edit's gesture, so a replace is a step of its own.
         game.history().end_gesture();
 

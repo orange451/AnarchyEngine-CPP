@@ -725,9 +725,19 @@ void ScriptRuntime::start_core_scripts() {
     }
     std::vector<InstanceId> pending;
     pending.swap(core_pending_);
+    const InstanceId core = game_->core();
     for (InstanceId id : pending) {
         auto* script = dynamic_cast<Script*>(game_->instance(id));
-        const bool want = script != nullptr && script->enabled() && game_->core_holds(id);
+        // A Script under another Script in Core runs with that one, as a plugin's Scripts do.
+        bool nested = false;
+        for (InstanceId up = game_->parent(id); up != 0 && up != DataModel::kNoParent && up != core;
+             up = game_->parent(up)) {
+            if (dynamic_cast<Script*>(game_->instance(up)) != nullptr) {
+                nested = true;
+                break;
+            }
+        }
+        const bool want = script != nullptr && script->enabled() && game_->core_holds(id) && !nested;
         const bool have = core_scripts_.count(id) != 0;
         if (want && !have) {
             if (register_plugin(id)) {

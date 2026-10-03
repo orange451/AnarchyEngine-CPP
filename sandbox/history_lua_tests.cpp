@@ -279,3 +279,38 @@ TEST_CASE("HL10 FinishRecordingOperation has Roblox's values: Cancel 0, Commit 1
     REQUIRE(has(all, "finished\tOne\tEnum.FinishRecordingOperation.Commit\t1\n"));
     REQUIRE(has(all, "finished\tTwo\tEnum.FinishRecordingOperation.Cancel\t0\n"));
 }
+
+TEST_CASE("HL11 ResetWaypoints during play drops only the play steps, and in edit mode every step", "[HL11][history]") {
+    ScriptRig rig;
+    engine_core::GameObject& part = brick(rig);
+    begin_step(rig.game, "Rename");
+    rig.game.set_name(part.id(), "Renamed");
+    end_step(rig.game);
+    rig.game.capture_place();
+
+    rig.game.start_simulation();
+    // A game script during play: a step of its own, then a reset.
+    add_script(rig.game, "Resetter", R"(
+        local history = game:GetService("ChangeHistoryService")
+        local id = history:TryBeginRecording("Play Move")
+        workspace.Renamed.Name = "Moved"
+        history:FinishRecording(id, Enum.FinishRecordingOperation.Commit)
+        print("before", history:GetCanUndo())
+        history:TryBeginRecording("Left Open")
+        history:ResetWaypoints()
+        print("after", history:GetCanUndo(), history:IsRecordingInProgress())
+    )");
+    rig.frames(1);
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
+    const std::vector<std::string> all = lines(rig.runtime);
+    REQUIRE(has(all, "before\ttrue\tPlay Move\n"));
+    REQUIRE(has(all, "after\tfalse\tfalse\n"));
+
+    rig.game.stop_simulation();
+    REQUIRE(rig.game.history().can_undo().second == "Rename");
+
+    rig.runtime.run_chunk("game:GetService('ChangeHistoryService'):ResetWaypoints()");
+    REQUIRE(rig.runtime.last_error().empty());
+    REQUIRE_FALSE(rig.game.history().can_undo().first);
+}

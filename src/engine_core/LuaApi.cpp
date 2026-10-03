@@ -1127,8 +1127,9 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("ChangeHistoryService", "GetCanUndo", "Whether there is a step to undo, and its name.", "boolean, string", false, {});
     add("ChangeHistoryService", "GetCanRedo", "Whether there is a step to redo, and its name.", "boolean, string", false, {});
     add("ChangeHistoryService", "ResetWaypoints",
-        "Forgets every undo and redo step, and drops an open recording without putting its changes back.", nullptr,
-        false, {});
+        "Forgets every undo and redo step, and drops an open recording without putting its changes back. During play "
+        "it forgets only the steps made since Play; the edit steps from before stay.",
+        nullptr, false, {});
     add("ChangeHistoryService", "OnUndo", "Fires after an undo. The argument is the step's name.", "Signal", false, {});
     add("ChangeHistoryService", "OnRedo", "Fires after a redo. The argument is the step's name.", "Signal", false, {});
     add("ChangeHistoryService", "OnRecordingStarted", "Fires when a recording opens. The arguments are its name and displayName.",

@@ -1080,7 +1080,13 @@ int ScriptBindings::history_get_can_redo(lua_State* state) {
 
 int ScriptBindings::history_reset_waypoints(lua_State* state) {
     return lua_guard(state, [&] {
-        history_service(state).reset_waypoints();
+        ChangeHistoryService& history = history_service(state);
+        // A game script's reset reaches only the play steps, never the user's edits.
+        if (runtime_from(state)->game_->simulation_running()) {
+            history.drop_session();
+        } else {
+            history.reset_waypoints();
+        }
         return 0;
     });
 }

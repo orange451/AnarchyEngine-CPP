@@ -2324,6 +2324,21 @@ Finished finished_from(const CheckInput& input) {
     return finished;
 }
 
+// Publishes `input` with an Analysis diagnostic saying why it was not checked.
+// Never throws: it runs where an exception would stop a thread.
+void publish_failure(const BatchHost& host, const CheckInput* input, const char* failure) {
+    if (input == nullptr) {
+        return;
+    }
+    try {
+        Finished finished = finished_from(*input);
+        finished.diagnostics.push_back(
+            make_diagnostic(input->id, TextRange{}, Severity::Error, "Analysis", std::string("could not be checked: ") + failure));
+        host.publish(std::move(finished));
+    } catch (...) {
+    }
+}
+
 void run_batch(PlaceChecker& checker, AnalysisPool& pool, const std::shared_ptr<const WorldSnap>& world,
                Claimed& claimed, const std::shared_ptr<Luau::FrontendCancellationToken>& cancel,
                const BatchHost& host) {
@@ -2391,6 +2406,16 @@ void run_batch(PlaceChecker& checker, AnalysisPool& pool, const std::shared_ptr<
 
     std::mutex done_mu;
     std::unordered_set<InstanceId> done;
+    // The env outlives this batch, so it must not keep pointers to its locals,
+    // even when something below throws.
+    struct ResetEnv {
+        WorkerEnv& env;
+        ~ResetEnv() {
+            env.files.batch_sources = nullptr;
+            env.files.world = nullptr;
+            env.world = nullptr;
+        }
+    } reset_env{env};
     env.files.batch_sources = &sources;
     env.files.world = world.get();
     // A script's own --!nonstrict header was rewritten to --!strict, and one
@@ -2403,25 +2428,37 @@ void run_batch(PlaceChecker& checker, AnalysisPool& pool, const std::shared_ptr<
     options.cancellationToken = cancel;
     // Runs on a pool thread as each module finishes, before Luau drops its
     // expression types, so its reached set can still be read.
+    // Luau catches only its own internal errors around this, so it never throws.
     options.customModuleCheck = [&](const Luau::SourceModule& source, const Luau::Module& module) {
-        const std::optional<InstanceId> id = instance_of_module(source.name);
-        const auto found = id ? by_id.find(*id) : by_id.end();
-        if (found == by_id.end() || !found->second->type_check || module.cancelled) {
-            return;
+        const CheckInput* input = nullptr;
+        try {
+            const std::optional<InstanceId> id = instance_of_module(source.name);
+            const auto found = id ? by_id.find(*id) : by_id.end();
+            if (found == by_id.end() || !found->second->type_check || module.cancelled) {
+                return;
+            }
+            input = found->second;
+            {
+                // After an internal error, checking a requirer again checks
+                // modules that already finished. Each publishes once.
+                std::lock_guard<std::mutex> lock(done_mu);
+                if (!done.insert(input->id).second) {
+                    return;
+                }
+            }
+            Finished finished = finished_from(*input);
+            add_type_errors(module, *input, env.files, finished.diagnostics);
+            finished.reached = reached_instances(module);
+            {
+                std::lock_guard<std::mutex> lock(checker.reached_mu);
+                checker.reached[input->id] = finished.reached;
+            }
+            host.publish(std::move(finished));
+        } catch (const std::exception& error) {
+            publish_failure(host, input, error.what());
+        } catch (...) {
+            publish_failure(host, input, "analysis failed");
         }
-        const CheckInput& input = *found->second;
-        Finished finished = finished_from(input);
-        add_type_errors(module, input, env.files, finished.diagnostics);
-        finished.reached = reached_instances(module);
-        {
-            std::lock_guard<std::mutex> lock(checker.reached_mu);
-            checker.reached[input.id] = finished.reached;
-        }
-        {
-            std::lock_guard<std::mutex> lock(done_mu);
-            done.insert(input.id);
-        }
-        host.publish(std::move(finished));
     };
     try {
         env.frontend->queueModuleCheck(queue);
@@ -2453,15 +2490,15 @@ void run_batch(PlaceChecker& checker, AnalysisPool& pool, const std::shared_ptr<
             if (cancel->requested()) {
                 break;
             }
-            Finished finished = finished_from(*by_id.at(id));
-            finished.diagnostics.push_back(
-                make_diagnostic(id, TextRange{}, Severity::Error, "Analysis", "could not be checked: " + failure));
-            host.publish(std::move(finished));
+            {
+                std::lock_guard<std::mutex> lock(done_mu);
+                if (!done.insert(id).second) {
+                    continue;
+                }
+            }
+            publish_failure(host, by_id.at(id), failure.c_str());
         }
     }
-    env.files.batch_sources = nullptr;
-    env.files.world = nullptr;
-    env.world = nullptr;
 }
 
 }  // namespace
@@ -2532,6 +2569,11 @@ struct ScriptAnalysis::State {
     std::shared_ptr<Luau::FrontendCancellationToken> batch_cancel;
     // Results pump() published, per script.
     std::unordered_map<InstanceId, std::uint64_t> checks;
+    // Scripts remove() dropped and nothing has scheduled since. A batch's tree
+    // can be older than the removal, so claim() refuses these. The generation
+    // is kept, never reset, so an id undo brings back cannot match a result
+    // checked before it was removed.
+    std::unordered_set<InstanceId> removed;
 
     void adopt(std::shared_ptr<const WorldSnap> world, std::uint64_t seq) {
         if (seq > latest_seq) {
@@ -2699,7 +2741,7 @@ void ScriptAnalysis::run_place() {
     BatchHost host;
     host.claim = [this](InstanceId id) -> std::optional<std::uint64_t> {
         std::lock_guard<std::mutex> lock(state_->mu);
-        if (state_->pending.count(id) != 0) {
+        if (state_->pending.count(id) != 0 || state_->removed.count(id) != 0) {
             return std::nullopt;
         }
         state_->in_batch.insert(id);
@@ -2746,16 +2788,47 @@ void ScriptAnalysis::run_place() {
             cancel = std::make_shared<Luau::FrontendCancellationToken>();
             state_->batch_cancel = cancel;
         }
-        if (checker.env->revision != lua_registry_revision()) {
-            checker.env = std::make_unique<WorkerEnv>();
-            checker.env->init();
-            std::lock_guard<std::mutex> lock(checker.reached_mu);
-            checker.reached.clear();
+        // An exception escaping here would end this thread with the batch's
+        // scripts still in in_batch, so idle() would never be true again.
+        const char* failure = nullptr;
+        std::string failure_text;
+        try {
+            if (checker.env->revision != lua_registry_revision()) {
+                checker.env = std::make_unique<WorkerEnv>();
+                checker.env->init();
+                std::lock_guard<std::mutex> lock(checker.reached_mu);
+                checker.reached.clear();
+            }
+            if (world != nullptr) {
+                run_batch(checker, pool, world, claimed, cancel, host);
+            }
+        } catch (const std::exception& error) {
+            failure = "analysis failed";
+            try {
+                failure_text = error.what();
+                failure = failure_text.c_str();
+            } catch (...) {
+            }
+        } catch (...) {
+            failure = "analysis failed";
         }
-        if (world != nullptr) {
-            run_batch(checker, pool, world, claimed, cancel, host);
+        if (failure != nullptr) {
+            // Each script the batch took says it could not be checked.
+            for (const auto& entry : claimed) {
+                try {
+                    CheckInput input;
+                    input.id = entry.first;
+                    input.generation = entry.second;
+                    if (const NodeSnap* node = world != nullptr ? world->find(entry.first) : nullptr) {
+                        input.name = node->name.empty() ? node->class_name : node->name;
+                        input.source = node->source;
+                    }
+                    publish_failure(host, &input, failure);
+                } catch (...) {
+                }
+            }
         }
-        if (checker.env->frontend != nullptr) {
+        if (checker.env != nullptr && checker.env->frontend != nullptr) {
             state_->cached_modules.store(checker.env->frontend->sourceNodes.size(), std::memory_order_relaxed);
         }
         std::lock_guard<std::mutex> lock(state_->mu);
@@ -2906,6 +2979,7 @@ void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
         }
         std::uint64_t& generation = state_->generations[id];
         ++generation;
+        state_->removed.erase(id);
         Job job;
         job.id = id;
         job.generation = generation;
@@ -2960,6 +3034,7 @@ void ScriptAnalysis::remove(InstanceId script) {
         enabled = state_->enabled;
         std::uint64_t& generation = state_->generations[script];
         ++generation;
+        state_->removed.insert(script);
         state_->pending.erase(script);
         state_->results.erase(std::remove_if(state_->results.begin(), state_->results.end(),
                                              [&](const Finished& finished) { return finished.id == script; }),

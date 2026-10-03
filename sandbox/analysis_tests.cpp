@@ -1374,3 +1374,25 @@ TEST_CASE("A39 a script edited while a batch checks it ends with its newest sour
     REQUIRE(report.find("'second'") != std::string::npos);
     REQUIRE(report.find("'first'") == std::string::npos);
 }
+
+TEST_CASE("A40 a script destroyed before a batch reaches it as a dependent is never published again", "[A40]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game, 4);
+    engine_core::ModuleScript& module = add_module(rig.game, "Shared", "return { value = 1 }\n");
+    const engine_core::InstanceId user =
+        add_script(rig.game, "User", "local Shared = require(workspace.Shared)\nprint(Shared.value)\n").id();
+    settle(analysis);
+    REQUIRE(analysis.analyzed_source(user).has_value());
+    // The edit captures a tree that still holds User. Destroying User takes no
+    // capture of its own, so the batch the edit starts finds User in that tree
+    // as a dependent of Shared after User is gone.
+    module.set_source("return { value = 2 }\n");
+    rig.game.destroy(user);
+    REQUIRE_FALSE(analysis.analyzed_source(user).has_value());
+    // No pump yet: pump() would capture a new tree before the batch starts.
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    settle(analysis);
+    REQUIRE_FALSE(analysis.analyzed_source(user).has_value());
+    REQUIRE(analysis.diagnostics(user).empty());
+    REQUIRE(analysis.analyzed_source(module.id()) == std::optional<std::string>("return { value = 2 }\n"));
+}

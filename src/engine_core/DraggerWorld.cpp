@@ -1,6 +1,7 @@
 #include "DraggerWorld.hpp"
 
 #include "Camera.hpp"
+#include "ChangeHistoryService.hpp"
 #include "DataModel.hpp"
 #include "Dragger.hpp"
 #include "Enum.hpp"
@@ -32,6 +33,7 @@ PVInstance* pv_of(DataModel& game, InstanceId id) { return dynamic_cast<PVInstan
 }  // namespace
 
 void DraggerWorld::dispatch(DataModel& game, std::vector<InputRecord>& records) {
+    close_step(game);
     if (drag_ && !drag_holds(game)) {
         end(game);
     }
@@ -133,6 +135,12 @@ bool DraggerWorld::begin(DataModel& game, const DraggerView& view, Vec2 point) {
     if (!begin_drag(dragger_frame(drag.start_transform, dragger->local_space()), view, point, handle, drag.start)) {
         return false;
     }
+    // Edit mode only: play writes are not edits.
+    if (!game.simulation_running()) {
+        if (std::optional<std::string> id = game.history().try_begin_recording("Move")) {
+            drag.recording = std::move(*id);
+        }
+    }
     drag_ = drag;
     dragger->set_drag(true, handle);
     game.fire_event(dragger->id(), "DragBegan", {handle_slot(handle)});
@@ -172,9 +180,26 @@ void DraggerWorld::move(DataModel& game, const DraggerView& view, Vec2 point) {
 void DraggerWorld::end(DataModel& game) {
     const Drag drag = *drag_;
     drag_.reset();
+    if (!drag.recording.empty()) {
+        closing_ = Closing{drag.recording, drag.moved};
+    }
     if (auto* dragger = dynamic_cast<Dragger*>(game.instance(drag.dragger))) {
         dragger->set_drag(false, DraggerHandle::None);
         game.fire_event(dragger->id(), "DragEnded", {handle_slot(drag.start.handle)});
+    }
+}
+
+void DraggerWorld::close_step(DataModel& game) {
+    if (!closing_) {
+        return;
+    }
+    const Closing closing = *closing_;
+    closing_.reset();
+    // Play seals an edit recording when it starts; one sealed so is gone.
+    ChangeHistoryService& history = game.history();
+    if (history.is_recording_in_progress(closing.recording)) {
+        history.finish_recording(closing.recording,
+                                 closing.moved ? FinishRecordingOperation::Commit : FinishRecordingOperation::Cancel);
     }
 }
 

@@ -21,7 +21,9 @@ class Dragger;
 // passes through. A press on a handle starts a drag of the nearest Dragger,
 // moves move its target, and the release ends it, each firing the Dragger's
 // event; the records a drag uses are marked processed. One drag runs at a
-// time. SimulationThread only.
+// time. In edit mode a drag is one undo step, "Move", which closes at the
+// next dispatch after it ends: events are deferred, so what the ending
+// step's handlers move joins it. SimulationThread only.
 class DraggerWorld {
 public:
     void dispatch(DataModel& game, std::vector<InputRecord>& records);
@@ -36,6 +38,13 @@ private:
         DragStart start;
         Matrix4 start_transform = matrix4_identity();
         bool moved = false;
+        // The undo step this drag opened, or empty when it joined one already open.
+        std::string recording;
+    };
+    // A drag's undo step waiting to close, and whether the drag moved anything.
+    struct Closing {
+        std::string recording;
+        bool moved = false;
     };
 
     // The view to pick and drag in, or false when input should pass through.
@@ -46,10 +55,12 @@ private:
     bool begin(DataModel& game, const DraggerView& view, Vec2 point);
     void move(DataModel& game, const DraggerView& view, Vec2 point);
     void end(DataModel& game);
+    void close_step(DataModel& game);
     // True while the drag's Dragger is alive and still bound to its target.
     bool drag_holds(DataModel& game) const;
 
     std::optional<Drag> drag_;
+    std::optional<Closing> closing_;
     std::vector<InstanceId> scratch_;
 };
 

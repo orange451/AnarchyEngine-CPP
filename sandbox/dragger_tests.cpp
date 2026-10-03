@@ -459,3 +459,63 @@ TEST_CASE("DR19 the offset stays total since the drag began when Increment chang
     REQUIRE(close(drag.transform(drag.part).m[12], 3));
     drag.release(175, 100);
 }
+
+TEST_CASE("DR12 in edit mode a drag is one undo step, and a press with no motion is none", "[DR12]") {
+    DragRig drag;
+    drag.press(150, 100);
+    drag.release(150, 100);
+    drag.rig.frames(1);
+    REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
+    REQUIRE_FALSE(drag.rig.game.history().is_recording_in_progress());
+
+    drag.press(150, 100);
+    drag.move(160, 100);
+    drag.move(170, 100);
+    drag.release(170, 100);
+    drag.rig.frames(1);
+    REQUIRE_FALSE(drag.rig.game.history().is_recording_in_progress());
+    REQUIRE(drag.rig.game.history().can_undo().first);
+    REQUIRE(drag.rig.game.history().can_undo().second == "Move");
+    drag.rig.game.history().undo();
+    REQUIRE(close(drag.transform(drag.part).m[12], 0));
+    REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
+}
+
+TEST_CASE("DR13 in play a drag records no history", "[DR13]") {
+    DragRig drag;
+    drag.rig.game.capture_place();
+    drag.rig.game.start_simulation();
+    drag.press(150, 100);
+    drag.move(170, 100);
+    drag.release(170, 100);
+    drag.rig.frames(1);
+    REQUIRE(close(drag.transform(drag.part).m[12], 2));
+    REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
+    drag.rig.game.stop_simulation();
+    REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
+}
+
+TEST_CASE("DR20 what a Dragged handler moves joins the drag's undo step", "[DR20]") {
+    DragRig drag;
+    const InstanceId other = drag.add_part(drag.rig.game.scene_service("Workspace"), engine_core::matrix4_translation(0, 5, -10));
+    drag.rig.game.set_name(other, "Other");
+    drag.rig.game.history().end_gesture();
+    drag.rig.game.history().reset_waypoints();
+    drag.rig.runtime.run_chunk(R"(
+        local dragger = workspace:FindFirstChild("GameObject"):FindFirstChild("Dragger")
+        dragger.Dragged:Connect(function(handle, offset)
+            workspace.Other.Transform = Matrix4.new(Vector3.new(offset.X, 5, -10))
+        end)
+    )");
+    drag.rig.frames(1);
+    drag.press(150, 100);
+    drag.move(170, 100);
+    drag.release(170, 100);
+    drag.rig.frames(1);
+    INFO(drag.rig.runtime.last_error());
+    REQUIRE(close(drag.transform(other).m[12], 2));
+    drag.rig.game.history().undo();
+    REQUIRE(close(drag.transform(drag.part).m[12], 0));
+    REQUIRE(close(drag.transform(other).m[12], 0));
+    REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
+}

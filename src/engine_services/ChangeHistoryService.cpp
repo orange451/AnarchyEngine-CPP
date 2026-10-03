@@ -123,6 +123,7 @@ void ChangeHistoryService::push_or_coalesce(Mutation mutation) {
         }
     }
     list.push_back(std::move(mutation));
+    named_slots_stale_ = true;
 }
 
 namespace {
@@ -136,9 +137,9 @@ void add_record_slots(const AuthoredRecord& record, std::unordered_set<std::uint
     }
 }
 
-void add_slots(const std::vector<Mutation>& mutations, MutationKind kind, std::unordered_set<std::uint32_t>& out) {
+void add_slots(const std::vector<Mutation>& mutations, std::unordered_set<std::uint32_t>& out) {
     for (const Mutation& mutation : mutations) {
-        if (mutation.kind == kind) {
+        if (mutation.kind == MutationKind::CreateInstance || mutation.kind == MutationKind::DestroyInstance) {
             add_record_slots(mutation.record, out);
         }
     }
@@ -148,26 +149,30 @@ void add_slots(const std::vector<Mutation>& mutations, MutationKind kind, std::u
 
 std::unordered_set<std::uint32_t> ChangeHistoryService::revivable_slots() const {
     std::unordered_set<std::uint32_t> out;
-    for (const std::vector<Waypoint>* stack : {&edit_undo_, &session_undo_}) {
+    for (const std::vector<Waypoint>* stack : {&edit_undo_, &edit_redo_, &session_undo_, &session_redo_}) {
         for (const Waypoint& waypoint : *stack) {
-            add_slots(waypoint.mutations, MutationKind::DestroyInstance, out);
-        }
-    }
-    for (const std::vector<Waypoint>* stack : {&edit_redo_, &session_redo_}) {
-        for (const Waypoint& waypoint : *stack) {
-            add_slots(waypoint.mutations, MutationKind::CreateInstance, out);
+            add_slots(waypoint.mutations, out);
         }
     }
     if (recording_) {
-        add_slots(recording_->mutations, MutationKind::DestroyInstance, out);
+        add_slots(recording_->mutations, out);
     }
     return out;
+}
+
+bool ChangeHistoryService::names_slot(std::uint32_t slot) const {
+    if (named_slots_stale_) {
+        named_slots_ = revivable_slots();
+        named_slots_stale_ = false;
+    }
+    return named_slots_.count(slot) != 0;
 }
 
 void ChangeHistoryService::forget_core() {
     if (!recording_) {
         return;
     }
+    named_slots_stale_ = true;
     std::vector<Mutation>& list = recording_->mutations;
     list.erase(std::remove_if(list.begin(), list.end(),
                               [this](const Mutation& mutation) { return game_->core_holds(mutation.id); }),
@@ -219,6 +224,7 @@ void ChangeHistoryService::finish_recording(std::string id, FinishRecordingOpera
     }
     Recording recording = std::move(*recording_);
     recording_.reset();
+    named_slots_stale_ = true;
     if (op == FinishRecordingOperation::Cancel) {
         Waypoint inverse;
         inverse.mutations = std::move(recording.mutations);
@@ -269,6 +275,7 @@ void ChangeHistoryService::reset_waypoints() {
     edit_redo_.clear();
     session_undo_.clear();
     session_redo_.clear();
+    named_slots_stale_ = true;
 }
 
 void ChangeHistoryService::trim(std::vector<Waypoint>& stack) {
@@ -348,6 +355,7 @@ void ChangeHistoryService::drop_session() {
     }
     session_undo_.clear();
     session_redo_.clear();
+    named_slots_stale_ = true;
 }
 
 }  // namespace engine_core

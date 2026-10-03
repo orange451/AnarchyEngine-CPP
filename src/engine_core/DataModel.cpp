@@ -633,11 +633,14 @@ void DataModel::destroy(InstanceId id) {
         // A captured instance's slot waits for Stop, which brings it back there.
         const bool held_for_stop = state_->simulation_running && index < state_->place_slots.size() &&
                                    state_->place_slots[index];
-        // Undo brings back a recorded destroy, and redo a create that undo
-        // destroys, into this same slot. An unrecorded instance, such as one
-        // made in Core, must not be in it then, so the slot waits too.
+        // Undo or redo brings an instance history names back into this same
+        // slot, even when this destroy was not recorded. An unrecorded
+        // instance, such as one made in Core, must not be in it then, so the
+        // slot waits too.
         const bool held_for_history =
-            captured.has_value() || (state_->history != nullptr && state_->history->applying_undo_redo());
+            captured.has_value() ||
+            (state_->history != nullptr &&
+             (state_->history->applying_undo_redo() || state_->history->names_slot(index)));
         if (!held_for_stop) {
             (held_for_history ? state_->history_held : state_->free_list).push_back(index);
         }

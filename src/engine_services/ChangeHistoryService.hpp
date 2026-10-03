@@ -155,10 +155,15 @@ public:
     bool enabled() const { return enabled_; }
     // True while undo, redo, or a cancel is writing the place back.
     bool applying_undo_redo() const { return applying_ != 0; }
-    // The slots undo or redo would bring an instance back into: those of the
-    // destroys on the undo stacks and in the open recording, and of the creates
-    // on the redo stacks. Nothing else may be in them.
+    // The slots undo or redo may bring an instance back into: those of every
+    // create and destroy on the undo and redo stacks and in the open recording,
+    // since a step that undo or redo moves runs the other way next. An instance
+    // destroyed outside any recording still has its slot here. Nothing else
+    // may be in them.
     std::unordered_set<std::uint32_t> revivable_slots() const;
+    // Whether revivable_slots holds this slot. Kept between changes to history,
+    // so a destroy can ask it each time.
+    bool names_slot(std::uint32_t slot) const;
 
     // True when a mutator should capture: a recording is open, history is on,
     // and no undo is being applied.
@@ -218,6 +223,9 @@ private:
     std::vector<Waypoint> session_redo_;
     std::size_t max_waypoints_ = kMaxWaypoints;
     std::size_t max_bytes_ = kMaxHistoryBytes;
+    // revivable_slots as of the last change to the stacks or the open recording.
+    mutable std::unordered_set<std::uint32_t> named_slots_;
+    mutable bool named_slots_stale_ = true;
 };
 
 }  // namespace engine_core

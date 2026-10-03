@@ -688,3 +688,56 @@ TEST_CASE("H26 a ScopedRecording inside an open recording joins it and leaves it
     game.history().undo();
     REQUIRE(game.name(part.id()) == "Brick");
 }
+
+TEST_CASE("H27 redo brings back a created instance that a write outside any recording destroyed, into its own slot",
+          "[H27][history]") {
+    engine_core::Game game;
+    game.history().reset_waypoints();
+    begin_step(game, "Insert GameObject");
+    const engine_core::InstanceId id = make_part(game, "Brick").id();
+    end_step(game);
+
+    // As the command line does: a destroy and a create outside any recording.
+    game.destroy(id);
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    const engine_core::InstanceId other = folder.id();
+    game.set_parent(other, workspace_of(game));
+
+    // Undo finds nothing to take away; redo brings the instance back.
+    game.history().undo();
+    REQUIRE_FALSE(game.alive(id));
+    game.history().redo();
+    REQUIRE(game.alive(id));
+    REQUIRE(game.name(id) == "Brick");
+    REQUIRE(game.parent(id) == workspace_of(game));
+    REQUIRE(game.alive(other));
+    REQUIRE(engine_core::id_slot(other) != engine_core::id_slot(id));
+}
+
+TEST_CASE("H28 undo brings back a deleted instance that a write outside any recording destroyed again, into its own slot",
+          "[H28][history]") {
+    engine_core::Game game;
+    const engine_core::InstanceId id = make_part(game, "Brick").id();
+    game.history().reset_waypoints();
+    begin_step(game, "Delete");
+    game.destroy(id);
+    end_step(game);
+    game.history().undo();
+    REQUIRE(game.alive(id));
+
+    // As the command line does: a destroy and a create outside any recording.
+    game.destroy(id);
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    const engine_core::InstanceId other = folder.id();
+    game.set_parent(other, workspace_of(game));
+
+    // Redo finds nothing to delete; undo brings the instance back.
+    game.history().redo();
+    REQUIRE_FALSE(game.alive(id));
+    game.history().undo();
+    REQUIRE(game.alive(id));
+    REQUIRE(game.name(id) == "Brick");
+    REQUIRE(game.parent(id) == workspace_of(game));
+    REQUIRE(game.alive(other));
+    REQUIRE(engine_core::id_slot(other) != engine_core::id_slot(id));
+}

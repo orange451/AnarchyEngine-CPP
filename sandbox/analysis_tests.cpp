@@ -1756,6 +1756,23 @@ TEST_CASE("A44 a class registry change rechecks every script in the place once",
     REQUIRE(analysis.cached_modules() == 3);
 }
 
+TEST_CASE("A45 a renamed script shows its new name in the report", "[A45]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& broken = add_script(rig.game, "Before", "local x =\n");
+    settle(analysis);
+    std::ostringstream report;
+    analysis.print_report(report);
+    REQUIRE(report.str().rfind("Before | Error | Syntax", 0) == 0);
+
+    rig.game.set_name(broken.id(), "After");
+    settle(analysis);
+    std::ostringstream renamed;
+    analysis.print_report(renamed);
+    INFO(renamed.str());
+    REQUIRE(renamed.str().rfind("After | Error | Syntax", 0) == 0);
+}
+
 namespace {
 
 double settle_ms(engine_core::ScriptAnalysis& analysis) {

@@ -489,6 +489,9 @@ std::string module_name_of(InstanceId id) {
     return std::string(kModulePrefix) + std::to_string(id);
 }
 
+// What the report calls a script: its Name, or its class when it has none.
+const std::string& shown_name(const NodeSnap& node) { return node.name.empty() ? node.class_name : node.name; }
+
 std::optional<InstanceId> instance_of_module(std::string_view name) {
     if (name.substr(0, kModulePrefix.size()) != kModulePrefix) {
         return std::nullopt;
@@ -597,7 +600,7 @@ struct SourceFileResolver : Luau::FileResolver {
         }
         if (const std::optional<InstanceId> id = instance_of_module(name); id && world != nullptr) {
             if (const NodeSnap* node = world->find(*id)) {
-                return node->name.empty() ? node->class_name : node->name;
+                return shown_name(*node);
             }
         }
         return name;
@@ -2201,7 +2204,7 @@ void prepare_script(const WorkerEnv& env, const WorldSnap& world, CheckInput& in
     if (self == nullptr || !self->lua) {
         return;
     }
-    input.name = self->name.empty() ? self->class_name : self->name;
+    input.name = shown_name(*self);
     input.source = self->source;
     input.module_name = module_name_of(input.id);
 
@@ -2494,8 +2497,10 @@ void sync_place(PlaceChecker& checker, const std::shared_ptr<const WorldSnap>& w
             }
         }
     }
+    // A tree change, not an edit: the edited script itself is checked anyway,
+    // and an edit elsewhere cannot fix what made a check fail.
     const bool changed = !diff.parents.empty() || !diff.moved.empty() || !diff.added_scripts.empty() ||
-                         !diff.removed_scripts.empty() || !diff.edited_scripts.empty();
+                         !diff.removed_scripts.empty();
     {
         std::lock_guard<std::mutex> lock(checker.reached_mu);
         for (InstanceId id : diff.removed_scripts) {
@@ -3173,7 +3178,7 @@ void ScriptAnalysis::run_place() {
                     input.id = entry.first;
                     input.generation = entry.second;
                     if (const NodeSnap* node = world != nullptr ? world->find(entry.first) : nullptr) {
-                        input.name = node->name.empty() ? node->class_name : node->name;
+                        input.name = shown_name(*node);
                         input.source = node->source;
                     }
                     publish_failure(host, &input, failure);
@@ -3380,7 +3385,7 @@ void ScriptAnalysis::capture_tree(bool tree_changed) {
         // A rename the place checker does not recheck still shows in the report.
         for (auto& entry : state_->published) {
             if (const NodeSnap* node = world->find(entry.first)) {
-                entry.second.name = node->name.empty() ? node->class_name : node->name;
+                entry.second.name = shown_name(*node);
             }
         }
     }
@@ -3598,6 +3603,12 @@ void ScriptAnalysis::pump() {
             }
             State::Record& record = state_->published[finished.id];
             record.name = std::move(finished.name);
+            // A batch can check a tree older than the newest authored one, or a play tree.
+            const NodeSnap* node =
+                state_->authored_world != nullptr ? state_->authored_world->find(finished.id) : nullptr;
+            if (node != nullptr) {
+                record.name = shown_name(*node);
+            }
             record.source = std::move(finished.source);
             record.diagnostics = std::move(finished.diagnostics);
             record.reached = std::move(finished.reached);

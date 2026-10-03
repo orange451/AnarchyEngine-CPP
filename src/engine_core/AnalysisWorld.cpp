@@ -4,6 +4,8 @@
 #include "LuaSource.hpp"
 #include "ModuleScript.hpp"
 
+#include <algorithm>
+
 namespace engine_core {
 namespace analysis {
 
@@ -91,7 +93,32 @@ std::shared_ptr<WorldSnap> capture_world(DataModel& game) {
             node.children.push_back(child);
         }
     }
+    keep_place_only(*world);
     return world;
+}
+
+void keep_place_only(WorldSnap& world) {
+    std::unordered_set<InstanceId> placed;
+    std::vector<InstanceId> stack;
+    if (world.find(world.root) != nullptr) {
+        stack.push_back(world.root);
+    }
+    while (!stack.empty()) {
+        const InstanceId id = stack.back();
+        stack.pop_back();
+        const NodeSnap* node = world.find(id);
+        if (node == nullptr || !placed.insert(id).second) {
+            continue;
+        }
+        stack.insert(stack.end(), node->children.begin(), node->children.end());
+    }
+    if (placed.size() == world.nodes.size()) {
+        return;
+    }
+    world.nodes.erase(std::remove_if(world.nodes.begin(), world.nodes.end(),
+                                     [&placed](const NodeSnap& node) { return placed.count(node.id) == 0; }),
+                      world.nodes.end());
+    world.reindex();
 }
 
 std::shared_ptr<WorldSnap> world_from_nodes(const std::vector<LuaNode>& nodes) {

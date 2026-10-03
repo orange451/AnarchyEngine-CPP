@@ -14,6 +14,7 @@ using engine_core::InstanceId;
 using engine_core::LuaNode;
 using engine_core::analysis::TreeDiff;
 using engine_core::analysis::diff_worlds;
+using engine_core::analysis::keep_place_only;
 using engine_core::analysis::world_from_nodes;
 
 constexpr InstanceId kNone = 0xffffffffu;
@@ -113,4 +114,36 @@ TEST_CASE("AW8 a source edit lists the script and nothing else", "[AW8]") {
     REQUIRE(diff.edited_scripts == std::vector<InstanceId>{4});
     REQUIRE(diff.parents.empty());
     REQUIRE(diff.moved.empty());
+}
+
+TEST_CASE("AW9 a detached subtree is out of the place, and back in when reattached", "[AW9]") {
+    // Props(3) is destroyed: Crate(5) and a script under it, Inner(6), are left
+    // parentless or under a parentless node, outside the place.
+    std::vector<LuaNode> grouped = base();
+    grouped.push_back(node(6, 3, "Inner", "ModuleScript", "return 1\n"));
+    std::vector<LuaNode> detached = grouped;
+    detached.erase(detached.begin() + 2);  // Props
+    at(detached, 5).parent = kNone;
+    at(detached, 6).parent = 7;
+    detached.push_back(node(7, kNone, "Loose", "Folder"));
+    auto placed = world_from_nodes(grouped);
+    keep_place_only(*placed);
+    auto apart = world_from_nodes(detached);
+    keep_place_only(*apart);
+    REQUIRE(placed->nodes.size() == 6);
+    REQUIRE(apart->nodes.size() == 3);
+    REQUIRE(apart->find(5) == nullptr);
+    REQUIRE(apart->find(6) == nullptr);
+    REQUIRE(apart->find(7) == nullptr);
+    REQUIRE(apart->find(4) != nullptr);
+
+    const TreeDiff gone = diff_worlds(*placed, *apart);
+    REQUIRE(gone.removed_scripts == std::vector<InstanceId>{6});
+    REQUIRE(gone.moved == set_of({3, 5, 6}));
+    REQUIRE(gone.parents == set_of({2, 3}));
+
+    const TreeDiff back = diff_worlds(*apart, *placed);
+    REQUIRE(back.added_scripts == std::vector<InstanceId>{6});
+    REQUIRE(back.removed_scripts.empty());
+    REQUIRE(back.parents == set_of({2, 3}));
 }

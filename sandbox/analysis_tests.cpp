@@ -1396,3 +1396,196 @@ TEST_CASE("A40 a script destroyed before a batch reaches it as a dependent is ne
     REQUIRE(analysis.diagnostics(user).empty());
     REQUIRE(analysis.analyzed_source(module.id()) == std::optional<std::string>("return { value = 2 }\n"));
 }
+
+TEST_CASE("A41 a module's instance types still match after a rename it does not reach", "[A41]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::GameObject& door = rig.game.create<engine_core::GameObject>();
+    rig.game.set_name(door.id(), "Door");
+    rig.game.set_parent(door.id(), workspace_of(rig.game));
+    engine_core::Folder& props = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(props.id(), "Props");
+    rig.game.set_parent(props.id(), workspace_of(rig.game));
+    engine_core::GameObject& crate = rig.game.create<engine_core::GameObject>();
+    rig.game.set_name(crate.id(), "Crate");
+    rig.game.set_parent(crate.id(), props.id());
+    engine_core::ModuleScript& doors =
+        add_module(rig.game, "Doors", "--!strict\nlocal Doors = {}\nDoors.main = workspace.Door\nreturn Doors\n");
+    engine_core::Script& user = add_script(rig.game, "User",
+                                           "--!strict\n"
+                                           "local Doors = require(workspace.Doors)\n"
+                                           "local door: typeof(workspace.Door) = Doors.main\n"
+                                           "print(door)\n");
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(user.id())));
+    REQUIRE(analysis.diagnostics(user.id()).empty());
+    const std::uint64_t doors_checks = analysis.checks(doors.id());
+
+    // Inside Props, which neither script reached: Doors keeps its cached types,
+    // and User is checked again against them.
+    rig.game.set_name(crate.id(), "Box");
+    user.set_source(user.source() + "\n");
+    settle(analysis);
+    REQUIRE(analysis.checks(doors.id()) == doors_checks);
+    INFO(dump(analysis.diagnostics(user.id())));
+    REQUIRE(analysis.diagnostics(user.id()).empty());
+}
+
+TEST_CASE("A42 a change rechecks only the scripts it can affect", "[A42]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    const engine_core::InstanceId workspace = workspace_of(rig.game);
+    const auto folder = [&rig](const char* name, engine_core::InstanceId parent) -> engine_core::Folder& {
+        engine_core::Folder& made = rig.game.create<engine_core::Folder>();
+        rig.game.set_name(made.id(), name);
+        rig.game.set_parent(made.id(), parent);
+        return made;
+    };
+    const auto part = [&rig](const char* name, engine_core::InstanceId parent) -> engine_core::GameObject& {
+        engine_core::GameObject& made = rig.game.create<engine_core::GameObject>();
+        rig.game.set_name(made.id(), name);
+        rig.game.set_parent(made.id(), parent);
+        return made;
+    };
+    engine_core::Folder& props = folder("Props", workspace);
+    engine_core::GameObject& crate = part("Crate", props.id());
+    engine_core::Folder& lights = folder("Lights", workspace);
+    engine_core::GameObject& lamp = part("Lamp", lights.id());
+    engine_core::Folder& extra = folder("Extra", workspace);
+    engine_core::ModuleScript& util = add_module(rig.game, "Util",
+                                                 "local Util = {}\n"
+                                                 "function Util.add(a: number, b: number): number\n"
+                                                 "    return a + b\n"
+                                                 "end\n"
+                                                 "return Util\n");
+    engine_core::Script& uses_util =
+        add_script(rig.game, "UsesUtil", "--!strict\nlocal Util = require(workspace.Util)\nprint(Util.add(1, 2))\n");
+    engine_core::Script& uses_props =
+        add_script(rig.game, "UsesProps", "--!strict\nlocal crate = workspace.Props.Crate\nprint(crate)\n");
+    engine_core::Script& uses_lamp = add_script(rig.game, "UsesLamp",
+                                                "--!strict\n"
+                                                "local lights = workspace.Lights\n"
+                                                "local function show(folder: typeof(lights))\n"
+                                                "    print(folder.Lamp)\n"
+                                                "end\n"
+                                                "show(lights)\n");
+    engine_core::Script& plain = add_script(rig.game, "Plain", "print(\"hi\")\n");
+    settle(analysis);
+    const std::vector<engine_core::InstanceId> watched{util.id(), uses_util.id(), uses_props.id(), uses_lamp.id(),
+                                                       plain.id()};
+    for (engine_core::InstanceId id : watched) {
+        INFO(rig.game.name(id) << "\n" << dump(analysis.diagnostics(id)));
+        REQUIRE(analysis.diagnostics(id).empty());
+    }
+    const auto counts = [&] {
+        std::vector<std::uint64_t> out;
+        for (engine_core::InstanceId id : watched) {
+            out.push_back(analysis.checks(id));
+        }
+        return out;
+    };
+    // Which of util, uses_util, uses_props, uses_lamp, plain were checked again since `before`.
+    const auto rechecked = [&](const std::vector<std::uint64_t>& before) {
+        const std::vector<std::uint64_t> now = counts();
+        std::vector<bool> out;
+        for (std::size_t i = 0; i < now.size(); ++i) {
+            out.push_back(now[i] != before[i]);
+        }
+        return out;
+    };
+    const std::vector<std::uint64_t> before = counts();
+
+    SECTION("editing a module rechecks what requires it, and nothing else") {
+        // Luau does not flag an extra argument, so the edit changes a parameter's type.
+        util.set_source("local Util = {}\nfunction Util.add(a: number, b: string): number\n    return a\nend\nreturn Util\n");
+        settle(analysis);
+        REQUIRE(rechecked(before) == std::vector<bool>{true, true, false, false, false});
+        REQUIRE_FALSE(analysis.diagnostics(uses_util.id()).empty());
+    }
+    SECTION("a rename inside a folder rechecks only the scripts that reached the folder") {
+        rig.game.set_name(crate.id(), "Box");
+        settle(analysis);
+        REQUIRE(rechecked(before) == std::vector<bool>{false, false, true, false, false});
+        REQUIRE_FALSE(analysis.diagnostics(uses_props.id()).empty());
+    }
+    SECTION("a child reached through a parameter is followed both ways") {
+        rig.game.set_name(lamp.id(), "Bulb");
+        settle(analysis);
+        REQUIRE(rechecked(before) == std::vector<bool>{false, false, false, true, false});
+        REQUIRE_FALSE(analysis.diagnostics(uses_lamp.id()).empty());
+        rig.game.set_name(lamp.id(), "Lamp");
+        settle(analysis);
+        REQUIRE(analysis.diagnostics(uses_lamp.id()).empty());
+    }
+    SECTION("a property change rechecks nothing") {
+        crate.set_position(engine_core::Vec3{1.f, 2.f, 3.f});
+        settle(analysis);
+        REQUIRE(rechecked(before) == std::vector<bool>{false, false, false, false, false});
+    }
+    SECTION("a script added where nothing looked checks only itself") {
+        engine_core::Script& added = add_script(rig.game, extra.id(), "Added", "print(1)\n");
+        settle(analysis);
+        REQUIRE(rechecked(before) == std::vector<bool>{false, false, false, false, false});
+        REQUIRE(analysis.checks(added.id()) >= 1);
+    }
+    SECTION("destroying a module rechecks what required it") {
+        rig.game.destroy(util.id());
+        settle(analysis);
+        REQUIRE(rechecked(before)[1]);
+        REQUIRE_FALSE(rechecked(before)[4]);
+        REQUIRE_FALSE(analysis.diagnostics(uses_util.id()).empty());
+        REQUIRE_FALSE(analysis.analyzed_source(util.id()).has_value());
+    }
+    SECTION("destroying a folder of scripts drops them and rechecks what required them") {
+        engine_core::Folder& group = folder("Group", extra.id());
+        engine_core::ModuleScript& inner = add_module(rig.game, "Inner", "return { value = 1 }\n");
+        rig.game.set_parent(inner.id(), group.id());
+        engine_core::Script& uses_inner = add_script(rig.game, extra.id(), "UsesInner",
+                                                     "--!strict\nlocal Inner = require(script.Parent.Group.Inner)\n"
+                                                     "print(Inner.value)\n");
+        settle(analysis);
+        REQUIRE(analysis.diagnostics(uses_inner.id()).empty());
+        const std::vector<std::uint64_t> grouped = counts();
+        rig.game.destroy(group.id());
+        settle(analysis);
+        REQUIRE_FALSE(analysis.analyzed_source(inner.id()).has_value());
+        REQUIRE_FALSE(analysis.diagnostics(uses_inner.id()).empty());
+        REQUIRE(rechecked(grouped) == std::vector<bool>{false, false, false, false, false});
+    }
+    SECTION("undoing the destroy of a folder of scripts checks them again") {
+        engine_core::Folder& group = folder("Group", extra.id());
+        engine_core::ModuleScript& inner = add_module(rig.game, "Inner", "return { value = 1 }\n");
+        rig.game.set_parent(inner.id(), group.id());
+        engine_core::Script& uses_inner = add_script(rig.game, extra.id(), "UsesInner",
+                                                     "--!strict\nlocal Inner = require(script.Parent.Group.Inner)\n"
+                                                     "print(Inner.value)\n");
+        settle(analysis);
+        REQUIRE(analysis.diagnostics(uses_inner.id()).empty());
+        begin_step(rig.game, "Delete");
+        rig.game.destroy(group.id());
+        end_step(rig.game);
+        settle(analysis);
+        REQUIRE_FALSE(analysis.analyzed_source(inner.id()).has_value());
+        REQUIRE_FALSE(analysis.diagnostics(uses_inner.id()).empty());
+        const std::vector<std::uint64_t> destroyed = counts();
+        rig.game.history().undo();
+        settle(analysis);
+        REQUIRE(rig.game.parent(inner.id()) == group.id());
+        REQUIRE(analysis.analyzed_source(inner.id()).has_value());
+        INFO(dump(analysis.diagnostics(uses_inner.id())));
+        REQUIRE(analysis.diagnostics(uses_inner.id()).empty());
+        REQUIRE(rechecked(destroyed) == std::vector<bool>{false, false, false, false, false});
+    }
+    SECTION("undoing a rename rechecks what the rename did") {
+        begin_step(rig.game, "Rename");
+        rig.game.set_name(crate.id(), "Box");
+        end_step(rig.game);
+        settle(analysis);
+        REQUIRE_FALSE(analysis.diagnostics(uses_props.id()).empty());
+        const std::vector<std::uint64_t> renamed = counts();
+        rig.game.history().undo();
+        settle(analysis);
+        REQUIRE(rechecked(renamed) == std::vector<bool>{false, false, true, false, false});
+        REQUIRE(analysis.diagnostics(uses_props.id()).empty());
+    }
+}

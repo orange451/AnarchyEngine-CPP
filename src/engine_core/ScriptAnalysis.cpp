@@ -87,6 +87,8 @@ struct Finished {
     std::vector<Diagnostic> diagnostics;
     std::vector<InstanceId> requires;
     std::vector<InstanceId> reached;
+    // The script left the place: pump() drops what it published instead.
+    bool dropped = false;
 };
 
 const char* severity_name(Severity severity) {
@@ -284,56 +286,95 @@ std::optional<Luau::TypeId> class_type(const Luau::Scope& scope, const std::stri
     return type;
 }
 
+// A new extern type for the instance, extending its class, tagged with its id.
+void add_instance_type(PlaceTypes& place, const Luau::Scope& globals, const NodeSnap& node) {
+    std::optional<Luau::TypeId> base = class_type(globals, node.class_name);
+    if (!base) {
+        base = class_type(globals, "DataModel");
+    }
+    if (!base) {
+        return;
+    }
+    const Luau::ExternType* base_class = Luau::get<Luau::ExternType>(*base);
+    place.types[node.id] = place.arena.addType(Luau::ExternType{base_class->name, {}, *base, std::nullopt, {},
+                                                                std::make_shared<InstanceTag>(node.id), "@anarchy",
+                                                                std::nullopt});
+}
+
+// The instance's children and Parent as its type's fields, from place.world.
+// The fields are rewritten, never the type: cached modules hold it.
+void fill_instance_props(PlaceTypes& place, InstanceId id) {
+    const NodeSnap* node = place.world->find(id);
+    const std::optional<Luau::TypeId> own = place.find(id);
+    if (node == nullptr || !own) {
+        return;
+    }
+    Luau::ExternType* type = Luau::getMutable<Luau::ExternType>(*own);
+    const Luau::ExternType* base_class = Luau::get<Luau::ExternType>(*type->parent);
+    type->props.clear();
+    for (InstanceId child : node->children) {
+        const NodeSnap* child_node = place.world->find(child);
+        const std::optional<Luau::TypeId> child_type = place.find(child);
+        if (child_node == nullptr || !child_type) {
+            continue;
+        }
+        const std::string& name = child_node->name;
+        if (name.empty() || type->props.count(name) != 0 || Luau::lookupExternTypeProp(base_class, name) != nullptr) {
+            continue;
+        }
+        type->props[name] = Luau::Property::readonly(*child_type);
+    }
+    const std::optional<Luau::TypeId> parent =
+        node->parent != DataModel::kNoParent ? place.find(node->parent) : std::nullopt;
+    if (!parent) {
+        return;
+    }
+    const Luau::Property* declared = Luau::lookupExternTypeProp(base_class, "Parent");
+    if (declared != nullptr && declared->writeTy) {
+        type->props["Parent"] = Luau::Property::rw(*parent, *declared->writeTy);
+    } else {
+        type->props["Parent"] = Luau::Property::readonly(*parent);
+    }
+}
+
 std::unique_ptr<PlaceTypes> build_place_types(const Luau::Scope& globals, std::shared_ptr<const WorldSnap> world) {
     auto place = std::make_unique<PlaceTypes>();
     place->world = std::move(world);
-    std::unordered_map<InstanceId, const NodeSnap*> nodes;
     for (const NodeSnap& node : place->world->nodes) {
-        nodes[node.id] = &node;
-        std::optional<Luau::TypeId> base = class_type(globals, node.class_name);
-        if (!base) {
-            base = class_type(globals, "DataModel");
-        }
-        if (!base) {
-            continue;
-        }
-        const Luau::ExternType* base_class = Luau::get<Luau::ExternType>(*base);
-        place->types[node.id] = place->arena.addType(Luau::ExternType{base_class->name, {}, *base, std::nullopt, {},
-                                                                      std::make_shared<InstanceTag>(node.id), "@anarchy",
-                                                                      std::nullopt});
+        add_instance_type(*place, globals, node);
     }
     for (const NodeSnap& node : place->world->nodes) {
-        const std::optional<Luau::TypeId> own = place->find(node.id);
-        if (!own) {
-            continue;
-        }
-        Luau::ExternType* type = Luau::getMutable<Luau::ExternType>(*own);
-        const Luau::ExternType* base_class = Luau::get<Luau::ExternType>(*type->parent);
-        for (InstanceId child : node.children) {
-            const auto child_node = nodes.find(child);
-            const std::optional<Luau::TypeId> child_type = place->find(child);
-            if (child_node == nodes.end() || !child_type) {
-                continue;
-            }
-            const std::string& name = child_node->second->name;
-            if (name.empty() || type->props.count(name) != 0 || Luau::lookupExternTypeProp(base_class, name) != nullptr) {
-                continue;
-            }
-            type->props[name] = Luau::Property::readonly(*child_type);
-        }
-        const std::optional<Luau::TypeId> parent =
-            node.parent != DataModel::kNoParent ? place->find(node.parent) : std::nullopt;
-        if (!parent) {
-            continue;
-        }
-        const Luau::Property* declared = Luau::lookupExternTypeProp(base_class, "Parent");
-        if (declared != nullptr && declared->writeTy) {
-            type->props["Parent"] = Luau::Property::rw(*parent, *declared->writeTy);
-        } else {
-            type->props["Parent"] = Luau::Property::readonly(*parent);
-        }
+        fill_instance_props(*place, node.id);
     }
     return place;
+}
+
+// Brings the place's types to `world` between batches. New instances get
+// types; instances the diff names get their fields rewritten; a destroyed one
+// keeps its type with no fields, since cached modules may still hold it. An
+// instance back in the place, after an undo or a detached folder reattached,
+// takes up the type it had.
+void update_place_types(PlaceTypes& place, const Luau::Scope& globals, std::shared_ptr<const WorldSnap> world,
+                        const TreeDiff& diff) {
+    const std::shared_ptr<const WorldSnap> before = std::move(place.world);
+    place.world = std::move(world);
+    std::vector<InstanceId> refill(diff.parents.begin(), diff.parents.end());
+    refill.insert(refill.end(), diff.moved.begin(), diff.moved.end());
+    for (const NodeSnap& node : place.world->nodes) {
+        if (place.types.count(node.id) == 0) {
+            add_instance_type(place, globals, node);
+            refill.push_back(node.id);
+        } else if (before == nullptr || before->find(node.id) == nullptr) {
+            refill.push_back(node.id);
+        }
+    }
+    for (InstanceId id : refill) {
+        if (place.world->find(id) != nullptr) {
+            fill_instance_props(place, id);
+        } else if (const std::optional<Luau::TypeId> type = place.find(id)) {
+            Luau::getMutable<Luau::ExternType>(*type)->props.clear();
+        }
+    }
 }
 
 std::optional<InstanceId> tagged_instance(Luau::TypeId type) {
@@ -575,8 +616,9 @@ struct WorkerEnv {
     const WorldSnap* world = nullptr;
     // The snapshot the frontend's cached modules were checked against.
     std::shared_ptr<const WorldSnap> checked_world;
-    // Built from checked_world. Every script is marked dirty when it is
-    // replaced, so no cached module still uses the old one's types.
+    // The editor checker builds it from checked_world and marks every script
+    // dirty when it is replaced, so no cached module still uses the old one's
+    // types. The place checker keeps one and updates it in place (sync_place).
     std::unique_ptr<PlaceTypes> place;
     std::shared_ptr<Luau::MagicFunction> find_child;
     std::shared_ptr<Luau::MagicFunction> service_result;
@@ -2300,7 +2342,83 @@ struct PlaceChecker {
     // Each script's reached set from its last check. Written from pool threads.
     std::mutex reached_mu;
     std::unordered_map<InstanceId, std::vector<InstanceId>> reached;
+    // The tree its cached modules and place types were checked against.
+    std::shared_ptr<const WorldSnap> last_world;
 };
+
+// Brings the place checker to `world` and adds to `names` every module the
+// change can affect: scripts added or edited, and scripts whose last check
+// reached an instance the diff names. A script that left the place leaves the
+// cache and goes in `removed`, and what required it is added.
+void sync_place(PlaceChecker& checker, const std::shared_ptr<const WorldSnap>& world,
+                std::unordered_set<std::string>& names, std::vector<InstanceId>& removed) {
+    WorkerEnv& env = *checker.env;
+    // A place with no root says nothing about the tree.
+    if (world->nodes.empty() || (checker.last_world == world && env.place != nullptr)) {
+        return;
+    }
+    // The first tree, or a new frontend after a registry change: every script
+    // is checked against new types. Scripts gone since the last tree are still
+    // dropped.
+    if (checker.last_world == nullptr || env.place == nullptr) {
+        if (checker.last_world != nullptr) {
+            for (const NodeSnap& node : checker.last_world->nodes) {
+                if (node.lua && world->find(node.id) == nullptr) {
+                    removed.push_back(node.id);
+                }
+            }
+            std::lock_guard<std::mutex> lock(checker.reached_mu);
+            for (InstanceId id : removed) {
+                checker.reached.erase(id);
+            }
+        }
+        env.place = build_place_types(*env.frontend->globals.globalScope, world);
+        for (const NodeSnap& node : world->nodes) {
+            if (node.lua) {
+                names.insert(module_name_of(node.id));
+            }
+        }
+        checker.last_world = world;
+        return;
+    }
+    const TreeDiff diff = diff_worlds(*checker.last_world, *world);
+    update_place_types(*env.place, *env.frontend->globals.globalScope, world, diff);
+    for (InstanceId id : diff.added_scripts) {
+        names.insert(module_name_of(id));
+    }
+    for (InstanceId id : diff.edited_scripts) {
+        names.insert(module_name_of(id));
+    }
+    {
+        std::lock_guard<std::mutex> lock(checker.reached_mu);
+        for (InstanceId id : diff.removed_scripts) {
+            checker.reached.erase(id);
+        }
+        for (const auto& entry : checker.reached) {
+            for (InstanceId id : entry.second) {
+                if (diff.parents.count(id) != 0 || diff.moved.count(id) != 0) {
+                    names.insert(module_name_of(entry.first));
+                    break;
+                }
+            }
+        }
+    }
+    std::vector<Luau::ModuleName> gone;
+    for (InstanceId id : diff.removed_scripts) {
+        const std::string name = module_name_of(id);
+        std::unordered_set<std::string> dependents;
+        add_dependents(*env.frontend, name, dependents);
+        dependents.erase(name);
+        names.insert(dependents.begin(), dependents.end());
+        gone.push_back(name);
+        removed.push_back(id);
+    }
+    for (const Luau::ModuleName& name : gone) {
+        names.erase(name);
+    }
+    env.frontend->clearModules(gone);
+    checker.last_world = world;
+}
 
 // The scripts a batch checks, each with its generation when the batch took it.
 using Claimed = std::unordered_map<InstanceId, std::uint64_t>;
@@ -2311,6 +2429,8 @@ struct BatchHost {
     std::function<std::optional<std::uint64_t>(InstanceId)> claim;
     // Hands one script's result to pump(). Any thread.
     std::function<void(Finished)> publish;
+    // Tells pump() these scripts left the place, so what they published goes.
+    std::function<void(const std::vector<InstanceId>&)> drop;
 };
 
 Finished finished_from(const CheckInput& input) {
@@ -2343,16 +2463,24 @@ void run_batch(PlaceChecker& checker, AnalysisPool& pool, const std::shared_ptr<
                Claimed& claimed, const std::shared_ptr<Luau::FrontendCancellationToken>& cancel,
                const BatchHost& host) {
     WorkerEnv& env = *checker.env;
-    sync_world(env, world, true);
-
-    // Every module the batch changes: the scripts taken, and what requires them.
+    // Every module the batch changes: the scripts taken, those the tree change
+    // reaches, and what requires each of them.
     std::unordered_set<std::string> names;
+    std::vector<InstanceId> removed;
+    sync_place(checker, world, names, removed);
+    if (!removed.empty()) {
+        host.drop(removed);
+    }
     for (const auto& entry : claimed) {
-        add_dependents(*env.frontend, module_name_of(entry.first), names);
+        names.insert(module_name_of(entry.first));
+    }
+    std::unordered_set<std::string> affected;
+    for (const std::string& name : names) {
+        add_dependents(*env.frontend, name, affected);
     }
     std::vector<CheckInput> inputs;
-    inputs.reserve(names.size());
-    for (const std::string& name : names) {
+    inputs.reserve(affected.size());
+    for (const std::string& name : affected) {
         const std::optional<InstanceId> id = instance_of_module(name);
         const NodeSnap* node = id ? world->find(*id) : nullptr;
         if (node == nullptr || !node->lua) {
@@ -2394,6 +2522,11 @@ void run_batch(PlaceChecker& checker, AnalysisPool& pool, const std::shared_ptr<
     for (const CheckInput& input : inputs) {
         by_id.emplace(input.id, &input);
         if (!input.type_check) {
+            // Its result reads no types, so no tree change can alter it.
+            {
+                std::lock_guard<std::mutex> lock(checker.reached_mu);
+                checker.reached.erase(input.id);
+            }
             host.publish(finished_from(input));
             continue;
         }
@@ -2517,7 +2650,7 @@ void lint_rule_names(std::vector<std::string>& out) {
 
 struct ScriptAnalysis::State {
     std::mutex mu;
-    // Set by note_world_changed. pump() turns it into one invalidate_all.
+    // Set by note_world_changed. pump() turns it into one note_tree().
     std::atomic<bool> world_stale{false};
     std::condition_variable cv;
     std::mutex start_mu;
@@ -2567,6 +2700,11 @@ struct ScriptAnalysis::State {
     // requires them, and the batch's cancel.
     std::unordered_set<InstanceId> in_batch;
     std::shared_ptr<Luau::FrontendCancellationToken> batch_cancel;
+    // A tree change the place checker has not taken yet, and when it is due.
+    bool tree_pending = false;
+    std::chrono::steady_clock::time_point tree_due{};
+    // The running batch took a tree change, so it may yet take any script.
+    bool tree_in_batch = false;
     // Results pump() published, per script.
     std::unordered_map<InstanceId, std::uint64_t> checks;
     // Scripts remove() dropped and nothing has scheduled since. A batch's tree
@@ -2660,6 +2798,7 @@ void ScriptAnalysis::shutdown() {
         state_->stop = true;
         state_->enabled = false;
         state_->pending.clear();
+        state_->tree_pending = false;
         if (state_->batch_cancel) {
             state_->batch_cancel->cancel();
         }
@@ -2758,13 +2897,30 @@ void ScriptAnalysis::run_place() {
         }
         state_->results.push_back(std::move(finished));
     };
+    host.drop = [this](const std::vector<InstanceId>& ids) {
+        std::lock_guard<std::mutex> lock(state_->mu);
+        if (state_->stop || !state_->enabled) {
+            return;
+        }
+        for (InstanceId id : ids) {
+            // At the script's generation now, so pump() keeps it in order with
+            // its results: a check after it, once the script is back, wins.
+            Finished finished;
+            finished.id = id;
+            finished.generation = state_->generations[id];
+            finished.dropped = true;
+            state_->results.push_back(std::move(finished));
+        }
+    };
     while (true) {
         Claimed claimed;
+        bool tree = false;
         std::shared_ptr<const WorldSnap> world;
         std::shared_ptr<Luau::FrontendCancellationToken> cancel;
         {
             std::unique_lock<std::mutex> lock(state_->mu);
-            state_->cv.wait(lock, [&] { return state_->stop || !state_->pending.empty(); });
+            state_->cv.wait(lock,
+                            [&] { return state_->stop || !state_->pending.empty() || state_->tree_pending; });
             if (state_->stop) {
                 return;
             }
@@ -2780,10 +2936,19 @@ void ScriptAnalysis::run_place() {
                     ++it;
                 }
             }
-            if (claimed.empty()) {
+            if (state_->tree_pending) {
+                if (state_->tree_due <= now) {
+                    tree = true;
+                    state_->tree_pending = false;
+                } else {
+                    next = std::min(next, state_->tree_due);
+                }
+            }
+            if (claimed.empty() && !tree) {
                 state_->cv.wait_until(lock, next);
                 continue;
             }
+            state_->tree_in_batch = tree;
             world = state_->latest_world;
             cancel = std::make_shared<Luau::FrontendCancellationToken>();
             state_->batch_cancel = cancel;
@@ -2794,6 +2959,9 @@ void ScriptAnalysis::run_place() {
         std::string failure_text;
         try {
             if (checker.env->revision != lua_registry_revision()) {
+                // The new frontend has no place types, so sync_place checks the
+                // whole place once. last_world stays only so the scripts gone
+                // since it are still dropped.
                 checker.env = std::make_unique<WorkerEnv>();
                 checker.env->init();
                 std::lock_guard<std::mutex> lock(checker.reached_mu);
@@ -2835,6 +3003,7 @@ void ScriptAnalysis::run_place() {
         for (const auto& entry : claimed) {
             state_->in_batch.erase(entry.first);
         }
+        state_->tree_in_batch = false;
         if (state_->batch_cancel == cancel) {
             state_->batch_cancel.reset();
         }
@@ -2923,6 +3092,7 @@ void ScriptAnalysis::set_enabled(bool enabled) {
         changed = true;
         if (!enabled) {
             state_->pending.clear();
+            state_->tree_pending = false;
             if (state_->batch_cancel) {
                 state_->batch_cancel->cancel();
             }
@@ -2985,6 +3155,26 @@ void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
         job.generation = generation;
         state_->pending[id] = Pending{job, ready_at};
     }
+    state_->cv.notify_all();
+}
+
+void ScriptAnalysis::note_tree() {
+    {
+        std::lock_guard<std::mutex> lock(state_->mu);
+        if (!state_->enabled || state_->stop) {
+            return;
+        }
+    }
+    const std::uint64_t seq = state_->world_seq.fetch_add(1) + 1;
+    const std::shared_ptr<WorldSnap> world = capture_world(game_);
+    ensure_worker();
+    std::lock_guard<std::mutex> lock(state_->mu);
+    if (!state_->enabled || state_->stop) {
+        return;
+    }
+    state_->adopt(world, seq);
+    state_->tree_pending = true;
+    state_->tree_due = std::chrono::steady_clock::now() + kDebounce;
     state_->cv.notify_all();
 }
 
@@ -3108,13 +3298,13 @@ std::vector<Diagnostic> ScriptAnalysis::get_diagnostics_for_line(InstanceId scri
 void ScriptAnalysis::note_world_changed() { state_->world_stale.store(true, std::memory_order_relaxed); }
 
 void ScriptAnalysis::pump() {
-    // A tree change rechecks every script once, however many changes came in.
-    // Only while stopped: play changes are not the authored tree. The UI
-    // thread pumps outside a step, so the read lock is short and uncontended.
+    // A tree change is diffed once, however many changes came in. Only while
+    // stopped: play changes are not the authored tree. The UI thread pumps
+    // outside a step, so the read lock is short and uncontended.
     if (state_->world_stale.load(std::memory_order_relaxed) && !game_.simulation_running()) {
         DataModelLock lock(game_, DataModelLock::Read, std::chrono::milliseconds(2));
         if (lock.owns() && state_->world_stale.exchange(false, std::memory_order_relaxed)) {
-            invalidate_all();
+            note_tree();
         }
     }
     std::vector<Finished> ready;
@@ -3131,6 +3321,14 @@ void ScriptAnalysis::pump() {
         for (Finished& finished : ready) {
             const auto generation = state_->generations.find(finished.id);
             if (generation == state_->generations.end() || generation->second != finished.generation) {
+                continue;
+            }
+            if (finished.dropped) {
+                // Its requirers are checked again in the batch that dropped it.
+                forget_requires(finished.id);
+                if (state_->published.erase(finished.id) > 0) {
+                    fired.push_back(finished.id);
+                }
                 continue;
             }
             State::Record& record = state_->published[finished.id];
@@ -3197,7 +3395,7 @@ bool ScriptAnalysis::busy() const {
         return true;
     }
     std::lock_guard<std::mutex> lock(state_->mu);
-    return !state_->pending.empty() || !state_->in_batch.empty();
+    return !state_->pending.empty() || !state_->in_batch.empty() || state_->tree_pending || state_->tree_in_batch;
 }
 
 bool ScriptAnalysis::idle() const {
@@ -3205,7 +3403,8 @@ bool ScriptAnalysis::idle() const {
         return false;
     }
     std::lock_guard<std::mutex> lock(state_->mu);
-    return state_->pending.empty() && state_->in_batch.empty() && state_->results.empty();
+    return state_->pending.empty() && state_->in_batch.empty() && state_->results.empty() && !state_->tree_pending &&
+           !state_->tree_in_batch;
 }
 
 bool ScriptAnalysis::settled(InstanceId script) const {
@@ -3213,6 +3412,10 @@ bool ScriptAnalysis::settled(InstanceId script) const {
         return false;
     }
     std::lock_guard<std::mutex> lock(state_->mu);
+    // A tree change not yet diffed, or being diffed, may check it again.
+    if (state_->tree_pending || state_->tree_in_batch) {
+        return false;
+    }
     if (state_->published.count(script) == 0 || state_->pending.count(script) != 0 ||
         state_->in_batch.count(script) != 0) {
         return false;

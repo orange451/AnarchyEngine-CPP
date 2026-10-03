@@ -48,8 +48,16 @@ struct WorldSnap {
     std::optional<InstanceId> workspace() const;
 };
 
-// The whole tree now. Gameplay thread, or a thread holding the DataModel lock.
+// The place now: the root and everything under it. An instance outside it,
+// such as the children a destroyed folder leaves parentless, is not in the
+// place, and neither are its scripts. Gameplay thread, or a thread holding the
+// DataModel lock.
 std::shared_ptr<WorldSnap> capture_world(DataModel& game);
+
+// Drops every node the root does not reach through children, keeping the rest
+// in order. capture_world does this; completion's snapshots keep detached
+// instances, so a buffer outside the tree still knows what it is.
+void keep_place_only(WorldSnap& world);
 
 // The place as completion sees it. The root is the parentless Game or DataModel,
 // and children follow the order of `nodes`.

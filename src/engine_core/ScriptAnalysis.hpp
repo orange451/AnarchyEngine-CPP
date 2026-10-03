@@ -198,7 +198,8 @@ public:
     // The tree changed around the scripts: a parent, a name, an order, a
     // destroy. A script's answer to FindFirstChild depends on that even when
     // its own source did not change. Cheap and safe to call often: the next
-    // pump() rechecks every script against one new snapshot of the tree.
+    // pump() takes one new snapshot of the tree, and the scripts whose last
+    // check reached what changed are checked again.
     // Waits while the simulation runs; Stop restores the authored tree.
     void note_world_changed();
     // The instance is gone. Drops its diagnostics; a result a running batch
@@ -231,7 +232,7 @@ public:
     std::vector<InstanceId> reached(InstanceId script) const;
 
     // A snapshot is waiting out the debounce, the worker is inside a job, or a
-    // tree change is waiting for pump().
+    // tree change is waiting for pump() or the place checker.
     bool busy() const;
     // busy() is false and pump() has published every finished job.
     bool idle() const;
@@ -278,6 +279,8 @@ private:
     void shutdown();
     void run_editor();
     void run_place();
+    // The tree changed: capture it, and let the place checker diff it against the last.
+    void note_tree();
     void fire(const std::vector<InstanceId>& ids);
     // Captures the tree once and queues these scripts. Gameplay thread, or a
     // thread that holds the DataModel lock.

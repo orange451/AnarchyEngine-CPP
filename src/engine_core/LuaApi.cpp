@@ -1110,7 +1110,8 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
 
     add("ChangeHistoryService", "TryBeginRecording",
         "Opens a recording: every change to the place until FinishRecording is one undo step with this name. Returns its "
-        "id, or nil when a recording is already open. A change no recording covers is not an undo step.",
+        "id, or nil when a recording is already open, history is off, or an undo is being applied. A change no "
+        "recording covers is not an undo step.",
         "string?", false, {P("name", "string"), P("displayName", "string?")});
     add("ChangeHistoryService", "FinishRecording",
         "Closes the recording with this id. Commit keeps its changes as one undo step; Cancel puts them back. An id "

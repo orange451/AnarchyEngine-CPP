@@ -181,6 +181,12 @@ struct LuauAnswer {
 // DataModel::gameplay_thread counts it (the simulation thread, or the thread
 // running a paused edit), or on the UI thread. Never on
 // RenderThread, and never inside lua_resume or Prepare.
+//
+// The place is checked in Edit mode only. While the simulation runs nothing is
+// captured or checked: Play cancels a running batch, and changes queue and wait.
+// Each script keeps its last result from Edit mode. After Stop the next pump()
+// captures the restored tree, and the place checker diffs it against the one
+// it last checked and redoes what Play cancelled.
 class ScriptAnalysis {
 public:
     // `threads` type-check the place at once; 0 means one fewer than the hardware has, and at least one.
@@ -205,6 +211,11 @@ public:
     // check reached what changed are checked again.
     // Waits while the simulation runs; Stop restores the authored tree.
     void note_world_changed();
+    // DataModel calls these, under its write lock, after simulation_running
+    // changes. Play cancels the running batch. Stop marks the tree changed, so
+    // the next pump() brings analysis up to date with the restored place.
+    void note_play_started();
+    void note_play_stopped();
     // The instance is gone. Drops its diagnostics; a result a running batch
     // still finishes for it is never published.
     void remove(InstanceId script);
@@ -237,13 +248,19 @@ public:
 
     // A script is queued or waiting out the debounce, the place checker is in
     // a batch, or a tree change is waiting for pump() or the place checker.
+    // While the simulation runs, queued work waits for Stop, and only a batch
+    // Play cancelled and that is still finishing counts.
     bool busy() const;
     // busy() is false and pump() has published every finished check.
     bool idle() const;
     // This script has a published result, and no newer check of it is queued,
     // running, or waiting for pump(). A tree change pump() has not taken yet
-    // counts as newer while the simulation is stopped. A script outside the
-    // place, or one a playtest added, is never checked: settled with no result.
+    // counts as newer. A script outside the place is never checked: settled
+    // with no result. While the simulation runs nothing is checked before Stop,
+    // so a script is settled once no batch Play cancelled still holds it: with
+    // its last result from Edit mode, which may be for an older source, or with
+    // none, as a script a playtest added has. MCP reports a script with no
+    // result for its current source as not checked then, rather than waiting.
     bool settled(InstanceId script) const;
 
     class DiagnosticsSignal {
@@ -286,17 +303,15 @@ private:
     void run_place();
     // pump() captures the tree once for every script queued since the last
     // capture, and when `tree_changed`, lets the place checker diff it against
-    // the last. A play tree is noted, so the authored one is diffed after
-    // Stop. Under the DataModel lock.
+    // the last. Captures nothing while the simulation runs. Under the
+    // DataModel lock.
     void capture_tree(bool tree_changed);
-    // A play tree was captured and the simulation has stopped since: the
-    // authored tree is waiting for pump() to diff it.
-    bool play_stale_now() const;
     void fire(const std::vector<InstanceId>& ids);
     // Queues the scripts among these that are in the place for the place
     // checker, which takes them once pump() has captured the tree. While the
-    // simulation runs, a script only the play tree has is left out. Gameplay
-    // thread, or a thread that holds the DataModel lock.
+    // simulation runs they wait for Stop; a script only the play tree has is
+    // removed at Stop before anything takes it. Gameplay thread, or a thread
+    // that holds the DataModel lock.
     void schedule(const std::vector<InstanceId>& ids);
     void replace_requires(InstanceId script, const std::vector<InstanceId>& targets);
     void forget_requires(InstanceId script);

@@ -592,6 +592,94 @@ void TestPlaytestRun() {
     engine.stop();
 }
 
+// While the place plays nothing is checked. get_diagnostics answers at once:
+// with the last result from Edit mode for a script that has one for its
+// current source, and not checked for any other.
+void TestDiagnosticsDuringPlay() {
+    engine_core::Engine engine;
+    engine_core::DataModel& game = engine.datamodel();
+    AddScript(game, "Authored", "local x =", game.scene_service("Workspace"));
+    AddScript(game, "Other", "print(missing)", game.scene_service("Workspace"));
+    auto state = std::make_shared<std::string>("stopped");
+    auto mu = std::make_shared<std::mutex>();
+    auto set = [state, mu](const char* next) {
+        std::lock_guard<std::mutex> guard(*mu);
+        *state = next;
+    };
+    ide::McpStudio studio;
+    studio.start_test = [&engine, set] {
+        engine.on_simulation([](engine_core::DataModel& world) {
+            if (!world.simulation_running()) {
+                world.capture_place();
+                world.start_simulation();
+            }
+        });
+        engine.resume();
+        set("running");
+    };
+    studio.pause_test = [&engine, set] {
+        engine.pause();
+        set("paused");
+    };
+    studio.resume_test = [&engine, set] {
+        engine.resume();
+        set("running");
+    };
+    studio.stop_test = [&engine, set] {
+        engine.pause();
+        engine.on_simulation([](engine_core::DataModel& world) {
+            if (world.simulation_running()) {
+                world.stop_simulation();
+            }
+        });
+        set("stopped");
+    };
+    studio.session = [state, mu] {
+        std::lock_guard<std::mutex> guard(*mu);
+        return *state;
+    };
+    ide::McpServer server;
+    ide::add_engine_tools(server, engine, studio);
+    engine.start();
+
+    const JsonValue before = Call(server, "get_diagnostics", R"({"instance":"Workspace.Authored"})");
+    Expect(Member(before, "checked").as_number() == 1 &&
+               HasProblem(Member(Item(Member(before, "scripts"), 0), "problems"), "Syntax", 1),
+           "Edit mode checks the script: " + ide::compact_json(before));
+
+    Call(server, "playtest", R"({"action":"start","run_for":0.1})");
+    const auto started = std::chrono::steady_clock::now();
+    const JsonValue kept = Call(server, "get_diagnostics", R"({"instance":"Workspace.Authored"})");
+    Expect(Member(kept, "checked").as_number() == 1 && kept.find("pending") == nullptr &&
+               HasProblem(Member(Item(Member(kept, "scripts"), 0), "problems"), "Syntax", 1),
+           "during play a script keeps its result from Edit mode: " + ide::compact_json(kept));
+    const JsonValue written = Call(server, "write_script", R"j({"instance":"Workspace.Other","source":"print(1)"})j");
+    Expect(written.find("problems") == nullptr && Member(written, "analysis").as_string() == "not checked",
+           "a source changed during play is not checked, rather than checked clean: " + ide::compact_json(written));
+    Call(server, "create_instance", R"({"class":"Script","name":"Runtime"})");
+    const JsonValue all = Call(server, "get_diagnostics", "{}");
+    std::vector<std::string> unchecked;
+    if (const JsonValue* list = all.find("unchecked")) {
+        for (const JsonValue& path : list->items()) {
+            unchecked.push_back(path.as_string());
+        }
+    }
+    std::sort(unchecked.begin(), unchecked.end());
+    Expect(all.find("pending") == nullptr && Member(all, "checked").as_number() == 1 &&
+               unchecked == std::vector<std::string>{"Workspace.Other", "Workspace.Runtime"},
+           "during play nothing waits, and what has no result for its source is not checked: " +
+               ide::compact_json(all));
+    Expect(std::chrono::steady_clock::now() - started < std::chrono::seconds(5),
+           "nothing during play waits for a check");
+
+    Call(server, "playtest", R"({"action":"stop"})");
+    const JsonValue after = Call(server, "get_diagnostics", "{}");
+    Expect(after.find("pending") == nullptr && after.find("unchecked") == nullptr &&
+               Member(after, "checked").as_number() == 2,
+           "after Stop the authored scripts are checked: " + ide::compact_json(after));
+    engine.stop();
+}
+
 // With the engine's threads running, an edit from another thread runs under
 // the write lock while paused, and waits for a step while playing.
 void TestThreadedEdits() {
@@ -1053,6 +1141,7 @@ int main() {
     TestEngineTools();
     TestScriptTools();
     TestPlaytestRun();
+    TestDiagnosticsDuringPlay();
     TestPrintSource();
     TestThreadedEdits();
     TestHttp();

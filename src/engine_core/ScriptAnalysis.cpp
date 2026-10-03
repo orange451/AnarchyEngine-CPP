@@ -2367,54 +2367,21 @@ struct PlaceChecker {
     // Scripts whose last check failed, so it said nothing of what it reached.
     // Any tree change checks them again. Guarded by reached_mu.
     std::unordered_set<InstanceId> failed;
-    // The authored tree its cached modules and place types were checked
-    // against. A play tree never replaces it.
+    // The tree its cached modules and place types were checked against. Only
+    // the authored tree is ever captured, so after Stop the place checker
+    // diffs the restored tree against this one.
     std::shared_ptr<const WorldSnap> last_world;
     // Each type-checked script's `require("Name")` names, from its last
     // check. Which module a name finds depends on the whole place.
     std::unordered_map<InstanceId, std::vector<std::string>> by_name;
-    // Scripts checked against a play tree. The next authored tree checks them again.
-    std::unordered_set<InstanceId> play_checked;
 };
-
-// Back on the authored tree after a playtest: drops every cached module, and
-// every record, of a script neither `world` nor the last authored tree has,
-// such as a module a play script required. They were never in an authored
-// tree, so no diff names them. A script the last authored tree has is left
-// for the diff, which also rechecks what required it.
-void forget_play_scripts(PlaceChecker& checker, const std::shared_ptr<const WorldSnap>& world) {
-    const auto authored = [&](InstanceId id) {
-        const NodeSnap* now = world->find(id);
-        const NodeSnap* was = checker.last_world != nullptr ? checker.last_world->find(id) : nullptr;
-        return (now != nullptr && now->lua) || (was != nullptr && was->lua);
-    };
-    std::vector<Luau::ModuleName> gone;
-    for (const auto& cached : checker.env->frontend->sourceNodes) {
-        const std::optional<InstanceId> id = instance_of_module(cached.first);
-        if (!id || !authored(*id)) {
-            gone.push_back(cached.first);
-        }
-    }
-    checker.env->frontend->clearModules(gone);
-    std::lock_guard<std::mutex> lock(checker.reached_mu);
-    for (auto it = checker.reached.begin(); it != checker.reached.end();) {
-        it = authored(it->first) ? std::next(it) : checker.reached.erase(it);
-    }
-    for (auto it = checker.by_name.begin(); it != checker.by_name.end();) {
-        it = authored(it->first) ? std::next(it) : checker.by_name.erase(it);
-    }
-    for (auto it = checker.failed.begin(); it != checker.failed.end();) {
-        it = authored(*it) ? std::next(it) : checker.failed.erase(it);
-    }
-}
 
 // Brings the place checker to `world` and adds to `names` every module the
 // change can affect: scripts added or edited, scripts whose last check reached
 // an instance the diff names, scripts that require by a name the change adds,
 // removes, or moves, and scripts whose last check failed. A script that left
 // the place leaves the cache and goes in `removed`, and what required it is
-// added. A play tree changes none of this: scripts checked against it are
-// noted, and the next authored tree checks them again.
+// added.
 void sync_place(PlaceChecker& checker, const std::shared_ptr<const WorldSnap>& world,
                 std::unordered_set<std::string>& names, std::vector<InstanceId>& removed) {
     WorkerEnv& env = *checker.env;
@@ -2422,27 +2389,13 @@ void sync_place(PlaceChecker& checker, const std::shared_ptr<const WorldSnap>& w
     if (world->nodes.empty()) {
         return;
     }
-    if (world->play) {
-        // Something to check play scripts against until the authored tree comes back.
-        if (env.place == nullptr) {
-            env.place = build_place_types(*env.frontend->globals.globalScope, world);
-        }
+    if (checker.last_world == world && env.place != nullptr) {
         return;
     }
-    if (checker.last_world == world && env.place != nullptr && !env.place->world->play) {
-        return;
-    }
-    if (!checker.play_checked.empty() || (env.place != nullptr && env.place->world->play)) {
-        forget_play_scripts(checker, world);
-    }
-    for (InstanceId id : checker.play_checked) {
-        names.insert(module_name_of(id));
-    }
-    checker.play_checked.clear();
-    // The first tree, a new frontend after a registry change, or types last
-    // built from a play tree: every script is checked against new types.
-    // Scripts gone since the last authored tree are still dropped.
-    if (checker.last_world == nullptr || env.place == nullptr || env.place->world->play) {
+    // The first tree, or a new frontend after a registry change: every script
+    // is checked against new types. Scripts gone since the last tree are
+    // still dropped.
+    if (checker.last_world == nullptr || env.place == nullptr) {
         if (checker.last_world != nullptr) {
             for (const NodeSnap& node : checker.last_world->nodes) {
                 if (node.lua && world->find(node.id) == nullptr) {
@@ -2643,12 +2596,6 @@ void run_batch(PlaceChecker& checker, AnalysisPool& pool, const std::shared_ptr<
         });
     }
     pool.run_all(std::move(prepare));
-    // The authored tree after a playtest checks these again.
-    if (world->play) {
-        for (const CheckInput& input : inputs) {
-            checker.play_checked.insert(input.id);
-        }
-    }
     // Any failure below marks its script, so the next tree change retries it.
     const auto note_failed = [&checker](InstanceId id) {
         try {
@@ -2817,10 +2764,11 @@ struct ScriptAnalysis::State {
     // takes one capture however many came in. True at first, so the first
     // pump() captures the place even when nothing is queued yet.
     std::atomic<bool> capture_needed{true};
-    // A tree was captured while the simulation ran. Stop restores the
-    // authored tree without a note, so once stopped pump() takes it as a tree
-    // change.
-    std::atomic<bool> play_stale{false};
+    // The simulation runs. Nothing is captured or checked until Stop: queued
+    // scripts and tree changes wait. Written on the gameplay thread under the
+    // DataModel write lock and `mu`, so a capture under the DataModel lock, and
+    // anything under `mu`, sees it settled.
+    std::atomic<bool> playing{false};
     std::condition_variable cv;
     std::mutex start_mu;
     bool stop = false;
@@ -2861,16 +2809,15 @@ struct ScriptAnalysis::State {
     std::shared_ptr<CompleteRequest> serving;
 
     // The newest tree captured, and its capture number: two captures can finish
-    // out of order, and the newer one wins. `authored_world` is the newest one
-    // captured while the simulation was stopped.
+    // out of order, and the newer one wins. Every capture is of the authored
+    // tree: none is taken while the simulation runs.
     std::shared_ptr<const WorldSnap> latest_world;
     std::uint64_t latest_seq = 0;
-    std::shared_ptr<const WorldSnap> authored_world;
-    std::uint64_t authored_seq = 0;
     std::atomic<std::uint64_t> world_seq{0};
     // Scripts in the batch the place checker is running, including what
     // requires them, and the batch's cancel.
     std::unordered_set<InstanceId> in_batch;
+    // Play cancels it, and the place checker queues what the batch took again.
     std::shared_ptr<Luau::FrontendCancellationToken> batch_cancel;
     // A tree change the place checker has not taken yet, and when it is due.
     bool tree_pending = false;
@@ -2889,10 +2836,6 @@ struct ScriptAnalysis::State {
         if (seq > latest_seq) {
             latest_world = world;
             latest_seq = seq;
-        }
-        if (!world->play && seq > authored_seq) {
-            authored_world = world;
-            authored_seq = seq;
         }
     }
 };
@@ -2958,6 +2901,7 @@ void ScriptAnalysis::collect_dependents(InstanceId id, std::vector<InstanceId>& 
 ScriptAnalysis::ScriptAnalysis(DataModel& game, unsigned threads)
     : game_(game), state_(std::make_unique<State>()), threads_(threads == 0 ? AnalysisPool::default_size() : threads) {
     signal_.owner_ = this;
+    state_->playing.store(game_.simulation_running(), std::memory_order_relaxed);
     game_.set_script_analysis(this);
 }
 
@@ -3095,8 +3039,11 @@ void ScriptAnalysis::run_place() {
         std::shared_ptr<Luau::FrontendCancellationToken> cancel;
         {
             std::unique_lock<std::mutex> lock(state_->mu);
-            state_->cv.wait(lock,
-                            [&] { return state_->stop || !state_->pending.empty() || state_->tree_pending; });
+            // While the simulation runs, queued work waits for Stop.
+            state_->cv.wait(lock, [&] {
+                return state_->stop || (!state_->playing.load(std::memory_order_relaxed) &&
+                                        (!state_->pending.empty() || state_->tree_pending));
+            });
             if (state_->stop) {
                 return;
             }
@@ -3164,7 +3111,9 @@ void ScriptAnalysis::run_place() {
         } catch (...) {
             failure = "analysis failed";
         }
-        if (failure != nullptr) {
+        // Cancelled for play, the batch is redone after Stop, so a failure it
+        // met on the way out is not news.
+        if (failure != nullptr && !cancel->requested()) {
             // Each script the batch took says it could not be checked.
             for (const auto& entry : claimed) {
                 try {
@@ -3188,8 +3137,30 @@ void ScriptAnalysis::run_place() {
             state_->cached_modules.store(checker.env->frontend->sourceNodes.size(), std::memory_order_relaxed);
         }
         std::lock_guard<std::mutex> lock(state_->mu);
+        // Cancelled while analysis is still on and running: Play started. What
+        // the batch took is queued again, at the generation it had, and waits
+        // for the tree pump() captures after Stop. A script queued or removed
+        // since is left to that.
+        const bool redo = cancel->requested() && !state_->stop && state_->enabled;
+        const std::uint64_t after = state_->world_seq.load();
         for (const auto& entry : claimed) {
             state_->in_batch.erase(entry.first);
+            const auto generation = state_->generations.find(entry.first);
+            if (!redo || generation == state_->generations.end() || generation->second != entry.second ||
+                state_->pending.count(entry.first) != 0 || state_->removed.count(entry.first) != 0) {
+                continue;
+            }
+            Pending pending;
+            pending.generation = entry.second;
+            pending.after = after;
+            state_->pending[entry.first] = pending;
+        }
+        if (redo && tree) {
+            state_->tree_pending = true;
+            state_->tree_due = std::chrono::steady_clock::now();
+        }
+        if (redo) {
+            state_->capture_needed.store(true, std::memory_order_relaxed);
         }
         state_->tree_in_batch = false;
         if (state_->batch_cancel == cancel) {
@@ -3331,6 +3302,12 @@ bool placed_script(const DataModel& game, InstanceId id) {
 void ScriptAnalysis::capture_tree(bool tree_changed) {
     {
         std::lock_guard<std::mutex> lock(state_->mu);
+        // Play can start after pump() looks. The DataModel lock is held, so
+        // it has not started since this looks: the tree is the authored one.
+        // A play tree is never captured; what waits for a capture waits for Stop.
+        if (state_->playing.load(std::memory_order_relaxed)) {
+            return;
+        }
         if (!state_->enabled || state_->stop) {
             // Nothing will check it. busy() must not wait for it.
             state_->capture_needed.store(false, std::memory_order_relaxed);
@@ -3345,12 +3322,6 @@ void ScriptAnalysis::capture_tree(bool tree_changed) {
     state_->capture_needed.store(false, std::memory_order_relaxed);
     const std::uint64_t seq = state_->world_seq.fetch_add(1) + 1;
     const std::shared_ptr<WorldSnap> world = capture_world(game_);
-    // Play can start after pump() looks and before the capture takes the lock.
-    // A play tree is not the authored one, so once stopped pump() diffs the
-    // authored tree again.
-    if (world->play) {
-        state_->play_stale.store(true, std::memory_order_relaxed);
-    }
     ensure_threads();
     std::lock_guard<std::mutex> lock(state_->mu);
     if (!state_->enabled || state_->stop) {
@@ -3363,8 +3334,8 @@ void ScriptAnalysis::capture_tree(bool tree_changed) {
         state_->world_stale.store(false, std::memory_order_relaxed);
         state_->tree_pending = true;
         state_->tree_due = std::chrono::steady_clock::now() + kDebounce;
-        // A script remove() dropped that is in the tree again, as Stop brings
-        // back one a playtest destroyed, is checked as new.
+        // A script remove() dropped that is in the tree again, as undo brings
+        // back a deleted one, or Stop one a playtest destroyed, is checked as new.
         for (auto it = state_->removed.begin(); it != state_->removed.end();) {
             const NodeSnap* node = world->find(*it);
             if (node == nullptr || !node->lua) {
@@ -3379,7 +3350,7 @@ void ScriptAnalysis::capture_tree(bool tree_changed) {
             it = state_->removed.erase(it);
         }
     }
-    if (state_->authored_world == world) {
+    if (state_->latest_world == world) {
         // A rename the place checker does not recheck still shows in the report.
         for (auto& entry : state_->published) {
             if (const NodeSnap* node = world->find(entry.first)) {
@@ -3404,7 +3375,6 @@ void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
     if (placed.empty()) {
         return;
     }
-    const bool playing = game_.simulation_running();
     {
         std::lock_guard<std::mutex> lock(state_->mu);
         if (!state_->enabled || state_->stop) {
@@ -3412,16 +3382,7 @@ void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
         }
         const auto ready_at = std::chrono::steady_clock::now() + kDebounce;
         const std::uint64_t after = state_->world_seq.load();
-        const WorldSnap* authored = state_->authored_world.get();
         for (InstanceId id : placed) {
-            // A script that exists only in the play tree, such as a clone, is
-            // never checked: Stop destroys it.
-            if (playing && authored != nullptr) {
-                const NodeSnap* node = authored->find(id);
-                if (node == nullptr || !node->lua) {
-                    continue;
-                }
-            }
             Pending pending;
             pending.generation = ++state_->generations[id];
             pending.ready_at = ready_at;
@@ -3474,11 +3435,6 @@ void ScriptAnalysis::remove(InstanceId script) {
     std::vector<InstanceId> dependents;
     bool notify = false;
     bool enabled = false;
-    // Stop may bring it back without a note of its own. The tree diffed after
-    // Stop checks it again then.
-    if (game_.simulation_running()) {
-        state_->play_stale.store(true, std::memory_order_relaxed);
-    }
     {
         std::lock_guard<std::mutex> lock(state_->mu);
         enabled = state_->enabled;
@@ -3557,19 +3513,38 @@ std::vector<Diagnostic> ScriptAnalysis::get_diagnostics_for_line(InstanceId scri
 
 void ScriptAnalysis::note_world_changed() { state_->world_stale.store(true, std::memory_order_relaxed); }
 
-void ScriptAnalysis::pump() {
-    // A tree change is diffed once, however many changes came in. Only while
-    // stopped: play changes are not the authored tree. The UI thread pumps
-    // outside a step, so the read lock is short, and a pump() that cannot take
-    // it captures next time.
-    if (state_->play_stale.load(std::memory_order_relaxed) && !game_.simulation_running() &&
-        state_->play_stale.exchange(false, std::memory_order_relaxed)) {
-        state_->world_stale.store(true, std::memory_order_relaxed);
+void ScriptAnalysis::note_play_started() {
+    std::lock_guard<std::mutex> lock(state_->mu);
+    state_->playing.store(true, std::memory_order_relaxed);
+    // The batch stops at its next module, and run_place queues what it took
+    // again for after Stop.
+    if (state_->batch_cancel) {
+        state_->batch_cancel->cancel();
     }
+}
+
+void ScriptAnalysis::note_play_stopped() {
+    std::lock_guard<std::mutex> lock(state_->mu);
+    state_->playing.store(false, std::memory_order_relaxed);
+    // Stop restored the authored tree while the simulation still ran, so its
+    // own notes were ignored. The next pump() captures the tree and the place
+    // checker diffs it against the one it last checked: sources edited during
+    // play and restored come out edited or unchanged, and a script play
+    // destroyed and Stop brought back is checked as new.
+    state_->world_stale.store(true, std::memory_order_relaxed);
+    state_->cv.notify_all();
+}
+
+void ScriptAnalysis::pump() {
+    // A tree change is diffed once, however many changes came in. Nothing is
+    // captured while the simulation runs. The UI thread pumps outside a step,
+    // so the read lock is short, and a pump() that cannot take it captures
+    // next time.
     // Queued scripts wait for one capture too, however many were queued, and
     // that one capture is the tree change's as well.
-    const bool tree = state_->world_stale.load(std::memory_order_relaxed) && !game_.simulation_running();
-    if (tree || state_->capture_needed.load(std::memory_order_relaxed)) {
+    const bool tree = state_->world_stale.load(std::memory_order_relaxed);
+    if (!state_->playing.load(std::memory_order_relaxed) &&
+        (tree || state_->capture_needed.load(std::memory_order_relaxed))) {
         DataModelLock lock(game_, DataModelLock::Read, std::chrono::milliseconds(2));
         if (lock.owns()) {
             capture_tree(tree);
@@ -3601,9 +3576,9 @@ void ScriptAnalysis::pump() {
             }
             State::Record& record = state_->published[finished.id];
             record.name = std::move(finished.name);
-            // A batch can check a tree older than the newest authored one, or a play tree.
+            // A batch can check a tree older than the newest one.
             const NodeSnap* node =
-                state_->authored_world != nullptr ? state_->authored_world->find(finished.id) : nullptr;
+                state_->latest_world != nullptr ? state_->latest_world->find(finished.id) : nullptr;
             if (node != nullptr) {
                 record.name = shown_name(*node);
             }
@@ -3665,49 +3640,48 @@ void ScriptAnalysis::print_report(std::ostream& out) const {
 }
 
 bool ScriptAnalysis::busy() const {
-    if (state_->world_stale.load(std::memory_order_relaxed) || play_stale_now()) {
-        return true;
-    }
     std::lock_guard<std::mutex> lock(state_->mu);
-    return !state_->pending.empty() || !state_->in_batch.empty() || state_->tree_pending || state_->tree_in_batch;
+    // While the simulation runs, queued work waits for Stop. Only a batch
+    // Play cancelled can still be finishing.
+    if (state_->playing.load(std::memory_order_relaxed)) {
+        return !state_->in_batch.empty() || state_->tree_in_batch;
+    }
+    return state_->world_stale.load(std::memory_order_relaxed) || !state_->pending.empty() ||
+           !state_->in_batch.empty() || state_->tree_pending || state_->tree_in_batch;
 }
 
 bool ScriptAnalysis::idle() const {
-    if (state_->world_stale.load(std::memory_order_relaxed) || play_stale_now()) {
+    if (busy()) {
         return false;
     }
     std::lock_guard<std::mutex> lock(state_->mu);
-    return state_->pending.empty() && state_->in_batch.empty() && state_->results.empty() && !state_->tree_pending &&
-           !state_->tree_in_batch;
+    return state_->results.empty();
 }
 
 bool ScriptAnalysis::settled(InstanceId script) const {
-    if ((state_->world_stale.load(std::memory_order_relaxed) && !game_.simulation_running()) || play_stale_now()) {
+    std::lock_guard<std::mutex> lock(state_->mu);
+    const bool playing = state_->playing.load(std::memory_order_relaxed);
+    // A tree change not yet diffed, or being diffed, may check it again. While
+    // the simulation runs, nothing queued is checked before Stop.
+    if (!playing && (state_->world_stale.load(std::memory_order_relaxed) || state_->tree_pending ||
+                     state_->pending.count(script) != 0)) {
         return false;
     }
-    std::lock_guard<std::mutex> lock(state_->mu);
-    // A tree change not yet diffed, or being diffed, may check it again.
-    if (state_->tree_pending || state_->tree_in_batch || state_->pending.count(script) != 0 ||
-        state_->in_batch.count(script) != 0 ||
+    if (state_->tree_in_batch || state_->in_batch.count(script) != 0 ||
         std::any_of(state_->results.begin(), state_->results.end(),
                     [script](const Finished& finished) { return finished.id == script; })) {
         return false;
     }
-    if (state_->published.count(script) != 0) {
+    if (state_->published.count(script) != 0 || playing) {
         return true;
     }
-    // A script outside the authored place, or one a playtest added, is never
-    // checked: settled, with nothing to say.
-    const WorldSnap* authored = state_->authored_world.get();
-    if (authored == nullptr) {
+    // A script outside the place is never checked: settled, with nothing to say.
+    const WorldSnap* world = state_->latest_world.get();
+    if (world == nullptr) {
         return false;
     }
-    const NodeSnap* node = authored->find(script);
+    const NodeSnap* node = world->find(script);
     return node == nullptr || !node->lua;
-}
-
-bool ScriptAnalysis::play_stale_now() const {
-    return state_->play_stale.load(std::memory_order_relaxed) && !game_.simulation_running();
 }
 
 void ScriptAnalysis::fire(const std::vector<InstanceId>& ids) {

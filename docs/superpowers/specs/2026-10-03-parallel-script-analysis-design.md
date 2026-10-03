@@ -24,7 +24,7 @@ Measured before this change, in the Release build: a 1000-line script takes abou
 | Editor requests | A second, separate Frontend (the editor checker) with its own thread answers `luau_facts` / `luau_facts_later` for completion, hover, and the console. Typing never waits behind a place batch. |
 | Instance types | One stable `ExternType` per instance for the life of the place, updated in place between batches. Never rebuilt on a tree change. |
 | Reached set | After each module is checked, its expression types are scanned for instance types (`InstanceTag`). The instances found are the script's reached set. |
-| Play | Tree changes during a playtest are ignored, as now. A batch running when play starts finishes against its pre-play snapshot. |
+| Play | Analysis runs in Edit mode only. While the simulation runs there are no tree captures, batches, or checks: Play cancels a running batch, whose scripts are queued again, and changes queue and wait. Each script keeps its last Edit-mode result. After Stop the next `pump()` captures the restored tree and the place checker diffs it against the tree it last checked. |
 | Player | AnarchyPlayer turns analysis off at startup. Nothing there reads diagnostics. |
 | Publishing | Still only `pump()`, on the gameplay thread or the UI thread. Results are handed over per module as each finishes, through the progress callback, so a large batch fills in gradually. `diagnostics_changed` keeps firing per script. |
 

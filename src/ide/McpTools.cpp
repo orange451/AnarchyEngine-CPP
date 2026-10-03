@@ -561,7 +561,8 @@ struct Checked {
     std::unordered_map<InstanceId, std::vector<engine_core::Diagnostic>> problems;
     // Scripts analysis had not finished when the wait ran out. A deleted script is in neither.
     std::vector<InstanceId> pending;
-    // Scripts analysis does not check: outside the place, or added during a playtest.
+    // Scripts analysis does not check: outside the place, or, while the place
+    // plays, a script with no result from Edit mode for its current source.
     std::vector<InstanceId> unchecked;
     // Analysis is turned off, so nothing was checked.
     bool off = false;
@@ -607,6 +608,10 @@ Checked CheckScripts(engine_core::Engine& engine, const std::vector<InstanceId>&
                         progress->unchecked.insert(id);
                     } else if (settled && *checked == script->source()) {
                         progress->done[id] = analysis.diagnostics(id);
+                    } else if (settled && world.simulation_running()) {
+                        // Nothing is checked during play, and its last result is
+                        // for a source play has changed since.
+                        progress->unchecked.insert(id);
                     } else {
                         still.push_back(id);
                     }

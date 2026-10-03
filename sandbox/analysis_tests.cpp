@@ -246,25 +246,29 @@ TEST_CASE("A7 a type error does not block the script", "[A7]") {
     REQUIRE(rig.game.name(box.id()) == "ran");
 }
 
-TEST_CASE("A8 stop restores authored diagnostics", "[A8]") {
+TEST_CASE("A8 an edit during play is not checked, and Stop keeps the authored diagnostics", "[A8][play]") {
     ScriptRig rig;
     engine_core::ScriptAnalysis analysis(rig.game);
     const char* authored = "--!strict\nlocal value: number = \"nope\"\n";
     engine_core::Script& script = add_script(rig.game, "Authored", authored);
     settle(analysis);
     REQUIRE(has_code(analysis.diagnostics(script.id()), "Type"));
+    const std::uint64_t checks = analysis.checks(script.id());
 
     rig.game.start_simulation();
     script.set_source("local x =\n");
     settle(analysis);
     INFO(dump(analysis.diagnostics(script.id())));
-    REQUIRE(has_code(analysis.diagnostics(script.id()), "Syntax"));
+    REQUIRE(analysis.checks(script.id()) == checks);
+    REQUIRE(analysis.analyzed_source(script.id()) == std::optional<std::string>(authored));
+    REQUIRE_FALSE(has_code(analysis.diagnostics(script.id()), "Syntax"));
 
     rig.game.stop_simulation();
     REQUIRE(script.source() == authored);
     settle(analysis);
     const std::vector<engine_core::Diagnostic> restored = analysis.diagnostics(script.id());
     INFO(dump(restored));
+    REQUIRE(analysis.analyzed_source(script.id()) == std::optional<std::string>(authored));
     REQUIRE(has_code(restored, "Type"));
     REQUIRE_FALSE(has_code(restored, "Syntax"));
 }
@@ -1635,66 +1639,148 @@ TEST_CASE("A42 a change rechecks only the scripts it can affect", "[A42]") {
     }
 }
 
-TEST_CASE("A43 a playtest's tree changes leave the authored results as they were", "[A43]") {
-    {
-        // The first playtest in the process can add to the class registry,
-        // which starts a new checker. One beforehand keeps the registry still below.
-        ScriptRig warm;
-        warm.game.start_simulation();
-        warm.frames(1);
-        warm.game.stop_simulation();
+namespace {
+
+// Pumps as the studio does each frame, for longer than the debounce and a
+// small check take, so work the place checker would do has time to show.
+void pump_for(engine_core::ScriptAnalysis& analysis, std::chrono::milliseconds span) {
+    const auto until = std::chrono::steady_clock::now() + span;
+    while (std::chrono::steady_clock::now() < until) {
+        analysis.pump();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    analysis.pump();
+}
+
+// The first playtest in the process can add to the class registry, which
+// starts a new checker. One beforehand keeps the registry still in a test.
+void warm_playtest() {
+    ScriptRig warm;
+    warm.game.start_simulation();
+    warm.frames(1);
+    warm.game.stop_simulation();
+}
+
+}  // namespace
+
+TEST_CASE("A43 nothing is checked during a playtest, and Stop leaves the authored results as they were",
+          "[A43][play]") {
+    warm_playtest();
     ScriptRig rig;
     engine_core::ScriptAnalysis analysis(rig.game);
     engine_core::Folder& holder = rig.game.create<engine_core::Folder>();
     rig.game.set_name(holder.id(), "Holder");
     rig.game.set_parent(holder.id(), workspace_of(rig.game));
-    engine_core::Script& kept =
-        add_script(rig.game, "Kept", "--!strict\nlocal value: number = \"nope\"\nprint(workspace.Holder.Moved)\n");
+    engine_core::GameObject& door = create_part(rig.game);
+    rig.game.set_name(door.id(), "Door");
+    engine_core::ModuleScript& shared = add_module(rig.game, "Shared", "return { value = 1 }\n");
+    engine_core::Script& kept = add_script(rig.game, "Kept",
+                                           "--!strict\nlocal value: number = \"nope\"\n"
+                                           "print(workspace.Holder.Moved, workspace.Door.Name)\n"
+                                           "print(require(workspace.Shared).value)\n");
     engine_core::Script& doomed = add_script(rig.game, "Doomed", "--!strict\nprint(workspace.Kept.Name)\n");
     engine_core::Script& moved = add_script(rig.game, holder.id(), "Moved", "--!strict\nprint(script.Parent.Name)\n");
     settle(analysis);
-    const std::vector<engine_core::InstanceId> authored{kept.id(), doomed.id(), moved.id()};
+    const std::vector<engine_core::InstanceId> authored{shared.id(), kept.id(), doomed.id(), moved.id()};
     std::vector<std::string> before;
+    std::vector<std::uint64_t> checks;
     for (engine_core::InstanceId id : authored) {
         REQUIRE(analysis.analyzed_source(id).has_value());
         before.push_back(*analysis.analyzed_source(id) + "\n" + dump(analysis.diagnostics(id)));
+        checks.push_back(analysis.checks(id));
     }
     REQUIRE(has_code(analysis.diagnostics(kept.id()), "Type"));
     const std::size_t cached = analysis.cached_modules();
-    const std::uint64_t kept_checks = analysis.checks(kept.id());
+    const std::uint64_t revision = engine_core::lua_registry_revision();
 
     rig.game.start_simulation();
     rig.frames(1);
-    rig.game.destroy(doomed.id());
-    rig.game.set_parent(moved.id(), engine_core::DataModel::kNoParent);
+    // An authored source edited, a script made at runtime and one an authored
+    // script requires, an authored script destroyed, another moved out, and a
+    // part renamed: none of it is checked while the place plays.
+    kept.set_source("--!strict\nlocal Extra = require(workspace.Extra)\nprint(Extra.value)\n");
     const engine_core::InstanceId runtime =
         add_script(rig.game, "Runtime", "--!strict\nprint(workspace.Kept.Name)\n").id();
-    // A module only the play tree has, which an authored script requires
-    // during play, so the checker loads it.
     const engine_core::InstanceId extra = add_module(rig.game, "Extra", "return { value = 1 }\n").id();
-    kept.set_source("--!strict\nlocal Extra = require(workspace.Extra)\nprint(Extra.value)\n");
-    settle(analysis);
-    const std::uint64_t revision = engine_core::lua_registry_revision();
-    REQUIRE(analysis.checks(kept.id()) > kept_checks);
-    REQUIRE(analysis.cached_modules() > cached);
+    rig.game.destroy(doomed.id());
+    rig.game.set_parent(moved.id(), engine_core::DataModel::kNoParent);
+    rig.game.set_name(door.id(), "Gate");
+    shared.set_source("return { value = \"two\" }\n");
+    pump_for(analysis, std::chrono::milliseconds(500));
+    REQUIRE_FALSE(analysis.busy());
+    REQUIRE(analysis.idle());
+    for (std::size_t at = 0; at < authored.size(); ++at) {
+        INFO(at);
+        REQUIRE(analysis.checks(authored[at]) == checks[at]);
+    }
+    REQUIRE(analysis.checks(runtime) == 0);
+    REQUIRE(analysis.checks(extra) == 0);
+    REQUIRE(analysis.cached_modules() == cached);
+    // Nothing is checked before Stop, so every script is settled: with its last
+    // result from Edit mode, or with none.
+    REQUIRE(analysis.settled(kept.id()));
+    REQUIRE(analysis.settled(runtime));
+    REQUIRE_FALSE(analysis.analyzed_source(runtime).has_value());
+    REQUIRE(*analysis.analyzed_source(kept.id()) + "\n" + dump(analysis.diagnostics(kept.id())) == before[1]);
+
     rig.game.stop_simulation();
     settle(analysis);
 
-    // Scripts only the play tree had were never checked, and the checker
-    // holds no module of theirs once the authored tree is back.
     REQUIRE(analysis.checks(runtime) == 0);
     REQUIRE(analysis.checks(extra) == 0);
     REQUIRE_FALSE(analysis.analyzed_source(runtime).has_value());
+    REQUIRE_FALSE(analysis.analyzed_source(extra).has_value());
     REQUIRE(analysis.diagnostics(runtime).empty());
     REQUIRE(engine_core::lua_registry_revision() == revision);
     REQUIRE(analysis.cached_modules() == cached);
     for (std::size_t at = 0; at < authored.size(); ++at) {
         INFO(rig.game.name(authored[at]));
+        REQUIRE(analysis.settled(authored[at]));
         REQUIRE(analysis.analyzed_source(authored[at]).has_value());
         REQUIRE(*analysis.analyzed_source(authored[at]) + "\n" + dump(analysis.diagnostics(authored[at])) ==
                 before[at]);
     }
+}
+
+TEST_CASE("A46 a batch running when play starts is cancelled, and redone after Stop", "[A46][play]") {
+    warm_playtest();
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game, 4);
+    engine_core::Script& small =
+        add_script(rig.game, "Small", "--!strict\nlocal value: number = \"nope\"\n");
+    settle(analysis);
+    const std::string small_before = dump(analysis.diagnostics(small.id()));
+    REQUIRE(has_code(analysis.diagnostics(small.id()), "Type"));
+
+    const std::string huge_source = long_source(20000, false, 0);
+    engine_core::Script& huge = add_script(rig.game, "Huge", huge_source.c_str());
+    small.set_source("--!strict\nlocal other: string = 1\n");
+    analysis.pump();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    REQUIRE(analysis.busy());
+
+    rig.game.start_simulation();
+    // The batch stops without finishing Huge, and nothing starts after it.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (analysis.busy()) {
+        analysis.pump();
+        REQUIRE(std::chrono::steady_clock::now() < deadline);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    pump_for(analysis, std::chrono::milliseconds(300));
+    REQUIRE_FALSE(analysis.busy());
+    REQUIRE(analysis.checks(huge.id()) == 0);
+    REQUIRE_FALSE(analysis.analyzed_source(huge.id()).has_value());
+
+    rig.game.stop_simulation();
+    settle(analysis);
+    REQUIRE(analysis.analyzed_source(huge.id()) == std::optional<std::string>(huge_source));
+    REQUIRE(has_code(analysis.diagnostics(huge.id()), "Type"));
+    REQUIRE(has_code(analysis.diagnostics(huge.id()), "Lint/UnknownGlobal"));
+    REQUIRE(analysis.analyzed_source(small.id()) ==
+            std::optional<std::string>("--!strict\nlocal other: string = 1\n"));
+    REQUIRE(has_code(analysis.diagnostics(small.id()), "Type"));
+    REQUIRE(dump(analysis.diagnostics(small.id())) != small_before);
 }
 
 TEST_CASE("A44 a class registry change rechecks every script in the place once", "[A44]") {

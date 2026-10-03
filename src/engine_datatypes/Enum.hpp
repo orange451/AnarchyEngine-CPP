@@ -29,6 +29,8 @@ const EnumType& key_code_enum();
 const EnumType& user_input_type_enum();
 const EnumType& user_input_state_enum();
 const EnumType& mouse_behavior_enum();
+// Commit 0, Cancel 1: engine_core::FinishRecordingOperation's own values.
+const EnumType& finish_recording_operation_enum();
 // Box 0, Sphere 1, Capsule 2, Hull 3, Custom 4, Cylinder 5, Cone 6, Wedge 7.
 const EnumType& physics_shape_enum();
 // Inverse 0, Linear 1, Exponential 2, None 3.

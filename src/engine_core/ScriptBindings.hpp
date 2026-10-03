@@ -25,6 +25,7 @@
 
 namespace engine_core {
 
+class ChangeHistoryService;
 class Mesh;
 class SoundEmitter;
 
@@ -62,7 +63,8 @@ struct ServiceUd {
     int kind = 0;
 };
 
-inline constexpr const char* kServiceClasses[] = {"RunService", "Selection", "UserInputService"};
+inline constexpr const char* kServiceClasses[] = {"RunService", "Selection", "UserInputService",
+                                                 "ChangeHistoryService"};
 constexpr int kUserInputServiceKind = 2;
 
 // SignalUd kinds. An instance's Changed, a RunService phase, an UserInputService
@@ -71,7 +73,8 @@ constexpr int kSignalChanged = 0;
 constexpr int kSignalPhase = 1;
 constexpr int kSignalInput = 2;
 constexpr int kSignalEvent = 3;
-// A service's signal with no arguments, found by its HostSignal tag in phase.
+// A service's own signal, found by its HostSignal tag in phase through
+// ScriptRuntime::host_signal; its handlers get whatever values the event carries.
 constexpr int kSignalHost = 4;
 constexpr int kServiceKinds = static_cast<int>(sizeof(kServiceClasses) / sizeof(kServiceClasses[0]));
 
@@ -274,6 +277,18 @@ struct ScriptBindings {
     static int service_newindex(lua_State* state);
     static int selection_get(lua_State* state);
     static int selection_set(lua_State* state);
+    // ChangeHistoryService's methods, each the C++ method of the same name.
+    // Raises when no place is attached.
+    static ChangeHistoryService& history_service(lua_State* state);
+    static int history_try_begin_recording(lua_State* state);
+    static int history_finish_recording(lua_State* state);
+    static int history_is_recording_in_progress(lua_State* state);
+    static int history_set_waypoint(lua_State* state);
+    static int history_undo(lua_State* state);
+    static int history_redo(lua_State* state);
+    static int history_get_can_undo(lua_State* state);
+    static int history_get_can_redo(lua_State* state);
+    static int history_reset_waypoints(lua_State* state);
     // A Mesh's shape methods. Each adds to the Mesh's AMESH file; see Mesh::edit_geometry.
     static Mesh& mesh_self(lua_State* state);
     static int mesh_add_box(lua_State* state);

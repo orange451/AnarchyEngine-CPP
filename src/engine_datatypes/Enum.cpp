@@ -210,6 +210,10 @@ const EnumType kKeyCodeType{"KeyCode", kKeyCodes, count_of(kKeyCodes)};
 const EnumType kUserInputTypeType{"UserInputType", kUserInputTypes, count_of(kUserInputTypes)};
 const EnumType kUserInputStateType{"UserInputState", kUserInputStates, count_of(kUserInputStates)};
 const EnumType kMouseBehaviorType{"MouseBehavior", kMouseBehaviors, count_of(kMouseBehaviors)};
+// Roblox's values. It has Append too, which this engine has no use for.
+const EnumEntry kFinishRecordingOperations[] = {{"Commit", 0}, {"Cancel", 1}};
+const EnumType kFinishRecordingOperationType{"FinishRecordingOperation", kFinishRecordingOperations,
+                                             count_of(kFinishRecordingOperations)};
 const EnumType kPhysicsShapeType{"PhysicsShape", kPhysicsShapes, count_of(kPhysicsShapes)};
 const EnumType kRollOffModeType{"RollOffMode", kRollOffModes, count_of(kRollOffModes)};
 const EnumType kGuiAlignmentType{"GuiAlignment", kGuiAlignments, count_of(kGuiAlignments)};
@@ -219,7 +223,8 @@ const EnumType kDraggerHandleType{"DraggerHandle", kDraggerHandles, count_of(kDr
 const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kRotationOrderType,
                                   &kKeyCodeType,        &kUserInputTypeType, &kUserInputStateType,
                                   &kMouseBehaviorType,  &kPhysicsShapeType,  &kRollOffModeType,
-                                  &kGuiAlignmentType,   &kDraggerSpaceType,  &kDraggerHandleType};
+                                  &kGuiAlignmentType,   &kDraggerSpaceType,  &kDraggerHandleType,
+                                  &kFinishRecordingOperationType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -289,6 +294,8 @@ const EnumType& user_input_type_enum() { return kUserInputTypeType; }
 const EnumType& user_input_state_enum() { return kUserInputStateType; }
 
 const EnumType& mouse_behavior_enum() { return kMouseBehaviorType; }
+
+const EnumType& finish_recording_operation_enum() { return kFinishRecordingOperationType; }
 
 const EnumType& physics_shape_enum() { return kPhysicsShapeType; }
 

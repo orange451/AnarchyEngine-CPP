@@ -761,6 +761,7 @@ add_executable(sandbox
     sandbox/tests.cpp
     sandbox/analysis_tests.cpp
     sandbox/history_tests.cpp
+    sandbox/history_lua_tests.cpp
     sandbox/project_tests.cpp
     sandbox/merge_tests.cpp
     sandbox/scene_services_tests.cpp

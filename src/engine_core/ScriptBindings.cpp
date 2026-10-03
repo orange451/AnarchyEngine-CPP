@@ -978,6 +978,98 @@ int ScriptBindings::selection_set(lua_State* state) {
     });
 }
 
+ChangeHistoryService& ScriptBindings::history_service(lua_State* state) {
+    luaL_checkudata(state, 1, kServiceMeta);
+    ScriptRuntime* runtime = runtime_from(state);
+    if (runtime == nullptr || runtime->game_ == nullptr) {
+        luaL_error(state, "ChangeHistoryService is not available");
+    }
+    return runtime->game_->history();
+}
+
+int ScriptBindings::history_try_begin_recording(lua_State* state) {
+    return lua_guard(state, [&] {
+        ChangeHistoryService& history = history_service(state);
+        const char* name = luaL_checkstring(state, 2);
+        const char* display = luaL_optstring(state, 3, "");
+        const std::optional<std::string> id = history.try_begin_recording(name, display);
+        if (id) {
+            lua_pushlstring(state, id->data(), id->size());
+        } else {
+            lua_pushnil(state);
+        }
+        return 1;
+    });
+}
+
+int ScriptBindings::history_finish_recording(lua_State* state) {
+    return lua_guard(state, [&] {
+        ChangeHistoryService& history = history_service(state);
+        const char* id = luaL_checkstring(state, 2);
+        const int op = check_enum_arg(state, 3, finish_recording_operation_enum());
+        history.finish_recording(id, static_cast<FinishRecordingOperation>(op));
+        return 0;
+    });
+}
+
+int ScriptBindings::history_is_recording_in_progress(lua_State* state) {
+    return lua_guard(state, [&] {
+        ChangeHistoryService& history = history_service(state);
+        std::optional<std::string> id;
+        if (!lua_isnoneornil(state, 2)) {
+            id = luaL_checkstring(state, 2);
+        }
+        lua_pushboolean(state, history.is_recording_in_progress(std::move(id)) ? 1 : 0);
+        return 1;
+    });
+}
+
+int ScriptBindings::history_set_waypoint(lua_State* state) {
+    return lua_guard(state, [&] {
+        history_service(state).set_waypoint(luaL_checkstring(state, 2));
+        return 0;
+    });
+}
+
+int ScriptBindings::history_undo(lua_State* state) {
+    return lua_guard(state, [&] {
+        history_service(state).undo();
+        return 0;
+    });
+}
+
+int ScriptBindings::history_redo(lua_State* state) {
+    return lua_guard(state, [&] {
+        history_service(state).redo();
+        return 0;
+    });
+}
+
+namespace {
+
+int push_can(lua_State* state, const std::pair<bool, std::string>& can) {
+    lua_pushboolean(state, can.first ? 1 : 0);
+    lua_pushlstring(state, can.second.data(), can.second.size());
+    return 2;
+}
+
+}  // namespace
+
+int ScriptBindings::history_get_can_undo(lua_State* state) {
+    return lua_guard(state, [&] { return push_can(state, history_service(state).can_undo()); });
+}
+
+int ScriptBindings::history_get_can_redo(lua_State* state) {
+    return lua_guard(state, [&] { return push_can(state, history_service(state).can_redo()); });
+}
+
+int ScriptBindings::history_reset_waypoints(lua_State* state) {
+    return lua_guard(state, [&] {
+        history_service(state).reset_waypoints();
+        return 0;
+    });
+}
+
 namespace {
 
 // A size the shape methods take: a number above 0.
@@ -1312,6 +1404,21 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         lua_method("Set", "nil", reinterpret_cast<void*>(&ScriptBindings::selection_set)),
     };
     register_lua_class("Selection", nullptr, selection, 2);
+
+    // ChangeHistoryService.cpp declares the class, its signals, and the service.
+    const LuaField history[] = {
+        lua_method("TryBeginRecording", "string", reinterpret_cast<void*>(&ScriptBindings::history_try_begin_recording)),
+        lua_method("FinishRecording", "nil", reinterpret_cast<void*>(&ScriptBindings::history_finish_recording)),
+        lua_method("IsRecordingInProgress", "boolean",
+                   reinterpret_cast<void*>(&ScriptBindings::history_is_recording_in_progress)),
+        lua_method("SetWaypoint", "nil", reinterpret_cast<void*>(&ScriptBindings::history_set_waypoint)),
+        lua_method("Undo", "nil", reinterpret_cast<void*>(&ScriptBindings::history_undo)),
+        lua_method("Redo", "nil", reinterpret_cast<void*>(&ScriptBindings::history_redo)),
+        lua_method("GetCanUndo", "boolean", reinterpret_cast<void*>(&ScriptBindings::history_get_can_undo)),
+        lua_method("GetCanRedo", "boolean", reinterpret_cast<void*>(&ScriptBindings::history_get_can_redo)),
+        lua_method("ResetWaypoints", "nil", reinterpret_cast<void*>(&ScriptBindings::history_reset_waypoints)),
+    };
+    register_lua_class("ChangeHistoryService", nullptr, history, static_cast<int>(sizeof(history) / sizeof(history[0])));
 
     // AssetInstances.cpp declares the class and its Path.
     const LuaField mesh[] = {

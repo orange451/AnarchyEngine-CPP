@@ -57,6 +57,21 @@ int push_event_args(lua_State* state, ScriptRuntime* runtime, const EventArgs* a
     return count;
 }
 
+LuaSlot text_slot(const std::string& text) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::String;
+    slot.text = text;
+    return slot;
+}
+
+LuaSlot operation_slot(FinishRecordingOperation op) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Enum;
+    slot.enum_type = &finish_recording_operation_enum();
+    slot.number = static_cast<int>(op);
+    return slot;
+}
+
 void clear_require_cache(lua_State* state, std::unordered_map<InstanceId, int>& cache) {
     for (const auto& entry : cache) {
         if (entry.second != LUA_REFNIL) {
@@ -117,6 +132,24 @@ void ScriptRuntime::attach(DataModel& game, TaskScheduler& scheduler) {
     game.events().set_script_gate(&ScriptRuntime::gate, this);
     run_service_.bind(game.events());
     game.events().host_signal(&selection_changed_);
+    for (Signal* signal : {&history_undo_, &history_redo_, &history_started_, &history_finished_}) {
+        game.events().host_signal(signal);
+    }
+    ChangeHistoryService& history = game.history();
+    history_links_[0] = history.on_undo.connect([this](const std::string& name) {
+        game_->events().emit_args(history_undo_.id(), 0, EventArgs{text_slot(name)});
+    });
+    history_links_[1] = history.on_redo.connect([this](const std::string& name) {
+        game_->events().emit_args(history_redo_.id(), 0, EventArgs{text_slot(name)});
+    });
+    history_links_[2] = history.on_recording_started.connect([this](const std::string& name, const std::string& display) {
+        game_->events().emit_args(history_started_.id(), 0, EventArgs{text_slot(name), text_slot(display)});
+    });
+    history_links_[3] = history.on_recording_finished.connect(
+        [this](const std::string& name, const std::string& display, const std::string& id, FinishRecordingOperation op) {
+            game_->events().emit_args(history_finished_.id(), 0,
+                                      EventArgs{text_slot(name), text_slot(display), text_slot(id), operation_slot(op)});
+        });
     selection_revision_ = game.selection().revision();
     was_running_ = game.simulation_running();
     game.input().bind(game.events());
@@ -142,6 +175,14 @@ void ScriptRuntime::detach() {
     if (game_ != nullptr) {
         run_service_.release(game_->events());
         game_->events().release_signal(selection_changed_);
+        ChangeHistoryService& history = game_->history();
+        history.on_undo.disconnect(history_links_[0]);
+        history.on_redo.disconnect(history_links_[1]);
+        history.on_recording_started.disconnect(history_links_[2]);
+        history.on_recording_finished.disconnect(history_links_[3]);
+        for (Signal* signal : {&history_undo_, &history_redo_, &history_started_, &history_finished_}) {
+            game_->events().release_signal(*signal);
+        }
         game_->input().release(game_->events());
         game_->input().set_active(false);
         game_->set_stop_hook(nullptr);
@@ -785,6 +826,14 @@ Signal* ScriptRuntime::host_signal(HostSignal which) {
         return run_service_.started();
     case HostSignal::Stopped:
         return run_service_.stopped();
+    case HostSignal::Undo:
+        return &history_undo_;
+    case HostSignal::Redo:
+        return &history_redo_;
+    case HostSignal::RecordingStarted:
+        return &history_started_;
+    case HostSignal::RecordingFinished:
+        return &history_finished_;
     }
     return nullptr;
 }

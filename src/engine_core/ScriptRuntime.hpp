@@ -440,6 +440,13 @@ private:
     Signal selection_changed_;
     std::uint64_t selection_revision_ = 0;
     bool was_running_ = false;
+    // ChangeHistoryService's OnUndo, OnRedo, OnRecordingStarted, and
+    // OnRecordingFinished, fired from its C++ signals of the same names.
+    Signal history_undo_;
+    Signal history_redo_;
+    Signal history_started_;
+    Signal history_finished_;
+    std::uint64_t history_links_[4] = {0, 0, 0, 0};
     void fire_host_changes();
 };
 

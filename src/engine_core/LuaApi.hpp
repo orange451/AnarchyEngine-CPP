@@ -102,8 +102,8 @@ struct LuaField {
     // Never a row in the Properties panel, though scripts, the command line,
     // and MCP read and write it. Archivable is one.
     bool hidden = false;
-    // A service's own signal with no arguments, found by tag through
-    // ScriptRuntime::host_signal (HostSignal).
+    // A service's own signal, found by tag through ScriptRuntime::host_signal
+    // (HostSignal); its handlers get whatever values the event carries.
     bool host_signal = false;
 
     bool shown_for(int value) const { return value >= 0 && value < 32 && ((shown_when_items >> value) & 1u) != 0; }
@@ -153,8 +153,16 @@ inline LuaField lua_saved_enum(const char* name, const EnumType& type, LuaRead r
     return field;
 }
 
-// The service signals that carry no arguments, by tag.
-enum class HostSignal { SelectionChanged = 0, Started = 1, Stopped = 2 };
+// The service signals ScriptRuntime fires, by tag.
+enum class HostSignal {
+    SelectionChanged = 0,
+    Started = 1,
+    Stopped = 2,
+    Undo = 3,
+    Redo = 4,
+    RecordingStarted = 5,
+    RecordingFinished = 6
+};
 
 inline LuaField lua_host_signal(const char* name, HostSignal tag) {
     LuaField field;

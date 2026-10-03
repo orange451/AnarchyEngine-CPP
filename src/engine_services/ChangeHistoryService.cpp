@@ -390,4 +390,21 @@ void ChangeHistoryService::drop_session() {
     named_slots_stale_ = true;
 }
 
+namespace {
+
+// ScriptRuntime adds the methods, since those calls need the script VM, and
+// fires these from the C++ signals of the same names.
+ANARCHY_LUA_REGISTER(register_change_history_lua) {
+    const LuaField fields[] = {
+        lua_host_signal("OnUndo", HostSignal::Undo),
+        lua_host_signal("OnRedo", HostSignal::Redo),
+        lua_host_signal("OnRecordingStarted", HostSignal::RecordingStarted),
+        lua_host_signal("OnRecordingFinished", HostSignal::RecordingFinished),
+    };
+    register_lua_class("ChangeHistoryService", nullptr, fields, static_cast<int>(sizeof(fields) / sizeof(fields[0])));
+    register_lua_service("ChangeHistoryService");
+}
+
+}  // namespace
+
 }  // namespace engine_core

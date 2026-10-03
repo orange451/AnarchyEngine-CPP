@@ -1108,6 +1108,35 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Selection", "Set", "Selects these instances and nothing else. The explorer shows the same selection.", nullptr,
         false, {P("selection", "{Instance}")});
 
+    add("ChangeHistoryService", "TryBeginRecording",
+        "Opens a recording: every change to the place until FinishRecording is one undo step with this name. Returns its "
+        "id, or nil when a recording is already open. A change no recording covers is not an undo step.",
+        "string?", false, {P("name", "string"), P("displayName", "string?")});
+    add("ChangeHistoryService", "FinishRecording",
+        "Closes the recording with this id. Commit keeps its changes as one undo step; Cancel puts them back. An id "
+        "that names no open recording does nothing.",
+        nullptr, false, {P("id", "string"), P("operation", "Enum.FinishRecordingOperation")});
+    add("ChangeHistoryService", "IsRecordingInProgress",
+        "True while the recording with this id is open, or while any is when id is omitted.", "boolean", false,
+        {P("id", "string?")});
+    add("ChangeHistoryService", "SetWaypoint", "Commits the open recording under this name. Does nothing when none is open.",
+        nullptr, false, {P("name", "string")});
+    add("ChangeHistoryService", "Undo", "Undoes the newest step. Does nothing while a recording is open.", nullptr, false, {});
+    add("ChangeHistoryService", "Redo", "Redoes the step last undone. Does nothing while a recording is open.", nullptr,
+        false, {});
+    add("ChangeHistoryService", "GetCanUndo", "Whether there is a step to undo, and its name.", "(boolean, string)", false, {});
+    add("ChangeHistoryService", "GetCanRedo", "Whether there is a step to redo, and its name.", "(boolean, string)", false, {});
+    add("ChangeHistoryService", "ResetWaypoints",
+        "Forgets every undo and redo step, and drops an open recording without putting its changes back.", nullptr,
+        false, {});
+    add("ChangeHistoryService", "OnUndo", "Fires after an undo. The argument is the step's name.", "Signal", false, {});
+    add("ChangeHistoryService", "OnRedo", "Fires after a redo. The argument is the step's name.", "Signal", false, {});
+    add("ChangeHistoryService", "OnRecordingStarted", "Fires when a recording opens. The arguments are its name and displayName.",
+        "Signal", false, {});
+    add("ChangeHistoryService", "OnRecordingFinished",
+        "Fires when a recording closes. The arguments are its name, displayName, id, and the Enum.FinishRecordingOperation.",
+        "Signal", false, {});
+
     add("UserInputService", "InputBegan",
         "Fires when a key or mouse button goes down in the scene view. The arguments are the InputObject and "
         "gameProcessedEvent.",

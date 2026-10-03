@@ -4850,6 +4850,103 @@ TEST_CASE("RW5 a continuation parked at Stop never resumes into the restored wor
     REQUIRE(rig.runtime.last_error().empty());
 }
 
+TEST_CASE("RW6 a window handler's visual write lands in that frame's snapshot", "[RW6]") {
+    // T21 (sandbox/tests.cpp, the Engine-driven "RenderStepped writes this frame
+    // and PostRender does not" case) is the model for this path: a render-step
+    // write needs visual_only (or ForceSimWrite) to pass authorize, and the
+    // write lock must be held across begin/end-window and take_changes, exactly
+    // as Engine::render_once holds it (Engine.cpp around line 400), for the
+    // snapshot to pick up the change in the same take_changes call. ScriptRig's
+    // plain rig.render() does not hold that lock or drive a pump, so this test
+    // builds the window by hand instead of reusing rig.render().
+    ScriptRig rig;
+    engine_core::GameObject& part = create_part(rig.game);
+    rig.game.set_name(part.id(), "Mover");
+    rig.game.set_visual_only(part.id(), true);
+    add_script(rig.game, "Push", R"(
+        local part = workspace:FindFirstChild("Mover")
+        game:GetService("RunService").RenderStepped:Connect(function()
+            part.Transform = Matrix4.new(5, 0, 0)
+        end)
+    )");
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    rig.game.start_simulation();
+    play_step(rig, 0.05);
+    std::thread render([&] {
+        engine_core::set_thread_role(engine_core::ThreadRole::Render);
+        rig.game.set_thread_ids(std::thread::id(), std::this_thread::get_id());
+        rig.game.set_threads_running(true);
+        {
+            engine_core::DataModelLock lock(rig.game, engine_core::DataModelLock::Write);
+            pump.begin_prerender_window(rig.game);
+            rig.scheduler.run_phase(engine_core::Phase::RenderStepped, 0.016);
+            pump.end_prerender_window(rig.game);
+            pump.take_changes(rig.game);
+        }
+        rig.game.set_threads_running(false);
+        engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+    });
+    render.join();
+    pump.finish_copy();
+    pump.publish();
+    const engine_core::VisualInstance* vis = pump.find(part.id());
+    REQUIRE(vis != nullptr);
+    REQUIRE(std::fabs(vis->world.m[12] - 5.0f) < 1e-4f);  // this frame, not the next
+    REQUIRE(rig.runtime.last_error().empty());
+}
+
+TEST_CASE("RW7 a write the window refuses raises a Lua error the handler can catch", "[RW7]") {
+    // Threads on and this thread registered as render, with the write lock held
+    // across the phase run (see RW6's comment and Engine.cpp's render loop): the
+    // same conditions that make authorize's render-thread branch real instead of
+    // the early "threads not running" pass-through. "Solid" carries no
+    // visual_only tag, so authorize's render-step branch refuses a Transform
+    // write to it, the one property confirmed (by reading GameObject.cpp's
+    // write_lua_transform) to reach DataModel::reject_write through a plain
+    // property write rather than a command queue.
+    ScriptRig rig;
+    engine_core::GameObject& part = create_part(rig.game);
+    rig.game.set_name(part.id(), "Solid");
+    add_script(rig.game, "Refused", R"(
+        local part = workspace:FindFirstChild("Solid")
+        game:GetService("RunService").RenderStepped:Connect(function()
+            local ok, err = pcall(function()
+                part.Transform = Matrix4.new(1, 2, 3)
+            end)
+            _G.ok = ok
+            _G.err = tostring(err)
+        end)
+    )");
+    rig.game.start_simulation();
+    play_step(rig, 0.05);
+    // has_deferred_violation keys off the calling thread's id, so it has to be
+    // read from inside the render thread, same as the deferral itself; checking
+    // it from the main thread after join() would trivially see nothing deferred
+    // whether or not the fix actually consumed it.
+    bool deferred_left = true;
+    std::thread render([&] {
+        engine_core::set_thread_role(engine_core::ThreadRole::Render);
+        rig.game.set_thread_ids(std::thread::id(), std::this_thread::get_id());
+        rig.game.set_threads_running(true);
+        {
+            engine_core::DataModelLock lock(rig.game, engine_core::DataModelLock::Write);
+            rig.game.set_prerender_window(true);
+            rig.scheduler.run_phase(engine_core::Phase::RenderStepped, 0.016);
+            rig.game.set_prerender_window(false);
+            deferred_left = rig.game.has_deferred_violation();
+        }
+        rig.game.set_threads_running(false);
+        engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+    });
+    render.join();
+    bool ok = true;
+    REQUIRE(rig.runtime.global_boolean("ok", ok));
+    REQUIRE_FALSE(ok);  // the pcall caught it: the refusal is a Lua error, not an abort
+    REQUIRE(rig.runtime.last_error().empty());
+    REQUIRE_FALSE(deferred_left);  // consumed by the Lua error, not left for the engine
+}
+
 TEST_CASE("S53 frames dropped before a step are not heard as RenderStepped", "[S53]") {
     // Window delivery runs the handler inside rig.render itself, so
     // drop_render_frames (which only forgets note_frame's summed ns, the sim-side

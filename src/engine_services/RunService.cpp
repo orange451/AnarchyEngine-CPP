@@ -15,6 +15,7 @@ void RunService::bind(EventQueue& events) {
     events.host_signal(&post_simulation_);
     events.host_signal(&heartbeat_);
     events.host_signal(&render_stepped_);
+    events.host_signal(&render_stepped_window_);
     events.host_signal(&started_);
     events.host_signal(&stopped_);
     bound_ = true;
@@ -29,6 +30,7 @@ void RunService::release(EventQueue& events) {
     events.release_signal(post_simulation_);
     events.release_signal(heartbeat_);
     events.release_signal(render_stepped_);
+    events.release_signal(render_stepped_window_);
     events.release_signal(started_);
     events.release_signal(stopped_);
     bound_ = false;

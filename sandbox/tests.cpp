@@ -5,6 +5,7 @@
 #include "Folder.hpp"
 #include "Game.hpp"
 #include "GameObject.hpp"
+#include "RunService.hpp"
 #include "SelectionService.hpp"
 #include "SnapshotPump.hpp"
 #include "Engine.hpp"
@@ -4837,4 +4838,17 @@ TEST_CASE("RW1 invoke_render runs a host signal's handlers in the window", "[RW1
     REQUIRE_THROWS_AS(events.invoke_render(signal, false), engine_core::ContractViolation);
     game.set_prerender_window(false);
     events.release_signal(signal);
+}
+
+TEST_CASE("RW2 the window signal binds with RunService and carries its own dt", "[RW2]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::RunService service;
+    service.bind(game.events());
+    REQUIRE(service.window_signal() != nullptr);
+    REQUIRE(service.window_signal()->id().valid());
+    service.set_window_dt(0.004);
+    REQUIRE(service.dt(engine_core::Phase::RenderStepped) == 0.004);
+    service.release(game.events());
+    REQUIRE_FALSE(service.window_signal()->id().valid());
 }

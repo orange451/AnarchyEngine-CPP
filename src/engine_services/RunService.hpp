@@ -12,10 +12,12 @@ namespace engine_core {
 // host-owned Signal fired with that step's dt. PreRender is declared to scripts
 // but blocked, so it has no signal.
 //
-// RenderStepped is the engine phase on RenderThread, but its script signal fires
-// on SimulationThread: the render job only counts the frame's time with
-// note_frame, and the next step fires the signal once for the frames drawn since,
-// with their summed time. Scripts never run on RenderThread.
+// RenderStepped reaches play and plugin scripts on RenderThread, inside the
+// Prepare window, once per displayed frame with that frame's dt: ScriptRuntime's
+// render job invokes window_signal's handlers directly, since the queue cannot
+// drain there. The console VM cannot join the window (its command line enters it
+// without the write lock), so its connections stay on the sim-side signal:
+// note_frame counts each frame, and the next step fires it with their summed time.
 //
 // SimulationThread is the only caller, except of note_frame and drop_frames. Between bind and
 // release the signals belong to one world's EventQueue, and they must outlive that use.
@@ -48,6 +50,10 @@ public:
     Signal* stopped() { return bound_ ? &stopped_ : nullptr; }
     // Forgets the frames noted so far. Any thread may call it.
     void drop_frames() { frame_ns_.store(0, std::memory_order_relaxed); }
+    // The signal window connections land on. Valid between bind and release.
+    Signal* window_signal() { return &render_stepped_window_; }
+    // The displayed frame's dt, which window handlers read through dt(RenderStepped).
+    void set_window_dt(double dt) { dt_[static_cast<int>(Phase::RenderStepped)] = dt; }
 
 private:
     Signal pre_animation_;
@@ -55,6 +61,10 @@ private:
     Signal post_simulation_;
     Signal heartbeat_;
     Signal render_stepped_;
+    // The window signal: play and plugin RenderStepped connections land here and
+    // are invoked on RenderThread inside the Prepare window, once per displayed
+    // frame. render_stepped_ keeps the sim-side delivery for the console VM.
+    Signal render_stepped_window_;
     Signal started_;
     Signal stopped_;
     double dt_[kPhaseCount] = {};

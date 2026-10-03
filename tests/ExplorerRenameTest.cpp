@@ -144,6 +144,20 @@ struct Rig {
         scene->noteButton(button, false, x, y, mods);
     }
 
+    // Lays out at `at`, then right-clicks the tree's empty space under the rows.
+    void rightClickEmpty(double at) {
+        frame(at);
+        jadefx::TreeView* view = tree();
+        Expect(view != nullptr, "the tree is on screen");
+        if (view == nullptr) {
+            return;
+        }
+        const double x = view->getAbsoluteX() + view->getWidth() * 0.5;
+        const double y = view->getAbsoluteY() + view->getHeight() - 4;
+        scene->noteButton(1, true, x, y, 0);
+        scene->noteButton(1, false, x, y, 0);
+    }
+
     void key(int code) { scene->noteKey(code, true, false, 0); }
 
     // Presses the middle of from's row, moves to along (0 top, 1 bottom) of
@@ -1049,16 +1063,7 @@ void TestRefusedInsertSaysWhy() {
     engine_core::register_lua_creatable("Folder", CreateFolder);
     Rig rig;
     rig.refuse_inserts = "The place is full.";
-    const std::vector<jadefx::Node*> found = rig.explorer->getElementsByClassName("explorer-add");
-    if (found.empty()) {
-        Expect(false, "the header has a + button");
-        return;
-    }
-    jadefx::Node* add = found.front();
-    const double x = add->getAbsoluteX() + add->getWidth() * 0.5;
-    const double y = add->getAbsoluteY() + add->getHeight() * 0.5;
-    rig.scene->noteButton(0, true, x, y, 0);
-    rig.scene->noteButton(0, false, x, y, 0);
+    rig.rightClickEmpty(0.05);
     rig.frame(0.1);
     rig.key(jadefx::Key::Enter);
     rig.frame(0.2);
@@ -1100,34 +1105,18 @@ void TestRightClickListCloses() {
            "the moved list inserts under the row right-clicked last");
 }
 
-void TestHeaderInsertsUnderTheRoot() {
+void TestEmptySpaceInsertsUnderTheRoot() {
     // The engine's registrars are not linked in here, so the class list needs one.
     engine_core::register_lua_creatable("Folder", CreateFolder);
     Rig rig;
-    const std::vector<jadefx::Node*> found = rig.explorer->getElementsByClassName("explorer-add");
-    jadefx::TextField* filter = rig.filter();
-    Expect(found.size() == 1 && filter != nullptr, "the header has a filter and a + button");
-    if (found.empty() || filter == nullptr) {
-        return;
-    }
-    jadefx::Node* add = found.front();
-    Expect(add->getAbsoluteY() >= filter->getAbsoluteY() + filter->getHeight(),
-           "the + sits under the filter");
-    Expect(add->getAbsoluteX() + add->getWidth() > filter->getAbsoluteX() + filter->getWidth() - 1,
-           "the + sits at the header's right edge");
-    jadefx::TreeView* view = rig.tree();
-    Expect(view != nullptr && add->getAbsoluteY() + add->getHeight() <= view->getAbsoluteY(),
-           "the + sits above the rows");
-    const double x = add->getAbsoluteX() + add->getWidth() * 0.5;
-    const double y = add->getAbsoluteY() + add->getHeight() * 0.5;
-    rig.scene->noteButton(0, true, x, y, 0);
-    rig.scene->noteButton(0, false, x, y, 0);
+    Expect(rig.explorer->getElementsByClassName("explorer-add").empty(), "the header has no + button");
+    rig.rightClickEmpty(0.05);
     rig.frame(0.1);
     // The class list takes the focus with its first class highlighted.
     rig.key(jadefx::Key::Enter);
     rig.frame(0.2);
     Expect(rig.inserts.size() == 1, "Enter in the list inserts once");
-    Expect(!rig.inserts.empty() && rig.inserts.front().second == rig.game.id(), "the header's + inserts under game");
+    Expect(!rig.inserts.empty() && rig.inserts.front().second == rig.game.id(), "a right-click on empty space inserts under game");
     rig.frame(0.3);
     Expect(rig.painted("Made"), "the new instance shows selected");
     jadefx::Node* focused = rig.scene->focusedNode();
@@ -1182,7 +1171,7 @@ int main() {
     TestRevealOpensTheBranch();
     TestRevealScrolls();
     TestRevealClearsAHidingFilter();
-    TestHeaderInsertsUnderTheRoot();
+    TestEmptySpaceInsertsUnderTheRoot();
     TestRightClickInsertsUnderTheRow();
     TestRightClickListCloses();
     TestRefusedInsertSaysWhy();

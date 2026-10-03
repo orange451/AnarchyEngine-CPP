@@ -63,7 +63,8 @@ struct ExplorerHost {
 // arrived in, not where the line was drawn. A row never goes inside itself, and Escape cancels.
 // Hovering a row shows + on its right. That opens a searchable list of classes
 // Instance.new can create, and the chosen class is parented under the row.
-// The + under the filter does the same for the explorer root itself.
+// A right-click on the empty space under the rows does the same for the
+// explorer root itself.
 //
 // The selection is the world's SelectionService, so every explorer and every
 // script share it. The tree is in Multiple mode: a click selects one row, Ctrl
@@ -71,7 +72,7 @@ struct ExplorerHost {
 // selects the rows from the last clicked one. A right-click on a selected row
 // keeps the rest. A Selection:Set from a script shows on the next frame.
 //
-// The header above the tree holds the filter field and that +, with a divider
+// The header above the tree holds the filter field, with a divider
 // under it. The field filters the tree. A row shows when its Name contains the
 // typed text, ignoring case, or when a row under it does. While filtering, the
 // branches leading to matches are open. An empty field shows every row again,
@@ -208,7 +209,6 @@ private:
     engine_core::InstanceId insert_parent_ = 0;
     std::shared_ptr<InsertResult> pending_insert_;
     std::shared_ptr<jadefx::Node> insert_button_;
-    std::shared_ptr<jadefx::Node> add_button_;
     std::unique_ptr<InsertPopup> insert_popup_;
 
     // Hidden until a rename. Kept as a child so it is styled every frame.

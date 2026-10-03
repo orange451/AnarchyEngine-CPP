@@ -40,8 +40,6 @@ constexpr double kDoubleClickSeconds = 0.4;
 // typed text lands where the name was drawn.
 constexpr double kRenameLead = 2;
 constexpr double kRenameTrail = 4;
-// The + in the header, the same chip a hovered row shows.
-constexpr double kAddSize = 22;
 
 // The header takes the Search pane's look: an inset filter field, then a
 // divider before the rows. kFindStylesheet styles the field itself.
@@ -255,29 +253,10 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
     insert_button_->setOnMouseClicked([this](const jadefx::MouseEvent&) { open_insert(); });
     tree_->setHoverAccessory(insert_button_);
     filter_field_ = jadefx::make<FilterField>([this] { leave_filter(); });
-    // Inserts under the root itself, which has no row of its own to hover.
-    add_button_ = jadefx::make<InsertButton>();
-    add_button_->getClassList().add("explorer-add");
-    add_button_->setStyle("color: var(--ide-explorer-button-color); border-radius: 3px;");
-    add_button_->setMinSize(kAddSize, kAddSize);
-    add_button_->setPrefSize(kAddSize, kAddSize);
-    add_button_->setMaxSize(kAddSize, kAddSize);
-    jadefx::Tooltip::install(add_button_.get(), jadefx::make<jadefx::Tooltip>("Insert Object"));
-    add_button_->setOnMouseClicked([this](const jadefx::MouseEvent& event) {
-        if (event.button == 0) {
-            insert_parent_ = root_.id();
-            show_insert(*add_button_);
-        }
-    });
-    auto actions = jadefx::make<jadefx::HBox>();
-    actions->setAlignment(jadefx::Pos::CenterRight);
-    actions->setStyle("width: 100%;");
-    actions->getChildren().add(add_button_);
     auto header = jadefx::make<jadefx::VBox>();
     header->getClassList().add("explorer-header");
     header->setStyle("width: 100%;");
     header->getChildren().add(filter_field_);
-    header->getChildren().add(actions);
     auto column = jadefx::make<jadefx::BorderPane>();
     Fill(*column);
     column->setTop(header);

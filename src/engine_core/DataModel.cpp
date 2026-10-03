@@ -977,10 +977,79 @@ Signal& DataModel::event_signal(InstanceId id, std::string_view name) {
     return event.signal;
 }
 
-void DataModel::fire_event(InstanceId id, std::string_view name) {
+namespace {
+
+// Whether slot is a value an event argument declared as param may carry.
+bool event_arg_fits(const LuaParam& param, const LuaSlot& slot) {
+    const std::string_view type = param.type_name != nullptr ? param.type_name : "";
+    using Kind = LuaSlot::Kind;
+    if (type == "number") {
+        return slot.kind == Kind::Number;
+    }
+    if (type == "boolean") {
+        return slot.kind == Kind::Bool;
+    }
+    if (type == "string") {
+        return slot.kind == Kind::String;
+    }
+    if (type == "Vector3") {
+        return slot.kind == Kind::Vec3;
+    }
+    if (type == "Vector2") {
+        return slot.kind == Kind::Vec2;
+    }
+    if (type == "Color3") {
+        return slot.kind == Kind::Color;
+    }
+    if (type == "Matrix4") {
+        return slot.kind == Kind::Matrix4;
+    }
+    if (type == "EnumItem") {
+        return slot.kind == Kind::Enum;
+    }
+    const bool optional = !type.empty() && type.back() == '?';
+    const std::string base(optional ? type.substr(0, type.size() - 1) : type);
+    if (lua_class_known(base.c_str())) {
+        return slot.kind == Kind::Instance || (optional && slot.kind == Kind::Nil);
+    }
+    return false;
+}
+
+// Fails the contract when args do not match what the class declares for the event.
+void check_event_args(const DataModel& object, std::string_view name, const EventArgs& args) {
+    const char* class_name = object.class_name() != nullptr ? object.class_name() : "Instance";
+    const LuaField* field = lua_class_find(class_name, name);
+    if (field == nullptr || !field->event) {
+        return;
+    }
+    const std::string label = std::string(class_name) + "." + std::string(name);
+    if (static_cast<int>(args.size()) != field->param_count) {
+        const std::string message = "fire_event: " + label + " takes " + std::to_string(field->param_count) +
+                                    " values, given " + std::to_string(args.size());
+        contract_fail(message.c_str());
+    }
+    for (int index = 0; index < field->param_count; ++index) {
+        const LuaParam& param = field->params[index];
+        if (!event_arg_fits(param, args[static_cast<std::size_t>(index)])) {
+            const std::string message = "fire_event: " + label + " argument " + std::to_string(index + 1) + " (" +
+                                        (param.name != nullptr ? param.name : "") + ") must be " +
+                                        (param.type_name != nullptr ? param.type_name : "?");
+            contract_fail(message.c_str());
+        }
+    }
+}
+
+}  // namespace
+
+void DataModel::fire_event(InstanceId id, std::string_view name, EventArgs args) {
     if (!on_gameplay_thread()) {
         contract_fail("fire_event runs on SimulationThread");
     }
+    const DataModel* object = instance(id);
+    if (object == nullptr) {
+        return;
+    }
+    check_event_args(*object, name, args);
     InstanceSignals* bag = bag_for(id);
     if (bag == nullptr) {
         return;
@@ -988,12 +1057,14 @@ void DataModel::fire_event(InstanceId id, std::string_view name) {
     for (const std::unique_ptr<InstanceSignals::Event>& event : bag->events) {
         if (event->name == name) {
             if (event->signal.bound() && event->signal.listeners_ > 0) {
-                state_->events.emit(event->signal.id(), id, Field::Reflected);
+                state_->events.emit_args(event->signal.id(), id, std::move(args));
             }
             return;
         }
     }
 }
+
+void DataModel::fire_event(InstanceId id, std::string_view name) { fire_event(id, name, EventArgs{}); }
 
 std::uint64_t DataModel::watch_changes(std::function<void()> notify) {
     std::lock_guard<std::mutex> guard(state_->watch_mu);

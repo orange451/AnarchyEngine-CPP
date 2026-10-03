@@ -332,7 +332,12 @@ public:
     // Action, made on first use. name is the field's name.
     Signal& event_signal(InstanceId id, std::string_view name);
     // Fires that event for whatever is connected to it; nothing when nothing
-    // is. Its handlers get the instance and Field::Reflected. SimulationThread.
+    // is. Its handlers get the instance, Field::Reflected, and args through
+    // EventQueue::current_args. args must match the event's declared arguments
+    // (lua_event), or the contract fails, whether or not anything listens. An
+    // event the class does not declare does nothing. SimulationThread.
+    void fire_event(InstanceId id, std::string_view name, EventArgs args);
+    // An event declared without arguments.
     void fire_event(InstanceId id, std::string_view name);
 
     EventQueue& events();

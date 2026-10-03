@@ -191,6 +191,15 @@ inline LuaField lua_event(const char* name) {
     return field;
 }
 
+// An event whose callbacks get these values, in order. fire_event must pass
+// exactly these: one LuaSlot per param, of the kind its type_name names.
+inline LuaField lua_event(const char* name, const LuaParam* params, int count) {
+    LuaField field = lua_event(name);
+    field.params = params;
+    field.param_count = count;
+    return field;
+}
+
 // Adds `fields` onto a class. `base` is another class name, or null.
 // Safe during static initialization and safe if the base is registered later.
 // Calling again adds more fields, so two libraries can each register part of

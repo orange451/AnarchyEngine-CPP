@@ -309,19 +309,15 @@ Signal* UserInputService::signal(Kind kind) {
 }
 
 void UserInputService::dispatch(EventQueue& events) {
-    // The previous step's records were delivered by the drains that followed it.
-    dispatched_.clear();
+    std::vector<InputRecord> records;
     {
         std::lock_guard<std::mutex> lock(mu_);
-        dispatched_.swap(queue_);
+        records.swap(queue_);
         // Under the lock, so a lock that starts after this sees these records dispatched.
         delta_lock_starts_ = lock_starts_.load(std::memory_order_relaxed);
     }
-    first_payload_ = next_payload_;
-    next_payload_ += dispatched_.size();
     mouse_delta_ = Vec3{};
-    for (std::size_t index = 0; index < dispatched_.size(); ++index) {
-        const InputRecord& record = dispatched_[index];
+    for (const InputRecord& record : records) {
         mouse_ = record.position;
         if (record.type == kMouseMovement) {
             mouse_delta_.x += record.delta.x;
@@ -345,16 +341,15 @@ void UserInputService::dispatch(EventQueue& events) {
         }
         Signal* target = signal(kind);
         if (target != nullptr && target->id().valid()) {
-            events.emit_payload(target->id(), first_payload_ + index);
+            LuaSlot input;
+            input.kind = LuaSlot::Kind::InputObject;
+            input.input = record;
+            LuaSlot processed;
+            processed.kind = LuaSlot::Kind::Bool;
+            processed.flag = record.processed;
+            events.emit_args(target->id(), 0, EventArgs{input, processed});
         }
     }
-}
-
-const InputRecord* UserInputService::record(std::uint64_t payload) const {
-    if (payload < first_payload_ || payload >= first_payload_ + dispatched_.size()) {
-        return nullptr;
-    }
-    return &dispatched_[static_cast<std::size_t>(payload - first_payload_)];
 }
 
 bool UserInputService::key_down(int key_code) const {
@@ -364,8 +359,6 @@ bool UserInputService::key_down(int key_code) const {
 bool UserInputService::button_down(int button) const { return valid_button(button) && buttons_down_[button]; }
 
 void UserInputService::reset() {
-    dispatched_.clear();
-    first_payload_ = next_payload_;
     keys_down_.clear();
     std::fill(std::begin(buttons_down_), std::end(buttons_down_), false);
     mouse_ = Vec3{};

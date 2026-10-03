@@ -7,6 +7,7 @@
 #include "Enum.hpp"
 #include "Events.hpp"
 #include "LuaApi.hpp"
+#include "UserInputService.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -297,4 +298,29 @@ TEST_CASE("EA3b an event without arguments still reaches Lua with none", "[EA3b]
     probe.rig.game.fire_event(probe.probe, "Bare");
     probe.rig.frames(1);
     REQUIRE(has_line(probe.rig.runtime.drain_output(), "bare\t0\n"));
+}
+
+TEST_CASE("EA10 an InputObject travels as an event value", "[EA10]") {
+    SimRole role;
+    engine_core::Game game;
+    // Posting and dispatching a key with a C++ listener on InputBegan
+    // delivers the record as the first value and gameProcessed as the second.
+    game.input().bind(game.events());
+    game.input().set_active(true);
+    int seen_key = 0;
+    bool seen_processed = true;
+    game.input().signal(engine_core::UserInputService::Kind::Began)->connect(
+        [&](engine_core::InstanceId, engine_core::Field) {
+            const engine_core::EventArgs* args = game.events().current_args();
+            REQUIRE(args != nullptr);
+            REQUIRE(args->size() == 2);
+            REQUIRE((*args)[0].kind == engine_core::LuaSlot::Kind::InputObject);
+            seen_key = (*args)[0].input.key;
+            seen_processed = (*args)[1].flag;
+        });
+    game.input().post_key(119, true);
+    game.input().dispatch(game.events());
+    game.events().drain();
+    REQUIRE(seen_key == 119);
+    REQUIRE_FALSE(seen_processed);
 }

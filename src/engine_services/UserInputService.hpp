@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Events.hpp"
+#include "InputRecord.hpp"
 #include "types.hpp"
 
 #include <atomic>
@@ -9,20 +10,6 @@
 #include <vector>
 
 namespace engine_core {
-
-// One keyboard or mouse event, as a script's InputObject reads it. The enum
-// fields hold Roblox values: KeyCode, UserInputType, and UserInputState.
-struct InputRecord {
-    int type = 22;  // UserInputType.None
-    int state = 4;  // UserInputState.None
-    int key = 0;    // KeyCode.Unknown
-    // Pointer position in the scene view, in points from its top-left corner.
-    // z is 0, except for MouseWheel, where z of position is the wheel movement.
-    Vec3 position{};
-    Vec3 delta{};
-    // True when the studio, not the game, took the event.
-    bool processed = false;
-};
 
 // game:GetService("UserInputService"). Keys and the mouse, as Roblox's
 // UserInputService gives them: InputBegan, InputChanged, and InputEnded fire
@@ -89,11 +76,9 @@ public:
     Signal* signal(Kind kind);
 
     // SimulationThread. Applies every queued record to the state the queries
-    // read, then queues one signal event for each. A handler finds its record
-    // through record(), keyed by the EventQueue payload it was emitted with.
+    // read, then queues one signal event for each, carrying its InputObject
+    // and whether the studio took it.
     void dispatch(EventQueue& events);
-    // Null when the payload is not from the latest dispatch.
-    const InputRecord* record(std::uint64_t payload) const;
 
     // SimulationThread. What the dispatched events add up to.
     bool key_down(int key_code) const;
@@ -143,9 +128,6 @@ private:
     bool posted_mouse_known_ = false;
 
     // SimulationThread only.
-    std::vector<InputRecord> dispatched_;
-    std::uint64_t first_payload_ = 1;
-    std::uint64_t next_payload_ = 1;
     std::vector<int> keys_down_;
     bool buttons_down_[3] = {};
     Vec3 mouse_{};

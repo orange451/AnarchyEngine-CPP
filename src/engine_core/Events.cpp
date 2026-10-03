@@ -331,21 +331,6 @@ void EventQueue::emit(SignalId signal, InstanceId id, Field field, WriteOrigin o
     post(event);
 }
 
-void EventQueue::emit_payload(SignalId signal, std::uint64_t payload) {
-    Signal* live = resolve(signal);
-    if (live == nullptr || live->listeners_ <= 0) {
-        return;
-    }
-    ++counts_[origin_index(WriteOrigin::Simulation)];
-    Event event;
-    event.signal = signal;
-    event.owner = live->owner_;
-    event.field = Field::Name;
-    event.payload = payload;
-    event.live = true;
-    post(event);
-}
-
 void EventQueue::emit_args(SignalId signal, InstanceId id, EventArgs args) {
     Signal* live = resolve(signal);
     if (live == nullptr || live->listeners_ <= 0) {

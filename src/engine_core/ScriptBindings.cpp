@@ -330,6 +330,9 @@ void push_registered(lua_State* state, ScriptRuntime* runtime, const LuaSlot& sl
         }
         push_enum_item(state, *slot.enum_type, static_cast<int>(slot.number));
         return;
+    case LuaSlot::Kind::InputObject:
+        push_input_object(state, slot.input);
+        return;
     case LuaSlot::Kind::Signal: {
         auto* signal = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
         *signal = SignalUd{};
@@ -673,11 +676,7 @@ int ScriptBindings::signal_connect(lua_State* state) {
             if (kind == kSignalChanged) {
                 runtime->invoke_listener(owner, held->ref, script, generation,
                                          changed_name(field, runtime->game_->events().payload()), false, 0);
-            } else if (kind == kSignalInput) {
-                if (const InputRecord* record = runtime->delivered_input()) {
-                    runtime->invoke_listener_input(owner, held->ref, script, generation, *record);
-                }
-            } else if (kind == kSignalEvent) {
+            } else if (kind == kSignalInput || kind == kSignalEvent) {
                 runtime->invoke_listener_args(owner, held->ref, script, generation,
                                               runtime->game_->events().current_args());
             } else {
@@ -725,13 +724,7 @@ int ScriptBindings::signal_wait(lua_State* state) {
             runtime->guarded(*waiting->vm, [&] {
                 if (kind == kSignalChanged) {
                     runtime->make_ready(*waiting, changed_name(field, runtime->game_->events().payload()));
-                } else if (kind == kSignalInput) {
-                    if (const InputRecord* record = runtime->delivered_input()) {
-                        runtime->make_ready_input(*waiting, *record);
-                    } else {
-                        runtime->make_ready(*waiting, nullptr);
-                    }
-                } else if (kind == kSignalEvent) {
+                } else if (kind == kSignalInput || kind == kSignalEvent) {
                     runtime->make_ready_args(*waiting, runtime->game_->events().current_args());
                 } else {
                     runtime->make_ready_number(*waiting, runtime->run_service_.dt());

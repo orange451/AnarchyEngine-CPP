@@ -1,5 +1,6 @@
 #pragma once
 
+#include "InputRecord.hpp"
 #include "types.hpp"
 
 #include <cstdint>
@@ -19,8 +20,9 @@ struct EnumType;
 // A value carried between a class's property and the Luau stack.
 // The set of kinds stays small. Property names do not live here.
 struct LuaSlot {
-    // A Vec2 (a Vector2) keeps its x and y in vec, with z 0.
-    enum class Kind { Nil, Bool, Number, String, Instance, Vec3, Color, Matrix4, Signal, Enum, Vec2 };
+    // A Vec2 (a Vector2) keeps its x and y in vec, with z 0. An InputObject is
+    // only ever an event's value, never a property's.
+    enum class Kind { Nil, Bool, Number, String, Instance, Vec3, Color, Matrix4, Signal, Enum, Vec2, InputObject };
     Kind kind = Kind::Nil;
     bool flag = false;
     // A Number's value, or an Enum item's value.
@@ -32,6 +34,8 @@ struct LuaSlot {
     Vec3 vec{};
     ColorRgb color{};
     Matrix4 transform{};
+    // An InputObject's record.
+    InputRecord input{};
     // Why a write refused the value, for the user. Empty when it did not say.
     std::string error;
 };

@@ -1602,37 +1602,6 @@ void ScriptRuntime::invoke_listener_args(Vm& vm, int ref, InstanceId script, std
     });
 }
 
-void ScriptRuntime::invoke_listener_input(Vm& vm, int ref, InstanceId script, std::uint32_t generation,
-                                          const InputRecord& record) {
-    guarded(vm, [&] {
-        Thread* thread = start_listener(vm, ref, script, generation);
-        if (thread == nullptr) {
-            return;
-        }
-        push_input_object(thread->co, record);
-        lua_pushboolean(thread->co, record.processed ? 1 : 0);
-        thread->nargs = 2;
-        run_listener(*thread);
-    });
-}
-
-void ScriptRuntime::make_ready_input(Thread& thread, const InputRecord& record) {
-    if (!unpark(thread)) {
-        return;
-    }
-    push_input_object(thread.co, record);
-    lua_pushboolean(thread.co, record.processed ? 1 : 0);
-    thread.nargs = 2;
-    ready(thread);
-}
-
-const InputRecord* ScriptRuntime::delivered_input() const {
-    if (game_ == nullptr) {
-        return nullptr;
-    }
-    return game_->input().record(game_->events().payload());
-}
-
 int ScriptRuntime::require_module(lua_State* state, InstanceId module_id) {
     if (game_ == nullptr) {
         luaL_error(state, "require has no data model");

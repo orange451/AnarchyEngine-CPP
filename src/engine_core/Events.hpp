@@ -125,9 +125,6 @@ public:
     // payload is for Field::Reflected: which property.
     void emit(SignalId signal, InstanceId id, Field field, WriteOrigin origin = WriteOrigin::Simulation,
               std::uint64_t payload = 0);
-    // A host signal event that carries a number for its handlers, such as which
-    // UserInputService record it is. Handlers read it with payload().
-    void emit_payload(SignalId signal, std::uint64_t payload);
     // The payload of the event whose handlers are running. 0 outside a handler,
     // and for an event emitted without one.
     std::uint64_t payload() const { return payload_; }

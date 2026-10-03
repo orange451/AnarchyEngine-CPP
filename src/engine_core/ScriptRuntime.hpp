@@ -26,7 +26,6 @@ struct lua_State;
 namespace engine_core {
 
 struct ScriptBindings;
-struct InputRecord;
 void open_host_libraries(lua_State* state);
 
 // Three Luau states, each with its own scheduler: the play VM for the play session,
@@ -359,15 +358,9 @@ private:
                          bool pass_number, double number);
     // An event with values: the listener gets each one, in order. Null gets none.
     void invoke_listener_args(Vm& vm, int ref, InstanceId script, std::uint32_t generation, const EventArgs* args);
-    // An UserInputService signal: the listener gets an InputObject and gameProcessedEvent.
-    void invoke_listener_input(Vm& vm, int ref, InstanceId script, std::uint32_t generation,
-                               const InputRecord& record);
     // Null when the owner may not run. The listener is on the new thread's stack.
     Thread* start_listener(Vm& vm, int ref, InstanceId script, std::uint32_t generation);
     void run_listener(Thread& thread);
-    void make_ready_input(Thread& thread, const InputRecord& record);
-    // The InputObject for the record being delivered, or null outside an UserInputService handler.
-    const InputRecord* delivered_input() const;
     int require_module(lua_State* state, InstanceId module_id);
 
     DataModel* game_ = nullptr;

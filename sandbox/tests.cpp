@@ -4133,9 +4133,14 @@ TEST_CASE("E3 a handler that throws leaves the queue as it was", "[E3]") {
     engine_core::Signal signal;
     events.host_signal(&signal);
     signal.connect([](engine_core::InstanceId, engine_core::Field) { throw std::runtime_error("handler failed"); });
-    events.emit_payload(signal.id(), 7);
+    events.emit(signal.id(), 0, engine_core::Field::Reflected, engine_core::WriteOrigin::Simulation, 7);
     REQUIRE_THROWS_AS(events.drain(), std::runtime_error);
     REQUIRE(events.payload() == 0);
+    engine_core::LuaSlot value;
+    value.kind = engine_core::LuaSlot::Kind::Number;
+    events.emit_args(signal.id(), 0, {value});
+    REQUIRE_THROWS_AS(events.drain(), std::runtime_error);
+    REQUIRE(events.current_args() == nullptr);
     events.release_signal(signal);
 }
 
@@ -4217,8 +4222,9 @@ struct InputRig {
         for (auto kind : {engine_core::UserInputService::Kind::Began, engine_core::UserInputService::Kind::Changed,
                           engine_core::UserInputService::Kind::Ended}) {
             connections.push_back(input.signal(kind)->connect([this](engine_core::InstanceId, engine_core::Field) {
-                if (const engine_core::InputRecord* record = input.record(game.events().payload())) {
-                    seen.push_back(*record);
+                const engine_core::EventArgs* args = game.events().current_args();
+                if (args != nullptr && !args->empty() && (*args)[0].kind == engine_core::LuaSlot::Kind::InputObject) {
+                    seen.push_back((*args)[0].input);
                 }
             }));
         }

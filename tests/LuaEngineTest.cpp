@@ -458,6 +458,7 @@ int RunUtf8Tests();
 int RunUiCallsTests();
 int RunViewCaptureTests();
 int RunSceneFeedTests();
+int RunGamePackTests();
 
 int RunColorLiteralsTests();
 int RunAssetBrowserTests();
@@ -487,6 +488,7 @@ int main() {
         gFailures += RunUiCallsTests();
         gFailures += RunViewCaptureTests();
         gFailures += RunSceneFeedTests();
+        gFailures += RunGamePackTests();
         gFailures += RunColorLiteralsTests();
         gFailures += RunAssetBrowserTests();
     } catch (const std::exception& ex) {

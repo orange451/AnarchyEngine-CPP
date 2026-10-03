@@ -13,6 +13,18 @@ namespace ide {
 // after a note on stderr of where it looked, when no copy exists.
 std::filesystem::path find_resource(const std::string& relative);
 
+// The folder relative names under resources/, such as "shaders", found the way
+// find_resource finds a file. Empty when there is none.
+std::filesystem::path find_resource_folder(const std::string& relative);
+
+// A resources folder searched before all the others: a packed game's own, so
+// the player draws with the shaders it was exported with. Set once, before any
+// resource is looked for.
+void set_resource_override(const std::filesystem::path& folder);
+
+// The running program itself. Empty when the system will not say.
+std::filesystem::path executable_path();
+
 // The folder of the running program. Empty when the system will not say.
 std::filesystem::path executable_directory();
 

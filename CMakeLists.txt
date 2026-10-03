@@ -14,6 +14,17 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# The C runtime links into every program, so an exported game is one .exe that
+# runs on a machine without the Visual C++ redistributable. Set before any
+# dependency is added: every library linked together must use the same runtime.
+# The policy default reaches dependencies whose cmake_minimum_required predates
+# it, and GLFW and Assimp read USE_MSVC_RUNTIME_LIBRARY_DLL.
+if(MSVC)
+    set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    set(USE_MSVC_RUNTIME_LIBRARY_DLL OFF CACHE BOOL "" FORCE)
+endif()
+
 # Editors (clangd, VS Code) read this so they use the same include paths as the build.
 # JadeFX lives outside this tree; without it, `#include "jadefx/jadefx.hpp"` looks missing.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -30,8 +41,10 @@ set(STUDIO_CORE_SOURCES
     src/runner/ShadowMath.cpp
     src/runner/ShadowAtlas.cpp
     src/runner/ShadowPlanner.cpp
+    src/runner/GamePack.cpp
     src/ide/AssetBrowser.cpp
     src/ide/ColorLiterals.cpp
+    src/ide/GameExport.cpp
     src/ide/IdeResources.cpp
     src/ide/ScratchResources.cpp
     src/ide/InputRouter.cpp
@@ -139,6 +152,27 @@ elseif(APPLE)
     # Lands in Contents/Resources, where CFBundleIconFile looks.
     target_sources(AnarchyEngine-CPP PRIVATE "${ANARCHY_ICON_DIR}/anarchy.icns")
     set_source_files_properties("${ANARCHY_ICON_DIR}/anarchy.icns" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+endif()
+
+# AnarchyPlayer plays a game without the studio: only the Scene View, playing
+# from the first frame. File > Export Game copies it and packs the project into
+# the copy (src/runner/GamePack.hpp), so a game is one file to send. Started
+# with a project folder, it plays that folder instead.
+add_executable(AnarchyPlayer MACOSX_BUNDLE
+    src/player/main.cpp
+)
+# The studio exports with the player beside it, so building the studio builds both.
+add_dependencies(AnarchyEngine-CPP AnarchyPlayer)
+if(WIN32)
+    target_sources(AnarchyPlayer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/anarchy.rc")
+    # No console window opens behind a game.
+    set_target_properties(AnarchyPlayer PROPERTIES WIN32_EXECUTABLE TRUE)
+    if(MSVC)
+        target_link_options(AnarchyPlayer PRIVATE /ENTRY:mainCRTStartup)
+    endif()
+elseif(APPLE)
+    # The icon's MACOSX_PACKAGE_LOCATION, set above, holds for this target too.
+    target_sources(AnarchyPlayer PRIVATE "${ANARCHY_ICON_DIR}/anarchy.icns")
 endif()
 
 # An explicit checkout wins. A sibling named JadeFX_CPP is next. Otherwise
@@ -542,6 +576,7 @@ endif()
 target_link_libraries(studio PUBLIC studio_core jadefx amesh)
 
 target_link_libraries(AnarchyEngine-CPP PRIVATE studio)
+target_link_libraries(AnarchyPlayer PRIVATE studio)
 
 # AMESH, the baked mesh format. Reading, writing, and validation need no
 # window or GL; GpuMesh (amesh_gl.cpp) builds into studio, beside the GL loader.
@@ -638,6 +673,7 @@ add_executable(engine-tests
     tests/Utf8Test.cpp
     tests/ViewCaptureTest.cpp
     tests/SceneFeedTest.cpp
+    tests/GamePackTest.cpp
 )
 target_link_libraries(engine-tests PRIVATE studio_core)
 
@@ -760,7 +796,7 @@ function(anarchy_warnings target)
         target_compile_options(${target} PRIVATE -Wall -Wextra)
     endif()
 endfunction()
-foreach(target IN ITEMS studio_core studio AnarchyEngine-CPP engine-tests shell-tests properties-tests console-tests
+foreach(target IN ITEMS studio_core studio AnarchyEngine-CPP AnarchyPlayer engine-tests shell-tests properties-tests console-tests
                         studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests assets-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
                         sandbox amesh amesh-tests amesh-gl-check scene-render-check ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
@@ -787,10 +823,36 @@ if(APPLE)
         MACOSX_BUNDLE_ICON_FILE "anarchy.icns"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in"
     )
+    # Export names a game's copy after the game, in place of "Anarchy Player"
+    # and the player's identifier (src/ide/GameExport.cpp).
+    set_target_properties(AnarchyPlayer PROPERTIES
+        OUTPUT_NAME "AnarchyPlayer"
+        MACOSX_BUNDLE_BUNDLE_NAME "Anarchy Player"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "local.anarchyengine.player"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.0"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+        MACOSX_BUNDLE_ICON_FILE "anarchy.icns"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in"
+    )
+
+    # The player's bundle gets the shaders, for playing a project folder; an
+    # exported game carries its own. Signed, so the studio bundle can hold it.
+    add_custom_target(bundle-player ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/shaders"
+            "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyPlayer>/Resources/shaders"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${JADEFX_SOURCE_ROOT}/res/shaders"
+            "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyPlayer>/Resources/shaders"
+        COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:AnarchyPlayer>"
+        DEPENDS AnarchyPlayer
+        VERBATIM
+    )
 
     # Copy the resources tree into the bundle, then sign it so Finder can launch it.
     # Source resources/ maps onto Contents/Resources, so resources/shaders lands in
-    # Contents/Resources/shaders. JadeFX's interface shaders join that directory.
+    # Contents/Resources/shaders. JadeFX's interface shaders join that directory,
+    # and the signed player goes in beside them, where Export Game finds it.
     add_custom_target(bundle-resources ALL
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyEngine-CPP>/Resources"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -799,8 +861,12 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${JADEFX_SOURCE_ROOT}/res/shaders"
             "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyEngine-CPP>/Resources/shaders"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyEngine-CPP>/Resources/AnarchyPlayer.app"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "$<TARGET_BUNDLE_DIR:AnarchyPlayer>"
+            "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyEngine-CPP>/Resources/AnarchyPlayer.app"
         COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:AnarchyEngine-CPP>"
-        DEPENDS AnarchyEngine-CPP
+        DEPENDS AnarchyEngine-CPP bundle-player
         VERBATIM
     )
 else()

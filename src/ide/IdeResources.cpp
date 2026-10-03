@@ -7,6 +7,7 @@
 #include <iterator>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -35,7 +36,7 @@ namespace {
 
 namespace fs = std::filesystem;
 
-fs::path ExecutableDirectory() {
+fs::path ExecutablePath() {
 #if defined(_WIN32)
     std::wstring buffer(MAX_PATH, L'\0');
     for (;;) {
@@ -49,7 +50,7 @@ fs::path ExecutableDirectory() {
         }
         buffer.resize(buffer.size() * 2);
     }
-    return fs::path(buffer).parent_path();
+    return fs::path(buffer);
 #elif defined(__APPLE__)
     std::string buffer(256, '\0');
     uint32_t size = static_cast<uint32_t>(buffer.size());
@@ -66,7 +67,7 @@ fs::path ExecutableDirectory() {
     buffer.resize(terminator);
     std::error_code error;
     const fs::path canonical = fs::weakly_canonical(buffer, error);
-    return (error ? fs::path(buffer) : canonical).parent_path();
+    return error ? fs::path(buffer) : canonical;
 #else
     std::string buffer(256, '\0');
     for (;;) {
@@ -80,8 +81,13 @@ fs::path ExecutableDirectory() {
         }
         buffer.resize(buffer.size() * 2);
     }
-    return fs::path(buffer).parent_path();
+    return fs::path(buffer);
 #endif
+}
+
+fs::path ExecutableDirectory() {
+    const fs::path program = ExecutablePath();
+    return program.empty() ? fs::path() : program.parent_path();
 }
 
 bool IsFile(const fs::path& path) {
@@ -93,29 +99,58 @@ bool IsFile(const fs::path& path) {
 
 fs::path executable_directory() { return ExecutableDirectory(); }
 
-fs::path find_resource(const std::string& relative) {
+fs::path executable_path() { return ExecutablePath(); }
+
+namespace {
+
+// Set once, before anything looks for a resource.
+fs::path gResourceOverride;
+
+// Where relative may be, in the order find_resource tries them.
+std::vector<fs::path> ResourceCandidates(const std::string& relative) {
     const fs::path exeDir = ExecutableDirectory();
     const fs::path tail = fs::path(relative);
-    fs::path candidates[4];
-    std::size_t count = 0;
+    std::vector<fs::path> candidates;
+    if (!gResourceOverride.empty()) {
+        candidates.push_back(gResourceOverride / tail);
+    }
     if (!exeDir.empty()) {
         // Mac bundle: the executable is Contents/MacOS, and resources/ from
         // the source tree is copied onto Contents/Resources.
-        candidates[count++] = exeDir / ".." / "Resources" / tail;
+        candidates.push_back(exeDir / ".." / "Resources" / tail);
     }
-    candidates[count++] = fs::path("resources") / tail;
+    candidates.push_back(fs::path("resources") / tail);
     if (!exeDir.empty()) {
-        candidates[count++] = exeDir / "resources" / tail;
-        candidates[count++] = exeDir / ".." / "resources" / tail;
+        candidates.push_back(exeDir / "resources" / tail);
+        candidates.push_back(exeDir / ".." / "resources" / tail);
     }
-    for (std::size_t i = 0; i < count; ++i) {
-        if (IsFile(candidates[i])) {
-            return candidates[i];
+    return candidates;
+}
+
+}  // namespace
+
+void set_resource_override(const fs::path& folder) { gResourceOverride = folder; }
+
+fs::path find_resource(const std::string& relative) {
+    const std::vector<fs::path> candidates = ResourceCandidates(relative);
+    for (const fs::path& candidate : candidates) {
+        if (IsFile(candidate)) {
+            return candidate;
         }
     }
     std::fprintf(stderr, "Could not find resource \"%s\". Looked for:\n", relative.c_str());
-    for (std::size_t i = 0; i < count; ++i) {
-        std::fprintf(stderr, "  %s\n", candidates[i].string().c_str());
+    for (const fs::path& candidate : candidates) {
+        std::fprintf(stderr, "  %s\n", candidate.string().c_str());
+    }
+    return {};
+}
+
+fs::path find_resource_folder(const std::string& relative) {
+    for (const fs::path& candidate : ResourceCandidates(relative)) {
+        std::error_code error;
+        if (fs::is_directory(candidate, error)) {
+            return candidate;
+        }
     }
     return {};
 }

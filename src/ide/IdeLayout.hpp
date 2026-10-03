@@ -183,6 +183,11 @@ private:
     // then runs after a successful save. A cancelled dialog or a failure skips it.
     void save_project(std::function<void()> then = {});
     void save_project_as(std::function<void()> then = {});
+    // File > Export Game: saves the place when it has changes, asks for the
+    // game's file name in a save dialog, and writes the game there as one file
+    // a friend can run, off the UI thread (GameExport.hpp). A toast says what
+    // it wrote, and the folder holding it opens.
+    void export_game();
     // Saves the open project and runs then. When files changed on disk since it
     // was opened or saved, asks whether to overwrite them and returns false; if
     // Overwrite saves, then runs after that save. overwrite, when set, lists the
@@ -517,6 +522,8 @@ private:
     // MCP tools that wait for the UI thread hold this weakly, so a task that
     // runs after the layout is gone does nothing.
     std::shared_ptr<int> alive_ = std::make_shared<int>(0);
+    // An export is writing; another waits for it to finish.
+    bool exporting_ = false;
     std::uint32_t last_script_focus_ = 0;
     // Source from an editor that was closed while the simulation was running.
     // Stop restores the place, then these strings are written back.

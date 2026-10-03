@@ -50,6 +50,8 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         ->setOnAction([this](jadefx::ActionEvent&) { save_project_as(); });
     AddItem(*file, "Reload from Disk", nullptr, 0, 0)->setOnAction([this](jadefx::ActionEvent&) { check_disk(); });
     file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
+    AddItem(*file, "Export Game…", "Play.png", 0, 0)->setOnAction([this](jadefx::ActionEvent&) { export_game(); });
+    file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     AddItem(*file, "Preferences\u2026", nullptr, jadefx::Key::Comma, jadefx::Key::ModControl)
         ->setOnAction([this](jadefx::ActionEvent&) { open_preferences(); });
     file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());

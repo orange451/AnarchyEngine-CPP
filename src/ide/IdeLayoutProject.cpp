@@ -4,6 +4,7 @@
 
 #include "AssetImport.hpp"
 #include "AssetInstances.hpp"
+#include "GameExport.hpp"
 #include "IdeAssets.hpp"
 #include "IdeLayoutInternal.hpp"
 #include "LockWaits.hpp"
@@ -14,6 +15,7 @@
 
 #include <chrono>
 #include <iterator>
+#include <thread>
 
 namespace ide {
 namespace {
@@ -848,6 +850,54 @@ void IdeLayout::save_project_as(std::function<void()> then) {
         if (save_project_to(root) && then) {
             then();
         }
+    });
+}
+
+void IdeLayout::export_game() {
+    if (exporting_ || dialog_open_ || prompt_open_) {
+        return;
+    }
+    // The game is the project as it is on disk, so changes are saved first.
+    if (!project_ || has_unsaved_changes()) {
+        save_project([this] { export_game(); });
+        return;
+    }
+    // A save dialog: the name typed there is the game's file.
+    jadefx::FolderDialogOptions options;
+    options.title = "Export Game";
+    options.save = true;
+    options.name = game_file_name(project_->name());
+    pick_folder(std::move(options), std::string(), [this](const std::filesystem::path& output) {
+        if (!project_ || exporting_) {
+            return;
+        }
+        GameExportRequest request;
+        request.name = project_->name();
+        request.project_root = project_->root();
+        request.tree_root = project_->tree_root();
+        request.resources_root = project_->resources_root();
+        request.output = output;
+        exporting_ = true;
+        show_toast("Exporting " + request.name + "…");
+        // A game with large resources takes a while to copy; the studio keeps drawing meanwhile.
+        std::thread([this, alive = std::weak_ptr<int>(alive_), request = std::move(request)] {
+            std::filesystem::path written;
+            std::string error;
+            const bool done = ide::export_game(request, written, error);
+            jadefx::runLater([this, alive, done, written, error] {
+                if (alive.expired()) {
+                    return;
+                }
+                exporting_ = false;
+                if (!done) {
+                    show_error("Could not export the game", error);
+                    return;
+                }
+                show_toast("Exported " + utf8_path(written.filename()) + ". Send it to a friend!",
+                           jadefx::Toast::LENGTH_LONG);
+                reveal_folder(written.parent_path());
+            });
+        }).detach();
     });
 }
 

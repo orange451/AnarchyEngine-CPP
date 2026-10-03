@@ -179,6 +179,8 @@ public:
     const std::filesystem::path& root() const { return root_; }
     // Where Mesh, Texture, and Sound Paths point: project.json's resources root.
     std::filesystem::path resources_root() const;
+    // Where the instance files are: project.json's tree root, src/ unless it names another.
+    std::filesystem::path tree_root() const;
     const std::string& name() const { return name_; }
     DataModel& datamodel() { return *game_; }
     const DataModel& datamodel() const { return *game_; }

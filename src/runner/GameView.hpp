@@ -83,6 +83,10 @@ public:
     jadefx::ComboBox& cameraList() { return *cameraBox_; }
     // The GUIs drawn over the view.
     GuiLayer& guiLayer() { return *guiLayer_; }
+    // The player's view: no FPS label or camera list, since a game shows only
+    // itself, and the view follows the Workspace's CurrentCamera, as a script
+    // sets it, rather than the Camera picked in the list.
+    void setPlayerView(bool player);
 
 protected:
     void layoutChildren() override;
@@ -206,6 +210,8 @@ private:
     engine_core::Engine* engine_ = nullptr;
     // Whether this view last locked its scene's pointer.
     bool pointerLocked_ = false;
+    // setPlayerView: the link follows the Workspace's CurrentCamera.
+    bool followCurrentCamera_ = false;
     // Paints in the current window. The label reads the finished average.
     std::chrono::steady_clock::time_point paintWindowStart_{};
     int paintWindowFrames_ = 0;

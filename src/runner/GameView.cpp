@@ -124,6 +124,12 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
     refreshWorkspace();
 }
 
+void GameView::setPlayerView(bool player) {
+    fpsLabel_->setVisible(!player);
+    cameraBox_->setVisible(!player);
+    followCurrentCamera_ = player;
+}
+
 void GameView::linkCamera(std::string guid) {
     if (guid == cameraGuid_) {
         return;
@@ -430,6 +436,17 @@ void GameView::readWorkspace() {
     if (place != placeGuid_) {
         placeGuid_ = std::move(place);
         cameraGuid_.clear();
+    }
+    if (followCurrentCamera_) {
+        const auto* workspace =
+            dynamic_cast<const engine_core::Workspace*>(game_->instance(game_->scene_service("Workspace")));
+        const engine_core::InstanceId current = workspace != nullptr ? workspace->current_camera() : 0;
+        for (const CameraChoice& choice : cameras_) {
+            if (current != 0 && choice.id == current) {
+                cameraGuid_ = choice.guid;
+                break;
+            }
+        }
     }
     if (cameraGuid_.empty() && !cameras_.empty()) {
         cameraGuid_ = cameras_.front().guid;

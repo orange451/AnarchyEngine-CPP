@@ -1198,6 +1198,8 @@ Project::Project() = default;
 
 std::filesystem::path Project::resources_root() const { return disk_path(root_, resources_); }
 
+std::filesystem::path Project::tree_root() const { return disk_path(root_, src_); }
+
 void Project::publish_resources_root() const {
     if (game_ != nullptr) {
         game_->set_resources_root(resources_root());

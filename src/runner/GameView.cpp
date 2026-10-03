@@ -144,10 +144,33 @@ void GameView::linkCamera(std::string guid) {
     }
 }
 
+void GameView::reportViewportSize() {
+    if (engine_ == nullptr || cameraId_ == 0) {
+        return;
+    }
+    const double width = contentWidth();
+    const double height = contentHeight();
+    if (cameraId_ == sizedCamera_ && width == sizedWidth_ && height == sizedHeight_) {
+        return;
+    }
+    sizedCamera_ = cameraId_;
+    sizedWidth_ = width;
+    sizedHeight_ = height;
+    const engine_core::Vec2 size{static_cast<float>(width), static_cast<float>(height)};
+    engine_->on_simulation([camera = cameraId_, size](engine_core::DataModel& game) {
+        if (auto* target = dynamic_cast<engine_core::Camera*>(game.instance(camera))) {
+            target->set_viewport_size(size);
+        }
+    });
+}
+
 void GameView::noteCurrentCamera(bool onlyIfNone) {
     if (engine_ == nullptr || cameraId_ == 0) {
         return;
     }
+    // Two views may show one camera: the one pressed in gives it its size.
+    sizedCamera_ = 0;
+    reportViewportSize();
     engine_->on_simulation([camera = cameraId_, onlyIfNone](engine_core::DataModel& game) {
         if (auto* workspace = dynamic_cast<engine_core::Workspace*>(game.instance(game.scene_service("Workspace")))) {
             if (!onlyIfNone || workspace->current_camera() == 0) {
@@ -372,6 +395,7 @@ void GameView::layoutChildren() {
     StackPane::layoutChildren();
     // The GUIs cover the whole view, whatever they would rather be.
     guiScene_->performLayout(contentLeft(), contentTop(), contentWidth(), contentHeight());
+    reportViewportSize();
     // The list sits in the top right corner, over the drawing, clear of the
     // FPS label on the left when the view is wide enough for both.
     constexpr double kMargin = 6.0;

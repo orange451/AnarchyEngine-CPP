@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameObject.hpp"
+#include "Vector2.hpp"
 
 #include <optional>
 #include <string>
@@ -33,12 +34,18 @@ public:
     // SimulationThread. Clamped to kMinFieldOfView..kMaxFieldOfView. A value
     // that is not finite is refused: returns why and changes nothing.
     std::optional<std::string> set_field_of_view(double degrees);
+    // The size in points of the scene view showing this camera, as the view
+    // last reported it; (0, 0) before any has. Read-only to scripts, never
+    // saved or undone. SimulationThread.
+    Vec2 viewport_size() const { return viewport_size_; }
+    void set_viewport_size(Vec2 size);
 
 protected:
     void on_reuse() override;
 
 private:
     double field_of_view_ = kDefaultFieldOfView;
+    Vec2 viewport_size_{};
 };
 
 }  // namespace engine_core

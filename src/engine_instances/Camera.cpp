@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
 namespace engine_core {
 namespace {
@@ -36,9 +37,19 @@ std::optional<std::string> Camera::set_field_of_view(double degrees) {
     return std::nullopt;
 }
 
+void Camera::set_viewport_size(Vec2 size) {
+    if (size.x == viewport_size_.x && size.y == viewport_size_.y) {
+        return;
+    }
+    viewport_size_ = size;
+    // The view's, not the place's: no history and nothing to save.
+    emit_property("ViewportSize");
+}
+
 void Camera::on_reuse() {
     GameObject::on_reuse();
     field_of_view_ = kDefaultFieldOfView;
+    viewport_size_ = Vec2{};
 }
 
 namespace {
@@ -49,6 +60,17 @@ bool read_field_of_view(DataModel&, DataModel& object, LuaSlot& out) {
         return false;
     }
     out = number_slot(camera->field_of_view());
+    return true;
+}
+
+bool read_viewport_size(DataModel&, DataModel& object, LuaSlot& out) {
+    auto* camera = dynamic_cast<Camera*>(&object);
+    if (camera == nullptr) {
+        return false;
+    }
+    const Vec2 size = camera->viewport_size();
+    out.kind = LuaSlot::Kind::Vec2;
+    out.vec = Vec3{size.x, size.y, 0.f};
     return true;
 }
 
@@ -71,8 +93,9 @@ ANARCHY_LUA_REGISTER(register_camera_lua) {
         lua_slider(lua_saved_property("FieldOfView", "number", read_field_of_view, write_field_of_view,
                                       field_of_view.c_str()),
                    Camera::kMinFieldOfView, Camera::kMaxFieldOfView),
+        lua_property("ViewportSize", "Vector2", false, read_viewport_size, nullptr),
     };
-    register_lua_class("Camera", "GameObject", fields, 1);
+    register_lua_class("Camera", "GameObject", fields, static_cast<int>(std::size(fields)));
 }
 
 }  // namespace

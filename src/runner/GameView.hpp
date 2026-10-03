@@ -107,6 +107,8 @@ private:
     void refreshFpsLabel();
     // Makes this view's linked Camera the Workspace's CurrentCamera; with
     // onlyIfNone, only while the Workspace has none.
+    // Tells this view's camera the view's size, when either changed.
+    void reportViewportSize();
     void noteCurrentCamera(bool onlyIfNone = false);
     // Locks or frees the scene's pointer to match MouseBehavior, and hands the
     // scene's pointer motion to UserInputService while locked. Two views can
@@ -167,6 +169,10 @@ private:
     // The link. cameraId_ is its Camera while that is in Workspace, else 0.
     std::string cameraGuid_;
     engine_core::InstanceId cameraId_ = 0;
+    // The camera and size last written to that camera's ViewportSize.
+    engine_core::InstanceId sizedCamera_ = 0;
+    double sizedWidth_ = -1.0;
+    double sizedHeight_ = -1.0;
     // The root's GUID at the last walk. Another means another place is open.
     std::string placeGuid_;
     // A selected PhysicsObject in Workspace, as of the last read.

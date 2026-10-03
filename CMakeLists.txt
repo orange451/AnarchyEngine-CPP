@@ -479,6 +479,7 @@ add_library(engine_instances STATIC
     src/engine_instances/PhysicsObject.cpp
     src/engine_instances/Skybox.cpp
     src/engine_instances/SoundEmitter.cpp
+    src/engine_instances/Dragger.cpp
     src/engine_instances/Script.cpp
 )
 add_library(engine_services STATIC

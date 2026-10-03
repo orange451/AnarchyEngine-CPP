@@ -20,6 +20,7 @@
 #include "Script.hpp"
 #include "SelectionService.hpp"
 #include "Skybox.hpp"
+#include "Dragger.hpp"
 #include "SoundEmitter.hpp"
 #include "UserInputService.hpp"
 #include "Vector2.hpp"
@@ -171,6 +172,7 @@ DataModel& create_folder(DataModel& world) { return world.create<Folder>(); }
 DataModel& create_physics_object(DataModel& world) { return world.create<PhysicsObject>(); }
 
 DataModel& create_sound_emitter(DataModel& world) { return world.create<SoundEmitter>(); }
+DataModel& create_dragger(DataModel& world) { return world.create<Dragger>(); }
 DataModel& create_skybox(DataModel& world) { return world.create<Skybox>(); }
 DataModel& create_screen_gui(DataModel& world) { return world.create<ScreenGui>(); }
 DataModel& create_pane(DataModel& world) { return world.create<Pane>(); }
@@ -202,6 +204,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Folder", create_folder);
     register_lua_creatable("PhysicsObject", create_physics_object);
     register_lua_creatable("SoundEmitter", create_sound_emitter);
+    register_lua_creatable("Dragger", create_dragger);
     register_lua_creatable("Skybox", create_skybox);
     register_lua_creatable("ScreenGui", create_screen_gui);
     register_lua_creatable("Pane", create_pane);

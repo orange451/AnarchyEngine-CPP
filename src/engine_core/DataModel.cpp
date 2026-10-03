@@ -85,6 +85,13 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                              .with<ecs::InGame>()
                              .cached()
                              .build();
+    world.dragger_query = world.ecs.query_builder<>()
+                              .with<ecs::Instance>()
+                              .in()
+                              .with<ecs::DraggerTag>()
+                              .with<ecs::InGame>()
+                              .cached()
+                              .build();
     world.slots.reserve(kMaxInstances);
     world.free_list.reserve(kMaxInstances);
     world.invalidation.reserve(kMaxInvalidations);
@@ -523,6 +530,9 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
     if (object->sound_source()) {
         ecs_add_id(ecs_world(), world.slots[index].entity, world.ecs_ids.sound_source);
     }
+    if (object->dragger()) {
+        ecs_add_id(ecs_world(), world.slots[index].entity, world.ecs_ids.dragger);
+    }
     const char* label = object->class_name();
     object->name_ = label != nullptr ? label : std::string();
     // Assigned once. A project load replaces it with the GUID from disk.
@@ -856,6 +866,17 @@ void DataModel::integrate_simulated(double dt) {
 void DataModel::physics_bodies(std::vector<InstanceId>& out) const {
     out.clear();
     ecs_iter_t it = ecs_query_iter(ecs_world(), state_->body_query.c_ptr());
+    while (ecs_query_next(&it)) {
+        const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
+        for (std::int32_t i = 0; i < it.count; ++i) {
+            out.push_back(owners[i].id);
+        }
+    }
+}
+
+void DataModel::draggers(std::vector<InstanceId>& out) const {
+    out.clear();
+    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->dragger_query.c_ptr());
     while (ecs_query_next(&it)) {
         const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
         for (std::int32_t i = 0; i < it.count; ++i) {

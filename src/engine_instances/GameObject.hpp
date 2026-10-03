@@ -19,6 +19,10 @@ public:
 
     void set_transform(const Matrix4& transform);
     void set_transform(const Matrix4& transform, ForceSimWrite);
+    std::optional<std::string> set_pv_transform(const Matrix4& transform) override {
+        set_transform(transform);
+        return std::nullopt;
+    }
     // The Transform's translation. A write keeps the rotation and is a
     // Transform write: it is checked, recorded, and changes as Transform.
     void set_position(const Vec3& position);

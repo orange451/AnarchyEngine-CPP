@@ -94,6 +94,7 @@ public:
 
     // SimulationThread. Each returns why it refused the value, changing nothing.
     std::optional<std::string> set_transform(const Matrix4& transform);
+    std::optional<std::string> set_pv_transform(const Matrix4& transform) override { return set_transform(transform); }
     std::optional<std::string> set_velocity(Vec3 velocity);
     std::optional<std::string> set_angular_velocity(Vec3 velocity);
     void set_anchored(bool anchored);

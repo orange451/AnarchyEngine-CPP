@@ -184,6 +184,17 @@ const EnumEntry kGuiAlignments[] = {
     {"CenterRight", 5}, {"BottomLeft", 6}, {"BottomCenter", 7}, {"BottomRight", 8},
 };
 
+// Dragger.Space: the axes its handles point along.
+const EnumEntry kDraggerSpaces[] = {
+    {"World", 0},
+    {"Local", 1},
+};
+
+// The handle a Dragger's events name: three arrows, then three plane squares.
+const EnumEntry kDraggerHandles[] = {
+    {"X", 0}, {"Y", 1}, {"Z", 2}, {"XY", 3}, {"YZ", 4}, {"XZ", 5},
+};
+
 template <std::size_t N>
 constexpr int count_of(const EnumEntry (&)[N]) {
     return static_cast<int>(N);
@@ -199,11 +210,13 @@ const EnumType kMouseBehaviorType{"MouseBehavior", kMouseBehaviors, count_of(kMo
 const EnumType kPhysicsShapeType{"PhysicsShape", kPhysicsShapes, count_of(kPhysicsShapes)};
 const EnumType kRollOffModeType{"RollOffMode", kRollOffModes, count_of(kRollOffModes)};
 const EnumType kGuiAlignmentType{"GuiAlignment", kGuiAlignments, count_of(kGuiAlignments)};
+const EnumType kDraggerSpaceType{"DraggerSpace", kDraggerSpaces, count_of(kDraggerSpaces)};
+const EnumType kDraggerHandleType{"DraggerHandle", kDraggerHandles, count_of(kDraggerHandles)};
 
 const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kRotationOrderType,
                                   &kKeyCodeType,        &kUserInputTypeType, &kUserInputStateType,
                                   &kMouseBehaviorType,  &kPhysicsShapeType,  &kRollOffModeType,
-                                  &kGuiAlignmentType};
+                                  &kGuiAlignmentType,   &kDraggerSpaceType,  &kDraggerHandleType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -279,6 +292,8 @@ const EnumType& physics_shape_enum() { return kPhysicsShapeType; }
 const EnumType& roll_off_mode_enum() { return kRollOffModeType; }
 
 const EnumType& gui_alignment_enum() { return kGuiAlignmentType; }
+const EnumType& dragger_space_enum() { return kDraggerSpaceType; }
+const EnumType& dragger_handle_enum() { return kDraggerHandleType; }
 
 int enum_item_value(const EnumType& type, std::string_view name) {
     for (int index = 0; index < type.count; ++index) {

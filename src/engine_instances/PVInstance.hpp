@@ -2,6 +2,9 @@
 
 #include "DataModel.hpp"
 
+#include <optional>
+#include <string>
+
 namespace engine_core {
 
 // An instance with a place in the world: every class with a Transform
@@ -15,6 +18,10 @@ public:
 
     // The Transform. A dead instance's is a zero matrix.
     virtual Matrix4 transform() const = 0;
+    // Writes the Transform through the class's own setter, so it is checked,
+    // recorded, and fires Changed like any edit. Returns why it refused.
+    // SimulationThread.
+    virtual std::optional<std::string> set_pv_transform(const Matrix4& transform) = 0;
 };
 
 }  // namespace engine_core

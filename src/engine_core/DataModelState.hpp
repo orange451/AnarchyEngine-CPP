@@ -103,6 +103,8 @@ struct DataModel::State {
     // Audio sources the audio world plays: Instance (in), with SoundSource
     // and InGame.
     flecs::query<> source_query;
+    // Draggers under game: Instance (in), with DraggerTag and InGame.
+    flecs::query<> dragger_query;
 
     // Guards slots, free lists, invalidation, and resync.
     // SimulationThread may hold Write across a whole step and may re-enter

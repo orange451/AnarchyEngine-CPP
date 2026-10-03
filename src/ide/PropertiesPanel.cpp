@@ -84,7 +84,7 @@ constexpr const char* kReadOnlyStyle =
     "padding: 0 4px; border-width: 1px; border-style: solid; border-radius: 3px; "
     "border-color: var(--ide-properties-readonly-border-color); "
     "background-color: var(--ide-properties-readonly-color); color: var(--ide-muted-text-color);";
-// Position's X, Y, and Z fields are tinted red, green, and blue, and so are a
+// A Vector3's X, Y, and Z fields are tinted red, green, and blue, and so are a
 // Transform's Position and Orientation.
 constexpr const char* kAxisStyles[3] = {
     "padding: 0 4px; border-width: 1px; border-style: solid; border-radius: 3px; "
@@ -1129,8 +1129,8 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         case PropertyKind::Vector2:
         case PropertyKind::Vector3:
             for (int axis = 0; axis < vector_axes(row.kind); ++axis) {
-                view->axes[axis] =
-                    make_field(view, !row.writable, row.name == "Position" ? kAxisStyles[axis] : kFieldStyle);
+                const bool tinted = row.kind == PropertyKind::Vector3;
+                view->axes[axis] = make_field(view, !row.writable, tinted ? kAxisStyles[axis] : kFieldStyle);
             }
             break;
         case PropertyKind::Transform: {

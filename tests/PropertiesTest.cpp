@@ -695,6 +695,17 @@ void TestPositionAxisColors() {
     }
     Expect(rig.field("Name")->getStyle().find("--ide-field-color") != std::string::npos,
            "other fields keep the field color");
+
+    // Every Vector3 is tinted, whatever its name.
+    const InstanceId body = rig.add<engine_core::PhysicsObject>("Body");
+    rig.select({body});
+    for (const char* name : {"Velocity", "AngularVelocity", "Size"}) {
+        for (int axis = 0; axis < 3; ++axis) {
+            jadefx::TextField* box = rig.field(name, axis);
+            Expect(box != nullptr && box->getStyle().find(colors[axis]) != std::string::npos,
+                   (std::string(name) + "'s X, Y, and Z are red, green, and blue").c_str());
+        }
+    }
 }
 
 bool SameColor(const engine_core::ColorRgb& color, float r, float g, float b) {

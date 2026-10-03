@@ -45,6 +45,8 @@ public:
 const engine_core::LuaParam kFiredArgs[] = {
     {"count", "number"}, {"where", "Vector3"}, {"key", "EnumItem"}, {"who", "Instance?"}};
 const engine_core::LuaParam kStrictArgs[] = {{"who", "Instance"}};
+const engine_core::LuaParam kPressedArgs[] = {{"input", "InputObject"}};
+const engine_core::LuaParam kMaybeArgs[] = {{"where", "Vector3?"}};
 
 engine_core::LuaSlot vec3_slot(float x, float y, float z) {
     engine_core::LuaSlot slot;
@@ -107,6 +109,8 @@ ANARCHY_LUA_REGISTER(register_event_probe_lua) {
         engine_core::lua_event("Fired", kFiredArgs, 4),
         engine_core::lua_event("Strict", kStrictArgs, 1),
         engine_core::lua_event("Bare"),
+        engine_core::lua_event("Pressed", kPressedArgs, 1),
+        engine_core::lua_event("Maybe", kMaybeArgs, 1),
     };
     engine_core::register_lua_class("EventProbe", "Instance", fields, static_cast<int>(std::size(fields)));
 }
@@ -323,4 +327,26 @@ TEST_CASE("EA10 an InputObject travels as an event value", "[EA10]") {
     game.events().drain();
     REQUIRE(seen_key == 119);
     REQUIRE_FALSE(seen_processed);
+}
+
+TEST_CASE("EA11 an InputObject argument takes an InputObject through fire_event, not an Instance", "[EA11]") {
+    SimRole role;
+    engine_core::Game game;
+    EventProbe& probe = game.create<EventProbe>();
+    engine_core::LuaSlot input;
+    input.kind = engine_core::LuaSlot::Kind::InputObject;
+    input.input.key = 119;
+    REQUIRE_NOTHROW(game.fire_event(probe.id(), "Pressed", {input}));
+    REQUIRE_THROWS_AS(game.fire_event(probe.id(), "Pressed", {instance_slot(probe.id())}),
+                      engine_core::ContractViolation);
+}
+
+TEST_CASE("EA12 an optional value type takes its value or nil, and never an Instance", "[EA12]") {
+    SimRole role;
+    engine_core::Game game;
+    EventProbe& probe = game.create<EventProbe>();
+    REQUIRE_NOTHROW(game.fire_event(probe.id(), "Maybe", {vec3_slot(1, 2, 3)}));
+    REQUIRE_NOTHROW(game.fire_event(probe.id(), "Maybe", {nil_slot()}));
+    REQUIRE_THROWS_AS(game.fire_event(probe.id(), "Maybe", {instance_slot(probe.id())}),
+                      engine_core::ContractViolation);
 }

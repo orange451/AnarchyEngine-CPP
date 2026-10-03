@@ -979,10 +979,17 @@ Signal& DataModel::event_signal(InstanceId id, std::string_view name) {
 
 namespace {
 
-// Whether slot is a value an event argument declared as param may carry.
+// Whether slot is a value an event argument declared as param may carry. A
+// type ending in ? also takes nil.
 bool event_arg_fits(const LuaParam& param, const LuaSlot& slot) {
-    const std::string_view type = param.type_name != nullptr ? param.type_name : "";
+    std::string_view type = param.type_name != nullptr ? param.type_name : "";
     using Kind = LuaSlot::Kind;
+    if (!type.empty() && type.back() == '?') {
+        if (slot.kind == Kind::Nil) {
+            return true;
+        }
+        type.remove_suffix(1);
+    }
     if (type == "number") {
         return slot.kind == Kind::Number;
     }
@@ -1007,10 +1014,14 @@ bool event_arg_fits(const LuaParam& param, const LuaSlot& slot) {
     if (type == "EnumItem") {
         return slot.kind == Kind::Enum;
     }
-    const bool optional = !type.empty() && type.back() == '?';
-    const std::string base(optional ? type.substr(0, type.size() - 1) : type);
-    if (lua_class_known(base.c_str())) {
-        return slot.kind == Kind::Instance || (optional && slot.kind == Kind::Nil);
+    if (type == "InputObject") {
+        return slot.kind == Kind::InputObject;
+    }
+    // Value types such as Vector3 are registered classes too, so only an
+    // Instance class takes an instance.
+    const std::string base(type);
+    if (lua_class_inherits(base.c_str(), "Instance")) {
+        return slot.kind == Kind::Instance;
     }
     return false;
 }

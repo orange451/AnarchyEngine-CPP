@@ -1261,3 +1261,23 @@ TEST_CASE("A30 a module the analyzer checked still reads as the functions it rep
     }
     CHECK(listed);
 }
+
+TEST_CASE("A33 ChangeHistoryService's documented use type-checks, with GetCanUndo's two values", "[A33]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Uses", R"(
+local history = game:GetService("ChangeHistoryService")
+local can, name = history:GetCanUndo()
+local again, other = history:GetCanRedo()
+print(can, name, again, other)
+local id = history:TryBeginRecording("Paint")
+if id then
+    history:FinishRecording(id, Enum.FinishRecordingOperation.Commit)
+end
+history.OnUndo:Connect(function(stepName) print(stepName) end)
+)");
+    settle(analysis);
+    const std::vector<engine_core::Diagnostic> diagnostics = analysis.diagnostics(script.id());
+    INFO(dump(diagnostics));
+    REQUIRE(diagnostics.empty());
+}

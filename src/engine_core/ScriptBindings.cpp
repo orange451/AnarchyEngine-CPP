@@ -1407,16 +1407,17 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     register_lua_class("Selection", nullptr, selection, 2);
 
     // ChangeHistoryService.cpp declares the class, its signals, and the service.
+    // GetCanUndo and GetCanRedo return two values, which only their docs can say.
     const LuaField history[] = {
-        lua_method("TryBeginRecording", "string", reinterpret_cast<void*>(&ScriptBindings::history_try_begin_recording)),
+        lua_method("TryBeginRecording", "string?", reinterpret_cast<void*>(&ScriptBindings::history_try_begin_recording)),
         lua_method("FinishRecording", "nil", reinterpret_cast<void*>(&ScriptBindings::history_finish_recording)),
         lua_method("IsRecordingInProgress", "boolean",
                    reinterpret_cast<void*>(&ScriptBindings::history_is_recording_in_progress)),
         lua_method("SetWaypoint", "nil", reinterpret_cast<void*>(&ScriptBindings::history_set_waypoint)),
         lua_method("Undo", "nil", reinterpret_cast<void*>(&ScriptBindings::history_undo)),
         lua_method("Redo", "nil", reinterpret_cast<void*>(&ScriptBindings::history_redo)),
-        lua_method("GetCanUndo", "boolean", reinterpret_cast<void*>(&ScriptBindings::history_get_can_undo)),
-        lua_method("GetCanRedo", "boolean", reinterpret_cast<void*>(&ScriptBindings::history_get_can_redo)),
+        lua_method("GetCanUndo", "", reinterpret_cast<void*>(&ScriptBindings::history_get_can_undo)),
+        lua_method("GetCanRedo", "", reinterpret_cast<void*>(&ScriptBindings::history_get_can_redo)),
         lua_method("ResetWaypoints", "nil", reinterpret_cast<void*>(&ScriptBindings::history_reset_waypoints)),
     };
     register_lua_class("ChangeHistoryService", nullptr, history, static_cast<int>(sizeof(history) / sizeof(history[0])));

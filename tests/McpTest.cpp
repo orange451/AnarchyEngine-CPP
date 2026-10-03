@@ -503,6 +503,22 @@ void TestScriptTools() {
     Expect(Member(several, "instances").items().size() == 2 &&
                Member(Item(Member(several, "instances"), 1), "name").as_string() == "Lib",
            "get_properties reads several instances in order");
+
+    // run_lua is the command line: a write is an undo step only when the chunk records it.
+    game.history().reset_waypoints();
+    game.history().mark_saved();
+    Call(server, "run_lua", R"({"source":"workspace.Main.Name = 'Loose'"})");
+    Expect(!game.history().can_undo().first, "a run_lua write outside a recording is not an undo step");
+    Expect(!game.history().dirty(), "and does not mark the place unsaved");
+    Call(server, "run_lua",
+         R"j({"source":"local h = game:GetService('ChangeHistoryService') local id = h:TryBeginRecording('Rename Main') workspace.Loose.Name = 'Main' h:FinishRecording(id, Enum.FinishRecordingOperation.Commit)"})j");
+    Expect(game.history().can_undo().second == "Rename Main", "a chunk that records is one named step");
+    Expect(game.history().dirty(), "and marks the place unsaved");
+
+    const std::string instructions = ide::default_instructions();
+    Expect(instructions.find("run_lua") != std::string::npos &&
+               instructions.find("ChangeHistoryService") != std::string::npos,
+           "the instructions say run_lua records only through ChangeHistoryService");
 }
 
 // playtest run_for waits while the place plays, and returns what it printed.

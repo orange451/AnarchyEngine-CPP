@@ -23,8 +23,11 @@ constexpr const char* kServerVersion = "0.1.0";
 constexpr const char* kDefaultInstructions =
     "Anarchy Engine studio. The place is a tree of instances under the root, `game`. "
     "Name an instance by its id, or by its path of Names from the root such as \"Folder.Part\". "
-    "Edits go through the studio's undo history, as if made by hand. "
-    "run_lua runs Luau against the live place, like the studio's command line. "
+    "set_property, create_instance, delete_instance, import_assets, write_script, and edit_script are undo steps "
+    "in the studio's history, as if made by hand. "
+    "run_lua runs Luau against the live place, like the studio's command line: what it changes is saved with the "
+    "place, but is an undo step only when the chunk records it with ChangeHistoryService "
+    "(TryBeginRecording, then FinishRecording). "
     "The studio checks Luau itself: write_script and edit_script return the problems it finds, and "
     "get_diagnostics reports them for any script.";
 

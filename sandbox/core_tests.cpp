@@ -48,3 +48,46 @@ TEST_CASE("CO9 a Game holds Core last, hidden from the explorer, and it cannot b
     // What Workspace may hold, Core may hold.
     REQUIRE_NOTHROW(add_folder(game, "Tools", core));
 }
+
+TEST_CASE("CO2a Core's descendants are in Core, and Core holds itself and them", "[CO2a]") {
+    SimRole role;
+    engine_core::Game game;
+    const InstanceId core = game.core();
+    const InstanceId tools = add_folder(game, "Tools", core);
+    const InstanceId inner = add_folder(game, "Inner", tools);
+    const InstanceId place = add_folder(game, "Place", game.scene_service("Workspace"));
+    REQUIRE(game.in_core(tools));
+    REQUIRE(game.in_core(inner));
+    REQUIRE_FALSE(game.in_core(core));
+    REQUIRE(game.core_holds(core));
+    REQUIRE(game.core_holds(inner));
+    REQUIRE_FALSE(game.core_holds(place));
+    REQUIRE_FALSE(game.core_holds(0));
+    REQUIRE(game.in_game(inner));
+    REQUIRE_FALSE(game.in_workspace(inner));
+}
+
+TEST_CASE("CO5 nothing moves across Core's edge, but an instance with no parent may go in", "[CO5]") {
+    SimRole role;
+    engine_core::Game game;
+    const InstanceId core = game.core();
+    const InstanceId workspace = game.scene_service("Workspace");
+    const InstanceId tools = add_folder(game, "Tools", core);
+    const InstanceId other = add_folder(game, "Other", core);
+    const InstanceId part = add_folder(game, "Part", workspace);
+    // Out of Core, to the place or to no parent.
+    REQUIRE(game.parent_error(tools, workspace).has_value());
+    REQUIRE(game.parent_error(tools, engine_core::DataModel::kNoParent).has_value());
+    REQUIRE_THROWS_AS(game.set_parent(tools, workspace), ContractViolation);
+    // From the place into Core.
+    REQUIRE(game.parent_error(part, core).has_value());
+    REQUIRE_THROWS_AS(game.set_parent(part, tools), ContractViolation);
+    // Within Core.
+    REQUIRE_NOTHROW(game.set_parent(tools, other));
+    // An instance with no parent, including one that left the place.
+    const InstanceId loose = add_folder(game, "Loose", engine_core::DataModel::kNoParent);
+    REQUIRE_NOTHROW(game.set_parent(loose, core));
+    game.set_parent(part, engine_core::DataModel::kNoParent);
+    REQUIRE_NOTHROW(game.set_parent(part, core));
+    REQUIRE(game.in_core(part));
+}

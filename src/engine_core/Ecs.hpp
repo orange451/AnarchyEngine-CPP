@@ -27,10 +27,12 @@ struct Instance {
     InstanceId id = 0;
 };
 
-// Under game, under the Workspace service, and under the Lighting service.
+// Under game, under the Workspace service, under the Lighting service, and
+// under the Core service.
 struct InGame {};
 struct InWorkspace {};
 struct InLighting {};
+struct InCore {};
 // A rigid body: its class's physics_body() is true (PhysicsObject).
 struct PhysicsBody {};
 // Plays audio: its class's sound_source() is true (SoundEmitter).
@@ -51,6 +53,7 @@ struct EcsIds {
     ecs_id_t in_game = 0;
     ecs_id_t in_workspace = 0;
     ecs_id_t in_lighting = 0;
+    ecs_id_t in_core = 0;
     ecs_id_t steps = 0;
     ecs_id_t physics_body = 0;
     ecs_id_t sound_source = 0;

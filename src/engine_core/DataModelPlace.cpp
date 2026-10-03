@@ -222,6 +222,7 @@ void DataModel::clear_hierarchy() {
         set_tag(world, part.entity, state_->ecs_ids.in_game, false);
         set_tag(world, part.entity, state_->ecs_ids.in_workspace, false);
         set_tag(world, part.entity, state_->ecs_ids.in_lighting, false);
+        set_tag(world, part.entity, state_->ecs_ids.in_core, false);
     }
 }
 

@@ -343,6 +343,8 @@ private:
     bool unpark(Thread& thread);
     void make_ready(Thread& thread, const char* result);
     void make_ready_number(Thread& thread, double result);
+    // Resumes a Wait with an event's values as its results. Null resumes it with none.
+    void make_ready_args(Thread& thread, const EventArgs* args);
     bool thread_ok(const Thread& thread) const;
     Thread& new_thread(Vm& vm, InstanceId script, std::uint32_t generation);
     void set_script_global(lua_State* co, InstanceId script);
@@ -355,6 +357,8 @@ private:
     void fire_phase(Phase phase, double dt);
     void invoke_listener(Vm& vm, int ref, InstanceId script, std::uint32_t generation, const char* text,
                          bool pass_number, double number);
+    // An event with values: the listener gets each one, in order. Null gets none.
+    void invoke_listener_args(Vm& vm, int ref, InstanceId script, std::uint32_t generation, const EventArgs* args);
     // An UserInputService signal: the listener gets an InputObject and gameProcessedEvent.
     void invoke_listener_input(Vm& vm, int ref, InstanceId script, std::uint32_t generation,
                                const InputRecord& record);

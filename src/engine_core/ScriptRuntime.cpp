@@ -39,7 +39,23 @@
 
 namespace engine_core {
 
+void push_registered(lua_State* state, ScriptRuntime* runtime, const LuaSlot& slot, InstanceId id, std::uint32_t world);
+
 namespace {
+
+// Pushes an event's values in order and says how many. The values are copied
+// onto the stack, so the event may go once this returns.
+int push_event_args(lua_State* state, ScriptRuntime* runtime, const EventArgs* args) {
+    if (args == nullptr || args->empty()) {
+        return 0;
+    }
+    const int count = static_cast<int>(args->size());
+    lua_checkstack(state, count);
+    for (const LuaSlot& slot : *args) {
+        push_registered(state, runtime, slot, 0, 0);
+    }
+    return count;
+}
 
 void clear_require_cache(lua_State* state, std::unordered_map<InstanceId, int>& cache) {
     for (const auto& entry : cache) {
@@ -993,6 +1009,14 @@ void ScriptRuntime::make_ready_number(Thread& thread, double result) {
     ready(thread);
 }
 
+void ScriptRuntime::make_ready_args(Thread& thread, const EventArgs* args) {
+    if (!unpark(thread)) {
+        return;
+    }
+    thread.nargs = push_event_args(thread.co, this, args);
+    ready(thread);
+}
+
 void ScriptRuntime::park_child_wait(Thread& thread) {
     Vm& vm = *thread.vm;
     thread.park = Thread::Park::Child;
@@ -1562,6 +1586,18 @@ void ScriptRuntime::invoke_listener(Vm& vm, int ref, InstanceId script, std::uin
             lua_pushnumber(thread->co, number);
             thread->nargs = 1;
         }
+        run_listener(*thread);
+    });
+}
+
+void ScriptRuntime::invoke_listener_args(Vm& vm, int ref, InstanceId script, std::uint32_t generation,
+                                         const EventArgs* args) {
+    guarded(vm, [&] {
+        Thread* thread = start_listener(vm, ref, script, generation);
+        if (thread == nullptr) {
+            return;
+        }
+        thread->nargs = push_event_args(thread->co, this, args);
         run_listener(*thread);
     });
 }

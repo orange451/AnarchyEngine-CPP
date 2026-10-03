@@ -74,6 +74,31 @@ engine_core::EventArgs fired_args(engine_core::LuaSlot who) {
     return {number_slot(3), vec3_slot(1, 2, 3), key_slot(119), std::move(who)};
 }
 
+bool has_line(const engine_core::ScriptRuntime::OutputBatch& batch, const std::string& text) {
+    for (const engine_core::ScriptRuntime::OutputLine& line : batch.lines) {
+        if (line.text == text) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A probe named Probe under Workspace, and a script beside it, running in play.
+struct ProbeRig {
+    ScriptRig rig;
+    engine_core::InstanceId probe = 0;
+
+    explicit ProbeRig(const char* source) {
+        EventProbe& made = rig.game.create<EventProbe>();
+        probe = made.id();
+        rig.game.set_name(probe, "Probe");
+        rig.game.set_parent(probe, rig.game.scene_service("Workspace"));
+        add_script(rig.game, "Listener", source);
+        rig.game.start_simulation();
+        rig.frames(1);
+    }
+};
+
 }  // namespace
 
 ANARCHY_LUA_REGISTER(register_event_probe_lua) {
@@ -214,4 +239,62 @@ TEST_CASE("EA8 the script checker types an event's callback from its declaration
     REQUIRE(definitions.find("Fired: Signal_EventProbe_Fired") != std::string::npos);
     REQUIRE(definitions.find("count: number, where: Vector3") != std::string::npos);
     REQUIRE(definitions.find("Bare: Signal\n") != std::string::npos);
+}
+
+TEST_CASE("EA1 a Connect handler gets each value the event was fired with", "[EA1]") {
+    ProbeRig probe(R"(
+        workspace.Probe.Fired:Connect(function(count, where, key, who)
+            print("fired", count, where.X, where.Y, where.Z, key == Enum.KeyCode.W, who == workspace.Probe, who == nil)
+        end)
+    )");
+    probe.rig.game.fire_event(probe.probe, "Fired", fired_args(instance_slot(probe.probe)));
+    probe.rig.frames(1);
+    INFO(probe.rig.runtime.last_error());
+    const auto output = probe.rig.runtime.drain_output();
+    REQUIRE(has_line(output, "fired\t3\t1\t2\t3\ttrue\ttrue\tfalse\n"));
+
+    probe.rig.game.fire_event(probe.probe, "Fired", fired_args(nil_slot()));
+    probe.rig.frames(1);
+    REQUIRE(has_line(probe.rig.runtime.drain_output(), "fired\t3\t1\t2\t3\ttrue\tfalse\ttrue\n"));
+}
+
+TEST_CASE("EA2 Wait returns the fired values", "[EA2]") {
+    ProbeRig probe(R"(
+        task.spawn(function()
+            local count, where = workspace.Probe.Fired:Wait()
+            print("waited", count, where.Y)
+        end)
+    )");
+    probe.rig.game.fire_event(probe.probe, "Fired", fired_args(nil_slot()));
+    probe.rig.frames(2);
+    INFO(probe.rig.runtime.last_error());
+    REQUIRE(has_line(probe.rig.runtime.drain_output(), "waited\t3\t2\n"));
+}
+
+TEST_CASE("EA3 two events fired in one step each reach Lua with their own values", "[EA3]") {
+    ProbeRig probe(R"(
+        workspace.Probe.Fired:Connect(function(count)
+            print("count", count)
+        end)
+    )");
+    engine_core::EventArgs first = fired_args(nil_slot());
+    engine_core::EventArgs second = fired_args(nil_slot());
+    second[0] = number_slot(4);
+    probe.rig.game.fire_event(probe.probe, "Fired", first);
+    probe.rig.game.fire_event(probe.probe, "Fired", second);
+    probe.rig.frames(1);
+    const auto output = probe.rig.runtime.drain_output();
+    REQUIRE(has_line(output, "count\t3\n"));
+    REQUIRE(has_line(output, "count\t4\n"));
+}
+
+TEST_CASE("EA3b an event without arguments still reaches Lua with none", "[EA3b]") {
+    ProbeRig probe(R"(
+        workspace.Probe.Bare:Connect(function(...)
+            print("bare", select("#", ...))
+        end)
+    )");
+    probe.rig.game.fire_event(probe.probe, "Bare");
+    probe.rig.frames(1);
+    REQUIRE(has_line(probe.rig.runtime.drain_output(), "bare\t0\n"));
 }

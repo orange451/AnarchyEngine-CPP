@@ -678,7 +678,8 @@ int ScriptBindings::signal_connect(lua_State* state) {
                     runtime->invoke_listener_input(owner, held->ref, script, generation, *record);
                 }
             } else if (kind == kSignalEvent) {
-                runtime->invoke_listener(owner, held->ref, script, generation, nullptr, false, 0);
+                runtime->invoke_listener_args(owner, held->ref, script, generation,
+                                              runtime->game_->events().current_args());
             } else {
                 runtime->invoke_listener(owner, held->ref, script, generation, nullptr, true,
                                          runtime->run_service_.dt());
@@ -731,7 +732,7 @@ int ScriptBindings::signal_wait(lua_State* state) {
                         runtime->make_ready(*waiting, nullptr);
                     }
                 } else if (kind == kSignalEvent) {
-                    runtime->make_ready(*waiting, nullptr);
+                    runtime->make_ready_args(*waiting, runtime->game_->events().current_args());
                 } else {
                     runtime->make_ready_number(*waiting, runtime->run_service_.dt());
                 }

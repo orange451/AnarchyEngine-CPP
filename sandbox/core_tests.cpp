@@ -460,3 +460,30 @@ TEST_CASE("CO7e a Script under another Script in Core runs once", "[CO7e]") {
     }
     REQUIRE(inner_runs == 1);
 }
+
+TEST_CASE("PR1 core() is Core's id through New, Open, Play, and Stop", "[PR1][project]") {
+    SimRole role;
+    TempDir dir;
+    engine_core::Game game;
+    const InstanceId core = game.core();
+    engine_core::Project project = engine_core::Project::create(dir.path, game);
+    engine_core::Project::reset_place(game);
+    REQUIRE(game.core() == core);
+    engine_core::Project reopened = engine_core::Project::load(dir.path, game);
+    game.start_simulation();
+    REQUIRE(game.core() == core);
+    game.stop_simulation();
+    REQUIRE(game.core() == core);
+}
+
+TEST_CASE("PR2 a change in Core leaves the place's authored revision alone", "[PR2]") {
+    SimRole role;
+    engine_core::Game game;
+    const InstanceId tools = add_folder(game, "Tools", game.core());
+    const InstanceId more = add_folder(game, "More", game.core());
+    const std::uint64_t before = game.authored_revision();
+    game.set_name(tools, "Renamed");
+    game.set_parent(more, tools);
+    game.destroy(more);
+    REQUIRE(game.authored_revision() == before);
+}

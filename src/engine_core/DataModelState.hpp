@@ -176,6 +176,8 @@ struct DataModel::State {
     // Dead slots kept off the free list because undo or redo may bring their
     // instance back. A full place takes them, dropping the undo history.
     std::vector<std::uint32_t> history_held;
+    // Core's id once found. Core cannot move or be destroyed, so it holds.
+    InstanceId core_id = 0;
     // Edit-mode authored changes a project save has not written yet.
     std::unordered_set<InstanceId> dirty;
     bool dirty_all = false;

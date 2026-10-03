@@ -6,6 +6,7 @@
 #include "PropertyReflection.hpp"
 
 #include <algorithm>
+#include <iterator>
 
 namespace engine_core {
 
@@ -443,6 +444,8 @@ DataModel* DataModel::pooled_object(InstancePool& pool, std::uint32_t storage, I
         pool.objects[storage] = object;
     } else {
         object->rebind(id);
+        // Reused storage starts as a new instance would.
+        object->archivable_ = true;
         object->on_reuse();
     }
     return object;
@@ -1522,7 +1525,31 @@ InstanceId DataModel::service(std::string_view class_name) const {
     return 0;
 }
 
-InstanceId DataModel::core() const { return service(kCoreClass); }
+bool DataModel::archivable(InstanceId id) const {
+    const DataModel* object = instance(id);
+    return object == nullptr || object->archivable_;
+}
+
+void DataModel::set_archivable(InstanceId id, bool archivable) {
+    DataModel* object = instance(id);
+    // A service holds the place: it is always written.
+    if (object == nullptr || object->is_service() || object->archivable_ == archivable) {
+        return;
+    }
+    object->archivable_ = archivable;
+    // What a save writes changed: the parent's folder gains or loses it.
+    mark_authored_dirty(id);
+    mark_authored_dirty(parent(id));
+    object->emit_property("Archivable");
+}
+
+InstanceId DataModel::core() const {
+    // Game makes Core once; until then, and in a DataModel that is not a Game, there is none.
+    if (state_->core_id == 0 || !alive(state_->core_id)) {
+        state_->core_id = service(kCoreClass);
+    }
+    return state_->core_id;
+}
 
 std::string DataModel::rule_class(InstanceId parent, InstanceId moved, InstanceId moved_to) const {
     InstanceId at = parent;
@@ -2050,6 +2077,10 @@ void DataModel::mark_authored_dirty(InstanceId id) {
     if (id == kNoParent || state_->simulation_running) {
         return;
     }
+    // Core is not the place: what changes there is never saved.
+    if (core_holds(id)) {
+        return;
+    }
     state_->dirty.insert(id);
     state_->revision.fetch_add(1, std::memory_order_relaxed);
 }
@@ -2105,6 +2136,25 @@ bool write_lua_parent(DataModel& world, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+bool read_lua_archivable(DataModel& world, DataModel& object, LuaSlot& out) {
+    out.kind = LuaSlot::Kind::Bool;
+    out.flag = world.archivable(object.id());
+    return true;
+}
+
+bool write_lua_archivable(DataModel& world, DataModel& object, LuaSlot& in) {
+    if (in.kind != LuaSlot::Kind::Bool) {
+        in.error = "Archivable must be true or false";
+        return false;
+    }
+    if (object.is_service() && !in.flag) {
+        in.error = world.name(object.id()) + " is a service, and a service is always archivable";
+        return false;
+    }
+    world.set_archivable(object.id(), in.flag);
+    return true;
+}
+
 bool read_lua_changed(DataModel&, DataModel&, LuaSlot& out) {
     out.kind = LuaSlot::Kind::Signal;
     return true;
@@ -2122,8 +2172,9 @@ ANARCHY_LUA_REGISTER(register_datamodel_lua) {
         // game is a parent too, and it is not an Instance.
         lua_property("Parent", "DataModel?", true, read_lua_parent, write_lua_parent),
         changed,
+        lua_hidden(lua_property("Archivable", "boolean", true, read_lua_archivable, write_lua_archivable)),
     };
-    register_lua_class("DataModel", nullptr, fields, 4);
+    register_lua_class("DataModel", nullptr, fields, static_cast<int>(std::size(fields)));
 }
 
 }  // namespace

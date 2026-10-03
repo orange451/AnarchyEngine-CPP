@@ -1160,8 +1160,9 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Signal", false, {});
     add("RunService", "PreRender", "A render step. Scripts cannot connect to it.", "Signal", false, {});
     add("RunService", "RenderStepped",
-        "Fires once a step after a frame is drawn, before the simulation step. The argument dt is the time of the "
-        "frames drawn since.",
+        "Fires every displayed frame, before the frame is drawn. The handler runs in the render step: what it "
+        "reads is what the frame draws, and a visual write lands in that frame. The argument dt is the frame's "
+        "time in seconds.",
         "Signal", false, {});
     add("RunService", "IsRunning", "True while a play session is open, paused or not. False in edit mode.", "boolean",
         false, {});

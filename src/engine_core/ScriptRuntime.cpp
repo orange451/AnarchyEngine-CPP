@@ -125,8 +125,10 @@ void ScriptRuntime::attach(DataModel& game, TaskScheduler& scheduler) {
     for (Phase phase : {Phase::PreAnimation, Phase::PreSimulation, Phase::PostSimulation, Phase::Heartbeat}) {
         phase_jobs_.push_back(scheduler.bind(phase, [this, phase](double dt) { fire_phase(phase, dt); }));
     }
-    // On RenderThread this only counts the frame. The next step fires the script signal.
-    phase_jobs_.push_back(scheduler.bind(Phase::RenderStepped, [this](double dt) { run_service_.note_frame(dt); }));
+    // On RenderThread this runs window handlers and counts the frame for the
+    // console fallback. Scripts in the window hold the same write lock the sim
+    // step holds, so the two never run Lua at once.
+    phase_jobs_.push_back(scheduler.bind(Phase::RenderStepped, [this](double dt) { render_step(dt); }));
 }
 
 void ScriptRuntime::detach() {
@@ -504,7 +506,29 @@ void ScriptRuntime::on_stop() {
     close_vm();
 }
 
+void ScriptRuntime::render_step(double dt) {
+    run_service_.note_frame(dt);
+    if (game_ == nullptr) {
+        return;
+    }
+    Signal* window = run_service_.window_signal();
+    if (window == nullptr || !window->id().valid()) {
+        return;
+    }
+    // A paused play session's handlers wait for resume; plugins keep stepping.
+    const bool include_play = open_ && !play_.closing && !render_paused_.load(std::memory_order_relaxed);
+    run_service_.set_window_dt(dt);
+    in_render_window_ = true;
+    game_->events().invoke_render(*window, include_play);
+    in_render_window_ = false;
+}
+
 void ScriptRuntime::assert_lua_thread() const {
+    // Lua runs wherever the DataModel write lock is held: the simulation step,
+    // a paused edit, or the render thread inside the Prepare window.
+    if (game_ != nullptr && game_->prerender_window() && thread_role() == ThreadRole::Render) {
+        return;
+    }
     if (thread_role() == ThreadRole::Render) {
         contract_fail("Lua runs on SimulationThread");
     }

@@ -684,6 +684,14 @@ int ScriptBindings::signal_connect(lua_State* state) {
         const auto held = std::make_shared<const ScriptRuntime::HeldRef>(vm, lua_ref(state, -1));
         lua_pop(state, 1);
         Signal* signal = &signal_of(state, *runtime, *ud);
+        if (ud->kind != kSignalChanged && ud->kind != kSignalEvent && ud->kind != kSignalInput &&
+            static_cast<Phase>(ud->phase) == Phase::RenderStepped &&
+            vm.kind != ScriptRuntime::VmKind::Console) {
+            // Play and plugin handlers run in the render window; the console VM
+            // keeps the sim-side delivery, since its command line enters it
+            // without the write lock.
+            signal = runtime->run_service_.window_signal();
+        }
         const InstanceId script = caller->script;
         const std::uint32_t generation = caller->generation;
         // The handler owns the callback's reference; Disconnect drops the handler.

@@ -307,11 +307,13 @@ struct CameraRig : ScriptRig {
         runtime.drain_output();
     }
 
-    // The plugin moves the camera on RenderStepped, so each step follows a rendered frame.
+    // The plugin moves the camera on RenderStepped. Input dispatches in step_tools,
+    // so it runs first, the same order the engine's two threads settle into: a
+    // key pressed before this call is current by the window's next handler run.
     void frames(int count, double dt = 1.0 / 60.0) {
         for (int i = 0; i < count; ++i) {
-            render(dt);
             ScriptRig::frames(1, dt);
+            render(dt);
         }
     }
 

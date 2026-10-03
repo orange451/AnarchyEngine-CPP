@@ -66,11 +66,13 @@ struct ScriptRig {
     }
 
     // One rendered frame: RenderStepped run on a thread of its own in the render
-    // role, as the engine's render thread runs it.
+    // role, inside the prerender window, as the engine's render thread runs it.
     void render(double dt = 1.0 / 60.0) {
         std::thread render_thread([&] {
             engine_core::set_thread_role(engine_core::ThreadRole::Render);
+            game.set_prerender_window(true);
             scheduler.run_phase(engine_core::Phase::RenderStepped, dt);
+            game.set_prerender_window(false);
             engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
         });
         render_thread.join();

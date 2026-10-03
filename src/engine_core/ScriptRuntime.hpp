@@ -68,6 +68,10 @@ public:
     // count them. The engine calls it on resume, for the frames drawn while paused.
     // Any thread may call it.
     void drop_render_frames() { run_service_.drop_frames(); }
+    // Pauses window delivery for play handlers: a paused session's signals wait,
+    // but plugins keep their render step. The engine calls it from pause and
+    // resume on whatever thread holds pause_mu_, so it is atomic.
+    void set_render_paused(bool paused) { render_paused_.store(paused, std::memory_order_relaxed); }
 
     double sim_clock() const { return play_.clock; }
     const std::string& last_error() const { return last_error_; }
@@ -390,6 +394,13 @@ private:
     bool open_ = false;
     // Lua frames on the C++ stack, any VM. Threads are released only at 0.
     int lua_depth_ = 0;
+    // The render job that runs window handlers. RenderThread, inside Prepare.
+    void render_step(double dt);
+    // True while render_step invokes handlers. Bindings branch on it: a Wait on
+    // the window signal resumes here, and a refused write raises instead of
+    // deferring silently.
+    bool in_render_window_ = false;
+    std::atomic<bool> render_paused_{false};
     std::uint64_t steps_ = 0;
     std::string last_error_;
 

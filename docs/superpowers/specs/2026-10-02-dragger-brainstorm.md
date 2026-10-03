@@ -2,6 +2,18 @@
 
 2026-10-02 · Status: design approved section by section in brainstorming. Not yet a spec. The next steps are to write `2026-10-02-dragger-design.md` from this, self-review it, have it reviewed, then write the plan with writing-plans.
 
+## Revisions after the first draft
+
+These replace what the sections below say wherever the two differ.
+
+- **Order.** Event arguments (`2026-10-02-event-arguments-design.md`) and the Core service (`2026-10-02-core-service-design.md`) come first. The Dragger needs both.
+- **Event arguments.** Settled by that spec: `Dragged(handle, offset)` and the others are declared `lua_event`s with `LuaParam` lists, fired with `fire_event(id, name, args)`.
+- **`Adornee`.** A Dragger gains `Adornee` (PVInstance?, saved). When set, the Dragger binds to it. When nil, it binds to its parent, as below.
+- **The Move tool's Dragger lives in Core**, with `Adornee` set to the selected PVInstance, not parented under it. Core is never saved or recorded in undo history, so the Move tool needs no history tricks, and undoing a delete never brings back a Dragger.
+- **`Archivable` is for saving only.** When false, the project writer skips the instance and its subtree. That is all it does: it is not hidden from the Explorer, and it does not affect undo history. It is hidden from the Properties panel, and Lua reads and writes it. The AR2 and AR3 tests below change to match: AR2 goes, and AR3 checks only that Properties never lists it.
+- **Closing a drag's undo step.** The recording closes at the start of the step after the release, not at the release. Handlers are deferred (`EventPolicy::Deferred`), so this catches what they do in the step the drag ended, including chains of events within that step. A handler that waits longer (`task.wait`) lands outside it, and the spec says so. For one step, any other edit joins the Move's undo step.
+- **Clicking the Dragger in the Explorer** is not a concern, since the Move tool's Dragger is in Core.
+
 ## Goal
 
 A `Dragger` instance. Parented under a PVInstance, it binds to it and draws translate handles at it: three axis arrows and three plane squares. Dragging a handle moves the PVInstance. It works in edit mode, where the studio's Move tool drives it, and in play, where games create their own. Roblox Studio's Move tool and Unity's or Unreal's translate gizmo are the model.

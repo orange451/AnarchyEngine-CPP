@@ -191,12 +191,10 @@ struct SignalType {
     std::string values;
 };
 
-std::vector<SignalType>& signal_types() {
-    static std::vector<SignalType> types;
-    return types;
-}
-
-std::string signal_type(const std::string& owner, const LuaField& field) {
+// Collected into a local passed down from `lua_analysis_definitions`, never a
+// shared global: two worker threads, the place checker's and the editor
+// checker's, each build their own definitions text concurrently.
+std::string signal_type(const std::string& owner, const LuaField& field, std::vector<SignalType>& signals) {
     SignalType type;
     type.name = "Signal_" + owner + "_" + field.name;
     for (int index = 0; index < field.param_count; ++index) {
@@ -205,24 +203,23 @@ std::string signal_type(const std::string& owner, const LuaField& field) {
         type.params += (index > 0 ? ", " : "") + std::string(param.name != nullptr && identifier(param.name) ? std::string(param.name) + ": " : "") + luau;
         type.values += (index > 0 ? ", " : "") + luau;
     }
-    signal_types().push_back(type);
+    signals.push_back(type);
     return type.name;
 }
 
-void emit_signal_types(std::ostringstream& out) {
+void emit_signal_types(std::ostringstream& out, const std::vector<SignalType>& signals) {
     if (!lua_class_known("Signal") || !lua_class_known("Connection")) {
         return;
     }
-    for (const SignalType& type : signal_types()) {
+    for (const SignalType& type : signals) {
         out << "declare extern type " << type.name << " extends Signal with\n";
         out << "    function Connect(self, callback: (" << type.params << ") -> ()): Connection\n";
         out << "    function Wait(self): (" << type.values << ")\n";
         out << "end\n\n";
     }
-    signal_types().clear();
 }
 
-void emit_class(std::ostringstream& out, const std::string& name) {
+void emit_class(std::ostringstream& out, const std::string& name, std::vector<SignalType>& signals) {
     if (name == "Vector3" || !identifier(name)) {
         return;
     }
@@ -254,7 +251,7 @@ void emit_class(std::ostringstream& out, const std::string& name) {
         // A signal that passes values has its own type, so a callback's
         // parameters are typed where it is written.
         const bool signal = field.params != nullptr && field.param_count > 0 && std::strcmp(type_name, "Signal") == 0;
-        out << field.name << ": " << (signal ? signal_type(name, field) : to_luau_type(type_name)) << "\n";
+        out << field.name << ": " << (signal ? signal_type(name, field, signals) : to_luau_type(type_name)) << "\n";
     }
     // Declared as properties, not methods: a method's first argument is always
     // this class, and `2 * v` passes the number first. Luau moves __ names into
@@ -369,6 +366,9 @@ std::string lua_analysis_definitions() {
     lua_class_names(names);
     std::unordered_set<std::string> emitted;
     emitted.insert("Vector3");
+    // Local to this call: two worker threads may build their own definitions
+    // text at once, so nothing here is shared between them.
+    std::vector<SignalType> signals;
     bool progress = true;
     while (progress) {
         progress = false;
@@ -381,18 +381,18 @@ std::string lua_analysis_definitions() {
                 emitted.count(base) == 0) {
                 continue;
             }
-            emit_class(out, name);
+            emit_class(out, name, signals);
             emitted.insert(name);
             progress = true;
         }
     }
     for (const std::string& name : names) {
         if (emitted.count(name) == 0) {
-            emit_class(out, name);
+            emit_class(out, name, signals);
         }
     }
 
-    emit_signal_types(out);
+    emit_signal_types(out, signals);
     if (lua_class_known("Game")) {
         out << "declare game: Game\n";
     }

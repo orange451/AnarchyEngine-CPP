@@ -58,6 +58,33 @@ bool has_code(const std::vector<engine_core::Diagnostic>& diagnostics, const cha
     return false;
 }
 
+// About `lines` lines of ordinary code: loops, tables, string formatting, a
+// FindFirstChild, and in each function one type error and one unknown global.
+// `salt` keeps function names apart when several such scripts share a place.
+std::string long_source(int lines, bool strict, int salt) {
+    std::ostringstream out;
+    if (strict) {
+        out << "--!strict\n";
+    }
+    for (int line = 0, f = 0; line < lines; line += 14, ++f) {
+        out << "local function fn" << f << "_" << salt << "(a: number, b: string)\n"
+            << "    local t = { x = a, y = b, list = {} }\n"
+            << "    for i = 1, a do\n"
+            << "        table.insert(t.list, i * 2)\n"
+            << "        if i % 3 == 0 then t.x += i else t.x -= 1 end\n"
+            << "    end\n"
+            << "    local name = string.format(\"%s-%d\", b, #t.list)\n"
+            << "    local part = workspace:FindFirstChild(name)\n"
+            << "    if part then print(part.Name) end\n"
+            << "    local bad: number = \"oops\"\n"
+            << "    undefinedThing" << f << "()\n"
+            << "    return t.x + #name\n"
+            << "end\n"
+            << "print(fn" << f << "_" << salt << "(" << f << ", \"k\"))\n";
+    }
+    return out.str();
+}
+
 }  // namespace
 
 TEST_CASE("A1 a syntax error is one Syntax diagnostic and compile still fails", "[A1]") {
@@ -1175,4 +1202,22 @@ history.OnUndo:Connect(function(stepName) print(stepName) end)
     const std::vector<engine_core::Diagnostic> diagnostics = analysis.diagnostics(script.id());
     INFO(dump(diagnostics));
     REQUIRE(diagnostics.empty());
+}
+
+TEST_CASE("A34 an editor request is answered while a long check runs", "[A34]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& small = add_script(rig.game, "Small", "local x = 1\n");
+    settle(analysis);
+    add_script(rig.game, "Huge", long_source(60000, false, 0).c_str());
+    // Past the debounce, so the place checker is inside Huge's check.
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    REQUIRE(analysis.busy());
+    const engine_core::LuauFacts asked =
+        analysis.luau_facts(completion_nodes(rig.game, small.id(), small.source()), small.id(), small.source(),
+                            small.source().size(), {}, std::chrono::seconds(20));
+    REQUIRE(asked.ran);
+    // Answered before Huge's check finished, not after it.
+    REQUIRE(analysis.busy());
+    settle(analysis);
 }

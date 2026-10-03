@@ -265,7 +265,8 @@ private:
 
     void ensure_worker();
     void shutdown();
-    void run();
+    void run_editor();
+    void run_place();
     void fire(const std::vector<InstanceId>& ids);
     // Captures the tree once and queues these scripts. Gameplay thread, or a
     // thread that holds the DataModel lock.

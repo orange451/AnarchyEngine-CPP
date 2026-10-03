@@ -2269,8 +2269,12 @@ struct ScriptAnalysis::State {
     int inflight = 0;
     // The script the worker is checking. 0 between jobs.
     InstanceId running = 0;
-    // Luau parses and checks here, as deep as its own recursion limits allow.
-    StackThread worker;
+    // The place checker's thread, and the editor checker's, which answers Luau
+    // requests so typing never waits behind a check of the place.
+    StackThread place;
+    StackThread editor;
+    // Wakes the editor thread for completions. `cv` wakes the place thread.
+    std::condition_variable editor_cv;
 
     struct Handler {
         std::uint64_t token = 0;
@@ -2391,13 +2395,17 @@ void ScriptAnalysis::shutdown() {
         stopped = std::move(state_->completions);
         state_->completions.clear();
         state_->cv.notify_all();
+        state_->editor_cv.notify_all();
     }
     for (const std::shared_ptr<CompleteRequest>& request : stopped) {
         request->answer->facts.error = "script analysis has stopped";
         finish_request(*request);
     }
-    if (state_->worker.joinable()) {
-        state_->worker.join();
+    if (state_->place.joinable()) {
+        state_->place.join();
+    }
+    if (state_->editor.joinable()) {
+        state_->editor.join();
     }
 }
 
@@ -2412,10 +2420,40 @@ void ScriptAnalysis::ensure_worker() {
         return;
     }
     state_->started = true;
-    state_->worker = StackThread(kWorkerStackBytes, [this] { run(); });
+    state_->place = StackThread(kWorkerStackBytes, [this] { run_place(); });
+    state_->editor = StackThread(kWorkerStackBytes, [this] { run_editor(); });
 }
 
-void ScriptAnalysis::run() {
+void ScriptAnalysis::run_editor() {
+    // Its own frontend: an unsaved buffer never reaches the place checker's cache.
+    auto owned = std::make_unique<WorkerEnv>();
+    owned->init();
+    while (true) {
+        std::shared_ptr<CompleteRequest> request;
+        {
+            std::unique_lock<std::mutex> lock(state_->mu);
+            state_->editor_cv.wait(lock, [&] { return state_->stop || !state_->completions.empty(); });
+            if (state_->stop) {
+                return;
+            }
+            request = std::move(state_->completions.front());
+            state_->completions.pop_front();
+            state_->serving = request;
+        }
+        if (owned->revision != lua_registry_revision()) {
+            owned = std::make_unique<WorkerEnv>();
+            owned->init();
+        }
+        request->answer->facts = facts_job(*owned, *request);
+        {
+            std::lock_guard<std::mutex> lock(state_->mu);
+            state_->serving.reset();
+        }
+        finish_request(*request);
+    }
+}
+
+void ScriptAnalysis::run_place() {
     // This thread never calls the play VM and never takes the DataModel lock.
     // Jobs carry a copy of Source and Name taken on the gameplay thread.
     // On the heap: its frontend points at its own resolvers, so it is rebuilt
@@ -2424,41 +2462,11 @@ void ScriptAnalysis::run() {
     owned->init();
     while (true) {
         Job job;
-        std::shared_ptr<CompleteRequest> request;
         {
             std::unique_lock<std::mutex> lock(state_->mu);
-            state_->cv.wait(lock,
-                            [&] { return state_->stop || !state_->pending.empty() || !state_->completions.empty(); });
+            state_->cv.wait(lock, [&] { return state_->stop || !state_->pending.empty(); });
             if (state_->stop) {
                 return;
-            }
-            if (!state_->completions.empty()) {
-                request = std::move(state_->completions.front());
-                state_->completions.pop_front();
-                state_->serving = request;
-            }
-        }
-        if (owned->revision != lua_registry_revision()) {
-            owned = std::make_unique<WorkerEnv>();
-            owned->init();
-        }
-        WorkerEnv& env = *owned;
-        if (request) {
-            request->answer->facts = facts_job(env, *request);
-            {
-                std::lock_guard<std::mutex> lock(state_->mu);
-                state_->serving.reset();
-            }
-            finish_request(*request);
-            continue;
-        }
-        {
-            std::unique_lock<std::mutex> lock(state_->mu);
-            if (state_->stop) {
-                return;
-            }
-            if (state_->pending.empty()) {
-                continue;
             }
             const auto now = std::chrono::steady_clock::now();
             auto due = state_->pending.begin();
@@ -2475,6 +2483,10 @@ void ScriptAnalysis::run() {
             state_->pending.erase(due);
             ++state_->inflight;
             state_->running = job.id;
+        }
+        if (owned->revision != lua_registry_revision()) {
+            owned = std::make_unique<WorkerEnv>();
+            owned->init();
         }
         Finished finished = analyze_job(*owned, job);
         if (owned->frontend != nullptr) {
@@ -2527,7 +2539,7 @@ std::shared_ptr<ScriptAnalysis::LuauRequest> ScriptAnalysis::queue_luau(const st
             }
         }
         state_->completions.push_back(request);
-        state_->cv.notify_all();
+        state_->editor_cv.notify_all();
     }
     for (const std::shared_ptr<CompleteRequest>& old : replaced) {
         old->answer->facts.error = "replaced by a newer request";

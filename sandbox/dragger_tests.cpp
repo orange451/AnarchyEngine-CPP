@@ -10,6 +10,7 @@
 #include "Light.hpp"
 #include "PhysicsObject.hpp"
 #include "SceneService.hpp"
+#include "SnapshotPump.hpp"
 #include "UserInputService.hpp"
 #include "Matrix4.hpp"
 
@@ -574,4 +575,78 @@ TEST_CASE("DR12b a click with no motion keeps what its handlers changed", "[DR12
     drag.release(150, 100);
     drag.rig.frames(1);
     REQUIRE(drag.rig.game.name(drag.part) == "Clicked");
+}
+
+TEST_CASE("RD1 an active Dragger has a snapshot row with its frame and states, an inactive one none", "[RD1]") {
+    DragRig drag;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    const auto frame = [&]() -> const engine_core::VisualSnapshot& {
+        pump.prepare_copy(drag.rig.game);
+        pump.publish();
+        return pump.front();
+    };
+    drag.move(150, 100);
+    {
+        const engine_core::VisualSnapshot& shot = frame();
+        REQUIRE(shot.draggers.size() == 1);
+        REQUIRE(close(shot.draggers[0].frame.origin.z, -10));
+        REQUIRE(shot.draggers[0].hovered == engine_core::DraggerHandle::X);
+        REQUIRE(shot.draggers[0].active == engine_core::DraggerHandle::None);
+    }
+    drag.press(150, 100);
+    REQUIRE(frame().draggers[0].active == engine_core::DraggerHandle::X);
+    drag.release(150, 100);
+    engine_core::Folder& folder = drag.rig.game.create<engine_core::Folder>();
+    drag.rig.game.set_parent(folder.id(), drag.rig.game.scene_service("Workspace"));
+    drag.rig.game.set_parent(drag.dragger, folder.id());
+    REQUIRE(frame().draggers.empty());
+}
+
+namespace {
+
+// How many vertices of mesh are close to color (r, g, b), alpha ignored.
+int count_color(const std::vector<engine_core::HandleVertex>& mesh, float r, float g, float b) {
+    int count = 0;
+    for (const engine_core::HandleVertex& vertex : mesh) {
+        if (close(vertex.color[0], r, 0.01f) && close(vertex.color[1], g, 0.01f) && close(vertex.color[2], b, 0.01f)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+}  // namespace
+
+TEST_CASE("RD3 handle_mesh draws what can be grabbed, colored by axis and state", "[RD3]") {
+    const auto view = view_of(200, 200);
+    const auto frame = world_frame({0, 0, -10});
+    std::vector<engine_core::HandleVertex> mesh;
+    engine_core::handle_mesh(frame, view, engine_core::DraggerHandle::None, engine_core::DraggerHandle::None, mesh);
+    REQUIRE(!mesh.empty());
+    REQUIRE(mesh.size() % 3 == 0);
+    REQUIRE(count_color(mesh, 0.90f, 0.20f, 0.20f) > 0);
+    REQUIRE(count_color(mesh, 0.30f, 0.85f, 0.30f) > 0);
+    // Z points at the camera: no arrow of its own; blue only on the XY square, which is see-through.
+    for (const engine_core::HandleVertex& vertex : mesh) {
+        if (close(vertex.color[0], 0.25f, 0.01f) && close(vertex.color[2], 0.95f, 0.01f)) {
+            REQUIRE(vertex.color[3] < 0.5f);
+        }
+    }
+    for (const engine_core::HandleVertex& vertex : mesh) {
+        REQUIRE(std::isfinite(vertex.position[0]));
+    }
+    // Dragging X: X is yellow, Y fades.
+    engine_core::handle_mesh(frame, view, engine_core::DraggerHandle::None, engine_core::DraggerHandle::X, mesh);
+    REQUIRE(count_color(mesh, 1.0f, 0.85f, 0.2f) > 0);
+    REQUIRE(count_color(mesh, 0.90f, 0.20f, 0.20f) == 0);
+    for (const engine_core::HandleVertex& vertex : mesh) {
+        if (close(vertex.color[1], 0.85f, 0.01f) && close(vertex.color[0], 0.30f, 0.01f)) {
+            REQUIRE(vertex.color[3] < 0.5f);
+        }
+    }
+    // Behind the camera: nothing.
+    engine_core::handle_mesh(world_frame({0, 0, 10}), view, engine_core::DraggerHandle::None,
+                             engine_core::DraggerHandle::None, mesh);
+    REQUIRE(mesh.empty());
 }

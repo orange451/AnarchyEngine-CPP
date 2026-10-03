@@ -2,6 +2,7 @@
 
 #include "DataModel.hpp"
 #include "DenseIdSet.hpp"
+#include "DraggerMath.hpp"
 #include "types.hpp"
 
 #include <atomic>
@@ -63,6 +64,14 @@ struct VisualInstance {
 };
 
 // The first Skybox under Lighting, in tree order, as the renderer reads it.
+// An active Dragger as a scene view draws it: where its handles sit, the one
+// the mouse is over, and the one being dragged.
+struct VisualDragger {
+    DraggerFrame frame{};
+    DraggerHandle hovered = DraggerHandle::None;
+    DraggerHandle active = DraggerHandle::None;
+};
+
 // present is false with no Skybox, and image is empty when it has no Image;
 // either way the renderer draws no sky.
 struct VisualSky {
@@ -140,6 +149,8 @@ struct VisualSnapshot {
     std::vector<VisualPrefab> prefabs;
     VisualLighting lighting;
     VisualSky sky;
+    // Rebuilt at every take_changes: there are few, and hover moves with the mouse.
+    std::vector<VisualDragger> draggers;
     // DataModel::resources_root as the snapshot was taken: the folder the
     // paths above are under.
     std::filesystem::path resources_root;
@@ -192,6 +203,8 @@ private:
     void apply_overrides(VisualSnapshot& dst);
     // The row's entry for guid, counting the row; 0 for an empty guid.
     std::uint32_t acquire_prefab(const std::string& guid);
+    // The active Draggers' rows, from the live tree.
+    void resolve_draggers(DataModel& game);
     void release_prefab(std::uint32_t entry);
     // Points inst at guid's entry, when it names another.
     void set_row_prefab(VisualInstance& inst, const std::string& guid);
@@ -221,6 +234,8 @@ private:
     std::unordered_map<std::string, std::uint32_t> prefab_by_guid_;
     // find_skybox's walk, kept so a Prepare allocates nothing.
     std::vector<InstanceId> sky_walk_;
+    // The Draggers resolve_draggers walks, kept so it does not allocate each frame.
+    std::vector<InstanceId> dragger_ids_;
 };
 
 }  // namespace engine_core

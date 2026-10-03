@@ -16,6 +16,7 @@ Vec3 sub(Vec3 a, Vec3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
 Vec3 scale(Vec3 v, float s) { return {v.x * s, v.y * s, v.z * s}; }
 float dot(Vec3 a, Vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 float length(Vec3 v) { return std::sqrt(dot(v, v)); }
+Vec3 cross(Vec3 a, Vec3 b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
 Vec3 normalize(Vec3 v) {
     const float n = length(v);
     return n > 0.f ? scale(v, 1.f / n) : v;
@@ -286,6 +287,133 @@ std::optional<Vec3> drag_offset(const DragStart& start, const DraggerView& view,
     const float u = snapped(dot(raw, frame.axes[first]), increment);
     const float v = snapped(dot(raw, frame.axes[second]), increment);
     return add(scale(frame.axes[first], u), scale(frame.axes[second], v));
+}
+
+namespace {
+
+struct Rgba {
+    float r, g, b, a;
+};
+
+constexpr Rgba kAxisColors[3] = {{0.90f, 0.20f, 0.20f, 1.f}, {0.30f, 0.85f, 0.30f, 1.f}, {0.25f, 0.45f, 0.95f, 1.f}};
+constexpr Rgba kActiveColor = {1.f, 0.85f, 0.2f, 1.f};
+constexpr float kPlaneAlpha = 0.4f;
+constexpr float kFadedAlpha = 0.35f;
+constexpr float kHoverWhite = 0.4f;
+constexpr float kShaftEnd = 0.8f;
+constexpr float kShaftPixels = 3.f;
+constexpr float kConePixels = 6.f;
+constexpr int kConeSides = 8;
+
+Rgba handle_color(DraggerHandle handle, DraggerHandle hovered, DraggerHandle active) {
+    Rgba color;
+    if (is_arrow(handle)) {
+        color = kAxisColors[arrow_axis(handle)];
+    } else {
+        int first = 0;
+        int second = 0;
+        int normal = 0;
+        plane_axes(handle, first, second, normal);
+        color = kAxisColors[normal];
+        color.a = kPlaneAlpha;
+    }
+    if (active != DraggerHandle::None) {
+        if (handle == active) {
+            return Rgba{kActiveColor.r, kActiveColor.g, kActiveColor.b, std::max(color.a, 0.6f)};
+        }
+        color.a *= kFadedAlpha;
+        return color;
+    }
+    if (handle == hovered) {
+        color.r += (1.f - color.r) * kHoverWhite;
+        color.g += (1.f - color.g) * kHoverWhite;
+        color.b += (1.f - color.b) * kHoverWhite;
+    }
+    return color;
+}
+
+void push(std::vector<HandleVertex>& out, Vec3 point, Rgba color) {
+    HandleVertex vertex;
+    vertex.position[0] = point.x;
+    vertex.position[1] = point.y;
+    vertex.position[2] = point.z;
+    vertex.color[0] = color.r;
+    vertex.color[1] = color.g;
+    vertex.color[2] = color.b;
+    vertex.color[3] = color.a;
+    out.push_back(vertex);
+}
+
+void push_triangle(std::vector<HandleVertex>& out, Vec3 a, Vec3 b, Vec3 c, Rgba color) {
+    push(out, a, color);
+    push(out, b, color);
+    push(out, c, color);
+}
+
+// Two unit vectors square to axis and to each other.
+void perpendiculars(Vec3 axis, Vec3& u, Vec3& v) {
+    const Vec3 other = std::abs(axis.x) < 0.9f ? Vec3{1.f, 0.f, 0.f} : Vec3{0.f, 1.f, 0.f};
+    u = normalize(cross(axis, other));
+    v = cross(axis, u);
+}
+
+}  // namespace
+
+void handle_mesh(const DraggerFrame& frame, const DraggerView& view, DraggerHandle hovered, DraggerHandle active,
+                 std::vector<HandleVertex>& out) {
+    out.clear();
+    Vec2 ignored;
+    if (!project_point(view, frame.origin, ignored)) {
+        return;
+    }
+    const float pixel = handle_scale(view, frame.origin);
+    const float arrow = kArrowPixels * pixel;
+    const Vec3 eye = eye_of(view).position;
+    for (DraggerHandle handle : {DraggerHandle::XY, DraggerHandle::YZ, DraggerHandle::XZ}) {
+        if (!handle_visible(frame, view, handle)) {
+            continue;
+        }
+        int first = 0;
+        int second = 0;
+        int normal = 0;
+        plane_axes(handle, first, second, normal);
+        const Rgba color = handle_color(handle, hovered, active);
+        const Vec3 a = frame.axes[first];
+        const Vec3 b = frame.axes[second];
+        const auto corner = [&](float u, float v) {
+            return add(frame.origin, add(scale(a, arrow * u), scale(b, arrow * v)));
+        };
+        push_triangle(out, corner(kPlaneNear, kPlaneNear), corner(kPlaneFar, kPlaneNear), corner(kPlaneFar, kPlaneFar),
+                      color);
+        push_triangle(out, corner(kPlaneNear, kPlaneNear), corner(kPlaneFar, kPlaneFar), corner(kPlaneNear, kPlaneFar),
+                      color);
+    }
+    for (DraggerHandle handle : {DraggerHandle::X, DraggerHandle::Y, DraggerHandle::Z}) {
+        if (!handle_visible(frame, view, handle)) {
+            continue;
+        }
+        const Rgba color = handle_color(handle, hovered, active);
+        const Vec3 axis = frame.axes[arrow_axis(handle)];
+        const Vec3 base = add(frame.origin, scale(axis, arrow * kShaftEnd));
+        const Vec3 tip = add(frame.origin, scale(axis, arrow));
+        // The shaft faces the camera, so it keeps its width from any side.
+        const Vec3 middle = add(frame.origin, scale(axis, arrow * kShaftEnd * 0.5f));
+        const Vec3 side = scale(normalize(cross(axis, normalize(sub(eye, middle)))), kShaftPixels * 0.5f * pixel);
+        push_triangle(out, sub(frame.origin, side), add(frame.origin, side), add(base, side), color);
+        push_triangle(out, sub(frame.origin, side), add(base, side), sub(base, side), color);
+        Vec3 u;
+        Vec3 v;
+        perpendiculars(axis, u, v);
+        const float radius = kConePixels * pixel;
+        for (int side_index = 0; side_index < kConeSides; ++side_index) {
+            const float from = 6.28318531f * static_cast<float>(side_index) / kConeSides;
+            const float to = 6.28318531f * static_cast<float>(side_index + 1) / kConeSides;
+            const Vec3 p0 = add(base, add(scale(u, std::cos(from) * radius), scale(v, std::sin(from) * radius)));
+            const Vec3 p1 = add(base, add(scale(u, std::cos(to) * radius), scale(v, std::sin(to) * radius)));
+            push_triangle(out, tip, p0, p1, color);
+            push_triangle(out, base, p1, p0, color);
+        }
+    }
 }
 
 DraggerFrame dragger_frame(const Matrix4& target, bool local) {

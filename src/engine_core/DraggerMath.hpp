@@ -5,6 +5,7 @@
 #include "types.hpp"
 
 #include <optional>
+#include <vector>
 
 // The geometry under a Dragger's translate handles: rays from the view,
 // which handle a point is over, and how far a drag has moved. No GL and no
@@ -77,5 +78,20 @@ std::optional<Vec3> drag_offset(const DragStart& start, const DraggerView& view,
 // The frame for a target's Transform: world axes, or with local the
 // target's rotation columns, normalized.
 DraggerFrame dragger_frame(const Matrix4& target, bool local);
+
+// One corner of a handle triangle: world position, then straight RGBA.
+struct HandleVertex {
+    float position[3]{};
+    float color[4]{};
+};
+
+// The handles of frame as seen in view, as colored world-space triangles
+// into out (cleared first): plane squares, then arrows, each a shaft and a
+// cone. Sized and hidden by the same rules pick_handle uses, so what is drawn
+// is what can be grabbed. X is red, Y green, Z blue; a square takes its
+// normal's color, see-through. hovered brightens; while active is not None it
+// is yellow and the rest fade. Nothing when the frame is behind the camera.
+void handle_mesh(const DraggerFrame& frame, const DraggerView& view, DraggerHandle hovered, DraggerHandle active,
+                 std::vector<HandleVertex>& out);
 
 }  // namespace engine_core

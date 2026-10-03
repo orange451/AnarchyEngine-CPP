@@ -1,6 +1,8 @@
 #include "SnapshotPump.hpp"
 
 #include "AssetInstances.hpp"
+#include "Dragger.hpp"
+#include "PVInstance.hpp"
 #include "Camera.hpp"
 #include "GameObject.hpp"
 #include "Light.hpp"
@@ -463,6 +465,7 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.lighting = base_.lighting;
     dst.sky = base_.sky;
     dst.resources_root = base_.resources_root;
+    dst.draggers = base_.draggers;
     dst.instances.resize(base_.instances.size());
     std::copy(base_.instances.begin(), base_.instances.end(), dst.instances.begin());
     // Element by element, so strings that did not change keep their buffers.
@@ -493,6 +496,23 @@ void SnapshotPump::prepare_copy(DataModel& game) {
     finish_copy();
 }
 
+void SnapshotPump::resolve_draggers(DataModel& game) {
+    base_.draggers.clear();
+    game.draggers(dragger_ids_);
+    for (InstanceId id : dragger_ids_) {
+        const auto* dragger = dynamic_cast<const Dragger*>(game.instance(id));
+        const auto* target = dragger != nullptr ? dynamic_cast<const PVInstance*>(game.instance(dragger->target())) : nullptr;
+        if (target == nullptr) {
+            continue;
+        }
+        VisualDragger row;
+        row.frame = dragger_frame(target->transform(), dragger->local_space());
+        row.hovered = dragger->hovered();
+        row.active = dragger->active_handle();
+        base_.draggers.push_back(row);
+    }
+}
+
 void SnapshotPump::take_changes(DataModel& game) {
     InvalidationQueue& queue = game.invalidations();
     if (queue.take_overflow() || game.consume_resync()) {
@@ -502,6 +522,7 @@ void SnapshotPump::take_changes(DataModel& game) {
     }
     resolve_prefabs(game);
     resolve_lighting(game);
+    resolve_draggers(game);
     base_.resources_root = game.resources_root();
     if (camera_pending_) {
         base_.camera = pending_camera_;

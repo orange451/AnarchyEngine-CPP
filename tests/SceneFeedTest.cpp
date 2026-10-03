@@ -107,5 +107,17 @@ int RunSceneFeedTests() {
     Expect(whole, "no frame the view reads is torn");
     Expect(ordered, "frames reach the view in order");
     Expect(feed.latest().frame == 3999, "the last frame arrives");
+
+    // Every field crosses to the view, the Dragger rows included.
+    engine_core::VisualSnapshot handles = Frame(4000, 1);
+    engine_core::VisualDragger row;
+    row.frame.origin = engine_core::Vec3{1.f, 2.f, 3.f};
+    row.hovered = engine_core::DraggerHandle::Y;
+    handles.draggers.push_back(row);
+    feed.perform(handles);
+    const engine_core::VisualSnapshot& drawn = feed.latest();
+    Expect(drawn.draggers.size() == 1 && drawn.draggers[0].frame.origin.y == 2.f &&
+               drawn.draggers[0].hovered == engine_core::DraggerHandle::Y,
+           "the Dragger rows reach the view");
     return gFailures;
 }

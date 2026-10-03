@@ -22,6 +22,7 @@ void SceneFeed::perform(const engine_core::VisualSnapshot& front) {
     std::copy(front.prefabs.begin(), front.prefabs.end(), out.prefabs.begin());
     out.lighting = front.lighting;
     out.sky = front.sky;
+    out.draggers = front.draggers;
     out.resources_root = front.resources_root;
     std::lock_guard<std::mutex> guard(mu_);
     std::swap(writing_, waiting_);

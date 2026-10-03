@@ -5,6 +5,8 @@
 #include "ChangeHistoryService.hpp"
 #include "Dragger.hpp"
 #include "Folder.hpp"
+#include "PhysicsObject.hpp"
+#include "SnapshotPump.hpp"
 #include "Project.hpp"
 #include "ide/PluginLoader.hpp"
 #include "SelectionService.hpp"
@@ -190,4 +192,21 @@ TEST_CASE("MT4 New and Open clear the selection, so the Move tool lets go", "[MT
     rig.frames(1);
     REQUIRE(rig.game.selection().get().empty());
     REQUIRE(move_target(rig.game) == 0);
+}
+
+TEST_CASE("MT5 selecting a PhysicsObject puts handles on it, and the snapshot carries them", "[MT5]") {
+    ScriptRig rig;
+    engine_core::PhysicsObject& body = rig.game.create<engine_core::PhysicsObject>();
+    rig.game.set_parent(body.id(), rig.game.scene_service("Workspace"));
+    ide::PluginLoader loader;
+    REQUIRE(loader.load(rig.game, rig.runtime, {move_tool_file()}) == 1);
+    rig.game.selection().set({body.id()});
+    rig.frames(1);
+    INFO(rig.runtime.last_error());
+    REQUIRE(move_target(rig.game) == body.id());
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    pump.prepare_copy(rig.game);
+    pump.publish();
+    REQUIRE(pump.front().draggers.size() == 1);
 }

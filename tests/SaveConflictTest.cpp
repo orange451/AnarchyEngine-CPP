@@ -1,5 +1,6 @@
 #include "ide/IdeLayout.hpp"
 
+#include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
 #include "DataModel.hpp"
 #include "Engine.hpp"
@@ -126,6 +127,17 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
            "Overwrite writes the studio's transform");
     expect(ReadBytes(root / spare_file).find(studio_transform) != std::string::npos, "over every file it listed");
     expect(!layout.has_unsaved_changes(), "and the place is saved");
+
+    // Flying the view is not an edit: there is nothing to save.
+    layout.simulation().on_simulation([](engine_core::DataModel& game) {
+        for (engine_core::InstanceId child : game.get_children(game.scene_service("Workspace"))) {
+            if (auto* camera = dynamic_cast<engine_core::Camera*>(game.instance(child))) {
+                camera->set_transform(engine_core::matrix4_translation(9.f, 9.f, 9.f));
+            }
+        }
+    });
+    layout.flushFrame();
+    expect(!layout.has_unsaved_changes(), "flying the camera leaves nothing to save");
 
     // File > New offers to save first; a conflict then asks too, and only a
     // save that happens lets the new place start.

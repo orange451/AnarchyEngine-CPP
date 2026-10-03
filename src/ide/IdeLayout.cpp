@@ -285,8 +285,7 @@ void IdeLayout::start() {
     if (!project_) {
         begin_scratch();
     }
-    // Whatever the app built before start is the starting point, not an edit.
-    mark_saved();
+    update_title();
     // The initial place exists by now: the app makes it right after
     // constructing this layout, before calling start. Loading here, rather
     // than in the constructor, keeps the plugins' Scripts out of that place's
@@ -848,7 +847,7 @@ void IdeLayout::update_title() {
     if (mainStage_ == nullptr) {
         return;
     }
-    title_modified_ = place_modified_ || editors_unflushed();
+    title_modified_ = has_unsaved_changes();
     const std::string name = project_ ? project_->name() : std::string("Untitled");
     mainStage_->setTitle(name + (title_modified_ ? "*" : "") + " - Anarchy Engine");
 }

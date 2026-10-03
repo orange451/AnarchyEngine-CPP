@@ -4,6 +4,7 @@
 
 #include "AssetImport.hpp"
 #include "AssetInstances.hpp"
+#include "ChangeHistoryService.hpp"
 #include "GameExport.hpp"
 #include "IdeAssets.hpp"
 #include "IdeLayoutInternal.hpp"
@@ -13,17 +14,10 @@
 #include "ScratchResources.hpp"
 #include "TextureImport.hpp"
 
-#include <chrono>
 #include <iterator>
 #include <thread>
 
 namespace ide {
-namespace {
-
-// How often refresh_modified checks the place while it keeps changing.
-constexpr std::chrono::milliseconds kModifiedCheckInterval{250};
-
-}  // namespace
 
 const std::shared_ptr<IdeConflicts>& IdeLayout::conflicts_pane() {
     window_page(*conflicts_window_);
@@ -512,8 +506,6 @@ std::optional<std::vector<engine_core::SaveConflict>> IdeLayout::check_disk(
     });
     check_pending_ = false;
     noted_play_check_ = false;
-    // The base may have moved without the place moving, so the title looks again.
-    seen_revision_ = ~std::uint64_t{0};
     if (!problem.empty()) {
         if (problem != disk_problem_) {
             show_toast("Can't read the project on disk: " + problem);
@@ -540,50 +532,14 @@ std::optional<std::vector<engine_core::SaveConflict>> IdeLayout::check_disk(
     return scan.conflicts;
 }
 
-void IdeLayout::mark_saved() {
-    engine_core::DataModel& game = runner_.simulation().datamodel();
-    run_now([this](engine_core::DataModel& world) { saved_fingerprint_ = engine_core::Project::place_fingerprint(world); });
-    seen_revision_ = game.authored_revision();
-    place_modified_ = false;
-    update_title();
-}
-
-void IdeLayout::refresh_modified(bool force) {
-    engine_core::DataModel& game = runner_.simulation().datamodel();
-    const std::uint64_t revision = game.authored_revision();
-    const auto checked = std::chrono::steady_clock::now();
-    // Only an authored change moves the revision; play steps do not. Flying the
-    // scene camera moves it every step, though, and the check below reads the
-    // whole place. So while it keeps moving the check waits out the interval.
-    // seen_revision_ stays behind meanwhile, so a later frame checks the place
-    // as it ends up.
-    const bool due = force || checked - modified_checked_at_ >= kModifiedCheckInterval;
-    if (revision != seen_revision_ && due) {
-        seen_revision_ = revision;
-        modified_checked_at_ = checked;
-        // A project compares key by key, so a file on disk that is only
-        // formatted differently does not count. An untitled place has no files.
-        std::uint64_t now = 0;
-        bool unsaved = false;
-        run_now([&](engine_core::DataModel& world) {
-            if (project_) {
-                unsaved = project_->unsaved();
-            } else {
-                now = engine_core::Project::place_fingerprint(world);
-            }
-        });
-        place_modified_ = project_ ? unsaved : now != saved_fingerprint_;
-    }
-    if ((place_modified_ || editors_unflushed()) != title_modified_) {
+void IdeLayout::refresh_modified() {
+    if (has_unsaved_changes() != title_modified_) {
         update_title();
     }
 }
 
 bool IdeLayout::has_unsaved_changes() {
-    seen_revision_ = ~std::uint64_t{0};
-    // Asked before a save or a discard, so it checks now, whatever the pace.
-    refresh_modified(true);
-    return place_modified_ || editors_unflushed();
+    return runner_.simulation().datamodel().history().dirty() || editors_unflushed();
 }
 
 void IdeLayout::confirm_discard(const std::string& question, std::function<void()> proceed) {
@@ -648,7 +604,7 @@ void IdeLayout::new_place() {
     // Whatever the last untitled place imported went with it.
     begin_scratch();
     forget_conflicts();
-    mark_saved();
+    update_title();
     show_toast("New place");
 }
 
@@ -707,7 +663,7 @@ void IdeLayout::open_project_at(const std::filesystem::path& root) {
     project_ = std::move(loaded);
     end_scratch();
     forget_conflicts();
-    mark_saved();
+    update_title();
     show_toast("Opened " + project_->name());
 }
 
@@ -745,7 +701,7 @@ bool IdeLayout::save_open_project(std::function<void()> then,
         show_error("Could not save project", error);
         return false;
     }
-    mark_saved();
+    update_title();
     const engine_core::Project::SaveReport& report = project_->last_save();
     const std::size_t changed = report.written.size() + report.moved.size() + report.removed.size();
     show_toast("Saved " + project_->name() +
@@ -926,7 +882,7 @@ bool IdeLayout::save_project_to(const std::filesystem::path& root) {
     }
     // Another folder, which this save wrote whole.
     forget_conflicts();
-    mark_saved();
+    update_title();
     show_toast("Saved " + project_->name());
     return true;
 }

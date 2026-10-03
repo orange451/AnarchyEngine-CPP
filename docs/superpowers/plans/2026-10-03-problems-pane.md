@@ -58,7 +58,6 @@
 | `tests/ProblemsTest.cpp` (new) | `RunProblemsTests(IdeLayout&, Scene&)` in `studio-tests`. |
 | `CMakeLists.txt` | New sources and test files. |
 
-(Ignore the `IdePrograms.hpp` row. It is a stray line, and no such file is created.)
 
 Commands:
 - Build: `cmake --build build --target engine-tests studio-tests -j8`

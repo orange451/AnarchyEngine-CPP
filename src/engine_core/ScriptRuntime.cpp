@@ -519,7 +519,13 @@ void ScriptRuntime::render_step(double dt) {
     const bool include_play = open_ && !play_.closing && !render_paused_.load(std::memory_order_relaxed);
     run_service_.set_window_dt(dt);
     in_render_window_ = true;
+    // A write a window handler (or a Wait resumption it parks) makes authorizes
+    // as a sim write would; see DataModel::authorize. Cleared right after, same
+    // as in_render_window_ above: both are written only here, by the render
+    // thread, while it holds the write lock for the whole window.
+    game_->set_window_script(true);
     game_->events().invoke_render(*window, include_play);
+    game_->set_window_script(false);
     in_render_window_ = false;
 }
 

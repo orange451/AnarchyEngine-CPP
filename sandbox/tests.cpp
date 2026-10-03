@@ -4896,15 +4896,99 @@ TEST_CASE("RW6 a window handler's visual write lands in that frame's snapshot", 
     REQUIRE(rig.runtime.last_error().empty());
 }
 
-TEST_CASE("RW7 a write the window refuses raises a Lua error the handler can catch", "[RW7]") {
+TEST_CASE("RW9 a window script write authorizes as a sim write, untagged or not", "[RW9]") {
+    // Live use (the SceneCamera plugin writing camera.Transform with threads
+    // running) found what RW6/RW7's sandbox rigs could not: authorize's
+    // render-thread branch required visual_only (or ForceSimWrite) for every
+    // window write, including ones a script makes, so an ordinary untagged
+    // part's Transform raised "cannot be written in a render step" for real.
+    // The ruling (see the design doc's Writes row): a write a window SCRIPT
+    // makes authorizes like a sim write, any instance, regardless of the
+    // visual_only tag. Same harness as RW6 (pump-driven window, write lock held
+    // across begin/end-window and take_changes) so the same-frame snapshot
+    // claim is checked for real, not just the DataModel's own copy.
+    ScriptRig rig;
+    engine_core::GameObject& loose = create_part(rig.game);
+    rig.game.set_name(loose.id(), "Loose");
+    engine_core::GameObject& loose2 = create_part(rig.game);
+    rig.game.set_name(loose2.id(), "Loose2");
+    // Neither part is tagged visual_only: before this fix, authorize's
+    // render-thread branch would refuse both.
+    add_script(rig.game, "Push", R"(
+        local a = workspace:FindFirstChild("Loose")
+        local b = workspace:FindFirstChild("Loose2")
+        game:GetService("RunService").RenderStepped:Connect(function()
+            a.Transform = Matrix4.new(5, 0, 0)
+            -- A second untagged instance: authorize's window-script bypass is
+            -- not a one-instance exception, it is the render-thread branch's
+            -- own rule while a script runs.
+            b.Transform = Matrix4.new(0, 7, 0)
+        end)
+    )");
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    rig.game.start_simulation();
+    play_step(rig, 0.05);
+    bool deferred_left = true;
+    std::thread render([&] {
+        engine_core::set_thread_role(engine_core::ThreadRole::Render);
+        rig.game.set_thread_ids(std::thread::id(), std::this_thread::get_id());
+        rig.game.set_threads_running(true);
+        {
+            engine_core::DataModelLock lock(rig.game, engine_core::DataModelLock::Write);
+            pump.begin_prerender_window(rig.game);
+            rig.scheduler.run_phase(engine_core::Phase::RenderStepped, 0.016);
+            pump.end_prerender_window(rig.game);
+            deferred_left = rig.game.has_deferred_violation();
+            pump.take_changes(rig.game);
+        }
+        rig.game.set_threads_running(false);
+        engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+    });
+    render.join();
+    pump.finish_copy();
+    pump.publish();
+
+    // No Lua error: pcall was never needed because authorize let both through.
+    REQUIRE(rig.runtime.last_error().empty());
+    // No refusal left for the engine to count.
+    REQUIRE_FALSE(deferred_left);
+
+    // The DataModel itself shows the new transforms (print(part.Transform)
+    // reads this, per the README's path table).
+    const engine_core::Matrix4 expected_a = engine_core::matrix4_translation(5.f, 0.f, 0.f);
+    const engine_core::Matrix4 expected_b = engine_core::matrix4_translation(0.f, 7.f, 0.f);
+    REQUIRE(near(rig.game.game_object(loose.id())->transform(), expected_a));
+    REQUIRE(near(rig.game.game_object(loose2.id())->transform(), expected_b));
+
+    // And this frame's published snapshot shows them too: the same-frame
+    // ForceSimWrite-style route, not a write that waits for the next Prepare.
+    const engine_core::VisualInstance* vis_a = pump.find(loose.id());
+    const engine_core::VisualInstance* vis_b = pump.find(loose2.id());
+    REQUIRE(vis_a != nullptr);
+    REQUIRE(vis_b != nullptr);
+    REQUIRE(std::fabs(vis_a->world.m[12] - 5.0f) < 1e-4f);
+    REQUIRE(std::fabs(vis_b->world.m[13] - 7.0f) < 1e-4f);
+}
+
+TEST_CASE("RW7 the old refusal case now succeeds: a window script write authorizes", "[RW7]") {
     // Threads on and this thread registered as render, with the write lock held
     // across the phase run (see RW6's comment and Engine.cpp's render loop): the
     // same conditions that make authorize's render-thread branch real instead of
     // the early "threads not running" pass-through. "Solid" carries no
-    // visual_only tag, so authorize's render-step branch refuses a Transform
-    // write to it, the one property confirmed (by reading GameObject.cpp's
-    // write_lua_transform) to reach DataModel::reject_write through a plain
-    // property write rather than a command queue.
+    // visual_only tag; before Task 8, authorize's render-step branch refused a
+    // Transform write to it (reject_write, deferred, then raised through
+    // instance_newindex's check -- see git history for that version of this
+    // test). The ruling in the design doc's Writes row reverses that: a write a
+    // window SCRIPT makes authorizes like a sim write, tag or no tag. So the
+    // pcall below now succeeds end to end, and nothing is left deferred.
+    //
+    // The raise-on-refusal net Task 5 built (instance_newindex/service_newindex
+    // consuming a deferred violation and raising) is still there, still correct
+    // for whatever authorize does refuse -- but with authorize no longer
+    // refusing a plain window-script property write, that net is currently
+    // unexercised by any sandbox test; RW6 and this test both take the
+    // succeeding path now.
     ScriptRig rig;
     engine_core::GameObject& part = create_part(rig.game);
     rig.game.set_name(part.id(), "Solid");
@@ -4921,9 +5005,8 @@ TEST_CASE("RW7 a write the window refuses raises a Lua error the handler can cat
     rig.game.start_simulation();
     play_step(rig, 0.05);
     // has_deferred_violation keys off the calling thread's id, so it has to be
-    // read from inside the render thread, same as the deferral itself; checking
-    // it from the main thread after join() would trivially see nothing deferred
-    // whether or not the fix actually consumed it.
+    // read from inside the render thread; checking it from the main thread
+    // after join() would trivially see nothing deferred either way.
     bool deferred_left = true;
     std::thread render([&] {
         engine_core::set_thread_role(engine_core::ThreadRole::Render);
@@ -4940,11 +5023,12 @@ TEST_CASE("RW7 a write the window refuses raises a Lua error the handler can cat
         engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
     });
     render.join();
-    bool ok = true;
+    bool ok = false;
     REQUIRE(rig.runtime.global_boolean("ok", ok));
-    REQUIRE_FALSE(ok);  // the pcall caught it: the refusal is a Lua error, not an abort
+    REQUIRE(ok);  // the write went through: authorize no longer refuses it
     REQUIRE(rig.runtime.last_error().empty());
-    REQUIRE_FALSE(deferred_left);  // consumed by the Lua error, not left for the engine
+    REQUIRE_FALSE(deferred_left);  // nothing was ever deferred
+    REQUIRE(near(rig.game.game_object(part.id())->transform(), engine_core::matrix4_translation(1.f, 2.f, 3.f)));
 }
 
 TEST_CASE("RW8 pause silences play handlers, Stop removes them, plugins run through", "[RW8]") {

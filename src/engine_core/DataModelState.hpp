@@ -131,6 +131,12 @@ struct DataModel::State {
     std::thread::id edit_owner{};
     bool threads_running = false;
     bool prerender_window = false;
+    // True while Lua executes inside the window (a RenderStepped/PreRender
+    // handler, or a Wait resumption there). Set/cleared only by the render
+    // thread, which holds the write lock for the whole window, mirroring
+    // prerender_window. authorize's render-thread branch treats a write made
+    // under this flag as a sim write, before the visual_only check.
+    bool window_script = false;
     bool resync = false;
 
     // Guards commands only. Workers push, SimulationThread drains.

@@ -158,6 +158,10 @@ void DataModel::set_prerender_window(bool open) { state_->prerender_window = ope
 
 bool DataModel::prerender_window() const { return state_->prerender_window; }
 
+void DataModel::set_window_script(bool active) { state_->window_script = active; }
+
+bool DataModel::window_script() const { return state_->window_script; }
+
 int DataModel::write_depth() const { return state_->write_depth; }
 
 InvalidationQueue& DataModel::invalidations() { return state_->invalidation; }
@@ -303,7 +307,13 @@ bool DataModel::authorize(const Slot& part, bool force_sim_write) {
         if (!state_->prerender_window) {
             return reject_write("DataModel write from RenderThread outside RenderStepped and PreRender");
         }
-        if (force_sim_write || has_tag(ecs_world(), part.entity, state_->ecs_ids.visual_only)) {
+        // A write made while Lua runs in the window (a RenderStepped/PreRender
+        // handler, or a Wait resumption there) authorizes as a sim write would,
+        // before the visual_only check: Roblox lets handlers modify any
+        // instance, and SceneCamera's `camera.Transform = ...` needs it. A C++
+        // render job outside Lua still needs visual_only or ForceSimWrite.
+        if (force_sim_write || state_->window_script ||
+            has_tag(ecs_world(), part.entity, state_->ecs_ids.visual_only)) {
             return true;
         }
         return reject_write("render-step DataModel write requires visual_only or ForceSimWrite");

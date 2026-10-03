@@ -17,7 +17,7 @@ Roblox fires `RenderStepped`, then `PreRender`, before the frame is drawn. Both 
 | Path | Who | What it changes |
 | --- | --- | --- |
 | A | SimulationThread phases | DataModel. Snapshot on the next Prepare. |
-| B | RenderStepped or PreRender, visual-only or ForceSimWrite — including script RenderStepped handlers, which run here | DataModel, and this frame's snapshot. |
+| B | RenderStepped or PreRender. A C++ job needs visual-only or ForceSimWrite. A script running here — a RenderStepped/PreRender handler, or a Wait resumption — is unrestricted, as a sim write, and records `PreRenderDataModel` | DataModel, and this frame's snapshot. |
 | C | `SnapshotPump::override_visual` | This frame's snapshot only. |
 | D | RenderThread outside that window, including Perform, Present, and PostRender | Contract failure (abort, or the test handler). |
 | E | Any other thread | Command queue, applied on the next sim step. |

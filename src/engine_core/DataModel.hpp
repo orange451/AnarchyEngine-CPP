@@ -437,6 +437,11 @@ public:
 
     void set_prerender_window(bool open);
     bool prerender_window() const;
+    // Set only by the render thread, while it holds the write lock, around Lua
+    // execution inside the window (ScriptRuntime::render_step). While set,
+    // authorize's render-thread branch admits a write as a sim write would.
+    void set_window_script(bool active);
+    bool window_script() const;
     int write_depth() const;
     // SimulationThread, or the caller when the engine threads are not running.
     bool on_gameplay_thread() const;

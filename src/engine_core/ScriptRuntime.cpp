@@ -807,6 +807,8 @@ void ScriptRuntime::close_state(Vm& vm) {
         vm.recordings.clear();
         return;
     }
+    // Nothing is left to finish what the VM's threads opened. A console thread
+    // that errored cancels its recording, as it would have ended; the rest commit.
     if (vm.kind == VmKind::Console) {
         close_recordings(vm, [&](const HeldRecording& held) {
             const Thread* thread = find_thread(held.thread);
@@ -1172,15 +1174,19 @@ void ScriptRuntime::resume_one(Thread& thread) {
     thread.nargs = 0;
     steps_ = 0;
     ++lua_depth_;
-    Thread* const outer = running_;
-    running_ = &thread;
     int status = LUA_OK;
     {
+        // Put back even if the resume throws, so running_ never names a released thread.
+        struct Running {
+            Thread*& slot;
+            Thread* const outer;
+            ~Running() { slot = outer; }
+        } running{running_, running_};
+        running_ = &thread;
         // A contract a script reaches from here throws, and Luau makes it a Lua error.
         ScriptContractScope script_contracts;
         status = lua_resume(thread.co, nullptr, nargs);
     }
-    running_ = outer;
     --lua_depth_;
     if (thread.dead) {
         drop_dead_queues(*thread.vm);

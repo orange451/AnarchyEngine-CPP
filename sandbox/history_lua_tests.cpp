@@ -319,3 +319,36 @@ TEST_CASE("HL11 ResetWaypoints during play drops only the play steps, and in edi
     REQUIRE(rig.runtime.last_error().empty());
     REQUIRE_FALSE(rig.game.history().can_undo().first);
 }
+
+TEST_CASE("HL12 a recording opened inside a coroutine closes with the thread that ran it", "[HL12][history]") {
+    ScriptRig rig;
+    engine_core::GameObject& part = brick(rig);
+    rig.runtime.run_chunk(R"(
+        coroutine.wrap(function()
+            game:GetService("ChangeHistoryService"):TryBeginRecording("Wrapped")
+            workspace.Brick.Name = "Wrapped"
+        end)()
+    )");
+    REQUIRE(rig.runtime.last_error().empty());
+    REQUIRE_FALSE(rig.game.history().is_recording_in_progress());
+    REQUIRE(rig.game.history().can_undo().second == "Wrapped");
+    REQUIRE(has_line_with(lines(rig.runtime), {"\"Wrapped\"", "committed"}));
+    rig.game.history().undo();
+    REQUIRE(rig.game.name(part.id()) == "Brick");
+}
+
+TEST_CASE("HL13 resetting the console commits a recording a waiting chunk holds", "[HL13][history]") {
+    ScriptRig rig;
+    engine_core::GameObject& part = brick(rig);
+    rig.runtime.run_chunk(R"(
+        game:GetService("ChangeHistoryService"):TryBeginRecording("Waiting")
+        workspace.Brick.Name = "Waited"
+        task.wait(10)
+    )");
+    REQUIRE(rig.game.history().is_recording_in_progress());
+    rig.runtime.reset_console();
+    REQUIRE_FALSE(rig.game.history().is_recording_in_progress());
+    REQUIRE(rig.game.name(part.id()) == "Waited");
+    REQUIRE(rig.game.history().can_undo().second == "Waiting");
+    REQUIRE(has_line_with(lines(rig.runtime), {"\"Waiting\"", "committed"}));
+}

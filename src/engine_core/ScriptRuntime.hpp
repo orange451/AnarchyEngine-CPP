@@ -348,8 +348,8 @@ private:
     // TryBeginRecording opened this recording on state's thread. Only the
     // console and plugin VMs keep it.
     void hold_recording(lua_State* state, const std::string& id, const std::string& name);
-    // Finishes each recording in vm.recordings that match picks and that is
-    // still open, and says so in the output: cancelled or committed, and when.
+    // Takes the recordings match accepts out of vm.recordings, finishes each
+    // one still open, and says so in the output: cancelled or committed, and when.
     template <typename Match>
     void close_recordings(Vm& vm, Match&& match, bool cancel, const char* when);
     void kill_script(InstanceId id);

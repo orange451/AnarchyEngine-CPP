@@ -331,3 +331,18 @@ TEST_CASE("MT9 a part both selected and inside a selected Folder moves once", "[
     move.rig.frames(1);
     REQUIRE(near(move.x_of(a), 2));
 }
+
+TEST_CASE("MT10 deleting the selected part takes it out of the selection, so the handles go", "[MT10]") {
+    MoveRig move;
+    const InstanceId a = move.part_at("A", 1, 0, -10);
+    move.rig.game.selection().set({a});
+    move.rig.frames(1);
+    REQUIRE(handles_at(move.rig.game));
+    const std::uint64_t before = move.rig.game.selection().revision();
+    move.rig.game.destroy_tree(a);
+    move.rig.frames(1);
+    INFO(move.rig.runtime.last_error());
+    REQUIRE(move.rig.game.selection().get().empty());
+    REQUIRE(move.rig.game.selection().revision() != before);
+    REQUIRE_FALSE(handles_at(move.rig.game));
+}

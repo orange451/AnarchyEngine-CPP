@@ -14,8 +14,8 @@ namespace engine_core {
 // write it on a click, so either side sees what the other chose.
 //
 // Any thread may call it. The list has its own lock, never the DataModel lock,
-// and nothing here reads the world. A destroyed id stays in the list until the
-// next set. Readers skip ids that are no longer alive.
+// and nothing here reads the world. DataModel::destroy takes a destroyed id out
+// of the list, so SelectionChanged fires when a selected instance is deleted.
 class SelectionService {
 public:
     std::vector<InstanceId> get() const;
@@ -26,6 +26,8 @@ public:
     // (id 0) is dropped. A list equal to the current one changes nothing.
     // Returns true when the list changed.
     bool set(std::vector<InstanceId> ids);
+    // Takes id out of the list, if it is there. Returns true when the list changed.
+    bool remove(InstanceId id);
 
     // Bumps on every change and never resets. A reader that saw this value
     // has already seen the list.

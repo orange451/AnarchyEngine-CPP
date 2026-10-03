@@ -35,6 +35,17 @@ bool SelectionService::set(std::vector<InstanceId> ids) {
     return true;
 }
 
+bool SelectionService::remove(InstanceId id) {
+    std::lock_guard<std::mutex> lock(mu_);
+    const auto it = std::find(ids_.begin(), ids_.end(), id);
+    if (it == ids_.end()) {
+        return false;
+    }
+    ids_.erase(it);
+    revision_.fetch_add(1, std::memory_order_release);
+    return true;
+}
+
 namespace {
 
 // ScriptRuntime adds Get and Set, since those calls need the script VM.

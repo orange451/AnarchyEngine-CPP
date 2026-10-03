@@ -642,6 +642,8 @@ void DataModel::destroy(InstanceId id) {
             (held_for_history ? state_->history_held : state_->free_list).push_back(index);
         }
     }
+    // Out of the selection too, so its readers see the change and let go of it.
+    state_->selection.remove(id);
     note(id, VisualField::Removed, current_origin());
     notify_watchers(id);
     if (captured) {

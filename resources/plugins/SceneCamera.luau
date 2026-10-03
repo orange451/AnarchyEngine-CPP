@@ -33,7 +33,7 @@ local function axis(positive, negative)
 	return value
 end
 
-RunService.Heartbeat:Connect(function(dt)
+RunService.RenderStepped:Connect(function(dt)
 	local camera = workspace.CurrentCamera
 	if camera == nil or RunService:IsRunning() then
 		return

@@ -38,6 +38,7 @@ set(STUDIO_CORE_SOURCES
     src/runner/SceneFeed.cpp
     src/runner/ViewCapture.cpp
     src/runner/RenderMath.cpp
+    src/runner/GridBands.cpp
     src/runner/ShadowMath.cpp
     src/runner/ShadowAtlas.cpp
     src/runner/ShadowPlanner.cpp
@@ -709,6 +710,7 @@ add_executable(engine-tests
     tests/ViewCaptureTest.cpp
     tests/SceneFeedTest.cpp
     tests/GamePackTest.cpp
+    tests/GridBandsTest.cpp
 )
 target_link_libraries(engine-tests PRIVATE studio_core)
 
@@ -764,6 +766,13 @@ add_executable(profiler-demo
     tests/ProfilerDemo.cpp
 )
 target_link_libraries(profiler-demo PRIVATE studio)
+
+# By hand, not ctest, from the repository root: grid-check out-dir times the
+# floor grid from fixed cameras and writes each picture's bytes for comparison.
+add_executable(grid-check
+    tests/GridCheck.cpp
+)
+target_link_libraries(grid-check PRIVATE studio)
 
 # By hand, not ctest: gpu-timer-check times clears with GpuTimer in a hidden GL 3.3 window.
 add_executable(gpu-timer-check
@@ -855,7 +864,7 @@ function(anarchy_warnings target)
 endfunction()
 foreach(target IN ITEMS studio_core studio AnarchyStudio AnarchyPlayer engine-tests shell-tests properties-tests console-tests
                         studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests assets-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
-                        sandbox amesh amesh-tests amesh-gl-check scene-render-check gpu-timer-check profiler-demo profiler profiler-tests ${ENGINE_PACKAGES})
+                        sandbox amesh amesh-tests amesh-gl-check scene-render-check gpu-timer-check grid-check profiler-demo profiler profiler-tests ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()
 

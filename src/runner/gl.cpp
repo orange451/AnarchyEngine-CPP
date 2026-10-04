@@ -84,6 +84,7 @@ void (*rt_glEndQuery)(GLenum) = nullptr;
 void (*rt_glGetQueryObjectiv)(GLuint, GLenum, GLint*) = nullptr;
 void (*rt_glGetQueryObjectui64v)(GLuint, GLenum, GLuint64*) = nullptr;
 void (*rt_glGetInteger64v)(GLenum, GLint64*) = nullptr;
+void (*rt_glGetFramebufferAttachmentParameteriv)(GLenum, GLenum, GLenum, GLint*) = nullptr;
 
 bool GlTimerQueries() {
     return rt_glGenQueries != nullptr && rt_glDeleteQueries != nullptr && rt_glBeginQuery != nullptr &&
@@ -191,6 +192,7 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD_OPTIONAL(GetQueryObjectiv);
     LOAD_OPTIONAL(GetQueryObjectui64v);
     LOAD_OPTIONAL(GetInteger64v);
+    LOAD_OPTIONAL(GetFramebufferAttachmentParameteriv);
 #undef LOAD_OPTIONAL
     return true;
 }

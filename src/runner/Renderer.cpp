@@ -241,6 +241,7 @@ bool Renderer::initialize() {
         buildProgram(merge_, "Merge", "pipeline/fullscreen.vert", "pipeline/merge.frag", {}) &&
         buildProgram(tonemap_, "Tone map", "pipeline/fullscreen.vert", "pipeline/tonemap.frag", {}) &&
         buildProgram(grid_, "Grid", "pipeline/fullscreen.vert", "pipeline/grid.frag", {}) &&
+        buildProgram(gridBands_, "Grid bands", "pipeline/grid_band.vert", "pipeline/grid.frag", {}) &&
         buildProgram(outline_, "Outline", "pipeline/outline.vert", "pipeline/outline.frag", {}) &&
         buildProgram(handle_, "Handle", "pipeline/handle.vert", "pipeline/handle.frag", {}) &&
         environment_.initialize() && shadows_.initialize();
@@ -271,6 +272,15 @@ bool Renderer::initialize() {
 
     glGenVertexArrays(1, &emptyVao_);
     createSphere();
+    glGenVertexArrays(1, &gridBandVao_);
+    glBindVertexArray(gridBandVao_);
+    glGenBuffers(1, &gridBandVbo_);
+    glBindBuffer(GL_ARRAY_BUFFER, gridBandVbo_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
+    gridBandsBuilt_ = false;
+    gridBandsValid_ = false;
+    depthFramebuffer_ = -1;
     glGenVertexArrays(1, &outlineVao_);
     glBindVertexArray(outlineVao_);
     glGenBuffers(1, &outlineVbo_);
@@ -616,7 +626,15 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     glDisable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
     glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
+    // The floor grid's bands mark the pane's depth as they draw. Cleared here, with
+    // the color, rather than just before the grid: a clear between draws to the
+    // pane would make the GPU write the pane out and read it back in between.
+    if (gridVisible_ && paneHasDepth(saved.framebuffer)) {
+        glDepthMask(GL_TRUE);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    } else {
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
 
     const bool hasMeshes = meshes != nullptr && meshCount > 0;
     if (!hasMeshes) {
@@ -746,7 +764,8 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     // Over a pane that got only the clear, the grid would show through the
     // surfaces that should hide it, so it waits for a frame that draws them.
     if (drawn && gridVisible_) {
-        gridPass(hasMeshes || hasSky ? depthTexture_ : whiteTexture_, inverseProjection.m);
+        gridPass(hasMeshes || hasSky ? depthTexture_ : whiteTexture_, projection, inverseProjection.m, pane.width,
+                 pane.height);
     }
     // Likewise the outlines, which would show at full strength through them.
     if (drawn && !outlines_.empty()) {
@@ -762,23 +781,87 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     return drawn;
 }
 
-void Renderer::gridPass(unsigned depth, const float* inverseProjection) {
+bool Renderer::paneHasDepth(int framebuffer) {
+    if (framebuffer == depthFramebuffer_) {
+        return depthFramebufferHas_;
+    }
+    depthFramebuffer_ = framebuffer;
+    depthFramebufferHas_ = false;
+    if (rt_glGetFramebufferAttachmentParameteriv != nullptr) {
+        // The window's own framebuffer names its depth buffer GL_DEPTH; one made with
+        // glGenFramebuffers, GL_DEPTH_ATTACHMENT. Either reads GL_NONE without one.
+        GLint type = 0;
+        glGetFramebufferAttachmentParameteriv(RT_GL_DRAW_FRAMEBUFFER,
+                                              framebuffer == 0 ? RT_GL_DEPTH : RT_GL_DEPTH_ATTACHMENT,
+                                              RT_GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &type);
+        depthFramebufferHas_ = type != 0;
+    }
+    return depthFramebufferHas_;
+}
+
+void Renderer::gridPass(unsigned depth, const float* projection, const float* inverseProjection, int width,
+                        int height) {
     RENDER_PASS("Floor grid");
     glDisable(GL_DEPTH_TEST);
     glDisable(RT_GL_CULL_FACE);
     glEnable(GL_BLEND);
     // Straight alpha over the pane, leaving its alpha as it was.
     glBlendFuncSeparate(RT_GL_SRC_ALPHA, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ZERO, RT_GL_ONE);
-    glUseProgram(grid_.id);
+    GLint framebuffer = 0;
+    glGetIntegerv(RT_GL_FRAMEBUFFER_BINDING, &framebuffer);
+    // The grid shades only GridBands' bands around its lines. Where they cross,
+    // a pixel must still be blended once, which the pane's depth buffer keeps
+    // track of; without one, the whole pane is shaded as it used to be.
+    const bool banded = paneHasDepth(framebuffer);
+    const Program& program = banded ? gridBands_ : grid_;
+    glUseProgram(program.id);
     BindTexture(kUnitDepth, depth);
     const engine_core::Matrix4 inverseView = engine_core::matrix4_inverse(view_);
-    glUniformMatrix4fv(grid_.inverseProjection, 1, GL_FALSE, inverseProjection);
-    glUniformMatrix4fv(grid_.inverseView, 1, GL_FALSE, inverseView.m);
-    glBindVertexArray(emptyVao_);
-    // A grid the driver is not ready for is left out of this frame, not the scene with it.
-    if (CanDraw(grid_.id)) {
-        DrawFullscreen(emptyVao_);
+    glUniformMatrix4fv(program.inverseProjection, 1, GL_FALSE, inverseProjection);
+    glUniformMatrix4fv(program.inverseView, 1, GL_FALSE, inverseView.m);
+    // Validation looks at the bound vertex array too, so it is bound first.
+    glBindVertexArray(banded ? gridBandVao_ : emptyVao_);
+    // A grid the driver is not ready for is left out of this frame, not the scene
+    // with it. Validating the banded program is slow on macOS, so it is asked
+    // until it passes, then trusted until the programs are made again.
+    if (!banded) {
+        if (CanDraw(program.id)) {
+            DrawFullscreen(emptyVao_);
+        }
+        return;
     }
+    if (!gridBandsValid_) {
+        if (!CanDraw(program.id)) {
+            return;
+        }
+        gridBandsValid_ = true;
+    }
+    GridView view;
+    view.view = view_;
+    std::copy(projection, projection + 16, view.projection.m);
+    view.width = width;
+    view.height = height;
+    glBindBuffer(GL_ARRAY_BUFFER, gridBandVbo_);
+    // Built again only when the camera or the pane changes.
+    if (!gridBandsBuilt_ || !engine_core::same_matrix4(view.view, gridBandView_.view) ||
+        !engine_core::same_matrix4(view.projection, gridBandView_.projection) || view.width != gridBandView_.width ||
+        view.height != gridBandView_.height) {
+        build_grid_bands(view, gridBandTriangles_);
+        gridBandView_ = view;
+        gridBandsBuilt_ = true;
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(gridBandTriangles_.size() * sizeof(float)),
+                     gridBandTriangles_.empty() ? nullptr : gridBandTriangles_.data(), RT_GL_STREAM_DRAW);
+    }
+    if (gridBandTriangles_.empty()) {
+        return;
+    }
+    // Each pixel once: the first band to reach it marks it in depth, which draw
+    // cleared with the pane.
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(RT_GL_LESS);
+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(gridBandTriangles_.size() / 2));
+    glDisable(GL_DEPTH_TEST);
 }
 
 void Renderer::setOutlines(const float* points, int pointCount) {
@@ -1284,7 +1367,8 @@ void Renderer::shutdown() {
     gpu_.shutdown();
     ready_ = false;
     for (Program* program :
-         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &sky_, &grid_, &outline_, &handle_}) {
+         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &sky_, &grid_, &gridBands_, &outline_,
+          &handle_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);
         }
@@ -1299,13 +1383,13 @@ void Renderer::shutdown() {
             *texture = 0;
         }
     }
-    for (unsigned* vao : {&emptyVao_, &sphereVao_, &outlineVao_, &handleVao_}) {
+    for (unsigned* vao : {&emptyVao_, &sphereVao_, &gridBandVao_, &outlineVao_, &handleVao_}) {
         if (*vao != 0) {
             glDeleteVertexArrays(1, vao);
             *vao = 0;
         }
     }
-    for (unsigned* buffer : {&sphereVbo_, &sphereEbo_, &outlineVbo_, &handleVbo_}) {
+    for (unsigned* buffer : {&sphereVbo_, &sphereEbo_, &gridBandVbo_, &outlineVbo_, &handleVbo_}) {
         if (*buffer != 0) {
             glDeleteBuffers(1, buffer);
             *buffer = 0;

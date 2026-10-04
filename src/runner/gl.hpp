@@ -147,6 +147,10 @@ constexpr GLboolean GL_TRUE = 1;
 constexpr GLenum GL_NO_ERROR = 0;
 // Timer queries (core in 3.3).
 constexpr GLenum GL_TIME_ELAPSED = 0x88BF;
+constexpr GLenum RT_GL_DRAW_FRAMEBUFFER = 0x8CA9;
+constexpr GLenum RT_GL_DEPTH = 0x1801;
+constexpr GLenum RT_GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE = 0x8CD0;
+constexpr GLenum RT_GL_STREAM_DRAW = 0x88E0;
 constexpr GLenum GL_TIMESTAMP = 0x8E28;
 constexpr GLenum GL_QUERY_RESULT = 0x8866;
 constexpr GLenum GL_QUERY_RESULT_AVAILABLE = 0x8867;
@@ -322,6 +326,9 @@ extern void (*rt_glEndQuery)(GLenum target);
 extern void (*rt_glGetQueryObjectiv)(GLuint id, GLenum pname, GLint* params);
 extern void (*rt_glGetQueryObjectui64v)(GLuint id, GLenum pname, GLuint64* params);
 extern void (*rt_glGetInteger64v)(GLenum pname, GLint64* data);
+// Optional too: without it a framebuffer's depth buffer is taken as absent.
+extern void (*rt_glGetFramebufferAttachmentParameteriv)(GLenum target, GLenum attachment, GLenum pname,
+                                                         GLint* params);
 // The entry points GpuTimer needs: elapsed-time queries and their results.
 bool GlTimerQueries();
 
@@ -412,3 +419,4 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glGetQueryObjectiv ::runner::rt_glGetQueryObjectiv
 #define glGetQueryObjectui64v ::runner::rt_glGetQueryObjectui64v
 #define glGetInteger64v ::runner::rt_glGetInteger64v
+#define glGetFramebufferAttachmentParameteriv ::runner::rt_glGetFramebufferAttachmentParameteriv

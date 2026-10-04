@@ -3,6 +3,7 @@
 #include "DraggerMath.hpp"
 #include "EnvironmentMap.hpp"
 #include "GpuTimer.hpp"
+#include "GridBands.hpp"
 #include "Matrix4.hpp"
 #include "ShadowRenderer.hpp"
 #include "ViewCapture.hpp"
@@ -278,7 +279,10 @@ private:
     bool mergePass();
     // The floor grid over the pane, on the pane's framebuffer. depth is the
     // scene's, or a texture of 1s where nothing was drawn.
-    void gridPass(unsigned depth, const float* inverseProjection);
+    void gridPass(unsigned depth, const float* projection, const float* inverseProjection, int width, int height);
+    // Whether the framebuffer the pane draws into has a depth buffer, which the
+    // grid's bands use to shade each pixel once. Asked once per framebuffer.
+    bool paneHasDepth(int framebuffer);
     // outlines_ over the pane, on the pane's framebuffer, with depth as gridPass takes it.
     void outlinePass(unsigned depth, const float* projection, const float* inverseProjection);
     void handlePass(const float* projection);
@@ -317,6 +321,17 @@ private:
     unsigned blackCube_ = 0;
     // No attributes: the full-screen triangle comes from gl_VertexID.
     unsigned emptyVao_ = 0;
+    // The floor grid drawn on GridBands' triangles, and the camera they were
+    // built for; they are built again only when it changes.
+    Program gridBands_;
+    unsigned gridBandVao_ = 0;
+    unsigned gridBandVbo_ = 0;
+    std::vector<float> gridBandTriangles_;
+    GridView gridBandView_;
+    bool gridBandsBuilt_ = false;
+    bool gridBandsValid_ = false;
+    int depthFramebuffer_ = -1;
+    bool depthFramebufferHas_ = false;
     // A unit sphere, positions only, for each light's volume.
     unsigned sphereVao_ = 0;
     unsigned sphereVbo_ = 0;

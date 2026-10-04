@@ -4,6 +4,8 @@
 // nears and leaves so no cell is ever much smaller than a few pixels. The X
 // axis runs along it in red and the Z axis in blue. Drawn over the tone mapped
 // pane, straight alpha; a surface nearer the camera than the plane hides it.
+// Usually run only on bands around the lines (GridBands, grid_band.vert), so
+// pixels far from any line are never shaded.
 in vec2 vUv;
 out vec4 fragColor;
 
@@ -92,8 +94,10 @@ void main() {
             alpha = 0.0;
         }
     }
-    if (!hit || alpha <= 0.0) {
-        discard;
+    // Nothing to draw blends nothing. Not a discard: drawn on GridBands' bands,
+    // every pixel then marks the depth buffer early, and is shaded once.
+    if (!hit) {
+        alpha = 0.0;
     }
-    fragColor = vec4(color, alpha);
+    fragColor = vec4(color, max(alpha, 0.0));
 }

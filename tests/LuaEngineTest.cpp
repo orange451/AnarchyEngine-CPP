@@ -463,6 +463,7 @@ int RunGamePackTests();
 
 int RunColorLiteralsTests();
 int RunAssetBrowserTests();
+int RunGridBandsTests();
 
 int main() {
     try {
@@ -493,6 +494,7 @@ int main() {
         gFailures += RunGamePackTests();
         gFailures += RunColorLiteralsTests();
         gFailures += RunAssetBrowserTests();
+        gFailures += RunGridBandsTests();
     } catch (const std::exception& ex) {
         std::fprintf(stderr, "FAIL exception: %s\n", ex.what());
         return EXIT_FAILURE;

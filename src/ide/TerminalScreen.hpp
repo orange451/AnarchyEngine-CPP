@@ -98,6 +98,9 @@ public:
     // The row's characters as UTF-8, without trailing blanks.
     std::string row_text(int row) const;
     int scrollback_rows() const;
+    // Lines that have gone into history, less those brought back. A line keeps
+    // the same row plus this as more scroll off, so a selection can follow it.
+    long long lines_scrolled() const { return lines_scrolled_; }
     TerminalCursor cursor() const;
     const std::string& title() const { return title_; }
     // A full-screen program's screen, which keeps no history.
@@ -126,6 +129,7 @@ private:
     std::string title_pending_;
     bool alt_screen_ = false;
     bool cursor_visible_ = true;
+    long long lines_scrolled_ = 0;
 };
 
 }  // namespace ide

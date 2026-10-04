@@ -5,8 +5,10 @@
 #include "ide/TerminalView.hpp"
 
 #include "jadefx/jadefx.hpp"
+#include "jadefx/scene/text/Font.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -101,6 +103,25 @@ struct Page {
     ide::TerminalScreen& screen() { return terminal->view().screen(); }
 
     void key(int key, int mods = 0) { scene->noteKey(key, true, false, mods); scene->noteKey(key, false, false, mods); }
+
+    // Just inside a cell's left edge, in the scene, from the font the terminal draws with.
+    double col_x(int col) {
+        const jadefx::Font font(ide::editor_mono_family(), 14.f);
+        return terminal->view().getAbsoluteX() + (col + 0.2) * font.measureWidth("M");
+    }
+    double row_y(int row) {
+        const jadefx::Font font(ide::editor_mono_family(), 14.f);
+        return terminal->view().getAbsoluteY() + (row + 0.5) * std::ceil(font.lineHeight());
+    }
+    void drag(int from_col, int from_row, int to_col, int to_row) {
+        scene->noteButton(0, true, col_x(from_col), row_y(from_row));
+        scene->noteMove(col_x(to_col), row_y(to_row));
+        scene->noteButton(0, false, col_x(to_col), row_y(to_row));
+    }
+    void click(int col, int row, int mods = 0) {
+        scene->noteButton(0, true, col_x(col), row_y(row), mods);
+        scene->noteButton(0, false, col_x(col), row_y(row), mods);
+    }
 
     std::string take() {
         std::string out;
@@ -342,6 +363,94 @@ void TestClosingEndsTheProgram() {
 
 }  // namespace
 
+#if defined(__APPLE__)
+constexpr int kCopyMods = jadefx::Key::ModSuper;
+constexpr int kScrollMods = jadefx::Key::ModSuper;
+#else
+constexpr int kCopyMods = jadefx::Key::ModControl | jadefx::Key::ModShift;
+constexpr int kScrollMods = jadefx::Key::ModControl | jadefx::Key::ModShift;
+#endif
+
+void TestDragSelectsAndCopies() {
+    Page page;
+    Output(*page.program, "hello world\r\nsecond line");
+    page.frame();
+    page.drag(3, 0, 4, 1);
+    Expect(page.terminal->view().hasSelection(), "a drag selects");
+    Expect(page.terminal->view().selectedText() == "lo world\nseco", "a drag selects from cell edge to cell edge, across rows");
+    page.scene->setClipboardText("");
+    page.key(jadefx::Key::C, kCopyMods);
+    Expect(page.scene->clipboardText() == "lo world\nseco", "the copy shortcut puts the selection on the clipboard");
+    Expect(page.take().empty(), "copying sends nothing to the program");
+    page.click(2, 0);
+    Expect(!page.terminal->view().hasSelection(), "a click clears the selection");
+    page.scene->setClipboardText("kept");
+    page.key(jadefx::Key::C, kCopyMods);
+    Expect(page.scene->clipboardText() == "kept", "without a selection, copy leaves the clipboard alone");
+}
+
+void TestClicksSelectWordsAndLines() {
+    Page page;
+    Output(*page.program, "edit src/ide/Main.cpp:42 now");
+    page.frame();
+    page.click(8, 0);
+    page.click(8, 0);
+    Expect(page.terminal->view().selectedText() == "src/ide/Main.cpp:42", "a double-click selects a path as one word");
+    page.click(8, 0);
+    Expect(page.terminal->view().selectedText() == "edit src/ide/Main.cpp:42 now", "a triple-click selects the line");
+}
+
+void TestShiftClickExtends() {
+    Page page;
+    Output(*page.program, "abcdefghij");
+    page.frame();
+    page.drag(1, 0, 3, 0);
+    page.click(6, 0, jadefx::Key::ModShift);
+    Expect(page.terminal->view().selectedText() == "bcdef", "Shift+click moves the selection's end");
+}
+
+void TestSelectionFollowsScrolledText() {
+    Page page;
+    Output(*page.program, "pick me\r\n");
+    page.frame();
+    page.drag(0, 0, 6, 0);
+    std::string lines;
+    for (int i = 0; i < 100; ++i) {
+        lines += "line " + std::to_string(i) + "\r\n";
+    }
+    Output(*page.program, lines);
+    page.frame();
+    Expect(page.terminal->view().selectedText() == "pick m", "a selection stays on its text as it scrolls into history");
+    page.terminal->view().requestFocus();
+    page.scene->noteText("x");
+    Expect(!page.terminal->view().hasSelection(), "typing clears the selection");
+}
+
+void TestKeysScrollHistory() {
+    Page page;
+    std::string lines;
+    for (int i = 0; i < 100; ++i) {
+        lines += "line " + std::to_string(i) + "\r\n";
+    }
+    Output(*page.program, lines);
+    page.frame();
+    page.terminal->view().requestFocus();
+    ide::TerminalView& view = page.terminal->view();
+    page.key(jadefx::Key::Up, kScrollMods);
+    Expect(view.scrollOffset() == 1, "Cmd+Up (Ctrl+Shift+Up elsewhere) scrolls back a line");
+    page.key(jadefx::Key::Down, kScrollMods);
+    Expect(view.scrollOffset() == 0, "and Down scrolls forward again");
+    page.key(jadefx::Key::PageUp, jadefx::Key::ModShift);
+    Expect(view.scrollOffset() == page.screen().rows() - 1, "Shift+Page Up scrolls back a page");
+    page.key(jadefx::Key::Home, kScrollMods);
+    Expect(view.scrollOffset() == page.screen().scrollback_rows(), "Home with them goes to the oldest line");
+    page.key(jadefx::Key::End, kScrollMods);
+    Expect(view.scrollOffset() == 0, "End with them comes back to the newest");
+    Expect(page.take().empty(), "keys that scroll are not sent to the program");
+    page.key(jadefx::Key::Up);
+    Expect(page.take() == "\x1b[A", "Up alone still goes to the program");
+}
+
 int RunTerminalPaneTests() {
     gFailures = 0;
     TestStartsAtItsSize();
@@ -350,6 +459,11 @@ int RunTerminalPaneTests() {
     TestPaste();
     TestResizeFollowsThePage();
     TestHistoryScrolls();
+    TestDragSelectsAndCopies();
+    TestClicksSelectWordsAndLines();
+    TestShiftClickExtends();
+    TestSelectionFollowsScrolledText();
+    TestKeysScrollHistory();
     TestExitAndRestart();
     TestTitleFollowsTheProgram();
     TestTextStaysReadable();

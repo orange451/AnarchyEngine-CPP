@@ -134,6 +134,7 @@ struct TerminalScreenCallbacks {
         }
         auto& history = self->vt_->history;
         history.emplace_back(cells, cells + used);
+        ++self->lines_scrolled_;
         while (history.size() > TerminalScreen::kScrollbackLimit) {
             history.pop_front();
         }
@@ -155,6 +156,7 @@ struct TerminalScreenCallbacks {
             cells[col] = col < static_cast<int>(line.size()) ? line[static_cast<std::size_t>(col)] : blank;
         }
         history.pop_back();
+        --self->lines_scrolled_;
         return 1;
     }
 

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ide {
@@ -41,6 +42,21 @@ const std::string& symbol_family() {
         return editor_mono_family();
     }();
     return family;
+}
+
+// Besides letters and digits, what a double-click takes as part of a word,
+// so a path, a URL, or file:line comes whole.
+bool IsWordCharacter(const std::u32string& chars) {
+    if (chars.empty()) {
+        return false;
+    }
+    const char32_t c = chars[0];
+    if (c < 0x80) {
+        return (c >= U'0' && c <= U'9') || (c >= U'a' && c <= U'z') || (c >= U'A' && c <= U'Z') ||
+               std::u32string_view(U"_-./~:@%+#?=&").find(c) != std::u32string_view::npos;
+    }
+    // Not the spaces, punctuation, arrows, box drawing, and symbols that programs draw their interfaces with.
+    return c != 0xA0 && c != 0x3000 && (c < 0x2000 || c > 0x2BFF);
 }
 
 bool TerminalKeyFor(int key, TerminalKey& out) {
@@ -412,6 +428,7 @@ TerminalView::TerminalView() : screen_(24, 80) {
     setFocusTraversable(true);
     // Ctrl+C, Ctrl+S, and Tab are the program's while it has focus, not the studio's.
     setCapturesKeys(true);
+    setDefaultCursor(jadefx::Cursor::Text);
     measure();
     apply_theme();
     theme_listener_ = std::make_unique<ThemeListener>([this] { apply_theme(); });
@@ -462,6 +479,8 @@ void TerminalView::layoutChildren() {
         return;
     }
     sized_ = true;
+    // The program redraws for the new size, so what was selected may have moved.
+    clear_selection();
     screen_.resize(rows, cols);
     scroll_ = std::min(scroll_, screen_.scrollback_rows());
     if (on_resize_) {
@@ -488,6 +507,10 @@ void TerminalView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
     auto x_of = [&](int col) { return left + static_cast<float>(col) * cell_width_; };
     // One device pixel, in points.
     const float pixel = 1.f / std::max(0.01f, painter.pixelsPerPoint());
+    const bool selected = hasSelection();
+    const Spot selection_start = std::min(anchor_, head_);
+    const Spot selection_end = std::max(anchor_, head_);
+    const jadefx::Color selection_color = theme_color("--text-selection-color");
 
     std::vector<Painted> line(static_cast<std::size_t>(cols));
     for (int r = 0; r < rows; ++r) {
@@ -529,6 +552,19 @@ void TerminalView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
                 painter.fillRect(x0, y0, x1 - x0, Snap(y + row_height_, pixel) - y0, Faded(first.bg, opacity));
             }
             col = end;
+        }
+
+        // The selection, over the backgrounds and under the text.
+        const long long line_here = screen_.lines_scrolled() + row;
+        if (selected && line_here >= selection_start.line && line_here <= selection_end.line) {
+            const int from = line_here == selection_start.line ? selection_start.col : 0;
+            const int to = line_here == selection_end.line ? selection_end.col : cols;
+            if (to > from) {
+                const float x0 = Snap(x_of(from), pixel);
+                const float x1 = Snap(x_of(to), pixel);
+                const float y0 = Snap(y, pixel);
+                painter.fillRect(x0, y0, x1 - x0, Snap(y + row_height_, pixel) - y0, Faded(selection_color, opacity));
+            }
         }
 
         // Text: ASCII in runs, since the font's advance is the cell width, and
@@ -627,16 +663,92 @@ void TerminalView::paste() {
     }
 }
 
+void TerminalView::copy() {
+    if (jadefx::Scene* scene = getScene()) {
+        scene->setClipboardText(selectedText());
+    }
+}
+
+std::string TerminalView::selectedText() const {
+    if (!hasSelection()) {
+        return {};
+    }
+    const Spot start = std::min(anchor_, head_);
+    const Spot end = std::max(anchor_, head_);
+    std::string out;
+    for (long long line = start.line; line <= end.line; ++line) {
+        const int row = row_of(line);
+        const int from = line == start.line ? start.col : 0;
+        const int to = line == end.line ? end.col : screen_.cols();
+        std::u32string text;
+        for (int col = from; col < to; ++col) {
+            const TerminalCell cell = screen_.cell(row, col);
+            if (!cell.chars.empty()) {
+                text += cell.chars;
+            } else if (col == 0 || screen_.cell(row, col - 1).width != 2) {
+                // A blank, and not the second half of a wide character.
+                text += U' ';
+            }
+        }
+        while (!text.empty() && text.back() == U' ') {
+            text.pop_back();
+        }
+        out += Utf8(text);
+        if (line != end.line) {
+            out += '\n';
+        }
+    }
+    return out;
+}
+
+void TerminalView::scroll_by(int rows) { scroll_ = std::clamp(scroll_ + rows, 0, screen_.scrollback_rows()); }
+
+bool TerminalView::scroll_key(const jadefx::KeyEvent& event) {
+    // A full-screen program keeps no history, and these keys are its own.
+    if (screen_.alt_screen()) {
+        return false;
+    }
+#if defined(__APPLE__)
+    const bool held = event.meta && !event.control && !event.alt && !event.shift;
+#else
+    const bool held = event.control && event.shift && !event.alt && !event.meta;
+#endif
+    const bool shift = event.shift && !event.control && !event.alt && !event.meta;
+    const int page = std::max(1, screen_.rows() - 1);
+    if (held) {
+        switch (event.key) {
+            case Key::Up: scroll_by(1); return true;
+            case Key::Down: scroll_by(-1); return true;
+            case Key::PageUp: scroll_by(page); return true;
+            case Key::PageDown: scroll_by(-page); return true;
+            case Key::Home: scroll_by(screen_.scrollback_rows()); return true;
+            case Key::End: to_bottom(); return true;
+            default: break;
+        }
+    }
+    if (shift && (event.key == Key::PageUp || event.key == Key::PageDown)) {
+        scroll_by(event.key == Key::PageUp ? page : -page);
+        return true;
+    }
+    return false;
+}
+
 void TerminalView::handleKey(jadefx::KeyEvent& event) {
     if (!event.pressed) {
         return;
     }
     swallow_text_ = false;
 #if defined(__APPLE__)
-    // Command is the studio's, but for paste.
+    // Command is the studio's, but for paste, copy, and scrolling.
     if (event.meta) {
-        if (event.key == Key::V && !event.control && !event.alt) {
+        const bool alone = !event.control && !event.alt && !event.shift;
+        if (event.key == Key::V && alone) {
             paste();
+            event.consume();
+        } else if (event.key == Key::C && alone && hasSelection()) {
+            copy();
+            event.consume();
+        } else if (scroll_key(event)) {
             event.consume();
         }
         return;
@@ -646,6 +758,11 @@ void TerminalView::handleKey(jadefx::KeyEvent& event) {
     if (event.control && event.shift) {
         if (event.key == Key::V) {
             paste();
+            event.consume();
+        } else if (event.key == Key::C && hasSelection()) {
+            copy();
+            event.consume();
+        } else if (scroll_key(event)) {
             event.consume();
         }
         return;
@@ -659,8 +776,19 @@ void TerminalView::handleKey(jadefx::KeyEvent& event) {
         event.consume();
         return;
     }
+    // As in Windows Terminal: with a selection, Ctrl+C copies it rather than interrupting.
+    if (event.control && !event.alt && event.key == Key::C && hasSelection()) {
+        copy();
+        clear_selection();
+        event.consume();
+        return;
+    }
 #endif
 #endif
+    if (scroll_key(event)) {
+        event.consume();
+        return;
+    }
     TerminalMods mods;
     mods.shift = event.shift;
     mods.alt = event.alt;
@@ -668,6 +796,7 @@ void TerminalView::handleKey(jadefx::KeyEvent& event) {
     TerminalKey key;
     if (TerminalKeyFor(event.key, key)) {
         to_bottom();
+        clear_selection();
         screen_.key(key, mods);
         event.consume();
         return;
@@ -681,6 +810,7 @@ void TerminalView::handleKey(jadefx::KeyEvent& event) {
     char32_t c = 0;
     if ((event.control || alt_sends) && CharacterFor(event, c)) {
         to_bottom();
+        clear_selection();
         if (!alt_sends) {
             mods.alt = false;
         }
@@ -700,6 +830,7 @@ void TerminalView::handleText(jadefx::TextEvent& event) {
         return;
     }
     to_bottom();
+    clear_selection();
     for (const char32_t c : Utf32(event.text)) {
         screen_.character(c, TerminalMods{});
     }
@@ -718,10 +849,101 @@ void TerminalView::handleScroll(jadefx::ScrollEvent& event) {
         }
         return;
     }
-    scroll_ = std::clamp(scroll_ + rows, 0, screen_.scrollback_rows());
+    scroll_by(rows);
 }
 
-void TerminalView::handleMousePressed(const jadefx::MouseEvent&) { requestFocus(); }
+TerminalView::Spot TerminalView::spot_at(double x, double y, bool edge) const {
+    const double across = (x - getAbsoluteX() - contentLeft()) / cell_width_;
+    const double down = (y - getAbsoluteY() - contentTop()) / row_height_;
+    const int row = std::clamp(static_cast<int>(std::floor(down)), 0, screen_.rows() - 1);
+    const int col = static_cast<int>(edge ? std::lround(across) : std::floor(across));
+    Spot spot;
+    spot.line = screen_.lines_scrolled() + row - scroll_;
+    spot.col = std::clamp(col, 0, edge ? screen_.cols() : screen_.cols() - 1);
+    return spot;
+}
+
+void TerminalView::select_unit(const Spot& spot, int clicks) {
+    unit_start_ = spot;
+    unit_end_ = spot;
+    if (clicks >= 3) {
+        unit_start_.col = 0;
+        unit_end_.col = screen_.cols();
+    } else {
+        const int row = row_of(spot.line);
+        // A wide character's second cell stands for its first.
+        auto chars_at = [&](int col) {
+            TerminalCell cell = screen_.cell(row, col);
+            if (cell.chars.empty() && col > 0) {
+                const TerminalCell before = screen_.cell(row, col - 1);
+                if (before.width == 2) {
+                    return before.chars;
+                }
+            }
+            return cell.chars;
+        };
+        int from = spot.col;
+        int to = spot.col + 1;
+        if (IsWordCharacter(chars_at(spot.col))) {
+            while (from > 0 && IsWordCharacter(chars_at(from - 1))) {
+                --from;
+            }
+            while (to < screen_.cols() && IsWordCharacter(chars_at(to))) {
+                ++to;
+            }
+        }
+        unit_start_.col = from;
+        unit_end_.col = to;
+    }
+    anchor_ = unit_start_;
+    head_ = unit_end_;
+    selecting_ = true;
+}
+
+void TerminalView::handleMousePressed(const jadefx::MouseEvent& event) {
+    requestFocus();
+    if (event.button != 0) {
+        return;
+    }
+    if (event.clickCount >= 2) {
+        select_unit(spot_at(event.x, event.y, false), event.clickCount);
+        return;
+    }
+    const Spot spot = spot_at(event.x, event.y);
+    // Shift+click moves the selection's far end and keeps where it started.
+    if (!(event.shift() && selecting_)) {
+        anchor_ = spot;
+    }
+    head_ = spot;
+    unit_start_ = anchor_;
+    unit_end_ = anchor_;
+    selecting_ = true;
+}
+
+void TerminalView::handleMouseDragged(const jadefx::MouseEvent& event) {
+    if (!selecting_) {
+        return;
+    }
+    // Past the top or the bottom, the view scrolls to take in more.
+    const double top = getAbsoluteY() + contentTop();
+    if (event.y < top) {
+        scroll_by(1);
+    } else if (event.y >= top + contentHeight()) {
+        scroll_by(-1);
+    }
+    const Spot spot = spot_at(event.x, event.y);
+    // A word or line from a double- or triple-click stays whole, whichever way the drag goes.
+    if (spot < unit_start_) {
+        anchor_ = unit_end_;
+        head_ = spot;
+    } else if (unit_end_ < spot) {
+        anchor_ = unit_start_;
+        head_ = spot;
+    } else {
+        anchor_ = unit_start_;
+        head_ = unit_end_;
+    }
+}
 
 void TerminalView::handleFocusGained() { screen_.focus(true); }
 

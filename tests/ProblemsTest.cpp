@@ -81,6 +81,32 @@ struct Harness {
     void key(int code) { scene->noteKey(code, true, false, 0); }
 };
 
+// Whether the pane's tree has a script row labelled name.
+bool row_shows(const ide::IdeProblems& pane, const std::string& name) {
+    for (const std::shared_ptr<jadefx::TreeItem>& row : pane.tree().getRoot()->getChildren().items()) {
+        const auto* box = dynamic_cast<const jadefx::Pane*>(row->getGraphic().get());
+        if (box == nullptr) {
+            continue;
+        }
+        for (const std::shared_ptr<jadefx::Node>& part : box->getChildren().items()) {
+            const auto* label = dynamic_cast<const jadefx::Label*>(part.get());
+            if (label != nullptr && label->getText() == name) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool lists(const ide::IdeProblems& pane, std::uint32_t id) {
+    for (const ide::ScriptProblems& listed : pane.list().scripts) {
+        if (listed.id == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 int RunProblemsPaneTests(engine_core::Engine& engine) {
@@ -128,7 +154,8 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     expect(!h.pane->list().scripts.empty() && h.pane->list().scripts[0].path == "Workspace.Logic",
            "and moving it back and renaming it back restores the path");
 
-    // A pane no scene lays out, as a tab that is not showing: its tick keeps the title counting.
+    // A pane no scene lays out, as a tab that is not showing: its tick keeps
+    // the title counting, and builds no rows.
     {
         auto loose = jadefx::make<ide::IdeProblems>(engine, ide::ProblemsHost{});
         loose->tick(Harness::clock());
@@ -137,9 +164,11 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
         settle(engine);
         loose->tick(Harness::clock() + 1);
         expect(loose->title() == "Problems (3)", "and keeps counting as scripts break");
-        const int ticked = loose->rebuilds();
+        const int ticked = loose->refreshes();
         loose->tick(Harness::clock() + 1);
-        expect(loose->rebuilds() == ticked, "a second tick in the same frame does nothing");
+        expect(loose->refreshes() == ticked, "a second tick in the same frame does nothing");
+        expect(loose->rebuilds() == 0 && loose->tree().getRoot()->getChildren().empty(),
+               "a pane in no scene builds no rows");
         game.destroy(more.id());
         settle(engine);
         h.frame();
@@ -222,9 +251,11 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     expect(h.pane->list().scripts.size() == 1 && h.pane->list().scripts[0].id == warned.id(), "the filter narrows");
     h.pane->filterInput().field().setText("");
     h.frame();
-    const int after_filter = h.pane->rebuilds();
+    const int after_filter = h.pane->refreshes();
+    const int after_filter_rows = h.pane->rebuilds();
     h.frame();
-    expect(h.pane->rebuilds() == after_filter, "a quiet frame after toggling the filter does not rebuild");
+    expect(h.pane->refreshes() == after_filter && h.pane->rebuilds() == after_filter_rows,
+           "a quiet frame after toggling the filter neither refreshes nor rebuilds");
 
     // Collapsing survives a rebuild.
     if (!h.pane->tree().getRoot()->getChildren().empty()) {
@@ -243,17 +274,21 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     h.frame();
     expect(h.pane->list().scripts.size() == 1 && h.pane->title() == "Problems (1)", "a fixed error leaves the list");
 
-    // Many changes, one rebuild per layout pass.
-    const int before = h.pane->rebuilds();
+    // Many changes, one refresh and one rebuild per layout pass.
+    const int before = h.pane->refreshes();
+    const int before_rows = h.pane->rebuilds();
     for (int i = 0; i < 20; ++i) {
         add_script(game, workspace, ("Many" + std::to_string(i)).c_str(), "nope()\n");
     }
     settle(engine);
     h.frame();
-    expect(h.pane->rebuilds() == before + 1, "many changes, one rebuild");
-    const int after_many = h.pane->rebuilds();
+    expect(h.pane->refreshes() == before + 1, "many changes, one refresh");
+    expect(h.pane->rebuilds() == before_rows + 1, "and one rebuild of the rows a shown pane has");
+    const int after_many = h.pane->refreshes();
+    const int after_many_rows = h.pane->rebuilds();
     h.frame();
-    expect(h.pane->rebuilds() == after_many, "a quiet frame does not rebuild");
+    expect(h.pane->refreshes() == after_many && h.pane->rebuilds() == after_many_rows,
+           "a quiet frame neither refreshes nor rebuilds");
 
     // Tree churn that changes no shown name or path, as a game spawning and
     // destroying things every frame: the tree revision moves, the rows stay.
@@ -267,7 +302,8 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
             h.frame();
         }
         expect(game.tree_revision() != revision, "creating and destroying a folder moves the tree revision");
-        expect(h.pane->rebuilds() == after_many, "tree churn that changes no shown name or path does not rebuild");
+        expect(h.pane->refreshes() == after_many && h.pane->rebuilds() == after_many_rows,
+               "tree churn that changes no shown name or path does not refresh");
     }
 
     // During a long check batch the rows follow at most every 250 ms of scene
@@ -285,7 +321,7 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
         settle(engine);
         const double start = Harness::clock() + 1;
         h.frame_at(start);
-        const int base = h.pane->rebuilds();
+        const int base = h.pane->refreshes();
         int busy_frames = 0;
         for (int i = 0; i < 10; ++i) {
             clean.set_source("print(" + std::to_string(i + 10) + ")\n");
@@ -296,17 +332,17 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
             h.frame_at(start + 0.30 + 0.02 * i);
         }
         expect(busy_frames == 10, "the checker is busy for every frame of the batch");
-        expect(h.pane->rebuilds() == base + 1, "frames within 250 ms of a busy batch rebuild once");
+        expect(h.pane->refreshes() == base + 1, "frames within 250 ms of a busy batch refresh once");
         clean.set_source("print(30)\n");
         game.set_name(churn.id(), "ChurnLate");
         engine.analysis().pump();
         const bool still_busy = engine.analysis().busy();
         h.frame_at(start + 0.30 + 0.26);
-        expect(!still_busy || h.pane->rebuilds() == base + 2, "250 ms on, a busy batch rebuilds again");
+        expect(!still_busy || h.pane->refreshes() == base + 2, "250 ms on, a busy batch refreshes again");
         settle(engine);
-        const int before_idle = h.pane->rebuilds();
+        const int before_idle = h.pane->refreshes();
         h.frame_at(start + 0.30 + 0.27);
-        expect(h.pane->rebuilds() == before_idle + 1, "and once more when it goes idle");
+        expect(h.pane->refreshes() == before_idle + 1, "and once more when it goes idle");
         if (inside != 0) {
             game.set_parent(inside, workspace);
         }
@@ -342,7 +378,8 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     // Stop puts the authored tree back. The pane keeps the Edit-mode rows
     // through all of it.
     {
-        const int before_churn = h.pane->rebuilds();
+        const int before_churn = h.pane->refreshes();
+        const int before_churn_rows = h.pane->rebuilds();
         const std::uint32_t renamed = shown > 0 ? h.pane->list().scripts[0].id : 0;
         const std::string authored = shown > 0 ? h.pane->list().scripts[0].name : std::string();
         if (renamed != 0) {
@@ -355,7 +392,8 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
             game.destroy(debris.id());
             h.frame();
         }
-        expect(h.pane->rebuilds() == before_churn, "tree churn during play does not rebuild");
+        expect(h.pane->refreshes() == before_churn && h.pane->rebuilds() == before_churn_rows,
+               "tree churn during play does not refresh");
         expect(!h.pane->list().scripts.empty() && h.pane->list().scripts[0].name == authored,
                "a rename during play is not followed");
         game.stop_simulation();
@@ -476,7 +514,7 @@ int RunProblemsWindowTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
 
     // Its default home is a tab beside the Console. With the Console's tab in
     // front, the Problems page is not laid out, and the studio's per-frame
-    // hook keeps its title counting.
+    // hook keeps its list and title counting without building rows.
     ide::IdeDock* dock = nullptr;
     for (jadefx::Node* cursor = pane; cursor != nullptr && dock == nullptr; cursor = cursor->getParent()) {
         dock = dynamic_cast<ide::IdeDock*>(cursor);
@@ -496,12 +534,33 @@ int RunProblemsWindowTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     if (pane != nullptr && problems_tab != nullptr && other_tab != nullptr) {
         dock->tabs()->select(other_tab);
         scene.layout(1280, 800, 50.4);
+        layout.flushFrame();
         const std::string before = pane->title();
+        const int hidden_refreshes = pane->refreshes();
+        const int hidden_rebuilds = pane->rebuilds();
         engine_core::Script& hidden =
             add_script(game, game.scene_service("Workspace"), "HiddenTabBroken", "nope()\nnope()\n");
         settle(engine);
         scene.layout(1280, 800, 50.5);
         layout.flushFrame();
+        expect(pane->getScene() == nullptr, "an unselected Problems tab is in no scene");
+        expect(pane->refreshes() > hidden_refreshes, "an unselected Problems tab refreshes its list");
+        expect(lists(*pane, hidden.id()), "and lists the new script");
+        expect(pane->rebuilds() == hidden_rebuilds, "but builds no rows");
+        expect(!row_shows(*pane, "HiddenTabBroken"), "so no row shows it yet");
+        // Selected, the rows are built once from the list, with no new gather.
+        {
+            const int refreshed = pane->refreshes();
+            dock->tabs()->select(problems_tab);
+            scene.layout(1280, 800, 50.51);
+            layout.flushFrame();
+            expect(pane->rebuilds() == hidden_rebuilds + 1, "selecting the tab builds the rows once");
+            expect(pane->refreshes() == refreshed, "from the list it has, with no new gather");
+            expect(row_shows(*pane, "HiddenTabBroken"), "and the new script has its row");
+            dock->tabs()->select(other_tab);
+            scene.layout(1280, 800, 50.52);
+            layout.flushFrame();
+        }
         expect(pane->title() != before && pane->title() == "Problems (" + std::to_string(pane->list().total.errors +
                                                                                      pane->list().total.warnings) +
                                                               ")",
@@ -515,12 +574,15 @@ int RunProblemsWindowTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         dock->tabs()->select(problems_tab);
         scene.layout(1280, 800, 50.7);
 
-        // Closed, the page is kept for reopening but does no work.
+        // Closed, the page is kept for reopening. It keeps its list and title
+        // current, and builds no rows.
         dock->tabs()->close(problems_tab);
         scene.layout(1280, 800, 50.8);
         layout.flushFrame();
         expect(scene.getElementsByClassName("problems-pane").empty(), "closing the Problems tab closes it");
+        const int closed_refreshes = pane->refreshes();
         const int closed_rebuilds = pane->rebuilds();
+        const std::string closed_title = pane->title();
         engine_core::Script& unseen =
             add_script(game, game.scene_service("Workspace"), "ClosedTabBroken", "nope()\n");
         settle(engine);
@@ -528,20 +590,28 @@ int RunProblemsWindowTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
             scene.layout(1280, 800, 50.81 + 0.01 * i);
             layout.flushFrame();
         }
-        expect(pane->rebuilds() == closed_rebuilds, "a closed Problems page does not rebuild as problems change");
-        // Reopened, it is current at once.
+        expect(pane->refreshes() > closed_refreshes, "a closed Problems page keeps refreshing as problems change");
+        expect(lists(*pane, unseen.id()), "its list has the new script");
+        expect(pane->title() != closed_title &&
+                   pane->title() == "Problems (" +
+                                        std::to_string(pane->list().total.errors + pane->list().total.warnings) +
+                                        ")",
+               "and its title counts it");
+        expect(pane->rebuilds() == closed_rebuilds, "but it builds no rows while closed");
+        expect(!row_shows(*pane, "ClosedTabBroken"), "so no row shows it yet");
+        // Reopened, the rows are built once from the list it kept, with no new gather.
+        const int reopen_refreshes = pane->refreshes();
         layout.show_problems();
         scene.layout(1280, 800, 50.9);
         layout.flushFrame();
         const std::vector<jadefx::Node*> reopened = scene.getElementsByClassName("problems-pane");
         auto* again = reopened.empty() ? nullptr : dynamic_cast<ide::IdeProblems*>(reopened.front());
-        bool caught_up = false;
-        if (again != nullptr) {
-            for (const ide::ScriptProblems& listed : again->list().scripts) {
-                caught_up = caught_up || listed.id == unseen.id();
-            }
-        }
-        expect(caught_up, "reopened, Problems lists what changed while it was closed");
+        expect(again == pane, "reopening shows the same page");
+        expect(again != nullptr && lists(*again, unseen.id()),
+               "reopened, Problems lists what changed while it was closed");
+        expect(pane->rebuilds() == closed_rebuilds + 1, "reopening builds the rows once");
+        expect(pane->refreshes() == reopen_refreshes, "with no new gather");
+        expect(row_shows(*pane, "ClosedTabBroken"), "and the new script has its row");
         game.destroy(unseen.id());
         settle(engine);
         scene.layout(1280, 800, 51.0);

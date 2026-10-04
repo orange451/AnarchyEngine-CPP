@@ -30,10 +30,16 @@ struct ProblemsHost {
 // the list. Clicking a problem, or Enter on it, opens its script there. Down
 // from the filter walks into the list, Enter there opens the first problem,
 // and Escape clears it. The list follows the checker as it publishes and the
-// tree as scripts and their folders move or are renamed, rebuilt at most once
-// a frame, and at most every 250 ms while a long check runs. While a playtest
-// runs the checker rests, and the pane says so and keeps the last results,
-// without following the tree until Stop restores it.
+// tree as scripts and their folders move or are renamed, refreshed at most
+// once a frame, and at most every 250 ms while a long check runs. While a
+// playtest runs the checker rests, and the pane says so and keeps the last
+// results, without following the tree until Stop restores it.
+//
+// The work is in two parts. The model (the list, its counts, the summary, and
+// the tab's title) follows all of that whether the pane is showing, a tab not
+// in front, or closed. The view (the rows, the notices, and the toggles'
+// counts) is built only while the pane is in a scene; while it is not, the
+// view is marked stale and built once from the current list when it shows.
 class IdeProblems : public IdePane {
 public:
     IdeProblems(engine_core::Engine& engine, ProblemsHost host);
@@ -50,17 +56,22 @@ public:
     bool offNoticeShown() const;
     // The filter, the toggles, and the summary. Hidden while analysis is off.
     bool headerShown() const;
-    // How many times the rows have been rebuilt. For tests.
+    // How many times the list, its counts, and the title were worked out
+    // again. For tests.
+    int refreshes() const { return refreshes_; }
+    // How many times the rows were built from the list. For tests.
     int rebuilds() const { return rebuilds_; }
 
-    // Gathers the published problems and rebuilds now, instead of on a later layout.
+    // Gathers the published problems and refreshes the list now, instead of
+    // on a later layout. The rows follow now if the pane is showing.
     void refresh();
     // What a layout pass does before it lays out: follows the checker, the
-    // tree, the filter, play, and analysis being on, and keeps the title, the
-    // notices, and the rows up to date. The studio calls it once a frame too,
-    // so the title keeps counting while the pane is a tab not showing, which
-    // is never laid out. now is the scene's time in seconds. Cheap when
-    // nothing changed, so a frame that runs it twice does the work once.
+    // tree, the filter, play, and analysis being on, and keeps the list and
+    // the title up to date, and the rows and notices too while the pane is in
+    // a scene. The studio calls it once a frame too, so the title keeps
+    // counting while the pane is a tab not showing or closed, neither of which
+    // is laid out. now is the scene's time in seconds. Cheap when nothing
+    // changed, so a frame that runs it twice does the work once.
     void tick(double now);
     // Opens what a row points at. False for an item that is not a row of this pane.
     bool openRow(const jadefx::TreeItem* item);
@@ -80,12 +91,20 @@ private:
     };
 
     ProblemFilter filter() const;
+    // Showing: in a scene, so laid out. A tab not in front, or closed, is in none.
+    bool shown() const { return getScene() != nullptr; }
+    // The list from sources_ and the filter, its counts, the summary, and the
+    // title. Marks the rows stale.
+    void update_model();
+    // The rows, from list_ as it is. Only while shown.
     void rebuild();
-    // Rebuilds now when the filter or a toggle moved since the last rebuild.
+    // Builds whatever of the view is stale, if the pane is showing.
+    void flush_view();
+    // Refreshes now when the filter or a toggle moved since the last refresh.
     void sync_filter();
     // A tree change alone: the cached scripts' names and paths read again.
-    // Scripts that left the place, or went under Core, drop. The rows are
-    // rebuilt only when a shown name or path changed or a script dropped.
+    // Scripts that left the place, or went under Core, drop. The list is
+    // refreshed only when a listed name or path changed or a script dropped.
     void refresh_paths();
     void update_toggles();
     // Each toggle as wide as its word and count.
@@ -116,15 +135,20 @@ private:
     std::unordered_set<std::uint32_t> collapsed_;
     std::vector<ProblemSource> sources_;
     ProblemList list_;
-    // What the last rebuild showed, to rebuild only when something changed.
+    // What the last refresh used, to refresh only when something changed.
     ProblemFilter shown_filter_;
     bool shown_playing_ = false;
     bool shown_enabled_ = true;
     bool built_once_ = false;
+    // The rows, or the notices, are behind the model and are built when the
+    // pane next shows.
+    bool rows_stale_ = false;
+    bool notices_stale_ = false;
+    int refreshes_ = 0;
     int rebuilds_ = 0;
     // DataModel::tree_revision when the names and paths were last read.
     std::uint64_t seen_tree_ = 0;
-    // The scene time of the latest tick, and of the last rebuild, which a
+    // The scene time of the latest tick, and of the last refresh, which a
     // long check batch spaces out.
     double now_ = 0;
     double built_at_ = 0;

@@ -22,7 +22,7 @@ constexpr double kRowHeight = 22;
 // instead, as wide as it with this much room on each side.
 constexpr double kToggleHeight = 22;
 constexpr double kTogglePadding = 8;
-// While a long check batch runs, the rows are rebuilt at most this often.
+// While a long check batch runs, the list is refreshed at most this often.
 constexpr double kBusyRebuildInterval = 0.25;
 
 constexpr const char* kProblemsRules = R"CSS(
@@ -376,7 +376,8 @@ void IdeProblems::refresh() {
     }
     sources_ = std::move(gathered);
     seen_tree_ = tree;
-    rebuild();
+    update_model();
+    flush_view();
 }
 
 void IdeProblems::refresh_paths() {
@@ -408,18 +409,42 @@ void IdeProblems::refresh_paths() {
         sources_ = std::move(kept);
     }
     // Most tree changes touch nothing listed: a part made or destroyed, a
-    // folder no listed script is under renamed. The rows stay as they are.
+    // folder no listed script is under renamed. The list stays as it is.
     if (shown_moved) {
-        rebuild();
+        update_model();
+        flush_view();
     }
 }
 
-void IdeProblems::rebuild() {
+void IdeProblems::update_model() {
     const ProblemFilter wanted = filter();
     list_ = build_problems(sources_, wanted);
     shown_filter_ = wanted;
     built_once_ = true;
     built_at_ = now_;
+    ++refreshes_;
+    // While analysis is off, "No problems" would contradict the notice below it.
+    summary_->setText(shown_enabled_ ? problems_summary(list_) : std::string());
+    const std::string title = problems_title(list_);
+    setTitle(title == "Problems" ? std::string() : title);
+    rows_stale_ = true;
+}
+
+void IdeProblems::flush_view() {
+    if (!shown()) {
+        return;
+    }
+    if (notices_stale_) {
+        notices_stale_ = false;
+        update_notices();
+    }
+    if (rows_stale_) {
+        rebuild();
+    }
+}
+
+void IdeProblems::rebuild() {
+    rows_stale_ = false;
     ++rebuilds_;
 
     std::optional<Target> selected;
@@ -459,10 +484,6 @@ void IdeProblems::rebuild() {
     if (reselect != nullptr) {
         tree_->select(reselect);
     }
-    // While analysis is off, "No problems" would contradict the notice below it.
-    summary_->setText(shown_enabled_ ? problems_summary(list_) : std::string());
-    const std::string title = problems_title(list_);
-    setTitle(title == "Problems" ? std::string() : title);
     update_toggles();
 }
 
@@ -488,6 +509,7 @@ void IdeProblems::fit_toggles() {
 }
 
 void IdeProblems::update_notices() {
+    tree_->setVisible(shown_enabled_);
     std::vector<std::shared_ptr<jadefx::Node>> rows;
     if (shown_playing_) {
         rows.push_back(play_note_);
@@ -554,19 +576,14 @@ void IdeProblems::tick(double now) {
     now_ = now;
     const bool playing = engine_.datamodel().simulation_running();
     const bool enabled = engine_.analysis().enabled();
-    bool notices_changed = false;
     if (playing != shown_playing_) {
         shown_playing_ = playing;
-        notices_changed = true;
+        notices_stale_ = true;
     }
     if (enabled != shown_enabled_) {
         shown_enabled_ = enabled;
-        tree_->setVisible(enabled);
         changed_.set();
-        notices_changed = true;
-    }
-    if (notices_changed) {
-        update_notices();
+        notices_stale_ = true;
     }
     bool changed = changed_.take() || !built_once_;
     // A playtest churns the tree every frame as it spawns and destroys things,
@@ -574,9 +591,9 @@ void IdeProblems::tick(double now) {
     // last Edit-mode results through play, so it does not follow the tree
     // until Stop; the first tick after it reads the restored names and paths.
     bool moved = !playing && engine_.datamodel().tree_revision() != seen_tree_;
-    // A long check batch publishes a little every frame. Rebuilding every row
-    // each time is wasted work no one can read, so while it runs the rows
-    // follow at most every kBusyRebuildInterval; what waits is kept for the
+    // A long check batch publishes a little every frame. Refreshing the list
+    // each time is wasted work no one can read, so while it runs the list
+    // follows at most every kBusyRebuildInterval; what waits is kept for the
     // first tick after that, or after the batch ends. A clock that went back
     // (a new scene) does not hold anything up.
     if ((changed || moved) && built_once_ && engine_.analysis().busy() && now >= built_at_ &&
@@ -595,8 +612,10 @@ void IdeProblems::tick(double now) {
     } else if (moved) {
         refresh_paths();
     } else if (filter_changed) {
-        rebuild();
+        update_model();
     }
+    // Hidden, the rows wait; shown again, they are built once from the list as it is.
+    flush_view();
 }
 
 void IdeProblems::sync_filter() {
@@ -607,7 +626,8 @@ void IdeProblems::sync_filter() {
     const ProblemFilter wanted = filter();
     if (wanted.text != shown_filter_.text || wanted.errors != shown_filter_.errors ||
         wanted.warnings != shown_filter_.warnings || wanted.info != shown_filter_.info) {
-        rebuild();
+        update_model();
+        flush_view();
     }
 }
 

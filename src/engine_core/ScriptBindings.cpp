@@ -454,6 +454,9 @@ int ScriptBindings::instance_newindex(lua_State* state) {
             slot.kind = LuaSlot::Kind::String;
             slot.text.assign(text != nullptr ? text : "", length);
         } else if (type == "boolean") {
+            if (!lua_isboolean(state, 3)) {
+                luaL_error(state, "%s must be true or false", field->name);
+            }
             slot.kind = LuaSlot::Kind::Bool;
             slot.flag = lua_toboolean(state, 3) != 0;
         } else if (type == "number") {

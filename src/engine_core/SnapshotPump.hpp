@@ -73,6 +73,18 @@ struct VisualDragger {
     DraggerHandle active = DraggerHandle::None;
 };
 
+// A BillboardGui runner::GuiLayer draws: drawn() and Visible. anchor is its
+// anchor_instance()'s world translation; when that instance has a row in the
+// same snapshot, it is that row's, after overrides, so a billboard and what
+// it floats over are always where the same frame put them.
+struct VisualBillboard {
+    InstanceId id = 0;
+    // 0 for the world origin.
+    InstanceId anchor_instance = 0;
+    Vec3 anchor{};
+    bool always_on_top = false;
+};
+
 // The first Skybox under Lighting, in tree order, as the renderer reads it.
 // present is false with no Skybox, and image is empty when it has no Image;
 // either way the renderer draws no sky.
@@ -153,6 +165,8 @@ struct VisualSnapshot {
     VisualSky sky;
     // Rebuilt at every take_changes: there are few, and hover moves with the mouse.
     std::vector<VisualDragger> draggers;
+    // Rebuilt at every take_changes, like draggers.
+    std::vector<VisualBillboard> billboards;
     // DataModel::resources_root as the snapshot was taken: the folder the
     // paths above are under.
     std::filesystem::path resources_root;
@@ -207,6 +221,10 @@ private:
     std::uint32_t acquire_prefab(const std::string& guid);
     // The active Draggers' rows, from the live tree.
     void resolve_draggers(DataModel& game);
+    // The drawn, visible BillboardGuis' rows, from the live tree.
+    void resolve_billboards(DataModel& game);
+    // Points each row's anchor at its anchor_instance's row in dst, after overrides.
+    void anchor_billboards(VisualSnapshot& dst) const;
     void release_prefab(std::uint32_t entry);
     // Points inst at guid's entry, when it names another.
     void set_row_prefab(VisualInstance& inst, const std::string& guid);
@@ -238,6 +256,8 @@ private:
     std::vector<InstanceId> sky_walk_;
     // The Draggers resolve_draggers walks, kept so it does not allocate each frame.
     std::vector<InstanceId> dragger_ids_;
+    // The BillboardGuis resolve_billboards walks, kept so it does not allocate each frame.
+    std::vector<InstanceId> billboard_ids_;
 };
 
 }  // namespace engine_core

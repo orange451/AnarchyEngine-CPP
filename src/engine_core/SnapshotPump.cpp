@@ -4,6 +4,7 @@
 #include "Dragger.hpp"
 #include "Camera.hpp"
 #include "GameObject.hpp"
+#include "Gui.hpp"
 #include "Light.hpp"
 #include "Lighting.hpp"
 #include "LuaApi.hpp"
@@ -469,6 +470,7 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.sky = base_.sky;
     dst.resources_root = base_.resources_root;
     dst.draggers = base_.draggers;
+    dst.billboards = base_.billboards;
     dst.instances.resize(base_.instances.size());
     std::copy(base_.instances.begin(), base_.instances.end(), dst.instances.begin());
     // Element by element, so strings that did not change keep their buffers.
@@ -515,6 +517,41 @@ void SnapshotPump::resolve_draggers(DataModel& game) {
     }
 }
 
+void SnapshotPump::resolve_billboards(DataModel& game) {
+    base_.billboards.clear();
+    game.billboards(billboard_ids_);
+    // In id order, so the rows keep one order from frame to frame.
+    std::sort(billboard_ids_.begin(), billboard_ids_.end());
+    for (InstanceId id : billboard_ids_) {
+        const auto* board = dynamic_cast<const BillboardGui*>(game.instance(id));
+        if (board == nullptr || !board->drawn() || !board->flag(GuiProperty::Visible)) {
+            continue;
+        }
+        VisualBillboard row;
+        row.id = id;
+        row.anchor_instance = board->anchor_instance();
+        row.anchor = board->anchor();
+        row.always_on_top = board->always_on_top();
+        base_.billboards.push_back(row);
+    }
+}
+
+void SnapshotPump::anchor_billboards(VisualSnapshot& dst) const {
+    for (VisualBillboard& row : dst.billboards) {
+        if (row.anchor_instance == 0) {
+            continue;
+        }
+        const int position = base_ids_.position(row.anchor_instance);
+        if (position < 0 || static_cast<std::size_t>(position) >= dst.instances.size()) {
+            continue;
+        }
+        const VisualInstance& inst = dst.instances[static_cast<std::size_t>(position)];
+        if (inst.id == row.anchor_instance && inst.alive) {
+            row.anchor = Vec3{inst.world.m[12], inst.world.m[13], inst.world.m[14]};
+        }
+    }
+}
+
 void SnapshotPump::take_changes(DataModel& game) {
     InvalidationQueue& queue = game.invalidations();
     if (queue.take_overflow() || game.consume_resync()) {
@@ -525,6 +562,7 @@ void SnapshotPump::take_changes(DataModel& game) {
     resolve_prefabs(game);
     resolve_lighting(game);
     resolve_draggers(game);
+    resolve_billboards(game);
     base_.resources_root = game.resources_root();
     if (camera_pending_) {
         base_.camera = pending_camera_;
@@ -536,6 +574,7 @@ void SnapshotPump::finish_copy() {
     VisualSnapshot& back = buffers_[1 - front_];
     blit(back);
     apply_overrides(back);
+    anchor_billboards(back);
     back.frame = next_frame_++;
     back.camera = base_.camera;
     overrides_.clear();

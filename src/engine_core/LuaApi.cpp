@@ -542,6 +542,15 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         true, {P("seconds", "number"), P("callback", "function")});
     add("task", "cancel", "Stops a thread started by spawn, defer, or delay.", nullptr, false, {P("thread", "thread")});
 
+    add("", "debug",
+        "Marks sections of a script for the profiler (Cmd+F6 over the Scene View). Only these two functions are here.",
+        nullptr, false, {});
+    add("debug", "profilebegin",
+        "Starts a profiler scope named name inside the running script's own. End it with profileend before the "
+        "script yields.",
+        nullptr, false, {P("name", "string")});
+    add("debug", "profileend", "Ends the innermost scope profilebegin started.", nullptr, false, {});
+
     add("", "math", "Numeric functions and constants.", nullptr, false, {});
     add("math", "abs", "The absolute value of n.", "number", false, {P("n", "number")});
     add("math", "acos", "Arc cosine of n, in radians.", "number", false, {P("n", "number")});

@@ -29,6 +29,8 @@
 #include "lualib.h"
 #include "luacode.h"
 
+#include "profiler/Profiler.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -1429,6 +1431,52 @@ int ScriptBindings::thread_index(lua_State* state) {
 }
 
 ANARCHY_LUA_REGISTER(note_task_library) { lua_note_host_library("task"); }
+
+ANARCHY_LUA_REGISTER(note_debug_library) { lua_note_host_library("debug"); }
+
+int ScriptBindings::debug_profilebegin(lua_State* state) {
+    return lua_guard(state, [&] {
+        if (lua_type(state, 1) != LUA_TSTRING) {
+            luaL_error(state, "invalid argument #1 to 'profilebegin' (string expected, got %s)",
+                       luaL_typename(state, 1));
+        }
+        std::size_t size = 0;
+        const char* text = lua_tolstring(state, 1, &size);
+        ScriptRuntime* runtime = runtime_from(state);
+        ScriptRuntime::Thread* thread = ScriptRuntime::thread_from(state);
+        if (runtime == nullptr || thread == nullptr) {
+            luaL_error(state, "debug.profilebegin runs inside a script");
+        }
+        ScriptRuntime::Thread::UserScope scope;
+        scope.name.assign(text, size);
+        if (profiler::enabled()) {
+            profiler::begin(runtime->user_scope(thread->script, scope.name));
+            scope.recorded = true;
+        }
+        thread->user_scopes.push_back(std::move(scope));
+        return 0;
+    });
+}
+
+int ScriptBindings::debug_profileend(lua_State* state) {
+    return lua_guard(state, [&] {
+        ScriptRuntime* runtime = runtime_from(state);
+        ScriptRuntime::Thread* thread = ScriptRuntime::thread_from(state);
+        if (runtime == nullptr || thread == nullptr) {
+            luaL_error(state, "debug.profileend runs inside a script");
+        }
+        if (thread->user_scopes.empty()) {
+            runtime->warn_profile_misuse(thread->script, ScriptRuntime::ProfileMisuse::StrayEnd,
+                                         "called debug.profileend() with no debug.profilebegin open.");
+            return 0;
+        }
+        if (thread->user_scopes.back().recorded) {
+            profiler::end();
+        }
+        thread->user_scopes.pop_back();
+        return 0;
+    });
+}
 
 ANARCHY_LUA_REGISTER(register_script_methods) {
     LuaField get_service =

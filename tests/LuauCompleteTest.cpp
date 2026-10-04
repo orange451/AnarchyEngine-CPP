@@ -179,7 +179,7 @@ void testLibraries() {
     std::vector<engine_core::LuaSymbol> globals;
     engine_core::lua_library_globals(globals);
     for (const engine_core::LuaSymbol& symbol : globals) {
-        if (symbol.name == "os" || symbol.name == "debug" || symbol.name == "io" || symbol.name == "getfenv") {
+        if (symbol.name == "os" || symbol.name == "io" || symbol.name == "getfenv") {
             fail(std::string("removed global is loaded: ") + symbol.name);
         }
     }
@@ -701,7 +701,13 @@ void testNames() {
 
     const ide::CompletionList removed = at_end("os");
     expect_missing(removed, "os", "removed global");
-    expect_missing(at_end("debug"), "debug", "removed global");
+    // debug is back with only the profiler's two functions.
+    expect_has(at_end("debug"), "debug", "debug for the profiler");
+    const ide::CompletionList marks = at_end("debug.");
+    expect_has(marks, "profilebegin", "debug.profilebegin");
+    expect_has(marks, "profileend", "debug.profileend");
+    expect_missing(marks, "traceback", "debug.traceback stays removed");
+    expect_missing(marks, "getinfo", "debug.getinfo stays removed");
     expect_missing(at_end("getfenv"), "getfenv", "removed global");
 }
 

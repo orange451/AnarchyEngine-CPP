@@ -573,6 +573,8 @@ void ScriptRuntime::on_start() {
     clear_output();
     // Ids are made again at Play and Stop; GUIDs carry each Script's history across.
     profiled_.clear();
+    user_scope_ids_.clear();
+    profile_warned_.clear();
     open_vm();
     play_.clock = 0;
     started_.clear();
@@ -741,6 +743,14 @@ void open_host_libraries(lua_State* state) {
 
     lua_pushcfunction(state, &ScriptBindings::require, "require");
     lua_setglobal(state, "require");
+
+    // The sandbox removes debug. Only the profiler's two functions come back.
+    lua_newtable(state);
+    lua_pushcfunction(state, &ScriptBindings::debug_profilebegin, "profilebegin");
+    lua_setfield(state, -2, "profilebegin");
+    lua_pushcfunction(state, &ScriptBindings::debug_profileend, "profileend");
+    lua_setfield(state, -2, "profileend");
+    lua_setglobal(state, "debug");
 
     // The play state replaces these after sandboxing. The reflection state keeps
     // them, so completion sees the same globals the command line has.
@@ -1198,6 +1208,48 @@ profiler::ScopeId ScriptRuntime::profile_scope(InstanceId script) {
     return entry.scope;
 }
 
+profiler::ScopeId ScriptRuntime::user_scope(InstanceId script, const std::string& name) {
+    static const profiler::ScopeId kTooMany = profiler::intern("(too many scopes)", profiler::Group::User);
+    std::unordered_map<std::string, profiler::ScopeId>& names = user_scope_ids_[script];
+    const auto found = names.find(name);
+    if (found != names.end()) {
+        return found->second;
+    }
+    if (names.size() >= kUserScopesPerScript) {
+        return kTooMany;
+    }
+    const profiler::ScopeId id = profiler::intern(name, profiler::Group::User);
+    names.emplace(name, id);
+    return id;
+}
+
+void ScriptRuntime::close_user_scopes(Thread& thread, ProfileMisuse how) {
+    const std::string innermost = thread.user_scopes.back().name;
+    for (auto it = thread.user_scopes.rbegin(); it != thread.user_scopes.rend(); ++it) {
+        if (it->recorded) {
+            profiler::end();
+        }
+    }
+    thread.user_scopes.clear();
+    const char* when = how == ProfileMisuse::OpenAtYield   ? "yielded"
+                       : how == ProfileMisuse::OpenAtError ? "stopped on an error"
+                                                           : "finished";
+    warn_profile_misuse(thread.script, how,
+                        std::string(when) + " with debug.profilebegin(\"" + innermost +
+                            "\") still open. It was ended there; call debug.profileend() before the script yields.");
+}
+
+void ScriptRuntime::warn_profile_misuse(InstanceId script, ProfileMisuse how, const std::string& text) {
+    if (!profile_warned_.insert({script, static_cast<int>(how)}).second) {
+        return;
+    }
+    std::string who = "The command line";
+    if (script != 0 && game_ != nullptr && game_->instance(script) != nullptr) {
+        who = game_->name(script);
+    }
+    append_output(OutputKind::Print, "Warning: " + who + " " + text, {}, script);
+}
+
 profiler::CauseId ScriptRuntime::profile_cause(const char* cause) {
     if (cause == nullptr) {
         return profiler::kNoCause;
@@ -1244,6 +1296,11 @@ void ScriptRuntime::resume_one(Thread& thread) {
         status = lua_resume(thread.co, nullptr, nargs);
     }
     --lua_depth_;
+    if (!thread.user_scopes.empty()) {
+        close_user_scopes(thread, status == LUA_YIELD ? ProfileMisuse::OpenAtYield
+                                  : status == LUA_OK  ? ProfileMisuse::OpenAtFinish
+                                                      : ProfileMisuse::OpenAtError);
+    }
     if (thread.dead) {
         drop_dead_queues(*thread.vm);
         return;

@@ -1958,3 +1958,13 @@ TEST_CASE("A-perf a change in a large place", "[.perf]") {
                 "one script edit %.3f ms to change, %.0f ms to settle\n",
                 instances, add_edit, add_settle, one_edit, one_settle);
 }
+
+TEST_CASE("A-PF debug.profilebegin and profileend are declared", "[A-PF]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script =
+        add_script(rig.game, "Marks", "debug.profilebegin(\"pathfind\")\ndebug.profileend()\n");
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(script.id())));
+    REQUIRE(analysis.diagnostics(script.id()).empty());
+}

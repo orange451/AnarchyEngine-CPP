@@ -15,6 +15,7 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -235,6 +236,13 @@ private:
         const char* cause = "start";
         // Resumed at least once. Until then a wake keeps the cause it was made with.
         bool started = false;
+        // debug.profilebegin calls not yet ended, innermost last. recorded is
+        // whether the profiler was on to hear the begin.
+        struct UserScope {
+            std::string name;
+            bool recorded = false;
+        };
+        std::vector<UserScope> user_scopes;
     };
 
     struct Start {
@@ -314,6 +322,15 @@ private:
     };
     std::unordered_map<InstanceId, ProfiledScript> profiled_;
     std::unordered_map<const char*, profiler::CauseId> profiled_causes_;
+    // debug.profilebegin's names, per Script, at most kUserScopesPerScript of them.
+    static constexpr std::size_t kUserScopesPerScript = 256;
+    profiler::ScopeId user_scope(InstanceId script, const std::string& name);
+    std::unordered_map<InstanceId, std::unordered_map<std::string, profiler::ScopeId>> user_scope_ids_;
+    // Ends what a resume left open, and says so once per Script and way it ended.
+    enum class ProfileMisuse { OpenAtYield, OpenAtError, OpenAtFinish, StrayEnd };
+    void close_user_scopes(Thread& thread, ProfileMisuse how);
+    void warn_profile_misuse(InstanceId script, ProfileMisuse how, const std::string& text);
+    std::set<std::pair<InstanceId, int>> profile_warned_;
     static constexpr std::size_t kMemoryLimit = 64 * 1024 * 1024;
     // The world a console or plugin handle carries. It resolves by id alone, so the
     // handle outlives a play session; the id's slot generation still tells a dead one.

@@ -169,3 +169,117 @@ TEST_CASE("PF4 require records the ModuleScript inside the Script that asked", "
     REQUIRE(libs[0].depth == users[0].depth + 1);
     REQUIRE(causes_of(history, "Lib") == std::set<std::string>{"require"});
 }
+
+namespace {
+
+// How many printed lines contain text.
+int printed(ScriptRig& rig, const std::string& text) {
+    int count = 0;
+    for (const auto& line : rig.runtime.drain_output().lines) {
+        count += line.text.find(text) != std::string::npos ? 1 : 0;
+    }
+    return count;
+}
+
+}  // namespace
+
+TEST_CASE("PF5 debug.profilebegin marks a scope inside the Script's own", "[PF5]") {
+    record_here();
+    Recording recording;
+    ScriptRig rig;
+    add_script(rig.game, "Enemy",
+               "game:GetService('RunService').Heartbeat:Connect(function()\n"
+               "  debug.profilebegin('pathfind')\n"
+               "  debug.profilebegin('inner')\n"
+               "  debug.profileend()\n"
+               "  debug.profileend()\n"
+               "end)");
+    rig.game.start_simulation();
+    const profiler::History history = run_frames(rig, 3);
+    const auto enemy = scopes_named(history, "Enemy");
+    const auto pathfind = scopes_named(history, "pathfind");
+    const auto inner = scopes_named(history, "inner");
+    REQUIRE_FALSE(pathfind.empty());
+    REQUIRE(inner.size() == pathfind.size());
+    REQUIRE(history.scopes[pathfind[0].scope].group == profiler::Group::User);
+    std::uint8_t heartbeat_depth = 255;
+    for (const profiler::ScopeRecord& record : enemy) {
+        if (record.cause != profiler::kNoCause && history.causes[record.cause] == "Heartbeat") {
+            heartbeat_depth = record.depth;
+        }
+    }
+    REQUIRE(pathfind[0].depth == heartbeat_depth + 1);
+    REQUIRE(inner[0].depth == heartbeat_depth + 2);
+    REQUIRE(printed(rig, "Warning") == 0);
+}
+
+TEST_CASE("PF6 a scope open at a yield closes there and warns once", "[PF6]") {
+    record_here();
+    Recording recording;
+    ScriptRig rig;
+    add_script(rig.game, "Looper",
+               "while true do\n"
+               "  debug.profilebegin('frame work')\n"
+               "  task.wait()\n"
+               "  debug.profileend()\n"
+               "end");
+    rig.game.start_simulation();
+    rig.runtime.drain_output();
+    const profiler::History history = run_frames(rig, 6);
+    const auto work = scopes_named(history, "frame work");
+    REQUIRE(work.size() >= 3);
+    // Each is closed when the Script yields, inside the Script's scope.
+    const auto looper = scopes_named(history, "Looper");
+    REQUIRE_FALSE(looper.empty());
+    for (const profiler::ScopeRecord& record : work) {
+        REQUIRE(record.depth == looper[0].depth + 1);
+    }
+    // The yield closed it, so the profileend after each wait has nothing to end: one
+    // warning for each kind, however many frames repeat it.
+    REQUIRE(printed(rig, "Warning: Looper") == 2);
+}
+
+TEST_CASE("PF7 profileend with nothing open warns once", "[PF7]") {
+    record_here();
+    Recording recording;
+    ScriptRig rig;
+    add_script(rig.game, "Stray", "while true do debug.profileend() task.wait() end");
+    rig.game.start_simulation();
+    rig.runtime.drain_output();
+    run_frames(rig, 4);
+    REQUIRE(printed(rig, "no debug.profilebegin") == 1);
+}
+
+TEST_CASE("PF8 scope names: text only, cut to 64 bytes, 256 a Script", "[PF8]") {
+    record_here();
+    Recording recording;
+    ScriptRig rig;
+    add_script(rig.game, "Names",
+               "local ok = pcall(debug.profilebegin, 5)\n"
+               "print('number ok', ok)\n"
+               "debug.profilebegin(string.rep('n', 100)) debug.profileend()\n"
+               "for i = 1, 257 do debug.profilebegin('s' .. i) debug.profileend() end");
+    rig.game.start_simulation();
+    profiler::frame_boundary();
+    rig.frames(1);
+    profiler::frame_boundary();
+    profiler::collect();
+    const profiler::History history = live_history();
+    REQUIRE(printed(rig, "number ok\tfalse") == 1);
+    REQUIRE(scopes_named(history, std::string(64, 'n')).size() == 1);
+    // The long name and s1 to s255 are the 256; s256 and s257 are past it.
+    REQUIRE(scopes_named(history, "s255").size() == 1);
+    REQUIRE(scopes_named(history, "s256").empty());
+    REQUIRE(scopes_named(history, "s257").empty());
+    REQUIRE(scopes_named(history, "(too many scopes)").size() == 2);
+}
+
+TEST_CASE("PF9 debug holds only the profiler's two functions", "[PF9]") {
+    ScriptRig rig;
+    add_script(rig.game, "Probe",
+               "print('debug', type(debug), type(debug.profilebegin), type(debug.profileend), "
+               "debug.traceback == nil, debug.getinfo == nil, debug.info == nil)");
+    rig.game.start_simulation();
+    rig.frames(1);
+    REQUIRE(printed(rig, "debug\ttable\tfunction\tfunction\ttrue\ttrue\ttrue") == 1);
+}

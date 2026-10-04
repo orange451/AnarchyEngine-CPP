@@ -58,6 +58,7 @@ set(STUDIO_CORE_SOURCES
     src/ide/PluginLoader.cpp
     src/ide/PropertySheet.cpp
     src/ide/RunProcess.cpp
+    src/ide/ProblemsModel.cpp
     src/ide/ScriptMarks.cpp
     src/ide/ScriptPairs.cpp
     src/ide/StudioRegistry.cpp
@@ -101,6 +102,7 @@ set(STUDIO_SOURCES
     src/ide/AssetPicker.cpp
     src/ide/IdeScriptEditor.cpp
     src/ide/IdeSearch.cpp
+    src/ide/IdeProblems.cpp
     src/ide/FindBar.cpp
     src/ide/IdeTheme.cpp
     src/ide/EditorFont.cpp
@@ -512,6 +514,8 @@ add_library(engine_core STATIC
     src/engine_core/ScriptRuntime.cpp
     src/engine_core/TableSnapshot.cpp
     src/engine_core/ScriptAnalysis.cpp
+    src/engine_core/AnalysisWorld.cpp
+    src/engine_core/AnalysisPool.cpp
     src/engine_core/StackThread.cpp
     src/engine_core/AnalysisDefinitions.cpp
     src/engine_core/PropertyBag.cpp
@@ -632,6 +636,7 @@ add_executable(studio-tests
     tests/ModelImportTest.cpp
     tests/ScratchResourcesTest.cpp
     tests/ConflictsTest.cpp
+    tests/ProblemsTest.cpp
     tests/ScriptTabsTest.cpp
     tests/TerminalPaneTest.cpp
     tests/GuiStyleTest.cpp
@@ -668,6 +673,7 @@ add_executable(engine-tests
     tests/LuauHighlightTest.cpp
     tests/CssHighlightTest.cpp
     tests/LuauCompleteTest.cpp
+    tests/ProblemsModelTest.cpp
     tests/ScriptMarksTest.cpp
     tests/ScriptPairsTest.cpp
     tests/TextSearchTest.cpp
@@ -760,6 +766,8 @@ endif()
 add_executable(sandbox
     sandbox/tests.cpp
     sandbox/analysis_tests.cpp
+    sandbox/analysis_world_tests.cpp
+    sandbox/analysis_pool_tests.cpp
     sandbox/history_tests.cpp
     sandbox/history_lua_tests.cpp
     sandbox/project_tests.cpp

@@ -6,6 +6,7 @@
 
 #include "Engine.hpp"
 #include "Project.hpp"
+#include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
 
 #include <cstdio>
@@ -111,6 +112,8 @@ public:
         const fs::path& root = root_;
         runner_.prepare();
         engine_core::Engine& engine = runner_.simulation();
+        // Nothing in the player reads diagnostics, so its scripts are not checked.
+        engine.analysis().set_enabled(false);
         if (error.empty()) {
             try {
                 project_ = std::make_unique<engine_core::Project>(engine_core::Project::load(root, engine.datamodel()));

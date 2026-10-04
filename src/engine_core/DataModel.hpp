@@ -246,6 +246,8 @@ public:
     // tree is still alive. Then: drop queued events, disconnect every
     // connection, cancel session jobs, restore the place, bump world_generation.
     // The start hook runs after simulation_running is set, still under the write lock.
+    // Script analysis hears of both after simulation_running changes: it checks
+    // only the authored tree.
     void capture_place();
     void start_simulation();
     void stop_simulation();

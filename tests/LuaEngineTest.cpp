@@ -450,6 +450,7 @@ void testInsertInstance() {
 int RunLuauHighlightTests();
 int RunCssHighlightTests();
 int RunLuauCompleteTests();
+int RunProblemsModelTests();
 int RunScriptMarksTests();
 int RunScriptPairsTests();
 int RunTextSearchTests();
@@ -480,6 +481,7 @@ int main() {
         gFailures += RunLuauHighlightTests();
         gFailures += RunCssHighlightTests();
         gFailures += RunLuauCompleteTests();
+        gFailures += RunProblemsModelTests();
         gFailures += RunScriptMarksTests();
         gFailures += RunScriptPairsTests();
         gFailures += RunTextSearchTests();

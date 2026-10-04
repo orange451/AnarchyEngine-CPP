@@ -38,6 +38,9 @@ int RunTextureImportTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunModelImportTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunScratchResourcesTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene);
+int RunProblemsStartupTests();
+int RunProblemsPaneTests(engine_core::Engine& engine);
+int RunProblemsWindowTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunScriptTabTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunTerminalPaneTests();
 int RunGuiStyleTests(ide::IdeLayout& layout, jadefx::Scene& scene);
@@ -330,10 +333,10 @@ int main() {
         for (const std::shared_ptr<jadefx::MenuItem>& item : windows->getItems().items()) {
             labels.push_back(item ? item->getText() : std::string());
         }
-        expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "Assets", "",
+        expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "Problems", "Assets", "",
                                                   "New Scene View", "New Terminal", "", "Save Layout as Default", "Reset to Default Layout",
                                                   "Restore Built-in Default"},
-               "Window lists the explorers, Properties, Console, Search, Conflicts, and Assets, then New Scene View, New Terminal, and the default layout's items");
+               "Window lists the explorers, Properties, Console, Search, Conflicts, Problems, and Assets, then New Scene View, New Terminal, and the default layout's items");
         double time = 1.1;
         auto frame = [&] {
             scene->layout(1280, 800, time);
@@ -911,6 +914,9 @@ int main() {
     failures += RunModelImportTests(layout, *scene);
     failures += RunScratchResourcesTests(layout, *scene);
     failures += RunConflictsTests(layout, *scene);
+    failures += RunProblemsStartupTests();
+    failures += RunProblemsPaneTests(layout.simulation());
+    failures += RunProblemsWindowTests(layout, *scene);
     // Conflicts opened beside the game explorer, the built-in layout's only
     // one, and is in front of it. Edit needs an explorer showing.
     pick_window("Game Explorer");

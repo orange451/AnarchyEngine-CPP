@@ -38,6 +38,7 @@ class IdeCssEditor;
 struct PrefabEditorHost;
 class IdeSearch;
 class IdeConflicts;
+class IdeProblems;
 class McpServer;
 class UiCalls;
 class PreferencesPanel;
@@ -137,6 +138,12 @@ public:
         const std::vector<engine_core::DiskChoice>& choices = {});
     // Shows the Conflicts window, docking it beside the left explorer when it is closed.
     void show_conflicts();
+    // Opens the Problems window, or brings it forward.
+    void show_problems();
+    // The Problems entry's page, made when this layout was constructed so it
+    // counts from startup. For tests, to check it before Problems is ever
+    // opened; show_problems docks this very pane.
+    IdePane* problemsPaneForTests() const;
     // Whether the Scene Views draw the floor grid now: Grid is on and no test runs.
     bool scene_grid() const { return runner_.sceneGrid(); }
     // Once a frame, after the scene lays out; the main window's stage calls it.
@@ -352,6 +359,7 @@ private:
     // Build the pages for their window entries.
     std::shared_ptr<IdePane> make_search();
     std::shared_ptr<IdePane> make_conflicts();
+    std::shared_ptr<IdePane> make_problems();
     // The user's shell, started in the project's folder.
     std::shared_ptr<IdePane> make_terminal();
     // The Assets pane, over the place, with the explorers' actions.
@@ -487,9 +495,10 @@ private:
     std::vector<std::weak_ptr<class IdeExplorer>> explorers_;
     // The windows the Window menu opens and closes, and layout.json keeps.
     std::vector<std::unique_ptr<WindowEntry>> windows_;
-    // Search's and Conflicts' entries in windows_.
+    // The Search, Conflicts, Problems, and Assets entries in windows_.
     WindowEntry* search_window_ = nullptr;
     WindowEntry* conflicts_window_ = nullptr;
+    WindowEntry* problems_window_ = nullptr;
     WindowEntry* assets_window_ = nullptr;
     // Scene views opened so far, which numbers the next one's tab.
     int scene_views_ = 1;

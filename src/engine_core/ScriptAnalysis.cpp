@@ -1,10 +1,11 @@
 #include "ScriptAnalysis.hpp"
 
+#include "AnalysisPool.hpp"
+#include "AnalysisWorld.hpp"
 #include "DataModel.hpp"
 #include "DataModelLock.hpp"
 #include "LuaApi.hpp"
 #include "LuaSource.hpp"
-#include "ModuleScript.hpp"
 #include "StackThread.hpp"
 #include "TableSnapshot.hpp"
 
@@ -45,6 +46,7 @@
 #include <climits>
 #include <condition_variable>
 #include <deque>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -59,86 +61,21 @@ namespace {
 
 constexpr std::chrono::milliseconds kDebounce{75};
 
-struct NodeSnap {
-    InstanceId id = 0;
-    InstanceId parent = DataModel::kNoParent;
-    std::string name;
-    std::string class_name;
-    std::string source;
-    bool lua = false;
-    bool module = false;
-    // Direct children in the same order FindFirstChild walks them.
-    std::vector<InstanceId> children;
-};
+using analysis::NodeSnap;
+using analysis::TreeDiff;
+using analysis::WorldSnap;
+using analysis::capture_world;
+using analysis::diff_worlds;
+using analysis::same_tree;
+using analysis::world_from_nodes;
 
-struct WorldSnap {
-    InstanceId root = 0;
-    std::vector<NodeSnap> nodes;
-
-    const NodeSnap* find(InstanceId id) const {
-        for (const NodeSnap& node : nodes) {
-            if (node.id == id) {
-                return &node;
-            }
-        }
-        return nullptr;
-    }
-
-    std::optional<InstanceId> child_named(InstanceId parent, std::string_view name) const {
-        const NodeSnap* parent_node = find(parent);
-        if (parent_node == nullptr) {
-            return std::nullopt;
-        }
-        for (InstanceId child : parent_node->children) {
-            const NodeSnap* node = find(child);
-            if (node != nullptr && node->name == name) {
-                return child;
-            }
-        }
-        return std::nullopt;
-    }
-
-    std::optional<InstanceId> module_named(std::string_view name, std::optional<InstanceId> prefer_parent) const {
-        std::optional<InstanceId> fallback;
-        for (const NodeSnap& node : nodes) {
-            if (!node.module || node.name != name) {
-                continue;
-            }
-            if (prefer_parent && node.parent == *prefer_parent) {
-                return node.id;
-            }
-            if (!fallback) {
-                fallback = node.id;
-            }
-        }
-        return fallback;
-    }
-
-    // workspace: the root's Workspace child.
-    std::optional<InstanceId> workspace() const {
-        const NodeSnap* root_node = find(root);
-        if (root_node != nullptr) {
-            for (InstanceId child : root_node->children) {
-                const NodeSnap* node = find(child);
-                if (node != nullptr && node->class_name == "Workspace") {
-                    return child;
-                }
-            }
-        }
-        return std::nullopt;
-    }
-};
-
-struct Job {
-    InstanceId id = 0;
-    std::uint64_t generation = 0;
-    std::shared_ptr<const WorldSnap> world;
-    std::shared_ptr<Luau::FrontendCancellationToken> cancel;
-};
-
+// A script waiting for the place checker.
 struct Pending {
-    Job job;
+    std::uint64_t generation = 0;
     std::chrono::steady_clock::time_point ready_at{};
+    // The capture count when it was queued. The place checker takes it only
+    // once a tree captured after that is adopted, so its batch sees the change.
+    std::uint64_t after = 0;
 };
 
 struct Finished {
@@ -148,7 +85,9 @@ struct Finished {
     std::string source;
     std::vector<Diagnostic> diagnostics;
     std::vector<InstanceId> requires;
-    bool cancelled = false;
+    std::vector<InstanceId> reached;
+    // The script left the place: pump() drops what it published instead.
+    bool dropped = false;
 };
 
 const char* severity_name(Severity severity) {
@@ -278,10 +217,22 @@ struct RequireWalk : Luau::AstVisitor {
     const WorldSnap* world = nullptr;
     InstanceId self = 0;
     std::vector<InstanceId> required;
+    // Each `require("Name")`: it looks the name up across the whole place.
+    std::vector<std::string> by_name;
 
     bool visit(Luau::AstExprCall* call) override {
         auto* global = call->func != nullptr ? call->func->as<Luau::AstExprGlobal>() : nullptr;
         if (global != nullptr && global->name == "require" && call->args.size > 0 && world != nullptr) {
+            Luau::AstExpr* arg = call->args.data[0];
+            while (auto* group = arg->as<Luau::AstExprGroup>()) {
+                arg = group->expr;
+            }
+            if (auto* literal = arg->as<Luau::AstExprConstantString>()) {
+                std::string name = string_literal(literal->value);
+                if (literal->isQuoted() && std::find(by_name.begin(), by_name.end(), name) == by_name.end()) {
+                    by_name.push_back(std::move(name));
+                }
+            }
             const std::optional<InstanceId> target = resolve_expr(*world, self, call->args.data[0]);
             if (target && *target != self) {
                 const NodeSnap* node = world->find(*target);
@@ -295,7 +246,9 @@ struct RequireWalk : Luau::AstVisitor {
     }
 };
 
-std::vector<InstanceId> find_requires(const WorldSnap& world, InstanceId self, Luau::AstStat* root) {
+// The modules the script requires, and in `by_name` the names it requires by name.
+std::vector<InstanceId> find_requires(const WorldSnap& world, InstanceId self, Luau::AstStat* root,
+                                      std::vector<std::string>* by_name = nullptr) {
     if (root == nullptr) {
         return {};
     }
@@ -303,6 +256,9 @@ std::vector<InstanceId> find_requires(const WorldSnap& world, InstanceId self, L
     walk.world = &world;
     walk.self = self;
     root->visit(&walk);
+    if (by_name != nullptr) {
+        *by_name = std::move(walk.by_name);
+    }
     return walk.required;
 }
 
@@ -346,56 +302,95 @@ std::optional<Luau::TypeId> class_type(const Luau::Scope& scope, const std::stri
     return type;
 }
 
+// A new extern type for the instance, extending its class, tagged with its id.
+void add_instance_type(PlaceTypes& place, const Luau::Scope& globals, const NodeSnap& node) {
+    std::optional<Luau::TypeId> base = class_type(globals, node.class_name);
+    if (!base) {
+        base = class_type(globals, "DataModel");
+    }
+    if (!base) {
+        return;
+    }
+    const Luau::ExternType* base_class = Luau::get<Luau::ExternType>(*base);
+    place.types[node.id] = place.arena.addType(Luau::ExternType{base_class->name, {}, *base, std::nullopt, {},
+                                                                std::make_shared<InstanceTag>(node.id), "@anarchy",
+                                                                std::nullopt});
+}
+
+// The instance's children and Parent as its type's fields, from place.world.
+// The fields are rewritten, never the type: cached modules hold it.
+void fill_instance_props(PlaceTypes& place, InstanceId id) {
+    const NodeSnap* node = place.world->find(id);
+    const std::optional<Luau::TypeId> own = place.find(id);
+    if (node == nullptr || !own) {
+        return;
+    }
+    Luau::ExternType* type = Luau::getMutable<Luau::ExternType>(*own);
+    const Luau::ExternType* base_class = Luau::get<Luau::ExternType>(*type->parent);
+    type->props.clear();
+    for (InstanceId child : node->children) {
+        const NodeSnap* child_node = place.world->find(child);
+        const std::optional<Luau::TypeId> child_type = place.find(child);
+        if (child_node == nullptr || !child_type) {
+            continue;
+        }
+        const std::string& name = child_node->name;
+        if (name.empty() || type->props.count(name) != 0 || Luau::lookupExternTypeProp(base_class, name) != nullptr) {
+            continue;
+        }
+        type->props[name] = Luau::Property::readonly(*child_type);
+    }
+    const std::optional<Luau::TypeId> parent =
+        node->parent != DataModel::kNoParent ? place.find(node->parent) : std::nullopt;
+    if (!parent) {
+        return;
+    }
+    const Luau::Property* declared = Luau::lookupExternTypeProp(base_class, "Parent");
+    if (declared != nullptr && declared->writeTy) {
+        type->props["Parent"] = Luau::Property::rw(*parent, *declared->writeTy);
+    } else {
+        type->props["Parent"] = Luau::Property::readonly(*parent);
+    }
+}
+
 std::unique_ptr<PlaceTypes> build_place_types(const Luau::Scope& globals, std::shared_ptr<const WorldSnap> world) {
     auto place = std::make_unique<PlaceTypes>();
     place->world = std::move(world);
-    std::unordered_map<InstanceId, const NodeSnap*> nodes;
     for (const NodeSnap& node : place->world->nodes) {
-        nodes[node.id] = &node;
-        std::optional<Luau::TypeId> base = class_type(globals, node.class_name);
-        if (!base) {
-            base = class_type(globals, "DataModel");
-        }
-        if (!base) {
-            continue;
-        }
-        const Luau::ExternType* base_class = Luau::get<Luau::ExternType>(*base);
-        place->types[node.id] = place->arena.addType(Luau::ExternType{base_class->name, {}, *base, std::nullopt, {},
-                                                                      std::make_shared<InstanceTag>(node.id), "@anarchy",
-                                                                      std::nullopt});
+        add_instance_type(*place, globals, node);
     }
     for (const NodeSnap& node : place->world->nodes) {
-        const std::optional<Luau::TypeId> own = place->find(node.id);
-        if (!own) {
-            continue;
-        }
-        Luau::ExternType* type = Luau::getMutable<Luau::ExternType>(*own);
-        const Luau::ExternType* base_class = Luau::get<Luau::ExternType>(*type->parent);
-        for (InstanceId child : node.children) {
-            const auto child_node = nodes.find(child);
-            const std::optional<Luau::TypeId> child_type = place->find(child);
-            if (child_node == nodes.end() || !child_type) {
-                continue;
-            }
-            const std::string& name = child_node->second->name;
-            if (name.empty() || type->props.count(name) != 0 || Luau::lookupExternTypeProp(base_class, name) != nullptr) {
-                continue;
-            }
-            type->props[name] = Luau::Property::readonly(*child_type);
-        }
-        const std::optional<Luau::TypeId> parent =
-            node.parent != DataModel::kNoParent ? place->find(node.parent) : std::nullopt;
-        if (!parent) {
-            continue;
-        }
-        const Luau::Property* declared = Luau::lookupExternTypeProp(base_class, "Parent");
-        if (declared != nullptr && declared->writeTy) {
-            type->props["Parent"] = Luau::Property::rw(*parent, *declared->writeTy);
-        } else {
-            type->props["Parent"] = Luau::Property::readonly(*parent);
-        }
+        fill_instance_props(*place, node.id);
     }
     return place;
+}
+
+// Brings the place's types to `world` between batches. New instances get
+// types; instances the diff names get their fields rewritten; a destroyed one
+// keeps its type with no fields, since cached modules may still hold it. An
+// instance back in the place, after an undo or a detached folder reattached,
+// takes up the type it had.
+void update_place_types(PlaceTypes& place, const Luau::Scope& globals, std::shared_ptr<const WorldSnap> world,
+                        const TreeDiff& diff) {
+    const std::shared_ptr<const WorldSnap> before = std::move(place.world);
+    place.world = std::move(world);
+    std::vector<InstanceId> refill(diff.parents.begin(), diff.parents.end());
+    refill.insert(refill.end(), diff.moved.begin(), diff.moved.end());
+    for (const NodeSnap& node : place.world->nodes) {
+        if (place.types.count(node.id) == 0) {
+            add_instance_type(place, globals, node);
+            refill.push_back(node.id);
+        } else if (before == nullptr || before->find(node.id) == nullptr) {
+            refill.push_back(node.id);
+        }
+    }
+    for (InstanceId id : refill) {
+        if (place.world->find(id) != nullptr) {
+            fill_instance_props(place, id);
+        } else if (const std::optional<Luau::TypeId> type = place.find(id)) {
+            Luau::getMutable<Luau::ExternType>(*type)->props.clear();
+        }
+    }
 }
 
 std::optional<InstanceId> tagged_instance(Luau::TypeId type) {
@@ -463,6 +458,7 @@ struct FindChildMagic final : Luau::MagicFunction {
     }
 
     bool infer(const Luau::MagicFunctionCallContext& context) override;
+    bool infer_child(const Luau::MagicFunctionCallContext& context);
 };
 
 struct NarrowMagic final : Luau::MagicFunction {
@@ -480,6 +476,7 @@ struct NarrowMagic final : Luau::MagicFunction {
     }
 
     bool infer(const Luau::MagicFunctionCallContext& context) override;
+    bool infer_narrow(const Luau::MagicFunctionCallContext& context);
 };
 
 void stamp_vector(Luau::Frontend& frontend);
@@ -490,6 +487,9 @@ constexpr std::string_view kModulePrefix = "script-";
 std::string module_name_of(InstanceId id) {
     return std::string(kModulePrefix) + std::to_string(id);
 }
+
+// What the report calls a script: its Name, or its class when it has none.
+const std::string& shown_name(const NodeSnap& node) { return node.name.empty() ? node.class_name : node.name; }
 
 std::optional<InstanceId> instance_of_module(std::string_view name) {
     if (name.substr(0, kModulePrefix.size()) != kModulePrefix) {
@@ -517,8 +517,22 @@ struct SourceFileResolver : Luau::FileResolver {
     const std::string* display = nullptr;
     Luau::SourceCode::Type type = Luau::SourceCode::Script;
     const WorldSnap* world = nullptr;
+    // While the place checker runs a batch: the source Luau checks for each
+    // script the batch took, by module name, with a header --!nonstrict made
+    // --!strict. A module one of them requires that the batch did not take is
+    // read from `world` as written.
+    const std::unordered_map<std::string, std::string>* batch_sources = nullptr;
 
     std::optional<Luau::SourceCode> readSource(const Luau::ModuleName& name) override {
+        if (batch_sources != nullptr) {
+            const auto found = batch_sources->find(name);
+            if (found != batch_sources->end()) {
+                const std::optional<InstanceId> id = instance_of_module(name);
+                const NodeSnap* node = id && world != nullptr ? world->find(*id) : nullptr;
+                const bool module = node != nullptr && node->module;
+                return Luau::SourceCode{found->second, module ? Luau::SourceCode::Module : Luau::SourceCode::Script};
+            }
+        }
         if (module_name != nullptr && source != nullptr && name == *module_name) {
             return Luau::SourceCode{*source, type};
         }
@@ -587,7 +601,7 @@ struct SourceFileResolver : Luau::FileResolver {
         }
         if (const std::optional<InstanceId> id = instance_of_module(name); id && world != nullptr) {
             if (const NodeSnap* node = world->find(*id)) {
-                return node->name.empty() ? node->class_name : node->name;
+                return shown_name(*node);
             }
         }
         return name;
@@ -621,11 +635,11 @@ struct WorkerEnv {
     std::string init_error;
     // The place copied for the check that is running. The magic reads it.
     const WorldSnap* world = nullptr;
-    InstanceId self = 0;
     // The snapshot the frontend's cached modules were checked against.
     std::shared_ptr<const WorldSnap> checked_world;
-    // Built from checked_world. Every script is marked dirty when it is
-    // replaced, so no cached module still uses the old one's types.
+    // The editor checker builds it from checked_world and marks every script
+    // dirty when it is replaced, so no cached module still uses the old one's
+    // types. The place checker keeps one and updates it in place (sync_place).
     std::unique_ptr<PlaceTypes> place;
     std::shared_ptr<Luau::MagicFunction> find_child;
     std::shared_ptr<Luau::MagicFunction> service_result;
@@ -651,28 +665,31 @@ struct WorkerEnv {
         // `game` is this place's root and `script` is the instance the module
         // belongs to, children and all, instead of their bare classes.
         frontend->prepareModuleScope = [this](const Luau::ModuleName& name, const Luau::ScopePtr& scope, bool) {
-            if (place != nullptr) {
-                if (const std::optional<Luau::TypeId> root = place->find(place->world->root)) {
-                    scope->bindings[Luau::AstName("game")] = Luau::Binding{*root};
-                }
-                if (const std::optional<InstanceId> workspace = place->world->workspace()) {
-                    if (const std::optional<Luau::TypeId> type = place->find(*workspace)) {
-                        scope->bindings[Luau::AstName("workspace")] = Luau::Binding{*type};
+            try {
+                if (place != nullptr) {
+                    if (const std::optional<Luau::TypeId> root = place->find(place->world->root)) {
+                        scope->bindings[Luau::AstName("game")] = Luau::Binding{*root};
+                    }
+                    if (const std::optional<InstanceId> workspace = place->world->workspace()) {
+                        if (const std::optional<Luau::TypeId> type = place->find(*workspace)) {
+                            scope->bindings[Luau::AstName("workspace")] = Luau::Binding{*type};
+                        }
+                    }
+                    if (const std::optional<InstanceId> owner = instance_of_module(name)) {
+                        if (const std::optional<Luau::TypeId> self = place->find(*owner)) {
+                            scope->bindings[Luau::AstName("script")] = Luau::Binding{*self};
+                            return;
+                        }
                     }
                 }
-                if (const std::optional<InstanceId> owner = instance_of_module(name)) {
-                    if (const std::optional<Luau::TypeId> self = place->find(*owner)) {
-                        scope->bindings[Luau::AstName("script")] = Luau::Binding{*self};
-                        return;
+                // A buffer the place does not hold yet is the kind of script it says it is.
+                if (files.module_name != nullptr && name == *files.module_name && frontend != nullptr) {
+                    const char* kind = files.type == Luau::SourceCode::Module ? "ModuleScript" : "Script";
+                    if (const std::optional<Luau::TypeId> type = class_type(*frontend->globals.globalScope, kind)) {
+                        scope->bindings[Luau::AstName("script")] = Luau::Binding{*type};
                     }
                 }
-            }
-            // A buffer the place does not hold yet is the kind of script it says it is.
-            if (files.module_name != nullptr && name == *files.module_name && frontend != nullptr) {
-                const char* kind = files.type == Luau::SourceCode::Module ? "ModuleScript" : "Script";
-                if (const std::optional<Luau::TypeId> type = class_type(*frontend->globals.globalScope, kind)) {
-                    scope->bindings[Luau::AstName("script")] = Luau::Binding{*type};
-                }
+            } catch (...) {
             }
         };
         revision = lua_registry_revision();
@@ -863,18 +880,35 @@ void attach_api(WorkerEnv& env) {
     }
 }
 
+// On a pool thread an exception escaping a Luau task leaves checkQueuedModules
+// waiting for it forever, so a hook that fails keeps the declared type instead.
 bool FindChildMagic::infer(const Luau::MagicFunctionCallContext& context) {
+    try {
+        return infer_child(context);
+    } catch (...) {
+        return false;
+    }
+}
+
+bool FindChildMagic::infer_child(const Luau::MagicFunctionCallContext& context) {
     if (env == nullptr || env->world == nullptr) {
         return false;
     }
-    // A required module is checked in the same pass, so `script` is whichever
-    // module this call is in.
-    InstanceId self = env->self;
-    if (context.constraint->moduleName != nullptr) {
-        if (const std::optional<InstanceId> owner = instance_of_module(*context.constraint->moduleName)) {
-            self = *owner;
-        }
+    // Modules are checked on several threads, a required one in the same pass,
+    // so `script` is whichever module this call is in. The constraint names it
+    // only under LuauCyclicRequireTypeInference; otherwise the solver's module does.
+    const Luau::ModuleName* module_name = context.constraint->moduleName.get();
+    if (module_name == nullptr && context.solver->module != nullptr) {
+        module_name = &context.solver->module->name;
     }
+    if (module_name == nullptr) {
+        return false;
+    }
+    const std::optional<InstanceId> owner = instance_of_module(*module_name);
+    if (!owner) {
+        return false;
+    }
+    const InstanceId self = *owner;
     // The receiver's type names its instance when it came from game, script, a
     // dotted child, or an earlier lookup, even through a local. Otherwise the
     // call's own path is followed.
@@ -912,6 +946,14 @@ bool FindChildMagic::infer(const Luau::MagicFunctionCallContext& context) {
 }
 
 bool NarrowMagic::infer(const Luau::MagicFunctionCallContext& context) {
+    try {
+        return infer_narrow(context);
+    } catch (...) {
+        return false;
+    }
+}
+
+bool NarrowMagic::infer_narrow(const Luau::MagicFunctionCallContext& context) {
     const Luau::AstExprCall* call = context.callSite.get();
     if (call == nullptr || call->args.size < 1) {
         return false;
@@ -972,39 +1014,11 @@ std::string checked_source(const std::string& source, const Luau::ParseResult& p
     return check_source;
 }
 
-// Two snapshots with the same instances, parents, names, and classes. Sources
-// may differ. Completion's snapshots and the analyzer's are made apart, so
-// they are compared by what they hold, not by identity.
-bool same_tree(const WorldSnap& a, const WorldSnap& b) {
-    if (a.root != b.root || a.nodes.size() != b.nodes.size()) {
-        return false;
-    }
-    std::unordered_map<InstanceId, const NodeSnap*> before;
-    before.reserve(a.nodes.size());
-    for (const NodeSnap& node : a.nodes) {
-        before.emplace(node.id, &node);
-    }
-    for (const NodeSnap& node : b.nodes) {
-        const auto was = before.find(node.id);
-        // Children in the same order too: FindFirstChild takes the first of two
-        // siblings with one name, and the place's types follow that order.
-        if (was == before.end() || was->second->parent != node.parent || was->second->name != node.name ||
-            was->second->class_name != node.class_name || was->second->lua != node.lua ||
-            was->second->module != node.module || was->second->children != node.children) {
-            return false;
-        }
-    }
-    return true;
-}
-
 // Required modules stay cached in the frontend. A new snapshot can change
 // their source or what their paths reach, so recheck them. A script the
 // snapshot lacks is gone, and so is its cached module.
-void sync_world(WorkerEnv& env, const std::shared_ptr<const WorldSnap>& world, bool keep_on_empty) {
-    // A place with no root, as when an analysis pass could not read it, says
-    // nothing about the tree. The cached modules stay for the next real
-    // snapshot. A completion asked with no place means none.
-    if (env.checked_world == world || (keep_on_empty && world->nodes.empty())) {
+void sync_world(WorkerEnv& env, const std::shared_ptr<const WorldSnap>& world) {
+    if (env.checked_world == world) {
         return;
     }
     // The same tree keeps every cached module and the place's types. Only a
@@ -1041,172 +1055,8 @@ void sync_world(WorkerEnv& env, const std::shared_ptr<const WorldSnap>& world, b
     env.place = build_place_types(*env.frontend->globals.globalScope, world);
 }
 
-Finished analyze_job(WorkerEnv& env, const Job& job) {
-    Finished finished;
-    finished.id = job.id;
-    finished.generation = job.generation;
-    if (job.world == nullptr) {
-        finished.cancelled = true;
-        return finished;
-    }
-    const NodeSnap* self = job.world->find(job.id);
-    if (self == nullptr || !self->lua) {
-        finished.cancelled = true;
-        return finished;
-    }
-    finished.name = self->name.empty() ? self->class_name : self->name;
-    finished.source = self->source;
-
-    if (job.cancel && job.cancel->requested()) {
-        finished.cancelled = true;
-        return finished;
-    }
-
-    Luau::Allocator allocator;
-    Luau::AstNameTable names(allocator);
-    Luau::ParseOptions parse_options;
-    parse_options.captureComments = true;
-    const Luau::ParseResult parsed =
-        Luau::Parser::parse(self->source.c_str(), self->source.size(), names, allocator, parse_options);
-
-    // Stage 1. A parse failure stops the pipeline. The compiler is unchanged.
-    if (!parsed.errors.empty()) {
-        for (const Luau::ParseError& error : parsed.errors) {
-            finished.diagnostics.push_back(make_diagnostic(job.id, range_from(error.getLocation()), Severity::Error,
-                                                           "Syntax", error.getMessage()));
-        }
-        if (parsed.root != nullptr) {
-            finished.requires = find_requires(*job.world, job.id, parsed.root);
-        }
-        return finished;
-    }
-
-    // A script without a `--!` mode comment on its first lines is checked nonstrict.
-    const Luau::Mode mode = Luau::parseMode(parsed.hotcomments).value_or(Luau::Mode::Nonstrict);
-    if (parsed.root != nullptr) {
-        finished.requires = find_requires(*job.world, job.id, parsed.root);
-    }
-    if (mode == Luau::Mode::NoCheck) {
-        return finished;
-    }
-
-    if (!env.init_error.empty() || env.frontend == nullptr || env.frontend->globals.globalScope == nullptr) {
-        const std::string message = env.init_error.empty() ? "script analysis is unavailable" : env.init_error;
-        finished.diagnostics.push_back(
-            make_diagnostic(job.id, TextRange{}, Severity::Error, "Analysis", message));
-        return finished;
-    }
-
-    // Stage 2. Builtin lints. Unknown globals are left to the type checker.
-    Luau::LintOptions lint_options;
-    lint_options.setDefaults();
-    lint_options.warningMask &= ~Luau::LintWarning::parseMask(parsed.hotcomments);
-    lint_options.disableWarning(Luau::LintWarning::Code_UnknownGlobal);
-    if (mode == Luau::Mode::Strict) {
-        lint_options.disableWarning(Luau::LintWarning::Code_ImplicitReturn);
-    }
-    const std::vector<Luau::LintWarning> lints = Luau::lint(parsed.root, names, env.frontend->globals.globalScope,
-                                                            env.untyped.get(), parsed.hotcomments, lint_options);
-    for (const Luau::LintWarning& warning : lints) {
-        Severity severity = Severity::Warning;
-        if (warning.code == Luau::LintWarning::Code_LocalUnused || warning.code == Luau::LintWarning::Code_FunctionUnused ||
-            warning.code == Luau::LintWarning::Code_ImportUnused) {
-            severity = Severity::Hint;
-        }
-        const char* name = Luau::LintWarning::getName(warning.code);
-        finished.diagnostics.push_back(make_diagnostic(job.id, range_from(warning.location), severity,
-                                                       std::string("Lint/") + (name != nullptr ? name : "Unknown"),
-                                                       warning.text));
-    }
-
-    if (job.cancel && job.cancel->requested()) {
-        finished.cancelled = true;
-        return finished;
-    }
-
-    // Stage 3. Type check against the registered API. Lint already ran, so the
-    // frontend does not lint again.
-    // The full checker runs for both strict and nonstrict. Nonstrict then
-    // downgrades type errors to warnings. `--!nocheck` never reaches here.
-    try {
-        const std::string check_source = checked_source(self->source, parsed, mode);
-        const std::string module_name = module_name_of(job.id);
-        sync_world(env, job.world, true);
-        env.files.module_name = &module_name;
-        env.files.world = job.world.get();
-        env.files.source = &check_source;
-        env.files.display = &finished.name;
-        env.files.type = self->module ? Luau::SourceCode::Module : Luau::SourceCode::Script;
-        env.configs.config.mode = Luau::Mode::Strict;
-        env.world = job.world.get();
-        env.self = job.id;
-        env.frontend->markDirty(module_name);
-
-        Luau::FrontendOptions options;
-        options.runLintChecks = false;
-        options.retainFullTypeGraphs = false;
-        options.cancellationToken = job.cancel;
-        const Luau::CheckResult checked = env.frontend->check(module_name, options);
-        env.world = nullptr;
-        env.files.world = nullptr;
-        env.self = 0;
-        if (job.cancel && job.cancel->requested()) {
-            finished.cancelled = true;
-            return finished;
-        }
-        Luau::TypeErrorToStringOptions stringify;
-        stringify.fileResolver = &env.files;
-        for (const Luau::TypeError& error : checked.errors) {
-            // A required module reports its own problems when it is analyzed.
-            if (error.moduleName != module_name) {
-                continue;
-            }
-            if (Luau::get<Luau::SyntaxError>(error) != nullptr) {
-                finished.diagnostics.push_back(make_diagnostic(job.id, range_from(error.location), Severity::Error, "Syntax",
-                                                               Luau::toString(error, stringify)));
-                continue;
-            }
-            if (const Luau::UnknownSymbol* symbol = Luau::get<Luau::UnknownSymbol>(error)) {
-                if (symbol->context == Luau::UnknownSymbol::Binding) {
-                    finished.diagnostics.push_back(make_diagnostic(job.id, range_from(error.location), Severity::Warning,
-                                                                   "Lint/UnknownGlobal", Luau::toString(error, stringify)));
-                    continue;
-                }
-            }
-            Severity severity = mode == Luau::Mode::Strict ? Severity::Error : Severity::Warning;
-            if (missing_render_member(error)) {
-                severity = Severity::Warning;
-            }
-            finished.diagnostics.push_back(
-                make_diagnostic(job.id, range_from(error.location), severity, "Type", Luau::toString(error, stringify)));
-        }
-    } catch (const std::exception& error) {
-        env.world = nullptr;
-        env.files.world = nullptr;
-        env.self = 0;
-        if (job.cancel && job.cancel->requested()) {
-            finished.cancelled = true;
-            return finished;
-        }
-        finished.diagnostics.push_back(make_diagnostic(job.id, TextRange{}, Severity::Error, "Analysis", error.what()));
-    } catch (...) {
-        env.world = nullptr;
-        env.files.world = nullptr;
-        env.self = 0;
-        if (job.cancel && job.cancel->requested()) {
-            finished.cancelled = true;
-            return finished;
-        }
-        finished.diagnostics.push_back(make_diagnostic(job.id, TextRange{}, Severity::Error, "Analysis", "analysis failed"));
-    }
-    env.world = nullptr;
-    env.files.world = nullptr;
-    env.self = 0;
-    return finished;
-}
-
 // A Luau request: the completion at `offset` (none when npos) and the type at
-// each of `offsets`. The worker answers it ahead of queued checks.
+// each of `offsets`. The editor checker answers it, never behind a check of the place.
 struct CompleteRequest {
     std::vector<std::size_t> offsets;
     // Requests in one lane replace each other while queued. Empty never does.
@@ -1231,43 +1081,6 @@ void finish_request(CompleteRequest& request) {
         request.done = true;
     }
     request.cv.notify_all();
-}
-
-// The place as completion sees it, as the snapshot a check reads. The root is
-// the parentless Game or DataModel.
-std::shared_ptr<WorldSnap> world_from_nodes(const std::vector<LuaNode>& nodes) {
-    auto world = std::make_shared<WorldSnap>();
-    bool rooted = false;
-    for (const LuaNode& item : nodes) {
-        NodeSnap node;
-        node.id = item.id;
-        node.parent = item.parent;
-        node.name = item.name;
-        node.class_name = item.class_name;
-        node.source = item.source;
-        node.module = item.class_name == "ModuleScript";
-        node.lua = node.module || item.class_name == "Script";
-        if (!rooted && item.parent == DataModel::kNoParent &&
-            (item.class_name == "Game" || item.class_name == "DataModel")) {
-            world->root = item.id;
-            rooted = true;
-        }
-        world->nodes.push_back(std::move(node));
-    }
-    // Children in the order the nodes came, which completion_world makes the
-    // tree's sibling order, as capture_world has it.
-    std::unordered_map<InstanceId, std::size_t> index;
-    index.reserve(world->nodes.size());
-    for (std::size_t at = 0; at < world->nodes.size(); ++at) {
-        index.emplace(world->nodes[at].id, at);
-    }
-    for (const NodeSnap& child : world->nodes) {
-        const auto parent = index.find(child.parent);
-        if (parent != index.end() && child.parent != child.id) {
-            world->nodes[parent->second].children.push_back(child.id);
-        }
-    }
-    return world;
 }
 
 // Line and byte column of a byte offset, as Luau counts them.
@@ -1350,7 +1163,7 @@ std::string self_type(Luau::TypeId type) {
     return class_name.empty() ? std::string("table") : class_name;
 }
 
-// The source of a module the worker can read: the buffer being answered, or a
+// The source of a module the checker can read: the buffer being answered, or a
 // script in the place.
 const std::string* module_text(const WorkerEnv& env, const std::string& module) {
     if (env.files.module_name != nullptr && env.files.source != nullptr && module == *env.files.module_name) {
@@ -1528,7 +1341,7 @@ std::string pack_text(const std::vector<std::string>& types) {
 }
 
 // The definition of a function in its module's source, and that source, when
-// the worker can read both.
+// the checker can read both.
 struct Definition {
     Luau::AstExprFunction* node = nullptr;
     const std::string* text = nullptr;
@@ -1694,7 +1507,7 @@ std::string with_checked_buffer(WorkerEnv& env, const CompleteRequest& request, 
     const std::string display = self != nullptr && !self->name.empty() ? self->name : std::string("script");
     std::string error;
     try {
-        sync_world(env, request.world, false);
+        sync_world(env, request.world);
         env.files.module_name = &module_name;
         env.files.world = request.world.get();
         env.files.source = &check_source;
@@ -1702,7 +1515,6 @@ std::string with_checked_buffer(WorkerEnv& env, const CompleteRequest& request, 
         env.files.type = self != nullptr && self->module ? Luau::SourceCode::Module : Luau::SourceCode::Script;
         env.configs.config.mode = Luau::Mode::Strict;
         env.world = request.world.get();
-        env.self = request.script;
         env.frontend->markDirty(module_name);
         Luau::FrontendOptions options;
         options.runLintChecks = false;
@@ -1726,7 +1538,6 @@ std::string with_checked_buffer(WorkerEnv& env, const CompleteRequest& request, 
         error = request.cancel->requested() ? "cancelled" : "the type check failed";
     }
     env.world = nullptr;
-    env.self = 0;
     env.files.world = nullptr;
     env.files.module_name = nullptr;
     env.files.source = nullptr;
@@ -2365,34 +2176,570 @@ LuauFacts facts_job(WorkerEnv& env, const CompleteRequest& request) {
     return out;
 }
 
-std::shared_ptr<WorldSnap> capture_world(DataModel& game) {
-    auto world = std::make_shared<WorldSnap>();
-    world->root = game.id();
-    NodeSnap root;
-    root.id = world->root;
-    root.parent = DataModel::kNoParent;
-    root.name = game.name(world->root);
-    root.class_name = game.class_name();
-    world->nodes.push_back(std::move(root));
-    game.for_each_instance([&](DataModel& object) {
-        NodeSnap node;
-        node.id = object.id();
-        node.parent = game.parent(object.id());
-        node.name = game.name(object.id());
-        node.class_name = object.class_name() != nullptr ? object.class_name() : "";
-        if (auto* source = dynamic_cast<LuaSource*>(&object)) {
-            node.lua = true;
-            node.module = dynamic_cast<ModuleScript*>(source) != nullptr;
-            node.source = source->source();
+// One script in a batch: stages 1 and 2 of its check, and what the type check
+// needs. prepare_script reads only the snapshot and the frozen globals, so a
+// batch prepares its scripts in parallel.
+struct CheckInput {
+    InstanceId id = 0;
+    std::uint64_t generation = 0;
+    std::string name;
+    std::string source;
+    std::string module_name;
+    std::string check_source;
+    Luau::Mode mode = Luau::Mode::Nonstrict;
+    // False after a syntax error, under --!nocheck, or when analysis cannot run.
+    bool type_check = false;
+    // Preparing it threw, so it says it could not be checked.
+    bool failed = false;
+    std::vector<Diagnostic> diagnostics;
+    std::vector<InstanceId> requires;
+    // The names it requires by name, as `require("Util")`.
+    std::vector<std::string> by_name;
+};
+
+void prepare_script(const WorkerEnv& env, const WorldSnap& world, CheckInput& input) {
+    const NodeSnap* self = world.find(input.id);
+    if (self == nullptr || !self->lua) {
+        return;
+    }
+    input.name = shown_name(*self);
+    input.source = self->source;
+    input.module_name = module_name_of(input.id);
+
+    Luau::Allocator allocator;
+    Luau::AstNameTable names(allocator);
+    Luau::ParseOptions parse_options;
+    parse_options.captureComments = true;
+    const Luau::ParseResult parsed =
+        Luau::Parser::parse(self->source.c_str(), self->source.size(), names, allocator, parse_options);
+
+    // Stage 1. A parse failure stops the pipeline. The compiler is unchanged.
+    if (!parsed.errors.empty()) {
+        for (const Luau::ParseError& error : parsed.errors) {
+            input.diagnostics.push_back(make_diagnostic(input.id, range_from(error.getLocation()), Severity::Error,
+                                                        "Syntax", error.getMessage()));
         }
-        world->nodes.push_back(std::move(node));
-    });
-    for (NodeSnap& node : world->nodes) {
-        for (InstanceId child = game.first_child(node.id); child != 0; child = game.next_sibling(child)) {
-            node.children.push_back(child);
+        if (parsed.root != nullptr) {
+            input.requires = find_requires(world, input.id, parsed.root);
+        }
+        return;
+    }
+
+    // A script without a `--!` mode comment on its first lines is checked nonstrict.
+    input.mode = Luau::parseMode(parsed.hotcomments).value_or(Luau::Mode::Nonstrict);
+    if (parsed.root != nullptr) {
+        input.requires = find_requires(world, input.id, parsed.root, &input.by_name);
+    }
+    if (input.mode == Luau::Mode::NoCheck) {
+        return;
+    }
+    if (!env.init_error.empty() || env.frontend == nullptr || env.frontend->globals.globalScope == nullptr) {
+        const std::string message = env.init_error.empty() ? "script analysis is unavailable" : env.init_error;
+        input.diagnostics.push_back(make_diagnostic(input.id, TextRange{}, Severity::Error, "Analysis", message));
+        return;
+    }
+
+    // Stage 2. Builtin lints. Unknown globals are left to the type checker.
+    Luau::LintOptions lint_options;
+    lint_options.setDefaults();
+    lint_options.warningMask &= ~Luau::LintWarning::parseMask(parsed.hotcomments);
+    lint_options.disableWarning(Luau::LintWarning::Code_UnknownGlobal);
+    if (input.mode == Luau::Mode::Strict) {
+        lint_options.disableWarning(Luau::LintWarning::Code_ImplicitReturn);
+    }
+    const std::vector<Luau::LintWarning> lints = Luau::lint(parsed.root, names, env.frontend->globals.globalScope,
+                                                            env.untyped.get(), parsed.hotcomments, lint_options);
+    for (const Luau::LintWarning& warning : lints) {
+        Severity severity = Severity::Warning;
+        if (warning.code == Luau::LintWarning::Code_LocalUnused ||
+            warning.code == Luau::LintWarning::Code_FunctionUnused ||
+            warning.code == Luau::LintWarning::Code_ImportUnused) {
+            severity = Severity::Hint;
+        }
+        const char* name = Luau::LintWarning::getName(warning.code);
+        input.diagnostics.push_back(make_diagnostic(input.id, range_from(warning.location), severity,
+                                                    std::string("Lint/") + (name != nullptr ? name : "Unknown"),
+                                                    warning.text));
+    }
+    input.check_source = checked_source(self->source, parsed, input.mode);
+    input.type_check = true;
+}
+
+// Stage 3's diagnostics: the module's own type errors. The full checker runs for
+// strict and nonstrict alike; nonstrict then reads type errors as warnings.
+void add_type_errors(const Luau::Module& module, const CheckInput& input, Luau::FileResolver& files,
+                     std::vector<Diagnostic>& out) {
+    Luau::TypeErrorToStringOptions stringify;
+    stringify.fileResolver = &files;
+    for (const Luau::TypeError& error : module.errors) {
+        // A required module reports its own problems when it is analyzed.
+        if (error.moduleName != input.module_name) {
+            continue;
+        }
+        if (Luau::get<Luau::SyntaxError>(error) != nullptr) {
+            out.push_back(make_diagnostic(input.id, range_from(error.location), Severity::Error, "Syntax",
+                                          Luau::toString(error, stringify)));
+            continue;
+        }
+        if (const Luau::UnknownSymbol* symbol = Luau::get<Luau::UnknownSymbol>(error)) {
+            if (symbol->context == Luau::UnknownSymbol::Binding) {
+                out.push_back(make_diagnostic(input.id, range_from(error.location), Severity::Warning,
+                                              "Lint/UnknownGlobal", Luau::toString(error, stringify)));
+                continue;
+            }
+        }
+        Severity severity = input.mode == Luau::Mode::Strict ? Severity::Error : Severity::Warning;
+        if (missing_render_member(error)) {
+            severity = Severity::Warning;
+        }
+        out.push_back(
+            make_diagnostic(input.id, range_from(error.location), severity, "Type", Luau::toString(error, stringify)));
+    }
+}
+
+// Every instance one of the module's expressions is typed as, directly or as an
+// option of a union or intersection, as Door? is. Locals, parameters, script,
+// and FindFirstChild all end up here, because this reads what Luau inferred.
+// A call written last in an argument list or a return is typed as a pack, so
+// the packs' values count too.
+std::vector<InstanceId> reached_instances(const Luau::Module& module) {
+    std::vector<InstanceId> out;
+    std::unordered_set<InstanceId> seen;
+    const auto take = [&](Luau::TypeId type) {
+        if (const std::optional<InstanceId> id = tagged_instance(type)) {
+            if (seen.insert(*id).second) {
+                out.push_back(*id);
+            }
+        }
+    };
+    const auto take_all = [&](Luau::TypeId type) {
+        type = Luau::follow(type);
+        take(type);
+        if (const Luau::UnionType* options = Luau::get<Luau::UnionType>(type)) {
+            for (Luau::TypeId option : options->options) {
+                take(option);
+            }
+        } else if (const Luau::IntersectionType* parts = Luau::get<Luau::IntersectionType>(type)) {
+            for (Luau::TypeId part : parts->parts) {
+                take(part);
+            }
+        }
+    };
+    for (const auto& entry : module.astTypes) {
+        take_all(entry.second);
+    }
+    for (const auto& entry : module.astTypePacks) {
+        for (Luau::TypeId type : Luau::flatten(entry.second).first) {
+            take_all(type);
         }
     }
-    return world;
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+// `name` and every module that requires it, however deep, as far as the
+// frontend knows. markDirty's own list stops at modules already dirty, so it
+// cannot say this.
+void add_dependents(const Luau::Frontend& frontend, const std::string& name, std::unordered_set<std::string>& out) {
+    std::vector<std::string> stack{name};
+    while (!stack.empty()) {
+        std::string next = std::move(stack.back());
+        stack.pop_back();
+        if (!out.insert(next).second) {
+            continue;
+        }
+        const auto node = frontend.sourceNodes.find(next);
+        if (node == frontend.sourceNodes.end() || node->second == nullptr) {
+            continue;
+        }
+        for (const std::string& dependent : node->second->dependents) {
+            stack.push_back(dependent);
+        }
+    }
+}
+
+// The place checker's own state, kept between batches on its thread.
+struct PlaceChecker {
+    std::unique_ptr<WorkerEnv> env;
+    // Each script's reached set from its last check. Written from pool threads.
+    std::mutex reached_mu;
+    std::unordered_map<InstanceId, std::vector<InstanceId>> reached;
+    // Scripts whose last check failed, so it said nothing of what it reached.
+    // Any tree change checks them again. Guarded by reached_mu.
+    std::unordered_set<InstanceId> failed;
+    // The tree its cached modules and place types were checked against. Only
+    // the authored tree is ever captured, so after Stop the place checker
+    // diffs the restored tree against this one.
+    std::shared_ptr<const WorldSnap> last_world;
+    // Each type-checked script's `require("Name")` names, from its last
+    // check. Which module a name finds depends on the whole place.
+    std::unordered_map<InstanceId, std::vector<std::string>> by_name;
+};
+
+// Brings the place checker to `world` and adds to `names` every module the
+// change can affect: scripts added or edited, scripts whose last check reached
+// an instance the diff names, scripts that require by a name the change adds,
+// removes, or moves, and scripts whose last check failed. A script that left
+// the place leaves the cache and goes in `removed`, and what required it is
+// added.
+void sync_place(PlaceChecker& checker, const std::shared_ptr<const WorldSnap>& world,
+                std::unordered_set<std::string>& names, std::vector<InstanceId>& removed) {
+    WorkerEnv& env = *checker.env;
+    // A place with no root says nothing about the tree.
+    if (world->nodes.empty()) {
+        return;
+    }
+    if (checker.last_world == world && env.place != nullptr) {
+        return;
+    }
+    // The first tree, or a new frontend after a registry change: every script
+    // is checked against new types. Scripts gone since the last tree are
+    // still dropped.
+    if (checker.last_world == nullptr || env.place == nullptr) {
+        if (checker.last_world != nullptr) {
+            for (const NodeSnap& node : checker.last_world->nodes) {
+                if (node.lua && world->find(node.id) == nullptr) {
+                    removed.push_back(node.id);
+                }
+            }
+            std::lock_guard<std::mutex> lock(checker.reached_mu);
+            for (InstanceId id : removed) {
+                checker.reached.erase(id);
+                checker.failed.erase(id);
+                checker.by_name.erase(id);
+            }
+        }
+        env.place = build_place_types(*env.frontend->globals.globalScope, world);
+        for (const NodeSnap& node : world->nodes) {
+            if (node.lua) {
+                names.insert(module_name_of(node.id));
+            }
+        }
+        checker.last_world = world;
+        return;
+    }
+    const TreeDiff diff = diff_worlds(*checker.last_world, *world);
+    update_place_types(*env.place, *env.frontend->globals.globalScope, world, diff);
+    for (InstanceId id : diff.added_scripts) {
+        names.insert(module_name_of(id));
+    }
+    for (InstanceId id : diff.edited_scripts) {
+        names.insert(module_name_of(id));
+    }
+    // Module names a by-name require may now find differently: a module added,
+    // removed, renamed, or moved, by its old name and its new one.
+    std::unordered_set<std::string> module_names;
+    for (InstanceId id : diff.moved) {
+        if (const NodeSnap* was = checker.last_world->find(id)) {
+            if (was->module) {
+                module_names.insert(was->name);
+            }
+        }
+        if (const NodeSnap* now = world->find(id)) {
+            if (now->module) {
+                module_names.insert(now->name);
+            }
+        }
+    }
+    for (InstanceId id : diff.added_scripts) {
+        if (const NodeSnap* now = world->find(id)) {
+            if (now->module) {
+                module_names.insert(now->name);
+            }
+        }
+    }
+    // A tree change, not an edit: the edited script itself is checked anyway,
+    // and an edit elsewhere cannot fix what made a check fail.
+    const bool changed = !diff.parents.empty() || !diff.moved.empty() || !diff.added_scripts.empty() ||
+                         !diff.removed_scripts.empty();
+    {
+        std::lock_guard<std::mutex> lock(checker.reached_mu);
+        for (InstanceId id : diff.removed_scripts) {
+            checker.reached.erase(id);
+            checker.failed.erase(id);
+            checker.by_name.erase(id);
+        }
+        for (const auto& entry : checker.reached) {
+            for (InstanceId id : entry.second) {
+                if (diff.parents.count(id) != 0 || diff.moved.count(id) != 0) {
+                    names.insert(module_name_of(entry.first));
+                    break;
+                }
+            }
+        }
+        if (changed) {
+            for (InstanceId id : checker.failed) {
+                names.insert(module_name_of(id));
+            }
+        }
+    }
+    for (const auto& entry : checker.by_name) {
+        // A script that moved prefers modules beside its new parent.
+        bool affected = diff.moved.count(entry.first) != 0;
+        for (const std::string& name : entry.second) {
+            affected = affected || module_names.count(name) != 0;
+        }
+        if (affected) {
+            names.insert(module_name_of(entry.first));
+        }
+    }
+    std::vector<Luau::ModuleName> gone;
+    for (InstanceId id : diff.removed_scripts) {
+        const std::string name = module_name_of(id);
+        std::unordered_set<std::string> dependents;
+        add_dependents(*env.frontend, name, dependents);
+        dependents.erase(name);
+        names.insert(dependents.begin(), dependents.end());
+        gone.push_back(name);
+        removed.push_back(id);
+    }
+    for (const Luau::ModuleName& name : gone) {
+        names.erase(name);
+    }
+    env.frontend->clearModules(gone);
+    checker.last_world = world;
+}
+
+// The scripts a batch checks, each with its generation when the batch took it.
+using Claimed = std::unordered_map<InstanceId, std::uint64_t>;
+
+struct BatchHost {
+    // Takes a script into the batch and returns its generation now, or nothing
+    // when it is waiting for its own batch with a newer source.
+    std::function<std::optional<std::uint64_t>(InstanceId)> claim;
+    // Hands one script's result to pump(). Any thread.
+    std::function<void(Finished)> publish;
+    // Tells pump() these scripts left the place, so what they published goes.
+    std::function<void(const std::vector<InstanceId>&)> drop;
+};
+
+Finished finished_from(const CheckInput& input) {
+    Finished finished;
+    finished.id = input.id;
+    finished.generation = input.generation;
+    finished.name = input.name;
+    finished.source = input.source;
+    finished.diagnostics = input.diagnostics;
+    finished.requires = input.requires;
+    return finished;
+}
+
+// Publishes `input` with an Analysis diagnostic saying why it was not checked.
+// Never throws: it runs where an exception would stop a thread.
+void publish_failure(const BatchHost& host, const CheckInput* input, const char* failure) {
+    if (input == nullptr) {
+        return;
+    }
+    try {
+        Finished finished = finished_from(*input);
+        finished.diagnostics.push_back(
+            make_diagnostic(input->id, TextRange{}, Severity::Error, "Analysis", std::string("could not be checked: ") + failure));
+        host.publish(std::move(finished));
+    } catch (...) {
+    }
+}
+
+void run_batch(PlaceChecker& checker, AnalysisPool& pool, const std::shared_ptr<const WorldSnap>& world,
+               Claimed& claimed, const std::shared_ptr<Luau::FrontendCancellationToken>& cancel,
+               const BatchHost& host) {
+    WorkerEnv& env = *checker.env;
+    // Every module the batch changes: the scripts taken, those the tree change
+    // reaches, and what requires each of them.
+    std::unordered_set<std::string> names;
+    std::vector<InstanceId> removed;
+    sync_place(checker, world, names, removed);
+    if (!removed.empty()) {
+        host.drop(removed);
+    }
+    for (const auto& entry : claimed) {
+        names.insert(module_name_of(entry.first));
+    }
+    std::unordered_set<std::string> affected;
+    for (const std::string& name : names) {
+        add_dependents(*env.frontend, name, affected);
+    }
+    std::vector<CheckInput> inputs;
+    inputs.reserve(affected.size());
+    for (const std::string& name : affected) {
+        const std::optional<InstanceId> id = instance_of_module(name);
+        const NodeSnap* node = id ? world->find(*id) : nullptr;
+        if (node == nullptr || !node->lua) {
+            continue;
+        }
+        if (claimed.count(*id) == 0) {
+            const std::optional<std::uint64_t> generation = host.claim(*id);
+            if (!generation) {
+                continue;
+            }
+            claimed.emplace(*id, *generation);
+        }
+        CheckInput input;
+        input.id = *id;
+        input.generation = claimed.at(*id);
+        inputs.push_back(std::move(input));
+        env.frontend->markDirty(name);
+    }
+
+    std::vector<std::function<void()>> prepare;
+    prepare.reserve(inputs.size());
+    for (CheckInput& input : inputs) {
+        // A pool task must not throw: run_all would wait for it forever.
+        prepare.push_back([&env, &world, &input] {
+            try {
+                prepare_script(env, *world, input);
+            } catch (...) {
+                input.type_check = false;
+                input.failed = true;
+                input.diagnostics.push_back(
+                    make_diagnostic(input.id, TextRange{}, Severity::Error, "Analysis", "analysis failed"));
+            }
+        });
+    }
+    pool.run_all(std::move(prepare));
+    // Any failure below marks its script, so the next tree change retries it.
+    const auto note_failed = [&checker](InstanceId id) {
+        try {
+            std::lock_guard<std::mutex> lock(checker.reached_mu);
+            checker.failed.insert(id);
+        } catch (...) {
+        }
+    };
+
+    std::unordered_map<std::string, std::string> sources;
+    std::unordered_map<InstanceId, const CheckInput*> by_id;
+    std::vector<Luau::ModuleName> queue;
+    for (const CheckInput& input : inputs) {
+        by_id.emplace(input.id, &input);
+        if (!input.type_check) {
+            // Its result reads no types, so no tree change can alter it.
+            {
+                std::lock_guard<std::mutex> lock(checker.reached_mu);
+                checker.reached.erase(input.id);
+                if (input.failed) {
+                    checker.failed.insert(input.id);
+                } else {
+                    checker.failed.erase(input.id);
+                }
+            }
+            checker.by_name.erase(input.id);
+            host.publish(finished_from(input));
+            continue;
+        }
+        if (input.by_name.empty()) {
+            checker.by_name.erase(input.id);
+        } else {
+            checker.by_name[input.id] = input.by_name;
+        }
+        sources.emplace(input.module_name, input.check_source);
+        queue.push_back(input.module_name);
+    }
+    if (queue.empty() || cancel->requested()) {
+        return;
+    }
+
+    std::mutex done_mu;
+    std::unordered_set<InstanceId> done;
+    // The env outlives this batch, so it must not keep pointers to its locals,
+    // even when something below throws.
+    struct ResetEnv {
+        WorkerEnv& env;
+        ~ResetEnv() {
+            env.files.batch_sources = nullptr;
+            env.files.world = nullptr;
+            env.world = nullptr;
+        }
+    } reset_env{env};
+    env.files.batch_sources = &sources;
+    env.files.world = world.get();
+    // A script's own --!nonstrict header was rewritten to --!strict, and one
+    // without a header is checked by the full checker too.
+    env.configs.config.mode = Luau::Mode::Strict;
+    env.world = world.get();
+    Luau::FrontendOptions options;
+    options.runLintChecks = false;
+    options.retainFullTypeGraphs = false;
+    options.cancellationToken = cancel;
+    // Runs on a pool thread as each module finishes, before Luau drops its
+    // expression types, so its reached set can still be read.
+    // Luau catches only its own internal errors around this, so it never throws.
+    options.customModuleCheck = [&](const Luau::SourceModule& source, const Luau::Module& module) {
+        const CheckInput* input = nullptr;
+        try {
+            const std::optional<InstanceId> id = instance_of_module(source.name);
+            const auto found = id ? by_id.find(*id) : by_id.end();
+            if (found == by_id.end() || !found->second->type_check || module.cancelled) {
+                return;
+            }
+            input = found->second;
+            {
+                // After an internal error, checking a requirer again checks
+                // modules that already finished. Each publishes once.
+                std::lock_guard<std::mutex> lock(done_mu);
+                if (!done.insert(input->id).second) {
+                    return;
+                }
+            }
+            Finished finished = finished_from(*input);
+            add_type_errors(module, *input, env.files, finished.diagnostics);
+            finished.reached = reached_instances(module);
+            {
+                std::lock_guard<std::mutex> lock(checker.reached_mu);
+                checker.reached[input->id] = finished.reached;
+                checker.failed.erase(input->id);
+            }
+            host.publish(std::move(finished));
+        } catch (const std::exception& error) {
+            if (input != nullptr) {
+                note_failed(input->id);
+            }
+            publish_failure(host, input, error.what());
+        } catch (...) {
+            if (input != nullptr) {
+                note_failed(input->id);
+            }
+            publish_failure(host, input, "analysis failed");
+        }
+    };
+    try {
+        env.frontend->queueModuleCheck(queue);
+        env.frontend->checkQueuedModules(
+            options, [&pool](std::vector<std::function<void()>> tasks) { pool.post(std::move(tasks)); });
+    } catch (...) {
+        // One module's internal error stops Luau's whole batch. What did not
+        // finish is checked one at a time, so only the broken one says so.
+        for (const std::string& name : queue) {
+            if (cancel->requested()) {
+                break;
+            }
+            const InstanceId id = *instance_of_module(name);
+            {
+                std::lock_guard<std::mutex> lock(done_mu);
+                if (done.count(id) != 0) {
+                    continue;
+                }
+            }
+            std::string failure;
+            try {
+                env.frontend->check(name, options);
+                continue;
+            } catch (const std::exception& error) {
+                failure = error.what();
+            } catch (...) {
+                failure = "analysis failed";
+            }
+            if (cancel->requested()) {
+                break;
+            }
+            {
+                std::lock_guard<std::mutex> lock(done_mu);
+                if (!done.insert(id).second) {
+                    continue;
+                }
+            }
+            note_failed(id);
+            publish_failure(host, by_id.at(id), failure.c_str());
+        }
+    }
 }
 
 }  // namespace
@@ -2411,19 +2758,29 @@ void lint_rule_names(std::vector<std::string>& out) {
 
 struct ScriptAnalysis::State {
     std::mutex mu;
-    // Set by note_world_changed. pump() turns it into one invalidate_all.
+    // Set by note_world_changed. pump() turns it into one capture of the tree.
     std::atomic<bool> world_stale{false};
+    // A script was queued, and pump() has not captured the tree since. pump()
+    // takes one capture however many came in. True at first, so the first
+    // pump() captures the place even when nothing is queued yet.
+    std::atomic<bool> capture_needed{true};
+    // The simulation runs. Nothing is captured or checked until Stop: queued
+    // scripts and tree changes wait. Written on the gameplay thread under the
+    // DataModel write lock and `mu`, so a capture under the DataModel lock, and
+    // anything under `mu`, sees it settled.
+    std::atomic<bool> playing{false};
     std::condition_variable cv;
     std::mutex start_mu;
     bool stop = false;
     bool enabled = true;
     bool started = false;
     std::uint64_t next_token = 0;
-    int inflight = 0;
-    // The script the worker is checking. 0 between jobs.
-    InstanceId running = 0;
-    // Luau parses and checks here, as deep as its own recursion limits allow.
-    StackThread worker;
+    // The place checker's thread, and the editor checker's, which answers Luau
+    // requests so typing never waits behind a check of the place.
+    StackThread place;
+    StackThread editor;
+    // Wakes the editor thread for completions. `cv` wakes the place thread.
+    std::condition_variable editor_cv;
 
     struct Handler {
         std::uint64_t token = 0;
@@ -2432,110 +2789,56 @@ struct ScriptAnalysis::State {
     };
     std::vector<Handler> handlers;
     std::unordered_map<InstanceId, std::uint64_t> generations;
-    // Written by the worker after each job.
+    // Written by the place checker after each batch.
     std::atomic<std::size_t> cached_modules{0};
     std::unordered_map<InstanceId, Pending> pending;
-    std::unordered_map<InstanceId, std::shared_ptr<Luau::FrontendCancellationToken>> tokens;
     std::vector<Finished> results;
     struct Record {
         std::string name;
         std::string source;
         std::vector<Diagnostic> diagnostics;
+        std::vector<InstanceId> reached;
     };
     std::unordered_map<InstanceId, Record> published;
     std::unordered_map<InstanceId, std::unordered_set<InstanceId>> requires_of;
     std::unordered_map<InstanceId, std::unordered_set<InstanceId>> required_by;
 
-    AnalysisScope scope = AnalysisScope::All;
     // Luau autocomplete requests, answered before queued checks, and the one
-    // the worker is answering now.
+    // the editor checker is answering now.
     std::deque<std::shared_ptr<CompleteRequest>> completions;
     std::shared_ptr<CompleteRequest> serving;
-    // Editors showing each script. Open scope analyzes these and what they require.
-    std::unordered_map<InstanceId, int> watched;
-    // Waiting for pump() to capture the tree: newly watched scripts, and
-    // modules a watched script turned out to require.
-    std::unordered_set<InstanceId> to_schedule;
+
+    // The newest tree captured, and its capture number: two captures can finish
+    // out of order, and the newer one wins. Every capture is of the authored
+    // tree: none is taken while the simulation runs.
+    std::shared_ptr<const WorldSnap> latest_world;
+    std::uint64_t latest_seq = 0;
+    std::atomic<std::uint64_t> world_seq{0};
+    // Scripts in the batch the place checker is running, including what
+    // requires them, and the batch's cancel.
+    std::unordered_set<InstanceId> in_batch;
+    // Play cancels it, and the place checker queues what the batch took again.
+    std::shared_ptr<Luau::FrontendCancellationToken> batch_cancel;
+    // A tree change the place checker has not taken yet, and when it is due.
+    bool tree_pending = false;
+    std::chrono::steady_clock::time_point tree_due{};
+    // The running batch took a tree change, so it may yet take any script.
+    bool tree_in_batch = false;
+    // Results pump() published, per script.
+    std::unordered_map<InstanceId, std::uint64_t> checks;
+    // Scripts remove() dropped and nothing has scheduled since. A batch's tree
+    // can be older than the removal, so claim() refuses these. The generation
+    // is kept, never reset, so an id undo brings back cannot match a result
+    // checked before it was removed.
+    std::unordered_set<InstanceId> removed;
+
+    void adopt(const std::shared_ptr<const WorldSnap>& world, std::uint64_t seq) {
+        if (seq > latest_seq) {
+            latest_world = world;
+            latest_seq = seq;
+        }
+    }
 };
-
-std::unordered_set<InstanceId> ScriptAnalysis::active_locked() const {
-    std::unordered_set<InstanceId> active;
-    std::vector<InstanceId> frontier;
-    for (const auto& entry : state_->watched) {
-        if (active.insert(entry.first).second) {
-            frontier.push_back(entry.first);
-        }
-    }
-    while (!frontier.empty()) {
-        const InstanceId next = frontier.back();
-        frontier.pop_back();
-        const auto found = state_->requires_of.find(next);
-        if (found == state_->requires_of.end()) {
-            continue;
-        }
-        for (InstanceId target : found->second) {
-            if (active.insert(target).second) {
-                frontier.push_back(target);
-            }
-        }
-    }
-    return active;
-}
-
-std::vector<InstanceId> ScriptAnalysis::drop_inactive_locked() {
-    const std::unordered_set<InstanceId> active = active_locked();
-    std::unordered_set<InstanceId> known;
-    for (const auto& entry : state_->published) {
-        known.insert(entry.first);
-    }
-    for (const auto& entry : state_->pending) {
-        known.insert(entry.first);
-    }
-    for (const auto& entry : state_->tokens) {
-        known.insert(entry.first);
-    }
-    for (InstanceId id : state_->to_schedule) {
-        known.insert(id);
-    }
-    std::vector<InstanceId> dropped;
-    for (InstanceId id : known) {
-        if (active.count(id) != 0) {
-            continue;
-        }
-        ++state_->generations[id];
-        state_->pending.erase(id);
-        state_->to_schedule.erase(id);
-        const auto token = state_->tokens.find(id);
-        if (token != state_->tokens.end()) {
-            if (token->second) {
-                token->second->cancel();
-            }
-            state_->tokens.erase(token);
-        }
-        state_->results.erase(std::remove_if(state_->results.begin(), state_->results.end(),
-                                             [id](const Finished& finished) { return finished.id == id; }),
-                              state_->results.end());
-        if (state_->published.erase(id) > 0) {
-            dropped.push_back(id);
-        }
-    }
-    // An inactive script's own requires no longer keep anything alive.
-    for (InstanceId id : known) {
-        if (active.count(id) == 0) {
-            const auto own = state_->requires_of.find(id);
-            if (own != state_->requires_of.end()) {
-                for (InstanceId target : own->second) {
-                    const auto found = state_->required_by.find(target);
-                    if (found != state_->required_by.end()) {
-                        found->second.erase(id);
-                    }
-                }
-                state_->requires_of.erase(own);
-            }
-        }
-    }
-    return dropped;
-}
 
 void ScriptAnalysis::replace_requires(InstanceId script, const std::vector<InstanceId>& targets) {
     std::unordered_set<InstanceId>& current = state_->requires_of[script];
@@ -2595,8 +2898,10 @@ void ScriptAnalysis::collect_dependents(InstanceId id, std::vector<InstanceId>& 
     }
 }
 
-ScriptAnalysis::ScriptAnalysis(DataModel& game) : game_(game), state_(std::make_unique<State>()) {
+ScriptAnalysis::ScriptAnalysis(DataModel& game, unsigned threads)
+    : game_(game), state_(std::make_unique<State>()), threads_(threads == 0 ? AnalysisPool::default_size() : threads) {
     signal_.owner_ = this;
+    state_->playing.store(game_.simulation_running(), std::memory_order_relaxed);
     game_.set_script_analysis(this);
 }
 
@@ -2613,12 +2918,10 @@ void ScriptAnalysis::shutdown() {
         state_->stop = true;
         state_->enabled = false;
         state_->pending.clear();
-        for (auto& entry : state_->tokens) {
-            if (entry.second) {
-                entry.second->cancel();
-            }
+        state_->tree_pending = false;
+        if (state_->batch_cancel) {
+            state_->batch_cancel->cancel();
         }
-        state_->tokens.clear();
         state_->results.clear();
         state_->handlers.clear();
         // Luau requests still queued are answered with nothing, and the one
@@ -2629,105 +2932,239 @@ void ScriptAnalysis::shutdown() {
         stopped = std::move(state_->completions);
         state_->completions.clear();
         state_->cv.notify_all();
+        state_->editor_cv.notify_all();
     }
     for (const std::shared_ptr<CompleteRequest>& request : stopped) {
         request->answer->facts.error = "script analysis has stopped";
         finish_request(*request);
     }
-    if (state_->worker.joinable()) {
-        state_->worker.join();
+    if (state_->place.joinable()) {
+        state_->place.join();
+    }
+    if (state_->editor.joinable()) {
+        state_->editor.join();
     }
 }
 
 // Luau's parser allows 1000 levels of nesting and its checker hundreds more;
 // a Debug build spends a few KB of stack on each. std::thread's default of 1 MB
-// overflows on code nested that deep, so the worker reserves this much.
+// overflows on code nested that deep, so every analysis thread reserves this much.
 constexpr std::size_t kWorkerStackBytes = std::size_t{16} << 20;
 
-void ScriptAnalysis::ensure_worker() {
+void ScriptAnalysis::ensure_threads() {
     std::lock_guard<std::mutex> start(state_->start_mu);
     if (state_->started) {
         return;
     }
     state_->started = true;
-    state_->worker = StackThread(kWorkerStackBytes, [this] { run(); });
+    state_->place = StackThread(kWorkerStackBytes, [this] { run_place(); });
+    state_->editor = StackThread(kWorkerStackBytes, [this] { run_editor(); });
 }
 
-void ScriptAnalysis::run() {
-    // This thread never calls the play VM and never takes the DataModel lock.
-    // Jobs carry a copy of Source and Name taken on the gameplay thread.
-    // On the heap: its frontend points at its own resolvers, so it is rebuilt
-    // in place, not moved, when the registry changed.
+void ScriptAnalysis::run_editor() {
+    // Its own frontend: an unsaved buffer never reaches the place checker's cache.
     auto owned = std::make_unique<WorkerEnv>();
     owned->init();
     while (true) {
-        Job job;
         std::shared_ptr<CompleteRequest> request;
         {
             std::unique_lock<std::mutex> lock(state_->mu);
-            state_->cv.wait(lock,
-                            [&] { return state_->stop || !state_->pending.empty() || !state_->completions.empty(); });
+            state_->editor_cv.wait(lock, [&] { return state_->stop || !state_->completions.empty(); });
             if (state_->stop) {
                 return;
             }
-            if (!state_->completions.empty()) {
-                request = std::move(state_->completions.front());
-                state_->completions.pop_front();
-                state_->serving = request;
-            }
+            request = std::move(state_->completions.front());
+            state_->completions.pop_front();
+            state_->serving = request;
         }
         if (owned->revision != lua_registry_revision()) {
             owned = std::make_unique<WorkerEnv>();
             owned->init();
         }
-        WorkerEnv& env = *owned;
-        if (request) {
-            request->answer->facts = facts_job(env, *request);
-            {
-                std::lock_guard<std::mutex> lock(state_->mu);
-                state_->serving.reset();
-            }
-            finish_request(*request);
-            continue;
+        request->answer->facts = facts_job(*owned, *request);
+        {
+            std::lock_guard<std::mutex> lock(state_->mu);
+            state_->serving.reset();
         }
+        finish_request(*request);
+    }
+}
+
+void ScriptAnalysis::run_place() {
+    // This thread and the pool never call the play VM and never take the
+    // DataModel lock. They read snapshots captured on the gameplay thread.
+    PlaceChecker checker;
+    checker.env = std::make_unique<WorkerEnv>();
+    checker.env->init();
+    AnalysisPool pool(threads_, kWorkerStackBytes);
+    BatchHost host;
+    host.claim = [this](InstanceId id) -> std::optional<std::uint64_t> {
+        std::lock_guard<std::mutex> lock(state_->mu);
+        if (state_->pending.count(id) != 0 || state_->removed.count(id) != 0) {
+            return std::nullopt;
+        }
+        state_->in_batch.insert(id);
+        return state_->generations[id];
+    };
+    host.publish = [this](Finished finished) {
+        std::lock_guard<std::mutex> lock(state_->mu);
+        if (state_->stop || !state_->enabled) {
+            return;
+        }
+        const auto generation = state_->generations.find(finished.id);
+        if (generation == state_->generations.end() || generation->second != finished.generation) {
+            return;
+        }
+        state_->results.push_back(std::move(finished));
+    };
+    host.drop = [this](const std::vector<InstanceId>& ids) {
+        std::lock_guard<std::mutex> lock(state_->mu);
+        if (state_->stop || !state_->enabled) {
+            return;
+        }
+        for (InstanceId id : ids) {
+            // At the script's generation now, so pump() keeps it in order with
+            // its results: a check after it, once the script is back, wins.
+            Finished finished;
+            finished.id = id;
+            finished.generation = state_->generations[id];
+            finished.dropped = true;
+            state_->results.push_back(std::move(finished));
+        }
+    };
+    while (true) {
+        Claimed claimed;
+        bool tree = false;
+        std::shared_ptr<const WorldSnap> world;
+        std::shared_ptr<Luau::FrontendCancellationToken> cancel;
         {
             std::unique_lock<std::mutex> lock(state_->mu);
+            // While the simulation runs, queued work waits for Stop.
+            state_->cv.wait(lock, [&] {
+                return state_->stop || (!state_->playing.load(std::memory_order_relaxed) &&
+                                        (!state_->pending.empty() || state_->tree_pending));
+            });
             if (state_->stop) {
                 return;
             }
-            if (state_->pending.empty()) {
-                continue;
-            }
             const auto now = std::chrono::steady_clock::now();
-            auto due = state_->pending.begin();
-            for (auto it = state_->pending.begin(); it != state_->pending.end(); ++it) {
-                if (it->second.ready_at < due->second.ready_at) {
-                    due = it;
+            auto next = std::chrono::steady_clock::time_point::max();
+            for (auto it = state_->pending.begin(); it != state_->pending.end();) {
+                if (it->second.ready_at > now) {
+                    next = std::min(next, it->second.ready_at);
+                    ++it;
+                } else if (state_->latest_seq <= it->second.after) {
+                    // Waiting for pump() to capture the tree it changed. The
+                    // capture wakes this thread.
+                    ++it;
+                } else {
+                    claimed.emplace(it->first, it->second.generation);
+                    state_->in_batch.insert(it->first);
+                    it = state_->pending.erase(it);
                 }
             }
-            if (due->second.ready_at > now) {
-                state_->cv.wait_until(lock, due->second.ready_at);
+            if (state_->tree_pending) {
+                if (state_->tree_due <= now) {
+                    tree = true;
+                    state_->tree_pending = false;
+                } else {
+                    next = std::min(next, state_->tree_due);
+                }
+            }
+            if (claimed.empty() && !tree) {
+                if (next == std::chrono::steady_clock::time_point::max()) {
+                    state_->cv.wait(lock);
+                } else {
+                    state_->cv.wait_until(lock, next);
+                }
                 continue;
             }
-            job = std::move(due->second.job);
-            state_->pending.erase(due);
-            ++state_->inflight;
-            state_->running = job.id;
+            state_->tree_in_batch = tree;
+            world = state_->latest_world;
+            cancel = std::make_shared<Luau::FrontendCancellationToken>();
+            state_->batch_cancel = cancel;
         }
-        Finished finished = analyze_job(*owned, job);
-        if (owned->frontend != nullptr) {
-            state_->cached_modules.store(owned->frontend->sourceNodes.size(), std::memory_order_relaxed);
-        }
-        {
-            std::lock_guard<std::mutex> lock(state_->mu);
-            --state_->inflight;
-            state_->running = 0;
-            const auto generation = state_->generations.find(job.id);
-            const bool current = generation != state_->generations.end() && generation->second == job.generation;
-            if (!state_->stop && state_->enabled && current && !finished.cancelled &&
-                !(job.cancel && job.cancel->requested())) {
-                state_->results.push_back(std::move(finished));
+        // An exception escaping here would end this thread with the batch's
+        // scripts still in in_batch, so idle() would never be true again.
+        const char* failure = nullptr;
+        std::string failure_text;
+        try {
+            if (checker.env->revision != lua_registry_revision()) {
+                // The new frontend has no place types, so sync_place checks the
+                // whole place once. last_world stays only so the scripts gone
+                // since it are still dropped.
+                checker.env = std::make_unique<WorkerEnv>();
+                checker.env->init();
+                std::lock_guard<std::mutex> lock(checker.reached_mu);
+                checker.reached.clear();
             }
+            if (world != nullptr) {
+                run_batch(checker, pool, world, claimed, cancel, host);
+            }
+        } catch (const std::exception& error) {
+            failure = "analysis failed";
+            try {
+                failure_text = error.what();
+                failure = failure_text.c_str();
+            } catch (...) {
+            }
+        } catch (...) {
+            failure = "analysis failed";
+        }
+        // Cancelled for play, the batch is redone after Stop, so a failure it
+        // met on the way out is not news.
+        if (failure != nullptr && !cancel->requested()) {
+            // Each script the batch took says it could not be checked.
+            for (const auto& entry : claimed) {
+                try {
+                    {
+                        std::lock_guard<std::mutex> lock(checker.reached_mu);
+                        checker.failed.insert(entry.first);
+                    }
+                    CheckInput input;
+                    input.id = entry.first;
+                    input.generation = entry.second;
+                    if (const NodeSnap* node = world != nullptr ? world->find(entry.first) : nullptr) {
+                        input.name = shown_name(*node);
+                        input.source = node->source;
+                    }
+                    publish_failure(host, &input, failure);
+                } catch (...) {
+                }
+            }
+        }
+        if (checker.env != nullptr && checker.env->frontend != nullptr) {
+            state_->cached_modules.store(checker.env->frontend->sourceNodes.size(), std::memory_order_relaxed);
+        }
+        std::lock_guard<std::mutex> lock(state_->mu);
+        // Cancelled while analysis is still on and running: Play started. What
+        // the batch took is queued again, at the generation it had, and waits
+        // for the tree pump() captures after Stop. A script queued or removed
+        // since is left to that.
+        const bool redo = cancel->requested() && !state_->stop && state_->enabled;
+        const std::uint64_t after = state_->world_seq.load();
+        for (const auto& entry : claimed) {
+            state_->in_batch.erase(entry.first);
+            const auto generation = state_->generations.find(entry.first);
+            if (!redo || generation == state_->generations.end() || generation->second != entry.second ||
+                state_->pending.count(entry.first) != 0 || state_->removed.count(entry.first) != 0) {
+                continue;
+            }
+            Pending pending;
+            pending.generation = entry.second;
+            pending.after = after;
+            state_->pending[entry.first] = pending;
+        }
+        if (redo && tree) {
+            state_->tree_pending = true;
+            state_->tree_due = std::chrono::steady_clock::now();
+        }
+        if (redo) {
+            state_->capture_needed.store(true, std::memory_order_relaxed);
+        }
+        state_->tree_in_batch = false;
+        if (state_->batch_cancel == cancel) {
+            state_->batch_cancel.reset();
         }
     }
 }
@@ -2765,13 +3202,13 @@ std::shared_ptr<ScriptAnalysis::LuauRequest> ScriptAnalysis::queue_luau(const st
             }
         }
         state_->completions.push_back(request);
-        state_->cv.notify_all();
+        state_->editor_cv.notify_all();
     }
     for (const std::shared_ptr<CompleteRequest>& old : replaced) {
         old->answer->facts.error = "replaced by a newer request";
         finish_request(*old);
     }
-    ensure_worker();
+    ensure_threads();
     return request;
 }
 
@@ -2814,12 +3251,10 @@ void ScriptAnalysis::set_enabled(bool enabled) {
         changed = true;
         if (!enabled) {
             state_->pending.clear();
-            for (auto& entry : state_->tokens) {
-                if (entry.second) {
-                    entry.second->cancel();
-                }
+            state_->tree_pending = false;
+            if (state_->batch_cancel) {
+                state_->batch_cancel->cancel();
             }
-            state_->tokens.clear();
             state_->results.clear();
             for (auto& entry : state_->generations) {
                 ++entry.second;
@@ -2845,52 +3280,123 @@ bool ScriptAnalysis::enabled() const {
     return state_->enabled;
 }
 
-void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
-    if (ids.empty()) {
-        return;
+namespace {
+
+// A Script or ModuleScript under the root. Only these are checked: an instance
+// outside the place, such as one a paste builds before adding it, does not run.
+// Id 0 is the root DataModel.
+bool placed_script(const DataModel& game, InstanceId id) {
+    if (dynamic_cast<const LuaSource*>(game.instance(id)) == nullptr) {
+        return false;
     }
+    for (InstanceId at = id; at != 0; at = game.parent(at)) {
+        if (at == DataModel::kNoParent) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+void ScriptAnalysis::capture_tree(bool tree_changed) {
     {
-        // The capture copies every script's source. Skip it when nothing will run.
         std::lock_guard<std::mutex> lock(state_->mu);
+        // Play can start after pump() looks. The DataModel lock is held, so
+        // it has not started since this looks: the tree is the authored one.
+        // A play tree is never captured; what waits for a capture waits for Stop.
+        if (state_->playing.load(std::memory_order_relaxed)) {
+            return;
+        }
         if (!state_->enabled || state_->stop) {
+            // Nothing will check it. busy() must not wait for it.
+            state_->capture_needed.store(false, std::memory_order_relaxed);
+            if (tree_changed) {
+                state_->world_stale.store(false, std::memory_order_relaxed);
+            }
             return;
         }
     }
+    // Every script queued before here is in this capture. One queued after
+    // sets the flag again and waits for the next.
+    state_->capture_needed.store(false, std::memory_order_relaxed);
+    const std::uint64_t seq = state_->world_seq.fetch_add(1) + 1;
     const std::shared_ptr<WorldSnap> world = capture_world(game_);
-    ensure_worker();
+    ensure_threads();
     std::lock_guard<std::mutex> lock(state_->mu);
     if (!state_->enabled || state_->stop) {
         return;
     }
-    const auto ready_at = std::chrono::steady_clock::now() + kDebounce;
-    for (InstanceId id : ids) {
-        // Handled either way: a dead or non-script id has nothing to check.
-        state_->to_schedule.erase(id);
-        const NodeSnap* node = world->find(id);
-        if (node == nullptr || !node->lua) {
-            continue;
+    state_->adopt(world, seq);
+    // Cleared only now, with tree_pending set, so settled() never sees neither.
+    // The DataModel lock is held, so no tree change came in since pump() looked.
+    if (tree_changed) {
+        state_->world_stale.store(false, std::memory_order_relaxed);
+        state_->tree_pending = true;
+        state_->tree_due = std::chrono::steady_clock::now() + kDebounce;
+        // A script remove() dropped that is in the tree again, as undo brings
+        // back a deleted one, or Stop one a playtest destroyed, is checked as new.
+        for (auto it = state_->removed.begin(); it != state_->removed.end();) {
+            const NodeSnap* node = world->find(*it);
+            if (node == nullptr || !node->lua) {
+                ++it;
+                continue;
+            }
+            Pending pending;
+            pending.generation = ++state_->generations[*it];
+            pending.ready_at = state_->tree_due;
+            pending.after = seq - 1;
+            state_->pending[*it] = pending;
+            it = state_->removed.erase(it);
         }
-        std::uint64_t& generation = state_->generations[id];
-        ++generation;
-        const auto previous = state_->tokens.find(id);
-        if (previous != state_->tokens.end() && previous->second) {
-            previous->second->cancel();
+    }
+    if (state_->latest_world == world) {
+        // A rename the place checker does not recheck still shows in the report.
+        for (auto& entry : state_->published) {
+            if (const NodeSnap* node = world->find(entry.first)) {
+                entry.second.name = shown_name(*node);
+            }
         }
-        auto token = std::make_shared<Luau::FrontendCancellationToken>();
-        state_->tokens[id] = token;
-        Job job;
-        job.id = id;
-        job.generation = generation;
-        job.world = world;
-        job.cancel = std::move(token);
-        state_->pending[id] = Pending{std::move(job), ready_at};
     }
     state_->cv.notify_all();
 }
 
+void ScriptAnalysis::schedule(const std::vector<InstanceId>& ids) {
+    if (ids.empty()) {
+        return;
+    }
+    std::vector<InstanceId> placed;
+    placed.reserve(ids.size());
+    for (InstanceId id : ids) {
+        if (placed_script(game_, id)) {
+            placed.push_back(id);
+        }
+    }
+    if (placed.empty()) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(state_->mu);
+        if (!state_->enabled || state_->stop) {
+            return;
+        }
+        const auto ready_at = std::chrono::steady_clock::now() + kDebounce;
+        const std::uint64_t after = state_->world_seq.load();
+        for (InstanceId id : placed) {
+            Pending pending;
+            pending.generation = ++state_->generations[id];
+            pending.ready_at = ready_at;
+            pending.after = after;
+            state_->removed.erase(id);
+            state_->pending[id] = pending;
+        }
+    }
+    state_->capture_needed.store(true, std::memory_order_relaxed);
+    ensure_threads();
+}
+
 void ScriptAnalysis::invalidate(InstanceId script) {
-    DataModel* object = game_.instance(script);
-    if (dynamic_cast<LuaSource*>(object) == nullptr) {
+    if (!placed_script(game_, script)) {
         return;
     }
     std::vector<InstanceId> chain;
@@ -2901,97 +3407,24 @@ void ScriptAnalysis::invalidate(InstanceId script) {
         }
         std::unordered_set<InstanceId> seen;
         collect_dependents(script, chain, seen);
-        if (state_->scope == AnalysisScope::Open) {
-            const std::unordered_set<InstanceId> active = active_locked();
-            chain.erase(std::remove_if(chain.begin(), chain.end(),
-                                       [&active](InstanceId id) { return active.count(id) == 0; }),
-                        chain.end());
-        }
     }
     schedule(chain);
 }
 
 void ScriptAnalysis::invalidate_all() {
-    std::vector<InstanceId> ids;
     {
         std::lock_guard<std::mutex> lock(state_->mu);
         if (!state_->enabled || state_->stop) {
             return;
         }
-        if (state_->scope == AnalysisScope::Open) {
-            const std::unordered_set<InstanceId> active = active_locked();
-            ids.assign(active.begin(), active.end());
-        }
     }
-    if (ids.empty()) {
-        // All scope: every script in the tree. schedule skips non-scripts.
-        bool all = false;
-        {
-            std::lock_guard<std::mutex> lock(state_->mu);
-            all = state_->scope == AnalysisScope::All;
+    std::vector<InstanceId> ids;
+    game_.for_each_instance([&ids](DataModel& object) {
+        if (dynamic_cast<LuaSource*>(&object) != nullptr) {
+            ids.push_back(object.id());
         }
-        if (!all) {
-            return;
-        }
-        game_.for_each_instance([&ids](DataModel& object) {
-            if (dynamic_cast<LuaSource*>(&object) != nullptr) {
-                ids.push_back(object.id());
-            }
-        });
-    }
+    });
     schedule(ids);
-}
-
-void ScriptAnalysis::set_scope(AnalysisScope scope) {
-    std::vector<InstanceId> dropped;
-    {
-        std::lock_guard<std::mutex> lock(state_->mu);
-        if (state_->scope == scope) {
-            return;
-        }
-        state_->scope = scope;
-        if (scope == AnalysisScope::Open) {
-            dropped = drop_inactive_locked();
-        }
-    }
-    fire(dropped);
-    if (scope == AnalysisScope::All) {
-        state_->world_stale.store(true, std::memory_order_relaxed);
-    }
-}
-
-AnalysisScope ScriptAnalysis::scope() const {
-    std::lock_guard<std::mutex> lock(state_->mu);
-    return state_->scope;
-}
-
-void ScriptAnalysis::watch(InstanceId script) {
-    std::lock_guard<std::mutex> lock(state_->mu);
-    ++state_->watched[script];
-    // Checked against the tree as it is when the editor opens, not whenever
-    // its last result was made.
-    state_->to_schedule.insert(script);
-}
-
-void ScriptAnalysis::unwatch(InstanceId script) {
-    std::vector<InstanceId> dropped;
-    {
-        std::lock_guard<std::mutex> lock(state_->mu);
-        const auto found = state_->watched.find(script);
-        if (found == state_->watched.end()) {
-            return;
-        }
-        if (--found->second > 0) {
-            return;
-        }
-        state_->watched.erase(found);
-        if (state_->scope == AnalysisScope::Open) {
-            dropped = drop_inactive_locked();
-        } else {
-            state_->to_schedule.erase(script);
-        }
-    }
-    fire(dropped);
 }
 
 std::size_t ScriptAnalysis::cached_modules() const {
@@ -3007,12 +3440,8 @@ void ScriptAnalysis::remove(InstanceId script) {
         enabled = state_->enabled;
         std::uint64_t& generation = state_->generations[script];
         ++generation;
+        state_->removed.insert(script);
         state_->pending.erase(script);
-        const auto token = state_->tokens.find(script);
-        if (token != state_->tokens.end() && token->second) {
-            token->second->cancel();
-        }
-        state_->tokens.erase(script);
         state_->results.erase(std::remove_if(state_->results.begin(), state_->results.end(),
                                              [&](const Finished& finished) { return finished.id == script; }),
                               state_->results.end());
@@ -3084,26 +3513,41 @@ std::vector<Diagnostic> ScriptAnalysis::get_diagnostics_for_line(InstanceId scri
 
 void ScriptAnalysis::note_world_changed() { state_->world_stale.store(true, std::memory_order_relaxed); }
 
+void ScriptAnalysis::note_play_started() {
+    std::lock_guard<std::mutex> lock(state_->mu);
+    state_->playing.store(true, std::memory_order_relaxed);
+    // The batch stops at its next module, and run_place queues what it took
+    // again for after Stop.
+    if (state_->batch_cancel) {
+        state_->batch_cancel->cancel();
+    }
+}
+
+void ScriptAnalysis::note_play_stopped() {
+    std::lock_guard<std::mutex> lock(state_->mu);
+    state_->playing.store(false, std::memory_order_relaxed);
+    // Stop restored the authored tree while the simulation still ran, so its
+    // own notes were ignored. The next pump() captures the tree and the place
+    // checker diffs it against the one it last checked: sources edited during
+    // play and restored come out edited or unchanged, and a script play
+    // destroyed and Stop brought back is checked as new.
+    state_->world_stale.store(true, std::memory_order_relaxed);
+    state_->cv.notify_all();
+}
+
 void ScriptAnalysis::pump() {
-    // A tree change rechecks every script once, however many changes came in.
-    // Only while stopped: play changes are not the authored tree. The UI
-    // thread pumps outside a step, so the read lock is short and uncontended.
-    if (state_->world_stale.load(std::memory_order_relaxed) && !game_.simulation_running()) {
-        DataModelLock lock(game_, DataModelLock::Read, std::chrono::milliseconds(2));
-        if (lock.owns() && state_->world_stale.exchange(false, std::memory_order_relaxed)) {
-            invalidate_all();
-        }
-    }
-    // Newly watched scripts, and modules they turned out to require.
-    std::vector<InstanceId> wanted;
-    {
-        std::lock_guard<std::mutex> lock(state_->mu);
-        wanted.assign(state_->to_schedule.begin(), state_->to_schedule.end());
-    }
-    if (!wanted.empty()) {
+    // A tree change is diffed once, however many changes came in. Nothing is
+    // captured while the simulation runs. The UI thread pumps outside a step,
+    // so the read lock is short, and a pump() that cannot take it captures
+    // next time.
+    // Queued scripts wait for one capture too, however many were queued, and
+    // that one capture is the tree change's as well.
+    const bool tree = state_->world_stale.load(std::memory_order_relaxed);
+    if (!state_->playing.load(std::memory_order_relaxed) &&
+        (tree || state_->capture_needed.load(std::memory_order_relaxed))) {
         DataModelLock lock(game_, DataModelLock::Read, std::chrono::milliseconds(2));
         if (lock.owns()) {
-            schedule(wanted);
+            capture_tree(tree);
         }
     }
     std::vector<Finished> ready;
@@ -3122,34 +3566,45 @@ void ScriptAnalysis::pump() {
             if (generation == state_->generations.end() || generation->second != finished.generation) {
                 continue;
             }
+            if (finished.dropped) {
+                // Its requirers are checked again in the batch that dropped it.
+                forget_requires(finished.id);
+                if (state_->published.erase(finished.id) > 0) {
+                    fired.push_back(finished.id);
+                }
+                continue;
+            }
             State::Record& record = state_->published[finished.id];
             record.name = std::move(finished.name);
+            // A batch can check a tree older than the newest one.
+            const NodeSnap* node =
+                state_->latest_world != nullptr ? state_->latest_world->find(finished.id) : nullptr;
+            if (node != nullptr) {
+                record.name = shown_name(*node);
+            }
             record.source = std::move(finished.source);
             record.diagnostics = std::move(finished.diagnostics);
+            record.reached = std::move(finished.reached);
+            ++state_->checks[finished.id];
             replace_requires(finished.id, finished.requires);
             fired.push_back(finished.id);
         }
-        if (state_->scope == AnalysisScope::Open && !fired.empty()) {
-            // A required module is on the watched script's path. Check it too,
-            // and what it requires, as each result arrives.
-            for (InstanceId id : fired) {
-                const auto found = state_->requires_of.find(id);
-                if (found == state_->requires_of.end()) {
-                    continue;
-                }
-                for (InstanceId target : found->second) {
-                    if (state_->published.count(target) == 0 && state_->pending.count(target) == 0 &&
-                        state_->tokens.count(target) == 0) {
-                        state_->to_schedule.insert(target);
-                    }
-                }
-            }
-            // A dropped require can leave a module nobody watches.
-            const std::vector<InstanceId> dropped = drop_inactive_locked();
-            fired.insert(fired.end(), dropped.begin(), dropped.end());
-        }
     }
     fire(fired);
+}
+
+unsigned ScriptAnalysis::threads() const { return threads_; }
+
+std::uint64_t ScriptAnalysis::checks(InstanceId script) const {
+    std::lock_guard<std::mutex> lock(state_->mu);
+    const auto found = state_->checks.find(script);
+    return found == state_->checks.end() ? 0 : found->second;
+}
+
+std::vector<InstanceId> ScriptAnalysis::reached(InstanceId script) const {
+    std::lock_guard<std::mutex> lock(state_->mu);
+    const auto found = state_->published.find(script);
+    return found == state_->published.end() ? std::vector<InstanceId>{} : found->second.reached;
 }
 
 void ScriptAnalysis::print_report(std::ostream& out) const {
@@ -3185,33 +3640,48 @@ void ScriptAnalysis::print_report(std::ostream& out) const {
 }
 
 bool ScriptAnalysis::busy() const {
-    if (state_->world_stale.load(std::memory_order_relaxed)) {
-        return true;
-    }
     std::lock_guard<std::mutex> lock(state_->mu);
-    return !state_->pending.empty() || state_->inflight > 0 || !state_->to_schedule.empty();
+    // While the simulation runs, queued work waits for Stop. Only a batch
+    // Play cancelled can still be finishing.
+    if (state_->playing.load(std::memory_order_relaxed)) {
+        return !state_->in_batch.empty() || state_->tree_in_batch;
+    }
+    return state_->world_stale.load(std::memory_order_relaxed) || !state_->pending.empty() ||
+           !state_->in_batch.empty() || state_->tree_pending || state_->tree_in_batch;
 }
 
 bool ScriptAnalysis::idle() const {
-    if (state_->world_stale.load(std::memory_order_relaxed)) {
+    if (busy()) {
         return false;
     }
     std::lock_guard<std::mutex> lock(state_->mu);
-    return state_->pending.empty() && state_->inflight == 0 && state_->results.empty() &&
-           state_->to_schedule.empty();
+    return state_->results.empty();
 }
 
 bool ScriptAnalysis::settled(InstanceId script) const {
-    if (state_->world_stale.load(std::memory_order_relaxed) && !game_.simulation_running()) {
-        return false;
-    }
     std::lock_guard<std::mutex> lock(state_->mu);
-    if (state_->published.count(script) == 0 || state_->pending.count(script) != 0 ||
-        state_->to_schedule.count(script) != 0 || state_->running == script) {
+    const bool playing = state_->playing.load(std::memory_order_relaxed);
+    // A tree change not yet diffed, or being diffed, may check it again. While
+    // the simulation runs, nothing queued is checked before Stop.
+    if (!playing && (state_->world_stale.load(std::memory_order_relaxed) || state_->tree_pending ||
+                     state_->pending.count(script) != 0)) {
         return false;
     }
-    return std::none_of(state_->results.begin(), state_->results.end(),
-                        [script](const Finished& finished) { return finished.id == script; });
+    if (state_->tree_in_batch || state_->in_batch.count(script) != 0 ||
+        std::any_of(state_->results.begin(), state_->results.end(),
+                    [script](const Finished& finished) { return finished.id == script; })) {
+        return false;
+    }
+    if (state_->published.count(script) != 0 || playing) {
+        return true;
+    }
+    // A script outside the place is never checked: settled, with nothing to say.
+    const WorldSnap* world = state_->latest_world.get();
+    if (world == nullptr) {
+        return false;
+    }
+    const NodeSnap* node = world->find(script);
+    return node == nullptr || !node->lua;
 }
 
 void ScriptAnalysis::fire(const std::vector<InstanceId>& ids) {

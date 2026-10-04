@@ -134,6 +134,15 @@
     --ide-search-path-color: var(--monokai-subtle);
     --ide-search-badge-color: var(--monokai-line);
     --ide-search-badge-text-color: var(--monokai-foreground);
+    --ide-problems-error-color: var(--monokai-pink);
+    --ide-problems-warning-color: var(--monokai-orange);
+    --ide-problems-info-color: var(--monokai-cyan);
+    --ide-problems-error-badge-color: #c21f57;
+    --ide-problems-warning-badge-color: #c97615;
+    --ide-problems-badge-text-color: #ffffff;
+    --ide-problems-warning-badge-text-color: #111111;
+    --ide-problems-detail-color: var(--ide-search-path-color);
+    --ide-problems-note-color: var(--ide-search-status-color);
 
     /* Console */
     --ide-console-command-color: var(--monokai-cyan);

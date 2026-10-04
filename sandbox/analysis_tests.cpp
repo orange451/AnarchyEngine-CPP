@@ -18,9 +18,12 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <random>
 #include <sstream>
 #include <string>
@@ -56,6 +59,33 @@ bool has_code(const std::vector<engine_core::Diagnostic>& diagnostics, const cha
         }
     }
     return false;
+}
+
+// About `lines` lines of ordinary code: loops, tables, string formatting, a
+// FindFirstChild, and in each function one type error and one unknown global.
+// `salt` keeps function names apart when several such scripts share a place.
+std::string long_source(int lines, bool strict, int salt) {
+    std::ostringstream out;
+    if (strict) {
+        out << "--!strict\n";
+    }
+    for (int line = 0, f = 0; line < lines; line += 14, ++f) {
+        out << "local function fn" << f << "_" << salt << "(a: number, b: string)\n"
+            << "    local t = { x = a, y = b, list = {} }\n"
+            << "    for i = 1, a do\n"
+            << "        table.insert(t.list, i * 2)\n"
+            << "        if i % 3 == 0 then t.x += i else t.x -= 1 end\n"
+            << "    end\n"
+            << "    local name = string.format(\"%s-%d\", b, #t.list)\n"
+            << "    local part = workspace:FindFirstChild(name)\n"
+            << "    if part then print(part.Name) end\n"
+            << "    local bad: number = \"oops\"\n"
+            << "    undefinedThing" << f << "()\n"
+            << "    return t.x + #name\n"
+            << "end\n"
+            << "print(fn" << f << "_" << salt << "(" << f << ", \"k\"))\n";
+    }
+    return out.str();
 }
 
 }  // namespace
@@ -216,25 +246,29 @@ TEST_CASE("A7 a type error does not block the script", "[A7]") {
     REQUIRE(rig.game.name(box.id()) == "ran");
 }
 
-TEST_CASE("A8 stop restores authored diagnostics", "[A8]") {
+TEST_CASE("A8 an edit during play is not checked, and Stop keeps the authored diagnostics", "[A8][play]") {
     ScriptRig rig;
     engine_core::ScriptAnalysis analysis(rig.game);
     const char* authored = "--!strict\nlocal value: number = \"nope\"\n";
     engine_core::Script& script = add_script(rig.game, "Authored", authored);
     settle(analysis);
     REQUIRE(has_code(analysis.diagnostics(script.id()), "Type"));
+    const std::uint64_t checks = analysis.checks(script.id());
 
     rig.game.start_simulation();
     script.set_source("local x =\n");
     settle(analysis);
     INFO(dump(analysis.diagnostics(script.id())));
-    REQUIRE(has_code(analysis.diagnostics(script.id()), "Syntax"));
+    REQUIRE(analysis.checks(script.id()) == checks);
+    REQUIRE(analysis.analyzed_source(script.id()) == std::optional<std::string>(authored));
+    REQUIRE_FALSE(has_code(analysis.diagnostics(script.id()), "Syntax"));
 
     rig.game.stop_simulation();
     REQUIRE(script.source() == authored);
     settle(analysis);
     const std::vector<engine_core::Diagnostic> restored = analysis.diagnostics(script.id());
     INFO(dump(restored));
+    REQUIRE(analysis.analyzed_source(script.id()) == std::optional<std::string>(authored));
     REQUIRE(has_code(restored, "Type"));
     REQUIRE_FALSE(has_code(restored, "Syntax"));
 }
@@ -247,6 +281,10 @@ TEST_CASE("A9 pump is the only publisher", "[A9]") {
     REQUIRE(analysis.diagnostics(script.id()).empty());
     REQUIRE(analysis.analyzed_source(script.id()) == std::string("return 1\n"));
     script.set_source("local x =\n");
+    // This pump() captures the tree the check reads. Nothing is finished yet,
+    // so it publishes nothing.
+    analysis.pump();
+    REQUIRE(analysis.analyzed_source(script.id()) == std::string("return 1\n"));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
     while (analysis.busy()) {
         if (std::chrono::steady_clock::now() > deadline) {
@@ -479,110 +517,7 @@ engine_core::ModuleScript& add_module(engine_core::DataModel& game, const char* 
     return module;
 }
 
-bool analyzed(const engine_core::ScriptAnalysis& analysis, engine_core::InstanceId id) {
-    return analysis.analyzed_source(id).has_value();
-}
-
 }  // namespace
-
-TEST_CASE("A14 open scope checks watched scripts and the modules they require", "[A14]") {
-    ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.game);
-    analysis.set_scope(engine_core::AnalysisScope::Open);
-    const char* kBad = "--!strict\nlocal x: number = \"a\"\nreturn x\n";
-    engine_core::ModuleScript& deep = add_module(rig.game, "Deep", kBad);
-    engine_core::ModuleScript& mid = add_module(rig.game, "Mid", "return require(script.Parent.Deep)\n");
-    engine_core::ModuleScript& other = add_module(rig.game, "Other", kBad);
-    engine_core::Script& main = add_script(rig.game, "Main", "local value = require(script.Parent.Mid)\nreturn value\n");
-    engine_core::Script& closed = add_script(rig.game, "Closed", kBad);
-    settle(analysis);
-    REQUIRE_FALSE(analyzed(analysis, main.id()));
-    REQUIRE_FALSE(analyzed(analysis, closed.id()));
-    REQUIRE_FALSE(analyzed(analysis, deep.id()));
-
-    SECTION("a watched script pulls in its requires, recursively, and nothing else") {
-        analysis.watch(main.id());
-        settle(analysis);
-        REQUIRE(analyzed(analysis, main.id()));
-        REQUIRE(analyzed(analysis, mid.id()));
-        REQUIRE(analyzed(analysis, deep.id()));
-        REQUIRE(has_code(analysis.diagnostics(deep.id()), "Type"));
-        REQUIRE_FALSE(analyzed(analysis, other.id()));
-        REQUIRE_FALSE(analyzed(analysis, closed.id()));
-
-        // An edit to a closed script is not checked. One on the watched path is.
-        closed.set_source("return 2\n");
-        deep.set_source("return 3\n");
-        settle(analysis);
-        REQUIRE_FALSE(analyzed(analysis, closed.id()));
-        REQUIRE(analysis.analyzed_source(deep.id()) == std::string("return 3\n"));
-        REQUIRE(analysis.diagnostics(deep.id()).empty());
-
-        // Dropping the require drops the modules it brought in.
-        main.set_source("return 1\n");
-        settle(analysis);
-        REQUIRE(analyzed(analysis, main.id()));
-        REQUIRE_FALSE(analyzed(analysis, mid.id()));
-        REQUIRE_FALSE(analyzed(analysis, deep.id()));
-
-        analysis.unwatch(main.id());
-        settle(analysis);
-        REQUIRE_FALSE(analyzed(analysis, main.id()));
-    }
-
-    SECTION("a module shared by two watched scripts stays until both close") {
-        engine_core::Script& second =
-            add_script(rig.game, "Second", "local value = require(script.Parent.Deep)\nreturn value\n");
-        analysis.watch(main.id());
-        analysis.watch(second.id());
-        settle(analysis);
-        REQUIRE(analyzed(analysis, deep.id()));
-        analysis.unwatch(main.id());
-        settle(analysis);
-        REQUIRE(analyzed(analysis, deep.id()));
-        REQUIRE_FALSE(analyzed(analysis, mid.id()));
-        analysis.unwatch(second.id());
-        settle(analysis);
-        REQUIRE_FALSE(analyzed(analysis, deep.id()));
-    }
-
-    SECTION("a watched script follows the tree") {
-        engine_core::Script& hop = add_script(rig.game, "Hop",
-                                               "local tri = workspace:FindFirstChild(\"Tri0\")\n"
-                                               "assert(tri)\n"
-                                               "local home = tri.Transform.Position\n"
-                                               "return home\n");
-        analysis.watch(hop.id());
-        settle(analysis);
-        REQUIRE_FALSE(analysis.diagnostics(hop.id()).empty());
-        engine_core::GameObject& part = rig.game.create<engine_core::GameObject>();
-        rig.game.set_name(part.id(), "Tri0");
-        rig.game.set_parent(part.id(), workspace_of(rig.game));
-        settle(analysis);
-        INFO(dump(analysis.diagnostics(hop.id())));
-        REQUIRE(analysis.diagnostics(hop.id()).empty());
-        REQUIRE_FALSE(analyzed(analysis, closed.id()));
-    }
-}
-
-TEST_CASE("A15 switching to open scope drops what is not watched", "[A15]") {
-    ScriptRig rig;
-    engine_core::ScriptAnalysis analysis(rig.game);
-    engine_core::Script& kept = add_script(rig.game, "Kept", "return 1\n");
-    engine_core::Script& dropped = add_script(rig.game, "Dropped", "return 2\n");
-    settle(analysis);
-    REQUIRE(analyzed(analysis, kept.id()));
-    REQUIRE(analyzed(analysis, dropped.id()));
-    analysis.watch(kept.id());
-    analysis.set_scope(engine_core::AnalysisScope::Open);
-    settle(analysis);
-    REQUIRE(analyzed(analysis, kept.id()));
-    REQUIRE_FALSE(analyzed(analysis, dropped.id()));
-    // A watched script that is destroyed does not leave analysis busy.
-    rig.game.destroy(kept.id());
-    settle(analysis);
-    REQUIRE(analysis.idle());
-}
 
 TEST_CASE("A16 a require path that reaches a ModuleScript takes its type", "[A16]") {
     ScriptRig rig;
@@ -810,7 +745,6 @@ TEST_CASE("A20 a dotted name is the child it reaches, with its type", "[A20]") {
 TEST_CASE("A21 FindFirstChild chains to a module in the place with no nil warning", "[A21]") {
     ScriptRig rig;
     engine_core::ScriptAnalysis analysis(rig.game);
-    analysis.set_scope(engine_core::AnalysisScope::Open);
     engine_core::Folder& modules = rig.game.create<engine_core::Folder>();
     rig.game.set_name(modules.id(), "Modules");
     rig.game.set_parent(modules.id(), workspace_of(rig.game));
@@ -829,7 +763,6 @@ TEST_CASE("A21 FindFirstChild chains to a module in the place with no nil warnin
         "\n"
         "print(\"Currency:\", currency, \"Setting:\", Config.Settings.DeleteEveryFileOnTheComputer)\n";
     engine_core::Script& script = add_script(rig.game, "Test", source);
-    analysis.watch(script.id());
     settle(analysis);
     INFO(dump(analysis.diagnostics(script.id())));
     REQUIRE(analysis.diagnostics(script.id()).empty());
@@ -1280,4 +1213,748 @@ history.OnUndo:Connect(function(stepName) print(stepName) end)
     const std::vector<engine_core::Diagnostic> diagnostics = analysis.diagnostics(script.id());
     INFO(dump(diagnostics));
     REQUIRE(diagnostics.empty());
+}
+
+TEST_CASE("A34 an editor request is answered while a long check runs", "[A34]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& small = add_script(rig.game, "Small", "local x = 1\n");
+    settle(analysis);
+    add_script(rig.game, "Huge", long_source(60000, false, 0).c_str());
+    // Pumping clears world_stale and moves Huge from pending into the running
+    // check, so busy() below reflects real checker work, not the stale flag.
+    for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+         std::chrono::steady_clock::now() < deadline;) {
+        analysis.pump();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE(analysis.busy());
+    const engine_core::LuauFacts asked =
+        analysis.luau_facts(completion_nodes(rig.game, small.id(), small.source()), small.id(), small.source(),
+                            small.source().size(), {}, std::chrono::seconds(20));
+    REQUIRE(asked.ran);
+    // Answered before Huge's check finished, not after it.
+    REQUIRE(analysis.busy());
+    settle(analysis);
+}
+
+namespace {
+
+// Ten modules, every other one with a strict-mode error, and twenty scripts that
+// require them and each have a type error and an unknown global. Returns the
+// modules' ids, then the scripts'.
+std::vector<engine_core::InstanceId> build_place(engine_core::DataModel& game) {
+    std::vector<engine_core::InstanceId> ids;
+    for (int i = 0; i < 10; ++i) {
+        const std::string name = "Mod" + std::to_string(i);
+        const char* source = i % 2 == 0 ? "local M = {}\n"
+                                          "function M.add(a: number, b: number): number\n"
+                                          "    return a + b\n"
+                                          "end\n"
+                                          "return M\n"
+                                        : "--!strict\n"
+                                          "local M = {}\n"
+                                          "local wrong: number = \"x\"\n"
+                                          "function M.add(a: number, b: number): number\n"
+                                          "    return a + b + wrong\n"
+                                          "end\n"
+                                          "return M\n";
+        ids.push_back(add_module(game, name.c_str(), source).id());
+    }
+    for (int j = 0; j < 20; ++j) {
+        const std::string name = "User" + std::to_string(j);
+        const std::string source = "local M = require(workspace.Mod" + std::to_string(j % 10) +
+                                   ")\nprint(M.add(1, \"two\"))\nprint(undefined" + std::to_string(j) + ")\n";
+        ids.push_back(add_script(game, name.c_str(), source.c_str()).id());
+    }
+    return ids;
+}
+
+std::vector<std::string> place_report(unsigned threads) {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game, threads);
+    REQUIRE(analysis.threads() == threads);
+    const std::vector<engine_core::InstanceId> ids = build_place(rig.game);
+    settle(analysis);
+    std::vector<std::string> out;
+    for (engine_core::InstanceId id : ids) {
+        out.push_back(std::string(rig.game.name(id)) + "\n" + dump(analysis.diagnostics(id)));
+    }
+    return out;
+}
+
+bool contains(const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId id) {
+    return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
+
+}  // namespace
+
+TEST_CASE("A35 a script's reached set is the instances its expressions are typed as", "[A35]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Folder& lights = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(lights.id(), "Lights");
+    rig.game.set_parent(lights.id(), workspace_of(rig.game));
+    engine_core::GameObject& lamp = rig.game.create<engine_core::GameObject>();
+    rig.game.set_name(lamp.id(), "Lamp");
+    rig.game.set_parent(lamp.id(), lights.id());
+    engine_core::GameObject& crate = rig.game.create<engine_core::GameObject>();
+    rig.game.set_name(crate.id(), "Crate");
+    rig.game.set_parent(crate.id(), workspace_of(rig.game));
+    // Lamp is reached only through a parameter and FindFirstChild.
+    engine_core::Script& script = add_script(rig.game, "Show",
+                                             "local folder = workspace.Lights\n"
+                                             "local function show(f: typeof(folder))\n"
+                                             "    print(f:FindFirstChild(\"Lamp\"))\n"
+                                             "end\n"
+                                             "show(folder)\n");
+    settle(analysis);
+    const std::vector<engine_core::InstanceId> reached = analysis.reached(script.id());
+    REQUIRE(contains(reached, workspace_of(rig.game)));
+    REQUIRE(contains(reached, lights.id()));
+    REQUIRE(contains(reached, lamp.id()));
+    REQUIRE_FALSE(contains(reached, crate.id()));
+    REQUIRE(analysis.checks(script.id()) >= 1);
+}
+
+TEST_CASE("A36 checking on several threads finds what checking on one does", "[A36]") {
+    const std::vector<std::string> serial = place_report(1);
+    const std::vector<std::string> parallel = place_report(4);
+    REQUIRE(serial == parallel);
+    // The first script found its type error, so the comparison is about something.
+    INFO(serial[10]);
+    REQUIRE(serial[10].find("Type") != std::string::npos);
+}
+
+TEST_CASE("A37 turning analysis off or destroying it during a batch stops cleanly", "[A37]") {
+    ScriptRig rig;
+    SECTION("off during a batch, then on again") {
+        engine_core::ScriptAnalysis analysis(rig.game);
+        const std::vector<engine_core::InstanceId> ids = build_place(rig.game);
+        add_script(rig.game, "Huge", long_source(20000, false, 0).c_str());
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        analysis.set_enabled(false);
+        settle(analysis);
+        REQUIRE(analysis.diagnostics().empty());
+        analysis.set_enabled(true);
+        settle(analysis);
+        REQUIRE_FALSE(analysis.diagnostics(ids[10]).empty());
+    }
+    SECTION("destroyed during a batch") {
+        auto analysis = std::make_unique<engine_core::ScriptAnalysis>(rig.game);
+        build_place(rig.game);
+        add_script(rig.game, "Huge", long_source(20000, false, 0).c_str());
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        const auto started = std::chrono::steady_clock::now();
+        analysis.reset();
+        REQUIRE(std::chrono::steady_clock::now() - started < std::chrono::seconds(2));
+    }
+}
+
+TEST_CASE("A38 a require cycle and a module with a syntax error still finish", "[A38]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game, 4);
+    engine_core::ModuleScript& a = add_module(rig.game, "A", "local B = require(script.Parent.B)\nreturn {}\n");
+    engine_core::ModuleScript& b = add_module(rig.game, "B", "local A = require(script.Parent.A)\nreturn {}\n");
+    engine_core::ModuleScript& broken = add_module(rig.game, "Broken", "return {\n");
+    engine_core::Script& user =
+        add_script(rig.game, "User", "local Broken = require(workspace.Broken)\nprint(Broken, undefinedName)\n");
+    settle(analysis);
+    REQUIRE(analysis.analyzed_source(a.id()).has_value());
+    REQUIRE(analysis.analyzed_source(b.id()).has_value());
+    INFO(dump(analysis.diagnostics(broken.id())));
+    REQUIRE(has_code(analysis.diagnostics(broken.id()), "Syntax"));
+    INFO(dump(analysis.diagnostics(user.id())));
+    REQUIRE(has_code(analysis.diagnostics(user.id()), "Lint/UnknownGlobal"));
+}
+
+TEST_CASE("A39 a script edited while a batch checks it ends with its newest source", "[A39]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game, 4);
+    add_script(rig.game, "Huge", long_source(20000, false, 0).c_str());
+    engine_core::Script& script = add_script(rig.game, "Edited", "print(first)\n");
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    script.set_source("print(second)\n");
+    settle(analysis);
+    REQUIRE(analysis.analyzed_source(script.id()) == std::optional<std::string>("print(second)\n"));
+    const std::string report = dump(analysis.diagnostics(script.id()));
+    INFO(report);
+    // Luau's message ends "consider assigning to it first", so look for the quoted name.
+    REQUIRE(report.find("'second'") != std::string::npos);
+    REQUIRE(report.find("'first'") == std::string::npos);
+}
+
+TEST_CASE("A40 a script destroyed before a batch reaches it as a dependent is never published again", "[A40]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game, 4);
+    engine_core::ModuleScript& module = add_module(rig.game, "Shared", "return { value = 1 }\n");
+    const engine_core::InstanceId user =
+        add_script(rig.game, "User", "local Shared = require(workspace.Shared)\nprint(Shared.value)\n").id();
+    settle(analysis);
+    REQUIRE(analysis.analyzed_source(user).has_value());
+    // The pump() after the edit captures a tree that still holds User.
+    // Destroying User takes no capture of its own, so the batch the edit starts
+    // finds User in that tree as a dependent of Shared after User is gone.
+    module.set_source("return { value = 2 }\n");
+    analysis.pump();
+    rig.game.destroy(user);
+    REQUIRE_FALSE(analysis.analyzed_source(user).has_value());
+    // No pump yet: pump() would capture a new tree before the batch starts.
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    settle(analysis);
+    REQUIRE_FALSE(analysis.analyzed_source(user).has_value());
+    REQUIRE(analysis.diagnostics(user).empty());
+    REQUIRE(analysis.analyzed_source(module.id()) == std::optional<std::string>("return { value = 2 }\n"));
+}
+
+TEST_CASE("A41 a module's instance types still match after a rename it does not reach", "[A41]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::GameObject& door = rig.game.create<engine_core::GameObject>();
+    rig.game.set_name(door.id(), "Door");
+    rig.game.set_parent(door.id(), workspace_of(rig.game));
+    engine_core::Folder& props = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(props.id(), "Props");
+    rig.game.set_parent(props.id(), workspace_of(rig.game));
+    engine_core::GameObject& crate = rig.game.create<engine_core::GameObject>();
+    rig.game.set_name(crate.id(), "Crate");
+    rig.game.set_parent(crate.id(), props.id());
+    engine_core::ModuleScript& doors =
+        add_module(rig.game, "Doors", "--!strict\nlocal Doors = {}\nDoors.main = workspace.Door\nreturn Doors\n");
+    engine_core::Script& user = add_script(rig.game, "User",
+                                           "--!strict\n"
+                                           "local Doors = require(workspace.Doors)\n"
+                                           "local door: typeof(workspace.Door) = Doors.main\n"
+                                           "print(door)\n");
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(user.id())));
+    REQUIRE(analysis.diagnostics(user.id()).empty());
+    const std::uint64_t doors_checks = analysis.checks(doors.id());
+
+    // Inside Props, which neither script reached: Doors keeps its cached types,
+    // and User is checked again against them.
+    rig.game.set_name(crate.id(), "Box");
+    user.set_source(user.source() + "\n");
+    settle(analysis);
+    REQUIRE(analysis.checks(doors.id()) == doors_checks);
+    INFO(dump(analysis.diagnostics(user.id())));
+    REQUIRE(analysis.diagnostics(user.id()).empty());
+}
+
+TEST_CASE("A42 a change rechecks only the scripts it can affect", "[A42]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    const engine_core::InstanceId workspace = workspace_of(rig.game);
+    const auto folder = [&rig](const char* name, engine_core::InstanceId parent) -> engine_core::Folder& {
+        engine_core::Folder& made = rig.game.create<engine_core::Folder>();
+        rig.game.set_name(made.id(), name);
+        rig.game.set_parent(made.id(), parent);
+        return made;
+    };
+    const auto part = [&rig](const char* name, engine_core::InstanceId parent) -> engine_core::GameObject& {
+        engine_core::GameObject& made = rig.game.create<engine_core::GameObject>();
+        rig.game.set_name(made.id(), name);
+        rig.game.set_parent(made.id(), parent);
+        return made;
+    };
+    engine_core::Folder& props = folder("Props", workspace);
+    engine_core::GameObject& crate = part("Crate", props.id());
+    engine_core::Folder& lights = folder("Lights", workspace);
+    engine_core::GameObject& lamp = part("Lamp", lights.id());
+    engine_core::Folder& extra = folder("Extra", workspace);
+    engine_core::ModuleScript& util = add_module(rig.game, "Util",
+                                                 "local Util = {}\n"
+                                                 "function Util.add(a: number, b: number): number\n"
+                                                 "    return a + b\n"
+                                                 "end\n"
+                                                 "return Util\n");
+    engine_core::Script& uses_util =
+        add_script(rig.game, "UsesUtil", "--!strict\nlocal Util = require(workspace.Util)\nprint(Util.add(1, 2))\n");
+    engine_core::Script& uses_props =
+        add_script(rig.game, "UsesProps", "--!strict\nlocal crate = workspace.Props.Crate\nprint(crate)\n");
+    engine_core::Script& uses_lamp = add_script(rig.game, "UsesLamp",
+                                                "--!strict\n"
+                                                "local lights = workspace.Lights\n"
+                                                "local function show(folder: typeof(lights))\n"
+                                                "    print(folder.Lamp)\n"
+                                                "end\n"
+                                                "show(lights)\n");
+    engine_core::Script& plain = add_script(rig.game, "Plain", "print(\"hi\")\n");
+    settle(analysis);
+    const std::vector<engine_core::InstanceId> watched{util.id(), uses_util.id(), uses_props.id(), uses_lamp.id(),
+                                                       plain.id()};
+    for (engine_core::InstanceId id : watched) {
+        INFO(rig.game.name(id) << "\n" << dump(analysis.diagnostics(id)));
+        REQUIRE(analysis.diagnostics(id).empty());
+    }
+    const auto counts = [&] {
+        std::vector<std::uint64_t> out;
+        for (engine_core::InstanceId id : watched) {
+            out.push_back(analysis.checks(id));
+        }
+        return out;
+    };
+    // Which of util, uses_util, uses_props, uses_lamp, plain were checked again since `before`.
+    const auto rechecked = [&](const std::vector<std::uint64_t>& before) {
+        const std::vector<std::uint64_t> now = counts();
+        std::vector<bool> out;
+        for (std::size_t i = 0; i < now.size(); ++i) {
+            out.push_back(now[i] != before[i]);
+        }
+        return out;
+    };
+    const std::vector<std::uint64_t> before = counts();
+
+    SECTION("editing a module rechecks what requires it, and nothing else") {
+        // Luau does not flag an extra argument, so the edit changes a parameter's type.
+        util.set_source("local Util = {}\nfunction Util.add(a: number, b: string): number\n    return a\nend\nreturn Util\n");
+        settle(analysis);
+        REQUIRE(rechecked(before) == std::vector<bool>{true, true, false, false, false});
+        REQUIRE_FALSE(analysis.diagnostics(uses_util.id()).empty());
+    }
+    SECTION("a rename inside a folder rechecks only the scripts that reached the folder") {
+        rig.game.set_name(crate.id(), "Box");
+        settle(analysis);
+        REQUIRE(rechecked(before) == std::vector<bool>{false, false, true, false, false});
+        REQUIRE_FALSE(analysis.diagnostics(uses_props.id()).empty());
+    }
+    SECTION("a child reached through a parameter is followed both ways") {
+        rig.game.set_name(lamp.id(), "Bulb");
+        settle(analysis);
+        REQUIRE(rechecked(before) == std::vector<bool>{false, false, false, true, false});
+        REQUIRE_FALSE(analysis.diagnostics(uses_lamp.id()).empty());
+        rig.game.set_name(lamp.id(), "Lamp");
+        settle(analysis);
+        REQUIRE(analysis.diagnostics(uses_lamp.id()).empty());
+    }
+    SECTION("a property change rechecks nothing") {
+        crate.set_position(engine_core::Vec3{1.f, 2.f, 3.f});
+        settle(analysis);
+        REQUIRE(rechecked(before) == std::vector<bool>{false, false, false, false, false});
+    }
+    SECTION("a script added where nothing looked checks only itself") {
+        engine_core::Script& added = add_script(rig.game, extra.id(), "Added", "print(1)\n");
+        settle(analysis);
+        REQUIRE(rechecked(before) == std::vector<bool>{false, false, false, false, false});
+        REQUIRE(analysis.checks(added.id()) >= 1);
+    }
+    SECTION("destroying a module rechecks what required it") {
+        rig.game.destroy(util.id());
+        settle(analysis);
+        REQUIRE(rechecked(before)[1]);
+        REQUIRE_FALSE(rechecked(before)[4]);
+        REQUIRE_FALSE(analysis.diagnostics(uses_util.id()).empty());
+        REQUIRE_FALSE(analysis.analyzed_source(util.id()).has_value());
+    }
+    SECTION("destroying a folder of scripts drops them and rechecks what required them") {
+        engine_core::Folder& group = folder("Group", extra.id());
+        engine_core::ModuleScript& inner = add_module(rig.game, "Inner", "return { value = 1 }\n");
+        rig.game.set_parent(inner.id(), group.id());
+        engine_core::Script& uses_inner = add_script(rig.game, extra.id(), "UsesInner",
+                                                     "--!strict\nlocal Inner = require(script.Parent.Group.Inner)\n"
+                                                     "print(Inner.value)\n");
+        settle(analysis);
+        REQUIRE(analysis.diagnostics(uses_inner.id()).empty());
+        const std::vector<std::uint64_t> grouped = counts();
+        rig.game.destroy(group.id());
+        settle(analysis);
+        REQUIRE_FALSE(analysis.analyzed_source(inner.id()).has_value());
+        REQUIRE_FALSE(analysis.diagnostics(uses_inner.id()).empty());
+        REQUIRE(rechecked(grouped) == std::vector<bool>{false, false, false, false, false});
+    }
+    SECTION("undoing the destroy of a folder of scripts checks them again") {
+        engine_core::Folder& group = folder("Group", extra.id());
+        engine_core::ModuleScript& inner = add_module(rig.game, "Inner", "return { value = 1 }\n");
+        rig.game.set_parent(inner.id(), group.id());
+        engine_core::Script& uses_inner = add_script(rig.game, extra.id(), "UsesInner",
+                                                     "--!strict\nlocal Inner = require(script.Parent.Group.Inner)\n"
+                                                     "print(Inner.value)\n");
+        settle(analysis);
+        REQUIRE(analysis.diagnostics(uses_inner.id()).empty());
+        begin_step(rig.game, "Delete");
+        rig.game.destroy(group.id());
+        end_step(rig.game);
+        settle(analysis);
+        REQUIRE_FALSE(analysis.analyzed_source(inner.id()).has_value());
+        REQUIRE_FALSE(analysis.diagnostics(uses_inner.id()).empty());
+        const std::vector<std::uint64_t> destroyed = counts();
+        rig.game.history().undo();
+        settle(analysis);
+        REQUIRE(rig.game.parent(inner.id()) == group.id());
+        REQUIRE(analysis.analyzed_source(inner.id()).has_value());
+        INFO(dump(analysis.diagnostics(uses_inner.id())));
+        REQUIRE(analysis.diagnostics(uses_inner.id()).empty());
+        REQUIRE(rechecked(destroyed) == std::vector<bool>{false, false, false, false, false});
+    }
+    SECTION("a reparent rechecks only the scripts that reached either folder") {
+        rig.game.set_parent(crate.id(), lights.id());
+        settle(analysis);
+        REQUIRE(rechecked(before) == std::vector<bool>{false, false, true, true, false});
+        REQUIRE_FALSE(analysis.diagnostics(uses_props.id()).empty());
+    }
+    SECTION("a module leaving the place through its parent is dropped, and what required it rechecked") {
+        rig.game.set_parent(util.id(), engine_core::DataModel::kNoParent);
+        settle(analysis);
+        REQUIRE_FALSE(analysis.analyzed_source(util.id()).has_value());
+        REQUIRE(analysis.diagnostics(util.id()).empty());
+        REQUIRE(rechecked(before)[1]);
+        REQUIRE_FALSE(rechecked(before)[4]);
+        REQUIRE_FALSE(analysis.diagnostics(uses_util.id()).empty());
+        // Back in the place, it is checked again.
+        rig.game.set_parent(util.id(), workspace);
+        settle(analysis);
+        REQUIRE(analysis.analyzed_source(util.id()).has_value());
+        REQUIRE(analysis.diagnostics(uses_util.id()).empty());
+    }
+    SECTION("a module added under a name a script requires rechecks the script") {
+        engine_core::Script& by_name = add_script(rig.game, "ByName",
+                                                  "--!strict\nlocal Missing = require(\"Missing\")\n"
+                                                  "print(Missing.value)\n");
+        settle(analysis);
+        INFO(dump(analysis.diagnostics(by_name.id())));
+        REQUIRE_FALSE(analysis.diagnostics(by_name.id()).empty());
+        const std::uint64_t by_name_checks = analysis.checks(by_name.id());
+        engine_core::ModuleScript& missing = add_module(rig.game, "Missing", "return { value = 1 }\n");
+        rig.game.set_parent(missing.id(), extra.id());
+        settle(analysis);
+        REQUIRE(analysis.checks(by_name.id()) > by_name_checks);
+        INFO(dump(analysis.diagnostics(by_name.id())));
+        REQUIRE(analysis.diagnostics(by_name.id()).empty());
+        // Renamed away, the require fails again.
+        rig.game.set_name(missing.id(), "Gone");
+        settle(analysis);
+        REQUIRE_FALSE(analysis.diagnostics(by_name.id()).empty());
+    }
+    SECTION("undoing a rename rechecks what the rename did") {
+        begin_step(rig.game, "Rename");
+        rig.game.set_name(crate.id(), "Box");
+        end_step(rig.game);
+        settle(analysis);
+        REQUIRE_FALSE(analysis.diagnostics(uses_props.id()).empty());
+        const std::vector<std::uint64_t> renamed = counts();
+        rig.game.history().undo();
+        settle(analysis);
+        REQUIRE(rechecked(renamed) == std::vector<bool>{false, false, true, false, false});
+        REQUIRE(analysis.diagnostics(uses_props.id()).empty());
+    }
+}
+
+namespace {
+
+// Pumps as the studio does each frame, for longer than the debounce and a
+// small check take, so work the place checker would do has time to show.
+void pump_for(engine_core::ScriptAnalysis& analysis, std::chrono::milliseconds span) {
+    const auto until = std::chrono::steady_clock::now() + span;
+    while (std::chrono::steady_clock::now() < until) {
+        analysis.pump();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    analysis.pump();
+}
+
+// The first playtest in the process can add to the class registry, which
+// starts a new checker. One beforehand keeps the registry still in a test.
+void warm_playtest() {
+    ScriptRig warm;
+    warm.game.start_simulation();
+    warm.frames(1);
+    warm.game.stop_simulation();
+}
+
+}  // namespace
+
+TEST_CASE("A43 nothing is checked during a playtest, and Stop leaves the authored results as they were",
+          "[A43][play]") {
+    warm_playtest();
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Folder& holder = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(holder.id(), "Holder");
+    rig.game.set_parent(holder.id(), workspace_of(rig.game));
+    engine_core::GameObject& door = create_part(rig.game);
+    rig.game.set_name(door.id(), "Door");
+    engine_core::ModuleScript& shared = add_module(rig.game, "Shared", "return { value = 1 }\n");
+    engine_core::Script& kept = add_script(rig.game, "Kept",
+                                           "--!strict\nlocal value: number = \"nope\"\n"
+                                           "print(workspace.Holder.Moved, workspace.Door.Name)\n"
+                                           "print(require(workspace.Shared).value)\n");
+    engine_core::Script& doomed = add_script(rig.game, "Doomed", "--!strict\nprint(workspace.Kept.Name)\n");
+    engine_core::Script& moved = add_script(rig.game, holder.id(), "Moved", "--!strict\nprint(script.Parent.Name)\n");
+    settle(analysis);
+    const std::vector<engine_core::InstanceId> authored{shared.id(), kept.id(), doomed.id(), moved.id()};
+    std::vector<std::string> before;
+    std::vector<std::uint64_t> checks;
+    for (engine_core::InstanceId id : authored) {
+        REQUIRE(analysis.analyzed_source(id).has_value());
+        before.push_back(*analysis.analyzed_source(id) + "\n" + dump(analysis.diagnostics(id)));
+        checks.push_back(analysis.checks(id));
+    }
+    REQUIRE(has_code(analysis.diagnostics(kept.id()), "Type"));
+    const std::size_t cached = analysis.cached_modules();
+    const std::uint64_t revision = engine_core::lua_registry_revision();
+
+    rig.game.start_simulation();
+    rig.frames(1);
+    // An authored source edited, a script made at runtime and one an authored
+    // script requires, an authored script destroyed, another moved out, and a
+    // part renamed: none of it is checked while the place plays.
+    kept.set_source("--!strict\nlocal Extra = require(workspace.Extra)\nprint(Extra.value)\n");
+    const engine_core::InstanceId runtime =
+        add_script(rig.game, "Runtime", "--!strict\nprint(workspace.Kept.Name)\n").id();
+    const engine_core::InstanceId extra = add_module(rig.game, "Extra", "return { value = 1 }\n").id();
+    rig.game.destroy(doomed.id());
+    rig.game.set_parent(moved.id(), engine_core::DataModel::kNoParent);
+    rig.game.set_name(door.id(), "Gate");
+    shared.set_source("return { value = \"two\" }\n");
+    pump_for(analysis, std::chrono::milliseconds(500));
+    REQUIRE_FALSE(analysis.busy());
+    REQUIRE(analysis.idle());
+    for (std::size_t at = 0; at < authored.size(); ++at) {
+        INFO(at);
+        REQUIRE(analysis.checks(authored[at]) == checks[at]);
+    }
+    REQUIRE(analysis.checks(runtime) == 0);
+    REQUIRE(analysis.checks(extra) == 0);
+    REQUIRE(analysis.cached_modules() == cached);
+    // Nothing is checked before Stop, so every script is settled: with its last
+    // result from Edit mode, or with none.
+    REQUIRE(analysis.settled(kept.id()));
+    REQUIRE(analysis.settled(runtime));
+    REQUIRE_FALSE(analysis.analyzed_source(runtime).has_value());
+    REQUIRE(*analysis.analyzed_source(kept.id()) + "\n" + dump(analysis.diagnostics(kept.id())) == before[1]);
+
+    rig.game.stop_simulation();
+    settle(analysis);
+
+    REQUIRE(analysis.checks(runtime) == 0);
+    REQUIRE(analysis.checks(extra) == 0);
+    REQUIRE_FALSE(analysis.analyzed_source(runtime).has_value());
+    REQUIRE_FALSE(analysis.analyzed_source(extra).has_value());
+    REQUIRE(analysis.diagnostics(runtime).empty());
+    REQUIRE(engine_core::lua_registry_revision() == revision);
+    REQUIRE(analysis.cached_modules() == cached);
+    for (std::size_t at = 0; at < authored.size(); ++at) {
+        INFO(rig.game.name(authored[at]));
+        REQUIRE(analysis.settled(authored[at]));
+        REQUIRE(analysis.analyzed_source(authored[at]).has_value());
+        REQUIRE(*analysis.analyzed_source(authored[at]) + "\n" + dump(analysis.diagnostics(authored[at])) ==
+                before[at]);
+    }
+}
+
+TEST_CASE("A46 a batch running when play starts is cancelled, and redone after Stop", "[A46][play]") {
+    warm_playtest();
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game, 4);
+    engine_core::Script& small =
+        add_script(rig.game, "Small", "--!strict\nlocal value: number = \"nope\"\n");
+    settle(analysis);
+    const std::string small_before = dump(analysis.diagnostics(small.id()));
+    REQUIRE(has_code(analysis.diagnostics(small.id()), "Type"));
+
+    const std::string huge_source = long_source(20000, false, 0);
+    engine_core::Script& huge = add_script(rig.game, "Huge", huge_source.c_str());
+    small.set_source("--!strict\nlocal other: string = 1\n");
+    analysis.pump();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    REQUIRE(analysis.busy());
+
+    rig.game.start_simulation();
+    // The batch stops without finishing Huge, and nothing starts after it.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (analysis.busy()) {
+        analysis.pump();
+        REQUIRE(std::chrono::steady_clock::now() < deadline);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    pump_for(analysis, std::chrono::milliseconds(300));
+    REQUIRE_FALSE(analysis.busy());
+    REQUIRE(analysis.checks(huge.id()) == 0);
+    REQUIRE_FALSE(analysis.analyzed_source(huge.id()).has_value());
+
+    rig.game.stop_simulation();
+    settle(analysis);
+    REQUIRE(analysis.analyzed_source(huge.id()) == std::optional<std::string>(huge_source));
+    REQUIRE(has_code(analysis.diagnostics(huge.id()), "Type"));
+    REQUIRE(has_code(analysis.diagnostics(huge.id()), "Lint/UnknownGlobal"));
+    REQUIRE(analysis.analyzed_source(small.id()) ==
+            std::optional<std::string>("--!strict\nlocal other: string = 1\n"));
+    REQUIRE(has_code(analysis.diagnostics(small.id()), "Type"));
+    REQUIRE(dump(analysis.diagnostics(small.id())) != small_before);
+}
+
+TEST_CASE("A44 a class registry change rechecks every script in the place once", "[A44]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::ModuleScript& util = add_module(rig.game, "Util",
+                                                 "--!strict\n"
+                                                 "local Util = {}\n"
+                                                 "local wrong: number = \"x\"\n"
+                                                 "function Util.add(a: number, b: number): number\n"
+                                                 "    return a + b + wrong\n"
+                                                 "end\n"
+                                                 "return Util\n");
+    engine_core::Script& user = add_script(rig.game, "User",
+                                           "--!strict\nlocal Util = require(workspace.Util)\n"
+                                           "print(Util.add(1, \"two\"))\nprint(undefinedThing)\n");
+    engine_core::Script& plain = add_script(rig.game, "Plain", "print(\"hi\")\n");
+    engine_core::Script& doomed = add_script(rig.game, "Doomed", "local x =\n");
+    settle(analysis);
+    const std::vector<engine_core::InstanceId> kept{util.id(), user.id(), plain.id()};
+    std::vector<std::string> before;
+    std::vector<std::uint64_t> checks;
+    for (engine_core::InstanceId id : kept) {
+        before.push_back(dump(analysis.diagnostics(id)));
+        checks.push_back(analysis.checks(id));
+    }
+    REQUIRE(has_code(analysis.diagnostics(util.id()), "Type"));
+    REQUIRE(has_code(analysis.diagnostics(user.id()), "Type"));
+    REQUIRE(has_code(analysis.diagnostics(user.id()), "Lint/UnknownGlobal"));
+    REQUIRE(analysis.diagnostics(plain.id()).empty());
+    const engine_core::InstanceId doomed_id = doomed.id();
+    const std::uint64_t doomed_checks = analysis.checks(doomed_id);
+    REQUIRE(has_code(analysis.diagnostics(doomed_id), "Syntax"));
+
+    // The editor checker reads the registry once, when it starts. An answer
+    // from it means it has, so nothing reads the registry while it changes.
+    const engine_core::LuauFacts asked = analysis.luau_facts(completion_nodes(rig.game, plain.id(), plain.source()),
+                                                             plain.id(), plain.source(), 0, {}, std::chrono::seconds(20));
+    REQUIRE(asked.ran);
+
+    // Destroyed with no pump, so the last tree the checker diffed still holds it.
+    rig.game.destroy(doomed_id);
+    const std::uint64_t revision = engine_core::lua_registry_revision();
+    engine_core::register_lua_class("RegistryProbe", "DataModel", nullptr, 0);
+    REQUIRE(engine_core::lua_registry_revision() != revision);
+    // A registry change queues nothing by itself. The next check of any script
+    // rebuilds the checker, and the whole place is checked against it.
+    plain.set_source("print(\"hi\")\n\n");
+    settle(analysis);
+
+    for (std::size_t at = 0; at < kept.size(); ++at) {
+        INFO(rig.game.name(kept[at]));
+        REQUIRE(analysis.checks(kept[at]) > checks[at]);
+        REQUIRE(dump(analysis.diagnostics(kept[at])) == before[at]);
+    }
+    REQUIRE(analysis.checks(doomed_id) == doomed_checks);
+    REQUIRE_FALSE(analysis.analyzed_source(doomed_id).has_value());
+    REQUIRE(analysis.diagnostics(doomed_id).empty());
+    REQUIRE(analysis.cached_modules() == 3);
+}
+
+TEST_CASE("A45 a renamed script shows its new name in the report", "[A45]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& broken = add_script(rig.game, "Before", "local x =\n");
+    settle(analysis);
+    std::ostringstream report;
+    analysis.print_report(report);
+    REQUIRE(report.str().rfind("Before | Error | Syntax", 0) == 0);
+
+    rig.game.set_name(broken.id(), "After");
+    settle(analysis);
+    std::ostringstream renamed;
+    analysis.print_report(renamed);
+    INFO(renamed.str());
+    REQUIRE(renamed.str().rfind("After | Error | Syntax", 0) == 0);
+}
+
+namespace {
+
+double settle_ms(engine_core::ScriptAnalysis& analysis) {
+    const auto started = std::chrono::steady_clock::now();
+    settle(analysis);
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+}
+
+}  // namespace
+
+// Hidden: run with ./build/sandbox "[.perf]". Each time includes the 75 ms debounce.
+TEST_CASE("A-perf timing of a large script and a large place", "[.perf]") {
+    for (bool strict : {false, true}) {
+        ScriptRig rig;
+        engine_core::ScriptAnalysis analysis(rig.game);
+        const std::string source = long_source(1000, strict, 0);
+        engine_core::Script& script = add_script(rig.game, "Big", source.c_str());
+        const double first = settle_ms(analysis);
+        script.set_source(source + "\n-- edit\n");
+        const double again = settle_ms(analysis);
+        std::printf("1000 lines %s: first %.0f ms, after an edit %.0f ms\n", strict ? "strict" : "nonstrict", first,
+                    again);
+    }
+    for (unsigned threads : {1u, 0u}) {
+        ScriptRig rig;
+        engine_core::ScriptAnalysis analysis(rig.game, threads);
+        std::vector<engine_core::Script*> scripts;
+        for (int i = 0; i < 20; ++i) {
+            const std::string name = "Big" + std::to_string(i);
+            scripts.push_back(&add_script(rig.game, name.c_str(), long_source(1000, false, i).c_str()));
+        }
+        const double place = settle_ms(analysis);
+        scripts[0]->set_source(scripts[0]->source() + "\n-- edit\n");
+        const double edit = settle_ms(analysis);
+        engine_core::Folder& away = rig.game.create<engine_core::Folder>();
+        rig.game.set_parent(away.id(), scripts[0]->id());
+        const std::uint64_t before = analysis.checks(scripts[1]->id());
+        rig.game.set_name(away.id(), "Renamed");
+        const double rename = settle_ms(analysis);
+        std::printf("20 x 1000 lines on %u threads: place %.0f ms, one edit %.0f ms, unrelated rename %.0f ms "
+                    "(script 2 rechecked: %s)\n",
+                    analysis.threads(), place, edit, rename,
+                    analysis.checks(scripts[1]->id()) != before ? "yes" : "no");
+    }
+}
+
+// Hidden: run with ./build/sandbox "[.perf]". The cost of a change in a large
+// place: 16000 plain instances, near the most a place holds, and 50 small
+// scripts. Each time is the change itself, then until analysis settles, which
+// includes the debounce.
+TEST_CASE("A-perf a change in a large place", "[.perf]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    const engine_core::InstanceId workspace = workspace_of(rig.game);
+    std::vector<engine_core::Script*> scripts;
+    for (int i = 0; i < 50; ++i) {
+        const std::string name = "Base" + std::to_string(i);
+        const std::string source = "local found = workspace:FindFirstChild(\"Group" + std::to_string(i) +
+                                   "\")\nprint(found)\n";
+        scripts.push_back(&add_script(rig.game, name.c_str(), source.c_str()));
+    }
+    for (int group = 0; group < 160; ++group) {
+        engine_core::Folder& folder = rig.game.create<engine_core::Folder>();
+        rig.game.set_name(folder.id(), "Group" + std::to_string(group));
+        for (int i = 0; i < 99; ++i) {
+            engine_core::GameObject& part = rig.game.create<engine_core::GameObject>();
+            rig.game.set_name(part.id(), "Part" + std::to_string(i));
+            rig.game.set_parent(part.id(), folder.id());
+        }
+        rig.game.set_parent(folder.id(), workspace);
+    }
+    settle(analysis);
+
+    // A model of 50 scripts, built outside the place and then added at once, as a paste is.
+    auto started = std::chrono::steady_clock::now();
+    engine_core::Folder& model = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(model.id(), "Model");
+    std::vector<engine_core::InstanceId> pasted;
+    for (int i = 0; i < 50; ++i) {
+        const std::string name = "Pasted" + std::to_string(i);
+        pasted.push_back(add_script(rig.game, model.id(), name.c_str(), "local x = script.Parent\nprint(x)\n").id());
+    }
+    rig.game.set_parent(model.id(), workspace);
+    const double add_edit = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    const double add_settle = settle_ms(analysis);
+    for (engine_core::InstanceId id : pasted) {
+        REQUIRE(analysis.analyzed_source(id).has_value());
+    }
+
+    started = std::chrono::steady_clock::now();
+    scripts[0]->set_source(scripts[0]->source() + "\n-- edit\n");
+    const double one_edit = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    const double one_settle = settle_ms(analysis);
+    std::size_t instances = 0;
+    rig.game.for_each_instance([&instances](engine_core::DataModel&) { ++instances; });
+    std::printf("%zu instances, 50 scripts: adding a model of 50 scripts %.2f ms to change, %.0f ms to settle; "
+                "one script edit %.3f ms to change, %.0f ms to settle\n",
+                instances, add_edit, add_settle, one_edit, one_settle);
 }

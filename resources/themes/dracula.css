@@ -131,6 +131,15 @@
     --ide-search-path-color: #b4b7cc;
     --ide-search-badge-color: var(--dracula-background-lighter);
     --ide-search-badge-text-color: var(--dracula-foreground);
+    --ide-problems-error-color: var(--dracula-red);
+    --ide-problems-warning-color: var(--dracula-orange);
+    --ide-problems-info-color: var(--dracula-cyan);
+    --ide-problems-error-badge-color: #b33a3a;
+    --ide-problems-warning-badge-color: #b8791a;
+    --ide-problems-badge-text-color: #ffffff;
+    --ide-problems-warning-badge-text-color: #111111;
+    --ide-problems-detail-color: var(--ide-search-path-color);
+    --ide-problems-note-color: var(--ide-search-status-color);
 
     /* Console */
     --ide-console-command-color: var(--dracula-cyan);

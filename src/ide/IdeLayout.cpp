@@ -34,9 +34,6 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     }
     set_editor_font_choice(preferences_.editor_font());
     set_current_theme(std::move(theme));
-    // Only open scripts, and the modules they require, are checked. Nothing
-    // else in the studio reads diagnostics.
-    runner_.simulation().analysis().set_scope(engine_core::AnalysisScope::Open);
 
     auto file = jadefx::make<jadefx::Menu>("File");
     AddItem(*file, "New", "New.png", jadefx::Key::N, jadefx::Key::ModControl)->setOnAction([this](jadefx::ActionEvent&) {
@@ -265,6 +262,13 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     search_window_ = &keep_closed("Search", "Search.png", [this] { return make_search(); });
     search_window_->open = [this] { open_search(false, scene_); };
     conflicts_window_ = &keep_closed("Conflicts", "Warning.png", [this] { return make_conflicts(); });
+    // Made now, not lazily like Search and Conflicts: so flushFrame can tick
+    // it from the first frame, and the list and the title count from startup
+    // whether or not Problems is ever opened. Still closed until the Window
+    // menu, its checkbox, or a saved layout opens it; window_page then hands
+    // out this same pane, since it has no make to remake it.
+    problems_window_ = &keep(make_problems(), [this] { return beside_console(); });
+    problems_window_->starts_closed = true;
     assets_window_ = &keep_closed("Assets", "AssetFolder.png", [this] { return make_assets(); });
     // In with the console, as a project browser docks under the scene.
     assets_window_->home = [this] { return beside_console(); };
@@ -416,6 +420,15 @@ void IdeLayout::flushFrame() {
         check_disk();
     }
     refresh_modified();
+    // A tab that is not showing, or a closed page kept for reopening, is not
+    // laid out, so Problems would stop counting. Its tick keeps the list and
+    // the title current and leaves the rows until it shows again. It does
+    // nothing a layout this frame already did.
+    if (problems_window_ != nullptr && problems_window_->pane) {
+        if (auto* problems = dynamic_cast<IdeProblems*>(problems_window_->pane.get())) {
+            problems->tick(scene_ != nullptr ? scene_->timeSeconds() : 0);
+        }
+    }
     const std::vector<std::shared_ptr<IdeDock>> pending = std::move(pendingEmpty_);
     pendingEmpty_.clear();
     for (const std::shared_ptr<IdeDock>& dock : pending) {

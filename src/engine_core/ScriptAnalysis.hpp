@@ -22,11 +22,6 @@ class DataModel;
 // This is not the compiler. A type warning still compiles and runs.
 enum class Severity { Error, Warning, Information, Hint };
 
-// Which scripts are analyzed. All: every Script and ModuleScript. Open: the
-// watched scripts and every ModuleScript they require, recursively, because a
-// required module's types are part of the watched script's check.
-enum class AnalysisScope { All, Open };
-
 // Rule names a header `--!nolint` comment can name. Unknown is not a rule.
 void lint_rule_names(std::vector<std::string>& out);
 
@@ -114,7 +109,7 @@ struct LuauSuggestion {
 struct LuauTypeAt;
 
 struct LuauCompletion {
-    // False when the worker did not answer in time, or analysis cannot run.
+    // False when the editor checker did not answer in time, or analysis cannot run.
     bool ran = false;
     // expression, statement, property, type, keyword, string, hot comment, or unknown.
     std::string context;
@@ -169,23 +164,33 @@ struct LuauFacts {
     std::vector<LuauTypeAt> types;
 };
 
-// A Luau answer on its way from the analysis worker. `ready` turns true once,
-// after the worker has written `facts`; read them only then. A request a newer
+// A Luau answer on its way from the editor checker. `ready` turns true once,
+// after the checker has written `facts`; read them only then. A request a newer
 // one in its lane replaced is ready with nothing in it.
 struct LuauAnswer {
     std::atomic<bool> ready{false};
     LuauFacts facts;
 };
 
-// Incremental analysis of every Lua source in one DataModel.
-// Source is copied on the gameplay thread. A background worker parses, lints,
-// and typechecks that copy. pump() is the only publisher. It runs on the
-// gameplay thread, as DataModel::gameplay_thread counts it (the simulation
-// thread, or the thread running a paused edit), or on the UI thread. Never on
+// Incremental analysis of every Lua source in one DataModel, whether or not anything shows it.
+// pump() copies the tree, sources and all, under the DataModel lock, once for
+// every change since its last copy. A coordinator thread takes due
+// scripts in batches and parses, lints, and type-checks them on a pool of
+// threads; a second thread answers Luau requests from editors. pump() is the
+// only publisher. It runs on the gameplay thread, as
+// DataModel::gameplay_thread counts it (the simulation thread, or the thread
+// running a paused edit), or on the UI thread. Never on
 // RenderThread, and never inside lua_resume or Prepare.
+//
+// The place is checked in Edit mode only. While the simulation runs nothing is
+// captured or checked: Play cancels a running batch, and changes queue and wait.
+// Each script keeps its last result from Edit mode. After Stop the next pump()
+// captures the restored tree, and the place checker diffs it against the one
+// it last checked and redoes what Play cancelled.
 class ScriptAnalysis {
 public:
-    explicit ScriptAnalysis(DataModel& game);
+    // `threads` type-check the place at once; 0 means one fewer than the hardware has, and at least one.
+    explicit ScriptAnalysis(DataModel& game, unsigned threads = 0);
     ~ScriptAnalysis();
 
     ScriptAnalysis(const ScriptAnalysis&) = delete;
@@ -194,30 +199,28 @@ public:
     void set_enabled(bool enabled);
     bool enabled() const;
 
-    // All is the default. Switching to Open drops every result outside the
-    // watched scripts and their required modules.
-    void set_scope(AnalysisScope scope);
-    AnalysisScope scope() const;
-    // An editor is showing this script. It is checked against the current tree
-    // on the next pump(), whatever result it had. Counted: each watch needs an unwatch.
-    void watch(InstanceId script);
-    // In Open scope, the last unwatch drops this script's result, and the
-    // result of every module no other watched script still requires.
-    void unwatch(InstanceId script);
-
-    // Source, name, or parent changed. Also used after place restore.
+    // Source, name, or parent changed. Also used after place restore. Cheap:
+    // it queues the script and what requires it, if it is in the place, and
+    // the next pump() captures the tree once for every script queued since.
     void invalidate(InstanceId script);
     void invalidate_all();
     // The tree changed around the scripts: a parent, a name, an order, a
     // destroy. A script's answer to FindFirstChild depends on that even when
     // its own source did not change. Cheap and safe to call often: the next
-    // pump() rechecks every script against one new snapshot of the tree.
+    // pump() takes one new snapshot of the tree, and the scripts whose last
+    // check reached what changed are checked again.
     // Waits while the simulation runs; Stop restores the authored tree.
     void note_world_changed();
-    // The instance is gone. Drops its diagnostics and cancels its job.
+    // DataModel calls these, under its write lock, after simulation_running
+    // changes. Play cancels the running batch. Stop marks the tree changed, so
+    // the next pump() brings analysis up to date with the restored place.
+    void note_play_started();
+    void note_play_stopped();
+    // The instance is gone. Drops its diagnostics; a result a running batch
+    // still finishes for it is never published.
     void remove(InstanceId script);
-    // Modules the checker holds, as of its last job: one per script it has
-    // checked in the tree it last saw.
+    // Modules the place checker holds, as of its last batch: one per script it
+    // has checked in the authored tree it last saw.
     std::size_t cached_modules() const;
 
     std::vector<Diagnostic> diagnostics() const;
@@ -228,21 +231,36 @@ public:
     // Empty when this script has no published result yet.
     std::optional<std::string> analyzed_source(InstanceId script) const;
 
-    // Applies finished jobs and fires diagnostics_changed. Does not run analysis.
+    // Captures the tree when a change waits for it, publishes finished checks,
+    // and fires diagnostics_changed. Does not run analysis.
     void pump();
 
     // One row per diagnostic: name | severity | code | message | line.
     // The printed line is 1-based.
     void print_report(std::ostream& out) const;
 
-    // A snapshot is waiting out the debounce, the worker is inside a job, or a
-    // tree change is waiting for pump().
+    unsigned threads() const;
+    // How many results pump() has published for this script. For tests.
+    std::uint64_t checks(InstanceId script) const;
+    // The instances the script's last published check typed an expression as,
+    // sorted. A tree change at one of them, or among its children, rechecks it.
+    std::vector<InstanceId> reached(InstanceId script) const;
+
+    // A script is queued or waiting out the debounce, the place checker is in
+    // a batch, or a tree change is waiting for pump() or the place checker.
+    // While the simulation runs, queued work waits for Stop, and only a batch
+    // Play cancelled and that is still finishing counts.
     bool busy() const;
-    // busy() is false and pump() has published every finished job.
+    // busy() is false and pump() has published every finished check.
     bool idle() const;
     // This script has a published result, and no newer check of it is queued,
     // running, or waiting for pump(). A tree change pump() has not taken yet
-    // counts as newer while the simulation is stopped.
+    // counts as newer. A script outside the place is never checked: settled
+    // with no result. While the simulation runs nothing is checked before Stop,
+    // so a script is settled once no batch Play cancelled still holds it: with
+    // its last result from Edit mode, which may be for an older source, or with
+    // none, as a script a playtest added has. MCP reports a script with no
+    // result for its current source as not checked then, rather than waiting.
     bool settled(InstanceId script) const;
 
     class DiagnosticsSignal {
@@ -260,13 +278,13 @@ public:
     // One type check of `source` as the text of `script`, with `world` as the
     // place, that answers Luau's autocomplete at byte `caret` (none when it is
     // npos) and the type at each byte of `offsets`, in that order. It runs on
-    // the analysis worker, ahead of queued checks, and waits up to `wait`. The
+    // the editor checker, never behind a check of the place, and waits up to `wait`. The
     // buffer's types are dropped afterwards, so an unsaved edit never reaches
     // another script's diagnostics. Any thread.
     LuauFacts luau_facts(const std::vector<LuaNode>& world, InstanceId script, std::string source, std::size_t caret,
                          std::vector<std::size_t> offsets, std::chrono::milliseconds wait);
     // The same without waiting. Poll the answer's `ready`. A new request in
-    // `lane` replaces one there that the worker has not started, so typing
+    // `lane` replaces one there that the editor checker has not started, so typing
     // never queues more than one per lane.
     std::shared_ptr<const LuauAnswer> luau_facts_later(const std::vector<LuaNode>& world, InstanceId script,
                                                        std::string source, std::size_t caret,
@@ -279,19 +297,22 @@ private:
     std::shared_ptr<LuauRequest> queue_luau(const std::vector<LuaNode>& world, InstanceId script, std::string source,
                                             std::size_t caret, const char* lane, std::vector<std::size_t> offsets);
 
-    void ensure_worker();
+    void ensure_threads();
     void shutdown();
-    void run();
+    void run_editor();
+    void run_place();
+    // pump() captures the tree once for every script queued since the last
+    // capture, and when `tree_changed`, lets the place checker diff it against
+    // the last. Captures nothing while the simulation runs. Under the
+    // DataModel lock.
+    void capture_tree(bool tree_changed);
     void fire(const std::vector<InstanceId>& ids);
-    // Captures the tree once and queues these scripts. Gameplay thread, or a
-    // thread that holds the DataModel lock.
+    // Queues the scripts among these that are in the place for the place
+    // checker, which takes them once pump() has captured the tree. While the
+    // simulation runs they wait for Stop; a script only the play tree has is
+    // removed at Stop before anything takes it. Gameplay thread, or a thread
+    // that holds the DataModel lock.
     void schedule(const std::vector<InstanceId>& ids);
-    // Open scope with the state mutex held: the watched scripts and every
-    // script they reach through recorded requires.
-    std::unordered_set<InstanceId> active_locked() const;
-    // Open scope with the state mutex held: forgets every script outside
-    // active_locked(). Returns the ones that had a published result.
-    std::vector<InstanceId> drop_inactive_locked();
     void replace_requires(InstanceId script, const std::vector<InstanceId>& targets);
     void forget_requires(InstanceId script);
     void collect_dependents(InstanceId id, std::vector<InstanceId>& out, std::unordered_set<InstanceId>& seen) const;
@@ -299,6 +320,7 @@ private:
     DataModel& game_;
     std::unique_ptr<State> state_;
     DiagnosticsSignal signal_;
+    unsigned threads_;
 };
 
 }  // namespace engine_core

@@ -158,8 +158,6 @@ struct IdeScriptEditor::Commit {
 IdeScriptEditor::IdeScriptEditor(engine_core::Engine& engine, std::uint32_t id)
     : IdePane("Script.lua", true), engine_(engine), id_(id), commit_(std::make_shared<Commit>()) {
     setIconFile("Script.png");
-    // Checked against the tree as it is now, not as it was at its last check.
-    engine_.analysis().watch(id_);
     diagnostics_hook_ = engine_.analysis().diagnostics_changed().connect(
         [changed = marks_changed_.setter(), id = id_](engine_core::InstanceId script) {
             if (script == id) {
@@ -623,7 +621,6 @@ IdeScriptEditor::~IdeScriptEditor() {
         getScene()->hidePopup(color_chooser_.get());
     }
     engine_.analysis().diagnostics_changed().disconnect(diagnostics_hook_);
-    engine_.analysis().unwatch(id_);
 }
 
 void IdeScriptEditor::onOpen() { focus(); }

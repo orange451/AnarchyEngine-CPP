@@ -173,6 +173,16 @@ const std::vector<ThemeVariable>& theme_variables() {
         {"--ide-search-badge-color", "Search", "Match count badge"},
         {"--ide-search-badge-text-color", "Search", "Match count badge text"},
 
+        {"--ide-problems-error-color", "Problems", "Error"},
+        {"--ide-problems-warning-color", "Problems", "Warning"},
+        {"--ide-problems-info-color", "Problems", "Info"},
+        {"--ide-problems-error-badge-color", "Problems", "Error count badge"},
+        {"--ide-problems-warning-badge-color", "Problems", "Warning count badge"},
+        {"--ide-problems-badge-text-color", "Problems", "Count badge text"},
+        {"--ide-problems-warning-badge-text-color", "Problems", "Warning count badge text"},
+        {"--ide-problems-detail-color", "Problems", "Path, line, and code"},
+        {"--ide-problems-note-color", "Problems", "Playtest note"},
+
         {"--ide-console-command-color", "Console", "Command"},
         {"--ide-console-time-color", "Console", "Timestamp"},
         {"--ide-console-key-color", "Console", "Table key"},

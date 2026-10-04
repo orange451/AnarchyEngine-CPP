@@ -38,6 +38,10 @@ void DataModel::start_simulation() {
         capture_place_unlocked();
     }
     state_->simulation_running = true;
+    // Script analysis checks the authored tree only. It stops checking until Stop.
+    if (ScriptAnalysis* analysis = script_analysis()) {
+        analysis->note_play_started();
+    }
     if (state_->on_start) {
         state_->on_start();
     }
@@ -69,6 +73,11 @@ void DataModel::stop_simulation() {
     restore_place_unlocked();
     ++state_->world_generation;
     state_->simulation_running = false;
+    // Restore's own notes came while the simulation still ran, so analysis
+    // ignored them. It brings itself up to date with the restored tree now.
+    if (ScriptAnalysis* analysis = script_analysis()) {
+        analysis->note_play_stopped();
+    }
 }
 
 void DataModel::capture_place_unlocked() {

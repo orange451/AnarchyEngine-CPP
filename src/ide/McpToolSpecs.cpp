@@ -76,7 +76,9 @@ constexpr SpecText kSpecs[] = {
      "Replaces the Source of a Script or ModuleScript. One undo step. An open editor shows the new "
      "source; typing not yet written from it is written first, then replaced. Returns the problems "
      "the studio's analysis finds in the new source, lines from 1, or analysis \"pending\" when it "
-     "has not finished (see get_diagnostics). To change part of a long script, edit_script sends less.",
+     "has not finished, or \"not checked\" for a script analysis does not check: one outside the "
+     "place, or one added during a playtest (see get_diagnostics). To change part of a long script, "
+     "edit_script sends less.",
      R"({"type":"object","required":["instance","source"],"properties":{
          "instance":{"type":["string","number"],"description":"Id or path."},
          "source":{"type":"string"}}})"},
@@ -106,7 +108,8 @@ constexpr SpecText kSpecs[] = {
      "The problems the studio's Luau analysis finds, as the script editor underlines them: syntax "
      "and type errors, and lint warnings. Checks one Script or ModuleScript, or every script under "
      "an instance, by default the whole place, waiting up to 10 seconds. Lists only scripts with "
-     "problems, lines from 1. pending names scripts whose check had not finished.",
+     "problems, lines from 1. pending names scripts whose check had not finished, and unchecked "
+     "scripts analysis does not check, such as one added during a playtest.",
      R"({"type":"object","properties":{
          "instance":{"type":["string","number"],"description":"A script, or an instance whose scripts to check. Default: the root, game."}}})"},
     {"run_lua",

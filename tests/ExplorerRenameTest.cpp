@@ -599,6 +599,9 @@ void TestDeleteRunsOnTheSelection() {
     Expect(rig.explorer->run_on_selection(engine_core::InstanceAction::Delete), "Delete runs on a multiple selection");
     Expect(rig.batches.size() == 1 && rig.batches[0].second == rig.pick({0, 1, 2}), "many rows use run_many");
     Expect(!rig.explorer->run_on_selection(engine_core::InstanceAction::Edit), "a folder does not offer Edit");
+    Expect(rig.explorer->run_on_selection(engine_core::InstanceAction::Paste), "Paste runs on a multiple selection");
+    Expect(rig.batches.size() == 2 && rig.batches[1].first == "Paste" && rig.batches[1].second == rig.pick({0, 1, 2}),
+           "Paste pastes into every selected row at once");
 }
 
 void TestDragIntoAnotherRow() {

@@ -90,7 +90,7 @@ void IdeLayout::run_action(engine_core::InstanceAction action, std::uint32_t id)
         copy({id});
         break;
     case engine_core::InstanceAction::Paste:
-        paste(id);
+        paste({id});
         break;
     case engine_core::InstanceAction::Duplicate:
         duplicate({id});
@@ -341,29 +341,58 @@ void IdeLayout::cut(const std::vector<std::uint32_t>& ids) {
     });
 }
 
-void IdeLayout::paste(std::uint32_t id, bool beside) {
-    if (clip_ && !clip_->held && clip_->copies) {
-        engine_core::DataModel& game = runner_.simulation().datamodel();
-        {
-            engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionWait);
-            if (!lock.owns()) {
-                show_toast(busy_message("Paste"));
-                return;
-            }
-            id = insert_target(game, beside && id != 0 ? game.parent(id) : id);
-            if (!parent_ok(game, id)) {
-                return;
+void IdeLayout::paste(const std::vector<std::uint32_t>& ids, bool beside) {
+    if (!clip_ || (!clip_->held && !clip_->copies)) {
+        return;
+    }
+    engine_core::DataModel& game = runner_.simulation().datamodel();
+    // One paste for each instance pasted on, each into its own parent. None
+    // pastes at the top of the tree.
+    std::vector<engine_core::InstanceId> targets;
+    std::vector<engine_core::InstanceId> children;
+    {
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionWait);
+        if (!lock.owns()) {
+            show_toast(busy_message("Paste"));
+            return;
+        }
+        for (std::uint32_t id : ids.empty() ? std::vector<std::uint32_t>{0} : ids) {
+            const engine_core::InstanceId target = insert_target(game, beside && id != 0 ? game.parent(id) : id);
+            if (parent_ok(game, target)) {
+                targets.push_back(target);
             }
         }
-        runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), copies = clip_->copies,
-                                            id](engine_core::DataModel& world) {
-            if (!parent_ok(world, id)) {
-                return;
+        if (targets.empty()) {
+            return;
+        }
+        if (clip_->held) {
+            // A target inside something cut refuses the whole paste, so nothing
+            // is left behind out of the place.
+            for (engine_core::InstanceId child : clip_->ids) {
+                if (!game.alive(child)) {
+                    continue;
+                }
+                for (engine_core::InstanceId target : targets) {
+                    if (std::optional<std::string> error = game.parent_error(child, target)) {
+                        show_toast(std::move(*error));
+                        return;
+                    }
+                }
+                children.push_back(child);
             }
+        }
+    }
+    if (!clip_->held) {
+        runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), copies = clip_->copies,
+                                            targets](engine_core::DataModel& world) {
             ScopedRecording step(world, "Paste");
             std::vector<engine_core::InstanceId> made;
             std::string refused;
-            paste_copies(world, *copies, id, &made, &refused);
+            for (engine_core::InstanceId target : targets) {
+                if (parent_ok(world, target)) {
+                    paste_copies(world, *copies, target, &made, &refused);
+                }
+            }
             if (!made.empty()) {
                 world.selection().set(made);
             }
@@ -373,51 +402,42 @@ void IdeLayout::paste(std::uint32_t id, bool beside) {
         });
         return;
     }
-    if (!clip_ || !clip_->held) {
-        return;
-    }
-    engine_core::DataModel& game = runner_.simulation().datamodel();
-    std::vector<engine_core::InstanceId> children;
-    {
-        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionWait);
-        if (!lock.owns()) {
-            show_toast(busy_message("Paste"));
-            return;
-        }
-        id = insert_target(game, beside && id != 0 ? game.parent(id) : id);
-        if (!parent_ok(game, id)) {
-            return;
-        }
-        // A target inside something cut refuses the whole paste, so nothing
-        // is left behind out of the place.
-        for (engine_core::InstanceId child : clip_->ids) {
-            if (!game.alive(child)) {
-                continue;
-            }
-            if (std::optional<std::string> error = game.parent_error(child, id)) {
-                show_toast(std::move(*error));
-                return;
-            }
-            children.push_back(child);
-        }
-    }
     if (children.empty()) {
         return;
     }
     clip_->held = false;
     clip_->ids.clear();
-    // The pasted instances become the selection, as they were when cut.
+    // The cut instances go to the first target, and copies of them to the
+    // rest. All of them become the selection.
     game.selection().set(children);
-    runner_.simulation().on_simulation([children, id](engine_core::DataModel& world) {
-        if (!parent_ok(world, id)) {
+    runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), children,
+                                        targets](engine_core::DataModel& world) {
+        if (!parent_ok(world, targets.front())) {
             return;
         }
         ScopedRecording step(world, "Paste");
         // Each goes last, so the pasted instances keep the order they were cut in.
+        std::vector<engine_core::InstanceId> made;
         for (engine_core::InstanceId child : children) {
-            if (world.alive(child) && !world.parent_error(child, id)) {
-                world.set_parent(child, id);
+            if (world.alive(child) && !world.parent_error(child, targets.front())) {
+                world.set_parent(child, targets.front());
+                made.push_back(child);
             }
+        }
+        if (targets.size() == 1 || made.empty()) {
+            return;
+        }
+        // Copied once they are back in the tree, which copy_set walks.
+        const std::vector<CopiedNode> copies = copy_set(world, made);
+        std::string refused;
+        for (std::size_t i = 1; i < targets.size(); ++i) {
+            if (parent_ok(world, targets[i])) {
+                paste_copies(world, copies, targets[i], &made, &refused);
+            }
+        }
+        world.selection().set(made);
+        if (!refused.empty()) {
+            toast_later(this, alive, std::move(refused));
         }
     });
 }

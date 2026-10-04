@@ -152,6 +152,8 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
             copy(ids);
         } else if (action == engine_core::InstanceAction::Duplicate) {
             duplicate(ids);
+        } else if (action == engine_core::InstanceAction::Paste) {
+            paste(ids);
         }
     };
     host.enabled = [this](engine_core::InstanceAction action) { return action_enabled(action); };
@@ -558,7 +560,7 @@ void IdeLayout::routeClipboard(jadefx::KeyEvent& event, jadefx::Scene& scene) {
     }
     const std::vector<engine_core::InstanceId> selected = runner_.simulation().datamodel().selection().get();
     if (key == jadefx::Key::V) {
-        paste(selected.empty() ? 0 : selected.front(), !event.shift);
+        paste(selected, !event.shift);
     } else if (selected.empty()) {
         return;
     } else if (key == jadefx::Key::X) {

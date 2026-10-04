@@ -69,7 +69,7 @@ using engine_core::InstanceAction;
 // Actions the explorer runs over the whole selection. The rest run on one row.
 bool Batchable(InstanceAction action) {
     return action == InstanceAction::Delete || action == InstanceAction::Cut || action == InstanceAction::Copy ||
-           action == InstanceAction::Duplicate;
+           action == InstanceAction::Duplicate || action == InstanceAction::Paste;
 }
 
 // Keys that make a click edit the selection instead of picking one row.

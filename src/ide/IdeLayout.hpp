@@ -161,8 +161,9 @@ private:
     void sync_fold_file();
     // Destroys each id and its descendants as one undo step.
     void delete_instances(std::vector<std::uint32_t> ids);
-    // Pastes into id, or beside it, under its parent, when beside is true.
-    void paste(std::uint32_t id, bool beside = false);
+    // Pastes into each of ids, or beside each, under its parent, when beside is
+    // true: one copy each. A cut goes to the first, and copies of it to the rest.
+    void paste(const std::vector<std::uint32_t>& ids, bool beside = false);
     // Puts ids under parent in order, just before its child before, or last
     // when before is 0, as one undo step. One that would cycle stays put.
     void move(std::vector<std::uint32_t> ids, std::uint32_t parent);

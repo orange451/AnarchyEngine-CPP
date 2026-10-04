@@ -27,10 +27,12 @@ struct ProblemsHost {
 // pane that docks like any other. Each script with a problem is a row with its
 // name, where it is, and how many errors and warnings it has; its problems are
 // rows under it. A filter field and Errors, Warnings, and Info toggles narrow
-// the list. Clicking a problem, or Enter on it, opens its script there. The
-// list follows the checker as it publishes, rebuilt at most once a frame.
-// While a playtest runs the checker rests, and the pane says so and keeps the
-// last results.
+// the list. Clicking a problem, or Enter on it, opens its script there. Down
+// from the filter walks into the list, Enter there opens the first problem,
+// and Escape clears it. The list follows the checker as it publishes and the
+// tree as scripts and their folders move or are renamed, rebuilt at most once
+// a frame, and at most every 250 ms while a long check runs. While a playtest
+// runs the checker rests, and the pane says so and keeps the last results.
 class IdeProblems : public IdePane {
 public:
     IdeProblems(engine_core::Engine& engine, ProblemsHost host);
@@ -45,16 +47,27 @@ public:
     std::string summary() const;
     bool playNoteShown() const;
     bool offNoticeShown() const;
+    // The filter, the toggles, and the summary. Hidden while analysis is off.
+    bool headerShown() const;
     // How many times the rows have been rebuilt. For tests.
     int rebuilds() const { return rebuilds_; }
 
     // Gathers the published problems and rebuilds now, instead of on a later layout.
     void refresh();
+    // What a layout pass does before it lays out: follows the checker, the
+    // tree, the filter, play, and analysis being on, and keeps the title, the
+    // notices, and the rows up to date. The studio calls it once a frame too,
+    // so the title keeps counting while the pane is a tab not showing, which
+    // is never laid out. now is the scene's time in seconds. Cheap when
+    // nothing changed, so a frame that runs it twice does the work once.
+    void tick(double now);
     // Opens what a row points at. False for an item that is not a row of this pane.
     bool openRow(const jadefx::TreeItem* item);
 
 protected:
     void layoutChildren() override;
+    void filterKey(jadefx::KeyEvent& event) override;
+    void handleKey(jadefx::KeyEvent& event) override;
     void onOpen() override { filter_->focusAll(); }
 
 private:
@@ -67,9 +80,17 @@ private:
 
     ProblemFilter filter() const;
     void rebuild();
+    // Rebuilds now when the filter or a toggle moved since the last rebuild.
+    void sync_filter();
+    // A tree change alone: the cached scripts' names and paths read again, and
+    // the rows rebuilt. Scripts that left the place, or went under Core, drop.
+    void refresh_paths();
     void update_toggles();
+    // Each toggle as wide as its word and count.
+    void fit_toggles();
     // Keeps the play note and the analysis-off notice, in that order, as the
-    // only children of notices_ that apply right now.
+    // only children of notices_ that apply right now. While analysis is off the
+    // header and the summary go too: there is nothing to filter or count.
     void update_notices();
     void clicked(const jadefx::MouseEvent& event);
 
@@ -81,6 +102,8 @@ private:
     std::shared_ptr<FindButton> errors_;
     std::shared_ptr<FindButton> warnings_;
     std::shared_ptr<FindButton> info_;
+    std::shared_ptr<jadefx::VBox> header_;
+    std::shared_ptr<jadefx::VBox> top_;
     std::shared_ptr<jadefx::Label> summary_;
     std::shared_ptr<jadefx::Label> play_note_;
     std::shared_ptr<jadefx::Label> off_notice_;
@@ -97,6 +120,12 @@ private:
     bool shown_enabled_ = true;
     bool built_once_ = false;
     int rebuilds_ = 0;
+    // DataModel::tree_revision when the names and paths were last read.
+    std::uint64_t seen_tree_ = 0;
+    // The scene time of the latest tick, and of the last rebuild, which a
+    // long check batch spaces out.
+    double now_ = 0;
+    double built_at_ = 0;
 };
 
 }  // namespace ide

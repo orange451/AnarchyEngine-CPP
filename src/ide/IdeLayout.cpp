@@ -414,6 +414,14 @@ void IdeLayout::flushFrame() {
         check_disk();
     }
     refresh_modified();
+    // A tab that is not showing is not laid out, so Problems would stop
+    // counting in its tab's title. Its tick does nothing a layout this frame
+    // already did.
+    if (problems_window_ != nullptr && problems_window_->pane) {
+        if (auto* problems = dynamic_cast<IdeProblems*>(problems_window_->pane.get())) {
+            problems->tick(scene_ != nullptr ? scene_->timeSeconds() : 0);
+        }
+    }
     const std::vector<std::shared_ptr<IdeDock>> pending = std::move(pendingEmpty_);
     pendingEmpty_.clear();
     for (const std::shared_ptr<IdeDock>& dock : pending) {

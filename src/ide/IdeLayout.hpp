@@ -490,7 +490,7 @@ private:
     std::vector<std::weak_ptr<class IdeExplorer>> explorers_;
     // The windows the Window menu opens and closes, and layout.json keeps.
     std::vector<std::unique_ptr<WindowEntry>> windows_;
-    // Search's and Conflicts' entries in windows_.
+    // The Search, Conflicts, Problems, and Assets entries in windows_.
     WindowEntry* search_window_ = nullptr;
     WindowEntry* conflicts_window_ = nullptr;
     WindowEntry* problems_window_ = nullptr;

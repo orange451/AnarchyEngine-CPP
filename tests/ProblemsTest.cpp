@@ -13,6 +13,8 @@
 
 #include "jadefx/jadefx.hpp"
 
+#include <cmath>
+
 #include <chrono>
 #include <cstdio>
 #include <string>
@@ -66,11 +68,17 @@ struct Harness {
         scene->setRoot(pane);
         frame();
     }
-    void frame() {
+    // The scene's clock, shared by every harness so it only goes forward.
+    static double& clock() {
         static double t = 0;
-        t += 0.1;
-        scene->layout(600, 400, t);
+        return t;
     }
+    void frame() { frame_at(clock() + 0.1); }
+    void frame_at(double at) {
+        clock() = at;
+        scene->layout(600, 400, at);
+    }
+    void key(int code) { scene->noteKey(code, true, false, 0); }
 };
 
 }  // namespace
@@ -96,6 +104,82 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     expect(h.pane->title() == "Problems (2)", "the tab counts the error and the warning");
     expect(h.pane->summary() == "1 error, 1 warning in 2 scripts", "the summary says the same");
     expect(h.pane->tree().getRoot()->getChildren().size() == 2, "a tree row per script");
+
+    // Renaming or moving a folder no script refers to rechecks nothing, so no
+    // diagnostics change: the tree revision alone brings the paths up to date.
+    game.set_name(logic.id(), "Gameplay");
+    settle(engine);
+    h.frame();
+    expect(!h.pane->list().scripts.empty() && h.pane->list().scripts[0].path == "Workspace.Gameplay",
+           "renaming a folder renames the path of the scripts under it");
+    engine_core::Folder& holder = game.create<engine_core::Folder>();
+    game.set_name(holder.id(), "Holder");
+    game.set_parent(holder.id(), workspace);
+    game.set_parent(logic.id(), holder.id());
+    settle(engine);
+    h.frame();
+    expect(!h.pane->list().scripts.empty() && h.pane->list().scripts[0].path == "Workspace.Holder.Gameplay",
+           "moving a folder moves the path of the scripts under it");
+    game.set_parent(logic.id(), workspace);
+    game.set_name(logic.id(), "Logic");
+    game.destroy(holder.id());
+    settle(engine);
+    h.frame();
+    expect(!h.pane->list().scripts.empty() && h.pane->list().scripts[0].path == "Workspace.Logic",
+           "and moving it back and renaming it back restores the path");
+
+    // A pane no scene lays out, as a tab that is not showing: its tick keeps the title counting.
+    {
+        auto loose = jadefx::make<ide::IdeProblems>(engine, ide::ProblemsHost{});
+        loose->tick(Harness::clock());
+        expect(loose->title() == "Problems (2)", "a pane that is never laid out still titles itself on tick");
+        engine_core::Script& more = add_script(game, workspace, "MoreBroken", "nope()\n");
+        settle(engine);
+        loose->tick(Harness::clock() + 1);
+        expect(loose->title() == "Problems (3)", "and keeps counting as scripts break");
+        const int ticked = loose->rebuilds();
+        loose->tick(Harness::clock() + 1);
+        expect(loose->rebuilds() == ticked, "a second tick in the same frame does nothing");
+        game.destroy(more.id());
+        settle(engine);
+        h.frame();
+    }
+
+    // Keys from the filter: Down walks into the list, Enter opens the first
+    // problem, Escape clears the filter.
+    h.pane->filterInput().focusAll();
+    h.frame();
+    h.key(jadefx::Key::Down);
+    expect(h.pane->tree().isFocused(), "Down from the filter focuses the list");
+    expect(h.pane->tree().getSelectedItem() != nullptr &&
+               h.pane->tree().getSelectedItem() == h.pane->tree().getRoot()->getChildren().items()[0].get(),
+           "and selects its first row");
+    h.pane->filterInput().focusAll();
+    h.pane->filterInput().field().setText("wiat");
+    h.opened.clear();
+    h.key(jadefx::Key::Enter);
+    expect(h.opened.size() == 1 && std::get<0>(h.opened[0]) == warned.id() && std::get<1>(h.opened[0]) == 1,
+           "Enter in the filter opens the first problem it shows");
+    h.opened.clear();
+    h.key(jadefx::Key::Escape);
+    expect(h.pane->filterInput().text().empty(), "Escape clears the filter");
+    h.frame();
+    expect(h.pane->list().scripts.size() == 2, "and the list shows everything again");
+    h.key(jadefx::Key::Escape);
+    expect(h.pane->filterInput().text().empty() && h.opened.empty(), "Escape on an empty filter is harmless");
+    h.frame();
+
+    // The toggles are as wide as their word and count.
+    {
+        ide::FindButton& toggle = h.pane->warningsToggle();
+        toggle.setText("Warnings (123)");
+        h.frame();
+        const jadefx::ComputedStyle& style = toggle.computedStyle();
+        const double text = jadefx::Font(style.fontFamily, style.fontSize).measureWidth("Warnings (123)");
+        expect(toggle.getPrefWidth() >= text + style.padding.width() + style.border.width(),
+               "a toggle with a 3-digit count is wide enough for its text");
+        expect(toggle.getWidth() >= text, "and is laid out that wide");
+    }
 
     // A script under Core is the studio's own tooling, not the place's: never listed.
     engine_core::Script& core_script = add_script(game, game.core(), "CoreBroken", "nope()\n");
@@ -171,10 +255,48 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     h.frame();
     expect(h.pane->rebuilds() == after_many, "a quiet frame does not rebuild");
 
+    // During a long check batch the rows follow at most every 250 ms of scene
+    // time. Each frame here renames a folder, so a tree change waits every
+    // time, and edits a script, so the checker stays busy.
+    {
+        engine_core::Folder& churn = game.create<engine_core::Folder>();
+        game.set_name(churn.id(), "Churn");
+        game.set_parent(churn.id(), workspace);
+        settle(engine);
+        const double start = Harness::clock() + 1;
+        h.frame_at(start);
+        const int base = h.pane->rebuilds();
+        int busy_frames = 0;
+        for (int i = 0; i < 10; ++i) {
+            clean.set_source("print(" + std::to_string(i + 10) + ")\n");
+            game.set_name(churn.id(), "Churn" + std::to_string(i));
+            engine.analysis().pump();
+            busy_frames += engine.analysis().busy() ? 1 : 0;
+            // 0.30 to 0.48 s after the last rebuild: all within one 250 ms span.
+            h.frame_at(start + 0.30 + 0.02 * i);
+        }
+        expect(busy_frames == 10, "the checker is busy for every frame of the batch");
+        expect(h.pane->rebuilds() == base + 1, "frames within 250 ms of a busy batch rebuild once");
+        clean.set_source("print(30)\n");
+        game.set_name(churn.id(), "ChurnLate");
+        engine.analysis().pump();
+        const bool still_busy = engine.analysis().busy();
+        h.frame_at(start + 0.30 + 0.26);
+        expect(!still_busy || h.pane->rebuilds() == base + 2, "250 ms on, a busy batch rebuilds again");
+        settle(engine);
+        const int before_idle = h.pane->rebuilds();
+        h.frame_at(start + 0.30 + 0.27);
+        expect(h.pane->rebuilds() == before_idle + 1, "and once more when it goes idle");
+        game.destroy(churn.id());
+        settle(engine);
+        h.frame();
+    }
+
     // A destroyed script's row goes, and opening an old row does nothing harmful.
-    const jadefx::TreeItem* stale = h.pane->tree().getRoot()->getChildren().empty()
-                                        ? nullptr
-                                        : h.pane->tree().getRoot()->getChildren().items()[0].get();
+    // Held, so the old row outlives the rebuild and its address is not reused.
+    const std::shared_ptr<jadefx::TreeItem> stale = h.pane->tree().getRoot()->getChildren().empty()
+                                                        ? nullptr
+                                                        : h.pane->tree().getRoot()->getChildren().items()[0];
     game.destroy(warned.id());
     settle(engine);
     h.frame();
@@ -184,7 +306,7 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     }
     expect(!listed, "a destroyed script's row goes");
     const std::size_t opened_before_stale = h.opened.size();
-    expect(!h.pane->openRow(stale), "opening a destroyed row's stale pointer does nothing");
+    expect(stale != nullptr && !h.pane->openRow(stale.get()), "opening a row from before the rebuild does nothing");
     expect(h.opened.size() == opened_before_stale, "and does not call open");
 
     // Play: checking stops and the note shows; the list keeps its rows.
@@ -204,10 +326,13 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     expect(h.pane->offNoticeShown(), "analysis off shows the notice");
     expect(!h.pane->tree().isVisible(), "and hides the tree");
     expect(h.pane->list().scripts.empty(), "and the list is empty");
+    expect(!h.pane->headerShown(), "and hides the filter and toggles");
+    expect(h.pane->summary().empty(), "and does not say No problems above the notice");
     engine.analysis().set_enabled(true);
     settle(engine);
     h.frame();
     expect(!h.pane->offNoticeShown(), "and on again hides it");
+    expect(h.pane->headerShown() && !h.pane->summary().empty(), "and brings back the header and the summary");
 
     // Clean up the scripts this test added.
     for (const ide::ScriptProblems& script : h.pane->list().scripts) {
@@ -297,6 +422,48 @@ int RunProblemsWindowTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         }
     }
     expect(renamed, "renaming a script renames its row");
+
+    // Its default home is a tab beside the Console. With the Console's tab in
+    // front, the Problems page is not laid out, and the studio's per-frame
+    // hook keeps its title counting.
+    ide::IdeDock* dock = nullptr;
+    for (jadefx::Node* cursor = pane; cursor != nullptr && dock == nullptr; cursor = cursor->getParent()) {
+        dock = dynamic_cast<ide::IdeDock*>(cursor);
+    }
+    std::shared_ptr<jadefx::Tab> problems_tab;
+    std::shared_ptr<jadefx::Tab> other_tab;
+    if (dock != nullptr) {
+        for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+            if (tab && tab->getContent() == pane) {
+                problems_tab = tab;
+            } else if (tab && !other_tab) {
+                other_tab = tab;
+            }
+        }
+    }
+    expect(problems_tab != nullptr && other_tab != nullptr, "Problems docks as a tab beside another");
+    if (pane != nullptr && problems_tab != nullptr && other_tab != nullptr) {
+        dock->tabs()->select(other_tab);
+        scene.layout(1280, 800, 50.4);
+        const std::string before = pane->title();
+        engine_core::Script& hidden =
+            add_script(game, game.scene_service("Workspace"), "HiddenTabBroken", "nope()\nnope()\n");
+        settle(engine);
+        scene.layout(1280, 800, 50.5);
+        layout.flushFrame();
+        expect(pane->title() != before && pane->title() == "Problems (" + std::to_string(pane->list().total.errors +
+                                                                                     pane->list().total.warnings) +
+                                                              ")",
+               "an unselected Problems tab's title follows new problems");
+        expect(pane->list().total.scripts >= 2, "the hidden pane's list has the new script");
+        game.destroy(hidden.id());
+        settle(engine);
+        scene.layout(1280, 800, 50.6);
+        layout.flushFrame();
+        expect(pane->title() == before, "and drops it again when it goes");
+        dock->tabs()->select(problems_tab);
+        scene.layout(1280, 800, 50.7);
+    }
 
     game.destroy(script.id());
     settle(engine);

@@ -10,6 +10,7 @@
 #include "Strings.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <utility>
 
@@ -17,9 +18,12 @@ namespace ide {
 namespace {
 
 constexpr double kRowHeight = 22;
-// FindButton is an icon-sized square by default; these toggles show text instead.
-constexpr double kToggleWidth = 92;
+// FindButton is an icon-sized square by default; these toggles show text
+// instead, as wide as it with this much room on each side.
 constexpr double kToggleHeight = 22;
+constexpr double kTogglePadding = 8;
+// While a long check batch runs, the rows are rebuilt at most this often.
+constexpr double kBusyRebuildInterval = 0.25;
 
 constexpr const char* kProblemsRules = R"CSS(
 .problems-pane {
@@ -165,40 +169,56 @@ protected:
     }
 };
 
-// Every Script and ModuleScript under parent with published diagnostics,
-// except the studio's own under Core. path is the chain below game.
-void gather(const engine_core::DataModel& game, const engine_core::ScriptAnalysis& analysis,
-            engine_core::InstanceId parent, const std::string& path, std::vector<ProblemSource>& out, int depth) {
+// A script in the place, as read under the DataModel lock.
+struct ScriptEntry {
+    std::uint32_t id = 0;
+    std::string name;
+    std::string class_name;
+    std::string path;
+};
+
+// Every Script and ModuleScript under parent, except the studio's own under
+// Core. path is the chain below game. Only the tree is read here: the
+// diagnostics are read after the lock is let go.
+void gather(const engine_core::DataModel& game, engine_core::InstanceId parent, const std::string& path,
+            std::vector<ScriptEntry>& out, int depth) {
     for (engine_core::InstanceId child = game.first_child(parent); child != 0; child = game.next_sibling(child)) {
         if (child == game.core()) {
             continue;
         }
-        const std::string name = game.name(child);
+        std::string name = game.name(child);
         if (const auto* script = dynamic_cast<const engine_core::LuaSource*>(game.instance(child))) {
-            std::vector<engine_core::Diagnostic> diagnostics = analysis.diagnostics(child);
-            // Hints are dropped by problems_from anyway; skip the source copy
-            // analyzed_source() makes when there is nothing else to show.
-            const bool any_shown = std::any_of(diagnostics.begin(), diagnostics.end(), [](const auto& diagnostic) {
-                return diagnostic.severity != engine_core::Severity::Hint;
-            });
-            if (any_shown) {
-                if (const std::optional<std::string> checked = analysis.analyzed_source(child)) {
-                    ProblemSource source;
-                    source.id = child;
-                    source.name = name;
-                    source.class_name = script->class_name();
-                    source.path = path;
-                    source.problems = problems_from(*checked, diagnostics);
-                    if (!source.problems.empty()) {
-                        out.push_back(std::move(source));
-                    }
-                }
-            }
+            out.push_back(ScriptEntry{child, name, script->class_name(), path});
         }
         if (depth < 512) {
-            gather(game, analysis, child, path.empty() ? name : path + "." + name, out, depth + 1);
+            gather(game, child, path.empty() ? name : path + "." + name, out, depth + 1);
         }
     }
+}
+
+// The chain of names from game's child down to id's parent, as gather builds
+// it. False when id is not in the place, or is under Core.
+bool path_of(const engine_core::DataModel& game, engine_core::InstanceId id, std::string& path) {
+    if (game.core_holds(id)) {
+        return false;
+    }
+    std::vector<engine_core::InstanceId> chain;
+    engine_core::InstanceId at = game.parent(id);
+    for (int depth = 0; at != game.id(); ++depth) {
+        if (at == engine_core::DataModel::kNoParent || depth > 512) {
+            return false;
+        }
+        chain.push_back(at);
+        at = game.parent(at);
+    }
+    path.clear();
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        if (!path.empty()) {
+            path += '.';
+        }
+        path += game.name(*it);
+    }
+    return true;
 }
 
 }  // namespace
@@ -220,8 +240,6 @@ IdeProblems::IdeProblems(engine_core::Engine& engine, ProblemsHost host)
         // These toggles carry a word and a count, not an icon, so they need
         // more than FindButton's default 22x22 icon-button box.
         toggle->setMinSize(0, kToggleHeight);
-        toggle->setPrefSize(kToggleWidth, kToggleHeight);
-        toggle->setMaxSize(kToggleWidth * 2, kToggleHeight);
         toggle->setOnAction([this] { changed_.set(); });
     }
     auto toggles = jadefx::make<jadefx::HBox>();
@@ -231,12 +249,12 @@ IdeProblems::IdeProblems(engine_core::Engine& engine, ProblemsHost host)
     toggles->getChildren().add(warnings_);
     toggles->getChildren().add(info_);
 
-    auto header = jadefx::make<jadefx::VBox>();
-    header->getClassList().add("problems-header");
-    header->setSpacing(4);
-    header->setStyle("width: 100%;");
-    header->getChildren().add(filter_);
-    header->getChildren().add(toggles);
+    header_ = jadefx::make<jadefx::VBox>();
+    header_->getClassList().add("problems-header");
+    header_->setSpacing(4);
+    header_->setStyle("width: 100%;");
+    header_->getChildren().add(filter_);
+    header_->getChildren().add(toggles);
 
     summary_ = text_label("", "problems-summary");
     summary_->setStyle("width: 100%;");
@@ -245,11 +263,11 @@ IdeProblems::IdeProblems(engine_core::Engine& engine, ProblemsHost host)
     notices_ = jadefx::make<jadefx::VBox>();
     notices_->setStyle("width: 100%;");
 
-    auto top = jadefx::make<jadefx::VBox>();
-    top->setStyle("width: 100%;");
-    top->getChildren().add(header);
-    top->getChildren().add(summary_);
-    top->getChildren().add(notices_);
+    top_ = jadefx::make<jadefx::VBox>();
+    top_->setStyle("width: 100%;");
+    top_->getChildren().add(header_);
+    top_->getChildren().add(summary_);
+    top_->getChildren().add(notices_);
 
     root_ = jadefx::make<jadefx::TreeItem>("");
     root_->setExpanded(true);
@@ -265,9 +283,10 @@ IdeProblems::IdeProblems(engine_core::Engine& engine, ProblemsHost host)
 
     auto column = jadefx::make<jadefx::BorderPane>();
     Fill(*column);
-    column->setTop(top);
+    column->setTop(top_);
     column->setCenter(tree_);
     getChildren().add(column);
+    update_toggles();
 
     hook_ = engine_.analysis().diagnostics_changed().connect(
         [changed = changed_.setter()](engine_core::InstanceId) { changed(); });
@@ -304,9 +323,19 @@ bool IdeProblems::offNoticeShown() const {
     return false;
 }
 
+bool IdeProblems::headerShown() const {
+    for (const auto& child : top_->getChildren().items()) {
+        if (child.get() == header_.get()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void IdeProblems::refresh() {
     engine_core::DataModel& game = engine_.datamodel();
-    std::vector<ProblemSource> gathered;
+    std::vector<ScriptEntry> scripts;
+    std::uint64_t tree = 0;
     {
         engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kFrameLockWait);
         if (!lock.owns()) {
@@ -314,9 +343,63 @@ void IdeProblems::refresh() {
             changed_.set();
             return;
         }
-        gather(game, engine_.analysis(), game.id(), "", gathered, 0);
+        tree = game.tree_revision();
+        gather(game, game.id(), "", scripts, 0);
+    }
+    // Analysis keeps its own lock: what it published is read without holding the place's.
+    const engine_core::ScriptAnalysis& analysis = engine_.analysis();
+    std::vector<ProblemSource> gathered;
+    for (ScriptEntry& script : scripts) {
+        const std::vector<engine_core::Diagnostic> diagnostics = analysis.diagnostics(script.id);
+        // Hints are dropped by problems_from anyway; skip the source copy
+        // analyzed_source() makes when there is nothing else to show.
+        const bool any_shown = std::any_of(diagnostics.begin(), diagnostics.end(), [](const auto& diagnostic) {
+            return diagnostic.severity != engine_core::Severity::Hint;
+        });
+        if (!any_shown) {
+            continue;
+        }
+        const std::optional<std::string> checked = analysis.analyzed_source(script.id);
+        if (!checked) {
+            continue;
+        }
+        ProblemSource source;
+        source.id = script.id;
+        source.name = std::move(script.name);
+        source.class_name = std::move(script.class_name);
+        source.path = std::move(script.path);
+        source.problems = problems_from(*checked, diagnostics);
+        if (!source.problems.empty()) {
+            gathered.push_back(std::move(source));
+        }
     }
     sources_ = std::move(gathered);
+    seen_tree_ = tree;
+    rebuild();
+}
+
+void IdeProblems::refresh_paths() {
+    engine_core::DataModel& game = engine_.datamodel();
+    {
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kFrameLockWait);
+        if (!lock.owns()) {
+            // seen_tree_ stays behind, so the next tick tries again.
+            return;
+        }
+        seen_tree_ = game.tree_revision();
+        std::vector<ProblemSource> kept;
+        kept.reserve(sources_.size());
+        for (ProblemSource& source : sources_) {
+            std::string path;
+            if (!path_of(game, source.id, path)) {
+                continue;
+            }
+            source.name = game.name(source.id);
+            source.path = std::move(path);
+            kept.push_back(std::move(source));
+        }
+        sources_ = std::move(kept);
+    }
     rebuild();
 }
 
@@ -325,6 +408,7 @@ void IdeProblems::rebuild() {
     list_ = build_problems(sources_, wanted);
     shown_filter_ = wanted;
     built_once_ = true;
+    built_at_ = now_;
     ++rebuilds_;
 
     std::optional<Target> selected;
@@ -364,7 +448,8 @@ void IdeProblems::rebuild() {
     if (reselect != nullptr) {
         tree_->select(reselect);
     }
-    summary_->setText(problems_summary(list_));
+    // While analysis is off, "No problems" would contradict the notice below it.
+    summary_->setText(shown_enabled_ ? problems_summary(list_) : std::string());
     const std::string title = problems_title(list_);
     setTitle(title == "Problems" ? std::string() : title);
     update_toggles();
@@ -374,6 +459,21 @@ void IdeProblems::update_toggles() {
     errors_->setText("Errors (" + std::to_string(list_.matching.errors) + ")");
     warnings_->setText("Warnings (" + std::to_string(list_.matching.warnings) + ")");
     info_->setText("Info (" + std::to_string(list_.matching.info) + ")");
+    fit_toggles();
+}
+
+void IdeProblems::fit_toggles() {
+    for (const auto& toggle : {errors_, warnings_, info_}) {
+        // Measured as Labeled measures its text, so the word and count fit.
+        const jadefx::ComputedStyle& style = toggle->computedStyle();
+        const jadefx::Font font(style.fontFamily, style.fontSize);
+        const double width = std::ceil(static_cast<double>(font.measureWidth(toggle->getText()))) +
+                             2 * kTogglePadding + style.padding.width() + style.border.width();
+        if (width != toggle->getPrefWidth()) {
+            toggle->setPrefSize(width, kToggleHeight);
+            toggle->setMaxSize(width, kToggleHeight);
+        }
+    }
 }
 
 void IdeProblems::update_notices() {
@@ -385,6 +485,15 @@ void IdeProblems::update_notices() {
         rows.push_back(off_notice_);
     }
     notices_->getChildren().setAll(std::move(rows));
+    std::vector<std::shared_ptr<jadefx::Node>> top;
+    if (shown_enabled_) {
+        top.push_back(header_);
+        top.push_back(summary_);
+    } else {
+        summary_->setText("");
+    }
+    top.push_back(notices_);
+    top_->getChildren().setAll(std::move(top));
 }
 
 bool IdeProblems::openRow(const jadefx::TreeItem* item) {
@@ -430,7 +539,8 @@ void IdeProblems::clicked(const jadefx::MouseEvent& event) {
     }
 }
 
-void IdeProblems::layoutChildren() {
+void IdeProblems::tick(double now) {
+    now_ = now;
     const bool playing = engine_.datamodel().simulation_running();
     const bool enabled = engine_.analysis().enabled();
     bool notices_changed = false;
@@ -447,14 +557,93 @@ void IdeProblems::layoutChildren() {
     if (notices_changed) {
         update_notices();
     }
+    bool changed = changed_.take() || !built_once_;
+    bool moved = engine_.datamodel().tree_revision() != seen_tree_;
+    // A long check batch publishes a little every frame. Rebuilding every row
+    // each time is wasted work no one can read, so while it runs the rows
+    // follow at most every kBusyRebuildInterval; what waits is kept for the
+    // first tick after that, or after the batch ends. A clock that went back
+    // (a new scene) does not hold anything up.
+    if ((changed || moved) && built_once_ && engine_.analysis().busy() && now >= built_at_ &&
+        now - built_at_ < kBusyRebuildInterval) {
+        if (changed) {
+            changed_.set();
+        }
+        changed = false;
+        moved = false;
+    }
     const ProblemFilter wanted = filter();
     const bool filter_changed = wanted.text != shown_filter_.text || wanted.errors != shown_filter_.errors ||
                                 wanted.warnings != shown_filter_.warnings || wanted.info != shown_filter_.info;
-    if (changed_.take() || !built_once_) {
+    if (changed) {
         refresh();
+    } else if (moved) {
+        refresh_paths();
     } else if (filter_changed) {
         rebuild();
     }
+}
+
+void IdeProblems::sync_filter() {
+    if (!built_once_) {
+        refresh();
+        return;
+    }
+    const ProblemFilter wanted = filter();
+    if (wanted.text != shown_filter_.text || wanted.errors != shown_filter_.errors ||
+        wanted.warnings != shown_filter_.warnings || wanted.info != shown_filter_.info) {
+        rebuild();
+    }
+}
+
+void IdeProblems::filterKey(jadefx::KeyEvent& event) {
+    // Down from the filter walks into the list. Taken on the way down: the
+    // field would move its caret with it and never let it bubble.
+    if (event.pressed && event.key == jadefx::Key::Down && !event.shortcut() && !event.shift &&
+        filter_->field().isFocused()) {
+        sync_filter();
+        if (!root_->getChildren().empty()) {
+            tree_->requestFocus();
+            if (tree_->getSelectedItem() == nullptr) {
+                tree_->select(0);
+            }
+        }
+        event.consume();
+        return;
+    }
+    IdePane::filterKey(event);
+}
+
+void IdeProblems::handleKey(jadefx::KeyEvent& event) {
+    // Keys bubble here from the filter and the list.
+    if (!event.pressed || !filter_->field().isFocused()) {
+        IdePane::handleKey(event);
+        return;
+    }
+    // Enter opens the first problem shown.
+    if ((event.key == jadefx::Key::Enter || event.key == jadefx::Key::KpEnter) && !event.shortcut()) {
+        sync_filter();
+        if (!root_->getChildren().empty()) {
+            const std::shared_ptr<jadefx::TreeItem>& first = root_->getChildren().items().front();
+            openRow(first->getChildren().empty() ? first.get() : first->getChildren().items().front().get());
+        }
+        event.consume();
+        return;
+    }
+    // Escape clears the filter. With nothing to clear it goes on up, as Search's does.
+    if (event.key == jadefx::Key::Escape && !filter_->text().empty()) {
+        filter_->field().clear();
+        sync_filter();
+        event.consume();
+        return;
+    }
+    IdePane::handleKey(event);
+}
+
+void IdeProblems::layoutChildren() {
+    jadefx::Scene* scene = getScene();
+    tick(scene != nullptr ? scene->timeSeconds() : now_);
+    fit_toggles();
     IdePane::layoutChildren();
 }
 

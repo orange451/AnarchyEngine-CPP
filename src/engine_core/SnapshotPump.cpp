@@ -209,6 +209,9 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
         inst->color = object->color();
         inst->transparency = unit(object->transparency());
     }
+    if (whole || any(change.fields, VisualField::Scale)) {
+        inst->scale = static_cast<float>(object->scale());
+    }
     if (whole || any(change.fields, VisualField::Light)) {
         inst->light = light_of(*object);
     }
@@ -231,6 +234,7 @@ void SnapshotPump::resync(DataModel& game) {
         inst.field_of_view = field_of_view_of(object);
         inst.color = object.color();
         inst.transparency = unit(object.transparency());
+        inst.scale = static_cast<float>(object.scale());
         inst.light = light_of(object);
         base_ids_.insert(object.id());
         base_.instances.push_back(inst);

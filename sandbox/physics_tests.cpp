@@ -800,3 +800,62 @@ TEST_CASE("P21 a Cylinder, a Cone, and a Wedge rest on their bottoms, a Cylinder
     REQUIRE(log.transform().m[14] > 1.f);
     REQUIRE(rig.warnings.empty());
 }
+
+TEST_CASE("P22 a GameObject's Scale scales the body that moves it", "[physics]") {
+    PhysicsRig rig;
+    rig.floor();
+
+    SECTION("a 1 wide box under a GameObject of Scale 2 rests 1 above the floor") {
+        GameObject& part = create_part(rig.game);
+        part.set_transform(at(0.f, 5.f, 0.f));
+        REQUIRE_FALSE(part.set_scale(2.0));
+        PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+        // Size is the PhysicsObject's own; Scale multiplies it.
+        REQUIRE(body.size().y == 1.f);
+        rig.play();
+        rig.seconds(3.0);
+        INFO(y_of(part.transform()));
+        REQUIRE(near(y_of(part.transform()), 1.f, 0.05f));
+        // The Transform keeps no scale of its own.
+        REQUIRE(near(column_length(part.transform(), 1), 1.f, 1e-4f));
+    }
+
+    SECTION("the Prefab's offset scales too, so the scaled mesh's bottom rests on the floor") {
+        PrefabBody pot = prefab_body(rig, at(0.f, 5.f, 0.f), Vec3{2.f, 2.f, 2.f});
+        REQUIRE_FALSE(pot.object->set_scale(2.0));
+        rig.play();
+        REQUIRE_FALSE(pot.mesh->edit_geometry(box_above_origin));
+        const Vec3 center = engine_core::PhysicsWorld::shape_center(rig.game, *pot.body);
+        REQUIRE(near(center.y, 2.f, 1e-5f));
+        rig.seconds(3.0);
+        INFO(y_of(pot.object->transform()));
+        REQUIRE(near(y_of(pot.object->transform()), 0.f, 0.05f));
+    }
+
+    SECTION("a Scale written during play makes the shape again") {
+        GameObject& part = create_part(rig.game);
+        part.set_transform(at(0.f, 2.f, 0.f));
+        rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+        rig.play();
+        rig.seconds(2.0);
+        REQUIRE(near(y_of(part.transform()), 0.5f, 0.05f));
+        REQUIRE_FALSE(part.set_scale(3.0));
+        rig.seconds(3.0);
+        INFO(y_of(part.transform()));
+        REQUIRE(near(y_of(part.transform()), 1.5f, 0.05f));
+    }
+
+    SECTION("its collision outline is the scaled shape") {
+        GameObject& part = create_part(rig.game);
+        REQUIRE_FALSE(part.set_scale(3.0));
+        PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 2.f, 1.f}, false, part.id());
+        const float scale = engine_core::PhysicsWorld::shape_scale(rig.game, body);
+        REQUIRE(scale == 3.f);
+        std::vector<Vec3> lines;
+        engine_core::PhysicsWorld::collision_outline(body, Vec3{}, {}, {}, lines, scale);
+        REQUIRE(lines.size() == 24);
+        for (const Vec3& p : lines) {
+            REQUIRE(on_box_corner(p, Vec3{1.5f, 3.f, 1.5f}));
+        }
+    }
+}

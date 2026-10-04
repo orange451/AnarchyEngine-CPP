@@ -341,9 +341,16 @@ void GameView::collectMeshes() {
         }
         // The GameObject's Color tints each Material's, and its opacity multiplies each Material's.
         const float opacity = 1.f - row.transparency;
+        // Its Scale grows the Prefab about the GameObject's origin: each axis, not the position.
+        engine_core::Matrix4 scaled = row.world;
+        for (int column = 0; column < 3; ++column) {
+            for (int axis = 0; axis < 3; ++axis) {
+                scaled.m[column * 4 + axis] *= row.scale;
+            }
+        }
         for (const MeshDraw& model : prefabMeshes_[row.prefab]) {
             MeshDraw& draw = meshDraws_.emplace_back(model);
-            draw.model = row.world;
+            draw.model = scaled;
             draw.owner = row.id;
             draw.color[0] *= row.color.r;
             draw.color[1] *= row.color.g;
@@ -558,7 +565,10 @@ void GameView::readSelectedBodies() {
                 outline.meshTriangles.clear();
             }
         }
-        const engine_core::Vec3 size = body->size();
+        // Its GameObject's Scale multiplies its Size, as its body's shape is made.
+        const float scale = engine_core::PhysicsWorld::shape_scale(*game_, *body);
+        const engine_core::Vec3 bodySize = body->size();
+        const engine_core::Vec3 size{bodySize.x * scale, bodySize.y * scale, bodySize.z * scale};
         // Centered in its GameObject's Prefab, which changes as the Prefab's Models and Meshes do.
         const engine_core::Vec3 center = engine_core::PhysicsWorld::shape_center(*game_, *body);
         const auto same = [](engine_core::Vec3 a, engine_core::Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; };
@@ -569,7 +579,7 @@ void GameView::readSelectedBodies() {
             outline.anchored = body->anchored();
             outline.center = center;
             engine_core::PhysicsWorld::collision_outline(*body, center, outline.meshPoints, outline.meshTriangles,
-                                                         outline.lines);
+                                                         outline.lines, scale);
         }
         // Its body starts at the GameObject it moves.
         outline.driven = body->driven_game_object();

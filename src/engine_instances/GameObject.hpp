@@ -54,6 +54,16 @@ public:
     std::optional<std::string> set_color(ColorRgb color);
     std::optional<std::string> set_transparency(double value);
 
+    // Scale multiplies the size the Prefab draws at, about the GameObject's
+    // origin, and the shape of the PhysicsObject that moves it
+    // (PhysicsWorld::shape_scale). It is not part of the Transform. A saved
+    // registry property, 1 by default.
+    static constexpr double kDefaultScale = 1.0;
+    double scale() const { return scale_; }
+    // SimulationThread. A value that is not finite and above 0 is refused:
+    // returns why and changes nothing.
+    std::optional<std::string> set_scale(double value);
+
     // Transform when it differs from a new GameObject's.
     void save_properties(PropertyBag& out) const override;
     void default_properties(PropertyBag& out) const override;
@@ -78,6 +88,7 @@ private:
     InstanceRef prefab_ref_;
     ColorRgb color_ = kDefaultColor;
     double transparency_ = kDefaultTransparency;
+    double scale_ = kDefaultScale;
 };
 
 }  // namespace engine_core

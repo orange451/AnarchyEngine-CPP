@@ -60,6 +60,8 @@ struct VisualInstance {
     // and its Transparency, clamped to 0..1, which stacks on each Material's.
     ColorRgb color{1.f, 1.f, 1.f, 1.f};
     float transparency = 0.f;
+    // The GameObject's Scale, which multiplies the size its Prefab draws at.
+    float scale = 1.f;
     VisualLight light;
 };
 

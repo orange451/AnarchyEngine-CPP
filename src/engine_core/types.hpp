@@ -52,7 +52,9 @@ enum class VisualField : std::uint32_t {
     // A Light's Color, Intensity, Radius, Enabled, or a SpotLight's cone.
     Light = 1u << 5,
     // GameObject.Color or Transparency.
-    Appearance = 1u << 6
+    Appearance = 1u << 6,
+    // GameObject.Scale.
+    Scale = 1u << 7
 };
 
 // Which writer produced a visual field.

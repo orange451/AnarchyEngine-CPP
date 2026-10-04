@@ -56,8 +56,8 @@ public:
 
     // Where object's shape is centered in its body's space: the middle of the
     // Prefab of the GameObject it moves (Prefab::origin_offset), scaled as
-    // that GameObject's Transform scales it, so the shape sits where the
-    // Prefab is drawn. The body's origin stays the GameObject's, and its
+    // that GameObject's Transform and its Scale scale it, so the shape sits
+    // where the Prefab is drawn. The body's origin stays the GameObject's, and its
     // center of mass is the shape's. The origin when it moves no GameObject,
     // or that GameObject has no Prefab. Needs the DataModel lock; a read lock
     // is enough.
@@ -68,16 +68,24 @@ public:
     // move a body that exists.
     static Vec3 shape_center(const DataModel& game, const PhysicsObject& object);
 
+    // What object's Size is multiplied by: the Scale of the GameObject it
+    // moves, or 1 when it moves none. Its Mass stays as given. A body is
+    // made again when that Scale changes. Needs the DataModel lock; a read
+    // lock is enough.
+    static float shape_scale(const DataModel& game, const PhysicsObject& object);
+
     // The edges of what a body made now for object would collide as, for the
     // Scene View to draw: line segments into lines, two points each, in the
-    // body's space (body_pose), around center (shape_center). points and
+    // body's space (body_pose), around center (shape_center), at Size times
+    // scale (shape_scale). points and
     // triangles are its Mesh's, as Mesh::vertex_positions gives them; no
     // points is no Mesh. Built as the body's shape is, so a Hull, and a Custom
     // that is not Anchored, is the hull Box3D makes of them, an anchored
     // Custom is each edge of its triangles once, and one that cannot be made
     // is the Box it falls back to. Warns of nothing.
     static void collision_outline(const PhysicsObject& object, Vec3 center, const std::vector<Vec3>& points,
-                                  const std::vector<std::uint32_t>& triangles, std::vector<Vec3>& lines);
+                                  const std::vector<std::uint32_t>& triangles, std::vector<Vec3>& lines,
+                                  float scale = 1.f);
     // Where a body made at transform is: its position and rotation, with any
     // scale taken out.
     static Matrix4 body_pose(const Matrix4& transform);

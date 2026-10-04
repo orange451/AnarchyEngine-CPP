@@ -103,6 +103,14 @@ void fit_points(const std::vector<Vec3>& mesh_points, Vec3 size, Vec3 center, st
     }
 }
 
+// shape_scale for a body that moves driven, or none at 0.
+float scale_for(const DataModel& game, InstanceId driven) {
+    const GameObject* object = driven != 0 ? game.game_object(driven) : nullptr;
+    return object != nullptr ? static_cast<float>(object->scale()) : 1.f;
+}
+
+Vec3 scaled(Vec3 size, float scale) { return Vec3{size.x * scale, size.y * scale, size.z * scale}; }
+
 // shape_center for a body that moves driven, or none at 0.
 Vec3 center_for(const DataModel& game, InstanceId driven) {
     const GameObject* object = driven != 0 ? game.game_object(driven) : nullptr;
@@ -115,12 +123,13 @@ Vec3 center_for(const DataModel& game, InstanceId driven) {
     if (prefab == nullptr) {
         return {};
     }
-    // The body's space has the GameObject's rotation but not its scale, which
-    // the Prefab is drawn with.
+    // The body's space has the GameObject's rotation but not its Transform's
+    // scale or its Scale, which the Prefab is drawn with.
     const Vec3 offset = prefab->origin_offset();
     const Matrix4 transform = object->transform();
-    return Vec3{offset.x * column_length(transform, 0), offset.y * column_length(transform, 1),
-                offset.z * column_length(transform, 2)};
+    const float scale = static_cast<float>(object->scale());
+    return Vec3{offset.x * column_length(transform, 0) * scale, offset.y * column_length(transform, 1) * scale,
+                offset.z * column_length(transform, 2) * scale};
 }
 
 bool same_vec3(Vec3 a, Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
@@ -291,9 +300,11 @@ struct PhysicsWorld::Impl {
         // The GameObject it moves, or 0, and the Transform it last gave it.
         InstanceId driven = 0;
         Matrix4 driven_pose{};
-        // Where the shape was centered when it was made (shape_center), and
-        // the GUID of the driven GameObject's Prefab as last seen.
+        // Where the shape was centered when it was made (shape_center), the
+        // driven GameObject's Scale it was made at (shape_scale), and the GUID
+        // of that GameObject's Prefab as last seen.
         Vec3 center{};
+        float scale = 1.f;
         std::string prefab;
         std::uint64_t seen = 0;
     };
@@ -459,13 +470,18 @@ struct PhysicsWorld::Impl {
 
     // A GameObject with another Prefab, or one moved or scaled by someone
     // else (moved), may center the shape elsewhere: it is made again there.
+    // One with another Scale makes it again at that size.
     void recenter(DataModel& game, PhysicsObject& object, Body& record, bool moved) {
         const GameObject* driven = record.driven != 0 ? game.game_object(record.driven) : nullptr;
-        if (driven == nullptr || (!moved && driven->prefab_guid() == record.prefab)) {
+        if (driven == nullptr) {
+            return;
+        }
+        const bool rescaled = static_cast<float>(driven->scale()) != record.scale;
+        if (!moved && !rescaled && driven->prefab_guid() == record.prefab) {
             return;
         }
         record.prefab = driven->prefab_guid();
-        if (!same_vec3(center_for(game, record.driven), record.center)) {
+        if (rescaled || !same_vec3(center_for(game, record.driven), record.center)) {
             make_shape(game, object, record);
         }
     }
@@ -508,7 +524,8 @@ struct PhysicsWorld::Impl {
         def.baseMaterial.restitution = static_cast<float>(object.bounciness());
         def.userData = user_data(object.id());
         def.updateBodyMass = false;
-        const Vec3 size = object.size();
+        record.scale = scale_for(game, record.driven);
+        const Vec3 size = scaled(object.size(), record.scale);
         record.center = center_for(game, record.driven);
         const GameObject* driven = record.driven != 0 ? game.game_object(record.driven) : nullptr;
         record.prefab = driven != nullptr ? driven->prefab_guid() : std::string();
@@ -535,7 +552,7 @@ struct PhysicsWorld::Impl {
             // Box3D gives a mesh contacts only on a static body, so an
             // unanchored Custom is a hull of its mesh until it is anchored.
             if (object.anchored()) {
-                if (b3MeshData* mesh = make_mesh(game, object, record.center)) {
+                if (b3MeshData* mesh = make_mesh(game, object, size, record.center)) {
                     record.mesh = mesh;
                     record.volume = size.x * size.y * size.z;
                     def.density = density(object, record.volume);
@@ -550,7 +567,7 @@ struct PhysicsWorld::Impl {
             }
             [[fallthrough]];
         case PhysicsObject::Shape::Hull:
-            if (b3HullData* hull = make_hull(game, object, record.center)) {
+            if (b3HullData* hull = make_hull(game, object, size, record.center)) {
                 record.volume = b3ComputeHullMass(hull, 1.f).mass;
                 def.density = density(object, record.volume);
                 // Box3D copies the hull into the shape.
@@ -585,10 +602,11 @@ struct PhysicsWorld::Impl {
         return static_cast<float>(object.mass()) / std::max(volume, 1e-9f);
     }
 
-    // The Mesh's points into points, fitted to Size around center, and with
-    // triangles, its triangles into triangles. Returns why there are none,
-    // or an empty string.
-    std::string fitted_mesh(DataModel& game, const PhysicsObject& object, Vec3 center, bool with_triangles) {
+    // The Mesh's points into points, fitted to size (Size, scaled) around
+    // center, and with triangles, its triangles into triangles. Returns why
+    // there are none, or an empty string.
+    std::string fitted_mesh(DataModel& game, const PhysicsObject& object, Vec3 size, Vec3 center,
+                            bool with_triangles) {
         const InstanceId mesh_id = object.mesh_id();
         const auto* mesh = mesh_id != 0 ? dynamic_cast<const Mesh*>(game.instance(mesh_id)) : nullptr;
         if (mesh == nullptr) {
@@ -598,14 +616,14 @@ struct PhysicsWorld::Impl {
                 mesh->vertex_positions(mesh_points, with_triangles ? &triangles : nullptr)) {
             return *error;
         }
-        fit_points(mesh_points, object.size(), center, points);
+        fit_points(mesh_points, size, center, points);
         return {};
     }
 
     // A hull of the Mesh's points. Null, with one warning, when there is no
     // hull to build.
-    b3HullData* make_hull(DataModel& game, PhysicsObject& object, Vec3 center) {
-        std::string why = fitted_mesh(game, object, center, false);
+    b3HullData* make_hull(DataModel& game, PhysicsObject& object, Vec3 size, Vec3 center) {
+        std::string why = fitted_mesh(game, object, size, center, false);
         b3HullData* hull = nullptr;
         if (why.empty()) {
             hull = build_hull(points);
@@ -626,8 +644,8 @@ struct PhysicsWorld::Impl {
     // The whole Mesh as triangles, for an anchored Custom. Box3D keeps a
     // pointer to it, so the body record owns it. Null, with one warning, when
     // there is none.
-    b3MeshData* make_mesh(DataModel& game, PhysicsObject& object, Vec3 center) {
-        std::string why = fitted_mesh(game, object, center, true);
+    b3MeshData* make_mesh(DataModel& game, PhysicsObject& object, Vec3 size, Vec3 center) {
+        std::string why = fitted_mesh(game, object, size, center, true);
         b3MeshData* mesh = nullptr;
         if (why.empty()) {
             mesh = build_mesh(points, triangles, indices);
@@ -778,14 +796,19 @@ Vec3 PhysicsWorld::shape_center(const DataModel& game, const PhysicsObject& obje
     return center_for(game, object.driven_game_object());
 }
 
+float PhysicsWorld::shape_scale(const DataModel& game, const PhysicsObject& object) {
+    return scale_for(game, object.driven_game_object());
+}
+
 void PhysicsWorld::collision_outline(const PhysicsObject& object, Vec3 center, const std::vector<Vec3>& mesh_points,
-                                     const std::vector<std::uint32_t>& triangles, std::vector<Vec3>& lines) {
+                                     const std::vector<std::uint32_t>& triangles, std::vector<Vec3>& lines,
+                                     float scale) {
     constexpr float kPi = 3.14159265359f;
     const Vec3 x{1.f, 0.f, 0.f};
     const Vec3 y{0.f, 1.f, 0.f};
     const Vec3 z{0.f, 0.f, 1.f};
     lines.clear();
-    const Vec3 size = object.size();
+    const Vec3 size = scaled(object.size(), scale);
     switch (object.shape()) {
     case PhysicsObject::Shape::Sphere: {
         const float radius = size.x * 0.5f;

@@ -130,6 +130,23 @@ std::optional<std::string> GameObject::set_transparency(double value) {
     return std::nullopt;
 }
 
+std::optional<std::string> GameObject::set_scale(double value) {
+    if (!on_gameplay_thread()) {
+        contract_fail("set_scale runs on SimulationThread");
+    }
+    if (!std::isfinite(value) || !(value > 0.0)) {
+        return std::string("Scale must be a finite number above 0");
+    }
+    if (value == scale_) {
+        return std::nullopt;
+    }
+    const double previous = scale_;
+    scale_ = value;
+    note_property_change("Scale", number_slot(previous), number_slot(value));
+    note_visual(VisualField::Scale);
+    return std::nullopt;
+}
+
 void GameObject::save_properties(PropertyBag& out) const {
     DataModel::save_properties(out);
     const Matrix4 transform_value = transform();
@@ -167,6 +184,7 @@ void GameObject::on_reuse() {
     prefab_ref_.set_guid(std::string());
     color_ = kDefaultColor;
     transparency_ = kDefaultTransparency;
+    scale_ = kDefaultScale;
 }
 
 void GameObject::reset_spatial() {
@@ -185,7 +203,7 @@ void GameObject::write_place(std::vector<std::byte>& out) const {
     const Matrix4 pose = transform();
     const auto* bytes = reinterpret_cast<const std::byte*>(&pose);
     out.insert(out.end(), bytes, bytes + sizeof(pose));
-    // The saved registry properties (Prefab, Color, Transparency) follow as DataModel's JSON blob.
+    // The saved registry properties (Prefab, Scale, Color, Transparency) follow as DataModel's JSON blob.
     DataModel::write_place(out);
 }
 
@@ -290,6 +308,27 @@ bool write_transparency(DataModel&, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+bool read_scale(DataModel&, DataModel& object, LuaSlot& out) {
+    auto* body = dynamic_cast<GameObject*>(&object);
+    if (body == nullptr) {
+        return false;
+    }
+    out = number_slot(body->scale());
+    return true;
+}
+
+bool write_scale(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* body = dynamic_cast<GameObject*>(&object);
+    if (body == nullptr) {
+        return false;
+    }
+    if (std::optional<std::string> error = body->set_scale(in.number)) {
+        in.error = std::move(*error);
+        return false;
+    }
+    return true;
+}
+
 ANARCHY_LUA_REGISTER(register_game_object_lua) {
     // The defaults, as a file would hold them, from the class's own constants.
     static const std::string color = [] {
@@ -298,6 +337,7 @@ ANARCHY_LUA_REGISTER(register_game_object_lua) {
         return write_json(json_floats(channels, 3));
     }();
     static const std::string transparency = write_json(JsonValue::number(GameObject::kDefaultTransparency));
+    static const std::string scale = write_json(JsonValue::number(GameObject::kDefaultScale));
     // PVInstance has no source file of its own, which would not stay linked.
     // It is abstract, and adds no members: IsA("PVInstance") is true of every
     // class with a Transform.
@@ -305,6 +345,7 @@ ANARCHY_LUA_REGISTER(register_game_object_lua) {
     const LuaField fields[] = {
         lua_property("Transform", "Matrix4", true, read_lua_transform, write_lua_transform),
         lua_saved_property("Prefab", "Prefab?", read_prefab, write_prefab, "null"),
+        lua_saved_property("Scale", "number", read_scale, write_scale, scale.c_str()),
         lua_saved_property("Color", "Color3", read_color, write_color, color.c_str()),
         lua_slider(lua_saved_property("Transparency", "number", read_transparency, write_transparency,
                                       transparency.c_str()),

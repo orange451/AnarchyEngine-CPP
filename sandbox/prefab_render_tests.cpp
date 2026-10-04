@@ -428,6 +428,57 @@ TEST_CASE("a GameObject's Color and Transparency reach its row, undo, save, and 
     REQUIRE(scene.row(id)->transparency == 0.25f);
 }
 
+TEST_CASE("a GameObject's Scale reaches its row, undoes, saves, and comes back at Stop", "[render]") {
+    Scene scene;
+    engine_core::GameObject& box = scene.object(0);
+    const InstanceId id = box.id();
+    scene.frame();
+    REQUIRE(box.scale() == 1.0);
+    REQUIRE(scene.row(id)->scale == 1.f);
+
+    // The default saves nothing.
+    engine_core::PropertyBag saved;
+    box.save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "Scale") == nullptr);
+
+    begin_step(scene.game, "Grow");
+    REQUIRE_FALSE(box.set_scale(2.5));
+    end_step(scene.game);
+    scene.frame();
+    REQUIRE(scene.row(id)->scale == 2.5f);
+    // The Transform is the GameObject's own; Scale does not change it.
+    REQUIRE(box.transform().m[0] == 1.f);
+
+    REQUIRE(*box.set_scale(0.0) == "Scale must be a finite number above 0");
+    REQUIRE(*box.set_scale(-1.0) == "Scale must be a finite number above 0");
+    REQUIRE(*box.set_scale(std::nan("")) == "Scale must be a finite number above 0");
+    REQUIRE(box.scale() == 2.5);
+
+    box.save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "Scale")->as_number() == 2.5);
+
+    scene.game.history().undo();
+    REQUIRE(box.scale() == 1.0);
+    scene.frame();
+    REQUIRE(scene.row(id)->scale == 1.f);
+
+    REQUIRE_FALSE(box.set_scale(0.5));
+    scene.game.capture_place();
+    scene.game.start_simulation();
+    REQUIRE_FALSE(scene.game.game_object(id)->set_scale(4.0));
+    scene.game.stop_simulation();
+    scene.frame();
+    REQUIRE(scene.game.game_object(id)->scale() == 0.5);
+    REQUIRE(scene.row(id)->scale == 0.5f);
+}
+
+TEST_CASE("scripts read and write a GameObject's Scale", "[render]") {
+    const engine_core::LuaField* field = engine_core::lua_class_find("GameObject", "Scale");
+    REQUIRE(field != nullptr);
+    REQUIRE(std::string(field->type_name) == "number");
+    REQUIRE(field->writable);
+}
+
 TEST_CASE("a Light's Color is its own, not the GameObject tint", "[render]") {
     const engine_core::LuaField* field = engine_core::lua_class_find("PointLight", "Color");
     REQUIRE(field != nullptr);

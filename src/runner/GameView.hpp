@@ -187,7 +187,8 @@ private:
     // A selected PhysicsObject in Workspace, as of the last read.
     struct BodyOutline {
         engine_core::InstanceId id = 0;
-        // What lines was made from: the Shape, Size, and Anchored, where the
+        // What lines was made from: the Shape, Size times its GameObject's
+        // Scale, and Anchored, where the
         // shape is centered, and the Mesh, its file, and its session
         // geometry's revision, with the points and triangles read from it.
         // No Mesh for any Shape but a Hull or a Custom.

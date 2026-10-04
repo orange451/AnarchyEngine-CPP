@@ -10,6 +10,8 @@
 
 #include "jadefx/jadefx.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -323,5 +325,43 @@ int RunProfilerPlayerKeyTests() {
     scene->noteKey(jadefx::Key::F6, false, false, 0);
     expect(!ui.shown() && !profiler::paused(), "and Cmd+F6 hides it again");
     profiler::reset_for_testing();
+    return gFailures;
+}
+
+namespace {
+
+double linear(float channel) {
+    return channel <= 0.04045f ? channel / 12.92 : std::pow((channel + 0.055) / 1.055, 2.4);
+}
+
+double luminance(const jadefx::Color& color) {
+    return 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b);
+}
+
+double contrast(const jadefx::Color& a, const jadefx::Color& b) {
+    const double la = luminance(a);
+    const double lb = luminance(b);
+    return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
+}
+
+}  // namespace
+
+// Every block's label reads: bright fills with dark text, and anything dark,
+// such as a block dimmed behind a highlighted scope, with light text.
+int RunProfilerColorTests() {
+    gFailures = 0;
+    using profiler::Group;
+    for (Group group : {Group::Engine, Group::Physics, Group::Render, Group::Script, Group::User, Group::Gpu}) {
+        const jadefx::Color fill = runner::ProfilerOverlay::blockColor(group, false);
+        expect(fill.a == 1.f, "a block is drawn opaque");
+        expect(contrast(fill, runner::ProfilerOverlay::labelColor(fill)) >= 7.0,
+               "a block's label has at least 7:1 contrast");
+        expect(luminance(fill) >= 0.35, "and the block itself is bright");
+        const jadefx::Color dim = runner::ProfilerOverlay::blockColor(group, true);
+        expect(contrast(dim, runner::ProfilerOverlay::labelColor(dim)) >= 4.5,
+               "a dimmed block's label still has 4.5:1 contrast");
+    }
+    const jadefx::Color dark = jadefx::Color::rgb8(40, 40, 48);
+    expect(luminance(runner::ProfilerOverlay::labelColor(dark)) > 0.8, "a dark fill gets light text");
     return gFailures;
 }

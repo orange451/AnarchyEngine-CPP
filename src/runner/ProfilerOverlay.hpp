@@ -70,6 +70,12 @@ public:
     ProfilerOverlay();
     const char* getElementType() const override { return "profiler"; }
 
+    // A timeline block's fill, opaque, as drawn: bright, or blended most of the way
+    // into the background when another scope is highlighted. Fixed, not themed.
+    static jadefx::Color blockColor(profiler::Group group, bool dimmed);
+    // Dark or light text, whichever reads better on fill.
+    static jadefx::Color labelColor(const jadefx::Color& fill);
+
     // How tall it is over a view of this height.
     static double heightFor(double viewHeight, double split);
 

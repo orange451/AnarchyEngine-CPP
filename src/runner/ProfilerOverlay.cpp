@@ -25,26 +25,36 @@ const Color kInk = Color::rgb8(13, 16, 21);
 const Color kButton = Color::rgb8(36, 44, 55, 255);
 const Color kButtonOn = Color::rgb8(58, 70, 86, 255);
 
+// Bright enough that dark text on them has at least 8.8:1 contrast.
 Color group_color(profiler::Group group) {
     switch (group) {
         case profiler::Group::Physics:
-            return Color::rgb8(59, 167, 160);
+            return Color::rgb8(95, 208, 198);
         case profiler::Group::Render:
-            return Color::rgb8(217, 138, 61);
+            return Color::rgb8(245, 173, 100);
         case profiler::Group::Script:
-            return Color::rgb8(155, 123, 224);
+            return Color::rgb8(188, 165, 245);
         case profiler::Group::User:
-            return Color::rgb8(226, 195, 90);
+            return Color::rgb8(242, 213, 128);
         case profiler::Group::Gpu:
-            return Color::rgb8(95, 179, 138);
+            return Color::rgb8(127, 216, 168);
         default:
-            return Color::rgb8(79, 143, 214);
+            return Color::rgb8(125, 180, 240);
     }
 }
 
-Color dimmed(Color color) {
-    color.a *= 0.3f;
-    return color;
+double channel_linear(float channel) {
+    return channel <= 0.04045f ? channel / 12.92 : std::pow((channel + 0.055) / 1.055, 2.4);
+}
+
+double luminance(const Color& color) {
+    return 0.2126 * channel_linear(color.r) + 0.7152 * channel_linear(color.g) + 0.0722 * channel_linear(color.b);
+}
+
+double contrast(const Color& a, const Color& b) {
+    const double la = luminance(a);
+    const double lb = luminance(b);
+    return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
 }
 
 constexpr const char* kFamily = "Open Sans";
@@ -133,6 +143,22 @@ void ProfilerUi::togglePaused() {
     if (!now) {
         selected = kNewest;
     }
+}
+
+Color ProfilerOverlay::blockColor(profiler::Group group, bool dimmed) {
+    const Color bright = group_color(group);
+    if (!dimmed) {
+        return bright;
+    }
+    // Seven tenths of the way into the overlay's background.
+    const Color back = Color::rgb8(12, 15, 20);
+    return Color::rgba(bright.r * 0.3f + back.r * 0.7f, bright.g * 0.3f + back.g * 0.7f,
+                       bright.b * 0.3f + back.b * 0.7f, 1.f);
+}
+
+Color ProfilerOverlay::labelColor(const Color& fill) {
+    const Color light = Color::rgb8(240, 244, 248);
+    return contrast(fill, kInk) >= contrast(fill, light) ? kInk : light;
 }
 
 ProfilerOverlay::ProfilerOverlay() {
@@ -509,11 +535,8 @@ void ProfilerOverlay::drawTimeline(jadefx::Painter& painter, const profiler::His
             const double bw = std::max(1.0, x1 - x0);
             const profiler::Group group =
                 record.scope < history.scopes.size() ? history.scopes[record.scope].group : profiler::Group::Engine;
-            Color color = group_color(group);
             const bool lit = highlight_ && record.scope == highlight_scope_ && record.cause == highlight_cause_;
-            if (highlight_ && !lit) {
-                color = dimmed(color);
-            }
+            const Color color = blockColor(group, highlight_ && !lit);
             painter.fillRect(static_cast<float>(x0), static_cast<float>(by), static_cast<float>(bw), kLane - 1, color);
             if (lit) {
                 painter.fillRect(static_cast<float>(x0), static_cast<float>(by), static_cast<float>(bw), 1, kText);
@@ -531,7 +554,7 @@ void ProfilerOverlay::drawTimeline(jadefx::Painter& painter, const profiler::His
                 }
                 if (!text.empty()) {
                     painter.text(static_cast<float>(x0 + 3), static_cast<float>(by + 1), text, kFamily, 10.f,
-                                 highlight_ && !lit ? dimmed(kInk) : kInk);
+                                 labelColor(color));
                 }
             }
             blocks_.push_back({{x0, by, bw, kLane - 1}, record, it->start_ns});

@@ -118,8 +118,8 @@ const std::vector<ThemeVariable>& theme_variables() {
         {"--ide-ribbon-pressed-color", "Ribbon", "Button pressed"},
 
         {"--ide-viewport-color", "Scene View", "Background"},
-        {"--ide-fps-color", "Scene View", "Frame rate background"},
-        {"--ide-fps-text-color", "Scene View", "Frame rate text"},
+        {"--ide-fps-color", "Scene View", "Overlay background"},
+        {"--ide-fps-text-color", "Scene View", "Overlay icon"},
 
         {"--ide-dock-merge-color", "Docking", "Tab drop outline"},
         {"--ide-dock-merge-fill-color", "Docking", "Tab drop fill"},

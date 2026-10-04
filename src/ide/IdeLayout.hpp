@@ -26,6 +26,10 @@ class Project;
 struct SaveConflict;
 }
 
+namespace runner {
+class GameView;
+}
+
 namespace ide {
 
 class IdeDock;
@@ -40,6 +44,9 @@ class IdeSearch;
 class IdeConflicts;
 class IdeProblems;
 struct ProblemCounts;
+namespace layout_detail {
+class StatusChip;
+}
 class McpServer;
 class UiCalls;
 class PreferencesPanel;
@@ -127,7 +134,8 @@ public:
     // changed what a save writes.
     bool export_needs_save();
     // Opens the Preferences window, or leaves the open one be.
-    void open_preferences();
+    // Opens Preferences, or brings it forward, at the tab titled page when one is given.
+    void open_preferences(const std::string& page = {});
     // Shows a dockable pane: open docks it when no dock holds it. Otherwise its
     // tab is selected, and a floating window that holds it comes to the front.
     void reveal_window(IdePane* pane, const std::function<void()>& open = {});
@@ -400,6 +408,13 @@ private:
     void show_conflict_count();
     // The status bar's error and warning counts, from Problems' unfiltered list.
     void show_problem_count(const ProblemCounts& total);
+    // The status bar's other chips. Each sets its labels only when what it shows changed.
+    void show_play_state();
+    void show_save_state(bool unsaved);
+    void show_cursor_position();
+    void show_frame_time();
+    void show_zoom();
+    void show_ai_client();
     // Selects the instance with this GUID and shows it in every explorer.
     void select_guid(const std::string& guid);
     // A rename or a Properties field is being typed in: a check waits for it.
@@ -501,6 +516,27 @@ private:
     std::shared_ptr<jadefx::Tooltip> problem_tip_;
     int shown_errors_ = 0;
     int shown_warnings_ = 0;
+    // The status bar's left end: play state and save state.
+    layout_detail::StatusChip* play_chip_ = nullptr;
+    jadefx::Label* play_state_text_ = nullptr;
+    layout_detail::StatusChip* save_chip_ = nullptr;
+    jadefx::Label* save_state_text_ = nullptr;
+    std::shared_ptr<jadefx::Tooltip> save_tip_;
+    int shown_unsaved_ = -1;
+    // Its right end: the caret, the frame time, the zoom, and the AI client.
+    layout_detail::StatusChip* cursor_chip_ = nullptr;
+    jadefx::Label* cursor_text_ = nullptr;
+    jadefx::Label* frame_text_ = nullptr;
+    std::shared_ptr<jadefx::Tooltip> frame_tip_;
+    // The Scene View the frame time is measured on: the studio's first, which stays open.
+    runner::GameView* frame_view_ = nullptr;
+    // The frame time is set four times a second at most, so it can be read.
+    double frame_shown_at_ = -1;
+    jadefx::Label* zoom_text_ = nullptr;
+    double shown_zoom_ = -1;
+    layout_detail::StatusChip* ai_chip_ = nullptr;
+    jadefx::Label* ai_text_ = nullptr;
+    std::shared_ptr<jadefx::Tooltip> ai_tip_;
     std::vector<std::weak_ptr<class IdeExplorer>> explorers_;
     // The windows the Window menu opens and closes, and layout.json keeps.
     std::vector<std::unique_ptr<WindowEntry>> windows_;

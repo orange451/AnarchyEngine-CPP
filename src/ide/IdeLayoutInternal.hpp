@@ -167,8 +167,14 @@ scene {
     font-size: 12px;
     transition: background-color 0.12s;
 }
-.ide-status-chip:hover {
+.ide-status-chip.clickable:hover {
     background-color: var(--ide-status-hover-color);
+}
+.ide-status-chip.off {
+    opacity: 0.55;
+}
+.ide-status-muted {
+    color: var(--ide-muted-text-color);
 }
 .ide-ribbon {
     background-color: var(--ide-ribbon-color);
@@ -196,11 +202,6 @@ scene {
 }
 .ide-viewport {
     background-color: var(--ide-viewport-color);
-}
-.ide-fps {
-    color: var(--ide-fps-text-color);
-    padding: 6px 8px;
-    background-color: var(--ide-fps-color);
 }
 .ide-gui-toggle {
     padding: 0 6px;
@@ -401,14 +402,18 @@ private:
     std::function<void()> action_;
 };
 
-// A clickable item on the status bar: icons, each with a number after it.
+// An item on the status bar: labels, each after an optional icon. With an
+// action, a click runs it.
 class StatusChip : public jadefx::HBox {
 public:
-    explicit StatusChip(std::function<void()> action) : action_(std::move(action)) {
+    explicit StatusChip(std::function<void()> action = nullptr) : action_(std::move(action)) {
         getClassList().add("ide-status-chip");
         setSpacing(4);
         setAlignment(jadefx::Pos::CenterLeft);
-        setCursor(jadefx::Cursor::Pointer);
+        if (action_) {
+            getClassList().add("clickable");
+            setCursor(jadefx::Cursor::Pointer);
+        }
         setOnMouseClicked([this](const jadefx::MouseEvent& event) {
             if (event.button == 0 && action_) {
                 action_();
@@ -416,9 +421,9 @@ public:
         });
     }
 
-    // An icon and the label after it, which the caller keeps to set.
-    jadefx::Label* add_count(const char* icon, const char* id) {
-        // A wider gap than the spacing sets each count apart from the one before.
+    // An icon, or none for nullptr, and the label after it, which the caller keeps to set.
+    jadefx::Label* add_label(const char* icon, const char* id, const char* text = "0") {
+        // A wider gap than the spacing sets each label apart from the one before.
         if (!getChildren().empty()) {
             auto gap = jadefx::make<jadefx::Pane>();
             gap->setMouseTransparent(true);
@@ -426,20 +431,46 @@ public:
             gap->setPrefWidth(4);
             getChildren().add(std::move(gap));
         }
-        if (std::shared_ptr<jadefx::ImageView> view = icon_graphic(icon)) {
-            getChildren().add(std::move(view));
+        if (icon != nullptr) {
+            if (std::shared_ptr<jadefx::ImageView> view = icon_graphic(icon)) {
+                icons_.push_back(view.get());
+                getChildren().add(std::move(view));
+            }
         }
-        auto text = jadefx::make<jadefx::Label>("0");
-        text->setElementId(id);
-        text->setMouseTransparent(true);
-        jadefx::Label* raw = text.get();
-        getChildren().add(std::move(text));
+        auto label = jadefx::make<jadefx::Label>(text);
+        label->setElementId(id);
+        label->setMouseTransparent(true);
+        jadefx::Label* raw = label.get();
+        getChildren().add(std::move(label));
         return raw;
+    }
+
+    // Draws the index'th icon from another file, such as Pause.png for Play.png.
+    void set_icon(std::size_t index, const char* icon) {
+        if (index >= icons_.size()) {
+            return;
+        }
+        if (std::shared_ptr<jadefx::ImageView> view = icon_file(icon)) {
+            icons_[index]->setImage(view->getImage());
+        }
     }
 
 private:
     std::function<void()> action_;
+    std::vector<jadefx::ImageView*> icons_;
 };
+
+// Adds or removes one style class, leaving the node's others alone.
+inline void SetStyleClass(jadefx::Node& node, const char* name, bool on) {
+    auto& classes = node.getClassList();
+    const auto& names = classes.items();
+    const bool marked = std::find(names.begin(), names.end(), name) != names.end();
+    if (on && !marked) {
+        classes.add(name);
+    } else if (!on && marked) {
+        classes.removeIf([name](const std::string& item) { return item == name; });
+    }
+}
 
 // A number in a layout.json object, or fallback when it is missing or not a finite number.
 inline double NumberOr(const engine_core::JsonValue& object, const char* key, double fallback) {

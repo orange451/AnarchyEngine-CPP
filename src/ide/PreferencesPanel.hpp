@@ -34,6 +34,8 @@ public:
     void set_file_picker(FilePicker picker) { file_picker_ = std::move(picker); }
     // Adds a tab after the panel's own, for a page the studio builds, such as AI.
     void add_page(const std::string& title, std::shared_ptr<jadefx::Node> page);
+    // Brings the tab with this title to the front. Nothing for a title no tab has.
+    void show_page(const std::string& title);
     // Runs with the frame rate the Performance tab keeps, so the studio draws at it.
     void set_on_frame_rate(std::function<void(int fps)> handler) { on_frame_rate_ = std::move(handler); }
 

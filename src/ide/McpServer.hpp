@@ -3,8 +3,11 @@
 #include "PropertyBag.hpp"
 
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -26,6 +29,19 @@ struct McpTool {
     // A JSON Schema object describing the arguments.
     engine_core::JsonValue input_schema;
     std::function<engine_core::JsonValue(const engine_core::JsonValue& arguments)> run;
+};
+
+// What clients have asked of a server since it started, for the studio to show.
+struct McpActivity {
+    // clientInfo's name from the latest initialize, such as "claude-code". Empty before one.
+    std::string client;
+    // The latest tool called, and how many tool calls there have been.
+    std::string last_tool;
+    std::uint64_t calls = 0;
+    // When the latest request of any kind, and the latest tool call, came in.
+    // The clock's epoch before the first.
+    std::chrono::steady_clock::time_point last_request{};
+    std::chrono::steady_clock::time_point last_call{};
 };
 
 // A Model Context Protocol server over Streamable HTTP. One endpoint, /mcp,
@@ -64,6 +80,9 @@ public:
     // empty reply with 202 means the body held only notifications.
     std::string handle(const std::string& body, int& status) const;
 
+    // A copy of what clients have asked so far. Safe from any thread.
+    McpActivity activity() const;
+
 private:
     engine_core::JsonValue dispatch(const engine_core::JsonValue& message, bool& reply) const;
     engine_core::JsonValue call_tool(const engine_core::JsonValue& params, bool& found) const;
@@ -75,6 +94,9 @@ private:
     std::thread thread_;
     std::atomic<bool> running_{false};
     int port_ = 0;
+    // Written by handle, on the server's threads, several at once.
+    mutable std::mutex activity_mutex_;
+    mutable McpActivity activity_;
 };
 
 // A tool result holds an image under this member: an object with "data", the

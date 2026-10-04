@@ -60,7 +60,7 @@ class SceneFeed;
 // away, which frees the pointer until the view is clicked again; MouseBehavior
 // stays as the script set it, so that click locks the pointer again.
 //
-// Over the drawing, under the FPS label and the camera list, the Gui service's
+// Over the drawing, under the camera list, the Gui service's
 // ScreenGuis are drawn (GuiLayer), in a SubScene so the studio's styles do not
 // reach them. The eye left of the camera list turns them off in edit mode, to
 // see the scene without them; a test always draws them, and hides the eye and
@@ -71,7 +71,7 @@ class GameView : public ide::IdePane {
 public:
     explicit GameView(Runner& runner, std::string name = "Scene View", bool closable = false);
 
-    // The next paint reads back what it drew, before the label, and hands it to
+    // The next paint reads back what it drew, before the overlays, and hands it to
     // done on this thread. A view that does not paint, such as a hidden tab,
     // does not call done until it paints again, nor does a paint the renderer
     // was not ready to draw.
@@ -87,10 +87,19 @@ public:
     GuiLayer& guiLayer() { return *guiLayer_; }
     // The eye left of the camera list. Selected, as it starts, draws the GUIs.
     jadefx::ToggleButton& guiToggle() { return *guiToggle_; }
-    // The player's view: no FPS label or camera list, since a game shows only
+    // The player's view: no camera list, since a game shows only
     // itself, and the view follows the Workspace's CurrentCamera, as a script
     // sets it, rather than the Camera picked in the list.
     void setPlayerView(bool player);
+
+    // How often the view painted, averaged over the last quarter second: the
+    // frames a second, and the time between paints in milliseconds. 0 before
+    // the first average.
+    int framesPerSecond() const { return measuredFps_.load(); }
+    double frameMilliseconds() const { return measuredFrameMs_.load(); }
+    // The view painted lately, so those numbers are what it does now. A tab
+    // not in front, or a minimized window, stops painting.
+    bool frameTimeCurrent() const;
 
 protected:
     void layoutChildren() override;
@@ -108,7 +117,6 @@ protected:
 
 private:
     void notePaint();
-    void refreshFpsLabel();
     // Makes this view's linked Camera the Workspace's CurrentCamera; with
     // onlyIfNone, only while the Workspace has none.
     // Tells this view's camera the view's size, when either changed.
@@ -237,13 +245,13 @@ private:
     bool followCurrentCamera_ = false;
     // setPlayerView: no camera list or eye, and the GUIs always drawn.
     bool playerView_ = false;
-    // Paints in the current window. The label reads the finished average.
+    // Paints in the current window. framesPerSecond and frameMilliseconds read the finished average.
     std::chrono::steady_clock::time_point paintWindowStart_{};
     int paintWindowFrames_ = 0;
     bool paintWindowOpen_ = false;
     std::atomic<int> measuredFps_{0};
-    jadefx::Label* fpsLabel_ = nullptr;
-    int shownFps_ = -1;
+    std::atomic<double> measuredFrameMs_{0};
+    std::chrono::steady_clock::time_point lastMeasured_{};
     bool graphicsAttempted_ = false;
     bool graphicsReady_ = false;
     static constexpr int kGraphicsTries = 5;

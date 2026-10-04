@@ -104,12 +104,6 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
     guiScene_ = guiScene.get();
     getChildren().add(std::move(guiScene));
 
-    auto label = jadefx::make<jadefx::Label>("0 FPS");
-    label->getClassList().add("ide-fps");
-    label->setMouseTransparent(true);
-    fpsLabel_ = label.get();
-    getChildren().add(std::move(label));
-
     auto cameras = jadefx::make<jadefx::ComboBox>();
     cameras->getClassList().add("ide-camera-list");
     cameras->setPromptText("No Camera");
@@ -138,7 +132,6 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
 }
 
 void GameView::setPlayerView(bool player) {
-    fpsLabel_->setVisible(!player);
     playerView_ = player;
     followCurrentCamera_ = player;
     refreshOverlays();
@@ -397,25 +390,22 @@ void GameView::notePaint() {
     if (elapsed < kWindowSeconds || paintWindowFrames_ <= 0) {
         return;
     }
-    measuredFps_.store(FramesPerSecond(elapsed / static_cast<double>(paintWindowFrames_)));
+    const double frame = elapsed / static_cast<double>(paintWindowFrames_);
+    measuredFps_.store(FramesPerSecond(frame));
+    measuredFrameMs_.store(frame * 1000.0);
+    lastMeasured_ = now;
     paintWindowStart_ = now;
     paintWindowFrames_ = 0;
 }
 
-void GameView::refreshFpsLabel() {
-    if (fpsLabel_ == nullptr) {
-        return;
-    }
-    const int fps = measuredFps_.load();
-    if (fps <= 0 || fps == shownFps_) {
-        return;
-    }
-    shownFps_ = fps;
-    fpsLabel_->setText(std::to_string(fps) + " FPS");
+bool GameView::frameTimeCurrent() const {
+    // Two windows without a paint: the view is hidden, or the studio stalled.
+    constexpr double kStaleSeconds = 0.6;
+    return paintWindowOpen_ && measuredFps_.load() > 0 &&
+           std::chrono::duration<double>(std::chrono::steady_clock::now() - lastMeasured_).count() < kStaleSeconds;
 }
 
 void GameView::layoutChildren() {
-    refreshFpsLabel();
     // Layout runs every frame, before the paint, so the list and the link are
     // current when the list lays out and when the paint follows the Camera.
     refreshWorkspace();
@@ -426,8 +416,7 @@ void GameView::layoutChildren() {
     // The GUIs cover the whole view, whatever they would rather be.
     guiScene_->performLayout(contentLeft(), contentTop(), contentWidth(), contentHeight());
     reportViewportSize();
-    // The list sits in the top right corner, over the drawing, clear of the
-    // FPS label on the left when the view is wide enough for both.
+    // The list sits in the top right corner, over the drawing.
     constexpr double kMargin = 6.0;
     constexpr double kListWidth = 160.0;
     const double width = std::max(0.0, std::min(kListWidth, contentWidth() - 2 * kMargin));
@@ -685,7 +674,7 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
         const bool drawn = renderer_.draw(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(),
                                           scene->getHeight(), meshDraws_.data(), static_cast<int>(meshDraws_.size()),
                                           lightDraws_.data(), static_cast<int>(lightDraws_.size()));
-        // Read before the children paint, so the FPS label is not in the picture.
+        // Read before the children paint, so the overlays are not in the picture.
         // A frame the driver was not ready for shows only the clear, so a capture waits for the next.
         if (drawn && !captures_.empty()) {
             ViewPixels pixels;

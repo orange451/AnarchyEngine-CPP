@@ -547,9 +547,11 @@ std::optional<std::vector<engine_core::SaveConflict>> IdeLayout::check_disk(
 }
 
 void IdeLayout::refresh_modified() {
-    if (has_unsaved_changes() != title_modified_) {
+    const bool unsaved = has_unsaved_changes();
+    if (unsaved != title_modified_) {
         update_title();
     }
+    show_save_state(unsaved);
 }
 
 bool IdeLayout::has_unsaved_changes() {

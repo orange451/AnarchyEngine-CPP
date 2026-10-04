@@ -465,6 +465,15 @@ void PreferencesPanel::add_page(const std::string& title, std::shared_ptr<jadefx
     tabs_->getTabs().add(tab);
 }
 
+void PreferencesPanel::show_page(const std::string& title) {
+    for (const std::shared_ptr<jadefx::Tab>& tab : tabs_->getTabs().items()) {
+        if (tab && tab->getText() == title) {
+            tabs_->select(tab);
+            return;
+        }
+    }
+}
+
 std::shared_ptr<jadefx::Node> PreferencesPanel::build_performance() {
     auto rate_row = jadefx::make<jadefx::HBox>();
     rate_row->getClassList().add("prefs-row");

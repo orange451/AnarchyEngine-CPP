@@ -193,7 +193,9 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
 
     // Docked before the threads start. Its first paint is what lets the
     // uncapped render thread leave its wait.
-    scene_view_ = jadefx::make<runner::GameView>(runner_);
+    auto game_view = jadefx::make<runner::GameView>(runner_);
+    frame_view_ = game_view.get();
+    scene_view_ = std::move(game_view);
     accept_prefab_drops(*scene_view_);
 
     auto status = jadefx::make<jadefx::HBox>();
@@ -202,16 +204,57 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     status->setAlignment(jadefx::Pos::CenterLeft);
     status->setMinSize(0, kStatusHeight);
     status->setPrefHeight(kStatusHeight);
-    // The chips sit at the right end.
+    // At the left end, whether a test runs, and whether there is work to save.
+    auto play = jadefx::make<StatusChip>();
+    play->setElementId("play-state");
+    play_state_text_ = play->add_label("Editing.png", "play-state-text", "Editing");
+    play_chip_ = play.get();
+    status->getChildren().add(std::move(play));
+    auto saved = jadefx::make<StatusChip>([this] { save_project(); });
+    saved->setElementId("save-state");
+    save_state_text_ = saved->add_label("Save.png", "save-state-text", "Saved");
+    save_tip_ = jadefx::make<jadefx::Tooltip>("");
+    jadefx::Tooltip::install(saved.get(), save_tip_);
+    save_chip_ = saved.get();
+    status->getChildren().add(std::move(saved));
+    // The rest sit at the right end.
     auto status_gap = jadefx::make<jadefx::Pane>();
     status_gap->setStyle("width: 100%;");
     status_gap->setMouseTransparent(true);
     status->getChildren().add(std::move(status_gap));
+    // The caret in the code editor that has the keyboard. Hidden otherwise.
+    auto cursor = jadefx::make<StatusChip>();
+    cursor->setElementId("cursor-position");
+    cursor->setVisible(false);
+    cursor_text_ = cursor->add_label(nullptr, "cursor-position-text", "");
+    cursor_chip_ = cursor.get();
+    status->getChildren().add(std::move(cursor));
+    // How long the Scene View takes between paints. Opens the frame rate limit.
+    auto frame = jadefx::make<StatusChip>([this] { open_preferences("Performance"); });
+    frame->setElementId("frame-time");
+    frame_text_ = frame->add_label("FrameTime.png", "frame-time-text", "-- ms");
+    frame_tip_ = jadefx::make<jadefx::Tooltip>("The Scene View is not drawing");
+    jadefx::Tooltip::install(frame.get(), frame_tip_);
+    status->getChildren().add(std::move(frame));
+    // The studio's zoom. A click goes back to actual size.
+    auto zoom = jadefx::make<StatusChip>([this] { set_zoom(1.0); });
+    zoom->setElementId("zoom-level");
+    zoom_text_ = zoom->add_label("Zoom.png", "zoom-level-text", "100%");
+    jadefx::Tooltip::install(zoom.get(), jadefx::make<jadefx::Tooltip>("Zoom. Click for actual size"));
+    status->getChildren().add(std::move(zoom));
+    // The MCP server, and the AI client using it. Opens Preferences at AI.
+    auto ai = jadefx::make<StatusChip>([this] { open_preferences("AI"); });
+    ai->setElementId("ai-client");
+    ai_text_ = ai->add_label("Robot.png", "ai-client-text", "AI off");
+    ai_tip_ = jadefx::make<jadefx::Tooltip>("");
+    jadefx::Tooltip::install(ai.get(), ai_tip_);
+    ai_chip_ = ai.get();
+    status->getChildren().add(std::move(ai));
     // The place's script errors and warnings, as Problems counts them. Opens Problems.
     auto problems = jadefx::make<StatusChip>([this] { show_problems(); });
     problems->setElementId("problems-count");
-    problem_errors_text_ = problems->add_count("Error.png", "problems-errors-text");
-    problem_warnings_text_ = problems->add_count("Exclamation.png", "problems-warnings-text");
+    problem_errors_text_ = problems->add_label("Error.png", "problems-errors-text");
+    problem_warnings_text_ = problems->add_label("Exclamation.png", "problems-warnings-text");
     problem_tip_ = jadefx::make<jadefx::Tooltip>("No problems");
     jadefx::Tooltip::install(problems.get(), problem_tip_);
     status->getChildren().add(std::move(problems));
@@ -219,7 +262,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     auto conflicts = jadefx::make<StatusChip>([this] { show_conflicts(); });
     conflicts->setElementId("conflicts-count");
     conflicts->setVisible(false);
-    conflict_count_text_ = conflicts->add_count("DiskConflict.png", "conflicts-count-text");
+    conflict_count_text_ = conflicts->add_label("DiskConflict.png", "conflicts-count-text");
     conflict_tip_ = jadefx::make<jadefx::Tooltip>("");
     jadefx::Tooltip::install(conflicts.get(), conflict_tip_);
     conflict_count_ = conflicts.get();
@@ -440,6 +483,10 @@ void IdeLayout::flushFrame() {
             show_problem_count(problems->list().total);
         }
     }
+    show_cursor_position();
+    show_frame_time();
+    show_zoom();
+    show_ai_client();
     const std::vector<std::shared_ptr<IdeDock>> pending = std::move(pendingEmpty_);
     pendingEmpty_.clear();
     for (const std::shared_ptr<IdeDock>& dock : pending) {
@@ -743,6 +790,7 @@ void IdeLayout::show_session(PlayState state) {
     }
     // A test shows the game as it plays, without the editor's grid.
     show_grid();
+    show_play_state();
 }
 
 void IdeLayout::set_grid(bool on) {
@@ -755,16 +803,8 @@ void IdeLayout::set_grid(bool on) {
 
 void IdeLayout::show_grid() {
     runner_.setSceneGrid(grid_on_ && !in_test());
-    if (grid_button_ == nullptr) {
-        return;
-    }
-    auto& classes = grid_button_->getClassList();
-    const auto& names = classes.items();
-    const bool marked = std::find(names.begin(), names.end(), "on") != names.end();
-    if (grid_on_ && !marked) {
-        classes.add("on");
-    } else if (!grid_on_ && marked) {
-        classes.removeIf([](const std::string& name) { return name == "on"; });
+    if (grid_button_ != nullptr) {
+        SetStyleClass(*grid_button_, "on", grid_on_);
     }
 }
 
@@ -912,8 +952,12 @@ void IdeLayout::show_toast(std::string text, double seconds) {
     jadefx::Toast::show(*root_, std::move(text), seconds, jadefx::Pos::BottomRight);
 }
 
-void IdeLayout::open_preferences() {
+void IdeLayout::open_preferences(const std::string& page) {
     if (preferences_window_ && preferences_window_->isOpen()) {
+        if (!page.empty() && preferences_panel_) {
+            preferences_panel_->show_page(page);
+            preferences_window_->toFront();
+        }
         return;
     }
     constexpr int kWidth = 700;
@@ -974,6 +1018,9 @@ void IdeLayout::open_preferences() {
         preferences_panel_.reset();
         preferences_window_.reset();
     });
+    if (!page.empty()) {
+        panel->show_page(page);
+    }
     preferences_window_ = std::move(window);
     preferences_panel_ = std::move(panel);
 }

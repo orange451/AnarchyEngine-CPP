@@ -285,6 +285,15 @@ JsonValue McpServer::dispatch(const JsonValue& message, bool& reply) const {
         params = &kNoParams;
     }
     const std::string& name = method->as_string();
+    {
+        const std::lock_guard<std::mutex> lock(activity_mutex_);
+        activity_.last_request = std::chrono::steady_clock::now();
+        if (name == "initialize") {
+            const JsonValue* client = params->find("clientInfo");
+            const JsonValue* client_name = client != nullptr && client->is_object() ? client->find("name") : nullptr;
+            activity_.client = client_name != nullptr && client_name->is_string() ? client_name->as_string() : "";
+        }
+    }
     if (name == "initialize") {
         JsonValue tools = JsonValue::object();
         tools.set("listChanged", JsonValue::boolean(false));
@@ -328,6 +337,11 @@ JsonValue McpServer::dispatch(const JsonValue& message, bool& reply) const {
     return ErrorReply(*id, kMethodNotFound, "Method not found: " + name);
 }
 
+McpActivity McpServer::activity() const {
+    const std::lock_guard<std::mutex> lock(activity_mutex_);
+    return activity_;
+}
+
 JsonValue McpServer::call_tool(const JsonValue& params, bool& found) const {
     found = false;
     const JsonValue* name = params.find("name");
@@ -344,6 +358,12 @@ JsonValue McpServer::call_tool(const JsonValue& params, bool& found) const {
         return {};
     }
     found = true;
+    {
+        const std::lock_guard<std::mutex> lock(activity_mutex_);
+        activity_.last_tool = tool->name;
+        ++activity_.calls;
+        activity_.last_call = std::chrono::steady_clock::now();
+    }
     static const JsonValue kNoArguments = JsonValue::object();
     const JsonValue* arguments = params.find("arguments");
     if (arguments == nullptr || !arguments->is_object()) {

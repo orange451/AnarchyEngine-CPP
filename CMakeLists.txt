@@ -110,6 +110,7 @@ set(STUDIO_SOURCES
     src/ide/IdeLayoutDocking.cpp
     src/ide/IdeLayoutEditing.cpp
     src/ide/IdeLayoutMcp.cpp
+    src/ide/IdeLayoutStatus.cpp
     src/ide/IdeLayoutProject.cpp
     src/ide/CutSet.cpp
     src/ide/TextureImport.cpp
@@ -637,6 +638,7 @@ add_executable(studio-tests
     tests/ScratchResourcesTest.cpp
     tests/ConflictsTest.cpp
     tests/ProblemsTest.cpp
+    tests/StatusBarTest.cpp
     tests/ScriptTabsTest.cpp
     tests/TerminalPaneTest.cpp
     tests/GuiStyleTest.cpp

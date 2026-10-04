@@ -16,6 +16,7 @@
 #include "Script.hpp"
 #include "httplib.h"
 
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -128,6 +129,10 @@ void TestProtocol() {
     server.add_tool({"boom", "Always fails.", ide::json_literal(R"({"type":"object"})"),
                      [](const JsonValue&) -> JsonValue { throw std::runtime_error("it broke"); }});
 
+    Expect(server.activity().client.empty() && server.activity().calls == 0 &&
+               server.activity().last_request == std::chrono::steady_clock::time_point{},
+           "a new server has seen no client");
+
     const JsonValue init = Request(server, "initialize", R"({"protocolVersion":"2025-06-18","capabilities":{}})");
     const JsonValue* result = init.find("result");
     Expect(result != nullptr && Member(*result, "protocolVersion").as_string() == "2025-06-18",
@@ -147,6 +152,18 @@ void TestProtocol() {
     Expect(echoed.find("a") != nullptr && Member(echoed, "a").as_number() == 1, "a tool's result is its structured content");
 
     Expect(ErrorText(server, "boom", "{}") == "it broke", "a throwing tool reports its message as a failed call");
+
+    // What the studio's status bar shows: the client, and its latest tool call.
+    Expect(server.activity().last_request != std::chrono::steady_clock::time_point{},
+           "a request is noted");
+    Expect(server.activity().client.empty(), "an initialize without clientInfo names no client");
+    Request(server, "initialize", R"({"protocolVersion":"2025-06-18","clientInfo":{"name":"test-client","version":"1"}})");
+    Expect(server.activity().client == "test-client", "initialize's clientInfo names the client");
+    Call(server, "echo", "{}");
+    Expect(server.activity().calls == 3 && server.activity().last_tool == "echo",
+           "each tool call is counted, failed ones too, and the latest is named");
+    Request(server, "tools/call", R"({"name":"nope"})");
+    Expect(server.activity().calls == 3, "a call to no tool is not counted");
 
     const JsonValue unknown = Request(server, "tools/call", R"({"name":"nope"})");
     Expect(unknown.find("error") != nullptr && Member(Member(unknown, "error"), "code").as_number() == -32602,

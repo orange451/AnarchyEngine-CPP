@@ -26,7 +26,8 @@ public:
     // False, and every call a no-op, when the context has no timer queries.
     bool init();
     bool available() const { return !pool_.empty(); }
-    void begin(profiler::ScopeId scope);
+    // timed false keeps the pairing with end but issues no query.
+    void begin(profiler::ScopeId scope, bool timed = true);
     void end();
     void frame();
     // Deletes the queries. The context that init ran on is current.

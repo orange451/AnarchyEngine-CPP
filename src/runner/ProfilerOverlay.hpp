@@ -83,6 +83,8 @@ public:
     Rect pauseRect() const;
     Rect saveRect() const;
     Rect closeCaptureRect() const;
+    // Switches the GPU row between the whole 3D draw once a frame and each pass.
+    Rect gpuDetailRect() const;
     Rect graphRect() const;
     // Frame index's bar among count frames.
     Rect barRect(std::size_t index, std::size_t count) const;

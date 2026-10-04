@@ -205,6 +205,13 @@ int RunProfilerOverlayTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     click(scene, overlay.pauseRect());
     frame();
     expect(!profiler::paused(), "the pause button resumes");
+    expect(!profiler::gpu_detail(), "the GPU is timed per frame until asked");
+    click(scene, overlay.gpuDetailRect());
+    frame();
+    expect(profiler::gpu_detail(), "the GPU button times each pass");
+    click(scene, overlay.gpuDetailRect());
+    frame();
+    expect(!profiler::gpu_detail(), "and again, the whole frame");
 
     // A second Scene View: clicking it moves the profiler there.
     if (jadefx::MenuItem* add = menu_item(scene, "Window", "New Scene View")) {

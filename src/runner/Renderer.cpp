@@ -16,11 +16,12 @@
 namespace runner {
 namespace {
 
-// One pass, timed on the CPU (a Render scope) and on the GPU (a Gpu scope of the same name).
+// One pass, timed on the CPU (a Render scope), and on the GPU (a Gpu scope of
+// the same name) only when per-pass GPU detail is on.
 class PassTimer {
 public:
     PassTimer(GpuTimer& gpu, profiler::ScopeId cpu, profiler::ScopeId on_gpu) : cpu_(cpu), gpu_(gpu) {
-        gpu_.begin(on_gpu);
+        gpu_.begin(on_gpu, profiler::gpu_detail());
     }
     ~PassTimer() { gpu_.end(); }
     PassTimer(const PassTimer&) = delete;
@@ -596,6 +597,16 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     }
     // The 3D draw runs on the UI thread, but the profiler shows it in the Render section.
     const profiler::RowScope row("Render draw");
+    // On the GPU, the whole draw is one scope, unless each pass is timed instead:
+    // every timed pass stalls the CPU on macOS, and inflates what it measures.
+    static const profiler::ScopeId kScene = profiler::intern("3D scene", profiler::Group::Gpu);
+    struct SceneTimer {
+        GpuTimer& gpu;
+        SceneTimer(GpuTimer& timer, profiler::ScopeId scope) : gpu(timer) { gpu.begin(scope, !profiler::gpu_detail()); }
+        ~SceneTimer() { gpu.end(); }
+        SceneTimer(const SceneTimer&) = delete;
+        SceneTimer& operator=(const SceneTimer&) = delete;
+    } sceneTimer(gpu_, kScene);
 
     GLint viewport[4] = {};
     glGetIntegerv(GL_VIEWPORT, viewport);

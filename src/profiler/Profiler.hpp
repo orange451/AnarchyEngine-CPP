@@ -101,6 +101,12 @@ void frame_boundary();
 // lag_frames frames after it was issued.
 void gpu_scope(ScopeId scope, std::uint8_t depth, std::uint64_t start_ns, std::uint64_t end_ns, int lag_frames);
 
+// Whether the renderer times each pass on the GPU, rather than the whole 3D
+// draw once a frame. Off by default: on macOS's OpenGL every timed pass stalls
+// the CPU and inflates what it measures, so per-pass detail costs the frame.
+bool gpu_detail();
+void set_gpu_detail(bool detail);
+
 std::uint64_t now_ns();
 void set_clock_for_testing(std::uint64_t (*clock)());
 // Empties the rings and the history and turns recording off. Ids stay.

@@ -117,7 +117,7 @@ debug.profileend()
 
 Cmd+P (View > Pause Profiler) freezes what it shows while the game plays on; clicking a frame's bar pauses on that frame. While paused, Save writes the frames to a capture file (`*.aprof.json`): in the studio wherever you choose, and in a game beside the project folder or the game's program. File > Open Profile Capture shows one again, paused; Close capture returns to live. While the profiler shows, a pointer a script locked with `MouseBehavior` is freed so the profiler can be clicked; `MouseBehavior` keeps its value, and the lock comes back on the next click after the profiler is hidden.
 
-GPU times are each pass's length on the GPU, read a frame or two late (the GPU row says how many) and placed just after the moment the pass was issued, since macOS's OpenGL reports no GPU timestamps. Times taken while editing are not the game's: Test first to profile play.
+The GPU row shows the whole 3D draw once a frame, as 3D scene, read a frame or two late (the row says how many). The header's GPU button times each pass instead, for a closer look; on macOS every timed pass makes the CPU wait for the GPU and inflates what it measures, so it slows the frame and is off until asked for. GPU times are lengths placed just after the moment the work was issued, since macOS's OpenGL reports no GPU timestamps. Times taken while editing are not the game's: Test first to profile play.
 
 ## Projects
 

@@ -434,6 +434,17 @@ void testRowScope() {
     profiler::release();
 }
 
+// The GPU is timed once a frame unless detail per pass is asked for: on macOS
+// each timed pass stalls the CPU and inflates what it measures.
+void testGpuDetail() {
+    fresh();
+    expect(!profiler::gpu_detail(), "the GPU is timed per frame by default");
+    profiler::set_gpu_detail(true);
+    expect(profiler::gpu_detail(), "per pass when asked");
+    profiler::set_gpu_detail(false);
+    expect(!profiler::gpu_detail(), "and back");
+}
+
 void testMacro() {
     fresh();
     profiler::acquire();
@@ -469,6 +480,7 @@ int main() {
     testNames();
     testGpuScope();
     testRowScope();
+    testGpuDetail();
     testMacro();
     gFailures += RunProfileJsonTests();
     profiler::set_clock_for_testing(nullptr);

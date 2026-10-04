@@ -449,6 +449,14 @@ void gpu_scope(ScopeId scope, std::uint8_t depth, std::uint64_t start_ns, std::u
     r.gpu_.push_back(late);
 }
 
+namespace {
+std::atomic<bool> g_gpu_detail{false};
+}
+
+bool gpu_detail() { return g_gpu_detail.load(std::memory_order_relaxed); }
+
+void set_gpu_detail(bool detail) { g_gpu_detail.store(detail, std::memory_order_relaxed); }
+
 std::uint64_t now_ns() { return g_clock.load(std::memory_order_relaxed)(); }
 
 void set_clock_for_testing(std::uint64_t (*clock)()) { g_clock.store(clock != nullptr ? clock : &steady_ns); }
@@ -462,6 +470,7 @@ void reset_for_testing() {
     r.frozen_ = History();
     r.capture_ = History();
     detail::g_enabled.store(0);
+    g_gpu_detail.store(false);
 }
 
 void collect() {

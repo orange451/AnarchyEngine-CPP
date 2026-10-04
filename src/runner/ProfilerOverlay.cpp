@@ -187,9 +187,14 @@ ProfilerOverlay::Rect ProfilerOverlay::saveRect() const {
     return {pause.x - 6 - 48, pause.y, 48, 18};
 }
 
-ProfilerOverlay::Rect ProfilerOverlay::closeCaptureRect() const {
+ProfilerOverlay::Rect ProfilerOverlay::gpuDetailRect() const {
     const Rect save = saveRect();
-    return {save.x - 6 - 96, save.y, 96, 18};
+    return {save.x - 6 - 132, save.y, 132, 18};
+}
+
+ProfilerOverlay::Rect ProfilerOverlay::closeCaptureRect() const {
+    const Rect gpu = gpuDetailRect();
+    return {gpu.x - 6 - 96, gpu.y, 96, 18};
 }
 
 ProfilerOverlay::Rect ProfilerOverlay::graphRect() const {
@@ -357,6 +362,8 @@ void ProfilerOverlay::drawHeader(jadefx::Painter& painter, const profiler::Histo
     if (paused && ui.save) {
         button(painter, saveRect(), "Save", false);
     }
+    const bool detail = profiler::gpu_detail();
+    button(painter, gpuDetailRect(), detail ? "GPU: each pass (slow)" : "GPU: whole frame", detail);
     double left = tabRect(ProfilerUi::Tab::Scopes).x + tabRect(ProfilerUi::Tab::Scopes).w + 12;
     std::string info;
     if (!history.frames.empty()) {
@@ -379,9 +386,7 @@ void ProfilerOverlay::drawHeader(jadefx::Painter& painter, const profiler::Histo
         label(painter, left, y + 5, dropped, kOver);
         left += textWidth(dropped) + 14;
     }
-    const double right = (history.capture_name.empty() ? (paused && ui.save ? saveRect().x : pauseRect().x)
-                                                         : closeCaptureRect().x) -
-                         12;
+    const double right = (history.capture_name.empty() ? gpuDetailRect().x : closeCaptureRect().x) - 12;
     const double hints = textWidth(kHints);
     if (right - hints > left) {
         label(painter, right - hints, y + 5, kHints, kMuted);
@@ -733,6 +738,10 @@ void ProfilerOverlay::handleMousePressed(const jadefx::MouseEvent& event) {
                 ui.selected = ProfilerUi::kNewest;
             }
         }
+        return;
+    }
+    if (gpuDetailRect().contains(event.x, event.y)) {
+        profiler::set_gpu_detail(!profiler::gpu_detail());
         return;
     }
     const bool capture = profiler::showing_capture();

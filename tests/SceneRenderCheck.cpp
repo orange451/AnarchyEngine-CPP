@@ -216,36 +216,49 @@ int main() {
         const Pixel middle = ReadPixel(fbWidth / 2, fbHeight / 2);
         const Pixel corner = ReadPixel(2, 2);
         {
-            // Profiled, each pass is a Render scope on the CPU and a GPU scope a frame or so later.
+            // Profiled, each pass is a Render scope on the CPU. The GPU is timed
+            // once a frame, as "3D scene", unless detail per pass is asked for.
             profiler::register_thread("UI");
-            profiler::acquire();
-            for (int frame = 0; frame < 8; ++frame) {
+            auto run = [&](bool detail, int& cpu, int& scene, int& pass) {
+                profiler::reset_for_testing();
+                profiler::set_gpu_detail(detail);
+                profiler::acquire();
+                for (int frame = 0; frame < 8; ++frame) {
+                    profiler::frame_boundary();
+                    renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1);
+                    glfwSwapBuffers(window);
+                }
                 profiler::frame_boundary();
-                renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1);
-                glfwSwapBuffers(window);
-            }
-            profiler::frame_boundary();
-            profiler::collect();
-            int cpu = 0;
-            int gpu = 0;
-            profiler::with_live([&](const profiler::History& history) {
-                for (const profiler::Frame& frame : history.frames) {
-                    for (const profiler::ScopeRecord& record : frame.scopes) {
-                        const profiler::ScopeInfo& info = history.scopes[record.scope];
-                        if (info.name == "Geometry" && info.group == profiler::Group::Render &&
-                            history.rows[record.row] == "Render draw") {
-                            ++cpu;
-                        }
-                        if (info.name == "Geometry" && info.group == profiler::Group::Gpu && history.rows[record.row] == "GPU") {
-                            ++gpu;
+                profiler::collect();
+                cpu = scene = pass = 0;
+                profiler::with_live([&](const profiler::History& history) {
+                    for (const profiler::Frame& frame : history.frames) {
+                        for (const profiler::ScopeRecord& record : frame.scopes) {
+                            const profiler::ScopeInfo& info = history.scopes[record.scope];
+                            const bool gpu = history.rows[record.row] == "GPU";
+                            cpu += info.name == "Geometry" && info.group == profiler::Group::Render &&
+                                           history.rows[record.row] == "Render draw"
+                                       ? 1
+                                       : 0;
+                            scene += gpu && info.name == "3D scene" ? 1 : 0;
+                            pass += gpu && info.name == "Geometry" ? 1 : 0;
                         }
                     }
-                }
-            });
+                });
+                profiler::release();
+                profiler::set_gpu_detail(false);
+            };
+            int cpu = 0;
+            int scene = 0;
+            int pass = 0;
+            run(false, cpu, scene, pass);
             Expect(cpu >= 6, "the geometry pass is timed on the CPU, on the Render draw row (" + std::to_string(cpu) + ")");
-            Expect(gpu >= 3, "and on the GPU (" + std::to_string(gpu) + ")");
+            Expect(scene >= 3 && pass == 0, "by default the GPU is timed once a frame, as 3D scene (" +
+                                                std::to_string(scene) + " frames, " + std::to_string(pass) + " passes)");
+            run(true, cpu, scene, pass);
+            Expect(pass >= 3 && scene == 0, "with detail, each pass is timed on the GPU instead (" + std::to_string(pass) +
+                                                " passes, " + std::to_string(scene) + " frames)");
             Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "timing leaves no GL error");
-            profiler::release();
         }
         Expect(!IsClear(middle), "the cube covers the middle of the view (" + Text(middle) + ")");
         Expect(IsClear(corner), "the corner is the clear color (" + Text(corner) + ")");

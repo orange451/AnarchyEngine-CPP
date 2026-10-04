@@ -28,12 +28,12 @@ bool GpuTimer::init() {
     return true;
 }
 
-void GpuTimer::begin(profiler::ScopeId scope) {
+void GpuTimer::begin(profiler::ScopeId scope, bool timed) {
     Open open;
     open.scope = scope;
     // One elapsed query at a time: a pass inside a timed one goes untimed.
     const bool nested = std::any_of(open_.begin(), open_.end(), [](const Open& outer) { return outer.query != 0; });
-    if (available() && profiler::enabled() && !nested && !free_.empty()) {
+    if (timed && available() && profiler::enabled() && !nested && !free_.empty()) {
         open.query = free_.back();
         free_.pop_back();
         open.issued_ns = profiler::now_ns();

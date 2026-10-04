@@ -462,6 +462,17 @@ add_subdirectory(cmake/miniaudio "${CMAKE_BINARY_DIR}/miniaudio")
 # So the four link each other. CMake allows that cycle between static libraries
 # and repeats them on the link line.
 # A target that links engine_core gets all four and their include directories.
+# The frame profiler's recorder: per-thread rings, the frame history, and stats.
+# It depends on nothing, so the engine, the renderer, and the studio all time into it.
+add_library(profiler STATIC
+    src/profiler/Profiler.cpp
+    src/profiler/ProfileStats.cpp
+)
+target_include_directories(profiler PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_features(profiler PUBLIC cxx_std_17)
+find_package(Threads REQUIRED)
+target_link_libraries(profiler PUBLIC Threads::Threads)
+
 add_library(engine_datatypes STATIC
     src/engine_datatypes/Color3.cpp
     src/engine_datatypes/Enum.cpp
@@ -536,7 +547,7 @@ foreach(package IN LISTS ENGINE_PACKAGES)
     target_compile_features(${package} PUBLIC cxx_std_17)
 endforeach()
 find_package(Threads REQUIRED)
-target_link_libraries(engine_core PUBLIC Threads::Threads engine_datatypes engine_instances engine_services)
+target_link_libraries(engine_core PUBLIC Threads::Threads profiler engine_datatypes engine_instances engine_services)
 target_link_libraries(engine_datatypes PUBLIC engine_core)
 target_link_libraries(engine_instances PUBLIC engine_core amesh)
 target_link_libraries(engine_services PUBLIC engine_core)
@@ -556,6 +567,7 @@ if(ENGINE_CORE_TSAN AND NOT MSVC)
     foreach(package IN LISTS ENGINE_PACKAGES)
         target_compile_options(${package} PRIVATE -fsanitize=thread -fno-omit-frame-pointer -g -O1)
     endforeach()
+    target_compile_options(profiler PRIVATE -fsanitize=thread -fno-omit-frame-pointer -g -O1)
     target_link_options(engine_core PUBLIC -fsanitize=thread)
 endif()
 
@@ -652,6 +664,12 @@ add_executable(mcp-tests
     src/bridge/StudioBridge.cpp
 )
 target_link_libraries(mcp-tests PRIVATE studio_core)
+
+# The profiler's recorder without the engine, and its capture files and report.
+add_executable(profiler-tests
+    tests/ProfilerTest.cpp
+)
+target_link_libraries(profiler-tests PRIVATE profiler)
 
 # Turning the MCP server on and off, registering it with Claude Code, and
 # running a program for its output.
@@ -817,7 +835,7 @@ function(anarchy_warnings target)
 endfunction()
 foreach(target IN ITEMS studio_core studio AnarchyStudio AnarchyPlayer engine-tests shell-tests properties-tests console-tests
                         studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests assets-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
-                        sandbox amesh amesh-tests amesh-gl-check scene-render-check ${ENGINE_PACKAGES})
+                        sandbox amesh amesh-tests amesh-gl-check scene-render-check profiler profiler-tests ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()
 
@@ -903,7 +921,7 @@ endif()
 # runs from the source folder, where resources/ is.
 enable_testing()
 foreach(suite engine-tests properties-tests console-tests studio-tests mcp-tests mcp-setup-tests sandbox shell-tests explorer-tests assets-tests
-              prefab-editor-tests terminal-tests amesh-tests)
+              prefab-editor-tests terminal-tests amesh-tests profiler-tests)
     if(TARGET ${suite})
         add_test(NAME ${suite} COMMAND ${suite} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()

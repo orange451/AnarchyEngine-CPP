@@ -25,7 +25,7 @@ public:
     void present() override {}
 
     // UI thread. The newest snapshot perform() finished, unchanged while held.
-    // Empty before the first frame.
+    // Before the first frame, an empty snapshot at frame 0, never null.
     std::shared_ptr<const engine_core::VisualSnapshot> hold();
     // UI thread. The same, held by the feed until the next latest() call.
     const engine_core::VisualSnapshot& latest();

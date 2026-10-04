@@ -1,6 +1,7 @@
 #include "SceneFeed.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <utility>
 
 namespace runner {
@@ -26,6 +27,14 @@ void SceneFeed::perform(const engine_core::VisualSnapshot& front) {
                 out = buffer;
                 break;
             }
+        }
+        if (out) {
+            // use_count() is a relaxed load; a reader's last shared_ptr
+            // release can land after it with no ordering between them. This
+            // fence makes that load, having observed the release, happen
+            // after it, so the reader's reads of the old frame are ordered
+            // before this thread's writes into the buffer below.
+            std::atomic_thread_fence(std::memory_order_acquire);
         }
         if (!out) {
             out = std::make_shared<engine_core::VisualSnapshot>();

@@ -10,7 +10,8 @@
 #include <vector>
 
 // SceneFeed hands the render thread's snapshots to the Scene Views: the newest
-// finished frame, unchanged until the next latest(), with no torn frame.
+// finished frame, unchanged until the next latest() call, or for as long as a
+// hold() pointer is kept, with no torn frame.
 namespace {
 
 int gFailures = 0;

@@ -15,6 +15,8 @@
 #include "ScriptRuntime.hpp"
 #include "Script.hpp"
 #include "httplib.h"
+#include "profiler/ProfileJson.hpp"
+#include "profiler/Profiler.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -1151,6 +1153,58 @@ void TestImages() {
     fs::remove_all(base, ignored);
 }
 
+// get_profile: records for a while when nothing records, reads a paused history
+// at once, and saves a capture file when given a path.
+void TestProfileTool() {
+    namespace fs = std::filesystem;
+    profiler::reset_for_testing();
+    engine_core::Engine engine;
+    ide::McpServer server;
+    ide::add_engine_tools(server, engine, {});
+    engine.start();
+    engine.resume();
+    // Nothing is recording, as with the studio minimized: the tool collects for itself.
+    const JsonValue report = Call(server, "get_profile", R"({"seconds":0.5,"top":5})");
+    Expect(Member(report, "frames").as_number() >= 5, "get_profile records frames: " + Excerpt(report));
+    Expect(!Member(report, "scopes").items().empty() && Member(report, "scopes").items().size() <= 5,
+           "top limits the scope rows");
+    Expect(report.find("slowest_frame") != nullptr && report.find("frame_ms") != nullptr &&
+               report.find("gpu_lag_frames") != nullptr,
+           "the report has the slowest frame, frame times, and the GPU lag");
+    Expect(Member(report, "recorded_for").as_number() >= 0.45, "it recorded for the seconds asked");
+    Expect(!profiler::enabled(), "and stopped recording after");
+
+    const fs::path file = fs::temp_directory_path() / "anarchy-mcp-profile.aprof.json";
+    fs::remove(file);
+    const JsonValue saved = Call(server, "get_profile",
+                                 std::string("{\"seconds\":0.3,\"include_timeline\":false,\"path\":\"") + file.generic_string() + "\"}");
+    Expect(saved.find("slowest_frame") == nullptr, "include_timeline false leaves the tree out");
+    std::ifstream in(file, std::ios::binary);
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    profiler::History read;
+    std::string error;
+    Expect(profiler::read_capture(text, read, error) && !read.frames.empty(),
+           "path writes a capture that opens again: " + error);
+    fs::remove(file);
+
+    // Paused, it reads the frozen history without waiting.
+    profiler::acquire();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    profiler::collect();
+    profiler::set_paused(true);
+    std::size_t frozen = 0;
+    profiler::with_view([&](const profiler::History& history) { frozen = history.frames.size(); });
+    const auto began = std::chrono::steady_clock::now();
+    const JsonValue paused = Call(server, "get_profile", R"({"seconds":5})");
+    const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+    Expect(took < 1.0, "a paused profile is read at once");
+    Expect(Member(paused, "frames").as_number() == static_cast<double>(frozen), "the paused history's frames");
+    profiler::set_paused(false);
+    profiler::release();
+    engine.stop();
+    profiler::reset_for_testing();
+}
+
 }  // namespace
 
 int main() {
@@ -1167,6 +1221,7 @@ int main() {
     TestImportAssets();
     TestToolSpecs();
     TestImages();
+    TestProfileTool();
     if (gFailures == 0) {
         std::printf("mcp tests passed\n");
         return 0;

@@ -1,5 +1,8 @@
 #include "McpTools.hpp"
 
+#include "profiler/ProfileJson.hpp"
+#include "profiler/Profiler.hpp"
+
 #include "AssetInstances.hpp"
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
@@ -16,6 +19,9 @@
 #include "Strings.hpp"
 #include "TextSearch.hpp"
 
+#include <filesystem>
+#include <fstream>
+#include <ctime>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -1551,6 +1557,56 @@ JsonValue Screenshot(const ToolContext& context, const JsonValue& arguments) {
     return out;
 }
 
+JsonValue GetProfile(const ToolContext&, const JsonValue& arguments) {
+    const double seconds = NumberArg(arguments, "seconds", 2.0, 0.1, 10.0);
+    profiler::ReportOptions options;
+    options.top = IntArg(arguments, "top", 25, 1, 200);
+    options.include_timeline = BoolArg(arguments, "include_timeline", true);
+    const JsonValue* path = arguments.find("path");
+    if (path != nullptr && !path->is_string()) {
+        throw std::runtime_error("path must be a string.");
+    }
+    double recorded = 0;
+    // Nothing recording, as with the profiler hidden or the window minimized:
+    // record here, collecting on this thread, since no paint will.
+    const bool own = !profiler::paused() && !profiler::enabled();
+    if (own) {
+        profiler::acquire();
+        const auto began = std::chrono::steady_clock::now();
+        while (recorded < seconds) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            profiler::collect();
+            recorded = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+        }
+    } else if (!profiler::paused()) {
+        profiler::collect();
+    }
+    JsonValue out;
+    std::string capture;
+    profiler::with_view([&](const profiler::History& history) {
+        out = profiler::build_report(history, options);
+        if (path != nullptr) {
+            capture = profiler::write_capture(history, "MCP", profiler::utc_stamp(std::time(nullptr)));
+        }
+    });
+    if (own) {
+        profiler::release();
+    }
+    out.set("recorded_for", JsonValue::number(std::round(recorded * 100.0) / 100.0));
+    out.set("paused", JsonValue::boolean(profiler::paused()));
+    if (path != nullptr) {
+        const std::filesystem::path file = std::filesystem::u8path(path->as_string());
+        std::ofstream stream(file, std::ios::binary | std::ios::trunc);
+        stream << capture;
+        stream.close();
+        if (!stream) {
+            throw std::runtime_error("Could not write " + path->as_string() + ".");
+        }
+        out.set("saved", JsonValue::string(path->as_string()));
+    }
+    return out;
+}
+
 JsonValue GetStudioInfo(const ToolContext& context, const JsonValue&) {
     JsonValue out = context.studio.info();
     if (context.studio.session) {
@@ -1592,6 +1648,7 @@ constexpr ToolCode kToolCode[] = {
     {"get_diagnostics", GetDiagnostics, nullptr},
     {"run_lua", RunLua, nullptr},
     {"get_output", GetOutput, nullptr},
+    {"get_profile", GetProfile, nullptr},
     {"get_selection", GetSelection, nullptr},
     {"set_selection", SetSelection, nullptr},
     {"undo", Undo, nullptr},

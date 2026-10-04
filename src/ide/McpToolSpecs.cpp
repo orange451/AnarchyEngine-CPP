@@ -123,6 +123,19 @@ constexpr SpecText kSpecs[] = {
      R"({"type":"object","properties":{
          "since":{"type":"integer","minimum":0,"description":"A seq from an earlier call. Default: the oldest kept."},
          "limit":{"type":"integer","minimum":1,"maximum":1000,"description":"Default 200."}}})"},
+    {"get_profile",
+     "Frame timing from the studio's profiler: how long each frame took (avg, p95, max, and frames over "
+     "16.6 ms), the scopes that cost the most per frame (engine phases, each Script with what resumed it, "
+     "debug.profilebegin sections, and GPU passes), and the slowest frame as a tree per thread. When the "
+     "profiler is not recording it records for seconds first; when it is paused it reads the paused frames "
+     "at once. Numbers taken in edit mode are not the game's: start a playtest first to profile play. GPU "
+     "times arrive a frame or two late. With path, also writes a capture file the studio opens with File > "
+     "Open Profile Capture.",
+     R"({"type":"object","properties":{
+         "seconds":{"type":"number","minimum":0.1,"maximum":10,"description":"How long to record when nothing is recording. Default 2."},
+         "top":{"type":"integer","minimum":1,"maximum":200,"description":"Scope rows, slowest first. Default 25."},
+         "include_timeline":{"type":"boolean","description":"Include the slowest frame's tree. Default true."},
+         "path":{"type":"string","description":"Also save a capture (.aprof.json) to this absolute path."}}})"},
     {"get_selection",
      "The instances selected in the studio's explorers, in the order they were picked.",
      R"({"type":"object","properties":{}})"},

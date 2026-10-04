@@ -393,8 +393,8 @@ void IdeLayout::fill_window_menu(jadefx::Menu& menu) {
             });
     }
     menu.getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
-    add("New Scene View", "Camera.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { new_scene_view(); });
-    add("New Terminal", "Console.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { new_terminal(); });
+    add("New Scene View", "CameraPlus.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { new_scene_view(); });
+    add("New Terminal", "ConsolePlus.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { new_terminal(); });
     menu.getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     add("Save Layout as Default", std::string(), nullptr)->setOnAction([this](jadefx::ActionEvent&) {
         save_default_layout();

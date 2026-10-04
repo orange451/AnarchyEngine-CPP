@@ -62,6 +62,7 @@
     --ide-muted-text-color: var(--monokai-subtle);
     --ide-panel-color: var(--monokai-sidebar);
     --ide-status-bar-color: var(--monokai-window);
+    --ide-status-hover-color: var(--monokai-line);
     --ide-field-color: var(--monokai-input);
     --ide-field-border-color: var(--monokai-input);
     --ide-error-text-color: var(--monokai-pink);

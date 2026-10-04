@@ -106,6 +106,7 @@ const std::vector<ThemeVariable>& theme_variables() {
         {"--ide-muted-text-color", "Studio", "Muted text"},
         {"--ide-panel-color", "Studio", "Panel"},
         {"--ide-status-bar-color", "Studio", "Status bar"},
+        {"--ide-status-hover-color", "Studio", "Status bar item hover"},
         {"--ide-field-color", "Studio", "Text field"},
         {"--ide-field-border-color", "Studio", "Text field border"},
         {"--ide-error-text-color", "Studio", "Error text"},

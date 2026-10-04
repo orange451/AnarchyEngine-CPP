@@ -467,12 +467,31 @@ int RunProblemsStartupTests() {
     expect(scene->getElementsByClassName("problems-pane").empty(),
            "no docked or visible Problems pane is in the scene at startup");
 
-    // Opening it docks the very same pane, not a second one, and builds its
-    // rows once from the list it already has.
-    layout.show_problems();
+    // The status bar counts them too, from the same list.
+    auto count_text = [&scene](const char* id) {
+        const auto* label = dynamic_cast<const jadefx::Label*>(scene->getElementById(id));
+        return label != nullptr ? label->getText() : std::string("?");
+    };
+    if (problems != nullptr) {
+        expect(count_text("problems-errors-text") == std::to_string(problems->list().total.errors) &&
+                   count_text("problems-warnings-text") == std::to_string(problems->list().total.warnings),
+               "the status bar shows the place's errors and warnings");
+        expect(problems->list().total.errors + problems->list().total.warnings == 1, "which add up to the one problem");
+    }
+
+    // Clicking that count docks the very same pane, not a second one, and
+    // builds its rows once from the list it already has.
+    const jadefx::Node* chip = scene->getElementById("problems-count");
+    expect(chip != nullptr && chip->isVisible(), "the status bar's problem count is showing");
+    if (chip != nullptr) {
+        const double x = chip->getAbsoluteX() + chip->getWidth() * 0.5;
+        const double y = chip->getAbsoluteY() + chip->getHeight() * 0.5;
+        scene->noteButton(0, true, x, y, 0);
+        scene->noteButton(0, false, x, y, 0);
+    }
     scene->layout(1280, 800, 0.6);
     const std::vector<jadefx::Node*> opened = scene->getElementsByClassName("problems-pane");
-    expect(opened.size() == 1, "show_problems docks one Problems pane");
+    expect(opened.size() == 1, "clicking the status bar's count docks one Problems pane");
     expect(!opened.empty() && opened.front() == raw_pane, "it is the pane made at startup, not a second one");
     if (problems != nullptr) {
         expect(problems->rebuilds() == 1, "opening it builds its rows once");
@@ -480,6 +499,10 @@ int RunProblemsStartupTests() {
 
     game.destroy(broken.id());
     settle(engine);
+    scene->layout(1280, 800, 0.7);
+    layout.flushFrame();
+    expect(count_text("problems-errors-text") == "0" && count_text("problems-warnings-text") == "0",
+           "the status bar's counts go back to zero with the script gone");
     return gFailures;
 }
 

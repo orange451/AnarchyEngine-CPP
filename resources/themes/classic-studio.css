@@ -62,6 +62,7 @@
     --ide-muted-text-color: #aaaaaa;
     --ide-panel-color: var(--studio-main);
     --ide-status-bar-color: var(--studio-dark);
+    --ide-status-hover-color: var(--studio-button);
     --ide-field-color: var(--studio-background);
     --ide-field-border-color: var(--studio-dark);
     --ide-error-text-color: #ff5a5a;

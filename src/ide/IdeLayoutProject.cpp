@@ -439,6 +439,20 @@ void IdeLayout::show_conflict_count() {
     }
 }
 
+void IdeLayout::show_problem_count(const ProblemCounts& total) {
+    if (problem_errors_text_ == nullptr || (total.errors == shown_errors_ && total.warnings == shown_warnings_)) {
+        return;
+    }
+    shown_errors_ = total.errors;
+    shown_warnings_ = total.warnings;
+    problem_errors_text_->setText(std::to_string(total.errors));
+    problem_warnings_text_->setText(std::to_string(total.warnings));
+    problem_tip_->setText(total.errors == 0 && total.warnings == 0
+                              ? std::string("No problems")
+                              : Counted(total.errors, "error", "errors") + ", " +
+                                    Counted(total.warnings, "warning", "warnings"));
+}
+
 void IdeLayout::select_guid(const std::string& guid) {
     bool found = false;
     run_now([&](engine_core::DataModel& game) {

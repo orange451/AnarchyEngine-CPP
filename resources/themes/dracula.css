@@ -59,6 +59,7 @@
     --ide-muted-text-color: #b4b7cc;
     --ide-panel-color: var(--dracula-background-dark);
     --ide-status-bar-color: var(--dracula-background-darker);
+    --ide-status-hover-color: var(--dracula-background-lighter);
     --ide-field-color: var(--dracula-background-light);
     --ide-field-border-color: var(--dracula-background-darker);
     --ide-error-text-color: var(--dracula-red);

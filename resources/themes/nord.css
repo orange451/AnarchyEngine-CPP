@@ -63,6 +63,7 @@
     --ide-muted-text-color: var(--nord-nord4);
     --ide-panel-color: var(--nord-nord0);
     --ide-status-bar-color: var(--nord-nord0-dark);
+    --ide-status-hover-color: var(--nord-nord2);
     --ide-field-color: var(--nord-nord1);
     --ide-field-border-color: var(--nord-nord2);
     --ide-error-text-color: var(--nord-nord11);

@@ -264,7 +264,7 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     layout.check_disk();
     expect(part_has("Transform"), "a change only the disk made loads when the studio checks");
     expect(!layout.has_unsaved_changes(), "and leaves nothing to save");
-    expect(!count_shown(), "with no conflict, the ribbon shows no count");
+    expect(!count_shown(), "with no conflict, the status bar shows no count");
 
     set_disk(0, 1, 0);
     scene.noteWindowFocus(false);
@@ -302,7 +302,7 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     move_part(0.25f, 0.5f, 0.75f);
     set_disk(1, 0, 0);
     layout.check_disk();
-    expect(count_shown(), "a conflict shows a count on the ribbon");
+    expect(count_shown(), "a conflict shows a count on the status bar");
     const auto* count = dynamic_cast<const jadefx::Label*>(scene.getElementById("conflicts-count-text"));
     expect(count != nullptr && count->getText() == "1", "counting the rows");
 

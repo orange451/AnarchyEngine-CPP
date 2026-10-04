@@ -185,7 +185,7 @@ private:
 };
 
 IdeConflicts::IdeConflicts(ConflictsHost host) : IdePane("Conflicts", true), host_(std::move(host)) {
-    setIconFile("Warning.png");
+    setIconFile("DiskConflict.png");
     getClassList().add("conflicts-pane");
     setStylesheet(kConflictRules);
     setMinSize(200, 140);

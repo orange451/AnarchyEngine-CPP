@@ -63,6 +63,7 @@
     --ide-muted-text-color: var(--one-dark-subtle);
     --ide-panel-color: var(--one-dark-sidebar);
     --ide-status-bar-color: var(--one-dark-input);
+    --ide-status-hover-color: var(--one-dark-hover);
     --ide-field-color: var(--one-dark-input);
     --ide-field-border-color: var(--one-dark-border);
     --ide-error-text-color: var(--one-dark-red);

@@ -66,6 +66,7 @@
     --ide-muted-text-color: var(--solarized-base0);
     --ide-panel-color: var(--solarized-sidebar);
     --ide-status-bar-color: var(--solarized-window);
+    --ide-status-hover-color: var(--solarized-hover);
     --ide-field-color: var(--solarized-input);
     --ide-field-border-color: var(--solarized-base02);
     --ide-error-text-color: var(--solarized-red);

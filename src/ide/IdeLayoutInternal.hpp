@@ -159,6 +159,16 @@ scene {
 }
 .ide-status {
     background-color: var(--ide-status-bar-color);
+    padding: 0 4px;
+}
+.ide-status-chip {
+    padding: 0 6px;
+    border-radius: 4px;
+    font-size: 12px;
+    transition: background-color 0.12s;
+}
+.ide-status-chip:hover {
+    background-color: var(--ide-status-hover-color);
 }
 .ide-ribbon {
     background-color: var(--ide-ribbon-color);
@@ -385,6 +395,46 @@ public:
                 action_();
             }
         });
+    }
+
+private:
+    std::function<void()> action_;
+};
+
+// A clickable item on the status bar: icons, each with a number after it.
+class StatusChip : public jadefx::HBox {
+public:
+    explicit StatusChip(std::function<void()> action) : action_(std::move(action)) {
+        getClassList().add("ide-status-chip");
+        setSpacing(4);
+        setAlignment(jadefx::Pos::CenterLeft);
+        setCursor(jadefx::Cursor::Pointer);
+        setOnMouseClicked([this](const jadefx::MouseEvent& event) {
+            if (event.button == 0 && action_) {
+                action_();
+            }
+        });
+    }
+
+    // An icon and the label after it, which the caller keeps to set.
+    jadefx::Label* add_count(const char* icon, const char* id) {
+        // A wider gap than the spacing sets each count apart from the one before.
+        if (!getChildren().empty()) {
+            auto gap = jadefx::make<jadefx::Pane>();
+            gap->setMouseTransparent(true);
+            gap->setMinSize(4, 0);
+            gap->setPrefWidth(4);
+            getChildren().add(std::move(gap));
+        }
+        if (std::shared_ptr<jadefx::ImageView> view = icon_graphic(icon)) {
+            getChildren().add(std::move(view));
+        }
+        auto text = jadefx::make<jadefx::Label>("0");
+        text->setElementId(id);
+        text->setMouseTransparent(true);
+        jadefx::Label* raw = text.get();
+        getChildren().add(std::move(text));
+        return raw;
     }
 
 private:

@@ -39,6 +39,7 @@ struct PrefabEditorHost;
 class IdeSearch;
 class IdeConflicts;
 class IdeProblems;
+struct ProblemCounts;
 class McpServer;
 class UiCalls;
 class PreferencesPanel;
@@ -395,8 +396,10 @@ private:
                        engine_core::InstanceId folder);
     // Where Search and Conflicts dock: beside the left explorer, else where editors dock.
     IdeDock* side_home();
-    // The ribbon's count and the Conflicts window's rows, from conflicts_.
+    // The status bar's count and the Conflicts window's rows, from conflicts_.
     void show_conflict_count();
+    // The status bar's error and warning counts, from Problems' unfiltered list.
+    void show_problem_count(const ProblemCounts& total);
     // Selects the instance with this GUID and shows it in every explorer.
     void select_guid(const std::string& guid);
     // A rename or a Properties field is being typed in: a check waits for it.
@@ -488,10 +491,16 @@ private:
     bool was_focused_ = true;
     // A test holds changes on disk back until it stops, and a toast said so.
     bool noted_play_check_ = false;
-    // The ribbon's conflict count: shown only when there are conflicts.
+    // The status bar's conflict count: shown only when there are conflicts.
     jadefx::Node* conflict_count_ = nullptr;
     jadefx::Label* conflict_count_text_ = nullptr;
     std::shared_ptr<jadefx::Tooltip> conflict_tip_;
+    // The status bar's error and warning counts, and the counts they last showed.
+    jadefx::Label* problem_errors_text_ = nullptr;
+    jadefx::Label* problem_warnings_text_ = nullptr;
+    std::shared_ptr<jadefx::Tooltip> problem_tip_;
+    int shown_errors_ = 0;
+    int shown_warnings_ = 0;
     std::vector<std::weak_ptr<class IdeExplorer>> explorers_;
     // The windows the Window menu opens and closes, and layout.json keeps.
     std::vector<std::unique_ptr<WindowEntry>> windows_;

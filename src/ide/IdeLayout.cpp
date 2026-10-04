@@ -80,24 +80,10 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     ribbon->getChildren().add(std::move(pause));
     ribbon->getChildren().add(std::move(resume));
     ribbon->getChildren().add(std::move(stop));
-    // Conflicts with the disk: a count at the right end, shown only when there are any.
     auto gap = jadefx::make<jadefx::Pane>();
     gap->setStyle("width: 100%;");
     gap->setMouseTransparent(true);
     ribbon->getChildren().add(gap);
-    auto count = jadefx::make<RibbonButton>("0", "Warning.png", [this] { show_conflicts(); });
-    count->setElementId("conflicts-count");
-    count->setVisible(false);
-    for (const std::shared_ptr<jadefx::Node>& child : count->getChildren().items()) {
-        if (auto* label = dynamic_cast<jadefx::Label*>(child.get())) {
-            label->setElementId("conflicts-count-text");
-            conflict_count_text_ = label;
-        }
-    }
-    conflict_tip_ = jadefx::make<jadefx::Tooltip>("");
-    jadefx::Tooltip::install(count.get(), conflict_tip_);
-    conflict_count_ = count.get();
-    ribbon->getChildren().add(std::move(count));
     // The Scene Views' floor grid, at the right end: lit while on.
     auto grid = jadefx::make<RibbonButton>("", "Grid.png", [this] { set_grid(!grid_on_); });
     grid->setElementId("grid-toggle");
@@ -210,10 +196,34 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     scene_view_ = jadefx::make<runner::GameView>(runner_);
     accept_prefab_drops(*scene_view_);
 
-    auto status = jadefx::make<jadefx::Pane>();
+    auto status = jadefx::make<jadefx::HBox>();
     status->getClassList().add("ide-status");
+    status->setSpacing(2);
+    status->setAlignment(jadefx::Pos::CenterLeft);
     status->setMinSize(0, kStatusHeight);
     status->setPrefHeight(kStatusHeight);
+    // The chips sit at the right end.
+    auto status_gap = jadefx::make<jadefx::Pane>();
+    status_gap->setStyle("width: 100%;");
+    status_gap->setMouseTransparent(true);
+    status->getChildren().add(std::move(status_gap));
+    // The place's script errors and warnings, as Problems counts them. Opens Problems.
+    auto problems = jadefx::make<StatusChip>([this] { show_problems(); });
+    problems->setElementId("problems-count");
+    problem_errors_text_ = problems->add_count("Error.png", "problems-errors-text");
+    problem_warnings_text_ = problems->add_count("Exclamation.png", "problems-warnings-text");
+    problem_tip_ = jadefx::make<jadefx::Tooltip>("No problems");
+    jadefx::Tooltip::install(problems.get(), problem_tip_);
+    status->getChildren().add(std::move(problems));
+    // Conflicts with the disk, shown only when there are any. Opens Conflicts.
+    auto conflicts = jadefx::make<StatusChip>([this] { show_conflicts(); });
+    conflicts->setElementId("conflicts-count");
+    conflicts->setVisible(false);
+    conflict_count_text_ = conflicts->add_count("DiskConflict.png", "conflicts-count-text");
+    conflict_tip_ = jadefx::make<jadefx::Tooltip>("");
+    jadefx::Tooltip::install(conflicts.get(), conflict_tip_);
+    conflict_count_ = conflicts.get();
+    status->getChildren().add(std::move(conflicts));
 
     root_ = jadefx::make<jadefx::BorderPane>();
     root_->setPrefWidthRatio(1);
@@ -261,7 +271,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     });
     search_window_ = &keep_closed("Search", "Search.png", [this] { return make_search(); });
     search_window_->open = [this] { open_search(false, scene_); };
-    conflicts_window_ = &keep_closed("Conflicts", "Warning.png", [this] { return make_conflicts(); });
+    conflicts_window_ = &keep_closed("Conflicts", "DiskConflict.png", [this] { return make_conflicts(); });
     // Made now, not lazily like Search and Conflicts: so flushFrame can tick
     // it from the first frame, and the list and the title count from startup
     // whether or not Problems is ever opened. Still closed until the Window
@@ -427,6 +437,7 @@ void IdeLayout::flushFrame() {
     if (problems_window_ != nullptr && problems_window_->pane) {
         if (auto* problems = dynamic_cast<IdeProblems*>(problems_window_->pane.get())) {
             problems->tick(scene_ != nullptr ? scene_->timeSeconds() : 0);
+            show_problem_count(problems->list().total);
         }
     }
     const std::vector<std::shared_ptr<IdeDock>> pending = std::move(pendingEmpty_);

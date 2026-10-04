@@ -87,8 +87,12 @@ public:
         const char wake = 0;
         (void)::write(stop_write_, &wake, 1);
         reader_.join();
+        // Closing the master hangs the terminal up, as when a terminal window
+        // closes, and drops its unread output. It comes before the wait: macOS
+        // holds an exiting shell until that output drains, and a job that
+        // outlives the shell's hangup (claude, for one) keeps adding to it.
+        close(master_);
         if (!reaped_) {
-            // The shell ends on a hangup, as when a terminal window closes.
             kill(child_, SIGHUP);
             for (int tries = 0; tries < 50; ++tries) {
                 if (waitpid(child_, nullptr, WNOHANG) != 0) {
@@ -102,7 +106,6 @@ public:
                 waitpid(child_, nullptr, 0);
             }
         }
-        close(master_);
         close(stop_read_);
         close(stop_write_);
     }

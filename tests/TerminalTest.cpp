@@ -206,6 +206,33 @@ void TestClosingEndsARunningChild() {
     Expect(took < std::chrono::seconds(5), "closing a pty with a live shell returns promptly");
 }
 
+#if !defined(_WIN32)
+// A job that outlives the shell's hangup and keeps writing, as claude does:
+// macOS holds an exiting zsh until the terminal's output drains, so closing
+// must not stop reading and then wait on the shell.
+void TestClosingEndsAShellWhoseJobKeepsWriting() {
+    if (!std::filesystem::exists("/bin/zsh")) {
+        return;
+    }
+    Transcript transcript;
+    ide::PtyOptions options;
+    options.program = "/bin/zsh";
+    options.args = {"-f"};
+    transcript.attach(options);
+    std::unique_ptr<ide::Pty> pty = ide::Pty::spawn(std::move(options), nullptr);
+    if (!pty) {
+        Expect(false, "a shell with a busy job starts to close");
+        return;
+    }
+    pty->write("(trap '' HUP; while echo still-writing; do sleep 0.01; done)\r");
+    Expect(transcript.wait_for("still-writing\r\nstill-writing"), "the job writes before the close");
+    const auto start = std::chrono::steady_clock::now();
+    pty.reset();
+    const auto took = std::chrono::steady_clock::now() - start;
+    Expect(took < std::chrono::seconds(5), "closing a pty whose job ignores the hangup returns promptly");
+}
+#endif
+
 void TestTextLandsInCells() {
     ide::TerminalScreen screen(5, 20);
     screen.write("hi\r\nthere");
@@ -354,6 +381,9 @@ int main() {
     TestSizeReachesTheChild();
     TestEnvironmentAndFolderReachTheChild();
     TestClosingEndsARunningChild();
+#if !defined(_WIN32)
+    TestClosingEndsAShellWhoseJobKeepsWriting();
+#endif
     if (gFailures == 0) {
         std::printf("terminal tests passed\n");
         return 0;

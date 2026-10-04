@@ -381,6 +381,7 @@ void IdeProblems::refresh() {
 
 void IdeProblems::refresh_paths() {
     engine_core::DataModel& game = engine_.datamodel();
+    bool shown_moved = false;
     {
         engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kFrameLockWait);
         if (!lock.owns()) {
@@ -393,15 +394,24 @@ void IdeProblems::refresh_paths() {
         for (ProblemSource& source : sources_) {
             std::string path;
             if (!path_of(game, source.id, path)) {
+                shown_moved = true;
                 continue;
             }
-            source.name = game.name(source.id);
-            source.path = std::move(path);
+            std::string name = game.name(source.id);
+            if (name != source.name || path != source.path) {
+                source.name = std::move(name);
+                source.path = std::move(path);
+                shown_moved = true;
+            }
             kept.push_back(std::move(source));
         }
         sources_ = std::move(kept);
     }
-    rebuild();
+    // Most tree changes touch nothing listed: a part made or destroyed, a
+    // folder no listed script is under renamed. The rows stay as they are.
+    if (shown_moved) {
+        rebuild();
+    }
 }
 
 void IdeProblems::rebuild() {
@@ -559,7 +569,11 @@ void IdeProblems::tick(double now) {
         update_notices();
     }
     bool changed = changed_.take() || !built_once_;
-    bool moved = engine_.datamodel().tree_revision() != seen_tree_;
+    // A playtest churns the tree every frame as it spawns and destroys things,
+    // and Stop puts the authored tree back, ids and all. The pane keeps the
+    // last Edit-mode results through play, so it does not follow the tree
+    // until Stop; the first tick after it reads the restored names and paths.
+    bool moved = !playing && engine_.datamodel().tree_revision() != seen_tree_;
     // A long check batch publishes a little every frame. Rebuilding every row
     // each time is wasted work no one can read, so while it runs the rows
     // follow at most every kBusyRebuildInterval; what waits is kept for the

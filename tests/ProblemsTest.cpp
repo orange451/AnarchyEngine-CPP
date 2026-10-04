@@ -255,13 +255,33 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     h.frame();
     expect(h.pane->rebuilds() == after_many, "a quiet frame does not rebuild");
 
+    // Tree churn that changes no shown name or path, as a game spawning and
+    // destroying things every frame: the tree revision moves, the rows stay.
+    {
+        const std::uint64_t revision = game.tree_revision();
+        for (int i = 0; i < 5; ++i) {
+            engine_core::Folder& passing = game.create<engine_core::Folder>();
+            game.set_name(passing.id(), "Passing");
+            game.set_parent(passing.id(), workspace);
+            game.destroy(passing.id());
+            h.frame();
+        }
+        expect(game.tree_revision() != revision, "creating and destroying a folder moves the tree revision");
+        expect(h.pane->rebuilds() == after_many, "tree churn that changes no shown name or path does not rebuild");
+    }
+
     // During a long check batch the rows follow at most every 250 ms of scene
-    // time. Each frame here renames a folder, so a tree change waits every
-    // time, and edits a script, so the checker stays busy.
+    // time. Each frame here renames the folder a listed script is in, so a
+    // change to a shown path waits every time, and edits a script, so the
+    // checker stays busy.
     {
         engine_core::Folder& churn = game.create<engine_core::Folder>();
         game.set_name(churn.id(), "Churn");
         game.set_parent(churn.id(), workspace);
+        const std::uint32_t inside = h.pane->list().scripts.empty() ? 0 : h.pane->list().scripts.back().id;
+        if (inside != 0) {
+            game.set_parent(inside, churn.id());
+        }
         settle(engine);
         const double start = Harness::clock() + 1;
         h.frame_at(start);
@@ -287,6 +307,9 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
         const int before_idle = h.pane->rebuilds();
         h.frame_at(start + 0.30 + 0.27);
         expect(h.pane->rebuilds() == before_idle + 1, "and once more when it goes idle");
+        if (inside != 0) {
+            game.set_parent(inside, workspace);
+        }
         game.destroy(churn.id());
         settle(engine);
         h.frame();
@@ -315,9 +338,37 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     h.frame();
     expect(h.pane->playNoteShown(), "the play note shows during a playtest");
     expect(h.pane->list().scripts.size() == shown, "and the last results stay");
-    game.stop_simulation();
-    settle(engine);
-    h.frame();
+    // Play churns the tree every frame, and may rename what the list shows;
+    // Stop puts the authored tree back. The pane keeps the Edit-mode rows
+    // through all of it.
+    {
+        const int before_churn = h.pane->rebuilds();
+        const std::uint32_t renamed = shown > 0 ? h.pane->list().scripts[0].id : 0;
+        const std::string authored = shown > 0 ? h.pane->list().scripts[0].name : std::string();
+        if (renamed != 0) {
+            game.set_name(renamed, "PlayName");
+        }
+        for (int i = 0; i < 5; ++i) {
+            engine_core::Folder& debris = game.create<engine_core::Folder>();
+            game.set_name(debris.id(), "Debris");
+            game.set_parent(debris.id(), workspace);
+            game.destroy(debris.id());
+            h.frame();
+        }
+        expect(h.pane->rebuilds() == before_churn, "tree churn during play does not rebuild");
+        expect(!h.pane->list().scripts.empty() && h.pane->list().scripts[0].name == authored,
+               "a rename during play is not followed");
+        game.stop_simulation();
+        settle(engine);
+        h.frame();
+        // Stop restores the tree as it was captured, which here predates the
+        // scripts this test made, so check only that the rows match it.
+        bool matches = true;
+        for (const ide::ScriptProblems& script : h.pane->list().scripts) {
+            matches = matches && script.name == game.name(script.id);
+        }
+        expect(matches, "after Stop the rows follow the restored tree");
+    }
     expect(!h.pane->playNoteShown(), "the note goes after Stop");
 
     // Analysis off.
@@ -463,6 +514,37 @@ int RunProblemsWindowTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         expect(pane->title() == before, "and drops it again when it goes");
         dock->tabs()->select(problems_tab);
         scene.layout(1280, 800, 50.7);
+
+        // Closed, the page is kept for reopening but does no work.
+        dock->tabs()->close(problems_tab);
+        scene.layout(1280, 800, 50.8);
+        layout.flushFrame();
+        expect(scene.getElementsByClassName("problems-pane").empty(), "closing the Problems tab closes it");
+        const int closed_rebuilds = pane->rebuilds();
+        engine_core::Script& unseen =
+            add_script(game, game.scene_service("Workspace"), "ClosedTabBroken", "nope()\n");
+        settle(engine);
+        for (int i = 0; i < 3; ++i) {
+            scene.layout(1280, 800, 50.81 + 0.01 * i);
+            layout.flushFrame();
+        }
+        expect(pane->rebuilds() == closed_rebuilds, "a closed Problems page does not rebuild as problems change");
+        // Reopened, it is current at once.
+        layout.show_problems();
+        scene.layout(1280, 800, 50.9);
+        layout.flushFrame();
+        const std::vector<jadefx::Node*> reopened = scene.getElementsByClassName("problems-pane");
+        auto* again = reopened.empty() ? nullptr : dynamic_cast<ide::IdeProblems*>(reopened.front());
+        bool caught_up = false;
+        if (again != nullptr) {
+            for (const ide::ScriptProblems& listed : again->list().scripts) {
+                caught_up = caught_up || listed.id == unseen.id();
+            }
+        }
+        expect(caught_up, "reopened, Problems lists what changed while it was closed");
+        game.destroy(unseen.id());
+        settle(engine);
+        scene.layout(1280, 800, 51.0);
     }
 
     game.destroy(script.id());

@@ -32,7 +32,8 @@ struct ProblemsHost {
 // and Escape clears it. The list follows the checker as it publishes and the
 // tree as scripts and their folders move or are renamed, rebuilt at most once
 // a frame, and at most every 250 ms while a long check runs. While a playtest
-// runs the checker rests, and the pane says so and keeps the last results.
+// runs the checker rests, and the pane says so and keeps the last results,
+// without following the tree until Stop restores it.
 class IdeProblems : public IdePane {
 public:
     IdeProblems(engine_core::Engine& engine, ProblemsHost host);
@@ -82,8 +83,9 @@ private:
     void rebuild();
     // Rebuilds now when the filter or a toggle moved since the last rebuild.
     void sync_filter();
-    // A tree change alone: the cached scripts' names and paths read again, and
-    // the rows rebuilt. Scripts that left the place, or went under Core, drop.
+    // A tree change alone: the cached scripts' names and paths read again.
+    // Scripts that left the place, or went under Core, drop. The rows are
+    // rebuilt only when a shown name or path changed or a script dropped.
     void refresh_paths();
     void update_toggles();
     // Each toggle as wide as its word and count.

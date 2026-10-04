@@ -416,8 +416,11 @@ void IdeLayout::flushFrame() {
     refresh_modified();
     // A tab that is not showing is not laid out, so Problems would stop
     // counting in its tab's title. Its tick does nothing a layout this frame
-    // already did.
-    if (problems_window_ != nullptr && problems_window_->pane) {
+    // already did. A closed Problems page is kept for reopening but not
+    // ticked: its change flag and the tree revision it last read stay
+    // behind, so its first tick after reopening catches up.
+    if (problems_window_ != nullptr && problems_window_->pane &&
+        dockContaining(problems_window_->pane.get()) != nullptr) {
         if (auto* problems = dynamic_cast<IdeProblems*>(problems_window_->pane.get())) {
             problems->tick(scene_ != nullptr ? scene_->timeSeconds() : 0);
         }

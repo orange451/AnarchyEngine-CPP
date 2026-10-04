@@ -1,4 +1,5 @@
 #include "IdeLayout.hpp"
+#include "runner/ProfilerOverlay.hpp"
 
 #include "AiClientsPage.hpp"
 #include "IdeAssets.hpp"
@@ -105,6 +106,12 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         ->setOnAction([this](jadefx::ActionEvent&) { set_zoom(jadefx::Stage::getZoom() - 0.1); });
     AddItem(*view, "Actual Size", nullptr, jadefx::Key::Digit0, jadefx::Key::ModControl)
         ->setOnAction([this](jadefx::ActionEvent&) { set_zoom(1.0); });
+    view->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
+    // The frame profiler, over the Scene View last clicked.
+    AddItem(*view, "Profiler", nullptr, jadefx::Key::F6, jadefx::Key::ModControl)
+        ->setOnAction([](jadefx::ActionEvent&) { runner::ProfilerUi::get().toggleShown(); });
+    AddItem(*view, "Pause Profiler", nullptr, jadefx::Key::P, jadefx::Key::ModControl)
+        ->setOnAction([](jadefx::ActionEvent&) { runner::ProfilerUi::get().togglePaused(); });
     view->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     AddItem(*view, "Maybe :)", "Smile.png", 0, 0);
 

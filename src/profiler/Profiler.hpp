@@ -29,6 +29,10 @@ inline constexpr CauseId kNoCause = 0xffff;
 inline constexpr std::size_t kRingEvents = 65536;
 inline constexpr std::size_t kHistoryFrames = 300;
 inline constexpr std::size_t kMaxNameBytes = 64;
+// A 60 Hz frame's budget, and the length past which a frame counts as over it:
+// a little slack, so vsync's jitter around 16.7 ms is not called slow.
+inline constexpr double kBudgetMs = 16.6;
+inline constexpr double kOverBudgetMs = 17.5;
 
 struct ScopeInfo {
     std::string name;

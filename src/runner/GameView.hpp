@@ -3,6 +3,7 @@
 #include "ide/IdePane.hpp"
 #include "GuiLayer.hpp"
 #include "MeshCache.hpp"
+#include "ProfilerOverlay.hpp"
 #include "TextureCache.hpp"
 #include "Renderer.hpp"
 #include "types.hpp"
@@ -70,6 +71,7 @@ class SceneFeed;
 class GameView : public ide::IdePane {
 public:
     explicit GameView(Runner& runner, std::string name = "Scene View", bool closable = false);
+    ~GameView() override;
 
     // The next paint reads back what it drew, before the overlays, and hands it to
     // done on this thread. A view that does not paint, such as a hidden tab,
@@ -87,6 +89,12 @@ public:
     GuiLayer& guiLayer() { return *guiLayer_; }
     // The eye left of the camera list. Selected, as it starts, draws the GUIs.
     jadefx::ToggleButton& guiToggle() { return *guiToggle_; }
+    // The profiler over this view. It shows while ProfilerUi is shown and this
+    // view is its owner: the Scene View last clicked or focused.
+    ProfilerOverlay& profilerOverlay() { return *profilerOverlay_; }
+    // A script's MouseBehavior asks for a lock and the profiler is not showing.
+    bool pointerWanted() const;
+
     // The player's view: no camera list, since a game shows only
     // itself, and the view follows the Workspace's CurrentCamera, as a script
     // sets it, rather than the Camera picked in the list.
@@ -114,6 +122,7 @@ protected:
     void handleScroll(jadefx::ScrollEvent& event) override;
     void handleKey(jadefx::KeyEvent& event) override;
     void handleFocusLost() override;
+    void handleFocusGained() override;
 
 private:
     void notePaint();
@@ -245,6 +254,10 @@ private:
     bool followCurrentCamera_ = false;
     // setPlayerView: no camera list or eye, and the GUIs always drawn.
     bool playerView_ = false;
+    ProfilerOverlay* profilerOverlay_ = nullptr;
+    // The player's Cmd+F6 and Cmd+P, on its window's scene.
+    jadefx::Scene* hookedScene_ = nullptr;
+    int keyHook_ = 0;
     // Paints in the current window. framesPerSecond and frameMilliseconds read the finished average.
     std::chrono::steady_clock::time_point paintWindowStart_{};
     int paintWindowFrames_ = 0;

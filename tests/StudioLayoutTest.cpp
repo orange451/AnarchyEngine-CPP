@@ -45,6 +45,7 @@ int RunScriptTabTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunTerminalPaneTests();
 int RunGuiStyleTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunStatusBarTests(ide::IdeLayout& layout, jadefx::Scene& scene);
+int RunProfilerOverlayTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 
 // R10: the studio's default layout builds, and its docks hold the explorers,
 // the console, and Properties. Runs headless: the threads are never started.
@@ -926,6 +927,7 @@ int main() {
     failures += RunTerminalPaneTests();
     failures += RunGuiStyleTests(layout, *scene);
     failures += RunStatusBarTests(layout, *scene);
+    failures += RunProfilerOverlayTests(layout, *scene);
 
     // The layout is kept in layout.json in the config folder, and the next
     // studio docks the windows that way again.

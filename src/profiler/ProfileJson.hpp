@@ -13,7 +13,6 @@ namespace profiler {
 
 inline constexpr const char* kCaptureFormat = "anarchy-profile";
 inline constexpr int kCaptureVersion = 1;
-inline constexpr double kBudgetMs = 16.6;
 
 // One line of compact JSON. Times are microseconds from the first frame's start.
 std::string write_capture(const History& history, const std::string& place, const std::string& created_utc);

@@ -79,6 +79,7 @@ set(STUDIO_SOURCES
     src/runner/TextureCache.cpp
     src/amesh/amesh_gl.cpp
     src/runner/GameView.cpp
+    src/runner/ProfilerOverlay.cpp
     src/runner/GuiLayer.cpp
     src/ide/IdePane.cpp
     src/ide/IdeDock.cpp
@@ -656,6 +657,7 @@ add_executable(studio-tests
     tests/ScriptTabsTest.cpp
     tests/TerminalPaneTest.cpp
     tests/GuiStyleTest.cpp
+    tests/ProfilerOverlayTest.cpp
 )
 target_link_libraries(studio-tests PRIVATE studio)
 
@@ -755,6 +757,13 @@ add_executable(amesh-gl-check
 )
 target_link_libraries(amesh-gl-check PRIVATE studio)
 
+# By hand, not ctest, from the repository root: profiler-demo out-dir plays a
+# slow place under the profiler and saves the overlay as PNGs.
+add_executable(profiler-demo
+    tests/ProfilerDemo.cpp
+)
+target_link_libraries(profiler-demo PRIVATE studio)
+
 # By hand, not ctest: gpu-timer-check times clears with GpuTimer in a hidden GL 3.3 window.
 add_executable(gpu-timer-check
     tests/GpuTimerCheck.cpp
@@ -845,7 +854,7 @@ function(anarchy_warnings target)
 endfunction()
 foreach(target IN ITEMS studio_core studio AnarchyStudio AnarchyPlayer engine-tests shell-tests properties-tests console-tests
                         studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests assets-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
-                        sandbox amesh amesh-tests amesh-gl-check scene-render-check gpu-timer-check profiler profiler-tests ${ENGINE_PACKAGES})
+                        sandbox amesh amesh-tests amesh-gl-check scene-render-check gpu-timer-check profiler-demo profiler profiler-tests ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()
 

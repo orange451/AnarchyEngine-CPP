@@ -146,6 +146,7 @@ constexpr GLboolean GL_FALSE = 0;
 constexpr GLboolean GL_TRUE = 1;
 constexpr GLenum GL_NO_ERROR = 0;
 // Timer queries (core in 3.3).
+constexpr GLenum GL_TIME_ELAPSED = 0x88BF;
 constexpr GLenum GL_TIMESTAMP = 0x8E28;
 constexpr GLenum GL_QUERY_RESULT = 0x8866;
 constexpr GLenum GL_QUERY_RESULT_AVAILABLE = 0x8867;
@@ -316,10 +317,12 @@ extern void (*rt_glGetBooleanv)(GLenum pname, GLboolean* data);
 extern void (*rt_glGenQueries)(GLsizei n, GLuint* ids);
 extern void (*rt_glDeleteQueries)(GLsizei n, const GLuint* ids);
 extern void (*rt_glQueryCounter)(GLuint id, GLenum target);
+extern void (*rt_glBeginQuery)(GLenum target, GLuint id);
+extern void (*rt_glEndQuery)(GLenum target);
 extern void (*rt_glGetQueryObjectiv)(GLuint id, GLenum pname, GLint* params);
 extern void (*rt_glGetQueryObjectui64v)(GLuint id, GLenum pname, GLuint64* params);
 extern void (*rt_glGetInteger64v)(GLenum pname, GLint64* data);
-// Every timer query entry point loaded.
+// The entry points GpuTimer needs: elapsed-time queries and their results.
 bool GlTimerQueries();
 
 using GlGetProcAddress = void* (*)(const char* name);
@@ -404,6 +407,8 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glGenQueries ::runner::rt_glGenQueries
 #define glDeleteQueries ::runner::rt_glDeleteQueries
 #define glQueryCounter ::runner::rt_glQueryCounter
+#define glBeginQuery ::runner::rt_glBeginQuery
+#define glEndQuery ::runner::rt_glEndQuery
 #define glGetQueryObjectiv ::runner::rt_glGetQueryObjectiv
 #define glGetQueryObjectui64v ::runner::rt_glGetQueryObjectui64v
 #define glGetInteger64v ::runner::rt_glGetInteger64v

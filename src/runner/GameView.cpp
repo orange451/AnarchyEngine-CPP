@@ -1,5 +1,7 @@
 #include "GameView.hpp"
 
+#include "profiler/Profiler.hpp"
+
 #include "AssetInstances.hpp"
 #include "Camera.hpp"
 #include "DataModelLock.hpp"
@@ -128,7 +130,29 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
     });
     guiToggle_ = eye.get();
     getChildren().add(std::move(eye));
+
+    // Last, so it draws over everything here and is hit first.
+    auto overlay = jadefx::make<ProfilerOverlay>();
+    overlay->setVisible(false);
+    profilerOverlay_ = overlay.get();
+    getChildren().add(std::move(overlay));
     refreshWorkspace();
+}
+
+GameView::~GameView() {
+    ProfilerUi& ui = ProfilerUi::get();
+    if (ui.owner == this) {
+        ui.owner = nullptr;
+    }
+    if (hookedScene_ != nullptr && keyHook_ != 0 && !hookedScene_->isTearingDown()) {
+        hookedScene_->removeKeyHook(keyHook_);
+    }
+}
+
+bool GameView::pointerWanted() const {
+    return game_ != nullptr &&
+           game_->input().mouse_behavior() != engine_core::UserInputService::kMouseBehaviorDefault &&
+           !ProfilerUi::get().shown();
 }
 
 void GameView::setPlayerView(bool player) {
@@ -139,8 +163,15 @@ void GameView::setPlayerView(bool player) {
 
 void GameView::refreshOverlays() {
     const bool editing = !playerView_ && !runner_->testing();
-    cameraBox_->setVisible(editing);
-    guiToggle_->setVisible(editing);
+    // While the profiler shows here, the list and the eye are under it, so they hide.
+    ProfilerUi& ui = ProfilerUi::get();
+    if (ui.shown() && ui.owner == nullptr && getScene() != nullptr) {
+        ui.owner = this;
+    }
+    const bool profiling = ui.shown() && ui.owner == this;
+    profilerOverlay_->setVisible(profiling);
+    cameraBox_->setVisible(editing && !profiling);
+    guiToggle_->setVisible(editing && !profiling);
     guiScene_->setVisible(!editing || guiToggle_->isSelected());
 }
 
@@ -218,7 +249,8 @@ void GameView::syncPointerLock() {
         scene->releaseFocus(this);
         return;
     }
-    const bool wanted = input.mouse_behavior() != engine_core::UserInputService::kMouseBehaviorDefault;
+    // The profiler frees the pointer while it shows, so its graph can be clicked.
+    const bool wanted = pointerWanted();
     if (wanted != pointerLocked_) {
         scene->setPointerLocked(wanted);
         pointerLocked_ = wanted;
@@ -423,6 +455,11 @@ void GameView::layoutChildren() {
     const double height = cameraBox_->measuredHeight(width, contentHeight());
     const double listLeft = contentLeft() + contentWidth() - kMargin - width;
     cameraBox_->performLayout(listLeft, contentTop() + kMargin, width, height);
+    if (profilerOverlay_->isVisible()) {
+        profilerOverlay_->performLayout(contentLeft() + kMargin, contentTop() + kMargin,
+                                        std::max(0.0, contentWidth() - 2 * kMargin),
+                                        ProfilerOverlay::heightFor(contentHeight(), ProfilerUi::get().split));
+    }
     // The eye sits just left of the list, as tall as it.
     constexpr double kGap = 4.0;
     const double eyeWidth = guiToggle_->measuredWidth(height);
@@ -661,6 +698,13 @@ void GameView::followCamera(const engine_core::VisualSnapshot& snapshot) {
 void GameView::renderChildren(jadefx::UiRenderer&, float) {}
 
 void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
+    // The window paints on this thread, the profiler's UI row.
+    static thread_local bool profiled = false;
+    if (!profiled) {
+        profiler::register_thread("UI");
+        profiled = true;
+    }
+    PROFILE_SCOPE("Scene View", profiler::Group::Render);
     notePaint();
     syncPointerLock();
     const jadefx::Scene* scene = getScene();
@@ -670,7 +714,10 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
         const jadefx::Color& clear = computedStyle().background.color;
         renderer_.setClearColor(clear.r, clear.g, clear.b);
         renderer_.setGridVisible(runner_->sceneGrid());
-        collectMeshes();
+        {
+            PROFILE_SCOPE("Snapshot read", profiler::Group::Render);
+            collectMeshes();
+        }
         const bool drawn = renderer_.draw(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(),
                                           scene->getHeight(), meshDraws_.data(), static_cast<int>(meshDraws_.size()),
                                           lightDraws_.data(), static_cast<int>(lightDraws_.size()));
@@ -687,8 +734,15 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
             }
         }
     }
+    // What the threads recorded since the last paint, for the overlay drawn next.
+    if (profiler::enabled()) {
+        profiler::collect();
+    }
     // Painted after the clear, so the label stays on top of the viewport.
-    Node::renderChildren(renderer, opacity);
+    {
+        PROFILE_SCOPE("GUIs and overlays", profiler::Group::Engine);
+        Node::renderChildren(renderer, opacity);
+    }
     // The render thread waits on this when it is uncapped, so its step follows
     // the paint instead of looping again as soon as the step itself returns.
     if (engine_ != nullptr) {
@@ -700,6 +754,32 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
 }
 
 void GameView::sceneChanged(jadefx::Scene* previous) {
+    if (getScene() == nullptr && ProfilerUi::get().owner == this) {
+        ProfilerUi::get().owner = nullptr;
+    }
+    if (hookedScene_ != nullptr && hookedScene_ != getScene()) {
+        if (keyHook_ != 0 && !hookedScene_->isTearingDown()) {
+            hookedScene_->removeKeyHook(keyHook_);
+        }
+        hookedScene_ = nullptr;
+        keyHook_ = 0;
+    }
+    // A game has no menu bar to hold the profiler's keys, so its view takes them.
+    if (playerView_ && getScene() != nullptr && hookedScene_ == nullptr) {
+        hookedScene_ = getScene();
+        keyHook_ = hookedScene_->addKeyHook([](jadefx::KeyEvent& key) {
+            if (!key.pressed || key.repeat || !key.shortcut() || key.shift || key.alt) {
+                return;
+            }
+            if (key.key == jadefx::Key::F6) {
+                ProfilerUi::get().toggleShown();
+                key.consume();
+            } else if (key.key == jadefx::Key::P && ProfilerUi::get().shown()) {
+                ProfilerUi::get().togglePaused();
+                key.consume();
+            }
+        });
+    }
     // A lock belongs to the window the view is leaving.
     if (pointerLocked_) {
         if (previous != nullptr && !previous->isTearingDown()) {
@@ -729,6 +809,7 @@ float GameView::localY(double y) const { return static_cast<float>(y - getAbsolu
 void GameView::handleMousePressed(const jadefx::MouseEvent& event) {
     // Keys go to the focused node, so a click is how a player gives the game the keyboard.
     requestFocus();
+    ProfilerUi::get().owner = this;
     noteCurrentCamera();
     if (game_ != nullptr) {
         game_->input().post_mouse_button(event.button, true, localX(event.x), localY(event.y));
@@ -781,6 +862,12 @@ void GameView::handleKey(jadefx::KeyEvent& event) {
         game_->input().post_key(key, event.pressed);
     }
     IdePane::handleKey(event);
+}
+
+void GameView::handleFocusGained() {
+    // The profiler follows the Scene View last given the keyboard.
+    ProfilerUi::get().owner = this;
+    IdePane::handleFocusGained();
 }
 
 void GameView::handleFocusLost() {

@@ -309,7 +309,7 @@ JsonValue build_report(const History& history, const ReportOptions& options) {
         const double ms = frame_ms(history.frames[index]);
         lengths.push_back(ms);
         total += ms;
-        over += ms > kBudgetMs ? 1 : 0;
+        over += ms > kOverBudgetMs ? 1 : 0;
         if (ms > lengths[slowest]) {
             slowest = index;
         }

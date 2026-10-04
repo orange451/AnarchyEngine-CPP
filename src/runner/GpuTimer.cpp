@@ -2,12 +2,14 @@
 
 #include "gl.hpp"
 
+#include <algorithm>
+
 namespace runner {
 
 namespace {
 
-// Two queries a pass: a dozen passes a frame for several frames in flight.
-constexpr int kQueries = 256;
+// One query a pass: a dozen passes a frame for several frames in flight.
+constexpr int kQueries = 128;
 // A pass the GPU has not finished this many frames later is given up on.
 constexpr std::uint64_t kGiveUpFrames = 16;
 
@@ -26,22 +28,16 @@ bool GpuTimer::init() {
     return true;
 }
 
-unsigned GpuTimer::take() {
-    if (free_.empty()) {
-        return 0;
-    }
-    const unsigned query = free_.back();
-    free_.pop_back();
-    return query;
-}
-
 void GpuTimer::begin(profiler::ScopeId scope) {
     Open open;
     open.scope = scope;
-    if (available() && profiler::enabled() && free_.size() >= 2) {
-        open.query = take();
-        open.timed = true;
-        glQueryCounter(open.query, GL_TIMESTAMP);
+    // One elapsed query at a time: a pass inside a timed one goes untimed.
+    const bool nested = std::any_of(open_.begin(), open_.end(), [](const Open& outer) { return outer.query != 0; });
+    if (available() && profiler::enabled() && !nested && !free_.empty()) {
+        open.query = free_.back();
+        free_.pop_back();
+        open.issued_ns = profiler::now_ns();
+        glBeginQuery(GL_TIME_ELAPSED, open.query);
     }
     open_.push_back(open);
 }
@@ -52,56 +48,36 @@ void GpuTimer::end() {
     }
     const Open open = open_.back();
     open_.pop_back();
-    if (!open.timed) {
+    if (open.query == 0) {
         return;
     }
-    const unsigned query = take();
-    if (query == 0) {
-        free_.push_back(open.query);
-        return;
-    }
-    glQueryCounter(query, GL_TIMESTAMP);
+    glEndQuery(GL_TIME_ELAPSED);
     Pending pending;
     pending.scope = open.scope;
-    pending.depth = static_cast<std::uint8_t>(open_.size());
-    pending.begin = open.query;
-    pending.end = query;
+    pending.query = open.query;
+    pending.issued_ns = open.issued_ns;
     pending.frame = frame_;
     pending_.push_back(pending);
 }
 
 void GpuTimer::frame() {
     ++frame_;
-    if (!available() || pending_.empty()) {
-        return;
-    }
-    // The GPU clock against this process's, once a frame.
-    GLint64 gpu_now = 0;
-    glGetInteger64v(GL_TIMESTAMP, &gpu_now);
-    const std::int64_t offset =
-        static_cast<std::int64_t>(profiler::now_ns()) - static_cast<std::int64_t>(gpu_now);
     // Queries finish in order, so the first one not ready ends the read.
-    while (!pending_.empty()) {
+    while (available() && !pending_.empty()) {
         const Pending& pending = pending_.front();
         GLint ready = 0;
-        glGetQueryObjectiv(pending.end, GL_QUERY_RESULT_AVAILABLE, &ready);
+        glGetQueryObjectiv(pending.query, GL_QUERY_RESULT_AVAILABLE, &ready);
         if (ready == 0 && frame_ - pending.frame < kGiveUpFrames) {
             break;
         }
         if (ready != 0) {
-            GLuint64 start = 0;
-            GLuint64 stop = 0;
-            glGetQueryObjectui64v(pending.begin, GL_QUERY_RESULT, &start);
-            glGetQueryObjectui64v(pending.end, GL_QUERY_RESULT, &stop);
-            const std::int64_t from = static_cast<std::int64_t>(start) + offset;
-            const std::int64_t to = static_cast<std::int64_t>(stop) + offset;
-            if (from > 0 && to >= from) {
-                profiler::gpu_scope(pending.scope, pending.depth, static_cast<std::uint64_t>(from),
-                                    static_cast<std::uint64_t>(to), static_cast<int>(frame_ - pending.frame));
-            }
+            GLuint64 elapsed = 0;
+            glGetQueryObjectui64v(pending.query, GL_QUERY_RESULT, &elapsed);
+            const std::uint64_t start = std::max(pending.issued_ns, gpu_cursor_ns_);
+            gpu_cursor_ns_ = start + elapsed;
+            profiler::gpu_scope(pending.scope, 0, start, gpu_cursor_ns_, static_cast<int>(frame_ - pending.frame));
         }
-        free_.push_back(pending.begin);
-        free_.push_back(pending.end);
+        free_.push_back(pending.query);
         pending_.pop_front();
     }
 }

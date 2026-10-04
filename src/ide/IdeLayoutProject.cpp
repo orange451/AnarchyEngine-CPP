@@ -468,7 +468,7 @@ void IdeLayout::select_guid(const std::string& guid) {
 
 void IdeLayout::add_select_to_tab_menu(IdePane& pane, std::uint32_t id) {
     pane.setOnTabMenu([this, id](jadefx::Menu& menu) {
-        auto item = jadefx::make<jadefx::MenuItem>("Select");
+        auto item = jadefx::make<jadefx::MenuItem>("Select In Explorer");
         item->setOnAction([this, id](jadefx::ActionEvent&) { select_instance(id); });
         menu.getItems().add(std::move(item));
     });

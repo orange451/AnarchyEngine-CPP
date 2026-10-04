@@ -419,7 +419,7 @@ private:
     void select_guid(const std::string& guid);
     // Selects only this instance, when it is alive, and shows it in every explorer.
     void select_instance(std::uint32_t id);
-    // Puts Select, for the instance the page edits, on the page's tab menu.
+    // Puts Select In Explorer, for the instance the page edits, on the page's tab menu.
     void add_select_to_tab_menu(IdePane& pane, std::uint32_t id);
     // A rename or a Properties field is being typed in: a check waits for it.
     bool editing_field() const;

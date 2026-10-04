@@ -134,7 +134,8 @@ private:
     std::shared_ptr<jadefx::TreeView> tree_;
     std::shared_ptr<jadefx::TreeItem> root_;
     std::unordered_map<const jadefx::TreeItem*, Target> targets_;
-    std::unordered_set<std::uint32_t> collapsed_;
+    // Scripts the user expanded; the rest start collapsed.
+    std::unordered_set<std::uint32_t> expanded_;
     std::vector<ProblemSource> sources_;
     ProblemList list_;
     // What the last refresh used, to refresh only when something changed.

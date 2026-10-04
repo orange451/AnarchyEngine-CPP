@@ -257,16 +257,29 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     expect(h.pane->refreshes() == after_filter && h.pane->rebuilds() == after_filter_rows,
            "a quiet frame after toggling the filter neither refreshes nor rebuilds");
 
-    // Collapsing survives a rebuild.
-    if (!h.pane->tree().getRoot()->getChildren().empty()) {
-        h.pane->tree().getRoot()->getChildren().items()[0]->setExpanded(false);
+    // Scripts start collapsed, their problems without graphics until expanded.
+    {
+        const auto& scripts = h.pane->tree().getRoot()->getChildren();
+        expect(!scripts.empty() && !scripts.items()[0]->isExpanded(), "a script starts collapsed");
+        expect(!scripts.empty() && !scripts.items()[0]->getChildren().empty() &&
+                   scripts.items()[0]->getChildren().items()[0]->getGraphic() == nullptr,
+               "a collapsed script builds no problem graphics");
+        if (!scripts.empty()) {
+            scripts.items()[0]->setExpanded(true);
+        }
+        expect(!scripts.empty() && !scripts.items()[0]->getChildren().empty() &&
+                   scripts.items()[0]->getChildren().items()[0]->getGraphic() != nullptr,
+               "expanding a script builds its problem graphics");
     }
+
+    // Expanding survives a rebuild.
     clean.set_source("print(2)\n");
     settle(engine);
     h.frame();
     expect(!h.pane->tree().getRoot()->getChildren().empty() &&
-               !h.pane->tree().getRoot()->getChildren().items()[0]->isExpanded(),
-           "a collapsed script stays collapsed after a rebuild");
+               h.pane->tree().getRoot()->getChildren().items()[0]->isExpanded() &&
+               h.pane->tree().getRoot()->getChildren().items()[0]->getChildren().items()[0]->getGraphic() != nullptr,
+           "an expanded script stays expanded, with its graphics, after a rebuild");
 
     // Fixing the error updates the pane by itself.
     broken.set_source("--!strict\nlocal --[[é]]x: number = 1\n");

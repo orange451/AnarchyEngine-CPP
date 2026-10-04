@@ -154,6 +154,16 @@ std::shared_ptr<jadefx::Node> problem_graphic(const Problem& problem) {
     return box;
 }
 
+// Gives each problem row under a script its graphic, if it has none yet.
+void show_problems(jadefx::TreeItem& row, const std::vector<Problem>& problems) {
+    const auto& children = row.getChildren().items();
+    for (std::size_t i = 0; i < children.size() && i < problems.size(); ++i) {
+        if (children[i]->getGraphic() == nullptr) {
+            children[i]->setGraphic(problem_graphic(problems[i]));
+        }
+    }
+}
+
 // Enter on a row opens it.
 class ProblemsTree : public jadefx::TreeView {
 public:
@@ -461,22 +471,31 @@ void IdeProblems::rebuild() {
     for (const ScriptProblems& script : list_.scripts) {
         auto row = jadefx::make<jadefx::TreeItem>("", script_graphic(script));
         const std::uint32_t id = script.id;
-        row->setExpanded(collapsed_.count(id) == 0);
-        row->setOnCollapsed([this, id](jadefx::TreeItem&) { collapsed_.insert(id); });
-        row->setOnExpanded([this, id](jadefx::TreeItem&) { collapsed_.erase(id); });
+        // Rows start collapsed, and a problem's row gets its graphic only once
+        // its script is expanded: a place with many problems builds few nodes.
+        const bool expanded = expanded_.count(id) != 0;
+        row->setExpanded(expanded);
+        row->setOnCollapsed([this, id](jadefx::TreeItem&) { expanded_.erase(id); });
+        row->setOnExpanded([this, id, problems = script.problems](jadefx::TreeItem& item) {
+            expanded_.insert(id);
+            show_problems(item, problems);
+        });
         const Problem& first = script.problems.front();
         targets_[row.get()] = Target{id, 0, first.column, first.column_end};
         if (selected && selected->id == id && selected->line == 0) {
             reselect = row.get();
         }
         for (const Problem& problem : script.problems) {
-            auto child = jadefx::make<jadefx::TreeItem>("", problem_graphic(problem));
+            auto child = jadefx::make<jadefx::TreeItem>("", nullptr);
             targets_[child.get()] = Target{id, problem.line, problem.column, problem.column_end};
             if (selected && selected->id == id && selected->line == problem.line &&
                 selected->column == problem.column) {
                 reselect = child.get();
             }
             row->getChildren().add(std::move(child));
+        }
+        if (expanded) {
+            show_problems(*row, script.problems);
         }
         rows.push_back(std::move(row));
     }

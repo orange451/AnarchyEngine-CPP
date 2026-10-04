@@ -1,5 +1,7 @@
 #include "Renderer.hpp"
 
+#include "profiler/Profiler.hpp"
+
 #include "RenderMath.hpp"
 #include "ShaderFile.hpp"
 #include "amesh.hpp"
@@ -12,6 +14,33 @@
 #include <vector>
 
 namespace runner {
+namespace {
+
+// One pass, timed on the CPU (a Render scope) and on the GPU (a Gpu scope of the same name).
+class PassTimer {
+public:
+    PassTimer(GpuTimer& gpu, profiler::ScopeId cpu, profiler::ScopeId on_gpu) : cpu_(cpu), gpu_(gpu) {
+        gpu_.begin(on_gpu);
+    }
+    ~PassTimer() { gpu_.end(); }
+    PassTimer(const PassTimer&) = delete;
+    PassTimer& operator=(const PassTimer&) = delete;
+
+private:
+    profiler::Scope cpu_;
+    GpuTimer& gpu_;
+};
+
+}  // namespace
+
+#define RENDER_PASS(name)                                                                              \
+    static const profiler::ScopeId PROFILER_JOIN(pass_cpu_, __LINE__) =                                \
+        profiler::intern(name, profiler::Group::Render);                                               \
+    static const profiler::ScopeId PROFILER_JOIN(pass_gpu_, __LINE__) =                                \
+        profiler::intern(name, profiler::Group::Gpu);                                                  \
+    PassTimer PROFILER_JOIN(pass_timer_, __LINE__)(gpu_, PROFILER_JOIN(pass_cpu_, __LINE__),             \
+                                                   PROFILER_JOIN(pass_gpu_, __LINE__))
+
 namespace {
 
 // Texture units. A pass binds what it reads to these, and each program's
@@ -272,6 +301,7 @@ bool Renderer::initialize() {
     }
 
     ready_ = true;
+    gpu_.init();
     return true;
 }
 
@@ -699,6 +729,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         glDisable(RT_GL_CULL_FACE);
         glEnable(GL_BLEND);
         glBlendFuncSeparate(RT_GL_ONE, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ZERO, RT_GL_ONE);
+        RENDER_PASS("Tone map");
         glUseProgram(tonemap_.id);
         BindTexture(kUnitScene, mergeTexture_);
         glUniform1f(tonemap_.exposure, std::max(lighting_.exposure, 0.f));
@@ -725,10 +756,12 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     }
 
     saved.restore(viewport);
+    gpu_.frame();
     return drawn;
 }
 
 void Renderer::gridPass(unsigned depth, const float* inverseProjection) {
+    RENDER_PASS("Grid");
     glDisable(GL_DEPTH_TEST);
     glDisable(RT_GL_CULL_FACE);
     glEnable(GL_BLEND);
@@ -751,6 +784,7 @@ void Renderer::setOutlines(const float* points, int pointCount) {
 }
 
 void Renderer::outlinePass(unsigned depth, const float* projection, const float* inverseProjection) {
+    RENDER_PASS("Outlines");
     glDisable(GL_DEPTH_TEST);
     glDisable(RT_GL_CULL_FACE);
     glEnable(GL_BLEND);
@@ -779,6 +813,7 @@ void Renderer::setHandles(const engine_core::HandleVertex* vertices, int count) 
 }
 
 void Renderer::handlePass(const float* projection) {
+    RENDER_PASS("Handles");
     glDisable(GL_DEPTH_TEST);
     glDisable(RT_GL_CULL_FACE);
     glEnable(GL_BLEND);
@@ -877,6 +912,7 @@ void Renderer::bindGBuffer(const Program& program) {
 }
 
 bool Renderer::shadowPass(const MeshDraw* meshes, int count, const float* projection) {
+    RENDER_PASS("Shadows");
     shadowLookups_.assign(shadowRequests_.size(), ShadowLookup{});
     sunLookup_ = ShadowLookup{};
     if (shadowRequests_.empty() && !hasSunShadow_) {
@@ -926,6 +962,7 @@ void Renderer::bindShadow(const Program& program, const ShadowLookup& lookup) {
 }
 
 bool Renderer::geometryPass(const MeshDraw* meshes, int count, const float* projection) {
+    RENDER_PASS("Geometry");
     glViewport(0, 0, targetWidth_, targetHeight_);
     glBindFramebuffer(RT_GL_FRAMEBUFFER, gbufferFbo_);
     glDisable(GL_BLEND);
@@ -966,6 +1003,7 @@ bool Renderer::geometryPass(const MeshDraw* meshes, int count, const float* proj
 }
 
 bool Renderer::lightPass(const float* projection, const float* inverseProjection) {
+    RENDER_PASS("Lighting");
     const engine_core::Matrix4 inverseView = engine_core::matrix4_inverse(view_);
     glBindFramebuffer(RT_GL_FRAMEBUFFER, accumulationFbo_);
     glClearColor(0.f, 0.f, 0.f, 0.f);
@@ -1076,6 +1114,7 @@ bool Renderer::lightPass(const float* projection, const float* inverseProjection
 }
 
 bool Renderer::skyPass(const float* inverseProjection) {
+    RENDER_PASS("Sky");
     if (!skyReady_) {
         return true;
     }
@@ -1097,6 +1136,7 @@ bool Renderer::skyPass(const float* inverseProjection) {
 
 bool Renderer::transparencyPass(const MeshDraw* meshes, int count, const float* projection,
                                 const float* inverseProjection) {
+    RENDER_PASS("Transparency");
     glBindFramebuffer(RT_GL_FRAMEBUFFER, transparencyFbo_);
     glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -1178,6 +1218,7 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, int count, const float* 
 }
 
 bool Renderer::mergePass() {
+    RENDER_PASS("Merge");
     glBindFramebuffer(RT_GL_FRAMEBUFFER, mergeFbo_);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
@@ -1238,6 +1279,7 @@ void Renderer::setClearColor(float r, float g, float b) {
 }
 
 void Renderer::shutdown() {
+    gpu_.shutdown();
     ready_ = false;
     for (Program* program :
          {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &sky_, &grid_, &outline_, &handle_}) {

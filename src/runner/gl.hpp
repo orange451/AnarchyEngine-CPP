@@ -18,6 +18,8 @@ using GLfloat = float;
 using GLubyte = unsigned char;
 using GLchar = char;
 using GLsizeiptr = std::ptrdiff_t;
+using GLint64 = long long;
+using GLuint64 = unsigned long long;
 
 // A platform OpenGL header may already have defined these as macros.
 #ifdef GL_FALSE
@@ -143,6 +145,10 @@ using GLsizeiptr = std::ptrdiff_t;
 constexpr GLboolean GL_FALSE = 0;
 constexpr GLboolean GL_TRUE = 1;
 constexpr GLenum GL_NO_ERROR = 0;
+// Timer queries (core in 3.3).
+constexpr GLenum GL_TIMESTAMP = 0x8E28;
+constexpr GLenum GL_QUERY_RESULT = 0x8866;
+constexpr GLenum GL_QUERY_RESULT_AVAILABLE = 0x8867;
 constexpr GLenum GL_TRIANGLES = 0x0004;
 constexpr GLbitfield GL_COLOR_BUFFER_BIT = 0x00004000;
 constexpr GLenum GL_VERSION = 0x1F02;
@@ -306,6 +312,16 @@ extern void (*rt_glDepthFunc)(GLenum func);
 extern void (*rt_glDepthMask)(GLboolean flag);
 extern void (*rt_glGetBooleanv)(GLenum pname, GLboolean* data);
 
+// Optional: a context without them still draws, and the profiler shows no GPU row.
+extern void (*rt_glGenQueries)(GLsizei n, GLuint* ids);
+extern void (*rt_glDeleteQueries)(GLsizei n, const GLuint* ids);
+extern void (*rt_glQueryCounter)(GLuint id, GLenum target);
+extern void (*rt_glGetQueryObjectiv)(GLuint id, GLenum pname, GLint* params);
+extern void (*rt_glGetQueryObjectui64v)(GLuint id, GLenum pname, GLuint64* params);
+extern void (*rt_glGetInteger64v)(GLenum pname, GLint64* data);
+// Every timer query entry point loaded.
+bool GlTimerQueries();
+
 using GlGetProcAddress = void* (*)(const char* name);
 
 bool LoadGl(GlGetProcAddress get_proc);
@@ -385,3 +401,9 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glDepthFunc ::runner::rt_glDepthFunc
 #define glDepthMask ::runner::rt_glDepthMask
 #define glGetBooleanv ::runner::rt_glGetBooleanv
+#define glGenQueries ::runner::rt_glGenQueries
+#define glDeleteQueries ::runner::rt_glDeleteQueries
+#define glQueryCounter ::runner::rt_glQueryCounter
+#define glGetQueryObjectiv ::runner::rt_glGetQueryObjectiv
+#define glGetQueryObjectui64v ::runner::rt_glGetQueryObjectui64v
+#define glGetInteger64v ::runner::rt_glGetInteger64v

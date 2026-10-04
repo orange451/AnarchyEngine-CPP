@@ -76,6 +76,17 @@ void (*rt_glCullFace)(GLenum) = nullptr;
 void (*rt_glDepthFunc)(GLenum) = nullptr;
 void (*rt_glDepthMask)(GLboolean) = nullptr;
 void (*rt_glGetBooleanv)(GLenum, GLboolean*) = nullptr;
+void (*rt_glGenQueries)(GLsizei, GLuint*) = nullptr;
+void (*rt_glDeleteQueries)(GLsizei, const GLuint*) = nullptr;
+void (*rt_glQueryCounter)(GLuint, GLenum) = nullptr;
+void (*rt_glGetQueryObjectiv)(GLuint, GLenum, GLint*) = nullptr;
+void (*rt_glGetQueryObjectui64v)(GLuint, GLenum, GLuint64*) = nullptr;
+void (*rt_glGetInteger64v)(GLenum, GLint64*) = nullptr;
+
+bool GlTimerQueries() {
+    return rt_glGenQueries != nullptr && rt_glDeleteQueries != nullptr && rt_glQueryCounter != nullptr &&
+           rt_glGetQueryObjectiv != nullptr && rt_glGetQueryObjectui64v != nullptr && rt_glGetInteger64v != nullptr;
+}
 
 bool LoadGl(GlGetProcAddress get_proc) {
     if (get_proc == nullptr) {
@@ -167,6 +178,16 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(GetBooleanv);
 
 #undef LOAD
+    // Optional entry points: missing ones stay null.
+#define LOAD_OPTIONAL(suffix) \
+    rt_gl##suffix = reinterpret_cast<decltype(rt_gl##suffix)>(get_proc("gl" #suffix))
+    LOAD_OPTIONAL(GenQueries);
+    LOAD_OPTIONAL(DeleteQueries);
+    LOAD_OPTIONAL(QueryCounter);
+    LOAD_OPTIONAL(GetQueryObjectiv);
+    LOAD_OPTIONAL(GetQueryObjectui64v);
+    LOAD_OPTIONAL(GetInteger64v);
+#undef LOAD_OPTIONAL
     return true;
 }
 

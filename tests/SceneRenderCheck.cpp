@@ -6,6 +6,7 @@
 #include "DraggerMath.hpp"
 #include "runner/Renderer.hpp"
 #include "runner/TextureCache.hpp"
+#include "profiler/Profiler.hpp"
 #include "runner/gl.hpp"
 
 // Only GLFW's window calls: the GL names come from runner/gl.hpp.
@@ -214,6 +215,37 @@ int main() {
         renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1);
         const Pixel middle = ReadPixel(fbWidth / 2, fbHeight / 2);
         const Pixel corner = ReadPixel(2, 2);
+        {
+            // Profiled, each pass is a Render scope on the CPU and a GPU scope a frame or so later.
+            profiler::register_thread("UI");
+            profiler::acquire();
+            for (int frame = 0; frame < 8; ++frame) {
+                profiler::frame_boundary();
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1);
+                glfwSwapBuffers(window);
+            }
+            profiler::frame_boundary();
+            profiler::collect();
+            int cpu = 0;
+            int gpu = 0;
+            profiler::with_live([&](const profiler::History& history) {
+                for (const profiler::Frame& frame : history.frames) {
+                    for (const profiler::ScopeRecord& record : frame.scopes) {
+                        const profiler::ScopeInfo& info = history.scopes[record.scope];
+                        if (info.name == "Geometry" && info.group == profiler::Group::Render) {
+                            ++cpu;
+                        }
+                        if (info.name == "Geometry" && info.group == profiler::Group::Gpu && record.row == 3) {
+                            ++gpu;
+                        }
+                    }
+                }
+            });
+            Expect(cpu >= 6, "the geometry pass is timed on the CPU (" + std::to_string(cpu) + ")");
+            Expect(gpu >= 3, "and on the GPU (" + std::to_string(gpu) + ")");
+            Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "timing leaves no GL error");
+            profiler::release();
+        }
         Expect(!IsClear(middle), "the cube covers the middle of the view (" + Text(middle) + ")");
         Expect(IsClear(corner), "the corner is the clear color (" + Text(corner) + ")");
         // With no lights, only the ambient: every face the same gray.

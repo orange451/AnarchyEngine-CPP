@@ -72,6 +72,7 @@ set(STUDIO_SOURCES
     src/runner/gl.cpp
     src/runner/ShaderFile.cpp
     src/runner/Renderer.cpp
+    src/runner/GpuTimer.cpp
     src/runner/ShadowRenderer.cpp
     src/runner/EnvironmentMap.cpp
     src/runner/MeshCache.cpp
@@ -754,6 +755,12 @@ add_executable(amesh-gl-check
 )
 target_link_libraries(amesh-gl-check PRIVATE studio)
 
+# By hand, not ctest: gpu-timer-check times clears with GpuTimer in a hidden GL 3.3 window.
+add_executable(gpu-timer-check
+    tests/GpuTimerCheck.cpp
+)
+target_link_libraries(gpu-timer-check PRIVATE studio)
+
 # By hand, not ctest, from the repository root: scene-render-check draws a baked
 # cube through MeshCache and the Scene View's Renderer in a hidden window.
 add_executable(scene-render-check
@@ -838,7 +845,7 @@ function(anarchy_warnings target)
 endfunction()
 foreach(target IN ITEMS studio_core studio AnarchyStudio AnarchyPlayer engine-tests shell-tests properties-tests console-tests
                         studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests assets-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
-                        sandbox amesh amesh-tests amesh-gl-check scene-render-check profiler profiler-tests ${ENGINE_PACKAGES})
+                        sandbox amesh amesh-tests amesh-gl-check scene-render-check gpu-timer-check profiler profiler-tests ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()
 

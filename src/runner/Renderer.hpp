@@ -2,6 +2,7 @@
 
 #include "DraggerMath.hpp"
 #include "EnvironmentMap.hpp"
+#include "GpuTimer.hpp"
 #include "Matrix4.hpp"
 #include "ShadowRenderer.hpp"
 #include "ViewCapture.hpp"
@@ -350,6 +351,10 @@ private:
     bool targetsRefused_ = false;
 
     bool ready_ = false;
+
+    // Times each pass on the GPU for the profiler, while it records.
+
+    GpuTimer gpu_;
     float clear_[3] = {30.f / 255.f, 30.f / 255.f, 30.f / 255.f};
     // The inverse of the camera's world, column-major.
     engine_core::Matrix4 view_ = DefaultView();

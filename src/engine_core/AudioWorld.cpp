@@ -11,9 +11,11 @@
 #pragma warning(pop)
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
@@ -61,6 +63,10 @@ struct AudioWorld::Impl {
         std::uint32_t serial = 0;
         bool spatial = false;
         std::uint64_t seen = 0;
+        // Still decoding on miniaudio's job thread. It plays what is decoded
+        // so far, but a seek waits for the whole file, and the voice with it.
+        bool loading = false;
+        bool seek_on_load = false;
     };
 
     explicit Impl(bool use_device) : want_device(use_device) {
@@ -72,7 +78,12 @@ struct AudioWorld::Impl {
     ~Impl() { close(); }
 
     mutable std::mutex mu;
-    bool want_device = true;
+    // With a device, it is opened and files are loaded off the step, which
+    // they would hold up: opening one takes a quarter second on macOS.
+    // Without, both happen in the step, so tests run the same everywhere.
+    const bool want_device = true;
+    bool device_tried = false;
+    std::future<std::unique_ptr<ma_engine>> opening;
     std::unique_ptr<ma_engine> engine;
     bool offline = false;
     double offline_frames = 0;
@@ -94,28 +105,47 @@ struct AudioWorld::Impl {
 
     void close() {
         drop_all();
+        if (opening.valid()) {
+            engine = opening.get();
+        }
         if (engine) {
             ma_engine_uninit(engine.get());
             engine.reset();
         }
     }
 
-    // The miniaudio engine, opened the first time a voice needs it.
+    // The miniaudio engine, opened the first time a voice needs it. A device
+    // opens on another thread: until it has, this is false while opening is
+    // valid, and no voice starts.
     bool open() {
         if (engine) {
             return true;
         }
-        auto made = std::make_unique<ma_engine>();
-        ma_engine_config config = ma_engine_config_init();
-        if (want_device && ma_engine_init(&config, made.get()) == MA_SUCCESS) {
-            engine = std::move(made);
-            offline = false;
-            return true;
-        }
-        if (want_device) {
+        if (want_device && !device_tried) {
+            if (!opening.valid()) {
+                opening = std::async(std::launch::async, [] {
+                    auto made = std::make_unique<ma_engine>();
+                    ma_engine_config config = ma_engine_config_init();
+                    if (ma_engine_init(&config, made.get()) != MA_SUCCESS) {
+                        made.reset();
+                    }
+                    return made;
+                });
+                return false;
+            }
+            if (opening.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+                return false;
+            }
+            device_tried = true;
+            engine = opening.get();
+            if (engine) {
+                offline = false;
+                return true;
+            }
             say("No audio device could be opened, so sounds play silently");
         }
-        config = ma_engine_config_init();
+        auto made = std::make_unique<ma_engine>();
+        ma_engine_config config = ma_engine_config_init();
         config.noDevice = MA_TRUE;
         config.channels = kOfflineChannels;
         config.sampleRate = kOfflineRate;
@@ -211,6 +241,13 @@ struct AudioWorld::Impl {
             found = voices.end();
         }
         if (found == voices.end()) {
+            if (!open()) {
+                // Still opening the device: the SoundEmitter waits, playing.
+                if (!opening.valid()) {
+                    emitter.store_playback(0.0, false);
+                }
+                return;
+            }
             Voice voice;
             if (!start(game, id, emitter, sound->path(), file, voice)) {
                 emitter.store_playback(0.0, false);
@@ -229,13 +266,39 @@ struct AudioWorld::Impl {
                 roll_off_into(emitter, *playing);
             }
             if ((dirty & SoundEmitter::kDirtySeek) != 0) {
-                ma_sound_seek_to_second(playing, static_cast<float>(emitter.time_position()));
+                if (found->second.loading) {
+                    found->second.seek_on_load = true;
+                    ma_sound_stop(playing);
+                } else {
+                    ma_sound_seek_to_second(playing, static_cast<float>(emitter.time_position()));
+                }
             }
         }
         Voice& voice = found->second;
         voice.seen = pass;
         place(game, id, voice);
         ma_sound* playing = voice.sound.get();
+        if (voice.loading) {
+            const ma_result loaded = ma_resource_manager_data_source_result(
+                static_cast<ma_resource_manager_data_source*>(ma_sound_get_data_source(playing)));
+            if (loaded == MA_BUSY) {
+                if (voice.seek_on_load) {
+                    return;
+                }
+            } else if (loaded != MA_SUCCESS) {
+                cannot_play(game, id, emitter, sound->path(), loaded);
+                erase(id);
+                emitter.store_playback(0.0, false);
+                return;
+            } else {
+                voice.loading = false;
+                emitter.warned_file = false;
+                if (voice.seek_on_load) {
+                    voice.seek_on_load = false;
+                    ma_sound_seek_to_second(playing, static_cast<float>(emitter.time_position()));
+                }
+            }
+        }
         if (!emitter.looped() && ma_sound_at_end(playing)) {
             erase(id);
             emitter.store_playback(0.0, false);
@@ -253,12 +316,9 @@ struct AudioWorld::Impl {
 
     bool start(DataModel& game, InstanceId id, SoundEmitter& emitter, const std::string& path,
                const std::filesystem::path& file, Voice& voice) {
-        if (!open()) {
-            return false;
-        }
         voice.sound = std::make_unique<ma_sound>();
         // Decoded whole as it loads, so a seek is exact and costs nothing.
-        const ma_uint32 flags = MA_SOUND_FLAG_DECODE;
+        const ma_uint32 flags = MA_SOUND_FLAG_DECODE | (want_device ? MA_SOUND_FLAG_ASYNC : 0);
 #if defined(_WIN32)
         const ma_result result =
             ma_sound_init_from_file_w(engine.get(), file.c_str(), flags, nullptr, nullptr, voice.sound.get());
@@ -268,21 +328,32 @@ struct AudioWorld::Impl {
 #endif
         if (result != MA_SUCCESS) {
             voice.sound.reset();
-            if (!emitter.warned_file) {
-                emitter.warned_file = true;
-                say("SoundEmitter " + game.name(id) + ": could not play " + path + " (" + ma_result_description(result) +
-                    ")");
-            }
+            cannot_play(game, id, emitter, path, result);
             return false;
         }
-        emitter.warned_file = false;
         ma_sound_set_doppler_factor(voice.sound.get(), 0.f);
         mix_into(emitter, *voice.sound);
         roll_off_into(emitter, *voice.sound);
+        voice.loading = (flags & MA_SOUND_FLAG_ASYNC) != 0;
+        if (!voice.loading) {
+            emitter.warned_file = false;
+        }
         if (emitter.time_position() > 0) {
-            ma_sound_seek_to_second(voice.sound.get(), static_cast<float>(emitter.time_position()));
+            if (voice.loading) {
+                voice.seek_on_load = true;
+            } else {
+                ma_sound_seek_to_second(voice.sound.get(), static_cast<float>(emitter.time_position()));
+            }
         }
         return true;
+    }
+
+    // Warns once, until the SoundEmitter plays a file again.
+    void cannot_play(DataModel& game, InstanceId id, SoundEmitter& emitter, const std::string& path, ma_result result) {
+        if (!emitter.warned_file) {
+            emitter.warned_file = true;
+            say("SoundEmitter " + game.name(id) + ": could not play " + path + " (" + ma_result_description(result) + ")");
+        }
     }
 
     static void mix_into(const SoundEmitter& emitter, ma_sound& sound) {

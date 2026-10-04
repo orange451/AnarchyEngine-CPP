@@ -26,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -75,17 +76,18 @@ void write_tone(const std::filesystem::path& file, double seconds) {
 }
 
 // A Game with a resources folder holding a one-second tone and a two-second
-// one, their Sounds, an audio world with no device, and its warnings.
+// one, their Sounds, an audio world (with no device unless asked), and its
+// warnings.
 struct AudioRig {
     SimRole role;
     TempDir dir;
     engine_core::Game game;
-    engine_core::AudioWorld audio{false};
+    engine_core::AudioWorld audio;
     std::vector<std::string> warnings;
     InstanceId tone = 0;
     InstanceId long_tone = 0;
 
-    AudioRig() {
+    explicit AudioRig(bool device = false) : audio(device) {
         audio.set_warning_sink([this](const std::string& text) { warnings.push_back(text); });
         write_tone(dir / "sounds/tone.wav", 1.0);
         write_tone(dir / "sounds/long.wav", 2.0);
@@ -505,4 +507,29 @@ TEST_CASE("A12 a Sound's TimeLength is how long its file plays, read-only and no
     engine_core::PropertyBag saved;
     sound.save_properties(saved);
     REQUIRE(engine_core::bag_find(saved, "TimeLength") == nullptr);
+}
+
+TEST_CASE("A13 with a device, the step neither opens it nor loads a file itself", "[audio]") {
+    // Where no device opens, the world falls back to none and loads the same way.
+    AudioRig rig(true);
+    SoundEmitter& emitter = rig.emitter(workspace_of(rig.game), rig.long_tone);
+    REQUIRE_FALSE(emitter.set_volume(0));
+    REQUIRE_FALSE(emitter.set_time_position(0.5));
+    rig.play();
+    emitter.play();
+    // The first step only begins opening the device; the SoundEmitter waits.
+    rig.frames(1);
+    REQUIRE_FALSE(rig.audio.has_voice(emitter.id()));
+    REQUIRE(emitter.is_playing());
+    REQUIRE(emitter.time_position() == 0.5);
+
+    // A later step starts the voice, and it plays from TimePosition once loaded.
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!rig.audio.voice_sounding(emitter.id()) && std::chrono::steady_clock::now() < until) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        rig.frames(1);
+    }
+    REQUIRE(rig.audio.voice_sounding(emitter.id()));
+    REQUIRE(emitter.is_playing());
+    REQUIRE(emitter.time_position() >= 0.5);
 }

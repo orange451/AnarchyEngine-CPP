@@ -35,7 +35,10 @@ class DataModel;
 //      of a sound that does not loop stops its SoundEmitter. These writes fire
 //      no Changed and record no history.
 //
-// The output device is opened on the first voice, not before.
+// The output device is opened on the first voice, not before, and on another
+// thread: a SoundEmitter stays playing, unheard, until it has. Each file is
+// decoded on miniaudio's job thread, and its voice plays as it decodes; one
+// that must seek first waits for the whole file. Neither holds up the step.
 class AudioWorld {
 public:
     // Without a device, nothing is heard: step mixes dt's worth of audio

@@ -97,7 +97,7 @@ public:
     // billboard farther than it takes no mouse.
     void setCursorDepth(std::optional<float> depth);
     // Children in paint order, for tests.
-    std::vector<jadefx::Node*> paintOrder() const { return order_; }
+    std::vector<jadefx::Node*> paintOrder() const;
     // For the occluded draw: the depth a billboard node draws at, and whether
     // it is depth tested.
     struct PlacedBillboard {
@@ -111,6 +111,10 @@ protected:
     // Every ScreenGui fills the layer, and each placed billboard is centred on
     // its anchor's point.
     void layoutChildren() override;
+    // The children in paint order, which painting and picking follow, so a
+    // reorder never takes a node out of the layer and focus and presses
+    // survive it. A child restack has not ordered yet comes after, in list order.
+    void visitChildren(const std::function<void(jadefx::Node*)>& visitor) override;
 
 private:
     struct Entry;
@@ -133,8 +137,9 @@ private:
     void collectScreens(engine_core::InstanceId id, std::vector<std::shared_ptr<jadefx::Node>>& out);
     // The drawn BillboardGuis' nodes, made or brought up to date, in id order.
     void collectBillboards(std::vector<engine_core::InstanceId>& ids, std::vector<std::shared_ptr<jadefx::Node>>& nodes);
-    // Sets the children to the billboards in paint order, then the ScreenGuis,
-    // when that order changed.
+    // Puts the billboards in paint order, then the ScreenGuis, in order_.
+    // The children list changes only by the nodes that leave or arrive, since
+    // taking a node out drops the focus and any press inside it.
     void restack();
     // The node for a GuiBase, made or brought up to date, with its children.
     std::shared_ptr<jadefx::Node> build(engine_core::InstanceId id, const engine_core::GuiValues& gui);
@@ -152,8 +157,11 @@ private:
     std::uint64_t pass_ = 0;
     std::vector<Placement> placements_;
     std::vector<std::shared_ptr<jadefx::Node>> screens_;
-    // The children as restack last set them.
-    std::vector<jadefx::Node*> order_;
+    // The children in paint order, as restack last put them. Held, so a
+    // pointer here is never left dangling.
+    std::vector<std::shared_ptr<jadefx::Node>> order_;
+    // The children list's nodes, sorted by address, as restack last set it.
+    std::vector<jadefx::Node*> members_;
     std::optional<float> cursorDepth_;
     // The service's CSS at the last sync, so it is parsed again only when it changes.
     std::string css_;

@@ -283,20 +283,64 @@ void GuiLayer::restack() {
         }
         return a->id < b->id;
     });
-    std::vector<std::shared_ptr<jadefx::Node>> children;
-    std::vector<jadefx::Node*> order;
-    children.reserve(sorted.size() + screens_.size());
+    order_.clear();
+    order_.reserve(sorted.size() + screens_.size());
     for (const Placement* placement : sorted) {
-        children.push_back(placement->node);
-        order.push_back(placement->node.get());
+        order_.push_back(placement->node);
     }
     for (const auto& screen : screens_) {
-        children.push_back(screen);
-        order.push_back(screen.get());
+        order_.push_back(screen);
     }
-    if (order != order_) {
-        getChildren().setAll(std::move(children));
-        order_ = std::move(order);
+    // A reorder alone leaves the list be: visitChildren paints and picks in order_.
+    std::vector<jadefx::Node*> members;
+    members.reserve(order_.size());
+    for (const auto& node : order_) {
+        members.push_back(node.get());
+    }
+    std::sort(members.begin(), members.end());
+    if (members != members_) {
+        // Only the nodes that leave or arrive are taken out or put in, so the
+        // rest keep their focus and presses.
+        getChildren().removeIf([&](const std::shared_ptr<jadefx::Node>& child) {
+            return !std::binary_search(members.begin(), members.end(), child.get());
+        });
+        for (const auto& node : order_) {
+            if (!std::binary_search(members_.begin(), members_.end(), node.get())) {
+                getChildren().add(node);
+            }
+        }
+        members_ = std::move(members);
+    }
+}
+
+std::vector<jadefx::Node*> GuiLayer::paintOrder() const {
+    std::vector<jadefx::Node*> order;
+    order.reserve(order_.size());
+    for (const auto& node : order_) {
+        order.push_back(node.get());
+    }
+    return order;
+}
+
+void GuiLayer::visitChildren(const std::function<void(jadefx::Node*)>& visitor) {
+    std::size_t visited = 0;
+    for (const auto& node : order_) {
+        if (node->getParent() == this) {
+            visitor(node.get());
+            ++visited;
+        }
+    }
+    if (visited == getChildren().size()) {
+        return;
+    }
+    for (const auto& child : getChildren().items()) {
+        if (!child) {
+            continue;
+        }
+        const bool ordered = std::find(order_.begin(), order_.end(), child) != order_.end();
+        if (!ordered) {
+            visitor(child.get());
+        }
     }
 }
 

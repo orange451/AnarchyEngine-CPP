@@ -65,6 +65,7 @@ int RunBillboardLayerTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     engine_core::InstanceId label = 0;
     engine_core::InstanceId button = 0;
     engine_core::InstanceId screen = 0;
+    engine_core::InstanceId field = 0;
     std::string cameraGuid;
     engine.on_simulation([&](engine_core::DataModel& game) {
         const engine_core::InstanceId workspace = game.scene_service("Workspace");
@@ -92,6 +93,8 @@ int RunBillboardLayerTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
                        "button { width: 10px; height: 10px; }");
         screen = engine_core::lua_create_instance(game, "ScreenGui")->id();
         game.set_parent(screen, game.scene_service("Gui"));
+        field = engine_core::lua_create_instance(game, "TextField")->id();
+        game.set_parent(field, screen);
     });
     frame();
     view->linkCamera(cameraGuid);
@@ -140,6 +143,32 @@ int RunBillboardLayerTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
                order[2] == layer.nodeFor(top) && order[3] == layer.nodeFor(screen),
            "depth-tested billboards far to near, then AlwaysOnTop ones, then ScreenGuis");
 
+    // Two depth-tested billboards trading places reorder the paint without
+    // taking any node out of the layer, so a focused TextField keeps the keys.
+    jadefx::Node* fieldNode = layer.nodeFor(field);
+    jadefx::Node* screenNode = layer.nodeFor(screen);
+    Expect(fieldNode != nullptr && screenNode != nullptr, "the ScreenGui's TextField is drawn");
+    if (fieldNode == nullptr || screenNode == nullptr) {
+        return gFailures;
+    }
+    fieldNode->requestFocus();
+    frame();
+    Expect(fieldNode->isFocused(), "the TextField takes the focus");
+    auto swapped = std::make_shared<engine_core::VisualSnapshot>(*shot);
+    swapped->frame = 3;
+    swapped->billboards[0].anchor = engine_core::Vec3{0.f, 0.f, -20.f};
+    swapped->billboards[1].anchor = engine_core::Vec3{0.f, 0.f, -10.f};
+    view->setSnapshotForTest(swapped);
+    frame();
+    const std::vector<jadefx::Node*> swappedOrder = layer.paintOrder();
+    Expect(swappedOrder.size() == 4 && swappedOrder[0] == nearNode && swappedOrder[1] == layer.nodeFor(far),
+           "billboards that trade distances trade places in the paint order");
+    Expect(fieldNode->isFocused(), "a depth swap leaves the TextField focused");
+    Expect(screenNode->getParent() == &layer, "a depth swap leaves the ScreenGui in the layer");
+    scene.releaseFocus(fieldNode);
+    view->setSnapshotForTest(shot);
+    frame();
+
     // The same frame moves the camera and the anchor together: the billboard
     // follows that frame, not the one before.
     auto moved = std::make_shared<engine_core::VisualSnapshot>(*shot);
@@ -166,6 +195,13 @@ int RunBillboardLayerTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     layer.setCursorDepth(1.f);
     frame();
     Expect(layer.pick(cx, cy) == buttonNode, "with the scene farther, it does");
+    // An AlwaysOnTop billboard takes the mouse whatever the scene under the cursor.
+    auto onTop = std::make_shared<engine_core::VisualSnapshot>(*moved);
+    onTop->billboards[0].always_on_top = true;
+    view->setSnapshotForTest(onTop);
+    layer.setCursorDepth(0.5f);
+    frame();
+    Expect(layer.pick(cx, cy) == buttonNode, "an AlwaysOnTop Button behind nearer scene still takes a click");
     layer.setCursorDepth(std::nullopt);
 
     // Behind the camera, it is hidden.

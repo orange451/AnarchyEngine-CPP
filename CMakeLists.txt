@@ -102,6 +102,7 @@ set(STUDIO_SOURCES
     src/ide/AssetPicker.cpp
     src/ide/IdeScriptEditor.cpp
     src/ide/IdeSearch.cpp
+    src/ide/IdeProblems.cpp
     src/ide/FindBar.cpp
     src/ide/IdeTheme.cpp
     src/ide/EditorFont.cpp
@@ -635,6 +636,7 @@ add_executable(studio-tests
     tests/ModelImportTest.cpp
     tests/ScratchResourcesTest.cpp
     tests/ConflictsTest.cpp
+    tests/ProblemsTest.cpp
     tests/ScriptTabsTest.cpp
     tests/TerminalPaneTest.cpp
     tests/GuiStyleTest.cpp

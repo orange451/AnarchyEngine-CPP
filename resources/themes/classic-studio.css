@@ -134,6 +134,14 @@
     --ide-search-path-color: #aaaaaa;
     --ide-search-badge-color: var(--studio-button);
     --ide-search-badge-text-color: var(--studio-text);
+    --ide-problems-error-color: var(--error-color);
+    --ide-problems-warning-color: var(--studio-warning);
+    --ide-problems-info-color: var(--studio-link);
+    --ide-problems-error-badge-color: #c23f3f;
+    --ide-problems-warning-badge-color: #b35600;
+    --ide-problems-badge-text-color: #ffffff;
+    --ide-problems-detail-color: var(--ide-search-path-color);
+    --ide-problems-note-color: var(--ide-search-status-color);
 
     /* Console */
     --ide-console-command-color: var(--studio-builtin);

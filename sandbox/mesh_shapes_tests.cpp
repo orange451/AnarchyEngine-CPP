@@ -491,3 +491,33 @@ TEST_CASE("OriginOffset runs from a Mesh's origin to the middle of its box, and 
     rig.run("game.Assets.Meshes.Low:AddBox(Vector3.new(2, 2, 2), Vector3.new(0, -10, 0))");
     REQUIRE(same(low.origin_offset(), Vec3{0.f, -2.5f, 0.f}));
 }
+
+TEST_CASE("GetBoundingBox gives the size of the box around a Prefab's Models' Meshes", "[shapes]") {
+    ShapeRig rig;
+    rig.mesh("Low");
+    rig.mesh("High");
+    // Nothing to measure yet, and a Model with no Mesh adds nothing.
+    REQUIRE(rig.run(R"(
+        local prefab = Instance.new("Prefab", game.Assets.Prefabs)
+        prefab.Name = "Pair"
+        Instance.new("Model", prefab).Mesh = game.Assets.Meshes.Low
+        Instance.new("Model", prefab)
+        print(prefab:GetBoundingBox() == Vector3.new())
+    )") == "true\n");
+
+    REQUIRE(rig.run(R"(
+        game.Assets.Meshes.Low:AddBox(Vector3.new(2, 2, 2), Vector3.new(0, 1, 0))
+        game.Assets.Meshes.High:AddBox(Vector3.new(2, 2, 2), Vector3.new(4, 0, 0))
+        print(game.Assets.Prefabs.Pair:GetBoundingBox() == Vector3.new(2, 2, 2))
+    )") == "true\n");
+
+    // Another Model widens the box: x -1 to 5, y -1 to 2.
+    REQUIRE(rig.run(R"(
+        local prefab = game.Assets.Prefabs.Pair
+        Instance.new("Model", prefab).Mesh = game.Assets.Meshes.High
+        print(prefab:GetBoundingBox() == Vector3.new(6, 3, 2))
+    )") == "true\n");
+
+    // It is a Prefab's alone.
+    REQUIRE(rig.run("print((pcall(function() return game.Assets.Meshes.Low:GetBoundingBox() end)))") == "false\n");
+}

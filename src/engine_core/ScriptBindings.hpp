@@ -307,6 +307,8 @@ struct ScriptBindings {
     static SoundEmitter& emitter_self(lua_State* state);
     static int emitter_play(lua_State* state);
     static int emitter_stop(lua_State* state);
+    // A Prefab's bounding box size, from Prefab::bounds.
+    static int prefab_get_bounding_box(lua_State* state);
     // The keys and buttons are the service's, read on the simulation thread.
     static UserInputService* input_service(lua_State* state);
     static int input_is_key_down(lua_State* state);

@@ -1164,6 +1164,24 @@ int ScriptBindings::emitter_stop(lua_State* state) {
     });
 }
 
+int ScriptBindings::prefab_get_bounding_box(lua_State* state) {
+    return lua_guard(state, [&] {
+        auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
+        ScriptRuntime* runtime = runtime_from(state);
+        const auto* prefab =
+            runtime == nullptr ? nullptr : dynamic_cast<const Prefab*>(runtime->resolve_id(ud->id, ud->world));
+        if (prefab == nullptr) {
+            luaL_error(state, "instance is gone");
+        }
+        // bounds sets nothing when no Model has a Mesh, leaving a size of (0, 0, 0).
+        Vec3 low{};
+        Vec3 high{};
+        prefab->bounds(low, high);
+        lua_pushvector(state, high.x - low.x, high.y - low.y, high.z - low.z);
+        return 1;
+    });
+}
+
 int ScriptBindings::mesh_add_box(lua_State* state) {
     return lua_guard(state, [&] {
         Mesh& mesh = mesh_self(state);
@@ -1460,6 +1478,11 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         lua_method("Stop", "nil", reinterpret_cast<void*>(&ScriptBindings::emitter_stop)),
     };
     register_lua_class("SoundEmitter", nullptr, emitter, static_cast<int>(sizeof(emitter) / sizeof(emitter[0])));
+
+    // AssetInstances.cpp declares the class and its OriginOffset.
+    const LuaField prefab =
+        lua_method("GetBoundingBox", "Vector3", reinterpret_cast<void*>(&ScriptBindings::prefab_get_bounding_box));
+    register_lua_class("Prefab", nullptr, &prefab, 1);
 
     // UserInputService.cpp declares the class, its signals, and the service.
     const LuaField input[] = {

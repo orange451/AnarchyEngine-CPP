@@ -6,6 +6,7 @@
 #include "runner/gl.hpp"
 
 #include "Engine.hpp"
+#include "Project.hpp"
 #include "Script.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
@@ -22,10 +23,10 @@
 #include <string>
 #include <vector>
 
-// By hand, not ctest: profiler-demo out-dir plays a small place with a slow
-// script and falling boxes under the profiler, and saves what it shows: the
-// live Timeline, the slowest frame paused with a scope's tooltip, and the
-// Scopes table.
+// By hand, not ctest: profiler-demo out-dir [project] plays a small place with
+// a slow script and falling boxes under the profiler, or the project folder
+// given, as the player does, and saves what it shows: the live Timeline, the
+// slowest frame paused with a scope's tooltip, and the Scopes table.
 namespace {
 
 constexpr int kWidth = 1280;
@@ -84,22 +85,34 @@ class ProfilerDemo : public jadefx::Application {
 public:
     void start(jadefx::Stage& stage, int argc, char** argv) override {
         out_dir_ = argc > 1 ? argv[1] : ".";
+        const std::string project = argc > 2 ? argv[2] : "";
         ide::set_current_theme(ide::shipped_theme("dark"));
         runner_.prepare();
         engine_core::Engine& engine = runner_.simulation();
         engine.analysis().set_enabled(false);
         runner_.setSceneGrid(true);
+        // Loaded before the engine's threads start, as the player does.
+        if (!project.empty()) {
+            project_ = std::make_unique<engine_core::Project>(engine_core::Project::load(project, engine.datamodel()));
+            runner_.setSceneGrid(false);
+        }
         auto view = jadefx::make<runner::GameView>(runner_, "Scene View");
         view->setPrefWidthRatio(1);
         view->setPrefHeightRatio(1);
         view_ = view.get();
+        view_->setPlayerView(!project.empty());
         auto scene = jadefx::make<jadefx::Scene>(view, kWidth, kHeight);
         scene_ = scene.get();
         stage.setScene(scene);
         stage.setTitle("Profiler demo");
         stage_ = &stage;
         runner_.start();
-        engine.on_simulation([](engine_core::DataModel& game) {
+        engine.on_simulation([played = !project.empty()](engine_core::DataModel& game) {
+            if (played) {
+                game.capture_place();
+                game.start_simulation();
+                return;
+            }
             const engine_core::InstanceId workspace = game.scene_service("Workspace");
             const std::pair<const char*, const char*> scripts[] = {
                 {"EnemyAI", kEnemy}, {"Spawner", kSpawner}, {"CameraScript", kCamera}};
@@ -191,6 +204,7 @@ private:
     }
 
     runner::Runner runner_;
+    std::unique_ptr<engine_core::Project> project_;
     runner::GameView* view_ = nullptr;
     jadefx::Scene* scene_ = nullptr;
     jadefx::Stage* stage_ = nullptr;

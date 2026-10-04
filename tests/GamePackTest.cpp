@@ -53,6 +53,16 @@ struct TempFolder {
 
 int RunGamePackTests() {
     const int before = gFailures;
+    // Where the player saves a profile: a played folder, else beside the program or its .app.
+    Expect(runner::player_capture_folder(fs::path("/games/Maze"), false, fs::path("/apps/AnarchyPlayer")) ==
+               fs::path("/games/Maze"),
+           "a played project folder holds its profiles");
+    Expect(runner::player_capture_folder(fs::path("/tmp/x/project"), true, fs::path("/games/Maze.exe")) ==
+               fs::path("/games"),
+           "a packed game's profiles go beside the program");
+    Expect(runner::player_capture_folder(fs::path("/tmp/x/project"), true,
+                                         fs::path("/Games/Maze.app/Contents/MacOS/Maze")) == fs::path("/Games"),
+           "and beside the .app on a Mac");
     TempFolder temp;
     const fs::path project = temp.path / "project";
     Write(project / "project.json", "{\"format\": 1}");

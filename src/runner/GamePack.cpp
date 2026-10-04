@@ -359,4 +359,18 @@ bool unpack_game(const fs::path& file, const PackLocation& where, const fs::path
     return true;
 }
 
+std::filesystem::path player_capture_folder(const std::filesystem::path& project, bool packed,
+                                            const std::filesystem::path& executable) {
+    if (!packed) {
+        return project;
+    }
+    std::filesystem::path folder = executable.parent_path();
+    // Name.app/Contents/MacOS/Name: the folder the .app is in.
+    if (folder.filename() == "MacOS" && folder.parent_path().filename() == "Contents" &&
+        folder.parent_path().parent_path().extension() == ".app") {
+        return folder.parent_path().parent_path().parent_path();
+    }
+    return folder;
+}
+
 }  // namespace runner

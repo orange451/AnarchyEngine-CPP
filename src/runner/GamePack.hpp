@@ -70,4 +70,9 @@ bool extract_game_pack(const std::filesystem::path& file, const PackLocation& wh
 bool unpack_game(const std::filesystem::path& file, const PackLocation& where, const std::filesystem::path& cache,
                  std::filesystem::path& folder, std::string& error);
 
+// Where AnarchyPlayer saves a profile capture: the project folder it plays, or,
+// for a packed game, the folder holding the program, or holding its .app on a Mac.
+std::filesystem::path player_capture_folder(const std::filesystem::path& project, bool packed,
+                                            const std::filesystem::path& executable);
+
 }  // namespace runner

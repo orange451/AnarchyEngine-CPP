@@ -12,7 +12,7 @@ namespace {
 using jadefx::Color;
 
 // One dark palette for the studio and games alike: it sits over the scene.
-const Color kBackground = Color::rgb8(12, 15, 20, 226);
+const Color kBackground = Color::rgb8(12, 15, 20, 242);
 const Color kPanel = Color::rgb8(28, 35, 44, 255);
 const Color kLine = Color::rgb8(42, 51, 63, 255);
 const Color kText = Color::rgb8(217, 224, 232);

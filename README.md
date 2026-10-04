@@ -101,6 +101,24 @@ The simulation starts paused, so the place holds still while you edit. Test capt
 
 Stop ends the session. Scripts are aborted, instances created during play are gone, and property changes revert to the captured place. Text you still have open in a script editor is written back onto those restored scripts, so the edit survives the stop.
 
+## Profiler
+
+Cmd+F6 (Ctrl+F6 on Windows and Linux), or View > Profiler, shows a frame profiler over the Scene View last clicked, in the studio and in a game alike. It records only while shown. Across the top is a bar for each of the last 300 frames, red past 17.5 ms, with a dashed line at 16.6 ms, the budget of a 60 Hz frame. Below it the Timeline shows each thread in turn: Sim (the simulation step, physics, scripts), Render (Prepare, the snapshot copy, PostRender), UI (the Scene View's draw and the GUIs), and GPU, each scope nested in the one that called it and colored by kind. Scroll zooms, a drag pans, and a double-click fits a scope. The Scopes tab lists every scope with its most and average time per frame, its time in the selected frame, and how often it ran; click a column to sort, or a row to light that scope up in the Timeline.
+
+Each Script's resumes are scopes of their own, named after it and after what resumed it, such as `EnemyAI · Heartbeat`, `Mover · wait`, or `Input · InputBegan`. A script can mark its own sections:
+
+```lua
+debug.profilebegin("pathfind")
+local path = findPath(from, to)
+debug.profileend()
+```
+
+`debug` holds only those two functions. A section still open when the script yields, errors, or ends is closed there, with one warning in the console; so is a `profileend` with nothing open. A script may name 256 sections; past that they show as "(too many scopes)".
+
+Cmd+P (View > Pause Profiler) freezes what it shows while the game plays on; clicking a frame's bar pauses on that frame. While paused, Save writes the frames to a capture file (`*.aprof.json`): in the studio wherever you choose, and in a game beside the project folder or the game's program. File > Open Profile Capture shows one again, paused; Close capture returns to live. While the profiler shows, a pointer a script locked with `MouseBehavior` is freed so the profiler can be clicked; `MouseBehavior` keeps its value, and the lock comes back on the next click after the profiler is hidden.
+
+GPU times are each pass's length on the GPU, read a frame or two late (the GPU row says how many) and placed just after the moment the pass was issued, since macOS's OpenGL reports no GPU timestamps. Times taken while editing are not the game's: Test first to profile play.
+
 ## Projects
 
 A project is a directory, and it is meant to live in git. `project.json` names it. `src/` holds the authored tree, one file per instance, and `resources/` is where textures, meshes, and audio will go. The live place is a working copy: loading reads `src/`, and saving writes back only the files whose bytes changed.
@@ -172,6 +190,8 @@ Each studio names its project and port in a `studios` folder beside `preferences
 4. else the studio whose project folder holds the folder the client was started in, so `cd MyGame && claude` talks to the studio that has MyGame open.
 
 Otherwise a call fails and lists the open studios. Once the studio `select_studio` picked closes, calls fail until it picks another; `select_studio` with `""` goes back to the usual order. `list_studios` shows every open studio and which one calls go to, and `get_studio_info` asks a studio which project it has open. The entry of a studio that crashed is dropped the next time the bridge looks.
+
+`get_profile` reads the profiler: frame times, the scopes that cost most per frame, and the slowest frame as a tree per thread. When the profiler is not recording, it records for `seconds` (2 by default, at most 10) first; while it is paused it reads the paused frames at once. With `path` it also saves a capture file.
 
 With only one studio open, a client that speaks MCP over HTTP can also connect to it directly, with the token described below: `claude mcp add --transport http anarchy http://127.0.0.1:7777/mcp --header "Authorization: Bearer <secret>"`.
 

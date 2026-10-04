@@ -2,6 +2,7 @@
 #include "ide/IdePane.hpp"
 #include "runner/GameView.hpp"
 #include "runner/ProfilerOverlay.hpp"
+#include "runner/Runner.hpp"
 
 #include "Engine.hpp"
 #include "UserInputService.hpp"
@@ -282,6 +283,37 @@ int RunProfilerOverlayTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     expect(!profiler::showing_capture() && !profiler::paused(), "Close capture returns to live");
     key(jadefx::Key::F6, jadefx::Key::ModControl);
     fs::remove_all(folder);
+    profiler::reset_for_testing();
+    return gFailures;
+}
+
+// The player's view has no menu bar, so it takes Cmd+F6 and Cmd+P itself.
+int RunProfilerPlayerKeyTests() {
+    gFailures = 0;
+    profiler::reset_for_testing();
+    runner::Runner player;
+    player.prepare();
+    auto view = jadefx::make<runner::GameView>(player, "Game");
+    view->setPlayerView(true);
+    runner::GameView* shown = view.get();
+    auto scene = jadefx::make<jadefx::Scene>(view, 800, 600);
+    scene->layout(800, 600, 0.1);
+    runner::ProfilerUi& ui = runner::ProfilerUi::get();
+    // The studio's views from the tests before are still alive in this process; a game has only its own.
+    ui.owner = nullptr;
+    expect(!ui.shown(), "a game starts with the profiler hidden");
+    scene->noteKey(jadefx::Key::F6, true, false, jadefx::Key::ModControl);
+    scene->noteKey(jadefx::Key::F6, false, false, 0);
+    scene->layout(800, 600, 0.2);
+    expect(ui.shown() && shown->profilerOverlay().isVisible(), "Cmd+F6 shows it over the game");
+    scene->noteKey(jadefx::Key::P, true, false, jadefx::Key::ModControl);
+    scene->noteKey(jadefx::Key::P, false, false, 0);
+    expect(profiler::paused(), "Cmd+P pauses it");
+    scene->noteKey(jadefx::Key::P, true, false, jadefx::Key::ModControl);
+    scene->noteKey(jadefx::Key::P, false, false, 0);
+    scene->noteKey(jadefx::Key::F6, true, false, jadefx::Key::ModControl);
+    scene->noteKey(jadefx::Key::F6, false, false, 0);
+    expect(!ui.shown() && !profiler::paused(), "and Cmd+F6 hides it again");
     profiler::reset_for_testing();
     return gFailures;
 }

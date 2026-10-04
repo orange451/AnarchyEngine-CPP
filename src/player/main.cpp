@@ -2,13 +2,17 @@
 #include "jadefx/jadefx.hpp"
 #include "runner/GamePack.hpp"
 #include "runner/GameView.hpp"
+#include "runner/ProfilerOverlay.hpp"
 #include "runner/Runner.hpp"
 
 #include "Engine.hpp"
 #include "Project.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
+#include "profiler/ProfileJson.hpp"
 
+#include <fstream>
+#include <ctime>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
@@ -48,7 +52,8 @@ constexpr const char* kStylesheet = R"(
 
 // The project to play: the folder named on the command line, or else the
 // game packed into this program, or on a Mac into its bundle, extracted.
-fs::path FindGame(int argc, char** argv, std::string& error) {
+fs::path FindGame(int argc, char** argv, std::string& error, bool& packed) {
+    packed = false;
     // A folder, for playing a project as the studio saved it. Finder may pass
     // -psn_ arguments; flags are not folders.
     if (argc > 1 && argv[1] != nullptr && argv[1][0] != '-') {
@@ -80,6 +85,7 @@ fs::path FindGame(int argc, char** argv, std::string& error) {
         const fs::path resources = folder / runner::kPackedResources;
         ide::set_resource_override(resources);
         fs::current_path(resources, failure);
+        packed = true;
         return folder / runner::kPackedProject;
     }
     error = "There is no game in this player. Export one from the studio with File > Export Game, "
@@ -101,7 +107,8 @@ void PrintOutput(engine_core::ScriptRuntime& scripts) {
 class AnarchyPlayer : public jadefx::Application {
 public:
     // root is the project to play, or error says why there is none.
-    AnarchyPlayer(fs::path root, std::string error) : root_(std::move(root)), error_(std::move(error)) {}
+    AnarchyPlayer(fs::path root, std::string error, bool packed)
+        : root_(std::move(root)), error_(std::move(error)), packed_(packed) {}
 
     void start(jadefx::Stage& stage, int, char**) override {
         const jadefx::Size size = defaultWindowSize();
@@ -151,6 +158,21 @@ public:
             }
         });
         engine.resume();
+        // Cmd+F6 shows the profiler; Save, while paused, writes beside the game.
+        runner::ProfilerUi::get().save = [this] {
+            const fs::path file = runner::player_capture_folder(root_, packed_, ide::executable_path()) /
+                                  profiler::capture_file_name(std::time(nullptr));
+            std::string text;
+            profiler::with_view([&](const profiler::History& history) {
+                text = profiler::write_capture(history, project_ ? project_->name() : std::string("Game"),
+                                               profiler::utc_stamp(std::time(nullptr)));
+            });
+            std::ofstream out(file, std::ios::binary | std::ios::trunc);
+            out << text;
+            out.close();
+            std::printf(out ? "Saved a profile to %s\n" : "Could not save a profile to %s\n", file.string().c_str());
+            std::fflush(stdout);
+        };
         // The game has the keyboard from the start, with no click first.
         jadefx::runLater([shown] { shown->requestFocus(); });
     }
@@ -189,6 +211,7 @@ private:
     // Declared before the project, which reads and writes its engine's place.
     fs::path root_;
     std::string error_;
+    bool packed_ = false;
     runner::Runner runner_;
     std::unique_ptr<engine_core::Project> project_;
 };
@@ -199,6 +222,8 @@ int main(int argc, char** argv) {
     // Unpacked before launch: JadeFX loads its shaders as it opens the window,
     // before start, and a packed game's are only on disk once this is done.
     std::string error;
-    fs::path root = FindGame(argc, argv, error);
-    return jadefx::Application::launch(std::make_unique<AnarchyPlayer>(std::move(root), std::move(error)), argc, argv);
+    bool packed = false;
+    fs::path root = FindGame(argc, argv, error, packed);
+    return jadefx::Application::launch(std::make_unique<AnarchyPlayer>(std::move(root), std::move(error), packed),
+                                       argc, argv);
 }

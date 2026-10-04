@@ -139,3 +139,12 @@ The UI thread receives OS input and posts it to `UserInputService`'s queue (a sh
 ## Out of scope
 
 Loading captures in the player; counters (memory, draw calls) as rows; per-scope colours chosen by scripts; network or remote viewing; GPU scopes from scripts; hotkeys beyond Cmd+F6 and Cmd+P.
+
+## Changes made during implementation
+
+- **Colours:** one fixed dark palette in the studio and in games, not theme colours: the overlay sits over the scene, and the player has no studio theme.
+- **GPU timing:** `GL_TIME_ELAPSED` queries, not `GL_TIMESTAMP`. macOS's OpenGL (on Metal) answers every timestamp query with 0. Each pass's length is exact; it is placed on the GPU row just after its CPU issue time, so its start is approximate. Elapsed queries cannot nest, so only top-level passes are timed.
+- **Where the renderer runs:** `Renderer::draw` runs on the UI thread inside `GameView`'s paint, so the pass scopes are on the UI row; the Render row holds Prepare, the snapshot copy, Perform/Present (the snapshot handoff), and PostRender.
+- **Over budget:** the line stays at 16.6 ms, but a frame counts as over (red, and in `over_budget`) past 17.5 ms, so vsync's jitter around 16.7 ms is not flagged.
+- **UI row:** no separate "Input" or whole-window "Paint" scope; JadeFX's stage owns that loop. The UI row has Scene View, Snapshot read, the render passes, and GUIs and overlays.
+- **Captures:** times are microseconds to the nanosecond (fractional), so frames under a microsecond keep their length.

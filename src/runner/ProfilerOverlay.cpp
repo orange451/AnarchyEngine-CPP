@@ -107,9 +107,16 @@ void ProfilerUi::setShown(bool shown) {
     shown_ = shown;
     if (shown) {
         profiler::acquire();
-    } else {
-        profiler::release();
+        return;
     }
+    // Shown again, it starts live: hiding ends a pause and closes a capture.
+    if (profiler::showing_capture()) {
+        profiler::close_capture();
+    } else if (profiler::paused()) {
+        profiler::set_paused(false);
+    }
+    selected = kNewest;
+    profiler::release();
 }
 
 void ProfilerUi::togglePaused() {

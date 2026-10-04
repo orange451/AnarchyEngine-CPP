@@ -163,6 +163,14 @@ int RunProfilerOverlayTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     expect(first->pointerWanted(), "hiding the profiler lets the lock come back");
     engine.datamodel().input().set_mouse_behavior(engine_core::UserInputService::kMouseBehaviorDefault);
 
+    // Hidden while paused, it comes back live, not on the old frames.
+    key(jadefx::Key::F6, jadefx::Key::ModControl);
+    key(jadefx::Key::P, jadefx::Key::ModControl);
+    key(jadefx::Key::F6, jadefx::Key::ModControl);
+    key(jadefx::Key::F6, jadefx::Key::ModControl);
+    expect(ui.shown() && !profiler::paused(), "shown again after hiding while paused, it is live");
+    key(jadefx::Key::F6, jadefx::Key::ModControl);
+
     // Clicks: a frame bar selects that frame and pauses; the tabs switch; a header sorts.
     key(jadefx::Key::F6, jadefx::Key::ModControl);
     profiler::register_thread("Render");

@@ -16,7 +16,8 @@ class GameView;
 
 // What every Scene View's profiler shows, one for the process. Showing it
 // starts recording (profiler::acquire) and hiding it stops (release); the
-// history it recorded stays until it is shown again. Only owner draws it: the
+// history it recorded stays until it is shown again. Hiding ends a pause and
+// closes a capture, so it always comes back live. Only owner draws it: the
 // Scene View last clicked or focused.
 class ProfilerUi {
 public:

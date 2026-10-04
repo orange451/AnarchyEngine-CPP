@@ -834,6 +834,7 @@ add_executable(sandbox
     sandbox/audio_tests.cpp
     sandbox/scene_camera_tests.cpp
     sandbox/gui_tests.cpp
+    sandbox/billboard_tests.cpp
     sandbox/render_math_tests.cpp
     sandbox/shadow_math_tests.cpp
     sandbox/shadow_atlas_tests.cpp

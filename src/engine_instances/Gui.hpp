@@ -141,6 +141,7 @@ class BillboardGui : public GuiBase {
 public:
     BillboardGui(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);
     const char* class_name() const override;
+    bool billboard_gui() const override { return true; }
 
     bool always_on_top() const { return flag(GuiProperty::AlwaysOnTop); }
     // Adornee as a script reads it, and its live target, or 0.

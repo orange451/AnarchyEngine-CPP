@@ -38,6 +38,7 @@ int RunTextureImportTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunModelImportTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunScratchResourcesTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene);
+int RunProblemsStartupTests();
 int RunProblemsPaneTests(engine_core::Engine& engine);
 int RunProblemsWindowTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunScriptTabTests(ide::IdeLayout& layout, jadefx::Scene& scene);
@@ -913,6 +914,7 @@ int main() {
     failures += RunModelImportTests(layout, *scene);
     failures += RunScratchResourcesTests(layout, *scene);
     failures += RunConflictsTests(layout, *scene);
+    failures += RunProblemsStartupTests();
     failures += RunProblemsPaneTests(layout.simulation());
     failures += RunProblemsWindowTests(layout, *scene);
     // Conflicts opened beside the game explorer, the built-in layout's only

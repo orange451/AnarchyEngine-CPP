@@ -178,6 +178,10 @@ std::shared_ptr<IdePane> IdeLayout::make_problems() {
 
 void IdeLayout::show_problems() { open_window(*problems_window_); }
 
+IdePane* IdeLayout::problemsPaneForTests() const {
+    return problems_window_ != nullptr ? problems_window_->pane.get() : nullptr;
+}
+
 IdeDock* IdeLayout::side_home() {
     // Beside the left explorer, as VS Code keeps search in its side bar.
     for (const std::weak_ptr<IdeExplorer>& weak : explorers_) {

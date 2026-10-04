@@ -140,6 +140,10 @@ public:
     void show_conflicts();
     // Opens the Problems window, or brings it forward.
     void show_problems();
+    // The Problems entry's page, made when this layout was constructed so it
+    // counts from startup. For tests, to check it before Problems is ever
+    // opened; show_problems docks this very pane.
+    IdePane* problemsPaneForTests() const;
     // Whether the Scene Views draw the floor grid now: Grid is on and no test runs.
     bool scene_grid() const { return runner_.sceneGrid(); }
     // Once a frame, after the scene lays out; the main window's stage calls it.

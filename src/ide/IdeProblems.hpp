@@ -91,7 +91,9 @@ private:
     };
 
     ProblemFilter filter() const;
-    // Showing: in a scene, so laid out. A tab not in front, or closed, is in none.
+    // Showing: in a scene, so laid out. A tab not in front, or closed, is in
+    // none. A floating window's tab counts as shown too, even while that
+    // window is minimized: it still has a scene, and still lays out.
     bool shown() const { return getScene() != nullptr; }
     // The list from sources_ and the filter, its counts, the summary, and the
     // title. Marks the rows stale.

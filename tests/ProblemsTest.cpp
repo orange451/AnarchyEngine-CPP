@@ -434,6 +434,55 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     return gFailures;
 }
 
+// Counting should start when the studio starts: the Problems entry's pane is
+// made with the layout, not lazily the first time someone opens it, so its
+// list and title are current before Problems is ever shown.
+int RunProblemsStartupTests() {
+    gFailures = 0;
+    ide::IdeLayout layout(1280, 800);
+    auto scene = jadefx::make<jadefx::Scene>(nullptr, 1280, 800);
+    layout.mount(*scene);
+    scene->layout(1280, 800, 0.1);
+
+    engine_core::Engine& engine = layout.simulation();
+    engine_core::DataModel& game = engine.datamodel();
+    engine_core::Script& broken = add_script(game, game.scene_service("Workspace"), "StartupBroken", "nope()\n");
+    settle(engine);
+    // The studio's per-frame hook, run a few times as it would be before
+    // anyone has ever opened the Problems window.
+    for (int i = 0; i < 3; ++i) {
+        scene->layout(1280, 800, 0.2 + 0.1 * i);
+        layout.flushFrame();
+    }
+
+    ide::IdePane* raw_pane = layout.problemsPaneForTests();
+    expect(raw_pane != nullptr, "the Problems entry's pane exists before it is ever opened");
+    auto* problems = dynamic_cast<ide::IdeProblems*>(raw_pane);
+    expect(problems != nullptr, "and it is the Problems pane");
+    if (problems != nullptr) {
+        expect(lists(*problems, broken.id()), "its list shows the script broken before Problems is ever opened");
+        expect(problems->title() == "Problems (1)", "and its title counts it, before Problems is ever opened");
+        expect(problems->rebuilds() == 0, "no rows are built before it is shown");
+    }
+    expect(scene->getElementsByClassName("problems-pane").empty(),
+           "no docked or visible Problems pane is in the scene at startup");
+
+    // Opening it docks the very same pane, not a second one, and builds its
+    // rows once from the list it already has.
+    layout.show_problems();
+    scene->layout(1280, 800, 0.6);
+    const std::vector<jadefx::Node*> opened = scene->getElementsByClassName("problems-pane");
+    expect(opened.size() == 1, "show_problems docks one Problems pane");
+    expect(!opened.empty() && opened.front() == raw_pane, "it is the pane made at startup, not a second one");
+    if (problems != nullptr) {
+        expect(problems->rebuilds() == 1, "opening it builds its rows once");
+    }
+
+    game.destroy(broken.id());
+    settle(engine);
+    return gFailures;
+}
+
 int RunProblemsWindowTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     gFailures = 0;
     expect(scene.getElementsByClassName("problems-pane").empty(), "Problems starts closed");
@@ -615,6 +664,101 @@ int RunProblemsWindowTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         game.destroy(unseen.id());
         settle(engine);
         scene.layout(1280, 800, 51.0);
+    }
+
+    // A floating window: a dock of its own, in a scene of its own, as
+    // IdeLayout's floatTab makes when a tab is dragged out of the main
+    // window. The pane still has a scene, so it still counts as shown: its
+    // rows build, and follow a change.
+    {
+        ide::IdeDock* home = nullptr;
+        for (jadefx::Node* cursor = pane; cursor != nullptr && home == nullptr; cursor = cursor->getParent()) {
+            home = dynamic_cast<ide::IdeDock*>(cursor);
+        }
+        std::shared_ptr<jadefx::Tab> problems_tab;
+        if (home != nullptr) {
+            for (const std::shared_ptr<jadefx::Tab>& tab : home->tabs()->getTabs().items()) {
+                if (tab && tab->getContent() == pane) {
+                    problems_tab = tab;
+                }
+            }
+        }
+        if (home != nullptr && problems_tab != nullptr) {
+            auto floating_dock = jadefx::make<ide::IdeDock>();
+            auto floating_scene = jadefx::make<jadefx::Scene>(floating_dock, 480, 320);
+            floating_dock->take(problems_tab);
+            floating_scene->layout(480, 320, 60.0);
+            layout.flushFrame();
+            expect(pane->getScene() == floating_scene.get(), "a floated Problems tab is in a scene of its own");
+
+            const int floated_rebuilds = pane->rebuilds();
+            engine_core::Script& floated =
+                add_script(game, game.scene_service("Workspace"), "FloatedBroken", "nope()\n");
+            settle(engine);
+            floating_scene->layout(480, 320, 60.1);
+            layout.flushFrame();
+            expect(pane->rebuilds() > floated_rebuilds, "a floating Problems window builds its rows");
+            expect(row_shows(*pane, "FloatedBroken"), "and follows a new problem");
+
+            game.destroy(floated.id());
+            settle(engine);
+            floating_scene->layout(480, 320, 60.2);
+            layout.flushFrame();
+
+            // Back in the main window, as every other block here leaves it.
+            home->take(problems_tab);
+            scene.layout(1280, 800, 60.3);
+            layout.flushFrame();
+            expect(pane->getScene() == &scene, "moving it back returns it to the main scene");
+        }
+    }
+
+    // A filter changed while the pane is hidden behind another tab: the list
+    // follows it right away, since sync_filter and tick refresh regardless of
+    // shown(), but the rows wait for the pane to show again.
+    {
+        ide::IdeDock* dock = nullptr;
+        for (jadefx::Node* cursor = pane; cursor != nullptr && dock == nullptr; cursor = cursor->getParent()) {
+            dock = dynamic_cast<ide::IdeDock*>(cursor);
+        }
+        std::shared_ptr<jadefx::Tab> problems_tab;
+        std::shared_ptr<jadefx::Tab> other_tab;
+        if (dock != nullptr) {
+            for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+                if (tab && tab->getContent() == pane) {
+                    problems_tab = tab;
+                } else if (tab && !other_tab) {
+                    other_tab = tab;
+                }
+            }
+        }
+        if (dock != nullptr && problems_tab != nullptr && other_tab != nullptr) {
+            dock->tabs()->select(other_tab);
+            scene.layout(1280, 800, 61.0);
+            layout.flushFrame();
+            expect(pane->getScene() == nullptr, "Problems is hidden behind another tab");
+
+            pane->filterInput().field().setText("Renamed");
+            const int before_filter_refreshes = pane->refreshes();
+            const int before_filter_rebuilds = pane->rebuilds();
+            scene.layout(1280, 800, 61.1);
+            layout.flushFrame();
+            expect(pane->refreshes() > before_filter_refreshes,
+                   "a filter set while hidden refreshes the list right away");
+            expect(pane->rebuilds() == before_filter_rebuilds, "but builds no rows while hidden");
+
+            dock->tabs()->select(problems_tab);
+            scene.layout(1280, 800, 61.2);
+            layout.flushFrame();
+            expect(pane->rebuilds() == before_filter_rebuilds + 1,
+                   "showing it again builds the rows once, from the filtered list");
+            expect(pane->list().scripts.size() == 1 && pane->list().scripts[0].id == script.id(),
+                   "and the rows reflect the filter that was set while hidden");
+
+            pane->filterInput().field().setText("");
+            scene.layout(1280, 800, 61.3);
+            layout.flushFrame();
+        }
     }
 
     game.destroy(script.id());

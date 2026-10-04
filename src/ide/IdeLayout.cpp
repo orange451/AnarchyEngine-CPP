@@ -260,9 +260,13 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     search_window_ = &keep_closed("Search", "Search.png", [this] { return make_search(); });
     search_window_->open = [this] { open_search(false, scene_); };
     conflicts_window_ = &keep_closed("Conflicts", "Warning.png", [this] { return make_conflicts(); });
-    problems_window_ = &keep_closed("Problems", "Warning.png", [this] { return make_problems(); });
-    // In with the console, as Assets docks.
-    problems_window_->home = [this] { return beside_console(); };
+    // Made now, not lazily like Search and Conflicts: so flushFrame can tick
+    // it from the first frame, and the list and the title count from startup
+    // whether or not Problems is ever opened. Still closed until the Window
+    // menu, its checkbox, or a saved layout opens it; window_page then hands
+    // out this same pane, since it has no make to remake it.
+    problems_window_ = &keep(make_problems(), [this] { return beside_console(); });
+    problems_window_->starts_closed = true;
     assets_window_ = &keep_closed("Assets", "AssetFolder.png", [this] { return make_assets(); });
     // In with the console, as a project browser docks under the scene.
     assets_window_->home = [this] { return beside_console(); };

@@ -91,6 +91,20 @@ int RunProblemsModelTests() {
         expect(got.size() == 1 && got[0].column_end >= got[0].column, "an end before the start is clamped");
         expect(got.size() == 1 && got[0].column <= 1, "a column past the line's end is clamped to it");
     }
+    {
+        // Many problems in one source, on lines out of order, CRLF breaks, and a
+        // line past the end: each lands on its own line.
+        const std::string text = "aa\r\nbbbb\r\ncccccc";
+        const std::vector<ide::Problem> got = ide::problems_from(
+            text, {diag(Severity::Error, "E", "third", 2, 0, 2, 99), diag(Severity::Error, "E", "first", 0, 0, 0, 99),
+                   diag(Severity::Error, "E", "second", 1, 1, 1, 99), diag(Severity::Error, "E", "gone", 7, 0, 7, 1)});
+        expect(got.size() == 4 && got[0].line == 3 && got[0].column_end == 6, "the last line has no break");
+        expect(got.size() == 4 && got[1].line == 1 && got[1].column_end == 2, "a CRLF line ends before its CR");
+        expect(got.size() == 4 && got[2].line == 2 && got[2].column == 1 && got[2].column_end == 4,
+               "a middle line is found from the line starts");
+        expect(got.size() == 4 && got[3].line == 8 && got[3].column == 0 && got[3].column_end == 0,
+               "a line past the end is empty");
+    }
 
     // build_problems: grouping and order.
     {
@@ -122,6 +136,17 @@ int RunProblemsModelTests() {
         expect(list.matching.warnings == 2, "toggle labels still count what the filter matches");
         expect(ide::problems_title(list) == "Problems (5)", "the title ignores the toggles");
         expect(ide::problems_summary(list) == "3 errors in 2 scripts", "the summary counts what is shown");
+    }
+    {
+        // Errors off: Mover shows only its warning, so it sorts with the rest by
+        // path instead of first for errors no one can see.
+        ide::ProblemFilter no_errors;
+        no_errors.errors = false;
+        const ide::ProblemList list = ide::build_problems(place(), no_errors);
+        expect(list.scripts.size() == 3 && list.scripts[0].name == "Shop" && list.scripts[1].name == "Mover" &&
+                   list.scripts[2].name == "Info",
+               "a hidden error does not sort its script first");
+        expect(list.scripts.size() == 3 && !list.scripts[1].has_error, "has_error counts shown errors only");
     }
     {
         ide::ProblemFilter text;

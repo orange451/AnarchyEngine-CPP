@@ -57,13 +57,14 @@ struct ScriptProblems {
     std::string path;
     // Errors, then warnings, then info, each by line then column.
     std::vector<Problem> problems;
+    // It shows an error. One the toggles or the filter hide does not count.
     bool has_error = false;
     int errors = 0;
     int warnings = 0;
 };
 
 struct ProblemList {
-    // Scripts with an error first, then the rest; within each, by path then name.
+    // Scripts showing an error first, then the rest; within each, by path then name.
     std::vector<ScriptProblems> scripts;
     // What the filter and toggles let through.
     ProblemCounts shown;

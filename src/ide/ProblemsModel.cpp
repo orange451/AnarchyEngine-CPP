@@ -4,7 +4,6 @@
 #include "Utf8.hpp"
 
 #include <algorithm>
-#include <cctype>
 
 namespace ide {
 namespace {
@@ -23,20 +22,22 @@ int rank(engine_core::Severity severity) {
     return 3;
 }
 
+// Where each line of source starts, so a script with many problems is scanned once.
+std::vector<std::size_t> line_starts(std::string_view source) {
+    std::vector<std::size_t> starts{0};
+    for (std::size_t at = source.find('\n'); at != std::string_view::npos; at = source.find('\n', at + 1)) {
+        starts.push_back(at + 1);
+    }
+    return starts;
+}
+
 // The bytes of 0-based line `line` in source, without its line break.
-std::string_view line_of(std::string_view source, std::uint32_t line) {
-    std::size_t start = 0;
-    for (std::uint32_t at = 0; at < line; ++at) {
-        const std::size_t stop = source.find('\n', start);
-        if (stop == std::string_view::npos) {
-            return {};
-        }
-        start = stop + 1;
+std::string_view line_of(std::string_view source, const std::vector<std::size_t>& starts, std::uint32_t line) {
+    if (line >= starts.size()) {
+        return {};
     }
-    std::size_t stop = source.find('\n', start);
-    if (stop == std::string_view::npos) {
-        stop = source.size();
-    }
+    const std::size_t start = starts[line];
+    std::size_t stop = line + 1 < starts.size() ? starts[line + 1] - 1 : source.size();
     if (stop > start && source[stop - 1] == '\r') {
         --stop;
     }
@@ -48,16 +49,8 @@ int column_of(std::string_view line, std::uint32_t byte) {
     return CodePointsBefore(line, std::min<std::size_t>(byte, line.size()));
 }
 
-std::string lower(std::string_view text) {
-    std::string out(text);
-    for (char& unit : out) {
-        unit = static_cast<char>(std::tolower(static_cast<unsigned char>(unit)));
-    }
-    return out;
-}
-
 bool contains(const std::string& haystack, const std::string& lowered_needle) {
-    return lower(haystack).find(lowered_needle) != std::string::npos;
+    return AsciiLower(haystack).find(lowered_needle) != std::string::npos;
 }
 
 void count(ProblemCounts& counts, engine_core::Severity severity) {
@@ -94,11 +87,15 @@ bool shown_by(const ProblemFilter& filter, engine_core::Severity severity) {
 
 std::vector<Problem> problems_from(std::string_view source, const std::vector<engine_core::Diagnostic>& diagnostics) {
     std::vector<Problem> out;
+    std::vector<std::size_t> starts;
     for (const engine_core::Diagnostic& diagnostic : diagnostics) {
         if (diagnostic.severity == engine_core::Severity::Hint) {
             continue;
         }
-        const std::string_view line = line_of(source, diagnostic.range.start.line);
+        if (starts.empty()) {
+            starts = line_starts(source);
+        }
+        const std::string_view line = line_of(source, starts, diagnostic.range.start.line);
         Problem problem;
         problem.line = static_cast<int>(diagnostic.range.start.line) + 1;
         problem.column = column_of(line, diagnostic.range.start.character);
@@ -116,7 +113,7 @@ std::vector<Problem> problems_from(std::string_view source, const std::vector<en
 
 ProblemList build_problems(std::vector<ProblemSource> sources, const ProblemFilter& filter) {
     ProblemList list;
-    const std::string needle = lower(filter.text);
+    const std::string needle = AsciiLower(filter.text);
     for (ProblemSource& source : sources) {
         if (source.problems.empty()) {
             continue;
@@ -132,9 +129,6 @@ ProblemList build_problems(std::vector<ProblemSource> sources, const ProblemFilt
         bool matched_any = false;
         for (Problem& problem : source.problems) {
             count(list.total, problem.severity);
-            if (problem.severity == engine_core::Severity::Error) {
-                row.has_error = true;
-            }
             const bool matches =
                 script_matches || contains(problem.message, needle) || contains(problem.code, needle);
             if (!matches) {
@@ -159,6 +153,9 @@ ProblemList build_problems(std::vector<ProblemSource> sources, const ProblemFilt
         if (row.problems.empty()) {
             continue;
         }
+        // Only a shown error sorts the script first: one the toggles or the
+        // filter hide would put a row of warnings above the rest for no reason.
+        row.has_error = row.errors > 0;
         std::stable_sort(row.problems.begin(), row.problems.end(), [](const Problem& a, const Problem& b) {
             if (rank(a.severity) != rank(b.severity)) {
                 return rank(a.severity) < rank(b.severity);

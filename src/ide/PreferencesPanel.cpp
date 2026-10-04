@@ -500,7 +500,7 @@ std::shared_ptr<jadefx::Node> PreferencesPanel::build_performance() {
     auto hint = jadefx::make<jadefx::Label>(
         "The most frames a second the studio draws. -1 is uncapped. From " +
         std::to_string(Preferences::kMinFrameRate) + " to " + std::to_string(Preferences::kMaxFrameRate) +
-        " otherwise. The game's simulation stays at 60 Hz.");
+        " otherwise. The game's simulation steps once a frame, at the same rate.");
     hint->getClassList().add("prefs-hint");
     rate_status_ = jadefx::make<jadefx::Label>("");
     rate_status_->getClassList().add("prefs-status");

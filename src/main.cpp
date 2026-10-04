@@ -54,7 +54,7 @@ protected:
 
     std::string defaultTitle() const override { return "Anarchy Engine"; }
 
-    // The scene draws as fast as the frame allows. The simulation stays at 60 Hz.
+    // The scene draws as fast as the frame allows, and the simulation steps with it.
     int swapInterval() const override { return 0; }
 
 private:

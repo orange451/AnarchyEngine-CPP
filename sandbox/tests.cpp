@@ -31,6 +31,7 @@
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -1447,6 +1448,56 @@ TEST_CASE("client sync keeps an uncapped render loop with the window", "[pace]")
     REQUIRE(paced_ms < 400);
     REQUIRE(engine.present_count() < idle + 50);
     engine.stop();
+}
+
+TEST_CASE("client sync steps an uncapped simulation with each paint", "[pace]") {
+    engine_core::Engine engine;
+    engine.set_simulation_pace_hz(0.0);
+    engine.set_render_pace_hz(0.0);
+    engine.set_simulation_client_sync(true);
+    engine.set_render_client_sync(true);
+    std::mutex dts_mu;
+    std::vector<double> dts;
+    engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double dt) {
+        std::lock_guard<std::mutex> guard(dts_mu);
+        dts.push_back(dt);
+    });
+    engine.start();
+    engine.resume();
+    wait_until([&] { return engine.sim_frame_count() > 0; });
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    // With no paint, the step falls back to about 60 Hz rather than spinning.
+    const auto idle_from = engine.sim_frame_count();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const auto idle = engine.sim_frame_count() - idle_from;
+    INFO("idle steps in 200 ms: " << idle);
+    REQUIRE(idle >= 6);
+    REQUIRE(idle <= 16);
+    {
+        std::lock_guard<std::mutex> guard(dts_mu);
+        dts.clear();
+    }
+    // Paints every 4 ms, a 250 Hz window. A 60 Hz step would take 40 ms per 2.4 paints.
+    const auto paced_at = std::chrono::steady_clock::now();
+    const auto first = engine.sim_frame_count();
+    for (int i = 0; i < 60; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(4));
+        engine.note_client_frame();
+    }
+    const auto steps = engine.sim_frame_count() - first;
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - paced_at).count();
+    engine.stop();
+    const double hz = static_cast<double>(steps) / seconds;
+    INFO("steps a second: " << hz);
+    REQUIRE(hz > 120.0);
+    // Each step's dt is the time it covers, so Heartbeat time keeps up with the clock.
+    double total = 0;
+    for (double dt : dts) {
+        total += dt;
+    }
+    INFO("Heartbeat time " << total << " over " << seconds << " s");
+    REQUIRE(total > seconds * 0.8);
+    REQUIRE(total < seconds * 1.2);
 }
 
 TEST_CASE("N1 default name is the class name and set_name fires Name", "[N1]") {

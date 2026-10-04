@@ -21,6 +21,10 @@ namespace {
 // How often a paused engine steps the command line's and the plugins' threads.
 constexpr std::chrono::milliseconds kToolInterval(16);
 
+// How long a client-synced simulation waits for a paint before it steps anyway,
+// so a window that stops painting still runs the place at about 60 Hz.
+constexpr std::chrono::microseconds kSimulationClientFallback(16667);
+
 // Sleeps until the next slot of a fixed hz schedule. Sleeping for the budget
 // less the step's own work dropped each wake-up's lateness, and a sleep on
 // Windows can wake a whole 15.6 ms tick late, so 60 Hz ran near 32. On a fixed
@@ -92,12 +96,15 @@ void Engine::set_render_pace_hz(double hz) { render_pace_hz_ = hz; }
 
 void Engine::set_render_client_sync(bool enabled) { render_client_sync_.store(enabled); }
 
+void Engine::set_simulation_client_sync(bool enabled) { simulation_client_sync_.store(enabled); }
+
 void Engine::note_client_frame() {
     {
         std::lock_guard<std::mutex> guard(client_frame_mu_);
         ++client_frames_;
     }
-    client_frame_cv_.notify_one();
+    // Both loops may be waiting on the same paint.
+    client_frame_cv_.notify_all();
 }
 
 void Engine::start() {
@@ -304,6 +311,13 @@ void Engine::simulation_loop() {
             next_step = {};
         }
 
+        // Sample before the step so a paint that arrives during it is not missed.
+        std::uint64_t client_seen = 0;
+        const bool wait_for_client = simulation_client_sync_.load() && !(simulation_pace_hz_ > 0.0);
+        if (wait_for_client) {
+            std::lock_guard<std::mutex> guard(client_frame_mu_);
+            client_seen = client_frames_;
+        }
         const auto frame_start = std::chrono::steady_clock::now();
         double wall = render_dt_;
         if (clock_ != nullptr) {
@@ -319,6 +333,10 @@ void Engine::simulation_loop() {
                 wall = 0.1;
             }
         }
+
+        // A step that follows the paint has no fixed length, so it is given the
+        // time it actually covers. A paced step keeps render_dt.
+        const double step_dt = wait_for_client && wall > 0.0 ? wall : render_dt_;
 
         int substeps = 0;
         guarded_step(
@@ -339,7 +357,7 @@ void Engine::simulation_loop() {
                 }
                 {
                     PROFILE_SCOPE("PreAnimation", profiler::Group::Engine);
-                    scheduler_.run_phase(Phase::PreAnimation, render_dt_);
+                    scheduler_.run_phase(Phase::PreAnimation, step_dt);
                 }
                 {
                     // Deferred handlers run on this thread, still under the step lock,
@@ -369,21 +387,21 @@ void Engine::simulation_loop() {
                 }
                 {
                     PROFILE_SCOPE("Heartbeat", profiler::Group::Engine);
-                    scheduler_.run_phase(Phase::Heartbeat, render_dt_);
+                    scheduler_.run_phase(Phase::Heartbeat, step_dt);
                     // Stepping instances under the root step in this phase. Bound
                     // Heartbeat jobs stay for callers that are not instances.
-                    game_.step_instances(render_dt_);
+                    game_.step_instances(step_dt);
                     game_.events().drain();
                 }
                 // Same dt Heartbeat jobs just received. Scripts resume after that drain.
                 if (scripts_) {
                     {
                         PROFILE_SCOPE("Scripts", profiler::Group::Engine);
-                        scripts_->heartbeat(render_dt_);
+                        scripts_->heartbeat(step_dt);
                     }
                     // The command line and plugins keep time with the play step.
                     PROFILE_SCOPE("Tools", profiler::Group::Engine);
-                    scripts_->step_tools(render_dt_);
+                    scripts_->step_tools(step_dt);
                 }
                 {
                     PROFILE_SCOPE("Events", profiler::Group::Engine);
@@ -391,7 +409,7 @@ void Engine::simulation_loop() {
                 }
                 // After the scripts, so a Play, Stop, or Destroy this frame is heard this frame.
                 PROFILE_SCOPE("Audio", profiler::Group::Engine);
-                audio_.step(game_, render_dt_);
+                audio_.step(game_, step_dt);
             },
             [&] { contract_count_.fetch_add(1); });
         if (game_.take_deferred_violation()) {
@@ -402,6 +420,13 @@ void Engine::simulation_loop() {
 
         if (simulation_pace_hz_ > 0) {
             WaitForSlot(next_step, frame_start, simulation_pace_hz_);
+        } else if (wait_for_client) {
+            // Steps with the window's paint, as the uncapped render loop does.
+            // stop() wakes this wait as well.
+            std::unique_lock<std::mutex> guard(client_frame_mu_);
+            client_frame_cv_.wait_until(guard, frame_start + kSimulationClientFallback, [&] {
+                return !running_.load() || client_frames_ != client_seen;
+            });
         }
     }
 }

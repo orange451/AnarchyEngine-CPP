@@ -64,13 +64,17 @@ public:
     void set_clock(IClock* clock);
     void set_timing(double render_dt, double physics_dt);
     // 0 runs as fast as the machine allows. set_pace_hz sets both loops.
-    // The IDE paces the simulation at 60 and leaves the render loop uncapped.
+    // The IDE leaves both loops uncapped and syncs them to the window's paint.
     void set_pace_hz(double hz);
     void set_simulation_pace_hz(double hz);
     void set_render_pace_hz(double hz);
     // An uncapped render loop normally spins. With this set, it waits for
     // note_client_frame instead, so it stays with the window that is actually drawing.
     void set_render_client_sync(bool enabled);
+    // The same for an uncapped simulation loop: it steps once per paint, so it
+    // runs as often as the window draws. Its steps then take the measured time
+    // as dt, not render_dt. A window that stops painting still steps at about 60 Hz.
+    void set_simulation_client_sync(bool enabled);
     void note_client_frame();
 
     DataModel& datamodel() { return game_; }
@@ -130,8 +134,9 @@ private:
     double simulation_pace_hz_ = 0;
     double render_pace_hz_ = 0;
     std::atomic<bool> render_client_sync_{false};
-    // note_client_frame bumps client_frames_. The uncapped render loop waits on it
-    // when render_client_sync_ is set. Tests leave the sync off.
+    std::atomic<bool> simulation_client_sync_{false};
+    // note_client_frame bumps client_frames_. Each uncapped loop waits on it
+    // when its client sync is set. Tests leave the sync off.
     std::mutex client_frame_mu_;
     std::condition_variable client_frame_cv_;
     std::uint64_t client_frames_ = 0;

@@ -182,7 +182,7 @@ protected:
 
     std::string defaultTitle() const override { return "Anarchy Player"; }
 
-    // The scene draws as fast as the cap allows. The simulation stays at 60 Hz.
+    // The scene draws as fast as the cap allows, and the simulation steps with it.
     int swapInterval() const override { return 0; }
 
 private:

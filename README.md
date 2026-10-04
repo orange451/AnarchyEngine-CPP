@@ -97,7 +97,7 @@ end)
 
 ## Play
 
-The simulation starts paused, so the place holds still while you edit. Test captures that place, starts every eligible script, and steps the world at 60 Hz. A frame can take several physics steps, then Heartbeat, which wakes `task.wait` and steps the instances in the tree.
+The simulation starts paused, so the place holds still while you edit. Test captures that place, starts every eligible script, and steps the world once each time the Scene View paints, so a 120 Hz display steps it 120 times a second. A frame can take several physics steps, then Heartbeat, which wakes `task.wait` and steps the instances in the tree.
 
 Stop ends the session. Scripts are aborted, instances created during play are gone, and property changes revert to the captured place. Text you still have open in a script editor is written back onto those restored scripts, so the edit survives the stop.
 

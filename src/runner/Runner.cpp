@@ -31,10 +31,12 @@ void Runner::prepare() {
     auto lua = std::make_unique<engine_core::LuaEngine>();
     lua->start();
     auto simulation = std::make_unique<engine_core::Engine>();
-    // Heartbeat stays at 60 Hz. The render thread has no 60 Hz sleep. It waits
-    // for each Scene View paint so an empty step cannot run ahead of the picture.
-    simulation->set_simulation_pace_hz(60.0);
+    // Neither thread has a fixed rate. Each waits for the Scene View's paint, so
+    // the place steps as often as the window draws: 120 times a second on a
+    // 120 Hz display. An empty step cannot run ahead of the picture.
+    simulation->set_simulation_pace_hz(0.0);
     simulation->set_render_pace_hz(0.0);
+    simulation->set_simulation_client_sync(true);
     simulation->set_render_client_sync(true);
     simulation->set_renderer(feed_.get());
     // The IDE console reads the script log. Sandbox print shares that log with play scripts.

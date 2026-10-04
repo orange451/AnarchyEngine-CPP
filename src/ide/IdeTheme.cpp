@@ -179,6 +179,7 @@ const std::vector<ThemeVariable>& theme_variables() {
         {"--ide-problems-error-badge-color", "Problems", "Error count badge"},
         {"--ide-problems-warning-badge-color", "Problems", "Warning count badge"},
         {"--ide-problems-badge-text-color", "Problems", "Count badge text"},
+        {"--ide-problems-warning-badge-text-color", "Problems", "Warning count badge text"},
         {"--ide-problems-detail-color", "Problems", "Path, line, and code"},
         {"--ide-problems-note-color", "Problems", "Playtest note"},
 

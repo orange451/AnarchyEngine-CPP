@@ -63,6 +63,7 @@ constexpr const char* kProblemsRules = R"CSS(
 }
 .problems-badge.warning {
     background-color: var(--ide-problems-warning-badge-color);
+    color: var(--ide-problems-warning-badge-text-color);
 }
 .problems-glyph {
     min-width: 8px;
@@ -147,7 +148,7 @@ std::shared_ptr<jadefx::Node> problem_graphic(const Problem& problem) {
     box->setAlignment(jadefx::Pos::CenterLeft);
     box->setMouseTransparent(true);
     box->getChildren().add(glyph(problem.severity));
-    box->getChildren().add(text_label("Line " + std::to_string(problem.line), "problems-detail"));
+    box->getChildren().add(text_label("Line " + std::to_string(problem.line), nullptr));
     box->getChildren().add(text_label(problem.message, nullptr));
     box->getChildren().add(text_label(problem.code, "problems-detail"));
     return box;

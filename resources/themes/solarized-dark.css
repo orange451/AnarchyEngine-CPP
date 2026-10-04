@@ -144,6 +144,7 @@
     --ide-problems-error-badge-color: #a82724;
     --ide-problems-warning-badge-color: #8f6c00;
     --ide-problems-badge-text-color: #ffffff;
+    --ide-problems-warning-badge-text-color: #ffffff;
     --ide-problems-detail-color: var(--ide-search-path-color);
     --ide-problems-note-color: var(--ide-search-status-color);
 

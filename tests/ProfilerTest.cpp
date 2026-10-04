@@ -179,9 +179,9 @@ void testRowsAndOtherThreads() {
     profiler::frame_boundary();
     profiler::collect();
     const profiler::History history = live();
-    expect(history.rows.size() >= 4 && history.rows[0] == "Sim" && history.rows[1] == "Render" &&
-               history.rows[2] == "UI" && history.rows[3] == "GPU",
-           "the rows start Sim, Render, UI, GPU");
+    expect(history.rows.size() >= 5 && history.rows[0] == "Sim" && history.rows[1] == "Render" &&
+               history.rows[2] == "Render draw" && history.rows[3] == "UI" && history.rows[4] == "GPU",
+           "the rows start Sim, Render, Render draw, UI, GPU");
     expect(history.frames.size() == 2, "two closed frames");
     const auto steps = named(history, "Worker step");
     expect(steps.size() == 1 && steps[0].row == row_of(history, "Sim"), "the step is on the Sim row");
@@ -351,6 +351,46 @@ void testGpuScope() {
     profiler::release();
 }
 
+// The UI thread draws the 3D scene for the Render section: inside a RowScope its
+// scopes go on that row, and the scope around it stays on the thread's own.
+void testRowScope() {
+    fresh();
+    profiler::acquire();
+    const profiler::ScopeId paint = profiler::intern("Row paint", profiler::Group::Engine);
+    const profiler::ScopeId pass = profiler::intern("Row pass", profiler::Group::Render);
+    const profiler::ScopeId after = profiler::intern("Row after", profiler::Group::Engine);
+    profiler::frame_boundary();
+    at(1);
+    profiler::begin(paint);
+    {
+        profiler::RowScope row("Render draw");
+        at(2);
+        profiler::begin(pass);
+        at(3);
+        profiler::end();
+    }
+    at(4);
+    profiler::begin(after);
+    at(5);
+    profiler::end();
+    at(6);
+    profiler::end();
+    at(16);
+    profiler::frame_boundary();
+    profiler::collect();
+    const profiler::History history = live();
+    const auto paints = named(history, "Row paint");
+    const auto passes = named(history, "Row pass");
+    const auto afters = named(history, "Row after");
+    expect(passes.size() == 1 && passes[0].row == row_of(history, "Render draw") && passes[0].depth == 0,
+           "a scope inside a RowScope is on that row");
+    expect(paints.size() == 1 && paints[0].row == row_of(history, "Render") && paints[0].end_ns == 6000000,
+           "the scope around it stays on the thread's row and ends where it ended");
+    expect(afters.size() == 1 && afters[0].row == row_of(history, "Render") && afters[0].depth == 1,
+           "after the RowScope, scopes are back on the thread's row");
+    profiler::release();
+}
+
 void testMacro() {
     fresh();
     profiler::acquire();
@@ -384,6 +424,7 @@ int main() {
     testHistoryCap();
     testNames();
     testGpuScope();
+    testRowScope();
     testMacro();
     gFailures += RunProfileJsonTests();
     profiler::set_clock_for_testing(nullptr);

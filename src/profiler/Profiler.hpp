@@ -29,6 +29,8 @@ inline constexpr CauseId kNoCause = 0xffff;
 inline constexpr std::size_t kRingEvents = 65536;
 inline constexpr std::size_t kHistoryFrames = 300;
 inline constexpr std::size_t kMaxNameBytes = 64;
+// Sim, Render, Render draw, UI, and GPU: the rows every history has, in order.
+inline constexpr std::size_t kFixedRowCount = 5;
 // A 60 Hz frame's budget, and the length past which a frame counts as over it:
 // a little slack, so vsync's jitter around 16.7 ms is not called slow.
 inline constexpr double kBudgetMs = 16.6;
@@ -57,7 +59,7 @@ struct Frame {
 };
 
 struct History {
-    // Sim, Render, UI, and GPU always, then other threads in the order they registered.
+    // Sim, Render, Render draw, UI, and GPU always, then other threads in the order they registered.
     std::vector<std::string> rows;
     // Oldest first, at most kHistoryFrames.
     std::deque<Frame> frames;
@@ -120,6 +122,20 @@ bool showing_capture();
 // and the live one otherwise.
 void with_view(const std::function<void(const History&)>& fn);
 void with_live(const std::function<void(const History&)>& fn);
+
+// Until destroyed, this thread's scopes go on another row, as the UI thread's 3D
+// draw goes on "Render draw" to sit in the Render section. Scopes begun before
+// it still end on their own row.
+class RowScope {
+public:
+    explicit RowScope(const char* row);
+    ~RowScope();
+    RowScope(const RowScope&) = delete;
+    RowScope& operator=(const RowScope&) = delete;
+
+private:
+    void* previous_;
+};
 
 // Records from construction to destruction, when recording was on at construction.
 class Scope {

@@ -150,7 +150,7 @@ int main() {
         lag = history.gpu_lag_frames;
         for (const profiler::Frame& frame : history.frames) {
             for (const profiler::ScopeRecord& record : frame.scopes) {
-                if (record.scope == clear && record.row == 3 && record.end_ns >= record.start_ns) {
+                if (record.scope == clear && history.rows[record.row] == "GPU" && record.end_ns >= record.start_ns) {
                     ++found;
                     total_ns += record.end_ns - record.start_ns;
                     overlap = overlap || record.start_ns < last_end;

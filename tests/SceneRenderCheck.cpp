@@ -232,16 +232,17 @@ int main() {
                 for (const profiler::Frame& frame : history.frames) {
                     for (const profiler::ScopeRecord& record : frame.scopes) {
                         const profiler::ScopeInfo& info = history.scopes[record.scope];
-                        if (info.name == "Geometry" && info.group == profiler::Group::Render) {
+                        if (info.name == "Geometry" && info.group == profiler::Group::Render &&
+                            history.rows[record.row] == "Render draw") {
                             ++cpu;
                         }
-                        if (info.name == "Geometry" && info.group == profiler::Group::Gpu && record.row == 3) {
+                        if (info.name == "Geometry" && info.group == profiler::Group::Gpu && history.rows[record.row] == "GPU") {
                             ++gpu;
                         }
                     }
                 }
             });
-            Expect(cpu >= 6, "the geometry pass is timed on the CPU (" + std::to_string(cpu) + ")");
+            Expect(cpu >= 6, "the geometry pass is timed on the CPU, on the Render draw row (" + std::to_string(cpu) + ")");
             Expect(gpu >= 3, "and on the GPU (" + std::to_string(gpu) + ")");
             Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "timing leaves no GL error");
             profiler::release();

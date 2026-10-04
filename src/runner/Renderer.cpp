@@ -584,6 +584,8 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     if (!ready_ || width <= 0.0 || height <= 0.0 || sceneWidth <= 0.0 || sceneHeight <= 0.0) {
         return false;
     }
+    // The 3D draw runs on the UI thread, but the profiler shows it in the Render section.
+    const profiler::RowScope row("Render draw");
 
     GLint viewport[4] = {};
     glGetIntegerv(GL_VIEWPORT, viewport);

@@ -715,6 +715,7 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
         renderer_.setClearColor(clear.r, clear.g, clear.b);
         renderer_.setGridVisible(runner_->sceneGrid());
         {
+            const profiler::RowScope row("Render draw");
             PROFILE_SCOPE("Snapshot read", profiler::Group::Render);
             collectMeshes();
         }

@@ -500,7 +500,7 @@ void ProfilerOverlay::drawTimeline(jadefx::Painter& painter, const profiler::His
     std::vector<double> row_top(history.rows.size(), -1);
     for (std::size_t row = 0; row < history.rows.size(); ++row) {
         // Extra threads show only when they did something in view.
-        if (row >= 4 && lanes[row] == 0) {
+        if (row >= profiler::kFixedRowCount && lanes[row] == 0) {
             continue;
         }
         const double height = std::max(1, lanes[row]) * kLane + 6;

@@ -64,11 +64,15 @@ std::uint64_t steady_ns() {
 std::atomic<std::uint64_t (*)()> g_clock{&steady_ns};
 
 thread_local Ring* t_ring = nullptr;
-// The scopes this thread has recorded a begin for and not yet ended.
-thread_local std::vector<ScopeId> t_open;
+// The scopes this thread has recorded a begin for and not yet ended, with the
+// ring each began on, so its end goes there too.
+thread_local std::vector<std::pair<ScopeId, Ring*>> t_open;
+// Rings this thread made for RowScope, by row name.
+thread_local std::vector<std::pair<std::string, Ring*>> t_rows;
 
-constexpr const char* kFixedRows[] = {"Sim", "Render", "UI", "GPU"};
-constexpr std::uint16_t kGpuRow = 3;
+constexpr const char* kFixedRows[] = {"Sim", "Render", "Render draw", "UI", "GPU"};
+static_assert(sizeof(kFixedRows) / sizeof(kFixedRows[0]) == kFixedRowCount, "fixed rows");
+constexpr std::uint16_t kGpuRow = 4;
 
 class Recorder {
 public:
@@ -343,9 +347,11 @@ CauseId intern_cause(std::string_view cause) {
     return id;
 }
 
-void register_thread(const char* row) {
+namespace {
+
+// A new ring on the row named row, for the calling thread to write.
+Ring* make_ring(const std::string& name) {
     Recorder& r = recorder();
-    const std::string name = row != nullptr ? row : "Thread";
     std::lock_guard<std::mutex> lock(r.names_mu_);
     auto ring = std::make_unique<Ring>();
     const auto existing = std::find(r.rows_.begin(), r.rows_.end(), name);
@@ -356,15 +362,34 @@ void register_thread(const char* row) {
         r.rows_.push_back(name);
         ++r.names_version_;
     }
-    t_ring = ring.get();
+    Ring* made = ring.get();
     r.rings_.push_back(std::move(ring));
+    return made;
 }
+
+}  // namespace
+
+void register_thread(const char* row) { t_ring = make_ring(row != nullptr ? row : "Thread"); }
+
+RowScope::RowScope(const char* row) : previous_(t_ring) {
+    const std::string name = row != nullptr ? row : "Thread";
+    for (const auto& [held, ring] : t_rows) {
+        if (held == name) {
+            t_ring = ring;
+            return;
+        }
+    }
+    t_ring = make_ring(name);
+    t_rows.emplace_back(name, t_ring);
+}
+
+RowScope::~RowScope() { t_ring = static_cast<Ring*>(previous_); }
 
 void begin(ScopeId scope, CauseId cause) {
     if (!enabled() || t_ring == nullptr) {
         return;
     }
-    t_open.push_back(scope);
+    t_open.emplace_back(scope, t_ring);
     t_ring->push({now_ns(), scope, cause, Kind::Begin});
 }
 
@@ -372,12 +397,12 @@ void end() {
     // Ends what this thread began, even after recording stopped, so a begin
     // never pairs with a later scope's end. An end with nothing begun, as for a
     // begin made while off, records nothing.
-    if (t_ring == nullptr || t_open.empty()) {
+    if (t_open.empty()) {
         return;
     }
-    const ScopeId scope = t_open.back();
+    const auto [scope, ring] = t_open.back();
     t_open.pop_back();
-    t_ring->push({now_ns(), scope, kNoCause, Kind::End});
+    ring->push({now_ns(), scope, kNoCause, Kind::End});
 }
 
 void frame_boundary() {

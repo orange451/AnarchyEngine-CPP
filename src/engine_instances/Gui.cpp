@@ -3,6 +3,7 @@
 #include "Containment.hpp"
 #include "Contract.hpp"
 #include "Enum.hpp"
+#include "PVInstance.hpp"
 #include "PropertyBag.hpp"
 #include "PropertyReflection.hpp"
 
@@ -44,6 +45,7 @@ constexpr GuiSpec kSpecs[] = {
     {"FontSize", "number", LuaSlot::Kind::Number, 1, 512},
     {"Prompt", "string", LuaSlot::Kind::String, 0, 0},
     {"Source", "string", LuaSlot::Kind::String, 0, 0},
+    {"AlwaysOnTop", "boolean", LuaSlot::Kind::Bool, 0, 0},
 };
 static_assert(std::size(kSpecs) == static_cast<std::size_t>(GuiProperty::Count), "a GuiProperty has no spec");
 
@@ -133,6 +135,8 @@ LuaSlot GuiValues::default_value(GuiProperty property, const char* class_name) {
         return string_slot("Prompt");
     case GuiProperty::Source:
         return string_slot(kDefaultCss);
+    case GuiProperty::AlwaysOnTop:
+        return bool_slot(false);
     case GuiProperty::Count:
         break;
     }
@@ -224,6 +228,64 @@ ScreenGui::ScreenGui(DataModel::ChildTag tag, DataModel::State& state, InstanceI
 }
 
 const char* ScreenGui::class_name() const { return "ScreenGui"; }
+
+BillboardGui::BillboardGui(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : GuiBase(tag, state, id) {
+    reset_values();
+}
+
+const char* BillboardGui::class_name() const { return "BillboardGui"; }
+
+LuaSlot BillboardGui::adornee() const { return instance_reference_slot(adornee_ref_, "PVInstance"); }
+
+InstanceId BillboardGui::adornee_id() const {
+    const LuaSlot slot = adornee();
+    return slot.kind == LuaSlot::Kind::Instance ? slot.id : 0;
+}
+
+std::optional<std::string> BillboardGui::set_adornee(const LuaSlot& value) {
+    if (!on_gameplay_thread()) {
+        contract_fail("Gui setters run on SimulationThread");
+    }
+    return set_instance_reference("Adornee", "PVInstance", adornee_ref_, value);
+}
+
+InstanceId BillboardGui::anchor_instance() const {
+    if (const InstanceId linked = adornee_id(); linked != 0) {
+        return linked;
+    }
+    const InstanceId above = parent(id());
+    if (above == kNoParent || above == 0) {
+        return 0;
+    }
+    return dynamic_cast<const PVInstance*>(instance(above)) != nullptr ? above : 0;
+}
+
+Vec3 BillboardGui::anchor() const {
+    const InstanceId target = anchor_instance();
+    const auto* object = target != 0 ? dynamic_cast<const PVInstance*>(instance(target)) : nullptr;
+    if (object == nullptr) {
+        return Vec3{};
+    }
+    const Matrix4 transform = object->transform();
+    return Vec3{transform.m[12], transform.m[13], transform.m[14]};
+}
+
+bool BillboardGui::drawn() const {
+    if (!in_workspace(id()) && !in_core(id())) {
+        return false;
+    }
+    for (InstanceId above = parent(id()); above != kNoParent && above != 0; above = parent(above)) {
+        if (dynamic_cast<const GuiBase*>(instance(above)) != nullptr) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void BillboardGui::on_reuse() {
+    GuiValues::on_reuse();
+    adornee_ref_.set_guid(std::string());
+}
 
 Pane::Pane(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : GuiBasePane(tag, state, id) {
     reset_values();
@@ -326,6 +388,27 @@ void add_class(const char* name, const char* base, const LuaField (&fields)[N]) 
     register_lua_class(name, base, fields, static_cast<int>(N));
 }
 
+bool read_adornee(DataModel&, DataModel& object, LuaSlot& out) {
+    const auto* board = dynamic_cast<const BillboardGui*>(&object);
+    if (board == nullptr) {
+        return false;
+    }
+    out = board->adornee();
+    return true;
+}
+
+bool write_adornee(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* board = dynamic_cast<BillboardGui*>(&object);
+    if (board == nullptr) {
+        return false;
+    }
+    if (std::optional<std::string> error = board->set_adornee(in)) {
+        in.error = std::move(*error);
+        return false;
+    }
+    return true;
+}
+
 ANARCHY_LUA_REGISTER(register_gui_lua) {
     const LuaField base[] = {
         gui_field<GuiProperty::ClassList>("GuiBase"),
@@ -342,6 +425,12 @@ ANARCHY_LUA_REGISTER(register_gui_lua) {
     };
     add_class("GuiBase", "Instance", base);
     register_lua_class("ScreenGui", "GuiBase", nullptr, 0);
+
+    const LuaField billboard[] = {
+        lua_saved_property("Adornee", "PVInstance?", read_adornee, write_adornee, "null"),
+        gui_field<GuiProperty::AlwaysOnTop>("BillboardGui"),
+    };
+    add_class("BillboardGui", "GuiBase", billboard);
 
     const LuaField pane_base[] = {
         gui_field<GuiProperty::BackgroundColor>("GuiBasePane"),
@@ -376,12 +465,14 @@ ANARCHY_LUA_REGISTER(register_gui_lua) {
     const LuaField css[] = {gui_field<GuiProperty::Source>("CSS")};
     add_class("CSS", "Instance", css);
 
-    // A ScreenGui goes only in Gui. Panes and controls go in a ScreenGui or a
-    // pane; a control holds no GUI of its own. CSS styles Gui or any GUI.
+    // A ScreenGui goes only in Gui, a BillboardGui in Workspace or on a
+    // PVInstance. Panes and controls go in either, or a pane; a control holds
+    // no GUI of its own. CSS styles Gui or any GUI.
     register_suited_parents("ScreenGui", {"Gui"});
-    register_suited_parents("GuiBasePane", {"ScreenGui", "GuiBasePane"});
+    register_suited_parents("BillboardGui", {"Workspace", "PVInstance"});
+    register_suited_parents("GuiBasePane", {"ScreenGui", "BillboardGui", "GuiBasePane"});
     for (const char* control : {"Label", "Button", "TextField"}) {
-        register_suited_parents(control, {"ScreenGui", "GuiBasePane"});
+        register_suited_parents(control, {"ScreenGui", "BillboardGui", "GuiBasePane"});
     }
     register_suited_parents("CSS", {"Gui", "GuiBase"});
 }

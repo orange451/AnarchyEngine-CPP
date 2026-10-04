@@ -1,9 +1,11 @@
 #pragma once
 
 #include "DataModel.hpp"
+#include "InstanceRef.hpp"
 #include "LuaApi.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -13,8 +15,9 @@ namespace engine_core {
 // them. Each GUI instance is one node of the screen: a ScreenGui fills the
 // view, and the GuiBases inside it lay out as JadeFX lays out its nodes, by
 // their containers and CSS, not by absolute positions. Every ScreenGui under
-// the Gui service, directly or through Folders, is drawn over the Scene View;
-// one anywhere else is only data.
+// the Gui service, directly or through Folders, is drawn over the Scene View,
+// and every BillboardGui in Workspace or Core inside it; either anywhere else
+// is only data.
 //
 // GuiBase (Lua class, not made itself)
 //   ClassList         string   CSS classes, separated by spaces. "".
@@ -31,6 +34,17 @@ namespace engine_core {
 //   BackgroundTransparency  number  0 to 1. 0.
 // ScreenGui  the root. It fills the view and ignores Size; its own area never
 //            takes the mouse, so a press on no element reaches the scene.
+// BillboardGui  a GuiBase drawn in the 3D world, not over it: centred on its
+//            anchor and facing the camera, while it is in Workspace or Core
+//            and not inside another GUI (runner::GuiLayer draws it).
+//   Adornee      PVInstance?  what it floats over. Nil: the parent, if it is
+//                             a PVInstance, else the world origin. nil.
+//   AlwaysOnTop  boolean      drawn over the world, which never hides it;
+//                             otherwise nearer surfaces do. false.
+//   A percentage width or height on the BillboardGui itself is world units:
+//   100% is one unit at its distance from the camera, so calc(200% + 32px)
+//   is two units and 32 pixels. Its children's percentages are of their
+//   parents, as in any CSS.
 // Pane       a GuiBasePane that stacks its children by Alignment. Size (100, 100).
 // HBox, VBox GuiBasePanes in a row or a column, with Spacing (number, 0 and up, 0).
 // Label      Text ("Label"), TextColor (Color3, black), FontSize (1 to 512, 16).
@@ -45,8 +59,8 @@ namespace engine_core {
 //            (runner::GuiLayer::defaultStylesheet).
 //
 // The Name of a GuiBase is its CSS id, its ClassList its classes, and its
-// class, lowercase, its element type: screengui, pane, hbox, vbox, label,
-// button, textfield.
+// class, lowercase, its element type: screengui, billboardgui, pane, hbox,
+// vbox, label, button, textfield.
 //
 // Each property is a saved registry property (lua_saved_property), so
 // DataModel saves, loads, undoes, and restores it at Stop.
@@ -67,6 +81,7 @@ enum class GuiProperty : int {
     FontSize,
     Prompt,
     Source,
+    AlwaysOnTop,
     Count
 };
 
@@ -120,6 +135,33 @@ class ScreenGui : public GuiBase {
 public:
     ScreenGui(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);
     const char* class_name() const override;
+};
+
+class BillboardGui : public GuiBase {
+public:
+    BillboardGui(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);
+    const char* class_name() const override;
+
+    bool always_on_top() const { return flag(GuiProperty::AlwaysOnTop); }
+    // Adornee as a script reads it, and its live target, or 0.
+    LuaSlot adornee() const;
+    InstanceId adornee_id() const;
+    // SimulationThread. nil clears it; anything but a live PVInstance is
+    // refused, and returns why.
+    std::optional<std::string> set_adornee(const LuaSlot& value);
+    // What it floats over: Adornee, else the parent when that is a PVInstance,
+    // else 0 for the world origin.
+    InstanceId anchor_instance() const;
+    // anchor_instance()'s Transform translation, or the origin.
+    Vec3 anchor() const;
+    // In Workspace or Core, at any depth, and not inside a GuiBase.
+    bool drawn() const;
+
+protected:
+    void on_reuse() override;
+
+private:
+    InstanceRef adornee_ref_;
 };
 
 class GuiBasePane : public GuiBase {

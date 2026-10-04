@@ -138,6 +138,7 @@ std::vector<ClassEntry>& class_registry() {
             {"SoundEmitter", [](DataModel& world) -> DataModel& { return world.create<SoundEmitter>(); }});
         out.push_back({"Skybox", [](DataModel& world) -> DataModel& { return world.create<Skybox>(); }});
         out.push_back({"ScreenGui", [](DataModel& world) -> DataModel& { return world.create<ScreenGui>(); }});
+        out.push_back({"BillboardGui", [](DataModel& world) -> DataModel& { return world.create<BillboardGui>(); }});
         out.push_back({"Pane", [](DataModel& world) -> DataModel& { return world.create<Pane>(); }});
         out.push_back({"HBox", [](DataModel& world) -> DataModel& { return world.create<HBox>(); }});
         out.push_back({"VBox", [](DataModel& world) -> DataModel& { return world.create<VBox>(); }});

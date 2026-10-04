@@ -51,7 +51,7 @@ const char* IconFileOverride(const std::string& class_name) {
         return "Sound.png";
     }
     // The GUI classes, with the legacy engine's icons.
-    if (class_name == "Gui" || class_name == "ScreenGui") {
+    if (class_name == "Gui" || class_name == "ScreenGui" || class_name == "BillboardGui") {
         return "Gui.png";
     }
     if (class_name == "HBox") {

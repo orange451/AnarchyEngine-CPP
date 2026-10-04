@@ -5,8 +5,11 @@
 
 #include "ChangeHistoryService.hpp"
 #include "Enum.hpp"
+#include "Folder.hpp"
+#include "GameObject.hpp"
 #include "Gui.hpp"
 #include "LuaApi.hpp"
+#include "Matrix4.hpp"
 #include "Project.hpp"
 #include "PropertyBag.hpp"
 #include "SceneService.hpp"
@@ -241,4 +244,150 @@ TEST_CASE("GUI6 a project saves and loads GUIs and CSS", "[gui][project]") {
     auto* sheet = dynamic_cast<engine_core::Css*>(game.instance(game.find_first_child(screen, "CSS")));
     REQUIRE(sheet != nullptr);
     REQUIRE(sheet->source() == ".toolbar {\n  spacing: 8px;\n}\n");
+}
+
+namespace {
+
+engine_core::LuaSlot instance_slot(engine_core::InstanceId id) {
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = id;
+    return slot;
+}
+
+engine_core::GameObject& part_at(engine_core::DataModel& game, float x, float y, float z) {
+    engine_core::GameObject& part = game.create<engine_core::GameObject>();
+    game.set_parent(part.id(), game.scene_service("Workspace"));
+    part.set_transform(engine_core::matrix4_translation(x, y, z));
+    return part;
+}
+
+}  // namespace
+
+TEST_CASE("GUI7 BillboardGui is a GuiBase with Adornee and AlwaysOnTop", "[gui][billboard]") {
+    SimRole role;
+    engine_core::Game game;
+    REQUIRE(engine_core::lua_creatable_known("BillboardGui"));
+    REQUIRE(engine_core::project_class_known("BillboardGui"));
+    REQUIRE(engine_core::lua_class_inherits("BillboardGui", "GuiBase"));
+    REQUIRE_FALSE(engine_core::lua_class_inherits("BillboardGui", "ScreenGui"));
+    engine_core::BillboardGui& board = game.create<engine_core::BillboardGui>();
+    REQUIRE(std::string(board.class_name()) == "BillboardGui");
+    REQUIRE_FALSE(board.always_on_top());
+    REQUIRE(board.adornee().kind == engine_core::LuaSlot::Kind::Nil);
+    engine_core::PropertyBag saved;
+    board.save_properties(saved);
+    REQUIRE(saved.empty());
+}
+
+TEST_CASE("GUI8 its anchor is the Adornee, else a PVInstance parent, else the origin", "[gui][billboard]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& parent = part_at(game, 1.f, 2.f, 3.f);
+    engine_core::GameObject& other = part_at(game, -4.f, 5.f, -6.f);
+    engine_core::BillboardGui& board = game.create<engine_core::BillboardGui>();
+    game.set_parent(board.id(), game.scene_service("Workspace"));
+    REQUIRE(board.anchor_instance() == 0);
+    REQUIRE(board.anchor().x == 0.f);
+
+    game.set_parent(board.id(), parent.id());
+    REQUIRE(board.anchor_instance() == parent.id());
+    REQUIRE(board.anchor().y == 2.f);
+    // The parent link is never written to Adornee.
+    REQUIRE(board.adornee().kind == engine_core::LuaSlot::Kind::Nil);
+
+    REQUIRE_FALSE(board.set_adornee(instance_slot(other.id())));
+    REQUIRE(board.anchor_instance() == other.id());
+    REQUIRE(board.anchor().z == -6.f);
+
+    // Moving the part moves the anchor with it.
+    other.set_transform(engine_core::matrix4_translation(7.f, 0.f, 0.f));
+    REQUIRE(board.anchor().x == 7.f);
+
+    // Moved out from under its parent, with no Adornee, it stops following.
+    REQUIRE_FALSE(board.set_adornee(engine_core::LuaSlot{}));
+    game.set_parent(board.id(), game.scene_service("Workspace"));
+    REQUIRE(board.anchor_instance() == 0);
+}
+
+TEST_CASE("GUI9 Adornee refuses a non-PVInstance, saves, undoes, and survives its target's destroy", "[gui][billboard]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& part = part_at(game, 0.f, 9.f, 0.f);
+    engine_core::BillboardGui& board = game.create<engine_core::BillboardGui>();
+    game.set_parent(board.id(), game.scene_service("Workspace"));
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    REQUIRE(*board.set_adornee(instance_slot(folder.id())) == "Adornee must be a PVInstance");
+
+    begin_step(game, "Set Adornee");
+    REQUIRE_FALSE(board.set_adornee(instance_slot(part.id())));
+    end_step(game);
+    engine_core::PropertyBag saved;
+    board.save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "Adornee") != nullptr);
+    game.history().undo();
+    REQUIRE(board.adornee_id() == 0);
+    game.history().redo();
+    REQUIRE(board.adornee_id() == part.id());
+
+    begin_step(game, "Delete");
+    game.destroy(part.id());
+    end_step(game);
+    REQUIRE(board.adornee_id() == 0);
+    REQUIRE(board.anchor_instance() == 0);
+    game.history().undo();
+    REQUIRE(board.adornee_id() != 0);
+    REQUIRE(board.anchor().y == 9.f);
+}
+
+TEST_CASE("GUI10 a BillboardGui is drawn in Workspace or Core, and not inside another GUI", "[gui][billboard]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::BillboardGui& board = game.create<engine_core::BillboardGui>();
+    REQUIRE_FALSE(board.drawn());
+    game.set_parent(board.id(), game.scene_service("Workspace"));
+    REQUIRE(board.drawn());
+    engine_core::GameObject& part = part_at(game, 0.f, 0.f, 0.f);
+    game.set_parent(board.id(), part.id());
+    REQUIRE(board.drawn());
+    // What is in Core stays there, so a separate instance checks that case.
+    engine_core::BillboardGui& in_core = game.create<engine_core::BillboardGui>();
+    game.set_parent(in_core.id(), game.core());
+    REQUIRE(in_core.drawn());
+    game.set_parent(board.id(), game.scene_service("Storage"));
+    REQUIRE_FALSE(board.drawn());
+    game.set_parent(board.id(), game.scene_service("Gui"));
+    REQUIRE_FALSE(board.drawn());
+
+    engine_core::BillboardGui& outer = game.create<engine_core::BillboardGui>();
+    game.set_parent(outer.id(), game.scene_service("Workspace"));
+    game.set_parent(board.id(), outer.id());
+    REQUIRE_FALSE(board.drawn());
+    engine_core::Pane& pane = game.create<engine_core::Pane>();
+    game.set_parent(pane.id(), game.scene_service("Workspace"));
+    game.set_parent(board.id(), pane.id());
+    REQUIRE_FALSE(board.drawn());
+}
+
+TEST_CASE("GUI11 scripts set Adornee and AlwaysOnTop, and both fire Changed", "[gui][billboard]") {
+    ScriptRig rig;
+    add_script(rig.game, "Ui", R"(
+        local part = Instance.new("GameObject", workspace)
+        local board = Instance.new("BillboardGui", part)
+        _G.defaults = board.AlwaysOnTop == false and board.Adornee == nil and board:IsA("GuiBase")
+        local changed = {}
+        board.Changed:Connect(function(name) changed[name] = true end)
+        board.AlwaysOnTop = true
+        board.Adornee = part
+        _G.set = board.AlwaysOnTop == true and board.Adornee == part
+        _G.refused = not pcall(function() board.Adornee = workspace end)
+            and not pcall(function() board.AlwaysOnTop = 3 end)
+        task.wait()
+        task.wait()
+        _G.changed = changed.AlwaysOnTop == true and changed.Adornee == true
+        _G.label = pcall(function() Instance.new("Label", board) end)
+    )");
+    rig.game.start_simulation();
+    rig.frames(3, 0.05);
+    require_globals(rig, {"defaults", "set", "refused", "changed", "label"});
 }

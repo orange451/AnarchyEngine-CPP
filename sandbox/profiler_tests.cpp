@@ -85,6 +85,16 @@ TEST_CASE("PF1 a running engine records frames with Sim and Render scopes", "[PF
     for (const profiler::ScopeRecord& record : scopes_named(history, "Heartbeat")) {
         REQUIRE(record.depth >= 1);
     }
+    // And a render frame's work is inside its render step.
+    REQUIRE_FALSE(scopes_named(history, "Render step").empty());
+    for (const char* name : {"Prepare", "PostRender"}) {
+        for (const profiler::ScopeRecord& record : scopes_named(history, name)) {
+            REQUIRE(record.depth >= 1);
+        }
+    }
+    for (const profiler::ScopeRecord& record : scopes_named(history, "Render step")) {
+        REQUIRE(record.depth == 0);
+    }
 }
 
 namespace {

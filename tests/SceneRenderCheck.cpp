@@ -219,6 +219,8 @@ int main() {
             // Profiled, each pass is a Render scope on the CPU. The GPU is timed
             // once a frame, as "3D scene", unless detail per pass is asked for.
             profiler::register_thread("UI");
+            bool rooted = false;
+            int misplaced = 0;
             auto run = [&](bool detail, int& cpu, int& scene, int& pass) {
                 profiler::reset_for_testing();
                 profiler::set_gpu_detail(detail);
@@ -235,6 +237,14 @@ int main() {
                     for (const profiler::Frame& frame : history.frames) {
                         for (const profiler::ScopeRecord& record : frame.scopes) {
                             const profiler::ScopeInfo& info = history.scopes[record.scope];
+                            // The 3D draw has one root on its row, 3D scene, as the other rows do.
+                            if (history.rows[record.row] == "Render draw" && !rooted) {
+                                rooted = true;
+                            }
+                            if (history.rows[record.row] == "Render draw" &&
+                                (info.name == "3D scene") != (record.depth == 0)) {
+                                ++misplaced;
+                            }
                             const bool gpu = history.rows[record.row] == "GPU";
                             cpu += info.name == "Geometry" && info.group == profiler::Group::Render &&
                                            history.rows[record.row] == "Render draw"
@@ -252,6 +262,8 @@ int main() {
             int scene = 0;
             int pass = 0;
             run(false, cpu, scene, pass);
+            Expect(rooted && misplaced == 0, "every 3D pass on the Render draw row is under 3D scene (" +
+                                                 std::to_string(misplaced) + " misplaced)");
             Expect(cpu >= 6, "the geometry pass is timed on the CPU, on the Render draw row (" + std::to_string(cpu) + ")");
             Expect(scene >= 3 && pass == 0, "by default the GPU is timed once a frame, as 3D scene (" +
                                                 std::to_string(scene) + " frames, " + std::to_string(pass) + " passes)");

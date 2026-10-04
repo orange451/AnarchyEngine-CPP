@@ -607,6 +607,8 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         SceneTimer(const SceneTimer&) = delete;
         SceneTimer& operator=(const SceneTimer&) = delete;
     } sceneTimer(gpu_, kScene);
+    // The same draw on the CPU: the root its passes nest under on the Render draw row.
+    PROFILE_SCOPE("3D scene", profiler::Group::Render);
 
     GLint viewport[4] = {};
     glGetIntegerv(GL_VIEWPORT, viewport);

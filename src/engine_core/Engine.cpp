@@ -409,6 +409,7 @@ void Engine::simulation_loop() {
 void Engine::render_loop() {
     set_thread_role(ThreadRole::Render);
     profiler::register_thread("Render");
+    static const profiler::ScopeId kStep = profiler::intern("Render step", profiler::Group::Render);
     static const profiler::ScopeId kPrepare = profiler::intern("Prepare", profiler::Group::Render);
     static const profiler::ScopeId kLockWait = profiler::intern("Lock wait", profiler::Group::Engine);
     {
@@ -452,7 +453,10 @@ void Engine::render_loop() {
         bool saw_contract = false;
         std::uint64_t hold_ns = 0;
         const bool timing = profiler::enabled();
+        // The frame's work, Prepare to PostRender, as one scope; the wait for the
+        // next paint after it is not part of it.
         if (timing) {
+            profiler::begin(kStep);
             profiler::begin(kPrepare);
             profiler::begin(kLockWait);
         }
@@ -534,6 +538,9 @@ void Engine::render_loop() {
                 scheduler_.run_phase(Phase::PostRender, frame_dt);
             },
             late_contract);
+        if (timing) {
+            profiler::end();
+        }
         present_count_.fetch_add(1);
 
         if (render_pace_hz_ > 0) {

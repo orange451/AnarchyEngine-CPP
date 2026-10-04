@@ -175,16 +175,23 @@ void gather(const engine_core::DataModel& game, const engine_core::ScriptAnalysi
         }
         const std::string name = game.name(child);
         if (const auto* script = dynamic_cast<const engine_core::LuaSource*>(game.instance(child))) {
-            const std::optional<std::string> checked = analysis.analyzed_source(child);
-            if (checked) {
-                ProblemSource source;
-                source.id = child;
-                source.name = name;
-                source.class_name = script->class_name();
-                source.path = path;
-                source.problems = problems_from(*checked, analysis.diagnostics(child));
-                if (!source.problems.empty()) {
-                    out.push_back(std::move(source));
+            std::vector<engine_core::Diagnostic> diagnostics = analysis.diagnostics(child);
+            // Hints are dropped by problems_from anyway; skip the source copy
+            // analyzed_source() makes when there is nothing else to show.
+            const bool any_shown = std::any_of(diagnostics.begin(), diagnostics.end(), [](const auto& diagnostic) {
+                return diagnostic.severity != engine_core::Severity::Hint;
+            });
+            if (any_shown) {
+                if (const std::optional<std::string> checked = analysis.analyzed_source(child)) {
+                    ProblemSource source;
+                    source.id = child;
+                    source.name = name;
+                    source.class_name = script->class_name();
+                    source.path = path;
+                    source.problems = problems_from(*checked, diagnostics);
+                    if (!source.problems.empty()) {
+                        out.push_back(std::move(source));
+                    }
                 }
             }
         }
@@ -278,14 +285,30 @@ ProblemFilter IdeProblems::filter() const {
 }
 
 std::string IdeProblems::summary() const { return summary_->getText(); }
-bool IdeProblems::playNoteShown() const { return shown_playing_; }
-bool IdeProblems::offNoticeShown() const { return !shown_enabled_; }
+
+bool IdeProblems::playNoteShown() const {
+    for (const auto& child : notices_->getChildren().items()) {
+        if (child.get() == play_note_.get()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool IdeProblems::offNoticeShown() const {
+    for (const auto& child : notices_->getChildren().items()) {
+        if (child.get() == off_notice_.get()) {
+            return true;
+        }
+    }
+    return false;
+}
 
 void IdeProblems::refresh() {
     engine_core::DataModel& game = engine_.datamodel();
     std::vector<ProblemSource> gathered;
     {
-        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionLockWait);
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kFrameLockWait);
         if (!lock.owns()) {
             // The place is busy. The next layout tries again.
             changed_.set();

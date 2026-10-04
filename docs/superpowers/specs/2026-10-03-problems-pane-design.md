@@ -25,7 +25,7 @@ A developer sees every problem in the game's scripts in one place, without openi
 | Play | Checking stops while a playtest runs. The pane keeps showing the last Edit-mode results, with a note above the list: "Checking resumes when the playtest stops." It updates by itself after Stop. |
 | Analysis off | The list is replaced by "Script analysis is off." |
 | Where | Window menu → Problems. Closed until opened; its home is beside the console, as Assets. The tab icon is `Warning.png`. |
-| Glyphs | Drawn as small shapes in theme colours, not image files: a filled circle for an error, a triangle for a warning, a ring for info. |
+| Glyphs | Drawn as small shapes in theme colours, not image files: a filled circle for an error, a filled square for a warning, a ring for info. |
 | Theme | New colours in the theme editor's list, under a "Problems" group: error, warning, info, error badge, warning badge, badge text, path and code text, play note. |
 
 ## Architecture

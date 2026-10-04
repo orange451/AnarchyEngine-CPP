@@ -93,6 +93,16 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     expect(h.pane->summary() == "1 error, 1 warning in 2 scripts", "the summary says the same");
     expect(h.pane->tree().getRoot()->getChildren().size() == 2, "a tree row per script");
 
+    // A script under Core is the studio's own tooling, not the place's: never listed.
+    engine_core::Script& core_script = add_script(game, game.core(), "CoreBroken", "nope()\n");
+    settle(engine);
+    h.frame();
+    bool core_listed = false;
+    for (const ide::ScriptProblems& script : h.pane->list().scripts) {
+        core_listed = core_listed || script.id == core_script.id();
+    }
+    expect(!core_listed, "a script under Core is not listed");
+
     // Opening the error: line 2, at the "x" string literal.
     const auto& rows = h.pane->tree().getRoot()->getChildren();
     if (!rows.empty() && !rows.items()[0]->getChildren().empty()) {
@@ -122,6 +132,9 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     expect(h.pane->list().scripts.size() == 1 && h.pane->list().scripts[0].id == warned.id(), "the filter narrows");
     h.pane->filterInput().field().setText("");
     h.frame();
+    const int after_filter = h.pane->rebuilds();
+    h.frame();
+    expect(h.pane->rebuilds() == after_filter, "a quiet frame after toggling the filter does not rebuild");
 
     // Collapsing survives a rebuild.
     if (!h.pane->tree().getRoot()->getChildren().empty()) {
@@ -148,6 +161,9 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     settle(engine);
     h.frame();
     expect(h.pane->rebuilds() == before + 1, "many changes, one rebuild");
+    const int after_many = h.pane->rebuilds();
+    h.frame();
+    expect(h.pane->rebuilds() == after_many, "a quiet frame does not rebuild");
 
     // A destroyed script's row goes, and opening an old row does nothing harmful.
     const jadefx::TreeItem* stale = h.pane->tree().getRoot()->getChildren().empty()
@@ -161,7 +177,9 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
         listed = listed || script.id == warned.id();
     }
     expect(!listed, "a destroyed script's row goes");
-    h.pane->openRow(stale);
+    const std::size_t opened_before_stale = h.opened.size();
+    expect(!h.pane->openRow(stale), "opening a destroyed row's stale pointer does nothing");
+    expect(h.opened.size() == opened_before_stale, "and does not call open");
 
     // Play: checking stops and the note shows; the list keeps its rows.
     const std::size_t shown = h.pane->list().scripts.size();
@@ -178,6 +196,8 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     engine.analysis().set_enabled(false);
     h.frame();
     expect(h.pane->offNoticeShown(), "analysis off shows the notice");
+    expect(!h.pane->tree().isVisible(), "and hides the tree");
+    expect(h.pane->list().scripts.empty(), "and the list is empty");
     engine.analysis().set_enabled(true);
     settle(engine);
     h.frame();
@@ -189,6 +209,7 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     }
     game.destroy(clean.id());
     game.destroy(logic.id());
+    game.destroy(core_script.id());
     settle(engine);
     return gFailures;
 }

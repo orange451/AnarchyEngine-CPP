@@ -1193,7 +1193,7 @@ void testInsertFilter() {
     std::vector<std::string> shown;
     ide::filter_class_names(names, "", shown);
     const std::vector<std::string> expected = {
-        "Button",       "Camera",        "CSS",        "DirectionalLight", "Dragger",   "Folder",     "GameObject", "HBox",
+        "BillboardGui", "Button",        "Camera",     "CSS",              "DirectionalLight", "Dragger", "Folder",     "GameObject", "HBox",
         "Label",        "Material",      "Mesh",       "Model",            "ModuleScript", "Pane",    "PhysicsObject",
         "PointLight",   "Prefab",        "ScreenGui",  "Script",           "Skybox",    "Sound",      "SoundEmitter",
         "SpotLight",    "TextField",     "Texture",    "VBox"};

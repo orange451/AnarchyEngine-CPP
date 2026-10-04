@@ -6,6 +6,7 @@
 #include "ScriptHost.hpp"
 #include "TableSnapshot.hpp"
 #include "TaskScheduler.hpp"
+#include "profiler/Profiler.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -229,6 +230,11 @@ private:
         bool dead = false;
         // Ended with an uncaught error, or its VM halted.
         bool errored = false;
+        // What resumes it next, as the profiler shows it: "start", "wait", a
+        // signal's name, and so on. Always a string that outlives the thread.
+        const char* cause = "start";
+        // Resumed at least once. Until then a wake keeps the cause it was made with.
+        bool started = false;
     };
 
     struct Start {
@@ -297,6 +303,17 @@ private:
     // stopped as a runaway. The same budget LuaEngine gives a chunk.
     static constexpr std::uint64_t kScriptTimeout = 1000000;
     static constexpr int kResumeBudget = 32;
+
+    // The profiler's scope for a Script (0 is the command line), by its GUID so a
+    // rename keeps its history, and a cause's id. Cleared at Play and Stop.
+    profiler::ScopeId profile_scope(InstanceId script);
+    profiler::CauseId profile_cause(const char* cause);
+    struct ProfiledScript {
+        profiler::ScopeId scope = 0;
+        std::string name;
+    };
+    std::unordered_map<InstanceId, ProfiledScript> profiled_;
+    std::unordered_map<const char*, profiler::CauseId> profiled_causes_;
     static constexpr std::size_t kMemoryLimit = 64 * 1024 * 1024;
     // The world a console or plugin handle carries. It resolves by id alone, so the
     // handle outlives a play session; the id's slot generation still tells a dead one.
@@ -403,12 +420,13 @@ private:
     void push_instance(lua_State* state, InstanceId id);
     DataModel* resolve_id(InstanceId id, std::uint32_t world) const;
     void fire_phase(Phase phase, double dt);
-    void invoke_listener(Vm& vm, int ref, InstanceId script, std::uint32_t generation, const char* text,
+    void invoke_listener(Vm& vm, int ref, InstanceId script, std::uint32_t generation, const char* cause, const char* text,
                          bool pass_number, double number);
     // An event with values: the listener gets each one, in order. Null gets none.
-    void invoke_listener_args(Vm& vm, int ref, InstanceId script, std::uint32_t generation, const EventArgs* args);
+    void invoke_listener_args(Vm& vm, int ref, InstanceId script, std::uint32_t generation, const char* cause,
+                              const EventArgs* args);
     // Null when the owner may not run. The listener is on the new thread's stack.
-    Thread* start_listener(Vm& vm, int ref, InstanceId script, std::uint32_t generation);
+    Thread* start_listener(Vm& vm, int ref, InstanceId script, std::uint32_t generation, const char* cause);
     void run_listener(Thread& thread);
     int require_module(lua_State* state, InstanceId module_id);
 

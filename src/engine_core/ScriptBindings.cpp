@@ -110,6 +110,7 @@ int ScriptBindings::task_spawn(lua_State* state) {
     return lua_guard(state, [&] {
         const ScriptRuntime::Thread& caller = task_caller(state, "task.spawn");
         ScriptRuntime::Thread& child = task_thread(state, caller, 1);
+        child.cause = "spawn";
         runtime_from(state)->ready(child);
         return push_task_handle(state, child);
     });
@@ -119,6 +120,7 @@ int ScriptBindings::task_defer(lua_State* state) {
     return lua_guard(state, [&] {
         const ScriptRuntime::Thread& caller = task_caller(state, "task.defer");
         ScriptRuntime::Thread& child = task_thread(state, caller, 1);
+        child.cause = "defer";
         child.park = ScriptRuntime::Thread::Park::Defer;
         child.vm->defer.push_back(&child);
         return push_task_handle(state, child);
@@ -130,6 +132,7 @@ int ScriptBindings::task_delay(lua_State* state) {
         const ScriptRuntime::Thread& caller = task_caller(state, "task.delay");
         const double dt = luaL_checknumber(state, 1);
         ScriptRuntime::Thread& child = task_thread(state, caller, 2);
+        child.cause = "delay";
         child.park = ScriptRuntime::Thread::Park::Sleep;
         child.due = child.vm->clock + (dt < 0 ? 0 : dt);
         child.vm->sleep.push_back(&child);
@@ -681,6 +684,27 @@ Signal& ScriptBindings::signal_of(lua_State* state, ScriptRuntime& runtime, cons
     return *signal;
 }
 
+const char* ScriptBindings::signal_cause(const SignalUd& ud) {
+    static const char* const kInput[] = {"InputBegan", "InputChanged", "InputEnded"};
+    static const char* const kHost[] = {"SelectionChanged", "Started", "Stopped", "OnUndo",
+                                        "OnRedo", "OnRecordingStarted", "OnRecordingFinished"};
+    static const char* const kPhases[] = {"PreAnimation", "PreSimulation", "PhysicsSubstep", "PostSimulation",
+                                          "Heartbeat", "RenderStepped", "PreRender", "PostRender"};
+    if (ud.kind == kSignalChanged) {
+        return "Changed";
+    }
+    if (ud.kind == kSignalEvent) {
+        return ud.event_name != nullptr ? ud.event_name : "event";
+    }
+    if (ud.kind == kSignalInput) {
+        return ud.phase >= 0 && ud.phase < 3 ? kInput[ud.phase] : "input";
+    }
+    if (ud.kind == kSignalHost) {
+        return ud.phase >= 0 && ud.phase < 7 ? kHost[ud.phase] : "event";
+    }
+    return ud.phase >= 0 && ud.phase < kPhaseCount ? kPhases[ud.phase] : "event";
+}
+
 bool ScriptBindings::render_window_routed(const SignalUd& ud, ScriptRuntime::VmKind vm_kind) {
     return ud.kind == kSignalPhase && static_cast<Phase>(ud.phase) == Phase::RenderStepped &&
            vm_kind != ScriptRuntime::VmKind::Console;
@@ -712,17 +736,19 @@ int ScriptBindings::signal_connect(lua_State* state) {
         const InstanceId script = caller->script;
         const std::uint32_t generation = caller->generation;
         // The handler owns the callback's reference; Disconnect drops the handler.
-        Handler handler = [runtime, held, script, generation, kind = ud->kind,
+        // What the profiler says resumed the handler: the signal's name.
+        const char* cause = signal_cause(*ud);
+        Handler handler = [runtime, held, script, generation, cause, kind = ud->kind,
                            phase = static_cast<Phase>(ud->phase)](InstanceId, Field field) {
             ScriptRuntime::Vm& owner = *held->vm;
             if (kind == kSignalChanged) {
-                runtime->invoke_listener(owner, held->ref, script, generation,
+                runtime->invoke_listener(owner, held->ref, script, generation, cause,
                                          changed_name(field, runtime->game_->events().payload()), false, 0);
             } else if (kind == kSignalInput || kind == kSignalEvent || kind == kSignalHost) {
-                runtime->invoke_listener_args(owner, held->ref, script, generation,
+                runtime->invoke_listener_args(owner, held->ref, script, generation, cause,
                                               runtime->game_->events().current_args());
             } else {
-                runtime->invoke_listener(owner, held->ref, script, generation, nullptr, true,
+                runtime->invoke_listener(owner, held->ref, script, generation, cause, nullptr, true,
                                          runtime->run_service_.dt(phase));
             }
         };

@@ -82,3 +82,90 @@ TEST_CASE("PF1 a running engine records frames with Sim and Render scopes", "[PF
         REQUIRE(record.depth >= 1);
     }
 }
+
+namespace {
+
+// The test thread records as Sim, once.
+void record_here() {
+    static thread_local bool registered = false;
+    if (!registered) {
+        profiler::register_thread("Sim");
+        registered = true;
+    }
+}
+
+// Steps the rig a frame at a time, marking a frame boundary before each, then collects.
+profiler::History run_frames(ScriptRig& rig, int count) {
+    for (int index = 0; index < count; ++index) {
+        profiler::frame_boundary();
+        rig.frames(1);
+    }
+    profiler::frame_boundary();
+    profiler::collect();
+    return live_history();
+}
+
+std::set<std::string> causes_of(const profiler::History& history, const std::string& name) {
+    std::set<std::string> out;
+    for (const profiler::ScopeRecord& record : scopes_named(history, name)) {
+        if (record.cause != profiler::kNoCause && record.cause < history.causes.size()) {
+            out.insert(history.causes[record.cause]);
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("PF2 a Script's resumes are scopes named after it, with what resumed them", "[PF2]") {
+    record_here();
+    Recording recording;
+    ScriptRig rig;
+    add_script(rig.game, "Mover",
+               "game:GetService('RunService').Heartbeat:Connect(function() end)\n"
+               "while true do task.wait() end");
+    rig.game.start_simulation();
+    const profiler::History history = run_frames(rig, 4);
+    const std::set<std::string> causes = causes_of(history, "Mover");
+    REQUIRE(causes.count("start") == 1);
+    REQUIRE(causes.count("Heartbeat") == 1);
+    REQUIRE(causes.count("wait") == 1);
+    for (const profiler::ScopeRecord& record : scopes_named(history, "Mover")) {
+        REQUIRE(history.scopes[record.scope].group == profiler::Group::Script);
+        REQUIRE(history.scopes[record.scope].key == rig.game.guid(
+                                                        rig.game.find_first_child(rig.game.scene_service("Workspace"), "Mover")));
+    }
+}
+
+TEST_CASE("PF3 a renamed Script keeps its scope, under the new name", "[PF3]") {
+    record_here();
+    Recording recording;
+    ScriptRig rig;
+    engine_core::Script& script = add_script(rig.game, "Before", "while true do task.wait() end");
+    rig.game.start_simulation();
+    run_frames(rig, 2);
+    rig.game.set_name(script.id(), "After");
+    const profiler::History history = run_frames(rig, 2);
+    const auto after = scopes_named(history, "After");
+    REQUIRE_FALSE(after.empty());
+    REQUIRE(scopes_named(history, "Before").empty());
+}
+
+TEST_CASE("PF4 require records the ModuleScript inside the Script that asked", "[PF4]") {
+    record_here();
+    Recording recording;
+    ScriptRig rig;
+    engine_core::ModuleScript& module = rig.game.create<engine_core::ModuleScript>();
+    rig.game.set_name(module.id(), "Lib");
+    module.set_source("local t = 0 for i = 1, 1000 do t = t + i end return t");
+    rig.game.set_parent(module.id(), rig.game.scene_service("Workspace"));
+    add_script(rig.game, "User", "local lib = require(workspace.Lib)");
+    rig.game.start_simulation();
+    const profiler::History history = run_frames(rig, 2);
+    const auto users = scopes_named(history, "User");
+    const auto libs = scopes_named(history, "Lib");
+    REQUIRE(users.size() == 1);
+    REQUIRE(libs.size() == 1);
+    REQUIRE(libs[0].depth == users[0].depth + 1);
+    REQUIRE(causes_of(history, "Lib") == std::set<std::string>{"require"});
+}

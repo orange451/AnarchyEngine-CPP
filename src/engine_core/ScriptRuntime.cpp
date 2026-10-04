@@ -3,6 +3,8 @@
 #include "ScriptBindings.hpp"
 #include "profiler/Profiler.hpp"
 
+#include <optional>
+
 #include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
 #include "Enum.hpp"
@@ -569,6 +571,8 @@ void ScriptRuntime::on_end_of_drain() {
 void ScriptRuntime::on_start() {
     // The previous session's lines are dropped before this session's scripts run.
     clear_output();
+    // Ids are made again at Play and Stop; GUIDs carry each Script's history across.
+    profiled_.clear();
     open_vm();
     play_.clock = 0;
     started_.clear();
@@ -590,6 +594,7 @@ void ScriptRuntime::on_start() {
 }
 
 void ScriptRuntime::on_stop() {
+    profiled_.clear();
     if (game_ != nullptr) {
         game_->events().disconnect_scripted();
         // Still active, for the plugins; this drops what the session left queued.
@@ -1130,6 +1135,9 @@ void ScriptRuntime::flush_defer(Vm& vm) {
             continue;
         }
         thread->park = Thread::Park::None;
+        if (thread->started) {
+            thread->cause = "defer";
+        }
         ready(*thread);
     }
     vm.defer.clear();
@@ -1146,6 +1154,9 @@ void ScriptRuntime::wake_sleeps(Vm& vm) {
         if (thread->due <= vm.clock) {
             thread->park = Thread::Park::None;
             it = vm.sleep.erase(it);
+            if (thread->started) {
+                thread->cause = "wait";
+            }
             ready(*thread);
         } else {
             ++it;
@@ -1167,6 +1178,39 @@ void ScriptRuntime::resume_budget(Vm& vm) {
     }
 }
 
+profiler::ScopeId ScriptRuntime::profile_scope(InstanceId script) {
+    static const profiler::ScopeId kCommandLine = profiler::intern("Command line", profiler::Group::Script);
+    static const profiler::ScopeId kGone = profiler::intern("(destroyed script)", profiler::Group::Script);
+    if (script == 0 || game_ == nullptr) {
+        return kCommandLine;
+    }
+    if (game_->instance(script) == nullptr) {
+        return kGone;
+    }
+    std::string name = game_->name(script);
+    const auto found = profiled_.find(script);
+    if (found != profiled_.end() && found->second.name == name) {
+        return found->second.scope;
+    }
+    ProfiledScript& entry = profiled_[script];
+    entry.scope = profiler::intern_keyed(game_->guid(script), name, profiler::Group::Script);
+    entry.name = std::move(name);
+    return entry.scope;
+}
+
+profiler::CauseId ScriptRuntime::profile_cause(const char* cause) {
+    if (cause == nullptr) {
+        return profiler::kNoCause;
+    }
+    const auto found = profiled_causes_.find(cause);
+    if (found != profiled_causes_.end()) {
+        return found->second;
+    }
+    const profiler::CauseId id = profiler::intern_cause(cause);
+    profiled_causes_.emplace(cause, id);
+    return id;
+}
+
 void ScriptRuntime::resume_one(Thread& thread) {
     if (thread.dead || thread.co == nullptr) {
         thread.dead = true;
@@ -1177,6 +1221,14 @@ void ScriptRuntime::resume_one(Thread& thread) {
     const int nargs = thread.nargs;
     thread.nargs = 0;
     steps_ = 0;
+    const char* cause = thread.cause;
+    thread.cause = "resume";
+    thread.started = true;
+    // The Script's time, which nests what it requires and what it marks itself.
+    std::optional<profiler::Scope> timing;
+    if (profiler::enabled()) {
+        timing.emplace(profile_scope(thread.script), profile_cause(cause));
+    }
     ++lua_depth_;
     int status = LUA_OK;
     {
@@ -1289,6 +1341,7 @@ void ScriptRuntime::make_ready(Thread& thread, const char* result) {
     if (!unpark(thread)) {
         return;
     }
+    thread.cause = "Wait";
     if (result != nullptr) {
         lua_pushstring(thread.co, result);
         thread.nargs = 1;
@@ -1300,6 +1353,7 @@ void ScriptRuntime::make_ready_number(Thread& thread, double result) {
     if (!unpark(thread)) {
         return;
     }
+    thread.cause = "Wait";
     lua_pushnumber(thread.co, result);
     thread.nargs = 1;
     ready(thread);
@@ -1309,6 +1363,7 @@ void ScriptRuntime::make_ready_args(Thread& thread, const EventArgs* args) {
     if (!unpark(thread)) {
         return;
     }
+    thread.cause = "Wait";
     thread.nargs = push_event_args(thread.co, this, args);
     ready(thread);
 }
@@ -1416,6 +1471,7 @@ void ScriptRuntime::deliver_child_waits(Vm& vm) {
         push_instance(thread->co, child);
         thread->nargs = 1;
         thread->park = Thread::Park::None;
+        thread->cause = "WaitForChild";
         ready(*thread);
     }
 }
@@ -1460,6 +1516,7 @@ void ScriptRuntime::wake_child_timers(Vm& vm) {
         lua_pushnil(thread->co);
         thread->nargs = 1;
         thread->park = Thread::Park::None;
+        thread->cause = "WaitForChild";
         ready(*thread);
     }
 }
@@ -1863,7 +1920,8 @@ void ScriptRuntime::fire_phase(Phase phase, double dt) {
     run_service_.fire(game_->events(), phase, dt);
 }
 
-ScriptRuntime::Thread* ScriptRuntime::start_listener(Vm& vm, int ref, InstanceId script, std::uint32_t generation) {
+ScriptRuntime::Thread* ScriptRuntime::start_listener(Vm& vm, int ref, InstanceId script, std::uint32_t generation,
+                                                     const char* cause) {
     if (vm.state == nullptr || vm.closing || (vm.kind == VmKind::Play && !open_)) {
         return nullptr;
     }
@@ -1871,6 +1929,7 @@ ScriptRuntime::Thread* ScriptRuntime::start_listener(Vm& vm, int ref, InstanceId
         return nullptr;
     }
     Thread& thread = new_thread(vm, script, generation);
+    thread.cause = cause != nullptr ? cause : "event";
     lua_getref(vm.state, ref);
     lua_xmove(vm.state, thread.co, 1);
     return &thread;
@@ -1884,10 +1943,10 @@ void ScriptRuntime::run_listener(Thread& thread) {
     resume_one(thread);
 }
 
-void ScriptRuntime::invoke_listener(Vm& vm, int ref, InstanceId script, std::uint32_t generation, const char* text,
-                                    bool pass_number, double number) {
+void ScriptRuntime::invoke_listener(Vm& vm, int ref, InstanceId script, std::uint32_t generation, const char* cause,
+                                    const char* text, bool pass_number, double number) {
     guarded(vm, [&] {
-        Thread* thread = start_listener(vm, ref, script, generation);
+        Thread* thread = start_listener(vm, ref, script, generation, cause);
         if (thread == nullptr) {
             return;
         }
@@ -1903,9 +1962,9 @@ void ScriptRuntime::invoke_listener(Vm& vm, int ref, InstanceId script, std::uin
 }
 
 void ScriptRuntime::invoke_listener_args(Vm& vm, int ref, InstanceId script, std::uint32_t generation,
-                                         const EventArgs* args) {
+                                         const char* cause, const EventArgs* args) {
     guarded(vm, [&] {
-        Thread* thread = start_listener(vm, ref, script, generation);
+        Thread* thread = start_listener(vm, ref, script, generation, cause);
         if (thread == nullptr) {
             return;
         }
@@ -1979,6 +2038,10 @@ int ScriptRuntime::require_module(lua_State* state, InstanceId module_id) {
         remember_error(co);
         const std::string message = last_error_;
         luaL_error(state, "%s", message.c_str());
+    }
+    std::optional<profiler::Scope> timing;
+    if (profiler::enabled()) {
+        timing.emplace(profile_scope(module_id), profile_cause("require"));
     }
     const int status = lua_resume(co, state, 0);
     if (status == LUA_YIELD) {

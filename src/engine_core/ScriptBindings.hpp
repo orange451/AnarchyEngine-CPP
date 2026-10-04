@@ -274,6 +274,8 @@ struct ScriptBindings {
     // the sim-side delivery, since its command line enters it without the
     // write lock.
     static bool render_window_routed(const SignalUd& ud, ScriptRuntime::VmKind vm_kind);
+    // The name the profiler gives what this signal resumes, such as InputBegan.
+    static const char* signal_cause(const SignalUd& ud);
     static int signal_connect(lua_State* state);
     static int signal_wait(lua_State* state);
     static int signal_index(lua_State* state);

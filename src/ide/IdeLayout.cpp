@@ -260,6 +260,9 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     search_window_ = &keep_closed("Search", "Search.png", [this] { return make_search(); });
     search_window_->open = [this] { open_search(false, scene_); };
     conflicts_window_ = &keep_closed("Conflicts", "Warning.png", [this] { return make_conflicts(); });
+    problems_window_ = &keep_closed("Problems", "Warning.png", [this] { return make_problems(); });
+    // In with the console, as Assets docks.
+    problems_window_->home = [this] { return beside_console(); };
     assets_window_ = &keep_closed("Assets", "AssetFolder.png", [this] { return make_assets(); });
     // In with the console, as a project browser docks under the scene.
     assets_window_->home = [this] { return beside_console(); };

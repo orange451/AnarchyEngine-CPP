@@ -1,5 +1,9 @@
 #include "ide/IdeProblems.hpp"
 
+#include "ide/IdeDock.hpp"
+#include "ide/IdeLayout.hpp"
+#include "ide/IdeScriptEditor.hpp"
+
 #include "DataModel.hpp"
 #include "Engine.hpp"
 #include "Folder.hpp"
@@ -97,6 +101,8 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     engine_core::Script& core_script = add_script(game, game.core(), "CoreBroken", "nope()\n");
     settle(engine);
     h.frame();
+    expect(!engine.analysis().diagnostics(core_script.id()).empty(),
+           "the checker does check a Core script, so excluding it is the pane's choice");
     bool core_listed = false;
     for (const ide::ScriptProblems& script : h.pane->list().scripts) {
         core_listed = core_listed || script.id == core_script.id();
@@ -210,6 +216,89 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     game.destroy(clean.id());
     game.destroy(logic.id());
     game.destroy(core_script.id());
+    settle(engine);
+    return gFailures;
+}
+
+int RunProblemsWindowTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
+    gFailures = 0;
+    expect(scene.getElementsByClassName("problems-pane").empty(), "Problems starts closed");
+    layout.show_problems();
+    scene.layout(1280, 800, 50.0);
+    const std::vector<jadefx::Node*> panes = scene.getElementsByClassName("problems-pane");
+    expect(panes.size() == 1, "show_problems opens one Problems pane");
+    auto* pane = panes.empty() ? nullptr : dynamic_cast<ide::IdeProblems*>(panes.front());
+    expect(pane != nullptr && pane->name() == "Problems", "named Problems for the Window menu and layout.json");
+
+    // It opens a script at the problem's line.
+    engine_core::Engine& engine = layout.simulation();
+    engine_core::DataModel& game = engine.datamodel();
+    engine_core::Script& script =
+        add_script(game, game.scene_service("Workspace"), "Opened", "local a = 1\nwiat(1)\n");
+    settle(engine);
+    scene.layout(1280, 800, 50.1);
+    if (pane != nullptr) {
+        pane->refresh();
+        const auto& rows = pane->tree().getRoot()->getChildren();
+        jadefx::TreeItem* row = nullptr;
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            if (!rows.items()[i]->getChildren().empty()) {
+                row = rows.items()[i]->getChildren().items()[0].get();
+            }
+        }
+        expect(pane->openRow(row), "a problem row opens");
+    }
+    scene.layout(1280, 800, 50.2);
+    // IdeScriptEditor keeps its IdePane name as "Script.lua" (the constructor's
+    // fixed name()); it titles its tab with the script's name instead, as
+    // "Opened.lua" (IdeScriptEditor::setTitleText). So an opened script is
+    // found by instanceId(), not by name().
+    ide::IdeScriptEditor* opened_editor = nullptr;
+    for (jadefx::Node* node : scene.getElementsByClassName("ide-pane")) {
+        if (auto* editor = dynamic_cast<ide::IdeScriptEditor*>(node);
+            editor != nullptr && editor->instanceId() == script.id()) {
+            opened_editor = editor;
+        }
+    }
+    expect(opened_editor != nullptr, "opening a problem opens its script in an editor");
+
+    // The editor docks in the Scene View's own tab strip and comes to the
+    // front, the way Search's result does: close it, as every other test that
+    // opens an editor does, so the Scene View's tab is selected (and so
+    // mounted) again for tests that run after this one.
+    if (opened_editor != nullptr) {
+        ide::IdeDock* dock = nullptr;
+        for (jadefx::Node* cursor = opened_editor; cursor != nullptr && dock == nullptr;
+             cursor = cursor->getParent()) {
+            dock = dynamic_cast<ide::IdeDock*>(cursor);
+        }
+        if (dock != nullptr) {
+            std::shared_ptr<jadefx::Tab> found;
+            for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+                if (tab && tab->getContent() == opened_editor) {
+                    found = tab;
+                }
+            }
+            if (found) {
+                dock->tabs()->close(found);
+            }
+        }
+        scene.layout(1280, 800, 50.21);
+    }
+
+    // Renaming a script renames its row.
+    game.set_name(script.id(), "Renamed");
+    settle(engine);
+    scene.layout(1280, 800, 50.3);
+    bool renamed = false;
+    if (pane != nullptr) {
+        for (const ide::ScriptProblems& listed : pane->list().scripts) {
+            renamed = renamed || (listed.id == script.id() && listed.name == "Renamed");
+        }
+    }
+    expect(renamed, "renaming a script renames its row");
+
+    game.destroy(script.id());
     settle(engine);
     return gFailures;
 }

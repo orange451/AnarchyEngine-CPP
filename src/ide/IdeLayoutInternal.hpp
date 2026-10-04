@@ -22,6 +22,7 @@
 #include "IdeConflicts.hpp"
 #include "IdeExplorer.hpp"
 #include "IdePrefabEditor.hpp"
+#include "IdeProblems.hpp"
 #include "IdeScriptEditor.hpp"
 #include "IdeSearch.hpp"
 #include "IdeTerminal.hpp"

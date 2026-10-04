@@ -164,6 +164,20 @@ std::shared_ptr<IdePane> IdeLayout::make_search() {
     return search_;
 }
 
+std::shared_ptr<IdePane> IdeLayout::make_problems() {
+    ProblemsHost host;
+    // As Search opens a match.
+    host.open = [this](std::uint32_t id, int line, int column, int column_end) {
+        edit(id);
+        if (const std::shared_ptr<IdeScriptEditor> editor = open_editor(id)) {
+            editor->showRange(line, column, column_end);
+        }
+    };
+    return jadefx::make<IdeProblems>(runner_.simulation(), std::move(host));
+}
+
+void IdeLayout::show_problems() { open_window(*problems_window_); }
+
 IdeDock* IdeLayout::side_home() {
     // Beside the left explorer, as VS Code keeps search in its side bar.
     for (const std::weak_ptr<IdeExplorer>& weak : explorers_) {

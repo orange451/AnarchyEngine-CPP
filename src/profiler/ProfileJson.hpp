@@ -14,7 +14,7 @@ namespace profiler {
 inline constexpr const char* kCaptureFormat = "anarchy-profile";
 inline constexpr int kCaptureVersion = 1;
 
-// One line of compact JSON. Times are microseconds from the first frame's start.
+// One line of compact JSON. Times are microseconds from the first frame's start, to the nanosecond.
 std::string write_capture(const History& history, const std::string& place, const std::string& created_utc);
 // False, with why, for any file that is not a whole version-1 capture; out is then untouched.
 bool read_capture(std::string_view text, History& out, std::string& error);

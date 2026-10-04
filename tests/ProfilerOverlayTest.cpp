@@ -10,6 +10,8 @@
 #include "jadefx/jadefx.hpp"
 
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 namespace {
@@ -235,6 +237,51 @@ int RunProfilerOverlayTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     }
     key(jadefx::Key::F6, jadefx::Key::ModControl);
     expect(!ui.shown(), "hidden at the end");
+
+    // Captures: File > Open Profile Capture, and Save from a paused profiler.
+    expect(menu_item(scene, "File", "Open Profile Capture\u2026") != nullptr, "File has Open Profile Capture");
+    key(jadefx::Key::F6, jadefx::Key::ModControl);
+    for (int index = 0; index < 4; ++index) {
+        profiler::frame_boundary();
+        profiler::begin(work);
+        profiler::end();
+    }
+    profiler::frame_boundary();
+    profiler::collect();
+    key(jadefx::Key::P, jadefx::Key::ModControl);
+    expect(static_cast<bool>(ui.save), "a paused studio profiler can be saved");
+    namespace fs = std::filesystem;
+    const fs::path folder = fs::temp_directory_path() / "anarchy-profile-test";
+    fs::create_directories(folder);
+    const fs::path saved = folder / "saved.aprof.json";
+    std::string error;
+    expect(layout.save_profile_capture(saved, error) && fs::exists(saved), "save writes the paused history");
+    key(jadefx::Key::P, jadefx::Key::ModControl);
+    key(jadefx::Key::F6, jadefx::Key::ModControl);
+    const bool opened = layout.open_profile_capture(saved, error);
+    expect(opened, "the saved capture opens");
+    frame();
+    std::string name;
+    std::size_t frames = 0;
+    profiler::with_view([&](const profiler::History& history) {
+        name = history.capture_name;
+        frames = history.frames.size();
+    });
+    expect(ui.shown() && profiler::showing_capture() && profiler::paused(), "opening shows it, paused");
+    expect(name == "saved.aprof.json" && frames == 4, "with its name and its frames");
+    {
+        std::ofstream(folder / "broken.aprof.json") << "{\"format\":\"anarchy-profile\",\"version\":";
+    }
+    error.clear();
+    expect(!layout.open_profile_capture(folder / "broken.aprof.json", error) && !error.empty(),
+           "a broken capture is refused, with why");
+    profiler::with_view([&](const profiler::History& history) { name = history.capture_name; });
+    expect(name == "saved.aprof.json", "and the capture showing stays");
+    click(scene, first->profilerOverlay().closeCaptureRect());
+    frame();
+    expect(!profiler::showing_capture() && !profiler::paused(), "Close capture returns to live");
+    key(jadefx::Key::F6, jadefx::Key::ModControl);
+    fs::remove_all(folder);
     profiler::reset_for_testing();
     return gFailures;
 }

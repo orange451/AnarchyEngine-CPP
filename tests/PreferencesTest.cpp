@@ -146,6 +146,27 @@ void TestSceneGrid() {
     Expect(ide::Preferences(file).scene_grid(), "a value that is not a boolean reads as on");
 }
 
+void TestProfiler() {
+    Scratch scratch;
+    const fs::path file = scratch.root / "preferences.json";
+    {
+        ide::Preferences preferences(file);
+        Expect(preferences.profiler_tab() == "timeline", "the profiler opens on the Timeline");
+        Expect(preferences.profiler_split() == 0.45, "with the lower half at 45%");
+        preferences.set_profiler_tab("scopes");
+        preferences.set_profiler_split(0.6);
+        std::string error;
+        Expect(preferences.save(error), "preferences save");
+    }
+    Expect(ide::Preferences(file).profiler_tab() == "scopes", "the profiler's tab is remembered");
+    Expect(ide::Preferences(file).profiler_split() == 0.6, "and its split");
+    Write(file, "{ \"profilerTab\": \"graph\", \"profilerSplit\": 0.95 }");
+    Expect(ide::Preferences(file).profiler_tab() == "timeline", "an unknown tab reads as the Timeline");
+    Expect(ide::Preferences(file).profiler_split() == 0.8, "a split past 0.8 reads as 0.8");
+    Write(file, "{ \"profilerSplit\": 0.01 }");
+    Expect(ide::Preferences(file).profiler_split() == 0.2, "a split under 0.2 reads as 0.2");
+}
+
 void TestLibrary() {
     Scratch scratch;
     const fs::path folder = scratch.root / "themes";
@@ -671,6 +692,7 @@ int RunPreferencesTests() {
     TestAssetsView();
     TestMcpEnabled();
     TestSceneGrid();
+    TestProfiler();
     TestLibrary();
     TestWriteTheme();
     TestCurrentTheme();

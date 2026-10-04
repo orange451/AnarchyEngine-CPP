@@ -58,6 +58,13 @@ public:
     bool scene_grid() const;
     void set_scene_grid(bool shown);
 
+    // The profiler's tab, "timeline" or "scopes" ("timeline" for anything else),
+    // and its lower half's share of the Scene View, kept from 0.2 to 0.8.
+    std::string profiler_tab() const;
+    void set_profiler_tab(const std::string& tab);
+    double profiler_split() const;
+    void set_profiler_split(double split);
+
     // Writes the file. True, doing nothing, when there is no file.
     bool save(std::string& error) const;
 

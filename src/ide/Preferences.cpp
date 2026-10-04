@@ -111,6 +111,27 @@ bool Preferences::scene_grid() const {
 
 void Preferences::set_scene_grid(bool shown) { root_.set("sceneGrid", engine_core::JsonValue::boolean(shown)); }
 
+std::string Preferences::profiler_tab() const {
+    const engine_core::JsonValue* tab = root_.find("profilerTab");
+    return tab != nullptr && tab->is_string() && tab->as_string() == "scopes" ? "scopes" : "timeline";
+}
+
+void Preferences::set_profiler_tab(const std::string& tab) {
+    root_.set("profilerTab", engine_core::JsonValue::string(tab == "scopes" ? "scopes" : "timeline"));
+}
+
+double Preferences::profiler_split() const {
+    const engine_core::JsonValue* split = root_.find("profilerSplit");
+    if (split == nullptr || !split->is_number() || !std::isfinite(split->as_number())) {
+        return 0.45;
+    }
+    return std::clamp(split->as_number(), 0.2, 0.8);
+}
+
+void Preferences::set_profiler_split(double split) {
+    root_.set("profilerSplit", engine_core::JsonValue::number(std::clamp(split, 0.2, 0.8)));
+}
+
 bool Preferences::save(std::string& error) const {
     if (file_.empty()) {
         return true;

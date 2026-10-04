@@ -30,9 +30,10 @@ bool group_from(const std::string& name, Group& out) {
 
 double round3(double value) { return std::round(value * 1000.0) / 1000.0; }
 
-double micros(std::uint64_t ns, std::uint64_t base) {
-    return std::round(static_cast<double>(ns - base) / 1000.0);
-}
+// Microseconds from base, to the nanosecond, so a frame of under a microsecond keeps its length.
+double micros(std::uint64_t ns, std::uint64_t base) { return static_cast<double>(ns - base) / 1000.0; }
+
+std::uint64_t nanos(double micros) { return static_cast<std::uint64_t>(std::llround(micros * 1000.0)); }
 
 bool integer_in(const JsonValue& value, double min, double max, double& out) {
     if (!value.is_number()) {
@@ -200,8 +201,8 @@ bool read_capture(std::string_view text, History& out, std::string& error) {
         }
         previous_end = end;
         Frame frame;
-        frame.start_ns = static_cast<std::uint64_t>(start * 1000.0);
-        frame.end_ns = static_cast<std::uint64_t>(end * 1000.0);
+        frame.start_ns = nanos(start);
+        frame.end_ns = nanos(end);
         history.frames.push_back(std::move(frame));
     }
     const JsonValue* events = root.find("events");
@@ -240,8 +241,8 @@ bool read_capture(std::string_view text, History& out, std::string& error) {
         record.row = static_cast<std::uint16_t>(row);
         record.scope = static_cast<ScopeId>(scope);
         record.depth = static_cast<std::uint8_t>(depth);
-        record.start_ns = static_cast<std::uint64_t>(start * 1000.0);
-        record.end_ns = record.start_ns + static_cast<std::uint64_t>(duration * 1000.0);
+        record.start_ns = nanos(start);
+        record.end_ns = record.start_ns + nanos(duration);
         if (!v[5].is_null()) {
             double cause = 0;
             if (history.causes.empty() ||

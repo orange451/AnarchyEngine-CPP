@@ -48,6 +48,8 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         ->setOnAction([this](jadefx::ActionEvent&) { save_project_as(); });
     file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     AddItem(*file, "Export Game…", "Export.png", 0, 0)->setOnAction([this](jadefx::ActionEvent&) { export_game(); });
+    AddItem(*file, "Open Profile Capture\u2026", nullptr, 0, 0)
+        ->setOnAction([this](jadefx::ActionEvent&) { choose_profile_capture(); });
     file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     AddItem(*file, "Preferences\u2026", nullptr, jadefx::Key::Comma, jadefx::Key::ModControl)
         ->setOnAction([this](jadefx::ActionEvent&) { open_preferences(); });
@@ -98,6 +100,29 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         ->setOnAction([this](jadefx::ActionEvent&) { open_search(false, scene_); });
     AddItem(*edit, "Replace in Scripts", nullptr, jadefx::Key::H, jadefx::Key::ModControl | jadefx::Key::ModShift)
         ->setOnAction([this](jadefx::ActionEvent&) { open_search(true, scene_); });
+
+    // The profiler keeps its tab and split here, and saves through a dialog.
+    {
+        runner::ProfilerUi& ui = runner::ProfilerUi::get();
+        ui.tab = preferences_.profiler_tab() == "scopes" ? runner::ProfilerUi::Tab::Scopes
+                                                         : runner::ProfilerUi::Tab::Timeline;
+        ui.split = preferences_.profiler_split();
+        ui.changed = [this, alive = std::weak_ptr<int>(alive_)] {
+            if (alive.expired()) {
+                return;
+            }
+            const runner::ProfilerUi& now = runner::ProfilerUi::get();
+            preferences_.set_profiler_tab(now.tab == runner::ProfilerUi::Tab::Scopes ? "scopes" : "timeline");
+            preferences_.set_profiler_split(now.split);
+            std::string error;
+            preferences_.save(error);
+        };
+        ui.save = [this, alive = std::weak_ptr<int>(alive_)] {
+            if (!alive.expired()) {
+                save_profile_capture_as();
+            }
+        };
+    }
 
     auto view = jadefx::make<jadefx::Menu>("View");
     AddItem(*view, "Zoom In", nullptr, jadefx::Key::Equal, jadefx::Key::ModControl)

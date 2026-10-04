@@ -660,6 +660,7 @@ add_executable(studio-tests
     tests/ScriptTabsTest.cpp
     tests/TerminalPaneTest.cpp
     tests/GuiStyleTest.cpp
+    tests/BillboardLayerTest.cpp
     tests/ProfilerOverlayTest.cpp
 )
 target_link_libraries(studio-tests PRIVATE studio)

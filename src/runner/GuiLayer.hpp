@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Matrix4.hpp"
+#include "SnapshotPump.hpp"
 #include "types.hpp"
 
 #include "jadefx/jadefx.hpp"
@@ -7,6 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -30,6 +33,15 @@ struct GuiInput {
     std::function<void(const jadefx::MouseEvent&)> moved;
 };
 
+// What placeBillboards places the BillboardGuis by: the camera the renderer
+// draws this frame with.
+struct BillboardView {
+    engine_core::Matrix4 view = engine_core::matrix4_identity();
+    float fovYDegrees = 60.f;
+    // The 3D pane in window points: what Renderer::draw is given.
+    double paneX = 0, paneY = 0, paneWidth = 0, paneHeight = 0;
+};
+
 // The Gui service's ScreenGuis, as JadeFX nodes over a Scene View. Each
 // ScreenGui under the service, directly or through Folders, fills the layer;
 // each GuiBase inside one, through a chain of GuiBases, is a node of its
@@ -49,6 +61,16 @@ struct GuiInput {
 // Text back. Mouse events on a node fire its instance's events on the
 // simulation thread, and the layer hands the mouse to its Scene View as
 // GuiInput says. A ScreenGui's own area does not take the mouse.
+//
+// Every BillboardGui in Workspace or Core that is not inside another GUI is a
+// node too, element type billboardgui, built and updated as a ScreenGui is.
+// placeBillboards puts each where the frame's snapshot says, by the camera
+// the renderer draws that frame with: centred on its anchor's point on screen
+// and laid out with the points one world unit covers there as its available
+// width and height, so a percentage on the billboard is world units. Their
+// paint order is depth tested far to near, then AlwaysOnTop far to near, then
+// the ScreenGuis. A depth-tested billboard takes no mouse while the scene
+// under the cursor (setCursorDepth) is nearer than it.
 class GuiLayer : public jadefx::Pane {
 public:
     GuiLayer(engine_core::Engine& engine, GuiInput input);
@@ -68,15 +90,52 @@ public:
     // The node for an instance, or null when it is not drawn. For tests.
     jadefx::Node* nodeFor(engine_core::InstanceId id) const;
 
+    // Places each drawn BillboardGui by its row in the frame's snapshot, as
+    // seen by view. A billboard with no row, or behind the camera, is hidden.
+    void placeBillboards(const std::vector<engine_core::VisualBillboard>& rows, const BillboardView& view);
+    // The cursor's scene depth from the last paint, or none. A depth-tested
+    // billboard farther than it takes no mouse.
+    void setCursorDepth(std::optional<float> depth);
+    // Children in paint order, for tests.
+    std::vector<jadefx::Node*> paintOrder() const { return order_; }
+    // For the occluded draw: the depth a billboard node draws at, and whether
+    // it is depth tested.
+    struct PlacedBillboard {
+        float depth;
+        bool alwaysOnTop;
+    };
+    // Null for a node that is not a placed billboard.
+    const PlacedBillboard* placedFor(const jadefx::Node* node) const;
+
 protected:
-    // Every ScreenGui fills the layer.
+    // Every ScreenGui fills the layer, and each placed billboard is centred on
+    // its anchor's point.
     void layoutChildren() override;
 
 private:
     struct Entry;
+    // A drawn BillboardGui's node and where this frame puts it.
+    struct Placement {
+        engine_core::InstanceId id = 0;
+        std::shared_ptr<jadefx::Node> node;
+        // False until placeBillboards finds it in front of the camera.
+        bool placed = false;
+        bool alwaysOnTop = false;
+        // Its anchor's point on screen, in window points.
+        double x = 0;
+        double y = 0;
+        double pixelsPerUnit = 0;
+        double distance = 0;
+        PlacedBillboard drawn{};
+    };
 
     // The ScreenGuis under id, a service or a Folder, in tree order.
     void collectScreens(engine_core::InstanceId id, std::vector<std::shared_ptr<jadefx::Node>>& out);
+    // The drawn BillboardGuis' nodes, made or brought up to date, in id order.
+    void collectBillboards(std::vector<engine_core::InstanceId>& ids, std::vector<std::shared_ptr<jadefx::Node>>& nodes);
+    // Sets the children to the billboards in paint order, then the ScreenGuis,
+    // when that order changed.
+    void restack();
     // The node for a GuiBase, made or brought up to date, with its children.
     std::shared_ptr<jadefx::Node> build(engine_core::InstanceId id, const engine_core::GuiValues& gui);
     std::shared_ptr<jadefx::Node> makeNode(engine_core::InstanceId id, const std::string& className);
@@ -91,7 +150,11 @@ private:
     std::shared_ptr<GuiInput> input_;
     std::unordered_map<engine_core::InstanceId, std::unique_ptr<Entry>> entries_;
     std::uint64_t pass_ = 0;
-    std::vector<jadefx::Node*> shown_;
+    std::vector<Placement> placements_;
+    std::vector<std::shared_ptr<jadefx::Node>> screens_;
+    // The children as restack last set them.
+    std::vector<jadefx::Node*> order_;
+    std::optional<float> cursorDepth_;
     // The service's CSS at the last sync, so it is parsed again only when it changes.
     std::string css_;
     // The root's GUID at the last sync. Another place starts the nodes over.

@@ -91,6 +91,8 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
         }
     };
     input.dragged = [this](const jadefx::MouseEvent& event) {
+        cursorX_ = event.x;
+        cursorY_ = event.y;
         if (game_ != nullptr) {
             game_->input().post_mouse_move(localX(event.x), localY(event.y), true);
         }
@@ -274,12 +276,14 @@ void GameView::requestCapture(std::function<void(ViewPixels)> done) {
 
 void GameView::collectMeshes() {
     meshDraws_.clear();
-    const engine_core::VisualSnapshot& snapshot = feed_->latest();
+    if (!frameSnapshot_) {
+        frameSnapshot_ = testSnapshot_ ? testSnapshot_ : feed_->hold();
+    }
+    const engine_core::VisualSnapshot& snapshot = *frameSnapshot_;
     // The folder the snapshot's paths are under, not the game's: a project
     // switch changes the game's before the snapshot catches up.
     meshes_.setRoot(snapshot.resources_root);
     textures_.setRoot(snapshot.resources_root);
-    followCamera(snapshot);
     collectOutlines(snapshot);
     collectHandles(snapshot);
     // Each Prefab's meshes once, however many GameObjects draw it.
@@ -440,10 +444,23 @@ bool GameView::frameTimeCurrent() const {
 void GameView::layoutChildren() {
     // Layout runs every frame, before the paint, so the list and the link are
     // current when the list lays out and when the paint follows the Camera.
+    // One snapshot for this frame's layout and paint, so billboards sit where
+    // the 3D draw puts what they float over, however fast the camera turns.
+    frameSnapshot_ = testSnapshot_ ? testSnapshot_ : feed_->hold();
     refreshWorkspace();
+    // After the link resolves, so a Camera linked this frame is seen from now.
+    followCamera(*frameSnapshot_);
     refreshCameraList();
     refreshOverlays();
     guiLayer_->sync();
+    BillboardView billboards;
+    billboards.view = renderer_.view();
+    billboards.fovYDegrees = renderer_.fovYDegrees();
+    billboards.paneX = getAbsoluteX();
+    billboards.paneY = getAbsoluteY();
+    billboards.paneWidth = getWidth();
+    billboards.paneHeight = getHeight();
+    guiLayer_->placeBillboards(frameSnapshot_->billboards, billboards);
     StackPane::layoutChildren();
     // The GUIs cover the whole view, whatever they would rather be.
     guiScene_->performLayout(contentLeft(), contentTop(), contentWidth(), contentHeight());
@@ -679,6 +696,10 @@ void GameView::collectHandles(const engine_core::VisualSnapshot& snapshot) {
     renderer_.setHandles(handleVertices_.data(), static_cast<int>(handleVertices_.size()));
 }
 
+void GameView::setSnapshotForTest(std::shared_ptr<const engine_core::VisualSnapshot> snapshot) {
+    testSnapshot_ = std::move(snapshot);
+}
+
 void GameView::followCamera(const engine_core::VisualSnapshot& snapshot) {
     if (cameraId_ == 0) {
         return;
@@ -825,6 +846,8 @@ void GameView::handleMouseReleased(const jadefx::MouseEvent& event) {
 }
 
 void GameView::handleMouseDragged(const jadefx::MouseEvent& event) {
+    cursorX_ = event.x;
+    cursorY_ = event.y;
     if (game_ != nullptr) {
         game_->input().post_mouse_move(localX(event.x), localY(event.y));
     }
@@ -832,6 +855,8 @@ void GameView::handleMouseDragged(const jadefx::MouseEvent& event) {
 }
 
 void GameView::handleMouseMoved(const jadefx::MouseEvent& event) {
+    cursorX_ = event.x;
+    cursorY_ = event.y;
     if (game_ != nullptr) {
         game_->input().post_mouse_move(localX(event.x), localY(event.y));
     }

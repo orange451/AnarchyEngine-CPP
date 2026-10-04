@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -87,6 +88,9 @@ public:
     jadefx::ComboBox& cameraList() { return *cameraBox_; }
     // The GUIs drawn over the view.
     GuiLayer& guiLayer() { return *guiLayer_; }
+    // Draws and places billboards from this snapshot instead of the feed's,
+    // until set to null. For tests.
+    void setSnapshotForTest(std::shared_ptr<const engine_core::VisualSnapshot> snapshot);
     // The eye left of the camera list. Selected, as it starts, draws the GUIs.
     jadefx::ToggleButton& guiToggle() { return *guiToggle_; }
     // The profiler over this view. It shows while ProfilerUi is shown and this
@@ -156,7 +160,7 @@ private:
     void refreshCameraList();
     // Points the renderer at the linked Camera's snapshot row, when it has one.
     void followCamera(const engine_core::VisualSnapshot& snapshot);
-    // Fills meshDraws_ and lightDraws_ from the feed's newest snapshot, and
+    // Fills meshDraws_ and lightDraws_ from the frame's snapshot, and
     // gives the renderer its Lighting. GL context current.
     void collectMeshes();
     bool ensureGraphics();
@@ -169,6 +173,12 @@ private:
     Runner* runner_ = nullptr;
     // The runner's; it outlives the engine that writes it.
     SceneFeed* feed_ = nullptr;
+    // The snapshot this frame lays out and paints from, held from layout to paint.
+    std::shared_ptr<const engine_core::VisualSnapshot> frameSnapshot_;
+    std::shared_ptr<const engine_core::VisualSnapshot> testSnapshot_;
+    // The mouse over this view, in window points, as it last moved. -1 before.
+    double cursorX_ = -1;
+    double cursorY_ = -1;
     MeshCache meshes_;
     TextureCache textures_;
     // Per frame: each snapshot Prefab's loaded meshes, with their textures and

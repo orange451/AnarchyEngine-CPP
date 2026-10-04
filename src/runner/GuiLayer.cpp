@@ -1,5 +1,6 @@
 #include "GuiLayer.hpp"
 
+#include "BillboardMath.hpp"
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
@@ -7,6 +8,7 @@
 #include "Gui.hpp"
 #include "SceneService.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <optional>
 #include <sstream>
@@ -100,6 +102,10 @@ struct GuiLayer::Entry {
     std::string css;
     std::vector<jadefx::Node*> children;
     std::uint64_t pass = 0;
+    // Visible and MouseTransparent as the instance last had them, which a
+    // billboard's placement combines with its own.
+    bool visible = true;
+    bool mouseTransparent = false;
     // Whether Size has given the node a preferred width or height. JadeFX
     // cannot unset one, so going back to 0 makes the node again.
     bool prefWidth = false;
@@ -166,15 +172,27 @@ void GuiLayer::sync() {
         setStylesheet(css);
         css_ = std::move(css);
     }
-    std::vector<jadefx::Node*> shown;
-    shown.reserve(screens.size());
-    for (const auto& screen : screens) {
-        shown.push_back(screen.get());
+    std::vector<engine_core::InstanceId> boardIds;
+    std::vector<std::shared_ptr<jadefx::Node>> boardNodes;
+    collectBillboards(boardIds, boardNodes);
+    // Each billboard keeps last frame's placement until placeBillboards runs.
+    std::vector<Placement> placements;
+    placements.reserve(boardNodes.size());
+    for (std::size_t i = 0; i < boardNodes.size(); ++i) {
+        Placement next;
+        for (const Placement& was : placements_) {
+            if (was.id == boardIds[i] && was.node == boardNodes[i]) {
+                next = was;
+                break;
+            }
+        }
+        next.id = boardIds[i];
+        next.node = boardNodes[i];
+        placements.push_back(std::move(next));
     }
-    if (shown != shown_) {
-        getChildren().setAll(std::move(screens));
-        shown_ = std::move(shown);
-    }
+    placements_ = std::move(placements);
+    screens_ = std::move(screens);
+    restack();
     // What is no longer drawn lets go of its children and goes.
     for (auto it = entries_.begin(); it != entries_.end();) {
         if (it->second->pass == pass_) {
@@ -199,12 +217,108 @@ void GuiLayer::collectScreens(engine_core::InstanceId id, std::vector<std::share
     }
 }
 
+void GuiLayer::collectBillboards(std::vector<engine_core::InstanceId>& ids,
+                                 std::vector<std::shared_ptr<jadefx::Node>>& nodes) {
+    std::vector<engine_core::InstanceId> found;
+    game_.billboards(found);
+    std::sort(found.begin(), found.end());
+    for (engine_core::InstanceId id : found) {
+        const auto* board = dynamic_cast<const engine_core::BillboardGui*>(game_.instance(id));
+        if (board != nullptr && board->drawn()) {
+            ids.push_back(id);
+            nodes.push_back(build(id, *board));
+        }
+    }
+}
+
+void GuiLayer::placeBillboards(const std::vector<engine_core::VisualBillboard>& rows, const BillboardView& view) {
+    for (Placement& placement : placements_) {
+        placement.placed = false;
+        const engine_core::VisualBillboard* row = nullptr;
+        for (const engine_core::VisualBillboard& candidate : rows) {
+            if (candidate.id == placement.id) {
+                row = &candidate;
+                break;
+            }
+        }
+        if (row != nullptr) {
+            const BillboardPlacement where =
+                PlaceBillboard(view.view, view.fovYDegrees, static_cast<float>(view.paneWidth),
+                               static_cast<float>(view.paneHeight), row->anchor);
+            placement.placed = where.visible;
+            placement.alwaysOnTop = row->always_on_top;
+            placement.x = view.paneX + where.x;
+            placement.y = view.paneY + where.y;
+            placement.pixelsPerUnit = where.pixelsPerUnit;
+            placement.distance = where.distance;
+            placement.drawn = PlacedBillboard{where.depth, row->always_on_top};
+        }
+        const auto found = entries_.find(placement.id);
+        const bool shown = found != entries_.end() && found->second->visible;
+        const bool userTransparent = found != entries_.end() && found->second->mouseTransparent;
+        // The scene under the cursor is nearer: the mouse goes past this billboard.
+        const bool behindScene = !placement.alwaysOnTop && cursorDepth_ && *cursorDepth_ < placement.drawn.depth;
+        placement.node->setVisible(shown && placement.placed);
+        placement.node->setMouseTransparent(!placement.placed || behindScene || userTransparent);
+    }
+    // The layer lays out after this in the same pass, from these placements.
+    restack();
+}
+
+void GuiLayer::setCursorDepth(std::optional<float> depth) { cursorDepth_ = depth; }
+
+void GuiLayer::restack() {
+    std::vector<const Placement*> sorted;
+    sorted.reserve(placements_.size());
+    for (const Placement& placement : placements_) {
+        sorted.push_back(&placement);
+    }
+    // Depth tested first, then on top; each far to near, ties by id so the order holds still.
+    std::sort(sorted.begin(), sorted.end(), [](const Placement* a, const Placement* b) {
+        if (a->alwaysOnTop != b->alwaysOnTop) {
+            return !a->alwaysOnTop;
+        }
+        if (a->distance != b->distance) {
+            return a->distance > b->distance;
+        }
+        return a->id < b->id;
+    });
+    std::vector<std::shared_ptr<jadefx::Node>> children;
+    std::vector<jadefx::Node*> order;
+    children.reserve(sorted.size() + screens_.size());
+    for (const Placement* placement : sorted) {
+        children.push_back(placement->node);
+        order.push_back(placement->node.get());
+    }
+    for (const auto& screen : screens_) {
+        children.push_back(screen);
+        order.push_back(screen.get());
+    }
+    if (order != order_) {
+        getChildren().setAll(std::move(children));
+        order_ = std::move(order);
+    }
+}
+
+const GuiLayer::PlacedBillboard* GuiLayer::placedFor(const jadefx::Node* node) const {
+    for (const Placement& placement : placements_) {
+        if (placement.node.get() == node && placement.placed) {
+            return &placement.drawn;
+        }
+    }
+    return nullptr;
+}
+
 std::shared_ptr<jadefx::Node> GuiLayer::makeNode(engine_core::InstanceId id, const std::string& className) {
     std::shared_ptr<jadefx::Node> node;
     const std::shared_ptr<GuiInput>& input = input_;
     if (className == "ScreenGui") {
         node = std::make_shared<GuiNode<jadefx::StackPane>>("screengui", input, false);
         // Its own area is the scene's: only what is in it takes the mouse.
+        node->setPickOnBounds(false);
+    } else if (className == "BillboardGui") {
+        node = std::make_shared<GuiNode<jadefx::StackPane>>("billboardgui", input, false);
+        // Like a ScreenGui, only what is in it takes the mouse.
         node->setPickOnBounds(false);
     } else if (className == "Pane") {
         node = std::make_shared<GuiNode<jadefx::StackPane>>("pane", input, false);
@@ -278,8 +392,9 @@ std::shared_ptr<jadefx::Node> GuiLayer::build(engine_core::InstanceId id, const 
             css += sheet->source();
             css += '\n';
         } else if (const auto* inner = dynamic_cast<const engine_core::GuiBase*>(object)) {
-            // A ScreenGui inside another is drawn by neither.
-            if (entry.container != nullptr && dynamic_cast<const engine_core::ScreenGui*>(object) == nullptr) {
+            // A ScreenGui or BillboardGui inside another GUI is drawn by neither.
+            if (entry.container != nullptr && dynamic_cast<const engine_core::ScreenGui*>(object) == nullptr &&
+                dynamic_cast<const engine_core::BillboardGui*>(object) == nullptr) {
                 children.push_back(build(child, *inner));
             }
         }
@@ -304,8 +419,10 @@ std::shared_ptr<jadefx::Node> GuiLayer::build(engine_core::InstanceId id, const 
 
 void GuiLayer::apply(Entry& entry, const engine_core::GuiValues& gui) {
     jadefx::Node& node = *entry.node;
-    node.setVisible(gui.flag(GuiProperty::Visible));
-    node.setMouseTransparent(gui.flag(GuiProperty::MouseTransparent));
+    entry.visible = gui.flag(GuiProperty::Visible);
+    entry.mouseTransparent = gui.flag(GuiProperty::MouseTransparent);
+    node.setVisible(entry.visible);
+    node.setMouseTransparent(entry.mouseTransparent);
     node.setAlignment(AlignmentPos(gui.number(GuiProperty::Alignment)));
     if (node.getStyle() != gui.text(GuiProperty::Style)) {
         node.setStyle(gui.text(GuiProperty::Style));
@@ -378,8 +495,24 @@ void GuiLayer::writeText(engine_core::InstanceId id, std::string text) {
 }
 
 void GuiLayer::layoutChildren() {
-    for (jadefx::Node* screen : shown_) {
+    for (const auto& screen : screens_) {
         screen->performLayout(contentLeft(), contentTop(), contentWidth(), contentHeight());
+    }
+    // A billboard's available size is one world unit at its distance, so a
+    // percentage on it is world units; its content and Size work as anywhere.
+    // performLayout takes a place relative to this layer, and placements are
+    // in window points.
+    const double left = getAbsoluteX();
+    const double top = getAbsoluteY();
+    for (const Placement& placement : placements_) {
+        if (!placement.placed) {
+            continue;
+        }
+        const double unit = std::min(placement.pixelsPerUnit, 1.0e6);
+        const double width = placement.node->measuredWidth(unit);
+        const double height = placement.node->measuredHeight(width, unit);
+        placement.node->performLayout(placement.x - left - width / 2.0, placement.y - top - height / 2.0, width,
+                                      height);
     }
 }
 

@@ -66,7 +66,9 @@ The pump adds a row for each BillboardGui `DataModel::in_workspace` or `in_core`
 
 Today `collectMeshes`, in the paint, calls `feed_->latest()`, while GuiLayer syncs and lays out earlier, in `layoutChildren`. A snapshot published between the two would put the billboards a frame behind the scene.
 
-`GameView::layoutChildren` calls `feed_->latest()` once, at its top, and keeps the reference as `frameSnapshot_`; `collectMeshes` and the paint use it instead of calling `latest()` again. `latest()` already promises the buffer is unchanged until the next call. Layout runs every frame before the paint, and a paint reached without a layout reads `latest()` itself, as it does now.
+`GameView::layoutChildren` takes the frame's snapshot once, at its top, and keeps it as `frameSnapshot_` until the end of its paint; `collectMeshes` and the paint use it instead of reading the feed again. A paint reached without a layout takes one itself.
+
+`latest()` is not enough for this: it keeps its buffer only until anyone's next `latest()`, and two Scene Views share one feed, so view B's layout could recycle the buffer view A holds for its paint. `SceneFeed` therefore keeps a pool of buffers and gains `hold()`, which returns a `std::shared_ptr<const VisualSnapshot>`; `perform` writes only a buffer no reader holds. `latest()` stays, implemented on `hold()`.
 
 The camera follows the same rule: `followCamera` runs from `frameSnapshot_` in layout, so the camera the billboards are projected with is the one `renderer_.draw` uses.
 
@@ -109,16 +111,9 @@ void clearOccluder();
 
 The box, text, and image shaders gain one uniform-gated sample and `discard`; with no occluder they draw as today. The texture unit is one UiRenderer uses for nothing else. Batching keeps boxes across draws, so the flush on change keeps a billboard's boxes out of a ScreenGui's draw.
 
-`Renderer` gains:
+`Renderer` gains `sceneDepth()`: its `depthTexture_` and the pane's framebuffer rectangle after a draw that drew meshes or sky, and no texture otherwise (nothing to hide behind, as the grid's white texture means).
 
-```cpp
-// This frame's scene depth: depthTexture_, or whiteTexture_ when nothing was drawn.
-unsigned sceneDepth() const;
-// A world point's value in sceneDepth(), by this frame's projection.
-float depthAt(Vec3 world) const;
-```
-
-Using the renderer's own matrices keeps the billboard's depth in the scene's encoding. GuiLayer paints a depth-tested billboard between `setOccluder(sceneDepth(), pane…, depthAt(anchor))` and `clearOccluder()`. AlwaysOnTop billboards and ScreenGuis paint with none. The paint follows `renderer_.draw` in the same `renderContent`, so the depth is that frame's.
+The billboard's depth comes from `runner::PlaceBillboard` (`BillboardMath`), which projects with the renderer's own view (`Renderer::view()`, `fovYDegrees()`), its `Perspective`, and the near and far planes now shared in `RenderMath` (`kSceneNear`, `kSceneFar`), so it is in the scene's encoding without the renderer computing it. GuiLayer paints a depth-tested billboard between `setOccluder(sceneDepth…, depth)` and `clearOccluder()`. AlwaysOnTop billboards and ScreenGuis paint with none. The paint follows `renderer_.draw` in the same `renderContent`, so the depth is that frame's.
 
 ### 6. Occluded input (`runner/GameView.cpp`, `runner/GuiLayer.cpp`)
 
@@ -132,15 +127,15 @@ A GL error in a JadeFX frame quits the studio. The occluder binds only its own t
 
 ## Testing
 
-**`BillboardGuiTest` (new, headless, ctest).** Defaults; save and load, undo and redo, and restore at Stop for both properties. `anchor()`: Adornee wins, else a PVInstance parent, else the origin; moved out from under its parent it stops following; destroying the Adornee falls back, and undoing the destroy restores the link. A non-PVInstance Adornee is refused. Drawn in Workspace and Core at any depth; not drawn in Storage, in Gui, or nested in a ScreenGui, a GuiBase, or another BillboardGui.
+**`sandbox` (Catch2, `[gui]` and `[billboard]`).** Defaults; save and load, undo and redo, and restore at Stop for both properties. `anchor()`: Adornee wins, else a PVInstance parent, else the origin; moved out from under its parent it stops following; destroying the Adornee falls back, and undoing the destroy restores the link. A non-PVInstance Adornee is refused. Drawn in Workspace and Core at any depth; not drawn in Storage, in Gui, or nested in a ScreenGui, a GuiBase, or another BillboardGui.
 
 **`SceneFeedTest`.** A drawn billboard publishes one row with its anchor and AlwaysOnTop; an undrawn one none. Moving the adornee, the billboard's row and the adornee's instance row agree in every snapshot.
 
 **`GuiStyleTest`.** With a known camera and field of view, a billboard ten units away gets the expected `pixelsPerUnit`: `width: 100%` is one unit, `calc(200% + 32px)` two units and 32 pixels, a child's `50%` half the billboard. It is centred on the anchor's projection and hidden behind the camera. Changing the camera and adornee in one snapshot, one layout and paint place the billboard by that snapshot. Order is depth tested, then AlwaysOnTop, then ScreenGuis. A click on a billboard Button fires Action; with a cursor depth set nearer than the billboard, the same click reaches the Scene View; with AlwaysOnTop it reaches the Button again.
 
-**JadeFX tests.** Setting or clearing the occluder flushes the pending batch. Against a depth texture near on its left half and far on its right, an occluded box draws only on the right; with no occluder, on both.
+**JadeFX tests.** The occluder's state: set, cleared, inactive with no texture or an empty rectangle, and a revision that moves only on change. JadeFX draws without batching today; if the box-batching spec lands, changing the occluder must flush the pending batch. The pixel result is checked in a real window (`billboard-demo`), since JadeFX has no GL pixel tests.
 
-**By hand.** `scene-render-check` gains a cube in front of half of a depth-tested billboard, which hides that half, and an AlwaysOnTop one it never hides. The occluder and depth read also run in `build/assets-demo <out> dark`, a real JadeFX window, where a bare context has missed macOS GL failures before. Last, in the studio: a billboard on a moving part while the camera turns fast.
+**By hand.** A new `billboard-demo` draws a cube in front of half of a depth-tested billboard, which hides that half, and an AlwaysOnTop one it never hides, in a real JadeFX window, and saves a PNG. The occluder and depth read also run in `build/assets-demo <out> dark`, a real JadeFX window, where a bare context has missed macOS GL failures before. Last, in the studio: a billboard on a moving part while the camera turns fast.
 
 ## Out of scope
 

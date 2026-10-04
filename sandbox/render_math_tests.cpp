@@ -3,6 +3,8 @@
 
 #include "runner/RenderMath.hpp"
 
+#include "runner/BillboardMath.hpp"
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -48,4 +50,60 @@ TEST_CASE("RM3 LookAtView puts the eye at the origin and the target down -Z, eve
         REQUIRE(std::isfinite(value));
     }
     REQUIRE(matrix4_point(down, {0.f, 0.f, 0.f}).z == Approx(-5.f));
+}
+
+TEST_CASE("RM10 a billboard ahead of the camera is centred, sized by distance, at the renderer's depth", "[RM][billboard]") {
+    // The default camera: at the origin, looking down -Z.
+    const engine_core::Matrix4 view = engine_core::matrix4_identity();
+    const runner::BillboardPlacement at10 = runner::PlaceBillboard(view, 90.f, 800.f, 600.f, {0.f, 0.f, -10.f});
+    REQUIRE(at10.visible);
+    REQUIRE(at10.x == Approx(400.f));
+    REQUIRE(at10.y == Approx(300.f));
+    // tan(45) is 1: one unit at ten units away is 600 / 20 points.
+    REQUIRE(at10.pixelsPerUnit == Approx(30.f));
+    REQUIRE(at10.distance == Approx(10.f));
+    const engine_core::Matrix4 projection =
+        runner::Perspective(90.f, 800.f / 600.f, runner::kSceneNear, runner::kSceneFar);
+    const float ndc = matrix4_point(projection, {0.f, 0.f, -10.f}).z;
+    REQUIRE(at10.depth == Approx(ndc * 0.5f + 0.5f));
+    const runner::BillboardPlacement at20 = runner::PlaceBillboard(view, 90.f, 800.f, 600.f, {0.f, 0.f, -20.f});
+    REQUIRE(at20.pixelsPerUnit == Approx(15.f));
+    REQUIRE(at20.depth > at10.depth);
+    // Up and to the right on screen is +X and +Y in view space.
+    const runner::BillboardPlacement offset = runner::PlaceBillboard(view, 90.f, 800.f, 600.f, {5.f, 5.f, -10.f});
+    REQUIRE(offset.x == Approx(400.f + 5.f * 30.f));
+    REQUIRE(offset.y == Approx(300.f - 5.f * 30.f));
+}
+
+TEST_CASE("RM11 a billboard at or behind the near plane is hidden", "[RM][billboard]") {
+    const engine_core::Matrix4 view = engine_core::matrix4_identity();
+    REQUIRE_FALSE(runner::PlaceBillboard(view, 90.f, 800.f, 600.f, {0.f, 0.f, 10.f}).visible);
+    REQUIRE_FALSE(runner::PlaceBillboard(view, 90.f, 800.f, 600.f, {0.f, 0.f, 0.f}).visible);
+    REQUIRE_FALSE(runner::PlaceBillboard(view, 90.f, 800.f, 600.f, {0.f, 0.f, -0.05f}).visible);
+    REQUIRE_FALSE(runner::PlaceBillboard(view, 180.f, 800.f, 600.f, {0.f, 0.f, -10.f}).visible);
+    REQUIRE_FALSE(runner::PlaceBillboard(view, 90.f, 0.f, 600.f, {0.f, 0.f, -10.f}).visible);
+    REQUIRE_FALSE(runner::PlaceBillboard(view, 90.f, 800.f, 600.f, {std::nanf(""), 0.f, -10.f}).visible);
+}
+
+TEST_CASE("RM12 a far billboard stays finite and visible", "[RM][billboard]") {
+    const engine_core::Matrix4 view = engine_core::matrix4_identity();
+    const runner::BillboardPlacement far = runner::PlaceBillboard(view, 60.f, 800.f, 600.f, {0.f, 0.f, -5000.f});
+    REQUIRE(far.visible);
+    REQUIRE(std::isfinite(far.pixelsPerUnit));
+    REQUIRE(far.pixelsPerUnit > 0.f);
+    REQUIRE(far.pixelsPerUnit < 1.f);
+    // Past the far plane nothing is drawn to hide it; its depth stays at most 1.
+    REQUIRE(far.depth <= 1.f);
+}
+
+TEST_CASE("RM13 the camera's own turn moves the billboard on screen", "[RM][billboard]") {
+    // Turned 90 degrees left about Y, the camera looks down -X.
+    const engine_core::Matrix4 world = engine_core::matrix4_axis_angle({0.f, 1.f, 0.f}, 3.14159265 / 2.0);
+    const engine_core::Matrix4 view = engine_core::matrix4_inverse(world);
+    const runner::BillboardPlacement ahead = runner::PlaceBillboard(view, 90.f, 800.f, 600.f, {-10.f, 0.f, 0.f});
+    REQUIRE(ahead.visible);
+    REQUIRE(ahead.x == Approx(400.f).margin(0.01));
+    // What was straight ahead of the unturned camera is now off to the side, or hidden.
+    const runner::BillboardPlacement old = runner::PlaceBillboard(view, 90.f, 800.f, 600.f, {0.f, 0.f, -10.f});
+    REQUIRE((!old.visible || std::abs(old.x - 400.f) > 100.f));
 }

@@ -82,9 +82,6 @@ constexpr float kSphereSlack = 1.05f;
 constexpr int kSphereStacks = 12;
 constexpr int kSphereSlices = 16;
 
-constexpr float kNear = 0.1f;
-constexpr float kFar = 1000.f;
-
 void BindTexture(int unit, unsigned texture) {
     glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(unit));
     glBindTexture(GL_TEXTURE_2D, texture);
@@ -657,7 +654,8 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     // A sky whose cubes can never be made is drawn as no sky, rather than never drawing.
     const bool hasSky = lighting_.sky.image != 0 && environment_.available();
     const engine_core::Matrix4 projectionMatrix =
-        Perspective(fovYDegrees_, static_cast<float>(pane.width) / static_cast<float>(pane.height), kNear, kFar);
+        Perspective(fovYDegrees_, static_cast<float>(pane.width) / static_cast<float>(pane.height), kSceneNear,
+                    kSceneFar);
     const float* projection = projectionMatrix.m;
     const engine_core::Matrix4 inverseProjection = engine_core::matrix4_inverse(projectionMatrix);
 
@@ -1023,7 +1021,7 @@ bool Renderer::shadowPass(const MeshDraw* meshes, int count, const float* projec
     std::copy(viewProjection, viewProjection + 16, camera.viewProjection.m);
     camera.fovYDegrees = fovYDegrees_;
     camera.aspect = static_cast<float>(targetWidth_) / static_cast<float>(targetHeight_);
-    camera.nearZ = kNear;
+    camera.nearZ = kSceneNear;
     camera.paneHeight = targetHeight_;
     if (!shadows_.draw(shadowRequests_, meshes, count, camera, shadowSettings_)) {
         return false;

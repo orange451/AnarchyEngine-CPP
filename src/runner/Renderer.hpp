@@ -126,6 +126,9 @@ public:
     // world is taken out. A world with no inverse, or an angle not between 0
     // and 180, is ignored and the camera stays as it was. Needs no GL context.
     void setCamera(const engine_core::Matrix4& world, float fovYDegrees);
+    // The view setCamera last took, world to view space, and its vertical angle.
+    const engine_core::Matrix4& view() const { return view_; }
+    float fovYDegrees() const { return fovYDegrees_; }
     // How the next draws are lit, until it is set again. Needs no GL context.
     void setLighting(const SceneLighting& lighting) { lighting_ = lighting; }
     // Whether draw lays the editor's floor grid over the pane, as Blender

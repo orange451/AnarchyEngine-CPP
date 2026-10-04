@@ -38,6 +38,7 @@ set(STUDIO_CORE_SOURCES
     src/runner/SceneFeed.cpp
     src/runner/ViewCapture.cpp
     src/runner/RenderMath.cpp
+    src/runner/BillboardMath.cpp
     src/runner/GridBands.cpp
     src/runner/ShadowMath.cpp
     src/runner/ShadowAtlas.cpp

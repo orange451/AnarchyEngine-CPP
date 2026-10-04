@@ -763,7 +763,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
 }
 
 void Renderer::gridPass(unsigned depth, const float* inverseProjection) {
-    RENDER_PASS("Grid");
+    RENDER_PASS("Floor grid");
     glDisable(GL_DEPTH_TEST);
     glDisable(RT_GL_CULL_FACE);
     glEnable(GL_BLEND);

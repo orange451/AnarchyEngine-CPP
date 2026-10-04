@@ -344,6 +344,24 @@ void GuiLayer::visitChildren(const std::function<void(jadefx::Node*)>& visitor) 
     }
 }
 
+void GuiLayer::renderChildren(jadefx::UiRenderer& renderer, float opacity) {
+    std::vector<jadefx::Node*> children;
+    visitChildren([&](jadefx::Node* child) { children.push_back(child); });
+    jadefx::Painter painter(renderer);
+    for (jadefx::Node* child : children) {
+        const PlacedBillboard* board = placedFor(child);
+        const bool hide = board != nullptr && !board->alwaysOnTop && sceneDepth_.texture != 0;
+        if (hide) {
+            painter.setOccluder(sceneDepth_.texture, sceneDepth_.x, sceneDepth_.y, sceneDepth_.width,
+                                sceneDepth_.height, board->depth);
+        }
+        child->render(renderer, opacity);
+        if (hide) {
+            painter.clearOccluder();
+        }
+    }
+}
+
 const GuiLayer::PlacedBillboard* GuiLayer::placedFor(const jadefx::Node* node) const {
     for (const Placement& placement : placements_) {
         if (placement.node.get() == node && placement.placed) {

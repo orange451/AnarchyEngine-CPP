@@ -5,11 +5,13 @@
 #include "GpuTimer.hpp"
 #include "GridBands.hpp"
 #include "Matrix4.hpp"
+#include "SceneDepth.hpp"
 #include "ShadowRenderer.hpp"
 #include "ViewCapture.hpp"
 
 #include <cstdint>
 #include <initializer_list>
+#include <optional>
 #include <vector>
 
 namespace anarchy::amesh {
@@ -179,6 +181,20 @@ public:
     // What draw clears the pane to, 0 to 1 per channel. The Scene View passes
     // its theme color, so the clear matches the pane around it.
     void setClearColor(float r, float g, float b);
+    // The depth this frame's surfaces left, and the framebuffer rectangle it
+    // covers, for UI drawn inside the pane to hide behind (as the grid does).
+    // texture is 0 when the last draw drew no meshes or sky, or failed.
+    SceneDepth sceneDepth() const { return sceneDepth_; }
+    // Where the next draw reads one depth value back, in window points as
+    // draw's x and y take them; negative x or y for none. Read without
+    // stalling: probedDepth has it one draw later.
+    void setDepthProbe(double x, double y) {
+        probeX_ = x;
+        probeY_ = y;
+    }
+    // The scene depth under the probe point as of the draw before last, 0 near
+    // to 1 far; none when the point was outside the pane or nothing was drawn.
+    std::optional<float> probedDepth() const { return probedDepth_; }
 
 private:
     // A pass's program and the uniforms Renderer sets on it. -1 for one the
@@ -367,6 +383,17 @@ private:
     unsigned mergeTexture_ = 0;
     // Whether the driver refused a size, so the refusal is reported once.
     bool targetsRefused_ = false;
+
+    void readProbe(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth, double sceneHeight,
+                   const int viewport[4]);
+    SceneDepth sceneDepth_;
+    double probeX_ = -1;
+    double probeY_ = -1;
+    std::optional<float> probedDepth_;
+    // Two one-float buffers in turn: one is read back while the other fills.
+    unsigned probeBuffers_[2] = {0, 0};
+    bool probeFilled_[2] = {false, false};
+    int probeNext_ = 0;
 
     bool ready_ = false;
 

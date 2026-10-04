@@ -739,9 +739,13 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
             PROFILE_SCOPE("Snapshot read", profiler::Group::Engine);
             collectMeshes();
         }
+        // The scene depth under the mouse, so a billboard the scene hides takes no clicks.
+        renderer_.setDepthProbe(cursorX_, cursorY_);
         const bool drawn = renderer_.draw(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(),
                                           scene->getHeight(), meshDraws_.data(), static_cast<int>(meshDraws_.size()),
                                           lightDraws_.data(), static_cast<int>(lightDraws_.size()));
+        guiLayer_->setSceneDepth(renderer_.sceneDepth());
+        guiLayer_->setCursorDepth(renderer_.probedDepth());
         // Read before the children paint, so the overlays are not in the picture.
         // A frame the driver was not ready for shows only the clear, so a capture waits for the next.
         if (drawn && !captures_.empty()) {
@@ -754,6 +758,9 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
                 done(pixels);
             }
         }
+    } else {
+        // No scene drawn this paint: nothing for a billboard to hide behind.
+        guiLayer_->setSceneDepth(SceneDepth{});
     }
     // What the threads recorded since the last paint, for the overlay drawn next.
     if (profiler::enabled()) {
@@ -772,6 +779,8 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
         // on the frame note above, so publishing analysis here is not RenderThread.
         engine_->analysis().pump();
     }
+    // The frame is painted: let the snapshot go, so the feed can reuse its buffer.
+    frameSnapshot_.reset();
 }
 
 void GameView::sceneChanged(jadefx::Scene* previous) {
@@ -861,6 +870,14 @@ void GameView::handleMouseMoved(const jadefx::MouseEvent& event) {
         game_->input().post_mouse_move(localX(event.x), localY(event.y));
     }
     IdePane::handleMouseMoved(event);
+}
+
+void GameView::handleHoverChanged() {
+    if (!isHovered()) {
+        cursorX_ = -1;
+        cursorY_ = -1;
+    }
+    IdePane::handleHoverChanged();
 }
 
 void GameView::handleScroll(jadefx::ScrollEvent& event) {

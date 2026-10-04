@@ -151,6 +151,10 @@ constexpr GLenum RT_GL_DRAW_FRAMEBUFFER = 0x8CA9;
 constexpr GLenum RT_GL_DEPTH = 0x1801;
 constexpr GLenum RT_GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE = 0x8CD0;
 constexpr GLenum RT_GL_STREAM_DRAW = 0x88E0;
+constexpr GLenum RT_GL_READ_FRAMEBUFFER = 0x8CA8;
+constexpr GLenum RT_GL_PIXEL_PACK_BUFFER = 0x88EB;
+constexpr GLenum RT_GL_STREAM_READ = 0x88E1;
+constexpr GLbitfield RT_GL_MAP_READ_BIT = 0x0001;
 constexpr GLenum GL_TIMESTAMP = 0x8E28;
 constexpr GLenum GL_QUERY_RESULT = 0x8866;
 constexpr GLenum GL_QUERY_RESULT_AVAILABLE = 0x8867;
@@ -284,6 +288,8 @@ extern void (*rt_glUniform3f)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2
 extern void (*rt_glUniformMatrix4fv)(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
 extern void (*rt_glUniformMatrix3fv)(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
 extern void (*rt_glReadPixels)(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
+extern void* (*rt_glMapBufferRange)(GLenum target, GLsizeiptr offset, GLsizeiptr length, GLbitfield access);
+extern GLboolean (*rt_glUnmapBuffer)(GLenum target);
 extern void (*rt_glGenTextures)(GLsizei n, GLuint* textures);
 extern void (*rt_glDeleteTextures)(GLsizei n, const GLuint* textures);
 extern void (*rt_glBindTexture)(GLenum target, GLuint texture);
@@ -381,6 +387,8 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glUniformMatrix4fv ::runner::rt_glUniformMatrix4fv
 #define glUniformMatrix3fv ::runner::rt_glUniformMatrix3fv
 #define glReadPixels ::runner::rt_glReadPixels
+#define glMapBufferRange ::runner::rt_glMapBufferRange
+#define glUnmapBuffer ::runner::rt_glUnmapBuffer
 #define glGenTextures ::runner::rt_glGenTextures
 #define glDeleteTextures ::runner::rt_glDeleteTextures
 #define glBindTexture ::runner::rt_glBindTexture

@@ -46,6 +46,8 @@ void (*rt_glUniform3f)(GLint, GLfloat, GLfloat, GLfloat) = nullptr;
 void (*rt_glUniformMatrix4fv)(GLint, GLsizei, GLboolean, const GLfloat*) = nullptr;
 void (*rt_glUniformMatrix3fv)(GLint, GLsizei, GLboolean, const GLfloat*) = nullptr;
 void (*rt_glReadPixels)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*) = nullptr;
+void* (*rt_glMapBufferRange)(GLenum, GLsizeiptr, GLsizeiptr, GLbitfield) = nullptr;
+GLboolean (*rt_glUnmapBuffer)(GLenum) = nullptr;
 void (*rt_glGenTextures)(GLsizei, GLuint*) = nullptr;
 void (*rt_glDeleteTextures)(GLsizei, const GLuint*) = nullptr;
 void (*rt_glBindTexture)(GLenum, GLuint) = nullptr;
@@ -149,6 +151,8 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(UniformMatrix4fv);
     LOAD(UniformMatrix3fv);
     LOAD(ReadPixels);
+    LOAD(MapBufferRange);
+    LOAD(UnmapBuffer);
     LOAD(GenTextures);
     LOAD(DeleteTextures);
     LOAD(BindTexture);

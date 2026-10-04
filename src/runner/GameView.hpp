@@ -127,6 +127,8 @@ protected:
     void handleKey(jadefx::KeyEvent& event) override;
     void handleFocusLost() override;
     void handleFocusGained() override;
+    // The pointer left the view: no scene depth is read under it any more.
+    void handleHoverChanged() override;
 
 private:
     void notePaint();

@@ -589,6 +589,9 @@ struct SavedState {
 
 bool Renderer::draw(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
                     const MeshDraw* meshes, int meshCount, const LightDraw* lights, int lightCount) {
+    // Nothing to hide behind, and no depth under the probe, until this draw leaves some.
+    sceneDepth_ = SceneDepth{};
+    probedDepth_.reset();
     if (!ready_ || width <= 0.0 || height <= 0.0 || sceneWidth <= 0.0 || sceneHeight <= 0.0) {
         return false;
     }
@@ -770,6 +773,8 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         drawn = CanDraw(tonemap_.id);
         if (drawn) {
             DrawFullscreen(emptyVao_);
+            sceneDepth_ = SceneDepth{depthTexture_, pane.x, pane.y, pane.width, pane.height};
+            readProbe(pane.x, pane.y, pane.width, pane.height, sceneWidth, sceneHeight, viewport);
         }
     }
     // Over a pane that got only the clear, the grid would show through the
@@ -790,6 +795,44 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     saved.restore(viewport);
     gpu_.frame();
     return drawn;
+}
+
+void Renderer::readProbe(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth,
+                         double sceneHeight, const int viewport[4]) {
+    if (probeBuffers_[0] == 0) {
+        glGenBuffers(2, probeBuffers_);
+        for (unsigned buffer : probeBuffers_) {
+            glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, buffer);
+            glBufferData(RT_GL_PIXEL_PACK_BUFFER, sizeof(float), nullptr, RT_GL_STREAM_READ);
+        }
+        glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, 0);
+    }
+    // Last draw's read, which the GPU has long finished.
+    const int previous = 1 - probeNext_;
+    probedDepth_.reset();
+    if (probeFilled_[previous]) {
+        glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, probeBuffers_[previous]);
+        if (const void* mapped = glMapBufferRange(RT_GL_PIXEL_PACK_BUFFER, 0, sizeof(float), RT_GL_MAP_READ_BIT)) {
+            probedDepth_ = *static_cast<const float*>(mapped);
+            glUnmapBuffer(RT_GL_PIXEL_PACK_BUFFER);
+        }
+        probeFilled_[previous] = false;
+    }
+    probeFilled_[probeNext_] = false;
+    if (probeX_ >= 0.0 && probeY_ >= 0.0) {
+        const double scaleX = static_cast<double>(viewport[2]) / sceneWidth;
+        const double scaleY = static_cast<double>(viewport[3]) / sceneHeight;
+        const int px = viewport[0] + static_cast<int>(std::floor(probeX_ * scaleX)) - paneX;
+        const int py = viewport[1] + viewport[3] - 1 - static_cast<int>(std::floor(probeY_ * scaleY)) - paneY;
+        if (px >= 0 && py >= 0 && px < paneWidth && py < paneHeight) {
+            glBindFramebuffer(RT_GL_READ_FRAMEBUFFER, gbufferFbo_);
+            glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, probeBuffers_[probeNext_]);
+            glReadPixels(px, py, 1, 1, RT_GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+            probeFilled_[probeNext_] = true;
+        }
+    }
+    glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, 0);
+    probeNext_ = previous;
 }
 
 bool Renderer::paneHasDepth(int framebuffer) {
@@ -1407,6 +1450,15 @@ void Renderer::shutdown() {
         }
     }
     sphereIndexCount_ = 0;
+    if (probeBuffers_[0] != 0) {
+        glDeleteBuffers(2, probeBuffers_);
+    }
+    probeBuffers_[0] = 0;
+    probeBuffers_[1] = 0;
+    probeFilled_[0] = false;
+    probeFilled_[1] = false;
+    probedDepth_.reset();
+    sceneDepth_ = SceneDepth{};
     destroyTargets();
     targetsRefused_ = false;
 }

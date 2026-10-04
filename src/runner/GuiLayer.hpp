@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Matrix4.hpp"
+#include "SceneDepth.hpp"
 #include "SnapshotPump.hpp"
 #include "types.hpp"
 
@@ -106,6 +107,9 @@ public:
     };
     // Null for a node that is not a placed billboard.
     const PlacedBillboard* placedFor(const jadefx::Node* node) const;
+    // The depth the Scene View's last draw left, which a depth-tested
+    // billboard is drawn behind; texture 0 when nothing hides it.
+    void setSceneDepth(const SceneDepth& depth) { sceneDepth_ = depth; }
 
 protected:
     // Every ScreenGui fills the layer, and each placed billboard is centred on
@@ -115,6 +119,9 @@ protected:
     // reorder never takes a node out of the layer and focus and presses
     // survive it. A child restack has not ordered yet comes after, in list order.
     void visitChildren(const std::function<void(jadefx::Node*)>& visitor) override;
+    // The children in paint order, each depth-tested billboard hidden where
+    // the scene's depth is nearer than it.
+    void renderChildren(jadefx::UiRenderer& renderer, float opacity) override;
 
 private:
     struct Entry;
@@ -163,6 +170,7 @@ private:
     // The children list's nodes, sorted by address, as restack last set it.
     std::vector<jadefx::Node*> members_;
     std::optional<float> cursorDepth_;
+    SceneDepth sceneDepth_;
     // The service's CSS at the last sync, so it is parsed again only when it changes.
     std::string css_;
     // The root's GUID at the last sync. Another place starts the nodes over.

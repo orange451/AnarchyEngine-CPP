@@ -66,6 +66,7 @@ set(STUDIO_CORE_SOURCES
     src/ide/TextSearch.cpp
     src/ide/TextUndoStack.cpp
     src/ide/TextWrap.cpp
+    src/profiler/ProfileJson.cpp
 )
 set(STUDIO_SOURCES
     src/runner/gl.cpp
@@ -668,8 +669,9 @@ target_link_libraries(mcp-tests PRIVATE studio_core)
 # The profiler's recorder without the engine, and its capture files and report.
 add_executable(profiler-tests
     tests/ProfilerTest.cpp
+    tests/ProfileJsonTest.cpp
 )
-target_link_libraries(profiler-tests PRIVATE profiler)
+target_link_libraries(profiler-tests PRIVATE studio_core)
 
 # Turning the MCP server on and off, registering it with Claude Code, and
 # running a program for its output.

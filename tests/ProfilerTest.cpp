@@ -14,6 +14,8 @@
 #include <thread>
 #include <vector>
 
+int RunProfileJsonTests();
+
 namespace {
 
 int gFailures = 0;
@@ -383,6 +385,7 @@ int main() {
     testNames();
     testGpuScope();
     testMacro();
+    gFailures += RunProfileJsonTests();
     profiler::set_clock_for_testing(nullptr);
     if (gFailures != 0) {
         std::fprintf(stderr, "%d failed\n", gFailures);

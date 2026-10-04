@@ -1,3 +1,4 @@
+#include "profiler/Profiler.hpp"
 #include "Engine.hpp"
 
 #include "DataModelLock.hpp"
@@ -246,6 +247,8 @@ void Engine::stop() {
 
 void Engine::simulation_loop() {
     set_thread_role(ThreadRole::Simulation);
+    profiler::register_thread("Sim");
+    static const profiler::ScopeId kLockWait = profiler::intern("Lock wait", profiler::Group::Engine);
     {
         std::unique_lock<std::mutex> guard(start_mu_);
         simulation_id_ = std::this_thread::get_id();
@@ -279,6 +282,7 @@ void Engine::simulation_loop() {
                     pause_lock.unlock();
                     guarded_step(
                         [&] {
+                            PROFILE_SCOPE("Tool step", profiler::Group::Engine);
                             DataModelLock lock(game_, DataModelLock::Write);
                             scripts_->step_tools(dt);
                         },
@@ -319,39 +323,74 @@ void Engine::simulation_loop() {
         int substeps = 0;
         guarded_step(
             [&] {
+                PROFILE_SCOPE("Simulation step", profiler::Group::Engine);
+                const bool timing = profiler::enabled();
+                if (timing) {
+                    profiler::begin(kLockWait);
+                }
                 DataModelLock lock(game_, DataModelLock::Write);
-                game_.drain_commands();
-                drain_edits();
-                scheduler_.run_phase(Phase::PreAnimation, render_dt_);
-                // Deferred handlers run on this thread, still under the step lock,
-                // after the phase that queued them and before Prepare can copy.
-                game_.events().drain();
+                if (timing) {
+                    profiler::end();
+                }
+                {
+                    PROFILE_SCOPE("Commands", profiler::Group::Engine);
+                    game_.drain_commands();
+                    drain_edits();
+                }
+                {
+                    PROFILE_SCOPE("PreAnimation", profiler::Group::Engine);
+                    scheduler_.run_phase(Phase::PreAnimation, render_dt_);
+                }
+                {
+                    // Deferred handlers run on this thread, still under the step lock,
+                    // after the phase that queued them and before Prepare can copy.
+                    PROFILE_SCOPE("Events", profiler::Group::Engine);
+                    game_.events().drain();
+                }
                 accumulator += wall;
                 constexpr int kMaxSubsteps = 32;
-                while (accumulator >= physics_dt_ && substeps < kMaxSubsteps) {
-                    scheduler_.run_phase(Phase::PreSimulation, physics_dt_);
-                    game_.events().drain();
-                    scheduler_.run_phase(Phase::PhysicsSubstep, physics_dt_);
-                    game_.events().drain();
-                    step_physics(physics_dt_);
-                    scheduler_.run_phase(Phase::PostSimulation, physics_dt_);
-                    game_.events().drain();
-                    accumulator -= physics_dt_;
-                    ++substeps;
+                if (accumulator >= physics_dt_) {
+                    PROFILE_SCOPE("Physics", profiler::Group::Physics);
+                    while (accumulator >= physics_dt_ && substeps < kMaxSubsteps) {
+                        PROFILE_SCOPE("Substep", profiler::Group::Physics);
+                        scheduler_.run_phase(Phase::PreSimulation, physics_dt_);
+                        game_.events().drain();
+                        scheduler_.run_phase(Phase::PhysicsSubstep, physics_dt_);
+                        game_.events().drain();
+                        {
+                            PROFILE_SCOPE("Box3D", profiler::Group::Physics);
+                            step_physics(physics_dt_);
+                        }
+                        scheduler_.run_phase(Phase::PostSimulation, physics_dt_);
+                        game_.events().drain();
+                        accumulator -= physics_dt_;
+                        ++substeps;
+                    }
                 }
-                scheduler_.run_phase(Phase::Heartbeat, render_dt_);
-                // Stepping instances under the root step in this phase. Bound
-                // Heartbeat jobs stay for callers that are not instances.
-                game_.step_instances(render_dt_);
-                game_.events().drain();
+                {
+                    PROFILE_SCOPE("Heartbeat", profiler::Group::Engine);
+                    scheduler_.run_phase(Phase::Heartbeat, render_dt_);
+                    // Stepping instances under the root step in this phase. Bound
+                    // Heartbeat jobs stay for callers that are not instances.
+                    game_.step_instances(render_dt_);
+                    game_.events().drain();
+                }
                 // Same dt Heartbeat jobs just received. Scripts resume after that drain.
                 if (scripts_) {
-                    scripts_->heartbeat(render_dt_);
+                    {
+                        PROFILE_SCOPE("Scripts", profiler::Group::Engine);
+                        scripts_->heartbeat(render_dt_);
+                    }
                     // The command line and plugins keep time with the play step.
+                    PROFILE_SCOPE("Tools", profiler::Group::Engine);
                     scripts_->step_tools(render_dt_);
                 }
-                game_.events().drain();
+                {
+                    PROFILE_SCOPE("Events", profiler::Group::Engine);
+                    game_.events().drain();
+                }
                 // After the scripts, so a Play, Stop, or Destroy this frame is heard this frame.
+                PROFILE_SCOPE("Audio", profiler::Group::Engine);
                 audio_.step(game_, render_dt_);
             },
             [&] { contract_count_.fetch_add(1); });
@@ -369,6 +408,9 @@ void Engine::simulation_loop() {
 
 void Engine::render_loop() {
     set_thread_role(ThreadRole::Render);
+    profiler::register_thread("Render");
+    static const profiler::ScopeId kPrepare = profiler::intern("Prepare", profiler::Group::Render);
+    static const profiler::ScopeId kLockWait = profiler::intern("Lock wait", profiler::Group::Engine);
     {
         std::unique_lock<std::mutex> guard(start_mu_);
         render_id_ = std::this_thread::get_id();
@@ -384,6 +426,8 @@ void Engine::render_loop() {
     std::chrono::steady_clock::time_point next_frame;
     RenderStepTime step_time;
     while (running_.load()) {
+        // A frame is one pass of this loop, from one Prepare to the next.
+        profiler::frame_boundary();
         // Sample before the work so a paint that arrives during the step is not missed.
         std::uint64_t client_seen = 0;
         const bool wait_for_client = render_client_sync_.load() && !(render_pace_hz_ > 0.0);
@@ -407,8 +451,16 @@ void Engine::render_loop() {
         bool prepared = false;
         bool saw_contract = false;
         std::uint64_t hold_ns = 0;
+        const bool timing = profiler::enabled();
+        if (timing) {
+            profiler::begin(kPrepare);
+            profiler::begin(kLockWait);
+        }
         {
             DataModelLock lock(game_, DataModelLock::Write, std::chrono::milliseconds(2));
+            if (timing) {
+                profiler::end();
+            }
             if (lock.owns()) {
                 const auto hold_start = std::chrono::steady_clock::now();
                 // Includes the frames since the last prepared one, which ran no RenderStepped.
@@ -417,13 +469,24 @@ void Engine::render_loop() {
                 // Roblox order inside the pre-draw window: RenderStepped, then PreRender.
                 // A failure in one does not skip the other or the copy.
                 const auto contract = [&saw_contract] { saw_contract = true; };
-                guarded_step([&] { scheduler_.run_phase(Phase::RenderStepped, step_dt); }, contract);
-                guarded_step([&] { scheduler_.run_phase(Phase::PreRender, step_dt); }, contract);
+                guarded_step(
+                    [&] {
+                        PROFILE_SCOPE("RenderStepped", profiler::Group::Engine);
+                        scheduler_.run_phase(Phase::RenderStepped, step_dt);
+                    },
+                    contract);
+                guarded_step(
+                    [&] {
+                        PROFILE_SCOPE("PreRender", profiler::Group::Engine);
+                        scheduler_.run_phase(Phase::PreRender, step_dt);
+                    },
+                    contract);
                 pump_.end_prerender_window(game_);
                 // Copy even after a rejected PreRender write. Authorize fails before
                 // mutation, so the queue still describes real sim state.
                 guarded_step(
                     [&] {
+                        PROFILE_SCOPE("Snapshot copy", profiler::Group::Engine);
                         pump_.take_changes(game_);
                         prepared = true;
                     },
@@ -442,22 +505,35 @@ void Engine::render_loop() {
         }
         if (prepared) {
             // The buffer copy needs no DataModel state, so it is out of the lock.
+            PROFILE_SCOPE("Publish", profiler::Group::Engine);
             pump_.finish_copy();
             pump_.publish();
+        }
+        if (timing) {
+            profiler::end();
         }
         // Perform is outside the pre-draw window. A DataModel write there is path D.
         const auto late_contract = [this] { contract_count_.fetch_add(1); };
         if (renderer_ != nullptr) {
             guarded_step(
                 [&] {
-                    renderer_->perform(pump_.front());
+                    {
+                        PROFILE_SCOPE("Perform", profiler::Group::Render);
+                        renderer_->perform(pump_.front());
+                    }
+                    PROFILE_SCOPE("Present", profiler::Group::Render);
                     renderer_->present();
                 },
                 late_contract);
         }
         // After Present the snapshot for this frame is already published.
         // PostRender does not hold the Prepare lock and is not part of the 2 ms budget.
-        guarded_step([&] { scheduler_.run_phase(Phase::PostRender, frame_dt); }, late_contract);
+        guarded_step(
+            [&] {
+                PROFILE_SCOPE("PostRender", profiler::Group::Engine);
+                scheduler_.run_phase(Phase::PostRender, frame_dt);
+            },
+            late_contract);
         present_count_.fetch_add(1);
 
         if (render_pace_hz_ > 0) {

@@ -1,6 +1,7 @@
 #include "ScriptRuntime.hpp"
 
 #include "ScriptBindings.hpp"
+#include "profiler/Profiler.hpp"
 
 #include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
@@ -297,7 +298,10 @@ void ScriptRuntime::step_tools(double dt) {
         // open, such as the running engine loop or a test, still empties the queue here.
         // The paused engine loop, which is how edit mode runs, only calls this while a
         // tool VM is open, so there the queue waits, capped, until one opens.
-        game_->input().dispatch(game_->events());
+        {
+            PROFILE_SCOPE("Input dispatch", profiler::Group::Engine);
+            game_->input().dispatch(game_->events());
+        }
         if (!tools_open) {
             run_service_.drop_frames();
             game_->events().drain();
@@ -1850,7 +1854,10 @@ void ScriptRuntime::fire_phase(Phase phase, double dt) {
     // so everything later in the step reads the keys as they are now.
     // RenderStepped follows the input, as in Roblox, and comes before the step.
     if (phase == Phase::PreAnimation) {
-        game_->input().dispatch(game_->events());
+        {
+            PROFILE_SCOPE("Input dispatch", profiler::Group::Engine);
+            game_->input().dispatch(game_->events());
+        }
         run_service_.fire_render_stepped(game_->events());
     }
     run_service_.fire(game_->events(), phase, dt);

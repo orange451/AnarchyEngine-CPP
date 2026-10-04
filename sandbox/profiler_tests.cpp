@@ -60,6 +60,10 @@ struct Recording {
 TEST_CASE("PF1 a running engine records frames with Sim and Render scopes", "[PF1]") {
     Recording recording;
     engine_core::Engine engine;
+    // Paced as the studio's Runner paces it. Unpaced, an empty place's step loop
+    // spins, and a render loop with no window to wait on does too.
+    engine.set_simulation_pace_hz(60.0);
+    engine.set_render_pace_hz(60.0);
     engine.start();
     engine.resume();
     const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(400);

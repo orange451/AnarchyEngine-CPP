@@ -21,12 +21,16 @@ struct Event {
     ScopeId scope = 0;
     CauseId cause = kNoCause;
     Kind kind = Kind::Begin;
+    // How many scopes the writing thread had open on this ring under this one.
+    // The reader rebuilds nesting from it, so a dropped event cannot shift it.
+    std::uint8_t depth = 0;
 };
 
 struct Open {
     ScopeId scope = 0;
     CauseId cause = kNoCause;
     std::uint64_t start_ns = 0;
+    std::uint8_t depth = 0;
 };
 
 // One writer (its thread) and one reader (collect, under the history lock).
@@ -168,30 +172,34 @@ public:
             const Event event = ring.events[from % kRingEvents];
             switch (event.kind) {
                 case Kind::Begin:
-                    ring.stack.push_back({event.scope, event.cause, event.ns});
+                    // Anything still open at this depth or deeper lost its end to a
+                    // drop: it is let go, unrecorded, rather than nesting what follows.
+                    while (!ring.stack.empty() && ring.stack.back().depth >= event.depth) {
+                        ring.stack.pop_back();
+                    }
+                    ring.stack.push_back({event.scope, event.cause, event.ns, event.depth});
                     break;
                 case Kind::End: {
-                    // An end matches the nearest open scope with its id. One with no
-                    // match, as after a drop or a begin made while off, is ignored.
-                    std::size_t match = ring.stack.size();
-                    while (match > 0 && ring.stack[match - 1].scope != event.scope) {
-                        --match;
+                    // Scopes deeper than this end lost theirs: let go. The one at this
+                    // depth is recorded when it is this scope; when its begin was
+                    // dropped, or it began while off, nothing is.
+                    while (!ring.stack.empty() && ring.stack.back().depth > event.depth) {
+                        ring.stack.pop_back();
                     }
-                    if (match == 0) {
+                    if (ring.stack.empty() || ring.stack.back().depth != event.depth ||
+                        ring.stack.back().scope != event.scope) {
                         break;
                     }
-                    while (ring.stack.size() >= match) {
-                        const Open open = ring.stack.back();
-                        ring.stack.pop_back();
-                        ScopeRecord record;
-                        record.row = ring.row;
-                        record.scope = open.scope;
-                        record.cause = open.cause;
-                        record.depth = static_cast<std::uint8_t>(std::min<std::size_t>(ring.stack.size(), 255));
-                        record.start_ns = open.start_ns;
-                        record.end_ns = std::max(event.ns, open.start_ns);
-                        pending_.push_back(record);
-                    }
+                    const Open open = ring.stack.back();
+                    ring.stack.pop_back();
+                    ScopeRecord record;
+                    record.row = ring.row;
+                    record.scope = open.scope;
+                    record.cause = open.cause;
+                    record.depth = open.depth;
+                    record.start_ns = open.start_ns;
+                    record.end_ns = std::max(event.ns, open.start_ns);
+                    pending_.push_back(record);
                     break;
                 }
                 case Kind::Frame:
@@ -369,6 +377,19 @@ Ring* make_ring(const std::string& name) {
 
 }  // namespace
 
+namespace {
+
+// How many of this thread's open scopes are on ring: the next begin's depth there.
+std::uint8_t open_depth(const Ring* ring) {
+    std::size_t depth = 0;
+    for (const auto& open : t_open) {
+        depth += open.second == ring ? 1 : 0;
+    }
+    return static_cast<std::uint8_t>(std::min<std::size_t>(depth, 255));
+}
+
+}  // namespace
+
 void register_thread(const char* row) { t_ring = make_ring(row != nullptr ? row : "Thread"); }
 
 RowScope::RowScope(const char* row) : previous_(t_ring) {
@@ -389,8 +410,8 @@ void begin(ScopeId scope, CauseId cause) {
     if (!enabled() || t_ring == nullptr) {
         return;
     }
+    t_ring->push({now_ns(), scope, cause, Kind::Begin, open_depth(t_ring)});
     t_open.emplace_back(scope, t_ring);
-    t_ring->push({now_ns(), scope, cause, Kind::Begin});
 }
 
 void end() {
@@ -402,7 +423,7 @@ void end() {
     }
     const auto [scope, ring] = t_open.back();
     t_open.pop_back();
-    ring->push({now_ns(), scope, kNoCause, Kind::End});
+    ring->push({now_ns(), scope, kNoCause, Kind::End, open_depth(ring)});
 }
 
 void frame_boundary() {

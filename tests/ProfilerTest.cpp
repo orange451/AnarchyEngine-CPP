@@ -255,6 +255,49 @@ void testOverflow() {
     profiler::release();
 }
 
+// A full ring drops events, which can lose a scope's begin or end. What is kept
+// still nests as the thread nested it: no child at the top for a lost parent,
+// and nothing after it nested under a scope whose end was lost.
+void testDropsKeepNesting() {
+    fresh();
+    profiler::acquire();
+    const profiler::ScopeId pair = profiler::intern("Drop pair", profiler::Group::Engine);
+    const profiler::ScopeId filler = profiler::intern("Drop filler", profiler::Group::Engine);
+    const profiler::ScopeId parent = profiler::intern("Drop parent", profiler::Group::Engine);
+    const profiler::ScopeId child = profiler::intern("Drop child", profiler::Group::Engine);
+    const profiler::ScopeId later = profiler::intern("Drop later", profiler::Group::Engine);
+    profiler::frame_boundary();
+    // One event short of full, then a begin that fills it: its end, and the
+    // parent's begin, are dropped.
+    for (std::size_t index = 0; index < (profiler::kRingEvents - 2) / 2; ++index) {
+        profiler::begin(pair);
+        profiler::end();
+    }
+    profiler::begin(filler);
+    profiler::end();
+    profiler::begin(parent);
+    profiler::collect();
+    at(1);
+    profiler::begin(child);
+    at(2);
+    profiler::end();
+    profiler::end();
+    at(3);
+    profiler::begin(later);
+    at(4);
+    profiler::end();
+    at(16);
+    profiler::frame_boundary();
+    profiler::collect();
+    const profiler::History history = live();
+    expect(history.dropped >= 2, "the end and the begin were dropped");
+    const auto children = named(history, "Drop child");
+    const auto laters = named(history, "Drop later");
+    expect(children.size() == 1 && children[0].depth == 1, "a child whose parent's begin was lost keeps its depth");
+    expect(laters.size() == 1 && laters[0].depth == 0, "a scope after a lost end is not nested under it");
+    profiler::release();
+}
+
 void testUnmatched() {
     fresh();
     const profiler::ScopeId a = profiler::intern("Half", profiler::Group::Engine);
@@ -419,6 +462,7 @@ int main() {
     testRowsAndOtherThreads();
     testStats();
     testOverflow();
+    testDropsKeepNesting();
     testUnmatched();
     testPause();
     testHistoryCap();

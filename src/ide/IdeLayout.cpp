@@ -261,8 +261,8 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     cursor_text_ = cursor->add_label(nullptr, "cursor-position-text", "");
     cursor_chip_ = cursor.get();
     status->getChildren().add(std::move(cursor));
-    // How long the Scene View takes between paints. Opens the frame rate limit.
-    auto frame = jadefx::make<StatusChip>([this] { open_preferences("Performance"); });
+    // How long the Scene View takes between paints. Shows or hides the profiler, as Ctrl+F6 does.
+    auto frame = jadefx::make<StatusChip>([] { runner::ProfilerUi::get().toggleShown(); });
     frame->setElementId("frame-time");
     frame_text_ = frame->add_label("FrameTime.png", "frame-time-text", "-- ms");
     frame_tip_ = jadefx::make<jadefx::Tooltip>("The Scene View is not drawing");

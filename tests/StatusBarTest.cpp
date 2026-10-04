@@ -1,5 +1,6 @@
 #include "ide/IdeLayout.hpp"
 #include "ide/IdeProblems.hpp"
+#include "runner/ProfilerOverlay.hpp"
 
 #include "ChangeHistoryService.hpp"
 #include "DataModel.hpp"
@@ -132,6 +133,27 @@ int RunStatusBarTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
 
     // A test does not paint the Scene View, so there is no frame time to show.
     expect(Text(scene, "frame-time-text") == "-- ms", "no frame time without paints");
+
+    // Clicking the frame time shows the profiler, and clicking again hides it.
+    auto click = [&](const char* id) {
+        const jadefx::Node* node = scene.getElementById(id);
+        if (node == nullptr) {
+            return;
+        }
+        const double x = node->getAbsoluteX() + node->getWidth() * 0.5;
+        const double y = node->getAbsoluteY() + node->getHeight() * 0.5;
+        scene.noteButton(0, true, x, y, 0);
+        scene.noteButton(0, false, x, y, 0);
+        frame();
+    };
+    runner::ProfilerUi& profiler = runner::ProfilerUi::get();
+    const bool profiler_was = profiler.shown();
+    profiler.setShown(false);
+    click("frame-time");
+    expect(profiler.shown(), "clicking the frame time shows the profiler");
+    click("frame-time");
+    expect(!profiler.shown(), "clicking it again hides the profiler");
+    profiler.setShown(profiler_was);
 
     // Zoom follows the View menu's shortcuts.
     expect(Text(scene, "zoom-level-text") == "100%", "the studio starts at actual size");

@@ -4,6 +4,7 @@
 
 #include "IdeLayoutInternal.hpp"
 #include "McpServer.hpp"
+#include "runner/ProfilerOverlay.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -125,16 +126,17 @@ void IdeLayout::show_frame_time() {
         return;
     }
     frame_shown_at_ = now;
+    const char* click = runner::ProfilerUi::get().shown() ? "Click to hide the profiler" : "Click to show the profiler";
     if (!frame_view_->frameTimeCurrent()) {
         SetText(frame_text_, "-- ms");
-        SetTip(frame_tip_, "The Scene View is not drawing. Click to set the frame rate limit");
+        SetTip(frame_tip_, std::string("The Scene View is not drawing. ") + click);
         return;
     }
     char text[32];
     std::snprintf(text, sizeof text, "%.1f ms", frame_view_->frameMilliseconds());
     SetText(frame_text_, text);
     SetTip(frame_tip_, std::to_string(frame_view_->framesPerSecond()) +
-                           " frames a second in the Scene View. Click to set the frame rate limit");
+                           " frames a second in the Scene View. " + click);
 }
 
 void IdeLayout::show_zoom() {

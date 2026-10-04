@@ -461,6 +461,8 @@ IdeAssets::IdeAssets(engine_core::DataModel& world, AssetsHost host)
           },
           kBallsPerFrame),
       thumbnails_(kThumbnailSize, thumbnails_ready_.setter()) {
+    // The material balls draw with GL of their own in renderContent.
+    setDrawsRawGl(true);
     watch_ = world_.watch_changes(edited_.setter());
     setPrefWidth(9999999);
     setMinSize(240, 120);

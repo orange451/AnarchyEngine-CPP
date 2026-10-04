@@ -63,6 +63,8 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
       }),
       game_(&runner.simulation().datamodel()),
       engine_(&runner.simulation()) {
+    // The 3D view draws with GL of its own in renderContent.
+    setDrawsRawGl(true);
     setIconFile("Camera.png");
     setMinSize(64, 64);
     // Its color is the theme's --ide-viewport-color, through the studio's stylesheet.

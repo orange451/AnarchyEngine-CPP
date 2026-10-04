@@ -300,7 +300,9 @@ private:
     void routeSearch(jadefx::KeyEvent& event, jadefx::Scene& scene);
     void routeZoom(jadefx::KeyEvent& event);
     void routeClipboard(jadefx::KeyEvent& event, jadefx::Scene& scene);
-    void set_zoom(double zoom);
+    // Zooms the studio and remembers it. announce shows a toast with the new
+    // zoom; the status bar's slider, which shows it already, does not.
+    void set_zoom(double zoom, bool announce = true);
     // Docks the Search pane, or brings it forward, and focuses its find field or,
     // with replace, its replace field. Docked without replace, it starts with
     // replace hidden. A selection on one line in the focused
@@ -545,6 +547,10 @@ private:
     double frame_shown_at_ = -1;
     jadefx::Label* zoom_text_ = nullptr;
     double shown_zoom_ = -1;
+    // The zoom chip's slider, made the first time it opens, and the zoom it
+    // picked this frame, set at the frame's end. Negative for none.
+    std::shared_ptr<class ZoomPopover> zoom_popover_;
+    double pending_zoom_ = -1;
     layout_detail::StatusChip* ai_chip_ = nullptr;
     jadefx::Label* ai_text_ = nullptr;
     std::shared_ptr<jadefx::Tooltip> ai_tip_;

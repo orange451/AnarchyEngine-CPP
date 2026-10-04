@@ -4,6 +4,7 @@
 
 #include "IdeLayoutInternal.hpp"
 #include "McpServer.hpp"
+#include "ZoomPopover.hpp"
 #include "runner/ProfilerOverlay.hpp"
 
 #include <chrono>
@@ -140,12 +141,28 @@ void IdeLayout::show_frame_time() {
 }
 
 void IdeLayout::show_zoom() {
+    if (pending_zoom_ > 0) {
+        if (pending_zoom_ != jadefx::Stage::getZoom()) {
+            set_zoom(pending_zoom_, false);
+        }
+        pending_zoom_ = -1;
+    }
     const double zoom = jadefx::Stage::getZoom();
+    const bool popover = zoom_popover_ && zoom_popover_->showing();
+    // Every frame while it shows: a zoom lays the scene out at a new size only
+    // on the frame after, and the slider must sit on its chip in that layout.
+    if (popover) {
+        zoom_popover_->follow();
+    }
     if (zoom_text_ == nullptr || zoom == shown_zoom_) {
         return;
     }
     shown_zoom_ = zoom;
     SetText(zoom_text_, std::to_string(static_cast<int>(std::lround(zoom * 100.0))) + "%");
+    // A shortcut may have zoomed while the slider shows.
+    if (popover) {
+        zoom_popover_->sync(zoom);
+    }
 }
 
 void IdeLayout::show_ai_client() {

@@ -411,8 +411,7 @@ public:
         setSpacing(4);
         setAlignment(jadefx::Pos::CenterLeft);
         if (action_) {
-            getClassList().add("clickable");
-            setCursor(jadefx::Cursor::Pointer);
+            mark_clickable();
         }
         setOnMouseClicked([this](const jadefx::MouseEvent& event) {
             if (event.button == 0 && action_) {
@@ -445,6 +444,12 @@ public:
         return raw;
     }
 
+    // Gives a chip made without an action one, for an action that needs the chip.
+    void set_action(std::function<void()> action) {
+        action_ = std::move(action);
+        mark_clickable();
+    }
+
     // Draws the index'th icon from another file, such as Pause.png for Play.png.
     void set_icon(std::size_t index, const char* icon) {
         if (index >= icons_.size()) {
@@ -456,6 +461,11 @@ public:
     }
 
 private:
+    void mark_clickable() {
+        getClassList().add("clickable");
+        setCursor(jadefx::Cursor::Pointer);
+    }
+
     std::function<void()> action_;
     std::vector<jadefx::ImageView*> icons_;
 };

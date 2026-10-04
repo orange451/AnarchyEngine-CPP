@@ -2,6 +2,7 @@
 #include "runner/ProfilerOverlay.hpp"
 
 #include "AiClientsPage.hpp"
+#include "ZoomPopover.hpp"
 #include "IdeAssets.hpp"
 #include "IdeLayoutInternal.hpp"
 #include "McpSetup.hpp"
@@ -268,11 +269,21 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     frame_tip_ = jadefx::make<jadefx::Tooltip>("The Scene View is not drawing");
     jadefx::Tooltip::install(frame.get(), frame_tip_);
     status->getChildren().add(std::move(frame));
-    // The studio's zoom. A click goes back to actual size.
-    auto zoom = jadefx::make<StatusChip>([this] { set_zoom(1.0); });
+    // The studio's zoom. A click opens a slider for it, and another closes it.
+    auto zoom = jadefx::make<StatusChip>();
     zoom->setElementId("zoom-level");
     zoom_text_ = zoom->add_label("Zoom.png", "zoom-level-text", "100%");
-    jadefx::Tooltip::install(zoom.get(), jadefx::make<jadefx::Tooltip>("Zoom. Click for actual size"));
+    zoom->set_action([this, chip = zoom.get()] {
+        if (!zoom_popover_) {
+            // Zoomed at the frame's end, in show_zoom.
+            zoom_popover_ = ZoomPopover::create([this](double value) { pending_zoom_ = value; });
+        }
+        if (zoom_popover_->showing()) {
+            zoom_popover_->dismiss();
+        } else {
+            zoom_popover_->open(*chip);
+        }
+    });
     status->getChildren().add(std::move(zoom));
     // The MCP server, and the AI client using it. Opens Preferences at AI.
     auto ai = jadefx::make<StatusChip>([this] { open_preferences("AI"); });
@@ -615,13 +626,15 @@ void IdeLayout::routeZoom(jadefx::KeyEvent& event) {
     event.consume();
 }
 
-void IdeLayout::set_zoom(double zoom) {
+void IdeLayout::set_zoom(double zoom, bool announce) {
     const double kept = std::clamp(std::round(zoom * 10.0) / 10.0, Preferences::kMinZoom, Preferences::kMaxZoom);
     jadefx::Stage::setZoom(kept);
     preferences_.set_zoom(kept);
     std::string failure;
     preferences_.save(failure);
-    show_toast("Zoom " + std::to_string(static_cast<int>(std::lround(kept * 100.0))) + "%");
+    if (announce) {
+        show_toast("Zoom " + std::to_string(static_cast<int>(std::lround(kept * 100.0))) + "%");
+    }
 }
 
 void IdeLayout::routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene) {

@@ -114,6 +114,7 @@ set(STUDIO_SOURCES
     src/ide/IdeLayoutEditing.cpp
     src/ide/IdeLayoutMcp.cpp
     src/ide/IdeLayoutStatus.cpp
+    src/ide/ZoomPopover.cpp
     src/ide/IdeLayoutProject.cpp
     src/ide/CutSet.cpp
     src/ide/TextureImport.cpp

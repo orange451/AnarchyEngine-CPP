@@ -64,6 +64,23 @@ bool Whole(const engine_core::VisualSnapshot& snapshot) {
             snapshot.prefabs[1].meshes[1].session != nullptr && snapshot.prefabs[1].meshes[1].revision == snapshot.frame);
 }
 
+void TestHeldFramesAreNotWrittenOver() {
+    runner::SceneFeed feed;
+    feed.perform(Frame(1, 3));
+    // Two views each hold the frame from their layout to their paint.
+    const std::shared_ptr<const engine_core::VisualSnapshot> a = feed.hold();
+    feed.perform(Frame(2, 3));
+    const std::shared_ptr<const engine_core::VisualSnapshot> b = feed.hold();
+    for (std::uint64_t n = 3; n < 40; ++n) {
+        feed.perform(Frame(n, 5));
+        (void)feed.latest();
+    }
+    Expect(a->frame == 1 && a->instances.size() == 3 && Whole(*a), "a held frame stays as it was");
+    Expect(b->frame == 2 && Whole(*b), "so does a second view's");
+    Expect(feed.hold()->frame == 39, "hold gives the newest frame");
+    Expect(feed.hold().get() == feed.hold().get(), "with no new frame, the same one");
+}
+
 }  // namespace
 
 int RunSceneFeedTests() {
@@ -119,5 +136,7 @@ int RunSceneFeedTests() {
     Expect(drawn.draggers.size() == 1 && drawn.draggers[0].frame.origin.y == 2.f &&
                drawn.draggers[0].hovered == engine_core::DraggerHandle::Y,
            "the Dragger rows reach the view");
+
+    TestHeldFramesAreNotWrittenOver();
     return gFailures;
 }

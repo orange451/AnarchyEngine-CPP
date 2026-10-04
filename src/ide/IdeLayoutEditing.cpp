@@ -542,6 +542,7 @@ void IdeLayout::edit(std::uint32_t id) {
     editor->bindUndo(&undo_router_.script_stack(id));
     editor->setFoldMemory([this, guid] { return recall_folds(guid); },
                           [this, guid](const std::vector<int>& lines) { remember_folds(guid, lines); });
+    add_select_to_tab_menu(*editor, id);
     std::shared_ptr<jadefx::Tab> tab = home->dock(editor);
     if (tab) {
         tab->setOnClosed([this, id, editor] {
@@ -571,6 +572,7 @@ void IdeLayout::edit_prefab(std::uint32_t prefab, IdeDock& home) {
         return;
     }
     auto editor = jadefx::make<IdePrefabEditor>(runner_.simulation().datamodel(), prefab, prefab_editor_host());
+    add_select_to_tab_menu(*editor, prefab);
     home.dock(editor);
     open_prefabs_[prefab] = editor;
 }
@@ -587,6 +589,7 @@ void IdeLayout::edit_css(std::uint32_t css, IdeDock& home) {
         }
     }
     auto editor = jadefx::make<IdeCssEditor>(runner_.simulation(), css);
+    add_select_to_tab_menu(*editor, css);
     std::shared_ptr<jadefx::Tab> tab = home.dock(editor);
     if (tab) {
         // Closing flushes the text into the place, so nothing is kept.

@@ -28,6 +28,14 @@ public:
     void setIconFile(std::string filename) { iconFile_ = std::move(filename); }
     const std::string& iconFile() const { return iconFile_; }
 
+    // Adds this page's items to its tab's right-click menu as the menu opens.
+    void setOnTabMenu(std::function<void(jadefx::Menu&)> handler) { on_tab_menu_ = std::move(handler); }
+    void fillTabMenu(jadefx::Menu& menu) const {
+        if (on_tab_menu_) {
+            on_tab_menu_(menu);
+        }
+    }
+
     virtual void onOpen() {}
     virtual void onClose() {}
 
@@ -35,6 +43,7 @@ private:
     std::string name_;
     std::string title_;
     std::function<void(const std::string&)> on_title_;
+    std::function<void(jadefx::Menu&)> on_tab_menu_;
     bool closable_;
     std::string iconFile_;
 };

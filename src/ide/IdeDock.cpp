@@ -45,6 +45,11 @@ std::shared_ptr<jadefx::Tab> IdeDock::dock(const std::shared_ptr<IdePane>& pane)
             live->setText(title);
         }
     });
+    tab->setOnMenu([page](jadefx::Menu& menu) {
+        if (const std::shared_ptr<IdePane> live = page.lock()) {
+            live->fillTabMenu(menu);
+        }
+    });
     tab->setOnSelectionChanged([page, weak] {
         const std::shared_ptr<IdePane> live = page.lock();
         const std::shared_ptr<jadefx::Tab> current = weak.lock();

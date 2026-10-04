@@ -454,11 +454,31 @@ void IdeLayout::show_problem_count(const ProblemCounts& total) {
 }
 
 void IdeLayout::select_guid(const std::string& guid) {
-    bool found = false;
+    engine_core::InstanceId found = 0;
     run_now([&](engine_core::DataModel& game) {
         const std::optional<engine_core::InstanceId> id = game.find_guid(guid);
-        if (id && *id != 0) {
-            game.selection().set({*id});
+        if (id) {
+            found = *id;
+        }
+    });
+    if (found != 0) {
+        select_instance(found);
+    }
+}
+
+void IdeLayout::add_select_to_tab_menu(IdePane& pane, std::uint32_t id) {
+    pane.setOnTabMenu([this, id](jadefx::Menu& menu) {
+        auto item = jadefx::make<jadefx::MenuItem>("Select");
+        item->setOnAction([this, id](jadefx::ActionEvent&) { select_instance(id); });
+        menu.getItems().add(std::move(item));
+    });
+}
+
+void IdeLayout::select_instance(std::uint32_t id) {
+    bool found = false;
+    run_now([&](engine_core::DataModel& game) {
+        if (id != 0 && game.alive(id)) {
+            game.selection().set({id});
             found = true;
         }
     });

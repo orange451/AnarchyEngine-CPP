@@ -16,8 +16,8 @@ class GameView;
 
 // What every Scene View's profiler shows, one for the process. Showing it
 // starts recording (profiler::acquire) and hiding it stops (release); the
-// history it recorded stays until it is shown again. Hiding ends a pause and
-// closes a capture, so it always comes back live. Only owner draws it: the
+// history it recorded stays until it is shown again. Hiding ends a pause, so
+// it always comes back live. Only owner draws it: the
 // Scene View last clicked or focused.
 class ProfilerUi {
 public:
@@ -29,7 +29,7 @@ public:
     bool shown() const { return shown_; }
     void setShown(bool shown);
     void toggleShown() { setShown(!shown_); }
-    // Pauses or resumes. Resuming a capture closes it and returns to live.
+    // Pauses or resumes.
     void togglePaused();
 
     // The view that draws it. A view that leaves its window lets go; the next
@@ -40,7 +40,7 @@ public:
     double split = 0.45;
     // The selected frame, an index into the paused history; kNewest when live.
     std::size_t selected = kNewest;
-    // Writes the paused history to a file. Null hides Save.
+    // Writes the paused history to a page a browser shows. Null hides Save.
     std::function<void()> save;
     // The tab or split changed, for preferences.
     std::function<void()> changed;
@@ -82,7 +82,6 @@ public:
     Rect tabRect(ProfilerUi::Tab tab) const;
     Rect pauseRect() const;
     Rect saveRect() const;
-    Rect closeCaptureRect() const;
     // Switches the GPU row between the whole 3D draw once a frame and each pass.
     Rect gpuDetailRect() const;
     Rect graphRect() const;

@@ -74,6 +74,7 @@ set(STUDIO_CORE_SOURCES
     src/ide/TextSearch.cpp
     src/ide/TextUndoStack.cpp
     src/ide/TextWrap.cpp
+    src/profiler/ProfileHtml.cpp
     src/profiler/ProfileJson.cpp
 )
 set(STUDIO_SOURCES

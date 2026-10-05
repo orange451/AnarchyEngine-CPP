@@ -15,13 +15,13 @@ A developer playing their place presses Cmd+F6 and sees, over the scene, one bar
 | GPU | Yes. A GPU row from `GL_TIMESTAMP` queries around the Renderer's main passes, shown 2–3 frames late and labelled so. Engine passes only; scripts cannot mark GPU work. |
 | Where it draws | `GameView`, so the studio and the player share it. In the studio, only on the Scene View last focused (the one whose Camera is CurrentCamera). |
 | Hotkeys | Cmd+F6 shows and hides. Cmd+P pauses and resumes. Studio-wide, whatever has focus. Ctrl on Windows and Linux. No other hotkeys. |
-| Menus (studio) | View → Profiler (Cmd+F6), View → Pause Profiler (Cmd+P), File → Open Profile Capture… |
+| Menus (studio) | View → Profiler (Cmd+F6), View → Pause Profiler (Cmd+P). |
 | Pointer | While the overlay is shown, a pointer locked by `MouseBehavior` is freed. `MouseBehavior` keeps its value; hiding the overlay locks again on the next click in the view, as after Shift+Esc. |
 | Recording | Off until the overlay is first shown, or `get_profile` asks. Hiding the overlay stops recording; its history stays until the next show. |
 | Frame | One render-thread frame, Prepare to the next Prepare. Other threads' events fall into frames by timestamp. |
 | History | The last 300 frames. |
 | Pause | Freezes what the overlay shows; the game runs on. Resume returns to live. Selecting a frame in the graph also pauses. |
-| Outside the overlay | MCP tool `get_profile`, and capture files (`*.aprof.json`) saved from the overlay and opened in the studio. |
+| Outside the overlay | MCP tool `get_profile`, and profile pages (`*.html`) saved from the overlay and read in any browser. The studio opens no profiles. |
 | Implementation | Our own library, `src/profiler/`. Not vendored microprofile (its UI needs a backend we would rewrite, it brings a web server, and it risks the Xcode 13 / libc++ 13 toolchain). Not Tracy (its viewer is a separate app). |
 
 ## Architecture
@@ -38,7 +38,7 @@ A library with no dependency on the engine, JadeFX, or GL.
 - **Collector.** Once per UI paint, while recording, it drains every ring into a `FrameHistory`: the last 300 frames, each with its events per thread as nested scopes (depth, start, duration, cause). Events from threads that run at their own rate (Sim, UI) go into the frame whose span holds their begin time; a scope that crosses a boundary is drawn where it starts, at its full length.
 - **Stats.** From the history: for each scope (and each Script-plus-cause pair), its max, average, and calls per frame over the history, its time in the selected frame, and its share of the average frame.
 - **Pause.** `FrameHistory` is copied to a frozen copy the overlay reads; the collector keeps draining (so rings never fill) but into the live history only.
-- **Capture I/O.** `write_capture` and `read_capture` (see Capture file). Read checks everything before it returns a history; on any failure it returns why and nothing else.
+- **Capture I/O.** `write_capture` writes the capture JSON, and `write_capture_html` the page Save writes around it (see Profile page). Nothing reads a capture back.
 
 ### Timing points
 
@@ -75,7 +75,7 @@ The UI thread receives OS input and posts it to `UserInputService`'s queue (a sh
 
 `ProfilerOverlay` is a JadeFX node in `GameView`, above the ScreenGuis and the camera list, left out of `requestCapture` readbacks.
 
-- **Header:** "Profiler", the selected frame's number and ms, the **Timeline | Scopes** tabs, a pause/resume button, **Save** (only while paused), events dropped (when any), the capture's file name (when showing one), and the hotkey hints.
+- **Header:** "Profiler", the selected frame's number and ms, the **Timeline | Scopes** tabs, a pause/resume button, **Save** (only while paused), events dropped (when any), and the hotkey hints.
 - **Frame graph:** the last 300 frames as bars, scaled to the slowest of them and never below 33 ms. A dashed line at 16.6 ms; frames over it are red. Hover: frame number and ms. Click: selects the frame and pauses.
 - **Lower half**, about 45% of the view at first, resized by dragging its top edge:
   - **Timeline:** rows Sim, Render, UI, GPU, each labelled; nested scopes stacked, coloured by group. Scroll zooms about the pointer; drag or right-drag pans; double-click a scope zooms to fit it. Live, it follows the newest frames; a selected frame is centred. Hover tooltip: name, ms, start within the frame, thread, and cause or detail. A row with no events in view is drawn empty, never hidden.
@@ -87,17 +87,19 @@ The UI thread receives OS input and posts it to `UserInputService`'s queue (a sh
 
 ### Studio and player
 
-- **Studio:** the studio's key handling and the View menu items toggle the overlay on the last focused Scene View, whatever has focus. File → Open Profile Capture… shows a capture in that view's overlay, paused and read-only, with its file name in the header; Resume or closing the capture returns to live.
-- **Player:** no menus. `GameView` handles Cmd+F6 and Cmd+P itself when it is the player's view. Save writes `profile-<yyyyMMdd-HHmmss>.aprof.json` next to the game's files. No Open.
+- **Studio:** the studio's key handling and the View menu items toggle the overlay on the last focused Scene View, whatever has focus.
+- **Player:** no menus. `GameView` handles Cmd+F6 and Cmd+P itself when it is the player's view. Save writes `profile-<yyyyMMdd-HHmmss>.html` next to the game's files.
 
 ## MCP tool `get_profile`
 
-- **Arguments:** `seconds?` (default 2, at most 10), `top?` (Scopes rows, default 25), `include_timeline?` (default true), `path?` (also save a capture file there).
+- **Arguments:** `seconds?` (default 2, at most 10), `top?` (Scopes rows, default 25), `include_timeline?` (default true), `path?` (also save the profile page there).
 - **Recording:** if nothing records, the tool records for `seconds`, then stops and returns. If the overlay records or is paused, the tool reads that history (the frozen one when paused) without waiting.
 - **Result (JSON):** frame count; average, p95, and max frame ms; frames over 16.6 ms; the top Scopes rows with the table's columns; with `include_timeline`, the slowest frame as a scope tree per thread, cut at depth 6 and at scopes under 0.05 ms; the GPU lag in frames.
 - **Description** tells agents that edit-mode numbers are not play numbers and suggests `playtest` first.
 
-## Capture file
+## Profile page
+
+Save writes one self-contained HTML page: the capture JSON below in a `<script type="application/json">` block (every `<` written as `\u003c`, so no name can end the block), and an inline viewer with the overlay's frame graph, Timeline (zoom, pan, double-click to fit, arrow keys step frames), and sortable, filterable Scopes table. It loads nothing from the network. It opens on the slowest frame.
 
 ```json
 { "format": "anarchy-profile", "version": 1,
@@ -112,7 +114,6 @@ The UI thread receives OS input and posts it to `UserInputService`'s queue (a sh
 
 - Times are microseconds from the first frame's start. `frames` are `[start, end]`. `events` are `[thread, scope, depth, start, duration, cause]`, with `cause` an index into `causes` or null.
 - Save writes the paused history. In the studio it opens a save dialog in the project folder.
-- Open refuses, with a console message and no change, a file whose `format` is not `anarchy-profile`, whose `version` is unknown, or whose indices or times do not hold together.
 
 ## Errors and limits
 
@@ -125,20 +126,19 @@ The UI thread receives OS input and posts it to `UserInputService`'s queue (a sh
 | Timer queries unsupported | GPU row reads "GPU timing unavailable". |
 | Query not ready / pool exhausted | Read next frame / that frame's GPU row skipped. |
 | Engine paused (edit mode) | The Sim row shows only the tool step at its rate; that is expected. |
-| Bad capture file | Refused before anything changes, with why in the console. |
 
 ## Testing
 
-- **`profiler-tests`** (new; pure C++, a fake clock): nesting; frame bucketing across three fake threads; stats; ring overflow drops and counts, and the next frame records; pause freezes, resume returns to live; disabled scopes record nothing; capture round trip; a wrong format, unknown version, or broken file refused with the history unchanged. A micro-benchmark reports, without asserting, the cost of an enabled and a disabled scope. Run under `build-tsan` too.
+- **`profiler-tests`** (new; pure C++, a fake clock): nesting; frame bucketing across three fake threads; stats; ring overflow drops and counts, and the next frame records; pause freezes, resume returns to live; disabled scopes record nothing; the capture's JSON; the page holds it, loads nothing from elsewhere, and keeps a `</script>` in a name inside its data block. A micro-benchmark reports, without asserting, the cost of an enabled and a disabled scope. Run under `build-tsan` too.
 - **Lua tests** (`sandbox` / Lua engine tests): user scopes nest under the Script scope, which records its cause (InputBegan, Heartbeat, wait); open scopes closed at yield, error, and finish, warning once; stray `profileend` warns once; non-string name errors; name cut; 256-name limit; `debug` holds only the two functions and the sandbox test still passes; `require` makes a nested ModuleScript scope.
 - **`studio-tests`** and a GameView test: Cmd+F6 shows the overlay on the last focused view only, Cmd+P pauses, both while a script editor has focus; the menu items show their shortcuts; with `MouseBehavior = LockCenter` the view locks, showing the overlay frees it with `MouseBehavior` unchanged, hiding locks again on the next click; clicking a bar selects and pauses; tabs and sorting work; `requestCapture` leaves the overlay out.
-- **`mcp-tests`:** `get_profile` records when idle and returns well-formed JSON; reads the paused history when there is one; `path` writes a capture that opens again.
+- **`mcp-tests`:** `get_profile` records when idle and returns well-formed JSON; reads the paused history when there is one; `path` writes the profile page.
 - **GPU:** in `assets-demo` or a GL check program, `GpuTimer` around a few draws gives times after the lag, no GL errors, and the unavailable path reads as such.
-- **By hand:** a sample place with a slow Script using `debug.profilebegin("pathfind")`, played in the studio (bundle-resources build) and in AnarchyPlayer: the spike shows in the graph, the timeline puts it under that Script with its cause, the Scopes table ranks it first; a saved capture opens again in the studio.
+- **By hand:** a sample place with a slow Script using `debug.profilebegin("pathfind")`, played in the studio (bundle-resources build) and in AnarchyPlayer: the spike shows in the graph, the timeline puts it under that Script with its cause, the Scopes table ranks it first; a saved profile page shows the same in a browser.
 
 ## Out of scope
 
-Loading captures in the player; counters (memory, draw calls) as rows; per-scope colours chosen by scripts; network or remote viewing; GPU scopes from scripts; hotkeys beyond Cmd+F6 and Cmd+P.
+Loading profiles back into the studio or the player; counters (memory, draw calls) as rows; per-scope colours chosen by scripts; network or remote viewing; GPU scopes from scripts; hotkeys beyond Cmd+F6 and Cmd+P.
 
 ## Changes made during implementation
 

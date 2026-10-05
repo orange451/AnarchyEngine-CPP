@@ -125,7 +125,7 @@ debug.profileend()
 
 `debug` holds only those two functions. A section still open when the script yields, errors, or ends is closed there, with one warning in the console; so is a `profileend` with nothing open. A script may name 256 sections; past that they show as "(too many scopes)".
 
-Cmd+P (View > Pause Profiler) freezes what it shows while the game plays on; clicking a frame's bar pauses on that frame. While paused, Save writes the frames to a capture file (`*.aprof.json`): in the studio wherever you choose, and in a game beside the project folder or the game's program. File > Open Profile Capture shows one again, paused; Close capture returns to live. While the profiler shows, a pointer a script locked with `MouseBehavior` is freed so the profiler can be clicked; `MouseBehavior` keeps its value, and the lock comes back on the next click after the profiler is hidden.
+Cmd+P (View > Pause Profiler) freezes what it shows while the game plays on; clicking a frame's bar pauses on that frame. While paused, Save writes the frames to an HTML page (`profile-<date>-<time>.html`): in the studio wherever you choose, and in a game beside the project folder or the game's program. Any browser opens it, with no studio running, and shows the frame graph, the Timeline, and the Scopes table as the profiler does. While the profiler shows, a pointer a script locked with `MouseBehavior` is freed so the profiler can be clicked; `MouseBehavior` keeps its value, and the lock comes back on the next click after the profiler is hidden.
 
 The GPU row shows the whole 3D draw once a frame, as 3D scene, read a frame or two late (the row says how many). The header's GPU button times each pass instead, for a closer look; on macOS every timed pass makes the CPU wait for the GPU and inflates what it measures, so it slows the frame and is off until asked for. GPU times are lengths placed just after the moment the work was issued, since macOS's OpenGL reports no GPU timestamps. Times taken while editing are not the game's: Test first to profile play.
 
@@ -201,7 +201,7 @@ Each studio names its project and port in a `studios` folder beside `preferences
 
 Otherwise a call fails and lists the open studios. Once the studio `select_studio` picked closes, calls fail until it picks another; `select_studio` with `""` goes back to the usual order. `list_studios` shows every open studio and which one calls go to, and `get_studio_info` asks a studio which project it has open. The entry of a studio that crashed is dropped the next time the bridge looks.
 
-`get_profile` reads the profiler: frame times, the scopes that cost most per frame, and the slowest frame as a tree per thread. When the profiler is not recording, it records for `seconds` (2 by default, at most 10) first; while it is paused it reads the paused frames at once. With `path` it also saves a capture file.
+`get_profile` reads the profiler: frame times, the scopes that cost most per frame, and the slowest frame as a tree per thread. When the profiler is not recording, it records for `seconds` (2 by default, at most 10) first; while it is paused it reads the paused frames at once. With `path` it also saves the profile as an HTML page, as Save does.
 
 With only one studio open, a client that speaks MCP over HTTP can also connect to it directly, with the token described below: `claude mcp add --transport http anarchy http://127.0.0.1:7777/mcp --header "Authorization: Bearer <secret>"`.
 

@@ -70,8 +70,6 @@ struct History {
     std::uint64_t dropped = 0;
     // How many frames late the GPU row's latest results arrived.
     int gpu_lag_frames = 0;
-    // The file this history was read from. Empty for a live one.
-    std::string capture_name;
 };
 
 namespace detail {
@@ -118,14 +116,10 @@ void collect();
 // Pausing freezes what with_view shows; recording goes on into the live history.
 void set_paused(bool paused);
 bool paused();
-// Shows a history read from a file, paused, until close_capture or set_paused(false).
-void show_capture(History capture);
-void close_capture();
-bool showing_capture();
 
 // fn sees the history under the profiler's lock, so it must not call back into
-// the profiler. with_view gives the frozen history or the capture while paused,
-// and the live one otherwise.
+// the profiler. with_view gives the frozen history while paused, and the live
+// one otherwise.
 void with_view(const std::function<void(const History&)>& fn);
 void with_live(const std::function<void(const History&)>& fn);
 

@@ -104,9 +104,7 @@ public:
     std::mutex history_mu_;
     History live_;
     History frozen_;
-    History capture_;
     bool paused_ = false;
-    bool showing_capture_ = false;
     std::uint64_t synced_version_ = 0;
     std::vector<ScopeRecord> pending_;
     bool have_boundary_ = false;
@@ -466,9 +464,7 @@ void reset_for_testing() {
     std::lock_guard<std::mutex> lock(r.history_mu_);
     r.clear_locked();
     r.paused_ = false;
-    r.showing_capture_ = false;
     r.frozen_ = History();
-    r.capture_ = History();
     detail::g_enabled.store(0);
     g_gpu_detail.store(false);
 }
@@ -487,8 +483,6 @@ void set_paused(bool paused) {
         r.frozen_ = r.live_;
     }
     if (!paused) {
-        r.showing_capture_ = false;
-        r.capture_ = History();
         r.frozen_ = History();
     }
     r.paused_ = paused;
@@ -500,36 +494,11 @@ bool paused() {
     return r.paused_;
 }
 
-void show_capture(History capture) {
-    Recorder& r = recorder();
-    std::lock_guard<std::mutex> lock(r.history_mu_);
-    r.capture_ = std::move(capture);
-    r.showing_capture_ = true;
-    r.paused_ = true;
-}
-
-void close_capture() {
-    Recorder& r = recorder();
-    std::lock_guard<std::mutex> lock(r.history_mu_);
-    r.capture_ = History();
-    r.showing_capture_ = false;
-    r.frozen_ = History();
-    r.paused_ = false;
-}
-
-bool showing_capture() {
-    Recorder& r = recorder();
-    std::lock_guard<std::mutex> lock(r.history_mu_);
-    return r.showing_capture_;
-}
-
 void with_view(const std::function<void(const History&)>& fn) {
     Recorder& r = recorder();
     std::lock_guard<std::mutex> lock(r.history_mu_);
     r.sync_names_locked();
-    if (r.showing_capture_) {
-        fn(r.capture_);
-    } else if (r.paused_) {
+    if (r.paused_) {
         fn(r.frozen_);
     } else {
         fn(r.live_);

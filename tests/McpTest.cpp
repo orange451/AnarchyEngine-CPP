@@ -1285,17 +1285,16 @@ void TestProfileTool() {
     Expect(Member(report, "recorded_for").as_number() >= 0.45, "it recorded for the seconds asked");
     Expect(!profiler::enabled(), "and stopped recording after");
 
-    const fs::path file = fs::temp_directory_path() / "anarchy-mcp-profile.aprof.json";
+    const fs::path file = fs::temp_directory_path() / "anarchy-mcp-profile.html";
     fs::remove(file);
     const JsonValue saved = Call(server, "get_profile",
                                  std::string("{\"seconds\":0.3,\"include_timeline\":false,\"path\":\"") + file.generic_string() + "\"}");
     Expect(saved.find("slowest_frame") == nullptr, "include_timeline false leaves the tree out");
     std::ifstream in(file, std::ios::binary);
     std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    profiler::History read;
-    std::string error;
-    Expect(profiler::read_capture(text, read, error) && !read.frames.empty(),
-           "path writes a capture that opens again: " + error);
+    Expect(text.rfind("<!doctype html>", 0) == 0 && text.find("\"anarchy-profile\"") != std::string::npos &&
+               text.find("\"frames\":[[") != std::string::npos,
+           "path writes the profile as an HTML page with its frames");
     fs::remove(file);
 
     // Paused, it reads the frozen history without waiting.

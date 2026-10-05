@@ -183,10 +183,8 @@ public:
     // Once a frame, after the scene lays out; the main window's stage calls it.
     // Coming back to the window checks the disk here.
     void flushFrame();
-    // Writes the paused profiler's history as a capture file. False, with why.
+    // Writes the paused profiler's history as a page a browser shows. False, with why.
     bool save_profile_capture(const std::filesystem::path& file, std::string& error);
-    // Shows a capture file in the profiler, paused. False, with why, changing nothing.
-    bool open_profile_capture(const std::filesystem::path& file, std::string& error);
     // Writes the layout to layout.json in the config folder. A close request
     // on the main window does this. Nothing is written without a config folder.
     void save_layout();
@@ -230,9 +228,8 @@ private:
     void new_place();
     // Asks to save, then for a folder, and opens the project there.
     void open_project();
-    // The profiler's Save button and File > Open Profile Capture: a dialog, then the file.
+    // The profiler's Save button: a dialog, then the page.
     void save_profile_capture_as();
-    void choose_profile_capture();
     // then runs after a successful save. A cancelled dialog or a failure skips it.
     void save_project(std::function<void()> then = {});
     void save_project_as(std::function<void()> then = {});

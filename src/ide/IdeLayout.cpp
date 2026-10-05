@@ -49,8 +49,6 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         ->setOnAction([this](jadefx::ActionEvent&) { save_project_as(); });
     file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     AddItem(*file, "Export Game…", "Export.png", 0, 0)->setOnAction([this](jadefx::ActionEvent&) { export_game(); });
-    AddItem(*file, "Open Profile Capture\u2026", nullptr, 0, 0)
-        ->setOnAction([this](jadefx::ActionEvent&) { choose_profile_capture(); });
     file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     AddItem(*file, "Preferences\u2026", nullptr, jadefx::Key::Comma, jadefx::Key::ModControl)
         ->setOnAction([this](jadefx::ActionEvent&) { open_preferences(); });

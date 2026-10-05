@@ -1,4 +1,4 @@
-// Capture files and the get_profile report, from a history built by hand.
+// Capture JSON, the page Save writes, and the get_profile report, from a history built by hand.
 
 #include "PropertyBag.hpp"
 #include "profiler/ProfileJson.hpp"
@@ -68,77 +68,79 @@ profiler::History sample() {
 
 const engine_core::JsonValue* member(const engine_core::JsonValue& value, const char* key) { return value.find(key); }
 
-void testRoundTrip() {
-    const profiler::History before = sample();
-    const std::string text = profiler::write_capture(before, "MyGame", "2026-10-04T00:00:00Z");
-    profiler::History after;
+// The JSON between the page's data block tags, as a browser's JSON.parse reads it.
+std::string embedded_json(const std::string& page) {
+    const std::string open = "<script id=\"capture\" type=\"application/json\">";
+    const std::size_t from = page.find(open);
+    if (from == std::string::npos) {
+        return {};
+    }
+    const std::size_t start = from + open.size();
+    const std::size_t end = page.find("</script>", start);
+    return end == std::string::npos ? std::string() : page.substr(start, end - start);
+}
+
+void testCapture() {
+    const profiler::History history = sample();
+    const std::string text = profiler::write_capture(history, "MyGame", "2026-10-04T00:00:00Z");
+    engine_core::JsonValue root;
     std::string error;
-    expect(profiler::read_capture(text, after, error), "a written capture reads back");
-    expect(error.empty(), "with no error");
-    expect(after.rows == before.rows, "rows survive");
-    expect(after.causes == before.causes, "causes survive");
-    expect(after.gpu_lag_frames == 2 && after.dropped == 3, "GPU lag and drops survive");
-    bool scopes_same = after.scopes.size() == before.scopes.size();
-    for (std::size_t index = 0; scopes_same && index < before.scopes.size(); ++index) {
-        scopes_same = after.scopes[index].name == before.scopes[index].name &&
-                      after.scopes[index].group == before.scopes[index].group &&
-                      after.scopes[index].key == before.scopes[index].key;
-    }
-    expect(scopes_same, "scope names, groups, and Script keys survive");
-    bool frames_same = after.frames.size() == before.frames.size();
-    for (std::size_t index = 0; frames_same && index < before.frames.size(); ++index) {
-        const profiler::Frame& a = before.frames[index];
-        const profiler::Frame& b = after.frames[index];
-        frames_same = b.scopes.size() == a.scopes.size() &&
-                      std::llabs(static_cast<long long>(b.end_ns - b.start_ns) -
-                                 static_cast<long long>(a.end_ns - a.start_ns)) <= 1000;
-        for (std::size_t s = 0; frames_same && s < a.scopes.size(); ++s) {
-            const profiler::ScopeRecord& x = a.scopes[s];
-            const profiler::ScopeRecord& y = b.scopes[s];
-            frames_same = x.row == y.row && x.scope == y.scope && x.depth == y.depth && x.cause == y.cause &&
-                          std::llabs(static_cast<long long>(y.start_ns - b.start_ns) -
-                                     static_cast<long long>(x.start_ns - a.start_ns)) <= 1000 &&
-                          std::llabs(static_cast<long long>(y.end_ns - y.start_ns) -
-                                     static_cast<long long>(x.end_ns - x.start_ns)) <= 1000;
-        }
-    }
-    expect(frames_same, "frames and their scopes survive to the microsecond");
+    expect(engine_core::parse_json(text, root, error), "a capture is JSON");
+    expect(member(root, "format") != nullptr && member(root, "format")->as_string() == "anarchy-profile" &&
+               member(root, "version")->as_number() == 1,
+           "with its format and version");
+    expect(member(root, "place")->as_string() == "MyGame" &&
+               member(root, "created")->as_string() == "2026-10-04T00:00:00Z",
+           "the place and when it was made");
+    expect(member(root, "threads")->items().size() == 4 && member(root, "causes")->items().size() == 1,
+           "every thread and cause");
+    expect(member(root, "gpu_lag_frames")->as_number() == 2 && member(root, "dropped")->as_number() == 3,
+           "the GPU lag and the drops");
+    expect(member(root, "budget_ms")->as_number() == profiler::kBudgetMs &&
+               member(root, "over_budget_ms")->as_number() == profiler::kOverBudgetMs,
+           "the budget a frame is measured against");
+    const auto& scopes = member(root, "scopes")->items();
+    expect(scopes.size() == 6 && scopes[1].find("name")->as_string() == "EnemyAI" &&
+               scopes[1].find("group")->as_string() == "script" && scopes[1].find("script")->as_string() == "guid-9",
+           "scope names, groups, and Script keys");
+    const auto& frames = member(root, "frames")->items();
+    expect(frames.size() == 3 && frames[0].items()[0].as_number() == 0 && frames[1].items()[0].as_number() == 16000 &&
+               frames[2].items()[1].as_number() == 52000,
+           "frames in microseconds from the first frame's start");
+    const auto& events = member(root, "events")->items();
+    expect(events.size() == 10, "every scope of every frame");
+    // Frame 1's EnemyAI: Sim, scope 1, depth 0, 20 ms in for 10 ms, resumed by Heartbeat.
+    const auto& enemy = events[4].items();
+    expect(enemy.size() == 6 && enemy[0].as_number() == 0 && enemy[1].as_number() == 1 && enemy[2].as_number() == 0 &&
+               std::fabs(enemy[3].as_number() - 20000) < 0.01 && std::fabs(enemy[4].as_number() - 10000) < 0.01 &&
+               enemy[5].as_number() == 0,
+           "an event is its thread, scope, depth, start, length, and cause");
+    expect(events[0].items()[5].is_null(), "a scope with no cause has null");
 }
 
-void expectRefused(const std::string& text, const char* label) {
-    profiler::History out;
-    out.capture_name = "untouched";
+void testPage() {
+    const profiler::History history = sample();
+    const std::string page = profiler::write_capture_html(history, "MyGame", "2026-10-04T00:00:00Z");
+    expect(page.rfind("<!doctype html>", 0) == 0, "the page is HTML");
+    expect(page.find("<canvas id=\"timeline\">") != std::string::npos && page.find("id=\"tab-scopes\"") != std::string::npos,
+           "with the Timeline and the Scopes");
+    expect(page.find("src=") == std::string::npos && page.find("href=") == std::string::npos &&
+               page.find("@import") == std::string::npos,
+           "and nothing loaded from elsewhere, so it reads offline");
+    expect(embedded_json(page) == profiler::write_capture(history, "MyGame", "2026-10-04T00:00:00Z"),
+           "the page holds the capture's JSON");
+
+    // A place named to end the data block early, or to make a browser read past its end, stays inside it.
+    const std::string name = "<!--<script></script><script>alert(1)</script>";
+    const std::string hostile = profiler::write_capture_html(history, name, "");
+    const std::string json = embedded_json(hostile);
+    engine_core::JsonValue root;
     std::string error;
-    const bool read = profiler::read_capture(text, out, error);
-    expect(!read && !error.empty(), label);
-    expect(out.capture_name == "untouched" && out.frames.empty(), "a refused file changes nothing");
-}
-
-std::string replaced(std::string text, const std::string& from, const std::string& to) {
-    const std::size_t at = text.find(from);
-    if (at != std::string::npos) {
-        text.replace(at, from.size(), to);
-    }
-    return text;
-}
-
-void testRefusals() {
-    const std::string good = profiler::write_capture(sample(), "MyGame", "2026-10-04T00:00:00Z");
-    expectRefused(replaced(good, "\"anarchy-profile\"", "\"other-profile\""), "a file of another format is refused");
-    expectRefused(replaced(good, "\"version\":1", "\"version\":2"), "a newer version is refused");
-    expectRefused(good.substr(0, good.size() / 2), "a truncated file is refused");
-    expectRefused("{\"format\":\"anarchy-profile\",\"version\":1,\"threads\":[\"Sim\"],\"scopes\":[{\"name\":\"A\","
-                  "\"group\":\"engine\"}],\"causes\":[],\"frames\":[[0,16000]],\"events\":[[4,0,0,10,5,null]]}",
-                  "an event on a thread out of range is refused");
-    expectRefused("{\"format\":\"anarchy-profile\",\"version\":1,\"threads\":[\"Sim\"],\"scopes\":[{\"name\":\"A\","
-                  "\"group\":\"engine\"}],\"causes\":[],\"frames\":[[0,16000]],\"events\":[[0,7,0,10,5,null]]}",
-                  "an event naming a scope out of range is refused");
-    expectRefused("{\"format\":\"anarchy-profile\",\"version\":1,\"threads\":[\"Sim\"],\"scopes\":[{\"name\":\"A\","
-                  "\"group\":\"engine\"}],\"causes\":[],\"frames\":[[0,16000]],\"events\":[[0,0,0,10,-5,null]]}",
-                  "a negative duration is refused");
-    expectRefused("{\"format\":\"anarchy-profile\",\"version\":1,\"threads\":[\"Sim\"],\"scopes\":[{\"name\":\"A\","
-                  "\"group\":\"engine\"}],\"causes\":[],\"frames\":[[0,16000],[8000,9000]],\"events\":[]}",
-                  "frames out of order are refused");
+    expect(engine_core::parse_json(json, root, error) && member(root, "place")->as_string() == name,
+           "a place name with </script> stays in the data block");
+    expect(json.find('<') == std::string::npos && hostile.find("<script>alert") == std::string::npos &&
+               hostile.find("<!--") == std::string::npos,
+           "and never becomes a script or a comment");
 }
 
 void testReport() {
@@ -204,15 +206,15 @@ void testFileName() {
     when.tm_min = 15;
     when.tm_sec = 3;
     when.tm_isdst = -1;
-    expect(profiler::capture_file_name(std::mktime(&when)) == "profile-20261004-021503.aprof.json",
-           "captures are named by local time");
+    expect(profiler::capture_file_name(std::mktime(&when)) == "profile-20261004-021503.html",
+           "profiles are named by local time");
 }
 
 }  // namespace
 
 int RunProfileJsonTests() {
-    testRoundTrip();
-    testRefusals();
+    testCapture();
+    testPage();
     testReport();
     testFileName();
     return gFailures;

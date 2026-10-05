@@ -119,10 +119,8 @@ void ProfilerUi::setShown(bool shown) {
         profiler::acquire();
         return;
     }
-    // Shown again, it starts live: hiding ends a pause and closes a capture.
-    if (profiler::showing_capture()) {
-        profiler::close_capture();
-    } else if (profiler::paused()) {
+    // Shown again, it starts live: hiding ends a pause.
+    if (profiler::paused()) {
         profiler::set_paused(false);
     }
     selected = kNewest;
@@ -131,11 +129,6 @@ void ProfilerUi::setShown(bool shown) {
 
 void ProfilerUi::togglePaused() {
     if (!shown_) {
-        return;
-    }
-    if (profiler::showing_capture()) {
-        profiler::close_capture();
-        selected = kNewest;
         return;
     }
     const bool now = !profiler::paused();
@@ -190,11 +183,6 @@ ProfilerOverlay::Rect ProfilerOverlay::saveRect() const {
 ProfilerOverlay::Rect ProfilerOverlay::gpuDetailRect() const {
     const Rect save = saveRect();
     return {save.x - 6 - 132, save.y, 132, 18};
-}
-
-ProfilerOverlay::Rect ProfilerOverlay::closeCaptureRect() const {
-    const Rect gpu = gpuDetailRect();
-    return {gpu.x - 6 - 96, gpu.y, 96, 18};
 }
 
 ProfilerOverlay::Rect ProfilerOverlay::graphRect() const {
@@ -327,15 +315,11 @@ void ProfilerOverlay::renderContent(jadefx::UiRenderer& renderer, float) {
         follow_ = true;
         ProfilerUi::get().selected = ProfilerUi::kNewest;
     }
-    const bool capture = profiler::showing_capture();
     painter.pushClip(x, y, w, h);
     painter.fillRect(x, y, w, h, kBackground);
     blocks_.clear();
     profiler::with_view([&](const profiler::History& history) {
         drawHeader(painter, history);
-        if (capture) {
-            button(painter, closeCaptureRect(), "Close capture", false);
-        }
         drawGraph(painter, history);
         if (ProfilerUi::get().tab == ProfilerUi::Tab::Timeline) {
             drawTimeline(painter, history);
@@ -374,9 +358,7 @@ void ProfilerOverlay::drawHeader(jadefx::Painter& painter, const profiler::Histo
     } else {
         info = "waiting for frames";
     }
-    if (!history.capture_name.empty()) {
-        info = "capture: " + history.capture_name + "   " + info;
-    } else if (paused) {
+    if (paused) {
         info = "paused \xC2\xB7 " + info;
     }
     label(painter, left, y + 5, info, paused ? kBudget : kMuted);
@@ -386,7 +368,7 @@ void ProfilerOverlay::drawHeader(jadefx::Painter& painter, const profiler::Histo
         label(painter, left, y + 5, dropped, kOver);
         left += textWidth(dropped) + 14;
     }
-    const double right = (history.capture_name.empty() ? gpuDetailRect().x : closeCaptureRect().x) - 12;
+    const double right = gpuDetailRect().x - 12;
     const double hints = textWidth(kHints);
     if (right - hints > left) {
         label(painter, right - hints, y + 5, kHints, kMuted);
@@ -744,15 +726,8 @@ void ProfilerOverlay::handleMousePressed(const jadefx::MouseEvent& event) {
         profiler::set_gpu_detail(!profiler::gpu_detail());
         return;
     }
-    const bool capture = profiler::showing_capture();
     if (!follow_ && ui.save && saveRect().contains(event.x, event.y)) {
         ui.save();
-        return;
-    }
-    if (capture && closeCaptureRect().contains(event.x, event.y)) {
-        profiler::close_capture();
-        follow_ = true;
-        ui.selected = ProfilerUi::kNewest;
         return;
     }
     if (graphRect().contains(event.x, event.y)) {

@@ -1006,8 +1006,8 @@ void leave_field_on_escape(jadefx::Scene& scene, int key, bool pressed) {
 bool IdeLayout::save_profile_capture(const std::filesystem::path& file, std::string& error) {
     std::string text;
     profiler::with_view([&](const profiler::History& history) {
-        text = profiler::write_capture(history, project_ ? project_->name() : std::string("Untitled"),
-                                       profiler::utc_stamp(std::time(nullptr)));
+        text = profiler::write_capture_html(history, project_ ? project_->name() : std::string("Untitled"),
+                                            profiler::utc_stamp(std::time(nullptr)));
     });
     std::ofstream out(file, std::ios::binary | std::ios::trunc);
     out << text;
@@ -1019,29 +1019,9 @@ bool IdeLayout::save_profile_capture(const std::filesystem::path& file, std::str
     return true;
 }
 
-bool IdeLayout::open_profile_capture(const std::filesystem::path& file, std::string& error) {
-    std::ifstream in(file, std::ios::binary);
-    if (!in) {
-        error = "Could not read " + file.string() + ".";
-        return false;
-    }
-    std::ostringstream bytes;
-    bytes << in.rdbuf();
-    profiler::History capture;
-    if (!profiler::read_capture(bytes.str(), capture, error)) {
-        return false;
-    }
-    capture.capture_name = file.filename().string();
-    runner::ProfilerUi& ui = runner::ProfilerUi::get();
-    ui.setShown(true);
-    ui.selected = runner::ProfilerUi::kNewest;
-    profiler::show_capture(std::move(capture));
-    return true;
-}
-
 void IdeLayout::save_profile_capture_as() {
     jadefx::FolderDialogOptions options;
-    options.title = "Save Profile Capture";
+    options.title = "Save Profile";
     options.save = true;
     options.name = profiler::capture_file_name(std::time(nullptr));
     if (project_) {
@@ -1052,31 +1032,13 @@ void IdeLayout::save_profile_capture_as() {
         if (alive.expired() || result != jadefx::DialogResult::Chosen) {
             return;
         }
+        const std::filesystem::path file = std::filesystem::u8path(path);
         std::string error;
-        if (!save_profile_capture(std::filesystem::u8path(path), error)) {
+        if (save_profile_capture(file, error)) {
+            show_toast("Saved " + file.filename().u8string());
+        } else {
             runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error,
-                                                         "Profile capture: " + error);
-        }
-    });
-}
-
-void IdeLayout::choose_profile_capture() {
-    jadefx::FolderDialogOptions options;
-    options.title = "Open Profile Capture";
-    options.file = true;
-    options.extensions = {"json"};
-    if (project_) {
-        options.directory = project_->root().string();
-    }
-    jadefx::showFolderDialog(std::move(options), [this, alive = std::weak_ptr<int>(alive_)](
-                                                     jadefx::DialogResult result, const std::string& path) {
-        if (alive.expired() || result != jadefx::DialogResult::Chosen) {
-            return;
-        }
-        std::string error;
-        if (!open_profile_capture(std::filesystem::u8path(path), error)) {
-            runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error,
-                                                         "Profile capture: " + error);
+                                                         "Profile: " + error);
         }
     });
 }

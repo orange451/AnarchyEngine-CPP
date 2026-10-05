@@ -1586,7 +1586,7 @@ JsonValue GetProfile(const ToolContext&, const JsonValue& arguments) {
     profiler::with_view([&](const profiler::History& history) {
         out = profiler::build_report(history, options);
         if (path != nullptr) {
-            capture = profiler::write_capture(history, "MCP", profiler::utc_stamp(std::time(nullptr)));
+            capture = profiler::write_capture_html(history, "MCP", profiler::utc_stamp(std::time(nullptr)));
         }
     });
     if (own) {

@@ -164,8 +164,8 @@ public:
                                   profiler::capture_file_name(std::time(nullptr));
             std::string text;
             profiler::with_view([&](const profiler::History& history) {
-                text = profiler::write_capture(history, project_ ? project_->name() : std::string("Game"),
-                                               profiler::utc_stamp(std::time(nullptr)));
+                text = profiler::write_capture_html(history, project_ ? project_->name() : std::string("Game"),
+                                                    profiler::utc_stamp(std::time(nullptr)));
             });
             std::ofstream out(file, std::ios::binary | std::ios::trunc);
             out << text;

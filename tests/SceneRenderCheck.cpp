@@ -800,6 +800,27 @@ int main() {
                 Expect(redder > 20, "the mirror floor below the cube reflects its red (" + std::to_string(redder) +
                                         " pixels)");
                 Expect(changedAbove == 0, "nothing above the floor changes (" + std::to_string(changedAbove) + ")");
+                // The reflection is solid, not stippled: on each row through it, few
+                // pixels between its first and last redder pixel miss.
+                int inside = 0;
+                int holes = 0;
+                for (int row = width * 6 / 10 + 1; row < width; ++row) {
+                    int first = -1;
+                    int last = -1;
+                    for (int x = 0; x < width; ++x) {
+                        if (redAt(reflected, row * width + x) > redAt(unreflected, row * width + x) + 20) {
+                            first = first < 0 ? x : first;
+                            last = x;
+                        }
+                    }
+                    for (int x = first; first >= 0 && x <= last; ++x) {
+                        ++inside;
+                        holes += redAt(reflected, row * width + x) > redAt(unreflected, row * width + x) + 20 ? 0 : 1;
+                    }
+                }
+                Expect(inside > 0 && holes * 10 <= inside, "the reflection has no stipple of missed rays (" +
+                                                               std::to_string(holes) + " of " + std::to_string(inside) +
+                                                               " missed)");
 
                 // Off four ways, and a floor rougher than MaxRoughness: exactly the frame without reflections.
                 for (int way = 0; way < 5; ++way) {

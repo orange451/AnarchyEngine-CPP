@@ -31,6 +31,12 @@ float facingFade(float reflectedZ) {
     return 1.0 - smoothstep(0.0, 0.5, reflectedZ);
 }
 
+bool stepHits(float depthA, float depthB, float sceneDepth, float thickness) {
+    float nearest = min(depthA, depthB);
+    float farthest = max(depthA, depthB);
+    return farthest >= sceneDepth && nearest <= sceneDepth + thickness;
+}
+
 float coneLevel(float roughness, float hitDistance, float pixelsPerUnit, float levels) {
     float radius = roughness * hitDistance * pixelsPerUnit;
     if (radius <= 1.0) {

@@ -26,5 +26,12 @@ float FacingFade(float reflectedZ);
 // roughness times the hit's distance, and pixelsPerUnit is how many of
 // level 0's pixels one stud spans there.
 float ConeLevel(float roughness, float hitDistance, float pixelsPerUnit, int levels);
+// Whether one step of the trace hit: the ray's distance from the camera ran
+// from depthA to depthB across the step, and the depth buffer's surface there
+// is sceneDepth away and thickness deep. The whole span is tested, as McGuire
+// and Mara's trace does, so a long stride that passes through the surface
+// still hits; a ray already behind it by more than its thickness passes
+// behind a thin object.
+bool StepHits(float depthA, float depthB, float sceneDepth, float thickness);
 
 }  // namespace runner

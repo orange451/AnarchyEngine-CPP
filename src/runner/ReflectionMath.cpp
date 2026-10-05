@@ -43,4 +43,10 @@ float ConeLevel(float roughness, float hitDistance, float pixelsPerUnit, int lev
     return std::min(std::log2(radius), static_cast<float>(levels - 1));
 }
 
+bool StepHits(float depthA, float depthB, float sceneDepth, float thickness) {
+    const float nearest = std::min(depthA, depthB);
+    const float farthest = std::max(depthA, depthB);
+    return farthest >= sceneDepth && nearest <= sceneDepth + thickness;
+}
+
 }  // namespace runner

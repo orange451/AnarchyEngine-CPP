@@ -73,3 +73,17 @@ TEST_CASE("RM5 the cone level grows with roughness and distance, from 0 for a mi
     // Never past the last level.
     REQUIRE(ConeLevel(1.f, 1000.f, 500.f, 6) == 5.f);
 }
+
+TEST_CASE("RM6 a step hits when the ray's depth across it reaches the surface, even jumping past it", "[reflections]") {
+    // Surface 10 studs away, 0.3 thick.
+    REQUIRE(StepHits(9.f, 10.1f, 10.f, 0.3f));
+    // A long stride from in front of the surface to far behind it still hits:
+    // the ray passed through it during the step.
+    REQUIRE(StepHits(9.f, 12.f, 10.f, 0.3f));
+    // Still in front of it.
+    REQUIRE_FALSE(StepHits(8.f, 9.5f, 10.f, 0.3f));
+    // Already behind it before the step, by more than its thickness: passing behind a thin object.
+    REQUIRE_FALSE(StepHits(10.5f, 12.f, 10.f, 0.3f));
+    // Either order of the two ends.
+    REQUIRE(StepHits(12.f, 9.f, 10.f, 0.3f));
+}

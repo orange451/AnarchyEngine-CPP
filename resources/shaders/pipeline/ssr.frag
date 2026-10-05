@@ -23,11 +23,6 @@ uniform float uMaxDistance;
 uniform float uMaxRoughness;
 uniform float uChainLevels;
 
-// Interleaved gradient noise (Jimenez 2014): a different offset at each pixel, with no texture.
-float noise(vec2 pixel) {
-    return fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
-}
-
 // How far in front of the camera the depth buffer's surface is at uv.
 float sceneDepthAt(vec2 uv) {
     return -viewPositionAt(uv, texture(uDepth, uv).r).z;
@@ -87,7 +82,10 @@ void main() {
     vec2 dp = vec2(stepDir, delta.y * invdx) * stride;
     float dqz = (qz1 - qz0) * invdx * stride;
     float dk = (k1 - k0) * invdx * stride;
-    float jitter = noise(gl_FragCoord.xy);
+    // Each step lands mid-stride. A per-pixel jitter would trade banding for
+    // noise, which only pays with frames averaged together (TAA); without
+    // that, noise shows as stipple, so every pixel steps alike.
+    float jitter = 0.5;
     vec2 p = p0 + dp * jitter;
     float qz = qz0 + dqz * jitter;
     float k = k0 + dk * jitter;
@@ -111,10 +109,10 @@ void main() {
         if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) {
             break;
         }
-        float rayDepth = -qz / k;
+        // The ray's depth across the whole step, so a long stride cannot jump past a surface.
         float sceneDepth = sceneDepthAt(uv);
         float thickness = max(0.05, sceneDepth * 0.03);
-        if (rayDepth >= sceneDepth && rayDepth <= sceneDepth + thickness) {
+        if (stepHits(-previousQz / previousK, -qz / k, sceneDepth, thickness)) {
             hit = true;
             break;
         }
@@ -142,6 +140,11 @@ void main() {
         }
     }
     vec2 hitUv = (permute ? p.yx : p) / uScreenSize;
+    // A ray can only hit a surface that faces it. One facing the same way is
+    // the surface it just left, a neighbor on a curved one, or a back face.
+    if (dot(texture(uNormal, hitUv).rgb, dir) >= 0.0) {
+        return;
+    }
     vec3 hitPosition = viewPositionAt(hitUv, texture(uDepth, hitUv).r);
     float hitDistance = length(hitPosition - origin);
     // Pixels of the lit chain's level 0 (half size) per stud at the hit.

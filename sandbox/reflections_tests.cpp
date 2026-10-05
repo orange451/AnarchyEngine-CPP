@@ -147,3 +147,44 @@ TEST_CASE("SSR4 scripts make a ScreenSpaceReflections and set it", "[reflections
         REQUIRE(value);
     }
 }
+
+TEST_CASE("SSR3 the snapshot carries the first ScreenSpaceReflections under Lighting", "[reflections][render]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    const auto frame = [&] {
+        pump.prepare_copy(game);
+        pump.publish();
+    };
+    frame();
+    REQUIRE_FALSE(pump.front().reflections.present);
+
+    const InstanceId lighting = game.scene_service("Lighting");
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    game.set_parent(folder.id(), lighting);
+    ScreenSpaceReflections& first = add_reflections(game, folder.id());
+    ScreenSpaceReflections& second = add_reflections(game, lighting);
+    REQUIRE_FALSE(first.set_enabled(false));
+    REQUIRE_FALSE(first.set_intensity(0.5));
+    REQUIRE_FALSE(first.set_max_distance(20.0));
+    REQUIRE_FALSE(first.set_max_roughness(0.25));
+    REQUIRE_FALSE(second.set_max_distance(70.0));
+    frame();
+    {
+        const engine_core::VisualReflections& ssr = pump.front().reflections;
+        REQUIRE(ssr.present);
+        REQUIRE_FALSE(ssr.enabled);
+        REQUIRE(ssr.intensity == 0.5f);
+        REQUIRE(ssr.max_distance == 20.f);
+        REQUIRE(ssr.max_roughness == 0.25f);
+    }
+    game.destroy(first.id());
+    frame();
+    REQUIRE(pump.front().reflections.present);
+    REQUIRE(pump.front().reflections.max_distance == 70.f);
+    game.destroy(second.id());
+    frame();
+    REQUIRE_FALSE(pump.front().reflections.present);
+    REQUIRE(pump.front().reflections.max_distance == 50.f);
+}

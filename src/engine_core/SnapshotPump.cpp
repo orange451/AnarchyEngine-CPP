@@ -9,6 +9,7 @@
 #include "Light.hpp"
 #include "Lighting.hpp"
 #include "LuaApi.hpp"
+#include "ScreenSpaceReflections.hpp"
 #include "Skybox.hpp"
 
 #include <algorithm>
@@ -27,6 +28,12 @@ static_assert(VisualBloom{}.enabled == BloomEffect::kDefaultEnabled &&
                   VisualBloom{}.size == static_cast<float>(BloomEffect::kDefaultSize) &&
                   VisualBloom{}.threshold == static_cast<float>(BloomEffect::kDefaultThreshold),
               "a place with no BloomEffect carries BloomEffect's defaults");
+
+static_assert(VisualReflections{}.enabled == ScreenSpaceReflections::kDefaultEnabled &&
+                  VisualReflections{}.intensity == static_cast<float>(ScreenSpaceReflections::kDefaultIntensity) &&
+                  VisualReflections{}.max_distance == static_cast<float>(ScreenSpaceReflections::kDefaultMaxDistance) &&
+                  VisualReflections{}.max_roughness == static_cast<float>(ScreenSpaceReflections::kDefaultMaxRoughness),
+              "a place with no ScreenSpaceReflections carries its defaults");
 
 float field_of_view_of(const GameObject& object) {
     const auto* camera = dynamic_cast<const Camera*>(&object);
@@ -474,6 +481,17 @@ void SnapshotPump::resolve_lighting(DataModel& game) {
         bloom.size = static_cast<float>(effect->size());
         bloom.threshold = static_cast<float>(effect->threshold());
     }
+    const ScreenSpaceReflections* traced =
+        lighting != nullptr ? find_first<ScreenSpaceReflections>(game, lighting->id()) : nullptr;
+    VisualReflections& reflections = base_.reflections;
+    reflections = VisualReflections{};
+    if (traced != nullptr) {
+        reflections.present = true;
+        reflections.enabled = traced->enabled();
+        reflections.intensity = static_cast<float>(traced->intensity());
+        reflections.max_distance = static_cast<float>(traced->max_distance());
+        reflections.max_roughness = static_cast<float>(traced->max_roughness());
+    }
 
     if (lighting == nullptr) {
         base_.lighting = VisualLighting{};
@@ -492,6 +510,7 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.lighting = base_.lighting;
     dst.sky = base_.sky;
     dst.bloom = base_.bloom;
+    dst.reflections = base_.reflections;
     dst.resources_root = base_.resources_root;
     dst.draggers = base_.draggers;
     dst.billboards = base_.billboards;

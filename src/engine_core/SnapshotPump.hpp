@@ -111,6 +111,17 @@ struct VisualBloom {
     float threshold = 0.f;
 };
 
+// The first ScreenSpaceReflections under Lighting, in tree order, as the
+// renderer reads it. present is false with none, and nothing is traced.
+struct VisualReflections {
+    bool present = false;
+    bool enabled = true;
+    float intensity = 1.f;
+    // Studs.
+    float max_distance = 50.f;
+    float max_roughness = 0.5f;
+};
+
 // Lighting's properties the renderer reads, found again at every Prepare.
 // Each is as Lighting has it; a place with no Lighting has the defaults.
 struct VisualLighting {
@@ -177,6 +188,7 @@ struct VisualSnapshot {
     VisualLighting lighting;
     VisualSky sky;
     VisualBloom bloom;
+    VisualReflections reflections;
     // Rebuilt at every take_changes: there are few, and hover moves with the mouse.
     std::vector<VisualDragger> draggers;
     // Rebuilt at every take_changes, like draggers.
@@ -244,7 +256,8 @@ private:
     void set_row_prefab(VisualInstance& inst, const std::string& guid);
     // Fills base_.prefabs from each entry's Prefab, as the DataModel is now.
     void resolve_prefabs(DataModel& game);
-    // Fills base_.lighting, base_.sky, and base_.bloom from the place's Lighting, as the DataModel is now.
+    // Fills base_.lighting, base_.sky, base_.bloom, and base_.reflections from the
+    // place's Lighting, as the DataModel is now.
     void resolve_lighting(DataModel& game);
     // The first T under root, depth first in child order, or null.
     template <class T>

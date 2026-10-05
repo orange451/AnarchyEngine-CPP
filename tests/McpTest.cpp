@@ -25,6 +25,7 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1058,6 +1059,7 @@ void TestToolSpecs() {
     studio.tabs = [] { return JsonValue::object(); };
     studio.change_tab = [](const std::string&, const std::string&) {};
     studio.save_place = [](const std::string&) { return JsonValue::object(); };
+    studio.show_profiler = [](std::optional<bool>) { return false; };
     ide::McpServer every;
     ide::add_engine_tools(every, engine, studio);
     const std::vector<ide::McpToolSpec> specs = ide::engine_tool_specs();
@@ -1082,11 +1084,12 @@ void TestToolSpecs() {
     std::vector<std::string> expected;
     for (const ide::McpToolSpec& spec : specs) {
         if (spec.name != "playtest" && spec.name != "screenshot" && spec.name != "get_studio_info" &&
-            spec.name != "import_assets" && spec.name != "tabs" && spec.name != "save_place") {
+            spec.name != "import_assets" && spec.name != "tabs" && spec.name != "save_place" &&
+            spec.name != "show_profiler") {
             expected.push_back(spec.name);
         }
     }
-    Expect(names == expected, "a studio without the hooks leaves out playtest, screenshot, get_studio_info, import_assets, tabs, and save_place");
+    Expect(names == expected, "a studio without the hooks leaves out playtest, screenshot, get_studio_info, import_assets, tabs, save_place, and show_profiler");
 }
 
 // tabs hands the action to the studio, then lists the tabs as they are after it.
@@ -1151,6 +1154,29 @@ void TestSavePlace() {
     Expect(ErrorText(server, "save_place", R"({"folder":"/conflict"})") ==
                "Not saved: src/Workspace.json changed on disk",
            "why the studio did not save comes back as the error");
+}
+
+// show_profiler hands the studio on, or nothing to flip, and returns what it says shows now.
+void TestShowProfiler() {
+    engine_core::Engine engine;
+    bool shown = false;
+    std::vector<std::optional<bool>> asked;
+    ide::McpStudio studio;
+    studio.show_profiler = [&](std::optional<bool> on) {
+        asked.push_back(on);
+        shown = on.value_or(!shown);
+        return shown;
+    };
+    ide::McpServer server;
+    ide::add_engine_tools(server, engine, studio);
+    Expect(Member(Call(server, "show_profiler", "{}"), "shown").as_bool(), "show_profiler flips it on");
+    Expect(!Member(Call(server, "show_profiler", "{}"), "shown").as_bool(), "and off again");
+    Expect(Member(Call(server, "show_profiler", R"({"on":true})"), "shown").as_bool(), "on true shows it");
+    Expect(!Member(Call(server, "show_profiler", R"({"on":false})"), "shown").as_bool(), "on false hides it");
+    Expect(asked == std::vector<std::optional<bool>>{std::nullopt, std::nullopt, true, false},
+           "the studio gets on, or nothing when it is left out");
+    Expect(ErrorText(server, "show_profiler", R"({"on":"yes"})").find("on must be") == 0, "on must be a boolean");
+    Expect(asked.size() == 4, "a bad on never reaches the studio");
 }
 
 // gpu_detail sets the profiler's per-pass GPU timing, or flips it without on.
@@ -1308,6 +1334,7 @@ int main() {
     TestImages();
     TestTabs();
     TestSavePlace();
+    TestShowProfiler();
     TestGpuDetail();
     TestProfileTool();
     if (gFailures == 0) {

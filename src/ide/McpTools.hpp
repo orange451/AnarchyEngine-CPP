@@ -4,6 +4,7 @@
 #include "types.hpp"
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -73,6 +74,9 @@ struct McpStudio {
     // does to that folder. Returns the project's name and folder, and for a
     // Save the files it wrote, moved, and removed. Throws why nothing was saved.
     std::function<engine_core::JsonValue(const std::string& folder)> save_place;
+    // Shows or hides the profiler over the Scene View, as Ctrl+F6 does, or
+    // flips it when shown is empty. Returns whether it shows now.
+    std::function<bool(std::optional<bool> shown)> show_profiler;
 };
 
 // What tools/list shows of a tool, without the code that runs it.
@@ -89,8 +93,8 @@ std::vector<McpToolSpec> engine_tool_specs();
 
 // The tools over one engine: the tree, properties, instances, scripts and
 // what analysis finds in them, selection, the class registry, Luau, output,
-// undo, play testing, the Scene View, the studio's tabs, saving, the profiler's GPU detail, and which
-// studio this is. Each is the
+// undo, play testing, the Scene View, the studio's tabs, saving, the profiler and its GPU detail, and
+// which studio this is. Each is the
 // one engine_tool_specs describes; a tool whose studio hooks are missing is
 // left out.
 //

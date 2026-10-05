@@ -5,6 +5,7 @@
 #include "AssetImport.hpp"
 #include "IdeLayoutInternal.hpp"
 #include "McpSetup.hpp"
+#include "runner/ProfilerOverlay.hpp"
 #include "TextureImport.hpp"
 
 namespace ide {
@@ -231,6 +232,16 @@ void IdeLayout::start_mcp() {
             *out = std::move(result);
         });
         return *out;
+    };
+    studio.show_profiler = [on_ui](std::optional<bool> shown) {
+        // Shared, since a task that runs after a timed-out wait still writes it.
+        auto now = std::make_shared<bool>(false);
+        on_ui([shown, now] {
+            runner::ProfilerUi& ui = runner::ProfilerUi::get();
+            ui.setShown(shown.value_or(!ui.shown()));
+            *now = ui.shown();
+        });
+        return *now;
     };
     auto identity = std::make_shared<McpIdentity>();
     studio.info = [identity] {

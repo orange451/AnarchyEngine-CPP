@@ -1626,6 +1626,16 @@ JsonValue SavePlace(const ToolContext& context, const JsonValue& arguments) {
     return context.studio.save_place(folder);
 }
 
+JsonValue ShowProfiler(const ToolContext& context, const JsonValue& arguments) {
+    std::optional<bool> shown;
+    if (arguments.find("on") != nullptr) {
+        shown = BoolArg(arguments, "on", false);
+    }
+    JsonValue out = JsonValue::object();
+    out.set("shown", JsonValue::boolean(context.studio.show_profiler(shown)));
+    return out;
+}
+
 JsonValue GpuDetail(const ToolContext&, const JsonValue& arguments) {
     profiler::set_gpu_detail(BoolArg(arguments, "on", !profiler::gpu_detail()));
     JsonValue out = JsonValue::object();
@@ -1652,6 +1662,8 @@ bool CanImport(const McpStudio& studio) { return studio.import_files != nullptr;
 bool HasTabs(const McpStudio& studio) { return studio.tabs && studio.change_tab; }
 
 bool CanSave(const McpStudio& studio) { return studio.save_place != nullptr; }
+
+bool HasProfiler(const McpStudio& studio) { return studio.show_profiler != nullptr; }
 
 bool KnowsItself(const McpStudio& studio) { return studio.info != nullptr; }
 
@@ -1688,6 +1700,7 @@ constexpr ToolCode kToolCode[] = {
     {"screenshot", Screenshot, CanCapture},
     {"tabs", Tabs, HasTabs},
     {"save_place", SavePlace, CanSave},
+    {"show_profiler", ShowProfiler, HasProfiler},
     {"gpu_detail", GpuDetail, nullptr},
     {"get_studio_info", GetStudioInfo, KnowsItself},
 };

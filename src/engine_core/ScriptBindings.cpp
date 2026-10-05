@@ -194,6 +194,7 @@ DataModel& create_skybox(DataModel& world) { return world.create<Skybox>(); }
 DataModel& create_screen_gui(DataModel& world) { return world.create<ScreenGui>(); }
 DataModel& create_billboard_gui(DataModel& world) { return world.create<BillboardGui>(); }
 DataModel& create_pane(DataModel& world) { return world.create<Pane>(); }
+DataModel& create_image_pane(DataModel& world) { return world.create<ImagePane>(); }
 DataModel& create_hbox(DataModel& world) { return world.create<HBox>(); }
 DataModel& create_vbox(DataModel& world) { return world.create<VBox>(); }
 DataModel& create_label(DataModel& world) { return world.create<Label>(); }
@@ -228,6 +229,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("ScreenGui", create_screen_gui);
     register_lua_creatable("BillboardGui", create_billboard_gui);
     register_lua_creatable("Pane", create_pane);
+    register_lua_creatable("ImagePane", create_image_pane);
     register_lua_creatable("HBox", create_hbox);
     register_lua_creatable("VBox", create_vbox);
     register_lua_creatable("Label", create_label);

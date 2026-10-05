@@ -1,5 +1,6 @@
 #include "Gui.hpp"
 
+#include "AssetInstances.hpp"
 #include "Containment.hpp"
 #include "Contract.hpp"
 #include "Enum.hpp"
@@ -46,6 +47,7 @@ constexpr GuiSpec kSpecs[] = {
     {"Prompt", "string", LuaSlot::Kind::String, 0, 0},
     {"Source", "string", LuaSlot::Kind::String, 0, 0},
     {"AlwaysOnTop", "boolean", LuaSlot::Kind::Bool, 0, 0},
+    {"ImageTransparency", "number", LuaSlot::Kind::Number, 0, 1},
 };
 static_assert(std::size(kSpecs) == static_cast<std::size_t>(GuiProperty::Count), "a GuiProperty has no spec");
 
@@ -113,7 +115,7 @@ LuaSlot GuiValues::default_value(GuiProperty property, const char* class_name) {
     case GuiProperty::Style:
         return string_slot("");
     case GuiProperty::Size:
-        return klass == "Pane" ? vec2_slot(100.f, 100.f) : vec2_slot(0.f, 0.f);
+        return klass == "Pane" || klass == "ImagePane" ? vec2_slot(100.f, 100.f) : vec2_slot(0.f, 0.f);
     case GuiProperty::Alignment:
         return enum_slot(gui_alignment_enum(), 0);
     case GuiProperty::Visible:
@@ -124,6 +126,7 @@ LuaSlot GuiValues::default_value(GuiProperty property, const char* class_name) {
         return color_slot(1.f, 1.f, 1.f);
     case GuiProperty::BackgroundTransparency:
     case GuiProperty::Spacing:
+    case GuiProperty::ImageTransparency:
         return number_slot(0);
     case GuiProperty::Text:
         return string_slot(klass == "Label" ? "Label" : klass == "Button" ? "Button" : "");
@@ -300,6 +303,36 @@ Pane::Pane(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : Gu
 
 const char* Pane::class_name() const { return "Pane"; }
 
+ImagePane::ImagePane(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : GuiBasePane(tag, state, id) {
+    reset_values();
+}
+
+const char* ImagePane::class_name() const { return "ImagePane"; }
+
+LuaSlot ImagePane::image() const { return instance_reference_slot(image_ref_, "Texture"); }
+
+const Texture* ImagePane::image_texture() const {
+    const InstanceId target = image_ref_.resolve(*this);
+    return target != 0 ? dynamic_cast<const Texture*>(instance(target)) : nullptr;
+}
+
+std::optional<std::string> ImagePane::set_image(const LuaSlot& value) {
+    if (!on_gameplay_thread()) {
+        contract_fail("Gui setters run on SimulationThread");
+    }
+    const std::string before = image_ref_.guid();
+    std::optional<std::string> error = set_instance_reference("Image", "Texture", image_ref_, value);
+    if (image_ref_.guid() != before) {
+        touch();
+    }
+    return error;
+}
+
+void ImagePane::on_reuse() {
+    GuiValues::on_reuse();
+    image_ref_.set_guid(std::string());
+}
+
 HBox::HBox(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : GuiBasePane(tag, state, id) {
     reset_values();
 }
@@ -384,7 +417,7 @@ LuaField gui_field(const char* class_name) {
         return lua_saved_enum(about.name, gui_alignment_enum(), read_gui<P>, write_gui<P>, default_json);
     }
     LuaField field = lua_saved_property(about.name, about.type, read_gui<P>, write_gui<P>, default_json);
-    if constexpr (P == GuiProperty::BackgroundTransparency) {
+    if constexpr (P == GuiProperty::BackgroundTransparency || P == GuiProperty::ImageTransparency) {
         field = lua_slider(field, 0.0, 1.0);
     }
     return field;
@@ -410,6 +443,27 @@ bool write_adornee(DataModel&, DataModel& object, LuaSlot& in) {
         return false;
     }
     if (std::optional<std::string> error = board->set_adornee(in)) {
+        in.error = std::move(*error);
+        return false;
+    }
+    return true;
+}
+
+bool read_image(DataModel&, DataModel& object, LuaSlot& out) {
+    const auto* pane = dynamic_cast<const ImagePane*>(&object);
+    if (pane == nullptr) {
+        return false;
+    }
+    out = pane->image();
+    return true;
+}
+
+bool write_image(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* pane = dynamic_cast<ImagePane*>(&object);
+    if (pane == nullptr) {
+        return false;
+    }
+    if (std::optional<std::string> error = pane->set_image(in)) {
         in.error = std::move(*error);
         return false;
     }
@@ -447,6 +501,12 @@ ANARCHY_LUA_REGISTER(register_gui_lua) {
     // A Pane starts 100 by 100, as the legacy one did.
     const LuaField pane[] = {gui_field<GuiProperty::Size>("Pane")};
     add_class("Pane", "GuiBasePane", pane);
+    const LuaField image_pane[] = {
+        gui_field<GuiProperty::Size>("ImagePane"),
+        lua_saved_property("Image", "Texture?", read_image, write_image, "null"),
+        gui_field<GuiProperty::ImageTransparency>("ImagePane"),
+    };
+    add_class("ImagePane", "GuiBasePane", image_pane);
     const LuaField box[] = {gui_field<GuiProperty::Spacing>("HBox")};
     add_class("HBox", "GuiBasePane", box);
     add_class("VBox", "GuiBasePane", box);

@@ -1,5 +1,6 @@
 #include "GuiLayer.hpp"
 
+#include "AssetInstances.hpp"
 #include "BillboardMath.hpp"
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
@@ -7,9 +8,12 @@
 #include "Folder.hpp"
 #include "Gui.hpp"
 #include "SceneService.hpp"
+#include "ScriptRuntime.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <iterator>
 #include <optional>
 #include <sstream>
 #include <string_view>
@@ -86,7 +90,12 @@ jadefx::Color NodeColor(engine_core::ColorRgb color, float alpha = 1.f) {
     return jadefx::Color{color.r, color.g, color.b, alpha};
 }
 
-bool IsPaneClass(const std::string& name) { return name == "Pane" || name == "HBox" || name == "VBox"; }
+bool IsPaneClass(const std::string& name) {
+    return name == "Pane" || name == "ImagePane" || name == "HBox" || name == "VBox";
+}
+
+// How often a file an ImagePane draws is looked at again.
+constexpr std::chrono::seconds kImageRecheck{1};
 
 }  // namespace
 
@@ -114,6 +123,11 @@ struct GuiLayer::Entry {
     // showed or wrote it.
     std::string instanceText;
     std::string fieldText;
+    // An ImagePane's Image as its Texture's Path, empty for none, and the
+    // opacity ImageTransparency gives it, as the last sync read them.
+    bool imagePane = false;
+    std::string imagePath;
+    float imageOpacity = 1.f;
 };
 
 const char* GuiLayer::defaultStylesheet() {
@@ -150,12 +164,20 @@ jadefx::Node* GuiLayer::nodeFor(engine_core::InstanceId id) const {
 }
 
 void GuiLayer::sync() {
-    // The simulation may be inside a step. Skip this frame rather than wait.
-    engine_core::DataModelLock lock(game_, engine_core::DataModelLock::Read, std::chrono::milliseconds(1));
-    if (!lock.owns()) {
-        return;
+    {
+        // The simulation may be inside a step. Skip this frame rather than wait.
+        engine_core::DataModelLock lock(game_, engine_core::DataModelLock::Read, std::chrono::milliseconds(1));
+        if (!lock.owns()) {
+            return;
+        }
+        syncTree();
     }
+    updateImages();
+}
+
+void GuiLayer::syncTree() {
     ++pass_;
+    resourcesRoot_ = game_.resources_root();
     std::vector<std::shared_ptr<jadefx::Node>> screens;
     std::string css;
     if (const engine_core::InstanceId service = game_.scene_service("Gui"); service != 0) {
@@ -384,6 +406,8 @@ std::shared_ptr<jadefx::Node> GuiLayer::makeNode(engine_core::InstanceId id, con
         node->setPickOnBounds(false);
     } else if (className == "Pane") {
         node = std::make_shared<GuiNode<jadefx::StackPane>>("pane", input, false);
+    } else if (className == "ImagePane") {
+        node = std::make_shared<GuiNode<jadefx::StackPane>>("imagepane", input, false);
     } else if (className == "HBox") {
         node = std::make_shared<GuiNode<jadefx::HBox>>("hbox", input, false);
     } else if (className == "VBox") {
@@ -439,6 +463,14 @@ std::shared_ptr<jadefx::Node> GuiLayer::build(engine_core::InstanceId id, const 
     if (gui.revision() != entry.revision) {
         apply(entry, gui);
         entry.revision = gui.revision();
+    }
+    // Read at every sync, since the Texture's Path can change without the
+    // ImagePane's revision moving.
+    if (const auto* imagePane = dynamic_cast<const engine_core::ImagePane*>(&gui)) {
+        const engine_core::Texture* texture = imagePane->image_texture();
+        entry.imagePane = true;
+        entry.imagePath = texture != nullptr ? texture->path() : std::string();
+        entry.imageOpacity = 1.f - static_cast<float>(gui.number(GuiProperty::ImageTransparency));
     }
     std::string name = game_.name(id);
     if (name != entry.name) {
@@ -554,6 +586,67 @@ void GuiLayer::writeText(engine_core::InstanceId id, std::string text) {
             game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
         }
     });
+}
+
+void GuiLayer::updateImages() {
+    ++imagePass_;
+    if (resourcesRoot_ != imagesRoot_) {
+        images_.clear();
+        imagesRoot_ = resourcesRoot_;
+    }
+    for (const auto& [id, entry] : entries_) {
+        if (!entry->imagePane) {
+            continue;
+        }
+        std::shared_ptr<jadefx::Image> image = entry->imagePath.empty() ? nullptr : loadImage(entry->imagePath);
+        jadefx::Node& node = *entry->node;
+        if (image != node.getBackgroundImage() || entry->imageOpacity != node.getBackgroundImageOpacity()) {
+            node.setBackgroundImage(std::move(image), entry->imageOpacity);
+        }
+    }
+    for (auto it = images_.begin(); it != images_.end();) {
+        it = it->second.pass == imagePass_ ? std::next(it) : images_.erase(it);
+    }
+}
+
+std::shared_ptr<jadefx::Image> GuiLayer::loadImage(const std::string& path) {
+    if (imagesRoot_.empty()) {
+        return nullptr;
+    }
+    LoadedImage& loaded = images_[path];
+    loaded.pass = imagePass_;
+    const auto now = std::chrono::steady_clock::now();
+    if (loaded.tried && now - loaded.checked < kImageRecheck) {
+        return loaded.image;
+    }
+    loaded.checked = now;
+    auto report = [this](const std::string& message) {
+        engine_.scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error, message);
+    };
+    // Texture Paths use '/', which every platform's path splits on.
+    const std::filesystem::path file = imagesRoot_ / std::filesystem::u8path(path);
+    std::error_code error;
+    const std::filesystem::file_time_type stamp = std::filesystem::last_write_time(file, error);
+    if (error) {
+        const bool wasThere = !loaded.tried || loaded.image != nullptr || loaded.stamp != std::filesystem::file_time_type{};
+        loaded.tried = true;
+        loaded.stamp = {};
+        loaded.image = nullptr;
+        if (wasThere) {
+            report("Texture " + path + " was not found in the resources folder");
+        }
+        return nullptr;
+    }
+    if (loaded.tried && stamp == loaded.stamp) {
+        return loaded.image;
+    }
+    loaded.tried = true;
+    loaded.stamp = stamp;
+    loaded.image = jadefx::Image::load(file.u8string());
+    if (loaded.image == nullptr) {
+        report("Texture " + path + " is not an image an ImagePane can draw");
+    }
+    return loaded.image;
 }
 
 void GuiLayer::layoutChildren() {

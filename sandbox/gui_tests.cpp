@@ -3,6 +3,7 @@
 
 #include "support.hpp"
 
+#include "AssetInstances.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Enum.hpp"
 #include "Folder.hpp"
@@ -68,7 +69,7 @@ TEST_CASE("GUI1 game has a Gui service, after Scripts", "[gui]") {
 TEST_CASE("GUI2 the classes, their bases, and their defaults", "[gui]") {
     SimRole role;
     engine_core::Game game;
-    for (const char* name : {"ScreenGui", "Pane", "HBox", "VBox", "Label", "Button", "TextField", "CSS"}) {
+    for (const char* name : {"ScreenGui", "Pane", "ImagePane", "HBox", "VBox", "Label", "Button", "TextField", "CSS"}) {
         INFO(name);
         REQUIRE(engine_core::lua_creatable_known(name));
         REQUIRE(engine_core::project_class_known(name));
@@ -518,4 +519,100 @@ TEST_CASE("GUI14 Stop puts back the Adornee a script changed during play", "[gui
     rig.game.stop_simulation();
     REQUIRE(board.adornee_id() == first.id());
     REQUIRE(board.anchor().x == 1.f);
+}
+
+TEST_CASE("GUI15 ImagePane is a Pane with an Image and an ImageTransparency", "[gui][image]") {
+    SimRole role;
+    engine_core::Game game;
+    REQUIRE(engine_core::lua_class_inherits("ImagePane", "GuiBasePane"));
+    engine_core::ImagePane& pane = game.create<engine_core::ImagePane>();
+    game.set_parent(pane.id(), gui_service(game));
+    REQUIRE(pane.vec2(GuiProperty::Size).x == 100.f);
+    REQUIRE(pane.vec2(GuiProperty::Size).y == 100.f);
+    REQUIRE(pane.number(GuiProperty::ImageTransparency) == 0);
+    REQUIRE(pane.image().kind == engine_core::LuaSlot::Kind::Nil);
+    REQUIRE(pane.image_texture() == nullptr);
+    engine_core::PropertyBag defaults;
+    pane.save_properties(defaults);
+    REQUIRE(defaults.empty());
+
+    REQUIRE_FALSE(pane.set_value(GuiProperty::ImageTransparency, number(-2)));
+    REQUIRE(pane.number(GuiProperty::ImageTransparency) == 0);
+    REQUIRE_FALSE(pane.set_value(GuiProperty::ImageTransparency, number(0.25)));
+    REQUIRE(pane.number(GuiProperty::ImageTransparency) == 0.25);
+
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    REQUIRE(*pane.set_image(instance_slot(folder.id())) == "Image must be a Texture");
+    engine_core::Texture& texture = game.create<engine_core::Texture>();
+    game.set_parent(texture.id(), game.service("Textures"));
+    REQUIRE_FALSE(texture.set_path("ui/logo.png"));
+
+    const std::uint64_t before = pane.revision();
+    begin_step(game, "Set Image");
+    REQUIRE_FALSE(pane.set_image(instance_slot(texture.id())));
+    end_step(game);
+    REQUIRE(pane.revision() != before);
+    REQUIRE(pane.image_texture() == &texture);
+    engine_core::PropertyBag saved;
+    pane.save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "Image") != nullptr);
+    REQUIRE(engine_core::bag_find(saved, "ImageTransparency") != nullptr);
+    game.history().undo();
+    REQUIRE(pane.image_texture() == nullptr);
+    game.history().redo();
+    REQUIRE(pane.image_texture() == &texture);
+    REQUIRE_FALSE(pane.set_image(engine_core::LuaSlot{}));
+    REQUIRE(pane.image_texture() == nullptr);
+}
+
+TEST_CASE("GUI16 a project saves and loads an ImagePane's Image", "[gui][image][project]") {
+    SimRole role;
+    TempDir dir;
+    {
+        engine_core::Project project = engine_core::Project::create(dir.path);
+        engine_core::DataModel& game = project.datamodel();
+        engine_core::ScreenGui& screen = game.create<engine_core::ScreenGui>();
+        game.set_parent(screen.id(), gui_service(game));
+        engine_core::ImagePane& pane = game.create<engine_core::ImagePane>();
+        game.set_name(pane.id(), "Logo");
+        game.set_parent(pane.id(), screen.id());
+        engine_core::Texture& texture = game.create<engine_core::Texture>();
+        game.set_name(texture.id(), "Logo");
+        game.set_parent(texture.id(), game.service("Textures"));
+        REQUIRE_FALSE(texture.set_path("ui/logo.png"));
+        REQUIRE_FALSE(pane.set_image(instance_slot(texture.id())));
+        REQUIRE_FALSE(pane.set_value(GuiProperty::ImageTransparency, number(0.5)));
+        project.save();
+    }
+    engine_core::Game game;
+    engine_core::Project loaded = engine_core::Project::load(dir.path, game);
+    const engine_core::InstanceId screen = game.find_first_child(gui_service(game), "ScreenGui");
+    auto* pane = dynamic_cast<engine_core::ImagePane*>(game.instance(game.find_first_child(screen, "Logo")));
+    REQUIRE(pane != nullptr);
+    REQUIRE(pane->number(GuiProperty::ImageTransparency) == 0.5);
+    const engine_core::Texture* texture = pane->image_texture();
+    REQUIRE(texture != nullptr);
+    REQUIRE(texture->path() == "ui/logo.png");
+}
+
+TEST_CASE("GUI17 scripts set an ImagePane's Image and ImageTransparency", "[gui][image]") {
+    ScriptRig rig;
+    engine_core::Texture& logo = rig.game.create<engine_core::Texture>();
+    rig.game.set_name(logo.id(), "Logo");
+    rig.game.set_parent(logo.id(), rig.game.service("Textures"));
+    add_script(rig.game, "Ui", R"(
+        local screen = Instance.new("ScreenGui", game.Gui)
+        local pane = Instance.new("ImagePane", screen)
+        _G.defaults = pane.Image == nil and pane.ImageTransparency == 0 and pane.Size == Vector2.new(100, 100)
+            and pane:IsA("GuiBasePane")
+        pane.Image = game.Assets.Textures.Logo
+        pane.ImageTransparency = 3
+        _G.set = pane.Image == game.Assets.Textures.Logo and pane.ImageTransparency == 1
+        _G.typed = not pcall(function() pane.Image = screen end)
+        pane.Image = nil
+        _G.cleared = pane.Image == nil
+    )");
+    rig.game.start_simulation();
+    rig.frames(1, 0.05);
+    require_globals(rig, {"defaults", "set", "typed", "cleared"});
 }

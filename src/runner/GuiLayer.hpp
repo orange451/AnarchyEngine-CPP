@@ -7,7 +7,9 @@
 
 #include "jadefx/jadefx.hpp"
 
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -46,8 +48,8 @@ struct BillboardView {
 // The Gui service's ScreenGuis, as JadeFX nodes over a Scene View. Each
 // ScreenGui under the service, directly or through Folders, fills the layer;
 // each GuiBase inside one, through a chain of GuiBases, is a node of its
-// class's element type (screengui, pane, hbox, vbox, label, button,
-// textfield) whose id is its Name and whose classes are its ClassList. The
+// class's element type (screengui, pane, imagepane, hbox, vbox, label,
+// button, textfield) whose id is its Name and whose classes are its ClassList. The
 // CSS instances under a GuiBase, joined in child order, are that node's
 // stylesheet, and those directly under the service are the layer's, so they
 // style every ScreenGui and every BillboardGui the layer draws.
@@ -62,6 +64,13 @@ struct BillboardView {
 // Text back. Mouse events on a node fire its instance's events on the
 // simulation thread, and the layer hands the mouse to its Scene View as
 // GuiInput says. A ScreenGui's own area does not take the mouse.
+//
+// An ImagePane's node draws its Image's file, by the Texture's Path under the
+// project's resources folder, as a JadeFX background image. The files load
+// after the lock is let go, so decoding never holds up the simulation; each is
+// looked at again at most once a second and reloaded when it changed. One
+// that is missing or does not decode draws nothing, and says why in Output
+// once per version of the file.
 //
 // Every BillboardGui in Workspace or Core that is not inside another GUI is a
 // node too, element type billboardgui, built and updated as a ScreenGui is.
@@ -158,6 +167,22 @@ private:
     void fire(engine_core::InstanceId id, const char* event);
     // A TextField's typed text, written back to Text.
     void writeText(engine_core::InstanceId id, std::string text);
+    // sync's work under the read lock.
+    void syncTree();
+    // Gives each ImagePane's node the image its entry names. Runs without the lock.
+    void updateImages();
+    // The decoded file at path under resourcesRoot_, or null.
+    std::shared_ptr<jadefx::Image> loadImage(const std::string& path);
+
+    // A file an ImagePane draws, as last read.
+    struct LoadedImage {
+        std::shared_ptr<jadefx::Image> image;
+        std::filesystem::file_time_type stamp{};
+        std::chrono::steady_clock::time_point checked{};
+        bool tried = false;
+        // updateImages' pass that last wanted it. One no pass wants is let go.
+        std::uint64_t pass = 0;
+    };
 
     engine_core::Engine& engine_;
     engine_core::DataModel& game_;
@@ -177,6 +202,12 @@ private:
     std::string css_;
     // The root's GUID at the last sync. Another place starts the nodes over.
     std::string placeGuid_;
+    // The resources folder at the last sync, and the files read from it, by Path.
+    std::filesystem::path resourcesRoot_;
+    // The folder images_ was read from.
+    std::filesystem::path imagesRoot_;
+    std::unordered_map<std::string, LoadedImage> images_;
+    std::uint64_t imagePass_ = 0;
 };
 
 }  // namespace runner

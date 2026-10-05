@@ -661,6 +661,7 @@ add_executable(studio-tests
     tests/ScriptTabsTest.cpp
     tests/TerminalPaneTest.cpp
     tests/GuiStyleTest.cpp
+    tests/GuiImageTest.cpp
     tests/BillboardLayerTest.cpp
     tests/ProfilerOverlayTest.cpp
 )

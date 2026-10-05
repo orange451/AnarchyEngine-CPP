@@ -1104,6 +1104,11 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Color3", false, {});
     add("GuiBasePane", "BackgroundTransparency", "0 is the BackgroundColor as it is, 1 is no background.", "number",
         false, {});
+    add("ImagePane", "Image",
+        "The Texture drawn over its background and under its children, stretched to fill it. Nil draws none.",
+        "Texture?", false, {});
+    add("ImagePane", "ImageTransparency", "0 is the Image as it is, 1 is no image. Its background and children stay.",
+        "number", false, {});
     add("HBox", "Spacing", "Points between its children.", "number", false, {});
     add("VBox", "Spacing", "Points between its children.", "number", false, {});
     add("Label", "Text", "The text it shows.", "string", false, {});

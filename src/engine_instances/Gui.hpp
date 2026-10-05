@@ -11,6 +11,8 @@
 
 namespace engine_core {
 
+class Texture;
+
 // The screen GUI classes, as the legacy engine had them, and CSS, which styles
 // them. Each GUI instance is one node of the screen: a ScreenGui fills the
 // view, and the GuiBases inside it lay out as JadeFX lays out its nodes, by
@@ -48,6 +50,10 @@ namespace engine_core {
 //   BillboardGui's height: give the BillboardGui a height of its own, in CSS
 //   or Size, when its children use percentage heights.
 // Pane       a GuiBasePane that stacks its children by Alignment. Size (100, 100).
+// ImagePane  a Pane that draws an image over its background and under its
+//            children, stretched to the box inside its border. Size (100, 100).
+//   Image              Texture?  the image, loaded by the Texture's Path. nil.
+//   ImageTransparency  number    0 to 1; fades only the image. 0.
 // HBox, VBox GuiBasePanes in a row or a column, with Spacing (number, 0 and up, 0).
 // Label      Text ("Label"), TextColor (Color3, black), FontSize (1 to 512, 16).
 // Button     Text ("Button"), and the event Action, on a click or Enter.
@@ -62,8 +68,8 @@ namespace engine_core {
 //            (runner::GuiLayer::defaultStylesheet).
 //
 // The Name of a GuiBase is its CSS id, its ClassList its classes, and its
-// class, lowercase, its element type: screengui, billboardgui, pane, hbox,
-// vbox, label, button, textfield.
+// class, lowercase, its element type: screengui, billboardgui, pane,
+// imagepane, hbox, vbox, label, button, textfield.
 //
 // Each property is a saved registry property (lua_saved_property), so
 // DataModel saves, loads, undoes, and restores it at Stop.
@@ -85,6 +91,7 @@ enum class GuiProperty : int {
     Prompt,
     Source,
     AlwaysOnTop,
+    ImageTransparency,
     Count
 };
 
@@ -122,6 +129,8 @@ protected:
     // Puts every slot back to this class's defaults. A subclass's constructor
     // calls it, since class_name is not its own until then.
     void reset_values();
+    // Moves revision(), for a property a subclass keeps outside the slots.
+    void touch() { ++revision_; }
 
 private:
 
@@ -181,6 +190,25 @@ class Pane : public GuiBasePane {
 public:
     Pane(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);
     const char* class_name() const override;
+};
+
+class ImagePane : public GuiBasePane {
+public:
+    ImagePane(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);
+    const char* class_name() const override;
+
+    // Image as a script reads it, and the live Texture it names, or null.
+    LuaSlot image() const;
+    const Texture* image_texture() const;
+    // SimulationThread. nil clears it; anything but a live Texture is refused,
+    // and returns why.
+    std::optional<std::string> set_image(const LuaSlot& value);
+
+protected:
+    void on_reuse() override;
+
+private:
+    InstanceRef image_ref_;
 };
 
 class HBox : public GuiBasePane {

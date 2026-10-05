@@ -54,6 +54,9 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "Gui" || class_name == "ScreenGui" || class_name == "BillboardGui") {
         return "Gui.png";
     }
+    if (class_name == "ImagePane") {
+        return "Texture.png";
+    }
     if (class_name == "HBox") {
         return "hbox.png";
     }

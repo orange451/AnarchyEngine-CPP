@@ -1386,6 +1386,7 @@ bool Renderer::shadowPass(const MeshDraw* meshes, int count, const CameraView& c
     if (!shadows_.drawSun(hasSunShadow_ ? &sunShadow_ : nullptr, meshes, camera, shadowSettings_)) {
         return false;
     }
+    stats_.instancedCalls += shadows_.calls();
     sunLookup_ = shadows_.sunLookup();
     for (std::size_t index = 0; index < shadowRequests_.size(); ++index) {
         shadowLookups_[index] = shadows_.lookup(shadowRequests_[index].key);

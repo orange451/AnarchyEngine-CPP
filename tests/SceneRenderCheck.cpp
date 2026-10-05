@@ -1272,6 +1272,20 @@ int main(int argc, char** argv) {
             Expect(std::abs(spotShadowed[1] - spotOpen[1]) <= 3,
                    "and the open floor lit as before, with no acne (" + std::to_string(spotShadowed[1]) + " and " +
                        std::to_string(spotOpen[1]) + ")");
+
+            // SH1: the spot's one tile draws its casters, all one mesh, in one call,
+            // and a frame that reuses the tile draws none. Visible: the cube and the
+            // floor, two runs of slot 0.
+            runner::LightDraw cachedSpot = spotLight;
+            cachedSpot.id = 31;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, scene, 2, &cachedSpot, 1);
+            const int firstCalls = renderer.stats().instancedCalls;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, scene, 2, &cachedSpot, 1);
+            const int reusedCalls = renderer.stats().instancedCalls;
+            Expect(firstCalls == 3 && reusedCalls == 2,
+                   "SH1 one shadow call for the tile, none when it is reused (" + std::to_string(firstCalls) +
+                       " then " + std::to_string(reusedCalls) + ")");
+
             Expect(lit(spotLight, scene, 2) == spotShadowed, "a second frame reuses the cached map and draws the same");
             Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "drawing shadows leaves no GL error");
 

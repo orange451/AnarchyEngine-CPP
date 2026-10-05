@@ -74,10 +74,7 @@ void ShadowRenderer::shutdown() {
         cascadeFbo_ = 0;
     }
     for (unsigned* texture : {&atlas_, &cascades_, &atlasStandIn_, &cascadeStandIn_}) {
-        if (*texture != 0) {
-            glDeleteTextures(1, texture);
-            *texture = 0;
-        }
+        DeleteTexture(*texture);
     }
     atlasTextureSize_ = 0;
     atlasTexturePages_ = 0;
@@ -89,10 +86,7 @@ void ShadowRenderer::shutdown() {
 }
 
 bool ShadowRenderer::makeAtlas(int size, int pages) {
-    if (atlas_ != 0) {
-        glDeleteTextures(1, &atlas_);
-    }
-    atlas_ = 0;
+    DeleteTexture(atlas_);
     atlasTextureSize_ = 0;
     atlasTexturePages_ = 0;
     // GL cannot add a layer in place, so a new page makes the whole array
@@ -109,7 +103,7 @@ bool ShadowRenderer::makeAtlas(int size, int pages) {
         made = glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) == RT_GL_FRAMEBUFFER_COMPLETE;
     }
     if (!made) {
-        glDeleteTextures(1, &texture);
+        DeleteTexture(texture);
         return false;
     }
     atlas_ = texture;
@@ -292,9 +286,7 @@ bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, cons
     }
     const int size = std::max(settings.cascadeSize, 16);
     if (sun != nullptr && size != cascadeSize_) {
-        if (cascades_ != 0) {
-            glDeleteTextures(1, &cascades_);
-        }
+        DeleteTexture(cascades_);
         cascades_ = MakeDepth(size, kMaxCascades, nullptr);
         cascadeSize_ = size;
         glBindFramebuffer(RT_GL_FRAMEBUFFER, cascadeFbo_);

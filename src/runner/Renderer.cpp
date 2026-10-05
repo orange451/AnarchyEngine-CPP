@@ -437,10 +437,7 @@ void Renderer::destroyTargets() {
     }
     for (unsigned* texture : {&albedoTexture_, &normalTexture_, &materialTexture_, &emissiveTexture_, &depthTexture_,
                               &accumulationTexture_, &transparencyTexture_, &mergeTexture_}) {
-        if (*texture != 0) {
-            glDeleteTextures(1, texture);
-            *texture = 0;
-        }
+        DeleteTexture(*texture);
     }
     targetWidth_ = 0;
     targetHeight_ = 0;
@@ -512,12 +509,13 @@ void CullBackFaces(const float* model) {
 }
 
 // The GL state a draw changes, so the UI pass after it finds its own. That
-// includes what every texture unit has bound to each target the passes use:
-// the UI drawn between 3D views keeps its own textures bound for the whole
-// frame (JadeFX keeps its occluder on unit 7, and its images and glyphs on
-// unit 0), so a draw must leave each unit as it found it, not empty. Any
-// other GL drawn between UI draws must do the same. Saved once a draw, not
-// once a pass: a few dozen queries for each 3D view each frame.
+// includes what every texture unit has bound to each target the passes use.
+// JadeFX binds its occluder, or a stand-in, to unit 7 once a frame and only
+// again when the occluder changes, so a draw must leave unit 7's 2D binding
+// as it found it, and GL_TEXTURE0 active; it binds unit 0 again on every
+// text and image draw itself. Any other GL drawn between UI draws must do
+// the same. Saved once a draw, not once a pass: a few dozen queries for each
+// 3D view each frame.
 struct SavedState {
     GLint framebuffer = 0;
     GLint scissorBox[4] = {};
@@ -575,7 +573,9 @@ struct SavedState {
         }
     }
 
-    void restore(const GLint viewport[4]) const {
+    // deleted holds the texture names the draw deleted: a unit that had one
+    // bound is left empty, since binding a deleted name is a GL error.
+    void restore(const GLint viewport[4], const DeletedTextures& deleted) const {
         glBindFramebuffer(RT_GL_FRAMEBUFFER, static_cast<GLuint>(framebuffer));
         glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
         glScissor(scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3]);
@@ -591,13 +591,19 @@ struct SavedState {
         Set(RT_GL_TEXTURE_CUBE_MAP_SEAMLESS, seamlessCubes);
         glUseProgram(static_cast<GLuint>(program));
         glBindVertexArray(static_cast<GLuint>(vertexArray));
-        // Every unit gets back what it had, on every target a pass binds. A
-        // draw deletes only its own targets and shadow maps, which nothing
-        // outside it keeps bound, so none of these names has gone stale.
+        // Every unit gets back what it had on the 2D, cube map, and 2D array
+        // targets, except a name the draw deleted, which is left at 0 even if
+        // GL has since given that name to a new texture. A unit left empty
+        // draws wrong pixels at worst; a deleted name bound back is an error.
+        const auto kept = [&deleted](GLint texture) {
+            const GLuint name = static_cast<GLuint>(texture);
+            return deleted.contains(name) ? 0u : name;
+        };
         for (int unit = kUnitCount - 1; unit >= 0; --unit) {
-            BindArray(unit, static_cast<unsigned>(arrays[unit]));
-            BindCube(unit, static_cast<unsigned>(cubes[unit]));
-            BindTexture(unit, static_cast<unsigned>(textures[unit]));
+            glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(unit));
+            glBindTexture(RT_GL_TEXTURE_2D_ARRAY, kept(arrays[unit]));
+            glBindTexture(RT_GL_TEXTURE_CUBE_MAP, kept(cubes[unit]));
+            glBindTexture(GL_TEXTURE_2D, kept(textures[unit]));
         }
         glActiveTexture(static_cast<GLenum>(activeTexture));
     }
@@ -639,6 +645,9 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         return false;
     }
 
+    // Open before the state is saved, so every texture the draw deletes,
+    // its targets on a resize or its shadow maps, is known to restore.
+    DeletedTextures deleted;
     const SavedState saved;
     PixelRect clip = pane;
     if (saved.scissor == GL_TRUE) {
@@ -810,7 +819,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         handlePass(projection);
     }
 
-    saved.restore(viewport);
+    saved.restore(viewport, deleted);
     gpu_.frame();
     return drawn;
 }
@@ -1450,10 +1459,7 @@ void Renderer::shutdown() {
     shadows_.shutdown();
     skyReady_ = false;
     for (unsigned* texture : {&whiteTexture_, &blackCube_}) {
-        if (*texture != 0) {
-            glDeleteTextures(1, texture);
-            *texture = 0;
-        }
+        DeleteTexture(*texture);
     }
     for (unsigned* vao : {&emptyVao_, &sphereVao_, &gridBandVao_, &outlineVao_, &handleVao_}) {
         if (*vao != 0) {

@@ -334,6 +334,42 @@ int main() {
         renderer.setCamera(engine_core::matrix4_look_at({0.f, 3.f, 7.f}, {0.f, 0.f, 0.f}, up),
                            runner::Renderer::kCameraFovYDegrees);
 
+        // A draw leaves each texture unit as it found it, as JadeFX's occluder
+        // on unit 7 needs, except a name the draw itself deleted.
+        {
+            const auto boundAt = [](int unit) {
+                runner::GLint active = 0;
+                runner::GLint texture = 0;
+                glGetIntegerv(runner::GL_ACTIVE_TEXTURE, &active);
+                glActiveTexture(runner::GL_TEXTURE0 + static_cast<runner::GLenum>(unit));
+                glGetIntegerv(runner::GL_TEXTURE_BINDING_2D, &texture);
+                glActiveTexture(static_cast<runner::GLenum>(active));
+                return static_cast<runner::GLuint>(texture);
+            };
+            runner::GLuint held = 0;
+            glGenTextures(1, &held);
+            glActiveTexture(runner::GL_TEXTURE0 + 7);
+            glBindTexture(runner::GL_TEXTURE_2D, held);
+            glActiveTexture(runner::GL_TEXTURE0);
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1);
+            runner::GLint active = 0;
+            glGetIntegerv(runner::GL_ACTIVE_TEXTURE, &active);
+            Expect(boundAt(7) == held && active == static_cast<runner::GLint>(runner::GL_TEXTURE0),
+                   "a draw leaves unit 7's texture bound, and unit 0 active");
+            // The scene's depth bound to unit 7, then a draw at another size,
+            // which deletes it: the unit is left empty, not bound to a dead name.
+            const runner::GLuint depth = renderer.sceneDepth().texture;
+            glActiveTexture(runner::GL_TEXTURE0 + 7);
+            glBindTexture(runner::GL_TEXTURE_2D, depth);
+            glActiveTexture(runner::GL_TEXTURE0);
+            renderer.draw(0, 0, kSize / 2, kSize / 2, kSize, kSize, &draw, 1);
+            Expect(depth != 0 && runner::rt_glGetError() == runner::GL_NO_ERROR,
+                   "a resize that deletes a bound depth texture leaves no GL error");
+            Expect(boundAt(7) == 0, "and leaves its unit empty");
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1);
+            glDeleteTextures(1, &held);
+        }
+
         // The legacy pipeline's lights, glow, see-through surfaces, and tone map.
         {
             const int midX = fbWidth / 2;

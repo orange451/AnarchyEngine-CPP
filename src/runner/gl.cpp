@@ -1,5 +1,6 @@
 #include "gl.hpp"
 
+#include <algorithm>
 #include <cstdio>
 
 namespace runner {
@@ -87,6 +88,37 @@ void (*rt_glGetQueryObjectiv)(GLuint, GLenum, GLint*) = nullptr;
 void (*rt_glGetQueryObjectui64v)(GLuint, GLenum, GLuint64*) = nullptr;
 void (*rt_glGetInteger64v)(GLenum, GLint64*) = nullptr;
 void (*rt_glGetFramebufferAttachmentParameteriv)(GLenum, GLenum, GLenum, GLint*) = nullptr;
+
+namespace {
+
+// The innermost open DeletedTextures. A GL context is current on one thread.
+thread_local DeletedTextures* gOpenDeletions = nullptr;
+
+}  // namespace
+
+void DeleteTexture(GLuint& texture) {
+    if (texture == 0) {
+        return;
+    }
+    glDeleteTextures(1, &texture);
+    if (gOpenDeletions != nullptr) {
+        gOpenDeletions->names_.push_back(texture);
+    }
+    texture = 0;
+}
+
+DeletedTextures::DeletedTextures() : outer_(gOpenDeletions) { gOpenDeletions = this; }
+
+DeletedTextures::~DeletedTextures() {
+    gOpenDeletions = outer_;
+    if (outer_ != nullptr) {
+        outer_->names_.insert(outer_->names_.end(), names_.begin(), names_.end());
+    }
+}
+
+bool DeletedTextures::contains(GLuint texture) const {
+    return texture != 0 && std::find(names_.begin(), names_.end(), texture) != names_.end();
+}
 
 bool GlTimerQueries() {
     return rt_glGenQueries != nullptr && rt_glDeleteQueries != nullptr && rt_glBeginQuery != nullptr &&

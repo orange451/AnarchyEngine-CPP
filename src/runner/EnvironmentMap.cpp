@@ -80,10 +80,7 @@ void EnvironmentMap::shutdown() {
         framebuffer_ = 0;
     }
     for (unsigned* texture : {&environment_, &irradiance_, &prefiltered_, &brdf_}) {
-        if (*texture != 0) {
-            glDeleteTextures(1, texture);
-            *texture = 0;
-        }
+        DeleteTexture(*texture);
     }
     brdfDrawn_ = false;
     imageRevision_ = 0;
@@ -131,8 +128,7 @@ bool EnvironmentMap::ensureTextures() {
         std::fprintf(stderr, "The Skybox's environment cubes are not supported; the sky is not drawn.\n");
         // Keeps the programs, but no textures: a later call does not try again.
         for (unsigned* texture : {&environment_, &irradiance_, &prefiltered_, &brdf_}) {
-            glDeleteTextures(1, texture);
-            *texture = 0;
+            DeleteTexture(*texture);
         }
         glBindFramebuffer(RT_GL_FRAMEBUFFER, 0);
         glDeleteFramebuffers(1, &framebuffer_);

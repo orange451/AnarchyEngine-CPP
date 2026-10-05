@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <vector>
 
 // Windows ships OpenGL 1.1 in opengl32.dll. macOS and Linux export newer entry
 // points from the driver library. Load every call this program makes after a
@@ -339,6 +340,29 @@ extern void (*rt_glGetFramebufferAttachmentParameteriv)(GLenum target, GLenum at
                                                          GLint* params);
 // The entry points GpuTimer needs: elapsed-time queries and their results.
 bool GlTimerQueries();
+
+// Deletes a texture and sets its name to 0. The name is noted in every open
+// DeletedTextures, so code that saved a binding before the deletion can tell
+// that the name is gone, even once GL hands the same name to a new texture.
+// Code that a 3D draw runs deletes its textures through this.
+void DeleteTexture(GLuint& texture);
+
+// The texture names DeleteTexture deletes while this is open, on this thread.
+// One opened inside another hands its names on to the outer one as it closes.
+class DeletedTextures {
+public:
+    DeletedTextures();
+    ~DeletedTextures();
+    DeletedTextures(const DeletedTextures&) = delete;
+    DeletedTextures& operator=(const DeletedTextures&) = delete;
+
+    bool contains(GLuint texture) const;
+
+private:
+    friend void DeleteTexture(GLuint& texture);
+    std::vector<GLuint> names_;
+    DeletedTextures* outer_ = nullptr;
+};
 
 using GlGetProcAddress = void* (*)(const char* name);
 

@@ -510,12 +510,13 @@ void CullBackFaces(const float* model) {
 
 // The GL state a draw changes, so the UI pass after it finds its own. That
 // includes what every texture unit has bound to each target the passes use.
-// JadeFX binds its occluder, or a stand-in, to unit 7 once a frame and only
-// again when the occluder changes, so a draw must leave unit 7's 2D binding
-// as it found it, and GL_TEXTURE0 active; it binds unit 0 again on every
-// text and image draw itself. Any other GL drawn between UI draws must do
-// the same. Saved once a draw, not once a pass: a few dozen queries for each
-// 3D view each frame.
+// JadeFX binds unit 7 only in setOccluder, to the scene's depth texture,
+// and its UI draws sample it there until clearOccluder; outside that window
+// the unit is free. A 3D draw issued inside the window would otherwise break
+// the occluder, so a draw must leave unit 7's 2D binding as it found it, and
+// GL_TEXTURE0 active; JadeFX binds unit 0 again on every text and image draw
+// itself. Any other GL drawn between UI draws must do the same. Saved once a
+// draw, not once a pass: a few dozen queries for each 3D view each frame.
 struct SavedState {
     GLint framebuffer = 0;
     GLint scissorBox[4] = {};

@@ -135,6 +135,12 @@ public:
     // recording covered, such as one from the command line or the flown camera,
     // changed what a save writes.
     bool export_needs_save();
+    // File > Export Game: when the place has changes, or was never saved, asks
+    // to save it first, and Cancel exports nothing. Then asks for the game's
+    // file name in a save dialog, and writes the game there as one file a
+    // friend can run, off the UI thread (GameExport.hpp). A toast says what it
+    // wrote, and the folder holding it opens.
+    void export_game();
     // Opens the Preferences window, or leaves the open one be.
     // Opens Preferences, or brings it forward, at the tab titled page when one is given.
     void open_preferences(const std::string& page = {});
@@ -230,11 +236,6 @@ private:
     // then runs after a successful save. A cancelled dialog or a failure skips it.
     void save_project(std::function<void()> then = {});
     void save_project_as(std::function<void()> then = {});
-    // File > Export Game: saves the place when it has changes, asks for the
-    // game's file name in a save dialog, and writes the game there as one file
-    // a friend can run, off the UI thread (GameExport.hpp). A toast says what
-    // it wrote, and the folder holding it opens.
-    void export_game();
     // Saves the open project and runs then. When files changed on disk since it
     // was opened or saved, asks whether to overwrite them and returns false; if
     // Overwrite saves, then runs after that save. overwrite, when set, lists the

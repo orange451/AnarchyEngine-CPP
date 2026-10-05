@@ -140,6 +140,12 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     expect(!layout.has_unsaved_changes(), "flying the camera leaves nothing to save");
     // The camera's file still changed, and Export Game reads the place from disk.
     expect(layout.export_needs_save(), "but Export Game saves it first");
+    // It asks before saving, and Cancel neither saves nor exports.
+    layout.export_game();
+    expect(button("export-save") != nullptr, "Export Game asks to save first");
+    click("export-cancel");
+    expect(button("export-save") == nullptr, "Cancel closes the question");
+    expect(layout.export_needs_save(), "and saves nothing");
     press(jadefx::Key::S);
     expect(!layout.export_needs_save(), "and after a save it does not");
 

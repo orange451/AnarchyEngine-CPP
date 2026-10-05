@@ -37,6 +37,10 @@ bool stepHits(float depthA, float depthB, float sceneDepth, float thickness) {
     return farthest >= sceneDepth && nearest <= sceneDepth + thickness;
 }
 
+bool bisectedHitHolds(float rayDepth, float sceneDepth, float thickness) {
+    return rayDepth - sceneDepth <= thickness;
+}
+
 float coneLevel(float roughness, float hitDistance, float pixelsPerUnit, float levels) {
     float radius = roughness * hitDistance * pixelsPerUnit;
     if (radius <= 1.0) {

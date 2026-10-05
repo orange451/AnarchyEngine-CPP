@@ -34,4 +34,19 @@ float ConeLevel(float roughness, float hitDistance, float pixelsPerUnit, int lev
 // behind a thin object.
 bool StepHits(float depthA, float depthB, float sceneDepth, float thickness);
 
+// One channel of a trace texel: the reflected light it carries, and how much it counts.
+struct ReflectionTexel {
+    float light = 0.f;
+    float confidence = 0.f;
+};
+// What the trace writes for a hit of this color at this confidence,
+// premultiplied; 0, 0 for a miss.
+ReflectionTexel TraceTexel(float hitColor, float confidence);
+// One channel of the merge's resolve: the surface's color with the sky's
+// reflection, skyLight, swapped for the traced light at the same weight.
+float ResolveReflection(float color, float intensity, ReflectionTexel traced, float weight, float skyLight);
+// Whether a hit holds after bisection: the ray ended rayDepth from the
+// camera, at most thickness behind the surface sceneDepth away.
+bool BisectedHitHolds(float rayDepth, float sceneDepth, float thickness);
+
 }  // namespace runner

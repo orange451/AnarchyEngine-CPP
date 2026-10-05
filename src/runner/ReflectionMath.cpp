@@ -49,4 +49,16 @@ bool StepHits(float depthA, float depthB, float sceneDepth, float thickness) {
     return farthest >= sceneDepth && nearest <= sceneDepth + thickness;
 }
 
+// Premultiplied, so averaging texels at a silhouette averages their light and
+// confidence alike, and the resolve stays linear in them.
+ReflectionTexel TraceTexel(float hitColor, float confidence) { return {hitColor * confidence, confidence}; }
+
+float ResolveReflection(float color, float intensity, ReflectionTexel traced, float weight, float skyLight) {
+    return std::max(color + intensity * (weight * traced.light - traced.confidence * skyLight), 0.f);
+}
+
+bool BisectedHitHolds(float rayDepth, float sceneDepth, float thickness) {
+    return rayDepth - sceneDepth <= thickness;
+}
+
 }  // namespace runner

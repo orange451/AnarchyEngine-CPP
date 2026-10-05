@@ -43,14 +43,15 @@ void main() {
     vec3 origin = viewPositionAt(vUv, depth);
     vec3 viewDirection = normalize(origin);
     vec3 N = texture(uNormal, vUv).rgb;
-    vec3 albedo = texture(uAlbedo, vUv).rgb;
-    SkyReflection sky = skyReflection(viewDirection, N, albedo, material.x, roughness, material.z, vec3(1.0), vec3(1.0));
-    if (all(lessThan(sky.weight, vec3(0.02)))) {
-        return;
-    }
+    // The cheap test first: rays turning back toward the camera.
     vec3 dir = reflect(viewDirection, N);
     fade *= facingFade(dir.z);
     if (fade <= 0.0) {
+        return;
+    }
+    vec3 albedo = texture(uAlbedo, vUv).rgb;
+    SkyReflection sky = skyReflection(viewDirection, N, albedo, material.x, roughness, material.z, vec3(1.0), vec3(1.0));
+    if (all(lessThan(sky.weight, vec3(0.02)))) {
         return;
     }
 
@@ -92,13 +93,10 @@ void main() {
     float endX = p1.x * stepDir;
 
     bool hit = false;
-    vec2 previousP = p;
-    float previousQz = qz;
-    float previousK = k;
     for (int i = 0; i < kReflectionMaxSteps; ++i) {
-        previousP = p;
-        previousQz = qz;
-        previousK = k;
+        vec2 previousP = p;
+        float previousQz = qz;
+        float previousK = k;
         p += dp;
         qz += dqz;
         k += dk;
@@ -112,32 +110,43 @@ void main() {
         // The ray's depth across the whole step, so a long stride cannot jump past a surface.
         float sceneDepth = sceneDepthAt(uv);
         float thickness = max(0.05, sceneDepth * 0.03);
-        if (stepHits(-previousQz / previousK, -qz / k, sceneDepth, thickness)) {
+        if (!stepHits(-previousQz / previousK, -qz / k, sceneDepth, thickness)) {
+            continue;
+        }
+        // Bisect between the step's two ends, then check the ray ended within
+        // the surface's thickness; a stride that crossed a thin object's
+        // depth while passing behind it lands far behind, and marches on.
+        vec2 a = previousP;
+        float aQz = previousQz;
+        float aK = previousK;
+        vec2 b = p;
+        float bQz = qz;
+        float bK = k;
+        for (int j = 0; j < kReflectionRefineSteps; ++j) {
+            vec2 midP = (a + b) * 0.5;
+            float midQz = (aQz + bQz) * 0.5;
+            float midK = (aK + bK) * 0.5;
+            vec2 midUv = (permute ? midP.yx : midP) / uScreenSize;
+            if (-midQz / midK >= sceneDepthAt(midUv)) {
+                b = midP;
+                bQz = midQz;
+                bK = midK;
+            } else {
+                a = midP;
+                aQz = midQz;
+                aK = midK;
+            }
+        }
+        vec2 bUv = (permute ? b.yx : b) / uScreenSize;
+        float bDepth = sceneDepthAt(bUv);
+        if (bisectedHitHolds(-bQz / bK, bDepth, max(0.05, bDepth * 0.03))) {
+            p = b;
             hit = true;
             break;
         }
     }
     if (!hit) {
         return;
-    }
-    // Bisect between the last step in front and the first behind.
-    vec2 a = previousP;
-    float aQz = previousQz;
-    float aK = previousK;
-    for (int i = 0; i < kReflectionRefineSteps; ++i) {
-        vec2 midP = (a + p) * 0.5;
-        float midQz = (aQz + qz) * 0.5;
-        float midK = (aK + k) * 0.5;
-        vec2 uv = (permute ? midP.yx : midP) / uScreenSize;
-        if (-midQz / midK >= sceneDepthAt(uv)) {
-            p = midP;
-            qz = midQz;
-            k = midK;
-        } else {
-            a = midP;
-            aQz = midQz;
-            aK = midK;
-        }
     }
     vec2 hitUv = (permute ? p.yx : p) / uScreenSize;
     // A ray can only hit a surface that faces it. One facing the same way is
@@ -151,5 +160,6 @@ void main() {
     float pixelsPerUnit = uProjection[1][1] * 0.25 * uScreenSize.y / max(-hitPosition.z, uNear);
     float level = coneLevel(roughness, hitDistance, pixelsPerUnit, uChainLevels);
     fade *= edgeFade(hitUv) * distanceFade(hitDistance, uMaxDistance);
-    outColor = vec4(textureLod(uSource, hitUv, level).rgb, fade);
+    // Premultiplied, so the merge's upsample averages hits and misses evenly.
+    outColor = vec4(textureLod(uSource, hitUv, level).rgb * fade, fade);
 }

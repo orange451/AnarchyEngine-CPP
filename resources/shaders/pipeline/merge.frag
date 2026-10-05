@@ -18,7 +18,8 @@ uniform sampler2D uTransparency;
 uniform sampler2D uAlbedo;
 uniform sampler2D uNormal;
 uniform sampler2D uMaterial;
-// The half-size trace: the reflected light, and how much it counts.
+// The half-size trace: the reflected light, premultiplied by how much it
+// counts, and how much it counts.
 uniform sampler2D uReflections;
 // 1 when this frame traced reflections.
 uniform float uReflectionsEnabled;
@@ -34,6 +35,17 @@ vec4 upsampleReflections(float depth) {
     vec2 position = vUv * halfSize - 0.5;
     vec2 base = floor(position);
     vec2 f = position - base;
+    // Most pixels reflect nothing; they skip the depth work.
+    vec4 taps[4];
+    float anyHit = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        ivec2 texel = clamp(ivec2(base) + ivec2(i & 1, i >> 1), ivec2(0), ivec2(halfSize) - 1);
+        taps[i] = texelFetch(uReflections, texel, 0);
+        anyHit += taps[i].a;
+    }
+    if (anyHit <= 0.0) {
+        return vec4(0.0);
+    }
     float center = -viewPositionAt(vUv, depth).z;
     vec4 sum = vec4(0.0);
     float total = 0.0;
@@ -44,7 +56,7 @@ vec4 upsampleReflections(float depth) {
         float tapDepth = -viewPositionAt(tapUv, texelFetch(uDepth, texel * 2, 0).r).z;
         float bilinear = (offset.x == 1 ? f.x : 1.0 - f.x) * (offset.y == 1 ? f.y : 1.0 - f.y);
         float w = bilinear / (1e-3 + abs(tapDepth - center) / center);
-        sum += texelFetch(uReflections, texel, 0) * w;
+        sum += taps[i] * w;
         total += w;
     }
     return total > 0.0 ? sum / total : vec4(0.0);
@@ -70,8 +82,8 @@ void main() {
             vec3 material = texture(uMaterial, vUv).rgb;
             SkyReflection sky = skyReflection(viewDirection, texture(uNormal, vUv).rgb, texture(uAlbedo, vUv).rgb,
                                               material.x, material.y, material.z, uAmbient, uSkyRadiance);
-            float amount = uReflectionsIntensity * traced.a;
-            color = max(color + amount * (sky.weight * traced.rgb - sky.light), 0.0);
+            // traced.rgb is premultiplied by traced.a.
+            color = max(color + uReflectionsIntensity * (sky.weight * traced.rgb - traced.a * sky.light), 0.0);
         }
     }
     outColor = vec4(color * (1.0 - seeThrough.a) + seeThrough.rgb, 1.0);

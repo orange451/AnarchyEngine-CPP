@@ -87,3 +87,31 @@ TEST_CASE("RM6 a step hits when the ray's depth across it reaches the surface, e
     // Either order of the two ends.
     REQUIRE(StepHits(12.f, 9.f, 10.f, 0.3f));
 }
+
+TEST_CASE("RM7 resolving an average of a hit and a miss is the average of resolving each", "[reflections]") {
+    // The upsample averages trace texels, so the resolve must be linear in
+    // them, or the edges between hits and misses come out dark.
+    const float base = 0.5f;
+    const float weight = 0.8f;
+    const float sky = 0.3f;
+    const float hitColor = 2.f;
+    // As the trace writes them: a hit (color, confidence 1) and a miss (nothing).
+    const ReflectionTexel hit = TraceTexel(hitColor, 1.f);
+    const ReflectionTexel miss = TraceTexel(0.f, 0.f);
+    const ReflectionTexel half{(hit.light + miss.light) * 0.5f, (hit.confidence + miss.confidence) * 0.5f};
+    const float ofAverage = ResolveReflection(base, 1.f, half, weight, sky);
+    const float averageOf =
+        (ResolveReflection(base, 1.f, hit, weight, sky) + ResolveReflection(base, 1.f, miss, weight, sky)) * 0.5f;
+    REQUIRE(ofAverage == Approx(averageOf));
+    // A full hit swaps the sky's reflection for the traced light at the same weight.
+    REQUIRE(ResolveReflection(base, 1.f, hit, weight, sky) == Approx(base + weight * hitColor - sky));
+    REQUIRE(ResolveReflection(base, 1.f, miss, weight, sky) == Approx(base));
+}
+
+TEST_CASE("RM8 a bisected hit holds only within the surface's thickness", "[reflections]") {
+    // The bisection lands just behind the surface for a real hit...
+    REQUIRE(BisectedHitHolds(10.05f, 10.f, 0.3f));
+    // ...but a long stride that crossed a thin object's depth while the ray
+    // passed behind it lands far behind: the march goes on.
+    REQUIRE_FALSE(BisectedHitHolds(15.f, 10.f, 0.3f));
+}

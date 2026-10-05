@@ -226,8 +226,8 @@ Each phase leaves the renderer working and is committed on its own.
 The stress place is built by a Lua script in a scratch copy of a project, never a real one: about 10,000 GameObjects over 3 Prefabs on a grid, about 50 one-off Prefabs, and a sun with shadows. It is measured from three cameras:
 
 - **Overview**, all of it in view: measures instancing. Mesh draw calls fall from about 10,000 to the number of runs (dozens), with the Geometry pass's GPU time and the Scene View's CPU time falling with them.
-- **Corner close-up**, most of it out of view: measures culling. The pose looks diagonally across the whole grid. `culled` is above 80% of `draws`, and the Visibility scope stays well under 1 ms.
-- **Ground close-up**, looking down from near ground level: exercises culling more than Corner does, with 74% of draws culled.
+- **Corner close-up**, most of it out of view: measures instancing more than culling. The pose looks diagonally across the whole grid, so the frustum still holds nearly all of it; `culled` stays near 0% of `draws`.
+- **Ground close-up**, looking down from near ground level: measures culling. Unlike Corner, it culls most of the grid, ~74% of `draws`; Visibility and Batches together run ~2 ms here, missing the "well under 1 ms" target.
 
 Numbers come from the per-pass GPU timers and the profiler's CPU scopes, with the profiler's GPU "Each pass" mode set by hand in the studio. Before and after measurements are written into this spec when it ships.
 
@@ -258,7 +258,7 @@ Measured on 2026-10-05 on the user's Mac laptop with the stress place (`scripts/
 Observations:
 
 - Targets met: draw calls fell from ~10k to dozens; Geometry CPU 34 → <1 ms; GPU Geometry 32 → 8–10 ms.
-- Target missed: CPU Visibility is ~1.75–2.1 ms for 10,088 draws, not "well under 1 ms" (one sphere + 6 planes + ScreenRadius sqrt/tan per draw). Candidates: cache spheres of unmoved objects (spec "out of scope, with room left"), skip ScreenRadius until LOD needs it.
+- Target missed: CPU Visibility is ~1.75–2.1 ms for 10,088 draws, not "well under 1 ms". The "Visibility" scope measured here ran until BuildBatches finished, not only through FindVisible: it included batching's own work (sorting ~10k entries, a per-instance determinant computed twice, the normal matrix, 3 `pow` calls, and a 112-byte copy per instance) on top of the sphere + 6 planes + ScreenRadius sqrt/tan per draw that Visibility alone does. Visibility and Batches are profiled as separate CPU scopes from now on, but the split has not been re-measured, so these numbers still describe the two combined. Candidates: cache spheres of unmoved objects (spec "out of scope, with room left"), skip ScreenRadius until LOD needs it.
 - Culling barely moves GPU Geometry in the Ground pose (9.8 ms) because the near teapots fill the screen: the pass is now fill-bound, not draw-bound.
 - New top CPU cost: "Floor grid" on the Render draw thread, 9.7–11.6 ms (6.9 ms before). Likely a GPU wait landing in that scope rather than the grid's own work; outside this plan.
 - Frame time is ~33–36 ms with the scene at ~16–21 ms: frames quantize to vsync (2 × 16.6) because the frame still exceeds one refresh.

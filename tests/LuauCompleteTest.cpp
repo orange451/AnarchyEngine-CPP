@@ -1195,14 +1195,14 @@ void testInsertFilter() {
     const std::vector<std::string> expected = {
         "Attachment", "BillboardGui", "BloomEffect", "Button",        "Camera",     "CSS",              "DirectionalLight", "Dragger", "Folder",     "GameObject", "HBox",
         "ImagePane",    "Label",        "Material",      "Mesh",       "Model",            "ModuleScript", "Pane",    "PhysicsObject",
-        "PointLight",   "Prefab",        "ScreenGui",  "Script",           "Skybox",    "Sound",      "SoundEmitter",
+        "PointLight",   "Prefab",        "ScreenGui",  "ScreenSpaceReflections", "Script",           "Skybox",    "Sound",      "SoundEmitter",
         "SpotLight",    "TextField",     "Texture",    "VBox"};
     if (shown != expected) {
         fail("insert list is every creatable class, A to Z");
     }
     ide::filter_class_names(names, "scr", shown);
     // Names that start with it first, A to Z, then those that have it inside.
-    if (shown != std::vector<std::string>{"ScreenGui", "Script", "ModuleScript"}) {
+    if (shown != std::vector<std::string>{"ScreenGui", "ScreenSpaceReflections", "Script", "ModuleScript"}) {
         fail("scr lists Script before ModuleScript");
     }
     ide::filter_class_names(names, "Ga", shown);

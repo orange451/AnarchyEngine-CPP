@@ -17,6 +17,7 @@
 #include "ModuleScript.hpp"
 #include "PhysicsObject.hpp"
 #include "SceneService.hpp"
+#include "ScreenSpaceReflections.hpp"
 #include "SelectionService.hpp"
 #include "Skybox.hpp"
 #include "SoundEmitter.hpp"
@@ -141,6 +142,8 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"Attachment", [](DataModel& world) -> DataModel& { return world.create<Attachment>(); }});
         out.push_back({"Skybox", [](DataModel& world) -> DataModel& { return world.create<Skybox>(); }});
         out.push_back({"BloomEffect", [](DataModel& world) -> DataModel& { return world.create<BloomEffect>(); }});
+        out.push_back({"ScreenSpaceReflections",
+                       [](DataModel& world) -> DataModel& { return world.create<ScreenSpaceReflections>(); }});
         out.push_back({"ScreenGui", [](DataModel& world) -> DataModel& { return world.create<ScreenGui>(); }});
         out.push_back({"BillboardGui", [](DataModel& world) -> DataModel& { return world.create<BillboardGui>(); }});
         out.push_back({"Pane", [](DataModel& world) -> DataModel& { return world.create<Pane>(); }});

@@ -1035,6 +1035,17 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "The brightness where bloom starts, from 0 to 10, fading in just below it. 0 blooms everything a little; "
         "above 1, only light brighter than white, such as a glowing Material or the sun in an .hdr sky.",
         "number", false, {});
+    add("ScreenSpaceReflections", "Enabled", "When false, this ScreenSpaceReflections traces nothing.", "boolean",
+        false, {});
+    add("ScreenSpaceReflections", "Intensity",
+        "How much of a smooth surface's sky reflection the reflection of what is on screen replaces, from 0 to 1.",
+        "number", false, {});
+    add("ScreenSpaceReflections", "MaxDistance",
+        "How far a reflected ray may travel, in studs, from 0 to 1000. It fades out over the last quarter.", "number",
+        false, {});
+    add("ScreenSpaceReflections", "MaxRoughness",
+        "Surfaces rougher than this, from 0 to 1, keep the sky's reflection; it fades in just below.", "number",
+        false, {});
     add("SpotLight", "OuterFOV",
         "The whole angle of this light's cone, in degrees, from 1 to 179. The cone points down the Transform's -Z.",
         "number", false, {});

@@ -500,6 +500,7 @@ add_library(engine_instances STATIC
     src/engine_instances/ModuleScript.cpp
     src/engine_instances/PhysicsObject.cpp
     src/engine_instances/BloomEffect.cpp
+    src/engine_instances/ScreenSpaceReflections.cpp
     src/engine_instances/Skybox.cpp
     src/engine_instances/SoundEmitter.cpp
     src/engine_instances/Attachment.cpp
@@ -853,6 +854,7 @@ add_executable(sandbox
     sandbox/shadow_math_tests.cpp
     sandbox/bloom_math_tests.cpp
     sandbox/antialiasing_tests.cpp
+    sandbox/reflections_tests.cpp
     sandbox/shadow_atlas_tests.cpp
     sandbox/shadow_planner_tests.cpp
     sandbox/event_args_tests.cpp

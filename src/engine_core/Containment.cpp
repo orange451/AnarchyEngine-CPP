@@ -129,7 +129,7 @@ std::optional<std::string> placement_error(std::string_view holder_class, std::s
         return "A " + std::string(holder_class) + " holds nothing";
     }
     // A Skybox or BloomEffect affects the whole place, so it lives where the place's lighting does.
-    if ((child_class == "Skybox" || child_class == "BloomEffect") && holder_class != "Lighting") {
+    if ((child_class == "Skybox" || child_class == "BloomEffect" || child_class == "ScreenSpaceReflections") && holder_class != "Lighting") {
         return "A " + std::string(child_class) + " must be in Lighting";
     }
     if (const char* home = asset_home(child_class)) {

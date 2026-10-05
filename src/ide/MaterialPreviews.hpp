@@ -36,6 +36,7 @@ struct MaterialLook {
     std::string normal_texture;
     std::string roughness_texture;
     std::string metalness_texture;
+    std::string emissive_texture;
 
     bool operator==(const MaterialLook& other) const;
     bool operator!=(const MaterialLook& other) const { return !(*this == other); }

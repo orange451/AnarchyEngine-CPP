@@ -84,6 +84,7 @@ bool MaterialBall::draw(const MaterialLook& look, runner::ViewPixels& out) {
     ball.normalTexture = textures_.get(look.normal_texture);
     ball.roughnessTexture = textures_.get(look.roughness_texture);
     ball.metalnessTexture = textures_.get(look.metalness_texture);
+    ball.emissiveTexture = textures_.get(look.emissive_texture);
     ball.color[0] = look.color.r;
     ball.color[1] = look.color.g;
     ball.color[2] = look.color.b;

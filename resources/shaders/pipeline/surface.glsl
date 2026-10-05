@@ -5,6 +5,7 @@ uniform sampler2D uDiffuse;
 uniform sampler2D uNormalMap;
 uniform sampler2D uRoughnessMap;
 uniform sampler2D uMetalnessMap;
+uniform sampler2D uEmissiveMap;
 // The Material's Color, white for no Material. Its alpha is unused.
 uniform vec4 uColor;
 uniform vec3 uEmissive;
@@ -13,6 +14,8 @@ uniform float uRoughness;
 uniform float uReflectivity;
 // 1 when the Material has a NormalTexture.
 uniform float uNormalMapEnabled;
+// 1 when the Material has an EmissiveTexture. Most have none, and skip the read.
+uniform float uEmissiveMapEnabled;
 
 struct Surface {
     vec3 albedo;
@@ -66,5 +69,8 @@ Surface readSurface(vec3 viewPosition, vec3 viewNormal, vec2 uv, vec4 vertexColo
     s.roughness = max(0.05, texture(uRoughnessMap, uv).r * uRoughness);
     s.reflectivity = uReflectivity;
     s.emissive = toLinear(uEmissive);
+    if (uEmissiveMapEnabled > 0.5) {
+        s.emissive *= toLinear(texture(uEmissiveMap, uv).rgb);
+    }
     return s;
 }

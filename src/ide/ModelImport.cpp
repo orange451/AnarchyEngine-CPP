@@ -400,6 +400,10 @@ ImportedMaterial ConvertMaterial(const aiMaterial& material, const std::string& 
             out.metalness_map = textures.find(*metalness, Channel::All);
         }
     }
+    if (std::optional<std::string> emissive =
+            FirstTexture(material, {aiTextureType_EMISSION_COLOR, aiTextureType_EMISSIVE})) {
+        out.emissive_map = textures.find(*emissive, Channel::All);
+    }
 
     aiColor4D color;
     if (material.Get(AI_MATKEY_BASE_COLOR, color) == AI_SUCCESS) {
@@ -412,6 +416,9 @@ ImportedMaterial ConvertMaterial(const aiMaterial& material, const std::string& 
         float intensity = 1.f;
         material.Get(AI_MATKEY_EMISSIVE_INTENSITY, intensity);
         out.emissive = {Clamp01(color.r * intensity), Clamp01(color.g * intensity), Clamp01(color.b * intensity), 1.f};
+    } else if (out.emissive_map >= 0) {
+        // Emissive scales the map, so with no color the map has the say.
+        out.emissive = {1.f, 1.f, 1.f, 1.f};
     }
     // An opacity of 0 is, in practice, an exporter that never set it.
     float opacity = 1.f;
@@ -653,6 +660,7 @@ engine_core::InstanceId build_model_assets(engine_core::DataModel& world, const 
             reference(material, engine_core::Material::kNormalTextureReference, texture_id(imported.normal));
             reference(material, engine_core::Material::kRoughnessTextureReference, texture_id(imported.roughness_map));
             reference(material, engine_core::Material::kMetalnessTextureReference, texture_id(imported.metalness_map));
+            reference(material, engine_core::Material::kEmissiveTextureReference, texture_id(imported.emissive_map));
             material_ids.push_back(id);
         }
     }

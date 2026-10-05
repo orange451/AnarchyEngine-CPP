@@ -141,7 +141,8 @@ int RunModelImportTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
   "nodes": [{"mesh": 0, "translation": [10, 0, 0]}],
   "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1}, "indices": 2, "material": 0}]}],
   "materials": [{"name": "Metal", "pbrMetallicRoughness": {"baseColorFactor": [1, 1, 1, 1],
-    "metallicFactor": 1.0, "roughnessFactor": 0.5, "metallicRoughnessTexture": {"index": 0}}}],
+    "metallicFactor": 1.0, "roughnessFactor": 0.5, "metallicRoughnessTexture": {"index": 0}},
+    "emissiveFactor": [1, 0.5, 0], "emissiveTexture": {"index": 0}}],
   "textures": [{"source": 0}],
   "images": [{"uri": "mr.tga"}],
   "buffers": [{"byteLength": 68, "uri": "tri.bin"}],
@@ -164,6 +165,9 @@ int RunModelImportTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
             const ide::ImportedMaterial& metal = model->materials[0];
             expect(metal.name == "Metal" && Near(metal.metalness, 1.0) && Near(metal.roughness, 0.5),
                    "its material keeps its name and factors");
+            expect(metal.emissive_map >= 0 && Near(metal.emissive.r, 1.0) && Near(metal.emissive.g, 0.5) &&
+                       Near(metal.emissive.b, 0.0),
+                   "its emissive map is kept, with its factor as Emissive");
             expect(model->meshes[0].path == "meshes/Tri/Metal.amesh" && model->meshes[0].material == 0,
                    "its mesh is written under meshes/<model>, named after its material");
             anarchy::amesh::Data data;

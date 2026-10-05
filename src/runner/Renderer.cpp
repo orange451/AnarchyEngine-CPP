@@ -64,6 +64,9 @@ constexpr int kUnitIrradiance = 13;
 constexpr int kUnitPrefiltered = 14;
 constexpr int kUnitBrdf = 15;
 constexpr int kUnitCount = 16;
+// The surface passes write the G-buffer's albedo, never read it, so a
+// Material's EmissiveTexture takes its unit. bindGBuffer binds it back.
+constexpr int kUnitEmissiveMap = kUnitAlbedo;
 // The light pass reads no Material, so its shadow maps take the Material's units.
 constexpr int kUnitShadowAtlas = kUnitDiffuse;
 constexpr int kUnitShadowCascades = kUnitNormalMap;
@@ -135,12 +138,14 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.normalMap = at("uNormalMap");
     program.roughnessMap = at("uRoughnessMap");
     program.metalnessMap = at("uMetalnessMap");
+    program.emissiveMap = at("uEmissiveMap");
     program.color = at("uColor");
     program.emissive = at("uEmissive");
     program.metalness = at("uMetalness");
     program.roughness = at("uRoughness");
     program.reflectivity = at("uReflectivity");
     program.normalMapEnabled = at("uNormalMapEnabled");
+    program.emissiveMapEnabled = at("uEmissiveMapEnabled");
     program.transparency = at("uTransparency");
     program.depth = at("uDepth");
     program.albedo = at("uAlbedo");
@@ -188,6 +193,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     sampler("uNormalMap", kUnitNormalMap);
     sampler("uRoughnessMap", kUnitRoughnessMap);
     sampler("uMetalnessMap", kUnitMetalnessMap);
+    sampler("uEmissiveMap", kUnitEmissiveMap);
     sampler("uDepth", kUnitDepth);
     sampler("uAlbedo", kUnitAlbedo);
     sampler("uNormal", kUnitNormal);
@@ -1007,12 +1013,16 @@ void Renderer::bindMaterial(const Program& program, const MeshDraw& draw) {
     BindTexture(kUnitNormalMap, draw.normalTexture != 0 ? draw.normalTexture : whiteTexture_);
     BindTexture(kUnitRoughnessMap, draw.roughnessTexture != 0 ? draw.roughnessTexture : whiteTexture_);
     BindTexture(kUnitMetalnessMap, draw.metalnessTexture != 0 ? draw.metalnessTexture : whiteTexture_);
+    // Also bound with no map: it puts the G-buffer's albedo, which the
+    // geometry pass draws into, off this unit.
+    BindTexture(kUnitEmissiveMap, draw.emissiveTexture != 0 ? draw.emissiveTexture : whiteTexture_);
     glUniform4f(program.color, draw.color[0], draw.color[1], draw.color[2], draw.color[3]);
     glUniform3f(program.emissive, draw.emissive[0], draw.emissive[1], draw.emissive[2]);
     glUniform1f(program.metalness, std::clamp(draw.metalness, 0.f, 1.f));
     glUniform1f(program.roughness, std::clamp(draw.roughness, 0.f, 1.f));
     glUniform1f(program.reflectivity, std::clamp(draw.reflectivity, 0.f, 1.f));
     glUniform1f(program.normalMapEnabled, draw.normalTexture != 0 ? 1.f : 0.f);
+    glUniform1f(program.emissiveMapEnabled, draw.emissiveTexture != 0 ? 1.f : 0.f);
     glUniform1f(program.transparency, std::clamp(draw.transparency, 0.f, 1.f));
     glUniformMatrix4fv(program.model, 1, GL_FALSE, draw.model.m);
 }

@@ -389,6 +389,7 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
                     texture_path(Material::kNormalTextureReference, out.normal_texture);
                     texture_path(Material::kRoughnessTextureReference, out.roughness_texture);
                     texture_path(Material::kMetalnessTextureReference, out.metalness_texture);
+                    texture_path(Material::kEmissiveTextureReference, out.emissive_texture);
                     out.color = material != nullptr ? material->color() : ColorRgb{};
                     out.emissive = material != nullptr ? material->emissive() : Material::kDefaultEmissive;
                     out.metalness = unit(material != nullptr ? material->metalness() : Material::kDefaultMetalness);

@@ -33,7 +33,7 @@ bool MaterialLook::operator==(const MaterialLook& other) const {
            metalness == other.metalness && roughness == other.roughness && reflectivity == other.reflectivity &&
            transparency == other.transparency && diffuse_texture == other.diffuse_texture &&
            normal_texture == other.normal_texture && roughness_texture == other.roughness_texture &&
-           metalness_texture == other.metalness_texture;
+           metalness_texture == other.metalness_texture && emissive_texture == other.emissive_texture;
 }
 
 std::optional<MaterialLook> material_look(const engine_core::DataModel& world, engine_core::InstanceId id) {
@@ -53,6 +53,7 @@ std::optional<MaterialLook> material_look(const engine_core::DataModel& world, e
     look.normal_texture = texture_path(world, *material, Material::kNormalTextureReference);
     look.roughness_texture = texture_path(world, *material, Material::kRoughnessTextureReference);
     look.metalness_texture = texture_path(world, *material, Material::kMetalnessTextureReference);
+    look.emissive_texture = texture_path(world, *material, Material::kEmissiveTextureReference);
     return look;
 }
 

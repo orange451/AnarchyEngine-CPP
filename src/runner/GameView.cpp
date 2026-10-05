@@ -307,6 +307,7 @@ void GameView::collectMeshes() {
             draw.normalTexture = textures_.get(source.normal_texture);
             draw.roughnessTexture = textures_.get(source.roughness_texture);
             draw.metalnessTexture = textures_.get(source.metalness_texture);
+            draw.emissiveTexture = textures_.get(source.emissive_texture);
             draw.color[0] = source.color.r;
             draw.color[1] = source.color.g;
             draw.color[2] = source.color.b;

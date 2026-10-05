@@ -31,11 +31,12 @@ struct MeshDraw {
     // RGBA, 0 to 1, as the Material's Color3 holds it (sRGB). Alpha is unused.
     float color[4] = {1.f, 1.f, 1.f, 1.f};
     // The Material's other textures. 0 is none: no normal map, and the
-    // roughness and metalness numbers alone.
+    // roughness, metalness, and emissive values alone.
     unsigned normalTexture = 0;
     unsigned roughnessTexture = 0;
     unsigned metalnessTexture = 0;
-    // The Material's Emissive, as its Color3 holds it.
+    unsigned emissiveTexture = 0;
+    // The Material's Emissive, as its Color3 holds it. It scales emissiveTexture.
     float emissive[3] = {0.f, 0.f, 0.f};
     // Each 0 to 1. Transparency 0 is opaque; 1 draws nothing.
     float metalness = 0.f;
@@ -221,12 +222,14 @@ private:
         int normalMap = -1;
         int roughnessMap = -1;
         int metalnessMap = -1;
+        int emissiveMap = -1;
         int color = -1;
         int emissive = -1;
         int metalness = -1;
         int roughness = -1;
         int reflectivity = -1;
         int normalMapEnabled = -1;
+        int emissiveMapEnabled = -1;
         int transparency = -1;
         // G-buffer inputs.
         int depth = -1;

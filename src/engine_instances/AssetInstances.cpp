@@ -358,12 +358,16 @@ constexpr ReferenceSpec kMaterialRefs[] = {
     {"NormalTexture", "Texture"},
     {"RoughnessTexture", "Texture"},
     {"MetalnessTexture", "Texture"},
+    {"EmissiveTexture", "Texture"},
 };
 
 constexpr ReferenceSpec kModelRefs[] = {
     {"Mesh", "Mesh"},
     {"Material", "Material"},
 };
+
+static_assert(std::size(kMaterialRefs) <= ReferenceAsset::kMaxReferences);
+static_assert(std::size(kModelRefs) <= ReferenceAsset::kMaxReferences);
 
 }  // namespace
 
@@ -643,6 +647,7 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
         lua_saved_property("NormalTexture", "Texture?", read_reference<1>, write_reference<1>, "null"),
         lua_saved_property("RoughnessTexture", "Texture?", read_reference<2>, write_reference<2>, "null"),
         lua_saved_property("MetalnessTexture", "Texture?", read_reference<3>, write_reference<3>, "null"),
+        lua_saved_property("EmissiveTexture", "Texture?", read_reference<4>, write_reference<4>, "null"),
         lua_saved_property("Color", "Color3", read_material_color<&Material::color>,
                            write_material_color<&Material::set_color>, color.c_str()),
         lua_saved_property("Emissive", "Color3", read_material_color<&Material::emissive>,

@@ -474,6 +474,45 @@ int main() {
             // Green and blue gain nothing (Saturation above 1 even pulls them down a little).
             Expect(glow.r > unlit.r + 60 && glow.g <= unlit.g + 3 && glow.g == glow.b,
                    "Emissive glows (" + Text(glow) + ")");
+            // Emissive scales an EmissiveTexture: white leaves the glow as it
+            // is, black puts it out, on opaque and see-through surfaces alike.
+            {
+                const auto solid = [](std::uint8_t value) {
+                    const std::uint8_t texel[4] = {value, value, value, 255};
+                    runner::GLuint texture = 0;
+                    glGenTextures(1, &texture);
+                    glBindTexture(runner::GL_TEXTURE_2D, texture);
+                    glTexImage2D(runner::GL_TEXTURE_2D, 0, static_cast<runner::GLint>(runner::GL_RGBA8), 1, 1, 0,
+                                 runner::GL_RGBA, runner::GL_UNSIGNED_BYTE, texel);
+                    glTexParameteri(runner::GL_TEXTURE_2D, runner::GL_TEXTURE_MIN_FILTER,
+                                    static_cast<runner::GLint>(runner::RT_GL_NEAREST));
+                    glTexParameteri(runner::GL_TEXTURE_2D, runner::GL_TEXTURE_MAG_FILTER,
+                                    static_cast<runner::GLint>(runner::RT_GL_NEAREST));
+                    glBindTexture(runner::GL_TEXTURE_2D, 0);
+                    return texture;
+                };
+                const runner::GLuint white = solid(255);
+                const runner::GLuint black = solid(0);
+                runner::MeshDraw mapped = glowing;
+                mapped.emissiveTexture = white;
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, &mapped, 1);
+                Expect(std::abs(Sum(ReadPixel(midX, midY)) - Sum(glow)) <= 3, "a white EmissiveTexture keeps the glow");
+                mapped.emissiveTexture = black;
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, &mapped, 1);
+                const Pixel masked = ReadPixel(midX, midY);
+                Expect(std::abs(Sum(masked) - Sum(unlit)) <= 3,
+                       "a black EmissiveTexture puts the glow out (" + Text(masked) + ")");
+                runner::MeshDraw clearGlow = glowing;
+                clearGlow.transparency = 0.3f;
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, &clearGlow, 1);
+                const Pixel clearGlowing = ReadPixel(midX, midY);
+                clearGlow.emissiveTexture = black;
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, &clearGlow, 1);
+                Expect(Sum(ReadPixel(midX, midY)) + 30 < Sum(clearGlowing),
+                       "and on a see-through surface (" + Text(clearGlowing) + ")");
+                glDeleteTextures(1, &white);
+                glDeleteTextures(1, &black);
+            }
 
             // Exposure and Saturation, from Lighting.
             runner::SceneLighting dim;

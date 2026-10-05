@@ -1033,7 +1033,8 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         false, {});
     add("Material", "Roughness", "How rough this material is, from 0 (shiny) to 1. Scales its RoughnessTexture.",
         "number", false, {});
-    add("Material", "Emissive", "The light this material gives off itself. Black gives none.", "Color3", false, {});
+    add("Material", "Emissive", "The light this material gives off itself. Black gives none. Scales its EmissiveTexture.",
+        "Color3", false, {});
     add("Material", "Reflectivity", "How much this material reflects its surroundings, from 0 to 1.", "number", false,
         {});
     add("Material", "Transparency", "How much this material lets through what is behind it, from 0 (opaque) to 1.",

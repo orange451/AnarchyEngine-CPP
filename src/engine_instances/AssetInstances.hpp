@@ -156,7 +156,7 @@ struct ReferenceSpec {
 // GUID (InstanceRef). Its subclass lists them once, in reference_specs.
 class ReferenceAsset : public DataModel {
 public:
-    static constexpr std::size_t kMaxReferences = 4;
+    static constexpr std::size_t kMaxReferences = 5;
 
     ReferenceAsset(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
 
@@ -175,11 +175,12 @@ private:
     std::array<InstanceRef, kMaxReferences> refs_;
 };
 
-// A PBR material: DiffuseTexture, NormalTexture, RoughnessTexture, and
-// MetalnessTexture, each a Texture or nil; Color, a Color3 that tints the
-// surface; Emissive, a Color3 of light the surface gives off itself; and
-// Metalness, Roughness, Reflectivity, and Transparency, each 0 to 1 on its
-// slider. Metalness and Roughness scale their textures. Those four take any
+// A PBR material: DiffuseTexture, NormalTexture, RoughnessTexture,
+// MetalnessTexture, and EmissiveTexture, each a Texture or nil; Color, a
+// Color3 that tints the surface; Emissive, a Color3 of light the surface
+// gives off itself; and Metalness, Roughness, Reflectivity, and Transparency,
+// each 0 to 1 on its slider. Metalness, Roughness, and Emissive scale their
+// textures. Those four take any
 // finite number, as a Roblox Transparency does; whatever draws them reads
 // them clamped to 0..1.
 class Material : public ReferenceAsset {
@@ -189,6 +190,7 @@ public:
     static constexpr std::size_t kNormalTextureReference = 1;
     static constexpr std::size_t kRoughnessTextureReference = 2;
     static constexpr std::size_t kMetalnessTextureReference = 3;
+    static constexpr std::size_t kEmissiveTextureReference = 4;
 
     static constexpr double kDefaultReflectivity = 0.5;
     static constexpr double kDefaultTransparency = 0.0;

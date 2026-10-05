@@ -131,6 +131,7 @@ struct VisualMesh {
     std::string normal_texture;
     std::string roughness_texture;
     std::string metalness_texture;
+    std::string emissive_texture;
     ColorRgb emissive{0.f, 0.f, 0.f, 1.f};
     float metalness = 0.f;
     float roughness = 0.4f;

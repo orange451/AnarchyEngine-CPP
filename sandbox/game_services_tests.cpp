@@ -554,9 +554,10 @@ TEST_CASE("GS10 Stop restores references and drops assets made in play", "[GS10]
         made.Name = "Made"
         made.Parent = game.Assets.Textures
         wall.NormalTexture = made
+        wall.EmissiveTexture = made
         wall.DiffuseTexture = nil
         _G.refused = not pcall(function() wall.RoughnessTexture = workspace end)
-        _G.done = wall.NormalTexture == made and wall.DiffuseTexture == nil
+        _G.done = wall.NormalTexture == made and wall.EmissiveTexture == made and wall.DiffuseTexture == nil
     )");
     game.start_simulation();
     rig.frames(1, 0.05);
@@ -570,6 +571,7 @@ TEST_CASE("GS10 Stop restores references and drops assets made in play", "[GS10]
     game.stop_simulation();
     REQUIRE(read_field(game, mat, "DiffuseTexture").id == brick);
     REQUIRE(read_field(game, mat, "NormalTexture").kind == engine_core::LuaSlot::Kind::Nil);
+    REQUIRE(read_field(game, mat, "EmissiveTexture").kind == engine_core::LuaSlot::Kind::Nil);
     REQUIRE(game.get_children(game.service("Textures")).size() == 1);
 }
 

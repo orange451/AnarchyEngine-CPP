@@ -39,6 +39,7 @@ struct ImportedMaterial {
     int normal = -1;
     int roughness_map = -1;
     int metalness_map = -1;
+    int emissive_map = -1;
 };
 
 // A Mesh whose AMESH file import_model_file wrote, and the Model that joins it

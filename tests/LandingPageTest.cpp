@@ -148,9 +148,22 @@ void TestLayout(ide::IdeLayout& layout, jadefx::Scene& scene) {
     Expect(names.size() >= 2 && names[1] == "Welcome" && shown_pane("Welcome") != nullptr,
            "Window > Welcome Page opens it again as the second tab");
 
-    // Leave the scene view in front for the tests after this one.
-    close_welcome();
+    // New Place starts the work the page was for, so the page closes. That also
+    // leaves the scene view in front for the tests after this one.
+    ide::LandingPage* page = dynamic_cast<ide::LandingPage*>(shown_pane("Welcome"));
+    jadefx::Button* new_place = page != nullptr ? page->button("New Place") : nullptr;
+    Expect(new_place != nullptr, "the docked page has New Place");
+    if (new_place != nullptr) {
+        new_place->fire();
+    }
+    // The place the earlier tests edited asks first; dropping it goes on.
+    if (auto* discard = dynamic_cast<jadefx::Button*>(scene.getElementById("unsaved-discard"))) {
+        discard->fire();
+    }
     scene.layout(1280, 800, 0.5);
+    Expect(shown_pane("Welcome") == nullptr, "New Place closes the Welcome page");
+    close_welcome();
+    scene.layout(1280, 800, 0.6);
 }
 
 }  // namespace

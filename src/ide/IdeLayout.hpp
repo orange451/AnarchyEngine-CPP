@@ -121,8 +121,8 @@ public:
     // floating windows, so it comes after the stage has its scene.
     void attachFrame(jadefx::Stage& stage);
     // Stops a running test, closes script editors, and loads the project at root.
-    // A failure shows an alert and leaves the current place open.
-    void open_project_at(const std::filesystem::path& root);
+    // A failure shows an alert, leaves the current place open, and returns false.
+    bool open_project_at(const std::filesystem::path& root);
     // Writes the place to root as Save As does, and binds there. A place never
     // saved also moves what its scratch folder holds into the project's
     // resources/. False, after an alert saying why, when it cannot.
@@ -145,6 +145,8 @@ public:
     // the page's "Don't show this page on startup" was checked; Window >
     // Welcome Page calls it too.
     void open_landing();
+    // Closes the Welcome page's tab, if one is open.
+    void close_landing();
     // Compares the disk with the place: loads what only the disk changed, and
     // lists what both changed in the Conflicts window and as a count on the
     // ribbon. choices are applied too. Returns the rows still open, or nothing
@@ -209,7 +211,8 @@ private:
     void load_plugins();
     // An empty, untitled place, with a new scratch folder for its resources.
     void new_place();
-    void open_project();
+    // Asks to save, then for a folder. opened runs once a project loads from it.
+    void open_project(std::function<void()> opened = {});
     // The profiler's Save button and File > Open Profile Capture: a dialog, then the file.
     void save_profile_capture_as();
     void choose_profile_capture();

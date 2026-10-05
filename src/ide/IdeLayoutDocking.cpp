@@ -527,10 +527,14 @@ void IdeLayout::open_landing() {
         return;
     }
     LandingPage::Actions actions;
+    // Either one starts the work the page was for, so the page goes.
     actions.new_place = [this] {
-        confirm_discard("Save changes before starting a new place?", [this] { new_place(); });
+        confirm_discard("Save changes before starting a new place?", [this] {
+            new_place();
+            close_landing();
+        });
     };
-    actions.open_project = [this] { open_project(); };
+    actions.open_project = [this] { open_project([this] { close_landing(); }); };
     actions.show_assets = [this] { open_window(*assets_window_); };
     actions.open_preferences = [this] { open_preferences(); };
     actions.set_show_on_startup = [this](bool show) {
@@ -549,6 +553,20 @@ void IdeLayout::open_landing() {
     }
     sceneDock_->dock(page, index);
     landing_ = page;
+}
+
+void IdeLayout::close_landing() {
+    const std::shared_ptr<LandingPage> page = landing_.lock();
+    IdeDock* dock = page ? dockContaining(page.get()) : nullptr;
+    if (dock == nullptr || dock->tabs() == nullptr) {
+        return;
+    }
+    const std::vector<std::shared_ptr<jadefx::Tab>> tabs = dock->tabs()->getTabs().items();
+    for (const std::shared_ptr<jadefx::Tab>& tab : tabs) {
+        if (tab && tab->getContent() == page.get()) {
+            dock->tabs()->close(tab);
+        }
+    }
 }
 
 void IdeLayout::new_scene_view() {

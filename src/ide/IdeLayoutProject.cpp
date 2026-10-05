@@ -649,12 +649,16 @@ void IdeLayout::new_place() {
     show_toast("New place");
 }
 
-void IdeLayout::open_project() {
-    confirm_discard("Save changes before opening another project?", [this] {
+void IdeLayout::open_project(std::function<void()> opened) {
+    confirm_discard("Save changes before opening another project?", [this, opened = std::move(opened)] {
         jadefx::FolderDialogOptions options;
         options.title = "Open Project";
         pick_folder(std::move(options), " You can also start the studio with a project folder: AnarchyStudio <folder>",
-                    [this](const std::filesystem::path& root) { open_project_at(root); });
+                    [this, opened](const std::filesystem::path& root) {
+                        if (open_project_at(root) && opened) {
+                            opened();
+                        }
+                    });
     });
 }
 
@@ -678,7 +682,7 @@ void IdeLayout::pick_folder(jadefx::FolderDialogOptions options, const std::stri
     });
 }
 
-void IdeLayout::open_project_at(const std::filesystem::path& root) {
+bool IdeLayout::open_project_at(const std::filesystem::path& root) {
     // The load replaces the tree that Stop would restore.
     if (in_test()) {
         stop_test();
@@ -694,7 +698,7 @@ void IdeLayout::open_project_at(const std::filesystem::path& root) {
     });
     if (!loaded) {
         show_error("Could not open project", error);
-        return;
+        return false;
     }
     // Every instance id changed. Editors and the clipboard pointed at the old ones.
     close_script_editors();
@@ -706,6 +710,7 @@ void IdeLayout::open_project_at(const std::filesystem::path& root) {
     forget_conflicts();
     update_title();
     show_toast("Opened " + project_->name());
+    return true;
 }
 
 bool IdeLayout::save_open_project(std::function<void()> then,

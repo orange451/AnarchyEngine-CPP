@@ -980,6 +980,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "How much this object lets through what is behind it, from 0 (opaque) to 1. It stacks on each Material's "
         "Transparency.",
         "number", false, {});
+    add("Attachment", "Offset", "Where this is relative to its parent PVInstance's Transform.", "Matrix4", false, {});
+    add("Attachment", "Transform",
+        "Where this is in the world: the parent PVInstance's Transform times Offset. Writing it sets Offset.",
+        "Matrix4", false, {});
     add("Camera", "FieldOfView",
         "How many degrees this camera sees from bottom to top, from 1 to 120. A Scene View linked to it draws with it.",
         "number", false, {});

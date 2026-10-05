@@ -1,6 +1,7 @@
 #include "ScriptBindings.hpp"
 
 #include "AssetInstances.hpp"
+#include "Attachment.hpp"
 #include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
@@ -187,6 +188,7 @@ DataModel& create_folder(DataModel& world) { return world.create<Folder>(); }
 DataModel& create_physics_object(DataModel& world) { return world.create<PhysicsObject>(); }
 
 DataModel& create_sound_emitter(DataModel& world) { return world.create<SoundEmitter>(); }
+DataModel& create_attachment(DataModel& world) { return world.create<Attachment>(); }
 DataModel& create_dragger(DataModel& world) { return world.create<Dragger>(); }
 DataModel& create_skybox(DataModel& world) { return world.create<Skybox>(); }
 DataModel& create_screen_gui(DataModel& world) { return world.create<ScreenGui>(); }
@@ -220,6 +222,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Folder", create_folder);
     register_lua_creatable("PhysicsObject", create_physics_object);
     register_lua_creatable("SoundEmitter", create_sound_emitter);
+    register_lua_creatable("Attachment", create_attachment);
     register_lua_creatable("Dragger", create_dragger);
     register_lua_creatable("Skybox", create_skybox);
     register_lua_creatable("ScreenGui", create_screen_gui);

@@ -1,6 +1,7 @@
 #include "Project.hpp"
 
 #include "AssetInstances.hpp"
+#include "Attachment.hpp"
 #include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Containment.hpp"
@@ -136,6 +137,7 @@ std::vector<ClassEntry>& class_registry() {
             {"PhysicsObject", [](DataModel& world) -> DataModel& { return world.create<PhysicsObject>(); }});
         out.push_back(
             {"SoundEmitter", [](DataModel& world) -> DataModel& { return world.create<SoundEmitter>(); }});
+        out.push_back({"Attachment", [](DataModel& world) -> DataModel& { return world.create<Attachment>(); }});
         out.push_back({"Skybox", [](DataModel& world) -> DataModel& { return world.create<Skybox>(); }});
         out.push_back({"ScreenGui", [](DataModel& world) -> DataModel& { return world.create<ScreenGui>(); }});
         out.push_back({"BillboardGui", [](DataModel& world) -> DataModel& { return world.create<BillboardGui>(); }});

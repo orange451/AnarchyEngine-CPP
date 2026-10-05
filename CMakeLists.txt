@@ -499,6 +499,7 @@ add_library(engine_instances STATIC
     src/engine_instances/PhysicsObject.cpp
     src/engine_instances/Skybox.cpp
     src/engine_instances/SoundEmitter.cpp
+    src/engine_instances/Attachment.cpp
     src/engine_instances/Dragger.cpp
     src/engine_instances/Script.cpp
 )
@@ -838,6 +839,7 @@ add_executable(sandbox
     sandbox/skybox_tests.cpp
     sandbox/physics_tests.cpp
     sandbox/audio_tests.cpp
+    sandbox/attachment_tests.cpp
     sandbox/scene_camera_tests.cpp
     sandbox/gui_tests.cpp
     sandbox/billboard_tests.cpp

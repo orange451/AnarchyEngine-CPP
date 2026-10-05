@@ -2,6 +2,7 @@
 
 #include "AssetInstances.hpp"
 #include "Attachment.hpp"
+#include "BloomEffect.hpp"
 #include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Containment.hpp"
@@ -139,6 +140,7 @@ std::vector<ClassEntry>& class_registry() {
             {"SoundEmitter", [](DataModel& world) -> DataModel& { return world.create<SoundEmitter>(); }});
         out.push_back({"Attachment", [](DataModel& world) -> DataModel& { return world.create<Attachment>(); }});
         out.push_back({"Skybox", [](DataModel& world) -> DataModel& { return world.create<Skybox>(); }});
+        out.push_back({"BloomEffect", [](DataModel& world) -> DataModel& { return world.create<BloomEffect>(); }});
         out.push_back({"ScreenGui", [](DataModel& world) -> DataModel& { return world.create<ScreenGui>(); }});
         out.push_back({"BillboardGui", [](DataModel& world) -> DataModel& { return world.create<BillboardGui>(); }});
         out.push_back({"Pane", [](DataModel& world) -> DataModel& { return world.create<Pane>(); }});

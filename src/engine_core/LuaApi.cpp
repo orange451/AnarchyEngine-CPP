@@ -1021,6 +1021,17 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "number", false, {});
     add("Skybox", "Tint", "A color the sky and its light are multiplied by. White leaves them as they are.", "Color3",
         false, {});
+    add("BloomEffect", "Enabled", "When false, this BloomEffect draws no bloom.", "boolean", false, {});
+    add("BloomEffect", "Intensity",
+        "How much of the image moves into its blurred copy, from 0 to 1. 0 draws no bloom.", "number", false, {});
+    add("BloomEffect", "Size",
+        "How far bright light spreads, in pixels at a 1080-pixel-tall view, from 0 to 56. Smaller and larger views "
+        "spread it in proportion.",
+        "number", false, {});
+    add("BloomEffect", "Threshold",
+        "The brightness where bloom starts, from 0 to 10, fading in just below it. 0 blooms everything a little; "
+        "above 1, only light brighter than white, such as a glowing Material or the sun in an .hdr sky.",
+        "number", false, {});
     add("SpotLight", "OuterFOV",
         "The whole angle of this light's cone, in degrees, from 1 to 179. The cone points down the Transform's -Z.",
         "number", false, {});

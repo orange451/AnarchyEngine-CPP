@@ -2,6 +2,7 @@
 
 #include "AssetInstances.hpp"
 #include "Attachment.hpp"
+#include "BloomEffect.hpp"
 #include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
@@ -191,6 +192,7 @@ DataModel& create_sound_emitter(DataModel& world) { return world.create<SoundEmi
 DataModel& create_attachment(DataModel& world) { return world.create<Attachment>(); }
 DataModel& create_dragger(DataModel& world) { return world.create<Dragger>(); }
 DataModel& create_skybox(DataModel& world) { return world.create<Skybox>(); }
+DataModel& create_bloom_effect(DataModel& world) { return world.create<BloomEffect>(); }
 DataModel& create_screen_gui(DataModel& world) { return world.create<ScreenGui>(); }
 DataModel& create_billboard_gui(DataModel& world) { return world.create<BillboardGui>(); }
 DataModel& create_pane(DataModel& world) { return world.create<Pane>(); }
@@ -226,6 +228,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Attachment", create_attachment);
     register_lua_creatable("Dragger", create_dragger);
     register_lua_creatable("Skybox", create_skybox);
+    register_lua_creatable("BloomEffect", create_bloom_effect);
     register_lua_creatable("ScreenGui", create_screen_gui);
     register_lua_creatable("BillboardGui", create_billboard_gui);
     register_lua_creatable("Pane", create_pane);

@@ -498,6 +498,7 @@ add_library(engine_instances STATIC
     src/engine_instances/LuaSource.cpp
     src/engine_instances/ModuleScript.cpp
     src/engine_instances/PhysicsObject.cpp
+    src/engine_instances/BloomEffect.cpp
     src/engine_instances/Skybox.cpp
     src/engine_instances/SoundEmitter.cpp
     src/engine_instances/Attachment.cpp
@@ -840,6 +841,7 @@ add_executable(sandbox
     sandbox/camera_tests.cpp
     sandbox/light_tests.cpp
     sandbox/skybox_tests.cpp
+    sandbox/bloom_tests.cpp
     sandbox/physics_tests.cpp
     sandbox/audio_tests.cpp
     sandbox/attachment_tests.cpp

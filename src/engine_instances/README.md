@@ -1,6 +1,6 @@
 # engine_instances
 
-The instance classes: `GameObject`, `Camera`, `Folder`, `Script`, `ModuleScript`, `PhysicsObject`, `Attachment`, `SoundEmitter`, `Skybox`, the GUI classes, and the six asset classes. Each inherits `DataModel` from engine_core and registers its Lua class, with any properties, in its own `.cpp`.
+The instance classes: `GameObject`, `Camera`, `Folder`, `Script`, `ModuleScript`, `PhysicsObject`, `Attachment`, `SoundEmitter`, `Skybox`, `BloomEffect`, the GUI classes, and the six asset classes. Each inherits `DataModel` from engine_core and registers its Lua class, with any properties, in its own `.cpp`.
 
 The asset classes live in `AssetInstances.{hpp,cpp}`, each only under its own category in `Assets`. `Texture`, `Mesh`, and `Sound` are a `FileAsset`, with a `Path`. `Material` and `Model` are a `ReferenceAsset`, whose saved properties are references held by GUID (`InstanceRef`, from engine_core): `Material` has `DiffuseTexture`, `NormalTexture`, `RoughnessTexture`, `MetalnessTexture`, and `EmissiveTexture`, each a `Texture?`, plus `Color` (a `Color3`, white) and `Reflectivity` (0.5) and `Transparency` (0), numbers shown on a 0 to 1 slider; `Model` has `Mesh` and `Material`. `Prefab` holds `Model`s as its only children.
 

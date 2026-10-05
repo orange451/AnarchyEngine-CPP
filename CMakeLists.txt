@@ -124,6 +124,7 @@ set(STUDIO_SOURCES
     src/ide/AssetImport.cpp
     src/ide/PropertiesPanel.cpp
     src/ide/AiClientsPage.cpp
+    src/ide/LandingPage.cpp
     src/ide/Preferences.cpp
     src/ide/PreferencesPanel.cpp
     src/ide/ThemeLibrary.cpp
@@ -659,6 +660,7 @@ add_executable(studio-tests
     tests/ProblemsTest.cpp
     tests/StatusBarTest.cpp
     tests/ScriptTabsTest.cpp
+    tests/LandingPageTest.cpp
     tests/TerminalPaneTest.cpp
     tests/GuiStyleTest.cpp
     tests/GuiImageTest.cpp

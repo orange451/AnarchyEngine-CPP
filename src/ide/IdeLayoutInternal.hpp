@@ -27,6 +27,7 @@
 #include "IdeSearch.hpp"
 #include "IdeTerminal.hpp"
 #include "IdeTheme.hpp"
+#include "LandingPage.hpp"
 #include "PreferencesPanel.hpp"
 #include "PropertiesPanel.hpp"
 #include "AssetInstances.hpp"

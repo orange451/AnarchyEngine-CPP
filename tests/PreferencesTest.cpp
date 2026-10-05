@@ -146,6 +146,21 @@ void TestSceneGrid() {
     Expect(ide::Preferences(file).scene_grid(), "a value that is not a boolean reads as on");
 }
 
+void TestShowLanding() {
+    Scratch scratch;
+    const fs::path file = scratch.root / "preferences.json";
+    {
+        ide::Preferences preferences(file);
+        Expect(preferences.show_landing(), "the Welcome page shows at startup until turned off");
+        preferences.set_show_landing(false);
+        std::string error;
+        Expect(preferences.save(error), "preferences save");
+    }
+    Expect(!ide::Preferences(file).show_landing(), "turning it off is remembered");
+    Write(file, "{ \"showLanding\": \"no\" }");
+    Expect(ide::Preferences(file).show_landing(), "a value that is not a boolean reads as on");
+}
+
 void TestProfiler() {
     Scratch scratch;
     const fs::path file = scratch.root / "preferences.json";
@@ -692,6 +707,7 @@ int RunPreferencesTests() {
     TestAssetsView();
     TestMcpEnabled();
     TestSceneGrid();
+    TestShowLanding();
     TestProfiler();
     TestLibrary();
     TestWriteTheme();

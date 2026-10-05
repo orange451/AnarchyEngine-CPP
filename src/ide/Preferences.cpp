@@ -111,6 +111,15 @@ bool Preferences::scene_grid() const {
 
 void Preferences::set_scene_grid(bool shown) { root_.set("sceneGrid", engine_core::JsonValue::boolean(shown)); }
 
+bool Preferences::show_landing() const {
+    const engine_core::JsonValue* shown = root_.find("showLanding");
+    return shown == nullptr || !shown->is_bool() || shown->as_bool();
+}
+
+void Preferences::set_show_landing(bool shown) {
+    root_.set("showLanding", engine_core::JsonValue::boolean(shown));
+}
+
 std::string Preferences::profiler_tab() const {
     const engine_core::JsonValue* tab = root_.find("profilerTab");
     return tab != nullptr && tab->is_string() && tab->as_string() == "scopes" ? "scopes" : "timeline";

@@ -395,6 +395,7 @@ void IdeLayout::fill_window_menu(jadefx::Menu& menu) {
     menu.getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     add("New Scene View", "CameraPlus.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { new_scene_view(); });
     add("New Terminal", "ConsolePlus.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { new_terminal(); });
+    add("Welcome Page", "World.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { open_landing(); });
     menu.getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     add("Save Layout as Default", std::string(), nullptr)->setOnAction([this](jadefx::ActionEvent&) {
         save_default_layout();
@@ -515,6 +516,39 @@ IdeDock* IdeLayout::dock_beside(jadefx::Node* target, DropSide side, double dept
     }
     rebindUtilities();
     return fresh.get();
+}
+
+void IdeLayout::open_landing() {
+    if (const std::shared_ptr<LandingPage> open = landing_.lock(); open && dockContaining(open.get()) != nullptr) {
+        reveal_window(open.get());
+        return;
+    }
+    if (sceneDock_ == nullptr) {
+        return;
+    }
+    LandingPage::Actions actions;
+    actions.new_place = [this] {
+        confirm_discard("Save changes before starting a new place?", [this] { new_place(); });
+    };
+    actions.open_project = [this] { open_project(); };
+    actions.show_assets = [this] { open_window(*assets_window_); };
+    actions.open_preferences = [this] { open_preferences(); };
+    actions.set_show_on_startup = [this](bool show) {
+        preferences_.set_show_landing(show);
+        std::string error;
+        preferences_.save(error);
+    };
+    auto page = jadefx::make<LandingPage>(std::move(actions), preferences_.show_landing());
+    // Right after the scene view, wherever its tab sits on the strip.
+    std::size_t index = 0;
+    const std::vector<std::shared_ptr<jadefx::Tab>>& tabs = sceneDock_->tabs()->getTabs().items();
+    for (std::size_t i = 0; i < tabs.size(); ++i) {
+        if (tabs[i] && tabs[i]->getContent() == scene_view_.get()) {
+            index = i + 1;
+        }
+    }
+    sceneDock_->dock(page, index);
+    landing_ = page;
 }
 
 void IdeLayout::new_scene_view() {

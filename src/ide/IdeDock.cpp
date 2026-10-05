@@ -23,7 +23,7 @@ IdeDock::IdeDock() {
     setCenter(tabs_);
 }
 
-std::shared_ptr<jadefx::Tab> IdeDock::dock(const std::shared_ptr<IdePane>& pane) {
+std::shared_ptr<jadefx::Tab> IdeDock::dock(const std::shared_ptr<IdePane>& pane, std::size_t index) {
     if (!pane || !tabs_) {
         return nullptr;
     }
@@ -62,7 +62,7 @@ std::shared_ptr<jadefx::Tab> IdeDock::dock(const std::shared_ptr<IdePane>& pane)
             live->onClose();
         }
     });
-    tabs_->getTabs().add(std::move(tab));
+    tabs_->getTabs().insert(index, std::move(tab));
     tabs_->select(opened);
     sawTab_ = true;
     queuedEmpty_ = false;

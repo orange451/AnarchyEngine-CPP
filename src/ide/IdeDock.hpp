@@ -2,6 +2,7 @@
 
 #include "IdePane.hpp"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 
@@ -13,8 +14,8 @@ class IdeDock : public jadefx::BorderPane {
 public:
     IdeDock();
 
-    // Adds the page and selects it.
-    std::shared_ptr<jadefx::Tab> dock(const std::shared_ptr<IdePane>& pane);
+    // Adds the page at index, or last when index is past the end, and selects it.
+    std::shared_ptr<jadefx::Tab> dock(const std::shared_ptr<IdePane>& pane, std::size_t index = SIZE_MAX);
     // Moves an existing tab onto this strip and selects it.
     void take(const std::shared_ptr<jadefx::Tab>& tab);
     void select(const IdePane* pane);

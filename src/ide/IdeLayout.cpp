@@ -388,6 +388,9 @@ void IdeLayout::start() {
         begin_scratch();
     }
     update_title();
+    if (preferences_.show_landing()) {
+        open_landing();
+    }
     // The initial place exists by now: the app makes it right after
     // constructing this layout, before calling start. Loading here, rather
     // than in the constructor, keeps the plugins' Scripts out of that place's

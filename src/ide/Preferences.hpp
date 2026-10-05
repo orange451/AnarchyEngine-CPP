@@ -58,6 +58,10 @@ public:
     bool scene_grid() const;
     void set_scene_grid(bool shown);
 
+    // Whether the Welcome page opens beside the Scene View at startup. On unless turned off.
+    bool show_landing() const;
+    void set_show_landing(bool shown);
+
     // The profiler's tab, "timeline" or "scopes" ("timeline" for anything else),
     // and its lower half's share of the Scene View, kept from 0.2 to 0.8.
     std::string profiler_tab() const;

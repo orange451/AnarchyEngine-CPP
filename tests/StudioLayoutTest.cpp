@@ -42,6 +42,7 @@ int RunProblemsStartupTests();
 int RunProblemsPaneTests(engine_core::Engine& engine);
 int RunProblemsWindowTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunScriptTabTests(ide::IdeLayout& layout, jadefx::Scene& scene);
+int RunLandingPageTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunTerminalPaneTests();
 int RunGuiStyleTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunGuiImageTests(ide::IdeLayout& layout, jadefx::Scene& scene);
@@ -340,9 +341,9 @@ int main() {
             labels.push_back(item ? item->getText() : std::string());
         }
         expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "Problems", "Assets", "",
-                                                  "New Scene View", "New Terminal", "", "Save Layout as Default", "Reset to Default Layout",
+                                                  "New Scene View", "New Terminal", "Welcome Page", "", "Save Layout as Default", "Reset to Default Layout",
                                                   "Restore Built-in Default"},
-               "Window lists the explorers, Properties, Console, Search, Conflicts, Problems, and Assets, then New Scene View, New Terminal, and the default layout's items");
+               "Window lists the explorers, Properties, Console, Search, Conflicts, Problems, and Assets, then New Scene View, New Terminal, Welcome Page, and the default layout's items");
         double time = 1.1;
         auto frame = [&] {
             scene->layout(1280, 800, time);
@@ -928,6 +929,7 @@ int main() {
     pick_window("Game Explorer");
     scene->layout(1280, 800, 5.9);
     failures += RunScriptTabTests(layout, *scene);
+    failures += RunLandingPageTests(layout, *scene);
     failures += RunTerminalPaneTests();
     failures += RunGuiStyleTests(layout, *scene);
     failures += RunGuiImageTests(layout, *scene);

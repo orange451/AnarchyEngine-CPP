@@ -49,6 +49,7 @@ class StatusChip;
 }
 class McpServer;
 class UiCalls;
+class LandingPage;
 class PreferencesPanel;
 class PropertiesPanel;
 
@@ -139,6 +140,11 @@ public:
     // Shows a dockable pane: open docks it when no dock holds it. Otherwise its
     // tab is selected, and a floating window that holds it comes to the front.
     void reveal_window(IdePane* pane, const std::function<void()>& open = {});
+    // Docks the Welcome page as the second tab of the scene view's strip and
+    // selects it, or brings the open one forward. start() calls this unless
+    // the page's "Don't show this page on startup" was checked; Window >
+    // Welcome Page calls it too.
+    void open_landing();
     // Compares the disk with the place: loads what only the disk changed, and
     // lists what both changed in the Conflicts window and as a count on the
     // ribbon. choices are applied too. Returns the rows still open, or nothing
@@ -562,6 +568,8 @@ private:
     WindowEntry* conflicts_window_ = nullptr;
     WindowEntry* problems_window_ = nullptr;
     WindowEntry* assets_window_ = nullptr;
+    // The Welcome page while one is made. It is not kept in layout.json.
+    std::weak_ptr<LandingPage> landing_;
     // Scene views opened so far, which numbers the next one's tab.
     int scene_views_ = 1;
     // The studio's first scene view. It stays open.

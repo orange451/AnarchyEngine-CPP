@@ -44,6 +44,7 @@ set(STUDIO_CORE_SOURCES
     src/runner/BloomMath.cpp
     src/runner/ReflectionMath.cpp
     src/runner/OcclusionMath.cpp
+    src/runner/SkyMath.cpp
     src/runner/ShadowAtlas.cpp
     src/runner/ShadowPlanner.cpp
     src/runner/GamePack.cpp
@@ -861,6 +862,7 @@ add_executable(sandbox
     sandbox/reflection_math_tests.cpp
     sandbox/ambient_occlusion_tests.cpp
     sandbox/occlusion_math_tests.cpp
+    sandbox/sky_math_tests.cpp
     sandbox/shadow_atlas_tests.cpp
     sandbox/shadow_planner_tests.cpp
     sandbox/event_args_tests.cpp

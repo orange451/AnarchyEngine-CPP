@@ -128,9 +128,12 @@ std::optional<std::string> placement_error(std::string_view holder_class, std::s
     if (is_asset_class(holder_class)) {
         return "A " + std::string(holder_class) + " holds nothing";
     }
-    // A Skybox or BloomEffect affects the whole place, so it lives where the place's lighting does.
-    if ((child_class == "Skybox" || child_class == "BloomEffect" || child_class == "ScreenSpaceReflections") && holder_class != "Lighting") {
-        return "A " + std::string(child_class) + " must be in Lighting";
+    // These affect the whole place, so they live where the place's lighting does.
+    if ((child_class == "Skybox" || child_class == "BloomEffect" || child_class == "ScreenSpaceReflections" ||
+         child_class == "AmbientOcclusionEffect") &&
+        holder_class != "Lighting") {
+        const bool vowel = child_class.front() == 'A';
+        return std::string(vowel ? "An " : "A ") + std::string(child_class) + " must be in Lighting";
     }
     if (const char* home = asset_home(child_class)) {
         const std::string where = find_service(home) != nullptr ? service_path(home) : std::string("a ") + home;

@@ -45,9 +45,20 @@ Draws with the same nonzero `slot` share their mesh, every texture and every Mat
 
 ## Visibility
 
-`src/runner/Visibility.hpp/.cpp`, with no GL, tested in `sandbox/visibility_tests.cpp`.
+`src/runner/Visibility.hpp/.cpp`, with no GL, tested in `sandbox/visibility_tests.cpp`. It is in `studio_core`, which the sandbox links, so like `ShadowCaster` it reads a plain `DrawItem` the renderer fills from each `MeshDraw`, not the `MeshDraw` itself (`GpuMesh::valid` is only in `studio`).
 
 ```cpp
+// What visibility and batching read from one MeshDraw. Pointers are into that draw.
+struct DrawItem {
+    const engine_core::Matrix4* model = nullptr;
+    const float* boundsMin = nullptr;  // the mesh's local box
+    const float* boundsMax = nullptr;
+    const float* tint = nullptr;       // the GameObject's Color, as the Color3 holds it; null is white
+    float transparency = 0.f;
+    std::uint32_t slot = 0;
+    bool drawable = false;             // an uploaded mesh, and transparency below 1
+};
+
 struct VisibleDraw {
     int index = 0;             // into the frame's MeshDraws
     float screenRadius = 0.f;  // the sphere's projected radius in pixels; +inf with the camera inside it
@@ -58,10 +69,11 @@ struct VisibilityResult {
     std::vector<Sphere> spheres;           // one per MeshDraw, world space
     std::vector<VisibleDraw> opaque;       // in MeshDraw order
     std::vector<VisibleDraw> transparent;  // in MeshDraw order
+    int culled = 0;                        // drawable, but outside the view
 };
 
 // out is reused frame to frame. With cull false every drawable draw is visible.
-void FindVisible(const MeshDraw* draws, int count, const CameraView& camera, bool cull, VisibilityResult& out);
+void FindVisible(const DrawItem* items, int count, const CameraView& camera, bool cull, VisibilityResult& out);
 ```
 
 A draw is drawable when its mesh is non-null and valid and its transparency is below 1, as the geometry pass checks today. Its sphere is `WorldBounds(model, bounds_min, bounds_max)`, and it is visible when `SphereInFrustum` passes against `MakeFrustum` of the camera's view-projection, made once per call. Transparency above 0 puts it in `transparent`, otherwise `opaque`. A draw that is not drawable gets a zero sphere and is in neither list.
@@ -118,13 +130,13 @@ Slot 15 stays free; GL guarantees 16. `upload` does not touch slots 7–14, so o
 struct InstanceData {  // 112 bytes; slots 7–14 in order
     float model[16];   // column-major
     float normal[9];   // inverse transpose of model's 3x3, column-major
-    float tint[3];
+    float tint[3];     // linear: the GameObject's Color to the power 2.2, as surface.glsl's toLinear
 };
 
 class InstanceBuffer {
 public:
-    // Orphans the buffer (glBufferData with nullptr), then glBufferSubData.
-    // Capacity doubles as needed and never shrinks while the view lives.
+    // glBufferData with the data, GL_STREAM_DRAW: new storage each upload, so
+    // draws still reading the last upload never stall the CPU.
     void upload(const InstanceData* data, int count);
     // With a mesh's VAO bound: points slots 7–14 at instance first, divisor 1, enabled.
     void attach(int first) const;
@@ -132,7 +144,7 @@ public:
 };
 ```
 
-The renderer owns one and `ShadowRenderer` owns another, so neither upload orphans the other's. `attach` is 8 `glVertexAttribPointer` calls per run, since GL 3.3 and macOS's 4.1 have no base instance.
+The renderer owns one and `ShadowRenderer` owns another. `attach` enables, points and sets the divisor of 8 slots per run (24 cheap state calls), since GL 3.3 and macOS's 4.1 have no base instance. `InstanceData` is declared in `DrawBatches.hpp`, which has no GL.
 
 ### Shaders
 
@@ -155,10 +167,15 @@ struct DrawRun {
     bool mirrored = false;
 };
 
-// Opaque runs first, sorted; then one run of 1 per transparent draw, back to front.
-// runs and instances are reused frame to frame.
-void BuildBatches(const MeshDraw* draws, const VisibilityResult& visible, const engine_core::Matrix4& view,
-                  std::vector<DrawRun>& runs, std::vector<InstanceData>& instances, int& opaqueRuns);
+struct DrawBatches {
+    std::vector<DrawRun> runs;            // opaque runs first, then one run of 1 per transparent draw
+    std::vector<InstanceData> instances;
+    int opaqueRuns = 0;
+};
+
+// Reuses out's vectors frame to frame.
+void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const engine_core::Matrix4& view,
+                  DrawBatches& out);
 ```
 
 - The key is `slot << 32 | lod << 1 | mirrored`, where mirrored is a negative 3x3 determinant (what `CullBackFaces` tests today). Slot 0 gets a key of its own per draw, so it is always a run of 1.
@@ -183,7 +200,7 @@ The transparency pass does the same for the runs after `opaqueRuns`. Material un
 The shadow pass draws with face culling off, and the planner gives each tile and cascade its casters already culled and without the light's own meshes. So its runs key on the mesh alone.
 
 - `ShadowRenderer::draw` takes the spheres from `VisibilityResult` instead of calling `WorldBounds`.
-- For each tile and cascade drawn this frame, its casters sort by mesh address into runs. All of them go into one array, uploaded once before the first tile draws. Cached tiles add nothing.
+- For each tile drawn this frame, its casters sort by mesh address into runs. All the tiles' runs go into one array, uploaded once before the first tile draws; the sun's cascades do the same in `drawSun`. Cached tiles and unchanged cascades add nothing.
 - `drawCasters` binds, attaches and calls `draw_instanced(0, count)` per run, in place of a `glUniformMatrix4fv` and a draw per caster.
 - Caster fingerprints read `model` and `revision` as now, so when a map redraws does not change.
 - Shadow instances use the same `InstanceData`; the shader reads only the matrix.

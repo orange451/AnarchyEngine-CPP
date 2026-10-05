@@ -8,6 +8,7 @@
 #include "Matrix4.hpp"
 #include "SceneDepth.hpp"
 #include "ShadowRenderer.hpp"
+#include "SkyMath.hpp"
 #include "ViewCapture.hpp"
 
 #include <cstdint>
@@ -73,6 +74,10 @@ struct LightDraw {
     float shadowDistance = 100.f;
 };
 
+// The DynamicSky's light from state: directional, id 0, shining the way
+// opposite state.light.toward, with kSkyShadowDistance.
+LightDraw SkyLightDraw(const SkyState& state, bool shadows);
+
 // The Skybox, as the renderer reads it. Each image is a GL texture as
 // TextureCache::getEnvironment uploads it, with its revision.
 struct SceneSky {
@@ -123,6 +128,44 @@ struct SceneOcclusion {
     SceneQuality quality = SceneQuality::Medium;
 };
 
+// The DynamicSky, as the renderer reads it, with SkyMath's sun, moon, and
+// stars already worked out (SetSkyState). The defaults draw none.
+struct SceneDynamicSky {
+    bool enabled = false;
+    // Toward each body, world space.
+    float sunDirection[3] = {0.f, 1.f, 0.f};
+    float moonDirection[3] = {0.f, -1.f, 0.f};
+    // Column-major, world into the stars' frame.
+    float starFrame[9] = {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
+    float starVisibility = 0.f;
+    // The sky's light, toward it, and its color times its intensity, linear;
+    // the clouds are lit by it.
+    float lightDirection[3] = {0.f, 1.f, 0.f};
+    float lightColor[3] = {0.f, 0.f, 0.f};
+    // Each disc's linear radiance.
+    float sunColor[3] = {0.f, 0.f, 0.f};
+    float moonColor[3] = {0.f, 0.f, 0.f};
+    float cloudCover = 0.5f;
+    float cloudDensity = 0.5f;
+    // Studs drifted across X and Z.
+    float cloudOffset[2] = {0.f, 0.f};
+    // Degrees across.
+    float sunSizeDegrees = 2.f;
+    float moonSizeDegrees = 2.f;
+    // GL textures as TextureCache::get uploads them (sRGB), 0 for the discs.
+    unsigned sunTexture = 0;
+    unsigned moonTexture = 0;
+    SceneQuality reflectionQuality = SceneQuality::Medium;
+    // Whether the clouds drift, and the clock they drift by, in seconds.
+    bool windy = false;
+    double seconds = 0.0;
+    // What the lighting cube is drawn from (LightingDue).
+    SkyLightingKey key;
+};
+
+// Copies state's directions, star frame and visibility, light, and disc colors into out.
+void SetSkyState(SceneDynamicSky& out, const SkyState& state);
+
 // Lighting's properties the renderer reads. The defaults are a new Lighting's.
 struct SceneLighting {
     float ambient[3] = {0.5f, 0.5f, 0.5f};
@@ -131,6 +174,7 @@ struct SceneLighting {
     float gamma = 2.2f;
     SceneAntialiasing antialiasing = SceneAntialiasing::FXAA;
     SceneSky sky;
+    SceneDynamicSky dynamicSky;
     SceneBloom bloom;
     SceneReflections reflections;
     SceneOcclusion occlusion;
@@ -141,7 +185,7 @@ struct SceneLighting {
 // (ShadowRenderer), then a G-buffer of each opaque surface's albedo, normal,
 // material, and glow; a light pass that adds the ambient and sky light and
 // then each light: a DirectionalLight over the whole view, a PointLight or
-// SpotLight over its volume; then the Skybox behind every surface; screen-space reflections, when a
+// SpotLight over its volume; then the Skybox or DynamicSky behind every surface; screen-space reflections, when a
 // ScreenSpaceReflections asks for them (traced at half size from the lit
 // image); a forward
 // pass that blends see-through surfaces over that, farthest first; a merge;
@@ -150,7 +194,7 @@ struct SceneLighting {
 // draws onto the pane; and, when set, the floor
 // grid and then the outlines over it. Every pass but those last ones draws
 // into this renderer's own buffers, the pane's size in pixels. With a
-// Skybox, its image-based lighting (EnvironmentMap) is the sky light, and the
+// Skybox or DynamicSky, its image-based lighting (EnvironmentMap) is the sky light, and the
 // sky fills the pane wherever nothing opaque was drawn, even with no meshes.
 class Renderer {
 public:
@@ -334,6 +378,23 @@ private:
         int blurRadius = -1;
         int occlusionEnabled = -1;
         int occlusionIntensity = -1;
+        // DynamicSky (procedural_sky.glsl).
+        int face = -1;
+        int sunDirection = -1;
+        int moonDirection = -1;
+        int starFrame = -1;
+        int starVisibility = -1;
+        int bodyLightDirection = -1;
+        int bodyLightColor = -1;
+        int sunColor = -1;
+        int moonColor = -1;
+        int cloudCover = -1;
+        int cloudDensity = -1;
+        int cloudOffset = -1;
+        int sunSize = -1;
+        int moonSize = -1;
+        int sunTextureEnabled = -1;
+        int moonTextureEnabled = -1;
     };
 
     // A light as the shaders take it, in view space.
@@ -408,6 +469,14 @@ private:
     void prepareSky();
     // The Skybox's uniforms and cubes, or uSkyEnabled 0 with none.
     void bindSky(const Program& program);
+    // The DynamicSky's uniforms and its two textures.
+    void bindDynamicSky(const Program& program);
+    // Draws the DynamicSky's lighting cube again when LightingDue says so.
+    // True when the cubes hold the DynamicSky (if a little stale); false
+    // before they ever have, and the sky is not drawn.
+    bool updateDynamicSkyLighting();
+    // Whether this draw's sky is the DynamicSky.
+    bool dynamicSkyDrawn() const { return lighting_.dynamicSky.enabled && dynamicSkyBuilt_; }
     // Draws this frame's due shadow maps, before the G-buffer, and fills shadowLookups_.
     bool shadowPass(const MeshDraw* meshes, int count, const float* projection);
     // Points program at lookup's map, and every shadow sampler at a texture of its kind.
@@ -429,15 +498,27 @@ private:
     Program gtao_;
     Program aoBlur_;
     Program sky_;
+    // The DynamicSky's, built apart from the others: when they do not build,
+    // only the DynamicSky goes undrawn.
+    Program dynamicSky_;
+    Program dynamicSkyCube_;
+    bool dynamicSkyBuilt_ = false;
+    // What the lighting cube was last drawn from, and when.
+    SkyLightingKey skyLightingMade_;
+    double skyLightingMadeAt_ = 0.0;
+    bool skyLightingValid_ = false;
     Program grid_;
     Program outline_;
     Program handle_;
     EnvironmentMap environment_;
-    // Whether this draw has a Skybox whose cubes are made.
+    // Whether this draw has a Skybox or DynamicSky whose cubes are made.
     bool skyReady_ = false;
     // From view space to the sky's, column-major, and Exposure times Tint, linear.
     float viewToSky_[9] = {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
     float skyColor_[3] = {1.f, 1.f, 1.f};
+    // The sky's LightScale and the 2D image bound for it: a DynamicSky's are 1 and white.
+    float skyLightScale_ = 1.f;
+    unsigned skyImage_ = 0;
     // 1 by 1 white, bound for a texture a draw does not have.
     unsigned whiteTexture_ = 0;
     // 1 by 1 black on each face, bound for the Skybox's cubes when there is none.

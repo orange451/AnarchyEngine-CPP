@@ -5,6 +5,7 @@
 #include "runner/RenderMath.hpp"
 #include "DraggerMath.hpp"
 #include "runner/Renderer.hpp"
+#include "runner/SkyMath.hpp"
 #include "runner/TextureCache.hpp"
 #include "profiler/Profiler.hpp"
 #include "runner/gl.hpp"
@@ -24,6 +25,7 @@
 #include <fstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 // By hand, not ctest (it needs a GL 3.3 context), from the repository root so
@@ -1457,6 +1459,84 @@ int main() {
                                                              " under " + std::to_string(Sum(skyTop)) + ")");
             renderer.setLighting(lit);
             Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the sky leaves no GL error");
+
+            // A DynamicSky: drawn from its shader, and lighting what it surrounds.
+            {
+                const auto skyAt = [&](double hours, double latitude, int quality) {
+                    runner::SceneLighting out;
+                    out.ambient[0] = out.ambient[1] = out.ambient[2] = 0.f;
+                    const runner::SkyState state = runner::ComputeSky(hours, latitude, 3.0, 0.0, 0.0);
+                    runner::SceneDynamicSky& sky = out.dynamicSky;
+                    sky.enabled = true;
+                    runner::SetSkyState(sky, state);
+                    sky.cloudCover = 0.f;
+                    sky.cloudDensity = 0.f;
+                    sky.reflectionQuality = static_cast<runner::SceneQuality>(quality);
+                    sky.key = {static_cast<float>(hours), static_cast<float>(latitude), 0.f, 0.f, quality};
+                    return std::make_pair(out, runner::SkyLightDraw(state, false));
+                };
+                // A second apart: LightingDue holds back a change that comes sooner
+                // than kLightingChangeSeconds after the last drawing of the cube.
+                double clock = 0.0;
+                const auto drawDynamic = [&](std::pair<runner::SceneLighting, runner::LightDraw> sky,
+                                             const runner::MeshDraw* meshes, int count) {
+                    clock += 1.0;
+                    sky.first.dynamicSky.seconds = clock;
+                    renderer.setLighting(sky.first);
+                    bool drawn = false;
+                    for (int attempt = 0; attempt < 3 && !drawn; ++attempt) {
+                        drawn = renderer.draw(0, 0, kSize, kSize, kSize, kSize, meshes, count, &sky.second, 1);
+                    }
+                    return drawn;
+                };
+                renderer.setCamera(engine_core::matrix4_look_at({0.f, 0.f, 7.f}, {0.f, 0.f, 0.f}, up), 60.f);
+                const auto noon = skyAt(12.0, 0.0, 1);
+                Expect(drawDynamic(noon, nullptr, 0), "a DynamicSky with no meshes draws");
+                const Pixel noonSky = ReadPixel(fbWidth / 2, fbHeight * 7 / 8);
+                Expect(noonSky.b > noonSky.r && Sum(noonSky) > 60,
+                       "the noon sky is bright and blue (" + Text(noonSky) + ")");
+                const auto midnight = skyAt(0.0, 0.0, 1);
+                drawDynamic(midnight, nullptr, 0);
+                const Pixel midnightSky = ReadPixel(fbWidth / 2, fbHeight * 7 / 8);
+                Expect(Sum(midnightSky) * 4 < Sum(noonSky),
+                       "the midnight sky is dark (" + Text(midnightSky) + " against " + Text(noonSky) + ")");
+                // Straight down is dark ground, not NaN (which tone maps to black or garbage).
+                renderer.setCamera(engine_core::matrix4_look_at({0.f, 5.f, 0.f}, {0.f, 0.f, 0.001f}, up), 60.f);
+                drawDynamic(noon, nullptr, 0);
+                const Pixel ground = ReadPixel(fbWidth / 2, fbHeight / 2);
+                Expect(Sum(ground) > 3 && Sum(ground) < Sum(noonSky),
+                       "straight down is dark ground, not NaN (" + Text(ground) + ")");
+
+                // The sun lights a cube at noon far more than the moon at midnight.
+                renderer.setCamera(engine_core::matrix4_look_at({0.f, 3.f, 7.f}, {0.f, 0.f, 0.f}, up),
+                                   runner::Renderer::kCameraFovYDegrees);
+                runner::MeshDraw skyCube{cube, engine_core::matrix4_identity()};
+                skyCube.roughness = 1.f;
+                const int cubeTopY = fbHeight / 2 + fbHeight * 3 / 64;
+                Expect(drawDynamic(noon, &skyCube, 1), "a cube under a DynamicSky draws");
+                const Pixel noonTop = ReadPixel(fbWidth / 2, cubeTopY);
+                drawDynamic(midnight, &skyCube, 1);
+                const Pixel midnightTop = ReadPixel(fbWidth / 2, cubeTopY);
+                Expect(Sum(noonTop) > 2 * Sum(midnightTop) + 10,
+                       "noon lights the cube's top more than midnight (" + Text(noonTop) + " against " +
+                           Text(midnightTop) + ")");
+                // A new ReflectionQuality makes the cubes again, and draws at once.
+                Expect(drawDynamic(skyAt(12.0, 0.0, 2), &skyCube, 1), "ReflectionQuality High draws");
+                Expect(drawDynamic(skyAt(12.0, 0.0, 0), &skyCube, 1), "and Low");
+                // At a pole the sun rides the horizon: no light, but the scene still draws.
+                Expect(drawDynamic(skyAt(12.0, 90.0, 1), &skyCube, 1), "a polar sky draws");
+                Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the DynamicSky leaves no GL error");
+
+                // Back to the image sky: its own cubes again, not the procedural ones.
+                renderer.setCamera(engine_core::matrix4_look_at({0.f, 0.f, 7.f}, {0.f, 0.f, 0.f}, up), 60.f);
+                renderer.setLighting(lit);
+                Expect(drawSky(nullptr, 0), "the image sky draws again after a DynamicSky");
+                const Pixel back = ReadPixel(fbWidth / 4, fbHeight * 3 / 4);
+                Expect(back.r > 150 && back.g < 30 && back.b < 30,
+                       "the image sky comes back (" + Text(back) + ")");
+                renderer.setCamera(engine_core::matrix4_look_at({0.f, 3.f, 7.f}, {0.f, 0.f, 0.f}, up),
+                                   runner::Renderer::kCameraFovYDegrees);
+            }
 
             // With no image, today's stand-in again, and the corner the clear color.
             renderer.setLighting(runner::SceneLighting{});

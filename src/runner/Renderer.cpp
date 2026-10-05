@@ -115,6 +115,39 @@ void DrawFullscreen(unsigned emptyVao) {
 
 }  // namespace
 
+void SetSkyState(SceneDynamicSky& out, const SkyState& state) {
+    const auto copy = [](SkyVector v, float* to) {
+        to[0] = v.x;
+        to[1] = v.y;
+        to[2] = v.z;
+    };
+    copy(state.sun, out.sunDirection);
+    copy(state.moon, out.moonDirection);
+    std::copy(state.starFrame, state.starFrame + 9, out.starFrame);
+    out.starVisibility = state.starVisibility;
+    copy(state.light.toward, out.lightDirection);
+    for (int channel = 0; channel < 3; ++channel) {
+        out.lightColor[channel] = state.light.color[channel] * state.light.intensity;
+        out.sunColor[channel] = state.sunColor[channel];
+        out.moonColor[channel] = state.moonColor[channel];
+    }
+}
+
+LightDraw SkyLightDraw(const SkyState& state, bool shadows) {
+    LightDraw light;
+    light.kind = LightDraw::Kind::Directional;
+    // Toward the body, so it shines the other way.
+    light.direction[0] = -state.light.toward.x;
+    light.direction[1] = -state.light.toward.y;
+    light.direction[2] = -state.light.toward.z;
+    std::copy(state.light.color, state.light.color + 3, light.color);
+    light.intensity = state.light.intensity;
+    light.id = 0;
+    light.shadows = shadows;
+    light.shadowDistance = kSkyShadowDistance;
+    return light;
+}
+
 bool Renderer::buildProgram(Program& program, const char* name, const char* vertex, const char* fragment,
                             std::initializer_list<const char*> libraries) {
     const std::string fragmentSource = LoadShader(fragment, libraries);
@@ -207,6 +240,22 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.blurRadius = at("uBlurRadius");
     program.occlusionEnabled = at("uOcclusionEnabled");
     program.occlusionIntensity = at("uOcclusionIntensity");
+    program.face = at("uFace");
+    program.sunDirection = at("uSunDirection");
+    program.moonDirection = at("uMoonDirection");
+    program.starFrame = at("uStarFrame");
+    program.starVisibility = at("uStarVisibility");
+    program.bodyLightDirection = at("uBodyLightDirection");
+    program.bodyLightColor = at("uBodyLightColor");
+    program.sunColor = at("uSunColor");
+    program.moonColor = at("uMoonColor");
+    program.cloudCover = at("uCloudCover");
+    program.cloudDensity = at("uCloudDensity");
+    program.cloudOffset = at("uCloudOffset");
+    program.sunSize = at("uSunSize");
+    program.moonSize = at("uMoonSize");
+    program.sunTextureEnabled = at("uSunTextureEnabled");
+    program.moonTextureEnabled = at("uMoonTextureEnabled");
 
     // Samplers keep their unit for the program's life. A name two passes use
     // for different things (uEmissive, uTransparency) is a sampler only in
@@ -243,6 +292,9 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     sampler("uOcclusion", kUnitOcclusion);
     // The blur reads its source where the merge reads the reflection trace, in another pass.
     sampler("uOcclusionSource", kUnitScene);
+    // The sky pass reads no Material, so the DynamicSky's textures take its units.
+    sampler("uSunTexture", kUnitDiffuse);
+    sampler("uMoonTexture", kUnitNormalMap);
     if (&program == &merge_) {
         sampler("uEmissive", kUnitEmissive);
         sampler("uTransparency", kUnitTransparency);
@@ -305,6 +357,15 @@ bool Renderer::initialize() {
     if (!built) {
         shutdown();
         return false;
+    }
+
+    dynamicSkyBuilt_ =
+        buildProgram(dynamicSky_, "Dynamic sky", "pipeline/fullscreen.vert", "pipeline/dynamic_sky.frag",
+                     {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/procedural_sky.glsl"}) &&
+        buildProgram(dynamicSkyCube_, "Dynamic sky cube", "pipeline/fullscreen.vert",
+                     "pipeline/dynamic_sky_cube.frag", {"pipeline/environment.glsl", "pipeline/procedural_sky.glsl"});
+    if (!dynamicSkyBuilt_) {
+        std::fprintf(stderr, "The DynamicSky's shaders did not build; a DynamicSky draws no sky.\n");
     }
 
     const unsigned char white[4] = {255, 255, 255, 255};
@@ -911,7 +972,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         meshCount = 0;
     }
     // A sky whose cubes can never be made is drawn as no sky, rather than never drawing.
-    const bool hasSky = lighting_.sky.image != 0 && environment_.available();
+    const bool hasSky = environment_.available() && (dynamicSkyDrawn() || lighting_.sky.image != 0);
     const engine_core::Matrix4 projectionMatrix =
         Perspective(fovYDegrees_, static_cast<float>(pane.width) / static_cast<float>(pane.height), kSceneNear,
                     kSceneFar);
@@ -992,10 +1053,14 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         std::stable_partition(viewLights_.begin(), viewLights_.end(),
                               [](const ViewLight& light) { return light.cone[0] < -3.f; });
 
-        // The Skybox's cubes, made again only when an image changes.
+        // The sky's cubes: an image's made again only when it changes; a
+        // DynamicSky's when LightingDue says, and never failing the frame.
         skyReady_ = false;
         bool cubesReady = true;
-        if (hasSky) {
+        if (hasSky && dynamicSkyDrawn()) {
+            skyReady_ = updateDynamicSkyLighting();
+            prepareSky();
+        } else if (hasSky) {
             const SceneSky& sky = lighting_.sky;
             cubesReady = environment_.update(sky.image, sky.imageRevision, emptyVao_);
             skyReady_ = cubesReady;
@@ -1291,9 +1356,10 @@ void Renderer::prepareSky() {
             viewToWorld[column * 3 + row] = view_.m[row * 4 + column];
         }
     }
-    // Then the sky turned back by its Rotation: what the camera sees at a
+    // Then a Skybox turned back by its Rotation (a DynamicSky does not turn): what the camera sees at a
     // world direction is the sky's at that direction turned by -Rotation.
-    const float angle = -lighting_.sky.rotationDegrees * 0.01745329252f;
+    const bool dynamic = dynamicSkyDrawn();
+    const float angle = dynamic ? 0.f : -lighting_.sky.rotationDegrees * 0.01745329252f;
     const float c = std::cos(angle);
     const float s = std::sin(angle);
     const float turn[9] = {c, 0.f, -s, 0.f, 1.f, 0.f, s, 0.f, c};
@@ -1309,8 +1375,11 @@ void Renderer::prepareSky() {
     // Tint is a color as picked, sRGB, made linear as surface.glsl makes a Material's.
     const float exposure = std::max(lighting_.sky.exposure, 0.f);
     for (int channel = 0; channel < 3; ++channel) {
-        skyColor_[channel] = exposure * std::pow(std::max(lighting_.sky.tint[channel], 0.f), 2.2f);
+        skyColor_[channel] =
+            dynamic ? 1.f : exposure * std::pow(std::max(lighting_.sky.tint[channel], 0.f), 2.2f);
     }
+    skyLightScale_ = dynamic ? 1.f : std::max(lighting_.sky.lightScale, 0.f);
+    skyImage_ = dynamic ? whiteTexture_ : lighting_.sky.image;
 }
 
 void Renderer::bindSky(const Program& program) {
@@ -1326,12 +1395,65 @@ void Renderer::bindSky(const Program& program) {
     }
     glUniformMatrix3fv(program.viewToSky, 1, GL_FALSE, viewToSky_);
     glUniform3f(program.skyColor, skyColor_[0], skyColor_[1], skyColor_[2]);
-    glUniform1f(program.skyLightScale, std::max(lighting_.sky.lightScale, 0.f));
+    glUniform1f(program.skyLightScale, skyLightScale_);
     glUniform1f(program.prefilteredMaxLod, EnvironmentMap::prefilteredMaxLod());
-    BindTexture(kUnitSky, lighting_.sky.image);
+    BindTexture(kUnitSky, skyImage_);
     BindCube(kUnitIrradiance, environment_.irradiance());
     BindCube(kUnitPrefiltered, environment_.prefiltered());
     BindTexture(kUnitBrdf, environment_.brdf());
+}
+
+void Renderer::bindDynamicSky(const Program& program) {
+    const SceneDynamicSky& sky = lighting_.dynamicSky;
+    constexpr float kHalfDegree = 0.5f * 0.01745329252f;
+    glUniform3fv(program.sunDirection, 1, sky.sunDirection);
+    glUniform3fv(program.moonDirection, 1, sky.moonDirection);
+    glUniformMatrix3fv(program.starFrame, 1, GL_FALSE, sky.starFrame);
+    glUniform1f(program.starVisibility, sky.starVisibility);
+    glUniform3fv(program.bodyLightDirection, 1, sky.lightDirection);
+    glUniform3fv(program.bodyLightColor, 1, sky.lightColor);
+    glUniform3fv(program.sunColor, 1, sky.sunColor);
+    glUniform3fv(program.moonColor, 1, sky.moonColor);
+    glUniform1f(program.cloudCover, std::clamp(sky.cloudCover, 0.f, 1.f));
+    glUniform1f(program.cloudDensity, std::clamp(sky.cloudDensity, 0.f, 1.f));
+    glUniform2f(program.cloudOffset, sky.cloudOffset[0], sky.cloudOffset[1]);
+    glUniform1f(program.sunSize, std::tan(std::clamp(sky.sunSizeDegrees, 0.1f, 20.f) * kHalfDegree));
+    glUniform1f(program.moonSize, std::tan(std::clamp(sky.moonSizeDegrees, 0.1f, 20.f) * kHalfDegree));
+    glUniform1f(program.sunTextureEnabled, sky.sunTexture != 0 ? 1.f : 0.f);
+    glUniform1f(program.moonTextureEnabled, sky.moonTexture != 0 ? 1.f : 0.f);
+    BindTexture(kUnitDiffuse, sky.sunTexture != 0 ? sky.sunTexture : whiteTexture_);
+    BindTexture(kUnitNormalMap, sky.moonTexture != 0 ? sky.moonTexture : whiteTexture_);
+}
+
+bool Renderer::updateDynamicSkyLighting() {
+    const SceneDynamicSky& sky = lighting_.dynamicSky;
+    const bool made = skyLightingValid_ && environment_.holdsProcedural();
+    if (!LightingDue(skyLightingMade_, sky.key, skyLightingMadeAt_, sky.seconds, sky.windy, made)) {
+        return made;
+    }
+    RENDER_PASS("Sky lighting");
+    const EnvironmentSizes sizes = EnvironmentSizesFor(sky.key.quality);
+    const Program& program = dynamicSkyCube_;
+    const bool drawn =
+        environment_.updateProcedural(sizes.environment, sizes.prefiltered, emptyVao_, [&](int face) {
+            if (face == 0) {
+                glUseProgram(program.id);
+                bindDynamicSky(program);
+                glBindVertexArray(emptyVao_);
+                if (!CanDraw(program.id)) {
+                    return false;
+                }
+            }
+            glUniform1i(program.face, face);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            return true;
+        });
+    if (drawn) {
+        skyLightingMade_ = sky.key;
+        skyLightingMadeAt_ = sky.seconds;
+        skyLightingValid_ = true;
+    }
+    return environment_.holdsProcedural();
 }
 
 void Renderer::bindGBuffer(const Program& program) {
@@ -1621,16 +1743,21 @@ bool Renderer::skyPass(const float* inverseProjection) {
     if (!skyReady_) {
         return true;
     }
+    const bool dynamic = dynamicSkyDrawn();
+    const Program& program = dynamic ? dynamicSky_ : sky_;
     // Only where no opaque surface is, which no light pass wrote: no blending needed.
     glBindFramebuffer(RT_GL_FRAMEBUFFER, accumulationFbo_);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
-    glUseProgram(sky_.id);
+    glUseProgram(program.id);
     BindTexture(kUnitDepth, depthTexture_);
-    glUniformMatrix4fv(sky_.inverseProjection, 1, GL_FALSE, inverseProjection);
-    bindSky(sky_);
+    glUniformMatrix4fv(program.inverseProjection, 1, GL_FALSE, inverseProjection);
+    bindSky(program);
+    if (dynamic) {
+        bindDynamicSky(program);
+    }
     glBindVertexArray(emptyVao_);
-    if (!CanDraw(sky_.id)) {
+    if (!CanDraw(program.id)) {
         return false;
     }
     DrawFullscreen(emptyVao_);
@@ -1935,7 +2062,7 @@ void Renderer::shutdown() {
     ready_ = false;
     for (Program* program :
          {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &fxaa_, &ssrScene_, &ssr_, &gtao_, &aoBlur_, &sky_, &grid_,
-          &gridBands_, &outline_, &handle_}) {
+          &gridBands_, &outline_, &handle_, &dynamicSky_, &dynamicSkyCube_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);
         }
@@ -1944,6 +2071,8 @@ void Renderer::shutdown() {
     environment_.shutdown();
     shadows_.shutdown();
     skyReady_ = false;
+    dynamicSkyBuilt_ = false;
+    skyLightingValid_ = false;
     for (unsigned* texture : {&whiteTexture_, &blackCube_}) {
         DeleteTexture(*texture);
     }

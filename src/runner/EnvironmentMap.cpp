@@ -84,39 +84,55 @@ void EnvironmentMap::shutdown() {
     }
     brdfDrawn_ = false;
     imageRevision_ = 0;
+    environmentSize_ = 0;
+    prefilteredSize_ = 0;
+    procedural_ = false;
     refused_ = false;
 }
 
-bool EnvironmentMap::ensureTextures() {
-    if (framebuffer_ != 0) {
+bool EnvironmentMap::ensureTextures(int environmentSize, int prefilteredSize) {
+    if (framebuffer_ != 0 && environmentSize == environmentSize_ && prefilteredSize == prefilteredSize_) {
         return true;
     }
     if (refused_) {
         return false;
     }
+    // Made again at the new sizes: whatever they held is gone.
+    for (unsigned* texture : {&environment_, &irradiance_, &prefiltered_}) {
+        DeleteTexture(*texture);
+    }
+    imageRevision_ = 0;
+    procedural_ = false;
+    environmentSize_ = 0;
+    prefilteredSize_ = 0;
     glActiveTexture(GL_TEXTURE0 + kUnitSource);
-    environment_ = MakeCube(kEnvironmentSize, true);
+    environment_ = MakeCube(environmentSize, true);
     irradiance_ = MakeCube(kIrradianceSize, false);
-    prefiltered_ = MakeCube(kPrefilteredSize, true);
+    prefiltered_ = MakeCube(prefilteredSize, true);
     // Mips past the last roughness are never drawn or read.
     glBindTexture(RT_GL_TEXTURE_CUBE_MAP, prefiltered_);
     glTexParameteri(RT_GL_TEXTURE_CUBE_MAP, RT_GL_TEXTURE_MAX_LEVEL, kPrefilteredLevels - 1);
     glBindTexture(RT_GL_TEXTURE_CUBE_MAP, 0);
 
-    glGenTextures(1, &brdf_);
-    glBindTexture(GL_TEXTURE_2D, brdf_);
-    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(RT_GL_RGBA16F), kBrdfSize, kBrdfSize, 0, GL_RGBA,
-                 RT_GL_HALF_FLOAT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR));
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLint>(RT_GL_CLAMP_TO_EDGE));
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<GLint>(RT_GL_CLAMP_TO_EDGE));
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    glGenFramebuffers(1, &framebuffer_);
+    if (brdf_ == 0) {
+        glGenTextures(1, &brdf_);
+        glBindTexture(GL_TEXTURE_2D, brdf_);
+        glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(RT_GL_RGBA16F), kBrdfSize, kBrdfSize, 0, GL_RGBA,
+                     RT_GL_HALF_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR));
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLint>(RT_GL_CLAMP_TO_EDGE));
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<GLint>(RT_GL_CLAMP_TO_EDGE));
+        glBindTexture(GL_TEXTURE_2D, 0);
+        brdfDrawn_ = false;
+    }
+    if (framebuffer_ == 0) {
+        glGenFramebuffers(1, &framebuffer_);
+        glBindFramebuffer(RT_GL_FRAMEBUFFER, framebuffer_);
+        const GLenum buffer = RT_GL_COLOR_ATTACHMENT0;
+        glDrawBuffers(1, &buffer);
+    }
     glBindFramebuffer(RT_GL_FRAMEBUFFER, framebuffer_);
-    const GLenum buffer = RT_GL_COLOR_ATTACHMENT0;
-    glDrawBuffers(1, &buffer);
     bool complete = true;
     for (const unsigned cube : {environment_, irradiance_, prefiltered_}) {
         glFramebufferTexture2D(RT_GL_FRAMEBUFFER, RT_GL_COLOR_ATTACHMENT0, RT_GL_TEXTURE_CUBE_MAP_POSITIVE_X, cube, 0);
@@ -125,7 +141,7 @@ bool EnvironmentMap::ensureTextures() {
     glFramebufferTexture2D(RT_GL_FRAMEBUFFER, RT_GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, brdf_, 0);
     complete = complete && glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) == RT_GL_FRAMEBUFFER_COMPLETE;
     if (!complete) {
-        std::fprintf(stderr, "The Skybox's environment cubes are not supported; the sky is not drawn.\n");
+        std::fprintf(stderr, "The sky's environment cubes are not supported; the sky is not drawn.\n");
         // Keeps the programs, but no textures: a later call does not try again.
         for (unsigned* texture : {&environment_, &irradiance_, &prefiltered_, &brdf_}) {
             DeleteTexture(*texture);
@@ -133,9 +149,12 @@ bool EnvironmentMap::ensureTextures() {
         glBindFramebuffer(RT_GL_FRAMEBUFFER, 0);
         glDeleteFramebuffers(1, &framebuffer_);
         framebuffer_ = 0;
+        brdfDrawn_ = false;
         refused_ = true;
         return false;
     }
+    environmentSize_ = environmentSize;
+    prefilteredSize_ = prefilteredSize;
     return true;
 }
 
@@ -162,8 +181,8 @@ bool EnvironmentMap::drawEnvironment(unsigned image, unsigned emptyVao) {
     glBindTexture(RT_GL_TEXTURE_CUBE_MAP, 0);
     glBindTexture(GL_TEXTURE_2D, image);
     glUseProgram(equirect_.id);
-    glUniform1f(equirect_.environmentSize, static_cast<float>(kEnvironmentSize));
-    if (!drawFaces(equirect_, environment_, 0, kEnvironmentSize, emptyVao)) {
+    glUniform1f(equirect_.environmentSize, static_cast<float>(environmentSize_));
+    if (!drawFaces(equirect_, environment_, 0, environmentSize_, emptyVao)) {
         return false;
     }
     glBindFramebuffer(RT_GL_FRAMEBUFFER, 0);
@@ -172,68 +191,119 @@ bool EnvironmentMap::drawEnvironment(unsigned image, unsigned emptyVao) {
     return true;
 }
 
-bool EnvironmentMap::update(unsigned image, std::uint64_t imageRevision, unsigned emptyVao) {
-    if (image == 0 || equirect_.id == 0) {
-        return false;
-    }
-    if (brdfDrawn_ && imageRevision == imageRevision_) {
+bool EnvironmentMap::ensureBrdf(unsigned emptyVao) {
+    if (brdfDrawn_) {
         return true;
     }
-    if (!ensureTextures()) {
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, framebuffer_);
+    glFramebufferTexture2D(RT_GL_FRAMEBUFFER, RT_GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, brdf_, 0);
+    glViewport(0, 0, kBrdfSize, kBrdfSize);
+    glUseProgram(brdfProgram_.id);
+    glBindVertexArray(emptyVao);
+    if (!CanDraw(brdfProgram_.id)) {
         return false;
     }
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    brdfDrawn_ = true;
+    return true;
+}
+
+bool EnvironmentMap::filter(unsigned emptyVao) {
+    // The diffuse light.
+    glActiveTexture(GL_TEXTURE0 + kUnitSource);
+    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, environment_);
+    glUseProgram(irradianceProgram_.id);
+    glUniform1f(irradianceProgram_.environmentSize, static_cast<float>(environmentSize_));
+    if (!drawFaces(irradianceProgram_, irradiance_, 0, kIrradianceSize, emptyVao)) {
+        return false;
+    }
+    // The reflections, from the same environment cube.
+    glActiveTexture(GL_TEXTURE0 + kUnitSource);
+    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, environment_);
+    glUseProgram(prefilter_.id);
+    glUniform1f(prefilter_.environmentSize, static_cast<float>(environmentSize_));
+    for (int level = 0; level < kPrefilteredLevels; ++level) {
+        glUseProgram(prefilter_.id);
+        glUniform1f(prefilter_.roughness, static_cast<float>(level) / static_cast<float>(kPrefilteredLevels - 1));
+        if (!drawFaces(prefilter_, prefiltered_, level, std::max(prefilteredSize_ >> level, 1), emptyVao)) {
+            return false;
+        }
+    }
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, 0);
+    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return true;
+}
+
+namespace {
+
+void BeginDrawing() {
     glDisable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
     glDisable(RT_GL_CULL_FACE);
     glDisable(GL_SCISSOR_TEST);
     // Filtering reads across the edges of faces, so the cubes have no seams.
     glEnable(RT_GL_TEXTURE_CUBE_MAP_SEAMLESS);
+}
+
+}  // namespace
+
+bool EnvironmentMap::update(unsigned image, std::uint64_t imageRevision, unsigned emptyVao) {
+    if (image == 0 || equirect_.id == 0) {
+        return false;
+    }
+    if (brdfDrawn_ && !procedural_ && imageRevision == imageRevision_ && environmentSize_ == kEnvironmentSize &&
+        prefilteredSize_ == kPrefilteredSize) {
+        return true;
+    }
+    if (!ensureTextures(kEnvironmentSize, kPrefilteredSize)) {
+        return false;
+    }
+    BeginDrawing();
     // Whatever was made before is not the sky now, whether or not this finishes.
     imageRevision_ = 0;
-
-    if (!brdfDrawn_) {
-        glBindFramebuffer(RT_GL_FRAMEBUFFER, framebuffer_);
-        glFramebufferTexture2D(RT_GL_FRAMEBUFFER, RT_GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, brdf_, 0);
-        glViewport(0, 0, kBrdfSize, kBrdfSize);
-        glUseProgram(brdfProgram_.id);
-        glBindVertexArray(emptyVao);
-        if (!CanDraw(brdfProgram_.id)) {
-            return false;
-        }
-        glDrawArrays(GL_TRIANGLES, 0, 3);
-        brdfDrawn_ = true;
-    }
-
-    // The diffuse light, from the image.
-    if (!drawEnvironment(image, emptyVao)) {
+    procedural_ = false;
+    if (!ensureBrdf(emptyVao) || !drawEnvironment(image, emptyVao) || !filter(emptyVao)) {
         return false;
-    }
-    glActiveTexture(GL_TEXTURE0 + kUnitSource);
-    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, environment_);
-    glUseProgram(irradianceProgram_.id);
-    glUniform1f(irradianceProgram_.environmentSize, static_cast<float>(kEnvironmentSize));
-    if (!drawFaces(irradianceProgram_, irradiance_, 0, kIrradianceSize, emptyVao)) {
-        return false;
-    }
-
-    // The reflections, from the same environment cube.
-    glActiveTexture(GL_TEXTURE0 + kUnitSource);
-    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, environment_);
-    glUseProgram(prefilter_.id);
-    glUniform1f(prefilter_.environmentSize, static_cast<float>(kEnvironmentSize));
-    for (int level = 0; level < kPrefilteredLevels; ++level) {
-        glUseProgram(prefilter_.id);
-        glUniform1f(prefilter_.roughness, static_cast<float>(level) / static_cast<float>(kPrefilteredLevels - 1));
-        if (!drawFaces(prefilter_, prefiltered_, level, std::max(kPrefilteredSize >> level, 1), emptyVao)) {
-            return false;
-        }
     }
     static_assert((kPrefilteredSize >> (kPrefilteredLevels - 1)) >= 1, "the prefiltered cube's mips run out at 1 by 1");
-
-    glBindFramebuffer(RT_GL_FRAMEBUFFER, 0);
-    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
     imageRevision_ = imageRevision;
+    return true;
+}
+
+bool EnvironmentMap::updateProcedural(int environmentSize, int prefilteredSize, unsigned emptyVao,
+                                      const std::function<bool(int face)>& drawFace) {
+    if (equirect_.id == 0 || (prefilteredSize >> (kPrefilteredLevels - 1)) < 1 ||
+        !ensureTextures(environmentSize, prefilteredSize)) {
+        return false;
+    }
+    BeginDrawing();
+    imageRevision_ = 0;
+    procedural_ = false;
+    if (!ensureBrdf(emptyVao)) {
+        return false;
+    }
+    glActiveTexture(GL_TEXTURE0 + kUnitSource);
+    // Not bound while it is drawn into.
+    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, 0);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, framebuffer_);
+    glViewport(0, 0, environmentSize_, environmentSize_);
+    glBindVertexArray(emptyVao);
+    for (int face = 0; face < 6; ++face) {
+        glFramebufferTexture2D(RT_GL_FRAMEBUFFER, RT_GL_COLOR_ATTACHMENT0,
+                               RT_GL_TEXTURE_CUBE_MAP_POSITIVE_X + static_cast<GLenum>(face), environment_, 0);
+        if (!drawFace(face)) {
+            return false;
+        }
+    }
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, 0);
+    glActiveTexture(GL_TEXTURE0 + kUnitSource);
+    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, environment_);
+    glGenerateMipmap(RT_GL_TEXTURE_CUBE_MAP);
+    if (!filter(emptyVao)) {
+        return false;
+    }
+    procedural_ = true;
     return true;
 }
 

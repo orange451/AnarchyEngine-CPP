@@ -442,6 +442,10 @@ private:
     // filtering. Made and resized with the other buffers.
     unsigned ldrFbo_ = 0;
     unsigned ldrTexture_ = 0;
+    // Whether fxaa_ has passed validation since the programs or buffers were
+    // last made. Validating is slow on macOS, and nothing it checks changes
+    // between frames, so it is asked until it passes, as the grid's bands are.
+    bool fxaaValid_ = false;
 
     void readProbe(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth, double sceneHeight,
                    const int viewport[4]);

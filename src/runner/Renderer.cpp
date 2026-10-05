@@ -300,6 +300,7 @@ bool Renderer::initialize() {
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
     gridBandsBuilt_ = false;
     gridBandsValid_ = false;
+    fxaaValid_ = false;
     depthFramebuffer_ = -1;
     glGenVertexArrays(1, &outlineVao_);
     glBindVertexArray(outlineVao_);
@@ -470,6 +471,7 @@ void Renderer::destroyTargets() {
         DeleteTexture(*texture);
     }
     destroyBloomChain();
+    fxaaValid_ = false;
     targetWidth_ = 0;
     targetHeight_ = 0;
 }
@@ -1585,8 +1587,11 @@ bool Renderer::fxaaPass() {
     BindTexture(kUnitScene, ldrTexture_);
     glUniform2f(fxaa_.texel, 1.f / static_cast<float>(targetWidth_), 1.f / static_cast<float>(targetHeight_));
     glBindVertexArray(emptyVao_);
-    if (!CanDraw(fxaa_.id)) {
-        return false;
+    if (!fxaaValid_) {
+        if (!CanDraw(fxaa_.id)) {
+            return false;
+        }
+        fxaaValid_ = true;
     }
     DrawFullscreen(emptyVao_);
     return true;

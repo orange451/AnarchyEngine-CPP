@@ -53,8 +53,8 @@ World +Y is up. The compass is fixed: north is −Z, east is +X, so south is +Z 
 There is no date: the sun's declination is 0 (the equinox), so it rises due east at 6:00 and sets due west at 18:00 at every latitude.
 
 - Hour angle: H = (TimeOfDay − 12) × 15°.
-- Before the latitude tilt, the sun goes around the celestial equator: `p = (−sin H, cos H, 0)` rotated so that at H = 0 it is overhead, rising from +X and setting toward −X.
-- The tilt rotates p about the east–west (X) axis by Latitude, toward the equator: at Latitude φ the noon sun stands 90° − |φ| above the horizon, toward the south (+Z) for φ > 0 and the north (−Z) for φ < 0. At ±90° the sun circles on the horizon all day.
+- At the equator the sun goes around `p = (−sin H, cos H, 0)`: (+1, 0, 0) at 6:00, straight up at 12:00, (−1, 0, 0) at 18:00.
+- Latitude φ rotates p about the X axis by φ (y' = y cos φ − z sin φ, z' = y sin φ + z cos φ), so the noon sun stands 90° − |φ| above the horizon, toward the south (+Z) for φ > 0 and the north (−Z) for φ < 0. At ±90° the sun circles on the horizon all day.
 - The moon is opposite the sun: `moon = −sun`. It has no phases.
 - The celestial pole is the same rotation applied to the north pole axis; the stars turn about it with the hour angle.
 

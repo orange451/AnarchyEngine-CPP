@@ -81,9 +81,11 @@ One directional light, `id` 0, from the sun while the sun is up and the moon oth
 
 ### Shaders
 
-- `procedural_sky.glsl` (library): `proceduralSky(dir, seconds)` returns the sky's linear radiance in a world direction. It holds:
-  - single-scattering Rayleigh and Mie atmosphere with the sun's glow (after 3djSzz), lit by the moon at night at a much lower level;
-  - fbm clouds on a plane above the camera, offset by `wind × seconds`, thresholded by CloudCover, opacity and self-shadowing by CloudDensity, lit by the current light colour (after wslyWs);
+- `procedural_sky.glsl` (library): `proceduralSky(dir, detail)` returns the sky's linear radiance in a world direction; `detail` is false for the lighting cube. It holds:
+  - single-scattering Rayleigh and Mie atmosphere with the sun's glow (after 3djSzz), lit by the moon at night at a much lower level (`kMoonSkyRadiance`, 3% of the sun's);
+  - at and below the horizon, the atmosphere and the moon's glow use the horizon in the same azimuth, not `dir` itself, so a column straight down does not fade toward the ground's own colour; straight down, with no azimuth, uses due south (0, 0, −1). A separate ground darkening (unchanged) dims the result below the horizon;
+  - the stars, the sun and moon discs, and the moon's glow are only added above the horizon, through a `smoothstep(-0.002, 0.002, dir.y)` fade: without it, every ray below the horizon shares one direction's worth of sky and would smear the sun, moon, and stars straight down the ground;
+  - fbm clouds on a plane above the camera (`kCloudHeight` 200 studs up, `kCloudFeature` 120 studs across a cell), offset by `wind × seconds`, thresholded by CloudCover, opacity and self-shadowing by CloudDensity, lit by the current light colour (after wslyWs);
   - stars: a hashed cell field in sky coordinates turned about the pole, faded in by star visibility and hidden by cloud;
   - the sun and moon: a disc of SunSize / MoonSize with limb darkening and a halo, or the texture on a quad facing the viewer at that angular size; drawn behind the clouds.
 - `dynamic_sky.frag` draws the visible sky: full screen into the accumulation buffer where depth is 1, as `sky.frag` does, clamped to `kMaxHalf`. Profiled as the existing `"Sky"` pass.
@@ -124,6 +126,8 @@ The redraw is profiled as a `"Sky lighting"` pass. The visible sky is not affect
 
 If the procedural programs fail to build, or the cubes cannot be made, that is reported once and frames draw as with no sky (the stand-in ambient and black reflections); unlike a Skybox's unready cubes today, the frame does not fail. A missing or unloadable SunTexture or MoonTexture draws the procedural disc.
 
+`EnvironmentMap::updateProcedural` clears its "holds a procedural sky" flag before it draws a single face, and only sets it again once every face, the mipmap, and the filter all succeed. So a redraw that fails partway — one face's program fails to link, say — drops the lighting cube's sky for that frame, the same as a build failure above: the renderer reads `holdsProcedural()` as false and lights the frame with no sky until a later redraw succeeds. The visible sky (drawn straight from the shader, not the cube) is unaffected either way.
+
 ## Registration
 
 As the effects under Lighting were registered:
@@ -148,20 +152,26 @@ As the effects under Lighting were registered:
 ## Tests
 
 - `sandbox/dynamic_sky_tests.cpp` (Catch2, `[dynamic_sky]`):
-  - each property's default, clamp, wrap (TimeOfDay), and refusal of non-finite values;
-  - undo, save and load, and restore at Stop;
-  - placement: allowed in Lighting and Folders under it, refused elsewhere;
-  - first sky wins, in both orders of a Skybox and a DynamicSky;
-  - the snapshot carries every value;
-  - a script sets TimeOfDay and the snapshot follows.
-- `SkyMath` unit tests:
-  - Latitude 0, 12:00: the sun is straight up;
-  - 6:00 and 18:00: the sun is on the horizon, at +X and −X;
-  - the noon sun's elevation is 90° − |Latitude|, south for positive Latitude and north for negative;
-  - the moon is opposite the sun;
-  - the light's intensity is continuous across sunrise and sunset, and comes from the sun at noon and the moon at midnight;
-  - the sun's light is redder at 5° elevation than at 60°;
-  - cloud dimming and star visibility at their ends.
+  - DS1 each property's default, clamp, wrap (TimeOfDay), and refusal of non-finite values; undo, save and load, and restore at Stop;
+  - DS2 placement: allowed in Lighting and Folders under it, refused elsewhere;
+  - DS3 the snapshot carries the first DynamicSky under Lighting, with every value;
+  - DS4 a script makes a DynamicSky and sets it, and the snapshot follows;
+  - DS5 the first Skybox or DynamicSky in the tree is the sky, in both orders.
+- `sandbox/sky_math_tests.cpp` (Catch2, `[sky_math]`):
+  - SM1 at the equator the sun is overhead at noon and on the horizon at 6:00 and 18:00, at +X and −X;
+  - SM2 Latitude sets the noon sun's height to 90° − |Latitude|, south for positive Latitude and north for negative;
+  - SM3 the stars' frame keeps the sun straight up and the pole at −Z;
+  - SM4 transmittance is white overhead and redder toward the horizon;
+  - SM5 fades, star visibility, and cloud dimming at their ends;
+  - SM6 the light comes from the sun by day and the moon by night, and is continuous across sunrise and sunset (the moon is opposite the sun);
+  - SM7 the light reddens at a low sun, and the discs hide below the horizon;
+  - SM8 the lighting cube's sizes and when it is drawn again (`LightingDue`'s 0.05 s and 0.25 s).
 - `tests/SceneFeedTest.cpp`: `VisualDynamicSky` is copied.
 - `tests/LuauCompleteTest.cpp`: DynamicSky in the rank-4 row of the Insert list, between BloomEffect and ScreenSpaceReflections.
-- `scene-render-check`: a DynamicSky at noon and at midnight: the sky pixels are bright and blue at noon and dark at midnight, and a ground plane is lit far more at noon.
+- `scene-render-check`: a DynamicSky, drawn with a test clock that advances a second per draw (so clouds drift deterministically and `LightingDue`'s throttle is exercised) rather than wall time:
+  - the sky pixels are bright and blue at noon and dark at midnight;
+  - straight down reads as dark ground, not NaN;
+  - at sunset, with the sun on the horizon due west, the ground below the sun matches the ground beside it, within tolerance — the horizon-azimuth fix above keeps the disc from smearing down the column;
+  - a cube lit by the sky is lit far more at noon than at midnight, and redraws at once on a ReflectionQuality change;
+  - a polar sky (Latitude 90, sun on the horizon all day) still draws;
+  - after a DynamicSky, a plain Skybox draws again from its own (non-procedural) cubes.

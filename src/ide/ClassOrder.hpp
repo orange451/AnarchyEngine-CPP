@@ -7,7 +7,7 @@
 namespace ide {
 
 // Where a class's cluster sits in the explorer and the Insert list. Lower
-// comes first. Folders lead, then scripts, then the things in the world. A
+// comes first. Folders lead, then scripts and CSS, then the things in the world. A
 // class not listed comes after every listed one.
 inline int class_rank(std::string_view class_name) {
     struct Rank {
@@ -18,17 +18,18 @@ inline int class_rank(std::string_view class_name) {
         {"Folder", 0},
         {"Script", 1},
         {"ModuleScript", 1},
-        {"GameObject", 2},
-        {"PhysicsObject", 2},
-        {"Model", 2},
-        {"Camera", 3},
-        {"DirectionalLight", 4},
-        {"PointLight", 4},
-        {"SpotLight", 4},
-        {"Skybox", 5},
-        {"AmbientOcclusionEffect", 5},
-        {"BloomEffect", 5},
-        {"ScreenSpaceReflections", 5},
+        {"CSS", 1},
+        {"Camera", 2},
+        {"GameObject", 3},
+        {"PhysicsObject", 3},
+        {"Model", 3},
+        {"Skybox", 4},
+        {"AmbientOcclusionEffect", 4},
+        {"BloomEffect", 4},
+        {"ScreenSpaceReflections", 4},
+        {"DirectionalLight", 5},
+        {"PointLight", 5},
+        {"SpotLight", 5},
         {"Sound", 6},
         {"SoundEmitter", 6},
         {"Attachment", 7},
@@ -41,7 +42,6 @@ inline int class_rank(std::string_view class_name) {
         {"Label", 10},
         {"Button", 10},
         {"TextField", 10},
-        {"CSS", 11},
     };
     for (const Rank& entry : kRanks) {
         if (entry.name == class_name) {

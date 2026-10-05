@@ -1192,20 +1192,19 @@ void testInsertFilter() {
     engine_core::lua_creatable_names(names);
     std::vector<std::string> shown;
     ide::filter_class_names(names, "", shown);
-    // Folders, then scripts, then the world's objects, each cluster A to Z.
+    // Folders, then scripts and CSS, then the world's objects, each cluster A to Z.
     const std::vector<std::string> expected = {
         "Folder",
-        "ModuleScript", "Script",
-        "GameObject", "Model", "PhysicsObject",
+        "CSS", "ModuleScript", "Script",
         "Camera",
-        "DirectionalLight", "PointLight", "SpotLight",
+        "GameObject", "Model", "PhysicsObject",
         "AmbientOcclusionEffect", "BloomEffect", "ScreenSpaceReflections", "Skybox",
+        "DirectionalLight", "PointLight", "SpotLight",
         "Sound", "SoundEmitter",
         "Attachment",
         "BillboardGui", "ScreenGui",
         "HBox", "ImagePane", "Pane", "VBox",
         "Button", "Label", "TextField",
-        "CSS",
         "Dragger", "Material", "Mesh", "Prefab", "Texture"};
     if (shown != expected) {
         fail("insert list is every creatable class, in clusters, each A to Z");

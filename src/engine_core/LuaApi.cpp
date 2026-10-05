@@ -1114,7 +1114,11 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Label", "Text", "The text it shows.", "string", false, {});
     add("Label", "TextColor", "The text's color. A stylesheet's color wins.", "Color3", false, {});
     add("Label", "FontSize", "The text's size in points, from 1 to 512.", "number", false, {});
+    add("Label", "TextScaled", "When true, the text grows or shrinks to the largest size that fits the label.",
+        "boolean", false, {});
     add("Button", "Text", "The text on the button.", "string", false, {});
+    add("Button", "TextScaled", "When true, the text grows or shrinks to the largest size that fits the button.",
+        "boolean", false, {});
     add("Button", "Action", "Fires when the button is clicked, or Enter is pressed while it has focus.", "Signal",
         false, {});
     add("TextField", "Text", "The text in the field. Typing changes it.", "string", false, {});

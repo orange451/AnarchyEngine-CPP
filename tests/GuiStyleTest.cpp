@@ -134,6 +134,32 @@ int RunGuiStyleTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     Expect(Same(node->computedStyle().color, jadefx::Color::rgb8(0, 255, 255)), "editing the service CSS restyles the next frame");
     Expect(node->computedStyle().padding.left == 4, "and its padding wins over the default's");
 
+    // TextScaled fills the box Size gives, and a stylesheet's font-size does not stop it.
+    engine_core::InstanceId label = 0;
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        label = engine_core::lua_create_instance(game, "Label")->id();
+        game.set_parent(label, screen);
+        engine_core::LuaSlot size;
+        size.kind = engine_core::LuaSlot::Kind::Vec2;
+        size.vec = engine_core::Vec3{300.f, 120.f, 0.f};
+        engine_core::LuaSlot scaled;
+        scaled.kind = engine_core::LuaSlot::Kind::Bool;
+        scaled.flag = true;
+        for (const engine_core::InstanceId id : {label, button}) {
+            auto* gui = dynamic_cast<engine_core::GuiValues*>(game.instance(id));
+            gui->set_value(engine_core::GuiProperty::Size, size);
+            gui->set_value(engine_core::GuiProperty::TextScaled, scaled);
+        }
+    });
+    setSource(serviceCss, "button, label { font-size: 10px; }");
+    frame();
+    auto* scaledLabel = dynamic_cast<jadefx::Label*>(view->guiLayer().nodeFor(label));
+    auto* scaledButton = dynamic_cast<jadefx::Button*>(view->guiLayer().nodeFor(button));
+    Expect(scaledLabel != nullptr && scaledLabel->isTextScaled() && scaledLabel->displayedFontSize() > 40.f,
+           "a TextScaled Label's text fills its Size");
+    Expect(scaledButton != nullptr && scaledButton->isTextScaled() && scaledButton->displayedFontSize() > 40.f,
+           "so does a TextScaled Button's");
+
     engine.on_simulation([&](engine_core::DataModel& game) {
         game.destroy_tree(serviceCss);
         game.destroy_tree(screen);

@@ -545,8 +545,10 @@ void GuiLayer::apply(Entry& entry, const engine_core::GuiValues& gui) {
         label->setText(gui.text(GuiProperty::Text));
         label->setTextFill(NodeColor(gui.color(GuiProperty::TextColor)));
         label->setFont(jadefx::Font(jadefx::Font().family(), static_cast<float>(gui.number(GuiProperty::FontSize))));
+        label->setTextScaled(gui.flag(GuiProperty::TextScaled));
     } else if (auto* button = dynamic_cast<jadefx::Button*>(&node)) {
         button->setText(gui.text(GuiProperty::Text));
+        button->setTextScaled(gui.flag(GuiProperty::TextScaled));
     } else if (entry.field != nullptr) {
         entry.field->setPromptText(gui.text(GuiProperty::Prompt));
         // Only a change on the instance's side reaches the field, so text

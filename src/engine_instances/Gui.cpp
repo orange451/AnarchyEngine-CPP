@@ -48,6 +48,7 @@ constexpr GuiSpec kSpecs[] = {
     {"Source", "string", LuaSlot::Kind::String, 0, 0},
     {"AlwaysOnTop", "boolean", LuaSlot::Kind::Bool, 0, 0},
     {"ImageTransparency", "number", LuaSlot::Kind::Number, 0, 1},
+    {"TextScaled", "boolean", LuaSlot::Kind::Bool, 0, 0},
 };
 static_assert(std::size(kSpecs) == static_cast<std::size_t>(GuiProperty::Count), "a GuiProperty has no spec");
 
@@ -139,6 +140,7 @@ LuaSlot GuiValues::default_value(GuiProperty property, const char* class_name) {
     case GuiProperty::Source:
         return string_slot(kDefaultCss);
     case GuiProperty::AlwaysOnTop:
+    case GuiProperty::TextScaled:
         return bool_slot(false);
     case GuiProperty::Count:
         break;
@@ -515,10 +517,12 @@ ANARCHY_LUA_REGISTER(register_gui_lua) {
         gui_field<GuiProperty::Text>("Label"),
         gui_field<GuiProperty::TextColor>("Label"),
         gui_field<GuiProperty::FontSize>("Label"),
+        gui_field<GuiProperty::TextScaled>("Label"),
     };
     add_class("Label", "GuiBase", label);
     const LuaField button[] = {
         gui_field<GuiProperty::Text>("Button"),
+        gui_field<GuiProperty::TextScaled>("Button"),
         lua_event(kGuiAction),
     };
     add_class("Button", "GuiBase", button);

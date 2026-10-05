@@ -55,8 +55,13 @@ class Texture;
 //   Image              Texture?  the image, loaded by the Texture's Path. nil.
 //   ImageTransparency  number    0 to 1; fades only the image. 0.
 // HBox, VBox GuiBasePanes in a row or a column, with Spacing (number, 0 and up, 0).
-// Label      Text ("Label"), TextColor (Color3, black), FontSize (1 to 512, 16).
-// Button     Text ("Button"), and the event Action, on a click or Enter.
+// Label      Text ("Label"), TextColor (Color3, black), FontSize (1 to 512, 16),
+//            TextScaled (boolean, false).
+// Button     Text ("Button"), TextScaled (boolean, false), and the event
+//            Action, on a click or Enter.
+//   TextScaled draws the text at the largest size that fits the element's box,
+//   whatever FontSize or CSS says; those still size an element that takes its
+//   size from its text. Give it a Size, or a width and height in CSS, to fill.
 // TextField  Text (""), Prompt ("Prompt"), and the event Action, on Enter.
 //            Typing writes Text.
 // CSS        Source ("/* CSS Document */"): a stylesheet for its parent
@@ -92,6 +97,7 @@ enum class GuiProperty : int {
     Source,
     AlwaysOnTop,
     ImageTransparency,
+    TextScaled,
     Count
 };
 

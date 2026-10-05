@@ -187,8 +187,9 @@ const EnumEntry kGuiAlignments[] = {
     {"CenterRight", 5}, {"BottomLeft", 6}, {"BottomCenter", 7}, {"BottomRight", 8},
 };
 
-// Dragger.Space: the axes its handles point along.
-const EnumEntry kDraggerSpaces[] = {
+// The axes a thing is measured along: Dragger.Space, the axes its handles
+// point along, and Attachment.OffsetSpace, the axes its Offset is in.
+const EnumEntry kTransformSpaces[] = {
     {"World", 0},
     {"Local", 1},
 };
@@ -217,13 +218,13 @@ const EnumType kFinishRecordingOperationType{"FinishRecordingOperation", kFinish
 const EnumType kPhysicsShapeType{"PhysicsShape", kPhysicsShapes, count_of(kPhysicsShapes)};
 const EnumType kRollOffModeType{"RollOffMode", kRollOffModes, count_of(kRollOffModes)};
 const EnumType kGuiAlignmentType{"GuiAlignment", kGuiAlignments, count_of(kGuiAlignments)};
-const EnumType kDraggerSpaceType{"DraggerSpace", kDraggerSpaces, count_of(kDraggerSpaces)};
+const EnumType kTransformSpaceType{"TransformSpace", kTransformSpaces, count_of(kTransformSpaces)};
 const EnumType kDraggerHandleType{"DraggerHandle", kDraggerHandles, count_of(kDraggerHandles)};
 
 const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kRotationOrderType,
                                   &kKeyCodeType,        &kUserInputTypeType, &kUserInputStateType,
                                   &kMouseBehaviorType,  &kPhysicsShapeType,  &kRollOffModeType,
-                                  &kGuiAlignmentType,   &kDraggerSpaceType,  &kDraggerHandleType,
+                                  &kGuiAlignmentType,   &kTransformSpaceType,  &kDraggerHandleType,
                                   &kFinishRecordingOperationType};
 
 int enum_item_index(lua_State* state) {
@@ -302,7 +303,7 @@ const EnumType& physics_shape_enum() { return kPhysicsShapeType; }
 const EnumType& roll_off_mode_enum() { return kRollOffModeType; }
 
 const EnumType& gui_alignment_enum() { return kGuiAlignmentType; }
-const EnumType& dragger_space_enum() { return kDraggerSpaceType; }
+const EnumType& transform_space_enum() { return kTransformSpaceType; }
 const EnumType& dragger_handle_enum() { return kDraggerHandleType; }
 
 int enum_item_value(const EnumType& type, std::string_view name) {

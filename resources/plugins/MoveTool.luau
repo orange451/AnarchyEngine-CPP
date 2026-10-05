@@ -8,7 +8,7 @@ local RunService = game:GetService("RunService")
 local Selection = game:GetService("Selection")
 local Core = game:GetService("Core")
 
-local SPACE = Enum.DraggerSpace.World
+local SPACE = Enum.TransformSpace.World
 local INCREMENT = 1 -- studs
 
 local dragger

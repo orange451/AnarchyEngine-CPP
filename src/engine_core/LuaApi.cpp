@@ -981,8 +981,13 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Transparency.",
         "number", false, {});
     add("Attachment", "Offset", "Where this is relative to its parent PVInstance's Transform.", "Matrix4", false, {});
+    add("Attachment", "OffsetSpace",
+        "Local measures Offset from the parent PVInstance's whole Transform. World measures it from only the "
+        "parent's position, along the world's axes.",
+        "EnumItem", false, {});
     add("Attachment", "Transform",
-        "Where this is in the world: the parent PVInstance's Transform times Offset. Writing it sets Offset.",
+        "Where this is in the world: Offset, measured from the parent PVInstance as OffsetSpace says. Writing it "
+        "sets Offset.",
         "Matrix4", false, {});
     add("Camera", "FieldOfView",
         "How many degrees this camera sees from bottom to top, from 1 to 120. A Scene View linked to it draws with it.",

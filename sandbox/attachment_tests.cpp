@@ -238,3 +238,113 @@ TEST_CASE("ATT7 scripts make Attachments, and Transform fires Changed", "[attach
     rig.frames(4, 0.05);
     require_globals(rig, {"isa", "offset", "transform", "fired", "reparent", "no_nan"});
 }
+
+TEST_CASE("ATT8 a World OffsetSpace takes the parent's position, not its rotation", "[attachment]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& part = create_part(game);
+    const Matrix4 turned = engine_core::matrix4_multiply(matrix4_translation(0.f, 10.f, 0.f),
+                                                         engine_core::matrix4_axis_angle({0.f, 1.f, 0.f}, 1.5707963267948966));
+    part.set_transform(turned);
+    Attachment& attachment = add_attachment(game, part.id());
+    REQUIRE(attachment.offset_space() == engine_core::TransformSpace::Local);
+    REQUIRE_FALSE(attachment.set_offset(matrix4_translation(0.f, 0.f, 10.f)));
+    // Local: the parent's +Z is the world's +X.
+    REQUIRE(std::fabs(engine_core::matrix4_position(attachment.transform()).x - 10.f) < 1e-4f);
+
+    // Switching keeps Offset, so the Transform moves to the new frame.
+    REQUIRE_FALSE(attachment.set_offset_space(static_cast<int>(engine_core::TransformSpace::World)));
+    REQUIRE(near_matrix(attachment.offset(), matrix4_translation(0.f, 0.f, 10.f)));
+    REQUIRE(near_matrix(attachment.transform(), matrix4_translation(0.f, 10.f, 10.f)));
+
+    // The parent's position still carries it; its rotation and scale do not.
+    Matrix4 moved = engine_core::matrix4_multiply(matrix4_translation(5.f, 0.f, 0.f),
+                                                  engine_core::matrix4_axis_angle({1.f, 0.f, 0.f}, 0.4));
+    moved.m[0] *= 3.f;
+    part.set_transform(moved);
+    REQUIRE(near_matrix(attachment.transform(), matrix4_translation(5.f, 0.f, 10.f)));
+
+    // A Transform write solves along the world's axes.
+    REQUIRE_FALSE(attachment.set_transform(matrix4_translation(6.f, 1.f, 1.f)));
+    REQUIRE(near_matrix(attachment.offset(), matrix4_translation(1.f, 1.f, 1.f)));
+
+    // A parent that is not a PVInstance is identity in either space.
+    game.set_parent(attachment.id(), workspace_of(game));
+    REQUIRE(near_matrix(attachment.transform(), matrix4_translation(1.f, 1.f, 1.f)));
+
+    REQUIRE(*attachment.set_offset_space(7) == "OffsetSpace must be an Enum.TransformSpace");
+}
+
+TEST_CASE("ATT9 a World OffsetSpace allows a Transform write under a flattened parent", "[attachment]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& part = create_part(game);
+    Matrix4 flat = matrix4_translation(0.f, 2.f, 0.f);
+    flat.m[5] = 0.f;
+    part.set_transform(flat);
+    Attachment& attachment = add_attachment(game, part.id());
+    REQUIRE(attachment.set_transform(matrix4_translation(1.f, 1.f, 1.f)).has_value());
+    REQUIRE_FALSE(attachment.set_offset_space(static_cast<int>(engine_core::TransformSpace::World)));
+    REQUIRE_FALSE(attachment.set_transform(matrix4_translation(1.f, 1.f, 1.f)));
+    REQUIRE(near_matrix(attachment.offset(), matrix4_translation(1.f, -1.f, 1.f)));
+}
+
+TEST_CASE("ATT10 OffsetSpace undoes, saves, loads, and scripts set it", "[attachment][project]") {
+    const int world = static_cast<int>(engine_core::TransformSpace::World);
+    SECTION("undo and redo set it back and forth") {
+        SimRole role;
+        engine_core::Game game;
+        Attachment& attachment = add_attachment(game, workspace_of(game));
+        begin_step(game, "Set OffsetSpace");
+        REQUIRE_FALSE(attachment.set_offset_space(world));
+        end_step(game);
+        game.history().undo();
+        REQUIRE(attachment.offset_space() == engine_core::TransformSpace::Local);
+        game.history().redo();
+        REQUIRE(attachment.offset_space() == engine_core::TransformSpace::World);
+    }
+    SECTION("a project saves it only when it is not Local") {
+        SimRole role;
+        TempDir dir;
+        {
+            engine_core::Project project = engine_core::Project::create(dir.path);
+            engine_core::DataModel& game = project.datamodel();
+            Attachment& plain = add_attachment(game, game.scene_service("Workspace"));
+            engine_core::PropertyBag saved;
+            plain.save_properties(saved);
+            REQUIRE(engine_core::bag_find(saved, "OffsetSpace") == nullptr);
+            Attachment& attachment = add_attachment(game, game.scene_service("Workspace"));
+            game.set_name(attachment.id(), "Point");
+            REQUIRE_FALSE(attachment.set_offset_space(world));
+            project.save();
+        }
+        engine_core::Game game;
+        engine_core::Project loaded = engine_core::Project::load(dir.path, game);
+        auto* attachment = dynamic_cast<Attachment*>(
+            game.instance(game.find_first_child(game.scene_service("Workspace"), "Point")));
+        REQUIRE(attachment != nullptr);
+        REQUIRE(attachment->offset_space() == engine_core::TransformSpace::World);
+    }
+    SECTION("scripts read and write it as an Enum.TransformSpace") {
+        ScriptRig rig;
+        add_script(rig.game, "Space", R"(
+            local part = Instance.new("GameObject", workspace)
+            part.Transform = Matrix4.new() + Vector3.new(0, 10, 0)
+            local point = Instance.new("Attachment", part)
+            _G.default = point.OffsetSpace == Enum.TransformSpace.Local
+            point.OffsetSpace = Enum.TransformSpace.World
+            point.Offset = Matrix4.new() + Vector3.new(0, 0, 10)
+            _G.world = point.OffsetSpace == Enum.TransformSpace.World
+                and point.Transform.Position == Vector3.new(0, 10, 10)
+            point.OffsetSpace = 1
+            _G.by_value = point.OffsetSpace == Enum.TransformSpace.Local
+            point.OffsetSpace = "World"
+            _G.by_name = point.OffsetSpace == Enum.TransformSpace.World
+            _G.refused = not pcall(function() point.OffsetSpace = Enum.Axis.X end)
+                and not pcall(function() point.OffsetSpace = "Sideways" end)
+        )");
+        rig.game.start_simulation();
+        rig.frames(2);
+        require_globals(rig, {"default", "world", "by_value", "by_name", "refused"});
+    }
+}

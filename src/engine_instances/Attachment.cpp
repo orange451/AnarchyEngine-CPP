@@ -2,6 +2,7 @@
 
 #include "Containment.hpp"
 #include "Contract.hpp"
+#include "Enum.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
 
@@ -18,6 +19,14 @@ LuaSlot matrix_slot(const Matrix4& value) {
     return slot;
 }
 
+LuaSlot space_slot(TransformSpace space) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Enum;
+    slot.enum_type = &transform_space_enum();
+    slot.number = static_cast<int>(space);
+    return slot;
+}
+
 bool finite(const Matrix4& value) {
     for (float component : value.m) {
         if (!std::isfinite(component)) {
@@ -27,24 +36,34 @@ bool finite(const Matrix4& value) {
     return true;
 }
 
-// The Transform of the instance at id, or identity when it is not a PVInstance.
-Matrix4 pv_transform_of(const DataModel& world, InstanceId id) {
+// The frame an Offset in space is measured from under the instance at id: its
+// Transform in Local, only its position in World, and identity when it is not
+// a PVInstance.
+Matrix4 frame_of(const DataModel& world, InstanceId id, TransformSpace space) {
     if (id == DataModel::kNoParent) {
         return matrix4_identity();
     }
     const auto* holder = dynamic_cast<const PVInstance*>(world.instance(id));
-    return holder != nullptr ? holder->transform() : matrix4_identity();
+    if (holder == nullptr) {
+        return matrix4_identity();
+    }
+    const Matrix4 transform = holder->transform();
+    if (space == TransformSpace::World) {
+        const Vec3 position = matrix4_position(transform);
+        return matrix4_translation(position.x, position.y, position.z);
+    }
+    return transform;
 }
 
 }  // namespace
 
-Matrix4 Attachment::parent_transform() const { return pv_transform_of(*this, parent(id())); }
+Matrix4 Attachment::parent_frame() const { return frame_of(*this, parent(id()), offset_space_); }
 
 Matrix4 Attachment::transform() const {
     if (!alive(id())) {
         return Matrix4{};
     }
-    return matrix4_multiply(parent_transform(), offset_);
+    return matrix4_multiply(parent_frame(), offset_);
 }
 
 std::optional<std::string> Attachment::set_offset(const Matrix4& offset) {
@@ -68,20 +87,42 @@ std::optional<std::string> Attachment::set_transform(const Matrix4& transform) {
     if (!finite(transform)) {
         return std::string("Transform must be finite");
     }
-    const Matrix4 offset = matrix4_multiply(matrix4_inverse(parent_transform()), transform);
+    const Matrix4 offset = matrix4_multiply(matrix4_inverse(parent_frame()), transform);
     if (!finite(offset)) {
         return std::string("Transform cannot be set while the parent's Transform has no inverse");
     }
     return set_offset(offset);
 }
 
-void Attachment::on_reuse() { offset_ = matrix4_identity(); }
+std::optional<std::string> Attachment::set_offset_space(int space) {
+    if (!on_gameplay_thread()) {
+        contract_fail("Attachment setters run on SimulationThread");
+    }
+    if (enum_item_name(transform_space_enum(), space) == nullptr) {
+        return std::string("OffsetSpace must be an Enum.TransformSpace");
+    }
+    const TransformSpace next = static_cast<TransformSpace>(space);
+    if (next == offset_space_) {
+        return std::nullopt;
+    }
+    // Offset stays as it is, so the Transform moves to the new frame.
+    const TransformSpace previous = offset_space_;
+    offset_space_ = next;
+    note_property_change("OffsetSpace", space_slot(previous), space_slot(next));
+    emit_property("Transform");
+    return std::nullopt;
+}
+
+void Attachment::on_reuse() {
+    offset_ = matrix4_identity();
+    offset_space_ = TransformSpace::Local;
+}
 
 void Attachment::on_parent_changed(InstanceId previous, InstanceId next) {
     if (!alive(id())) {
         return;
     }
-    if (!same_matrix4(pv_transform_of(*this, previous), pv_transform_of(*this, next))) {
+    if (!same_matrix4(frame_of(*this, previous, offset_space_), frame_of(*this, next, offset_space_))) {
         emit_property("Transform");
     }
 }
@@ -112,6 +153,27 @@ bool write_offset(DataModel&, DataModel& object, LuaSlot& in) {
     return attachment != nullptr && refuse(in, attachment->set_offset(in.transform));
 }
 
+bool read_offset_space(DataModel&, DataModel& object, LuaSlot& out) {
+    const Attachment* attachment = attachment_of(object);
+    if (attachment == nullptr) {
+        return false;
+    }
+    out = space_slot(attachment->offset_space());
+    return true;
+}
+
+bool write_offset_space(DataModel&, DataModel& object, LuaSlot& in) {
+    Attachment* attachment = attachment_of(object);
+    if (attachment == nullptr) {
+        return false;
+    }
+    if (in.kind != LuaSlot::Kind::Enum || in.enum_type != &transform_space_enum()) {
+        in.error = "OffsetSpace must be an Enum.TransformSpace";
+        return false;
+    }
+    return refuse(in, attachment->set_offset_space(static_cast<int>(in.number)));
+}
+
 bool read_transform(DataModel&, DataModel& object, LuaSlot& out) {
     const Attachment* attachment = attachment_of(object);
     if (attachment == nullptr) {
@@ -135,6 +197,7 @@ ANARCHY_LUA_REGISTER(register_attachment_lua) {
         // Transform is worked out from Offset, so only Offset is saved.
         lua_property("Transform", "Matrix4", true, read_transform, write_transform),
         lua_saved_property("Offset", "Matrix4", read_offset, write_offset, identity.c_str()),
+        lua_saved_enum("OffsetSpace", transform_space_enum(), read_offset_space, write_offset_space, "\"Local\""),
     };
     register_lua_class("Attachment", "PVInstance", fields, static_cast<int>(std::size(fields)));
     register_suited_parents("Attachment", {"Workspace", "PVInstance"});

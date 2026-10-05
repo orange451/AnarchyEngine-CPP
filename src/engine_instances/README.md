@@ -10,7 +10,7 @@ The asset classes live in `AssetInstances.{hpp,cpp}`, each only under its own ca
 
 `PVInstance` (`PVInstance.hpp`) is the abstract base of every class with a Transform: `GameObject`, `PhysicsObject`, and `Attachment` inherit it, each keeping its Transform its own way behind the virtual `transform()`. It has no source file, so `GameObject.cpp` registers its Lua class.
 
-`Attachment` keeps only its `Offset`, a saved registry property; `transform()` multiplies the parent's by it on each read, and `set_transform` solves for the Offset. `on_parent_changed` fires Changed for `Transform` when the new parent moves it.
+`Attachment` keeps only its `Offset` and `OffsetSpace`, saved registry properties; `transform()` multiplies the parent's frame by Offset on each read (`parent_frame()`: the parent's Transform in Local, its position alone in World), and `set_transform` solves for the Offset. `on_parent_changed` fires Changed for `Transform` when the new parent moves it. `Enum.TransformSpace` (World 0, Local 1) is shared with `Dragger.Space`.
 
 `SoundEmitter` plays its `Sound` reference. Its class says `sound_source()`, which tags its entity so `AudioWorld` (engine_core, the only code that includes miniaudio) finds the ones under game each frame. `Play` and `Stop` are bound in `ScriptBindings`. Setters mark a dirty mask the audio world takes each step; the world's own writes (TimePosition as the sound plays, IsPlaying at its end) go through `store_playback` and record nothing. Its `read_place` stops it, so Stop never leaves one playing into the next Test.
 

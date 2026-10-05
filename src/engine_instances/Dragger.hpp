@@ -15,7 +15,7 @@ namespace engine_core {
 // a game may make its own.
 //
 // Transform  Matrix4             identity. Saved. Where the handles sit.
-// Space      Enum.DraggerSpace   World. Saved. Local follows the Transform's rotation.
+// Space      Enum.TransformSpace   World. Saved. Local follows the Transform's rotation.
 // Increment  number              0. Saved. Snap step in studs; 0 is none.
 // Dragging   boolean             read-only.
 //

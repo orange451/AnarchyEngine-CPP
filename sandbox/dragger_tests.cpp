@@ -268,12 +268,12 @@ TEST_CASE("DR18 a script makes a Dragger, and Space, Increment, and Dragging ref
     ScriptRig rig;
     add_script(rig.game, "Probe", R"(
         local dragger = Instance.new("Dragger")
-        print("class", dragger.ClassName, dragger:IsA("PVInstance"), dragger.Space == Enum.DraggerSpace.World,
+        print("class", dragger.ClassName, dragger:IsA("PVInstance"), dragger.Space == Enum.TransformSpace.World,
             dragger.Increment, dragger.Dragging)
-        dragger.Space = Enum.DraggerSpace.Local
+        dragger.Space = Enum.TransformSpace.Local
         dragger.Increment = 0.5
         dragger.Transform = Matrix4.new(Vector3.new(1, 2, 3))
-        print("set", dragger.Space == Enum.DraggerSpace.Local, dragger.Increment, dragger.Transform.Position.Y)
+        print("set", dragger.Space == Enum.TransformSpace.Local, dragger.Increment, dragger.Transform.Position.Y)
         print("negative", pcall(function() dragger.Increment = -1 end))
         print("nan", pcall(function() dragger.Increment = 0 / 0 end))
         print("dragging", pcall(function() dragger.Dragging = true end))

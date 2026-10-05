@@ -30,7 +30,7 @@ LuaSlot matrix_slot(const Matrix4& value) {
 LuaSlot space_slot(bool local) {
     LuaSlot slot;
     slot.kind = LuaSlot::Kind::Enum;
-    slot.enum_type = &dragger_space_enum();
+    slot.enum_type = &transform_space_enum();
     slot.number = local ? 1 : 0;
     return slot;
 }
@@ -61,8 +61,8 @@ std::optional<std::string> Dragger::set_transform(const Matrix4& transform) {
 
 std::optional<std::string> Dragger::set_space(int space) {
     require_thread(*this);
-    if (enum_item_name(dragger_space_enum(), space) == nullptr) {
-        return std::string("Space must be an Enum.DraggerSpace");
+    if (enum_item_name(transform_space_enum(), space) == nullptr) {
+        return std::string("Space must be an Enum.TransformSpace");
     }
     const bool next = space == 1;
     if (next == local_) {
@@ -146,8 +146,8 @@ bool write_space(DataModel&, DataModel& object, LuaSlot& in) {
     if (dragger == nullptr) {
         return false;
     }
-    if (in.kind != LuaSlot::Kind::Enum || in.enum_type != &dragger_space_enum()) {
-        in.error = "Space must be an Enum.DraggerSpace";
+    if (in.kind != LuaSlot::Kind::Enum || in.enum_type != &transform_space_enum()) {
+        in.error = "Space must be an Enum.TransformSpace";
         return false;
     }
     return refuse(in, dragger->set_space(static_cast<int>(in.number)));
@@ -193,7 +193,7 @@ ANARCHY_LUA_REGISTER(register_dragger_lua) {
     }();
     const LuaField fields[] = {
         lua_saved_property("Transform", "Matrix4", read_transform, write_transform, identity.c_str()),
-        lua_saved_enum("Space", dragger_space_enum(), read_space, write_space, "\"World\""),
+        lua_saved_enum("Space", transform_space_enum(), read_space, write_space, "\"World\""),
         lua_saved_property("Increment", "number", read_increment, write_increment, "0"),
         lua_property("Dragging", "boolean", false, read_dragging, nullptr),
         lua_event("DragBegan", kHandleArgs, 1),

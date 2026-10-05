@@ -39,8 +39,10 @@ const EnumType& roll_off_mode_enum();
 // Where a GuiBase puts its children: TopLeft 0, TopCenter 1, TopRight 2,
 // CenterLeft 3, Center 4, CenterRight 5, BottomLeft 6, BottomCenter 7, BottomRight 8.
 const EnumType& gui_alignment_enum();
-// World 0, Local 1.
-const EnumType& dragger_space_enum();
+// World 0, Local 1. Dragger.Space and Attachment.OffsetSpace.
+const EnumType& transform_space_enum();
+// transform_space_enum's items, by value.
+enum class TransformSpace { World = 0, Local = 1 };
 // X 0, Y 1, Z 2, XY 3, YZ 4, XZ 5.
 const EnumType& dragger_handle_enum();
 

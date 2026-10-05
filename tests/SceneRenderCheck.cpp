@@ -540,6 +540,11 @@ int main() {
                     renderer.read(0, 0, kSize, kSize, kSize, kSize, pixels);
                     return pixels.rgba;
                 };
+                // These read pixels at the cube's edge, which FXAA smooths, so
+                // they measure bloom with hard edges.
+                runner::SceneLighting hardEdges;
+                hardEdges.antialiasing = runner::SceneAntialiasing::None;
+                renderer.setLighting(hardEdges);
                 // Bright, but under the tone map's white, so moving light out of it shows.
                 runner::MeshDraw bright = draw;
                 bright.emissive[0] = bright.emissive[1] = bright.emissive[2] = 1.0f;
@@ -555,7 +560,7 @@ int main() {
                 Expect(edge < fbWidth - 8 && IsClear(ReadPixel(outside, midY)),
                        "without bloom the pane is clear past the cube's edge");
 
-                runner::SceneLighting haze;
+                runner::SceneLighting haze = hardEdges;
                 haze.bloom.enabled = true;
                 haze.bloom.intensity = 0.5f;
                 haze.bloom.size = 56.f;
@@ -621,6 +626,116 @@ int main() {
                 drawTwice(bright);
                 Expect(!IsClear(ReadPixel(outside, midY)), "after the pane changes size, it still blooms");
                 Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "bloom leaves no GL error");
+                renderer.setLighting(runner::SceneLighting{});
+            }
+            // FXAA. A cube rolled 30 degrees has slanted edges; FXAA softens
+            // the steps along them and leaves flat areas exactly as they were.
+            {
+                const auto drawTwice = [&](const runner::MeshDraw& mesh) {
+                    for (int pass = 0; pass < 2; ++pass) {
+                        renderer.draw(0, 0, kSize, kSize, kSize, kSize, &mesh, 1);
+                    }
+                };
+                const auto snap = [&] {
+                    runner::ViewPixels pixels;
+                    renderer.read(0, 0, kSize, kSize, kSize, kSize, pixels);
+                    return pixels.rgba;
+                };
+                // The largest step between neighbours along each row through the cube, averaged.
+                const auto sharpness = [&] {
+                    long total = 0;
+                    int rows = 0;
+                    for (int y = fbHeight * 3 / 10; y < fbHeight * 7 / 10; y += 2) {
+                        int largest = 0;
+                        Pixel previous = ReadPixel(0, y);
+                        for (int x = 1; x < fbWidth; ++x) {
+                            const Pixel here = ReadPixel(x, y);
+                            largest = std::max(largest, std::abs(Sum(here) - Sum(previous)));
+                            previous = here;
+                        }
+                        total += largest;
+                        ++rows;
+                    }
+                    return static_cast<double>(total) / rows;
+                };
+                runner::MeshDraw rolled = glowing;
+                rolled.model = engine_core::matrix4_axis_angle({0.f, 0.f, 1.f}, 30.0 * 3.14159265358979 / 180.0);
+                runner::SceneLighting hard;
+                hard.antialiasing = runner::SceneAntialiasing::None;
+                runner::SceneLighting smooth;
+                smooth.antialiasing = runner::SceneAntialiasing::FXAA;
+
+                renderer.setLighting(hard);
+                drawTwice(rolled);
+                const std::vector<unsigned char> hardPixels = snap();
+                const double hardSharpness = sharpness();
+                const Pixel hardMiddle = ReadPixel(midX, midY);
+
+                renderer.setLighting(smooth);
+                const bool first = renderer.draw(0, 0, kSize, kSize, kSize, kSize, &rolled, 1);
+                Expect(first && !IsClear(ReadPixel(midX, midY)), "the first frame with FXAA draws the cube");
+                drawTwice(rolled);
+                const double smoothSharpness = sharpness();
+                Expect(smoothSharpness < hardSharpness * 0.85,
+                       "FXAA softens the steps along slanted edges (" + std::to_string(smoothSharpness) + " vs " +
+                           std::to_string(hardSharpness) + ")");
+                Expect(Sum(ReadPixel(midX, midY)) == Sum(hardMiddle), "and leaves the cube's flat middle as it was");
+                Expect(IsClear(ReadPixel(2, 2)), "and the empty corner exactly the clear color");
+
+                // Back and forth: each mode draws what a fresh draw of it draws.
+                renderer.setLighting(hard);
+                drawTwice(rolled);
+                Expect(snap() == hardPixels, "switching back to None draws exactly the hard edges again");
+
+                // A see-through cube over the empty pane blends the same with and without FXAA in its middle.
+                runner::MeshDraw seeThrough = glowing;
+                seeThrough.transparency = 0.5f;
+                drawTwice(seeThrough);
+                const Pixel hardClear = ReadPixel(midX, midY);
+                renderer.setLighting(smooth);
+                drawTwice(seeThrough);
+                Expect(Sum(ReadPixel(midX, midY)) == Sum(hardClear),
+                       "a see-through surface blends over the pane the same with FXAA (" +
+                           Text(ReadPixel(midX, midY)) + " vs " + Text(hardClear) + ")");
+
+                // The grid draws after FXAA, so it is identical with and without it.
+                renderer.setGridVisible(true);
+                renderer.setLighting(hard);
+                drawTwice(rolled);
+                std::vector<Pixel> hardGrid;
+                for (int x = 0; x < fbWidth; ++x) {
+                    hardGrid.push_back(ReadPixel(x, 3));
+                }
+                renderer.setLighting(smooth);
+                drawTwice(rolled);
+                bool gridSame = true;
+                for (int x = 0; x < fbWidth; ++x) {
+                    const Pixel p = ReadPixel(x, 3);
+                    gridSame = gridSame && p.r == hardGrid[x].r && p.g == hardGrid[x].g && p.b == hardGrid[x].b;
+                }
+                Expect(gridSame, "the grid near the bottom edge is the same with and without FXAA");
+                renderer.setGridVisible(false);
+
+                // Under a parent's clip, FXAA draws only inside it.
+                glClearColor(0.f, 0.f, 1.f, 1.f);
+                glClear(runner::GL_COLOR_BUFFER_BIT);
+                glEnable(runner::GL_SCISSOR_TEST);
+                glScissor(0, 0, fbWidth / 2, fbHeight);
+                for (int pass = 0; pass < 2; ++pass) {
+                    renderer.draw(0, 0, kSize, kSize, kSize, kSize, &rolled, 1);
+                }
+                glDisable(runner::GL_SCISSOR_TEST);
+                const Pixel outsideClip = ReadPixel(fbWidth * 3 / 4, fbHeight / 2);
+                Expect(outsideClip.b == 255 && outsideClip.r == 0, "FXAA leaves what is outside the parent's clip alone (" +
+                                                                       Text(outsideClip) + ")");
+
+                // Another size makes the target again.
+                for (int pass = 0; pass < 2; ++pass) {
+                    renderer.draw(0, 0, kSize / 2.0, kSize / 2.0, kSize, kSize, &rolled, 1);
+                }
+                drawTwice(rolled);
+                Expect(!IsClear(ReadPixel(midX, midY)), "after the pane changes size, FXAA still draws the cube");
+                Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "FXAA leaves no GL error");
                 renderer.setLighting(runner::SceneLighting{});
             }
 

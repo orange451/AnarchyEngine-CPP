@@ -259,6 +259,7 @@ bool Renderer::initialize() {
         buildProgram(bloomDown_, "Bloom down", "pipeline/fullscreen.vert", "pipeline/bloom_down.frag",
                      {"pipeline/bloom.glsl"}) &&
         buildProgram(bloomUp_, "Bloom up", "pipeline/fullscreen.vert", "pipeline/bloom_up.frag", {}) &&
+        buildProgram(fxaa_, "FXAA", "pipeline/fullscreen.vert", "pipeline/fxaa.frag", {}) &&
         buildProgram(grid_, "Grid", "pipeline/fullscreen.vert", "pipeline/grid.frag", {}) &&
         buildProgram(gridBands_, "Grid bands", "pipeline/grid_band.vert", "pipeline/grid.frag", {}) &&
         buildProgram(outline_, "Outline", "pipeline/outline.vert", "pipeline/outline.frag", {}) &&
@@ -426,6 +427,8 @@ bool Renderer::ensureTargets(int width, int height) {
     // Linear for bloom's first step, which reads between texels; the tone map
     // reads it texel for texel either way.
     mergeTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height, GL_LINEAR);
+    // FXAA reads between texels.
+    ldrTexture_ = MakeTarget(GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, width, height, GL_LINEAR);
     glBindTexture(GL_TEXTURE_2D, 0);
 
     bool complete = true;
@@ -441,6 +444,9 @@ bool Renderer::ensureTargets(int width, int height) {
     glGenFramebuffers(1, &mergeFbo_);
     glBindFramebuffer(RT_GL_FRAMEBUFFER, mergeFbo_);
     complete = Attach({mergeTexture_}, 0) && complete;
+    glGenFramebuffers(1, &ldrFbo_);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, ldrFbo_);
+    complete = Attach({ldrTexture_}, 0) && complete;
     if (!complete) {
         if (!targetsRefused_) {
             std::fprintf(stderr, "The Scene View's %d by %d render buffers are not supported.\n", width, height);
@@ -453,14 +459,14 @@ bool Renderer::ensureTargets(int width, int height) {
 }
 
 void Renderer::destroyTargets() {
-    for (unsigned* fbo : {&gbufferFbo_, &accumulationFbo_, &transparencyFbo_, &mergeFbo_}) {
+    for (unsigned* fbo : {&gbufferFbo_, &accumulationFbo_, &transparencyFbo_, &mergeFbo_, &ldrFbo_}) {
         if (*fbo != 0) {
             glDeleteFramebuffers(1, fbo);
             *fbo = 0;
         }
     }
     for (unsigned* texture : {&albedoTexture_, &normalTexture_, &materialTexture_, &emissiveTexture_, &depthTexture_,
-                              &accumulationTexture_, &transparencyTexture_, &mergeTexture_}) {
+                              &accumulationTexture_, &transparencyTexture_, &mergeTexture_, &ldrTexture_}) {
         DeleteTexture(*texture);
     }
     destroyBloomChain();
@@ -856,30 +862,45 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         bloomLevels = drawn ? bloomPass(targetWidth_, targetHeight_) : 0;
     }
     if (drawn && (hasMeshes || hasSky)) {
-        // The tone map, blended over the clear: where nothing was drawn the pane shows through.
-        glBindFramebuffer(RT_GL_FRAMEBUFFER, static_cast<GLuint>(saved.framebuffer));
-        glEnable(GL_SCISSOR_TEST);
-        glScissor(clip.x, clip.y, clip.width, clip.height);
-        glViewport(pane.x, pane.y, pane.width, pane.height);
         glDisable(GL_DEPTH_TEST);
         glDisable(RT_GL_CULL_FACE);
-        glEnable(GL_BLEND);
-        glBlendFuncSeparate(RT_GL_ONE, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ZERO, RT_GL_ONE);
-        RENDER_PASS("Tone map");
-        glUseProgram(tonemap_.id);
-        BindTexture(kUnitScene, mergeTexture_);
-        glUniform1f(tonemap_.exposure, std::max(lighting_.exposure, 0.f));
-        glUniform1f(tonemap_.inverseGamma, 1.f / std::max(lighting_.gamma, 0.01f));
-        glUniform1f(tonemap_.saturation, std::max(lighting_.saturation, 0.f));
-        // With no bloom the shader skips it; any texture keeps the sampler loadable.
-        BindTexture(kUnitBloom, bloomLevels > 0 ? bloomTextures_[0] : whiteTexture_);
-        glUniform1f(tonemap_.bloomIntensity, bloomLevels > 0 ? std::min(lighting_.bloom.intensity, 1.f) : 0.f);
-        glUniform1f(tonemap_.bloomLevelScale, bloomLevels > 0 ? 1.f / static_cast<float>(bloomLevels) : 0.f);
-        glUniform1f(tonemap_.bloomThreshold, std::max(lighting_.bloom.threshold, 0.f));
-        glBindVertexArray(emptyVao_);
-        drawn = CanDraw(tonemap_.id);
+        // The pane, with its parent's clip.
+        const auto bindPane = [&] {
+            glBindFramebuffer(RT_GL_FRAMEBUFFER, static_cast<GLuint>(saved.framebuffer));
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(clip.x, clip.y, clip.width, clip.height);
+            glViewport(pane.x, pane.y, pane.width, pane.height);
+        };
+        // Blended over the clear: where nothing was drawn the pane shows through.
+        const auto blendOverClear = [] {
+            glEnable(GL_BLEND);
+            glBlendFuncSeparate(RT_GL_ONE, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ZERO, RT_GL_ONE);
+        };
+        bool onPane = false;
+        if (lighting_.antialiasing == SceneAntialiasing::FXAA) {
+            // The tone map into ldrTexture_, over the pane's clear color, so it
+            // holds what the pane would have shown; then FXAA onto the pane.
+            glBindFramebuffer(RT_GL_FRAMEBUFFER, ldrFbo_);
+            glDisable(GL_SCISSOR_TEST);
+            glViewport(0, 0, targetWidth_, targetHeight_);
+            glDisable(GL_BLEND);
+            glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            blendOverClear();
+            if (toneMapPass(bloomLevels)) {
+                bindPane();
+                glDisable(GL_BLEND);
+                onPane = fxaaPass();
+            }
+        }
+        // Without FXAA, or when it cannot draw yet: the tone map straight onto the pane.
+        if (!onPane) {
+            bindPane();
+            blendOverClear();
+            onPane = toneMapPass(bloomLevels);
+        }
+        drawn = onPane;
         if (drawn) {
-            DrawFullscreen(emptyVao_);
             sceneDepth_ = SceneDepth{depthTexture_, pane.x, pane.y, pane.width, pane.height};
             readProbe(pane.x, pane.y, pane.width, pane.height, sceneWidth, sceneHeight, viewport);
         }
@@ -1538,6 +1559,39 @@ int Renderer::bloomPass(int width, int height) {
     return plan.levels;
 }
 
+bool Renderer::toneMapPass(int bloomLevels) {
+    RENDER_PASS("Tone map");
+    glUseProgram(tonemap_.id);
+    BindTexture(kUnitScene, mergeTexture_);
+    glUniform1f(tonemap_.exposure, std::max(lighting_.exposure, 0.f));
+    glUniform1f(tonemap_.inverseGamma, 1.f / std::max(lighting_.gamma, 0.01f));
+    glUniform1f(tonemap_.saturation, std::max(lighting_.saturation, 0.f));
+    // With no bloom the shader skips it; any texture keeps the sampler loadable.
+    BindTexture(kUnitBloom, bloomLevels > 0 ? bloomTextures_[0] : whiteTexture_);
+    glUniform1f(tonemap_.bloomIntensity, bloomLevels > 0 ? std::min(lighting_.bloom.intensity, 1.f) : 0.f);
+    glUniform1f(tonemap_.bloomLevelScale, bloomLevels > 0 ? 1.f / static_cast<float>(bloomLevels) : 0.f);
+    glUniform1f(tonemap_.bloomThreshold, std::max(lighting_.bloom.threshold, 0.f));
+    glBindVertexArray(emptyVao_);
+    if (!CanDraw(tonemap_.id)) {
+        return false;
+    }
+    DrawFullscreen(emptyVao_);
+    return true;
+}
+
+bool Renderer::fxaaPass() {
+    RENDER_PASS("FXAA");
+    glUseProgram(fxaa_.id);
+    BindTexture(kUnitScene, ldrTexture_);
+    glUniform2f(fxaa_.texel, 1.f / static_cast<float>(targetWidth_), 1.f / static_cast<float>(targetHeight_));
+    glBindVertexArray(emptyVao_);
+    if (!CanDraw(fxaa_.id)) {
+        return false;
+    }
+    DrawFullscreen(emptyVao_);
+    return true;
+}
+
 bool Renderer::read(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
                     ViewPixels& out) const {
     out = ViewPixels{};
@@ -1584,7 +1638,7 @@ void Renderer::shutdown() {
     gpu_.shutdown();
     ready_ = false;
     for (Program* program :
-         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &sky_, &grid_,
+         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &fxaa_, &sky_, &grid_,
           &gridBands_, &outline_, &handle_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);

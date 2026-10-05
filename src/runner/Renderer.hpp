@@ -89,6 +89,9 @@ struct SceneSky {
     float tint[3] = {1.f, 1.f, 1.f};
 };
 
+// Lighting.Antialiasing, as the renderer reads it.
+enum class SceneAntialiasing { None = 0, FXAA = 1 };
+
 // The BloomEffect, as the renderer reads it. The defaults draw no bloom.
 struct SceneBloom {
     bool enabled = false;
@@ -105,6 +108,7 @@ struct SceneLighting {
     float exposure = 1.f;
     float saturation = 1.2f;
     float gamma = 2.2f;
+    SceneAntialiasing antialiasing = SceneAntialiasing::FXAA;
     SceneSky sky;
     SceneBloom bloom;
 };
@@ -117,7 +121,8 @@ struct SceneLighting {
 // SpotLight over its volume; then the Skybox behind every surface; a forward
 // pass that blends see-through surfaces over that, farthest first; a merge;
 // bloom, when a BloomEffect asks for it (a chain of half-size levels, down
-// and back up); a filmic tone map onto the pane; and, when set, the floor
+// and back up); a filmic tone map, onto the pane, or with FXAA into a buffer that FXAA then
+// draws onto the pane; and, when set, the floor
 // grid and then the outlines over it. Every pass but those last ones draws
 // into this renderer's own buffers, the pane's size in pixels. With a
 // Skybox, its image-based lighting (EnvironmentMap) is the sky light, and the
@@ -323,6 +328,11 @@ private:
     // drawn, 0 when there is no bloom this frame (none asked for, no room for
     // a level, the chain refused, or a program that cannot draw yet).
     int bloomPass(int width, int height);
+    // The tone map, with this frame's uniforms and textures, into whatever
+    // framebuffer, viewport, and blend are set. False when it cannot draw yet.
+    bool toneMapPass(int bloomLevels);
+    // ldrTexture_ onto whatever is bound, opaque. False when it cannot draw yet.
+    bool fxaaPass();
     // Makes the chain for a width by height pane, if it is not made. False,
     // with nothing made, when the driver will not render into it.
     bool ensureBloomChain(int width, int height);
@@ -357,6 +367,7 @@ private:
     Program tonemap_;
     Program bloomDown_;
     Program bloomUp_;
+    Program fxaa_;
     Program sky_;
     Program grid_;
     Program outline_;
@@ -427,6 +438,10 @@ private:
     // The size the driver last refused, so it is reported once and not tried each frame.
     int bloomRefusedWidth_ = 0;
     int bloomRefusedHeight_ = 0;
+    // The tone-mapped image FXAA reads, the pane's size, RGBA8 with linear
+    // filtering. Made and resized with the other buffers.
+    unsigned ldrFbo_ = 0;
+    unsigned ldrTexture_ = 0;
 
     void readProbe(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth, double sceneHeight,
                    const int viewport[4]);

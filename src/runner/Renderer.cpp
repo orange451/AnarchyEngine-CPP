@@ -1500,7 +1500,9 @@ int Renderer::bloomPass(int width, int height) {
     glDisable(GL_BLEND);
     glBindVertexArray(emptyVao_);
 
-    // Down: the merge image into level 0, then each level into the next.
+    // Down: the merge image into level 0, then each level into the next. Each
+    // program is validated once, at its first step: nothing validation looks
+    // at changes between steps, and on macOS each validation costs.
     glUseProgram(bloomDown_.id);
     glUniform1f(bloomDown_.threshold, std::max(bloom.threshold, 0.f));
     for (int k = 0; k < plan.levels; ++k) {
@@ -1509,7 +1511,7 @@ int Renderer::bloomPass(int width, int height) {
         BindTexture(kUnitScene, k == 0 ? mergeTexture_ : bloomTextures_[k - 1]);
         glUniform2f(bloomDown_.texel, 1.f / static_cast<float>(width >> k), 1.f / static_cast<float>(height >> k));
         glUniform1f(bloomDown_.prefilter, k == 0 ? 1.f : 0.f);
-        if (!CanDraw(bloomDown_.id)) {
+        if (k == 0 && !CanDraw(bloomDown_.id)) {
             return 0;
         }
         DrawFullscreen(emptyVao_);
@@ -1526,7 +1528,7 @@ int Renderer::bloomPass(int width, int height) {
         BindTexture(kUnitScene, bloomTextures_[k]);
         glUniform2f(bloomUp_.texel, 1.f / static_cast<float>(width >> (k + 1)),
                     1.f / static_cast<float>(height >> (k + 1)));
-        if (!CanDraw(bloomUp_.id)) {
+        if (k == plan.levels - 1 && !CanDraw(bloomUp_.id)) {
             glDisable(GL_BLEND);
             return 0;
         }

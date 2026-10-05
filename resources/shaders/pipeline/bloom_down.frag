@@ -14,8 +14,14 @@ uniform vec2 uTexel;
 uniform float uPrefilter;
 uniform float uThreshold;
 
+// Half float's largest value. A driver may store light past it as infinity,
+// and one infinite tap would turn the Karis weights, and so a whole patch of
+// the bloom, into NaN; Apple's saturates instead.
+const float kMaxHalf = 65000.0;
+
 vec3 tap(float x, float y) {
-    return max(texture(uSource, vUv + vec2(x, y) * uTexel).rgb, 0.0);
+    vec3 c = texture(uSource, vUv + vec2(x, y) * uTexel).rgb;
+    return any(isnan(c)) ? vec3(0.0) : clamp(c, 0.0, kMaxHalf);
 }
 
 float luma(vec3 color) {

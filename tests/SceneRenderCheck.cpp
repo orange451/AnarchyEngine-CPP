@@ -598,6 +598,18 @@ int main() {
                 drawTwice(hot);
                 Expect(!IsClear(ReadPixel(outside, midY)), "and a bright one still does");
 
+                // Light past half float's range is stored as infinity. Bloom must
+                // not spread that into a black or invalid patch around it.
+                runner::MeshDraw blinding = draw;
+                blinding.emissive[0] = blinding.emissive[1] = blinding.emissive[2] = 1e5f;
+                renderer.setLighting(haze);
+                drawTwice(blinding);
+                const Pixel blindingHalo = ReadPixel(outside, midY);
+                const Pixel blindingInside = ReadPixel(edge - 1, midY);
+                Expect(!IsClear(blindingHalo) && Sum(blindingHalo) > 90 + 6 && Sum(blindingInside) > 600,
+                       "an overflowing highlight still blooms, not a dark patch (halo " + Text(blindingHalo) +
+                           ", inside " + Text(blindingInside) + ")");
+
                 // A pane of another size makes the chain again; one too small for a level skips bloom quietly.
                 renderer.setLighting(haze);
                 for (int pass = 0; pass < 2; ++pass) {

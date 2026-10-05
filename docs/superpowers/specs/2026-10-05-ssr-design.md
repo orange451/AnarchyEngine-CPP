@@ -21,7 +21,7 @@ Efficiency is a design rule. A place with no ScreenSpaceReflections pays nothing
 | Enabled | boolean | true | false traces nothing |
 | Intensity | number | 1 | clamped to 0–1: how much of the sky reflection the traced one replaces |
 | MaxDistance | number | 50 | clamped to 0–1000 studs: how far a ray may travel; it fades out over the last quarter |
-| MaxRoughness | number | 0.5 | clamped to 0–1: rougher surfaces keep the sky reflection; it fades in over the last fifth below |
+| MaxRoughness | number | 0.3 | clamped to 0–1: rougher surfaces keep the sky reflection; it fades in over the last fifth below |
 
 A value that is not finite is refused with "`<Property>` must be a finite number".
 

@@ -119,7 +119,7 @@ struct VisualReflections {
     float intensity = 1.f;
     // Studs.
     float max_distance = 50.f;
-    float max_roughness = 0.5f;
+    float max_roughness = 0.3f;
 };
 
 // Lighting's properties the renderer reads, found again at every Prepare.

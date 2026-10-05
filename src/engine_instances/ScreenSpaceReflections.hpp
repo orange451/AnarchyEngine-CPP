@@ -18,7 +18,7 @@ namespace engine_core {
 //                        replaces, 1. From 0 to kMaxIntensity.
 // MaxDistance   number   how far a ray may travel, in studs, 50; it fades
 //                        out over the last quarter. From 0 to kMaxMaxDistance.
-// MaxRoughness  number   rougher surfaces keep the sky reflection, 0.5; it
+// MaxRoughness  number   rougher surfaces keep the sky reflection, 0.3; it
 //                        fades in over the last fifth below. From 0 to 1.
 //
 // Each is a saved registry property (lua_saved_property). The render
@@ -30,7 +30,7 @@ public:
     static constexpr double kMaxIntensity = 1.0;
     static constexpr double kDefaultMaxDistance = 50.0;
     static constexpr double kMaxMaxDistance = 1000.0;
-    static constexpr double kDefaultMaxRoughness = 0.5;
+    static constexpr double kDefaultMaxRoughness = 0.3;
     static constexpr double kMaxMaxRoughness = 1.0;
 
     ScreenSpaceReflections(DataModel::ChildTag tag, DataModel::State& state, InstanceId id)

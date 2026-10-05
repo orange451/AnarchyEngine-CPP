@@ -108,7 +108,7 @@ struct SceneReflections {
     float intensity = 1.f;
     // Studs.
     float maxDistance = 50.f;
-    float maxRoughness = 0.5f;
+    float maxRoughness = 0.3f;
 };
 
 // Lighting's properties the renderer reads. The defaults are a new Lighting's.

@@ -42,7 +42,7 @@ TEST_CASE("SSR1 a ScreenSpaceReflections' properties are checked, undo, save, an
     REQUIRE(ssr.enabled());
     REQUIRE(ssr.intensity() == 1.0);
     REQUIRE(ssr.max_distance() == 50.0);
-    REQUIRE(ssr.max_roughness() == 0.5);
+    REQUIRE(ssr.max_roughness() == 0.3);
 
     engine_core::PropertyBag saved;
     ssr.save_properties(saved);
@@ -82,7 +82,7 @@ TEST_CASE("SSR1 a ScreenSpaceReflections' properties are checked, undo, save, an
     REQUIRE_FALSE(ssr.set_enabled(false));
     REQUIRE_FALSE(ssr.set_intensity(0.7));
     REQUIRE_FALSE(ssr.set_max_distance(80.0));
-    REQUIRE_FALSE(ssr.set_max_roughness(0.3));
+    REQUIRE_FALSE(ssr.set_max_roughness(0.25));
     engine_core::PropertyBag changed;
     ssr.save_properties(changed);
     for (const char* name : {"Enabled", "Intensity", "MaxDistance", "MaxRoughness"}) {
@@ -97,7 +97,7 @@ TEST_CASE("SSR1 a ScreenSpaceReflections' properties are checked, undo, save, an
     game.stop_simulation();
     REQUIRE(ssr.max_distance() == 80.0);
     REQUIRE_FALSE(ssr.enabled());
-    REQUIRE(ssr.max_roughness() == 0.3);
+    REQUIRE(ssr.max_roughness() == 0.25);
 }
 
 TEST_CASE("SSR2 a ScreenSpaceReflections belongs under Lighting and nowhere else", "[reflections]") {
@@ -126,7 +126,7 @@ TEST_CASE("SSR4 scripts make a ScreenSpaceReflections and set it", "[reflections
     add_script(rig.game, "Mirror", R"(
         local ssr = Instance.new("ScreenSpaceReflections", game.Lighting)
         _G.defaults = ssr.Enabled == true and ssr.Intensity == 1 and ssr.MaxDistance == 50
-            and ssr.MaxRoughness == 0.5
+            and math.abs(ssr.MaxRoughness - 0.3) < 1e-9
         ssr.Enabled = false
         ssr.Intensity = 0.25
         ssr.MaxDistance = 2000

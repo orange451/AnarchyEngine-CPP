@@ -6,6 +6,7 @@
 #include "ide/McpServer.hpp"
 #include "ide/McpTools.hpp"
 #include "ide/StudioRegistry.hpp"
+#include "profiler/Profiler.hpp"
 #include "SelectionService.hpp"
 
 #include "Engine.hpp"
@@ -1056,6 +1057,7 @@ void TestToolSpecs() {
     studio.import_files = [](const std::vector<std::string>&) { return ide::McpPlaceImports{}; };
     studio.tabs = [] { return JsonValue::object(); };
     studio.change_tab = [](const std::string&, const std::string&) {};
+    studio.save_place = [](const std::string&) { return JsonValue::object(); };
     ide::McpServer every;
     ide::add_engine_tools(every, engine, studio);
     const std::vector<ide::McpToolSpec> specs = ide::engine_tool_specs();
@@ -1080,11 +1082,11 @@ void TestToolSpecs() {
     std::vector<std::string> expected;
     for (const ide::McpToolSpec& spec : specs) {
         if (spec.name != "playtest" && spec.name != "screenshot" && spec.name != "get_studio_info" &&
-            spec.name != "import_assets" && spec.name != "tabs") {
+            spec.name != "import_assets" && spec.name != "tabs" && spec.name != "save_place") {
             expected.push_back(spec.name);
         }
     }
-    Expect(names == expected, "a studio without the hooks leaves out playtest, screenshot, get_studio_info, import_assets, and tabs");
+    Expect(names == expected, "a studio without the hooks leaves out playtest, screenshot, get_studio_info, import_assets, tabs, and save_place");
 }
 
 // tabs hands the action to the studio, then lists the tabs as they are after it.
@@ -1119,6 +1121,53 @@ void TestTabs() {
            "an unknown action is refused");
     Expect(ErrorText(server, "tabs", R"({"action":"close","tab":"Scene View"})") == "Scene View cannot be closed.",
            "what the studio refuses comes back as the error");
+}
+
+// save_place hands the studio the folder, empty for a Save, and returns what it reports.
+void TestSavePlace() {
+    engine_core::Engine engine;
+    std::vector<std::string> folders;
+    ide::McpStudio studio;
+    studio.save_place = [&folders](const std::string& folder) {
+        if (folder == "/conflict") {
+            throw std::runtime_error("Not saved: src/Workspace.json changed on disk");
+        }
+        folders.push_back(folder);
+        JsonValue out = JsonValue::object();
+        out.set("project", JsonValue::string("Place"));
+        return out;
+    };
+    ide::McpServer server;
+    ide::add_engine_tools(server, engine, studio);
+    Expect(Member(Call(server, "save_place", "{}"), "project").as_string() == "Place",
+           "save_place returns what the studio reports");
+    Call(server, "save_place", R"({"folder":"/Users/me/Place"})");
+    Expect(folders == std::vector<std::string>{"", "/Users/me/Place"}, "a Save has no folder, and Save As its folder");
+    Expect(ErrorText(server, "save_place", R"({"folder":"Place"})") == "folder must be an absolute path.",
+           "a relative folder is refused");
+    Expect(ErrorText(server, "save_place", R"({"folder":3})") == "folder must be an absolute path.",
+           "a folder that is not a string is refused");
+    Expect(folders.size() == 2, "a refused folder never reaches the studio");
+    Expect(ErrorText(server, "save_place", R"({"folder":"/conflict"})") ==
+               "Not saved: src/Workspace.json changed on disk",
+           "why the studio did not save comes back as the error");
+}
+
+// gpu_detail sets the profiler's per-pass GPU timing, or flips it without on.
+void TestGpuDetail() {
+    engine_core::Engine engine;
+    ide::McpServer server;
+    ide::add_engine_tools(server, engine, ide::McpStudio{});
+    profiler::set_gpu_detail(false);
+    Expect(Member(Call(server, "gpu_detail", "{}"), "on").as_bool() && profiler::gpu_detail(),
+           "gpu_detail flips it on");
+    Expect(!Member(Call(server, "gpu_detail", "{}"), "on").as_bool() && !profiler::gpu_detail(),
+           "and off again");
+    Expect(Member(Call(server, "gpu_detail", R"({"on":true})"), "on").as_bool(), "on true turns it on");
+    Expect(Member(Call(server, "gpu_detail", R"({"on":true})"), "on").as_bool(), "and leaves it on");
+    Expect(!Member(Call(server, "gpu_detail", R"({"on":false})"), "on").as_bool() && !profiler::gpu_detail(),
+           "on false turns it off");
+    Expect(ErrorText(server, "gpu_detail", R"({"on":"yes"})").find("on must be") == 0, "on must be a boolean");
 }
 
 // An image a tool returns goes out as image content, beside the JSON text.
@@ -1258,6 +1307,8 @@ int main() {
     TestToolSpecs();
     TestImages();
     TestTabs();
+    TestSavePlace();
+    TestGpuDetail();
     TestProfileTool();
     if (gFailures == 0) {
         std::printf("mcp tests passed\n");

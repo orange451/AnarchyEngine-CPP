@@ -713,6 +713,7 @@ bool IdeLayout::open_project_at(const std::filesystem::path& root) {
 
 bool IdeLayout::save_open_project(std::function<void()> then,
                                   const std::vector<engine_core::SaveConflict>* overwrite) {
+    save_failure_.clear();
     // A check first: what only the disk changed loads, and what both changed
     // stops the save and asks. When the check cannot run, during a test or with
     // src/ unreadable, the save's own guard still stops at a changed file.
@@ -742,6 +743,7 @@ bool IdeLayout::save_open_project(std::function<void()> then,
         return false;
     }
     if (!error.empty()) {
+        save_failure_ = error;
         show_error("Could not save project", error);
         return false;
     }
@@ -759,10 +761,9 @@ bool IdeLayout::save_open_project(std::function<void()> then,
 
 void IdeLayout::confirm_overwrite(const std::vector<engine_core::SaveConflict>& conflicts,
                                   std::function<void()> then, GateRows from) {
-    runner_.simulation().scripts().append_output(
-        engine_core::ScriptRuntime::OutputKind::Error,
-        "Not saved: " + engine_core::describe_conflict(conflicts.front()) +
-            (conflicts.size() > 1 ? " (and " + std::to_string(conflicts.size() - 1) + " more)" : std::string()));
+    save_failure_ = "Not saved: " + engine_core::describe_conflict(conflicts.front()) +
+                    (conflicts.size() > 1 ? " (and " + std::to_string(conflicts.size() - 1) + " more)" : std::string());
+    runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error, save_failure_);
     if (scene_ == nullptr || prompt_open_) {
         return;
     }
@@ -955,6 +956,7 @@ void IdeLayout::export_saved_game() {
 }
 
 bool IdeLayout::save_project_to(const std::filesystem::path& root) {
+    save_failure_.clear();
     flush_editors();
     std::string error;
     run_now([&](engine_core::DataModel& game) {
@@ -969,6 +971,7 @@ bool IdeLayout::save_project_to(const std::filesystem::path& root) {
         }
     });
     if (!error.empty()) {
+        save_failure_ = error;
         show_error("Could not save project", error);
         return false;
     }

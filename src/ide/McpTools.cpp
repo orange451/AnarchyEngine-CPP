@@ -1615,6 +1615,24 @@ JsonValue Tabs(const ToolContext& context, const JsonValue& arguments) {
     return context.studio.tabs();
 }
 
+JsonValue SavePlace(const ToolContext& context, const JsonValue& arguments) {
+    std::string folder;
+    if (const JsonValue* given = arguments.find("folder")) {
+        if (!given->is_string() || !path_from_utf8(given->as_string()).is_absolute()) {
+            throw std::runtime_error("folder must be an absolute path.");
+        }
+        folder = given->as_string();
+    }
+    return context.studio.save_place(folder);
+}
+
+JsonValue GpuDetail(const ToolContext&, const JsonValue& arguments) {
+    profiler::set_gpu_detail(BoolArg(arguments, "on", !profiler::gpu_detail()));
+    JsonValue out = JsonValue::object();
+    out.set("on", JsonValue::boolean(profiler::gpu_detail()));
+    return out;
+}
+
 JsonValue GetStudioInfo(const ToolContext& context, const JsonValue&) {
     JsonValue out = context.studio.info();
     if (context.studio.session) {
@@ -1632,6 +1650,8 @@ bool CanCapture(const McpStudio& studio) { return studio.capture_view != nullptr
 bool CanImport(const McpStudio& studio) { return studio.import_files != nullptr; }
 
 bool HasTabs(const McpStudio& studio) { return studio.tabs && studio.change_tab; }
+
+bool CanSave(const McpStudio& studio) { return studio.save_place != nullptr; }
 
 bool KnowsItself(const McpStudio& studio) { return studio.info != nullptr; }
 
@@ -1667,6 +1687,8 @@ constexpr ToolCode kToolCode[] = {
     {"playtest", Playtest, CanPlaytest},
     {"screenshot", Screenshot, CanCapture},
     {"tabs", Tabs, HasTabs},
+    {"save_place", SavePlace, CanSave},
+    {"gpu_detail", GpuDetail, nullptr},
     {"get_studio_info", GetStudioInfo, KnowsItself},
 };
 

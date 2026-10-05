@@ -639,6 +639,8 @@ private:
     // project. Made by start and New, deleted by New, Open, and the destructor.
     // Empty while a project is open.
     std::filesystem::path scratch_resources_;
+    // Why the last save wrote nothing: an error, or the files changed on disk. Empty after a save that wrote.
+    std::string save_failure_;
     bool dialog_open_ = false;
     bool prompt_open_ = false;
     // What the window title shows now.

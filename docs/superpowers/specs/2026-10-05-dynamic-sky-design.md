@@ -62,7 +62,7 @@ There is no date: the sun's declination is 0 (the equinox), so it rises due east
 
 One directional light, `id` 0, from the sun while the sun is up and the moon otherwise:
 
-- Each body's strength is a smoothstep of its elevation from −2° to +6°, so at the crossing (the sun on the horizon) both are near zero and the light, and its shadow, never jump between them while either is bright.
+- Each body's strength is a smoothstep of its elevation from 0° to 6°. The moon is opposite the sun, so at the crossing (the sun on the horizon) both are exactly zero and the light, and its shadow, never jump between them.
 - Colour: the sun's light is its transmittance through the same atmosphere the shader draws (Rayleigh and Mie extinction along the path at that elevation), so it yellows and reddens toward the horizon. The moon's light is a fixed cool white (0.75, 0.82, 1.0) times its transmittance.
 - Intensity: Brightness for the sun, Brightness × 0.1 for the moon, times the elevation fade, times a cloud dimming of `1 − 0.7 × CloudCover × CloudDensity`.
 - Shadows: the instance's Shadows, with `ShadowDistance` 100, as `DirectionalLight`'s default.
@@ -70,7 +70,7 @@ One directional light, `id` 0, from the sun while the sun is up and the moon oth
 
 ## Data path
 
-- `SnapshotPump::resolve_lighting` walks Lighting in tree order for the first Skybox or DynamicSky (`find_first` taking both types). A Skybox fills `VisualSky` as now; a DynamicSky fills a new `VisualDynamicSky` (`present` and every property, with the two texture paths resolved). A `static_assert` checks `VisualDynamicSky{}`'s defaults against `DynamicSky::kDefault*`, as the effects do. `blit` and `SceneFeed` copy it.
+- `SnapshotPump::resolve_lighting` walks Lighting in tree order for the first Skybox or DynamicSky (`find_first` taking both types). A Skybox fills `VisualSky` as now; a DynamicSky fills a new `VisualDynamicSky` (`present` and every property, with the two texture paths resolved). A sandbox test checks `VisualDynamicSky{}`'s defaults against `DynamicSky::kDefault*` (it holds strings, so it cannot be a `static_assert` as the effects' are). `blit` and `SceneFeed` copy it.
 - `GameView` calls `SkyMath` and:
   - fills `SceneSky`'s new procedural part: the sun and moon directions, the light colour, star visibility and pole, CloudCover, CloudDensity, the wind, the sizes, the two textures (from `textures_`, as the Skybox image is), ReflectionQuality, and `seconds`;
   - puts the sky's light at the front of `lightDraws_` with `id` 0, skipped when its intensity is 0.

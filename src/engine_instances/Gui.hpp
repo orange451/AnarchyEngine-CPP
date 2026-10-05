@@ -44,7 +44,9 @@ namespace engine_core {
 //   A percentage width or height on the BillboardGui itself is world units:
 //   100% is one unit at its distance from the camera, so calc(200% + 32px)
 //   is two units and 32 pixels. Its children's percentages are of their
-//   parents, as in any CSS.
+//   parents, as in any CSS, so a child's percentage height is of the
+//   BillboardGui's height: give the BillboardGui a height of its own, in CSS
+//   or Size, when its children use percentage heights.
 // Pane       a GuiBasePane that stacks its children by Alignment. Size (100, 100).
 // HBox, VBox GuiBasePanes in a row or a column, with Spacing (number, 0 and up, 0).
 // Label      Text ("Label"), TextColor (Color3, black), FontSize (1 to 512, 16).
@@ -53,7 +55,8 @@ namespace engine_core {
 //            Typing writes Text.
 // CSS        Source ("/* CSS Document */"): a stylesheet for its parent
 //            GuiBase and everything inside it, or, directly under the Gui
-//            service, for every ScreenGui. The CSS editor edits Source;
+//            service, for the whole layer: every ScreenGui and every drawn
+//            BillboardGui. The CSS editor edits Source;
 //            Properties does not show it. The studio's styles never reach
 //            the game's GUIs; they start from a blank default sheet
 //            (runner::GuiLayer::defaultStylesheet).

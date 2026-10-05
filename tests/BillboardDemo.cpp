@@ -159,9 +159,10 @@ private:
 
     // SimulationThread. A GameObject with no Prefab at where, holding a
     // BillboardGui 4 by 2 units filled with one Pane of color, whose id it
-    // returns. The size is on the BillboardGui itself: a Pane's percentage
-    // height of a BillboardGui whose height is its content's would be its own
-    // content's, none.
+    // returns. The BillboardGui is given a height of its own because the Pane's
+    // 100% height is a share of it: left to fit its content, the BillboardGui
+    // would be only as tall as the Pane, so the Pane's height would come out
+    // as nothing.
     engine_core::InstanceId board(engine_core::DataModel& game, engine_core::InstanceId workspace, const char* name,
                engine_core::Vec3 where, bool onTop, const char* color) {
         const engine_core::InstanceId anchor = Create(game, "GameObject", name, workspace);

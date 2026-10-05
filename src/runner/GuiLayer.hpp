@@ -50,7 +50,7 @@ struct BillboardView {
 // textfield) whose id is its Name and whose classes are its ClassList. The
 // CSS instances under a GuiBase, joined in child order, are that node's
 // stylesheet, and those directly under the service are the layer's, so they
-// style every ScreenGui.
+// style every ScreenGui and every BillboardGui the layer draws.
 //
 // The layer is the root of a jadefx::SubScene whose user-agent stylesheet is
 // defaultStylesheet, so the studio's theme and stylesheets do not reach the

@@ -290,6 +290,9 @@ void GameView::collectMeshes() {
     if (prefabMeshes_.size() < snapshot.prefabs.size()) {
         prefabMeshes_.resize(snapshot.prefabs.size());
     }
+    // Each Prefab Model its own slot, from 1, so every GameObject drawing it
+    // shares one instanced call. Numbered again each frame, as the list is made again.
+    std::uint32_t nextSlot = 1;
     for (std::size_t index = 0; index < snapshot.prefabs.size(); ++index) {
         std::vector<MeshDraw>& loaded = prefabMeshes_[index];
         loaded.clear();
@@ -319,6 +322,7 @@ void GameView::collectMeshes() {
             draw.roughness = source.roughness;
             draw.reflectivity = source.reflectivity;
             draw.transparency = source.transparency;
+            draw.slot = nextSlot++;
             loaded.push_back(draw);
         }
     }
@@ -369,7 +373,7 @@ void GameView::collectMeshes() {
         if (row.prefab == 0 || row.prefab >= snapshot.prefabs.size()) {
             continue;
         }
-        // The GameObject's Color tints each Material's, and its opacity multiplies each Material's.
+        // The GameObject's Color tints each Material's, per instance, and its opacity multiplies each Material's.
         const float opacity = 1.f - row.transparency;
         // Its Scale grows the Prefab about the GameObject's origin: each axis, not the position.
         engine_core::Matrix4 scaled = row.world;
@@ -382,9 +386,9 @@ void GameView::collectMeshes() {
             MeshDraw& draw = meshDraws_.emplace_back(model);
             draw.model = scaled;
             draw.owner = row.id;
-            draw.color[0] *= row.color.r;
-            draw.color[1] *= row.color.g;
-            draw.color[2] *= row.color.b;
+            draw.tint[0] = row.color.r;
+            draw.tint[1] = row.color.g;
+            draw.tint[2] = row.color.b;
             draw.transparency = 1.f - (1.f - std::clamp(draw.transparency, 0.f, 1.f)) * opacity;
         }
     }

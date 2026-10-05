@@ -47,6 +47,7 @@ set(STUDIO_CORE_SOURCES
     src/runner/ShadowAtlas.cpp
     src/runner/ShadowPlanner.cpp
     src/runner/Visibility.cpp
+    src/runner/DrawBatches.cpp
     src/runner/GamePack.cpp
     src/ide/AssetBrowser.cpp
     src/ide/ColorLiterals.cpp
@@ -865,6 +866,7 @@ add_executable(sandbox
     sandbox/shadow_atlas_tests.cpp
     sandbox/shadow_planner_tests.cpp
     sandbox/visibility_tests.cpp
+    sandbox/draw_batches_tests.cpp
     sandbox/event_args_tests.cpp
     sandbox/core_tests.cpp
     sandbox/archivable_tests.cpp

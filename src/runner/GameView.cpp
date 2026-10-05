@@ -13,6 +13,7 @@
 #include "Runner.hpp"
 #include "SceneFeed.hpp"
 #include "SceneService.hpp"
+#include "SkyMath.hpp"
 #include "ScriptRuntime.hpp"
 #include "amesh.hpp"
 #include "gl.hpp"
@@ -408,6 +409,39 @@ void GameView::collectMeshes() {
         lighting.sky.tint[0] = sky.tint.r;
         lighting.sky.tint[1] = sky.tint.g;
         lighting.sky.tint[2] = sky.tint.b;
+    }
+    // The DynamicSky, if it is the sky: SkyMath's sun, moon, and stars, the
+    // clouds' drift by the view's clock, and its light first among the suns,
+    // so it takes the shadow cascades.
+    const engine_core::VisualDynamicSky& dynamic = snapshot.dynamic_sky;
+    if (dynamic.present) {
+        const SkyState state = ComputeSky(dynamic.time_of_day, dynamic.latitude, dynamic.brightness,
+                                          dynamic.cloud_cover, dynamic.cloud_density);
+        SceneDynamicSky& out = lighting.dynamicSky;
+        out.enabled = true;
+        SetSkyState(out, state);
+        out.cloudCover = dynamic.cloud_cover;
+        out.cloudDensity = dynamic.cloud_density;
+        const double seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - skyClockStart_).count();
+        // In double, wrapped, so the shader's floats stay precise: the clouds jump once in many hours.
+        constexpr double kCloudOffsetWrap = 100000.0;
+        out.cloudOffset[0] = static_cast<float>(std::fmod(static_cast<double>(dynamic.wind.x) * seconds, kCloudOffsetWrap));
+        out.cloudOffset[1] = static_cast<float>(std::fmod(static_cast<double>(dynamic.wind.z) * seconds, kCloudOffsetWrap));
+        out.windy = dynamic.wind.x != 0.f || dynamic.wind.z != 0.f;
+        out.seconds = seconds;
+        out.sunSizeDegrees = dynamic.sun_size;
+        out.moonSizeDegrees = dynamic.moon_size;
+        out.sunTexture = textures_.get(dynamic.sun_texture);
+        out.moonTexture = textures_.get(dynamic.moon_texture);
+        out.reflectionQuality = dynamic.reflection_quality == 0   ? SceneQuality::Low
+                                : dynamic.reflection_quality == 2 ? SceneQuality::High
+                                                                  : SceneQuality::Medium;
+        out.key = {dynamic.time_of_day, dynamic.latitude, dynamic.cloud_cover, dynamic.cloud_density,
+                   static_cast<int>(out.reflectionQuality)};
+        if (state.light.intensity > 0.f) {
+            lightDraws_.insert(lightDraws_.begin(), SkyLightDraw(state, dynamic.shadows));
+        }
     }
     // The BloomEffect, if any; with none, or one turned off, there is no bloom.
     const engine_core::VisualBloom& bloom = snapshot.bloom;

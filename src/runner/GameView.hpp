@@ -271,6 +271,8 @@ private:
     jadefx::Scene* hookedScene_ = nullptr;
     int keyHook_ = 0;
     // Paints in the current window. framesPerSecond and frameMilliseconds read the finished average.
+    // The DynamicSky's clouds drift by this clock, from when the view was made.
+    std::chrono::steady_clock::time_point skyClockStart_ = std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point paintWindowStart_{};
     int paintWindowFrames_ = 0;
     bool paintWindowOpen_ = false;

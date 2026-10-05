@@ -1,9 +1,15 @@
 #pragma once
 
+#include "InstanceBuffer.hpp"
 #include "ShadowPlanner.hpp"
 
 #include <cstdint>
+#include <utility>
 #include <vector>
+
+namespace anarchy::amesh {
+class GpuMesh;
+}
 
 namespace runner {
 
@@ -42,12 +48,12 @@ public:
     bool initialize();
     void shutdown();
 
-    // Draws this frame's due tiles for requests, casting from meshes. False,
-    // having committed nothing, when the program cannot draw yet (macOS). A
-    // driver that will not draw into the atlas gets every light unshadowed,
-    // said once.
-    bool draw(const std::vector<ShadowRequest>& requests, const MeshDraw* meshes, int count, const CameraView& camera,
-              const ShadowSettings& settings);
+    // Draws this frame's due tiles for requests, casting from meshes, whose
+    // world spheres are spheres (one per mesh). False, having committed nothing,
+    // when the program cannot draw yet (macOS). A driver that will not draw into
+    // the atlas gets every light unshadowed, said once.
+    bool draw(const std::vector<ShadowRequest>& requests, const MeshDraw* meshes, int count, const Sphere* spheres,
+              const CameraView& camera, const ShadowSettings& settings);
     // How the light pass reads key's map: kNone before it has one, or once
     // the driver has refused to draw shadow maps.
     ShadowLookup lookup(std::uint64_t key) const;
@@ -63,11 +69,12 @@ public:
     unsigned cascadeMap() const { return cascades_ != 0 ? cascades_ : cascadeStandIn_; }
     // The atlas texture's pages, 0 with none.
     int atlasPages() const { return atlas_ != 0 ? atlasTexturePages_ : 0; }
+    // Instanced calls this frame's draw and drawSun made; draw starts the count over.
+    int calls() const { return calls_; }
 
 private:
     struct DepthProgram {
         unsigned id = 0;
-        int model = -1;
         int viewProjection = -1;
     };
 
@@ -80,14 +87,29 @@ private:
     // Depth on, polygon offset on, both sides drawn, scissor on.
     void begin();
     void end();
-    // Draws casters (indices into casters_) seen through viewProjection.
-    bool drawCasters(const engine_core::Matrix4& viewProjection, const std::vector<int>& casters,
-                     const MeshDraw* meshes, bool& asked);
+    // Adds casters' runs, grouped by mesh, to casterRuns_ and their rows to
+    // casterRows_; returns the first run's index. Their end is casterRuns_.size().
+    int addCasterRuns(const std::vector<int>& casters, const MeshDraw* meshes);
+    // Draws runs first to end (indices into casterRuns_) seen through viewProjection.
+    bool drawCasters(const engine_core::Matrix4& viewProjection, int first, int end, bool& asked);
 
     ShadowPlanner planner_;
     // What draw handed the planner, and the MeshDraw each came from.
     std::vector<ShadowCaster> casters_;
     std::vector<int> casterMeshes_;
+    // The casters of every tile or cascade drawn this frame, as instanced runs.
+    struct CasterRun {
+        const anarchy::amesh::GpuMesh* mesh = nullptr;
+        int first = 0;
+        int count = 0;
+    };
+    std::vector<CasterRun> casterRuns_;
+    std::vector<InstanceData> casterRows_;
+    std::vector<int> casterOrder_;
+    // Each tile's or cascade's runs, first to end in casterRuns_.
+    std::vector<std::pair<int, int>> tileRuns_;
+    InstanceBuffer instances_;
+    int calls_ = 0;
     DepthProgram depth_;
     unsigned atlasFbo_ = 0;
     unsigned atlas_ = 0;

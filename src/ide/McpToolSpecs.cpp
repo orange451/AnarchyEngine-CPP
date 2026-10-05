@@ -198,6 +198,13 @@ constexpr SpecText kSpecs[] = {
      "moved, and removed.",
      R"({"type":"object","properties":{
          "folder":{"type":"string","description":"Save As: an absolute path to save the project in."}}})"},
+    {"show_profiler",
+     "Shows or hides the profiler over the Scene View, as View > Profiler (Ctrl+F6) does. screenshot "
+     "leaves it out, as it does the view's other overlays. While it shows it records every frame; "
+     "get_profile does not need it, since it records on its own. Hiding it ends a pause and closes an "
+     "open capture. Without on it flips. Returns whether it shows now.",
+     R"({"type":"object","properties":{
+         "on":{"type":"boolean","description":"true shows it, false hides it. Default: the opposite of now."}}})"},
     {"gpu_detail",
      "Whether the profiler times each render pass on the GPU, rather than the whole 3D draw once a "
      "frame: the profiler's GPU button. Per-pass detail shows which pass costs the most in get_profile, "

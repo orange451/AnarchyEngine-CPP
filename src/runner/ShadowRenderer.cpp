@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <functional>
 
 namespace runner {
 namespace {
@@ -51,7 +52,6 @@ bool ShadowRenderer::initialize() {
     if (depth_.id == 0) {
         return false;
     }
-    depth_.model = glGetUniformLocation(depth_.id, "uModel");
     depth_.viewProjection = glGetUniformLocation(depth_.id, "uViewProjection");
     glGenFramebuffers(1, &atlasFbo_);
     glGenFramebuffers(1, &cascadeFbo_);
@@ -76,6 +76,7 @@ void ShadowRenderer::shutdown() {
     for (unsigned* texture : {&atlas_, &cascades_, &atlasStandIn_, &cascadeStandIn_}) {
         DeleteTexture(*texture);
     }
+    instances_.destroy();
     atlasTextureSize_ = 0;
     atlasTexturePages_ = 0;
     cascadeSize_ = 0;
@@ -136,25 +137,46 @@ void ShadowRenderer::end() {
     glDisable(GL_SCISSOR_TEST);
 }
 
-bool ShadowRenderer::drawCasters(const Matrix4& viewProjection, const std::vector<int>& casters,
-                                 const MeshDraw* meshes, bool& asked) {
+int ShadowRenderer::addCasterRuns(const std::vector<int>& casters, const MeshDraw* meshes) {
+    const int begin = static_cast<int>(casterRuns_.size());
+    casterOrder_.assign(casters.begin(), casters.end());
+    const auto meshOf = [&](int caster) { return meshes[casterMeshes_[static_cast<std::size_t>(caster)]].mesh; };
+    std::stable_sort(casterOrder_.begin(), casterOrder_.end(),
+                     [&](int a, int b) { return std::less<const void*>()(meshOf(a), meshOf(b)); });
+    for (const int caster : casterOrder_) {
+        const MeshDraw& draw = meshes[casterMeshes_[static_cast<std::size_t>(caster)]];
+        if (static_cast<int>(casterRuns_.size()) == begin || casterRuns_.back().mesh != draw.mesh) {
+            casterRuns_.push_back(CasterRun{draw.mesh, static_cast<int>(casterRows_.size()), 0});
+        }
+        ++casterRuns_.back().count;
+        // Depth only reads the world matrix.
+        InstanceData row{};
+        std::copy(draw.model.m, draw.model.m + 16, row.model);
+        casterRows_.push_back(row);
+    }
+    return begin;
+}
+
+bool ShadowRenderer::drawCasters(const Matrix4& viewProjection, int first, int end, bool& asked) {
     glUseProgram(depth_.id);
     glUniformMatrix4fv(depth_.viewProjection, 1, GL_FALSE, viewProjection.m);
-    for (const int caster : casters) {
-        const MeshDraw& draw = meshes[casterMeshes_[static_cast<std::size_t>(caster)]];
-        glUniformMatrix4fv(depth_.model, 1, GL_FALSE, draw.model.m);
-        draw.mesh->bind();
+    for (int index = first; index < end; ++index) {
+        const CasterRun& run = casterRuns_[static_cast<std::size_t>(index)];
+        run.mesh->bind();
+        instances_.attach(run.first);
         if (!asked && !CanDraw(depth_.id)) {
             return false;
         }
         asked = true;
-        draw.mesh->draw(0);
+        run.mesh->draw_instanced(0, run.count);
+        ++calls_;
     }
     return true;
 }
 
 bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const MeshDraw* meshes, int count,
-                          const CameraView& camera, const ShadowSettings& settings) {
+                          const Sphere* spheres, const CameraView& camera, const ShadowSettings& settings) {
+    calls_ = 0;
     if (refused_) {
         return true;
     }
@@ -182,7 +204,7 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         caster.revision = mesh.mesh->generation();
         caster.owner = mesh.owner;
         caster.model = mesh.model;
-        caster.bounds = WorldBounds(mesh.model, mesh.mesh->bounds_min(), mesh.mesh->bounds_max());
+        caster.bounds = spheres[index];
         casters_.push_back(caster);
         casterMeshes_.push_back(index);
     }
@@ -219,9 +241,6 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         plan = planner_.plan(requests, casters_, camera, settings);
     }
     if (!plan.draws.empty()) {
-        glBindFramebuffer(RT_GL_FRAMEBUFFER, atlasFbo_);
-        begin();
-        bool asked = false;
         // Each page's tiles together, so each page is attached once.
         std::vector<const TileDraw*> byPage;
         byPage.reserve(plan.draws.size());
@@ -230,9 +249,21 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         }
         std::stable_sort(byPage.begin(), byPage.end(),
                          [](const TileDraw* a, const TileDraw* b) { return a->tile.page < b->tile.page; });
-        int attached = -1;
+        // Every tile's casters as runs, uploaded once.
+        casterRuns_.clear();
+        casterRows_.clear();
+        tileRuns_.clear();
         for (const TileDraw* draw : byPage) {
-            const TileDraw& tile = *draw;
+            const int first = addCasterRuns(draw->casters, meshes);
+            tileRuns_.emplace_back(first, static_cast<int>(casterRuns_.size()));
+        }
+        instances_.upload(casterRows_.data(), static_cast<int>(casterRows_.size()));
+        glBindFramebuffer(RT_GL_FRAMEBUFFER, atlasFbo_);
+        begin();
+        bool asked = false;
+        int attached = -1;
+        for (std::size_t t = 0; t < byPage.size(); ++t) {
+            const TileDraw& tile = *byPage[t];
             if (tile.tile.page != attached) {
                 glFramebufferTextureLayer(RT_GL_FRAMEBUFFER, RT_GL_DEPTH_ATTACHMENT, atlas_, 0, tile.tile.page);
                 attached = tile.tile.page;
@@ -240,7 +271,7 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
             glViewport(tile.tile.x, tile.tile.y, tile.tile.size, tile.tile.size);
             glScissor(tile.tile.x, tile.tile.y, tile.tile.size, tile.tile.size);
             glClear(GL_DEPTH_BUFFER_BIT);
-            if (!drawCasters(tile.viewProjection, tile.casters, meshes, asked)) {
+            if (!drawCasters(tile.viewProjection, tileRuns_[t].first, tileRuns_[t].second, asked)) {
                 end();
                 return false;
             }
@@ -302,12 +333,21 @@ bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, cons
     // Unreadable until these draws commit: a layer redrawn before one fails
     // would no longer match the matrices the last commit kept.
     planner_.forgetCascades();
+    casterRuns_.clear();
+    casterRows_.clear();
+    tileRuns_.clear();
+    for (const CascadeDraw& draw : draws) {
+        const int first = addCasterRuns(draw.casters, meshes);
+        tileRuns_.emplace_back(first, static_cast<int>(casterRuns_.size()));
+    }
+    instances_.upload(casterRows_.data(), static_cast<int>(casterRows_.size()));
     glBindFramebuffer(RT_GL_FRAMEBUFFER, cascadeFbo_);
     begin();
     glViewport(0, 0, size, size);
     glScissor(0, 0, size, size);
     bool asked = false;
-    for (const CascadeDraw& draw : draws) {
+    for (std::size_t c = 0; c < draws.size(); ++c) {
+        const CascadeDraw& draw = draws[c];
         glFramebufferTextureLayer(RT_GL_FRAMEBUFFER, RT_GL_DEPTH_ATTACHMENT, cascades_, 0, draw.layer);
         if (glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) != RT_GL_FRAMEBUFFER_COMPLETE) {
             refuse();
@@ -315,7 +355,7 @@ bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, cons
             return true;
         }
         glClear(GL_DEPTH_BUFFER_BIT);
-        if (!drawCasters(draw.viewProjection, draw.casters, meshes, asked)) {
+        if (!drawCasters(draw.viewProjection, tileRuns_[c].first, tileRuns_[c].second, asked)) {
             end();
             return false;
         }

@@ -23,6 +23,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <utility>
@@ -32,7 +33,8 @@
 // resources/shaders is found: scene-render-check draws what the Scene View
 // draws for a GameObject with a Prefab, lit through the legacy pipeline. A cube baked to AMESH in a scratch
 // resources folder goes through MeshCache and Renderer, with the fixed
-// camera, and the check reads the pixels back.
+// camera, and the check reads the pixels back. With --save dir or --compare dir
+// it also writes, or checks against, the regression scenes' frames.
 namespace {
 
 using namespace anarchy::amesh;
@@ -154,9 +156,146 @@ std::string TestSky() {
     });
 }
 
+// The regression scenes: frames that must not change, beyond 1 per channel,
+// when the renderer draws the same meshes another way. 25 cubes in a 5 by 5
+// grid, turned and sized differently, one mirrored in X and one stretched in
+// Y, colored in turn, on a floor; then under a shadowing sun; then with a
+// shadowing spot and three see-through cubes in front.
+std::vector<runner::MeshDraw> RegressionDraws(const GpuMesh* cube, bool seeThrough) {
+    std::vector<runner::MeshDraw> draws;
+    for (int i = 0; i < 25; ++i) {
+        const float x = static_cast<float>(i % 5) * 1.6f - 3.2f;
+        const float z = 1.f - static_cast<float>(i / 5) * 1.6f;
+        engine_core::Matrix4 model = engine_core::matrix4_multiply(
+            engine_core::matrix4_translation(x, 0.f, z), engine_core::matrix4_axis_angle({0.f, 1.f, 0.f}, 0.3 * i));
+        const float scale = 0.5f + 0.05f * static_cast<float>(i % 7);
+        for (int column = 0; column < 3; ++column) {
+            for (int axis = 0; axis < 3; ++axis) {
+                model.m[column * 4 + axis] *= scale;
+            }
+        }
+        if (i == 7) {
+            for (int axis = 0; axis < 3; ++axis) {
+                model.m[axis] *= -1.f;
+            }
+        }
+        if (i == 12) {
+            for (int axis = 0; axis < 3; ++axis) {
+                model.m[4 + axis] *= 2.f;
+            }
+        }
+        runner::MeshDraw draw{cube, model};
+        draw.color[0] = i % 3 == 0 ? 1.f : 0.3f;
+        draw.color[1] = i % 3 == 1 ? 1.f : 0.3f;
+        draw.color[2] = i % 3 == 2 ? 1.f : 0.3f;
+        draws.push_back(draw);
+    }
+    engine_core::Matrix4 floor = engine_core::matrix4_translation(0.f, -0.6f, -2.f);
+    floor.m[0] = 12.f;
+    floor.m[5] = 0.2f;
+    floor.m[10] = 12.f;
+    draws.push_back(runner::MeshDraw{cube, floor});
+    if (seeThrough) {
+        for (int i = 0; i < 3; ++i) {
+            runner::MeshDraw glass{cube, engine_core::matrix4_translation(static_cast<float>(i) - 1.f, 0.5f, 3.f)};
+            glass.transparency = 0.4f;
+            glass.color[i] = 1.f;
+            draws.push_back(glass);
+        }
+    }
+    return draws;
+}
+
+// The three regression frames, each width * height * 4 bytes, read from the window.
+std::vector<std::vector<unsigned char>> RegressionFrames(const GpuMesh* cube, int size, int width, int height) {
+    runner::Renderer renderer;
+    Expect(renderer.initialize(), "the renderer builds for the regression scenes");
+    runner::LightDraw sun;
+    sun.kind = runner::LightDraw::Kind::Directional;
+    sun.direction[0] = 0.5f;
+    sun.direction[1] = -0.8f;
+    sun.direction[2] = -0.3f;
+    sun.intensity = 2.f;
+    sun.shadows = true;
+    sun.shadowDistance = 100.f;
+    sun.id = 21;
+    runner::LightDraw spot;
+    spot.kind = runner::LightDraw::Kind::Spot;
+    spot.position[0] = -4.f;
+    spot.position[1] = 4.f;
+    spot.position[2] = 2.f;
+    spot.direction[0] = 0.6f;
+    spot.direction[1] = -0.7f;
+    spot.direction[2] = -0.4f;
+    spot.outerFovDegrees = 90.f;
+    spot.radius = 20.f;
+    spot.intensity = 4.f;
+    spot.shadows = true;
+    spot.id = 22;
+    std::vector<std::vector<unsigned char>> frames;
+    const auto capture = [&](const std::vector<runner::MeshDraw>& draws, const runner::LightDraw* light) {
+        // Twice, so cached shadow maps are what the frame reads, as in the studio.
+        for (int pass = 0; pass < 2; ++pass) {
+            renderer.draw(0, 0, size, size, size, size, draws.data(), static_cast<int>(draws.size()), light,
+                          light != nullptr ? 1 : 0);
+        }
+        std::vector<unsigned char> pixels(static_cast<std::size_t>(width) * height * 4);
+        glReadPixels(0, 0, width, height, runner::GL_RGBA, runner::GL_UNSIGNED_BYTE, pixels.data());
+        frames.push_back(std::move(pixels));
+    };
+    capture(RegressionDraws(cube, false), nullptr);
+    capture(RegressionDraws(cube, false), &sun);
+    capture(RegressionDraws(cube, true), &spot);
+    Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the regression scenes leave no GL error");
+    renderer.shutdown();
+    return frames;
+}
+
+// --save writes each frame to dir/regression-N.rgba; --compare reads them back
+// and expects every channel within 1. Both modes validate that frames draw content.
+void SaveOrCompareRegression(const std::vector<std::vector<unsigned char>>& frames, const std::string& mode,
+                             const std::filesystem::path& dir) {
+    for (std::size_t n = 0; n < frames.size(); ++n) {
+        // Count pixels that are not the clear color (30, 30, 30).
+        int drawn = 0;
+        const std::size_t pixels = frames[n].size() / 4;
+        for (std::size_t i = 0; i < frames[n].size(); i += 4) {
+            const bool clear = frames[n][i] == 30 && frames[n][i + 1] == 30 && frames[n][i + 2] == 30;
+            drawn += clear ? 0 : 1;
+        }
+        Expect(drawn >= static_cast<int>(pixels * 0.05),
+               "regression frame " + std::to_string(n) + " draws something (" + std::to_string(drawn) + " of " +
+                   std::to_string(pixels) + " pixels)");
+
+        const std::filesystem::path file = dir / ("regression-" + std::to_string(n) + ".rgba");
+        if (mode == "--save") {
+            std::filesystem::create_directories(dir);
+            std::ofstream out(file, std::ios::binary);
+            out.write(reinterpret_cast<const char*>(frames[n].data()), static_cast<std::streamsize>(frames[n].size()));
+            Expect(out.good(), "regression frame " + std::to_string(n) + " saved");
+            continue;
+        }
+        std::ifstream in(file, std::ios::binary);
+        std::vector<unsigned char> saved((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        if (saved.size() != frames[n].size()) {
+            Expect(false, "regression frame " + std::to_string(n) + " has the saved size");
+            continue;
+        }
+        int worst = 0;
+        int differing = 0;
+        for (std::size_t i = 0; i < saved.size(); ++i) {
+            const int difference = std::abs(static_cast<int>(saved[i]) - static_cast<int>(frames[n][i]));
+            worst = std::max(worst, difference);
+            differing += difference > 0 ? 1 : 0;
+        }
+        Expect(worst <= 1, "regression frame " + std::to_string(n) + " matches within 1 (worst " +
+                               std::to_string(worst) + ", " + std::to_string(differing) + " channels differ)");
+    }
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     // A scratch project resources folder with the cube and a file that is not AMESH.
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "anarchy-scene-render-check";
     std::filesystem::remove_all(root);
@@ -1135,6 +1274,20 @@ int main() {
             Expect(std::abs(spotShadowed[1] - spotOpen[1]) <= 3,
                    "and the open floor lit as before, with no acne (" + std::to_string(spotShadowed[1]) + " and " +
                        std::to_string(spotOpen[1]) + ")");
+
+            // SH1: the spot's one tile draws its casters, all one mesh, in one call,
+            // and a frame that reuses the tile draws none. Visible: the cube and the
+            // floor, two runs of slot 0.
+            runner::LightDraw cachedSpot = spotLight;
+            cachedSpot.id = 31;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, scene, 2, &cachedSpot, 1);
+            const int firstCalls = renderer.stats().instancedCalls;
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, scene, 2, &cachedSpot, 1);
+            const int reusedCalls = renderer.stats().instancedCalls;
+            Expect(firstCalls == 3 && reusedCalls == 2,
+                   "SH1 one shadow call for the tile, none when it is reused (" + std::to_string(firstCalls) +
+                       " then " + std::to_string(reusedCalls) + ")");
+
             Expect(lit(spotLight, scene, 2) == spotShadowed, "a second frame reuses the cached map and draws the same");
             Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "drawing shadows leaves no GL error");
 
@@ -1269,6 +1422,17 @@ int main() {
             sunLight.direction[0] = 0.f;
             sunLight.direction[1] = -1.f;
             Expect(lit(sunLight, scene, 2)[0] > ambientFloor + 20, "a sun straight down lights the floor beside the cube");
+            // CL4: a caster the camera cannot see still shadows what it can. A cube
+            // 12 studs above the open floor point is far above the view.
+            const runner::MeshDraw withHigh[3] = {scene[0], scene[1],
+                                                  runner::MeshDraw{cube, engine_core::matrix4_translation(1.f, 12.f, 2.f)}};
+            const int openUnder = lit(sunLight, scene, 2)[1];
+            const std::array<int, 2> high = lit(sunLight, withHigh, 3);
+            Expect(renderer.stats().culled == 1, "CL4 the high cube is out of view (" +
+                                                     std::to_string(renderer.stats().culled) + " culled)");
+            Expect(openUnder > ambientFloor + 20 && std::abs(high[1] - ambientFloor) <= 4,
+                   "CL4 and its shadow still falls on the open floor (" + std::to_string(high[1]) + " against " +
+                       std::to_string(ambientFloor) + ")");
             Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "cascades leave no GL error");
 
             // Shadows off in the settings draws every light unshadowed.
@@ -1605,6 +1769,96 @@ int main() {
         meshes.sweepSessions();
         Expect(meshes.getSession(9, session, 3) != nullptr, "one swept away uploads again when asked");
         Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "session uploads leave no GL error");
+
+        {
+            // CL1–CL3: culling. From (0, 0, 8) down -Z with a 60 degree view, a cube
+            // at the origin is in view, one at (0, 0, 20) is behind the camera, and
+            // one at (40, 0, 0) is far past the right edge.
+            // A fresh mesh of its own: by here the file-backed cube above was broken
+            // on purpose (the recheck test) and is no longer valid.
+            GpuMesh cullCube;
+            cullCube.upload(Cube());
+            runner::Renderer culler;
+            Expect(culler.initialize(), "the renderer builds for culling");
+            culler.setCamera(engine_core::matrix4_translation(0.f, 0.f, 8.f), 60.f);
+            const runner::MeshDraw three[3] = {runner::MeshDraw{&cullCube, engine_core::matrix4_identity()},
+                                               runner::MeshDraw{&cullCube, engine_core::matrix4_translation(0.f, 0.f, 20.f)},
+                                               runner::MeshDraw{&cullCube, engine_core::matrix4_translation(40.f, 0.f, 0.f)}};
+            culler.draw(0, 0, kSize, kSize, kSize, kSize, three, 3);
+            const runner::RenderStats culled = culler.stats();
+            Expect(culled.draws == 3 && culled.visible == 1 && culled.culled == 2 && culled.runs == 1,
+                   "CL1 two of three cubes are culled (" + std::to_string(culled.visible) + " visible, " +
+                       std::to_string(culled.culled) + " culled)");
+            std::vector<unsigned char> withCulling(static_cast<std::size_t>(fbWidth) * fbHeight * 4);
+            glReadPixels(0, 0, fbWidth, fbHeight, runner::GL_RGBA, runner::GL_UNSIGNED_BYTE, withCulling.data());
+            culler.setCulling(false);
+            culler.draw(0, 0, kSize, kSize, kSize, kSize, three, 3);
+            Expect(culler.stats().visible == 3 && culler.stats().culled == 0, "CL2 culling off draws all three");
+            std::vector<unsigned char> without(withCulling.size());
+            glReadPixels(0, 0, fbWidth, fbHeight, runner::GL_RGBA, runner::GL_UNSIGNED_BYTE, without.data());
+            Expect(withCulling == without, "CL3 culling changes no pixel");
+            Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "culling leaves no GL error");
+            culler.shutdown();
+            cullCube.destroy();
+        }
+
+        {
+            // IN1–IN4: instancing. From (0, 0, 8) down -Z, white cubes of one
+            // slot, left tinted red and right green, draw as one run.
+            // A fresh mesh of its own: by here the file-backed cube above was
+            // broken on purpose (the recheck test) and is no longer valid.
+            GpuMesh instanceCube;
+            instanceCube.upload(Cube());
+            runner::Renderer batcher;
+            Expect(batcher.initialize(), "the renderer builds for instancing");
+            batcher.setCamera(engine_core::matrix4_translation(0.f, 0.f, 8.f), 60.f);
+            runner::MeshDraw pair[2] = {
+                runner::MeshDraw{&instanceCube, engine_core::matrix4_translation(-1.5f, 0.f, 0.f)},
+                runner::MeshDraw{&instanceCube, engine_core::matrix4_translation(1.5f, 0.f, 0.f)}};
+            pair[0].slot = pair[1].slot = 1;
+            pair[0].tint[1] = pair[0].tint[2] = 0.f;
+            pair[1].tint[0] = pair[1].tint[2] = 0.f;
+            batcher.draw(0, 0, kSize, kSize, kSize, kSize, pair, 2);
+            const Pixel left = ReadPixel(fbWidth * 40 / kSize, fbHeight / 2);
+            const Pixel right = ReadPixel(fbWidth * 88 / kSize, fbHeight / 2);
+            Expect(batcher.stats().runs == 1 && batcher.stats().instancedCalls == 1,
+                   "IN1 two cubes of one slot draw in one call (" + std::to_string(batcher.stats().runs) + " runs)");
+            Expect(left.r > left.g + 30 && right.g > right.r + 30,
+                   "IN2 each keeps its own tint (" + Text(left) + " and " + Text(right) + ")");
+
+            // A mirrored cube draws the same as an unmirrored one, in a run of its own.
+            runner::MeshDraw plain{&instanceCube, engine_core::matrix4_identity()};
+            plain.slot = 1;
+            batcher.draw(0, 0, kSize, kSize, kSize, kSize, &plain, 1);
+            const Pixel unmirrored = ReadPixel(fbWidth / 2, fbHeight / 2);
+            runner::MeshDraw both[2] = {plain, plain};
+            both[1].model.m[0] = -1.f;
+            both[0].model = engine_core::matrix4_translation(0.f, 0.f, -30.f);  // hidden behind it, same slot
+            batcher.draw(0, 0, kSize, kSize, kSize, kSize, both, 2);
+            const Pixel mirrored = ReadPixel(fbWidth / 2, fbHeight / 2);
+            Expect(batcher.stats().runs == 2, "IN3 a mirrored cube draws in a run of its own");
+            Expect(std::abs(Sum(mirrored) - Sum(unmirrored)) <= 3,
+                   "IN3 and shows its outside (" + Text(mirrored) + " against " + Text(unmirrored) + ")");
+
+            // Slot 0 never batches.
+            const runner::MeshDraw loose[3] = {
+                runner::MeshDraw{&instanceCube, engine_core::matrix4_translation(-1.5f, 0.f, 0.f)},
+                runner::MeshDraw{&instanceCube, engine_core::matrix4_identity()},
+                runner::MeshDraw{&instanceCube, engine_core::matrix4_translation(1.5f, 0.f, 0.f)}};
+            batcher.draw(0, 0, kSize, kSize, kSize, kSize, loose, 3);
+            Expect(batcher.stats().runs == 3, "IN4 slot 0 draws each alone");
+            Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "instancing leaves no GL error");
+            batcher.shutdown();
+            instanceCube.destroy();
+        }
+
+        if (argc == 3 && (std::string(argv[1]) == "--save" || std::string(argv[1]) == "--compare")) {
+            GpuMesh regressionCube;
+            regressionCube.upload(Cube());
+            SaveOrCompareRegression(RegressionFrames(&regressionCube, kSize, fbWidth, fbHeight), argv[1], argv[2]);
+            regressionCube.destroy();
+        }
+
         meshes.clear();
         renderer.shutdown();
     }

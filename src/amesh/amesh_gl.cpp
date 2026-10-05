@@ -101,6 +101,18 @@ void GpuMesh::draw_subset(std::size_t subset) const {
     draw_range(subsets_[subset].tri_begin, subsets_[subset].tri_count);
 }
 
+void GpuMesh::draw_instanced(int lod, int count) const {
+    if (!valid() || count <= 0) {
+        return;
+    }
+    if (lod < 0 || static_cast<std::size_t>(lod) >= lods_.size()) {
+        throw std::out_of_range("GpuMesh::draw_instanced: LOD " + std::to_string(lod) + " of " +
+                                std::to_string(lods_.size()));
+    }
+    draw_range_instanced(lods_[static_cast<std::size_t>(lod)].tri_begin,
+                         lods_[static_cast<std::size_t>(lod)].tri_count, count);
+}
+
 #ifdef AE_MESH_NO_GL
 
 void GpuMesh::upload(const Data& data, bool) {
@@ -109,6 +121,7 @@ void GpuMesh::upload(const Data& data, bool) {
 }
 void GpuMesh::bind() const {}
 void GpuMesh::draw_range(std::uint32_t, std::uint32_t) const {}
+void GpuMesh::draw_range_instanced(std::uint32_t, std::uint32_t, int) const {}
 void GpuMesh::destroy() {
     lods_.clear();
     subsets_.clear();
@@ -216,6 +229,16 @@ void GpuMesh::draw_range(std::uint32_t tri_begin, std::uint32_t tri_count) const
     const std::size_t first_index = std::size_t{tri_begin} * 3;
     glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(std::size_t{tri_count} * 3), GL_UNSIGNED_INT,
                    reinterpret_cast<const void*>(first_index * sizeof(std::uint32_t)));
+}
+
+void GpuMesh::draw_range_instanced(std::uint32_t tri_begin, std::uint32_t tri_count, int instances) const {
+    if (tri_count == 0) {
+        return;
+    }
+    const std::size_t first_index = std::size_t{tri_begin} * 3;
+    glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(std::size_t{tri_count} * 3), GL_UNSIGNED_INT,
+                            reinterpret_cast<const void*>(first_index * sizeof(std::uint32_t)),
+                            static_cast<GLsizei>(instances));
 }
 
 void GpuMesh::destroy() {

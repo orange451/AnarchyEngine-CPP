@@ -286,6 +286,9 @@ private:
     std::chrono::steady_clock::time_point graphicsRetryAt_{};
     // Waiting for the next paint's pixels. UI thread only.
     std::vector<std::function<void(ViewPixels)>> captures_;
+    // ANARCHY_RENDER_STATS: when the stats were last printed, so each view
+    // prints at most once a second of its own.
+    std::chrono::steady_clock::time_point statsPrinted_{};
 };
 
 }  // namespace runner

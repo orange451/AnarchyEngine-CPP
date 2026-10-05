@@ -47,6 +47,8 @@ set(STUDIO_CORE_SOURCES
     src/runner/SkyMath.cpp
     src/runner/ShadowAtlas.cpp
     src/runner/ShadowPlanner.cpp
+    src/runner/Visibility.cpp
+    src/runner/DrawBatches.cpp
     src/runner/GamePack.cpp
     src/ide/AssetBrowser.cpp
     src/ide/ColorLiterals.cpp
@@ -80,6 +82,7 @@ set(STUDIO_SOURCES
     src/runner/Renderer.cpp
     src/runner/GpuTimer.cpp
     src/runner/ShadowRenderer.cpp
+    src/runner/InstanceBuffer.cpp
     src/runner/EnvironmentMap.cpp
     src/runner/MeshCache.cpp
     src/runner/TextureCache.cpp
@@ -867,6 +870,8 @@ add_executable(sandbox
     sandbox/sky_math_tests.cpp
     sandbox/shadow_atlas_tests.cpp
     sandbox/shadow_planner_tests.cpp
+    sandbox/visibility_tests.cpp
+    sandbox/draw_batches_tests.cpp
     sandbox/event_args_tests.cpp
     sandbox/core_tests.cpp
     sandbox/archivable_tests.cpp

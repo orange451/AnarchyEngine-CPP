@@ -2,14 +2,17 @@
 
 #include "BloomMath.hpp"
 #include "DraggerMath.hpp"
+#include "DrawBatches.hpp"
 #include "EnvironmentMap.hpp"
 #include "GpuTimer.hpp"
 #include "GridBands.hpp"
+#include "InstanceBuffer.hpp"
 #include "Matrix4.hpp"
 #include "SceneDepth.hpp"
 #include "ShadowRenderer.hpp"
 #include "SkyMath.hpp"
 #include "ViewCapture.hpp"
+#include "Visibility.hpp"
 
 #include <cstdint>
 #include <initializer_list>
@@ -31,6 +34,7 @@ struct MeshDraw {
     // A GL texture, sampled at the mesh's UVs. 0 draws white.
     unsigned texture = 0;
     // RGBA, 0 to 1, as the Material's Color3 holds it (sRGB). Alpha is unused.
+    // The GameObject's Color is tint, not multiplied in here.
     float color[4] = {1.f, 1.f, 1.f, 1.f};
     // The Material's other textures. 0 is none: no normal map, and the
     // roughness, metalness, and emissive values alone.
@@ -48,6 +52,12 @@ struct MeshDraw {
     // The instance that draws it, or 0. A light never shadows itself, so
     // meshes whose owner is a LightDraw's id cast nothing for that light.
     std::uint64_t owner = 0;
+    // The GameObject's Color, as its Color3 holds it (sRGB). It multiplies color.
+    float tint[3] = {1.f, 1.f, 1.f};
+    // Which Prefab Model it draws, numbered from 1 each frame. Draws with the
+    // same slot share a mesh and every Material value, and draw as one
+    // instanced call. 0 draws alone.
+    std::uint32_t slot = 0;
 };
 
 // A PointLight, SpotLight, or DirectionalLight, in world space.
@@ -77,6 +87,20 @@ struct LightDraw {
 // The DynamicSky's light from state: directional, id 0, shining the way
 // opposite state.light.toward, with kSkyShadowDistance.
 LightDraw SkyLightDraw(const SkyState& state, bool shadows);
+
+// What the last draw did with its meshes.
+struct RenderStats {
+    // MeshDraws given.
+    int draws = 0;
+    // Opaque and see-through draws in view.
+    int visible = 0;
+    // Drawable, but outside the view.
+    int culled = 0;
+    // Draw calls the geometry pass made.
+    int runs = 0;
+    // GpuMesh::draw_instanced calls in every pass, shadows included.
+    int instancedCalls = 0;
+};
 
 // The Skybox, as the renderer reads it. Each image is a GL texture as
 // TextureCache::getEnvironment uploads it, with its revision.
@@ -242,6 +266,10 @@ public:
     void setShadowSettings(const ShadowSettings& settings) { shadowSettings_ = settings; }
     // The shadow atlas texture's pages (ShadowRenderer::atlasPages), 0 with none.
     int shadowAtlasPages() const { return shadows_.atlasPages(); }
+    // Whether meshes outside the view are skipped: true unless turned off to compare.
+    void setCulling(bool culling) { culling_ = culling; }
+    // The last draw's counts. Zero for a draw that drew no meshes.
+    const RenderStats& stats() const { return stats_; }
 
     // x, y, width, and height are the pane in window points, origin at the top
     // left. sceneWidth and sceneHeight are the window in the same units.
@@ -425,11 +453,11 @@ private:
     void createSphere();
 
     // Each pass is false, having stopped before its first draw, when its program cannot draw yet.
-    bool geometryPass(const MeshDraw* meshes, int count, const float* projection);
+    bool geometryPass(const MeshDraw* meshes, const float* projection);
     bool lightPass(const float* projection, const float* inverseProjection);
     // The Skybox where no opaque surface was drawn. True with no Skybox.
     bool skyPass(const float* inverseProjection);
-    bool transparencyPass(const MeshDraw* meshes, int count, const float* projection, const float* inverseProjection);
+    bool transparencyPass(const MeshDraw* meshes, const float* projection, const float* inverseProjection);
     bool mergePass(bool reflected, const float* inverseProjection);
     // Screen-space reflections into reflectionTexture_, from the lit opaque
     // image. False, with nothing to resolve, when none are asked for, the
@@ -484,8 +512,12 @@ private:
     bool updateDynamicSkyLighting();
     // Whether this draw's sky is the DynamicSky.
     bool dynamicSkyDrawn() const { return lighting_.dynamicSky.enabled && dynamicSkyBuilt_; }
+    // The camera as the shadow planner and visibility see it, for this frame's targets.
+    CameraView cameraView(const float* projection) const;
+    // Fills drawItems_ from meshes and finds what the camera sees into visibility_.
+    void findVisible(const MeshDraw* meshes, int count, const CameraView& camera);
     // Draws this frame's due shadow maps, before the G-buffer, and fills shadowLookups_.
-    bool shadowPass(const MeshDraw* meshes, int count, const float* projection);
+    bool shadowPass(const MeshDraw* meshes, int count, const CameraView& camera);
     // Points program at lookup's map, and every shadow sampler at a texture of its kind.
     void bindShadow(const Program& program, const ShadowLookup& lookup);
 
@@ -658,8 +690,12 @@ private:
 
     // Per draw, reused.
     std::vector<ViewLight> viewLights_;
-    std::vector<int> transparent_;
-    std::vector<float> transparentDepth_;
+    DrawBatches batches_;
+    InstanceBuffer instances_;
+    std::vector<DrawItem> drawItems_;
+    VisibilityResult visibility_;
+    bool culling_ = true;
+    RenderStats stats_;
     std::vector<ShadowRequest> shadowRequests_;
     std::vector<ShadowLookup> shadowLookups_;
     // The first shadowed DirectionalLight this frame, if any, and its lookup.

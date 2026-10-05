@@ -154,3 +154,43 @@ TEST_CASE("AO4 scripts make an AmbientOcclusionEffect and set it", "[occlusion]"
         REQUIRE(value);
     }
 }
+
+TEST_CASE("AO3 the snapshot carries the first AmbientOcclusionEffect under Lighting", "[occlusion][render]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    const auto frame = [&] {
+        pump.prepare_copy(game);
+        pump.publish();
+    };
+    frame();
+    REQUIRE_FALSE(pump.front().occlusion.present);
+
+    const InstanceId lighting = game.scene_service("Lighting");
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    game.set_parent(folder.id(), lighting);
+    AmbientOcclusionEffect& first = add_occlusion(game, folder.id());
+    AmbientOcclusionEffect& second = add_occlusion(game, lighting);
+    REQUIRE_FALSE(first.set_enabled(false));
+    REQUIRE_FALSE(first.set_intensity(2.0));
+    REQUIRE_FALSE(first.set_radius(3.0));
+    REQUIRE_FALSE(first.set_quality(2));
+    REQUIRE_FALSE(second.set_radius(7.0));
+    frame();
+    {
+        const engine_core::VisualAmbientOcclusion& ao = pump.front().occlusion;
+        REQUIRE(ao.present);
+        REQUIRE_FALSE(ao.enabled);
+        REQUIRE(ao.intensity == 2.f);
+        REQUIRE(ao.radius == 3.f);
+        REQUIRE(ao.quality == 2);
+    }
+    game.destroy(first.id());
+    frame();
+    REQUIRE(pump.front().occlusion.radius == 7.f);
+    REQUIRE(pump.front().occlusion.quality == 1);
+    game.destroy(second.id());
+    frame();
+    REQUIRE_FALSE(pump.front().occlusion.present);
+}

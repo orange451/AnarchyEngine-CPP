@@ -713,6 +713,7 @@ bool IdeLayout::open_project_at(const std::filesystem::path& root) {
 
 bool IdeLayout::save_open_project(std::function<void()> then,
                                   const std::vector<engine_core::SaveConflict>* overwrite) {
+    save_failure_.clear();
     // A check first: what only the disk changed loads, and what both changed
     // stops the save and asks. When the check cannot run, during a test or with
     // src/ unreadable, the save's own guard still stops at a changed file.
@@ -742,6 +743,7 @@ bool IdeLayout::save_open_project(std::function<void()> then,
         return false;
     }
     if (!error.empty()) {
+        save_failure_ = error;
         show_error("Could not save project", error);
         return false;
     }
@@ -759,10 +761,9 @@ bool IdeLayout::save_open_project(std::function<void()> then,
 
 void IdeLayout::confirm_overwrite(const std::vector<engine_core::SaveConflict>& conflicts,
                                   std::function<void()> then, GateRows from) {
-    runner_.simulation().scripts().append_output(
-        engine_core::ScriptRuntime::OutputKind::Error,
-        "Not saved: " + engine_core::describe_conflict(conflicts.front()) +
-            (conflicts.size() > 1 ? " (and " + std::to_string(conflicts.size() - 1) + " more)" : std::string()));
+    save_failure_ = "Not saved: " + engine_core::describe_conflict(conflicts.front()) +
+                    (conflicts.size() > 1 ? " (and " + std::to_string(conflicts.size() - 1) + " more)" : std::string());
+    runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error, save_failure_);
     if (scene_ == nullptr || prompt_open_) {
         return;
     }
@@ -865,13 +866,50 @@ void IdeLayout::export_game() {
     if (exporting_ || dialog_open_ || prompt_open_) {
         return;
     }
-    // The game is the project as it is on disk, so changes are saved first,
-    // with what writes outside any recording changed.
-    if (!project_ || export_needs_save()) {
-        save_project([this] { export_saved_game(); });
+    // The game is the project as it is on disk, so changes, with what writes
+    // outside any recording changed, are saved first, once asked.
+    if (project_ && !export_needs_save()) {
+        export_saved_game();
         return;
     }
-    export_saved_game();
+    if (scene_ == nullptr) {
+        return;
+    }
+    prompt_open_ = true;
+    const jadefx::ButtonType save("Save", jadefx::ButtonType::Data::OkDone);
+    auto alert = std::make_shared<jadefx::Alert>(
+        jadefx::AlertType::Warning,
+        project_ ? "The game is exported from the project as it is saved on disk."
+                 : "The game is exported from a project folder, so the place is saved as a project first.",
+        std::vector<jadefx::ButtonType>{save, jadefx::ButtonType::Cancel()});
+    alert->setTitle("Anarchy Engine");
+    alert->setHeaderText(project_ ? "Save changes before exporting?" : "Save the place before exporting?");
+    alert->setOnClosed([this, save](const jadefx::ButtonType* choice) {
+        prompt_open_ = false;
+        if (choice == nullptr || *choice != save) {
+            return;
+        }
+        // A test holds changes back from disk.
+        if (in_test()) {
+            stop_test();
+        }
+        save_project([this] { export_saved_game(); });
+    });
+    alerts_.erase(std::remove_if(alerts_.begin(), alerts_.end(),
+                                 [](const std::shared_ptr<jadefx::Alert>& item) {
+                                     return !item || item->getResult() != nullptr;
+                                 }),
+                  alerts_.end());
+    alert->show(*scene_);
+    // Stable names for the answers, so a test can find them.
+    const std::pair<const jadefx::ButtonType*, const char*> ids[] = {{&save, "export-save"},
+                                                                     {&jadefx::ButtonType::Cancel(), "export-cancel"}};
+    for (const auto& [type, id] : ids) {
+        if (jadefx::Button* button = alert->lookupButton(*type)) {
+            button->setElementId(id);
+        }
+    }
+    alerts_.push_back(std::move(alert));
 }
 
 void IdeLayout::export_saved_game() {
@@ -918,6 +956,7 @@ void IdeLayout::export_saved_game() {
 }
 
 bool IdeLayout::save_project_to(const std::filesystem::path& root) {
+    save_failure_.clear();
     flush_editors();
     std::string error;
     run_now([&](engine_core::DataModel& game) {
@@ -932,6 +971,7 @@ bool IdeLayout::save_project_to(const std::filesystem::path& root) {
         }
     });
     if (!error.empty()) {
+        save_failure_ = error;
         show_error("Could not save project", error);
         return false;
     }

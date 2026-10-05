@@ -197,6 +197,41 @@ void IdeLayout::start_mcp() {
             }
         });
     };
+    studio.save_place = [this, on_ui](const std::string& folder) {
+        // Shared, since a task that runs after a timed-out wait still writes it.
+        auto out = std::make_shared<engine_core::JsonValue>();
+        on_ui([this, folder, out] {
+            bool saved = false;
+            if (!folder.empty()) {
+                saved = save_project_to(path_from_utf8(folder));
+            } else if (!project_) {
+                throw std::runtime_error("The place has never been saved. Give folder to save it there, as Save "
+                                         "As does.");
+            } else {
+                saved = save_open_project();
+            }
+            if (!saved) {
+                throw std::runtime_error(save_failure_.empty() ? std::string("Not saved.") : save_failure_);
+            }
+            engine_core::JsonValue result = engine_core::JsonValue::object();
+            result.set("project", engine_core::JsonValue::string(project_->name()));
+            result.set("folder", engine_core::JsonValue::string(utf8_path(project_->root())));
+            if (folder.empty()) {
+                const engine_core::Project::SaveReport& report = project_->last_save();
+                const std::pair<const char*, const std::vector<std::string>*> lists[] = {
+                    {"written", &report.written}, {"moved", &report.moved}, {"removed", &report.removed}};
+                for (const auto& [key, files] : lists) {
+                    std::vector<engine_core::JsonValue> items;
+                    for (const std::string& file : *files) {
+                        items.push_back(engine_core::JsonValue::string(file));
+                    }
+                    result.set(key, engine_core::JsonValue::array(std::move(items)));
+                }
+            }
+            *out = std::move(result);
+        });
+        return *out;
+    };
     auto identity = std::make_shared<McpIdentity>();
     studio.info = [identity] {
         std::lock_guard<std::mutex> guard(identity->mu);

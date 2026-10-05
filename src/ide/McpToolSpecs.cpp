@@ -188,6 +188,23 @@ constexpr SpecText kSpecs[] = {
      R"({"type":"object","properties":{
          "action":{"type":"string","enum":["list","select","close","open"],"description":"Default list."},
          "tab":{"type":"string","description":"The tab's title or window's name, such as Scene View or Welcome. Required except for list."}}})"},
+    {"save_place",
+     "Saves the place to its project folder, as File > Save does: only files that changed are written, "
+     "and open script editors' typing is saved with it. During a test it saves the place as it was at "
+     "Test, so play edits stay out. When a file changed on disk since the last load or save, nothing "
+     "is written: the error names the file, and the studio asks whether to overwrite. A place never "
+     "saved needs folder. With folder, saves the whole project there, as Save As does, and the studio "
+     "works in that folder from then on. Returns the project's name and folder, and what a Save wrote, "
+     "moved, and removed.",
+     R"({"type":"object","properties":{
+         "folder":{"type":"string","description":"Save As: an absolute path to save the project in."}}})"},
+    {"gpu_detail",
+     "Whether the profiler times each render pass on the GPU, rather than the whole 3D draw once a "
+     "frame: the profiler's GPU button. Per-pass detail shows which pass costs the most in get_profile, "
+     "but on macOS each timed pass stalls the CPU, so it inflates what it measures and slows the frame. "
+     "Without on it flips. Returns whether it is on now.",
+     R"({"type":"object","properties":{
+         "on":{"type":"boolean","description":"true times each pass, false the whole frame. Default: the opposite of now."}}})"},
     {"get_studio_info",
      "Which studio this is: its project's name and folder, its process id, and its MCP port. "
      "Several studios may be open at once; check this before editing when it matters which.",

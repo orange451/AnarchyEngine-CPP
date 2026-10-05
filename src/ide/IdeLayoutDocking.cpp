@@ -534,7 +534,8 @@ void IdeLayout::open_landing() {
             close_landing();
         });
     };
-    actions.open_project = [this] { open_project([this] { close_landing(); }); };
+    // Opening a project closes the page itself.
+    actions.open_project = [this] { open_project(); };
     actions.show_assets = [this] { open_window(*assets_window_); };
     actions.open_preferences = [this] { open_preferences(); };
     actions.set_show_on_startup = [this](bool show) {

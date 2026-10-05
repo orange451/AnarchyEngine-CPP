@@ -861,9 +861,15 @@ int main() {
         layout.simulation().on_simulation([&](engine_core::DataModel&) { engine_core::Project::create(root); });
         engine_core::ScriptRuntime& scripts = layout.simulation().scripts();
         const std::uint64_t before = scripts.output_next();
+        // AnarchyStudio <folder> opens the project this way, over a Welcome page shown at startup.
+        layout.open_landing();
+        scene->layout(1280, 800, 1.95);
+        expect(shown_pane("Welcome") != nullptr, "the Welcome page is in front before the project opens");
         layout.open_project_at(root);
         scene->layout(1280, 800, 2.0);
         scene->layout(1280, 800, 2.05);
+        expect(shown_pane("Welcome") == nullptr && shown_pane("Scene View") != nullptr,
+               "opening a project closes the Welcome page and shows the scene view");
         jadefx::Label* toast = nullptr;
         for (jadefx::Node* node : scene->getElementsByClassName("toast")) {
             auto* label = dynamic_cast<jadefx::Label*>(node);

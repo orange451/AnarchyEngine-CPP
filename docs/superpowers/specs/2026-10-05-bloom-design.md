@@ -29,7 +29,7 @@ A value that is not finite is refused. The names and Size's range follow Roblox'
 
 ### Where it runs
 
-A new `Renderer::bloomPass()` runs after `mergePass()` and before the tone map, on the linear HDR merge image, so see-through surfaces and emissive glow bloom too. It is profiled as the `"Bloom"` pass. When bloom is off it does nothing, and the tone map gets Intensity 0 and a black texture.
+A new `Renderer::bloomPass()` runs after `mergePass()` and before the tone map, on the linear HDR merge image, so see-through surfaces and emissive glow bloom too. It is profiled as the `"Bloom"` pass. When bloom is off it does nothing, and the tone map gets Intensity 0 (with the white texture bound, so the sampler stays loadable) and skips the mix.
 
 ### The chain
 
@@ -47,13 +47,14 @@ A new `Renderer::bloomPass()` runs after `mergePass()` and before the tone map, 
 
 ### Up
 
-`bloom_up.frag` reads the smaller level through a 3×3 tent at `BloomMath`'s radius and adds it (blend ONE, ONE) into the next larger level, which still holds its own downsample. This repeats from the smallest level used back up to level 1.
+`bloom_up.frag` reads the smaller level through a 3×3 tent at `BloomMath`'s radius and adds it (blend ONE, ONE) into the next larger level, which still holds its own downsample. This repeats from the smallest level used back up to level 1, which ends up the sum of every level, so the combine divides it by the number of levels.
 
 ### Combine
 
 `tonemap.frag` samples level 1 bilinearly before tone mapping:
 
 ```
+bloom = level1 / levels
 rgb = scene + Intensity × (bloom − brightPart(scene))
 ```
 
@@ -77,15 +78,16 @@ The tone-mapping curve (still Hable; replacing it is a decision of its own), len
 ## Tests
 
 - `sandbox/bloom_tests.cpp`: setters and clamping, refusal of values that are not finite, undo, save and load, Stop, placement (only under Lighting, through Folders), the first-BloomEffect rule, and scripts setting each property.
-- `tests/BloomMathTest.cpp`:
+- `sandbox/bloom_math_tests.cpp`, beside `shadow_math_tests.cpp`:
   - Size to level count and tent radius, giving the same spread relative to the pane at 540, 1080, and 2160 pixels tall;
   - the 2-pixel and 8-level limits, and Size 0;
-  - the knee: 0 below threshold − knee, continuous across the knee, and the identity well above the threshold.
+  - the knee: 0 below threshold − knee, continuous across the knee, and exactly brightness − threshold above it.
 - `tests/SceneRenderCheck.cpp`, with no GL errors throughout:
   - an emissive cube on an empty pane lights pixels just outside its edge with bloom, and not without;
   - with a high Threshold, a dim cube gets no halo while a bright emissive one does;
-  - Threshold 0 keeps the image's total light within a tolerance of the image without bloom;
+  - at Threshold 0 light moves out of the cube, not only added: a pixel just inside its edge gets darker (exact conservation is not testable on tone-mapped 8-bit pixels);
   - Enabled false and Intensity 0 each match the image without bloom exactly;
   - far from the cube the pane's clear color is exact;
   - resizing the pane makes the chain again.
-- `tests/SceneFeedTest.cpp`: a BloomEffect's values reach `SceneLighting`, and removing it turns bloom off.
+- `tests/SceneFeedTest.cpp`: `VisualBloom` rides through the feed. Removing the BloomEffect turns bloom off (BLM3 in `sandbox/bloom_tests.cpp`).
+- `GameView`'s copy into `SceneLighting` is five assignments and is covered by looking at the studio, not a test.

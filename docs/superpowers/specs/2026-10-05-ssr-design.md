@@ -53,24 +53,25 @@ Per pixel:
 3. Rebuild the view position from depth, and reflect the view ray about the normal. Rays pointing back toward the camera fade out (`ReflectionMath::FacingFade`).
 4. March the ray as a screen-space DDA (McGuire and Mara, 2014):
    - The ray is clipped to the near plane and to MaxDistance, and projected to both ends in full-resolution pixels.
-   - It is stepped with a pixel stride, at most 32 steps, offset by interleaved-gradient noise.
+   - It is stepped with a pixel stride, at most 32 steps, each landing mid-stride. There is no per-pixel jitter: without TAA to average it, jitter shows as stipple.
    - Reciprocal depth is interpolated, so depth along the ray is perspective-correct.
-   - A step hits when the ray is behind the depth buffer by less than a thickness proportional to view depth. That way rays do not hit the backs of thin walls.
-   - A hit is refined with 4 binary-search steps.
-5. Write rgb as the hit color from the lit chain, and alpha as confidence: the product of the screen-edge fade, the distance fade, the roughness fade, and the facing fade (all `ReflectionMath`). A miss writes 0.
+   - A step hits when the ray's depth across the whole step reaches the depth buffer's surface (`ReflectionMath::StepHits`), so a long stride cannot jump past it.
+   - A hit is refined with 4 binary-search steps, then kept only if the ray ended within a thickness proportional to view depth behind the surface (`BisectedHitHolds`). Otherwise the march goes on, so rays pass behind thin objects.
+   - A hit on a surface facing away from the ray (its own neighbors on a curved surface, or a back face) is skipped.
+5. Write rgb as the hit color from the lit chain, premultiplied by confidence, and alpha as confidence: the product of the screen-edge fade, the distance fade, the roughness fade, and the facing fade (all `ReflectionMath`). A miss writes 0.
 
 ### 3. The resolve (in `merge.frag`)
 
-- The merge upsamples the trace with a depth-aware 2×2 filter: the four half-size texels around the pixel, weighted by how close their depth is to the pixel's.
+- The merge upsamples the trace with a depth-aware 2×2 filter: the four half-size texels around the pixel, weighted by how close their depth is to the pixel's. Where all four missed, it skips the depth work.
 - Where the resulting confidence is above 0, and only there, it adds:
 
   ```
-  color += Intensity × confidence × weight × traced − Intensity × confidence × skyReflected
+  color += Intensity × (weight × traced − confidence × skyReflected)    (traced is premultiplied)
   ```
 
 - `skyReflection(...)` is factored out of `image_lighting.glsl`'s `skyLight`, and both `ibl.frag` and the merge call it. It returns the reflected light, `skyReflected`, which `skyLight` adds, and its `weight`, so the merge removes exactly what the IBL pass added:
   - with a Skybox: the prefiltered cube's light times the split-sum weight `F0 · brdf.x + brdf.y` and the Skybox's color and LightScale;
-  - with none: the legacy stand-in's reflection term (`skyRadiance × Fresnel × Ambient` in `ambientLight`), and that Fresnel as the weight.
+  - with none: the legacy stand-in's reflection term (`skyRadiance × Fresnel × Ambient` in `ambientLight`) as the light. The weight is Karis's analytic split-sum fit (2014), because the legacy Fresnel gives a mirror next to nothing.
 - `skyLight`'s output is unchanged by the factoring. The existing render checks pin that.
 
 ### Buffers and failure

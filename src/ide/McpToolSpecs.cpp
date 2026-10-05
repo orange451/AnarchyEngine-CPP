@@ -177,6 +177,17 @@ constexpr SpecText kSpecs[] = {
      "longer side. The view must be showing: a hidden tab or a minimized window does not draw.",
      R"({"type":"object","properties":{
          "max_size":{"type":"integer","minimum":64,"maximum":2048,"description":"Default 1024."}}})"},
+    {"tabs",
+     "The studio's tabs, as its docks show them. list, the default, returns each dock's tabs in "
+     "strip order, which one is in front, and the windows that are closed. select brings an open "
+     "tab to the front, as clicking it does: screenshot needs the Scene View in front, and the "
+     "Welcome page covers it when the studio starts. close closes a tab, as its x does; the Scene "
+     "View cannot be closed. open docks a closed window from the closed list, as the Window menu "
+     "does, or brings an open one to the front. A tab is named by its title or its window's name, "
+     "ignoring case. Every action returns the tabs as they are after it.",
+     R"({"type":"object","properties":{
+         "action":{"type":"string","enum":["list","select","close","open"],"description":"Default list."},
+         "tab":{"type":"string","description":"The tab's title or window's name, such as Scene View or Welcome. Required except for list."}}})"},
     {"get_studio_info",
      "Which studio this is: its project's name and folder, its process id, and its MCP port. "
      "Several studios may be open at once; check this before editing when it matters which.",

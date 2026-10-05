@@ -148,6 +148,16 @@ public:
     void open_landing();
     // Closes the Welcome page's tab, if one is open.
     void close_landing();
+    // What the MCP tool tabs lists: docks, each with its tabs in strip order,
+    // and closed, the Window menu's windows no dock holds.
+    engine_core::JsonValue tab_list();
+    // The tab titled tab, or holding the page named tab, ignoring case: select
+    // brings it forward, and close closes it as its × does. open docks the
+    // Window menu's window, or the Welcome page, named tab, or brings it
+    // forward when it is open. Each throws, saying why, when it cannot.
+    void select_tab(const std::string& tab);
+    void close_tab(const std::string& tab);
+    void open_tab(const std::string& tab);
     // Compares the disk with the place: loads what only the disk changed, and
     // lists what both changed in the Conflicts window and as a count on the
     // ribbon. choices are applied too. Returns the rows still open, or nothing

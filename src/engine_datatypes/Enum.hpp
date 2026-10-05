@@ -45,6 +45,10 @@ const EnumType& transform_space_enum();
 enum class TransformSpace { World = 0, Local = 1 };
 // X 0, Y 1, Z 2, XY 3, YZ 4, XZ 5.
 const EnumType& dragger_handle_enum();
+// How the 3D scene's edges are smoothed: None 0, FXAA 1. Lighting.Antialiasing.
+const EnumType& antialiasing_mode_enum();
+// antialiasing_mode_enum's items, by value.
+enum class AntialiasingMode { None = 0, FXAA = 1 };
 
 // Every type the Enum global holds, for script analysis to declare.
 int enum_type_count();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Enum.hpp"
 #include "SceneService.hpp"
 
 #include <optional>
@@ -10,14 +11,15 @@ namespace engine_core {
 // How the scene is lit, set through its properties. Each is a saved registry
 // property (lua_saved_property), so DataModel saves, loads, undoes, and
 // restores it at Stop; this class keeps the values and checks them. The render
-// snapshot carries Ambient, Exposure, Saturation, and Gamma (VisualLighting);
-// the renderer does not read Brightness yet.
+// snapshot carries Ambient, Exposure, Saturation, Gamma, and Antialiasing
+// (VisualLighting); the renderer does not read Brightness yet.
 //
 // Ambient     Color3  the light every surface gets, from no direction.
 // Brightness  number  how strong the sun is. Not below 0.
 // Exposure    number  how much the camera takes in before tone mapping. Not below 0.
 // Saturation  number  1 leaves color as it is, 0 is gray. Not below 0.
 // Gamma       number  the display's gamma the image is corrected for. Not below 0.
+// Antialiasing  Enum.AntialiasingMode  how the 3D scene's edges are smoothed. FXAA.
 class Lighting : public SceneService {
 public:
     static constexpr ColorRgb kDefaultAmbient{0.5f, 0.5f, 0.5f, 1.f};
@@ -25,6 +27,7 @@ public:
     static constexpr double kDefaultExposure = 1.0;
     static constexpr double kDefaultSaturation = 1.2;
     static constexpr double kDefaultGamma = 2.2;
+    static constexpr AntialiasingMode kDefaultAntialiasing = AntialiasingMode::FXAA;
 
     using SceneService::SceneService;
     const char* class_name() const override;
@@ -41,6 +44,9 @@ public:
     std::optional<std::string> set_saturation(double value);
     double gamma() const { return gamma_; }
     std::optional<std::string> set_gamma(double value);
+    AntialiasingMode antialiasing() const { return antialiasing_; }
+    // An Enum.AntialiasingMode's value; any other is refused.
+    std::optional<std::string> set_antialiasing(int mode);
 
 private:
     std::optional<std::string> set_number(const char* property, double& slot, double value);
@@ -51,6 +57,7 @@ private:
     double exposure_ = kDefaultExposure;
     double saturation_ = kDefaultSaturation;
     double gamma_ = kDefaultGamma;
+    AntialiasingMode antialiasing_ = kDefaultAntialiasing;
 };
 
 }  // namespace engine_core

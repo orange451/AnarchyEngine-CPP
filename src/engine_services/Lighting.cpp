@@ -16,6 +16,14 @@ LuaSlot number_slot(double value) {
     return slot;
 }
 
+LuaSlot mode_slot(AntialiasingMode mode) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Enum;
+    slot.enum_type = &antialiasing_mode_enum();
+    slot.number = static_cast<int>(mode);
+    return slot;
+}
+
 LuaSlot color_slot(ColorRgb color) {
     LuaSlot slot;
     slot.kind = LuaSlot::Kind::Color;
@@ -78,6 +86,23 @@ std::optional<std::string> Lighting::set_saturation(double value) {
 
 std::optional<std::string> Lighting::set_gamma(double value) { return set_number("Gamma", gamma_, value); }
 
+std::optional<std::string> Lighting::set_antialiasing(int mode) {
+    if (!on_gameplay_thread()) {
+        contract_fail("Lighting setters run on SimulationThread");
+    }
+    if (enum_item_name(antialiasing_mode_enum(), mode) == nullptr) {
+        return std::string("Antialiasing must be an Enum.AntialiasingMode");
+    }
+    const AntialiasingMode next = static_cast<AntialiasingMode>(mode);
+    if (next == antialiasing_) {
+        return std::nullopt;
+    }
+    const AntialiasingMode previous = antialiasing_;
+    antialiasing_ = next;
+    note_property_change("Antialiasing", mode_slot(previous), mode_slot(next));
+    return std::nullopt;
+}
+
 namespace {
 
 Lighting* lighting_of(DataModel& object) { return dynamic_cast<Lighting*>(&object); }
@@ -122,6 +147,27 @@ bool write_number(DataModel&, DataModel& object, LuaSlot& in) {
     return lighting != nullptr && refuse(in, (lighting->*Set)(in.number));
 }
 
+bool read_antialiasing(DataModel&, DataModel& object, LuaSlot& out) {
+    Lighting* lighting = lighting_of(object);
+    if (lighting == nullptr) {
+        return false;
+    }
+    out = mode_slot(lighting->antialiasing());
+    return true;
+}
+
+bool write_antialiasing(DataModel&, DataModel& object, LuaSlot& in) {
+    Lighting* lighting = lighting_of(object);
+    if (lighting == nullptr) {
+        return false;
+    }
+    if (in.kind != LuaSlot::Kind::Enum || in.enum_type != &antialiasing_mode_enum()) {
+        in.error = "Antialiasing must be an Enum.AntialiasingMode";
+        return false;
+    }
+    return refuse(in, lighting->set_antialiasing(static_cast<int>(in.number)));
+}
+
 std::string number_json(double value) { return write_json(JsonValue::number(value)); }
 
 std::string color_json(ColorRgb color) {
@@ -150,6 +196,7 @@ ANARCHY_LUA_REGISTER(register_lighting_lua) {
         lua_slider(lua_saved_property("Gamma", "number", read_number<&Lighting::gamma>,
                                       write_number<&Lighting::set_gamma>, gamma.c_str()),
                    0.0, 4.0),
+        lua_saved_enum("Antialiasing", antialiasing_mode_enum(), read_antialiasing, write_antialiasing, "\"FXAA\""),
     };
     register_lua_class("Lighting", "SceneService", fields, static_cast<int>(sizeof(fields) / sizeof(fields[0])));
 }

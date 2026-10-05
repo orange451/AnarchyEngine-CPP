@@ -13,7 +13,7 @@ Everything in the tree is a `DataModel`: it has `Name`, `Parent`, `FindFirstChil
 `game` holds five scene services and nothing else, in this order:
 
 - `Workspace` is what the place shows. Anything may go in it; what can render, renders.
-- `Lighting` is how the scene is lit, through its properties: `Ambient`, `Brightness`, `Exposure`, `Saturation`, and `Gamma`. The Scene View reads `Ambient`, `Exposure`, `Saturation`, and `Gamma`; `Brightness` is not drawn yet. Lights in it shine as they do in `Workspace`, and a `Skybox` in it is the sky, and a `BloomEffect` its bloom.
+- `Lighting` is how the scene is lit, through its properties: `Ambient`, `Brightness`, `Exposure`, `Saturation`, `Gamma`, and `Antialiasing`. `Antialiasing`, an `Enum.AntialiasingMode`, smooths the 3D scene's edges with `FXAA` (the default), or leaves them hard with `None`. The Scene View reads `Ambient`, `Exposure`, `Saturation`, and `Gamma`; `Brightness` is not drawn yet. Lights in it shine as they do in `Workspace`, and a `Skybox` in it is the sky, and a `BloomEffect` its bloom.
 - `Storage` keeps assets a place uses at runtime. Nothing in it renders or runs.
 - `Scripts` holds scripts that run at runtime.
 - `Gui` holds the screen GUIs: every `ScreenGui` in it is drawn over the Scene View, in edit mode and in play. Scripts in it run, as they do in `Workspace`.

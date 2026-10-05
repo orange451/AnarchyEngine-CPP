@@ -220,12 +220,15 @@ const EnumType kRollOffModeType{"RollOffMode", kRollOffModes, count_of(kRollOffM
 const EnumType kGuiAlignmentType{"GuiAlignment", kGuiAlignments, count_of(kGuiAlignments)};
 const EnumType kTransformSpaceType{"TransformSpace", kTransformSpaces, count_of(kTransformSpaces)};
 const EnumType kDraggerHandleType{"DraggerHandle", kDraggerHandles, count_of(kDraggerHandles)};
+// How the 3D scene's edges are smoothed. Later methods, such as TAA, are new entries.
+const EnumEntry kAntialiasingModes[] = {{"None", 0}, {"FXAA", 1}};
+const EnumType kAntialiasingModeType{"AntialiasingMode", kAntialiasingModes, count_of(kAntialiasingModes)};
 
 const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kRotationOrderType,
                                   &kKeyCodeType,        &kUserInputTypeType, &kUserInputStateType,
                                   &kMouseBehaviorType,  &kPhysicsShapeType,  &kRollOffModeType,
                                   &kGuiAlignmentType,   &kTransformSpaceType,  &kDraggerHandleType,
-                                  &kFinishRecordingOperationType};
+                                  &kFinishRecordingOperationType, &kAntialiasingModeType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -305,6 +308,7 @@ const EnumType& roll_off_mode_enum() { return kRollOffModeType; }
 const EnumType& gui_alignment_enum() { return kGuiAlignmentType; }
 const EnumType& transform_space_enum() { return kTransformSpaceType; }
 const EnumType& dragger_handle_enum() { return kDraggerHandleType; }
+const EnumType& antialiasing_mode_enum() { return kAntialiasingModeType; }
 
 int enum_item_value(const EnumType& type, std::string_view name) {
     for (int index = 0; index < type.count; ++index) {

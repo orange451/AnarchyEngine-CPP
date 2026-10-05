@@ -1021,6 +1021,9 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "number", false, {});
     add("Skybox", "Tint", "A color the sky and its light are multiplied by. White leaves them as they are.", "Color3",
         false, {});
+    add("Lighting", "Antialiasing",
+        "How the 3D scene's edges are smoothed: Enum.AntialiasingMode.FXAA, or None for hard pixel edges.",
+        "Enum.AntialiasingMode", false, {});
     add("BloomEffect", "Enabled", "When false, this BloomEffect draws no bloom.", "boolean", false, {});
     add("BloomEffect", "Intensity",
         "How much of the image moves into its blurred copy, from 0 to 1. 0 draws no bloom.", "number", false, {});

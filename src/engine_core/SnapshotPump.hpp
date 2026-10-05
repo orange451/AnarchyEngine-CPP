@@ -118,6 +118,8 @@ struct VisualLighting {
     float exposure = 1.f;
     float saturation = 1.2f;
     float gamma = 2.2f;
+    // Enum.AntialiasingMode's value: None 0, FXAA 1.
+    int antialiasing = 1;
 };
 
 // One Model's Mesh, as the renderer loads it: a file, or the geometry this

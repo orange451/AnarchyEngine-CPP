@@ -852,6 +852,7 @@ add_executable(sandbox
     sandbox/render_math_tests.cpp
     sandbox/shadow_math_tests.cpp
     sandbox/bloom_math_tests.cpp
+    sandbox/antialiasing_tests.cpp
     sandbox/shadow_atlas_tests.cpp
     sandbox/shadow_planner_tests.cpp
     sandbox/event_args_tests.cpp

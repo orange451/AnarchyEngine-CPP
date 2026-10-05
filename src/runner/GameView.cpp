@@ -421,6 +421,14 @@ void GameView::collectMeshes() {
     lighting.reflections.intensity = reflections.intensity;
     lighting.reflections.maxDistance = reflections.max_distance;
     lighting.reflections.maxRoughness = reflections.max_roughness;
+    // The AmbientOcclusionEffect, if any; with none, or one turned off, nothing is shaded.
+    const engine_core::VisualAmbientOcclusion& occlusion = snapshot.occlusion;
+    lighting.occlusion.enabled = occlusion.present && occlusion.enabled;
+    lighting.occlusion.intensity = occlusion.intensity;
+    lighting.occlusion.radius = occlusion.radius;
+    lighting.occlusion.quality = occlusion.quality == 0   ? SceneQuality::Low
+                                 : occlusion.quality == 2 ? SceneQuality::High
+                                                          : SceneQuality::Medium;
     renderer_.setLighting(lighting);
 }
 

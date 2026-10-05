@@ -1,12 +1,11 @@
 #version 330 core
 // The first light in the accumulation buffer: what the ambient and the sky
-// give every opaque surface (the legacy ibl.frag). Renderer puts
-// lighting.glsl, environment.glsl, and image_lighting.glsl in after the
-// #version line.
+// give every opaque surface (the legacy ibl.frag), shaded by ambient
+// occlusion. Renderer puts lighting.glsl, environment.glsl, occlusion.glsl
+// (which declares uDepth), and image_lighting.glsl in after the #version line.
 in vec2 vUv;
 out vec4 outColor;
 
-uniform sampler2D uDepth;
 uniform sampler2D uAlbedo;
 uniform sampler2D uNormal;
 uniform sampler2D uMaterial;
@@ -23,5 +22,8 @@ void main() {
     vec3 N = texture(uNormal, vUv).rgb;
     vec3 material = texture(uMaterial, vUv).rgb;
     vec3 albedo = texture(uAlbedo, vUv).rgb;
-    outColor = vec4(skyLight(viewDirection, N, albedo, material.x, material.y, material.z, uAmbient, uSkyRadiance), 1.0);
+    float occlusion = occlusionAt(vUv, depth);
+    outColor = vec4(skyLight(viewDirection, N, albedo, material.x, material.y, material.z, uAmbient, uSkyRadiance,
+                             occlusion),
+                    1.0);
 }

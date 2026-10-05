@@ -31,6 +31,25 @@ struct SkyReflection {
     vec3 weight;
 };
 
+// OcclusionMath's MultiBounce, per channel: exactly 1 when open.
+vec3 multiBounce(float visibility, vec3 albedo) {
+    if (visibility >= 1.0) {
+        return vec3(1.0);
+    }
+    vec3 a = 2.0404 * albedo - 0.3324;
+    vec3 b = -4.7951 * albedo + 0.6417;
+    vec3 c = 2.7552 * albedo + 0.6903;
+    return max(vec3(visibility), ((visibility * a + b) * visibility + c) * visibility);
+}
+
+// OcclusionMath's SpecularOcclusion: exactly 1 when open.
+float specularOcclusion(float visibility, float NdotV, float roughness) {
+    if (visibility >= 1.0) {
+        return 1.0;
+    }
+    return clamp(pow(NdotV + visibility, exp2(-16.0 * roughness - 1.0)) - 1.0 + visibility, 0.0, 1.0);
+}
+
 // What skyLight and skyReflection share with a Skybox.
 struct SkySurface {
     vec3 F0;
@@ -49,8 +68,10 @@ SkySurface skySurface(vec3 viewDirection, vec3 N, vec3 albedo, float metallic, f
     return s;
 }
 
+// occlusion is ambient occlusion's visibility, 1 open: it dims the light the
+// sky reflects (weight, the share of traced light, stays as it is).
 SkyReflection skyReflection(vec3 viewDirection, vec3 N, vec3 albedo, float metallic, float roughness,
-                            float reflectivity, vec3 ambient, vec3 skyRadiance) {
+                            float reflectivity, vec3 ambient, vec3 skyRadiance, float occlusion) {
     SkyReflection r;
     if (uSkyEnabled < 0.5) {
         // The stand-in's reflection is what ambientLight added, so it is
@@ -58,7 +79,9 @@ SkyReflection skyReflection(vec3 viewDirection, vec3 N, vec3 albedo, float metal
         // mirror next to nothing, though, so traced light is weighted
         // physically: Karis's analytic fit of the split-sum table (2014),
         // which needs no table.
-        r.light = skyRadiance * calculateFresnel(viewDirection, N, roughness, metallic, reflectivity) * ambient;
+        // skyLight multiplies all of ambientLight by multiBounce, this part with it.
+        r.light = skyRadiance * calculateFresnel(viewDirection, N, roughness, metallic, reflectivity) * ambient *
+                  multiBounce(occlusion, albedo);
         float NdotV = clamp(dot(N, -viewDirection), 1e-4, 1.0);
         vec3 F0 = mix(vec3(0.16 * reflectivity * reflectivity), albedo, metallic);
         vec4 fit = roughness * vec4(-1.0, -0.0275, -0.572, 0.022) + vec4(1.0, 0.0425, 1.04, -0.04);
@@ -71,21 +94,26 @@ SkyReflection skyReflection(vec3 viewDirection, vec3 N, vec3 albedo, float metal
     vec3 R = reflect(viewDirection, N);
     vec3 reflected = textureLod(uPrefiltered, uViewToSky * R, roughness * uPrefilteredMaxLod).rgb;
     r.weight = s.F0 * s.brdf.x + s.brdf.y;
-    r.light = reflected * r.weight * uSkyColor * uSkyLightScale;
+    float NdotV = clamp(dot(N, -viewDirection), 1e-4, 1.0);
+    r.light = reflected * r.weight * uSkyColor * uSkyLightScale * specularOcclusion(occlusion, NdotV, roughness);
     return r;
 }
 
-// viewDirection is the unit vector from the camera to the surface.
+// viewDirection is the unit vector from the camera to the surface. occlusion
+// is ambient occlusion's visibility, 1 open; with 1 nothing changes.
 vec3 skyLight(vec3 viewDirection, vec3 N, vec3 albedo, float metallic, float roughness, float reflectivity,
-              vec3 ambient, vec3 skyRadiance) {
+              vec3 ambient, vec3 skyRadiance, float occlusion) {
+    vec3 diffuseOcclusion = multiBounce(occlusion, albedo);
     if (uSkyEnabled < 0.5) {
-        return ambientLight(viewDirection, N, albedo, metallic, roughness, reflectivity, ambient, skyRadiance);
+        return ambientLight(viewDirection, N, albedo, metallic, roughness, reflectivity, ambient, skyRadiance) *
+               diffuseOcclusion;
     }
     SkySurface s = skySurface(viewDirection, N, albedo, metallic, roughness, reflectivity);
     vec3 kD = (vec3(1.0) - s.F) * (1.0 - metallic);
     vec3 irradiance = texture(uIrradiance, uViewToSky * N).rgb;
-    SkyReflection r = skyReflection(viewDirection, N, albedo, metallic, roughness, reflectivity, ambient, skyRadiance);
-    vec3 sky = kD * albedo * irradiance * uSkyColor * uSkyLightScale + r.light;
+    SkyReflection r =
+        skyReflection(viewDirection, N, albedo, metallic, roughness, reflectivity, ambient, skyRadiance, occlusion);
+    vec3 sky = kD * albedo * irradiance * diffuseOcclusion * uSkyColor * uSkyLightScale + r.light;
     // Lighting.Ambient lights every surface alike, as light from no direction.
-    return sky + albedo * (1.0 - metallic) * ambient / kPi;
+    return sky + albedo * (1.0 - metallic) * ambient / kPi * diffuseOcclusion;
 }

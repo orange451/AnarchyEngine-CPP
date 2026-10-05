@@ -55,6 +55,9 @@ engine_core::VisualSnapshot Frame(std::uint64_t number, std::size_t rows) {
     snapshot.reflections.max_distance = static_cast<float>(number);
     snapshot.occlusion.present = true;
     snapshot.occlusion.radius = static_cast<float>(number);
+    snapshot.dynamic_sky.present = true;
+    snapshot.dynamic_sky.time_of_day = static_cast<float>(number);
+    snapshot.dynamic_sky.sun_texture = "textures/" + std::to_string(number) + ".png";
     engine_core::VisualBillboard board;
     board.id = 99;
     board.anchor.x = static_cast<float>(number);
@@ -75,7 +78,10 @@ bool Whole(const engine_core::VisualSnapshot& snapshot) {
              snapshot.bloom.present && snapshot.bloom.size == static_cast<float>(snapshot.frame) &&
              snapshot.lighting.antialiasing == static_cast<int>(snapshot.frame % 2) &&
              snapshot.reflections.present && snapshot.reflections.max_distance == static_cast<float>(snapshot.frame) &&
-             snapshot.occlusion.present && snapshot.occlusion.radius == static_cast<float>(snapshot.frame) && snapshot.prefabs.size() == 2 && snapshot.prefabs[1].meshes.size() == 2 &&
+             snapshot.occlusion.present && snapshot.occlusion.radius == static_cast<float>(snapshot.frame) &&
+             snapshot.dynamic_sky.present && snapshot.dynamic_sky.time_of_day == static_cast<float>(snapshot.frame) &&
+             snapshot.dynamic_sky.sun_texture == "textures/" + std::to_string(snapshot.frame) + ".png" &&
+             snapshot.prefabs.size() == 2 && snapshot.prefabs[1].meshes.size() == 2 &&
              snapshot.prefabs[1].meshes[0].path == "meshes/" + std::to_string(snapshot.frame) + ".amesh" &&
              snapshot.prefabs[1].meshes[1].session != nullptr && snapshot.prefabs[1].meshes[1].revision == snapshot.frame)) &&
            (snapshot.frame == 0 ||

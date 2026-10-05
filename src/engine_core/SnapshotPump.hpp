@@ -84,9 +84,9 @@ struct VisualBillboard {
     bool always_on_top = false;
 };
 
-// The first Skybox under Lighting, in tree order, as the renderer reads it.
-// present is false with no Skybox, and image is empty when it has no Image;
-// either way the renderer draws no sky.
+// The first Skybox under Lighting, in tree order, when it comes before every
+// DynamicSky, as the renderer reads it. present is false with no Skybox, and
+// image is empty when it has no Image; either way the renderer draws no sky.
 struct VisualSky {
     bool present = false;
     // Texture Paths, relative to the resources folder. Empty for none.
@@ -98,6 +98,29 @@ struct VisualSky {
     float rotation = 0.f;
     // As the Color3 holds it.
     ColorRgb tint{1.f, 1.f, 1.f, 1.f};
+};
+
+// The first DynamicSky under Lighting, in tree order, as the renderer reads
+// it, when it comes before every Skybox; then VisualSky::present is false.
+// present is false otherwise, and the values are DynamicSky's defaults.
+struct VisualDynamicSky {
+    bool present = false;
+    float time_of_day = 14.f;
+    float latitude = 35.f;
+    float brightness = 3.f;
+    bool shadows = true;
+    float cloud_cover = 0.5f;
+    float cloud_density = 0.5f;
+    // Studs per second; Y is ignored.
+    Vec3 wind{1.f, 0.f, 0.3f};
+    // Texture Paths, relative to the resources folder. Empty for none.
+    std::string sun_texture;
+    std::string moon_texture;
+    // Degrees across.
+    float sun_size = 2.f;
+    float moon_size = 2.f;
+    // Enum.EffectQuality's value: Low 0, Medium 1, High 2.
+    int reflection_quality = 1;
 };
 
 // The first BloomEffect under Lighting, in tree order, as the renderer reads
@@ -199,6 +222,7 @@ struct VisualSnapshot {
     std::vector<VisualPrefab> prefabs;
     VisualLighting lighting;
     VisualSky sky;
+    VisualDynamicSky dynamic_sky;
     VisualBloom bloom;
     VisualReflections reflections;
     VisualAmbientOcclusion occlusion;
@@ -269,12 +293,16 @@ private:
     void set_row_prefab(VisualInstance& inst, const std::string& guid);
     // Fills base_.prefabs from each entry's Prefab, as the DataModel is now.
     void resolve_prefabs(DataModel& game);
-    // Fills base_.lighting, base_.sky, base_.bloom, base_.reflections, and
-    // base_.occlusion from the place's Lighting, as the DataModel is now.
+    // Fills base_.lighting, base_.sky, base_.dynamic_sky, base_.bloom,
+    // base_.reflections, and base_.occlusion from the place's Lighting, as
+    // the DataModel is now.
     void resolve_lighting(DataModel& game);
     // The first T under root, depth first in child order, or null.
     template <class T>
     const T* find_first(const DataModel& game, InstanceId root);
+    // The first instance under root, in tree order, that is any of T.
+    template <class... T>
+    const DataModel* find_first_of(const DataModel& game, InstanceId root);
 
     VisualSnapshot base_{};
     VisualSnapshot buffers_[2]{};

@@ -212,3 +212,105 @@ TEST_CASE("DS4 scripts make a DynamicSky and set it", "[dynamic_sky]") {
         REQUIRE(value);
     }
 }
+
+TEST_CASE("DS3 the snapshot carries the first DynamicSky under Lighting", "[dynamic_sky][render]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    const auto frame = [&] {
+        pump.prepare_copy(game);
+        pump.publish();
+    };
+    frame();
+    // With none, the class's defaults.
+    {
+        const engine_core::VisualDynamicSky& sky = pump.front().dynamic_sky;
+        REQUIRE_FALSE(sky.present);
+        REQUIRE(sky.time_of_day == static_cast<float>(DynamicSky::kDefaultTimeOfDay));
+        REQUIRE(sky.latitude == static_cast<float>(DynamicSky::kDefaultLatitude));
+        REQUIRE(sky.brightness == static_cast<float>(DynamicSky::kDefaultBrightness));
+        REQUIRE(sky.shadows == DynamicSky::kDefaultShadows);
+        REQUIRE(sky.cloud_cover == static_cast<float>(DynamicSky::kDefaultCloudCover));
+        REQUIRE(sky.cloud_density == static_cast<float>(DynamicSky::kDefaultCloudDensity));
+        REQUIRE(sky.wind.x == DynamicSky::kDefaultWindDirection.x);
+        REQUIRE(sky.wind.z == DynamicSky::kDefaultWindDirection.z);
+        REQUIRE(sky.sun_size == static_cast<float>(DynamicSky::kDefaultSunSize));
+        REQUIRE(sky.moon_size == static_cast<float>(DynamicSky::kDefaultMoonSize));
+        REQUIRE(sky.reflection_quality == static_cast<int>(DynamicSky::kDefaultReflectionQuality));
+        REQUIRE(sky.sun_texture.empty());
+    }
+
+    const InstanceId lighting = game.scene_service("Lighting");
+    engine_core::Texture& sun = add_texture(game, "Sun", "textures/sun.png");
+    DynamicSky& sky = add_dynamic_sky(game, lighting);
+    REQUIRE_FALSE(sky.set_time_of_day(18.5));
+    REQUIRE_FALSE(sky.set_latitude(-20.0));
+    REQUIRE_FALSE(sky.set_brightness(5.0));
+    REQUIRE_FALSE(sky.set_shadows(false));
+    REQUIRE_FALSE(sky.set_cloud_cover(0.25));
+    REQUIRE_FALSE(sky.set_cloud_density(0.75));
+    REQUIRE_FALSE(sky.set_wind_direction(engine_core::Vec3{3.f, 1.f, -2.f}));
+    REQUIRE_FALSE(sky.set_sun_texture(instance_slot(sun.id())));
+    REQUIRE_FALSE(sky.set_sun_size(4.0));
+    REQUIRE_FALSE(sky.set_moon_size(6.0));
+    REQUIRE_FALSE(sky.set_reflection_quality(0));
+    frame();
+    {
+        const engine_core::VisualDynamicSky& seen = pump.front().dynamic_sky;
+        REQUIRE(seen.present);
+        REQUIRE_FALSE(pump.front().sky.present);
+        REQUIRE(seen.time_of_day == 18.5f);
+        REQUIRE(seen.latitude == -20.f);
+        REQUIRE(seen.brightness == 5.f);
+        REQUIRE_FALSE(seen.shadows);
+        REQUIRE(seen.cloud_cover == 0.25f);
+        REQUIRE(seen.cloud_density == 0.75f);
+        REQUIRE(seen.wind.x == 3.f);
+        REQUIRE(seen.wind.z == -2.f);
+        REQUIRE(seen.sun_texture == "textures/sun.png");
+        REQUIRE(seen.moon_texture.empty());
+        REQUIRE(seen.sun_size == 4.f);
+        REQUIRE(seen.moon_size == 6.f);
+        REQUIRE(seen.reflection_quality == 0);
+    }
+    // A destroyed Texture reads as none; a destroyed sky as no sky.
+    game.destroy(sun.id());
+    frame();
+    REQUIRE(pump.front().dynamic_sky.sun_texture.empty());
+    game.destroy(sky.id());
+    frame();
+    REQUIRE_FALSE(pump.front().dynamic_sky.present);
+    REQUIRE(pump.front().dynamic_sky.time_of_day == static_cast<float>(DynamicSky::kDefaultTimeOfDay));
+}
+
+TEST_CASE("DS5 the first Skybox or DynamicSky in the tree is the sky", "[dynamic_sky][render]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    const auto frame = [&] {
+        pump.prepare_copy(game);
+        pump.publish();
+    };
+    const InstanceId lighting = game.scene_service("Lighting");
+    DynamicSky& dynamic = add_dynamic_sky(game, lighting);
+    engine_core::Skybox& image = game.create<engine_core::Skybox>();
+    game.set_parent(image.id(), lighting);
+    frame();
+    REQUIRE(pump.front().dynamic_sky.present);
+    REQUIRE_FALSE(pump.front().sky.present);
+
+    // The DynamicSky into a Folder after the Skybox: the Skybox is first now.
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    game.set_parent(folder.id(), lighting);
+    game.set_parent(dynamic.id(), folder.id());
+    frame();
+    REQUIRE(pump.front().sky.present);
+    REQUIRE_FALSE(pump.front().dynamic_sky.present);
+
+    game.destroy(image.id());
+    frame();
+    REQUIRE(pump.front().dynamic_sky.present);
+    REQUIRE_FALSE(pump.front().sky.present);
+}

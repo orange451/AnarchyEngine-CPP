@@ -4,6 +4,7 @@
 #include "AssetInstances.hpp"
 #include "BloomEffect.hpp"
 #include "Dragger.hpp"
+#include "DynamicSky.hpp"
 #include "Camera.hpp"
 #include "GameObject.hpp"
 #include "Gui.hpp"
@@ -427,8 +428,8 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
     }
 }
 
-template <class T>
-const T* SnapshotPump::find_first(const DataModel& game, InstanceId root) {
+template <class... T>
+const DataModel* SnapshotPump::find_first_of(const DataModel& game, InstanceId root) {
     // Children are pushed last first, so the first child comes off the walk first.
     lighting_walk_.clear();
     lighting_walk_.push_back(root);
@@ -436,8 +437,9 @@ const T* SnapshotPump::find_first(const DataModel& game, InstanceId root) {
         const InstanceId id = lighting_walk_.back();
         lighting_walk_.pop_back();
         if (id != root) {
-            if (const auto* found = dynamic_cast<const T*>(game.instance(id))) {
-                return found;
+            const DataModel* object = game.instance(id);
+            if (object != nullptr && (... || (dynamic_cast<const T*>(object) != nullptr))) {
+                return object;
             }
         }
         const std::size_t first = lighting_walk_.size();
@@ -449,10 +451,19 @@ const T* SnapshotPump::find_first(const DataModel& game, InstanceId root) {
     return nullptr;
 }
 
+template <class T>
+const T* SnapshotPump::find_first(const DataModel& game, InstanceId root) {
+    return static_cast<const T*>(find_first_of<T>(game, root));
+}
+
 void SnapshotPump::resolve_lighting(DataModel& game) {
     const auto* lighting = dynamic_cast<const Lighting*>(game.instance(game.scene_service("Lighting")));
     VisualSky& sky = base_.sky;
-    const Skybox* skybox = lighting != nullptr ? find_first<Skybox>(game, lighting->id()) : nullptr;
+    // The first Skybox or DynamicSky in tree order is the sky; the other kind is not drawn.
+    const DataModel* first_sky =
+        lighting != nullptr ? find_first_of<Skybox, DynamicSky>(game, lighting->id()) : nullptr;
+    const auto* skybox = dynamic_cast<const Skybox*>(first_sky);
+    const auto* dynamic = dynamic_cast<const DynamicSky*>(first_sky);
     sky.present = skybox != nullptr;
     // Assigned in place, so an unchanged sky reuses last frame's strings.
     const auto texture_path = [&](const LuaSlot& slot, std::string& path) {
@@ -476,6 +487,38 @@ void SnapshotPump::resolve_lighting(DataModel& game) {
         sky.light_scale = static_cast<float>(Skybox::kDefaultLightScale);
         sky.rotation = static_cast<float>(Skybox::kDefaultRotation);
         sky.tint = Skybox::kDefaultTint;
+    }
+
+    VisualDynamicSky& procedural = base_.dynamic_sky;
+    procedural.present = dynamic != nullptr;
+    if (dynamic != nullptr) {
+        procedural.time_of_day = static_cast<float>(dynamic->time_of_day());
+        procedural.latitude = static_cast<float>(dynamic->latitude());
+        procedural.brightness = static_cast<float>(dynamic->brightness());
+        procedural.shadows = dynamic->shadows();
+        procedural.cloud_cover = static_cast<float>(dynamic->cloud_cover());
+        procedural.cloud_density = static_cast<float>(dynamic->cloud_density());
+        procedural.wind = dynamic->wind_direction();
+        texture_path(dynamic->sun_texture(), procedural.sun_texture);
+        texture_path(dynamic->moon_texture(), procedural.moon_texture);
+        procedural.sun_size = static_cast<float>(dynamic->sun_size());
+        procedural.moon_size = static_cast<float>(dynamic->moon_size());
+        procedural.reflection_quality = static_cast<int>(dynamic->reflection_quality());
+    } else {
+        // Field by field, so the strings keep their buffers.
+        const VisualDynamicSky defaults;
+        procedural.time_of_day = defaults.time_of_day;
+        procedural.latitude = defaults.latitude;
+        procedural.brightness = defaults.brightness;
+        procedural.shadows = defaults.shadows;
+        procedural.cloud_cover = defaults.cloud_cover;
+        procedural.cloud_density = defaults.cloud_density;
+        procedural.wind = defaults.wind;
+        procedural.sun_texture.clear();
+        procedural.moon_texture.clear();
+        procedural.sun_size = defaults.sun_size;
+        procedural.moon_size = defaults.moon_size;
+        procedural.reflection_quality = defaults.reflection_quality;
     }
 
     const BloomEffect* effect = lighting != nullptr ? find_first<BloomEffect>(game, lighting->id()) : nullptr;
@@ -527,6 +570,7 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.camera = base_.camera;
     dst.lighting = base_.lighting;
     dst.sky = base_.sky;
+    dst.dynamic_sky = base_.dynamic_sky;
     dst.bloom = base_.bloom;
     dst.reflections = base_.reflections;
     dst.occlusion = base_.occlusion;

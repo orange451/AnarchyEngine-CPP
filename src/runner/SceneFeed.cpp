@@ -51,6 +51,7 @@ void SceneFeed::perform(const engine_core::VisualSnapshot& front) {
     std::copy(front.prefabs.begin(), front.prefabs.end(), out->prefabs.begin());
     out->lighting = front.lighting;
     out->sky = front.sky;
+    out->dynamic_sky = front.dynamic_sky;
     out->bloom = front.bloom;
     out->reflections = front.reflections;
     out->occlusion = front.occlusion;

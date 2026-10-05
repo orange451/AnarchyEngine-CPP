@@ -317,6 +317,7 @@ bool Renderer::initialize() {
     gridBandsBuilt_ = false;
     gridBandsValid_ = false;
     fxaaValid_ = false;
+    reflectionsValid_ = false;
     depthFramebuffer_ = -1;
     glGenVertexArrays(1, &outlineVao_);
     glBindVertexArray(outlineVao_);
@@ -590,6 +591,7 @@ void Renderer::destroyReflectionBuffers() {
     DeleteTexture(reflectSceneTexture_);
     DeleteTexture(reflectionTexture_);
     reflectSceneLevels_ = 0;
+    reflectionsValid_ = false;
     reflectionWidth_ = 0;
     reflectionHeight_ = 0;
 }
@@ -1505,7 +1507,8 @@ bool Renderer::reflectionsPass(const float* projection, const float* inverseProj
     glUseProgram(ssrScene_.id);
     BindTexture(kUnitAccumulation, accumulationTexture_);
     BindTexture(kUnitEmissive, emissiveTexture_);
-    if (!CanDraw(ssrScene_.id)) {
+    // Validated until it passes, then trusted until the programs or buffers are made again.
+    if (!reflectionsValid_ && !CanDraw(ssrScene_.id)) {
         return false;
     }
     DrawFullscreen(emptyVao_);
@@ -1525,10 +1528,11 @@ bool Renderer::reflectionsPass(const float* projection, const float* inverseProj
     glUniform1f(ssr_.maxDistance, reflections.maxDistance);
     glUniform1f(ssr_.maxRoughness, std::min(reflections.maxRoughness, 1.f));
     glUniform1f(ssr_.chainLevels, static_cast<float>(reflectSceneLevels_));
-    if (!CanDraw(ssr_.id)) {
+    if (!reflectionsValid_ && !CanDraw(ssr_.id)) {
         return false;
     }
     DrawFullscreen(emptyVao_);
+    reflectionsValid_ = true;
     glViewport(0, 0, targetWidth_, targetHeight_);
     return true;
 }

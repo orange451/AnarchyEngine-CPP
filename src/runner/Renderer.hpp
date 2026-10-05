@@ -486,6 +486,9 @@ private:
     int reflectionHeight_ = 0;
     int reflectionRefusedWidth_ = 0;
     int reflectionRefusedHeight_ = 0;
+    // Whether ssrScene_ and ssr_ have passed validation since the programs or
+    // these buffers were last made, as fxaaValid_ is for FXAA.
+    bool reflectionsValid_ = false;
 
     void readProbe(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth, double sceneHeight,
                    const int viewport[4]);

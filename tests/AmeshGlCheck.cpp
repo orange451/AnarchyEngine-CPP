@@ -1,4 +1,5 @@
 #include "amesh.hpp"
+#include "runner/InstanceBuffer.hpp"
 #include "runner/gl.hpp"
 
 // Only GLFW's window calls: the GL names come from runner/gl.hpp.
@@ -64,6 +65,20 @@ in vec3 vColor;
 out vec4 fragColor;
 void main() {
     fragColor = vec4(vColor, 1.0);
+}
+)";
+
+// Instanced: each instance's model places the quad, its normal matrix's z
+// column scales its tint, and the tint is the color.
+const char* kInstancedVertexShader = R"(#version 330 core
+layout(location = 0) in vec3 aPosition;
+layout(location = 7) in mat4 aModel;
+layout(location = 11) in mat3 aNormalMatrix;
+layout(location = 14) in vec3 aTint;
+out vec3 vColor;
+void main() {
+    vColor = aTint * (aNormalMatrix * vec3(0.0, 0.0, 1.0)).z;
+    gl_Position = aModel * vec4(aPosition, 1.0);
 }
 )";
 
@@ -159,6 +174,18 @@ int main() {
     glDeleteShader(vertex);
     glDeleteShader(fragment);
 
+    const GLuint instanced = glCreateProgram();
+    const GLuint instancedVertex = Compile(runner::GL_VERTEX_SHADER, kInstancedVertexShader);
+    const GLuint instancedFragment = Compile(runner::GL_FRAGMENT_SHADER, kFragmentShader);
+    glAttachShader(instanced, instancedVertex);
+    glAttachShader(instanced, instancedFragment);
+    glLinkProgram(instanced);
+    GLint instancedLinked = 0;
+    glGetProgramiv(instanced, runner::GL_LINK_STATUS, &instancedLinked);
+    Expect(instancedLinked != 0, "the instanced check shader links");
+    glDeleteShader(instancedVertex);
+    glDeleteShader(instancedFragment);
+
     {
         const Data data = SkinnedQuad();
         GpuMesh mesh;
@@ -209,6 +236,65 @@ int main() {
         }
         Expect(threw, "drawing a missing LOD throws");
 
+        // Three instances of the 0..1 quad, each moved into a quadrant of clip
+        // space (a quadrant is 1 wide, as the quad is): bottom left red, bottom
+        // right green, top left blue. Identity normal matrices pass the tint on.
+        mesh.upload(data);
+        runner::InstanceData rows[3] = {};
+        const float corners[3][2] = {{-1.f, -1.f}, {0.f, -1.f}, {-1.f, 0.f}};
+        for (int i = 0; i < 3; ++i) {
+            rows[i].model[0] = rows[i].model[5] = rows[i].model[10] = rows[i].model[15] = 1.f;
+            rows[i].model[12] = corners[i][0];
+            rows[i].model[13] = corners[i][1];
+            rows[i].normal[0] = rows[i].normal[4] = rows[i].normal[8] = 1.f;
+            rows[i].tint[i] = 1.f;
+        }
+        runner::InstanceBuffer instances;
+        instances.upload(rows, 3);
+        glUseProgram(instanced);
+        glClear(runner::GL_COLOR_BUFFER_BIT);
+        mesh.bind();
+        instances.attach(0);
+        mesh.draw_instanced(0, 3);
+        ExpectNoGlError("draw_instanced");
+        const int q = kSize / 4;
+        const Pixel bottomLeft = ReadPixel(q, q);
+        const Pixel bottomRight = ReadPixel(3 * q, q);
+        const Pixel topLeft = ReadPixel(q, 3 * q);
+        const Pixel topRight = ReadPixel(3 * q, 3 * q);
+        Expect(bottomLeft.r > 200 && bottomLeft.g < 50, "instance 0 draws red bottom left");
+        Expect(bottomRight.g > 200 && bottomRight.r < 50, "instance 1 draws green bottom right");
+        Expect(topLeft.b > 200 && topLeft.r < 50, "instance 2 draws blue top left");
+        Expect(topRight.r == 0 && topRight.g == 0 && topRight.b == 0, "nothing draws top right");
+
+        // attach(1) starts at the second row: two instances, green and blue.
+        glClear(runner::GL_COLOR_BUFFER_BIT);
+        instances.attach(1);
+        mesh.draw_instanced(0, 2);
+        Expect(ReadPixel(q, q).r == 0 && ReadPixel(3 * q, q).g > 200 && ReadPixel(q, 3 * q).b > 200,
+               "attach(first) starts at row first");
+        ExpectNoGlError("attach(1)");
+
+        // A plain draw of the same mesh still works after an instanced one.
+        glUseProgram(program);
+        glClear(runner::GL_COLOR_BUFFER_BIT);
+        mesh.bind();
+        mesh.draw(0);
+        Expect(Near(ReadPixel(kSize / 2, 0).r, 128), "a plain draw after an instanced one still draws");
+        ExpectNoGlError("plain after instanced");
+
+        bool instancedThrew = false;
+        try {
+            mesh.draw_instanced(1, 1);
+        } catch (const std::out_of_range&) {
+            instancedThrew = true;
+        }
+        Expect(instancedThrew, "draw_instanced with a missing LOD throws");
+        mesh.draw_instanced(0, 0);
+        ExpectNoGlError("draw_instanced of 0");
+        instances.destroy();
+        ExpectNoGlError("InstanceBuffer::destroy");
+
         GpuMesh moved = std::move(mesh);
         Expect(moved.valid() && !mesh.valid(), "moving a GpuMesh moves its objects");
         moved.destroy();
@@ -221,6 +307,7 @@ int main() {
     ExpectNoGlError("destructor");
 
     glDeleteProgram(program);
+    glDeleteProgram(instanced);
     glfwDestroyWindow(window);
     glfwTerminate();
     if (gFailures != 0) {

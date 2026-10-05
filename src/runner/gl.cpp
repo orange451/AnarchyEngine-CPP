@@ -36,6 +36,8 @@ void (*rt_glVertexAttribPointer)(GLuint, GLint, GLenum, GLboolean, GLsizei, cons
 void (*rt_glDrawArrays)(GLenum, GLint, GLsizei) = nullptr;
 void (*rt_glVertexAttribIPointer)(GLuint, GLint, GLenum, GLsizei, const void*) = nullptr;
 void (*rt_glDrawElements)(GLenum, GLsizei, GLenum, const void*) = nullptr;
+void (*rt_glDrawElementsInstanced)(GLenum, GLsizei, GLenum, const void*, GLsizei) = nullptr;
+void (*rt_glVertexAttribDivisor)(GLuint, GLuint) = nullptr;
 void (*rt_glEnable)(GLenum) = nullptr;
 void (*rt_glDisable)(GLenum) = nullptr;
 GLboolean (*rt_glIsEnabled)(GLenum) = nullptr;
@@ -172,6 +174,8 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(DrawArrays);
     LOAD(VertexAttribIPointer);
     LOAD(DrawElements);
+    LOAD(DrawElementsInstanced);
+    LOAD(VertexAttribDivisor);
     LOAD(Enable);
     LOAD(Disable);
     LOAD(IsEnabled);

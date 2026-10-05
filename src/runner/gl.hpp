@@ -282,6 +282,9 @@ extern void (*rt_glVertexAttribPointer)(GLuint index, GLint size, GLenum type, G
 extern void (*rt_glDrawArrays)(GLenum mode, GLint first, GLsizei count);
 extern void (*rt_glVertexAttribIPointer)(GLuint index, GLint size, GLenum type, GLsizei stride, const void* pointer);
 extern void (*rt_glDrawElements)(GLenum mode, GLsizei count, GLenum type, const void* indices);
+extern void (*rt_glDrawElementsInstanced)(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                          GLsizei instancecount);
+extern void (*rt_glVertexAttribDivisor)(GLuint index, GLuint divisor);
 extern void (*rt_glEnable)(GLenum cap);
 extern void (*rt_glDisable)(GLenum cap);
 extern GLboolean (*rt_glIsEnabled)(GLenum cap);
@@ -404,6 +407,8 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glDrawArrays ::runner::rt_glDrawArrays
 #define glVertexAttribIPointer ::runner::rt_glVertexAttribIPointer
 #define glDrawElements ::runner::rt_glDrawElements
+#define glDrawElementsInstanced ::runner::rt_glDrawElementsInstanced
+#define glVertexAttribDivisor ::runner::rt_glVertexAttribDivisor
 #define glEnable ::runner::rt_glEnable
 #define glDisable ::runner::rt_glDisable
 #define glIsEnabled ::runner::rt_glIsEnabled

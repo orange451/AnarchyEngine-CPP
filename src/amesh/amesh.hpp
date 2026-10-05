@@ -289,6 +289,13 @@ inline constexpr unsigned kAttribColor = 4;
 inline constexpr unsigned kAttribBone = 5;
 inline constexpr unsigned kAttribWeight = 6;
 
+// Per-instance slots, divisor 1, which runner::InstanceBuffer::attach points
+// at its rows: a mat4 world matrix (7 to 10), a mat3 normal matrix (11 to 13),
+// and a linear RGB tint (14). upload never touches them.
+inline constexpr unsigned kAttribInstanceModel = 7;
+inline constexpr unsigned kAttribInstanceNormal = 11;
+inline constexpr unsigned kAttribInstanceTint = 14;
+
 // GPU buffers for one AMESH: a VAO, an interleaved VBO and a u32 EBO. Every
 // call but valid() needs the GL context the mesh was uploaded in to be current.
 class GpuMesh {
@@ -308,6 +315,10 @@ public:
     // both throw std::out_of_range for a missing LOD or subset.
     void draw(int lod = 0) const;
     void draw_subset(std::size_t subset) const;
+    // count instances of lod, with the mesh and its instance slots bound.
+    // Nothing for count 0 or before an upload; throws std::out_of_range for a
+    // missing LOD once uploaded, as draw does.
+    void draw_instanced(int lod, int count) const;
     void destroy();
     // Drops the GL names without deleting them, for a context that is already
     // gone (its objects went with it). Needs no GL. valid() is false after.
@@ -329,6 +340,7 @@ private:
     // Takes the next generation, once an upload has succeeded.
     void next_generation();
     void draw_range(std::uint32_t tri_begin, std::uint32_t tri_count) const;
+    void draw_range_instanced(std::uint32_t tri_begin, std::uint32_t tri_count, int instances) const;
 
     unsigned vao_ = 0;
     unsigned vbo_ = 0;

@@ -81,6 +81,7 @@ set(STUDIO_SOURCES
     src/runner/Renderer.cpp
     src/runner/GpuTimer.cpp
     src/runner/ShadowRenderer.cpp
+    src/runner/InstanceBuffer.cpp
     src/runner/EnvironmentMap.cpp
     src/runner/MeshCache.cpp
     src/runner/TextureCache.cpp

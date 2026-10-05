@@ -102,6 +102,15 @@ struct SceneBloom {
     float threshold = 0.f;
 };
 
+// The ScreenSpaceReflections, as the renderer reads it. The defaults trace nothing.
+struct SceneReflections {
+    bool enabled = false;
+    float intensity = 1.f;
+    // Studs.
+    float maxDistance = 50.f;
+    float maxRoughness = 0.5f;
+};
+
 // Lighting's properties the renderer reads. The defaults are a new Lighting's.
 struct SceneLighting {
     float ambient[3] = {0.5f, 0.5f, 0.5f};
@@ -111,6 +120,7 @@ struct SceneLighting {
     SceneAntialiasing antialiasing = SceneAntialiasing::FXAA;
     SceneSky sky;
     SceneBloom bloom;
+    SceneReflections reflections;
 };
 
 // Draws meshes seen from the camera, through the legacy AnarchyEngine
@@ -118,7 +128,9 @@ struct SceneLighting {
 // (ShadowRenderer), then a G-buffer of each opaque surface's albedo, normal,
 // material, and glow; a light pass that adds the ambient and sky light and
 // then each light: a DirectionalLight over the whole view, a PointLight or
-// SpotLight over its volume; then the Skybox behind every surface; a forward
+// SpotLight over its volume; then the Skybox behind every surface; screen-space reflections, when a
+// ScreenSpaceReflections asks for them (traced at half size from the lit
+// image); a forward
 // pass that blends see-through surfaces over that, farthest first; a merge;
 // bloom, when a BloomEffect asks for it (a chain of half-size levels, down
 // and back up); a filmic tone map, onto the pane, or with FXAA into a buffer that FXAA then
@@ -292,6 +304,14 @@ private:
         int bloomIntensity = -1;
         int bloomLevelScale = -1;
         int bloomThreshold = -1;
+        // Screen-space reflections (ssr.frag, merge.frag).
+        int screenSize = -1;
+        int nearPlane = -1;
+        int maxDistance = -1;
+        int maxRoughness = -1;
+        int chainLevels = -1;
+        int reflectionsEnabled = -1;
+        int reflectionsIntensity = -1;
     };
 
     // A light as the shaders take it, in view space.
@@ -323,7 +343,13 @@ private:
     // The Skybox where no opaque surface was drawn. True with no Skybox.
     bool skyPass(const float* inverseProjection);
     bool transparencyPass(const MeshDraw* meshes, int count, const float* projection, const float* inverseProjection);
-    bool mergePass();
+    bool mergePass(bool reflected, const float* inverseProjection);
+    // Screen-space reflections into reflectionTexture_, from the lit opaque
+    // image. False, with nothing to resolve, when none are asked for, the
+    // buffers are refused, or a program cannot draw yet.
+    bool reflectionsPass(const float* projection, const float* inverseProjection);
+    bool ensureReflectionBuffers(int width, int height);
+    void destroyReflectionBuffers();
     // Bloom's chain from the merge image, width by height pixels: the levels
     // drawn, 0 when there is no bloom this frame (none asked for, no room for
     // a level, the chain refused, or a program that cannot draw yet).
@@ -368,6 +394,8 @@ private:
     Program bloomDown_;
     Program bloomUp_;
     Program fxaa_;
+    Program ssrScene_;
+    Program ssr_;
     Program sky_;
     Program grid_;
     Program outline_;
@@ -446,6 +474,18 @@ private:
     // last made. Validating is slow on macOS, and nothing it checks changes
     // between frames, so it is asked until it passes, as the grid's bands are.
     bool fxaaValid_ = false;
+    // Screen-space reflections, each half the pane's size: the lit opaque
+    // image with its mips, which the trace reads, and the trace itself.
+    // Made on the first frame that reflects, apart from the other buffers.
+    unsigned reflectSceneFbo_ = 0;
+    unsigned reflectSceneTexture_ = 0;
+    int reflectSceneLevels_ = 0;
+    unsigned reflectionFbo_ = 0;
+    unsigned reflectionTexture_ = 0;
+    int reflectionWidth_ = 0;
+    int reflectionHeight_ = 0;
+    int reflectionRefusedWidth_ = 0;
+    int reflectionRefusedHeight_ = 0;
 
     void readProbe(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth, double sceneHeight,
                    const int viewport[4]);

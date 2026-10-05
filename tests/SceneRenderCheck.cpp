@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -736,6 +737,125 @@ int main() {
                 drawTwice(rolled);
                 Expect(!IsClear(ReadPixel(midX, midY)), "after the pane changes size, FXAA still draws the cube");
                 Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "FXAA leaves no GL error");
+                renderer.setLighting(runner::SceneLighting{});
+            }
+
+            // Screen-space reflections: a mirror floor under a red glowing cube.
+            {
+                runner::SceneLighting plain;
+                plain.antialiasing = runner::SceneAntialiasing::None;
+                const auto drawScene = [&](const runner::MeshDraw* scene, int count) {
+                    for (int pass = 0; pass < 2; ++pass) {
+                        renderer.draw(0, 0, kSize, kSize, kSize, kSize, scene, count);
+                    }
+                };
+                const auto snap = [&] {
+                    runner::ViewPixels pixels;
+                    renderer.read(0, 0, kSize, kSize, kSize, kSize, pixels);
+                    return pixels.rgba;
+                };
+                runner::MeshDraw floor = draw;
+                // A wide flat slab, its top at y = -0.6, just under the cube.
+                floor.model = engine_core::matrix4_identity();
+                floor.model.m[0] = 8.f;
+                floor.model.m[5] = 0.1f;
+                floor.model.m[10] = 8.f;
+                floor.model.m[13] = -0.65f;
+                floor.metalness = 1.f;
+                floor.roughness = 0.f;
+                floor.color[0] = floor.color[1] = floor.color[2] = 0.9f;
+                runner::MeshDraw red = draw;
+                red.emissive[0] = 3.f;
+                red.color[1] = red.color[2] = 0.f;
+                const runner::MeshDraw scene[] = {floor, red};
+
+                renderer.setLighting(plain);
+                drawScene(scene, 2);
+                const std::vector<unsigned char> unreflected = snap();
+                const auto redAt = [](const std::vector<unsigned char>& rgba, int index) {
+                    return static_cast<int>(rgba[index * 4]) - static_cast<int>(rgba[index * 4 + 2]);
+                };
+
+                runner::SceneLighting mirror = plain;
+                mirror.reflections.enabled = true;
+                renderer.setLighting(mirror);
+                const bool first = renderer.draw(0, 0, kSize, kSize, kSize, kSize, scene, 2);
+                Expect(first, "the first frame with reflections still draws");
+                drawScene(scene, 2);
+                const std::vector<unsigned char> reflected = snap();
+                // Rows are top first. Count floor pixels below the cube that turned redder,
+                // and pixels in the top quarter (sky and cube top) that changed at all.
+                const int width = static_cast<int>(std::sqrt(reflected.size() / 4));
+                int redder = 0;
+                int changedAbove = 0;
+                for (int i = 0; i < static_cast<int>(reflected.size() / 4); ++i) {
+                    const int row = i / width;
+                    if (row > width * 6 / 10 && redAt(reflected, i) > redAt(unreflected, i) + 20) {
+                        ++redder;
+                    }
+                    if (row < width / 4 && std::memcmp(&reflected[i * 4], &unreflected[i * 4], 3) != 0) {
+                        ++changedAbove;
+                    }
+                }
+                Expect(redder > 20, "the mirror floor below the cube reflects its red (" + std::to_string(redder) +
+                                        " pixels)");
+                Expect(changedAbove == 0, "nothing above the floor changes (" + std::to_string(changedAbove) + ")");
+
+                // Off four ways, and a floor rougher than MaxRoughness: exactly the frame without reflections.
+                for (int way = 0; way < 5; ++way) {
+                    runner::SceneLighting off = mirror;
+                    runner::MeshDraw changedScene[] = {floor, red};
+                    if (way == 0) {
+                        off.reflections.enabled = false;
+                    } else if (way == 1) {
+                        off.reflections.intensity = 0.f;
+                    } else if (way == 2) {
+                        off.reflections.maxDistance = 0.f;
+                    } else if (way == 3) {
+                        off = plain;
+                    } else {
+                        changedScene[0].roughness = 0.7f;
+                    }
+                    renderer.setLighting(off);
+                    drawScene(changedScene, 2);
+                    const std::vector<unsigned char> got = snap();
+                    if (way == 4) {
+                        renderer.setLighting(plain);
+                        drawScene(changedScene, 2);
+                        Expect(got == snap(), "a floor rougher than MaxRoughness draws as without reflections");
+                    } else {
+                        Expect(got == unreflected, "off draws exactly as without reflections (way " +
+                                                       std::to_string(way) + ")");
+                    }
+                }
+
+                // The cube far off screen: nothing to reflect, and no hole.
+                runner::MeshDraw away = red;
+                away.model = engine_core::matrix4_translation(200.f, 0.f, 0.f);
+                const runner::MeshDraw lonely[] = {floor, away};
+                renderer.setLighting(plain);
+                drawScene(lonely, 2);
+                const std::vector<unsigned char> lonelyPlain = snap();
+                renderer.setLighting(mirror);
+                drawScene(lonely, 2);
+                Expect(snap() == lonelyPlain, "with nothing on screen to reflect, the floor keeps its sky reflection");
+
+                // Glass over the floor: the reflection sits under it, so the glass's own color still shows.
+                runner::MeshDraw glass = draw;
+                glass.transparency = 0.5f;
+                glass.color[0] = glass.color[1] = 0.f;
+                glass.model = engine_core::matrix4_translation(0.f, -0.3f, 1.5f);
+                const runner::MeshDraw covered[] = {floor, red, glass};
+                drawScene(covered, 3);
+                Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "reflections under glass leave no GL error");
+
+                // Another size makes the buffers again.
+                for (int pass = 0; pass < 2; ++pass) {
+                    renderer.draw(0, 0, kSize / 2.0, kSize / 2.0, kSize, kSize, scene, 2);
+                }
+                drawScene(scene, 2);
+                Expect(snap() == reflected, "after the pane changes size and back, it reflects the same");
+                Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "reflections leave no GL error");
                 renderer.setLighting(runner::SceneLighting{});
             }
 

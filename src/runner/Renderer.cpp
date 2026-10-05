@@ -72,6 +72,8 @@ constexpr int kUnitShadowAtlas = kUnitDiffuse;
 constexpr int kUnitShadowCascades = kUnitNormalMap;
 // The tone map reads no G-buffer, so the bloom takes the accumulation buffer's unit.
 constexpr int kUnitBloom = kUnitAccumulation;
+// The merge reads no scene image, so the reflection trace takes its unit.
+constexpr int kUnitReflections = kUnitScene;
 // A light with no instance names its map for one frame only.
 constexpr std::uint64_t kUncachedShadowKey = 1ull << 63;
 // A ViewLight's shadow: the sun's cascades.
@@ -186,6 +188,13 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.bloomIntensity = at("uBloomIntensity");
     program.bloomLevelScale = at("uBloomLevelScale");
     program.bloomThreshold = at("uBloomThreshold");
+    program.screenSize = at("uScreenSize");
+    program.nearPlane = at("uNear");
+    program.maxDistance = at("uMaxDistance");
+    program.maxRoughness = at("uMaxRoughness");
+    program.chainLevels = at("uChainLevels");
+    program.reflectionsEnabled = at("uReflectionsEnabled");
+    program.reflectionsIntensity = at("uReflectionsIntensity");
 
     // Samplers keep their unit for the program's life. A name two passes use
     // for different things (uEmissive, uTransparency) is a sampler only in
@@ -217,6 +226,8 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     // Each bloom step reads the level before it where the tone map reads the scene.
     sampler("uSource", kUnitScene);
     sampler("uBloom", kUnitBloom);
+    sampler("uEmissiveLight", kUnitEmissive);
+    sampler("uReflections", kUnitReflections);
     if (&program == &merge_) {
         sampler("uEmissive", kUnitEmissive);
         sampler("uTransparency", kUnitTransparency);
@@ -253,13 +264,18 @@ bool Renderer::initialize() {
                      {"pipeline/lighting.glsl", "pipeline/shadow.glsl"}) &&
         buildProgram(sun_, "Directional light", "pipeline/fullscreen.vert", "pipeline/light.frag",
                      {"pipeline/lighting.glsl", "pipeline/shadow.glsl"}) &&
-        buildProgram(merge_, "Merge", "pipeline/fullscreen.vert", "pipeline/merge.frag", {}) &&
+        buildProgram(merge_, "Merge", "pipeline/fullscreen.vert", "pipeline/merge.frag",
+                     {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/image_lighting.glsl"}) &&
         buildProgram(tonemap_, "Tone map", "pipeline/fullscreen.vert", "pipeline/tonemap.frag",
                      {"pipeline/bloom.glsl"}) &&
         buildProgram(bloomDown_, "Bloom down", "pipeline/fullscreen.vert", "pipeline/bloom_down.frag",
                      {"pipeline/bloom.glsl"}) &&
         buildProgram(bloomUp_, "Bloom up", "pipeline/fullscreen.vert", "pipeline/bloom_up.frag", {}) &&
         buildProgram(fxaa_, "FXAA", "pipeline/fullscreen.vert", "pipeline/fxaa.frag", {}) &&
+        buildProgram(ssrScene_, "Reflections scene", "pipeline/fullscreen.vert", "pipeline/ssr_scene.frag", {}) &&
+        buildProgram(ssr_, "Reflections", "pipeline/fullscreen.vert", "pipeline/ssr.frag",
+                     {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/image_lighting.glsl",
+                      "pipeline/ssr.glsl"}) &&
         buildProgram(grid_, "Grid", "pipeline/fullscreen.vert", "pipeline/grid.frag", {}) &&
         buildProgram(gridBands_, "Grid bands", "pipeline/grid_band.vert", "pipeline/grid.frag", {}) &&
         buildProgram(outline_, "Outline", "pipeline/outline.vert", "pipeline/outline.frag", {}) &&
@@ -471,6 +487,7 @@ void Renderer::destroyTargets() {
         DeleteTexture(*texture);
     }
     destroyBloomChain();
+    destroyReflectionBuffers();
     fxaaValid_ = false;
     targetWidth_ = 0;
     targetHeight_ = 0;
@@ -520,6 +537,61 @@ void Renderer::destroyBloomChain() {
     bloomLevelsMade_ = 0;
     bloomWidth_ = 0;
     bloomHeight_ = 0;
+}
+
+bool Renderer::ensureReflectionBuffers(int width, int height) {
+    if (reflectionFbo_ != 0 && width == reflectionWidth_ && height == reflectionHeight_) {
+        return true;
+    }
+    if (width == reflectionRefusedWidth_ && height == reflectionRefusedHeight_) {
+        return false;
+    }
+    destroyReflectionBuffers();
+    const int halfWidth = std::max(width >> 1, 1);
+    const int halfHeight = std::max(height >> 1, 1);
+    reflectSceneTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, halfWidth, halfHeight, GL_LINEAR);
+    // Mip-filtered: rough reflections read a blurrier level instead of taking more taps.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR_MIPMAP_LINEAR));
+    glGenerateMipmap(GL_TEXTURE_2D);
+    reflectSceneLevels_ = 1;
+    for (int side = std::max(halfWidth, halfHeight); side > 1; side >>= 1) {
+        ++reflectSceneLevels_;
+    }
+    reflectionTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, halfWidth, halfHeight);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    bool complete = true;
+    glGenFramebuffers(1, &reflectSceneFbo_);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, reflectSceneFbo_);
+    complete = Attach({reflectSceneTexture_}, 0) && complete;
+    glGenFramebuffers(1, &reflectionFbo_);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, reflectionFbo_);
+    complete = Attach({reflectionTexture_}, 0) && complete;
+    if (!complete) {
+        std::fprintf(stderr,
+                     "The Scene View's %d by %d reflection buffers are not supported; drawing without reflections.\n",
+                     width, height);
+        destroyReflectionBuffers();
+        reflectionRefusedWidth_ = width;
+        reflectionRefusedHeight_ = height;
+        return false;
+    }
+    reflectionWidth_ = width;
+    reflectionHeight_ = height;
+    return true;
+}
+
+void Renderer::destroyReflectionBuffers() {
+    for (unsigned* fbo : {&reflectSceneFbo_, &reflectionFbo_}) {
+        if (*fbo != 0) {
+            glDeleteFramebuffers(1, fbo);
+            *fbo = 0;
+        }
+    }
+    DeleteTexture(reflectSceneTexture_);
+    DeleteTexture(reflectionTexture_);
+    reflectSceneLevels_ = 0;
+    reflectionWidth_ = 0;
+    reflectionHeight_ = 0;
 }
 
 namespace {
@@ -858,8 +930,12 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         glViewport(0, 0, targetWidth_, targetHeight_);
         drawn = cubesReady && shadowPass(meshes, meshCount, projection) &&
                 geometryPass(meshes, meshCount, projection) && lightPass(projection, inverseProjection.m) &&
-                skyPass(inverseProjection.m) && transparencyPass(meshes, meshCount, projection, inverseProjection.m) &&
-                mergePass();
+                skyPass(inverseProjection.m);
+        // Reflections never fail the frame: without them, surfaces keep their sky reflection.
+        const bool reflected = drawn && reflectionsPass(projection, inverseProjection.m);
+        glViewport(0, 0, targetWidth_, targetHeight_);
+        drawn = drawn && transparencyPass(meshes, meshCount, projection, inverseProjection.m) &&
+                mergePass(reflected, inverseProjection.m);
         // Bloom never fails the frame: without it, the tone map draws the scene as it is.
         bloomLevels = drawn ? bloomPass(targetWidth_, targetHeight_) : 0;
     }
@@ -1407,6 +1483,56 @@ bool Renderer::skyPass(const float* inverseProjection) {
     return true;
 }
 
+bool Renderer::reflectionsPass(const float* projection, const float* inverseProjection) {
+    const SceneReflections& reflections = lighting_.reflections;
+    if (!reflections.enabled || !(reflections.intensity > 0.f) || !(reflections.maxDistance > 0.f) ||
+        !(reflections.maxRoughness > 0.f)) {
+        return false;
+    }
+    if (!ensureReflectionBuffers(targetWidth_, targetHeight_)) {
+        return false;
+    }
+    RENDER_PASS("Reflections");
+    const int halfWidth = std::max(targetWidth_ >> 1, 1);
+    const int halfHeight = std::max(targetHeight_ >> 1, 1);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glViewport(0, 0, halfWidth, halfHeight);
+    glBindVertexArray(emptyVao_);
+
+    // The lit opaque image, with its glow, at half size; then its mips.
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, reflectSceneFbo_);
+    glUseProgram(ssrScene_.id);
+    BindTexture(kUnitAccumulation, accumulationTexture_);
+    BindTexture(kUnitEmissive, emissiveTexture_);
+    if (!CanDraw(ssrScene_.id)) {
+        return false;
+    }
+    DrawFullscreen(emptyVao_);
+    BindTexture(kUnitScene, reflectSceneTexture_);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    // The trace.
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, reflectionFbo_);
+    glUseProgram(ssr_.id);
+    bindGBuffer(ssr_);
+    bindSky(ssr_);
+    BindTexture(kUnitScene, reflectSceneTexture_);
+    glUniformMatrix4fv(ssr_.projection, 1, GL_FALSE, projection);
+    glUniformMatrix4fv(ssr_.inverseProjection, 1, GL_FALSE, inverseProjection);
+    glUniform2f(ssr_.screenSize, static_cast<float>(targetWidth_), static_cast<float>(targetHeight_));
+    glUniform1f(ssr_.nearPlane, kSceneNear);
+    glUniform1f(ssr_.maxDistance, reflections.maxDistance);
+    glUniform1f(ssr_.maxRoughness, std::min(reflections.maxRoughness, 1.f));
+    glUniform1f(ssr_.chainLevels, static_cast<float>(reflectSceneLevels_));
+    if (!CanDraw(ssr_.id)) {
+        return false;
+    }
+    DrawFullscreen(emptyVao_);
+    glViewport(0, 0, targetWidth_, targetHeight_);
+    return true;
+}
+
 bool Renderer::transparencyPass(const MeshDraw* meshes, int count, const float* projection,
                                 const float* inverseProjection) {
     RENDER_PASS("Transparency");
@@ -1490,7 +1616,7 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, int count, const float* 
     return true;
 }
 
-bool Renderer::mergePass() {
+bool Renderer::mergePass(bool reflected, const float* inverseProjection) {
     RENDER_PASS("Merge");
     glBindFramebuffer(RT_GL_FRAMEBUFFER, mergeFbo_);
     glDisable(GL_DEPTH_TEST);
@@ -1500,7 +1626,15 @@ bool Renderer::mergePass() {
     BindTexture(kUnitEmissive, emissiveTexture_);
     BindTexture(kUnitAccumulation, accumulationTexture_);
     BindTexture(kUnitTransparency, transparencyTexture_);
-    glUniform1f(merge_.skyEnabled, skyReady_ ? 1.f : 0.f);
+    glUniformMatrix4fv(merge_.inverseProjection, 1, GL_FALSE, inverseProjection);
+    glUniform1f(merge_.reflectionsEnabled, reflected ? 1.f : 0.f);
+    glUniform1f(merge_.reflectionsIntensity, std::min(lighting_.reflections.intensity, 1.f));
+    glUniform3f(merge_.ambient, lighting_.ambient[0], lighting_.ambient[1], lighting_.ambient[2]);
+    glUniform3f(merge_.skyRadiance, kSkyRadiance, kSkyRadiance, kSkyRadiance);
+    bindGBuffer(merge_);
+    bindSky(merge_);
+    // With no trace, any texture keeps the sampler loadable.
+    BindTexture(kUnitReflections, reflected ? reflectionTexture_ : whiteTexture_);
     glBindVertexArray(emptyVao_);
     if (!CanDraw(merge_.id)) {
         return false;
@@ -1643,7 +1777,7 @@ void Renderer::shutdown() {
     gpu_.shutdown();
     ready_ = false;
     for (Program* program :
-         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &fxaa_, &sky_, &grid_,
+         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &fxaa_, &ssrScene_, &ssr_, &sky_, &grid_,
           &gridBands_, &outline_, &handle_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);
@@ -1682,6 +1816,8 @@ void Renderer::shutdown() {
     targetsRefused_ = false;
     bloomRefusedWidth_ = 0;
     bloomRefusedHeight_ = 0;
+    reflectionRefusedWidth_ = 0;
+    reflectionRefusedHeight_ = 0;
 }
 
 engine_core::Matrix4 Renderer::DefaultView() {

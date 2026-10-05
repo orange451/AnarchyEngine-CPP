@@ -41,6 +41,7 @@ set(STUDIO_CORE_SOURCES
     src/runner/BillboardMath.cpp
     src/runner/GridBands.cpp
     src/runner/ShadowMath.cpp
+    src/runner/BloomMath.cpp
     src/runner/ShadowAtlas.cpp
     src/runner/ShadowPlanner.cpp
     src/runner/GamePack.cpp
@@ -850,6 +851,7 @@ add_executable(sandbox
     sandbox/billboard_tests.cpp
     sandbox/render_math_tests.cpp
     sandbox/shadow_math_tests.cpp
+    sandbox/bloom_math_tests.cpp
     sandbox/shadow_atlas_tests.cpp
     sandbox/shadow_planner_tests.cpp
     sandbox/event_args_tests.cpp

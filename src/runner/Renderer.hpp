@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BloomMath.hpp"
 #include "DraggerMath.hpp"
 #include "EnvironmentMap.hpp"
 #include "GpuTimer.hpp"
@@ -88,6 +89,16 @@ struct SceneSky {
     float tint[3] = {1.f, 1.f, 1.f};
 };
 
+// The BloomEffect, as the renderer reads it. The defaults draw no bloom.
+struct SceneBloom {
+    bool enabled = false;
+    // 0 to 1: how much of the image moves into its blurred copy.
+    float intensity = 0.05f;
+    // Pixels at a 1080-pixel-tall view (BloomMath).
+    float size = 24.f;
+    float threshold = 0.f;
+};
+
 // Lighting's properties the renderer reads. The defaults are a new Lighting's.
 struct SceneLighting {
     float ambient[3] = {0.5f, 0.5f, 0.5f};
@@ -95,6 +106,7 @@ struct SceneLighting {
     float saturation = 1.2f;
     float gamma = 2.2f;
     SceneSky sky;
+    SceneBloom bloom;
 };
 
 // Draws meshes seen from the camera, through the legacy AnarchyEngine
@@ -104,11 +116,12 @@ struct SceneLighting {
 // then each light: a DirectionalLight over the whole view, a PointLight or
 // SpotLight over its volume; then the Skybox behind every surface; a forward
 // pass that blends see-through surfaces over that, farthest first; a merge;
-// a filmic tone map onto the pane; and, when set, the floor grid and then the
-// outlines over it. Every pass but those last ones draws into this
-// renderer's own buffers, the pane's size in pixels. With a Skybox, its
-// image-based lighting (EnvironmentMap) is the sky light, and the sky fills
-// the pane wherever nothing opaque was drawn, even with no meshes.
+// bloom, when a BloomEffect asks for it (a chain of half-size levels, down
+// and back up); a filmic tone map onto the pane; and, when set, the floor
+// grid and then the outlines over it. Every pass but those last ones draws
+// into this renderer's own buffers, the pane's size in pixels. With a
+// Skybox, its image-based lighting (EnvironmentMap) is the sky light, and the
+// sky fills the pane wherever nothing opaque was drawn, even with no meshes.
 class Renderer {
 public:
     // The camera until setCamera: where it is and what it looks at, in world units, Y up.
@@ -267,6 +280,13 @@ private:
         int exposure = -1;
         int inverseGamma = -1;
         int saturation = -1;
+        // Bloom (bloom_down.frag, bloom_up.frag) and its mix in the tone map.
+        int prefilter = -1;
+        int threshold = -1;
+        int radius = -1;
+        int bloomIntensity = -1;
+        int bloomLevelScale = -1;
+        int bloomThreshold = -1;
     };
 
     // A light as the shaders take it, in view space.
@@ -299,6 +319,14 @@ private:
     bool skyPass(const float* inverseProjection);
     bool transparencyPass(const MeshDraw* meshes, int count, const float* projection, const float* inverseProjection);
     bool mergePass();
+    // Bloom's chain from the merge image, width by height pixels: the levels
+    // drawn, 0 when there is no bloom this frame (none asked for, no room for
+    // a level, the chain refused, or a program that cannot draw yet).
+    int bloomPass(int width, int height);
+    // Makes the chain for a width by height pane, if it is not made. False,
+    // with nothing made, when the driver will not render into it.
+    bool ensureBloomChain(int width, int height);
+    void destroyBloomChain();
     // The floor grid over the pane, on the pane's framebuffer. depth is the
     // scene's, or a texture of 1s where nothing was drawn.
     void gridPass(unsigned depth, const float* projection, const float* inverseProjection, int width, int height);
@@ -327,6 +355,8 @@ private:
     Program sun_;
     Program merge_;
     Program tonemap_;
+    Program bloomDown_;
+    Program bloomUp_;
     Program sky_;
     Program grid_;
     Program outline_;
@@ -386,6 +416,17 @@ private:
     unsigned mergeTexture_ = 0;
     // Whether the driver refused a size, so the refusal is reported once.
     bool targetsRefused_ = false;
+    // Bloom's chain: bloomTextures_[k] is the pane halved k + 1 times, linear
+    // RGBA16F. Made for bloomWidth_ by bloomHeight_ on the first frame that
+    // blooms, apart from the other buffers, so a place with no bloom has none.
+    unsigned bloomTextures_[kBloomMaxLevels] = {};
+    unsigned bloomFbos_[kBloomMaxLevels] = {};
+    int bloomLevelsMade_ = 0;
+    int bloomWidth_ = 0;
+    int bloomHeight_ = 0;
+    // The size the driver last refused, so it is reported once and not tried each frame.
+    int bloomRefusedWidth_ = 0;
+    int bloomRefusedHeight_ = 0;
 
     void readProbe(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth, double sceneHeight,
                    const int viewport[4]);

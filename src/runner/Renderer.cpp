@@ -70,6 +70,8 @@ constexpr int kUnitEmissiveMap = kUnitAlbedo;
 // The light pass reads no Material, so its shadow maps take the Material's units.
 constexpr int kUnitShadowAtlas = kUnitDiffuse;
 constexpr int kUnitShadowCascades = kUnitNormalMap;
+// The tone map reads no G-buffer, so the bloom takes the accumulation buffer's unit.
+constexpr int kUnitBloom = kUnitAccumulation;
 // A light with no instance names its map for one frame only.
 constexpr std::uint64_t kUncachedShadowKey = 1ull << 63;
 // A ViewLight's shadow: the sun's cascades.
@@ -178,6 +180,12 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.exposure = at("uExposure");
     program.inverseGamma = at("uInverseGamma");
     program.saturation = at("uSaturation");
+    program.prefilter = at("uPrefilter");
+    program.threshold = at("uThreshold");
+    program.radius = at("uRadius");
+    program.bloomIntensity = at("uBloomIntensity");
+    program.bloomLevelScale = at("uBloomLevelScale");
+    program.bloomThreshold = at("uBloomThreshold");
 
     // Samplers keep their unit for the program's life. A name two passes use
     // for different things (uEmissive, uTransparency) is a sampler only in
@@ -206,6 +214,9 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     sampler("uBrdf", kUnitBrdf);
     sampler("uShadowAtlas", kUnitShadowAtlas);
     sampler("uShadowCascades", kUnitShadowCascades);
+    // Each bloom step reads the level before it where the tone map reads the scene.
+    sampler("uSource", kUnitScene);
+    sampler("uBloom", kUnitBloom);
     if (&program == &merge_) {
         sampler("uEmissive", kUnitEmissive);
         sampler("uTransparency", kUnitTransparency);
@@ -243,7 +254,11 @@ bool Renderer::initialize() {
         buildProgram(sun_, "Directional light", "pipeline/fullscreen.vert", "pipeline/light.frag",
                      {"pipeline/lighting.glsl", "pipeline/shadow.glsl"}) &&
         buildProgram(merge_, "Merge", "pipeline/fullscreen.vert", "pipeline/merge.frag", {}) &&
-        buildProgram(tonemap_, "Tone map", "pipeline/fullscreen.vert", "pipeline/tonemap.frag", {}) &&
+        buildProgram(tonemap_, "Tone map", "pipeline/fullscreen.vert", "pipeline/tonemap.frag",
+                     {"pipeline/bloom.glsl"}) &&
+        buildProgram(bloomDown_, "Bloom down", "pipeline/fullscreen.vert", "pipeline/bloom_down.frag",
+                     {"pipeline/bloom.glsl"}) &&
+        buildProgram(bloomUp_, "Bloom up", "pipeline/fullscreen.vert", "pipeline/bloom_up.frag", {}) &&
         buildProgram(grid_, "Grid", "pipeline/fullscreen.vert", "pipeline/grid.frag", {}) &&
         buildProgram(gridBands_, "Grid bands", "pipeline/grid_band.vert", "pipeline/grid.frag", {}) &&
         buildProgram(outline_, "Outline", "pipeline/outline.vert", "pipeline/outline.frag", {}) &&
@@ -362,14 +377,15 @@ void Renderer::createSphere() {
 
 namespace {
 
-unsigned MakeTarget(GLenum internalFormat, GLenum format, GLenum type, int width, int height) {
+unsigned MakeTarget(GLenum internalFormat, GLenum format, GLenum type, int width, int height,
+                    GLenum filter = RT_GL_NEAREST) {
     unsigned texture = 0;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
     glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(internalFormat), width, height, 0, format, type, nullptr);
-    // Every pass reads its inputs texel for texel.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(RT_GL_NEAREST));
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(RT_GL_NEAREST));
+    // Every pass but bloom's reads its inputs texel for texel.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(filter));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(filter));
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLint>(RT_GL_CLAMP_TO_EDGE));
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<GLint>(RT_GL_CLAMP_TO_EDGE));
     return texture;
@@ -407,7 +423,9 @@ bool Renderer::ensureTargets(int width, int height) {
     depthTexture_ = MakeTarget(RT_GL_DEPTH_COMPONENT24, RT_GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, width, height);
     accumulationTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height);
     transparencyTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height);
-    mergeTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height);
+    // Linear for bloom's first step, which reads between texels; the tone map
+    // reads it texel for texel either way.
+    mergeTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height, GL_LINEAR);
     glBindTexture(GL_TEXTURE_2D, 0);
 
     bool complete = true;
@@ -445,8 +463,55 @@ void Renderer::destroyTargets() {
                               &accumulationTexture_, &transparencyTexture_, &mergeTexture_}) {
         DeleteTexture(*texture);
     }
+    destroyBloomChain();
     targetWidth_ = 0;
     targetHeight_ = 0;
+}
+
+bool Renderer::ensureBloomChain(int width, int height) {
+    if (bloomLevelsMade_ > 0 && width == bloomWidth_ && height == bloomHeight_) {
+        return true;
+    }
+    if (width == bloomRefusedWidth_ && height == bloomRefusedHeight_) {
+        return false;
+    }
+    destroyBloomChain();
+    // Every level the pane has room for, so a change of Size never makes the chain again.
+    const int levels = BloomLevelsAvailable(width, height);
+    bool complete = levels > 0;
+    for (int k = 0; k < levels; ++k) {
+        bloomTextures_[k] =
+            MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width >> (k + 1), height >> (k + 1), GL_LINEAR);
+        glGenFramebuffers(1, &bloomFbos_[k]);
+        glBindFramebuffer(RT_GL_FRAMEBUFFER, bloomFbos_[k]);
+        complete = Attach({bloomTextures_[k]}, 0) && complete;
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+    if (!complete) {
+        std::fprintf(stderr, "The Scene View's %d by %d bloom buffers are not supported; drawing without bloom.\n",
+                     width, height);
+        destroyBloomChain();
+        bloomRefusedWidth_ = width;
+        bloomRefusedHeight_ = height;
+        return false;
+    }
+    bloomLevelsMade_ = levels;
+    bloomWidth_ = width;
+    bloomHeight_ = height;
+    return true;
+}
+
+void Renderer::destroyBloomChain() {
+    for (int k = 0; k < kBloomMaxLevels; ++k) {
+        if (bloomFbos_[k] != 0) {
+            glDeleteFramebuffers(1, &bloomFbos_[k]);
+            bloomFbos_[k] = 0;
+        }
+        DeleteTexture(bloomTextures_[k]);
+    }
+    bloomLevelsMade_ = 0;
+    bloomWidth_ = 0;
+    bloomHeight_ = 0;
 }
 
 namespace {
@@ -697,6 +762,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     const engine_core::Matrix4 inverseProjection = engine_core::matrix4_inverse(projectionMatrix);
 
     bool drawn = !hasMeshes && !hasSky;
+    int bloomLevels = 0;
     if (!drawn && ensureTargets(pane.width, pane.height)) {
         // The lights in view space, as every pass takes them.
         viewLights_.clear();
@@ -786,6 +852,8 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
                 geometryPass(meshes, meshCount, projection) && lightPass(projection, inverseProjection.m) &&
                 skyPass(inverseProjection.m) && transparencyPass(meshes, meshCount, projection, inverseProjection.m) &&
                 mergePass();
+        // Bloom never fails the frame: without it, the tone map draws the scene as it is.
+        bloomLevels = drawn ? bloomPass(targetWidth_, targetHeight_) : 0;
     }
     if (drawn && (hasMeshes || hasSky)) {
         // The tone map, blended over the clear: where nothing was drawn the pane shows through.
@@ -803,6 +871,11 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         glUniform1f(tonemap_.exposure, std::max(lighting_.exposure, 0.f));
         glUniform1f(tonemap_.inverseGamma, 1.f / std::max(lighting_.gamma, 0.01f));
         glUniform1f(tonemap_.saturation, std::max(lighting_.saturation, 0.f));
+        // With no bloom the shader skips it; any texture keeps the sampler loadable.
+        BindTexture(kUnitBloom, bloomLevels > 0 ? bloomTextures_[0] : whiteTexture_);
+        glUniform1f(tonemap_.bloomIntensity, bloomLevels > 0 ? std::min(lighting_.bloom.intensity, 1.f) : 0.f);
+        glUniform1f(tonemap_.bloomLevelScale, bloomLevels > 0 ? 1.f / static_cast<float>(bloomLevels) : 0.f);
+        glUniform1f(tonemap_.bloomThreshold, std::max(lighting_.bloom.threshold, 0.f));
         glBindVertexArray(emptyVao_);
         drawn = CanDraw(tonemap_.id);
         if (drawn) {
@@ -1413,6 +1486,56 @@ bool Renderer::mergePass() {
     return true;
 }
 
+int Renderer::bloomPass(int width, int height) {
+    const SceneBloom& bloom = lighting_.bloom;
+    if (!bloom.enabled || !(bloom.intensity > 0.f)) {
+        return 0;
+    }
+    const BloomPlan plan = PlanBloom(bloom.size, width, height);
+    if (plan.levels == 0 || !ensureBloomChain(width, height)) {
+        return 0;
+    }
+    RENDER_PASS("Bloom");
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glBindVertexArray(emptyVao_);
+
+    // Down: the merge image into level 0, then each level into the next.
+    glUseProgram(bloomDown_.id);
+    glUniform1f(bloomDown_.threshold, std::max(bloom.threshold, 0.f));
+    for (int k = 0; k < plan.levels; ++k) {
+        glBindFramebuffer(RT_GL_FRAMEBUFFER, bloomFbos_[k]);
+        glViewport(0, 0, width >> (k + 1), height >> (k + 1));
+        BindTexture(kUnitScene, k == 0 ? mergeTexture_ : bloomTextures_[k - 1]);
+        glUniform2f(bloomDown_.texel, 1.f / static_cast<float>(width >> k), 1.f / static_cast<float>(height >> k));
+        glUniform1f(bloomDown_.prefilter, k == 0 ? 1.f : 0.f);
+        if (!CanDraw(bloomDown_.id)) {
+            return 0;
+        }
+        DrawFullscreen(emptyVao_);
+    }
+
+    // Up: each level added into the next larger one, so level 0 ends up the sum of them all.
+    glUseProgram(bloomUp_.id);
+    glUniform1f(bloomUp_.radius, plan.radius);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(RT_GL_ONE, RT_GL_ONE, RT_GL_ONE, RT_GL_ONE);
+    for (int k = plan.levels - 1; k > 0; --k) {
+        glBindFramebuffer(RT_GL_FRAMEBUFFER, bloomFbos_[k - 1]);
+        glViewport(0, 0, width >> k, height >> k);
+        BindTexture(kUnitScene, bloomTextures_[k]);
+        glUniform2f(bloomUp_.texel, 1.f / static_cast<float>(width >> (k + 1)),
+                    1.f / static_cast<float>(height >> (k + 1)));
+        if (!CanDraw(bloomUp_.id)) {
+            glDisable(GL_BLEND);
+            return 0;
+        }
+        DrawFullscreen(emptyVao_);
+    }
+    glDisable(GL_BLEND);
+    return plan.levels;
+}
+
 bool Renderer::read(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
                     ViewPixels& out) const {
     out = ViewPixels{};
@@ -1459,8 +1582,8 @@ void Renderer::shutdown() {
     gpu_.shutdown();
     ready_ = false;
     for (Program* program :
-         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &sky_, &grid_, &gridBands_, &outline_,
-          &handle_}) {
+         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &sky_, &grid_,
+          &gridBands_, &outline_, &handle_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);
         }
@@ -1496,6 +1619,8 @@ void Renderer::shutdown() {
     sceneDepth_ = SceneDepth{};
     destroyTargets();
     targetsRefused_ = false;
+    bloomRefusedWidth_ = 0;
+    bloomRefusedHeight_ = 0;
 }
 
 engine_core::Matrix4 Renderer::DefaultView() {

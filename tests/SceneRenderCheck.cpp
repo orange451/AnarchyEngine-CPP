@@ -527,6 +527,90 @@ int main() {
             const Pixel grayLit = ReadPixel(midX, midY);
             Expect(grayLit.r == grayLit.g && grayLit.g == grayLit.b, "Saturation 0 is gray (" + Text(grayLit) + ")");
             renderer.setLighting(runner::SceneLighting{});
+            // Bloom. A chain made this frame may not draw until the next on
+            // macOS, so each look draws twice and reads the second.
+            {
+                const auto drawTwice = [&](const runner::MeshDraw& mesh) {
+                    for (int pass = 0; pass < 2; ++pass) {
+                        renderer.draw(0, 0, kSize, kSize, kSize, kSize, &mesh, 1);
+                    }
+                };
+                const auto snap = [&] {
+                    runner::ViewPixels pixels;
+                    renderer.read(0, 0, kSize, kSize, kSize, kSize, pixels);
+                    return pixels.rgba;
+                };
+                // Bright, but under the tone map's white, so moving light out of it shows.
+                runner::MeshDraw bright = draw;
+                bright.emissive[0] = bright.emissive[1] = bright.emissive[2] = 1.0f;
+                drawTwice(bright);
+                const std::vector<unsigned char> plain = snap();
+                // The cube's right edge along the middle row, and pixels just inside and past it.
+                int edge = fbWidth / 2;
+                while (edge < fbWidth - 1 && !IsClear(ReadPixel(edge + 1, midY))) {
+                    ++edge;
+                }
+                const int outside = std::min(edge + 3, fbWidth - 1);
+                const Pixel plainInside = ReadPixel(edge - 1, midY);
+                Expect(edge < fbWidth - 8 && IsClear(ReadPixel(outside, midY)),
+                       "without bloom the pane is clear past the cube's edge");
+
+                runner::SceneLighting haze;
+                haze.bloom.enabled = true;
+                haze.bloom.intensity = 0.5f;
+                haze.bloom.size = 56.f;
+                renderer.setLighting(haze);
+                const bool first = renderer.draw(0, 0, kSize, kSize, kSize, kSize, &bright, 1);
+                Expect(first, "the first frame with bloom still draws, with or without the bloom");
+                drawTwice(bright);
+                const Pixel halo = ReadPixel(outside, midY);
+                Expect(!IsClear(halo) && Sum(halo) > 90 + 6,
+                       "bloom spreads light past a bright cube's edge (" + Text(halo) + ")");
+                Expect(Sum(ReadPixel(edge - 1, midY)) < Sum(plainInside),
+                       "at Threshold 0 the light moves out of the cube, not only added (" +
+                           Text(ReadPixel(edge - 1, midY)) + " was " + Text(plainInside) + ")");
+                Expect(IsClear(ReadPixel(2, 2)), "and the far corner stays the clear color");
+
+                // Off three ways, the frame is exactly the one without bloom.
+                for (int way = 0; way < 3; ++way) {
+                    runner::SceneLighting off = haze;
+                    if (way == 0) {
+                        off.bloom.enabled = false;
+                    } else if (way == 1) {
+                        off.bloom.intensity = 0.f;
+                    } else {
+                        off.bloom.size = 0.f;
+                    }
+                    renderer.setLighting(off);
+                    drawTwice(bright);
+                    Expect(snap() == plain, "Enabled false, Intensity 0, or Size 0 draws no bloom (way " +
+                                                std::to_string(way) + ")");
+                }
+
+                // Above a Threshold, only bright light blooms.
+                runner::SceneLighting glowOnly = haze;
+                glowOnly.bloom.threshold = 1.f;
+                renderer.setLighting(glowOnly);
+                drawTwice(draw);
+                Expect(IsClear(ReadPixel(outside, midY)), "with a Threshold, a dim cube gets no halo");
+                runner::MeshDraw hot = draw;
+                hot.emissive[0] = hot.emissive[1] = hot.emissive[2] = 4.f;
+                drawTwice(hot);
+                Expect(!IsClear(ReadPixel(outside, midY)), "and a bright one still does");
+
+                // A pane of another size makes the chain again; one too small for a level skips bloom quietly.
+                renderer.setLighting(haze);
+                for (int pass = 0; pass < 2; ++pass) {
+                    renderer.draw(0, 0, kSize / 2.0, kSize / 2.0, kSize, kSize, &bright, 1);
+                }
+                for (int pass = 0; pass < 2; ++pass) {
+                    renderer.draw(0, 0, 3, 3, fbWidth, fbHeight, &bright, 1);
+                }
+                drawTwice(bright);
+                Expect(!IsClear(ReadPixel(outside, midY)), "after the pane changes size, it still blooms");
+                Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "bloom leaves no GL error");
+                renderer.setLighting(runner::SceneLighting{});
+            }
 
             // Transparency 1 draws nothing; between 0 and 1 the pane shows through.
             runner::MeshDraw gone = draw;

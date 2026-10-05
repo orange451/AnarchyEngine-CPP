@@ -408,6 +408,12 @@ void GameView::collectMeshes() {
         lighting.sky.tint[1] = sky.tint.g;
         lighting.sky.tint[2] = sky.tint.b;
     }
+    // The BloomEffect, if any; with none, or one turned off, there is no bloom.
+    const engine_core::VisualBloom& bloom = snapshot.bloom;
+    lighting.bloom.enabled = bloom.present && bloom.enabled;
+    lighting.bloom.intensity = bloom.intensity;
+    lighting.bloom.size = bloom.size;
+    lighting.bloom.threshold = bloom.threshold;
     renderer_.setLighting(lighting);
 }
 

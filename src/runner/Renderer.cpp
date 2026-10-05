@@ -511,7 +511,13 @@ void CullBackFaces(const float* model) {
     glCullFace(determinant < 0.f ? RT_GL_FRONT : RT_GL_BACK);
 }
 
-// The GL state a draw changes, so the UI pass after it finds its own.
+// The GL state a draw changes, so the UI pass after it finds its own. That
+// includes what every texture unit has bound to each target the passes use:
+// the UI drawn between 3D views keeps its own textures bound for the whole
+// frame (JadeFX keeps its occluder on unit 7, and its images and glyphs on
+// unit 0), so a draw must leave each unit as it found it, not empty. Any
+// other GL drawn between UI draws must do the same. Saved once a draw, not
+// once a pass: a few dozen queries for each 3D view each frame.
 struct SavedState {
     GLint framebuffer = 0;
     GLint scissorBox[4] = {};
@@ -529,6 +535,9 @@ struct SavedState {
     GLint program = 0;
     GLint vertexArray = 0;
     GLint activeTexture = 0;
+    GLint textures[kUnitCount] = {};
+    GLint cubes[kUnitCount] = {};
+    GLint arrays[kUnitCount] = {};
     GLboolean seamlessCubes = GL_FALSE;
 
     SavedState() {
@@ -548,6 +557,13 @@ struct SavedState {
         glGetIntegerv(RT_GL_CURRENT_PROGRAM, &program);
         glGetIntegerv(RT_GL_VERTEX_ARRAY_BINDING, &vertexArray);
         glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
+        for (int unit = 0; unit < kUnitCount; ++unit) {
+            glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(unit));
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &textures[unit]);
+            glGetIntegerv(RT_GL_TEXTURE_BINDING_CUBE_MAP, &cubes[unit]);
+            glGetIntegerv(RT_GL_TEXTURE_BINDING_2D_ARRAY, &arrays[unit]);
+        }
+        glActiveTexture(static_cast<GLenum>(activeTexture));
         seamlessCubes = glIsEnabled(RT_GL_TEXTURE_CUBE_MAP_SEAMLESS);
     }
 
@@ -575,11 +591,13 @@ struct SavedState {
         Set(RT_GL_TEXTURE_CUBE_MAP_SEAMLESS, seamlessCubes);
         glUseProgram(static_cast<GLuint>(program));
         glBindVertexArray(static_cast<GLuint>(vertexArray));
-        // The units the passes used are left empty, as the old single pass left unit 0.
+        // Every unit gets back what it had, on every target a pass binds. A
+        // draw deletes only its own targets and shadow maps, which nothing
+        // outside it keeps bound, so none of these names has gone stale.
         for (int unit = kUnitCount - 1; unit >= 0; --unit) {
-            BindArray(unit, 0);
-            BindCube(unit, 0);
-            BindTexture(unit, 0);
+            BindArray(unit, static_cast<unsigned>(arrays[unit]));
+            BindCube(unit, static_cast<unsigned>(cubes[unit]));
+            BindTexture(unit, static_cast<unsigned>(textures[unit]));
         }
         glActiveTexture(static_cast<GLenum>(activeTexture));
     }

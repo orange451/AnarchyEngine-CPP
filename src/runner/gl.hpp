@@ -231,6 +231,7 @@ constexpr GLenum RT_GL_ARRAY_BUFFER_BINDING = 0x8894;
 constexpr GLenum RT_GL_LINES = 0x0001;
 // The Skybox's environment cubes.
 constexpr GLenum RT_GL_TEXTURE_CUBE_MAP = 0x8513;
+constexpr GLenum RT_GL_TEXTURE_BINDING_CUBE_MAP = 0x8514;
 constexpr GLenum RT_GL_TEXTURE_CUBE_MAP_POSITIVE_X = 0x8515;
 constexpr GLenum RT_GL_TEXTURE_CUBE_MAP_SEAMLESS = 0x884F;
 constexpr GLenum RT_GL_TEXTURE_WRAP_R = 0x8072;
@@ -239,6 +240,7 @@ constexpr GLenum RT_GL_TEXTURE_MAX_LEVEL = 0x813D;
 // Shadow maps. Each is in GLES 3.0 too.
 constexpr GLenum RT_GL_NONE = 0;
 constexpr GLenum RT_GL_TEXTURE_2D_ARRAY = 0x8C1A;
+constexpr GLenum RT_GL_TEXTURE_BINDING_2D_ARRAY = 0x8C1D;
 constexpr GLenum RT_GL_TEXTURE_COMPARE_MODE = 0x884C;
 constexpr GLenum RT_GL_TEXTURE_COMPARE_FUNC = 0x884D;
 constexpr GLenum RT_GL_COMPARE_REF_TO_TEXTURE = 0x884E;

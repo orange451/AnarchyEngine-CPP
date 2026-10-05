@@ -97,6 +97,8 @@ public:
     // The cursor's scene depth from the last paint, or none. A depth-tested
     // billboard farther than it takes no mouse.
     void setCursorDepth(std::optional<float> depth);
+    // What setCursorDepth last gave. For tests.
+    std::optional<float> cursorDepth() const { return cursorDepth_; }
     // Children in paint order, for tests.
     std::vector<jadefx::Node*> paintOrder() const;
     // For the occluded draw: the depth a billboard node draws at, and whether

@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -36,8 +37,13 @@
 // Camera at (0, 0, 10) looks at the origin; the cube sits at (-2, 0, 0). A red
 // billboard 4 units wide at (0, 0, -2) is behind the cube on its left half, so
 // only its right half shows; a blue AlwaysOnTop one 3 units above it shows
-// whole, over the cube. It saves <out-dir>/billboards.png, then orbits the
-// Camera 30 degrees around the origin and saves <out-dir>/billboards-moved.png.
+// whole, over the cube. It saves <out-dir>/billboards.png, then checks the
+// cursor depth probe: it moves the mouse over the cube, then over the empty
+// background, and prints the scene depth the view reads under each beside the
+// red billboard's depth. Over the cube the depth must be nearer than the red
+// billboard's, and over the background it must be 1, the far plane, or none;
+// otherwise the demo exits with 1. Then it orbits the Camera 30 degrees around
+// the origin and saves <out-dir>/billboards-moved.png.
 namespace {
 
 constexpr int kWidth = 1280;
@@ -46,6 +52,13 @@ constexpr int kHeight = 760;
 constexpr int kSettleFrames = 20;
 constexpr double kOrbitDegrees = 30.0;
 constexpr double kCameraDistance = 10.0;
+// Frames the probe gets at each mouse point: its read lands one draw later.
+constexpr int kProbeFrames = 4;
+// The probe over the background reads the cleared depth, 1, give or take rounding.
+constexpr float kFarDepth = 0.9999f;
+
+// Set when a check fails, so main exits with 1.
+bool g_failed = false;
 
 engine_core::LuaSlot Slot(engine_core::InstanceId id) {
     engine_core::LuaSlot slot;
@@ -139,16 +152,17 @@ private:
 
         Create(game, "DirectionalLight", "Sun", game.scene_service("Lighting"));
 
-        board(game, workspace, "Behind", engine_core::Vec3{0.f, 0.f, -2.f}, false, "red");
+        behind_ = board(game, workspace, "Behind", engine_core::Vec3{0.f, 0.f, -2.f}, false, "red");
         board(game, workspace, "OnTop", engine_core::Vec3{0.f, 3.f, -2.f}, true, "blue");
         built_ = true;
     }
 
     // SimulationThread. A GameObject with no Prefab at where, holding a
-    // BillboardGui 4 by 2 units filled with one Pane of color. The size is on
-    // the BillboardGui itself: a Pane's percentage height of a BillboardGui
-    // whose height is its content's would be its own content's, none.
-    void board(engine_core::DataModel& game, engine_core::InstanceId workspace, const char* name,
+    // BillboardGui 4 by 2 units filled with one Pane of color, whose id it
+    // returns. The size is on the BillboardGui itself: a Pane's percentage
+    // height of a BillboardGui whose height is its content's would be its own
+    // content's, none.
+    engine_core::InstanceId board(engine_core::DataModel& game, engine_core::InstanceId workspace, const char* name,
                engine_core::Vec3 where, bool onTop, const char* color) {
         const engine_core::InstanceId anchor = Create(game, "GameObject", name, workspace);
         dynamic_cast<engine_core::GameObject*>(game.instance(anchor))
@@ -168,6 +182,7 @@ private:
                        std::string("billboardgui { width: 400%; height: 200%; } "
                                    "pane { width: 100%; height: 100%; background-color: ") +
                            color + "; }");
+        return gui;
     }
 
     void frame(int width, int height) {
@@ -180,14 +195,56 @@ private:
             return;
         } else if (frames_ == kSettleFrames) {
             save(width, height, "billboards.png");
+            // A point on the cube's front face left of where the red billboard shows through.
+            moveTo(engine_core::Vec3{-3.f, 0.f, 0.5f});
+        } else if (frames_ == kSettleFrames + kProbeFrames) {
+            cubeDepth_ = view_->guiLayer().cursorDepth();
+            // Below and right of everything, where only the clear is.
+            moveTo(engine_core::Vec3{4.f, -3.f, 0.f});
+        } else if (frames_ == kSettleFrames + kProbeFrames * 2) {
+            report(view_->guiLayer().cursorDepth());
             runner_.simulation().on_simulation([camera = camera_](engine_core::DataModel& game) {
                 if (auto* object = dynamic_cast<engine_core::Camera*>(game.instance(camera))) {
                     object->set_transform(CameraTransform(kOrbitDegrees));
                 }
             });
-        } else if (frames_ == kSettleFrames * 2) {
+        } else if (frames_ == kSettleFrames * 2 + kProbeFrames * 2) {
             save(width, height, "billboards-moved.png");
             stage_->close();
+        }
+    }
+
+    // Moves the mouse to where the Camera, unorbited, sees world, as the window would.
+    void moveTo(engine_core::Vec3 world) {
+        const double tanHalf = std::tan(engine_core::Camera::kNewPlaceFieldOfView * 3.14159265358979323846 / 360.0);
+        const double width = view_->getWidth();
+        const double height = view_->getHeight();
+        const double away = kCameraDistance - world.z;
+        const double ndcX = world.x / (away * tanHalf * width / height);
+        const double ndcY = world.y / (away * tanHalf);
+        const double x = view_->getAbsoluteX() + (ndcX + 1.0) * 0.5 * width;
+        const double y = view_->getAbsoluteY() + (1.0 - ndcY) * 0.5 * height;
+        std::printf("mouse at (%.0f, %.0f) over world (%.1f, %.1f, %.1f)\n", x, y, world.x, world.y, world.z);
+        stage_->getScene().noteMove(x, y);
+    }
+
+    // Prints the probe's depths and the red billboard's, and checks them.
+    void report(std::optional<float> backgroundDepth) {
+        const jadefx::Node* node = view_->guiLayer().nodeFor(behind_);
+        const runner::GuiLayer::PlacedBillboard* placed =
+            node != nullptr ? view_->guiLayer().placedFor(node) : nullptr;
+        const auto show = [](std::optional<float> depth) {
+            return depth ? std::to_string(*depth) : std::string("none");
+        };
+        std::printf("probe over cube: %s\n", show(cubeDepth_).c_str());
+        std::printf("probe over background: %s\n", show(backgroundDepth).c_str());
+        std::printf("red billboard depth: %s\n", placed != nullptr ? std::to_string(placed->depth).c_str() : "unplaced");
+        const bool cubeNearer = placed != nullptr && cubeDepth_ && *cubeDepth_ < placed->depth;
+        const bool backgroundFar = !backgroundDepth || *backgroundDepth >= kFarDepth;
+        std::printf("cube nearer than red billboard: %s\n", cubeNearer ? "yes" : "NO");
+        std::printf("background at the far plane or none: %s\n", backgroundFar ? "yes" : "NO");
+        if (!cubeNearer || !backgroundFar) {
+            g_failed = true;
         }
     }
 
@@ -215,6 +272,9 @@ private:
     std::string out_dir_;
     std::filesystem::path resources_;
     engine_core::InstanceId camera_ = 0;
+    // The red BillboardGui, set before built_.
+    engine_core::InstanceId behind_ = 0;
+    std::optional<float> cubeDepth_;
     std::string cameraGuid_;
     // Set on the simulation thread once the place is built; cameraGuid_ is written before it.
     std::atomic<bool> built_{false};
@@ -224,4 +284,7 @@ private:
 
 }  // namespace
 
-int main(int argc, char** argv) { return jadefx::Application::launch(std::make_unique<BillboardDemo>(), argc, argv); }
+int main(int argc, char** argv) {
+    const int code = jadefx::Application::launch(std::make_unique<BillboardDemo>(), argc, argv);
+    return code != 0 ? code : (g_failed ? 1 : 0);
+}

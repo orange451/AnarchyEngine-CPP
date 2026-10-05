@@ -759,8 +759,9 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
             }
         }
     } else {
-        // No scene drawn this paint: nothing for a billboard to hide behind.
+        // No scene drawn this paint: nothing for a billboard to hide behind, and no depth under the cursor.
         guiLayer_->setSceneDepth(SceneDepth{});
+        guiLayer_->setCursorDepth(std::nullopt);
     }
     // What the threads recorded since the last paint, for the overlay drawn next.
     if (profiler::enabled()) {

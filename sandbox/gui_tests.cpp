@@ -16,9 +16,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <initializer_list>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -390,4 +392,130 @@ TEST_CASE("GUI11 scripts set Adornee and AlwaysOnTop, and both fire Changed", "[
     rig.game.start_simulation();
     rig.frames(3, 0.05);
     require_globals(rig, {"defaults", "set", "refused", "changed", "label"});
+}
+
+TEST_CASE("GUI12 AlwaysOnTop saves, loads, undoes, and comes back at Stop", "[gui][billboard][project]") {
+    engine_core::LuaSlot yes;
+    yes.kind = engine_core::LuaSlot::Kind::Bool;
+    yes.flag = true;
+    SECTION("a project saves and loads it") {
+        SimRole role;
+        TempDir dir;
+        {
+            engine_core::Project project = engine_core::Project::create(dir.path);
+            engine_core::DataModel& game = project.datamodel();
+            engine_core::BillboardGui& board = game.create<engine_core::BillboardGui>();
+            game.set_name(board.id(), "Board");
+            game.set_parent(board.id(), game.scene_service("Workspace"));
+            REQUIRE_FALSE(board.set_value(GuiProperty::AlwaysOnTop, yes));
+            project.save();
+        }
+        engine_core::Game game;
+        engine_core::Project loaded = engine_core::Project::load(dir.path, game);
+        auto* board = dynamic_cast<engine_core::BillboardGui*>(
+            game.instance(game.find_first_child(game.scene_service("Workspace"), "Board")));
+        REQUIRE(board != nullptr);
+        REQUIRE(board->always_on_top());
+    }
+    SECTION("undo and redo set it back and forth") {
+        SimRole role;
+        engine_core::Game game;
+        engine_core::BillboardGui& board = game.create<engine_core::BillboardGui>();
+        game.set_parent(board.id(), game.scene_service("Workspace"));
+        begin_step(game, "Set AlwaysOnTop");
+        REQUIRE_FALSE(board.set_value(GuiProperty::AlwaysOnTop, yes));
+        end_step(game);
+        game.history().undo();
+        REQUIRE_FALSE(board.always_on_top());
+        game.history().redo();
+        REQUIRE(board.always_on_top());
+    }
+    SECTION("Stop puts back what it was before a script changed it") {
+        ScriptRig rig;
+        engine_core::BillboardGui& board = rig.game.create<engine_core::BillboardGui>();
+        rig.game.set_name(board.id(), "Board");
+        rig.game.set_parent(board.id(), rig.game.scene_service("Workspace"));
+        REQUIRE_FALSE(board.set_value(GuiProperty::AlwaysOnTop, yes));
+        add_script(rig.game, "Flip", R"(
+            workspace.Board.AlwaysOnTop = false
+            _G.flipped = workspace.Board.AlwaysOnTop == false
+        )");
+        rig.game.start_simulation();
+        rig.frames(2);
+        require_globals(rig, {"flipped"});
+        REQUIRE_FALSE(board.always_on_top());
+        rig.game.stop_simulation();
+        REQUIRE(board.always_on_top());
+    }
+}
+
+namespace {
+
+// first is ahead of second among their parent's children, so it is saved and loaded first.
+bool comes_before(engine_core::DataModel& game, engine_core::InstanceId first, engine_core::InstanceId second) {
+    const std::vector<engine_core::InstanceId> children = game.get_children(game.parent(first));
+    const auto at_first = std::find(children.begin(), children.end(), first);
+    const auto at_second = std::find(children.begin(), children.end(), second);
+    return at_first != children.end() && at_second != children.end() && at_first < at_second;
+}
+
+}  // namespace
+
+TEST_CASE("GUI13 a loaded Adornee finds a target saved after its BillboardGui", "[gui][billboard][project]") {
+    SimRole role;
+    TempDir dir;
+    {
+        engine_core::Project project = engine_core::Project::create(dir.path);
+        engine_core::DataModel& game = project.datamodel();
+        // The BillboardGui is made and parented first, so it is saved and
+        // loaded before the part its Adornee names.
+        engine_core::BillboardGui& board = game.create<engine_core::BillboardGui>();
+        game.set_name(board.id(), "Board");
+        game.set_parent(board.id(), game.scene_service("Workspace"));
+        engine_core::GameObject& part = part_at(game, 3.f, 4.f, 5.f);
+        game.set_name(part.id(), "Target");
+        REQUIRE(comes_before(game, board.id(), part.id()));
+        REQUIRE_FALSE(board.set_adornee(instance_slot(part.id())));
+        project.save();
+    }
+    engine_core::Game game;
+    engine_core::Project loaded = engine_core::Project::load(dir.path, game);
+    const engine_core::InstanceId workspace = game.scene_service("Workspace");
+    const engine_core::InstanceId board_id = game.find_first_child(workspace, "Board");
+    const engine_core::InstanceId part_id = game.find_first_child(workspace, "Target");
+    REQUIRE(comes_before(game, board_id, part_id));
+    auto* board = dynamic_cast<engine_core::BillboardGui*>(game.instance(board_id));
+    auto* part = dynamic_cast<engine_core::GameObject*>(game.instance(part_id));
+    REQUIRE(board != nullptr);
+    REQUIRE(part != nullptr);
+    REQUIRE(board->adornee_id() == part_id);
+    REQUIRE(board->anchor_instance() == part_id);
+    REQUIRE(board->anchor().x == 3.f);
+    REQUIRE(board->anchor().z == 5.f);
+    part->set_transform(engine_core::matrix4_translation(-1.f, 0.f, 0.f));
+    REQUIRE(board->anchor().x == -1.f);
+}
+
+TEST_CASE("GUI14 Stop puts back the Adornee a script changed during play", "[gui][billboard]") {
+    ScriptRig rig;
+    engine_core::GameObject& first = part_at(rig.game, 1.f, 0.f, 0.f);
+    rig.game.set_name(first.id(), "First");
+    engine_core::GameObject& second = part_at(rig.game, 2.f, 0.f, 0.f);
+    rig.game.set_name(second.id(), "Second");
+    engine_core::BillboardGui& board = rig.game.create<engine_core::BillboardGui>();
+    rig.game.set_name(board.id(), "Board");
+    rig.game.set_parent(board.id(), rig.game.scene_service("Workspace"));
+    REQUIRE_FALSE(board.set_adornee(instance_slot(first.id())));
+    add_script(rig.game, "Move", R"(
+        workspace.Board.Adornee = workspace.Second
+        _G.moved = workspace.Board.Adornee == workspace.Second
+    )");
+    rig.game.start_simulation();
+    rig.frames(2);
+    require_globals(rig, {"moved"});
+    REQUIRE(board.adornee_id() == second.id());
+    REQUIRE(board.anchor().x == 2.f);
+    rig.game.stop_simulation();
+    REQUIRE(board.adornee_id() == first.id());
+    REQUIRE(board.anchor().x == 1.f);
 }

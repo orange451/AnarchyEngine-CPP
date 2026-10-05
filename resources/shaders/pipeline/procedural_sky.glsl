@@ -194,8 +194,10 @@ vec4 body(vec3 dir, vec3 toward, float size, float textured, sampler2D image, fl
     basis(toward, T, B);
     vec2 plane = vec2(dot(dir, T), dot(dir, B)) / (max(c, 1e-4) * size);
     float r = length(plane);
-    float soft = max(fwidth(r), 1e-3);
-    if (c <= 0.0) {
+    // Capped: toward 90 degrees from the body r runs off to infinity, and an
+    // uncapped fwidth there would smear half a disc around the whole sky.
+    float soft = clamp(fwidth(r), 1e-3, 0.5);
+    if (c <= 0.0 || r > 2.0) {
         return vec4(0.0);
     }
     if (textured > 0.5) {

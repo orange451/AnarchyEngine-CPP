@@ -741,6 +741,10 @@ add_executable(assets-demo
 )
 target_link_libraries(assets-demo PRIVATE studio)
 
+# By hand, not ctest: billboard-demo <out-dir> saves a depth-tested and an always-on-top BillboardGui beside a cube.
+add_executable(billboard-demo tests/BillboardDemo.cpp)
+target_link_libraries(billboard-demo PRIVATE studio)
+
 # By hand, not ctest: prefab-demo out-dir light saves the Prefab editor as PNGs.
 add_executable(prefab-demo
     tests/PrefabEditorDemo.cpp
@@ -866,7 +870,7 @@ function(anarchy_warnings target)
     endif()
 endfunction()
 foreach(target IN ITEMS studio_core studio AnarchyStudio AnarchyPlayer engine-tests shell-tests properties-tests console-tests
-                        studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests assets-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
+                        studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests assets-demo billboard-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
                         sandbox amesh amesh-tests amesh-gl-check scene-render-check gpu-timer-check grid-check profiler-demo profiler profiler-tests ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()

@@ -774,11 +774,10 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
                                           lightDraws_.data(), static_cast<int>(lightDraws_.size()));
         // ANARCHY_RENDER_STATS set prints the draw's counts once a second, for measuring culling and instancing.
         static const bool printStats = std::getenv("ANARCHY_RENDER_STATS") != nullptr;
-        if (printStats) {
-            static auto printed = std::chrono::steady_clock::now();
+        if (printStats && drawn) {
             const auto now = std::chrono::steady_clock::now();
-            if (now - printed >= std::chrono::seconds(1)) {
-                printed = now;
+            if (now - statsPrinted_ >= std::chrono::seconds(1)) {
+                statsPrinted_ = now;
                 const RenderStats& stats = renderer_.stats();
                 std::fprintf(stderr, "render stats: %d draws, %d visible, %d culled, %d runs, %d instanced calls\n",
                              stats.draws, stats.visible, stats.culled, stats.runs, stats.instancedCalls);

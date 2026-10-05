@@ -155,6 +155,10 @@ public:
     InstanceId anchor_instance() const;
     // anchor_instance()'s Transform translation, or the origin.
     Vec3 anchor() const;
+    // target's Transform translation, or the origin when it is 0 or not a
+    // PVInstance. anchor() is anchor_of(anchor_instance()), for a caller that
+    // already has the anchor instance.
+    Vec3 anchor_of(InstanceId target) const;
     // In Workspace or Core, at any depth, and not inside a GuiBase.
     bool drawn() const;
 

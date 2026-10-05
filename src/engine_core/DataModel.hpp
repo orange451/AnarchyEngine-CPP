@@ -282,6 +282,8 @@ public:
     // Stable authored identity, written to disk and used by references.
     // create assigns one. Empty when id is dead. Id 0 is the root.
     std::string guid(InstanceId id) const;
+    // id is live, or the root, and its GUID is guid. Unlike guid(), copies nothing.
+    bool has_guid(InstanceId id, std::string_view guid) const;
     // Project load only. The loader checks that GUIDs are unique; this does
     // not scan the world. Throws std::invalid_argument on a malformed GUID.
     // Does not record history.

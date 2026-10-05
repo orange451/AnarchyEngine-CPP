@@ -238,8 +238,14 @@ const char* BillboardGui::class_name() const { return "BillboardGui"; }
 LuaSlot BillboardGui::adornee() const { return instance_reference_slot(adornee_ref_, "PVInstance"); }
 
 InstanceId BillboardGui::adornee_id() const {
-    const LuaSlot slot = adornee();
-    return slot.kind == LuaSlot::Kind::Instance ? slot.id : 0;
+    // What adornee() resolves to, without building a slot and copying the GUID
+    // into it: the pump calls this for every billboard each frame.
+    const InstanceId target = adornee_ref_.resolve(*this);
+    if (target == 0) {
+        return 0;
+    }
+    const DataModel* object = instance(target);
+    return object != nullptr && lua_class_inherits(object->class_name(), "PVInstance") ? target : 0;
 }
 
 std::optional<std::string> BillboardGui::set_adornee(const LuaSlot& value) {
@@ -260,8 +266,9 @@ InstanceId BillboardGui::anchor_instance() const {
     return dynamic_cast<const PVInstance*>(instance(above)) != nullptr ? above : 0;
 }
 
-Vec3 BillboardGui::anchor() const {
-    const InstanceId target = anchor_instance();
+Vec3 BillboardGui::anchor() const { return anchor_of(anchor_instance()); }
+
+Vec3 BillboardGui::anchor_of(InstanceId target) const {
     const auto* object = target != 0 ? dynamic_cast<const PVInstance*>(instance(target)) : nullptr;
     if (object == nullptr) {
         return Vec3{};

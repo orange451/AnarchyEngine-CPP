@@ -1916,6 +1916,11 @@ std::string DataModel::guid(InstanceId id) const {
     return object != nullptr ? object->guid_ : std::string();
 }
 
+bool DataModel::has_guid(InstanceId id, std::string_view guid) const {
+    const DataModel* object = id == 0 ? state_->root : instance(id);
+    return object != nullptr && object->guid_ == guid;
+}
+
 void DataModel::set_guid(InstanceId id, std::string guid) {
     if (!valid_guid(guid)) {
         throw std::invalid_argument("malformed GUID \"" + guid + "\"");

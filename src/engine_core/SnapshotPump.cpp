@@ -530,7 +530,7 @@ void SnapshotPump::resolve_billboards(DataModel& game) {
         VisualBillboard row;
         row.id = id;
         row.anchor_instance = board->anchor_instance();
-        row.anchor = board->anchor();
+        row.anchor = board->anchor_of(row.anchor_instance);
         row.always_on_top = board->always_on_top();
         base_.billboards.push_back(row);
     }

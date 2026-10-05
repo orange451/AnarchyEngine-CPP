@@ -14,7 +14,8 @@ InstanceId InstanceRef::resolve(const DataModel& world) const {
         return 0;
     }
     const InstanceId cached = cached_.load(std::memory_order_relaxed);
-    if (cached != 0 && world.alive(cached) && world.guid(cached) == guid_) {
+    // has_guid, not guid(), so a reference that still holds is checked without a copy.
+    if (cached != 0 && world.alive(cached) && world.has_guid(cached, guid_)) {
         return cached;
     }
     const std::optional<InstanceId> found = world.find_guid(guid_);

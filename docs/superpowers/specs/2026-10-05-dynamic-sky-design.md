@@ -28,13 +28,13 @@ Efficiency is a design rule:
 | CloudCover | number | 0.5 | clamped to 0–1: how much of the sky has cloud |
 | CloudDensity | number | 0.5 | clamped to 0–1: how thick and opaque the clouds are |
 | WindDirection | Vector3 | (1, 0, 0.3) | the clouds' drift; its length is the speed in studs per second; its Y is ignored |
-| SunTexture | Image ref | none | when set, drawn in place of the procedural sun disc |
-| MoonTexture | Image ref | none | when set, drawn in place of the procedural moon disc |
+| SunTexture | Texture? | nil | when set, drawn in place of the procedural sun disc |
+| MoonTexture | Texture? | nil | when set, drawn in place of the procedural moon disc |
 | SunSize | number | 2 | degrees across, clamped to 0.1–20 |
 | MoonSize | number | 2 | degrees across, clamped to 0.1–20 |
 | ReflectionQuality | Enum.EffectQuality | Medium | the lighting cube's size (below); not the visible sky's |
 
-`SunTexture` and `MoonTexture` are `InstanceRef`s to an Image, held and resolved as `Skybox`'s image is. A texture's alpha cuts its shape out of the sky; its colour is multiplied by the body's light colour, so a sun texture still reddens at sunset.
+`SunTexture` and `MoonTexture` are `InstanceRef`s to a Texture, held and resolved as `Skybox`'s Image is; anything else is refused with "SunTexture must be a Texture". A texture's alpha cuts its shape out of the sky; its colour is multiplied by the body's light colour, so a sun texture still reddens at sunset.
 
 ### Two skies
 
@@ -74,7 +74,7 @@ One directional light, `id` 0, from the sun while the sun is up and the moon oth
 - `GameView` calls `SkyMath` and:
   - fills `SceneSky`'s new procedural part: the sun and moon directions, the light colour, star visibility and pole, CloudCover, CloudDensity, the wind, the sizes, the two textures (from `textures_`, as the Skybox image is), ReflectionQuality, and `seconds`;
   - puts the sky's light at the front of `lightDraws_` with `id` 0, skipped when its intensity is 0.
-- `seconds` is wall-clock time from a steady clock held by GameView, so clouds drift in the studio's edit mode too, and in a paused game. Only clouds use it; TimeOfDay never moves on its own.
+- `seconds` is wall-clock time from a steady clock held by GameView, so clouds drift in the studio's edit mode too, and in a paused game. Only clouds use it; TimeOfDay never moves on its own. GameView turns it into the clouds' offset, `wind × seconds` in studs, worked out in double and wrapped every 100 000 studs (a jump in the clouds once in many hours), so the shader's floats stay precise.
 - The studio's Scene View and the player both draw through `GameView`, so both get the dynamic sky. The Assets pane's material balls keep their own fixed lighting.
 
 ## Rendering
@@ -87,7 +87,9 @@ One directional light, `id` 0, from the sun while the sun is up and the moon oth
   - stars: a hashed cell field in sky coordinates turned about the pole, faded in by star visibility and hidden by cloud;
   - the sun and moon: a disc of SunSize / MoonSize with limb darkening and a halo, or the texture on a quad facing the viewer at that angular size; drawn behind the clouds.
 - `dynamic_sky.frag` draws the visible sky: full screen into the accumulation buffer where depth is 1, as `sky.frag` does, clamped to `kMaxHalf`. Profiled as the existing `"Sky"` pass.
-- `dynamic_sky_cube.frag` draws one face of the lighting cube with the same `proceduralSky`.
+- `dynamic_sky_cube.frag` draws one face of the lighting cube with the same `proceduralSky`, without the sun and moon discs (their glow stays): the built-in light already gives the sun's highlight, and a disc in the cube would add it twice. So the textures never reach the cube.
+
+The sun and moon textures are bound to the Material units 0 and 1 (`kUnitDiffuse`, `kUnitNormalMap`): the sky pass reads no Material.
 
 ### Shading stays the same
 
@@ -109,7 +111,10 @@ The prefiltered cube keeps 6 levels at every size. A Skybox keeps today's 512 / 
 
 When it is redrawn:
 
-- at once when the sky's *revision* changes: GameView bumps it when TimeOfDay, Latitude, CloudCover, CloudDensity, SunSize, MoonSize, a texture, or ReflectionQuality changes;
+The renderer decides, with `SkyMath`'s `LightingDue`, from what the cube was last drawn with (TimeOfDay, Latitude, CloudCover, CloudDensity, ReflectionQuality) and when:
+
+- the first time, and at once when ReflectionQuality changes (the cubes are made again);
+- when another of those changed, at least 0.05 s after the last redraw, so a script moving TimeOfDay every frame costs at most 20 redraws a second;
 - otherwise, while the wind's length is not 0, when 0.25 s of `seconds` have passed since the last redraw;
 - never otherwise.
 

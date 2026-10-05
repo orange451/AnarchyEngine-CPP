@@ -25,6 +25,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <utility>
 
@@ -770,6 +772,18 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
         const bool drawn = renderer_.draw(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(),
                                           scene->getHeight(), meshDraws_.data(), static_cast<int>(meshDraws_.size()),
                                           lightDraws_.data(), static_cast<int>(lightDraws_.size()));
+        // ANARCHY_RENDER_STATS set prints the draw's counts once a second, for measuring culling and instancing.
+        static const bool printStats = std::getenv("ANARCHY_RENDER_STATS") != nullptr;
+        if (printStats) {
+            static auto printed = std::chrono::steady_clock::now();
+            const auto now = std::chrono::steady_clock::now();
+            if (now - printed >= std::chrono::seconds(1)) {
+                printed = now;
+                const RenderStats& stats = renderer_.stats();
+                std::fprintf(stderr, "render stats: %d draws, %d visible, %d culled, %d runs, %d instanced calls\n",
+                             stats.draws, stats.visible, stats.culled, stats.runs, stats.instancedCalls);
+            }
+        }
         guiLayer_->setSceneDepth(renderer_.sceneDepth());
         guiLayer_->setCursorDepth(renderer_.probedDepth());
         // Read before the children paint, so the overlays are not in the picture.

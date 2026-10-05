@@ -22,6 +22,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <vector>
@@ -30,7 +31,8 @@
 // resources/shaders is found: scene-render-check draws what the Scene View
 // draws for a GameObject with a Prefab, lit through the legacy pipeline. A cube baked to AMESH in a scratch
 // resources folder goes through MeshCache and Renderer, with the fixed
-// camera, and the check reads the pixels back.
+// camera, and the check reads the pixels back. With --save dir or --compare dir
+// it also writes, or checks against, the regression scenes' frames.
 namespace {
 
 using namespace anarchy::amesh;
@@ -152,9 +154,134 @@ std::string TestSky() {
     });
 }
 
+// The regression scenes: frames that must not change, beyond 1 per channel,
+// when the renderer draws the same meshes another way. 25 cubes in a 5 by 5
+// grid, turned and sized differently, one mirrored in X and one stretched in
+// Y, colored in turn, on a floor; then under a shadowing sun; then with a
+// shadowing spot and three see-through cubes in front.
+std::vector<runner::MeshDraw> RegressionDraws(const GpuMesh* cube, bool seeThrough) {
+    std::vector<runner::MeshDraw> draws;
+    for (int i = 0; i < 25; ++i) {
+        const float x = static_cast<float>(i % 5) * 1.6f - 3.2f;
+        const float z = 1.f - static_cast<float>(i / 5) * 1.6f;
+        engine_core::Matrix4 model = engine_core::matrix4_multiply(
+            engine_core::matrix4_translation(x, 0.f, z), engine_core::matrix4_axis_angle({0.f, 1.f, 0.f}, 0.3 * i));
+        const float scale = 0.5f + 0.05f * static_cast<float>(i % 7);
+        for (int column = 0; column < 3; ++column) {
+            for (int axis = 0; axis < 3; ++axis) {
+                model.m[column * 4 + axis] *= scale;
+            }
+        }
+        if (i == 7) {
+            for (int axis = 0; axis < 3; ++axis) {
+                model.m[axis] *= -1.f;
+            }
+        }
+        if (i == 12) {
+            for (int axis = 0; axis < 3; ++axis) {
+                model.m[4 + axis] *= 2.f;
+            }
+        }
+        runner::MeshDraw draw{cube, model};
+        draw.color[0] = i % 3 == 0 ? 1.f : 0.3f;
+        draw.color[1] = i % 3 == 1 ? 1.f : 0.3f;
+        draw.color[2] = i % 3 == 2 ? 1.f : 0.3f;
+        draws.push_back(draw);
+    }
+    engine_core::Matrix4 floor = engine_core::matrix4_translation(0.f, -0.6f, -2.f);
+    floor.m[0] = 12.f;
+    floor.m[5] = 0.2f;
+    floor.m[10] = 12.f;
+    draws.push_back(runner::MeshDraw{cube, floor});
+    if (seeThrough) {
+        for (int i = 0; i < 3; ++i) {
+            runner::MeshDraw glass{cube, engine_core::matrix4_translation(static_cast<float>(i) - 1.f, 0.5f, 3.f)};
+            glass.transparency = 0.4f;
+            glass.color[i] = 1.f;
+            draws.push_back(glass);
+        }
+    }
+    return draws;
+}
+
+// The three regression frames, each width * height * 4 bytes, read from the window.
+std::vector<std::vector<unsigned char>> RegressionFrames(const GpuMesh* cube, int size, int width, int height) {
+    runner::Renderer renderer;
+    Expect(renderer.initialize(), "the renderer builds for the regression scenes");
+    runner::LightDraw sun;
+    sun.kind = runner::LightDraw::Kind::Directional;
+    sun.direction[0] = 0.5f;
+    sun.direction[1] = -0.8f;
+    sun.direction[2] = -0.3f;
+    sun.intensity = 2.f;
+    sun.shadows = true;
+    sun.shadowDistance = 100.f;
+    sun.id = 21;
+    runner::LightDraw spot;
+    spot.kind = runner::LightDraw::Kind::Spot;
+    spot.position[0] = -4.f;
+    spot.position[1] = 4.f;
+    spot.position[2] = 2.f;
+    spot.direction[0] = 0.6f;
+    spot.direction[1] = -0.7f;
+    spot.direction[2] = -0.4f;
+    spot.outerFovDegrees = 90.f;
+    spot.radius = 20.f;
+    spot.intensity = 4.f;
+    spot.shadows = true;
+    spot.id = 22;
+    std::vector<std::vector<unsigned char>> frames;
+    const auto capture = [&](const std::vector<runner::MeshDraw>& draws, const runner::LightDraw* light) {
+        // Twice, so cached shadow maps are what the frame reads, as in the studio.
+        for (int pass = 0; pass < 2; ++pass) {
+            renderer.draw(0, 0, size, size, size, size, draws.data(), static_cast<int>(draws.size()), light,
+                          light != nullptr ? 1 : 0);
+        }
+        std::vector<unsigned char> pixels(static_cast<std::size_t>(width) * height * 4);
+        glReadPixels(0, 0, width, height, runner::GL_RGBA, runner::GL_UNSIGNED_BYTE, pixels.data());
+        frames.push_back(std::move(pixels));
+    };
+    capture(RegressionDraws(cube, false), nullptr);
+    capture(RegressionDraws(cube, false), &sun);
+    capture(RegressionDraws(cube, true), &spot);
+    Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the regression scenes leave no GL error");
+    renderer.shutdown();
+    return frames;
+}
+
+// --save writes each frame to dir/regression-N.rgba; --compare reads them back
+// and expects every channel within 1.
+void SaveOrCompareRegression(const std::vector<std::vector<unsigned char>>& frames, const std::string& mode,
+                             const std::filesystem::path& dir) {
+    for (std::size_t n = 0; n < frames.size(); ++n) {
+        const std::filesystem::path file = dir / ("regression-" + std::to_string(n) + ".rgba");
+        if (mode == "--save") {
+            std::filesystem::create_directories(dir);
+            std::ofstream(file, std::ios::binary)
+                .write(reinterpret_cast<const char*>(frames[n].data()), static_cast<std::streamsize>(frames[n].size()));
+            continue;
+        }
+        std::ifstream in(file, std::ios::binary);
+        std::vector<unsigned char> saved((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        if (saved.size() != frames[n].size()) {
+            Expect(false, "regression frame " + std::to_string(n) + " has the saved size");
+            continue;
+        }
+        int worst = 0;
+        int differing = 0;
+        for (std::size_t i = 0; i < saved.size(); ++i) {
+            const int difference = std::abs(static_cast<int>(saved[i]) - static_cast<int>(frames[n][i]));
+            worst = std::max(worst, difference);
+            differing += difference > 0 ? 1 : 0;
+        }
+        Expect(worst <= 1, "regression frame " + std::to_string(n) + " matches within 1 (worst " +
+                               std::to_string(worst) + ", " + std::to_string(differing) + " channels differ)");
+    }
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     // A scratch project resources folder with the cube and a file that is not AMESH.
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "anarchy-scene-render-check";
     std::filesystem::remove_all(root);
@@ -1516,6 +1643,11 @@ int main() {
         meshes.sweepSessions();
         Expect(meshes.getSession(9, session, 3) != nullptr, "one swept away uploads again when asked");
         Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "session uploads leave no GL error");
+
+        if (argc == 3 && (std::string(argv[1]) == "--save" || std::string(argv[1]) == "--compare")) {
+            SaveOrCompareRegression(RegressionFrames(cube, kSize, fbWidth, fbHeight), argv[1], argv[2]);
+        }
+
         meshes.clear();
         renderer.shutdown();
     }

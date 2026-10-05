@@ -6,7 +6,11 @@
 
 namespace runner {
 
-float ScreenRadius(const Sphere& sphere, const CameraView& camera) {
+namespace {
+
+// ScreenRadius with tan(fovY / 2) precomputed once per FindVisible call,
+// instead of once per draw.
+float ScreenRadiusScaled(const Sphere& sphere, const CameraView& camera, float tanHalfFov) {
     const float* eye = camera.world.m + 12;
     const float dx = sphere.center.x - eye[0];
     const float dy = sphere.center.y - eye[1];
@@ -15,8 +19,14 @@ float ScreenRadius(const Sphere& sphere, const CameraView& camera) {
     if (distance <= sphere.radius) {
         return std::numeric_limits<float>::infinity();
     }
+    return sphere.radius * static_cast<float>(camera.paneHeight) / (2.f * distance * tanHalfFov);
+}
+
+}  // namespace
+
+float ScreenRadius(const Sphere& sphere, const CameraView& camera) {
     const float halfFov = camera.fovYDegrees * 0.5f * 0.01745329252f;
-    return sphere.radius * static_cast<float>(camera.paneHeight) / (2.f * distance * std::tan(halfFov));
+    return ScreenRadiusScaled(sphere, camera, std::tan(halfFov));
 }
 
 void FindVisible(const DrawItem* items, int count, const CameraView& camera, bool cull, VisibilityResult& out) {
@@ -26,6 +36,8 @@ void FindVisible(const DrawItem* items, int count, const CameraView& camera, boo
     out.transparent.clear();
     out.culled = 0;
     const Frustum frustum = MakeFrustum(camera.viewProjection);
+    const float halfFov = camera.fovYDegrees * 0.5f * 0.01745329252f;
+    const float tanHalfFov = std::tan(halfFov);
     for (int index = 0; index < count; ++index) {
         const DrawItem& item = items[index];
         if (!item.drawable) {
@@ -39,7 +51,7 @@ void FindVisible(const DrawItem* items, int count, const CameraView& camera, boo
         }
         VisibleDraw visible;
         visible.index = index;
-        visible.screenRadius = ScreenRadius(sphere, camera);
+        visible.screenRadius = ScreenRadiusScaled(sphere, camera, tanHalfFov);
         (item.transparency > 0.f ? out.transparent : out.opaque).push_back(visible);
     }
 }

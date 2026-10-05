@@ -42,12 +42,12 @@ public:
     bool initialize();
     void shutdown();
 
-    // Draws this frame's due tiles for requests, casting from meshes. False,
-    // having committed nothing, when the program cannot draw yet (macOS). A
-    // driver that will not draw into the atlas gets every light unshadowed,
-    // said once.
-    bool draw(const std::vector<ShadowRequest>& requests, const MeshDraw* meshes, int count, const CameraView& camera,
-              const ShadowSettings& settings);
+    // Draws this frame's due tiles for requests, casting from meshes, whose
+    // world spheres are spheres (one per mesh). False, having committed nothing,
+    // when the program cannot draw yet (macOS). A driver that will not draw into
+    // the atlas gets every light unshadowed, said once.
+    bool draw(const std::vector<ShadowRequest>& requests, const MeshDraw* meshes, int count, const Sphere* spheres,
+              const CameraView& camera, const ShadowSettings& settings);
     // How the light pass reads key's map: kNone before it has one, or once
     // the driver has refused to draw shadow maps.
     ShadowLookup lookup(std::uint64_t key) const;

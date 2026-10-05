@@ -9,6 +9,7 @@
 #include "SceneDepth.hpp"
 #include "ShadowRenderer.hpp"
 #include "ViewCapture.hpp"
+#include "Visibility.hpp"
 
 #include <cstdint>
 #include <initializer_list>
@@ -71,6 +72,20 @@ struct LightDraw {
     bool shadows = false;
     // A DirectionalLight's: studs from the camera its cascades cover.
     float shadowDistance = 100.f;
+};
+
+// What the last draw did with its meshes.
+struct RenderStats {
+    // MeshDraws given.
+    int draws = 0;
+    // Opaque and see-through draws in view.
+    int visible = 0;
+    // Drawable, but outside the view.
+    int culled = 0;
+    // Draw calls the geometry pass made.
+    int runs = 0;
+    // GpuMesh::draw_instanced calls in every pass, shadows included.
+    int instancedCalls = 0;
 };
 
 // The Skybox, as the renderer reads it. Each image is a GL texture as
@@ -198,6 +213,10 @@ public:
     void setShadowSettings(const ShadowSettings& settings) { shadowSettings_ = settings; }
     // The shadow atlas texture's pages (ShadowRenderer::atlasPages), 0 with none.
     int shadowAtlasPages() const { return shadows_.atlasPages(); }
+    // Whether meshes outside the view are skipped: true unless turned off to compare.
+    void setCulling(bool culling) { culling_ = culling; }
+    // The last draw's counts. Zero for a draw that drew no meshes.
+    const RenderStats& stats() const { return stats_; }
 
     // x, y, width, and height are the pane in window points, origin at the top
     // left. sceneWidth and sceneHeight are the window in the same units.
@@ -408,8 +427,12 @@ private:
     void prepareSky();
     // The Skybox's uniforms and cubes, or uSkyEnabled 0 with none.
     void bindSky(const Program& program);
+    // The camera as the shadow planner and visibility see it, for this frame's targets.
+    CameraView cameraView(const float* projection) const;
+    // Fills drawItems_ from meshes and finds what the camera sees into visibility_.
+    void findVisible(const MeshDraw* meshes, int count, const CameraView& camera);
     // Draws this frame's due shadow maps, before the G-buffer, and fills shadowLookups_.
-    bool shadowPass(const MeshDraw* meshes, int count, const float* projection);
+    bool shadowPass(const MeshDraw* meshes, int count, const CameraView& camera);
     // Points program at lookup's map, and every shadow sampler at a texture of its kind.
     void bindShadow(const Program& program, const ShadowLookup& lookup);
 
@@ -567,6 +590,10 @@ private:
     std::vector<ViewLight> viewLights_;
     std::vector<int> transparent_;
     std::vector<float> transparentDepth_;
+    std::vector<DrawItem> drawItems_;
+    VisibilityResult visibility_;
+    bool culling_ = true;
+    RenderStats stats_;
     std::vector<ShadowRequest> shadowRequests_;
     std::vector<ShadowLookup> shadowLookups_;
     // The first shadowed DirectionalLight this frame, if any, and its lookup.

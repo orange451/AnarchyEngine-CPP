@@ -154,7 +154,7 @@ bool ShadowRenderer::drawCasters(const Matrix4& viewProjection, const std::vecto
 }
 
 bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const MeshDraw* meshes, int count,
-                          const CameraView& camera, const ShadowSettings& settings) {
+                          const Sphere* spheres, const CameraView& camera, const ShadowSettings& settings) {
     if (refused_) {
         return true;
     }
@@ -182,7 +182,7 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         caster.revision = mesh.mesh->generation();
         caster.owner = mesh.owner;
         caster.model = mesh.model;
-        caster.bounds = WorldBounds(mesh.model, mesh.mesh->bounds_min(), mesh.mesh->bounds_max());
+        caster.bounds = spheres[index];
         casters_.push_back(caster);
         casterMeshes_.push_back(index);
     }

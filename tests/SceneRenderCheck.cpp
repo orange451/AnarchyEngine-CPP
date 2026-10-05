@@ -1406,6 +1406,17 @@ int main(int argc, char** argv) {
             sunLight.direction[0] = 0.f;
             sunLight.direction[1] = -1.f;
             Expect(lit(sunLight, scene, 2)[0] > ambientFloor + 20, "a sun straight down lights the floor beside the cube");
+            // CL4: a caster the camera cannot see still shadows what it can. A cube
+            // 12 studs above the open floor point is far above the view.
+            const runner::MeshDraw withHigh[3] = {scene[0], scene[1],
+                                                  runner::MeshDraw{cube, engine_core::matrix4_translation(1.f, 12.f, 2.f)}};
+            const int openUnder = lit(sunLight, scene, 2)[1];
+            const std::array<int, 2> high = lit(sunLight, withHigh, 3);
+            Expect(renderer.stats().culled == 1, "CL4 the high cube is out of view (" +
+                                                     std::to_string(renderer.stats().culled) + " culled)");
+            Expect(openUnder > ambientFloor + 20 && std::abs(high[1] - ambientFloor) <= 4,
+                   "CL4 and its shadow still falls on the open floor (" + std::to_string(high[1]) + " against " +
+                       std::to_string(ambientFloor) + ")");
             Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "cascades leave no GL error");
 
             // Shadows off in the settings draws every light unshadowed.
@@ -1655,6 +1666,38 @@ int main(int argc, char** argv) {
         meshes.sweepSessions();
         Expect(meshes.getSession(9, session, 3) != nullptr, "one swept away uploads again when asked");
         Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "session uploads leave no GL error");
+
+        {
+            // CL1–CL3: culling. From (0, 0, 8) down -Z with a 60 degree view, a cube
+            // at the origin is in view, one at (0, 0, 20) is behind the camera, and
+            // one at (40, 0, 0) is far past the right edge.
+            // A fresh mesh of its own: by here the file-backed cube above was broken
+            // on purpose (the recheck test) and is no longer valid.
+            GpuMesh cullCube;
+            cullCube.upload(Cube());
+            runner::Renderer culler;
+            Expect(culler.initialize(), "the renderer builds for culling");
+            culler.setCamera(engine_core::matrix4_translation(0.f, 0.f, 8.f), 60.f);
+            const runner::MeshDraw three[3] = {runner::MeshDraw{&cullCube, engine_core::matrix4_identity()},
+                                               runner::MeshDraw{&cullCube, engine_core::matrix4_translation(0.f, 0.f, 20.f)},
+                                               runner::MeshDraw{&cullCube, engine_core::matrix4_translation(40.f, 0.f, 0.f)}};
+            culler.draw(0, 0, kSize, kSize, kSize, kSize, three, 3);
+            const runner::RenderStats culled = culler.stats();
+            Expect(culled.draws == 3 && culled.visible == 1 && culled.culled == 2 && culled.runs == 1,
+                   "CL1 two of three cubes are culled (" + std::to_string(culled.visible) + " visible, " +
+                       std::to_string(culled.culled) + " culled)");
+            std::vector<unsigned char> withCulling(static_cast<std::size_t>(fbWidth) * fbHeight * 4);
+            glReadPixels(0, 0, fbWidth, fbHeight, runner::GL_RGBA, runner::GL_UNSIGNED_BYTE, withCulling.data());
+            culler.setCulling(false);
+            culler.draw(0, 0, kSize, kSize, kSize, kSize, three, 3);
+            Expect(culler.stats().visible == 3 && culler.stats().culled == 0, "CL2 culling off draws all three");
+            std::vector<unsigned char> without(withCulling.size());
+            glReadPixels(0, 0, fbWidth, fbHeight, runner::GL_RGBA, runner::GL_UNSIGNED_BYTE, without.data());
+            Expect(withCulling == without, "CL3 culling changes no pixel");
+            Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "culling leaves no GL error");
+            culler.shutdown();
+            cullCube.destroy();
+        }
 
         if (argc == 3 && (std::string(argv[1]) == "--save" || std::string(argv[1]) == "--compare")) {
             GpuMesh regressionCube;

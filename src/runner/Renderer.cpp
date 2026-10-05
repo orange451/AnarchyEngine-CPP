@@ -845,6 +845,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     // Nothing to hide behind, and no depth under the probe, until this draw leaves some.
     sceneDepth_ = SceneDepth{};
     probedDepth_.reset();
+    stats_ = RenderStats{};
     if (!ready_ || width <= 0.0 || height <= 0.0 || sceneWidth <= 0.0 || sceneHeight <= 0.0) {
         return false;
     }
@@ -1005,7 +1006,9 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
 
         glDisable(GL_SCISSOR_TEST);
         glViewport(0, 0, targetWidth_, targetHeight_);
-        drawn = cubesReady && shadowPass(meshes, meshCount, projection) &&
+        const CameraView camera = cameraView(projection);
+        findVisible(meshes, meshCount, camera);
+        drawn = cubesReady && shadowPass(meshes, meshCount, camera) &&
                 geometryPass(meshes, meshCount, projection);
         // Occlusion never fails the frame: without it, surfaces are lit as if open.
         if (drawn) {
@@ -1343,13 +1346,7 @@ void Renderer::bindGBuffer(const Program& program) {
     BindTexture(kUnitEmissive, emissiveTexture_);
 }
 
-bool Renderer::shadowPass(const MeshDraw* meshes, int count, const float* projection) {
-    RENDER_PASS("Shadows");
-    shadowLookups_.assign(shadowRequests_.size(), ShadowLookup{});
-    sunLookup_ = ShadowLookup{};
-    if (shadowRequests_.empty() && !hasSunShadow_) {
-        return true;
-    }
+CameraView Renderer::cameraView(const float* projection) const {
     CameraView camera;
     camera.world = engine_core::matrix4_inverse(view_);
     Matrix viewProjection;
@@ -1359,7 +1356,39 @@ bool Renderer::shadowPass(const MeshDraw* meshes, int count, const float* projec
     camera.aspect = static_cast<float>(targetWidth_) / static_cast<float>(targetHeight_);
     camera.nearZ = kSceneNear;
     camera.paneHeight = targetHeight_;
-    if (!shadows_.draw(shadowRequests_, meshes, count, camera, shadowSettings_)) {
+    return camera;
+}
+
+void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& camera) {
+    PROFILE_SCOPE("Visibility", profiler::Group::Render);
+    drawItems_.resize(static_cast<std::size_t>(count));
+    for (int index = 0; index < count; ++index) {
+        const MeshDraw& draw = meshes[index];
+        DrawItem& item = drawItems_[static_cast<std::size_t>(index)];
+        item = DrawItem{};
+        item.model = &draw.model;
+        item.transparency = draw.transparency;
+        // As the passes have always skipped: no mesh, not uploaded, or wholly see-through.
+        item.drawable = draw.mesh != nullptr && draw.mesh->valid() && !(draw.transparency >= 1.f);
+        if (item.drawable) {
+            item.boundsMin = draw.mesh->bounds_min();
+            item.boundsMax = draw.mesh->bounds_max();
+        }
+    }
+    FindVisible(drawItems_.data(), count, camera, culling_, visibility_);
+    stats_.draws = count;
+    stats_.visible = static_cast<int>(visibility_.opaque.size() + visibility_.transparent.size());
+    stats_.culled = visibility_.culled;
+}
+
+bool Renderer::shadowPass(const MeshDraw* meshes, int count, const CameraView& camera) {
+    RENDER_PASS("Shadows");
+    shadowLookups_.assign(shadowRequests_.size(), ShadowLookup{});
+    sunLookup_ = ShadowLookup{};
+    if (shadowRequests_.empty() && !hasSunShadow_) {
+        return true;
+    }
+    if (!shadows_.draw(shadowRequests_, meshes, count, visibility_.spheres.data(), camera, shadowSettings_)) {
         return false;
     }
     if (!shadows_.drawSun(hasSunShadow_ ? &sunShadow_ : nullptr, meshes, camera, shadowSettings_)) {
@@ -1408,18 +1437,14 @@ bool Renderer::geometryPass(const MeshDraw* meshes, int count, const float* proj
     glUseProgram(geometry_.id);
     glUniformMatrix4fv(geometry_.view, 1, GL_FALSE, view_.m);
     glUniformMatrix4fv(geometry_.projection, 1, GL_FALSE, projection);
+    (void)count;
     transparent_.clear();
+    for (const VisibleDraw& visible : visibility_.transparent) {
+        transparent_.push_back(visible.index);
+    }
     bool asked = false;
-    for (int index = 0; index < count; ++index) {
-        const MeshDraw& draw = meshes[index];
-        if (draw.mesh == nullptr || !draw.mesh->valid() || draw.transparency >= 1.f) {
-            continue;
-        }
-        // See-through surfaces wait for the forward pass, as the legacy pipeline queued them.
-        if (draw.transparency > 0.f) {
-            transparent_.push_back(index);
-            continue;
-        }
+    for (const VisibleDraw& visible : visibility_.opaque) {
+        const MeshDraw& draw = meshes[visible.index];
         bindMaterial(geometry_, draw);
         CullBackFaces(draw.model.m);
         draw.mesh->bind();
@@ -1427,7 +1452,8 @@ bool Renderer::geometryPass(const MeshDraw* meshes, int count, const float* proj
             return false;
         }
         asked = true;
-        draw.mesh->draw(0);
+        draw.mesh->draw(visible.lod);
+        ++stats_.runs;
     }
     glDisable(RT_GL_CULL_FACE);
     glCullFace(RT_GL_BACK);

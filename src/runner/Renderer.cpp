@@ -751,6 +751,7 @@ struct SavedState {
     GLint cullMode = 0;
     GLint program = 0;
     GLint vertexArray = 0;
+    GLint arrayBuffer = 0;
     GLint activeTexture = 0;
     GLint textures[kUnitCount] = {};
     GLint cubes[kUnitCount] = {};
@@ -773,6 +774,7 @@ struct SavedState {
         glGetIntegerv(RT_GL_CULL_FACE_MODE, &cullMode);
         glGetIntegerv(RT_GL_CURRENT_PROGRAM, &program);
         glGetIntegerv(RT_GL_VERTEX_ARRAY_BINDING, &vertexArray);
+        glGetIntegerv(RT_GL_ARRAY_BUFFER_BINDING, &arrayBuffer);
         glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
         for (int unit = 0; unit < kUnitCount; ++unit) {
             glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(unit));
@@ -810,6 +812,7 @@ struct SavedState {
         Set(RT_GL_TEXTURE_CUBE_MAP_SEAMLESS, seamlessCubes);
         glUseProgram(static_cast<GLuint>(program));
         glBindVertexArray(static_cast<GLuint>(vertexArray));
+        glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(arrayBuffer));
         // Every unit gets back what it had on the 2D, cube map, and 2D array
         // targets, except a name the draw deleted, which is left at 0 even if
         // GL has since given that name to a new texture. A unit left empty

@@ -151,3 +151,53 @@ TEST_CASE("BLM4 scripts make a BloomEffect and set it", "[bloom]") {
         REQUIRE(value);
     }
 }
+
+TEST_CASE("BLM3 the snapshot carries the first BloomEffect under Lighting", "[bloom][render]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    const auto frame = [&] {
+        pump.prepare_copy(game);
+        pump.publish();
+    };
+    frame();
+    REQUIRE_FALSE(pump.front().bloom.present);
+
+    const InstanceId lighting = game.scene_service("Lighting");
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    game.set_parent(folder.id(), lighting);
+    BloomEffect& first = add_bloom(game, folder.id());
+    BloomEffect& second = add_bloom(game, lighting);
+    REQUIRE_FALSE(first.set_enabled(false));
+    REQUIRE_FALSE(first.set_intensity(0.5));
+    REQUIRE_FALSE(first.set_size(12.0));
+    REQUIRE_FALSE(first.set_threshold(2.0));
+    REQUIRE_FALSE(second.set_size(40.0));
+    frame();
+    // The Folder comes first in Lighting, so the BloomEffect inside it is the bloom.
+    {
+        const engine_core::VisualBloom& bloom = pump.front().bloom;
+        REQUIRE(bloom.present);
+        REQUIRE_FALSE(bloom.enabled);
+        REQUIRE(bloom.intensity == 0.5f);
+        REQUIRE(bloom.size == 12.f);
+        REQUIRE(bloom.threshold == 2.f);
+    }
+
+    // A change shows on the next frame.
+    REQUIRE_FALSE(first.set_enabled(true));
+    frame();
+    REQUIRE(pump.front().bloom.enabled);
+
+    // Gone, the next one is the bloom.
+    game.destroy(first.id());
+    frame();
+    REQUIRE(pump.front().bloom.present);
+    REQUIRE(pump.front().bloom.size == 40.f);
+
+    game.destroy(second.id());
+    frame();
+    REQUIRE_FALSE(pump.front().bloom.present);
+    REQUIRE(pump.front().bloom.intensity == 0.05f);
+}

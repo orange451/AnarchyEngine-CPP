@@ -19,7 +19,6 @@ struct Data;
 
 namespace engine_core {
 
-class Skybox;
 
 // What a light's row shines. A PointLight or SpotLight sits at the row's
 // world translation, and a SpotLight points down the row's -Z. A
@@ -101,6 +100,17 @@ struct VisualSky {
     ColorRgb tint{1.f, 1.f, 1.f, 1.f};
 };
 
+// The first BloomEffect under Lighting, in tree order, as the renderer reads
+// it. present is false with none, and the renderer draws no bloom.
+struct VisualBloom {
+    bool present = false;
+    bool enabled = true;
+    float intensity = 0.05f;
+    // Pixels at a 1080-pixel-tall view.
+    float size = 24.f;
+    float threshold = 0.f;
+};
+
 // Lighting's properties the renderer reads, found again at every Prepare.
 // Each is as Lighting has it; a place with no Lighting has the defaults.
 struct VisualLighting {
@@ -164,6 +174,7 @@ struct VisualSnapshot {
     std::vector<VisualPrefab> prefabs;
     VisualLighting lighting;
     VisualSky sky;
+    VisualBloom bloom;
     // Rebuilt at every take_changes: there are few, and hover moves with the mouse.
     std::vector<VisualDragger> draggers;
     // Rebuilt at every take_changes, like draggers.
@@ -231,10 +242,11 @@ private:
     void set_row_prefab(VisualInstance& inst, const std::string& guid);
     // Fills base_.prefabs from each entry's Prefab, as the DataModel is now.
     void resolve_prefabs(DataModel& game);
-    // Fills base_.lighting and base_.sky from the place's Lighting, as the DataModel is now.
+    // Fills base_.lighting, base_.sky, and base_.bloom from the place's Lighting, as the DataModel is now.
     void resolve_lighting(DataModel& game);
-    // The first Skybox under root, depth first in child order, or null.
-    const Skybox* find_skybox(const DataModel& game, InstanceId root);
+    // The first T under root, depth first in child order, or null.
+    template <class T>
+    const T* find_first(const DataModel& game, InstanceId root);
 
     VisualSnapshot base_{};
     VisualSnapshot buffers_[2]{};
@@ -253,8 +265,8 @@ private:
     std::vector<PrefabEntry> prefab_entries_;
     std::vector<std::uint32_t> free_prefab_entries_;
     std::unordered_map<std::string, std::uint32_t> prefab_by_guid_;
-    // find_skybox's walk, kept so a Prepare allocates nothing.
-    std::vector<InstanceId> sky_walk_;
+    // find_first's walk, kept so a Prepare allocates nothing.
+    std::vector<InstanceId> lighting_walk_;
     // The Draggers resolve_draggers walks, kept so it does not allocate each frame.
     std::vector<InstanceId> dragger_ids_;
     // The BillboardGuis resolve_billboards walks, kept so it does not allocate each frame.

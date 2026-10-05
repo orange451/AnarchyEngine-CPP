@@ -1,6 +1,7 @@
 #include "SnapshotPump.hpp"
 
 #include "AssetInstances.hpp"
+#include "BloomEffect.hpp"
 #include "Dragger.hpp"
 #include "Camera.hpp"
 #include "GameObject.hpp"
@@ -19,6 +20,12 @@ static_assert(VisualLighting{}.exposure == static_cast<float>(Lighting::kDefault
                   VisualLighting{}.saturation == static_cast<float>(Lighting::kDefaultSaturation) &&
                   VisualLighting{}.gamma == static_cast<float>(Lighting::kDefaultGamma),
               "a place with no Lighting draws with Lighting's defaults");
+
+static_assert(VisualBloom{}.enabled == BloomEffect::kDefaultEnabled &&
+                  VisualBloom{}.intensity == static_cast<float>(BloomEffect::kDefaultIntensity) &&
+                  VisualBloom{}.size == static_cast<float>(BloomEffect::kDefaultSize) &&
+                  VisualBloom{}.threshold == static_cast<float>(BloomEffect::kDefaultThreshold),
+              "a place with no BloomEffect carries BloomEffect's defaults");
 
 float field_of_view_of(const GameObject& object) {
     const auto* camera = dynamic_cast<const Camera*>(&object);
@@ -405,10 +412,32 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
     }
 }
 
+template <class T>
+const T* SnapshotPump::find_first(const DataModel& game, InstanceId root) {
+    // Children are pushed last first, so the first child comes off the walk first.
+    lighting_walk_.clear();
+    lighting_walk_.push_back(root);
+    while (!lighting_walk_.empty()) {
+        const InstanceId id = lighting_walk_.back();
+        lighting_walk_.pop_back();
+        if (id != root) {
+            if (const auto* found = dynamic_cast<const T*>(game.instance(id))) {
+                return found;
+            }
+        }
+        const std::size_t first = lighting_walk_.size();
+        for (InstanceId child = game.first_child(id); child != 0; child = game.next_sibling(child)) {
+            lighting_walk_.push_back(child);
+        }
+        std::reverse(lighting_walk_.begin() + static_cast<std::ptrdiff_t>(first), lighting_walk_.end());
+    }
+    return nullptr;
+}
+
 void SnapshotPump::resolve_lighting(DataModel& game) {
     const auto* lighting = dynamic_cast<const Lighting*>(game.instance(game.scene_service("Lighting")));
     VisualSky& sky = base_.sky;
-    const Skybox* skybox = lighting != nullptr ? find_skybox(game, lighting->id()) : nullptr;
+    const Skybox* skybox = lighting != nullptr ? find_first<Skybox>(game, lighting->id()) : nullptr;
     sky.present = skybox != nullptr;
     // Assigned in place, so an unchanged sky reuses last frame's strings.
     const auto texture_path = [&](const LuaSlot& slot, std::string& path) {
@@ -434,6 +463,17 @@ void SnapshotPump::resolve_lighting(DataModel& game) {
         sky.tint = Skybox::kDefaultTint;
     }
 
+    const BloomEffect* effect = lighting != nullptr ? find_first<BloomEffect>(game, lighting->id()) : nullptr;
+    VisualBloom& bloom = base_.bloom;
+    bloom = VisualBloom{};
+    if (effect != nullptr) {
+        bloom.present = true;
+        bloom.enabled = effect->enabled();
+        bloom.intensity = static_cast<float>(effect->intensity());
+        bloom.size = static_cast<float>(effect->size());
+        bloom.threshold = static_cast<float>(effect->threshold());
+    }
+
     if (lighting == nullptr) {
         base_.lighting = VisualLighting{};
         return;
@@ -444,31 +484,12 @@ void SnapshotPump::resolve_lighting(DataModel& game) {
     base_.lighting.gamma = static_cast<float>(lighting->gamma());
 }
 
-const Skybox* SnapshotPump::find_skybox(const DataModel& game, InstanceId root) {
-    // Children are pushed last first, so the first child comes off the walk first.
-    sky_walk_.clear();
-    sky_walk_.push_back(root);
-    while (!sky_walk_.empty()) {
-        const InstanceId id = sky_walk_.back();
-        sky_walk_.pop_back();
-        if (id != root) {
-            if (const auto* skybox = dynamic_cast<const Skybox*>(game.instance(id))) {
-                return skybox;
-            }
-        }
-        const std::size_t first = sky_walk_.size();
-        for (InstanceId child = game.first_child(id); child != 0; child = game.next_sibling(child)) {
-            sky_walk_.push_back(child);
-        }
-        std::reverse(sky_walk_.begin() + static_cast<std::ptrdiff_t>(first), sky_walk_.end());
-    }
-    return nullptr;
-}
 
 void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.camera = base_.camera;
     dst.lighting = base_.lighting;
     dst.sky = base_.sky;
+    dst.bloom = base_.bloom;
     dst.resources_root = base_.resources_root;
     dst.draggers = base_.draggers;
     dst.billboards = base_.billboards;

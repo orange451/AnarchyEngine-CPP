@@ -1352,27 +1352,30 @@ CameraView Renderer::cameraView(const float* projection) const {
 }
 
 void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& camera) {
-    PROFILE_SCOPE("Visibility", profiler::Group::Render);
-    drawItems_.resize(static_cast<std::size_t>(count));
-    for (int index = 0; index < count; ++index) {
-        const MeshDraw& draw = meshes[index];
-        DrawItem& item = drawItems_[static_cast<std::size_t>(index)];
-        item = DrawItem{};
-        item.model = &draw.model;
-        item.transparency = draw.transparency;
-        // As the passes have always skipped: no mesh, not uploaded, or wholly see-through.
-        item.drawable = draw.mesh != nullptr && draw.mesh->valid() && !(draw.transparency >= 1.f);
-        if (item.drawable) {
-            item.boundsMin = draw.mesh->bounds_min();
-            item.boundsMax = draw.mesh->bounds_max();
+    {
+        PROFILE_SCOPE("Visibility", profiler::Group::Render);
+        drawItems_.resize(static_cast<std::size_t>(count));
+        for (int index = 0; index < count; ++index) {
+            const MeshDraw& draw = meshes[index];
+            DrawItem& item = drawItems_[static_cast<std::size_t>(index)];
+            item = DrawItem{};
+            item.model = &draw.model;
+            item.transparency = draw.transparency;
+            // As the passes have always skipped: no mesh, not uploaded, or wholly see-through.
+            item.drawable = draw.mesh != nullptr && draw.mesh->valid() && !(draw.transparency >= 1.f);
+            if (item.drawable) {
+                item.boundsMin = draw.mesh->bounds_min();
+                item.boundsMax = draw.mesh->bounds_max();
+            }
+            item.tint = draw.tint;
+            item.slot = draw.slot;
         }
-        item.tint = draw.tint;
-        item.slot = draw.slot;
+        FindVisible(drawItems_.data(), count, camera, culling_, visibility_);
+        stats_.draws = count;
+        stats_.visible = static_cast<int>(visibility_.opaque.size() + visibility_.transparent.size());
+        stats_.culled = visibility_.culled;
     }
-    FindVisible(drawItems_.data(), count, camera, culling_, visibility_);
-    stats_.draws = count;
-    stats_.visible = static_cast<int>(visibility_.opaque.size() + visibility_.transparent.size());
-    stats_.culled = visibility_.culled;
+    PROFILE_SCOPE("Batches", profiler::Group::Render);
     BuildBatches(drawItems_.data(), visibility_, view_, batches_);
 }
 

@@ -223,9 +223,42 @@ Each phase leaves the renderer working and is committed on its own.
 
 ## Testing and measurement
 
-The stress place is built by a Lua script in a scratch copy of a project, never a real one: about 10,000 GameObjects over 3 Prefabs on a grid, about 50 one-off Prefabs, and a sun with shadows. It is measured from two cameras:
+The stress place is built by a Lua script in a scratch copy of a project, never a real one: about 10,000 GameObjects over 3 Prefabs on a grid, about 50 one-off Prefabs, and a sun with shadows. It is measured from three cameras:
 
 - **Overview**, all of it in view: measures instancing. Mesh draw calls fall from about 10,000 to the number of runs (dozens), with the Geometry pass's GPU time and the Scene View's CPU time falling with them.
-- **Corner close-up**, most of it out of view: measures culling. `culled` is above 80% of `draws`, and the Visibility scope stays well under 1 ms.
+- **Corner close-up**, most of it out of view: measures culling. The pose looks diagonally across the whole grid. `culled` is above 80% of `draws`, and the Visibility scope stays well under 1 ms.
+- **Ground close-up**, looking down from near ground level: exercises culling more than Corner does, with 74% of draws culled.
 
-Numbers come from the per-pass GPU timers and the profiler's CPU scopes, before and after, and are written into this spec when it ships.
+Numbers come from the per-pass GPU timers and the profiler's CPU scopes, with the profiler's GPU "Each pass" mode set by hand in the studio. Before and after measurements are written into this spec when it ships.
+
+## Results
+
+Measured on 2026-10-05 on the user's Mac laptop with the stress place (`scripts/stress_place.lua`) saved as the StressTest project, GPU per-pass timing set by hand in the studio.
+
+| Pose | Measure | Before | After |
+|---|---|---|---|
+| Overview (0,120,260)→(0,0,0) | mesh draw calls | 10,088 (one per draw) | 79 runs |
+| Overview | visible / culled | 10,088 / 0 | 9,145 / 943 |
+| Overview | GPU Geometry | 32.0 | 8.0 |
+| Overview | CPU Geometry pass | 34.1 | 0.74 |
+| Overview | CPU Scene View | 45.2 | 17.4 |
+| Overview | CPU 3D scene | 43.9 | 15.8 |
+| Overview | CPU Visibility | — | 1.75 |
+| Corner (-205,6,-205)→(-190,0,-190) | visible / culled | 10,088 / 0 | 10,038 / 50 (pose looks diagonally across the whole grid) |
+| Corner | mesh draw calls | 10,088 | 29 runs |
+| Corner | GPU Geometry | 31.4 | 9.2 |
+| Corner | CPU Scene View | 44.4 | 20.0 |
+| Corner | CPU Visibility | — | 2.0 |
+| Ground (0,3,0)→(0,1,50) (added: Corner does not exercise culling) | visible / culled | 10,088 / 0 | 2,609 / 7,479 (74% culled) |
+| Ground | mesh draw calls | 10,088 | 7 runs |
+| Ground | GPU Geometry | ~32 (as every pose before) | 9.8 |
+| Ground | CPU Scene View | ~45 | 21.2 |
+| Ground | CPU Visibility | — | 2.1 |
+
+Observations:
+
+- Targets met: draw calls fell from ~10k to dozens; Geometry CPU 34 → <1 ms; GPU Geometry 32 → 8–10 ms.
+- Target missed: CPU Visibility is ~1.75–2.1 ms for 10,088 draws, not "well under 1 ms" (one sphere + 6 planes + ScreenRadius sqrt/tan per draw). Candidates: cache spheres of unmoved objects (spec "out of scope, with room left"), skip ScreenRadius until LOD needs it.
+- Culling barely moves GPU Geometry in the Ground pose (9.8 ms) because the near teapots fill the screen: the pass is now fill-bound, not draw-bound.
+- New top CPU cost: "Floor grid" on the Render draw thread, 9.7–11.6 ms (6.9 ms before). Likely a GPU wait landing in that scope rather than the grid's own work; outside this plan.
+- Frame time is ~33–36 ms with the scene at ~16–21 ms: frames quantize to vsync (2 × 16.6) because the frame still exceeds one refresh.

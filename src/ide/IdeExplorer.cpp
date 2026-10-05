@@ -1,4 +1,5 @@
 #include "IdeExplorer.hpp"
+#include "ClassOrder.hpp"
 #include "LockWaits.hpp"
 
 #include "DataModelLock.hpp"
@@ -1023,6 +1024,7 @@ void IdeExplorer::read_hierarchy(Snapshot& snap) {
                 ++count;
             }
         }
+        sort_children(snap, begin, count);
 
         snap.ids.push_back(id);
         snap.child_counts.push_back(count);
@@ -1033,6 +1035,32 @@ void IdeExplorer::read_hierarchy(Snapshot& snap) {
         for (std::uint32_t i = count; i-- > 0;) {
             pending_.push_back(snap.children[begin + i]);
         }
+    }
+}
+
+void IdeExplorer::sort_children(Snapshot& snap, std::uint32_t begin, std::uint32_t count) {
+    if (count < 2) {
+        return;
+    }
+    child_keys_.resize(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        ChildKey& key = child_keys_[i];
+        key.id = snap.children[begin + i];
+        key.name = root_.name(key.id);
+        key.rank = class_rank({});
+        if (const engine_core::DataModel* object = root_.instance(key.id)) {
+            const char* type = object->class_name();
+            key.rank = object->is_service() ? -1 : class_rank(type != nullptr ? type : "");
+        }
+    }
+    std::stable_sort(child_keys_.begin(), child_keys_.end(), [](const ChildKey& left, const ChildKey& right) {
+        if (left.rank < 0 && right.rank < 0) {
+            return false;
+        }
+        return cluster_before(left.rank, left.name, right.rank, right.name);
+    });
+    for (std::uint32_t i = 0; i < count; ++i) {
+        snap.children[begin + i] = child_keys_[i].id;
     }
 }
 

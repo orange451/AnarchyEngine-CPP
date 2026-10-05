@@ -1192,18 +1192,28 @@ void testInsertFilter() {
     engine_core::lua_creatable_names(names);
     std::vector<std::string> shown;
     ide::filter_class_names(names, "", shown);
+    // Folders, then scripts, then the world's objects, each cluster A to Z.
     const std::vector<std::string> expected = {
-        "AmbientOcclusionEffect", "Attachment", "BillboardGui", "BloomEffect", "Button",        "Camera",     "CSS",              "DirectionalLight", "Dragger", "Folder",     "GameObject", "HBox",
-        "ImagePane",    "Label",        "Material",      "Mesh",       "Model",            "ModuleScript", "Pane",    "PhysicsObject",
-        "PointLight",   "Prefab",        "ScreenGui",  "ScreenSpaceReflections", "Script",           "Skybox",    "Sound",      "SoundEmitter",
-        "SpotLight",    "TextField",     "Texture",    "VBox"};
+        "Folder",
+        "ModuleScript", "Script",
+        "GameObject", "Model", "PhysicsObject",
+        "Camera",
+        "DirectionalLight", "PointLight", "SpotLight",
+        "AmbientOcclusionEffect", "BloomEffect", "ScreenSpaceReflections", "Skybox",
+        "Sound", "SoundEmitter",
+        "Attachment",
+        "BillboardGui", "ScreenGui",
+        "HBox", "ImagePane", "Pane", "VBox",
+        "Button", "Label", "TextField",
+        "CSS",
+        "Dragger", "Material", "Mesh", "Prefab", "Texture"};
     if (shown != expected) {
-        fail("insert list is every creatable class, A to Z");
+        fail("insert list is every creatable class, in clusters, each A to Z");
     }
     ide::filter_class_names(names, "scr", shown);
-    // Names that start with it first, A to Z, then those that have it inside.
-    if (shown != std::vector<std::string>{"ScreenGui", "ScreenSpaceReflections", "Script", "ModuleScript"}) {
-        fail("scr lists Script before ModuleScript");
+    // Names that start with it first, then those that have it inside, each in clusters.
+    if (shown != std::vector<std::string>{"Script", "ScreenSpaceReflections", "ScreenGui", "ModuleScript"}) {
+        fail("scr lists Script first and ModuleScript after the names that start with it");
     }
     ide::filter_class_names(names, "Ga", shown);
     if (shown.size() != 1 || shown[0] != "GameObject") {

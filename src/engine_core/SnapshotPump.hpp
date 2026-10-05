@@ -122,6 +122,18 @@ struct VisualReflections {
     float max_roughness = 0.3f;
 };
 
+// The first AmbientOcclusionEffect under Lighting, in tree order, as the
+// renderer reads it. present is false with none, and nothing is shaded.
+struct VisualAmbientOcclusion {
+    bool present = false;
+    bool enabled = true;
+    float intensity = 1.f;
+    // Studs.
+    float radius = 1.f;
+    // Enum.EffectQuality's value: Low 0, Medium 1, High 2.
+    int quality = 1;
+};
+
 // Lighting's properties the renderer reads, found again at every Prepare.
 // Each is as Lighting has it; a place with no Lighting has the defaults.
 struct VisualLighting {
@@ -189,6 +201,7 @@ struct VisualSnapshot {
     VisualSky sky;
     VisualBloom bloom;
     VisualReflections reflections;
+    VisualAmbientOcclusion occlusion;
     // Rebuilt at every take_changes: there are few, and hover moves with the mouse.
     std::vector<VisualDragger> draggers;
     // Rebuilt at every take_changes, like draggers.
@@ -256,8 +269,8 @@ private:
     void set_row_prefab(VisualInstance& inst, const std::string& guid);
     // Fills base_.prefabs from each entry's Prefab, as the DataModel is now.
     void resolve_prefabs(DataModel& game);
-    // Fills base_.lighting, base_.sky, base_.bloom, and base_.reflections from the
-    // place's Lighting, as the DataModel is now.
+    // Fills base_.lighting, base_.sky, base_.bloom, base_.reflections, and
+    // base_.occlusion from the place's Lighting, as the DataModel is now.
     void resolve_lighting(DataModel& game);
     // The first T under root, depth first in child order, or null.
     template <class T>

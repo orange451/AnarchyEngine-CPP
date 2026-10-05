@@ -1,5 +1,6 @@
 #include "SnapshotPump.hpp"
 
+#include "AmbientOcclusionEffect.hpp"
 #include "AssetInstances.hpp"
 #include "BloomEffect.hpp"
 #include "Dragger.hpp"
@@ -34,6 +35,12 @@ static_assert(VisualReflections{}.enabled == ScreenSpaceReflections::kDefaultEna
                   VisualReflections{}.max_distance == static_cast<float>(ScreenSpaceReflections::kDefaultMaxDistance) &&
                   VisualReflections{}.max_roughness == static_cast<float>(ScreenSpaceReflections::kDefaultMaxRoughness),
               "a place with no ScreenSpaceReflections carries its defaults");
+
+static_assert(VisualAmbientOcclusion{}.enabled == AmbientOcclusionEffect::kDefaultEnabled &&
+                  VisualAmbientOcclusion{}.intensity == static_cast<float>(AmbientOcclusionEffect::kDefaultIntensity) &&
+                  VisualAmbientOcclusion{}.radius == static_cast<float>(AmbientOcclusionEffect::kDefaultRadius) &&
+                  VisualAmbientOcclusion{}.quality == static_cast<int>(AmbientOcclusionEffect::kDefaultQuality),
+              "a place with no AmbientOcclusionEffect carries its defaults");
 
 float field_of_view_of(const GameObject& object) {
     const auto* camera = dynamic_cast<const Camera*>(&object);
@@ -492,6 +499,17 @@ void SnapshotPump::resolve_lighting(DataModel& game) {
         reflections.max_distance = static_cast<float>(traced->max_distance());
         reflections.max_roughness = static_cast<float>(traced->max_roughness());
     }
+    const AmbientOcclusionEffect* shading =
+        lighting != nullptr ? find_first<AmbientOcclusionEffect>(game, lighting->id()) : nullptr;
+    VisualAmbientOcclusion& occlusion = base_.occlusion;
+    occlusion = VisualAmbientOcclusion{};
+    if (shading != nullptr) {
+        occlusion.present = true;
+        occlusion.enabled = shading->enabled();
+        occlusion.intensity = static_cast<float>(shading->intensity());
+        occlusion.radius = static_cast<float>(shading->radius());
+        occlusion.quality = static_cast<int>(shading->quality());
+    }
 
     if (lighting == nullptr) {
         base_.lighting = VisualLighting{};
@@ -511,6 +529,7 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.sky = base_.sky;
     dst.bloom = base_.bloom;
     dst.reflections = base_.reflections;
+    dst.occlusion = base_.occlusion;
     dst.resources_root = base_.resources_root;
     dst.draggers = base_.draggers;
     dst.billboards = base_.billboards;

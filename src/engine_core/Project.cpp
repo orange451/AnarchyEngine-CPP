@@ -1,5 +1,6 @@
 #include "Project.hpp"
 
+#include "AmbientOcclusionEffect.hpp"
 #include "AssetInstances.hpp"
 #include "Attachment.hpp"
 #include "BloomEffect.hpp"
@@ -144,6 +145,8 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"BloomEffect", [](DataModel& world) -> DataModel& { return world.create<BloomEffect>(); }});
         out.push_back({"ScreenSpaceReflections",
                        [](DataModel& world) -> DataModel& { return world.create<ScreenSpaceReflections>(); }});
+        out.push_back({"AmbientOcclusionEffect",
+                       [](DataModel& world) -> DataModel& { return world.create<AmbientOcclusionEffect>(); }});
         out.push_back({"ScreenGui", [](DataModel& world) -> DataModel& { return world.create<ScreenGui>(); }});
         out.push_back({"BillboardGui", [](DataModel& world) -> DataModel& { return world.create<BillboardGui>(); }});
         out.push_back({"Pane", [](DataModel& world) -> DataModel& { return world.create<Pane>(); }});

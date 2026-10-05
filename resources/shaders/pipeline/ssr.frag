@@ -50,7 +50,8 @@ void main() {
         return;
     }
     vec3 albedo = texture(uAlbedo, vUv).rgb;
-    SkyReflection sky = skyReflection(viewDirection, N, albedo, material.x, roughness, material.z, vec3(1.0), vec3(1.0));
+    SkyReflection sky =
+        skyReflection(viewDirection, N, albedo, material.x, roughness, material.z, vec3(1.0), vec3(1.0), 1.0);
     if (all(lessThan(sky.weight, vec3(0.02)))) {
         return;
     }

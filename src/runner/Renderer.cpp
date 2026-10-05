@@ -2,6 +2,7 @@
 
 #include "profiler/Profiler.hpp"
 
+#include "OcclusionMath.hpp"
 #include "RenderMath.hpp"
 #include "ShaderFile.hpp"
 #include "amesh.hpp"
@@ -74,6 +75,9 @@ constexpr int kUnitShadowCascades = kUnitNormalMap;
 constexpr int kUnitBloom = kUnitAccumulation;
 // The merge reads no scene image, so the reflection trace takes its unit.
 constexpr int kUnitReflections = kUnitScene;
+// Ambient occlusion shares the metalness map's unit: none of the passes that
+// read it (the light pass, the merge, its own blur) reads a Material.
+constexpr int kUnitOcclusion = kUnitMetalnessMap;
 // A light with no instance names its map for one frame only.
 constexpr std::uint64_t kUncachedShadowKey = 1ull << 63;
 // A ViewLight's shadow: the sun's cascades.
@@ -195,6 +199,14 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.chainLevels = at("uChainLevels");
     program.reflectionsEnabled = at("uReflectionsEnabled");
     program.reflectionsIntensity = at("uReflectionsIntensity");
+    program.occlusionRadius = at("uOcclusionRadius");
+    program.projectionScale = at("uProjectionScale");
+    program.occlusionScale = at("uOcclusionScale");
+    program.slices = at("uSlices");
+    program.blurDirection = at("uBlurDirection");
+    program.blurRadius = at("uBlurRadius");
+    program.occlusionEnabled = at("uOcclusionEnabled");
+    program.occlusionIntensity = at("uOcclusionIntensity");
 
     // Samplers keep their unit for the program's life. A name two passes use
     // for different things (uEmissive, uTransparency) is a sampler only in
@@ -228,6 +240,9 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     sampler("uBloom", kUnitBloom);
     sampler("uEmissiveLight", kUnitEmissive);
     sampler("uReflections", kUnitReflections);
+    sampler("uOcclusion", kUnitOcclusion);
+    // The blur reads its source where the merge reads the reflection trace, in another pass.
+    sampler("uOcclusionSource", kUnitScene);
     if (&program == &merge_) {
         sampler("uEmissive", kUnitEmissive);
         sampler("uTransparency", kUnitTransparency);
@@ -257,7 +272,8 @@ bool Renderer::initialize() {
                      {"pipeline/surface.glsl", "pipeline/lighting.glsl", "pipeline/environment.glsl",
                       "pipeline/image_lighting.glsl"}) &&
         buildProgram(ibl_, "IBL", "pipeline/fullscreen.vert", "pipeline/ibl.frag",
-                     {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/image_lighting.glsl"}) &&
+                     {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/occlusion.glsl",
+                      "pipeline/image_lighting.glsl"}) &&
         buildProgram(sky_, "Sky", "pipeline/fullscreen.vert", "pipeline/sky.frag",
                      {"pipeline/lighting.glsl", "pipeline/environment.glsl"}) &&
         buildProgram(light_, "Light", "pipeline/light.vert", "pipeline/light.frag",
@@ -265,7 +281,8 @@ bool Renderer::initialize() {
         buildProgram(sun_, "Directional light", "pipeline/fullscreen.vert", "pipeline/light.frag",
                      {"pipeline/lighting.glsl", "pipeline/shadow.glsl"}) &&
         buildProgram(merge_, "Merge", "pipeline/fullscreen.vert", "pipeline/merge.frag",
-                     {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/image_lighting.glsl"}) &&
+                     {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/occlusion.glsl",
+                      "pipeline/image_lighting.glsl"}) &&
         buildProgram(tonemap_, "Tone map", "pipeline/fullscreen.vert", "pipeline/tonemap.frag",
                      {"pipeline/bloom.glsl"}) &&
         buildProgram(bloomDown_, "Bloom down", "pipeline/fullscreen.vert", "pipeline/bloom_down.frag",
@@ -276,6 +293,10 @@ bool Renderer::initialize() {
         buildProgram(ssr_, "Reflections", "pipeline/fullscreen.vert", "pipeline/ssr.frag",
                      {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/image_lighting.glsl",
                       "pipeline/ssr.glsl"}) &&
+        buildProgram(gtao_, "Ambient occlusion", "pipeline/fullscreen.vert", "pipeline/gtao.frag",
+                     {"pipeline/lighting.glsl"}) &&
+        buildProgram(aoBlur_, "Occlusion blur", "pipeline/fullscreen.vert", "pipeline/ao_blur.frag",
+                     {"pipeline/lighting.glsl"}) &&
         buildProgram(grid_, "Grid", "pipeline/fullscreen.vert", "pipeline/grid.frag", {}) &&
         buildProgram(gridBands_, "Grid bands", "pipeline/grid_band.vert", "pipeline/grid.frag", {}) &&
         buildProgram(outline_, "Outline", "pipeline/outline.vert", "pipeline/outline.frag", {}) &&
@@ -318,6 +339,7 @@ bool Renderer::initialize() {
     gridBandsValid_ = false;
     fxaaValid_ = false;
     reflectionsValid_ = false;
+    occlusionValid_ = false;
     depthFramebuffer_ = -1;
     glGenVertexArrays(1, &outlineVao_);
     glBindVertexArray(outlineVao_);
@@ -489,6 +511,7 @@ void Renderer::destroyTargets() {
     }
     destroyBloomChain();
     destroyReflectionBuffers();
+    destroyOcclusionBuffers();
     fxaaValid_ = false;
     targetWidth_ = 0;
     targetHeight_ = 0;
@@ -594,6 +617,58 @@ void Renderer::destroyReflectionBuffers() {
     reflectionsValid_ = false;
     reflectionWidth_ = 0;
     reflectionHeight_ = 0;
+}
+
+bool Renderer::ensureOcclusionBuffers(int width, int height, int scale) {
+    if (occlusionFbo_ != 0 && width == occlusionWidth_ && height == occlusionHeight_ && scale == occlusionScale_) {
+        return true;
+    }
+    if (width == occlusionRefusedWidth_ && height == occlusionRefusedHeight_ && scale == occlusionRefusedScale_) {
+        return false;
+    }
+    destroyOcclusionBuffers();
+    const int w = std::max(width / scale, 1);
+    const int h = std::max(height / scale, 1);
+    occlusionTexture_ = MakeTarget(RT_GL_R8, RT_GL_RED, GL_UNSIGNED_BYTE, w, h);
+    occlusionBlurTexture_ = MakeTarget(RT_GL_R8, RT_GL_RED, GL_UNSIGNED_BYTE, w, h);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    bool complete = true;
+    glGenFramebuffers(1, &occlusionFbo_);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, occlusionFbo_);
+    complete = Attach({occlusionTexture_}, 0) && complete;
+    glGenFramebuffers(1, &occlusionBlurFbo_);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, occlusionBlurFbo_);
+    complete = Attach({occlusionBlurTexture_}, 0) && complete;
+    if (!complete) {
+        std::fprintf(stderr,
+                     "The Scene View's %d by %d occlusion buffers are not supported; drawing without ambient "
+                     "occlusion.\n",
+                     w, h);
+        destroyOcclusionBuffers();
+        occlusionRefusedWidth_ = width;
+        occlusionRefusedHeight_ = height;
+        occlusionRefusedScale_ = scale;
+        return false;
+    }
+    occlusionWidth_ = width;
+    occlusionHeight_ = height;
+    occlusionScale_ = scale;
+    return true;
+}
+
+void Renderer::destroyOcclusionBuffers() {
+    for (unsigned* fbo : {&occlusionFbo_, &occlusionBlurFbo_}) {
+        if (*fbo != 0) {
+            glDeleteFramebuffers(1, fbo);
+            *fbo = 0;
+        }
+    }
+    DeleteTexture(occlusionTexture_);
+    DeleteTexture(occlusionBlurTexture_);
+    occlusionWidth_ = 0;
+    occlusionHeight_ = 0;
+    occlusionScale_ = 0;
+    occlusionValid_ = false;
 }
 
 namespace {
@@ -931,8 +1006,14 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         glDisable(GL_SCISSOR_TEST);
         glViewport(0, 0, targetWidth_, targetHeight_);
         drawn = cubesReady && shadowPass(meshes, meshCount, projection) &&
-                geometryPass(meshes, meshCount, projection) && lightPass(projection, inverseProjection.m) &&
-                skyPass(inverseProjection.m);
+                geometryPass(meshes, meshCount, projection);
+        // Occlusion never fails the frame: without it, surfaces are lit as if open.
+        if (drawn) {
+            occlusionPass(projection, inverseProjection.m);
+        } else {
+            occlusionReady_ = false;
+        }
+        drawn = drawn && lightPass(projection, inverseProjection.m) && skyPass(inverseProjection.m);
         // Reflections never fail the frame: without them, surfaces keep their sky reflection.
         const bool reflected = drawn && reflectionsPass(projection, inverseProjection.m);
         glViewport(0, 0, targetWidth_, targetHeight_);
@@ -1353,6 +1434,76 @@ bool Renderer::geometryPass(const MeshDraw* meshes, int count, const float* proj
     return true;
 }
 
+bool Renderer::occlusionPass(const float* projection, const float* inverseProjection) {
+    occlusionReady_ = false;
+    const SceneOcclusion& occlusion = lighting_.occlusion;
+    if (!occlusion.enabled || !(occlusion.intensity > 0.f) || !(occlusion.radius > 0.f)) {
+        return false;
+    }
+    const OcclusionQuality settings = QualitySettings(static_cast<int>(occlusion.quality));
+    if (!ensureOcclusionBuffers(targetWidth_, targetHeight_, settings.scale)) {
+        return false;
+    }
+    RENDER_PASS("Ambient occlusion");
+    const int w = std::max(targetWidth_ / settings.scale, 1);
+    const int h = std::max(targetHeight_ / settings.scale, 1);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glViewport(0, 0, w, h);
+    glBindVertexArray(emptyVao_);
+    BindTexture(kUnitDepth, depthTexture_);
+    BindTexture(kUnitNormal, normalTexture_);
+    const float texelX = 1.f / static_cast<float>(targetWidth_);
+    const float texelY = 1.f / static_cast<float>(targetHeight_);
+
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, occlusionFbo_);
+    glUseProgram(gtao_.id);
+    glUniformMatrix4fv(gtao_.inverseProjection, 1, GL_FALSE, inverseProjection);
+    glUniform2f(gtao_.texel, texelX, texelY);
+    glUniform1f(gtao_.occlusionRadius, occlusion.radius);
+    // Full-size pixels per stud at view depth 1: half the height times the projection's [1][1].
+    glUniform1f(gtao_.projectionScale, 0.5f * static_cast<float>(targetHeight_) * projection[5]);
+    glUniform1f(gtao_.occlusionScale, static_cast<float>(settings.scale));
+    glUniform1f(gtao_.slices, static_cast<float>(settings.slices));
+    // Validated until it passes, then trusted until the programs or buffers are made again.
+    if (!occlusionValid_ && !CanDraw(gtao_.id)) {
+        glViewport(0, 0, targetWidth_, targetHeight_);
+        return false;
+    }
+    DrawFullscreen(emptyVao_);
+
+    // Across into the halfway buffer, then down back into occlusionTexture_.
+    glUseProgram(aoBlur_.id);
+    glUniformMatrix4fv(aoBlur_.inverseProjection, 1, GL_FALSE, inverseProjection);
+    glUniform2f(aoBlur_.texel, texelX, texelY);
+    glUniform1f(aoBlur_.occlusionScale, static_cast<float>(settings.scale));
+    glUniform1f(aoBlur_.blurRadius, static_cast<float>(settings.blurRadius));
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, occlusionBlurFbo_);
+    BindTexture(kUnitScene, occlusionTexture_);
+    glUniform2f(aoBlur_.blurDirection, 1.f, 0.f);
+    if (!occlusionValid_ && !CanDraw(aoBlur_.id)) {
+        glViewport(0, 0, targetWidth_, targetHeight_);
+        return false;
+    }
+    DrawFullscreen(emptyVao_);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, occlusionFbo_);
+    BindTexture(kUnitScene, occlusionBlurTexture_);
+    glUniform2f(aoBlur_.blurDirection, 0.f, 1.f);
+    DrawFullscreen(emptyVao_);
+    glViewport(0, 0, targetWidth_, targetHeight_);
+    occlusionValid_ = true;
+    occlusionReady_ = true;
+    return true;
+}
+
+void Renderer::bindOcclusion(const Program& program) {
+    glUniform1f(program.occlusionEnabled, occlusionReady_ ? 1.f : 0.f);
+    glUniform1f(program.occlusionIntensity, std::min(lighting_.occlusion.intensity, 4.f));
+    glUniform1f(program.occlusionScale, static_cast<float>(std::max(occlusionScale_, 1)));
+    // With none, any texture keeps the sampler loadable.
+    BindTexture(kUnitOcclusion, occlusionReady_ ? occlusionTexture_ : whiteTexture_);
+}
+
 bool Renderer::lightPass(const float* projection, const float* inverseProjection) {
     RENDER_PASS("Lighting");
     const engine_core::Matrix4 inverseView = engine_core::matrix4_inverse(view_);
@@ -1371,6 +1522,7 @@ bool Renderer::lightPass(const float* projection, const float* inverseProjection
     glUniform3f(ibl_.ambient, lighting_.ambient[0], lighting_.ambient[1], lighting_.ambient[2]);
     glUniform3f(ibl_.skyRadiance, kSkyRadiance, kSkyRadiance, kSkyRadiance);
     bindSky(ibl_);
+    bindOcclusion(ibl_);
     glBindVertexArray(emptyVao_);
     if (!CanDraw(ibl_.id)) {
         return false;
@@ -1637,6 +1789,7 @@ bool Renderer::mergePass(bool reflected, const float* inverseProjection) {
     glUniform3f(merge_.skyRadiance, kSkyRadiance, kSkyRadiance, kSkyRadiance);
     bindGBuffer(merge_);
     bindSky(merge_);
+    bindOcclusion(merge_);
     // With no trace, any texture keeps the sampler loadable.
     BindTexture(kUnitReflections, reflected ? reflectionTexture_ : whiteTexture_);
     glBindVertexArray(emptyVao_);
@@ -1781,7 +1934,7 @@ void Renderer::shutdown() {
     gpu_.shutdown();
     ready_ = false;
     for (Program* program :
-         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &fxaa_, &ssrScene_, &ssr_, &sky_, &grid_,
+         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &fxaa_, &ssrScene_, &ssr_, &gtao_, &aoBlur_, &sky_, &grid_,
           &gridBands_, &outline_, &handle_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);
@@ -1822,6 +1975,9 @@ void Renderer::shutdown() {
     bloomRefusedHeight_ = 0;
     reflectionRefusedWidth_ = 0;
     reflectionRefusedHeight_ = 0;
+    occlusionRefusedWidth_ = 0;
+    occlusionRefusedHeight_ = 0;
+    occlusionRefusedScale_ = 0;
 }
 
 engine_core::Matrix4 Renderer::DefaultView() {

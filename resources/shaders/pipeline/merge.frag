@@ -5,12 +5,12 @@
 // nothing opaque was drawn there is the Skybox, which the sky pass left in
 // the accumulation buffer; with no Skybox only the see-through surfaces are
 // left there, premultiplied, so the pane's color shows behind them. Renderer
-// puts lighting.glsl, environment.glsl, and image_lighting.glsl in after the
-// #version line; image_lighting.glsl declares uSkyEnabled.
+// puts lighting.glsl, environment.glsl, occlusion.glsl, and
+// image_lighting.glsl in after the #version line; occlusion.glsl declares
+// uDepth and image_lighting.glsl uSkyEnabled.
 in vec2 vUv;
 out vec4 outColor;
 
-uniform sampler2D uDepth;
 uniform sampler2D uEmissive;
 uniform sampler2D uAccumulation;
 // Premultiplied: rgb already carries its alpha.
@@ -81,7 +81,8 @@ void main() {
             vec3 viewDirection = normalize(viewPositionAt(vUv, depth));
             vec3 material = texture(uMaterial, vUv).rgb;
             SkyReflection sky = skyReflection(viewDirection, texture(uNormal, vUv).rgb, texture(uAlbedo, vUv).rgb,
-                                              material.x, material.y, material.z, uAmbient, uSkyRadiance);
+                                              material.x, material.y, material.z, uAmbient, uSkyRadiance,
+                                              occlusionAt(vUv, depth));
             // traced.rgb is premultiplied by traced.a.
             color = max(color + uReflectionsIntensity * (sky.weight * traced.rgb - traced.a * sky.light), 0.0);
         }

@@ -120,8 +120,9 @@ public:
     // Gives the window the place and size layout.json had, and opens its
     // floating windows, so it comes after the stage has its scene.
     void attachFrame(jadefx::Stage& stage);
-    // Stops a running test, closes script editors, and loads the project at root.
-    // A failure shows an alert, leaves the current place open, and returns false.
+    // Stops a running test, closes script editors and the Welcome page, and loads
+    // the project at root. A failure shows an alert, leaves the current place
+    // open, and returns false.
     bool open_project_at(const std::filesystem::path& root);
     // Writes the place to root as Save As does, and binds there. A place never
     // saved also moves what its scratch folder holds into the project's
@@ -147,6 +148,16 @@ public:
     void open_landing();
     // Closes the Welcome page's tab, if one is open.
     void close_landing();
+    // What the MCP tool tabs lists: docks, each with its tabs in strip order,
+    // and closed, the Window menu's windows no dock holds.
+    engine_core::JsonValue tab_list();
+    // The tab titled tab, or holding the page named tab, ignoring case: select
+    // brings it forward, and close closes it as its × does. open docks the
+    // Window menu's window, or the Welcome page, named tab, or brings it
+    // forward when it is open. Each throws, saying why, when it cannot.
+    void select_tab(const std::string& tab);
+    void close_tab(const std::string& tab);
+    void open_tab(const std::string& tab);
     // Compares the disk with the place: loads what only the disk changed, and
     // lists what both changed in the Conflicts window and as a count on the
     // ribbon. choices are applied too. Returns the rows still open, or nothing
@@ -211,8 +222,8 @@ private:
     void load_plugins();
     // An empty, untitled place, with a new scratch folder for its resources.
     void new_place();
-    // Asks to save, then for a folder. opened runs once a project loads from it.
-    void open_project(std::function<void()> opened = {});
+    // Asks to save, then for a folder, and opens the project there.
+    void open_project();
     // The profiler's Save button and File > Open Profile Capture: a dialog, then the file.
     void save_profile_capture_as();
     void choose_profile_capture();

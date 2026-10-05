@@ -1607,6 +1607,14 @@ JsonValue GetProfile(const ToolContext&, const JsonValue& arguments) {
     return out;
 }
 
+JsonValue Tabs(const ToolContext& context, const JsonValue& arguments) {
+    const std::string action = ChoiceArg(arguments, "action", "list", {"list", "select", "close", "open"});
+    if (action != "list") {
+        context.studio.change_tab(action, StringArg(arguments, "tab"));
+    }
+    return context.studio.tabs();
+}
+
 JsonValue GetStudioInfo(const ToolContext& context, const JsonValue&) {
     JsonValue out = context.studio.info();
     if (context.studio.session) {
@@ -1622,6 +1630,8 @@ bool CanPlaytest(const McpStudio& studio) {
 bool CanCapture(const McpStudio& studio) { return studio.capture_view != nullptr; }
 
 bool CanImport(const McpStudio& studio) { return studio.import_files != nullptr; }
+
+bool HasTabs(const McpStudio& studio) { return studio.tabs && studio.change_tab; }
 
 bool KnowsItself(const McpStudio& studio) { return studio.info != nullptr; }
 
@@ -1656,6 +1666,7 @@ constexpr ToolCode kToolCode[] = {
     {"get_class", GetClass, nullptr},
     {"playtest", Playtest, CanPlaytest},
     {"screenshot", Screenshot, CanCapture},
+    {"tabs", Tabs, HasTabs},
     {"get_studio_info", GetStudioInfo, KnowsItself},
 };
 

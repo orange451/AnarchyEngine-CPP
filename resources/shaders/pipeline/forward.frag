@@ -35,7 +35,7 @@ void main() {
     }
     vec3 viewDirection = normalize(vViewPosition);
     vec3 color = skyLight(viewDirection, s.normal, s.albedo, s.metalness, s.roughness, s.reflectivity, uAmbient,
-                          uSkyRadiance);
+                          uSkyRadiance, 1.0);
     for (int i = 0; i < uLightCount && i < kMaxLights; ++i) {
         color += shadeLight(s.normal, vViewPosition, s.albedo, s.metalness, s.roughness, uLightPositionRadius[i].xyz,
                             uLightDirection[i].xyz, uLightCone[i].xy, uLightColorIntensity[i].rgb,

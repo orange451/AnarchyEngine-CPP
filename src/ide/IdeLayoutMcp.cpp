@@ -102,7 +102,8 @@ void IdeLayout::start_mcp() {
             // A tab behind another is out of the scene, so it does not paint.
             if (view->getScene() == nullptr) {
                 throw std::runtime_error("The Scene View's tab is behind another tab in its dock, so it is not "
-                                         "drawing. Select its tab in the studio, then try again.");
+                                         "drawing. Bring it forward with tabs (action select, tab Scene View), "
+                                         "then try again.");
             }
             view->requestCapture([shot, calls](runner::ViewPixels pixels) {
                 calls->update([&] {
@@ -178,6 +179,23 @@ void IdeLayout::start_mcp() {
             }
             return imports;
         };
+    };
+    studio.tabs = [this, on_ui] {
+        // Shared, since a task that runs after a timed-out wait still writes it.
+        auto list = std::make_shared<engine_core::JsonValue>();
+        on_ui([this, list] { *list = tab_list(); });
+        return *list;
+    };
+    studio.change_tab = [this, on_ui](const std::string& action, const std::string& tab) {
+        on_ui([this, action, tab] {
+            if (action == "select") {
+                select_tab(tab);
+            } else if (action == "close") {
+                close_tab(tab);
+            } else {
+                open_tab(tab);
+            }
+        });
     };
     auto identity = std::make_shared<McpIdentity>();
     studio.info = [identity] {

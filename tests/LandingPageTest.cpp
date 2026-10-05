@@ -6,7 +6,10 @@
 #include "jadefx/jadefx.hpp"
 
 #include <cstdio>
+#include <exception>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -58,6 +61,28 @@ void TestPage() {
     Expect(hidden->hide_box()->isSelected(), "the box starts checked when the page is off at startup");
     hidden->hide_box()->fire();
     Expect(!hidden->hide_box()->isSelected(), "a page without actions still toggles");
+}
+
+// A page too short for the card scrolls it, and the checkbox stays at the bottom.
+void TestShortPage() {
+    auto page = jadefx::make<ide::LandingPage>(ide::LandingPage::Actions{}, true);
+    jadefx::Scene scene(page, 900, 700);
+
+    scene.layout(900, 700, 0);
+    jadefx::ScrollPane* scroll = page->scroll_pane();
+    Expect(scroll->getContentBounds().height <= scroll->getViewportBounds().height,
+           "a tall page has nothing to scroll");
+    const double card_y = page->button("New Place")->getAbsoluteY();
+
+    scene.layout(900, 240, 0.1);
+    Expect(scroll->getContentBounds().height > scroll->getViewportBounds().height, "a short page scrolls the card");
+    jadefx::CheckBox* box = page->hide_box();
+    Expect(box->getAbsoluteY() >= 0 && box->getAbsoluteY() + box->getHeight() <= 240,
+           "the checkbox stays inside a short page");
+    Expect(box->getAbsoluteY() > page->getHeight() - 60, "and sits at its bottom");
+
+    scene.layout(900, 700, 0.2);
+    Expect(page->button("New Place")->getAbsoluteY() == card_y, "the card is centered again once the page is tall");
 }
 
 ide::IdeDock* DockOf(jadefx::Node* node) {
@@ -166,12 +191,95 @@ void TestLayout(ide::IdeLayout& layout, jadefx::Scene& scene) {
     scene.layout(1280, 800, 0.6);
 }
 
+// The MCP tool tabs: what the layout lists, and select, close, and open by name.
+void TestTabTool(ide::IdeLayout& layout, jadefx::Scene& scene) {
+    auto shown = [&scene](const std::string& name) {
+        for (jadefx::Node* node : scene.getRoot()->getElementsByClassName("ide-pane")) {
+            auto* pane = dynamic_cast<ide::IdePane*>(node);
+            if (pane != nullptr && pane->name() == name) {
+                return true;
+            }
+        }
+        return false;
+    };
+    // The listed tab titled title, or null.
+    auto listed = [&layout](const std::string& title) -> std::optional<engine_core::JsonValue> {
+        const engine_core::JsonValue list = layout.tab_list();
+        for (const engine_core::JsonValue& dock : list.find("docks")->items()) {
+            for (const engine_core::JsonValue& tab : dock.find("tabs")->items()) {
+                if (tab.find("title")->as_string() == title) {
+                    return tab;
+                }
+            }
+        }
+        return std::nullopt;
+    };
+    auto closed = [&layout](const std::string& name) {
+        const engine_core::JsonValue list = layout.tab_list();
+        for (const engine_core::JsonValue& each : list.find("closed")->items()) {
+            if (each.as_string() == name) {
+                return true;
+            }
+        }
+        return false;
+    };
+    // What fn threw, or empty.
+    auto refusal = [](const std::function<void()>& fn) {
+        try {
+            fn();
+        } catch (const std::exception& ex) {
+            return std::string(ex.what());
+        }
+        return std::string();
+    };
+
+    Expect(closed("Welcome") && !closed("Game Explorer"),
+           "the list names the closed windows, the Welcome page among them");
+    const std::optional<engine_core::JsonValue> view = listed("Scene View");
+    Expect(view && view->find("selected")->as_bool() && !view->find("closable")->as_bool(),
+           "the scene view is listed in front, and cannot be closed");
+
+    layout.open_tab("welcome");
+    scene.layout(1280, 800, 0.7);
+    Expect(shown("Welcome") && !shown("Scene View"), "open docks the Welcome page in front, ignoring case");
+    Expect(listed("Welcome") && listed("Welcome")->find("selected")->as_bool() && !closed("Welcome"),
+           "and the list has it in front");
+
+    layout.select_tab("Scene View");
+    scene.layout(1280, 800, 0.8);
+    Expect(shown("Scene View") && !shown("Welcome"), "select brings the scene view forward");
+    Expect(listed("Welcome") && !listed("Welcome")->find("selected")->as_bool(), "leaving the Welcome page open");
+
+    Expect(refusal([&] { layout.select_tab("Nowhere"); }).find("No open tab is titled \"Nowhere\"") == 0,
+           "select names no tab it cannot find");
+    Expect(refusal([&] { layout.close_tab("scene view"); }) == "Scene View cannot be closed.",
+           "close refuses the scene view");
+    Expect(refusal([&] { layout.open_tab("Banana"); }).find("No window is named") == 0, "open refuses an unknown window");
+
+    layout.close_tab("Welcome");
+    scene.layout(1280, 800, 0.9);
+    Expect(!listed("Welcome") && closed("Welcome"), "close closes the Welcome page");
+
+    // Conflicts is open from the tests before; left open as found.
+    layout.close_tab("conflicts");
+    scene.layout(1280, 800, 1.0);
+    Expect(!shown("Conflicts") && closed("Conflicts") && !listed("Conflicts"), "close closes a window");
+    layout.open_tab("Conflicts");
+    scene.layout(1280, 800, 1.1);
+    Expect(shown("Conflicts") && !closed("Conflicts"), "open docks a closed window in front");
+    layout.open_tab("Conflicts");
+    Expect(shown("Conflicts") && listed("Conflicts"), "opening it again leaves it open");
+    Expect(shown("Scene View"), "the scene view is in front for the tests after this one");
+}
+
 }  // namespace
 
 int RunLandingPageTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     gFailures = 0;
     TestPage();
+    TestShortPage();
     TestLayout(layout, scene);
+    TestTabTool(layout, scene);
     if (gFailures == 0) {
         std::printf("landing page tests passed\n");
     }

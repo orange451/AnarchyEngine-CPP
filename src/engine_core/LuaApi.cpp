@@ -1046,6 +1046,16 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("ScreenSpaceReflections", "MaxRoughness",
         "Surfaces rougher than this, from 0 to 1, keep the sky's reflection; it fades in just below.", "number",
         false, {});
+    add("AmbientOcclusionEffect", "Enabled", "When false, this AmbientOcclusionEffect shades nothing.", "boolean",
+        false, {});
+    add("AmbientOcclusionEffect", "Intensity",
+        "How strongly creases and contact are shaded, from 0 to 4. 1 is physical; above 1 is darker.", "number",
+        false, {});
+    add("AmbientOcclusionEffect", "Radius",
+        "How far, in studs, from 0 to 10, nearby geometry still hides the sky from a surface.", "number", false, {});
+    add("AmbientOcclusionEffect", "Quality",
+        "Enum.EffectQuality: Low and Medium shade at half resolution, High at full.", "Enum.EffectQuality", false,
+        {});
     add("SpotLight", "OuterFOV",
         "The whole angle of this light's cone, in degrees, from 1 to 179. The cone points down the Transform's -Z.",
         "number", false, {});

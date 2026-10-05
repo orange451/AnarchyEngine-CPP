@@ -1054,6 +1054,8 @@ void TestToolSpecs() {
     studio.info = [] { return JsonValue::object(); };
     studio.capture_view = [](int) { return ide::McpImage{}; };
     studio.import_files = [](const std::vector<std::string>&) { return ide::McpPlaceImports{}; };
+    studio.tabs = [] { return JsonValue::object(); };
+    studio.change_tab = [](const std::string&, const std::string&) {};
     ide::McpServer every;
     ide::add_engine_tools(every, engine, studio);
     const std::vector<ide::McpToolSpec> specs = ide::engine_tool_specs();
@@ -1078,11 +1080,45 @@ void TestToolSpecs() {
     std::vector<std::string> expected;
     for (const ide::McpToolSpec& spec : specs) {
         if (spec.name != "playtest" && spec.name != "screenshot" && spec.name != "get_studio_info" &&
-            spec.name != "import_assets") {
+            spec.name != "import_assets" && spec.name != "tabs") {
             expected.push_back(spec.name);
         }
     }
-    Expect(names == expected, "a studio without the hooks leaves out playtest, screenshot, get_studio_info, and import_assets");
+    Expect(names == expected, "a studio without the hooks leaves out playtest, screenshot, get_studio_info, import_assets, and tabs");
+}
+
+// tabs hands the action to the studio, then lists the tabs as they are after it.
+void TestTabs() {
+    engine_core::Engine engine;
+    std::vector<std::string> done;
+    ide::McpStudio studio;
+    studio.tabs = [&done] {
+        JsonValue out = JsonValue::object();
+        out.set("changes", JsonValue::number(static_cast<double>(done.size())));
+        return out;
+    };
+    studio.change_tab = [&done](const std::string& action, const std::string& tab) {
+        if (tab == "Scene View" && action == "close") {
+            throw std::runtime_error("Scene View cannot be closed.");
+        }
+        done.push_back(action + " " + tab);
+    };
+    ide::McpServer server;
+    ide::add_engine_tools(server, engine, studio);
+    Expect(Member(Call(server, "tabs", "{}"), "changes").as_number() == 0 && done.empty(),
+           "tabs lists without changing anything by default");
+    Expect(Member(Call(server, "tabs", R"({"action":"select","tab":"Scene View"})"), "changes").as_number() == 1,
+           "select returns the list after it");
+    Call(server, "tabs", R"({"action":"open","tab":"Welcome"})");
+    Call(server, "tabs", R"({"action":"close","tab":"Welcome"})");
+    Expect(done == std::vector<std::string>{"select Scene View", "open Welcome", "close Welcome"},
+           "each action reaches the studio with its tab");
+    Expect(ErrorText(server, "tabs", R"({"action":"select"})") == "tab is required and must be a string.",
+           "an action needs a tab");
+    Expect(ErrorText(server, "tabs", R"({"action":"move","tab":"x"})").find("action must be") == 0,
+           "an unknown action is refused");
+    Expect(ErrorText(server, "tabs", R"({"action":"close","tab":"Scene View"})") == "Scene View cannot be closed.",
+           "what the studio refuses comes back as the error");
 }
 
 // An image a tool returns goes out as image content, beside the JSON text.
@@ -1221,6 +1257,7 @@ int main() {
     TestImportAssets();
     TestToolSpecs();
     TestImages();
+    TestTabs();
     TestProfileTool();
     if (gFailures == 0) {
         std::printf("mcp tests passed\n");

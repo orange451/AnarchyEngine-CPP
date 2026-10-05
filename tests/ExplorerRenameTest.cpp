@@ -11,6 +11,7 @@
 #include "Game.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
+#include "Script.hpp"
 #include "jadefx/jadefx.hpp"
 
 #include <cmath>
@@ -919,6 +920,68 @@ void TestRevealScrolls() {
     Expect(!rig.explorer->reveal_selection(), "reveal does nothing with no selection");
 }
 
+// The names of item's child rows, top to bottom.
+std::vector<std::string> row_names(const jadefx::TreeItem& item) {
+    std::vector<std::string> names;
+    for (const std::shared_ptr<jadefx::TreeItem>& child : item.getChildren().items()) {
+        names.push_back(child->getValue());
+    }
+    return names;
+}
+
+const jadefx::TreeItem* row_named(const jadefx::TreeItem& parent, const std::string& name) {
+    for (const std::shared_ptr<jadefx::TreeItem>& child : parent.getChildren().items()) {
+        if (child->getValue() == name) {
+            return child.get();
+        }
+    }
+    return nullptr;
+}
+
+void rows_cluster_by_class() {
+    Rig rig;
+    const engine_core::InstanceId workspace = rig.game.scene_service("Workspace");
+    const auto add = [&](engine_core::DataModel& made, const char* name) {
+        rig.game.set_name(made.id(), name);
+        rig.game.set_parent(made.id(), workspace);
+    };
+    add(rig.game.create<engine_core::GameObject>(), "Aardvark");
+    add(rig.game.create<engine_core::Script>(), "Zed");
+    add(rig.game.create<engine_core::Script>(), "boot");
+    add(rig.game.create<engine_core::Folder>(), "delta");
+    add(rig.game.create<engine_core::GameObject>(), "Crate");
+    rig.frame(1);
+    jadefx::TreeView* view = rig.tree();
+    Expect(view != nullptr, "the tree is on screen");
+    if (view == nullptr) {
+        return;
+    }
+    const jadefx::TreeItem* row = row_named(*view->getRoot(), "Workspace");
+    Expect(row != nullptr, "Workspace has a row");
+    if (row == nullptr) {
+        return;
+    }
+    // Folders, then scripts, then GameObjects, each A to Z ignoring case.
+    const std::vector<std::string> expected = {"Alpha", "Beta", "delta", "Gamma", "boot", "Zed", "Aardvark", "Crate"};
+    Expect(row_names(*row) == expected, "Workspace's rows are in clusters, each A to Z");
+
+    // Renaming moves a row within its cluster, never out of it.
+    rig.game.set_name(rig.ids[0], "Zulu");
+    rig.frame(2);
+    const std::vector<std::string> renamed = {"Beta", "delta", "Gamma", "Zulu", "boot", "Zed", "Aardvark", "Crate"};
+    Expect(row_names(*row) == renamed, "a renamed Folder moves to its place among the Folders");
+
+    // Services keep the place's order.
+    std::vector<std::string> services;
+    for (const engine_core::InstanceId id : rig.game.get_children(rig.game.id())) {
+        const engine_core::DataModel* object = rig.game.instance(id);
+        if (object != nullptr && !object->hidden_in_explorer()) {
+            services.push_back(rig.game.name(id));
+        }
+    }
+    Expect(row_names(*view->getRoot()) == services, "the services are in the place's order");
+}
+
 void hidden_services_have_no_rows() {
     Rig rig;
     rig.frame(0);
@@ -1179,6 +1242,7 @@ int main() {
     TestRightClickListCloses();
     TestRefusedInsertSaysWhy();
     hidden_services_have_no_rows();
+    rows_cluster_by_class();
     insert_list_leaves_out_assets();
     insert_list_suits_the_parent();
     insert_list_suits_registered_parents();

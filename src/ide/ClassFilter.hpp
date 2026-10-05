@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ClassOrder.hpp"
 #include "Strings.hpp"
 
 #include <algorithm>
@@ -34,7 +35,8 @@ inline bool EqualsAt(std::string_view text, std::string_view query, std::size_t 
 }
 
 // Empty query keeps every name. A name that starts with the query is listed
-// before one that only contains it. Each group is A to Z, ignoring case.
+// before one that only contains it. Each group is in class_rank's clusters,
+// each cluster A to Z, ignoring case.
 inline void filter_class_names(const std::vector<std::string>& names, std::string_view query,
                                std::vector<std::string>& out) {
     query = TrimAscii(query);
@@ -53,19 +55,11 @@ inline void filter_class_names(const std::vector<std::string>& names, std::strin
             rest.push_back(name);
         }
     }
-    const auto by_name = [](const std::string& left, const std::string& right) {
-        const std::size_t count = std::min(left.size(), right.size());
-        for (std::size_t i = 0; i < count; ++i) {
-            const char a = AsciiLower(static_cast<unsigned char>(left[i]));
-            const char b = AsciiLower(static_cast<unsigned char>(right[i]));
-            if (a != b) {
-                return a < b;
-            }
-        }
-        return left.size() < right.size();
+    const auto by_cluster = [](const std::string& left, const std::string& right) {
+        return cluster_before(class_rank(left), left, class_rank(right), right);
     };
-    std::sort(prefix.begin(), prefix.end(), by_name);
-    std::sort(rest.begin(), rest.end(), by_name);
+    std::sort(prefix.begin(), prefix.end(), by_cluster);
+    std::sort(rest.begin(), rest.end(), by_cluster);
     out.clear();
     out.reserve(prefix.size() + rest.size());
     out.insert(out.end(), prefix.begin(), prefix.end());

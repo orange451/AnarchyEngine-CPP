@@ -649,16 +649,12 @@ void IdeLayout::new_place() {
     show_toast("New place");
 }
 
-void IdeLayout::open_project(std::function<void()> opened) {
-    confirm_discard("Save changes before opening another project?", [this, opened = std::move(opened)] {
+void IdeLayout::open_project() {
+    confirm_discard("Save changes before opening another project?", [this] {
         jadefx::FolderDialogOptions options;
         options.title = "Open Project";
         pick_folder(std::move(options), " You can also start the studio with a project folder: AnarchyStudio <folder>",
-                    [this, opened](const std::filesystem::path& root) {
-                        if (open_project_at(root) && opened) {
-                            opened();
-                        }
-                    });
+                    [this](const std::filesystem::path& root) { open_project_at(root); });
     });
 }
 
@@ -709,6 +705,8 @@ bool IdeLayout::open_project_at(const std::filesystem::path& root) {
     end_scratch();
     forget_conflicts();
     update_title();
+    // The project is the work the Welcome page was for, however it was opened.
+    close_landing();
     show_toast("Opened " + project_->name());
     return true;
 }

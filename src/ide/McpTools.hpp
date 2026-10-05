@@ -65,6 +65,10 @@ struct McpStudio {
     // makes their instances. Throws when the place cannot take files now, as
     // during a test.
     std::function<McpPlaceImports(const std::vector<std::string>& files)> import_files;
+    // The studio's tabs: docks, each with its tabs, and the closed windows.
+    std::function<engine_core::JsonValue()> tabs;
+    // Does action, "select", "close", or "open", to the tab or window named tab.
+    std::function<void(const std::string& action, const std::string& tab)> change_tab;
 };
 
 // What tools/list shows of a tool, without the code that runs it.
@@ -81,7 +85,7 @@ std::vector<McpToolSpec> engine_tool_specs();
 
 // The tools over one engine: the tree, properties, instances, scripts and
 // what analysis finds in them, selection, the class registry, Luau, output,
-// undo, play testing, the Scene View, and which studio this is. Each is the
+// undo, play testing, the Scene View, the studio's tabs, and which studio this is. Each is the
 // one engine_tool_specs describes; a tool whose studio hooks are missing is
 // left out.
 //

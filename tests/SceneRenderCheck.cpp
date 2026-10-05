@@ -880,6 +880,151 @@ int main() {
                 renderer.setLighting(runner::SceneLighting{});
             }
 
+            // Ambient occlusion: a cube resting on a wide floor slab.
+            {
+                runner::SceneLighting plain;
+                plain.antialiasing = runner::SceneAntialiasing::None;
+                // Occlusion shades only the ambient and sky light, which the stand-in
+                // sky makes dim; brighter ambient gives the checks room to measure.
+                plain.ambient[0] = plain.ambient[1] = plain.ambient[2] = 3.f;
+                runner::MeshDraw floor = draw;
+                floor.model = engine_core::matrix4_identity();
+                floor.model.m[0] = 20.f;
+                floor.model.m[5] = 0.1f;
+                floor.model.m[10] = 20.f;
+                floor.model.m[13] = -0.55f;
+                // Mid-gray: multi-bounce rightly gives a white surface back most of
+                // what occlusion takes, which would hide the shade.
+                floor.color[0] = floor.color[1] = floor.color[2] = 0.5f;
+                const runner::MeshDraw scene[] = {draw, floor};
+                const auto drawScene = [&](const runner::MeshDraw* meshes, int count) {
+                    for (int pass = 0; pass < 2; ++pass) {
+                        renderer.draw(0, 0, kSize, kSize, kSize, kSize, meshes, count);
+                    }
+                };
+                const auto snap = [&] {
+                    runner::ViewPixels pixels;
+                    renderer.read(0, 0, kSize, kSize, kSize, kSize, pixels);
+                    return pixels.rgba;
+                };
+                // Where a world point lands, with the default camera, in framebuffer pixels.
+                const engine_core::Vec3 up{0.f, 1.f, 0.f};
+                const engine_core::Matrix4 view = engine_core::matrix4_inverse(engine_core::matrix4_look_at(
+                    {runner::Renderer::kCameraEye[0], runner::Renderer::kCameraEye[1], runner::Renderer::kCameraEye[2]},
+                    {0.f, 0.f, 0.f}, up));
+                const float focal = 1.f / std::tan(0.5f * runner::Renderer::kCameraFovYDegrees * 0.01745329252f);
+                const auto at = [&](float x, float y, float z) {
+                    const engine_core::Vec3 p = engine_core::matrix4_point(view, {x, y, z});
+                    const int px = static_cast<int>((focal * p.x / -p.z * 0.5f + 0.5f) * static_cast<float>(fbWidth));
+                    const int py = static_cast<int>((focal * p.y / -p.z * 0.5f + 0.5f) * static_cast<float>(fbHeight));
+                    return ReadPixel(px, py);
+                };
+                renderer.setLighting(plain);
+                drawScene(scene, 2);
+                const std::vector<unsigned char> unshaded = snap();
+                const Pixel contactOff = at(0.f, -0.5f, 0.58f);
+                const Pixel openOff = at(2.2f, -0.5f, 2.2f);
+                const Pixel pastTopOff = at(0.f, -0.5f, -4.f);
+
+                runner::SceneLighting shaded = plain;
+                shaded.occlusion.enabled = true;
+                renderer.setLighting(shaded);
+                const bool first = renderer.draw(0, 0, kSize, kSize, kSize, kSize, scene, 2);
+                Expect(first, "the first frame with ambient occlusion still draws");
+                drawScene(scene, 2);
+                Expect(Sum(at(0.f, -0.5f, 0.58f)) + 10 < Sum(contactOff),
+                       "the floor where the cube stands on it is shaded (" + Text(at(0.f, -0.5f, 0.58f)) + " vs " +
+                           Text(contactOff) + ")");
+                Expect(std::abs(Sum(at(2.2f, -0.5f, 2.2f)) - Sum(openOff)) <= 2,
+                       "the open floor is not shaded (" + Text(at(2.2f, -0.5f, 2.2f)) + ")");
+                Expect(std::abs(Sum(at(0.f, -0.5f, -4.f)) - Sum(pastTopOff)) <= 2,
+                       "the floor seen just past the cube's top edge, far behind it, is not shaded (" +
+                           Text(at(0.f, -0.5f, -4.f)) + ")");
+
+                // Each Quality shades the contact; High and Medium agree on it.
+                int contact[3] = {};
+                for (int quality = 0; quality < 3; ++quality) {
+                    runner::SceneLighting q = shaded;
+                    q.occlusion.quality = static_cast<runner::SceneQuality>(quality);
+                    renderer.setLighting(q);
+                    drawScene(scene, 2);
+                    contact[quality] = Sum(at(0.f, -0.5f, 0.58f));
+                    Expect(contact[quality] + 10 < Sum(contactOff),
+                           "Quality " + std::to_string(quality) + " shades the contact");
+                }
+                Expect(std::abs(contact[2] - contact[1]) <= 12, "High and Medium agree on the contact (" +
+                                                                    std::to_string(contact[2]) + " vs " +
+                                                                    std::to_string(contact[1]) + ")");
+
+                // Off four ways: exactly the frame without it.
+                for (int way = 0; way < 4; ++way) {
+                    runner::SceneLighting off = shaded;
+                    if (way == 0) {
+                        off.occlusion.enabled = false;
+                    } else if (way == 1) {
+                        off.occlusion.intensity = 0.f;
+                    } else if (way == 2) {
+                        off.occlusion.radius = 0.f;
+                    } else {
+                        off = plain;
+                    }
+                    renderer.setLighting(off);
+                    drawScene(scene, 2);
+                    Expect(snap() == unshaded, "off draws exactly as without occlusion (way " + std::to_string(way) + ")");
+                }
+
+                // A camera almost at the floor: no black (NaN) pixels that were not black without it.
+                renderer.setCamera(engine_core::matrix4_look_at({0.f, -0.45f, 1.5f}, {0.f, -0.5f, 0.f}, up),
+                                   runner::Renderer::kCameraFovYDegrees);
+                renderer.setLighting(plain);
+                drawScene(scene, 2);
+                const std::vector<unsigned char> closeOff = snap();
+                renderer.setLighting(shaded);
+                drawScene(scene, 2);
+                const std::vector<unsigned char> closeOn = snap();
+                int newBlack = 0;
+                for (std::size_t i = 0; i + 3 < closeOn.size(); i += 4) {
+                    const bool black = closeOn[i] == 0 && closeOn[i + 1] == 0 && closeOn[i + 2] == 0;
+                    const bool wasBlack = closeOff[i] == 0 && closeOff[i + 1] == 0 && closeOff[i + 2] == 0;
+                    newBlack += black && !wasBlack ? 1 : 0;
+                }
+                Expect(newBlack == 0, "a camera almost at a surface leaves no black pixels (" +
+                                          std::to_string(newBlack) + ")");
+                renderer.setCamera(engine_core::matrix4_inverse(view), runner::Renderer::kCameraFovYDegrees);
+
+                // With SSR too, a mirror floor where rays find nothing matches occlusion alone.
+                runner::MeshDraw mirror = floor;
+                mirror.metalness = 1.f;
+                mirror.roughness = 0.f;
+                const runner::MeshDraw mirrored[] = {draw, mirror};
+                renderer.setLighting(shaded);
+                drawScene(mirrored, 2);
+                const Pixel besideAlone = at(-0.62f, -0.5f, 0.f);
+                runner::SceneLighting both = shaded;
+                both.reflections.enabled = true;
+                renderer.setLighting(both);
+                drawScene(mirrored, 2);
+                const Pixel besideBoth = at(-0.62f, -0.5f, 0.f);
+                Expect(std::abs(Sum(besideBoth) - Sum(besideAlone)) <= 1,
+                       "where SSR misses, the floor matches occlusion alone (" + Text(besideBoth) + " vs " +
+                           Text(besideAlone) + ")");
+
+                // Size and Quality changes make the buffers again.
+                renderer.setLighting(shaded);
+                for (int pass = 0; pass < 2; ++pass) {
+                    renderer.draw(0, 0, kSize / 2.0, kSize / 2.0, kSize, kSize, scene, 2);
+                }
+                runner::SceneLighting high = shaded;
+                high.occlusion.quality = runner::SceneQuality::High;
+                renderer.setLighting(high);
+                drawScene(scene, 2);
+                renderer.setLighting(shaded);
+                drawScene(scene, 2);
+                Expect(Sum(at(0.f, -0.5f, 0.58f)) + 10 < Sum(contactOff), "after size and Quality changes it still shades");
+                Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "ambient occlusion leaves no GL error");
+                renderer.setLighting(runner::SceneLighting{});
+            }
+
             // Transparency 1 draws nothing; between 0 and 1 the pane shows through.
             runner::MeshDraw gone = draw;
             gone.transparency = 1.f;

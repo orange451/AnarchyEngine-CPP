@@ -3,6 +3,7 @@
 #include "IdeLayout.hpp"
 
 #include "IdeLayoutInternal.hpp"
+#include "Strings.hpp"
 
 namespace ide {
 
@@ -534,7 +535,8 @@ void IdeLayout::open_landing() {
             close_landing();
         });
     };
-    actions.open_project = [this] { open_project([this] { close_landing(); }); };
+    // Opening a project closes the page itself.
+    actions.open_project = [this] { open_project(); };
     actions.show_assets = [this] { open_window(*assets_window_); };
     actions.open_preferences = [this] { open_preferences(); };
     actions.set_show_on_startup = [this](bool show) {
@@ -567,6 +569,137 @@ void IdeLayout::close_landing() {
             dock->tabs()->close(tab);
         }
     }
+}
+
+namespace {
+
+// An open tab, the dock showing it, and its page.
+struct FoundTab {
+    IdeDock* dock = nullptr;
+    std::shared_ptr<jadefx::Tab> tab;
+    IdePane* page = nullptr;
+};
+
+// The one open tab titled name, or holding the page named name, ignoring case.
+FoundTab find_tab(const std::vector<std::shared_ptr<IdeDock>>& docks, const std::string& name) {
+    const std::string wanted = AsciiLower(Trim(name));
+    std::vector<FoundTab> found;
+    std::string titles;
+    for (const std::shared_ptr<IdeDock>& dock : docks) {
+        if (!dock || dock->getParent() == nullptr || dock->tabs() == nullptr) {
+            continue;
+        }
+        for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+            auto* page = tab ? dynamic_cast<IdePane*>(tab->getContent()) : nullptr;
+            if (page == nullptr) {
+                continue;
+            }
+            titles += (titles.empty() ? "" : ", ") + tab->getText();
+            if (AsciiLower(tab->getText()) == wanted || AsciiLower(page->name()) == wanted) {
+                found.push_back({dock.get(), tab, page});
+            }
+        }
+    }
+    if (found.empty()) {
+        throw std::runtime_error("No open tab is titled \"" + name + "\". The open tabs are " + titles +
+                                 ". open docks a closed window.");
+    }
+    if (found.size() > 1) {
+        throw std::runtime_error(std::to_string(found.size()) + " open tabs are titled \"" + name + "\".");
+    }
+    return found.front();
+}
+
+}  // namespace
+
+engine_core::JsonValue IdeLayout::tab_list() {
+    using engine_core::JsonValue;
+    JsonValue docks = JsonValue::array();
+    for (const std::shared_ptr<IdeDock>& dock : docks_) {
+        if (!dock || dock->getParent() == nullptr || dock->tabs() == nullptr || dock->empty()) {
+            continue;
+        }
+        JsonValue tabs = JsonValue::array();
+        for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+            if (!tab) {
+                continue;
+            }
+            JsonValue row = JsonValue::object();
+            row.set("title", JsonValue::string(tab->getText()));
+            // The page's own name, when its title says more, as Conflicts adds a count.
+            const auto* page = dynamic_cast<const IdePane*>(tab->getContent());
+            if (page != nullptr && page->name() != tab->getText()) {
+                row.set("name", JsonValue::string(page->name()));
+            }
+            row.set("selected", JsonValue::boolean(tab->isSelected()));
+            row.set("closable", JsonValue::boolean(tab->isClosable()));
+            tabs.items().push_back(std::move(row));
+        }
+        JsonValue row = JsonValue::object();
+        row.set("window", JsonValue::string(utilityOf(dock.get()) != nullptr ? "floating" : "main"));
+        row.set("tabs", std::move(tabs));
+        docks.items().push_back(std::move(row));
+    }
+    JsonValue closed = JsonValue::array();
+    for (const std::unique_ptr<WindowEntry>& entry : windows_) {
+        if (dockContaining(entry->pane.get()) == nullptr) {
+            closed.items().push_back(JsonValue::string(entry->name));
+        }
+    }
+    const std::shared_ptr<LandingPage> landing = landing_.lock();
+    if (!landing || dockContaining(landing.get()) == nullptr) {
+        closed.items().push_back(JsonValue::string("Welcome"));
+    }
+    JsonValue out = JsonValue::object();
+    out.set("docks", std::move(docks));
+    out.set("closed", std::move(closed));
+    return out;
+}
+
+void IdeLayout::select_tab(const std::string& tab) { reveal_window(find_tab(docks_, tab).page); }
+
+void IdeLayout::close_tab(const std::string& tab) {
+    const FoundTab found = find_tab(docks_, tab);
+    if (!found.tab->isClosable()) {
+        throw std::runtime_error(found.tab->getText() + " cannot be closed.");
+    }
+    if (!found.dock->tabs()->close(found.tab)) {
+        throw std::runtime_error(found.tab->getText() + " stayed open.");
+    }
+}
+
+void IdeLayout::open_tab(const std::string& tab) {
+    const std::string wanted = AsciiLower(Trim(tab));
+    if (wanted == "welcome" || wanted == "welcome page") {
+        open_landing();
+        return;
+    }
+    if (wanted == AsciiLower(scene_view_->name())) {
+        reveal_window(scene_view_.get());
+        return;
+    }
+    std::string names;
+    for (const std::unique_ptr<WindowEntry>& entry : windows_) {
+        names += entry->name + ", ";
+        if (AsciiLower(entry->name) != wanted) {
+            continue;
+        }
+        WindowEntry* kept = entry.get();
+        // As the Window menu opens it, but leaving one that is showing open.
+        reveal_window(kept->pane.get(), [this, kept] {
+            if (kept->open) {
+                kept->open();
+            } else {
+                show_window(*kept);
+            }
+        });
+        if (dockContaining(kept->pane.get()) == nullptr) {
+            throw std::runtime_error(kept->name + " could not be docked.");
+        }
+        return;
+    }
+    throw std::runtime_error("No window is named \"" + tab + "\". open takes " + names + scene_view_->name() +
+                             ", or Welcome.");
 }
 
 void IdeLayout::new_scene_view() {

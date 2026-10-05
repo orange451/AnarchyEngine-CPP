@@ -168,6 +168,9 @@ private:
     // Copies the live hierarchy. False when the lock is busy or nothing changed.
     bool capture();
     void read_hierarchy(Snapshot& snap);
+    // Orders one parent's children in snap: in class_rank's clusters, each A
+    // to Z by name. Services keep the place's order, ahead of the rest.
+    void sort_children(Snapshot& snap, std::uint32_t begin, std::uint32_t count);
     // How many row inserts, removals, moves, and order edits this snapshot needs.
     std::size_t edit_weight() const;
     void apply(bool batch);
@@ -187,6 +190,13 @@ private:
     std::unordered_map<const jadefx::TreeItem*, engine_core::InstanceId> item_ids_;
     std::unordered_set<engine_core::InstanceId> seen_;
     std::vector<engine_core::InstanceId> pending_;
+    // sort_children's keys, kept to reuse their storage.
+    struct ChildKey {
+        int rank;
+        std::string name;
+        engine_core::InstanceId id;
+    };
+    std::vector<ChildKey> child_keys_;
     Snapshot scratch_;
     Snapshot committed_;
     Snapshot filtered_;

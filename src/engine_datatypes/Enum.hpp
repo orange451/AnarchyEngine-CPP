@@ -49,6 +49,11 @@ const EnumType& dragger_handle_enum();
 const EnumType& antialiasing_mode_enum();
 // antialiasing_mode_enum's items, by value.
 enum class AntialiasingMode { None = 0, FXAA = 1 };
+// How much an effect spends for how good it looks: Low 0, Medium 1, High 2.
+// AmbientOcclusionEffect.Quality; later effects share it.
+const EnumType& effect_quality_enum();
+// effect_quality_enum's items, by value.
+enum class EffectQuality { Low = 0, Medium = 1, High = 2 };
 
 // Every type the Enum global holds, for script analysis to declare.
 int enum_type_count();

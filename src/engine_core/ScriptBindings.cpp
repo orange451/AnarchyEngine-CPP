@@ -1,5 +1,6 @@
 #include "ScriptBindings.hpp"
 
+#include "AmbientOcclusionEffect.hpp"
 #include "AssetInstances.hpp"
 #include "Attachment.hpp"
 #include "BloomEffect.hpp"
@@ -195,6 +196,7 @@ DataModel& create_dragger(DataModel& world) { return world.create<Dragger>(); }
 DataModel& create_skybox(DataModel& world) { return world.create<Skybox>(); }
 DataModel& create_bloom_effect(DataModel& world) { return world.create<BloomEffect>(); }
 DataModel& create_screen_space_reflections(DataModel& world) { return world.create<ScreenSpaceReflections>(); }
+DataModel& create_ambient_occlusion_effect(DataModel& world) { return world.create<AmbientOcclusionEffect>(); }
 DataModel& create_screen_gui(DataModel& world) { return world.create<ScreenGui>(); }
 DataModel& create_billboard_gui(DataModel& world) { return world.create<BillboardGui>(); }
 DataModel& create_pane(DataModel& world) { return world.create<Pane>(); }
@@ -232,6 +234,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Skybox", create_skybox);
     register_lua_creatable("BloomEffect", create_bloom_effect);
     register_lua_creatable("ScreenSpaceReflections", create_screen_space_reflections);
+    register_lua_creatable("AmbientOcclusionEffect", create_ambient_occlusion_effect);
     register_lua_creatable("ScreenGui", create_screen_gui);
     register_lua_creatable("BillboardGui", create_billboard_gui);
     register_lua_creatable("Pane", create_pane);

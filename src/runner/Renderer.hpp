@@ -111,6 +111,18 @@ struct SceneReflections {
     float maxRoughness = 0.3f;
 };
 
+// Enum.EffectQuality, as the renderer reads it.
+enum class SceneQuality { Low = 0, Medium = 1, High = 2 };
+
+// The AmbientOcclusionEffect, as the renderer reads it. The defaults shade nothing.
+struct SceneOcclusion {
+    bool enabled = false;
+    float intensity = 1.f;
+    // Studs.
+    float radius = 1.f;
+    SceneQuality quality = SceneQuality::Medium;
+};
+
 // Lighting's properties the renderer reads. The defaults are a new Lighting's.
 struct SceneLighting {
     float ambient[3] = {0.5f, 0.5f, 0.5f};
@@ -121,6 +133,7 @@ struct SceneLighting {
     SceneSky sky;
     SceneBloom bloom;
     SceneReflections reflections;
+    SceneOcclusion occlusion;
 };
 
 // Draws meshes seen from the camera, through the legacy AnarchyEngine
@@ -312,6 +325,15 @@ private:
         int chainLevels = -1;
         int reflectionsEnabled = -1;
         int reflectionsIntensity = -1;
+        // Ambient occlusion (gtao.frag, ao_blur.frag, occlusion.glsl).
+        int occlusionRadius = -1;
+        int projectionScale = -1;
+        int occlusionScale = -1;
+        int slices = -1;
+        int blurDirection = -1;
+        int blurRadius = -1;
+        int occlusionEnabled = -1;
+        int occlusionIntensity = -1;
     };
 
     // A light as the shaders take it, in view space.
@@ -348,6 +370,14 @@ private:
     // image. False, with nothing to resolve, when none are asked for, the
     // buffers are refused, or a program cannot draw yet.
     bool reflectionsPass(const float* projection, const float* inverseProjection);
+    // Ambient occlusion into occlusionTexture_ at the Quality's scale. False,
+    // with the light pass reading white, when none is asked for, the buffers
+    // are refused, or a program cannot draw yet.
+    bool occlusionPass(const float* projection, const float* inverseProjection);
+    bool ensureOcclusionBuffers(int width, int height, int scale);
+    void destroyOcclusionBuffers();
+    // Points program's occlusion uniforms and unit at this frame's result, or white.
+    void bindOcclusion(const Program& program);
     bool ensureReflectionBuffers(int width, int height);
     void destroyReflectionBuffers();
     // Bloom's chain from the merge image, width by height pixels: the levels
@@ -396,6 +426,8 @@ private:
     Program fxaa_;
     Program ssrScene_;
     Program ssr_;
+    Program gtao_;
+    Program aoBlur_;
     Program sky_;
     Program grid_;
     Program outline_;
@@ -489,6 +521,22 @@ private:
     // Whether ssrScene_ and ssr_ have passed validation since the programs or
     // these buffers were last made, as fxaaValid_ is for FXAA.
     bool reflectionsValid_ = false;
+    // Ambient occlusion, one channel, 1 open: the trace and the blur's halfway
+    // buffer, the pane's size divided by occlusionScale_. Made on the first
+    // frame that shades, apart from the other buffers.
+    unsigned occlusionFbo_ = 0;
+    unsigned occlusionTexture_ = 0;
+    unsigned occlusionBlurFbo_ = 0;
+    unsigned occlusionBlurTexture_ = 0;
+    int occlusionWidth_ = 0;
+    int occlusionHeight_ = 0;
+    int occlusionScale_ = 0;
+    int occlusionRefusedWidth_ = 0;
+    int occlusionRefusedHeight_ = 0;
+    int occlusionRefusedScale_ = 0;
+    bool occlusionValid_ = false;
+    // Whether this frame shaded occlusion: when not, the passes read white.
+    bool occlusionReady_ = false;
 
     void readProbe(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth, double sceneHeight,
                    const int viewport[4]);

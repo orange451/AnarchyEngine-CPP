@@ -1198,7 +1198,7 @@ void testInsertFilter() {
         "CSS", "ModuleScript", "Script",
         "Camera",
         "GameObject", "Model", "PhysicsObject",
-        "AmbientOcclusionEffect", "BloomEffect", "ScreenSpaceReflections", "Skybox",
+        "AmbientOcclusionEffect", "BloomEffect", "DynamicSky", "ScreenSpaceReflections", "Skybox",
         "DirectionalLight", "PointLight", "SpotLight",
         "Sound", "SoundEmitter",
         "Attachment",

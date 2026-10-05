@@ -7,6 +7,7 @@
 #include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Containment.hpp"
+#include "DynamicSky.hpp"
 #include "Folder.hpp"
 #include "Game.hpp"
 #include "GameObject.hpp"
@@ -142,6 +143,7 @@ std::vector<ClassEntry>& class_registry() {
             {"SoundEmitter", [](DataModel& world) -> DataModel& { return world.create<SoundEmitter>(); }});
         out.push_back({"Attachment", [](DataModel& world) -> DataModel& { return world.create<Attachment>(); }});
         out.push_back({"Skybox", [](DataModel& world) -> DataModel& { return world.create<Skybox>(); }});
+        out.push_back({"DynamicSky", [](DataModel& world) -> DataModel& { return world.create<DynamicSky>(); }});
         out.push_back({"BloomEffect", [](DataModel& world) -> DataModel& { return world.create<BloomEffect>(); }});
         out.push_back({"ScreenSpaceReflections",
                        [](DataModel& world) -> DataModel& { return world.create<ScreenSpaceReflections>(); }});

@@ -505,6 +505,7 @@ add_library(engine_instances STATIC
     src/engine_instances/BloomEffect.cpp
     src/engine_instances/ScreenSpaceReflections.cpp
     src/engine_instances/AmbientOcclusionEffect.cpp
+    src/engine_instances/DynamicSky.cpp
     src/engine_instances/Skybox.cpp
     src/engine_instances/SoundEmitter.cpp
     src/engine_instances/Attachment.cpp
@@ -847,6 +848,7 @@ add_executable(sandbox
     sandbox/camera_tests.cpp
     sandbox/light_tests.cpp
     sandbox/skybox_tests.cpp
+    sandbox/dynamic_sky_tests.cpp
     sandbox/bloom_tests.cpp
     sandbox/physics_tests.cpp
     sandbox/audio_tests.cpp

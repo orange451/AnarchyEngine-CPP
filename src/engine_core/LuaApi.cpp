@@ -1021,6 +1021,34 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "number", false, {});
     add("Skybox", "Tint", "A color the sky and its light are multiplied by. White leaves them as they are.", "Color3",
         false, {});
+    add("DynamicSky", "TimeOfDay",
+        "The hour, from 0 up to 24: sunrise in the east at 6, noon at 12, sunset in the west at 18. It moves "
+        "only when set.",
+        "number", false, {});
+    add("DynamicSky", "Latitude",
+        "Degrees from -90 to 90: at noon the sun stands 90 minus this many degrees up, to the south for a "
+        "northern latitude.",
+        "number", false, {});
+    add("DynamicSky", "Brightness",
+        "The sun light's intensity, from 0 to 20. The moon's light is a tenth of it.", "number", false, {});
+    add("DynamicSky", "Shadows", "When true, the sun or moon light casts shadows.", "boolean", false, {});
+    add("DynamicSky", "CloudCover", "How much of the sky has cloud, from 0 (clear) to 1 (overcast).", "number",
+        false, {});
+    add("DynamicSky", "CloudDensity",
+        "How thick and opaque the clouds are, from 0 to 1. Thick cover dims the sun light.", "number", false, {});
+    add("DynamicSky", "WindDirection",
+        "Which way the clouds drift, across X and Z; its length is their speed in studs per second.", "Vector3",
+        false, {});
+    add("DynamicSky", "SunTexture", "An image drawn in place of the sun's disc. Nil draws the disc.", "Texture?",
+        false, {});
+    add("DynamicSky", "MoonTexture", "An image drawn in place of the moon's disc. Nil draws the disc.",
+        "Texture?", false, {});
+    add("DynamicSky", "SunSize", "How many degrees across the sun looks, from 0.1 to 20.", "number", false, {});
+    add("DynamicSky", "MoonSize", "How many degrees across the moon looks, from 0.1 to 20.", "number", false, {});
+    add("DynamicSky", "ReflectionQuality",
+        "Enum.EffectQuality: how sharp the sky's light and reflections are (Low, Medium, High). The sky "
+        "itself is always drawn at full resolution.",
+        "Enum.EffectQuality", false, {});
     add("Lighting", "Antialiasing",
         "How the 3D scene's edges are smoothed: Enum.AntialiasingMode.FXAA, or None for hard pixel edges.",
         "Enum.AntialiasingMode", false, {});

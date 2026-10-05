@@ -13,8 +13,12 @@ namespace {
 constexpr const char* kStylesheet = R"CSS(
 .landing {
     background-color: var(--ide-window-color);
-    padding: 24px;
     font-family: "Open Sans";
+}
+.landing-body {
+    padding: 24px;
+    min-height: 100%;
+    alignment: center;
 }
 .landing-card {
     background-color: var(--ide-panel-color);
@@ -23,7 +27,7 @@ constexpr const char* kStylesheet = R"CSS(
     border-color: var(--ide-field-border-color);
     border-radius: 12px;
     box-shadow: 0px 8px 28px 0px var(--ide-popup-shadow-color);
-    padding: 36px 40px 20px 40px;
+    padding: 36px 40px;
     spacing: 28px;
     max-width: 760px;
 }
@@ -95,8 +99,8 @@ constexpr const char* kStylesheet = R"CSS(
     border-width: 1px 0 0 0;
     border-style: solid;
     border-color: var(--ide-field-border-color);
-    padding: 14px 0 0 0;
-    alignment: center-left;
+    padding: 10px 24px;
+    alignment: center;
     width: 100%;
 }
 .landing-footer check-box {
@@ -173,7 +177,6 @@ jadefx::Button* LandingPage::button(const std::string& text) const {
 void LandingPage::build(bool show_on_startup) {
     setStylesheet(kStylesheet);
     getClassList().add("landing");
-    setAlignment(jadefx::Pos::Center);
 
     auto card = jadefx::make<jadefx::VBox>();
     card->getClassList().add("landing-card");
@@ -196,6 +199,15 @@ void LandingPage::build(bool show_on_startup) {
     columns->getChildren().add(shortcut_column());
     card->getChildren().add(columns);
 
+    // The card scrolls when the page is too short for it, and stays centered when not:
+    // the body is at least as tall as the viewport.
+    auto body = jadefx::make<jadefx::StackPane>();
+    body->getClassList().add("landing-body");
+    body->getChildren().add(card);
+    scroll_ = jadefx::make<jadefx::ScrollPane>(body);
+    scroll_->setFitToWidth(true);
+
+    // The checkbox stays pinned to the bottom of the page, outside the scroll.
     auto footer = jadefx::make<jadefx::HBox>();
     footer->getClassList().add("landing-footer");
     hide_box_ = jadefx::make<jadefx::CheckBox>("Don't show this page on startup");
@@ -206,9 +218,12 @@ void LandingPage::build(bool show_on_startup) {
         }
     });
     footer->getChildren().add(hide_box_);
-    card->getChildren().add(footer);
 
-    getChildren().add(card);
+    auto frame = jadefx::make<jadefx::BorderPane>();
+    Fill(*frame);
+    frame->setCenter(scroll_);
+    frame->setBottom(footer);
+    getChildren().add(frame);
 }
 
 std::shared_ptr<jadefx::Node> LandingPage::start_column() {

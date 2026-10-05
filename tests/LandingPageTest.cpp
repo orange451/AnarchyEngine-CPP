@@ -60,6 +60,28 @@ void TestPage() {
     Expect(!hidden->hide_box()->isSelected(), "a page without actions still toggles");
 }
 
+// A page too short for the card scrolls it, and the checkbox stays at the bottom.
+void TestShortPage() {
+    auto page = jadefx::make<ide::LandingPage>(ide::LandingPage::Actions{}, true);
+    jadefx::Scene scene(page, 900, 700);
+
+    scene.layout(900, 700, 0);
+    jadefx::ScrollPane* scroll = page->scroll_pane();
+    Expect(scroll->getContentBounds().height <= scroll->getViewportBounds().height,
+           "a tall page has nothing to scroll");
+    const double card_y = page->button("New Place")->getAbsoluteY();
+
+    scene.layout(900, 240, 0.1);
+    Expect(scroll->getContentBounds().height > scroll->getViewportBounds().height, "a short page scrolls the card");
+    jadefx::CheckBox* box = page->hide_box();
+    Expect(box->getAbsoluteY() >= 0 && box->getAbsoluteY() + box->getHeight() <= 240,
+           "the checkbox stays inside a short page");
+    Expect(box->getAbsoluteY() > page->getHeight() - 60, "and sits at its bottom");
+
+    scene.layout(900, 700, 0.2);
+    Expect(page->button("New Place")->getAbsoluteY() == card_y, "the card is centered again once the page is tall");
+}
+
 ide::IdeDock* DockOf(jadefx::Node* node) {
     for (jadefx::Node* cursor = node; cursor != nullptr; cursor = cursor->getParent()) {
         if (auto* dock = dynamic_cast<ide::IdeDock*>(cursor)) {
@@ -171,6 +193,7 @@ void TestLayout(ide::IdeLayout& layout, jadefx::Scene& scene) {
 int RunLandingPageTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     gFailures = 0;
     TestPage();
+    TestShortPage();
     TestLayout(layout, scene);
     if (gFailures == 0) {
         std::printf("landing page tests passed\n");

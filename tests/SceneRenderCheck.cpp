@@ -1506,6 +1506,15 @@ int main() {
                 const Pixel ground = ReadPixel(fbWidth / 2, fbHeight / 2);
                 Expect(Sum(ground) > 3 && Sum(ground) < Sum(noonSky),
                        "straight down is dark ground, not NaN (" + Text(ground) + ")");
+                // At sunset the sun sits on the horizon, due west: the ground below it
+                // is the ground beside it, not the disc smeared down the column.
+                renderer.setCamera(engine_core::matrix4_look_at({0.f, 0.f, 7.f}, {-10.f, 0.f, 7.f}, up), 60.f);
+                drawDynamic(skyAt(18.0, 0.0, 1), nullptr, 0);
+                const Pixel belowSun = ReadPixel(fbWidth / 2, fbHeight / 4);
+                const Pixel besideSun = ReadPixel(fbWidth / 2 + fbWidth / 32, fbHeight / 4);
+                Expect(std::abs(Sum(belowSun) - Sum(besideSun)) <= 9,
+                       "the sun does not streak down the ground below it (" + Text(belowSun) + " against " +
+                           Text(besideSun) + ")");
 
                 // The sun lights a cube at noon far more than the moon at midnight.
                 renderer.setCamera(engine_core::matrix4_look_at({0.f, 3.f, 7.f}, {0.f, 0.f, 0.f}, up),

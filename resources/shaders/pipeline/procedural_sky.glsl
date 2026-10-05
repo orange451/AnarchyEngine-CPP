@@ -229,13 +229,17 @@ vec3 proceduralSky(vec3 dir, bool detail) {
         air += atmosphere(up, uMoonDirection, kMoonSkyRadiance);
     }
     air += kNightSky;
-    vec3 color = air + uMoonColor * 0.02 * pow(max(dot(up, uMoonDirection), 0.0), 600.0);
+    // The stars, the discs, and the moon's glow only above the horizon: below
+    // it every direction down a column is the same horizon, which would smear
+    // them down the ground.
+    float above = smoothstep(-0.002, 0.002, dir.y);
+    vec3 color = air + uMoonColor * 0.02 * pow(max(dot(up, uMoonDirection), 0.0), 600.0) * above;
     if (detail) {
-        color += stars(up) * uStarVisibility;
+        color += stars(up) * uStarVisibility * above;
         vec4 sun = body(up, uSunDirection, uSunSize, uSunTextureEnabled, uSunTexture, 0.0);
-        color += sun.rgb * uSunColor * sun.a;
+        color += sun.rgb * uSunColor * sun.a * above;
         vec4 moon = body(up, uMoonDirection, uMoonSize, uMoonTextureEnabled, uMoonTexture, 1.0);
-        color = mix(color, air + moon.rgb * uMoonColor, moon.a);
+        color = mix(color, air + moon.rgb * uMoonColor, moon.a * above);
     }
     vec4 cloud = clouds(up, air);
     color = mix(color, cloud.rgb, cloud.a);

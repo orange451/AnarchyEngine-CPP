@@ -2,9 +2,11 @@
 
 #include "BloomMath.hpp"
 #include "DraggerMath.hpp"
+#include "DrawBatches.hpp"
 #include "EnvironmentMap.hpp"
 #include "GpuTimer.hpp"
 #include "GridBands.hpp"
+#include "InstanceBuffer.hpp"
 #include "Matrix4.hpp"
 #include "SceneDepth.hpp"
 #include "ShadowRenderer.hpp"
@@ -31,6 +33,7 @@ struct MeshDraw {
     // A GL texture, sampled at the mesh's UVs. 0 draws white.
     unsigned texture = 0;
     // RGBA, 0 to 1, as the Material's Color3 holds it (sRGB). Alpha is unused.
+    // The GameObject's Color is tint, not multiplied in here.
     float color[4] = {1.f, 1.f, 1.f, 1.f};
     // The Material's other textures. 0 is none: no normal map, and the
     // roughness, metalness, and emissive values alone.
@@ -48,6 +51,12 @@ struct MeshDraw {
     // The instance that draws it, or 0. A light never shadows itself, so
     // meshes whose owner is a LightDraw's id cast nothing for that light.
     std::uint64_t owner = 0;
+    // The GameObject's Color, as its Color3 holds it (sRGB). It multiplies color.
+    float tint[3] = {1.f, 1.f, 1.f};
+    // Which Prefab Model it draws, numbered from 1 each frame. Draws with the
+    // same slot share a mesh and every Material value, and draw as one
+    // instanced call. 0 draws alone.
+    std::uint32_t slot = 0;
 };
 
 // A PointLight, SpotLight, or DirectionalLight, in world space.
@@ -379,11 +388,11 @@ private:
     void createSphere();
 
     // Each pass is false, having stopped before its first draw, when its program cannot draw yet.
-    bool geometryPass(const MeshDraw* meshes, int count, const float* projection);
+    bool geometryPass(const MeshDraw* meshes, const float* projection);
     bool lightPass(const float* projection, const float* inverseProjection);
     // The Skybox where no opaque surface was drawn. True with no Skybox.
     bool skyPass(const float* inverseProjection);
-    bool transparencyPass(const MeshDraw* meshes, int count, const float* projection, const float* inverseProjection);
+    bool transparencyPass(const MeshDraw* meshes, const float* projection, const float* inverseProjection);
     bool mergePass(bool reflected, const float* inverseProjection);
     // Screen-space reflections into reflectionTexture_, from the lit opaque
     // image. False, with nothing to resolve, when none are asked for, the
@@ -588,8 +597,8 @@ private:
 
     // Per draw, reused.
     std::vector<ViewLight> viewLights_;
-    std::vector<int> transparent_;
-    std::vector<float> transparentDepth_;
+    DrawBatches batches_;
+    InstanceBuffer instances_;
     std::vector<DrawItem> drawItems_;
     VisibilityResult visibility_;
     bool culling_ = true;

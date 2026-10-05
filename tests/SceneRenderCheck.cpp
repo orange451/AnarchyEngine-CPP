@@ -1699,6 +1699,56 @@ int main(int argc, char** argv) {
             cullCube.destroy();
         }
 
+        {
+            // IN1–IN4: instancing. From (0, 0, 8) down -Z, white cubes of one
+            // slot, left tinted red and right green, draw as one run.
+            // A fresh mesh of its own: by here the file-backed cube above was
+            // broken on purpose (the recheck test) and is no longer valid.
+            GpuMesh instanceCube;
+            instanceCube.upload(Cube());
+            runner::Renderer batcher;
+            Expect(batcher.initialize(), "the renderer builds for instancing");
+            batcher.setCamera(engine_core::matrix4_translation(0.f, 0.f, 8.f), 60.f);
+            runner::MeshDraw pair[2] = {
+                runner::MeshDraw{&instanceCube, engine_core::matrix4_translation(-1.5f, 0.f, 0.f)},
+                runner::MeshDraw{&instanceCube, engine_core::matrix4_translation(1.5f, 0.f, 0.f)}};
+            pair[0].slot = pair[1].slot = 1;
+            pair[0].tint[1] = pair[0].tint[2] = 0.f;
+            pair[1].tint[0] = pair[1].tint[2] = 0.f;
+            batcher.draw(0, 0, kSize, kSize, kSize, kSize, pair, 2);
+            const Pixel left = ReadPixel(fbWidth * 40 / kSize, fbHeight / 2);
+            const Pixel right = ReadPixel(fbWidth * 88 / kSize, fbHeight / 2);
+            Expect(batcher.stats().runs == 1 && batcher.stats().instancedCalls == 1,
+                   "IN1 two cubes of one slot draw in one call (" + std::to_string(batcher.stats().runs) + " runs)");
+            Expect(left.r > left.g + 30 && right.g > right.r + 30,
+                   "IN2 each keeps its own tint (" + Text(left) + " and " + Text(right) + ")");
+
+            // A mirrored cube draws the same as an unmirrored one, in a run of its own.
+            runner::MeshDraw plain{&instanceCube, engine_core::matrix4_identity()};
+            plain.slot = 1;
+            batcher.draw(0, 0, kSize, kSize, kSize, kSize, &plain, 1);
+            const Pixel unmirrored = ReadPixel(fbWidth / 2, fbHeight / 2);
+            runner::MeshDraw both[2] = {plain, plain};
+            both[1].model.m[0] = -1.f;
+            both[0].model = engine_core::matrix4_translation(0.f, 0.f, -30.f);  // hidden behind it, same slot
+            batcher.draw(0, 0, kSize, kSize, kSize, kSize, both, 2);
+            const Pixel mirrored = ReadPixel(fbWidth / 2, fbHeight / 2);
+            Expect(batcher.stats().runs == 2, "IN3 a mirrored cube draws in a run of its own");
+            Expect(std::abs(Sum(mirrored) - Sum(unmirrored)) <= 3,
+                   "IN3 and shows its outside (" + Text(mirrored) + " against " + Text(unmirrored) + ")");
+
+            // Slot 0 never batches.
+            const runner::MeshDraw loose[3] = {
+                runner::MeshDraw{&instanceCube, engine_core::matrix4_translation(-1.5f, 0.f, 0.f)},
+                runner::MeshDraw{&instanceCube, engine_core::matrix4_identity()},
+                runner::MeshDraw{&instanceCube, engine_core::matrix4_translation(1.5f, 0.f, 0.f)}};
+            batcher.draw(0, 0, kSize, kSize, kSize, kSize, loose, 3);
+            Expect(batcher.stats().runs == 3, "IN4 slot 0 draws each alone");
+            Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "instancing leaves no GL error");
+            batcher.shutdown();
+            instanceCube.destroy();
+        }
+
         if (argc == 3 && (std::string(argv[1]) == "--save" || std::string(argv[1]) == "--compare")) {
             GpuMesh regressionCube;
             regressionCube.upload(Cube());

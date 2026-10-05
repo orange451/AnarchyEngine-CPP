@@ -726,16 +726,6 @@ void Multiply(const float* a, const float* b, float* out) {
     }
 }
 
-// Culls the faces turned away from the camera. Meshes are wound CCW, but a
-// Transform that mirrors, scaled negative on an odd number of axes, turns
-// the winding around, so its back faces are the CW ones.
-void CullBackFaces(const float* model) {
-    const float* m = model;
-    const float determinant = m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2]) +
-                              m[8] * (m[1] * m[6] - m[5] * m[2]);
-    glCullFace(determinant < 0.f ? RT_GL_FRONT : RT_GL_BACK);
-}
-
 // The GL state a draw changes, so the UI pass after it finds its own. That
 // includes what every texture unit has bound to each target the passes use.
 // JadeFX binds unit 7 only in setOccluder, to the scene's depth texture,
@@ -1009,7 +999,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         const CameraView camera = cameraView(projection);
         findVisible(meshes, meshCount, camera);
         drawn = cubesReady && shadowPass(meshes, meshCount, camera) &&
-                geometryPass(meshes, meshCount, projection);
+                geometryPass(meshes, projection);
         // Occlusion never fails the frame: without it, surfaces are lit as if open.
         if (drawn) {
             occlusionPass(projection, inverseProjection.m);
@@ -1020,7 +1010,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         // Reflections never fail the frame: without them, surfaces keep their sky reflection.
         const bool reflected = drawn && reflectionsPass(projection, inverseProjection.m);
         glViewport(0, 0, targetWidth_, targetHeight_);
-        drawn = drawn && transparencyPass(meshes, meshCount, projection, inverseProjection.m) &&
+        drawn = drawn && transparencyPass(meshes, projection, inverseProjection.m) &&
                 mergePass(reflected, inverseProjection.m);
         // Bloom never fails the frame: without it, the tone map draws the scene as it is.
         bloomLevels = drawn ? bloomPass(targetWidth_, targetHeight_) : 0;
@@ -1282,7 +1272,6 @@ void Renderer::bindMaterial(const Program& program, const MeshDraw& draw) {
     glUniform1f(program.normalMapEnabled, draw.normalTexture != 0 ? 1.f : 0.f);
     glUniform1f(program.emissiveMapEnabled, draw.emissiveTexture != 0 ? 1.f : 0.f);
     glUniform1f(program.transparency, std::clamp(draw.transparency, 0.f, 1.f));
-    glUniformMatrix4fv(program.model, 1, GL_FALSE, draw.model.m);
 }
 
 void Renderer::prepareSky() {
@@ -1374,11 +1363,14 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
             item.boundsMin = draw.mesh->bounds_min();
             item.boundsMax = draw.mesh->bounds_max();
         }
+        item.tint = draw.tint;
+        item.slot = draw.slot;
     }
     FindVisible(drawItems_.data(), count, camera, culling_, visibility_);
     stats_.draws = count;
     stats_.visible = static_cast<int>(visibility_.opaque.size() + visibility_.transparent.size());
     stats_.culled = visibility_.culled;
+    BuildBatches(drawItems_.data(), visibility_, view_, batches_);
 }
 
 bool Renderer::shadowPass(const MeshDraw* meshes, int count, const CameraView& camera) {
@@ -1422,7 +1414,7 @@ void Renderer::bindShadow(const Program& program, const ShadowLookup& lookup) {
     glUniform1f(program.shadowFaceScale, lookup.faceScale);
 }
 
-bool Renderer::geometryPass(const MeshDraw* meshes, int count, const float* projection) {
+bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
     RENDER_PASS("Geometry");
     glViewport(0, 0, targetWidth_, targetHeight_);
     glBindFramebuffer(RT_GL_FRAMEBUFFER, gbufferFbo_);
@@ -1437,23 +1429,23 @@ bool Renderer::geometryPass(const MeshDraw* meshes, int count, const float* proj
     glUseProgram(geometry_.id);
     glUniformMatrix4fv(geometry_.view, 1, GL_FALSE, view_.m);
     glUniformMatrix4fv(geometry_.projection, 1, GL_FALSE, projection);
-    (void)count;
-    transparent_.clear();
-    for (const VisibleDraw& visible : visibility_.transparent) {
-        transparent_.push_back(visible.index);
-    }
+    // Every instance of the frame, opaque and see-through, in one upload.
+    instances_.upload(batches_.instances.data(), static_cast<int>(batches_.instances.size()));
     bool asked = false;
-    for (const VisibleDraw& visible : visibility_.opaque) {
-        const MeshDraw& draw = meshes[visible.index];
+    for (int index = 0; index < batches_.opaqueRuns; ++index) {
+        const DrawRun& run = batches_.runs[static_cast<std::size_t>(index)];
+        const MeshDraw& draw = meshes[run.draw];
         bindMaterial(geometry_, draw);
-        CullBackFaces(draw.model.m);
+        glCullFace(run.mirrored ? RT_GL_FRONT : RT_GL_BACK);
         draw.mesh->bind();
+        instances_.attach(run.first);
         if (!asked && !CanDraw(geometry_.id)) {
             return false;
         }
         asked = true;
-        draw.mesh->draw(visible.lod);
+        draw.mesh->draw_instanced(run.lod, run.count);
         ++stats_.runs;
+        ++stats_.instancedCalls;
     }
     glDisable(RT_GL_CULL_FACE);
     glCullFace(RT_GL_BACK);
@@ -1715,26 +1707,14 @@ bool Renderer::reflectionsPass(const float* projection, const float* inverseProj
     return true;
 }
 
-bool Renderer::transparencyPass(const MeshDraw* meshes, int count, const float* projection,
-                                const float* inverseProjection) {
+bool Renderer::transparencyPass(const MeshDraw* meshes, const float* projection, const float* inverseProjection) {
     RENDER_PASS("Transparency");
     glBindFramebuffer(RT_GL_FRAMEBUFFER, transparencyFbo_);
     glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT);
-    if (transparent_.empty()) {
+    if (batches_.opaqueRuns == static_cast<int>(batches_.runs.size())) {
         return true;
     }
-
-    // Farthest first, by each Transform's distance along the view.
-    transparentDepth_.assign(static_cast<std::size_t>(count), 0.f);
-    for (const int index : transparent_) {
-        const float* v = view_.m;
-        const float* t = meshes[index].model.m + 12;
-        transparentDepth_[static_cast<std::size_t>(index)] = v[2] * t[0] + v[6] * t[1] + v[10] * t[2] + v[14];
-    }
-    std::stable_sort(transparent_.begin(), transparent_.end(), [this](int a, int b) {
-        return transparentDepth_[static_cast<std::size_t>(a)] < transparentDepth_[static_cast<std::size_t>(b)];
-    });
 
     // Tested against the opaque surfaces' depth, but writing none, so each
     // see-through surface blends over every one behind it.
@@ -1780,16 +1760,19 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, int count, const float* 
     }
     glEnable(RT_GL_CULL_FACE);
     bool asked = false;
-    for (const int index : transparent_) {
-        const MeshDraw& draw = meshes[index];
+    for (std::size_t index = static_cast<std::size_t>(batches_.opaqueRuns); index < batches_.runs.size(); ++index) {
+        const DrawRun& run = batches_.runs[index];
+        const MeshDraw& draw = meshes[run.draw];
         bindMaterial(forward_, draw);
-        CullBackFaces(draw.model.m);
+        glCullFace(run.mirrored ? RT_GL_FRONT : RT_GL_BACK);
         draw.mesh->bind();
+        instances_.attach(run.first);
         if (!asked && !CanDraw(forward_.id)) {
             return false;
         }
         asked = true;
-        draw.mesh->draw(0);
+        draw.mesh->draw_instanced(run.lod, run.count);
+        ++stats_.instancedCalls;
     }
     glDisable(RT_GL_CULL_FACE);
     glCullFace(RT_GL_BACK);
@@ -1969,6 +1952,7 @@ void Renderer::shutdown() {
     }
     environment_.shutdown();
     shadows_.shutdown();
+    instances_.destroy();
     skyReady_ = false;
     for (unsigned* texture : {&whiteTexture_, &blackCube_}) {
         DeleteTexture(*texture);

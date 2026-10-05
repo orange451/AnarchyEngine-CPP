@@ -42,7 +42,8 @@ float horizonCosAt(vec2 uv, vec3 P, vec3 V, float low, float falloffMul, float f
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThanEqual(uv, vec2(1.0)))) {
         return low;
     }
-    ivec2 texel = ivec2(uv / uTexel);
+    // A rounded reciprocal can put uv just under 1 at the size itself.
+    ivec2 texel = min(ivec2(uv / uTexel), textureSize(uDepth, 0) - 1);
     float depth = texelFetch(uDepth, texel, 0).r;
     if (depth >= 1.0) {
         return low;

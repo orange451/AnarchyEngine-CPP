@@ -29,6 +29,17 @@ float occlusionAt(vec2 uv, float depth) {
         vec2 position = uv * size - 0.5;
         vec2 base = floor(position);
         vec2 f = position - base;
+        // Most of the screen is open: four open texels skip the depth work.
+        float taps[4];
+        float lowest = 1.0;
+        for (int i = 0; i < 4; ++i) {
+            ivec2 texel = clamp(ivec2(base) + ivec2(i & 1, i >> 1), ivec2(0), ivec2(size) - 1);
+            taps[i] = texelFetch(uOcclusion, texel, 0).r;
+            lowest = min(lowest, taps[i]);
+        }
+        if (lowest >= 1.0) {
+            return 1.0;
+        }
         float center = -viewPositionAt(uv, depth).z;
         float sum = 0.0;
         float total = 0.0;
@@ -39,7 +50,7 @@ float occlusionAt(vec2 uv, float depth) {
             float tapDepth = -viewPositionAt((vec2(full) + 0.5) / fullSize, texelFetch(uDepth, full, 0).r).z;
             float bilinear = (offset.x == 1 ? f.x : 1.0 - f.x) * (offset.y == 1 ? f.y : 1.0 - f.y);
             float w = bilinear / (1e-3 + abs(tapDepth - center) / center);
-            sum += texelFetch(uOcclusion, texel, 0).r * w;
+            sum += taps[i] * w;
             total += w;
         }
         visibility = total > 0.0 ? sum / total : 1.0;

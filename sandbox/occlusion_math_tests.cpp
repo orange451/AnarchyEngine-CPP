@@ -19,7 +19,9 @@ TEST_CASE("OM1 each Quality's resolution, slices, and blur", "[occlusion]") {
     const OcclusionQuality low = QualitySettings(0);
     const OcclusionQuality medium = QualitySettings(1);
     const OcclusionQuality high = QualitySettings(2);
-    REQUIRE((low.scale == 2 && low.slices == 2 && low.blurRadius == 6));
+    // Low saves trace taps and keeps the blur: a wider blur costs more than the slice it saves.
+    REQUIRE((low.scale == 2 && low.slices == 2 && low.blurRadius == 4));
+    REQUIRE(low.slices * low.blurRadius < medium.slices * medium.blurRadius);
     REQUIRE((medium.scale == 2 && medium.slices == 3 && medium.blurRadius == 4));
     REQUIRE((high.scale == 1 && high.slices == 3 && high.blurRadius == 4));
     // Anything else is Medium.

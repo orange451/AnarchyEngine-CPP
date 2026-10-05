@@ -29,7 +29,7 @@ A number that is not finite is refused with "`<Property>` must be a finite numbe
 
 | Quality | Resolution | Slices × steps per side | Depth taps per pixel | Blur radius |
 | --- | --- | --- | --- | --- |
-| Low | half | 2 × 6 | 24 | 6 |
+| Low | half | 2 × 6 | 24 | 4 |
 | Medium | half | 3 × 6 | 36 | 4 |
 | High | full | 3 × 6 | 36 | 4 |
 
@@ -72,7 +72,7 @@ The blur is separable (across, then down) and runs at the trace's resolution, in
 - distance from the center pixel's tangent plane, relative to its depth (tolerance 0.02);
 - normal agreement (power 8).
 
-So creases do not smear across silhouettes. Without TAA this blur is the only denoiser, so Low's wider radius covers its extra noise.
+So creases do not smear across silhouettes. Without TAA this blur is the only denoiser. Low keeps the same radius: a wider one costs more than the slice it saves.
 
 ### 3. Applying it
 

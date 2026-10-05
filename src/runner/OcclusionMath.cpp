@@ -8,7 +8,8 @@ namespace runner {
 OcclusionQuality QualitySettings(int quality) {
     switch (quality) {
         case 0:
-            return {2, 2, 6};
+            // Fewer slices, the same blur: a wider blur would cost more than the slice saves.
+            return {2, 2, 4};
         case 2:
             return {1, 3, 4};
         default:

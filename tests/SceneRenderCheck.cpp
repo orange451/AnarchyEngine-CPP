@@ -250,15 +250,27 @@ std::vector<std::vector<unsigned char>> RegressionFrames(const GpuMesh* cube, in
 }
 
 // --save writes each frame to dir/regression-N.rgba; --compare reads them back
-// and expects every channel within 1.
+// and expects every channel within 1. Both modes validate that frames draw content.
 void SaveOrCompareRegression(const std::vector<std::vector<unsigned char>>& frames, const std::string& mode,
                              const std::filesystem::path& dir) {
     for (std::size_t n = 0; n < frames.size(); ++n) {
+        // Count pixels that are not the clear color (30, 30, 30).
+        int drawn = 0;
+        const std::size_t pixels = frames[n].size() / 4;
+        for (std::size_t i = 0; i < frames[n].size(); i += 4) {
+            const bool clear = frames[n][i] == 30 && frames[n][i + 1] == 30 && frames[n][i + 2] == 30;
+            drawn += clear ? 0 : 1;
+        }
+        Expect(drawn >= static_cast<int>(pixels * 0.05),
+               "regression frame " + std::to_string(n) + " draws something (" + std::to_string(drawn) + " of " +
+                   std::to_string(pixels) + " pixels)");
+
         const std::filesystem::path file = dir / ("regression-" + std::to_string(n) + ".rgba");
         if (mode == "--save") {
             std::filesystem::create_directories(dir);
-            std::ofstream(file, std::ios::binary)
-                .write(reinterpret_cast<const char*>(frames[n].data()), static_cast<std::streamsize>(frames[n].size()));
+            std::ofstream out(file, std::ios::binary);
+            out.write(reinterpret_cast<const char*>(frames[n].data()), static_cast<std::streamsize>(frames[n].size()));
+            Expect(out.good(), "regression frame " + std::to_string(n) + " saved");
             continue;
         }
         std::ifstream in(file, std::ios::binary);
@@ -1645,7 +1657,10 @@ int main(int argc, char** argv) {
         Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "session uploads leave no GL error");
 
         if (argc == 3 && (std::string(argv[1]) == "--save" || std::string(argv[1]) == "--compare")) {
-            SaveOrCompareRegression(RegressionFrames(cube, kSize, fbWidth, fbHeight), argv[1], argv[2]);
+            GpuMesh regressionCube;
+            regressionCube.upload(Cube());
+            SaveOrCompareRegression(RegressionFrames(&regressionCube, kSize, fbWidth, fbHeight), argv[1], argv[2]);
+            regressionCube.destroy();
         }
 
         meshes.clear();

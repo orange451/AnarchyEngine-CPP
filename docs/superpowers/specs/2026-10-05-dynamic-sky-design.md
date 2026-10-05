@@ -89,7 +89,7 @@ One directional light, `id` 0, from the sun while the sun is up and the moon oth
   - stars: a hashed cell field in sky coordinates turned about the pole, faded in by star visibility and hidden by cloud;
   - the sun and moon: a disc of SunSize / MoonSize with limb darkening and a halo, or the texture on a quad facing the viewer at that angular size; drawn behind the clouds.
 - `dynamic_sky.frag` draws the visible sky: full screen into the accumulation buffer where depth is 1, as `sky.frag` does, clamped to `kMaxHalf`. Profiled as the existing `"Sky"` pass.
-- `dynamic_sky_cube.frag` draws one face of the lighting cube with the same `proceduralSky`, without the sun and moon discs (their glow stays): the built-in light already gives the sun's highlight, and a disc in the cube would add it twice. So the textures never reach the cube.
+- `dynamic_sky_cube.frag` draws one face of the lighting cube with the same `proceduralSky`, without the sun and moon discs (their glow stays) or the stars: the built-in light already gives the sun's highlight, a disc in the cube would add it twice, and a cube face holds no useful star field at this size anyway. So the textures never reach the cube.
 
 The sun and moon textures are bound to the Material units 0 and 1 (`kUnitDiffuse`, `kUnitNormalMap`): the sky pass reads no Material.
 
@@ -124,9 +124,11 @@ The redraw is profiled as a `"Sky lighting"` pass. The visible sky is not affect
 
 ### Failure
 
-If the procedural programs fail to build, or the cubes cannot be made, that is reported once and frames draw as with no sky (the stand-in ambient and black reflections); unlike a Skybox's unready cubes today, the frame does not fail. A missing or unloadable SunTexture or MoonTexture draws the procedural disc.
+If the procedural programs fail to build, that is reported once and the frame draws as with no sky at all: no visible sky, and the stand-in ambient and black reflections in its place. The DynamicSky's light (the sun or moon) is driven from TimeOfDay directly, not the shader, so it keeps lighting the scene even then — only the sky itself, its ambient, and its reflections are lost. A missing or unloadable SunTexture or MoonTexture draws the procedural disc instead of failing to build.
 
-`EnvironmentMap::updateProcedural` clears its "holds a procedural sky" flag before it draws a single face, and only sets it again once every face, the mipmap, and the filter all succeed. So a redraw that fails partway — one face's program fails to link, say — drops the lighting cube's sky for that frame, the same as a build failure above: the renderer reads `holdsProcedural()` as false and lights the frame with no sky until a later redraw succeeds. The visible sky (drawn straight from the shader, not the cube) is unaffected either way.
+If the programs build but the lighting cube cannot be made — the first frame, before it ever has been, or any frame a redraw fails partway — the frame does not fail, unlike a Skybox's unready cubes today: the visible sky still draws every such frame, straight from the shader, same as when the cube is ready. Only what a surface takes from the cube (its ambient and reflections) falls back to the stand-in, the same as with no sky, until a later redraw succeeds.
+
+`EnvironmentMap::updateProcedural` clears its "holds a procedural sky" flag before it draws a single face, and only sets it again once every face, the mipmap, and the filter all succeed. So a redraw that fails partway — one face's program fails to link, say — drops the lighting cube's sky for that frame, the same as it never having been made: the renderer reads `holdsProcedural()` as false and gives surfaces the stand-in ambient and black reflections until a later redraw succeeds. The visible sky (drawn straight from the shader, not the cube) and the DynamicSky's light are unaffected either way.
 
 ## Registration
 

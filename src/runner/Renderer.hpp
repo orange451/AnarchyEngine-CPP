@@ -304,6 +304,10 @@ private:
         int skyColor = -1;
         int skyLightScale = -1;
         int prefilteredMaxLod = -1;
+        // merge.frag only: whether the sky pass drew into the accumulation
+        // buffer this frame, which is not always uSkyEnabled (a DynamicSky
+        // draws even when its lighting cube, uSkyEnabled's cubesReady, is not).
+        int skyDrawn = -1;
         // Material.
         int diffuse = -1;
         int normalMap = -1;
@@ -471,9 +475,12 @@ private:
     void bindSky(const Program& program);
     // The DynamicSky's uniforms and its two textures.
     void bindDynamicSky(const Program& program);
-    // Draws the DynamicSky's lighting cube again when LightingDue says so.
-    // True when the cubes hold the DynamicSky (if a little stale); false
-    // before they ever have, and the sky is not drawn.
+    // Draws the DynamicSky's lighting cube again when LightingDue says so,
+    // otherwise leaves the cubes as they are. True once the cubes hold a
+    // DynamicSky's lighting, whether this frame's draw or an earlier one left
+    // in place because a redraw was not due or failed partway; false before
+    // they ever have. Either way the visible sky (skyPass) draws from the
+    // shader and does not wait on this.
     bool updateDynamicSkyLighting();
     // Whether this draw's sky is the DynamicSky.
     bool dynamicSkyDrawn() const { return lighting_.dynamicSky.enabled && dynamicSkyBuilt_; }
@@ -511,8 +518,13 @@ private:
     Program outline_;
     Program handle_;
     EnvironmentMap environment_;
-    // Whether this draw has a Skybox or DynamicSky whose cubes are made.
+    // Whether this draw has a Skybox or DynamicSky whose cubes are made,
+    // which surfaces (image_lighting.glsl) light from and reflect.
     bool skyReady_ = false;
+    // Whether skyPass draws into the accumulation buffer this frame: always
+    // when skyReady_ is, and also for a DynamicSky whose lighting cube
+    // (skyReady_) is not ready yet — the visible sky does not wait on it.
+    bool skyVisible_ = false;
     // From view space to the sky's, column-major, and Exposure times Tint, linear.
     float viewToSky_[9] = {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
     float skyColor_[3] = {1.f, 1.f, 1.f};

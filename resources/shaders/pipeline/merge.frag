@@ -7,10 +7,15 @@
 // left there, premultiplied, so the pane's color shows behind them. Renderer
 // puts lighting.glsl, environment.glsl, occlusion.glsl, and
 // image_lighting.glsl in after the #version line; occlusion.glsl declares
-// uDepth and image_lighting.glsl uSkyEnabled.
+// uDepth and image_lighting.glsl uSkyEnabled: whether a surface lights and
+// reflects from the sky's cubes, which stays 0 for a DynamicSky whose
+// lighting cube is not ready. uSkyDrawn, below, is separate: whether the sky
+// pass drew into uAccumulation this frame, which for a DynamicSky is true
+// even then, since it draws straight from its shader.
 in vec2 vUv;
 out vec4 outColor;
 
+uniform float uSkyDrawn;
 uniform sampler2D uEmissive;
 uniform sampler2D uAccumulation;
 // Premultiplied: rgb already carries its alpha.
@@ -66,7 +71,7 @@ void main() {
     vec4 seeThrough = texture(uTransparency, vUv);
     float depth = texture(uDepth, vUv).r;
     if (depth >= 1.0) {
-        if (uSkyEnabled < 0.5) {
+        if (uSkyDrawn < 0.5) {
             outColor = seeThrough;
             return;
         }

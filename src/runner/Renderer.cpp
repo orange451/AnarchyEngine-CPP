@@ -175,6 +175,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.skyColor = at("uSkyColor");
     program.skyLightScale = at("uSkyLightScale");
     program.prefilteredMaxLod = at("uPrefilteredMaxLod");
+    program.skyDrawn = at("uSkyDrawn");
     program.diffuse = at("uDiffuse");
     program.normalMap = at("uNormalMap");
     program.roughnessMap = at("uRoughnessMap");
@@ -1056,14 +1057,19 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         // The sky's cubes: an image's made again only when it changes; a
         // DynamicSky's when LightingDue says, and never failing the frame.
         skyReady_ = false;
+        skyVisible_ = false;
         bool cubesReady = true;
         if (hasSky && dynamicSkyDrawn()) {
             skyReady_ = updateDynamicSkyLighting();
+            // Drawn straight from the shader every frame it is due, whether
+            // or not its lighting cube (skyReady_) is ready yet.
+            skyVisible_ = true;
             prepareSky();
         } else if (hasSky) {
             const SceneSky& sky = lighting_.sky;
             cubesReady = environment_.update(sky.image, sky.imageRevision, emptyVao_);
             skyReady_ = cubesReady;
+            skyVisible_ = skyReady_;
             prepareSky();
         }
         glEnable(RT_GL_TEXTURE_CUBE_MAP_SEAMLESS);
@@ -1740,7 +1746,7 @@ bool Renderer::lightPass(const float* projection, const float* inverseProjection
 
 bool Renderer::skyPass(const float* inverseProjection) {
     RENDER_PASS("Sky");
-    if (!skyReady_) {
+    if (!skyVisible_) {
         return true;
     }
     const bool dynamic = dynamicSkyDrawn();
@@ -1752,9 +1758,15 @@ bool Renderer::skyPass(const float* inverseProjection) {
     glUseProgram(program.id);
     BindTexture(kUnitDepth, depthTexture_);
     glUniformMatrix4fv(program.inverseProjection, 1, GL_FALSE, inverseProjection);
-    bindSky(program);
     if (dynamic) {
+        // dynamic_sky.frag reads no IBL uniform, only uViewToSky: bindSky
+        // uploads that one only when skyReady_, so upload it here instead,
+        // since the DynamicSky draws even when skyReady_ (its lighting
+        // cube) is not.
+        glUniformMatrix3fv(program.viewToSky, 1, GL_FALSE, viewToSky_);
         bindDynamicSky(program);
+    } else {
+        bindSky(program);
     }
     glBindVertexArray(emptyVao_);
     if (!CanDraw(program.id)) {
@@ -1916,6 +1928,10 @@ bool Renderer::mergePass(bool reflected, const float* inverseProjection) {
     glUniform3f(merge_.skyRadiance, kSkyRadiance, kSkyRadiance, kSkyRadiance);
     bindGBuffer(merge_);
     bindSky(merge_);
+    // uSkyEnabled (bindSky, above) is whether surfaces light and reflect from
+    // the cubes; uSkyDrawn is whether skyPass drew into the accumulation
+    // buffer at all, which for a DynamicSky is true even with no cubes.
+    glUniform1f(merge_.skyDrawn, skyVisible_ ? 1.f : 0.f);
     bindOcclusion(merge_);
     // With no trace, any texture keeps the sampler loadable.
     BindTexture(kUnitReflections, reflected ? reflectionTexture_ : whiteTexture_);
@@ -2071,6 +2087,7 @@ void Renderer::shutdown() {
     environment_.shutdown();
     shadows_.shutdown();
     skyReady_ = false;
+    skyVisible_ = false;
     dynamicSkyBuilt_ = false;
     skyLightingValid_ = false;
     for (unsigned* texture : {&whiteTexture_, &blackCube_}) {

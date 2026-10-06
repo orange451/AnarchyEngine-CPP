@@ -8,6 +8,10 @@ namespace runner {
 // The trace's step budget: strided steps, then bisections once a step hits.
 constexpr int kReflectionMaxSteps = 32;
 constexpr int kReflectionRefineSteps = 4;
+// The lit image's blur, in taps either side of the middle: each level of its
+// mip chain is the level above, halved, then blurred by a Gaussian one of its
+// own texels wide, so a rough reflection's cone reads a smooth level.
+constexpr int kReflectionBlurRadius = 2;
 
 // 1 inside the middle 80% of the screen on both axes, falling smoothly to 0
 // at its edges, so reflections never stop at a seam. u and v run 0 to 1.
@@ -48,5 +52,11 @@ float ResolveReflection(float color, float intensity, ReflectionTexel traced, fl
 // Whether a hit holds after bisection: the ray ended rayDepth from the
 // camera, at most thickness behind the surface sceneDepth away.
 bool BisectedHitHolds(float rayDepth, float sceneDepth, float thickness);
+// How much one tap of the lit image's blur counts, offset taps from the
+// middle (within kReflectionBlurRadius), before the blur divides by the sum:
+// a Gaussian whose weights add to 1. With firefly, also divided by 1 plus
+// the tap's luma (a Karis average), so a glint one texel wide cannot become a
+// bright smear across a rough reflection; only the first level down uses it.
+float PyramidTapWeight(int offset, float luma, bool firefly);
 
 }  // namespace runner

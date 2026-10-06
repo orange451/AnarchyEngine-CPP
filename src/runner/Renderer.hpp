@@ -399,6 +399,8 @@ private:
         int maxDistance = -1;
         int maxRoughness = -1;
         int chainLevels = -1;
+        // ssr_blur.frag: the level of its source the taps read.
+        int sourceLevel = -1;
         int reflectionsEnabled = -1;
         int reflectionsIntensity = -1;
         // Ambient occlusion (gtao.frag, ao_blur.frag, occlusion.glsl).
@@ -533,6 +535,7 @@ private:
     Program bloomUp_;
     Program fxaa_;
     Program ssrScene_;
+    Program ssrBlur_;
     Program ssr_;
     Program gtao_;
     Program aoBlur_;
@@ -637,13 +640,19 @@ private:
     unsigned reflectSceneFbo_ = 0;
     unsigned reflectSceneTexture_ = 0;
     int reflectSceneLevels_ = 0;
+    // The mip chain's blur: each level k from 1 is drawn across into
+    // reflectBlurTexture_'s level k, then down into reflectSceneTexture_'s.
+    // Element k - 1 of each list draws into level k.
+    unsigned reflectBlurTexture_ = 0;
+    std::vector<unsigned> reflectBlurFbos_;
+    std::vector<unsigned> reflectSceneLevelFbos_;
     unsigned reflectionFbo_ = 0;
     unsigned reflectionTexture_ = 0;
     int reflectionWidth_ = 0;
     int reflectionHeight_ = 0;
     int reflectionRefusedWidth_ = 0;
     int reflectionRefusedHeight_ = 0;
-    // Whether ssrScene_ and ssr_ have passed validation since the programs or
+    // Whether ssrScene_, ssrBlur_ and ssr_ have passed validation since the programs or
     // these buffers were last made, as fxaaValid_ is for FXAA.
     bool reflectionsValid_ = false;
     // Ambient occlusion, one channel, 1 open: the trace and the blur's halfway

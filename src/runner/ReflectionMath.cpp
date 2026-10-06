@@ -61,4 +61,11 @@ bool BisectedHitHolds(float rayDepth, float sceneDepth, float thickness) {
     return rayDepth - sceneDepth <= thickness;
 }
 
+float PyramidTapWeight(int offset, float luma, bool firefly) {
+    // A Gaussian with a sigma of one texel, normalized over -2 to 2.
+    constexpr float kWeights[kReflectionBlurRadius + 1] = {0.402620f, 0.244201f, 0.054489f};
+    const float w = kWeights[std::min(std::abs(offset), kReflectionBlurRadius)];
+    return firefly ? w / (1.f + std::max(luma, 0.f)) : w;
+}
+
 }  // namespace runner

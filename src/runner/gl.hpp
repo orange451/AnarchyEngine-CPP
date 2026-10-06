@@ -240,6 +240,7 @@ constexpr GLenum RT_GL_TEXTURE_CUBE_MAP_SEAMLESS = 0x884F;
 constexpr GLenum RT_GL_TEXTURE_WRAP_R = 0x8072;
 constexpr GLenum RT_GL_TEXTURE_BASE_LEVEL = 0x813C;
 constexpr GLenum RT_GL_TEXTURE_MAX_LEVEL = 0x813D;
+constexpr GLenum RT_GL_NEAREST_MIPMAP_NEAREST = 0x2700;
 // Shadow maps. Each is in GLES 3.0 too.
 constexpr GLenum RT_GL_NONE = 0;
 constexpr GLenum RT_GL_TEXTURE_2D_ARRAY = 0x8C1A;

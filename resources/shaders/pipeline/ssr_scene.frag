@@ -1,7 +1,7 @@
 #version 330 core
 // The lit opaque image screen-space reflections read: the light each
 // surface took (and the sky) plus its own glow, averaged 2x2 into half size.
-// Renderer builds the mips after.
+// Renderer builds the mips after, with ssr_blur.frag.
 in vec2 vUv;
 out vec4 outColor;
 

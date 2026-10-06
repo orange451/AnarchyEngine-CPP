@@ -115,3 +115,39 @@ TEST_CASE("RM8 a bisected hit holds only within the surface's thickness", "[refl
     // passed behind it lands far behind: the march goes on.
     REQUIRE_FALSE(BisectedHitHolds(15.f, 10.f, 0.3f));
 }
+
+TEST_CASE("RM9 the pyramid's blur is a symmetric Gaussian that keeps a flat image flat", "[reflections]") {
+    float total = 0.f;
+    for (int offset = -kReflectionBlurRadius; offset <= kReflectionBlurRadius; ++offset) {
+        INFO(offset);
+        REQUIRE(PyramidTapWeight(offset, 0.f, false) == Approx(PyramidTapWeight(-offset, 0.f, false)));
+        if (offset > 0) {
+            REQUIRE(PyramidTapWeight(offset, 0.f, false) < PyramidTapWeight(offset - 1, 0.f, false));
+        }
+        total += PyramidTapWeight(offset, 0.f, false);
+    }
+    REQUIRE(total == Approx(1.f));
+    // A tap's own light weighs nothing without the firefly weighting.
+    REQUIRE(PyramidTapWeight(1, 500.f, false) == PyramidTapWeight(1, 0.f, false));
+}
+
+TEST_CASE("RM10 the firefly weighting tames one very bright texel and leaves a flat image alone", "[reflections]") {
+    // The blur's normalized average of one row, with or without the weighting.
+    const auto blur = [](const float* row, bool firefly) {
+        float sum = 0.f;
+        float total = 0.f;
+        for (int offset = -kReflectionBlurRadius; offset <= kReflectionBlurRadius; ++offset) {
+            const float light = row[offset + kReflectionBlurRadius];
+            const float w = PyramidTapWeight(offset, light, firefly);
+            sum += light * w;
+            total += w;
+        }
+        return sum / total;
+    };
+    const float flat[5] = {3.f, 3.f, 3.f, 3.f, 3.f};
+    REQUIRE(blur(flat, true) == Approx(3.f));
+    // A light's specular glint, one texel at a thousand times its neighbors.
+    const float glint[5] = {1.f, 1.f, 1000.f, 1.f, 1.f};
+    REQUIRE(blur(glint, true) < 0.1f * blur(glint, false));
+    REQUIRE(blur(glint, true) > 1.f);
+}

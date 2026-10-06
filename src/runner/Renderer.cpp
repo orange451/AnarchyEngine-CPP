@@ -231,6 +231,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.maxDistance = at("uMaxDistance");
     program.maxRoughness = at("uMaxRoughness");
     program.chainLevels = at("uChainLevels");
+    program.sourceLevel = at("uSourceLevel");
     program.reflectionsEnabled = at("uReflectionsEnabled");
     program.reflectionsIntensity = at("uReflectionsIntensity");
     program.occlusionRadius = at("uOcclusionRadius");
@@ -343,6 +344,8 @@ bool Renderer::initialize() {
         buildProgram(bloomUp_, "Bloom up", "pipeline/fullscreen.vert", "pipeline/bloom_up.frag", {}) &&
         buildProgram(fxaa_, "FXAA", "pipeline/fullscreen.vert", "pipeline/fxaa.frag", {}) &&
         buildProgram(ssrScene_, "Reflections scene", "pipeline/fullscreen.vert", "pipeline/ssr_scene.frag", {}) &&
+        buildProgram(ssrBlur_, "Reflections blur", "pipeline/fullscreen.vert", "pipeline/ssr_blur.frag",
+                     {"pipeline/ssr.glsl"}) &&
         buildProgram(ssr_, "Reflections", "pipeline/fullscreen.vert", "pipeline/ssr.frag",
                      {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/image_lighting.glsl",
                       "pipeline/ssr.glsl"}) &&
@@ -510,6 +513,22 @@ bool Attach(std::initializer_list<unsigned> colors, unsigned depth) {
     return glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) == RT_GL_FRAMEBUFFER_COMPLETE;
 }
 
+// A new framebuffer, left bound, drawing into one mip level of texture. 0
+// when it cannot be drawn into.
+unsigned MakeLevelFbo(unsigned texture, int level) {
+    unsigned fbo = 0;
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(RT_GL_FRAMEBUFFER, RT_GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, level);
+    const GLenum buffer = RT_GL_COLOR_ATTACHMENT0;
+    glDrawBuffers(1, &buffer);
+    if (glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) != RT_GL_FRAMEBUFFER_COMPLETE) {
+        glDeleteFramebuffers(1, &fbo);
+        return 0;
+    }
+    return fbo;
+}
+
 }  // namespace
 
 bool Renderer::ensureTargets(int width, int height) {
@@ -643,12 +662,21 @@ bool Renderer::ensureReflectionBuffers(int width, int height) {
     for (int side = std::max(halfWidth, halfHeight); side > 1; side >>= 1) {
         ++reflectSceneLevels_;
     }
+    // The blur's halfway levels, read texel for texel at a chosen level.
+    reflectBlurTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, halfWidth, halfHeight);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(RT_GL_NEAREST_MIPMAP_NEAREST));
+    glGenerateMipmap(GL_TEXTURE_2D);
     reflectionTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, halfWidth, halfHeight);
     glBindTexture(GL_TEXTURE_2D, 0);
     bool complete = true;
     glGenFramebuffers(1, &reflectSceneFbo_);
     glBindFramebuffer(RT_GL_FRAMEBUFFER, reflectSceneFbo_);
     complete = Attach({reflectSceneTexture_}, 0) && complete;
+    for (int level = 1; level < reflectSceneLevels_; ++level) {
+        reflectBlurFbos_.push_back(MakeLevelFbo(reflectBlurTexture_, level));
+        reflectSceneLevelFbos_.push_back(MakeLevelFbo(reflectSceneTexture_, level));
+        complete = reflectBlurFbos_.back() != 0 && reflectSceneLevelFbos_.back() != 0 && complete;
+    }
     glGenFramebuffers(1, &reflectionFbo_);
     glBindFramebuffer(RT_GL_FRAMEBUFFER, reflectionFbo_);
     complete = Attach({reflectionTexture_}, 0) && complete;
@@ -673,7 +701,16 @@ void Renderer::destroyReflectionBuffers() {
             *fbo = 0;
         }
     }
+    for (std::vector<unsigned>* fbos : {&reflectBlurFbos_, &reflectSceneLevelFbos_}) {
+        for (unsigned& fbo : *fbos) {
+            if (fbo != 0) {
+                glDeleteFramebuffers(1, &fbo);
+            }
+        }
+        fbos->clear();
+    }
     DeleteTexture(reflectSceneTexture_);
+    DeleteTexture(reflectBlurTexture_);
     DeleteTexture(reflectionTexture_);
     reflectSceneLevels_ = 0;
     reflectionsValid_ = false;
@@ -1828,8 +1865,31 @@ bool Renderer::reflectionsPass(const float* projection, const float* inverseProj
         return false;
     }
     DrawFullscreen(emptyVao_);
-    BindTexture(kUnitScene, reflectSceneTexture_);
-    glGenerateMipmap(GL_TEXTURE_2D);
+    // Each level down, a Gaussian one of its texels wide: the level above,
+    // blurred across into the blur buffer's level (the bilinear taps halving
+    // it), then that blurred down into this level. No buffer is read while
+    // it is drawn into.
+    glUseProgram(ssrBlur_.id);
+    for (int level = 1; level < reflectSceneLevels_; ++level) {
+        const int levelWidth = std::max(halfWidth >> level, 1);
+        const int levelHeight = std::max(halfHeight >> level, 1);
+        glViewport(0, 0, levelWidth, levelHeight);
+        glUniform1f(ssrBlur_.prefilter, level == 1 ? 1.f : 0.f);
+        glBindFramebuffer(RT_GL_FRAMEBUFFER, reflectBlurFbos_[level - 1]);
+        BindTexture(kUnitScene, reflectSceneTexture_);
+        glUniform1f(ssrBlur_.sourceLevel, static_cast<float>(level - 1));
+        glUniform2f(ssrBlur_.blurDirection, 1.f / static_cast<float>(levelWidth), 0.f);
+        if (level == 1 && !reflectionsValid_ && !CanDraw(ssrBlur_.id)) {
+            return false;
+        }
+        DrawFullscreen(emptyVao_);
+        glBindFramebuffer(RT_GL_FRAMEBUFFER, reflectSceneLevelFbos_[level - 1]);
+        BindTexture(kUnitScene, reflectBlurTexture_);
+        glUniform1f(ssrBlur_.sourceLevel, static_cast<float>(level));
+        glUniform2f(ssrBlur_.blurDirection, 0.f, 1.f / static_cast<float>(levelHeight));
+        DrawFullscreen(emptyVao_);
+    }
+    glViewport(0, 0, halfWidth, halfHeight);
 
     // The trace.
     glBindFramebuffer(RT_GL_FRAMEBUFFER, reflectionFbo_);
@@ -2093,7 +2153,7 @@ void Renderer::shutdown() {
     gpu_.shutdown();
     ready_ = false;
     for (Program* program :
-         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &fxaa_, &ssrScene_, &ssr_, &gtao_, &aoBlur_, &sky_, &grid_,
+         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &fxaa_, &ssrScene_, &ssrBlur_, &ssr_, &gtao_, &aoBlur_, &sky_, &grid_,
           &gridBands_, &outline_, &handle_, &dynamicSky_, &dynamicSkyCube_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);

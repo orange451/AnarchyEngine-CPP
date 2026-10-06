@@ -963,6 +963,49 @@ int main(int argc, char** argv) {
                                                                std::to_string(holes) + " of " + std::to_string(inside) +
                                                                " missed)");
 
+                // A rough floor reads the blurred levels of the lit image: under
+                // a red cube beside a green one, its reflection takes in some of
+                // the green, where the mirror's stays red.
+                {
+                    runner::MeshDraw left = red;
+                    left.model = engine_core::matrix4_translation(-0.5f, 0.f, 0.f);
+                    left.emissive[0] = 1.f;
+                    runner::MeshDraw right = draw;
+                    right.model = engine_core::matrix4_translation(0.5f, 0.f, 0.f);
+                    right.color[0] = right.color[2] = 0.f;
+                    right.emissive[1] = 1.f;
+                    // The green that floor's reflection adds under the red cube, the left half's floor.
+                    const auto greenUnderRed = [&](float roughness) {
+                        runner::MeshDraw pairFloor = floor;
+                        pairFloor.roughness = roughness;
+                        const runner::MeshDraw pair[] = {pairFloor, left, right};
+                        runner::SceneLighting glossy = mirror;
+                        glossy.reflections.maxRoughness = 1.f;
+                        renderer.setLighting(plain);
+                        drawScene(pair, 3);
+                        const std::vector<unsigned char> without = snap();
+                        renderer.setLighting(glossy);
+                        drawScene(pair, 3);
+                        const std::vector<unsigned char> with = snap();
+                        int green = 0;
+                        for (int row = width * 6 / 10 + 1; row < width; ++row) {
+                            for (int x = 0; x < width / 2 - 2; ++x) {
+                                const int i = (row * width + x) * 4 + 1;
+                                green += std::max(static_cast<int>(with[i]) - static_cast<int>(without[i]), 0);
+                            }
+                        }
+                        return green;
+                    };
+                    const int sharp = greenUnderRed(0.f);
+                    const int blurred = greenUnderRed(0.3f);
+                    // Plain box-filtered mips blur about a fifth as much (920 to 5103 at 128 pixels).
+                    Expect(blurred > sharp + 2500, "a rough floor's reflection blurs the cubes' colors together (" +
+                                                         std::to_string(blurred) + " green under the red cube, against " +
+                                                         std::to_string(sharp) + " for a mirror)");
+                    Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "rough reflections leave no GL error");
+                    renderer.setLighting(mirror);
+                }
+
                 // Off four ways, and a floor rougher than MaxRoughness: exactly the frame without reflections.
                 for (int way = 0; way < 5; ++way) {
                     runner::SceneLighting off = mirror;

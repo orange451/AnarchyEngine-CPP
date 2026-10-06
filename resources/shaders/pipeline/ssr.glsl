@@ -1,4 +1,4 @@
-// Screen-space reflections' fades and cone level: ReflectionMath, line for
+// Screen-space reflections' fades, cone level and mip chain blur: ReflectionMath, line for
 // line, which the sandbox tests pin. No #version: Renderer puts it in after
 // the main file's.
 
@@ -47,4 +47,13 @@ float coneLevel(float roughness, float hitDistance, float pixelsPerUnit, float l
         return 0.0;
     }
     return min(log2(radius), levels - 1.0);
+}
+
+const int kReflectionBlurRadius = 2;
+
+float pyramidTapWeight(int offset, float luma, bool firefly) {
+    // A Gaussian with a sigma of one texel, normalized over -2 to 2.
+    const float kWeights[kReflectionBlurRadius + 1] = float[kReflectionBlurRadius + 1](0.402620, 0.244201, 0.054489);
+    float w = kWeights[min(abs(offset), kReflectionBlurRadius)];
+    return firefly ? w / (1.0 + max(luma, 0.0)) : w;
 }

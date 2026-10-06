@@ -642,26 +642,24 @@ struct PhysicsWorld::Impl {
             const float relative = velocity.y - ground.velocity.y;
             const float settled = (relative - omega * omega * step * (ground.gap - gap)) /
                                   (1.f + 2.f * omega * step + omega * omega * step * step);
-            velocity.y = ground.velocity.y + settled - kGravity * step;
+            const float weight = -kGravity * step;
+            velocity.y = ground.velocity.y + settled + weight;
             // Friction, across the ground only: speed relative to the
             // ground's own decays by exp(-Friction dt).
             const float keep = std::exp(-static_cast<float>(controller->friction()) * step);
             velocity.x = ground.velocity.x + (velocity.x - ground.velocity.x) * keep;
             velocity.z = ground.velocity.z + (velocity.z - ground.velocity.z) * keep;
             b3Body_SetLinearVelocity(record.body, velocity);
-            push_ground(ground, controller->mass(), b3Sub(velocity, before));
+            // A dynamic ground carries the controller's weight, and only that.
+            // Handing it the spring's or friction's reaction too couples the two
+            // into a loop that rings when the ground is much lighter, and drags
+            // the ground along under a walking controller, since Box3D sees no
+            // push for the script's Velocity write.
+            if (b3Body_IsValid(ground.body) && b3Body_GetType(ground.body) == b3_dynamicBody) {
+                const float load = static_cast<float>(controller->mass()) * weight;
+                b3Body_ApplyLinearImpulse(ground.body, b3Vec3{0.f, -load, 0.f}, ground.point, true);
+            }
         }
-    }
-
-    // The opposite of change, times mass, into ground's body at the probe's
-    // hit, when that body is dynamic.
-    static void push_ground(const Ground& ground, double mass, b3Vec3 change) {
-        if (!b3Body_IsValid(ground.body) || b3Body_GetType(ground.body) != b3_dynamicBody) {
-            return;
-        }
-        const float scale = -static_cast<float>(mass);
-        b3Body_ApplyLinearImpulse(ground.body, b3Vec3{change.x * scale, change.y * scale, change.z * scale},
-                                  ground.point, true);
     }
 
     // ---- Bodies -------------------------------------------------------

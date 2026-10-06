@@ -495,3 +495,42 @@ TEST_CASE("C15 one PlayerController stands on another and the stack settles", "[
     REQUIRE(above.on_ground());
     REQUIRE(near(above.velocity().y, 0.f, 0.05f));
 }
+
+TEST_CASE("C16 a heavy PlayerController on a light one settles", "[player]") {
+    for (const double ratio : {10.0, 80.0}) {
+        INFO("mass ratio " << ratio);
+        PhysicsRig rig;
+        rig.floor();
+        PlayerController& below = rig.controller(at(0.f, 0.5f, 0.f));
+        PlayerController& above = rig.controller(at(0.f, 3.f, 0.f));
+        REQUIRE_FALSE(above.set_mass(ratio));
+        rig.play();
+        rig.seconds(4.0);
+        float fastest = 0.f;
+        for (int i = 0; i < 240; ++i) {
+            rig.steps(1);
+            fastest = std::max(fastest, std::fabs(above.velocity().y));
+        }
+        INFO(y_of(below.transform()) << " " << y_of(above.transform()) << " " << fastest);
+        REQUIRE(std::isfinite(y_of(above.transform())));
+        REQUIRE(fastest < 0.05f);
+        // It stands on the lower one's head, which its weight presses down.
+        REQUIRE(near(y_of(above.transform()) - y_of(below.transform()), 2.f, 0.05f));
+        REQUIRE(y_of(below.transform()) > -0.45f);
+        REQUIRE(above.on_ground());
+    }
+}
+
+TEST_CASE("C17 walking across a light crate does not drag it along", "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& crate = rig.body(at(0.f, 0.5f, 0.f), Vec3{6.f, 1.f, 6.f}, false);
+    PlayerController& c = rig.controller(at(-2.f, 1.5f, 0.f));
+    rig.play();
+    rig.seconds(1.0);
+    const float start = x_of(crate.transform());
+    walk(rig, c, 4.f, 0.f, 0.8);
+    INFO(x_of(c.transform()) << " " << x_of(crate.transform()) - start);
+    REQUIRE(x_of(c.transform()) > 0.5f);
+    REQUIRE(std::fabs(x_of(crate.transform()) - start) < 0.05f);
+}

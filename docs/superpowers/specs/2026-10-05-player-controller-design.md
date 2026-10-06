@@ -117,7 +117,7 @@ v_rel = (v_rel - omega² · dt · (gap - StepHeight)) / (1 + 2 · omega · dt + 
 velocity.y = ground_velocity.y + v_rel
 ```
 
-The change in vertical velocity is `dv`. When the ground body is dynamic, the impulse `-Mass · dv` along Y is applied to it at the hit point. Standing on a box presses it down; standing on one end of a plank tips it.
+Box3D adds this step's gravity after, so the pass also adds `-kGravity * dt` back. When the ground body is dynamic, it gets the controller's weight, the impulse `Mass * kGravity * dt` along Y at the hit point, and nothing else: standing on a box presses it down, and standing on one end of a plank tips it. The spring's own change is not handed to the ground. Doing that couples the two bodies into a loop that rings once the ground is about 8 times lighter than the controller (found in review: a Mass 80 player on a Mass 1 crate or controller).
 
 Because the collider's bottom sits StepHeight above the feet, any edge up to StepHeight passes under it; once the puck is over that edge the probe hits its top and the spring lifts the controller onto it.
 
@@ -129,7 +129,7 @@ dh = h_rel · (exp(-Friction · dt) - 1)
 velocity += dh
 ```
 
-When the ground body is dynamic, the impulse `-Mass · dh` is applied to it at the hit point. A moving platform carries the controller, because friction pulls toward the platform's velocity.
+The ground feels no reaction to friction. A script's Velocity write is how a controller pushes off, and Box3D sees no push for it, so friction's reaction alone would drag the ground forward under a walking controller (a light crate slid along with the player in review). A moving platform still carries the controller, because friction pulls toward the platform's velocity.
 
 ### 5. Sliding and air
 

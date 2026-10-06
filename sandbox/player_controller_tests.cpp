@@ -534,3 +534,77 @@ TEST_CASE("C17 walking across a light crate does not drag it along", "[player]")
     REQUIRE(x_of(c.transform()) > 0.5f);
     REQUIRE(std::fabs(x_of(crate.transform()) - start) < 0.05f);
 }
+
+TEST_CASE("C18 landing stops the fall at once; only stepping up is smoothed", "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+
+    SECTION("dropped from 3, it stops dead at its hover height on the step it lands") {
+        PlayerController& c = rig.controller(at(0.f, 3.f, 0.f));
+        rig.play();
+        float lowest = 10.f;
+        int landed = -1;
+        for (int i = 0; i < 480; ++i) {
+            rig.steps(1);
+            lowest = std::min(lowest, y_of(c.transform()));
+            if (landed < 0 && c.on_ground()) {
+                landed = i;
+                INFO("landed at step " << i << " y " << y_of(c.transform()) << " vy " << c.velocity().y);
+                REQUIRE(std::fabs(c.velocity().y) < 0.1f);
+                REQUIRE(near(y_of(c.transform()), 0.f, 0.01f));
+            }
+        }
+        REQUIRE(landed > 0);
+        INFO(lowest);
+        REQUIRE(lowest > -0.01f);
+    }
+
+    SECTION("in the air above the ground it is not yet on it") {
+        PlayerController& c = rig.controller(at(0.f, 0.3f, 0.f));
+        rig.play();
+        rig.steps(1);
+        REQUIRE_FALSE(c.on_ground());
+    }
+
+    SECTION("walking off a 0.3 step it keeps to the ground and drops at once") {
+        rig.body(at(-3.f, 0.15f, 0.f), Vec3{6.f, 0.3f, 6.f}, true);
+        PlayerController& c = rig.controller(at(-1.f, 0.6f, 0.f));
+        rig.play();
+        rig.seconds(1.0);
+        REQUIRE(near(y_of(c.transform()), 0.3f, 0.01f));
+        bool always = true;
+        float x_down = 0.f;
+        for (int i = 0; i < 240; ++i) {
+            REQUIRE_FALSE(c.set_velocity(Vec3{3.f, c.velocity().y, 0.f}));
+            rig.steps(1);
+            always = always && c.on_ground();
+            if (x_down == 0.f && y_of(c.transform()) < 0.01f) {
+                x_down = x_of(c.transform());
+            }
+        }
+        INFO(x_down);
+        REQUIRE(always);
+        // Down once its probe's ring, 0.95 of Radius, is past the edge at x = 0.
+        REQUIRE(x_down > 0.45f);
+        REQUIRE(x_down < 0.55f);
+    }
+}
+
+TEST_CASE("C19 walking under a sloped overhang stops it there, not pushed into the ground", "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+    ramp(rig, 30.0);
+    PlayerController& c = rig.controller(at(9.f, 0.5f, 0.f));
+    rig.play();
+    rig.seconds(0.5);
+    float lowest = 10.f;
+    for (int i = 0; i < 480; ++i) {
+        REQUIRE_FALSE(c.set_velocity(Vec3{-4.f, c.velocity().y, 0.f}));
+        rig.steps(1);
+        lowest = std::min(lowest, y_of(c.transform()));
+    }
+    INFO(x_of(c.transform()) << " lowest " << lowest);
+    REQUIRE(lowest > -0.02f);
+    REQUIRE(x_of(c.transform()) > 5.6f);
+    REQUIRE(c.on_ground());
+}

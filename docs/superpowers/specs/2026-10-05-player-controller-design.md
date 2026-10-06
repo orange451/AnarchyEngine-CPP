@@ -101,12 +101,14 @@ From the hit:
 
 ### 2. Classify
 
-- **Rising**: `velocity.y - ground_velocity.y > kRisingSpeed`, and either `gap > StepHeight + kProbeSkin` or the controller is launched: a Velocity write since the last step added more than kRisingSpeed upward to what the body had. Launched clears when it stops rising or loses the ground. With no hit, the controller is in the air and none of the cases below apply.
-- **OnGround**: a hit, the angle between `normal` and +Y is at most MaxSlope, and not rising.
+- **Rising**: `velocity.y - ground_velocity.y > kRisingSpeed`, and either the controller is launched, or `gap > StepHeight + kProbeSkin` and `velocity.y > kRisingSpeed` (it is itself going up, not left behind by ground dropping away): a Velocity write since the last step added more than kRisingSpeed upward to what the body had. Launched clears when it stops rising or loses the ground. With no hit, the controller is in the air and none of the cases below apply.
+- **OnGround**: a hit, the angle between `normal` and +Y is at most MaxSlope, not rising, and it reaches the ground: it was OnGround last step, or `gap <= StepHeight + fall + kProbeSkin`, where `fall` is how far it drops toward the ground this step. A falling controller is not OnGround until the step it reaches its hover height.
 - **IsSliding**: a hit, that angle is above MaxSlope, and not rising.
 - Otherwise both are false.
 
 ### 3. Hover (only when OnGround)
+
+At or above the hover height (`gap >= StepHeight`), the controller goes there at once: it is moved down by `gap - StepHeight` and its vertical velocity becomes the ground's. A landing stops dead, and walking down stairs or a slope keeps to the ground with no lag. Only below it, when an edge has passed under the cylinder, does the spring lift it smoothly:
 
 A critically damped spring at kHoverFrequency drives `gap` toward StepHeight, on vertical velocity relative to the ground. Integrated implicitly, as the pogo in Box3D's `samples/mover.cpp` is:
 
@@ -120,6 +122,10 @@ velocity.y = ground_velocity.y + v_rel
 Box3D adds this step's gravity after, so the pass also adds `-kGravity * dt` back. When the ground body is dynamic, it gets the controller's weight, the impulse `Mass * kGravity * dt` along Y at the hit point, and nothing else: standing on a box presses it down, and standing on one end of a plank tips it. The spring's own change is not handed to the ground. Doing that couples the two bodies into a loop that rings once the ground is about 8 times lighter than the controller (found in review: a Mass 80 player on a Mass 1 crate or controller).
 
 Because the collider's bottom sits StepHeight above the feet, any edge up to StepHeight passes under it; once the puck is over that edge the probe hits its top and the spring lifts the controller onto it.
+
+### 3b. Overhangs
+
+Before any of this, every contact on the controller whose push on it points downward (a ceiling, or the underside of a ramp) takes out the part of its horizontal velocity that goes into that contact. With zero contact friction, walking into a sloped underside would otherwise press the controller into the ground; instead it stops there as at a wall.
 
 ### 4. Friction (only when OnGround)
 

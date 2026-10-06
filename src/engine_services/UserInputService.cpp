@@ -6,6 +6,7 @@
 #include "LuaApi.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -78,6 +79,29 @@ int UserInputService::key_code_from_glfw(int glfw_key) {
         return 0;
     }
     return table[static_cast<std::size_t>(glfw_key)];
+}
+
+int UserInputService::glfw_key_named(std::string_view name) {
+    const EnumType& codes = key_code_enum();
+    for (int index = 0; index < codes.count; ++index) {
+        const std::string_view item = codes.items[index].name;
+        const bool same = item.size() == name.size() &&
+                          std::equal(item.begin(), item.end(), name.begin(), [](char a, char b) {
+                              return std::tolower(static_cast<unsigned char>(a)) ==
+                                     std::tolower(static_cast<unsigned char>(b));
+                          });
+        if (!same || codes.items[index].value == 0) {
+            continue;
+        }
+        static const std::vector<int> table = build_key_table();
+        for (std::size_t glfw = 0; glfw < table.size(); ++glfw) {
+            if (table[glfw] == codes.items[index].value) {
+                return static_cast<int>(glfw);
+            }
+        }
+        return -1;
+    }
+    return -1;
 }
 
 void UserInputService::set_active(bool active) {

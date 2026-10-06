@@ -1060,6 +1060,7 @@ void TestToolSpecs() {
     studio.change_tab = [](const std::string&, const std::string&) {};
     studio.save_place = [](const std::string&) { return JsonValue::object(); };
     studio.show_profiler = [](std::optional<bool>) { return false; };
+    studio.send_input = [](const std::vector<ide::McpInput>&) { return ide::McpViewSize{}; };
     ide::McpServer every;
     ide::add_engine_tools(every, engine, studio);
     const std::vector<ide::McpToolSpec> specs = ide::engine_tool_specs();
@@ -1085,11 +1086,11 @@ void TestToolSpecs() {
     for (const ide::McpToolSpec& spec : specs) {
         if (spec.name != "playtest" && spec.name != "screenshot" && spec.name != "get_studio_info" &&
             spec.name != "import_assets" && spec.name != "tabs" && spec.name != "save_place" &&
-            spec.name != "show_profiler") {
+            spec.name != "show_profiler" && spec.name != "mouse_input" && spec.name != "key_input") {
             expected.push_back(spec.name);
         }
     }
-    Expect(names == expected, "a studio without the hooks leaves out playtest, screenshot, get_studio_info, import_assets, tabs, save_place, and show_profiler");
+    Expect(names == expected, "a studio without the hooks leaves out playtest, screenshot, get_studio_info, import_assets, tabs, save_place, show_profiler, mouse_input, and key_input");
 }
 
 // tabs hands the action to the studio, then lists the tabs as they are after it.
@@ -1177,6 +1178,75 @@ void TestShowProfiler() {
            "the studio gets on, or nothing when it is left out");
     Expect(ErrorText(server, "show_profiler", R"({"on":"yes"})").find("on must be") == 0, "on must be a boolean");
     Expect(asked.size() == 4, "a bad on never reaches the studio");
+}
+
+// mouse_input and key_input hand the studio the events a person's mouse and
+// keyboard would make, in order, and check what they can before any goes.
+void TestInputTools() {
+    engine_core::Engine engine;
+    std::vector<ide::McpInput> sent;
+    int batches = 0;
+    ide::McpStudio studio;
+    studio.send_input = [&](const std::vector<ide::McpInput>& inputs) {
+        ++batches;
+        sent.insert(sent.end(), inputs.begin(), inputs.end());
+        return ide::McpViewSize{800, 600};
+    };
+    ide::McpServer server;
+    ide::add_engine_tools(server, engine, studio);
+    using Kind = ide::McpInput::Kind;
+    auto kinds = [&] {
+        std::vector<Kind> out;
+        for (const ide::McpInput& input : sent) {
+            out.push_back(input.kind);
+        }
+        return out;
+    };
+
+    const JsonValue clicked = Call(server, "mouse_input", R"({"x":10,"y":20})");
+    Expect(Member(clicked, "view_width").as_number() == 800 && Member(clicked, "view_height").as_number() == 600,
+           "mouse_input returns the view's size");
+    Expect(kinds() == std::vector<Kind>{Kind::Move, Kind::Button, Kind::Button} && batches == 3,
+           "a click moves, then presses and releases, each in a step of its own");
+    Expect(sent[1].down && !sent[2].down && sent[1].code == 0 && sent[2].x == 10 && sent[2].y == 20,
+           "with the left button, where it moved");
+
+    sent.clear();
+    Call(server, "mouse_input", R"({"x":5,"y":5,"button":"right","modifiers":["shift"]})");
+    Expect(kinds() == std::vector<Kind>{Kind::Key, Kind::Move, Kind::Button, Kind::Button, Kind::Key},
+           "modifiers are pressed before and released after");
+    Expect(sent[0].down && !sent[4].down && sent[0].code == sent[4].code && sent[2].code == 1 && sent[2].mods == 1,
+           "the right button carries shift's bit");
+
+    sent.clear();
+    Call(server, "mouse_input", R"({"action":"drag","x":0,"y":0,"to":[100,50],"steps":4,"hold":0})");
+    Expect(kinds() == std::vector<Kind>{Kind::Move, Kind::Button, Kind::Move, Kind::Move, Kind::Move, Kind::Move,
+                                        Kind::Button},
+           "a drag presses, moves in steps, and releases");
+    Expect(sent[3].x == 50 && sent[3].y == 25 && sent[6].x == 100 && !sent[6].down, "along the line, letting go at to");
+    sent.clear();
+    Expect(ErrorText(server, "mouse_input", R"({"action":"drag","x":0,"y":0,"to":[900,0]})").find("to is outside") == 0,
+           "a drag that ends outside the view says so");
+    Expect(kinds() == std::vector<Kind>{Kind::Move}, "before pressing anything");
+
+    sent.clear();
+    Call(server, "mouse_input", R"({"action":"scroll","x":1,"y":2,"amount":-3})");
+    Expect(kinds() == std::vector<Kind>{Kind::Scroll} && sent[0].amount == -3, "scroll turns the wheel");
+    Expect(ErrorText(server, "mouse_input", R"({"action":"click"})") == "x is required.", "a click needs a point");
+
+    sent.clear();
+    Call(server, "key_input", R"({"key":["LeftControl","z"],"hold":0})");
+    Expect(kinds() == std::vector<Kind>{Kind::Key, Kind::Key, Kind::Key, Kind::Key}, "a chord is four key events");
+    Expect(sent[0].code == 341 && sent[1].code == 90 && sent[2].code == 90 && sent[3].code == 341 && sent[0].down &&
+               sent[1].down && !sent[2].down && !sent[3].down,
+           "pressed in order, by KeyCode name or character, and released in reverse");
+    Expect(ErrorText(server, "key_input", R"({"key":"Nope"})").find("No key is named") == 0, "an unknown key says so");
+
+    sent.clear();
+    Call(server, "key_input", R"({"action":"type","text":"a!\n"})");
+    Expect(kinds() == std::vector<Kind>{Kind::Key, Kind::Text, Kind::Key, Kind::Text, Kind::Key, Kind::Key},
+           "type sends each character's key and text; ! has no key of its own, and \\n is Return alone");
+    Expect(sent[1].text == "a" && sent[3].text == "!" && sent[4].code == 257, "with the text typed");
 }
 
 // gpu_detail sets the profiler's per-pass GPU timing, or flips it without on.
@@ -1334,6 +1404,7 @@ int main() {
     TestTabs();
     TestSavePlace();
     TestShowProfiler();
+    TestInputTools();
     TestGpuDetail();
     TestProfileTool();
     if (gFailures == 0) {

@@ -93,6 +93,7 @@ void IdeLayout::start_mcp() {
         struct Shot {
             bool done = false;
             runner::ViewPixels pixels;
+            McpViewSize size;
         };
         auto shot = std::make_shared<Shot>();
         on_ui([this, shot, calls] {
@@ -106,6 +107,7 @@ void IdeLayout::start_mcp() {
                                          "drawing. Bring it forward with tabs (action select, tab Scene View), "
                                          "then try again.");
             }
+            calls->update([&] { shot->size = {view->getWidth(), view->getHeight()}; });
             view->requestCapture([shot, calls](runner::ViewPixels pixels) {
                 calls->update([&] {
                     shot->pixels = std::move(pixels);
@@ -118,7 +120,11 @@ void IdeLayout::start_mcp() {
                                      "is not minimized.");
         }
         runner::ViewPixels pixels;
-        calls->update([&] { pixels = std::move(shot->pixels); });
+        McpViewSize size;
+        calls->update([&] {
+            pixels = std::move(shot->pixels);
+            size = shot->size;
+        });
         if (pixels.empty()) {
             throw std::runtime_error("The Scene View could not be read back.");
         }
@@ -127,7 +133,92 @@ void IdeLayout::start_mcp() {
         image.png = runner::EncodePng(fitted);
         image.width = fitted.width;
         image.height = fitted.height;
+        image.view_width = size.width;
+        image.view_height = size.height;
         return image;
+    };
+    // Into the first Scene View's scene, where the window's own events go, so a
+    // GUI, the studio's tools, and UserInputService hear them as they do a person's.
+    // Where the inputs last left the pointer, in view points. UI thread only.
+    auto pointer = std::make_shared<std::optional<std::pair<double, double>>>();
+    studio.send_input = [this, on_ui, pointer](const std::vector<McpInput>& inputs) {
+        // Shared, since a task that runs after a timed-out wait still writes it.
+        auto size = std::make_shared<McpViewSize>();
+        on_ui([this, inputs, size, pointer] {
+            auto* view = dynamic_cast<runner::GameView*>(scene_view_.get());
+            if (view == nullptr) {
+                throw std::runtime_error("The studio has no Scene View.");
+            }
+            jadefx::Scene* scene = view->getScene();
+            if (scene == nullptr) {
+                throw std::runtime_error("The Scene View's tab is behind another tab in its dock, so it cannot be "
+                                         "clicked. Bring it forward with tabs (action select, tab Scene View), "
+                                         "then try again.");
+            }
+            *size = {view->getWidth(), view->getHeight()};
+            bool keys = false;
+            for (const McpInput& input : inputs) {
+                if (input.kind == McpInput::Kind::Key || input.kind == McpInput::Kind::Text) {
+                    keys = true;
+                } else if (!(input.x >= 0 && input.x < size->width && input.y >= 0 && input.y < size->height)) {
+                    throw std::runtime_error("(" + engine_core::format_json_number(input.x) + ", " +
+                                             engine_core::format_json_number(input.y) +
+                                             ") is outside the Scene View, which is " +
+                                             engine_core::format_json_number(size->width) + " by " +
+                                             engine_core::format_json_number(size->height) + " points.");
+                }
+            }
+            // Keys go to the focused node, so elsewhere in the studio they could
+            // edit the place. Focus inside the view, as a GUI's text field, stays.
+            if (keys) {
+                const jadefx::Node* node = scene->focusedNode();
+                while (node != nullptr && node != view) {
+                    node = node->getParent();
+                }
+                if (node == nullptr) {
+                    view->requestFocus();
+                }
+            }
+            // While a script locks the pointer, a person's stays where it is and
+            // only its motion reaches GetMouseDelta. So here: no move gets
+            // through, and presses land where the pointer was.
+            const bool locked = view->pointerWanted();
+            const double left = view->getAbsoluteX();
+            const double top = view->getAbsoluteY();
+            for (const McpInput& input : inputs) {
+                // A modifier an earlier call pressed is still held, as the window's own mods would say.
+                const int mods = input.mods | scene->modifierMask();
+                if (input.kind == McpInput::Kind::Move && locked) {
+                    continue;
+                }
+                if (input.kind == McpInput::Kind::Move || input.kind == McpInput::Kind::Button ||
+                    input.kind == McpInput::Kind::Scroll) {
+                    if (!locked || !pointer->has_value()) {
+                        *pointer = std::make_pair(input.x, input.y);
+                    }
+                }
+                const double x = pointer->has_value() ? left + (*pointer)->first : 0;
+                const double y = pointer->has_value() ? top + (*pointer)->second : 0;
+                switch (input.kind) {
+                    case McpInput::Kind::Move:
+                        scene->noteMove(x, y);
+                        break;
+                    case McpInput::Kind::Button:
+                        scene->noteButton(input.code, input.down, x, y, mods);
+                        break;
+                    case McpInput::Kind::Scroll:
+                        scene->noteScroll(x, y, 0, input.amount);
+                        break;
+                    case McpInput::Kind::Key:
+                        scene->noteKey(input.code, input.down, false, mods);
+                        break;
+                    case McpInput::Kind::Text:
+                        scene->noteText(input.text);
+                        break;
+                }
+            }
+        });
+        return *size;
     };
     // Only where the files go is asked of the UI thread. They are read here, on
     // the server thread, so a large model does not hold the window.

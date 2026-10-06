@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <string_view>
 #include <vector>
 
 namespace engine_core {
@@ -51,6 +52,9 @@ public:
     // The KeyCode value for a GLFW key number. JadeFX forwards GLFW's numbers
     // unchanged. KeyCode.Unknown (0) when the key has no KeyCode.
     static int key_code_from_glfw(int glfw_key);
+    // The GLFW key number of the KeyCode item named name, ignoring case, such
+    // as "W", "Space", or "LeftShift". -1 when the studio forwards no such key.
+    static int glfw_key_named(std::string_view name);
 
     // Any thread. While inactive, posts are dropped. Either way the queue and
     // what the posts left down are cleared, so nothing carries into a session.

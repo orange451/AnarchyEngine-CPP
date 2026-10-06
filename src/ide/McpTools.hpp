@@ -20,6 +20,35 @@ struct McpImage {
     std::string png;
     int width = 0;
     int height = 0;
+    // The view it shows, in points, as mouse_input measures it. 0 when not known.
+    double view_width = 0;
+    double view_height = 0;
+};
+
+// One event for the Scene View, as the window delivers it from the mouse or
+// the keyboard.
+struct McpInput {
+    enum class Kind { Move, Button, Scroll, Key, Text };
+    Kind kind = Kind::Move;
+    // Move, Button, and Scroll: points from the view's top-left.
+    double x = 0;
+    double y = 0;
+    // Button: 0 left, 1 right, 2 middle. Key: the GLFW key number.
+    int code = 0;
+    // Button and Key: pressed rather than released.
+    bool down = false;
+    // Scroll: lines, positive away from the user.
+    double amount = 0;
+    // Button and Key: the Key::Mod bits held with it.
+    int mods = 0;
+    // Text: what the keys typed, UTF-8.
+    std::string text;
+};
+
+// The Scene View's size in points.
+struct McpViewSize {
+    double width = 0;
+    double height = 0;
 };
 
 // What import_assets made of one file.
@@ -77,6 +106,15 @@ struct McpStudio {
     // Shows or hides the profiler over the Scene View, as Ctrl+F6 does, or
     // flips it when shown is empty. Returns whether it shows now.
     std::function<bool(std::optional<bool> shown)> show_profiler;
+    // Delivers the inputs to the Scene View in order, at once, as the window
+    // delivers the mouse and keyboard: what is under the pointer hears it, a
+    // GUI first. Keys go to the view, or to what in it has the keyboard; when
+    // the keyboard is elsewhere the view takes it first, as a click would.
+    // While a script locks the pointer, moves are dropped and presses land
+    // where it last was.
+    // Throws, delivering nothing, when the view is not drawing or a point is
+    // outside it. Returns the view's size.
+    std::function<McpViewSize(const std::vector<McpInput>& inputs)> send_input;
 };
 
 // What tools/list shows of a tool, without the code that runs it.
@@ -93,7 +131,7 @@ std::vector<McpToolSpec> engine_tool_specs();
 
 // The tools over one engine: the tree, properties, instances, scripts and
 // what analysis finds in them, selection, the class registry, Luau, output,
-// undo, play testing, the Scene View, the studio's tabs, saving, the profiler and its GPU detail, and
+// undo, play testing, the Scene View and its mouse and keyboard, the studio's tabs, saving, the profiler and its GPU detail, and
 // which studio this is. Each is the
 // one engine_tool_specs describes; a tool whose studio hooks are missing is
 // left out.

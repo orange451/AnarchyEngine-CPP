@@ -18,11 +18,13 @@
 #include "SelectionService.hpp"
 #include "Strings.hpp"
 #include "TextSearch.hpp"
+#include "UserInputService.hpp"
 
 #include <filesystem>
 #include <fstream>
 #include <ctime>
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -1553,6 +1555,11 @@ JsonValue Screenshot(const ToolContext& context, const JsonValue& arguments) {
     JsonValue out = JsonValue::object();
     out.set("width", JsonValue::number(image.width));
     out.set("height", JsonValue::number(image.height));
+    // What mouse_input measures in, to turn a point in the picture into one in the view.
+    if (image.view_width > 0 && image.view_height > 0) {
+        out.set("view_width", JsonValue::number(image.view_width));
+        out.set("view_height", JsonValue::number(image.view_height));
+    }
     out.set(kImageMember, std::move(picture));
     return out;
 }
@@ -1651,6 +1658,284 @@ JsonValue GetStudioInfo(const ToolContext& context, const JsonValue&) {
     return out;
 }
 
+// A number that must be given.
+double RequiredNumber(const JsonValue& arguments, const char* key) {
+    const JsonValue* value = arguments.find(key);
+    if (value == nullptr) {
+        throw std::runtime_error(std::string(key) + " is required.");
+    }
+    return NumberArg(*value, key);
+}
+
+// The pause between the steps of one mouse_input or key_input, so each lands
+// in a frame of its own: a script sees the pointer arrive before the press,
+// and the press before the release.
+constexpr double kInputStep = 0.05;
+// The longest a button or key is held, and the most moves a drag takes.
+constexpr double kMaxHold = 30;
+constexpr int kMaxDragSteps = 120;
+// How long a drag takes to move unless told.
+constexpr double kDragSeconds = 0.3;
+
+void Pause(double seconds) { std::this_thread::sleep_for(std::chrono::duration<double>(seconds)); }
+
+// A modifier the mouse's modifiers name: its Key::Mod bit and the key that holds it.
+struct Modifier {
+    const char* name;
+    int bit;
+    const char* key;
+};
+
+constexpr Modifier kModifiers[] = {
+    {"shift", 0x1, "LeftShift"}, {"ctrl", 0x2, "LeftControl"}, {"alt", 0x4, "LeftAlt"}, {"super", 0x8, "LeftSuper"}};
+
+McpInput KeyChange(int key, bool down) {
+    McpInput input;
+    input.kind = McpInput::Kind::Key;
+    input.code = key;
+    input.down = down;
+    return input;
+}
+
+McpInput PointerEvent(McpInput::Kind kind, double x, double y) {
+    McpInput input;
+    input.kind = kind;
+    input.x = x;
+    input.y = y;
+    return input;
+}
+
+// The GLFW key a character is typed with, unshifted, or -1. GLFW numbers the
+// printable keys by their ASCII characters, letters in upper case.
+int KeyForCharacter(unsigned char c) {
+    if (c == '\n') {
+        return engine_core::UserInputService::glfw_key_named("Return");
+    }
+    if (c == '\t') {
+        return engine_core::UserInputService::glfw_key_named("Tab");
+    }
+    const int key = std::toupper(c);
+    return c < 0x80 && engine_core::UserInputService::key_code_from_glfw(key) != 0 ? key : -1;
+}
+
+// A key by its Enum.KeyCode name, ignoring case, or by a character on it.
+int KeyArg(const JsonValue& value) {
+    if (!value.is_string()) {
+        throw std::runtime_error("key must be a key's name, or a list of them.");
+    }
+    const std::string& name = value.as_string();
+    int key = engine_core::UserInputService::glfw_key_named(name);
+    if (key < 0 && name.size() == 1) {
+        key = KeyForCharacter(static_cast<unsigned char>(name[0]));
+    }
+    if (key < 0) {
+        throw std::runtime_error("No key is named \"" + name + "\". Use an Enum.KeyCode name, such as W, Space, "
+                                 "LeftShift, Return, Escape, or Up.");
+    }
+    return key;
+}
+
+JsonValue ViewSize(const McpViewSize& size) {
+    JsonValue out = JsonValue::object();
+    out.set("view_width", JsonValue::number(size.width));
+    out.set("view_height", JsonValue::number(size.height));
+    return out;
+}
+
+JsonValue MouseInput(const ToolContext& context, const JsonValue& arguments) {
+    const std::string action =
+        ChoiceArg(arguments, "action", "click", {"click", "down", "up", "move", "drag", "scroll", "delta"});
+    if (action == "delta") {
+        // What a locked pointer's motion becomes: GameView posts it so too.
+        const double dx = RequiredNumber(arguments, "dx");
+        const double dy = RequiredNumber(arguments, "dy");
+        engine_core::UserInputService& input = context.engine.datamodel().input();
+        input.post_mouse_delta(FloatArg(dx, "dx"), FloatArg(dy, "dy"));
+        JsonValue out = JsonValue::object();
+        const engine_core::EnumType& behaviors = engine_core::mouse_behavior_enum();
+        for (int i = 0; i < behaviors.count; ++i) {
+            if (behaviors.items[i].value == input.mouse_behavior()) {
+                out.set("mouse_behavior", JsonValue::string(behaviors.items[i].name));
+            }
+        }
+        return out;
+    }
+    const double x = RequiredNumber(arguments, "x");
+    const double y = RequiredNumber(arguments, "y");
+    const std::string button = ChoiceArg(arguments, "button", "left", {"left", "right", "middle"});
+    // Keys held around a click, drag, or scroll; down and up only carry their bits.
+    std::vector<McpInput> held;
+    std::vector<McpInput> let_go;
+    int mods = 0;
+    if (const JsonValue* given = arguments.find("modifiers")) {
+        if (!given->is_array()) {
+            throw std::runtime_error("modifiers must be a list such as [\"shift\", \"ctrl\"].");
+        }
+        for (const JsonValue& item : given->items()) {
+            const Modifier* modifier = std::find_if(std::begin(kModifiers), std::end(kModifiers), [&](const Modifier& m) {
+                return item.is_string() && item.as_string() == m.name;
+            });
+            if (modifier == std::end(kModifiers)) {
+                throw std::runtime_error("modifiers takes shift, ctrl, alt, and super.");
+            }
+            mods |= modifier->bit;
+            const int key = engine_core::UserInputService::glfw_key_named(modifier->key);
+            held.push_back(KeyChange(key, true));
+            let_go.insert(let_go.begin(), KeyChange(key, false));
+        }
+    }
+    auto press = [&](double at_x, double at_y, bool down) {
+        McpInput input = PointerEvent(McpInput::Kind::Button, at_x, at_y);
+        input.code = button == "left" ? 0 : button == "right" ? 1 : 2;
+        input.down = down;
+        input.mods = mods;
+        return input;
+    };
+    const McpStudio& studio = context.studio;
+    McpViewSize size;
+    if (action == "move") {
+        size = studio.send_input({PointerEvent(McpInput::Kind::Move, x, y)});
+    } else if (action == "down" || action == "up") {
+        size = studio.send_input({PointerEvent(McpInput::Kind::Move, x, y), press(x, y, action == "down")});
+    } else if (action == "scroll") {
+        McpInput scroll = PointerEvent(McpInput::Kind::Scroll, x, y);
+        scroll.amount = NumberArg(arguments, "amount", 1, -100, 100);
+        std::vector<McpInput> inputs = held;
+        inputs.push_back(scroll);
+        inputs.insert(inputs.end(), let_go.begin(), let_go.end());
+        size = studio.send_input(inputs);
+    } else {
+        const double hold = NumberArg(arguments, "hold", action == "drag" ? kDragSeconds : kInputStep, 0, kMaxHold);
+        const int count = action == "click" ? IntArg(arguments, "count", 1, 1, 3) : 1;
+        double to_x = x;
+        double to_y = y;
+        if (action == "drag") {
+            const JsonValue* to = arguments.find("to");
+            if (to == nullptr || !to->is_array() || to->items().size() != 2) {
+                throw std::runtime_error("drag needs to, the point it ends at, as [x, y].");
+            }
+            to_x = NumberArg(to->items()[0], "to");
+            to_y = NumberArg(to->items()[1], "to");
+        }
+        std::vector<McpInput> first = held;
+        first.push_back(PointerEvent(McpInput::Kind::Move, x, y));
+        size = studio.send_input(first);
+        if (!(to_x >= 0 && to_x < size.width && to_y >= 0 && to_y < size.height)) {
+            studio.send_input(let_go);
+            throw std::runtime_error("to is outside the Scene View, which is " +
+                                     engine_core::format_json_number(size.width) + " by " +
+                                     engine_core::format_json_number(size.height) + " points.");
+        }
+        Pause(kInputStep);
+        try {
+            for (int click = 0; click < count; ++click) {
+                if (click > 0) {
+                    Pause(kInputStep);
+                }
+                studio.send_input({press(x, y, true)});
+                if (action == "drag") {
+                    const int steps = IntArg(arguments, "steps", 10, 1, kMaxDragSteps);
+                    for (int step = 1; step <= steps; ++step) {
+                        Pause(hold / steps);
+                        const double t = static_cast<double>(step) / steps;
+                        studio.send_input({PointerEvent(McpInput::Kind::Move, x + (to_x - x) * t, y + (to_y - y) * t)});
+                    }
+                    Pause(kInputStep);
+                } else {
+                    Pause(hold);
+                }
+                studio.send_input({press(to_x, to_y, false)});
+            }
+        } catch (...) {
+            // Nothing left held after a failure part way.
+            try {
+                std::vector<McpInput> release = {press(to_x, to_y, false)};
+                release.insert(release.end(), let_go.begin(), let_go.end());
+                studio.send_input(release);
+            } catch (...) {
+            }
+            throw;
+        }
+        if (!let_go.empty()) {
+            Pause(kInputStep);
+            studio.send_input(let_go);
+        }
+    }
+    return ViewSize(size);
+}
+
+JsonValue KeyInput(const ToolContext& context, const JsonValue& arguments) {
+    const std::string action = ChoiceArg(arguments, "action", "press", {"press", "down", "up", "type"});
+    std::vector<McpInput> inputs;
+    if (action == "type") {
+        const std::string& text = StringArg(arguments, "text");
+        for (std::size_t at = 0; at < text.size();) {
+            const unsigned char lead = static_cast<unsigned char>(text[at]);
+            const std::size_t length = lead < 0x80 ? 1 : lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+            const int key = length == 1 ? KeyForCharacter(lead) : -1;
+            if (key >= 0) {
+                inputs.push_back(KeyChange(key, true));
+            }
+            // Return and Tab are keys a text field reads, not text.
+            if (lead != '\n' && lead != '\t') {
+                McpInput typed;
+                typed.kind = McpInput::Kind::Text;
+                typed.text = text.substr(at, length);
+                inputs.push_back(std::move(typed));
+            }
+            if (key >= 0) {
+                inputs.push_back(KeyChange(key, false));
+            }
+            at += length;
+        }
+        if (!inputs.empty()) {
+            context.studio.send_input(inputs);
+        }
+        JsonValue out = JsonValue::object();
+        out.set("events", JsonValue::number(static_cast<double>(inputs.size())));
+        return out;
+    }
+    const JsonValue* given = arguments.find("key");
+    if (given == nullptr) {
+        throw std::runtime_error("key is required.");
+    }
+    std::vector<int> keys;
+    if (given->is_array()) {
+        for (const JsonValue& item : given->items()) {
+            keys.push_back(KeyArg(item));
+        }
+    } else {
+        keys.push_back(KeyArg(*given));
+    }
+    if (keys.empty()) {
+        throw std::runtime_error("key names no keys.");
+    }
+    std::vector<McpInput> downs;
+    std::vector<McpInput> ups;
+    for (int key : keys) {
+        downs.push_back(KeyChange(key, true));
+        ups.insert(ups.begin(), KeyChange(key, false));
+    }
+    if (action == "down") {
+        context.studio.send_input(downs);
+    } else if (action == "up") {
+        context.studio.send_input(ups);
+    } else {
+        const double hold = NumberArg(arguments, "hold", kInputStep, 0, kMaxHold);
+        context.studio.send_input(downs);
+        Pause(hold);
+        try {
+            context.studio.send_input(ups);
+        } catch (...) {
+            // Once more, so a key is not left held after a slow UI thread.
+            context.studio.send_input(ups);
+        }
+    }
+    JsonValue out = JsonValue::object();
+    out.set("events", JsonValue::number(static_cast<double>(action == "press" ? 2 * keys.size() : keys.size())));
+    return out;
+}
+
 bool CanPlaytest(const McpStudio& studio) {
     return studio.session && studio.start_test && studio.pause_test && studio.resume_test && studio.stop_test;
 }
@@ -1658,6 +1943,8 @@ bool CanPlaytest(const McpStudio& studio) {
 bool CanCapture(const McpStudio& studio) { return studio.capture_view != nullptr; }
 
 bool CanImport(const McpStudio& studio) { return studio.import_files != nullptr; }
+
+bool TakesInput(const McpStudio& studio) { return studio.send_input != nullptr; }
 
 bool HasTabs(const McpStudio& studio) { return studio.tabs && studio.change_tab; }
 
@@ -1698,6 +1985,8 @@ constexpr ToolCode kToolCode[] = {
     {"get_class", GetClass, nullptr},
     {"playtest", Playtest, CanPlaytest},
     {"screenshot", Screenshot, CanCapture},
+    {"mouse_input", MouseInput, TakesInput},
+    {"key_input", KeyInput, TakesInput},
     {"tabs", Tabs, HasTabs},
     {"save_place", SavePlace, CanSave},
     {"show_profiler", ShowProfiler, HasProfiler},

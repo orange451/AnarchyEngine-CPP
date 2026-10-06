@@ -1,5 +1,6 @@
 #pragma once
 
+#include "amesh.hpp"
 #include "types.hpp"
 
 #include <cstddef>
@@ -90,12 +91,13 @@ public:
     // scale (shape_scale). points and
     // triangles are its Mesh's, as Mesh::vertex_positions gives them; no
     // points is no Mesh. Built as the body's shape is, so a Hull, and a Custom
-    // that is not Anchored, is the hull Box3D makes of them, an anchored
-    // Custom is each edge of its triangles once, and one that cannot be made
-    // is the Box it falls back to. Warns of nothing.
+    // that is not Anchored, is the hull Box3D makes of them, an anchored Custom
+    // is each edge of its triangles once, an unanchored Custom with pieces (as
+    // known_pieces gives them) is each piece's hull, and one that cannot be
+    // made is the Box it falls back to. Warns of nothing.
     static void collision_outline(const PhysicsObject& object, Vec3 center, const std::vector<Vec3>& points,
                                   const std::vector<std::uint32_t>& triangles, std::vector<Vec3>& lines,
-                                  float scale = 1.f);
+                                  float scale = 1.f, const std::vector<anarchy::amesh::ConvexPiece>* pieces = nullptr);
     // Where a body made at transform is: its position and rotation, with any
     // scale taken out.
     static Matrix4 body_pose(const Matrix4& transform);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ide/IdePane.hpp"
+#include "amesh.hpp"
 #include "GuiLayer.hpp"
 #include "MeshCache.hpp"
 #include "ProfilerOverlay.hpp"
@@ -230,6 +231,10 @@ private:
         std::uint64_t meshRevision = 0;
         std::vector<engine_core::Vec3> meshPoints;
         std::vector<std::uint32_t> meshTriangles;
+        // The Mesh's file as last read (Mesh::file_stamp), and the convex pieces
+        // known for it then, for an unanchored Custom.
+        std::string meshStamp;
+        std::vector<anarchy::amesh::ConvexPiece> meshPieces;
         // Segments in the body's space.
         std::vector<engine_core::Vec3> lines;
         // The GameObject it moves, or 0, and where the body is: that

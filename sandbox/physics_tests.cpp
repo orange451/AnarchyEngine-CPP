@@ -1049,3 +1049,35 @@ TEST_CASE("P32 pieces in the Mesh's file are used without decomposing, anchored 
     std::error_code ignored;
     std::filesystem::remove_all(resources, ignored);
 }
+
+TEST_CASE("P33 an unanchored Custom's outline is its pieces when they are known", "[physics]") {
+    PhysicsRig rig;
+    PhysicsObject& cup = rig.body(at(0.f, 0.f, 0.f), Vec3{4.f, 3.f, 4.f}, false);
+    REQUIRE_FALSE(cup.set_shape(static_cast<int>(PhysicsObject::Shape::Custom)));
+    anarchy::amesh::Data data;
+    add_cup(data);
+    std::vector<Vec3> points;
+    for (const auto& v : data.vertices) {
+        points.push_back(Vec3{v.p[0], v.p[1], v.p[2]});
+    }
+    const auto pieces = engine_core::decompose(points, data.indices);
+    REQUIRE(pieces.size() >= 2);
+
+    std::vector<Vec3> hull_lines;
+    engine_core::PhysicsWorld::collision_outline(cup, Vec3{}, points, data.indices, hull_lines);
+    std::vector<Vec3> piece_lines;
+    engine_core::PhysicsWorld::collision_outline(cup, Vec3{}, points, data.indices, piece_lines, 1.f, &pieces);
+    REQUIRE(piece_lines.size() > hull_lines.size());
+    for (const Vec3& p : piece_lines) {
+        REQUIRE(std::fabs(p.x) <= 2.05f);
+        REQUIRE(std::fabs(p.y) <= 1.55f);
+        REQUIRE(std::fabs(p.z) <= 2.05f);
+    }
+    // Anchored, it is its triangles whatever pieces it has.
+    cup.set_anchored(true);
+    std::vector<Vec3> anchored_lines;
+    engine_core::PhysicsWorld::collision_outline(cup, Vec3{}, points, data.indices, anchored_lines, 1.f, &pieces);
+    std::vector<Vec3> triangle_lines;
+    engine_core::PhysicsWorld::collision_outline(cup, Vec3{}, points, data.indices, triangle_lines);
+    REQUIRE(anchored_lines.size() == triangle_lines.size());
+}

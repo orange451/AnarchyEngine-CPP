@@ -1489,7 +1489,7 @@ void PhysicsWorld::collision_outline(const PlayerController& controller, std::ve
 
 void PhysicsWorld::collision_outline(const PhysicsObject& object, Vec3 center, const std::vector<Vec3>& mesh_points,
                                      const std::vector<std::uint32_t>& triangles, std::vector<Vec3>& lines,
-                                     float scale) {
+                                     float scale, const std::vector<anarchy::amesh::ConvexPiece>* pieces) {
     const Vec3 x{1.f, 0.f, 0.f};
     const Vec3 y{0.f, 1.f, 0.f};
     const Vec3 z{0.f, 0.f, 1.f};
@@ -1541,6 +1541,16 @@ void PhysicsWorld::collision_outline(const PhysicsObject& object, Vec3 center, c
             b3DestroyMesh(mesh);
             outline_triangles(points, triangles, lines);
             return;
+        }
+        if (object.shape() == PhysicsObject::Shape::Custom && pieces != nullptr && !pieces->empty()) {
+            std::vector<b3HullData*> hulls = piece_hulls(*pieces, fit_of(mesh_points, size, center));
+            for (b3HullData* hull : hulls) {
+                outline_hull(*hull, lines);
+                b3DestroyHull(hull);
+            }
+            if (!hulls.empty()) {
+                return;
+            }
         }
         b3HullData* hull = build_hull(points);
         if (hull == nullptr) {

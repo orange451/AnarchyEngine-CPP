@@ -4,6 +4,7 @@
 
 #include "AssetInstances.hpp"
 #include "Camera.hpp"
+#include "ConvexDecomposition.hpp"
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
 #include "PhysicsObject.hpp"
@@ -685,18 +686,25 @@ void GameView::readSelectedBodies() {
         static const std::string kNoPath;
         const std::string& meshPath = mesh != nullptr ? mesh->path() : kNoPath;
         const std::uint64_t meshRevision = mesh != nullptr ? mesh->session_geometry().revision : 0;
-        const bool meshChanged =
-            !made || outline.mesh != meshId || outline.meshPath != meshPath || outline.meshRevision != meshRevision;
+        const std::string meshStamp = mesh != nullptr ? mesh->file_stamp() : std::string();
+        const bool meshChanged = !made || outline.mesh != meshId || outline.meshPath != meshPath ||
+                                 outline.meshRevision != meshRevision || outline.meshStamp != meshStamp;
         if (meshChanged) {
             outline.mesh = meshId;
             outline.meshPath = meshPath;
             outline.meshRevision = meshRevision;
+            outline.meshStamp = meshStamp;
             outline.meshPoints.clear();
             outline.meshTriangles.clear();
             // A Mesh with no points to read outlines as no Mesh: the Box it falls back to.
             if (mesh != nullptr && mesh->vertex_positions(outline.meshPoints, &outline.meshTriangles)) {
                 outline.meshPoints.clear();
                 outline.meshTriangles.clear();
+            }
+            // An unanchored Custom draws its pieces when they are known; the outline never decomposes.
+            outline.meshPieces.clear();
+            if (mesh != nullptr && shape == engine_core::PhysicsObject::Shape::Custom && !outline.meshPoints.empty()) {
+                engine_core::known_pieces(*mesh, outline.meshPoints, outline.meshTriangles, outline.meshPieces);
             }
         }
         // Its GameObject's Scale multiplies its Size, as its body's shape is made.
@@ -713,7 +721,7 @@ void GameView::readSelectedBodies() {
             outline.anchored = body->anchored();
             outline.center = center;
             engine_core::PhysicsWorld::collision_outline(*body, center, outline.meshPoints, outline.meshTriangles,
-                                                         outline.lines, scale);
+                                                         outline.lines, scale, &outline.meshPieces);
         }
         // Its body starts at the GameObject it moves.
         outline.driven = body->driven_game_object();

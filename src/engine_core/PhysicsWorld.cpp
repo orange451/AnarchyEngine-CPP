@@ -1,6 +1,7 @@
 #include "PhysicsWorld.hpp"
 
 #include "AssetInstances.hpp"
+#include "ConvexDecomposition.hpp"
 #include "DataModel.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
@@ -109,22 +110,38 @@ void* user_data(InstanceId id) { return reinterpret_cast<void*>(static_cast<std:
 
 InstanceId id_of(void* data) { return static_cast<InstanceId>(reinterpret_cast<std::uintptr_t>(data)); }
 
-// A Mesh's points, which are not empty, fitted to size around center in the
-// body's space: centered on their bounds, each axis scaled so the bounds are size.
-void fit_points(const std::vector<Vec3>& mesh_points, Vec3 size, Vec3 center, std::vector<b3Vec3>& points) {
+// How a Mesh's points are placed in the body's space: centered on their
+// bounds, each axis scaled so the bounds are size, around center.
+struct Fit {
+    Vec3 middle;
+    Vec3 scale;
+    Vec3 center;
+};
+
+// The fit of mesh_points, which are not empty.
+Fit fit_of(const std::vector<Vec3>& mesh_points, Vec3 size, Vec3 center) {
     Vec3 low = mesh_points.front();
     Vec3 high = low;
     for (const Vec3& p : mesh_points) {
         low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
         high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
     }
-    const Vec3 middle{(low.x + high.x) * 0.5f, (low.y + high.y) * 0.5f, (low.z + high.z) * 0.5f};
     auto fit = [](float target, float extent) { return extent > 1e-6f ? target / extent : 1.f; };
-    const Vec3 scale{fit(size.x, high.x - low.x), fit(size.y, high.y - low.y), fit(size.z, high.z - low.z)};
+    return Fit{Vec3{(low.x + high.x) * 0.5f, (low.y + high.y) * 0.5f, (low.z + high.z) * 0.5f},
+               Vec3{fit(size.x, high.x - low.x), fit(size.y, high.y - low.y), fit(size.z, high.z - low.z)}, center};
+}
+
+b3Vec3 apply_fit(const Fit& fit, Vec3 p) {
+    return b3Vec3{(p.x - fit.middle.x) * fit.scale.x + fit.center.x, (p.y - fit.middle.y) * fit.scale.y + fit.center.y,
+                  (p.z - fit.middle.z) * fit.scale.z + fit.center.z};
+}
+
+// A Mesh's points, which are not empty, fitted to size around center in the body's space.
+void fit_points(const std::vector<Vec3>& mesh_points, Vec3 size, Vec3 center, std::vector<b3Vec3>& points) {
+    const Fit fit = fit_of(mesh_points, size, center);
     points.clear();
     for (const Vec3& p : mesh_points) {
-        points.push_back(b3Vec3{(p.x - middle.x) * scale.x + center.x, (p.y - middle.y) * scale.y + center.y,
-                                (p.z - middle.z) * scale.z + center.z});
+        points.push_back(apply_fit(fit, p));
     }
 }
 
@@ -167,6 +184,23 @@ b3HullData* build_hull(const std::vector<b3Vec3>& points) {
         hull = b3CreateHull(points.data(), count, kHullVerticesRetry);
     }
     return hull;
+}
+
+// Each piece, fitted as its whole Mesh is (fit), as a hull. Pieces Box3D
+// builds no hull from are left out. The caller destroys the hulls.
+std::vector<b3HullData*> piece_hulls(const std::vector<anarchy::amesh::ConvexPiece>& pieces, const Fit& fit) {
+    std::vector<b3HullData*> hulls;
+    std::vector<b3Vec3> points;
+    for (const anarchy::amesh::ConvexPiece& piece : pieces) {
+        points.clear();
+        for (const auto& p : piece.points) {
+            points.push_back(apply_fit(fit, Vec3{p[0], p[1], p[2]}));
+        }
+        if (b3HullData* hull = build_hull(points)) {
+            hulls.push_back(hull);
+        }
+    }
+    return hulls;
 }
 
 // The corners of a Cylinder, Cone, or Wedge of size around center, into
@@ -348,8 +382,9 @@ float probe_hit(b3ShapeId shape, b3Pos point, b3Vec3 normal, float fraction, uin
 struct PhysicsWorld::Impl {
     struct Body {
         b3BodyId body = b3_nullBodyId;
-        b3ShapeId shape = b3_nullShapeId;
-        // The shape's volume, which turns Mass into a density.
+        // Its shapes: one, or one per convex piece of an unanchored Custom.
+        std::vector<b3ShapeId> shapes;
+        // The shapes' volume, summed, which turns Mass into a density.
         float volume = 1.f;
         // A PlayerController's: an upright cylinder, never recentered or scaled.
         bool controller = false;
@@ -1057,15 +1092,15 @@ struct PhysicsWorld::Impl {
         if (b3HullData* hull = build_hull(points)) {
             record.volume = b3ComputeHullMass(hull, 1.f).mass;
             def.density = density(controller, record.volume);
-            record.shape = b3CreateHullShape(record.body, &def, hull);
+            add_shape(record, b3CreateHullShape(record.body, &def, hull));
             b3DestroyHull(hull);
         }
-        if (!b3Shape_IsValid(record.shape)) {
+        if (record.shapes.empty()) {
             const b3BoxHull box =
                 b3MakeOffsetBoxHull(radius, tall * 0.5f, radius, b3Vec3{0.f, gap + tall * 0.5f, 0.f});
             record.volume = 4.f * radius * radius * tall;
             def.density = density(controller, record.volume);
-            record.shape = b3CreateHullShape(record.body, &def, &box.base);
+            add_shape(record, b3CreateHullShape(record.body, &def, &box.base));
         }
         b3Body_ApplyMassFromShapes(record.body);
     }
@@ -1090,7 +1125,7 @@ struct PhysicsWorld::Impl {
             const b3Sphere sphere{center, size.x * 0.5f};
             record.volume = b3ComputeSphereMass(&sphere, 1.f).mass;
             def.density = density(object, record.volume);
-            record.shape = b3CreateSphereShape(record.body, &def, &sphere);
+            add_shape(record, b3CreateSphereShape(record.body, &def, &sphere));
             break;
         }
         case PhysicsObject::Shape::Capsule: {
@@ -1100,25 +1135,23 @@ struct PhysicsWorld::Impl {
                                     b3Vec3{center.x, center.y + half, center.z}, radius};
             record.volume = b3ComputeCapsuleMass(&capsule, 1.f).mass;
             def.density = density(object, record.volume);
-            record.shape = b3CreateCapsuleShape(record.body, &def, &capsule);
+            add_shape(record, b3CreateCapsuleShape(record.body, &def, &capsule));
             break;
         }
         case PhysicsObject::Shape::Custom:
             // Box3D gives a mesh contacts only on a static body, so an
-            // unanchored Custom is a hull of its mesh until it is anchored.
+            // unanchored Custom is convex pieces of its mesh instead.
             if (object.anchored()) {
                 if (b3MeshData* mesh = make_mesh(game, object, size, record.center)) {
                     record.mesh = mesh;
                     record.volume = size.x * size.y * size.z;
                     def.density = density(object, record.volume);
-                    record.shape = b3CreateMeshShape(record.body, &def, mesh, b3Vec3{1.f, 1.f, 1.f});
+                    add_shape(record, b3CreateMeshShape(record.body, &def, mesh, b3Vec3{1.f, 1.f, 1.f}));
                 }
                 break;
             }
-            if (!object.warned_custom) {
-                object.warned_custom = true;
-                say("PhysicsObject " + game.name(object.id()) +
-                    ": a Custom collides as its whole mesh only while Anchored; until then it is a Hull of it");
+            if (make_pieces(game, object, size, record, def)) {
+                break;
             }
             [[fallthrough]];
         case PhysicsObject::Shape::Hull:
@@ -1126,7 +1159,7 @@ struct PhysicsWorld::Impl {
                 record.volume = b3ComputeHullMass(hull, 1.f).mass;
                 def.density = density(object, record.volume);
                 // Box3D copies the hull into the shape.
-                record.shape = b3CreateHullShape(record.body, &def, hull);
+                add_shape(record, b3CreateHullShape(record.body, &def, hull));
                 b3DestroyHull(hull);
             }
             break;
@@ -1137,18 +1170,18 @@ struct PhysicsWorld::Impl {
             if (b3HullData* hull = build_hull(points)) {
                 record.volume = b3ComputeHullMass(hull, 1.f).mass;
                 def.density = density(object, record.volume);
-                record.shape = b3CreateHullShape(record.body, &def, hull);
+                add_shape(record, b3CreateHullShape(record.body, &def, hull));
                 b3DestroyHull(hull);
             }
             break;
         case PhysicsObject::Shape::Box:
             break;
         }
-        if (!b3Shape_IsValid(record.shape)) {
+        if (record.shapes.empty()) {
             const b3BoxHull box = b3MakeOffsetBoxHull(size.x * 0.5f, size.y * 0.5f, size.z * 0.5f, center);
             record.volume = size.x * size.y * size.z;
             def.density = density(object, record.volume);
-            record.shape = b3CreateHullShape(record.body, &def, &box.base);
+            add_shape(record, b3CreateHullShape(record.body, &def, &box.base));
         }
         b3Body_ApplyMassFromShapes(record.body);
     }
@@ -1217,16 +1250,60 @@ struct PhysicsWorld::Impl {
         return mesh;
     }
 
+    // An unanchored Custom as one hull per convex piece of its Mesh, fitted as
+    // its whole Mesh is. False when it has none; with a Mesh that has points,
+    // it says so once, and the caller makes it a Hull.
+    bool make_pieces(DataModel& game, PhysicsObject& object, Vec3 size, Body& record, b3ShapeDef& def) {
+        if (!fitted_mesh(game, object, size, record.center, true).empty()) {
+            // No Mesh, or no points: the Hull it falls to says why.
+            return false;
+        }
+        const auto* mesh = dynamic_cast<const Mesh*>(game.instance(object.mesh_id()));
+        const std::vector<anarchy::amesh::ConvexPiece> pieces = pieces_for(*mesh, mesh_points, triangles);
+        std::vector<b3HullData*> hulls = piece_hulls(pieces, fit_of(mesh_points, size, record.center));
+        if (hulls.empty()) {
+            if (!object.warned_custom) {
+                object.warned_custom = true;
+                say("PhysicsObject " + game.name(object.id()) + ": Custom fell back to Hull (" +
+                    (pieces.empty() ? "its Mesh split into no convex pieces"
+                                    : "Box3D could not build a hull from any piece") +
+                    ")");
+            }
+            return false;
+        }
+        object.warned_custom = false;
+        record.volume = 0.f;
+        for (b3HullData* hull : hulls) {
+            record.volume += b3ComputeHullMass(hull, 1.f).mass;
+        }
+        def.density = density(object, record.volume);
+        for (b3HullData* hull : hulls) {
+            // Box3D copies the hull into the shape.
+            add_shape(record, b3CreateHullShape(record.body, &def, hull));
+            b3DestroyHull(hull);
+        }
+        return !record.shapes.empty();
+    }
+
     static std::string shape_name(const PhysicsObject& object) {
         return object.shape() == PhysicsObject::Shape::Custom ? "Custom" : "Hull";
     }
 
-    // Destroys the record's shape, and the mesh it held, if any.
-    static void drop_shape(Body& record) {
-        if (b3Shape_IsValid(record.shape)) {
-            b3DestroyShape(record.shape, false);
+    // Keeps shape on the record, when Box3D made one.
+    static void add_shape(Body& record, b3ShapeId shape) {
+        if (b3Shape_IsValid(shape)) {
+            record.shapes.push_back(shape);
         }
-        record.shape = b3_nullShapeId;
+    }
+
+    // Destroys the record's shapes, and the mesh one held, if any.
+    static void drop_shape(Body& record) {
+        for (const b3ShapeId shape : record.shapes) {
+            if (b3Shape_IsValid(shape)) {
+                b3DestroyShape(shape, false);
+            }
+        }
+        record.shapes.clear();
         if (record.mesh != nullptr) {
             b3DestroyMesh(record.mesh);
             record.mesh = nullptr;
@@ -1254,12 +1331,17 @@ struct PhysicsWorld::Impl {
             // A new shape takes the current Friction, Bounciness, and Mass too.
             make_shape(game, object, record);
         } else {
-            if (rigid != nullptr && (dirty & PhysicsObject::kDirtyMaterial) != 0 && b3Shape_IsValid(record.shape)) {
-                b3Shape_SetFriction(record.shape, static_cast<float>(rigid->friction()));
-                b3Shape_SetRestitution(record.shape, static_cast<float>(rigid->bounciness()));
+            if (rigid != nullptr && (dirty & PhysicsObject::kDirtyMaterial) != 0) {
+                for (const b3ShapeId shape : record.shapes) {
+                    b3Shape_SetFriction(shape, static_cast<float>(rigid->friction()));
+                    b3Shape_SetRestitution(shape, static_cast<float>(rigid->bounciness()));
+                }
             }
-            if ((dirty & PhysicsObject::kDirtyMass) != 0 && b3Shape_IsValid(record.shape)) {
-                b3Shape_SetDensity(record.shape, density(object, record.volume), true);
+            if ((dirty & PhysicsObject::kDirtyMass) != 0) {
+                for (const b3ShapeId shape : record.shapes) {
+                    b3Shape_SetDensity(shape, density(object, record.volume), false);
+                }
+                b3Body_ApplyMassFromShapes(record.body);
             }
         }
         if ((dirty & PhysicsObject::kDirtyDamping) != 0) {
@@ -1355,6 +1437,22 @@ void PhysicsWorld::step(DataModel& game, double dt) { impl_->step(game, dt); }
 std::size_t PhysicsWorld::body_count() const { return impl_->bodies.size(); }
 
 bool PhysicsWorld::has_body(InstanceId id) const { return impl_->bodies.count(id) != 0; }
+
+float PhysicsWorld::body_mass(InstanceId id) const {
+    const auto found = impl_->bodies.find(id);
+    return found != impl_->bodies.end() ? b3Body_GetMass(found->second.body) : 0.f;
+}
+
+std::vector<float> PhysicsWorld::shape_frictions(InstanceId id) const {
+    std::vector<float> frictions;
+    const auto found = impl_->bodies.find(id);
+    if (found != impl_->bodies.end()) {
+        for (const b3ShapeId shape : found->second.shapes) {
+            frictions.push_back(b3Shape_GetFriction(shape));
+        }
+    }
+    return frictions;
+}
 
 void PhysicsWorld::set_warning_sink(std::function<void(const std::string&)> sink) { impl_->warn = std::move(sink); }
 

@@ -5,6 +5,7 @@
 #include "support.hpp"
 
 #include "AssetInstances.hpp"
+#include "ConvexDecomposition.hpp"
 #include "Enum.hpp"
 #include "Folder.hpp"
 #include "LuaApi.hpp"
@@ -21,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <initializer_list>
 #include <string>
 #include <vector>
@@ -40,6 +42,37 @@ engine_core::LuaSlot instance_slot(InstanceId id) {
     slot.kind = engine_core::LuaSlot::Kind::Instance;
     slot.id = id;
     return slot;
+}
+
+// An open-topped box, 4 by 3 by 4, its floor half a unit thick and its walls
+// too, standing on y = 0 in the Mesh's space.
+void add_cup(anarchy::amesh::Data& data) {
+    engine_core::add_box(data, Vec3{4.f, 0.5f, 4.f}, Vec3{0.f, 0.25f, 0.f});
+    engine_core::add_box(data, Vec3{0.5f, 3.f, 4.f}, Vec3{-1.75f, 1.5f, 0.f});
+    engine_core::add_box(data, Vec3{0.5f, 3.f, 4.f}, Vec3{1.75f, 1.5f, 0.f});
+    engine_core::add_box(data, Vec3{3.f, 3.f, 0.5f}, Vec3{0.f, 1.5f, -1.75f});
+    engine_core::add_box(data, Vec3{3.f, 3.f, 0.5f}, Vec3{0.f, 1.5f, 1.75f});
+}
+
+// An unanchored Custom cup of size, its bottom on the floor, and a ball of
+// diameter 1 to drop into it at x.
+struct CupScene {
+    PhysicsObject* cup = nullptr;
+    PhysicsObject* ball = nullptr;
+    engine_core::Mesh* mesh = nullptr;
+};
+
+CupScene cup_scene(PhysicsRig& rig, Vec3 size, float ball_x = 0.f) {
+    rig.floor();
+    CupScene scene;
+    scene.mesh = &rig.game.create<engine_core::Mesh>();
+    scene.cup = &rig.body(at(0.f, size.y * 0.5f, 0.f), size, false);
+    REQUIRE_FALSE(scene.cup->set_shape(static_cast<int>(PhysicsObject::Shape::Custom)));
+    REQUIRE_FALSE(scene.cup->set_mesh(instance_slot(scene.mesh->id())));
+    REQUIRE_FALSE(scene.cup->set_mass(20.0));
+    scene.ball = &rig.body(at(ball_x, 8.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(scene.ball->set_shape(static_cast<int>(PhysicsObject::Shape::Sphere)));
+    return scene;
 }
 
 }  // namespace
@@ -302,7 +335,7 @@ TEST_CASE("P15 a PhysicsObject under a GameObject moves it until it is moved els
     REQUIRE(y_of(part.transform()) == left);
 }
 
-TEST_CASE("P16 an anchored Custom collides as its whole mesh; unanchored it is a Hull", "[physics]") {
+TEST_CASE("P16 an anchored Custom collides as its whole mesh, and still falls when unanchored", "[physics]") {
     PhysicsRig rig;
     engine_core::Mesh& mesh = rig.game.create<engine_core::Mesh>();
     // A floor with a step: only a whole-mesh collider has the gap between the two.
@@ -325,21 +358,20 @@ TEST_CASE("P16 an anchored Custom collides as its whole mesh; unanchored it is a
     REQUIRE(near(y_of(on_low.transform()), 0.f, 0.05f));
     REQUIRE(rig.warnings.empty());
 
-    // Unanchored, it falls as a hull of the same mesh, and says so once.
+    // Unanchored, it falls as convex pieces of the same mesh, with no warning.
     PhysicsObject& loose = rig.body(at(30.f, 10.f, 0.f), Vec3{2.f, 2.f, 2.f}, false);
     REQUIRE_FALSE(loose.set_shape(static_cast<int>(PhysicsObject::Shape::Custom)));
     REQUIRE_FALSE(loose.set_mesh(instance_slot(mesh.id())));
     rig.seconds(0.5);
     REQUIRE(y_of(loose.transform()) < 10.f);
-    REQUIRE(rig.warnings.size() == 1);
-    REQUIRE(rig.warnings.front().find("only while Anchored") != std::string::npos);
+    REQUIRE(rig.warnings.empty());
     // Anchoring it makes it its whole mesh, and holds it there.
     loose.set_anchored(true);
     rig.steps(1);
     const float held = y_of(loose.transform());
     rig.seconds(0.25);
     REQUIRE(y_of(loose.transform()) == held);
-    REQUIRE(rig.warnings.size() == 1);
+    REQUIRE(rig.warnings.empty());
 }
 
 TEST_CASE("P13 PhysicsObject properties are checked, saved, and come back at Stop", "[physics]") {
@@ -911,4 +943,109 @@ TEST_CASE("P26 a PlayerController falls as fast as Workspace.Gravity says", "[ph
     rig.seconds(0.5);
     INFO(controller.velocity().y);
     REQUIRE(near(controller.velocity().y, -2.f, 0.1f));
+}
+
+TEST_CASE("P27 an unanchored Custom cup catches a ball", "[physics]") {
+    engine_core::clear_piece_cache();
+    PhysicsRig rig;
+    CupScene scene = cup_scene(rig, Vec3{4.f, 3.f, 4.f});
+    rig.play();
+    REQUIRE_FALSE(scene.mesh->edit_geometry(add_cup));
+    rig.seconds(4.0);
+    INFO(y_of(scene.ball->transform()));
+    // On the cup's floor: 0.5 up, plus the ball's radius. A single hull would hold it at 3.5.
+    REQUIRE(near(y_of(scene.ball->transform()), 1.f, 0.15f));
+    REQUIRE(rig.physics.shape_frictions(scene.cup->id()).size() >= 2);
+    REQUIRE(rig.warnings.empty());
+}
+
+TEST_CASE("P28 a body of pieces weighs its Mass", "[physics]") {
+    PhysicsRig rig;
+    CupScene scene = cup_scene(rig, Vec3{4.f, 3.f, 4.f});
+    rig.play();
+    REQUIRE_FALSE(scene.mesh->edit_geometry(add_cup));
+    rig.steps(1);
+    REQUIRE(near(rig.physics.body_mass(scene.cup->id()), 20.f, 0.01f));
+    // Every shape kind still weighs its Mass, with one shape.
+    REQUIRE(near(rig.physics.body_mass(scene.ball->id()), 1.f, 0.001f));
+    REQUIRE(rig.physics.shape_frictions(scene.ball->id()).size() == 1);
+}
+
+TEST_CASE("P29 a Custom whose Mesh has no pieces falls back to a Hull and says so once", "[physics]") {
+    PhysicsRig rig;
+    rig.floor();
+    engine_core::Mesh& mesh = rig.game.create<engine_core::Mesh>();
+    PhysicsObject& body = rig.body(at(0.f, 3.f, 0.f), Vec3{2.f, 2.f, 2.f}, false);
+    REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Custom)));
+    REQUIRE_FALSE(body.set_mesh(instance_slot(mesh.id())));
+    rig.play();
+    anarchy::amesh::Data cube;
+    engine_core::add_box(cube, Vec3{1.f, 1.f, 1.f}, Vec3{0.f, 0.f, 0.f});
+    std::vector<Vec3> points;
+    for (const auto& v : cube.vertices) {
+        points.push_back(Vec3{v.p[0], v.p[1], v.p[2]});
+    }
+    // Known to split into nothing.
+    engine_core::remember_pieces(points, cube.indices, {});
+    REQUIRE_FALSE(mesh.edit_geometry([&cube](anarchy::amesh::Data& data) { data = cube; }));
+    rig.seconds(3.0);
+    REQUIRE(near(y_of(body.transform()), 1.f, 0.05f));
+    REQUIRE(rig.warnings.size() == 1);
+    REQUIRE(rig.warnings.front().find("Custom fell back to Hull") != std::string::npos);
+    engine_core::clear_piece_cache();
+}
+
+TEST_CASE("P30 Friction set during play reaches every piece", "[physics]") {
+    PhysicsRig rig;
+    CupScene scene = cup_scene(rig, Vec3{4.f, 3.f, 4.f});
+    rig.play();
+    REQUIRE_FALSE(scene.mesh->edit_geometry(add_cup));
+    rig.steps(1);
+    REQUIRE_FALSE(scene.cup->set_friction(0.125));
+    rig.steps(1);
+    const std::vector<float> frictions = rig.physics.shape_frictions(scene.cup->id());
+    REQUIRE(frictions.size() >= 2);
+    for (const float friction : frictions) {
+        REQUIRE(near(friction, 0.125f, 1e-6f));
+    }
+}
+
+TEST_CASE("P31 a cup stretched by Size still holds a ball", "[physics]") {
+    PhysicsRig rig;
+    CupScene scene = cup_scene(rig, Vec3{8.f, 3.f, 4.f}, 2.f);
+    rig.play();
+    REQUIRE_FALSE(scene.mesh->edit_geometry(add_cup));
+    rig.seconds(4.0);
+    INFO(x_of(scene.ball->transform()) << " " << y_of(scene.ball->transform()));
+    REQUIRE(y_of(scene.ball->transform()) < 2.f);
+    REQUIRE(std::fabs(x_of(scene.ball->transform())) < 4.f);
+}
+
+TEST_CASE("P32 pieces in the Mesh's file are used without decomposing, anchored or not", "[physics]") {
+    PhysicsRig rig;
+    const std::filesystem::path resources = std::filesystem::temp_directory_path() / "anarchy-physics-pieces-test";
+    std::filesystem::remove_all(resources);
+    std::filesystem::create_directories(resources);
+    rig.game.set_resources_root(resources);
+    CupScene scene = cup_scene(rig, Vec3{4.f, 3.f, 4.f});
+    // Stopped: the cup goes into the Mesh's file, then its pieces do.
+    REQUIRE_FALSE(scene.mesh->edit_geometry(add_cup));
+    std::vector<Vec3> points;
+    std::vector<std::uint32_t> triangles;
+    REQUIRE_FALSE(scene.mesh->vertex_positions(points, &triangles));
+    REQUIRE_FALSE(scene.mesh->store_pieces(engine_core::kRecipe, engine_core::decompose(points, triangles)));
+    engine_core::clear_piece_cache();
+    const std::uint64_t before = engine_core::decompose_count();
+
+    rig.play();
+    rig.seconds(4.0);
+    REQUIRE(near(y_of(scene.ball->transform()), 1.f, 0.15f));
+    scene.cup->set_anchored(true);
+    rig.steps(1);
+    scene.cup->set_anchored(false);
+    rig.seconds(1.0);
+    REQUIRE(near(y_of(scene.ball->transform()), 1.f, 0.15f));
+    REQUIRE(engine_core::decompose_count() == before);
+    std::error_code ignored;
+    std::filesystem::remove_all(resources, ignored);
 }

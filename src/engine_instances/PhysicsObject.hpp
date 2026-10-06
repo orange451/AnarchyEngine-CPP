@@ -61,7 +61,8 @@ public:
 
     // One warning each, until the condition clears: its Hull fell back to a Box.
     bool warned_hull = false;
-    // Once, until it is reused: this unanchored Custom collides as a Hull.
+    // Once, until the condition clears or it is reused: the "Custom fell back
+    // to Hull" warning.
     bool warned_custom = false;
 
 protected:

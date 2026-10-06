@@ -54,6 +54,10 @@ public:
     // How many bodies the world holds, and whether this PhysicsObject has one.
     std::size_t body_count() const;
     bool has_body(InstanceId id) const;
+    // For tests: the body's mass, and each of its shapes' friction. 0 and
+    // empty when the PhysicsObject has no body.
+    float body_mass(InstanceId id) const;
+    std::vector<float> shape_frictions(InstanceId id) const;
 
     // Where a warning goes, such as a Hull that fell back to a Box. Unset, it
     // goes nowhere.

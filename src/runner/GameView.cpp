@@ -701,7 +701,10 @@ void GameView::readSelectedBodies() {
                 outline.meshPoints.clear();
                 outline.meshTriangles.clear();
             }
-            // An unanchored Custom draws its pieces when they are known; the outline never decomposes.
+        }
+        // An unanchored Custom draws its pieces when they are known; the outline never decomposes.
+        // A Hull turned Custom on the same Mesh looks them up too.
+        if (meshChanged || outline.shape != static_cast<int>(shape)) {
             outline.meshPieces.clear();
             if (mesh != nullptr && shape == engine_core::PhysicsObject::Shape::Custom && !outline.meshPoints.empty()) {
                 engine_core::known_pieces(*mesh, outline.meshPoints, outline.meshTriangles, outline.meshPieces);

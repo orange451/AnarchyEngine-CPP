@@ -449,6 +449,22 @@ endif()
 set(BOX3D_SOURCE_DIR "${box3d_SOURCE_DIR}")
 add_subdirectory(cmake/box3d "${CMAKE_BINARY_DIR}/box3d")
 
+# V-HACD splits a Custom PhysicsObject's Mesh into convex pieces: one
+# BSD-3-Clause header by Khaled Mamou, pinned by tag. Only fetched here;
+# ConvexDecomposition.cpp compiles it.
+FetchContent_Declare(
+    vhacd
+    GIT_REPOSITORY https://github.com/kmammou/v-hacd.git
+    GIT_TAG v4.1.0
+)
+FetchContent_GetProperties(vhacd)
+if(NOT vhacd_POPULATED)
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
+    FetchContent_Populate(vhacd)
+endif()
+
 # miniaudio plays SoundEmitters: public-domain (or MIT-0) C by David Reid,
 # pinned by tag and hash. cmake/miniaudio builds it with its bundled
 # stb_vorbis, so Ogg Vorbis decodes beside WAV, MP3, and FLAC.
@@ -558,6 +574,7 @@ add_library(engine_core STATIC
     src/engine_core/Containment.cpp
     src/engine_core/Ecs.cpp
     src/engine_core/PhysicsWorld.cpp
+    src/engine_core/ConvexDecomposition.cpp
     src/engine_core/DraggerMath.cpp
     src/engine_core/DraggerWorld.cpp
     src/engine_core/AudioWorld.cpp
@@ -578,6 +595,8 @@ target_link_libraries(engine_core PRIVATE flecs)
 target_link_libraries(engine_instances PRIVATE flecs)
 # Box3D stays private too: only PhysicsWorld.cpp includes it.
 target_link_libraries(engine_core PRIVATE box3d)
+# V-HACD too: only ConvexDecomposition.cpp includes it. SYSTEM, so -Wextra does not report on it.
+target_include_directories(engine_core SYSTEM PRIVATE "${vhacd_SOURCE_DIR}/include")
 # So does miniaudio: only AudioWorld.cpp and SoundPreview.cpp include it.
 target_link_libraries(engine_core PRIVATE miniaudio)
 target_link_libraries(engine_core PRIVATE Luau.Compiler Luau.VM Luau.Analysis)
@@ -857,6 +876,7 @@ add_executable(sandbox
     sandbox/dynamic_sky_tests.cpp
     sandbox/bloom_tests.cpp
     sandbox/physics_tests.cpp
+    sandbox/convex_decomposition_tests.cpp
     sandbox/player_controller_tests.cpp
     sandbox/audio_tests.cpp
     sandbox/attachment_tests.cpp

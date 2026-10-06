@@ -1,5 +1,6 @@
 #include "amesh.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -99,6 +100,22 @@ Data SkinnedQuad() {
     return data;
 }
 
+// A tetrahedron of side s at (x, 0, 0), as a piece.
+ConvexPiece Tetra(float x, float s = 1) {
+    ConvexPiece piece;
+    piece.points = {{x, 0, 0}, {x + s, 0, 0}, {x, s, 0}, {x, 0, s}};
+    return piece;
+}
+
+// The quad with three pieces of recipe 7.
+Data PiecedQuad() {
+    Data data = Quad();
+    data.piece_recipe = 7;
+    data.pieces = {Tetra(0), Tetra(2), Tetra(4, 2)};
+    data.pieces[2].points.push_back({5, 1, 1});
+    return data;
+}
+
 // Where the skins start in a file of four vertices.
 constexpr std::size_t kQuadSkins = kHeaderSize + 4 * kVertexSize;
 
@@ -114,8 +131,8 @@ void TestHeaderOffsets() {
     static_assert(offsetof(AEHeader, high_quality_lods) == 31);
     static_assert(offsetof(AEHeader, bbox_min) == 32);
     static_assert(offsetof(AEHeader, bbox_max) == 44);
-    static_assert(offsetof(AEHeader, reserved1) == 56);
-    static_assert(offsetof(AEHeader, reserved2) == 60);
+    static_assert(offsetof(AEHeader, piece_count) == 56);
+    static_assert(offsetof(AEHeader, piece_point_total) == 60);
     static_assert(offsetof(AEVertex, tx) == 32);
     static_assert(offsetof(AEVertex, r) == 36);
     static_assert(offsetof(AEBone, cull_radius) == 12);
@@ -138,9 +155,9 @@ void TestStaticMeshLayout() {
     Expect(bytes.size() == kHeaderSize + 4 * kVertexSize + 2 * kTriangleSize + kCrcSize,
            "a static mesh has no skins, bones, LODs, or subsets");
     const auto header = Peek<AEHeader>(bytes, 0);
-    Expect(std::memcmp(header.magic, "AESH", 4) == 0 && header.version_major == 1 && header.version_minor == 0 &&
+    Expect(std::memcmp(header.magic, "AESH", 4) == 0 && header.version_major == 1 && header.version_minor == 1 &&
                header.header_size == 64,
-           "the header says AESH 1.0, 64 bytes");
+           "the header says AESH 1.1, 64 bytes");
     Expect(header.flags == FLAG_UNORM_UV, "a white quad with UVs in [0,1] sets only FLAG_UNORM_UV");
     Expect(header.bbox_min[0] == 0 && header.bbox_max[0] == 1 && header.bbox_max[1] == 1 && header.bbox_max[2] == 0,
            "the writer computes the bounding box");
@@ -386,20 +403,20 @@ void TestReaderRejects() {
     ExpectRejected(bytes, 0, "a wrong magic");
 
     bytes = good;
-    Poke<std::uint16_t>(bytes, offsetof(AEHeader, version_minor), 1);
-    ExpectRejected(bytes, offsetof(AEHeader, version_major), "version 1.1");
+    Poke<std::uint16_t>(bytes, offsetof(AEHeader, version_minor), 2);
+    ExpectRejected(bytes, offsetof(AEHeader, version_major), "version 1.2");
 
     bytes = good;
     Poke<std::uint16_t>(bytes, offsetof(AEHeader, header_size), 80);
     ExpectRejected(bytes, offsetof(AEHeader, header_size), "header_size 80");
 
     bytes = good;
-    Poke<std::uint16_t>(bytes, offsetof(AEHeader, flags), static_cast<std::uint16_t>(FLAG_SKINNED | (1u << 6)));
+    Poke<std::uint16_t>(bytes, offsetof(AEHeader, flags), static_cast<std::uint16_t>(FLAG_SKINNED | (1u << 7)));
     ExpectRejected(bytes, offsetof(AEHeader, flags), "an unknown flag bit");
 
     bytes = good;
-    Poke<std::uint32_t>(bytes, offsetof(AEHeader, reserved2), 1);
-    ExpectRejected(bytes, offsetof(AEHeader, reserved2), "a set reserved field");
+    Poke<std::uint32_t>(bytes, offsetof(AEHeader, piece_point_total), 1);
+    ExpectRejected(bytes, offsetof(AEHeader, piece_count), "piece_point_total without FLAG_HULLS");
 
     bytes = good;
     Poke<std::uint16_t>(bytes, offsetof(AEHeader, flags), 0);
@@ -489,6 +506,85 @@ void TestReaderRejects() {
     ExpectRejected(bytes, lods + 4, "lod_face_end that does not increase");
 }
 
+void TestPiecesRoundTrip() {
+    const Data data = PiecedQuad();
+    const std::vector<std::byte> bytes = write(data);
+    const auto header = Peek<AEHeader>(bytes, 0);
+    Expect(header.version_major == 1 && header.version_minor == 1, "a file is written as 1.1");
+    Expect((header.flags & FLAG_HULLS) != 0, "pieces set FLAG_HULLS");
+    Expect(header.piece_count == 3 && header.piece_point_total == 13, "the header counts the pieces and their points");
+    Expect(bytes.size() == kHeaderSize + 4 * kVertexSize + 2 * kTriangleSize + 4 + 3 * 4 + 13 * 12 + kCrcSize,
+           "the section is a recipe, a count per piece, and the points");
+    const Data back = read(bytes);
+    Expect(back.piece_recipe == 7, "the recipe round-trips");
+    Expect(back.pieces.size() == 3 && back.pieces[2].points.size() == 5, "the pieces round-trip");
+    Expect(back.pieces[1].points[1] == std::array<float, 3>{3, 0, 0}, "a piece's points round-trip");
+    Expect(write(back) == bytes, "a read file rewrites to the same bytes");
+}
+
+void TestVersionOneZeroReads() {
+    std::vector<std::byte> bytes = write(Quad());
+    Poke<std::uint16_t>(bytes, offsetof(AEHeader, version_minor), 0);
+    Recrc(bytes);
+    const Data back = read(bytes);
+    Expect(back.vertices.size() == 4 && back.pieces.empty(), "a 1.0 file reads, with no pieces");
+}
+
+void TestPiecesRejected() {
+    const std::vector<std::byte> good = write(PiecedQuad());
+    const std::size_t section = kHeaderSize + 4 * kVertexSize + 2 * kTriangleSize;
+    const std::size_t points = section + 4 + 3 * 4;
+
+    std::vector<std::byte> bytes = good;
+    Poke<std::uint16_t>(bytes, offsetof(AEHeader, version_minor), 0);
+    Recrc(bytes);
+    ExpectRejected(bytes, offsetof(AEHeader, flags), "a 1.0 file with FLAG_HULLS");
+
+    bytes = good;
+    Poke<std::uint32_t>(bytes, offsetof(AEHeader, piece_count), kMaxPieces + 1);
+    ExpectRejected(bytes, offsetof(AEHeader, piece_count), "piece_count over 256");
+
+    bytes = write(Quad());
+    Poke<std::uint32_t>(bytes, offsetof(AEHeader, piece_count), 1);
+    Recrc(bytes);
+    ExpectRejected(bytes, offsetof(AEHeader, piece_count), "piece_count without FLAG_HULLS");
+
+    bytes = good;
+    Poke<std::uint32_t>(bytes, section + 4, 3);
+    Poke<std::uint32_t>(bytes, section + 8, 5);
+    Recrc(bytes);
+    ExpectRejected(bytes, section + 4, "a piece of 3 points");
+
+    bytes = good;
+    Poke<std::uint32_t>(bytes, section + 4, 5);
+    Recrc(bytes);
+    ExpectRejected(bytes, section + 4, "piece counts that disagree with piece_point_total");
+
+    bytes = good;
+    Poke<float>(bytes, points, std::nanf(""));
+    Recrc(bytes);
+    ExpectRejected(bytes, points, "a point that is not finite");
+
+    Data data = PiecedQuad();
+    data.pieces[0].points.resize(kMaxPiecePoints + 1, {0, 0, 0});
+    ExpectWriteRejected(data, "a piece of 129 points");
+    data = PiecedQuad();
+    data.pieces[0].points.resize(3);
+    ExpectWriteRejected(data, "a piece of 3 points");
+    data = PiecedQuad();
+    data.pieces[1].points[0][1] = INFINITY;
+    ExpectWriteRejected(data, "a piece point that is not finite");
+}
+
+void TestNoPiecesSameSize() {
+    const std::vector<std::byte> bytes = write(Quad());
+    const auto header = Peek<AEHeader>(bytes, 0);
+    Expect(bytes.size() == kHeaderSize + 4 * kVertexSize + 2 * kTriangleSize + kCrcSize,
+           "a mesh without pieces is as large as in 1.0");
+    Expect(header.piece_count == 0 && header.piece_point_total == 0 && (header.flags & FLAG_HULLS) == 0,
+           "a mesh without pieces has both piece words 0 and no FLAG_HULLS");
+}
+
 void TestGpuMeshWithoutGl() {
     GpuMesh mesh;
     mesh.upload(SkinnedQuad());
@@ -533,9 +629,10 @@ void TestGpuMeshWithoutGl() {
 
 int main() {
     const std::vector<std::function<void()>> tests = {
-        TestSelfTest,         TestHeaderOffsets,  TestEmptyMesh,      TestStaticMeshLayout,
-        TestFullRoundTrip,    TestWeights,        TestComputeHelpers, TestWriteOptions,
-        TestWriterRejects,    TestReaderRejects,  TestGpuMeshWithoutGl,
+        TestSelfTest,         TestHeaderOffsets,     TestEmptyMesh,         TestStaticMeshLayout,
+        TestFullRoundTrip,    TestWeights,           TestComputeHelpers,    TestWriteOptions,
+        TestWriterRejects,    TestReaderRejects,     TestPiecesRoundTrip,   TestVersionOneZeroReads,
+        TestPiecesRejected,   TestNoPiecesSameSize,  TestGpuMeshWithoutGl,
     };
     for (const auto& test : tests) {
         try {

@@ -5,9 +5,10 @@
 // (AddTeapot / AddCylinder / etc.) and will be converted
 // to AMESH later. This module does not implement that instance.
 //
-// File: magic "AESH", version 1.0. Little-endian, tightly packed, no padding,
-// no compression. Triangles only, CCW front faces. Right-handed, Y-up,
-// X-right, Z-forward (the camera looks down -Z). Engine world units.
+// File: magic "AESH", version 1.1 (1.0 still reads). Little-endian, tightly
+// packed, no padding, no compression. Triangles only, CCW front faces.
+// Right-handed, Y-up, X-right, Z-forward (the camera looks down -Z). Engine
+// world units.
 //
 // Layout, from offset 0. Arrays behind a flag are left out when it is clear.
 //     AEHeader    header                          64 bytes
@@ -18,10 +19,17 @@
 //     AEBone      bones[bone_count]               64 bytes each, FLAG_SKINNED
 //     u8          name_blob[name_blob_size]
 //     AESubset    subsets[subset_count]           72 bytes each, FLAG_SUBSETS
+//     u32         piece_recipe                     4 bytes,      FLAG_HULLS
+//     u32         piece_points[piece_count]        4 bytes each, FLAG_HULLS
+//     f32         piece_xyz[piece_point_total][3] 12 bytes each, FLAG_HULLS
 //     u32         crc32 of bytes [0, size - 4)    zlib CRC-32
 //
 // A static mesh is a skinned mesh with no bones. Skins hold global bone
 // indices; subsets are draw and cluster hints and never remap them.
+//
+// Pieces are convex point sets in the mesh's own space that together cover it,
+// for a physics body that cannot use the triangles. piece_recipe names the
+// settings that made them, so a reader can tell when they are stale.
 //
 // GpuMesh vertex attributes, interleaved, 76 bytes per vertex:
 //     location 0  position  3 x float
@@ -33,6 +41,7 @@
 //     location 6  weight    4 x float
 // Build with AE_MESH_NO_GL and GpuMesh does nothing, so tools need no GL context.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -83,7 +92,7 @@ private:
 
 inline constexpr char kMagic[4] = {'A', 'E', 'S', 'H'};
 inline constexpr std::uint16_t kVersionMajor = 1;
-inline constexpr std::uint16_t kVersionMinor = 0;
+inline constexpr std::uint16_t kVersionMinor = 1;
 
 inline constexpr std::size_t kHeaderSize = 64;
 inline constexpr std::size_t kVertexSize = 40;
@@ -99,8 +108,9 @@ inline constexpr std::uint16_t FLAG_SUBSETS = 1u << 2;
 inline constexpr std::uint16_t FLAG_VERTEX_COLOR = 1u << 3;
 inline constexpr std::uint16_t FLAG_TANGENTS = 1u << 4;
 inline constexpr std::uint16_t FLAG_UNORM_UV = 1u << 5;
+inline constexpr std::uint16_t FLAG_HULLS = 1u << 6;
 inline constexpr std::uint16_t kKnownFlags =
-    FLAG_SKINNED | FLAG_LODS | FLAG_SUBSETS | FLAG_VERTEX_COLOR | FLAG_TANGENTS | FLAG_UNORM_UV;
+    FLAG_SKINNED | FLAG_LODS | FLAG_SUBSETS | FLAG_VERTEX_COLOR | FLAG_TANGENTS | FLAG_UNORM_UV | FLAG_HULLS;
 
 inline constexpr std::uint32_t kMaxVertices = 2'000'000;
 inline constexpr std::uint32_t kMaxTriangles = 4'000'000;
@@ -111,6 +121,9 @@ inline constexpr std::uint32_t kMaxNameBlob = 1'048'576;
 inline constexpr std::uint64_t kMaxFileSize = 512ull * 1024 * 1024;
 inline constexpr std::uint32_t kMaxInfluences = 4;
 inline constexpr std::uint32_t kMaxSubsetBones = 26;
+inline constexpr std::uint32_t kMaxPieces = 256;
+inline constexpr std::uint32_t kMinPiecePoints = 4;
+inline constexpr std::uint32_t kMaxPiecePoints = 128;
 
 inline constexpr std::uint16_t kNoBone = 0xFFFF;
 inline constexpr std::uint32_t kNoName = 0xFFFFFFFF;
@@ -139,8 +152,8 @@ struct AEHeader {
     std::uint8_t high_quality_lods;
     float bbox_min[3];
     float bbox_max[3];
-    std::uint32_t reserved1;      // 0
-    std::uint32_t reserved2;      // 0
+    std::uint32_t piece_count;        // 0 if !FLAG_HULLS else 1 to kMaxPieces
+    std::uint32_t piece_point_total;  // 0 if !FLAG_HULLS else the pieces' points, summed
 };
 static_assert(sizeof(AEHeader) == kHeaderSize);
 
@@ -227,6 +240,11 @@ struct LodRange {
     std::uint32_t tri_begin = 0, tri_count = 0;
 };
 
+// A convex set of points in the mesh's own space.
+struct ConvexPiece {
+    std::vector<std::array<float, 3>> points;
+};
+
 struct Data {
     std::uint16_t flags = 0;
     std::vector<Vertex> vertices;
@@ -239,6 +257,9 @@ struct Data {
     // The header's LOD provenance, kept so a read and write round-trips it.
     std::uint8_t lod_generator = kLodGeneratorNone;
     bool high_quality_lods = false;
+    // Convex pieces covering the mesh, and which settings made them. No pieces: no FLAG_HULLS.
+    std::uint32_t piece_recipe = 0;
+    std::vector<ConvexPiece> pieces;
 };
 
 struct ReadOptions {

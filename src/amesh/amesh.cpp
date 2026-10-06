@@ -107,6 +107,7 @@ struct Layout {
     std::uint64_t bones = 0;
     std::uint64_t names = 0;
     std::uint64_t subsets = 0;
+    std::uint64_t pieces = 0;
     std::uint64_t crc = 0;
     std::uint64_t size = 0;
 };
@@ -138,6 +139,11 @@ Layout Plan(const AEHeader& h) {
     if (h.flags & FLAG_SUBSETS) {
         at += std::uint64_t{h.subset_count} * kSubsetSize;
     }
+    l.pieces = at;
+    if (h.flags & FLAG_HULLS) {
+        at += sizeof(std::uint32_t) + std::uint64_t{h.piece_count} * sizeof(std::uint32_t) +
+              std::uint64_t{h.piece_point_total} * 3 * sizeof(float);
+    }
     l.crc = at;
     l.size = at + kCrcSize;
     return l;
@@ -147,21 +153,15 @@ void CheckHeader(const AEHeader& h) {
     if (std::memcmp(h.magic, kMagic, sizeof(kMagic)) != 0) {
         throw AEMeshError(offsetof(AEHeader, magic), "the magic is not \"AESH\"");
     }
-    if (h.version_major != kVersionMajor || h.version_minor != kVersionMinor) {
+    if (h.version_major != kVersionMajor || h.version_minor > kVersionMinor) {
         throw AEMeshError(offsetof(AEHeader, version_major),
-                          "version " + Num(h.version_major) + "." + Num(h.version_minor) + " is not 1.0");
+                          "version " + Num(h.version_major) + "." + Num(h.version_minor) + " is not 1.0 or 1.1");
     }
     if (h.header_size != kHeaderSize) {
         throw AEMeshError(offsetof(AEHeader, header_size), "header_size is " + Num(h.header_size) + ", not 64");
     }
     if ((h.flags & ~kKnownFlags) != 0) {
         throw AEMeshError(offsetof(AEHeader, flags), "unknown flag bits are set: " + Num(h.flags & ~kKnownFlags));
-    }
-    if (h.reserved1 != 0) {
-        throw AEMeshError(offsetof(AEHeader, reserved1), "reserved1 is not 0");
-    }
-    if (h.reserved2 != 0) {
-        throw AEMeshError(offsetof(AEHeader, reserved2), "reserved2 is not 0");
     }
 
     struct Limit {
@@ -198,6 +198,19 @@ void CheckHeader(const AEHeader& h) {
     if (subsets != (h.subset_count >= 1)) {
         throw AEMeshError(offsetof(AEHeader, subset_count),
                           "FLAG_SUBSETS and subset_count " + Num(h.subset_count) + " disagree");
+    }
+
+    const bool hulls = (h.flags & FLAG_HULLS) != 0;
+    if (hulls && h.version_minor == 0) {
+        throw AEMeshError(offsetof(AEHeader, flags), "a 1.0 file cannot have FLAG_HULLS");
+    }
+    if (hulls ? h.piece_count < 1 || h.piece_count > kMaxPieces : h.piece_count != 0 || h.piece_point_total != 0) {
+        throw AEMeshError(offsetof(AEHeader, piece_count),
+                          "FLAG_HULLS and piece_count " + Num(h.piece_count) + " disagree, or it is over 256");
+    }
+    if (h.piece_point_total > std::uint64_t{h.piece_count} * kMaxPiecePoints) {
+        throw AEMeshError(offsetof(AEHeader, piece_point_total),
+                          "piece_point_total " + Num(h.piece_point_total) + " is over the limit");
     }
 
     // Unspecified by the format, so rejected: a generator past 3, a LOD-less
@@ -441,6 +454,32 @@ void CheckSubsets(ByteSpan bytes, const Layout& l) {
     }
 }
 
+void CheckPieces(ByteSpan bytes, const Layout& l) {
+    const AEHeader& h = l.header;
+    if ((h.flags & FLAG_HULLS) == 0) {
+        return;
+    }
+    std::uint64_t total = 0;
+    for (std::uint32_t k = 0; k < h.piece_count; ++k) {
+        const std::uint64_t at = l.pieces + 4 + std::uint64_t{k} * 4;
+        const auto count = Load<std::uint32_t>(bytes, at);
+        if (count < kMinPiecePoints || count > kMaxPiecePoints) {
+            throw AEMeshError(at, "piece " + Num(k) + " has " + Num(count) + " points; it needs 4 to 128");
+        }
+        total += count;
+    }
+    if (total != h.piece_point_total) {
+        throw AEMeshError(l.pieces + 4, "the pieces' point counts sum to " + Num(total) + ", not piece_point_total " +
+                                            Num(h.piece_point_total));
+    }
+    const std::uint64_t points = l.pieces + 4 + std::uint64_t{h.piece_count} * 4;
+    for (std::uint64_t i = 0; i < total * 3; ++i) {
+        if (!Finite({Load<float>(bytes, points + i * 4)})) {
+            throw AEMeshError(points + i * 4, "piece point " + Num(i / 3) + " is not finite");
+        }
+    }
+}
+
 // Everything read() rejects, without building a Data.
 Layout Validate(ByteSpan bytes, const ReadOptions& options) {
     const std::uint64_t size = bytes.size();
@@ -470,6 +509,7 @@ Layout Validate(ByteSpan bytes, const ReadOptions& options) {
     CheckLods(bytes, l);
     CheckBones(bytes, l, options.strict_parents);
     CheckSubsets(bytes, l);
+    CheckPieces(bytes, l);
     return l;
 }
 
@@ -558,6 +598,20 @@ Data Decode(ByteSpan bytes, const Layout& l) {
         out.vert_begin = sub.vert_begin;
         out.vert_count = sub.vert_count;
         out.bones.assign(sub.bones, sub.bones + sub.bone_count);
+    }
+
+    if (h.flags & FLAG_HULLS) {
+        data.piece_recipe = Load<std::uint32_t>(bytes, l.pieces);
+        std::uint64_t point = l.pieces + 4 + std::uint64_t{h.piece_count} * 4;
+        data.pieces.resize(h.piece_count);
+        for (std::uint32_t k = 0; k < h.piece_count; ++k) {
+            const auto count = Load<std::uint32_t>(bytes, l.pieces + 4 + std::uint64_t{k} * 4);
+            data.pieces[k].points.resize(count);
+            for (std::array<float, 3>& p : data.pieces[k].points) {
+                p = {Load<float>(bytes, point), Load<float>(bytes, point + 4), Load<float>(bytes, point + 8)};
+                point += 12;
+            }
+        }
     }
     return data;
 }
@@ -702,6 +756,23 @@ std::vector<std::byte> write(const Data& data, WriteOptions options) {
     if (data.lod_generator > kLodGeneratorMeshoptimizer) {
         throw AEMeshError(offsetof(AEHeader, lod_generator), "lod_generator " + Num(data.lod_generator) + " is unknown");
     }
+    if (data.pieces.size() > kMaxPieces) {
+        throw AEMeshError(offsetof(AEHeader, piece_count), Num(data.pieces.size()) + " pieces is over the limit");
+    }
+    std::uint64_t piece_points = 0;
+    for (std::size_t k = 0; k < data.pieces.size(); ++k) {
+        const auto& points = data.pieces[k].points;
+        if (points.size() < kMinPiecePoints || points.size() > kMaxPiecePoints) {
+            throw AEMeshError(offsetof(AEHeader, piece_point_total),
+                              "piece " + Num(k) + " has " + Num(points.size()) + " points; it needs 4 to 128");
+        }
+        for (const auto& p : points) {
+            if (!Finite({p[0], p[1], p[2]})) {
+                throw AEMeshError(offsetof(AEHeader, piece_point_total), "piece " + Num(k) + " has a point that is not finite");
+            }
+        }
+        piece_points += points.size();
+    }
 
     // One LOD, which read() gives even an empty mesh, is the same as none. Two
     // or more are consecutive, non-empty, and cover every triangle.
@@ -800,6 +871,9 @@ std::vector<std::byte> write(const Data& data, WriteOptions options) {
     if (options.write_uv_unorm_flag && ((data.flags & FLAG_UNORM_UV) || uv_unorm)) {
         flags |= FLAG_UNORM_UV;
     }
+    if (!data.pieces.empty()) {
+        flags |= FLAG_HULLS;
+    }
     const bool tangents = (flags & FLAG_TANGENTS) != 0;
     const bool colors = (flags & FLAG_VERTEX_COLOR) != 0;
 
@@ -815,6 +889,8 @@ std::vector<std::byte> write(const Data& data, WriteOptions options) {
     header.bone_count = static_cast<std::uint16_t>(data.bones.size());
     header.name_blob_size = static_cast<std::uint32_t>(blob.size());
     header.subset_count = static_cast<std::uint16_t>(data.subsets.size());
+    header.piece_count = static_cast<std::uint32_t>(data.pieces.size());
+    header.piece_point_total = static_cast<std::uint32_t>(piece_points);
     if (has_lods) {
         header.lod_generator = data.lod_generator == kLodGeneratorNone ? kLodGeneratorUnknown : data.lod_generator;
         header.high_quality_lods = static_cast<std::uint8_t>(data.high_quality_lods ? 1 : 0);
@@ -902,6 +978,20 @@ std::vector<std::byte> write(const Data& data, WriteOptions options) {
         std::fill(std::begin(packed_subset.bones), std::end(packed_subset.bones), kNoBone);
         std::copy(subset.bones.begin(), subset.bones.end(), packed_subset.bones);
         Store(out, l.subsets + s * kSubsetSize, packed_subset);
+    }
+
+    if (!data.pieces.empty()) {
+        Store(out, l.pieces, data.piece_recipe);
+        std::uint64_t point = l.pieces + 4 + data.pieces.size() * 4;
+        for (std::size_t k = 0; k < data.pieces.size(); ++k) {
+            Store(out, l.pieces + 4 + k * 4, static_cast<std::uint32_t>(data.pieces[k].points.size()));
+            for (const auto& p : data.pieces[k].points) {
+                Store(out, point, p[0]);
+                Store(out, point + 4, p[1]);
+                Store(out, point + 8, p[2]);
+                point += 12;
+            }
+        }
     }
 
     Store(out, l.crc, crc32(ByteSpan(out).first(static_cast<std::size_t>(l.crc))));
@@ -1031,6 +1121,15 @@ bool amesh_self_test() {
             if (std::memcmp(triangle_back.vertices[i].p, triangle.vertices[i].p, sizeof(float) * 3) != 0) {
                 return false;
             }
+        }
+
+        Data pieced = triangle;
+        pieced.piece_recipe = 1;
+        pieced.pieces.push_back(ConvexPiece{{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}}});
+        const Data pieced_back = read(write(pieced));
+        if (pieced_back.pieces.size() != 1 || pieced_back.pieces[0].points != pieced.pieces[0].points ||
+            pieced_back.piece_recipe != 1) {
+            return false;
         }
 
         // 2) Two triangles on two bones keep their bones and weights.

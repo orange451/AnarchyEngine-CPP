@@ -155,9 +155,9 @@ void TestStaticMeshLayout() {
     Expect(bytes.size() == kHeaderSize + 4 * kVertexSize + 2 * kTriangleSize + kCrcSize,
            "a static mesh has no skins, bones, LODs, or subsets");
     const auto header = Peek<AEHeader>(bytes, 0);
-    Expect(std::memcmp(header.magic, "AESH", 4) == 0 && header.version_major == 1 && header.version_minor == 1 &&
+    Expect(std::memcmp(header.magic, "AESH", 4) == 0 && header.version_major == 1 && header.version_minor == 0 &&
                header.header_size == 64,
-           "the header says AESH 1.1, 64 bytes");
+           "the header says AESH 1.0, 64 bytes");
     Expect(header.flags == FLAG_UNORM_UV, "a white quad with UVs in [0,1] sets only FLAG_UNORM_UV");
     Expect(header.bbox_min[0] == 0 && header.bbox_max[0] == 1 && header.bbox_max[1] == 1 && header.bbox_max[2] == 0,
            "the writer computes the bounding box");
@@ -510,7 +510,7 @@ void TestPiecesRoundTrip() {
     const Data data = PiecedQuad();
     const std::vector<std::byte> bytes = write(data);
     const auto header = Peek<AEHeader>(bytes, 0);
-    Expect(header.version_major == 1 && header.version_minor == 1, "a file is written as 1.1");
+    Expect(header.version_major == 1 && header.version_minor == 1, "a file with pieces is written as 1.1");
     Expect((header.flags & FLAG_HULLS) != 0, "pieces set FLAG_HULLS");
     Expect(header.piece_count == 3 && header.piece_point_total == 13, "the header counts the pieces and their points");
     Expect(bytes.size() == kHeaderSize + 4 * kVertexSize + 2 * kTriangleSize + 4 + 3 * 4 + 13 * 12 + kCrcSize,
@@ -523,9 +523,7 @@ void TestPiecesRoundTrip() {
 }
 
 void TestVersionOneZeroReads() {
-    std::vector<std::byte> bytes = write(Quad());
-    Poke<std::uint16_t>(bytes, offsetof(AEHeader, version_minor), 0);
-    Recrc(bytes);
+    const std::vector<std::byte> bytes = write(Quad());
     const Data back = read(bytes);
     Expect(back.vertices.size() == 4 && back.pieces.empty(), "a 1.0 file reads, with no pieces");
 }
@@ -583,6 +581,10 @@ void TestNoPiecesSameSize() {
            "a mesh without pieces is as large as in 1.0");
     Expect(header.piece_count == 0 && header.piece_point_total == 0 && (header.flags & FLAG_HULLS) == 0,
            "a mesh without pieces has both piece words 0 and no FLAG_HULLS");
+    Expect(header.version_major == 1 && header.version_minor == 0, "a file without pieces is written as 1.0");
+    Data stripped = read(write(PiecedQuad()));
+    stripped.pieces.clear();
+    Expect(Peek<AEHeader>(write(stripped), 0).version_minor == 0, "a file that loses its pieces goes back to 1.0");
 }
 
 void TestGpuMeshWithoutGl() {

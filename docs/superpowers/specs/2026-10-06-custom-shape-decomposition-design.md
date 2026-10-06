@@ -37,7 +37,7 @@ The user does not choose between two shapes. `Custom` means "collide as this Mes
 
 ### 1. AMESH 1.1 (`amesh/amesh.{hpp,cpp}`)
 
-`kVersionMinor` becomes 1. The reader accepts 1.0 and 1.1. A 1.0 file with `FLAG_HULLS` set is rejected. `write()` always writes 1.1, so any rewrite upgrades a 1.0 file, and a file nobody rewrites stays 1.0.
+`kVersionMinor` becomes 1. The reader accepts 1.0 and 1.1. A 1.0 file with `FLAG_HULLS` set is rejected. `write()` writes 1.1 only when there are pieces and 1.0 otherwise, so a mesh without pieces stays readable by builds from before pieces, and a file that loses its pieces goes back to 1.0.
 
 The header's two reserved words get names and keep their offsets, so the header stays 64 bytes:
 
@@ -150,9 +150,9 @@ V-HACD is header-only, so it needs no CMake subdirectory of its own. V-HACD is f
 
 **`tests/AmeshTest.cpp`**
 - A1: Data with three pieces round-trips, with points, counts, and recipe intact. The file is 1.1 with `FLAG_HULLS` set.
-- A2: A 1.0 file (built by hand) reads, with no pieces.
+- A2: A 1.0 file (the writer's output for a mesh without pieces) reads, with no pieces.
 - A3: A 1.0 file with `FLAG_HULLS` set is rejected, and so are `piece_count` above 256, a piece with fewer than 4 or more than 128 points, a `piece_point_total` that disagrees with the counts, and a non-finite point.
-- A4: Data without pieces writes a file of the same size as a 1.0 file of the same mesh, with both piece words 0.
+- A4: Data without pieces writes a 1.0 file of the same size as before pieces, with both piece words 0.
 
 **`sandbox/convex_decomposition_tests.cpp` (new)**
 - D1: An L of two boxes gives at least two pieces, each with at most 64 points, all within the mesh's bounds.

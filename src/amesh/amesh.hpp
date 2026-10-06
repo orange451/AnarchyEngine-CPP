@@ -5,8 +5,9 @@
 // (AddTeapot / AddCylinder / etc.) and will be converted
 // to AMESH later. This module does not implement that instance.
 //
-// File: magic "AESH", version 1.1 (1.0 still reads). Little-endian, tightly
-// packed, no padding, no compression. Triangles only, CCW front faces.
+// File: magic "AESH", version 1.0 without pieces and 1.1 with them, so a
+// mesh without pieces still reads in builds from before pieces. Little-endian,
+// tightly packed, no padding, no compression. Triangles only, CCW front faces.
 // Right-handed, Y-up, X-right, Z-forward (the camera looks down -Z). Engine
 // world units.
 //

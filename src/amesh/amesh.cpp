@@ -880,7 +880,8 @@ std::vector<std::byte> write(const Data& data, WriteOptions options) {
     AEHeader header{};
     std::memcpy(header.magic, kMagic, sizeof(kMagic));
     header.version_major = kVersionMajor;
-    header.version_minor = kVersionMinor;
+    // 1.0 when there are no pieces, which older readers still take.
+    header.version_minor = data.pieces.empty() ? 0 : kVersionMinor;
     header.header_size = static_cast<std::uint16_t>(kHeaderSize);
     header.flags = flags;
     header.vertex_count = static_cast<std::uint32_t>(vertex_count);

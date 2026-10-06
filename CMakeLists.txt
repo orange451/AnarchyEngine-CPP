@@ -90,6 +90,7 @@ set(STUDIO_SOURCES
     src/amesh/amesh_gl.cpp
     src/runner/GameView.cpp
     src/runner/ProfilerOverlay.cpp
+    src/runner/UiFrameProfile.cpp
     src/runner/GuiLayer.cpp
     src/ide/IdePane.cpp
     src/ide/IdeDock.cpp
@@ -699,6 +700,7 @@ add_executable(studio-tests
     tests/GuiImageTest.cpp
     tests/BillboardLayerTest.cpp
     tests/ProfilerOverlayTest.cpp
+    tests/UiFrameProfileTest.cpp
 )
 target_link_libraries(studio-tests PRIVATE studio)
 

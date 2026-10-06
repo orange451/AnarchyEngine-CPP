@@ -17,6 +17,7 @@
 #include "SceneService.hpp"
 #include "SkyMath.hpp"
 #include "ScriptRuntime.hpp"
+#include "UiFrameProfile.hpp"
 #include "amesh.hpp"
 #include "gl.hpp"
 #include "ide/IdeIcons.hpp"
@@ -822,11 +823,7 @@ void GameView::renderChildren(jadefx::UiRenderer&, float) {}
 
 void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
     // The window paints on this thread, the profiler's UI row.
-    static thread_local bool profiled = false;
-    if (!profiled) {
-        profiler::register_thread("UI");
-        profiled = true;
-    }
+    register_ui_thread();
     PROFILE_SCOPE("Scene View", profiler::Group::Render);
     notePaint();
     syncPointerLock();

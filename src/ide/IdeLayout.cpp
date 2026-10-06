@@ -1,5 +1,6 @@
 #include "IdeLayout.hpp"
 #include "runner/ProfilerOverlay.hpp"
+#include "runner/UiFrameProfile.hpp"
 
 #include "AiClientsPage.hpp"
 #include "ZoomPopover.hpp"
@@ -448,6 +449,8 @@ void IdeLayout::attachFrame(jadefx::Stage& stage) {
     jadefx::Stage::setZoom(preferences_.zoom());
     resizeWindow_ =[&stage](int width, int height) { stage.setSize(width, height); };
     stage.setFrameTail([this]() { flushFrame(); });
+    // The window's own work each frame, on the profiler's UI row.
+    runner::profile_ui_frames(stage);
     LeaveFieldsOnEscape(stage);
     // The close button, Alt+F4, and Cmd+Q ask about unsaved work first.
     stage.setOnCloseRequest([this]() {

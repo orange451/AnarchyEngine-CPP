@@ -256,6 +256,7 @@ void Engine::simulation_loop() {
     set_thread_role(ThreadRole::Simulation);
     profiler::register_thread("Sim");
     static const profiler::ScopeId kLockWait = profiler::intern("Lock wait", profiler::Group::Engine);
+    static const profiler::ScopeId kPaintWait = profiler::intern("Paint wait", profiler::Group::Engine);
     {
         std::unique_lock<std::mutex> guard(start_mu_);
         simulation_id_ = std::this_thread::get_id();
@@ -435,6 +436,7 @@ void Engine::simulation_loop() {
         } else if (wait_for_client) {
             // Steps with the window's paint, as the uncapped render loop does.
             // stop() wakes this wait as well.
+            profiler::Scope wait(kPaintWait);
             std::unique_lock<std::mutex> guard(client_frame_mu_);
             client_frame_cv_.wait_until(guard, frame_start + kSimulationClientFallback, [&] {
                 return !running_.load() || client_frames_ != client_seen;
@@ -449,6 +451,7 @@ void Engine::render_loop() {
     static const profiler::ScopeId kStep = profiler::intern("Render step", profiler::Group::Render);
     static const profiler::ScopeId kPrepare = profiler::intern("Prepare", profiler::Group::Render);
     static const profiler::ScopeId kLockWait = profiler::intern("Lock wait", profiler::Group::Engine);
+    static const profiler::ScopeId kPaintWait = profiler::intern("Paint wait", profiler::Group::Engine);
     {
         std::unique_lock<std::mutex> guard(start_mu_);
         render_id_ = std::this_thread::get_id();
@@ -585,7 +588,9 @@ void Engine::render_loop() {
         } else if (wait_for_client) {
             // The window paints much slower than an empty step. Waiting here keeps
             // the step with that paint. The timeout only covers a window that is
-            // not painting; stop() wakes this wait as well.
+            // not painting; stop() wakes this wait as well. Recorded, so the frame
+            // shows the step waiting for the paint rather than a gap after it.
+            profiler::Scope wait(kPaintWait);
             std::unique_lock<std::mutex> guard(client_frame_mu_);
             client_frame_cv_.wait_for(guard, std::chrono::milliseconds(50), [&] {
                 return !running_.load() || client_frames_ != client_seen;

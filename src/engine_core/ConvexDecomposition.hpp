@@ -5,12 +5,20 @@
 
 #include "Vector3.hpp"
 #include "amesh.hpp"
+#include "types.hpp"
 
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace engine_core {
 
+class DataModel;
 class Mesh;
 
 // Which settings made a set of pieces. Bump it whenever a setting in
@@ -40,5 +48,46 @@ std::vector<anarchy::amesh::ConvexPiece> pieces_for(const Mesh& mesh, const std:
 // For tests: how many times decompose has run, and forgetting every cached piece.
 std::uint64_t decompose_count();
 void clear_piece_cache();
+
+// The studio's decompositions: one worker thread that splits the Meshes of
+// Custom PhysicsObjects while the place is stopped, so playing finds their
+// pieces in their files.
+class ConvexDecomposer {
+public:
+    ConvexDecomposer();
+    // Drops work that has not started, and joins the worker.
+    ~ConvexDecomposer();
+    ConvexDecomposer(const ConvexDecomposer&) = delete;
+    ConvexDecomposer& operator=(const ConvexDecomposer&) = delete;
+
+    // On the gameplay thread, with the write lock, while stopped. Writes
+    // finished pieces into their Meshes' files when the files are as they
+    // were, then queues each Custom's Mesh whose file has no pieces of
+    // kRecipe, once per file_stamp.
+    void update(DataModel& game);
+    // No work waiting or running. Finished work waits for the next update.
+    bool idle() const;
+
+private:
+    struct Job {
+        InstanceId mesh = 0;
+        std::string stamp;
+        std::vector<Vec3> points;
+        std::vector<std::uint32_t> triangles;
+        std::vector<anarchy::amesh::ConvexPiece> pieces;
+    };
+    void work();
+
+    mutable std::mutex mutex_;
+    std::condition_variable wake_;
+    std::deque<Job> waiting_;
+    std::vector<Job> done_;
+    bool running_ = false;
+    bool stopping_ = false;
+    // The file_stamp each Mesh was last queued at. Gameplay thread only.
+    std::unordered_map<InstanceId, std::string> queued_;
+    std::vector<InstanceId> bodies_;
+    std::thread thread_;
+};
 
 }  // namespace engine_core

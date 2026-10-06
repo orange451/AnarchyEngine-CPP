@@ -1,6 +1,8 @@
 #include "ConvexDecomposition.hpp"
 
 #include "AssetInstances.hpp"
+#include "DataModel.hpp"
+#include "PhysicsObject.hpp"
 
 #pragma warning(push, 0)
 #define ENABLE_VHACD_IMPLEMENTATION 1
@@ -155,6 +157,97 @@ void clear_piece_cache() {
     Cache& kept = cache();
     std::lock_guard<std::mutex> lock(kept.mutex);
     kept.entries.clear();
+}
+
+ConvexDecomposer::ConvexDecomposer() : thread_([this] { work(); }) {}
+
+ConvexDecomposer::~ConvexDecomposer() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stopping_ = true;
+        waiting_.clear();
+    }
+    wake_.notify_all();
+    thread_.join();
+}
+
+bool ConvexDecomposer::idle() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return waiting_.empty() && !running_;
+}
+
+void ConvexDecomposer::work() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    while (true) {
+        wake_.wait(lock, [this] { return stopping_ || !waiting_.empty(); });
+        if (stopping_) {
+            return;
+        }
+        Job job = std::move(waiting_.front());
+        waiting_.pop_front();
+        running_ = true;
+        lock.unlock();
+        job.pieces = decompose(job.points, job.triangles);
+        lock.lock();
+        running_ = false;
+        done_.push_back(std::move(job));
+    }
+}
+
+void ConvexDecomposer::update(DataModel& game) {
+    std::vector<Job> finished;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        finished.swap(done_);
+    }
+    for (Job& job : finished) {
+        // Right for its geometry whatever became of the Mesh.
+        remember_pieces(job.points, job.triangles, job.pieces);
+        auto* mesh = dynamic_cast<Mesh*>(game.instance(job.mesh));
+        if (mesh == nullptr || job.pieces.empty() || mesh->file_stamp() != job.stamp) {
+            continue;
+        }
+        if (!mesh->store_pieces(kRecipe, std::move(job.pieces))) {
+            // Its own write is not a change to queue again for.
+            queued_[job.mesh] = mesh->file_stamp();
+        }
+    }
+
+    game.physics_bodies(bodies_);
+    for (const InstanceId id : bodies_) {
+        const auto* object = dynamic_cast<const PhysicsObject*>(game.instance(id));
+        if (object == nullptr || object->shape() != PhysicsObject::Shape::Custom) {
+            continue;
+        }
+        const auto* mesh = dynamic_cast<const Mesh*>(game.instance(object->mesh_id()));
+        if (mesh == nullptr) {
+            continue;
+        }
+        const std::string stamp = mesh->file_stamp();
+        if (stamp.empty()) {
+            continue;
+        }
+        const auto seen = queued_.find(mesh->id());
+        if (seen != queued_.end() && seen->second == stamp) {
+            continue;
+        }
+        queued_[mesh->id()] = stamp;
+        std::vector<anarchy::amesh::ConvexPiece> stored;
+        if (mesh->file_pieces(kRecipe, stored)) {
+            continue;
+        }
+        Job job;
+        job.mesh = mesh->id();
+        job.stamp = stamp;
+        if (mesh->vertex_positions(job.points, &job.triangles)) {
+            continue;
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            waiting_.push_back(std::move(job));
+        }
+        wake_.notify_one();
+    }
 }
 
 }  // namespace engine_core

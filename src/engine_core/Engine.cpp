@@ -355,6 +355,10 @@ void Engine::simulation_loop() {
                     game_.drain_commands();
                     drain_edits();
                 }
+                if (!game_.simulation_running()) {
+                    PROFILE_SCOPE("Convex decomposition", profiler::Group::Physics);
+                    decomposer_.update(game_);
+                }
                 {
                     PROFILE_SCOPE("PreAnimation", profiler::Group::Engine);
                     scheduler_.run_phase(Phase::PreAnimation, step_dt);

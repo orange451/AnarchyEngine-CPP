@@ -6,11 +6,17 @@
 #include "AssetInstances.hpp"
 #include "ConvexDecomposition.hpp"
 #include "MeshShapes.hpp"
+#include "PhysicsObject.hpp"
 #include "amesh.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -89,4 +95,135 @@ TEST_CASE("D2 a mesh decomposes once, then comes from the cache", "[decompositio
     engine_core::remember_pieces(moved.points, moved.triangles, {});
     REQUIRE(engine_core::known_pieces(mesh, moved.points, moved.triangles, known));
     REQUIRE(known.empty());
+}
+
+namespace {
+
+engine_core::LuaSlot instance_slot(engine_core::InstanceId id) {
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = id;
+    return slot;
+}
+
+// A stopped game with a resources folder, a Mesh file holding an L, and the queue.
+struct QueueRig {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::ConvexDecomposer decomposer;
+    std::filesystem::path resources;
+    engine_core::Mesh* mesh = nullptr;
+
+    QueueRig() {
+        // A folder of its own, so two rigs at once keep their files.
+        static std::atomic<int> rigs{0};
+        resources = std::filesystem::temp_directory_path() /
+                    ("anarchy-decomposer-test-" + std::to_string(rigs++));
+        std::filesystem::remove_all(resources);
+        std::filesystem::create_directories(resources);
+        game.set_resources_root(resources);
+        mesh = &game.create<engine_core::Mesh>();
+        REQUIRE_FALSE(mesh->edit_geometry([](anarchy::amesh::Data& data) {
+            engine_core::add_box(data, Vec3{3.f, 1.f, 1.f}, Vec3{1.5f, 0.5f, 0.f});
+            engine_core::add_box(data, Vec3{1.f, 2.f, 1.f}, Vec3{0.5f, 2.f, 0.f});
+        }));
+    }
+    ~QueueRig() {
+        std::error_code ignored;
+        std::filesystem::remove_all(resources, ignored);
+    }
+
+    engine_core::PhysicsObject& custom(bool anchored) {
+        auto& object = game.create<engine_core::PhysicsObject>();
+        REQUIRE_FALSE(object.set_shape(static_cast<int>(engine_core::PhysicsObject::Shape::Custom)));
+        REQUIRE_FALSE(object.set_mesh(instance_slot(mesh->id())));
+        object.set_anchored(anchored);
+        game.set_parent(object.id(), workspace_of(game));
+        return object;
+    }
+
+    // Waits for the worker, at most ten seconds.
+    void wait() {
+        for (int tries = 0; tries < 1000 && !decomposer.idle(); ++tries) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        REQUIRE(decomposer.idle());
+    }
+
+    bool has_pieces() const {
+        std::vector<anarchy::amesh::ConvexPiece> found;
+        return mesh->file_pieces(engine_core::kRecipe, found);
+    }
+};
+
+}  // namespace
+
+TEST_CASE("Q1 a stopped update writes a Custom's pieces into its Mesh's file, once per Mesh", "[decomposition]") {
+    QueueRig rig;
+    rig.custom(true);
+    rig.custom(false);
+    const std::uint64_t before = engine_core::decompose_count();
+    rig.decomposer.update(rig.game);
+    rig.wait();
+    REQUIRE_FALSE(rig.has_pieces());
+    rig.decomposer.update(rig.game);
+    REQUIRE(rig.has_pieces());
+    REQUIRE(engine_core::decompose_count() == before + 1);
+    // Already stored: nothing more to do.
+    rig.decomposer.update(rig.game);
+    REQUIRE(rig.decomposer.idle());
+    REQUIRE(engine_core::decompose_count() == before + 1);
+}
+
+TEST_CASE("Q2 a result for a Mesh edited or deleted since is dropped", "[decomposition]") {
+    QueueRig rig;
+    rig.custom(false);
+    rig.decomposer.update(rig.game);
+    REQUIRE_FALSE(rig.mesh->edit_geometry([](anarchy::amesh::Data& data) {
+        engine_core::add_box(data, Vec3{1.f, 1.f, 1.f}, Vec3{5.f, 0.f, 0.f});
+    }));
+    rig.wait();
+    // The stale result is dropped, and the new geometry is queued.
+    rig.decomposer.update(rig.game);
+    REQUIRE_FALSE(rig.has_pieces());
+    rig.wait();
+    rig.decomposer.update(rig.game);
+    REQUIRE(rig.has_pieces());
+
+    QueueRig other;
+    other.custom(false);
+    other.decomposer.update(other.game);
+    other.game.destroy(other.mesh->id());
+    other.wait();
+    other.decomposer.update(other.game);
+    REQUIRE(other.decomposer.idle());
+}
+
+TEST_CASE("Q3 nothing is written while playing; a result waits for Stop", "[decomposition]") {
+    QueueRig rig;
+    rig.custom(false);
+    rig.decomposer.update(rig.game);
+    rig.wait();
+    const std::string stamp = rig.mesh->file_stamp();
+    rig.game.capture_place();
+    rig.game.start_simulation();
+    // The Engine never updates the queue while playing; Stop brings the result in.
+    rig.game.stop_simulation();
+    REQUIRE(rig.mesh->file_stamp() == stamp);
+    rig.decomposer.update(rig.game);
+    REQUIRE(rig.has_pieces());
+}
+
+TEST_CASE("Q4 a Mesh that splits into nothing is not queued again until it changes", "[decomposition]") {
+    QueueRig rig;
+    REQUIRE_FALSE(rig.mesh->edit_geometry([](anarchy::amesh::Data& data) { data = anarchy::amesh::Data{}; }));
+    rig.custom(false);
+    const std::uint64_t before = engine_core::decompose_count();
+    for (int frame = 0; frame < 5; ++frame) {
+        rig.decomposer.update(rig.game);
+        rig.wait();
+    }
+    // An empty Mesh has no points: nothing to queue at all.
+    REQUIRE(engine_core::decompose_count() == before);
+    REQUIRE_FALSE(rig.has_pieces());
 }

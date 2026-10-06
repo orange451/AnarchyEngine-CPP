@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AudioWorld.hpp"
+#include "ConvexDecomposition.hpp"
 #include "DataModel.hpp"
 #include "Game.hpp"
 #include "IClock.hpp"
@@ -125,6 +126,8 @@ private:
     std::unique_ptr<ScriptRuntime> scripts_;
     // PhysicsObject bodies, stepped in step_physics while the place plays.
     PhysicsWorld physics_;
+    // Splits Custom PhysicsObjects' Meshes into convex pieces while stopped.
+    ConvexDecomposer decomposer_;
     // SoundEmitter voices, stepped after the scripts each frame while the place plays.
     AudioWorld audio_;
     IRenderer* renderer_ = nullptr;

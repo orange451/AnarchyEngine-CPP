@@ -12,7 +12,9 @@
 namespace engine_core {
 
 class DataModel;
+class PhysicsBase;
 class PhysicsObject;
+class PlayerController;
 
 // The Box3D world behind PhysicsObject. Engine::step_physics calls step once
 // per physics substep while the place plays, before Heartbeat. Only this
@@ -20,7 +22,7 @@ class PhysicsObject;
 //
 // Each step, on SimulationThread under the step lock:
 //   1. A Stop since the last step (a new world_generation) drops every body.
-//   2. Every PhysicsObject in Workspace, at any depth, gets a body; one that
+//   2. Every PhysicsBase in Workspace, at any depth, gets a body; one that
 //      left Workspace or was destroyed loses its body. Of several naming one
 //      GameObject, the first in tree order wins, and each other warns once.
 //   3. What scripts and Properties changed since the last step goes into the
@@ -65,14 +67,15 @@ public:
     // A body is centered when its shape is made, and again when its
     // GameObject's Prefab changes or something other than physics moves the
     // GameObject. A Prefab's Models or Meshes changing during play do not
-    // move a body that exists.
-    static Vec3 shape_center(const DataModel& game, const PhysicsObject& object);
+    // move a body that exists. The origin for a PlayerController, which is
+    // never recentered.
+    static Vec3 shape_center(const DataModel& game, const PhysicsBase& object);
 
     // What object's Size is multiplied by: the Scale of the GameObject it
     // moves, or 1 when it moves none. Its Mass stays as given. A body is
     // made again when that Scale changes. Needs the DataModel lock; a read
-    // lock is enough.
-    static float shape_scale(const DataModel& game, const PhysicsObject& object);
+    // lock is enough. 1 for a PlayerController, which is never scaled.
+    static float shape_scale(const DataModel& game, const PhysicsBase& object);
 
     // The edges of what a body made now for object would collide as, for the
     // Scene View to draw: line segments into lines, two points each, in the
@@ -89,6 +92,10 @@ public:
     // Where a body made at transform is: its position and rotation, with any
     // scale taken out.
     static Matrix4 body_pose(const Matrix4& transform);
+    // A PlayerController's edges, as collision_outline gives a PhysicsObject's:
+    // its cylinder, from hover_gap() above its feet up to Height, and one
+    // line from its feet up to the cylinder's bottom, in the body's space.
+    static void collision_outline(const PlayerController& controller, std::vector<Vec3>& lines);
 
 private:
     struct Impl;

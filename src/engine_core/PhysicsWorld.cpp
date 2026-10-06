@@ -6,6 +6,7 @@
 #include "LuaApi.hpp"
 #include "MeshShapes.hpp"
 #include "PhysicsObject.hpp"
+#include "PlayerController.hpp"
 
 #pragma warning(push, 0)
 #include "box3d/box3d.h"
@@ -295,6 +296,8 @@ struct PhysicsWorld::Impl {
         b3ShapeId shape = b3_nullShapeId;
         // The shape's volume, which turns Mass into a density.
         float volume = 1.f;
+        // A PlayerController's: an upright cylinder, never recentered or scaled.
+        bool controller = false;
         // An anchored Custom's triangles, which its shape points into.
         b3MeshData* mesh = nullptr;
         // The GameObject it moves, or 0, and the Transform it last gave it.
@@ -384,7 +387,7 @@ struct PhysicsWorld::Impl {
         claims.clear();
         bool shared = false;
         for (InstanceId id : eligible) {
-            const auto* object = dynamic_cast<PhysicsObject*>(game.instance(id));
+            const auto* object = dynamic_cast<PhysicsBase*>(game.instance(id));
             if (object == nullptr) {
                 continue;
             }
@@ -398,12 +401,12 @@ struct PhysicsWorld::Impl {
             first_in_tree_order(game);
         }
         for (const auto& [id, target] : wanted) {
-            auto* object = dynamic_cast<PhysicsObject*>(game.instance(id));
+            auto* object = dynamic_cast<PhysicsBase*>(game.instance(id));
             if (target != 0 && claims[target] != id) {
                 if (!object->warned_shared) {
                     object->warned_shared = true;
-                    say("PhysicsObject " + game.name(id) + " has no body: an earlier PhysicsObject already moves " +
-                        game.name(target));
+                    say(std::string(object->class_name()) + " " + game.name(id) +
+                        " has no body: an earlier body already moves " + game.name(target));
                 }
                 continue;
             }
@@ -430,7 +433,7 @@ struct PhysicsWorld::Impl {
         while (!stack.empty()) {
             const InstanceId id = stack.back();
             stack.pop_back();
-            if (const auto* object = dynamic_cast<const PhysicsObject*>(game.instance(id))) {
+            if (const auto* object = dynamic_cast<const PhysicsBase*>(game.instance(id))) {
                 if (const InstanceId target = object->driven_game_object(); target != 0) {
                     claims.emplace(target, id);
                 }
@@ -452,7 +455,7 @@ struct PhysicsWorld::Impl {
         bodies.erase(found);
     }
 
-    void keep(DataModel& game, PhysicsObject& object, InstanceId target) {
+    void keep(DataModel& game, PhysicsBase& object, InstanceId target) {
         auto found = bodies.find(object.id());
         if (found != bodies.end() && found->second.driven != target) {
             destroy(object.id());
@@ -471,7 +474,10 @@ struct PhysicsWorld::Impl {
     // A GameObject with another Prefab, or one moved or scaled by someone
     // else (moved), may center the shape elsewhere: it is made again there.
     // One with another Scale makes it again at that size.
-    void recenter(DataModel& game, PhysicsObject& object, Body& record, bool moved) {
+    void recenter(DataModel& game, PhysicsBase& object, Body& record, bool moved) {
+        if (record.controller) {
+            return;
+        }
         const GameObject* driven = record.driven != 0 ? game.game_object(record.driven) : nullptr;
         if (driven == nullptr) {
             return;
@@ -488,7 +494,7 @@ struct PhysicsWorld::Impl {
 
     // ---- Bodies -------------------------------------------------------
 
-    std::unordered_map<InstanceId, Body>::iterator create(DataModel& game, PhysicsObject& object, InstanceId target) {
+    std::unordered_map<InstanceId, Body>::iterator create(DataModel& game, PhysicsBase& object, InstanceId target) {
         object.take_dirty();
         Body record;
         record.driven = target;
@@ -498,12 +504,23 @@ struct PhysicsWorld::Impl {
             record.driven_pose = start;
         }
         b3BodyDef def = b3DefaultBodyDef();
+        const auto* rigid = dynamic_cast<PhysicsObject*>(&object);
+        if (dynamic_cast<PlayerController*>(&object) != nullptr) {
+            // Upright, it never turns, and it never sleeps under its hover.
+            start = upright_transform(start);
+            def.motionLocks.angularX = true;
+            def.motionLocks.angularY = true;
+            def.motionLocks.angularZ = true;
+            def.enableSleep = false;
+        }
         def.type = object.anchored() ? b3_staticBody : b3_dynamicBody;
         pose_of(start, def.position, def.rotation);
         def.linearVelocity = to_b3(object.velocity());
-        def.angularVelocity = to_b3(object.angular_velocity());
         def.linearDamping = static_cast<float>(object.linear_damping());
-        def.angularDamping = static_cast<float>(object.angular_damping());
+        if (rigid != nullptr) {
+            def.angularVelocity = to_b3(rigid->angular_velocity());
+            def.angularDamping = static_cast<float>(rigid->angular_damping());
+        }
         def.userData = user_data(object.id());
         record.body = b3CreateBody(world, &def);
         make_shape(game, object, record);
@@ -514,9 +531,53 @@ struct PhysicsWorld::Impl {
         return bodies.emplace(object.id(), record).first;
     }
 
+    // Puts the body's shape on it, replacing any it had: a PlayerController's
+    // cylinder, or a PhysicsObject's Shape.
+    void make_shape(DataModel& game, PhysicsBase& object, Body& record) {
+        if (auto* controller = dynamic_cast<PlayerController*>(&object)) {
+            make_controller_shape(*controller, record);
+        } else if (auto* body = dynamic_cast<PhysicsObject*>(&object)) {
+            make_object_shape(game, *body, record);
+        }
+    }
+
+    // An upright cylinder of Radius from hover_gap() above the feet (the
+    // body's origin) up to Height, with no friction and no bounce.
+    void make_controller_shape(PlayerController& controller, Body& record) {
+        drop_shape(record);
+        record.controller = true;
+        record.center = Vec3{};
+        record.scale = 1.f;
+        record.prefab.clear();
+        const float radius = static_cast<float>(controller.radius());
+        const float gap = static_cast<float>(controller.hover_gap());
+        const float tall = static_cast<float>(controller.height()) - gap;
+        primitive_points(PhysicsObject::Shape::Cylinder, Vec3{2.f * radius, tall, 2.f * radius},
+                         Vec3{0.f, gap + tall * 0.5f, 0.f}, points);
+        b3ShapeDef def = b3DefaultShapeDef();
+        def.baseMaterial.friction = 0.f;
+        def.baseMaterial.restitution = 0.f;
+        def.userData = user_data(controller.id());
+        def.updateBodyMass = false;
+        if (b3HullData* hull = build_hull(points)) {
+            record.volume = b3ComputeHullMass(hull, 1.f).mass;
+            def.density = density(controller, record.volume);
+            record.shape = b3CreateHullShape(record.body, &def, hull);
+            b3DestroyHull(hull);
+        }
+        if (!b3Shape_IsValid(record.shape)) {
+            const b3BoxHull box =
+                b3MakeOffsetBoxHull(radius, tall * 0.5f, radius, b3Vec3{0.f, gap + tall * 0.5f, 0.f});
+            record.volume = 4.f * radius * radius * tall;
+            def.density = density(controller, record.volume);
+            record.shape = b3CreateHullShape(record.body, &def, &box.base);
+        }
+        b3Body_ApplyMassFromShapes(record.body);
+    }
+
     // Puts the object's Shape on the body, replacing any shape it had, with
     // Friction, Bounciness, and a density that gives it its Mass.
-    void make_shape(DataModel& game, PhysicsObject& object, Body& record) {
+    void make_object_shape(DataModel& game, PhysicsObject& object, Body& record) {
         drop_shape(record);
         b3ShapeDef def = b3DefaultShapeDef();
         def.baseMaterial.friction = static_cast<float>(object.friction());
@@ -597,7 +658,7 @@ struct PhysicsWorld::Impl {
         b3Body_ApplyMassFromShapes(record.body);
     }
 
-    static float density(const PhysicsObject& object, float volume) {
+    static float density(const PhysicsBase& object, float volume) {
         return static_cast<float>(object.mass()) / std::max(volume, 1e-9f);
     }
 
@@ -678,15 +739,16 @@ struct PhysicsWorld::Impl {
     }
 
     // What writes changed since the last step, into the body.
-    void push(DataModel& game, PhysicsObject& object, Body& record) {
+    void push(DataModel& game, PhysicsBase& object, Body& record) {
         const std::uint32_t dirty = object.take_dirty();
         if (dirty == 0) {
             return;
         }
+        auto* rigid = dynamic_cast<PhysicsObject*>(&object);
         // Anchoring a Custom turns its hull into its whole mesh, and back. The
         // old shape goes first, so a mesh is never on a dynamic body.
-        const bool custom_type = (dirty & PhysicsObject::kDirtyType) != 0 &&
-                                 object.shape() == PhysicsObject::Shape::Custom;
+        const bool custom_type = rigid != nullptr && (dirty & PhysicsObject::kDirtyType) != 0 &&
+                                 rigid->shape() == PhysicsObject::Shape::Custom;
         if (custom_type) {
             drop_shape(record);
         }
@@ -697,9 +759,9 @@ struct PhysicsWorld::Impl {
             // A new shape takes the current Friction, Bounciness, and Mass too.
             make_shape(game, object, record);
         } else {
-            if ((dirty & PhysicsObject::kDirtyMaterial) != 0 && b3Shape_IsValid(record.shape)) {
-                b3Shape_SetFriction(record.shape, static_cast<float>(object.friction()));
-                b3Shape_SetRestitution(record.shape, static_cast<float>(object.bounciness()));
+            if (rigid != nullptr && (dirty & PhysicsObject::kDirtyMaterial) != 0 && b3Shape_IsValid(record.shape)) {
+                b3Shape_SetFriction(record.shape, static_cast<float>(rigid->friction()));
+                b3Shape_SetRestitution(record.shape, static_cast<float>(rigid->bounciness()));
             }
             if ((dirty & PhysicsObject::kDirtyMass) != 0 && b3Shape_IsValid(record.shape)) {
                 b3Shape_SetDensity(record.shape, density(object, record.volume), true);
@@ -707,7 +769,9 @@ struct PhysicsWorld::Impl {
         }
         if ((dirty & PhysicsObject::kDirtyDamping) != 0) {
             b3Body_SetLinearDamping(record.body, static_cast<float>(object.linear_damping()));
-            b3Body_SetAngularDamping(record.body, static_cast<float>(object.angular_damping()));
+            if (rigid != nullptr) {
+                b3Body_SetAngularDamping(record.body, static_cast<float>(rigid->angular_damping()));
+            }
         }
         if ((dirty & PhysicsObject::kDirtyPose) != 0) {
             b3Vec3 position{};
@@ -723,7 +787,9 @@ struct PhysicsWorld::Impl {
         }
         if ((dirty & PhysicsObject::kDirtyVelocity) != 0) {
             b3Body_SetLinearVelocity(record.body, to_b3(object.velocity()));
-            b3Body_SetAngularVelocity(record.body, to_b3(object.angular_velocity()));
+            if (rigid != nullptr) {
+                b3Body_SetAngularVelocity(record.body, to_b3(rigid->angular_velocity()));
+            }
         }
         if ((dirty & ~PhysicsObject::kDirtyMaterial) != 0 && !object.anchored()) {
             b3Body_SetAwake(record.body, true);
@@ -732,7 +798,7 @@ struct PhysicsWorld::Impl {
 
     // A driven GameObject that is not where physics last put it was moved by
     // a script or Properties: the body jumps there. True when it did.
-    bool follow_driven(DataModel& game, PhysicsObject& object, Body& record) {
+    bool follow_driven(DataModel& game, PhysicsBase& object, Body& record) {
         const GameObject* driven = record.driven != 0 ? game.game_object(record.driven) : nullptr;
         if (driven == nullptr) {
             return false;
@@ -743,7 +809,7 @@ struct PhysicsWorld::Impl {
         }
         b3Vec3 position{};
         b3Quat rotation{};
-        pose_of(now, position, rotation);
+        pose_of(record.controller ? upright_transform(now) : now, position, rotation);
         b3Body_SetTransform(record.body, position, rotation);
         if (!object.anchored()) {
             b3Body_SetAwake(record.body, true);
@@ -760,7 +826,7 @@ struct PhysicsWorld::Impl {
             const b3BodyMoveEvent& event = events.moveEvents[index];
             const InstanceId id = id_of(event.userData);
             const auto found = bodies.find(id);
-            auto* object = dynamic_cast<PhysicsObject*>(game.instance(id));
+            auto* object = dynamic_cast<PhysicsBase*>(game.instance(id));
             if (found == bodies.end() || object == nullptr) {
                 continue;
             }
@@ -769,7 +835,9 @@ struct PhysicsWorld::Impl {
             const b3Quat rotation = event.transform.q;
             object->store_simulated(matrix_of(position, rotation, object->transform()),
                                     from_b3(b3Body_GetLinearVelocity(record.body)));
-            object->store_angular_velocity(from_b3(b3Body_GetAngularVelocity(record.body)));
+            if (auto* rigid = dynamic_cast<PhysicsObject*>(object)) {
+                rigid->store_angular_velocity(from_b3(b3Body_GetAngularVelocity(record.body)));
+            }
             if (GameObject* driven = record.driven != 0 ? game.game_object(record.driven) : nullptr) {
                 record.driven_pose = matrix_of(position, rotation, driven->transform());
                 game.write_simulated_transform(record.driven, record.driven_pose);
@@ -790,12 +858,35 @@ bool PhysicsWorld::has_body(InstanceId id) const { return impl_->bodies.count(id
 
 void PhysicsWorld::set_warning_sink(std::function<void(const std::string&)> sink) { impl_->warn = std::move(sink); }
 
-Vec3 PhysicsWorld::shape_center(const DataModel& game, const PhysicsObject& object) {
+Vec3 PhysicsWorld::shape_center(const DataModel& game, const PhysicsBase& object) {
+    if (dynamic_cast<const PlayerController*>(&object) != nullptr) {
+        return Vec3{};
+    }
     return center_for(game, object.driven_game_object());
 }
 
-float PhysicsWorld::shape_scale(const DataModel& game, const PhysicsObject& object) {
+float PhysicsWorld::shape_scale(const DataModel& game, const PhysicsBase& object) {
+    if (dynamic_cast<const PlayerController*>(&object) != nullptr) {
+        return 1.f;
+    }
     return scale_for(game, object.driven_game_object());
+}
+
+void PhysicsWorld::collision_outline(const PlayerController& controller, std::vector<Vec3>& lines) {
+    lines.clear();
+    const float radius = static_cast<float>(controller.radius());
+    const float gap = static_cast<float>(controller.hover_gap());
+    const float tall = static_cast<float>(controller.height()) - gap;
+    std::vector<b3Vec3> points;
+    primitive_points(PhysicsObject::Shape::Cylinder, Vec3{2.f * radius, tall, 2.f * radius},
+                     Vec3{0.f, gap + tall * 0.5f, 0.f}, points);
+    if (b3HullData* hull = build_hull(points)) {
+        outline_hull(*hull, lines);
+        b3DestroyHull(hull);
+    }
+    if (gap > 0.f) {
+        add_line(lines, Vec3{0.f, 0.f, 0.f}, Vec3{0.f, gap, 0.f});
+    }
 }
 
 void PhysicsWorld::collision_outline(const PhysicsObject& object, Vec3 center, const std::vector<Vec3>& mesh_points,

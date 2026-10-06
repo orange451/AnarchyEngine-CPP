@@ -110,3 +110,110 @@ TEST_CASE("C2 scripts make a PlayerController and cannot write its ground flags"
         REQUIRE(value);
     }
 }
+
+namespace {
+
+// Its +Y axis, which an upright Transform keeps straight up.
+bool upright(const Matrix4& m) { return near(m.m[4], 0.f, 1e-4f) && near(m.m[5], 1.f, 1e-4f) && near(m.m[6], 0.f, 1e-4f); }
+
+}  // namespace
+
+TEST_CASE("C3 a PlayerController is an upright cylinder that never turns", "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+
+    SECTION("with StepHeight 0 it falls and rests with its feet on the floor") {
+        PlayerController& c = rig.controller(at(0.f, 3.f, 0.f));
+        REQUIRE_FALSE(c.set_step_height(0.0));
+        rig.play();
+        rig.seconds(2.0);
+        INFO(y_of(c.transform()));
+        REQUIRE(near(y_of(c.transform()), 0.f, 0.02f));
+        REQUIRE(rig.physics.has_body(c.id()));
+    }
+
+    SECTION("a spinning box knocks it aside but does not turn it") {
+        PlayerController& c = rig.controller(at(0.f, 0.f, 0.f));
+        REQUIRE_FALSE(c.set_step_height(0.0));
+        PhysicsObject& box = rig.body(at(-3.f, 1.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+        REQUIRE_FALSE(box.set_velocity(Vec3{8.f, 0.f, 0.f}));
+        REQUIRE_FALSE(box.set_angular_velocity(Vec3{3.f, 5.f, 20.f}));
+        rig.play();
+        rig.seconds(2.0);
+        REQUIRE(x_of(c.transform()) > 0.05f);
+        REQUIRE(upright(c.transform()));
+        REQUIRE(near(c.transform().m[0], 1.f, 1e-4f));
+    }
+
+    SECTION("a written Transform keeps its position and its turn about Y only") {
+        PlayerController& c = rig.controller(at(0.f, 0.f, 0.f));
+        Matrix4 turned = engine_core::matrix4_axis_angle(Vec3{0.f, 1.f, 0.f}, 0.7);
+        turned.m[12] = 1.f;
+        turned.m[13] = 2.f;
+        turned.m[14] = 3.f;
+        REQUIRE_FALSE(c.set_transform(turned));
+        REQUIRE(near(c.transform().m[0], std::cos(0.7f), 1e-4f));
+        Matrix4 tilted = engine_core::matrix4_axis_angle(Vec3{1.f, 0.f, 0.f}, 0.5);
+        tilted.m[12] = 4.f;
+        REQUIRE_FALSE(c.set_transform(tilted));
+        REQUIRE(upright(c.transform()));
+        REQUIRE(x_of(c.transform()) == 4.f);
+    }
+
+    SECTION("anchored, it is a static cylinder a box lands on") {
+        PlayerController& c = rig.controller(at(0.f, 0.f, 0.f));
+        c.set_anchored(true);
+        PhysicsObject& box = rig.body(at(0.f, 4.f, 0.f), Vec3{0.5f, 0.5f, 0.5f}, false);
+        rig.play();
+        rig.seconds(2.0);
+        INFO(y_of(box.transform()));
+        REQUIRE(near(y_of(box.transform()), 2.25f, 0.03f));
+        REQUIRE(y_of(c.transform()) == 0.f);
+    }
+
+    SECTION("it moves its GameObject parent, upright, from its feet") {
+        engine_core::GameObject& part = create_part(rig.game);
+        part.set_transform(at(0.f, 3.f, 0.f));
+        PlayerController& c = rig.controller(at(0.f, 0.f, 0.f), part.id());
+        REQUIRE_FALSE(c.set_step_height(0.0));
+        rig.play();
+        rig.seconds(2.0);
+        REQUIRE(near(y_of(part.transform()), 0.f, 0.02f));
+        // A script moving the GameObject, tilted, moves the body upright.
+        Matrix4 tilted = engine_core::matrix4_axis_angle(Vec3{0.f, 0.f, 1.f}, 0.6);
+        tilted.m[12] = 5.f;
+        tilted.m[13] = 1.f;
+        part.set_transform(tilted);
+        rig.seconds(2.0);
+        INFO(x_of(part.transform()) << " " << y_of(part.transform()));
+        REQUIRE(near(x_of(part.transform()), 5.f, 0.05f));
+        REQUIRE(near(y_of(part.transform()), 0.f, 0.02f));
+        REQUIRE(upright(part.transform()));
+    }
+    REQUIRE(rig.warnings.empty());
+}
+
+TEST_CASE("C4 a PlayerController's outline is its cylinder and a line up from its feet", "[player]") {
+    PhysicsRig rig;
+    PlayerController& c = rig.controller(at(0.f, 0.f, 0.f));
+    REQUIRE_FALSE(c.set_radius(0.5));
+    REQUIRE_FALSE(c.set_height(2.0));
+    REQUIRE_FALSE(c.set_step_height(0.4));
+    std::vector<Vec3> lines;
+    engine_core::PhysicsWorld::collision_outline(c, lines);
+    REQUIRE(lines.size() >= 2 * 16 * 3);
+    REQUIRE(lines.size() % 2 == 0);
+    bool feet = false;
+    for (const Vec3& p : lines) {
+        const float out = std::sqrt(p.x * p.x + p.z * p.z);
+        REQUIRE(out <= 0.5f + 1e-4f);
+        REQUIRE(p.y >= -1e-4f);
+        REQUIRE(p.y <= 2.f + 1e-4f);
+        // Only the line from the feet comes below the cylinder.
+        if (p.y < 0.4f - 1e-4f) {
+            REQUIRE(out < 1e-4f);
+        }
+        feet = feet || (out < 1e-4f && p.y < 1e-4f);
+    }
+    REQUIRE(feet);
+}

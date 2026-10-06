@@ -21,11 +21,12 @@ The user does not choose between two shapes. `Custom` means "collide as this Mes
 | Decomposition settings | Fixed, not exposed: at most 32 pieces, 100,000 voxels, at most 64 points per piece, 1% volume error, flood fill, shrink wrap on. The set is named by one number, the *recipe*, `kRecipe = 1`. Changing any setting bumps it. |
 | Where pieces are stored | The Mesh's AMESH file, in a new section behind a new flag. AMESH goes to version 1.1. |
 | What is stored | Each piece's points in the Mesh's own space (as its vertex positions are), not Box3D's `b3HullData`, whose layout is Box3D's to change. Hulls are rebuilt from the points with `b3CreateHull` when a body is made, which takes about a millisecond for 32 pieces. |
-| When the studio decomposes | While stopped, when a PhysicsObject becomes Custom with a Mesh: its Shape is set to Custom, or its Mesh is set while it is Custom, or a project opens with one. Anchored or not, since a script can unanchor it during play. |
+| When the studio decomposes | While stopped, each Engine step scans `DataModel::physics_bodies` for a Custom PhysicsObject with a Mesh whose file has no pieces of the current recipe. One scan covers setting Shape or Mesh, undo, paste, and opening a project. Anchored or not, since a script can unanchor it during play. |
 | Where the studio decomposes | On one worker thread. The body uses the single hull until the pieces arrive. The result is written into the file on the main thread. |
 | When play decomposes | When an unanchored Custom's body is made and its Mesh has no pieces of the current recipe, in its file or in memory. This happens on the simulation thread and stalls it, which is accepted for now. The result is cached in memory and never written to the file. |
 | Session geometry | A Mesh edited during play (MeshShapes) has no file pieces that match it. It decomposes at play time into the memory cache, as above. |
 | Geometry edits | `Mesh::edit_geometry` drops the pieces when it rewrites the file, since they no longer match. Reimport writes a fresh file without them. |
+| Imported meshes with LODs | `store_pieces` keeps the file's LODs and everything else it holds; only the pieces change. Pieces come from the finest LOD, as `vertex_positions` gives it. |
 | Undo | Writing pieces is not an undo step. Undoing the Shape change leaves them in the file, where they are a harmless cache. |
 | Mass | Each piece's density is `Mass / (sum of the pieces' volumes)`, so the body's mass is `Mass` exactly. Overlap between pieces is counted twice in that sum, which can shift the center of mass slightly; accepted. |
 | Fallback | No pieces (decomposition failed, or Box3D built no hull from any piece) falls back to the single hull, then to Box, each warning once as `Hull` does today. |
@@ -84,7 +85,18 @@ V-HACD's own async mode stays off: callers choose the thread.
 `ConvexDecomposition` also owns two things the rest of the engine shares:
 
 - **The memory cache.** It holds pieces keyed by a 64-bit hash of the points, the triangles, and `kRecipe`, and keeps the last 64 meshes it was given. The play path and the studio both fill it, so ten PhysicsObjects on one Mesh decompose once.
-- **The studio queue.** `request(InstanceId mesh)` reads the Mesh's points and triangles on the main thread with the DataModel lock held, and notes its Path and the file's time on disk. It then hands the work to one worker thread. A Mesh already queued or running is not queued again. `poll()`, called once per main-thread frame while stopped, collects finished work. If the Mesh still exists and its Path and file time are unchanged, `poll()` calls `Mesh::store_pieces`, adds the result to the memory cache, and marks the PhysicsObjects that use the Mesh shape-dirty. A stale result is dropped. The queue drops unstarted work and joins its thread when the Engine shuts down.
+- **The studio queue**, `ConvexDecomposer`, owned by the Engine. `update(DataModel&)` runs once per Engine step while stopped, under the step's write lock. It first collects finished work: if the Mesh still exists and its `file_stamp()` is unchanged, it calls `Mesh::store_pieces` and adds the result to the memory cache; a stale result is dropped. Then it scans `physics_bodies` for Custom PhysicsObjects with a Mesh. For each Mesh with a file, no pieces of `kRecipe` in it, and no work queued for its current stamp, it reads the Mesh's points and triangles on this thread and queues them for its one worker thread. A Mesh is queued at most once per stamp, so a Mesh whose decomposition finds nothing is not retried every frame. The destructor drops unstarted work and joins the thread.
+
+Shared helpers, used by PhysicsWorld and the Scene View outline:
+
+```cpp
+// The Mesh's pieces without decomposing: its file's, else the memory cache's.
+bool known_pieces(const Mesh& mesh, const std::vector<Vec3>& points,
+                  const std::vector<std::uint32_t>& triangles, std::vector<amesh::ConvexPiece>& out);
+// known_pieces, else decompose now and add the result to the cache.
+std::vector<amesh::ConvexPiece> pieces_for(const Mesh& mesh, const std::vector<Vec3>& points,
+                                           const std::vector<std::uint32_t>& triangles);
+```
 
 ### 3. `Mesh` (`engine_instances/AssetInstances.{hpp,cpp}`)
 
@@ -95,9 +107,13 @@ V-HACD's own async mode stays off: callers choose the thread.
 bool file_pieces(std::uint32_t recipe, std::vector<amesh::ConvexPiece>& out) const;
 
 // Reads the file, sets its pieces, and writes it back beside and renamed over,
-// as edit_geometry does. Refused while playing or with no Path. Not an undo
-// step. Returns why nothing changed.
+// as edit_geometry does, keeping its LODs. Refused while playing or with no
+// file. Not an undo step. Returns why nothing changed.
 std::optional<std::string> store_pieces(std::uint32_t recipe, std::vector<amesh::ConvexPiece> pieces);
+
+// What the file is now: its Path, time on disk, and size, as one string.
+// Empty with no Path or no file.
+std::string file_stamp() const;
 ```
 
 `edit_geometry` clears `pieces` before it writes. The atomic write that `edit_geometry` uses becomes a private helper that both methods share.
@@ -118,11 +134,13 @@ The existing once-only warning ("a Custom collides as its whole mesh only while 
 
 **Anchoring.** Toggling Anchored on a Custom already drops the shape and makes a new one. It now drops every piece. Once the pieces are cached, unanchoring costs only the hull builds.
 
-**Outlines.** An unanchored Custom draws each piece's hull edges when pieces can be had without decomposing (file or memory cache). Otherwise it draws the single hull as today. Drawing an outline never starts a decomposition.
+**Outlines.** An unanchored Custom draws each piece's hull edges when pieces can be had without decomposing (`known_pieces`). Otherwise it draws the single hull as today. Drawing an outline never starts a decomposition. `collision_outline` takes the pieces as a new argument, which `GameView` fills.
 
-### 5. Studio triggers (`engine_instances/PhysicsObject.cpp`, project load)
+**For tests.** `float body_mass(InstanceId) const` and `std::vector<float> shape_frictions(InstanceId) const`: the body's mass and each of its shapes' friction, 0 and empty with no body.
 
-While stopped, the `Shape` and `Mesh` setters call `ConvexDecomposition::request(mesh)` when the result is a Custom with a Mesh. Project load does the same for every such PhysicsObject. `request` returns at once if `file_pieces(kRecipe)` already finds pieces.
+### 5. Engine (`engine_core/Engine.{hpp,cpp}`)
+
+The Engine owns a `ConvexDecomposer` and calls `update(game_)` in its step, under the write lock, after commands are drained, while `simulation_running()` is false. PhysicsObject itself is unchanged.
 
 ### 6. Build (`CMakeLists.txt`, `cmake/vhacd`)
 
@@ -145,6 +163,9 @@ V-HACD is fetched with FetchContent and compiled once, in `ConvexDecomposition.c
 - M2: `file_pieces` with another recipe finds none.
 - M3: `AddBox` after `store_pieces` leaves the file with no pieces.
 - M4: `store_pieces` while playing is refused, and the file is unchanged.
+- M5: `store_pieces` on a file with LODs keeps them.
+- Q1: A stopped `update` decomposes a Custom's Mesh on the worker and a later `update` writes the pieces into the file. Two PhysicsObjects on one Mesh queue it once.
+- Q2: A result whose Mesh was edited, or deleted, before it was collected is dropped.
 
 **`sandbox/physics_tests.cpp`**
 - P1: An unanchored Custom of an open-topped hollow box (a cup) catches a small sphere dropped into it: the sphere comes to rest below the cup's rim. As a single hull, the sphere would rest on top.

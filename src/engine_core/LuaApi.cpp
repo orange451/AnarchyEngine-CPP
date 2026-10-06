@@ -1293,6 +1293,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "The Camera the studio's scene view last used, set when you click in a view or pick its camera. Nil when that "
         "Camera is gone. Not saved.",
         "Camera", false, {});
+    add("Workspace", "Gravity",
+        "How fast every PhysicsObject and PlayerController speeds downward, in studs per second per second. "
+        "Below 0 pulls up; 0 is none. Defaults to 9.81.",
+        "number", false, {});
 
     return docs;
 }

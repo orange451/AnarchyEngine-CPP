@@ -2,6 +2,7 @@
 
 #include "DataModel.hpp"
 
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -43,8 +44,15 @@ std::string scene_service_guid(std::string_view class_name);
 // saved, never an undo step, 0 once that Camera is gone, and cleared when the
 // place is rebuilt. A change fires Changed, so Properties shows it at once. A
 // script may set it too; the views do not follow a script's write.
+//
+// Gravity is how fast PhysicsWorld speeds every body and PlayerController
+// downward, in studs per second per second: a saved registry property
+// (lua_saved_property), so it is saved, undone, and restored at Stop. Below 0
+// pulls up; 0 is none. A change during play takes effect on the next step.
 class Workspace : public SceneService {
 public:
+    static constexpr double kDefaultGravity = 9.81;
+
     using SceneService::SceneService;
     const char* class_name() const override;
 
@@ -53,8 +61,14 @@ public:
     // not a Camera. A new value fires Changed with "CurrentCamera".
     bool set_current_camera(InstanceId id);
 
+    double gravity() const { return gravity_; }
+    // Runs on SimulationThread. A value that is not finite is refused: it
+    // returns why and changes nothing. Otherwise empty.
+    std::optional<std::string> set_gravity(double value);
+
 private:
     InstanceId current_camera_ = 0;
+    double gravity_ = kDefaultGravity;
 };
 
 // Assets a place keeps to use at runtime. Nothing here renders or runs.

@@ -7,6 +7,7 @@
 #include "MeshShapes.hpp"
 #include "PhysicsObject.hpp"
 #include "PlayerController.hpp"
+#include "SceneService.hpp"
 
 #pragma warning(push, 0)
 #include "box3d/box3d.h"
@@ -23,7 +24,6 @@
 namespace engine_core {
 namespace {
 
-constexpr float kGravity = -9.81f;
 // The most vertices a Hull asks Box3D to keep, then a second try with fewer:
 // a hull past 128 faces or edges fails, and fewer vertices make fewer.
 constexpr int kHullVertices = 64;
@@ -369,6 +369,8 @@ struct PhysicsWorld::Impl {
     };
 
     b3WorldId world = b3_nullWorldId;
+    // Up is positive: minus Workspace.Gravity, as the world was last given it.
+    float gravity = -static_cast<float>(Workspace::kDefaultGravity);
     std::uint32_t generation = 0;
     std::uint64_t pass = 0;
     std::unordered_map<InstanceId, Body> bodies;
@@ -412,7 +414,7 @@ struct PhysicsWorld::Impl {
     void begin(std::uint32_t next_generation) {
         reset();
         b3WorldDef def = b3DefaultWorldDef();
-        def.gravity = b3Vec3{0.f, kGravity, 0.f};
+        def.gravity = b3Vec3{0.f, gravity, 0.f};
         world = b3CreateWorld(&def);
         generation = next_generation;
     }
@@ -430,10 +432,21 @@ struct PhysicsWorld::Impl {
         if (!b3World_IsValid(world) || generation != game.world_generation()) {
             begin(game.world_generation());
         }
+        pull_gravity(game);
         reconcile(game);
         control(game, dt);
         b3World_Step(world, static_cast<float>(dt), 1);
         pull(game);
+    }
+
+    // Workspace.Gravity into the world, when it changed.
+    void pull_gravity(const DataModel& game) {
+        const auto* workspace = dynamic_cast<const Workspace*>(game.instance(game.scene_service("Workspace")));
+        const float next = workspace != nullptr ? -static_cast<float>(workspace->gravity()) : gravity;
+        if (next != gravity) {
+            gravity = next;
+            b3World_SetGravity(world, b3Vec3{0.f, gravity, 0.f});
+        }
     }
 
     // ---- Which PhysicsObjects have bodies ------------------------------
@@ -654,7 +667,7 @@ struct PhysicsWorld::Impl {
                 }
                 continue;
             }
-            const float weight = -kGravity * step;
+            const float weight = -gravity * step;
             if (ground.gap >= gap) {
                 // At or above its hover height: it goes there at once and moves
                 // up and down with the ground, as landing and stairs down do.

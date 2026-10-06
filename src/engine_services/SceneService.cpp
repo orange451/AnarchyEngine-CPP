@@ -2,8 +2,11 @@
 
 #include "Containment.hpp"
 #include "LuaApi.hpp"
+#include "PropertyBag.hpp"
 
 #include <cctype>
+#include <cmath>
+#include <string>
 
 namespace engine_core {
 
@@ -47,6 +50,33 @@ bool Workspace::set_current_camera(InstanceId id) {
     return true;
 }
 
+namespace {
+
+LuaSlot number_slot(double value) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Number;
+    slot.number = value;
+    return slot;
+}
+
+}  // namespace
+
+std::optional<std::string> Workspace::set_gravity(double value) {
+    if (!on_gameplay_thread()) {
+        contract_fail("Workspace setters run on SimulationThread");
+    }
+    if (!std::isfinite(value)) {
+        return std::string("Gravity must be a finite number");
+    }
+    if (gravity_ == value) {
+        return std::nullopt;
+    }
+    const double previous = gravity_;
+    gravity_ = value;
+    note_property_change("Gravity", number_slot(previous), number_slot(value));
+    return std::nullopt;
+}
+
 const char* Storage::class_name() const { return "Storage"; }
 
 const char* Scripts::class_name() const { return "Scripts"; }
@@ -80,13 +110,37 @@ bool write_current_camera(DataModel&, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+bool read_gravity(DataModel&, DataModel& object, LuaSlot& out) {
+    auto* workspace = dynamic_cast<Workspace*>(&object);
+    if (workspace == nullptr) {
+        return false;
+    }
+    out = number_slot(workspace->gravity());
+    return true;
+}
+
+bool write_gravity(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* workspace = dynamic_cast<Workspace*>(&object);
+    if (workspace == nullptr) {
+        return false;
+    }
+    if (const auto error = workspace->set_gravity(in.number)) {
+        in.error = *error;
+        return false;
+    }
+    return true;
+}
+
 ANARCHY_LUA_REGISTER(register_scene_service_lua) {
     register_lua_class("Service", "DataModel", nullptr, 0);
     register_lua_class("SceneService", "Service", nullptr, 0);
+    // The default, as a file would hold it, from the class's own constant.
+    static const std::string gravity = write_json(JsonValue::number(Workspace::kDefaultGravity));
     const LuaField workspace[] = {
         lua_property("CurrentCamera", "Camera?", true, read_current_camera, write_current_camera),
+        lua_saved_property("Gravity", "number", read_gravity, write_gravity, gravity.c_str()),
     };
-    register_lua_class("Workspace", "SceneService", workspace, 1);
+    register_lua_class("Workspace", "SceneService", workspace, static_cast<int>(sizeof(workspace) / sizeof(workspace[0])));
     register_lua_class("Storage", "SceneService", nullptr, 0);
     register_lua_class("Scripts", "SceneService", nullptr, 0);
     register_lua_class("Gui", "SceneService", nullptr, 0);

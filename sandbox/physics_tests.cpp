@@ -12,6 +12,7 @@
 #include "PhysicsObject.hpp"
 #include "PhysicsWorld.hpp"
 #include "Project.hpp"
+#include "SceneService.hpp"
 #include "PropertyBag.hpp"
 #include "amesh.hpp"
 
@@ -836,4 +837,78 @@ TEST_CASE("P23 PhysicsObject is a PhysicsBase, which is never made itself", "[ph
         INFO(name);
         REQUIRE(engine_core::bag_find(defaults, name) != nullptr);
     }
+}
+
+namespace {
+
+engine_core::Workspace& workspace_service(engine_core::Game& game) {
+    auto* workspace = dynamic_cast<engine_core::Workspace*>(game.instance(workspace_of(game)));
+    REQUIRE(workspace != nullptr);
+    return *workspace;
+}
+
+}  // namespace
+
+TEST_CASE("P24 Workspace.Gravity is checked, saved, and comes back at Stop", "[physics]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::Workspace& workspace = workspace_service(game);
+    REQUIRE(workspace.gravity() == engine_core::Workspace::kDefaultGravity);
+    engine_core::PropertyBag saved;
+    workspace.save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "Gravity") == nullptr);
+
+    REQUIRE(*workspace.set_gravity(std::nan("")) == "Gravity must be a finite number");
+    REQUIRE(workspace.gravity() == engine_core::Workspace::kDefaultGravity);
+    // Below 0 pulls up, and 0 is none: both are allowed.
+    REQUIRE_FALSE(workspace.set_gravity(-3.0));
+    REQUIRE(workspace.gravity() == -3.0);
+    REQUIRE_FALSE(workspace.set_gravity(20.0));
+    engine_core::PropertyBag changed;
+    workspace.save_properties(changed);
+    const engine_core::JsonValue* gravity = engine_core::bag_find(changed, "Gravity");
+    REQUIRE(gravity != nullptr);
+    REQUIRE(gravity->as_number() == 20.0);
+
+    const engine_core::LuaField* field = engine_core::lua_class_find("Workspace", "Gravity");
+    REQUIRE(field != nullptr);
+
+    game.capture_place();
+    game.start_simulation();
+    REQUIRE_FALSE(workspace.set_gravity(0.0));
+    game.stop_simulation();
+    REQUIRE(workspace.gravity() == 20.0);
+}
+
+TEST_CASE("P25 bodies fall as fast as Workspace.Gravity says, even when it changes during play", "[physics]") {
+    PhysicsRig rig;
+    engine_core::Workspace& workspace = workspace_service(rig.game);
+    PhysicsObject& box = rig.body(at(0.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(workspace.set_gravity(20.0));
+    rig.play();
+    rig.seconds(0.5);
+    // v = g t.
+    INFO(box.velocity().y);
+    REQUIRE(near(box.velocity().y, -10.f, 0.2f));
+
+    // None: it keeps the speed it had.
+    REQUIRE_FALSE(workspace.set_gravity(0.0));
+    rig.seconds(0.5);
+    REQUIRE(near(box.velocity().y, -10.f, 0.2f));
+
+    // Below 0: it slows, and then rises.
+    REQUIRE_FALSE(workspace.set_gravity(-20.0));
+    rig.seconds(1.0);
+    REQUIRE(near(box.velocity().y, 10.f, 0.3f));
+}
+
+TEST_CASE("P26 a PlayerController falls as fast as Workspace.Gravity says", "[physics]") {
+    PhysicsRig rig;
+    engine_core::Workspace& workspace = workspace_service(rig.game);
+    PlayerController& controller = rig.controller(at(0.f, 50.f, 0.f));
+    REQUIRE_FALSE(workspace.set_gravity(4.0));
+    rig.play();
+    rig.seconds(0.5);
+    INFO(controller.velocity().y);
+    REQUIRE(near(controller.velocity().y, -2.f, 0.1f));
 }

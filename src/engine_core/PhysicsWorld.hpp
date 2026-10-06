@@ -40,7 +40,7 @@ class PlayerController;
 //      GameObject's scale kept. These writes fire no Changed and record no
 //      history, as a GameObject's own velocity integration does.
 //
-// Gravity is (0, -9.81, 0).
+// Gravity is (0, -Workspace.Gravity, 0), read again at the start of each step.
 class PhysicsWorld {
 public:
     PhysicsWorld();

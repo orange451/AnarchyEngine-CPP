@@ -25,7 +25,7 @@ The Box3D world exists while the place is stopped, not only while it plays. Stop
 | `RaycastParams` | A new datatype made with `RaycastParams.new()`: `FilterType: Enum.RaycastFilterType` (Exclude, the default, or Include) and `FilterDescendantsInstances: {Instance}`. A hit counts when its Instance is, or is a descendant of, a listed Instance (Include), or is not (Exclude). |
 | How hits map to instances | Each Box3D shape's `userData` holds its owner's InstanceId. The ray uses `b3World_CastRay` with a callback that skips filtered hits and clips to the closest kept hit. |
 | Freshness | `Raycast` runs `sync` first, so it sees the tree as it is at the call, including a Transform the script set on the line before. `sync` only pushes what is dirty, so this is cheap. |
-| Threads | `Raycast` runs on SimulationThread, as every Lua call does. While playing it takes the step lock, as `step` does, so a ray never overlaps a Box3D step. |
+| Threads | `Raycast` runs on SimulationThread, as every Lua call does. Physics steps run on that thread too, between script phases, so a ray never overlaps a Box3D step and needs no lock of its own. |
 | Out of scope | Studio click-to-select, shape casts (`workspace:Shapecast`), `Material` for non-Terrain hits, collision groups. |
 
 ## Architecture

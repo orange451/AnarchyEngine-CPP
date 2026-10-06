@@ -509,8 +509,7 @@ struct PhysicsWorld::Impl {
         make_shape(game, object, record);
         // Its Transform says where the body is from the start.
         if (target != 0) {
-            object.store_simulated(matrix_of(def.position, def.rotation, object.transform()), object.velocity(),
-                                   object.angular_velocity());
+            object.store_simulated(matrix_of(def.position, def.rotation, object.transform()), object.velocity());
         }
         return bodies.emplace(object.id(), record).first;
     }
@@ -750,8 +749,7 @@ struct PhysicsWorld::Impl {
             b3Body_SetAwake(record.body, true);
         }
         record.driven_pose = now;
-        object.store_simulated(matrix_of(position, rotation, object.transform()), object.velocity(),
-                               object.angular_velocity());
+        object.store_simulated(matrix_of(position, rotation, object.transform()), object.velocity());
         return true;
     }
 
@@ -770,8 +768,8 @@ struct PhysicsWorld::Impl {
             const b3Vec3 position = event.transform.p;
             const b3Quat rotation = event.transform.q;
             object->store_simulated(matrix_of(position, rotation, object->transform()),
-                                    from_b3(b3Body_GetLinearVelocity(record.body)),
-                                    from_b3(b3Body_GetAngularVelocity(record.body)));
+                                    from_b3(b3Body_GetLinearVelocity(record.body)));
+            object->store_angular_velocity(from_b3(b3Body_GetAngularVelocity(record.body)));
             if (GameObject* driven = record.driven != 0 ? game.game_object(record.driven) : nullptr) {
                 record.driven_pose = matrix_of(position, rotation, driven->transform());
                 game.write_simulated_transform(record.driven, record.driven_pose);

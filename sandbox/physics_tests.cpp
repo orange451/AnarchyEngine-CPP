@@ -859,3 +859,30 @@ TEST_CASE("P22 a GameObject's Scale scales the body that moves it", "[physics]")
         }
     }
 }
+
+TEST_CASE("P23 PhysicsObject is a PhysicsBase, which is never made itself", "[physics]") {
+    REQUIRE(engine_core::lua_class_inherits("PhysicsObject", "PhysicsBase"));
+    REQUIRE(engine_core::lua_class_inherits("PhysicsBase", "PVInstance"));
+    REQUIRE_FALSE(engine_core::project_class_known("PhysicsBase"));
+    for (const char* shared : {"Transform", "Velocity", "Anchored", "Mass", "LinearDamping", "GameObject"}) {
+        INFO(shared);
+        REQUIRE(engine_core::lua_class_find("PhysicsBase", shared) != nullptr);
+    }
+    for (const char* own : {"AngularVelocity", "AngularDamping", "Friction", "Bounciness", "Shape", "Size", "Mesh"}) {
+        INFO(own);
+        REQUIRE(engine_core::lua_class_find("PhysicsBase", own) == nullptr);
+        REQUIRE(engine_core::lua_class_find("PhysicsObject", own) != nullptr);
+    }
+
+    // Every saved property is still saved, by the same name.
+    SimRole role;
+    engine_core::Game game;
+    PhysicsObject& body = game.create<PhysicsObject>();
+    engine_core::PropertyBag defaults;
+    body.default_properties(defaults);
+    for (const char* name : {"Transform", "Velocity", "AngularVelocity", "Anchored", "Mass", "Friction", "Bounciness",
+                             "LinearDamping", "AngularDamping", "Shape", "Size", "Mesh", "GameObject"}) {
+        INFO(name);
+        REQUIRE(engine_core::bag_find(defaults, name) != nullptr);
+    }
+}

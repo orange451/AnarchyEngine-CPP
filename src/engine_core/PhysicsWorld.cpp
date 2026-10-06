@@ -43,6 +43,8 @@ constexpr float kProbeWidth = 0.95f;
 constexpr float kProbeNarrowest = 0.6f;
 constexpr float kProbeSkin = 0.01f;
 constexpr float kSnapMin = 0.1f;
+// How far past an edge the probe looks for the face it stands on.
+constexpr float kFaceNudge = 0.02f;
 // The hover: a spring at this many hertz, critically damped.
 constexpr float kHoverFrequency = 6.f;
 // Faster than this up, relative to the ground, and above the hover gap, a
@@ -51,6 +53,9 @@ constexpr float kRisingSpeed = 0.1f;
 // A contact pushing on a controller with more than this much downward is an
 // overhang it stops at, not one it may be pressed down by.
 constexpr float kOverhangNormal = 0.05f;
+// Ground whose normal points up less than this is a wall: a controller does
+// not hover on it, but falls along it.
+constexpr float kWallNormal = 0.05f;
 constexpr float kPi = 3.14159265359f;
 
 b3Vec3 to_b3(Vec3 v) { return b3Vec3{v.x, v.y, v.z}; }
@@ -351,9 +356,15 @@ struct PhysicsWorld::Impl {
         // A controller a write sped upward, as a jump does: it is leaving the
         // ground until it stops rising.
         bool launched = false;
-        // A controller that was on ground last step: it keeps to ground that
-        // drops away under it, as stairs down do.
+        // A controller that was on ground last step, standing or sliding: it
+        // keeps to ground that drops away under it, as stairs down do.
         bool grounded = false;
+        // How fast it rose last step, relative to the ground, by moving
+        // across a slope: its own climb, not a jump.
+        float climb = 0.f;
+        // The speed up and down it was to have after this step: what it set,
+        // less gravity. A steep slope it hits may not add to it.
+        float planned = 0.f;
         // An anchored Custom's triangles, which its shape points into.
         b3MeshData* mesh = nullptr;
         // The GameObject it moves, or 0, and the Transform it last gave it.
@@ -436,6 +447,7 @@ struct PhysicsWorld::Impl {
         reconcile(game);
         control(game, dt);
         b3World_Step(world, static_cast<float>(dt), 1);
+        unclimb(game);
         pull(game);
     }
 
@@ -576,7 +588,28 @@ struct PhysicsWorld::Impl {
         b3BodyId body = b3_nullBodyId;
         // The ground's own velocity at point.
         b3Vec3 velocity{};
+        // Ground too steep under the ring's edge, beside what it stands on:
+        // a wall to it, that ground's normal, and how far below the cylinder
+        // it is there.
+        bool walled = false;
+        b3Vec3 wall{};
+        float wall_gap = 0.f;
     };
+
+    // The slope of the face a probe's hit is on. Where the ring meets an
+    // edge, as of a step or a ramp's side, the cast's normal leans between
+    // the faces there, steep as a wall though both are level. A ray down just
+    // past the edge, away from where the normal leans, finds the top face.
+    static b3Vec3 face_normal(b3ShapeId shape, b3Vec3 point, b3Vec3 normal, float top) {
+        const float level = std::sqrt(normal.x * normal.x + normal.z * normal.z);
+        if (level < 1e-3f) {
+            return normal;
+        }
+        const b3Vec3 origin{point.x - kFaceNudge * normal.x / level, top, point.z - kFaceNudge * normal.z / level};
+        const b3WorldCastOutput face =
+            b3Shape_RayCast(shape, origin, b3Vec3{0.f, point.y - top - kFaceNudge, 0.f});
+        return face.hit && face.fraction > 0.f ? face.normal : normal;
+    }
 
     Ground probe(const PlayerController& controller, const Body& record) {
         const float radius = static_cast<float>(controller.radius());
@@ -609,20 +642,46 @@ struct PhysicsWorld::Impl {
             ground.hit = true;
             // Box3D stops a cast B3_LINEAR_SLOP short of what it hits.
             ground.gap = hits.closest * reach - kProbeSkin + B3_LINEAR_SLOP;
-            ground.normal = hits.normal;
+            ground.normal = face_normal(hits.shape, hits.point, hits.normal, origin.y);
             ground.point = hits.point;
             ground.body = b3Shape_GetBody(hits.shape);
             ground.velocity = b3Body_GetWorldPointVelocity(ground.body, hits.point);
+            if (ground.normal.y < steepest(controller)) {
+                // The ring's edge is on ground too steep, as at the foot of a
+                // steep slope. If it stands on ground it can under its middle,
+                // it stands there, and the slope is a wall to it. Its middle
+                // looks a hover gap further, for it may have hovered on the
+                // slope that much above that ground.
+                const float deeper = reach + gap;
+                ProbeHits middle;
+                middle.self = record.body;
+                b3World_CastRay(world, origin, b3Vec3{0.f, -deeper, 0.f}, b3DefaultQueryFilter(), probe_hit, &middle);
+                if (middle.hit && !middle.started_inside && middle.normal.y >= steepest(controller)) {
+                    ground.walled = true;
+                    ground.wall = ground.normal;
+                    ground.wall_gap = ground.gap;
+                    ground.gap = middle.closest * deeper - kProbeSkin;
+                    ground.normal = middle.normal;
+                    ground.point = middle.point;
+                    ground.body = b3Shape_GetBody(middle.shape);
+                    ground.velocity = b3Body_GetWorldPointVelocity(ground.body, middle.point);
+                }
+            }
             return ground;
         }
         return Ground{};
     }
 
+    // The least a normal points up on ground a controller can stand on.
+    static float steepest(const PlayerController& controller) {
+        return std::cos(static_cast<float>(controller.max_slope()) * kPi / 180.f);
+    }
+
     // ---- PlayerControllers ---------------------------------------------
 
     // Before Box3D steps: each controller probes for ground, says whether it
-    // is on it or sliding, and on ground hovers hover_gap() above it and
-    // slows across it by Friction. What
+    // is on it or sliding, hovers hover_gap() above it either way, and on
+    // ground slows across it by Friction. What
     // it does to its own velocity, it does the opposite of to a dynamic ground.
     void control(DataModel& game, double dt) {
         const float step = static_cast<float>(dt);
@@ -637,83 +696,185 @@ struct PhysicsWorld::Impl {
                 }
                 continue;
             }
-            const Ground ground = probe(*controller, record);
+            Ground ground = probe(*controller, record);
             const b3Vec3 before = b3Body_GetLinearVelocity(record.body);
             b3Vec3 velocity = before;
-            stop_at_overhangs(record, velocity);
+            stop_at_walls(record, steepest(*controller), velocity);
             const float gap = static_cast<float>(controller->hover_gap());
+            const float into_wall = b3Dot(b3Sub(velocity, ground.velocity), ground.wall);
+            if (ground.walled && ground.wall_gap < gap + kProbeSkin &&
+                (into_wall < 0.f || (controller->is_sliding() && into_wall <= kRisingSpeed))) {
+                // Moving into the steep slope it stands at the foot of, it
+                // goes onto it, as onto any steep ground; on it already, it
+                // stays while it does not leave it.
+                ground.walled = false;
+                ground.normal = ground.wall;
+                ground.gap = ground.wall_gap;
+            }
             const float upward = velocity.y - ground.velocity.y;
             if (!ground.hit || upward <= 0.f) {
                 record.launched = false;
             }
+            // How fast it rose last step following its slope, and past that,
+            // by its own: the hover's speed.
+            const float climbed = record.climb;
+            const float own = upward - climbed;
             // Rising: leaving the ground faster than it, by a jump or by itself
-            // going up, not by the ground dropping away under it.
+            // going up, not by the ground dropping away under it, nor by its
+            // own climb up a slope running out at the top.
             const bool rising =
                 ground.hit && upward > kRisingSpeed &&
-                (record.launched || (ground.gap > gap + kProbeSkin && velocity.y > kRisingSpeed));
-            const float slope =
-                std::acos(std::min(std::max(ground.normal.y, -1.f), 1.f)) * 180.f / kPi;
+                (record.launched ||
+                 (ground.gap > gap + kProbeSkin && own > kRisingSpeed && velocity.y > kRisingSpeed));
+            const b3Vec3 normal = ground.normal;
+            const float slope = std::acos(std::min(std::max(normal.y, -1.f), 1.f)) * 180.f / kPi;
             const bool steep = slope > static_cast<float>(controller->max_slope());
             // A controller in the air lands only on the step it reaches its
             // hover height; one already on ground keeps to it as it drops away.
+            // One that surfed lands as from the air: it may be above the
+            // floor at the slope's foot, going up the slope.
             const float falls = std::max(-upward, 0.f) * step;
-            const bool reaches = record.grounded || ground.gap <= gap + falls + kProbeSkin;
-            const bool on_ground = ground.hit && !rising && !steep && reaches;
-            record.grounded = on_ground;
-            controller->store_ground(on_ground, ground.hit && !rising && steep);
-            if (!on_ground) {
+            const bool reaches =
+                (record.grounded && !controller->is_sliding()) || ground.gap <= gap + falls + kProbeSkin;
+            // On ground too steep it surfs, as in Quake: it is on it while
+            // within its hover gap and not leaving it, rising or not, and
+            // keeps all of its speed along it.
+            const bool surfing = ground.hit && steep && normal.y > kWallNormal &&
+                                 ground.gap <= gap + falls + kProbeSkin &&
+                                 b3Dot(b3Sub(velocity, ground.velocity), normal) <= kRisingSpeed;
+            // On ground it stands; on ground too steep it slides. Either way it
+            // hovers its gap above it. Near a wall it only falls.
+            const bool touching =
+                surfing || (ground.hit && !steep && !rising && reaches && normal.y > kWallNormal);
+            const bool on_ground = touching && !steep;
+            const bool was_grounded = record.grounded;
+            record.grounded = touching;
+            controller->store_ground(on_ground, touching && steep);
+            if (!touching) {
+                hold_off_steep(*controller, record, ground, gap, velocity);
+                record.climb = 0.f;
+                record.planned = velocity.y + gravity * step;
                 if (!same_velocity(velocity, before)) {
                     b3Body_SetLinearVelocity(record.body, velocity);
                 }
                 continue;
             }
             const float weight = -gravity * step;
-            if (ground.gap >= gap) {
-                // At or above its hover height: it goes there at once and moves
-                // up and down with the ground, as landing and stairs down do.
-                if (ground.gap > gap) {
+            if (steep) {
+                surf(record, ground, gap, weight, velocity);
+            } else {
+                if (ground.walled) {
+                    // Come down beside the steep slope, as at the foot of one
+                    // it slid, it may be part way into it already.
+                    hold_off_steep(*controller, record, ground, gap, velocity);
+                }
+                // Its speed across the ground, relative to the ground's own.
+                // Friction, across the ground only: it decays by exp(-Friction dt).
+                const float keep = std::exp(-static_cast<float>(controller->friction()) * step);
+                const float across_x = (velocity.x - ground.velocity.x) * keep;
+                const float across_z = (velocity.z - ground.velocity.z) * keep;
+                velocity.x = ground.velocity.x + across_x;
+                velocity.z = ground.velocity.z + across_z;
+                // Down no faster this step than gravity would take it.
+                const float fastest = upward - weight;
+                // Moving across a slope, it rises and falls with it, so the
+                // hover has only edges to make up, not the slope.
+                const float climb = -(normal.x * across_x + normal.z * across_z) / normal.y;
+                record.climb = climb;
+                const float follow = ground.velocity.y + climb;
+                // Landing, above its hover height, it goes there at once. Below
+                // it by no more than its own way down took it last step, as
+                // where a slope it slid meets a floor or a step down ends, it
+                // goes back up at once too: that is its own overshoot, not an
+                // edge.
+                const float short_by = gap - ground.gap;
+                const float came_down = (std::max(-climbed, 0.f) + std::max(-own, 0.f)) * step;
+                float lift = 0.f;
+                bool held = false;
+                if (short_by < 0.f) {
+                    if (!was_grounded) {
+                        lift = short_by;
+                        held = true;
+                    }
+                } else {
+                    lift = std::min(short_by, came_down);
+                    held = short_by <= came_down;
+                }
+                if (lift != 0.f) {
                     b3Vec3 position = b3Body_GetPosition(record.body);
-                    position.y -= ground.gap - gap;
+                    position.y += lift;
                     b3Body_SetTransform(record.body, position, b3Body_GetRotation(record.body));
                 }
-                velocity.y = ground.velocity.y + weight;
-            } else {
-                // Below it, as when an edge passes under it: the hover lifts it
-                // smoothly, implicit as Box3D's mover sample's pogo, on velocity
-                // up and down relative to the ground's. Box3D adds this step's
-                // gravity after, so it is taken out first.
-                const float omega = 2.f * kPi * kHoverFrequency;
-                const float relative = velocity.y - ground.velocity.y;
-                const float settled = (relative - omega * omega * step * (ground.gap - gap)) /
-                                      (1.f + 2.f * omega * step + omega * omega * step * step);
-                velocity.y = ground.velocity.y + settled + weight;
+                if (held) {
+                    // At its hover height: it moves up and down with the ground.
+                    velocity.y = follow + weight;
+                } else {
+                    // Off it, as when an edge passes under it or it steps down
+                    // off one: the hover takes it there smoothly, implicit as
+                    // Box3D's mover sample's pogo, on its own speed up and
+                    // down, past following the ground; down, no faster than
+                    // gravity. Box3D adds this step's gravity after, so it is
+                    // taken out first.
+                    const float omega = 2.f * kPi * kHoverFrequency;
+                    const float settled = (own + omega * omega * step * (short_by - lift)) /
+                                          (1.f + 2.f * omega * step + omega * omega * step * step);
+                    velocity.y = follow + std::max(settled, std::min(fastest - climb, 0.f)) + weight;
+                }
             }
-            // Friction, across the ground only: speed relative to the
-            // ground's own decays by exp(-Friction dt).
-            const float keep = std::exp(-static_cast<float>(controller->friction()) * step);
-            velocity.x = ground.velocity.x + (velocity.x - ground.velocity.x) * keep;
-            velocity.z = ground.velocity.z + (velocity.z - ground.velocity.z) * keep;
             b3Body_SetLinearVelocity(record.body, velocity);
-            // A dynamic ground carries the controller's weight, and only that.
+            record.planned = velocity.y - weight;
+            // A dynamic ground carries the controller's weight, and only that:
+            // all of it where it stands, and where it slides, the part the
+            // slope holds up, pushed into it.
             // Handing it the spring's or friction's reaction too couples the two
             // into a loop that rings when the ground is much lighter, and drags
             // the ground along under a walking controller, since Box3D sees no
             // push for the script's Velocity write.
             if (b3Body_IsValid(ground.body) && b3Body_GetType(ground.body) == b3_dynamicBody) {
                 const float load = static_cast<float>(controller->mass()) * weight;
-                b3Body_ApplyLinearImpulse(ground.body, b3Vec3{0.f, -load, 0.f}, ground.point, true);
+                const b3Vec3 push = steep ? b3Vec3{-load * normal.y * normal.x, -load * normal.y * normal.y,
+                                                   -load * normal.y * normal.z}
+                                          : b3Vec3{0.f, -load, 0.f};
+                b3Body_ApplyLinearImpulse(ground.body, push, ground.point, true);
             }
+        }
+    }
+
+    // On ground too steep to stand on, a controller surfs, as Quake's
+    // PM_ClipVelocity has it: of its speed relative to the ground, only what
+    // goes into the slope is taken out, so speed into it turns up or down
+    // along it. The slope holds up the part of gravity that pushes into it,
+    // so gravity takes it down along it, and nothing slows it. It hovers its
+    // gap above the slope, moved out square to it.
+    static void surf(Body& record, const Ground& ground, float gap, float weight, b3Vec3& velocity) {
+        const b3Vec3 normal = ground.normal;
+        b3Vec3 relative = b3Sub(velocity, ground.velocity);
+        const float into = b3Dot(relative, normal);
+        if (into < 0.f) {
+            relative = b3MulAdd(relative, -into, normal);
+        }
+        record.climb = relative.y;
+        // Box3D adds this step's gravity after.
+        velocity = b3Add(ground.velocity, b3MulAdd(relative, weight * normal.y, normal));
+        const float short_by = gap - ground.gap;
+        if (short_by != 0.f) {
+            b3Vec3 position = b3Body_GetPosition(record.body);
+            if (short_by > 0.f) {
+                // As far out square to the slope as it falls away under it
+                // by the shortfall.
+                position = b3MulAdd(position, short_by * normal.y, normal);
+            } else {
+                position.y += short_by;
+            }
+            b3Body_SetTransform(record.body, position, b3Body_GetRotation(record.body));
         }
     }
 
     static bool same_velocity(b3Vec3 a, b3Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
 
-    // A contact that pushes down on the controller, as a ceiling or the
-    // underside of a ramp does, would turn walking into it into a push into
-    // the ground, since the cylinder has no friction. So the controller stops
-    // at one as at a wall: the part of its speed across the ground that goes
-    // into it is taken out.
-    void stop_at_overhangs(const Body& record, b3Vec3& velocity) {
+    // Calls each(push) for each way a contact pushes on the controller.
+    template <typename Each>
+    void for_each_push(const Body& record, Each each) {
         const int capacity = b3Body_GetContactCapacity(record.body);
         if (capacity <= 0) {
             return;
@@ -723,28 +884,105 @@ struct PhysicsWorld::Impl {
         for (int index = 0; index < count; ++index) {
             const b3ContactData& contact = contacts[static_cast<std::size_t>(index)];
             const bool first = B3_ID_EQUALS(b3Shape_GetBody(contact.shapeIdA), record.body);
-            for (int each = 0; each < contact.manifoldCount; ++each) {
-                const b3Manifold& manifold = contact.manifolds[each];
+            for (int which = 0; which < contact.manifoldCount; ++which) {
+                const b3Manifold& manifold = contact.manifolds[which];
                 if (manifold.pointCount == 0) {
                     continue;
                 }
                 // The normal runs from shape A to shape B: turned to push on the controller.
-                const b3Vec3 push = first ? b3Vec3{-manifold.normal.x, -manifold.normal.y, -manifold.normal.z}
-                                          : manifold.normal;
-                if (push.y > -kOverhangNormal) {
-                    continue;
-                }
-                const float across = std::sqrt(push.x * push.x + push.z * push.z);
-                if (across < 1e-4f) {
-                    continue;
-                }
-                const float away_x = push.x / across;
-                const float away_z = push.z / across;
-                const float into = velocity.x * away_x + velocity.z * away_z;
+                each(first ? b3Vec3{-manifold.normal.x, -manifold.normal.y, -manifold.normal.z} : manifold.normal);
+            }
+        }
+    }
+
+    // A contact on ground too steep to stand on, pushing up on the controller.
+    static bool steep_push(b3Vec3 push, float steepest) { return push.y > kOverhangNormal && push.y < steepest; }
+
+    // A contact that pushes down on the controller, as a ceiling or the
+    // underside of a ramp does, would turn walking into it into a push into
+    // the ground, since the cylinder has no friction. So the controller stops
+    // at one as at a wall: the part of its speed across the ground that goes
+    // into it is taken out. One on a slope too steep to stand on it surfs:
+    // only the part of its speed into the slope is taken out. A wall that
+    // stands straight up Box3D stops it at already, and it may shove one that
+    // moves.
+    void stop_at_walls(const Body& record, float steepest, b3Vec3& velocity) {
+        for_each_push(record, [&](b3Vec3 push) {
+            if (push.y <= -kOverhangNormal) {
+                stop_against(push, velocity.x, velocity.z);
+            } else if (steep_push(push, steepest)) {
+                const float into = b3Dot(velocity, push);
                 if (into < 0.f) {
-                    velocity.x -= into * away_x;
-                    velocity.z -= into * away_z;
+                    velocity = b3MulAdd(velocity, -into, push);
                 }
+            }
+        });
+    }
+
+    // Takes out the part of a speed across the ground (x, z) that goes into
+    // a face whose normal is away, as a wall stops it.
+    static void stop_against(b3Vec3 away, float& x, float& z) {
+        const float level = std::sqrt(away.x * away.x + away.z * away.z);
+        if (level < 1e-4f) {
+            return;
+        }
+        const float away_x = away.x / level;
+        const float away_z = away.z / level;
+        const float into = x * away_x + z * away_z;
+        if (into < 0.f) {
+            x -= into * away_x;
+            z -= into * away_z;
+        }
+    }
+
+    // A controller off the ground, as one rising from a jump, beside ground
+    // too steep to stand on: only its cylinder meets the slope, so the
+    // slope would come up into the hover gap under it, where its feet are.
+    // The slope is a wall to that gap too: the controller moves out from it
+    // level, not up it, so its jump is no higher, and stops going into it.
+    void hold_off_steep(const PlayerController& controller, const Body& record, const Ground& ground, float gap,
+                        b3Vec3& velocity) {
+        if (!ground.hit) {
+            return;
+        }
+        const b3Vec3 face = ground.walled ? ground.wall : ground.normal;
+        const float face_gap = ground.walled ? ground.wall_gap : ground.gap;
+        if (face.y <= kWallNormal || face.y >= steepest(controller) || face_gap >= gap) {
+            return;
+        }
+        const float level = std::sqrt(face.x * face.x + face.z * face.z);
+        // Out level by this much, the face drops away under it by the gap's
+        // shortfall.
+        const float out = (gap - face_gap) * face.y / level;
+        b3Vec3 position = b3Body_GetPosition(record.body);
+        position.x += out * face.x / level;
+        position.z += out * face.z / level;
+        b3Body_SetTransform(record.body, position, b3Body_GetRotation(record.body));
+        stop_against(face, velocity.x, velocity.z);
+    }
+
+    // After Box3D steps: a controller that met a slope too steep to stand
+    // on, moving into it, was turned up along it by the contact. It keeps
+    // the speed up and down it was to have.
+    void unclimb(DataModel& game) {
+        for (auto& [id, record] : bodies) {
+            if (!record.controller || b3Body_GetType(record.body) != b3_dynamicBody) {
+                continue;
+            }
+            const auto* controller = dynamic_cast<const PlayerController*>(game.instance(id));
+            if (controller == nullptr) {
+                continue;
+            }
+            b3Vec3 velocity = b3Body_GetLinearVelocity(record.body);
+            if (velocity.y <= record.planned) {
+                continue;
+            }
+            const float least = steepest(*controller);
+            bool steep = false;
+            for_each_push(record, [&](b3Vec3 push) { steep = steep || steep_push(push, least); });
+            if (steep) {
+                velocity.y = record.planned;
+                b3Body_SetLinearVelocity(record.body, velocity);
             }
         }
     }

@@ -1317,7 +1317,7 @@ struct PhysicsWorld::Impl {
             return;
         }
         auto* rigid = dynamic_cast<PhysicsObject*>(&object);
-        // Anchoring a Custom turns its hull into its whole mesh, and back. The
+        // Anchoring a Custom turns its convex pieces into its whole mesh, and back. The
         // old shape goes first, so a mesh is never on a dynamic body.
         const bool custom_type = rigid != nullptr && (dirty & PhysicsObject::kDirtyType) != 0 &&
                                  rigid->shape() == PhysicsObject::Shape::Custom;

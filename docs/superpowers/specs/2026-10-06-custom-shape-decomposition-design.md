@@ -142,9 +142,9 @@ The existing once-only warning ("a Custom collides as its whole mesh only while 
 
 The Engine owns a `ConvexDecomposer` and calls `update(game_)` in its step, under the write lock, after commands are drained, while `simulation_running()` is false. PhysicsObject itself is unchanged.
 
-### 6. Build (`CMakeLists.txt`, `cmake/vhacd`)
+### 6. Build (`CMakeLists.txt`)
 
-V-HACD is fetched with FetchContent and compiled once, in `ConvexDecomposition.cpp` with `ENABLE_VHACD_IMPLEMENTATION`. It is linked PRIVATE to `engine_core`, and its include directory is SYSTEM. It must build with the engine's oldest toolchains, MSVC 19.23 and Apple clang 13 / libc++ 13. The plan's first task proves that before anything depends on it.
+V-HACD is header-only, so it needs no CMake subdirectory of its own. V-HACD is fetched with FetchContent and compiled once, in `ConvexDecomposition.cpp` with `ENABLE_VHACD_IMPLEMENTATION`. It is linked PRIVATE to `engine_core`, and its include directory is SYSTEM. It must build with the engine's oldest toolchains, MSVC 19.23 and Apple clang 13 / libc++ 13. The plan's first task proves that before anything depends on it.
 
 ## Testing
 

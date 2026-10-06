@@ -23,7 +23,7 @@ namespace engine_core {
 // Mesh             Mesh?     a Hull's points, or a Custom's triangles: the
 //                            whole mesh, which collides only while Anchored
 //                            (Box3D gives a mesh contacts only on a static
-//                            body); unanchored, a Custom is a Hull of it.
+//                            body); unanchored, a Custom is convex pieces of it.
 //                            Shown only for a Hull or a Custom.
 class PhysicsObject : public PhysicsBase {
 public:

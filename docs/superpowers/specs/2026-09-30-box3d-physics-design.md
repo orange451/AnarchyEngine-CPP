@@ -21,7 +21,7 @@ Rigid-body physics during play, simulated by [Box3D](https://github.com/erincatt
 | Anchoring | An `Anchored` boolean maps to `b3_staticBody`. In Box3D a zero-mass dynamic body is not static; it is unsupported ("unexpected behavior"), so Mass never anchors. |
 | Mass | Shape density is set to `Mass / volume`, so Box3D derives a consistent inertia. Mass ≤ 0 (or not finite) on write is clamped to 0.001. |
 | AngularFactor | Dropped. Box3D has only per-world-axis on/off locks, no fractional factor. `AngularDamping` is added instead. |
-| Shapes | Box, Sphere, Capsule, Hull. Box3D has no cylinder primitive; meshes collide only on static bodies. |
+| Shapes | Box, Sphere, Capsule, Hull. Box3D has no cylinder primitive; meshes collide only on static bodies. An unanchored Custom is convex pieces of its Mesh (see `2026-10-06-custom-shape-decomposition-design.md`). |
 | Hull point source | A `Mesh?` property on PhysicsObject, independent of the GameObject's visuals. Shown in Properties only when Shape is Hull. |
 | Several PhysicsObjects on one GameObject | The first eligible one in depth-first tree order gets a body. The rest get none, and each warns once. If the winner leaves or retargets, the next takes over on the next step. |
 | Does the GameObject have to be in Workspace | No. Only the PhysicsObject does. |

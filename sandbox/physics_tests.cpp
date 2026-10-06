@@ -1082,3 +1082,17 @@ TEST_CASE("P33 an unanchored Custom's outline is its pieces when they are known"
     engine_core::PhysicsWorld::collision_outline(cup, Vec3{}, points, data.indices, triangle_lines);
     REQUIRE(anchored_lines.size() == triangle_lines.size());
 }
+
+TEST_CASE("P34 Mass set during play reweighs a body of pieces", "[physics]") {
+    PhysicsRig rig;
+    CupScene scene = cup_scene(rig, Vec3{4.f, 3.f, 4.f});
+    rig.play();
+    REQUIRE_FALSE(scene.mesh->edit_geometry(add_cup));
+    rig.steps(1);
+    REQUIRE(rig.physics.shape_frictions(scene.cup->id()).size() >= 2);
+    REQUIRE(near(rig.physics.body_mass(scene.cup->id()), 20.f, 0.01f));
+    // Each piece's density changes in place, and the body's mass with them.
+    REQUIRE_FALSE(scene.cup->set_mass(35.0));
+    rig.steps(1);
+    REQUIRE(near(rig.physics.body_mass(scene.cup->id()), 35.f, 0.01f));
+}

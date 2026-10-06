@@ -601,7 +601,8 @@ struct PhysicsWorld::Impl {
     // ---- PlayerControllers ---------------------------------------------
 
     // Before Box3D steps: each controller probes for ground, says whether it
-    // is on it or sliding, and on ground hovers hover_gap() above it. What
+    // is on it or sliding, and on ground hovers hover_gap() above it and
+    // slows across it by Friction. What
     // it does to its own velocity, it does the opposite of to a dynamic ground.
     void control(DataModel& game, double dt) {
         const float step = static_cast<float>(dt);
@@ -642,6 +643,11 @@ struct PhysicsWorld::Impl {
             const float settled = (relative - omega * omega * step * (ground.gap - gap)) /
                                   (1.f + 2.f * omega * step + omega * omega * step * step);
             velocity.y = ground.velocity.y + settled - kGravity * step;
+            // Friction, across the ground only: speed relative to the
+            // ground's own decays by exp(-Friction dt).
+            const float keep = std::exp(-static_cast<float>(controller->friction()) * step);
+            velocity.x = ground.velocity.x + (velocity.x - ground.velocity.x) * keep;
+            velocity.z = ground.velocity.z + (velocity.z - ground.velocity.z) * keep;
             b3Body_SetLinearVelocity(record.body, velocity);
             push_ground(ground, controller->mass(), b3Sub(velocity, before));
         }

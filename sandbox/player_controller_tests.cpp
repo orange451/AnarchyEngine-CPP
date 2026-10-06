@@ -397,3 +397,101 @@ TEST_CASE("C9 ground in odd places: none, anchored, StepHeight over Height, chan
         REQUIRE_FALSE(c.on_ground());
     }
 }
+
+TEST_CASE("C10 Friction slows it across the ground as exp(-Friction t), and only there", "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+
+    SECTION("on the ground, Friction 8") {
+        PlayerController& c = rig.controller(at(0.f, 0.5f, 0.f));
+        rig.play();
+        rig.seconds(1.0);
+        REQUIRE_FALSE(c.set_velocity(Vec3{4.f, 0.f, 0.f}));
+        rig.seconds(0.25);
+        INFO(c.velocity().x);
+        REQUIRE(near(c.velocity().x, 4.f * std::exp(-8.f * 0.25f), 0.05f));
+    }
+
+    SECTION("on the ground, Friction 0") {
+        PlayerController& c = rig.controller(at(0.f, 0.5f, 0.f));
+        REQUIRE_FALSE(c.set_friction(0.0));
+        rig.play();
+        rig.seconds(1.0);
+        REQUIRE_FALSE(c.set_velocity(Vec3{4.f, 0.f, 0.f}));
+        rig.seconds(0.5);
+        REQUIRE(near(c.velocity().x, 4.f, 0.01f));
+    }
+
+    SECTION("in the air, nothing") {
+        PlayerController& c = rig.controller(at(0.f, 30.f, 0.f));
+        REQUIRE_FALSE(c.set_velocity(Vec3{4.f, 0.f, 0.f}));
+        rig.play();
+        rig.seconds(0.5);
+        REQUIRE(near(c.velocity().x, 4.f, 0.01f));
+    }
+}
+
+TEST_CASE("C11 a moving platform carries it", "[player]") {
+    PhysicsRig rig;
+    PhysicsObject& floor = rig.floor();
+    REQUIRE_FALSE(floor.set_friction(0.0));
+    PhysicsObject& platform = rig.body(at(0.f, 0.25f, 0.f), Vec3{6.f, 0.5f, 6.f}, false);
+    REQUIRE_FALSE(platform.set_friction(0.0));
+    REQUIRE_FALSE(platform.set_mass(10000.0));
+    PlayerController& c = rig.controller(at(0.f, 1.f, 0.f));
+    rig.play();
+    rig.seconds(1.0);
+    REQUIRE_FALSE(platform.set_velocity(Vec3{2.f, 0.f, 0.f}));
+    rig.seconds(1.5);
+    INFO(c.velocity().x << " " << x_of(c.transform()) << " " << x_of(platform.transform()));
+    REQUIRE(near(c.velocity().x, 2.f, 0.05f));
+    // It caught up exponentially, so it trails by speed / Friction.
+    REQUIRE(near(x_of(c.transform()) - x_of(platform.transform()), -2.f / 8.f, 0.05f));
+    REQUIRE(c.on_ground());
+}
+
+TEST_CASE("C12 it slides along a wall it is pushed into", "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+    // A wall whose face is at x = 1.
+    rig.body(at(1.5f, 2.f, 0.f), Vec3{1.f, 4.f, 40.f}, true);
+    PlayerController& c = rig.controller(at(0.f, 0.5f, 0.f));
+    rig.play();
+    rig.seconds(1.0);
+    walk(rig, c, 3.f, 3.f, 1.0);
+    INFO(x_of(c.transform()) << " " << z_of(c.transform()));
+    REQUIRE(x_of(c.transform()) <= 0.51f);
+    REQUIRE(z_of(c.transform()) > 2.5f);
+}
+
+TEST_CASE("C13 it pushes down on what it stands on", "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+    // A plank balanced on a ridge along Z.
+    rig.body(at(0.f, 0.25f, 0.f), Vec3{0.2f, 0.5f, 4.f}, true);
+    PhysicsObject& plank = rig.body(at(0.f, 0.6f, 0.f), Vec3{6.f, 0.2f, 2.f}, false);
+    REQUIRE_FALSE(plank.set_mass(10.0));
+    PlayerController& c = rig.controller(at(2.5f, 1.2f, 0.f));
+    REQUIRE_FALSE(c.set_mass(50.0));
+    rig.play();
+    rig.seconds(2.0);
+    // The plank's +X axis tips down toward the controller's end.
+    INFO(plank.transform().m[1]);
+    REQUIRE(plank.transform().m[1] < -0.05f);
+}
+
+TEST_CASE("C15 one PlayerController stands on another and the stack settles", "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+    PlayerController& below = rig.controller(at(0.f, 0.5f, 0.f));
+    PlayerController& above = rig.controller(at(0.f, 4.f, 0.f));
+    rig.play();
+    rig.seconds(4.0);
+    INFO(y_of(below.transform()) << " " << y_of(above.transform()));
+    REQUIRE(std::isfinite(y_of(above.transform())));
+    REQUIRE(near(y_of(below.transform()), 0.f, 0.03f));
+    // The lower one's top is at 2; the upper one's feet hover on it.
+    REQUIRE(near(y_of(above.transform()), 2.f, 0.05f));
+    REQUIRE(above.on_ground());
+    REQUIRE(near(above.velocity().y, 0.f, 0.05f));
+}

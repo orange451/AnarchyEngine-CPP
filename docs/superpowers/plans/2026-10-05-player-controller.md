@@ -2051,7 +2051,8 @@ TEST_CASE("C11 a moving platform carries it", "[player]") {
     rig.seconds(1.5);
     INFO(c.velocity().x << " " << x_of(c.transform()) << " " << x_of(platform.transform()));
     REQUIRE(near(c.velocity().x, 2.f, 0.05f));
-    REQUIRE(near(x_of(c.transform()) - x_of(platform.transform()), 0.f, 0.2f));
+    // It caught up exponentially, so it trails by speed / Friction.
+    REQUIRE(near(x_of(c.transform()) - x_of(platform.transform()), -2.f / 8.f, 0.05f));
     REQUIRE(c.on_ground());
 }
 

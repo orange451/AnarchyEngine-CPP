@@ -5,6 +5,7 @@
 
 #include "AssetInstances.hpp"
 #include "ConvexDecomposition.hpp"
+#include "Engine.hpp"
 #include "MeshShapes.hpp"
 #include "PhysicsObject.hpp"
 #include "amesh.hpp"
@@ -226,4 +227,43 @@ TEST_CASE("Q4 a Mesh that splits into nothing is not queued again until it chang
     // An empty Mesh has no points: nothing to queue at all.
     REQUIRE(engine_core::decompose_count() == before);
     REQUIRE_FALSE(rig.has_pieces());
+}
+
+TEST_CASE("Q5 a stopped Engine writes a Custom's pieces into its Mesh's file", "[decomposition]") {
+    const std::filesystem::path resources =
+        std::filesystem::temp_directory_path() / "anarchy-decomposer-test-engine";
+    std::filesystem::remove_all(resources);
+    std::filesystem::create_directories(resources);
+    engine_core::Engine engine;
+    engine.start();
+    // The studio's Engine is paused whenever the place is stopped.
+    REQUIRE(engine.paused());
+    engine_core::InstanceId mesh_id = 0;
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        game.set_resources_root(resources);
+        auto& mesh = game.create<engine_core::Mesh>();
+        mesh_id = mesh.id();
+        REQUIRE_FALSE(mesh.edit_geometry([](anarchy::amesh::Data& data) {
+            engine_core::add_box(data, Vec3{3.f, 1.f, 1.f}, Vec3{1.5f, 0.5f, 0.f});
+            engine_core::add_box(data, Vec3{1.f, 2.f, 1.f}, Vec3{0.5f, 2.f, 0.f});
+        }));
+        auto& object = game.create<engine_core::PhysicsObject>();
+        REQUIRE_FALSE(object.set_shape(static_cast<int>(engine_core::PhysicsObject::Shape::Custom)));
+        REQUIRE_FALSE(object.set_mesh(instance_slot(mesh.id())));
+        game.set_parent(object.id(), workspace_of(game));
+    });
+    bool stored = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!stored && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        engine.on_simulation([&](engine_core::DataModel& game) {
+            const auto* mesh = dynamic_cast<const engine_core::Mesh*>(game.instance(mesh_id));
+            std::vector<anarchy::amesh::ConvexPiece> found;
+            stored = mesh != nullptr && mesh->file_pieces(engine_core::kRecipe, found);
+        });
+    }
+    engine.stop();
+    std::error_code ignored;
+    std::filesystem::remove_all(resources, ignored);
+    REQUIRE(stored);
 }

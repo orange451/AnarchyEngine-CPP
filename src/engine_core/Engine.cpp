@@ -283,10 +283,22 @@ void Engine::simulation_loop() {
                     const auto now = std::chrono::steady_clock::now();
                     const double dt = std::min(0.1, std::chrono::duration<double>(now - last_tool).count());
                     last_tool = now;
+                    pause_lock.unlock();
+                    // Stopped, Custom PhysicsObjects' Meshes are split into convex
+                    // pieces. A paused test writes no files.
+                    guarded_step(
+                        [&] {
+                            PROFILE_SCOPE("Convex decomposition", profiler::Group::Physics);
+                            DataModelLock lock(game_, DataModelLock::Write);
+                            if (!game_.simulation_running()) {
+                                decomposer_.update(game_);
+                            }
+                        },
+                        [&] { contract_count_.fetch_add(1); });
                     if (!scripts_ || !scripts_->tools_open()) {
+                        pause_lock.lock();
                         continue;
                     }
-                    pause_lock.unlock();
                     guarded_step(
                         [&] {
                             PROFILE_SCOPE("Tool step", profiler::Group::Engine);
@@ -354,10 +366,6 @@ void Engine::simulation_loop() {
                     PROFILE_SCOPE("Commands", profiler::Group::Engine);
                     game_.drain_commands();
                     drain_edits();
-                }
-                if (!game_.simulation_running()) {
-                    PROFILE_SCOPE("Convex decomposition", profiler::Group::Physics);
-                    decomposer_.update(game_);
                 }
                 {
                     PROFILE_SCOPE("PreAnimation", profiler::Group::Engine);

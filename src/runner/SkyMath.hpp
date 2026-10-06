@@ -102,4 +102,18 @@ inline bool operator!=(const SkyLightingKey& a, const SkyLightingKey& b) { retur
 bool LightingDue(const SkyLightingKey& made, const SkyLightingKey& now, double madeSeconds, double nowSeconds,
                  bool windy, bool everMade);
 
+// A redraw of the lighting cube spread over frames, so that no one frame pays
+// for all of it: slices 0 to kLightingSlices - 1, one a frame, in order. A
+// slice draws the sky's faces [faceBegin, faceEnd); then, with diffuse, the
+// environment cube's mipmap and the irradiance; then the prefiltered mips
+// whose bits are set in levels. Any other slice does nothing.
+constexpr int kLightingSlices = 5;
+struct LightingSlice {
+    int faceBegin = 0;
+    int faceEnd = 0;
+    bool diffuse = false;
+    unsigned levels = 0;
+};
+LightingSlice LightingSliceAt(int slice);
+
 }  // namespace runner

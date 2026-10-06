@@ -138,4 +138,23 @@ bool LightingDue(const SkyLightingKey& made, const SkyLightingKey& now, double m
     return windy && since >= kLightingDriftSeconds;
 }
 
+LightingSlice LightingSliceAt(int slice) {
+    // The sky's faces are cheap beside the filtering, which the last three share.
+    switch (slice) {
+    case 0:
+        return {0, 3, false, 0u};
+    case 1:
+        return {3, 6, false, 0u};
+    case 2:
+        return {6, 6, true, 0b000001u};
+    case 3:
+        return {6, 6, false, 0b111100u};
+    // Mip 1 has three quarters of the filtered texels, so it gets a slice to itself.
+    case 4:
+        return {6, 6, false, 0b000010u};
+    default:
+        return {};
+    }
+}
+
 }  // namespace runner

@@ -99,7 +99,7 @@ Everything after the cubes reads only `bindSky`'s uniforms and units, and keeps 
 
 ### The lighting cube
 
-`EnvironmentMap` gains a second way in beside `update(image, revision)`: `updateProcedural(drawFace, size, revision)`, where the renderer draws the environment cube's faces with `dynamic_sky_cube.frag` and the map then mipmaps it and runs its existing irradiance and prefilter passes on it.
+`EnvironmentMap` gains a second way in beside `update(image, revision)`: `startProcedural(sizes)` and then `continueProcedural(drawFace)` once a frame, where the renderer draws the environment cube's faces with `dynamic_sky_cube.frag` and the map then mipmaps it and runs its irradiance and prefilter passes on it, into spare irradiance and prefiltered cubes that take the place of the ones in use when the redraw finishes.
 
 Sizes by ReflectionQuality:
 
@@ -120,7 +120,11 @@ The renderer decides, with `SkyMath`'s `LightingDue`, from what the cube was las
 - otherwise, while the wind's length is not 0, when 0.25 s of `seconds` have passed since the last redraw;
 - never otherwise.
 
-The redraw is profiled as a `"Sky lighting"` pass. The visible sky is not affected by the throttle: between redraws only the clouds' reflections and ambient lag, by at most a quarter second.
+A redraw is spread over five frames (`SkyMath`'s `LightingSliceAt`), so no one frame pays for all of it: the sky's faces 0–2, faces 3–5, the mipmap with the irradiance and prefiltered mip 0, mips 2–5, and mip 1, which has three quarters of the filtered texels, alone. The cubes in use stay until the last slice, then the spare ones take their place, so surfaces never read a half-made cube. Every slice draws the sky as it was when the redraw started, so the faces match. The first redraw, and one at a new ReflectionQuality, which makes the cubes again, draw all five slices at once, since there is no earlier sky to show meanwhile. Measured at High in the studio, a redraw cost about 36 ms of GPU in one frame before; sliced it is about 2–4.5 ms a frame over five.
+
+A DynamicSky is filtered with fewer samples per texel than an image: 128 for the irradiance (an image 512), and 64 for prefiltered mips 1–2 and 32 from mip 3 (an image 256). Each sample reads a blurrier mip the fewer there are, so a bright spot is still averaged in. The counts are `uSamples` in `irradiance.frag` and `prefilter.frag`.
+
+Each slice is profiled as a `"Sky lighting"` pass. The visible sky is not affected by the throttle: between redraws only the clouds' reflections and ambient lag, by at most a quarter second and the five frames a redraw takes.
 
 ### Failure
 
@@ -128,7 +132,7 @@ If the procedural programs fail to build, that is reported once and the frame dr
 
 If the programs build but the lighting cube cannot be made — the first frame, before it ever has been, or any frame a redraw fails partway — the frame does not fail, unlike a Skybox's unready cubes today: the visible sky still draws every such frame, straight from the shader, same as when the cube is ready. Only what a surface takes from the cube (its ambient and reflections) falls back to the stand-in, the same as with no sky, until a later redraw succeeds.
 
-`EnvironmentMap::updateProcedural` clears its "holds a procedural sky" flag before it draws a single face, and only sets it again once every face, the mipmap, and the filter all succeed. So a redraw that fails partway — one face's program fails to link, say — drops the lighting cube's sky for that frame, the same as it never having been made: the renderer reads `holdsProcedural()` as false and gives surfaces the stand-in ambient and black reflections until a later redraw succeeds. The visible sky (drawn straight from the shader, not the cube) and the DynamicSky's light are unaffected either way.
+A slice that cannot draw — its program does not validate yet, say — is tried again the next frame, and the cubes in use stay as they are meanwhile: an earlier redraw's sky if there was one, otherwise none, when the renderer reads `holdsProcedural()` as false and gives surfaces the stand-in ambient and black reflections until a redraw finishes. The visible sky (drawn straight from the shader, not the cube) and the DynamicSky's light are unaffected either way.
 
 ## Registration
 

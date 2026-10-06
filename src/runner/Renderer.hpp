@@ -503,12 +503,14 @@ private:
     void prepareSky();
     // The Skybox's uniforms and cubes, or uSkyEnabled 0 with none.
     void bindSky(const Program& program);
-    // The DynamicSky's uniforms and its two textures.
-    void bindDynamicSky(const Program& program);
-    // Draws the DynamicSky's lighting cube again when LightingDue says so,
-    // otherwise leaves the cubes as they are. True once the cubes hold a
-    // DynamicSky's lighting, whether this frame's draw or an earlier one left
-    // in place because a redraw was not due or failed partway; false before
+    // sky's uniforms and its two textures.
+    void bindDynamicSky(const Program& program, const SceneDynamicSky& sky);
+    // Starts drawing the DynamicSky's lighting cube again when LightingDue
+    // says so, and draws a slice of a redraw under way, a slice a frame
+    // (LightingSliceAt); the cubes in use stay until the redraw finishes.
+    // The first redraw, or one at a new ReflectionQuality, draws all at once.
+    // True once the cubes hold a DynamicSky's lighting, whether a finished
+    // redraw's or an earlier one's left in place meanwhile; false before
     // they ever have. Either way the visible sky (skyPass) draws from the
     // shader and does not wait on this.
     bool updateDynamicSkyLighting();
@@ -548,6 +550,8 @@ private:
     // What the lighting cube was last drawn from, and when.
     SkyLightingKey skyLightingMade_;
     double skyLightingMadeAt_ = 0.0;
+    // What the redraw under way draws, as it was when it started.
+    SceneDynamicSky skyLightingDrawing_;
     bool skyLightingValid_ = false;
     Program grid_;
     Program outline_;

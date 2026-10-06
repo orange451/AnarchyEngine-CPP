@@ -12,7 +12,8 @@ uniform float uRoughness;
 // The environment cube's width in texels at mip 0.
 uniform float uEnvironmentSize;
 
-const uint kSamples = 256u;
+// Samples per texel: the fewer, the blurrier the mip each one reads.
+uniform int uSamples;
 
 void main() {
     // Taken as seen straight on: N, V, and R are one direction.
@@ -24,14 +25,15 @@ void main() {
     float a = uRoughness * uRoughness;
     vec3 sum = vec3(0.0);
     float weight = 0.0;
-    for (uint i = 0u; i < kSamples; ++i) {
-        vec3 H = importanceSampleGGX(hammersley(i, kSamples), N, a);
+    uint samples = uint(max(uSamples, 1));
+    for (uint i = 0u; i < samples; ++i) {
+        vec3 H = importanceSampleGGX(hammersley(i, samples), N, a);
         vec3 L = normalize(2.0 * dot(N, H) * H - N);
         float NdotL = dot(N, L);
         if (NdotL > 0.0) {
             float NdotH = max(dot(N, H), 0.0);
             // With V equal to N, the pdf's NdotH over 4 HdotV is a quarter.
-            float lod = sampleLod(ggx(NdotH, a) * 0.25, float(kSamples), uEnvironmentSize);
+            float lod = sampleLod(ggx(NdotH, a) * 0.25, float(samples), uEnvironmentSize);
             sum += textureLod(uEnvironment, L, lod).rgb * NdotL;
             weight += NdotL;
         }

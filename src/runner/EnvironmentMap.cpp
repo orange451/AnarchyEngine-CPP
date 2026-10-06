@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <utility>
 
 namespace runner {
 namespace {
@@ -33,6 +34,14 @@ unsigned MakeCube(int size, bool mipmapped) {
     return texture;
 }
 
+// Mips past the last roughness are never drawn or read.
+unsigned MakePrefiltered(int size) {
+    const unsigned texture = MakeCube(size, true);
+    glTexParameteri(RT_GL_TEXTURE_CUBE_MAP, RT_GL_TEXTURE_MAX_LEVEL, EnvironmentMap::kPrefilteredLevels - 1);
+    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, 0);
+    return texture;
+}
+
 }  // namespace
 
 bool EnvironmentMap::buildProgram(Program& program, const char* name, const char* fragment) {
@@ -46,6 +55,7 @@ bool EnvironmentMap::buildProgram(Program& program, const char* name, const char
     program.face = glGetUniformLocation(id, "uFace");
     program.roughness = glGetUniformLocation(id, "uRoughness");
     program.environmentSize = glGetUniformLocation(id, "uEnvironmentSize");
+    program.samples = glGetUniformLocation(id, "uSamples");
     glUseProgram(id);
     for (const char* sampler : {"uSky", "uEnvironment"}) {
         const int location = glGetUniformLocation(id, sampler);
@@ -79,9 +89,11 @@ void EnvironmentMap::shutdown() {
         glDeleteFramebuffers(1, &framebuffer_);
         framebuffer_ = 0;
     }
-    for (unsigned* texture : {&environment_, &irradiance_, &prefiltered_, &brdf_}) {
+    for (unsigned* texture :
+         {&environment_, &irradiance_, &prefiltered_, &brdf_, &spareIrradiance_, &sparePrefiltered_}) {
         DeleteTexture(*texture);
     }
+    slice_ = -1;
     brdfDrawn_ = false;
     imageRevision_ = 0;
     environmentSize_ = 0;
@@ -98,9 +110,10 @@ bool EnvironmentMap::ensureTextures(int environmentSize, int prefilteredSize) {
         return false;
     }
     // Made again at the new sizes: whatever they held is gone.
-    for (unsigned* texture : {&environment_, &irradiance_, &prefiltered_}) {
+    for (unsigned* texture : {&environment_, &irradiance_, &prefiltered_, &spareIrradiance_, &sparePrefiltered_}) {
         DeleteTexture(*texture);
     }
+    slice_ = -1;
     imageRevision_ = 0;
     procedural_ = false;
     environmentSize_ = 0;
@@ -108,11 +121,7 @@ bool EnvironmentMap::ensureTextures(int environmentSize, int prefilteredSize) {
     glActiveTexture(GL_TEXTURE0 + kUnitSource);
     environment_ = MakeCube(environmentSize, true);
     irradiance_ = MakeCube(kIrradianceSize, false);
-    prefiltered_ = MakeCube(prefilteredSize, true);
-    // Mips past the last roughness are never drawn or read.
-    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, prefiltered_);
-    glTexParameteri(RT_GL_TEXTURE_CUBE_MAP, RT_GL_TEXTURE_MAX_LEVEL, kPrefilteredLevels - 1);
-    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, 0);
+    prefiltered_ = MakePrefiltered(prefilteredSize);
 
     if (brdf_ == 0) {
         glGenTextures(1, &brdf_);
@@ -209,29 +218,50 @@ bool EnvironmentMap::ensureBrdf(unsigned emptyVao) {
 }
 
 bool EnvironmentMap::filter(unsigned emptyVao) {
+    if (!filterIrradiance(irradiance_, kIrradianceSamples, emptyVao) ||
+        !filterLevels(prefiltered_, (1u << kPrefilteredLevels) - 1u, false, emptyVao)) {
+        return false;
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return true;
+}
+
+bool EnvironmentMap::filterIrradiance(unsigned irradiance, int samples, unsigned emptyVao) {
     // The diffuse light.
     glActiveTexture(GL_TEXTURE0 + kUnitSource);
     glBindTexture(RT_GL_TEXTURE_CUBE_MAP, environment_);
     glUseProgram(irradianceProgram_.id);
     glUniform1f(irradianceProgram_.environmentSize, static_cast<float>(environmentSize_));
-    if (!drawFaces(irradianceProgram_, irradiance_, 0, kIrradianceSize, emptyVao)) {
+    glUniform1i(irradianceProgram_.samples, samples);
+    if (!drawFaces(irradianceProgram_, irradiance, 0, kIrradianceSize, emptyVao)) {
         return false;
     }
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, 0);
+    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, 0);
+    return true;
+}
+
+bool EnvironmentMap::filterLevels(unsigned prefiltered, unsigned levels, bool procedural, unsigned emptyVao) {
     // The reflections, from the same environment cube.
     glActiveTexture(GL_TEXTURE0 + kUnitSource);
     glBindTexture(RT_GL_TEXTURE_CUBE_MAP, environment_);
     glUseProgram(prefilter_.id);
     glUniform1f(prefilter_.environmentSize, static_cast<float>(environmentSize_));
     for (int level = 0; level < kPrefilteredLevels; ++level) {
+        if (((levels >> level) & 1u) == 0) {
+            continue;
+        }
+        const int samples =
+            !procedural ? kPrefilterSamples : level < 3 ? kProceduralPrefilterSamples : kProceduralRoughSamples;
         glUseProgram(prefilter_.id);
         glUniform1f(prefilter_.roughness, static_cast<float>(level) / static_cast<float>(kPrefilteredLevels - 1));
-        if (!drawFaces(prefilter_, prefiltered_, level, std::max(prefilteredSize_ >> level, 1), emptyVao)) {
+        glUniform1i(prefilter_.samples, samples);
+        if (!drawFaces(prefilter_, prefiltered, level, std::max(prefilteredSize_ >> level, 1), emptyVao)) {
             return false;
         }
     }
     glBindFramebuffer(RT_GL_FRAMEBUFFER, 0);
     glBindTexture(RT_GL_TEXTURE_CUBE_MAP, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
     return true;
 }
 
@@ -263,6 +293,7 @@ bool EnvironmentMap::update(unsigned image, std::uint64_t imageRevision, unsigne
     // Whatever was made before is not the sky now, whether or not this finishes.
     imageRevision_ = 0;
     procedural_ = false;
+    slice_ = -1;
     if (!ensureBrdf(emptyVao) || !drawEnvironment(image, emptyVao) || !filter(emptyVao)) {
         return false;
     }
@@ -271,39 +302,78 @@ bool EnvironmentMap::update(unsigned image, std::uint64_t imageRevision, unsigne
     return true;
 }
 
-bool EnvironmentMap::updateProcedural(int environmentSize, int prefilteredSize, unsigned emptyVao,
-                                      const std::function<bool(int face)>& drawFace) {
+bool EnvironmentMap::startProcedural(int environmentSize, int prefilteredSize) {
+    slice_ = -1;
     if (equirect_.id == 0 || (prefilteredSize >> (kPrefilteredLevels - 1)) < 1 ||
         !ensureTextures(environmentSize, prefilteredSize)) {
         return false;
     }
+    if (spareIrradiance_ == 0) {
+        // The same formats and sizes as the cubes in use, which the driver renders into.
+        glActiveTexture(GL_TEXTURE0 + kUnitSource);
+        spareIrradiance_ = MakeCube(kIrradianceSize, false);
+        sparePrefiltered_ = MakePrefiltered(prefilteredSize_);
+    }
+    slice_ = 0;
+    return true;
+}
+
+bool EnvironmentMap::continueProcedural(unsigned emptyVao, const std::function<bool(int face)>& drawFace) {
+    if (slice_ < 0) {
+        return false;
+    }
     BeginDrawing();
-    imageRevision_ = 0;
-    procedural_ = false;
     if (!ensureBrdf(emptyVao)) {
         return false;
     }
-    glActiveTexture(GL_TEXTURE0 + kUnitSource);
-    // Not bound while it is drawn into.
-    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, 0);
-    glBindFramebuffer(RT_GL_FRAMEBUFFER, framebuffer_);
-    glViewport(0, 0, environmentSize_, environmentSize_);
-    glBindVertexArray(emptyVao);
-    for (int face = 0; face < 6; ++face) {
-        glFramebufferTexture2D(RT_GL_FRAMEBUFFER, RT_GL_COLOR_ATTACHMENT0,
-                               RT_GL_TEXTURE_CUBE_MAP_POSITIVE_X + static_cast<GLenum>(face), environment_, 0);
-        if (!drawFace(face)) {
+    // With no procedural sky in use to light the frames between, all at once.
+    const int last = procedural_ ? slice_ : kLightingSlices - 1;
+    for (; slice_ <= last; ++slice_) {
+        if (!drawSlice(LightingSliceAt(slice_), emptyVao, drawFace)) {
             return false;
         }
     }
-    glBindFramebuffer(RT_GL_FRAMEBUFFER, 0);
-    glActiveTexture(GL_TEXTURE0 + kUnitSource);
-    glBindTexture(RT_GL_TEXTURE_CUBE_MAP, environment_);
-    glGenerateMipmap(RT_GL_TEXTURE_CUBE_MAP);
-    if (!filter(emptyVao)) {
+    if (slice_ < kLightingSlices) {
         return false;
     }
+    std::swap(irradiance_, spareIrradiance_);
+    std::swap(prefiltered_, sparePrefiltered_);
+    slice_ = -1;
+    imageRevision_ = 0;
     procedural_ = true;
+    return true;
+}
+
+bool EnvironmentMap::drawSlice(const LightingSlice& slice, unsigned emptyVao,
+                               const std::function<bool(int face)>& drawFace) {
+    if (slice.faceBegin < slice.faceEnd) {
+        glActiveTexture(GL_TEXTURE0 + kUnitSource);
+        // Not bound while it is drawn into.
+        glBindTexture(RT_GL_TEXTURE_CUBE_MAP, 0);
+        glBindFramebuffer(RT_GL_FRAMEBUFFER, framebuffer_);
+        glViewport(0, 0, environmentSize_, environmentSize_);
+        glBindVertexArray(emptyVao);
+        for (int face = slice.faceBegin; face < slice.faceEnd; ++face) {
+            glFramebufferTexture2D(RT_GL_FRAMEBUFFER, RT_GL_COLOR_ATTACHMENT0,
+                                   RT_GL_TEXTURE_CUBE_MAP_POSITIVE_X + static_cast<GLenum>(face), environment_, 0);
+            if (!drawFace(face)) {
+                return false;
+            }
+        }
+        glBindFramebuffer(RT_GL_FRAMEBUFFER, 0);
+    }
+    if (slice.diffuse) {
+        glActiveTexture(GL_TEXTURE0 + kUnitSource);
+        glBindTexture(RT_GL_TEXTURE_CUBE_MAP, environment_);
+        glGenerateMipmap(RT_GL_TEXTURE_CUBE_MAP);
+        if (!filterIrradiance(spareIrradiance_, kProceduralIrradianceSamples, emptyVao)) {
+            return false;
+        }
+    }
+    if (slice.levels != 0u && !filterLevels(sparePrefiltered_, slice.levels, true, emptyVao)) {
+        return false;
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
     return true;
 }
 

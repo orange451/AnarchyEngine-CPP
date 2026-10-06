@@ -173,3 +173,42 @@ TEST_CASE("SM8 the lighting cube's sizes and when it is drawn again", "[sky_math
     // A clock that went back, as in a new view: now.
     REQUIRE(LightingDue(key, key, 5.0, 1.0, true, true));
 }
+
+TEST_CASE("SM9 a lighting cube redraw's slices draw each face and mip once, after what each reads", "[sky_math]") {
+    int faces[6] = {};
+    int levels[6] = {};
+    int facesDrawn = 0;
+    int diffuse = 0;
+    for (int slice = 0; slice < kLightingSlices; ++slice) {
+        const LightingSlice s = LightingSliceAt(slice);
+        REQUIRE(0 <= s.faceBegin);
+        REQUIRE(s.faceBegin <= s.faceEnd);
+        REQUIRE(s.faceEnd <= 6);
+        for (int face = s.faceBegin; face < s.faceEnd; ++face) {
+            ++faces[face];
+            ++facesDrawn;
+        }
+        // The mipmap and irradiance read every face; the mips read the mipmapped cube.
+        if (s.diffuse) {
+            REQUIRE(facesDrawn == 6);
+            ++diffuse;
+        }
+        REQUIRE((s.levels >> 6) == 0u);
+        for (int level = 0; level < 6; ++level) {
+            if ((s.levels >> level) & 1u) {
+                REQUIRE(diffuse == 1);
+                ++levels[level];
+            }
+        }
+    }
+    REQUIRE(diffuse == 1);
+    for (int i = 0; i < 6; ++i) {
+        REQUIRE(faces[i] == 1);
+        REQUIRE(levels[i] == 1);
+    }
+    // Past the last, nothing.
+    const LightingSlice past = LightingSliceAt(kLightingSlices);
+    REQUIRE(past.faceBegin == past.faceEnd);
+    REQUIRE_FALSE(past.diffuse);
+    REQUIRE(past.levels == 0u);
+}

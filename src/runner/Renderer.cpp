@@ -1442,8 +1442,7 @@ void Renderer::bindSky(const Program& program) {
     BindTexture(kUnitBrdf, environment_.brdf());
 }
 
-void Renderer::bindDynamicSky(const Program& program) {
-    const SceneDynamicSky& sky = lighting_.dynamicSky;
+void Renderer::bindDynamicSky(const Program& program, const SceneDynamicSky& sky) {
     constexpr float kHalfDegree = 0.5f * 0.01745329252f;
     glUniform3fv(program.sunDirection, 1, sky.sunDirection);
     glUniform3fv(program.moonDirection, 1, sky.moonDirection);
@@ -1466,30 +1465,41 @@ void Renderer::bindDynamicSky(const Program& program) {
 
 bool Renderer::updateDynamicSkyLighting() {
     const SceneDynamicSky& sky = lighting_.dynamicSky;
-    const bool made = skyLightingValid_ && environment_.holdsProcedural();
-    if (!LightingDue(skyLightingMade_, sky.key, skyLightingMadeAt_, sky.seconds, sky.windy, made)) {
-        return made;
+    if (!environment_.drawingProcedural()) {
+        const bool made = skyLightingValid_ && environment_.holdsProcedural();
+        if (!LightingDue(skyLightingMade_, sky.key, skyLightingMadeAt_, sky.seconds, sky.windy, made)) {
+            return made;
+        }
+        const EnvironmentSizes sizes = EnvironmentSizesFor(sky.key.quality);
+        if (!environment_.startProcedural(sizes.environment, sizes.prefiltered)) {
+            return environment_.holdsProcedural();
+        }
+        // Every slice draws this, so the faces match however the sky moves meanwhile.
+        skyLightingDrawing_ = sky;
     }
     RENDER_PASS("Sky lighting");
-    const EnvironmentSizes sizes = EnvironmentSizesFor(sky.key.quality);
+    // The textures as they are now, in case the old ones are gone; the cube draws no discs anyway.
+    skyLightingDrawing_.sunTexture = sky.sunTexture;
+    skyLightingDrawing_.moonTexture = sky.moonTexture;
     const Program& program = dynamicSkyCube_;
-    const bool drawn =
-        environment_.updateProcedural(sizes.environment, sizes.prefiltered, emptyVao_, [&](int face) {
-            if (face == 0) {
-                glUseProgram(program.id);
-                bindDynamicSky(program);
-                glBindVertexArray(emptyVao_);
-                if (!CanDraw(program.id)) {
-                    return false;
-                }
+    bool bound = false;
+    const bool finished = environment_.continueProcedural(emptyVao_, [&](int face) {
+        if (!bound) {
+            glUseProgram(program.id);
+            bindDynamicSky(program, skyLightingDrawing_);
+            glBindVertexArray(emptyVao_);
+            if (!CanDraw(program.id)) {
+                return false;
             }
-            glUniform1i(program.face, face);
-            glDrawArrays(GL_TRIANGLES, 0, 3);
-            return true;
-        });
-    if (drawn) {
-        skyLightingMade_ = sky.key;
-        skyLightingMadeAt_ = sky.seconds;
+            bound = true;
+        }
+        glUniform1i(program.face, face);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        return true;
+    });
+    if (finished) {
+        skyLightingMade_ = skyLightingDrawing_.key;
+        skyLightingMadeAt_ = skyLightingDrawing_.seconds;
         skyLightingValid_ = true;
     }
     return environment_.holdsProcedural();
@@ -1827,7 +1837,7 @@ bool Renderer::skyPass(const float* inverseProjection) {
         // since the DynamicSky draws even when skyReady_ (its lighting
         // cube) is not.
         glUniformMatrix3fv(program.viewToSky, 1, GL_FALSE, viewToSky_);
-        bindDynamicSky(program);
+        bindDynamicSky(program, lighting_.dynamicSky);
     } else {
         bindSky(program);
     }

@@ -11,7 +11,8 @@ uniform int uFace;
 // The environment cube's width in texels at mip 0.
 uniform float uEnvironmentSize;
 
-const uint kSamples = 512u;
+// Samples per texel: the fewer, the blurrier the mip each one reads.
+uniform int uSamples;
 
 void main() {
     vec3 N = normalize(cubeDirection(uFace, vUv));
@@ -19,15 +20,16 @@ void main() {
     vec3 B;
     basis(N, T, B);
     vec3 sum = vec3(0.0);
-    for (uint i = 0u; i < kSamples; ++i) {
-        vec2 xi = hammersley(i, kSamples);
+    uint samples = uint(max(uSamples, 1));
+    for (uint i = 0u; i < samples; ++i) {
+        vec2 xi = hammersley(i, samples);
         // Cosine weighted, so the average of the samples is the integral over pi.
         float phi = 2.0 * kPi * xi.x;
         float cosTheta = sqrt(1.0 - xi.y);
         float sinTheta = sqrt(xi.y);
         vec3 L = T * (cos(phi) * sinTheta) + B * (sin(phi) * sinTheta) + N * cosTheta;
-        float lod = sampleLod(cosTheta / kPi, float(kSamples), uEnvironmentSize);
+        float lod = sampleLod(cosTheta / kPi, float(samples), uEnvironmentSize);
         sum += textureLod(uEnvironment, L, lod).rgb;
     }
-    outColor = vec4(sum / float(kSamples), 1.0);
+    outColor = vec4(sum / float(samples), 1.0);
 }

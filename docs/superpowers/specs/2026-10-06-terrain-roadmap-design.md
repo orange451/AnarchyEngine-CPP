@@ -38,7 +38,7 @@ The Box3D world exists while stopped. Bodies are kept in step with the tree but 
 
 ### 1. Terrain core
 
-The Terrain instance; sparse 32³ chunks of a 1-byte distance and a 1-byte material slot per cell, copy-on-write; Surface Nets meshing on a worker thread; chunk meshes drawn with each material's flat color; one static Box3D body per Terrain with a mesh shape per chunk; the Lua API; the `.avox` file. See its spec.
+The Terrain instance; hidden `TerrainMaterial` children that choose which Materials an island may use (at most 255, one per Material), edited in a Configure Terrain tab; sparse 32³ chunks of a 1-byte distance and a 1-byte material Id per cell, copy-on-write; Surface Nets meshing on a worker thread; chunk meshes drawn with each material's flat color; one static Box3D body per Terrain with a mesh shape per chunk; the Lua API; the `.avox` file. See its spec.
 
 ### 2. Sculpt tools and terrain undo (decided so far)
 
@@ -51,7 +51,9 @@ The Terrain instance; sparse 32³ chunks of a 1-byte distance and a 1-byte mater
 
 - The user only assigns Materials. The engine builds hidden texture arrays from them, resizing every map to one common size (with mipmaps) so mismatched textures just work. Nothing about this is a property.
 - Triplanar mapping, so cliffs and overhangs do not stretch.
-- Up to four materials blend per vertex. Sub-project 1 already writes a vertex's material slots into the unused bone-index channel and their weights into the bone-weight channel, so the mesh format does not change.
+- Up to four materials blend per vertex. Sub-project 1 already writes a vertex's material Ids into the unused bone-index channel and their weights into the bone-weight channel, so the mesh format does not change.
+- The Configure Terrain tab shows the texture memory the configured materials cost.
+- Per-material custom shaders (a `Shader` property on TerrainMaterial): chunks split their triangles into one draw per shader. This spec must decide how the edge between two shaders blends.
 
 ### 4. Extras (candidates, not committed)
 

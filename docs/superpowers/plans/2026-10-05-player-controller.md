@@ -944,6 +944,7 @@ TEST_CASE("C1 PlayerController properties are checked, saved, and come back at S
     c.store_ground(true, false);
     REQUIRE_FALSE(c.on_ground());
 
+    REQUIRE_FALSE(c.set_radius(0.5));
     game.capture_place();
     game.start_simulation();
     c.store_ground(true, false);

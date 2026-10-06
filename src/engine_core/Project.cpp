@@ -18,6 +18,7 @@
 #include "Light.hpp"
 #include "ModuleScript.hpp"
 #include "PhysicsObject.hpp"
+#include "PlayerController.hpp"
 #include "SceneService.hpp"
 #include "ScreenSpaceReflections.hpp"
 #include "SelectionService.hpp"
@@ -139,6 +140,8 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"Folder", [](DataModel& world) -> DataModel& { return world.create<Folder>(); }});
         out.push_back(
             {"PhysicsObject", [](DataModel& world) -> DataModel& { return world.create<PhysicsObject>(); }});
+        out.push_back(
+            {"PlayerController", [](DataModel& world) -> DataModel& { return world.create<PlayerController>(); }});
         out.push_back(
             {"SoundEmitter", [](DataModel& world) -> DataModel& { return world.create<SoundEmitter>(); }});
         out.push_back({"Attachment", [](DataModel& world) -> DataModel& { return world.create<Attachment>(); }});

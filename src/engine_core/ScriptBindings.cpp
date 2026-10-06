@@ -20,6 +20,7 @@
 #include "MeshShapes.hpp"
 #include "ModuleScript.hpp"
 #include "PhysicsObject.hpp"
+#include "PlayerController.hpp"
 #include "PropertyReflection.hpp"
 #include "Script.hpp"
 #include "ScreenSpaceReflections.hpp"
@@ -190,6 +191,7 @@ DataModel& create_module_script(DataModel& world) { return world.create<ModuleSc
 DataModel& create_folder(DataModel& world) { return world.create<Folder>(); }
 
 DataModel& create_physics_object(DataModel& world) { return world.create<PhysicsObject>(); }
+DataModel& create_player_controller(DataModel& world) { return world.create<PlayerController>(); }
 
 DataModel& create_sound_emitter(DataModel& world) { return world.create<SoundEmitter>(); }
 DataModel& create_attachment(DataModel& world) { return world.create<Attachment>(); }
@@ -230,6 +232,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("ModuleScript", create_module_script);
     register_lua_creatable("Folder", create_folder);
     register_lua_creatable("PhysicsObject", create_physics_object);
+    register_lua_creatable("PlayerController", create_player_controller);
     register_lua_creatable("SoundEmitter", create_sound_emitter);
     register_lua_creatable("Attachment", create_attachment);
     register_lua_creatable("Dragger", create_dragger);

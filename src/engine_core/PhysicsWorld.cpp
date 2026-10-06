@@ -33,6 +33,22 @@ constexpr float kWeldTolerance = 1e-4f;
 // The sides around a Cylinder or a Cone, as Box3D builds no round hull. A
 // Cylinder of n sides has 6n half-edges, and a hull keeps at most 128.
 constexpr int kRoundSides = 16;
+// A PlayerController's ground probe: a flat ring of points kProbeWidth of
+// Radius across, cast down from kProbeSkin above the cylinder's bottom. A
+// probe that starts inside something is cast again narrower, down to
+// kProbeNarrowest. It reaches the hover gap again below the feet, at least
+// kSnapMin, so the controller keeps to stairs and slopes going down.
+constexpr int kProbeSides = 16;
+constexpr float kProbeWidth = 0.95f;
+constexpr float kProbeNarrowest = 0.6f;
+constexpr float kProbeSkin = 0.01f;
+constexpr float kSnapMin = 0.1f;
+// The hover: a spring at this many hertz, critically damped.
+constexpr float kHoverFrequency = 6.f;
+// Faster than this up, relative to the ground, and above the hover gap, a
+// controller is leaving the ground: a jump.
+constexpr float kRisingSpeed = 0.1f;
+constexpr float kPi = 3.14159265359f;
 
 b3Vec3 to_b3(Vec3 v) { return b3Vec3{v.x, v.y, v.z}; }
 
@@ -288,6 +304,37 @@ void outline_triangles(const std::vector<b3Vec3>& points, const std::vector<std:
     }
 }
 
+// The closest shape a probe's cast hits, skipping its own body's. One it
+// starts inside it skips too, and notes.
+struct ProbeHits {
+    b3BodyId self = b3_nullBodyId;
+    float closest = 1.f;
+    bool hit = false;
+    bool started_inside = false;
+    b3ShapeId shape = b3_nullShapeId;
+    b3Vec3 point{};
+    b3Vec3 normal{};
+};
+
+float probe_hit(b3ShapeId shape, b3Pos point, b3Vec3 normal, float fraction, uint64_t, int, int, void* context) {
+    auto* hits = static_cast<ProbeHits*>(context);
+    if (B3_ID_EQUALS(b3Shape_GetBody(shape), hits->self)) {
+        return -1.f;
+    }
+    if (fraction == 0.f) {
+        hits->started_inside = true;
+        return -1.f;
+    }
+    if (fraction < hits->closest) {
+        hits->closest = fraction;
+        hits->hit = true;
+        hits->shape = shape;
+        hits->point = point;
+        hits->normal = normal;
+    }
+    return hits->closest;
+}
+
 }  // namespace
 
 struct PhysicsWorld::Impl {
@@ -298,6 +345,9 @@ struct PhysicsWorld::Impl {
         float volume = 1.f;
         // A PlayerController's: an upright cylinder, never recentered or scaled.
         bool controller = false;
+        // A controller a write sped upward, as a jump does: it is leaving the
+        // ground until it stops rising.
+        bool launched = false;
         // An anchored Custom's triangles, which its shape points into.
         b3MeshData* mesh = nullptr;
         // The GameObject it moves, or 0, and the Transform it last gave it.
@@ -374,6 +424,7 @@ struct PhysicsWorld::Impl {
             begin(game.world_generation());
         }
         reconcile(game);
+        control(game, dt);
         b3World_Step(world, static_cast<float>(dt), 1);
         pull(game);
     }
@@ -420,6 +471,9 @@ struct PhysicsWorld::Impl {
             }
         }
         for (InstanceId id : gone) {
+            if (auto* controller = dynamic_cast<PlayerController*>(game.instance(id))) {
+                controller->store_ground(false, false);
+            }
             destroy(id);
         }
     }
@@ -490,6 +544,118 @@ struct PhysicsWorld::Impl {
         if (rescaled || !same_vec3(center_for(game, record.driven), record.center)) {
             make_shape(game, object, record);
         }
+    }
+
+    // What a PlayerController's probe found under it.
+    struct Ground {
+        bool hit = false;
+        // How far below the cylinder's bottom the ground is: hover_gap() at rest.
+        float gap = 0.f;
+        b3Vec3 normal{0.f, 1.f, 0.f};
+        b3Vec3 point{};
+        b3BodyId body = b3_nullBodyId;
+        // The ground's own velocity at point.
+        b3Vec3 velocity{};
+    };
+
+    Ground probe(const PlayerController& controller, const Body& record) {
+        const float radius = static_cast<float>(controller.radius());
+        const float gap = static_cast<float>(controller.hover_gap());
+        const b3Vec3 feet = b3Body_GetPosition(record.body);
+        const float start = gap + kProbeSkin;
+        const float reach = start + std::max(gap, kSnapMin);
+        const b3Vec3 origin{feet.x, feet.y + start, feet.z};
+        b3Vec3 ring[kProbeSides];
+        for (float width = kProbeWidth; width > kProbeNarrowest - 1e-4f; width -= 0.1f) {
+            for (int side = 0; side < kProbeSides; ++side) {
+                const float angle = 2.f * kPi * static_cast<float>(side) / static_cast<float>(kProbeSides);
+                ring[side] = b3Vec3{radius * width * std::cos(angle), 0.f, radius * width * std::sin(angle)};
+            }
+            b3ShapeProxy proxy;
+            proxy.points = ring;
+            proxy.count = kProbeSides;
+            proxy.radius = 0.f;
+            ProbeHits hits;
+            hits.self = record.body;
+            b3World_CastShape(world, origin, &proxy, b3Vec3{0.f, -reach, 0.f}, b3DefaultQueryFilter(), probe_hit,
+                              &hits);
+            if (hits.started_inside) {
+                continue;
+            }
+            Ground ground;
+            if (!hits.hit) {
+                return ground;
+            }
+            ground.hit = true;
+            // Box3D stops a cast B3_LINEAR_SLOP short of what it hits.
+            ground.gap = hits.closest * reach - kProbeSkin + B3_LINEAR_SLOP;
+            ground.normal = hits.normal;
+            ground.point = hits.point;
+            ground.body = b3Shape_GetBody(hits.shape);
+            ground.velocity = b3Body_GetWorldPointVelocity(ground.body, hits.point);
+            return ground;
+        }
+        return Ground{};
+    }
+
+    // ---- PlayerControllers ---------------------------------------------
+
+    // Before Box3D steps: each controller probes for ground, says whether it
+    // is on it or sliding, and on ground hovers hover_gap() above it. What
+    // it does to its own velocity, it does the opposite of to a dynamic ground.
+    void control(DataModel& game, double dt) {
+        const float step = static_cast<float>(dt);
+        for (auto& [id, record] : bodies) {
+            if (!record.controller) {
+                continue;
+            }
+            auto* controller = dynamic_cast<PlayerController*>(game.instance(id));
+            if (controller == nullptr || controller->anchored()) {
+                if (controller != nullptr) {
+                    controller->store_ground(false, false);
+                }
+                continue;
+            }
+            const Ground ground = probe(*controller, record);
+            const b3Vec3 before = b3Body_GetLinearVelocity(record.body);
+            const float gap = static_cast<float>(controller->hover_gap());
+            const float upward = before.y - ground.velocity.y;
+            if (!ground.hit || upward <= 0.f) {
+                record.launched = false;
+            }
+            const bool rising =
+                ground.hit && upward > kRisingSpeed && (record.launched || ground.gap > gap + kProbeSkin);
+            const float slope =
+                std::acos(std::min(std::max(ground.normal.y, -1.f), 1.f)) * 180.f / kPi;
+            const bool steep = slope > static_cast<float>(controller->max_slope());
+            const bool on_ground = ground.hit && !rising && !steep;
+            controller->store_ground(on_ground, ground.hit && !rising && steep);
+            if (!on_ground) {
+                continue;
+            }
+            b3Vec3 velocity = before;
+            // The hover, implicit as Box3D's mover sample's pogo, on velocity
+            // up and down relative to the ground's. Box3D adds this step's
+            // gravity after, so it is taken out first.
+            const float omega = 2.f * kPi * kHoverFrequency;
+            const float relative = velocity.y - ground.velocity.y;
+            const float settled = (relative - omega * omega * step * (ground.gap - gap)) /
+                                  (1.f + 2.f * omega * step + omega * omega * step * step);
+            velocity.y = ground.velocity.y + settled - kGravity * step;
+            b3Body_SetLinearVelocity(record.body, velocity);
+            push_ground(ground, controller->mass(), b3Sub(velocity, before));
+        }
+    }
+
+    // The opposite of change, times mass, into ground's body at the probe's
+    // hit, when that body is dynamic.
+    static void push_ground(const Ground& ground, double mass, b3Vec3 change) {
+        if (!b3Body_IsValid(ground.body) || b3Body_GetType(ground.body) != b3_dynamicBody) {
+            return;
+        }
+        const float scale = -static_cast<float>(mass);
+        b3Body_ApplyLinearImpulse(ground.body, b3Vec3{change.x * scale, change.y * scale, change.z * scale},
+                                  ground.point, true);
     }
 
     // ---- Bodies -------------------------------------------------------
@@ -786,6 +952,11 @@ struct PhysicsWorld::Impl {
             }
         }
         if ((dirty & PhysicsObject::kDirtyVelocity) != 0) {
+            // A write that adds speed upward is a jump: the hover lets go at once.
+            if (record.controller &&
+                object.velocity().y - b3Body_GetLinearVelocity(record.body).y > kRisingSpeed) {
+                record.launched = true;
+            }
             b3Body_SetLinearVelocity(record.body, to_b3(object.velocity()));
             if (rigid != nullptr) {
                 b3Body_SetAngularVelocity(record.body, to_b3(rigid->angular_velocity()));
@@ -892,7 +1063,6 @@ void PhysicsWorld::collision_outline(const PlayerController& controller, std::ve
 void PhysicsWorld::collision_outline(const PhysicsObject& object, Vec3 center, const std::vector<Vec3>& mesh_points,
                                      const std::vector<std::uint32_t>& triangles, std::vector<Vec3>& lines,
                                      float scale) {
-    constexpr float kPi = 3.14159265359f;
     const Vec3 x{1.f, 0.f, 0.f};
     const Vec3 y{0.f, 1.f, 0.f};
     const Vec3 z{0.f, 0.f, 1.f};

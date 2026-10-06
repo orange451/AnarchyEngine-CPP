@@ -217,3 +217,183 @@ TEST_CASE("C4 a PlayerController's outline is its cylinder and a line up from it
     }
     REQUIRE(feet);
 }
+
+namespace {
+
+// Each step, sets the controller's speed across the ground to (vx, vz),
+// keeping what physics gave it up and down, then steps.
+void walk(PhysicsRig& rig, PlayerController& c, float vx, float vz, double time) {
+    const int count = static_cast<int>(time / kStep + 0.5);
+    for (int i = 0; i < count; ++i) {
+        REQUIRE_FALSE(c.set_velocity(Vec3{vx, c.velocity().y, vz}));
+        rig.steps(1);
+    }
+}
+
+// An anchored ramp rising toward +X at degrees, its top through the origin.
+PhysicsObject& ramp(PhysicsRig& rig, double degrees) {
+    const double angle = degrees * 3.14159265358979 / 180.0;
+    Matrix4 where = engine_core::matrix4_axis_angle(Vec3{0.f, 0.f, 1.f}, angle);
+    // The box's top face passes through the origin: its center sits half
+    // its thickness below, along the face's normal (-sin, cos, 0).
+    where.m[12] = static_cast<float>(0.5 * std::sin(angle));
+    where.m[13] = static_cast<float>(-0.5 * std::cos(angle));
+    PhysicsObject& slope = rig.body(where, Vec3{30.f, 1.f, 8.f}, true);
+    return slope;
+}
+
+}  // namespace
+
+TEST_CASE("C5 a PlayerController hovers StepHeight above the floor, on ground", "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+    PlayerController& c = rig.controller(at(0.f, 3.f, 0.f));
+    rig.play();
+    rig.seconds(3.0);
+    INFO(y_of(c.transform()));
+    // Its feet are on the floor: the cylinder floats 0.4 above them, within 1%.
+    REQUIRE(near(y_of(c.transform()), 0.f, 0.004f));
+    REQUIRE(near(c.velocity().y, 0.f, 0.01f));
+    REQUIRE(c.on_ground());
+    REQUIRE_FALSE(c.is_sliding());
+}
+
+TEST_CASE("C6 it walks up an edge as tall as StepHeight, and no taller", "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+    PlayerController& c = rig.controller(at(0.f, 0.5f, 0.f));
+
+    SECTION("an edge 0.9 of StepHeight is walked up") {
+        rig.body(at(4.f, 0.18f, 0.f), Vec3{4.f, 0.36f, 4.f}, true);
+        rig.play();
+        rig.seconds(1.0);
+        walk(rig, c, 2.f, 0.f, 2.5);
+        INFO(x_of(c.transform()) << " " << y_of(c.transform()));
+        REQUIRE(x_of(c.transform()) > 3.f);
+        REQUIRE(near(y_of(c.transform()), 0.36f, 0.01f));
+        REQUIRE(c.on_ground());
+    }
+
+    SECTION("an edge 1.1 of StepHeight blocks it") {
+        rig.body(at(4.f, 0.22f, 0.f), Vec3{4.f, 0.44f, 4.f}, true);
+        rig.play();
+        rig.seconds(1.0);
+        walk(rig, c, 2.f, 0.f, 2.5);
+        INFO(x_of(c.transform()));
+        // The ledge's face is at x = 2, and the cylinder's radius 0.5.
+        REQUIRE(x_of(c.transform()) <= 1.51f);
+        REQUIRE(near(y_of(c.transform()), 0.f, 0.01f));
+    }
+}
+
+TEST_CASE("C7 an upward Velocity jumps, and the hover lets go", "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+    PlayerController& c = rig.controller(at(0.f, 0.5f, 0.f));
+    rig.play();
+    rig.seconds(1.0);
+    REQUIRE(c.on_ground());
+    REQUIRE_FALSE(c.set_velocity(Vec3{0.f, 5.f, 0.f}));
+    float top = 0.f;
+    bool left = false;
+    for (int i = 0; i < 240; ++i) {
+        rig.steps(1);
+        top = std::max(top, y_of(c.transform()));
+        left = left || !c.on_ground();
+    }
+    INFO(top);
+    // 5 up under 9.81 rises 1.27; the hover pulling down would cut that short.
+    REQUIRE(top > 1.15f);
+    REQUIRE(left);
+    rig.seconds(2.0);
+    REQUIRE(c.on_ground());
+}
+
+TEST_CASE("C8 it stands still on a walkable slope and slides down a steep one", "[player]") {
+    PhysicsRig rig;
+
+    SECTION("30 degrees: on ground, and it does not creep") {
+        ramp(rig, 30.0);
+        PlayerController& c = rig.controller(at(0.f, 1.f, 0.f));
+        rig.play();
+        rig.seconds(1.0);
+        const float x = x_of(c.transform());
+        rig.seconds(2.0);
+        INFO(x << " " << x_of(c.transform()));
+        REQUIRE(near(x_of(c.transform()), x, 0.02f));
+        REQUIRE(c.on_ground());
+        REQUIRE_FALSE(c.is_sliding());
+    }
+
+    SECTION("60 degrees: sliding, and it goes down") {
+        ramp(rig, 60.0);
+        PlayerController& c = rig.controller(at(0.f, 1.f, 0.f));
+        rig.play();
+        bool slid = false;
+        for (int i = 0; i < 480; ++i) {
+            rig.steps(1);
+            slid = slid || c.is_sliding();
+            REQUIRE_FALSE(c.on_ground());
+        }
+        INFO(x_of(c.transform()));
+        REQUIRE(slid);
+        REQUIRE(x_of(c.transform()) < -1.f);
+    }
+}
+
+TEST_CASE("C9 ground in odd places: none, anchored, StepHeight over Height, changes in play, Stop", "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+
+    SECTION("in the air it is on nothing") {
+        PlayerController& c = rig.controller(at(0.f, 20.f, 0.f));
+        rig.play();
+        rig.seconds(0.1);
+        REQUIRE_FALSE(c.on_ground());
+        REQUIRE_FALSE(c.is_sliding());
+    }
+
+    SECTION("anchored, it is never on ground") {
+        PlayerController& c = rig.controller(at(0.f, 0.4f, 0.f));
+        c.set_anchored(true);
+        rig.play();
+        rig.seconds(0.5);
+        REQUIRE_FALSE(c.on_ground());
+    }
+
+    SECTION("StepHeight above Height: a thin slab at the top, its feet still on the floor") {
+        PlayerController& c = rig.controller(at(0.f, 3.f, 0.f));
+        REQUIRE_FALSE(c.set_step_height(3.0));
+        rig.play();
+        rig.seconds(3.0);
+        INFO(y_of(c.transform()));
+        REQUIRE(near(y_of(c.transform()), 0.f, 0.03f));
+        REQUIRE(c.on_ground());
+        REQUIRE(c.step_height() == 3.0);
+    }
+
+    SECTION("raising StepHeight during play lifts the cylinder, not the feet, and launches nothing") {
+        PlayerController& c = rig.controller(at(0.f, 0.5f, 0.f));
+        rig.play();
+        rig.seconds(1.0);
+        REQUIRE_FALSE(c.set_step_height(0.8));
+        float fastest = 0.f;
+        for (int i = 0; i < 240; ++i) {
+            rig.steps(1);
+            fastest = std::max(fastest, std::fabs(c.velocity().y));
+        }
+        INFO(fastest << " " << y_of(c.transform()));
+        REQUIRE(fastest < 5.f);
+        REQUIRE(near(y_of(c.transform()), 0.f, 0.01f));
+        REQUIRE(c.on_ground());
+    }
+
+    SECTION("Stop clears OnGround") {
+        PlayerController& c = rig.controller(at(0.f, 0.5f, 0.f));
+        rig.play();
+        rig.seconds(1.0);
+        REQUIRE(c.on_ground());
+        rig.game.stop_simulation();
+        REQUIRE_FALSE(c.on_ground());
+    }
+}

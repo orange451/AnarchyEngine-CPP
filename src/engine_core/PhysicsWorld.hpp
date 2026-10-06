@@ -30,10 +30,13 @@ class PlayerController;
 //      Transform is not what physics last wrote was moved by someone else,
 //      and its body jumps there. A body whose shape_center moved since its
 //      shape was made, as when its GameObject gets a Prefab, is made again.
-//   4. Box3D steps by dt, in one substep: the engine's own substeps are
+//   4. Each PlayerController probes for the ground under it, says whether
+//      it is OnGround or IsSliding, and on ground hovers its hover gap above
+//      it and slows by its Friction (PlayerController).
+//   5. Box3D steps by dt, in one substep: the engine's own substeps are
 //      already 240 Hz.
-//   5. Every body Box3D moved writes its PhysicsObject's Transform, Velocity,
-//      and AngularVelocity, and its GameObject's Transform with that
+//   6. Every body Box3D moved writes its Transform and Velocity (and a
+//      PhysicsObject's AngularVelocity), and its GameObject's Transform with that
 //      GameObject's scale kept. These writes fire no Changed and record no
 //      history, as a GameObject's own velocity integration does.
 //

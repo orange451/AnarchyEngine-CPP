@@ -95,13 +95,13 @@ The cast keeps the closest hit and ignores the controller's own shape. If the pu
 
 From the hit:
 
-- `gap`: the distance from the collider's bottom face down to the hit. At rest it is StepHeight.
+- `gap`: the distance from the collider's bottom face down to the hit, plus B3_LINEAR_SLOP, since Box3D stops a cast that far short. At rest it is StepHeight.
 - `normal`: the hit normal.
 - the ground body, and `ground_velocity`: `b3Body_GetWorldPointVelocity` at the hit point (zero for a static body).
 
 ### 2. Classify
 
-- **Rising**: `velocity.y - ground_velocity.y > kRisingSpeed` and `gap > StepHeight + kProbeSkin`. With no hit, the controller is in the air and none of the cases below apply.
+- **Rising**: `velocity.y - ground_velocity.y > kRisingSpeed`, and either `gap > StepHeight + kProbeSkin` or the controller is launched: a Velocity write since the last step added more than kRisingSpeed upward to what the body had. Launched clears when it stops rising or loses the ground. With no hit, the controller is in the air and none of the cases below apply.
 - **OnGround**: a hit, the angle between `normal` and +Y is at most MaxSlope, and not rising.
 - **IsSliding**: a hit, that angle is above MaxSlope, and not rising.
 - Otherwise both are false.
@@ -139,7 +139,7 @@ When IsSliding or in the air, there is no hover and no friction. On a steep surf
 
 The body writes Transform and Velocity as every body does (`store_simulated`, with the driven GameObject's scale kept). The controller also stores OnGround and IsSliding (`store_ground`). These writes fire no Changed and record no history.
 
-Jumping needs nothing special: a script sets Velocity.Y upward. Once the controller is above its hover height it counts as rising and the spring lets go. Below it, the spring was already pushing up.
+Jumping needs nothing special: a script sets Velocity.Y upward. That write adds speed upward, so the controller counts as launched and the spring lets go at once; without that, the spring's damping would take a quarter of the jump in the first steps. A script that writes Velocity each frame keeping its Y adds nothing upward and launches nothing.
 
 ## Code structure
 

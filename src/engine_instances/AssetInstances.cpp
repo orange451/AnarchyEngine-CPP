@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -61,7 +62,7 @@ const char* Texture::class_name() const { return "Texture"; }
 const char* Mesh::class_name() const { return "Mesh"; }
 
 std::optional<std::string> Mesh::read_file(const std::filesystem::path& root, const std::string& path,
-                                           anarchy::amesh::Data& out) const {
+                                           anarchy::amesh::Data& out, bool allow_lods) const {
     out = anarchy::amesh::Data{};
     if (root.empty() || path.empty()) {
         return std::nullopt;
@@ -84,7 +85,7 @@ std::optional<std::string> Mesh::read_file(const std::filesystem::path& root, co
         return path + " is not an AMESH file, so it is left as it is: " + failure.what();
     }
     // New triangles would fall past the last LOD's range.
-    if (out.lods.size() >= 2) {
+    if (!allow_lods && out.lods.size() >= 2) {
         return path + " has LODs, and shapes are added only to a mesh without them";
     }
     return std::nullopt;
@@ -104,6 +105,7 @@ std::optional<std::string> Mesh::edit_geometry(const std::function<void(anarchy:
         }
         edit(data);
         data.lods.clear();
+        data.pieces.clear();
         if (data.vertices.size() > anarchy::amesh::kMaxVertices || data.indices.size() / 3 > anarchy::amesh::kMaxTriangles) {
             return std::string("The shapes are more than one mesh can hold");
         }
@@ -122,7 +124,6 @@ std::optional<std::string> Mesh::edit_geometry(const std::function<void(anarchy:
     // The GUID keeps two Meshes with one Name from sharing a file.
     const std::string path =
         !this->path().empty() ? this->path() : "meshes/" + sanitize_file_name(name(id())) + "." + guid(id()) + ".amesh";
-    const std::filesystem::path file = root / std::filesystem::u8path(path);
     anarchy::amesh::Data data;
     if (std::optional<std::string> error = read_file(root, path, data)) {
         return error;
@@ -130,13 +131,25 @@ std::optional<std::string> Mesh::edit_geometry(const std::function<void(anarchy:
     edit(data);
     // One LOD over every triangle, whatever the edit added.
     data.lods.clear();
+    data.pieces.clear();
+    if (std::optional<std::string> error = write_file(root, path, data)) {
+        return error;
+    }
+    if (this->path() != path) {
+        return set_path(path);
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> Mesh::write_file(const std::filesystem::path& root, const std::string& path,
+                                            const anarchy::amesh::Data& data) {
+    const std::filesystem::path file = root / std::filesystem::u8path(path);
     std::vector<std::byte> bytes;
     try {
         bytes = anarchy::amesh::write(data);
     } catch (const std::exception& failure) {
         return std::string("The shapes do not fit in an AMESH file: ") + failure.what();
     }
-
     // Written beside the file and renamed over it, so a reader never sees half a mesh.
     std::error_code error;
     std::filesystem::create_directories(file.parent_path(), error);
@@ -152,9 +165,6 @@ std::optional<std::string> Mesh::edit_geometry(const std::function<void(anarchy:
     if (error) {
         std::filesystem::remove(partial, error);
         return "Could not write " + path;
-    }
-    if (this->path() != path) {
-        return set_path(path);
     }
     return std::nullopt;
 }
@@ -280,6 +290,71 @@ Vec3 Mesh::origin_offset() const {
     return bounds(low, high) ? middle(low, high) : Vec3{};
 }
 
+std::string Mesh::file_stamp() const {
+    const std::filesystem::path root = resources_root();
+    if (root.empty() || path().empty()) {
+        return {};
+    }
+    const std::filesystem::path file = root / std::filesystem::u8path(path());
+    std::error_code error;
+    const std::filesystem::file_time_type time = std::filesystem::last_write_time(file, error);
+    if (error) {
+        return {};
+    }
+    const std::uintmax_t size = std::filesystem::file_size(file, error);
+    if (error) {
+        return {};
+    }
+    // libc++'s file clock counts in __int128, which to_string does not take.
+    const long long nanoseconds =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count();
+    return path() + "|" + std::to_string(nanoseconds) + "|" + std::to_string(size);
+}
+
+bool Mesh::file_pieces(std::uint32_t recipe, std::vector<anarchy::amesh::ConvexPiece>& out) const {
+    out.clear();
+    if (session_geometry().data) {
+        return false;
+    }
+    const std::string stamp = file_stamp();
+    if (stamp.empty()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(pieces_mutex_);
+    if (pieces_stamp_ != stamp) {
+        pieces_stamp_ = stamp;
+        anarchy::amesh::Data data;
+        read_file(resources_root(), path(), data, true);
+        pieces_recipe_ = data.piece_recipe;
+        pieces_ = std::move(data.pieces);
+    }
+    if (pieces_.empty() || pieces_recipe_ != recipe) {
+        return false;
+    }
+    out = pieces_;
+    return true;
+}
+
+std::optional<std::string> Mesh::store_pieces(std::uint32_t recipe, std::vector<anarchy::amesh::ConvexPiece> pieces) {
+    if (!on_gameplay_thread()) {
+        contract_fail("asset setters run on SimulationThread");
+    }
+    if (simulation_running()) {
+        return std::string("Pieces are stored only while the place is stopped");
+    }
+    if (file_stamp().empty()) {
+        return std::string("the Mesh has no file");
+    }
+    const std::filesystem::path root = resources_root();
+    anarchy::amesh::Data data;
+    if (std::optional<std::string> error = read_file(root, path(), data, true)) {
+        return error;
+    }
+    data.piece_recipe = recipe;
+    data.pieces = std::move(pieces);
+    return write_file(root, path(), data);
+}
+
 void Mesh::on_reuse() {
     FileAsset::on_reuse();
     session_ = SessionGeometry{};
@@ -287,6 +362,9 @@ void Mesh::on_reuse() {
     std::lock_guard<std::mutex> lock(bounds_mutex_);
     bounds_measured_ = false;
     bounds_found_ = false;
+    std::lock_guard<std::mutex> pieces_lock(pieces_mutex_);
+    pieces_stamp_.clear();
+    pieces_.clear();
 }
 
 const char* Sound::class_name() const { return "Sound"; }

@@ -2,6 +2,7 @@
 
 #include "DataModel.hpp"
 #include "InstanceRef.hpp"
+#include "amesh.hpp"
 
 #include <array>
 #include <cstddef>
@@ -102,6 +103,20 @@ public:
     // when it has none.
     Vec3 origin_offset() const;
 
+    // The convex pieces in the AMESH file, when it has some of recipe and this
+    // session made no geometry. Read again only when file_stamp changes. Needs
+    // the DataModel lock; a read lock is enough.
+    bool file_pieces(std::uint32_t recipe, std::vector<anarchy::amesh::ConvexPiece>& out) const;
+
+    // Reads the file, sets its pieces, and writes it back as edit_geometry
+    // does, keeping its LODs. Refused while playing or with no file. Not an
+    // undo step. Returns why nothing changed.
+    std::optional<std::string> store_pieces(std::uint32_t recipe, std::vector<anarchy::amesh::ConvexPiece> pieces);
+
+    // The file as it is now: Path, time on disk, and size, as one string.
+    // Empty with no Path or no file.
+    std::string file_stamp() const;
+
 protected:
     void on_reuse() override;
 
@@ -109,7 +124,12 @@ private:
     // Reads the AMESH file at path under root into out. An empty path, or no
     // file, leaves out empty.
     std::optional<std::string> read_file(const std::filesystem::path& root, const std::string& path,
-                                         anarchy::amesh::Data& out) const;
+                                         anarchy::amesh::Data& out, bool allow_lods = false) const;
+
+    // Writes data to path under root beside the file, then renames it over, so
+    // a reader never sees half a mesh.
+    static std::optional<std::string> write_file(const std::filesystem::path& root, const std::string& path,
+                                                 const anarchy::amesh::Data& data);
 
     SessionGeometry session_;
     // world_generation() when session_ was made. Stop bumps it, and the copy lapses.
@@ -126,6 +146,12 @@ private:
     mutable bool bounds_found_ = false;
     mutable Vec3 bounds_low_{};
     mutable Vec3 bounds_high_{};
+
+    // file_pieces, as last read, and the file_stamp it was read at.
+    mutable std::mutex pieces_mutex_;
+    mutable std::string pieces_stamp_;
+    mutable std::uint32_t pieces_recipe_ = 0;
+    mutable std::vector<anarchy::amesh::ConvexPiece> pieces_;
 };
 
 class Sound : public FileAsset {

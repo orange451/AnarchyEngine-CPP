@@ -12,8 +12,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -520,4 +522,86 @@ TEST_CASE("GetBoundingBox gives the size of the box around a Prefab's Models' Me
 
     // It is a Prefab's alone.
     REQUIRE(rig.run("print((pcall(function() return game.Assets.Meshes.Low:GetBoundingBox() end)))") == "false\n");
+}
+
+namespace {
+
+std::vector<anarchy::amesh::ConvexPiece> two_tetras() {
+    anarchy::amesh::ConvexPiece a{{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}}};
+    anarchy::amesh::ConvexPiece b{{{2, 0, 0}, {3, 0, 0}, {2, 1, 0}, {2, 0, 1}}};
+    return {a, b};
+}
+
+}  // namespace
+
+TEST_CASE("M1 pieces stored in a Mesh's file are read back for their recipe", "[shapes]") {
+    ShapeRig rig;
+    engine_core::Mesh& cube = rig.mesh("Cube");
+    rig.run("game.Assets.Meshes.Cube:AddBox(Vector3.new(1, 1, 1))");
+    const std::string before = cube.file_stamp();
+    REQUIRE_FALSE(before.empty());
+    std::vector<anarchy::amesh::ConvexPiece> found;
+    REQUIRE_FALSE(cube.file_pieces(5, found));
+
+    REQUIRE_FALSE(cube.store_pieces(5, two_tetras()));
+    REQUIRE(cube.file_stamp() != before);
+    REQUIRE(cube.file_pieces(5, found));
+    REQUIRE(found.size() == 2);
+    REQUIRE(found[1].points[0] == std::array<float, 3>{2, 0, 0});
+    const Data file = rig.file_of(cube);
+    REQUIRE(file.piece_recipe == 5);
+    REQUIRE(file.vertices.size() == 24);
+}
+
+TEST_CASE("M2 pieces of another recipe are not found", "[shapes]") {
+    ShapeRig rig;
+    engine_core::Mesh& cube = rig.mesh("Cube");
+    rig.run("game.Assets.Meshes.Cube:AddBox(Vector3.new(1, 1, 1))");
+    REQUIRE_FALSE(cube.store_pieces(5, two_tetras()));
+    std::vector<anarchy::amesh::ConvexPiece> found;
+    REQUIRE_FALSE(cube.file_pieces(6, found));
+    REQUIRE(found.empty());
+}
+
+TEST_CASE("M3 a shape added after pieces drops them", "[shapes]") {
+    ShapeRig rig;
+    engine_core::Mesh& cube = rig.mesh("Cube");
+    rig.run("game.Assets.Meshes.Cube:AddBox(Vector3.new(1, 1, 1))");
+    REQUIRE_FALSE(cube.store_pieces(5, two_tetras()));
+    rig.run("game.Assets.Meshes.Cube:AddBox(Vector3.new(1, 1, 1), Vector3.new(3, 0, 0))");
+    std::vector<anarchy::amesh::ConvexPiece> found;
+    REQUIRE_FALSE(cube.file_pieces(5, found));
+    REQUIRE(rig.file_of(cube).pieces.empty());
+}
+
+TEST_CASE("M4 pieces are not stored while playing, or without a file", "[shapes]") {
+    ShapeRig rig;
+    engine_core::Mesh& bare = rig.mesh("Bare");
+    REQUIRE(bare.file_stamp().empty());
+    REQUIRE(bare.store_pieces(5, two_tetras()));
+    engine_core::Mesh& cube = rig.mesh("Cube");
+    rig.run("game.Assets.Meshes.Cube:AddBox(Vector3.new(1, 1, 1))");
+    const std::string stamp = cube.file_stamp();
+    rig.game.start_simulation();
+    REQUIRE(cube.store_pieces(5, two_tetras()));
+    REQUIRE(cube.file_stamp() == stamp);
+}
+
+TEST_CASE("M5 storing pieces keeps a file's LODs", "[shapes]") {
+    ShapeRig rig;
+    anarchy::amesh::Data lodded;
+    engine_core::add_box(lodded, Vec3{1.f, 1.f, 1.f}, Vec3{0.f, 0.f, 0.f});
+    engine_core::add_box(lodded, Vec3{1.f, 1.f, 1.f}, Vec3{0.f, 0.f, 0.f});
+    lodded.lods = {{0, 12}, {12, 12}};
+    const std::vector<std::byte> bytes = anarchy::amesh::write(lodded);
+    std::filesystem::create_directories(rig.resources / "meshes");
+    std::ofstream(rig.resources / "meshes" / "lodded.amesh", std::ios::binary)
+        .write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    engine_core::Mesh& mesh = rig.mesh("Lodded");
+    REQUIRE_FALSE(mesh.set_path("meshes/lodded.amesh"));
+
+    REQUIRE_FALSE(mesh.store_pieces(5, two_tetras()));
+    const Data file = rig.file_of(mesh);
+    REQUIRE(file.lods.size() == 2);
+    REQUIRE(file.pieces.size() == 2);
 }

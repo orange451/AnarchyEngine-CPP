@@ -7,9 +7,11 @@
 #include "amesh.hpp"
 #include "types.hpp"
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -29,6 +31,11 @@ inline constexpr std::uint32_t kRecipe = 1;
 // decompose or V-HACD finds no piece. Any thread; seconds on a large mesh.
 std::vector<anarchy::amesh::ConvexPiece> decompose(const std::vector<Vec3>& points,
                                                    const std::vector<std::uint32_t>& triangles);
+// decompose, given up soon after stop is set from another thread. A run given
+// up gives no pieces.
+std::vector<anarchy::amesh::ConvexPiece> decompose(const std::vector<Vec3>& points,
+                                                   const std::vector<std::uint32_t>& triangles,
+                                                   const std::atomic<bool>& stop);
 
 // Pieces kept in memory, keyed by the geometry they were made from and
 // kRecipe: the last 64 meshes. Any thread.
@@ -55,15 +62,17 @@ void clear_piece_cache();
 class ConvexDecomposer {
 public:
     ConvexDecomposer();
-    // Drops work that has not started, and joins the worker.
+    // Drops work that has not started, cancels the decompose that has, and
+    // joins the worker.
     ~ConvexDecomposer();
     ConvexDecomposer(const ConvexDecomposer&) = delete;
     ConvexDecomposer& operator=(const ConvexDecomposer&) = delete;
 
     // On the gameplay thread, with the write lock, while stopped. Writes
     // finished pieces into their Meshes' files when the files are as they
-    // were, then queues each Custom's Mesh whose file has no pieces of
-    // kRecipe, once per file_stamp.
+    // were, then queues a Custom's Mesh whose file has no pieces of kRecipe,
+    // once per file_stamp. One Mesh a call, so opening a project with many
+    // reads one Mesh's points a tick.
     void update(DataModel& game);
     // No work waiting or running. Finished work waits for the next update.
     bool idle() const;
@@ -83,7 +92,10 @@ private:
     std::deque<Job> waiting_;
     std::vector<Job> done_;
     bool running_ = false;
-    bool stopping_ = false;
+    // Set with mutex_ held; the running decompose reads it without.
+    std::atomic<bool> stopping_{false};
+    // Cancels the decompose the worker runs, while it runs. Under mutex_.
+    std::function<void()> cancel_;
     // The file_stamp each Mesh was last queued at. Gameplay thread only.
     std::unordered_map<InstanceId, std::string> queued_;
     std::vector<InstanceId> bodies_;

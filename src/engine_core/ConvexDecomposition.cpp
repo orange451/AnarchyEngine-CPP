@@ -12,6 +12,7 @@
 #include <atomic>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <utility>
 
@@ -51,10 +52,27 @@ std::uint64_t geometry_key(const std::vector<Vec3>& points, const std::vector<st
     return hash;
 }
 
-}  // namespace
+// Cancels a V-HACD run once stop is set. Compute clears a Cancel made before
+// it starts, so each progress report looks again.
+class StopCheck final : public VHACD::IVHACD::IUserCallback {
+public:
+    StopCheck(VHACD::IVHACD& vhacd, const std::atomic<bool>* stop) : vhacd_(vhacd), stop_(stop) {}
+    void Update(const double, const double, const char* const, const char*) override {
+        if (stop_ != nullptr && stop_->load()) {
+            vhacd_.Cancel();
+        }
+    }
 
-std::vector<anarchy::amesh::ConvexPiece> decompose(const std::vector<Vec3>& points,
-                                                   const std::vector<std::uint32_t>& triangles) {
+private:
+    VHACD::IVHACD& vhacd_;
+    const std::atomic<bool>* stop_;
+};
+
+// decompose, given up when stop is set. attach gets a way to cancel the run as
+// it starts, and an empty one before the run is freed.
+std::vector<anarchy::amesh::ConvexPiece> decompose_until(
+    const std::vector<Vec3>& points, const std::vector<std::uint32_t>& triangles, const std::atomic<bool>* stop,
+    const std::function<void(std::function<void()>)>& attach) {
     ++decompositions;
     std::vector<anarchy::amesh::ConvexPiece> pieces;
     if (points.empty() || triangles.size() < 3) {
@@ -67,20 +85,29 @@ std::vector<anarchy::amesh::ConvexPiece> decompose(const std::vector<Vec3>& poin
         flat.push_back(p.y);
         flat.push_back(p.z);
     }
+    VHACD::IVHACD* vhacd = VHACD::CreateVHACD();
+    StopCheck check(*vhacd, stop);
     // The settings kRecipe names.
     VHACD::IVHACD::Parameters parameters;
+    parameters.m_callback = &check;
     parameters.m_maxConvexHulls = 32;
     parameters.m_resolution = 100000;
     parameters.m_maxNumVerticesPerCH = 64;
     parameters.m_minimumVolumePercentErrorAllowed = 1;
     parameters.m_fillMode = VHACD::FillMode::FLOOD_FILL;
     parameters.m_shrinkWrap = true;
-    // The caller picks the thread.
-    parameters.m_asyncACD = false;
+    // Use V-HACD's own threads; Compute still blocks the caller.
+    parameters.m_asyncACD = true;
 
-    VHACD::IVHACD* vhacd = VHACD::CreateVHACD();
-    if (vhacd->Compute(flat.data(), static_cast<std::uint32_t>(points.size()), triangles.data(),
-                       static_cast<std::uint32_t>(triangles.size() / 3), parameters)) {
+    if (attach) {
+        attach([vhacd] { vhacd->Cancel(); });
+    }
+    const bool computed = vhacd->Compute(flat.data(), static_cast<std::uint32_t>(points.size()), triangles.data(),
+                                         static_cast<std::uint32_t>(triangles.size() / 3), parameters);
+    if (attach) {
+        attach(nullptr);
+    }
+    if (computed && (stop == nullptr || !stop->load())) {
         for (std::uint32_t index = 0; index < vhacd->GetNConvexHulls(); ++index) {
             VHACD::IVHACD::ConvexHull hull;
             if (!vhacd->GetConvexHull(index, hull) || hull.m_points.size() < anarchy::amesh::kMinPiecePoints) {
@@ -103,6 +130,19 @@ std::vector<anarchy::amesh::ConvexPiece> decompose(const std::vector<Vec3>& poin
     vhacd->Clean();
     vhacd->Release();
     return pieces;
+}
+
+}  // namespace
+
+std::vector<anarchy::amesh::ConvexPiece> decompose(const std::vector<Vec3>& points,
+                                                   const std::vector<std::uint32_t>& triangles) {
+    return decompose_until(points, triangles, nullptr, nullptr);
+}
+
+std::vector<anarchy::amesh::ConvexPiece> decompose(const std::vector<Vec3>& points,
+                                                   const std::vector<std::uint32_t>& triangles,
+                                                   const std::atomic<bool>& stop) {
+    return decompose_until(points, triangles, &stop, nullptr);
 }
 
 void remember_pieces(const std::vector<Vec3>& points, const std::vector<std::uint32_t>& triangles,
@@ -166,6 +206,10 @@ ConvexDecomposer::~ConvexDecomposer() {
         std::lock_guard<std::mutex> lock(mutex_);
         stopping_ = true;
         waiting_.clear();
+        // V-HACD can take seconds; the worker should not hold the studio's exit.
+        if (cancel_) {
+            cancel_();
+        }
     }
     wake_.notify_all();
     thread_.join();
@@ -187,9 +231,16 @@ void ConvexDecomposer::work() {
         waiting_.pop_front();
         running_ = true;
         lock.unlock();
-        job.pieces = decompose(job.points, job.triangles);
+        job.pieces = decompose_until(job.points, job.triangles, &stopping_, [this](std::function<void()> cancel) {
+            std::lock_guard<std::mutex> hold(mutex_);
+            cancel_ = std::move(cancel);
+        });
         lock.lock();
         running_ = false;
+        // A cancelled job has no result.
+        if (stopping_) {
+            return;
+        }
         done_.push_back(std::move(job));
     }
 }
@@ -247,6 +298,8 @@ void ConvexDecomposer::update(DataModel& game) {
             waiting_.push_back(std::move(job));
         }
         wake_.notify_one();
+        // The rest wait for later calls.
+        return;
     }
 }
 

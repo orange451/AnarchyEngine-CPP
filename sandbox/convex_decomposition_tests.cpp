@@ -98,6 +98,15 @@ TEST_CASE("D2 a mesh decomposes once, then comes from the cache", "[decompositio
     REQUIRE(known.empty());
 }
 
+TEST_CASE("D3 a decompose stopped before it starts gives no pieces", "[decomposition]") {
+    const Geometry l = ell();
+    // V-HACD clears a cancel made before its run; the stop is seen again once it runs.
+    std::atomic<bool> stop{true};
+    REQUIRE(engine_core::decompose(l.points, l.triangles, stop).empty());
+    stop = false;
+    REQUIRE(engine_core::decompose(l.points, l.triangles, stop).size() >= 2);
+}
+
 namespace {
 
 engine_core::LuaSlot instance_slot(engine_core::InstanceId id) {
@@ -266,4 +275,34 @@ TEST_CASE("Q5 a stopped Engine writes a Custom's pieces into its Mesh's file", "
     std::error_code ignored;
     std::filesystem::remove_all(resources, ignored);
     REQUIRE(stored);
+}
+
+TEST_CASE("Q6 an update queues one Mesh; the next is queued by a later update", "[decomposition]") {
+    QueueRig rig;
+    rig.custom(false);
+    engine_core::Mesh& second = rig.game.create<engine_core::Mesh>();
+    REQUIRE_FALSE(second.edit_geometry([](anarchy::amesh::Data& data) {
+        engine_core::add_box(data, Vec3{3.f, 1.f, 1.f}, Vec3{1.5f, 0.5f, 0.f});
+        engine_core::add_box(data, Vec3{1.f, 2.f, 1.f}, Vec3{2.5f, 2.f, 0.f});
+    }));
+    auto& other = rig.game.create<engine_core::PhysicsObject>();
+    REQUIRE_FALSE(other.set_shape(static_cast<int>(engine_core::PhysicsObject::Shape::Custom)));
+    REQUIRE_FALSE(other.set_mesh(instance_slot(second.id())));
+    rig.game.set_parent(other.id(), workspace_of(rig.game));
+
+    const std::uint64_t before = engine_core::decompose_count();
+    rig.decomposer.update(rig.game);
+    rig.wait();
+    REQUIRE(engine_core::decompose_count() == before + 1);
+    rig.decomposer.update(rig.game);
+    rig.wait();
+    REQUIRE(engine_core::decompose_count() == before + 2);
+    rig.decomposer.update(rig.game);
+    std::vector<anarchy::amesh::ConvexPiece> found;
+    REQUIRE(rig.has_pieces());
+    REQUIRE(second.file_pieces(engine_core::kRecipe, found));
+    // Both stored: nothing more to queue.
+    rig.decomposer.update(rig.game);
+    REQUIRE(rig.decomposer.idle());
+    REQUIRE(engine_core::decompose_count() == before + 2);
 }

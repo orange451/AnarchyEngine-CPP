@@ -22,6 +22,7 @@ inline int class_rank(std::string_view class_name) {
         {"Camera", 2},
         {"GameObject", 3},
         {"PhysicsObject", 3},
+        {"PlayerController", 3},
         {"Model", 3},
         {"Skybox", 4},
         {"DynamicSky", 4},

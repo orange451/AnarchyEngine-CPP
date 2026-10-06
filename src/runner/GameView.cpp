@@ -7,6 +7,7 @@
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
 #include "PhysicsObject.hpp"
+#include "PlayerController.hpp"
 #include "PhysicsWorld.hpp"
 #include "SelectionService.hpp"
 #include "ScriptAnalysis.hpp"
@@ -632,6 +633,34 @@ void GameView::readSelectedBodies() {
     }
     outlineScratch_.clear();
     for (const engine_core::InstanceId id : selected_) {
+        if (const auto* controller = dynamic_cast<const engine_core::PlayerController*>(game_->instance(id))) {
+            if (!game_->in_workspace(id)) {
+                continue;
+            }
+            BodyOutline& outline = outlineScratch_.emplace_back();
+            for (BodyOutline& kept : outlines_) {
+                if (kept.id == id) {
+                    outline = std::move(kept);
+                    kept.id = 0;
+                    break;
+                }
+            }
+            // Its outline is made from Radius, Height, and the hover gap, kept in size.
+            const engine_core::Vec3 size{static_cast<float>(controller->radius()),
+                                         static_cast<float>(controller->height()),
+                                         static_cast<float>(controller->hover_gap())};
+            const bool made = outline.id == id;
+            if (!made || outline.size.x != size.x || outline.size.y != size.y || outline.size.z != size.z) {
+                outline.size = size;
+                engine_core::PhysicsWorld::collision_outline(*controller, outline.lines);
+            }
+            outline.id = id;
+            outline.shape = -1;
+            outline.driven = controller->driven_game_object();
+            const engine_core::GameObject* driven = outline.driven != 0 ? game_->game_object(outline.driven) : nullptr;
+            outline.transform = driven != nullptr ? driven->transform() : controller->transform();
+            continue;
+        }
         const auto* body = dynamic_cast<const engine_core::PhysicsObject*>(game_->instance(id));
         if (body == nullptr || !game_->in_workspace(id)) {
             continue;

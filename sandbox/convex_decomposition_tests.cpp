@@ -116,10 +116,10 @@ struct QueueRig {
     engine_core::Mesh* mesh = nullptr;
 
     QueueRig() {
-        // A folder of its own, so two rigs at once keep their files.
+        // A folder of its own, so two rigs at once, in this run or another, keep their files.
         static std::atomic<int> rigs{0};
         resources = std::filesystem::temp_directory_path() /
-                    ("anarchy-decomposer-test-" + std::to_string(rigs++));
+                    ("anarchy-decomposer-test-" + process_id() + "-" + std::to_string(rigs++));
         std::filesystem::remove_all(resources);
         std::filesystem::create_directories(resources);
         game.set_resources_root(resources);
@@ -231,7 +231,7 @@ TEST_CASE("Q4 a Mesh that splits into nothing is not queued again until it chang
 
 TEST_CASE("Q5 a stopped Engine writes a Custom's pieces into its Mesh's file", "[decomposition]") {
     const std::filesystem::path resources =
-        std::filesystem::temp_directory_path() / "anarchy-decomposer-test-engine";
+        std::filesystem::temp_directory_path() / ("anarchy-decomposer-test-engine-" + process_id());
     std::filesystem::remove_all(resources);
     std::filesystem::create_directories(resources);
     engine_core::Engine engine;

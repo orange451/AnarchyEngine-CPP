@@ -1023,7 +1023,8 @@ TEST_CASE("P31 a cup stretched by Size still holds a ball", "[physics]") {
 
 TEST_CASE("P32 pieces in the Mesh's file are used without decomposing, anchored or not", "[physics]") {
     PhysicsRig rig;
-    const std::filesystem::path resources = std::filesystem::temp_directory_path() / "anarchy-physics-pieces-test";
+    const std::filesystem::path resources =
+        std::filesystem::temp_directory_path() / ("anarchy-physics-pieces-test-" + process_id());
     std::filesystem::remove_all(resources);
     std::filesystem::create_directories(resources);
     rig.game.set_resources_root(resources);

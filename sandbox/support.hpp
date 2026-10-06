@@ -22,6 +22,12 @@
 #include <thread>
 #include <utility>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 // A fresh directory under the system temp dir, removed at the end of the test.
 struct TempDir {
     std::filesystem::path path;
@@ -40,6 +46,15 @@ struct TempDir {
 
     std::filesystem::path operator/(const char* child) const { return path / child; }
 };
+
+// This process's id, for temp folders two sandbox runs at once must not share.
+inline std::string process_id() {
+#ifdef _WIN32
+    return std::to_string(_getpid());
+#else
+    return std::to_string(getpid());
+#endif
+}
 
 // Marks this thread as SimulationThread while it lives.
 struct SimRole {

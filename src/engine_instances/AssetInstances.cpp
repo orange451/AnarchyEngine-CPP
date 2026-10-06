@@ -305,10 +305,11 @@ std::string Mesh::file_stamp() const {
     if (error) {
         return {};
     }
-    // libc++'s file clock counts in __int128, which to_string does not take.
-    const long long nanoseconds =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count();
-    return path() + "|" + std::to_string(nanoseconds) + "|" + std::to_string(size);
+    // Microseconds: MSVC's file clock counts from 1601, past long long in
+    // nanoseconds, and libc++'s counts in __int128, which to_string does not take.
+    const long long microseconds = static_cast<long long>(
+        std::chrono::duration_cast<std::chrono::microseconds>(time.time_since_epoch()).count());
+    return path() + "|" + std::to_string(microseconds) + "|" + std::to_string(size);
 }
 
 bool Mesh::file_pieces(std::uint32_t recipe, std::vector<anarchy::amesh::ConvexPiece>& out) const {
@@ -343,7 +344,7 @@ std::optional<std::string> Mesh::store_pieces(std::uint32_t recipe, std::vector<
         return std::string("Pieces are stored only while the place is stopped");
     }
     if (file_stamp().empty()) {
-        return std::string("the Mesh has no file");
+        return std::string("The Mesh has no file");
     }
     const std::filesystem::path root = resources_root();
     anarchy::amesh::Data data;

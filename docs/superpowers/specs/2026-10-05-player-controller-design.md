@@ -20,7 +20,7 @@ Reference: Box3D's character documentation (`docs/character.md`) and its rigid-b
 | --- | --- |
 | Rigid body or Box3D's character mover | A dynamic rigid body. The mover (`b3World_CastMover`, `b3SolvePlanes`) lives outside the simulation, so it neither pushes nor is pushed, unlike a PhysicsObject. |
 | Class tree (Lua) | A new abstract `PhysicsBase` under PVInstance holds the shared properties. `PhysicsObject` and `PlayerController` both sit under it. PhysicsObject's own properties do not leak into PlayerController, which a Lua subclass of PhysicsObject would cause. |
-| Collider | A 16-sided cylinder hull (Box3D has no round cylinder), radius `Radius`, from `StepHeight` above the feet up to `Height`. Contact friction 0, restitution 0, all three rotation axes locked (`b3MotionLocks`), sleep off. |
+| Collider | A 16-sided cylinder hull (Box3D has no round cylinder), radius `Radius`, from the hover gap above the feet up to `Height`. The hover gap is StepHeight capped at `Height - kMinSize`, so the cylinder always has length. Contact friction 0, restitution 0, all three rotation axes locked (`b3MotionLocks`), sleep off. |
 | Why a cylinder | Its flat bottom makes StepHeight exact: an edge up to StepHeight passes under the collider and is climbed, any taller one meets a vertical side and blocks. A capsule's round bottom rides up over edges somewhat above StepHeight. Accepted costs: slight bumps sliding along walls as facet corners pass, and a flat top that can catch on ceiling edges. |
 | Height | Ground to top of head. The hover gap is inside it. |
 | Origin | Transform's position is the feet: the point on the ground below the collider's center. No Prefab recentering (`shape_center` does not apply). |
@@ -59,19 +59,21 @@ Its own fields, unchanged: AngularVelocity, AngularDamping, Friction, Bounciness
 | --- | --- | --- | --- |
 | Friction | number | 8 | Not below 0. Ground friction per second. |
 | Radius | number | 0.5 | At least kMinSize. |
-| Height | number | 2 | At least StepHeight + kMinSize; a lower value is raised to that, as Size is clamped today. Raising StepHeight raises Height with it. |
-| StepHeight | number | 0.4 | Not below 0. |
+| Height | number | 2 | At least kMinSize. The character's total height, ground to top of head; StepHeight never changes it. |
+| StepHeight | number | 0.4 | Not below 0. Keeps the value written; where it would leave the collider shorter than kMinSize, the collider and the hover use `Height - kMinSize` instead. |
 | MaxSlope | number | 45 | Degrees, clamped to [0, 89]. Slider 0–89. |
 | OnGround | boolean | false | Read-only, not saved, not in history. |
 | IsSliding | boolean | false | Read-only, not saved, not in history. |
 
-A value that is not finite is refused, as on PhysicsObject. Radius, Height, and StepHeight mark the shape dirty; Friction and MaxSlope are read every step and need no dirty bit.
+A value that is not finite is refused, as on PhysicsObject. Each property is clamped only against its own limits, never against another property, so a place loads and scripts write the same result in any order. Radius, Height, and StepHeight mark the shape dirty; Friction and MaxSlope are read every step and need no dirty bit.
 
 When Anchored, the controller is a static cylinder: no probe, no hover, no friction, and OnGround and IsSliding stay false.
 
 ## Each physics step
 
 In `PhysicsWorld::Impl::step`, after the dirty changes are pushed into bodies and before `b3World_Step`, a controller pass runs for every unanchored PlayerController that has a body.
+
+Below, StepHeight means the capped hover gap: `min(StepHeight, Height - kMinSize)`.
 
 Constants (internal, in `PhysicsWorld.cpp`):
 
@@ -157,7 +159,7 @@ Jumping needs nothing special: a script sets Velocity.Y upward. Once the control
 
 In `sandbox/physics_tests.cpp`, stepping a real world headlessly:
 
-- **Properties**: defaults; clamping (Height raised to StepHeight + kMinSize, MaxSlope to [0, 89], non-finite refused); a save and load round trip; `IsA("PhysicsBase")` true for both classes and `IsA("PhysicsObject")` false for a PlayerController; OnGround and IsSliding refuse writes and are not saved.
+- **Properties**: defaults; clamping (Height to at least kMinSize, MaxSlope to [0, 89], non-finite refused; writing StepHeight 3 on a Height 2 controller leaves Height 2 and StepHeight 3, and its collider is kMinSize tall at the top); a save and load round trip; `IsA("PhysicsBase")` true for both classes and `IsA("PhysicsObject")` false for a PlayerController; OnGround and IsSliding refuse writes and are not saved.
 - **PhysicsObject unchanged**: every existing physics test passes as is.
 - **Hover**: dropped onto a floor, the controller settles with gap within 1% of StepHeight and OnGround true.
 - **Steps**: walking at a ledge 0.9 × StepHeight tall climbs it; at 1.1 × StepHeight it is blocked.

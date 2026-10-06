@@ -3,6 +3,7 @@
 
 #include "support.hpp"
 
+#include "AssetInstances.hpp"
 #include "ConvexDecomposition.hpp"
 #include "MeshShapes.hpp"
 #include "amesh.hpp"
@@ -60,4 +61,32 @@ TEST_CASE("D1 an L splits into at least two convex pieces inside its bounds", "[
 
 TEST_CASE("D1b nothing to decompose gives no pieces", "[decomposition]") {
     REQUIRE(engine_core::decompose({}, {}).empty());
+}
+
+TEST_CASE("D2 a mesh decomposes once, then comes from the cache", "[decomposition]") {
+    engine_core::clear_piece_cache();
+    engine_core::Game game;
+    // No Path: a Mesh with no file, so only the cache can know its pieces.
+    engine_core::Mesh& mesh = game.create<engine_core::Mesh>();
+    const Geometry l = ell();
+    std::vector<anarchy::amesh::ConvexPiece> known;
+    REQUIRE_FALSE(engine_core::known_pieces(mesh, l.points, l.triangles, known));
+
+    const std::uint64_t before = engine_core::decompose_count();
+    const auto first = engine_core::pieces_for(mesh, l.points, l.triangles);
+    REQUIRE(engine_core::decompose_count() == before + 1);
+    const auto second = engine_core::pieces_for(mesh, l.points, l.triangles);
+    REQUIRE(engine_core::decompose_count() == before + 1);
+    REQUIRE(second.size() == first.size());
+    REQUIRE(engine_core::known_pieces(mesh, l.points, l.triangles, known));
+
+    // Other geometry is not the same entry.
+    Geometry moved = l;
+    moved.points[0].x += 0.25f;
+    REQUIRE_FALSE(engine_core::known_pieces(mesh, moved.points, moved.triangles, known));
+
+    // Known to have none is still known.
+    engine_core::remember_pieces(moved.points, moved.triangles, {});
+    REQUIRE(engine_core::known_pieces(mesh, moved.points, moved.triangles, known));
+    REQUIRE(known.empty());
 }

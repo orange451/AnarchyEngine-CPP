@@ -161,6 +161,9 @@ if(WIN32)
     set(ANARCHY_ICON_ICO "${ANARCHY_ICON_DIR}/anarchy.ico")
     configure_file("${ANARCHY_ICON_DIR}/anarchy.rc.in" "${CMAKE_CURRENT_BINARY_DIR}/anarchy.rc" @ONLY)
     target_sources(AnarchyStudio PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/anarchy.rc")
+    # Opts in to paths of 260 characters or more; see the file for why.
+    set(ANARCHY_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/anarchy.manifest")
+    target_sources(AnarchyStudio PRIVATE "${ANARCHY_MANIFEST}")
     # A GUI-subsystem program, so launching the IDE opens no console window.
     # MSVC looks for WinMain there; the entry point keeps the ordinary main().
     set_target_properties(AnarchyStudio PROPERTIES WIN32_EXECUTABLE TRUE)
@@ -183,7 +186,7 @@ add_executable(AnarchyPlayer MACOSX_BUNDLE
 # The studio exports with the player beside it, so building the studio builds both.
 add_dependencies(AnarchyStudio AnarchyPlayer)
 if(WIN32)
-    target_sources(AnarchyPlayer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/anarchy.rc")
+    target_sources(AnarchyPlayer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/anarchy.rc" "${ANARCHY_MANIFEST}")
     # No console window opens behind a game.
     set_target_properties(AnarchyPlayer PROPERTIES WIN32_EXECUTABLE TRUE)
     if(MSVC)

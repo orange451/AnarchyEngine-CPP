@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Merged into the studio's and the player's embedded manifest (CMakeLists.txt).
+     longPathAware lets them open files whose full path is 260 characters or more,
+     which a project's deeply nested Name.<hash> folders can reach. Windows honors
+     it only where the LongPathsEnabled policy is on. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings xmlns:ws2="http://schemas.microsoft.com/SMI/2016/WindowsSettings">
+      <ws2:longPathAware>true</ws2:longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

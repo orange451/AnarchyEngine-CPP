@@ -28,6 +28,22 @@ TEST_CASE("OM1 each Quality's resolution, slices, and blur", "[occlusion]") {
     REQUIRE(QualitySettings(9).slices == 3);
 }
 
+TEST_CASE("OM1b a dense display traces Low and Medium at a quarter of each side", "[occlusion]") {
+    // Two pixels a point: a quarter of each side is half of each side in points.
+    for (int quality : {0, 1}) {
+        const OcclusionQuality normal = QualitySettings(quality, 1.f);
+        const OcclusionQuality dense = QualitySettings(quality, 2.f);
+        REQUIRE(normal.scale == 2);
+        REQUIRE(dense.scale == 4);
+        REQUIRE(dense.slices == normal.slices);
+        REQUIRE(dense.blurRadius == normal.blurRadius);
+    }
+    // High keeps full size; a fractional scale under 1.5 is not dense.
+    REQUIRE(QualitySettings(2, 2.f).scale == 1);
+    REQUIRE(QualitySettings(1, 1.25f).scale == 2);
+    REQUIRE(QualitySettings(1, 1.5f).scale == 4);
+}
+
 TEST_CASE("OM2 the pixel radius shrinks with depth and stops at a quarter of the buffer", "[occlusion]") {
     REQUIRE(PixelRadius(1.f, 10.f, 500.f, 1000.f) == Approx(50.f));
     REQUIRE(PixelRadius(1.f, 20.f, 500.f, 1000.f) == Approx(25.f));

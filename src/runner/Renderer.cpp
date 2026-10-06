@@ -966,6 +966,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     if (pane.width <= 0 || pane.height <= 0) {
         return false;
     }
+    pixelsPerPoint_ = static_cast<float>(static_cast<double>(viewport[3]) / sceneHeight);
 
     // Open before the state is saved, so every texture the draw deletes,
     // its targets on a resize or its shadow maps, is known to restore.
@@ -1630,7 +1631,7 @@ bool Renderer::occlusionPass(const float* projection, const float* inverseProjec
     if (!occlusion.enabled || !(occlusion.intensity > 0.f) || !(occlusion.radius > 0.f)) {
         return false;
     }
-    const OcclusionQuality settings = QualitySettings(static_cast<int>(occlusion.quality));
+    const OcclusionQuality settings = QualitySettings(static_cast<int>(occlusion.quality), pixelsPerPoint_);
     if (!ensureOcclusionBuffers(targetWidth_, targetHeight_, settings.scale)) {
         return false;
     }

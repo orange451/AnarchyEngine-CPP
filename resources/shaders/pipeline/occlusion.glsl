@@ -10,7 +10,7 @@ uniform sampler2D uOcclusion;
 // 1 when this frame shaded occlusion; else uOcclusion is a white texel.
 uniform float uOcclusionEnabled;
 uniform float uOcclusionIntensity;
-// The occlusion buffer is the full-size buffers divided by this: 1 or 2.
+// The occlusion buffer is the full-size buffers divided by this: 1, 2, or 4.
 uniform float uOcclusionScale;
 
 float occlusionAt(vec2 uv, float depth) {
@@ -21,7 +21,7 @@ float occlusionAt(vec2 uv, float depth) {
     if (uOcclusionScale < 1.5) {
         visibility = texture(uOcclusion, uv).r;
     } else {
-        // The four half-size texels around this pixel, weighted bilinearly and
+        // The four smaller texels around this pixel, weighted bilinearly and
         // by how near each one's surface is to this pixel's, so shade does not
         // bleed across a silhouette.
         vec2 size = vec2(textureSize(uOcclusion, 0));
@@ -46,7 +46,7 @@ float occlusionAt(vec2 uv, float depth) {
         for (int i = 0; i < 4; ++i) {
             ivec2 offset = ivec2(i & 1, i >> 1);
             ivec2 texel = clamp(ivec2(base) + offset, ivec2(0), ivec2(size) - 1);
-            ivec2 full = texel * 2;
+            ivec2 full = texel * int(uOcclusionScale);
             float tapDepth = -viewPositionAt((vec2(full) + 0.5) / fullSize, texelFetch(uDepth, full, 0).r).z;
             float bilinear = (offset.x == 1 ? f.x : 1.0 - f.x) * (offset.y == 1 ? f.y : 1.0 - f.y);
             float w = bilinear / (1e-3 + abs(tapDepth - center) / center);

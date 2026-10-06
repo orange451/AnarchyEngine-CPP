@@ -5,15 +5,16 @@
 
 namespace runner {
 
-OcclusionQuality QualitySettings(int quality) {
+OcclusionQuality QualitySettings(int quality, float pixelsPerPoint) {
+    const int reduced = pixelsPerPoint >= kDenseDisplayPixelsPerPoint ? 4 : 2;
     switch (quality) {
         case 0:
             // Fewer slices, the same blur: a wider blur would cost more than the slice saves.
-            return {2, 2, 4};
+            return {reduced, 2, 4};
         case 2:
             return {1, 3, 4};
         default:
-            return {2, 3, 4};
+            return {reduced, 3, 4};
     }
 }
 

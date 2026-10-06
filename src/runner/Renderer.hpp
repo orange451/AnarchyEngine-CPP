@@ -665,6 +665,8 @@ private:
     int occlusionWidth_ = 0;
     int occlusionHeight_ = 0;
     int occlusionScale_ = 0;
+    // The last draw's framebuffer pixels a window point: 2 on a Retina display.
+    float pixelsPerPoint_ = 1.f;
     int occlusionRefusedWidth_ = 0;
     int occlusionRefusedHeight_ = 0;
     int occlusionRefusedScale_ = 0;

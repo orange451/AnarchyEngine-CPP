@@ -12,13 +12,20 @@ constexpr float kOcclusionMaxRadiusFraction = 0.25f;
 constexpr float kOcclusionFalloffRange = 0.6f;
 
 struct OcclusionQuality {
-    // The buffers are the pane's size divided by this: 2 is half, 1 is full.
+    // The buffers are the pane's size divided by this: 4 is a quarter, 2 is
+    // half, 1 is full.
     int scale = 2;
     int slices = 3;
     int blurRadius = 4;
 };
+// From this many framebuffer pixels a window point, a display is dense, as a
+// Retina one is.
+constexpr float kDenseDisplayPixelsPerPoint = 1.5f;
 // Enum.EffectQuality's value: Low 0, Medium 1, High 2. Anything else is Medium.
-OcclusionQuality QualitySettings(int quality);
+// On a dense display, Low and Medium trace a quarter of each side, still half
+// of each side in points: at half, the trace would cost four times what it
+// does on a plain display, for shade too soft to tell apart.
+OcclusionQuality QualitySettings(int quality, float pixelsPerPoint = 1.f);
 // How many full-size pixels Radius covers at a view depth, capped at
 // kOcclusionMaxRadiusFraction of bufferHeight. projectionScale is pixels per
 // stud at depth 1.

@@ -15,7 +15,7 @@ uniform vec2 uTexel;
 uniform float uOcclusionRadius;
 // Full-size pixels per stud at view depth 1.
 uniform float uProjectionScale;
-// 1 or 2: this buffer's texel covers that many full-size pixels a side.
+// 1, 2, or 4: this buffer's texel covers that many full-size pixels a side.
 uniform float uOcclusionScale;
 uniform float uSlices;
 

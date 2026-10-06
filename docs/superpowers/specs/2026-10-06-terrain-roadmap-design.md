@@ -38,7 +38,7 @@ The Box3D world exists while stopped. Bodies are kept in step with the tree but 
 
 ### 1. Terrain core
 
-The Terrain instance; hidden `TerrainMaterial` children that choose which Materials an island may use (at most 255, one per Material), edited in a Configure Terrain tab; sparse 32³ chunks of a 1-byte distance and a 1-byte material Id per cell, copy-on-write; Surface Nets meshing on a worker thread; chunk meshes drawn with each material's flat color; one static Box3D body per Terrain with a mesh shape per chunk; the Lua API; the `.avox` file. See its spec.
+The Terrain instance; hidden `TerrainMaterial` children that choose which Materials an island may use (at most 255; several may share one Material), edited in a Configure Terrain tab; sparse 32³ chunks of a 1-byte distance and a 1-byte material Id per cell, copy-on-write; Surface Nets meshing on a worker thread; chunk meshes drawn with each material's flat color; one static Box3D body per Terrain with a mesh shape per chunk; the Lua API; the `.avox` file. See its spec.
 
 ### 2. Sculpt tools and terrain undo (decided so far)
 

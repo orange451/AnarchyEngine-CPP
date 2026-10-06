@@ -20,9 +20,9 @@ This sub-project draws each material as its flat Color. Textured, blended materi
 | Terrain's hidden saved property | `DataPath: string`, the `.avox` file under resources, made with `lua_hidden`. |
 | Where a Terrain may live | Anywhere an instance may. Only a Terrain in Workspace (at any depth) is meshed, drawn, and collided. Methods work everywhere. |
 | What chooses a Terrain's materials | Its `TerrainMaterial` children. Each says "voxels with this Id draw and collide as this Material". The user configures them in the Configure Terrain tab or through Terrain's methods. |
-| TerrainMaterial's properties | `Id: number`, read-only, 1–255, fixed for the TerrainMaterial's life. `Material: Material?`, settable; changing it re-skins every voxel with that Id at once, with no voxel edit. `Name` follows its Material's name, as a Prefab's Model follows its Mesh. Later sub-projects add Shader, texture scale, and friction here. |
+| TerrainMaterial's properties | `Id: number`, read-only, 1–255, fixed for the TerrainMaterial's life. `Material: Material?`, settable; changing it re-skins every voxel with that Id at once, with no voxel edit. `Name` is editable and starts as its Material's name, so "Rock" and "Rock (large)" can be told apart. Later sub-projects add Shader, texture scale, and friction here. |
 | TerrainMaterial is internal | Never shown in Explorer. Its Parent is fixed to the Terrain that made it: setting Parent raises "TerrainMaterial cannot be reparented". `Instance.new("TerrainMaterial")` raises; Terrain's `AddMaterial` makes them. `Destroy` works. These need two new engine abilities, added by this sub-project: a class flag that Explorer skips, and a class flag that refuses reparenting (Destroy, undo, paste, and Stop's restore still move it). |
-| One entry per Material | A Terrain holds at most one TerrainMaterial per Material. `AddMaterial` with a Material already configured raises "Material 'Rock' is already configured on this Terrain (Id 3)"; setting `Material` to one another entry holds is refused with the same reason. Entries whose Material is `nil` never conflict. |
+| Several entries per Material | Allowed. One Material may back several TerrainMaterials, which will differ by tiling, shader, or friction once those exist. So voxel methods take TerrainMaterials, never Materials: a Material would be ambiguous. |
 | Limit | 255 TerrainMaterials. One more raises "Terrain can hold at most 255 Materials". The real budget in practice is texture memory (sub-project 3), which the Configure Terrain tab will show. |
 | Which Id a new entry gets | The lowest Id that no TerrainMaterial of this Terrain holds. |
 | Deleting a TerrainMaterial | The voxels keep their Id and draw and collide as the default material (Id 0). The Configure Terrain tab lists how many cells use an unassigned Id, with a Replace action. A TerrainMaterial added later takes the lowest free Id, which may be that one, and the leftover voxels become its Material. Undo restores a deleted TerrainMaterial on its old Id. |
@@ -102,17 +102,17 @@ Only chunks that are not all air are written.
 
 | Method | Effect |
 | --- | --- |
-| `AddMaterial(material: Material) -> TerrainMaterial` | Configures a Material on the lowest free Id. Raises if already configured, or past 255. |
+| `AddMaterial(material: Material?) -> TerrainMaterial` | Adds a TerrainMaterial on the lowest free Id, named after the Material. Raises past 255. |
 | `GetMaterials() -> {TerrainMaterial}` | Every TerrainMaterial, ordered by Id. |
 | `GetMaterialById(id: number) -> TerrainMaterial?` | The TerrainMaterial with that Id, or `nil`. |
-| `GetMaterial(material: Material) -> TerrainMaterial?` | The TerrainMaterial configured for that Material, or `nil`. |
+| `GetMaterialsFor(material: Material) -> {TerrainMaterial}` | Every TerrainMaterial backed by that Material, ordered by Id. |
 | `RemoveMaterial(entry: TerrainMaterial)` | The same as `entry:Destroy()`. Raises if it belongs to another Terrain. |
 
 ### Terrain: voxels
 
 `space` is `Enum.TransformSpace` (World, the default, or Local). World positions and frames are converted into the Terrain's space; Local ones are taken as they are, so island-relative code keeps working when the island moves.
 
-`material` is a `TerrainMaterial` of this Terrain, a `Material` (which means the TerrainMaterial configured for it; raises "Material 'Rock' is not configured on this Terrain" when there is none), or `nil` for the default material.
+`material` is a `TerrainMaterial` of this Terrain, or `nil` for the default material. A Material raises "Pass a TerrainMaterial (see Terrain:GetMaterials)"; another Terrain's TerrainMaterial raises "TerrainMaterial belongs to another Terrain".
 
 | Method | Effect |
 | --- | --- |
@@ -123,8 +123,8 @@ Only chunks that are not all air are written.
 | `SubtractBall(center, radius, space?)`, `SubtractBlock(transform, size, space?)`, `SubtractCylinder(transform, height, radius, space?)`, `SubtractWedge(transform, size, space?)` | Carve the shape out |
 | `PaintBall(center, radius, material, space?)`, `PaintBlock(transform, size, material, space?)` | Set the material of solid cells inside, shape unchanged |
 | `ReplaceMaterial(min: Vector3, max: Vector3, from, to, space?)` | Swap one material for another inside a box |
-| `ReadVoxels(min: Vector3, max: Vector3) -> {Distances: {{{number}}}, Materials: {{{number}}}}` | Raw cells in integer cell coordinates, inclusive. Distances in studs; Materials as Ids (0 for air and the default; use `GetMaterialById` to look one up). |
-| `WriteVoxels(min: Vector3, distances, materials)` | Writes the arrays back; sizes must match. Ids are 0–255; an Id with no TerrainMaterial is allowed and draws as the default. |
+| `ReadVoxels(min: Vector3, max: Vector3) -> {Distances: {{{number}}}, Materials: {{{TerrainMaterial?}}}}` | Raw cells in integer cell coordinates, inclusive. Distances in studs; Materials as this Terrain's TerrainMaterials, `nil` for air, the default, and an Id with no TerrainMaterial. |
+| `WriteVoxels(min: Vector3, distances: {{{number}}}, materials: {{{TerrainMaterial?}}})` | Writes the arrays back; sizes must match, and each material must be `nil` or this Terrain's. Because an unassigned Id reads as `nil`, a read then write turns those cells into the default material. |
 | `WorldToCell(position: Vector3) -> Vector3`, `CellToWorld(cell: Vector3) -> Vector3` | Convert between world positions and cell coordinates |
 | `Clear()` | Remove every voxel. TerrainMaterials stay. |
 
@@ -141,7 +141,7 @@ Distances for ball, box, and cylinder are exact. The wedge's is the box's inters
 `ide::IdeTerrainEditor`, a document tab built the way `IdePrefabEditor` is.
 
 - **Opening:** `Terrain::context_actions` adds `InstanceAction::Edit`, so Edit appears in the Explorer context menu, and double-clicking a Terrain in Explorer opens it. `IdeLayout::edit` reuses an open tab for the same Terrain.
-- **Contents:** a card per TerrainMaterial, in Id order, showing its Id, its Material (picked with `AssetPicker` over `asset_choices(world, "Material")`), and an "In use" badge from the Id usage masks. An "Add Material" tile, and a counter "n / 255". A row for cells that use unassigned Ids, if any, with a Replace action.
+- **Contents:** a card per TerrainMaterial, in Id order, showing its Id, its editable Name, its Material (picked with `AssetPicker` over `asset_choices(world, "Material")`), and an "In use" badge from the Id usage masks. An "Add Material" tile, and a counter "n / 255". A row for cells that use unassigned Ids, if any, with a Replace action.
 - **Editing:** through a `TerrainEditorHost` of callbacks, as `PrefabEditorHost` does. Each runs on SimulationThread inside `ScopedRecording`, one undo step each: "Add Terrain Material", "Set Terrain Material", "Remove Terrain Material".
 - **Remove while in use:** asks "Replace with…", offering the other TerrainMaterials and the default. The replacement runs `ReplaceMaterial` over the whole Terrain and then destroys the card. Until voxel undo exists (sub-project 2), the dialog says the replacement cannot be undone. Choosing "Keep cells" instead leaves them on the freed Id, drawing as the default.
 - **Selecting a card** shows its TerrainMaterial in the Properties panel.
@@ -159,7 +159,7 @@ New code lives in `src/engine_core/terrain/` (no engine dependencies, unit-testa
 | `AvoxFile` | Read and write `.avox` | `VoxelVolume` |
 | `TerrainMesher` | The worker thread, the job queue ordered by camera distance, stale-result dropping | `SurfaceNets`, Box3D through a callback that `PhysicsWorld.cpp` supplies (Box3D stays included only there) |
 | `TerrainStash` | Token to chunk-map snapshot, for place bytes | `VoxelVolume` |
-| `TerrainMaterial` | The instance: Id, Material, the uniqueness rule | `DataModel` |
+| `TerrainMaterial` | The instance: Id, Name, Material | `DataModel` |
 | `Terrain` | The instance: properties, Lua methods, material resolution, saving, loading | everything above |
 | `IdeTerrainEditor` | The Configure Terrain tab | `AssetPicker`, `ScopedRecording` |
 
@@ -179,8 +179,8 @@ Thread rules: SimulationThread does every voxel write and every Lua call, and ap
 - **`VoxelVolume`:** fill and subtract give the expected distances; a filled then subtracted region collapses back to uniform air; copy-on-write leaves earlier pointers intact and clones only touched chunks; Id usage masks match the cells; the per-call limit errors.
 - **`SurfaceNets`:** a meshed ball's vertices lie within 0.1 × VoxelSize of its radius; two neighboring chunks share their border vertices exactly; uniform chunks make no triangles; a wall a cell thick still meshes.
 - **`.avox`:** write then read gives identical chunks; a bad CRC or a missing file loads empty with one warning; VoxelSize is in the header.
-- **TerrainMaterial:** `AddMaterial` takes the lowest free Id; a duplicate Material raises from `AddMaterial` and is refused by the setter; the 256th raises; reparenting and `Instance.new` raise; it is absent from Explorer; deleting one leaves its cells on the Id, drawing the default color; adding another reuses the Id and the cells take its Material; undoing a delete restores the Id; changing `Material` changes only the color table.
-- **Lua voxels:** every method in World and Local space on a rotated, moved Terrain; a Material that is not configured raises; `ReadVoxels` then `WriteVoxels` round-trips; error messages for a missing argument and the call limit; a scaled Transform is refused.
+- **TerrainMaterial:** `AddMaterial` takes the lowest free Id; two TerrainMaterials may share a Material and `GetMaterialsFor` returns both; the 256th raises; reparenting and `Instance.new` raise; it is absent from Explorer; deleting one leaves its cells on the Id, drawing the default color; adding another reuses the Id and the cells take its Material; undoing a delete restores the Id; changing `Material` changes only the color table.
+- **Lua voxels:** every method in World and Local space on a rotated, moved Terrain; passing a Material, or another Terrain's TerrainMaterial, raises; `ReadVoxels` then `WriteVoxels` round-trips with TerrainMaterials in the arrays; error messages for a missing argument and the call limit; a scaled Transform is refused.
 - **Physics:** a chunk shape appears once its job finishes; a result older than a newer edit is dropped; CanCollide false makes no shapes; `workspace:Raycast` hits a Terrain and returns its Material, stopped and playing.
 - **Play and Stop:** edits during play are gone after Stop; TerrainMaterials added during play are gone after Stop; only the chunks changed during play are re-meshed; the `.avox` on disk is untouched by play.
 - **Place bytes:** copy and paste of a Terrain gives an equal, independent island with its own TerrainMaterials; undoing its Destroy brings its voxels back.

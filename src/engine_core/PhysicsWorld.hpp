@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -17,23 +18,57 @@ class PhysicsBase;
 class PhysicsObject;
 class PlayerController;
 
-// The Box3D world behind PhysicsObject. Engine::step_physics calls step once
-// per physics substep while the place plays, before Heartbeat. Only this
-// class's source includes Box3D.
+// Which instances a ray sees: with include, only those that are, or are under,
+// one of instances; else every instance but those.
+struct RayFilter {
+    bool include = false;
+    std::vector<InstanceId> instances;
+};
+
+// What a ray hit first.
+struct RayHit {
+    InstanceId instance = 0;   // The PhysicsBase (later, Terrain) whose body was hit.
+    Vec3 position{};
+    Vec3 normal{};
+    float distance = 0.f;
+    // Box3D's surface material for the hit triangle or shape: a Terrain's
+    // material Id. False for everything but Terrain.
+    bool has_material = false;
+    std::uint8_t material = 0;
+};
+
+// The Box3D world behind PhysicsObject. It lives while the place is stopped
+// too: then the Engine's stopped tick calls sync, and bodies follow the tree
+// but are never simulated, as if everything were anchored. While the place
+// plays, Engine::step_physics calls step once per physics substep, before
+// Heartbeat. Only this class's source includes Box3D.
 //
-// Each step, on SimulationThread under the step lock:
-//   1. A Stop since the last step (a new world_generation) drops every body.
+// sync, on SimulationThread under the write lock, playing or stopped:
+//   1. A Stop since the last sync (a new world_generation) drops every body.
 //   2. Every PhysicsBase in Workspace, at any depth, gets a body; one that
 //      left Workspace or was destroyed loses its body. Of several naming one
 //      GameObject, the first in tree order wins, and each other warns once.
-//   3. What scripts and Properties changed since the last step goes into the
+//   3. What scripts and Properties changed since the last sync goes into the
 //      bodies (PhysicsObject::take_dirty). A driven GameObject whose
 //      Transform is not what physics last wrote was moved by someone else,
 //      and its body jumps there. A body whose shape_center moved since its
-//      shape was made, as when its GameObject gets a Prefab, is made again.
-//   4. Each PlayerController probes for the ground under it, says whether
-//      it is OnGround or IsSliding, and on ground hovers its hover gap above
-//      it and slows by its Friction (PlayerController).
+//      shape was made is made again.
+//   Stopped, the GameObject decides where its body is: each PhysicsBase that
+//   moves a GameObject (PhysicsBase::driven_game_object) takes that
+//   GameObject's position and rotation as its Transform, keeping its own
+//   scale, a PlayerController upright, so the body sits where it starts at
+//   play and a dragger over the GameObject's children finds it there. A
+//   write to that PhysicsBase's own Transform moves neither the body nor the
+//   GameObject; the Transform goes back to the body's. This holds on the
+//   first sync of play too, for a write made just before Play. Those stores
+//   are the only writes stopped sync makes to instances: no Changed, no
+//   history, no dirty mark, and no ground for a PlayerController. Stopped,
+//   sync never decomposes a Mesh: an unanchored Custom without known pieces
+//   is a Hull until its pieces are stored, or until Play, when it is made
+//   again.
+//
+// simulate, only while playing:
+//   4. Each PlayerController probes for the ground under it (PlayerController).
 //   5. Box3D steps by dt, in one substep: the engine's own substeps are
 //      already 240 Hz.
 //   6. Every body Box3D moved writes its Transform and Velocity (and a
@@ -41,7 +76,7 @@ class PlayerController;
 //      GameObject's scale kept. These writes fire no Changed and record no
 //      history, as a GameObject's own velocity integration does.
 //
-// Gravity is (0, -Workspace.Gravity, 0), read again at the start of each step.
+// Gravity is (0, -Workspace.Gravity, 0), read again at each sync.
 class PhysicsWorld {
 public:
     PhysicsWorld();
@@ -49,18 +84,18 @@ public:
     PhysicsWorld(const PhysicsWorld&) = delete;
     PhysicsWorld& operator=(const PhysicsWorld&) = delete;
 
-    // Does nothing while game is not playing.
+    // Bodies match the tree. Playing or stopped.
+    void sync(DataModel& game);
+    // Probes, steps, and writes back. Does nothing while game is not playing.
+    void simulate(DataModel& game, double dt);
+    // Does nothing while game is not playing; else sync, then simulate.
     void step(DataModel& game, double dt);
 
-    // While the place is stopped, what step does for a body's GameObject in
-    // reverse: each PhysicsBase in Workspace that moves a GameObject
-    // (PhysicsBase::driven_game_object) takes that GameObject's position and
-    // rotation as its Transform, keeping its own scale, a PlayerController
-    // upright. So the body sits where it will start at play, and a dragger
-    // that takes in a GameObject's children finds it there. Stored as a
-    // physics move is: no Changed, no history, no dirty mark. The Engine's
-    // stopped tick calls it. SimulationThread, under the write lock.
-    static void follow_game_objects(DataModel& game);
+    // The first body a ray from origin along direction hits, within direction's
+    // length, that filter lets it see. Syncs first, so it sees the tree as it
+    // is now. A ray that starts inside a body does not hit it. Nothing for a
+    // zero direction or a non-finite origin. Any thread, under the write lock.
+    std::optional<RayHit> raycast(DataModel& game, Vec3 origin, Vec3 direction, const RayFilter& filter);
 
     // How many bodies the world holds, and whether this PhysicsObject has one.
     std::size_t body_count() const;
@@ -71,6 +106,15 @@ public:
     std::vector<float> shape_frictions(InstanceId id) const;
     // For tests: how many times this body's shape has been made, or 0.
     int shapes_made(InstanceId id) const;
+    // For tests: a key naming the body's Box3D handle and the world_generation
+    // it was made in, the same while the body lives and different after a
+    // Stop (a new world hands out the same handles again); 0 when the
+    // PhysicsBase has none. And where the body is.
+    std::uint64_t body_key(InstanceId id) const;
+    std::optional<Vec3> body_position(InstanceId id) const;
+    // For tests: a key naming its first shape's Box3D handle, changing
+    // whenever the shape is remade; 0 when it has none.
+    std::uint64_t shape_key(InstanceId id) const;
 
     // Where a warning goes, such as a Hull that fell back to a Box. Unset, it
     // goes nowhere.

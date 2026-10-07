@@ -80,6 +80,13 @@ struct PhysicsRig {
     }
 
     void seconds(double time) { steps(static_cast<int>(time / kStep + 0.5)); }
+
+    // What the Engine's stopped tick does: bodies follow the tree, nothing moves.
+    void sync_steps(int count) {
+        for (int i = 0; i < count; ++i) {
+            physics.sync(game);
+        }
+    }
 };
 
 }  // namespace physics_rig

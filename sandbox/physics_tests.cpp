@@ -1125,7 +1125,7 @@ TEST_CASE("P35 stopped, a body's Transform follows the GameObject it moves", "[p
     REQUIRE_FALSE(body.set_game_object(instance_slot(part.id())));
     PhysicsObject& loose = rig.body(at(0.f, 2.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
 
-    engine_core::PhysicsWorld::follow_game_objects(rig.game);
+    rig.sync_steps(1);
     REQUIRE(near(x_of(body.transform()), 3.f, 1e-5f));
     REQUIRE(near(y_of(body.transform()), 10.f, 1e-5f));
     // Only the pose: the body keeps its own scale, the GameObject its Transform,
@@ -1136,7 +1136,7 @@ TEST_CASE("P35 stopped, a body's Transform follows the GameObject it moves", "[p
 
     // Moved again, by Properties or a dragger, the body comes along.
     part.set_transform(at(5.f, 10.f, 0.f));
-    engine_core::PhysicsWorld::follow_game_objects(rig.game);
+    rig.sync_steps(1);
     REQUIRE(near(x_of(body.transform()), 5.f, 1e-5f));
 
     // A body under a GameObject follows its parent; a PlayerController stays
@@ -1149,7 +1149,7 @@ TEST_CASE("P35 stopped, a body's Transform follows the GameObject it moves", "[p
     other.set_transform(tilted);
     PlayerController& controller = rig.controller(engine_core::matrix4_identity(), other.id());
     REQUIRE(controller.driven_game_object() == other.id());
-    engine_core::PhysicsWorld::follow_game_objects(rig.game);
+    rig.sync_steps(1);
     REQUIRE(near(x_of(controller.transform()), -4.f, 1e-5f));
     REQUIRE(near(z_of(controller.transform()), 6.f, 1e-5f));
     REQUIRE(near(controller.transform().m[5], 1.f, 1e-5f));

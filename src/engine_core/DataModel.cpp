@@ -1868,6 +1868,10 @@ void DataModel::set_script_analysis(ScriptAnalysis* analysis) { state_->script_a
 
 ScriptAnalysis* DataModel::script_analysis() const { return state_->script_analysis; }
 
+void DataModel::set_physics(PhysicsWorld* physics) { state_->physics = physics; }
+
+PhysicsWorld* DataModel::physics() const { return state_->physics; }
+
 void DataModel::for_each_instance(const std::function<void(DataModel&)>& fn) {
     const std::uint32_t count = slot_count();
     for (std::uint32_t index = 0; index < count; ++index) {

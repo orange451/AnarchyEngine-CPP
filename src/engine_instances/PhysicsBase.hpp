@@ -18,7 +18,7 @@ namespace engine_core {
 // GameObject: it has a Transform but draws nothing. When GameObject names
 // one, or else when its parent is a GameObject, the body starts at that
 // GameObject's Transform and moves it; stopped, its Transform follows that
-// GameObject's position and rotation (PhysicsWorld::follow_game_objects). Of
+// GameObject's position and rotation (PhysicsWorld::sync). Of
 // several bodies moving one GameObject, only the first in tree order gets
 // one. Abstract: the Lua class PhysicsBase cannot be made, and
 // IsA("PhysicsBase") is true of both.

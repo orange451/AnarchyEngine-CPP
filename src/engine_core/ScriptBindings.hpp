@@ -1,8 +1,8 @@
 #pragma once
 
-// Internal to ScriptRuntime.cpp and ScriptBindings.cpp: the userdata layouts,
-// metatable names, and helpers both use, and the Lua bindings that reach into
-// ScriptRuntime as a friend. Nothing else includes this.
+// Internal to ScriptRuntime.cpp, ScriptBindings.cpp, and RaycastBindings.cpp:
+// the userdata layouts, metatable names, and helpers they use, and the Lua
+// bindings that reach into ScriptRuntime as a friend. Nothing else includes this.
 
 #include "Contract.hpp"
 #include "Events.hpp"
@@ -314,6 +314,15 @@ struct ScriptBindings {
     static int emitter_stop(lua_State* state);
     // A Prefab's bounding box size, from Prefab::bounds.
     static int prefab_get_bounding_box(lua_State* state);
+    // Workspace:Raycast, and the two RaycastParams/RaycastResult members that
+    // read the current tree (FilterDescendantsInstances and Instance), so need
+    // ScriptRuntime's privates as this friend struct. Defined in RaycastBindings.cpp.
+    // Runs on whichever thread holds the VM, always under the write lock (a
+    // step, the tool step, a paused edit, or the render window), as
+    // PhysicsWorld::raycast needs.
+    static int workspace_raycast(lua_State* state);
+    static int raycast_params_index(lua_State* state);
+    static int raycast_result_index(lua_State* state);
     // The keys and buttons are the service's, read on the simulation thread.
     static UserInputService* input_service(lua_State* state);
     static int input_is_key_down(lua_State* state);
@@ -327,5 +336,8 @@ struct ScriptBindings {
     static int input_object_tostring(lua_State* state);
     static int thread_index(lua_State* state);
 };
+
+// RaycastParams and RaycastResult: their metatables and the RaycastParams global.
+void open_raycast(lua_State* state);
 
 }  // namespace engine_core

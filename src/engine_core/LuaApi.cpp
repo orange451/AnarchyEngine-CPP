@@ -1297,6 +1297,28 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "How fast every PhysicsObject and PlayerController speeds downward, in studs per second per second. "
         "Below 0 pulls up; 0 is none. Defaults to 9.81.",
         "number", false, {});
+    add("Workspace", "Raycast",
+        "Casts a ray from origin along direction (its length is how far) and returns the first thing it hits, as a "
+        "RaycastResult, or nil. params (a RaycastParams) chooses what it sees. Works stopped and playing. A ray "
+        "that starts inside something does not hit it.",
+        "RaycastResult?", false, {P("origin", "Vector3"), P("direction", "Vector3"), P("params", "RaycastParams?")});
+
+    add("RaycastParams", "new", "A new RaycastParams, excluding nothing.", "RaycastParams", false, {});
+    add("RaycastParams", "FilterType",
+        "Whether FilterDescendantsInstances is what the ray sees (Include) or what it does not (Exclude, the "
+        "default).",
+        "Enum.RaycastFilterType", false, {});
+    add("RaycastParams", "FilterDescendantsInstances",
+        "The instances (and everything under them) FilterType either limits the ray to or hides from it. Empty by "
+        "default.",
+        "{Instance}", false, {});
+
+    add("RaycastResult", "Instance", "What the ray hit, or nil if it is gone since.", "Instance", false, {});
+    add("RaycastResult", "Position", "Where the ray hit, in world space.", "Vector3", false, {});
+    add("RaycastResult", "Normal", "The hit surface's outward normal.", "Vector3", false, {});
+    add("RaycastResult", "Distance", "How far along the ray the hit is, in studs.", "number", false, {});
+    add("RaycastResult", "Material", "Always nil: nothing but Terrain has one, and this engine has no Terrain yet.",
+        "Material?", false, {});
 
     return docs;
 }

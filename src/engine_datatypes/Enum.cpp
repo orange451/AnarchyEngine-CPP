@@ -194,6 +194,12 @@ const EnumEntry kTransformSpaces[] = {
     {"Local", 1},
 };
 
+// Whether a ray sees only what RaycastParams lists (Include) or all but it.
+const EnumEntry kRaycastFilterTypes[] = {
+    {"Exclude", 0},
+    {"Include", 1},
+};
+
 // The handle a Dragger's events name: three arrows, then three plane squares.
 const EnumEntry kDraggerHandles[] = {
     {"X", 0}, {"Y", 1}, {"Z", 2}, {"XY", 3}, {"YZ", 4}, {"XZ", 5},
@@ -219,6 +225,7 @@ const EnumType kPhysicsShapeType{"PhysicsShape", kPhysicsShapes, count_of(kPhysi
 const EnumType kRollOffModeType{"RollOffMode", kRollOffModes, count_of(kRollOffModes)};
 const EnumType kGuiAlignmentType{"GuiAlignment", kGuiAlignments, count_of(kGuiAlignments)};
 const EnumType kTransformSpaceType{"TransformSpace", kTransformSpaces, count_of(kTransformSpaces)};
+const EnumType kRaycastFilterTypeType{"RaycastFilterType", kRaycastFilterTypes, count_of(kRaycastFilterTypes)};
 const EnumType kDraggerHandleType{"DraggerHandle", kDraggerHandles, count_of(kDraggerHandles)};
 // How the 3D scene's edges are smoothed. Later methods, such as TAA, are new entries.
 const EnumEntry kAntialiasingModes[] = {{"None", 0}, {"FXAA", 1}};
@@ -231,7 +238,8 @@ const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kR
                                   &kKeyCodeType,        &kUserInputTypeType, &kUserInputStateType,
                                   &kMouseBehaviorType,  &kPhysicsShapeType,  &kRollOffModeType,
                                   &kGuiAlignmentType,   &kTransformSpaceType,  &kDraggerHandleType,
-                                  &kFinishRecordingOperationType, &kAntialiasingModeType, &kEffectQualityType};
+                                  &kFinishRecordingOperationType, &kAntialiasingModeType, &kEffectQualityType,
+                                  &kRaycastFilterTypeType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -310,6 +318,7 @@ const EnumType& roll_off_mode_enum() { return kRollOffModeType; }
 
 const EnumType& gui_alignment_enum() { return kGuiAlignmentType; }
 const EnumType& transform_space_enum() { return kTransformSpaceType; }
+const EnumType& raycast_filter_type_enum() { return kRaycastFilterTypeType; }
 const EnumType& dragger_handle_enum() { return kDraggerHandleType; }
 const EnumType& antialiasing_mode_enum() { return kAntialiasingModeType; }
 const EnumType& effect_quality_enum() { return kEffectQualityType; }

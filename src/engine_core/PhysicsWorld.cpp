@@ -406,6 +406,52 @@ float probe_hit(b3ShapeId shape, b3Pos point, b3Vec3 normal, float fraction, uin
     return hits->closest;
 }
 
+// The closest hit a script's ray keeps, skipping what the filter hides and
+// bodies it starts inside.
+struct RayHits {
+    const DataModel* game = nullptr;
+    const RayFilter* filter = nullptr;
+    float closest = 1.f;
+    bool hit = false;
+    InstanceId instance = 0;
+    b3Vec3 point{};
+    b3Vec3 normal{};
+    uint64_t material = 0;
+};
+
+// Whether id is one of instances or under one of them. parent gives
+// kNoParent for a dead or unparented id, and again for kNoParent itself, so
+// the walk stops there as well as at the root.
+bool under_any(const DataModel& game, InstanceId id, const std::vector<InstanceId>& instances) {
+    for (InstanceId at = id; at != 0 && at != DataModel::kNoParent; at = game.parent(at)) {
+        if (std::find(instances.begin(), instances.end(), at) != instances.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+float ray_hit(b3ShapeId shape, b3Pos point, b3Vec3 normal, float fraction, uint64_t material, int, int,
+              void* context) {
+    auto* hits = static_cast<RayHits*>(context);
+    if (fraction == 0.f) {
+        return -1.f;
+    }
+    const InstanceId id = id_of(b3Body_GetUserData(b3Shape_GetBody(shape)));
+    if (under_any(*hits->game, id, hits->filter->instances) != hits->filter->include) {
+        return -1.f;
+    }
+    if (fraction < hits->closest) {
+        hits->closest = fraction;
+        hits->hit = true;
+        hits->instance = id;
+        hits->point = point;
+        hits->normal = normal;
+        hits->material = material;
+    }
+    return hits->closest;
+}
+
 }  // namespace
 
 struct PhysicsWorld::Impl {
@@ -443,6 +489,11 @@ struct PhysicsWorld::Impl {
         // How many times its shape has been made (shapes_made).
         int made = 0;
         std::uint64_t seen = 0;
+        // An unanchored Custom made while stopped, when its Mesh's pieces were
+        // not known: it is a Hull, made again when the Mesh's file changes
+        // (its stamp then) or when play starts.
+        bool made_without_pieces = false;
+        std::string pieces_stamp;
     };
 
     b3WorldId world = b3_nullWorldId;
@@ -450,6 +501,12 @@ struct PhysicsWorld::Impl {
     float gravity = -static_cast<float>(Workspace::kDefaultGravity);
     std::uint32_t generation = 0;
     std::uint64_t pass = 0;
+    // The last sync ran while the place played, and whether this one takes a
+    // driven body's pose from its GameObject rather than its own Transform:
+    // while stopped, and on the first sync of play, when a write made just
+    // before Play was never seen stopped (see push).
+    bool played = false;
+    bool poses_from_game_objects = true;
     std::unordered_map<InstanceId, Body> bodies;
     std::function<void(const std::string&)> warn;
 
@@ -502,19 +559,61 @@ struct PhysicsWorld::Impl {
         }
     }
 
-    void step(DataModel& game, double dt) {
-        if (!game.simulation_running()) {
-            return;
-        }
+    void sync(DataModel& game) {
         if (!b3World_IsValid(world) || generation != game.world_generation()) {
             begin(game.world_generation());
         }
         pull_gravity(game);
+        const bool running = game.simulation_running();
+        poses_from_game_objects = !running || !played;
         reconcile(game);
+        played = running;
+    }
+
+    void simulate(DataModel& game, double dt) {
+        if (!game.simulation_running()) {
+            return;
+        }
         control(game, dt);
         b3World_Step(world, static_cast<float>(dt), 1);
         unclimb(game);
         pull(game);
+    }
+
+    void step(DataModel& game, double dt) {
+        if (!game.simulation_running()) {
+            return;
+        }
+        sync(game);
+        simulate(game, dt);
+    }
+
+    std::optional<RayHit> raycast(DataModel& game, Vec3 origin, Vec3 direction, const RayFilter& filter) {
+        const float length =
+            std::sqrt(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
+        if (!(length > 0.f) || !std::isfinite(length)) {
+            return std::nullopt;
+        }
+        // Box3D asserts the origin is finite (b3IsValidPosition); a script can
+        // pass one that is not (0/0, math.huge), so refuse it before that, same
+        // as the direction above.
+        if (!std::isfinite(origin.x) || !std::isfinite(origin.y) || !std::isfinite(origin.z)) {
+            return std::nullopt;
+        }
+        sync(game);
+        RayHits hits;
+        hits.game = &game;
+        hits.filter = &filter;
+        b3World_CastRay(world, to_b3(origin), to_b3(direction), b3DefaultQueryFilter(), ray_hit, &hits);
+        if (!hits.hit) {
+            return std::nullopt;
+        }
+        RayHit out;
+        out.instance = hits.instance;
+        out.position = from_b3(hits.point);
+        out.normal = from_b3(hits.normal);
+        out.distance = hits.closest * length;
+        return out;
     }
 
     // Workspace.Gravity into the world, when it changed.
@@ -557,6 +656,11 @@ struct PhysicsWorld::Impl {
                     say(std::string(object->class_name()) + " " + game.name(id) +
                         " has no body: an earlier body already moves " + game.name(target));
                 }
+                // Stopped, its Transform still follows that GameObject, as a
+                // body's does, so a dragger finds it there too.
+                if (!game.simulation_running()) {
+                    follow_without_body(game, *object, target);
+                }
                 continue;
             }
             object->warned_shared = false;
@@ -569,8 +673,10 @@ struct PhysicsWorld::Impl {
             }
         }
         for (InstanceId id : gone) {
-            if (auto* controller = dynamic_cast<PlayerController*>(game.instance(id))) {
-                controller->store_ground(false, false);
+            if (game.simulation_running()) {
+                if (auto* controller = dynamic_cast<PlayerController*>(game.instance(id))) {
+                    controller->store_ground(false, false);
+                }
             }
             destroy(id);
         }
@@ -592,6 +698,23 @@ struct PhysicsWorld::Impl {
             }
             std::vector<InstanceId> children = game.get_children(id);
             stack.insert(stack.end(), children.rbegin(), children.rend());
+        }
+    }
+
+    // object's Transform at target's position and rotation (upright for a
+    // PlayerController), keeping its own scale, stored as a physics move is.
+    static void follow_without_body(DataModel& game, PhysicsBase& object, InstanceId target) {
+        const GameObject* driven = game.game_object(target);
+        if (driven == nullptr) {
+            return;
+        }
+        const bool controller = dynamic_cast<PlayerController*>(&object) != nullptr;
+        b3Vec3 position{};
+        b3Quat rotation{};
+        pose_of(controller ? upright_transform(driven->transform()) : driven->transform(), position, rotation);
+        const Matrix4 followed = matrix_of(position, rotation, object.transform());
+        if (!same_matrix4(followed, object.transform())) {
+            object.store_simulated(followed, object.velocity());
         }
     }
 
@@ -621,6 +744,13 @@ struct PhysicsWorld::Impl {
         Body& body = found->second;
         body.seen = pass;
         recenter(game, object, body, follow_driven(game, object, body));
+        if (body.made_without_pieces && !object.anchored()) {
+            const auto* rigid = dynamic_cast<PhysicsObject*>(&object);
+            const auto* mesh = rigid != nullptr ? dynamic_cast<const Mesh*>(game.instance(rigid->mesh_id())) : nullptr;
+            if (game.simulation_running() || (mesh != nullptr && mesh->file_stamp() != body.pieces_stamp)) {
+                make_shape(game, object, body);
+            }
+        }
     }
 
     // A GameObject with another Prefab, or one moved by someone else (moved),
@@ -1085,7 +1215,7 @@ struct PhysicsWorld::Impl {
         def.userData = user_data(object.id());
         record.body = b3CreateBody(world, &def);
         make_shape(game, object, record);
-        // Its Transform says where the body is from the start.
+        // Its Transform says where the body is from the start, stopped too.
         if (target != 0) {
             object.store_simulated(matrix_of(def.position, def.rotation, object.transform()), object.velocity());
         }
@@ -1141,6 +1271,13 @@ struct PhysicsWorld::Impl {
     // Friction, Bounciness, and a density that gives it its Mass.
     void make_object_shape(DataModel& game, PhysicsObject& object, Body& record) {
         drop_shape(record);
+        // Only make_pieces sets this, for the one case it covers: a stopped,
+        // unanchored Custom whose Mesh's pieces were not known. Cleared here
+        // so a shape made any other way (a different Shape, an anchored
+        // Custom, or an unanchored Custom whose pieces are known) does not
+        // keep asking every played sync to be made again.
+        record.made_without_pieces = false;
+        record.pieces_stamp.clear();
         b3ShapeDef def = b3DefaultShapeDef();
         def.baseMaterial.friction = static_cast<float>(object.friction());
         def.baseMaterial.restitution = static_cast<float>(object.bounciness());
@@ -1292,7 +1429,15 @@ struct PhysicsWorld::Impl {
             return false;
         }
         const auto* mesh = dynamic_cast<const Mesh*>(game.instance(object.mesh_id()));
-        const std::vector<anarchy::amesh::ConvexPiece> pieces = pieces_for(*mesh, mesh_points, triangles);
+        std::vector<anarchy::amesh::ConvexPiece> pieces;
+        if (game.simulation_running()) {
+            pieces = pieces_for(*mesh, mesh_points, triangles);
+        } else if (!known_pieces(*mesh, mesh_points, triangles, pieces)) {
+            // Stopped, never decompose here: the studio's decomposer will.
+            record.made_without_pieces = true;
+            record.pieces_stamp = mesh->file_stamp();
+            return false;
+        }
         std::vector<b3HullData*> hulls = piece_hulls(pieces, fit_of(mesh_points, scale, record.center));
         if (hulls.empty()) {
             if (!object.warned_custom) {
@@ -1383,7 +1528,20 @@ struct PhysicsWorld::Impl {
                 b3Body_SetAngularDamping(record.body, static_cast<float>(rigid->angular_damping()));
             }
         }
-        if ((dirty & PhysicsObject::kDirtyPose) != 0) {
+        // Stopped, a driven body's Transform follows its GameObject, so a write
+        // to it, as the Move tool's to every selected PVInstance or a
+        // Properties edit, does not move the body or the GameObject (which
+        // would be a GameObject move with no Changed and no history): the
+        // GameObject decides, and the Transform goes back to where the body
+        // is. The same on the first sync of play, for a write made after the
+        // last stopped sync and before Play.
+        const bool pose_from_game_object = record.driven != 0 && poses_from_game_objects;
+        if ((dirty & PhysicsObject::kDirtyPose) != 0 && pose_from_game_object) {
+            const b3Vec3 position = b3Body_GetPosition(record.body);
+            const b3Quat rotation = b3Body_GetRotation(record.body);
+            object.store_simulated(matrix_of(position, rotation, object.transform()), object.velocity());
+        }
+        if ((dirty & PhysicsObject::kDirtyPose) != 0 && !pose_from_game_object) {
             b3Vec3 position{};
             b3Quat rotation{};
             pose_of(object.transform(), position, rotation);
@@ -1465,27 +1623,14 @@ PhysicsWorld::PhysicsWorld() : impl_(std::make_unique<Impl>()) {}
 
 PhysicsWorld::~PhysicsWorld() = default;
 
+void PhysicsWorld::sync(DataModel& game) { impl_->sync(game); }
+
+void PhysicsWorld::simulate(DataModel& game, double dt) { impl_->simulate(game, dt); }
+
 void PhysicsWorld::step(DataModel& game, double dt) { impl_->step(game, dt); }
 
-void PhysicsWorld::follow_game_objects(DataModel& game) {
-    std::vector<InstanceId> ids;
-    game.physics_bodies(ids);
-    for (InstanceId id : ids) {
-        auto* object = dynamic_cast<PhysicsBase*>(game.instance(id));
-        const InstanceId target = object != nullptr ? object->driven_game_object() : 0;
-        const GameObject* driven = target != 0 ? game.game_object(target) : nullptr;
-        if (driven == nullptr) {
-            continue;
-        }
-        const bool controller = dynamic_cast<PlayerController*>(object) != nullptr;
-        b3Vec3 position{};
-        b3Quat rotation{};
-        pose_of(controller ? upright_transform(driven->transform()) : driven->transform(), position, rotation);
-        const Matrix4 followed = matrix_of(position, rotation, object->transform());
-        if (!same_matrix4(followed, object->transform())) {
-            object->store_simulated(followed, object->velocity());
-        }
-    }
+std::optional<RayHit> PhysicsWorld::raycast(DataModel& game, Vec3 origin, Vec3 direction, const RayFilter& filter) {
+    return impl_->raycast(game, origin, direction, filter);
 }
 
 std::size_t PhysicsWorld::body_count() const { return impl_->bodies.size(); }
@@ -1511,6 +1656,32 @@ std::vector<float> PhysicsWorld::shape_frictions(InstanceId id) const {
         }
     }
     return frictions;
+}
+
+std::uint64_t PhysicsWorld::body_key(InstanceId id) const {
+    const auto found = impl_->bodies.find(id);
+    if (found == impl_->bodies.end()) {
+        return 0;
+    }
+    // A new world numbers its bodies from the start again, so the handle alone
+    // would match across a Stop; the generation in the top bits tells them apart.
+    return b3StoreBodyId(found->second.body) ^ (static_cast<std::uint64_t>(impl_->generation) << 48);
+}
+
+std::uint64_t PhysicsWorld::shape_key(InstanceId id) const {
+    const auto found = impl_->bodies.find(id);
+    if (found == impl_->bodies.end() || found->second.shapes.empty()) {
+        return 0;
+    }
+    return b3StoreShapeId(found->second.shapes.front());
+}
+
+std::optional<Vec3> PhysicsWorld::body_position(InstanceId id) const {
+    const auto found = impl_->bodies.find(id);
+    if (found == impl_->bodies.end()) {
+        return std::nullopt;
+    }
+    return from_b3(b3Body_GetPosition(found->second.body));
 }
 
 void PhysicsWorld::set_warning_sink(std::function<void(const std::string&)> sink) { impl_->warn = std::move(sink); }

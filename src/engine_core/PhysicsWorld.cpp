@@ -390,9 +390,11 @@ struct RayHits {
     uint64_t material = 0;
 };
 
-// Whether id is one of instances or under one of them.
+// Whether id is one of instances or under one of them. parent gives
+// kNoParent for a dead or unparented id, and again for kNoParent itself, so
+// the walk stops there as well as at the root.
 bool under_any(const DataModel& game, InstanceId id, const std::vector<InstanceId>& instances) {
-    for (InstanceId at = id; at != 0; at = game.parent(at)) {
+    for (InstanceId at = id; at != 0 && at != DataModel::kNoParent; at = game.parent(at)) {
         if (std::find(instances.begin(), instances.end(), at) != instances.end()) {
             return true;
         }
@@ -1475,7 +1477,12 @@ struct PhysicsWorld::Impl {
                 b3Body_SetAngularDamping(record.body, static_cast<float>(rigid->angular_damping()));
             }
         }
-        if ((dirty & PhysicsObject::kDirtyPose) != 0) {
+        // Stopped, a driven body's own Transform is stale (nothing stores into
+        // it), so a write to it, as the Move tool's to every selected PVInstance,
+        // is not where the body is: the GameObject decides, and follow_driven
+        // puts the body there. Nothing is written to any instance.
+        const bool pose_from_game_object = record.driven != 0 && !game.simulation_running();
+        if ((dirty & PhysicsObject::kDirtyPose) != 0 && !pose_from_game_object) {
             b3Vec3 position{};
             b3Quat rotation{};
             pose_of(object.transform(), position, rotation);
@@ -1591,7 +1598,12 @@ std::vector<float> PhysicsWorld::shape_frictions(InstanceId id) const {
 
 std::uint64_t PhysicsWorld::body_key(InstanceId id) const {
     const auto found = impl_->bodies.find(id);
-    return found == impl_->bodies.end() ? 0 : b3StoreBodyId(found->second.body);
+    if (found == impl_->bodies.end()) {
+        return 0;
+    }
+    // A new world numbers its bodies from the start again, so the handle alone
+    // would match across a Stop; the generation in the top bits tells them apart.
+    return b3StoreBodyId(found->second.body) ^ (static_cast<std::uint64_t>(impl_->generation) << 48);
 }
 
 std::uint64_t PhysicsWorld::shape_key(InstanceId id) const {

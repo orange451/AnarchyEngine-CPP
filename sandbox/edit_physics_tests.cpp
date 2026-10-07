@@ -122,6 +122,7 @@ TEST_CASE("E4 Play keeps the bodies made while stopped, and Stop remakes them", 
     rig.game.stop_simulation();
     rig.sync_steps(1);
     REQUIRE(rig.physics.has_body(box.id()));
+    REQUIRE(rig.physics.body_key(box.id()) != before);
     REQUIRE(rig.physics.body_position(box.id())->y == 5.f);
 }
 
@@ -156,12 +157,20 @@ TEST_CASE("E7 a body made without pieces is made again at Play, with pieces", "[
     TempResourcesRoot resources(rig.game);
     engine_core::Mesh* mesh = nullptr;
     PhysicsObject& body = custom_cube(rig, mesh);
-    (void)body;
+    // Two apart boxes, not one cube, so the pieces are more than the one Hull.
+    REQUIRE_FALSE(mesh->edit_geometry([](anarchy::amesh::Data& data) {
+        data = anarchy::amesh::Data{};
+        engine_core::add_box(data, Vec3{0.4f, 1.f, 1.f}, Vec3{-0.3f, 0.f, 0.f});
+        engine_core::add_box(data, Vec3{0.4f, 1.f, 1.f}, Vec3{0.3f, 0.f, 0.f});
+    }));
     rig.sync_steps(1);
+    REQUIRE(rig.physics.shape_frictions(body.id()).size() == 1);
     const std::uint64_t decomposed = engine_core::decompose_count();
     rig.play();
     rig.steps(1);
     REQUIRE(engine_core::decompose_count() == decomposed + 1);
+    // Built again from the stored pieces, one shape each, not the one Hull.
+    REQUIRE(rig.physics.shape_frictions(body.id()).size() > 1);
     engine_core::clear_piece_cache();
 }
 
@@ -223,4 +232,27 @@ TEST_CASE("E10 a stopped Engine keeps bodies and registers its world", "[physics
     }
     engine.stop();
     REQUIRE(synced);
+}
+
+TEST_CASE("E11 stopped, a Move tool drag of a GameObject and its PhysicsObject moves the GameObject only by its own Transform",
+          "[physics][edit]") {
+    PhysicsRig rig;
+    GameObject& part = create_part(rig.game);
+    part.set_transform(at(10.f, 0.f, 0.f));
+    // A child PhysicsObject drives its GameObject; stopped, its own Transform
+    // is stale (identity here), as nothing stores into it.
+    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+    rig.sync_steps(1);
+    REQUIRE(rig.physics.body_position(body.id())->x == 10.f);
+    // What MoveTool.luau does to every selected PVInstance: its current
+    // Transform, plus the drag.
+    const Matrix4 part_now = part.transform();
+    part.set_transform(at(x_of(part_now) + 1.f, y_of(part_now), z_of(part_now)));
+    const Matrix4 body_now = body.transform();
+    REQUIRE_FALSE(body.set_transform(at(x_of(body_now) + 1.f, y_of(body_now), z_of(body_now))));
+    rig.sync_steps(1);
+    REQUIRE(x_of(part.transform()) == 11.f);
+    REQUIRE(y_of(part.transform()) == 0.f);
+    REQUIRE(rig.physics.body_position(body.id())->x == 11.f);
+    REQUIRE(rig.physics.body_position(body.id())->y == 0.f);
 }

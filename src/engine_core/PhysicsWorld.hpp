@@ -94,8 +94,10 @@ public:
     // empty when the PhysicsObject has no body.
     float body_mass(InstanceId id) const;
     std::vector<float> shape_frictions(InstanceId id) const;
-    // For tests: a key naming the body's Box3D handle, the same while the
-    // body lives; 0 when the PhysicsBase has none. And where the body is.
+    // For tests: a key naming the body's Box3D handle and the world_generation
+    // it was made in, the same while the body lives and different after a
+    // Stop (a new world hands out the same handles again); 0 when the
+    // PhysicsBase has none. And where the body is.
     std::uint64_t body_key(InstanceId id) const;
     std::optional<Vec3> body_position(InstanceId id) const;
     // For tests: a key naming its first shape's Box3D handle, changing

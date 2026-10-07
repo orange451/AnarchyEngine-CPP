@@ -77,25 +77,51 @@ Sculpt tools and voxel-edit undo (sub-project 2); textures, blending, and per-ma
 
 ## The `.avox` file
 
-Little-endian. Voxels only; the materials are the TerrainMaterial children.
+Little-endian. Voxels only; the materials are the TerrainMaterial children. Built for size on disk and for fast loads of very large islands: an index up front, and each dense chunk its own [zstd](https://github.com/facebook/zstd) frame, so chunks decode in parallel and a reader can find any chunk without reading the rest.
 
 ```
-char  magic[4]       "AVOX"
-u16   version_major  1
-u16   version_minor  0
-f32   voxel_size
-u32   chunk_size     32
-u32   chunk_count
-then  chunk_count × chunk:
-        i32 x, y, z
-        u8  form             0 uniform, 1 dense
-        uniform: i8 distance, u8 id
-        dense:   u32 byte_length, then run-length triples (u16 run, i8 distance, u8 id)
-                 covering 32,768 cells in x-fastest order
-u32   crc32 of everything before it
+header, 32 bytes
+  char  magic[4]       "AVOX"
+  u16   version_major  1
+  u16   version_minor  0
+  f32   voxel_size
+  u32   chunk_size     32
+  u32   chunk_count
+  u32   index_crc32    CRC-32 of the index
+  u64   reserved       0
+index, chunk_count × 32 bytes, sorted by (z, y, x)
+  i32   x, y, z
+  u8    form           0 uniform, 1 dense
+  i8    distance       uniform only, else 0
+  u8    id             uniform only, else 0
+  u8    reserved       0
+  u64   offset         dense only: where its frame starts, from the file's start; else 0
+  u32   size           dense only: its frame's length in bytes; else 0
+  u32   reserved       0
+frames
+  one zstd frame per dense chunk, with zstd's content checksum on, holding 65,536 bytes:
+    32,768 distance residuals, x fastest, then 32,768 material Ids, x fastest
 ```
 
-Only chunks that are not all air are written.
+**Distance residuals.** Each distance is stored as the difference from a prediction made of its already-written neighbors inside the chunk (the 3D "Lorenzo" predictor; a neighbor outside the chunk counts as 0):
+
+```
+p = d(x-1,y,z) + d(x,y-1,z) + d(x,y,z-1)
+  - d(x-1,y-1,z) - d(x-1,y,z-1) - d(x,y-1,z-1)
+  + d(x-1,y-1,z-1)
+residual = (d - p) mod 256, stored as a byte
+```
+
+The arithmetic wraps, so decoding is exact. A signed distance field is close to linear near its surface and constant (±127) away from it, and the predictor is exact on both, so almost every residual is 0 or ±1. Materials are stored plainly: they are usually one or two values per chunk, which zstd shrinks to almost nothing. Expect a surface chunk to take a few KB, against 64 KB raw.
+
+**Speed.**
+- **Saving.** Saves use zstd level 3. Each chunk keeps its last encoded frame beside its data. Chunks never change once shared, so that frame stays right, and a save compresses only chunks edited since the last one.
+- **Loading.** The loader reads the header and index, checks the index CRC, then decodes the frames on a pool of worker threads (zstd decodes at over 1 GB/s per thread). Any bad frame (zstd checksum), out-of-range offset, or bad index makes the whole file damaged, as above.
+- **Budget.** 4,096 dense chunks, about a 256 MB island raw, decode in under 1 s in a Release build.
+
+**zstd itself.** It is fetched with FetchContent, pinned to a release tag, and compiled through its own wrapper, `cmake/zstd/CMakeLists.txt`, as Box3D is. Only `AvoxFile.cpp` includes it.
+
+Only chunks that are not all air are written. Later, the same per-chunk frames let idle chunks stay compressed in memory, which matters as much as disk on a very large island; that belongs to the terrain surface plan, which owns the mesher that reads chunks.
 
 ## Lua API
 

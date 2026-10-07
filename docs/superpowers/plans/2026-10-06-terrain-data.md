@@ -25,7 +25,7 @@
 - Fill: `d = min(d, s)`; Id becomes the material's where `s < d_old` and `s < VoxelSize`. Subtract: `d = max(d, -s)`. Paint: Id becomes the material's where `s ≤ 0` and `d ≤ VoxelSize`.
 - Voxel methods take a `TerrainMaterial` of this Terrain or `nil`. A Material raises `Pass a TerrainMaterial (see Terrain:GetMaterials)`; another Terrain's raises `TerrainMaterial belongs to another Terrain`.
 - `ReadVoxels`/`WriteVoxels` use integer cell coordinates and carry material Ids as numbers; `WriteVoxels` accepts whole numbers 0–255 and raises otherwise.
-- `.avox` layout exactly as the spec's "The `.avox` file" section; little-endian; only non-air chunks written; CRC-32 at the end.
+- `.avox` layout exactly as the spec's "The `.avox` file" section: little-endian, a 32-byte header with an index CRC-32, a 32-byte index entry per non-air chunk sorted by (z, y, x), one zstd frame (level 3, checksum on) of Lorenzo-predicted distance residuals then material Ids per dense chunk. zstd is included only by `AvoxFile.cpp`.
 - Only `src/engine_core/PhysicsWorld.cpp` includes Box3D; this plan includes none.
 - Comments follow the codebase: plain English, say which thread. Project code builds warning-free at /W4.
 - Commit messages: a plain imperative sentence, ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -794,11 +794,14 @@ git commit -m "Add the terrain voxel volume and its shape edits"
 
 ---
 
-### Task 3: The `.avox` file
+### Task 3: The `.avox` file, compressed with zstd
 
 **Files:**
+- Create: `cmake/zstd/CMakeLists.txt`
+- Modify: `CMakeLists.txt`: fetch zstd beside Box3D (~line 438-454), link it PRIVATE to the engine library that holds `AvoxFile.cpp` (as `target_link_libraries(engine_core PRIVATE box3d)` at ~line 601), add the sources below
 - Create: `src/engine_core/terrain/AvoxFile.hpp`, `src/engine_core/terrain/AvoxFile.cpp`
-- Modify: `sandbox/terrain_voxel_tests.cpp`, `CMakeLists.txt`
+- Modify: `src/engine_core/terrain/VoxelChunk.hpp/.cpp` (the cached encoded frame)
+- Modify: `sandbox/terrain_voxel_tests.cpp`
 
 **Interfaces:**
 - Consumes: Tasks 1–2.
@@ -806,15 +809,85 @@ git commit -m "Add the terrain voxel volume and its shape edits"
 
 ```cpp
 namespace engine_core::terrain {
-// The bytes of an .avox file holding volume's chunks.
+// The bytes of an .avox file holding volume's chunks. Reuses each chunk's
+// cached frame; compresses only chunks that have none.
 std::vector<std::byte> encode_avox(const VoxelVolume& volume);
-// Reads bytes into out. Returns why they are not a valid .avox file; out is
-// then left empty.
-std::optional<std::string> decode_avox(const std::byte* data, std::size_t size, VoxelVolume& out);
+// Reads bytes into out, decoding dense chunks on up to `threads` threads
+// (0: hardware threads less one, at least 1). Returns why they are not a
+// valid .avox file; out is then left empty.
+std::optional<std::string> decode_avox(const std::byte* data, std::size_t size, VoxelVolume& out,
+                                       unsigned threads = 0);
 }
 ```
 
-- [ ] **Step 1: Write the failing tests**
+and on `ChunkData` (Task 1's class):
+
+```cpp
+    // This chunk's zstd frame as .avox stores it, made on first use and kept:
+    // the chunk never changes once shared, so neither does its frame. Empty
+    // for a uniform chunk. Any thread.
+    const std::vector<std::byte>& encoded() const;
+    // A decoded chunk gets the frame it was read from, so an unchanged chunk
+    // is never compressed again by the next save.
+    void adopt_encoded(std::vector<std::byte> frame);
+```
+
+The cache is `mutable std::once_flag encoded_once_; mutable std::vector<std::byte> encoded_;` (or an atomic shared_ptr) so two threads asking at once compress it once. `clone_dense()` must not copy it: a clone is about to change.
+
+**The format** is the spec's "The `.avox` file" section, verbatim: a 32-byte header, a 32-byte index entry per non-air chunk sorted by (z, y, x), then one zstd frame (level 3, content checksum on) per dense chunk holding 32,768 Lorenzo distance residuals then 32,768 material Ids, both x fastest. Read the spec section before starting; this task implements it exactly.
+
+- [ ] **Step 1: Add zstd**
+
+`CMakeLists.txt`, after Box3D's block, in the same style (comment, `FetchContent_Declare` with `GIT_TAG` pinned, `FetchContent_GetProperties`/`FetchContent_Populate`, then `add_subdirectory` of the wrapper):
+
+```cmake
+# zstd compresses a Terrain's .avox chunks: BSD-licensed C by Meta, pinned by
+# tag. Only fetched here; cmake/zstd builds its library sources, since its own
+# CMakeLists also builds programs and wants newer options. Only AvoxFile.cpp
+# includes it.
+FetchContent_Declare(
+    zstd
+    GIT_REPOSITORY https://github.com/facebook/zstd.git
+    GIT_TAG v1.5.6
+)
+FetchContent_GetProperties(zstd)
+if(NOT zstd_POPULATED)
+    FetchContent_Populate(zstd)
+endif()
+set(ZSTD_SOURCE_DIR "${zstd_SOURCE_DIR}")
+add_subdirectory(cmake/zstd "${CMAKE_BINARY_DIR}/zstd")
+```
+
+`cmake/zstd/CMakeLists.txt`:
+
+```cmake
+# zstd's library builds here rather than through its own CMakeLists (under
+# build/cmake, which also builds its programs). The same sources, the
+# engine's runtime library, and no assembly: MSVC does not build the .S file,
+# so ZSTD_DISABLE_ASM picks the C Huffman decoder everywhere.
+file(GLOB ZSTD_SOURCES CONFIGURE_DEPENDS
+    "${ZSTD_SOURCE_DIR}/lib/common/*.c"
+    "${ZSTD_SOURCE_DIR}/lib/compress/*.c"
+    "${ZSTD_SOURCE_DIR}/lib/decompress/*.c")
+add_library(zstd STATIC ${ZSTD_SOURCES})
+# PUBLIC is SYSTEM, so the engine's warnings do not report on zstd's headers.
+target_include_directories(zstd SYSTEM PUBLIC "${ZSTD_SOURCE_DIR}/lib")
+target_compile_definitions(zstd PRIVATE ZSTD_DISABLE_ASM ZSTD_MULTITHREAD=0 XXH_NAMESPACE=ZSTD_)
+if(MSVC)
+    target_compile_options(zstd PRIVATE /W3)
+    # Compression is optimized in every configuration, as Box3D is: a Debug
+    # build still saves and loads large islands quickly.
+    string(REPLACE "/RTC1" "" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+    string(REPLACE "/Od" "" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+    target_compile_options(zstd PRIVATE $<$<CONFIG:Debug>:/O2>)
+endif()
+```
+
+Remove `ZSTD_MULTITHREAD=0` if zstd's headers treat any definition as "on" (check `lib/common/zstd_internal.h`/`threading.h`; the goal is single-threaded zstd — the engine parallelizes across chunks itself). Confirm the configure and a Debug build succeed before writing tests. If MSVC 14.23 in C mode rejects something in zstd 1.5.6, note it in the report and try the nearest earlier 1.5.x tag rather than patching zstd.
+
+- [ ] **Step 2: Write the failing tests**
+
+Append to `sandbox/terrain_voxel_tests.cpp` (`#include "terrain/AvoxFile.hpp"`, `<chrono>`):
 
 ```cpp
 TEST_CASE("AV1 an .avox round-trips every chunk", "[terrain]") {
@@ -833,7 +906,7 @@ TEST_CASE("AV1 an .avox round-trips every chunk", "[terrain]") {
     for (const auto& [coord, chunk] : volume.chunks()) {
         const ChunkPtr& other = back.chunks().at(coord);
         REQUIRE(other->is_uniform() == chunk->is_uniform());
-        for (int i = 0; i < kChunkCells; i += 97) {
+        for (int i = 0; i < kChunkCells; ++i) {
             REQUIRE(other->cell(i) == chunk->cell(i));
         }
     }
@@ -842,39 +915,155 @@ TEST_CASE("AV1 an .avox round-trips every chunk", "[terrain]") {
 TEST_CASE("AV2 a damaged .avox is refused and leaves nothing", "[terrain]") {
     VoxelVolume volume;
     REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 4.f), 1));
-    std::vector<std::byte> bytes = encode_avox(volume);
-    bytes[bytes.size() / 2] ^= std::byte{0x5a};
+    const std::vector<std::byte> good = encode_avox(volume);
     VoxelVolume back;
+    // A flipped byte inside a frame: zstd's checksum catches it.
+    std::vector<std::byte> bytes = good;
+    bytes[bytes.size() - 20] ^= std::byte{0x5a};
     REQUIRE(decode_avox(bytes.data(), bytes.size(), back).has_value());
     REQUIRE(back.chunks().empty());
-    REQUIRE(decode_avox(bytes.data(), 3, back).has_value());
+    // A flipped byte in the index: the index CRC catches it.
+    bytes = good;
+    bytes[32 + 3] ^= std::byte{0x01};
+    REQUIRE(decode_avox(bytes.data(), bytes.size(), back).has_value());
+    // Cut short.
+    REQUIRE(decode_avox(good.data(), 3, back).has_value());
+    REQUIRE(decode_avox(good.data(), good.size() - 1, back).has_value());
 }
 
-TEST_CASE("AV3 the header says AVOX 1.0, VoxelSize, and 32", "[terrain]") {
+TEST_CASE("AV3 the header says AVOX 1.0, VoxelSize, and 32, and an empty file is only a header", "[terrain]") {
     const std::vector<std::byte> bytes = encode_avox(VoxelVolume{});
-    REQUIRE(bytes.size() == 4 + 2 + 2 + 4 + 4 + 4 + 4);
+    REQUIRE(bytes.size() == 32u);
     REQUIRE(static_cast<char>(bytes[0]) == 'A');
     REQUIRE(static_cast<char>(bytes[3]) == 'X');
+    VoxelVolume back;
+    REQUIRE_FALSE(decode_avox(bytes.data(), bytes.size(), back));
+    REQUIRE(back.chunks().empty());
+}
+
+TEST_CASE("AV4 a surface chunk compresses to a small fraction of its 64 KB", "[terrain]") {
+    VoxelVolume volume;
+    // A slope across one chunk: every cell in its band varies.
+    Shape slope;
+    slope.kind = Shape::Kind::Wedge;
+    slope.frame = matrix4_translation(16.f, 16.f, 16.f);
+    slope.size = Vec3{32.f, 32.f, 32.f};
+    REQUIRE_FALSE(volume.fill(slope, 1));
+    const ChunkPtr& chunk = volume.chunks().at(ChunkCoord{0, 0, 0});
+    REQUIRE_FALSE(chunk->is_uniform());
+    INFO(chunk->encoded().size());
+    REQUIRE(chunk->encoded().size() < 8192u);
+}
+
+TEST_CASE("AV5 an unchanged chunk is not compressed again; a decoded one keeps its frame", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 9.f), 2));
+    const ChunkPtr chunk = volume.chunks().at(ChunkCoord{0, 0, 0});
+    const std::byte* first = chunk->encoded().data();
+    (void)encode_avox(volume);
+    REQUIRE(chunk->encoded().data() == first);   // the same cached frame
+    const std::vector<std::byte> bytes = encode_avox(volume);
+    VoxelVolume back;
+    REQUIRE_FALSE(decode_avox(bytes.data(), bytes.size(), back));
+    REQUIRE(back.chunks().at(ChunkCoord{0, 0, 0})->encoded() == chunk->encoded());
+}
+
+TEST_CASE("AV6 one thread and many decode the same", "[terrain]") {
+    VoxelVolume volume;
+    for (int i = 0; i < 12; ++i) {
+        REQUIRE_FALSE(volume.fill(ball_at(static_cast<float>(i * 40), 0.f, 0.f, 9.f), static_cast<std::uint8_t>(i + 1)));
+    }
+    const std::vector<std::byte> bytes = encode_avox(volume);
+    VoxelVolume one;
+    VoxelVolume many;
+    REQUIRE_FALSE(decode_avox(bytes.data(), bytes.size(), one, 1));
+    REQUIRE_FALSE(decode_avox(bytes.data(), bytes.size(), many, 8));
+    REQUIRE(one.chunks().size() == many.chunks().size());
+    for (const auto& [coord, chunk] : one.chunks()) {
+        REQUIRE(many.chunks().at(coord)->encoded() == chunk->encoded());
+    }
+}
+
+TEST_CASE("AV7 4,096 dense chunks decode in under a second", "[.][terrain-bench]") {
+    VoxelVolume volume;
+    // A 16 x 16 x 16-chunk block of rolling surface: every chunk dense.
+    for (int cz = 0; cz < 16; ++cz) {
+        for (int cx = 0; cx < 16; ++cx) {
+            for (int cy = 0; cy < 16; ++cy) {
+                REQUIRE_FALSE(volume.fill(ball_at(cx * 32.f + 16.f, cy * 32.f + 16.f, cz * 32.f + 16.f, 15.f),
+                                          static_cast<std::uint8_t>(1 + (cx + cy + cz) % 4)));
+            }
+        }
+    }
+    REQUIRE(volume.chunks().size() >= 4096u);
+    const std::vector<std::byte> bytes = encode_avox(volume);
+    const auto start = std::chrono::steady_clock::now();
+    VoxelVolume back;
+    REQUIRE_FALSE(decode_avox(bytes.data(), bytes.size(), back));
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    INFO(seconds << " s for " << bytes.size() << " bytes");
+    REQUIRE(seconds < 1.0);
 }
 ```
 
-- [ ] **Step 2: Run to verify they fail** (compile error: header missing).
+- [ ] **Step 3: Run to verify they fail** (compile error: `terrain/AvoxFile.hpp` not found, `encoded` not a member).
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 4: Implement**
 
-Write little-endian helpers (`put_u16`, `put_u32`, `put_i32`, `put_f32` with `std::memcpy` into a 4-byte buffer; the engine only targets little-endian x64/arm64, so a static_assert on `std::endian::native == std::endian::little` is not available in C++20 on MSVC 14.23 — write bytes explicitly by shifting). Layout exactly as the spec:
+Encoding one dense chunk (also what `ChunkData::encoded()` runs, once):
 
+```cpp
+namespace {
+
+// The 3D Lorenzo prediction of cell (x, y, z) from its already-written
+// neighbors; a neighbor outside the chunk counts as 0.
+int predict(const std::int8_t* d, int x, int y, int z) {
+    auto at = [&](int i, int j, int k) -> int {
+        return (i < 0 || j < 0 || k < 0) ? 0 : d[cell_index(i, j, k)];
+    };
+    return at(x - 1, y, z) + at(x, y - 1, z) + at(x, y, z - 1) - at(x - 1, y - 1, z) - at(x - 1, y, z - 1) -
+           at(x, y - 1, z - 1) + at(x - 1, y - 1, z - 1);
+}
+
+}  // namespace
+
+// distances and materials: 32,768 each, x fastest.
+std::vector<std::byte> encode_chunk_frame(const std::int8_t* distances, const std::uint8_t* materials) {
+    std::vector<std::uint8_t> payload(2 * kChunkCells);
+    for (int z = 0; z < kChunkSize; ++z) {
+        for (int y = 0; y < kChunkSize; ++y) {
+            for (int x = 0; x < kChunkSize; ++x) {
+                const int i = cell_index(x, y, z);
+                payload[static_cast<std::size_t>(i)] =
+                    static_cast<std::uint8_t>((distances[i] - predict(distances, x, y, z)) & 0xff);
+            }
+        }
+    }
+    std::memcpy(payload.data() + kChunkCells, materials, kChunkCells);
+    // ZSTD_CCtx with ZSTD_c_compressionLevel 3 and ZSTD_c_checksumFlag 1, then ZSTD_compress2.
+    ...
+}
 ```
-"AVOX" u16 1 u16 0 f32 voxel_size u32 32 u32 chunk_count
-per chunk: i32 x, y, z; u8 form (0 uniform, 1 dense)
-  uniform: i8 distance, u8 id
-  dense:   u32 byte_length, then (u16 run, i8 distance, u8 id) triples covering 32,768 cells x-fastest
-u32 crc32 of everything before it
+
+Decoding reverses it: decompress (check `ZSTD_getFrameContentSize == 65536` and that `ZSTD_decompressDCtx` returns 65536; any `ZSTD_isError` is damage), then for z, y, x in order `d = static_cast<std::int8_t>((residual + predict(d, x, y, z)) & 0xff)`, which only reads cells already restored. The 8-bit wrap must happen through `std::uint8_t` then a cast to `std::int8_t`, so it is exact.
+
+Put the frame codec in `AvoxFile.cpp` and declare the two functions `ChunkData::encoded()` needs (`encode_chunk_frame`, and nothing zstd-typed) in an internal header `terrain/ChunkFrame.hpp`, so only `AvoxFile.cpp` includes `zstd.h`. `ChunkData::encoded()` calls `encode_chunk_frame(distances_.data(), materials_.data())` under its `std::call_once`; `ChunkData` keeps its distances and materials in the two vectors it already has.
+
+`encode_avox`: header (with `index_crc32` filled after the index), the index sorted by (z, y, x) with `offset`/`size` of each dense chunk's frame, then the frames in index order. Write every field with explicit little-endian byte shifts (no `std::endian`/`std::bit_cast` on MSVC 14.23). CRC-32: reuse AMESH's if it is exported (`grep -rn crc32 src/amesh`), else the standard reflected 0xEDB88320 table version in `AvoxFile.cpp`.
+
+`decode_avox`: check the size is at least 32, magic `AVOX`, major 1, chunk_size 32, voxel_size finite and > 0, that `32 + 32 × chunk_count` fits, the index CRC, each entry's form (0 or 1), and each dense entry's `offset + size` lies inside the file past the index. Then decode dense frames on `threads` worker threads (`std::thread`, each taking every n-th dense entry into its own slot of a results vector; no shared mutable state besides that vector), each chunk `finish()`ed and given its frame with `adopt_encoded`. If any frame fails, return `"damaged .avox file"` and leave `out` empty. Otherwise build the map (uniform entries via `ChunkData::uniform`, all-air skipped), `out = VoxelVolume(voxel_size)`, `out.set_chunks(std::move(map))`, then `out.take_dirty(...)` into a discarded vector so a freshly loaded volume starts with nothing dirty except what the caller marks. Reasons: `"not an .avox file"` (size or magic), `"unsupported .avox version"`, `"damaged .avox file"` (everything else).
+
+- [ ] **Step 5: Run tests**
+
+Run: `build/Debug/sandbox.exe "[terrain]"`; then a Release build and `build/Release/sandbox.exe "[terrain-bench]"`.
+Expected: AV1–AV6 pass; AV7 passes in Release. Report AV4's frame size and AV7's time and byte count.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add cmake/zstd/CMakeLists.txt CMakeLists.txt src/engine_core/terrain/AvoxFile.hpp src/engine_core/terrain/AvoxFile.cpp src/engine_core/terrain/ChunkFrame.hpp src/engine_core/terrain/VoxelChunk.hpp src/engine_core/terrain/VoxelChunk.cpp sandbox/terrain_voxel_tests.cpp
+git commit -m "Store terrain chunks in .avox as zstd frames of predicted distances"
 ```
-
-CRC-32: check whether the codebase already has one (`grep -rn crc32 src/amesh`): AMESH has a CRC; reuse its function if it is exported, else write the standard reflected 0xEDB88320 table version in `AvoxFile.cpp`. Decoding checks magic, version major 1, chunk_size 32, voxel_size finite and > 0, every length against the remaining bytes, run totals exactly 32,768, and the CRC; any failure clears `out` and returns a reason such as `"not an .avox file"`, `"damaged .avox file"`. Decoded dense chunks call `finish()`; air chunks are skipped. `out` is replaced with a new `VoxelVolume(voxel_size)` and filled via `set_chunks`.
-
-- [ ] **Step 4: Run tests**; **Step 5: Commit** (`Add the .avox terrain file format`).
 
 ---
 

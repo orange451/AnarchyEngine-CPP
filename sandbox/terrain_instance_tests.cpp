@@ -16,6 +16,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -468,4 +472,175 @@ TEST_CASE("TP7 loading a DataPath with history off never takes stashed voxels", 
     game.history().set_enabled(true);
     REQUIRE(loaded.data_path() == "terrain/Reload.avox");
     REQUIRE(loaded.volume().chunks().empty());
+}
+
+namespace {
+
+// Fills a ball through Terrain::edit_volume, which marks the change.
+void edit_ball(engine_core::Terrain& terrain, float x, float y, float z, float r, std::uint8_t id) {
+    const std::optional<std::string> error = terrain.edit_volume(
+        [&](engine_core::terrain::VoxelVolume& volume) { return volume.fill(ball_at(x, y, z, r), id); });
+    REQUIRE_FALSE(error);
+}
+
+engine_core::Terrain& terrain_named(engine_core::DataModel& game, const char* name) {
+    const InstanceId id = game.find_first_child(workspace_of(game), name);
+    auto* terrain = dynamic_cast<engine_core::Terrain*>(game.instance(id));
+    REQUIRE(terrain != nullptr);
+    return *terrain;
+}
+
+std::filesystem::path avox_file(const TempDir& dir, const std::string& data_path) {
+    return dir.path / "resources" / std::filesystem::u8path(data_path);
+}
+
+std::string file_bytes(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+// A project with one Terrain named Island holding a ball of Id 2, saved.
+// Returns the Terrain's DataPath.
+std::string save_island(const TempDir& dir) {
+    engine_core::Game game;
+    engine_core::Project project = engine_core::Project::create(dir.path, game);
+    engine_core::Terrain& terrain = add_terrain(game);
+    game.set_name(terrain.id(), "Island");
+    edit_ball(terrain, 0.f, 0.f, 0.f, 4.f, 2);
+    project.save();
+    return terrain.data_path();
+}
+
+}  // namespace
+
+TEST_CASE("TS1 a Terrain's voxels are saved with the project and come back", "[terrain]") {
+    SimRole role;
+    TempDir dir;
+    std::string path;
+    {
+        engine_core::Game game;
+        engine_core::Project project = engine_core::Project::create(dir.path, game);
+        engine_core::Terrain& terrain = add_terrain(game);
+        game.set_name(terrain.id(), "Island");
+        edit_ball(terrain, 0.f, 0.f, 0.f, 4.f, 2);
+        // The first edit while stopped gives it its file's path, before any save.
+        path = terrain.data_path();
+        REQUIRE(path.rfind("terrain/Island." + game.guid(terrain.id()), 0) == 0);
+        REQUIRE(path.size() > 5);
+        REQUIRE(path.substr(path.size() - 5) == ".avox");
+        project.save();
+        REQUIRE(terrain.data_path() == path);
+        REQUIRE(std::filesystem::is_regular_file(avox_file(dir, path)));
+        REQUIRE_FALSE(std::filesystem::exists(avox_file(dir, path).string() + ".partial"));
+    }
+    engine_core::Project loaded = engine_core::Project::load(dir.path);
+    engine_core::Terrain& terrain = terrain_named(loaded.datamodel(), "Island");
+    REQUIRE(terrain.data_path() == path);
+    REQUIRE(id_at(terrain, 0, 0, 0) == 2);
+}
+
+TEST_CASE("TS2 a missing or damaged .avox loads an empty Terrain and says so in Output", "[terrain]") {
+    SimRole role;
+    TempDir dir;
+    const std::string path = save_island(dir);
+    const std::filesystem::path file = avox_file(dir, path);
+    REQUIRE(std::filesystem::is_regular_file(file));
+    const std::string good = file_bytes(file);
+
+    std::filesystem::remove(file);
+    {
+        engine_core::Game game;
+        std::vector<std::string> lines;
+        game.set_warning_sink([&lines](const std::string& text) { lines.push_back(text); });
+        engine_core::Project project = engine_core::Project::load(dir.path, game);
+        engine_core::Terrain& terrain = terrain_named(game, "Island");
+        REQUIRE(terrain.volume().chunks().empty());
+        REQUIRE(lines.size() == 1u);
+        REQUIRE(lines[0] == "Terrain Island: its voxel file " + path + " is missing, so it is empty");
+        REQUIRE(terrain.data_path() == path);
+    }
+
+    // The file back, with its middle byte flipped.
+    std::string bad = good;
+    bad[bad.size() / 2] = static_cast<char>(bad[bad.size() / 2] ^ 0x5a);
+    {
+        std::ofstream out(file, std::ios::binary | std::ios::trunc);
+        out.write(bad.data(), static_cast<std::streamsize>(bad.size()));
+    }
+    engine_core::Game game;
+    std::vector<std::string> lines;
+    game.set_warning_sink([&lines](const std::string& text) { lines.push_back(text); });
+    engine_core::Project project = engine_core::Project::load(dir.path, game);
+    engine_core::Terrain& terrain = terrain_named(game, "Island");
+    REQUIRE(terrain.volume().chunks().empty());
+    REQUIRE(lines.size() == 1u);
+    const std::string prefix = "Terrain Island: its voxel file " + path + " is damaged (";
+    REQUIRE(lines[0].rfind(prefix, 0) == 0);
+    REQUIRE(lines[0].size() > prefix.size() + 1);
+    const std::string suffix = "), so it is empty";
+    REQUIRE(lines[0].substr(lines[0].size() - suffix.size()) == suffix);
+    // A damaged file is never written over: the Terrain took a new file at load.
+    REQUIRE_FALSE(terrain.data_path().empty());
+    REQUIRE(terrain.data_path() != path);
+    const std::string fresh = terrain.data_path();
+    // The new DataPath is the studio's change, not the disk's, and a save
+    // writes it even with no edit.
+    REQUIRE_FALSE(project.scan_disk().has_disk_changes);
+    project.save();
+    REQUIRE(file_bytes(file) == bad);
+    {
+        engine_core::Game again;
+        std::vector<std::string> said;
+        again.set_warning_sink([&said](const std::string& text) { said.push_back(text); });
+        engine_core::Project reopened = engine_core::Project::load(dir.path, again);
+        REQUIRE(said.empty());
+        REQUIRE(terrain_named(again, "Island").data_path() == fresh);
+    }
+    edit_ball(terrain, 0.f, 0.f, 0.f, 4.f, 3);
+    project.save();
+    REQUIRE(file_bytes(file) == bad);
+    REQUIRE(terrain.data_path() == fresh);
+    REQUIRE(std::filesystem::is_regular_file(avox_file(dir, fresh)));
+}
+
+TEST_CASE("TS4 saving during play writes the voxels from Play's snapshot, not the runtime edits", "[terrain]") {
+    SimRole role;
+    TempDir dir;
+    {
+        engine_core::Game game;
+        engine_core::Project project = engine_core::Project::create(dir.path, game);
+        engine_core::Terrain& terrain = add_terrain(game);
+        game.set_name(terrain.id(), "Island");
+        edit_ball(terrain, 0.f, 0.f, 0.f, 4.f, 1);
+        REQUIRE_FALSE(terrain.data_path().empty());
+        game.capture_place();
+        game.start_simulation();
+        edit_ball(terrain, 50.f, 0.f, 0.f, 4.f, 2);
+        project.save();
+        game.stop_simulation();
+    }
+    engine_core::Project loaded = engine_core::Project::load(dir.path);
+    engine_core::Terrain& terrain = terrain_named(loaded.datamodel(), "Island");
+    REQUIRE(id_at(terrain, 0, 0, 0) == 1);
+    REQUIRE(terrain.volume().cell(engine_core::terrain::CellCoord{50, 0, 0}).distance ==
+            engine_core::terrain::kAirDistance);
+}
+
+TEST_CASE("TS3 voxel edits while stopped mark the place unsaved; edits during play do not", "[terrain]") {
+    SimRole role;
+    TempDir dir;
+    engine_core::Game game;
+    engine_core::Project project = engine_core::Project::create(dir.path, game);
+    engine_core::Terrain& terrain = add_terrain(game);
+    project.save();
+    REQUIRE_FALSE(game.history().dirty());
+    edit_ball(terrain, 0.f, 0.f, 0.f, 4.f, 1);
+    REQUIRE(game.history().dirty());
+    project.save();
+    REQUIRE_FALSE(game.history().dirty());
+    game.capture_place();
+    game.start_simulation();
+    edit_ball(terrain, 20.f, 0.f, 0.f, 4.f, 2);
+    REQUIRE_FALSE(game.history().dirty());
+    game.stop_simulation();
 }

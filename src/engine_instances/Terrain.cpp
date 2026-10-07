@@ -1,5 +1,6 @@
 #include "Terrain.hpp"
 
+#include "AssetInstances.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Containment.hpp"
 #include "Contract.hpp"
@@ -7,13 +8,16 @@
 #include "Project.hpp"
 #include "PropertyBag.hpp"
 #include "TerrainMaterial.hpp"
+#include "terrain/AvoxFile.hpp"
 #include "terrain/TerrainStash.hpp"
 
 #include <algorithm>
 #include <bitset>
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <iterator>
+#include <string_view>
 #include <utility>
 
 namespace engine_core {
@@ -58,6 +62,45 @@ bool rigid(const Matrix4& m) {
     return std::fabs(dot(0, 0) - 1.f) < tolerance && std::fabs(dot(4, 4) - 1.f) < tolerance &&
            std::fabs(dot(8, 8) - 1.f) < tolerance && std::fabs(dot(0, 4)) < tolerance &&
            std::fabs(dot(0, 8)) < tolerance && std::fabs(dot(4, 8)) < tolerance && determinant > 0.f;
+}
+
+// Terrain's place bytes: [u32 base length][DataModel's bytes][u64 token].
+struct PlaceParts {
+    const std::byte* base = nullptr;
+    std::size_t base_size = 0;
+    // 0 when the bytes are too short to hold one.
+    std::uint64_t token = 0;
+};
+
+PlaceParts split_place(const std::byte* data, std::size_t size) {
+    PlaceParts parts;
+    std::uint32_t length = 0;
+    if (data != nullptr && size >= sizeof(length)) {
+        std::memcpy(&length, data, sizeof(length));
+        if (length <= size - sizeof(length)) {
+            parts.base = data + sizeof(length);
+            parts.base_size = length;
+            if (size - sizeof(length) - length >= sizeof(parts.token)) {
+                std::memcpy(&parts.token, parts.base + length, sizeof(parts.token));
+            }
+        }
+    }
+    return parts;
+}
+
+// The DataPath in the base bytes, which are the saved properties as JSON.
+std::string place_data_path(const PlaceParts& parts) {
+    if (parts.base == nullptr || parts.base_size == 0) {
+        return std::string();
+    }
+    JsonValue values;
+    std::string message;
+    if (!parse_json(std::string_view(reinterpret_cast<const char*>(parts.base), parts.base_size), values, message) ||
+        !values.is_object()) {
+        return std::string();
+    }
+    const JsonValue* path = values.find("DataPath");
+    return path != nullptr && path->is_string() ? path->as_string() : std::string();
 }
 
 }  // namespace
@@ -200,16 +243,133 @@ void Terrain::load_data_path(std::string path) {
         found = terrain::TerrainStash::get(terrain::TerrainStash::latest(path), chunks, stashed_size);
     }
     if (!found) {
-        data_path_ = std::move(path);
+        read_data_file(std::move(path));
         return;
     }
     // A paste: the copy starts with its source's voxels and its own file.
     volume_.set_chunks(std::move(chunks));
-    data_path_ = "terrain/" + sanitize_file_name(name(id())) + "." + guid(id()) + ".avox";
+    data_path_ = own_data_path(std::string());
     emit_property("DataPath");
     note_unrecorded_edit(id());
     // The paste's step recorded this Terrain empty when it was made.
     refresh_created_record(id());
+}
+
+void Terrain::read_data_file(std::string path) {
+    data_path_ = std::move(path);
+    const std::filesystem::path root = resources_root();
+    // No project, so no resources folder: there is no file to read.
+    if (root.empty()) {
+        return;
+    }
+    std::optional<std::string> damage = resource_path_error(data_path_);
+    const std::filesystem::path file = root / std::filesystem::u8path(data_path_);
+    std::error_code error;
+    if (!damage && !std::filesystem::is_regular_file(file, error)) {
+        volume_.set_chunks(terrain::ChunkMap{});
+        warn("Terrain " + name(id()) + ": its voxel file " + data_path_ + " is missing, so it is empty");
+        return;
+    }
+    terrain::VoxelVolume loaded(volume_.voxel_size());
+    if (!damage) {
+        std::ifstream in(file, std::ios::binary);
+        std::vector<char> bytes;
+        if (in) {
+            bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+        if (!in.is_open() || in.bad()) {
+            damage = std::string("it could not be read");
+        } else {
+            damage = terrain::decode_avox(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size(), loaded);
+        }
+    }
+    if (damage) {
+        volume_.set_chunks(terrain::ChunkMap{});
+        warn("Terrain " + name(id()) + ": its voxel file " + data_path_ + " is damaged (" + *damage +
+             "), so it is empty");
+        // The damaged file stays as it is, for recovery by hand: the next
+        // save writes this Terrain's voxels to a file of its own.
+        data_path_ = own_data_path(data_path_);
+        emit_property("DataPath");
+        note_unrecorded_edit(id());
+        return;
+    }
+    volume_.set_chunks(loaded.chunks());
+    saved_ = true;
+    saved_path_ = data_path_;
+    saved_chunks_ = volume_.chunks();
+}
+
+std::string Terrain::own_data_path(const std::string& avoid) const {
+    const std::string stem = "terrain/" + sanitize_file_name(name(id())) + "." + guid(id());
+    std::string path = stem + ".avox";
+    for (int suffix = 2; path == avoid; ++suffix) {
+        path = stem + "." + std::to_string(suffix) + ".avox";
+    }
+    return path;
+}
+
+std::optional<std::string> Terrain::edit_volume(
+    const std::function<std::optional<std::string>(terrain::VoxelVolume&)>& edit) {
+    require_thread(*this);
+    if (std::optional<std::string> error = edit(volume_)) {
+        return error;
+    }
+    // Edits during play are the session's: Stop drops them, and no save
+    // writes them.
+    if (simulation_running()) {
+        return std::nullopt;
+    }
+    // The first authored voxels: the file's path is in every snapshot from now on.
+    if (data_path_.empty()) {
+        data_path_ = own_data_path(std::string());
+        emit_property("DataPath");
+    }
+    note_unrecorded_edit(id());
+    return std::nullopt;
+}
+
+std::optional<std::string> Terrain::save_resources(const std::filesystem::path& root) {
+    require_thread(*this);
+    std::string path = data_path_;
+    terrain::ChunkMap chunks;
+    float voxel_size = volume_.voxel_size();
+    if (simulation_running()) {
+        // A save during play writes what Stop will restore: the voxels and
+        // DataPath this Terrain had at Play's capture.
+        const std::vector<std::byte>* captured = captured_place_bytes();
+        if (captured == nullptr) {
+            return std::nullopt;
+        }
+        PlaceParts parts = split_place(captured->data(), captured->size());
+        if (!terrain::TerrainStash::get(parts.token, chunks, voxel_size)) {
+            return std::nullopt;
+        }
+        path = place_data_path(parts);
+    } else {
+        chunks = volume_.chunks();
+    }
+    // No DataPath: this Terrain has never had authored voxels.
+    if (path.empty()) {
+        return std::nullopt;
+    }
+    if (std::optional<std::string> error = resource_path_error(path)) {
+        return "Terrain " + name(id()) + ": DataPath " + path + ": " + *error;
+    }
+    std::error_code error;
+    if (saved_ && saved_path_ == path && saved_chunks_ == chunks &&
+        std::filesystem::is_regular_file(root / std::filesystem::u8path(path), error)) {
+        return std::nullopt;
+    }
+    terrain::VoxelVolume volume(voxel_size);
+    volume.set_chunks(chunks);
+    if (std::optional<std::string> failure = write_resource_file(root, path, terrain::encode_avox(volume))) {
+        return failure;
+    }
+    saved_ = true;
+    saved_path_ = std::move(path);
+    saved_chunks_ = std::move(chunks);
+    return std::nullopt;
 }
 
 void Terrain::write_place(std::vector<std::byte>& out) const {
@@ -220,36 +380,20 @@ void Terrain::write_place(std::vector<std::byte>& out) const {
     out.insert(out.end(), l, l + sizeof(length));
     out.insert(out.end(), base.begin(), base.end());
     const std::uint64_t token = terrain::TerrainStash::put(volume_.chunks(), volume_.voxel_size(), data_path_);
-    if (!simulation_running()) {
-        authored_token_ = token;
-    }
     const auto* t = reinterpret_cast<const std::byte*>(&token);
     out.insert(out.end(), t, t + sizeof(token));
 }
 
 void Terrain::read_place(const std::byte* data, std::size_t size) {
-    const std::byte* base = nullptr;
-    std::size_t base_size = 0;
-    std::uint32_t length = 0;
-    std::uint64_t token = 0;
-    if (data != nullptr && size >= sizeof(length)) {
-        std::memcpy(&length, data, sizeof(length));
-        if (length <= size - sizeof(length)) {
-            base = data + sizeof(length);
-            base_size = length;
-            if (size - sizeof(length) - length >= sizeof(token)) {
-                std::memcpy(&token, base + length, sizeof(token));
-            }
-        }
-    }
+    const PlaceParts parts = split_place(data, size);
     terrain::ChunkMap chunks;
     // VoxelSize is always 1; the stash carries it for when it may vary.
     float stashed_size = volume_.voxel_size();
-    const bool known = token != 0 && terrain::TerrainStash::get(token, chunks, stashed_size);
-    // A known token supplies the voxels, so DataPath is only stored; an
-    // unknown one leaves the voxels and writes DataPath as a load does.
+    const bool known = parts.token != 0 && terrain::TerrainStash::get(parts.token, chunks, stashed_size);
+    // A known token supplies the voxels, so DataPath is only stored; with an
+    // unknown one DataPath is written as a load writes it, file read and all.
     restoring_ = known;
-    DataModel::read_place(base, base_size);
+    DataModel::read_place(parts.base, parts.base_size);
     restoring_ = false;
     if (known) {
         volume_.set_chunks(std::move(chunks));
@@ -261,8 +405,10 @@ void Terrain::on_reuse() {
     can_collide_ = true;
     data_path_.clear();
     volume_ = terrain::VoxelVolume{};
-    authored_token_ = 0;
     restoring_ = false;
+    saved_ = false;
+    saved_path_.clear();
+    saved_chunks_.clear();
 }
 
 namespace {

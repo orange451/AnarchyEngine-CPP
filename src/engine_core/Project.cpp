@@ -1356,13 +1356,19 @@ void Project::read_into_game(const fs::path& root, bool replace) {
     src_ = layout.src;
     resources_ = layout.resources;
     const std::vector<PlanNode> plan = PlanReader(root, layout).read();
+    // Replace builds a scratch place first. Its instances are each file as its
+    // class stores it: the base a disk scan and a save compare against.
+    std::unique_ptr<Game> scratch;
+    std::vector<InstanceId> scratch_ids;
     if (replace) {
         // A class-level error (a bad Color) must not leave the world half rebuilt.
-        Game scratch;
-        scratch.history().set_enabled(false);
-        build(scratch, plan);
+        scratch = std::make_unique<Game>();
+        scratch->history().set_enabled(false);
+        scratch_ids = build(*scratch, plan);
     }
     std::vector<InstanceId> ids;
+    // Before the build, so a Terrain reads its voxel file as it loads.
+    publish_resources_root();
     {
         Rebuild rebuild(*game_);
         if (replace) {
@@ -1382,8 +1388,19 @@ void Project::read_into_game(const fs::path& root, bool replace) {
             made = true;
             continue;
         }
-        files_[node.guid] = from_disk(node, index == 0 ? std::string() : plan[parents[index]].guid,
-                                      written_doc(*game_, ids[index], node.doc));
+        JsonValue live = written_doc(*game_, ids[index], node.doc);
+        if (scratch != nullptr) {
+            // An instance that changed itself as it loaded, as a Terrain whose
+            // voxel file is damaged takes a file of its own, differs from its
+            // file: that is the studio's change, which the next save writes.
+            JsonValue disk = written_doc(*scratch, scratch_ids[index], node.doc);
+            if (!(disk == live)) {
+                game_->mark_authored_dirty(ids[index]);
+            }
+            live = std::move(disk);
+        }
+        files_[node.guid] =
+            from_disk(node, index == 0 ? std::string() : plan[parents[index]].guid, std::move(live));
     }
     // A service the read made is not among game's children on disk, so the next save writes game.
     if (made) {
@@ -2727,6 +2744,16 @@ void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {
         }
         if (!node.has_properties && files_.count(node.guid) == 0) {
             fail("instance " + node.guid + " has no saved bytes");
+        }
+    }
+
+    // Files an instance keeps under resources, such as a Terrain's voxels.
+    for (const AuthoredNode& node : tree) {
+        if (node.id == 0 || !world.alive(node.id)) {
+            continue;
+        }
+        if (std::optional<std::string> reason = world.instance(node.id)->save_resources(resources_root())) {
+            fail(*reason);
         }
     }
 

@@ -1914,6 +1914,16 @@ void DataModel::set_resources_root(std::filesystem::path root) {
     state_->resources_root = std::move(root);
 }
 
+void DataModel::set_warning_sink(std::function<void(const std::string&)> sink) {
+    state_->warning_sink = std::move(sink);
+}
+
+void DataModel::warn(const std::string& text) const {
+    if (state_->warning_sink) {
+        state_->warning_sink(text);
+    }
+}
+
 std::string DataModel::guid(InstanceId id) const {
     const DataModel* object = id == 0 ? state_->root : instance(id);
     return object != nullptr ? object->guid_ : std::string();
@@ -2122,6 +2132,11 @@ bool DataModel::load_property(const std::string& key, const JsonValue& value, st
         set_visual_only(id_, value.as_bool());
     }
     return true;
+}
+
+std::optional<std::string> DataModel::save_resources(const std::filesystem::path& root) {
+    (void)root;
+    return std::nullopt;
 }
 
 PropertyBag DataModel::merged_properties(const DataModel& object) const {

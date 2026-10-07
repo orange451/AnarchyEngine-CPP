@@ -374,6 +374,18 @@ void DataModel::restore_place_unlocked() {
     state_->resync = true;
 }
 
+const std::vector<std::byte>* DataModel::captured_place_bytes() const {
+    if (!state_->place_captured) {
+        return nullptr;
+    }
+    for (const PlaceRecord& record : state_->place.instances) {
+        if (record.id == id_) {
+            return &record.extra;
+        }
+    }
+    return nullptr;
+}
+
 std::vector<AuthoredNode> DataModel::authored_tree(const std::function<bool(InstanceId)>& want) const {
     std::vector<AuthoredNode> out;
     const DataModel* root = state_->root;

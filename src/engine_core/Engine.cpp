@@ -65,6 +65,10 @@ Engine::Engine() {
     audio_.set_warning_sink([this](const std::string& text) {
         scripts_->append_output(ScriptRuntime::OutputKind::Print, text);
     });
+    // So do instances' warnings, such as a Terrain whose voxel file is missing.
+    game_.set_warning_sink([this](const std::string& text) {
+        scripts_->append_output(ScriptRuntime::OutputKind::Print, text);
+    });
     analysis_ = std::make_unique<ScriptAnalysis>(game_);
 }
 

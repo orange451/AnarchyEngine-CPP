@@ -5,6 +5,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -45,8 +47,11 @@ public:
     // one takes that Terrain's voxels (shared chunks, nothing copied) and a
     // DataPath of its own at once, without an undo step. With history on, a
     // path no live Terrain holds but the stash knows (a cut source) is a
-    // paste too, from the stash's latest voxels for it. Any other path is
-    // stored.
+    // paste too, from the stash's latest voxels for it. Any other path names
+    // this Terrain's .avox file, read from under resources_root(). A missing
+    // or damaged file leaves the Terrain empty and says so through warn(); a
+    // damaged one also gives the Terrain a new DataPath at once, so no save
+    // ever writes over it.
     void load_data_path(std::string path);
 
     // The TerrainMaterial children, by Id. Those on Id 0 are left out.
@@ -62,6 +67,18 @@ public:
     // SimulationThread.
     terrain::VoxelVolume& volume() { return volume_; }
     const terrain::VoxelVolume& volume() const { return volume_; }
+    // SimulationThread. Every voxel edit goes through here, never through
+    // volume() directly: runs edit, and when it succeeds while stopped marks
+    // the place unsaved and, on this Terrain's first edit, gives it its
+    // DataPath. Returns edit's refusal.
+    std::optional<std::string> edit_volume(
+        const std::function<std::optional<std::string>(terrain::VoxelVolume&)>& edit);
+
+    // SimulationThread. Writes the authored voxels to DataPath under root when
+    // they changed since the last save or load, or the file is missing.
+    // Stopped, those are the live voxels; during play, the ones Play's
+    // capture holds, never the runtime edits. Never assigns a DataPath.
+    std::optional<std::string> save_resources(const std::filesystem::path& root) override;
 
 protected:
     void on_reuse() override;
@@ -74,15 +91,22 @@ protected:
     void read_place(const std::byte* data, std::size_t size) override;
 
 private:
+    // terrain/<Name>.<guid>.avox, or with a numeric suffix when that is avoid.
+    std::string own_data_path(const std::string& avoid) const;
+    // Stores path and reads its file into the voxels (load_data_path).
+    void read_data_file(std::string path);
+
     Matrix4 transform_ = matrix4_identity();
     bool can_collide_ = true;
     std::string data_path_;
     terrain::VoxelVolume volume_;
-    // The token of the last write_place while stopped: Play's capture names
-    // the authored voxels, which a save during play writes (Task 7).
-    mutable std::uint64_t authored_token_ = 0;
     // True while read_place loads the base properties with a known token.
     bool restoring_ = false;
+    // What the file at saved_path_ holds, as of the last save or load: the
+    // same shared chunks, so a save compares pointers, not cells.
+    bool saved_ = false;
+    std::string saved_path_;
+    terrain::ChunkMap saved_chunks_;
 };
 
 }  // namespace engine_core

@@ -79,6 +79,11 @@ public:
     // Stopped, those are the live voxels; during play, the ones Play's
     // capture holds, never the runtime edits. Never assigns a DataPath.
     std::optional<std::string> save_resources(const std::filesystem::path& root) override;
+    // SimulationThread. A save during play of a Terrain that play destroyed:
+    // writes the voxels its captured place bytes name (name is for messages).
+    // Bytes without a capture, or with no DataPath, write nothing.
+    static std::optional<std::string> save_captured(const std::filesystem::path& root, const std::string& name,
+                                                    const std::vector<std::byte>* captured);
 
 protected:
     void on_reuse() override;

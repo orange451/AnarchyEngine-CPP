@@ -374,12 +374,12 @@ void DataModel::restore_place_unlocked() {
     state_->resync = true;
 }
 
-const std::vector<std::byte>* DataModel::captured_place_bytes() const {
+const std::vector<std::byte>* DataModel::captured_place_bytes(InstanceId id) const {
     if (!state_->place_captured) {
         return nullptr;
     }
     for (const PlaceRecord& record : state_->place.instances) {
-        if (record.id == id_) {
+        if (record.id == id) {
             return &record.extra;
         }
     }

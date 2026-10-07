@@ -103,6 +103,32 @@ std::string place_data_path(const PlaceParts& parts) {
     return path != nullptr && path->is_string() ? path->as_string() : std::string();
 }
 
+// A Terrain's DataPath and voxels as Play's capture holds them. False when
+// there is no capture, or its stash token is gone.
+bool captured_voxels(const std::vector<std::byte>* captured, std::string& path, terrain::ChunkMap& chunks,
+                     float& voxel_size) {
+    if (captured == nullptr) {
+        return false;
+    }
+    const PlaceParts parts = split_place(captured->data(), captured->size());
+    if (!terrain::TerrainStash::get(parts.token, chunks, voxel_size)) {
+        return false;
+    }
+    path = place_data_path(parts);
+    return true;
+}
+
+// Writes chunks as the .avox file at path under root.
+std::optional<std::string> write_avox(const std::filesystem::path& root, const std::string& name,
+                                      const std::string& path, const terrain::ChunkMap& chunks, float voxel_size) {
+    if (std::optional<std::string> error = resource_path_error(path)) {
+        return "Terrain " + name + ": DataPath " + path + ": " + *error;
+    }
+    terrain::VoxelVolume volume(voxel_size);
+    volume.set_chunks(chunks);
+    return write_resource_file(root, path, terrain::encode_avox(volume));
+}
+
 }  // namespace
 
 Terrain::Terrain(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : PVInstance(tag, state, id) {}
@@ -268,6 +294,10 @@ void Terrain::read_data_file(std::string path) {
     if (!damage && !std::filesystem::is_regular_file(file, error)) {
         volume_.set_chunks(terrain::ChunkMap{});
         warn("Terrain " + name(id()) + ": its voxel file " + data_path_ + " is missing, so it is empty");
+        // Empty is what it loaded: a save writes nothing until it is edited.
+        saved_ = true;
+        saved_path_ = data_path_;
+        saved_chunks_.clear();
         return;
     }
     terrain::VoxelVolume loaded(volume_.voxel_size());
@@ -337,15 +367,9 @@ std::optional<std::string> Terrain::save_resources(const std::filesystem::path& 
     if (simulation_running()) {
         // A save during play writes what Stop will restore: the voxels and
         // DataPath this Terrain had at Play's capture.
-        const std::vector<std::byte>* captured = captured_place_bytes();
-        if (captured == nullptr) {
+        if (!captured_voxels(captured_place_bytes(id()), path, chunks, voxel_size)) {
             return std::nullopt;
         }
-        PlaceParts parts = split_place(captured->data(), captured->size());
-        if (!terrain::TerrainStash::get(parts.token, chunks, voxel_size)) {
-            return std::nullopt;
-        }
-        path = place_data_path(parts);
     } else {
         chunks = volume_.chunks();
     }
@@ -353,23 +377,33 @@ std::optional<std::string> Terrain::save_resources(const std::filesystem::path& 
     if (path.empty()) {
         return std::nullopt;
     }
-    if (std::optional<std::string> error = resource_path_error(path)) {
-        return "Terrain " + name(id()) + ": DataPath " + path + ": " + *error;
-    }
+    // Unchanged since the last save or load. A Terrain that loaded empty
+    // because its file was missing writes nothing until it is edited, so a
+    // file the user puts back is not written over.
     std::error_code error;
     if (saved_ && saved_path_ == path && saved_chunks_ == chunks &&
-        std::filesystem::is_regular_file(root / std::filesystem::u8path(path), error)) {
+        (chunks.empty() || std::filesystem::is_regular_file(root / std::filesystem::u8path(path), error))) {
         return std::nullopt;
     }
-    terrain::VoxelVolume volume(voxel_size);
-    volume.set_chunks(chunks);
-    if (std::optional<std::string> failure = write_resource_file(root, path, terrain::encode_avox(volume))) {
+    if (std::optional<std::string> failure = write_avox(root, name(id()), path, chunks, voxel_size)) {
         return failure;
     }
     saved_ = true;
     saved_path_ = std::move(path);
     saved_chunks_ = std::move(chunks);
     return std::nullopt;
+}
+
+std::optional<std::string> Terrain::save_captured(const std::filesystem::path& root, const std::string& name,
+                                                  const std::vector<std::byte>* captured) {
+    std::string path;
+    terrain::ChunkMap chunks;
+    float voxel_size = 1.f;
+    if (!captured_voxels(captured, path, chunks, voxel_size) || path.empty()) {
+        return std::nullopt;
+    }
+    // Nothing remembers what this Terrain last wrote, so its file is written.
+    return write_avox(root, name, path, chunks, voxel_size);
 }
 
 void Terrain::write_place(std::vector<std::byte>& out) const {

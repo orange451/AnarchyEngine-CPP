@@ -320,8 +320,8 @@ public:
     // True when this class owns key. The value was applied, or error is set.
     // Runs on a live instance during project load.
     virtual bool load_property(const std::string& key, const JsonValue& value, std::string& error);
-    // Project save calls this on every live authored instance before it
-    // writes the place, with the project's resources folder. An instance
+    // Project save calls this on every live authored instance once nothing on
+    // disk stops the save, with the project's resources folder. An instance
     // writes its own files there, such as a Terrain's .avox. A returned reason
     // fails the save. SimulationThread.
     virtual std::optional<std::string> save_resources(const std::filesystem::path& root);
@@ -330,6 +330,9 @@ public:
     // instances created during play are never included. Unparented instances
     // are not in the tree. want(id) false leaves properties and source empty.
     std::vector<AuthoredNode> authored_tree(const std::function<bool(InstanceId)>& want) const;
+    // While a place is captured, the bytes id wrote at its capture: what Stop
+    // will restore. Null when id was not captured. id need not be live now.
+    const std::vector<std::byte>* captured_place_bytes(InstanceId id) const;
     // Mutators mark here from the same sites that record history, and only
     // while the simulation is stopped. Stop sets all: the restore may revert
     // edits that came after the last capture.
@@ -562,9 +565,6 @@ protected:
     // GameObject clears it on read.
     virtual void write_place(std::vector<std::byte>& out) const;
     virtual void read_place(const std::byte* data, std::size_t size);
-    // While a place is captured, the bytes this instance wrote at its
-    // capture: what Stop will restore. Null when it was not captured.
-    const std::vector<std::byte>* captured_place_bytes() const;
 
 private:
     friend class DataModelLock;

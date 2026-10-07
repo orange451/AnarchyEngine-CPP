@@ -2747,16 +2747,6 @@ void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {
         }
     }
 
-    // Files an instance keeps under resources, such as a Terrain's voxels.
-    for (const AuthoredNode& node : tree) {
-        if (node.id == 0 || !world.alive(node.id)) {
-            continue;
-        }
-        if (std::optional<std::string> reason = world.instance(node.id)->save_resources(resources_root())) {
-            fail(*reason);
-        }
-    }
-
     std::map<std::string, Files> next = plan_files(tree, layout.src, files_);
 
     // A file changed on disk since the last load or save stops a guarded save
@@ -2771,6 +2761,26 @@ void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {
     });
     if (!listed) {
         throw ProjectConflict(std::move(conflicts));
+    }
+
+    // Files an instance keeps under resources, such as a Terrain's voxels:
+    // after the gate, so a save it stops has written nothing. Each is its own
+    // file, already named by the JSON, so the JSON writes below need not undo them.
+    for (const AuthoredNode& node : tree) {
+        if (node.id == 0) {
+            continue;
+        }
+        std::optional<std::string> reason;
+        if (world.alive(node.id)) {
+            reason = world.instance(node.id)->save_resources(resources_root());
+        } else if (playing && node.class_name == "Terrain") {
+            // Destroyed during play, but in Play's snapshot: its voxels are
+            // written from the snapshot as its JSON is.
+            reason = Terrain::save_captured(resources_root(), node.name, world.captured_place_bytes(node.id));
+        }
+        if (reason) {
+            fail(*reason);
+        }
     }
 
     SaveReport report;

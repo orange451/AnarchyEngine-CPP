@@ -499,6 +499,9 @@ std::string file_bytes(const std::filesystem::path& path) {
     return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 }
 
+// A bool, so a failure never prints the binary bytes.
+bool same_bytes(const std::filesystem::path& path, const std::string& bytes) { return file_bytes(path) == bytes; }
+
 // A project with one Terrain named Island holding a ball of Id 2, saved.
 // Returns the Terrain's DataPath.
 std::string save_island(const TempDir& dir) {
@@ -558,6 +561,9 @@ TEST_CASE("TS2 a missing or damaged .avox loads an empty Terrain and says so in 
         REQUIRE(lines.size() == 1u);
         REQUIRE(lines[0] == "Terrain Island: its voxel file " + path + " is missing, so it is empty");
         REQUIRE(terrain.data_path() == path);
+        // Nothing was edited: a save writes no empty file over the missing one.
+        project.save();
+        REQUIRE_FALSE(std::filesystem::exists(file));
     }
 
     // The file back, with its middle byte flipped.
@@ -587,7 +593,7 @@ TEST_CASE("TS2 a missing or damaged .avox loads an empty Terrain and says so in 
     // writes it even with no edit.
     REQUIRE_FALSE(project.scan_disk().has_disk_changes);
     project.save();
-    REQUIRE(file_bytes(file) == bad);
+    REQUIRE(same_bytes(file, bad));
     {
         engine_core::Game again;
         std::vector<std::string> said;
@@ -598,7 +604,7 @@ TEST_CASE("TS2 a missing or damaged .avox loads an empty Terrain and says so in 
     }
     edit_ball(terrain, 0.f, 0.f, 0.f, 4.f, 3);
     project.save();
-    REQUIRE(file_bytes(file) == bad);
+    REQUIRE(same_bytes(file, bad));
     REQUIRE(terrain.data_path() == fresh);
     REQUIRE(std::filesystem::is_regular_file(avox_file(dir, fresh)));
 }
@@ -643,4 +649,68 @@ TEST_CASE("TS3 voxel edits while stopped mark the place unsaved; edits during pl
     edit_ball(terrain, 20.f, 0.f, 0.f, 4.f, 2);
     REQUIRE_FALSE(game.history().dirty());
     game.stop_simulation();
+}
+
+namespace {
+
+// The Terrain's own .json file under src/, found by its GUID.
+std::filesystem::path terrain_json(const TempDir& dir, const std::string& guid) {
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(dir.path / "src")) {
+        const std::string leaf = entry.path().filename().u8string();
+        if (entry.is_regular_file() && leaf.find(guid) != std::string::npos && entry.path().extension() == ".json") {
+            return entry.path();
+        }
+    }
+    FAIL("no file for " + guid);
+    return {};
+}
+
+}  // namespace
+
+TEST_CASE("TS5 a save stopped by an outside change writes no voxel file", "[terrain]") {
+    SimRole role;
+    TempDir dir;
+    engine_core::Game game;
+    engine_core::Project project = engine_core::Project::create(dir.path, game);
+    engine_core::Terrain& terrain = add_terrain(game);
+    game.set_name(terrain.id(), "Island");
+    edit_ball(terrain, 0.f, 0.f, 0.f, 4.f, 2);
+    project.save();
+    const std::filesystem::path file = avox_file(dir, terrain.data_path());
+    const std::string saved = file_bytes(file);
+
+    // CanCollide changes on disk while the studio moves the Terrain and edits its voxels.
+    const std::filesystem::path json = terrain_json(dir, game.guid(terrain.id()));
+    engine_core::JsonValue doc;
+    std::string message;
+    REQUIRE(engine_core::parse_json(file_bytes(json), doc, message));
+    doc.set("CanCollide", engine_core::JsonValue::boolean(false));
+    {
+        std::ofstream out(json, std::ios::binary | std::ios::trunc);
+        out << engine_core::write_json(doc);
+    }
+    REQUIRE_FALSE(terrain.set_transform(engine_core::matrix4_translation(3.f, 0.f, 0.f)));
+    edit_ball(terrain, 20.f, 0.f, 0.f, 4.f, 5);
+    REQUIRE_THROWS_AS(project.save(), engine_core::ProjectConflict);
+    REQUIRE(same_bytes(file, saved));
+}
+
+TEST_CASE("TS6 a save during play writes the voxels of a Terrain play destroyed", "[terrain]") {
+    SimRole role;
+    TempDir dir;
+    {
+        engine_core::Game game;
+        engine_core::Project project = engine_core::Project::create(dir.path, game);
+        engine_core::Terrain& terrain = add_terrain(game);
+        game.set_name(terrain.id(), "Island");
+        edit_ball(terrain, 0.f, 0.f, 0.f, 4.f, 1);
+        game.capture_place();
+        game.start_simulation();
+        game.destroy(terrain.id());
+        project.save();
+        game.stop_simulation();
+    }
+    engine_core::Project loaded = engine_core::Project::load(dir.path);
+    engine_core::Terrain& terrain = terrain_named(loaded.datamodel(), "Island");
+    REQUIRE(id_at(terrain, 0, 0, 0) == 1);
 }

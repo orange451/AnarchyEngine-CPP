@@ -698,6 +698,10 @@ void IdeLayout::routeReveal(jadefx::KeyEvent& event, jadefx::Scene& scene) {
         event.alt || event.control || event.meta || InTextWidget(scene.focusedNode())) {
         return;
     }
+    // During a test the Scene View's keys are the game's, so a script reading F hears it.
+    if (in_test() && Owning<runner::GameView>(scene.focusedNode()) != nullptr) {
+        return;
+    }
     bool any = false;
     for (const std::weak_ptr<IdeExplorer>& weak : explorers_) {
         // A closed explorer is kept for the Window menu, and has nothing to show.

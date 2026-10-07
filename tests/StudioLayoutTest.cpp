@@ -670,6 +670,36 @@ int main() {
                 scene->noteButton(0, false, x, y);
                 frame();
                 expect(view->isFocused(), "a click selects the Scene View again");
+
+                // F reveals the selection in the explorers, but during a test
+                // the Scene View's keys are the game's: a script reading F
+                // hears it even with something selected.
+                engine_core::DataModel& world = layout.simulation().datamodel();
+                world.selection().set({world.scene_service("Workspace")});
+                frame();
+                auto press = [&](int code, int mods) {
+                    const bool consumed = scene->noteKey(code, true, false, mods);
+                    scene->noteKey(code, false, false, 0);
+                    return consumed;
+                };
+                expect(press(jadefx::Key::F, 0), "stopped, F in the Scene View reveals the selection");
+                // A test brings the console in front of Assets; Stop leaves it there.
+                ide::IdePane* assets_pane = showing("Assets");
+                ide::IdeDock* bottom = dock_of(assets_pane);
+                press(jadefx::Key::F5, 0);
+                frame();
+                layout.simulation().datamodel().selection().set(
+                    {layout.simulation().datamodel().scene_service("Workspace")});
+                frame();
+                expect(view->isFocused(), "the Scene View keeps the keyboard in the test");
+                expect(!press(jadefx::Key::F, 0), "during a test, F in the Scene View goes to the game");
+                press(jadefx::Key::F5, jadefx::Key::ModShift);
+                frame();
+                if (bottom != nullptr && assets_pane != nullptr) {
+                    bottom->select(assets_pane);
+                }
+                world.selection().set({});
+                frame();
             }
         }
 

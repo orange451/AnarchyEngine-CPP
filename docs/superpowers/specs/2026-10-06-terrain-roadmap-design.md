@@ -27,10 +27,11 @@ Heightmaps cannot make overhangs or tunnels, so Anarchy is volumetric. It stores
 | # | Name | Spec | Depends on |
 | --- | --- | --- | --- |
 | 0 | Edit-mode physics and `workspace:Raycast` | `2026-10-06-edit-mode-physics-raycast-design.md` | — |
-| 1 | Terrain core | `2026-10-06-terrain-core-design.md` | 0 |
+| 1 | Terrain core, in three plans: 1a data (`2026-10-06-terrain-data.md`), 1b surface (meshing, colliders, drawing), 1c Configure Terrain tab | `2026-10-06-terrain-core-design.md` | 0 |
+| 1d | Terrain LOD | to be written | 1b |
 | 2 | Sculpt tools and terrain undo | to be written | 1 |
-| 3 | Multi-material rendering | to be written | 1 |
-| 4 | Extras: LOD, generators, water, resampling | to be written | 1 |
+| 3 | Multi-material rendering | to be written | 1, 1d |
+| 4 | Extras: generators, water, resampling | to be written | 1 |
 
 ### 0. Edit-mode physics and `workspace:Raycast`
 
@@ -39,6 +40,19 @@ The Box3D world exists while stopped. Bodies are kept in step with the tree but 
 ### 1. Terrain core
 
 The Terrain instance; hidden `TerrainMaterial` children that choose which Materials an island may use (at most 255; several may share one Material), edited in a Configure Terrain tab; sparse 32³ chunks of a 1-byte distance and a 1-byte material Id per cell, copy-on-write; Surface Nets meshing on a worker thread; chunk meshes drawn with each material's flat color; one static Box3D body per Terrain with a mesh shape per chunk; the Lua API; the `.avox` file. See its spec.
+
+### 1d. Terrain LOD (decided so far)
+
+Distant terrain must look nearly the same as it does up close. Roblox's looks chopped and banded because it makes LODs by coarsening the voxels: surfaces move, thin parts vanish, slopes terrace, and normals from the coarse shape change the lighting. Anarchy simplifies meshes instead, after Unreal's Nanite:
+
+- **Source:** the full-detail chunk meshes from 1b. Groups of 2×2×2 chunks are merged and simplified by quadric error metrics with [meshoptimizer](https://github.com/zeux/meshoptimizer) (MIT), each level about a quarter of the triangles of the one below.
+- **Choice by screen-space error:** each LOD node records its geometric error in studs; the renderer draws the coarsest node whose error projects under about one pixel. Silhouettes stay put.
+- **Full-detail shading:** LOD vertices take their normals (the distance field's gradient) and material weights from the full-resolution voxels, not from the simplified triangles, so lighting and material edges do not shift at distance.
+- **No cracks, no popping:** shared borders are locked while simplifying; switching level is a short dithered cross-fade.
+- **Physics is unaffected:** colliders stay full detail; Box3D only tests chunks near moving bodies.
+- **Cheap to keep current:** an edit rebuilds only its chunk's branch of the hierarchy, on the mesher worker.
+
+1b is built LOD-ready: per-chunk meshes as the hierarchy's leaves, room for per-mesh error metadata, and a mesher queue that can take simplification jobs.
 
 ### 2. Sculpt tools and terrain undo (decided so far)
 
@@ -57,7 +71,6 @@ The Terrain instance; hidden `TerrainMaterial` children that choose which Materi
 
 ### 4. Extras (candidates, not committed)
 
-- Level of detail for large islands, with seams stitched between levels.
 - Generators (noise, heightmap import) and an Erode brush.
 - Water.
 - A Studio "Resample" action that changes VoxelSize (sub-project 1 keeps the data resample-ready: distances are in studs and the file records VoxelSize).

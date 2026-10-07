@@ -70,6 +70,12 @@ struct MeshDraw {
     // Id's color and surface from this table, ignoring the Material values and
     // tint above. Such a draw is always opaque and drawn alone, and casts shadows.
     std::uint32_t terrainLook = 0;
+    // A terrain LOD node cross-fading with another level (TerrainDraws):
+    // 1 draws it whole; less dithers it away in terrain.frag, fading in
+    // (terrainFadeIn) or out, so the two levels together cover each pixel
+    // once. Shadows draw only the fading-in node, whole.
+    float terrainFade = 1.f;
+    bool terrainFadeIn = true;
 };
 
 // A Terrain's look table: a 256 x 2 GL_RGBA8 texture, GL_NEAREST, from
@@ -380,6 +386,9 @@ private:
         int normalMapEnabled = -1;
         int emissiveMapEnabled = -1;
         int transparency = -1;
+        // terrain.frag: a LOD node's cross-fade.
+        int fade = -1;
+        int fadeIn = -1;
         // G-buffer inputs.
         int depth = -1;
         int albedo = -1;

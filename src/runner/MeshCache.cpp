@@ -23,8 +23,8 @@ MeshCache::~MeshCache() {
     for (auto& [mesh, entry] : sessions_) {
         entry.mesh.forget();
     }
-    for (auto& [key, entry] : chunks_) {
-        entry.mesh.forget();
+    for (auto& [key, entry] : nodes_) {
+        entry.upload.mesh.forget();
     }
 }
 
@@ -45,10 +45,10 @@ void MeshCache::clear() {
         entry.mesh.destroy();
     }
     sessions_.clear();
-    for (auto& [key, entry] : chunks_) {
-        entry.mesh.destroy();
+    for (auto& [key, entry] : nodes_) {
+        entry.upload.mesh.destroy();
     }
-    chunks_.clear();
+    nodes_.clear();
 }
 
 void MeshCache::uploadOnce(SessionEntry& entry, const anarchy::amesh::Data& data, std::uint64_t revision,
@@ -93,25 +93,43 @@ void MeshCache::sweepSessions() {
     }
 }
 
-std::size_t MeshCache::ChunkKeyHash::operator()(const ChunkKey& key) const {
-    return engine_core::terrain::ChunkCoordHash{}(key.coord) * 31u + std::hash<engine_core::InstanceId>{}(key.terrain);
+std::size_t MeshCache::NodeCacheKeyHash::operator()(const NodeCacheKey& key) const {
+    return engine_core::terrain::NodeKeyHash{}(key.key) * 31u + std::hash<engine_core::InstanceId>{}(key.terrain);
 }
 
-const anarchy::amesh::GpuMesh* MeshCache::getTerrainChunk(engine_core::InstanceId terrain,
-                                                         engine_core::terrain::ChunkCoord coord,
-                                                         const anarchy::amesh::Data& data, std::uint64_t revision) {
-    SessionEntry& entry = chunks_[ChunkKey{terrain, coord}];
+const anarchy::amesh::GpuMesh* MeshCache::getTerrainNode(engine_core::InstanceId terrain,
+                                                        const engine_core::terrain::NodeKey& key,
+                                                        const anarchy::amesh::Data& data, std::uint64_t revision) {
+    SessionEntry& entry = nodes_[NodeCacheKey{terrain, key}].upload;
     uploadOnce(entry, data, revision, false, "A Terrain chunk could not be drawn: ");
     return entry.mesh.valid() ? &entry.mesh : nullptr;
 }
 
-void MeshCache::sweepTerrainChunks() {
-    for (auto it = chunks_.begin(); it != chunks_.end();) {
-        if (!it->second.asked) {
-            it->second.mesh.destroy();
-            it = chunks_.erase(it);
+const anarchy::amesh::GpuMesh* MeshCache::getTerrainNode(engine_core::InstanceId terrain,
+                                                        const engine_core::terrain::NodeKey& key,
+                                                        const engine_core::terrain::CompactMesh& compact,
+                                                        std::uint64_t revision) {
+    SessionEntry& entry = nodes_[NodeCacheKey{terrain, key}].upload;
+    if (!(entry.tried && entry.revision == revision)) {
+        // Unpacked only to upload (spec decision 1); the copy goes when this returns.
+        uploadOnce(entry, engine_core::terrain::unpack(compact), revision, false,
+                   "A Terrain LOD node could not be drawn: ");
+    }
+    entry.asked = true;
+    return entry.mesh.valid() ? &entry.mesh : nullptr;
+}
+
+void MeshCache::sweepTerrainNodes(double now_seconds) {
+    for (auto it = nodes_.begin(); it != nodes_.end();) {
+        NodeEntry& entry = it->second;
+        if (entry.upload.asked) {
+            entry.upload.asked = false;
+            entry.used = now_seconds;
+            ++it;
+        } else if (now_seconds - entry.used >= kTerrainNodeGraceSeconds) {
+            entry.upload.mesh.destroy();
+            it = nodes_.erase(it);
         } else {
-            it->second.asked = false;
             ++it;
         }
     }

@@ -192,6 +192,8 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.normalMapEnabled = at("uNormalMapEnabled");
     program.emissiveMapEnabled = at("uEmissiveMapEnabled");
     program.transparency = at("uTransparency");
+    program.fade = at("uFade");
+    program.fadeIn = at("uFadeIn");
     program.depth = at("uDepth");
     program.albedo = at("uAlbedo");
     program.normal = at("uNormal");
@@ -1694,6 +1696,8 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
                 glUniformMatrix4fv(terrain_.projection, 1, GL_FALSE, projection);
             }
             BindTexture(kUnitTerrainLook, draw.terrainLook);
+            glUniform1f(terrain_.fade, draw.terrainFade);
+            glUniform1i(terrain_.fadeIn, draw.terrainFadeIn ? 1 : 0);
         } else {
             if (terrain) {
                 // Not reached while BuildBatches sorts terrain last; kept so

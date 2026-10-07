@@ -17,6 +17,7 @@
 #include "profiler/Profiler.hpp"
 #include "runner/gl.hpp"
 #include "runner/ViewCapture.hpp"
+#include "terrain/LodNode.hpp"
 #include "terrain/SurfaceNets.hpp"
 #include "terrain/VoxelVolume.hpp"
 
@@ -39,6 +40,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -348,6 +350,44 @@ std::shared_ptr<const std::vector<engine_core::TerrainChunkView>> MeshChunks(con
         }
     }
     return chunks;
+}
+
+// chunks as level-0 LOD nodes, as TerrainWorld publishes them before any
+// coarser level is built: each its own root, its bounds its chunk's box and
+// its mesh's, sorted by key.
+std::shared_ptr<const std::vector<engine_core::TerrainNodeView>> ChunkNodes(
+    const std::vector<engine_core::TerrainChunkView>& chunks, float voxelSize) {
+    auto nodes = std::make_shared<std::vector<engine_core::TerrainNodeView>>();
+    for (const engine_core::TerrainChunkView& chunk : chunks) {
+        engine_core::TerrainNodeView node;
+        node.key = terrain::node_of(chunk.coord, 0);
+        node.revision = chunk.revision;
+        node.mesh = chunk.mesh;
+        terrain::node_bounds(node.key, voxelSize, node.bounds_min, node.bounds_max);
+        for (const anarchy::amesh::Vertex& vertex : chunk.mesh->vertices) {
+            node.bounds_min = {std::min(node.bounds_min.x, vertex.p[0]),
+                               std::min(node.bounds_min.y, vertex.p[1]),
+                               std::min(node.bounds_min.z, vertex.p[2])};
+            node.bounds_max = {std::max(node.bounds_max.x, vertex.p[0]),
+                               std::max(node.bounds_max.y, vertex.p[1]),
+                               std::max(node.bounds_max.z, vertex.p[2])};
+        }
+        nodes->push_back(node);
+    }
+    std::sort(nodes->begin(), nodes->end(), [](const engine_core::TerrainNodeView& a, const engine_core::TerrainNodeView& b) {
+        return std::tie(a.key.level, a.key.x, a.key.y, a.key.z) < std::tie(b.key.level, b.key.x, b.key.y, b.key.z);
+    });
+    return nodes;
+}
+
+// The camera renderer draws from, for selecting terrain nodes on a pane size by size.
+runner::TerrainCamera RendererCamera(const runner::Renderer& renderer, int width, int height) {
+    runner::TerrainCamera camera;
+    camera.world = engine_core::matrix4_inverse(renderer.view());
+    camera.fov_y_degrees = renderer.fovYDegrees();
+    camera.pane_width = width;
+    camera.pane_height = height;
+    return camera;
 }
 
 // A published look from look-table bytes (LookBytes'), with revision.
@@ -2196,18 +2236,22 @@ int main(int argc, char** argv) {
 
         // A ball of Id 1, with Id 1 pure red: the middle of the view is red.
         // Through AppendTerrainDraws, as the Scene View draws a snapshot's
-        // Terrains: MeshCache::getTerrainChunk and Renderer::terrainLookTexture.
+        // Terrains: SelectTerrainNodes, MeshCache::getTerrainNode and
+        // Renderer::terrainLookTexture. The chunks are level-0 nodes, each a root.
         {
             terrain::VoxelVolume volume(0.25f);
             Edit(volume.fill(Ball(0.f, 0.f, 0.f, 1.5f), 1), "the red ball");
             engine_core::TerrainView view;
             view.terrain = 77;
             view.chunks = MeshChunks(volume, 1);
+            view.nodes = ChunkNodes(*view.chunks, 0.25f);
             view.look = MakeLook(LookBytes({{1, 255, 0, 0}}), 1);
             Expect(!view.chunks->empty(), "the red ball meshes (" + std::to_string(view.chunks->size()) + " chunks)");
             runner::MeshCache chunkMeshes;
+            runner::TerrainFadeState fades;
+            const runner::TerrainCamera camera = RendererCamera(renderer, kSize, kSize);
             std::vector<runner::MeshDraw> draws;
-            runner::AppendTerrainDraws({view}, chunkMeshes, renderer, draws);
+            runner::AppendTerrainDraws({view}, camera, 0.0, fades, chunkMeshes, renderer, draws);
             Expect(draws.size() == view.chunks->size() && draws.front().terrainLook != 0 &&
                        draws.front().owner == 77 && draws.front().slot == 0,
                    "each chunk is a MeshDraw with the Terrain's look, owned by it, drawn alone");
@@ -2225,7 +2269,7 @@ int main(int argc, char** argv) {
             engine_core::TerrainView green = view;
             green.look = MakeLook(LookBytes({{1, 0, 255, 0}}), 2);
             std::vector<runner::MeshDraw> greenDraws;
-            runner::AppendTerrainDraws({green}, chunkMeshes, renderer, greenDraws);
+            runner::AppendTerrainDraws({green}, camera, 0.0, fades, chunkMeshes, renderer, greenDraws);
             Expect(greenDraws.size() == draws.size() && greenDraws.front().mesh == draws.front().mesh &&
                        greenDraws.front().terrainLook == draws.front().terrainLook,
                    "a new look revision keeps the chunk uploads and the texture");
@@ -2235,7 +2279,7 @@ int main(int argc, char** argv) {
                    "and draws in the new look's green (" + Text(turned) + ")");
             // Back to red (another revision change), for the frame with a cube.
             draws.clear();
-            runner::AppendTerrainDraws({view}, chunkMeshes, renderer, draws);
+            runner::AppendTerrainDraws({view}, camera, 0.0, fades, chunkMeshes, renderer, draws);
 
             // Behind a cube: the cube's material program and the terrain's in one frame.
             GpuMesh mixCube;
@@ -2254,10 +2298,81 @@ int main(int argc, char** argv) {
                    "with a cube beside it, the ball stays red and the cube blue (" + Text(stillRed) + " and " +
                        Text(cubeBlue) + ")");
             mixCube.destroy();
-            // No Terrains: the sweeps delete the uploads and the look.
+
+            // A cross-fade halfway: the red ball fading in and the same meshes
+            // in green fading out cover the ball's pixels between them, each
+            // about half, and nothing shows the clear color through.
+            {
+                const std::vector<std::uint8_t> greenBytes = LookBytes({{1, 0, 255, 0}});
+                const unsigned greenLook = runner::MakeTerrainLookTexture(greenBytes.data());
+                std::vector<runner::MeshDraw> fading;
+                for (const runner::MeshDraw& draw : draws) {
+                    runner::MeshDraw in = draw;
+                    in.terrainFade = 0.5f;
+                    in.terrainFadeIn = true;
+                    runner::MeshDraw out = draw;
+                    out.terrainLook = greenLook;
+                    out.terrainFade = 0.5f;
+                    out.terrainFadeIn = false;
+                    fading.push_back(in);
+                    fading.push_back(out);
+                }
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, fading.data(), static_cast<int>(fading.size()));
+                int reds = 0;
+                int greens = 0;
+                int clear = 0;
+                for (int dy = -4; dy < 4; ++dy) {
+                    for (int dx = -4; dx < 4; ++dx) {
+                        const Pixel p = ReadPixel(fbWidth / 2 + dx, fbHeight / 2 + dy);
+                        if (p.r > p.g + 10) {
+                            ++reds;
+                        } else if (p.g > p.r + 10) {
+                            ++greens;
+                        } else if (IsClear(p)) {
+                            ++clear;
+                        }
+                    }
+                }
+                // The pattern is 4 x 4, so 8 x 8 holds it four times; antialiasing
+                // blends neighbors toward each other (a pixel leans red or green
+                // rather than being pure), but none is left empty.
+                Expect(reds >= 8 && greens >= 8 && clear == 0,
+                       "a half cross-fade dithers the two levels over every pixel (" + std::to_string(reds) +
+                           " red, " + std::to_string(greens) + " green, " + std::to_string(clear) +
+                           " clear of 64; the middle " + Text(ReadPixel(fbWidth / 2, fbHeight / 2)) + ", beside it " +
+                           Text(ReadPixel(fbWidth / 2 + 1, fbHeight / 2)) + ")");
+                // The one fading in alone, at half: the dither leaves holes.
+                std::vector<runner::MeshDraw> half;
+                for (std::size_t i = 0; i < fading.size(); i += 2) {
+                    half.push_back(fading[i]);
+                }
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, half.data(), static_cast<int>(half.size()));
+                int holes = 0;
+                for (int dy = -4; dy < 4; ++dy) {
+                    for (int dx = -4; dx < 4; ++dx) {
+                        const Pixel p = ReadPixel(fbWidth / 2 + dx, fbHeight / 2 + dy);
+                        holes += p.r > p.g + 10 ? 0 : 1;
+                    }
+                }
+                Expect(holes >= 8, "one level alone at half a fade dithers away part of it (" + std::to_string(holes) +
+                                       " of 64 not red)");
+                runner::GLuint texture = greenLook;
+                glDeleteTextures(1, &texture);
+            }
+
+            // No Terrains: the looks go at once; the uploads stay for the
+            // grace period, then go.
             draws.clear();
-            runner::AppendTerrainDraws({}, chunkMeshes, renderer, draws);
+            runner::AppendTerrainDraws({}, camera, 1.0, fades, chunkMeshes, renderer, draws);
             Expect(draws.empty(), "no Terrains draw nothing");
+            Expect(chunkMeshes.terrainNodeCount() == view.chunks->size(),
+                   "the node uploads stay a while after they stop drawing (" +
+                       std::to_string(chunkMeshes.terrainNodeCount()) + ")");
+            runner::AppendTerrainDraws({}, camera, 1.0 + runner::MeshCache::kTerrainNodeGraceSeconds, fades, chunkMeshes,
+                                       renderer, draws);
+            Expect(chunkMeshes.terrainNodeCount() == 0,
+                   "and are deleted once not drawn for the grace period (" +
+                       std::to_string(chunkMeshes.terrainNodeCount()) + " left)");
             chunkMeshes.clear();
             Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the red terrain ball leaves no GL error");
         }
@@ -2431,12 +2546,19 @@ int main(int argc, char** argv) {
                     game.set_parent(placed.id(), game.scene_service("Workspace"));
                     build(game, placed);
                     engine_core::TerrainWorld world;
-                    // As TS1's settle: until every queued chunk is meshed and collected.
-                    for (int pass = 0; pass < 4; ++pass) {
+                    // As TS1's settle, and on until every LOD level is built: until
+                    // an update after the pool is idle publishes no new node set.
+                    std::uint64_t settled = ~std::uint64_t{0};
+                    for (int pass = 0; pass < 64; ++pass) {
                         world.update(game);
                         world.wait_idle();
+                        world.update(game);
+                        const std::uint64_t revision = world.views().empty() ? 0 : world.views()[0].nodes_revision;
+                        if (revision == settled) {
+                            break;
+                        }
+                        settled = revision;
                     }
-                    world.update(game);
                     engine_core::SnapshotPump pump;
                     pump.reserve(engine_core::DataModel::kMaxInstances);
                     pump.set_terrain_world(&world);
@@ -2446,14 +2568,46 @@ int main(int argc, char** argv) {
                     Expect(snapshot.terrains.size() == 1 && snapshot.terrains[0].chunks != nullptr &&
                                !snapshot.terrains[0].chunks->empty() && snapshot.terrains[0].look != nullptr,
                            "the snapshot carries the Terrain's chunks and look");
+                    Expect(snapshot.terrains.size() == 1 && snapshot.terrains[0].nodes != nullptr &&
+                               !snapshot.terrains[0].nodes->empty(),
+                           "and its LOD nodes (top level " +
+                               std::to_string(snapshot.terrains.empty() ? -1 : snapshot.terrains[0].top_level) + ")");
                     runner::MeshCache chunkMeshes;
                     std::vector<runner::MeshDraw> draws;
-                    runner::AppendTerrainDraws(snapshot.terrains, chunkMeshes, renderer, draws);
                     for (const TerrainShot& shot : shots) {
+                        // Selected for this shot's camera on the 1280 x 720 target, with no fade from another.
+                        runner::TerrainCamera camera;
+                        camera.world = ShotCamera(shot);
+                        camera.fov_y_degrees = shot.fov;
+                        camera.pane_width = kShotWidth;
+                        camera.pane_height = kShotHeight;
+                        runner::TerrainFadeState fades;
+                        draws.clear();
+                        runner::AppendTerrainDraws(snapshot.terrains, camera, 0.0, fades, chunkMeshes, renderer, draws);
+                        // Which levels it drew, for the log.
+                        int levels[16] = {};
+                        std::vector<runner::NodeChoice> choices;
+                        runner::TerrainFadeState counting;
+                        runner::SelectTerrainNodes(snapshot.terrains[0], camera, 0.0, counting, choices);
+                        std::string histogram;
+                        for (const runner::NodeChoice& choice : choices) {
+                            ++levels[std::min((*snapshot.terrains[0].nodes)[choice.index].key.level, 15)];
+                        }
+                        for (int level = 0; level < 16; ++level) {
+                            if (levels[level] > 0) {
+                                histogram += " L" + std::to_string(level) + "x" + std::to_string(levels[level]);
+                            }
+                        }
+                        std::printf("%s: %d nodes drawn of %d published:%s\n", shot.file.c_str(),
+                                    static_cast<int>(draws.size()),
+                                    static_cast<int>(snapshot.terrains[0].nodes->size()), histogram.c_str());
                         shootDraws(draws, shot);
                     }
                     draws.clear();
-                    runner::AppendTerrainDraws({}, chunkMeshes, renderer, draws);
+                    // No Terrains: the look goes, so the next Game's Terrain (the same
+                    // id, a fresh TerrainWorld's look revisions) makes its own.
+                    runner::TerrainFadeState none;
+                    runner::AppendTerrainDraws({}, runner::TerrainCamera{}, 0.0, none, chunkMeshes, renderer, draws);
                     chunkMeshes.clear();
                     pump.set_terrain_world(nullptr);
                 }

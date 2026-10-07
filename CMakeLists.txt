@@ -48,6 +48,7 @@ set(STUDIO_CORE_SOURCES
     src/runner/ShadowAtlas.cpp
     src/runner/ShadowPlanner.cpp
     src/runner/Visibility.cpp
+    src/runner/TerrainSelection.cpp
     src/runner/DrawBatches.cpp
     src/runner/GamePack.cpp
     src/ide/AssetBrowser.cpp
@@ -984,6 +985,7 @@ add_executable(sandbox
     sandbox/terrain_lua_tests.cpp
     sandbox/terrain_lod_tests.cpp
     sandbox/terrain_lod_tree_tests.cpp
+    sandbox/terrain_lod_draw_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

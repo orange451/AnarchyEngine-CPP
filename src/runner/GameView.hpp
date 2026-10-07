@@ -5,6 +5,7 @@
 #include "GuiLayer.hpp"
 #include "MeshCache.hpp"
 #include "ProfilerOverlay.hpp"
+#include "TerrainSelection.hpp"
 #include "TextureCache.hpp"
 #include "Renderer.hpp"
 #include "types.hpp"
@@ -184,6 +185,9 @@ private:
     double cursorY_ = -1;
     MeshCache meshes_;
     TextureCache textures_;
+    // Each Terrain's LOD cross-fades, frame to frame.
+    TerrainFadeState terrainFades_;
+    std::chrono::steady_clock::time_point terrainClockStart_ = std::chrono::steady_clock::now();
     // Per frame: each snapshot Prefab's loaded meshes, with their textures and
     // colors, then one draw per row and mesh at that row's Transform.
     std::vector<std::vector<MeshDraw>> prefabMeshes_;

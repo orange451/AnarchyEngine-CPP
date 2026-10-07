@@ -13,6 +13,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -67,6 +68,13 @@ public:
     void wait_idle() { mesher_.wait_idle(); }
     std::uint64_t meshed_count() const { return meshed_count_; }
 
+    // A mesh/collider build that threw: TerrainMesher's worker drops the job
+    // (its chunk keeps its old mesh) and keeps only a count and the latest
+    // message. The Engine reads these from SimulationThread each update() and
+    // reports a rise once, the way it already does other faults.
+    std::uint64_t mesh_failures() const { return mesher_.failure_count(); }
+    std::string last_mesh_failure() const { return mesher_.last_failure(); }
+
 private:
     // One Id's inputs to the look table, compared each update against what
     // was last published so an unrelated Material elsewhere never forces a
@@ -88,8 +96,14 @@ private:
 
     // Everything TerrainWorld keeps for one live Terrain.
     struct TerrainRecord {
-        // Per-chunk coordinate, bumped every queue(): a result is accepted
-        // only when it still matches the live counter (see accept_result).
+        // Per-chunk coordinate, set to a fresh value from next_job_revision_
+        // every queue(): a result is accepted only when it still matches the
+        // live value (see accept_result). Drawn from a counter that lives on
+        // TerrainWorld, not on this record, so a value is never reused even
+        // after this record is dropped (Terrain left Workspace) and a later
+        // record is created for the same Terrain returning: a job queued
+        // during a previous stay can then never again match the live value
+        // for any chunk, however the two records' own lifetimes line up.
         std::unordered_map<terrain::ChunkCoord, std::uint64_t, terrain::ChunkCoordHash> chunk_revisions;
         // Published meshes and colliders, by chunk coordinate: the source
         // accept_result writes and publish_chunks reads to rebuild the
@@ -98,6 +112,11 @@ private:
         std::unordered_map<terrain::ChunkCoord, ChunkCollider, terrain::ChunkCoordHash> collider_map;
         bool chunks_dirty = false;   // a result landed since the last publish
         std::shared_ptr<const std::vector<TerrainChunkView>> chunks;
+        // Set from next_chunks_set_revision_ each publish_chunks, for the
+        // same reason chunk_revisions draws from next_job_revision_: a
+        // record recreated after a Terrain returns to Workspace must never
+        // repeat a value an earlier record (for the same Terrain) already
+        // published, in case a consumer is keyed on (terrain, chunks_revision).
         std::uint64_t chunks_revision = 0;
         std::vector<ChunkCollider> colliders_vec;
         std::shared_ptr<const TerrainLook> look;
@@ -116,6 +135,11 @@ private:
     std::uint64_t meshed_count_ = 0;
     std::uint64_t next_chunk_revision_ = 1;   // unique across every TerrainChunkView this world publishes
     std::uint64_t next_look_revision_ = 1;    // unique across every TerrainLook this world publishes
+    // World-wide, never reused for the life of this TerrainWorld -- unlike a
+    // per-record counter, which restarts at 1 whenever a Terrain's record is
+    // dropped and recreated (leaves Workspace, then returns).
+    std::uint64_t next_job_revision_ = 1;         // backs every TerrainRecord::chunk_revisions value
+    std::uint64_t next_chunks_set_revision_ = 1;  // backs every TerrainRecord::chunks_revision value
 };
 
 }  // namespace engine_core

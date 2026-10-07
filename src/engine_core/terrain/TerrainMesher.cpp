@@ -1,6 +1,7 @@
 #include "terrain/TerrainMesher.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <utility>
 
 namespace engine_core::terrain {
@@ -90,6 +91,16 @@ void TerrainMesher::wait_idle() {
     cv_.wait(lock, [this] { return waiting_.empty() && running_ == 0; });
 }
 
+std::uint64_t TerrainMesher::failure_count() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return failure_count_;
+}
+
+std::string TerrainMesher::last_failure() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return last_failure_;
+}
+
 void TerrainMesher::pause_for_test(bool paused) {
     // Caller's thread (tests only).
     {
@@ -138,23 +149,33 @@ void TerrainMesher::worker_loop() {
         ChunkMesh mesh;
         std::shared_ptr<void> collider;
         bool ok = true;
+        std::string failure_message;
         try {
             mesh = surface_nets(job.input);
             if (build_collider_) collider = build_collider_(mesh);
-        } catch (...) {
+        } catch (const std::exception& error) {
             // A throw must never cross back into worker_loop's caller (an
             // uncaught exception on a non-main thread is std::terminate): a
             // bad job is dropped instead. It produces no result -- the chunk
             // keeps whatever mesh it had until a later edit queues a fresh
             // job for the same coordinate -- but running_ is still
             // decremented below, so the mesher never looks permanently busy.
+            // The message is kept (not just discarded) so the owning thread
+            // can report it once it notices failure_count_ rise.
             ok = false;
+            failure_message = error.what();
+        } catch (...) {
+            ok = false;
+            failure_message = "a non-std::exception";
         }
         {
             std::lock_guard<std::mutex> lock(mutex_);
             --running_;
             if (ok) {
                 results_.push_back(MeshResult{job.terrain, job.coord, job.revision, std::move(mesh), std::move(collider)});
+            } else {
+                ++failure_count_;
+                last_failure_ = std::move(failure_message);
             }
         }
         cv_.notify_all();   // may have just made the mesher idle

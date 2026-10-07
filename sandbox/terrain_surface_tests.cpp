@@ -296,14 +296,9 @@ TEST_CASE("TM5 a result from a running job loses to a newer one queued while it 
     // (queued after job 1 was already taken), so they come back in order.
     REQUIRE(results[0].revision == 1u);
     REQUIRE(results[1].revision == 2u);
-    // TerrainWorld-style filtering: a per-chunk counter that is now at 2
-    // keeps only the result whose revision matches it.
-    const std::uint64_t current_revision = 2;
-    int accepted = 0;
-    for (const MeshResult& r : results) {
-        if (r.revision == current_revision) ++accepted;
-    }
-    REQUIRE(accepted == 1);
+    // TerrainWorld's own revision-filtering (accept_result, which keeps only
+    // the result matching a chunk's current counter) is covered end to end
+    // by TW6 below, not re-simulated here.
 }
 
 TEST_CASE("TM6 a job whose collider builder throws is dropped, not fatal", "[terrain]") {
@@ -518,4 +513,141 @@ TEST_CASE("TW5 Stop re-meshes only what play changed", "[terrain]") {
     settle(world, game);
     REQUIRE(world.meshed_count() - before <= 27u);
     REQUIRE(world.views()[0].chunks->size() >= 2u);   // the near ball is back
+}
+
+TEST_CASE("TW6 a Terrain destroyed during play keeps its TerrainTag when Stop restores it", "[terrain]") {
+    // DataModel::adopt_slot (DataModelPlace.cpp) rebuilds a captured
+    // instance's slot from scratch on Stop. It must add TerrainTag beside
+    // physics_body's tag -- exactly as issue_entity does for a brand-new
+    // instance -- or terrains() never finds the restored Terrain again and
+    // it silently drops out of TerrainWorld (and so out of rendering and
+    // collision) even though DataModel still considers it alive.
+    SimRole role;
+    Game game;
+    Terrain& t = terrain_in_workspace(game);
+    REQUIRE_FALSE(t.volume().fill(ball_at(5.f, 5.f, 5.f, 4.f), 0));
+    const InstanceId id = t.id();
+    TerrainWorld world;
+    settle(world, game);
+    REQUIRE(world.views().size() == 1u);
+
+    game.capture_place();
+    game.start_simulation();
+    game.destroy(id);
+    settle(world, game);
+    REQUIRE(world.views().empty());   // gone while destroyed in play
+
+    game.stop_simulation();   // restores the captured Terrain through adopt_slot
+    REQUIRE(game.alive(id));
+    settle(world, game);
+    REQUIRE(world.views().size() == 1u);   // found again: TerrainTag survived the rebuild
+}
+
+TEST_CASE("TW7 a mesh from a Terrain's previous stay in Workspace is dropped, not shown, on its return",
+          "[terrain]") {
+    // Job revisions and chunks_revision must come from counters that live on
+    // TerrainWorld, not on the per-Terrain record: a record is dropped and
+    // recreated (fresh, restarting any local counter at 1) every time a
+    // Terrain leaves and returns to Workspace, so a value drawn from a local
+    // counter can collide with one a previous record already handed out for
+    // the very same chunk.
+    SimRole role;
+    Game game;
+    Terrain& t = terrain_in_workspace(game);
+    // Dead center of chunk {0,0,0} (32 studs on a side): radius 4 plus the
+    // 4-cell band stays 8 studs clear of every face, so this is the only
+    // chunk fill() stores, and its 26 neighbors stay pure air.
+    REQUIRE_FALSE(t.volume().fill(ball_at(16.f, 16.f, 16.f, 4.f), 0));
+
+    std::mutex gate_mu;
+    std::condition_variable gate_cv;
+    bool blocked = false;   // the chunk with real geometry is now stuck mid-build
+    bool release = false;   // the test says go
+    TerrainWorld world(
+        [&](const ChunkMesh& mesh) -> std::shared_ptr<void> {
+            if (mesh.triangles.empty()) {
+                return nullptr;   // one of the 26 air neighbors: never blocks
+            }
+            std::unique_lock<std::mutex> lock(gate_mu);
+            blocked = true;
+            gate_cv.notify_all();
+            gate_cv.wait(lock, [&] { return release; });
+            return nullptr;
+        },
+        1);   // one worker: exactly one job can ever be "running" at a time
+
+    world.update(game);   // first sight: queues the stored chunk and its 26 neighbors
+    {
+        std::unique_lock<std::mutex> lock(gate_mu);
+        gate_cv.wait(lock, [&] { return blocked; });
+    }
+    // The real chunk's job is now stuck holding its pre-edit mesh and the
+    // revision this, its first, stay in Workspace assigned it.
+    game.set_parent(t.id(), game.scene_service("Storage"));
+    world.update(game);   // leaves Workspace: TerrainWorld drops its record
+    // While away, repaint the same solid region -- a visible edit the stuck
+    // job's mesh will not reflect once it finally lands.
+    REQUIRE_FALSE(t.volume().paint(ball_at(16.f, 16.f, 16.f, 4.f), 7));
+    game.set_parent(t.id(), workspace_of(game));
+    world.update(game);   // returns: first sight again, re-queues all 27 coords
+    const std::uint64_t before = world.meshed_count();
+
+    {
+        std::lock_guard<std::mutex> lock(gate_mu);
+        release = true;
+    }
+    gate_cv.notify_all();
+    world.wait_idle();
+    world.update(game);
+    // This stay's 27 fresh jobs (26 air plus the one real chunk, repainted)
+    // are accepted; the one job left over from the previous stay must be
+    // dropped as stale, not counted a 28th time.
+    REQUIRE(world.meshed_count() - before == 27u);
+}
+
+TEST_CASE("TW8 first sight meshes a stored chunk's footprint including an unstored chunk that owns a quad",
+          "[terrain]") {
+    // queue_dirty's first_seen branch must queue every stored chunk AND its
+    // 26 neighbors (deduplicated) -- the same footprint take_dirty gives
+    // after an edit -- not just volume.chunks()'s own keys.
+    //
+    // A chunk's own cell 31 reaches one sample past its own top face, into
+    // whichever chunk sits above it on that axis (SurfaceNets.cpp's -1..31
+    // cell range): so a quad at a seam is owned by the LOWER chunk's cell 31,
+    // not the chunk above, even when the solid material behind it lives
+    // entirely in the chunk above. Here a one-cell-thick solid slab is
+    // written directly into chunk {0,1,0}'s own first row (world y=32), kept
+    // well inside that chunk's x/z extent (cells 4..27, not 0..31) so its
+    // four side walls stay owned by {0,1,0} itself rather than spilling into
+    // the x/z-neighbor chunks whose own cell 31 would otherwise own the
+    // low-side walls; chunk {0,0,0} below it is never written at all, so it
+    // stays out of volume.chunks() -- yet it owns the slab's underside.
+    // Meshing only volume.chunks()'s own key ({0,1,0}) finds the slab's top
+    // face (and its walls) but leaves its underside out: a real, visible gap.
+    SimRole role;
+    Game game;
+    Terrain& t = terrain_in_workspace(game);
+    const std::size_t side = 24;   // cells 4..27 inclusive
+    const std::size_t plane = side * side;
+    const std::vector<float> distances(plane, -4.f);   // deep solid
+    const std::vector<std::uint8_t> materials(plane, 1);
+    REQUIRE_FALSE(t.volume().write(CellCoord{4, 32, 4}, CellCoord{27, 32, 27}, distances, materials));
+    REQUIRE(t.volume().chunks().find(ChunkCoord{0, 1, 0}) != t.volume().chunks().end());
+    REQUIRE(t.volume().chunks().find(ChunkCoord{0, 0, 0}) == t.volume().chunks().end());   // never touched
+
+    std::size_t reference_count = 0;
+    for (const ChunkMesh& mesh : mesh_all(t.volume())) {
+        if (!mesh.triangles.empty()) {
+            ++reference_count;
+        }
+    }
+    REQUIRE(reference_count == 2u);   // the slab's top face (stored) and its underside (unstored)
+
+    TerrainWorld world;
+    settle(world, game);
+    REQUIRE(world.views().size() == 1u);
+    // TerrainWorld publishes a TerrainChunkView only for a chunk whose last
+    // result had a non-null mesh (accept_result erases the rest), so this
+    // count is directly comparable to reference_count above.
+    REQUIRE(world.views()[0].chunks->size() == reference_count);
 }

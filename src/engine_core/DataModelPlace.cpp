@@ -190,6 +190,9 @@ void DataModel::adopt_slot(std::uint16_t pool_index, InstanceId id) {
     if (object->physics_body()) {
         ecs_add_id(ecs_world(), part.entity, state_->ecs_ids.physics_body);
     }
+    if (object->terrain()) {
+        ecs_add_id(ecs_world(), part.entity, state_->ecs_ids.terrain);
+    }
     if (object->sound_source()) {
         ecs_add_id(ecs_world(), part.entity, state_->ecs_ids.sound_source);
     }

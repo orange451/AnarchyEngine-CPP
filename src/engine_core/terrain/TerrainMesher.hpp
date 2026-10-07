@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -49,6 +50,15 @@ public:
     bool idle() const;
     // For tests: blocks until idle.
     void wait_idle();
+
+    // A job whose surface_nets/collider build throws is dropped: its chunk
+    // keeps whatever mesh it had until a later edit queues a fresh job for
+    // the same coordinate (see worker_loop). failure_count/last_failure let
+    // the owning thread (TerrainWorld, from SimulationThread) notice a rise
+    // and report it once, the way Engine::report_fault already does for
+    // other faults -- worker threads here never log directly.
+    std::uint64_t failure_count() const;
+    std::string last_failure() const;
 
     // Test-only: when true, a worker that is not already running a job blocks
     // before it takes its next one, so a test can queue several jobs for the
@@ -117,6 +127,9 @@ private:
     bool stopping_ = false;         // destructor requested shutdown. Protected by mutex_.
 
     std::vector<MeshResult> results_;   // finished since the last collect(). Protected by mutex_.
+
+    std::uint64_t failure_count_ = 0;   // jobs whose mesh/collider build threw. Protected by mutex_.
+    std::string last_failure_;          // the most recent one's what() (or a fixed message). Protected by mutex_.
 
     std::vector<std::thread> workers_;   // started last, so they see a fully built mutex_/cv_
 };

@@ -199,6 +199,16 @@ void Engine::guarded_step(Step&& step, OnContract&& on_contract) {
     }
 }
 
+void Engine::report_terrain_failures() {
+    const std::uint64_t failures = terrain_.mesh_failures();
+    if (failures <= terrain_failures_seen_) {
+        return;   // no rise since the last check
+    }
+    terrain_failures_seen_ = failures;
+    const std::string text = "Terrain meshing failed: " + terrain_.last_mesh_failure();
+    report_fault(text.c_str());
+}
+
 void Engine::report_fault(const char* what) {
     const std::string text = std::string("Engine: ") + (what != nullptr ? what : "unknown error");
     const auto now = std::chrono::steady_clock::now();
@@ -304,6 +314,7 @@ void Engine::simulation_loop() {
                                 decomposer_.update(game_);
                                 physics_.sync(game_);
                                 terrain_.update(game_);
+                                report_terrain_failures();
                             }
                         },
                         [&] { contract_count_.fetch_add(1); });
@@ -395,6 +406,7 @@ void Engine::simulation_loop() {
                     // is already off this thread (TerrainMesher's workers).
                     PROFILE_SCOPE("Terrain", profiler::Group::Engine);
                     terrain_.update(game_);
+                    report_terrain_failures();
                 }
                 accumulator += wall;
                 constexpr int kMaxSubsteps = 32;

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_set>
 #include <utility>
 
 namespace engine_core {
@@ -48,10 +49,15 @@ void TerrainWorld::accept_result(const terrain::MeshResult& result) {
     TerrainRecord& record = found->second;
     const auto revision_it = record.chunk_revisions.find(result.coord);
     if (revision_it == record.chunk_revisions.end() || revision_it->second != result.revision) {
-        // Stale: an older job than the chunk's current counter, or one for a
-        // counter this record never issued (left over from a dropped-then-
+        // Stale: an older job than the chunk's current value, or one for a
+        // value this record never issued (left over from a dropped-then-
         // reseen Terrain). Results can arrive out of order across workers,
-        // so only an exact match on the live counter is accepted.
+        // so only an exact match on the live value is accepted. Because that
+        // value comes from next_job_revision_ (world-wide, never reused --
+        // see queue_dirty), a job queued during a Terrain's previous stay in
+        // Workspace can never match the value its chunk holds now, even if
+        // both happened to be the first job ever queued for that coordinate
+        // in their respective records.
         return;
     }
     ++meshed_count_;
@@ -77,20 +83,35 @@ void TerrainWorld::queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainR
         // A Terrain seen for the first time (just arrived in Workspace, or
         // TerrainWorld itself just started): drain whatever take_dirty would
         // have returned -- it is about to be superseded -- then queue every
-        // chunk the volume actually holds.
+        // stored chunk and its 26 neighbors (deduplicated), the same
+        // footprint an edit's mark_dirty gives. A surface quad belongs to
+        // the chunk holding the edge's lower endpoint, which can be an
+        // unstored (air) neighbor of a stored chunk, so meshing stored
+        // chunks alone can leave gaps at a Terrain's outer boundary.
         std::vector<terrain::ChunkCoord> drained;
         volume.take_dirty(drained);
-        dirty.reserve(volume.chunks().size());
+        std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> footprint;
         for (const auto& [coord, chunk] : volume.chunks()) {
             (void)chunk;
-            dirty.push_back(coord);
+            for (int dz = -1; dz <= 1; ++dz) {
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        footprint.insert(terrain::ChunkCoord{coord.x + dx, coord.y + dy, coord.z + dz});
+                    }
+                }
+            }
         }
+        dirty.assign(footprint.begin(), footprint.end());
     } else {
         volume.take_dirty(dirty);
     }
     const float voxel_size = static_cast<float>(volume.voxel_size());
     for (const terrain::ChunkCoord& coord : dirty) {
-        const std::uint64_t revision = ++record.chunk_revisions[coord];
+        // Drawn from a counter that lives on TerrainWorld, not this record,
+        // so the value is unique for the TerrainWorld's whole life -- see the
+        // comment on TerrainRecord::chunk_revisions.
+        const std::uint64_t revision = ++next_job_revision_;
+        record.chunk_revisions[coord] = revision;
         float job_distance = 0.f;
         if (has_camera) {
             const Vec3 world_center = matrix4_point(terrain.transform(), chunk_center_local(coord, voxel_size));
@@ -149,7 +170,9 @@ void TerrainWorld::publish_chunks(TerrainRecord& record) {
         chunks->push_back(view);
     }
     record.chunks = std::move(chunks);
-    ++record.chunks_revision;
+    // World-wide, not a local increment: see the comment on
+    // TerrainRecord::chunks_revision.
+    record.chunks_revision = ++next_chunks_set_revision_;
     record.colliders_vec.clear();
     record.colliders_vec.reserve(record.collider_map.size());
     for (const auto& [coord, collider] : record.collider_map) {

@@ -122,6 +122,11 @@ private:
     template <typename Step, typename OnContract>
     void guarded_step(Step&& step, OnContract&& on_contract);
     void report_fault(const char* what);
+    // Checks terrain_'s failure count against what was last seen and reports
+    // a rise once through report_fault, the way other faults are reported --
+    // TerrainMesher's worker threads never log directly (see its header).
+    // Called right after each terrain_.update(game_), on SimulationThread.
+    void report_terrain_failures();
 
     Game game_;
     SnapshotPump pump_;
@@ -136,6 +141,7 @@ private:
     // Meshes every Terrain in Workspace, playing or stopped. {} is the
     // collider builder until Task 4 wires PhysicsWorld::build_terrain_collider in.
     TerrainWorld terrain_;
+    std::uint64_t terrain_failures_seen_ = 0;   // report_terrain_failures' high-water mark
     // SoundEmitter voices, stepped after the scripts each frame while the place plays.
     AudioWorld audio_;
     IRenderer* renderer_ = nullptr;

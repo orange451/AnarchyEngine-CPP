@@ -29,6 +29,15 @@ struct LodInput {
     // missing (vector shorter than children, or empty altogether) counts as
     // 0, which is always correct for a level-0 child (an exact chunk mesh).
     std::vector<float> child_errors;
+    // R10 (binding): each child's own surface_index_count (LodResult's
+    // field below), parallel to children. An entry missing (vector shorter
+    // than children) means the whole child mesh is surface -- always
+    // correct for a level-0 chunk mesh, which has no skirts. build_node
+    // merges only a child's first child_surface_index_counts[i] indices, so
+    // a non-leaf child's own skirt triangles are never baked into this
+    // (coarser) level; vertices referenced only by skirts are then dropped
+    // by the weld/compaction step since nothing still indexes them.
+    std::vector<std::uint32_t> child_surface_index_counts;
     std::shared_ptr<const ChunkMap> voxels;  // full-resolution voxels, for re-shading; null skips it
 };
 
@@ -40,6 +49,13 @@ struct LodResult {
     // stood before skirts were appended to mesh (so these indices still
     // address mesh's first vertices/triangles; skirt geometry follows).
     std::vector<std::uint32_t> border_edges;
+    // R10: mesh->indices.size() as it stood just before add_skirts()
+    // appended the skirt triangles' indices to the tail -- i.e. the index
+    // count of this node's real surface. A caller merging this result as a
+    // child of a coarser node (via LodInput::child_surface_index_counts)
+    // passes this back so the parent can drop the skirts instead of
+    // merging them in as if they were real geometry.
+    std::uint32_t surface_index_count = 0;
 };
 
 // The level's simplification budget, in studs: 0.25 * voxel_size * 2^level.
@@ -65,7 +81,10 @@ float target_error(int level, float voxel_size);
 // edges (edges used by exactly one triangle) and, for each one, appends a
 // skirt quad folded inward along -normal by max(2 * result.error,
 // input.voxel_size), copying the edge's own two vertices' normals and Ids.
-// border_edges is reported as it stood before skirts were appended.
+// border_edges and surface_index_count are reported as they stood before
+// skirts were appended (R10): a caller recursing to a coarser level passes
+// surface_index_count back in child_surface_index_counts so this level's own
+// skirts aren't merged into the next one up.
 //
 // Callable from any thread (voxels, like children, is only ever read).
 LodResult build_node(const LodInput& input);

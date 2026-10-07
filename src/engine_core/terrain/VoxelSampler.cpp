@@ -25,14 +25,25 @@ void cell_space(Vec3 p, float voxel_size, int& ix, int& iy, int& iz, float& fx, 
 
 }  // namespace
 
+const ChunkData* VoxelSampler::chunk_at(const ChunkCoord& coord) const {
+    if (cached_valid_ && coord == cached_coord_) {
+        return cached_chunk_;
+    }
+    const auto found = chunks_.find(coord);
+    cached_chunk_ = (found == chunks_.end()) ? nullptr : found->second.get();
+    cached_coord_ = coord;
+    cached_valid_ = true;
+    return cached_chunk_;
+}
+
 Cell VoxelSampler::cell_at(int cx, int cy, int cz) const {
     const ChunkCoord coord = chunk_of(cx, cy, cz);
-    const auto found = chunks_.find(coord);
-    if (found == chunks_.end()) {
+    const ChunkData* chunk = chunk_at(coord);
+    if (!chunk) {
         return Cell{};  // missing chunk: air, exactly as VoxelVolume::cell() treats it
     }
     const int index = cell_index(cx - coord.x * kChunkSize, cy - coord.y * kChunkSize, cz - coord.z * kChunkSize);
-    return found->second->cell(index);
+    return chunk->cell(index);
 }
 
 float VoxelSampler::distance(Vec3 p) const {

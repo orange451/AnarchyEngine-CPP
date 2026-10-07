@@ -16,8 +16,13 @@
 namespace engine_core::terrain {
 
 // Allocation-free per sample: holds only a reference to the ChunkMap and the
-// voxel size, both of which must outlive every call. Any thread (reads only
-// the immutable chunks the map already holds; never mutates anything).
+// voxel size, both of which must outlive every call. Reads only the
+// immutable chunks the map already holds; never mutates the map or any
+// chunk. NOT thread-safe, though: a sampler instance caches the last chunk
+// it resolved (chunk_at, below) to cut repeated unordered_map lookups, so
+// two threads must each construct and keep their own VoxelSampler rather
+// than share one (LodBuilder::build_node already does this -- a fresh
+// instance local to each call).
 // A chunk coordinate absent from the map reads as air -- the same default
 // VoxelVolume::cell() and SurfaceNets' fill_samples() give a missing
 // neighbor (Cell{}: kAirDistance, material 0).
@@ -39,9 +44,21 @@ public:
 
 private:
     Cell cell_at(int cx, int cy, int cz) const;
+    // The chunk holding cell coord, or nullptr if none is mapped (read as
+    // air). NOT thread-safe: caches the single most recently resolved
+    // chunk, since consecutive lookups overwhelmingly repeat it -- a
+    // distance() call's own 8 corners, a gradient() call's 6
+    // central-difference taps, and successive vertices reshade_vertices()
+    // visits in a row, all typically land in the same chunk away from a
+    // chunk boundary. Construct one VoxelSampler per thread/call (build_node
+    // already does: a fresh instance local to each build_node call).
+    const ChunkData* chunk_at(const ChunkCoord& coord) const;
 
     const ChunkMap& chunks_;
     float voxel_size_;
+    mutable ChunkCoord cached_coord_{};
+    mutable const ChunkData* cached_chunk_ = nullptr;
+    mutable bool cached_valid_ = false;
 };
 
 }  // namespace engine_core::terrain

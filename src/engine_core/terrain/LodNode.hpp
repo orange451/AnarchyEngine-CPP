@@ -14,6 +14,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace engine_core::terrain {
@@ -53,6 +54,12 @@ struct CompactMesh {
     std::vector<std::uint8_t> weights;       // 4 per vertex, /255
     std::vector<std::uint16_t> indices;      // 3 per triangle; empty when indices32 is used
     std::vector<std::uint32_t> indices32;    // used instead of indices when vertices.size() > 65535
+    // R10: the index count (into indices/indices32) of the surface part,
+    // before any skirt triangles. Lets a parent build (LodTree, Task 4)
+    // merge only a child's real surface and drop its skirts rather than
+    // baking them into every coarser level. A single scalar per node, so it
+    // is not counted in bytes()'s per-vertex/per-triangle budget (R1).
+    std::uint32_t surface_index_count = 0;
     std::size_t bytes() const;
 };
 
@@ -60,8 +67,10 @@ struct CompactMesh {
 // pass the union of the node's bounds and the mesh's own AABB (Surface Nets
 // boundary vertices and skirts can lie outside the node's box). A degenerate
 // axis (bounds_max == bounds_min) quantizes to 0 on that axis rather than
-// dividing by zero.
-CompactMesh pack(const anarchy::amesh::Data& mesh, Vec3 bounds_min, Vec3 bounds_max);
+// dividing by zero. surface_index_count (R10) is clamped to mesh.indices.size()
+// and stored as-is; the default (omitted) means the whole mesh is surface.
+CompactMesh pack(const anarchy::amesh::Data& mesh, Vec3 bounds_min, Vec3 bounds_max,
+                  std::uint32_t surface_index_count = std::numeric_limits<std::uint32_t>::max());
 // The inverse of pack(): a full Vertex per entry (tangent, uv and bone left
 // at Vertex's defaults -- pack() does not carry them), u32 indices, and the
 // AABB set from the unpacked positions.

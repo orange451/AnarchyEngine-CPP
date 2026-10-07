@@ -640,6 +640,9 @@ TEST_CASE("LB3 levels 1..4 built bottom-up over a 16x1x16-chunk slab fall about 
 
     std::unordered_map<NodeKey, std::shared_ptr<const anarchy::amesh::Data>, NodeKeyHash> level;
     std::unordered_map<NodeKey, float, NodeKeyHash> level_errors;  // R8: passed up as child_errors
+    // R10: passed up as child_surface_index_counts; a level-0 chunk mesh has
+    // no skirts, so its whole index buffer is surface.
+    std::unordered_map<NodeKey, std::uint32_t, NodeKeyHash> level_surface_index_counts;
     for (int x = 0; x < 16; ++x) {
         for (int z = 0; z < 16; ++z) {
             const ChunkCoord coord{x, 0, z};
@@ -648,6 +651,7 @@ TEST_CASE("LB3 levels 1..4 built bottom-up over a 16x1x16-chunk slab fall about 
                 const NodeKey key = node_of(coord, 0);
                 level[key] = mesh.render;
                 level_errors[key] = 0.f;  // a level-0 chunk mesh is exact (R8)
+                level_surface_index_counts[key] = static_cast<std::uint32_t>(mesh.render->indices.size());
             }
         }
     }
@@ -662,6 +666,7 @@ TEST_CASE("LB3 levels 1..4 built bottom-up over a 16x1x16-chunk slab fall about 
         }
         std::unordered_map<NodeKey, std::shared_ptr<const anarchy::amesh::Data>, NodeKeyHash> next;
         std::unordered_map<NodeKey, float, NodeKeyHash> next_errors;
+        std::unordered_map<NodeKey, std::uint32_t, NodeKeyHash> next_surface_index_counts;
         for (const auto& [parent_key, child_keys] : grouped) {
             LodInput input;
             input.key = parent_key;
@@ -669,11 +674,13 @@ TEST_CASE("LB3 levels 1..4 built bottom-up over a 16x1x16-chunk slab fall about 
             for (const NodeKey& child_key : child_keys) {
                 input.children.push_back(level[child_key]);
                 input.child_errors.push_back(level_errors[child_key]);
+                input.child_surface_index_counts.push_back(level_surface_index_counts[child_key]);
             }
             const LodResult result = build_node(input);
             if (result.mesh) {
                 next[parent_key] = result.mesh;
                 next_errors[parent_key] = result.error;
+                next_surface_index_counts[parent_key] = result.surface_index_count;
             }
         }
         const std::size_t triangles = total_triangles(next);
@@ -686,6 +693,7 @@ TEST_CASE("LB3 levels 1..4 built bottom-up over a 16x1x16-chunk slab fall about 
         previous_triangles = triangles;
         level = std::move(next);
         level_errors = std::move(next_errors);
+        level_surface_index_counts = std::move(next_surface_index_counts);
     }
 }
 
@@ -731,6 +739,12 @@ LodResult build_lod_node(VoxelVolume& volume, const NodeKey& key, const std::sha
         if (child.mesh) {
             input.children.push_back(child.mesh);
             input.child_errors.push_back(child.error);
+            // R10: a level-0 child's LodResult never goes through build_node
+            // (see above), so it leaves surface_index_count at its default
+            // (0); the whole mesh is surface, so pass its real index count
+            // instead of that default.
+            input.child_surface_index_counts.push_back(
+                child_key.level == 0 ? static_cast<std::uint32_t>(child.mesh->indices.size()) : child.surface_index_count);
         }
     }
     return build_node(input);
@@ -998,4 +1012,124 @@ TEST_CASE("RS4 a level-1 node's skirt triangles face consistently with their sou
         ++checked;
     }
     REQUIRE(checked > 0);
+}
+
+// Task 3 fix round 1 (findings-r1.md), R10: a child's own skirts must never
+// be baked into a coarser level's merge.
+
+namespace {
+
+// result's mesh with its skirts physically cut off: just the vertices and
+// indices result.surface_index_count/border_edges say are the real surface
+// (see original_vertex_count, above, for the same split).
+std::shared_ptr<const anarchy::amesh::Data> strip_skirts(const LodResult& result) {
+    anarchy::amesh::Data out;
+    const std::size_t original_count = original_vertex_count(result);
+    out.vertices.assign(result.mesh->vertices.begin(),
+                         result.mesh->vertices.begin() + static_cast<std::ptrdiff_t>(original_count));
+    out.indices.assign(result.mesh->indices.begin(),
+                        result.mesh->indices.begin() + static_cast<std::ptrdiff_t>(result.surface_index_count));
+    anarchy::amesh::compute_aabb(out);
+    return std::make_shared<const anarchy::amesh::Data>(std::move(out));
+}
+
+}  // namespace
+
+TEST_CASE("RS5 a level-2 node merges skirted level-1 children the same as the same children with skirts "
+          "physically stripped",
+          "[terrain][lod]") {
+    VoxelVolume volume;
+    const Vec3 center{64.f, 64.f, 64.f};
+    const float radius = 40.f;
+    REQUIRE_FALSE(volume.fill(ball_at(center.x, center.y, center.z, radius), 1));
+    const auto voxels = std::make_shared<const ChunkMap>(volume.chunks());
+
+    const NodeKey level2_key{2, 0, 0, 0};
+    std::vector<LodResult> level1_results;
+    for (const NodeKey& child_key : children_of(level2_key)) {
+        LodResult child = build_lod_node(volume, child_key, voxels);
+        if (child.mesh) {
+            REQUIRE(child.border_edges.size() > 0);  // this node's own rim must actually have skirts to strip
+            level1_results.push_back(std::move(child));
+        }
+    }
+    REQUIRE(level1_results.size() >= 2);  // the ball must straddle more than one level-1 node
+
+    // Path A: build_node sees the children's full (skirted) meshes, and
+    // relies on child_surface_index_counts (R10) to drop the skirts itself.
+    LodInput skirted_input;
+    skirted_input.key = level2_key;
+    skirted_input.voxel_size = volume.voxel_size();
+    skirted_input.voxels = voxels;
+
+    // Path B: the children are pre-stripped of their skirts entirely (no
+    // skirt vertices or triangles exist in the input at all), with no
+    // child_surface_index_counts entry -- the "missing entry" default
+    // ("whole mesh is surface") is exactly right since there is no skirt left.
+    LodInput stripped_input;
+    stripped_input.key = level2_key;
+    stripped_input.voxel_size = volume.voxel_size();
+    stripped_input.voxels = voxels;
+
+    for (const LodResult& child : level1_results) {
+        skirted_input.children.push_back(child.mesh);
+        skirted_input.child_errors.push_back(child.error);
+        skirted_input.child_surface_index_counts.push_back(child.surface_index_count);
+
+        stripped_input.children.push_back(strip_skirts(child));
+        stripped_input.child_errors.push_back(child.error);
+    }
+
+    const LodResult with_skirts = build_node(skirted_input);
+    const LodResult stripped = build_node(stripped_input);
+
+    REQUIRE(with_skirts.mesh != nullptr);
+    REQUIRE(stripped.mesh != nullptr);
+    INFO("with_skirts surface_index_count " << with_skirts.surface_index_count << ", stripped "
+                                             << stripped.surface_index_count << "; with_skirts error "
+                                             << with_skirts.error << ", stripped error " << stripped.error);
+    // Same triangle budget and the same honestly-measured error: a child's
+    // own skirts (now excluded from both the merge and the error
+    // measurement, per R10) must not change either outcome.
+    REQUIRE(with_skirts.surface_index_count == stripped.surface_index_count);
+    REQUIRE(with_skirts.mesh->indices.size() == stripped.mesh->indices.size());
+    REQUIRE(with_skirts.error == Approx(stripped.error).margin(1e-5f));
+}
+
+TEST_CASE("RS6 a fully-collapsed simplification yields a null mesh, same as an empty input",
+          "[terrain][lod]") {
+    // A tiny, isolated, fully open-bordered quad (2 triangles, 4 distinct
+    // vertices a thousandth of a stud apart): meshopt_simplify (lock_border
+    // == 0, as build_node always calls it -- see the comment on the
+    // fill_rolling_wave helper above, found by watching exactly this happen
+    // to an unwanted "floor cap" patch while chasing LB1's budget) is free
+    // to collapse an open patch like this away entirely for a cost far
+    // under any level's target_error, and target_index_count (0, since the
+    // input's own 6 indices are below build_node's /4/3*3 floor) asks it to.
+    // No two vertices are exactly equal, so weld() does not pre-collapse
+    // this itself -- the test exercises meshopt's own full collapse, then
+    // build_node's "0 triangles left -> null mesh" handling below it.
+    anarchy::amesh::Data quad;
+    quad.vertices.resize(4);
+    const float positions[4][3] = {
+        {5.f, 5.f, 5.f}, {5.001f, 5.f, 5.f}, {5.f, 5.001f, 5.f}, {5.001f, 5.001f, 5.f}};
+    for (int i = 0; i < 4; ++i) {
+        quad.vertices[static_cast<std::size_t>(i)].p[0] = positions[i][0];
+        quad.vertices[static_cast<std::size_t>(i)].p[1] = positions[i][1];
+        quad.vertices[static_cast<std::size_t>(i)].p[2] = positions[i][2];
+        quad.vertices[static_cast<std::size_t>(i)].n[2] = 1.f;
+    }
+    quad.indices = {0, 1, 2, 1, 3, 2};
+    anarchy::amesh::compute_aabb(quad);
+
+    LodInput input;
+    input.key = NodeKey{1, 0, 0, 0};
+    input.voxel_size = 1.f;
+    input.children.push_back(std::make_shared<const anarchy::amesh::Data>(std::move(quad)));
+
+    const LodResult result = build_node(input);
+
+    REQUIRE(result.mesh == nullptr);
+    REQUIRE(result.border_edges.empty());
+    REQUIRE(result.surface_index_count == 0);
 }

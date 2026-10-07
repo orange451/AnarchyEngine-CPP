@@ -196,15 +196,38 @@ float nearest_triangle_distance(const TriangleGrid& grid, const anarchy::amesh::
 // nearest triangle: R8's honest per-level measurement (meshopt's own quadric
 // error underestimates this on bumpy terrain, by ~5x in cases checked while
 // building this), grid-accelerated so it stays cheap on the largest nodes.
+//
+// R10: a child's skirt vertices (indexed only by the triangles beyond its
+// own child_surface_index_counts[i], if given) are excluded -- a skirt
+// vertex is displaced inward along -normal purely to hide a rendering
+// crack, so measuring this (coarser) level's error against it would charge
+// for a discrepancy that was never part of the real surface to begin with,
+// and would make this measurement (and so the recorded error) depend on
+// whether a child happened to carry skirts, rather than on the child's own
+// real geometry. Mirrors the same first-N-indices slice build_node's own
+// merge uses below, so a child merged with vs. without its skirts already
+// physically stripped measures identically.
 float max_child_distance(const std::vector<std::shared_ptr<const anarchy::amesh::Data>>& children,
+                          const std::vector<std::uint32_t>& child_surface_index_counts,
                           const anarchy::amesh::Data& mesh) {
     const TriangleGrid grid = build_triangle_grid(mesh);
     float worst = 0.f;
-    for (const auto& child : children) {
+    for (std::size_t c = 0; c < children.size(); ++c) {
+        const auto& child = children[c];
         if (!child) {
             continue;
         }
+        const std::size_t use_count = c < child_surface_index_counts.size()
+                                           ? std::min<std::size_t>(child_surface_index_counts[c], child->indices.size())
+                                           : child->indices.size();
+        std::vector<bool> used(child->vertices.size(), false);
+        for (std::size_t i = 0; i < use_count; ++i) {
+            used[child->indices[i]] = true;
+        }
         for (std::size_t i = 0; i < child->vertices.size(); ++i) {
+            if (!used[i]) {
+                continue;
+            }
             const Vec3 p = vertex_position(*child, static_cast<std::uint32_t>(i));
             worst = std::max(worst, nearest_triangle_distance(grid, mesh, p));
         }
@@ -329,7 +352,7 @@ LodResult build_node(const LodInput& input) {
     for (const auto& child : input.children) {
         if (child) {
             total_vertices += child->vertices.size();
-            total_indices += child->indices.size();
+            total_indices += child->indices.size();  // upper bound (pre-R10-slice); fine for reserve()
         }
     }
     if (total_indices == 0) {
@@ -337,20 +360,33 @@ LodResult build_node(const LodInput& input) {
     }
 
     // Concatenate children, offsetting each one's indices by the vertices
-    // already appended.
+    // already appended. R10: merge only a child's surface part -- its first
+    // child_surface_index_counts[i] indices (or, missing that entry, the
+    // whole mesh: a level-0 chunk mesh has no skirts). A child's skirt
+    // vertices, now referenced by nothing in merged_indices, are dropped
+    // for free by meshopt_generateVertexRemap below (it only assigns a
+    // destination index to a vertex actually visited through the index
+    // buffer), so a coarser level never inherits a finer level's skirts.
     std::vector<anarchy::amesh::Vertex> merged_vertices;
     std::vector<unsigned int> merged_indices;
     merged_vertices.reserve(total_vertices);
     merged_indices.reserve(total_indices);
-    for (const auto& child : input.children) {
+    for (std::size_t c = 0; c < input.children.size(); ++c) {
+        const auto& child = input.children[c];
         if (!child) {
             continue;
         }
         const std::uint32_t offset = static_cast<std::uint32_t>(merged_vertices.size());
         merged_vertices.insert(merged_vertices.end(), child->vertices.begin(), child->vertices.end());
-        for (std::uint32_t idx : child->indices) {
-            merged_indices.push_back(idx + offset);
+        const std::size_t use_count = c < input.child_surface_index_counts.size()
+                                           ? std::min<std::size_t>(input.child_surface_index_counts[c], child->indices.size())
+                                           : child->indices.size();
+        for (std::size_t i = 0; i < use_count; ++i) {
+            merged_indices.push_back(child->indices[i] + offset);
         }
+    }
+    if (merged_indices.empty()) {
+        return result;  // every child was pure skirt (shouldn't happen in practice): null mesh, same contract
     }
 
     // Weld exactly-equal positions: meshopt_generateVertexRemap on positions
@@ -419,7 +455,7 @@ LodResult build_node(const LodInput& input) {
         mesh.indices.assign(simplified.begin(), simplified.end());
         anarchy::amesh::compute_aabb(mesh);
 
-        const float measured = max_child_distance(input.children, mesh);
+        const float measured = max_child_distance(input.children, input.child_surface_index_counts, mesh);
         const float candidate_error = measured + max_child_error;
         const bool within_budget = candidate_error <= target;
         if (within_budget || candidate_error < best_error) {
@@ -456,6 +492,9 @@ LodResult build_node(const LodInput& input) {
     // Border edges, as the simplified (and possibly re-shaded) surface
     // stands before skirts are appended -- this is what the result reports.
     result.border_edges = collect_border_edges(best_mesh);
+    // R10: the surface's own index count, before add_skirts() appends more
+    // below -- reported so a parent build can merge just this part.
+    result.surface_index_count = static_cast<std::uint32_t>(best_mesh.indices.size());
 
     // Skirts: one quad per border edge, folded inward along -normal by this
     // node's own recorded error (R8) and the input voxel size.

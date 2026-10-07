@@ -133,10 +133,11 @@ std::size_t CompactMesh::bytes() const {
     return total;
 }
 
-CompactMesh pack(const anarchy::amesh::Data& mesh, Vec3 bounds_min, Vec3 bounds_max) {
+CompactMesh pack(const anarchy::amesh::Data& mesh, Vec3 bounds_min, Vec3 bounds_max, std::uint32_t surface_index_count) {
     CompactMesh out;
     out.origin = bounds_min;
     out.scale = Vec3{bounds_max.x - bounds_min.x, bounds_max.y - bounds_min.y, bounds_max.z - bounds_min.z};
+    out.surface_index_count = std::min<std::uint32_t>(surface_index_count, static_cast<std::uint32_t>(mesh.indices.size()));
 
     const std::size_t vertex_count = mesh.vertices.size();
     out.positions.resize(vertex_count * 3);

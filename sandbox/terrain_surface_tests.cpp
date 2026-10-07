@@ -7,6 +7,7 @@
 #include "AssetInstances.hpp"
 #include "LuaApi.hpp"
 #include "PhysicsWorld.hpp"
+#include "SnapshotPump.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
 #include "TerrainWorld.hpp"
@@ -653,6 +654,35 @@ TEST_CASE("TW8 first sight meshes a stored chunk's footprint including an unstor
     // result had a non-null mesh (accept_result erases the rest), so this
     // count is directly comparable to reference_count above.
     REQUIRE(world.views()[0].chunks->size() == reference_count);
+}
+
+TEST_CASE("TS1 the snapshot carries each Terrain's chunks, transform, and look", "[terrain][render]") {
+    SimRole role;
+    Game game;
+    SnapshotPump pump;
+    pump.reserve(DataModel::kMaxInstances);
+    Terrain& t = terrain_in_workspace(game);
+    REQUIRE_FALSE(t.set_transform(matrix4_translation(10.f, 0.f, 0.f)));
+    // Edit through volume() directly: Terrain::edit_volume is not merged yet (see TW1 above).
+    REQUIRE_FALSE(t.volume().fill(ball_at(5.f, 5.f, 5.f, 4.f), 1));
+    TerrainWorld world;
+    settle(world, game);
+    REQUIRE(world.views().size() == 1u);
+
+    // set_terrain_world happens once, the way Engine's constructor wires
+    // pump_.set_terrain_world(&terrain_). frame() below is prepare_copy + publish,
+    // as prefab_render_tests.cpp's Scene::frame() runs it.
+    pump.set_terrain_world(&world);
+    pump.prepare_copy(game);
+    pump.publish();
+
+    const VisualSnapshot& front = pump.front();
+    REQUIRE(front.terrains.size() == 1u);
+    const TerrainView& view = front.terrains[0];
+    // Same shared_ptr as TerrainWorld's own view: a pointer copy, not a chunk copy.
+    REQUIRE(view.chunks == world.views()[0].chunks);
+    REQUIRE(view.transform.m[12] == 10.f);
+    REQUIRE(view.look != nullptr);
 }
 
 namespace {

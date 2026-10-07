@@ -13,6 +13,7 @@
 #include "LuaApi.hpp"
 #include "ScreenSpaceReflections.hpp"
 #include "Skybox.hpp"
+#include "TerrainWorld.hpp"
 
 #include <algorithm>
 
@@ -155,6 +156,8 @@ void SnapshotPump::set_camera(const Matrix4& camera) {
     pending_camera_ = camera;
     camera_pending_ = true;
 }
+
+void SnapshotPump::set_terrain_world(const TerrainWorld* terrains) { terrain_world_ = terrains; }
 
 VisualInstance* SnapshotPump::base_find(InstanceId id) {
     const int position = base_ids_.position(id);
@@ -577,6 +580,7 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.resources_root = base_.resources_root;
     dst.draggers = base_.draggers;
     dst.billboards = base_.billboards;
+    dst.terrains = base_.terrains;
     dst.instances.resize(base_.instances.size());
     std::copy(base_.instances.begin(), base_.instances.end(), dst.instances.begin());
     // Element by element, so strings that did not change keep their buffers.
@@ -642,6 +646,18 @@ void SnapshotPump::resolve_billboards(DataModel& game) {
     }
 }
 
+void SnapshotPump::resolve_terrains(DataModel& game) {
+    (void)game;  // TerrainWorld::update ran on SimulationThread before this call; nothing more to read here.
+    base_.terrains.clear();
+    if (terrain_world_ == nullptr) {
+        return;
+    }
+    // Copies TerrainView by value -- Matrix4 and a couple of scalars plus two
+    // shared_ptrs -- so this is a pointer-only copy, not a chunk/look copy.
+    const std::vector<TerrainView>& views = terrain_world_->views();
+    base_.terrains.assign(views.begin(), views.end());
+}
+
 void SnapshotPump::anchor_billboards(VisualSnapshot& dst) const {
     for (VisualBillboard& row : dst.billboards) {
         if (row.anchor_instance == 0) {
@@ -669,6 +685,7 @@ void SnapshotPump::take_changes(DataModel& game) {
     resolve_lighting(game);
     resolve_draggers(game);
     resolve_billboards(game);
+    resolve_terrains(game);
     base_.resources_root = game.resources_root();
     if (camera_pending_) {
         base_.camera = pending_camera_;

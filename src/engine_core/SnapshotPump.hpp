@@ -3,6 +3,7 @@
 #include "DataModel.hpp"
 #include "DenseIdSet.hpp"
 #include "DraggerMath.hpp"
+#include "TerrainWorld.hpp"
 #include "types.hpp"
 
 #include <atomic>
@@ -230,6 +231,9 @@ struct VisualSnapshot {
     std::vector<VisualDragger> draggers;
     // Rebuilt at every take_changes, like draggers.
     std::vector<VisualBillboard> billboards;
+    // Every Terrain in Workspace, as TerrainWorld shows it. Pointers only: the
+    // chunk list and look are immutable and shared with the simulation.
+    std::vector<TerrainView> terrains;
     // DataModel::resources_root as the snapshot was taken: the folder the
     // paths above are under.
     std::filesystem::path resources_root;
@@ -248,6 +252,10 @@ public:
     // Path C. No DataModel write.
     void override_visual(const SnapshotOverride& override);
     void set_camera(const Matrix4& camera);
+    // The TerrainWorld whose views() resolve_terrains reads each take_changes.
+    // Set once, outside the per-frame windows (Engine's constructor sets it,
+    // and clears it to null in its destructor before terrain_ is torn down).
+    void set_terrain_world(const TerrainWorld* terrains);
 
     // Copies dirty DataModel fields into the base snapshot. Needs the DataModel
     // lock, and is the only step here that does.
@@ -286,6 +294,10 @@ private:
     void resolve_draggers(DataModel& game);
     // The drawn, visible BillboardGuis' rows, from the live tree.
     void resolve_billboards(DataModel& game);
+    // Copies terrain_world_'s views() (pointers only -- see VisualSnapshot::terrains)
+    // into base_.terrains. TerrainWorld::update already ran on SimulationThread
+    // before take_changes is called, so there is nothing more to read from game here.
+    void resolve_terrains(DataModel& game);
     // Points each row's anchor at its anchor_instance's row in dst, after overrides.
     void anchor_billboards(VisualSnapshot& dst) const;
     void release_prefab(std::uint32_t entry);
@@ -312,6 +324,8 @@ private:
     std::vector<SnapshotOverride> overrides_;
     bool camera_pending_ = false;
     Matrix4 pending_camera_ = matrix4_identity();
+    // Not owned. Null until Engine's constructor calls set_terrain_world.
+    const TerrainWorld* terrain_world_ = nullptr;
     bool window_open_ = false;
     // The ids with a row in base_.instances, position for position.
     DenseIdSet base_ids_;

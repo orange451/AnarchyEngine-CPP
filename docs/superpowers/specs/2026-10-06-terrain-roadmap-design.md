@@ -65,7 +65,7 @@ Distant terrain must look nearly the same as it does up close. Roblox's looks ch
 
 - The user only assigns Materials. The engine builds hidden texture arrays from them, resizing every map to one common size (with mipmaps) so mismatched textures just work. Nothing about this is a property.
 - Triplanar mapping, so cliffs and overhangs do not stretch.
-- Up to four materials blend per vertex. Sub-project 1 already writes a vertex's material Ids into the unused bone-index channel and their weights into the bone-weight channel, so the mesh format does not change.
+- Up to four materials blend per vertex. Sub-project 1 already writes a vertex's material Ids into the color channel and their weights into the tangent channel, so the mesh format does not change.
 - The Configure Terrain tab shows the texture memory the configured materials cost.
 - Per-material custom shaders (a `Shader` property on TerrainMaterial): chunks split their triangles into one draw per shader. This spec must decide how the edge between two shaders blends.
 

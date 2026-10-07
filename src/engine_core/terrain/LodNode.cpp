@@ -1,6 +1,7 @@
 #include "terrain/LodNode.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 
 namespace engine_core::terrain {
@@ -96,6 +97,7 @@ NodeKey parent_of(const NodeKey& key) {
 }
 
 std::array<NodeKey, 8> children_of(const NodeKey& key) {
+    assert(key.level >= 1 && "children_of requires key.level >= 1");
     std::array<NodeKey, 8> out;
     const int level = key.level - 1;
     int i = 0;

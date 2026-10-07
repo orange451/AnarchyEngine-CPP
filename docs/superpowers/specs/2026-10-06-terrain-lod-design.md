@@ -90,7 +90,15 @@ The snapshot carries each Terrain's node set behind a shared pointer with a revi
 
 ## Implementation notes
 
-Task 1 (`terrain/LodNode`, meshoptimizer) fixed five things the decisions above leave open:
+The plan's five decisions, referenced above:
+
+1. The compact node format (16-bit quantized positions, octahedral 2-byte normals, 4-byte Ids, 4-byte weights, 16-bit indices) is the RAM format; a node is unpacked to `amesh::Data` (full `Vertex`, u32 indices) only when uploaded, since `GpuMesh` takes only that.
+2. Selection runs in `GameView`/`TerrainDraws` before `Renderer::draw`, from the camera row and the Scene View's pane height, because the renderer learns its target size only inside `draw()`.
+3. Shadows draw, for a node mid-fade, only the incoming node, without dither (the depth shader has no dither and needs none at shadow resolution).
+4. LOD builds re-shade from a chunk-map snapshot (`std::shared_ptr<const ChunkMap>`, a pointer copy) taken at most once per `TerrainWorld::update`, and only when LOD work is queued.
+5. The mesher's job queue holds two job kinds (chunk mesh, node build), sharing workers and distance ordering.
+
+Task 1 (`terrain/LodNode`, meshoptimizer) fixed five more things the decisions above leave open:
 
 - **meshoptimizer's fetch.** FetchContent pinned to tag `v0.22` (`https://github.com/zeux/meshoptimizer.git`), built by `cmake/meshoptimizer`'s own `CMakeLists.txt` rather than the library's: it globs `src/*.cpp` into a STATIC lib, exposes `src` as a SYSTEM include, and builds `/W3` with `/O2` even in Debug -- the same shape as `cmake/zstd`'s wrapper. `engine_core` links it `PRIVATE`; nothing calls it yet (that starts with `LodBuilder`, the only file that will include its header).
 - **The compact RAM budget (ruling R1).** The plan's "12 B/vertex" was an arithmetic error. The actual format is 16 B/vertex -- 6 B position (3 x u16) + 2 B normal (octahedral) + 4 B material Ids + 4 B weights -- plus 6 B/triangle for 16-bit indices (12 B/triangle when a node is large enough to need `indices32`, at 4 B per index). `CompactMesh::bytes()` counts whichever index vector is in use.

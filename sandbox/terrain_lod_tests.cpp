@@ -187,3 +187,175 @@ TEST_CASE("LN4 bytes() stays within the per-vertex/per-triangle compact RAM budg
     const std::size_t budget = 16 * vertex_count + 6 * triangle_count;
     REQUIRE(compact.bytes() <= budget);
 }
+
+namespace {
+
+// A synthetic grid mesh with more than 65,535 vertices, to exercise pack()'s
+// indices32 path (LN4's u16-index budget only covers the common case).
+anarchy::amesh::Data synthetic_grid_mesh(int width, int height) {
+    anarchy::amesh::Data out;
+    out.vertices.resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
+
+    for (int j = 0; j < height; ++j) {
+        for (int i = 0; i < width; ++i) {
+            const std::size_t idx = static_cast<std::size_t>(j) * static_cast<std::size_t>(width) + static_cast<std::size_t>(i);
+            anarchy::amesh::Vertex& v = out.vertices[idx];
+            v.p[0] = static_cast<float>(i);
+            v.p[1] = static_cast<float>(j);
+            v.p[2] = 0.1f * static_cast<float>((i + j) % 7);
+            v.n[0] = 0.f;
+            v.n[1] = 0.f;
+            v.n[2] = 1.f;
+            for (int c = 0; c < 4; ++c) {
+                v.rgba[c] = static_cast<std::uint8_t>((i * 7 + j * 13 + c * 29) % 256);
+                v.weight[c] = static_cast<float>((i + c) % 4) / 3.f;
+            }
+        }
+    }
+
+    for (int j = 0; j < height - 1; ++j) {
+        for (int i = 0; i < width - 1; ++i) {
+            const std::uint32_t tl = static_cast<std::uint32_t>(j * width + i);
+            const std::uint32_t tr = tl + 1;
+            const std::uint32_t bl = static_cast<std::uint32_t>((j + 1) * width + i);
+            const std::uint32_t br = bl + 1;
+            out.indices.push_back(tl);
+            out.indices.push_back(bl);
+            out.indices.push_back(tr);
+            out.indices.push_back(tr);
+            out.indices.push_back(bl);
+            out.indices.push_back(br);
+        }
+    }
+
+    anarchy::amesh::compute_aabb(out);
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("LN5 pack/unpack of a >65535-vertex mesh uses indices32", "[terrain][lod]") {
+    // 256 x 257 = 65,792 vertices: just over the 16-bit index limit.
+    const int width = 256, height = 257;
+    const anarchy::amesh::Data grid = synthetic_grid_mesh(width, height);
+    REQUIRE(grid.vertices.size() > 65535u);
+
+    const Vec3 bounds_min{0.f, 0.f, 0.f};
+    const Vec3 bounds_max{static_cast<float>(width - 1), static_cast<float>(height - 1), 1.f};
+    const CompactMesh compact = pack(grid, bounds_min, bounds_max);
+
+    // indices32 is used instead of indices once the node exceeds 65,535 vertices.
+    REQUIRE_FALSE(compact.indices32.empty());
+    REQUIRE(compact.indices.empty());
+    REQUIRE(compact.indices32.size() == grid.indices.size());
+    for (std::size_t i = 0; i < grid.indices.size(); ++i) {
+        REQUIRE(compact.indices32[i] == grid.indices[i]);
+    }
+
+    const std::size_t vertex_count = grid.vertices.size();
+    const std::size_t triangle_count = grid.indices.size() / 3;
+    // R1: 16 B/vertex + 12 B/triangle (u32 indices) when indices32 is in use.
+    REQUIRE(compact.bytes() == 16 * vertex_count + 12 * triangle_count);
+
+    const anarchy::amesh::Data round_tripped = unpack(compact);
+    REQUIRE(round_tripped.vertices.size() == grid.vertices.size());
+    REQUIRE(round_tripped.indices.size() == grid.indices.size());
+    for (std::size_t i = 0; i < grid.indices.size(); ++i) {
+        REQUIRE(round_tripped.indices[i] == grid.indices[i]);
+    }
+
+    const float scale_x = bounds_max.x - bounds_min.x;
+    const float scale_y = bounds_max.y - bounds_min.y;
+    const float scale_z = bounds_max.z - bounds_min.z;
+    const float tol_x = scale_x / 65535.f;
+    const float tol_y = scale_y / 65535.f;
+    const float tol_z = scale_z / 65535.f;
+
+    for (std::size_t i = 0; i < grid.vertices.size(); ++i) {
+        const anarchy::amesh::Vertex& original = grid.vertices[i];
+        const anarchy::amesh::Vertex& rt = round_tripped.vertices[i];
+        REQUIRE(std::fabs(rt.p[0] - original.p[0]) <= tol_x + 1e-5f);
+        REQUIRE(std::fabs(rt.p[1] - original.p[1]) <= tol_y + 1e-5f);
+        REQUIRE(std::fabs(rt.p[2] - original.p[2]) <= tol_z + 1e-5f);
+        for (int c = 0; c < 4; ++c) {
+            REQUIRE(rt.rgba[c] == original.rgba[c]);
+            REQUIRE(std::fabs(rt.weight[c] - original.weight[c]) <= 1.f / 255.f + 1e-6f);
+        }
+    }
+}
+
+TEST_CASE("LN6 pack/unpack of a degenerate (flat) axis round-trips without NaN or Inf", "[terrain][lod]") {
+    // A flat quad: all four vertices share the same Z, so bounds_min.z ==
+    // bounds_max.z and pack()'s quantize_axis must take the scale == 0
+    // branch instead of dividing by zero.
+    anarchy::amesh::Data flat;
+    flat.vertices.resize(4);
+    const float flat_z = 5.f;
+    const float xs[4] = {0.f, 4.f, 0.f, 4.f};
+    const float ys[4] = {0.f, 0.f, 4.f, 4.f};
+    for (int i = 0; i < 4; ++i) {
+        anarchy::amesh::Vertex& v = flat.vertices[static_cast<std::size_t>(i)];
+        v.p[0] = xs[i];
+        v.p[1] = ys[i];
+        v.p[2] = flat_z;
+        v.n[0] = 0.f;
+        v.n[1] = 0.f;
+        v.n[2] = 1.f;
+        for (int c = 0; c < 4; ++c) {
+            v.rgba[c] = static_cast<std::uint8_t>(10 * i + c);
+            v.weight[c] = 0.25f * static_cast<float>(c);
+        }
+    }
+    flat.indices = {0, 1, 2, 1, 3, 2};
+    anarchy::amesh::compute_aabb(flat);
+
+    const Vec3 bounds_min{0.f, 0.f, flat_z};
+    const Vec3 bounds_max{4.f, 4.f, flat_z};  // degenerate on Z
+    const CompactMesh compact = pack(flat, bounds_min, bounds_max);
+    const anarchy::amesh::Data round_tripped = unpack(compact);
+
+    REQUIRE(round_tripped.vertices.size() == flat.vertices.size());
+    for (std::size_t i = 0; i < flat.vertices.size(); ++i) {
+        const anarchy::amesh::Vertex& rt = round_tripped.vertices[i];
+        REQUIRE(std::isfinite(rt.p[0]));
+        REQUIRE(std::isfinite(rt.p[1]));
+        REQUIRE(std::isfinite(rt.p[2]));
+        // The degenerate axis quantizes to 0, which unpacks back to origin.z
+        // exactly (origin.z + 0 / 65535 * 0 == origin.z == flat_z).
+        REQUIRE(std::fabs(rt.p[2] - flat_z) <= 1e-5f);
+        REQUIRE(std::fabs(rt.p[0] - flat.vertices[i].p[0]) <= 4.f / 65535.f + 1e-5f);
+        REQUIRE(std::fabs(rt.p[1] - flat.vertices[i].p[1]) <= 4.f / 65535.f + 1e-5f);
+    }
+}
+
+TEST_CASE("LN7 pack/unpack preserves non-zero, non-uniform weights", "[terrain][lod]") {
+    anarchy::amesh::Data mesh;
+    mesh.vertices.resize(2);
+    const float weights0[4] = {0.f, 0.33f, 0.99f, 1.f};
+    const float weights1[4] = {1.f, 0.99f, 0.33f, 0.f};
+    for (int c = 0; c < 4; ++c) {
+        mesh.vertices[0].weight[c] = weights0[c];
+        mesh.vertices[1].weight[c] = weights1[c];
+    }
+    mesh.vertices[0].p[0] = 0.f;
+    mesh.vertices[0].p[1] = 0.f;
+    mesh.vertices[0].p[2] = 0.f;
+    mesh.vertices[1].p[0] = 1.f;
+    mesh.vertices[1].p[1] = 1.f;
+    mesh.vertices[1].p[2] = 1.f;
+    mesh.vertices[0].n[2] = 1.f;
+    mesh.vertices[1].n[2] = 1.f;
+    mesh.indices = {0, 1, 0};
+    anarchy::amesh::compute_aabb(mesh);
+
+    const Vec3 bounds_min{0.f, 0.f, 0.f};
+    const Vec3 bounds_max{1.f, 1.f, 1.f};
+    const CompactMesh compact = pack(mesh, bounds_min, bounds_max);
+    const anarchy::amesh::Data round_tripped = unpack(compact);
+
+    for (std::size_t i = 0; i < mesh.vertices.size(); ++i) {
+        for (int c = 0; c < 4; ++c) {
+            REQUIRE(std::fabs(round_tripped.vertices[i].weight[c] - mesh.vertices[i].weight[c]) <= 1.f / 255.f + 1e-6f);
+        }
+    }
+}

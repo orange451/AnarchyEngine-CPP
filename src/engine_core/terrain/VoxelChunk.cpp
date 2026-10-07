@@ -48,14 +48,30 @@ void ChunkData::finish() {
         }
         return;
     }
-    bool same = true;
+    // A flat 256-entry table, one bool per Id: a plain indexed byte store
+    // per cell instead of the shift-and-OR into one of 4 uint64 words that
+    // ids_used()'s packed form needs. Packed into used_ once, after the
+    // scan, since there are only 256 entries to fold regardless of how
+    // large the chunk is.
+    bool used_flat[256] = {};
     const Cell first = cells_[0];
+    bool same = true;
     for (int i = 0; i < kChunkCells; ++i) {
         const Cell c = cells_[static_cast<std::size_t>(i)];
         if (c.distance != kAirDistance) {
-            used_[c.material >> 6] |= 1ull << (c.material & 63);
+            used_flat[c.material] = true;
         }
-        same = same && c == first;
+        // Once same is false it stays false; skip the comparison instead of
+        // re-ANDing into it for the remaining cells (same && ... is false
+        // from here on regardless, but costs a comparison every time).
+        if (same && !(c == first)) {
+            same = false;
+        }
+    }
+    for (int m = 0; m < 256; ++m) {
+        if (used_flat[m]) {
+            used_[m >> 6] |= 1ull << (m & 63);
+        }
     }
     if (same) {
         uniform_ = true;

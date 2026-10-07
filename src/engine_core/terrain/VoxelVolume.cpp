@@ -76,16 +76,24 @@ void VoxelVolume::edit(CellCoord min, CellCoord max, Change change) {
                 const int x0 = std::max(min.x, bx), x1 = std::min(max.x, bx + kChunkSize - 1);
                 const int y0 = std::max(min.y, by), y1 = std::min(max.y, by + kChunkSize - 1);
                 const int z0 = std::max(min.z, bz), z1 = std::min(max.z, bz + kChunkSize - 1);
+                // Looked up once per chunk, not per cell: while old isn't
+                // cloned, a uniform chunk's value never needs an array
+                // index at all (no cell_index(), no dense_at() call), since
+                // every cell reads the same cached value.
+                const bool old_uniform = old->is_uniform();
+                // cell(0) rather than dense_at(0): a uniform chunk's dense
+                // array is empty (collapsed away by finish()), so dense_at
+                // is only ever valid on a chunk known non-uniform.
+                const Cell old_value = old_uniform ? old->cell(0) : Cell{};
                 for (int z = z0; z <= z1; ++z) {
+                    const int zbase = (z - bz) * kChunkSize * kChunkSize;
                     for (int y = y0; y <= y1; ++y) {
-                        for (int x = x0; x <= x1; ++x) {
-                            const int index = cell_index(x - bx, y - by, z - bz);
-                            // Once cloned, copy is always dense: dense_at
-                            // skips the is_uniform() branch that cell() pays
-                            // on every cell, and set_dense_at skips set()'s
-                            // own re-normalization (change(...)'s result is
-                            // already normalized just below).
-                            const Cell before = copy ? copy->dense_at(index) : old->cell(index);
+                        // index steps by 1 per cell (x is the chunk's fastest
+                        // axis): computed once per row rather than via
+                        // cell_index()'s multiply-add on every cell.
+                        int index = zbase + (y - by) * kChunkSize + (x0 - bx);
+                        for (int x = x0; x <= x1; ++x, ++index) {
+                            const Cell before = copy ? copy->dense_at(index) : (old_uniform ? old_value : old->dense_at(index));
                             const Cell after = normalized(change(x, y, z, before));
                             if (after == before) {
                                 continue;

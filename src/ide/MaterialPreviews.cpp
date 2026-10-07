@@ -16,14 +16,16 @@ namespace {
 
 float unit(double value) { return static_cast<float>(std::clamp(value, 0.0, 1.0)); }
 
-// The Path of the Texture material's reference at index holds; empty for none.
-std::string texture_path(const engine_core::DataModel& world, const engine_core::Material& material,
-                         std::size_t index) {
+// The Path and FlipY of the Texture material's reference at index holds;
+// empty and false for none.
+void texture_of(const engine_core::DataModel& world, const engine_core::Material& material, std::size_t index,
+                std::string& path, bool& flip_y) {
     const engine_core::LuaSlot slot = material.reference(index);
     const auto* texture = slot.kind == engine_core::LuaSlot::Kind::Instance
                               ? dynamic_cast<const engine_core::Texture*>(world.instance(slot.id))
                               : nullptr;
-    return texture != nullptr ? texture->path() : std::string();
+    path = texture != nullptr ? texture->path() : std::string();
+    flip_y = texture != nullptr && texture->flip_y();
 }
 
 }  // namespace
@@ -33,7 +35,10 @@ bool MaterialLook::operator==(const MaterialLook& other) const {
            metalness == other.metalness && roughness == other.roughness && reflectivity == other.reflectivity &&
            transparency == other.transparency && diffuse_texture == other.diffuse_texture &&
            normal_texture == other.normal_texture && roughness_texture == other.roughness_texture &&
-           metalness_texture == other.metalness_texture && emissive_texture == other.emissive_texture;
+           metalness_texture == other.metalness_texture && emissive_texture == other.emissive_texture &&
+           diffuse_flip_y == other.diffuse_flip_y && normal_flip_y == other.normal_flip_y &&
+           roughness_flip_y == other.roughness_flip_y && metalness_flip_y == other.metalness_flip_y &&
+           emissive_flip_y == other.emissive_flip_y;
 }
 
 std::optional<MaterialLook> material_look(const engine_core::DataModel& world, engine_core::InstanceId id) {
@@ -49,11 +54,13 @@ std::optional<MaterialLook> material_look(const engine_core::DataModel& world, e
     look.roughness = unit(material->roughness());
     look.reflectivity = unit(material->reflectivity());
     look.transparency = unit(material->transparency());
-    look.diffuse_texture = texture_path(world, *material, Material::kDiffuseTextureReference);
-    look.normal_texture = texture_path(world, *material, Material::kNormalTextureReference);
-    look.roughness_texture = texture_path(world, *material, Material::kRoughnessTextureReference);
-    look.metalness_texture = texture_path(world, *material, Material::kMetalnessTextureReference);
-    look.emissive_texture = texture_path(world, *material, Material::kEmissiveTextureReference);
+    texture_of(world, *material, Material::kDiffuseTextureReference, look.diffuse_texture, look.diffuse_flip_y);
+    texture_of(world, *material, Material::kNormalTextureReference, look.normal_texture, look.normal_flip_y);
+    texture_of(world, *material, Material::kRoughnessTextureReference, look.roughness_texture,
+               look.roughness_flip_y);
+    texture_of(world, *material, Material::kMetalnessTextureReference, look.metalness_texture,
+               look.metalness_flip_y);
+    texture_of(world, *material, Material::kEmissiveTextureReference, look.emissive_texture, look.emissive_flip_y);
     return look;
 }
 

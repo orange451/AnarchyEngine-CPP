@@ -51,7 +51,8 @@ struct EnvironmentTexture {
 // A Scene View's uploaded textures, by Texture Path, as MeshCache keeps its
 // meshes: a path loads the first time a frame draws it, from the project's
 // resources folder, and its file is looked at again at most once a second and
-// reloaded when it changed. A file that is missing or does not decode has no
+// reloaded when it changed. A Texture's FlipY uploads the image upside down,
+// kept apart from the same path's upright upload. A file that is missing or does not decode has no
 // texture; report hears why, once per version of the file. Every call but the
 // destructor needs the GL context the textures were uploaded in.
 class TextureCache {
@@ -68,12 +69,13 @@ public:
     // The resources folder paths are under. Empty loads nothing. Another root clears the cache.
     void setRoot(const std::filesystem::path& root);
     // The GL texture for path, relative to the root with '/' between names, or
-    // 0 when there is none to draw. Mipmapped, repeating, and RGBA8.
-    unsigned get(const std::string& path);
+    // 0 when there is none to draw. Mipmapped, repeating, and RGBA8. flipY
+    // puts the image's top row at v 0.
+    unsigned get(const std::string& path, bool flipY = false);
     // The same file decoded by DecodeLinearTexture, for a Skybox: RGBA16F,
     // mipmapped, repeating across and clamped at the poles. Kept apart from
     // get's upload of the same path.
-    EnvironmentTexture getEnvironment(const std::string& path);
+    EnvironmentTexture getEnvironment(const std::string& path, bool flipY = false);
     // Deletes every texture.
     void clear();
 
@@ -87,14 +89,15 @@ private:
         std::uint64_t revision = 0;
     };
 
-    Entry& find(std::unordered_map<std::string, Entry>& entries, const std::string& path, bool linear);
-    void load(const std::string& path, Entry& entry, bool linear);
+    Entry& find(std::unordered_map<std::string, Entry>& entries, const std::string& path, bool linear, bool flipY);
+    void load(const std::string& path, Entry& entry, bool linear, bool flipY);
     void fail(Entry& entry, const std::string& message);
 
     Report report_;
     std::filesystem::path root_;
-    std::unordered_map<std::string, Entry> entries_;
-    std::unordered_map<std::string, Entry> environments_;
+    // Each by flipY: [0] upright, [1] flipped.
+    std::unordered_map<std::string, Entry> entries_[2];
+    std::unordered_map<std::string, Entry> environments_[2];
 };
 
 }  // namespace runner

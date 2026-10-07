@@ -575,6 +575,42 @@ TEST_CASE("GS10 Stop restores references and drops assets made in play", "[GS10]
     REQUIRE(game.get_children(game.service("Textures")).size() == 1);
 }
 
+TEST_CASE("GS10b a Texture's FlipY starts false, saves when set, and undoes", "[GS10b]") {
+    SimRole role;
+    Game game;
+    const InstanceId brick = make(game, "Texture", "Brick", game.service("Textures"));
+    const engine_core::LuaSlot fresh = read_field(game, brick, "FlipY");
+    REQUIRE(fresh.kind == engine_core::LuaSlot::Kind::Bool);
+    REQUIRE_FALSE(fresh.flag);
+    engine_core::PropertyBag saved;
+    game.instance(brick)->save_properties(saved);
+    REQUIRE(saved.empty());
+
+    engine_core::LuaSlot flipped;
+    flipped.kind = engine_core::LuaSlot::Kind::Bool;
+    flipped.flag = true;
+    begin_step(game, "Set FlipY");
+    REQUIRE(write_field(game, brick, "FlipY", flipped));
+    end_step(game);
+    REQUIRE(read_field(game, brick, "FlipY").flag);
+    REQUIRE(static_cast<engine_core::Texture*>(game.instance(brick))->flip_y());
+
+    game.instance(brick)->save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "FlipY") != nullptr);
+    Game other;
+    const InstanceId copy = make(other, "Texture", "Brick", other.service("Textures"));
+    for (const auto& [name, value] : saved) {
+        std::string load_error;
+        REQUIRE(other.instance(copy)->load_property(name, value, load_error));
+    }
+    REQUIRE(read_field(other, copy, "FlipY").flag);
+
+    game.history().undo();
+    REQUIRE_FALSE(read_field(game, brick, "FlipY").flag);
+    game.history().redo();
+    REQUIRE(read_field(game, brick, "FlipY").flag);
+}
+
 namespace {
 
 void write_text(const std::filesystem::path& path, const std::string& bytes) {

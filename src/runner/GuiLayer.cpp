@@ -9,10 +9,12 @@
 #include "Gui.hpp"
 #include "SceneService.hpp"
 #include "ScriptRuntime.hpp"
+#include "TextureCache.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <optional>
 #include <sstream>
@@ -97,6 +99,20 @@ bool IsPaneClass(const std::string& name) {
 // How often a file an ImagePane draws is looked at again.
 constexpr std::chrono::seconds kImageRecheck{1};
 
+// The image file decoded upside down, as a Texture's FlipY draws it, or null.
+// DecodeTexture gives the bottom row first, and fromRgba takes its first row
+// as the top.
+std::shared_ptr<jadefx::Image> loadFlipped(const std::filesystem::path& file) {
+    std::ifstream in(file, std::ios::binary);
+    const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    TexturePixels pixels;
+    std::string why;
+    if (!DecodeTexture(bytes.data(), bytes.size(), pixels, why)) {
+        return nullptr;
+    }
+    return jadefx::Image::fromRgba(pixels.width, pixels.height, std::move(pixels.rgba));
+}
+
 }  // namespace
 
 struct GuiLayer::Entry {
@@ -127,6 +143,7 @@ struct GuiLayer::Entry {
     // opacity ImageTransparency gives it, as the last sync read them.
     bool imagePane = false;
     std::string imagePath;
+    bool imageFlipY = false;
     float imageOpacity = 1.f;
 };
 
@@ -470,6 +487,7 @@ std::shared_ptr<jadefx::Node> GuiLayer::build(engine_core::InstanceId id, const 
         const engine_core::Texture* texture = imagePane->image_texture();
         entry.imagePane = true;
         entry.imagePath = texture != nullptr ? texture->path() : std::string();
+        entry.imageFlipY = texture != nullptr && texture->flip_y();
         entry.imageOpacity = 1.f - static_cast<float>(gui.number(GuiProperty::ImageTransparency));
     }
     std::string name = game_.name(id);
@@ -593,29 +611,34 @@ void GuiLayer::writeText(engine_core::InstanceId id, std::string text) {
 void GuiLayer::updateImages() {
     ++imagePass_;
     if (resourcesRoot_ != imagesRoot_) {
-        images_.clear();
+        for (auto& images : images_) {
+            images.clear();
+        }
         imagesRoot_ = resourcesRoot_;
     }
     for (const auto& [id, entry] : entries_) {
         if (!entry->imagePane) {
             continue;
         }
-        std::shared_ptr<jadefx::Image> image = entry->imagePath.empty() ? nullptr : loadImage(entry->imagePath);
+        std::shared_ptr<jadefx::Image> image =
+            entry->imagePath.empty() ? nullptr : loadImage(entry->imagePath, entry->imageFlipY);
         jadefx::Node& node = *entry->node;
         if (image != node.getBackgroundImage() || entry->imageOpacity != node.getBackgroundImageOpacity()) {
             node.setBackgroundImage(std::move(image), entry->imageOpacity);
         }
     }
-    for (auto it = images_.begin(); it != images_.end();) {
-        it = it->second.pass == imagePass_ ? std::next(it) : images_.erase(it);
+    for (auto& images : images_) {
+        for (auto it = images.begin(); it != images.end();) {
+            it = it->second.pass == imagePass_ ? std::next(it) : images.erase(it);
+        }
     }
 }
 
-std::shared_ptr<jadefx::Image> GuiLayer::loadImage(const std::string& path) {
+std::shared_ptr<jadefx::Image> GuiLayer::loadImage(const std::string& path, bool flipY) {
     if (imagesRoot_.empty()) {
         return nullptr;
     }
-    LoadedImage& loaded = images_[path];
+    LoadedImage& loaded = images_[flipY ? 1 : 0][path];
     loaded.pass = imagePass_;
     const auto now = std::chrono::steady_clock::now();
     if (loaded.tried && now - loaded.checked < kImageRecheck) {
@@ -644,7 +667,7 @@ std::shared_ptr<jadefx::Image> GuiLayer::loadImage(const std::string& path) {
     }
     loaded.tried = true;
     loaded.stamp = stamp;
-    loaded.image = jadefx::Image::load(file.u8string());
+    loaded.image = flipY ? loadFlipped(file) : jadefx::Image::load(file.u8string());
     if (loaded.image == nullptr) {
         report("Texture " + path + " is not an image an ImagePane can draw");
     }

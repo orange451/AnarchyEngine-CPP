@@ -43,6 +43,10 @@ const EnumType& gui_alignment_enum();
 const EnumType& transform_space_enum();
 // transform_space_enum's items, by value.
 enum class TransformSpace { World = 0, Local = 1 };
+// Exclude 0, Include 1. RaycastParams.FilterType.
+const EnumType& raycast_filter_type_enum();
+// raycast_filter_type_enum's items, by value.
+enum class RaycastFilterType { Exclude = 0, Include = 1 };
 // X 0, Y 1, Z 2, XY 3, YZ 4, XZ 5.
 const EnumType& dragger_handle_enum();
 // How the 3D scene's edges are smoothed: None 0, FXAA 1. Lighting.Antialiasing.

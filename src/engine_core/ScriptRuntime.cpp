@@ -764,6 +764,7 @@ void open_host_libraries(lua_State* state) {
     open_vector2(state);
     open_vector3(state);
     open_matrix4(state);
+    open_raycast(state);
 }
 
 lua_State* ScriptRuntime::create_state(Vm& vm) {

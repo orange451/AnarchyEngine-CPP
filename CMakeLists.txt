@@ -562,6 +562,7 @@ add_library(engine_core STATIC
     src/engine_core/InstanceRef.cpp
     src/engine_core/LuaReflect.cpp
     src/engine_core/ScriptBindings.cpp
+    src/engine_core/RaycastBindings.cpp
     src/engine_core/ScriptRuntime.cpp
     src/engine_core/TableSnapshot.cpp
     src/engine_core/ScriptAnalysis.cpp
@@ -880,6 +881,7 @@ add_executable(sandbox
     sandbox/physics_tests.cpp
     sandbox/edit_physics_tests.cpp
     sandbox/raycast_tests.cpp
+    sandbox/raycast_lua_tests.cpp
     sandbox/convex_decomposition_tests.cpp
     sandbox/player_controller_tests.cpp
     sandbox/audio_tests.cpp

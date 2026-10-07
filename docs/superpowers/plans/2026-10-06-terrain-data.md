@@ -872,7 +872,7 @@ file(GLOB ZSTD_SOURCES CONFIGURE_DEPENDS
 add_library(zstd STATIC ${ZSTD_SOURCES})
 # PUBLIC is SYSTEM, so the engine's warnings do not report on zstd's headers.
 target_include_directories(zstd SYSTEM PUBLIC "${ZSTD_SOURCE_DIR}/lib")
-target_compile_definitions(zstd PRIVATE ZSTD_DISABLE_ASM ZSTD_MULTITHREAD=0 XXH_NAMESPACE=ZSTD_)
+target_compile_definitions(zstd PRIVATE ZSTD_DISABLE_ASM XXH_NAMESPACE=ZSTD_)
 if(MSVC)
     target_compile_options(zstd PRIVATE /W3)
     # Compression is optimized in every configuration, as Box3D is: a Debug
@@ -883,7 +883,7 @@ if(MSVC)
 endif()
 ```
 
-Remove `ZSTD_MULTITHREAD=0` if zstd's headers treat any definition as "on" (check `lib/common/zstd_internal.h`/`threading.h`; the goal is single-threaded zstd — the engine parallelizes across chunks itself). Confirm the configure and a Debug build succeed before writing tests. If MSVC 14.23 in C mode rejects something in zstd 1.5.6, note it in the report and try the nearest earlier 1.5.x tag rather than patching zstd.
+Leave `ZSTD_MULTITHREAD` undefined: zstd tests it with `#ifdef`, so any definition turns threading on. zstd stays single-threaded; the engine parallelizes across chunks itself. Confirm the configure and a Debug build succeed before writing tests. If MSVC 14.23 in C mode rejects something in zstd 1.5.6, note it in the report and try the nearest earlier 1.5.x tag rather than patching zstd.
 
 - [ ] **Step 2: Write the failing tests**
 

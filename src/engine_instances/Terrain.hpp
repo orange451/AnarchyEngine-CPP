@@ -30,6 +30,8 @@ public:
     Terrain(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);
     const char* class_name() const override { return "Terrain"; }
     bool terrain() const override { return true; }
+    // Edit, which opens the Configure Terrain tab, then the usual actions.
+    void context_actions(std::vector<ContextAction>& out) const override;
 
     Matrix4 transform() const override { return transform_; }
     // SimulationThread. Each returns why it refused the value, changing nothing.

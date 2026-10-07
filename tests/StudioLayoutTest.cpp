@@ -1,12 +1,14 @@
 #include "ide/IdeAssets.hpp"
 #include "ide/IdeConsole.hpp"
 #include "ide/IdeDock.hpp"
+#include "ide/IdeExplorer.hpp"
 #include "ide/IdeLayout.hpp"
 #include "ide/IdePrefabEditor.hpp"
 #include "ide/IdeResources.hpp"
 #include "ide/IdePane.hpp"
 #include "ide/IdeSearch.hpp"
 #include "ide/IdeTerminal.hpp"
+#include "ide/IdeTerrainEditor.hpp"
 #include "runner/GameView.hpp"
 
 #include "Engine.hpp"
@@ -845,6 +847,77 @@ int main() {
                 game.destroy_tree(crate);
                 game.destroy_tree(barrel);
             });
+            frame();
+        }
+
+        // A Terrain's Edit, its primary action, docks the Configure Terrain tab
+        // with the scene view. Editing it again brings that tab forward.
+        {
+            engine_core::DataModel& world = layout.simulation().datamodel();
+            engine_core::InstanceId island = 0;
+            layout.simulation().on_simulation([&](engine_core::DataModel& game) {
+                engine_core::DataModel* made = engine_core::lua_create_instance(game, "Terrain");
+                game.set_name(made->id(), "Island");
+                game.set_parent(made->id(), game.scene_service("Workspace"));
+                island = made->id();
+            });
+            std::vector<engine_core::ContextAction> actions;
+            world.instance(island)->context_actions(actions);
+            expect(!actions.empty() && actions[0].action == engine_core::InstanceAction::Edit && actions[0].primary,
+                   "a Terrain's primary action is Edit");
+            ide::IdePane* scene_view = showing("Scene View");
+            ide::IdeDock* home_strip = dock_of(scene_view);
+            expect(home_strip != nullptr, "the Scene View shows");
+            auto edit = [&] {
+                world.selection().set({island});
+                frame();
+                frame();
+                bool ran = false;
+                for (jadefx::Node* node : scene->getElementsByClassName("explorer-pane")) {
+                    if (auto* explorer = dynamic_cast<ide::IdeExplorer*>(node); explorer != nullptr && !ran) {
+                        ran = explorer->run_on_selection(engine_core::InstanceAction::Edit);
+                    }
+                }
+                expect(ran, "an explorer runs Edit on the selected Terrain");
+                frame();
+            };
+            auto editors = [&] {
+                std::vector<std::shared_ptr<jadefx::Tab>> found;
+                if (home_strip != nullptr) {
+                    for (const std::shared_ptr<jadefx::Tab>& tab : home_strip->tabs()->getTabs().items()) {
+                        if (tab && dynamic_cast<ide::IdeTerrainEditor*>(tab->getContent()) != nullptr) {
+                            found.push_back(tab);
+                        }
+                    }
+                }
+                return found;
+            };
+            expect(editors().empty(), "no Configure Terrain tab is open at first");
+            edit();
+            std::vector<std::shared_ptr<jadefx::Tab>> open = editors();
+            expect(open.size() == 1 &&
+                       static_cast<ide::IdeTerrainEditor*>(open[0]->getContent())->terrain() == island &&
+                       open[0]->isSelected(),
+                   "Edit on a Terrain docks its Configure Terrain tab in front");
+            expect(open.size() == 1 && open[0]->isClosable(), "it closes like any tab");
+            // Something else in front, then Edit again.
+            if (home_strip != nullptr) {
+                for (const std::shared_ptr<jadefx::Tab>& tab : home_strip->tabs()->getTabs().items()) {
+                    if (tab && tab->getContent() == scene_view) {
+                        home_strip->tabs()->select(tab);
+                    }
+                }
+            }
+            frame();
+            edit();
+            std::vector<std::shared_ptr<jadefx::Tab>> again = editors();
+            expect(again.size() == 1 && open.size() == 1 && again[0] == open[0] && again[0]->isSelected(),
+                   "editing it again brings the same tab forward, not a second one");
+            for (const std::shared_ptr<jadefx::Tab>& tab : editors()) {
+                tab->getTabPane()->close(tab);
+            }
+            expect(editors().empty(), "closing its tab takes it away");
+            layout.simulation().on_simulation([&](engine_core::DataModel& game) { game.destroy_tree(island); });
             frame();
         }
     }

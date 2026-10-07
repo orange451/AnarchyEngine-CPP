@@ -55,4 +55,16 @@ std::optional<std::string> remove_terrain_material(engine_core::DataModel& world
 std::optional<std::string> replace_unassigned(engine_core::DataModel& world, engine_core::InstanceId terrain,
                                               int from, int to);
 
+// SimulationThread. The writes above as the Studio's Configure Terrain tab
+// makes them, each one undo step: "Add Terrain Material", "Set Terrain
+// Material", "Remove Terrain Material", and "Replace Terrain Material".
+engine_core::InstanceId run_add(engine_core::DataModel& world, engine_core::InstanceId terrain,
+                                engine_core::InstanceId material, std::string& error);
+std::optional<std::string> run_set(engine_core::DataModel& world, engine_core::InstanceId entry,
+                                   engine_core::InstanceId material);
+std::optional<std::string> run_remove(engine_core::DataModel& world, engine_core::InstanceId entry,
+                                      RemoveChoice choice);
+std::optional<std::string> run_replace_unassigned(engine_core::DataModel& world, engine_core::InstanceId terrain,
+                                                  int from, int to);
+
 }  // namespace ide

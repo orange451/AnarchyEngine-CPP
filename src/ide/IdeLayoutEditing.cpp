@@ -4,9 +4,11 @@
 
 #include "IdeLayoutInternal.hpp"
 #include "IdeCssEditor.hpp"
+#include "IdeTerrainEditor.hpp"
 
 #include "FileBytes.hpp"
 #include "Gui.hpp"
+#include "Terrain.hpp"
 
 namespace ide {
 
@@ -504,6 +506,7 @@ void IdeLayout::edit(std::uint32_t id) {
     engine_core::DataModel& game = runner_.simulation().datamodel();
     bool is_prefab = false;
     bool is_css = false;
+    bool is_terrain = false;
     std::string guid;
     {
         engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionWait);
@@ -514,6 +517,8 @@ void IdeLayout::edit(std::uint32_t id) {
         const engine_core::DataModel* object = game.instance(id);
         if (dynamic_cast<const engine_core::Prefab*>(object) != nullptr) {
             is_prefab = true;
+        } else if (dynamic_cast<const engine_core::Terrain*>(object) != nullptr) {
+            is_terrain = true;
         } else if (dynamic_cast<const engine_core::Css*>(object) != nullptr) {
             is_css = true;
         } else if (dynamic_cast<const engine_core::LuaSource*>(object) == nullptr) {
@@ -523,6 +528,10 @@ void IdeLayout::edit(std::uint32_t id) {
     }
     if (is_prefab) {
         edit_prefab(id, *home);
+        return;
+    }
+    if (is_terrain) {
+        edit_terrain(id, *home);
         return;
     }
     if (is_css) {
@@ -637,6 +646,72 @@ std::shared_ptr<IdePrefabEditor> IdeLayout::open_prefab_editor(std::uint32_t pre
     return found->second.lock();
 }
 
+void IdeLayout::edit_terrain(std::uint32_t terrain, IdeDock& home) {
+    // As edit_prefab: a tab that was closed is not reused.
+    const std::shared_ptr<IdeTerrainEditor> existing = open_terrain_editor(terrain);
+    if (existing && dockContaining(existing.get()) != nullptr) {
+        reveal_window(existing.get());
+        return;
+    }
+    auto editor =
+        jadefx::make<IdeTerrainEditor>(runner_.simulation().datamodel(), terrain, terrain_editor_host());
+    add_select_to_tab_menu(*editor, terrain);
+    home.dock(editor);
+    open_terrains_[terrain] = editor;
+}
+
+TerrainEditorHost IdeLayout::terrain_editor_host() {
+    // Each write is its own run_* step, so the tests run what the studio runs.
+    TerrainEditorHost host;
+    host.add = [this](engine_core::InstanceId terrain, engine_core::InstanceId material,
+                      std::shared_ptr<InsertResult> result) {
+        runner_.simulation().on_simulation([terrain, material, result](engine_core::DataModel& world) {
+            std::string error;
+            const engine_core::InstanceId made = run_add(world, terrain, material, error);
+            if (result) {
+                result->id.store(made, std::memory_order_relaxed);
+                result->error = std::move(error);
+                result->done.store(true, std::memory_order_release);
+            }
+        });
+    };
+    host.set_material = [this](engine_core::InstanceId entry, engine_core::InstanceId material) {
+        runner_.simulation().on_simulation(
+            [this, alive = std::weak_ptr<int>(alive_), entry, material](engine_core::DataModel& world) {
+                if (std::optional<std::string> error = run_set(world, entry, material)) {
+                    toast_later(this, alive, std::move(*error));
+                }
+            });
+    };
+    host.rename = [this](engine_core::InstanceId id, std::string name) { rename(id, std::move(name)); };
+    host.remove = [this](engine_core::InstanceId entry, RemoveChoice choice) {
+        runner_.simulation().on_simulation(
+            [this, alive = std::weak_ptr<int>(alive_), entry, choice](engine_core::DataModel& world) {
+                if (std::optional<std::string> error = run_remove(world, entry, choice)) {
+                    toast_later(this, alive, std::move(*error));
+                }
+            });
+    };
+    host.replace_unassigned = [this](engine_core::InstanceId terrain, int from, int to) {
+        runner_.simulation().on_simulation(
+            [this, alive = std::weak_ptr<int>(alive_), terrain, from, to](engine_core::DataModel& world) {
+                if (std::optional<std::string> error = run_replace_unassigned(world, terrain, from, to)) {
+                    toast_later(this, alive, std::move(*error));
+                }
+            });
+    };
+    host.notice = [this](std::string text) { show_toast(std::move(text)); };
+    return host;
+}
+
+std::shared_ptr<IdeTerrainEditor> IdeLayout::open_terrain_editor(std::uint32_t terrain) const {
+    const auto found = open_terrains_.find(terrain);
+    if (found == open_terrains_.end()) {
+        return nullptr;
+    }
+    return found->second.lock();
+}
+
 std::shared_ptr<IdeScriptEditor> IdeLayout::open_editor(std::uint32_t id) const {
     const auto found = open_scripts_.find(id);
     if (found == open_scripts_.end()) {
@@ -711,6 +786,11 @@ void IdeLayout::close_script_editors() {
             pages.push_back(std::move(editor));
         }
     }
+    for (const auto& entry : open_terrains_) {
+        if (std::shared_ptr<IdeTerrainEditor> editor = entry.second.lock()) {
+            pages.push_back(std::move(editor));
+        }
+    }
     for (const auto& entry : open_css_) {
         if (std::shared_ptr<IdeCssEditor> editor = entry.second.lock()) {
             pages.push_back(std::move(editor));
@@ -736,6 +816,7 @@ void IdeLayout::close_script_editors() {
     undo_router_.forget_scripts();
     open_scripts_.clear();
     open_prefabs_.clear();
+    open_terrains_.clear();
     open_css_.clear();
     kept_sources_.clear();
     last_script_focus_ = 0;

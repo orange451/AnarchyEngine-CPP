@@ -133,6 +133,11 @@ std::optional<std::string> write_avox(const std::filesystem::path& root, const s
 
 Terrain::Terrain(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : PVInstance(tag, state, id) {}
 
+void Terrain::context_actions(std::vector<ContextAction>& out) const {
+    out.push_back(ContextAction{InstanceAction::Edit, true});
+    PVInstance::context_actions(out);
+}
+
 std::optional<std::string> Terrain::set_transform(const Matrix4& transform) {
     require_thread(*this);
     for (float value : transform.m) {

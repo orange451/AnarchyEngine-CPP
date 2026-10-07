@@ -1,6 +1,7 @@
 #include "TerrainMaterials.hpp"
 
 #include "LuaApi.hpp"
+#include "ScopedRecording.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
 
@@ -135,6 +136,27 @@ std::optional<std::string> replace_unassigned(engine_core::DataModel& world, Ins
     }
     terrain->replace_material_everywhere(from, to);
     return std::nullopt;
+}
+
+InstanceId run_add(engine_core::DataModel& world, InstanceId terrain, InstanceId material, std::string& error) {
+    ScopedRecording step(world, "Add Terrain Material");
+    return add_terrain_material(world, terrain, material, error);
+}
+
+std::optional<std::string> run_set(engine_core::DataModel& world, InstanceId entry, InstanceId material) {
+    ScopedRecording step(world, "Set Terrain Material");
+    return set_terrain_material(world, entry, material);
+}
+
+std::optional<std::string> run_remove(engine_core::DataModel& world, InstanceId entry, RemoveChoice choice) {
+    ScopedRecording step(world, "Remove Terrain Material");
+    return remove_terrain_material(world, entry, choice);
+}
+
+std::optional<std::string> run_replace_unassigned(engine_core::DataModel& world, InstanceId terrain, int from,
+                                                  int to) {
+    ScopedRecording step(world, "Replace Terrain Material");
+    return replace_unassigned(world, terrain, from, to);
 }
 
 }  // namespace ide

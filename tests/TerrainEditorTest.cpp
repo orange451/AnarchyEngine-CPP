@@ -1,4 +1,5 @@
 #include "ide/IdeTerrainEditor.hpp"
+#include "ide/ScopedRecording.hpp"
 #include "ide/TerrainMaterials.hpp"
 #include "SelectionService.hpp"
 
@@ -436,6 +437,44 @@ void TE7_deleted_terrain() {
     Expect(rig.adds == 0, "TE7 and Add does nothing");
 }
 
+void TE8_one_undo_step_each() {
+    Rig rig;
+    std::string error;
+    auto entries = [&rig] { return ide::read_terrain_materials(rig.game, rig.terrain_id).materials; };
+    // Voxels on Id 1 first, so Remove is a Keep Cells on one in use.
+    rig.fill_ball(0, 0, 0, 5, 1);
+    // What the Studio's host runs on the simulation thread, each its own step.
+    const InstanceId entry = ide::run_add(rig.game, rig.terrain_id, rig.rock, error);
+    Expect(entry != 0 && error.empty(), "TE8 Add makes one");
+    Expect(!ide::run_set(rig.game, entry, rig.grass), "TE8 Set points it at Grass");
+    // Named after Rock, it follows its Material's name.
+    Expect(rig.game.name(entry) == "Grass", "TE8 and renames it Grass");
+    // Rename goes through IdeLayout::rename, which records it as "Rename".
+    Expect(!rig.game.rename_error(entry, "Cliff"), "TE8 Cliff is a fine name");
+    {
+        ide::ScopedRecording step(rig.game, "Rename");
+        rig.game.set_name(entry, "Cliff");
+    }
+    Expect(!ide::run_remove(rig.game, entry, {}), "TE8 Remove with Keep Cells");
+    Expect(entries().empty() && rig.cell_id(0, 0, 0) == 1, "TE8 it is gone, and its voxels keep Id 1");
+
+    rig.game.history().undo();
+    std::vector<ide::TerrainMaterialView> back = entries();
+    Expect(back.size() == 1 && back[0].id == entry && back[0].name == "Cliff" && back[0].material == rig.grass,
+           "TE8 the first undo brings it back as it was before Remove");
+    rig.game.history().undo();
+    back = entries();
+    Expect(back.size() == 1 && back[0].name == "Grass" && back[0].material == rig.grass,
+           "TE8 the second undoes only the Rename");
+    rig.game.history().undo();
+    back = entries();
+    Expect(back.size() == 1 && back[0].name == "Rock" && back[0].material == rig.rock,
+           "TE8 the third undoes the Set, and the name that came with it");
+    rig.game.history().undo();
+    Expect(entries().empty(), "TE8 the fourth undoes the Add");
+    Expect(rig.cell_id(0, 0, 0) == 1, "TE8 none of them touched the voxels");
+}
+
 void TE9_unassigned_row() {
     PaneRig rig;
     std::string error;
@@ -489,6 +528,7 @@ int main() {
     TE5_remove_used_asks();
     TE6_script_changes_follow();
     TE7_deleted_terrain();
+    TE8_one_undo_step_each();
     TE9_unassigned_row();
     TE10_click_selects();
     if (gFailures != 0) {

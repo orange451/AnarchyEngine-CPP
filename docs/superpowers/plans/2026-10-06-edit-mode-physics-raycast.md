@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-06-edit-mode-physics-raycast-design.md`
 
+> **Amendment (2026-10-06, after this plan was written):** main now makes a stopped body's Transform follow the GameObject it moves. `PhysicsWorld::follow_game_objects(game)` (static, `PhysicsWorld.cpp`) copies each driven GameObject's position and rotation onto its body through `store_simulated`, keeping the body's scale and a PlayerController upright; the Engine's stopped tick calls it beside `decomposer_.update`, and `P35` in `sandbox/physics_tests.cpp` pins it. This was asked for so a dragger over a GameObject with a body as a child finds the body where the GameObject is. It reverses this plan's premise that nothing writes a Transform while stopped, so when implementing: (1) drop the "no `store_simulated` while stopped" constraint and Review Focus 1; (2) flip E3 so `body.transform()` follows the GameObject (as P35 asserts) instead of staying identity; (3) the `seeded` flag and E5 are unnecessary, since the body's Transform is already the GameObject's when Play starts, so `follow_driven` keeps storing unconditionally as it does today; (4) fold `follow_game_objects` into `sync` (`follow_driven` already does the same for a body that exists) and delete the static helper and the Engine call once `sync` runs from the stopped tick. `store_ground` while stopped stays unwritten.
+
 ## Global Constraints
 
 - Only `src/engine_core/PhysicsWorld.cpp` includes Box3D. Nothing else may.

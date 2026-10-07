@@ -285,13 +285,15 @@ void Engine::simulation_loop() {
                     last_tool = now;
                     pause_lock.unlock();
                     // Stopped, Custom PhysicsObjects' Meshes are split into convex
-                    // pieces. A paused test writes no files.
+                    // pieces, and bodies follow the GameObjects they move. A
+                    // paused test writes no files and moves no body.
                     guarded_step(
                         [&] {
                             PROFILE_SCOPE("Convex decomposition", profiler::Group::Physics);
                             DataModelLock lock(game_, DataModelLock::Write);
                             if (!game_.simulation_running()) {
                                 decomposer_.update(game_);
+                                PhysicsWorld::follow_game_objects(game_);
                             }
                         },
                         [&] { contract_count_.fetch_add(1); });

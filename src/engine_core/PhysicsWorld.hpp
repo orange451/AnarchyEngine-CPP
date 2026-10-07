@@ -52,6 +52,16 @@ public:
     // Does nothing while game is not playing.
     void step(DataModel& game, double dt);
 
+    // While the place is stopped, what step does for a body's GameObject in
+    // reverse: each PhysicsBase in Workspace that moves a GameObject
+    // (PhysicsBase::driven_game_object) takes that GameObject's position and
+    // rotation as its Transform, keeping its own scale, a PlayerController
+    // upright. So the body sits where it will start at play, and a dragger
+    // that takes in a GameObject's children finds it there. Stored as a
+    // physics move is: no Changed, no history, no dirty mark. The Engine's
+    // stopped tick calls it. SimulationThread, under the write lock.
+    static void follow_game_objects(DataModel& game);
+
     // How many bodies the world holds, and whether this PhysicsObject has one.
     std::size_t body_count() const;
     bool has_body(InstanceId id) const;

@@ -1096,3 +1096,44 @@ TEST_CASE("P34 Mass set during play reweighs a body of pieces", "[physics]") {
     rig.steps(1);
     REQUIRE(near(rig.physics.body_mass(scene.cup->id()), 35.f, 0.01f));
 }
+
+TEST_CASE("P35 stopped, a body's Transform follows the GameObject it moves", "[physics]") {
+    PhysicsRig rig;
+    GameObject& part = create_part(rig.game);
+    Matrix4 scaled = at(3.f, 10.f, 0.f);
+    scaled.m[0] = scaled.m[5] = scaled.m[10] = 2.f;
+    part.set_transform(scaled);
+    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(body.set_game_object(instance_slot(part.id())));
+    PhysicsObject& loose = rig.body(at(0.f, 2.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+
+    engine_core::PhysicsWorld::follow_game_objects(rig.game);
+    REQUIRE(near(x_of(body.transform()), 3.f, 1e-5f));
+    REQUIRE(near(y_of(body.transform()), 10.f, 1e-5f));
+    // Only the pose: the body keeps its own scale, the GameObject its Transform,
+    // and a body that moves nothing stays where it was authored.
+    REQUIRE(near(column_length(body.transform(), 0), 1.f, 1e-5f));
+    REQUIRE(engine_core::same_matrix4(part.transform(), scaled));
+    REQUIRE(y_of(loose.transform()) == 2.f);
+
+    // Moved again, by Properties or a dragger, the body comes along.
+    part.set_transform(at(5.f, 10.f, 0.f));
+    engine_core::PhysicsWorld::follow_game_objects(rig.game);
+    REQUIRE(near(x_of(body.transform()), 5.f, 1e-5f));
+
+    // A body under a GameObject follows its parent; a PlayerController stays
+    // upright, as it starts at play.
+    GameObject& other = create_part(rig.game);
+    Matrix4 tilted = engine_core::matrix4_axis_angle(Vec3{1.f, 0.f, 0.f}, 0.5);
+    tilted.m[12] = -4.f;
+    tilted.m[13] = 1.f;
+    tilted.m[14] = 6.f;
+    other.set_transform(tilted);
+    PlayerController& controller = rig.controller(engine_core::matrix4_identity(), other.id());
+    REQUIRE(controller.driven_game_object() == other.id());
+    engine_core::PhysicsWorld::follow_game_objects(rig.game);
+    REQUIRE(near(x_of(controller.transform()), -4.f, 1e-5f));
+    REQUIRE(near(z_of(controller.transform()), 6.f, 1e-5f));
+    REQUIRE(near(controller.transform().m[5], 1.f, 1e-5f));
+    REQUIRE(near(controller.transform().m[6], 0.f, 1e-5f));
+}

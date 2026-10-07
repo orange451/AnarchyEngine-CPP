@@ -1434,6 +1434,27 @@ PhysicsWorld::~PhysicsWorld() = default;
 
 void PhysicsWorld::step(DataModel& game, double dt) { impl_->step(game, dt); }
 
+void PhysicsWorld::follow_game_objects(DataModel& game) {
+    std::vector<InstanceId> ids;
+    game.physics_bodies(ids);
+    for (InstanceId id : ids) {
+        auto* object = dynamic_cast<PhysicsBase*>(game.instance(id));
+        const InstanceId target = object != nullptr ? object->driven_game_object() : 0;
+        const GameObject* driven = target != 0 ? game.game_object(target) : nullptr;
+        if (driven == nullptr) {
+            continue;
+        }
+        const bool controller = dynamic_cast<PlayerController*>(object) != nullptr;
+        b3Vec3 position{};
+        b3Quat rotation{};
+        pose_of(controller ? upright_transform(driven->transform()) : driven->transform(), position, rotation);
+        const Matrix4 followed = matrix_of(position, rotation, object->transform());
+        if (!same_matrix4(followed, object->transform())) {
+            object->store_simulated(followed, object->velocity());
+        }
+    }
+}
+
 std::size_t PhysicsWorld::body_count() const { return impl_->bodies.size(); }
 
 bool PhysicsWorld::has_body(InstanceId id) const { return impl_->bodies.count(id) != 0; }

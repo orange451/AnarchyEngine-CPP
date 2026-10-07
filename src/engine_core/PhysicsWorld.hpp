@@ -18,6 +18,25 @@ class PhysicsBase;
 class PhysicsObject;
 class PlayerController;
 
+// Which instances a ray sees: with include, only those that are, or are under,
+// one of instances; else every instance but those.
+struct RayFilter {
+    bool include = false;
+    std::vector<InstanceId> instances;
+};
+
+// What a ray hit first.
+struct RayHit {
+    InstanceId instance = 0;   // The PhysicsBase (later, Terrain) whose body was hit.
+    Vec3 position{};
+    Vec3 normal{};
+    float distance = 0.f;
+    // Box3D's surface material for the hit triangle or shape: a Terrain's
+    // material Id. False for everything but Terrain.
+    bool has_material = false;
+    std::uint8_t material = 0;
+};
+
 // The Box3D world behind PhysicsObject. It lives while the place is stopped
 // too: then the Engine's stopped tick calls sync, and bodies follow the tree
 // but are never simulated, as if everything were anchored. While the place
@@ -61,6 +80,12 @@ public:
     void simulate(DataModel& game, double dt);
     // Does nothing while game is not playing; else sync, then simulate.
     void step(DataModel& game, double dt);
+
+    // The first body a ray from origin along direction hits, within direction's
+    // length, that filter lets it see. Syncs first, so it sees the tree as it
+    // is now. A ray that starts inside a body does not hit it. Nothing for a
+    // zero direction. SimulationThread, under the write lock.
+    std::optional<RayHit> raycast(DataModel& game, Vec3 origin, Vec3 direction, const RayFilter& filter);
 
     // How many bodies the world holds, and whether this PhysicsObject has one.
     std::size_t body_count() const;

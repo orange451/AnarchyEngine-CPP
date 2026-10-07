@@ -377,6 +377,50 @@ float probe_hit(b3ShapeId shape, b3Pos point, b3Vec3 normal, float fraction, uin
     return hits->closest;
 }
 
+// The closest hit a script's ray keeps, skipping what the filter hides and
+// bodies it starts inside.
+struct RayHits {
+    const DataModel* game = nullptr;
+    const RayFilter* filter = nullptr;
+    float closest = 1.f;
+    bool hit = false;
+    InstanceId instance = 0;
+    b3Vec3 point{};
+    b3Vec3 normal{};
+    uint64_t material = 0;
+};
+
+// Whether id is one of instances or under one of them.
+bool under_any(const DataModel& game, InstanceId id, const std::vector<InstanceId>& instances) {
+    for (InstanceId at = id; at != 0; at = game.parent(at)) {
+        if (std::find(instances.begin(), instances.end(), at) != instances.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+float ray_hit(b3ShapeId shape, b3Pos point, b3Vec3 normal, float fraction, uint64_t material, int, int,
+              void* context) {
+    auto* hits = static_cast<RayHits*>(context);
+    if (fraction == 0.f) {
+        return -1.f;
+    }
+    const InstanceId id = id_of(b3Body_GetUserData(b3Shape_GetBody(shape)));
+    if (under_any(*hits->game, id, hits->filter->instances) != hits->filter->include) {
+        return -1.f;
+    }
+    if (fraction < hits->closest) {
+        hits->closest = fraction;
+        hits->hit = true;
+        hits->instance = id;
+        hits->point = point;
+        hits->normal = normal;
+        hits->material = material;
+    }
+    return hits->closest;
+}
+
 }  // namespace
 
 struct PhysicsWorld::Impl {
@@ -503,6 +547,28 @@ struct PhysicsWorld::Impl {
         }
         sync(game);
         simulate(game, dt);
+    }
+
+    std::optional<RayHit> raycast(DataModel& game, Vec3 origin, Vec3 direction, const RayFilter& filter) {
+        const float length =
+            std::sqrt(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
+        if (!(length > 0.f) || !std::isfinite(length)) {
+            return std::nullopt;
+        }
+        sync(game);
+        RayHits hits;
+        hits.game = &game;
+        hits.filter = &filter;
+        b3World_CastRay(world, to_b3(origin), to_b3(direction), b3DefaultQueryFilter(), ray_hit, &hits);
+        if (!hits.hit) {
+            return std::nullopt;
+        }
+        RayHit out;
+        out.instance = hits.instance;
+        out.position = from_b3(hits.point);
+        out.normal = from_b3(hits.normal);
+        out.distance = hits.closest * length;
+        return out;
     }
 
     // Workspace.Gravity into the world, when it changed.
@@ -1492,6 +1558,10 @@ void PhysicsWorld::sync(DataModel& game) { impl_->sync(game); }
 void PhysicsWorld::simulate(DataModel& game, double dt) { impl_->simulate(game, dt); }
 
 void PhysicsWorld::step(DataModel& game, double dt) { impl_->step(game, dt); }
+
+std::optional<RayHit> PhysicsWorld::raycast(DataModel& game, Vec3 origin, Vec3 direction, const RayFilter& filter) {
+    return impl_->raycast(game, origin, direction, filter);
+}
 
 std::size_t PhysicsWorld::body_count() const { return impl_->bodies.size(); }
 

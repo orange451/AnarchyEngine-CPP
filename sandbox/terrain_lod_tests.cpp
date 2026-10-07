@@ -1133,3 +1133,80 @@ TEST_CASE("RS6 a fully-collapsed simplification yields a null mesh, same as an e
     REQUIRE(result.border_edges.empty());
     REQUIRE(result.surface_index_count == 0);
 }
+
+TEST_CASE("RS7 on a clay mound half-buried in a grass slab, every level-1 triangle draws its centroid's material "
+          "and every skirt stays inside the surface",
+          "[terrain][lod]") {
+    // As scene-render-check's "two materials" snapshot shot: a grass slab
+    // whose top is y = 0 (the y = -1 / y = 0 node boundary) and a clay mound
+    // sunk into it. terrain.frag reads the material from the provoking
+    // (last) vertex of each triangle (flat in), so a long simplified floor
+    // triangle fanned from a clay-Id vertex at the mound's base drew wholly
+    // in clay: orange fins on the grass.
+    VoxelVolume volume;
+    Shape slab;
+    slab.kind = Shape::Kind::Block;
+    slab.frame = matrix4_translation(0.f, -2.f, 0.f);
+    slab.size = Vec3{96.f, 4.f, 96.f};
+    REQUIRE_FALSE(volume.fill(slab, 1));
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 10.f, 0.f, 8.f), 2));
+    REQUIRE_FALSE(volume.fill(ball_at(-14.f, 2.f, 10.f, 5.f), 2));
+    const auto voxels = std::make_shared<const ChunkMap>(volume.chunks());
+    const VoxelSampler sampler(*voxels, volume.voxel_size());
+
+    int checked = 0;
+    int long_boundary_triangles = 0;
+    for (int level = 1; level <= 2; ++level) {
+        for (int x = -1; x <= 0; ++x) {
+            for (int y = -1; y <= 0; ++y) {
+                for (int z = -1; z <= 0; ++z) {
+                    const NodeKey key{level, x, y, z};
+                    const LodResult result = build_lod_node(volume, key, voxels);
+                    if (!result.mesh) {
+                        continue;
+                    }
+                    const anarchy::amesh::Data& mesh = *result.mesh;
+                    for (std::size_t t = 0; t < result.surface_index_count; t += 3) {
+                        const anarchy::amesh::Vertex* v[3] = {&mesh.vertices[mesh.indices[t]],
+                                                              &mesh.vertices[mesh.indices[t + 1]],
+                                                              &mesh.vertices[mesh.indices[t + 2]]};
+                        const Vec3 centroid{(v[0]->p[0] + v[1]->p[0] + v[2]->p[0]) / 3.f,
+                                            (v[0]->p[1] + v[1]->p[1] + v[2]->p[1]) / 3.f,
+                                            (v[0]->p[2] + v[1]->p[2] + v[2]->p[2]) / 3.f};
+                        const std::uint8_t truth = sampler.id(centroid);
+                        const bool any = v[0]->rgba[0] == truth || v[1]->rgba[0] == truth || v[2]->rgba[0] == truth;
+                        if (!any) {
+                            continue;   // no vertex carries it: nothing a triangle's own Ids can do
+                        }
+                        if (v[0]->rgba[0] != v[1]->rgba[0] || v[1]->rgba[0] != v[2]->rgba[0]) {
+                            float longest = 0.f;
+                            for (int k = 0; k < 3; ++k) {
+                                const Vec3 a{v[k]->p[0], v[k]->p[1], v[k]->p[2]};
+                                const Vec3 b{v[(k + 1) % 3]->p[0], v[(k + 1) % 3]->p[1], v[(k + 1) % 3]->p[2]};
+                                longest = std::max(longest, std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) +
+                                                                      (a.z - b.z) * (a.z - b.z)));
+                            }
+                            if (longest > 2.f) {
+                                ++long_boundary_triangles;
+                            }
+                        }
+                        INFO("node L" << level << " (" << x << "," << y << "," << z << ") triangle " << t / 3
+                                      << " centroid (" << centroid.x << ", " << centroid.y << ", " << centroid.z
+                                      << ") Ids " << int(v[0]->rgba[0]) << " " << int(v[1]->rgba[0]) << " "
+                                      << int(v[2]->rgba[0]) << ", the field's " << int(truth));
+                        REQUIRE(v[2]->rgba[0] == truth);
+                        ++checked;
+                    }
+                    // Skirts fold into the solid: no skirt vertex out in the air.
+                    for (std::size_t i = original_vertex_count(result); i < mesh.vertices.size(); ++i) {
+                        const anarchy::amesh::Vertex& s = mesh.vertices[i];
+                        INFO("skirt vertex (" << s.p[0] << ", " << s.p[1] << ", " << s.p[2] << ")");
+                        REQUIRE(sampler.distance(Vec3{s.p[0], s.p[1], s.p[2]}) <= 0.05f);
+                    }
+                }
+            }
+        }
+    }
+    REQUIRE(checked > 0);
+    REQUIRE(long_boundary_triangles > 0);   // the scene does make mixed-Id triangles over 2 studs long
+}

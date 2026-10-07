@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace engine_core::terrain {
 namespace {
@@ -77,8 +78,11 @@ bool quick_reject(const MeshInput& input) {
 // re-deriving which neighbor and which cell each sample belongs to.
 void fill_samples(const MeshInput& input, std::vector<float>& distances, std::vector<std::uint8_t>& ids) {
     const std::size_t total = static_cast<std::size_t>(kSamplesPerAxis) * kSamplesPerAxis * kSamplesPerAxis;
-    distances.assign(total, 0.f);
-    ids.assign(total, 0);
+    // resize, not assign: every element below is unconditionally overwritten
+    // (there is no "leave as default" case), so there is no need to also
+    // pay to fill newly-grown elements with 0.f/0 first.
+    distances.resize(total);
+    ids.resize(total);
     const float voxel_size = input.voxel_size;
     for (int k = kSampleMin; k <= kSampleMax; ++k) {
         const Local lk = locate(k);
@@ -104,15 +108,18 @@ float sample_distance(const std::vector<float>& distances, int i, int j, int k) 
     return distances[sample_index(i, j, k)];
 }
 
-// The distance field, trilinearly interpolated between samples, at an
-// arbitrary point in chunk-local sample space.
-float trilinear(const std::vector<float>& distances, float x, float y, float z) {
-    const int ix = static_cast<int>(std::floor(x));
-    const int iy = static_cast<int>(std::floor(y));
-    const int iz = static_cast<int>(std::floor(z));
-    const float fx = x - static_cast<float>(ix);
-    const float fy = y - static_cast<float>(iy);
-    const float fz = z - static_cast<float>(iz);
+// The distance field, trilinearly interpolated between samples, at the point
+// (local sample ix,iy,iz) + (fx,fy,fz) (each fraction in [0,1]). Taking the
+// integer cell and the fraction as separate arguments -- instead of a single
+// combined float coordinate -- means two chunks meshing the same physical
+// point with the same fraction (as build_vertices guarantees: fx/fy/fz come
+// straight from the edge-crossing average, never combined with a
+// chunk-local index first) get bit-identical fx/fy/fz here, regardless of
+// how large ix is in either chunk's local frame. Combining first and taking
+// floor()/subtracting back out would round fx/fy/fz differently depending on
+// ix's magnitude, which is exactly what made two chunks' shared boundary
+// vertices (and their normals) disagree.
+float trilinear(const std::vector<float>& distances, int ix, int iy, int iz, float fx, float fy, float fz) {
     const float c000 = sample_distance(distances, ix, iy, iz);
     const float c100 = sample_distance(distances, ix + 1, iy, iz);
     const float c010 = sample_distance(distances, ix, iy + 1, iz);
@@ -131,11 +138,14 @@ float trilinear(const std::vector<float>& distances, float x, float y, float z) 
 }
 
 // The normalized central-difference gradient of the trilinearly interpolated
-// field, at a point in chunk-local sample space. Points from solid to air.
-Vec3 gradient(const std::vector<float>& distances, float x, float y, float z) {
-    const float dx = trilinear(distances, x + 1.f, y, z) - trilinear(distances, x - 1.f, y, z);
-    const float dy = trilinear(distances, x, y + 1.f, z) - trilinear(distances, x, y - 1.f, z);
-    const float dz = trilinear(distances, x, y, z + 1.f) - trilinear(distances, x, y, z - 1.f);
+// field, at (local sample ix,iy,iz) + (fx,fy,fz). Points from solid to air.
+// Shifting ix/iy/iz by a whole sample (rather than adding 1 to a combined
+// float coordinate) keeps the fraction bit-identical to the one used for the
+// vertex position, for the same reason given on trilinear() above.
+Vec3 gradient(const std::vector<float>& distances, int ix, int iy, int iz, float fx, float fy, float fz) {
+    const float dx = trilinear(distances, ix + 1, iy, iz, fx, fy, fz) - trilinear(distances, ix - 1, iy, iz, fx, fy, fz);
+    const float dy = trilinear(distances, ix, iy + 1, iz, fx, fy, fz) - trilinear(distances, ix, iy - 1, iz, fx, fy, fz);
+    const float dz = trilinear(distances, ix, iy, iz + 1, fx, fy, fz) - trilinear(distances, ix, iy, iz - 1, fx, fy, fz);
     const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
     if (!(length > 0.f)) {
         return Vec3{0.f, 0.f, 1.f};
@@ -167,9 +177,12 @@ float distance_squared(Vec3 a, Vec3 b) {
 void build_vertices(const std::vector<float>& distances, const std::vector<std::uint8_t>& ids, const MeshInput& input,
                      anarchy::amesh::Data& render, std::vector<Vec3>& positions, std::vector<std::uint32_t>& vtable) {
     const float voxel_size = input.voxel_size;
-    const float abs_x = static_cast<float>(input.coord.x * kChunkSize);
-    const float abs_y = static_cast<float>(input.coord.y * kChunkSize);
-    const float abs_z = static_cast<float>(input.coord.z * kChunkSize);
+    // Chunk-absolute cell coordinates, as integers: computing these (exact,
+    // no rounding) before any float arithmetic is what lets two chunks that
+    // share a boundary cell agree on its absolute index bit-for-bit.
+    const int base_x = input.coord.x * kChunkSize;
+    const int base_y = input.coord.y * kChunkSize;
+    const int base_z = input.coord.z * kChunkSize;
 
     for (int k = kCellMin; k <= kCellMax; ++k) {
         for (int j = kCellMin; j <= kCellMax; ++j) {
@@ -205,9 +218,13 @@ void build_vertices(const std::vector<float>& distances, const std::vector<std::
                 if (count == 0) {
                     continue;  // unreachable for a cube, but never divide by zero
                 }
-                const float px = static_cast<float>(i) + sum_x / static_cast<float>(count);
-                const float py = static_cast<float>(j) + sum_y / static_cast<float>(count);
-                const float pz = static_cast<float>(k) + sum_z / static_cast<float>(count);
+                // The cell-local fraction, from the edge-crossing average
+                // alone -- never combined with the (chunk-sized) cell index
+                // i/j/k. Same corner distances in, same fx/fy/fz out,
+                // regardless of which chunk's local i/j/k got us here.
+                const float fx = sum_x / static_cast<float>(count);
+                const float fy = sum_y / static_cast<float>(count);
+                const float fz = sum_z / static_cast<float>(count);
 
                 int lowest = 0;
                 for (int c = 1; c < 8; ++c) {
@@ -216,12 +233,20 @@ void build_vertices(const std::vector<float>& distances, const std::vector<std::
                     }
                 }
                 const std::uint8_t id = ids[sample_index(i + kCorner[lowest][0], j + kCorner[lowest][1], k + kCorner[lowest][2])];
-                const Vec3 normal = gradient(distances, px, py, pz);
+                const Vec3 normal = gradient(distances, i, j, k, fx, fy, fz);
+
+                // Absolute integer cell + fraction, combined in one float
+                // addition: for the same physical cell this is the same
+                // (ax, fx) pair in every chunk that touches it, so the
+                // result is bit-identical no matter which chunk computed it.
+                const int ax = base_x + i;
+                const int ay = base_y + j;
+                const int az = base_z + k;
 
                 anarchy::amesh::Vertex vertex;
-                vertex.p[0] = (abs_x + px) * voxel_size;
-                vertex.p[1] = (abs_y + py) * voxel_size;
-                vertex.p[2] = (abs_z + pz) * voxel_size;
+                vertex.p[0] = (static_cast<float>(ax) + fx) * voxel_size;
+                vertex.p[1] = (static_cast<float>(ay) + fy) * voxel_size;
+                vertex.p[2] = (static_cast<float>(az) + fz) * voxel_size;
                 vertex.n[0] = normal.x;
                 vertex.n[1] = normal.y;
                 vertex.n[2] = normal.z;
@@ -326,8 +351,20 @@ ChunkMesh surface_nets(const MeshInput& input) {
         return mesh;
     }
 
-    // Reused per calling thread, so back-to-back chunks (the mesher pool's
-    // normal case) pay no repeated malloc/free for these scratch buffers.
+    // Reused per calling thread: every call fully rewrites these buffers
+    // before reading them back (fill_samples overwrites every sample below;
+    // vtable is reset to kNoVertex on the next line), so nothing from a
+    // previous call ever leaks into this one -- that's what makes sharing
+    // them across calls safe. thread_local means each thread that calls
+    // surface_nets gets its own copy (no two threads ever touch the same
+    // one) and keeps it allocated -- about 377 KB (36^3 floats + 36^3 bytes
+    // + 33^3 uint32s) -- until that thread exits, instead of paying a
+    // malloc/free pair per chunk when the mesher pool meshes many chunks
+    // back-to-back on one thread. Because the buffers are shared per thread
+    // across calls, surface_nets must never re-enter itself on the same
+    // thread (directly, or indirectly via some callback invoked during its
+    // own call) -- a nested call would clobber the outer call's
+    // in-progress buffers out from under it.
     thread_local std::vector<float> distances;
     thread_local std::vector<std::uint8_t> ids;
     thread_local std::vector<std::uint32_t> vtable;

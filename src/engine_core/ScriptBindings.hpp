@@ -333,6 +333,13 @@ struct ScriptBindings {
     static int terrain_add_material(lua_State* state);
     static int terrain_read_voxels(lua_State* state);
     static int terrain_world_to_cell(lua_State* state);
+    static int terrain_get_materials(lua_State* state);
+    static int terrain_get_material_by_id(lua_State* state);
+    static int terrain_get_materials_for(lua_State* state);
+    static int terrain_remove_material(lua_State* state);
+    static int terrain_write_voxels(lua_State* state);
+    static int terrain_cell_to_world(lua_State* state);
+    static int terrain_clear(lua_State* state);
     static SoundEmitter& emitter_self(lua_State* state);
     static int emitter_play(lua_State* state);
     static int emitter_stop(lua_State* state);

@@ -1,4 +1,4 @@
-// Terrain's Lua methods: shape edits, materials, and raw voxel reads. Every
+// Terrain's Lua methods: shape edits, materials, and raw voxel access. Every
 // binding runs on SimulationThread, as every script does; every voxel edit
 // goes through Terrain::edit_volume, never volume() directly, so the place is
 // marked unsaved and the Terrain gets its DataPath.
@@ -167,6 +167,28 @@ void push_grid(lua_State* state, const std::vector<T>& values, int nx, int ny, i
         }
         lua_rawseti(state, -2, i + 1);
     }
+}
+
+constexpr const char* kShapeMismatch = "distances and materials must have the same shape";
+
+// Pushes entries as a list, in order; push puts one instance on the stack.
+template <typename Push>
+void push_materials(lua_State* state, const std::vector<TerrainMaterial*>& entries, Push push) {
+    lua_createtable(state, static_cast<int>(entries.size()), 0);
+    int index = 1;
+    for (const TerrainMaterial* entry : entries) {
+        push(entry->id());
+        lua_rawseti(state, -2, index);
+        ++index;
+    }
+}
+
+// The length of the WriteVoxels table at index; raises unless it is a table.
+int table_length(lua_State* state, int index) {
+    if (!lua_istable(state, index)) {
+        luaL_error(state, "distances and materials must be tables of tables of tables of numbers");
+    }
+    return lua_objlen(state, index);
 }
 
 }  // namespace
@@ -383,6 +405,181 @@ int ScriptBindings::terrain_world_to_cell(lua_State* state) {
     });
 }
 
+// GetMaterials() -> {TerrainMaterial}, ordered by Id.
+int ScriptBindings::terrain_get_materials(lua_State* state) {
+    return lua_guard(state, [&] {
+        const Terrain& terrain = terrain_self(state);
+        ScriptRuntime* runtime = runtime_from(state);
+        push_materials(state, terrain.materials(), [&](InstanceId id) { runtime->push_instance(state, id); });
+        return 1;
+    });
+}
+
+// GetMaterialById(id) -> TerrainMaterial?: nil unless id is a whole number
+// from 1 to 255 that a TerrainMaterial of this Terrain holds.
+int ScriptBindings::terrain_get_material_by_id(lua_State* state) {
+    return lua_guard(state, [&] {
+        const Terrain& terrain = terrain_self(state);
+        const double id = luaL_checknumber(state, 2);
+        TerrainMaterial* entry = nullptr;
+        if (std::floor(id) == id && id >= 1 && id <= TerrainMaterial::kMaxId) {
+            entry = terrain.material_by_id(static_cast<int>(id));
+        }
+        if (entry == nullptr) {
+            lua_pushnil(state);
+        } else {
+            runtime_from(state)->push_instance(state, entry->id());
+        }
+        return 1;
+    });
+}
+
+// GetMaterialsFor(material) -> {TerrainMaterial}: those backed by material,
+// ordered by Id.
+int ScriptBindings::terrain_get_materials_for(lua_State* state) {
+    return lua_guard(state, [&] {
+        const Terrain& terrain = terrain_self(state);
+        const DataModel* material = terrain_instance_arg(state, 2);
+        if (material == nullptr || !lua_class_inherits(material->class_name(), "Material")) {
+            luaL_error(state, "material must be a Material");
+        }
+        ScriptRuntime* runtime = runtime_from(state);
+        push_materials(state, terrain.materials_for(material->id()),
+                       [&](InstanceId id) { runtime->push_instance(state, id); });
+        return 1;
+    });
+}
+
+// RemoveMaterial(entry): entry:Destroy() for a TerrainMaterial of this Terrain.
+int ScriptBindings::terrain_remove_material(lua_State* state) {
+    return lua_guard(state, [&] {
+        const Terrain& terrain = terrain_self(state);
+        if (lua_isnoneornil(state, 2)) {
+            luaL_error(state, "RemoveMaterial needs a TerrainMaterial");
+        }
+        const auto* entry = dynamic_cast<const TerrainMaterial*>(terrain_instance_arg(state, 2));
+        if (entry == nullptr) {
+            luaL_error(state, "Pass a TerrainMaterial (see Terrain:GetMaterials)");
+        }
+        if (terrain.parent(entry->id()) != terrain.id()) {
+            luaL_error(state, "TerrainMaterial belongs to another Terrain");
+        }
+        ScriptRuntime* runtime = runtime_from(state);
+        const InstanceId id = entry->id();
+        if (const std::optional<std::string> error = runtime->game_->destroy_error(id)) {
+            luaL_error(state, "%s", error->c_str());
+        }
+        runtime->game_->destroy(id);
+        return 0;
+    });
+}
+
+// WriteVoxels(min, distances, materials): distances[i][j][k] and
+// materials[i][j][k] become cell min + (i - 1, j - 1, k - 1), as ReadVoxels
+// gives them. The box comes from the arrays' lengths, which must agree all
+// the way down; the cell count is checked before anything is allocated.
+int ScriptBindings::terrain_write_voxels(lua_State* state) {
+    return lua_guard(state, [&] {
+        Terrain& terrain = terrain_self(state);
+        const Vec3 corner = vector_arg(state, 2, "min");
+        const CellCoord min{cell_coord(state, corner.x), cell_coord(state, corner.y), cell_coord(state, corner.z)};
+        const int nx = table_length(state, 3);
+        if (table_length(state, 4) != nx) {
+            luaL_error(state, "%s", kShapeMismatch);
+        }
+        if (nx == 0) {
+            return 0;
+        }
+        // Inner lengths from the first row; every row is checked against them below.
+        lua_rawgeti(state, 3, 1);
+        const int ny = table_length(state, -1);
+        int nz = 0;
+        if (ny > 0) {
+            lua_rawgeti(state, -1, 1);
+            nz = table_length(state, -1);
+            lua_pop(state, 1);
+        }
+        lua_pop(state, 1);
+        // Each length fits an int, so nx * ny fits 64 bits, and once that is
+        // within the limit so does its product with nz.
+        const std::int64_t plane = static_cast<std::int64_t>(nx) * ny;
+        if (plane > VoxelVolume::kMaxCellsPerEdit || plane * nz > VoxelVolume::kMaxCellsPerEdit) {
+            luaL_error(state, "Terrain edit too large: split it into smaller calls");
+        }
+        const auto count = static_cast<std::size_t>(plane * nz);
+        std::vector<float> distances(count);
+        std::vector<std::uint8_t> materials(count);
+        for (int i = 0; i < nx; ++i) {
+            lua_rawgeti(state, 3, i + 1);
+            lua_rawgeti(state, 4, i + 1);
+            if (table_length(state, -2) != ny || table_length(state, -1) != ny) {
+                luaL_error(state, "%s", kShapeMismatch);
+            }
+            for (int j = 0; j < ny; ++j) {
+                lua_rawgeti(state, -2, j + 1);
+                lua_rawgeti(state, -2, j + 1);
+                if (table_length(state, -2) != nz || table_length(state, -1) != nz) {
+                    luaL_error(state, "%s", kShapeMismatch);
+                }
+                for (int k = 0; k < nz; ++k) {
+                    const std::size_t at =
+                        (static_cast<std::size_t>(k) * static_cast<std::size_t>(ny) + static_cast<std::size_t>(j)) *
+                            static_cast<std::size_t>(nx) +
+                        static_cast<std::size_t>(i);
+                    int is_number = 0;
+                    lua_rawgeti(state, -2, k + 1);
+                    const double distance = lua_tonumberx(state, -1, &is_number);
+                    if (is_number == 0 || !std::isfinite(distance)) {
+                        luaL_error(state, "distances must be finite numbers");
+                    }
+                    lua_pop(state, 1);
+                    lua_rawgeti(state, -1, k + 1);
+                    const double id = lua_tonumberx(state, -1, &is_number);
+                    if (is_number == 0 || std::floor(id) != id || id < 0 || id > 255) {
+                        luaL_error(state, "material Ids must be whole numbers from 0 to 255");
+                    }
+                    lua_pop(state, 1);
+                    distances[at] = static_cast<float>(distance);
+                    materials[at] = static_cast<std::uint8_t>(id);
+                }
+                lua_pop(state, 2);
+            }
+            lua_pop(state, 2);
+        }
+        if (count == 0) {
+            return 0;
+        }
+        const CellCoord max{min.x + nx - 1, min.y + ny - 1, min.z + nz - 1};
+        raise_if(state, terrain.edit_volume(
+                            [&](VoxelVolume& volume) { return volume.write(min, max, distances, materials); }));
+        return 0;
+    });
+}
+
+// CellToWorld(cell) -> Vector3: the world position a cell samples.
+int ScriptBindings::terrain_cell_to_world(lua_State* state) {
+    return lua_guard(state, [&] {
+        const Terrain& terrain = terrain_self(state);
+        const Vec3 cell = vector_arg(state, 2, "cell");
+        const float size = static_cast<float>(terrain.voxel_size());
+        const Vec3 world = matrix4_point(terrain.transform(), Vec3{cell.x * size, cell.y * size, cell.z * size});
+        lua_pushvector(state, world.x, world.y, world.z);
+        return 1;
+    });
+}
+
+// Clear(): removes every voxel; the TerrainMaterials stay.
+int ScriptBindings::terrain_clear(lua_State* state) {
+    return lua_guard(state, [&] {
+        Terrain& terrain = terrain_self(state);
+        raise_if(state, terrain.edit_volume([](VoxelVolume& volume) -> std::optional<std::string> {
+            volume.clear();
+            return std::nullopt;
+        }));
+        return 0;
+    });
+}
+
 ANARCHY_LUA_REGISTER(register_terrain_methods) {
     // Terrain.cpp declares the class and its properties.
     const LuaField methods[] = {
@@ -400,6 +597,16 @@ ANARCHY_LUA_REGISTER(register_terrain_methods) {
         lua_method("AddMaterial", "TerrainMaterial", reinterpret_cast<void*>(&ScriptBindings::terrain_add_material)),
         lua_method("ReadVoxels", "", reinterpret_cast<void*>(&ScriptBindings::terrain_read_voxels)),
         lua_method("WorldToCell", "Vector3", reinterpret_cast<void*>(&ScriptBindings::terrain_world_to_cell)),
+        lua_method("GetMaterials", "TerrainMaterial", reinterpret_cast<void*>(&ScriptBindings::terrain_get_materials),
+                   false, false, true),
+        lua_method("GetMaterialById", "TerrainMaterial",
+                   reinterpret_cast<void*>(&ScriptBindings::terrain_get_material_by_id)),
+        lua_method("GetMaterialsFor", "TerrainMaterial",
+                   reinterpret_cast<void*>(&ScriptBindings::terrain_get_materials_for), false, false, true),
+        lua_method("RemoveMaterial", "nil", reinterpret_cast<void*>(&ScriptBindings::terrain_remove_material)),
+        lua_method("WriteVoxels", "nil", reinterpret_cast<void*>(&ScriptBindings::terrain_write_voxels)),
+        lua_method("CellToWorld", "Vector3", reinterpret_cast<void*>(&ScriptBindings::terrain_cell_to_world)),
+        lua_method("Clear", "nil", reinterpret_cast<void*>(&ScriptBindings::terrain_clear)),
     };
     register_lua_class("Terrain", nullptr, methods, static_cast<int>(sizeof(methods) / sizeof(methods[0])));
 }

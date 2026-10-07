@@ -150,3 +150,69 @@ TEST_CASE("TL10 a box too large to count in cells raises and changes nothing", "
     REQUIRE(raised == 5);
     REQUIRE(has_line(out, "true\ttrue\n"));
 }
+
+TEST_CASE("TL7 material lookups", "[terrain][lua]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk(R"(
+        local t = Instance.new("Terrain", workspace)
+        local a, b = t:AddMaterial(nil), t:AddMaterial(nil)
+        print(#t:GetMaterials(), t:GetMaterialById(2) == b, t:GetMaterialById(9))
+        t:RemoveMaterial(a)
+        print(#t:GetMaterials(), t:AddMaterial(nil).Id)
+        print(pcall(function() b.Id = 7 end))
+        print(pcall(function() b.Parent = workspace end))
+    )");
+    rig.frames(1);
+    const auto out = rig.runtime.drain_output();
+    INFO(all_text(out));
+    REQUIRE(has_line(out, "2\ttrue\tnil\n"));
+    REQUIRE(has_line(out, "1\t1\n"));
+    REQUIRE(all_text(out).find("TerrainMaterial cannot be reparented") != std::string::npos);
+}
+
+TEST_CASE("TL8 WriteVoxels round-trips ReadVoxels exactly, unassigned Ids included", "[terrain][lua]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk(R"(
+        local t = Instance.new("Terrain", workspace)
+        local u = Instance.new("Terrain", workspace)
+        local lo, hi = Vector3.new(-3, -3, -3), Vector3.new(3, 3, 3)
+        local d, m = {}, {}
+        for x = 1, 7 do d[x], m[x] = {}, {}
+            for y = 1, 7 do d[x][y], m[x][y] = {}, {}
+                for z = 1, 7 do d[x][y][z] = (x + y + z) / 4 - 3; m[x][y][z] = 42 end end end
+        t:WriteVoxels(lo, d, m)
+        local v = t:ReadVoxels(lo, hi)
+        u:WriteVoxels(lo, v.Distances, v.Materials)
+        local w = u:ReadVoxels(lo, hi)
+        local same = true
+        for x = 1, 7 do for y = 1, 7 do for z = 1, 7 do
+            same = same and w.Distances[x][y][z] == v.Distances[x][y][z] and w.Materials[x][y][z] == v.Materials[x][y][z]
+        end end end
+        print(same, v.Materials[1][1][1])
+        print(select(2, pcall(function() t:WriteVoxels(lo, {{{0}}}, {{{1.5}}}) end)))
+        print(select(2, pcall(function() t:WriteVoxels(lo, {{{0}}}, {{{256}}}) end)))
+    )");
+    rig.frames(1);
+    const auto out = rig.runtime.drain_output();
+    const std::string text = all_text(out);
+    INFO(text);
+    REQUIRE(has_line(out, "true\t42\n"));
+    REQUIRE(text.find("material Ids must be whole numbers from 0 to 255") != std::string::npos);
+}
+
+TEST_CASE("TL9 CellToWorld inverts WorldToCell; Clear empties the Terrain but keeps materials", "[terrain][lua]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk(R"(
+        local t = Instance.new("Terrain", workspace)
+        t.Transform = Matrix4.new(5, 6, 7)
+        local m = t:AddMaterial(nil)
+        t:FillBall(Vector3.new(5, 6, 7), 3, m)
+        print(t:CellToWorld(t:WorldToCell(Vector3.new(8, 6, 7))) == Vector3.new(8, 6, 7))
+        t:Clear()
+        print(t:ReadVoxels(Vector3.new(), Vector3.new()).Distances[1][1][1] > 0, #t:GetMaterials())
+    )");
+    rig.frames(1);
+    const auto out = rig.runtime.drain_output();
+    REQUIRE(has_line(out, "true\n"));
+    REQUIRE(has_line(out, "true\t1\n"));
+}

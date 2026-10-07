@@ -1139,6 +1139,24 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "{Distances: {{{number}}}, Materials: {{{number}}}}", false, {P("min", "Vector3"), P("max", "Vector3")});
     add("Terrain", "WorldToCell", "The cell nearest a world position, as whole numbers.", "Vector3", false,
         {P("position", "Vector3")});
+    add("Terrain", "GetMaterials", "Every TerrainMaterial of this Terrain, ordered by Id.", "{TerrainMaterial}", false,
+        {});
+    add("Terrain", "GetMaterialById", "The TerrainMaterial with that Id, or nil.", "TerrainMaterial?", false,
+        {P("id", "number")});
+    add("Terrain", "GetMaterialsFor", "Every TerrainMaterial backed by material, ordered by Id.", "{TerrainMaterial}",
+        false, {P("material", "Material")});
+    add("Terrain", "RemoveMaterial",
+        "The same as entry:Destroy(). Cells on its Id keep it and draw as the default. Raises if entry belongs to "
+        "another Terrain.",
+        "nil", false, {P("entry", "TerrainMaterial")});
+    add("Terrain", "WriteVoxels",
+        "Writes cells as ReadVoxels gives them: distances[i][j][k] and materials[i][j][k] become cell min + (i - 1, "
+        "j - 1, k - 1). Both arrays must have the same shape, and Ids must be whole numbers from 0 to 255; an Id with "
+        "no TerrainMaterial draws as the default. Meshes and colliders follow a frame or two later.",
+        "nil", false, {P("min", "Vector3"), P("distances", "{{{number}}}"), P("materials", "{{{number}}}")});
+    add("Terrain", "CellToWorld", "The world position a cell samples; WorldToCell goes the other way.", "Vector3",
+        false, {P("cell", "Vector3")});
+    add("Terrain", "Clear", "Removes every voxel. The TerrainMaterials stay.", "nil", false, {});
     add("TerrainMaterial", "Id",
         "The voxel Id this entry names, from 1 to 255. Read-only: its Terrain picks the lowest one free when it is "
         "added.",

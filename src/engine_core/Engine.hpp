@@ -82,7 +82,8 @@ public:
     DataModel& datamodel() { return game_; }
     SnapshotPump& pump() { return pump_; }
     TaskScheduler& scheduler() { return scheduler_; }
-    // For Task 4 (physics colliders) and Task 5 (the snapshot pump).
+    // For PhysicsWorld's terrain bodies (set_terrain_world) and the snapshot
+    // pump's resolve_terrains.
     TerrainWorld& terrain_world() { return terrain_; }
     ScriptRuntime& scripts();
     ScriptAnalysis& analysis();

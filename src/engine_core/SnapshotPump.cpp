@@ -647,7 +647,9 @@ void SnapshotPump::resolve_billboards(DataModel& game) {
 }
 
 void SnapshotPump::resolve_terrains(DataModel& game) {
-    (void)game;  // TerrainWorld::update ran on SimulationThread before this call; nothing more to read here.
+    (void)game;  // Called from RenderThread's snapshot copy, under the DataModel write
+    // lock; views() is read under that same write lock that TerrainWorld::update also
+    // takes, so nothing more to read here.
     base_.terrains.clear();
     if (terrain_world_ == nullptr) {
         return;

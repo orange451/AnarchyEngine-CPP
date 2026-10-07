@@ -303,7 +303,7 @@ TEST_CASE("TM5 a result from a running job loses to a newer one queued while it 
     REQUIRE(results[1].revision == 2u);
     // TerrainWorld's own revision-filtering (accept_result, which keeps only
     // the result matching a chunk's current counter) is covered end to end
-    // by TW6 below, not re-simulated here.
+    // by TW7 below, not re-simulated here.
 }
 
 TEST_CASE("TM6 a job whose collider builder throws is dropped, not fatal", "[terrain]") {
@@ -502,7 +502,7 @@ TEST_CASE("TW4 a TerrainMaterial's Material changes the look, not the meshes", "
     settle(world, game);
     const auto chunks = world.views()[0].chunks;
     const std::uint64_t look = world.views()[0].look->revision;
-    // A red Material, under the Assets service, as plan 1a's tests do.
+    // A red Material, under the Materials service, as plan 1a's tests do.
     Material& red = add_material_asset(game, "Red");
     REQUIRE_FALSE(red.set_color(rgb(1.f, 0.f, 0.f)));
     LuaSlot material_slot;
@@ -893,6 +893,45 @@ TEST_CASE("TP4 a box resting on terrain stays up while its chunk is re-meshed", 
     REQUIRE(collider_revision(world, t.id(), under) != before);
     INFO(y_of(box.transform()));
     REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));
+}
+
+TEST_CASE("TP5 a Terrain's body survives a play then Stop round trip", "[terrain][physics]") {
+    using physics_rig::kStep;
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    REQUIRE_FALSE(t.volume().fill(slab(16.f, 8.f), 1));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.has_body(t.id()));
+    const std::size_t meshed = chunks_with_triangles(world);
+    REQUIRE(meshed >= 1u);
+    REQUIRE(rig.physics.shape_count(t.id()) == meshed);
+
+    rig.play();
+    for (int frame = 0; frame < 8; ++frame) {
+        world.update(rig.game);
+        for (int step = 0; step < 4; ++step) {
+            rig.physics.step(rig.game, kStep);
+        }
+    }
+
+    rig.game.stop_simulation();
+    // Mirrors the Engine's stopped tick (Engine.cpp's simulation_loop): terrain
+    // meshes before physics syncs, so a Terrain's shape and collider exist
+    // before physics_.sync looks for them, under the same DataModel write lock.
+    world.update(rig.game);
+    rig.physics.sync(rig.game);
+
+    REQUIRE(rig.physics.has_body(t.id()));
+    const std::size_t colliders = world.colliders(t.id())->size();
+    REQUIRE(rig.physics.shape_count(t.id()) == colliders);
+    const Vec3 origin{3.f, 10.f, 3.f};
+    const Vec3 down{0.f, -20.f, 0.f};
+    const auto hit = rig.physics.raycast(rig.game, origin, down, {});
+    REQUIRE(hit.has_value());
+    REQUIRE(hit->instance == t.id());
 }
 
 namespace {

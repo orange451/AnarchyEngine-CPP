@@ -320,9 +320,14 @@ void Engine::simulation_loop() {
                             DataModelLock lock(game_, DataModelLock::Write);
                             if (!game_.simulation_running()) {
                                 decomposer_.update(game_);
-                                physics_.sync(game_);
+                                // Terrain meshes before physics syncs, as the running tick
+                                // also orders it (see below): a Terrain's shape and collider
+                                // need to exist before physics_.sync looks for them, or a
+                                // Terrain created this tick still shows up in TerrainWorld's
+                                // views with no collider built yet, for one tick.
                                 terrain_.update(game_);
                                 report_terrain_failures();
+                                physics_.sync(game_);
                             }
                         },
                         [&] { contract_count_.fetch_add(1); });

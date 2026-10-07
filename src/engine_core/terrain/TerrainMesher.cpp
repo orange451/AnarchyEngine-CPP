@@ -135,13 +135,27 @@ void TerrainMesher::worker_loop() {
         // Meshing (and the collider build) happen with no lock held: this is
         // the whole point of the pool, and surface_nets/build_collider_ only
         // touch this job's own immutable input.
-        ChunkMesh mesh = surface_nets(job.input);
+        ChunkMesh mesh;
         std::shared_ptr<void> collider;
-        if (build_collider_) collider = build_collider_(mesh);
+        bool ok = true;
+        try {
+            mesh = surface_nets(job.input);
+            if (build_collider_) collider = build_collider_(mesh);
+        } catch (...) {
+            // A throw must never cross back into worker_loop's caller (an
+            // uncaught exception on a non-main thread is std::terminate): a
+            // bad job is dropped instead. It produces no result -- the chunk
+            // keeps whatever mesh it had until a later edit queues a fresh
+            // job for the same coordinate -- but running_ is still
+            // decremented below, so the mesher never looks permanently busy.
+            ok = false;
+        }
         {
             std::lock_guard<std::mutex> lock(mutex_);
             --running_;
-            results_.push_back(MeshResult{job.terrain, job.coord, job.revision, std::move(mesh), std::move(collider)});
+            if (ok) {
+                results_.push_back(MeshResult{job.terrain, job.coord, job.revision, std::move(mesh), std::move(collider)});
+            }
         }
         cv_.notify_all();   // may have just made the mesher idle
     }

@@ -25,6 +25,7 @@ class Terrain : public PVInstance {
 public:
     Terrain(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);
     const char* class_name() const override { return "Terrain"; }
+    bool terrain() const override { return true; }
 
     Matrix4 transform() const override { return transform_; }
     // SimulationThread. Each returns why it refused the value, changing nothing.

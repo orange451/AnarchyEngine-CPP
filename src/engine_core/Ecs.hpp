@@ -35,6 +35,8 @@ struct InLighting {};
 struct InCore {};
 // A rigid body: its class's physics_body() is true (PhysicsObject).
 struct PhysicsBody {};
+// A Terrain: its class's terrain() is true.
+struct TerrainTag {};
 // Plays audio: its class's sound_source() is true (SoundEmitter).
 struct SoundSource {};
 // Draws and takes handle drags: its class's dragger() is true (Dragger).
@@ -60,6 +62,7 @@ struct EcsIds {
     ecs_id_t in_core = 0;
     ecs_id_t steps = 0;
     ecs_id_t physics_body = 0;
+    ecs_id_t terrain = 0;
     ecs_id_t sound_source = 0;
     ecs_id_t dragger = 0;
     ecs_id_t billboard = 0;

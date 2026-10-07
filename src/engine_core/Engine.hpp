@@ -9,6 +9,7 @@
 #include "PhysicsWorld.hpp"
 #include "SnapshotPump.hpp"
 #include "TaskScheduler.hpp"
+#include "TerrainWorld.hpp"
 
 #include <memory>
 
@@ -81,6 +82,8 @@ public:
     DataModel& datamodel() { return game_; }
     SnapshotPump& pump() { return pump_; }
     TaskScheduler& scheduler() { return scheduler_; }
+    // For Task 4 (physics colliders) and Task 5 (the snapshot pump).
+    TerrainWorld& terrain_world() { return terrain_; }
     ScriptRuntime& scripts();
     ScriptAnalysis& analysis();
     const ScriptAnalysis& analysis() const;
@@ -130,6 +133,9 @@ private:
     PhysicsWorld physics_;
     // Splits Custom PhysicsObjects' Meshes into convex pieces while stopped.
     ConvexDecomposer decomposer_;
+    // Meshes every Terrain in Workspace, playing or stopped. {} is the
+    // collider builder until Task 4 wires PhysicsWorld::build_terrain_collider in.
+    TerrainWorld terrain_;
     // SoundEmitter voices, stepped after the scripts each frame while the place plays.
     AudioWorld audio_;
     IRenderer* renderer_ = nullptr;

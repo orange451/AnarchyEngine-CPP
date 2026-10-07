@@ -78,6 +78,13 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                            .with<ecs::InWorkspace>()
                            .cached()
                            .build();
+    world.terrain_query = world.ecs.query_builder<>()
+                              .with<ecs::Instance>()
+                              .in()
+                              .with<ecs::TerrainTag>()
+                              .with<ecs::InWorkspace>()
+                              .cached()
+                              .build();
     world.source_query = world.ecs.query_builder<>()
                              .with<ecs::Instance>()
                              .in()
@@ -568,6 +575,9 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
     if (object->physics_body()) {
         ecs_add_id(ecs_world(), world.slots[index].entity, world.ecs_ids.physics_body);
     }
+    if (object->terrain()) {
+        ecs_add_id(ecs_world(), world.slots[index].entity, world.ecs_ids.terrain);
+    }
     if (object->sound_source()) {
         ecs_add_id(ecs_world(), world.slots[index].entity, world.ecs_ids.sound_source);
     }
@@ -911,6 +921,17 @@ void DataModel::integrate_simulated(double dt) {
 void DataModel::physics_bodies(std::vector<InstanceId>& out) const {
     out.clear();
     ecs_iter_t it = ecs_query_iter(ecs_world(), state_->body_query.c_ptr());
+    while (ecs_query_next(&it)) {
+        const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
+        for (std::int32_t i = 0; i < it.count; ++i) {
+            out.push_back(owners[i].id);
+        }
+    }
+}
+
+void DataModel::terrains(std::vector<InstanceId>& out) const {
+    out.clear();
+    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->terrain_query.c_ptr());
     while (ecs_query_next(&it)) {
         const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
         for (std::int32_t i = 0; i < it.count; ++i) {

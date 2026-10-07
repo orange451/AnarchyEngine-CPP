@@ -187,6 +187,9 @@ public:
     // True for a class the physics world simulates while it is in Workspace
     // (PhysicsObject). Read once, when its entity is issued.
     virtual bool physics_body() const { return false; }
+    // True for a class TerrainWorld meshes while it is in Workspace (Terrain).
+    // Read once, when its entity is issued.
+    virtual bool terrain() const { return false; }
     // True for a class the audio world plays while it is under game
     // (SoundEmitter). Read once, when its entity is issued.
     virtual bool sound_source() const { return false; }
@@ -423,6 +426,9 @@ public:
     // The physics bodies in Workspace (physics_body()), in no set order, into
     // out, which is cleared first.
     void physics_bodies(std::vector<InstanceId>& out) const;
+    // The Terrains in Workspace (terrain()), in no set order, into out, which
+    // is cleared first.
+    void terrains(std::vector<InstanceId>& out) const;
     // The audio sources under game (sound_source()), in no set order, into
     // out, which is cleared first.
     void sound_sources(std::vector<InstanceId>& out) const;

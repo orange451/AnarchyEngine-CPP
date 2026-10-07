@@ -104,6 +104,8 @@ struct DataModel::State {
     // Rigid bodies the physics world simulates: Instance (in), with
     // PhysicsBody and InWorkspace.
     flecs::query<> body_query;
+    // Terrains TerrainWorld meshes: Instance (in), with TerrainTag and InWorkspace.
+    flecs::query<> terrain_query;
     // Audio sources the audio world plays: Instance (in), with SoundSource
     // and InGame.
     flecs::query<> source_query;

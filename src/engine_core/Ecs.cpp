@@ -20,6 +20,7 @@ EcsIds register_ecs(flecs::world& world) {
     ids.in_core = world.component<ecs::InCore>().id();
     ids.steps = world.component<ecs::Steps>().id();
     ids.physics_body = world.component<ecs::PhysicsBody>().id();
+    ids.terrain = world.component<ecs::TerrainTag>().id();
     ids.sound_source = world.component<ecs::SoundSource>().id();
     ids.dragger = world.component<ecs::DraggerTag>().id();
     ids.billboard = world.component<ecs::BillboardTag>().id();

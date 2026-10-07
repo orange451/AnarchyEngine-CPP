@@ -303,6 +303,7 @@ void Engine::simulation_loop() {
                             if (!game_.simulation_running()) {
                                 decomposer_.update(game_);
                                 physics_.sync(game_);
+                                terrain_.update(game_);
                             }
                         },
                         [&] { contract_count_.fetch_add(1); });
@@ -387,6 +388,13 @@ void Engine::simulation_loop() {
                     // after the phase that queued them and before Prepare can copy.
                     PROFILE_SCOPE("Events", profiler::Group::Engine);
                     game_.events().drain();
+                }
+                {
+                    // Once per frame, not per substep: the camera for job
+                    // ordering only needs to move once a frame, and meshing
+                    // is already off this thread (TerrainMesher's workers).
+                    PROFILE_SCOPE("Terrain", profiler::Group::Engine);
+                    terrain_.update(game_);
                 }
                 accumulator += wall;
                 constexpr int kMaxSubsteps = 32;

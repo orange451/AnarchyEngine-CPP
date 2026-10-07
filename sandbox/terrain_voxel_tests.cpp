@@ -278,6 +278,42 @@ TEST_CASE("V11 ids_used tracks exactly through Id reassignment and removal", "[t
     REQUIRE(volume.chunks().empty());
 }
 
+TEST_CASE("VR1 replace_everywhere changes one Id across far-apart chunks", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 5.f), 3));
+    REQUIRE_FALSE(volume.fill(ball_at(5000.f, 0.f, 0.f, 5.f), 3));
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 900.f, 0.f, 5.f), 4));
+    volume.replace_everywhere(3, 7);
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).material == 7);
+    REQUIRE(volume.cell(CellCoord{5000, 0, 0}).material == 7);
+    REQUIRE(volume.cell(CellCoord{0, 900, 0}).material == 4);
+    REQUIRE((volume.ids_used()[0] >> 3 & 1u) == 0u);
+    REQUIRE((volume.ids_used()[0] >> 7 & 1u) == 1u);
+}
+
+TEST_CASE("VR2 replace_everywhere leaves chunks without the Id untouched", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 5.f), 3));
+    REQUIRE_FALSE(volume.fill(ball_at(300.f, 0.f, 0.f, 5.f), 4));
+    const ChunkMap before = volume.chunks();
+    REQUIRE(volume.replace_everywhere(3, 7) > 0u);
+    for (const auto& [coord, chunk] : before) {
+        if (coord.x >= 8) REQUIRE(volume.chunks().at(coord) == chunk);   // the far ball's chunks: same pointers
+    }
+    REQUIRE(volume.replace_everywhere(9, 1) == 0u);
+}
+
+TEST_CASE("VR3 revision moves with every change, and ids_used follows it", "[terrain]") {
+    VoxelVolume volume;
+    const std::uint64_t r0 = volume.revision();
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 5.f), 2));
+    REQUIRE(volume.revision() != r0);
+    REQUIRE((volume.ids_used()[0] >> 2 & 1u) == 1u);
+    const std::uint64_t r1 = volume.revision();
+    REQUIRE_FALSE(volume.fill(ball_at(1000.f, 0.f, 0.f, 0.f), 2));   // a no-op edit
+    REQUIRE(volume.revision() == r1);
+}
+
 TEST_CASE("AV1 an .avox round-trips every chunk", "[terrain]") {
     VoxelVolume volume;
     REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 9.f), 2));

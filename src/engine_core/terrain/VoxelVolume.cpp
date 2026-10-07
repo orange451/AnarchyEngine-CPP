@@ -92,6 +92,9 @@ template <typename Change>
 void VoxelVolume::edit(CellCoord min, CellCoord max, Change change) {
     const ChunkCoord c0 = chunk_of(min.x, min.y, min.z);
     const ChunkCoord c1 = chunk_of(max.x, max.y, max.z);
+    // Set only when some chunk actually changes, so a no-op edit (nothing in
+    // range, or every cell already at its new value) leaves revision_ alone.
+    bool changed = false;
     for (int cz = c0.z; cz <= c1.z; ++cz) {
         for (int cy = c0.y; cy <= c1.y; ++cy) {
             for (int cx = c0.x; cx <= c1.x; ++cx) {
@@ -171,8 +174,12 @@ void VoxelVolume::edit(CellCoord min, CellCoord max, Change change) {
                     chunks_[coord] = std::move(copy);
                 }
                 mark_dirty(coord);
+                changed = true;
             }
         }
+    }
+    if (changed) {
+        ++revision_;
     }
 }
 
@@ -332,30 +339,71 @@ std::optional<std::string> VoxelVolume::write(CellCoord min, CellCoord max, cons
 }
 
 void VoxelVolume::clear() {
+    if (chunks_.empty()) {
+        return;
+    }
     for (const auto& [coord, chunk] : chunks_) {
         (void)chunk;
         mark_dirty(coord);
     }
     chunks_.clear();
+    ++revision_;
 }
 
 void VoxelVolume::set_chunks(ChunkMap chunks) {
+    bool changed = false;
     for (const auto& [coord, chunk] : chunks_) {
         const auto found = chunks.find(coord);
         if (found == chunks.end() || found->second != chunk) {
             mark_dirty(coord);
+            changed = true;
         }
     }
     for (const auto& [coord, chunk] : chunks) {
         (void)chunk;
         if (chunks_.find(coord) == chunks_.end()) {
             mark_dirty(coord);
+            changed = true;
         }
     }
     chunks_ = std::move(chunks);
+    if (changed) {
+        ++revision_;
+    }
+}
+
+std::size_t VoxelVolume::replace_everywhere(std::uint8_t from, std::uint8_t to) {
+    if (from == to) {
+        return 0;
+    }
+    std::size_t changed_chunks = 0;
+    for (auto& [coord, chunk] : chunks_) {
+        const std::array<std::uint64_t, 4>& used = chunk->ids_used();
+        if (((used[from >> 6] >> (from & 63)) & 1ull) == 0ull) {
+            continue;   // from isn't used anywhere in this chunk: leave it alone
+        }
+        std::shared_ptr<ChunkData> copy = chunk->clone_dense();
+        for (int i = 0; i < kChunkCells; ++i) {
+            const Cell before = copy->dense_at(i);
+            if (before.distance != kAirDistance && before.material == from) {
+                copy->set_dense_at(i, Cell{before.distance, to});
+            }
+        }
+        copy->finish();
+        chunk = std::move(copy);
+        mark_dirty(coord);
+        ++changed_chunks;
+    }
+    if (changed_chunks > 0) {
+        ++revision_;
+    }
+    return changed_chunks;
 }
 
 std::array<std::uint64_t, 4> VoxelVolume::ids_used() const {
+    if (ids_cache_valid_ && ids_cache_revision_ == revision_) {
+        return ids_cache_;
+    }
     std::array<std::uint64_t, 4> result{};
     for (const auto& [coord, chunk] : chunks_) {
         (void)coord;
@@ -364,6 +412,9 @@ std::array<std::uint64_t, 4> VoxelVolume::ids_used() const {
             result[i] |= used[i];
         }
     }
+    ids_cache_ = result;
+    ids_cache_revision_ = revision_;
+    ids_cache_valid_ = true;
     return result;
 }
 

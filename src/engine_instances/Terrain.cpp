@@ -360,6 +360,13 @@ std::optional<std::string> Terrain::edit_volume(
     return std::nullopt;
 }
 
+void Terrain::replace_material_everywhere(int from, int to) {
+    edit_volume([&](terrain::VoxelVolume& volume) -> std::optional<std::string> {
+        volume.replace_everywhere(static_cast<std::uint8_t>(from), static_cast<std::uint8_t>(to));
+        return std::nullopt;
+    });
+}
+
 void Terrain::refresh_creation() {
     // Known limitation: a creation committed in an earlier step keeps the
     // record it was made with, so undo then redo of it brings the Terrain

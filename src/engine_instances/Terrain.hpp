@@ -74,6 +74,9 @@ public:
     // edit's refusal.
     std::optional<std::string> edit_volume(
         const std::function<std::optional<std::string>(terrain::VoxelVolume&)>& edit);
+    // SimulationThread. replace_everywhere through edit_volume, so it marks
+    // the place unsaved like any other voxel edit.
+    void replace_material_everywhere(int from, int to);
 
     // SimulationThread. Writes the authored voxels to DataPath under root when
     // they changed since the last save or load, or the file is missing.

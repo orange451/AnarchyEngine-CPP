@@ -44,13 +44,51 @@ std::optional<std::string> TerrainMaterial::set_material_id(int value) {
     return std::nullopt;
 }
 
-void TerrainMaterial::clear_material_id() {
+void TerrainMaterial::load_material_id(int value) {
     require_thread(*this);
-    if (material_id_ == 0) {
+    if (const Terrain* terrain = terrain_parent()) {
+        // Already in a Terrain, as when changes are accepted from disk: no
+        // reparent follows, so the arrival rule runs here.
+        if (!settle_id(*terrain, value)) {
+            (void)set_material_id(value);
+        }
         return;
     }
+    if (value != 0) {
+        (void)set_material_id(value);
+        return;
+    }
+    if (material_id_ != 0) {
+        material_id_ = 0;
+        emit_property("Id");
+    }
+}
+
+const Terrain* TerrainMaterial::terrain_parent() const {
+    const InstanceId holder = parent(id());
+    return holder == kNoParent || holder == 0 ? nullptr : dynamic_cast<const Terrain*>(instance(holder));
+}
+
+bool TerrainMaterial::settle_id(const Terrain& terrain, int wanted) {
+    bool held = wanted == 0;
+    for (InstanceId child = first_child(terrain.id()); child != 0 && !held; child = next_sibling(child)) {
+        const auto* sibling = child == id() ? nullptr : dynamic_cast<const TerrainMaterial*>(instance(child));
+        held = sibling != nullptr && sibling->material_id() == wanted;
+    }
+    if (!held) {
+        return false;
+    }
+    // The one already there keeps the Id, so no voxel changes what it looks
+    // like. With all 255 taken, this one is left on 0 and draws nothing.
+    const int before = material_id_;
     material_id_ = 0;
-    emit_property("Id");
+    material_id_ = terrain.free_id();
+    if (material_id_ != before) {
+        // Not an undo step of its own: it can run inside an undo.
+        emit_property("Id");
+        note_unrecorded_edit(id());
+    }
+    return true;
 }
 
 LuaSlot TerrainMaterial::material() const { return instance_reference_slot(material_, "Material"); }
@@ -87,26 +125,9 @@ void TerrainMaterial::on_parent_changed(InstanceId previous, InstanceId next) {
     // SimulationThread, at the end of set_parent: load, paste, duplicate, and
     // undo of a delete all set the Id first and the parent second.
     const auto* terrain = next == kNoParent ? nullptr : dynamic_cast<const Terrain*>(instance(next));
-    if (terrain == nullptr) {
-        return;
+    if (terrain != nullptr) {
+        settle_id(*terrain, material_id_);
     }
-    bool clash = material_id_ == 0;
-    for (InstanceId child = first_child(next); child != 0 && !clash; child = next_sibling(child)) {
-        const auto* sibling = child == id() ? nullptr : dynamic_cast<const TerrainMaterial*>(instance(child));
-        clash = sibling != nullptr && sibling->material_id() == material_id_;
-    }
-    if (!clash) {
-        return;
-    }
-    // The one already there keeps the Id, so no voxel changes what it looks
-    // like. With all 255 taken, this one is left on 0 and draws nothing.
-    const int free = terrain->free_id();
-    if (free == material_id_) {
-        return;
-    }
-    material_id_ = free;
-    emit_property("Id");
-    note_unrecorded_edit(id());
 }
 
 namespace {
@@ -140,13 +161,10 @@ bool write_id(DataModel&, DataModel& object, LuaSlot& in) {
         in.error = id_refused();
         return false;
     }
-    // 0, the saved default, is unassigned: the entry takes the lowest free Id
-    // when it arrives in a Terrain.
-    if (in.number == 0.0) {
-        entry->clear_material_id();
-        return true;
-    }
-    return refuse(in, entry->set_material_id(static_cast<int>(in.number)));
+    // 0, the saved default, is unassigned; load_material_id applies the
+    // arrival rule if the entry is already in a Terrain.
+    entry->load_material_id(static_cast<int>(in.number));
+    return true;
 }
 
 bool read_material(DataModel&, DataModel& object, LuaSlot& out) {

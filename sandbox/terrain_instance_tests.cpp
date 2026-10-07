@@ -236,3 +236,57 @@ TEST_CASE("TM9 a mirrored Transform is refused as a scale", "[terrain]") {
     turned.m[10] = -1.f;
     REQUIRE_FALSE(terrain.set_transform(turned));
 }
+
+TEST_CASE("TM10 an Id written to a TerrainMaterial already in a Terrain never takes a held Id or 0", "[terrain]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::Terrain& terrain = add_terrain(game);
+    engine_core::TerrainMaterial* one = nullptr;
+    engine_core::TerrainMaterial* two = nullptr;
+    REQUIRE_FALSE(terrain.add_material(0, one));
+    REQUIRE_FALSE(terrain.add_material(0, two));
+    // What accepting changes from disk does: load_property on a live, parented entry.
+    std::string error;
+    REQUIRE(two->load_property("Id", engine_core::JsonValue::number(0), error));
+    REQUIRE(error.empty());
+    REQUIRE(two->material_id() != 0);
+    REQUIRE(two->material_id() == 2);   // its own Id is the lowest one no other entry holds
+    REQUIRE(terrain.materials().size() == 2u);
+    REQUIRE(two->load_property("Id", engine_core::JsonValue::number(1), error));
+    REQUIRE(error.empty());
+    REQUIRE(one->material_id() == 1);   // the holder keeps it
+    REQUIRE(two->material_id() == 2);
+    // A free Id is taken as written.
+    REQUIRE(two->load_property("Id", engine_core::JsonValue::number(7), error));
+    REQUIRE(two->material_id() == 7);
+    REQUIRE(terrain.free_id() == 2);
+    REQUIRE(two->load_property("Id", engine_core::JsonValue::number(0), error));
+    REQUIRE(two->material_id() == 2);
+}
+
+TEST_CASE("TM11 undo and redo of adding a TerrainMaterial", "[terrain]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::Terrain& terrain = add_terrain(game);
+    engine_core::TerrainMaterial* first = nullptr;
+    REQUIRE_FALSE(terrain.add_material(0, first));
+    begin_step(game, "Add Terrain Material");
+    engine_core::TerrainMaterial* added = nullptr;
+    REQUIRE_FALSE(terrain.add_material(0, added));
+    end_step(game);
+    const InstanceId added_id = added->id();
+    REQUIRE(added->material_id() == 2);
+    game.history().undo();
+    REQUIRE_FALSE(game.alive(added_id));
+    REQUIRE(terrain.materials().size() == 1u);
+    REQUIRE(first->material_id() == 1);
+    game.history().redo();
+    auto* back = dynamic_cast<engine_core::TerrainMaterial*>(game.instance(added_id));
+    REQUIRE(back != nullptr);
+    REQUIRE(game.parent(added_id) == terrain.id());
+    REQUIRE(back->material_id() == 2);
+    REQUIRE(first->material_id() == 1);
+    game.history().undo();
+    REQUIRE_FALSE(game.alive(added_id));
+    REQUIRE(terrain.materials().size() == 1u);
+}

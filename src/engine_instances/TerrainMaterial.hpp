@@ -8,6 +8,8 @@
 
 namespace engine_core {
 
+class Terrain;
+
 // One entry in a Terrain's material list: voxels whose Id is this one's draw
 // and collide as its Material. It lives only in a Terrain, has no row in the
 // Game Explorer, and keeps the Terrain it was first given; Terrain's
@@ -35,11 +37,13 @@ public:
     // SimulationThread. Load, paste, and Terrain::add_material only; scripts
     // read Id. Refuses anything but 1 to 255.
     std::optional<std::string> set_material_id(int value);
-    // SimulationThread. Load, Stop, and undo only, through the Id property's
-    // write: a saved Id of 0 means unassigned, so on_parent_changed gives it
-    // the lowest free Id when it arrives in a Terrain. Not an edit: it
-    // records nothing.
-    void clear_material_id();
+    // SimulationThread. The Id property's write: load, Stop, undo, paste, and
+    // accepting changes from disk. value is 0 to 255; 0 means unassigned.
+    // Outside a Terrain it is stored as it is (0 without recording), and
+    // on_parent_changed settles it on arrival. Inside one, the arrival rule
+    // applies at once: 0, or an Id another TerrainMaterial of that Terrain
+    // holds, takes the lowest free Id instead.
+    void load_material_id(int value);
 
     // The Material slot, as a script reads it.
     LuaSlot material() const;
@@ -56,6 +60,15 @@ protected:
     void on_parent_changed(InstanceId previous, InstanceId next) override;
 
 private:
+    // The Terrain this is a child of, or null.
+    const Terrain* terrain_parent() const;
+    // The arrival rule, shared by on_parent_changed and load_material_id:
+    // when wanted is 0 or another TerrainMaterial of terrain holds it, this
+    // one takes terrain's lowest free Id (its own counting as free) as an
+    // unrecorded edit, and it returns true. Otherwise it changes nothing and
+    // returns false.
+    bool settle_id(const Terrain& terrain, int wanted);
+
     int material_id_ = 0;
     InstanceRef material_;
 };

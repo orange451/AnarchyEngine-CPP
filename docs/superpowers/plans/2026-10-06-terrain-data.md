@@ -1406,7 +1406,8 @@ TEST_CASE("TP4 a pasted Terrain starts with its source's voxels and its own file
     // load each saved property the way build_copy does (load_property per member)
     // ... then:
     REQUIRE(id_at(copy, 0, 0, 0) == 2);
-    REQUIRE(copy.data_path().empty());
+    REQUIRE_FALSE(copy.data_path().empty());
+    REQUIRE(copy.data_path() != terrain.data_path());   // its own file, assigned at paste
 }
 ```
 
@@ -1457,12 +1458,13 @@ Paste: `write_data_path(value)`: if another live Terrain in this DataModel has `
 **Interfaces:**
 - Produces:
   - `virtual std::optional<std::string> save_resources(const std::filesystem::path& root);` on `DataModel` (default: nothing, `nullopt`). `Project::save` calls it on every authored instance before building the JSON, so a property it changes (DataPath) is saved in the same save. A returned reason fails the save the way a file write failure does.
-  - `Terrain::save_resources`: when its voxels changed since the last save (or the file is missing), writes `encode_avox` to `DataPath` (assigning `terrain/<sanitize_file_name(Name)>.<guid>.avox` first when empty, without an undo step: `emit_property("DataPath")` plus `note_unrecorded_edit(id())`), through the same `.partial`-then-rename writer `Mesh` uses (`write_file` in `AssetInstances.cpp:144`). During play it writes the voxels named by `authored_token_` and only when it already has a DataPath.
+  - **A Terrain gets its DataPath the moment it first has authored voxels**, never during a save: on its first voxel edit while stopped (in `edit_volume`), when paste gives it a source's voxels (Task 6's `write_data_path`), and when a damaged file is found at load (below). The path is `terrain/<sanitize_file_name(Name)>.<guid>.avox`, set without an undo step (`emit_property("DataPath")` plus `note_unrecorded_edit(id())`). So DataPath is in every snapshot like any other property, and Task 6's paste test (TP4) expects the copy's DataPath to be its own new path rather than empty.
+  - `Terrain::save_resources`: writes `encode_avox` of the authored voxels to `DataPath` when they changed since the last save or the file is missing, through the same `.partial`-then-rename writer `Mesh` uses (`write_file` in `AssetInstances.cpp:144`). It never assigns a path. Stopped, the authored voxels are the live ones. **During play it is no different from any other instance's save: it writes what the snapshot holds** — the voxels named by `authored_token_` (the token written at Play's capture) to the DataPath the snapshot holds — and never the runtime edits. A Terrain with no DataPath has no authored voxels and writes nothing.
   - Loading: writing `DataPath` (load, Stop restore, undo) with a path no live Terrain holds reads the file under `resources_root()` with `decode_avox`. A missing or damaged file leaves the Terrain empty and **prints one line to the Output window**:
     - `Terrain <Name>: its voxel file <DataPath> is missing, so it is empty`
     - `Terrain <Name>: its voxel file <DataPath> is damaged (<reason>), so it is empty`
 
-    A damaged file is never overwritten: the next save that has voxels to write gives the Terrain a new DataPath (the usual `terrain/<Name>.<guid>.avox`, with a numeric suffix if that name is the damaged file), so the user can still recover the old one by hand.
+    A damaged file is never overwritten: on finding it, the Terrain takes a new DataPath right away (the usual `terrain/<Name>.<guid>.avox`, with a numeric suffix if that name is the damaged file), so the user can still recover the old one by hand.
   - **Output for engine instances:** `void DataModel::set_warning_sink(std::function<void(const std::string&)> sink);` and `void DataModel::warn(const std::string& text) const;` (stored in `DataModelState`; `warn` does nothing without a sink). `Engine`'s constructor wires it the way it wires `physics_.set_warning_sink` (`Engine.cpp:58-66`): `game_.set_warning_sink([this](const std::string& text) { scripts_->append_output(ScriptRuntime::OutputKind::Print, text); });`. Tests set their own sink and collect the lines.
   - Every voxel edit while stopped calls `note_unrecorded_edit(id())` and sets `voxels_changed_`; the Lua methods (Tasks 8–9) go through `Terrain` methods that do this, never through `volume()` directly.
 
@@ -1485,8 +1487,15 @@ TEST_CASE("TS2 a missing or damaged .avox loads an empty Terrain and says so in 
     // REQUIRE the reopened Terrain's volume().chunks().empty(), exactly one line, and that it
     // contains "is missing, so it is empty".
     // Again with the file's middle byte flipped: one line containing "is damaged (".
-    // Edit the damaged Terrain and save: REQUIRE its DataPath changed and the damaged file is
+    // REQUIRE the damaged Terrain's DataPath changed at load; edit it and save: the damaged file is
     // still on disk, byte for byte.
+}
+
+TEST_CASE("TS4 saving during play writes the voxels from Play's snapshot, not the runtime edits", "[terrain]") {
+    // New project; add a Terrain and edit_volume a ball with Id 1 (it gets a DataPath now) — do NOT save.
+    // capture_place; start_simulation; edit_volume a second ball elsewhere with Id 2.
+    // Save while playing. stop_simulation. Reopen into a fresh Game:
+    // REQUIRE the first ball is there (Id 1) and the second is not.
 }
 
 TEST_CASE("TS3 voxel edits while stopped mark the place unsaved; edits during play do not", "[terrain]") {

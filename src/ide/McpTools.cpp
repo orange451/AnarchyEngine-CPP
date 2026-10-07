@@ -948,7 +948,7 @@ JsonValue CreateInstance(const ToolContext& context, const JsonValue& arguments)
     const std::string name = OptionalStringArg(arguments, "name");
     return RunEdit(context.engine, [class_name, parent, name](DataModel& world) {
         const InstanceId parent_id = Resolve(world, &parent, "parent");
-        if (!engine_core::lua_creatable_known(class_name.c_str())) {
+        if (!engine_core::lua_script_creatable(class_name.c_str())) {
             throw std::runtime_error("Instance.new cannot make \"" + class_name +
                                      "\". list_classes names the ones it can.");
         }

@@ -11,6 +11,18 @@ namespace {
 // int's range, so max - min + 1 on any axis cannot overflow either.
 constexpr double kMaxBoundCell = 1073741824.0;  // 2^30
 
+// dx * dy * dz, but any product past VoxelVolume::kMaxCellsPerEdit comes back
+// as kMaxCellsPerEdit + 1, so no product can overflow and wrap below the limit.
+// Each extent is positive and at most 2^32.
+std::int64_t saturated_count(std::int64_t dx, std::int64_t dy, std::int64_t dz) {
+    constexpr std::int64_t over = VoxelVolume::kMaxCellsPerEdit + 1;
+    if (dx >= over || dy >= over || dz >= over) {
+        return over;
+    }
+    const std::int64_t xy = dx * dy;
+    return xy >= over ? over : std::min(xy * dz, over);
+}
+
 // The cells an edit of shape visits: its bounds grown by the band, in cells.
 // Returns false, setting nothing, when a bound is not finite or lies past
 // kMaxBoundCell: such an edit is too large.
@@ -31,8 +43,8 @@ bool cell_box(const Shape& shape, float voxel_size, CellCoord& min, CellCoord& m
     }
     min = CellCoord{static_cast<int>(bounds[0]), static_cast<int>(bounds[1]), static_cast<int>(bounds[2])};
     max = CellCoord{static_cast<int>(bounds[3]), static_cast<int>(bounds[4]), static_cast<int>(bounds[5])};
-    count = (static_cast<std::int64_t>(max.x) - min.x + 1) * (static_cast<std::int64_t>(max.y) - min.y + 1) *
-            (static_cast<std::int64_t>(max.z) - min.z + 1);
+    count = saturated_count(static_cast<std::int64_t>(max.x) - min.x + 1, static_cast<std::int64_t>(max.y) - min.y + 1,
+                            static_cast<std::int64_t>(max.z) - min.z + 1);
     return true;
 }
 
@@ -49,7 +61,7 @@ bool box_count(CellCoord min, CellCoord max, std::int64_t& count) {
     const std::int64_t dx = static_cast<std::int64_t>(max.x) - static_cast<std::int64_t>(min.x) + 1;
     const std::int64_t dy = static_cast<std::int64_t>(max.y) - static_cast<std::int64_t>(min.y) + 1;
     const std::int64_t dz = static_cast<std::int64_t>(max.z) - static_cast<std::int64_t>(min.z) + 1;
-    count = dx * dy * dz;
+    count = saturated_count(dx, dy, dz);
     return true;
 }
 

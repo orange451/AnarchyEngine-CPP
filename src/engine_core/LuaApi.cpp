@@ -1125,7 +1125,9 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         {P("transform", "Matrix4"), P("size", "Vector3"), P("material", "TerrainMaterial?"),
          P("space", "Enum.TransformSpace?")});
     add("Terrain", "ReplaceMaterial",
-        "Swaps from for to in the solid cells of the box between min and max, both included.", "nil", false,
+        "Swaps from for to in the solid cells of the box between min and max, both included. Meshes and colliders "
+        "follow a frame or two later.",
+        "nil", false,
         {P("min", "Vector3"), P("max", "Vector3"), P("from", "TerrainMaterial?"), P("to", "TerrainMaterial?"),
          P("space", "Enum.TransformSpace?")});
     add("Terrain", "AddMaterial",

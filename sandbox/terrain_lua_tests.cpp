@@ -122,21 +122,31 @@ TEST_CASE("TL6 a zero or negative radius changes nothing", "[terrain][lua]") {
     REQUIRE(has_line(rig.runtime.drain_output(), "true\n"));
 }
 
-TEST_CASE("TL7 a shape too far out to count in cells raises and changes nothing", "[terrain][lua]") {
+TEST_CASE("TL10 a box too large to count in cells raises and changes nothing", "[terrain][lua]") {
     ScriptRig rig;
     rig.runtime.run_chunk(R"(
         local t = Instance.new("Terrain", workspace)
+        local u = Instance.new("Terrain", workspace)
+        local a, b = u:AddMaterial(nil), u:AddMaterial(nil)
+        u:FillBall(Vector3.new(), 2, a)
+        local lo, hi = Vector3.new(-1e9, -1e9, -1e9), Vector3.new(1e9, 1e9, 1e9)
         print(select(2, pcall(function() t:FillBall(Vector3.new(), 1e12, nil) end)))
         print(select(2, pcall(function() t:FillBall(Vector3.new(), math.huge, nil) end)))
-        print(t:ReadVoxels(Vector3.new(), Vector3.new()).Distances[1][1][1] > 0)
+        print(select(2, pcall(function() t:FillBall(Vector3.new(), 1e9, nil) end)))
+        print(select(2, pcall(function() t:ReadVoxels(lo, hi) end)))
+        print(select(2, pcall(function() u:ReplaceMaterial(lo, hi, a, b) end)))
+        local cell = u:ReadVoxels(Vector3.new(), Vector3.new())
+        print(t:ReadVoxels(Vector3.new(), Vector3.new()).Distances[1][1][1] > 0, cell.Materials[1][1][1] == a.Id)
     )");
     rig.frames(1);
     const auto out = rig.runtime.drain_output();
     const std::string text = all_text(out);
     INFO(text);
     const std::string message = "Terrain edit too large: split it into smaller calls";
-    const std::size_t first = text.find(message);
-    REQUIRE(first != std::string::npos);
-    REQUIRE(text.find(message, first + message.size()) != std::string::npos);
-    REQUIRE(has_line(out, "true\n"));
+    int raised = 0;
+    for (std::size_t at = text.find(message); at != std::string::npos; at = text.find(message, at + message.size())) {
+        ++raised;
+    }
+    REQUIRE(raised == 5);
+    REQUIRE(has_line(out, "true\ttrue\n"));
 }

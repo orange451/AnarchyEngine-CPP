@@ -112,6 +112,7 @@ set(STUDIO_SOURCES
     src/ide/MaterialBall.cpp
     src/ide/IdeIcons.cpp
     src/ide/IdePrefabEditor.cpp
+    src/ide/IdeTerrainEditor.cpp
     src/ide/PrefabModels.cpp
     src/ide/TerrainMaterials.cpp
     src/ide/AssetChoices.cpp
@@ -706,7 +707,7 @@ add_executable(prefab-editor-tests
 )
 target_link_libraries(prefab-editor-tests PRIVATE studio)
 
-# The data behind the Configure Terrain tab: TerrainMaterials, in use, by Id.
+# The Configure Terrain tab: its cards, pickers, and remove flow, and the data behind them.
 add_executable(terrain-editor-tests
     tests/TerrainEditorTest.cpp
 )

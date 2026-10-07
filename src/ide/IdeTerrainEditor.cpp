@@ -855,11 +855,13 @@ void IdeTerrainEditor::requestRemove(engine_core::InstanceId entry) {
     closePicker();
     const jadefx::ButtonType replace("Replace…", jadefx::ButtonType::Data::Left);
     const jadefx::ButtonType keep("Keep Cells", jadefx::ButtonType::Data::OkDone);
+    // The Alert draws its text in one Label that cuts a line too long for it short,
+    // so the lines are broken here, as the conflicts Alert does.
     alert_ = std::make_shared<jadefx::Alert>(
         jadefx::AlertType::Warning,
-        "Replace them with another material, or keep them: they draw as the default material until a new "
+        "Replace them with another material, or keep them:\nthey draw as the default material until a new\n"
         "material takes Id " +
-            std::to_string(view->material_id) + ". A replacement cannot be undone yet.",
+            std::to_string(view->material_id) + ".\nA replacement cannot be undone yet.",
         std::vector<jadefx::ButtonType>{replace, keep, jadefx::ButtonType::Cancel()});
     alert_->setTitle("Anarchy Engine");
     alert_->setHeaderText(view->name + " is used by voxels");

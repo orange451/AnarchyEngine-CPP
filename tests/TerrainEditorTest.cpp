@@ -369,9 +369,28 @@ void TE5_remove_used_asks() {
     Expect(alert != nullptr && alert->getHeaderText() == "Rock is used by voxels", "TE5 the Alert names it");
     Expect(alert != nullptr &&
                alert->getContentText() ==
-                   "Replace them with another material, or keep them: they draw as the default material until a "
-                   "new material takes Id 1. A replacement cannot be undone yet.",
+                   "Replace them with another material, or keep them:\nthey draw as the default material until a "
+                   "new\nmaterial takes Id 1.\nA replacement cannot be undone yet.",
            "TE5 and says what each answer does");
+    // The Alert draws that text in one Label, which cuts a line too long for it
+    // short with an ellipsis. Every line must fit, or the warning goes unseen.
+    rig.frames();
+    const jadefx::Label* content = nullptr;
+    // A button sits in its row, in the button bar, in the Alert's panel.
+    jadefx::Node* panel_node = rig.button("terrain-remove-keep");
+    for (int up = 0; up < 3 && panel_node != nullptr; ++up) {
+        panel_node = panel_node->getParent();
+    }
+    if (auto* panel = dynamic_cast<jadefx::Pane*>(panel_node)) {
+        for (const std::shared_ptr<jadefx::Node>& child : panel->getChildren()) {
+            auto* label = dynamic_cast<const jadefx::Label*>(child.get());
+            if (label != nullptr && alert != nullptr && label->getText() == alert->getContentText()) {
+                content = label;
+            }
+        }
+    }
+    Expect(content != nullptr && content->displayedText() == content->getText(),
+           "TE5 and shows all of it, not cut short");
     Expect(rig.button("terrain-remove-replace") != nullptr && rig.button("terrain-remove-keep") != nullptr,
            "TE5 it offers Replace and Keep Cells");
     rig.fire("terrain-remove-cancel");

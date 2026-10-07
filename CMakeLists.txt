@@ -581,6 +581,7 @@ add_library(engine_core STATIC
     src/engine_core/terrain/VoxelChunk.cpp
     src/engine_core/terrain/ShapeDistance.cpp
     src/engine_core/terrain/VoxelVolume.cpp
+    src/engine_core/terrain/SurfaceNets.cpp
     src/engine_core/ConvexDecomposition.cpp
     src/engine_core/DraggerMath.cpp
     src/engine_core/DraggerWorld.cpp
@@ -911,6 +912,7 @@ add_executable(sandbox
     sandbox/move_tool_tests.cpp
     sandbox/profiler_tests.cpp
     sandbox/terrain_voxel_tests.cpp
+    sandbox/terrain_surface_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

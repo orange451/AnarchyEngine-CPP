@@ -183,6 +183,8 @@ int ScriptBindings::raycast_result_index(lua_State* state) {
     luaL_error(state, "%s is not a valid member of RaycastResult", key);
 }
 
+// Runs on whichever thread holds the VM, always under the write lock (a step,
+// the tool step, a paused edit, or the render window), as PhysicsWorld::raycast needs.
 int ScriptBindings::workspace_raycast(lua_State* state) {
     return lua_guard(state, [&] {
         auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));

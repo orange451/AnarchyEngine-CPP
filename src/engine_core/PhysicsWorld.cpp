@@ -555,6 +555,12 @@ struct PhysicsWorld::Impl {
         if (!(length > 0.f) || !std::isfinite(length)) {
             return std::nullopt;
         }
+        // Box3D asserts the origin is finite (b3IsValidPosition); a script can
+        // pass one that is not (0/0, math.huge), so refuse it before that, same
+        // as the direction above.
+        if (!std::isfinite(origin.x) || !std::isfinite(origin.y) || !std::isfinite(origin.z)) {
+            return std::nullopt;
+        }
         sync(game);
         RayHits hits;
         hits.game = &game;

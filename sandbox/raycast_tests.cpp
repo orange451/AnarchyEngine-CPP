@@ -8,6 +8,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <limits>
+
 namespace {
 
 using engine_core::PhysicsObject;
@@ -86,4 +88,15 @@ TEST_CASE("R5 a ray sees a Transform set just before it, and works while playing
     hit = rig.physics.raycast(rig.game, Vec3{10.f, 10.f, 0.f}, Vec3{0.f, -20.f, 0.f}, RayFilter{});
     REQUIRE(hit->instance == box.id());
     REQUIRE(near(hit->position.y, 6.f, 1e-3f));
+}
+
+// Box3D asserts its origin is finite (b3IsValidPosition); a NaN or infinite
+// one must never reach it.
+TEST_CASE("R6 a non-finite origin hits nothing", "[physics][raycast]") {
+    PhysicsRig rig;
+    rig.floor();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    REQUIRE_FALSE(rig.physics.raycast(rig.game, Vec3{nan, 10.f, 0.f}, Vec3{0.f, -20.f, 0.f}, RayFilter{}));
+    REQUIRE_FALSE(rig.physics.raycast(rig.game, Vec3{inf, 10.f, 0.f}, Vec3{0.f, -20.f, 0.f}, RayFilter{}));
 }

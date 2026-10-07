@@ -84,7 +84,7 @@ public:
     // The first body a ray from origin along direction hits, within direction's
     // length, that filter lets it see. Syncs first, so it sees the tree as it
     // is now. A ray that starts inside a body does not hit it. Nothing for a
-    // zero direction. SimulationThread, under the write lock.
+    // zero direction or a non-finite origin. Any thread, under the write lock.
     std::optional<RayHit> raycast(DataModel& game, Vec3 origin, Vec3 direction, const RayFilter& filter);
 
     // How many bodies the world holds, and whether this PhysicsObject has one.

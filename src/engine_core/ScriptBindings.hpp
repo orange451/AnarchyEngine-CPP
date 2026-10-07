@@ -317,6 +317,9 @@ struct ScriptBindings {
     // Workspace:Raycast, and the two RaycastParams/RaycastResult members that
     // read the current tree (FilterDescendantsInstances and Instance), so need
     // ScriptRuntime's privates as this friend struct. Defined in RaycastBindings.cpp.
+    // Runs on whichever thread holds the VM, always under the write lock (a
+    // step, the tool step, a paused edit, or the render window), as
+    // PhysicsWorld::raycast needs.
     static int workspace_raycast(lua_State* state);
     static int raycast_params_index(lua_State* state);
     static int raycast_result_index(lua_State* state);

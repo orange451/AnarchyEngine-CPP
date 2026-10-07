@@ -104,6 +104,16 @@ TEST_CASE("L4 bad arguments and read-only results raise", "[raycast][lua]") {
     REQUIRE(out.find("FilterDescendantsInstances must hold only Instances") != std::string::npos);
 }
 
+// 0/0 is NaN: Box3D asserts its origin is finite, so this must return nil
+// rather than ever reach it.
+TEST_CASE("L6 Raycast with a non-finite origin is nil", "[raycast][lua]") {
+    RaycastRig rig;
+    rig.body(at(0.f, -0.5f, 0.f), Vec3{40.f, 1.f, 40.f}, "Floor");
+    const std::string out = rig.run(R"(print(workspace:Raycast(Vector3.new(0 / 0, 0, 0), Vector3.new(0, -1, 0))))");
+    INFO(out);
+    REQUIRE(has_line(out, "nil\n"));
+}
+
 TEST_CASE("L5 Raycast without a physics world raises", "[raycast][lua]") {
     ScriptRig rig;
     rig.runtime.run_chunk(R"(print(pcall(function() return workspace:Raycast(Vector3.new(), Vector3.new(0, -1, 0)) end)))");

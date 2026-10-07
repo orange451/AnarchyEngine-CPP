@@ -21,11 +21,24 @@ bool cell_box(const Shape& shape, float voxel_size, CellCoord& min, CellCoord& m
 }
 
 // A box's cell count, for the coordinate-range operations (replace/read/write).
-std::int64_t box_count(CellCoord min, CellCoord max) {
-    return static_cast<std::int64_t>(max.x - min.x + 1) * (max.y - min.y + 1) * (max.z - min.z + 1);
+// False (count left at 0) when max is less than min on any axis: a caller-
+// supplied box, unlike a shape's own bounds, can be inverted by mistake, and
+// `max - min + 1` would otherwise go negative (or, with two inverted axes,
+// wrap back to a misleadingly positive count) and must be rejected instead of
+// silently mis-sized or, worse, left to overflow int math.
+bool box_count(CellCoord min, CellCoord max, std::int64_t& count) {
+    if (max.x < min.x || max.y < min.y || max.z < min.z) {
+        return false;
+    }
+    const std::int64_t dx = static_cast<std::int64_t>(max.x) - static_cast<std::int64_t>(min.x) + 1;
+    const std::int64_t dy = static_cast<std::int64_t>(max.y) - static_cast<std::int64_t>(min.y) + 1;
+    const std::int64_t dz = static_cast<std::int64_t>(max.z) - static_cast<std::int64_t>(min.z) + 1;
+    count = dx * dy * dz;
+    return true;
 }
 
 const char* kTooLarge = "Terrain edit too large: split it into smaller calls";
+const char* kInverted = "max must not be less than min on any axis";
 
 // Whether a shape edit would touch any cell at all: a Ball needs a positive
 // radius; a Block or Wedge needs every size component positive; a Cylinder
@@ -58,14 +71,21 @@ void VoxelVolume::edit(CellCoord min, CellCoord max, Change change) {
                 const auto found = chunks_.find(coord);
                 const ChunkPtr& old = found != chunks_.end() ? found->second : ChunkData::air();
                 std::shared_ptr<ChunkData> copy;
-                const int x0 = std::max(min.x, cx * kChunkSize), x1 = std::min(max.x, cx * kChunkSize + kChunkSize - 1);
-                const int y0 = std::max(min.y, cy * kChunkSize), y1 = std::min(max.y, cy * kChunkSize + kChunkSize - 1);
-                const int z0 = std::max(min.z, cz * kChunkSize), z1 = std::min(max.z, cz * kChunkSize + kChunkSize - 1);
+                // Hoisted once per chunk rather than recomputed for every cell.
+                const int bx = cx * kChunkSize, by = cy * kChunkSize, bz = cz * kChunkSize;
+                const int x0 = std::max(min.x, bx), x1 = std::min(max.x, bx + kChunkSize - 1);
+                const int y0 = std::max(min.y, by), y1 = std::min(max.y, by + kChunkSize - 1);
+                const int z0 = std::max(min.z, bz), z1 = std::min(max.z, bz + kChunkSize - 1);
                 for (int z = z0; z <= z1; ++z) {
                     for (int y = y0; y <= y1; ++y) {
                         for (int x = x0; x <= x1; ++x) {
-                            const int index = cell_index(x - cx * kChunkSize, y - cy * kChunkSize, z - cz * kChunkSize);
-                            const Cell before = (copy ? copy->cell(index) : old->cell(index));
+                            const int index = cell_index(x - bx, y - by, z - bz);
+                            // Once cloned, copy is always dense: dense_at
+                            // skips the is_uniform() branch that cell() pays
+                            // on every cell, and set_dense_at skips set()'s
+                            // own re-normalization (change(...)'s result is
+                            // already normalized just below).
+                            const Cell before = copy ? copy->dense_at(index) : old->cell(index);
                             const Cell after = normalized(change(x, y, z, before));
                             if (after == before) {
                                 continue;
@@ -73,7 +93,7 @@ void VoxelVolume::edit(CellCoord min, CellCoord max, Change change) {
                             if (!copy) {
                                 copy = old->clone_dense();
                             }
-                            copy->set(index, after);
+                            copy->set_dense_at(index, after);
                         }
                     }
                 }
@@ -189,7 +209,11 @@ std::optional<std::string> VoxelVolume::paint(Shape shape, std::uint8_t material
 }
 
 std::optional<std::string> VoxelVolume::replace(CellCoord min, CellCoord max, std::uint8_t from, std::uint8_t to) {
-    if (box_count(min, max) > kMaxCellsPerEdit) {
+    std::int64_t count = 0;
+    if (!box_count(min, max, count)) {
+        return std::string(kInverted);
+    }
+    if (count > kMaxCellsPerEdit) {
         return std::string(kTooLarge);
     }
     edit(min, max, [&](int, int, int, Cell cell) {
@@ -203,13 +227,17 @@ std::optional<std::string> VoxelVolume::replace(CellCoord min, CellCoord max, st
 
 std::optional<std::string> VoxelVolume::read(CellCoord min, CellCoord max, std::vector<float>& distances,
                                               std::vector<std::uint8_t>& materials) const {
-    if (box_count(min, max) > kMaxCellsPerEdit) {
+    std::int64_t count = 0;
+    if (!box_count(min, max, count)) {
+        return std::string(kInverted);
+    }
+    if (count > kMaxCellsPerEdit) {
         return std::string(kTooLarge);
     }
     distances.clear();
     materials.clear();
-    distances.reserve(static_cast<std::size_t>(box_count(min, max)));
-    materials.reserve(static_cast<std::size_t>(box_count(min, max)));
+    distances.reserve(static_cast<std::size_t>(count));
+    materials.reserve(static_cast<std::size_t>(count));
     for (int z = min.z; z <= max.z; ++z) {
         for (int y = min.y; y <= max.y; ++y) {
             for (int x = min.x; x <= max.x; ++x) {
@@ -224,7 +252,10 @@ std::optional<std::string> VoxelVolume::read(CellCoord min, CellCoord max, std::
 
 std::optional<std::string> VoxelVolume::write(CellCoord min, CellCoord max, const std::vector<float>& distances,
                                                const std::vector<std::uint8_t>& materials) {
-    const std::int64_t count = box_count(min, max);
+    std::int64_t count = 0;
+    if (!box_count(min, max, count)) {
+        return std::string(kInverted);
+    }
     if (count > kMaxCellsPerEdit) {
         return std::string(kTooLarge);
     }

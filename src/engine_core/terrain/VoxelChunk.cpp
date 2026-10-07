@@ -1,8 +1,5 @@
 #include "terrain/VoxelChunk.hpp"
 
-#include <algorithm>
-#include <cmath>
-
 namespace engine_core::terrain {
 
 std::size_t ChunkCoordHash::operator()(const ChunkCoord& c) const {
@@ -12,31 +9,12 @@ std::size_t ChunkCoordHash::operator()(const ChunkCoord& c) const {
     return h;
 }
 
-std::int8_t quantize(float studs, float voxel_size) {
-    const float scaled = studs / (kBandCells * voxel_size) * 127.f;
-    const float clamped = std::clamp(scaled, -127.f, 127.f);
-    return static_cast<std::int8_t>(std::lround(clamped));
-}
-
-float dequantize(std::int8_t stored, float voxel_size) {
-    return static_cast<float>(stored) / 127.f * kBandCells * voxel_size;
-}
-
 namespace {
 int floor_div(int value, int by) { return value >= 0 ? value / by : -((-value + by - 1) / by); }
 }  // namespace
 
 ChunkCoord chunk_of(int cx, int cy, int cz) {
     return ChunkCoord{floor_div(cx, kChunkSize), floor_div(cy, kChunkSize), floor_div(cz, kChunkSize)};
-}
-
-int cell_index(int lx, int ly, int lz) { return lx + kChunkSize * (ly + kChunkSize * lz); }
-
-Cell normalized(Cell cell) {
-    if (cell.distance == kAirDistance) {
-        cell.material = 0;
-    }
-    return cell;
 }
 
 std::shared_ptr<const ChunkData> ChunkData::uniform(Cell value) {
@@ -51,30 +29,15 @@ const std::shared_ptr<const ChunkData>& ChunkData::air() {
     return empty;
 }
 
-Cell ChunkData::cell(int index) const {
-    if (uniform_) {
-        return value_;
-    }
-    return Cell{distances_[static_cast<std::size_t>(index)], materials_[static_cast<std::size_t>(index)]};
-}
-
 std::shared_ptr<ChunkData> ChunkData::clone_dense() const {
     auto copy = std::make_shared<ChunkData>();
     copy->uniform_ = false;
     if (uniform_) {
-        copy->distances_.assign(kChunkCells, value_.distance);
-        copy->materials_.assign(kChunkCells, value_.material);
+        copy->cells_.assign(kChunkCells, value_);
     } else {
-        copy->distances_ = distances_;
-        copy->materials_ = materials_;
+        copy->cells_ = cells_;
     }
     return copy;
-}
-
-void ChunkData::set(int index, Cell value) {
-    value = normalized(value);
-    distances_[static_cast<std::size_t>(index)] = value.distance;
-    materials_[static_cast<std::size_t>(index)] = value.material;
 }
 
 void ChunkData::finish() {
@@ -86,9 +49,9 @@ void ChunkData::finish() {
         return;
     }
     bool same = true;
-    const Cell first{distances_[0], materials_[0]};
+    const Cell first = cells_[0];
     for (int i = 0; i < kChunkCells; ++i) {
-        const Cell c{distances_[static_cast<std::size_t>(i)], materials_[static_cast<std::size_t>(i)]};
+        const Cell c = cells_[static_cast<std::size_t>(i)];
         if (c.distance != kAirDistance) {
             used_[c.material >> 6] |= 1ull << (c.material & 63);
         }
@@ -97,10 +60,8 @@ void ChunkData::finish() {
     if (same) {
         uniform_ = true;
         value_ = first;
-        distances_.clear();
-        distances_.shrink_to_fit();
-        materials_.clear();
-        materials_.shrink_to_fit();
+        cells_.clear();
+        cells_.shrink_to_fit();
     }
 }
 

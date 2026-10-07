@@ -238,3 +238,20 @@ TEST_CASE("V9 FillBall of radius 8 is fast", "[.][terrain-bench]") {
     INFO(ms / 100.0);
     REQUIRE(ms / 100.0 < 0.5);
 }
+
+TEST_CASE("V10 an inverted box is refused by read, write, and replace", "[terrain]") {
+    VoxelVolume volume;
+    std::vector<float> distances;
+    std::vector<std::uint8_t> materials;
+    // One axis inverted.
+    REQUIRE(*volume.read(CellCoord{5, 0, 0}, CellCoord{-5, 0, 0}, distances, materials) ==
+            "max must not be less than min on any axis");
+    REQUIRE(*volume.write(CellCoord{0, 5, 0}, CellCoord{0, -5, 0}, distances, materials) ==
+            "max must not be less than min on any axis");
+    REQUIRE(*volume.replace(CellCoord{0, 0, 5}, CellCoord{0, 0, -5}, 1, 2) ==
+            "max must not be less than min on any axis");
+    // Two axes inverted: the naive product would come out positive again.
+    REQUIRE(*volume.read(CellCoord{5, 5, 0}, CellCoord{-5, -5, 0}, distances, materials) ==
+            "max must not be less than min on any axis");
+    REQUIRE(volume.chunks().empty());
+}

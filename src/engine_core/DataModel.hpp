@@ -149,6 +149,10 @@ public:
     virtual bool is_scene_service() const { return false; }
     // A game service, and so everything under it, has no row in the Game Explorer.
     virtual bool hidden_in_explorer() const { return false; }
+    // True for an instance that stays under the parent it was first given,
+    // as a TerrainMaterial stays in its Terrain. Load, paste, and undo set
+    // its parent from none; destroy still takes it out.
+    virtual bool parent_locked() const { return false; }
     // The root's child of this scene service class, or 0 when there is none.
     InstanceId scene_service(std::string_view class_name) const;
     // The service of this class, under game or under a service directly under

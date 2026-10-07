@@ -3,6 +3,7 @@
 #include "ide/IdeResources.hpp"
 #include "AssetInstances.hpp"
 #include "Folder.hpp"
+#include "LuaApi.hpp"
 #include "ide/McpServer.hpp"
 #include "ide/McpTools.hpp"
 #include "ide/StudioRegistry.hpp"
@@ -381,6 +382,20 @@ void TestEngineTools() {
         creatable = creatable || entry.as_string() == "Folder";
     }
     Expect(creatable, "list_classes names Folder as creatable");
+    // A paste-only class (as TerrainMaterial will be) is refused by create_instance,
+    // the same way Instance.new refuses it, and left off list_classes's creatable list.
+    engine_core::register_lua_creatable(
+        "TestMcpPasteOnly",
+        [](engine_core::DataModel& world) -> engine_core::DataModel& { return world.create<engine_core::Folder>(); },
+        false);
+    Expect(ErrorText(server, "create_instance", R"({"class":"TestMcpPasteOnly"})").find("Instance.new cannot make") == 0,
+           "create_instance refuses a paste-only class the same way Instance.new does");
+    const JsonValue classesAfterPasteOnly = Call(server, "list_classes", "{}");
+    bool listedPasteOnly = false;
+    for (const JsonValue& entry : Member(classesAfterPasteOnly, "creatable").items()) {
+        listedPasteOnly = listedPasteOnly || entry.as_string() == "TestMcpPasteOnly";
+    }
+    Expect(!listedPasteOnly, "list_classes leaves out a paste-only class");
     const JsonValue api = Call(server, "get_class", R"({"class":"Folder"})");
     bool has_name = false;
     for (const JsonValue& entry : Member(api, "properties").items()) {

@@ -368,6 +368,7 @@ namespace {
 struct Creatable {
     const char* name = nullptr;
     LuaCreate create = nullptr;
+    bool from_scripts = true;
 };
 
 std::vector<Creatable>& creatables() {
@@ -389,20 +390,25 @@ const Creatable* find_creatable(const char* class_name) {
 
 }  // namespace
 
-void register_lua_creatable(const char* class_name, LuaCreate create) {
+void register_lua_creatable(const char* class_name, LuaCreate create, bool from_scripts) {
     if (class_name == nullptr || create == nullptr || find_creatable(class_name) != nullptr) {
         return;
     }
-    creatables().push_back(Creatable{class_name, create});
+    creatables().push_back(Creatable{class_name, create, from_scripts});
     registry_changed();
 }
 
 bool lua_creatable_known(const char* class_name) { return find_creatable(class_name) != nullptr; }
 
+bool lua_script_creatable(const char* class_name) {
+    const Creatable* record = find_creatable(class_name);
+    return record != nullptr && record->from_scripts;
+}
+
 void lua_creatable_names(std::vector<std::string>& out) {
     out.clear();
     for (const Creatable& record : creatables()) {
-        if (record.name != nullptr) {
+        if (record.name != nullptr && record.from_scripts) {
             out.emplace_back(record.name);
         }
     }
@@ -1063,6 +1069,19 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "The brightness where bloom starts, from 0 to 10, fading in just below it. 0 blooms everything a little; "
         "above 1, only light brighter than white, such as a glowing Material or the sun in an .hdr sky.",
         "number", false, {});
+    add("Terrain", "Transform",
+        "Where this island is and how it is turned. It may be moved and rotated, but not scaled: VoxelSize sets "
+        "the size of its cells.",
+        "Matrix4", false, {});
+    add("Terrain", "VoxelSize", "The size of one cell, in studs. Read-only; always 1.", "number", false, {});
+    add("Terrain", "CanCollide", "When false, nothing collides with this island.", "boolean", false, {});
+    add("TerrainMaterial", "Id",
+        "The voxel Id this entry names, from 1 to 255. Read-only: its Terrain picks the lowest one free when it is "
+        "added.",
+        "number", false, {});
+    add("TerrainMaterial", "Material",
+        "The Material that voxels with this Id draw and collide as. Nil draws them as the default material.",
+        "Material?", false, {});
     add("ScreenSpaceReflections", "Enabled", "When false, this ScreenSpaceReflections traces nothing.", "boolean",
         false, {});
     add("ScreenSpaceReflections", "Intensity",

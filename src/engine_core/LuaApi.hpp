@@ -300,8 +300,12 @@ void lua_service_names(std::vector<std::string>& out);
 // Completion and the explorer insert list use these same names. A null result
 // from lua_create_instance is an unknown class.
 using LuaCreate = DataModel& (*)(DataModel& world);
-void register_lua_creatable(const char* class_name, LuaCreate create);
+// from_scripts false registers a class made by paste, duplicate, and undo
+// (lua_create_instance) but refused by Instance.new and left out of
+// lua_creatable_names(), as a TerrainMaterial is made only alongside its Terrain.
+void register_lua_creatable(const char* class_name, LuaCreate create, bool from_scripts = true);
 bool lua_creatable_known(const char* class_name);
+bool lua_script_creatable(const char* class_name);
 void lua_creatable_names(std::vector<std::string>& out);
 DataModel* lua_create_instance(DataModel& world, const char* class_name);
 

@@ -25,6 +25,8 @@
 #include "Skybox.hpp"
 #include "SoundEmitter.hpp"
 #include "Script.hpp"
+#include "Terrain.hpp"
+#include "TerrainMaterial.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -168,6 +170,9 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"Material", [](DataModel& world) -> DataModel& { return world.create<Material>(); }});
         out.push_back({"Model", [](DataModel& world) -> DataModel& { return world.create<Model>(); }});
         out.push_back({"Prefab", [](DataModel& world) -> DataModel& { return world.create<Prefab>(); }});
+        out.push_back({"Terrain", [](DataModel& world) -> DataModel& { return world.create<Terrain>(); }});
+        out.push_back(
+            {"TerrainMaterial", [](DataModel& world) -> DataModel& { return world.create<TerrainMaterial>(); }});
         return out;
     }();
     return entries;

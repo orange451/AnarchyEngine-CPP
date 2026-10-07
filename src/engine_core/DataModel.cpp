@@ -1726,6 +1726,9 @@ std::optional<std::string> DataModel::parent_error(InstanceId id, InstanceId new
         state_->place_slots[index]) {
         return name(id) + " is part of the place, so it cannot go into Core during play";
     }
+    if (object->parent_locked() && current != kNoParent) {
+        return std::string(object->class_name()) + " cannot be reparented";
+    }
     if (new_parent == kNoParent) {
         return std::nullopt;
     }

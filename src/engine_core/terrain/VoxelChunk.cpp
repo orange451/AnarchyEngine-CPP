@@ -81,4 +81,33 @@ void ChunkData::finish() {
     }
 }
 
+void ChunkData::finish_with_mask(const std::array<std::uint64_t, 4>& mask) {
+    if (uniform_) {
+        // A uniform chunk's own mask is trivial to recompute; nothing to
+        // skip, and the caller's mask isn't meant for this case.
+        finish();
+        return;
+    }
+    // The real, exact uniformity check, same as finish()'s, but exiting at
+    // the first cell that disagrees with cell 0 instead of visiting all
+    // 32,768: the caller already proved the mask, so once this chunk is
+    // known non-uniform there's nothing left to compute here.
+    const Cell first = cells_[0];
+    for (int i = 1; i < kChunkCells; ++i) {
+        if (!(cells_[static_cast<std::size_t>(i)] == first)) {
+            used_ = mask;
+            return;
+        }
+    }
+    // Every cell agrees with cell 0: this chunk collapses to uniform.
+    uniform_ = true;
+    value_ = first;
+    cells_.clear();
+    cells_.shrink_to_fit();
+    used_ = {};
+    if (value_.distance != kAirDistance) {
+        used_[value_.material >> 6] |= 1ull << (value_.material & 63);
+    }
+}
+
 }  // namespace engine_core::terrain

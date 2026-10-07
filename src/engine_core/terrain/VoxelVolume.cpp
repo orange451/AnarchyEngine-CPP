@@ -85,6 +85,19 @@ void VoxelVolume::edit(CellCoord min, CellCoord max, Change change) {
                 // array is empty (collapsed away by finish()), so dense_at
                 // is only ever valid on a chunk known non-uniform.
                 const Cell old_value = old_uniform ? old->cell(0) : Cell{};
+                // Tracks whether this chunk's Id usage mask can be computed
+                // without finish()'s full rescan: written_mask is every Id
+                // this edit actually wrote to a solid/band cell (safe to OR
+                // in — a material that's now present is present, however
+                // it's counted); maybe_removed means some changed cell's OLD
+                // value was solid/band and either went to air or changed Id,
+                // so that Id *might* have just lost its last cell somewhere
+                // in this chunk. Only when that never happens is old's mask
+                // (which was itself exact) still exact once written_mask is
+                // OR-ed in — nothing could have been removed, so nothing
+                // needs re-proving by a full scan.
+                std::array<std::uint64_t, 4> written_mask{};
+                bool maybe_removed = false;
                 for (int z = z0; z <= z1; ++z) {
                     const int zbase = (z - bz) * kChunkSize * kChunkSize;
                     for (int y = y0; y <= y1; ++y) {
@@ -102,13 +115,28 @@ void VoxelVolume::edit(CellCoord min, CellCoord max, Change change) {
                                 copy = old->clone_dense();
                             }
                             copy->set_dense_at(index, after);
+                            if (after.distance != kAirDistance) {
+                                written_mask[after.material >> 6] |= 1ull << (after.material & 63);
+                            }
+                            if (before.distance != kAirDistance &&
+                                (after.distance == kAirDistance || after.material != before.material)) {
+                                maybe_removed = true;
+                            }
                         }
                     }
                 }
                 if (!copy) {
                     continue;
                 }
-                copy->finish();
+                if (maybe_removed) {
+                    copy->finish();
+                } else {
+                    std::array<std::uint64_t, 4> mask = old->ids_used();
+                    for (int w = 0; w < 4; ++w) {
+                        mask[w] |= written_mask[w];
+                    }
+                    copy->finish_with_mask(mask);
+                }
                 if (copy->is_air()) {
                     chunks_.erase(coord);
                 } else {

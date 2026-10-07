@@ -82,6 +82,12 @@ public:
     void set_dense_at(int index, Cell value) { cells_[static_cast<std::size_t>(index)] = value; }
     // Recomputes the Id usage mask; uniform when every cell is equal.
     void finish();
+    // Same collapse-to-uniform check as finish(), but the Id usage mask is
+    // taken from the caller (who has proven it exact some cheaper way, e.g.
+    // VoxelVolume::edit() tracking it incrementally) rather than rescanned.
+    // Still does the real, exact uniformity check: only the mask rescan is
+    // skipped.
+    void finish_with_mask(const std::array<std::uint64_t, 4>& mask);
     bool is_air() const { return uniform_ && value_.distance == kAirDistance; }
     // Bit i set when a solid or band cell uses Id i.
     const std::array<std::uint64_t, 4>& ids_used() const { return used_; }

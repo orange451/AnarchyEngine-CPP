@@ -255,3 +255,22 @@ TEST_CASE("V10 an inverted box is refused by read, write, and replace", "[terrai
             "max must not be less than min on any axis");
     REQUIRE(volume.chunks().empty());
 }
+
+TEST_CASE("V11 ids_used tracks exactly through Id reassignment and removal", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 5.f), 2));
+    REQUIRE_FALSE(volume.paint(ball_at(0.f, 0.f, 0.f, 2.f), 3));
+    REQUIRE((volume.ids_used()[0] >> 2 & 1u) == 1u);
+    REQUIRE((volume.ids_used()[0] >> 3 & 1u) == 1u);
+    // A covering fill, comfortably bigger than the first ball's whole band,
+    // repaints every cell the first fill touched: Id 2 is replaced
+    // everywhere, not just where this fill's own band happens to land.
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 10.f), 3));
+    REQUIRE((volume.ids_used()[0] >> 2 & 1u) == 0u);
+    REQUIRE((volume.ids_used()[0] >> 3 & 1u) == 1u);
+    // Subtracting everything clears every cell to air: Id 3 vanishes too,
+    // and the chunk(s) collapse away entirely.
+    REQUIRE_FALSE(volume.subtract(ball_at(0.f, 0.f, 0.f, 20.f)));
+    REQUIRE(volume.ids_used() == std::array<std::uint64_t, 4>{});
+    REQUIRE(volume.chunks().empty());
+}

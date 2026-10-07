@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -31,6 +32,12 @@ public:
     static constexpr std::int64_t kMaxCellsPerEdit = 16777216;
 
     explicit VoxelVolume(float voxel_size = 1.f) : voxel_size_(voxel_size) {}
+    // ids_cache_mutex_ cannot be moved, so these move the rest of the fields
+    // by hand and leave each side with a fresh mutex of its own. Never copied
+    // (a copy would need to decide which side's cache to keep); nothing in
+    // the codebase does.
+    VoxelVolume(VoxelVolume&& other) noexcept;
+    VoxelVolume& operator=(VoxelVolume&& other) noexcept;
     float voxel_size() const { return voxel_size_; }
 
     const ChunkMap& chunks() const { return chunks_; }
@@ -79,7 +86,11 @@ private:
     std::uint64_t revision_ = 0;
     // ids_used()'s cache: valid when ids_cache_valid_ and ids_cache_revision_
     // matches revision_. Mutable since ids_used() is const but still wants to
-    // remember the last scan.
+    // remember the last scan. Several UI-thread readers may call ids_used()
+    // concurrently under the world's shared read lock, so ids_cache_mutex_
+    // guards these three together; chunks_ and revision_ themselves are not
+    // written while a read lock is held, so they need no lock here.
+    mutable std::mutex ids_cache_mutex_;
     mutable std::array<std::uint64_t, 4> ids_cache_{};
     mutable std::uint64_t ids_cache_revision_ = 0;
     mutable bool ids_cache_valid_ = false;

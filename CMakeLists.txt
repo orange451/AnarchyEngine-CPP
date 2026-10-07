@@ -113,6 +113,7 @@ set(STUDIO_SOURCES
     src/ide/IdeIcons.cpp
     src/ide/IdePrefabEditor.cpp
     src/ide/PrefabModels.cpp
+    src/ide/TerrainMaterials.cpp
     src/ide/AssetChoices.cpp
     src/ide/AssetPicker.cpp
     src/ide/IdeScriptEditor.cpp
@@ -705,6 +706,12 @@ add_executable(prefab-editor-tests
 )
 target_link_libraries(prefab-editor-tests PRIVATE studio)
 
+# The data behind the Configure Terrain tab: TerrainMaterials, in use, by Id.
+add_executable(terrain-editor-tests
+    tests/TerrainEditorTest.cpp
+)
+target_link_libraries(terrain-editor-tests PRIVATE studio)
+
 # Opens and closes printed tables in the console log, by call and by click.
 add_executable(console-tests
     tests/ConsoleLogTest.cpp
@@ -967,7 +974,7 @@ function(anarchy_warnings target)
     endif()
 endfunction()
 foreach(target IN ITEMS studio_core studio AnarchyStudio AnarchyPlayer engine-tests shell-tests properties-tests console-tests
-                        studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests assets-demo billboard-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
+                        studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests terrain-editor-tests assets-demo billboard-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
                         sandbox amesh amesh-tests amesh-gl-check scene-render-check gpu-timer-check grid-check profiler-demo profiler profiler-tests ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()
@@ -1054,7 +1061,7 @@ endif()
 # runs from the source folder, where resources/ is.
 enable_testing()
 foreach(suite engine-tests properties-tests console-tests studio-tests mcp-tests mcp-setup-tests sandbox shell-tests explorer-tests assets-tests
-              prefab-editor-tests terminal-tests amesh-tests profiler-tests)
+              prefab-editor-tests terrain-editor-tests terminal-tests amesh-tests profiler-tests)
     if(TARGET ${suite})
         add_test(NAME ${suite} COMMAND ${suite} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()

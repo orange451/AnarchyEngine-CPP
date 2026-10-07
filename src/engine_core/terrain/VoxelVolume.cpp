@@ -5,6 +5,24 @@
 #include <utility>
 
 namespace engine_core::terrain {
+
+VoxelVolume::VoxelVolume(VoxelVolume&& other) noexcept {
+    *this = std::move(other);
+}
+
+VoxelVolume& VoxelVolume::operator=(VoxelVolume&& other) noexcept {
+    if (this != &other) {
+        voxel_size_ = other.voxel_size_;
+        chunks_ = std::move(other.chunks_);
+        dirty_ = std::move(other.dirty_);
+        revision_ = other.revision_;
+        ids_cache_ = other.ids_cache_;
+        ids_cache_revision_ = other.ids_cache_revision_;
+        ids_cache_valid_ = other.ids_cache_valid_;
+    }
+    return *this;
+}
+
 namespace {
 
 // Cell bounds past this are refused before they are cast to int. Far inside
@@ -401,6 +419,10 @@ std::size_t VoxelVolume::replace_everywhere(std::uint8_t from, std::uint8_t to) 
 }
 
 std::array<std::uint64_t, 4> VoxelVolume::ids_used() const {
+    // chunks_ and revision_ are stable while this runs (no writer runs
+    // concurrently with a reader), but several readers may call this at
+    // once, so the cache fields themselves need their own lock.
+    std::lock_guard<std::mutex> lock(ids_cache_mutex_);
     if (ids_cache_valid_ && ids_cache_revision_ == revision_) {
         return ids_cache_;
     }

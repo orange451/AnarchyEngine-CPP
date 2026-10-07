@@ -415,6 +415,11 @@ struct PhysicsWorld::Impl {
         // Its Transform was seeded from its GameObject in this play session.
         // Bodies made while stopped are seeded on the first played sync.
         bool seeded = false;
+        // An unanchored Custom made while stopped, when its Mesh's pieces were
+        // not known: it is a Hull, made again when the Mesh's file changes
+        // (its stamp then) or when play starts.
+        bool made_without_pieces = false;
+        std::string pieces_stamp;
     };
 
     b3WorldId world = b3_nullWorldId;
@@ -606,6 +611,13 @@ struct PhysicsWorld::Impl {
         Body& body = found->second;
         body.seen = pass;
         recenter(game, object, body, follow_driven(game, object, body));
+        if (body.made_without_pieces && !object.anchored()) {
+            const auto* rigid = dynamic_cast<PhysicsObject*>(&object);
+            const auto* mesh = rigid != nullptr ? dynamic_cast<const Mesh*>(game.instance(rigid->mesh_id())) : nullptr;
+            if (game.simulation_running() || (mesh != nullptr && mesh->file_stamp() != body.pieces_stamp)) {
+                make_shape(game, object, body);
+            }
+        }
         if (game.simulation_running() && !body.seeded) {
             body.seeded = true;
             if (target != 0) {
@@ -1285,7 +1297,16 @@ struct PhysicsWorld::Impl {
             return false;
         }
         const auto* mesh = dynamic_cast<const Mesh*>(game.instance(object.mesh_id()));
-        const std::vector<anarchy::amesh::ConvexPiece> pieces = pieces_for(*mesh, mesh_points, triangles);
+        std::vector<anarchy::amesh::ConvexPiece> pieces;
+        record.made_without_pieces = false;
+        if (game.simulation_running()) {
+            pieces = pieces_for(*mesh, mesh_points, triangles);
+        } else if (!known_pieces(*mesh, mesh_points, triangles, pieces)) {
+            // Stopped, never decompose here: the studio's decomposer will.
+            record.made_without_pieces = true;
+            record.pieces_stamp = mesh->file_stamp();
+            return false;
+        }
         std::vector<b3HullData*> hulls = piece_hulls(pieces, fit_of(mesh_points, size, record.center));
         if (hulls.empty()) {
             if (!object.warned_custom) {

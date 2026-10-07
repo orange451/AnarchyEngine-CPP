@@ -4,10 +4,18 @@
 #include "physics_rig.hpp"
 #include "support.hpp"
 
+#include "AssetInstances.hpp"
+#include "ConvexDecomposition.hpp"
+#include "MeshShapes.hpp"
 #include "PhysicsObject.hpp"
 #include "PhysicsWorld.hpp"
+#include "amesh.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <filesystem>
+#include <system_error>
+#include <vector>
 
 namespace {
 
@@ -24,6 +32,41 @@ engine_core::LuaSlot instance_slot(InstanceId id) {
     slot.kind = engine_core::LuaSlot::Kind::Instance;
     slot.id = id;
     return slot;
+}
+
+// A temporary resources folder, so a stopped Mesh edit has somewhere to write
+// its AMESH file. Removed when the test ends.
+struct TempResourcesRoot {
+    std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                 ("anarchy-edit-physics-test-" + process_id());
+
+    explicit TempResourcesRoot(engine_core::Game& game) {
+        std::filesystem::remove_all(path);
+        std::filesystem::create_directories(path);
+        game.set_resources_root(path);
+    }
+
+    ~TempResourcesRoot() {
+        std::error_code ignored;
+        std::filesystem::remove_all(path, ignored);
+    }
+
+    TempResourcesRoot(const TempResourcesRoot&) = delete;
+    TempResourcesRoot& operator=(const TempResourcesRoot&) = delete;
+};
+
+// An unanchored Custom 2x2x2 at height 3, with a cube Mesh whose pieces are not known.
+PhysicsObject& custom_cube(PhysicsRig& rig, engine_core::Mesh*& mesh_out) {
+    engine_core::clear_piece_cache();
+    engine_core::Mesh& mesh = rig.game.create<engine_core::Mesh>();
+    PhysicsObject& body = rig.body(at(0.f, 3.f, 0.f), Vec3{2.f, 2.f, 2.f}, false);
+    REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Custom)));
+    REQUIRE_FALSE(body.set_mesh(instance_slot(mesh.id())));
+    anarchy::amesh::Data cube;
+    engine_core::add_box(cube, Vec3{1.f, 1.f, 1.f}, Vec3{0.f, 0.f, 0.f});
+    REQUIRE_FALSE(mesh.edit_geometry([&cube](anarchy::amesh::Data& data) { data = cube; }));
+    mesh_out = &mesh;
+    return body;
 }
 
 }  // namespace
@@ -91,4 +134,48 @@ TEST_CASE("E5 an anchored body made while stopped seeds its Transform on the fir
     rig.steps(1);
     REQUIRE(x_of(body.transform()) == 2.f);
     REQUIRE(y_of(body.transform()) == 3.f);
+}
+
+TEST_CASE("E6 stopped, an unanchored Custom without pieces is a Hull and decomposes nothing", "[physics][edit]") {
+    PhysicsRig rig;
+    TempResourcesRoot resources(rig.game);
+    engine_core::Mesh* mesh = nullptr;
+    PhysicsObject& body = custom_cube(rig, mesh);
+    const std::uint64_t decomposed = engine_core::decompose_count();
+    rig.sync_steps(3);
+    REQUIRE(rig.physics.has_body(body.id()));
+    REQUIRE(engine_core::decompose_count() == decomposed);
+    REQUIRE(rig.warnings.empty());
+}
+
+TEST_CASE("E7 a body made without pieces is made again at Play, with pieces", "[physics][edit]") {
+    PhysicsRig rig;
+    TempResourcesRoot resources(rig.game);
+    engine_core::Mesh* mesh = nullptr;
+    PhysicsObject& body = custom_cube(rig, mesh);
+    (void)body;
+    rig.sync_steps(1);
+    const std::uint64_t decomposed = engine_core::decompose_count();
+    rig.play();
+    rig.steps(1);
+    REQUIRE(engine_core::decompose_count() == decomposed + 1);
+    engine_core::clear_piece_cache();
+}
+
+TEST_CASE("E8 stopped, a body made without pieces is made again once its Mesh stores them", "[physics][edit]") {
+    PhysicsRig rig;
+    TempResourcesRoot resources(rig.game);
+    engine_core::Mesh* mesh = nullptr;
+    PhysicsObject& body = custom_cube(rig, mesh);
+    rig.sync_steps(1);
+    const std::size_t hull_shapes = rig.physics.shape_frictions(body.id()).size();
+    // What the studio's decomposer does when it finishes: two pieces into the file.
+    std::vector<anarchy::amesh::ConvexPiece> pieces(2);
+    for (auto& piece : pieces) {
+        piece.points = {{-1.f, -1.f, -1.f}, {1.f, -1.f, -1.f}, {-1.f, 1.f, -1.f}, {-1.f, -1.f, 1.f}};
+    }
+    REQUIRE_FALSE(mesh->store_pieces(engine_core::kRecipe, pieces));
+    rig.sync_steps(1);
+    REQUIRE(rig.physics.shape_frictions(body.id()).size() == 2);
+    REQUIRE(hull_shapes == 1);
 }

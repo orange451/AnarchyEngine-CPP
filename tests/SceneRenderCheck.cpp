@@ -9,6 +9,9 @@
 #include "runner/TextureCache.hpp"
 #include "profiler/Profiler.hpp"
 #include "runner/gl.hpp"
+#include "runner/ViewCapture.hpp"
+#include "terrain/SurfaceNets.hpp"
+#include "terrain/VoxelVolume.hpp"
 
 // Only GLFW's window calls: the GL names come from runner/gl.hpp.
 #define GLFW_INCLUDE_NONE
@@ -23,9 +26,13 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
+#include <memory>
+#include <optional>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -34,7 +41,11 @@
 // draws for a GameObject with a Prefab, lit through the legacy pipeline. A cube baked to AMESH in a scratch
 // resources folder goes through MeshCache and Renderer, with the fixed
 // camera, and the check reads the pixels back. With --save dir or --compare dir
-// it also writes, or checks against, the regression scenes' frames.
+// it also writes, or checks against, the regression scenes' frames. Terrain
+// (Surface Nets chunks through the terrain program) is drawn too, a red ball in
+// the window and then island, hills, cliff and chunk-seam scenes at 1280 by 720
+// offscreen under a DynamicSky; with --terrain-shots dir those scenes are also
+// written to dir as PNGs, and each path printed. The flags combine.
 namespace {
 
 using namespace anarchy::amesh;
@@ -293,9 +304,239 @@ void SaveOrCompareRegression(const std::vector<std::vector<unsigned char>>& fram
     }
 }
 
+// Terrain: Surface Nets chunk meshes drawn through the terrain program.
+
+namespace terrain = engine_core::terrain;
+
+// Every chunk of volume that has data, and its 26 neighbors, meshed and
+// uploaded; empty chunks are left out. As sandbox/terrain_surface_tests.cpp's mesh_all.
+std::vector<std::unique_ptr<GpuMesh>> UploadTerrain(const terrain::VoxelVolume& volume) {
+    std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> coords;
+    for (const auto& entry : volume.chunks()) {
+        const terrain::ChunkCoord& coord = entry.first;
+        for (int dz = -1; dz <= 1; ++dz) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    coords.insert(terrain::ChunkCoord{coord.x + dx, coord.y + dy, coord.z + dz});
+                }
+            }
+        }
+    }
+    std::vector<std::unique_ptr<GpuMesh>> out;
+    for (const terrain::ChunkCoord& coord : coords) {
+        const terrain::ChunkMesh mesh = terrain::surface_nets(terrain::mesh_input(volume, coord));
+        if (mesh.render == nullptr) {
+            continue;
+        }
+        auto gpu = std::make_unique<GpuMesh>();
+        gpu->upload(*mesh.render, false);
+        out.push_back(std::move(gpu));
+    }
+    return out;
+}
+
+// One MeshDraw per chunk, at the Terrain's Transform model.
+std::vector<runner::MeshDraw> TerrainDraws(const std::vector<std::unique_ptr<GpuMesh>>& chunks, unsigned look,
+                                           const engine_core::Matrix4& model = engine_core::matrix4_identity()) {
+    std::vector<runner::MeshDraw> draws;
+    for (const auto& chunk : chunks) {
+        runner::MeshDraw draw{chunk.get(), model};
+        draw.terrainLook = look;
+        draw.owner = 77;
+        draws.push_back(draw);
+    }
+    return draws;
+}
+
+// A Terrain look table's bytes: every Id rough and plain, colored by colors
+// (Id, then sRGB) and a neutral gray for the rest.
+std::vector<std::uint8_t> TerrainLook(std::initializer_list<std::array<int, 4>> colors) {
+    std::vector<std::uint8_t> bytes(256 * 2 * 4);
+    for (int id = 0; id < 256; ++id) {
+        std::uint8_t* color = bytes.data() + id * 4;
+        color[0] = color[1] = color[2] = 150;
+        color[3] = 255;
+        std::uint8_t* surface = bytes.data() + (256 + id) * 4;
+        surface[0] = 0;    // metalness
+        surface[1] = 220;  // roughness
+        surface[2] = 20;   // reflectivity
+        surface[3] = 255;
+    }
+    for (const std::array<int, 4>& entry : colors) {
+        std::uint8_t* color = bytes.data() + entry[0] * 4;
+        for (int channel = 0; channel < 3; ++channel) {
+            color[channel] = static_cast<std::uint8_t>(entry[channel + 1]);
+        }
+    }
+    return bytes;
+}
+
+terrain::Shape Ball(float x, float y, float z, float radius) {
+    terrain::Shape shape;
+    shape.kind = terrain::Shape::Kind::Ball;
+    shape.center = engine_core::Vec3{x, y, z};
+    shape.radius = radius;
+    return shape;
+}
+
+terrain::Shape Block(float x, float y, float z, float sx, float sy, float sz) {
+    terrain::Shape shape;
+    shape.kind = terrain::Shape::Kind::Block;
+    shape.frame = engine_core::matrix4_translation(x, y, z);
+    shape.size = engine_core::Vec3{sx, sy, sz};
+    return shape;
+}
+
+// A cylinder of radius about frame's Y, height long.
+terrain::Shape Cylinder(const engine_core::Matrix4& frame, float radius, float height) {
+    terrain::Shape shape;
+    shape.kind = terrain::Shape::Kind::Cylinder;
+    shape.frame = frame;
+    shape.size = engine_core::Vec3{2.f * radius, height, 2.f * radius};
+    return shape;
+}
+
+// Each edit fits VoxelVolume's limit, or the check says which did not.
+void Edit(const std::optional<std::string>& refused, const std::string& what) {
+    Expect(!refused.has_value(), what + " is within the edit limit" + (refused ? " (" + *refused + ")" : ""));
+}
+
+// A framebuffer of its own, width by height RGBA8, that the Renderer draws
+// its pane into, so a shot can be larger than the hidden window.
+class OffscreenTarget {
+public:
+    OffscreenTarget(int width, int height) : width_(width), height_(height) {
+        glGenTextures(1, &color_);
+        glBindTexture(runner::GL_TEXTURE_2D, color_);
+        glTexImage2D(runner::GL_TEXTURE_2D, 0, static_cast<runner::GLint>(runner::GL_RGBA8), width, height, 0,
+                     runner::GL_RGBA, runner::GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(runner::GL_TEXTURE_2D, runner::GL_TEXTURE_MIN_FILTER,
+                        static_cast<runner::GLint>(runner::RT_GL_NEAREST));
+        glTexParameteri(runner::GL_TEXTURE_2D, runner::GL_TEXTURE_MAG_FILTER,
+                        static_cast<runner::GLint>(runner::RT_GL_NEAREST));
+        glBindTexture(runner::GL_TEXTURE_2D, 0);
+        glGenFramebuffers(1, &framebuffer_);
+        glBindFramebuffer(runner::RT_GL_FRAMEBUFFER, framebuffer_);
+        glFramebufferTexture2D(runner::RT_GL_FRAMEBUFFER, runner::RT_GL_COLOR_ATTACHMENT0, runner::GL_TEXTURE_2D,
+                               color_, 0);
+        complete_ = glCheckFramebufferStatus(runner::RT_GL_FRAMEBUFFER) == runner::RT_GL_FRAMEBUFFER_COMPLETE;
+        glBindFramebuffer(runner::RT_GL_FRAMEBUFFER, 0);
+    }
+    ~OffscreenTarget() {
+        glDeleteFramebuffers(1, &framebuffer_);
+        glDeleteTextures(1, &color_);
+    }
+    OffscreenTarget(const OffscreenTarget&) = delete;
+    OffscreenTarget& operator=(const OffscreenTarget&) = delete;
+
+    bool complete() const { return complete_; }
+
+    // Draws a few times (the DynamicSky's lighting cube and the shadow maps
+    // settle over the first frames, as in the studio), then reads the pane
+    // back top row first. The window's framebuffer and viewport are put back.
+    bool shoot(runner::Renderer& renderer, const std::vector<runner::MeshDraw>& draws, const runner::LightDraw& sun,
+               runner::ViewPixels& out) {
+        runner::GLint viewport[4] = {};
+        glGetIntegerv(runner::GL_VIEWPORT, viewport);
+        glBindFramebuffer(runner::RT_GL_FRAMEBUFFER, framebuffer_);
+        glViewport(0, 0, width_, height_);
+        const double w = width_;
+        const double h = height_;
+        bool drawn = false;
+        for (int frame = 0; frame < 4; ++frame) {
+            drawn = renderer.draw(0, 0, w, h, w, h, draws.empty() ? nullptr : draws.data(),
+                                  static_cast<int>(draws.size()), &sun, 1);
+        }
+        const bool read = drawn && renderer.read(0, 0, w, h, w, h, out);
+        glBindFramebuffer(runner::RT_GL_FRAMEBUFFER, 0);
+        glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+        return read;
+    }
+
+private:
+    int width_;
+    int height_;
+    unsigned color_ = 0;
+    unsigned framebuffer_ = 0;
+    bool complete_ = false;
+};
+
+// One terrain shot: what the camera looks at, from where (degrees around Y
+// from +X toward +Z, degrees up, studs away), and its vertical angle.
+struct TerrainShot {
+    std::string file;
+    engine_core::Vec3 target;
+    float azimuth = 0.f;
+    float elevation = 0.f;
+    float distance = 0.f;
+    float fov = 50.f;
+};
+
+// The camera's Transform for shot.
+engine_core::Matrix4 ShotCamera(const TerrainShot& shot) {
+    constexpr float kDegrees = 3.14159265f / 180.f;
+    const float around = shot.azimuth * kDegrees;
+    const float up = shot.elevation * kDegrees;
+    const engine_core::Vec3 eye{shot.target.x + shot.distance * std::cos(up) * std::cos(around),
+                                shot.target.y + shot.distance * std::sin(up),
+                                shot.target.z + shot.distance * std::cos(up) * std::sin(around)};
+    return engine_core::matrix4_look_at(eye, shot.target, {0.f, 1.f, 0.f});
+}
+
+int PixelSum(const runner::ViewPixels& pixels, int x, int y) {
+    const unsigned char* p = pixels.rgba.data() + (static_cast<std::size_t>(y) * pixels.width + x) * 4;
+    return p[0] + p[1] + p[2];
+}
+
+// Whether shot shows terrain where the sky alone would be: its middle, and a
+// good part of the frame, differ from sky's; and what differs is lit, not black.
+void ExpectTerrainShown(const std::string& name, const runner::ViewPixels& shot, const runner::ViewPixels& sky) {
+    if (shot.rgba.size() != sky.rgba.size() || shot.rgba.empty()) {
+        Expect(false, name + " and its sky alone read back at the same size");
+        return;
+    }
+    const int middle = std::abs(PixelSum(shot, shot.width / 2, shot.height / 2) -
+                                PixelSum(sky, sky.width / 2, sky.height / 2));
+    Expect(middle > 12, name + ": terrain covers the middle (differs from the sky by " + std::to_string(middle) + ")");
+    std::int64_t covered = 0;
+    std::int64_t brightness = 0;
+    for (int y = 0; y < shot.height; ++y) {
+        for (int x = 0; x < shot.width; ++x) {
+            if (std::abs(PixelSum(shot, x, y) - PixelSum(sky, x, y)) > 12) {
+                ++covered;
+                brightness += PixelSum(shot, x, y);
+            }
+        }
+    }
+    const std::int64_t total = static_cast<std::int64_t>(shot.width) * shot.height;
+    Expect(covered * 50 > total, name + ": terrain covers over 2% of the frame (" + std::to_string(covered) + " of " +
+                                     std::to_string(total) + " pixels)");
+    const std::int64_t mean = covered > 0 ? brightness / covered : 0;
+    Expect(mean > 90, name + ": the terrain is lit, not black (mean channel sum " + std::to_string(mean) + ")");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+    // --save dir or --compare dir (the regression frames), --terrain-shots dir (the terrain PNGs).
+    std::string regressionMode;
+    std::filesystem::path regressionDir;
+    std::filesystem::path terrainShots;
+    for (int i = 1; i < argc; ++i) {
+        const std::string flag = argv[i];
+        if ((flag == "--save" || flag == "--compare" || flag == "--terrain-shots") && i + 1 < argc) {
+            if (flag == "--terrain-shots") {
+                terrainShots = argv[++i];
+            } else {
+                regressionMode = flag;
+                regressionDir = argv[++i];
+            }
+            continue;
+        }
+        std::fprintf(stderr, "usage: scene-render-check [--save dir | --compare dir] [--terrain-shots dir]\n");
+        return 2;
+    }
+
     // A scratch project resources folder with the cube and a file that is not AMESH.
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "anarchy-scene-render-check";
     std::filesystem::remove_all(root);
@@ -1895,10 +2136,11 @@ int main(int argc, char** argv) {
             instanceCube.destroy();
         }
 
-        if (argc == 3 && (std::string(argv[1]) == "--save" || std::string(argv[1]) == "--compare")) {
+        if (!regressionMode.empty()) {
             GpuMesh regressionCube;
             regressionCube.upload(Cube());
-            SaveOrCompareRegression(RegressionFrames(&regressionCube, kSize, fbWidth, fbHeight), argv[1], argv[2]);
+            SaveOrCompareRegression(RegressionFrames(&regressionCube, kSize, fbWidth, fbHeight), regressionMode,
+                                    regressionDir);
             regressionCube.destroy();
         }
 
@@ -1906,6 +2148,206 @@ int main(int argc, char** argv) {
         renderer.shutdown();
     }
     Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "shutdown leaves no GL error");
+
+    // Terrain: Surface Nets chunk meshes, each vertex's material Id in its
+    // color, drawn through the terrain program with a look table.
+    {
+        runner::Renderer renderer;
+        Expect(renderer.initialize(), "the renderer builds its terrain program");
+
+        // A ball of Id 1, with Id 1 pure red: the middle of the view is red.
+        {
+            terrain::VoxelVolume volume(0.25f);
+            Edit(volume.fill(Ball(0.f, 0.f, 0.f, 1.5f), 1), "the red ball");
+            const auto chunks = UploadTerrain(volume);
+            Expect(!chunks.empty(), "the red ball meshes (" + std::to_string(chunks.size()) + " chunks)");
+            const std::vector<std::uint8_t> bytes = TerrainLook({{1, 255, 0, 0}});
+            const unsigned look = runner::MakeTerrainLookTexture(bytes.data());
+            Expect(look != 0, "the look table uploads");
+            const std::vector<runner::MeshDraw> draws = TerrainDraws(chunks, look);
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, draws.data(), static_cast<int>(draws.size()));
+            const Pixel middle = ReadPixel(fbWidth / 2, fbHeight / 2);
+            Expect(middle.r > middle.g + 40 && middle.r > middle.b + 40,
+                   "a terrain ball whose Id 1 is red draws red (" + Text(middle) + ")");
+            Expect(IsClear(ReadPixel(2, 2)), "and the corner is the clear color");
+            Expect(renderer.stats().runs == static_cast<int>(draws.size()),
+                   "each terrain chunk is a run of its own (" + std::to_string(renderer.stats().runs) + " runs, " +
+                       std::to_string(draws.size()) + " chunks)");
+
+            // Behind a cube: the cube's material program and the terrain's in one frame.
+            GpuMesh mixCube;
+            mixCube.upload(Cube());
+            std::vector<runner::MeshDraw> mixed = draws;
+            runner::MeshDraw blue{&mixCube, engine_core::matrix4_translation(2.5f, 0.f, 0.f)};
+            blue.color[0] = 0.f;
+            blue.color[1] = 0.f;
+            blue.color[2] = 1.f;
+            // First in the list, so sorting is what puts the terrain after it.
+            mixed.insert(mixed.begin(), blue);
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, mixed.data(), static_cast<int>(mixed.size()));
+            const Pixel stillRed = ReadPixel(fbWidth / 2, fbHeight / 2);
+            const Pixel cubeBlue = ReadPixel(fbWidth / 2 + fbWidth * 36 / kSize, fbHeight / 2);
+            Expect(stillRed.r > stillRed.g + 40 && stillRed.r > stillRed.b + 40 && cubeBlue.b > cubeBlue.r + 40,
+                   "with a cube beside it, the ball stays red and the cube blue (" + Text(stillRed) + " and " +
+                       Text(cubeBlue) + ")");
+            mixCube.destroy();
+            runner::GLuint texture = look;
+            glDeleteTextures(1, &texture);
+            Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the red terrain ball leaves no GL error");
+        }
+
+        // The scenes, 1280 by 720 under a DynamicSky and its shadowing sun.
+        // With --terrain-shots dir each is written to dir as a PNG.
+        constexpr int kShotWidth = 1280;
+        constexpr int kShotHeight = 720;
+        OffscreenTarget target(kShotWidth, kShotHeight);
+        Expect(target.complete(), "the 1280 by 720 offscreen target is complete");
+
+        constexpr double kHours = 15.5;
+        constexpr double kLatitude = 25.0;
+        constexpr double kCloudCover = 0.35;
+        constexpr double kCloudDensity = 0.45;
+        const runner::SkyState state = runner::ComputeSky(kHours, kLatitude, 3.0, kCloudCover, kCloudDensity);
+        runner::SceneLighting lighting;
+        lighting.ambient[0] = lighting.ambient[1] = lighting.ambient[2] = 0.3f;
+        lighting.dynamicSky.enabled = true;
+        runner::SetSkyState(lighting.dynamicSky, state);
+        lighting.dynamicSky.cloudCover = static_cast<float>(kCloudCover);
+        lighting.dynamicSky.cloudDensity = static_cast<float>(kCloudDensity);
+        lighting.dynamicSky.reflectionQuality = runner::SceneQuality::High;
+        lighting.dynamicSky.key = {static_cast<float>(kHours), static_cast<float>(kLatitude),
+                                   static_cast<float>(kCloudCover), static_cast<float>(kCloudDensity), 2};
+        renderer.setLighting(lighting);
+        runner::ShadowSettings shadowSettings;
+        shadowSettings.cascadeSize = 4096;
+        renderer.setShadowSettings(shadowSettings);
+        std::printf("terrain sun: toward (%.2f, %.2f, %.2f), %.0f degrees around Y from +X toward +Z\n",
+                    state.sun.x, state.sun.y, state.sun.z, std::atan2(state.sun.z, state.sun.x) * 180.0 / 3.14159265);
+
+        const std::vector<std::uint8_t> lookBytes = TerrainLook({
+            {0, 150, 150, 150},  // a neutral default
+            {1, 122, 110, 98},   // rock, gray-brown
+            {2, 92, 142, 58},    // grass
+            {3, 218, 196, 142},  // sand
+            {4, 242, 245, 250},  // snow
+            {5, 182, 92, 64},    // terracotta, for the seam's octants
+            {6, 78, 112, 160},   // slate blue
+        });
+        const unsigned look = runner::MakeTerrainLookTexture(lookBytes.data());
+
+        const auto shoot = [&](const terrain::VoxelVolume& volume, std::initializer_list<TerrainShot> shots) {
+            const auto chunks = UploadTerrain(volume);
+            const std::vector<runner::MeshDraw> draws = TerrainDraws(chunks, look);
+            for (const TerrainShot& shot : shots) {
+                renderer.setCamera(ShotCamera(shot), shot.fov);
+                runner::LightDraw sun = runner::SkyLightDraw(state, true);
+                // The cascades reach past the subject, however far the camera stands.
+                sun.shadowDistance = shot.distance * 2.f + 60.f;
+                runner::ViewPixels sky;
+                runner::ViewPixels pixels;
+                const bool skyShot = target.shoot(renderer, {}, sun, sky);
+                const bool drawn = target.shoot(renderer, draws, sun, pixels);
+                Expect(skyShot && drawn, shot.file + " draws and reads back");
+                Expect(pixels.width == kShotWidth && pixels.height == kShotHeight,
+                       shot.file + " is 1280 by 720 (" + std::to_string(pixels.width) + " by " +
+                           std::to_string(pixels.height) + ")");
+                ExpectTerrainShown(shot.file, pixels, sky);
+                if (!terrainShots.empty() && drawn) {
+                    std::filesystem::create_directories(terrainShots);
+                    const std::filesystem::path file = terrainShots / shot.file;
+                    std::ofstream(file, std::ios::binary) << runner::EncodePng(pixels);
+                    std::printf("wrote %s (%d chunks)\n", file.string().c_str(), static_cast<int>(chunks.size()));
+                }
+            }
+            Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the terrain shots leave no GL error");
+        };
+
+        // The sun shines from about 160 degrees around Y (toward -X, a little
+        // +Z) and 33 degrees up; each camera stands to one side of it.
+
+        // (1) and (5): a floating rock ball island, grass on its crown and a
+        // grassy knoll on top, over a wide sand flat that takes its shadow.
+        {
+            terrain::VoxelVolume volume;
+            Edit(volume.fill(Block(0.f, -47.f, 0.f, 640.f, 4.f, 640.f), 3), "the sand flat");
+            Edit(volume.fill(Ball(0.f, 0.f, 0.f, 22.f), 1), "the island");
+            Edit(volume.paint(Ball(0.f, 16.f, 0.f, 17.f), 2), "the island's grass");
+            Edit(volume.fill(Ball(5.f, 19.f, -3.f, 9.f), 2), "the knoll");
+            shoot(volume, {
+                              TerrainShot{"terrain-1-ball-island.png", {0.f, 0.f, 0.f}, 115.f, 16.f, 85.f, 50.f},
+                              TerrainShot{"terrain-5-island-far.png", {10.f, -10.f, 0.f}, 200.f, 10.f, 210.f, 40.f},
+                          });
+        }
+
+        // (2) Rolling hills: a wide rock slab with broad, low, overlapping
+        // rises, grass on top, and a sandy hollow.
+        {
+            terrain::VoxelVolume volume;
+            Edit(volume.fill(Block(0.f, -3.f, 0.f, 640.f, 6.f, 640.f), 1), "the slab");
+            // x, y, z, radius: deep, wide balls, so only a low, gentle cap of each shows.
+            const float hills[][4] = {{-40.f, -70.f, -30.f, 82.f}, {30.f, -76.f, -60.f, 90.f}, {60.f, -64.f, 30.f, 72.f},
+                                      {-20.f, -66.f, 50.f, 74.f},  {-110.f, -70.f, 60.f, 84.f}, {120.f, -72.f, -90.f, 88.f},
+                                      {-120.f, -74.f, -110.f, 90.f}, {130.f, -66.f, 110.f, 80.f}, {0.f, -76.f, -170.f, 90.f}};
+            for (const auto& hill : hills) {
+                Edit(volume.fill(Ball(hill[0], hill[1], hill[2], hill[3]), 1), "a hill");
+            }
+            Edit(volume.paint(Block(0.f, 13.f, 0.f, 644.f, 30.f, 644.f), 2), "the grass");
+            Edit(volume.subtract(Ball(18.f, 4.f, -6.f, 8.f)), "the hollow");
+            Edit(volume.paint(Ball(18.f, 4.f, -6.f, 10.f), 3), "the hollow's sand");
+            shoot(volume, {
+                              TerrainShot{"terrain-2-rolling-hills.png", {0.f, 0.f, 0.f}, 115.f, 14.f, 130.f, 50.f},
+                              TerrainShot{"terrain-2b-rolling-hills-low.png", {0.f, 8.f, 0.f}, 215.f, 8.f, 90.f, 55.f},
+                          });
+        }
+
+        // (3) A cliff on a sand beach, its face toward -X (the sun's side):
+        // an overhang along its top, a tunnel through it, a hollow in its
+        // face, and snow on its crown.
+        {
+            terrain::VoxelVolume volume;
+            Edit(volume.fill(Block(0.f, -2.f, 0.f, 120.f, 4.f, 120.f), 3), "the beach");
+            Edit(volume.fill(Block(6.f, 18.f, 0.f, 24.f, 40.f, 44.f), 1), "the cliff");
+            Edit(volume.fill(Block(-10.f, 34.f, 0.f, 12.f, 8.f, 44.f), 1), "the overhang");
+            // Along X: the cylinder's Y axis turned onto X.
+            const engine_core::Matrix4 tunnel = engine_core::matrix4_multiply(
+                engine_core::matrix4_translation(4.f, 8.f, 6.f),
+                engine_core::matrix4_axis_angle({0.f, 0.f, 1.f}, 3.14159265 / 2.0));
+            Edit(volume.subtract(Cylinder(tunnel, 6.f, 40.f)), "the tunnel");
+            Edit(volume.subtract(Ball(-6.f, 18.f, -12.f, 7.f)), "a hollow in the face");
+            Edit(volume.paint(Block(0.f, 38.f, 0.f, 60.f, 8.f, 60.f), 4), "the snow");
+            shoot(volume, {
+                              TerrainShot{"terrain-3-cliff-tunnel.png", {0.f, 16.f, 0.f}, 195.f, 10.f, 85.f, 50.f},
+                              TerrainShot{"terrain-3b-cliff-overhang-side.png", {0.f, 20.f, 0.f}, 125.f, 6.f, 80.f, 50.f},
+                          });
+        }
+
+        // (4) A ball centered on a chunk corner, so it spans 8 chunks: each
+        // octant (each chunk) painted its own Id, so the seams show as color
+        // edges, and any crack as sky.
+        {
+            terrain::VoxelVolume volume;
+            Edit(volume.fill(Ball(32.f, 32.f, 32.f, 11.f), 1), "the corner ball");
+            const int ids[8] = {1, 2, 3, 5, 6, 4, 2, 1};
+            for (int octant = 0; octant < 8; ++octant) {
+                const float sx = (octant & 1) != 0 ? 1.f : -1.f;
+                const float sy = (octant & 2) != 0 ? 1.f : -1.f;
+                const float sz = (octant & 4) != 0 ? 1.f : -1.f;
+                // Cells 32 to 43 or 20 to 31 on each axis: exactly one chunk's side.
+                Edit(volume.paint(Block(sx > 0 ? 37.5f : 25.5f, sy > 0 ? 37.5f : 25.5f, sz > 0 ? 37.5f : 25.5f,
+                                        11.5f, 11.5f, 11.5f),
+                                  static_cast<std::uint8_t>(ids[octant])),
+                     "an octant's paint");
+            }
+            shoot(volume, {
+                               TerrainShot{"terrain-4-chunk-corner-seam.png", {32.f, 32.f, 32.f}, 100.f, 22.f, 32.f, 45.f},
+                           });
+        }
+
+        runner::GLuint texture = look;
+        glDeleteTextures(1, &texture);
+        renderer.shutdown();
+        Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the terrain checks leave no GL error");
+    }
 
     // A Material's preview: a ball in its Color, lit from the upper left and
     // clear around it, drawn off screen, leaving the window's framebuffer as it was.

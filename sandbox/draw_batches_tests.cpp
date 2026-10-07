@@ -212,3 +212,26 @@ TEST_CASE("B9 InstanceData is 112 bytes, in slot order", "[batches]") {
     REQUIRE(offsetof(InstanceData, normal) == 64);
     REQUIRE(offsetof(InstanceData, tint) == 100);
 }
+
+TEST_CASE("B10 terrain chunks draw alone, after every other opaque run", "[batches]") {
+    Frame frame;
+    frame.add(At(0.f, 0.f, -5.f), 0);
+    frame.add(At(0.f, 0.f, -9.f), 0);
+    frame.add(At(0.f, 0.f, -2.f), 0);
+    frame.add(At(0.f, 0.f, -7.f), 5);
+    frame.add(At(0.f, 0.f, -3.f), 5);
+    frame.items[0].terrain = true;
+    frame.items[2].terrain = true;
+    DrawBatches out;
+    BuildBatches(frame.ready(), frame.visible, kView, out);
+    // Draw 1 (slot 0 sorts first), the slot 5 pair, then the two terrain chunks, nearest first.
+    REQUIRE(out.runs.size() == 4);
+    REQUIRE(out.opaqueRuns == 4);
+    REQUIRE(out.runs[0].draw == 1);
+    REQUIRE(out.runs[1].count == 2);
+    REQUIRE(out.runs[1].draw == 4);
+    REQUIRE(out.runs[2].draw == 2);
+    REQUIRE(out.runs[3].draw == 0);
+    REQUIRE(out.runs[2].count == 1);
+    REQUIRE(out.runs[3].count == 1);
+}

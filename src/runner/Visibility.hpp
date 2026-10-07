@@ -24,6 +24,9 @@ struct DrawItem {
     // Which Prefab Model it draws. Draws with the same nonzero slot share a
     // mesh and every Material value. 0 never batches.
     std::uint32_t slot = 0;
+    // A terrain chunk (MeshDraw::terrainLook): never batched, and sorted after
+    // every other opaque draw.
+    bool terrain = false;
     // An uploaded mesh, and transparency below 1. Anything else draws nothing.
     bool drawable = false;
 };

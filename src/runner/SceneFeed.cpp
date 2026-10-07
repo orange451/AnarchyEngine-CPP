@@ -57,6 +57,8 @@ void SceneFeed::perform(const engine_core::VisualSnapshot& front) {
     out->occlusion = front.occlusion;
     out->draggers = front.draggers;
     out->billboards = front.billboards;
+    // Each Terrain's chunks and look, shared by pointer.
+    out->terrains = front.terrains;
     out->resources_root = front.resources_root;
     std::lock_guard<std::mutex> guard(mu_);
     newest_ = std::move(out);

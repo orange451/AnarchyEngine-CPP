@@ -62,6 +62,13 @@ engine_core::VisualSnapshot Frame(std::uint64_t number, std::size_t rows) {
     board.id = 99;
     board.anchor.x = static_cast<float>(number);
     snapshot.billboards.push_back(board);
+    // A Terrain rides along as a view naming its chunks and look by pointer.
+    engine_core::TerrainView terrain;
+    terrain.terrain = 42;
+    terrain.chunks_revision = number;
+    terrain.chunks = std::make_shared<const std::vector<engine_core::TerrainChunkView>>();
+    terrain.look = std::make_shared<const engine_core::TerrainLook>();
+    snapshot.terrains.push_back(terrain);
     return snapshot;
 }
 
@@ -85,7 +92,9 @@ bool Whole(const engine_core::VisualSnapshot& snapshot) {
              snapshot.prefabs[1].meshes[0].path == "meshes/" + std::to_string(snapshot.frame) + ".amesh" &&
              snapshot.prefabs[1].meshes[1].session != nullptr && snapshot.prefabs[1].meshes[1].revision == snapshot.frame)) &&
            (snapshot.frame == 0 ||
-            (snapshot.billboards.size() == 1 && snapshot.billboards[0].anchor.x == static_cast<float>(snapshot.frame)));
+            (snapshot.billboards.size() == 1 && snapshot.billboards[0].anchor.x == static_cast<float>(snapshot.frame) &&
+             snapshot.terrains.size() == 1 && snapshot.terrains[0].chunks_revision == snapshot.frame &&
+             snapshot.terrains[0].chunks != nullptr && snapshot.terrains[0].look != nullptr));
 }
 
 void TestHeldFramesAreNotWrittenOver() {

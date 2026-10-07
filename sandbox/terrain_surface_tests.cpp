@@ -26,6 +26,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -397,6 +398,24 @@ TEST_CASE("SN6 meshing one dense chunk is fast", "[.][terrain-bench]") {
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / 50.0;
     INFO(ms);
     REQUIRE(ms < 1.5);   // leaves room for the collider build in the 2 ms budget
+}
+
+TEST_CASE("SN8 meshing one dense chunk plus its collider is fast", "[.][terrain-bench]") {
+    // The spec's worker budget: Surface Nets and the Box3D mesh for one dense
+    // surface chunk together under 2 ms, on one mesher worker thread.
+    VoxelVolume volume;
+    for (int i = 0; i < 6; ++i) {
+        REQUIRE_FALSE(volume.fill(ball_at(5.f + i * 4.f, 10.f + (i % 3) * 5.f, 16.f, 6.f), 1));
+    }
+    const MeshInput input = mesh_input(volume, ChunkCoord{0, 0, 0});
+    REQUIRE(PhysicsWorld::build_terrain_collider(surface_nets(input)) != nullptr);
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < 50; ++i) {
+        (void)PhysicsWorld::build_terrain_collider(surface_nets(input));
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / 50.0;
+    INFO(ms);
+    REQUIRE(ms < 2.0);
 }
 
 namespace {
@@ -871,4 +890,110 @@ TEST_CASE("TP4 a box resting on terrain stays up while its chunk is re-meshed", 
     REQUIRE(collider_revision(world, t.id(), under) != before);
     INFO(y_of(box.transform()));
     REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));
+}
+
+namespace {
+
+// A rolling slab over 16 x 16 chunks (512 x 512 studs), built as a sum of
+// balls whose centers rise and fall: its top wanders across y = 32 and its
+// bottom across y = 0, so most columns have surface in two or more chunks.
+void fill_rolling_slab(VoxelVolume& volume) {
+    for (int z = 0; z <= 512; z += 16) {
+        for (int x = 0; x <= 512; x += 16) {
+            const float fx = static_cast<float>(x), fz = static_cast<float>(z);
+            const float y = 20.f + 12.f * std::sin(fx / 40.f) * std::cos(fz / 50.f);
+            REQUIRE_FALSE(volume.fill(ball_at(fx, y, fz, 14.f), 1));
+        }
+    }
+}
+
+// How many chunks of volume have triangles, meshed serially here: what the
+// TerrainWorld should end up showing.
+std::size_t surface_chunk_count(const VoxelVolume& volume) {
+    std::size_t count = 0;
+    for (const ChunkMesh& mesh : mesh_all(volume)) {
+        if (!mesh.triangles.empty()) ++count;
+    }
+    return count;
+}
+
+}  // namespace
+
+TEST_CASE("TL1 a 500-chunk island is fully meshed about a second after it appears", "[.][terrain-bench]") {
+    SimRole role;
+    Game game;
+    Terrain& t = terrain_in_workspace(game);
+    fill_rolling_slab(t.volume());
+    const std::size_t expected = surface_chunk_count(t.volume());
+    INFO("chunks with surface: " << expected);
+    REQUIRE(expected >= 500u);
+
+    // This thread stands in for SimulationThread (no other thread touches
+    // game, so no DataModel lock) and keeps ticking: one update about every
+    // millisecond until every chunk with a surface has a mesh (and a
+    // collider, built in the same job on a mesher worker).
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    const auto start = std::chrono::steady_clock::now();
+    std::size_t shown = 0;
+    while (true) {
+        world.update(game);
+        shown = world.views().empty() ? 0 : world.views()[0].chunks->size();
+        if (shown >= expected) break;
+        if (std::chrono::steady_clock::now() - start > std::chrono::seconds(10)) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    INFO("seconds: " << seconds);
+    REQUIRE(shown == expected);
+    REQUIRE(seconds < 1.5);
+}
+
+TEST_CASE("TL2 during play, digging under a resting box drops it", "[terrain][physics]") {
+    using physics_rig::at;
+    using physics_rig::kStep;
+    using physics_rig::near;
+    using physics_rig::y_of;
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    REQUIRE_FALSE(t.volume().fill(slab(48.f, 8.f), 1));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+    rig.play();
+    PhysicsObject& box = rig.body(at(8.f, 3.f, 8.f), Vec3{1.f, 1.f, 1.f}, false);
+    // One TerrainWorld update a frame and four physics steps, as the Engine
+    // runs them during play.
+    const auto frames = [&](int count) {
+        for (int frame = 0; frame < count; ++frame) {
+            world.update(rig.game);
+            for (int step = 0; step < 4; ++step) {
+                rig.physics.step(rig.game, kStep);
+            }
+        }
+    };
+    frames(120);
+    {
+        INFO(y_of(box.transform()));
+        REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));   // at rest on the slab
+    }
+
+    // Dig a hole right through the slab under the box (Terrain::edit_volume
+    // is not merged yet: edit through volume() directly). The box may be
+    // asleep by now; the old chunk shapes going must wake it.
+    Shape hole;
+    hole.kind = Shape::Kind::Block;
+    hole.frame = matrix4_translation(8.f, -4.f, 8.f);
+    hole.size = Vec3{12.f, 20.f, 12.f};
+    REQUIRE_FALSE(t.volume().subtract(hole));
+    // These frames run much faster than real time, so give the mesher's
+    // workers the real time a playing Engine would: queue the edit's chunks
+    // from this thread (standing in for SimulationThread), wait for the
+    // workers, and the next frame collects them -- an edit shows a frame or
+    // two later.
+    world.update(rig.game);
+    world.wait_idle();
+    frames(120);   // 2 s
+    REQUIRE_FALSE(rig.physics.raycast(rig.game, Vec3{4.f, 10.f, 4.f}, Vec3{0.f, -20.f, 0.f}, {}).has_value());
+    INFO(y_of(box.transform()));
+    REQUIRE(y_of(box.transform()) < -10.f);
 }

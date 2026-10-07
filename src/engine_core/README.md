@@ -28,6 +28,8 @@ While Lua runs, on any thread, a contract failure a script reaches throws `Contr
 
 Physics may substep inside one sim frame (240 Hz). Display rate does not set that count. Pools are reserved at startup; the step does not allocate.
 
+Terrain meshing is the one other set of threads. `TerrainWorld` runs on SimulationThread under the write lock: each tick it hands the dirty chunks of every Terrain in Workspace to `TerrainMesher`, whose workers (hardware threads less one, at most 4) run `surface_nets` (`terrain/SurfaceNets`) and build each chunk's collider. Workers read only the immutable chunks a job holds and take only the mesher's own lock; finished meshes are collected on the next tick and published for `PhysicsWorld` and `SnapshotPump`.
+
 ## ThreadSanitizer
 
 ```sh

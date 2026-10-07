@@ -48,7 +48,9 @@ struct DrawBatches {
     std::vector<Entry> order;
 };
 
-// Sorts visible's opaque draws by BatchKey, nearest first within a key, into
+// Sorts visible's opaque draws by BatchKey, nearest first within a key (a
+// terrain chunk by the middle of its own mesh box, as one Terrain's chunks
+// share a model; anything else by its model's origin), into
 // runs; a slot 0 draw or a terrain chunk is always a run of its own, and
 // terrain chunks come after every other opaque run. Then each see-through draw,
 // farthest first by its Transform's depth in view, as a run of 1.

@@ -14,6 +14,23 @@ float ViewDepth(const engine_core::Matrix4& view, const engine_core::Matrix4& mo
     return v[2] * t[0] + v[6] * t[1] + v[10] * t[2] + v[14];
 }
 
+// How far along the view's -Z the middle of item's mesh box is. A Terrain's
+// chunks share one model, so its origin would tie them all; each chunk's own
+// box keeps them nearest first.
+float BoundsViewDepth(const engine_core::Matrix4& view, const DrawItem& item) {
+    const float* m = item.model->m;
+    float local[3];
+    for (int axis = 0; axis < 3; ++axis) {
+        local[axis] = 0.5f * (item.boundsMin[axis] + item.boundsMax[axis]);
+    }
+    float world[3];
+    for (int row = 0; row < 3; ++row) {
+        world[row] = m[row] * local[0] + m[4 + row] * local[1] + m[8 + row] * local[2] + m[12 + row];
+    }
+    const float* v = view.m;
+    return v[2] * world[0] + v[6] * world[1] + v[10] * world[2] + v[14];
+}
+
 void Cross(const float* a, const float* b, float* out) {
     out[0] = a[1] * b[2] - a[2] * b[1];
     out[1] = a[2] * b[0] - a[0] * b[2];
@@ -75,7 +92,9 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
         const DrawItem& item = items[draw.index];
         DrawBatches::Entry entry;
         entry.key = BatchKey(item.slot, draw.lod, Mirrored(*item.model));
-        entry.depth = ViewDepth(view, *item.model);
+        entry.depth = item.terrain && item.boundsMin != nullptr && item.boundsMax != nullptr
+                          ? BoundsViewDepth(view, item)
+                          : ViewDepth(view, *item.model);
         entry.index = draw.index;
         entry.lod = draw.lod;
         order.push_back(entry);

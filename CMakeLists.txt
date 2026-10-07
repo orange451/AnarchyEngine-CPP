@@ -86,6 +86,7 @@ set(STUDIO_SOURCES
     src/runner/InstanceBuffer.cpp
     src/runner/EnvironmentMap.cpp
     src/runner/MeshCache.cpp
+    src/runner/TerrainDraws.cpp
     src/runner/TextureCache.cpp
     src/amesh/amesh_gl.cpp
     src/runner/GameView.cpp

@@ -23,6 +23,9 @@ MeshCache::~MeshCache() {
     for (auto& [mesh, entry] : sessions_) {
         entry.mesh.forget();
     }
+    for (auto& [key, entry] : chunks_) {
+        entry.mesh.forget();
+    }
 }
 
 void MeshCache::setRoot(const std::filesystem::path& root) {
@@ -42,28 +45,39 @@ void MeshCache::clear() {
         entry.mesh.destroy();
     }
     sessions_.clear();
+    for (auto& [key, entry] : chunks_) {
+        entry.mesh.destroy();
+    }
+    chunks_.clear();
+}
+
+void MeshCache::uploadOnce(SessionEntry& entry, const anarchy::amesh::Data& data, std::uint64_t revision,
+                           bool dynamic, const char* what) {
+    entry.asked = true;
+    if (entry.tried && entry.revision == revision) {
+        return;
+    }
+    entry.tried = true;
+    entry.revision = revision;
+    if (data.indices.empty()) {
+        entry.mesh.destroy();
+        return;
+    }
+    try {
+        entry.mesh.upload(data, dynamic);
+    } catch (const std::exception& failure) {
+        entry.mesh.destroy();
+        if (report_) {
+            report_(std::string(what) + failure.what());
+        }
+    }
 }
 
 const anarchy::amesh::GpuMesh* MeshCache::getSession(engine_core::InstanceId mesh, const anarchy::amesh::Data& data,
                                                     std::uint64_t revision) {
     SessionEntry& entry = sessions_[mesh];
-    entry.asked = true;
-    if (entry.revision != revision) {
-        entry.revision = revision;
-        if (data.indices.empty()) {
-            entry.mesh.destroy();
-        } else {
-            try {
-                // Dynamic: a script may replace it again next frame.
-                entry.mesh.upload(data, true);
-            } catch (const std::exception& failure) {
-                entry.mesh.destroy();
-                if (report_) {
-                    report_(std::string("A Mesh's play-session shapes could not be drawn: ") + failure.what());
-                }
-            }
-        }
-    }
+    // Dynamic: a script may replace it again next frame.
+    uploadOnce(entry, data, revision, true, "A Mesh's play-session shapes could not be drawn: ");
     return entry.mesh.valid() ? &entry.mesh : nullptr;
 }
 
@@ -72,6 +86,30 @@ void MeshCache::sweepSessions() {
         if (!it->second.asked) {
             it->second.mesh.destroy();
             it = sessions_.erase(it);
+        } else {
+            it->second.asked = false;
+            ++it;
+        }
+    }
+}
+
+std::size_t MeshCache::ChunkKeyHash::operator()(const ChunkKey& key) const {
+    return engine_core::terrain::ChunkCoordHash{}(key.coord) * 31u + std::hash<engine_core::InstanceId>{}(key.terrain);
+}
+
+const anarchy::amesh::GpuMesh* MeshCache::getTerrainChunk(engine_core::InstanceId terrain,
+                                                         engine_core::terrain::ChunkCoord coord,
+                                                         const anarchy::amesh::Data& data, std::uint64_t revision) {
+    SessionEntry& entry = chunks_[ChunkKey{terrain, coord}];
+    uploadOnce(entry, data, revision, false, "A Terrain chunk could not be drawn: ");
+    return entry.mesh.valid() ? &entry.mesh : nullptr;
+}
+
+void MeshCache::sweepTerrainChunks() {
+    for (auto it = chunks_.begin(); it != chunks_.end();) {
+        if (!it->second.asked) {
+            it->second.mesh.destroy();
+            it = chunks_.erase(it);
         } else {
             it->second.asked = false;
             ++it;

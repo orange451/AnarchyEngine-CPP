@@ -235,3 +235,31 @@ TEST_CASE("B10 terrain chunks draw alone, after every other opaque run", "[batch
     REQUIRE(out.runs[2].count == 1);
     REQUIRE(out.runs[3].count == 1);
 }
+
+TEST_CASE("B11 one Terrain's chunks, sharing its model, draw nearest box first", "[batches][terrain]") {
+    // Three chunks of a Terrain moved 4 back: every one has the same model,
+    // so only each chunk's own box tells which is nearer.
+    const float nearMin[3] = {0.f, 0.f, -8.f};
+    const float nearMax[3] = {8.f, 8.f, 0.f};
+    const float farMin[3] = {0.f, 0.f, -40.f};
+    const float farMax[3] = {8.f, 8.f, -32.f};
+    const float midMin[3] = {0.f, 0.f, -24.f};
+    const float midMax[3] = {8.f, 8.f, -16.f};
+    Frame frame;
+    for (int i = 0; i < 3; ++i) {
+        frame.add(At(0.f, 0.f, -4.f), 0);
+        frame.items.back().terrain = true;
+    }
+    frame.items[0].boundsMin = farMin;
+    frame.items[0].boundsMax = farMax;
+    frame.items[1].boundsMin = nearMin;
+    frame.items[1].boundsMax = nearMax;
+    frame.items[2].boundsMin = midMin;
+    frame.items[2].boundsMax = midMax;
+    DrawBatches out;
+    BuildBatches(frame.ready(), frame.visible, kView, out);
+    REQUIRE(out.runs.size() == 3);
+    REQUIRE(out.runs[0].draw == 1);
+    REQUIRE(out.runs[1].draw == 2);
+    REQUIRE(out.runs[2].draw == 0);
+}

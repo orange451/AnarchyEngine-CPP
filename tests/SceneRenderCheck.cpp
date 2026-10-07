@@ -1,10 +1,17 @@
+#include "AssetInstances.hpp"
 #include "Camera.hpp"
+#include "Game.hpp"
+#include "SnapshotPump.hpp"
+#include "Terrain.hpp"
+#include "TerrainMaterial.hpp"
+#include "TerrainWorld.hpp"
 #include "amesh.hpp"
 #include "ide/MaterialBall.hpp"
 #include "runner/MeshCache.hpp"
 #include "runner/RenderMath.hpp"
 #include "DraggerMath.hpp"
 #include "runner/Renderer.hpp"
+#include "runner/TerrainDraws.hpp"
 #include "runner/SkyMath.hpp"
 #include "runner/TextureCache.hpp"
 #include "profiler/Profiler.hpp"
@@ -42,10 +49,13 @@
 // resources folder goes through MeshCache and Renderer, with the fixed
 // camera, and the check reads the pixels back. With --save dir or --compare dir
 // it also writes, or checks against, the regression scenes' frames. Terrain
-// (Surface Nets chunks through the terrain program) is drawn too, a red ball in
-// the window and then island, hills, cliff and chunk-seam scenes at 1280 by 720
-// offscreen under a DynamicSky; with --terrain-shots dir those scenes are also
-// written to dir as PNGs, and each path printed. The flags combine.
+// (Surface Nets chunks through the terrain program) is drawn too: always a red
+// ball in the window, through the Scene View's own AppendTerrainDraws. With
+// --terrain-shots dir, also island, hills, cliff and chunk-seam scenes at 1280
+// by 720 offscreen under a DynamicSky, and scenes taken through the snapshot
+// path (a Game's Terrain, a TerrainWorld, a SnapshotPump), each written to dir
+// as a PNG and its path printed; they take some seconds, so a plain run skips
+// them. The flags combine.
 namespace {
 
 using namespace anarchy::amesh;
@@ -308,9 +318,9 @@ void SaveOrCompareRegression(const std::vector<std::vector<unsigned char>>& fram
 
 namespace terrain = engine_core::terrain;
 
-// Every chunk of volume that has data, and its 26 neighbors, meshed and
-// uploaded; empty chunks are left out. As sandbox/terrain_surface_tests.cpp's mesh_all.
-std::vector<std::unique_ptr<GpuMesh>> UploadTerrain(const terrain::VoxelVolume& volume) {
+// Every chunk of volume that has data, and its 26 neighbors: the chunks a
+// surface may cross. As sandbox/terrain_surface_tests.cpp's mesh_all.
+std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> ChunksAround(const terrain::VoxelVolume& volume) {
     std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> coords;
     for (const auto& entry : volume.chunks()) {
         const terrain::ChunkCoord& coord = entry.first;
@@ -322,8 +332,37 @@ std::vector<std::unique_ptr<GpuMesh>> UploadTerrain(const terrain::VoxelVolume& 
             }
         }
     }
+    return coords;
+}
+
+// Every chunk ChunksAround names, meshed, as TerrainWorld publishes them: a
+// TerrainChunkView each, with revisions from next_revision on; empty chunks
+// are left out.
+std::shared_ptr<const std::vector<engine_core::TerrainChunkView>> MeshChunks(const terrain::VoxelVolume& volume,
+                                                                            std::uint64_t next_revision) {
+    auto chunks = std::make_shared<std::vector<engine_core::TerrainChunkView>>();
+    for (const terrain::ChunkCoord& coord : ChunksAround(volume)) {
+        terrain::ChunkMesh mesh = terrain::surface_nets(terrain::mesh_input(volume, coord));
+        if (mesh.render != nullptr) {
+            chunks->push_back(engine_core::TerrainChunkView{coord, next_revision++, std::move(mesh.render)});
+        }
+    }
+    return chunks;
+}
+
+// A published look from look-table bytes (LookBytes'), with revision.
+std::shared_ptr<const engine_core::TerrainLook> MakeLook(const std::vector<std::uint8_t>& bytes,
+                                                        std::uint64_t revision) {
+    auto look = std::make_shared<engine_core::TerrainLook>();
+    std::copy(bytes.begin(), bytes.end(), look->texels.begin());
+    look->revision = revision;
+    return look;
+}
+
+// Every chunk ChunksAround names, meshed and uploaded; empty chunks are left out.
+std::vector<std::unique_ptr<GpuMesh>> UploadTerrain(const terrain::VoxelVolume& volume) {
     std::vector<std::unique_ptr<GpuMesh>> out;
-    for (const terrain::ChunkCoord& coord : coords) {
+    for (const terrain::ChunkCoord& coord : ChunksAround(volume)) {
         const terrain::ChunkMesh mesh = terrain::surface_nets(terrain::mesh_input(volume, coord));
         if (mesh.render == nullptr) {
             continue;
@@ -350,7 +389,7 @@ std::vector<runner::MeshDraw> TerrainDraws(const std::vector<std::unique_ptr<Gpu
 
 // A Terrain look table's bytes: every Id rough and plain, colored by colors
 // (Id, then sRGB) and a neutral gray for the rest.
-std::vector<std::uint8_t> TerrainLook(std::initializer_list<std::array<int, 4>> colors) {
+std::vector<std::uint8_t> LookBytes(std::initializer_list<std::array<int, 4>> colors) {
     std::vector<std::uint8_t> bytes(256 * 2 * 4);
     for (int id = 0; id < 256; ++id) {
         std::uint8_t* color = bytes.data() + id * 4;
@@ -2156,15 +2195,22 @@ int main(int argc, char** argv) {
         Expect(renderer.initialize(), "the renderer builds its terrain program");
 
         // A ball of Id 1, with Id 1 pure red: the middle of the view is red.
+        // Through AppendTerrainDraws, as the Scene View draws a snapshot's
+        // Terrains: MeshCache::getTerrainChunk and Renderer::terrainLookTexture.
         {
             terrain::VoxelVolume volume(0.25f);
             Edit(volume.fill(Ball(0.f, 0.f, 0.f, 1.5f), 1), "the red ball");
-            const auto chunks = UploadTerrain(volume);
-            Expect(!chunks.empty(), "the red ball meshes (" + std::to_string(chunks.size()) + " chunks)");
-            const std::vector<std::uint8_t> bytes = TerrainLook({{1, 255, 0, 0}});
-            const unsigned look = runner::MakeTerrainLookTexture(bytes.data());
-            Expect(look != 0, "the look table uploads");
-            const std::vector<runner::MeshDraw> draws = TerrainDraws(chunks, look);
+            engine_core::TerrainView view;
+            view.terrain = 77;
+            view.chunks = MeshChunks(volume, 1);
+            view.look = MakeLook(LookBytes({{1, 255, 0, 0}}), 1);
+            Expect(!view.chunks->empty(), "the red ball meshes (" + std::to_string(view.chunks->size()) + " chunks)");
+            runner::MeshCache chunkMeshes;
+            std::vector<runner::MeshDraw> draws;
+            runner::AppendTerrainDraws({view}, chunkMeshes, renderer, draws);
+            Expect(draws.size() == view.chunks->size() && draws.front().terrainLook != 0 &&
+                       draws.front().owner == 77 && draws.front().slot == 0,
+                   "each chunk is a MeshDraw with the Terrain's look, owned by it, drawn alone");
             renderer.draw(0, 0, kSize, kSize, kSize, kSize, draws.data(), static_cast<int>(draws.size()));
             const Pixel middle = ReadPixel(fbWidth / 2, fbHeight / 2);
             Expect(middle.r > middle.g + 40 && middle.r > middle.b + 40,
@@ -2173,6 +2219,23 @@ int main(int argc, char** argv) {
             Expect(renderer.stats().runs == static_cast<int>(draws.size()),
                    "each terrain chunk is a run of its own (" + std::to_string(renderer.stats().runs) + " runs, " +
                        std::to_string(draws.size()) + " chunks)");
+
+            // A new look (Id 1 green) on the same chunks: the same uploads and
+            // texture name, the new texels.
+            engine_core::TerrainView green = view;
+            green.look = MakeLook(LookBytes({{1, 0, 255, 0}}), 2);
+            std::vector<runner::MeshDraw> greenDraws;
+            runner::AppendTerrainDraws({green}, chunkMeshes, renderer, greenDraws);
+            Expect(greenDraws.size() == draws.size() && greenDraws.front().mesh == draws.front().mesh &&
+                       greenDraws.front().terrainLook == draws.front().terrainLook,
+                   "a new look revision keeps the chunk uploads and the texture");
+            renderer.draw(0, 0, kSize, kSize, kSize, kSize, greenDraws.data(), static_cast<int>(greenDraws.size()));
+            const Pixel turned = ReadPixel(fbWidth / 2, fbHeight / 2);
+            Expect(turned.g > turned.r + 40 && turned.g > turned.b + 40,
+                   "and draws in the new look's green (" + Text(turned) + ")");
+            // Back to red (another revision change), for the frame with a cube.
+            draws.clear();
+            runner::AppendTerrainDraws({view}, chunkMeshes, renderer, draws);
 
             // Behind a cube: the cube's material program and the terrain's in one frame.
             GpuMesh mixCube;
@@ -2191,54 +2254,56 @@ int main(int argc, char** argv) {
                    "with a cube beside it, the ball stays red and the cube blue (" + Text(stillRed) + " and " +
                        Text(cubeBlue) + ")");
             mixCube.destroy();
-            runner::GLuint texture = look;
-            glDeleteTextures(1, &texture);
+            // No Terrains: the sweeps delete the uploads and the look.
+            draws.clear();
+            runner::AppendTerrainDraws({}, chunkMeshes, renderer, draws);
+            Expect(draws.empty(), "no Terrains draw nothing");
+            chunkMeshes.clear();
             Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the red terrain ball leaves no GL error");
         }
 
-        // The scenes, 1280 by 720 under a DynamicSky and its shadowing sun.
-        // With --terrain-shots dir each is written to dir as a PNG.
-        constexpr int kShotWidth = 1280;
-        constexpr int kShotHeight = 720;
-        OffscreenTarget target(kShotWidth, kShotHeight);
-        Expect(target.complete(), "the 1280 by 720 offscreen target is complete");
+        // The scenes, only with --terrain-shots dir: they take some seconds.
+        if (!terrainShots.empty()) {
+            // 1280 by 720 under a DynamicSky and its shadowing sun, each written to dir as a PNG.
+            constexpr int kShotWidth = 1280;
+            constexpr int kShotHeight = 720;
+            OffscreenTarget target(kShotWidth, kShotHeight);
+            Expect(target.complete(), "the 1280 by 720 offscreen target is complete");
 
-        constexpr double kHours = 15.5;
-        constexpr double kLatitude = 25.0;
-        constexpr double kCloudCover = 0.35;
-        constexpr double kCloudDensity = 0.45;
-        const runner::SkyState state = runner::ComputeSky(kHours, kLatitude, 3.0, kCloudCover, kCloudDensity);
-        runner::SceneLighting lighting;
-        lighting.ambient[0] = lighting.ambient[1] = lighting.ambient[2] = 0.3f;
-        lighting.dynamicSky.enabled = true;
-        runner::SetSkyState(lighting.dynamicSky, state);
-        lighting.dynamicSky.cloudCover = static_cast<float>(kCloudCover);
-        lighting.dynamicSky.cloudDensity = static_cast<float>(kCloudDensity);
-        lighting.dynamicSky.reflectionQuality = runner::SceneQuality::High;
-        lighting.dynamicSky.key = {static_cast<float>(kHours), static_cast<float>(kLatitude),
-                                   static_cast<float>(kCloudCover), static_cast<float>(kCloudDensity), 2};
-        renderer.setLighting(lighting);
-        runner::ShadowSettings shadowSettings;
-        shadowSettings.cascadeSize = 4096;
-        renderer.setShadowSettings(shadowSettings);
-        std::printf("terrain sun: toward (%.2f, %.2f, %.2f), %.0f degrees around Y from +X toward +Z\n",
-                    state.sun.x, state.sun.y, state.sun.z, std::atan2(state.sun.z, state.sun.x) * 180.0 / 3.14159265);
+            constexpr double kHours = 15.5;
+            constexpr double kLatitude = 25.0;
+            constexpr double kCloudCover = 0.35;
+            constexpr double kCloudDensity = 0.45;
+            const runner::SkyState state = runner::ComputeSky(kHours, kLatitude, 3.0, kCloudCover, kCloudDensity);
+            runner::SceneLighting lighting;
+            lighting.ambient[0] = lighting.ambient[1] = lighting.ambient[2] = 0.3f;
+            lighting.dynamicSky.enabled = true;
+            runner::SetSkyState(lighting.dynamicSky, state);
+            lighting.dynamicSky.cloudCover = static_cast<float>(kCloudCover);
+            lighting.dynamicSky.cloudDensity = static_cast<float>(kCloudDensity);
+            lighting.dynamicSky.reflectionQuality = runner::SceneQuality::High;
+            lighting.dynamicSky.key = {static_cast<float>(kHours), static_cast<float>(kLatitude),
+                                       static_cast<float>(kCloudCover), static_cast<float>(kCloudDensity), 2};
+            renderer.setLighting(lighting);
+            runner::ShadowSettings shadowSettings;
+            shadowSettings.cascadeSize = 4096;
+            renderer.setShadowSettings(shadowSettings);
+            std::printf("terrain sun: toward (%.2f, %.2f, %.2f), %.0f degrees around Y from +X toward +Z\n",
+                        state.sun.x, state.sun.y, state.sun.z, std::atan2(state.sun.z, state.sun.x) * 180.0 / 3.14159265);
 
-        const std::vector<std::uint8_t> lookBytes = TerrainLook({
-            {0, 150, 150, 150},  // a neutral default
-            {1, 122, 110, 98},   // rock, gray-brown
-            {2, 92, 142, 58},    // grass
-            {3, 218, 196, 142},  // sand
-            {4, 242, 245, 250},  // snow
-            {5, 182, 92, 64},    // terracotta, for the seam's octants
-            {6, 78, 112, 160},   // slate blue
-        });
-        const unsigned look = runner::MakeTerrainLookTexture(lookBytes.data());
+            const std::vector<std::uint8_t> lookBytes = LookBytes({
+                {0, 150, 150, 150},  // a neutral default
+                {1, 122, 110, 98},   // rock, gray-brown
+                {2, 92, 142, 58},    // grass
+                {3, 218, 196, 142},  // sand
+                {4, 242, 245, 250},  // snow
+                {5, 182, 92, 64},    // terracotta, for the seam's octants
+                {6, 78, 112, 160},   // slate blue
+            });
+            const unsigned look = runner::MakeTerrainLookTexture(lookBytes.data());
 
-        const auto shoot = [&](const terrain::VoxelVolume& volume, std::initializer_list<TerrainShot> shots) {
-            const auto chunks = UploadTerrain(volume);
-            const std::vector<runner::MeshDraw> draws = TerrainDraws(chunks, look);
-            for (const TerrainShot& shot : shots) {
+            // draws (one per chunk) from shot, checked against the sky alone and written to dir.
+            const auto shootDraws = [&](const std::vector<runner::MeshDraw>& draws, const TerrainShot& shot) {
                 renderer.setCamera(ShotCamera(shot), shot.fov);
                 runner::LightDraw sun = runner::SkyLightDraw(state, true);
                 // The cascades reach past the subject, however far the camera stands.
@@ -2252,99 +2317,199 @@ int main(int argc, char** argv) {
                        shot.file + " is 1280 by 720 (" + std::to_string(pixels.width) + " by " +
                            std::to_string(pixels.height) + ")");
                 ExpectTerrainShown(shot.file, pixels, sky);
-                if (!terrainShots.empty() && drawn) {
+                if (drawn) {
                     std::filesystem::create_directories(terrainShots);
                     const std::filesystem::path file = terrainShots / shot.file;
                     std::ofstream(file, std::ios::binary) << runner::EncodePng(pixels);
-                    std::printf("wrote %s (%d chunks)\n", file.string().c_str(), static_cast<int>(chunks.size()));
+                    std::printf("wrote %s (%d chunks)\n", file.string().c_str(), static_cast<int>(draws.size()));
                 }
+            };
+            const auto shoot = [&](const terrain::VoxelVolume& volume, std::initializer_list<TerrainShot> shots) {
+                const auto chunks = UploadTerrain(volume);
+                const std::vector<runner::MeshDraw> draws = TerrainDraws(chunks, look);
+                for (const TerrainShot& shot : shots) {
+                    shootDraws(draws, shot);
+                }
+                Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the terrain shots leave no GL error");
+            };
+
+            // The sun shines from about 160 degrees around Y (toward -X, a little
+            // +Z) and 33 degrees up; each camera stands to one side of it.
+
+            // (1) and (5): a floating rock ball island, grass on its crown and a
+            // grassy knoll on top, over a wide sand flat that takes its shadow.
+            {
+                terrain::VoxelVolume volume;
+                Edit(volume.fill(Block(0.f, -47.f, 0.f, 640.f, 4.f, 640.f), 3), "the sand flat");
+                Edit(volume.fill(Ball(0.f, 0.f, 0.f, 22.f), 1), "the island");
+                Edit(volume.paint(Ball(0.f, 16.f, 0.f, 17.f), 2), "the island's grass");
+                Edit(volume.fill(Ball(5.f, 19.f, -3.f, 9.f), 2), "the knoll");
+                shoot(volume, {
+                                  TerrainShot{"terrain-1-ball-island.png", {0.f, 0.f, 0.f}, 115.f, 16.f, 85.f, 50.f},
+                                  TerrainShot{"terrain-5-island-far.png", {10.f, -10.f, 0.f}, 200.f, 10.f, 210.f, 40.f},
+                              });
             }
-            Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the terrain shots leave no GL error");
-        };
 
-        // The sun shines from about 160 degrees around Y (toward -X, a little
-        // +Z) and 33 degrees up; each camera stands to one side of it.
-
-        // (1) and (5): a floating rock ball island, grass on its crown and a
-        // grassy knoll on top, over a wide sand flat that takes its shadow.
-        {
-            terrain::VoxelVolume volume;
-            Edit(volume.fill(Block(0.f, -47.f, 0.f, 640.f, 4.f, 640.f), 3), "the sand flat");
-            Edit(volume.fill(Ball(0.f, 0.f, 0.f, 22.f), 1), "the island");
-            Edit(volume.paint(Ball(0.f, 16.f, 0.f, 17.f), 2), "the island's grass");
-            Edit(volume.fill(Ball(5.f, 19.f, -3.f, 9.f), 2), "the knoll");
-            shoot(volume, {
-                              TerrainShot{"terrain-1-ball-island.png", {0.f, 0.f, 0.f}, 115.f, 16.f, 85.f, 50.f},
-                              TerrainShot{"terrain-5-island-far.png", {10.f, -10.f, 0.f}, 200.f, 10.f, 210.f, 40.f},
-                          });
-        }
-
-        // (2) Rolling hills: a wide rock slab with broad, low, overlapping
-        // rises, grass on top, and a sandy hollow.
-        {
-            terrain::VoxelVolume volume;
-            Edit(volume.fill(Block(0.f, -3.f, 0.f, 640.f, 6.f, 640.f), 1), "the slab");
-            // x, y, z, radius: deep, wide balls, so only a low, gentle cap of each shows.
-            const float hills[][4] = {{-40.f, -70.f, -30.f, 82.f}, {30.f, -76.f, -60.f, 90.f}, {60.f, -64.f, 30.f, 72.f},
-                                      {-20.f, -66.f, 50.f, 74.f},  {-110.f, -70.f, 60.f, 84.f}, {120.f, -72.f, -90.f, 88.f},
-                                      {-120.f, -74.f, -110.f, 90.f}, {130.f, -66.f, 110.f, 80.f}, {0.f, -76.f, -170.f, 90.f}};
-            for (const auto& hill : hills) {
-                Edit(volume.fill(Ball(hill[0], hill[1], hill[2], hill[3]), 1), "a hill");
+            // (2) Rolling hills: a wide rock slab with broad, low, overlapping
+            // rises, grass on top, and a sandy hollow.
+            {
+                terrain::VoxelVolume volume;
+                Edit(volume.fill(Block(0.f, -3.f, 0.f, 640.f, 6.f, 640.f), 1), "the slab");
+                // x, y, z, radius: deep, wide balls, so only a low, gentle cap of each shows.
+                const float hills[][4] = {{-40.f, -70.f, -30.f, 82.f}, {30.f, -76.f, -60.f, 90.f}, {60.f, -64.f, 30.f, 72.f},
+                                          {-20.f, -66.f, 50.f, 74.f},  {-110.f, -70.f, 60.f, 84.f}, {120.f, -72.f, -90.f, 88.f},
+                                          {-120.f, -74.f, -110.f, 90.f}, {130.f, -66.f, 110.f, 80.f}, {0.f, -76.f, -170.f, 90.f}};
+                for (const auto& hill : hills) {
+                    Edit(volume.fill(Ball(hill[0], hill[1], hill[2], hill[3]), 1), "a hill");
+                }
+                Edit(volume.paint(Block(0.f, 13.f, 0.f, 644.f, 30.f, 644.f), 2), "the grass");
+                Edit(volume.subtract(Ball(18.f, 4.f, -6.f, 8.f)), "the hollow");
+                Edit(volume.paint(Ball(18.f, 4.f, -6.f, 10.f), 3), "the hollow's sand");
+                shoot(volume, {
+                                  TerrainShot{"terrain-2-rolling-hills.png", {0.f, 0.f, 0.f}, 115.f, 14.f, 130.f, 50.f},
+                                  TerrainShot{"terrain-2b-rolling-hills-low.png", {0.f, 8.f, 0.f}, 215.f, 8.f, 90.f, 55.f},
+                              });
             }
-            Edit(volume.paint(Block(0.f, 13.f, 0.f, 644.f, 30.f, 644.f), 2), "the grass");
-            Edit(volume.subtract(Ball(18.f, 4.f, -6.f, 8.f)), "the hollow");
-            Edit(volume.paint(Ball(18.f, 4.f, -6.f, 10.f), 3), "the hollow's sand");
-            shoot(volume, {
-                              TerrainShot{"terrain-2-rolling-hills.png", {0.f, 0.f, 0.f}, 115.f, 14.f, 130.f, 50.f},
-                              TerrainShot{"terrain-2b-rolling-hills-low.png", {0.f, 8.f, 0.f}, 215.f, 8.f, 90.f, 55.f},
-                          });
-        }
 
-        // (3) A cliff on a sand beach, its face toward -X (the sun's side):
-        // an overhang along its top, a tunnel through it, a hollow in its
-        // face, and snow on its crown.
-        {
-            terrain::VoxelVolume volume;
-            Edit(volume.fill(Block(0.f, -2.f, 0.f, 120.f, 4.f, 120.f), 3), "the beach");
-            Edit(volume.fill(Block(6.f, 18.f, 0.f, 24.f, 40.f, 44.f), 1), "the cliff");
-            Edit(volume.fill(Block(-10.f, 34.f, 0.f, 12.f, 8.f, 44.f), 1), "the overhang");
-            // Along X: the cylinder's Y axis turned onto X.
-            const engine_core::Matrix4 tunnel = engine_core::matrix4_multiply(
-                engine_core::matrix4_translation(4.f, 8.f, 6.f),
-                engine_core::matrix4_axis_angle({0.f, 0.f, 1.f}, 3.14159265 / 2.0));
-            Edit(volume.subtract(Cylinder(tunnel, 6.f, 40.f)), "the tunnel");
-            Edit(volume.subtract(Ball(-6.f, 18.f, -12.f, 7.f)), "a hollow in the face");
-            Edit(volume.paint(Block(0.f, 38.f, 0.f, 60.f, 8.f, 60.f), 4), "the snow");
-            shoot(volume, {
-                              TerrainShot{"terrain-3-cliff-tunnel.png", {0.f, 16.f, 0.f}, 195.f, 10.f, 85.f, 50.f},
-                              TerrainShot{"terrain-3b-cliff-overhang-side.png", {0.f, 20.f, 0.f}, 125.f, 6.f, 80.f, 50.f},
-                          });
-        }
-
-        // (4) A ball centered on a chunk corner, so it spans 8 chunks: each
-        // octant (each chunk) painted its own Id, so the seams show as color
-        // edges, and any crack as sky.
-        {
-            terrain::VoxelVolume volume;
-            Edit(volume.fill(Ball(32.f, 32.f, 32.f, 11.f), 1), "the corner ball");
-            const int ids[8] = {1, 2, 3, 5, 6, 4, 2, 1};
-            for (int octant = 0; octant < 8; ++octant) {
-                const float sx = (octant & 1) != 0 ? 1.f : -1.f;
-                const float sy = (octant & 2) != 0 ? 1.f : -1.f;
-                const float sz = (octant & 4) != 0 ? 1.f : -1.f;
-                // Cells 32 to 43 or 20 to 31 on each axis: exactly one chunk's side.
-                Edit(volume.paint(Block(sx > 0 ? 37.5f : 25.5f, sy > 0 ? 37.5f : 25.5f, sz > 0 ? 37.5f : 25.5f,
-                                        11.5f, 11.5f, 11.5f),
-                                  static_cast<std::uint8_t>(ids[octant])),
-                     "an octant's paint");
+            // (3) A cliff on a sand beach, its face toward -X (the sun's side):
+            // an overhang along its top, a tunnel through it, a hollow in its
+            // face, and snow on its crown.
+            {
+                terrain::VoxelVolume volume;
+                Edit(volume.fill(Block(0.f, -2.f, 0.f, 120.f, 4.f, 120.f), 3), "the beach");
+                Edit(volume.fill(Block(6.f, 18.f, 0.f, 24.f, 40.f, 44.f), 1), "the cliff");
+                Edit(volume.fill(Block(-10.f, 34.f, 0.f, 12.f, 8.f, 44.f), 1), "the overhang");
+                // Along X: the cylinder's Y axis turned onto X.
+                const engine_core::Matrix4 tunnel = engine_core::matrix4_multiply(
+                    engine_core::matrix4_translation(4.f, 8.f, 6.f),
+                    engine_core::matrix4_axis_angle({0.f, 0.f, 1.f}, 3.14159265 / 2.0));
+                Edit(volume.subtract(Cylinder(tunnel, 6.f, 40.f)), "the tunnel");
+                Edit(volume.subtract(Ball(-6.f, 18.f, -12.f, 7.f)), "a hollow in the face");
+                Edit(volume.paint(Block(0.f, 38.f, 0.f, 60.f, 8.f, 60.f), 4), "the snow");
+                shoot(volume, {
+                                  TerrainShot{"terrain-3-cliff-tunnel.png", {0.f, 16.f, 0.f}, 195.f, 10.f, 85.f, 50.f},
+                                  TerrainShot{"terrain-3b-cliff-overhang-side.png", {0.f, 20.f, 0.f}, 125.f, 6.f, 80.f, 50.f},
+                              });
             }
-            shoot(volume, {
-                               TerrainShot{"terrain-4-chunk-corner-seam.png", {32.f, 32.f, 32.f}, 100.f, 22.f, 32.f, 45.f},
-                           });
-        }
 
-        runner::GLuint texture = look;
-        glDeleteTextures(1, &texture);
+            // (4) A ball centered on a chunk corner, so it spans 8 chunks: each
+            // octant (each chunk) painted its own Id, so the seams show as color
+            // edges, and any crack as sky.
+            {
+                terrain::VoxelVolume volume;
+                Edit(volume.fill(Ball(32.f, 32.f, 32.f, 11.f), 1), "the corner ball");
+                const int ids[8] = {1, 2, 3, 5, 6, 4, 2, 1};
+                for (int octant = 0; octant < 8; ++octant) {
+                    const float sx = (octant & 1) != 0 ? 1.f : -1.f;
+                    const float sy = (octant & 2) != 0 ? 1.f : -1.f;
+                    const float sz = (octant & 4) != 0 ? 1.f : -1.f;
+                    // Cells 32 to 43 or 20 to 31 on each axis: exactly one chunk's side.
+                    Edit(volume.paint(Block(sx > 0 ? 37.5f : 25.5f, sy > 0 ? 37.5f : 25.5f, sz > 0 ? 37.5f : 25.5f,
+                                            11.5f, 11.5f, 11.5f),
+                                      static_cast<std::uint8_t>(ids[octant])),
+                         "an octant's paint");
+                }
+                shoot(volume, {
+                                   TerrainShot{"terrain-4-chunk-corner-seam.png", {32.f, 32.f, 32.f}, 100.f, 22.f, 32.f, 45.f},
+                               });
+            }
+
+            // Through the snapshot path, as the Scene View sees a place: a Game
+            // with a Terrain in Workspace, edited through volume() (the Lua
+            // Terrain:FillBall is not on this branch), a TerrainWorld settled on
+            // it, a SnapshotPump wired with set_terrain_world, and the published
+            // snapshot's terrains drawn by AppendTerrainDraws, as GameView's
+            // collectMeshes draws them. This thread takes SimulationThread's
+            // role for the Game, TerrainWorld and pump (no other thread touches
+            // them; TerrainWorld's own mesher threads read only immutable
+            // chunks), as sandbox/terrain_surface_tests.cpp's TS1 does.
+            const auto shootSnapshot = [&](const auto& build, std::initializer_list<TerrainShot> shots) {
+                engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+                {
+                    engine_core::Game game;
+                    engine_core::Terrain& placed = game.create<engine_core::Terrain>();
+                    game.set_parent(placed.id(), game.scene_service("Workspace"));
+                    build(game, placed);
+                    engine_core::TerrainWorld world;
+                    // As TS1's settle: until every queued chunk is meshed and collected.
+                    for (int pass = 0; pass < 4; ++pass) {
+                        world.update(game);
+                        world.wait_idle();
+                    }
+                    world.update(game);
+                    engine_core::SnapshotPump pump;
+                    pump.reserve(engine_core::DataModel::kMaxInstances);
+                    pump.set_terrain_world(&world);
+                    pump.prepare_copy(game);
+                    pump.publish();
+                    const engine_core::VisualSnapshot& snapshot = pump.front();
+                    Expect(snapshot.terrains.size() == 1 && snapshot.terrains[0].chunks != nullptr &&
+                               !snapshot.terrains[0].chunks->empty() && snapshot.terrains[0].look != nullptr,
+                           "the snapshot carries the Terrain's chunks and look");
+                    runner::MeshCache chunkMeshes;
+                    std::vector<runner::MeshDraw> draws;
+                    runner::AppendTerrainDraws(snapshot.terrains, chunkMeshes, renderer, draws);
+                    for (const TerrainShot& shot : shots) {
+                        shootDraws(draws, shot);
+                    }
+                    draws.clear();
+                    runner::AppendTerrainDraws({}, chunkMeshes, renderer, draws);
+                    chunkMeshes.clear();
+                    pump.set_terrain_world(nullptr);
+                }
+                engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+                Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the snapshot terrain shots leave no GL error");
+            };
+
+            // As the studio check "workspace.Terrain:FillBall(Vector3.new(0, 10, 0), 8,
+            // workspace.Terrain:AddMaterial(nil))" would make, over a floor of
+            // the same Id so the ball's shadow shows: one TerrainMaterial with
+            // no Material, so the default Material's look.
+            shootSnapshot(
+                [](engine_core::Game&, engine_core::Terrain& placed) {
+                    engine_core::TerrainMaterial* entry = nullptr;
+                    Expect(!placed.add_material(0, entry).has_value() && entry != nullptr &&
+                               entry->material_id() == 1,
+                           "AddMaterial(nil) takes Id 1");
+                    Edit(placed.volume().fill(Block(0.f, -2.f, 0.f, 96.f, 4.f, 96.f), 1), "the default floor");
+                    Edit(placed.volume().fill(Ball(0.f, 10.f, 0.f, 8.f), 1), "the default ball");
+                },
+                {TerrainShot{"terrain-snapshot-gray-ball.png", {0.f, 6.f, 0.f}, 70.f, 28.f, 60.f, 50.f}});
+
+            // Two TerrainMaterials with their own Materials, a green floor and a
+            // clay ball, on a Terrain moved 40 along X, so the snapshot's
+            // Transform places the chunks.
+            shootSnapshot(
+                [](engine_core::Game& game, engine_core::Terrain& placed) {
+                    Expect(!placed.set_transform(engine_core::matrix4_translation(40.f, 0.f, 0.f)).has_value(),
+                           "the Terrain moves");
+                    const auto material = [&game](const char* name, float r, float g, float b) {
+                        engine_core::Material& made = game.create<engine_core::Material>();
+                        game.set_name(made.id(), name);
+                        game.set_parent(made.id(), game.service("Materials"));
+                        engine_core::ColorRgb color;
+                        color.r = r;
+                        color.g = g;
+                        color.b = b;
+                        color.a = 1.f;
+                        Expect(!made.set_color(color).has_value(), std::string(name) + " takes its color");
+                        return made.id();
+                    };
+                    engine_core::TerrainMaterial* grass = nullptr;
+                    engine_core::TerrainMaterial* clay = nullptr;
+                    Expect(!placed.add_material(material("Grass", 0.33f, 0.55f, 0.22f), grass).has_value() &&
+                               !placed.add_material(material("Clay", 0.78f, 0.40f, 0.25f), clay).has_value() &&
+                               grass->material_id() == 1 && clay->material_id() == 2,
+                           "Grass takes Id 1 and Clay Id 2");
+                    Edit(placed.volume().fill(Block(0.f, -2.f, 0.f, 96.f, 4.f, 96.f), 1), "the grass floor");
+                    Edit(placed.volume().fill(Ball(0.f, 10.f, 0.f, 8.f), 2), "the clay ball");
+                    Edit(placed.volume().fill(Ball(-14.f, 2.f, 10.f, 5.f), 2), "a clay mound in the grass");
+                },
+                {TerrainShot{"terrain-snapshot-two-materials.png", {40.f, 6.f, 0.f}, 70.f, 28.f, 60.f, 50.f}});
+
+            runner::GLuint texture = look;
+            glDeleteTextures(1, &texture);
+        }
         renderer.shutdown();
         Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the terrain checks leave no GL error");
     }

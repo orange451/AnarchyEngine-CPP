@@ -1,6 +1,7 @@
 #pragma once
 
 #include "amesh.hpp"
+#include "terrain/VoxelChunk.hpp"
 #include "types.hpp"
 
 #include <chrono>
@@ -42,6 +43,18 @@ public:
     // such as those a Stop ended. Call once a frame, after that frame's
     // getSession calls: the uploads they returned stay.
     void sweepSessions();
+    // The upload of one Terrain chunk's mesh (TerrainChunkView::mesh), kept per
+    // (terrain, coord) and uploaded again when revision changes. Static: a
+    // chunk changes only when its voxels are edited. Null for a mesh with no
+    // triangles. Its bounds, which culling reads, are the chunk's own, in the
+    // Terrain's space.
+    const anarchy::amesh::GpuMesh* getTerrainChunk(engine_core::InstanceId terrain,
+                                                  engine_core::terrain::ChunkCoord coord,
+                                                  const anarchy::amesh::Data& data, std::uint64_t revision);
+    // Deletes the chunk uploads no getTerrainChunk asked for since the last
+    // sweep: chunks that emptied, and Terrains that left Workspace. Call once
+    // a frame, after that frame's getTerrainChunk calls.
+    void sweepTerrainChunks();
     // Deletes every mesh.
     void clear();
 
@@ -57,15 +70,31 @@ private:
     struct SessionEntry {
         anarchy::amesh::GpuMesh mesh;
         std::uint64_t revision = 0;
+        // Whether revision has been uploaded (or found empty) yet, so a first revision of 0 still uploads.
+        bool tried = false;
         bool asked = false;
     };
 
+    struct ChunkKey {
+        engine_core::InstanceId terrain = 0;
+        engine_core::terrain::ChunkCoord coord;
+        bool operator==(const ChunkKey& other) const { return terrain == other.terrain && coord == other.coord; }
+    };
+    struct ChunkKeyHash {
+        std::size_t operator()(const ChunkKey& key) const;
+    };
+
     void load(const std::string& path, Entry& entry);
+    // Marks entry asked, and uploads data into it when revision is new. What
+    // failed goes to report_, after what.
+    void uploadOnce(SessionEntry& entry, const anarchy::amesh::Data& data, std::uint64_t revision, bool dynamic,
+                    const char* what);
 
     Report report_;
     std::filesystem::path root_;
     std::unordered_map<std::string, Entry> entries_;
     std::unordered_map<engine_core::InstanceId, SessionEntry> sessions_;
+    std::unordered_map<ChunkKey, SessionEntry, ChunkKeyHash> chunks_;
 };
 
 }  // namespace runner

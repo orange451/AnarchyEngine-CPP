@@ -16,6 +16,7 @@
 #include "SceneFeed.hpp"
 #include "SceneService.hpp"
 #include "SkyMath.hpp"
+#include "TerrainDraws.hpp"
 #include "ScriptRuntime.hpp"
 #include "UiFrameProfile.hpp"
 #include "amesh.hpp"
@@ -398,6 +399,8 @@ void GameView::collectMeshes() {
             draw.transparency = 1.f - (1.f - std::clamp(draw.transparency, 0.f, 1.f)) * opacity;
         }
     }
+    // Each Terrain's meshed chunks, with its look; uploads no Terrain shows now are deleted.
+    AppendTerrainDraws(snapshot.terrains, meshes_, renderer_, meshDraws_);
     SceneLighting lighting;
     lighting.ambient[0] = snapshot.lighting.ambient.r;
     lighting.ambient[1] = snapshot.lighting.ambient.g;

@@ -13,11 +13,17 @@
 #include "SkyMath.hpp"
 #include "ViewCapture.hpp"
 #include "Visibility.hpp"
+#include "types.hpp"
 
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
+#include <unordered_map>
 #include <vector>
+
+namespace engine_core {
+struct TerrainLook;
+}
 
 namespace anarchy::amesh {
 class GpuMesh;
@@ -306,7 +312,18 @@ public:
     // there is nothing to read.
     bool read(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
               ViewPixels& out) const;
+    // Also deletes the look textures terrainLookTexture made.
     void shutdown();
+    // terrain's look table as a GL texture for MeshDraw::terrainLook: made
+    // with MakeTerrainLookTexture the first time, and its texels replaced
+    // (same texture name) when look.revision changes. RenderThread, with the
+    // GL context current; reads look only, which TerrainWorld never changes
+    // once published, so it needs no DataModel lock.
+    std::uint32_t terrainLookTexture(engine_core::InstanceId terrain, const engine_core::TerrainLook& look);
+    // Deletes the look textures no terrainLookTexture asked for since the last
+    // sweep, as for a Terrain that left Workspace. Call once a frame, after
+    // that frame's terrainLookTexture calls.
+    void sweepTerrainLooks();
     // What draw clears the pane to, 0 to 1 per channel. The Scene View passes
     // its theme color, so the clear matches the pane around it.
     void setClearColor(float r, float g, float b);
@@ -587,6 +604,13 @@ private:
     unsigned skyImage_ = 0;
     // 1 by 1 white, bound for a texture a draw does not have.
     unsigned whiteTexture_ = 0;
+    // terrainLookTexture's textures, by Terrain.
+    struct TerrainLookEntry {
+        unsigned texture = 0;
+        std::uint64_t revision = 0;
+        bool asked = false;
+    };
+    std::unordered_map<engine_core::InstanceId, TerrainLookEntry> terrainLooks_;
     // 1 by 1 black on each face, bound for the Skybox's cubes when there is none.
     unsigned blackCube_ = 0;
     // No attributes: the full-screen triangle comes from gl_VertexID.

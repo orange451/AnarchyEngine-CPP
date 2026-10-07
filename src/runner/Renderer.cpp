@@ -5,6 +5,7 @@
 #include "OcclusionMath.hpp"
 #include "RenderMath.hpp"
 #include "ShaderFile.hpp"
+#include "TerrainWorld.hpp"
 #include "amesh.hpp"
 #include "gl.hpp"
 
@@ -1372,9 +1373,12 @@ void Renderer::handlePass(const float* projection) {
     glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(arrayBuffer));
 }
 
-unsigned MakeTerrainLookTexture(const std::uint8_t* rgba256x2) {
-    unsigned texture = 0;
-    glGenTextures(1, &texture);
+namespace {
+
+// Puts rgba256x2 into texture, as MakeTerrainLookTexture describes. The
+// renderer binds every unit it reads before each draw, so leaving unit 0
+// unbound here disturbs no pass.
+void FillTerrainLookTexture(unsigned texture, const std::uint8_t* rgba256x2) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
     // Rows of 256 RGBA texels are whole words, so the default unpack alignment adds no padding.
@@ -1382,7 +1386,41 @@ unsigned MakeTerrainLookTexture(const std::uint8_t* rgba256x2) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(RT_GL_NEAREST));
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(RT_GL_NEAREST));
     glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+}  // namespace
+
+unsigned MakeTerrainLookTexture(const std::uint8_t* rgba256x2) {
+    unsigned texture = 0;
+    glGenTextures(1, &texture);
+    FillTerrainLookTexture(texture, rgba256x2);
     return texture;
+}
+
+std::uint32_t Renderer::terrainLookTexture(engine_core::InstanceId terrain, const engine_core::TerrainLook& look) {
+    TerrainLookEntry& entry = terrainLooks_[terrain];
+    entry.asked = true;
+    if (entry.texture == 0) {
+        entry.texture = MakeTerrainLookTexture(look.texels.data());
+        entry.revision = look.revision;
+    } else if (entry.revision != look.revision) {
+        // The same texture name, so MeshDraws already holding it see the new look.
+        FillTerrainLookTexture(entry.texture, look.texels.data());
+        entry.revision = look.revision;
+    }
+    return entry.texture;
+}
+
+void Renderer::sweepTerrainLooks() {
+    for (auto it = terrainLooks_.begin(); it != terrainLooks_.end();) {
+        if (!it->second.asked) {
+            DeleteTexture(it->second.texture);
+            it = terrainLooks_.erase(it);
+        } else {
+            it->second.asked = false;
+            ++it;
+        }
+    }
 }
 
 void Renderer::bindMaterial(const Program& program, const MeshDraw& draw) {
@@ -2232,6 +2270,10 @@ void Renderer::shutdown() {
     for (unsigned* texture : {&whiteTexture_, &blackCube_}) {
         DeleteTexture(*texture);
     }
+    for (auto& [terrain, entry] : terrainLooks_) {
+        DeleteTexture(entry.texture);
+    }
+    terrainLooks_.clear();
     for (unsigned* vao : {&emptyVao_, &sphereVao_, &gridBandVao_, &outlineVao_, &handleVao_}) {
         if (*vao != 0) {
             glDeleteVertexArrays(1, vao);

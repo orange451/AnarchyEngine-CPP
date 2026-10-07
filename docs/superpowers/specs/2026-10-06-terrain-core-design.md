@@ -49,16 +49,16 @@ This sub-project draws each material as its flat Color. Textured, blended materi
 | --- | --- |
 | Meshing | Surface Nets: one vertex per surface cell, placed at the average of its edge crossings, normal from the distance field's gradient. Each surface-crossing lattice edge makes one quad, owned by the chunk that holds the edge's lower endpoint, so neighbors never double up. |
 | Chunk borders | The mesher reads the chunk plus a 2-sample apron from its 26 neighbors (for border cells and gradients). Neighbors share border vertices exactly, so there are no cracks. An edit dirties every chunk whose apron it touches. |
-| Vertex format | The existing `GpuVertex` (`amesh.hpp`). Color is white. The vertex's material Ids go in the bone-index channel and their weights in the bone-weight channel: this sub-project writes one Id (that of its most-solid neighboring sample) at weight 1. Sub-project 3 fills the other three. |
+| Vertex format | The existing `GpuVertex` (`amesh.hpp`). The vertex's material Ids go in the color channel (one byte each) and their weights in the tangent channel; a static upload overwrites the bone channel, so it cannot carry them. This sub-project writes one Id (that of its most-solid neighboring sample) at weight 1. Sub-project 3 fills the other three. |
 | Collision mesh | The same positions, welded, with each triangle's material Id in `b3MeshDef::materialIndices`. |
-| Where meshing runs | One `TerrainMesher` worker thread, as `ConvexDecomposer` has. A job holds the chunk and apron pointers (copied cheaply, under the copy-on-write rule) and the revision. It returns the render mesh (`std::shared_ptr<const amesh::Data>`) and the Box3D mesh (`b3CreateMesh`, built on the worker). |
+| Where meshing runs | `TerrainMesher`, a small pool of worker threads (hardware threads less one, at most 4), so a large island loads quickly. A job holds the chunk and apron pointers (copied cheaply, under the copy-on-write rule) and the revision. It returns the render mesh (`std::shared_ptr<const amesh::Data>`) and the Box3D mesh (`b3CreateMesh`, built on the worker). Meshes live in `TerrainWorld`, a simulation-side system the Engine owns like `PhysicsWorld`; the voxels stay in `Terrain`. |
 | Job order | Nearest chunk to the camera first. One pending job per chunk; a newer edit replaces a queued job. |
 | Stale results | A result whose revision is older than the chunk's is dropped. The newer job brings the right geometry. |
-| Applying results | On SimulationThread: the render mesh goes onto the chunk for the next snapshot; the Box3D mesh is handed to `PhysicsWorld`, which swaps the chunk's shape during its next `sync`, under the step lock while playing. |
+| Applying results | On SimulationThread, in `TerrainWorld::update` (every tick, playing or stopped): the render mesh goes into the Terrain's chunk list for the next snapshot; the Box3D mesh is held for `PhysicsWorld`, which swaps the chunk's shape during its next `sync`. |
 | Physics | One `b3_staticBody` per Terrain at its Transform, and one mesh shape per chunk with triangles. `userData` is the Terrain's InstanceId. Each shape has 256 surface materials, `userMaterialId` = Id. CanCollide false means no shapes. A Transform change calls `b3Body_SetTransform`. The Terrain record owns every `b3MeshData`. |
 | Raycast | `workspace:Raycast` hits chunk shapes like any other. `Instance` is the Terrain; `Material` is the Material of the TerrainMaterial with the reported Id, or `nil` for Id 0 or an unassigned Id. |
 | Edit latency | An edit changes voxels before its call returns; `ReadVoxels` sees it at once. Meshes and colliders follow about one to two frames later. A ray cast straight after an edit may hit the old surface. Documented on every edit method. |
-| Rendering | `SnapshotPump` emits a `VisualTerrainChunk` per meshed chunk: Terrain id, chunk coordinates, revision, world matrix, and the mesh pointer; and once per Terrain, a 256-entry color table (each TerrainMaterial's Material's Color, the default color for Id 0 and unassigned Ids). The renderer's `TerrainChunkCache` uploads a chunk when its revision changes and frees chunks no snapshot names, as `MeshCache::getSession` does. Chunks draw in the deferred geometry and shadow passes, culled by chunk bounds, with a terrain variant of `geometry.vert` / `surface.glsl` that colors by Id from the table. Changing a TerrainMaterial's Material changes only the table, never a mesh. |
+| Rendering | `SnapshotPump` carries each Terrain's `TerrainView`: id, transform, its chunk list, and its look, the last two behind shared pointers with revisions so the snapshot's per-frame copies copy pointers only. The look is a 256 × 2 RGBA8 texture per Terrain (row 0 each Id's color, row 1 metalness, roughness, reflectivity; Id 0 and unassigned Ids the Material defaults), uploaded when it changes; a 256-entry uniform array would sit at OpenGL 3.3's minimum uniform limit. The renderer uploads a chunk when its revision changes and frees chunks no snapshot names, as `MeshCache::getSession` does. Chunks draw in the deferred geometry and shadow passes, culled by chunk bounds, with a terrain shader (`terrain.vert`, `terrain.frag`) that writes the same G-buffer as the others, so lighting, shadows, AO, reflections, and bloom apply unchanged. Changing a TerrainMaterial's Material changes only the look, never a mesh. |
 
 ### Play, saving, place bytes
 
@@ -77,25 +77,51 @@ Sculpt tools and voxel-edit undo (sub-project 2); textures, blending, and per-ma
 
 ## The `.avox` file
 
-Little-endian. Voxels only; the materials are the TerrainMaterial children.
+Little-endian. Voxels only; the materials are the TerrainMaterial children. Built for size on disk and for fast loads of very large islands: an index up front, and each dense chunk its own [zstd](https://github.com/facebook/zstd) frame, so chunks decode in parallel and a reader can find any chunk without reading the rest.
 
 ```
-char  magic[4]       "AVOX"
-u16   version_major  1
-u16   version_minor  0
-f32   voxel_size
-u32   chunk_size     32
-u32   chunk_count
-then  chunk_count × chunk:
-        i32 x, y, z
-        u8  form             0 uniform, 1 dense
-        uniform: i8 distance, u8 id
-        dense:   u32 byte_length, then run-length triples (u16 run, i8 distance, u8 id)
-                 covering 32,768 cells in x-fastest order
-u32   crc32 of everything before it
+header, 32 bytes
+  char  magic[4]       "AVOX"
+  u16   version_major  1
+  u16   version_minor  0
+  f32   voxel_size
+  u32   chunk_size     32
+  u32   chunk_count
+  u32   index_crc32    CRC-32 of the index
+  u64   reserved       0
+index, chunk_count × 32 bytes, sorted by (z, y, x)
+  i32   x, y, z
+  u8    form           0 uniform, 1 dense
+  i8    distance       uniform only, else 0
+  u8    id             uniform only, else 0
+  u8    reserved       0
+  u64   offset         dense only: where its frame starts, from the file's start; else 0
+  u32   size           dense only: its frame's length in bytes; else 0
+  u32   reserved       0
+frames
+  one zstd frame per dense chunk, with zstd's content checksum on, holding 65,536 bytes:
+    32,768 distance residuals, x fastest, then 32,768 material Ids, x fastest
 ```
 
-Only chunks that are not all air are written.
+**Distance residuals.** Each distance is stored as the difference from a prediction made of its already-written neighbors inside the chunk (the 3D "Lorenzo" predictor; a neighbor outside the chunk counts as 0):
+
+```
+p = d(x-1,y,z) + d(x,y-1,z) + d(x,y,z-1)
+  - d(x-1,y-1,z) - d(x-1,y,z-1) - d(x,y-1,z-1)
+  + d(x-1,y-1,z-1)
+residual = (d - p) mod 256, stored as a byte
+```
+
+The arithmetic wraps, so decoding is exact. A signed distance field is close to linear near its surface and constant (±127) away from it, and the predictor is exact on both, so almost every residual is 0 or ±1. Materials are stored plainly: they are usually one or two values per chunk, which zstd shrinks to almost nothing. Expect a surface chunk to take a few KB, against 64 KB raw.
+
+**Speed.**
+- **Saving.** Saves use zstd level 3. Each chunk keeps its last encoded frame beside its data. Chunks never change once shared, so that frame stays right, and a save compresses only chunks edited since the last one.
+- **Loading.** The loader reads the header and index, checks the index CRC, then decodes the frames on a pool of worker threads (zstd decodes at over 1 GB/s per thread). Any bad frame (zstd checksum), out-of-range offset, or bad index makes the whole file damaged, as above.
+- **Budget.** 4,096 dense chunks, about a 256 MB island raw, decode in under 1 s in a Release build.
+
+**zstd itself.** It is fetched with FetchContent, pinned to a release tag, and compiled through its own wrapper, `cmake/zstd/CMakeLists.txt`, as Box3D is. Only `AvoxFile.cpp` includes it.
+
+Only chunks that are not all air are written. Later, the same per-chunk frames let idle chunks stay compressed in memory, which matters as much as disk on a very large island; that belongs to the terrain surface plan, which owns the mesher that reads chunks.
 
 ## Lua API
 

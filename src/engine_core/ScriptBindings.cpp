@@ -1568,6 +1568,9 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     };
     register_lua_class("ChangeHistoryService", nullptr, history, static_cast<int>(sizeof(history) / sizeof(history[0])));
 
+    // TerrainBindings.cpp registers Terrain's methods itself; this keeps it linked.
+    ScriptBindings::link_terrain_methods();
+
     // AssetInstances.cpp declares the class and its Path.
     const LuaField mesh[] = {
         lua_method("AddBox", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_add_box)),

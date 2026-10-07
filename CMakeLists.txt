@@ -588,6 +588,7 @@ add_library(engine_core STATIC
     src/engine_core/LuaReflect.cpp
     src/engine_core/ScriptBindings.cpp
     src/engine_core/RaycastBindings.cpp
+    src/engine_core/TerrainBindings.cpp
     src/engine_core/ScriptRuntime.cpp
     src/engine_core/TableSnapshot.cpp
     src/engine_core/ScriptAnalysis.cpp
@@ -608,6 +609,7 @@ add_library(engine_core STATIC
     src/engine_core/terrain/SurfaceNets.cpp
     src/engine_core/terrain/TerrainMesher.cpp
     src/engine_core/TerrainWorld.cpp
+    src/engine_core/terrain/TerrainStash.cpp
     src/engine_core/ConvexDecomposition.cpp
     src/engine_core/DraggerMath.cpp
     src/engine_core/DraggerWorld.cpp
@@ -945,6 +947,7 @@ add_executable(sandbox
     sandbox/terrain_voxel_tests.cpp
     sandbox/terrain_instance_tests.cpp
     sandbox/terrain_surface_tests.cpp
+    sandbox/terrain_lua_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

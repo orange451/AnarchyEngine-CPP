@@ -71,6 +71,10 @@ Engine::Engine() {
     // RenderThread's snapshot carries each Terrain's chunks and look, read
     // from terrain_ by SnapshotPump::resolve_terrains.
     pump_.set_terrain_world(&terrain_);
+    // So do instances' warnings, such as a Terrain whose voxel file is missing.
+    game_.set_warning_sink([this](const std::string& text) {
+        scripts_->append_output(ScriptRuntime::OutputKind::Print, text);
+    });
     analysis_ = std::make_unique<ScriptAnalysis>(game_);
 }
 

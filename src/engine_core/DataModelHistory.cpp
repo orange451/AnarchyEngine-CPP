@@ -190,6 +190,23 @@ void DataModel::record_created(InstanceId id) {
     state_->history->note(std::move(mutation));
 }
 
+void DataModel::refresh_created_record(InstanceId id) {
+    if (!capturing(state_->history.get())) {
+        return;
+    }
+    if (AuthoredRecord* record = state_->history->open_created_record(id)) {
+        record->extra = capture_record(id, false).extra;
+    }
+}
+
+const std::vector<std::byte>* DataModel::open_created_place(InstanceId id) const {
+    if (!capturing(state_->history.get())) {
+        return nullptr;
+    }
+    const AuthoredRecord* record = state_->history->open_created_record(id);
+    return record != nullptr ? &record->extra : nullptr;
+}
+
 void DataModel::record_destroyed(AuthoredRecord record) {
     if (state_->history == nullptr) {
         return;

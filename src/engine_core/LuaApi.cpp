@@ -1075,6 +1075,90 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Matrix4", false, {});
     add("Terrain", "VoxelSize", "The size of one cell, in studs. Read-only; always 1.", "number", false, {});
     add("Terrain", "CanCollide", "When false, nothing collides with this island.", "boolean", false, {});
+    // The voxel methods take positions and frames in world space unless space
+    // is Enum.TransformSpace.Local, and a TerrainMaterial of this Terrain or nil
+    // for the default material.
+    add("Terrain", "FillBall",
+        "Fills a ball of radius around center with material. Meshes and colliders follow a frame or two later.", "nil",
+        false,
+        {P("center", "Vector3"), P("radius", "number"), P("material", "TerrainMaterial?"),
+         P("space", "Enum.TransformSpace?")});
+    add("Terrain", "FillBlock",
+        "Fills a box of size placed by transform with material. Meshes and colliders follow a frame or two later.",
+        "nil", false,
+        {P("transform", "Matrix4"), P("size", "Vector3"), P("material", "TerrainMaterial?"),
+         P("space", "Enum.TransformSpace?")});
+    add("Terrain", "FillCylinder",
+        "Fills a cylinder along transform's Y with material. Meshes and colliders follow a frame or two later.", "nil",
+        false,
+        {P("transform", "Matrix4"), P("height", "number"), P("radius", "number"), P("material", "TerrainMaterial?"),
+         P("space", "Enum.TransformSpace?")});
+    add("Terrain", "FillWedge",
+        "Fills a wedge of size placed by transform with material. Meshes and colliders follow a frame or two later.",
+        "nil", false,
+        {P("transform", "Matrix4"), P("size", "Vector3"), P("material", "TerrainMaterial?"),
+         P("space", "Enum.TransformSpace?")});
+    add("Terrain", "SubtractBall",
+        "Carves a ball of radius around center out of the voxels. Meshes and colliders follow a frame or two later.",
+        "nil", false, {P("center", "Vector3"), P("radius", "number"), P("space", "Enum.TransformSpace?")});
+    add("Terrain", "SubtractBlock",
+        "Carves a box of size placed by transform out of the voxels. Meshes and colliders follow a frame or two later.",
+        "nil", false, {P("transform", "Matrix4"), P("size", "Vector3"), P("space", "Enum.TransformSpace?")});
+    add("Terrain", "SubtractCylinder",
+        "Carves a cylinder along transform's Y out of the voxels. Meshes and colliders follow a frame or two later.",
+        "nil", false,
+        {P("transform", "Matrix4"), P("height", "number"), P("radius", "number"), P("space", "Enum.TransformSpace?")});
+    add("Terrain", "SubtractWedge",
+        "Carves a wedge of size placed by transform out of the voxels. Meshes and colliders follow a frame or two "
+        "later.",
+        "nil", false, {P("transform", "Matrix4"), P("size", "Vector3"), P("space", "Enum.TransformSpace?")});
+    add("Terrain", "PaintBall",
+        "Sets the material of the solid cells in a ball, keeping their shape. Meshes and colliders follow a frame or "
+        "two later.",
+        "nil", false,
+        {P("center", "Vector3"), P("radius", "number"), P("material", "TerrainMaterial?"),
+         P("space", "Enum.TransformSpace?")});
+    add("Terrain", "PaintBlock",
+        "Sets the material of the solid cells in a box, keeping their shape. Meshes and colliders follow a frame or "
+        "two later.",
+        "nil", false,
+        {P("transform", "Matrix4"), P("size", "Vector3"), P("material", "TerrainMaterial?"),
+         P("space", "Enum.TransformSpace?")});
+    add("Terrain", "ReplaceMaterial",
+        "Swaps from for to in the solid cells of the box between min and max, both included. Meshes and colliders "
+        "follow a frame or two later.",
+        "nil", false,
+        {P("min", "Vector3"), P("max", "Vector3"), P("from", "TerrainMaterial?"), P("to", "TerrainMaterial?"),
+         P("space", "Enum.TransformSpace?")});
+    add("Terrain", "AddMaterial",
+        "Adds a TerrainMaterial on the lowest free Id, named after material. Raises past 255.", "TerrainMaterial",
+        false, {P("material", "Material?")});
+    add("Terrain", "ReadVoxels",
+        "The cells from min to max, both included, in whole cell coordinates: Distances in studs, negative inside, "
+        "and Materials as Ids, 0 for air and the default. Distances[i][j][k] is cell min + (i - 1, j - 1, k - 1).",
+        "{Distances: {{{number}}}, Materials: {{{number}}}}", false, {P("min", "Vector3"), P("max", "Vector3")});
+    add("Terrain", "WorldToCell", "The cell nearest a world position, as whole numbers.", "Vector3", false,
+        {P("position", "Vector3")});
+    add("Terrain", "GetMaterials", "Every TerrainMaterial of this Terrain, ordered by Id.", "{TerrainMaterial}", false,
+        {});
+    add("Terrain", "GetMaterialById", "The TerrainMaterial with that Id, or nil.", "TerrainMaterial?", false,
+        {P("id", "number")});
+    add("Terrain", "GetMaterialsFor", "Every TerrainMaterial backed by material, ordered by Id.", "{TerrainMaterial}",
+        false, {P("material", "Material")});
+    add("Terrain", "RemoveMaterial",
+        "The same as entry:Destroy(). Cells on its Id keep it and draw as the default. Raises if entry belongs to "
+        "another Terrain.",
+        "nil", false, {P("entry", "TerrainMaterial")});
+    add("Terrain", "WriteVoxels",
+        "Writes cells as ReadVoxels gives them: distances[i][j][k] and materials[i][j][k] become cell min + (i - 1, "
+        "j - 1, k - 1). Both arrays must have the same shape, and Ids must be whole numbers from 0 to 255; an Id with "
+        "no TerrainMaterial draws as the default. Meshes and colliders follow a frame or two later.",
+        "nil", false, {P("min", "Vector3"), P("distances", "{{{number}}}"), P("materials", "{{{number}}}")});
+    add("Terrain", "CellToWorld", "The world position a cell samples; WorldToCell goes the other way.", "Vector3",
+        false, {P("cell", "Vector3")});
+    add("Terrain", "Clear",
+        "Removes every voxel. The TerrainMaterials stay. Meshes and colliders follow a frame or two later.", "nil",
+        false, {});
     add("TerrainMaterial", "Id",
         "The voxel Id this entry names, from 1 to 255. Read-only: its Terrain picks the lowest one free when it is "
         "added.",

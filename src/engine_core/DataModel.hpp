@@ -290,6 +290,12 @@ public:
     // or saves a folder, and reset_place clears it. Empty with no project. Any thread.
     std::filesystem::path resources_root() const;
     void set_resources_root(std::filesystem::path root);
+    // Where engine instances report problems a user should see, such as a
+    // Terrain whose voxel file is missing. Engine sends them to the Output
+    // window; warn does nothing without a sink. Set the sink before the world
+    // runs; warn is called on SimulationThread.
+    void set_warning_sink(std::function<void(const std::string&)> sink);
+    void warn(const std::string& text) const;
 
     // Stable authored identity, written to disk and used by references.
     // create assigns one. Empty when id is dead. Id 0 is the root.
@@ -322,11 +328,19 @@ public:
     // True when this class owns key. The value was applied, or error is set.
     // Runs on a live instance during project load.
     virtual bool load_property(const std::string& key, const JsonValue& value, std::string& error);
+    // Project save calls this on every live authored instance once nothing on
+    // disk stops the save, with the project's resources folder. An instance
+    // writes its own files there, such as a Terrain's .avox. A returned reason
+    // fails the save. SimulationThread.
+    virtual std::optional<std::string> save_resources(const std::filesystem::path& root);
 
     // Edit mode: the live tree under the root. Play: the place snapshot, so
     // instances created during play are never included. Unparented instances
     // are not in the tree. want(id) false leaves properties and source empty.
     std::vector<AuthoredNode> authored_tree(const std::function<bool(InstanceId)>& want) const;
+    // While a place is captured, the bytes id wrote at its capture: what Stop
+    // will restore. Null when id was not captured. id need not be live now.
+    const std::vector<std::byte>* captured_place_bytes(InstanceId id) const;
     // Mutators mark here from the same sites that record history, and only
     // while the simulation is stopped. Stop sets all: the restore may revert
     // edits that came after the last capture.
@@ -522,6 +536,13 @@ protected:
     // marks the save set and the place dirty. Not during play, not in Core,
     // and the place only while history is on.
     void note_unrecorded_edit(InstanceId id);
+    // When the open recording created id, its record takes id's place bytes
+    // as they are now, so redo brings back what a write that records nothing
+    // set while making it (a pasted Terrain's voxels and DataPath).
+    void refresh_created_record(InstanceId id);
+    // The place bytes of the record refresh_created_record would refresh;
+    // null when the open recording did not create id.
+    const std::vector<std::byte>* open_created_place(InstanceId id) const;
 
     // Successful mutators record here. Equal values return before these run.
     // Velocity is not recorded. Undo application does not record.

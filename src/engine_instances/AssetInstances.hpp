@@ -31,6 +31,12 @@ namespace engine_core {
 // with '/' between names: not absolute, no drive letter, no '\', and no "..".
 std::optional<std::string> resource_path_error(std::string_view path);
 
+// Writes bytes to path under root: to a file beside it first, then renamed
+// over it, so a reader never sees half a file. Returns "Could not write
+// <path>" when it fails. A Mesh's shapes and a Terrain's voxels go through it.
+std::optional<std::string> write_resource_file(const std::filesystem::path& root, const std::string& path,
+                                               const std::vector<std::byte>& bytes);
+
 // An asset that names a file under the project's resources folder, as Path.
 // Nothing checks that the file exists. The Scene View loads a Mesh's file as AMESH;
 // nothing else loads resources yet.

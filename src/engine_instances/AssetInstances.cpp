@@ -37,6 +37,31 @@ std::optional<std::string> resource_path_error(std::string_view path) {
     return std::nullopt;
 }
 
+std::optional<std::string> write_resource_file(const std::filesystem::path& root, const std::string& path,
+                                               const std::vector<std::byte>& bytes) {
+    const std::filesystem::path file = root / std::filesystem::u8path(path);
+    // Written beside the file and renamed over it, so a reader never sees half a file.
+    std::error_code error;
+    std::filesystem::create_directories(file.parent_path(), error);
+    std::filesystem::path partial = file;
+    partial += ".partial";
+    std::ofstream out(partial, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    // Closed here, not by the destructor, so a failed flush of the last
+    // bytes (a full disk) is seen before the rename puts them over a good file.
+    out.close();
+    if (out.fail()) {
+        std::filesystem::remove(partial, error);
+        return "Could not write " + path;
+    }
+    std::filesystem::rename(partial, file, error);
+    if (error) {
+        std::filesystem::remove(partial, error);
+        return "Could not write " + path;
+    }
+    return std::nullopt;
+}
+
 std::optional<std::string> FileAsset::set_path(std::string path) {
     if (!on_gameplay_thread()) {
         contract_fail("asset setters run on SimulationThread");
@@ -143,30 +168,13 @@ std::optional<std::string> Mesh::edit_geometry(const std::function<void(anarchy:
 
 std::optional<std::string> Mesh::write_file(const std::filesystem::path& root, const std::string& path,
                                             const anarchy::amesh::Data& data) {
-    const std::filesystem::path file = root / std::filesystem::u8path(path);
     std::vector<std::byte> bytes;
     try {
         bytes = anarchy::amesh::write(data);
     } catch (const std::exception& failure) {
         return std::string("The shapes do not fit in an AMESH file: ") + failure.what();
     }
-    // Written beside the file and renamed over it, so a reader never sees half a mesh.
-    std::error_code error;
-    std::filesystem::create_directories(file.parent_path(), error);
-    std::filesystem::path partial = file;
-    partial += ".partial";
-    {
-        std::ofstream out(partial, std::ios::binary | std::ios::trunc);
-        if (!out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) {
-            return "Could not write " + path;
-        }
-    }
-    std::filesystem::rename(partial, file, error);
-    if (error) {
-        std::filesystem::remove(partial, error);
-        return "Could not write " + path;
-    }
-    return std::nullopt;
+    return write_resource_file(root, path, bytes);
 }
 
 Mesh::SessionGeometry Mesh::session_geometry() const {

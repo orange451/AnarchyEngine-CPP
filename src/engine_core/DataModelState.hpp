@@ -214,6 +214,8 @@ struct DataModel::State {
     // DataModel::resources_root. The UI thread and SimulationThread both read it.
     mutable std::mutex resources_mu;
     std::filesystem::path resources_root;
+    // DataModel::set_warning_sink: where warn sends a line. Empty: nowhere.
+    std::function<void(const std::string&)> warning_sink;
     std::mutex watch_mu;
     std::vector<ChangeWatcher> watchers;
     std::atomic<std::size_t> watched_count{0};

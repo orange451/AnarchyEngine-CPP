@@ -529,6 +529,9 @@ protected:
     // as they are now, so redo brings back what a write that records nothing
     // set while making it (a pasted Terrain's voxels and DataPath).
     void refresh_created_record(InstanceId id);
+    // The place bytes of the record refresh_created_record would refresh;
+    // null when the open recording did not create id.
+    const std::vector<std::byte>* open_created_place(InstanceId id) const;
 
     // Successful mutators record here. Equal values return before these run.
     // Velocity is not recorded. Undo application does not record.

@@ -416,6 +416,9 @@ std::optional<std::string> decode_avox(const std::byte* data, std::size_t size, 
         const unsigned hw = std::thread::hardware_concurrency();
         worker_count = hw > 1 ? hw - 1 : 1;
     }
+    // No more threads than dense chunks: a small island starts none.
+    worker_count = static_cast<unsigned>(
+        std::max<std::size_t>(1, std::min<std::size_t>(worker_count, dense_indices.size())));
     if (!dense_indices.empty()) {
         auto work = [&](unsigned start) {
             for (std::size_t j = start; j < dense_indices.size(); j += worker_count) {

@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -93,7 +94,16 @@ Matrix4 matrix_arg(lua_State* state, int index) {
     return *value;
 }
 
-float number_arg(lua_State* state, int index) { return static_cast<float>(luaL_checknumber(state, index)); }
+// A Lua number as a float. A finite one is held to float's range first
+// (casting a finite double beyond it is undefined), so a huge size still
+// saturates and a huge distance still quantizes to the band's edge;
+// infinities and NaN pass through for the callers' own checks.
+float to_float(double value) {
+    const double limit = static_cast<double>(std::numeric_limits<float>::max());
+    return static_cast<float>(std::isfinite(value) ? std::clamp(value, -limit, limit) : value);
+}
+
+float number_arg(lua_State* state, int index) { return to_float(luaL_checknumber(state, index)); }
 
 // One coordinate as a whole cell: rounded, then clamped to kMaxCellCoord.
 int cell_coord(lua_State* state, double value) {
@@ -539,7 +549,7 @@ int ScriptBindings::terrain_write_voxels(lua_State* state) {
                         luaL_error(state, "material Ids must be whole numbers from 0 to 255");
                     }
                     lua_pop(state, 1);
-                    distances[at] = static_cast<float>(distance);
+                    distances[at] = to_float(distance);
                     materials[at] = static_cast<std::uint8_t>(id);
                 }
                 lua_pop(state, 2);

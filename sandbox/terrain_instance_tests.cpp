@@ -11,6 +11,7 @@
 #include "PropertyBag.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
+#include "terrain/TerrainStash.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -516,6 +517,46 @@ std::string save_island(const TempDir& dir) {
 
 }  // namespace
 
+TEST_CASE("TP8 undo then redo of a Terrain made and edited in one step brings back its voxels and file", "[terrain]") {
+    SimRole role;
+    engine_core::Game game;
+    begin_step(game, "Insert Terrain");
+    engine_core::Terrain& terrain = add_terrain(game);
+    edit_ball(terrain, 0.f, 0.f, 0.f, 4.f, 6);
+    end_step(game);
+    const InstanceId id = terrain.id();
+    const std::string path = terrain.data_path();
+    REQUIRE_FALSE(path.empty());
+    game.history().undo();
+    REQUIRE_FALSE(game.alive(id));
+    game.history().redo();
+    auto* back = dynamic_cast<engine_core::Terrain*>(game.instance(id));
+    REQUIRE(back != nullptr);
+    REQUIRE(id_at(*back, 0, 0, 0) == 6);
+    REQUIRE(back->data_path() == path);
+}
+
+TEST_CASE("TP9 many edits in the step that made a Terrain do not grow the stash per edit", "[terrain]") {
+    SimRole role;
+    engine_core::Game game;
+    begin_step(game, "Generate");
+    engine_core::Terrain& terrain = add_terrain(game);
+    edit_ball(terrain, 0.f, 0.f, 0.f, 4.f, 1);
+    edit_ball(terrain, 10.f, 0.f, 0.f, 4.f, 1);
+    const std::size_t settled = engine_core::terrain::TerrainStash::size();
+    for (int i = 2; i <= 50; ++i) {
+        edit_ball(terrain, static_cast<float>(i * 10), 0.f, 0.f, 4.f, 1);
+    }
+    REQUIRE(engine_core::terrain::TerrainStash::size() == settled);
+    end_step(game);
+    const InstanceId id = terrain.id();
+    game.history().undo();
+    game.history().redo();
+    auto* back = dynamic_cast<engine_core::Terrain*>(game.instance(id));
+    REQUIRE(back != nullptr);
+    REQUIRE(id_at(*back, 500, 0, 0) == 1);   // the last edit is in the record
+}
+
 TEST_CASE("TS1 a Terrain's voxels are saved with the project and come back", "[terrain]") {
     SimRole role;
     TempDir dir;
@@ -713,4 +754,15 @@ TEST_CASE("TS6 a save during play writes the voxels of a Terrain play destroyed"
     engine_core::Project loaded = engine_core::Project::load(dir.path);
     engine_core::Terrain& terrain = terrain_named(loaded.datamodel(), "Island");
     REQUIRE(id_at(terrain, 0, 0, 0) == 1);
+}
+
+TEST_CASE("TS7 a resource file that cannot be put in place leaves no .partial file", "[terrain]") {
+    TempDir dir;
+    // A non-empty folder where the file goes: the rename over it fails.
+    std::filesystem::create_directories(dir.path / "terrain" / "Island.avox" / "inside");
+    const std::vector<std::byte> bytes(64, std::byte{7});
+    REQUIRE(reason(engine_core::write_resource_file(dir.path, "terrain/Island.avox", bytes)) ==
+            "Could not write terrain/Island.avox");
+    REQUIRE_FALSE(std::filesystem::exists(dir.path / "terrain" / "Island.avox.partial"));
+    REQUIRE(std::filesystem::is_directory(dir.path / "terrain" / "Island.avox" / "inside"));
 }

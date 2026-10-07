@@ -45,11 +45,14 @@ std::optional<std::string> write_resource_file(const std::filesystem::path& root
     std::filesystem::create_directories(file.parent_path(), error);
     std::filesystem::path partial = file;
     partial += ".partial";
-    {
-        std::ofstream out(partial, std::ios::binary | std::ios::trunc);
-        if (!out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) {
-            return "Could not write " + path;
-        }
+    std::ofstream out(partial, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    // Closed here, not by the destructor, so a failed flush of the last
+    // bytes (a full disk) is seen before the rename puts them over a good file.
+    out.close();
+    if (out.fail()) {
+        std::filesystem::remove(partial, error);
+        return "Could not write " + path;
     }
     std::filesystem::rename(partial, file, error);
     if (error) {

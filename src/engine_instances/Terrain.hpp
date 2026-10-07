@@ -38,8 +38,6 @@ public:
     bool can_collide() const { return can_collide_; }
     std::optional<std::string> set_can_collide(bool value);
     const std::string& data_path() const { return data_path_; }
-    // SimulationThread. Load, Stop, and undo write it; it is not an edit.
-    void set_data_path(std::string path) { data_path_ = std::move(path); }
     // SimulationThread. What writing DataPath through its registry property
     // does (load, paste, Stop, undo). While read_place restores this Terrain
     // from place bytes it only stores the path: the bytes' token brings the
@@ -70,7 +68,9 @@ public:
     // SimulationThread. Every voxel edit goes through here, never through
     // volume() directly: runs edit, and when it succeeds while stopped marks
     // the place unsaved and, on this Terrain's first edit, gives it its
-    // DataPath. Returns edit's refusal.
+    // DataPath. When the open recording made this Terrain, its record takes
+    // the edit too, so redo of that creation brings the voxels back. Returns
+    // edit's refusal.
     std::optional<std::string> edit_volume(
         const std::function<std::optional<std::string>(terrain::VoxelVolume&)>& edit);
 
@@ -100,6 +100,9 @@ private:
     std::string own_data_path(const std::string& avoid) const;
     // Stores path and reads its file into the voxels (load_data_path).
     void read_data_file(std::string path);
+    // edit_volume's: when the open recording created this Terrain, its
+    // record takes the voxels and DataPath as they are now.
+    void refresh_creation();
 
     Matrix4 transform_ = matrix4_identity();
     bool can_collide_ = true;
@@ -107,6 +110,12 @@ private:
     terrain::VoxelVolume volume_;
     // True while read_place loads the base properties with a known token.
     bool restoring_ = false;
+    // The stash token edit_volume last put in the open recording's record of
+    // this Terrain's creation. When that record still holds it, the next edit
+    // overwrites that one stash entry in place (write_place reads
+    // reuse_token_ while edit_volume refreshes the record).
+    std::uint64_t refreshed_token_ = 0;
+    std::uint64_t reuse_token_ = 0;
     // What the file at saved_path_ holds, as of the last save or load: the
     // same shared chunks, so a save compares pointers, not cells.
     bool saved_ = false;

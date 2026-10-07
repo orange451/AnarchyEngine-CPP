@@ -42,6 +42,21 @@ std::uint64_t TerrainStash::put(ChunkMap chunks, float voxel_size, const std::st
     return token;
 }
 
+bool TerrainStash::replace(std::uint64_t token, ChunkMap chunks, float voxel_size, const std::string& data_path) {
+    Stash& s = stash();
+    std::lock_guard<std::mutex> guard(s.mu);
+    const auto found = s.entries.find(token);
+    if (found == s.entries.end()) {
+        return false;
+    }
+    found->second.chunks = std::move(chunks);
+    found->second.voxel_size = voxel_size;
+    if (!data_path.empty()) {
+        s.latest[data_path] = token;
+    }
+    return true;
+}
+
 std::uint64_t TerrainStash::latest(const std::string& data_path) {
     Stash& s = stash();
     std::lock_guard<std::mutex> guard(s.mu);
@@ -66,6 +81,12 @@ void TerrainStash::clear() {
     std::lock_guard<std::mutex> guard(s.mu);
     s.entries.clear();
     s.latest.clear();
+}
+
+std::size_t TerrainStash::size() {
+    Stash& s = stash();
+    std::lock_guard<std::mutex> guard(s.mu);
+    return s.entries.size();
 }
 
 }  // namespace engine_core::terrain

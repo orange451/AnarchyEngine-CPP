@@ -356,7 +356,29 @@ std::optional<std::string> Terrain::edit_volume(
         emit_property("DataPath");
     }
     note_unrecorded_edit(id());
+    refresh_creation();
     return std::nullopt;
+}
+
+void Terrain::refresh_creation() {
+    // Known limitation: a creation committed in an earlier step keeps the
+    // record it was made with, so undo then redo of it brings the Terrain
+    // back without the edits made after it. That needs voxel undo
+    // (sub-project 2).
+    const std::vector<std::byte>* before = open_created_place(id());
+    if (before == nullptr) {
+        return;
+    }
+    // A script may edit thousands of times in one recording: once this
+    // Terrain's own refresh has put an entry in the record, later ones
+    // overwrite that entry rather than putting one per edit.
+    const std::uint64_t held = split_place(before->data(), before->size()).token;
+    reuse_token_ = held != 0 && held == refreshed_token_ ? held : 0;
+    refresh_created_record(id());
+    reuse_token_ = 0;
+    if (const std::vector<std::byte>* after = open_created_place(id())) {
+        refreshed_token_ = split_place(after->data(), after->size()).token;
+    }
 }
 
 std::optional<std::string> Terrain::save_resources(const std::filesystem::path& root) {
@@ -413,7 +435,10 @@ void Terrain::write_place(std::vector<std::byte>& out) const {
     const auto* l = reinterpret_cast<const std::byte*>(&length);
     out.insert(out.end(), l, l + sizeof(length));
     out.insert(out.end(), base.begin(), base.end());
-    const std::uint64_t token = terrain::TerrainStash::put(volume_.chunks(), volume_.voxel_size(), data_path_);
+    std::uint64_t token = reuse_token_;
+    if (token == 0 || !terrain::TerrainStash::replace(token, volume_.chunks(), volume_.voxel_size(), data_path_)) {
+        token = terrain::TerrainStash::put(volume_.chunks(), volume_.voxel_size(), data_path_);
+    }
     const auto* t = reinterpret_cast<const std::byte*>(&token);
     out.insert(out.end(), t, t + sizeof(token));
 }
@@ -440,6 +465,8 @@ void Terrain::on_reuse() {
     data_path_.clear();
     volume_ = terrain::VoxelVolume{};
     restoring_ = false;
+    refreshed_token_ = 0;
+    reuse_token_ = 0;
     saved_ = false;
     saved_path_.clear();
     saved_chunks_.clear();

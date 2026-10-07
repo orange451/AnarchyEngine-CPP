@@ -132,6 +132,7 @@ TEST_CASE("TL10 a box too large to count in cells raises and changes nothing", "
         local lo, hi = Vector3.new(-1e9, -1e9, -1e9), Vector3.new(1e9, 1e9, 1e9)
         print(select(2, pcall(function() t:FillBall(Vector3.new(), 1e12, nil) end)))
         print(select(2, pcall(function() t:FillBall(Vector3.new(), math.huge, nil) end)))
+        print(select(2, pcall(function() t:FillBall(Vector3.new(), 1e300, nil) end)))
         print(select(2, pcall(function() t:FillBall(Vector3.new(), 1e9, nil) end)))
         print(select(2, pcall(function() t:ReadVoxels(lo, hi) end)))
         print(select(2, pcall(function() u:ReplaceMaterial(lo, hi, a, b) end)))
@@ -147,7 +148,7 @@ TEST_CASE("TL10 a box too large to count in cells raises and changes nothing", "
     for (std::size_t at = text.find(message); at != std::string::npos; at = text.find(message, at + message.size())) {
         ++raised;
     }
-    REQUIRE(raised == 5);
+    REQUIRE(raised == 6);
     REQUIRE(has_line(out, "true\ttrue\n"));
 }
 
@@ -191,12 +192,17 @@ TEST_CASE("TL8 WriteVoxels round-trips ReadVoxels exactly, unassigned Ids includ
         print(same, v.Materials[1][1][1])
         print(select(2, pcall(function() t:WriteVoxels(lo, {{{0}}}, {{{1.5}}}) end)))
         print(select(2, pcall(function() t:WriteVoxels(lo, {{{0}}}, {{{256}}}) end)))
+        t:WriteVoxels(lo, {{{1e300}}}, {{{0}}})
+        local far = t:ReadVoxels(lo, lo).Distances[1][1][1]
+        t:WriteVoxels(lo, {{{-1e300}}}, {{{0}}})
+        print("huge", far == 4, t:ReadVoxels(lo, lo).Distances[1][1][1] == -4)
     )");
     rig.frames(1);
     const auto out = rig.runtime.drain_output();
     const std::string text = all_text(out);
     INFO(text);
     REQUIRE(has_line(out, "true\t42\n"));
+    REQUIRE(has_line(out, "huge\ttrue\ttrue\n"));
     REQUIRE(text.find("material Ids must be whole numbers from 0 to 255") != std::string::npos);
 }
 

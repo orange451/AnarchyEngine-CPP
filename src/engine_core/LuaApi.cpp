@@ -1156,7 +1156,9 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "nil", false, {P("min", "Vector3"), P("distances", "{{{number}}}"), P("materials", "{{{number}}}")});
     add("Terrain", "CellToWorld", "The world position a cell samples; WorldToCell goes the other way.", "Vector3",
         false, {P("cell", "Vector3")});
-    add("Terrain", "Clear", "Removes every voxel. The TerrainMaterials stay.", "nil", false, {});
+    add("Terrain", "Clear",
+        "Removes every voxel. The TerrainMaterials stay. Meshes and colliders follow a frame or two later.", "nil",
+        false, {});
     add("TerrainMaterial", "Id",
         "The voxel Id this entry names, from 1 to 255. Read-only: its Terrain picks the lowest one free when it is "
         "added.",

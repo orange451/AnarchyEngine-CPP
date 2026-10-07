@@ -8,6 +8,7 @@
 
 #include "terrain/VoxelVolume.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -20,6 +21,11 @@ public:
     // A new token, never 0, naming a copy of chunks. A non-empty data_path
     // (the Terrain's DataPath) remembers it as that path's latest token.
     static std::uint64_t put(ChunkMap chunks, float voxel_size, const std::string& data_path);
+    // Overwrites the entry token names in place, as put fills a new one (the
+    // edits of a Terrain made in the open recording keep refreshing one entry,
+    // not adding one per edit). False, changing nothing, when the token is
+    // unknown (0, or cleared).
+    static bool replace(std::uint64_t token, ChunkMap chunks, float voxel_size, const std::string& data_path);
     // The latest token put for data_path; 0 when none (or cleared). A paste
     // whose source was cut takes the voxels from the cut's undo record.
     static std::uint64_t latest(const std::string& data_path);
@@ -28,6 +34,8 @@ public:
     static bool get(std::uint64_t token, ChunkMap& chunks, float& voxel_size);
     // Drops every entry; the project's place was rebuilt.
     static void clear();
+    // How many entries are held (for tests).
+    static std::size_t size();
 };
 
 }  // namespace engine_core::terrain

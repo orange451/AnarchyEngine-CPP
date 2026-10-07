@@ -45,6 +45,9 @@ void FindVisible(const DrawItem* items, int count, const CameraView& camera, boo
         }
         const Sphere sphere = WorldBounds(*item.model, item.boundsMin, item.boundsMax);
         out.spheres[static_cast<std::size_t>(index)] = sphere;
+        if (item.shadowOnly) {
+            continue;
+        }
         if (cull && !SphereInFrustum(frustum, sphere)) {
             ++out.culled;
             continue;

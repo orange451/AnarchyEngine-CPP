@@ -18,6 +18,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <string>
 #include <vector>
 
 using Catch::Approx;
@@ -104,6 +105,66 @@ std::vector<NodeChoice> SelectFresh(const TerrainView& view, const TerrainCamera
 }
 
 const NodeKey& KeyOf(const TerrainView& view, const NodeChoice& choice) { return (*view.nodes)[choice.index].key; }
+
+// The 16 dither thresholds terrain.frag tests a fade against (kBayer).
+float Threshold(int i) {
+    static const float kBayer[16] = {0.f, 8.f, 2.f, 10.f, 12.f, 4.f, 14.f, 6.f,
+                                     3.f, 11.f, 1.f, 9.f, 15.f, 7.f, 13.f, 5.f};
+    return (kBayer[i] + 0.5f) / 16.f;
+}
+
+// Whether choice draws a pixel of threshold th, as terrain.frag decides.
+bool Draws(const NodeChoice& choice, float th) {
+    return choice.incoming ? !(th > choice.fade) : !(th <= 1.f - choice.fade);
+}
+
+// Over each chunk of an n x n Slab whose x and z are within [x0, x1) and
+// [z0, z1) (chunks), and each of the 16 dither thresholds: how many choices
+// draw it. Empty when every one is drawn exactly once; else the first that
+// is not, for the failure message.
+std::string Coverage(const TerrainView& view, const std::vector<NodeChoice>& choices, int n, int x0 = 0,
+                     int x1 = -1, int z0 = 0, int z1 = -1) {
+    x1 = x1 < 0 ? n : x1;
+    z1 = z1 < 0 ? n : z1;
+    std::vector<int> count(static_cast<std::size_t>(n * n * 16), 0);
+    for (const NodeChoice& choice : choices) {
+        const NodeKey& key = KeyOf(view, choice);
+        const int side = 1 << key.level;
+        for (int t = 0; t < 16; ++t) {
+            if (!Draws(choice, Threshold(t))) {
+                continue;
+            }
+            for (int x = std::max(key.x * side, x0); x < std::min((key.x + 1) * side, x1); ++x) {
+                for (int z = std::max(key.z * side, z0); z < std::min((key.z + 1) * side, z1); ++z) {
+                    ++count[static_cast<std::size_t>((x * n + z) * 16 + t)];
+                }
+            }
+        }
+    }
+    for (int x = x0; x < x1; ++x) {
+        for (int z = z0; z < z1; ++z) {
+            for (int t = 0; t < 16; ++t) {
+                const int c = count[static_cast<std::size_t>((x * n + z) * 16 + t)];
+                if (c != 1) {
+                    std::string text = "chunk " + std::to_string(x) + "," + std::to_string(z) + " threshold " +
+                                       std::to_string(Threshold(t)) + " drawn " + std::to_string(c) + " times by:";
+                    for (const NodeChoice& choice : choices) {
+                        const NodeKey& key = KeyOf(view, choice);
+                        const int side = 1 << key.level;
+                        if (x >= key.x * side && x < (key.x + 1) * side && z >= key.z * side &&
+                            z < (key.z + 1) * side) {
+                            text += " L" + std::to_string(key.level) + "(" + std::to_string(key.x) + "," +
+                                    std::to_string(key.z) + ")" + (choice.incoming ? " in " : " out ") +
+                                    std::to_string(choice.fade);
+                        }
+                    }
+                    return text;
+                }
+            }
+        }
+    }
+    return {};
+}
 
 }  // namespace
 
@@ -275,41 +336,355 @@ TEST_CASE("SEL5 a node with a child missing from the set is drawn instead of its
     const TerrainView noTop =
         Slab(64, [](const NodeKey& key) { return key.level != 6 && !(key == NodeKey{5, 0, 0, 0}); });
     const std::vector<NodeChoice> roots = SelectFresh(noTop, closer);
-    CHECK(roots.size() >= 3);
+    // The three level-5 nodes built and the four level-4 children of the one not: each chunk once.
+    CHECK(roots.size() == 7);
+    CHECK(Coverage(noTop, roots, 64) == "");
     CHECK(std::none_of(roots.begin(), roots.end(), [&](const NodeChoice& choice) {
         return KeyOf(noTop, choice).level == 6;
     }));
+    CHECK(Coverage(missing, out, 64) == "");
 }
 
 TEST_CASE("SEL6 selection over a 4 km island's nodes takes under half a millisecond", "[.][terrain-bench]") {
     // 128 x 128 chunks of 32 studs (4,096 studs a side), every level of it
     // published: 21,845 nodes, more than the ~16 k a 4 km island keeps resident.
-    const TerrainView view = Slab(128);
+    TerrainView view = Slab(128);
     std::printf("SEL6: %zu nodes\n", view.nodes->size());
+    using Clock = std::chrono::steady_clock;
+    const auto ms = [](Clock::time_point from, Clock::time_point to) {
+        return std::chrono::duration<double, std::milli>(to - from).count();
+    };
     TerrainFadeState state;
     std::vector<NodeChoice> out;
-    const auto first = std::chrono::steady_clock::now();
+    std::vector<std::size_t> casters, keep, upload;
+    const auto first = Clock::now();
     SelectTerrainNodes(view, Looking({100.f, 20.f, 100.f}, {200.f, 10.f, 200.f}), 0.0, state, out);
-    const double firstMs =
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - first).count();
-    // A camera flying across the island at 60 frames a second.
+    const double firstMs = ms(first, Clock::now());
+    // A camera flying across the island at 60 frames a second: the frame's
+    // selection, then its shadow casters, then its prefetch (nothing held).
     constexpr int kFrames = 600;
     std::size_t drawn = 0;
+    std::size_t cast = 0;
+    std::size_t candidates = 0;
     double worstMs = 0.0;
-    const auto start = std::chrono::steady_clock::now();
+    double selectMs = 0.0;
+    double castersMs = 0.0;
+    double prefetchMs = 0.0;
     for (int frame = 1; frame <= kFrames; ++frame) {
         const float t = static_cast<float>(frame) / kFrames;
         const Vec3 eye{100.f + 3900.f * t, 20.f + 30.f * t, 100.f + 3900.f * t};
-        const auto before = std::chrono::steady_clock::now();
-        SelectTerrainNodes(view, Looking(eye, {eye.x + 100.f, 10.f, eye.z + 60.f}), frame / 60.0, state, out);
-        worstMs = std::max(worstMs, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
-                                                                              before)
-                                        .count());
+        const TerrainCamera camera = Looking(eye, {eye.x + 100.f, 10.f, eye.z + 60.f});
+        const auto before = Clock::now();
+        SelectTerrainNodes(view, camera, frame / 60.0, state, out);
+        const auto selected = Clock::now();
+        SelectTerrainCasters(view, camera, state, casters);
+        const auto casted = Clock::now();
+        SelectTerrainPrefetch(view, camera, out, state, [](std::size_t) { return false; }, keep, upload);
+        const auto prefetched = Clock::now();
+        worstMs = std::max(worstMs, ms(before, selected));
+        selectMs += ms(before, selected);
+        castersMs += ms(selected, casted);
+        prefetchMs += ms(casted, prefetched);
         drawn += out.size();
+        cast += casters.size();
+        candidates += upload.size() + keep.size();
     }
-    const double averageMs =
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / kFrames;
-    std::printf("SEL6: first frame (roots) %.3f ms; per frame %.4f ms average, %.4f ms worst; %.0f nodes drawn a frame\n",
+    const double averageMs = selectMs / kFrames;
+    std::printf("SEL6: first frame (index and roots) %.3f ms; selection per frame %.4f ms average, %.4f ms worst; "
+                "%.0f nodes drawn a frame\n",
                 firstMs, averageMs, worstMs, static_cast<double>(drawn) / kFrames);
+    std::printf("SEL6: shadow casters out of view %.4f ms a frame, %.0f of them; prefetch %.4f ms a frame\n",
+                castersMs / kFrames, static_cast<double>(cast) / kFrames, prefetchMs / kFrames);
+    // A new node set every frame (a build or an edit publishing). Re-meshed
+    // nodes only (the same keys): the index is kept. Keys added or gone
+    // (alternating with a set missing one leaf): the index and roots each time.
+    const TerrainCamera still = Looking({2000.f, 20.f, 2000.f}, {2100.f, 10.f, 2060.f});
+    TerrainView fewer = Slab(128, [](const NodeKey& key) { return !(key == NodeKey{0, 3, 0, 3}); });
+    constexpr int kRebuilds = 100;
+    const auto average = [&](const std::function<void(int)>& before, double from) {
+        double total = 0.0;
+        for (int i = 0; i < kRebuilds; ++i) {
+            before(i);
+            const TerrainView& shown = (i % 2 == 1 && fewer.nodes_revision >= 1000) ? fewer : view;
+            const auto start = Clock::now();
+            SelectTerrainNodes(shown, still, from + i / 60.0, state, out);
+            total += ms(start, Clock::now());
+        }
+        return total / kRebuilds;
+    };
+    const double steadyMs = average([](int) {}, 20.0);
+    const double remeshedMs = average([&](int i) { view.nodes_revision = 100 + static_cast<std::uint64_t>(i); }, 30.0);
+    const double changedMs = average(
+        [&](int i) {
+            view.nodes_revision = 1000 + 2 * static_cast<std::uint64_t>(i);
+            fewer.nodes_revision = 1001 + 2 * static_cast<std::uint64_t>(i);
+        },
+        40.0);
+    std::printf("SEL6: a frame with the same node set %.4f ms; with a new set of the same keys %.4f ms (+%.4f); "
+                "with keys changed %.4f ms (+%.4f, the index and roots rebuilt)\n",
+                steadyMs, remeshedMs, remeshedMs - steadyMs, changedMs, changedMs - steadyMs);
     CHECK(averageMs < 0.5);
+}
+
+namespace {
+
+// SEL4's cameras over Slab(64), looking straight down at its middle: the top
+// node alone (far), its 4 children (closer), its 16 grandchildren (closest).
+const TerrainCamera kFar = Looking({1024.f, 50000.f, 1024.f}, {1024.f, 0.f, 1024.f});
+const TerrainCamera kCloser = Looking({1024.f, 10000.f, 1024.f}, {1024.f, 0.f, 1024.f});
+const TerrainCamera kClosest = Looking({1024.f, 5000.f, 1024.f}, {1024.f, 0.f, 1024.f});
+
+int CountLevel(const TerrainView& view, const std::vector<NodeChoice>& choices, int level, bool incoming) {
+    return static_cast<int>(std::count_if(choices.begin(), choices.end(), [&](const NodeChoice& choice) {
+        return KeyOf(view, choice).level == level && choice.incoming == incoming;
+    }));
+}
+
+}  // namespace
+
+TEST_CASE("SEL7 a region mid-fade finishes its fade before it switches again, every pixel drawn once",
+          "[terrain][lod][render]") {
+    const TerrainView view = Slab(64);
+    TerrainFadeState state;
+    Select(view, kFar, 0.0, state);
+    std::vector<NodeChoice> out = Select(view, kCloser, 1.0, state);   // top -> 4 children begins
+    CHECK(Coverage(view, out, 64) == "");
+
+    SECTION("zooming in again at +0.1 s") {
+        // The grandchildren are wanted now, but the children are still fading in: held.
+        out = Select(view, kClosest, 1.1, state);
+        CHECK(CountLevel(view, out, 5, true) == 4);
+        CHECK(CountLevel(view, out, 6, false) == 1);
+        CHECK(CountLevel(view, out, 4, true) == 0);
+        CHECK(Coverage(view, out, 64) == "");
+        out = Select(view, kClosest, 1.2, state);
+        CHECK(CountLevel(view, out, 4, true) == 0);
+        CHECK(Coverage(view, out, 64) == "");
+        // Done at +0.25 s: now the switch to the grandchildren starts.
+        out = Select(view, kClosest, 1.25, state);
+        CHECK(CountLevel(view, out, 4, true) == 16);
+        CHECK(CountLevel(view, out, 5, false) == 4);
+        CHECK(CountLevel(view, out, 6, false) == 0);
+        CHECK(Coverage(view, out, 64) == "");
+        out = Select(view, kClosest, 1.35, state);
+        CHECK(Coverage(view, out, 64) == "");
+        out = Select(view, kClosest, 1.5, state);
+        CHECK(out.size() == 16);
+        CHECK(Coverage(view, out, 64) == "");
+    }
+    SECTION("zooming back out at +0.1 s") {
+        out = Select(view, kFar, 1.1, state);
+        CHECK(CountLevel(view, out, 5, true) == 4);
+        CHECK(CountLevel(view, out, 6, false) == 1);
+        CHECK(Coverage(view, out, 64) == "");
+        out = Select(view, kFar, 1.25, state);
+        CHECK(CountLevel(view, out, 6, true) == 1);
+        CHECK(CountLevel(view, out, 5, false) == 4);
+        CHECK(Coverage(view, out, 64) == "");
+        out = Select(view, kFar, 1.4, state);
+        CHECK(Coverage(view, out, 64) == "");
+        out = Select(view, kFar, 1.5, state);
+        CHECK(out.size() == 1);
+    }
+}
+
+TEST_CASE("SEL8 zooming in and out, and wandering, draws every pixel once each frame", "[terrain][lod][render]") {
+    const TerrainView view = Slab(32);   // levels 0 to 5
+    const auto run = [&](const std::function<Vec3(int)>& eyeAt, int frames, double dt) {
+        TerrainFadeState state;
+        int finest = 99;
+        int coarsest = -1;
+        for (int frame = 0; frame < frames; ++frame) {
+            const Vec3 eye = eyeAt(frame);
+            const std::vector<NodeChoice> out =
+                Select(view, Looking(eye, {eye.x + 1.f, 0.f, eye.z + 1.f}, false), frame * dt, state);
+            const std::string coverage = Coverage(view, out, 32);
+            INFO("frame " << frame << " eye " << eye.x << "," << eye.y << "," << eye.z);
+            REQUIRE(coverage == "");
+            for (const NodeChoice& choice : out) {
+                finest = std::min(finest, KeyOf(view, choice).level);
+                coarsest = std::max(coarsest, KeyOf(view, choice).level);
+            }
+        }
+        return std::make_pair(finest, coarsest);
+    };
+    // Down from 40,000 studs to 20 over 3 s at 60 frames a second, then back up.
+    const auto height = [](int frame) {
+        const float t = static_cast<float>(frame) / 180.f;
+        return 40000.f * std::pow(20.f / 40000.f, t);
+    };
+    const auto in = run([&](int frame) { return Vec3{500.f, height(frame), 500.f}; }, 181, 1.0 / 60.0);
+    CHECK(in.first == 0);
+    CHECK(in.second == 5);
+    const auto out = run([&](int frame) { return Vec3{500.f, height(180 - frame), 500.f}; }, 181, 1.0 / 60.0);
+    CHECK(out.first == 0);
+    CHECK(out.second == 5);
+    // Jumping about at random, faster than a fade, at 30 frames a second.
+    unsigned seed = 12345u;
+    const auto next = [&]() {
+        seed = seed * 1664525u + 1013904223u;
+        return static_cast<float>(seed >> 8) / static_cast<float>(1u << 24);
+    };
+    std::vector<Vec3> eyes;
+    for (int i = 0; i < 240; ++i) {
+        const float x = next() * 1024.f;
+        const float h = next() * next();
+        const float z = next() * 1024.f;
+        eyes.push_back(Vec3{x, 5.f + h * 20000.f, z});
+    }
+    run([&](int frame) { return eyes[static_cast<std::size_t>(frame)]; }, 240, 1.0 / 30.0);
+}
+
+TEST_CASE("SEL9 a child coming into view while its parent fades out takes the other half of that fade",
+          "[terrain][lod][render]") {
+    const TerrainView view = Slab(64);
+    // A narrow view (10 degrees, 50 x 1080 pixels) along +X from 70,000 studs
+    // off the slab's low-X side: it sees a strip of the slab ~570 studs wide.
+    // The top node (16 studs of error) is 1.4 px there, its children 0.7 px.
+    const auto camera = [](Vec3 eye, float aimZ) {
+        TerrainCamera c = Looking(eye, {0.f, 4.f, aimZ});
+        c.fov_y_degrees = 10.f;
+        c.pane_width = 50;
+        return c;
+    };
+    TerrainFadeState state;
+    std::vector<NodeChoice> out = Select(view, camera({-150000.f, 4.f, 512.f}, 512.f), 0.0, state);
+    REQUIRE(out.size() == 1);
+    CHECK(KeyOf(view, out[0]).level == 6);
+    // Closer, aimed at z 512: the top's children at z 0-1024 switch in; those at z 1024-2048 are out of view.
+    out = Select(view, camera({-70000.f, 4.f, 512.f}, 512.f), 1.0, state);
+    CHECK(CountLevel(view, out, 5, true) == 2);
+    CHECK(CountLevel(view, out, 6, false) == 1);
+    CHECK(Coverage(view, out, 64, 0, 64, 0, 32) == "");
+    // Turned to z 1536 at +0.1 s: the other two come into view, joining the top's fade at 0.4.
+    out = Select(view, camera({-70000.f, 4.f, 512.f}, 1536.f), 1.1, state);
+    int joined = 0;
+    float top = -1.f;
+    for (const NodeChoice& choice : out) {
+        const NodeKey& key = KeyOf(view, choice);
+        if (key.level == 5 && key.z == 1) {
+            ++joined;
+            CHECK(choice.incoming);
+            CHECK(choice.fade == Approx(0.4f).margin(1e-4));
+        } else if (key.level == 6) {
+            CHECK(!choice.incoming);
+            top = choice.fade;
+        }
+    }
+    CHECK(joined == 2);
+    CHECK(top == Approx(0.6f).margin(1e-4));
+    CHECK(Coverage(view, out, 64, 0, 64, 32, 64) == "");
+    out = Select(view, camera({-70000.f, 4.f, 512.f}, 1536.f), 1.2, state);
+    CHECK(Coverage(view, out, 64, 0, 64, 32, 64) == "");
+    out = Select(view, camera({-70000.f, 4.f, 512.f}, 1536.f), 1.3, state);
+    CHECK(CountLevel(view, out, 5, true) == 2);
+    CHECK(CountLevel(view, out, 6, false) == 0);
+    CHECK(Coverage(view, out, 64, 0, 64, 32, 64) == "");
+}
+
+TEST_CASE("SEL10 a node of a fade gone from the set mid-fade leaves no hole", "[terrain][lod][render]") {
+    const TerrainView view = Slab(64);
+    TerrainFadeState state;
+    Select(view, kFar, 0.0, state);
+    Select(view, kCloser, 1.0, state);   // top fading out, 4 children in
+    SECTION("the node fading out goes") {
+        TerrainView noTop = Slab(64, [](const NodeKey& key) { return key.level != 6; });
+        noTop.nodes_revision = 2;
+        const std::vector<NodeChoice> out = Select(noTop, kCloser, 1.1, state);
+        CHECK(out.size() == 4);
+        CHECK(Coverage(noTop, out, 64) == "");
+    }
+    SECTION("a node fading in goes") {
+        TerrainView missing = Slab(64, [](const NodeKey& key) { return !(key == NodeKey{5, 0, 0, 0}); });
+        missing.nodes_revision = 2;
+        std::vector<NodeChoice> out = Select(missing, kCloser, 1.1, state);
+        REQUIRE(out.size() == 1);
+        CHECK(KeyOf(missing, out[0]).level == 6);
+        CHECK(Coverage(missing, out, 64) == "");
+        // Built again: the switch starts over, from whole nodes.
+        TerrainView again = Slab(64);
+        again.nodes_revision = 3;
+        out = Select(again, kCloser, 1.2, state);
+        CHECK(Coverage(again, out, 64) == "");
+        CHECK(CountLevel(again, out, 5, true) == 4);
+    }
+}
+
+TEST_CASE("SEL11 terrain out of view casts shadows at the selection it would draw at", "[terrain][lod][render]") {
+    const TerrainView view = Slab(64);
+    const Vec3 eye{500.f, 4.f, 500.f};
+    TerrainFadeState state;
+    std::vector<NodeChoice> out;
+    std::vector<std::size_t> casters;
+    // Looking along -Z, after a step that leaves fades going.
+    SelectTerrainNodes(view, Looking({500.f, 4.f, 700.f}, {500.f, 4.f, 0.f}), 0.0, state, out);
+    SelectTerrainNodes(view, Looking(eye, {500.f, 4.f, 0.f}), 0.1, state, out);
+    SelectTerrainCasters(view, Looking(eye, {500.f, 4.f, 0.f}), state, casters);
+    const auto behind = [&](std::size_t index) { return (*view.nodes)[index].bounds_min.z > eye.z; };
+    CHECK(std::count_if(casters.begin(), casters.end(), behind) > 0);
+    // None of them drawn; with what is drawn fading in (or steady), every chunk once.
+    REQUIRE(std::any_of(out.begin(), out.end(), [](const NodeChoice& choice) { return !choice.incoming; }));
+    std::vector<NodeChoice> cast;
+    for (const NodeChoice& choice : out) {
+        CHECK(std::find(casters.begin(), casters.end(), choice.index) == casters.end());
+        if (choice.incoming) {
+            cast.push_back(NodeChoice{choice.index, 1.f, true});
+        }
+    }
+    for (const std::size_t index : casters) {
+        cast.push_back(NodeChoice{index, 1.f, true});
+    }
+    CHECK(Coverage(view, cast, 64) == "");
+    // With no culling, everything that casts is drawn.
+    SelectTerrainNodes(view, Looking(eye, {500.f, 4.f, 0.f}, false), 0.2, state, out);
+    SelectTerrainCasters(view, Looking(eye, {500.f, 4.f, 0.f}, false), state, casters);
+    CHECK(casters.empty());
+}
+
+TEST_CASE("SEL12 the children of nodes close to switching upload ahead, nearest first, 8 a frame",
+          "[terrain][lod][render]") {
+    const TerrainView view = Slab(64);
+    TerrainFadeState state;
+    std::vector<NodeChoice> out;
+    std::vector<std::size_t> keep, upload;
+    const auto none = [](std::size_t) { return false; };
+    // The top alone at 0.3 px: not close.
+    SelectTerrainNodes(view, kFar, 0.0, state, out);
+    SelectTerrainPrefetch(view, kFar, out, state, none, keep, upload);
+    CHECK(keep.empty());
+    CHECK(upload.empty());
+    // Its 4 children at about 0.75 px: their 16 children are candidates; 8 upload, nearest first.
+    TerrainFadeState fresh;
+    const TerrainCamera aside = Looking({300.f, 10000.f, 300.f}, {1024.f, 0.f, 1024.f});
+    SelectTerrainNodes(view, aside, 0.0, fresh, out);
+    REQUIRE(out.size() == 4);
+    SelectTerrainPrefetch(view, aside, out, fresh, none, keep, upload);
+    CHECK(keep.empty());
+    REQUIRE(upload.size() == static_cast<std::size_t>(kTerrainPrefetchUploads));
+    const Vec3 eye = engine_core::matrix4_position(aside.world);
+    const auto distance = [&](std::size_t index) {
+        const TerrainNodeView& node = (*view.nodes)[index];
+        const float dx = std::max({node.bounds_min.x - eye.x, 0.f, eye.x - node.bounds_max.x});
+        const float dy = std::max({node.bounds_min.y - eye.y, 0.f, eye.y - node.bounds_max.y});
+        const float dz = std::max({node.bounds_min.z - eye.z, 0.f, eye.z - node.bounds_max.z});
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
+    };
+    for (std::size_t i = 0; i < upload.size(); ++i) {
+        CHECK((*view.nodes)[upload[i]].key.level == 4);
+        if (i > 0) {
+            CHECK(distance(upload[i - 1]) <= distance(upload[i]));
+        }
+    }
+    // The nearest is the grandchild under the camera's corner.
+    CHECK((*view.nodes)[upload[0]].key == NodeKey{4, 0, 0, 0});
+    // Those uploaded already are kept, and the other 8 upload.
+    const std::vector<std::size_t> first = upload;
+    const auto held = [&](std::size_t index) { return std::find(first.begin(), first.end(), index) != first.end(); };
+    SelectTerrainPrefetch(view, aside, out, fresh, held, keep, upload);
+    CHECK(keep.size() == 8);
+    CHECK(upload.size() == 8);
+    for (const std::size_t index : upload) {
+        CHECK(!held(index));
+        CHECK(distance(index) >= distance(first.back()));
+    }
 }

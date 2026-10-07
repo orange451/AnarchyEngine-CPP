@@ -56,7 +56,12 @@ public:
                                                  const engine_core::terrain::NodeKey& key,
                                                  const engine_core::terrain::CompactMesh& compact,
                                                  std::uint64_t revision);
-    // Deletes the node uploads no getTerrainNode asked for in the last
+    // Whether the node's upload of revision is held already (uploaded, or found
+    // to have no triangles); if so it counts as asked for, as getTerrainNode
+    // would, so the sweep keeps it. Uploads nothing: for prefetching.
+    bool touchTerrainNode(engine_core::InstanceId terrain, const engine_core::terrain::NodeKey& key,
+                          std::uint64_t revision);
+    // Deletes the node uploads no getTerrainNode (or touchTerrainNode) asked for in the last
     // kTerrainNodeGraceSeconds by now_seconds (the caller's clock, never
     // decreasing): nodes no longer drawn, and Terrains that left Workspace.
     // Call once a frame, after that frame's getTerrainNode calls.

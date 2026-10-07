@@ -1605,6 +1605,7 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
             // A terrain chunk is opaque, drawn alone, and sorted after every
             // other opaque draw so the geometry pass switches program once.
             item.terrain = draw.terrainLook != 0;
+            item.shadowOnly = draw.shadowOnly;
             if (item.terrain) {
                 item.transparency = 0.f;
                 item.slot = 0;

@@ -7,7 +7,6 @@
 #include <array>
 #include <cmath>
 #include <limits>
-#include <tuple>
 
 namespace runner {
 
@@ -15,19 +14,86 @@ using engine_core::Matrix4;
 using engine_core::TerrainNodeView;
 using engine_core::Vec3;
 using engine_core::terrain::NodeKey;
+using PerTerrain = TerrainFadeState::PerTerrain;
+using Fade = TerrainFadeState::Fade;
 
 namespace {
 
-bool KeyLess(const NodeKey& a, const NodeKey& b) {
-    return std::tie(a.level, a.x, a.y, a.z) < std::tie(b.level, b.x, b.y, b.z);
+constexpr std::size_t kNone = std::numeric_limits<std::size_t>::max();
+
+std::size_t SlotOf(const NodeKey& key, std::size_t mask) {
+    std::uint64_t h = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(key.x)) << 32 |
+                       static_cast<std::uint32_t>(key.z)) *
+                      0x9e3779b97f4a7c15ull;
+    h ^= (static_cast<std::uint64_t>(static_cast<std::uint32_t>(key.y)) << 8 |
+          static_cast<std::uint32_t>(key.level)) *
+         0xc2b2ae3d27d4eb4full;
+    h ^= h >> 31;
+    return static_cast<std::size_t>(h) & mask;
 }
 
-// key's index in nodes (sorted by level, x, y, z), or npos.
-constexpr std::size_t kNone = std::numeric_limits<std::size_t>::max();
-std::size_t Find(const std::vector<TerrainNodeView>& nodes, const NodeKey& key) {
-    const auto it = std::lower_bound(nodes.begin(), nodes.end(), key,
-                                     [](const TerrainNodeView& node, const NodeKey& k) { return KeyLess(node.key, k); });
-    return it != nodes.end() && it->key == key ? static_cast<std::size_t>(it - nodes.begin()) : kNone;
+// parent_of, inline: the index walks up from every node.
+int Half(int value) { return value >= 0 ? value / 2 : -((1 - value) / 2); }
+NodeKey Parent(const NodeKey& key) { return NodeKey{key.level + 1, Half(key.x), Half(key.y), Half(key.z)}; }
+
+// key's index in the node set terrain is indexed for, or kNone.
+std::size_t Find(const PerTerrain& terrain, const NodeKey& key) {
+    if (terrain.slots.empty()) {
+        return kNone;
+    }
+    const std::size_t mask = terrain.slots.size() - 1;
+    for (std::size_t slot = SlotOf(key, mask);; slot = (slot + 1) & mask) {
+        const std::uint32_t entry = terrain.slots[slot];
+        if (entry == 0) {
+            return kNone;
+        }
+        if (terrain.keys[entry - 1] == key) {
+            return entry - 1;
+        }
+    }
+}
+
+// The table and roots for nodes, a new node set. The same keys as the last
+// (only meshes changed, as an edit re-meshing nodes does) keep both.
+void Index(PerTerrain& terrain, const std::vector<TerrainNodeView>& nodes, int levelLimit) {
+    if (terrain.keys.size() == nodes.size() && !terrain.slots.empty() &&
+        std::equal(nodes.begin(), nodes.end(), terrain.keys.begin(),
+                   [](const TerrainNodeView& node, const NodeKey& key) { return node.key == key; })) {
+        return;
+    }
+    terrain.keys.resize(nodes.size());
+    for (std::size_t index = 0; index < nodes.size(); ++index) {
+        terrain.keys[index] = nodes[index].key;
+    }
+    std::size_t size = 16;
+    while (size < nodes.size() * 2) {
+        size *= 2;
+    }
+    terrain.slots.assign(size, 0u);
+    const std::size_t mask = size - 1;
+    for (std::size_t index = 0; index < nodes.size(); ++index) {
+        std::size_t slot = SlotOf(terrain.keys[index], mask);
+        while (terrain.slots[slot] != 0) {
+            slot = (slot + 1) & mask;
+        }
+        terrain.slots[slot] = static_cast<std::uint32_t>(index + 1);
+    }
+    // A root has no published ancestor; nearly every node's parent is published, one lookup.
+    terrain.roots.clear();
+    for (std::size_t index = 0; index < nodes.size(); ++index) {
+        NodeKey key = terrain.keys[index];
+        bool root = true;
+        while (key.level < levelLimit) {
+            key = Parent(key);
+            if (Find(terrain, key) != kNone) {
+                root = false;
+                break;
+            }
+        }
+        if (root) {
+            terrain.roots.push_back(index);
+        }
+    }
 }
 
 // A node's Terrain-local box as a world box: center and half extents.
@@ -72,6 +138,9 @@ bool InView(const Frustum& frustum, const WorldBox& box) {
 // Whether any strict ancestor of key, up to level limit, is in set.
 template <typename Set>
 bool AncestorIn(const Set& set, NodeKey key, int limit) {
+    if (set.empty()) {
+        return false;
+    }
     while (key.level < limit) {
         key = engine_core::terrain::parent_of(key);
         if (set.count(key) != 0) {
@@ -82,14 +151,139 @@ bool AncestorIn(const Set& set, NodeKey key, int limit) {
 }
 
 // Adds every strict ancestor of key, up to level limit, to set; stops at one already there.
-template <typename Set>
-void AddAncestors(Set& set, NodeKey key, int limit) {
+void AddAncestors(NodeKeySet& set, NodeKey key, int limit) {
     while (key.level < limit) {
         key = engine_core::terrain::parent_of(key);
         if (!set.insert(key).second) {
             return;
         }
     }
+}
+
+// Whether key is in set, or an ancestor or descendant of a key in it (ancestors: set's strict ancestors).
+bool Related(const NodeKeySet& set, const NodeKeySet& ancestors, const NodeKey& key, int limit) {
+    return !set.empty() && (set.count(key) != 0 || ancestors.count(key) != 0 || AncestorIn(set, key, limit));
+}
+
+// What one Terrain's nodes look like from one camera.
+struct Sight {
+    const std::vector<TerrainNodeView>& nodes;
+    const PerTerrain& terrain;
+    Vec3 eye;
+    bool cull = false;
+    Frustum frustum;
+    Matrix4 m;
+    float errorScale = 1.f;
+    float fov = 60.f;
+    int paneHeight = 1;
+
+    WorldBox box(const TerrainNodeView& node) const { return ToWorld(m, node.bounds_min, node.bounds_max); }
+    bool inView(const WorldBox& world) const { return !cull || InView(frustum, world); }
+    float pixelError(const TerrainNodeView& node, const WorldBox& world) const {
+        return NodePixelError(node.error * errorScale, DistanceTo(world, eye), fov, paneHeight);
+    }
+};
+
+Sight Look(const engine_core::TerrainView& view, const TerrainCamera& camera, const PerTerrain& terrain) {
+    Sight sight{*view.nodes, terrain, engine_core::matrix4_position(camera.world)};
+    sight.cull = camera.pane_width > 0 && camera.pane_height > 0 && camera.fov_y_degrees > 0.f &&
+                 camera.fov_y_degrees < 180.f;
+    if (sight.cull) {
+        const Matrix4 viewMatrix = engine_core::matrix4_inverse(engine_core::matrix4_orthonormalize(camera.world));
+        const Matrix4 projection =
+            Perspective(camera.fov_y_degrees,
+                        static_cast<float>(camera.pane_width) / static_cast<float>(camera.pane_height), kSceneNear,
+                        std::max(camera.far_z, kSceneNear * 2.f));
+        sight.frustum = MakeFrustum(engine_core::matrix4_multiply(projection, viewMatrix));
+    }
+    // A scaled Terrain's errors grow with it: by its largest axis's scale.
+    sight.m = view.transform;
+    const Matrix4& m = view.transform;
+    sight.errorScale = std::max({std::sqrt(m.m[0] * m.m[0] + m.m[1] * m.m[1] + m.m[2] * m.m[2]),
+                                 std::sqrt(m.m[4] * m.m[4] + m.m[5] * m.m[5] + m.m[6] * m.m[6]),
+                                 std::sqrt(m.m[8] * m.m[8] + m.m[9] * m.m[9] + m.m[10] * m.m[10])});
+    sight.fov = camera.fov_y_degrees;
+    sight.paneHeight = camera.pane_height;
+    return sight;
+}
+
+// From the roots: what to draw with no fades, culled when cull is set. A
+// node in held draws without its error tested; one in holdPath (an ancestor
+// of a held node) splits whatever its error, if it can.
+void Traverse(const Sight& sight, bool cull, const NodeKeySet& held, const NodeKeySet& holdPath,
+              std::vector<std::size_t>& stack, std::vector<std::size_t>& selected) {
+    const std::vector<TerrainNodeView>& nodes = sight.nodes;
+    const bool holding = !held.empty();
+    selected.clear();
+    stack.assign(sight.terrain.roots.begin(), sight.terrain.roots.end());
+    while (!stack.empty()) {
+        const std::size_t index = stack.back();
+        stack.pop_back();
+        const TerrainNodeView& node = nodes[index];
+        const WorldBox box = sight.box(node);
+        if (cull && !sight.inView(box)) {
+            continue;
+        }
+        if (holding && held.count(node.key) != 0) {
+            selected.push_back(index);
+            continue;
+        }
+        const bool split = holding && holdPath.count(node.key) != 0;
+        if (node.key.level == 0 || node.child_mask == 0 ||
+            (!split && sight.pixelError(node, box) < kTerrainPixelError)) {
+            selected.push_back(index);
+            continue;
+        }
+        // R4: descend only when every child with surface is published.
+        const std::array<NodeKey, 8> children = engine_core::terrain::children_of(node.key);
+        std::size_t found[8];
+        int count = 0;
+        bool complete = true;
+        for (int i = 0; i < 8; ++i) {
+            if ((node.child_mask & (1u << i)) == 0) {
+                continue;
+            }
+            const std::size_t child = Find(sight.terrain, children[static_cast<std::size_t>(i)]);
+            if (child == kNone) {
+                complete = false;
+                break;
+            }
+            found[count++] = child;
+        }
+        if (!complete) {
+            selected.push_back(index);
+            continue;
+        }
+        stack.insert(stack.end(), found, found + count);
+    }
+}
+
+// What a node drawn last frame is now.
+enum Drawn : std::uint8_t {
+    kSteady = 1,       // fading in no longer: whole
+    kFadingIn = 2,     // mid fade-in
+    kFadingOut = 4,    // mid fade-out, with a value
+    kMixedOut = 8,     // more than one fade-out value
+};
+std::uint8_t Classify(const Fade& fade, double now, float& value) {
+    value = fade.at(now);
+    if (fade.incoming) {
+        return value >= 1.f ? kSteady : kFadingIn;
+    }
+    return value > 0.f ? kFadingOut : 0;
+}
+// Folds one drawn node (bits, value) into what is known of a key's relatives; false when it adds nothing.
+bool Merge(std::pair<std::uint8_t, float>& into, std::uint8_t bits, float value) {
+    const std::pair<std::uint8_t, float> before = into;
+    if ((bits & kFadingOut) != 0) {
+        if ((into.first & kFadingOut) == 0) {
+            into.second = value;
+        } else if (std::abs(into.second - value) > 1e-4f) {
+            into.first = static_cast<std::uint8_t>(into.first | kMixedOut);
+        }
+    }
+    into.first = static_cast<std::uint8_t>(into.first | bits);
+    return into.first != before.first || into.second != before.second;
 }
 
 }  // namespace
@@ -121,174 +315,258 @@ float NodePixelError(float error, float distance, float fov_y_degrees, int pane_
 void SelectTerrainNodes(const engine_core::TerrainView& view, const TerrainCamera& camera, double now_seconds,
                         TerrainFadeState& state, std::vector<NodeChoice>& out) {
     out.clear();
-    TerrainFadeState::PerTerrain& terrain = state.terrains[view.terrain];
+    state.held.clear();
+    state.holdPath.clear();
+    state.chosen.clear();
+    PerTerrain& terrain = state.terrains[view.terrain];
     terrain.seen = true;
     if (view.nodes == nullptr || view.nodes->empty()) {
         terrain.fades.clear();
         terrain.roots.clear();
-        terrain.rootsFor = nullptr;
+        terrain.slots.clear();
+        terrain.indexFor = nullptr;
         return;
     }
     const std::vector<TerrainNodeView>& nodes = *view.nodes;
     const int levelLimit = std::max(view.top_level, nodes.back().key.level);
-
-    // The roots: published nodes with no published ancestor. Once a node set.
-    if (terrain.rootsFor != view.nodes.get() || terrain.rootsRevision != view.nodes_revision) {
-        terrain.rootsFor = view.nodes.get();
-        terrain.rootsRevision = view.nodes_revision;
-        terrain.roots.clear();
-        for (std::size_t index = 0; index < nodes.size(); ++index) {
-            NodeKey key = nodes[index].key;
-            bool root = true;
-            while (key.level < levelLimit) {
-                key = engine_core::terrain::parent_of(key);
-                if (Find(nodes, key) != kNone) {
-                    root = false;
-                    break;
-                }
-            }
-            if (root) {
-                terrain.roots.push_back(index);
-            }
-        }
+    if (terrain.indexFor != view.nodes.get() || terrain.indexRevision != view.nodes_revision) {
+        terrain.indexFor = view.nodes.get();
+        terrain.indexRevision = view.nodes_revision;
+        Index(terrain, nodes, levelLimit);
     }
-
-    // The camera, in world space.
-    const Vec3 eye = engine_core::matrix4_position(camera.world);
-    const bool cull = camera.pane_width > 0 && camera.pane_height > 0 && camera.fov_y_degrees > 0.f &&
-                      camera.fov_y_degrees < 180.f;
-    Frustum frustum;
-    if (cull) {
-        const Matrix4 viewMatrix = engine_core::matrix4_inverse(engine_core::matrix4_orthonormalize(camera.world));
-        const Matrix4 projection =
-            Perspective(camera.fov_y_degrees,
-                        static_cast<float>(camera.pane_width) / static_cast<float>(camera.pane_height), kSceneNear,
-                        std::max(camera.far_z, kSceneNear * 2.f));
-        frustum = MakeFrustum(engine_core::matrix4_multiply(projection, viewMatrix));
-    }
-    // A scaled Terrain's errors grow with it: by its largest axis's scale.
-    const Matrix4& m = view.transform;
-    const float errorScale = std::max({std::sqrt(m.m[0] * m.m[0] + m.m[1] * m.m[1] + m.m[2] * m.m[2]),
-                                       std::sqrt(m.m[4] * m.m[4] + m.m[5] * m.m[5] + m.m[6] * m.m[6]),
-                                       std::sqrt(m.m[8] * m.m[8] + m.m[9] * m.m[9] + m.m[10] * m.m[10])});
-    const auto inView = [&](const TerrainNodeView& node) {
-        return !cull || InView(frustum, ToWorld(m, node.bounds_min, node.bounds_max));
-    };
-
-    // What this frame would draw with no fades.
-    std::vector<std::size_t>& selected = state.selected;
-    std::vector<std::size_t>& stack = state.stack;
-    selected.clear();
-    stack.assign(terrain.roots.begin(), terrain.roots.end());
-    while (!stack.empty()) {
-        const std::size_t index = stack.back();
-        stack.pop_back();
-        const TerrainNodeView& node = nodes[index];
-        const WorldBox box = ToWorld(m, node.bounds_min, node.bounds_max);
-        if (cull && !InView(frustum, box)) {
-            continue;
-        }
-        if (node.key.level == 0 || node.child_mask == 0 ||
-            NodePixelError(node.error * errorScale, DistanceTo(box, eye), camera.fov_y_degrees,
-                           camera.pane_height) < kTerrainPixelError) {
-            selected.push_back(index);
-            continue;
-        }
-        // R4: descend only when every child with surface is published.
-        const std::array<NodeKey, 8> children = engine_core::terrain::children_of(node.key);
-        std::size_t found[8];
-        int count = 0;
-        bool complete = true;
-        for (int i = 0; i < 8; ++i) {
-            if ((node.child_mask & (1u << i)) == 0) {
-                continue;
-            }
-            const std::size_t child = Find(nodes, children[static_cast<std::size_t>(i)]);
-            if (child == kNone) {
-                complete = false;
-                break;
-            }
-            found[count++] = child;
-        }
-        if (!complete) {
-            selected.push_back(index);
-            continue;
-        }
-        stack.insert(stack.end(), found, found + count);
-    }
-
-    // Fades: what last frame drew (terrain.fades) against what this one chose.
-    auto& chosen = state.chosen;
-    auto& chosenAncestors = state.chosenAncestors;
-    auto& drawnAncestors = state.drawnAncestors;
-    auto& next = state.nextFades;
-    chosen.clear();
-    chosenAncestors.clear();
-    drawnAncestors.clear();
-    next.clear();
-    bool drawnAncestorsReady = false;
     int fadeLimit = levelLimit;
     for (const auto& [key, fade] : terrain.fades) {
         fadeLimit = std::max(fadeLimit, key.level);
     }
+
+    // R18: what is fading in stays chosen until its fade is done.
+    for (const auto& [key, fade] : terrain.fades) {
+        if (fade.incoming && fade.at(now_seconds) < 1.f) {
+            state.held.insert(key);
+            AddAncestors(state.holdPath, key, fadeLimit);
+        }
+    }
+    const Sight sight = Look(view, camera, terrain);
+    std::vector<std::size_t>& selected = state.selected;
+    Traverse(sight, sight.cull, state.held, state.holdPath, state.stack, selected);
+
+    // Fades: what last frame drew (terrain.fades) against what this one chose.
+    auto& chosen = state.chosen;
+    auto& next = state.nextFades;
+    auto& snapped = state.snapped;
+    next.clear();
+    snapped.clear();
+    state.chosenAncestors.clear();
+    state.snappedAncestors.clear();
+    state.vanished.clear();
+    state.vanishedAncestors.clear();
     for (const std::size_t index : selected) {
         chosen.insert(nodes[index].key);
     }
+    bool belowReady = false;
     for (const std::size_t index : selected) {
         const NodeKey& key = nodes[index].key;
-        TerrainFadeState::Fade fade;
+        Fade fade;
         const auto last = terrain.fades.find(key);
-        if (last != terrain.fades.end()) {
+        // (One done fading out counts as new.)
+        if (last != terrain.fades.end() && (last->second.incoming || last->second.at(now_seconds) > 0.f)) {
             fade = last->second;
             if (!fade.incoming) {
-                // Chosen again mid fade-out: back in from where it is.
-                fade = TerrainFadeState::Fade{fade.at(now_seconds), now_seconds, true};
+                // Chosen again mid fade-out (what replaced it went): whole at once.
+                fade = Fade{1.f, now_seconds, true};
+                snapped.insert(key);
             }
         } else {
-            // New: it replaces what last frame drew of its ancestors or descendants, if any.
-            if (!drawnAncestorsReady) {
-                for (const auto& [drawn, unused] : terrain.fades) {
-                    AddAncestors(drawnAncestors, drawn, fadeLimit);
+            // New: what of its ancestors and descendants did last frame draw?
+            if (!belowReady) {
+                state.drawnBelow.clear();
+                for (const auto& [drawn, drawnFade] : terrain.fades) {
+                    float value = 0.f;
+                    const std::uint8_t bits = Classify(drawnFade, now_seconds, value);
+                    if (bits == 0) {
+                        continue;
+                    }
+                    NodeKey up = drawn;
+                    while (up.level < fadeLimit) {
+                        up = engine_core::terrain::parent_of(up);
+                        if (!Merge(state.drawnBelow[up], bits, value)) {
+                            break;
+                        }
+                    }
                 }
-                drawnAncestorsReady = true;
+                belowReady = true;
             }
-            const bool replaces = drawnAncestors.count(key) != 0 || AncestorIn(terrain.fades, key, fadeLimit);
-            fade = TerrainFadeState::Fade{replaces ? 0.f : 1.f, now_seconds, true};
+            std::pair<std::uint8_t, float> relatives{std::uint8_t{0}, 0.f};
+            const auto below = state.drawnBelow.find(key);
+            if (below != state.drawnBelow.end()) {
+                relatives = below->second;
+            }
+            NodeKey up = key;
+            while (up.level < fadeLimit) {
+                up = engine_core::terrain::parent_of(up);
+                const auto above = terrain.fades.find(up);
+                if (above != terrain.fades.end()) {
+                    float value = 0.f;
+                    const std::uint8_t bits = Classify(above->second, now_seconds, value);
+                    Merge(relatives, bits, value);
+                }
+            }
+            if (relatives.first == 0) {
+                // Nothing related drawn: first sight, or turning into view.
+                fade = Fade{1.f, now_seconds, true};
+            } else if (relatives.first == kSteady) {
+                // Replacing whole nodes: in from 0 while they go out.
+                fade = Fade{0.f, now_seconds, true};
+            } else if (relatives.first == kFadingOut) {
+                // Coming into view (or reached) where its relatives fade out: the other half of their fade.
+                fade = Fade{1.f - relatives.second, now_seconds, true};
+            } else {
+                // A fade it cannot join exactly: whole at once, and its relatives stop.
+                fade = Fade{1.f, now_seconds, true};
+                snapped.insert(key);
+            }
         }
         out.push_back(NodeChoice{index, fade.at(now_seconds), true});
         next.emplace(key, fade);
     }
-    bool chosenAncestorsReady = false;
+    for (const std::size_t index : selected) {
+        AddAncestors(state.chosenAncestors, nodes[index].key, fadeLimit);
+    }
+    // What fades out: last frame's nodes not chosen, while what replaced them draws.
+    const std::size_t outgoing = out.size();
+    auto& dropped = state.vanished;
     for (const auto& [key, last] : terrain.fades) {
-        if (chosen.count(key) != 0) {
+        if (chosen.count(key) != 0 || !Related(chosen, state.chosenAncestors, key, fadeLimit)) {
             continue;
         }
-        // Not chosen: it fades out only while what replaced it draws.
-        if (!chosenAncestorsReady) {
-            for (const std::size_t index : selected) {
-                AddAncestors(chosenAncestors, nodes[index].key, fadeLimit);
-            }
-            chosenAncestorsReady = true;
+        float value = 0.f;
+        const std::uint8_t bits = Classify(last, now_seconds, value);
+        if (bits == 0) {
+            continue;   // done fading out
         }
-        if (chosenAncestors.count(key) == 0 && !AncestorIn(chosen, key, fadeLimit)) {
+        const std::size_t index = bits == kFadingIn ? kNone : Find(terrain, key);
+        if (index == kNone) {
+            // Mid fade-in but no longer chosen (its region's fade stopped), or
+            // gone from the set: what was fading against it must draw whole.
+            dropped.insert(key);
             continue;
         }
-        TerrainFadeState::Fade fade = last;
-        if (fade.incoming) {
-            fade = TerrainFadeState::Fade{fade.at(now_seconds), now_seconds, false};
-        }
-        const float value = fade.at(now_seconds);
-        if (!(value > 0.f)) {
+        if (!sight.inView(sight.box(nodes[index]))) {
             continue;
         }
-        const std::size_t index = Find(nodes, key);
-        if (index == kNone || !inView(nodes[index])) {
-            continue;
-        }
-        out.push_back(NodeChoice{index, value, false});
+        const Fade fade = bits == kSteady ? Fade{1.f, now_seconds, false} : last;
+        out.push_back(NodeChoice{index, fade.at(now_seconds), false});
         next.emplace(key, fade);
     }
+    // A node drawn whole at once (snapped) stops the fades against it; a node
+    // fading in against one that stopped draws whole too; until nothing changes.
+    std::size_t snappedBefore = 0;
+    for (;;) {
+        if (snapped.size() != snappedBefore) {
+            snappedBefore = snapped.size();
+            state.snappedAncestors.clear();
+            for (const NodeKey& key : snapped) {
+                AddAncestors(state.snappedAncestors, key, fadeLimit);
+            }
+            const auto stop = std::remove_if(out.begin() + static_cast<std::ptrdiff_t>(outgoing), out.end(),
+                                             [&](const NodeChoice& choice) {
+                                                 const NodeKey& key = nodes[choice.index].key;
+                                                 if (!Related(snapped, state.snappedAncestors, key, fadeLimit)) {
+                                                     return false;
+                                                 }
+                                                 next.erase(key);
+                                                 dropped.insert(key);
+                                                 return true;
+                                             });
+            out.erase(stop, out.end());
+        }
+        if (dropped.empty()) {
+            break;
+        }
+        state.vanishedAncestors.clear();
+        for (const NodeKey& key : dropped) {
+            AddAncestors(state.vanishedAncestors, key, fadeLimit);
+        }
+        for (std::size_t i = 0; i < outgoing; ++i) {
+            const NodeKey& key = nodes[out[i].index].key;
+            if (out[i].fade < 1.f && Related(dropped, state.vanishedAncestors, key, fadeLimit)) {
+                out[i].fade = 1.f;
+                next[key] = Fade{1.f, now_seconds, true};
+                snapped.insert(key);
+            }
+        }
+        if (snapped.size() == snappedBefore) {
+            break;
+        }
+    }
     terrain.fades.swap(next);
+}
+
+void SelectTerrainCasters(const engine_core::TerrainView& view, const TerrainCamera& camera,
+                          TerrainFadeState& state, std::vector<std::size_t>& out) {
+    out.clear();
+    const auto found = state.terrains.find(view.terrain);
+    if (view.nodes == nullptr || view.nodes->empty() || found == state.terrains.end() ||
+        found->second.indexFor != view.nodes.get()) {
+        return;
+    }
+    const Sight sight = Look(view, camera, found->second);
+    if (!sight.cull) {
+        // Nothing is out of view: every caster is drawn.
+        return;
+    }
+    // The same selection as the frame's, holds and all, but not culled: in
+    // view it is what was chosen; the rest is out of view.
+    Traverse(sight, false, state.held, state.holdPath, state.stack, out);
+    const std::vector<TerrainNodeView>& nodes = *view.nodes;
+    out.erase(std::remove_if(out.begin(), out.end(),
+                             [&](std::size_t index) { return state.chosen.count(nodes[index].key) != 0; }),
+              out.end());
+}
+
+void SelectTerrainPrefetch(const engine_core::TerrainView& view, const TerrainCamera& camera,
+                           const std::vector<NodeChoice>& choices, TerrainFadeState& state,
+                           const std::function<bool(std::size_t index)>& uploaded, std::vector<std::size_t>& keep,
+                           std::vector<std::size_t>& upload) {
+    keep.clear();
+    upload.clear();
+    const auto found = state.terrains.find(view.terrain);
+    if (view.nodes == nullptr || view.nodes->empty() || found == state.terrains.end() ||
+        found->second.indexFor != view.nodes.get()) {
+        return;
+    }
+    const PerTerrain& terrain = found->second;
+    const std::vector<TerrainNodeView>& nodes = *view.nodes;
+    const Sight sight = Look(view, camera, terrain);
+    auto& waiting = state.nearest;
+    waiting.clear();
+    for (const NodeChoice& choice : choices) {
+        const TerrainNodeView& node = nodes[choice.index];
+        if (!choice.incoming || node.key.level == 0 || node.child_mask == 0 ||
+            sight.pixelError(node, sight.box(node)) < kTerrainPrefetchPixelError) {
+            continue;
+        }
+        const std::array<NodeKey, 8> children = engine_core::terrain::children_of(node.key);
+        for (int i = 0; i < 8; ++i) {
+            if ((node.child_mask & (1u << i)) == 0) {
+                continue;
+            }
+            const std::size_t child = Find(terrain, children[static_cast<std::size_t>(i)]);
+            if (child == kNone || state.chosen.count(nodes[child].key) != 0) {
+                continue;
+            }
+            if (uploaded(child)) {
+                keep.push_back(child);
+            } else {
+                waiting.emplace_back(DistanceTo(sight.box(nodes[child]), sight.eye), child);
+            }
+        }
+    }
+    const std::size_t count = std::min(waiting.size(), static_cast<std::size_t>(kTerrainPrefetchUploads));
+    std::partial_sort(waiting.begin(), waiting.begin() + static_cast<std::ptrdiff_t>(count), waiting.end());
+    for (std::size_t i = 0; i < count; ++i) {
+        upload.push_back(waiting[i].second);
+    }
 }
 
 }  // namespace runner

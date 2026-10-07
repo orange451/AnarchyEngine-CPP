@@ -76,6 +76,9 @@ struct MeshDraw {
     // once. Shadows draw only the fading-in node, whole.
     float terrainFade = 1.f;
     bool terrainFadeIn = true;
+    // Casts shadows only, never drawn in view: terrain out of the camera's
+    // view that still shadows what is in it (TerrainDraws).
+    bool shadowOnly = false;
 };
 
 // A Terrain's look table: a 256 x 2 GL_RGBA8 texture, GL_NEAREST, from
@@ -268,6 +271,10 @@ public:
     // The view setCamera last took, world to view space, and its vertical angle.
     const engine_core::Matrix4& view() const { return view_; }
     float fovYDegrees() const { return fovYDegrees_; }
+    // Framebuffer pixels per layout point, as the last draw found them (1
+    // before any draw): a pane getHeight() points tall is that many times as
+    // many pixels.
+    float pixelsPerPoint() const { return pixelsPerPoint_; }
     // How the next draws are lit, until it is set again. Needs no GL context.
     void setLighting(const SceneLighting& lighting) { lighting_ = lighting; }
     // Whether draw lays the editor's floor grid over the pane, as Blender

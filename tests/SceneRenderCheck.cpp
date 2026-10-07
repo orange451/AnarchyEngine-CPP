@@ -2263,6 +2263,16 @@ int main(int argc, char** argv) {
             Expect(renderer.stats().runs == static_cast<int>(draws.size()),
                    "each terrain chunk is a run of its own (" + std::to_string(renderer.stats().runs) + " runs, " +
                        std::to_string(draws.size()) + " chunks)");
+            // The same draws as shadow casters only (terrain out of view, R15): nothing shows.
+            {
+                std::vector<runner::MeshDraw> casting = draws;
+                for (runner::MeshDraw& draw : casting) {
+                    draw.shadowOnly = true;
+                }
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, casting.data(), static_cast<int>(casting.size()));
+                const Pixel hidden = ReadPixel(fbWidth / 2, fbHeight / 2);
+                Expect(IsClear(hidden), "the ball's draws as shadow casters only are not seen (" + Text(hidden) + ")");
+            }
 
             // A new look (Id 1 green) on the same chunks: the same uploads and
             // texture name, the new texels.
@@ -2598,10 +2608,54 @@ int main(int argc, char** argv) {
                                 histogram += " L" + std::to_string(level) + "x" + std::to_string(levels[level]);
                             }
                         }
-                        std::printf("%s: %d nodes drawn of %d published:%s\n", shot.file.c_str(),
-                                    static_cast<int>(draws.size()),
+                        const int shadowOnly = static_cast<int>(
+                            std::count_if(draws.begin(), draws.end(),
+                                          [](const runner::MeshDraw& draw) { return draw.shadowOnly; }));
+                        std::printf("%s: %d nodes drawn (and %d casting shadows only) of %d published:%s\n",
+                                    shot.file.c_str(), static_cast<int>(draws.size()) - shadowOnly, shadowOnly,
                                     static_cast<int>(snapshot.terrains[0].nodes->size()), histogram.c_str());
                         shootDraws(draws, shot);
+                    }
+                    // What a prefetch (or a switch) costs a node: its unpack and
+                    // upload, timed to the GPU having it (a pixel read waits), each node
+                    // into a cache that has none.
+                    {
+                        runner::MeshCache timing;
+                        double compactMs = 0.0;
+                        double meshMs = 0.0;
+                        int compactCount = 0;
+                        int meshCount = 0;
+                        std::size_t compactTriangles = 0;
+                        std::size_t meshTriangles = 0;
+                        (void)ReadPixel(0, 0);
+                        for (const engine_core::TerrainNodeView& node : *snapshot.terrains[0].nodes) {
+                            const auto start = std::chrono::steady_clock::now();
+                            if (node.compact != nullptr) {
+                                timing.getTerrainNode(1, node.key, *node.compact, node.revision);
+                            } else if (node.mesh != nullptr) {
+                                timing.getTerrainNode(1, node.key, *node.mesh, node.revision);
+                            }
+                            (void)ReadPixel(0, 0);
+                            const double took =
+                                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                                    .count();
+                            if (node.compact != nullptr) {
+                                compactMs += took;
+                                ++compactCount;
+                                compactTriangles += (node.compact->indices.size() + node.compact->indices32.size()) / 3;
+                            } else if (node.mesh != nullptr) {
+                                meshMs += took;
+                                ++meshCount;
+                                meshTriangles += node.mesh->indices.size() / 3;
+                            }
+                        }
+                        std::printf("node upload: %d compact nodes (levels >= 1) unpack + upload %.3f ms each, "
+                                    "%zu triangles each; %d level-0 nodes upload %.3f ms each, %zu triangles each\n",
+                                    compactCount, compactCount > 0 ? compactMs / compactCount : 0.0,
+                                    compactCount > 0 ? compactTriangles / static_cast<std::size_t>(compactCount) : 0,
+                                    meshCount, meshCount > 0 ? meshMs / meshCount : 0.0,
+                                    meshCount > 0 ? meshTriangles / static_cast<std::size_t>(meshCount) : 0);
+                        timing.clear();
                     }
                     draws.clear();
                     // No Terrains: the look goes, so the next Game's Terrain (the same

@@ -411,8 +411,12 @@ void GameView::collectMeshes() {
         terrainCamera.world = engine_core::matrix4_inverse(renderer_.view());
         terrainCamera.fov_y_degrees = renderer_.fovYDegrees();
     }
-    terrainCamera.pane_width = static_cast<int>(getWidth());
-    terrainCamera.pane_height = static_cast<int>(getHeight());
+    // In framebuffer pixels, as the error formula wants: getWidth() and
+    // getHeight() are layout points, the renderer's last draw found how many
+    // pixels each is (on a HiDPI display, more than 1).
+    const float pixelsPerPoint = std::max(renderer_.pixelsPerPoint(), 0.01f);
+    terrainCamera.pane_width = static_cast<int>(std::lround(getWidth() * pixelsPerPoint));
+    terrainCamera.pane_height = static_cast<int>(std::lround(getHeight() * pixelsPerPoint));
     const double terrainNow =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - terrainClockStart_).count();
     AppendTerrainDraws(snapshot.terrains, terrainCamera, terrainNow, terrainFades_, meshes_, renderer_, meshDraws_);

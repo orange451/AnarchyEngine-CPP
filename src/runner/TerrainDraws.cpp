@@ -2,6 +2,22 @@
 
 namespace runner {
 
+namespace {
+
+// The upload of view's node (uploading it if new), or null.
+const anarchy::amesh::GpuMesh* NodeMesh(const engine_core::TerrainView& view, const engine_core::TerrainNodeView& node,
+                                        MeshCache& meshes) {
+    if (node.mesh != nullptr) {
+        return meshes.getTerrainNode(view.terrain, node.key, *node.mesh, node.revision);
+    }
+    if (node.compact != nullptr) {
+        return meshes.getTerrainNode(view.terrain, node.key, *node.compact, node.revision);
+    }
+    return nullptr;
+}
+
+}  // namespace
+
 void AppendTerrainDraws(const std::vector<engine_core::TerrainView>& terrains, const TerrainCamera& camera,
                         double now_seconds, TerrainFadeState& fades, MeshCache& meshes, Renderer& renderer,
                         std::vector<MeshDraw>& out) {
@@ -17,28 +33,53 @@ void AppendTerrainDraws(const std::vector<engine_core::TerrainView>& terrains, c
             // nodes here rather than push draws it would render wrong.
             continue;
         }
-        SelectTerrainNodes(view, camera, now_seconds, fades, fades.choices);
-        for (const NodeChoice& choice : fades.choices) {
-            const engine_core::TerrainNodeView& node = (*view.nodes)[choice.index];
-            const anarchy::amesh::GpuMesh* mesh = nullptr;
-            if (node.mesh != nullptr) {
-                mesh = meshes.getTerrainNode(view.terrain, node.key, *node.mesh, node.revision);
-            } else if (node.compact != nullptr) {
-                mesh = meshes.getTerrainNode(view.terrain, node.key, *node.compact, node.revision);
-            }
+        const std::vector<engine_core::TerrainNodeView>& nodes = *view.nodes;
+        // Drawn alone (slot 0) and untinted; the Terrain is the instance that draws it.
+        const auto push = [&](const engine_core::TerrainNodeView& node, float fade, bool incoming, bool shadowOnly) {
+            const anarchy::amesh::GpuMesh* mesh = NodeMesh(view, node, meshes);
             if (mesh == nullptr) {
-                continue;
+                return;
             }
-            // Drawn alone (slot 0) and untinted; the Terrain is the instance that draws it.
             MeshDraw draw;
             draw.mesh = mesh;
             draw.model = view.transform;
             draw.terrainLook = look;
-            draw.terrainFade = choice.fade;
-            draw.terrainFadeIn = choice.incoming;
+            draw.terrainFade = fade;
+            draw.terrainFadeIn = incoming;
+            draw.shadowOnly = shadowOnly;
             draw.owner = view.terrain;
             draw.slot = 0;
             out.push_back(draw);
+        };
+        SelectTerrainNodes(view, camera, now_seconds, fades, fades.choices);
+        for (const NodeChoice& choice : fades.choices) {
+            push(nodes[choice.index], choice.fade, choice.incoming, false);
+        }
+        // R15: terrain out of view still casts, at the selection it would draw
+        // at. Those not uploaded yet upload a few a frame (a first frame would
+        // otherwise upload the whole Terrain); until then they cast nothing.
+        SelectTerrainCasters(view, camera, fades, fades.casters);
+        int casterUploads = 0;
+        for (const std::size_t index : fades.casters) {
+            const engine_core::TerrainNodeView& node = nodes[index];
+            if (!meshes.touchTerrainNode(view.terrain, node.key, node.revision)) {
+                if (casterUploads >= kTerrainCasterUploads) {
+                    continue;
+                }
+                ++casterUploads;
+            }
+            push(node, 1.f, true, true);
+        }
+        // R14: the finer nodes next to switch in, uploaded ahead (a few a frame) and kept.
+        SelectTerrainPrefetch(
+            view, camera, fades.choices, fades,
+            [&](std::size_t index) {
+                const engine_core::TerrainNodeView& node = nodes[index];
+                return meshes.touchTerrainNode(view.terrain, node.key, node.revision);
+            },
+            fades.keep, fades.upload);
+        for (const std::size_t index : fades.upload) {
+            NodeMesh(view, nodes[index], meshes);
         }
     }
     meshes.sweepTerrainNodes(now_seconds);

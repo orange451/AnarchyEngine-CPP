@@ -13,8 +13,11 @@ namespace runner {
 // Terrain in terrains (a VisualSnapshot's), seen from camera at now_seconds
 // (any origin, never decreasing): the node's upload from meshes, at the
 // Terrain's Transform, drawn with its look table from renderer, with its fade
-// (MeshDraw::terrainFade, terrainFadeIn). fades carries the cross-fades from
-// frame to frame. Then sweeps: node uploads not drawn for
+// (MeshDraw::terrainFade, terrainFadeIn); then a shadow-only MeshDraw
+// (MeshDraw::shadowOnly) for each node SelectTerrainCasters adds out of view,
+// and uploads (at most kTerrainPrefetchUploads a frame) and keeps the finer
+// nodes SelectTerrainPrefetch picks. fades carries the cross-fades from
+// frame to frame. Then sweeps: node uploads not asked for in
 // MeshCache::kTerrainNodeGraceSeconds, looks no Terrain shows, and fades of
 // Terrains gone. Once a frame, on RenderThread with the GL context current.
 // The views are the snapshot's immutable copies, so it takes no DataModel

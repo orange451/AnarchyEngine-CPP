@@ -101,7 +101,7 @@ const anarchy::amesh::GpuMesh* MeshCache::getTerrainNode(engine_core::InstanceId
                                                         const engine_core::terrain::NodeKey& key,
                                                         const anarchy::amesh::Data& data, std::uint64_t revision) {
     SessionEntry& entry = nodes_[NodeCacheKey{terrain, key}].upload;
-    uploadOnce(entry, data, revision, false, "A Terrain chunk could not be drawn: ");
+    uploadOnce(entry, data, revision, false, "A Terrain LOD node could not be drawn: ");
     return entry.mesh.valid() ? &entry.mesh : nullptr;
 }
 
@@ -117,6 +117,16 @@ const anarchy::amesh::GpuMesh* MeshCache::getTerrainNode(engine_core::InstanceId
     }
     entry.asked = true;
     return entry.mesh.valid() ? &entry.mesh : nullptr;
+}
+
+bool MeshCache::touchTerrainNode(engine_core::InstanceId terrain, const engine_core::terrain::NodeKey& key,
+                                 std::uint64_t revision) {
+    const auto found = nodes_.find(NodeCacheKey{terrain, key});
+    if (found == nodes_.end() || !found->second.upload.tried || found->second.upload.revision != revision) {
+        return false;
+    }
+    found->second.upload.asked = true;
+    return true;
 }
 
 void MeshCache::sweepTerrainNodes(double now_seconds) {

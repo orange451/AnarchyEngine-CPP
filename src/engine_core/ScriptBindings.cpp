@@ -28,6 +28,8 @@
 #include "Skybox.hpp"
 #include "Dragger.hpp"
 #include "SoundEmitter.hpp"
+#include "Terrain.hpp"
+#include "TerrainMaterial.hpp"
 #include "UserInputService.hpp"
 #include "Vector2.hpp"
 #include "Vector3.hpp"
@@ -218,6 +220,8 @@ DataModel& create_sound(DataModel& world) { return world.create<Sound>(); }
 DataModel& create_material(DataModel& world) { return world.create<Material>(); }
 DataModel& create_model(DataModel& world) { return world.create<Model>(); }
 DataModel& create_prefab(DataModel& world) { return world.create<Prefab>(); }
+DataModel& create_terrain(DataModel& world) { return world.create<Terrain>(); }
+DataModel& create_terrain_material(DataModel& world) { return world.create<TerrainMaterial>(); }
 
 // The factories stay here, which ScriptRuntime.cpp links, so each class's
 // object file stays linked.
@@ -257,6 +261,8 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Material", create_material);
     register_lua_creatable("Model", create_model);
     register_lua_creatable("Prefab", create_prefab);
+    register_lua_creatable("Terrain", create_terrain);
+    register_lua_creatable("TerrainMaterial", create_terrain_material, false);
 }
 
 }  // namespace

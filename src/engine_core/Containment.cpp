@@ -124,6 +124,9 @@ std::optional<std::string> placement_error(std::string_view holder_class, std::s
         }
         return std::string("A Prefab holds only Models");
     }
+    if (child_class == "TerrainMaterial" && holder_class != "Terrain") {
+        return std::string("A TerrainMaterial must be in a Terrain");
+    }
     // Every other asset is a leaf.
     if (is_asset_class(holder_class)) {
         return "A " + std::string(holder_class) + " holds nothing";

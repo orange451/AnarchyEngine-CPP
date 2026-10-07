@@ -1069,6 +1069,19 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "The brightness where bloom starts, from 0 to 10, fading in just below it. 0 blooms everything a little; "
         "above 1, only light brighter than white, such as a glowing Material or the sun in an .hdr sky.",
         "number", false, {});
+    add("Terrain", "Transform",
+        "Where this island is and how it is turned. It may be moved and rotated, but not scaled: VoxelSize sets "
+        "the size of its cells.",
+        "Matrix4", false, {});
+    add("Terrain", "VoxelSize", "The size of one cell, in studs. Read-only; always 1.", "number", false, {});
+    add("Terrain", "CanCollide", "When false, nothing collides with this island.", "boolean", false, {});
+    add("TerrainMaterial", "Id",
+        "The voxel Id this entry names, from 1 to 255. Read-only: its Terrain picks the lowest one free when it is "
+        "added.",
+        "number", false, {});
+    add("TerrainMaterial", "Material",
+        "The Material that voxels with this Id draw and collide as. Nil draws them as the default material.",
+        "Material?", false, {});
     add("ScreenSpaceReflections", "Enabled", "When false, this ScreenSpaceReflections traces nothing.", "boolean",
         false, {});
     add("ScreenSpaceReflections", "Intensity",

@@ -179,3 +179,21 @@ TEST_CASE("E8 stopped, a body made without pieces is made again once its Mesh st
     REQUIRE(rig.physics.shape_frictions(body.id()).size() == 2);
     REQUIRE(hull_shapes == 1);
 }
+
+TEST_CASE("E9 a body made without pieces, then given another Shape, does not keep remaking at Play",
+          "[physics][edit]") {
+    PhysicsRig rig;
+    TempResourcesRoot resources(rig.game);
+    engine_core::Mesh* mesh = nullptr;
+    PhysicsObject& body = custom_cube(rig, mesh);
+    rig.sync_steps(1);
+    // Away from Custom, while still stopped: make_pieces, the only place that
+    // used to clear made_without_pieces, is never reached again.
+    REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Box)));
+    rig.sync_steps(1);
+    rig.play();
+    rig.steps(1);
+    const std::uint64_t key = rig.physics.shape_key(body.id());
+    rig.steps(1);
+    REQUIRE(rig.physics.shape_key(body.id()) == key);
+}

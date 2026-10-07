@@ -73,6 +73,9 @@ public:
     // body lives; 0 when the PhysicsBase has none. And where the body is.
     std::uint64_t body_key(InstanceId id) const;
     std::optional<Vec3> body_position(InstanceId id) const;
+    // For tests: a key naming its first shape's Box3D handle, changing
+    // whenever the shape is remade; 0 when it has none.
+    std::uint64_t shape_key(InstanceId id) const;
 
     // Where a warning goes, such as a Hull that fell back to a Box. Unset, it
     // goes nowhere.

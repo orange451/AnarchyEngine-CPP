@@ -1147,6 +1147,13 @@ struct PhysicsWorld::Impl {
     // Friction, Bounciness, and a density that gives it its Mass.
     void make_object_shape(DataModel& game, PhysicsObject& object, Body& record) {
         drop_shape(record);
+        // Only make_pieces sets this, for the one case it covers: a stopped,
+        // unanchored Custom whose Mesh's pieces were not known. Cleared here
+        // so a shape made any other way (a different Shape, an anchored
+        // Custom, or an unanchored Custom whose pieces are known) does not
+        // keep asking every played sync to be made again.
+        record.made_without_pieces = false;
+        record.pieces_stamp.clear();
         b3ShapeDef def = b3DefaultShapeDef();
         def.baseMaterial.friction = static_cast<float>(object.friction());
         def.baseMaterial.restitution = static_cast<float>(object.bounciness());
@@ -1298,7 +1305,6 @@ struct PhysicsWorld::Impl {
         }
         const auto* mesh = dynamic_cast<const Mesh*>(game.instance(object.mesh_id()));
         std::vector<anarchy::amesh::ConvexPiece> pieces;
-        record.made_without_pieces = false;
         if (game.simulation_running()) {
             pieces = pieces_for(*mesh, mesh_points, triangles);
         } else if (!known_pieces(*mesh, mesh_points, triangles, pieces)) {
@@ -1510,6 +1516,14 @@ std::vector<float> PhysicsWorld::shape_frictions(InstanceId id) const {
 std::uint64_t PhysicsWorld::body_key(InstanceId id) const {
     const auto found = impl_->bodies.find(id);
     return found == impl_->bodies.end() ? 0 : b3StoreBodyId(found->second.body);
+}
+
+std::uint64_t PhysicsWorld::shape_key(InstanceId id) const {
+    const auto found = impl_->bodies.find(id);
+    if (found == impl_->bodies.end() || found->second.shapes.empty()) {
+        return 0;
+    }
+    return b3StoreShapeId(found->second.shapes.front());
 }
 
 std::optional<Vec3> PhysicsWorld::body_position(InstanceId id) const {

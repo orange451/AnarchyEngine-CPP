@@ -41,14 +41,18 @@ void require_thread(const DataModel& object) {
     }
 }
 
-// True when the matrix's axes are unit length and at right angles.
+// True when the matrix's axes are unit length and at right angles, and keep
+// their handedness: a mirror is a scale of -1.
 bool rigid(const Matrix4& m) {
     const float* a = m.m;
     auto dot = [&](int i, int j) { return a[i] * a[j] + a[i + 1] * a[j + 1] + a[i + 2] * a[j + 2]; };
     constexpr float tolerance = 1e-3f;
+    // The first axis dotted with the cross of the other two.
+    const float determinant = a[0] * (a[5] * a[10] - a[6] * a[9]) - a[1] * (a[4] * a[10] - a[6] * a[8]) +
+                              a[2] * (a[4] * a[9] - a[5] * a[8]);
     return std::fabs(dot(0, 0) - 1.f) < tolerance && std::fabs(dot(4, 4) - 1.f) < tolerance &&
            std::fabs(dot(8, 8) - 1.f) < tolerance && std::fabs(dot(0, 4)) < tolerance &&
-           std::fabs(dot(0, 8)) < tolerance && std::fabs(dot(4, 8)) < tolerance;
+           std::fabs(dot(0, 8)) < tolerance && std::fabs(dot(4, 8)) < tolerance && determinant > 0.f;
 }
 
 }  // namespace

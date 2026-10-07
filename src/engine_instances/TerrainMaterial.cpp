@@ -44,6 +44,15 @@ std::optional<std::string> TerrainMaterial::set_material_id(int value) {
     return std::nullopt;
 }
 
+void TerrainMaterial::clear_material_id() {
+    require_thread(*this);
+    if (material_id_ == 0) {
+        return;
+    }
+    material_id_ = 0;
+    emit_property("Id");
+}
+
 LuaSlot TerrainMaterial::material() const { return instance_reference_slot(material_, "Material"); }
 
 InstanceId TerrainMaterial::material_instance() const { return material().id; }
@@ -127,9 +136,15 @@ bool write_id(DataModel&, DataModel& object, LuaSlot& in) {
         return false;
     }
     if (in.kind != LuaSlot::Kind::Number || !std::isfinite(in.number) || std::floor(in.number) != in.number ||
-        in.number < 1.0 || in.number > TerrainMaterial::kMaxId) {
+        in.number < 0.0 || in.number > TerrainMaterial::kMaxId) {
         in.error = id_refused();
         return false;
+    }
+    // 0, the saved default, is unassigned: the entry takes the lowest free Id
+    // when it arrives in a Terrain.
+    if (in.number == 0.0) {
+        entry->clear_material_id();
+        return true;
     }
     return refuse(in, entry->set_material_id(static_cast<int>(in.number)));
 }

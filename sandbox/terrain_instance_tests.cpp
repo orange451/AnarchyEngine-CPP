@@ -203,3 +203,36 @@ TEST_CASE("TM7 a TerrainMaterial pasted into a Terrain that uses its Id gets the
     REQUIRE(a->material_id() == 1);
     REQUIRE(copy.material_id() == 3);
 }
+
+TEST_CASE("TM8 a TerrainMaterial loaded with Id 0 takes the lowest free Id when it arrives", "[terrain]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::Terrain& terrain = add_terrain(game);
+    engine_core::TerrainMaterial* a = nullptr;
+    REQUIRE_FALSE(terrain.add_material(0, a));
+    // What load does with an explicit "Id": 0: make one, load its properties, then parent it.
+    engine_core::TerrainMaterial& loaded = game.create<engine_core::TerrainMaterial>();
+    std::string error;
+    REQUIRE(loaded.load_property("Id", engine_core::JsonValue::number(0), error));
+    REQUIRE(error.empty());
+    REQUIRE(loaded.material_id() == 0);
+    game.set_parent(loaded.id(), terrain.id());
+    REQUIRE(a->material_id() == 1);
+    REQUIRE(loaded.material_id() == 2);
+    // set_material_id itself still refuses 0.
+    REQUIRE(reason(loaded.set_material_id(0)) == "Id must be a whole number from 1 to 255");
+}
+
+TEST_CASE("TM9 a mirrored Transform is refused as a scale", "[terrain]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::Terrain& terrain = add_terrain(game);
+    engine_core::Matrix4 mirrored = engine_core::matrix4_identity();
+    mirrored.m[0] = -1.f;
+    REQUIRE(reason(terrain.set_transform(mirrored)) == "Terrain cannot be scaled");
+    // A turn half way round about Y keeps its handedness and is allowed.
+    engine_core::Matrix4 turned = engine_core::matrix4_identity();
+    turned.m[0] = -1.f;
+    turned.m[10] = -1.f;
+    REQUIRE_FALSE(terrain.set_transform(turned));
+}

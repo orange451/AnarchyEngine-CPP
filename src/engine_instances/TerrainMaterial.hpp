@@ -35,6 +35,11 @@ public:
     // SimulationThread. Load, paste, and Terrain::add_material only; scripts
     // read Id. Refuses anything but 1 to 255.
     std::optional<std::string> set_material_id(int value);
+    // SimulationThread. Load, Stop, and undo only, through the Id property's
+    // write: a saved Id of 0 means unassigned, so on_parent_changed gives it
+    // the lowest free Id when it arrives in a Terrain. Not an edit: it
+    // records nothing.
+    void clear_material_id();
 
     // The Material slot, as a script reads it.
     LuaSlot material() const;

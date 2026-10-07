@@ -79,7 +79,8 @@ Engine::~Engine() {
     stop();
     // game_ is declared before physics_, so it is destroyed after physics_
     // goes away. Clear the pointer here so no one can reach a dangling world
-    // during teardown.
+    // during teardown. This runs after stop() has joined the simulation and
+    // render threads, so nothing else touches game_ and no lock is needed.
     game_.set_physics(nullptr);
 }
 

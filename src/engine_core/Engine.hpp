@@ -124,7 +124,9 @@ private:
     SnapshotPump pump_;
     TaskScheduler scheduler_;
     std::unique_ptr<ScriptRuntime> scripts_;
-    // PhysicsObject bodies, stepped in step_physics while the place plays.
+    // PhysicsObject bodies, stepped in step_physics while the place plays,
+    // and synced (not stepped) by the stopped tick, so they follow the tree
+    // in edit mode. Registered with game_ so scripts reach it (Raycast).
     PhysicsWorld physics_;
     // Splits Custom PhysicsObjects' Meshes into convex pieces while stopped.
     ConvexDecomposer decomposer_;

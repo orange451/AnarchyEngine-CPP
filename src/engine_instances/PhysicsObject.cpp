@@ -72,6 +72,14 @@ std::optional<std::string> PhysicsObject::set_shape(int shape) {
     shape_ = next;
     mark_dirty(kDirtyShape);
     note_property_change("Shape", shape_slot(previous), shape_slot(next));
+    // A Hull or a Custom is its Mesh at the Mesh's own size: Size, which it
+    // does not show, goes back to 1.
+    const bool meshed = next == Shape::Hull || next == Shape::Custom;
+    if (meshed && (size_.x != 1.f || size_.y != 1.f || size_.z != 1.f)) {
+        const Vec3 previous_size = size_;
+        size_ = {1.f, 1.f, 1.f};
+        note_property_change("Size", vec3_slot(previous_size), vec3_slot(size_));
+    }
     return std::nullopt;
 }
 
@@ -150,8 +158,13 @@ ANARCHY_LUA_REGISTER(register_physics_object_lua) {
         lua_saved_property("AngularDamping", "number", read_number<PhysicsObject, &PhysicsObject::angular_damping>,
                            write_number<PhysicsObject, &PhysicsObject::set_angular_damping>, "0"),
         lua_saved_enum("Shape", physics_shape_enum(), read_shape, write_shape, "\"Box\""),
-        lua_saved_property("Size", "Vector3", read_vec<PhysicsObject, &PhysicsObject::size>,
-                           write_vec<PhysicsObject, &PhysicsObject::set_size>, "[1,1,1]"),
+        lua_shown_when(lua_saved_property("Size", "Vector3", read_vec<PhysicsObject, &PhysicsObject::size>,
+                                          write_vec<PhysicsObject, &PhysicsObject::set_size>, "[1,1,1]"),
+                       "Shape",
+                       {static_cast<int>(PhysicsObject::Shape::Box), static_cast<int>(PhysicsObject::Shape::Sphere),
+                        static_cast<int>(PhysicsObject::Shape::Capsule),
+                        static_cast<int>(PhysicsObject::Shape::Cylinder), static_cast<int>(PhysicsObject::Shape::Cone),
+                        static_cast<int>(PhysicsObject::Shape::Wedge)}),
         lua_shown_when(lua_saved_property("Mesh", "Mesh?", read_mesh, write_mesh, "null"), "Shape",
                        {static_cast<int>(PhysicsObject::Shape::Hull), static_cast<int>(PhysicsObject::Shape::Custom)}),
     };

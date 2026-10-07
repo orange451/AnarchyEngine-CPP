@@ -100,9 +100,9 @@ public:
     // The edges of what a body made now for object would collide as, for the
     // Scene View to draw: line segments into lines, two points each, in the
     // body's space (body_pose), around center (shape_center), at Size times
-    // scale (shape_scale). points and
-    // triangles are its Mesh's, as Mesh::vertex_positions gives them; no
-    // points is no Mesh. Built as the body's shape is, so a Hull, and a Custom
+    // scale (shape_scale), or for a Hull or a Custom its Mesh at its own size
+    // times scale. points and triangles are its Mesh's, as
+    // Mesh::vertex_positions gives them; no points is no Mesh. Built as the body's shape is, so a Hull, and a Custom
     // that is not Anchored, is the hull Box3D makes of them, an anchored Custom
     // is each edge of its triangles once, an unanchored Custom with pieces (as
     // known_pieces gives them) is each piece's hull, and one that cannot be

@@ -23,7 +23,10 @@ namespace engine_core {
 //                            the bottom, height Y to its tip. Wedge: Size's
 //                            box halved by a slope from its bottom front
 //                            (-Z) edge up to its top back (+Z) edge. Hull
-//                            and Custom: the mesh fits it.
+//                            and Custom: unused and not shown; the Mesh is
+//                            taken at its own size. Shape becoming one of
+//                            them puts Size back to (1, 1, 1), the Box a Hull
+//                            with no Mesh falls back to.
 // Mesh             Mesh?     a Hull's points, or a Custom's triangles: the
 //                            whole mesh, which collides only while Anchored
 //                            (Box3D gives a mesh contacts only on a static

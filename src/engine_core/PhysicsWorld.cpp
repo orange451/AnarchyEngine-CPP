@@ -111,24 +111,38 @@ void* user_data(InstanceId id) { return reinterpret_cast<void*>(static_cast<std:
 InstanceId id_of(void* data) { return static_cast<InstanceId>(reinterpret_cast<std::uintptr_t>(data)); }
 
 // How a Mesh's points are placed in the body's space: centered on their
-// bounds, each axis scaled so the bounds are size, around center.
+// bounds, each axis at the body's scale (shape_scale), around center. A Hull
+// or a Custom is its Mesh at the Mesh's own size; Size plays no part.
 struct Fit {
     Vec3 middle;
     Vec3 scale;
     Vec3 center;
 };
 
-// The fit of mesh_points, which are not empty.
-Fit fit_of(const std::vector<Vec3>& mesh_points, Vec3 size, Vec3 center) {
-    Vec3 low = mesh_points.front();
-    Vec3 high = low;
+// The bounds of mesh_points, which are not empty.
+void bounds_of(const std::vector<Vec3>& mesh_points, Vec3& low, Vec3& high) {
+    low = mesh_points.front();
+    high = low;
     for (const Vec3& p : mesh_points) {
         low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
         high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
     }
-    auto fit = [](float target, float extent) { return extent > 1e-6f ? target / extent : 1.f; };
-    return Fit{Vec3{(low.x + high.x) * 0.5f, (low.y + high.y) * 0.5f, (low.z + high.z) * 0.5f},
-               Vec3{fit(size.x, high.x - low.x), fit(size.y, high.y - low.y), fit(size.z, high.z - low.z)}, center};
+}
+
+// The extents of the bounds of mesh_points, which are not empty.
+Vec3 bounds_size(const std::vector<Vec3>& mesh_points) {
+    Vec3 low;
+    Vec3 high;
+    bounds_of(mesh_points, low, high);
+    return Vec3{high.x - low.x, high.y - low.y, high.z - low.z};
+}
+
+// The fit of mesh_points, which are not empty, at scale around center.
+Fit fit_of(const std::vector<Vec3>& mesh_points, Vec3 scale, Vec3 center) {
+    Vec3 low;
+    Vec3 high;
+    bounds_of(mesh_points, low, high);
+    return Fit{Vec3{(low.x + high.x) * 0.5f, (low.y + high.y) * 0.5f, (low.z + high.z) * 0.5f}, scale, center};
 }
 
 b3Vec3 apply_fit(const Fit& fit, Vec3 p) {
@@ -136,9 +150,9 @@ b3Vec3 apply_fit(const Fit& fit, Vec3 p) {
                   (p.z - fit.middle.z) * fit.scale.z + fit.center.z};
 }
 
-// A Mesh's points, which are not empty, fitted to size around center in the body's space.
-void fit_points(const std::vector<Vec3>& mesh_points, Vec3 size, Vec3 center, std::vector<b3Vec3>& points) {
-    const Fit fit = fit_of(mesh_points, size, center);
+// A Mesh's points, which are not empty, at scale around center in the body's space.
+void fit_points(const std::vector<Vec3>& mesh_points, Vec3 scale, Vec3 center, std::vector<b3Vec3>& points) {
+    const Fit fit = fit_of(mesh_points, scale, center);
     points.clear();
     for (const Vec3& p : mesh_points) {
         points.push_back(apply_fit(fit, p));
@@ -1148,20 +1162,21 @@ struct PhysicsWorld::Impl {
             // Box3D gives a mesh contacts only on a static body, so an
             // unanchored Custom is convex pieces of its mesh instead.
             if (object.anchored()) {
-                if (b3MeshData* mesh = make_mesh(game, object, size, record.center)) {
+                if (b3MeshData* mesh = make_mesh(game, object, record.scale, record.center)) {
                     record.mesh = mesh;
-                    record.volume = size.x * size.y * size.z;
+                    const Vec3 bounds = scaled(bounds_size(mesh_points), record.scale);
+                    record.volume = bounds.x * bounds.y * bounds.z;
                     def.density = density(object, record.volume);
                     add_shape(record, b3CreateMeshShape(record.body, &def, mesh, b3Vec3{1.f, 1.f, 1.f}));
                 }
                 break;
             }
-            if (make_pieces(game, object, size, record, def)) {
+            if (make_pieces(game, object, record.scale, record, def)) {
                 break;
             }
             [[fallthrough]];
         case PhysicsObject::Shape::Hull:
-            if (b3HullData* hull = make_hull(game, object, size, record.center)) {
+            if (b3HullData* hull = make_hull(game, object, record.scale, record.center)) {
                 record.volume = b3ComputeHullMass(hull, 1.f).mass;
                 def.density = density(object, record.volume);
                 // Box3D copies the hull into the shape.
@@ -1196,10 +1211,10 @@ struct PhysicsWorld::Impl {
         return static_cast<float>(object.mass()) / std::max(volume, 1e-9f);
     }
 
-    // The Mesh's points into points, fitted to size (Size, scaled) around
-    // center, and with triangles, its triangles into triangles. Returns why
-    // there are none, or an empty string.
-    std::string fitted_mesh(DataModel& game, const PhysicsObject& object, Vec3 size, Vec3 center,
+    // The Mesh's points into points, at their own size times scale
+    // (shape_scale) around center, and with triangles, its triangles into
+    // triangles. Returns why there are none, or an empty string.
+    std::string fitted_mesh(DataModel& game, const PhysicsObject& object, Vec3 scale, Vec3 center,
                             bool with_triangles) {
         const InstanceId mesh_id = object.mesh_id();
         const auto* mesh = mesh_id != 0 ? dynamic_cast<const Mesh*>(game.instance(mesh_id)) : nullptr;
@@ -1210,14 +1225,14 @@ struct PhysicsWorld::Impl {
                 mesh->vertex_positions(mesh_points, with_triangles ? &triangles : nullptr)) {
             return *error;
         }
-        fit_points(mesh_points, size, center, points);
+        fit_points(mesh_points, scale, center, points);
         return {};
     }
 
     // A hull of the Mesh's points. Null, with one warning, when there is no
     // hull to build.
-    b3HullData* make_hull(DataModel& game, PhysicsObject& object, Vec3 size, Vec3 center) {
-        std::string why = fitted_mesh(game, object, size, center, false);
+    b3HullData* make_hull(DataModel& game, PhysicsObject& object, Vec3 scale, Vec3 center) {
+        std::string why = fitted_mesh(game, object, scale, center, false);
         b3HullData* hull = nullptr;
         if (why.empty()) {
             hull = build_hull(points);
@@ -1238,8 +1253,8 @@ struct PhysicsWorld::Impl {
     // The whole Mesh as triangles, for an anchored Custom. Box3D keeps a
     // pointer to it, so the body record owns it. Null, with one warning, when
     // there is none.
-    b3MeshData* make_mesh(DataModel& game, PhysicsObject& object, Vec3 size, Vec3 center) {
-        std::string why = fitted_mesh(game, object, size, center, true);
+    b3MeshData* make_mesh(DataModel& game, PhysicsObject& object, Vec3 scale, Vec3 center) {
+        std::string why = fitted_mesh(game, object, scale, center, true);
         b3MeshData* mesh = nullptr;
         if (why.empty()) {
             mesh = build_mesh(points, triangles, indices);
@@ -1259,14 +1274,14 @@ struct PhysicsWorld::Impl {
     // An unanchored Custom as one hull per convex piece of its Mesh, fitted as
     // its whole Mesh is. False when it has none; with a Mesh that has points,
     // it says so once, and the caller makes it a Hull.
-    bool make_pieces(DataModel& game, PhysicsObject& object, Vec3 size, Body& record, b3ShapeDef& def) {
-        if (!fitted_mesh(game, object, size, record.center, true).empty()) {
+    bool make_pieces(DataModel& game, PhysicsObject& object, Vec3 scale, Body& record, b3ShapeDef& def) {
+        if (!fitted_mesh(game, object, scale, record.center, true).empty()) {
             // No Mesh, or no points: the Hull it falls to says why.
             return false;
         }
         const auto* mesh = dynamic_cast<const Mesh*>(game.instance(object.mesh_id()));
         const std::vector<anarchy::amesh::ConvexPiece> pieces = pieces_for(*mesh, mesh_points, triangles);
-        std::vector<b3HullData*> hulls = piece_hulls(pieces, fit_of(mesh_points, size, record.center));
+        std::vector<b3HullData*> hulls = piece_hulls(pieces, fit_of(mesh_points, scale, record.center));
         if (hulls.empty()) {
             if (!object.warned_custom) {
                 object.warned_custom = true;
@@ -1558,7 +1573,7 @@ void PhysicsWorld::collision_outline(const PhysicsObject& object, Vec3 center, c
             break;
         }
         std::vector<b3Vec3> points;
-        fit_points(mesh_points, size, center, points);
+        fit_points(mesh_points, scale, center, points);
         if (object.shape() == PhysicsObject::Shape::Custom && object.anchored()) {
             std::vector<std::int32_t> indices;
             b3MeshData* mesh = build_mesh(points, triangles, indices);
@@ -1570,7 +1585,7 @@ void PhysicsWorld::collision_outline(const PhysicsObject& object, Vec3 center, c
             return;
         }
         if (object.shape() == PhysicsObject::Shape::Custom && pieces != nullptr && !pieces->empty()) {
-            std::vector<b3HullData*> hulls = piece_hulls(*pieces, fit_of(mesh_points, size, center));
+            std::vector<b3HullData*> hulls = piece_hulls(*pieces, fit_of(mesh_points, scale, center));
             for (b3HullData* hull : hulls) {
                 outline_hull(*hull, lines);
                 b3DestroyHull(hull);

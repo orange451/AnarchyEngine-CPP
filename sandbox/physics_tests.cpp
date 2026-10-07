@@ -268,9 +268,10 @@ TEST_CASE("P11 a Hull from a Mesh rests like a box; no Mesh falls back to a Box"
     PhysicsObject& bare = rig.body(at(5.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
     REQUIRE_FALSE(bare.set_shape(static_cast<int>(PhysicsObject::Shape::Hull)));
     rig.play();
-    // A unit box in the Mesh's session geometry: the hull fits it to Size, 2.
+    // A 2 wide box in the Mesh's session geometry: the hull is it, at its own
+    // size, whatever Size was.
     REQUIRE_FALSE(mesh.edit_geometry([](anarchy::amesh::Data& data) {
-        engine_core::add_box(data, Vec3{1.f, 1.f, 1.f}, Vec3{0.f, 0.f, 0.f});
+        engine_core::add_box(data, Vec3{2.f, 2.f, 2.f}, Vec3{0.f, 0.f, 0.f});
     }));
     rig.seconds(3.0);
     INFO(y_of(hull.transform()));
@@ -498,6 +499,8 @@ TEST_CASE("P17 a collision outline traces what the body collides as, in the body
     PhysicsRig rig;
     PhysicsObject& body = rig.body(at(4.f, 5.f, 6.f), Vec3{2.f, 4.f, 6.f}, false);
     const Vec3 half{1.f, 2.f, 3.f};
+    // A Hull or a Custom has Size 1 and takes its Mesh, the unit cube, at its own size.
+    const Vec3 unit_half{0.5f, 0.5f, 0.5f};
     const std::vector<Vec3> no_points;
     const std::vector<std::uint32_t> no_triangles;
     std::vector<Vec3> lines{Vec3{9.f, 9.f, 9.f}};
@@ -540,7 +543,7 @@ TEST_CASE("P17 a collision outline traces what the body collides as, in the body
         REQUIRE(near(high, 1.5f, 1e-4f));
     }
 
-    SECTION("a Hull is the hull of its Mesh's points, fitted to Size") {
+    SECTION("a Hull is the hull of its Mesh's points, at the Mesh's own size") {
         REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Hull)));
         std::vector<Vec3> points;
         std::vector<std::uint32_t> triangles;
@@ -551,7 +554,7 @@ TEST_CASE("P17 a collision outline traces what the body collides as, in the body
         REQUIRE(lines.size() >= 24);
         REQUIRE(lines.size() % 2 == 0);
         for (const Vec3& p : lines) {
-            REQUIRE(on_box_corner(p, half));
+            REQUIRE(on_box_corner(p, unit_half));
         }
     }
 
@@ -560,7 +563,7 @@ TEST_CASE("P17 a collision outline traces what the body collides as, in the body
         engine_core::PhysicsWorld::collision_outline(body, Vec3{}, no_points, no_triangles, lines);
         REQUIRE(lines.size() == 24);
         for (const Vec3& p : lines) {
-            REQUIRE(on_box_corner(p, half));
+            REQUIRE(on_box_corner(p, unit_half));
         }
         const std::vector<Vec3> flat{{0.f, 0.f, 0.f}, {1.f, 0.f, 0.f}, {0.f, 1.f, 0.f}, {1.f, 1.f, 0.f}};
         engine_core::PhysicsWorld::collision_outline(body, Vec3{}, flat, no_triangles, lines);
@@ -577,7 +580,7 @@ TEST_CASE("P17 a collision outline traces what the body collides as, in the body
         // Twelve box edges and a diagonal across each of the six faces.
         REQUIRE(lines.size() == 2 * 18);
         for (const Vec3& p : lines) {
-            REQUIRE(on_box_corner(p, half));
+            REQUIRE(on_box_corner(p, unit_half));
         }
         body.set_anchored(false);
         std::vector<Vec3> hull;
@@ -991,7 +994,8 @@ TEST_CASE("P29 a Custom whose Mesh has no pieces falls back to a Hull and says s
     engine_core::remember_pieces(points, cube.indices, {});
     REQUIRE_FALSE(mesh.edit_geometry([&cube](anarchy::amesh::Data& data) { data = cube; }));
     rig.seconds(3.0);
-    REQUIRE(near(y_of(body.transform()), 1.f, 0.05f));
+    // The unit cube at its own size: its middle rests half a unit up.
+    REQUIRE(near(y_of(body.transform()), 0.5f, 0.05f));
     REQUIRE(rig.warnings.size() == 1);
     REQUIRE(rig.warnings.front().find("Custom fell back to Hull") != std::string::npos);
     engine_core::clear_piece_cache();
@@ -1012,15 +1016,27 @@ TEST_CASE("P30 Friction set during play reaches every piece", "[physics]") {
     }
 }
 
-TEST_CASE("P31 a cup stretched by Size still holds a ball", "[physics]") {
+TEST_CASE("P31 a cup stretched by its GameObject's Transform still holds a ball", "[physics]") {
     PhysicsRig rig;
-    CupScene scene = cup_scene(rig, Vec3{8.f, 3.f, 4.f}, 2.f);
+    rig.floor();
+    // The cup's GameObject is twice as wide along X, so the cup is 8 wide.
+    GameObject& part = create_part(rig.game);
+    Matrix4 wide = at(0.f, 1.5f, 0.f);
+    wide.m[0] = 2.f;
+    part.set_transform(wide);
+    engine_core::Mesh& mesh = rig.game.create<engine_core::Mesh>();
+    PhysicsObject& cup = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+    REQUIRE_FALSE(cup.set_shape(static_cast<int>(PhysicsObject::Shape::Custom)));
+    REQUIRE_FALSE(cup.set_mesh(instance_slot(mesh.id())));
+    REQUIRE_FALSE(cup.set_mass(20.0));
+    PhysicsObject& ball = rig.body(at(2.f, 8.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(ball.set_shape(static_cast<int>(PhysicsObject::Shape::Sphere)));
     rig.play();
-    REQUIRE_FALSE(scene.mesh->edit_geometry(add_cup));
+    REQUIRE_FALSE(mesh.edit_geometry(add_cup));
     rig.seconds(4.0);
-    INFO(x_of(scene.ball->transform()) << " " << y_of(scene.ball->transform()));
-    REQUIRE(y_of(scene.ball->transform()) < 2.f);
-    REQUIRE(std::fabs(x_of(scene.ball->transform())) < 4.f);
+    INFO(x_of(ball.transform()) << " " << y_of(ball.transform()));
+    REQUIRE(y_of(ball.transform()) < 2.f);
+    REQUIRE(std::fabs(x_of(ball.transform())) < 4.f);
 }
 
 TEST_CASE("P32 pieces in the Mesh's file are used without decomposing, anchored or not", "[physics]") {
@@ -1204,5 +1220,59 @@ TEST_CASE("P36 the scale in a GameObject's Transform scales the body that moves 
         for (const Vec3& p : lines) {
             REQUIRE(on_box_corner(p, Vec3{1.5f, 1.f, 0.5f}));
         }
+    }
+}
+
+TEST_CASE("P37 a Hull or a Custom takes its Mesh at its own size, and Size, hidden, goes back to 1", "[physics]") {
+    PhysicsRig rig;
+    rig.floor();
+    engine_core::Mesh& mesh = rig.game.create<engine_core::Mesh>();
+
+    SECTION("Size is shown for every Shape but Hull and Custom") {
+        const engine_core::LuaField* size = engine_core::lua_class_find("PhysicsObject", "Size");
+        REQUIRE(size != nullptr);
+        REQUIRE(std::string(size->shown_when) == "Shape");
+        for (PhysicsObject::Shape shape : {PhysicsObject::Shape::Box, PhysicsObject::Shape::Sphere,
+                                           PhysicsObject::Shape::Capsule, PhysicsObject::Shape::Cylinder,
+                                           PhysicsObject::Shape::Cone, PhysicsObject::Shape::Wedge}) {
+            REQUIRE(size->shown_for(static_cast<int>(shape)));
+        }
+        REQUIRE_FALSE(size->shown_for(static_cast<int>(PhysicsObject::Shape::Hull)));
+        REQUIRE_FALSE(size->shown_for(static_cast<int>(PhysicsObject::Shape::Custom)));
+    }
+
+    SECTION("Shape becoming Hull or Custom puts Size back to 1, and back to Box leaves it there") {
+        PhysicsObject& body = rig.body(at(0.f, 3.f, 0.f), Vec3{2.f, 4.f, 6.f}, false);
+        REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Hull)));
+        REQUIRE(body.size().x == 1.f);
+        REQUIRE(body.size().y == 1.f);
+        REQUIRE(body.size().z == 1.f);
+        REQUIRE_FALSE(body.set_size(Vec3{5.f, 5.f, 5.f}));
+        REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Custom)));
+        REQUIRE(body.size().y == 1.f);
+        REQUIRE_FALSE(body.set_size(Vec3{5.f, 5.f, 5.f}));
+        REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Box)));
+        REQUIRE(body.size().y == 5.f);
+    }
+
+    SECTION("the body is the Mesh at its own size, whatever Size says, times its GameObject's scale") {
+        GameObject& part = create_part(rig.game);
+        part.set_transform(at(0.f, 5.f, 0.f));
+        PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+        REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Hull)));
+        REQUIRE_FALSE(body.set_mesh(instance_slot(mesh.id())));
+        REQUIRE_FALSE(body.set_size(Vec3{9.f, 9.f, 9.f}));
+        rig.play();
+        // A 3 by 1 by 3 slab: its middle, the body's origin, rests half a unit up.
+        REQUIRE_FALSE(mesh.edit_geometry([](anarchy::amesh::Data& data) {
+            engine_core::add_box(data, Vec3{3.f, 1.f, 3.f}, Vec3{0.f, 0.5f, 0.f});
+        }));
+        rig.seconds(3.0);
+        INFO(y_of(part.transform()));
+        REQUIRE(near(y_of(part.transform()), 0.5f, 0.05f));
+        REQUIRE_FALSE(part.set_scale(2.0));
+        rig.seconds(3.0);
+        INFO(y_of(part.transform()));
+        REQUIRE(near(y_of(part.transform()), 1.f, 0.05f));
     }
 }

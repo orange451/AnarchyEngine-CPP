@@ -633,6 +633,7 @@ add_library(engine_core STATIC
     src/engine_core/terrain/LodNode.cpp
     src/engine_core/terrain/VoxelSampler.cpp
     src/engine_core/terrain/LodBuilder.cpp
+    src/engine_core/terrain/LodTree.cpp
     src/engine_core/TerrainWorld.cpp
     src/engine_core/terrain/TerrainStash.cpp
     src/engine_core/ConvexDecomposition.cpp
@@ -982,6 +983,7 @@ add_executable(sandbox
     sandbox/terrain_surface_tests.cpp
     sandbox/terrain_lua_tests.cpp
     sandbox/terrain_lod_tests.cpp
+    sandbox/terrain_lod_tree_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

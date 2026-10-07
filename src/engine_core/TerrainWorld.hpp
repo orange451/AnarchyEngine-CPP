@@ -4,10 +4,14 @@
 // DataModel's write lock: the Engine calls update() once per tick, playing or
 // stopped. It queues each Terrain's dirty chunks with TerrainMesher, collects
 // finished meshes, and publishes what the renderer (SnapshotPump) and
-// PhysicsWorld read. The voxels themselves stay in Terrain/VoxelVolume; this
-// class owns only meshes, colliders, and look tables.
+// PhysicsWorld read. Each Terrain also keeps a LOD octree (terrain/LodTree):
+// node builds go on the same pool, levels 0-1 stay resident only near the
+// camera, and every resident node is published for the renderer. The voxels
+// themselves stay in Terrain/VoxelVolume; this class owns only meshes, LOD
+// nodes, colliders, and look tables.
 
 #include "DataModel.hpp"
+#include "terrain/LodTree.hpp"
 #include "terrain/TerrainMesher.hpp"
 
 #include <array>
@@ -15,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace engine_core {
@@ -40,9 +45,15 @@ struct TerrainView {
     InstanceId terrain = 0;
     Matrix4 transform = matrix4_identity();
     bool can_collide = true;
+    // Resident chunk meshes only (LodTree keeps levels 0-1 near the camera).
+    // The renderer draws these until it selects from nodes instead.
     std::shared_ptr<const std::vector<TerrainChunkView>> chunks;   // replaced, never changed
     std::uint64_t chunks_revision = 0;
     std::shared_ptr<const TerrainLook> look;
+    // Every resident LOD node with a mesh, sorted by (level, x, y, z).
+    std::shared_ptr<const std::vector<TerrainNodeView>> nodes;   // replaced, never changed
+    std::uint64_t nodes_revision = 0;
+    int top_level = 0;   // the level of the octree's roots
 };
 
 // Keeps every Terrain in Workspace meshed. SimulationThread, under the write
@@ -54,6 +65,10 @@ public:
     // Finds Terrains, queues their dirty chunks (all of them the first time a
     // Terrain is seen), collects finished meshes, rebuilds changed looks.
     void update(DataModel& game);
+    // The same, with the clock (milliseconds, any origin, never decreasing)
+    // that spaces a stale LOD node's rebuilds kRebuildIntervalMs apart.
+    // update(game) passes steady_clock; tests pass their own.
+    void update(DataModel& game, double now_ms);
     const std::vector<TerrainView>& views() const { return views_; }
 
     // Colliders by chunk, for PhysicsWorld: the latest for each meshed chunk.
@@ -67,6 +82,10 @@ public:
     // For tests.
     void wait_idle() { mesher_.wait_idle(); }
     std::uint64_t meshed_count() const { return meshed_count_; }
+    const terrain::LodTree* lod_tree(InstanceId terrain) const {
+        const auto found = terrains_.find(terrain);
+        return found != terrains_.end() ? found->second.tree.get() : nullptr;
+    }
 
     // A mesh/collider build that threw: TerrainMesher's worker drops the job
     // (its chunk keeps its old mesh) and keeps only a count and the latest
@@ -105,6 +124,16 @@ private:
         // during a previous stay can then never again match the live value
         // for any chunk, however the two records' own lifetimes line up.
         std::unordered_map<terrain::ChunkCoord, std::uint64_t, terrain::ChunkCoordHash> chunk_revisions;
+        // Chunks whose live job was queued only to bring a dropped mesh back
+        // (residency), not because their voxels changed: the result leaves
+        // the collider alone and does not mark LOD ancestors stale. A chunk
+        // leaves the set when an edit queues it again.
+        std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> residency_jobs;
+        // The LOD octree: made on first sight, and again (re-queueing every
+        // chunk) if the volume's voxel size changes.
+        std::unique_ptr<terrain::LodTree> tree;
+        std::shared_ptr<const std::vector<TerrainNodeView>> nodes;
+        std::uint64_t nodes_revision = 0;   // from next_nodes_set_revision_, as chunks_revision is
         // Published meshes and colliders, by chunk coordinate: the source
         // accept_result writes and publish_chunks reads to rebuild the
         // vectors views() and colliders() hand out.
@@ -126,6 +155,10 @@ private:
     void accept_result(const terrain::MeshResult& result);
     void queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, bool first_seen, bool has_camera,
                       Vec3 camera_pos);
+    // One Terrain's LOD work for this update: drops and re-queues chunk
+    // meshes as its LodTree asks, and queues the node builds now due.
+    void update_lod(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, double now_ms, bool has_camera,
+                    Vec3 camera_pos);
     void rebuild_look(Terrain& terrain, TerrainRecord& record, bool force);
     void publish_chunks(TerrainRecord& record);
 
@@ -140,6 +173,11 @@ private:
     // dropped and recreated (leaves Workspace, then returns).
     std::uint64_t next_job_revision_ = 1;         // backs every TerrainRecord::chunk_revisions value
     std::uint64_t next_chunks_set_revision_ = 1;  // backs every TerrainRecord::chunks_revision value
+    std::uint64_t next_nodes_set_revision_ = 1;   // backs every TerrainRecord::nodes_revision value
+    // Shared by every Terrain's LodTree (node job and TerrainNodeView
+    // revisions): never reused for this TerrainWorld's life, so a node job
+    // from a Terrain's previous stay in Workspace can never be accepted.
+    std::uint64_t next_node_revision_ = 0;
 };
 
 }  // namespace engine_core

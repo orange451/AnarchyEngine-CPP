@@ -196,7 +196,8 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
     for (int index = 0; index < count; ++index) {
         const MeshDraw& mesh = meshes[index];
         // See-through surfaces cast nothing, as in the legacy engine.
-        if (mesh.mesh == nullptr || !mesh.mesh->valid() || mesh.transparency > 0.f) {
+        // A terrain chunk (terrainLook) is always opaque, so it always casts.
+        if (mesh.mesh == nullptr || !mesh.mesh->valid() || (mesh.transparency > 0.f && mesh.terrainLook == 0)) {
             continue;
         }
         ShadowCaster caster;

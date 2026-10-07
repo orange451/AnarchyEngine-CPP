@@ -58,7 +58,20 @@ struct MeshDraw {
     // same slot share a mesh and every Material value, and draw as one
     // instanced call. 0 draws alone.
     std::uint32_t slot = 0;
+    // A Terrain's look table as MakeTerrainLookTexture makes it (a GL
+    // texture), for a terrain chunk's mesh: non-zero draws it with the terrain
+    // program, which reads each vertex's material Id from its color and that
+    // Id's color and surface from this table, ignoring the Material values and
+    // tint above. Such a draw is always opaque and drawn alone, and casts shadows.
+    std::uint32_t terrainLook = 0;
 };
+
+// A Terrain's look table: a 256 x 2 GL_RGBA8 texture, GL_NEAREST, from
+// rgba256x2's 256 * 2 * 4 bytes, row 0 first. Row 0's texel i is material
+// Id i's color (sRGB, alpha unused); row 1's is its metalness, roughness and
+// reflectivity (0 to 255) and 255. The GL context has to be current; the
+// caller deletes the texture.
+unsigned MakeTerrainLookTexture(const std::uint8_t* rgba256x2);
 
 // A PointLight, SpotLight, or DirectionalLight, in world space.
 struct LightDraw {
@@ -526,6 +539,8 @@ private:
     void bindShadow(const Program& program, const ShadowLookup& lookup);
 
     Program geometry_;
+    // terrain.vert and terrain.frag: a MeshDraw with a terrainLook, into the G-buffer.
+    Program terrain_;
     Program forward_;
     Program ibl_;
     Program light_;

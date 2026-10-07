@@ -80,7 +80,11 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
         entry.lod = draw.lod;
         order.push_back(entry);
     }
-    std::sort(order.begin(), order.end(), [](const DrawBatches::Entry& a, const DrawBatches::Entry& b) {
+    std::sort(order.begin(), order.end(), [items](const DrawBatches::Entry& a, const DrawBatches::Entry& b) {
+        // Terrain chunks last, so the geometry pass changes program once.
+        if (items[a.index].terrain != items[b.index].terrain) {
+            return items[b.index].terrain;
+        }
         if (a.key != b.key) {
             return a.key < b.key;
         }
@@ -92,7 +96,8 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
     for (std::size_t i = 0; i < order.size(); ++i) {
         const DrawBatches::Entry& entry = order[i];
         const DrawItem& item = items[entry.index];
-        const bool joins = i > 0 && item.slot != 0 && order[i - 1].key == entry.key;
+        const bool joins = i > 0 && item.slot != 0 && !item.terrain && !items[order[i - 1].index].terrain &&
+                           order[i - 1].key == entry.key;
         if (!joins) {
             DrawRun run;
             run.first = static_cast<int>(out.instances.size());

@@ -49,7 +49,8 @@ struct DrawBatches {
 };
 
 // Sorts visible's opaque draws by BatchKey, nearest first within a key, into
-// runs; a slot 0 draw is always a run of its own. Then each see-through draw,
+// runs; a slot 0 draw or a terrain chunk is always a run of its own, and
+// terrain chunks come after every other opaque run. Then each see-through draw,
 // farthest first by its Transform's depth in view, as a run of 1.
 void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const engine_core::Matrix4& view,
                   DrawBatches& out);

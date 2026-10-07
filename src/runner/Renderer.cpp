@@ -78,6 +78,8 @@ constexpr int kUnitReflections = kUnitScene;
 // Ambient occlusion shares the metalness map's unit: none of the passes that
 // read it (the light pass, the merge, its own blur) reads a Material.
 constexpr int kUnitOcclusion = kUnitMetalnessMap;
+// The terrain program reads no Material, so a Terrain's look table takes the diffuse unit.
+constexpr int kUnitTerrainLook = kUnitDiffuse;
 // A light with no instance names its map for one frame only.
 constexpr std::uint64_t kUncachedShadowKey = 1ull << 63;
 // A ViewLight's shadow: the sun's cascades.
@@ -297,6 +299,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     // The sky pass reads no Material, so the DynamicSky's textures take its units.
     sampler("uSunTexture", kUnitDiffuse);
     sampler("uMoonTexture", kUnitNormalMap);
+    sampler("uTerrainLook", kUnitTerrainLook);
     if (&program == &merge_) {
         sampler("uEmissive", kUnitEmissive);
         sampler("uTransparency", kUnitTransparency);
@@ -322,6 +325,7 @@ bool Renderer::initialize() {
     const bool built =
         buildProgram(geometry_, "G-buffer", "pipeline/geometry.vert", "pipeline/deferred.frag",
                      {"pipeline/surface.glsl"}) &&
+        buildProgram(terrain_, "Terrain", "pipeline/terrain.vert", "pipeline/terrain.frag", {}) &&
         buildProgram(forward_, "Transparency", "pipeline/geometry.vert", "pipeline/forward.frag",
                      {"pipeline/surface.glsl", "pipeline/lighting.glsl", "pipeline/environment.glsl",
                       "pipeline/image_lighting.glsl"}) &&
@@ -1368,6 +1372,19 @@ void Renderer::handlePass(const float* projection) {
     glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(arrayBuffer));
 }
 
+unsigned MakeTerrainLookTexture(const std::uint8_t* rgba256x2) {
+    unsigned texture = 0;
+    glGenTextures(1, &texture);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    // Rows of 256 RGBA texels are whole words, so the default unpack alignment adds no padding.
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(GL_RGBA8), 256, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba256x2);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(RT_GL_NEAREST));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(RT_GL_NEAREST));
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return texture;
+}
+
 void Renderer::bindMaterial(const Program& program, const MeshDraw& draw) {
     BindTexture(kUnitDiffuse, draw.texture != 0 ? draw.texture : whiteTexture_);
     BindTexture(kUnitNormalMap, draw.normalTexture != 0 ? draw.normalTexture : whiteTexture_);
@@ -1538,13 +1555,22 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
             item.model = &draw.model;
             item.transparency = draw.transparency;
             // As the passes have always skipped: no mesh, not uploaded, or wholly see-through.
-            item.drawable = draw.mesh != nullptr && draw.mesh->valid() && !(draw.transparency >= 1.f);
+            item.drawable = draw.mesh != nullptr && draw.mesh->valid() &&
+                            (draw.terrainLook != 0 || !(draw.transparency >= 1.f));
             if (item.drawable) {
                 item.boundsMin = draw.mesh->bounds_min();
                 item.boundsMax = draw.mesh->bounds_max();
             }
             item.tint = draw.tint;
-            item.slot = draw.slot;
+            // A terrain chunk is opaque, drawn alone, and sorted after every
+            // other opaque draw so the geometry pass switches program once.
+            item.terrain = draw.terrainLook != 0;
+            if (item.terrain) {
+                item.transparency = 0.f;
+                item.slot = 0;
+            } else {
+                item.slot = draw.slot;
+            }
         }
         FindVisible(drawItems_.data(), count, camera, culling_, visibility_);
         stats_.draws = count;
@@ -1615,17 +1641,38 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
     // Every instance of the frame, opaque and see-through, in one upload.
     instances_.upload(batches_.instances.data(), static_cast<int>(batches_.instances.size()));
     bool asked = false;
+    // BuildBatches puts terrain chunks after every other opaque run, so the
+    // program switches to terrain_ once, at the first of them.
+    bool terrain = false;
+    bool askedTerrain = false;
     for (int index = 0; index < batches_.opaqueRuns; ++index) {
         const DrawRun& run = batches_.runs[static_cast<std::size_t>(index)];
         const MeshDraw& draw = meshes[run.draw];
-        bindMaterial(geometry_, draw);
+        if (draw.terrainLook != 0) {
+            if (!terrain) {
+                terrain = true;
+                glUseProgram(terrain_.id);
+                glUniformMatrix4fv(terrain_.view, 1, GL_FALSE, view_.m);
+                glUniformMatrix4fv(terrain_.projection, 1, GL_FALSE, projection);
+            }
+            BindTexture(kUnitTerrainLook, draw.terrainLook);
+        } else {
+            if (terrain) {
+                // Not reached while BuildBatches sorts terrain last; kept so
+                // a change there costs program switches, not wrong surfaces.
+                terrain = false;
+                glUseProgram(geometry_.id);
+            }
+            bindMaterial(geometry_, draw);
+        }
         glCullFace(run.mirrored ? RT_GL_FRONT : RT_GL_BACK);
         draw.mesh->bind();
         instances_.attach(run.first);
-        if (!asked && !CanDraw(geometry_.id)) {
+        bool& programAsked = terrain ? askedTerrain : asked;
+        if (!programAsked && !CanDraw(terrain ? terrain_.id : geometry_.id)) {
             return false;
         }
-        asked = true;
+        programAsked = true;
         draw.mesh->draw_instanced(run.lod, run.count);
         ++stats_.runs;
         ++stats_.instancedCalls;
@@ -1980,6 +2027,10 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, const float* projection,
     for (std::size_t index = static_cast<std::size_t>(batches_.opaqueRuns); index < batches_.runs.size(); ++index) {
         const DrawRun& run = batches_.runs[index];
         const MeshDraw& draw = meshes[run.draw];
+        // Terrain is always opaque (findVisible), so never drawn with forward_.
+        if (draw.terrainLook != 0) {
+            continue;
+        }
         bindMaterial(forward_, draw);
         glCullFace(run.mirrored ? RT_GL_FRONT : RT_GL_BACK);
         draw.mesh->bind();
@@ -2164,7 +2215,7 @@ void Renderer::shutdown() {
     gpu_.shutdown();
     ready_ = false;
     for (Program* program :
-         {&geometry_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &fxaa_, &ssrScene_, &ssrBlur_, &ssr_, &gtao_, &aoBlur_, &sky_, &grid_,
+         {&geometry_, &terrain_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &fxaa_, &ssrScene_, &ssrBlur_, &ssr_, &gtao_, &aoBlur_, &sky_, &grid_,
           &gridBands_, &outline_, &handle_, &dynamicSky_, &dynamicSkyCube_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);

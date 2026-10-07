@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 
@@ -130,6 +131,9 @@ bool decode_chunk_frame(const std::byte* frame, std::size_t frame_size, ChunkDat
     }
     std::vector<std::uint8_t> payload(kFrameContentSize);
     ZSTD_DCtx* dctx = ZSTD_createDCtx();
+    if (dctx == nullptr) {
+        return false;  // out of memory or similar: treat like any other damage
+    }
     const std::size_t written = ZSTD_decompressDCtx(dctx, payload.data(), payload.size(), frame, frame_size);
     ZSTD_freeDCtx(dctx);
     if (ZSTD_isError(written) || written != payload.size()) {
@@ -183,6 +187,24 @@ bool by_zyx(const std::pair<ChunkCoord, ChunkPtr>& a, const std::pair<ChunkCoord
     return a.first.x < b.first.x;
 }
 
+// Joins every thread it holds in its own destructor. Without this, an
+// exception thrown while more workers are still being started (std::thread's
+// constructor throws std::system_error if the OS can't start one) would
+// unwind through a plain std::vector<std::thread> that still holds earlier,
+// successfully-started, still-joinable threads: its destructor calls
+// std::terminate on any one of them. Being destroyed during that same
+// unwind, this joins them all first instead.
+struct JoiningThreads {
+    std::vector<std::thread> threads;
+    ~JoiningThreads() {
+        for (std::thread& t : threads) {
+            if (t.joinable()) {
+                t.join();
+            }
+        }
+    }
+};
+
 }  // namespace
 
 // ChunkFrame.hpp's declaration: the only part of the frame codec visible
@@ -209,15 +231,26 @@ std::vector<std::byte> encode_chunk_frame(const Cell* cells) {
     }
 
     ZSTD_CCtx* cctx = ZSTD_createCCtx();
+    if (cctx == nullptr) {
+        // Out of memory or similar: encode_chunk_frame has no error channel
+        // of its own (ChunkData::encoded() calls it under std::call_once
+        // expecting a vector back), so this is the one way to report it
+        // rather than silently treating a garbage size as a real one below.
+        throw std::runtime_error("zstd: failed to create a compression context");
+    }
     ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, 3);
     ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 1);
     const std::size_t bound = ZSTD_compressBound(payload.size());
     std::vector<std::byte> out(bound);
     const std::size_t written = ZSTD_compress2(cctx, out.data(), bound, payload.data(), payload.size());
     ZSTD_freeCCtx(cctx);
-    // ZSTD_compress2 only fails on a bad parameter or a destination too
-    // small to hold the worst case; bound is ZSTD_compressBound's own
-    // answer, so there is nothing to recover from here.
+    if (ZSTD_isError(written)) {
+        // written is ZSTD's error code in this case, not a byte count:
+        // resizing to it (as if it were always a valid size) would ask the
+        // vector for a bogus length instead of reporting the real failure.
+        throw std::runtime_error(std::string("zstd: failed to compress a chunk frame: ") +
+                                  ZSTD_getErrorName(written));
+    }
     out.resize(written);
     return out;
 }
@@ -339,6 +372,18 @@ std::optional<std::string> decode_avox(const std::byte* data, std::size_t size, 
         const std::byte* e = data + index_start + static_cast<std::size_t>(i) * kIndexEntrySize;
         IndexEntry& entry = entries[i];
         entry.coord = ChunkCoord{get_i32(e + 0), get_i32(e + 4), get_i32(e + 8)};
+        if (i > 0) {
+            // The index must be sorted by (z, y, x), strictly: a duplicate or
+            // out-of-order coordinate is damage, not something to silently
+            // overwrite or reorder underneath the caller.
+            const ChunkCoord& prev = entries[i - 1].coord;
+            const bool increasing = (entry.coord.z > prev.z) ||
+                                    (entry.coord.z == prev.z && entry.coord.y > prev.y) ||
+                                    (entry.coord.z == prev.z && entry.coord.y == prev.y && entry.coord.x > prev.x);
+            if (!increasing) {
+                return std::string("damaged .avox file");
+            }
+        }
         entry.form = get_u8(e + 12);
         if (entry.form > 1) {
             return std::string("damaged .avox file");
@@ -374,26 +419,52 @@ std::optional<std::string> decode_avox(const std::byte* data, std::size_t size, 
     if (!dense_indices.empty()) {
         auto work = [&](unsigned start) {
             for (std::size_t j = start; j < dense_indices.size(); j += worker_count) {
-                const IndexEntry& entry = entries[dense_indices[j]];
-                std::shared_ptr<ChunkData> chunk = ChunkData::air()->clone_dense();
-                if (!decode_chunk_frame(data + entry.offset, entry.size, *chunk)) {
+                try {
+                    const IndexEntry& entry = entries[dense_indices[j]];
+                    std::shared_ptr<ChunkData> chunk = ChunkData::air()->clone_dense();
+                    if (!decode_chunk_frame(data + entry.offset, entry.size, *chunk)) {
+                        damaged.store(true, std::memory_order_relaxed);
+                        continue;
+                    }
+                    chunk->finish();
+                    if (chunk->is_air()) {
+                        // A dense frame that happens to decode to nothing but
+                        // air collapses the same way an edit would: dropped
+                        // rather than kept, since a missing chunk is air
+                        // already (built[j] stays null; the merge below
+                        // skips it).
+                        continue;
+                    }
+                    if (!chunk->is_uniform()) {
+                        // Only a chunk that stays dense gets a cached frame:
+                        // encoded() must stay empty for a uniform chunk, the
+                        // same as one built by an ordinary edit.
+                        std::vector<std::byte> frame(entry.size);
+                        std::memcpy(frame.data(), data + entry.offset, entry.size);
+                        chunk->adopt_encoded(std::move(frame));
+                    }
+                    built[j] = std::move(chunk);
+                } catch (...) {
+                    // Any exception here (e.g. bad_alloc while cloning or
+                    // decoding a chunk) is reported as damage rather than
+                    // left to escape a worker thread, which would otherwise
+                    // call std::terminate.
                     damaged.store(true, std::memory_order_relaxed);
-                    continue;
                 }
-                chunk->finish();
-                std::vector<std::byte> frame(entry.size);
-                std::memcpy(frame.data(), data + entry.offset, entry.size);
-                chunk->adopt_encoded(std::move(frame));
-                built[j] = std::move(chunk);
             }
         };
-        std::vector<std::thread> workers;
-        for (unsigned w = 1; w < worker_count; ++w) {
-            workers.emplace_back(work, w);
-        }
-        work(0);  // this thread takes a share too, instead of only joining
-        for (std::thread& t : workers) {
-            t.join();
+        try {
+            JoiningThreads joiner;
+            for (unsigned w = 1; w < worker_count; ++w) {
+                joiner.threads.emplace_back(work, w);
+            }
+            work(0);  // this thread takes a share too, instead of only joining
+        } catch (...) {
+            // A worker thread failed to start (e.g. the OS is out of
+            // resources). JoiningThreads's destructor, run by this catch's
+            // own unwind, already joined whatever threads it held, so there
+            // is nothing left joinable here.
+            damaged.store(true, std::memory_order_relaxed);
         }
     }
     if (damaged.load(std::memory_order_relaxed)) {
@@ -414,7 +485,9 @@ std::optional<std::string> decode_avox(const std::byte* data, std::size_t size, 
         map[entry.coord] = ChunkData::uniform(value);
     }
     for (std::size_t j = 0; j < dense_indices.size(); ++j) {
-        map[entries[dense_indices[j]].coord] = std::move(built[j]);
+        if (built[j]) {
+            map[entries[dense_indices[j]].coord] = std::move(built[j]);
+        }
     }
 
     out = VoxelVolume(voxel_size);

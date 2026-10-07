@@ -2,6 +2,7 @@
 // No instances; nothing here touches the DataModel.
 
 #include "terrain/AvoxFile.hpp"
+#include "terrain/ChunkFrame.hpp"
 #include "terrain/ShapeDistance.hpp"
 #include "terrain/VoxelChunk.hpp"
 #include "terrain/VoxelVolume.hpp"
@@ -10,6 +11,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstring>
 
 using namespace engine_core;
 using namespace engine_core::terrain;
@@ -389,4 +391,98 @@ TEST_CASE("AV7 4,096 dense chunks decode in under a second", "[.][terrain-bench]
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     INFO(seconds << " s for " << bytes.size() << " bytes");
     REQUIRE(seconds < 1.0);
+}
+
+namespace {
+// Mirrors AvoxFile.cpp's private little-endian writers and CRC-32, only so
+// these two tests can hand-build or patch raw .avox bytes without reaching
+// into AvoxFile.cpp's internals.
+void put_u16(std::vector<std::byte>& bytes, std::size_t at, std::uint16_t v) {
+    bytes[at] = std::byte{static_cast<std::uint8_t>(v & 0xffu)};
+    bytes[at + 1] = std::byte{static_cast<std::uint8_t>((v >> 8) & 0xffu)};
+}
+void put_u32(std::vector<std::byte>& bytes, std::size_t at, std::uint32_t v) {
+    for (int i = 0; i < 4; ++i) {
+        bytes[at + static_cast<std::size_t>(i)] = std::byte{static_cast<std::uint8_t>((v >> (8 * i)) & 0xffu)};
+    }
+}
+void put_i32(std::vector<std::byte>& bytes, std::size_t at, std::int32_t v) {
+    put_u32(bytes, at, static_cast<std::uint32_t>(v));
+}
+void put_u64(std::vector<std::byte>& bytes, std::size_t at, std::uint64_t v) {
+    for (int i = 0; i < 8; ++i) {
+        bytes[at + static_cast<std::size_t>(i)] = std::byte{static_cast<std::uint8_t>((v >> (8 * i)) & 0xffu)};
+    }
+}
+void put_f32(std::vector<std::byte>& bytes, std::size_t at, float v) {
+    std::uint32_t bits = 0;
+    std::memcpy(&bits, &v, sizeof(bits));
+    put_u32(bytes, at, bits);
+}
+std::uint32_t test_crc32(const std::byte* data, std::size_t size) {
+    std::uint32_t crc = 0xffffffffu;
+    for (std::size_t i = 0; i < size; ++i) {
+        crc ^= static_cast<std::uint8_t>(data[i]);
+        for (int bit = 0; bit < 8; ++bit) {
+            crc = (crc & 1u) ? (crc >> 1) ^ 0xedb88320u : (crc >> 1);
+        }
+    }
+    return ~crc;
+}
+}  // namespace
+
+TEST_CASE("AV8 a dense frame that decodes to all-air is dropped like a missing chunk", "[terrain]") {
+    // A dense frame built directly (bypassing encode_avox's own uniform
+    // check), whose cells are all air: a reader must drop this the same way
+    // it drops a missing chunk, not keep a uniform-air entry around.
+    std::vector<Cell> cells(static_cast<std::size_t>(kChunkCells), Cell{kAirDistance, 0});
+    const std::vector<std::byte> frame = encode_chunk_frame(cells.data());
+
+    std::vector<std::byte> bytes(32 + 32 + frame.size());
+    put_i32(bytes, 32 + 0, 0);
+    put_i32(bytes, 32 + 4, 0);
+    put_i32(bytes, 32 + 8, 0);
+    bytes[32 + 12] = std::byte{1};  // form: dense
+    bytes[32 + 13] = std::byte{0};
+    bytes[32 + 14] = std::byte{0};
+    bytes[32 + 15] = std::byte{0};
+    put_u64(bytes, 32 + 16, 64);
+    put_u32(bytes, 32 + 24, static_cast<std::uint32_t>(frame.size()));
+    put_u32(bytes, 32 + 28, 0);
+    std::memcpy(bytes.data() + 64, frame.data(), frame.size());
+
+    bytes[0] = std::byte{'A'};
+    bytes[1] = std::byte{'V'};
+    bytes[2] = std::byte{'O'};
+    bytes[3] = std::byte{'X'};
+    put_u16(bytes, 4, 1);
+    put_u16(bytes, 6, 0);
+    put_f32(bytes, 8, 1.f);
+    put_u32(bytes, 12, static_cast<std::uint32_t>(kChunkSize));
+    put_u32(bytes, 16, 1);
+    put_u32(bytes, 20, test_crc32(bytes.data() + 32, 32));
+    put_u64(bytes, 24, 0);
+
+    VoxelVolume back;
+    REQUIRE_FALSE(decode_avox(bytes.data(), bytes.size(), back));
+    REQUIRE(back.chunks().empty());
+}
+
+TEST_CASE("AV9 a duplicate or out-of-order index entry is refused", "[terrain]") {
+    VoxelVolume volume;
+    // Both balls stay well inside their own chunk's interior (center 16,
+    // reach radius + the 4-cell band), so each is exactly one chunk: one at
+    // ChunkCoord{0,0,0}, the other at ChunkCoord{6,0,0}.
+    REQUIRE_FALSE(volume.fill(ball_at(16.f, 16.f, 16.f, 2.f), 1));
+    REQUIRE_FALSE(volume.fill(ball_at(216.f, 16.f, 16.f, 2.f), 1));
+    REQUIRE(volume.chunks().size() == 2u);
+    std::vector<std::byte> bytes = encode_avox(volume);
+    // Overwrite the second entry's coordinate with the first's: a duplicate,
+    // not two strictly increasing (z, y, x) rows.
+    std::memcpy(bytes.data() + 32 + 32, bytes.data() + 32, 12);
+    // Recompute the index CRC, so the order/duplicate check is what rejects
+    // this, not the CRC.
+    put_u32(bytes, 20, test_crc32(bytes.data() + 32, 64));
+    VoxelVolume back;
+    REQUIRE(decode_avox(bytes.data(), bytes.size(), back).has_value());
 }

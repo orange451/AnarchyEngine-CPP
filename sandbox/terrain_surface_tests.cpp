@@ -2,6 +2,7 @@
 // terrain bodies, and what the renderer is handed.
 
 #include "terrain/SurfaceNets.hpp"
+#include "terrain/TerrainMesher.hpp"
 #include "terrain/VoxelVolume.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -10,8 +11,10 @@
 #include <chrono>
 #include <cmath>
 #include <map>
+#include <memory>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 using namespace engine_core;
 using namespace engine_core::terrain;
@@ -168,6 +171,73 @@ TEST_CASE("SN7 triangle winding agrees with vertex normals", "[terrain]") {
         const float dot = geometric.x * average.x + geometric.y * average.y + geometric.z * average.z;
         REQUIRE(dot > 0.f);
     }
+}
+
+TEST_CASE("TM1 queued chunks come back meshed", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(5.f, 5.f, 5.f, 4.f), 2));
+    TerrainMesher mesher;
+    mesher.queue(7, 1, mesh_input(volume, ChunkCoord{0, 0, 0}), 0.f);
+    mesher.wait_idle();
+    std::vector<MeshResult> results;
+    mesher.collect(results);
+    REQUIRE(results.size() == 1u);
+    REQUIRE(results[0].terrain == 7u);
+    REQUIRE(results[0].revision == 1u);
+    REQUIRE_FALSE(results[0].mesh.triangles.empty());
+}
+
+TEST_CASE("TM2 a newer job for a chunk replaces a queued older one", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(5.f, 5.f, 5.f, 4.f), 2));
+    TerrainMesher mesher({}, 1);
+    // Keep the one worker busy so the next two jobs wait in the queue.
+    for (int i = 0; i < 20; ++i) mesher.queue(1, 1, mesh_input(volume, ChunkCoord{0, 0, 0}), 0.f);
+    mesher.queue(9, 1, mesh_input(volume, ChunkCoord{0, 0, 0}), 0.f);
+    mesher.queue(9, 2, mesh_input(volume, ChunkCoord{0, 0, 0}), 0.f);
+    mesher.wait_idle();
+    std::vector<MeshResult> results;
+    mesher.collect(results);
+    int nine = 0;
+    for (const MeshResult& r : results) {
+        if (r.terrain == 9) {
+            ++nine;
+            REQUIRE((r.revision == 1u || r.revision == 2u));
+        }
+    }
+    REQUIRE(nine <= 2);   // revision 1 may have started before 2 was queued; then both come back
+    REQUIRE(std::any_of(results.begin(), results.end(), [](const MeshResult& r) { return r.terrain == 9 && r.revision == 2; }));
+}
+
+TEST_CASE("TM3 the collider builder runs on the worker and its result comes back", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(5.f, 5.f, 5.f, 4.f), 2));
+    TerrainMesher mesher([](const ChunkMesh& mesh) { return std::make_shared<std::size_t>(mesh.triangles.size()); });
+    mesher.queue(1, 1, mesh_input(volume, ChunkCoord{0, 0, 0}), 0.f);
+    mesher.wait_idle();
+    std::vector<MeshResult> results;
+    mesher.collect(results);
+    REQUIRE(*std::static_pointer_cast<std::size_t>(results[0].collider) == results[0].mesh.triangles.size());
+}
+
+TEST_CASE("TM4 a revision replaced while still queued leaves exactly one result", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(5.f, 5.f, 5.f, 4.f), 2));
+    TerrainMesher mesher({}, 1);
+    // Hold the single worker before it takes a job, so both queue() calls for
+    // key 9 land while nothing is running yet -- deterministically exercising
+    // the replace-in-the-waiting-set path (as opposed to TM2, where revision 1
+    // may already be running by the time revision 2 is queued).
+    mesher.pause_for_test(true);
+    mesher.queue(9, 1, mesh_input(volume, ChunkCoord{0, 0, 0}), 0.f);
+    mesher.queue(9, 2, mesh_input(volume, ChunkCoord{0, 0, 0}), 0.f);
+    mesher.pause_for_test(false);
+    mesher.wait_idle();
+    std::vector<MeshResult> results;
+    mesher.collect(results);
+    REQUIRE(results.size() == 1u);
+    REQUIRE(results[0].terrain == 9u);
+    REQUIRE(results[0].revision == 2u);
 }
 
 TEST_CASE("SN6 meshing one dense chunk is fast", "[.][terrain-bench]") {

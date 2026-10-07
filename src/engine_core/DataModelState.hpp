@@ -33,6 +33,9 @@
 #include <vector>
 
 namespace engine_core {
+
+class PhysicsWorld;
+
 namespace datamodel_detail {
 
 // pool_index_for found no pool for the type. Also the most pools there can be.
@@ -217,6 +220,8 @@ struct DataModel::State {
     std::function<void()> on_start;
     ScriptHost* script_host = nullptr;
     ScriptAnalysis* script_analysis = nullptr;
+    // The Engine's physics world, for scripts' queries. Null without an Engine.
+    PhysicsWorld* physics = nullptr;
 };
 
 }  // namespace engine_core

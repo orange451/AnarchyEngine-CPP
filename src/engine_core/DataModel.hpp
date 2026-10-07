@@ -84,6 +84,7 @@ public:
 class ChangeHistoryService;
 class Engine;
 class GameObject;
+class PhysicsWorld;
 class ScriptAnalysis;
 class ScriptHost;
 class SelectionService;
@@ -260,6 +261,10 @@ public:
     // Null until ScriptAnalysis is attached. Setters notify it. They do not analyze.
     void set_script_analysis(ScriptAnalysis* analysis);
     ScriptAnalysis* script_analysis() const;
+    // The physics world scripts' queries (Workspace:Raycast) use. The Engine
+    // sets it; null without one.
+    void set_physics(PhysicsWorld* physics);
+    PhysicsWorld* physics() const;
     std::uint32_t world_generation() const;
     bool simulation_running() const;
     // Edit undo. Play waypoints live on a second stack that stop drops.

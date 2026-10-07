@@ -6,6 +6,7 @@
 
 #include "AssetInstances.hpp"
 #include "ConvexDecomposition.hpp"
+#include "Engine.hpp"
 #include "MeshShapes.hpp"
 #include "PhysicsObject.hpp"
 #include "PhysicsWorld.hpp"
@@ -13,8 +14,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
 #include <filesystem>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -196,4 +199,28 @@ TEST_CASE("E9 a body made without pieces, then given another Shape, does not kee
     const std::uint64_t key = rig.physics.shape_key(body.id());
     rig.steps(1);
     REQUIRE(rig.physics.shape_key(body.id()) == key);
+}
+
+TEST_CASE("E10 a stopped Engine keeps bodies and registers its world", "[physics][edit][engine]") {
+    engine_core::Engine engine;
+    engine.start();
+    // The studio's Engine is paused whenever the place is stopped.
+    REQUIRE(engine.paused());
+    InstanceId id = 0;
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        auto& object = game.create<PhysicsObject>();
+        object.set_anchored(true);
+        game.set_parent(object.id(), workspace_of(game));
+        id = object.id();
+    });
+    bool synced = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!synced && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        engine.on_simulation([&](engine_core::DataModel& game) {
+            synced = game.physics() != nullptr && game.physics()->has_body(id);
+        });
+    }
+    engine.stop();
+    REQUIRE(synced);
 }

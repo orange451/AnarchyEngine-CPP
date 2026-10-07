@@ -61,6 +61,7 @@ Engine::Engine() {
     physics_.set_warning_sink([this](const std::string& text) {
         scripts_->append_output(ScriptRuntime::OutputKind::Print, text);
     });
+    game_.set_physics(&physics_);
     // So do audio warnings, such as a Sound whose file cannot be played.
     audio_.set_warning_sink([this](const std::string& text) {
         scripts_->append_output(ScriptRuntime::OutputKind::Print, text);
@@ -74,7 +75,13 @@ ScriptAnalysis& Engine::analysis() { return *analysis_; }
 
 const ScriptAnalysis& Engine::analysis() const { return *analysis_; }
 
-Engine::~Engine() { stop(); }
+Engine::~Engine() {
+    stop();
+    // game_ is declared before physics_, so it is destroyed after physics_
+    // goes away. Clear the pointer here so no one can reach a dangling world
+    // during teardown.
+    game_.set_physics(nullptr);
+}
 
 void Engine::set_renderer(IRenderer* renderer) { renderer_ = renderer; }
 
@@ -286,13 +293,15 @@ void Engine::simulation_loop() {
                     last_tool = now;
                     pause_lock.unlock();
                     // Stopped, Custom PhysicsObjects' Meshes are split into convex
-                    // pieces. A paused test writes no files.
+                    // pieces, and bodies follow the tree without being simulated.
+                    // A paused test writes no files.
                     guarded_step(
                         [&] {
-                            PROFILE_SCOPE("Convex decomposition", profiler::Group::Physics);
+                            PROFILE_SCOPE("Stopped physics", profiler::Group::Physics);
                             DataModelLock lock(game_, DataModelLock::Write);
                             if (!game_.simulation_running()) {
                                 decomposer_.update(game_);
+                                physics_.sync(game_);
                             }
                         },
                         [&] { contract_count_.fetch_add(1); });

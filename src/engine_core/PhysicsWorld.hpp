@@ -143,6 +143,40 @@ public:
     // For tests: how many shapes the body of this PhysicsBase or Terrain has, or 0.
     std::size_t shape_count(InstanceId id) const;
 
+    // For tests: one ray's result from ray_cast_mesh_for_test or
+    // ray_cast_terrain_collider_for_test. fraction, triangle, and material
+    // are unset (0.f, -1, -1) when hit is false. fraction is along the ray,
+    // as cast (its full length is fraction 1). material is Box3D's
+    // materialIndex for the hit triangle: the material id passed in for a
+    // terrain mesh (ray_cast_terrain_collider_for_test), or 0 when none was
+    // given (ray_cast_mesh_for_test).
+    struct MeshRayCastHit {
+        bool hit = false;
+        float fraction = 0.f;
+        int triangle = -1;
+        int material = -1;
+    };
+    // For tests: welds positions and triangles into a Box3D mesh exactly as
+    // an anchored Custom's shape is built (build_mesh: welded, with edges
+    // identified), with the default SAH split, or, when use_median_split is
+    // true, the split build_terrain_collider uses, then casts each ray
+    // (ray_origins[i] to ray_origins[i] + ray_directions[i]) through it with
+    // b3RayCastMesh. One result per ray, in the same order. Any thread, no
+    // lock. This and ray_cast_terrain_collider_for_test are how a test
+    // reaches Box3D's mesh ray cast without including Box3D itself.
+    static std::vector<MeshRayCastHit> ray_cast_mesh_for_test(const std::vector<Vec3>& positions,
+                                                               const std::vector<std::uint32_t>& triangles,
+                                                               bool use_median_split,
+                                                               const std::vector<Vec3>& ray_origins,
+                                                               const std::vector<Vec3>& ray_directions);
+    // For tests: build_terrain_collider's own mesh for mesh (its real
+    // useMedianSplit, weld, and material-carrying code path), then the same
+    // per-ray b3RayCastMesh cast as ray_cast_mesh_for_test. Every ray misses
+    // when build_terrain_collider finds nothing to build.
+    static std::vector<MeshRayCastHit> ray_cast_terrain_collider_for_test(const terrain::ChunkMesh& mesh,
+                                                                           const std::vector<Vec3>& ray_origins,
+                                                                           const std::vector<Vec3>& ray_directions);
+
     // Where a warning goes, such as a Hull that fell back to a Box. Unset, it
     // goes nowhere.
     void set_warning_sink(std::function<void(const std::string&)> sink);

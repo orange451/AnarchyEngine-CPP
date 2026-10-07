@@ -415,7 +415,10 @@ TEST_CASE("SN8 meshing one dense chunk plus its collider is fast", "[.][terrain-
     }
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / 50.0;
     INFO(ms);
-    REQUIRE(ms < 2.0);
+    // The spec's 2 ms budget awaits a compiler upgrade (MSVC 19.28+, which
+    // drops the mesh.c /d2SSAOptimizer- workaround in cmake/box3d) or a
+    // custom mesh builder. The user accepted about 4.5 to 5 ms on 2026-10-07.
+    REQUIRE(ms < 6.0);
 }
 
 namespace {

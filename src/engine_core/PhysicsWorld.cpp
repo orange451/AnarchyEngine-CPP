@@ -284,6 +284,36 @@ b3MeshData* build_mesh(std::vector<b3Vec3>& points, const std::vector<std::uint3
     return b3CreateMesh(&def, nullptr, 0);
 }
 
+// For PhysicsWorld::ray_cast_mesh_for_test and
+// ray_cast_terrain_collider_for_test: casts each ray in origins/directions
+// through data's BVH with b3RayCastMesh, one result per ray. A null data is
+// every ray a miss (mesh.triangle count too small, or Box3D built nothing).
+std::vector<PhysicsWorld::MeshRayCastHit> ray_cast_mesh_data(const b3MeshData* data,
+                                                              const std::vector<Vec3>& origins,
+                                                              const std::vector<Vec3>& directions) {
+    std::vector<PhysicsWorld::MeshRayCastHit> results(origins.size());
+    if (data == nullptr) {
+        return results;
+    }
+    b3Mesh shape{};
+    shape.data = data;
+    shape.scale = b3Vec3{1.f, 1.f, 1.f};
+    for (std::size_t i = 0; i < origins.size(); ++i) {
+        b3RayCastInput input{};
+        input.origin = to_b3(origins[i]);
+        input.translation = to_b3(directions[i]);
+        input.maxFraction = 1.f;
+        const b3CastOutput out = b3RayCastMesh(&shape, &input);
+        results[i].hit = out.hit;
+        if (out.hit) {
+            results[i].fraction = out.fraction;
+            results[i].triangle = out.triangleIndex;
+            results[i].material = out.materialIndex;
+        }
+    }
+    return results;
+}
+
 // What build_terrain_collider hands TerrainWorld: one chunk's triangles as a
 // Box3D mesh. Built on a TerrainMesher worker; read on SimulationThread by
 // the shape made from it, which the body record keeps it alive for. Freed by
@@ -1922,6 +1952,42 @@ std::shared_ptr<void> PhysicsWorld::build_terrain_collider(const terrain::ChunkM
         return nullptr;
     }
     return collider;
+}
+
+std::vector<PhysicsWorld::MeshRayCastHit> PhysicsWorld::ray_cast_mesh_for_test(
+    const std::vector<Vec3>& positions, const std::vector<std::uint32_t>& triangles, bool use_median_split,
+    const std::vector<Vec3>& ray_origins, const std::vector<Vec3>& ray_directions) {
+    std::vector<b3Vec3> points;
+    points.reserve(positions.size());
+    for (const Vec3& p : positions) {
+        points.push_back(to_b3(p));
+    }
+    std::vector<std::int32_t> indices(triangles.begin(), triangles.end());
+    b3MeshDef def{};
+    def.vertices = points.data();
+    def.indices = indices.data();
+    def.vertexCount = static_cast<int>(points.size());
+    def.triangleCount = static_cast<int>(indices.size() / 3);
+    // Welded, with edges identified, as build_mesh builds an anchored
+    // Custom's shape.
+    def.weldVertices = true;
+    def.weldTolerance = kWeldTolerance;
+    def.identifyEdges = true;
+    def.useMedianSplit = use_median_split;
+    b3MeshData* mesh = b3CreateMesh(&def, nullptr, 0);
+    std::vector<MeshRayCastHit> results = ray_cast_mesh_data(mesh, ray_origins, ray_directions);
+    if (mesh != nullptr) {
+        b3DestroyMesh(mesh);
+    }
+    return results;
+}
+
+std::vector<PhysicsWorld::MeshRayCastHit> PhysicsWorld::ray_cast_terrain_collider_for_test(
+    const terrain::ChunkMesh& mesh, const std::vector<Vec3>& ray_origins, const std::vector<Vec3>& ray_directions) {
+    const std::shared_ptr<void> collider = build_terrain_collider(mesh);
+    const auto* terrain_collider = static_cast<const TerrainCollider*>(collider.get());
+    return ray_cast_mesh_data(terrain_collider != nullptr ? terrain_collider->mesh : nullptr, ray_origins,
+                               ray_directions);
 }
 
 std::size_t PhysicsWorld::shape_count(InstanceId id) const {

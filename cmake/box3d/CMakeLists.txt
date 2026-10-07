@@ -26,8 +26,12 @@ endif()
 # triangle mesh builds is corrupt and its first walk crashes. With the
 # compiler's SSA optimizer off (/d2SSAOptimizer-) the bug is gone: mesh.c
 # stays optimized and builds byte-for-byte the meshes an /Od build does,
-# about four times faster (one dense terrain chunk: 47 ms to 11 ms). Custom
-# shapes and every terrain chunk's collider go through it.
+# about four times faster (one dense terrain chunk: 47 ms to 11 ms, the flag
+# alone, before build_terrain_collider's useMedianSplit, which brings a
+# terrain chunk lower still, to about 4.5 ms). Custom shapes and every
+# terrain chunk's collider go through it. PhysicsWorld's P39 test
+# (sandbox/physics_tests.cpp) checks both split paths' b3RayCastMesh
+# against brute-force ray-triangle intersection, in Debug and Release.
 if(MSVC AND CMAKE_C_COMPILER_VERSION VERSION_LESS 19.28)
     set_source_files_properties("${BOX3D_SOURCE_DIR}/src/mesh.c" PROPERTIES COMPILE_OPTIONS "/d2SSAOptimizer-")
 endif()

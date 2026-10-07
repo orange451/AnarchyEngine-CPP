@@ -16,6 +16,7 @@
 #include "SceneService.hpp"
 #include "PropertyBag.hpp"
 #include "amesh.hpp"
+#include "terrain/SurfaceNets.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -24,6 +25,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <initializer_list>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -1309,4 +1311,306 @@ TEST_CASE("P38 a body whose GameObject's Transform is scaled is not made again a
     part.set_transform(grown);
     rig.steps(1);
     REQUIRE(rig.physics.shapes_made(body.id()) == made + 1);
+}
+
+namespace {
+
+// Vec3 has no arithmetic of its own (PhysicsWorld.cpp's is private to that
+// file); brute_force_ray_cast needs its own, minimal and local.
+Vec3 vsub(Vec3 a, Vec3 b) { return Vec3{a.x - b.x, a.y - b.y, a.z - b.z}; }
+Vec3 vcross(Vec3 a, Vec3 b) {
+    return Vec3{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+}
+float vdot(Vec3 a, Vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+
+// A noisy, irregular sphere: one vertex at each pole, kRings interior
+// latitude rings of kLonSegments points, 2 * kRings * kLonSegments
+// triangles (a few thousand), so Box3D's default SAH split
+// (ray_cast_mesh_for_test's use_median_split false) builds a deep tree, as
+// an unanchored Custom's shape would from a dense Mesh. Deterministic: a
+// fixed seed perturbs each ring vertex's radius. Every triangle winds CCW
+// as seen from outside (its cross product points away from the origin),
+// verified by hand against this function, so a ray from outside hits it.
+void build_noisy_sphere(std::vector<Vec3>& positions, std::vector<std::uint32_t>& triangles) {
+    constexpr int kRings = 32;
+    constexpr int kLonSegments = 48;
+    constexpr float kBaseRadius = 10.f;
+    constexpr float kNoiseAmplitude = 1.5f;
+    constexpr float kPi = 3.14159265359f;
+
+    std::mt19937_64 random(90125);
+    std::uniform_real_distribution<float> noise(-kNoiseAmplitude, kNoiseAmplitude);
+
+    positions.clear();
+    triangles.clear();
+
+    const auto north_pole = static_cast<std::uint32_t>(positions.size());
+    positions.push_back(Vec3{0.f, kBaseRadius, 0.f});
+
+    std::vector<std::uint32_t> ring_start(kRings);
+    for (int r = 0; r < kRings; ++r) {
+        const float theta = kPi * static_cast<float>(r + 1) / static_cast<float>(kRings + 1);
+        ring_start[static_cast<std::size_t>(r)] = static_cast<std::uint32_t>(positions.size());
+        const float sin_theta = std::sin(theta);
+        const float cos_theta = std::cos(theta);
+        for (int lon = 0; lon < kLonSegments; ++lon) {
+            const float phi = 2.f * kPi * static_cast<float>(lon) / static_cast<float>(kLonSegments);
+            const float radius = kBaseRadius + noise(random);
+            positions.push_back(
+                Vec3{radius * sin_theta * std::cos(phi), radius * cos_theta, radius * sin_theta * std::sin(phi)});
+        }
+    }
+    const auto south_pole = static_cast<std::uint32_t>(positions.size());
+    positions.push_back(Vec3{0.f, -kBaseRadius, 0.f});
+
+    const auto ring_vertex = [&](int r, int lon) {
+        return ring_start[static_cast<std::size_t>(r)] + static_cast<std::uint32_t>((lon + kLonSegments) % kLonSegments);
+    };
+
+    // The north cap: a fan from the pole to the first ring.
+    for (int lon = 0; lon < kLonSegments; ++lon) {
+        triangles.insert(triangles.end(), {north_pole, ring_vertex(0, lon + 1), ring_vertex(0, lon)});
+    }
+    // Between each pair of rings, two triangles per quad.
+    for (int r = 0; r < kRings - 1; ++r) {
+        for (int lon = 0; lon < kLonSegments; ++lon) {
+            const std::uint32_t a = ring_vertex(r, lon);
+            const std::uint32_t b = ring_vertex(r, lon + 1);
+            const std::uint32_t c = ring_vertex(r + 1, lon);
+            const std::uint32_t d = ring_vertex(r + 1, lon + 1);
+            triangles.insert(triangles.end(), {a, b, c});
+            triangles.insert(triangles.end(), {b, d, c});
+        }
+    }
+    // The south cap: a fan from the last ring to the pole, wound the other
+    // way from the north cap (its outward side faces the other way).
+    for (int lon = 0; lon < kLonSegments; ++lon) {
+        triangles.insert(
+            triangles.end(), {south_pole, ring_vertex(kRings - 1, lon), ring_vertex(kRings - 1, lon + 1)});
+    }
+}
+
+// A dense terrain chunk's triangles: a (kCells + 1) by (kCells + 1) grid of
+// vertices over a wavy, noisy height field, two triangles per cell (a few
+// thousand total) — an even grid, as Surface Nets' output roughly is, which
+// is why build_terrain_collider's useMedianSplit helps it. Each triangle's
+// material (one of two, by its average height) lets
+// ray_cast_terrain_collider_for_test's material field be checked too.
+// Deterministic: a fixed seed perturbs each vertex's height. Every triangle
+// winds CCW from above (+Y outward), so a ray from above hits it.
+void build_terrain_chunk(engine_core::terrain::ChunkMesh& mesh) {
+    constexpr int kCells = 48;
+    constexpr float kCellSize = 1.f;
+    constexpr float kHeightScale = 3.f;
+    constexpr std::uint8_t kLowMaterial = 2;
+    constexpr std::uint8_t kHighMaterial = 9;
+
+    std::mt19937_64 random(24601);
+    std::uniform_real_distribution<float> noise(-0.4f, 0.4f);
+
+    mesh.positions.clear();
+    mesh.triangles.clear();
+    mesh.triangle_ids.clear();
+
+    const auto vertex_index = [kCells](int ix, int iz) { return iz * (kCells + 1) + ix; };
+
+    std::vector<float> jitter(static_cast<std::size_t>((kCells + 1) * (kCells + 1)));
+    for (float& j : jitter) {
+        j = noise(random);
+    }
+    for (int iz = 0; iz <= kCells; ++iz) {
+        for (int ix = 0; ix <= kCells; ++ix) {
+            const float x = static_cast<float>(ix) * kCellSize;
+            const float z = static_cast<float>(iz) * kCellSize;
+            const float y = kHeightScale * (std::sin(x * 0.35f) * std::cos(z * 0.28f) +
+                                             0.4f * std::sin(x * 0.11f + z * 0.07f)) +
+                            jitter[static_cast<std::size_t>(vertex_index(ix, iz))];
+            mesh.positions.push_back(Vec3{x, y, z});
+        }
+    }
+    for (int iz = 0; iz < kCells; ++iz) {
+        for (int ix = 0; ix < kCells; ++ix) {
+            const auto a = static_cast<std::uint32_t>(vertex_index(ix, iz));
+            const auto b = static_cast<std::uint32_t>(vertex_index(ix + 1, iz));
+            const auto c = static_cast<std::uint32_t>(vertex_index(ix, iz + 1));
+            const auto d = static_cast<std::uint32_t>(vertex_index(ix + 1, iz + 1));
+            mesh.triangles.insert(mesh.triangles.end(), {a, c, b});
+            mesh.triangles.insert(mesh.triangles.end(), {b, c, d});
+            const float average_height = 0.25f * (mesh.positions[a].y + mesh.positions[b].y + mesh.positions[c].y +
+                                                   mesh.positions[d].y);
+            const std::uint8_t material = average_height > 0.f ? kHighMaterial : kLowMaterial;
+            mesh.triangle_ids.push_back(material);
+            mesh.triangle_ids.push_back(material);
+        }
+    }
+}
+
+// What a ray against positions/triangles finds, with no BVH: every triangle
+// checked in turn, the closest fraction kept. The same one-sided
+// (backface-culled) test b3RayCastMesh uses (box3d's simd.c,
+// b3IntersectRayTriangle): a ray only hits a triangle's own (CCW, outward)
+// side.
+struct BruteForceHit {
+    bool hit = false;
+    float fraction = 0.f;
+    int triangle = -1;
+};
+
+BruteForceHit brute_force_ray_cast(const std::vector<Vec3>& positions, const std::vector<std::uint32_t>& triangles,
+                                    Vec3 origin, Vec3 direction) {
+    BruteForceHit best;
+    best.fraction = 1.f;
+    const std::size_t triangle_count = triangles.size() / 3;
+    for (std::size_t t = 0; t < triangle_count; ++t) {
+        const Vec3& v0 = positions[triangles[t * 3 + 0]];
+        const Vec3& v1 = positions[triangles[t * 3 + 1]];
+        const Vec3& v2 = positions[triangles[t * 3 + 2]];
+        const Vec3 edge1 = vsub(v1, v0);
+        const Vec3 edge2 = vsub(v2, v0);
+        const Vec3 normal = vcross(edge1, edge2);
+        const float denom = vdot(normal, direction);
+        if (denom >= 0.f) {
+            continue;  // The back face, or parallel: b3RayCastMesh never hits this side.
+        }
+        const float lambda = vdot(normal, vsub(v0, origin)) / denom;
+        if (lambda <= 0.f || lambda >= best.fraction) {
+            continue;
+        }
+        const Vec3 point{origin.x + lambda * direction.x, origin.y + lambda * direction.y,
+                          origin.z + lambda * direction.z};
+        if (vdot(vcross(edge1, vsub(point, v0)), normal) < 0.f) {
+            continue;
+        }
+        if (vdot(vcross(vsub(v2, v1), vsub(point, v1)), normal) < 0.f) {
+            continue;
+        }
+        if (vdot(vcross(vsub(v0, v2), vsub(point, v2)), normal) < 0.f) {
+            continue;
+        }
+        best.hit = true;
+        best.fraction = lambda;
+        best.triangle = static_cast<int>(t);
+    }
+    return best;
+}
+
+// A direction of unit length, from random: never the zero vector (its
+// magnitude is re-rolled until it is well away from zero).
+Vec3 random_direction(std::mt19937_64& random) {
+    std::uniform_real_distribution<float> unit(-1.f, 1.f);
+    Vec3 v{};
+    float length_sq = 0.f;
+    do {
+        v = Vec3{unit(random), unit(random), unit(random)};
+        length_sq = vdot(v, v);
+    } while (length_sq < 1e-6f);
+    const float length = std::sqrt(length_sq);
+    return Vec3{v.x / length, v.y / length, v.z / length};
+}
+
+}  // namespace
+
+TEST_CASE("P39 b3RayCastMesh on the SAH and median-split BVHs matches brute-force ray-triangle", "[physics]") {
+    SECTION("a noisy sphere, the default SAH split, as an anchored Custom's shape builds") {
+        std::vector<Vec3> positions;
+        std::vector<std::uint32_t> triangles;
+        build_noisy_sphere(positions, triangles);
+        REQUIRE(triangles.size() / 3 >= 2000);
+
+        // Guaranteed hits: a ray from 30 studs out (well past the sphere's
+        // radius, up to about 11.5) toward within 3 studs of the center
+        // must cross the surface. Guaranteed misses: a ray from the same
+        // shell to a point at most 8 studs away from where it started never
+        // comes within 30 - 8*sqrt(3) (about 16) studs of the center.
+        std::mt19937_64 random(4242);
+        std::uniform_real_distribution<float> near_center(-3.f, 3.f);
+        std::uniform_real_distribution<float> small_offset(-8.f, 8.f);
+        constexpr int kHitRays = 220;
+        constexpr int kMissRays = 80;
+        std::vector<Vec3> origins;
+        std::vector<Vec3> directions;
+        for (int i = 0; i < kHitRays; ++i) {
+            const Vec3 dir = random_direction(random);
+            const Vec3 origin{dir.x * 30.f, dir.y * 30.f, dir.z * 30.f};
+            const Vec3 target{near_center(random), near_center(random), near_center(random)};
+            origins.push_back(origin);
+            directions.push_back(vsub(target, origin));
+        }
+        for (int i = 0; i < kMissRays; ++i) {
+            const Vec3 dir = random_direction(random);
+            const Vec3 origin{dir.x * 30.f, dir.y * 30.f, dir.z * 30.f};
+            const Vec3 offset{small_offset(random), small_offset(random), small_offset(random)};
+            origins.push_back(origin);
+            directions.push_back(offset);
+        }
+
+        const std::vector<engine_core::PhysicsWorld::MeshRayCastHit> results =
+            engine_core::PhysicsWorld::ray_cast_mesh_for_test(positions, triangles, false, origins, directions);
+        REQUIRE(results.size() == origins.size());
+
+        int hits = 0;
+        int misses = 0;
+        for (std::size_t i = 0; i < origins.size(); ++i) {
+            const BruteForceHit expected = brute_force_ray_cast(positions, triangles, origins[i], directions[i]);
+            INFO("ray " << i << ", expected hit " << expected.hit << ", fraction " << expected.fraction);
+            REQUIRE(results[i].hit == expected.hit);
+            if (expected.hit) {
+                REQUIRE(near(results[i].fraction, expected.fraction, 1e-3f));
+                ++hits;
+            } else {
+                ++misses;
+            }
+        }
+        REQUIRE(hits == kHitRays);
+        REQUIRE(misses == kMissRays);
+    }
+
+    SECTION("a dense terrain chunk, through build_terrain_collider's median split") {
+        engine_core::terrain::ChunkMesh mesh;
+        build_terrain_chunk(mesh);
+        REQUIRE(mesh.triangles.size() / 3 >= 2000);
+
+        // Guaranteed hits: straight down, from well above, at an x and z
+        // safely inside the grid (the grid spans 0 to 48). Guaranteed
+        // misses: the same, at an x safely outside it.
+        std::mt19937_64 random(99);
+        std::uniform_real_distribution<float> inside(2.f, 46.f);
+        std::uniform_real_distribution<float> outside_x(-20.f, -5.f);
+        std::uniform_real_distribution<float> any_z(-20.f, 68.f);
+        constexpr int kHitRays = 220;
+        constexpr int kMissRays = 80;
+        std::vector<Vec3> origins;
+        std::vector<Vec3> directions;
+        for (int i = 0; i < kHitRays; ++i) {
+            origins.push_back(Vec3{inside(random), 60.f, inside(random)});
+            directions.push_back(Vec3{0.f, -120.f, 0.f});
+        }
+        for (int i = 0; i < kMissRays; ++i) {
+            origins.push_back(Vec3{outside_x(random), 60.f, any_z(random)});
+            directions.push_back(Vec3{0.f, -120.f, 0.f});
+        }
+
+        const std::vector<engine_core::PhysicsWorld::MeshRayCastHit> results =
+            engine_core::PhysicsWorld::ray_cast_terrain_collider_for_test(mesh, origins, directions);
+        REQUIRE(results.size() == origins.size());
+
+        int hits = 0;
+        int misses = 0;
+        for (std::size_t i = 0; i < origins.size(); ++i) {
+            const BruteForceHit expected = brute_force_ray_cast(mesh.positions, mesh.triangles, origins[i], directions[i]);
+            INFO("ray " << i << ", expected hit " << expected.hit << ", fraction " << expected.fraction);
+            REQUIRE(results[i].hit == expected.hit);
+            if (expected.hit) {
+                REQUIRE(near(results[i].fraction, expected.fraction, 1e-3f));
+                REQUIRE(expected.triangle >= 0);
+                REQUIRE(results[i].material ==
+                        static_cast<int>(mesh.triangle_ids[static_cast<std::size_t>(expected.triangle)]));
+                ++hits;
+            } else {
+                ++misses;
+            }
+        }
+        REQUIRE(hits == kHitRays);
+        REQUIRE(misses == kMissRays);
+    }
 }

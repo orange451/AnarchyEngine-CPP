@@ -38,8 +38,9 @@ std::uint8_t to_u8(double value) { return to_u8(static_cast<float>(value)); }
 
 }  // namespace
 
-TerrainWorld::TerrainWorld(terrain::TerrainMesher::BuildCollider build, unsigned threads)
-    : mesher_(std::move(build), threads) {}
+TerrainWorld::TerrainWorld(terrain::TerrainMesher::BuildCollider build, unsigned threads,
+                           terrain::TerrainMesher::BuildNode build_node)
+    : mesher_(std::move(build), threads, std::move(build_node)) {}
 
 void TerrainWorld::accept_result(const terrain::MeshResult& result) {
     // SimulationThread (called from update(), which owns terrains_).
@@ -59,6 +60,15 @@ void TerrainWorld::accept_result(const terrain::MeshResult& result) {
         // Workspace can never match the value its chunk holds now, even if
         // both happened to be the first job ever queued for that coordinate
         // in their respective records.
+        return;
+    }
+    if (result.failed) {
+        // The job threw: the chunk keeps its mesh and collider, and its
+        // LOD ancestors stop waiting on it.
+        record.residency_jobs.erase(result.coord);
+        if (record.tree != nullptr) {
+            record.tree->chunk_failed(result.coord);
+        }
         return;
     }
     ++meshed_count_;
@@ -271,7 +281,12 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
     for (const terrain::NodeResult& result : node_results) {
         const auto found = terrains_.find(static_cast<InstanceId>(result.terrain));
         if (found != terrains_.end() && found->second.tree != nullptr) {
-            found->second.tree->node_built(result);   // the tree drops one from an older stay or revision
+            // The tree drops one from an older stay or revision.
+            if (result.failed) {
+                found->second.tree->node_failed(result);
+            } else {
+                found->second.tree->node_built(result);
+            }
         }
     }
 

@@ -481,7 +481,44 @@ TEST_CASE("TM11 a node job that throws is dropped and counted", "[terrain]") {
     std::vector<MeshResult> chunks;
     std::vector<NodeResult> nodes;
     mesher.collect(chunks, nodes);
+    // The failure is reported through collect, so the caller stops waiting on it.
+    REQUIRE(chunks.empty());
+    REQUIRE(nodes.size() == 1u);
+    REQUIRE(nodes[0].failed);
+    REQUIRE(nodes[0].terrain == 1u);
+    REQUIRE(nodes[0].revision == 1u);
+    REQUIRE((nodes[0].key == input.key));
+    REQUIRE(nodes[0].result.mesh == nullptr);
+    REQUIRE(mesher.failure_count() == 1u);
+}
+
+TEST_CASE("TM12 a chunk job that throws comes back through collect(chunks, nodes) flagged failed", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(5.f, 5.f, 5.f, 4.f), 2));
+    TerrainMesher mesher([](const ChunkMesh& mesh) -> std::shared_ptr<void> {
+        if (mesh.triangles.empty()) {
+            return nullptr;
+        }
+        throw std::runtime_error("TM12: a deliberately broken collider build");
+    });
+    mesher.queue(3, 4, mesh_input(volume, ChunkCoord{0, 0, 0}), 0.f);
+    mesher.queue(3, 5, mesh_input(volume, ChunkCoord{5, 5, 5}), 0.f);   // empty: succeeds
+    mesher.wait_idle();
+    std::vector<MeshResult> chunks;
+    std::vector<NodeResult> nodes;
+    mesher.collect(chunks, nodes);
     REQUIRE(nodes.empty());
+    REQUIRE(chunks.size() == 2u);
+    for (const MeshResult& result : chunks) {
+        REQUIRE(result.terrain == 3u);
+        const bool broken = result.coord == ChunkCoord{0, 0, 0};
+        REQUIRE(result.failed == broken);
+        REQUIRE(result.revision == (broken ? 4u : 5u));
+        if (broken) {
+            REQUIRE(result.mesh.render == nullptr);
+            REQUIRE(result.collider == nullptr);
+        }
+    }
     REQUIRE(mesher.failure_count() == 1u);
 }
 

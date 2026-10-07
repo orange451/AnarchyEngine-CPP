@@ -35,7 +35,14 @@ struct TerrainNodeView {
     // (built or not yet built). Selection descends only when every child in
     // the mask is in the published set. Always 0 at level 0.
     std::uint8_t child_mask = 0;
-    std::shared_ptr<const anarchy::amesh::Data> mesh;   // unpacked for upload; level 0 = the chunk mesh
+    // Exactly one of these is set (R12). Level 0: mesh is the chunk mesh
+    // and compact is null. Levels >= 1: compact is the node's quantized
+    // mesh, shared with LodTree (never copied), and mesh is null, so nothing
+    // holds a level >= 1 node unpacked in RAM. The renderer unpacks compact
+    // (terrain::unpack) when it uploads the node (Task 6) and lets the
+    // unpacked copy go once the GPU has it.
+    std::shared_ptr<const anarchy::amesh::Data> mesh;
+    std::shared_ptr<const terrain::CompactMesh> compact;
 };
 
 }  // namespace engine_core
@@ -81,9 +88,23 @@ public:
     // coord's job landed with no triangles: its level-0 node no longer
     // exists; ancestors left with no children are removed, the rest marked stale.
     void chunk_removed(ChunkCoord coord);
+    // coord's job failed (TerrainMesher reported it: MeshResult::failed).
+    // The chunk keeps the mesh it had, if any, and stops blocking its
+    // parent, which builds from that old mesh (or without the chunk when
+    // none is resident). A residency re-mesh is not asked for again until
+    // the chunk is next queued, so a chunk that always fails does not retry
+    // every update. A chunk that never had surface is removed as
+    // chunk_removed would.
+    void chunk_failed(ChunkCoord coord);
     // A node job finished. Ignored unless the node still exists and the
     // result is newer than the one it has (results may arrive out of order).
+    // A level >= 1 result with no triangles removes the node (only nodes
+    // with surface exist), and each ancestor left with no children with it.
     void node_built(const NodeResult& result);
+    // A node job failed (NodeResult::failed). If it was the node's latest
+    // queued build, the node may be queued again once kRebuildIntervalMs
+    // has passed since that build was queued.
+    void node_failed(const NodeResult& result);
 
     // Levels 0-1 against camera_chunk (null: no camera, everything resident).
     // Appends to out_drop_chunks the chunk meshes it dropped (the caller
@@ -102,8 +123,8 @@ public:
     // camera_chunk first within a level. Marks each queued.
     void next_builds(double now_ms, const ChunkCoord* camera_chunk, std::vector<NodeBuildRequest>& out);
 
-    // Every resident node with a mesh. Levels >= 1 are unpacked here, and
-    // the unpacked mesh is cached until the node's mesh changes.
+    // Every resident node with a mesh: level 0 with its chunk mesh, levels
+    // >= 1 with their shared compact mesh (R12: nothing is unpacked here).
     std::vector<TerrainNodeView> nodes_for_view();
     // True once since anything nodes_for_view reports changed.
     bool take_changed();
@@ -119,8 +140,10 @@ public:
         // Level 0 only.
         std::shared_ptr<const anarchy::amesh::Data> chunk_mesh;   // resident chunk mesh, or null
         bool in_flight = false;                                    // a chunk job is queued
+        bool failed = false;   // the last job failed: not asked for again for residency until queued
         // Every level. Level 0: the last result had triangles. Level >= 1:
-        // the last build's result had triangles (meaningless until built).
+        // the last build's result had triangles (meaningless until built;
+        // a build without triangles removes the node, so once built it is true).
         bool has_surface = false;
         std::uint64_t mesh_revision = 0;   // TerrainNodeView::revision of the current mesh
         Vec3 bounds_min{}, bounds_max{};
@@ -132,9 +155,8 @@ public:
         double last_build_ms = -std::numeric_limits<double>::infinity();
         bool built = false;
         bool resident = false;   // compact holds the mesh
-        CompactMesh compact;
+        std::shared_ptr<const CompactMesh> compact;   // shared with each TerrainNodeView of this build
         float error = 0.f;
-        std::shared_ptr<const anarchy::amesh::Data> unpacked;   // cache of unpack(compact)
         bool stale() const { return built_revision != revision; }
     };
     const std::unordered_map<NodeKey, Node, NodeKeyHash>& nodes() const { return nodes_; }
@@ -158,9 +180,10 @@ private:
     bool parent_covers(const NodeKey& key) const;
     // The parent (if any) is stale, or there is none: key's mesh is wanted.
     bool parent_wants(const NodeKey& key) const;
-    // node's unpacked mesh (level >= 1, resident), made on first use and
-    // kept until the node's mesh changes or is dropped.
-    std::shared_ptr<const anarchy::amesh::Data> unpacked_mesh(Node& node);
+    // Erases key and then each ancestor left with no children. The first
+    // ancestor that keeps children is marked stale when had_surface (the
+    // erased node's mesh was part of it).
+    void prune_up(const NodeKey& key, bool had_surface);
 
     float voxel_size_;
     std::uint64_t own_revisions_ = 0;

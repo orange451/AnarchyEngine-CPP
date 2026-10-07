@@ -160,7 +160,9 @@ bool LodTree::surfaced(const NodeKey& key, const Node& node) const {
 
 bool LodTree::child_ready(const NodeKey& key, const Node& node) const {
     if (key.level == 0) {
-        return !node.in_flight && (!node.has_surface || node.chunk_mesh != nullptr);
+        // A failed chunk with no resident mesh stops blocking: the parent
+        // builds without it.
+        return !node.in_flight && (!node.has_surface || node.chunk_mesh != nullptr || node.failed);
     }
     return !node.stale() && (!node.has_surface || node.resident);
 }
@@ -189,6 +191,7 @@ void LodTree::chunk_queued(ChunkCoord coord, bool edited) {
         ++level0_count_;
     }
     it->second.in_flight = true;   // the reference survives the rehashes below
+    it->second.failed = false;
     refresh_top();
     ensure_ancestors(coord, edited);
 }
@@ -208,6 +211,7 @@ void LodTree::chunk_meshed(ChunkCoord coord, std::shared_ptr<const anarchy::ames
     Node& node = it->second;
     const bool was_surface = node.has_surface;
     node.in_flight = false;
+    node.failed = false;
     node.has_surface = true;
     covering_bounds(key, voxel_size_, *mesh, node.bounds_min, node.bounds_max);
     node.chunk_mesh = std::move(mesh);
@@ -228,13 +232,18 @@ void LodTree::chunk_removed(ChunkCoord coord) {
     if (found->second.chunk_mesh != nullptr) {
         changed_ = true;
     }
-    nodes_.erase(found);
     --level0_count_;
     extent_dirty_ = true;
-    // Ancestors left with no children go; the rest change if this chunk had surface.
+    prune_up(key, had_surface);
+    refresh_top();
+}
+
+void LodTree::prune_up(const NodeKey& key, bool had_surface) {
+    nodes_.erase(key);
+    // Ancestors left with no children go; the rest change if key had surface.
     NodeKey up = key;
     bool pruning = true;
-    for (int level = 1; level <= top_; ++level) {
+    for (int level = key.level + 1; level <= top_; ++level) {
         up = parent_of(up);
         const auto parent = nodes_.find(up);
         if (parent == nodes_.end()) {
@@ -253,7 +262,32 @@ void LodTree::chunk_removed(ChunkCoord coord) {
         }
         mark_stale(parent->second);
     }
-    refresh_top();
+}
+
+void LodTree::chunk_failed(ChunkCoord coord) {
+    residency_dirty_ = true;
+    Node* node = find_mutable(chunk_key(coord));
+    if (node == nullptr) {
+        return;
+    }
+    if (!node->has_surface) {
+        chunk_removed(coord);   // no old mesh to keep: as if it came back empty
+        return;
+    }
+    node->in_flight = false;
+    node->failed = true;   // keeps chunk_mesh (null if it was dropped)
+}
+
+void LodTree::node_failed(const NodeResult& result) {
+    if (result.key.level == 0) {
+        return;
+    }
+    Node* node = find_mutable(result.key);
+    if (node == nullptr || result.revision < node->min_revision || node->queued_revision != result.revision) {
+        return;   // gone, from a dropped tree, or a newer build was queued since
+    }
+    // last_build_ms stays: next_builds offers it again after the debounce window.
+    node->queued_revision = 0;
 }
 
 void LodTree::node_built(const NodeResult& result) {
@@ -265,25 +299,23 @@ void LodTree::node_built(const NodeResult& result) {
         return;   // the node is gone, or this is older than what it has (or from a dropped tree)
     }
     residency_dirty_ = true;
+    changed_ = true;
+    const auto& mesh = result.result.mesh;
+    if (mesh == nullptr || mesh->indices.empty()) {
+        // No surface: only nodes with surface exist, so it goes, with any
+        // ancestor it leaves childless; the rest rebuild without it.
+        prune_up(result.key, node->built && node->has_surface);
+        return;
+    }
     node->built_revision = result.revision;
     node->built = true;
-    const auto& mesh = result.result.mesh;
-    if (mesh != nullptr && !mesh->indices.empty()) {
-        covering_bounds(result.key, voxel_size_, *mesh, node->bounds_min, node->bounds_max);
-        node->compact = pack(*mesh, node->bounds_min, node->bounds_max, result.result.surface_index_count);
-        node->has_surface = true;
-        node->resident = true;
-        node->error = result.result.error;
-    } else {
-        node->compact = CompactMesh{};
-        node->has_surface = false;
-        node->resident = false;
-        node->error = 0.f;
-        node_bounds(result.key, voxel_size_, node->bounds_min, node->bounds_max);
-    }
-    node->unpacked.reset();
+    covering_bounds(result.key, voxel_size_, *mesh, node->bounds_min, node->bounds_max);
+    node->compact = std::make_shared<const CompactMesh>(
+        pack(*mesh, node->bounds_min, node->bounds_max, result.result.surface_index_count));
+    node->has_surface = true;
+    node->resident = true;
+    node->error = result.result.error;
     node->mesh_revision = next_revision();
-    changed_ = true;
 }
 
 void LodTree::update_residency(const ChunkCoord* camera_chunk, std::vector<ChunkCoord>& out_drop_chunks,
@@ -304,8 +336,7 @@ void LodTree::update_residency(const ChunkCoord* camera_chunk, std::vector<Chunk
         const bool wanted = camera_chunk == nullptr || distance <= kNearChunks || parent_wants(key);
         if (node.resident) {
             if (camera_chunk != nullptr && distance > kFarChunks && !wanted && parent_covers(key)) {
-                node.compact = CompactMesh{};
-                node.unpacked.reset();
+                node.compact.reset();
                 node.resident = false;
                 changed_ = true;
             }
@@ -327,7 +358,7 @@ void LodTree::update_residency(const ChunkCoord* camera_chunk, std::vector<Chunk
                 changed_ = true;
                 out_drop_chunks.push_back(coord);
             }
-        } else if (wanted && !node.in_flight) {
+        } else if (wanted && !node.in_flight && !node.failed) {
             node.in_flight = true;
             out_need_chunks.push_back(coord);
         }
@@ -339,13 +370,6 @@ void LodTree::update_residency(const ChunkCoord* camera_chunk, std::vector<Chunk
     if (camera_chunk != nullptr) {
         residency_camera_ = *camera_chunk;
     }
-}
-
-std::shared_ptr<const anarchy::amesh::Data> LodTree::unpacked_mesh(Node& node) {
-    if (node.unpacked == nullptr) {
-        node.unpacked = std::make_shared<const anarchy::amesh::Data>(unpack(node.compact));
-    }
-    return node.unpacked;
 }
 
 void LodTree::next_builds(double now_ms, const ChunkCoord* camera_chunk, std::vector<NodeBuildRequest>& out) {
@@ -388,13 +412,21 @@ void LodTree::next_builds(double now_ms, const ChunkCoord* camera_chunk, std::ve
                 continue;
             }
             if (child_key.level == 0) {
+                if (child->chunk_mesh == nullptr) {
+                    continue;   // its job failed with no mesh resident: build without it
+                }
                 // A missing child_surface_index_counts entry means the whole
                 // mesh: right for a chunk mesh, which has no skirts.
                 request.input.children.push_back(child->chunk_mesh);
             } else {
-                request.input.children.push_back(unpacked_mesh(*child));
+                if (child->compact == nullptr) {
+                    continue;
+                }
+                // Unpacked for this job only (R12): the job owns it and it
+                // goes when the build is done.
+                request.input.children.push_back(std::make_shared<const anarchy::amesh::Data>(unpack(*child->compact)));
                 request.input.child_errors.push_back(child->error);
-                request.input.child_surface_index_counts.push_back(child->compact.surface_index_count);
+                request.input.child_surface_index_counts.push_back(child->compact->surface_index_count);
             }
         }
         node.queued_revision = node.revision;
@@ -418,10 +450,10 @@ std::vector<TerrainNodeView> LodTree::nodes_for_view() {
             }
             view.mesh = node.chunk_mesh;
         } else {
-            if (!node.resident || !node.has_surface) {
+            if (!node.resident || !node.has_surface || node.compact == nullptr) {
                 continue;
             }
-            view.mesh = unpacked_mesh(node);
+            view.compact = node.compact;
             view.error = node.error;
             const std::array<NodeKey, 8> children = children_of(key);
             for (std::size_t i = 0; i < children.size(); ++i) {

@@ -103,6 +103,7 @@ void TerrainMesher::collect(std::vector<MeshResult>& out) {
     assert(!node_job_queued_ && "collect(chunks only) used after queue_node(): call collect(chunks, nodes) instead");
     out.clear();
     out.swap(results_);
+    out.erase(std::remove_if(out.begin(), out.end(), [](const MeshResult& r) { return r.failed; }), out.end());
 }
 
 void TerrainMesher::collect(std::vector<MeshResult>& chunks, std::vector<NodeResult>& nodes) {
@@ -200,9 +201,9 @@ void TerrainMesher::worker_loop() {
         } catch (const std::exception& error) {
             // A throw must never cross back into worker_loop's caller (an
             // uncaught exception on a non-main thread is std::terminate): a
-            // bad job is dropped instead. It produces no result -- the chunk
-            // (or node) keeps whatever it had until a later edit queues a
-            // fresh job for the same key -- but running_ is still
+            // bad job comes back as a result flagged failed, with an empty
+            // mesh (or LodResult), so the caller can stop waiting on it; the
+            // chunk (or node) keeps whatever it had. running_ is still
             // decremented below, so the mesher never looks permanently busy.
             // The message is kept (not just discarded) so the owning thread
             // can report it once it notices failure_count_ rise.
@@ -215,15 +216,19 @@ void TerrainMesher::worker_loop() {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             --running_;
-            if (ok) {
-                if (job.kind == JobKind::Chunk) {
-                    results_.push_back(MeshResult{job.terrain, job.coord, job.revision, std::move(mesh), std::move(collider)});
-                } else {
-                    node_results_.push_back(NodeResult{job.terrain, job.node, job.revision, std::move(node_result)});
-                }
-            } else {
+            if (!ok) {
+                mesh = ChunkMesh{};
+                collider.reset();
+                node_result = LodResult{};
+                node_result.key = job.node;
                 ++failure_count_;
                 last_failure_ = std::move(failure_message);
+            }
+            if (job.kind == JobKind::Chunk) {
+                results_.push_back(
+                    MeshResult{job.terrain, job.coord, job.revision, std::move(mesh), std::move(collider), !ok});
+            } else {
+                node_results_.push_back(NodeResult{job.terrain, job.node, job.revision, std::move(node_result), !ok});
             }
         }
         cv_.notify_all();   // may have just made the mesher idle

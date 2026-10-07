@@ -27,6 +27,9 @@ struct MeshResult {
     std::uint64_t revision = 0;           // the caller's revision for this chunk when queued
     ChunkMesh mesh;
     std::shared_ptr<void> collider;       // what build_collider made, or null
+    // The job threw: mesh and collider are empty. The chunk should keep the
+    // mesh it had; the job is over, so nothing should wait on it.
+    bool failed = false;
 };
 
 // What a worker hands back for one LOD node build (spec decision 5: the
@@ -37,6 +40,9 @@ struct NodeResult {
     NodeKey key;
     std::uint64_t revision = 0;  // the caller's revision for this node when queued
     LodResult result;
+    // The job threw: result is empty (key set, no mesh). The node should
+    // keep what it had and may be queued again.
+    bool failed = false;
 };
 
 // Meshes chunks on worker threads (hardware threads less one, at least one,
@@ -69,17 +75,20 @@ public:
     // was ever queued (queue_node() was never called on this instance): once
     // node jobs are in play, their results must not be silently dropped, so
     // callers that mix job kinds must use collect(chunks, nodes) instead.
+    // Failed jobs are left out (failure_count() still counts them).
     void collect(std::vector<MeshResult>& out);
-    // Every chunk and node result finished since the last call.
+    // Every chunk and node result finished since the last call, failed jobs
+    // included (flagged failed, with an empty mesh or LodResult), so a
+    // caller tracking jobs in flight can stop waiting on them.
     void collect(std::vector<MeshResult>& chunks, std::vector<NodeResult>& nodes);
     // No job waiting or running.
     bool idle() const;
     // For tests: blocks until idle.
     void wait_idle();
 
-    // A job whose surface_nets/collider build throws is dropped: its chunk
-    // keeps whatever mesh it had until a later edit queues a fresh job for
-    // the same coordinate (see worker_loop). failure_count/last_failure let
+    // A job whose surface_nets/collider/node build throws comes back flagged
+    // failed (MeshResult::failed, NodeResult::failed) with nothing built: its
+    // chunk or node keeps whatever it had (see worker_loop). failure_count/last_failure let
     // the owning thread (TerrainWorld, from SimulationThread) notice a rise
     // and report it once, the way Engine::report_fault already does for
     // other faults -- worker threads here never log directly.

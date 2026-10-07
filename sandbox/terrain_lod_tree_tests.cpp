@@ -20,10 +20,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
@@ -240,8 +242,16 @@ TEST_CASE("LT1 a settled 8x1x8-chunk island has nodes at every level up to the t
     REQUIRE(count_level(nodes, 4) == 0);
     REQUIRE(find_view(nodes, NodeKey{3, 0, 0, 0}) != nullptr);
     for (const TerrainNodeView& node : nodes) {
-        REQUIRE(node.mesh != nullptr);
-        REQUIRE_FALSE(node.mesh->indices.empty());
+        // R12: level 0 publishes its chunk mesh, levels >= 1 only their compact mesh.
+        if (node.key.level == 0) {
+            REQUIRE(node.mesh != nullptr);
+            REQUIRE(node.compact == nullptr);
+            REQUIRE_FALSE(node.mesh->indices.empty());
+        } else {
+            REQUIRE(node.mesh == nullptr);
+            REQUIRE(node.compact != nullptr);
+            REQUIRE_FALSE(unpack(*node.compact).indices.empty());
+        }
         Vec3 min, max;
         node_bounds(node.key, t.volume().voxel_size(), min, max);
         REQUIRE((node.bounds_min.x <= min.x && node.bounds_min.y <= min.y && node.bounds_min.z <= min.z));
@@ -424,14 +434,31 @@ TEST_CASE("LT6 levels >= 2 of a built island stay within the compact RAM budget"
     for (const auto& [key, node] : tree->nodes()) {
         if (key.level < 2) continue;
         REQUIRE(node.resident);
-        const CompactMesh& mesh = node.compact;
+        REQUIRE(node.compact != nullptr);
+        const CompactMesh& mesh = *node.compact;
         const std::size_t v = mesh.positions.size() / 3;
         const std::size_t tris = (mesh.indices.size() + mesh.indices32.size()) / 3;
-        bytes += mesh.bytes();
+        // bytes() is what the vectors really hold, not a formula of its own.
+        const std::size_t held = mesh.positions.size() * sizeof(std::uint16_t) + mesh.normals.size() +
+                                 mesh.ids.size() + mesh.weights.size() +
+                                 mesh.indices.size() * sizeof(std::uint16_t) +
+                                 mesh.indices32.size() * sizeof(std::uint32_t);
+        REQUIRE(mesh.bytes() == held);
+        // The per-vertex/per-triangle layout the budget assumes (R1).
+        REQUIRE(mesh.normals.size() == 2 * v);
+        REQUIRE(mesh.ids.size() == 4 * v);
+        REQUIRE(mesh.weights.size() == 4 * v);
+        REQUIRE((mesh.indices.empty() || mesh.indices32.empty()));
+        bytes += held;
         vertices += v;
         triangles += tris;
-        budget += 16 * v + (mesh.indices32.empty() ? 6 : 12) * tris;   // R1
         ++nodes;
+    }
+    budget = 16 * vertices;   // R1, from the counts alone
+    for (const auto& [key, node] : tree->nodes()) {
+        if (key.level < 2) continue;
+        const std::size_t tris = (node.compact->indices.size() + node.compact->indices32.size()) / 3;
+        budget += (node.compact->indices32.empty() ? 6 : 12) * tris;
     }
     INFO("levels >= 2: " << nodes << " nodes, " << vertices << " vertices, " << triangles << " triangles, " << bytes
                          << " bytes (budget " << budget << "); level 0: " << level0_triangles << " triangles");
@@ -441,6 +468,211 @@ TEST_CASE("LT6 levels >= 2 of a built island stay within the compact RAM budget"
     REQUIRE(nodes == 5u);
     REQUIRE(bytes > 0u);
     REQUIRE(bytes <= budget);
+
+    // R12: RAM each resident node >= 1 costs. Published views share the
+    // tree's compact mesh and hold nothing unpacked; before R12 each also
+    // kept its unpacked amesh::Data cached for as long as it was published.
+    const std::vector<TerrainNodeView>& published = *world.views()[0].nodes;
+    std::size_t resident = 0, compact_bytes = 0, unpacked_bytes = 0;
+    for (const auto& [key, node] : tree->nodes()) {
+        if (key.level < 1 || !node.resident) continue;
+        const TerrainNodeView* view = find_view(published, key);
+        REQUIRE(view != nullptr);
+        REQUIRE(view->mesh == nullptr);
+        REQUIRE(view->compact.get() == node.compact.get());   // shared, not copied
+        const anarchy::amesh::Data unpacked = unpack(*node.compact);
+        compact_bytes += node.compact->bytes();
+        unpacked_bytes += unpacked.vertices.size() * sizeof(anarchy::amesh::Vertex) +
+                          unpacked.indices.size() * sizeof(std::uint32_t);
+        ++resident;
+    }
+    REQUIRE(resident == 21u);
+    WARN("LT6 RAM, " << resident << " resident nodes >= 1: before R12 " << (compact_bytes + unpacked_bytes) / resident
+                     << " B/node (compact + unpacked cache), after " << compact_bytes / resident
+                     << " B/node (compact only); totals " << compact_bytes + unpacked_bytes << " -> " << compact_bytes);
     // The spec's estimate: levels 2 and up are a small fraction of full detail.
     REQUIRE(triangles * 4 <= level0_triangles);
+}
+
+TEST_CASE("LT7 a node build that fails is offered again and the node and its ancestors settle", "[terrain][lod]") {
+    SimRole role;
+    Game game;
+    Terrain& t = island_terrain(game, 4);   // top level 2
+    const NodeKey broken{1, 1, 0, 1};
+    std::atomic<int> calls{0};
+    TerrainWorld world({}, 0, [&](const LodInput& input) -> LodResult {
+        if (input.key == broken && calls.fetch_add(1) < 2) {
+            throw std::runtime_error("LT7: a deliberately broken node build");
+        }
+        return build_node(input);
+    });
+    double now = 0.0;
+    settle_lod(world, game, now);
+
+    REQUIRE(world.mesh_failures() == 2u);
+    REQUIRE(calls.load() == 3);   // two failures, then one build that took
+    const LodTree* tree = world.lod_tree(t.id());
+    REQUIRE(tree != nullptr);
+    for (const NodeKey& key : {broken, NodeKey{2, 0, 0, 0}}) {
+        INFO("level " << key.level);
+        const LodTree::Node* node = tree->find(key);
+        REQUIRE(node != nullptr);
+        REQUIRE(node->built);
+        REQUIRE_FALSE(node->stale());
+        REQUIRE(find_view(*world.views()[0].nodes, key) != nullptr);
+    }
+}
+
+TEST_CASE("LT8 a chunk job that fails keeps its old mesh and does not block its ancestors", "[terrain][lod]") {
+    SimRole role;
+    Game game;
+    Terrain& t = island_terrain(game, 4);
+    const float span = kChunkSize * t.volume().voxel_size();
+    std::atomic<bool> armed{false};
+    // Throws, once armed, for chunk (1, 0, 1)'s mesh only (found by its AABB's center).
+    TerrainWorld world([&](const ChunkMesh& mesh) -> std::shared_ptr<void> {
+        if (mesh.render == nullptr || mesh.render->indices.empty()) return nullptr;
+        const float cx = (mesh.render->bbox_min[0] + mesh.render->bbox_max[0]) * 0.5f;
+        const float cz = (mesh.render->bbox_min[2] + mesh.render->bbox_max[2]) * 0.5f;
+        if (armed.load() && std::floor(cx / span) == 1.f && std::floor(cz / span) == 1.f) {
+            throw std::runtime_error("LT8: a deliberately broken chunk build");
+        }
+        return std::make_shared<int>(1);
+    });
+    double now = 0.0;
+    settle_lod(world, game, now);
+    const ChunkCoord edited{1, 0, 1};
+    const auto chunk_revision = [&]() -> std::uint64_t {
+        for (const TerrainChunkView& chunk : *world.views()[0].chunks) {
+            if (chunk.coord == edited) return chunk.revision;
+        }
+        return 0;
+    };
+    const std::uint64_t before = chunk_revision();
+    REQUIRE(before != 0u);
+    REQUIRE(world.mesh_failures() == 0u);
+
+    // A bump on the surface inside the chunk; its job fails.
+    armed = true;
+    REQUIRE_FALSE(t.edit_volume([](VoxelVolume& v) {
+        const std::vector<float> distances(64, -1.f);
+        const std::vector<std::uint8_t> materials(64, 1);
+        return v.write(CellCoord{44, 17, 44}, CellCoord{47, 20, 47}, distances, materials);
+    }));
+    settle_lod(world, game, now);
+
+    REQUIRE(world.mesh_failures() >= 1u);
+    REQUIRE(chunk_revision() == before);   // the old mesh stays
+    REQUIRE(world.views()[0].chunks->size() == 16u);
+    const LodTree* tree = world.lod_tree(t.id());
+    REQUIRE(tree != nullptr);
+    REQUIRE_FALSE(tree->find(NodeKey{0, edited.x, edited.y, edited.z})->in_flight);
+    for (const NodeKey& key : ancestors_of(edited, world.views()[0].top_level)) {
+        INFO("level " << key.level);
+        const LodTree::Node* node = tree->find(key);
+        REQUIRE(node != nullptr);
+        REQUIRE(node->built);
+        REQUIRE_FALSE(node->stale());
+    }
+}
+
+TEST_CASE("LT9 a node whose build has no surface is removed, with ancestors it leaves childless", "[terrain][lod]") {
+    // Level-1 builds under (2, 0, 0, 0), and (1, 3, 0, 3), come back empty.
+    const auto empty = [](const NodeKey& key) {
+        return key.level == 1 && ((key.x < 2 && key.z < 2) || (key.x == 3 && key.z == 3));
+    };
+    TreeRig rig(1.f, fake_chunk_mesh, [&](const LodInput& input) {
+        if (empty(input.key)) {
+            LodResult result;
+            result.key = input.key;
+            return result;
+        }
+        return fake_build(input);
+    });
+    rig.edit(island_chunks(8));
+    rig.settle();
+    REQUIRE(rig.tree.top_level() == 3);
+
+    for (const auto& [key, node] : rig.tree.nodes()) {
+        INFO("level " << key.level << " (" << key.x << ", " << key.y << ", " << key.z << ")");
+        REQUIRE_FALSE(empty(key));
+        if (key.level > 0) {
+            // Only nodes with surface exist.
+            REQUIRE(node.built);
+            REQUIRE(node.has_surface);
+            REQUIRE_FALSE(node.stale());
+        }
+    }
+    REQUIRE(rig.tree.find(NodeKey{2, 0, 0, 0}) == nullptr);   // all four children went: so did it
+    const std::vector<TerrainNodeView> views = rig.tree.nodes_for_view();
+    const auto bits = [](std::uint8_t mask) {
+        int n = 0;
+        for (int i = 0; i < 8; ++i) n += (mask >> i) & 1;
+        return n;
+    };
+    const TerrainNodeView* kept = find_view(views, NodeKey{2, 1, 0, 1});
+    REQUIRE(kept != nullptr);
+    REQUIRE(bits(kept->child_mask) == 3);
+    const TerrainNodeView* top = find_view(views, NodeKey{3, 0, 0, 0});
+    REQUIRE(top != nullptr);
+    REQUIRE(bits(top->child_mask) == 3);
+}
+
+namespace {
+
+// Settles a tree over chunks and checks its roots: every node at
+// top_level, each chunk under exactly one of them, nothing above.
+void check_roots(const std::vector<ChunkCoord>& chunks, int expected_top, std::size_t expected_roots) {
+    TreeRig rig;
+    rig.edit(chunks);
+    rig.settle();
+    const int top = rig.tree.top_level();
+    REQUIRE(top == expected_top);
+    std::vector<NodeKey> roots;
+    for (const auto& [key, node] : rig.tree.nodes()) {
+        REQUIRE(key.level <= top);
+        if (key.level == top) {
+            roots.push_back(key);
+            if (top > 0) {
+                REQUIRE(node.built);
+                REQUIRE_FALSE(node.stale());
+            }
+        }
+    }
+    REQUIRE(roots.size() == expected_roots);
+    for (const ChunkCoord& chunk : chunks) {
+        INFO("chunk (" << chunk.x << ", " << chunk.y << ", " << chunk.z << ")");
+        const NodeKey root = node_of(chunk, top);
+        const auto covering = std::count_if(roots.begin(), roots.end(), [&](const NodeKey& r) { return r == root; });
+        REQUIRE(covering == 1);
+        // And the tree links the chunk up to that root.
+        NodeKey key{0, chunk.x, chunk.y, chunk.z};
+        for (int level = 1; level <= top; ++level) {
+            key = parent_of(key);
+            REQUIRE(rig.tree.find(key) != nullptr);
+        }
+        REQUIRE((key == root));
+    }
+    const std::vector<TerrainNodeView> views = rig.tree.nodes_for_view();
+    REQUIRE(static_cast<std::size_t>(count_level(views, top)) == expected_roots);
+}
+
+std::vector<ChunkCoord> box_chunks(ChunkCoord lo, ChunkCoord hi) {
+    std::vector<ChunkCoord> out;
+    for (int z = lo.z; z <= hi.z; ++z)
+        for (int y = lo.y; y <= hi.y; ++y)
+            for (int x = lo.x; x <= hi.x; ++x) out.push_back(ChunkCoord{x, y, z});
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("LT10 a Terrain straddling the origin has one root per side, each chunk under exactly one",
+          "[terrain][lod]") {
+    // x straddles at level 2 ((-1, 0)), y at level 0, z collapses to one node at level 1.
+    check_roots(box_chunks(ChunkCoord{-3, -1, 0}, ChunkCoord{2, 0, 1}), 2, 4u);
+    // Every axis straddles: 8 roots at level 1.
+    check_roots(box_chunks(ChunkCoord{-2, -2, -2}, ChunkCoord{1, 1, 1}), 1, 8u);
+    // No straddle: one root (the control).
+    check_roots(box_chunks(ChunkCoord{0, 0, 0}, ChunkCoord{3, 0, 3}), 2, 1u);
 }

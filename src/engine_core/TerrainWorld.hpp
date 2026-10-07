@@ -60,7 +60,9 @@ struct TerrainView {
 // lock: the Engine calls update once per tick, playing or stopped.
 class TerrainWorld {
 public:
-    explicit TerrainWorld(terrain::TerrainMesher::BuildCollider build = {}, unsigned threads = 0);
+    // build_node: TerrainMesher's node-build override (tests inject a failing one); empty builds normally.
+    explicit TerrainWorld(terrain::TerrainMesher::BuildCollider build = {}, unsigned threads = 0,
+                          terrain::TerrainMesher::BuildNode build_node = {});
 
     // Finds Terrains, queues their dirty chunks (all of them the first time a
     // Terrain is seen), collects finished meshes, rebuilds changed looks.
@@ -87,9 +89,10 @@ public:
         return found != terrains_.end() ? found->second.tree.get() : nullptr;
     }
 
-    // A mesh/collider build that threw: TerrainMesher's worker drops the job
-    // (its chunk keeps its old mesh) and keeps only a count and the latest
-    // message. The Engine reads these from SimulationThread each update() and
+    // A mesh/collider/node build that threw: its chunk keeps its old mesh and
+    // collider (a node, its old build, and it may be queued again), the LOD
+    // tree stops waiting on it, and TerrainMesher keeps a count and the
+    // latest message. The Engine reads these from SimulationThread each update() and
     // reports a rise once, the way it already does other faults.
     std::uint64_t mesh_failures() const { return mesher_.failure_count(); }
     std::string last_mesh_failure() const { return mesher_.last_failure(); }

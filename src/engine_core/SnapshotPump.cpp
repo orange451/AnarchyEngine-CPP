@@ -399,20 +399,22 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
                     }
                     const Material* material = ReferencedAs<Material>(game, *model, Model::kMaterialReference);
                     // Assigned in place, as above. Empty for no Material or no Texture.
-                    const auto texture_path = [&](std::size_t index, std::string& path) {
+                    const auto texture_path = [&](std::size_t index, std::string& path, bool& flip_y) {
                         const Texture* texture =
                             material != nullptr ? ReferencedAs<Texture>(game, *material, index) : nullptr;
                         if (texture != nullptr) {
                             path = texture->path();
+                            flip_y = texture->flip_y();
                         } else {
                             path.clear();
+                            flip_y = false;
                         }
                     };
-                    texture_path(Material::kDiffuseTextureReference, out.diffuse_texture);
-                    texture_path(Material::kNormalTextureReference, out.normal_texture);
-                    texture_path(Material::kRoughnessTextureReference, out.roughness_texture);
-                    texture_path(Material::kMetalnessTextureReference, out.metalness_texture);
-                    texture_path(Material::kEmissiveTextureReference, out.emissive_texture);
+                    texture_path(Material::kDiffuseTextureReference, out.diffuse_texture, out.diffuse_flip_y);
+                    texture_path(Material::kNormalTextureReference, out.normal_texture, out.normal_flip_y);
+                    texture_path(Material::kRoughnessTextureReference, out.roughness_texture, out.roughness_flip_y);
+                    texture_path(Material::kMetalnessTextureReference, out.metalness_texture, out.metalness_flip_y);
+                    texture_path(Material::kEmissiveTextureReference, out.emissive_texture, out.emissive_flip_y);
                     out.color = material != nullptr ? material->color() : ColorRgb{};
                     out.emissive = material != nullptr ? material->emissive() : Material::kDefaultEmissive;
                     out.metalness = unit(material != nullptr ? material->metalness() : Material::kDefaultMetalness);
@@ -466,23 +468,26 @@ void SnapshotPump::resolve_lighting(DataModel& game) {
     const auto* dynamic = dynamic_cast<const DynamicSky*>(first_sky);
     sky.present = skybox != nullptr;
     // Assigned in place, so an unchanged sky reuses last frame's strings.
-    const auto texture_path = [&](const LuaSlot& slot, std::string& path) {
+    const auto texture_path = [&](const LuaSlot& slot, std::string& path, bool& flip_y) {
         const auto* texture =
             slot.kind == LuaSlot::Kind::Instance ? dynamic_cast<const Texture*>(game.instance(slot.id)) : nullptr;
         if (texture != nullptr) {
             path = texture->path();
+            flip_y = texture->flip_y();
         } else {
             path.clear();
+            flip_y = false;
         }
     };
     if (skybox != nullptr) {
-        texture_path(skybox->image(), sky.image);
+        texture_path(skybox->image(), sky.image, sky.image_flip_y);
         sky.exposure = static_cast<float>(skybox->exposure());
         sky.light_scale = static_cast<float>(skybox->light_scale());
         sky.rotation = static_cast<float>(skybox->rotation());
         sky.tint = skybox->tint();
     } else {
         sky.image.clear();
+        sky.image_flip_y = false;
         sky.exposure = static_cast<float>(Skybox::kDefaultExposure);
         sky.light_scale = static_cast<float>(Skybox::kDefaultLightScale);
         sky.rotation = static_cast<float>(Skybox::kDefaultRotation);
@@ -499,8 +504,8 @@ void SnapshotPump::resolve_lighting(DataModel& game) {
         procedural.cloud_cover = static_cast<float>(dynamic->cloud_cover());
         procedural.cloud_density = static_cast<float>(dynamic->cloud_density());
         procedural.wind = dynamic->wind_direction();
-        texture_path(dynamic->sun_texture(), procedural.sun_texture);
-        texture_path(dynamic->moon_texture(), procedural.moon_texture);
+        texture_path(dynamic->sun_texture(), procedural.sun_texture, procedural.sun_flip_y);
+        texture_path(dynamic->moon_texture(), procedural.moon_texture, procedural.moon_flip_y);
         procedural.sun_size = static_cast<float>(dynamic->sun_size());
         procedural.moon_size = static_cast<float>(dynamic->moon_size());
         procedural.reflection_quality = static_cast<int>(dynamic->reflection_quality());
@@ -516,6 +521,8 @@ void SnapshotPump::resolve_lighting(DataModel& game) {
         procedural.wind = defaults.wind;
         procedural.sun_texture.clear();
         procedural.moon_texture.clear();
+        procedural.sun_flip_y = false;
+        procedural.moon_flip_y = false;
         procedural.sun_size = defaults.sun_size;
         procedural.moon_size = defaults.moon_size;
         procedural.reflection_quality = defaults.reflection_quality;

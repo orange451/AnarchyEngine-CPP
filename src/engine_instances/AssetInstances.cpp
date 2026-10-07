@@ -59,6 +59,23 @@ std::optional<std::string> FileAsset::set_path(std::string path) {
 }
 
 const char* Texture::class_name() const { return "Texture"; }
+
+void Texture::set_flip_y(bool flip_y) {
+    if (!on_gameplay_thread()) {
+        contract_fail("asset setters run on SimulationThread");
+    }
+    if (flip_y == flip_y_) {
+        return;
+    }
+    flip_y_ = flip_y;
+    LuaSlot before;
+    before.kind = LuaSlot::Kind::Bool;
+    before.flag = !flip_y;
+    LuaSlot after;
+    after.kind = LuaSlot::Kind::Bool;
+    after.flag = flip_y;
+    note_property_change("FlipY", before, after);
+}
 const char* Mesh::class_name() const { return "Mesh"; }
 
 std::optional<std::string> Mesh::read_file(const std::filesystem::path& root, const std::string& path,
@@ -582,7 +599,26 @@ bool read_path(DataModel&, DataModel& object, LuaSlot& out) {
     return true;
 }
 
-bool read_time_length(DataModel& game, DataModel& object, LuaSlot& out) {
+bool read_flip_y(DataModel&, DataModel& object, LuaSlot& out) {
+    const auto* texture = dynamic_cast<const Texture*>(&object);
+    if (texture == nullptr) {
+        return false;
+    }
+    out.kind = LuaSlot::Kind::Bool;
+    out.flag = texture->flip_y();
+    return true;
+}
+
+bool write_flip_y(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* texture = dynamic_cast<Texture*>(&object);
+    if (texture == nullptr) {
+        return false;
+    }
+    texture->set_flip_y(in.flag);
+    return true;
+}
+
+bool read_time_length(DataModel& game,DataModel& object, LuaSlot& out) {
     const auto* sound = dynamic_cast<const Sound*>(&object);
     if (sound == nullptr) {
         return false;
@@ -707,7 +743,11 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
         lua_saved_property("Path", "string", read_path, write_path, "\"\""),
     };
     register_lua_class("FileAsset", "Instance", nullptr, 0);
-    register_lua_class("Texture", "FileAsset", file_fields, 1);
+    const LuaField texture_fields[] = {
+        file_fields[0],
+        lua_saved_property("FlipY", "boolean", read_flip_y, write_flip_y, "false"),
+    };
+    register_lua_class("Texture", "FileAsset", texture_fields, 2);
     // OriginOffset is measured from the geometry, never written or saved.
     const LuaField mesh_fields[] = {
         file_fields[0],

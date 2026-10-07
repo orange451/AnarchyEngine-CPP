@@ -312,11 +312,11 @@ void GameView::collectMeshes() {
             }
             MeshDraw draw;
             draw.mesh = mesh;
-            draw.texture = textures_.get(source.diffuse_texture);
-            draw.normalTexture = textures_.get(source.normal_texture);
-            draw.roughnessTexture = textures_.get(source.roughness_texture);
-            draw.metalnessTexture = textures_.get(source.metalness_texture);
-            draw.emissiveTexture = textures_.get(source.emissive_texture);
+            draw.texture = textures_.get(source.diffuse_texture, source.diffuse_flip_y);
+            draw.normalTexture = textures_.get(source.normal_texture, source.normal_flip_y);
+            draw.roughnessTexture = textures_.get(source.roughness_texture, source.roughness_flip_y);
+            draw.metalnessTexture = textures_.get(source.metalness_texture, source.metalness_flip_y);
+            draw.emissiveTexture = textures_.get(source.emissive_texture, source.emissive_flip_y);
             draw.color[0] = source.color.r;
             draw.color[1] = source.color.g;
             draw.color[2] = source.color.b;
@@ -409,7 +409,7 @@ void GameView::collectMeshes() {
     // The Skybox's images, uploaded linear; a missing or unreadable one draws no sky.
     const engine_core::VisualSky& sky = snapshot.sky;
     if (sky.present) {
-        const EnvironmentTexture image = textures_.getEnvironment(sky.image);
+        const EnvironmentTexture image = textures_.getEnvironment(sky.image, sky.image_flip_y);
         lighting.sky.image = image.texture;
         lighting.sky.imageRevision = image.revision;
         lighting.sky.exposure = sky.exposure;
@@ -441,8 +441,8 @@ void GameView::collectMeshes() {
         out.seconds = seconds;
         out.sunSizeDegrees = dynamic.sun_size;
         out.moonSizeDegrees = dynamic.moon_size;
-        out.sunTexture = textures_.get(dynamic.sun_texture);
-        out.moonTexture = textures_.get(dynamic.moon_texture);
+        out.sunTexture = textures_.get(dynamic.sun_texture, dynamic.sun_flip_y);
+        out.moonTexture = textures_.get(dynamic.moon_texture, dynamic.moon_flip_y);
         out.reflectionQuality = dynamic.reflection_quality == 0   ? SceneQuality::Low
                                 : dynamic.reflection_quality == 2 ? SceneQuality::High
                                                                   : SceneQuality::Medium;

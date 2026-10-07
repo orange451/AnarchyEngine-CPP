@@ -66,7 +66,8 @@ struct BillboardView {
 // GuiInput says. A ScreenGui's own area does not take the mouse.
 //
 // An ImagePane's node draws its Image's file, by the Texture's Path under the
-// project's resources folder, as a JadeFX background image. The files load
+// project's resources folder, as a JadeFX background image, upside down when
+// the Texture's FlipY is set. The files load
 // after the lock is let go, so decoding never holds up the simulation; each is
 // looked at again at most once a second and reloaded when it changed. One
 // that is missing or does not decode draws nothing, and says why in Output
@@ -171,8 +172,8 @@ private:
     void syncTree();
     // Gives each ImagePane's node the image its entry names. Runs without the lock.
     void updateImages();
-    // The decoded file at path under resourcesRoot_, or null.
-    std::shared_ptr<jadefx::Image> loadImage(const std::string& path);
+    // The decoded file at path under resourcesRoot_, upside down with flipY, or null.
+    std::shared_ptr<jadefx::Image> loadImage(const std::string& path, bool flipY);
 
     // A file an ImagePane draws, as last read.
     struct LoadedImage {
@@ -206,7 +207,8 @@ private:
     std::filesystem::path resourcesRoot_;
     // The folder images_ was read from.
     std::filesystem::path imagesRoot_;
-    std::unordered_map<std::string, LoadedImage> images_;
+    // Each by flipY: [0] upright, [1] flipped.
+    std::unordered_map<std::string, LoadedImage> images_[2];
     std::uint64_t imagePass_ = 0;
 };
 

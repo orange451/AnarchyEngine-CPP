@@ -53,6 +53,21 @@ class Texture : public FileAsset {
 public:
     using FileAsset::FileAsset;
     const char* class_name() const override;
+
+    // FlipY: the image is drawn upside down, its top row at v 0, wherever the
+    // Texture draws. For a file whose rows run the other way from AMESH's v.
+    bool flip_y() const { return flip_y_; }
+    // SimulationThread.
+    void set_flip_y(bool flip_y);
+
+protected:
+    void on_reuse() override {
+        FileAsset::on_reuse();
+        flip_y_ = false;
+    }
+
+private:
+    bool flip_y_ = false;
 };
 
 class Mesh : public FileAsset {

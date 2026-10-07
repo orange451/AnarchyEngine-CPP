@@ -27,6 +27,7 @@
 #include "Script.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
+#include "terrain/TerrainStash.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1091,6 +1092,8 @@ public:
     ~Rebuild() { world_.history().set_enabled(was_); }
 
     void finish() {
+        // The old place's Terrain voxels are no longer named by any place bytes.
+        terrain::TerrainStash::clear();
         world_.capture_place();
         world_.history().reset_waypoints();
         world_.clear_authored_dirty();

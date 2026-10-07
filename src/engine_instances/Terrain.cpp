@@ -3,13 +3,17 @@
 #include "Containment.hpp"
 #include "Contract.hpp"
 #include "LuaApi.hpp"
+#include "Project.hpp"
 #include "PropertyBag.hpp"
 #include "TerrainMaterial.hpp"
+#include "terrain/TerrainStash.hpp"
 
 #include <algorithm>
 #include <bitset>
 #include <cmath>
+#include <cstring>
 #include <iterator>
+#include <utility>
 
 namespace engine_core {
 namespace {
@@ -170,11 +174,80 @@ std::optional<std::string> Terrain::add_material(InstanceId material, TerrainMat
     return std::nullopt;
 }
 
+void Terrain::load_data_path(std::string path) {
+    if (restoring_ || path.empty() || path == data_path_) {
+        data_path_ = std::move(path);
+        return;
+    }
+    Terrain* holder = nullptr;
+    for_each_instance([&](DataModel& object) {
+        auto* other = dynamic_cast<Terrain*>(&object);
+        if (holder == nullptr && other != nullptr && other != this && other->data_path_ == path) {
+            holder = other;
+        }
+    });
+    if (holder == nullptr) {
+        data_path_ = std::move(path);
+        return;
+    }
+    // A paste: the copy starts with its source's voxels and its own file.
+    volume_.set_chunks(holder->volume_.chunks());
+    data_path_ = "terrain/" + sanitize_file_name(name(id())) + "." + guid(id()) + ".avox";
+    emit_property("DataPath");
+    note_unrecorded_edit(id());
+}
+
+void Terrain::write_place(std::vector<std::byte>& out) const {
+    std::vector<std::byte> base;
+    DataModel::write_place(base);
+    const std::uint32_t length = static_cast<std::uint32_t>(base.size());
+    const auto* l = reinterpret_cast<const std::byte*>(&length);
+    out.insert(out.end(), l, l + sizeof(length));
+    out.insert(out.end(), base.begin(), base.end());
+    const std::uint64_t token = terrain::TerrainStash::put(volume_.chunks(), volume_.voxel_size());
+    if (!simulation_running()) {
+        authored_token_ = token;
+    }
+    const auto* t = reinterpret_cast<const std::byte*>(&token);
+    out.insert(out.end(), t, t + sizeof(token));
+}
+
+void Terrain::read_place(const std::byte* data, std::size_t size) {
+    const std::byte* base = nullptr;
+    std::size_t base_size = 0;
+    std::uint32_t length = 0;
+    std::uint64_t token = 0;
+    if (data != nullptr && size >= sizeof(length)) {
+        std::memcpy(&length, data, sizeof(length));
+        if (length <= size - sizeof(length)) {
+            base = data + sizeof(length);
+            base_size = length;
+            if (size - sizeof(length) - length >= sizeof(token)) {
+                std::memcpy(&token, base + length, sizeof(token));
+            }
+        }
+    }
+    terrain::ChunkMap chunks;
+    // VoxelSize is always 1; the stash carries it for when it may vary.
+    float stashed_size = volume_.voxel_size();
+    const bool known = token != 0 && terrain::TerrainStash::get(token, chunks, stashed_size);
+    // A known token supplies the voxels, so DataPath is only stored; an
+    // unknown one leaves the voxels and writes DataPath as a load does.
+    restoring_ = known;
+    DataModel::read_place(base, base_size);
+    restoring_ = false;
+    if (known) {
+        volume_.set_chunks(std::move(chunks));
+    }
+}
+
 void Terrain::on_reuse() {
     transform_ = matrix4_identity();
     can_collide_ = true;
     data_path_.clear();
     volume_ = terrain::VoxelVolume{};
+    authored_token_ = 0;
+    restoring_ = false;
 }
 
 namespace {
@@ -241,7 +314,7 @@ bool write_data_path(DataModel&, DataModel& object, LuaSlot& in) {
     if (terrain == nullptr) {
         return false;
     }
-    terrain->set_data_path(in.text);
+    terrain->load_data_path(in.text);
     return true;
 }
 

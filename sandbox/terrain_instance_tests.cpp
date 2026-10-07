@@ -290,3 +290,102 @@ TEST_CASE("TM11 undo and redo of adding a TerrainMaterial", "[terrain]") {
     REQUIRE_FALSE(game.alive(added_id));
     REQUIRE(terrain.materials().size() == 1u);
 }
+
+namespace {
+
+engine_core::terrain::Shape ball_at(float x, float y, float z, float r) {
+    engine_core::terrain::Shape s;
+    s.center = engine_core::Vec3{x, y, z};
+    s.radius = r;
+    return s;
+}
+
+std::uint8_t id_at(const engine_core::Terrain& terrain, int x, int y, int z) {
+    return terrain.volume().cell(engine_core::terrain::CellCoord{x, y, z}).material;
+}
+
+// Writes DataPath through its registry write with a string, as load does.
+void write_data_path(engine_core::DataModel& game, engine_core::Terrain& terrain, const std::string& path) {
+    for (const engine_core::LuaField& field : engine_core::lua_saved_fields("Terrain")) {
+        if (std::string(field.name) == "DataPath") {
+            engine_core::LuaSlot slot;
+            slot.kind = engine_core::LuaSlot::Kind::String;
+            slot.text = path;
+            REQUIRE(field.write(game, terrain, slot));
+            return;
+        }
+    }
+    FAIL("Terrain has no DataPath field");
+}
+
+}  // namespace
+
+TEST_CASE("TP1 Stop puts back the voxels edited during play", "[terrain]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::Terrain& terrain = add_terrain(game);
+    REQUIRE_FALSE(terrain.volume().fill(ball_at(0.f, 0.f, 0.f, 4.f), 1));
+    game.capture_place();
+    game.start_simulation();
+    REQUIRE_FALSE(terrain.volume().fill(ball_at(50.f, 0.f, 0.f, 4.f), 2));
+    REQUIRE_FALSE(terrain.volume().subtract(ball_at(0.f, 0.f, 0.f, 10.f)));
+    game.stop_simulation();
+    REQUIRE(id_at(terrain, 0, 0, 0) == 1);
+    REQUIRE(terrain.volume().cell(engine_core::terrain::CellCoord{50, 0, 0}).distance ==
+            engine_core::terrain::kAirDistance);
+}
+
+TEST_CASE("TP2 TerrainMaterials added during play are gone after Stop", "[terrain]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::Terrain& terrain = add_terrain(game);
+    engine_core::TerrainMaterial* kept = nullptr;
+    REQUIRE_FALSE(terrain.add_material(0, kept));
+    game.capture_place();
+    game.start_simulation();
+    engine_core::TerrainMaterial* temp = nullptr;
+    REQUIRE_FALSE(terrain.add_material(0, temp));
+    game.stop_simulation();
+    REQUIRE(terrain.materials().size() == 1u);
+}
+
+TEST_CASE("TP3 undoing a Terrain's delete brings its voxels back", "[terrain]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::Terrain& terrain = add_terrain(game);
+    REQUIRE_FALSE(terrain.volume().fill(ball_at(0.f, 0.f, 0.f, 4.f), 3));
+    const InstanceId id = terrain.id();
+    begin_step(game, "Delete");
+    game.destroy(id);
+    end_step(game);
+    game.history().undo();
+    auto* back = dynamic_cast<engine_core::Terrain*>(game.instance(id));
+    REQUIRE(back != nullptr);
+    REQUIRE(id_at(*back, 0, 0, 0) == 3);
+}
+
+TEST_CASE("TP4 a pasted Terrain starts with its source's voxels and its own file", "[terrain]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::Terrain& terrain = add_terrain(game);
+    write_data_path(game, terrain, "terrain/Source.avox");
+    REQUIRE(terrain.data_path() == "terrain/Source.avox");
+    REQUIRE_FALSE(terrain.volume().fill(ball_at(0.f, 0.f, 0.f, 4.f), 2));
+    // Paste builds from saved properties (src/ide/CutSet.cpp build_copy).
+    engine_core::PropertyBag saved;
+    terrain.save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "DataPath") != nullptr);
+    engine_core::Terrain& copy = game.create<engine_core::Terrain>();
+    for (const engine_core::JsonValue::Member& member : saved) {
+        std::string error;
+        copy.load_property(member.first, member.second, error);
+        REQUIRE(error.empty());
+    }
+    game.set_parent(copy.id(), workspace_of(game));
+    REQUIRE(id_at(copy, 0, 0, 0) == 2);
+    REQUIRE_FALSE(copy.data_path().empty());
+    REQUIRE(copy.data_path() != terrain.data_path());   // its own file, assigned at paste
+    REQUIRE(copy.data_path().rfind("terrain/", 0) == 0);
+    REQUIRE(copy.data_path().find(game.guid(copy.id())) != std::string::npos);
+    REQUIRE(terrain.data_path() == "terrain/Source.avox");   // the source keeps its own
+}

@@ -603,6 +603,7 @@ add_library(engine_core STATIC
     src/engine_core/terrain/ShapeDistance.cpp
     src/engine_core/terrain/VoxelVolume.cpp
     src/engine_core/terrain/AvoxFile.cpp
+    src/engine_core/terrain/TerrainStash.cpp
     src/engine_core/ConvexDecomposition.cpp
     src/engine_core/DraggerMath.cpp
     src/engine_core/DraggerWorld.cpp
